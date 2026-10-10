@@ -1,0 +1,13 @@
+# build output
+build/
+out/
+/cmake-build-*/
+# agent worktrees (managed by docs/agents/LOOP.md)
+.worktrees/
+# asset cache
+.decache/
+# editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp

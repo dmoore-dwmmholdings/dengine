@@ -1,0 +1,25 @@
+/* dengine.h — umbrella header. Include individual de_*.h headers to reduce compile time. */
+#ifndef DENGINE_H
+#define DENGINE_H
+#include "de_base.h"
+#include "de_memory.h"
+#include "de_math.h"
+#include "de_platform.h"
+#include "de_task.h"
+#include "de_reflect.h"
+#include "de_ecs.h"
+#include "de_asset.h"
+#include "de_gpu.h"
+#include "de_render.h"
+#include "de_anim.h"
+#include "de_physics.h"
+#include "de_audio.h"
+#include "de_input.h"
+#include "de_net.h"
+#include "de_text.h"
+#include "de_ui.h"
+#include "de_gameplay.h"
+#include "de_services.h"
+#include "de_debug.h"
+#include "de_game.h"
+#endif
