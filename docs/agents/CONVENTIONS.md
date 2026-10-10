@@ -24,6 +24,7 @@ When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over 
   - `needs-human`: escalated with `request_decision`. Agents leave it alone until a human answers.
   - `follow-up`: filed by the orchestrator from a worker's Follow-ups list.
 - Parallelism: tasks are linked with `blocked_by`. A task may start when all its blockers are Done. The wave number in the description and the SPRINT PLAN only guide the order. **Owns paths** do not overlap within a wave.
+- Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. `Parallel-safe with: T3, T4` and other `Tn` references are outline ids within the same sprint; the epic's SPRINT PLAN table maps them to real keys. Some planning notes were added later as **comments** on issues. They correct the description, so read the comments too.
 
 ## 3. Code (from SPEC §3.2, §4.2, §5.1)
 
@@ -52,6 +53,23 @@ third_party/<lib>/              vendored, pinned, LICENSE inside
 tests/unit/<mod>/  tests/fuzz/<mod>/  tests/golden/<scene>/  tests/determinism/<scenario>/
 docs/modules/<mod>.md           one page per module, updated by any task that changes its API
 ```
+
+**Canonical directories.** Some issues were written in parallel and use different names for the same place. This table decides:
+
+| Thing | Canonical path | Aliases you may see in issues |
+|---|---|---|
+| App host / `de_engine` / main loop / game API | `src/host/` | `src/engine/`, `src/app/` |
+| Cross-module bridges in the app host (anim↔physics, audio occlusion raycasts) | `src/host/bridges/` | `src/app/bridges/` |
+| Host-level debug panels (audio/physics/net stats) | `src/host/debug/` | `src/app/debug/` |
+| Math (fast + deterministic) | `src/core/math/` | `src/math/` |
+| Cooker library / importers | `tools/cook/lib/`, `tools/cook/importers/` | |
+| Pack format (runtime reader) / writer | `src/asset/dpak/` / `tools/pack/lib/` | |
+| World streaming cells | `src/world/streaming/` | |
+| Save games / C binding layer | `src/services/save/` / `src/services/bind/` | |
+| 2D physics | `src/physics/2d/` (same deterministic module) | |
+| Editor | `tools/editor/` | |
+
+If an issue names an alias, use the canonical path and note that in your report. If an earlier sprint actually built something somewhere else, the code already in the repo wins. Follow it.
 
 - S01 registers every module target in advance, so later tasks **do not edit the root `CMakeLists.txt`**. They add sources in `src/<mod>/CMakeLists.txt` and tests with `de_add_test()`.
 - Removable modules (audio, net, physics, ui, vfx, nav, video, steam) sit behind `DE_WITH_<MOD>` options. Code that uses them must build with them switched off.
