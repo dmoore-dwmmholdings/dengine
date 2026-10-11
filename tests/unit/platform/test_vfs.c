@@ -18,6 +18,11 @@
 #error "DE_IO_TEST_TMP_DIR must be defined by tests/unit/platform/CMakeLists.txt"
 #endif
 
+/* Size of a buffer that holds a DE_FS_PATH_MAX test directory plus a short suffix. It is larger
+ * than DE_FS_PATH_MAX so that snprintf can never truncate: GCC rejects the possible truncation
+ * with -Werror=format-truncation (DENG-360; DENG-356 fixed test_error.c the same way). */
+#define SUBPATH_MAX (DE_FS_PATH_MAX + 64)
+
 /* ---------- helpers ---------- */
 
 typedef struct name_list {
@@ -139,7 +144,7 @@ TEST(vfs, roundtrip_user) {
     EXPECT_STREQ(read_text("user:/a/b.txt"), "new");
 
     /* resolve gives the native path in the mount. */
-    char native[DE_FS_PATH_MAX], expect[DE_FS_PATH_MAX];
+    char native[DE_FS_PATH_MAX], expect[SUBPATH_MAX];
     ASSERT_EQ(de_fs_resolve("user:/a/./b.txt", native, sizeof native), DE_OK);
     snprintf(expect, sizeof expect, "%s/a/b.txt", dir);
     EXPECT_STREQ(native, expect);
@@ -225,7 +230,7 @@ TEST(vfs, reject_escape) {
     EXPECT_EQ(de_fs_mount("Bad", dir, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_fs_mount("", dir, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_fs_mount("x", NULL, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);
-    char missing[DE_FS_PATH_MAX];
+    char missing[SUBPATH_MAX];
     snprintf(missing, sizeof missing, "%s/does_not_exist", dir);
     EXPECT_EQ(de_fs_mount("x", missing, DE_MOUNT_READ_ONLY, 0), DE_ERR_NOT_FOUND);
 
@@ -258,7 +263,7 @@ TEST(vfs, readonly_mount) {
 }
 
 TEST(vfs, mount_priority) {
-    char base[DE_FS_PATH_MAX], low[DE_FS_PATH_MAX], high[DE_FS_PATH_MAX];
+    char base[DE_FS_PATH_MAX], low[SUBPATH_MAX], high[SUBPATH_MAX];
     fresh_dir("mount_priority", base, sizeof base);
     snprintf(low, sizeof low, "%s/low", base);
     snprintf(high, sizeof high, "%s/high/", base); /* trailing separator is ignored */
@@ -281,7 +286,7 @@ TEST(vfs, mount_priority) {
     write_text("data:/new.txt", "written");
     EXPECT_TRUE(de_path_exists("lo:/new.txt"));
     EXPECT_FALSE(de_path_exists("hi:/new.txt"));
-    char native[DE_FS_PATH_MAX], expect[DE_FS_PATH_MAX];
+    char native[DE_FS_PATH_MAX], expect[SUBPATH_MAX];
     ASSERT_EQ(de_fs_resolve("data:/both.txt", native, sizeof native), DE_OK);
     snprintf(expect, sizeof expect, "%s/high/both.txt", base);
     EXPECT_STREQ(native, expect);
@@ -332,7 +337,7 @@ static bool list_and_read(const char *name, bool is_dir, void *user) {
 }
 
 TEST(vfs, dir_list) {
-    char base[DE_FS_PATH_MAX], lower[DE_FS_PATH_MAX], upper[DE_FS_PATH_MAX];
+    char base[DE_FS_PATH_MAX], lower[SUBPATH_MAX], upper[SUBPATH_MAX];
     fresh_dir("dir_list", base, sizeof base);
     snprintf(lower, sizeof lower, "%s/lower", base);
     snprintf(upper, sizeof upper, "%s/upper", base);
@@ -509,8 +514,8 @@ TEST(vfs, cvar_config) {
 }
 
 TEST(vfs, init_standard_roots) {
-    char base[DE_FS_PATH_MAX], game[DE_FS_PATH_MAX], user[DE_FS_PATH_MAX];
-    char cache[DE_FS_PATH_MAX], dev[DE_FS_PATH_MAX];
+    char base[DE_FS_PATH_MAX], game[SUBPATH_MAX], user[SUBPATH_MAX];
+    char cache[SUBPATH_MAX], dev[SUBPATH_MAX];
     fresh_dir("init_standard_roots", base, sizeof base);
     snprintf(game, sizeof game, "%s/game", base);
     snprintf(user, sizeof user, "%s/profile/user", base); /* created by init */

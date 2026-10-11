@@ -479,6 +479,25 @@ void de_sem_destroy(de_sem *s) {
 
 #else /* Linux and other POSIX: unnamed sem_t */
 
+/* ThreadSanitizer intercepts sem_post and sem_timedwait but not sem_clockwait (checked with the
+ * GCC 14 and Clang 18 runtimes). Without help it sees no happens-before edge from a post to a
+ * wake through sem_clockwait, and reports a race on all data written before de_sem_post and
+ * read after de_sem_wait_timeout (DENG-360). glibc's sem_clockwait does acquire; this annotation
+ * tells TSan so. The interceptor releases on the same address in sem_post. */
+#if defined(__SANITIZE_THREAD__)
+#define DE__TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DE__TSAN 1
+#endif
+#endif
+#if defined(DE__TSAN)
+#include <sanitizer/tsan_interface.h>
+#define DE__TSAN_ACQUIRE(addr) __tsan_acquire(addr)
+#else
+#define DE__TSAN_ACQUIRE(addr) ((void)(addr))
+#endif
+
 static sem_t *de__psem(de_sem *s) {
     return (sem_t *)(void *)s->opaque;
 }
@@ -535,6 +554,7 @@ bool de_sem_wait_timeout(de_sem *s, u64 timeout_ns) {
         if (errno != EINTR)
             DE__FATAL("sem_clockwait", errno);
     }
+    DE__TSAN_ACQUIRE(de__psem(s));
     return true;
 }
 
