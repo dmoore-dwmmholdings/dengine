@@ -24,7 +24,7 @@ When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over 
   - `needs-human`: escalated with `request_decision`. Agents leave it alone until a human answers.
   - `follow-up`: filed by the orchestrator from a worker's Follow-ups list.
 - Parallelism: tasks are linked with `blocked_by`. A task may start when all its blockers are Done. The wave number in the description and in the SPRINT PLAN only guide the order. **Owns paths** do not overlap within a wave.
-- Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. Descriptions use real DENG keys. If you still meet an outline id (`T3`, `S05 T10`), the **Outline ids** table in that sprint's SPRINT PLAN (v2) (epic description) maps it to a key. Corrections that were first posted as comments have been folded into the descriptions; a later comment still wins over the description if they disagree.
+- Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. Descriptions use real DENG keys. If you still meet an outline id (`T3`, `S05 T10`), the **Outline ids** list in that sprint's SPRINT PLAN (v2) (epic description) maps it to a key. Corrections that were first posted as comments have been folded into the descriptions; a later comment still wins over the description if they disagree.
 
 ## 3. Code (from SPEC §3.2, §4.2, §5.1)
 
