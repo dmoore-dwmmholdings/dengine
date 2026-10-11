@@ -14,6 +14,7 @@ de_add_test(NAME core
         test_array.c
         test_hashmap.c
         test_bitset_ring.c
+        test_log.c
     LIBS de_core Threads::Threads
 )
 

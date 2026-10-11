@@ -8,6 +8,7 @@
 #include <dengine/de_base.h>
 
 #include "core/de_compiler.h"
+#include "core/log_internal.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -75,6 +76,10 @@ void de_panic_(const char *file, u32 line, const char *func, const char *fmt, ..
             msg[0] = '\0';
         va_end(ap);
     }
+
+    /* Get buffered log records out before the crash handler runs (DENG-150). Best effort: it
+     * gives up instead of waiting on a stuck sink. */
+    de__log_flush_for_panic();
 
     de__hook_lock_acquire();
     de_panic_hook_fn fn = de__hook_fn;
