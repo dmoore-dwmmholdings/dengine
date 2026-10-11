@@ -95,6 +95,7 @@ void de_platform_shutdown(void) {
     DE__PLATFORM_SDL_ASSERT_MAIN(st);
     de__platform_sdl_devices_shutdown(st); /* DENG-246; needs the windows for text input */
     de__platform_sdl_windows_destroy_all(st);
+    de__platform_sdl_surface_shutdown(st); /* the Vulkan loader reference (DENG-250) */
     SDL_Quit();
     de__platform = NULL;
     de_arena_destroy(st->paths);

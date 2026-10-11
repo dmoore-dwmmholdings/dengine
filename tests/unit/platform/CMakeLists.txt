@@ -82,3 +82,21 @@ if(TARGET test_devices)
         target_link_libraries(test_devices PRIVATE de_tp_sdl3)
     endif()
 endif()
+
+# Native window handles and graphics surfaces (DENG-250). Skips without a video driver; the Vulkan
+# tests skip without a Vulkan loader (set SDL_VULKAN_LIBRARY to point at one). The test builds a
+# minimal Vulkan instance with the Vulkan headers SDL ships (no loader is linked). On macOS a
+# small Objective-C helper checks the layer's class.
+de_add_test(NAME surface SOURCES test_surface.c LIBS de_platform LABELS unit window)
+if(TARGET test_surface)
+    target_include_directories(test_surface PRIVATE "${DE_ROOT_DIR}/src")
+    if(TARGET SDL3-static)
+        get_target_property(_de_sdl3_src SDL3-static SOURCE_DIR)
+        target_include_directories(test_surface SYSTEM PRIVATE "${_de_sdl3_src}/src/video/khronos")
+    endif()
+    if(APPLE AND NOT DE_HEADLESS)
+        target_sources(test_surface PRIVATE test_surface_metal.m)
+        set_source_files_properties(test_surface_metal.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(test_surface PRIVATE "$<LINK_LIBRARY:FRAMEWORK,QuartzCore>")
+    endif()
+endif()

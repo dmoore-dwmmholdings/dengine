@@ -129,6 +129,20 @@ typedef enum de_window_mode {
     DE_WINDOW_FULLSCREEN  /**< exclusive fullscreen at the display mode closest to the window */
 } de_window_mode;
 
+/** The graphics surface a window is created for (de_window_desc.surface, S03 DENG-250). The RHI
+ * picks its backend before it opens the window, and the window is set up for that backend. */
+typedef enum de_window_surface {
+    /** No API-specific setup. D3D12 uses this: it only needs the Win32 window handle. */
+    DE_WINDOW_SURFACE_NONE,
+    /** Vulkan: the window can get a Vulkan surface (de_window_vulkan_create_surface()). The
+     * Vulkan loader is opened first; without one, de_window_create() returns
+     * DE_ERR_UNSUPPORTED. */
+    DE_WINDOW_SURFACE_VULKAN,
+    /** Metal (macOS): de_window_native() gives the window's Core Animation Metal layer.
+     * DE_ERR_UNSUPPORTED where there is no Metal. */
+    DE_WINDOW_SURFACE_METAL
+} de_window_surface;
+
 typedef struct de_window_desc {
     const char *title; /**< UTF-8; NULL = the app name */
     u32 width, height; /**< logical pixels (points); 0 = 1280x720 */
@@ -141,6 +155,10 @@ typedef struct de_window_desc {
      * on macOS (the OS scales the window up). */
     bool high_dpi;
     bool hidden; /**< create without showing it (tests, tools) */
+    /** The graphics API that will present to this window (S03 DENG-250; see
+     * de_window_surface). DE_WINDOW_SURFACE_NONE (zero) for D3D12 and windows nobody renders
+     * to. */
+    de_window_surface surface;
 } de_window_desc;
 
 /**
@@ -179,16 +197,86 @@ DE_API void de_window_set_title(de_window w, const char *title);
  * de_display_info). All zero for a stale handle. */
 DE_API de_display_info de_window_display(de_window w);
 
-/* Native handles for the RHI only (Win32 window handle, macOS Metal layer, Vulkan surface
- * helper data).
- * de_window_native() is implemented by S03 DENG-250. */
+/* ---------- Native window handles and graphics surfaces (S03, DENG-250) ----------
+ * For the RHI only (S09): the Win32 window handle (D3D12), the Core Animation Metal layer
+ * (Metal) and Vulkan surfaces. Every OS and graphics-API type is passed as void * or u64, so
+ * this header stays free of them. Main thread only, like the rest of the window API. A
+ * DE_HEADLESS build has stubs: zeros, 0 and DE_ERR_UNSUPPORTED.
+ *
+ * Swapchain size: the windowing layer never resizes the swapchain images. On a
+ * DE_EV_WINDOW_RESIZED event the RHI swapchain sets the Metal layer's drawable size, or
+ * recreates the Vulkan swapchain, from de_window_size_pixels(). */
+
+/** Native handles of a window. A field the platform or the window's surface kind does not have
+ * is NULL. */
 typedef struct de_native_window {
-    void *hwnd;        /* Windows */
-    void *metal_layer; /* macOS */
-    void *sdl_window;  /* Vulkan surface creation path; opaque */
+    /** Windows: the Win32 window handle. NULL elsewhere. */
+    void *hwnd;
+    /** macOS, windows created with DE_WINDOW_SURFACE_METAL: the Core Animation Metal layer
+     * (cast it to the Metal layer class). The first de_window_native() call creates a Metal
+     * view in the window for it; later calls return the same layer. The view and the layer
+     * belong to the window: de_window_destroy() releases them. Each call sets the layer's
+     * contents scale to the window's current pixel density (call again on DE_DISPLAY_SCALE).
+     * The drawable size is the window's pixel size when the view is made; the RHI keeps it up
+     * to date after that. NULL for other windows. */
+    void *metal_layer;
+    /** The windowing library's window, opaque. Only the platform layer uses it. */
+    void *sdl_window;
 } de_native_window;
 
+/** The native handles of `w`. All NULL for a stale or zero handle, before de_platform_init(),
+ * and when the Metal view cannot be created (the error context then says why). */
 DE_API de_native_window de_window_native(de_window w);
+
+/**
+ * The instance extensions Vulkan needs to present to a window on this platform (for example
+ * VK_KHR_surface and VK_EXT_metal_surface on macOS, VK_KHR_win32_surface on Windows). Writes up
+ * to `max` extension names to `out` and returns how many there are, so `(NULL, 0)` counts. The
+ * strings are static and stay valid until de_platform_shutdown().
+ *
+ * Opens the Vulkan loader the first time it is needed (the engine never links it, so builds
+ * without the Vulkan SDK still link). The loader stays open until de_platform_shutdown().
+ * Returns 0, with the error context set, when the platform is not initialised, is headless, or
+ * there is no Vulkan loader.
+ */
+DE_API u32 de_window_vulkan_instance_extensions(const char **out, u32 max);
+
+/** A function pointer from the Vulkan loader. Cast it to the real type before calling. */
+typedef void (*de_window_vulkan_fn)(void);
+
+/**
+ * The loader's `vkGetInstanceProcAddr`, from the same Vulkan loader the surface functions use.
+ * The RHI loads every other Vulkan function through it. Opens the loader like
+ * de_window_vulkan_instance_extensions(); NULL, with the error context set, when that fails.
+ * Valid until de_platform_shutdown().
+ */
+DE_API de_window_vulkan_fn de_window_vulkan_get_instance_proc_addr(void);
+
+/**
+ * Creates a Vulkan surface for `w`, which must have been created with
+ * DE_WINDOW_SURFACE_VULKAN.
+ *
+ * @param vk_instance  The Vulkan instance handle, created through
+ *                     de_window_vulkan_get_instance_proc_addr() with the extensions from
+ *                     de_window_vulkan_instance_extensions() enabled.
+ * @param vk_allocation_callbacks  Pointer to the Vulkan allocation callbacks, or NULL.
+ * @param out_vk_surface  Receives the Vulkan surface handle (a 64-bit non-dispatchable handle);
+ *                     0 on failure.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (stale handle, NULL instance or `out_vk_surface`, or a
+ *         window not created for Vulkan); DE_ERR_UNSUPPORTED (headless, no Vulkan loader);
+ *         DE_ERR_INTERNAL when Vulkan refuses (the message has the reason).
+ */
+DE_API de_result de_window_vulkan_create_surface(de_window w, void *vk_instance,
+                                                 const void *vk_allocation_callbacks,
+                                                 u64 *out_vk_surface);
+
+/**
+ * Destroys a surface from de_window_vulkan_create_surface(), with the same instance and
+ * allocation callbacks. Destroy the swapchain first, and destroy the surface before its window
+ * and its instance. A 0 surface or NULL instance is ignored.
+ */
+DE_API void de_window_vulkan_destroy_surface(void *vk_instance, u64 vk_surface,
+                                             const void *vk_allocation_callbacks);
 
 /* ---------- Event pump ---------- */
 

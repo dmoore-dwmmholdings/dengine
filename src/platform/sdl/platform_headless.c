@@ -118,6 +118,37 @@ de_native_window de_window_native(de_window w) {
     return n;
 }
 
+/* Graphics surfaces (DENG-250): no windows, so no surfaces and no Vulkan loader. */
+u32 de_window_vulkan_instance_extensions(const char **out, u32 max) {
+    (void)out;
+    (void)max;
+    (void)DE_FAIL(DE_ERR_UNSUPPORTED, "vulkan: headless build");
+    return 0;
+}
+
+de_window_vulkan_fn de_window_vulkan_get_instance_proc_addr(void) {
+    (void)DE_FAIL(DE_ERR_UNSUPPORTED, "vulkan: headless build");
+    return NULL;
+}
+
+de_result de_window_vulkan_create_surface(de_window w, void *vk_instance,
+                                          const void *vk_allocation_callbacks,
+                                          u64 *out_vk_surface) {
+    (void)w;
+    (void)vk_instance;
+    (void)vk_allocation_callbacks;
+    if (out_vk_surface)
+        *out_vk_surface = 0;
+    return DE_FAIL(DE_ERR_UNSUPPORTED, "de_window_vulkan_create_surface: headless build");
+}
+
+void de_window_vulkan_destroy_surface(void *vk_instance, u64 vk_surface,
+                                      const void *vk_allocation_callbacks) {
+    (void)vk_instance;
+    (void)vk_surface;
+    (void)vk_allocation_callbacks;
+}
+
 u32 de_platform_pump(de_app_event *events, u32 max_events) {
     if (!de__headless_up)
         return 0;

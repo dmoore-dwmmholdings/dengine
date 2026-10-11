@@ -114,3 +114,19 @@ if(TARGET de_platform)
             sdl/dialog_sdl.c)
     endif()
 endif()
+
+# ---- Native window handles and graphics surfaces (DENG-250) ----
+# surface_sdl.c: Win32 window handle, Metal view, Vulkan surfaces through SDL (SDL opens the Vulkan
+# loader at run time; nothing links it). surface_metal.m (macOS): the CAMetalLayer property that C
+# cannot set, with ARC. Root CMakeLists.txt enables OBJC on Apple.
+if(TARGET de_platform AND NOT DE_HEADLESS)
+    target_sources(de_platform PRIVATE sdl/surface_sdl.c)
+    if(APPLE)
+        target_sources(de_platform PRIVATE sdl/surface_metal.m)
+        set_source_files_properties(sdl/surface_metal.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        set(_de_surface_frameworks
+            "$<LINK_LIBRARY:FRAMEWORK,QuartzCore>" "$<LINK_LIBRARY:FRAMEWORK,Foundation>")
+        target_link_libraries(de_platform PRIVATE ${_de_surface_frameworks})
+        set_property(TARGET de_platform APPEND PROPERTY DE_MODULE_LIBS ${_de_surface_frameworks})
+    endif()
+endif()

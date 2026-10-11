@@ -123,6 +123,9 @@ de_result de_window_create(const de_window_desc *desc, de_window *out) {
         flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (desc->hidden)
         flags |= SDL_WINDOW_HIDDEN;
+    de_result sr = de__platform_sdl_surface_flags(st, desc->surface, &flags); /* DENG-250 */
+    if (sr != DE_OK)
+        return DE_FAIL_WRAP(sr, "de_window_create: surface");
 
     SDL_PropertiesID props = SDL_CreateProperties();
     if (!props)
@@ -157,11 +160,14 @@ de_result de_window_create(const de_window_desc *desc, de_window *out) {
     s->id = SDL_GetWindowID(win);
     s->mode = desc->mode;
     s->minimized = false;
+    s->surface = desc->surface;
+    s->metal_view = NULL;
     *out = de__make_handle(slot, s->gen);
     return DE_OK;
 }
 
 static void de__destroy_slot(de__platform_sdl_window *s) {
+    de__platform_sdl_surface_release(s); /* the Metal view goes before its window (DENG-250) */
     SDL_DestroyWindow(s->sdl);
     s->sdl = NULL;
     s->id = 0;
