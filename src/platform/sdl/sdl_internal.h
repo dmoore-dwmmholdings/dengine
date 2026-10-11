@@ -10,6 +10,8 @@
  * DENG-246 either installs a hook or drains the ring with de__platform_sdl_input_drain() each
  * frame.
  * - DENG-250 (native surfaces): de__platform_sdl_window_get() maps a de_window to its SDL_Window.
+ *   surface_sdl.c adds the window flags for the surface kind, and releases a window's Metal view
+ *   before the window and the Vulkan loader before SDL_Quit (the hooks at the end of this file).
  */
 #ifndef DE_PLATFORM_SDL_INTERNAL_H
 #define DE_PLATFORM_SDL_INTERNAL_H
@@ -31,6 +33,9 @@ typedef struct de__platform_sdl_window {
     u32 gen;             /**< generation, 1 .. 0xFFFFFF, bumped on destroy */
     de_window_mode mode; /**< the mode last asked for */
     bool minimized;      /**< last DE_EV_WINDOW_MINIMIZED state sent */
+    /* Graphics surface (DENG-250, surface_sdl.c). */
+    de_window_surface surface; /**< what the window was created for */
+    SDL_MetalView metal_view;  /**< made by the first de_window_native() of a METAL window */
 } de__platform_sdl_window;
 
 /** Called for each routed input event, instead of queueing it in the ring. */
@@ -55,6 +60,8 @@ typedef struct de__platform_sdl_state {
     de_arena *paths;
     /* Raw input devices (DENG-246, input_sdl.c); NULL until de__platform_sdl_devices_init(). */
     struct de__platform_sdl_devices *devices;
+    /* The engine's one reference on SDL's Vulkan loader (DENG-250), taken lazily. */
+    bool vulkan_loaded;
 } de__platform_sdl_state;
 
 /** The state, or NULL before de_platform_init() / after de_platform_shutdown(). */
@@ -182,5 +189,26 @@ typedef void(SDLCALL *de__platform_sdl_dialog_show_fn)(SDL_FileDialogType type,
                                                        SDL_DialogFileCallback cb, void *userdata,
                                                        SDL_PropertiesID props);
 void de__platform_sdl_dialog_set_show(de__platform_sdl_dialog_show_fn fn);
+
+/* ---- graphics surfaces (surface_sdl.c, surface_metal.m; DENG-250) ---- */
+
+/**
+ * The SDL window flags for `surface`, checked before the window is created. VULKAN opens the
+ * Vulkan loader first. DE_ERR_UNSUPPORTED (no Vulkan loader, no Metal on this platform) or
+ * DE_ERR_INVALID_ARGUMENT (bad value).
+ */
+de_result de__platform_sdl_surface_flags(de__platform_sdl_state *st, de_window_surface surface,
+                                         SDL_WindowFlags *flags);
+/** Releases the surface objects of a window slot (its Metal view). Called before
+ * SDL_DestroyWindow. */
+void de__platform_sdl_surface_release(de__platform_sdl_window *s);
+/** Drops the engine's Vulkan loader reference. Called at shutdown, after the windows are gone. */
+void de__platform_sdl_surface_shutdown(de__platform_sdl_state *st);
+
+#if defined(SDL_PLATFORM_APPLE)
+/** surface_metal.m: sets the Metal layer's contents scale to `scale` (the window's pixel
+ * density). */
+void de__platform_sdl_metal_layer_set_scale(void *layer, float scale);
+#endif
 
 #endif /* DE_PLATFORM_SDL_INTERNAL_H */
