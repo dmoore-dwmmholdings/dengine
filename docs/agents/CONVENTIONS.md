@@ -2,6 +2,8 @@
 
 When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over both.
 
+Project documentation lives in the Trama space `DENG`. `docs/agents/DOCS.md` has the rules: read it for context before you work, and update it as part of every issue.
+
 ## 1. Git
 
 | Item | Rule |
@@ -36,7 +38,7 @@ When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over 
 - Functions that can fail return `de_result` and give their outputs through pointer parameters. On failure, they set the error context with `DE_FAIL(...)`.
 - Every create function takes a `*_desc` struct, and `(desc){0}` must be valid. Every subsystem takes an explicit `de_allocator *`. There are no hidden globals.
 - No `malloc`/`free` in per-frame paths. Use the frame arena or thread scratch. The zero-alloc frame test (from S06) enforces this.
-- Layering (§4.1): a module includes only modules below it. `tools/check_layers.py` enforces this from S01 onward.
+- Layering (§4.1): a module includes only modules below it. `tools/check_layers/check_layers.py` (table: `tools/check_layers/layers.toml`) enforces this from S01 onward.
 - **Deterministic modules** (simulation ECS schedules, physics, sim-side animation, input replay, netcode, sim navigation): every SPEC §5.7 rule applies. Use `de_dmath` only. Build with `-ffp-contract=off` (`de_add_module(... DETERMINISTIC)` sets it). Do not iterate hash maps. Iterate in stable order. Add a checksum test.
 - C++ third-party code is allowed only behind a C interface inside one module (DENG-2 Q1). The `.cpp` shims stay inside that module's `src/` directory.
 - Style: `.clang-format` (from S01). 4-space indent, 100 columns. Comments explain *why*. Public API comments are Doxygen-style `/** */`.
@@ -51,7 +53,7 @@ shaders/<area>/*.slang          shaders
 tools/<tool>/                   CLIs (de-cook, de-pack, caps, editor…)
 third_party/<lib>/              vendored, pinned, LICENSE inside
 tests/unit/<mod>/  tests/fuzz/<mod>/  tests/golden/<scene>/  tests/determinism/<scenario>/
-docs/modules/<mod>.md           one page per module, updated by any task that changes its API
+(Trama) Module: <mod>           one page per module, updated by any task that changes it (DOCS.md)
 ```
 
 **Canonical directories.** Some issues were written in parallel and use different names for the same place. This table decides:

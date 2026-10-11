@@ -61,9 +61,10 @@ SDK. CMake finds those through a path that you set.
 
 - Public header comments (`include/dengine/de_*.h`) are Doxygen-style `/** */`. They are the
   source of the API reference (DENG-2 Q7), so a public function without one is not done.
-- A change to a module's public API also updates its page, `docs/modules/<mod>.md`. Start a new
-  page from [`docs/modules/_template.md`](docs/modules/_template.md) and add it to the
-  [module index](docs/modules/README.md).
+- Project documentation (architecture, module pages, decisions, sprint reports) lives in the
+  Trama space `DENG`. A change to a module also updates its page `Module: <mod>` there, using the
+  sections of [`docs/modules/_template.md`](docs/modules/_template.md). The rules are in
+  [`docs/agents/DOCS.md`](docs/agents/DOCS.md).
 
 ## Review checklist
 

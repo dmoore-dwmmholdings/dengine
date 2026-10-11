@@ -1,14 +1,15 @@
 # `<module>` module
 
 <!--
-Copy this file to docs/modules/<module>.md and add a row in docs/modules/README.md.
-Any task that changes this module's public API updates this page in the same commit.
-Keep each section short. Write "None." when a section does not apply; do not delete it.
+The section layout of the Trama page "Module: <module>" (space DENG; see docs/agents/DOCS.md).
+Start the page with the DOCS.md §2 page header, then these sections.
+Any task that changes this module updates its page before In Review; the orchestrator publishes it
+after the merge. Keep each section short. Write "None." when a section does not apply.
 -->
 
 - **Source:** `src/<module>/`
 - **Header:** `include/dengine/de_<module>.h`
-- **Layer:** <SPEC §4.1 layer, as listed in `docs/modules/README.md`> · **CMake band:**
+- **Layer:** <SPEC §4.1 layer, as listed on the Trama `Modules` page> · **CMake band:**
   <foundation | runtime | content | gameplay | host> (`de_add_module(... LAYER)`)
 - **CMake target:** `de_<module>` · **Option:** <`DE_WITH_<MOD>` | always built>
 - **Deterministic:** <yes (`de_add_module(... DETERMINISTIC)`) | no>

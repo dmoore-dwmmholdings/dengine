@@ -13,7 +13,8 @@ Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`,
 2. Read the issue description in full. Then read:
    - the `## SPRINT PLAN (v2)` section of the epic description (`get_issue <EPIC>`),
    - **DENG-2** (decisions),
-   - `docs/agents/CONVENTIONS.md`,
+   - `docs/agents/CONVENTIONS.md` and `docs/agents/DOCS.md`,
+   - the Trama pages that DOCS.md §5 lists for workers: `Architecture`, the `Module:` pages of the modules you change and call, the pages that reference your key or the epic, and the `Decision:` pages about your modules. They explain the code that earlier sprints merged into your base. If a page disagrees with the code, the code wins.
    - the SPEC.md sections and the `include/dengine/*.h` headers that the issue cites,
    - the existing code in the module directories the issue touches. Earlier sprints are merged into your base.
 3. Set the status to **In Progress**: `set_issue_status <KEY> "In Progress"`. Use `update_issue` with `assignee: "this agent"` if the issue has no assignee.
@@ -35,6 +36,7 @@ In **resume / fix / rebase / retry** mode, first read your earlier comments and 
 - If the header sketch is wrong or incomplete, amend it. Record each change under **API changes** in your report.
 - Write the tests that the issue's **Test plan** lists. Put unit tests in `tests/unit/<module>/`, parser fuzz targets in `tests/fuzz/<module>/`, golden scenes in `tests/golden/`, and determinism scenarios in `tests/determinism/`.
 - When the spec and the issue leave a choice open, make the choice that fits SPEC.md and DENG-2 best. Record it under **Decisions** in your report. Do not stop to ask, unless the work cannot be done at all.
+- **Document as you build** (DOCS.md §3–§4). Update the `Module:` page of each module you change, the `Tool:` or `Build and Test` page of each tool or build feature you change, and create a `Decision:` page for each cross-cutting decision. Set the page header's `Status` and `Last change: <KEY> (Sxx)`. Write the pages from what your final code does, after Step 3 passes. Do not publish them; the orchestrator does after the merge. If an issue names a `docs/modules/…` or other narrative `docs/` file, write the Trama page instead.
 - You may use subagents for research or reviews. Do not run two agents that edit files in this worktree at the same time.
 - Do not commit while the work is half done, unless you need a checkpoint. If you make checkpoint commits, the **final** commit must still leave the branch green.
 
@@ -92,7 +94,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 - ⏳ needs-hw: … (what to run, where)
 
 **Decisions**
-- <choices made where spec/issue were open, with the reason>
+- <choices made where spec/issue were open, with the reason; link `Decision:` pages by title>
+
+**Docs** (Trama space `DENG`, drafts until merged)
+- <page title> — <created | updated>: <what changed>
 
 **Follow-ups**
 - <work found that belongs elsewhere; the orchestrator will file it>
@@ -110,7 +115,8 @@ BRANCH: feature/<KEY>-<slug>
 COMMIT: <full sha>
 TESTS: <passed>/<total>
 NEEDS_HW: <yes|no>
-NOTES: <one line, or "none">
+DOCS: <Trama page titles you created or updated, separated by " | ", or "none">
+NOTES: <one line, or "none". If DOCS is none but you changed code, say why here.>
 ```
 
 **Fail path.** Use it when you cannot finish: the work is impossible on this host and there is nothing useful to commit, a blocker is missing, or you hit an unresolvable conflict. Then:
@@ -130,4 +136,5 @@ REASON: <one line>
 - Edit files outside your worktree, or check out or modify `main` or the sprint branch.
 - Push, force-push, or rewrite history that you did not create in this issue.
 - Install licensed SDKs (Windows SDK, Steamworks), or accept licenses for the user.
+- Publish a Trama page, or edit a page your issue does not own (DOCS.md §3). Comment on it instead.
 - Weaken a test, or skip a check, to get to green. If a check is wrong, fix the check and say so in the report.

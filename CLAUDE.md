@@ -6,6 +6,7 @@ The work is planned in Andare project **DENG** (initiative DENG-1; decisions DEN
 - Orchestrator loop: `docs/agents/LOOP.md`. Run it with `/loop Follow docs/agents/LOOP.md`.
 - Per-issue worker: `docs/agents/WORKER.md`
 - Code, git, test and verification rules: `docs/agents/CONVENTIONS.md`
+- Project documentation: Trama space **DENG**. Read it for context, keep it updated: `docs/agents/DOCS.md`
 
 ## Build and test quick start
 
@@ -27,13 +28,13 @@ Where things live:
 - `tools/`: CLIs and checks (`cook/`, `pack/`, `vendor/`, `check_layers/`, `editor/`)
 - `third_party/`: vendored libraries, pinned in `third_party/vendor.toml`
 - `tests/`: `unit/`, `fuzz/`, `golden/`, `determinism/`
-- `examples/`; `docs/` (one page per module in `docs/modules/`)
+- `examples/`; `docs/` (build guide, agent rules; module pages live in Trama space DENG)
 
 Adding code:
 
 - Sources: `de_add_module()` in `src/<mod>/CMakeLists.txt`. Tests: `de_add_test()`.
 - Never edit the root `CMakeLists.txt`.
-- A public API change updates `docs/modules/<mod>.md` (start from `docs/modules/_template.md`).
+- A change to a module updates its Trama page `Module: <mod>` (`docs/agents/DOCS.md`).
 
 Before review: `ctest --preset dev -L check` (`header_check`, `layering_check`) passes, and so
 does the full `ctest --preset dev`.
