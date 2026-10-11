@@ -46,6 +46,11 @@ de_add_module(
         math/affine.c
         math/geom.c
         math/proj.c
+        math/dmath_reduce.h
+        math/dmath.c
+        math/dmath64.c
+        math/rng.c
+        math/fpenv.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -86,3 +91,7 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(de_core PRIVATE m)
     set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS m)
 endif()
+
+# DENG-243: the deterministic math (SPEC §5.7). Core is not a deterministic module, so these
+# files get the deterministic flags (-ffp-contract=off, /fp:precise) one by one.
+de_mark_deterministic_sources(math/dmath.c math/dmath64.c math/rng.c math/fpenv.c)
