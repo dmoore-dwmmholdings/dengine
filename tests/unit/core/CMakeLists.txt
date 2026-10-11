@@ -6,5 +6,7 @@ de_add_test(NAME core
     SOURCES
         test_base.c
         test_error.c
+        test_arena.c
+        test_scratch.c
     LIBS de_core Threads::Threads
 )
