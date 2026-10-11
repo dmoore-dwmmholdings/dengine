@@ -23,7 +23,7 @@ Related files:
 |---|---|
 | Andare project | `DENG` |
 | Issue statuses | `Backlog` → `To Do` → `In Progress` → `In Review` → `Done` (also `Won't do`) |
-| Sprint names | `S01 …` to `S39 …`. Run them in numeric order. Only one sprint is active at a time. |
+| Sprint names | `S01 …` to `S39 …`. Run them in numeric order (the number after `S`), **not** in `list_sprints` order: `list_sprints` sorts by creation date. Only one sprint is active at a time. **Ignore any sprint with 0 issues.** S06, S18, S22, S34 and S36 were re-created because Andare's search could not see the originals: the live ones are `S06 App Host + Profiling`, `S18 Post-Processing, Upscaling + HDR`, `S22 Physics 3D I: Collision`, `S34 World Systems I: VFX, Decals, Sky, Volumetrics` and `S36 Gameplay Support: Navigation, Tilemaps, Aseprite, Video`. The old sprints with the original names are empty. |
 | Sprint epic | One `epic` per sprint, under DENG-1, in that sprint. Its summary starts with `[Sxx]`. **Sprint `Sxx` → epic `DENG-(xx+2)`** (DENG-3 … DENG-41). Epic N is `blocked_by` epic N-1. |
 | Finding tasks | Always use `parent = <EPIC>` **and pass `project: "DENG"`** to `search_issues` (without it the search scans only part of the workspace and silently drops children). Never search by sprint name, because it fails for some names. Cross-check the count against the `## Children` list from `get_issue <EPIC>`. |
 | Sprint plan | The `## SPRINT PLAN (v2)` section of the **epic description**. It gives the sprint branch, **Max parallel workers**, the outline-id → key map, waves, critical path, merge hotspots and exit checks. The older `## SPRINT PLAN` comment on the epic is superseded; ignore it. |
@@ -46,7 +46,7 @@ Do these steps in order. Do not skip a step because you "remember" the state; ch
 ### 2.2 Find the active sprint
 1. `list_sprints DENG`.
 2. If a sprint is **active**, use it and go to §2.3.
-3. If no sprint is active, take the **lowest-numbered future sprint**. Then:
+3. If no sprint is active, take the **lowest-numbered future sprint that has issues** (skip empty sprints; if two future sprints share a number, use the one with issues). Then:
    - Find its epic from the fixed mapping: **the epic for sprint `Sxx` is `DENG-(xx+2)`**. For example, S01 → DENG-3, S20 → DENG-22, S39 → DENG-41. Confirm with `get_issue` that the summary starts with `[Sxx]`. Do **not** look up the epic by searching on the sprint name: AQL `sprint = "<name>"` returns nothing for some sprint names (S06, S18, S22, S34, S36). Confirm that `get_issue` reports no unfinished blocker (the epic of the sprint before must be Done).
    - Read DENG-2 (decisions) and the `## SPRINT PLAN (v2)` section of the epic description (`get_issue` on the epic).
    - `start_sprint` with `durationDays: 14`.
