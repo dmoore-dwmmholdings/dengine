@@ -24,6 +24,9 @@ if(WIN32)
     # timeBeginPeriod (sleep_pacing.c), the fallback before high-resolution waitable timers.
     list(APPEND _de_platform_libs winmm)
 endif()
+if(WIN32)
+    list(APPEND _de_platform_libs dbghelp) # MiniDumpWriteDump (crash_win32.c, DENG-251)
+endif()
 
 de_add_module(
     NAME platform
@@ -39,6 +42,9 @@ de_add_module(
         file_${_de_platform_os}.c
         known_dirs.c
         async_io.c
+        crash_common.c
+        crash_internal.h
+        crash_${_de_platform_os}.c
     DEPS core
     LIBS ${_de_platform_libs}
 )
@@ -60,4 +66,35 @@ if(TARGET de_platform)
         # The aggregate `dengine` library links each module's DE_MODULE_LIBS too.
         set_property(TARGET de_platform APPEND PROPERTY DE_MODULE_LIBS de_tp_sdl3)
     endif()
+endif()
+
+# Build ID for crash reports (DENG-251): `git rev-parse --short HEAD` at configure time, or
+# "unknown" outside a git checkout. -DDE_BUILD_ID=<id> overrides it (CI, release builds). Only
+# crash_common.c gets the definition, so a new commit rebuilds one file after reconfiguring.
+set(DE_BUILD_ID "" CACHE STRING "Build ID written into crash reports (empty: git commit)")
+set(_de_build_id "${DE_BUILD_ID}")
+if(_de_build_id STREQUAL "")
+    set(_de_build_id "unknown")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+            WORKING_DIRECTORY "${DE_ROOT_DIR}"
+            OUTPUT_VARIABLE _de_git_head
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE _de_git_rc)
+        if(_de_git_rc EQUAL 0 AND _de_git_head MATCHES "^[0-9a-f]+$")
+            set(_de_build_id "${_de_git_head}")
+        endif()
+    endif()
+endif()
+if(NOT _de_build_id MATCHES "^[A-Za-z0-9._+-]+$")
+    message(FATAL_ERROR "DE_BUILD_ID '${_de_build_id}' may only use A-Z a-z 0-9 . _ + -")
+endif()
+# The value the build uses, for tests (tests/unit/platform/CMakeLists.txt).
+set(DE_BUILD_ID_VALUE "${_de_build_id}" CACHE INTERNAL "Build ID compiled into de_platform")
+if(TARGET de_platform)
+    set_property(SOURCE crash_common.c APPEND PROPERTY
+        COMPILE_DEFINITIONS "DE_BUILD_ID=\"${_de_build_id}\"")
 endif()

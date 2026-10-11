@@ -62,3 +62,11 @@ if(TARGET test_window)
         target_link_libraries(test_window PRIVATE de_tp_sdl3)
     endif()
 endif()
+
+# Crash handler (DENG-251): its own executable, so CTest names are crash.<test>. It uses the
+# internal header src/platform/crash_internal.h and the alloc guard (handler_no_malloc).
+de_add_test(NAME crash SOURCES test_crash.c LIBS de_platform de_test_support)
+if(TARGET test_crash)
+    target_include_directories(test_crash PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_crash PRIVATE "DE_TEST_BUILD_ID=\"${DE_BUILD_ID_VALUE}\"")
+endif()

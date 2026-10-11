@@ -251,18 +251,141 @@ typedef void (*de_stats_panel_fn)(void *user); /* draws with de_dbg_* */
 DE_API void de_stats_register_panel(const char *name, de_stats_panel_fn fn, void *user);
 DE_API void de_stats_overlay_toggle(void);
 
-/* ---------- Crash handling (S03 DENG-251) ---------- */
+/* ---------- Crash handling (S03 DENG-251) ----------
+ *
+ * SPEC §18.5. de_crash_install() catches CPU crashes and DE_PANIC and writes a text report
+ * `<dump_dir>/crash-<unixtime>-<pid>.txt` (reason, fault address, build ID, thread name,
+ * annotations, backtrace), a minidump `<stem>.dmp` on Windows, and a pending marker
+ * `<stem>.pending` that the next launch finds (S06 DENG-96 scans it and calls the upload
+ * callback). After the report, the process dies with the original signal (default action) or the
+ * Windows exception goes on to WER, so the OS crash reporter still sees the crash.
+ *
+ *   - POSIX (macOS, Linux): sigaction for SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT and SIGTRAP,
+ *     on a preallocated alternate signal stack (at least 64 KiB), so a stack overflow is
+ *     reported too.
+ *   - Windows: SetUnhandledExceptionFilter, a vectored handler for stack overflow, and the CRT
+ *     SIGABRT signal; a thread created at install writes the minidump (MiniDumpWriteDump) and
+ *     the report, because the crashing thread may have no stack left.
+ *   - DE_PANIC: de_crash_install takes the panic hook slot (de_panic_set_hook), so a panic writes
+ *     a report with the panic message before de_panic_ aborts. The abort that follows does not
+ *     write a second report.
+ *
+ * One crash is reported per process: when several threads crash at once, the first writes the
+ * report and the others wait for the process to die. The crash state is process-wide.
+ */
+
+/** A crash report as the next-launch upload flow passes it to the game (S06 DENG-96). */
 typedef struct de_crash_report {
-    const char *dump_path; /* minidump or equivalent */
-    const char *log_path;
-    const char *build_id;
-    const char *gpu_breadcrumbs; /* last render-graph passes, if a GPU fault */
+    const char *dump_path;       /**< minidump (Windows) or the text report (POSIX) */
+    const char *log_path;        /**< the text report, or a log tail written beside it */
+    const char *build_id;        /**< de_build_id() of the build that crashed */
+    const char *gpu_breadcrumbs; /**< last render-graph passes, if a GPU fault (S30 DENG-333) */
     bool gpu_fault;
 } de_crash_report;
-typedef void (*de_crash_upload_fn)(const de_crash_report *report, void *user); /* game-provided */
 
-DE_API void de_crash_install(const char *dump_dir, de_crash_upload_fn upload, void *user);
-DE_API void de_crash_set_annotation(const char *key, const char *value); /* included in reports */
+/** Game-provided upload callback. Called on a normal thread at the next launch (S06 DENG-96),
+ * never from a crash handler. */
+typedef void (*de_crash_upload_fn)(const de_crash_report *report, void *user);
+
+/** What caused a crash report. */
+typedef enum de_crash_kind {
+    DE_CRASH_SIGNAL,    /**< POSIX signal, or the CRT SIGABRT on Windows; `code` = signal number */
+    DE_CRASH_EXCEPTION, /**< Windows structured exception; `code` = exception code */
+    DE_CRASH_PANIC,     /**< DE_PANIC; `code` = 0, `panic_message` is set */
+} de_crash_kind;
+
+/**
+ * What a chained crash handler (de_crash_add_handler) receives. Every string lives in
+ * preallocated storage that stays valid for the whole handler chain; none may be kept after the
+ * handler returns.
+ */
+typedef struct de_crash_context {
+    de_crash_kind kind;
+    u32 code;                  /**< signal number, exception code, or 0 for a panic */
+    const char *reason;        /**< "SIGSEGV", "EXCEPTION_ACCESS_VIOLATION", "panic", ... */
+    u64 fault_address;         /**< si_addr / the faulting data address; 0 for a panic */
+    const char *panic_message; /**< the formatted DE_PANIC message, or NULL */
+    const char *thread_name;   /**< the crashing thread's name, "" if it has none */
+    const char *build_id;      /**< de_build_id() */
+    const char *report_path;   /**< full native path of the text report: `<report_stem>.txt` */
+    const char *report_stem;   /**< the same path without ".txt": `<dump_dir>/crash-<t>-<pid>` */
+    const char *dump_path;     /**< `<report_stem>.dmp` on Windows when written, else NULL */
+    intptr_t report_fd;        /**< the open report: POSIX file descriptor, or Win32 HANDLE */
+} de_crash_context;
+
+/**
+ * A chained crash handler. Handlers run after the core report and the pending marker are
+ * written, in registration order: on the crashing thread on POSIX (inside the signal handler, on
+ * the alternate stack, or in the panic hook), on the dump thread on Windows. It must be
+ * async-signal-safe: no malloc, no locks, no stdio, no logging. It may append to the report with
+ * de_crash_write and create sibling files named `<report_stem>.<something>` with open()/write()
+ * (CreateFileW on Windows).
+ */
+typedef void (*de_crash_handler_fn)(const de_crash_context *ctx, void *user);
+
+/** Most chained handlers (de_crash_add_handler). */
+#define DE_CRASH_MAX_HANDLERS 16
+/** Annotation table size: entries, and bytes per key and value including the NUL. */
+#define DE_CRASH_MAX_ANNOTATIONS      64
+#define DE_CRASH_ANNOTATION_KEY_MAX   64
+#define DE_CRASH_ANNOTATION_VALUE_MAX 256
+
+/**
+ * Installs the crash handlers (once per process) and sets where reports go.
+ *
+ * `dump_dir` is a native UTF-8 directory path (not a VFS path); NULL or "" is the current
+ * directory. It is created if missing, then copied, so the crash path does no allocation and no
+ * VFS work. `upload` and `user` are stored for the next-launch upload flow (S06 DENG-96);
+ * `upload` is never called from a crash handler. Also sets up the calling thread's alternate
+ * signal stack (de_crash_thread_init) and takes the panic hook slot (de_panic_set_hook).
+ *
+ * Calling it again only updates the directory and the upload callback; the handlers stay as
+ * they are. Not thread-safe against a concurrent install or crash.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (path longer than about 900 bytes); DE_ERR_IO (the
+ *         directory cannot be created, or a handler cannot be installed). On failure the
+ *         previous state is kept.
+ */
+DE_API de_result de_crash_install(const char *dump_dir, de_crash_upload_fn upload, void *user);
+
+/**
+ * Sets a key/value pair that every crash report lists (level name, GPU, game state...).
+ *
+ * The table is preallocated: DE_CRASH_MAX_ANNOTATIONS entries of DE_CRASH_ANNOTATION_KEY_MAX-byte
+ * keys and DE_CRASH_ANNOTATION_VALUE_MAX-byte values (each with its NUL); longer strings are cut
+ * at a UTF-8 boundary. Setting an existing key overwrites its value; an empty or NULL value
+ * removes the key and frees its entry. When the table is full a new key is dropped and counted
+ * (the report shows the count). Thread-safe and allocation-free: each entry is a seqlock, so the
+ * crash handler never waits on a writer. Works before de_crash_install. NULL or "" key: ignored.
+ */
+DE_API void de_crash_set_annotation(const char *key, const char *value);
+
+/**
+ * Adds a handler to the crash chain (see de_crash_handler_fn). Handlers run in the order they
+ * were added. Thread-safe; works before de_crash_install. There is no removal.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL fn); DE_ERR_BUSY (DE_CRASH_MAX_HANDLERS already).
+ */
+DE_API de_result de_crash_add_handler(de_crash_handler_fn fn, void *user);
+
+/**
+ * Appends `n` bytes of `s` to the report of `ctx`. Async-signal-safe, no allocation; for use in
+ * chained handlers. A NULL ctx or s, or an n of 0, does nothing.
+ */
+DE_API void de_crash_write(const de_crash_context *ctx, const char *s, size_t n);
+
+/**
+ * Prepares the calling thread for crash reporting: on POSIX it gives the thread its own alternate
+ * signal stack of at least 64 KiB (unless it already has one), so a stack overflow on it is
+ * reported; on Windows it reserves stack for the stack-overflow handler (SetThreadStackGuarantee).
+ * Call it at the start of every long-lived thread; de_crash_install does it for its own thread.
+ * Calling it twice is harmless. The stack is freed when the thread exits.
+ */
+DE_API void de_crash_thread_init(void);
+
+/** The build ID: the git commit (`git rev-parse --short HEAD` at configure time), or "unknown"
+ * outside a git checkout. Written into every crash report. Never NULL. */
+DE_API const char *de_build_id(void);
 
 DE_EXTERN_C_END
 #endif
