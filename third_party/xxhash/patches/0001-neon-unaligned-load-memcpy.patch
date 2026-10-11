@@ -1,0 +1,45 @@
+xxHash: load NEON vectors with memcpy instead of a misaligned dereference (AArch64 GCC)
+
+On AArch64 with GCC, XXH_vld1q_u64() read 16 bytes as `*(uint64x2_t const *)ptr`.
+uint64x2_t needs 16-byte alignment, but the input and the secret stripes (secret + 8*n)
+are not 16-byte aligned, so this is undefined behaviour. UBSan (GCC 14, -fsanitize=undefined,
+any -O level) stops at xxhash.h:4150 "load of misaligned address ... requires 16 byte
+alignment" for every XXH3 input longer than 240 bytes. Clang and the other XXH_VECTOR paths
+are not affected (they use vld1q_u8 / _mm_loadu_si128).
+
+A memcpy into a uint64x2_t is defined for any alignment. GCC 14 -O2 compiles it to the same
+single `ldr q` as the dereference (identical instruction counts), so speed and hash values
+do not change.
+
+Engine-local patch (DENG-358), applied by tools/vendor/vendor.py. Report upstream:
+https://github.com/Cyan4973/xxHash (no issue exists as of 2026-10; xxHash dev still has the
+dereference). Drop this patch when a pinned release has the fix.
+
+diff --git a/xxhash.h b/xxhash.h
+--- a/xxhash.h
++++ b/xxhash.h
+@@ -4139,15 +4139,21 @@ typedef uint64x2_t xxh_aliasing_uint64x2_t XXH_ALIASING;
+  * *conditionally* safe (`vld1` has an alignment bit like `movdq[ua]` in x86).
+  *
+  * GCC for AArch64 sees `vld1q_u8` as an intrinsic instead of a load, so it
+- * prohibits load-store optimizations. Therefore, a direct dereference is used.
++ * prohibits load-store optimizations. Therefore, a plain load is used: a
++ * memcpy into a uint64x2_t, which GCC compiles to the same single `ldr q`.
++ * A direct dereference of a `uint64x2_t const*` would also compile to that,
++ * but the input and the secret are not 16-byte aligned, so it is undefined
++ * behaviour (UBSan: "load of misaligned address").
+  *
+  * Otherwise, `vld1q_u8` is used with `vreinterpretq_u8_u64` to do a safe
+  * unaligned load.
+  */
+ #if defined(__aarch64__) && defined(__GNUC__) && !defined(__clang__)
+-XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr) /* silence -Wcast-align */
++XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr)
+ {
+-    return *(xxh_aliasing_uint64x2_t const *)ptr;
++    uint64x2_t v;
++    XXH_memcpy(&v, ptr, sizeof(v));
++    return v;
+ }
+ #else
+ XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr)

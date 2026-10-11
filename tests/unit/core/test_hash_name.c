@@ -82,6 +82,28 @@ TEST(hash, xxh3_vectors) {
     }
 }
 
+/* The hash depends on the bytes only, never on their address. Every start offset in a 16-byte
+ * window is used, so the SIMD loads of the long-input loop (> 240 bytes) see inputs that are not
+ * vector-aligned. Under DE_SANITIZE=undefined this also catches a misaligned vector load
+ * (DENG-358: xxHash's AArch64 GCC path dereferenced a uint64x2_t pointer). */
+TEST(hash, unaligned_input) {
+    fill_sanity_buffer();
+    /* 16 bytes of slack, plus room to start at any offset of a 16-byte boundary. */
+    static _Alignas(16) unsigned char shifted[SANITY_LEN + 16];
+    for (size_t off = 0; off < 16; ++off) {
+        memcpy(shifted + off, sanity_buf, SANITY_LEN);
+        for (size_t i = 0; i < sizeof xxh3_vectors / sizeof xxh3_vectors[0]; ++i) {
+            const xxh3_vector *v = &xxh3_vectors[i];
+            const u64 got = de_hash64(shifted + off, v->len, v->seed);
+            if (got != v->hash)
+                printf("  offset=%zu len=%zu seed=0x%llx: got 0x%016llx want 0x%016llx\n", off,
+                       v->len, (unsigned long long)v->seed, (unsigned long long)got,
+                       (unsigned long long)v->hash);
+            EXPECT_EQ(got, v->hash);
+        }
+    }
+}
+
 TEST(hash, str_helpers) {
     EXPECT_EQ(de_hash64_str(""), 0x2D06800538D394C2ULL);
     EXPECT_EQ(de_hash64_str(NULL), 0x2D06800538D394C2ULL);

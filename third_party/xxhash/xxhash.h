@@ -4139,15 +4139,21 @@ typedef uint64x2_t xxh_aliasing_uint64x2_t XXH_ALIASING;
  * *conditionally* safe (`vld1` has an alignment bit like `movdq[ua]` in x86).
  *
  * GCC for AArch64 sees `vld1q_u8` as an intrinsic instead of a load, so it
- * prohibits load-store optimizations. Therefore, a direct dereference is used.
+ * prohibits load-store optimizations. Therefore, a plain load is used: a
+ * memcpy into a uint64x2_t, which GCC compiles to the same single `ldr q`.
+ * A direct dereference of a `uint64x2_t const*` would also compile to that,
+ * but the input and the secret are not 16-byte aligned, so it is undefined
+ * behaviour (UBSan: "load of misaligned address").
  *
  * Otherwise, `vld1q_u8` is used with `vreinterpretq_u8_u64` to do a safe
  * unaligned load.
  */
 #if defined(__aarch64__) && defined(__GNUC__) && !defined(__clang__)
-XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr) /* silence -Wcast-align */
+XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr)
 {
-    return *(xxh_aliasing_uint64x2_t const *)ptr;
+    uint64x2_t v;
+    XXH_memcpy(&v, ptr, sizeof(v));
+    return v;
 }
 #else
 XXH_FORCE_INLINE uint64x2_t XXH_vld1q_u64(void const* ptr)
