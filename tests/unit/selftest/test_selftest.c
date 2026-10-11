@@ -7,6 +7,7 @@
  */
 #include "de_test.h"
 
+#include <limits.h>
 #include <stdint.h>
 
 /* ---- Passing checks ----------------------------------------------------------------------- */
@@ -61,6 +62,36 @@ TEST(selftest, mixed_sign_compare) {
     ASSERT_LT(INT64_MIN, UINT64_MAX);
     ASSERT_EQ((uint8_t)255, 255);
     ASSERT_EQ((int8_t)-1, -1LL);
+}
+
+/* Every integer width keeps its value: operands narrower than 64 bits go through helpers that
+ * take their own width and widen inside de_test.c (DENG-366). */
+DE_TEST_CASE(case_u32_message, inner, u32_message) {
+    EXPECT_LT(UINT_MAX, 0);
+}
+
+TEST(selftest, integer_widths) {
+    uint32_t u32max = UINT32_MAX;
+    ASSERT_EQ((signed char)-128, -128);
+    ASSERT_EQ((unsigned char)255, 255u);
+    ASSERT_EQ((short)-32768, -32768);
+    ASSERT_EQ((unsigned short)65535, 65535u);
+    ASSERT_EQ(INT_MIN, -2147483647LL - 1);
+    ASSERT_EQ(INT_MAX, 2147483647ULL);
+    ASSERT_EQ(UINT_MAX, 4294967295ULL);
+    ASSERT_GT(UINT_MAX, INT_MAX);
+    ASSERT_LT(INT_MIN, 0u);
+    ASSERT_EQ(LONG_MIN, (long long)LONG_MIN);
+    ASSERT_EQ(ULONG_MAX, (unsigned long long)ULONG_MAX);
+    ASSERT_GT(ULONG_MAX, -1);
+    ASSERT_EQ((_Bool)1, 1u);
+    ASSERT_EQ(u32max, 0xFFFFFFFFULL);
+    ASSERT_LT(u32max, 0x100000000ULL);
+    ASSERT_GT(0x100000000LL, u32max);
+
+    de_test_result r;
+    ASSERT_EQ(de_test_run_case(&case_u32_message, &r, 1), DE_TEST_FAILED);
+    ASSERT_TRUE(strstr(r.message, "got 4294967295 vs 0") != NULL);
 }
 
 /* Operands are evaluated exactly once. */

@@ -220,6 +220,17 @@ typedef struct de__tv {
     const void *p;
 } de__tv;
 
+/* One constructor per integer width. An operand narrower than 64 bits is passed as int,
+ * unsigned int, long or unsigned long, and the widening to 64 bits happens inside de_test.c, not
+ * at the call site. MSVC cl 19.44 (VS 2022 17.14) at /O2 miscompiled the call-site widening:
+ * when a u32 lived in lane 0 of an XMM register after a vectorised sum, cl passed it to
+ * de__tv_u(unsigned long long) with `movq rdx, xmm`, which copies lane 1 (a partial sum) into the
+ * upper 32 bits. EXPECT_LT(visible, total) then saw 0x20FC00002BFC for 11260 (DENG-366). A 32-bit
+ * parameter makes cl emit `movd edx, xmm`, and the callee's widening is correct. */
+de__tv de__tv_si(int v);
+de__tv de__tv_ui(unsigned int v);
+de__tv de__tv_sl(long v);
+de__tv de__tv_ul(unsigned long v);
 de__tv de__tv_s(long long v);
 de__tv de__tv_u(unsigned long long v);
 de__tv de__tv_p(const volatile void *v);
@@ -233,7 +244,7 @@ de__tv de__tv_p(const volatile void *v);
  * &arr[0]). DE__TV maps `float` to de__tv_p itself, so a float operand is still an error. */
 #if defined(_MSC_VER) && !defined(__clang__)
 #define DE__TV_ENUM_OR_PTR(x)                                                                      \
-    _Generic((char (*)[sizeof(x)])0, char (*)[sizeof(int)]: de__tv_s, default: de__tv_p)
+    _Generic((char (*)[sizeof(x)])0, char (*)[sizeof(int)]: de__tv_si, default: de__tv_p)
 #else
 #define DE__TV_ENUM_OR_PTR(x) de__tv_p
 #endif
@@ -242,17 +253,17 @@ de__tv de__tv_p(const volatile void *v);
  * no integer<->pointer casts, and a double or struct operand is a compile error. */
 #define DE__TV(x)                                                                                  \
     _Generic((x),                                                                                  \
-        _Bool: de__tv_u,                                                                           \
-        char: de__tv_s,                                                                            \
-        signed char: de__tv_s,                                                                     \
-        short: de__tv_s,                                                                           \
-        int: de__tv_s,                                                                             \
-        long: de__tv_s,                                                                            \
+        _Bool: de__tv_ui,                                                                          \
+        char: de__tv_si,                                                                           \
+        signed char: de__tv_si,                                                                    \
+        short: de__tv_si,                                                                          \
+        int: de__tv_si,                                                                            \
+        long: de__tv_sl,                                                                           \
         long long: de__tv_s,                                                                       \
-        unsigned char: de__tv_u,                                                                   \
-        unsigned short: de__tv_u,                                                                  \
-        unsigned int: de__tv_u,                                                                    \
-        unsigned long: de__tv_u,                                                                   \
+        unsigned char: de__tv_ui,                                                                  \
+        unsigned short: de__tv_ui,                                                                 \
+        unsigned int: de__tv_ui,                                                                   \
+        unsigned long: de__tv_ul,                                                                  \
         unsigned long long: de__tv_u,                                                              \
         float: de__tv_p, /* rejected: use ASSERT_FLOAT_EQ (see DE__TV_ENUM_OR_PTR) */              \
         default: DE__TV_ENUM_OR_PTR(x))(x)
