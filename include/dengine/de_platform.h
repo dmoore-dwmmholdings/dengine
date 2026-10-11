@@ -1257,19 +1257,99 @@ DE_API u32 de_io_pump(u32 max_completions);
  * End of the files and async I/O sections (DENG-247).
  * ========================================================================================== */
 
-/* ---------- File watching (dev builds) ---------- */
+/* ==========================================================================================
+ * File watching (S03, DENG-248). SPEC §6 (dev only), §10.1 (game hot reload), §11.9 (asset
+ * hot reload). Implementation: src/platform/watch_common.c and one backend per OS
+ * (watch_fsevents.c, watch_inotify.c, watch_win32.c).
+ *
+ * Only Debug and Dev builds watch files. In Release and Shipping builds de_file_watch_create()
+ * returns DE_ERR_UNSUPPORTED.
+ *
+ * A watch observes one directory, named by a virtual path (`dev:/assets`), and reports changes
+ * under it with virtual paths. The OS reports changes on its own threads; the watch keeps them
+ * in a pending table and merges them per path. A change is delivered once nothing has happened
+ * to its path for the debounce window (editors save in bursts: temporary file, rename, several
+ * writes). Callbacks run only inside de_file_watch_poll(), on the thread that calls it.
+ *
+ * Merge rules for one path within a window: CREATED + MODIFIED -> CREATED; CREATED + DELETED ->
+ * nothing; DELETED + CREATED -> MODIFIED (replaced); a rename -> one RENAMED with the new path
+ * and `old_path`. A file that is created and then renamed over a target in the same window (an
+ * atomic save, de_file_write_all_atomic) reports one MODIFIED for the target and nothing for
+ * the temporary file. A rename into the watched tree from outside is CREATED, a rename out of
+ * it is DELETED. Directories report CREATED, DELETED and RENAMED, never MODIFIED; renaming a
+ * directory reports the directory only, not each entry inside it. When the OS drops events
+ * (queue or buffer overflow), the watch reports one MODIFIED for the watched directory itself
+ * (`is_dir` true): rescan it.
+ * ========================================================================================== */
+
+/** A directory watch. Opaque. */
 typedef struct de_file_watch de_file_watch;
+
+/** What happened to a path. */
 typedef enum de_watch_change {
-    DE_WATCH_CREATED,
-    DE_WATCH_MODIFIED,
-    DE_WATCH_DELETED,
-    DE_WATCH_RENAMED
+    DE_WATCH_CREATED,  /**< a new file or directory */
+    DE_WATCH_MODIFIED, /**< the contents of a file changed (or the watched dir needs a rescan) */
+    DE_WATCH_DELETED,  /**< removed, or moved out of the watched tree */
+    DE_WATCH_RENAMED   /**< moved within the watched tree: `path` is the new name */
 } de_watch_change;
-typedef void (*de_watch_fn)(const char *path, de_watch_change change, void *user);
-DE_API de_result de_file_watch_create(const char *dir, bool recursive, de_watch_fn fn, void *user,
-                                      de_file_watch **out);
-DE_API void de_file_watch_poll(de_file_watch *w); /* delivers on the calling thread */
+
+/** One change, valid only during the callback. */
+typedef struct de_watch_event {
+    const char *path;       /**< virtual path, `<watched dir>/<relative path>` */
+    const char *old_path;   /**< DE_WATCH_RENAMED: the previous virtual path; otherwise NULL */
+    de_watch_change change; /**< what happened */
+    bool is_dir;            /**< the path is a directory (as far as the OS reported it) */
+} de_watch_event;
+
+/** Watch callback. It may call any file function, but must not destroy its own watch. */
+typedef void (*de_watch_fn)(const de_watch_event *ev, void *user);
+
+/** Default debounce window, in milliseconds (the cvar `fs.watch_debounce_ms`). */
+#define DE_WATCH_DEBOUNCE_DEFAULT_MS 100
+
+/**
+ * de_file_watch_create() settings. `dir` and `fn` are required; zero is the default for the
+ * other fields.
+ */
+typedef struct de_file_watch_desc {
+    /** Virtual path of an existing directory. A root with several mounts is watched in the
+     * mount that de_fs_resolve() picks (the first one where the directory exists). */
+    const char *dir;
+    /** Also watch every subdirectory, including ones created later. */
+    bool recursive;
+    de_watch_fn fn; /**< called from de_file_watch_poll() */
+    void *user;     /**< passed to fn */
+    /** Debounce window in ms; 0 = the cvar `fs.watch_debounce_ms` (default
+     * DE_WATCH_DEBOUNCE_DEFAULT_MS), read at every poll. The cvar is registered by the first
+     * de_file_watch_create(). */
+    u32 debounce_ms;
+    /** The watch, its pending changes and the backend buffers; NULL = de_heap_allocator(). */
+    const de_allocator *allocator;
+} de_file_watch_desc;
+
+/**
+ * Starts watching `desc->dir`. Changes made after this returns are reported.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL desc, `dir`, `fn` or `out`, a bad virtual path,
+ *         not a directory); DE_ERR_NOT_FOUND (root not mounted, no such directory);
+ *         DE_ERR_OUT_OF_MEMORY; DE_ERR_IO (the OS refused the watch); DE_ERR_UNSUPPORTED (not a
+ *         Debug or Dev build).
+ */
+DE_API de_result de_file_watch_create(const de_file_watch_desc *desc, de_file_watch **out);
+
+/**
+ * Delivers every change whose debounce window has passed, on the calling thread, oldest first.
+ * Never blocks on the OS. Call it from one thread at a time (typically once per frame on the
+ * main thread). A NULL watch is ignored. Returns the number of callbacks made.
+ */
+DE_API u32 de_file_watch_poll(de_file_watch *w);
+
+/** Stops the watch and frees it with any pending changes (they are not delivered). NULL is
+ * ignored. Not from inside the watch's own callback. */
 DE_API void de_file_watch_destroy(de_file_watch *w);
+
+/* ==========================================================================================
+ * End of the file watching section (DENG-248).
+ * ========================================================================================== */
 
 /* ---------- Dynamic libraries (S03, DENG-249) ----------
  * The game library in dev builds (SPEC §10.1) and its hot reload. Implementation:

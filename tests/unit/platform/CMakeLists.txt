@@ -82,3 +82,14 @@ if(TARGET test_devices)
         target_link_libraries(test_devices PRIVATE de_tp_sdl3)
     endif()
 endif()
+
+# File watching (DENG-248): its own executable, so CTest names are watch.<test>. Each test
+# mounts its own directory under the build tree as scratch:/ and uses the internal header
+# src/platform/watch_internal.h (pending-count hook). The tests wait for OS notifications in
+# poll loops, hence the generous timeout.
+de_add_test(NAME watch SOURCES test_watch.c LIBS de_platform TIMEOUT 120)
+if(TARGET test_watch)
+    target_include_directories(test_watch PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_watch PRIVATE
+        DE_IO_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_watch_tmp")
+endif()
