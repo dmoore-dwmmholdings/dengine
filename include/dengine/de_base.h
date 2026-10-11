@@ -344,17 +344,136 @@ typedef struct de_log_record {
 
 typedef void (*de_log_sink_fn)(const de_log_record *rec, void *user);
 
+/**
+ * Registers a category, or returns the existing one with the same name (its level is then left
+ * alone). The name is copied (cut to DE_LOG_CATEGORY_NAME_MAX - 1 bytes). Thread-safe. When all
+ * DE_LOG_MAX_CATEGORIES are taken, writes a warning to stderr and returns DE_LOG_CAT_GENERAL.
+ */
 DE_API de_log_category de_log_register_category(const char *name, de_log_level default_level);
+/** Messages of `cat` below `level` are dropped before formatting. Thread-safe. */
 DE_API void de_log_set_level(de_log_category cat, de_log_level level);
+/**
+ * Adds a sink (at most DE_LOG_MAX_SINKS; a full table or a duplicate (fn, user) pair is ignored).
+ * Sinks run on the log thread, or on a thread inside de_log_flush(), one record at a time, never
+ * two at once. A sink may log (the record goes to the next batch) but must not add or remove
+ * sinks or call de_log_flush(). Allowed before de_log_init(). de_log_shutdown() removes every sink.
+ */
 DE_API void de_log_add_sink(de_log_sink_fn fn, void *user);
+/** Formats the message into the calling thread's log buffer. Use DE_LOG / DE_INFO / ... */
 DE_API void de_log_(de_log_level lvl, de_log_category cat, const char *file, u32 line,
                     const char *fmt, ...) DE_PRINTF_FMT(5, 6);
-#define DE_LOG(lvl, cat, ...) de_log_((lvl), (cat), __FILE__, __LINE__, __VA_ARGS__)
-#define DE_INFO(cat, ...)     DE_LOG(DE_LOG_INFO, cat, __VA_ARGS__)
-#define DE_WARN(cat, ...)     DE_LOG(DE_LOG_WARN, cat, __VA_ARGS__)
-#define DE_ERROR(cat, ...)    DE_LOG(DE_LOG_ERROR, cat, __VA_ARGS__)
+/* The level check comes first, so the arguments are not even evaluated below the level. */
+#define DE_LOG(lvl, cat, ...)                                                                      \
+    (de_log_enabled((lvl), (cat)) ? de_log_((lvl), (cat), __FILE__, __LINE__, __VA_ARGS__)         \
+                                  : (void)0)
+#define DE_INFO(cat, ...)  DE_LOG(DE_LOG_INFO, cat, __VA_ARGS__)
+#define DE_WARN(cat, ...)  DE_LOG(DE_LOG_WARN, cat, __VA_ARGS__)
+#define DE_ERROR(cat, ...) DE_LOG(DE_LOG_ERROR, cat, __VA_ARGS__)
 
 /* Log init and flush (DENG-150) go at the end of this section. */
+
+/* ---------- Logging: init, flush, sinks (DENG-150) ---------- */
+
+/** Most categories; ids are 0 .. DE_LOG_MAX_CATEGORIES - 1. */
+#define DE_LOG_MAX_CATEGORIES 256
+/** Capacity of a category name, including the NUL. */
+#define DE_LOG_CATEGORY_NAME_MAX 32
+/** Most sinks at once. */
+#define DE_LOG_MAX_SINKS 8
+/** Capacity of one formatted message, including the NUL. Longer messages are cut. */
+#define DE_LOG_MESSAGE_MAX 1024
+
+/* Pre-registered categories (ids 0, 1, 2), default level Info. */
+#ifdef __cplusplus
+#define DE_LOG_CATEGORY_(id) (de_log_category{(id)})
+#else
+#define DE_LOG_CATEGORY_(id) ((de_log_category){(id)})
+#endif
+#define DE_LOG_CAT_GENERAL  DE_LOG_CATEGORY_(0) /**< "general"; same as (de_log_category){0} */
+#define DE_LOG_CAT_CORE     DE_LOG_CATEGORY_(1) /**< "core" */
+#define DE_LOG_CAT_PLATFORM DE_LOG_CATEGORY_(2) /**< "platform" */
+
+/** DE_LOG at Fatal level: logs, flushes every sink, then DE_PANICs with the same message. */
+#define DE_FATAL(cat, ...) DE_LOG(DE_LOG_FATAL, cat, __VA_ARGS__)
+
+struct de_allocator; /* de_memory.h */
+
+/** de_log_init() settings. `(de_log_desc){0}` (or a NULL desc) gives the defaults. */
+typedef struct de_log_desc {
+    /** Per-thread buffer memory, taken once per thread on its first log call and returned at
+     * de_log_shutdown(). NULL = the system heap (malloc). Must outlive de_log_shutdown(). */
+    const struct de_allocator *allocator;
+    /** Per-thread buffer size. 0 = 64 KiB. Rounded up to a power of two, at least 4 KiB. */
+    u32 thread_buffer_bytes;
+    /** How often the log thread drains when nobody wakes it, in ms. 0 = 5. */
+    u32 drain_interval_ms;
+    /** true: do not add the console sink (de_log_console_sink). */
+    bool no_console_sink;
+} de_log_desc;
+
+/**
+ * Starts the log thread (`de-log`) and switches de_log_ from synchronous stderr output to the
+ * per-thread buffers. Adds the console sink unless `desc->no_console_sink`.
+ *
+ * Before de_log_init() and after de_log_shutdown(), de_log_ writes each message synchronously to
+ * stderr in the console format; sinks are not called. Not thread-safe against de_log_shutdown().
+ * @return DE_OK, DE_ERR_BUSY (already initialized), DE_ERR_INVALID_ARGUMENT (an allocator
+ *         without alloc/free), or the error of the semaphore, TLS key or thread creation.
+ */
+DE_API de_result de_log_init(const de_log_desc *desc);
+
+/**
+ * Drains every buffer one last time, stops the log thread, removes every sink and frees the
+ * buffers. No other thread may be inside de_log_ while this runs: shut logging down after the
+ * threads that log have stopped. Does nothing when logging is not initialized.
+ */
+DE_API void de_log_shutdown(void);
+
+/**
+ * Synchronously drains every thread's buffer to the sinks on the calling thread. Every message
+ * logged before the call (on this thread, or on threads that synchronized with it) has reached
+ * the sinks when it returns. Does nothing before de_log_init(), or inside a sink. DE_FATAL and
+ * DE_PANIC call it.
+ */
+DE_API void de_log_flush(void);
+
+/** Whether a message of `lvl` in `cat` would be logged. One relaxed load; thread-safe. */
+DE_API bool de_log_enabled(de_log_level lvl, de_log_category cat);
+/** The level of `cat` (DE_LOG_INFO for an unregistered id). */
+DE_API de_log_level de_log_get_level(de_log_category cat);
+/** The category's name; "general" for an unregistered id. */
+DE_API const char *de_log_category_name(de_log_category cat);
+/** "trace", "debug", "info", "warn", "error", "fatal"; "?" when out of range. */
+DE_API const char *de_log_level_name(de_log_level lvl);
+
+/**
+ * Removes the sink added with this (fn, user) pair. When it returns, the sink is not running and
+ * is never called again. Must not be called from inside a sink.
+ */
+DE_API void de_log_remove_sink(de_log_sink_fn fn, void *user);
+
+/**
+ * The console sink: one line per record on stderr, `[level][category] file:line message`, with
+ * the level coloured when stderr is a terminal. `user` is ignored. de_log_init() adds it.
+ */
+DE_API void de_log_console_sink(const de_log_record *rec, void *user);
+
+/** A file sink opened by de_log_file_sink_open(). */
+typedef struct de_log_file_sink de_log_file_sink;
+
+/**
+ * Creates (truncates) the file at `native_path` with stdio and adds a sink that writes one line
+ * per record, `<seconds> [level][category][thread] file:line message`. The file is flushed after
+ * each drain batch. Works without the VFS: the path is an OS path, not a virtual path.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_OUT_OF_MEMORY, DE_ERR_BUSY (DE_LOG_MAX_SINKS
+ *         sinks already), or DE_ERR_IO when the file cannot be opened.
+ */
+DE_API de_result de_log_file_sink_open(const char *native_path, de_log_file_sink **out);
+
+/** Flushes the log (when initialized), removes the sink, then closes the file. NULL is ignored. */
+DE_API void de_log_file_sink_close(de_log_file_sink *sink);
+
+/* ---------- End of logging: init, flush, sinks (DENG-150) ---------- */
 
 /* ---------- Version ---------- */
 

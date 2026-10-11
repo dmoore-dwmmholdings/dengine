@@ -28,6 +28,8 @@ de_add_module(
         hashmap.c
         de_bitset.h
         de_ring.h
+        log.c
+        log_sinks.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -42,6 +44,8 @@ target_link_libraries(de_core PRIVATE "$<TARGET_NAME_IF_EXISTS:Threads::Threads>
 # The dev intern table locks a de_mutex, so core links platform (core and platform form one
 # layering group; CMake resolves the static-library cycle with platform's DEPS core).
 target_link_libraries(de_core PRIVATE de_tp_xxhash de_platform)
+# DENG-150: logging (log.c) also needs platform through this link: the de-log thread, TLS keys,
+# semaphores and de_time_now_ns.
 set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS de_tp_xxhash)
 if(APPLE)
     # CMake repeats the core <-> platform static-library cycle on every link line, because GNU ld
