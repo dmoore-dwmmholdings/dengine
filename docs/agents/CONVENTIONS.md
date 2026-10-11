@@ -7,7 +7,7 @@ When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over 
 | Item | Rule |
 |---|---|
 | `main` | Only completed sprints, merged with `--no-ff` and tagged `sxx-done`. |
-| Sprint branch | `sprint/<sxx>-<slug>`, cut from `main` at sprint start. The exact name is in the epic's SPRINT PLAN. |
+| Sprint branch | `sprint/<sxx>-<slug>`, cut from `main` at sprint start. The exact name is in the SPRINT PLAN (v2) in the epic description. |
 | Feature branch | `feature/<KEY>-<slug>`, cut from the sprint branch. One issue per branch. |
 | Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. |
 | Commits | Commit at the **end of each issue**. Subject: `<KEY>: <summary>`. End with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. |
@@ -23,8 +23,8 @@ When this file and SPEC.md disagree, SPEC.md wins. Decisions on DENG-2 win over 
   - `agent-failed`: a worker failed once. The orchestrator retries once.
   - `needs-human`: escalated with `request_decision`. Agents leave it alone until a human answers.
   - `follow-up`: filed by the orchestrator from a worker's Follow-ups list.
-- Parallelism: tasks are linked with `blocked_by`. A task may start when all its blockers are Done. The wave number in the description and the SPRINT PLAN only guide the order. **Owns paths** do not overlap within a wave.
-- Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. `Parallel-safe with: T3, T4` and other `Tn` references are outline ids within the same sprint; the epic's SPRINT PLAN table maps them to real keys. Some planning notes were added later as **comments** on issues. They correct the description, so read the comments too.
+- Parallelism: tasks are linked with `blocked_by`. A task may start when all its blockers are Done. The wave number in the description and in the SPRINT PLAN only guide the order. **Owns paths** do not overlap within a wave.
+- Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. Descriptions use real DENG keys. If you still meet an outline id (`T3`, `S05 T10`), the **Outline ids** table in that sprint's SPRINT PLAN (v2) (epic description) maps it to a key. Corrections that were first posted as comments have been folded into the descriptions; a later comment still wins over the description if they disagree.
 
 ## 3. Code (from SPEC §3.2, §4.2, §5.1)
 

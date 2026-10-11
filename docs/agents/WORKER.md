@@ -11,7 +11,7 @@ Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`,
 ## Step 1: Read and claim
 1. `get_issue <KEY>`. If it reports an unfinished blocker, stop and return `RESULT: failed` with the reason `blocked by <keys>`. Do not start.
 2. Read the issue description in full. Then read:
-   - the epic's `## SPRINT PLAN` comment (`list_comments <EPIC>`),
+   - the `## SPRINT PLAN (v2)` section of the epic description (`get_issue <EPIC>`),
    - **DENG-2** (decisions),
    - `docs/agents/CONVENTIONS.md`,
    - the SPEC.md sections and the `include/dengine/*.h` headers that the issue cites,

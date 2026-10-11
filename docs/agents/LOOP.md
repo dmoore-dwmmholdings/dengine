@@ -25,12 +25,12 @@ Related files:
 | Issue statuses | `Backlog` → `To Do` → `In Progress` → `In Review` → `Done` (also `Won't do`) |
 | Sprint names | `S01 …` to `S39 …`. Run them in numeric order. Only one sprint is active at a time. |
 | Sprint epic | One `epic` per sprint, under DENG-1, in that sprint. Its summary starts with `[Sxx]`. **Sprint `Sxx` → epic `DENG-(xx+2)`** (DENG-3 … DENG-41). Epic N is `blocked_by` epic N-1. |
-| Finding tasks | Always use `parent = <EPIC>`. Never search by sprint name, because it fails for some names. |
-| Sprint plan | A comment on the epic whose first line is `## SPRINT PLAN`. It gives the sprint branch, **Max parallel workers**, waves, critical path, merge hotspots and exit checks. |
+| Finding tasks | Always use `parent = <EPIC>` **and pass `project: "DENG"`** to `search_issues` (without it the search scans only part of the workspace and silently drops children). Never search by sprint name, because it fails for some names. Cross-check the count against the `## Children` list from `get_issue <EPIC>`. |
+| Sprint plan | The `## SPRINT PLAN (v2)` section of the **epic description**. It gives the sprint branch, **Max parallel workers**, the outline-id → key map, waves, critical path, merge hotspots and exit checks. The older `## SPRINT PLAN` comment on the epic is superseded; ignore it. |
 | Tasks | `task` issues whose parent is the epic. `blocked_by` links between tasks are **the rule** for ordering. Waves are only a guide. |
 | Integration checkout | The main repo directory (this one). During a sprint it has the sprint branch checked out. Only you write to it. |
 | Worker checkouts | `.worktrees/<KEY>/` (gitignored). One per issue, on `feature/<KEY>-<slug>`. |
-| Default max parallel | 4, if the plan comment does not give a number. Never more than 6. |
+| Default max parallel | 4, if the plan does not give a number. Never more than 6. |
 
 ---
 
@@ -48,14 +48,14 @@ Do these steps in order. Do not skip a step because you "remember" the state; ch
 2. If a sprint is **active**, use it and go to §2.3.
 3. If no sprint is active, take the **lowest-numbered future sprint**. Then:
    - Find its epic from the fixed mapping: **the epic for sprint `Sxx` is `DENG-(xx+2)`**. For example, S01 → DENG-3, S20 → DENG-22, S39 → DENG-41. Confirm with `get_issue` that the summary starts with `[Sxx]`. Do **not** look up the epic by searching on the sprint name: AQL `sprint = "<name>"` returns nothing for some sprint names (S06, S18, S22, S34, S36). Confirm that `get_issue` reports no unfinished blocker (the epic of the sprint before must be Done).
-   - Read DENG-2 (decisions) and the epic's `SPRINT PLAN` comment (`list_comments` on the epic).
+   - Read DENG-2 (decisions) and the `## SPRINT PLAN (v2)` section of the epic description (`get_issue` on the epic).
    - `start_sprint` with `durationDays: 14`.
    - Create the sprint branch from `main`: `git checkout main && git checkout -b sprint/<code>-<slug>`. Use the exact name from the plan.
    - Set the epic to `In Progress`. Comment on it: `▶ Sprint started. Branch sprint/… from main @ <sha>. Max parallel N.`
 4. If no future sprints are left and every epic is Done, go to §2.8 (finish).
 
 ### 2.3 Load the sprint's tasks
-`search_issues` with `parent = <EPIC> ORDER BY key ASC`, limit 100. For each task, record its status, labels, priority and `blocked_by` keys. Call `get_issue` when you need the blocking details or the latest comments.
+`search_issues` with `project: "DENG"`, `parent = <EPIC> ORDER BY key ASC`, limit 100. If the number of tasks differs from the epic's `## Children` list in `get_issue`, use the children list. For each task, record its status, labels, priority and `blocked_by` keys. Call `get_issue` when you need the blocking details or the latest comments.
 
 Sort every task into exactly one bucket:
 
