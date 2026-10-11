@@ -1,66 +1,251 @@
 /* de_platform.h — windows, time, threads, files, async I/O, file watch, dynamic libs.
- * Implemented on SDL3 + per-OS code. No SDL types appear here. SPEC.md §6. */
+ * Implemented on a vendored windowing library + per-OS code. No third-party type or name
+ * appears here. SPEC.md §6. */
 #ifndef DE_PLATFORM_H
 #define DE_PLATFORM_H
 #include "de_base.h"
 #include "de_memory.h"
 DE_EXTERN_C_BEGIN
 
+/* ==========================================================================================
+ * Platform init, displays, windows and the event pump (S03, DENG-245). SPEC §6.
+ * Implementation: src/platform/sdl/ (third_party/sdl3). A DE_HEADLESS build does not link the
+ * windowing library at all: src/platform/sdl/platform_headless.c provides the same functions,
+ * and every window function there returns DE_ERR_UNSUPPORTED (or a zero value).
+ *
+ * Threading: every function in this section is main-thread only (the thread that called
+ * de_platform_init()). macOS requires windows and events on the main thread; the S04
+ * main-thread queue and S05 DE_SYSTEM_MAIN_THREAD systems rely on this rule. Debug and Dev
+ * builds assert it.
+ * ========================================================================================== */
+
+/* ---------- Platform init ---------- */
+
+/** Flags for de_platform_desc.flags. */
+typedef enum de_platform_flags {
+    /** No video subsystem: no windows, no displays. de_window_create() returns
+     * DE_ERR_UNSUPPORTED. The event pump still delivers DE_EV_QUIT (SIGINT/SIGTERM). Servers and
+     * tools use this; a DE_HEADLESS build always behaves as if it were set. */
+    DE_PLATFORM_HEADLESS = 1u << 0
+} de_platform_flags;
+
+/** de_platform_init() settings. `(de_platform_desc){0}` (or a NULL desc) gives the defaults. */
+typedef struct de_platform_desc {
+    const char *app_name;       /**< shown by the OS (macOS menu, audio mixers); NULL = "DEngine" */
+    const char *app_org;        /**< developer / publisher name; NULL = none */
+    const char *app_version;    /**< free-form version string; NULL = none */
+    const char *app_identifier; /**< reverse-DNS id, e.g. "com.example.game"; NULL = none */
+    u32 flags;                  /**< de_platform_flags */
+    /** The platform state, window table, input ring and drop-path arena bookkeeping. NULL =
+     * de_heap_allocator(). Must outlive de_platform_shutdown(). The windowing library itself
+     * allocates with the system heap. */
+    const de_allocator *allocator;
+} de_platform_desc;
+
+/**
+ * Starts the platform layer: the windowing library with video (or only events, headless).
+ *
+ * Call it once, on the main thread, before any other function in this section. It tells the
+ * windowing library that the engine owns main(), sets the app metadata, and starts video.
+ * The strings in `desc` are copied.
+ *
+ * @return DE_OK; DE_ERR_BUSY if already initialised; DE_ERR_OUT_OF_MEMORY; or
+ *         DE_ERR_UNSUPPORTED when no video driver can start (no display server). A caller that
+ *         can run without windows may retry with DE_PLATFORM_HEADLESS.
+ */
+DE_API de_result de_platform_init(const de_platform_desc *desc);
+
+/** Destroys every window that is still open, shuts video down and frees the platform state.
+ * Does nothing when the platform is not initialised. Main thread only. */
+DE_API void de_platform_shutdown(void);
+
+/** True when the platform runs without video (DE_PLATFORM_HEADLESS, a DE_HEADLESS build, or
+ * not initialised). */
+DE_API bool de_platform_headless(void);
+
+/* ---------- Displays ----------
+ * Displays are addressed by index, 0 .. de_display_count() - 1, in the OS order (the primary
+ * display is not always 0; see de_display_info.primary). Indices can change when a display is
+ * added or removed (DE_EV_DISPLAY_CHANGED with DE_DISPLAY_ADDED / DE_DISPLAY_REMOVED). */
+
+/** Display description. Sizes are in pixels. */
+typedef struct de_display_info {
+    u32 width, height; /**< desktop mode in pixels (points × pixel density) */
+    u32 refresh_hz;    /**< desktop refresh rate, rounded; 0 = unknown */
+    /** UI scale the user chose for this display (1.0 = 100 %, 2.0 on a Retina display). Not the
+     * same as the pixel density of a window (see de_window_size_pixels()). */
+    f32 content_scale;
+    /** The display can show more than SDR white now or on demand (Windows HDR on, macOS EDR,
+     * HDR on Wayland): there is headroom above SDR white. */
+    bool hdr_capable;
+    /**
+     * SDR white and peak luminance, in nits, in the scRGB convention (1.0 = 80 nits). Known
+     * per window: de_window_display() fills them from the window's SDR white level and HDR
+     * headroom. de_display_info_get() uses an engine window on that display if there is one;
+     * otherwise sdr_white_nits is 80 and max_nits is 80 for an SDR display or 0 (unknown) for
+     * an HDR one. On macOS the SDR white level is always 1.0 (EDR), so only the ratio
+     * max_nits / sdr_white_nits (= hdr_headroom) is meaningful there.
+     */
+    f32 sdr_white_nits, max_nits;
+    f32 hdr_headroom; /**< max_nits / sdr_white_nits; 1.0 for SDR, 0 when unknown */
+    bool primary;     /**< the OS primary display */
+    char name[64];    /**< UTF-8, cut at 63 bytes; "" when the OS gives none */
+} de_display_info;
+
+/** A fullscreen display mode. */
+typedef struct de_display_mode {
+    u32 width, height; /**< pixels */
+    f32 refresh_hz;    /**< exact rate, e.g. 59.94; 0 = unspecified */
+    f32 pixel_density; /**< pixels per point: logical size = width / pixel_density */
+} de_display_mode;
+
+/** Number of connected displays. 0 when headless or not initialised. */
+DE_API u32 de_display_count(void);
+
+/** Describes display `index`. DE_ERR_INVALID_ARGUMENT for a bad index or NULL `out`;
+ * DE_ERR_UNSUPPORTED when headless. */
+DE_API de_result de_display_info_get(u32 index, de_display_info *out);
+
+/**
+ * Fullscreen modes of display `index`, best first (largest, then highest density, then highest
+ * refresh rate). Writes at most `max` modes to `out` (which may be NULL when `max` is 0) and
+ * returns the total number of modes, so `de_display_modes(i, NULL, 0)` asks for the count.
+ * Returns 0 for a bad index or when headless.
+ */
+DE_API u32 de_display_modes(u32 index, de_display_mode *out, u32 max);
+
+/* ---------- Windows ---------- */
+
+/** Windows are typed handles with a generation (SPEC §5.1): a handle kept after
+ * de_window_destroy() is rejected, even when its slot is reused. */
 DE_HANDLE(de_window);
+
+/** Most windows open at once. */
+#define DE_WINDOW_MAX 16
 
 typedef enum de_window_mode {
     DE_WINDOW_WINDOWED,
-    DE_WINDOW_BORDERLESS,
-    DE_WINDOW_FULLSCREEN
+    DE_WINDOW_BORDERLESS, /**< borderless fullscreen at the desktop mode */
+    DE_WINDOW_FULLSCREEN  /**< exclusive fullscreen at the display mode closest to the window */
 } de_window_mode;
 
 typedef struct de_window_desc {
-    const char *title;
-    u32 width, height; /* logical pixels; 0 = 1280x720 */
+    const char *title; /**< UTF-8; NULL = the app name */
+    u32 width, height; /**< logical pixels (points); 0 = 1280x720 */
     de_window_mode mode;
-    i32 display_index; /* -1 = primary */
-    bool resizable, high_dpi, hidden;
+    i32 display_index; /**< display to open on (centred); -1 = primary. Note that 0 in a zeroed
+                            desc means display 0, which is usually but not always primary. */
+    bool resizable;
+    /** Full-resolution backbuffer on high-density displays (Retina): the pixel size is then the
+     * logical size × the display's pixel density. Without it the pixel size is the logical size
+     * on macOS (the OS scales the window up). */
+    bool high_dpi;
+    bool hidden; /**< create without showing it (tests, tools) */
 } de_window_desc;
 
-typedef struct de_display_info {
-    u32 width, height, refresh_hz;
-    f32 content_scale;
-    bool hdr_capable;
-    f32 sdr_white_nits, max_nits;
-} de_display_info;
+/**
+ * Opens a window. A NULL `desc` gives the defaults.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `out`, not initialised, bad display index);
+ *         DE_ERR_UNSUPPORTED (headless); DE_ERR_BUSY (DE_WINDOW_MAX windows open); or
+ *         DE_ERR_INTERNAL when the OS refuses the window (the message has the reason).
+ */
+DE_API de_result de_window_create(const de_window_desc *desc, de_window *out);
 
-/* Native handles for the RHI only (HWND, CAMetalLayer*, VkSurface helper data). */
+/** Closes the window. A stale or zero handle is ignored. */
+DE_API void de_window_destroy(de_window w);
+
+/** Size of the drawable area in pixels (what a swapchain needs). 0 x 0 for a stale handle.
+ * Either pointer may be NULL. */
+DE_API void de_window_size_pixels(de_window w, u32 *width, u32 *height);
+
+/**
+ * Switches between windowed, borderless fullscreen and exclusive fullscreen. Exclusive
+ * fullscreen uses the display mode closest to the window's logical size on the window's
+ * display. The OS may apply the change later (macOS animates it); a hidden window applies it
+ * when shown. de_window_get_mode() reports the mode asked for here.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (stale handle or bad mode); DE_ERR_NOT_FOUND (no
+ *         fullscreen mode on that display); DE_ERR_INTERNAL when the OS refuses.
+ */
+DE_API de_result de_window_set_mode(de_window w, de_window_mode mode);
+
+/** The mode last set by de_window_create() or de_window_set_mode(). DE_WINDOW_WINDOWED for a
+ * stale handle. */
+DE_API de_window_mode de_window_get_mode(de_window w);
+
+/** Sets the title (UTF-8). A stale handle or NULL title is ignored. */
+DE_API void de_window_set_title(de_window w, const char *title);
+
+/** The display the window is mostly on, with the window's SDR white level and HDR headroom (see
+ * de_display_info). All zero for a stale handle. */
+DE_API de_display_info de_window_display(de_window w);
+
+/* Native handles for the RHI only (Win32 window handle, macOS Metal layer, Vulkan surface
+ * helper data).
+ * de_window_native() is implemented by S03 DENG-250. */
 typedef struct de_native_window {
     void *hwnd;        /* Windows */
     void *metal_layer; /* macOS */
     void *sdl_window;  /* Vulkan surface creation path; opaque */
 } de_native_window;
 
-DE_API de_result de_window_create(const de_window_desc *desc, de_window *out);
-DE_API void de_window_destroy(de_window w);
-DE_API void de_window_size_pixels(de_window w, u32 *width, u32 *height);
-DE_API void de_window_set_mode(de_window w, de_window_mode mode);
-DE_API void de_window_set_title(de_window w, const char *title);
-DE_API de_display_info de_window_display(de_window w);
 DE_API de_native_window de_window_native(de_window w);
 
-/* Event pump. Input events are routed to de_input (de_input.h); this returns window/app events. */
+/* ---------- Event pump ---------- */
+
+/** What de_platform_pump() returns. Input events (keyboard, mouse, gamepad, touch, pen,
+ * sensors) are not app events: the pump routes them to de_input (de_input.h, S03 DENG-246). */
 typedef enum de_app_event_kind {
-    DE_EV_QUIT,
-    DE_EV_WINDOW_RESIZED,
-    DE_EV_WINDOW_FOCUS,
-    DE_EV_WINDOW_MINIMIZED,
-    DE_EV_DISPLAY_CHANGED,
-    DE_EV_DROP_FILE,
-    DE_EV_LOW_MEMORY
+    DE_EV_QUIT,             /**< the user or the OS asks to quit (last window closed, Cmd-Q,
+                                 SIGINT/SIGTERM) */
+    DE_EV_WINDOW_RESIZED,   /**< `window`'s pixel size changed: `a` x `b` pixels */
+    DE_EV_WINDOW_FOCUS,     /**< `a` = 1 keyboard focus gained, 0 lost */
+    DE_EV_WINDOW_MINIMIZED, /**< `a` = 1 minimised, 0 restored or maximised */
+    DE_EV_DISPLAY_CHANGED,  /**< `a` = display index (or ~0u if gone), `b` = de_display_change;
+                                 `window` set for the per-window reasons */
+    DE_EV_DROP_FILE,        /**< a file dropped on `window`; `path` (UTF-8) */
+    DE_EV_LOW_MEMORY,       /**< the OS is low on memory: free caches */
+    DE_EV_WINDOW_CLOSE      /**< the user asked to close `window` (close button). The window
+                                 stays open until de_window_destroy(). With one window open,
+                                 DE_EV_QUIT follows. */
 } de_app_event_kind;
+
+/** Why a DE_EV_DISPLAY_CHANGED event was sent (its `b` field). */
+typedef enum de_display_change {
+    DE_DISPLAY_WINDOW_MOVED, /**< `window` moved to display `a` */
+    DE_DISPLAY_HDR,          /**< `window`'s HDR state, SDR white or headroom changed; query
+                                  de_window_display() */
+    DE_DISPLAY_SCALE,        /**< `window`'s pixel density or content scale changed */
+    DE_DISPLAY_ADDED,        /**< display `a` was connected (indices may have changed) */
+    DE_DISPLAY_REMOVED,      /**< a display was disconnected (`a` = ~0u; indices may have
+                                  changed) */
+    DE_DISPLAY_MODE          /**< display `a`'s desktop or current mode, orientation, content
+                                  scale or bounds changed */
+} de_display_change;
+
 typedef struct de_app_event {
     de_app_event_kind kind;
-    de_window window;
+    de_window window; /**< zero for app-wide and display-wide events */
     u32 a, b;
+    /** DE_EV_DROP_FILE only: copied into a per-pump arena, valid until the next
+     * de_platform_pump() or de_platform_shutdown(). NULL otherwise. */
     const char *path;
 } de_app_event;
+
+/**
+ * Polls the OS event queue without blocking. Writes up to `max_events` app events to `events`
+ * and returns how many. Input events are routed to the input layer on the way. When `events` is
+ * full the rest stay queued for the next call, in order, so a caller that wants everything
+ * calls again until the result is less than `max_events`. `max_events == 0` (`events` may then
+ * be NULL) drains the queue, routes input and discards the app events.
+ *
+ * Main thread only. Never blocks; returns 0 when nothing is queued. Headless, it still reports
+ * DE_EV_QUIT. Returns 0 when the platform is not initialised.
+ */
 DE_API u32 de_platform_pump(de_app_event *events, u32 max_events);
+
+/* ==========================================================================================
+ * End of the platform init, displays, windows and event pump sections (DENG-245).
+ * ========================================================================================== */
 
 /* ==========================================================================================
  * Time and threads (S02, DENG-147). Engine-owned per OS; <threads.h> is not used (SPEC §3.2).
@@ -361,7 +546,7 @@ DE_API de_result de_tls_set(de_tls_key key, void *value);
  * ========================================================================================== */
 
 /* ==========================================================================================
- * Files and async I/O (S03, DENG-247). Engine-owned per OS (SPEC §6), no SDL.
+ * Files and async I/O (S03, DENG-247). Engine-owned per OS (SPEC §6), no windowing library.
  * Implementation: src/platform/vfs.c (paths, mounts), file_{posix,win32}.c (OS calls),
  * known_dirs.c (per-user directories), async_io.c (I/O threads).
  * ========================================================================================== */

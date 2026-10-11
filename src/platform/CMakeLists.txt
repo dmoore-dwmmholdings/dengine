@@ -42,3 +42,22 @@ de_add_module(
     DEPS core
     LIBS ${_de_platform_libs}
 )
+
+# ---- Platform init, displays, windows, event pump (DENG-245) ----
+# SDL3 backend in sdl/. A DE_HEADLESS build does not link SDL at all: sdl/platform_headless.c
+# provides the same API (windows report DE_ERR_UNSUPPORTED). SDL headers stay inside sdl/.
+if(TARGET de_platform)
+    if(DE_HEADLESS)
+        target_sources(de_platform PRIVATE sdl/platform_headless.c)
+    else()
+        target_sources(de_platform PRIVATE
+            sdl/sdl_internal.h
+            sdl/platform_sdl.c
+            sdl/window_sdl.c
+            sdl/display_sdl.c
+            sdl/events_sdl.c)
+        target_link_libraries(de_platform PRIVATE de_tp_sdl3)
+        # The aggregate `dengine` library links each module's DE_MODULE_LIBS too.
+        set_property(TARGET de_platform APPEND PROPERTY DE_MODULE_LIBS de_tp_sdl3)
+    endif()
+endif()
