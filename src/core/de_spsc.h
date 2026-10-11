@@ -3,8 +3,8 @@
  * header, not installed: include as "core/de_spsc.h".
  *
  * One thread pushes, one thread pops; neither ever blocks or takes a lock. Elements are copied
- * in and out by value (`elem_size` bytes each). The ring storage comes from the caller's
- * de_allocator in de_spsc_init() and nothing is allocated afterwards.
+ * in and out by value (`elem_size` bytes each). The ring storage comes from the desc's
+ * de_allocator (default: the heap) in de_spsc_init() and nothing is allocated afterwards.
  *
  * Which thread may call what:
  *   producer only : de_spsc_push
@@ -65,7 +65,7 @@ _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "de_spsc needs lock-free 64-bit atom
 /** Largest accepted capacity (elements). */
 #define DE_SPSC_MAX_CAPACITY (1u << 31)
 
-/** Parameters of de_spsc_init(). `(de_spsc_desc){0}` plus an allocator is valid. */
+/** Parameters of de_spsc_init(). `(de_spsc_desc){0}` is valid. */
 typedef struct de_spsc_desc {
     /** Number of elements; a power of two in [1, DE_SPSC_MAX_CAPACITY]. 0 means
      * DE_SPSC_DEFAULT_CAPACITY. Every slot is usable: a queue of capacity 1 holds one element. */
@@ -77,7 +77,7 @@ typedef struct de_spsc_desc {
     u32 elem_align;
     /** Memory tag passed to the allocator. */
     u32 tag;
-    /** Where the ring storage comes from. Required (the default heap is DENG-149). */
+    /** Where the ring storage comes from. NULL means de_heap_allocator(). */
     const de_allocator *allocator;
 } de_spsc_desc;
 
@@ -111,7 +111,7 @@ typedef struct de_spsc {
 
 /**
  * Initialises `q` and allocates `capacity * stride` bytes from `desc->allocator`.
- * Fails with DE_ERR_INVALID_ARGUMENT (bad capacity, alignment or missing allocator) or
+ * Fails with DE_ERR_INVALID_ARGUMENT (bad capacity or alignment) or
  * DE_ERR_OUT_OF_MEMORY, and sets the error context; `q` is then left zeroed.
  */
 de_result de_spsc_init(de_spsc *q, const de_spsc_desc *desc);

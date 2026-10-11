@@ -529,6 +529,57 @@ TEST_F(log, hot_path_no_alloc, log_fx) {
     EXPECT_EQ(de_atomic_load_u64(&ca.live_bytes, DE_ATOMIC_RELAXED), 0u);
 }
 
+/* A NULL de_log_desc.allocator means de_heap_allocator(): a new thread's buffer is a heap block,
+ * which the heap reports to the hooks in DE_MEM_TRACKING builds. */
+#if DE_MEM_TRACKING
+typedef struct big_alloc_seen {
+    de_atomic_u64 count;
+    size_t min_size;
+} big_alloc_seen;
+
+static void big_alloc_hook(void *user, void *ptr, size_t size, u32 tag) {
+    (void)ptr;
+    (void)tag;
+    big_alloc_seen *s = (big_alloc_seen *)user;
+    if (size >= s->min_size)
+        de_atomic_fetch_add_u64(&s->count, 1, DE_ATOMIC_RELAXED);
+}
+
+static i32 log_once(void *user) {
+    (void)user;
+    DE_INFO(DE_LOG_CAT_CORE, "from a new thread");
+    return 0;
+}
+#endif
+
+TEST_F(log, null_allocator_uses_heap, log_fx) {
+#if !DE_MEM_TRACKING
+    SKIP("the heap reports its blocks only in Debug and Dev builds");
+#else
+    capture_init(&f->cap, 16);
+    de_log_desc d = {0};
+    d.no_console_sink = true;
+    d.thread_buffer_bytes = 64u << 10;
+    ASSERT_EQ(de_log_init(&d), DE_OK);
+    de_log_add_sink(capture_sink, &f->cap);
+
+    big_alloc_seen seen;
+    de_atomic_init_u64(&seen.count, 0);
+    seen.min_size = 64u << 10;
+    const de_mem_hooks hooks = {big_alloc_hook, NULL, &seen};
+    const de_mem_hooks *prev = de_mem_set_hooks(&hooks);
+    de_thread *t = NULL;
+    de_result r = de_thread_create(log_once, NULL, "log-heap", DE_THREAD_NORMAL, 0, &t);
+    if (r == DE_OK)
+        (void)de_thread_join(t);
+    de_mem_set_hooks(prev);
+    ASSERT_EQ(r, DE_OK);
+    EXPECT_EQ(de_atomic_load_u64(&seen.count, DE_ATOMIC_RELAXED), 1u);
+    de_log_shutdown();
+    EXPECT_EQ(f->cap.count, 1u);
+#endif
+}
+
 /* ---- stderr before init ------------------------------------------------------------------ */
 
 /* Runs fn with stderr (fd 2) redirected to a file, and returns what was written. */

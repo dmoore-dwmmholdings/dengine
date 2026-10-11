@@ -7,8 +7,8 @@
  * never block and never take a lock: they return false when the queue is full or empty. A
  * thread is never stuck behind a stalled thread in try_push/try_pop; it can only see the queue
  * as full or empty for a moment longer (see "Stalls" below). Elements are copied in and out by
- * value (`elem_size` bytes). The cells come from the caller's de_allocator in de_mpmc_init()
- * and nothing is allocated afterwards.
+ * value (`elem_size` bytes). The cells come from the desc's de_allocator (default: the heap) in
+ * de_mpmc_init() and nothing is allocated afterwards.
  *
  * Which thread may call what:
  *   any thread            : de_mpmc_try_push, de_mpmc_try_pop, de_mpmc_size_approx,
@@ -83,7 +83,7 @@ _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "de_mpmc needs lock-free 64-bit atom
 /** Largest accepted capacity (elements). */
 #define DE_MPMC_MAX_CAPACITY (1u << 31)
 
-/** Parameters of de_mpmc_init(). `(de_mpmc_desc){0}` plus an allocator is valid. */
+/** Parameters of de_mpmc_init(). `(de_mpmc_desc){0}` is valid. */
 typedef struct de_mpmc_desc {
     /** Number of elements; a power of two in [1, DE_MPMC_MAX_CAPACITY]. 0 means
      * DE_MPMC_DEFAULT_CAPACITY. Every cell is usable: a queue of capacity 1 holds one element. */
@@ -95,7 +95,7 @@ typedef struct de_mpmc_desc {
     u32 elem_align;
     /** Memory tag passed to the allocator. */
     u32 tag;
-    /** Where the cells come from. Required (the default heap is DENG-149). */
+    /** Where the cells come from. NULL means de_heap_allocator(). */
     const de_allocator *allocator;
 } de_mpmc_desc;
 
@@ -127,7 +127,7 @@ typedef struct de_mpmc {
 
 /**
  * Initialises `q` and allocates `capacity` cells from `desc->allocator`.
- * Fails with DE_ERR_INVALID_ARGUMENT (bad capacity, alignment or missing allocator) or
+ * Fails with DE_ERR_INVALID_ARGUMENT (bad capacity or alignment) or
  * DE_ERR_OUT_OF_MEMORY, and sets the error context; `q` is then left zeroed.
  */
 de_result de_mpmc_init(de_mpmc *q, const de_mpmc_desc *desc);

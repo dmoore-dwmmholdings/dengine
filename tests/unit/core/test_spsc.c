@@ -217,8 +217,10 @@ TEST(spsc, capacity_edges) {
     d.elem_align = DE_CACHE_LINE * 2;
     EXPECT_EQ(de_spsc_init(&q, &d), DE_ERR_INVALID_ARGUMENT);
     d.elem_align = 0;
-    d.allocator = NULL;
-    EXPECT_EQ(de_spsc_init(&q, &d), DE_ERR_INVALID_ARGUMENT);
+    d.allocator = NULL; /* NULL means the default heap */
+    ASSERT_EQ(de_spsc_init(&q, &d), DE_OK);
+    EXPECT_TRUE(q.allocator == de_heap_allocator());
+    de_spsc_destroy(&q);
     EXPECT_EQ(de_spsc_init(NULL, &d), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_spsc_init(&q, NULL), DE_ERR_INVALID_ARGUMENT);
     d.allocator = &a;

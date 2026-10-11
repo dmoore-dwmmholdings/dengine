@@ -29,7 +29,7 @@ void de__log_flush_for_panic(void);
 struct de_allocator;
 /**
  * The allocator for log objects (thread buffers, file sinks): a copy of the de_log_desc
- * allocator while logging is initialized, the system heap otherwise. Keep the copy with the
+ * allocator while logging is initialized, de_heap_allocator() otherwise. Keep the copy with the
  * object so it is freed by the allocator that made it, even across de_log_shutdown().
  */
 void de__log_allocator(struct de_allocator *out);

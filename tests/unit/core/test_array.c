@@ -252,3 +252,15 @@ TEST(array, typed_pointer_elems) {
     de_array_free(&names);
     EXPECT_EQ(ca.live_blocks, 0u);
 }
+
+TEST(array, null_allocator_uses_heap) {
+    /* A NULL allocator means de_heap_allocator(). */
+    DE_ARRAY(u64) arr;
+    DE_ARRAY_INIT(&arr, u64, NULL);
+    EXPECT_TRUE(arr.a == de_heap_allocator());
+    for (u64 i = 0; i < 1000; i++)
+        ASSERT_EQ(DE_ARRAY_PUSH(&arr, u64, i), DE_OK);
+    EXPECT_EQ(DE_ARRAY_AT(&arr, u64, 999), 999u);
+    de_array_free(&arr);
+    EXPECT_EQ(arr.capacity, 0u);
+}

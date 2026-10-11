@@ -55,7 +55,7 @@ typedef bool (*de_hashmap_key_eq_fn)(const void *a, const void *b, u32 key_size,
 
 /** Hash map settings. */
 typedef struct de_hashmap_desc {
-    const de_allocator *allocator; /**< required */
+    const de_allocator *allocator; /**< NULL means de_heap_allocator() */
     u32 key_size;                  /**< bytes per key, > 0 */
     u32 value_size;                /**< bytes per value; 0 makes a set */
     u32 key_align;   /**< power of two; 0: largest power of two <= 16 dividing key_size */
@@ -85,8 +85,8 @@ typedef struct de_hashmap {
 } de_hashmap;
 
 /**
- * Initialises an empty map. Allocates nothing. DE_ERR_INVALID_ARGUMENT if the allocator is NULL,
- * key_size is 0, an alignment is not a power of two, or key_size + value_size exceeds 2^30.
+ * Initialises an empty map. Allocates nothing. DE_ERR_INVALID_ARGUMENT if key_size is 0, an
+ * alignment is not a power of two, or key_size + value_size exceeds 2^30.
  */
 de_result de_hashmap_init(de_hashmap *m, const de_hashmap_desc *desc);
 

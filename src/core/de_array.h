@@ -45,8 +45,9 @@ typedef struct de_array {
 #define DE_ARRAY(T) de_array
 
 /**
- * Initialises an empty array. Allocates nothing. `elem_size` must be > 0 and `elem_align` a
- * power of two (0 means the largest power of two, up to 16, that divides `elem_size`).
+ * Initialises an empty array. Allocates nothing. `a` NULL means de_heap_allocator(). `elem_size`
+ * must be > 0 and `elem_align` a power of two (0 means the largest power of two, up to 16, that
+ * divides `elem_size`).
  */
 void de_array_init(de_array *arr, const de_allocator *a, u32 elem_size, u32 elem_align, u32 tag);
 

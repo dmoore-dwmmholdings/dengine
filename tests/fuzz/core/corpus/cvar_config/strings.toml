@@ -1,0 +1,4 @@
+player.name = """
+multi
+line"""
+r.shadows.filter = "PCF"

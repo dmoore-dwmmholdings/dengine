@@ -92,7 +92,8 @@ static size_t rss_bytes(void) {
  * forward to glibc's __libc_* entry points. Neither works under ASan/TSan, whose runtimes replace
  * malloc: the test's self-check notices and skips. Windows: not counted (skips).
  * DE_TEST_SANITIZED is also used by arena.large_reserve_commit, whose RSS bounds do not hold when
- * the sanitizer's shadow memory is resident. */
+ * the sanitizer's shadow memory is resident, and by arena.reset_is_constant_time for its timing
+ * bound. */
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) ||                         \
@@ -276,9 +277,11 @@ TEST(arena, reset_is_constant_time) {
         }
     printf("    arena.reset after %d pushes: median %llu ns\n", PUSHES,
            (unsigned long long)times[ROUNDS / 2]);
-#if defined(DE_DEBUG)
+#if defined(DE_DEBUG) || defined(DE_TEST_SANITIZED)
     /* Debug builds fill the popped 16 MB with 0xDD on reset (by design O(bytes)); the O(1) bound
-     * is checked in the other build types. */
+     * is checked in the other build types. Under a sanitizer the timing is too noisy for a 1 us
+     * bound when other tests (core.stress_mixed) run in parallel: it failed once under Linux TSan
+     * and once under a parallel ASan+UBSan run (DENG-155). The median is still printed. */
 #else
     EXPECT_LT(times[ROUNDS / 2], 1000u);
 #endif
