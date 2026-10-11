@@ -111,3 +111,6 @@ exclude = [
     "SDL3-3.4.18/src/**/vita/**",
     "SDL3-3.4.18/src/video/openvr/**",
 ]
+# SDL's MSVC `_alloca` check wrote test_malloc_alloca.c into the source tree on configure; the
+# patch writes it to the binary dir (see the patch header). DENG-367.
+patches = ["patches/0001-alloca-check-in-binary-dir.patch"]
