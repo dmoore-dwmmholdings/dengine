@@ -396,7 +396,8 @@ de_result de__native_mkdirs(const char *native) {
 }
 
 de_result de_fs_init(const de_fs_desc *desc) {
-    static const de_fs_desc zero;
+    /* Explicit initialiser: MSVC warns C4132 on an uninitialised const object (DENG-360). */
+    static const de_fs_desc zero = {0};
     if (desc == NULL)
         desc = &zero;
     fs_ensure();
