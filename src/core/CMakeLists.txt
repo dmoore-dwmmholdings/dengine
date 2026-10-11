@@ -1,7 +1,10 @@
 # src/core: module `core` (target de_core), layer foundation.
-# Stub source only, until the sprint that owns this module adds real code.
+# Shared file: later S02 tasks append their sources to the SOURCES list, one per line.
 de_add_module(
     NAME core
     LAYER foundation
-    SOURCES core_stub.c
+    SOURCES
+        base.c
+        error.c
+        panic.c
 )
