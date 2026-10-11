@@ -84,7 +84,7 @@ For each task in **review**:
 5. **If verification fails:** `git reset --hard ORIG_HEAD`. This undoes only the merge you just made. Set the issue to `In Progress`. Comment with the failing output (the last ~60 lines in a code block). Re-dispatch in **fix** mode.
 6. **If verification passes:**
    - Comment: `✅ Merged into sprint/<…> @ <sha>. Sprint build + tests green (<n> tests).`
-   - Publish every Trama page in the worker's `DOCS:` line: `publish_page` (space `DENG`) with the note `<KEY> merged @ <sha>`.
+   - Publish every Trama page in the worker's `DOCS:` line: `publish_page` (space `DENG`) with the note `<KEY> merged @ <sha>`. First `get_page` each one and check that it still has the `![[andare:KEY]]` embed of every issue that was on its last published version (plus this one). If an embed is missing, the draft overwrote another worker's text: do not publish it; ask the owner of the lost text (resume that worker, or dispatch a docs fix) to restore it, then publish.
    - Set the issue to **Done**.
    - `git worktree remove .worktrees/<KEY>`. Keep the feature branch.
 

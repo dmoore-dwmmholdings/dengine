@@ -83,6 +83,8 @@ A worker that changes the module graph, the threading model or another architect
    - Call `get_page` immediately before `update_page`. Do no other work between the two calls.
    - Change only the sections about your work. Send back every other line unchanged.
    - Call `get_page` once more afterwards. If text from another agent is missing, put it back.
+   - Every issue embed (`![[andare:KEY]]`) that was on the page before your write must still be there after it. A missing embed means you wrote over someone else's work: restore their sections from the page as you read it.
+   - Write your page changes **after** your final rebase, as the last step before `In Review`, not early in the issue. A draft written hours before the merge is the one most likely to overwrite another worker's.
 4. **Link the issue.** After your last update of a page, call `link_to_issue` (`ref: "<KEY>"`) on it once. `pages_referencing <KEY>` then shows that the issue is documented.
 5. **Do not publish.** Workers leave their changes as drafts. The orchestrator publishes after a green merge, so the **published** version of a page always describes merged code.
 6. **Style.** Short sections. Plain sentences. Link repo files by path in backticks, other pages with `[[Title]]`, issues with their key. Say what is missing or deferred, with the issue key that tracks it. Do not paste large code blocks; point at the file.
