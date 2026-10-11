@@ -65,6 +65,19 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
 /** Test hook: number of changes waiting in the pending table (matured or not). */
 u32 de__watch_pending_count(de_file_watch *w);
 
+/** The backend of `w` (for the backend's own test hooks). */
+de__watch_backend *de__watch_backend_of(de_file_watch *w);
+
+#if defined(__APPLE__)
+/**
+ * Test hook (macOS): runs one FSEvents event for `rel` (relative to the watched directory)
+ * through the backend's classification, on the stream's queue, as if the stream had delivered
+ * it. `flags` are kFSEventStreamEventFlag* bits, `ino` the event's file ID (0 = none). The
+ * path is checked on disk as for a real event. Returns once the event is handled (DENG-371).
+ */
+void de__watch_fsevents_inject(de_file_watch *w, const char *rel, u32 flags, u64 ino);
+#endif
+
 /* ---- Known directories (watch_common.c, used by watch_win32.c) ---------------------------- */
 
 /**

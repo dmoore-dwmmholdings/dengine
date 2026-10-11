@@ -13,6 +13,11 @@
  * one. A MOVED_FROM whose path was itself created in this window (the temporary file of an
  * atomic save) makes the target MODIFIED instead, and nothing is reported for the temporary.
  *
+ * A path created and deleted in this window stays "transient" until something brings it back:
+ * the consumer never learns of it, so a repeated removal (DELETED again: FSEvents can report a
+ * removal twice, DENG-371) changes nothing, a MOVED_FROM is the move of a file created in this
+ * window, and a MODIFIED makes it CREATED.
+ *
  * Memory: the watch record and one record per pending path, from the watch's allocator. A poll
  * with nothing pending touches no allocator. More than WATCH_MAX_PENDING pending paths (a huge
  * burst nobody polls) clears the table and reports a rescan of the root instead.
@@ -55,6 +60,7 @@ typedef struct watch_entry {
     u8 state;
     bool is_dir;
     bool prior_created; /* DELETED by a MOVED_FROM of a path CREATED in this window */
+    bool transient;     /* NONE: created and gone again in this window (see the top) */
 } watch_entry;
 
 typedef struct move_rec {
@@ -253,12 +259,16 @@ static void apply_created(watch_entry *e) {
     }
     e->cookie = 0;
     e->prior_created = false;
+    e->transient = false;
 }
 
 static void apply_modified(watch_entry *e) {
     switch ((entry_state)e->state) {
     case ST_NONE:
-        e->state = ST_MODIFIED;
+        if (e->transient)
+            apply_created(e); /* written again: the consumer has not seen it yet */
+        else
+            e->state = ST_MODIFIED;
         break;
     case ST_DELETED: /* deleted, then written again: as DELETED + CREATED */
         apply_created(e);
@@ -273,12 +283,16 @@ static void apply_modified(watch_entry *e) {
 static void apply_deleted(de_file_watch *w, watch_entry *e) {
     switch ((entry_state)e->state) {
     case ST_NONE:
+        if (!e->transient) /* else: gone already, a repeated removal */
+            e->state = ST_DELETED;
+        break;
     case ST_MODIFIED:
     case ST_DELETED:
         e->state = ST_DELETED;
         break;
     case ST_CREATED:
         e->state = ST_NONE; /* created and deleted in one window: nothing happened */
+        e->transient = true;
         break;
     case ST_RENAMED:
         /* Moved here, then deleted: the source is gone too. `old` keeps it, reported first. */
@@ -291,9 +305,11 @@ static void apply_deleted(de_file_watch *w, watch_entry *e) {
 }
 
 static void apply_moved_from(de_file_watch *w, watch_entry *e, u64 cookie) {
-    bool created = e->state == ST_CREATED || (e->state == ST_DELETED && e->prior_created);
+    bool created = e->state == ST_CREATED || (e->state == ST_DELETED && e->prior_created) ||
+                   (e->state == ST_NONE && e->transient);
     e->state = ST_DELETED;
     e->prior_created = created;
+    e->transient = false;
     e->cookie = cookie;
     if (cookie != 0) {
         move_rec *m = &w->moves[w->move_next];
@@ -317,6 +333,7 @@ static void apply_arrived(watch_entry *b) {
     }
     b->cookie = 0;
     b->prior_created = false;
+    b->transient = false;
 }
 
 static void apply_moved_to(de_file_watch *w, watch_entry *b, u64 cookie) {
@@ -330,6 +347,7 @@ static void apply_moved_to(de_file_watch *w, watch_entry *b, u64 cookie) {
         /* A file created in this window and renamed over `b`: an atomic save of `b`. */
         a->state = ST_NONE;
         a->prior_created = false;
+        a->transient = true;
         apply_arrived(b);
         return;
     }
@@ -360,6 +378,7 @@ static void apply_moved_to(de_file_watch *w, watch_entry *b, u64 cookie) {
     b->state = ST_RENAMED;
     b->cookie = 0;
     b->prior_created = false;
+    b->transient = false;
 }
 
 void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_t rel_len,
@@ -411,6 +430,10 @@ u32 de__watch_pending_count(de_file_watch *w) {
     u32 n = w->count + (w->rescan ? 1u : 0u);
     de_mutex_unlock(&w->lock);
     return n;
+}
+
+de__watch_backend *de__watch_backend_of(de_file_watch *w) {
+    return w->backend;
 }
 
 /* ---- Known directories (de__watch_dirset) ------------------------------------------------- */
