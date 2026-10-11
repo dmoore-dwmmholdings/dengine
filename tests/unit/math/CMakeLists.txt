@@ -55,3 +55,11 @@ if(TARGET test_dmath)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/check_dmath_no_libm.cmake")
     set_tests_properties(math.dmath_no_libm PROPERTIES LABELS "unit;math")
 endif()
+
+# DENG-364: golden vectors for de_dv3_relative and de_transform_* (math.transform.golden_bitwise,
+# in test_transform.c). Like dmath_golden.txt, x86-64 and arm64 must reproduce the file bit for
+# bit; test_math can be built for x86-64 and run under Rosetta 2 the same way as test_dmath.
+if(TARGET test_math)
+    target_compile_definitions(test_math PRIVATE
+        "DE_TRANSFORM_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/transform_golden.txt\"")
+endif()

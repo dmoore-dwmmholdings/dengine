@@ -27,6 +27,7 @@ ctest --preset dev -L check
 | `layering_check` | `tools/check_layers/check_layers.py`: every `#include` in `src/`, `tools/cook/lib/` and `include/dengine/` follows the module layers in `tools/check_layers/layers.toml` (SPEC §4.1). It writes the module graph to `build/<preset>/tools/check_layers/layers.dot`. |
 | `layering_selftest` | The layering checker on its own fixture trees. |
 | `vendor_selftest` | `tools/vendor/vendor.py` on a local fake archive: fetch, excludes, patches and verify. No network. It needs `git` on `PATH` (`git apply` applies the patches). |
+| `deterministic_asm_check` | Builds the deterministic targets, then disassembles every object of a `DETERMINISTIC` module and every file passed to `de_mark_deterministic_sources()`, and fails on an FMA or approximate-reciprocal instruction (SPEC §5.7). It needs `llvm-objdump` or `objdump` at configure time; without one it is reported as skipped. It runs serially, because it drives the build. |
 
 CI runs the same entries (`docs/ci.md`).
 

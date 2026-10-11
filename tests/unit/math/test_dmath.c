@@ -467,7 +467,7 @@ static void ev_sqrt64(const u64 *in, u64 *out) {
 }
 static void ev_v3n(const u64 *in, u64 *out) {
     de_vec3 v = {f32b((u32)in[0]), f32b((u32)in[1]), f32b((u32)in[2])};
-    de_vec3 r = de_dv3_normalize(v);
+    de_vec3 r = de_dnormalize_v3(v);
     out[0] = b32(r.x);
     out[1] = b32(r.y);
     out[2] = b32(r.z);
@@ -487,11 +487,11 @@ static void quat_out(de_quat q, u64 *out) {
     out[3] = b32(q.w);
 }
 static void ev_qn(const u64 *in, u64 *out) {
-    quat_out(de_dquat_normalize(quat_in(in)), out);
+    quat_out(de_dnormalize_quat(quat_in(in)), out);
 }
 static void ev_qi(const u64 *in, u64 *out) {
     de_vec3 w = {f32b((u32)in[4]), f32b((u32)in[5]), f32b((u32)in[6])};
-    quat_out(de_dquat_integrate(quat_in(in), w, f32b((u32)in[7])), out);
+    quat_out(de_dintegrate_quat(quat_in(in), w, f32b((u32)in[7])), out);
 }
 
 typedef void (*eval_fn)(const u64 *in, u64 *out);
@@ -1096,7 +1096,7 @@ TEST(dmath, quat_integrate_stable) {
     de_quat q = q0;
     f64 max_norm_err = 0.0;
     for (int i = 0; i < steps; i++) {
-        q = de_dquat_integrate(q, w, (f32)dt);
+        q = de_dintegrate_quat(q, w, (f32)dt);
         f64 n = sqrt((f64)q.x * q.x + (f64)q.y * q.y + (f64)q.z * q.z + (f64)q.w * q.w);
         max_norm_err = fmax(max_norm_err, fabs(n - 1.0));
     }
@@ -1119,7 +1119,7 @@ TEST(dmath, quat_integrate_stable) {
     /* Deterministic: the same steps give the same bits. */
     de_quat q2 = q0;
     for (int i = 0; i < steps; i++) {
-        q2 = de_dquat_integrate(q2, w, (f32)dt);
+        q2 = de_dintegrate_quat(q2, w, (f32)dt);
     }
     EXPECT_EQ(b32(q2.x), b32(q.x));
     EXPECT_EQ(b32(q2.y), b32(q.y));
@@ -1128,7 +1128,7 @@ TEST(dmath, quat_integrate_stable) {
 
     /* No rotation: the input normalized. */
     de_vec3 zero = {0.0f, 0.0f, 0.0f};
-    de_quat a = de_dquat_integrate(q0, zero, (f32)dt), b = de_dquat_normalize(q0);
+    de_quat a = de_dintegrate_quat(q0, zero, (f32)dt), b = de_dnormalize_quat(q0);
     EXPECT_EQ(b32(a.z), b32(b.z));
     EXPECT_EQ(b32(a.w), b32(b.w));
     /* A half turn about +Z: identity -> (0, 0, 1, 0) up to sign and rounding. */
@@ -1136,26 +1136,26 @@ TEST(dmath, quat_integrate_stable) {
     id.x = id.y = id.z = 0.0f;
     id.w = 1.0f;
     de_vec3 wz_axis = {0.0f, 0.0f, 3.14159265f};
-    de_quat h = de_dquat_integrate(id, wz_axis, 1.0f);
+    de_quat h = de_dintegrate_quat(id, wz_axis, 1.0f);
     EXPECT_FLOAT_EQ(h.z, 1.0, 1e-7);
     EXPECT_FLOAT_EQ(h.w, 0.0, 1e-7);
 }
 
 TEST(dmath, helpers) {
     de_vec3 v = {3.0f, 0.0f, 4.0f};
-    de_vec3 n = de_dv3_normalize(v);
+    de_vec3 n = de_dnormalize_v3(v);
     EXPECT_BITS(n.x, 0x3F19999Au); /* 0.6 */
     EXPECT_BITS(n.y, PZERO);
     EXPECT_BITS(n.z, 0x3F4CCCCDu); /* 0.8 */
     de_vec3 zero = {0.0f, 0.0f, 0.0f};
-    n = de_dv3_normalize(zero);
+    n = de_dnormalize_v3(zero);
     EXPECT_BITS(n.x, PZERO);
     de_vec3 big = {FLT_MAX, FLT_MAX, 0.0f}; /* no overflow: |v|^2 is formed in f64 */
-    n = de_dv3_normalize(big);
+    n = de_dnormalize_v3(big);
     EXPECT_BITS(n.x, 0x3F3504F3u);
     de_quat z;
     z.x = z.y = z.z = z.w = 0.0f;
-    de_quat q = de_dquat_normalize(z);
+    de_quat q = de_dnormalize_quat(z);
     EXPECT_BITS(q.w, 0x3F800000u);
     EXPECT_BITS(q.x, PZERO);
 }
