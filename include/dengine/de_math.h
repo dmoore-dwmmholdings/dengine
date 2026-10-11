@@ -496,6 +496,15 @@ DE_API void de_frustum_cull_aabbs(const de_frustum *f, const de_aabb *boxes, u32
  * Accuracy (f32, measured against a double-precision libm by math.dmath.accuracy_report): about
  * 0.5 ulp for every transcendental (the f64 kernels are accurate to about 2^-53), so the results
  * are almost always the correctly rounded value. Special values follow C11 Annex F.
+ *
+ * Names (DENG-364). The letter d after de_ means "deterministic" or "double", so the prefixes
+ * are fixed:
+ *   - de_d<verb>        deterministic scalar f32 function: de_dsin, de_dfmod.
+ *   - de_d<verb>64      the same on f64: de_dsin64.
+ *   - de_d<verb>_<type> deterministic function on an f32 type (v3, quat), computed in f64:
+ *                       de_dnormalize_v3, de_dnormalize_quat, de_dintegrate_quat.
+ *   - de_d<type>_*      functions on an f64 type only. de_dv3_* is de_dvec3 (section 5); a
+ *                       future f64 quaternion would be de_dquat_*. Never an f32 helper.
  */
 
 /** sin(x), x in radians. +-inf and NaN give NaN. sin(-0) = -0. */
@@ -555,17 +564,17 @@ DE_API f64 de_dsqrt64(f64 x);
 
 /** a / |a|, computed in f64. The zero vector gives the zero vector; a non-finite component
  *  gives NaN in every component. */
-DE_API de_vec3 de_dv3_normalize(de_vec3 a);
+DE_API de_vec3 de_dnormalize_v3(de_vec3 a);
 /** q / |q|, computed in f64. The zero quaternion gives the identity; a non-finite component
  *  gives NaN in every component. */
-DE_API de_quat de_dquat_normalize(de_quat q);
+DE_API de_quat de_dnormalize_quat(de_quat q);
 /**
  * Integrates the orientation q over dt seconds of the constant angular velocity
  * `angular_velocity` (rad/s, in world space): returns normalize(d * q), where d is the rotation
  * by |w| * dt about w / |w| (built with the de_d* sin and cos, so there is no first-order drift).
- * w = 0 or dt = 0 returns de_dquat_normalize(q). Computed in f64.
+ * w = 0 or dt = 0 returns de_dnormalize_quat(q). Computed in f64.
  */
-DE_API de_quat de_dquat_integrate(de_quat q, de_vec3 angular_velocity, f32 dt);
+DE_API de_quat de_dintegrate_quat(de_quat q, de_vec3 angular_velocity, f32 dt);
 
 /**
  * Deterministic random number stream: PCG32 (PCG-XSH-RR, 64-bit state, 32-bit output). Streams
@@ -620,15 +629,15 @@ DE_API bool de_fp_env_check(void);
  * de_transform_to_affine_relative. At 100 km an f32 has a spacing of about 8 mm; an f64 about
  * 1.5e-11 m.
  *
- * The de_dv3_* and de_transform_* functions below (all but from_affine and the *_relative matrix
- * builders, which call the fast-math TRS code) use only + - * / and sqrt, with no <math.h>
- * transcendental, and src/core/math/dvec.c and transform.c are compiled without FP contraction
- * (no FMA). They give the same bits on x86-64 and arm64 when the thread runs in the
- * de_fp_env_init_thread mode, so simulation code may use them. Interpolation is nlerp, not slerp,
- * for that reason.
+ * The de_dv3_* and de_transform_* functions below (all but de_transform_from_affine, which calls
+ * the fast-math de_m4_decompose) use only + - * / and sqrt, with no <math.h> transcendental, and
+ * src/core/math/dvec.c and transform.c are compiled without FP contraction (no FMA). They give the
+ * same bits on x86-64 and arm64 when the thread runs in the de_fp_env_init_thread mode, so
+ * simulation code may use them. Interpolation is nlerp, not slerp, for that reason.
+ * tests/unit/math/vectors/transform_golden.txt is the contract (math.transform.golden_bitwise).
  *
- * Note: de_dv3_normalize (section 4) is the deterministic normalize of an f32 de_vec3; it is not
- * a de_dvec3 function.
+ * Names: de_dv3_* always means de_dvec3 (f64). The deterministic helpers on the f32 de_vec3 and
+ * de_quat are de_d<verb>_<type> in section 4 (de_dnormalize_v3); the rule is written there.
  */
 
 /* ---- de_dvec3 ---- */
@@ -713,11 +722,12 @@ DE_API bool de_transform_from_affine(const de_affine *a, de_dvec3 origin, de_tra
 /**
  * de_m4_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale): the float model matrix
  * relative to `origin` (the camera or the render origin), ready for upload. Cheap and
- * branch-free.
+ * branch-free. Computed in transform.c with the same formula as de_m4_trs (so the two agree bit
+ * for bit wherever de_m4_trs is not contracted), but always without FMA: deterministic.
  */
 DE_API de_mat4 de_transform_to_m4_relative(const de_transform *t, de_dvec3 origin);
 /** de_affine_from_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale): the 3x4 form
- *  of de_transform_to_m4_relative. Cheap and branch-free. */
+ *  of de_transform_to_m4_relative, computed the same way. Cheap, branch-free, deterministic. */
 DE_API de_affine de_transform_to_affine_relative(const de_transform *t, de_dvec3 origin);
 
 DE_EXTERN_C_END

@@ -1,7 +1,8 @@
-# check_dmath_no_libm.cmake: SPEC §5.7 rule 2 for the deterministic math (DENG-243).
+# check_dmath_no_libm.cmake: SPEC §5.7 rule 2 for the deterministic math (DENG-243), and for the
+# large-world transforms that simulation code may call (dvec.c, transform.c; DENG-364).
 #
-# The files of src/core/math/ that make up de_dmath may include <math.h> only for sqrt and sqrtf
-# (correctly rounded IEEE operations). Every other libm function differs between platforms, so a
+# The files of src/core/math/ that make up de_dmath, and dvec.c and transform.c, may include
+# <math.h> only for sqrt and sqrtf (correctly rounded IEEE operations). Every other libm function differs between platforms, so a
 # call to one (or to its __builtin_ form) fails this check. The fast-math header
 # math_internal.h must not be included either. Comments are stripped before the scan.
 #
@@ -16,6 +17,13 @@ if(nfiles LESS 3)
     message(FATAL_ERROR "check_dmath_no_libm: expected dmath.c, dmath64.c and dmath_reduce.h, "
                         "found: ${files}")
 endif()
+foreach(f dvec.c transform.c)
+    if(NOT EXISTS "${DE_ROOT_DIR}/src/core/math/${f}")
+        message(FATAL_ERROR "check_dmath_no_libm: src/core/math/${f} is missing")
+    endif()
+    list(APPEND files "${DE_ROOT_DIR}/src/core/math/${f}")
+endforeach()
+list(LENGTH files nfiles)
 
 set(funcs "acos|acosh|asin|asinh|atan|atan2|atanh|cbrt|ceil|copysign|cos|cosh|erf|erfc|exp|"
           "exp2|expm1|fabs|fdim|floor|fma|fmax|fmin|fmod|frexp|hypot|ilogb|ldexp|lgamma|llrint|"

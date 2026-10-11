@@ -391,7 +391,7 @@ static bool de__any_nonfinite(const f32 *v, int n) {
     return false;
 }
 
-de_vec3 de_dv3_normalize(de_vec3 a) {
+de_vec3 de_dnormalize_v3(de_vec3 a) {
     f32 in[3] = {a.x, a.y, a.z};
     de_vec3 r;
     if (de__any_nonfinite(in, 3)) {
@@ -434,7 +434,7 @@ static de_quat de__quat_nan(void) {
     return r;
 }
 
-de_quat de_dquat_normalize(de_quat q) {
+de_quat de_dnormalize_quat(de_quat q) {
     f32 in[4] = {q.x, q.y, q.z, q.w};
     if (de__any_nonfinite(in, 4)) {
         return de__quat_nan();
@@ -443,7 +443,7 @@ de_quat de_dquat_normalize(de_quat q) {
                                 (f64)de__dm_daz32(q.z), (f64)de__dm_daz32(q.w));
 }
 
-de_quat de_dquat_integrate(de_quat q, de_vec3 angular_velocity, f32 dt) {
+de_quat de_dintegrate_quat(de_quat q, de_vec3 angular_velocity, f32 dt) {
     f32 in[8] = {q.x, q.y, q.z, q.w, angular_velocity.x, angular_velocity.y, angular_velocity.z,
                  dt};
     if (de__any_nonfinite(in, 8)) {

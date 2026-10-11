@@ -5,11 +5,13 @@
  * millimetres. The rotation is normalized in f64 first, so an f32 quaternion whose length is
  * 1 +- 1e-7 does not stretch the result by 1e-7 (1 cm at 100 km).
  *
- * mul, inverse, point, dir and lerp use only + - * / and sqrt, and this file is compiled with
- * the deterministic flags (src/core/CMakeLists.txt: no FP contraction), so simulation code may
- * call them. They do not call the fast de_quat_* functions (those may dispatch to SIMD with FMA).
- * Only from_affine and the *_relative matrix builders call fast math (de_m4_trs,
- * de_affine_from_trs, de_m4_decompose); they serve rendering and tools. */
+ * Every function but from_affine uses only + - * / and sqrt, and this file is compiled with the
+ * deterministic flags (src/core/CMakeLists.txt: no FP contraction), so simulation code may call
+ * them; tests/unit/math/vectors/transform_golden.txt pins their bits. They do not call the fast
+ * de_quat_* / de_m4_* functions (those may dispatch to SIMD with FMA): the *_relative matrix
+ * builders build the rotation-scale matrix here (de__rs_cols), with the formula of the fast
+ * de_quat_to_m3 + de_m4_trs. Only from_affine calls fast math (de_m4_decompose); it serves
+ * tools. */
 #include <dengine/de_math.h>
 
 #include <math.h> /* sqrt only */
@@ -172,10 +174,48 @@ bool de_transform_from_affine(const de_affine *a, de_dvec3 origin, de_transform 
     return ok;
 }
 
+/* R(q) * S as nine f32 values, column-major (element (r, c) at m[c * 3 + r]): the formula of the
+ * fast de_quat_to_m3 followed by the column scaling of de_m4_trs, one rounding per operation in
+ * the same order, so on any build without contraction the result equals de_m4_trs bit for bit.
+ * Here it is compiled without contraction on every target, which de_quat_to_m3 is not. */
+static void de__rs_cols(de_quat q, de_vec3 s, f32 m[9]) {
+    f32 xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    f32 xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    f32 wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+    m[0] = (1.0f - 2.0f * (yy + zz)) * s.x;
+    m[1] = (2.0f * (xy + wz)) * s.x;
+    m[2] = (2.0f * (xz - wy)) * s.x;
+    m[3] = (2.0f * (xy - wz)) * s.y;
+    m[4] = (1.0f - 2.0f * (xx + zz)) * s.y;
+    m[5] = (2.0f * (yz + wx)) * s.y;
+    m[6] = (2.0f * (xz + wy)) * s.z;
+    m[7] = (2.0f * (yz - wx)) * s.z;
+    m[8] = (1.0f - 2.0f * (xx + yy)) * s.z;
+}
+
 de_mat4 de_transform_to_m4_relative(const de_transform *t, de_dvec3 origin) {
-    return de_m4_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale);
+    f32 rs[9];
+    de__rs_cols(t->rotation, t->scale, rs);
+    de_vec3 p = de_dv3_relative(t->position, origin);
+    de_mat4 m;
+    for (int c = 0; c < 3; ++c) {
+        for (int i = 0; i < 3; ++i)
+            m.m[c * 4 + i] = rs[c * 3 + i];
+        m.m[c * 4 + 3] = 0.0f;
+    }
+    m.m[12] = p.x;
+    m.m[13] = p.y;
+    m.m[14] = p.z;
+    m.m[15] = 1.0f;
+    return m;
 }
 
 de_affine de_transform_to_affine_relative(const de_transform *t, de_dvec3 origin) {
-    return de_affine_from_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale);
+    de_affine a;
+    de__rs_cols(t->rotation, t->scale, a.m);
+    de_vec3 p = de_dv3_relative(t->position, origin);
+    a.m[9] = p.x;
+    a.m[10] = p.y;
+    a.m[11] = p.z;
+    return a;
 }
