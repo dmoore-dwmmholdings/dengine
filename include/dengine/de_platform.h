@@ -271,7 +271,9 @@ DE_API u64 de_time_now_ns(void);
  * The last stretch before a sleep deadline that de_sleep_until_ns() spins instead of asking the
  * OS to sleep (1 ms). OS sleeps overshoot by tens of microseconds (Linux timer slack) to several
  * hundred (Windows high-resolution timers, macOS timer leeway), so the OS sleep stops this far
- * before the deadline and a de_cpu_pause() spin on de_time_now_ns() does the rest.
+ * before the deadline and a de_cpu_pause() spin on de_time_now_ns() does the rest. This is the
+ * minimum: on a host whose OS sleeps wake later than that (some VMs) the window grows by the
+ * measured excess, up to 4 ms more.
  */
 #define DE_SLEEP_SPIN_NS 1000000ull
 
@@ -289,9 +291,12 @@ DE_API void de_sleep_ns(u64 ns);
  * 10 1803) runs until DE_SLEEP_SPIN_NS before the deadline, then the thread spins on the clock.
  * Each OS sleep asks for half of the time left before that point, because timer leeway can grow
  * with the length of a sleep (macOS, and VMs on it); a 16 ms wait takes about 7 short sleeps.
- * A late return only comes from preemption. The spin
- * costs up to DE_SLEEP_SPIN_NS of CPU per call; frame pacing pays it once per frame. Thread-safe,
- * no allocation. A deadline in the past returns at once.
+ * The spin window adapts to the host: when OS sleeps wake later than halving can absorb (a fixed
+ * wake-up latency of several ms, as on GitHub's macOS VMs), it grows by that excess, learned
+ * process-wide from the sleeps themselves, up to DE_SLEEP_SPIN_NS + 4 ms. A late return then
+ * only comes from preemption, or from a host whose OS sleeps are later than that. The spin
+ * costs up to the window of CPU per call (DE_SLEEP_SPIN_NS on a normal host); frame pacing pays
+ * it once per frame. Thread-safe, no allocation. A deadline in the past returns at once.
  */
 DE_API void de_sleep_until_ns(u64 deadline_ns);
 

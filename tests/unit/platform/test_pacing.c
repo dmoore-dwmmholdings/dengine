@@ -4,6 +4,11 @@
  * milliseconds at a time, so when DE_CI or CI is set (GitHub Actions sets CI=true) the
  * statistical bounds are loose; the "never early" checks stay exact everywhere. */
 #define _CRT_SECURE_NO_WARNINGS /* getenv */
+#if defined(__linux__)
+#define _GNU_SOURCE /* nanosleep under -std=c11 */
+#elif defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "de_test.h"
 
@@ -11,6 +16,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <time.h>
+#endif
 
 #define MS 1000000ull
 #define US 1000ull
@@ -53,9 +61,35 @@ TEST(pacing, sleep_edge_cases) {
     EXPECT_GE(de_time_now_ns(), deadline);
 }
 
+/* Prints how late a bare 0.5 ms OS sleep wakes on this host (POSIX nanosleep), the number that
+ * decides de_sleep_until_ns()'s spin window (DENG-361). A record for CI logs, not a check. */
+static void print_os_sleep_lateness(void) {
+#if !defined(_WIN32)
+    enum { N = 21 };
+    u64 late[N];
+    for (int i = 0; i < N; i++) {
+        struct timespec req = {0, 500000};
+        u64 t0 = de_time_now_ns();
+        (void)nanosleep(&req, NULL);
+        u64 dt = de_time_now_ns() - t0;
+        late[i] = dt > 500 * US ? dt - 500 * US : 0;
+    }
+    for (int i = 1; i < N; i++) { /* insertion sort, for the median */
+        u64 v = late[i];
+        int j = i;
+        for (; j > 0 && late[j - 1] > v; j--)
+            late[j] = late[j - 1];
+        late[j] = v;
+    }
+    printf("nanosleep(0.5 ms) wakes late by: min %.1f us, median %.1f us, max %.1f us (%d runs)\n",
+           (double)late[0] / 1000.0, (double)late[N / 2] / 1000.0, (double)late[N - 1] / 1000.0, N);
+#endif
+}
+
 TEST(pacing, sleep_accuracy) {
     /* Acceptance: de_sleep_ns(2 ms) lands within +0.3 ms / -0 of the target in >= 95 % of 200
      * samples. The histogram goes to stdout for the record. */
+    print_os_sleep_lateness();
     enum { SAMPLES = 200, BUCKETS = 8 };
     static const u64 edges[BUCKETS] = {10 * US,  25 * US,  50 * US,   100 * US,
                                        200 * US, 300 * US, 1000 * US, UINT64_MAX};
@@ -95,10 +129,15 @@ TEST(pacing, sleep_accuracy) {
     printf("  within +0.3 ms: %u / %d\n", within, SAMPLES);
 
     EXPECT_EQ(early, 0u);
-    if (on_ci())
-        EXPECT_GE(within * 100, (u32)SAMPLES * 50u); /* shared runners: half is enough */
-    else
+    if (on_ci()) {
+        /* Shared runners preempt the spin now and then. GitHub's macOS VMs, whose nanosleep
+         * wakes 1.5 to 6.3 ms late, measured 194 to 199 of 200 with the adaptive spin window
+         * (13 before it, DENG-361); Linux and Windows runners 200. 80 % leaves room for a noisy
+         * VM and still fails on a spin window that does not adapt. */
+        EXPECT_GE(within * 100, (u32)SAMPLES * 80u);
+    } else {
         EXPECT_GE(within * 100, (u32)SAMPLES * 95u);
+    }
 }
 
 TEST(pacing, pacer_60hz) {
