@@ -25,7 +25,7 @@ configure, build and `ctest` for one preset.
 | windows clang-cl Debug / Release | `windows-2022` | `windows-clang-cl-debug`, `windows-clang-cl-release` |
 | windows msvc Debug / Release | `windows-2022` | `windows-msvc-debug`, `windows-msvc-release` |
 | linux clang Debug / Release | `ubuntu-24.04` | `linux-clang-debug`, `linux-clang-release` |
-| linux gcc Debug / Release | `ubuntu-24.04` | `linux-gcc-debug`, `linux-gcc-release` |
+| linux gcc Debug / Dev / Release | `ubuntu-24.04` | `linux-gcc-debug`, `linux-gcc-dev`, `linux-gcc-release` |
 | macos apple-clang Debug / Release | `macos-14` | `macos-debug`, `macos-release` |
 | headless linux Release | `ubuntu-24.04` | `linux-headless-release` |
 | headless windows Release | `windows-2022` | `windows-headless-release` |
@@ -43,8 +43,11 @@ the cross-architecture determinism job in S05 (DENG-353) and S22 (DENG-136).
 |---|---|---|---|
 | linux clang ASan+UBSan | `ubuntu-24.04` | `ci-linux-asan` | `address,undefined` |
 | linux clang TSan | `ubuntu-24.04` | `ci-linux-tsan` | `thread` |
-| macos apple-clang ASan | `macos-14` | `ci-macos-asan` | `address` |
+| macos apple-clang ASan+UBSan | `macos-14` | `ci-macos-asan` | `address,undefined` |
+| linux gcc TSan | `ubuntu-24.04` | `ci-linux-gcc-tsan` | `thread` |
 
+- GCC TSan catches a different class of error from Clang TSan: GCC rejects some atomics under
+  `-fsanitize=thread` (`-Wtsan`, an error with `-Werror`), see `src/platform/de_atomic.h`.
 - The `ci-*` presets are Debug builds. `DE_SANITIZE` instruments every target, third-party code
   included. With `undefined`, a UB report stops the test (`-fno-sanitize-recover=undefined`).
 - The sanitizer options are in the `ci-*` test presets, so `ctest --preset ci-linux-asan` uses
@@ -58,8 +61,8 @@ the cross-architecture determinism job in S05 (DENG-353) and S22 (DENG-136).
 - On Linux, the job runs `sudo sysctl -w vm.mmap_rnd_bits=28` first. The Ubuntu 24.04 kernel
   uses more mmap randomness than the TSan runtime can handle ("unexpected memory mapping"). If
   you see that error on your own Linux machine, run the same command.
-- On macOS, the ASan job runs locally with `cmake --preset ci-macos-asan`, then the build and
-  test commands above.
+- On macOS, the ASan+UBSan job runs locally with `cmake --preset ci-macos-asan`, then the
+  build and test commands above.
 
 ### `checks.yml`: repository checks
 
@@ -81,8 +84,8 @@ git diff --name-only --diff-filter=ACMR sprint/<sprint> -- '*.c' '*.h' '*.cpp' '
 ```
 
 Objective-C files (`.m`, `.mm`) are not checked, because `.clang-format` has no ObjC section yet.
-The public header sketches in `include/dengine/` and `examples/minimal_game.c` are not yet
-formatted. The first change to one of these files must format the whole file.
+Every other C and C++ file outside `third_party/` is formatted, the public headers in
+`include/dengine/` and `examples/minimal_game.c` included (DENG-355).
 
 ## Shared setup: `.github/actions/setup-dengine`
 
@@ -107,10 +110,10 @@ Every build job uses this composite action. It does these steps:
 The Windows SDK comes from the runner image. No job caches or uploads SDK files
 (CONVENTIONS §6). The compiler cache holds object files only.
 
-Known limit: the Debug and Dev builds use `/Zi` (one shared program database per target,
-`cmake/DeBuildTypes.cmake`). sccache cannot cache that correctly with `cl`, so the
-`windows msvc Debug` job runs without a compiler cache (`no-cache: true` in its matrix entry).
-clang-cl puts the debug info into each object file, so its jobs are cached.
+Debug info and the cache: a local Debug or Dev build with `cl` or `clang-cl` uses `/Zi` (one
+shared program database per target), which sccache cannot cache with `cl`. Because the action
+sets a compiler launcher, `cmake/DeBuildTypes.cmake` switches these builds to `/Z7` (debug info
+in each object file), so every Windows job, `windows msvc Debug` included, uses the cache.
 
 ## Third-party actions
 

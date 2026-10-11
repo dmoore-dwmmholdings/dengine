@@ -1,0 +1,27 @@
+// markdownlint-cli2 settings for the repository's Markdown (DENG-355).
+// Run: npx markdownlint-cli2 "**/*.md"
+{
+  "config": {
+    "default": true,
+    // Wrap prose at 100 columns, the same width as the code (docs/agents/CONVENTIONS.md §3).
+    // Table rows and code blocks cannot wrap, so they are exempt.
+    "MD013": {
+      "line_length": 100,
+      "tables": false,
+      "code_blocks": false
+    },
+    // The same heading text under different parents is fine ("Notes", "Tests").
+    "MD024": {
+      "siblings_only": true
+    },
+    // Tables are written with a bare `|---|---|` separator row and are not column-aligned.
+    "MD060": false
+  },
+  // Vendored trees are byte-exact upstream; build output and worktrees are not ours.
+  "ignores": [
+    "third_party/**",
+    "build/**",
+    ".worktrees/**",
+    "**/node_modules/**"
+  ]
+}
