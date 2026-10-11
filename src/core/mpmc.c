@@ -38,8 +38,7 @@ de_result de_mpmc_init(de_mpmc *q, const de_mpmc_desc *desc) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "de_mpmc_init: elem_align %u is not a power of two <= %u", align,
                        (u32)DE_CACHE_LINE);
-    if (desc->allocator == NULL)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_mpmc_init: allocator is required");
+    const de_allocator *alloc = desc->allocator != NULL ? desc->allocator : de_heap_allocator();
 
     /* Cell: the u64 sequence first, then the element at its alignment; the stride keeps both
      * the next sequence (8 bytes) and the next element aligned. */
@@ -52,7 +51,7 @@ de_result de_mpmc_init(de_mpmc *q, const de_mpmc_desc *desc) {
                        elem_size);
     size_t bytes = (size_t)(stride * capacity);
 
-    u8 *cells = (u8 *)DE_ALLOC(desc->allocator, bytes, DE_CACHE_LINE, desc->tag);
+    u8 *cells = (u8 *)DE_ALLOC(alloc, bytes, DE_CACHE_LINE, desc->tag);
     if (cells == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_mpmc_init: cannot allocate %zu bytes", bytes);
 
@@ -64,7 +63,7 @@ de_result de_mpmc_init(de_mpmc *q, const de_mpmc_desc *desc) {
     q->data_offset = (u32)data_offset;
     q->tag = desc->tag;
     q->bytes = bytes;
-    q->allocator = desc->allocator;
+    q->allocator = alloc;
     /* Cell i waits for the producer of position i. */
     for (u64 i = 0; i < capacity; i++)
         de_atomic_init_u64(cell_seq(q, i), 2 * i);

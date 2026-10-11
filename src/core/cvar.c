@@ -74,60 +74,15 @@ static struct {
     de_atomic_u32 generation; /* 1..0xFFFF; outlives resets */
     de_atomic_ptr chunks[CHUNK_COUNT];
     de_mutex lock;
-    const de_allocator *a;
-    de_array order;     /* de__cvar_entry * */
-    de_hashmap by_name; /* u64 name hash -> u32 index in order */
+    const de_allocator *a; /* de_heap_allocator() */
+    de_array order;        /* de__cvar_entry * */
+    de_hashmap by_name;    /* u64 name hash -> u32 index in order */
     de_hashmap prefixes;
     de_array pending;           /* pending_value */
     de_hashmap pending_by_name; /* u64 name hash -> u32 index in pending */
     bool startup_locked;
     de_cvar cheats;
 } g_cvars;
-
-/* ---- The registry allocator -------------------------------------------------------------- */
-
-/* The system heap behind the de_allocator interface. The registry should use
- * de_heap_allocator() (the TLSF heap, DENG-149), which does not exist yet; switch to it when it
- * does. Blocks need at most 16-byte alignment, which malloc gives on every supported target. */
-enum { SYS_MAX_ALIGN = 16 };
-
-static void *sys_alloc(void *user, size_t size, size_t align, u32 tag) {
-    (void)user;
-    (void)tag;
-    if (align > SYS_MAX_ALIGN) {
-        (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "cvar heap: alignment %zu above %d", align,
-                      (int)SYS_MAX_ALIGN);
-        return NULL;
-    }
-    void *p = malloc(size != 0 ? size : 1);
-    if (p == NULL)
-        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "cvar heap: out of memory (%zu bytes)", size);
-    return p;
-}
-
-static void *sys_realloc(void *user, void *ptr, size_t old_size, size_t new_size, size_t align,
-                         u32 tag) {
-    (void)old_size;
-    if (ptr == NULL)
-        return sys_alloc(user, new_size, align, tag);
-    if (align > SYS_MAX_ALIGN) {
-        (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "cvar heap: alignment %zu above %d", align,
-                      (int)SYS_MAX_ALIGN);
-        return NULL;
-    }
-    void *p = realloc(ptr, new_size != 0 ? new_size : 1);
-    if (p == NULL)
-        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "cvar heap: out of memory (%zu bytes)", new_size);
-    return p;
-}
-
-static void sys_free(void *user, void *ptr, size_t size) {
-    (void)user;
-    (void)size;
-    free(ptr);
-}
-
-static const de_allocator g_sys_allocator = {sys_alloc, sys_realloc, sys_free, NULL};
 
 /* ---- Small helpers ----------------------------------------------------------------------- */
 
@@ -197,7 +152,7 @@ static de_cvar register_locked(const de_cvar_desc *desc);
 
 static void registry_create(void) {
     de_mutex_init(&g_cvars.lock);
-    g_cvars.a = &g_sys_allocator;
+    g_cvars.a = de_heap_allocator();
     de_array_init(&g_cvars.order, g_cvars.a, (u32)sizeof(de__cvar_entry *), 0, DE_MEM_GENERAL);
     de_array_init(&g_cvars.pending, g_cvars.a, (u32)sizeof(pending_value), 0, DE_MEM_GENERAL);
     de_result r = DE_HASHMAP_INIT(&g_cvars.by_name, u64, u32, g_cvars.a);

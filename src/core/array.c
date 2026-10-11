@@ -16,7 +16,6 @@ static u32 de__array_default_align(u32 elem_size) {
 
 void de_array_init(de_array *arr, const de_allocator *a, u32 elem_size, u32 elem_align, u32 tag) {
     DE_ASSERT(arr != NULL);
-    DE_ASSERT(a != NULL);
     DE_ASSERT(elem_size > 0);
     if (elem_align == 0)
         elem_align = de__array_default_align(elem_size);
@@ -27,7 +26,7 @@ void de_array_init(de_array *arr, const de_allocator *a, u32 elem_size, u32 elem
     arr->elem_size = elem_size;
     arr->elem_align = elem_align;
     arr->tag = tag;
-    arr->a = a;
+    arr->a = a != NULL ? a : de_heap_allocator();
 }
 
 /* Reallocates to exactly `new_capacity` elements (> capacity). */

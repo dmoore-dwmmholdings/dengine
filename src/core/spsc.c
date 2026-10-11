@@ -30,8 +30,7 @@ de_result de_spsc_init(de_spsc *q, const de_spsc_desc *desc) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "de_spsc_init: elem_align %u is not a power of two <= %u", align,
                        (u32)DE_CACHE_LINE);
-    if (desc->allocator == NULL)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_spsc_init: allocator is required");
+    const de_allocator *alloc = desc->allocator != NULL ? desc->allocator : de_heap_allocator();
 
     /* Round each slot up to its alignment so every element in the ring is aligned. */
     u64 stride = ((u64)elem_size + align - 1) & ~(u64)(align - 1);
@@ -41,7 +40,7 @@ de_result de_spsc_init(de_spsc *q, const de_spsc_desc *desc) {
                        elem_size);
     size_t bytes = (size_t)(stride * capacity);
 
-    u8 *slots = (u8 *)DE_ALLOC(desc->allocator, bytes, DE_CACHE_LINE, desc->tag);
+    u8 *slots = (u8 *)DE_ALLOC(alloc, bytes, DE_CACHE_LINE, desc->tag);
     if (slots == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_spsc_init: cannot allocate %zu bytes", bytes);
 
@@ -56,7 +55,7 @@ de_result de_spsc_init(de_spsc *q, const de_spsc_desc *desc) {
     q->stride = (u32)stride;
     q->tag = desc->tag;
     q->bytes = bytes;
-    q->allocator = desc->allocator;
+    q->allocator = alloc;
     return DE_OK;
 }
 

@@ -66,8 +66,6 @@ static inline size_t de__hm_align_up(size_t v, size_t align) {
 de_result de_hashmap_init(de_hashmap *m, const de_hashmap_desc *desc) {
     DE_ASSERT(m != NULL && desc != NULL);
     memset(m, 0, sizeof *m);
-    if (desc->allocator == NULL)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_hashmap: allocator is NULL");
     if (desc->key_size == 0)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_hashmap: key_size is 0");
     if (desc->key_size > DE__HM_MAX_ELEM || desc->value_size > DE__HM_MAX_ELEM - desc->key_size)
@@ -93,7 +91,7 @@ de_result de_hashmap_init(de_hashmap *m, const de_hashmap_desc *desc) {
     m->tag = desc->tag;
     m->key_eq = desc->key_eq;
     m->key_eq_user = desc->key_eq_user;
-    m->a = desc->allocator;
+    m->a = desc->allocator != NULL ? desc->allocator : de_heap_allocator();
     return DE_OK;
 }
 

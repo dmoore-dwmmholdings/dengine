@@ -401,7 +401,7 @@ struct de_allocator; /* de_memory.h */
 /** de_log_init() settings. `(de_log_desc){0}` (or a NULL desc) gives the defaults. */
 typedef struct de_log_desc {
     /** Per-thread buffer memory, taken once per thread on its first log call and returned at
-     * de_log_shutdown(). NULL = the system heap (malloc). Must outlive de_log_shutdown(). */
+     * de_log_shutdown(). NULL = de_heap_allocator(). Must outlive de_log_shutdown(). */
     const struct de_allocator *allocator;
     /** Per-thread buffer size. 0 = 64 KiB. Rounded up to a power of two, at least 4 KiB. */
     u32 thread_buffer_bytes;

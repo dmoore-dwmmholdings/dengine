@@ -152,30 +152,12 @@ static DE_THREAD_LOCAL de__log_tl_state de__log_tl;
 /* Per thread, so counting costs no shared cache line on the hot path. */
 static DE_THREAD_LOCAL u64 de__log_tl_formatted;
 
-/* ---------- System heap fallback ---------- */
+/* ---------- Default allocator ---------- */
 
-static void *de__sys_alloc(void *user, size_t size, size_t align, u32 tag) {
-    (void)user;
-    (void)tag;
-    if (align > _Alignof(max_align_t))
-        return NULL;
-    return malloc(size);
+/* NULL in de_log_desc, and the file sink before de_log_init: the engine heap. */
+static de_allocator de__log_default_allocator(void) {
+    return *de_heap_allocator();
 }
-static void *de__sys_realloc(void *user, void *ptr, size_t old_size, size_t new_size, size_t align,
-                             u32 tag) {
-    (void)user;
-    (void)old_size;
-    (void)tag;
-    if (align > _Alignof(max_align_t))
-        return NULL;
-    return realloc(ptr, new_size);
-}
-static void de__sys_free(void *user, void *ptr, size_t size) {
-    (void)user;
-    (void)size;
-    free(ptr);
-}
-static const de_allocator de__sys_allocator = {de__sys_alloc, de__sys_realloc, de__sys_free, NULL};
 
 /* ---------- Locks ---------- */
 
@@ -571,7 +553,7 @@ de_result de_log_init(const de_log_desc *desc) {
         de__log_unlock();
         return DE_FAIL(DE_ERR_BUSY, "de_log_init: logging is already initialized");
     }
-    g.alloc = d.allocator != NULL ? *d.allocator : de__sys_allocator;
+    g.alloc = d.allocator != NULL ? *d.allocator : de__log_default_allocator();
     g.ring_bytes = de__round_ring_bytes(d.thread_buffer_bytes);
     g.interval_ns =
         (u64)(d.drain_interval_ms != 0 ? d.drain_interval_ms : DE__LOG_DEFAULT_INTERVAL) *
@@ -670,7 +652,8 @@ void de__log_allocator(de_allocator *out) {
     bool locked = !de__log_in_drain(); /* a sink already holds the lock */
     if (locked)
         de__log_lock();
-    *out = de_atomic_load_u32(&g.running, DE_ATOMIC_RELAXED) ? g.alloc : de__sys_allocator;
+    *out =
+        de_atomic_load_u32(&g.running, DE_ATOMIC_RELAXED) ? g.alloc : de__log_default_allocator();
     if (locked)
         de__log_unlock();
 }

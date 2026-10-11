@@ -19,6 +19,7 @@ de_add_test(NAME core
         test_tlsf.c
         test_tracking.c
         test_cvar.c
+        test_core_stress.c
     LIBS de_core Threads::Threads
 )
 
@@ -77,3 +78,7 @@ if(TARGET test_core_cvar_shipping)
         DE_CVAR_TEST_OUT_PREFIX="${CMAKE_CURRENT_BINARY_DIR}/test_cvar_shipping_")
     target_include_directories(test_core_cvar_shipping PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-155: the alloc guard of de_test_support (tests/support/), in its own executable so no
+# thread or hook of another test runs during its regions. CTest names: guard.<test>.
+de_add_test(NAME guard SOURCES test_alloc_guard.c LIBS de_test_support de_platform)

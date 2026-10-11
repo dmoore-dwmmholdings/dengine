@@ -1,0 +1,4 @@
+inf
+-Infinity
+NaN
++nan

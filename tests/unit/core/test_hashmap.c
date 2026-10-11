@@ -333,6 +333,15 @@ TEST(hashmap, key_sizes) {
     z.key_align = 3;
     EXPECT_EQ(de_hashmap_init(&bad, &z), DE_ERR_INVALID_ARGUMENT);
     de_error_clear();
+
+    /* A NULL allocator means the default heap. */
+    de_hashmap heap_map;
+    ASSERT_EQ(DE_HASHMAP_INIT(&heap_map, u64, u64, NULL), DE_OK);
+    EXPECT_TRUE(heap_map.a == de_heap_allocator());
+    for (u64 k = 0; k < 100; k++)
+        ASSERT_EQ(de_hashmap_put(&heap_map, k * 0x9E3779B97F4A7C15ull, &k, &k), DE_OK);
+    EXPECT_EQ(de_hashmap_count(&heap_map), 100u);
+    de_hashmap_free(&heap_map);
     hm_check_clean(&ca);
 }
 
