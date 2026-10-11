@@ -97,6 +97,44 @@ typedef struct de_str {
 
 /* Hashing and string helpers (DENG-153) go at the end of this section. */
 
+/* ---- Hashing and names (DENG-153) ---- */
+
+/**
+ * 64-bit hash of `len` bytes: XXH3-64 (xxHash 0.8) with `seed`. `data` may be NULL when `len` is
+ * 0. The same bytes and seed give the same value on every platform and in every build type.
+ *
+ * Asset IDs and de_name values are de_hash64(bytes, len, 0). They are stored in cooked data, so
+ * the algorithm and the seed are part of the pack format: never change them without bumping the
+ * pack format version (S08).
+ */
+DE_API u64 de_hash64(const void *data, size_t len, u64 seed);
+
+/** de_hash64(str, strlen(str), 0). A NULL `str` hashes like "". */
+DE_API u64 de_hash64_str(const char *str);
+
+/**
+ * 1 when this build keeps the reverse lookup of de_name values (DE_DEBUG or DE_DEV, and not
+ * DE_SHIPPING), so de_name_str() can return the string. 0 otherwise (Release, Shipping).
+ */
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+#define DE_NAME_LOOKUP 1
+#else
+#define DE_NAME_LOOKUP 0
+#endif
+
+/*
+ * de_name_from(str): the name of the exact bytes of `str` (no case folding, no path
+ * normalisation): `.hash == de_hash64_str(str)`. With DE_NAME_LOOKUP, the string is also copied
+ * into a process-wide, thread-safe intern table, and two different strings with the same hash
+ * are a fatal error (DE_PANIC). A NULL `str` gives the name of "".
+ *
+ * de_name_str(n): the interned string of `n` (valid for the life of the process), or NULL when
+ * the name was never interned. Always NULL without DE_NAME_LOOKUP.
+ */
+
+/** Like de_name_from(), for a string view (the bytes need no NUL terminator). */
+DE_API de_name de_name_from_view(de_str s);
+
 /* ---------- Results and error context ---------- */
 
 typedef enum de_result {
@@ -178,6 +216,61 @@ DE_API de_result de_error_wrap_(de_result r, const char *file, u32 line, const c
         if (r__ != DE_OK)                                                                          \
             return r__;                                                                            \
     } while (0)
+
+/* ---------- String views (DENG-153) ----------
+ * A de_str is a non-owning view: `ptr` may be NULL only when `len` is 0, and the bytes need no
+ * NUL terminator. No function here allocates or keeps the view. Byte-wise and locale-independent:
+ * "whitespace" means the ASCII characters space, \t, \n, \v, \f and \r. */
+
+/** de_str_find() result when the needle does not occur. */
+#define DE_STR_NPOS ((size_t)-1)
+
+/** A view of a NUL-terminated string (without the NUL). NULL gives {NULL, 0}. */
+DE_API de_str de_str_from_cstr(const char *s);
+
+/** True if both views have the same length and bytes. */
+DE_API bool de_str_eq(de_str a, de_str b);
+
+/** True if `s` begins with `prefix`. Every view begins with the empty view. */
+DE_API bool de_str_starts_with(de_str s, de_str prefix);
+
+/** Offset of the first occurrence of `needle` in `s`, or DE_STR_NPOS. An empty needle gives 0. */
+DE_API size_t de_str_find(de_str s, de_str needle);
+
+/**
+ * Split iterator. Takes the text of `*rest` up to the first `sep` into `*out` and moves `*rest`
+ * past that separator. When `*rest` holds no separator, `*out` gets all of it and `*rest` becomes
+ * {NULL, 0}. Returns false (and leaves `*out` alone) when `rest->ptr` is NULL.
+ *
+ *     de_str rest = DE_STR("a,,b"), tok;
+ *     while (de_str_split_next(&rest, ',', &tok)) { ... }   // "a", "", "b"
+ *
+ * So N separators always give N + 1 tokens: "" gives one empty token, "a," gives "a" and "".
+ */
+DE_API bool de_str_split_next(de_str *rest, char sep, de_str *out);
+
+/** `s` without leading and trailing ASCII whitespace. */
+DE_API de_str de_str_trim(de_str s);
+
+/**
+ * Parses all of `s` as a signed 64-bit integer: an optional `+` or `-`, then decimal digits, or
+ * `0x`/`0X` and hex digits, or `0b`/`0B` and binary digits. No whitespace, no digit separators.
+ *
+ * @return DE_OK, or DE_ERR_PARSE (empty, a stray character, or out of range); `*out` is written
+ *         only on DE_OK. Failures set the error context.
+ */
+DE_API de_result de_str_to_i64(de_str s, i64 *out);
+
+/**
+ * Parses all of `s` as a double: an optional sign, decimal digits with an optional `.` fraction
+ * (at least one digit in all) and an optional exponent (`e`/`E`, optional sign, digits); or
+ * `inf`, `infinity`, `nan` in any case, with an optional sign. No whitespace, no hex floats.
+ * Uses `.` as the decimal point whatever the C locale says.
+ *
+ * @return DE_OK, or DE_ERR_PARSE (bad syntax, longer than 511 bytes, or a finite value too large
+ *         for a double); `*out` is written only on DE_OK. Failures set the error context.
+ */
+DE_API de_result de_str_to_f64(de_str s, f64 *out);
 
 /* ---------- Asserts and panic ---------- */
 
