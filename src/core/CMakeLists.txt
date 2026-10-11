@@ -30,6 +30,12 @@ de_add_module(
         de_ring.h
         log.c
         log_sinks.c
+        mem_internal.h
+        tlsf.c
+        heap.c
+        pool.c
+        mem_tags.c
+        tracking_alloc.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
