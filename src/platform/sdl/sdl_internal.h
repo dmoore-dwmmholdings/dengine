@@ -53,6 +53,8 @@ typedef struct de__platform_sdl_state {
     void *input_hook_user;
     /* Per-pump arena for DE_EV_DROP_FILE paths; reset at the start of every pump. */
     de_arena *paths;
+    /* Raw input devices (DENG-246, input_sdl.c); NULL until de__platform_sdl_devices_init(). */
+    struct de__platform_sdl_devices *devices;
 } de__platform_sdl_state;
 
 /** The state, or NULL before de_platform_init() / after de_platform_shutdown(). */
@@ -97,5 +99,88 @@ u32 de__platform_sdl_input_drain(SDL_Event *out, u32 max);
 u32 de__platform_sdl_input_dropped(void);
 /** True for the SDL event types that de__platform_sdl_route_input() takes. */
 bool de__platform_sdl_is_input_event(Uint32 type);
+
+/* ---- raw input devices (DENG-246: input, gamepad, sensor, clipboard, cursor, dialog _sdl.c) ----
+ *
+ * de__platform_sdl_devices_init() runs at the end of de_platform_init(): it allocates the raw
+ * input ring, starts the gamepad and sensor subsystems (not when headless) and installs
+ * de__platform_sdl_devices_route() as the input hook above, so every input event is translated
+ * while the pump polls it. That matters: SDL frees event strings (text input) at the next poll.
+ * Removing the hook (tests of the DENG-245 ring) sends events to the SDL_Event ring instead. */
+
+/** Device sensors open at once. */
+#define DE__PLATFORM_SDL_SENSOR_MAX 8
+
+typedef struct de__platform_sdl_pad {
+    SDL_JoystickID id; /**< 0 when the slot is free */
+    SDL_Gamepad *pad;
+} de__platform_sdl_pad;
+
+typedef struct de__platform_sdl_sensor {
+    SDL_SensorID id; /**< 0 when the slot is free */
+    SDL_Sensor *sensor;
+} de__platform_sdl_sensor;
+
+typedef struct de__platform_sdl_devices {
+    bool pads_ok;    /**< the gamepad subsystem started */
+    bool sensors_ok; /**< the sensor subsystem started */
+    /* Raw input ring: the pump pushes, de_platform_input_events() pops (both main thread). */
+    u32 ring_head, ring_count;
+    u64 ring_dropped;
+    /* SDL timestamp → de_time_now_ns() (input_sdl.c). */
+    bool clock_synced;
+    i64 clock_offset;        /**< engine ns - SDL ns */
+    Uint64 clock_sync_ticks; /**< SDL ns when the offset was measured */
+    u64 last_time_ns;        /**< last converted time, so event times never go backwards */
+    de__platform_sdl_pad pads[DE_PLATFORM_PAD_MAX]; /**< in connection order, no gaps */
+    u32 pad_count;
+    de__platform_sdl_sensor sensors[DE__PLATFORM_SDL_SENSOR_MAX];
+    SDL_Cursor *cursors[DE_CURSOR_COUNT_]; /**< system cursors, created on first use */
+    de_raw_input_event ring[DE_PLATFORM_INPUT_RING];
+} de__platform_sdl_devices;
+
+/** Starts the devices part of the platform (end of de_platform_init()). */
+de_result de__platform_sdl_devices_init(de__platform_sdl_state *st);
+/** Cancels open dialogs, closes pads and sensors, frees cursors and the ring (start of
+ * de_platform_shutdown(), while SDL still runs). */
+void de__platform_sdl_devices_shutdown(de__platform_sdl_state *st);
+/** The input hook: translates one SDL input event into the raw input ring. */
+void de__platform_sdl_devices_route(const SDL_Event *ev, void *user);
+/** Appends one event to the raw input ring; a full ring drops its oldest event. */
+void de__platform_sdl_ring_push(de__platform_sdl_devices *dv, const de_raw_input_event *ev);
+/** SDL event timestamp (SDL_GetTicksNS() base) in the de_time_now_ns() timebase; never earlier
+ * than the previous result. */
+u64 de__platform_sdl_time_ns(de__platform_sdl_devices *dv, Uint64 sdl_ticks_ns);
+
+/* gamepad_sdl.c */
+/** Opens gamepad `id` after SDL_EVENT_GAMEPAD_ADDED; false when it could not be opened (the
+ * event is then not reported). */
+bool de__platform_sdl_pad_added(de__platform_sdl_devices *dv, SDL_JoystickID id);
+/** Closes gamepad `id` after SDL_EVENT_GAMEPAD_REMOVED; false when it was not open. */
+bool de__platform_sdl_pad_removed(de__platform_sdl_devices *dv, SDL_JoystickID id);
+/** True when `id` is an open gamepad (events of other joysticks are dropped). */
+bool de__platform_sdl_pad_known(const de__platform_sdl_devices *dv, SDL_JoystickID id);
+void de__platform_sdl_pads_close_all(de__platform_sdl_devices *dv);
+de_platform_sensor_type de__platform_sdl_sensor_type_from_sdl(SDL_SensorType t);
+SDL_SensorType de__platform_sdl_sensor_type_to_sdl(de_platform_sensor_type t);
+
+/* sensor_sdl.c */
+void de__platform_sdl_sensors_close_all(de__platform_sdl_devices *dv);
+
+/* cursor_sdl.c */
+void de__platform_sdl_cursors_free(de__platform_sdl_devices *dv);
+
+/* dialog_sdl.c */
+/** Calls the callbacks of finished dialogs (end of every de_platform_pump()). */
+void de__platform_sdl_dialogs_dispatch(void);
+/** Calls every outstanding callback: finished ones with their result, open ones with
+ * DE_ERR_CANCELLED. A late OS callback is dropped. */
+void de__platform_sdl_dialogs_shutdown(void);
+/** How a dialog is shown: SDL_ShowFileDialogWithProperties() by default. Tests install a fake
+ * (NULL restores the default) to run the delivery path without a real dialog. */
+typedef void(SDLCALL *de__platform_sdl_dialog_show_fn)(SDL_FileDialogType type,
+                                                       SDL_DialogFileCallback cb, void *userdata,
+                                                       SDL_PropertiesID props);
+void de__platform_sdl_dialog_set_show(de__platform_sdl_dialog_show_fn fn);
 
 #endif /* DE_PLATFORM_SDL_INTERNAL_H */

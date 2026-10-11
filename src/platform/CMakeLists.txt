@@ -98,3 +98,19 @@ if(TARGET de_platform)
     set_property(SOURCE crash_common.c APPEND PROPERTY
         COMPILE_DEFINITIONS "DE_BUILD_ID=\"${_de_build_id}\"")
 endif()
+
+# ---- Raw input devices, gamepads, sensors, clipboard, cursor, text input, dialogs (DENG-246) ----
+# Same split as above: the SDL files, or SDL-free stubs in a DE_HEADLESS build.
+if(TARGET de_platform)
+    if(DE_HEADLESS)
+        target_sources(de_platform PRIVATE sdl/devices_headless.c)
+    else()
+        target_sources(de_platform PRIVATE
+            sdl/input_sdl.c
+            sdl/gamepad_sdl.c
+            sdl/sensor_sdl.c
+            sdl/clipboard_sdl.c
+            sdl/cursor_sdl.c
+            sdl/dialog_sdl.c)
+    endif()
+endif()
