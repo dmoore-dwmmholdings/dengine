@@ -1,0 +1,67 @@
+# Pin list of every vendored library (SPEC §22, CONVENTIONS §6, policy in third_party/README.md).
+# Managed by tools/vendor/vendor.py:
+#
+#   python3 tools/vendor/vendor.py fetch <name> | --all     (re)write third_party/<name>/
+#   python3 tools/vendor/vendor.py verify                   tree == pinned archive, for every lib
+#
+# One [[lib]] table per library. To add a library, append a table, run `vendor.py hash <url>` for
+# the sha256, then `vendor.py fetch <name>`. To take more files from a library already here,
+# extend its `files` list; never add a second entry for the same library.
+#
+# Keys:
+#   name          directory under third_party/ and the CMake target suffix (de_tp_<name>)
+#   version       upstream version (tag, or `<date>-<short sha>` for an untagged commit)
+#   url           release tarball, or a git archive at a tag or commit (never a branch)
+#   sha256        sha256 of the archive at `url`
+#   license       SPDX expression; must be in the SPEC §22 allowlist in vendor.py
+#   license_file  licence file inside the archive (after `strip`); copied to <name>/LICENSE
+#                 (default "LICENSE")
+#   strip         leading path components removed from archive paths (default 1)
+#   files         globs of archive paths to vendor (`*` within a component, `**` across them)
+#   exclude       globs removed again from `files` (default [])
+#   local         globs of engine-owned files in third_party/<name>/ that the tool never touches
+#                 (default ["CMakeLists.txt", "de_*", "smoke/**", "patches/**"])
+#   patches       local patch files applied in order with `git apply` (prefer none) (default [])
+
+[[lib]]
+name = "xxhash"
+version = "0.8.4"
+url = "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz"
+sha256 = "5738270935e7c3d38a79b3adf7c9692566ce7895a25f67de43ad52ab504acd32"
+license = "BSD-2-Clause"
+files = ["xxhash.h"]
+
+[[lib]]
+name = "zstd"
+version = "1.5.7"
+url = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+sha256 = "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+# zstd is dual-licensed BSD-3-Clause (LICENSE) or GPL-2.0 (COPYING); we take BSD-3-Clause.
+license = "BSD-3-Clause"
+files = [
+    "lib/zstd.h",
+    "lib/zstd_errors.h",
+    "lib/common/**",
+    "lib/compress/**",
+    "lib/decompress/**",
+]
+# x86-64 Huffman assembly: the build sets ZSTD_DISABLE_ASM so the C path is used everywhere.
+exclude = ["lib/decompress/*.S"]
+
+[[lib]]
+name = "tomlc17"
+version = "R261003"
+url = "https://github.com/cktan/tomlc17/archive/refs/tags/R261003.tar.gz"
+sha256 = "48876f14bd7a123f95f16074dd0d5681f75c397c1bce61f1a52f42201f90eacc"
+license = "MIT"
+files = ["src/tomlc17.c", "src/tomlc17.h"]
+
+[[lib]]
+name = "stb"
+# stb has no release tags: pinned to a master commit (2026-08-02).
+version = "2026-08-02-2c980bb"
+url = "https://github.com/nothings/stb/archive/2c980bb59875b0d32144a71867fbdebb2f77cd20.tar.gz"
+sha256 = "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515"
+license = "MIT OR Unlicense"
+# Later sprints append stb_image_write.h (S10, DENG-327) and stb_truetype.h (S28) here.
+files = ["stb_image.h", "stb_vorbis.c"]

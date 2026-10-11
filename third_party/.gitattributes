@@ -1,0 +1,3 @@
+# Vendored files must stay byte-identical to their pinned archives (tools/vendor/vendor.py
+# verify), so git never converts their line endings. Applies to the library directories only.
+/*/** -text

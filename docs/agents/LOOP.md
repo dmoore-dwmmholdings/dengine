@@ -13,6 +13,7 @@ Each firing of the loop is one **tick**. A tick also runs when a worker's comple
 Related files:
 - `docs/agents/WORKER.md`: what each worker does. Pass it to the worker; do not paraphrase it.
 - `docs/agents/CONVENTIONS.md`: code, git, test and verification rules. They apply to you and to the workers.
+- `docs/agents/DOCS.md`: the project documentation in the Trama space `DENG`: page tree, who writes which page, how to read it for context.
 - Andare **DENG-1**: initiative. **DENG-2**: the decisions issue. It holds the default answers to the spec's open questions. Read it at the start of every sprint.
 
 ---
@@ -31,6 +32,7 @@ Related files:
 | Integration checkout | The main repo directory (this one). During a sprint it has the sprint branch checked out. Only you write to it. |
 | Worker checkouts | `.worktrees/<KEY>/` (gitignored). One per issue, on `feature/<KEY>-<slug>`. |
 | Default max parallel | 4, if the plan does not give a number. Never more than 6. |
+| Project docs | Trama space `DENG`. Workers write module, tool and decision pages as drafts; you publish them after a green merge and own the index pages (DOCS.md §3). |
 
 ---
 
@@ -42,6 +44,7 @@ Do these steps in order. Do not skip a step because you "remember" the state; ch
 1. `git status` in the integration checkout. It must be clean, apart from untracked files in `.worktrees/`. If a merge is half done (`MERGE_HEAD` exists), finish it or abort it as §2.4 says before you continue.
 2. `git worktree list` gives the worktrees that are dispatched at the moment.
 3. If the repo has no commits, or `docs/agents/` is missing, stop and tell the user. The bootstrap commit is required.
+4. Docs bootstrap (once): if `get_page_tree DENG` has no `DEngine` page, create the DOCS.md §2 skeleton: every page down to the index level (not the `Module:`, `Tool:`, `Decision:` or `Sprint Sxx:` pages), each with a short body that says what will go there. Seed the `Modules` table from `git show c9ab5f6:docs/modules/README.md`, and embed DENG-2 on `Decisions` with `link_to_issue`. Publish them.
 
 ### 2.2 Find the active sprint
 1. `list_sprints DENG`.
@@ -49,6 +52,7 @@ Do these steps in order. Do not skip a step because you "remember" the state; ch
 3. If no sprint is active, take the **lowest-numbered future sprint that has issues** (skip empty sprints; if two future sprints share a number, use the one with issues). Then:
    - Find its epic from the fixed mapping: **the epic for sprint `Sxx` is `DENG-(xx+2)`**. For example, S01 → DENG-3, S20 → DENG-22, S39 → DENG-41. Confirm with `get_issue` that the summary starts with `[Sxx]`. Do **not** look up the epic by searching on the sprint name: AQL `sprint = "<name>"` returns nothing for some sprint names (S06, S18, S22, S34, S36). Confirm that `get_issue` reports no unfinished blocker (the epic of the sprint before must be Done).
    - Read DENG-2 (decisions) and the `## SPRINT PLAN (v2)` section of the epic description (`get_issue` on the epic).
+   - Read the docs for context (DOCS.md §5): `DEngine`, `Architecture`, the previous `Sprint Sxx: …` page and `Verification Backlog`.
    - `start_sprint` with `durationDays: 14`.
    - Create the sprint branch from `main`: `git checkout main && git checkout -b sprint/<code>-<slug>`. Use the exact name from the plan.
    - Set the epic to `In Progress`. Comment on it: `▶ Sprint started. Branch sprint/… from main @ <sha>. Max parallel N.`
@@ -80,6 +84,7 @@ For each task in **review**:
 5. **If verification fails:** `git reset --hard ORIG_HEAD`. This undoes only the merge you just made. Set the issue to `In Progress`. Comment with the failing output (the last ~60 lines in a code block). Re-dispatch in **fix** mode.
 6. **If verification passes:**
    - Comment: `✅ Merged into sprint/<…> @ <sha>. Sprint build + tests green (<n> tests).`
+   - Publish every Trama page in the worker's `DOCS:` line: `publish_page` (space `DENG`) with the note `<KEY> merged @ <sha>`.
    - Set the issue to **Done**.
    - `git worktree remove .worktrees/<KEY>`. Keep the feature branch.
 
@@ -105,7 +110,7 @@ Sprint branch (base, do not modify): sprint/<…>
 Sprint epic: <EPIC KEY> · Decisions: DENG-2
 <fix/rebase/retry only: "Reason: <failure output / conflict files / previous failure comment>">
 
-First read <worktree>/docs/agents/WORKER.md and <worktree>/docs/agents/CONVENTIONS.md and follow them exactly.
+First read <worktree>/docs/agents/WORKER.md, <worktree>/docs/agents/CONVENTIONS.md and <worktree>/docs/agents/DOCS.md and follow them exactly.
 Finish with the RESULT block that WORKER.md specifies.
 ```
 
@@ -116,6 +121,7 @@ You may start several workers in one message. That is the preferred way.
 ### 2.6 Handle worker results
 A worker's final message contains a `RESULT:` block (see WORKER.md).
 - `RESULT: ready-for-merge`: confirm that the issue is now `In Review` and that the branch has the commit the worker gave. Then merge it at once (§2.4), and dispatch again at once (§2.5), because more tasks may now be ready.
+  - Docs are part of done. If `DOCS:` is `none` and the issue changed code under `src/`, `tools/`, `cmake/` or `tests/`, the worker must give a reason in `NOTES`. With no reason, do not merge: set the issue to `In Progress` and re-dispatch in **fix** mode with `Reason: Trama docs missing (DOCS.md §3)`.
 - `RESULT: failed`: the worker has already commented and set the issue back to `To Do`. Add the label `agent-failed` (`update_issue`; keep the existing labels). Then:
   - First failure: re-dispatch in **retry** mode, with the worker's failure notes in `Reason:`.
   - Second failure (the label is already there): call `request_decision` on the issue (person: `me`). Write the question in one sentence and include the worker's blocker. Add the label `needs-human`. Leave the worktree in place for the human. Go on with the other ready work.
@@ -123,9 +129,9 @@ A worker's final message contains a `RESULT:` block (see WORKER.md).
 
 ### 2.7 Close the sprint
 When every task is in **done**:
-1. Run the plan's **Sprint exit checks** on the sprint branch: a full clean build of every preset the host can build, all tests, the header-compile and layering checks, and the sprint-specific checks. If a check fails, file a `task` under the epic in this sprint (`[Sxx] Fix: …`, with points, `priority: highest`) and treat it as ready. Do not close the sprint with a red exit check.
+1. Run the plan's **Sprint exit checks** on the sprint branch: a full clean build of every preset the host can build, all tests, the header-compile and layering checks, and the sprint-specific checks. Also the **docs check**: every module and tool the sprint changed has a published page whose `Status` and `Last change` match this sprint, and `pages_referencing` finds a page for every task that changed code (or its report gave a reason). An issue that says `docs/modules/<mod>.md` is satisfied by the Trama page `Module: <mod>`. If a check fails, file a `task` under the epic in this sprint (`[Sxx] Fix: …`, with points, `priority: highest`) and treat it as ready. Do not close the sprint with a red exit check.
 2. Merge into main: `git checkout main && git merge --no-ff sprint/<…> -m "Sprint <Sxx> <name>"`, then `git tag sxx-done`. If an `origin` remote exists, `git push origin main sprint/<…> --tags`. Never force-push.
-3. Comment on the epic with the **SPRINT REPORT**: the tasks and points completed, the merge sha, the exit checks with their results, every issue with the `needs-hw-verify` label and what it still needs, decisions or deviations the workers recorded, and follow-ups filed.
+3. Write the **SPRINT REPORT** as the Trama page `Sprint Sxx: <name>` under `Sprints`: the tasks and points completed, the merge sha, the exit checks with their results, every issue with the `needs-hw-verify` label and what it still needs, decisions or deviations the workers recorded (link the `Decision:` pages), and follow-ups filed. `link_to_issue` the epic on it. Then update the index pages you own (DOCS.md §3): the `Sprints` row, `Modules` statuses, `Verification Backlog` (add new items, remove cleared ones), `Architecture` (the workers' `Architecture:` follow-ups), and the status line on `DEngine`. Read `list_stubs DENG`: write the index-level stubs, and list the rest in the report. Publish every page you changed. Comment on the epic with a 5–10 line summary and the report page title.
 4. `set_ceremony` with type `review` (held: true) and the same summary. Add type `retrospective` (held: true) with what slowed the sprint down (merge conflicts, retries, unclear specs) and the changes to make next time.
 5. Set the epic to **Done**. Call `complete_sprint` with `moveUnfinishedTo: "backlog"`. The user has authorised this call for sprints with no unfinished issues. If a sprint still has unfinished issues, do not complete it. Ask the user instead.
 6. **Milestone gates:** after **S20** (Milestone 1) and after **S37** (runtime v1), send a `PushNotification` (if available) with the report link, then go on. The user asked for an unattended build. The notification keeps them informed and does not stop the loop.
@@ -150,6 +156,7 @@ When all 39 epics are Done, comment a final summary on DENG-1, set DENG-1 to Don
 - Workers set `In Progress` and `In Review`. You set `Done`, after a green merge. Do not set statuses for a worker that is still running.
 - Use `requestId` on every `create_issue` / `create_issues` call, so that retries are safe.
 - Keep each tick short. Read issue descriptions only when you dispatch or merge.
+- **Trama explains** what was built and why (DOCS.md). If a page disagrees with git, git wins: fix the page, or file a follow-up for the owner.
 - If the user comments on an issue or edits DENG-2, their instruction overrides this file.
 
 ## 4. Host prerequisites (a human installs these once)

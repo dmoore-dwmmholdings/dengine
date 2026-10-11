@@ -1,0 +1,801 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Common settings: Ninja, build/<preset>, tests on.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "DE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "cfg-debug",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "cfg-dev",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Dev",
+        "DE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "cfg-release",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "cfg-shipping",
+      "hidden": true,
+      "description": "SPEC §3.2: Shipping is a static link with no dev tooling.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Shipping",
+        "DE_BUILD_SHARED": "OFF",
+        "DE_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "headless",
+      "hidden": true,
+      "description": "Server build: no renderer, GPU, audio or UI (SPEC §4.2).",
+      "cacheVariables": {
+        "DE_HEADLESS": "ON"
+      }
+    },
+    {
+      "name": "os-macos",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos-arm64.cmake"
+    },
+    {
+      "name": "os-linux-clang",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-x64-clang.cmake"
+    },
+    {
+      "name": "os-linux-gcc",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-x64-gcc.cmake"
+    },
+    {
+      "name": "os-windows-clang-cl",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "description": "Run from a Visual Studio x64 developer prompt (Ninja needs its environment).",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "os-windows-msvc",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "description": "Run from a Visual Studio x64 developer prompt (Ninja needs its environment).",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "os-windows-xwin",
+      "hidden": true,
+      "inherits": [
+        "base"
+      ],
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "description": "Cross build from macOS/Linux; needs xwin output in DE_XWIN_DIR (default ~/.xwin).",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-clang-cl-xwin.cmake"
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS arm64 (Apple Clang) Debug",
+      "inherits": [
+        "os-macos",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "macos-dev",
+      "displayName": "macOS arm64 (Apple Clang) Dev",
+      "inherits": [
+        "os-macos",
+        "cfg-dev"
+      ]
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS arm64 (Apple Clang) Release",
+      "inherits": [
+        "os-macos",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "macos-shipping",
+      "displayName": "macOS arm64 (Apple Clang) Shipping",
+      "inherits": [
+        "os-macos",
+        "cfg-shipping"
+      ]
+    },
+    {
+      "name": "linux-clang-debug",
+      "displayName": "Linux x64 (Clang) Debug",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "linux-clang-dev",
+      "displayName": "Linux x64 (Clang) Dev",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-dev"
+      ]
+    },
+    {
+      "name": "linux-clang-release",
+      "displayName": "Linux x64 (Clang) Release",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "linux-clang-shipping",
+      "displayName": "Linux x64 (Clang) Shipping",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-shipping"
+      ]
+    },
+    {
+      "name": "linux-gcc-debug",
+      "displayName": "Linux x64 (GCC) Debug",
+      "inherits": [
+        "os-linux-gcc",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux x64 (GCC) Release",
+      "inherits": [
+        "os-linux-gcc",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "linux-headless-dev",
+      "displayName": "Linux x64 headless server (Clang) Dev",
+      "inherits": [
+        "os-linux-clang",
+        "headless",
+        "cfg-dev"
+      ]
+    },
+    {
+      "name": "linux-headless-release",
+      "displayName": "Linux x64 headless server (Clang) Release",
+      "inherits": [
+        "os-linux-clang",
+        "headless",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "displayName": "Windows x64 (clang-cl) Debug",
+      "inherits": [
+        "os-windows-clang-cl",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "windows-clang-cl-dev",
+      "displayName": "Windows x64 (clang-cl) Dev",
+      "inherits": [
+        "os-windows-clang-cl",
+        "cfg-dev"
+      ]
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "displayName": "Windows x64 (clang-cl) Release",
+      "inherits": [
+        "os-windows-clang-cl",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "windows-clang-cl-shipping",
+      "displayName": "Windows x64 (clang-cl) Shipping",
+      "inherits": [
+        "os-windows-clang-cl",
+        "cfg-shipping"
+      ]
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows x64 (MSVC) Debug",
+      "inherits": [
+        "os-windows-msvc",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows x64 (MSVC) Release",
+      "inherits": [
+        "os-windows-msvc",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "windows-headless-release",
+      "displayName": "Windows x64 headless server (clang-cl) Release",
+      "inherits": [
+        "os-windows-clang-cl",
+        "headless",
+        "cfg-release"
+      ]
+    },
+    {
+      "name": "windows-xwin-debug",
+      "displayName": "Windows x64 cross (clang-cl + xwin) Debug",
+      "inherits": [
+        "os-windows-xwin",
+        "cfg-debug"
+      ]
+    },
+    {
+      "name": "windows-xwin-dev",
+      "displayName": "Windows x64 cross (clang-cl + xwin) Dev",
+      "inherits": [
+        "os-windows-xwin",
+        "cfg-dev"
+      ]
+    },
+    {
+      "name": "dev",
+      "displayName": "Host Dev (= macos-dev)",
+      "description": "Alias for the host-native Dev preset (macos-dev).",
+      "inherits": [
+        "macos-dev"
+      ]
+    },
+    {
+      "name": "ci-linux-asan",
+      "displayName": "CI: Linux x64 (Clang) Debug, ASan + UBSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "address,undefined"
+      }
+    },
+    {
+      "name": "ci-linux-tsan",
+      "displayName": "CI: Linux x64 (Clang) Debug, TSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "thread"
+      }
+    },
+    {
+      "name": "ci-macos-asan",
+      "displayName": "CI: macOS arm64 (Apple Clang) Debug, ASan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-macos",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "address"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "host-darwin",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "host-linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "host-windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "host-not-windows",
+      "hidden": true,
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "macos-debug",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-debug"
+    },
+    {
+      "name": "macos-dev",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-dev"
+    },
+    {
+      "name": "macos-release",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-release"
+    },
+    {
+      "name": "macos-shipping",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-shipping"
+    },
+    {
+      "name": "linux-clang-debug",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-debug"
+    },
+    {
+      "name": "linux-clang-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-dev"
+    },
+    {
+      "name": "linux-clang-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-release"
+    },
+    {
+      "name": "linux-clang-shipping",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-shipping"
+    },
+    {
+      "name": "linux-gcc-debug",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-debug"
+    },
+    {
+      "name": "linux-gcc-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-release"
+    },
+    {
+      "name": "linux-headless-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-headless-dev"
+    },
+    {
+      "name": "linux-headless-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-headless-release"
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-debug"
+    },
+    {
+      "name": "windows-clang-cl-dev",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-dev"
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-release"
+    },
+    {
+      "name": "windows-clang-cl-shipping",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-shipping"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "windows-headless-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-headless-release"
+    },
+    {
+      "name": "windows-xwin-debug",
+      "inherits": [
+        "host-not-windows"
+      ],
+      "configurePreset": "windows-xwin-debug"
+    },
+    {
+      "name": "windows-xwin-dev",
+      "inherits": [
+        "host-not-windows"
+      ],
+      "configurePreset": "windows-xwin-dev"
+    },
+    {
+      "name": "dev",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "dev"
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-asan"
+    },
+    {
+      "name": "ci-linux-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-tsan"
+    },
+    {
+      "name": "ci-macos-asan",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "ci-macos-asan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "host-darwin",
+      "hidden": true,
+      "inherits": [
+        "test-base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "host-linux",
+      "hidden": true,
+      "inherits": [
+        "test-base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "host-windows",
+      "hidden": true,
+      "inherits": [
+        "test-base"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "macos-debug",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-debug"
+    },
+    {
+      "name": "macos-dev",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-dev"
+    },
+    {
+      "name": "macos-release",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-release"
+    },
+    {
+      "name": "macos-shipping",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "macos-shipping"
+    },
+    {
+      "name": "linux-clang-debug",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-debug"
+    },
+    {
+      "name": "linux-clang-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-dev"
+    },
+    {
+      "name": "linux-clang-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-release"
+    },
+    {
+      "name": "linux-clang-shipping",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-clang-shipping"
+    },
+    {
+      "name": "linux-gcc-debug",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-debug"
+    },
+    {
+      "name": "linux-gcc-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-release"
+    },
+    {
+      "name": "linux-headless-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-headless-dev"
+    },
+    {
+      "name": "linux-headless-release",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-headless-release"
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-debug"
+    },
+    {
+      "name": "windows-clang-cl-dev",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-dev"
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-release"
+    },
+    {
+      "name": "windows-clang-cl-shipping",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-clang-cl-shipping"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-msvc-debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-msvc-release"
+    },
+    {
+      "name": "windows-headless-release",
+      "inherits": [
+        "host-windows"
+      ],
+      "configurePreset": "windows-headless-release"
+    },
+    {
+      "name": "dev",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "dev"
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-asan",
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "ci-linux-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1"
+      }
+    },
+    {
+      "name": "ci-macos-asan",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "ci-macos-asan",
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
+      }
+    }
+  ]
+}

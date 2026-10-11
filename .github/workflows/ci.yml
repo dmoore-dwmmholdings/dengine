@@ -1,0 +1,83 @@
+# CI: build + unit tests on every compiler x config of SPEC §19.3, plus the headless server
+# builds. Every job runs one CMakePresets.json preset, so a job is reproduced locally with
+#   cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>
+# (docs/ci.md). GPU/golden jobs come in S10; sanitizers are in sanitizers.yml, repository checks
+# in checks.yml.
+name: CI
+
+on:
+  push:
+    branches: [main, "sprint/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x64: clang-cl is the primary compiler, MSVC must stay green (SPEC §2, §3.2).
+          - { name: windows clang-cl Debug, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug }
+          - { name: windows clang-cl Release, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-release }
+          # No compiler cache: Debug uses /Zi (one shared PDB per target), which sccache cannot
+          # cache correctly with cl. clang-cl writes CodeView into the .obj, so it is fine.
+          - { name: windows msvc Debug, os: windows-2022, compiler: msvc, preset: windows-msvc-debug, no-cache: true }
+          - { name: windows msvc Release, os: windows-2022, compiler: msvc, preset: windows-msvc-release }
+          # Linux x64: Clang primary, GCC for portability.
+          - { name: linux clang Debug, os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug }
+          - { name: linux clang Release, os: ubuntu-24.04, compiler: clang, preset: linux-clang-release }
+          - { name: linux gcc Debug, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-debug }
+          - { name: linux gcc Release, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-release }
+          # macOS arm64: Apple Clang.
+          - { name: macos apple-clang Debug, os: macos-14, compiler: apple-clang, preset: macos-debug }
+          - { name: macos apple-clang Release, os: macos-14, compiler: apple-clang, preset: macos-release }
+          # Headless server builds (DE_HEADLESS=ON, SPEC §4.2).
+          - { name: headless linux Release, os: ubuntu-24.04, compiler: clang, preset: linux-headless-release }
+          - { name: headless windows Release, os: windows-2022, compiler: clang-cl, preset: windows-headless-release }
+    env:
+      PRESET: ${{ matrix.preset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-dengine
+        with:
+          compiler: ${{ matrix.compiler }}
+          cache-key: ${{ !matrix.no-cache && matrix.preset || '' }}
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset "${PRESET}"
+          cat "build/${PRESET}/de_config_dump.txt"
+
+      - name: Build
+        shell: bash
+        run: cmake --build --preset "${PRESET}"
+
+      - name: Test
+        shell: bash
+        run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/Testing/Temporary/
+            build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
+            build/${{ matrix.preset }}/de_config_dump.txt
+          if-no-files-found: ignore
+          retention-days: 7

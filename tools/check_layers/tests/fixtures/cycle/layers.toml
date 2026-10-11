@@ -1,0 +1,37 @@
+bands = ["low", "mid"]
+include_roots = ["src"]
+
+[[module]]
+name = "base"
+band = "low"
+paths = ["src/base"]
+
+[[module]]
+name = "alpha"
+band = "mid"
+paths = ["src/alpha"]
+
+[[module]]
+name = "beta"
+band = "mid"
+paths = ["src/beta"]
+
+[[module]]
+name = "gamma"
+band = "mid"
+paths = ["src/gamma"]
+
+[[allow]]
+from = "alpha"
+to = "beta"
+why = "fixture"
+
+[[allow]]
+from = "beta"
+to = "alpha"
+why = "fixture: closes the cycle"
+
+[[allow]]
+from = "gamma"
+to = "alpha"
+why = "fixture: feeds the cycle but is not in it"

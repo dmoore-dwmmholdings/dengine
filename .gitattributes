@@ -1,0 +1,13 @@
+# Normalise all text to LF in the repo and in working trees.
+* text=auto eol=lf
+
+# Binary assets: never diff or convert line endings.
+*.png  binary
+*.exr  binary
+*.ktx2 binary
+*.dpak binary
+*.bin  binary
+
+# Golden vectors (reference images, checksum dumps) must stay byte-exact.
+tests/golden/**      -text
+*.golden             -text
