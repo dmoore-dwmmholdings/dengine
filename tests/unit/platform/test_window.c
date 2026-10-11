@@ -324,6 +324,9 @@ TEST_F(window, pump_window_and_app_events, plat_fx) {
     (void)f;
     de_window w = open_hidden(320, 240, false);
     drain();
+    /* DENG-246 installs its raw-input translator as the input hook at init; remove it so this
+     * test sees the SDL_Event ring underneath (test_devices.c covers the translator). */
+    de__platform_sdl_set_input_hook(NULL, NULL);
     SDL_Window *sw = de__platform_sdl_window_get(w);
     ASSERT_TRUE(sw != NULL);
     SDL_WindowID id = SDL_GetWindowID(sw);

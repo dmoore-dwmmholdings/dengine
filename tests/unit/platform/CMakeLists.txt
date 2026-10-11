@@ -70,3 +70,15 @@ if(TARGET test_crash)
     target_include_directories(test_crash PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_definitions(test_crash PRIVATE "DE_TEST_BUILD_ID=\"${DE_BUILD_ID_VALUE}\"")
 endif()
+
+# Raw input devices (DENG-246): raw events, virtual gamepads, sensors, clipboard, cursor, text
+# input and file dialogs. Its own executable, labelled `window` too (needs video for most tests,
+# which skip without a driver). Uses the internal header to push SDL events and drive SDL virtual
+# gamepads.
+de_add_test(NAME devices SOURCES test_devices.c LIBS de_platform LABELS unit window)
+if(TARGET test_devices)
+    target_include_directories(test_devices PRIVATE "${DE_ROOT_DIR}/src")
+    if(TARGET de_tp_sdl3)
+        target_link_libraries(test_devices PRIVATE de_tp_sdl3)
+    endif()
+endif()

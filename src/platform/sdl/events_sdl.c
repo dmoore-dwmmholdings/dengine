@@ -187,5 +187,7 @@ u32 de_platform_pump(de_app_event *events, u32 max_events) {
         if (max_events)
             events[n++] = out;
     }
+    /* File dialogs that finished since the last pump (DENG-246, dialog_sdl.c). */
+    de__platform_sdl_dialogs_dispatch();
     return n;
 }

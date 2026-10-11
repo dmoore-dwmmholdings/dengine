@@ -193,7 +193,8 @@ DE_API de_native_window de_window_native(de_window w);
 /* ---------- Event pump ---------- */
 
 /** What de_platform_pump() returns. Input events (keyboard, mouse, gamepad, touch, pen,
- * sensors) are not app events: the pump routes them to de_input (de_input.h, S03 DENG-246). */
+ * sensors) are not app events: the pump translates them into the raw input ring, read with
+ * de_platform_input_events() (section "Raw input and devices", DENG-246). */
 typedef enum de_app_event_kind {
     DE_EV_QUIT,             /**< the user or the OS asks to quit (last window closed, Cmd-Q,
                                  SIGINT/SIGTERM) */
@@ -239,12 +240,459 @@ typedef struct de_app_event {
  * be NULL) drains the queue, routes input and discards the app events.
  *
  * Main thread only. Never blocks; returns 0 when nothing is queued. Headless, it still reports
- * DE_EV_QUIT. Returns 0 when the platform is not initialised.
+ * DE_EV_QUIT. Returns 0 when the platform is not initialised. Finished file dialogs
+ * (de_platform_file_dialog()) call their callbacks from here, after the events are polled.
  */
 DE_API u32 de_platform_pump(de_app_event *events, u32 max_events);
 
 /* ==========================================================================================
  * End of the platform init, displays, windows and event pump sections (DENG-245).
+ * ========================================================================================== */
+
+/* ==========================================================================================
+ * Raw input and devices (S03, DENG-246). SPEC §6, §15.
+ * Implementation: src/platform/sdl/{input,gamepad,sensor,clipboard,cursor,dialog}_sdl.c; a
+ * DE_HEADLESS build uses src/platform/sdl/devices_headless.c (no devices, DE_ERR_UNSUPPORTED).
+ *
+ * This is the raw layer below de_input (S21): device events and device control in engine
+ * types. Action maps, rebinding, glyphs, gyro calibration and recording are de_input's job.
+ * The platform layer never includes de_input.h; the numbering below is kept equal to de_input's
+ * enums so that S21 can cast (de_input adds the matching _Static_asserts).
+ *
+ * Threading: main thread only, like the rest of the windowing API above (Debug/Dev builds
+ * assert it). File-dialog callbacks also run on the main thread, inside de_platform_pump().
+ * With DE_PLATFORM_HEADLESS (or a DE_HEADLESS build) there are no gamepads (every pad id gives
+ * DE_ERR_NOT_FOUND), no device sensors, and clipboard, cursor, text input and dialogs return
+ * DE_ERR_UNSUPPORTED or zero values. Keyboard and mouse events that reach the event queue are
+ * still translated.
+ * ========================================================================================== */
+
+/* ---------- Raw input events ---------- */
+
+/** Capacity of the raw input ring, in events. It is allocated by de_platform_init(); a full
+ * ring drops its oldest event and counts it (de_platform_input_dropped()). */
+#define DE_PLATFORM_INPUT_RING 1024
+
+/** Kinds of de_raw_input_event. */
+typedef enum de_raw_input_kind {
+    DE_RAW_KEY,          /**< `key`: a key went down, up, or auto-repeated */
+    DE_RAW_TEXT,         /**< `text`: committed text (typed or from an IME) */
+    DE_RAW_MOUSE_MOVE,   /**< `mouse_move` */
+    DE_RAW_MOUSE_BUTTON, /**< `mouse_button` */
+    DE_RAW_MOUSE_WHEEL,  /**< `mouse_wheel` */
+    DE_RAW_PAD_ADDED,    /**< gamepad `device` connected and opened (de_platform_pad_info()) */
+    DE_RAW_PAD_REMOVED,  /**< gamepad `device` disconnected; its id is now invalid */
+    DE_RAW_PAD_BUTTON,   /**< `pad_button` */
+    DE_RAW_PAD_AXIS,     /**< `pad_axis` */
+    DE_RAW_PAD_TOUCHPAD, /**< `pad_touch`: a finger on a gamepad touchpad (DualShock 4, DualSense)
+                          */
+    DE_RAW_PAD_SENSOR,   /**< `sensor`: gyro or accelerometer sample of gamepad `device` */
+    DE_RAW_TEXT_EDIT     /**< `text`: IME composition (pre-edit) text, with the edit cursor */
+} de_raw_input_kind;
+
+/** Keyboard modifier flags in de_raw_key.mods. */
+typedef enum de_key_mod {
+    DE_KEYMOD_LSHIFT = 1u << 0,
+    DE_KEYMOD_RSHIFT = 1u << 1,
+    DE_KEYMOD_LCTRL = 1u << 2,
+    DE_KEYMOD_RCTRL = 1u << 3,
+    DE_KEYMOD_LALT = 1u << 4,
+    DE_KEYMOD_RALT = 1u << 5,
+    DE_KEYMOD_LGUI = 1u << 6, /**< Cmd on macOS, the Windows key elsewhere */
+    DE_KEYMOD_RGUI = 1u << 7,
+    DE_KEYMOD_NUM = 1u << 8,  /**< Num Lock on */
+    DE_KEYMOD_CAPS = 1u << 9, /**< Caps Lock on */
+    DE_KEYMOD_ALTGR = 1u << 10
+} de_key_mod;
+
+/** DE_RAW_KEY payload. */
+typedef struct de_raw_key {
+    /** USB HID usage code of the physical key (keyboard page 0x07): the same numbers as de_key
+     * in de_input.h, e.g. 4 = A, 40 = Return, 225 = left Shift. Independent of the layout. */
+    u16 code;
+    u16 mods; /**< de_key_mod flags at the time of the event */
+    /** Unicode code point the key produces in the current layout without modifiers (for
+     * showing bindings), or 0 for keys that produce no character. */
+    u32 sym;
+    bool down;   /**< pressed (true) or released */
+    bool repeat; /**< an OS auto-repeat of a key that is held down */
+} de_raw_key;
+
+/** DE_RAW_TEXT and DE_RAW_TEXT_EDIT payload. */
+typedef struct de_raw_text {
+    /** UTF-8, NUL-terminated, at most 31 bytes. Longer committed text arrives as several
+     * DE_RAW_TEXT events, split between code points. Composition text longer than 31 bytes is
+     * cut at a code point boundary. */
+    char utf8[32];
+    /** DE_RAW_TEXT_EDIT only: edit cursor position and selection length, in code points of the
+     * whole composition; -1 when unknown. 0 for DE_RAW_TEXT. */
+    i32 start, length;
+} de_raw_text;
+
+/** DE_RAW_MOUSE_MOVE payload. Window coordinates in logical points (multiply by the window's
+ * pixel density for pixels), origin top left. */
+typedef struct de_raw_mouse_move {
+    f32 x, y;   /**< position in `window`; not updated in relative mode */
+    f32 dx, dy; /**< motion since the last event; the useful part in relative mode */
+} de_raw_mouse_move;
+
+/** DE_RAW_MOUSE_BUTTON payload. */
+typedef struct de_raw_mouse_button {
+    f32 x, y;  /**< position in `window`, logical points */
+    u8 button; /**< 0 left, 1 right, 2 middle, 3 X1, 4 X2 (de_mouse_button order); 5+ others */
+    bool down;
+    u8 clicks; /**< 1 single, 2 double click, ... */
+} de_raw_mouse_button;
+
+/** DE_RAW_MOUSE_WHEEL payload. */
+typedef struct de_raw_mouse_wheel {
+    /** Scroll amount, in notches (fractional for touchpads and high-resolution wheels).
+     * +dy scrolls away from the user (up), +dx to the right. "Natural scrolling" settings are
+     * already undone, so the sign means the same on every OS. */
+    f32 dx, dy;
+    f32 x, y; /**< mouse position in `window`, logical points */
+} de_raw_mouse_wheel;
+
+/** DE_RAW_PAD_BUTTON payload. */
+typedef struct de_raw_pad_button {
+    /** 0..20 in de_pad_button order (de_input.h): SOUTH, EAST, WEST, NORTH, BACK, GUIDE, START,
+     * LSTICK, RSTICK, LSHOULDER, RSHOULDER, DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT, MISC1,
+     * PADDLE1 (right upper), PADDLE2 (left upper), PADDLE3 (right lower), PADDLE4 (left lower),
+     * TOUCHPAD (click). 21..25 are extra buttons (MISC2..MISC6) that de_pad_button lacks. */
+    u8 button;
+    bool down;
+} de_raw_pad_button;
+
+/** DE_RAW_PAD_AXIS payload. */
+typedef struct de_raw_pad_axis {
+    /** 0..5 in de_pad_axis order (de_input.h): LEFT_X, LEFT_Y, RIGHT_X, RIGHT_Y, LEFT_TRIGGER,
+     * RIGHT_TRIGGER. */
+    u8 axis;
+    /** Sticks in [-1, 1] (+x right, +y down, as the device reports it); triggers in [0, 1].
+     * No dead zone is applied. */
+    f32 value;
+} de_raw_pad_axis;
+
+/** What a touchpad finger did. */
+typedef enum de_touch_phase { DE_TOUCH_DOWN, DE_TOUCH_MOVE, DE_TOUCH_UP } de_touch_phase;
+
+/** DE_RAW_PAD_TOUCHPAD payload. */
+typedef struct de_raw_pad_touch {
+    u8 touchpad, finger; /**< touchpad index on the pad, finger index on the touchpad */
+    u8 phase;            /**< de_touch_phase */
+    f32 x, y;            /**< normalized [0, 1], origin top left */
+    f32 pressure;        /**< [0, 1] */
+} de_raw_pad_touch;
+
+/** Motion sensor types (gamepad and device sensors). Units: accelerometers m/s² (gravity
+ * included), gyroscopes rad/s. Axes for a gamepad held level: +x right, +y up, +z towards the
+ * player; a gyro reports positive rotation counter-clockwise around each axis. */
+typedef enum de_platform_sensor_type {
+    DE_PLATFORM_SENSOR_UNKNOWN,
+    DE_PLATFORM_SENSOR_ACCEL,
+    DE_PLATFORM_SENSOR_GYRO,
+    DE_PLATFORM_SENSOR_ACCEL_L, /**< left Joy-Con */
+    DE_PLATFORM_SENSOR_GYRO_L,
+    DE_PLATFORM_SENSOR_ACCEL_R, /**< right Joy-Con */
+    DE_PLATFORM_SENSOR_GYRO_R
+} de_platform_sensor_type;
+
+/** DE_RAW_PAD_SENSOR payload. */
+typedef struct de_raw_sensor {
+    u32 sensor; /**< de_platform_sensor_type */
+    f32 data[3];
+    /** The device's own timestamp of the sample, in ns, on the device's clock (not the
+     * de_time_now_ns() timebase). Use differences between samples to integrate a gyro; 0 if
+     * the device has none. de_raw_input_event.time_ns is when the host received it. */
+    u64 sensor_time_ns;
+} de_raw_sensor;
+
+/** One raw input event (64 bytes). */
+typedef struct de_raw_input_event {
+    de_raw_input_kind kind;
+    /** Window with keyboard or mouse focus (zero if none, or not an engine window); zero for
+     * gamepad events. */
+    de_window window;
+    /** Gamepad instance id for DE_RAW_PAD_* (see de_platform_pads()); the OS keyboard or mouse
+     * id for keyboard and mouse events (0 when unknown or synthetic). */
+    u32 device;
+    u32 reserved_;
+    /** When the OS delivered the event, in the de_time_now_ns() timebase, so input can be lined
+     * up with frames and replays. */
+    u64 time_ns;
+    union {
+        de_raw_key key;
+        de_raw_text text;
+        de_raw_mouse_move mouse_move;
+        de_raw_mouse_button mouse_button;
+        de_raw_mouse_wheel mouse_wheel;
+        de_raw_pad_button pad_button;
+        de_raw_pad_axis pad_axis;
+        de_raw_pad_touch pad_touch;
+        de_raw_sensor sensor;
+    };
+} de_raw_input_event;
+
+/**
+ * Pops up to `max` raw input events, oldest first, into `out` and returns how many.
+ *
+ * de_platform_pump() fills the ring; call this after each pump until it returns less than
+ * `max`. No allocation. Touchscreen, pen and joysticks that are not gamepads are not reported.
+ * Returns 0 when the platform is not initialised or `out` is NULL.
+ */
+DE_API u32 de_platform_input_events(de_raw_input_event *out, u32 max);
+
+/** Events dropped since de_platform_init() because the ring was full (the oldest go first). */
+DE_API u64 de_platform_input_dropped(void);
+
+/* ---------- Gamepads ----------
+ * A gamepad is addressed by its OS instance id, an opaque u32 that is never 0 and is not reused
+ * while the program runs. The platform opens every gamepad when it connects (DE_RAW_PAD_ADDED)
+ * and closes it on DE_RAW_PAD_REMOVED. A stale id gives DE_ERR_NOT_FOUND. */
+
+/** Most gamepads open at once; more are ignored (with a warning). */
+#define DE_PLATFORM_PAD_MAX 16
+
+/** Gamepad families, for glyphs and feature defaults. */
+typedef enum de_platform_pad_type {
+    DE_PLATFORM_PAD_GENERIC, /**< unknown, or a standard layout without a known family */
+    DE_PLATFORM_PAD_XBOX,    /**< Xbox 360 / One / Series */
+    DE_PLATFORM_PAD_PS4,     /**< DualShock 4 (and DualShock 3) */
+    DE_PLATFORM_PAD_PS5,     /**< DualSense (and DualSense Edge) */
+    DE_PLATFORM_PAD_SWITCH,  /**< Switch Pro controller and Joy-Cons */
+    DE_PLATFORM_PAD_STEAM    /**< Steam Controller, Steam Deck */
+} de_platform_pad_type;
+
+/** Capability flags in de_platform_pad_info.caps. */
+typedef enum de_platform_pad_cap {
+    DE_PLATFORM_PAD_CAP_RUMBLE = 1u << 0,         /**< de_platform_pad_rumble() */
+    DE_PLATFORM_PAD_CAP_TRIGGER_RUMBLE = 1u << 1, /**< de_platform_pad_trigger_rumble() */
+    DE_PLATFORM_PAD_CAP_LED = 1u << 2,            /**< de_platform_pad_set_led() (RGB or mono) */
+    DE_PLATFORM_PAD_CAP_GYRO = 1u << 3,
+    DE_PLATFORM_PAD_CAP_ACCEL = 1u << 4,
+    DE_PLATFORM_PAD_CAP_TOUCHPAD = 1u << 5
+} de_platform_pad_cap;
+
+/** A connected gamepad. */
+typedef struct de_platform_pad_info {
+    u32 id;                    /**< instance id */
+    de_platform_pad_type type; /**< family */
+    u16 vendor, product;       /**< USB vendor and product ids; 0 when unknown */
+    u32 caps;                  /**< de_platform_pad_cap flags */
+    u32 touchpads;             /**< number of touchpads */
+    i32 player_index;          /**< player index the OS or the pad shows; -1 = none */
+    char name[64];             /**< UTF-8, cut at 63 bytes */
+} de_platform_pad_info;
+
+/** Writes up to `max` connected gamepad ids to `out` (in connection order) and returns how many
+ * are connected, so `de_platform_pads(NULL, 0)` counts them. */
+DE_API u32 de_platform_pads(u32 *out, u32 max);
+
+/** Describes gamepad `pad`. DE_ERR_NOT_FOUND for a stale id, DE_ERR_INVALID_ARGUMENT for NULL
+ * `out`. */
+DE_API de_result de_platform_pad_info_get(u32 pad, de_platform_pad_info *out);
+
+/**
+ * Starts the two rumble motors: `low` (left, low frequency) and `high` (right, high frequency)
+ * in [0, 1] (clamped), for `duration_ms` (0 stops). A new call replaces the previous one.
+ * @return DE_OK; DE_ERR_NOT_FOUND (stale id); DE_ERR_UNSUPPORTED (no rumble on this pad); or
+ *         DE_ERR_IO when the device refuses (the message has the reason).
+ */
+DE_API de_result de_platform_pad_rumble(u32 pad, f32 low, f32 high, u32 duration_ms);
+
+/** Rumble in the triggers (Xbox One / Series impulse triggers), like de_platform_pad_rumble().
+ * DE_ERR_UNSUPPORTED on pads without trigger motors. */
+DE_API de_result de_platform_pad_trigger_rumble(u32 pad, f32 left, f32 right, u32 duration_ms);
+
+/** Sets the pad's LED colour (light bar on DualShock 4 / DualSense). DE_ERR_UNSUPPORTED on pads
+ * without an LED. */
+DE_API de_result de_platform_pad_set_led(u32 pad, u8 r, u8 g, u8 b);
+
+/**
+ * Sends a raw, device-specific effect packet. On a DualSense this is the output-report effect
+ * block (adaptive trigger modes, HD haptics enables); on a DualShock 4 the output report.
+ * de_input (S21) builds the packets; this call only transports `size` bytes.
+ * @return DE_OK; DE_ERR_NOT_FOUND; DE_ERR_INVALID_ARGUMENT (NULL `data` or `size` 0); or
+ *         DE_ERR_UNSUPPORTED when the pad's driver takes no effect packets.
+ */
+DE_API de_result de_platform_pad_send_effect(u32 pad, const void *data, u32 size);
+
+/** True when gamepad `pad` has a sensor of `type`. False for a stale id. */
+DE_API bool de_platform_pad_has_sensor(u32 pad, de_platform_sensor_type type);
+
+/**
+ * Turns the reports of one gamepad sensor on or off. While on, the pump sends DE_RAW_PAD_SENSOR
+ * events (a DualSense reports at about 250 Hz per sensor). Sensors start off, because they cost
+ * bandwidth and battery.
+ * @return DE_OK; DE_ERR_NOT_FOUND; DE_ERR_UNSUPPORTED when the pad has no such sensor; or
+ *         DE_ERR_IO when the device refuses.
+ */
+DE_API de_result de_platform_pad_sensor_enable(u32 pad, de_platform_sensor_type type, bool on);
+
+/* ---------- Device sensors ----------
+ * Motion sensors built into the machine (tablets, some laptops, handhelds that expose them as
+ * system sensors). Most desktops have none. Addressed by an opaque u32 instance id. */
+
+/** A device sensor. */
+typedef struct de_platform_sensor_info {
+    u32 id;                       /**< instance id */
+    de_platform_sensor_type type; /**< DE_PLATFORM_SENSOR_UNKNOWN for other sensor kinds */
+    char name[64];                /**< UTF-8, cut at 63 bytes */
+} de_platform_sensor_info;
+
+/** Writes up to `max` device sensors to `out` and returns how many exist (`(NULL, 0)` counts). */
+DE_API u32 de_platform_sensors(de_platform_sensor_info *out, u32 max);
+
+/** Opens (`on`) or closes device sensor `sensor`. An open sensor is updated by every pump.
+ * DE_ERR_NOT_FOUND for an unknown id; DE_ERR_BUSY when 8 sensors are already open. */
+DE_API de_result de_platform_sensor_enable(u32 sensor, bool on);
+
+/** Reads the latest sample of open sensor `sensor` into `out[0..2]` (units as in
+ * de_platform_sensor_type). DE_ERR_INVALID_ARGUMENT when it is not open or `out` is NULL. */
+DE_API de_result de_platform_sensor_read(u32 sensor, f32 out[3]);
+
+/* ---------- Clipboard ---------- */
+
+/** Puts UTF-8 `text` on the system clipboard. DE_ERR_UNSUPPORTED when headless,
+ * DE_ERR_INVALID_ARGUMENT for NULL, DE_ERR_IO when the OS refuses. */
+DE_API de_result de_platform_clipboard_set(const char *text);
+
+/**
+ * Copies the clipboard text (UTF-8) to `buf` and returns its full length in bytes, without the
+ * NUL. At most `cap - 1` bytes are written, cut at a code point boundary, then a NUL; so
+ * `de_platform_clipboard_get(NULL, 0)` asks for the size and a return value >= `cap` means the
+ * copy was cut. Returns 0 when there is no text, when headless, or when not initialised.
+ * The OS copy is freed before the call returns.
+ */
+DE_API size_t de_platform_clipboard_get(char *buf, size_t cap);
+
+/* ---------- Cursor and mouse ---------- */
+
+/** System cursor shapes. */
+typedef enum de_platform_cursor {
+    DE_CURSOR_DEFAULT,
+    DE_CURSOR_TEXT,
+    DE_CURSOR_WAIT,
+    DE_CURSOR_CROSSHAIR,
+    DE_CURSOR_PROGRESS,    /**< busy, but still clickable */
+    DE_CURSOR_RESIZE_NWSE, /**< diagonal, top left to bottom right */
+    DE_CURSOR_RESIZE_NESW,
+    DE_CURSOR_RESIZE_EW,
+    DE_CURSOR_RESIZE_NS,
+    DE_CURSOR_MOVE,
+    DE_CURSOR_NOT_ALLOWED,
+    DE_CURSOR_POINTER, /**< pointing hand (links) */
+    DE_CURSOR_COUNT_
+} de_platform_cursor;
+
+/** Shows or hides the mouse cursor (all windows). DE_ERR_UNSUPPORTED when headless. */
+DE_API de_result de_platform_cursor_show(bool visible);
+
+/** True when the cursor is shown. False when headless. */
+DE_API bool de_platform_cursor_visible(void);
+
+/** Sets the cursor shape (all windows). The OS cursors are created on first use and freed by
+ * de_platform_shutdown(). DE_ERR_UNSUPPORTED when headless or the OS lacks that shape,
+ * DE_ERR_INVALID_ARGUMENT for an out-of-range value. */
+DE_API de_result de_platform_cursor_set(de_platform_cursor shape);
+
+/**
+ * Relative mouse mode for window `w`: the cursor is hidden and confined, and DE_RAW_MOUSE_MOVE
+ * reports unbounded motion in dx/dy (camera control). It applies while `w` has focus.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (stale window); DE_ERR_UNSUPPORTED (headless); or
+ *         DE_ERR_IO when the OS refuses.
+ */
+DE_API de_result de_platform_mouse_relative(de_window w, bool on);
+
+/** True when relative mouse mode is on for `w`. */
+DE_API bool de_platform_mouse_relative_get(de_window w);
+
+/** Moves the cursor to (`x`, `y`) in window `w`, in logical points. Generates a
+ * DE_RAW_MOUSE_MOVE. DE_ERR_INVALID_ARGUMENT for a stale window, DE_ERR_UNSUPPORTED headless. */
+DE_API de_result de_platform_mouse_warp(de_window w, f32 x, f32 y);
+
+/* ---------- Text input ---------- */
+
+/** Where the text being edited is, so the OS can place the IME candidate window next to it.
+ * Window coordinates in logical points. */
+typedef struct de_platform_text_area {
+    i32 x, y, w, h; /**< the input field */
+    i32 cursor;     /**< caret offset from `x`, in points */
+} de_platform_text_area;
+
+/**
+ * Starts text input for window `w`: the pump then sends DE_RAW_TEXT (and DE_RAW_TEXT_EDIT while
+ * an IME composes), and on-screen keyboards may show. `area` (may be NULL) places the IME.
+ * Key events keep coming either way. DE_ERR_INVALID_ARGUMENT for a stale window,
+ * DE_ERR_UNSUPPORTED when headless.
+ */
+DE_API de_result de_platform_text_input_start(de_window w, const de_platform_text_area *area);
+
+/** Moves the IME area of window `w` (while text input is on, e.g. when the caret moves). */
+DE_API de_result de_platform_text_input_area(de_window w, const de_platform_text_area *area);
+
+/** Stops text input for `w`. A stale window is ignored. */
+DE_API void de_platform_text_input_stop(de_window w);
+
+/** True while text input is on for `w`. */
+DE_API bool de_platform_text_input_active(de_window w);
+
+/* ---------- File dialogs ---------- */
+
+/** Most file dialogs open at once. */
+#define DE_PLATFORM_DIALOG_MAX 4
+
+typedef enum de_file_dialog_kind {
+    DE_FILE_DIALOG_OPEN,  /**< choose one or more existing files */
+    DE_FILE_DIALOG_SAVE,  /**< choose a new or existing file name */
+    DE_FILE_DIALOG_FOLDER /**< choose one or more folders */
+} de_file_dialog_kind;
+
+/** A file type filter: `name` = "Images", `pattern` = "png;jpg;jpeg" (extensions without dots,
+ * separated by ';'; "*" = all files). */
+typedef struct de_file_dialog_filter {
+    const char *name;
+    const char *pattern;
+} de_file_dialog_filter;
+
+/**
+ * Called once per de_platform_file_dialog() call, on the main thread inside de_platform_pump()
+ * (or inside de_platform_shutdown() for a dialog that is still open, with DE_ERR_CANCELLED).
+ *
+ * @param result DE_OK with `count` >= 1 paths; DE_ERR_CANCELLED (the user closed the dialog, or
+ *               the platform shut down) with `count` 0; or DE_ERR_IO / DE_ERR_UNSUPPORTED when
+ *               the OS could not show it.
+ * @param paths  native UTF-8 paths (not VFS paths), valid only during the call.
+ * @param filter index of the filter the user picked, or -1 when unknown.
+ */
+typedef void (*de_file_dialog_fn)(void *user, de_result result, const char *const *paths, u32 count,
+                                  i32 filter);
+
+/** de_platform_file_dialog() settings. Strings and filters are copied. */
+typedef struct de_file_dialog_desc {
+    de_file_dialog_kind kind;
+    const de_file_dialog_filter *filters; /**< may be NULL; ignored for folders */
+    u32 filter_count;
+    const char *default_path; /**< starting folder or file; NULL = OS default */
+    const char *title;        /**< NULL = OS default */
+    de_window parent;         /**< modal for this window where the OS supports it; zero = none */
+    bool allow_many;          /**< several files or folders (not for SAVE) */
+} de_file_dialog_desc;
+
+/**
+ * Opens an OS file dialog without blocking (on most systems) and returns at once. `fn` gets the
+ * result later, on the main thread, from de_platform_pump(). macOS shows a dialog without a
+ * `parent` as an app-modal panel, which runs its own event loop until the user closes it.
+ * @return DE_OK (`fn` will be called exactly once); DE_ERR_INVALID_ARGUMENT (NULL `desc` or
+ *         `fn`, bad kind, a filter with NULL strings, stale parent); DE_ERR_BUSY
+ *         (DE_PLATFORM_DIALOG_MAX dialogs open); DE_ERR_UNSUPPORTED (headless);
+ *         DE_ERR_OUT_OF_MEMORY. On error `fn` is never called.
+ */
+DE_API de_result de_platform_file_dialog(const de_file_dialog_desc *desc, de_file_dialog_fn fn,
+                                         void *user);
+
+/* ==========================================================================================
+ * End of the raw input and devices section (DENG-246).
  * ========================================================================================== */
 
 /* ==========================================================================================

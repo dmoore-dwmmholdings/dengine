@@ -75,6 +75,16 @@ de_result de_platform_init(const de_platform_desc *desc) {
     if (!st->headless)
         de__platform_sdl_displays_refresh(st);
     de__platform = st;
+
+    /* Raw input devices (DENG-246): input ring, gamepads, sensors; installs the input hook. */
+    r = de__platform_sdl_devices_init(st);
+    if (r != DE_OK) {
+        de__platform = NULL;
+        SDL_Quit();
+        de_arena_destroy(st->paths);
+        DE_FREE(a, st, sizeof *st);
+        return r;
+    }
     return DE_OK;
 }
 
@@ -83,6 +93,7 @@ void de_platform_shutdown(void) {
     if (!st)
         return;
     DE__PLATFORM_SDL_ASSERT_MAIN(st);
+    de__platform_sdl_devices_shutdown(st); /* DENG-246; needs the windows for text input */
     de__platform_sdl_windows_destroy_all(st);
     SDL_Quit();
     de__platform = NULL;
