@@ -22,6 +22,12 @@ de_add_module(
         sort.c
         de_strbuf.h
         de_sort.h
+        de_array.h
+        array.c
+        de_hashmap.h
+        hashmap.c
+        de_bitset.h
+        de_ring.h
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
