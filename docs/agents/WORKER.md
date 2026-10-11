@@ -9,7 +9,7 @@ Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`,
 ---
 
 ## Step 1: Read and claim
-1. `get_issue <KEY>`. If it reports an unfinished blocker, stop and return `RESULT: failed` with the reason `blocked by <keys>`. Do not start.
+1. `get_issue <KEY>`. The `⚠ BLOCKED BY` banner lists every `blocked_by` link, also finished ones, so check each blocker's status. If a blocker is not `Done` or `Won't do`, stop and return `RESULT: failed` with the reason `blocked by <keys>`. Do not start.
 2. Read the issue description in full. Then read:
    - the `## SPRINT PLAN (v2)` section of the epic description (`get_issue <EPIC>`),
    - **DENG-2** (decisions),

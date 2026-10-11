@@ -28,6 +28,7 @@ Related files:
 | Sprint epic | One `epic` per sprint, under DENG-1, in that sprint. Its summary starts with `[Sxx]`. **Sprint `Sxx` → epic `DENG-(xx+2)`** (DENG-3 … DENG-41). By default, epic N is `blocked_by` epic N-1. The parallel check (§2.2.3) can replace that link with links to the earlier epics. |
 | Finding tasks | Always use `parent = <EPIC>` **and pass `project: "DENG"`** to `search_issues` (without it the search scans only part of the workspace and silently drops children). Never search by sprint name, because it fails for some names. Cross-check the count against the `## Children` list from `get_issue <EPIC>`. |
 | Sprint plan | The `## SPRINT PLAN (v2)` section of the **epic description**. It gives the sprint branch, **Max parallel workers**, the outline-id → key map, waves, critical path, merge hotspots and exit checks. The older `## SPRINT PLAN` comment on the epic is superseded; ignore it. |
+| Blockers | `get_issue` prints a `⚠ BLOCKED BY <keys>` banner for **every** `blocked_by` link, also when the blocker is already Done. Do not trust the banner. Check each blocker's own status. An **unfinished blocker** is a blocker whose status is not `Done` or `Won't do`. |
 | Tasks | `task` issues whose parent is the epic. `blocked_by` links between tasks are **the rule** for ordering. Waves are only a guide. |
 | Integration checkouts | One per lane (§1.1). During a sprint, each has its lane's sprint branch checked out. Only you write to them. |
 | Worker checkouts | `.worktrees/<KEY>/` (gitignored). One per issue, on `feature/<KEY>-<slug>`. |
