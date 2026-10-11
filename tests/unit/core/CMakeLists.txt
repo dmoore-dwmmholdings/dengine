@@ -8,6 +8,9 @@ de_add_test(NAME core
         test_error.c
         test_arena.c
         test_scratch.c
+        test_hash_name.c
+        test_str.c
+        test_sort.c
     LIBS de_core Threads::Threads
 )
 
@@ -23,3 +26,22 @@ foreach(_de_queue_test test_spsc test_mpmc)
         target_include_directories(${_de_queue_test} PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endforeach()
+
+# DENG-153: the name threads test starts threads with de_thread_create; the string and sort
+# tests include the internal headers "core/de_strbuf.h" and "core/de_sort.h".
+target_link_libraries(test_core PRIVATE de_platform)
+target_include_directories(test_core PRIVATE "${DE_ROOT_DIR}/src")
+
+# DENG-153: test_hash_name.c again, with src/core/name.c compiled in as Shipping (DE_SHIPPING=1:
+# no intern table, de_name_str returns NULL), whatever the build type. Its name.o comes first, so
+# the linker never takes de_core's copy (both define the same symbols).
+de_add_test(NAME core_name_shipping
+    SOURCES
+        test_hash_name.c
+        ${DE_ROOT_DIR}/src/core/name.c
+    LIBS de_core de_platform Threads::Threads
+)
+if(TARGET test_core_name_shipping)
+    target_compile_definitions(test_core_name_shipping PRIVATE DE_SHIPPING=1)
+    target_include_directories(test_core_name_shipping PRIVATE "${DE_ROOT_DIR}/src")
+endif()
