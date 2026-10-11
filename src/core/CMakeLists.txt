@@ -39,6 +39,13 @@ de_add_module(
         de_cvar_internal.h
         cvar.c
         cvar_toml.c
+        math/math_internal.h
+        math/vec.c
+        math/quat.c
+        math/mat.c
+        math/affine.c
+        math/geom.c
+        math/proj.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -71,3 +78,11 @@ endif()
 # DE_MODULE_LIBS too, so the aggregate `dengine` library links it.
 target_link_libraries(de_core PRIVATE de_tp_tomlc17)
 set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+
+# DENG-241: the fast math (src/core/math/) calls <math.h> (sqrtf, sinf, tanf, ...). glibc keeps
+# those in libm, which is not linked by default; macOS and Windows have them in the C library.
+# Recorded in DE_MODULE_LIBS too, so the aggregate `dengine` library links it.
+if(UNIX AND NOT APPLE)
+    target_link_libraries(de_core PRIVATE m)
+    set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS m)
+endif()
