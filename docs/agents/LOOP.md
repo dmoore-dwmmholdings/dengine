@@ -87,7 +87,7 @@ For each task in **review**:
    - Comment: `✅ Merged into sprint/<…> @ <sha>. Sprint build + tests green (<n> tests).`
    - Publish every Trama page in the worker's `DOCS:` line: `publish_page` (space `DENG`) with the note `<KEY> merged @ <sha>`. First `get_page` each one and check that it still has the `![[andare:KEY]]` embed of every issue that was on its last published version (plus this one). If an embed is missing, the draft overwrote another worker's text: do not publish it; ask the owner of the lost text (resume that worker, or dispatch a docs fix) to restore it, then publish.
    - Set the issue to **Done**.
-   - If an `origin` remote exists: `git push origin sprint/<…>`. Never force. The push starts CI (`ci.yml`, `sanitizers.yml`, `checks.yml`) on every platform; the next preflight reads the result (§2.1.3).
+   - If an `origin` remote exists: `git push origin sprint/<…>`. Never force. Then start CI on the new tip: `for w in CI Sanitizers Checks; do gh workflow run "$w" --ref sprint/<…>; done` (push events have not been starting runs on this repo; `cancel-in-progress` drops a duplicate if they do). The next preflight reads the result (§2.1.3).
    - `git worktree remove .worktrees/<KEY>`. Keep the feature branch.
 
 Merge in key order unless the plan's *merge order* section says otherwise.
