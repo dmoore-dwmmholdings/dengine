@@ -456,6 +456,51 @@ TEST(simd, frustum_cull_bitwise) {
     EXPECT_LT(visible, total);
 }
 
+/* Regression for DENG-366. MSVC cl 19.44 (VS 2022 17.14) at /O2 vectorises a u8 -> u32 sum like
+ * the `visible` count above and keeps the result in lane 0 of a callee-saved XMM register. A
+ * check that widened it to 64 bits at the call site got `movq rdx, xmm`, which also copies lane 1
+ * (a partial sum) into the upper half: EXPECT_LT(visible, total) saw 36266703858684
+ * (0x20FC00002BFC) for 11260. de_test.h now passes 32-bit operands as 32-bit parameters and
+ * widens them inside de_test.c.
+ *
+ * This test keeps the shape that triggered the bug on its own, so the fix stays covered if
+ * frustum_cull_bitwise changes. Checked on Compiler Explorer: with the old de_test.h, cl 19.44
+ * emits the bad `movq` here. The shape is fragile. Another use of `sum` after the loop (a cast to
+ * u64, one more check) makes cl copy it to a general register, and the bug no longer shows, so
+ * do not add checks on `sum`. */
+TEST(simd, u32_sum_reduction_in_checks) {
+    enum { N = 4096, ROUNDS = 25 };
+    static de_aabb boxes[N];
+    static u8 vis[N], vis_t[N];
+    int nt = simd_tables();
+    g_rng = 0x5EEDu;
+    u32 total = 0, sum = 0, differ = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        de_frustum f = rnd_frustum(round & 1);
+        for (int i = 0; i < N; ++i)
+            boxes[i] = rnd_cull_box(&f);
+        de__frustum_cull_aabbs_scalar(&f, boxes, N, vis);
+        /* The sum under test: cl vectorises this loop and keeps the vector sum in XMM. */
+        for (int i = 0; i < N; ++i)
+            sum += vis[i];
+        total += N;
+        /* Per-box calls keep the general registers busy, so cl leaves the sum in XMM. */
+        for (int k = 0; k < nt; ++k) {
+            const de__math_table *t = g_isas[k];
+            t->frustum_cull_aabbs(&f, boxes, N, vis_t);
+            for (int i = 0; i < N; ++i) {
+                u8 one = t->frustum_test_aabb(&f, boxes[i]) ? 1 : 0;
+                if (vis_t[i] != vis[i] || one != vis[i])
+                    ++differ;
+            }
+        }
+    }
+    printf("  u32 sum: %u boxes, %u visible, %u differ over %d ISA(s)\n", total, sum, differ, nt);
+    EXPECT_EQ(differ, 0u);
+    EXPECT_GT(sum, 0u);
+    EXPECT_LT(sum, total);
+}
+
 /* ---- Batch tails ---- */
 
 TEST(simd, batch_tails) {

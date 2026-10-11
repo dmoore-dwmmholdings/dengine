@@ -150,6 +150,23 @@ static de__tv tv_make(int kind) {
     return t;
 }
 
+/* The narrow constructors widen here, in the callee (see de_test.h, DENG-366). */
+de__tv de__tv_si(int v) {
+    return de__tv_s((long long)v);
+}
+
+de__tv de__tv_ui(unsigned int v) {
+    return de__tv_u((unsigned long long)v);
+}
+
+de__tv de__tv_sl(long v) {
+    return de__tv_s((long long)v);
+}
+
+de__tv de__tv_ul(unsigned long v) {
+    return de__tv_u((unsigned long long)v);
+}
+
 de__tv de__tv_s(long long v) {
     de__tv t = tv_make(DE__TV_SIGNED);
     t.i = v;
