@@ -58,7 +58,7 @@
 /* The indices are u64; a lock-based fallback would make the queue neither lock-free nor safe in
  * a signal handler. platform/de_atomic.h asserts the same; repeated here because the queues'
  * correctness argument depends on it. */
-_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "de_spsc needs lock-free 64-bit atomics");
+_Static_assert(DE_ATOMIC_LOCK_FREE_U64, "de_spsc needs lock-free 64-bit atomics");
 
 /** Default capacity when de_spsc_desc.capacity is 0. */
 #define DE_SPSC_DEFAULT_CAPACITY 256u

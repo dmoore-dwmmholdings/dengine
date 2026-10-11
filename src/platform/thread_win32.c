@@ -64,6 +64,16 @@ static DWORD de__timeout_ms(u64 timeout_ns) {
     return ms >= (u64)INFINITE ? INFINITE - 1u : (DWORD)ms;
 }
 
+/* Rounding up is not enough on its own: Win32 wait timeouts run on the system timer tick
+ * (15.6 ms by default), so a wait can report a timeout up to about one tick before the requested
+ * time has passed on the QueryPerformanceCounter clock that de_time_now_ns() reads (CI saw a
+ * 20 ms semaphore wait return after 14.4 ms, DENG-359). The timed waits below therefore check
+ * their deadline on that clock and never report a timeout before it. */
+static u64 de__deadline_ns(u64 timeout_ns) {
+    u64 now = de_time_now_ns();
+    return timeout_ns > UINT64_MAX - now ? UINT64_MAX : now + timeout_ns;
+}
+
 /* ---------- Threads ---------- */
 
 struct de_thread {
@@ -228,11 +238,15 @@ void de_cond_wait(de_cond *c, de_mutex *m) {
 }
 
 bool de_cond_wait_timeout(de_cond *c, de_mutex *m, u64 timeout_ns) {
+    u64 deadline = de__deadline_ns(timeout_ns);
     if (SleepConditionVariableSRW(de__cv(c), de__srw(m), de__timeout_ms(timeout_ns), 0))
         return true;
-    if (GetLastError() == ERROR_TIMEOUT)
-        return false;
-    DE__FATAL("SleepConditionVariableSRW");
+    if (GetLastError() != ERROR_TIMEOUT)
+        DE__FATAL("SleepConditionVariableSRW");
+    /* A timeout before the deadline is reported as a wakeup, which the contract allows
+     * (spurious wakeups); the caller re-checks its predicate and waits again. Waiting again here
+     * instead could miss a signal sent while this thread holds the mutex between the waits. */
+    return de_time_now_ns() < deadline;
 }
 
 void de_cond_signal(de_cond *c) {
@@ -305,12 +319,19 @@ bool de_sem_try_wait(de_sem *s) {
 }
 
 bool de_sem_wait_timeout(de_sem *s, u64 timeout_ns) {
-    DWORD r = WaitForSingleObject(de__sem_handle(s), de__timeout_ms(timeout_ns));
-    if (r == WAIT_OBJECT_0)
-        return true;
-    if (r == WAIT_TIMEOUT)
-        return false;
-    DE__FATAL("WaitForSingleObject(semaphore)");
+    u64 deadline = de__deadline_ns(timeout_ns);
+    for (;;) {
+        DWORD r = WaitForSingleObject(de__sem_handle(s), de__timeout_ms(timeout_ns));
+        if (r == WAIT_OBJECT_0)
+            return true;
+        if (r != WAIT_TIMEOUT)
+            DE__FATAL("WaitForSingleObject(semaphore)");
+        /* Ended early on the tick clock: wait for the rest (see de__deadline_ns). */
+        u64 now = de_time_now_ns();
+        if (now >= deadline)
+            return false;
+        timeout_ns = deadline - now;
+    }
 }
 
 void de_sem_destroy(de_sem *s) {

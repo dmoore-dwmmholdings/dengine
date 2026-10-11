@@ -537,11 +537,11 @@ de_result de_tlsf_check(const de_tlsf *t, de_tlsf_info *out) {
     size_t list_free = 0;
     u64 list_blocks = 0;
     for (u32 fl = 0; fl < DE__FL_COUNT; ++fl) {
-        DE__CHECK(((t->fl_bitmap >> fl) & 1u) == (t->sl_bitmap[fl] != 0),
+        DE__CHECK((((t->fl_bitmap >> fl) & 1u) != 0) == (t->sl_bitmap[fl] != 0),
                   "tlsf check: fl_bitmap bit %u disagrees with sl_bitmap", fl);
         for (u32 sl = 0; sl < DE__SL_COUNT; ++sl) {
             const de__blk *b = t->heads[fl][sl];
-            DE__CHECK(((t->sl_bitmap[fl] >> sl) & 1u) == (b != NULL),
+            DE__CHECK((((t->sl_bitmap[fl] >> sl) & 1u) != 0) == (b != NULL),
                       "tlsf check: sl_bitmap[%u] bit %u disagrees with its list", fl, sl);
             const de__blk *prev = NULL;
             for (; b != NULL; prev = b, b = b->next_free) {

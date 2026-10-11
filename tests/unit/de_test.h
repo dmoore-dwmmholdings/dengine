@@ -61,6 +61,14 @@
 #error "de_test.h is C-only (it uses _Generic). Write tests in C11."
 #endif
 
+/* MSVC cl creates a hidden temporary ('$S1', ...) for a compound literal inside the (never
+ * evaluated) _Generic operand of the check macros, as in ASSERT_EQ(DE_ARRAY_PUSH(...), DE_OK),
+ * and then warns C4189 that it is unused, which /WX makes an error. Off for test sources only;
+ * Clang and GCC (-Wunused-variable) still report real unused locals in tests (DENG-359). */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(disable : 4189)
+#endif
+
 /* ---- Test registry ---------------------------------------------------------------------- */
 
 /** One test. `run` is invoked by the runner inside its failure trap. */
@@ -216,6 +224,20 @@ de__tv de__tv_s(long long v);
 de__tv de__tv_u(unsigned long long v);
 de__tv de__tv_p(const volatile void *v);
 
+/* An operand that matched no integer type in DE__TV: a pointer, or on MSVC cl also an enum.
+ * cl's _Generic does not match an enum operand to `int` (its compatible type), so it lands in
+ * `default`. There, tell the two apart by size: an enum is an int (4 bytes) on MSVC, a pointer is
+ * 8 bytes (Windows builds are x64 only, see platform/thread_win32.c). `sizeof` does not evaluate
+ * x and creates no temporaries; a `1 ? (x) : 0` probe did, and cl warned C4189 about them
+ * (DENG-359). Limit on cl only: an operand array of exactly 4 bytes reads as an integer (pass
+ * &arr[0]). DE__TV maps `float` to de__tv_p itself, so a float operand is still an error. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define DE__TV_ENUM_OR_PTR(x)                                                                      \
+    _Generic((char (*)[sizeof(x)])0, char (*)[sizeof(int)]: de__tv_s, default: de__tv_p)
+#else
+#define DE__TV_ENUM_OR_PTR(x) de__tv_p
+#endif
+
 /* Only the selected function is called, so each operand converts through a matching prototype:
  * no integer<->pointer casts, and a double or struct operand is a compile error. */
 #define DE__TV(x)                                                                                  \
@@ -232,7 +254,8 @@ de__tv de__tv_p(const volatile void *v);
         unsigned int: de__tv_u,                                                                    \
         unsigned long: de__tv_u,                                                                   \
         unsigned long long: de__tv_u,                                                              \
-        default: de__tv_p)(x)
+        float: de__tv_p, /* rejected: use ASSERT_FLOAT_EQ (see DE__TV_ENUM_OR_PTR) */              \
+        default: DE__TV_ENUM_OR_PTR(x))(x)
 
 void de__test_bool(int fatal, int expected, int value, const char *expr, const char *file,
                    int line);

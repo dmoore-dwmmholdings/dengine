@@ -210,8 +210,7 @@ de_result de_str_to_f64(de_str s, f64 *out) {
     if (end != buf + s.len)
         return DE_FAIL(DE_ERR_PARSE, "not a number: \"%.*s\"", quote_len(s), quote_ptr(s));
     if (errno == ERANGE && isinf(v))
-        return DE_FAIL(DE_ERR_PARSE, "number out of range: \"%.*s\"", quote_len(s),
-                       quote_ptr(s));
+        return DE_FAIL(DE_ERR_PARSE, "number out of range: \"%.*s\"", quote_len(s), quote_ptr(s));
     /* Underflow (ERANGE with a tiny or zero result) keeps the rounded value. */
     *out = v;
     return DE_OK;

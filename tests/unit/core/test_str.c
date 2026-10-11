@@ -242,7 +242,7 @@ TEST(str, parse_numbers) {
     EXPECT_FLOAT_EQ(parse_f64_ok("5."), 5.0, 0.0);
     EXPECT_FLOAT_EQ(parse_f64_ok("1e3"), 1000.0, 0.0);
     EXPECT_FLOAT_EQ(parse_f64_ok("2.5E-2"), 0.025, 1e-18);
-    EXPECT_FLOAT_EQ(parse_f64_ok("0.1"), 0.1, 0.0); /* correctly rounded, like strtod */
+    EXPECT_FLOAT_EQ(parse_f64_ok("0.1"), 0.1, 0.0);    /* correctly rounded, like strtod */
     EXPECT_FLOAT_EQ(parse_f64_ok("1e-400"), 0.0, 0.0); /* underflow rounds to zero */
     EXPECT_TRUE(isinf(parse_f64_ok("inf")) && parse_f64_ok("inf") > 0);
     EXPECT_TRUE(isinf(parse_f64_ok("-Infinity")) && parse_f64_ok("-INF") < 0);

@@ -590,7 +590,9 @@ static void capture_stderr(void (*fn)(void), char *out, size_t cap) {
     fflush(stderr);
     int saved = de_dup(2);
     ASSERT_TRUE(saved >= 0);
-    ASSERT_EQ(de_dup2(de_fileno(tmp), 2), 2);
+    /* POSIX dup2 returns the new fd (2); the Windows CRT's _dup2 returns 0. Both return -1 on
+     * failure, which is the only result that matters here. */
+    ASSERT_TRUE(de_dup2(de_fileno(tmp), 2) != -1);
     fn();
     fflush(stderr);
     de_dup2(saved, 2);

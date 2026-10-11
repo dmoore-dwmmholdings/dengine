@@ -76,7 +76,7 @@
 #endif
 
 /* Positions and cell sequences are u64; see de_spsc.h for why lock-free is required. */
-_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "de_mpmc needs lock-free 64-bit atomics");
+_Static_assert(DE_ATOMIC_LOCK_FREE_U64, "de_mpmc needs lock-free 64-bit atomics");
 
 /** Default capacity when de_mpmc_desc.capacity is 0. */
 #define DE_MPMC_DEFAULT_CAPACITY 256u
