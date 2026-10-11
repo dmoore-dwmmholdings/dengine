@@ -6,3 +6,34 @@ The work is planned in Andare project **DENG** (initiative DENG-1; decisions DEN
 - Orchestrator loop: `docs/agents/LOOP.md`. Run it with `/loop Follow docs/agents/LOOP.md`.
 - Per-issue worker: `docs/agents/WORKER.md`
 - Code, git, test and verification rules: `docs/agents/CONVENTIONS.md`
+
+## Build and test quick start
+
+Full guide: `docs/building.md`. Full rules: `docs/agents/CONVENTIONS.md`.
+
+```sh
+cmake --preset dev                  # host preset (macOS Dev on the build host)
+cmake --build --preset dev
+ctest --preset dev                  # everything; narrow with -L unit, -L check, -R <name>
+cmake --preset windows-xwin-dev && cmake --build --preset windows-xwin-dev  # needs xwin
+```
+
+Where things live:
+
+- `include/dengine/`: public headers (`de_*.h`)
+- `src/<mod>/`: one directory per module; `src/host/` is the app host (main loop, game API)
+- `cmake/`: build helpers, and `cmake/toolchains/` for cross builds
+- `shaders/`: Slang sources
+- `tools/`: CLIs and checks (`cook/`, `pack/`, `vendor/`, `check_layers/`, `editor/`)
+- `third_party/`: vendored libraries, pinned in `third_party/vendor.toml`
+- `tests/`: `unit/`, `fuzz/`, `golden/`, `determinism/`
+- `examples/`; `docs/` (one page per module in `docs/modules/`)
+
+Adding code:
+
+- Sources: `de_add_module()` in `src/<mod>/CMakeLists.txt`. Tests: `de_add_test()`.
+- Never edit the root `CMakeLists.txt`.
+- A public API change updates `docs/modules/<mod>.md` (start from `docs/modules/_template.md`).
+
+Before review: `ctest --preset dev -L check` (`header_check`, `layering_check`) passes, and so
+does the full `ctest --preset dev`.
