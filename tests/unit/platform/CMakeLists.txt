@@ -50,3 +50,15 @@ foreach(_de_io_test test_vfs test_aio)
             DE_IO_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/${_de_io_test}_tmp")
     endif()
 endforeach()
+
+# Window, display and event-pump tests (DENG-245): their own executable, so they carry the
+# `window` label (`ctest -L window`). They skip when no video driver can start. The tests that
+# push SDL events use the internal header src/platform/sdl/sdl_internal.h and link SDL; a
+# DE_HEADLESS build compiles them out and checks the stubs instead.
+de_add_test(NAME window SOURCES test_window.c LIBS de_platform LABELS unit window)
+if(TARGET test_window)
+    target_include_directories(test_window PRIVATE "${DE_ROOT_DIR}/src")
+    if(TARGET de_tp_sdl3)
+        target_link_libraries(test_window PRIVATE de_tp_sdl3)
+    endif()
+endif()
