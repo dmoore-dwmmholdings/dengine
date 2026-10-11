@@ -1,0 +1,31 @@
+tomlc17: compute the page size with offsetof instead of a null-pointer member access
+
+page_create() sized a page as `(size_t)&((page_t *)0)->data[size]`. That forms a
+member access through a null pointer and indexes past `data[1]`, both undefined
+behaviour. UBSan (clang 23, -fsanitize=undefined) stops the tomlc17 smoke tests at
+src/tomlc17.c:110. `offsetof(page_t, data) + size` is the same value with defined
+behaviour; `size` is already range-checked to [0, 1 GiB] above.
+
+Engine-local patch (DENG-356), applied by tools/vendor/vendor.py. Report upstream:
+https://github.com/cktan/tomlc17. Drop this patch when a pinned release has the fix.
+
+diff --git a/src/tomlc17.c b/src/tomlc17.c
+--- a/src/tomlc17.c
++++ b/src/tomlc17.c
+@@ -9,6 +9,7 @@
+ #include <math.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
++#include <stddef.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -107,7 +108,7 @@ static page_t *page_create(int size) {
+   if (!(0 <= size && size <= (1 << 30))) { // [0..1GB]
+     return NULL;
+   }
+-  size_t totalsz = (size_t)&((page_t *)0)->data[size];
++  size_t totalsz = offsetof(page_t, data) + (size_t)size;
+   page_t *page = MALLOC(totalsz);
+   if (!page) {
+     return NULL;

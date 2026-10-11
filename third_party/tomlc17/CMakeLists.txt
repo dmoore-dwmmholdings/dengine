@@ -3,6 +3,9 @@
 #
 # Note for wrappers: allocation hooks are process-global (toml_set_option) and take no user
 # pointer, so an engine wrapper must route them to its allocator itself.
+#
+# patches/0001-page-create-offsetof.patch (listed in vendor.toml) removes UB that UBSan reports
+# in page_create(); vendor.py applies it on fetch and checks it on verify (DENG-356).
 add_library(de_tp_tomlc17 STATIC src/tomlc17.c)
 target_include_directories(de_tp_tomlc17 SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # Vendored code: no engine warning flags, and its own warnings are off (CONVENTIONS §6).

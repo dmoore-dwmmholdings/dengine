@@ -55,6 +55,8 @@ url = "https://github.com/cktan/tomlc17/archive/refs/tags/R261003.tar.gz"
 sha256 = "48876f14bd7a123f95f16074dd0d5681f75c397c1bce61f1a52f42201f90eacc"
 license = "MIT"
 files = ["src/tomlc17.c", "src/tomlc17.h"]
+# UBSan fix in page_create() (null-pointer member access); see the patch header. DENG-356.
+patches = ["patches/0001-page-create-offsetof.patch"]
 
 [[lib]]
 name = "stb"
