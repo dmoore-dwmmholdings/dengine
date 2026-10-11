@@ -15,3 +15,6 @@ compile_commands.json
 .idea/
 *.xcworkspace
 *.swp
+# Vendored trees are committed whole (tools/vendor/vendor.py verify): no rule above and no global
+# excludes file may drop an upstream file under third_party/. Keep this line last. DENG-362.
+!/third_party/**

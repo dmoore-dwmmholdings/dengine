@@ -34,6 +34,12 @@ match a `local` glob, and writes the selected archive files and `LICENSE`. Engin
 (`CMakeLists.txt`, `de_*`, `smoke/**`, `patches/**`) are never touched. When an entry lists
 `patches`, `fetch` applies them in order with `git apply` before it writes the files.
 
+`fetch` never writes the archive's git control files (`.gitignore` and `.gitattributes`, at any
+depth), even when a `files` glob selects them. An upstream `.gitignore` would stop git from
+committing vendored files, and an upstream `.gitattributes` would override
+`third_party/.gitattributes`. SDL 3.4.18 ships `src/render/gpu/shaders/.gitignore` with `*.hlsl`
+(DENG-362). After it writes the files, `fetch` fails if git ignores one of them (see below).
+
 **verify** gets each archive the same way as `fetch` (it downloads a missing archive unless you
 give `--offline`) and checks the sha256. It then compares the tree with the archive. The check
 fails on:
@@ -42,6 +48,10 @@ fails on:
 - a missing upstream file;
 - a file that is not from the archive and does not match a `local` glob;
 - a `files` glob that matches nothing;
+- a vendored file that git ignores. The check runs `git check-ignore --no-index`, so a tracked
+  file is checked too, and the message names the ignore rule. It is skipped outside a git work
+  tree. The last line of the root `.gitignore`, `!/third_party/**`, keeps the rules above it and
+  a global excludes file away from `third_party/`;
 - a directory under `third_party/` that `vendor.toml` does not list (full verify only).
 
 **Config checks.** These run on every command. Every entry needs `name`, `version`, `url`,
@@ -78,5 +88,6 @@ hash.
 CI (DENG-66) runs `python3 tools/vendor/vendor.py verify`. It points `DE_VENDOR_CACHE` at a
 cached directory to avoid downloading on each run. ctest runs `vendor_selftest`
 (`tests/selftest.py`, label `check`). This self-test runs offline: it exercises fetch, verify,
-tamper detection, patches and the policy checks against local `file://` archives. The real
-`verify` needs the pinned archives, so it is a separate CI step and not a ctest.
+tamper detection, patches, git control files, git-ignored files (in a `git init` fake repository)
+and the policy checks against local `file://` archives. The real `verify` needs the pinned
+archives, so it is a separate CI step and not a ctest.

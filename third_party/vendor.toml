@@ -17,7 +17,8 @@
 #   license_file  licence file inside the archive (after `strip`); copied to <name>/LICENSE
 #                 (default "LICENSE")
 #   strip         leading path components removed from archive paths (default 1)
-#   files         globs of archive paths to vendor (`*` within a component, `**` across them)
+#   files         globs of archive paths to vendor (`*` within a component, `**` across them);
+#                 upstream `.gitignore` and `.gitattributes` files are never vendored (DENG-362)
 #   exclude       globs removed again from `files` (default [])
 #   local         globs of engine-owned files in third_party/<name>/ that the tool never touches
 #                 (default ["CMakeLists.txt", "de_*", "smoke/**", "patches/**"])
