@@ -18,6 +18,7 @@ de_add_test(NAME core
         test_pool.c
         test_tlsf.c
         test_tracking.c
+        test_cvar.c
     LIBS de_core Threads::Threads
 )
 
@@ -51,4 +52,28 @@ de_add_test(NAME core_name_shipping
 if(TARGET test_core_name_shipping)
     target_compile_definitions(test_core_name_shipping PRIVATE DE_SHIPPING=1)
     target_include_directories(test_core_name_shipping PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-154: the cvar tests read tests/unit/core/data/cvars_*.toml and write their saves into the
+# build directory (one prefix per executable, so parallel ctest runs do not share files).
+target_compile_definitions(test_core PRIVATE
+    DE_CVAR_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    DE_CVAR_TEST_OUT_PREFIX="${CMAKE_CURRENT_BINARY_DIR}/test_cvar_")
+
+# DENG-154: test_cvar.c again, with src/core/cvar.c and cvar_toml.c compiled in as Shipping
+# (DE_SHIPPING=1: DEV_ONLY cvars are not registered, CHEAT cvars need `cheats`), whatever the build
+# type. Its objects come first, so the linker never takes de_core's copies.
+de_add_test(NAME core_cvar_shipping
+    SOURCES
+        test_cvar.c
+        ${DE_ROOT_DIR}/src/core/cvar.c
+        ${DE_ROOT_DIR}/src/core/cvar_toml.c
+    LIBS de_core de_platform de_tp_tomlc17 Threads::Threads
+)
+if(TARGET test_core_cvar_shipping)
+    target_compile_definitions(test_core_cvar_shipping PRIVATE
+        DE_SHIPPING=1
+        DE_CVAR_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        DE_CVAR_TEST_OUT_PREFIX="${CMAKE_CURRENT_BINARY_DIR}/test_cvar_shipping_")
+    target_include_directories(test_core_cvar_shipping PRIVATE "${DE_ROOT_DIR}/src")
 endif()

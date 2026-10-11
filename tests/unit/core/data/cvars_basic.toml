@@ -1,0 +1,21 @@
+# Input of cvar.toml_roundtrip (tests/unit/core/test_cvar.c). Hand-written, so the layout differs
+# from what de_cvar_save writes; the test checks the saved text and that a second save is
+# byte-identical.
+volume = 0.1
+zz = true
+
+[r]
+vsync = false
+
+[r.shadows]
+quality = 0x3
+filter = "pcf"
+
+[player]
+name = "Ann \"the\" Tester\té\\"
+
+[ui]
+scale = 1.25
+
+[net]
+rate = -30
