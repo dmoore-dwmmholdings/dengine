@@ -8,6 +8,9 @@ de_add_test(NAME core
         test_error.c
         test_arena.c
         test_scratch.c
+        test_array.c
+        test_hashmap.c
+        test_bitset_ring.c
     LIBS de_core Threads::Threads
 )
 
@@ -23,3 +26,8 @@ foreach(_de_queue_test test_spsc test_mpmc)
         target_include_directories(${_de_queue_test} PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endforeach()
+
+# DENG-151: the container tests include engine-internal headers ("core/de_array.h", ...).
+if(TARGET test_core)
+    target_include_directories(test_core PRIVATE "${DE_ROOT_DIR}/src")
+endif()
