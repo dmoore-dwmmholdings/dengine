@@ -2,12 +2,16 @@
 build/
 out/
 /cmake-build-*/
+compile_commands.json
 # agent worktrees (managed by docs/agents/LOOP.md)
 .worktrees/
 # asset cache
 .decache/
+# tool caches (clangd, etc.)
+.cache/
 # editors / OS
 .DS_Store
 .vscode/
 .idea/
+*.xcworkspace
 *.swp
