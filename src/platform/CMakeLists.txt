@@ -16,6 +16,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_target_properties(Threads::Threads PROPERTIES IMPORTED_GLOBAL TRUE)
     list(APPEND _de_platform_libs Threads::Threads)
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # dlopen/dlsym (dylib_posix.c). glibc 2.34+ has them in libc; older ones need libdl.
+    list(APPEND _de_platform_libs ${CMAKE_DL_LIBS})
+endif()
+if(WIN32)
+    # timeBeginPeriod (sleep_pacing.c), the fallback before high-resolution waitable timers.
+    list(APPEND _de_platform_libs winmm)
+endif()
 
 de_add_module(
     NAME platform
@@ -24,6 +32,8 @@ de_add_module(
         de_atomic.h
         thread_${_de_platform_os}.c
         time_${_de_platform_os}.c
+        dylib_${_de_platform_os}.c
+        sleep_pacing.c
     DEPS core
     LIBS ${_de_platform_libs}
 )

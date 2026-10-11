@@ -79,8 +79,121 @@ DE_API u32 de_platform_pump(de_app_event *events, u32 max_events);
  */
 DE_API u64 de_time_now_ns(void);
 
-/** Sleeps the calling thread for at least `ns` nanoseconds. Not implemented yet: S03 DENG-249. */
+/* ---------- Sleep and frame pacing (S03, DENG-249) ----------
+ * Implementation: src/platform/sleep_pacing.c. */
+
+/**
+ * The last stretch before a sleep deadline that de_sleep_until_ns() spins instead of asking the
+ * OS to sleep (1 ms). OS sleeps overshoot by tens of microseconds (Linux timer slack) to several
+ * hundred (Windows high-resolution timers, macOS timer leeway), so the OS sleep stops this far
+ * before the deadline and a de_cpu_pause() spin on de_time_now_ns() does the rest.
+ */
+#define DE_SLEEP_SPIN_NS 1000000ull
+
+/**
+ * Sleeps the calling thread for at least `ns` nanoseconds, then returns as close to that as the
+ * scheduler allows. Same as `de_sleep_until_ns(de_time_now_ns() + ns)`; 0 returns at once.
+ */
 DE_API void de_sleep_ns(u64 ns);
+
+/**
+ * Sleeps until de_time_now_ns() >= `deadline_ns`. Never returns early.
+ *
+ * The OS sleep (`nanosleep` on POSIX; on Windows a waitable timer created with
+ * `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, or `Sleep` after `timeBeginPeriod(1)` before Windows
+ * 10 1803) runs until DE_SLEEP_SPIN_NS before the deadline, then the thread spins on the clock.
+ * Each OS sleep asks for half of the time left before that point, because timer leeway can grow
+ * with the length of a sleep (macOS, and VMs on it); a 16 ms wait takes about 7 short sleeps.
+ * A late return only comes from preemption. The spin
+ * costs up to DE_SLEEP_SPIN_NS of CPU per call; frame pacing pays it once per frame. Thread-safe,
+ * no allocation. A deadline in the past returns at once.
+ */
+DE_API void de_sleep_until_ns(u64 deadline_ns);
+
+/** How a de_frame_pacer waits at the end of a frame. */
+typedef enum de_frame_pacer_mode {
+    /** Never waits (uncapped). Stats are still kept. The zero value. */
+    DE_FRAME_PACER_NONE,
+    /** Frame cap: de_frame_pacer_wait() sleeps until each deadline. */
+    DE_FRAME_PACER_CAP,
+    /**
+     * For a vsync'ed swapchain: wakes `vsync_lead_ns` before each deadline and leaves the last
+     * wait to the present call that blocks on the vblank. Keeps the CPU from running frames
+     * ahead of the display (less input latency) without fighting the swapchain's own clock.
+     */
+    DE_FRAME_PACER_VSYNC_ASSIST
+} de_frame_pacer_mode;
+
+/** Settings of a de_frame_pacer. `(de_frame_pacer_desc){0}` is valid: uncapped. */
+typedef struct de_frame_pacer_desc {
+    u32 target_hz;            /**< frames per second; 0 = uncapped whatever the mode */
+    de_frame_pacer_mode mode; /**< see de_frame_pacer_mode */
+    u64 vsync_lead_ns;        /**< VSYNC_ASSIST only; 0 = DE_FRAME_PACER_DEFAULT_VSYNC_LEAD_NS */
+} de_frame_pacer_desc;
+
+/** `vsync_lead_ns` used when the desc gives 0: 1 ms. */
+#define DE_FRAME_PACER_DEFAULT_VSYNC_LEAD_NS 1000000ull
+
+/** Counters of a de_frame_pacer, from de_frame_pacer_stats(). All times in nanoseconds. */
+typedef struct de_frame_pacer_stats {
+    u64 last_frame_ns;    /**< begin-to-begin time of the last complete frame; 0 before one */
+    u64 last_work_ns;     /**< begin-to-wait time of the last frame (the frame's own work) */
+    u64 frames;           /**< de_frame_pacer_begin() calls since init */
+    u64 missed_deadlines; /**< waits that found their deadline already passed */
+    u64 resyncs;          /**< missed deadlines more than 2 periods late: the schedule restarted */
+} de_frame_pacer_stats;
+
+/**
+ * Drift-free frame pacer. Caller storage; one thread uses it (the main loop). Treat the fields
+ * as private. No allocation.
+ *
+ * Deadline n is `epoch + n * 1e9 / target_hz`, computed from integers, so rounding never
+ * accumulates and N frames take N periods. A wait that finds its deadline passed counts a miss
+ * and returns at once; the following frames catch up toward the schedule. When a wait finds the
+ * deadline more than 2 periods gone (a stall: loading, a debugger, a minimized window) the
+ * schedule restarts at that moment instead of running a burst of short frames.
+ *
+ *     de_frame_pacer p;
+ *     de_frame_pacer_init(&p, &(de_frame_pacer_desc){.target_hz = 60, .mode = DE_FRAME_PACER_CAP});
+ *     for (;;) {
+ *         de_frame_pacer_begin(&p);
+ *         run_frame();
+ *         de_frame_pacer_wait(&p);
+ *     }
+ */
+typedef struct de_frame_pacer {
+    de_frame_pacer_desc desc;
+    u64 epoch_ns; /* time of deadline 0 of the current schedule */
+    u64 index;    /* frames since epoch_ns: the next deadline is deadline(index + 1) */
+    u64 begin_ns; /* time of the last de_frame_pacer_begin(); 0 = none yet */
+    bool started; /* a schedule exists (set by the first begin after init/set_target) */
+    de_frame_pacer_stats stats;
+} de_frame_pacer;
+
+/** Initializes `p`. `desc` may be NULL (uncapped). */
+DE_API void de_frame_pacer_init(de_frame_pacer *p, const de_frame_pacer_desc *desc);
+
+/**
+ * Changes the rate or mode at run time (settings menu, display change). The schedule restarts
+ * at the next de_frame_pacer_begin(); the stats are kept.
+ */
+DE_API void de_frame_pacer_set(de_frame_pacer *p, const de_frame_pacer_desc *desc);
+
+/**
+ * Marks the start of a frame. Call once per frame, before the frame's work. The first call
+ * after init or set starts the schedule: the first deadline is one period later.
+ */
+DE_API void de_frame_pacer_begin(de_frame_pacer *p);
+
+/**
+ * Ends the frame: sleeps (de_sleep_until_ns) until the frame's deadline, or returns at once when
+ * the pacer is uncapped or the deadline has passed (see de_frame_pacer). Call once per frame,
+ * after de_frame_pacer_begin(); a wait without a begin is ignored.
+ */
+DE_API void de_frame_pacer_wait(de_frame_pacer *p);
+
+/** The counters of `p`. */
+DE_API de_frame_pacer_stats de_frame_pacer_stats_get(const de_frame_pacer *p);
 
 /* ---------- Threads ---------- */
 
@@ -287,11 +400,59 @@ DE_API de_result de_file_watch_create(const char *dir, bool recursive, de_watch_
 DE_API void de_file_watch_poll(de_file_watch *w); /* delivers on the calling thread */
 DE_API void de_file_watch_destroy(de_file_watch *w);
 
-/* ---------- Dynamic libraries ---------- */
+/* ---------- Dynamic libraries (S03, DENG-249) ----------
+ * The game library in dev builds (SPEC §10.1) and its hot reload. Implementation:
+ * src/platform/dylib_{posix,win32}.c. */
+
+/** A loaded shared library. Opaque; the pointer is the OS handle, so nothing is allocated. */
 typedef struct de_dylib de_dylib;
+
+/** A function pointer from de_dylib_function(). Cast it to the real type before calling. */
+typedef void (*de_dylib_fn)(void);
+
+/**
+ * Loads the shared library at `path`, a native UTF-8 file path (not a VFS path: the game library
+ * sits next to the executable). POSIX `dlopen(RTLD_NOW | RTLD_LOCAL)`: every symbol is resolved
+ * now, and none leaks into the global namespace. Windows `LoadLibraryExW`; an absolute path also
+ * searches the library's own directory for its dependencies (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`).
+ *
+ * Each distinct file is a separate image: a copy of a library under a new name loads next to the
+ * original, with its own globals (hot reload, SPEC §10.1). Opening the same path twice gives the
+ * same image, reference-counted by the OS; close each open once.
+ *
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL or empty `path`, NULL `out`), DE_ERR_NOT_FOUND
+ *         (no such file), or DE_ERR_IO (the OS could not load it: wrong architecture, a missing
+ *         dependency, an unresolved symbol). The error message carries the OS text (`dlerror`,
+ *         `FormatMessageW`).
+ */
 DE_API de_result de_dylib_open(const char *path, de_dylib **out);
+
+/**
+ * The address of the exported data or function `name` in `lib`, or NULL with the error context
+ * set (DE_ERR_INVALID_ARGUMENT, DE_ERR_NOT_FOUND with the OS text). For a function, use
+ * de_dylib_function(): ISO C has no cast between object and function pointers.
+ */
 DE_API void *de_dylib_symbol(de_dylib *lib, const char *name);
+
+/** Like de_dylib_symbol(), for an exported function. NULL with the error context set if absent. */
+DE_API de_dylib_fn de_dylib_function(de_dylib *lib, const char *name);
+
+/**
+ * Releases `lib` (`dlclose`, `FreeLibrary`). The image unloads when its last open is closed;
+ * pointers into it are invalid then. NULL is ignored.
+ */
 DE_API void de_dylib_close(de_dylib *lib);
+
+/**
+ * Writes the platform file name of the library `base` to `buf`: `libgame.dylib` (macOS),
+ * `libgame.so` (Linux), `game.dll` (Windows) for `base` = "game". A directory part is kept,
+ * with the prefix added to the last component only: "bin/game" → "bin/libgame.so".
+ *
+ * @param cap  Size of `buf` in bytes, NUL included.
+ * @return DE_OK, or DE_ERR_INVALID_ARGUMENT (NULL argument, empty file name, or `buf` too small;
+ *         `buf` then holds an empty string if `cap` > 0).
+ */
+DE_API de_result de_dylib_platform_name(const char *base, char *buf, size_t cap);
 
 DE_EXTERN_C_END
 #endif
