@@ -665,8 +665,10 @@ static de_cvar register_locked(const de_cvar_desc *d) {
     u64 default_bits = 0;
     if (check_desc(d, name_len, &default_bits) != DE_OK)
         return invalid_handle();
-    if (CVAR_SHIPPING && (d->flags & DE_CVAR_DEV_ONLY))
+#if CVAR_SHIPPING /* #if, not if: MSVC C4127 rejects a constant condition under /W4 /WX */
+    if (d->flags & DE_CVAR_DEV_ONLY)
         return invalid_handle();
+#endif
 
     u64 hash = de_name_from(d->name).hash;
     const u32 *existing = DE_HASHMAP_GET(&g_cvars.by_name, u32, hash, &hash);

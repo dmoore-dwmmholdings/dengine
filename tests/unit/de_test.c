@@ -67,7 +67,9 @@ static int case_cmp(const void *a, const void *b) {
  * the registry is sorted by (file, line) before anyone reads it. */
 static void ensure_sorted(void) {
     if (!g_sorted) {
-        qsort(g_cases, g_count, sizeof g_cases[0], case_cmp);
+        /* The explicit cast: MSVC warns (C4090) when `const de_test_case **` converts to
+         * `void *` implicitly, although only the pointers are moved, never the cases. */
+        qsort((void *)g_cases, g_count, sizeof g_cases[0], case_cmp);
         g_sorted = 1;
     }
 }

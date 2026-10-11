@@ -39,10 +39,29 @@ typedef struct de_atomic_ptr {
 } de_atomic_ptr;
 
 /* Lock-free is a requirement, not a hope: a lock-based fallback would break signal and
- * lock-free queue users (DENG-152). */
-_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "32-bit atomics must be lock-free");
-_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "64-bit atomics must be lock-free");
-_Static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "pointer atomics must be lock-free");
+ * lock-free queue users (DENG-152). DE_ATOMIC_LOCK_FREE_{U32,U64,PTR} are integer constant
+ * expressions (1 = always lock-free) for other headers that want to restate the requirement in a
+ * _Static_assert (core/de_spsc.h, core/de_mpmc.h); use them instead of ATOMIC_*_LOCK_FREE. */
+#if defined(_MSC_VER) && !defined(__clang__)
+/* MSVC cl's <stdatomic.h> (vcruntime_c11_stdatomic.h) defines every ATOMIC_*_LOCK_FREE as 1
+ * ("sometimes"), because it also accepts _Atomic types of any size. Its rule is fixed and
+ * written in the CRT header itself: _Atomic_is_lock_free(size) is `size <= 8 && size is a power
+ * of two`; any other size gets an embedded spinlock, which makes the _Atomic type larger than its
+ * value type. So check that exact rule, and that no lock was added, at compile time. (clang-cl
+ * uses Clang's own <stdatomic.h> and takes the #else branch.) */
+#define DE__MSVC_ATOMIC_LOCK_FREE(T)                                                               \
+    (sizeof(T) <= 8 && (sizeof(T) & (sizeof(T) - 1)) == 0 && sizeof(_Atomic(T)) == sizeof(T))
+#define DE_ATOMIC_LOCK_FREE_U32 DE__MSVC_ATOMIC_LOCK_FREE(u32)
+#define DE_ATOMIC_LOCK_FREE_U64 DE__MSVC_ATOMIC_LOCK_FREE(u64)
+#define DE_ATOMIC_LOCK_FREE_PTR DE__MSVC_ATOMIC_LOCK_FREE(void *)
+#else
+#define DE_ATOMIC_LOCK_FREE_U32 (ATOMIC_INT_LOCK_FREE == 2)
+#define DE_ATOMIC_LOCK_FREE_U64 (ATOMIC_LLONG_LOCK_FREE == 2)
+#define DE_ATOMIC_LOCK_FREE_PTR (ATOMIC_POINTER_LOCK_FREE == 2)
+#endif
+_Static_assert(DE_ATOMIC_LOCK_FREE_U32, "32-bit atomics must be lock-free");
+_Static_assert(DE_ATOMIC_LOCK_FREE_U64, "64-bit atomics must be lock-free");
+_Static_assert(DE_ATOMIC_LOCK_FREE_PTR, "pointer atomics must be lock-free");
 
 /* Initialization of an object no other thread can see yet (not an atomic operation). */
 #define DE_ATOMIC_INIT(value) {(value)}
@@ -72,11 +91,15 @@ static inline u32 de_atomic_exchange_u32(de_atomic_u32 *a, u32 v, de_memory_orde
 /* Strong CAS. On failure *expected receives the current value. */
 static inline bool de_atomic_cas_u32(de_atomic_u32 *a, u32 *expected, u32 desired,
                                      de_memory_order success, de_memory_order failure) {
+    /* MSVC cl's __c11_atomic_compare_exchange_* intrinsics do not count the failure order as
+     * a use (C4100 under /W4 /WX); it is still passed, so the semantics are unchanged. */
+    (void)failure;
     return atomic_compare_exchange_strong_explicit(&a->v, expected, desired, success, failure);
 }
 /* Weak CAS: may fail spuriously; use it in retry loops. */
 static inline bool de_atomic_cas_weak_u32(de_atomic_u32 *a, u32 *expected, u32 desired,
                                           de_memory_order success, de_memory_order failure) {
+    (void)failure;
     return atomic_compare_exchange_weak_explicit(&a->v, expected, desired, success, failure);
 }
 /* The fetch_* functions return the previous value. */
@@ -106,10 +129,12 @@ static inline u64 de_atomic_exchange_u64(de_atomic_u64 *a, u64 v, de_memory_orde
 }
 static inline bool de_atomic_cas_u64(de_atomic_u64 *a, u64 *expected, u64 desired,
                                      de_memory_order success, de_memory_order failure) {
+    (void)failure;
     return atomic_compare_exchange_strong_explicit(&a->v, expected, desired, success, failure);
 }
 static inline bool de_atomic_cas_weak_u64(de_atomic_u64 *a, u64 *expected, u64 desired,
                                           de_memory_order success, de_memory_order failure) {
+    (void)failure;
     return atomic_compare_exchange_weak_explicit(&a->v, expected, desired, success, failure);
 }
 static inline u64 de_atomic_fetch_add_u64(de_atomic_u64 *a, u64 v, de_memory_order mo) {
@@ -138,10 +163,12 @@ static inline void *de_atomic_exchange_ptr(de_atomic_ptr *a, void *v, de_memory_
 }
 static inline bool de_atomic_cas_ptr(de_atomic_ptr *a, void **expected, void *desired,
                                      de_memory_order success, de_memory_order failure) {
+    (void)failure;
     return atomic_compare_exchange_strong_explicit(&a->v, expected, desired, success, failure);
 }
 static inline bool de_atomic_cas_weak_ptr(de_atomic_ptr *a, void **expected, void *desired,
                                           de_memory_order success, de_memory_order failure) {
+    (void)failure;
     return atomic_compare_exchange_weak_explicit(&a->v, expected, desired, success, failure);
 }
 

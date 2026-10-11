@@ -29,7 +29,10 @@
 #define DE__RAW_EXPORT
 #endif
 
-static _Atomic(de__raw_alloc_fn) de__raw_fn = NULL;
+/* No initializer: static zero-initialisation is a valid NULL state for an atomic (C11
+ * 7.17.2.1). `= NULL` is a void * converted to a function pointer, which Apple Clang 15 rejects
+ * under -Wpedantic (DENG-359). */
+static _Atomic(de__raw_alloc_fn) de__raw_fn;
 
 DE__RAW_EXPORT void de__raw_alloc_set_callback(de__raw_alloc_fn fn) {
     atomic_store_explicit(&de__raw_fn, fn, memory_order_release);

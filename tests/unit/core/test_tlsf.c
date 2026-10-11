@@ -409,6 +409,7 @@ typedef struct heap_worker {
     u32 id;
     u64 failures; /* checked by the test thread */
     u64 larges;
+    live_block *live; /* the small blocks still allocated at the end; the test thread frees them */
 } heap_worker;
 
 /* Bytes of a block that the heap workers fill and check: large blocks only up to the size of
@@ -466,14 +467,21 @@ static i32 heap_worker_fn(void *user) {
             memset(p, s->byte, fill_len(size));
         }
     }
+    /* Large blocks go back now; the small ones stay allocated until the test thread has read
+     * the heap info. So the pool growth the test checks does not depend on how the OS overlaps
+     * the workers: on Windows CI they sometimes ran nearly one after the other, and the peak
+     * stayed inside the first pool (DENG-359). */
     for (size_t i = 0; i < HEAP_SLOTS; ++i) {
         if (live[i].p != NULL) {
             if (!block_has(live[i].p, fill_len(live[i].size), live[i].byte))
                 w->failures++;
-            DE_FREE(h, live[i].p, live[i].size);
+            if (live[i].size > DE_HEAP_LARGE_THRESHOLD) {
+                DE_FREE(h, live[i].p, live[i].size);
+                live[i].p = NULL;
+            }
         }
     }
-    free(live);
+    w->live = live;
     return 0;
 }
 
@@ -499,7 +507,8 @@ TEST(tlsf, heap_threads) {
     }
     EXPECT_GT(larges, 0u);
     const de_heap_info after = de_heap_get_info();
-    /* 8 threads x 512 slots x ~1.8 KiB average outgrow the first 4 MiB pool. */
+    /* The kept small blocks (8 threads x ~264 live slots x ~2.3 KiB average, from fixed seeds)
+     * outgrow the first 4 MiB pool. */
     EXPECT_GT(after.pool_count, 1u);
     EXPECT_GE(after.pool_count, before.pool_count);
     EXPECT_GT(after.committed, (size_t)4 << 20);
@@ -507,6 +516,19 @@ TEST(tlsf, heap_threads) {
     de_tlsf_info info;
     ASSERT_EQ(de_heap_check(&info), DE_OK);
     EXPECT_EQ(info.pool_count, after.pool_count);
+
+    /* Free the kept blocks from this thread: a cross-thread free is legal for the heap. */
+    const de_allocator *h = de_heap_allocator();
+    for (u32 i = 0; i < HEAP_THREADS; ++i) {
+        if (w[i].live == NULL)
+            continue;
+        for (size_t j = 0; j < HEAP_SLOTS; ++j) {
+            if (w[i].live[j].p != NULL)
+                DE_FREE(h, w[i].live[j].p, w[i].live[j].size);
+        }
+        free(w[i].live);
+    }
+    ASSERT_EQ(de_heap_check(&info), DE_OK);
 }
 
 TEST(tlsf, heap_large_blocks) {

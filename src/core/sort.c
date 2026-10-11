@@ -61,8 +61,7 @@ static void merge(const char *src, char *dst, size_t lo, size_t mid, size_t hi, 
 }
 
 /* The scratch copy of `count` elements of `size` bytes, or NULL with the error context set. */
-static void *scratch_alloc(const de_allocator *scratch, size_t count, size_t size,
-                           de_result *err) {
+static void *scratch_alloc(const de_allocator *scratch, size_t count, size_t size, de_result *err) {
     if (scratch == NULL) {
         *err = DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "sorting %zu elements needs a scratch allocator (more than %d)", count,
@@ -70,8 +69,8 @@ static void *scratch_alloc(const de_allocator *scratch, size_t count, size_t siz
         return NULL;
     }
     if (size != 0 && count > (size_t)-1 / size) {
-        *err = DE_FAIL(DE_ERR_OUT_OF_MEMORY, "sort scratch size overflows (%zu x %zu)", count,
-                       size);
+        *err =
+            DE_FAIL(DE_ERR_OUT_OF_MEMORY, "sort scratch size overflows (%zu x %zu)", count, size);
         return NULL;
     }
     void *p = DE_ALLOC(scratch, count * size, SORT_SCRATCH_ALIGN, DE_MEM_SCRATCH);
@@ -150,7 +149,7 @@ de_result de_sort_stable(void *base, size_t count, size_t size, de_sort_cmp_fn c
         T *src = items, *dst = tmp;                                                                \
         for (unsigned d = 0; d < (KEY_BYTES); ++d) {                                               \
             size_t *h = hist[d];                                                                   \
-            /* Every key has the same digit here: the pass would not move anything. */            \
+            /* Every key has the same digit here: the pass would not move anything. */             \
             if (h[(src[0].key >> (8u * d)) & 0xFFu] == count)                                      \
                 continue;                                                                          \
             size_t sum = 0;                                                                        \

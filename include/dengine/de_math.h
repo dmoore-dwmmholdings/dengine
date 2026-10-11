@@ -5,6 +5,12 @@
 #include "de_base.h"
 DE_EXTERN_C_BEGIN
 
+/* MSVC C4324 ("structure was padded due to alignment specifier") fires for every DE_ALIGN(16)
+ * struct below, which /W4 /WX turns into an error. The alignment is the point (SIMD loads). */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 typedef struct de_vec2 {
     f32 x, y;
 } de_vec2;
@@ -52,6 +58,9 @@ typedef struct de_transform {
     de_quat rotation;
     de_vec3 scale;
 } de_transform;
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 #define DE_PI           3.14159265358979323846f
 #define DE_TAU          6.28318530717958647692f

@@ -155,8 +155,8 @@ static void names_intern(u64 hash, const char *s, size_t len) {
         de_mutex_unlock(&g_names.lock);
         DE_PANIC("de_name: hash collision 0x%016llx between \"%.*s\" (%zu bytes) and \"%.*s\" "
                  "(%zu bytes); rename one of them",
-                 (unsigned long long)hash, print_len(other_len), other, other_len,
-                 print_len(len), s, len);
+                 (unsigned long long)hash, print_len(other_len), other, other_len, print_len(len),
+                 s, len);
     }
     /* Keep the load factor at or below 70 %. */
     if ((g_names.count + 1) * 10 > g_names.cap * 7 && !names_grow()) {

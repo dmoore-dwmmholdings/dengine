@@ -15,11 +15,20 @@ DE_EXTERN_C_BEGIN
 
 /** One copy of a string value. Copies are kept until the registry is reset (tests only), so a
  * pointer from de_cvar_string never dangles. */
+/* MSVC C4200 calls a C99 flexible array member a "nonstandard extension" (/W4 /WX); it is
+ * standard C11, so silence only that warning, only here. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+#pragma warning(disable : 4200)
+#endif
 typedef struct de__cvar_strval {
     struct de__cvar_strval *next;
     size_t len;
     char text[]; /* len bytes + NUL */
 } de__cvar_strval;
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 /**
  * A registered cvar. One allocation holds the entry, the enum name pointers and every string
