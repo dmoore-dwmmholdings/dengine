@@ -43,8 +43,22 @@ if(NOT TARGET de_build_flags)
     endif()
 endif()
 
-# Flags for every translation unit of a deterministic module (SPEC §5.7 rule 1).
-if(DE_COMPILER_FRONTEND STREQUAL "MSVC")
+# Flags for every translation unit of a deterministic module (SPEC §5.7 rule 1), and for single
+# files marked with de_mark_deterministic_sources(). Both read DE_DETERMINISTIC_FLAGS.
+#   MSVC cl:   /fp:precise. Since VS 2022 17.0, cl contracts a*b+c into FMA only under /fp:fast
+#              or /fp:contract, never under /fp:precise (the engine needs VS 17.5+ anyway, for
+#              /experimental:c11atomics below).
+#   clang-cl:  /clang:-ffp-contract=off, in place of /fp:precise (DENG-363). clang-cl's
+#              /fp:precise is -ffp-model=precise, which keeps -ffp-contract=on: with FMA in the
+#              target (/arch:AVX2) it fused a*b+c in dvec.c and transform.c. The two flags cannot
+#              be combined: Clang (23 on the build host) reports "overriding '-ffp-model=precise'
+#              option with '-ffp-contract=off'" (-Woverriding-option, an error under /WX). The
+#              precise model is clang-cl's default, so the contract flag alone gives the same cc1
+#              options as /fp:precise except contraction. A global /fp:fast is not overridden on
+#              these files; it gets the same diagnostic ('-ffast-math'), so /WX stops the build.
+if(DE_COMPILER_FRONTEND STREQUAL "MSVC" AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    set(DE_DETERMINISTIC_FLAGS /clang:-ffp-contract=off)
+elseif(DE_COMPILER_FRONTEND STREQUAL "MSVC")
     set(DE_DETERMINISTIC_FLAGS /fp:precise)
 else()
     set(DE_DETERMINISTIC_FLAGS -ffp-contract=off)
@@ -78,6 +92,15 @@ if(DE_SANITIZERS)
             add_compile_options(-fno-sanitize-recover=undefined)
         endif()
         add_link_options(-fsanitize=${_de_san_flag})
+        # ASan on Apple platforms (DENG-361, DENG-363): dlclose does not unregister a library's
+        # globals, so when dlopen maps a library again at the same address, ASan's default ODR
+        # check (shadow poisoning) sees the old registration and aborts with odr-violation. The
+        # ODR indicator scheme keeps the "registered" flag in the library's own data, which a
+        # fresh mapping resets. Every target gets it, so hot reload (S06 DENG-93) and the dylib
+        # tests are covered. Clang on Linux already uses indicators by default; GCC has no flag.
+        if("address" IN_LIST DE_SANITIZERS AND APPLE AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+            add_compile_options(-fsanitize-address-use-odr-indicator)
+        endif()
     endif()
 endif()
 
