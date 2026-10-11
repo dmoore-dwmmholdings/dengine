@@ -73,7 +73,23 @@ endforeach()
 
 # MSVC/clang-cl: with policy CMP0141 the debug-info flag is not in the flag strings, so name the
 # configs that carry debug info explicitly.
-set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,Dev,RelWithDebInfo>:ProgramDatabase>")
+#
+# ProgramDatabase (/Zi) makes every compile of a target write into one shared .pdb. A compiler
+# cache such as sccache cannot cache such a compile with cl, so when a compiler launcher is set
+# (CMAKE_<LANG>_COMPILER_LAUNCHER, as a variable or in the environment, which is how CI sets
+# sccache) use Embedded (/Z7): the debug info goes into each .obj and the linker still writes the
+# .pdb. A -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=... on the command line wins over both.
+if(NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    set(_de_msvc_debug_format ProgramDatabase)
+    foreach(_lang C CXX)
+        if(CMAKE_${_lang}_COMPILER_LAUNCHER
+           OR NOT "$ENV{CMAKE_${_lang}_COMPILER_LAUNCHER}" STREQUAL "")
+            set(_de_msvc_debug_format Embedded)
+        endif()
+    endforeach()
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+        "$<$<CONFIG:Debug,Dev,RelWithDebInfo>:${_de_msvc_debug_format}>")
+endif()
 
 # Imported third-party targets (Vulkan SDK, ...) usually ship only Debug/Release configs.
 set(CMAKE_MAP_IMPORTED_CONFIG_DEV RelWithDebInfo Release "")

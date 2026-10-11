@@ -1,6 +1,7 @@
-# Sanitizers (SPEC §19.3): every test under ASan+UBSan and TSan on Linux Clang, and ASan on
-# macOS. The presets (ci-*) set DE_SANITIZE; their test presets set ASAN_/UBSAN_/TSAN_OPTIONS,
-# so `ctest --preset ci-linux-asan` behaves the same locally (docs/ci.md).
+# Sanitizers (SPEC §19.3): every test under ASan+UBSan and TSan on Linux Clang, ASan+UBSan on
+# macOS, and TSan on Linux GCC. The presets (ci-*) set DE_SANITIZE; their test presets set
+# ASAN_/UBSAN_/TSAN_OPTIONS, so `ctest --preset ci-linux-asan` behaves the same locally
+# (docs/ci.md).
 name: Sanitizers
 
 on:
@@ -27,7 +28,11 @@ jobs:
         include:
           - { name: linux clang ASan+UBSan, os: ubuntu-24.04, compiler: clang, preset: ci-linux-asan, flag: "-fsanitize=address,undefined" }
           - { name: linux clang TSan, os: ubuntu-24.04, compiler: clang, preset: ci-linux-tsan, flag: "-fsanitize=thread" }
-          - { name: macos apple-clang ASan, os: macos-14, compiler: apple-clang, preset: ci-macos-asan, flag: "-fsanitize=address" }
+          # ASan+UBSan on macOS too: Apple Clang ASan alone missed UB in vendored code (DENG-356).
+          - { name: macos apple-clang ASan+UBSan, os: macos-14, compiler: apple-clang, preset: ci-macos-asan, flag: "-fsanitize=address,undefined" }
+          # GCC rejects some atomics under TSan (-Wtsan, an error with -Werror), which Clang
+          # accepts. This job keeps platform/de_atomic.h building with GCC TSan (DENG-357).
+          - { name: linux gcc TSan, os: ubuntu-24.04, compiler: gcc, preset: ci-linux-gcc-tsan, flag: "-fsanitize=thread" }
     env:
       PRESET: ${{ matrix.preset }}
       # The same values as the ci-* test presets; set here too so they show in the job log.
