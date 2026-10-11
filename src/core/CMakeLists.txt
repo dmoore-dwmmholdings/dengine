@@ -30,6 +30,9 @@ de_add_module(
         de_ring.h
         log.c
         log_sinks.c
+        de_cvar_internal.h
+        cvar.c
+        cvar_toml.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -57,3 +60,8 @@ if(APPLE)
         target_link_options(de_core INTERFACE "LINKER:-no_warn_duplicate_libraries")
     endif()
 endif()
+
+# DENG-154: cvars read and write config.toml through the vendored tomlc17 parser. Recorded in
+# DE_MODULE_LIBS too, so the aggregate `dengine` library links it.
+target_link_libraries(de_core PRIVATE de_tp_tomlc17)
+set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
