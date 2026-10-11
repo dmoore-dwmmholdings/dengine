@@ -7,6 +7,7 @@ de_add_test(NAME math
         test_quat.c
         test_mat.c
         test_geom.c
+        test_transform.c
     LIBS de_core
 )
 

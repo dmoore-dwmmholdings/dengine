@@ -611,9 +611,114 @@ DE_API bool de_fp_env_check(void);
 
 /* ================================ 5. Large-world transforms (DENG-244) ===================== */
 
-/* Camera-relative conversion for large worlds (double → float). */
+/*
+ * Large worlds (SPEC §5.5, DENG-2 Q10: up to +-100 km). World positions are de_dvec3 (f64);
+ * rotation and scale are f32 (de_transform). Nothing is ever converted to f32 in world
+ * coordinates: code that needs floats (rendering, audio, the physics solver) subtracts an origin
+ * near the work in f64 first (the camera or the render origin, an island origin) and converts
+ * the small difference with de_dv3_relative / de_transform_to_m4_relative /
+ * de_transform_to_affine_relative. At 100 km an f32 has a spacing of about 8 mm; an f64 about
+ * 1.5e-11 m.
+ *
+ * The de_dv3_* and de_transform_* functions below (all but from_affine and the *_relative matrix
+ * builders, which call the fast-math TRS code) use only + - * / and sqrt, with no <math.h>
+ * transcendental, and src/core/math/dvec.c and transform.c are compiled without FP contraction
+ * (no FMA). They give the same bits on x86-64 and arm64 when the thread runs in the
+ * de_fp_env_init_thread mode, so simulation code may use them. Interpolation is nlerp, not slerp,
+ * for that reason.
+ *
+ * Note: de_dv3_normalize (section 4) is the deterministic normalize of an f32 de_vec3; it is not
+ * a de_dvec3 function.
+ */
+
+/* ---- de_dvec3 ---- */
+DE_API de_dvec3 de_dv3_add(de_dvec3 a, de_dvec3 b);
+DE_API de_dvec3 de_dv3_sub(de_dvec3 a, de_dvec3 b);
+DE_API de_dvec3 de_dv3_scale(de_dvec3 a, f64 s);
+DE_API f64 de_dv3_dot(de_dvec3 a, de_dvec3 b);
+DE_API f64 de_dv3_length(de_dvec3 a);
+/** length(b - a). */
+DE_API f64 de_dv3_distance(de_dvec3 a, de_dvec3 b);
+/** a * (1 - t) + b * t: exactly a at t = 0 and exactly b at t = 1. t is not clamped. */
+DE_API de_dvec3 de_dv3_lerp(de_dvec3 a, de_dvec3 b, f64 t);
+/** Widens to f64 (exact). */
+DE_API de_dvec3 de_dv3_from_v3(de_vec3 v);
+/** Rounds each component to the nearest f32. Loses precision far from the origin: to get a
+ *  float position for rendering, use de_dv3_relative. */
+DE_API de_vec3 de_dv3_to_v3(de_dvec3 v);
+/** true when every component differs by at most eps. */
+DE_API bool de_dv3_eq_eps(de_dvec3 a, de_dvec3 b, f64 eps);
+/**
+ * p - origin, subtracted in f64 and then rounded to f32 once. Use it to convert a world position
+ * to camera-relative (or render-origin-relative, island-relative) coordinates: an object 1 mm
+ * from a camera 100 km out comes back as 1 mm to within f32 rounding of 1 mm. Branch-free.
+ */
 DE_API de_vec3 de_dv3_relative(de_dvec3 p, de_dvec3 origin);
+
+/* ---- de_transform ---- */
+/*
+ * A de_transform is the map x -> position + rotate(rotation, scale * x) (scale component-wise):
+ * scale first, then rotate, then translate, like de_m4_trs. `rotation` should be a unit
+ * quaternion. The f64 paths (mul, inverse, point, dir, lerp) use rotation / |rotation| computed in
+ * f64, so the rounding of |rotation| in f32 does not stretch a 100 km lever arm.
+ *
+ * No shear. A rotated child under a parent with non-uniform scale has a sheared exact world
+ * matrix, which a de_transform cannot hold. de_transform_mul approximates it the way glTF
+ * importers and Bevy's Transform do: rotation = parent.rotation * child.rotation and
+ * scale = parent.scale * child.scale (component-wise), while the child's position goes through
+ * the full parent transform. So the child's origin is exact; only its axes ignore the shear, and
+ * so do its own children (mul is then not associative: parent-to-child propagation gives the
+ * Bevy result). With uniform scales (or no rotation under a non-uniform scale) the result is
+ * exact. Use de_affine / de_mat4 when the shear matters.
+ */
+DE_API de_transform de_transform_identity(void);
+/**
+ * parent * child: the transform that applies child first, then parent (the child's world
+ * transform from its local one). position = parent.position + rotate(parent.rotation,
+ * parent.scale * child.position), in f64; rotation = normalize(parent.rotation * child.rotation)
+ * (computed in f64, rounded to f32 once); scale = parent.scale * child.scale. See the non-uniform
+ * scale note above.
+ */
+DE_API de_transform de_transform_mul(const de_transform *parent, const de_transform *child);
+/**
+ * Inverse: rotation = conj(rotation), scale = 1 / scale (in f32), position =
+ * -rotate(conj(rotation), (1 / scale) * position). de_transform_mul(inverse(t), t) is the
+ * identity: its position is exactly zero and its rotation and scale are within f32 rounding.
+ * t * inverse(t) is the identity within f64 rounding when the scale is 1 (or a power of two), and
+ * within about 1e-7 relative otherwise (1 / scale is rounded to f32). With a non-uniform scale and
+ * a rotation, t * inverse(t) is not the identity (no shear; see above). A zero scale component
+ * gives non-finite results.
+ */
+DE_API de_transform de_transform_inverse(const de_transform *t);
+/** position + rotate(rotation, scale * p), in f64: a world point from a local one. */
+DE_API de_dvec3 de_transform_point(const de_transform *t, de_dvec3 p);
+/** rotate(rotation, scale * d): a direction (no translation), computed in f64 and rounded to
+ *  f32 once. Not for normals under non-uniform scale. */
+DE_API de_vec3 de_transform_dir(const de_transform *t, de_vec3 d);
+/**
+ * Interpolates a -> b: position a * (1 - t) + b * t in f64 (exact at t = 0 and t = 1), rotation
+ * nlerp along the shortest path (normalized in f64, so it is the normalized endpoint at t = 0
+ * and t = 1), scale a * (1 - t) + b * t in f32 (exact at the endpoints). t is not clamped. A
+ * blend of zero length (zero quaternions) gives the identity rotation.
+ */
+DE_API de_transform de_transform_lerp(const de_transform *a, const de_transform *b, f32 t);
+/**
+ * Splits an affine transform relative to `origin` into a de_transform: position = origin +
+ * translation (in f64), rotation and scale from de_m4_decompose (a mirror becomes a negative x
+ * scale; a shear is lost). Pass a zero origin for an affine in world coordinates. Returns false,
+ * with rotation = identity, when a column of the linear part has zero length. `out` must not
+ * be NULL. Inverse of de_transform_to_affine_relative up to f32 rounding.
+ */
+DE_API bool de_transform_from_affine(const de_affine *a, de_dvec3 origin, de_transform *out);
+/**
+ * de_m4_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale): the float model matrix
+ * relative to `origin` (the camera or the render origin), ready for upload. Cheap and
+ * branch-free.
+ */
 DE_API de_mat4 de_transform_to_m4_relative(const de_transform *t, de_dvec3 origin);
+/** de_affine_from_trs(de_dv3_relative(t->position, origin), t->rotation, t->scale): the 3x4 form
+ *  of de_transform_to_m4_relative. Cheap and branch-free. */
+DE_API de_affine de_transform_to_affine_relative(const de_transform *t, de_dvec3 origin);
 
 DE_EXTERN_C_END
 #endif
