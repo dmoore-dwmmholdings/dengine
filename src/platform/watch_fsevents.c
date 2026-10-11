@@ -8,10 +8,18 @@
  * FSEvents reports per path a set of flags that may be coalesced, and a flag can stay set on
  * later events of the same path (a file created and then modified reports ItemCreated again).
  * So the flags are resolved against the file system: `lstat` decides whether the path exists
- * now, and a small ring of (path, inode) pairs already reported as created or renamed marks
- * such repeated flags as stale. ItemRenamed is split by existence: a path that exists with the
- * event's inode is the new name (MOVED_TO), otherwise it is the old name (MOVED_FROM); the inode
- * is the cookie that pairs them. */
+ * now, and a small ring of (path, inode) pairs already reported marks such repeated flags as
+ * stale. ItemRenamed is split by existence: a path that exists with the event's inode is the new
+ * name (MOVED_TO), otherwise it is the old name (MOVED_FROM); the inode is the cookie that pairs
+ * them.
+ *
+ * The ring also records whether a pair was reported gone, and how. A file created and deleted
+ * at once can get two events with the same inode, `Created` and then `Created|Removed`. When the
+ * first is handled after the delete, `lstat` already fails and it reports CREATED + DELETED; the
+ * second one must then add nothing (DENG-371). Only a rename that a removal turns out to have
+ * been is still reported, so that it pairs with the new name: a MOVED_FROM, after a CREATED
+ * when the removed path was new (the temporary file of an atomic save whose events came late;
+ * the common layer may have dropped the path already, so it must be told again). */
 #define _DARWIN_C_SOURCE /* F_GETPATH, O_DIRECTORY */
 
 #include <dengine/de_platform.h>
@@ -31,8 +39,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-/* (path, inode) pairs already reported as created or renamed. Flags repeat for a short time
- * after the change, so a few hundred recent ones are enough. */
+/* (path, inode) pairs already reported. Flags repeat for a short time after the change, so a
+ * few hundred recent ones are enough. */
 #define FSE_SEEN_RING 1024u
 /* FSEvents latency: changes after the first one of a quiet period are batched this long. The
  * common debounce window does the real coalescing. */
@@ -40,9 +48,14 @@
 /* Longest wait for the start-up barrier event before giving up on it. */
 #define FSE_BARRIER_TIMEOUT_NS 2000000000ll
 
+/* What was last reported for a (path, inode) pair: here, DELETED, CREATED + DELETED (a new
+ * path that was gone already), or MOVED_FROM. */
+enum { FSE_HERE, FSE_DELETED, FSE_TRANSIENT, FSE_MOVED_AWAY };
+
 typedef struct fse_seen {
     u64 hash;
     u64 ino;
+    u8 gone; /* FSE_HERE, or how it was reported gone */
 } fse_seen;
 
 struct de__watch_backend {
@@ -72,20 +85,30 @@ struct de__watch_backend {
     struct timespec start_time; /* wall clock at start, compared with file birth times */
 };
 
-static bool seen_has(const de__watch_backend *b, u64 h, u64 ino) {
+static fse_seen *seen_find(de__watch_backend *b, u64 h, u64 ino) {
     for (u32 i = 0; i < FSE_SEEN_RING; ++i) {
         if (b->seen[i].hash == h && b->seen[i].ino == ino)
-            return true;
+            return &b->seen[i];
     }
-    return false;
+    return NULL;
 }
 
-static void seen_add(de__watch_backend *b, u64 h, u64 ino) {
-    if (seen_has(b, h, ino))
-        return;
-    b->seen[b->seen_next].hash = h;
-    b->seen[b->seen_next].ino = ino;
+/* Records the pair (oldest one out when the ring is full) and returns it. */
+static fse_seen *seen_add(de__watch_backend *b, u64 h, u64 ino) {
+    fse_seen *s = seen_find(b, h, ino);
+    if (s != NULL)
+        return s;
+    s = &b->seen[b->seen_next];
+    s->hash = h;
+    s->ino = ino;
+    s->gone = FSE_HERE;
     b->seen_next = (b->seen_next + 1) % FSE_SEEN_RING;
+    return s;
+}
+
+static void seen_set(de__watch_backend *b, u64 h, u64 ino, u8 gone) {
+    if (ino != 0)
+        seen_add(b, h, ino)->gone = gone;
 }
 
 /* The part of `path` below the watched directory, or NULL (outside, or the directory itself). */
@@ -148,11 +171,26 @@ static void handle_event(de__watch_backend *b, const char *path, FSEventStreamEv
 
     u64 h = de_hash64(rel, rl, 0);
     u64 ino = ev_ino != 0 ? ev_ino : (exists ? (u64)st.st_ino : 0);
-    bool stale = ino != 0 && seen_has(b, h, ino);
-    if ((created || renamed) && ino != 0)
-        seen_add(b, h, ino);
-    if (b->priming)
+    fse_seen *seen = ino != 0 ? seen_find(b, h, ino) : NULL;
+    /* Reported gone, and here again with the same inode: renamed back, not a stale flag. */
+    bool back = seen != NULL && seen->gone != FSE_HERE && exists && ino == (u64)st.st_ino;
+    bool stale = seen != NULL && !back;
+    if (b->priming) {
+        if ((created || renamed) && ino != 0)
+            seen_add(b, h, ino);
         return;
+    }
+    if (!exists && seen != NULL && seen->gone != FSE_HERE) {
+        /* Its removal is reported already and the flags are left over. If it went away by a
+         * rename, the MOVED_FROM lets the common layer pair it with the new name. */
+        if (renamed && seen->gone != FSE_MOVED_AWAY) {
+            if (seen->gone == FSE_TRANSIENT)
+                de__watch_post(w, DE__WATCH_RAW_CREATED, rel, rl, is_dir, 0);
+            de__watch_post(w, DE__WATCH_RAW_MOVED_FROM, rel, rl, is_dir, ino);
+            seen->gone = FSE_MOVED_AWAY;
+        }
+        return;
+    }
     /* A file born before the watch started was not created now, whatever the flags say (a
      * renamed file keeps its birth time, so this applies to ItemCreated only). */
     bool born_before = exists && (st.st_birthtimespec.tv_sec < b->start_time.tv_sec ||
@@ -169,11 +207,19 @@ static void handle_event(de__watch_backend *b, const char *path, FSEventStreamEv
             /* The renamed file left; another one is here now. */
             de__watch_post(w, DE__WATCH_RAW_MOVED_FROM, rel, rl, is_dir, ino);
             de__watch_post(w, DE__WATCH_RAW_CREATED, rel, rl, is_dir, 0);
+            seen_set(b, h, ino, FSE_MOVED_AWAY);
         } else if (removed && (created_now || ino != (u64)st.st_ino)) {
             de__watch_post(w, DE__WATCH_RAW_DELETED, rel, rl, is_dir, 0);
             de__watch_post(w, DE__WATCH_RAW_CREATED, rel, rl, is_dir, 0);
+            if (ino != (u64)st.st_ino)
+                seen_set(b, h, ino, FSE_DELETED);
         } else if (created_now) {
             de__watch_post(w, DE__WATCH_RAW_CREATED, rel, rl, is_dir, 0);
+        }
+        if ((created || renamed) && ino != 0) {
+            fse_seen *s = seen_add(b, h, ino);
+            if (ino == (u64)st.st_ino)
+                s->gone = FSE_HERE; /* here (again) */
         }
         if (modified && !is_dir)
             de__watch_post(w, DE__WATCH_RAW_MODIFIED, rel, rl, false, 0);
@@ -184,6 +230,7 @@ static void handle_event(de__watch_backend *b, const char *path, FSEventStreamEv
             de__watch_post(w, DE__WATCH_RAW_MOVED_FROM, rel, rl, is_dir, ino);
         else
             de__watch_post(w, DE__WATCH_RAW_DELETED, rel, rl, is_dir, 0);
+        seen_set(b, h, ino, renamed ? FSE_MOVED_AWAY : (created_now ? FSE_TRANSIENT : FSE_DELETED));
     }
 }
 
@@ -212,6 +259,26 @@ static void fse_callback(ConstFSEventStreamRef stream, void *info, size_t n, voi
         }
         handle_event(b, path, flags[i], ino);
     }
+}
+
+typedef struct fse_inject {
+    de__watch_backend *b;
+    const char *path;
+    u32 flags;
+    u64 ino;
+} fse_inject;
+
+static void fse_run_inject(void *ctx) {
+    const fse_inject *j = (const fse_inject *)ctx;
+    handle_event(j->b, j->path, (FSEventStreamEventFlags)j->flags, j->ino);
+}
+
+void de__watch_fsevents_inject(de_file_watch *w, const char *rel, u32 flags, u64 ino) {
+    de__watch_backend *b = de__watch_backend_of(w);
+    char path[MAXPATHLEN * 2];
+    snprintf(path, sizeof path, "%s/%s", b->canon, rel);
+    fse_inject j = {b, path, flags, ino};
+    dispatch_sync_f(b->queue, &j, fse_run_inject);
 }
 
 static void fse_noop(void *ctx) {

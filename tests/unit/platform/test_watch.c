@@ -10,6 +10,10 @@
  * stamps a change when its thread posts it, which can be before the call that made the change
  * returns (inotify posts at close(), inside write_file). A time taken after the call is not a
  * lower bound (DENG-370: 0.22 ms too late under ASan on CI). */
+#if defined(__APPLE__)
+#include <CoreServices/CoreServices.h> /* kFSEventStreamEventFlag* for watch.fsevents_transient */
+#endif
+
 #include "de_test.h"
 
 #include <dengine/de_debug.h>
@@ -470,6 +474,144 @@ TEST_F(watch, poll_thread_only, watch_fx) {
     EXPECT_EQ(f->r->wrong_thread, 0u);
     EXPECT_EQ(de__watch_pending_count(f->w), 0u);
 }
+
+/* ---------- merge rules, fed synthetic backend changes (DENG-371) ---------- */
+
+static void post(de_file_watch *w, de__watch_raw kind, const char *rel, bool is_dir, u64 cookie) {
+    de__watch_post(w, kind, rel, strlen(rel), is_dir, cookie);
+}
+
+/* A path created and deleted in one window is reported never, whatever the backend repeats.
+ * The changes go straight into the common layer through the internal header, so the rules are
+ * checked without depending on OS event timing. The real backend watches an empty directory
+ * that nothing changes, so it adds nothing. */
+TEST_F(watch, merge_transient, watch_fx) {
+    fresh_dir(f, "merge_transient");
+    start(f, "scratch:/", true, 200);
+    de_file_watch *w = f->w;
+    /* Create and remove reported together (one event with both flags). */
+    post(w, DE__WATCH_RAW_CREATED, "coalesced.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "coalesced.txt", false, 0);
+    /* Split over separate deliveries, and the removal reported twice (DENG-371: FSEvents gave
+     * `Created` after the file was gone, then `Created|Removed`). */
+    post(w, DE__WATCH_RAW_CREATED, "split.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "split.txt", false, 0);
+    de_sleep_ns(20 * MS);
+    post(w, DE__WATCH_RAW_DELETED, "split.txt", false, 0);
+    post(w, DE__WATCH_RAW_CREATED, "split_dir", true, 0);
+    post(w, DE__WATCH_RAW_DELETED, "split_dir", true, 0);
+    de_sleep_ns(20 * MS);
+    post(w, DE__WATCH_RAW_DELETED, "split_dir", true, 0);
+    /* Gone, then the rename it turned out to be: an atomic save of a new target, MODIFIED as
+     * documented and not RENAMED from the temporary (S03 exit run under load). The temporary
+     * reports nothing, also when its removal repeats after the rename. */
+    post(w, DE__WATCH_RAW_CREATED, "tmp.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "tmp.txt", false, 0);
+    post(w, DE__WATCH_RAW_MOVED_FROM, "tmp.txt", false, 71);
+    post(w, DE__WATCH_RAW_MOVED_TO, "saved.txt", false, 71);
+    post(w, DE__WATCH_RAW_DELETED, "tmp.txt", false, 0);
+    /* Gone, then written again: new to the consumer. */
+    post(w, DE__WATCH_RAW_CREATED, "again.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "again.txt", false, 0);
+    post(w, DE__WATCH_RAW_MODIFIED, "again.txt", false, 0);
+    /* Gone, then created again. */
+    post(w, DE__WATCH_RAW_CREATED, "back.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "back.txt", false, 0);
+    post(w, DE__WATCH_RAW_CREATED, "back.txt", false, 0);
+    /* A path that existed before: its removal is reported, once, even when repeated. */
+    post(w, DE__WATCH_RAW_DELETED, "old.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "old.txt", false, 0);
+    pump(w, f->r, 4, 400);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 4u);
+    EXPECT_TRUE(find_event(f->r, "scratch:/saved.txt", DE_WATCH_MODIFIED) >= 0);
+    EXPECT_TRUE(find_event(f->r, "scratch:/again.txt", DE_WATCH_CREATED) >= 0);
+    EXPECT_TRUE(find_event(f->r, "scratch:/back.txt", DE_WATCH_CREATED) >= 0);
+    int old = find_event(f->r, "scratch:/old.txt", DE_WATCH_DELETED);
+    ASSERT_TRUE(old >= 0);
+    EXPECT_FALSE(f->r->ev[old].is_dir);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+}
+
+#if defined(__APPLE__)
+/* File IDs far above any the volume has handed out: "created after the start" to the backend,
+ * and never on disk, so lstat fails as for a file that is already gone. */
+#define FAKE_INO (1ull << 52)
+
+static void inject(de_file_watch *w, const char *rel, u32 flags, u64 ino) {
+    de__watch_fsevents_inject(w, rel, flags, ino);
+}
+
+/* The FSEvents classification of a file created and deleted at once (DENG-371). With the
+ * sticky flags, its events are `Created|Modified` and then `Created|Modified|Removed`, the same
+ * inode on both. On the CI runner the first was handled after the file was gone. Here the
+ * second event also comes after the debounce window, when the common layer has already dropped
+ * the path, so only the backend can tell that its removal was reported already. */
+TEST_F(watch, fsevents_transient, watch_fx) {
+    const u32 created = kFSEventStreamEventFlagItemCreated;
+    const u32 removed = kFSEventStreamEventFlagItemRemoved;
+    const u32 renamed = kFSEventStreamEventFlagItemRenamed;
+    const u32 modified = kFSEventStreamEventFlagItemModified;
+    const u32 is_file = kFSEventStreamEventFlagItemIsFile;
+    const u32 is_dir = kFSEventStreamEventFlagItemIsDir;
+    fresh_dir(f, "fse_transient");
+    start(f, "scratch:/", true, 100);
+    de_file_watch *w = f->w;
+    inject(w, "brief.txt", created | modified | is_file, FAKE_INO + 1);
+    inject(w, "brief_dir", created | is_dir, FAKE_INO + 2);
+    inject(w, "tmp.txt", created | modified | is_file, FAKE_INO + 3);
+    /* A file that existed before the start, removed: reported, once. */
+    inject(w, "old.txt", removed | is_file, FAKE_INO + 4);
+    pump(w, f->r, 1, 300); /* every window above has passed and was delivered */
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 1u);
+    EXPECT_TRUE(find_event(f->r, "scratch:/old.txt", DE_WATCH_DELETED) >= 0);
+    memset(f->r, 0, sizeof *f->r);
+
+    inject(w, "brief.txt", created | modified | removed | is_file, FAKE_INO + 1);
+    inject(w, "brief_dir", created | removed | is_dir, FAKE_INO + 2);
+    inject(w, "old.txt", removed | is_file, FAKE_INO + 4);
+    /* One event with both flags, for a path the watch never saw. */
+    inject(w, "coalesced.txt", created | modified | removed | is_file, FAKE_INO + 5);
+    /* Reported as created and gone (and dropped by the common layer since), then shown to be a
+     * rename: CREATED + MOVED_FROM go out again so that a MOVED_TO could pair with it.
+     * Unpaired, it is the move of a file created in this window: nothing is reported. */
+    inject(w, "tmp.txt", created | modified | renamed | is_file, FAKE_INO + 3);
+    inject(w, "tmp.txt", created | modified | renamed | is_file, FAKE_INO + 3);
+    pump(w, f->r, 0, 400);
+    dump(f->r);
+    EXPECT_EQ(f->r->count, 0u);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+}
+
+/* An atomic save of a new file on FSEvents when the temporary's first event is handled after
+ * the rename (S03 exit run under load: `RENAMED fresh.txt (from fresh.txt.tmp-…)`). The
+ * temporary's `Created|Modified` finds no file (CREATED + DELETED), then its sticky
+ * `Created|Modified|Renamed` must still give the MOVED_FROM that pairs with the target, and the
+ * result is the documented one: one MODIFIED for the target. The target's MOVED_TO is posted as
+ * the backend posts it for a file that exists with the event's inode (the fake inode is not on
+ * disk, so it cannot go through the backend). */
+TEST_F(watch, fsevents_atomic_save, watch_fx) {
+    const u32 created = kFSEventStreamEventFlagItemCreated;
+    const u32 renamed = kFSEventStreamEventFlagItemRenamed;
+    const u32 modified = kFSEventStreamEventFlagItemModified;
+    const u32 is_file = kFSEventStreamEventFlagItemIsFile;
+    fresh_dir(f, "fse_atomic");
+    start(f, "scratch:/", true, 100);
+    de_file_watch *w = f->w;
+    inject(w, "fresh.txt.tmp-1", created | modified | is_file, FAKE_INO + 1);
+    inject(w, "fresh.txt.tmp-1", created | modified | renamed | is_file, FAKE_INO + 1);
+    post(w, DE__WATCH_RAW_MOVED_TO, "fresh.txt", false, FAKE_INO + 1);
+    /* The same with the temporary's events in one: CREATED + MOVED_FROM. */
+    inject(w, "other.txt.tmp-2", created | modified | renamed | is_file, FAKE_INO + 2);
+    post(w, DE__WATCH_RAW_MOVED_TO, "other.txt", false, FAKE_INO + 2);
+    pump(w, f->r, 2, 400);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 2u);
+    EXPECT_TRUE(find_event(f->r, "scratch:/fresh.txt", DE_WATCH_MODIFIED) >= 0);
+    EXPECT_TRUE(find_event(f->r, "scratch:/other.txt", DE_WATCH_MODIFIED) >= 0);
+}
+#endif
 
 /* ---------- counting allocator (leak check for destroy_pending) ---------- */
 
