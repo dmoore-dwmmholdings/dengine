@@ -36,3 +36,17 @@ endif()
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
                  "${CMAKE_CURRENT_BINARY_DIR}/test_pacing_serial.cmake")
 endif()
+
+# DENG-247: virtual file system and async I/O, one executable each, so the CTest names are
+# vfs.<test> and aio.<test>. The tests mount directories under the build tree as user:/ and
+# never write into the real user profile. aio links de_test_support for the alloc guard.
+de_add_test(NAME vfs SOURCES test_vfs.c LIBS de_platform)
+de_add_test(NAME aio SOURCES test_async_io.c LIBS de_platform de_test_support
+    LABELS unit tsan TIMEOUT 120)
+foreach(_de_io_test test_vfs test_aio)
+    if(TARGET ${_de_io_test})
+        target_include_directories(${_de_io_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(${_de_io_test} PRIVATE
+            DE_IO_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/${_de_io_test}_tmp")
+    endif()
+endforeach()

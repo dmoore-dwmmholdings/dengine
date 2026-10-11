@@ -10,15 +10,15 @@
  * that records the de_allocator and the size, so each block goes back to the allocator it came
  * from. Which allocator a parse uses is a thread-local set around the parse and the free.
  *
- * Until the S03 virtual file system (DENG-247), paths are native and go through stdio.
+ * Paths are virtual (`user:/config.toml`, DENG-247): load reads the whole file with
+ * de_file_read_all, save replaces it with de_file_write_all_atomic (temporary file + rename), so a
+ * crash during a save never leaves a half-written config.
  */
-#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
-#define _CRT_SECURE_NO_WARNINGS /* fopen */
-#endif
 
 #include <dengine/de_base.h>
 #include <dengine/de_debug.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_platform.h>
 
 #include "core/de_compiler.h"
 #include "core/de_cvar_internal.h"
@@ -211,29 +211,14 @@ de_result de_cvar_load_from_memory(const char *text, size_t len) {
 de_result de_cvar_load(const char *vpath) {
     if (vpath == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_cvar_load: path is NULL");
-    FILE *f = fopen(vpath, "rb");
-    if (f == NULL)
-        return DE_FAIL(DE_ERR_IO, "config %s: cannot open it for reading", vpath);
-    de_strbuf b;
-    de_strbuf_init(&b, de__cvar_allocator());
-    de_result r = DE_OK;
-    for (;;) {
-        r = de_strbuf_reserve(&b, 4096);
-        if (r != DE_OK)
-            break;
-        size_t n = fread(b.ptr + b.len, 1, b.cap - b.len - 1, f);
-        b.len += n;
-        b.ptr[b.len] = '\0';
-        if (n == 0)
-            break;
-    }
-    bool read_error = ferror(f) != 0;
-    fclose(f);
-    if (r == DE_OK && read_error)
-        r = DE_FAIL(DE_ERR_IO, "config %s: read error", vpath);
-    if (r == DE_OK)
-        r = load_text(b.ptr, b.len, vpath);
-    de_strbuf_free(&b);
+    const de_allocator *a = de__cvar_allocator();
+    void *data = NULL;
+    u64 size = 0;
+    de_result r = de_file_read_all(vpath, a, &data, &size);
+    if (r != DE_OK)
+        return DE_FAIL_WRAP(r, "config %s: cannot read it", vpath);
+    r = load_text((const char *)data, (size_t)size, vpath);
+    DE_FREE(a, data, (size_t)size + 1);
     return r;
 }
 
@@ -411,15 +396,9 @@ de_result de_cvar_save(const char *vpath) {
         de_strbuf_free(&b);
         return DE_FAIL_WRAP(r, "config %s: cannot build the text", vpath);
     }
-    FILE *f = fopen(vpath, "wb");
-    if (f == NULL) {
-        de_strbuf_free(&b);
-        return DE_FAIL(DE_ERR_IO, "config %s: cannot open it for writing", vpath);
-    }
-    size_t written = fwrite(de_strbuf_cstr(&b), 1, b.len, f);
-    int close_rc = fclose(f);
-    if (written != b.len || close_rc != 0)
-        r = DE_FAIL(DE_ERR_IO, "config %s: write error", vpath);
+    r = de_file_write_all_atomic(vpath, de_strbuf_cstr(&b), b.len);
+    if (r != DE_OK)
+        r = DE_FAIL_WRAP(r, "config %s: cannot write it", vpath);
     de_strbuf_free(&b);
     return r;
 }
