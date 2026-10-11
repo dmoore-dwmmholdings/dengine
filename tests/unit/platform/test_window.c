@@ -286,14 +286,14 @@ TEST_F(window, display_enumeration, plat_fx) {
 
 #if !defined(DE_HEADLESS)
 
-/* Pumps until the queue is quiet, then empties the input ring: startup produces display,
+/* Pumps until the queue is quiet, then empties the raw input ring: startup produces display,
  * focus and device-added (keyboard, mouse) events. */
 static void drain(void) {
     de_app_event ev[64];
     for (int i = 0; i < 100 && de_platform_pump(ev, 64) != 0; i++) {
     }
-    SDL_Event in[64];
-    while (de__platform_sdl_input_drain(in, 64) != 0) {
+    de_raw_input_event in[64];
+    while (de_platform_input_events(in, 64) != 0) {
     }
 }
 
@@ -324,9 +324,6 @@ TEST_F(window, pump_window_and_app_events, plat_fx) {
     (void)f;
     de_window w = open_hidden(320, 240, false);
     drain();
-    /* DENG-246 installs its raw-input translator as the input hook at init; remove it so this
-     * test sees the SDL_Event ring underneath (test_devices.c covers the translator). */
-    de__platform_sdl_set_input_hook(NULL, NULL);
     SDL_Window *sw = de__platform_sdl_window_get(w);
     ASSERT_TRUE(sw != NULL);
     SDL_WindowID id = SDL_GetWindowID(sw);
@@ -344,11 +341,13 @@ TEST_F(window, pump_window_and_app_events, plat_fx) {
     e.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
     e.window.windowID = id;
     ASSERT_TRUE(SDL_PushEvent(&e));
-    /* An input event goes to the input ring, not to the app events. */
+    /* An input event goes through the input hook to the raw input ring, not to the app events
+     * (test_devices.c covers the translation itself). */
     SDL_zero(e);
     e.type = SDL_EVENT_KEY_DOWN;
     e.key.windowID = id;
     e.key.scancode = SDL_SCANCODE_A;
+    e.key.down = true;
     ASSERT_TRUE(SDL_PushEvent(&e));
 
     de_app_event ev[8];
@@ -361,12 +360,14 @@ TEST_F(window, pump_window_and_app_events, plat_fx) {
     EXPECT_EQ(ev[2].kind, DE_EV_WINDOW_CLOSE);
     EXPECT_EQ(ev[2].window.id, w.id);
 
-    SDL_Event in[4];
-    u32 ni = de__platform_sdl_input_drain(in, 4);
+    de_raw_input_event in[4];
+    u32 ni = de_platform_input_events(in, 4);
     ASSERT_EQ(ni, 1u);
-    EXPECT_EQ(in[0].type, (Uint32)SDL_EVENT_KEY_DOWN);
-    EXPECT_EQ(in[0].key.scancode, SDL_SCANCODE_A);
-    EXPECT_EQ(de__platform_sdl_input_drain(in, 4), 0u);
+    EXPECT_EQ(in[0].kind, DE_RAW_KEY);
+    EXPECT_EQ(in[0].window.id, w.id);
+    EXPECT_EQ(in[0].key.code, (u16)SDL_SCANCODE_A);
+    EXPECT_TRUE(in[0].key.down);
+    EXPECT_EQ(de_platform_input_events(in, 4), 0u);
 
     /* A full `events` array leaves the rest queued, in order. */
     for (int i = 0; i < 3; i++) {
@@ -390,29 +391,38 @@ static void count_hook(const SDL_Event *ev, void *user) {
     *(u32 *)user += 1;
 }
 
-TEST_F(window, input_hook_and_ring_overflow, plat_fx) {
+TEST_F(window, input_hook_routing, plat_fx) {
     (void)f;
     drain();
-    g_hook_calls = 0;
-    de__platform_sdl_set_input_hook(count_hook, &g_hook_calls);
+    de_raw_input_event raw[4];
     SDL_Event e;
     SDL_zero(e);
     e.type = SDL_EVENT_MOUSE_MOTION;
+
+    /* An installed hook replaces DENG-246's translator: it sees the event, the raw ring does
+     * not. */
+    g_hook_calls = 0;
+    de__platform_sdl_set_input_hook(count_hook, &g_hook_calls);
     ASSERT_TRUE(SDL_PushEvent(&e));
     EXPECT_EQ(de_platform_pump(NULL, 0), 0u);
     EXPECT_EQ(g_hook_calls, 1u);
-    de__platform_sdl_set_input_hook(NULL, NULL);
+    EXPECT_EQ(de_platform_input_events(raw, 4), 0u);
 
-    /* Without a hook the ring takes DE__PLATFORM_SDL_INPUT_RING events, then counts drops. */
-    u32 dropped0 = de__platform_sdl_input_dropped();
-    for (u32 i = 0; i < DE__PLATFORM_SDL_INPUT_RING + 10; i++)
-        de__platform_sdl_route_input(&e);
-    EXPECT_EQ(de__platform_sdl_input_dropped() - dropped0, 10u);
-    SDL_Event out[64];
-    u32 total = 0, got;
-    while ((got = de__platform_sdl_input_drain(out, 64)) != 0)
-        total += got;
-    EXPECT_EQ(total, (u32)DE__PLATFORM_SDL_INPUT_RING);
+    /* Without a hook the event is discarded; nothing keeps an SDL_Event for later. */
+    de__platform_sdl_set_input_hook(NULL, NULL);
+    u64 dropped0 = de_platform_input_dropped();
+    ASSERT_TRUE(SDL_PushEvent(&e));
+    EXPECT_EQ(de_platform_pump(NULL, 0), 0u);
+    EXPECT_EQ(g_hook_calls, 1u);
+    EXPECT_EQ(de_platform_input_events(raw, 4), 0u);
+    EXPECT_EQ(de_platform_input_dropped(), dropped0);
+
+    /* Put the translator back: input reaches the raw ring again. */
+    de__platform_sdl_set_input_hook(de__platform_sdl_devices_route, de__platform_sdl_get());
+    ASSERT_TRUE(SDL_PushEvent(&e));
+    EXPECT_EQ(de_platform_pump(NULL, 0), 0u);
+    ASSERT_EQ(de_platform_input_events(raw, 4), 1u);
+    EXPECT_EQ(raw[0].kind, DE_RAW_MOUSE_MOVE);
 }
 
 #else /* DE_HEADLESS */

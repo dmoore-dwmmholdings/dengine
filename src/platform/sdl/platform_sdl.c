@@ -76,7 +76,8 @@ de_result de_platform_init(const de_platform_desc *desc) {
         de__platform_sdl_displays_refresh(st);
     de__platform = st;
 
-    /* Raw input devices (DENG-246): input ring, gamepads, sensors; installs the input hook. */
+    /* Raw input devices (DENG-246): raw input ring, gamepads, sensors; installs the input hook
+     * that de_platform_pump() routes every input event through (the only input path). */
     r = de__platform_sdl_devices_init(st);
     if (r != DE_OK) {
         de__platform = NULL;
