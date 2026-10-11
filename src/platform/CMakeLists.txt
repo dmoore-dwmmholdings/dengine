@@ -130,3 +130,22 @@ if(TARGET de_platform AND NOT DE_HEADLESS)
         set_property(TARGET de_platform APPEND PROPERTY DE_MODULE_LIBS ${_de_surface_frameworks})
     endif()
 endif()
+
+# ---- File watching (DENG-248) ----
+# watch_common.c (pending table, debounce, delivery) plus one backend per OS. Only Debug and
+# Dev builds watch; the sources compile to stubs (DE_ERR_UNSUPPORTED) in Release and Shipping.
+if(TARGET de_platform)
+    target_sources(de_platform PRIVATE watch_internal.h watch_common.c)
+    if(APPLE)
+        target_sources(de_platform PRIVATE watch_fsevents.c)
+        # FSEvents lives in CoreServices; CFArray/CFString in CoreFoundation.
+        set(_de_watch_libs "-framework CoreServices" "-framework CoreFoundation")
+        target_link_libraries(de_platform PRIVATE ${_de_watch_libs})
+        # The aggregate `dengine` library links each module's DE_MODULE_LIBS too.
+        set_property(TARGET de_platform APPEND PROPERTY DE_MODULE_LIBS ${_de_watch_libs})
+    elseif(WIN32)
+        target_sources(de_platform PRIVATE watch_win32.c)
+    else()
+        target_sources(de_platform PRIVATE watch_inotify.c)
+    endif()
+endif()
