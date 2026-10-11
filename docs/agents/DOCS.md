@@ -81,6 +81,7 @@ A worker that changes the module graph, the threading model or another architect
 2. **Create** with `create_page` (`space: "DENG"`, `parent: "<parent title>"`).
 3. **Update with read-modify-write in one step.** `update_page` replaces the whole body, and other workers may edit the same page.
    - Call `get_page` immediately before `update_page`. Do no other work between the two calls.
+   - **Address the page by `id`** (from `get_page_tree`) in both calls. `get_page` by title can return the last *published* text instead of the current draft, and writing that back deletes other workers' unpublished changes.
    - Change only the sections about your work. Send back every other line unchanged.
    - Call `get_page` once more afterwards. If text from another agent is missing, put it back.
    - Every issue embed (`![[andare:KEY]]`) that was on the page before your write must still be there after it. A missing embed means you wrote over someone else's work: restore their sections from the page as you read it.
