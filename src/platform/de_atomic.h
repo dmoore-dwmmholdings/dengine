@@ -147,9 +147,25 @@ static inline bool de_atomic_cas_weak_ptr(de_atomic_ptr *a, void **expected, voi
 
 /* ---------- fences and spinning ---------- */
 
+/* GCC 11+ with -fsanitize=thread warns that TSan does not support atomic_thread_fence (-Wtsan),
+ * and -Werror makes that a build error. The fence is still emitted and still orders memory on
+ * the hardware, so the wrapper keeps it and silences only that warning: the memory-order
+ * semantics are the same as in every other build. TSan does not model a standalone fence as a
+ * happens-before edge (Clang TSan ignores it silently, GCC says so), so engine code should
+ * synchronise through acquire/release operations on atomics, which TSan checks. Newer Clang also
+ * defines __SANITIZE_THREAD__, hence the !__clang__ test. */
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11 && defined(__SANITIZE_THREAD__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wtsan"
 static inline void de_atomic_thread_fence(de_memory_order mo) {
     atomic_thread_fence(mo);
 }
+#pragma GCC diagnostic pop
+#else
+static inline void de_atomic_thread_fence(de_memory_order mo) {
+    atomic_thread_fence(mo);
+}
+#endif
 
 /* Compiler-only barrier: orders memory accesses against a signal handler on the same thread. */
 static inline void de_atomic_signal_fence(de_memory_order mo) {

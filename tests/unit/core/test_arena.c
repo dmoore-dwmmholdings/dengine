@@ -90,7 +90,9 @@ static size_t rss_bytes(void) {
  * macOS: libmalloc calls `malloc_logger` (the hook MallocStackLogging uses) for every allocation
  * through the system zones. Linux/glibc: this executable defines malloc and friends, which
  * forward to glibc's __libc_* entry points. Neither works under ASan/TSan, whose runtimes replace
- * malloc: the test's self-check notices and skips. Windows: not counted (skips). */
+ * malloc: the test's self-check notices and skips. Windows: not counted (skips).
+ * DE_TEST_SANITIZED is also used by arena.large_reserve_commit, whose RSS bounds do not hold when
+ * the sanitizer's shadow memory is resident. */
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) ||                         \
@@ -304,6 +306,13 @@ TEST(arena, large_reserve_commit) {
     EXPECT_LT(info.committed, info.used + 64 * 1024 * 2);
     printf("    pushed 1 GiB: committed %zu MiB, RSS %zu -> %zu MiB\n", info.committed >> 20,
            rss0 >> 20, rss1 >> 20);
+#if defined(DE_TEST_SANITIZED)
+    /* The RSS bounds below do not hold under ASan/TSan/MSan: the runtime's shadow memory for the
+     * touched pages is resident too (ASan adds 1/8 of the touched bytes, TSan more), so RSS grows
+     * by more than the arena committed. The reserve/commit/used checks above still run; the RSS
+     * bounds run in every unsanitized build. */
+    printf("    RSS bounds not checked: sanitizer shadow memory counts toward RSS\n");
+#else
     if (rss0 != 0 && rss1 != 0) {
         const size_t grew = rss1 > rss0 ? rss1 - rss0 : 0;
         /* RSS can never grow by more than what was committed (plus slack for the runtime). */
@@ -314,6 +323,7 @@ TEST(arena, large_reserve_commit) {
         EXPECT_LT(grew, 256 * MIB);
 #endif
     }
+#endif
     de_arena_destroy(a);
 }
 
