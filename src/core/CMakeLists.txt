@@ -12,6 +12,10 @@ de_add_module(
         scratch.c
         vmem_posix.c
         vmem_win32.c
+        de_spsc.h
+        spsc.c
+        de_mpmc.h
+        mpmc.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
