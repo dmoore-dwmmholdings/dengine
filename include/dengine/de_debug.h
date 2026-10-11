@@ -188,10 +188,10 @@ DE_API de_result de_cvar_apply_args(int argc, char **argv);
  * Loads config.toml: every value becomes a startup set of the cvar named by its dotted key
  * path. Keys nobody registered yet are kept pending.
  *
- * Until the S03 virtual file system exists (DENG-247), `vpath` is a native path opened with
- * stdio.
+ * `vpath` is a virtual path (`user:/config.toml`, see de_file_read_all in de_platform.h).
  *
- * @return DE_OK; DE_ERR_IO (the file cannot be read); DE_ERR_PARSE (not valid TOML, with the
+ * @return DE_OK; DE_ERR_NOT_FOUND (no such file), DE_ERR_INVALID_ARGUMENT (not a virtual path)
+ *         or DE_ERR_IO (the file cannot be read); DE_ERR_PARSE (not valid TOML, with the
  *         line in the message; nothing is applied); or the first per-key failure (a bad name, an
  *         array or date value, a value that does not parse, a flag that refuses it), after the
  *         other keys were applied.
@@ -209,9 +209,11 @@ DE_API de_result de_cvar_load_from_memory(const char *text, size_t len);
  * cvars and their values, so saving twice gives the same bytes, and loading the file and saving
  * again does too. Pending values and cvars without DE_CVAR_SAVED are not written.
  *
- * Until S03 (DENG-247), `vpath` is a native path written with stdio.
+ * `vpath` is a virtual path on a writable mount. The file is replaced atomically
+ * (de_file_write_all_atomic): a crash leaves the old or the new file, never a part.
  *
- * @return DE_OK, DE_ERR_IO, DE_ERR_INVALID_ARGUMENT (NULL path) or DE_ERR_OUT_OF_MEMORY.
+ * @return DE_OK, DE_ERR_IO, DE_ERR_NOT_FOUND (no parent directory), DE_ERR_INVALID_ARGUMENT
+ *         (NULL or bad path, no writable mount) or DE_ERR_OUT_OF_MEMORY.
  */
 DE_API de_result de_cvar_save(const char *vpath);
 

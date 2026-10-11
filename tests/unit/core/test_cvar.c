@@ -43,8 +43,37 @@ void de__cvar_test_unlock(void);
 #error "DE_CVAR_TEST_OUT_PREFIX must be defined by tests/unit/core/CMakeLists.txt"
 #endif
 
+/* DENG-247: de_cvar_load/save take virtual paths. The data directory is mounted read-only as
+ * cvdata:/ and the directory of DE_CVAR_TEST_OUT_PREFIX writable as cvout:/. */
+static char g_out_vprefix[256]; /* "cvout:/<file name prefix>" */
+
+static void mount_test_dirs(void) {
+    static bool mounted;
+    if (mounted)
+        return;
+    const char *prefix = DE_CVAR_TEST_OUT_PREFIX;
+    const char *slash = strrchr(prefix, '/');
+    ASSERT_TRUE(slash != NULL);
+    char dir[1024];
+    size_t dl = (size_t)(slash - prefix);
+    ASSERT_TRUE(dl < sizeof dir);
+    memcpy(dir, prefix, dl);
+    dir[dl] = '\0';
+    ASSERT_EQ(de_fs_mount("cvdata", DE_CVAR_TEST_DATA_DIR, DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(de_fs_mount("cvout", dir, DE_MOUNT_WRITABLE, 0), DE_OK);
+    snprintf(g_out_vprefix, sizeof g_out_vprefix, "cvout:/%s", slash + 1);
+    mounted = true;
+}
+
+/* Virtual path of the output file DE_CVAR_TEST_OUT_PREFIX + name. */
+static const char *out_vpath(char *buf, size_t cap, const char *name) {
+    snprintf(buf, cap, "%s%s", g_out_vprefix, name);
+    return buf;
+}
+
 static void reset(void) {
     de__cvar_test_reset();
+    mount_test_dirs();
     de_error_clear();
 }
 
@@ -712,7 +741,7 @@ static const char k_basic_saved[] =
 TEST(cvar, toml_roundtrip) {
     reset();
     register_basic();
-    ASSERT_EQ(de_cvar_load(DE_CVAR_TEST_DATA_DIR "/cvars_basic.toml"), DE_OK);
+    ASSERT_EQ(de_cvar_load("cvdata:/cvars_basic.toml"), DE_OK);
     EXPECT_TRUE(de_cvar_float(de_cvar_find("volume")) == 0.1);
     EXPECT_EQ(de_cvar_int(de_cvar_find("r.shadows.quality")), 3);
     EXPECT_EQ(de_cvar_int(de_cvar_find("net.rate")), -30);
@@ -726,7 +755,11 @@ TEST(cvar, toml_roundtrip) {
     const char *path_a = DE_CVAR_TEST_OUT_PREFIX "roundtrip_a.toml";
     const char *path_b = DE_CVAR_TEST_OUT_PREFIX "roundtrip_b.toml";
     const char *path_c = DE_CVAR_TEST_OUT_PREFIX "roundtrip_c.toml";
-    ASSERT_EQ(de_cvar_save(path_a), DE_OK);
+    char vpath_a[512], vpath_b[512], vpath_c[512];
+    out_vpath(vpath_a, sizeof vpath_a, "roundtrip_a.toml");
+    out_vpath(vpath_b, sizeof vpath_b, "roundtrip_b.toml");
+    out_vpath(vpath_c, sizeof vpath_c, "roundtrip_c.toml");
+    ASSERT_EQ(de_cvar_save(vpath_a), DE_OK);
     size_t len_a = 0;
     char *a = read_file(path_a, &len_a);
     ASSERT_TRUE(a != NULL);
@@ -736,12 +769,12 @@ TEST(cvar, toml_roundtrip) {
     /* load -> save -> load -> save: byte-identical, starting from fresh defaults. */
     reset();
     register_basic();
-    ASSERT_EQ(de_cvar_load(path_a), DE_OK);
-    ASSERT_EQ(de_cvar_save(path_b), DE_OK);
+    ASSERT_EQ(de_cvar_load(vpath_a), DE_OK);
+    ASSERT_EQ(de_cvar_save(vpath_b), DE_OK);
     reset();
     register_basic();
-    ASSERT_EQ(de_cvar_load(path_b), DE_OK);
-    ASSERT_EQ(de_cvar_save(path_c), DE_OK);
+    ASSERT_EQ(de_cvar_load(vpath_b), DE_OK);
+    ASSERT_EQ(de_cvar_save(vpath_c), DE_OK);
     size_t len_b = 0, len_c = 0;
     char *b = read_file(path_b, &len_b);
     char *c = read_file(path_c, &len_c);
@@ -786,7 +819,9 @@ TEST(cvar, toml_values) {
     ASSERT_EQ(de_cvar_set(big, "-9223372036854775808"), DE_OK);
 
     const char *path = DE_CVAR_TEST_OUT_PREFIX "values.toml";
-    ASSERT_EQ(de_cvar_save(path), DE_OK);
+    char vpath[512];
+    out_vpath(vpath, sizeof vpath, "values.toml");
+    ASSERT_EQ(de_cvar_save(vpath), DE_OK);
     char *text = read_file(path, NULL);
     ASSERT_TRUE(text != NULL);
     EXPECT_TRUE(strstr(text, "tenth = 0.1\n") != NULL);
@@ -805,7 +840,7 @@ TEST(cvar, toml_values) {
     en = de_cvar_register(&(de_cvar_desc){
         .name = "e.m", .type = DE_CVAR_ENUM, .flags = S, .enum_values = m, .enum_count = 2});
     big = reg("i.min", DE_CVAR_INT, S);
-    ASSERT_EQ(de_cvar_load(path), DE_OK);
+    ASSERT_EQ(de_cvar_load(vpath), DE_OK);
     EXPECT_TRUE(de_cvar_float(f[0]) == 0.1);
     EXPECT_TRUE(de_cvar_float(f[1]) == 1.7976931348623157e308);
     EXPECT_TRUE(de_cvar_float(f[2]) == 4.9406564584124654e-324);
@@ -827,7 +862,7 @@ TEST(cvar, toml_values) {
 TEST(cvar, toml_unknown_pending) {
     reset();
     de_cvar known = reg("known", DE_CVAR_INT, 0);
-    ASSERT_EQ(de_cvar_load(DE_CVAR_TEST_DATA_DIR "/cvars_unknown.toml"), DE_OK);
+    ASSERT_EQ(de_cvar_load("cvdata:/cvars_unknown.toml"), DE_OK);
     EXPECT_EQ(de_cvar_int(known), 7);
     de_cvar speed = reg("future.module.speed", DE_CVAR_FLOAT, 0);
     de_cvar mode = reg("future.module.mode", DE_CVAR_STRING, 0);
@@ -879,10 +914,15 @@ TEST(cvar, toml_errors) {
     EXPECT_EQ(de_cvar_load_from_memory("", 0), DE_OK);
     EXPECT_EQ(de_cvar_load_from_memory(NULL, 0), DE_OK);
     EXPECT_EQ(de_cvar_load_from_memory(NULL, 3), DE_ERR_INVALID_ARGUMENT);
-    EXPECT_EQ(de_cvar_load(DE_CVAR_TEST_DATA_DIR "/does_not_exist.toml"), DE_ERR_IO);
+    EXPECT_EQ(de_cvar_load("cvdata:/does_not_exist.toml"), DE_ERR_NOT_FOUND);
     EXPECT_EQ(de_cvar_load(NULL), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_cvar_save(NULL), DE_ERR_INVALID_ARGUMENT);
-    EXPECT_EQ(de_cvar_save(DE_CVAR_TEST_DATA_DIR "/no_such_dir/out.toml"), DE_ERR_IO);
+    char vpath[512];
+    EXPECT_EQ(de_cvar_save(out_vpath(vpath, sizeof vpath, "no_such_dir/out.toml")),
+              DE_ERR_NOT_FOUND);
+    /* DENG-247: native paths and read-only mounts are refused. */
+    EXPECT_EQ(de_cvar_load(DE_CVAR_TEST_DATA_DIR "/cvars_basic.toml"), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_cvar_save("cvdata:/out.toml"), DE_ERR_INVALID_ARGUMENT);
 }
 
 /* ---- threads --------------------------------------------------------------------------- */

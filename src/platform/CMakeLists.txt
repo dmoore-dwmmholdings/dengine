@@ -34,6 +34,11 @@ de_add_module(
         time_${_de_platform_os}.c
         dylib_${_de_platform_os}.c
         sleep_pacing.c
+        vfs_internal.h
+        vfs.c
+        file_${_de_platform_os}.c
+        known_dirs.c
+        async_io.c
     DEPS core
     LIBS ${_de_platform_libs}
 )

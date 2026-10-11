@@ -360,31 +360,264 @@ DE_API de_result de_tls_set(de_tls_key key, void *value);
  * End of the time and threads sections (DENG-147).
  * ========================================================================================== */
 
-/* ---------- Files ---------- */
+/* ==========================================================================================
+ * Files and async I/O (S03, DENG-247). Engine-owned per OS (SPEC §6), no SDL.
+ * Implementation: src/platform/vfs.c (paths, mounts), file_{posix,win32}.c (OS calls),
+ * known_dirs.c (per-user directories), async_io.c (I/O threads).
+ * ========================================================================================== */
+
+/* ---------- Virtual paths and mounts ----------
+ *
+ * Every engine file access names a virtual path `<root>:/<path>`, so asset IDs and data never
+ * depend on where the files are on disk (SPEC §11.1):
+ *   - `<root>` is 1 to DE_FS_ROOT_MAX bytes of `[a-z0-9_-]`. Standard roots (de_fs_init):
+ *     `game:/` (install directory, read-only), `user:/` (saves, settings; writable), `cache:/`
+ *     (writable), `dev:/` (project directory, Debug and Dev builds only). `pack:/` is reserved
+ *     for pack archives (S08) and cannot be mounted.
+ *   - `<path>` uses `/` separators and is UTF-8. Empty and `.` segments are dropped; `..` removes
+ *     the segment before it. A `..` that would leave the root, a backslash, a `:`, a control
+ *     byte or invalid UTF-8 is rejected with DE_ERR_INVALID_ARGUMENT, and so is a native path
+ *     (`/etc/passwd`, `C:\x`): there is no way to name a file outside the mounted directories.
+ *
+ * A root can have several mounts. Reads use the first mount, in priority order, where the path
+ * exists. Writes go to the first writable mount; a root with no writable mount refuses writes
+ * with DE_ERR_INVALID_ARGUMENT. The mount table is process-wide and thread-safe; it works
+ * without de_fs_init (tests mount temporary directories with de_fs_mount alone).
+ */
+
+/** Longest root name, in bytes. */
+#define DE_FS_ROOT_MAX 15
+/** Longest virtual or native path, in bytes with the NUL. */
+#define DE_FS_PATH_MAX 1024
+/** Mounts the table holds, across all roots. */
+#define DE_FS_MAX_MOUNTS 32
+
+/** de_fs_mount flags. */
+typedef enum de_mount_flags {
+    DE_MOUNT_READ_ONLY = 0,      /**< reads only (the default) */
+    DE_MOUNT_WRITABLE = 1u << 0, /**< writes, deletes and directory creation are allowed */
+} de_mount_flags;
+
+/**
+ * Standard mounts. `(de_fs_desc){0}` is valid: `game:/` is the executable's directory, and
+ * `user:/` and `cache:/` are the per-OS directories for the application "dengine".
+ */
+typedef struct de_fs_desc {
+    /** Organisation folder above `app` on macOS and Windows (not used on Linux); NULL = none. */
+    const char *org;
+    /** Application folder name for `user:/` and `cache:/`; NULL = "dengine". */
+    const char *app;
+    /** Native directory for `game:/`; NULL = the directory of the executable. */
+    const char *game_dir;
+    /**
+     * Native directory for `user:/`; NULL = per OS: `~/Library/Application Support/<org>/<app>`
+     * (macOS), `$XDG_DATA_HOME/<app>` or `~/.local/share/<app>` (Linux),
+     * `%APPDATA%\<org>\<app>` (Windows). Created if missing.
+     */
+    const char *user_dir;
+    /**
+     * Native directory for `cache:/`; NULL = per OS: `~/Library/Caches/<org>/<app>` (macOS),
+     * `$XDG_CACHE_HOME/<app>` or `~/.cache/<app>` (Linux), `%LOCALAPPDATA%\<org>\<app>\cache`
+     * (Windows). Created if missing.
+     */
+    const char *cache_dir;
+    /** Native project directory for `dev:/` (writable). NULL, Release and Shipping: no `dev:/`. */
+    const char *dev_dir;
+    /** Allocator for open-file records; NULL = de_heap_allocator(). */
+    const de_allocator *allocator;
+} de_fs_desc;
+
+/**
+ * Mounts the standard roots at priority 0. `desc` may be NULL (same as a zeroed desc).
+ * @return DE_OK, DE_ERR_ALREADY_EXISTS (already initialised), DE_ERR_NOT_FOUND (a directory or
+ *         the home directory could not be found), DE_ERR_IO (a directory could not be created).
+ */
+DE_API de_result de_fs_init(const de_fs_desc *desc);
+/** Removes every mount, standard or not. Files that are still open stay usable. */
+DE_API void de_fs_shutdown(void);
+
+/**
+ * Adds `native_dir` (an existing directory) under `root` (a root name without `:/`, e.g.
+ * "user"). Mounts with a higher `priority` are searched first; among equal priorities the newer
+ * mount comes first.
+ * @param flags  de_mount_flags.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad root name or path too long), DE_ERR_UNSUPPORTED
+ *         (`pack`, reserved for S08), DE_ERR_NOT_FOUND (not a directory), DE_ERR_OUT_OF_MEMORY
+ *         (DE_FS_MAX_MOUNTS reached).
+ */
+DE_API de_result de_fs_mount(const char *root, const char *native_dir, u32 flags, i32 priority);
+/** Removes the mount of `native_dir` under `root` (as given to de_fs_mount). DE_ERR_NOT_FOUND. */
+DE_API de_result de_fs_unmount(const char *root, const char *native_dir);
+
+/**
+ * Writes the normalised form of `vpath` (`user:/a/../b//c` -> `user:/b/c`) into `buf`.
+ * Checks the syntax only; the root need not be mounted.
+ * @return DE_OK or DE_ERR_INVALID_ARGUMENT (bad path, or `cap` too small).
+ */
+DE_API de_result de_path_normalize(const char *vpath, char *buf, size_t cap);
+
+/**
+ * Writes the native path for `vpath` into `buf`: the first mount where it exists, else the
+ * mount a write would use (the first writable one), else the first mount.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad path or `cap` too small), DE_ERR_NOT_FOUND (root
+ *         not mounted).
+ */
+DE_API de_result de_fs_resolve(const char *vpath, char *buf, size_t cap);
+
+/* ---------- Files ----------
+ * Synchronous, blocking calls; safe from any thread. A de_file may be read from several threads
+ * at once (reads take an offset); writes to one de_file must not overlap. */
 typedef struct de_file de_file;
-typedef enum de_file_mode { DE_FILE_READ, DE_FILE_WRITE, DE_FILE_APPEND } de_file_mode;
+typedef enum de_file_mode {
+    DE_FILE_READ,  /**< existing file, reads only */
+    DE_FILE_WRITE, /**< created or truncated, sequential writes */
+    DE_FILE_APPEND /**< created if missing, every write goes to the end */
+} de_file_mode;
 
-/* Virtual roots: "game:/" (install dir), "user:/" (saves/settings), "cache:/", "dev:/" (project,
- * dev only). */
+/**
+ * Opens a file. READ searches the mounts in priority order; WRITE and APPEND use the first
+ * writable mount of the root, and its parent directory must exist (see de_dir_create).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad path, no writable mount, a directory),
+ *         DE_ERR_NOT_FOUND, DE_ERR_IO, DE_ERR_OUT_OF_MEMORY.
+ */
 DE_API de_result de_file_open(const char *vpath, de_file_mode mode, de_file **out);
+/**
+ * Reads up to `bytes` at `offset` into `dst`. `*read` (optional) gets the count, which is less
+ * than `bytes` only at the end of the file. Does not move a file position.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (not opened for reading), DE_ERR_IO.
+ */
 DE_API de_result de_file_read(de_file *f, void *dst, u64 offset, u64 bytes, u64 *read);
+/** Writes all `bytes` after the previous write (WRITE) or at the end (APPEND). DE_ERR_IO. */
 DE_API de_result de_file_write(de_file *f, const void *src, u64 bytes);
+/** Size of the open file in bytes; 0 on error. */
 DE_API u64 de_file_size(de_file *f);
+/** Closes `f` (NULL is ignored). Written data is handed to the OS; it is not flushed to disk. */
 DE_API void de_file_close(de_file *f);
-DE_API de_result de_file_read_all(const char *vpath, const de_allocator *a, void **data, u64 *size);
-DE_API bool de_path_exists(const char *vpath);
 
-/* ---------- Async I/O ---------- */
+/**
+ * Reads a whole file into one block from `a` (NULL = de_heap_allocator()). The block has
+ * `*size + 1` bytes with a NUL after the data; free it with `DE_FREE(a, *data, *size + 1)`.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_NOT_FOUND, DE_ERR_IO, DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_file_read_all(const char *vpath, const de_allocator *a, void **data, u64 *size);
+/**
+ * Replaces the file at `vpath` with `bytes` of `data` (first writable mount): writes a temporary
+ * file in the same directory, flushes it to disk, then renames it over the target, so a reader
+ * or a crash sees either the old or the new file, never a part.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_NOT_FOUND (no parent directory), DE_ERR_IO.
+ */
+DE_API de_result de_file_write_all_atomic(const char *vpath, const void *data, u64 bytes);
+/** True if `vpath` names an existing file or directory in any mount of its root. */
+DE_API bool de_path_exists(const char *vpath);
+/**
+ * Deletes a file or an empty directory from the first writable mount that has it.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad path, no writable mount), DE_ERR_NOT_FOUND,
+ *         DE_ERR_IO (e.g. a directory that is not empty).
+ */
+DE_API de_result de_file_delete(const char *vpath);
+/**
+ * Creates the directory `vpath` and its missing parents in the first writable mount. An
+ * existing directory is not an error.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_IO.
+ */
+DE_API de_result de_dir_create(const char *vpath);
+
+/** de_dir_list callback: one entry name (no path). Return false to stop the listing. */
+typedef bool (*de_dir_fn)(const char *name, bool is_dir, void *user);
+/**
+ * Calls `fn` once for each entry of the directory `vpath`, merged over the mounts of its root: a
+ * name that a higher mount also has is reported once, for the higher mount. `.` and `..` are
+ * skipped. The order is unspecified (OS order). `fn` may call other file functions.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_NOT_FOUND (no mount has the directory),
+ *         DE_ERR_IO, DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_dir_list(const char *vpath, de_dir_fn fn, void *user);
+
+/* ---------- Async I/O ----------
+ *
+ * v1 async I/O (SPEC §6): a pool of I/O threads doing blocking reads. Requests are caller-owned
+ * and linked into the queues intrusively, so submitting allocates nothing. Each thread takes the
+ * request with the lowest `priority` value (FIFO within a priority) and reads it in chunks of
+ * at most DE_IO_CHUNK_BYTES, checking for cancellation between chunks.
+ *
+ * Completions are delivered exactly once per submitted request: by de_io_pump() on the thread
+ * that pumps, or, with DE_IO_CALLBACK_ON_IO_THREAD, directly on the thread that finishes the
+ * request (an I/O thread, or the thread calling de_io_cancel/de_io_shutdown for a request that
+ * never started). The request is free again (may be resubmitted or released) when `on_complete`
+ * runs, and the I/O system does not touch it afterwards.
+ */
+
+/** Largest read an I/O thread issues at once; cancellation is checked between chunks. */
+#define DE_IO_CHUNK_BYTES ((u64)1 << 20)
+/** I/O threads when de_io_desc.thread_count is 0. */
+#define DE_IO_DEFAULT_THREADS 2
+
+/** de_io_request.flags. */
+enum {
+    /** Call `on_complete` on the thread that finishes the request, not from de_io_pump(). */
+    DE_IO_CALLBACK_ON_IO_THREAD = 1u << 0,
+};
+
 typedef struct de_io_request {
-    de_file *file;
-    u64 offset, bytes;
-    void *dst;
+    de_file *file; /**< opened with DE_FILE_READ; must stay open until on_complete */
+    u64 offset;    /**< file offset of the first byte */
+    u64 bytes;     /**< bytes to read; reading stops early at the end of the file */
+    void *dst;     /**< at least `bytes` bytes */
+    /**
+     * Required. `r` is DE_OK (`bytes_read` < `bytes` only at the end of the file), DE_ERR_IO, or
+     * DE_ERR_CANCELLED (`bytes_read` is what was read before the cancel).
+     */
     void (*on_complete)(struct de_io_request *req, de_result r, u64 bytes_read);
-    void *user;
-    u8 priority; /* 0 = highest */
+    void *user;  /**< for the caller */
+    u8 priority; /**< 0 = highest */
+    u32 flags;   /**< DE_IO_CALLBACK_ON_IO_THREAD */
+    /** Owned by the I/O system from de_io_submit until on_complete. Zero it before first use. */
+    struct {
+        struct de_io_request *next, *prev;
+        u64 done;
+        i32 result;
+        u32 state, cancel;
+    } internal_;
 } de_io_request;
-DE_API de_result de_io_submit(de_io_request *req); /* req must stay alive until on_complete */
+
+typedef struct de_io_desc {
+    u32 thread_count; /**< I/O threads; 0 = DE_IO_DEFAULT_THREADS */
+} de_io_desc;
+
+/**
+ * Starts the I/O threads (named "de-io-<n>"). `desc` may be NULL.
+ * @return DE_OK, DE_ERR_ALREADY_EXISTS (running), DE_ERR_OUT_OF_MEMORY, DE_ERR_INTERNAL.
+ */
+DE_API de_result de_io_init(const de_io_desc *desc);
+/**
+ * Stops the I/O system: queued requests complete with DE_ERR_CANCELLED, running ones stop at
+ * their next chunk boundary, the threads are joined, and every pending completion is delivered
+ * on the calling thread (call it from the thread that pumps). Does nothing if not running.
+ */
+DE_API void de_io_shutdown(void);
+/**
+ * Queues `req`, which must stay valid and unchanged until its on_complete runs. Allocates
+ * nothing. On an error the request is not queued and on_complete is not called.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL request, file, callback or `dst`, a file not
+ *         opened for reading), DE_ERR_BUSY (`req` is already submitted), DE_ERR_UNSUPPORTED
+ *         (de_io_init not called).
+ */
+DE_API de_result de_io_submit(de_io_request *req);
+/**
+ * Cancels `req`: still queued -> it completes with DE_ERR_CANCELLED and 0 bytes; being read ->
+ * it stops at the next chunk boundary with DE_ERR_CANCELLED; already finished or not submitted
+ * -> nothing happens. `req` must be valid memory for the duration of the call.
+ */
 DE_API void de_io_cancel(de_io_request *req);
+/**
+ * Delivers up to `max_completions` finished requests (0 = all that are ready) on the calling
+ * thread, in completion order. Never blocks on I/O. Returns the number delivered.
+ */
+DE_API u32 de_io_pump(u32 max_completions);
+
+/* ==========================================================================================
+ * End of the files and async I/O sections (DENG-247).
+ * ========================================================================================== */
 
 /* ---------- File watching (dev builds) ---------- */
 typedef struct de_file_watch de_file_watch;
