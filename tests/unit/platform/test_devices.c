@@ -109,12 +109,11 @@ static de_window open_hidden(void) {
  * reads; each clock rounds to its own tick). */
 #define TIME_SLACK_NS 20000u
 
-static bool need_pads(void) {
-    if (!SDL_WasInit(SDL_INIT_GAMEPAD)) {
+/* SKIP does not return, so this returns only when pads can be tested. A `return` after SKIP is
+ * unreachable code, which MSVC rejects (C4702). */
+static void need_pads(void) {
+    if (!SDL_WasInit(SDL_INIT_GAMEPAD))
         SKIP("no gamepad subsystem");
-        return false;
-    }
-    return true;
 }
 
 /* ---------- keyboard and mouse ---------- */
@@ -454,8 +453,7 @@ static const de_raw_input_event *find_axis(const de_raw_input_event *ev, u32 n, 
 
 TEST_F(devices, virtual_pad_events, vid_fx) {
     (void)f;
-    if (!need_pads())
-        return;
+    need_pads();
     flush_raw();
     /* Real controllers on the host may be connected too: count relative to them. */
     u32 base = de_platform_pads(NULL, 0);
@@ -557,8 +555,7 @@ TEST_F(devices, virtual_pad_events, vid_fx) {
 
 TEST_F(devices, unsupported_haptics, vid_fx) {
     (void)f;
-    if (!need_pads())
-        return;
+    need_pads();
     flush_raw();
     u32 base = de_platform_pads(NULL, 0);
     ASSERT_LT(base, 12u);

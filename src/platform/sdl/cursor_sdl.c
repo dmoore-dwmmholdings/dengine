@@ -2,12 +2,26 @@
  * DENG-246). */
 #include "platform/sdl/sdl_internal.h"
 
-/* de_platform_cursor copies the first entries of SDL_SystemCursor. */
-DE_STATIC_ASSERT(SDL_SYSTEM_CURSOR_DEFAULT == (int)DE_CURSOR_DEFAULT &&
-                     SDL_SYSTEM_CURSOR_NWSE_RESIZE == (int)DE_CURSOR_RESIZE_NWSE &&
-                     SDL_SYSTEM_CURSOR_NS_RESIZE == (int)DE_CURSOR_RESIZE_NS &&
-                     SDL_SYSTEM_CURSOR_POINTER == (int)DE_CURSOR_POINTER,
+/* de_platform_cursor copies the first entries of SDL_SystemCursor, so de_platform_cursor_set
+ * casts the shape straight to SDL_SystemCursor. Each side is checked against the same literal:
+ * MSVC's C compiler warns (C5287) on an operator between two enum types and still sees the enum
+ * type through an (int) cast, so the two enums never meet in one operator. */
+#define DE__CURSOR_IS(sdl, de, n) ((sdl) == (n) && (de) == (n))
+DE_STATIC_ASSERT(DE__CURSOR_IS(SDL_SYSTEM_CURSOR_DEFAULT, DE_CURSOR_DEFAULT, 0) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_TEXT, DE_CURSOR_TEXT, 1) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_WAIT, DE_CURSOR_WAIT, 2) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_CROSSHAIR, DE_CURSOR_CROSSHAIR, 3) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_PROGRESS, DE_CURSOR_PROGRESS, 4) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_NWSE_RESIZE, DE_CURSOR_RESIZE_NWSE, 5) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_NESW_RESIZE, DE_CURSOR_RESIZE_NESW, 6) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_EW_RESIZE, DE_CURSOR_RESIZE_EW, 7) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_NS_RESIZE, DE_CURSOR_RESIZE_NS, 8) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_MOVE, DE_CURSOR_MOVE, 9) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_NOT_ALLOWED, DE_CURSOR_NOT_ALLOWED, 10) &&
+                     DE__CURSOR_IS(SDL_SYSTEM_CURSOR_POINTER, DE_CURSOR_POINTER, 11) &&
+                     DE_CURSOR_COUNT_ == 12,
                  "SDL system cursor order changed");
+#undef DE__CURSOR_IS
 
 /* The devices state when video is up, else NULL. */
 static de__platform_sdl_devices *de__video_devices(void) {
