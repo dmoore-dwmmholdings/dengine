@@ -472,34 +472,142 @@ DE_API void de_frustum_cull_aabbs(const de_frustum *f, const de_aabb *boxes, u32
 
 /* ================================ 4. Deterministic math (DENG-243) ========================= */
 
-/* Deterministic math (simulation). Strict IEEE, own transcendentals, no approximate
- * reciprocals, compiled with -ffp-contract=off. */
+/*
+ * Deterministic math for simulation code (SPEC §5.7). Physics, sim-side animation, netcode and
+ * every other deterministic module use only these functions, never the fast math above or
+ * <math.h>. The same inputs give bit-identical results on x86-64 and arm64, with any compiler
+ * and build type. tests/unit/math/vectors/dmath_golden.txt is the contract every platform must
+ * reproduce bit for bit.
+ *
+ * How (src/core/math/dmath*.c):
+ *   - Own transcendentals: range reduction (Cody-Waite for |x| < 2^20 * pi/2, exact integer
+ *     Payne-Hanek beyond), minimax polynomials in a fixed Horner order, only the IEEE basic
+ *     operations (+ - * / sqrt, correctly rounded everywhere). Compiled with -ffp-contract=off
+ *     (no FMA) and no approximate reciprocal instructions.
+ *   - Each f32 function computes in f64 and rounds to f32 once, at the end.
+ *   - Denormal inputs are read as zero of the same sign; results smaller than FLT_MIN (or
+ *     DBL_MIN) become zero of the same sign. This is the FTZ/DAZ behaviour of
+ *     de_fp_env_init_thread, done in code, so the results do not depend on the thread's FP mode.
+ *   - Every NaN result is the canonical quiet NaN (bits 0x7FC00000, or 0x7FF8000000000000 for
+ *     f64), whatever NaN came in: CPUs differ in how they propagate NaN payloads.
+ *   - The rounding mode must be round-to-nearest-even (the default, and what
+ *     de_fp_env_init_thread sets).
+ *
+ * Accuracy (f32, measured against a double-precision libm by math.dmath.accuracy_report): about
+ * 0.5 ulp for every transcendental (the f64 kernels are accurate to about 2^-53), so the results
+ * are almost always the correctly rounded value. Special values follow C11 Annex F.
+ */
+
+/** sin(x), x in radians. +-inf and NaN give NaN. sin(-0) = -0. */
 DE_API f32 de_dsin(f32 x);
+/** cos(x), x in radians. +-inf and NaN give NaN. */
 DE_API f32 de_dcos(f32 x);
+/** sin and cos from one range reduction; *s and *c equal de_dsin(x) and de_dcos(x) bit for bit.
+ *  Either pointer may be NULL. */
 DE_API void de_dsincos(f32 x, f32 *s, f32 *c);
-DE_API f32 de_datan2(f32 y, f32 x);
+/** tan(x) = sin(x) / cos(x) of one reduction. +-inf and NaN give NaN. */
+DE_API f32 de_dtan(f32 x);
+/** asin(x) in [-pi/2, pi/2]. |x| > 1 gives NaN. */
+DE_API f32 de_dasin(f32 x);
+/** acos(x) in [0, pi]. |x| > 1 gives NaN. */
 DE_API f32 de_dacos(f32 x);
+/** atan(x) in [-pi/2, pi/2]; atan(+-inf) = +-pi/2. */
+DE_API f32 de_datan(f32 x);
+/** atan2(y, x) in [-pi, pi], with the C11 Annex F signed-zero and infinity cases
+ *  (atan2(+-0, -0) = +-pi, atan2(+-inf, -inf) = +-3pi/4, ...). */
+DE_API f32 de_datan2(f32 y, f32 x);
+/** e^x. Overflows to +inf above about 88.72; below about -87.34 the result is +0. */
 DE_API f32 de_dexp(f32 x);
+/** Natural log. log(+-0) = -inf, log(x < 0) = NaN, log(+inf) = +inf. */
 DE_API f32 de_dlog(f32 x);
+/**
+ * x^y, as exp(y * log|x|) in f64. C11 Annex F special cases: pow(x, +-0) = 1 and pow(1, y) = 1
+ * even for NaN, pow(-1, +-inf) = 1, a negative x with a non-integer y gives NaN, a negative x
+ * with an odd integer y gives a negative result, pow(+-0, y < 0) = +inf (+-inf for odd y).
+ */
 DE_API f32 de_dpow(f32 x, f32 y);
-DE_API f32 de_dsqrt(f32 x); /* IEEE sqrt is exact; wrapper documents intent */
+/**
+ * Square root. IEEE sqrt is correctly rounded on every target, so this is sqrtf (the hardware
+ * instruction); the wrapper adds the denormal and NaN rules above and documents the intent.
+ * x < 0 gives NaN, sqrt(-0) = -0.
+ */
+DE_API f32 de_dsqrt(f32 x);
+/** Largest integer <= x. Exact. A negative denormal reads as -0, so floor gives -0. */
+DE_API f32 de_dfloor(f32 x);
+/** Smallest integer >= x. Exact. ceil(-0.5) = -0. */
+DE_API f32 de_dceil(f32 x);
+/** Nearest integer, halfway cases away from zero (like C round()). Exact. */
+DE_API f32 de_dround(f32 x);
+/**
+ * x - n * y with n = trunc(x / y): the remainder with the sign of x, like C fmod(). Exact
+ * (computed on the integer significands), except that a remainder below FLT_MIN becomes +-0.
+ * fmod(+-inf, y) and fmod(x, 0) give NaN; fmod(x, +-inf) = x for finite x.
+ */
+DE_API f32 de_dfmod(f32 x, f32 y);
+
+/** sin(x) in f64, x in radians: Cody-Waite / Payne-Hanek reduction to a double-double and the
+ *  same kernels as de_dsin; about 1 ulp. +-inf and NaN give NaN. */
 DE_API f64 de_dsin64(f64 x);
+/** cos(x) in f64, like de_dsin64. */
 DE_API f64 de_dcos64(f64 x);
+/** Square root in f64 (the hardware instruction), with the denormal and NaN rules above. */
+DE_API f64 de_dsqrt64(f64 x);
+
+/** a / |a|, computed in f64. The zero vector gives the zero vector; a non-finite component
+ *  gives NaN in every component. */
 DE_API de_vec3 de_dv3_normalize(de_vec3 a);
+/** q / |q|, computed in f64. The zero quaternion gives the identity; a non-finite component
+ *  gives NaN in every component. */
 DE_API de_quat de_dquat_normalize(de_quat q);
+/**
+ * Integrates the orientation q over dt seconds of the constant angular velocity
+ * `angular_velocity` (rad/s, in world space): returns normalize(d * q), where d is the rotation
+ * by |w| * dt about w / |w| (built with the de_d* sin and cos, so there is no first-order drift).
+ * w = 0 or dt = 0 returns de_dquat_normalize(q). Computed in f64.
+ */
 DE_API de_quat de_dquat_integrate(de_quat q, de_vec3 angular_velocity, f32 dt);
 
-/* Deterministic RNG stream (PCG32). */
+/**
+ * Deterministic random number stream: PCG32 (PCG-XSH-RR, 64-bit state, 32-bit output). Streams
+ * with the same seed and different `stream` values are independent sequences. Simulation code
+ * draws random numbers only from streams it seeded itself (SPEC §5.7 rule 6). Plain value: copy
+ * it to fork or save a stream. Not thread-safe; give each thread or system its own stream.
+ */
 typedef struct de_rng {
     u64 state, inc;
 } de_rng;
+/** A stream seeded like the PCG paper's pcg32_srandom_r(seed, stream): seed 42, stream 54
+ *  starts with 0xa15c02b7, 0x7b47f409, 0xba1d3330. */
 DE_API de_rng de_rng_seed(u64 seed, u64 stream);
+/** Next 32-bit output. */
 DE_API u32 de_rng_u32(de_rng *r);
-DE_API f32 de_rng_f32(de_rng *r); /* [0, 1) */
+/** Uniform in [0, 1): the top 24 bits of one output times 2^-24. */
+DE_API f32 de_rng_f32(de_rng *r);
+/** Uniform in [0, 1) with 53 bits: two outputs, (a >> 5) * 2^26 + (b >> 6), times 2^-53. */
+DE_API f64 de_rng_f64(de_rng *r);
+/**
+ * Uniform integer in [lo, hi_exclusive), without bias (Lemire's multiply-shift with rejection;
+ * usually one output, more only when rejected). hi_exclusive <= lo returns lo and does not
+ * advance the stream.
+ */
 DE_API u32 de_rng_range(de_rng *r, u32 lo, u32 hi_exclusive);
+/**
+ * Jumps ahead by `delta` outputs in O(log delta), as if de_rng_u32 had been called delta times.
+ * The period is 2^64, so delta = 2^64 - k (that is, (u64)-k) steps back k outputs.
+ */
+DE_API void de_rng_advance(de_rng *r, u64 delta);
 
-/* Applied once per thread at startup (FTZ/DAZ on x86 MXCSR, FZ on arm64 FPCR). */
+/**
+ * Sets the deterministic floating-point mode on the calling thread (SPEC §5.7 rule 4): flush
+ * denormals to zero (x86-64 MXCSR FTZ + DAZ, arm64 FPCR FZ), round to nearest even, exceptions
+ * masked. Call it once at the start of every thread that runs simulation code (the S04 task
+ * scheduler does it for its workers). Cheap and idempotent: it writes the control register only
+ * when it differs.
+ */
 DE_API void de_fp_env_init_thread(void);
+/** true when the calling thread's FP mode is the one de_fp_env_init_thread sets. For Debug
+ *  checks (S05). Always false on targets this file does not know. */
+DE_API bool de_fp_env_check(void);
 
 /* ================================ 5. Large-world transforms (DENG-244) ===================== */
 

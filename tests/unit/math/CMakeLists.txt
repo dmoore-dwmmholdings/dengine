@@ -35,3 +35,22 @@ if(TARGET test_simd AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_E
             ENVIRONMENT "DE_MATH_ISA=sse4.2" LABELS "unit;math" TIMEOUT 120)
     endif()
 endif()
+
+# DENG-243: deterministic math (de_d*), de_rng and the FP environment. Separate executables, so
+# test_dmath and test_rng can be built for x86-64 and run under Rosetta 2 against the same golden
+# files (see the Rosetta note on the Trama page "core: Math").
+de_add_test(NAME dmath SOURCES test_dmath.c LIBS de_core)
+de_add_test(NAME rng SOURCES test_rng.c LIBS de_core)
+de_add_test(NAME fpenv SOURCES test_fpenv.c LIBS de_core)
+if(TARGET test_dmath)
+    target_compile_definitions(test_dmath PRIVATE
+        "DE_DMATH_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/dmath_golden.txt\"")
+    target_compile_definitions(test_rng PRIVATE
+        "DE_RNG_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/rng_golden.txt\"")
+    # Static check (SPEC §5.7 rule 2): the deterministic sources call no <math.h> function except
+    # sqrt / sqrtf.
+    add_test(NAME math.dmath_no_libm
+        COMMAND "${CMAKE_COMMAND}" "-DDE_ROOT_DIR=${DE_ROOT_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/check_dmath_no_libm.cmake")
+    set_tests_properties(math.dmath_no_libm PROPERTIES LABELS "unit;math")
+endif()

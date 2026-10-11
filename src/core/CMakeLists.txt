@@ -52,6 +52,11 @@ de_add_module(
         math/simd_sse.c
         math/simd_avx2.c
         math/simd_neon.c
+        math/dmath_reduce.h
+        math/dmath.c
+        math/dmath64.c
+        math/rng.c
+        math/fpenv.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -133,3 +138,7 @@ if(_de_simd_x86)
 endif()
 # tests/unit/math registers an extra whole-binary run of test_simd at the SSE4.2 level on x86-64.
 set_property(GLOBAL PROPERTY DE_MATH_SIMD_X86 ${_de_simd_x86})
+
+# DENG-243: the deterministic math (SPEC §5.7). Core is not a deterministic module, so these
+# files get the deterministic flags (-ffp-contract=off, /fp:precise) one by one.
+de_mark_deterministic_sources(math/dmath.c math/dmath64.c math/rng.c math/fpenv.c)
