@@ -1,0 +1,15 @@
+bands = ["low"]
+
+[[module]]
+name = "a"
+band = "low"
+paths = ["src/a"]
+
+[[module]]
+name = "b"
+band = "low"
+paths = ["src/b"]
+
+[[allow]]
+from = "a"
+to = "b"

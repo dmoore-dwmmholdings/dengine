@@ -1,0 +1,293 @@
+# Module layer table for tools/check_layers/check_layers.py (SPEC §4.1, §4.2).
+#
+# A module may include headers of modules in a LOWER band. Inside its own band it may include
+# only the modules listed for it in an [[allow]] entry. Includes into a higher band are always
+# an error, and so is every cycle in the module graph.
+#
+# How to change this file:
+#   - New module directory: add a [[module]] entry (or rely on a wildcard entry below).
+#   - New same-band edge: append an [[allow]] entry. `why` is required: say what needs the edge.
+#   - [[forbid]] entries (at the end) are edges that must never exist. The check rejects an
+#     [[allow]] entry that contradicts one. Physics, audio and anim never include each other
+#     (DENG-2); code that combines them goes in src/host/bridges/, which is in the host band.
+#
+# Module entries:
+#   name     Module id. A `*` stands for one directory name taken from the matching path.
+#   band     One of `bands` below.
+#   paths    Directories (relative to the repository root) that belong to the module. The
+#            longest match wins, so `src/gpu/metal/x.c` is in `gpu/metal`, not in `gpu`.
+#            A module with no paths owns only public headers (`gameplay`, `services`).
+#   headers  Public headers in include/dengine/ that the module owns. A header that is not
+#            listed belongs to the module with the same name (de_ecs.h -> ecs).
+#   explicit_only  Optional. Only modules with an [[allow]] edge to it may include it, whatever
+#            their band. Used for the cooker library: engine code must not include tools/.
+
+bands = ["foundation", "runtime", "content", "gameplay", "host"]
+
+# Include roots used to resolve `#include "<dir>/..."` and `#include <dir/...>`, in order.
+# DENG-60 makes src/ a private include root for every module ("core/de_array.h"). tools/ lets
+# the cooker library be named as "cook/lib/..." (the asset -> cook edge below).
+include_roots = ["src", "tools"]
+
+# ---------------------------------------------------------------- foundation
+
+[[module]]
+name = "core"
+band = "foundation"
+paths = ["src/core"]
+headers = ["de_base.h", "de_memory.h", "de_math.h", "de_debug.h"]
+
+[[module]]
+name = "platform"
+band = "foundation"
+paths = ["src/platform"]
+headers = ["de_platform.h"]
+
+# ---------------------------------------------------------------- runtime
+
+[[module]]
+name = "task"
+band = "runtime"
+paths = ["src/task"]
+
+[[module]]
+name = "reflect"
+band = "runtime"
+paths = ["src/reflect"]
+
+[[module]]
+name = "ecs"
+band = "runtime"
+paths = ["src/ecs"]
+
+# ---------------------------------------------------------------- content
+
+[[module]]
+name = "gpu"
+band = "content"
+paths = ["src/gpu"]
+
+[[module]]
+name = "gpu/*"
+band = "content"
+paths = ["src/gpu/*"]
+
+[[module]]
+name = "cook"
+band = "content"
+paths = ["tools/cook/lib"]
+explicit_only = true
+
+[[module]]
+name = "asset"
+band = "content"
+paths = ["src/asset"]
+
+[[module]]
+name = "render"
+band = "content"
+paths = ["src/render"]
+
+# ---------------------------------------------------------------- gameplay
+
+[[module]]
+name = "anim"
+band = "gameplay"
+paths = ["src/anim"]
+
+[[module]]
+name = "physics"
+band = "gameplay"
+paths = ["src/physics"]   # includes src/physics/2d
+
+[[module]]
+name = "audio"
+band = "gameplay"
+paths = ["src/audio"]
+
+[[module]]
+name = "input"
+band = "gameplay"
+paths = ["src/input"]
+
+[[module]]
+name = "net"
+band = "gameplay"
+paths = ["src/net"]
+
+[[module]]
+name = "ui"
+band = "gameplay"
+paths = ["src/ui"]
+
+[[module]]
+name = "text"
+band = "gameplay"
+paths = ["src/text"]
+
+[[module]]
+name = "world/*"
+band = "gameplay"
+paths = ["src/world/*"]   # vfx, sky, terrain, water, decal, streaming
+
+[[module]]
+name = "gameplay"
+band = "gameplay"
+paths = []
+headers = ["de_gameplay.h"]   # shared public API of the gameplay/* modules
+
+[[module]]
+name = "gameplay/*"
+band = "gameplay"
+paths = ["src/gameplay/*"]    # nav, tilemap, video
+
+# ---------------------------------------------------------------- host
+
+[[module]]
+name = "host"
+band = "host"
+paths = ["src/host"]          # includes src/host/bridges and src/host/debug
+headers = ["de_game.h"]
+
+[[module]]
+name = "services"
+band = "host"
+paths = []
+headers = ["de_services.h"]   # shared public API of the services/* modules
+
+[[module]]
+name = "services/*"
+band = "host"
+paths = ["src/services/*"]    # steam, crash, mods, save, bind
+
+# ---------------------------------------------------------------- groups
+# Members of a group may include each other in both directions and count as one node for
+# cycle detection.
+
+[[group]]
+members = ["core", "platform"]
+why = "Logging and the heap need platform threads and atomics; platform uses the core allocator interface."
+
+# ---------------------------------------------------------------- same-band edges
+
+# runtime
+[[allow]]
+from = "ecs"
+to = "task"
+why = "ECS schedules run systems as task-graph jobs (SPEC §7.3); de_ecs.h includes de_task.h."
+
+[[allow]]
+from = "ecs"
+to = "reflect"
+why = "Components are registered through reflection (SPEC §7.1); de_ecs.h includes de_reflect.h."
+
+# content
+[[allow]]
+from = "gpu/*"
+to = "gpu"
+why = "Each RHI backend implements the de_gpu.h interface (SPEC §12.1)."
+
+[[allow]]
+from = "render"
+to = "gpu"
+why = "The renderer records work through the RHI (SPEC §12.1); de_render.h includes de_gpu.h."
+
+[[allow]]
+from = "render"
+to = "asset"
+why = "The renderer consumes meshes, textures and materials from the asset system; de_render.h includes de_asset.h."
+
+[[allow]]
+from = "asset"
+to = "gpu"
+why = "GPU-resident asset types (textures, buffers) are created through the RHI (DENG-60: OPTIONAL_DEPS gpu)."
+
+[[allow]]
+from = "asset"
+to = "cook"
+why = "Dev builds only (DE_HAS_COOKER): the asset pipeline runs the cooker library in-process (SPEC §11.5, S08 DENG-209). Shipping does not link it."
+
+# gameplay
+[[allow]]
+from = "ui"
+to = "text"
+why = "UI lays out and draws shaped text (SPEC §17.2); de_ui.h includes de_text.h."
+
+[[allow]]
+from = "ui"
+to = "input"
+why = "UI focus and navigation read input actions (SPEC §17.2)."
+
+[[allow]]
+from = "net"
+to = "physics"
+why = "Rollback and prediction save and restore physics state (SPEC §16.2)."
+
+[[allow]]
+from = "gameplay/nav"
+to = "physics"
+why = "Navmesh generation and agent avoidance query physics colliders (DENG-60: OPTIONAL_DEPS physics)."
+
+[[allow]]
+from = "gameplay/*"
+to = "gameplay"
+why = "Each gameplay/* module implements its part of de_gameplay.h."
+
+[[allow]]
+from = "world/*"
+to = "physics"
+why = "World systems (terrain, water, streaming cells, vfx collision) create and query physics bodies."
+
+[[allow]]
+from = "gameplay/video"
+to = "audio"
+why = "Video playback feeds its sound track to the audio mixer (DENG-60: OPTIONAL_DEPS audio)."
+
+# host
+[[allow]]
+from = "services/*"
+to = "services"
+why = "Each services/* module implements its part of de_services.h."
+
+[[allow]]
+from = "host"
+to = "services"
+why = "The app host owns and ticks the services (SPEC §10)."
+
+[[allow]]
+from = "host"
+to = "services/*"
+why = "The app host creates the crash, mods, save, steam and bind services (DENG-60: host DEPS crash mods save, OPTIONAL_DEPS steam)."
+
+# ---------------------------------------------------------------- forbidden edges
+# Never add an [[allow]] entry for these. The check fails if one exists.
+
+[[forbid]]
+from = "anim"
+to = "physics"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+[[forbid]]
+from = "physics"
+to = "anim"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+[[forbid]]
+from = "audio"
+to = "physics"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+[[forbid]]
+from = "physics"
+to = "audio"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+[[forbid]]
+from = "anim"
+to = "audio"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+[[forbid]]
+from = "audio"
+to = "anim"
+why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"

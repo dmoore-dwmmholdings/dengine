@@ -1,0 +1,21 @@
+bands = ["low"]
+
+[[module]]
+name = "anim"
+band = "low"
+paths = ["src/anim"]
+
+[[module]]
+name = "physics"
+band = "low"
+paths = ["src/physics"]
+
+[[allow]]
+from = "anim"
+to = "physics"
+why = "fixture: contradicts the forbid below"
+
+[[forbid]]
+from = "anim"
+to = "physics"
+why = "fixture: never"
