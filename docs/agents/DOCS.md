@@ -107,6 +107,7 @@ Read before you plan; keep it to the pages that matter for the issue.
 - Every tool takes the space key `DENG`.
 - `search_pages` matches whole words and is **not ranked**. Read several results.
 - `update_page` **replaces** the body (see §4.3). `create_page` refuses a title that exists.
+- **No empty table cells.** A Markdown table with an empty cell (`| |`) makes `create_page`/`update_page` fail with "Internal error". `create_page` then leaves an empty page behind. Put `–` in cells with no value. After an error, check with `get_page` whether the page exists before you retry, and retry with `update_page`.
 - An empty result can mean "not visible to you". The `DENG` space is company-visible, so this should not happen; if it does, report it.
 - Every write is recorded against the user whose token the connection uses. Write as a careful teammate would.
 - `list_stubs DENG` lists `[[links]]` to pages nobody has written. Link a page that should exist even before it is written; the stub list is the docs to-do list.
