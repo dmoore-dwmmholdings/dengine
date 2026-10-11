@@ -4,7 +4,12 @@
  * first and mounted as scratch:/. Changes are made with native calls (stdio, rename) or with
  * the VFS (de_file_write_all_atomic). OS notification latency varies, so the tests poll in a
  * loop until the expected events arrive (with a generous timeout), then keep polling for a
- * quiet period to prove that nothing more comes. CTest runs every test in its own process. */
+ * quiet period to prove that nothing more comes. CTest runs every test in its own process.
+ *
+ * Debounce bounds take the time just BEFORE the change that starts the window: the backend
+ * stamps a change when its thread posts it, which can be before the call that made the change
+ * returns (inotify posts at close(), inside write_file). A time taken after the call is not a
+ * lower bound (DENG-370: 0.22 ms too late under ASan on CI). */
 #include "de_test.h"
 
 #include <dengine/de_debug.h>
@@ -201,9 +206,10 @@ static void start(watch_fx *f, const char *vdir, bool recursive, u32 debounce_ms
 TEST_F(watch, create, watch_fx) {
     fresh_dir(f, "create");
     start(f, "scratch:/", false, 100);
+    u64 a_start = de_time_now_ns();
     write_file(f, "a.txt", "hello");
-    make_dir(f, "d");
-    u64 last_change = de_time_now_ns();
+    u64 d_start = de_time_now_ns();
+    make_dir(f, "d"); /* a one-letter name: the shortest ReadDirectoryChangesW record */
     pump(f->w, f->r, 2, 400);
     dump(f->r);
     ASSERT_EQ(f->r->count, 2u);
@@ -214,8 +220,9 @@ TEST_F(watch, create, watch_fx) {
     EXPECT_FALSE(f->r->ev[a].is_dir);
     EXPECT_TRUE(f->r->ev[d].is_dir);
     EXPECT_FALSE(f->r->ev[a].has_old);
-    /* Never before the debounce window has passed since the last change. */
-    EXPECT_GE(f->r->ev[a].time_ns, last_change + 100 * MS);
+    /* Never before the debounce window has passed since the path's last change. */
+    EXPECT_GE(f->r->ev[a].time_ns, a_start + 100 * MS);
+    EXPECT_GE(f->r->ev[d].time_ns, d_start + 100 * MS);
     EXPECT_LT(a, d); /* oldest first */
 }
 
@@ -227,8 +234,8 @@ TEST_F(watch, modify_debounced, watch_fx) {
     de_sleep_ns(8 * MS);
     write_file(f, "a.txt", "v2");
     de_sleep_ns(8 * MS);
+    u64 last_write = de_time_now_ns(); /* before the write: see the top of the file */
     write_file(f, "a.txt", "v3");
-    u64 last_write = de_time_now_ns();
     pump(f->w, f->r, 1, 600);
     dump(f->r);
     ASSERT_EQ(f->r->count, 1u);
@@ -241,20 +248,58 @@ TEST_F(watch, delete, watch_fx) {
     fresh_dir(f, "delete");
     write_file(f, "a.txt", "a");
     write_file(f, "b.txt", "b");
-    make_dir(f, "gone");
+    make_dir(f, "gone/inner");
+    write_file(f, "gone/inner/x.txt", "x");
     start(f, "scratch:/", true, 100);
     remove_path(f, "a.txt");
+    /* A tree that existed before the watch: Windows cannot stat a deleted path, so is_dir comes
+     * from the directories its backend knows (DENG-370). */
+    remove_path(f, "gone/inner/x.txt");
+    remove_path(f, "gone/inner");
     remove_path(f, "gone");
     /* Created and deleted within one window: nothing to report. */
     write_file(f, "brief.txt", "x");
     remove_path(f, "brief.txt");
-    pump(f->w, f->r, 2, 500);
+    make_dir(f, "brief_dir");
+    remove_path(f, "brief_dir");
+    pump(f->w, f->r, 4, 500);
     dump(f->r);
-    ASSERT_EQ(f->r->count, 2u);
-    ASSERT_TRUE(find_event(f->r, "scratch:/a.txt", DE_WATCH_DELETED) >= 0);
+    ASSERT_EQ(f->r->count, 4u);
+    int a = find_event(f->r, "scratch:/a.txt", DE_WATCH_DELETED);
+    ASSERT_TRUE(a >= 0);
+    EXPECT_FALSE(f->r->ev[a].is_dir);
+    int x = find_event(f->r, "scratch:/gone/inner/x.txt", DE_WATCH_DELETED);
+    ASSERT_TRUE(x >= 0);
+    EXPECT_FALSE(f->r->ev[x].is_dir);
+    int i = find_event(f->r, "scratch:/gone/inner", DE_WATCH_DELETED);
+    ASSERT_TRUE(i >= 0);
+    EXPECT_TRUE(f->r->ev[i].is_dir);
     int g = find_event(f->r, "scratch:/gone", DE_WATCH_DELETED);
     ASSERT_TRUE(g >= 0);
     EXPECT_TRUE(f->r->ev[g].is_dir);
+
+    /* A directory made and moved after the start is known too: deleting it reports is_dir. */
+    de_file_watch_destroy(f->w);
+    f->w = NULL;
+    memset(f->r, 0, sizeof *f->r);
+    start(f, "scratch:/", true, 100);
+    make_dir(f, "later/sub");
+    pump(f->w, f->r, 2, 300);
+    memset(f->r, 0, sizeof *f->r);
+    rename_path(f, "later", "moved");
+    pump(f->w, f->r, 1, 300);
+    memset(f->r, 0, sizeof *f->r);
+    remove_path(f, "moved/sub");
+    remove_path(f, "moved");
+    pump(f->w, f->r, 2, 500);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 2u);
+    int s = find_event(f->r, "scratch:/moved/sub", DE_WATCH_DELETED);
+    int m = find_event(f->r, "scratch:/moved", DE_WATCH_DELETED);
+    ASSERT_TRUE(s >= 0);
+    ASSERT_TRUE(m >= 0);
+    EXPECT_TRUE(f->r->ev[s].is_dir);
+    EXPECT_TRUE(f->r->ev[m].is_dir);
 }
 
 TEST_F(watch, rename, watch_fx) {
@@ -502,6 +547,124 @@ TEST_F(watch, destroy_pending, watch_fx) {
     EXPECT_EQ(f->r->count, 0u);
 }
 
+/* The known-directory set the Windows backend keeps (DENG-370). Portable, so tested here. */
+static bool dirset_has(const de__watch_dirset *s, const char *rel) {
+    return de__watch_dirset_has(s, rel, strlen(rel));
+}
+
+static bool dirset_add(de__watch_dirset *s, const char *rel) {
+    return de__watch_dirset_add(s, rel, strlen(rel));
+}
+
+static bool dirset_remove(de__watch_dirset *s, const char *rel) {
+    return de__watch_dirset_remove_tree(s, rel, strlen(rel));
+}
+
+TEST_F(watch, dirset, watch_fx) {
+    counting cnt = {de_heap_allocator(), 0, 0};
+    de_allocator a = {cnt_alloc, cnt_realloc, cnt_free, &cnt};
+    de__watch_dirset s;
+    de__watch_dirset_init(&s, &a, false);
+    EXPECT_FALSE(dirset_has(&s, "a"));
+    EXPECT_FALSE(dirset_remove(&s, "a"));
+    EXPECT_TRUE(dirset_add(&s, "")); /* the watched directory itself: not stored */
+    EXPECT_EQ(s.count, 0u);
+    ASSERT_TRUE(dirset_add(&s, "a"));
+    ASSERT_TRUE(dirset_add(&s, "a/b"));
+    ASSERT_TRUE(dirset_add(&s, "a/b/c"));
+    ASSERT_TRUE(dirset_add(&s, "a/bc"));
+    ASSERT_TRUE(dirset_add(&s, "ab"));
+    ASSERT_TRUE(dirset_add(&s, "a/b")); /* again: no duplicate */
+    EXPECT_EQ(s.count, 5u);
+    EXPECT_TRUE(dirset_has(&s, "a/b"));
+    EXPECT_FALSE(dirset_has(&s, "a/b/"));
+    EXPECT_FALSE(dirset_has(&s, "A/B")); /* case matters unless the set says otherwise */
+    /* A removal takes the path and everything below it, not names that only share a prefix. */
+    EXPECT_TRUE(dirset_remove(&s, "a/b"));
+    EXPECT_EQ(s.count, 3u);
+    EXPECT_FALSE(dirset_has(&s, "a/b"));
+    EXPECT_FALSE(dirset_has(&s, "a/b/c"));
+    EXPECT_TRUE(dirset_has(&s, "a"));
+    EXPECT_TRUE(dirset_has(&s, "a/bc"));
+    EXPECT_TRUE(dirset_has(&s, "ab"));
+    EXPECT_FALSE(dirset_remove(&s, "a/b/c")); /* already gone */
+
+    /* Enough entries to grow the table many times and give long probe runs, then remove every
+     * other subtree: the entries that stay must all still be found (backward-shift deletion). */
+    char p[64];
+    for (u32 i = 0; i < 500; ++i) {
+        snprintf(p, sizeof p, "t%u", (unsigned)i);
+        ASSERT_TRUE(dirset_add(&s, p));
+        for (u32 j = 0; j < 3; ++j) {
+            snprintf(p, sizeof p, "t%u/s%u", (unsigned)i, (unsigned)j);
+            ASSERT_TRUE(dirset_add(&s, p));
+        }
+    }
+    EXPECT_EQ(s.count, 2003u);
+    for (u32 i = 0; i < 500; i += 2) {
+        snprintf(p, sizeof p, "t%u", (unsigned)i);
+        EXPECT_TRUE(dirset_remove(&s, p));
+    }
+    EXPECT_EQ(s.count, 1003u);
+    u32 wrong = 0;
+    for (u32 i = 0; i < 500; ++i) {
+        snprintf(p, sizeof p, "t%u", (unsigned)i);
+        wrong += dirset_has(&s, p) != (i % 2 == 1) ? 1u : 0u;
+        for (u32 j = 0; j < 3; ++j) {
+            snprintf(p, sizeof p, "t%u/s%u", (unsigned)i, (unsigned)j);
+            wrong += dirset_has(&s, p) != (i % 2 == 1) ? 1u : 0u;
+        }
+    }
+    EXPECT_EQ(wrong, 0u);
+    de__watch_dirset_clear(&s);
+    EXPECT_EQ(s.count, 0u);
+    EXPECT_FALSE(dirset_has(&s, "t1"));
+
+    /* Windows names: ASCII letters compare without case. */
+    de__watch_dirset n;
+    de__watch_dirset_init(&n, &a, true);
+    ASSERT_TRUE(dirset_add(&n, "Gone"));
+    ASSERT_TRUE(dirset_add(&n, "Gone/Inner"));
+    ASSERT_TRUE(dirset_add(&n, "gone/inner")); /* the same directory */
+    EXPECT_EQ(n.count, 2u);
+    EXPECT_TRUE(dirset_has(&n, "GONE/inner"));
+    EXPECT_TRUE(dirset_remove(&n, "gONE"));
+    EXPECT_EQ(n.count, 0u);
+    de__watch_dirset_free(&n);
+
+    /* Scans read the tree on disk: directories only, as deep as the watch reports. */
+    fresh_dir(f, "dirset");
+    make_dir(f, "x/y/z");
+    make_dir(f, "w");
+    write_file(f, "x/file.txt", "f");
+    write_file(f, "top.txt", "t");
+    de__watch_dirset_scan(&s, f->dir, "", 0, true);
+    EXPECT_EQ(s.count, 4u);
+    EXPECT_TRUE(dirset_has(&s, "x"));
+    EXPECT_TRUE(dirset_has(&s, "x/y"));
+    EXPECT_TRUE(dirset_has(&s, "x/y/z"));
+    EXPECT_TRUE(dirset_has(&s, "w"));
+    EXPECT_FALSE(dirset_has(&s, "x/file.txt"));
+    EXPECT_FALSE(dirset_has(&s, "top.txt"));
+    de__watch_dirset_clear(&s);
+    de__watch_dirset_scan(&s, f->dir, "", 0, false); /* not recursive: the top level only */
+    EXPECT_EQ(s.count, 2u);
+    EXPECT_TRUE(dirset_has(&s, "x"));
+    EXPECT_TRUE(dirset_has(&s, "w"));
+    de__watch_dirset_clear(&s);
+    de__watch_dirset_scan(&s, f->dir, "x", 1, true); /* a directory that arrived: it and below */
+    EXPECT_EQ(s.count, 3u);
+    EXPECT_TRUE(dirset_has(&s, "x/y/z"));
+    de__watch_dirset_clear(&s);
+    de__watch_dirset_scan(&s, f->dir, "x", 1, false);
+    EXPECT_EQ(s.count, 1u);
+    de__watch_dirset_scan(&s, f->dir, "missing", 7, true); /* gone again: just the name */
+    EXPECT_TRUE(dirset_has(&s, "missing"));
+    de__watch_dirset_free(&s);
+    EXPECT_EQ(cnt.bytes, 0);
+    EXPECT_EQ(cnt.blocks, 0);
+}
+
 TEST_F(watch, invalid_args, watch_fx) {
     fresh_dir(f, "invalid");
     write_file(f, "file.txt", "x");
@@ -538,8 +701,8 @@ TEST_F(watch, debounce_cvar, watch_fx) {
     EXPECT_EQ(de_cvar_int(cv), (i64)DE_WATCH_DEBOUNCE_DEFAULT_MS);
     /* The window is read at every poll. */
     ASSERT_EQ(de_cvar_set(cv, "300"), DE_OK);
+    u64 changed = de_time_now_ns(); /* before the write: see the top of the file */
     write_file(f, "a.txt", "a");
-    u64 changed = de_time_now_ns();
     pump(f->w, f->r, 1, 100);
     ASSERT_EQ(f->r->count, 1u);
     EXPECT_GE(f->r->ev[0].time_ns, changed + 300 * MS);

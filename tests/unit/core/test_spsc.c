@@ -251,7 +251,11 @@ TEST(spsc, capacity_edges) {
 
 /* ---------- two-thread stress ---------- */
 
-#define STRESS_COUNT 10000000ull
+/* TSan builds pass a smaller count (tests/unit/core/CMakeLists.txt, DENG-370). */
+#ifndef DE_SPSC_STRESS_COUNT
+#define DE_SPSC_STRESS_COUNT 10000000ull
+#endif
+#define STRESS_COUNT DE_SPSC_STRESS_COUNT
 
 typedef struct stress_ctx {
     de_spsc *q;

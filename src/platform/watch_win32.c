@@ -11,6 +11,11 @@
  * reports the two halves of a rename next to each other, so a counter is the cookie. A
  * completion with zero bytes (the buffer overflowed) or ERROR_NOTIFY_ENUM_DIR -> RESCAN.
  *
+ * A removed path cannot be asked whether it was a directory, so the backend keeps the set of
+ * directories in the tree (de__watch_dirset, DENG-370): scanned before create returns, then kept
+ * current from ADDED / REMOVED / RENAMED (a directory added or renamed here is scanned, so the
+ * directories inside it are known too), and scanned again after an overflow.
+ *
  * The first read is issued by the watcher thread before de__watch_backend_start returns (the
  * start waits for it), so changes made after create are not lost. The thread issues every
  * read itself because Windows cancels pending I/O of a thread that exits. */
@@ -28,6 +33,7 @@
 #if DE__WATCH_ENABLED
 
 #include <windows.h>
+#include <stddef.h>
 #include <string.h>
 
 #define RDC_BUF_BYTES 65536u
@@ -48,7 +54,10 @@ struct de__watch_backend {
     de_result start_result;
     DWORD start_error; /* GetLastError of a failed first read, on the watcher thread */
     u64 cookie;        /* rename pairs */
-    DWORD *buf;        /* RDC_BUF_BYTES, DWORD-aligned as ReadDirectoryChangesW requires */
+    bool moved_dir;    /* the last RENAMED_OLD_NAME was a directory */
+    const char *native_dir;
+    de__watch_dirset dirs; /* only the watcher thread uses it after start */
+    DWORD *buf;            /* RDC_BUF_BYTES, DWORD-aligned as ReadDirectoryChangesW requires */
     wchar_t root[WPATH_MAX];
     size_t root_len; /* in wchar_t, no trailing separator */
 };
@@ -80,11 +89,17 @@ static bool is_directory(const de__watch_backend *b, const wchar_t *name, size_t
 static void handle_buffer(de__watch_backend *b, DWORD bytes) {
     const u8 *p = (const u8 *)b->buf;
     const u8 *end = p + bytes;
+    /* A record is its header and FileNameLength bytes of name. The last record is not padded to
+     * sizeof(FILE_NOTIFY_INFORMATION): a one-letter name makes a 14-byte record, which a
+     * `sizeof` bound used to drop (DENG-370). */
+    const size_t head = offsetof(FILE_NOTIFY_INFORMATION, FileName);
     char rel[DE_FS_PATH_MAX];
     for (;;) {
-        if (p + sizeof(FILE_NOTIFY_INFORMATION) > end)
+        if ((size_t)(end - p) < head)
             break;
         const FILE_NOTIFY_INFORMATION *n = (const FILE_NOTIFY_INFORMATION *)p;
+        if (n->FileNameLength > (size_t)(end - p) - head)
+            break;
         size_t wlen = n->FileNameLength / sizeof(WCHAR);
         int rl = WideCharToMultiByte(CP_UTF8, 0, n->FileName, (int)wlen, rel, (int)sizeof rel - 1,
                                      NULL, NULL);
@@ -95,25 +110,37 @@ static void handle_buffer(de__watch_backend *b, DWORD bytes) {
             }
             rel[rl] = '\0';
             size_t len = (size_t)rl;
+            bool dir;
             switch (n->Action) {
             case FILE_ACTION_ADDED:
-                de__watch_post(b->w, DE__WATCH_RAW_CREATED, rel, len,
-                               is_directory(b, n->FileName, wlen), 0);
+                dir = is_directory(b, n->FileName, wlen);
+                if (dir) /* also what is already inside (moved in from outside the tree) */
+                    de__watch_dirset_scan(&b->dirs, b->native_dir, rel, len, b->recursive);
+                de__watch_post(b->w, DE__WATCH_RAW_CREATED, rel, len, dir, 0);
                 break;
             case FILE_ACTION_REMOVED:
-                de__watch_post(b->w, DE__WATCH_RAW_DELETED, rel, len, false, 0);
+                dir = de__watch_dirset_remove_tree(&b->dirs, rel, len);
+                de__watch_post(b->w, DE__WATCH_RAW_DELETED, rel, len, dir, 0);
                 break;
             case FILE_ACTION_MODIFIED:
-                de__watch_post(b->w, DE__WATCH_RAW_MODIFIED, rel, len,
-                               is_directory(b, n->FileName, wlen), 0);
+                /* A directory whose contents changed (the common layer drops it); it may be
+                 * gone already when a deletion of its tree follows. */
+                dir =
+                    de__watch_dirset_has(&b->dirs, rel, len) || is_directory(b, n->FileName, wlen);
+                de__watch_post(b->w, DE__WATCH_RAW_MODIFIED, rel, len, dir, 0);
                 break;
             case FILE_ACTION_RENAMED_OLD_NAME:
                 ++b->cookie;
-                de__watch_post(b->w, DE__WATCH_RAW_MOVED_FROM, rel, len, false, b->cookie);
+                b->moved_dir = de__watch_dirset_remove_tree(&b->dirs, rel, len);
+                de__watch_post(b->w, DE__WATCH_RAW_MOVED_FROM, rel, len, b->moved_dir, b->cookie);
                 break;
             case FILE_ACTION_RENAMED_NEW_NAME:
-                de__watch_post(b->w, DE__WATCH_RAW_MOVED_TO, rel, len,
-                               is_directory(b, n->FileName, wlen), b->cookie);
+                /* Renamed again since: it was a directory if its old name was one. */
+                dir = is_directory(b, n->FileName, wlen) || b->moved_dir;
+                if (dir)
+                    de__watch_dirset_scan(&b->dirs, b->native_dir, rel, len, b->recursive);
+                b->moved_dir = false;
+                de__watch_post(b->w, DE__WATCH_RAW_MOVED_TO, rel, len, dir, b->cookie);
                 break;
             default:
                 break;
@@ -133,11 +160,21 @@ static bool issue_read(de__watch_backend *b) {
                                  RDC_FILTER, NULL, &b->ov, NULL) != 0;
 }
 
+/* Forgets the known directories and reads them from disk again. */
+static void rescan_dirs(de__watch_backend *b) {
+    de__watch_dirset_clear(&b->dirs);
+    de__watch_dirset_scan(&b->dirs, b->native_dir, "", 0, b->recursive);
+}
+
 static i32 watch_thread(void *user) {
     de__watch_backend *b = (de__watch_backend *)user;
     bool ok = issue_read(b);
     b->start_result = ok ? DE_OK : DE_ERR_IO;
     b->start_error = ok ? 0 : GetLastError();
+    /* After the read is pending, so a directory made from here on is in the scan or in an ADDED
+     * event (or both); before create returns, so the set is complete for what follows. */
+    if (ok)
+        rescan_dirs(b);
     de_sem_post(&b->started, 1);
     if (!ok)
         return 1;
@@ -159,9 +196,10 @@ static i32 watch_thread(void *user) {
                 return 1; /* the directory went away */
             bytes = 0;
         }
-        if (bytes == 0)
+        if (bytes == 0) {
+            rescan_dirs(b);
             de__watch_post(b->w, DE__WATCH_RAW_RESCAN, "", 0, true, 0);
-        else
+        } else
             handle_buffer(b, bytes);
         if (!issue_read(b))
             return 1;
@@ -169,6 +207,7 @@ static i32 watch_thread(void *user) {
 }
 
 static void free_backend(de__watch_backend *b) {
+    de__watch_dirset_free(&b->dirs);
     if (b->dir != INVALID_HANDLE_VALUE && b->dir != NULL)
         CloseHandle(b->dir);
     if (b->io_event != NULL)
@@ -190,6 +229,8 @@ de_result de__watch_backend_start(de_file_watch *w, const de__watch_info *info,
     b->w = w;
     b->alloc = info->alloc;
     b->recursive = info->recursive;
+    b->native_dir = info->native_dir;
+    de__watch_dirset_init(&b->dirs, info->alloc, true);
     b->dir = INVALID_HANDLE_VALUE;
     if (!to_wide(info->native_dir, b->root, WPATH_MAX)) {
         free_backend(b);
