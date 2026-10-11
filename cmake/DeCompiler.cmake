@@ -80,3 +80,11 @@ if(DE_SANITIZERS)
         add_link_options(-fsanitize=${_de_san_flag})
     endif()
 endif()
+
+# ---- C11 atomics on MSVC (DENG-147) ----
+# MSVC (cl, VS 17.5+) only provides <stdatomic.h> in C with /experimental:c11atomics.
+# clang-cl uses Clang's own <stdatomic.h> and needs nothing. src/platform/de_atomic.h is the user.
+if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(de_build_flags INTERFACE
+        "$<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>")
+endif()
