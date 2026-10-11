@@ -5,10 +5,10 @@
  *
  * Hooks for the other S03 platform tasks:
  * - DENG-246 (raw input): de_platform_pump() hands every input event (keyboard, mouse, joystick,
- *   gamepad, touch, clipboard, sensor, pen) to de__platform_sdl_route_input(). That queues it in
- * the input ring below, or calls the hook installed with de__platform_sdl_set_input_hook().
- * DENG-246 either installs a hook or drains the ring with de__platform_sdl_input_drain() each
- * frame.
+ *   gamepad, touch, clipboard, sensor, pen) to de__platform_sdl_route_input(), which calls the
+ *   hook installed with de__platform_sdl_set_input_hook(). DENG-246 installs its translator as
+ *   that hook at init, so each event becomes a de_raw_input_event while the pump polls it. No
+ *   SDL_Event is kept (DENG-368 removed the SDL_Event ring that DENG-245 had as a fallback).
  * - DENG-250 (native surfaces): de__platform_sdl_window_get() maps a de_window to its SDL_Window.
  *   surface_sdl.c adds the window flags for the surface kind, and releases a window's Metal view
  *   before the window and the Vulkan loader before SDL_Quit (the hooks at the end of this file).
@@ -19,9 +19,6 @@
 #include <dengine/de_platform.h>
 
 #include <SDL3/SDL.h>
-
-/** Capacity of the input ring, in events. A full ring drops the newest event and counts it. */
-#define DE__PLATFORM_SDL_INPUT_RING 512
 
 /** Reserved address space of the per-pump drop-path arena. */
 #define DE__PLATFORM_SDL_PATH_ARENA_BYTES ((size_t)16 << 20)
@@ -38,7 +35,7 @@ typedef struct de__platform_sdl_window {
     SDL_MetalView metal_view;  /**< made by the first de_window_native() of a METAL window */
 } de__platform_sdl_window;
 
-/** Called for each routed input event, instead of queueing it in the ring. */
+/** Called for each routed input event, during de_platform_pump(). */
 typedef void (*de__platform_sdl_input_hook)(const SDL_Event *ev, void *user);
 
 /** The platform state, created by de_platform_init(). */
@@ -51,9 +48,7 @@ typedef struct de__platform_sdl_state {
     /* Displays in SDL's order; refreshed on init and on display added/removed events. */
     SDL_DisplayID displays[32];
     u32 display_count;
-    /* Input ring (single-threaded: the pump pushes, the input layer pops, both on main). */
-    SDL_Event input[DE__PLATFORM_SDL_INPUT_RING];
-    u32 input_head, input_count, input_dropped;
+    /* Input hook (main thread): DENG-246's translator into the raw input ring. */
     de__platform_sdl_input_hook input_hook;
     void *input_hook_user;
     /* Per-pump arena for DE_EV_DROP_FILE paths; reset at the start of every pump. */
@@ -94,16 +89,13 @@ void de__platform_sdl_windows_destroy_all(de__platform_sdl_state *st);
 /* ---- input routing (events_sdl.c) ---- */
 
 /**
- * Hands one input event to the input layer: the installed hook if there is one, otherwise the
- * input ring. de_platform_pump() calls it; DENG-246 does not need to.
+ * Hands one input event to the installed input hook. Without a hook (before the devices start
+ * or after they shut down) the event is discarded: SDL frees event text at the next poll, so an
+ * SDL_Event cannot be kept for later. de_platform_pump() calls it; DENG-246 does not need to.
  */
 void de__platform_sdl_route_input(const SDL_Event *ev);
-/** Installs (or with NULL removes) the input hook. Events already in the ring stay there. */
+/** Installs (or with NULL removes) the input hook. */
 void de__platform_sdl_set_input_hook(de__platform_sdl_input_hook fn, void *user);
-/** Pops up to `max` queued input events, oldest first, into `out`; returns how many. */
-u32 de__platform_sdl_input_drain(SDL_Event *out, u32 max);
-/** Input events dropped because the ring was full, since init. */
-u32 de__platform_sdl_input_dropped(void);
 /** True for the SDL event types that de__platform_sdl_route_input() takes. */
 bool de__platform_sdl_is_input_event(Uint32 type);
 
@@ -113,7 +105,7 @@ bool de__platform_sdl_is_input_event(Uint32 type);
  * input ring, starts the gamepad and sensor subsystems (not when headless) and installs
  * de__platform_sdl_devices_route() as the input hook above, so every input event is translated
  * while the pump polls it. That matters: SDL frees event strings (text input) at the next poll.
- * Removing the hook (tests of the DENG-245 ring) sends events to the SDL_Event ring instead. */
+ * de__platform_sdl_devices_shutdown() removes the hook again. */
 
 /** Device sensors open at once. */
 #define DE__PLATFORM_SDL_SENSOR_MAX 8

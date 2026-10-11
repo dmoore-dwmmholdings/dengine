@@ -17,17 +17,9 @@ void de__platform_sdl_route_input(const SDL_Event *ev) {
     de__platform_sdl_state *st = de__platform_sdl_get();
     if (!st)
         return;
-    if (st->input_hook) {
+    /* No hook only before de__platform_sdl_devices_init() or after its shutdown: discard. */
+    if (st->input_hook)
         st->input_hook(ev, st->input_hook_user);
-        return;
-    }
-    if (st->input_count == DE__PLATFORM_SDL_INPUT_RING) {
-        st->input_dropped++;
-        return;
-    }
-    u32 tail = (st->input_head + st->input_count) % DE__PLATFORM_SDL_INPUT_RING;
-    st->input[tail] = *ev;
-    st->input_count++;
 }
 
 void de__platform_sdl_set_input_hook(de__platform_sdl_input_hook fn, void *user) {
@@ -37,25 +29,6 @@ void de__platform_sdl_set_input_hook(de__platform_sdl_input_hook fn, void *user)
     DE__PLATFORM_SDL_ASSERT_MAIN(st);
     st->input_hook = fn;
     st->input_hook_user = fn ? user : NULL;
-}
-
-u32 de__platform_sdl_input_drain(SDL_Event *out, u32 max) {
-    de__platform_sdl_state *st = de__platform_sdl_get();
-    if (!st || !out)
-        return 0;
-    DE__PLATFORM_SDL_ASSERT_MAIN(st);
-    u32 n = 0;
-    while (n < max && st->input_count > 0) {
-        out[n++] = st->input[st->input_head];
-        st->input_head = (st->input_head + 1u) % DE__PLATFORM_SDL_INPUT_RING;
-        st->input_count--;
-    }
-    return n;
-}
-
-u32 de__platform_sdl_input_dropped(void) {
-    de__platform_sdl_state *st = de__platform_sdl_get();
-    return st ? st->input_dropped : 0u;
 }
 
 /* ---------- App events ---------- */
