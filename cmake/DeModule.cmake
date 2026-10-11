@@ -22,8 +22,10 @@
 #                  uses them with `#if DE_HAS_<X>`.
 #   LIBS           Other link items (de_tp_* vendored targets, system libraries, frameworks),
 #                  linked PRIVATE. They also reach consumers of the aggregate `dengine` library.
-#   DETERMINISTIC  SPEC §5.7: every TU of the module gets -ffp-contract=off (Clang/GCC) or
-#                  /fp:precise (MSVC). Sets the target property DE_DETERMINISTIC.
+#   DETERMINISTIC  SPEC §5.7: every TU of the module gets DE_DETERMINISTIC_FLAGS
+#                  (cmake/DeCompiler.cmake): -ffp-contract=off (Clang/GCC),
+#                  /clang:-ffp-contract=off (clang-cl) or /fp:precise (MSVC cl). Sets the target
+#                  property DE_DETERMINISTIC.
 #   OPTIONAL_OPTION  Name of a variable (usually DE_WITH_<X> or DE_HAS_<X>). The module is skipped
 #                  when it is false. Independently of this, a module is always skipped when
 #                  DE_HAS_<NAME> (cmake/DeOptions.cmake) is defined and false.
