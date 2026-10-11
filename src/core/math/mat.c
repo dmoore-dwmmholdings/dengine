@@ -3,6 +3,7 @@
  * Column-major: element (row r, column c) is m[c * N + r]. The projection and view builders are
  * in proj.c. */
 #include "core/math/math_internal.h"
+#include "core/math/math_simd.h"
 
 /* ---- de_mat3 ---- */
 
@@ -73,7 +74,7 @@ de_mat4 de_m4_identity(void) {
     return m;
 }
 
-de_mat4 de_m4_mul(const de_mat4 *a, const de_mat4 *b) {
+de_mat4 de__m4_mul_scalar(const de_mat4 *a, const de_mat4 *b) {
     de_mat4 r;
     for (int c = 0; c < 4; ++c)
         for (int i = 0; i < 4; ++i)
@@ -90,7 +91,7 @@ de_mat4 de_m4_transpose(const de_mat4 *m) {
     return r;
 }
 
-de_mat4 de_m4_inverse(const de_mat4 *mat) {
+de_mat4 de__m4_inverse_scalar(const de_mat4 *mat) {
     /* Cofactor expansion through the 2x2 sub-determinants of the top and bottom half. Valid for
      * either storage order, because inverse(transpose(M)) = transpose(inverse(M)). */
     const f32 *m = mat->m;
@@ -149,7 +150,7 @@ de_mat4 de_m4_inverse_affine(const de_mat4 *m) {
     return r;
 }
 
-de_vec4 de_m4_mul_v4(const de_mat4 *m, de_vec4 v) {
+de_vec4 de__m4_mul_v4_scalar(const de_mat4 *m, de_vec4 v) {
     de_vec4 r;
     r.x = m->m[0] * v.x + m->m[4] * v.y + m->m[8] * v.z + m->m[12] * v.w;
     r.y = m->m[1] * v.x + m->m[5] * v.y + m->m[9] * v.z + m->m[13] * v.w;

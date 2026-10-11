@@ -46,6 +46,12 @@ de_add_module(
         math/affine.c
         math/geom.c
         math/proj.c
+        math/math_simd.h
+        math/simd_kernels.h
+        math/simd_dispatch.c
+        math/simd_sse.c
+        math/simd_avx2.c
+        math/simd_neon.c
 )
 
 # DENG-148: thread scratch uses a pthread key destructor; glibc < 2.34 keeps it in libpthread.
@@ -86,3 +92,44 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(de_core PRIVATE m)
     set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS m)
 endif()
+
+# DENG-242: fast-math SIMD paths. simd_sse.c and simd_avx2.c are built for their ISA only when the
+# target is x86-64 (on arm64 they compile to nothing); simd_dispatch.c checks cpuid before it
+# selects them, so the rest of the engine keeps the x86-64 baseline. simd_neon.c needs no flag.
+# -ffp-contract=off: the SIMD frustum culls rely on separate multiplies and adds to match the
+# scalar reference bit for bit; the kernels request FMA explicitly where they want it.
+# Never pass these files to de_mark_deterministic_sources (SPEC §5.7): they are fast math.
+set(_de_simd_x86 OFF)
+if(APPLE)
+    # CMAKE_SYSTEM_PROCESSOR is the host's on macOS; the target is CMAKE_OSX_ARCHITECTURES. An
+    # x86_64-only build (the Rosetta check) gets the flags. A universal build does not: per-arch
+    # flags cannot be passed per source file, so its x86_64 slice falls back to scalar (the ISA
+    # files check __SSE4_2__ / __AVX2__). Intel Macs are not a v1 target (DENG-2 Q3).
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(_de_simd_x86 ON)
+    elseif("x86_64" IN_LIST CMAKE_OSX_ARCHITECTURES)
+        message(STATUS "dengine: universal build; the x86_64 slice uses scalar fast math")
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")
+    set(_de_simd_x86 ON)
+endif()
+set(_de_simd_files math/simd_sse.c math/simd_avx2.c math/simd_neon.c)
+if(DE_COMPILER_FRONTEND STREQUAL "GNU")
+    set_property(SOURCE ${_de_simd_files} APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
+elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang") # clang-cl; MSVC cl does not contract by default
+    set_property(SOURCE ${_de_simd_files} APPEND PROPERTY COMPILE_OPTIONS /clang:-ffp-contract=off)
+endif()
+if(_de_simd_x86)
+    if(DE_COMPILER_FRONTEND STREQUAL "MSVC")
+        # MSVC cl accepts SSE4.2 intrinsics without a flag; clang-cl needs the target feature.
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            set_property(SOURCE math/simd_sse.c APPEND PROPERTY COMPILE_OPTIONS -msse4.2)
+        endif()
+        set_property(SOURCE math/simd_avx2.c APPEND PROPERTY COMPILE_OPTIONS /arch:AVX2)
+    else()
+        set_property(SOURCE math/simd_sse.c APPEND PROPERTY COMPILE_OPTIONS -msse4.2)
+        set_property(SOURCE math/simd_avx2.c APPEND PROPERTY COMPILE_OPTIONS -mavx2 -mfma)
+    endif()
+endif()
+# tests/unit/math registers an extra whole-binary run of test_simd at the SSE4.2 level on x86-64.
+set_property(GLOBAL PROPERTY DE_MATH_SIMD_X86 ${_de_simd_x86})

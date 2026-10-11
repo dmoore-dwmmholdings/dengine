@@ -3,6 +3,7 @@
  * Hamilton quaternions (x, y, z, w), w scalar. mul(a, b) applies b first, like matrices, so
  * de_quat_to_m3(a * b) = de_quat_to_m3(a) * de_quat_to_m3(b). */
 #include "core/math/math_internal.h"
+#include "core/math/math_simd.h"
 
 de_quat de_quat_identity(void) {
     return de__quat(0.0f, 0.0f, 0.0f, 1.0f);
@@ -14,7 +15,7 @@ de_quat de_quat_axis_angle(de_vec3 axis, f32 radians) {
     return de__quat(axis.x * s, axis.y * s, axis.z * s, cosf(h));
 }
 
-de_quat de_quat_mul(de_quat a, de_quat b) {
+de_quat de__quat_mul_scalar(de_quat a, de_quat b) {
     return de__quat(a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
                     a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
                     a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
@@ -76,7 +77,7 @@ de_quat de_quat_normalize(de_quat q) {
     return de__quat(q.x * inv, q.y * inv, q.z * inv, q.w * inv);
 }
 
-de_vec3 de_quat_rotate(de_quat q, de_vec3 v) {
+de_vec3 de__quat_rotate_scalar(de_quat q, de_vec3 v) {
     /* v' = v + w*t + u x t with u = (x, y, z), t = 2 (u x v): q v q* without building q*. */
     de_vec3 u = de__v3(q.x, q.y, q.z);
     de_vec3 t = de_v3_scale(de_v3_cross(u, v), 2.0f);
