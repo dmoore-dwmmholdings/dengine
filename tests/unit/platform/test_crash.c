@@ -463,6 +463,12 @@ TEST(crash, segv_report) {
     EXPECT_TRUE(strstr(r, bid) != NULL);
     int frames = count_backtrace_frames(r);
     EXPECT_GE(frames, 3);
+#if defined(__APPLE__)
+    /* macOS walks the trace from the faulting context (DENG-365): it starts at the faulting
+     * function, even though crash_null is a leaf without a frame record. Linux frames are
+     * addresses only (no -rdynamic), so the name is checked on Apple only. */
+    EXPECT_TRUE(strstr(r, "crash_null") != NULL);
+#endif
     EXPECT_TRUE(strstr(r, "end of core report") != NULL);
 
     /* The pending marker: `<stem>.pending` with report=<path>. */
@@ -695,6 +701,12 @@ static void expect_overflow_report(const crash_dir *d, int status, const char *t
     EXPECT_TRUE(strstr(r, "end of core report") != NULL);
     if (thread_line != NULL)
         EXPECT_TRUE(strstr(r, thread_line) != NULL);
+#if defined(__APPLE__)
+    /* The context walk follows the overflowing thread's frame chain (main thread and worker
+     * stacks have different bounds), so the recursion shows in the trace. */
+    EXPECT_GE(count_backtrace_frames(r), 3);
+    EXPECT_TRUE(strstr(r, "recurse_forever") != NULL);
+#endif
 }
 
 TEST(crash, stack_overflow_main) {

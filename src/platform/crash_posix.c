@@ -8,8 +8,17 @@
  *
  * Everything on the signal path is async-signal-safe: open/write/close, time, getpid, raise,
  * sigaction, nanosleep, backtrace/backtrace_symbols_fd (backtrace is called once at install so
- * that glibc loads libgcc_s then, not in the handler) and pthread_getname_np (a copy from the
- * thread structure on macOS, prctl on Linux). */
+ * that glibc loads libgcc_s then, not in the handler), pthread_getname_np (a copy from the
+ * thread structure on macOS, prctl on Linux) and, on macOS, pthread_get_stackaddr_np /
+ * pthread_get_stacksize_np (reads of the thread structure).
+ *
+ * Signal backtraces on macOS are walked from the faulting thread's context (pc, lr, then the
+ * frame-pointer chain), not taken with backtrace(): libc's backtrace() starts at the handler's
+ * own frame, which is on the alternate stack, and macOS 14 refuses to walk a frame outside the
+ * thread's stack, so it returns no frames at all (DENG-365). Newer macOS walks through _sigtramp,
+ * but still misses the faulting function when it is a leaf. Linux keeps backtrace(): glibc
+ * unwinds through the signal frame with CFI, and Linux code may be built without frame
+ * pointers. */
 #if defined(__linux__)
 #define _GNU_SOURCE /* pthread_getname_np, MAP_ANONYMOUS, sigaltstack under -std=c11 */
 #elif defined(__APPLE__)
@@ -32,6 +41,9 @@
 #include <sys/syscall.h>
 #endif
 #include <sys/types.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -216,10 +228,109 @@ void de_crash_thread_init(void) {
 
 /* ---------- Report ---------- */
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+#define DE__CRASH_CONTEXT_WALK 1
+#else
+#define DE__CRASH_CONTEXT_WALK 0
+#endif
+
+#if DE__CRASH_CONTEXT_WALK
+
+/* The walk reads frame records of other functions; ASan has nothing to say about those reads. */
+#if defined(__clang__) || defined(__GNUC__)
+#define DE__CRASH_NO_ASAN __attribute__((no_sanitize("address")))
+#else
+#define DE__CRASH_NO_ASAN
+#endif
+
+/* arm64e system code signs the return addresses it saves (pointer authentication); the
+ * signature sits in the bits above the 47-bit user address space. */
+static uintptr_t de__crash_strip_pac(uintptr_t a) {
+#if defined(__aarch64__)
+    return a & (((uintptr_t)1 << 47) - 1);
+#else
+    return a;
+#endif
+}
+
+/* True when a frame record (saved fp, saved return address) at `fp` lies inside [lo, hi). */
+static bool de__crash_frame_ok(uintptr_t fp, uintptr_t lo, uintptr_t hi) {
+    return fp != 0 && fp % sizeof(uintptr_t) == 0 && fp >= lo && fp <= hi - 2 * sizeof(uintptr_t);
+}
+
+/* Frames of the interrupted code from the signal context `ucv`: the faulting pc, the link
+ * register (arm64: the caller of a leaf function, which has no frame record yet), then the
+ * return address of each frame record on the frame-pointer chain. The chain is followed only
+ * while each record is aligned, inside this thread's stack and above the previous one, so a
+ * smashed stack ends the walk instead of faulting. Returns the frame count (0 when the context
+ * has no pc). */
+DE__CRASH_NO_ASAN static int de__crash_context_frames(const void *ucv, void **frames, int max) {
+    const ucontext_t *uc = (const ucontext_t *)ucv;
+    if (uc == NULL || uc->uc_mcontext == NULL || max <= 0)
+        return 0;
+    uintptr_t pc, fp, lr = 0;
+#if defined(__aarch64__)
+#if defined(__darwin_arm_thread_state64_get_pc)
+    pc = (uintptr_t)__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
+    lr = (uintptr_t)__darwin_arm_thread_state64_get_lr(uc->uc_mcontext->__ss);
+    fp = (uintptr_t)__darwin_arm_thread_state64_get_fp(uc->uc_mcontext->__ss);
+#else
+    pc = (uintptr_t)uc->uc_mcontext->__ss.__pc;
+    lr = (uintptr_t)uc->uc_mcontext->__ss.__lr;
+    fp = (uintptr_t)uc->uc_mcontext->__ss.__fp;
+#endif
+#else
+    pc = (uintptr_t)uc->uc_mcontext->__ss.__rip;
+    fp = (uintptr_t)uc->uc_mcontext->__ss.__rbp;
+#endif
+    pc = de__crash_strip_pac(pc);
+    lr = de__crash_strip_pac(lr);
+    if (pc == 0)
+        return 0;
+
+    pthread_t self = pthread_self();
+    uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self);
+    size_t size = pthread_get_stacksize_np(self);
+    uintptr_t lo = size < hi ? hi - size : 0;
+
+    int n = 0;
+    frames[n++] = (void *)pc;
+    if (lr != 0 && n < max) {
+        /* A function that set up its frame record saved lr in it; the chain below lists it. */
+        uintptr_t first_ret = 0;
+        if (de__crash_frame_ok(fp, lo, hi))
+            first_ret = de__crash_strip_pac(((const uintptr_t *)fp)[1]);
+        if (lr != first_ret)
+            frames[n++] = (void *)lr;
+    }
+    while (n < max && de__crash_frame_ok(fp, lo, hi)) {
+        const uintptr_t *rec = (const uintptr_t *)fp;
+        uintptr_t next = rec[0];
+        uintptr_t ret = de__crash_strip_pac(rec[1]);
+        if (ret == 0)
+            break;
+        frames[n++] = (void *)ret;
+        if (next <= fp)
+            break; /* the stack grows down: callers' records are higher */
+        fp = next;
+    }
+    return n;
+}
+
+#endif /* DE__CRASH_CONTEXT_WALK */
+
+/* `user` is the signal's ucontext_t, or NULL for a panic (written on the panicking thread's own
+ * stack, where backtrace() works). */
 static void de__crash_write_backtrace(intptr_t fd, void *user) {
+    static void *frames[DE__CRASH_MAX_FRAMES]; /* static: keep the alternate stack free */
+    int n = 0;
+#if DE__CRASH_CONTEXT_WALK
+    n = de__crash_context_frames(user, frames, DE__CRASH_MAX_FRAMES);
+#else
     (void)user;
-    void *frames[DE__CRASH_MAX_FRAMES];
-    int n = backtrace(frames, DE__CRASH_MAX_FRAMES);
+#endif
+    if (n <= 0)
+        n = backtrace(frames, DE__CRASH_MAX_FRAMES);
     char num[24];
     size_t len = de__crash_fmt_u64(num, (u64)(n > 0 ? n : 0), 10);
     de__crash_os_write(fd, "backtrace: ", 11);
@@ -245,7 +356,6 @@ static void de__crash_die(int sig) {
 }
 
 static void de__crash_signal_handler(int sig, siginfo_t *si, void *uc) {
-    (void)uc;
     int saved_errno = errno;
     switch (de__crash_enter(de__crash_self_id())) {
     case DE__CRASH_ENTER_OWNER: {
@@ -257,7 +367,9 @@ static void de__crash_signal_handler(int sig, siginfo_t *si, void *uc) {
         ev.fault_address = si != NULL ? (u64)(uintptr_t)si->si_addr : 0;
         ev.thread_id = de__crash_self_id();
         de__crash_thread_name(ev.thread_name, sizeof ev.thread_name);
-        (void)de__crash_write_report(&ev, &g_os_report);
+        /* The context lets the backtrace start at the faulting instruction. */
+        const de__crash_os_report rep = {NULL, de__crash_write_backtrace, uc};
+        (void)de__crash_write_report(&ev, &rep);
         de__crash_leave();
         break;
     }
