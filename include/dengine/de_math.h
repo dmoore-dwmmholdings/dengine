@@ -418,6 +418,58 @@ DE_API bool de_frustum_test_sphere(const de_frustum *f, de_vec3 center, f32 radi
 
 /* ================================ 3. Fast math, batch / SIMD APIs (DENG-242) =============== */
 
+/*
+ * SIMD dispatch. de_m4_mul, de_m4_inverse, de_m4_mul_v4, de_quat_mul, de_quat_rotate,
+ * de_affine_mul, de_frustum_test_aabb and the batch functions below run on the best instruction
+ * set of the CPU: NEON on arm64; SSE4.2, or AVX2 + FMA when cpuid reports it, on x86-64. The
+ * choice is made once, by de_math_init() or on the first call (thread-safe), and never changes.
+ *
+ * Results match the scalar reference within a few ulp (the SIMD paths may use FMA and sum in a
+ * different order); de_m4_inverse within 1e-5 relative. Frustum culling is exact: the SIMD tests
+ * return the same result as the scalar test for every box. No approximate reciprocal or rsqrt is
+ * used.
+ *
+ * Overrides, read once when the choice is made (environment variables, not cvars):
+ *   DE_MATH_FORCE_SCALAR=1        use the scalar reference (also as a compile definition).
+ *   DE_MATH_ISA=<name>            use that ISA ("scalar", "sse4.2", "avx2", "neon") when this
+ *                                 CPU supports it; otherwise the default choice.
+ */
+
+/** Instruction set of the fast-math paths. */
+typedef enum de_math_isa {
+    DE_MATH_ISA_SCALAR = 0,
+    DE_MATH_ISA_SSE42 = 1, /**< x86-64 SSE4.2 */
+    DE_MATH_ISA_AVX2 = 2,  /**< x86-64 AVX2 + FMA */
+    DE_MATH_ISA_NEON = 3,  /**< arm64 Advanced SIMD */
+    DE_MATH_ISA_COUNT
+} de_math_isa;
+
+/** Picks the instruction set now (otherwise the first dispatched call does). Returns it. Safe to
+ *  call from any thread, any number of times. */
+DE_API de_math_isa de_math_init(void);
+/** The instruction set in use (picks it first if needed). */
+DE_API de_math_isa de_math_active_isa(void);
+/** "scalar", "sse4.2", "avx2", "neon"; "unknown" for any other value. */
+DE_API const char *de_math_isa_name(de_math_isa isa);
+
+/**
+ * out[i] = m * (in[i], 1) for i < n, without the divide by w (use de_m4_mul_point for one
+ * projected point). `in` and `out` must not overlap. n = 0 does nothing.
+ */
+DE_API void de_m4_transform_points(const de_mat4 *m, const de_vec3 *in, de_vec4 *out, u32 n);
+/**
+ * out[i] = de_aabb_transform(in[i], a) for i < n (Arvo; an empty box stays empty). `out` may be
+ * `in` (in place); other overlaps are not allowed. n = 0 does nothing.
+ */
+DE_API void de_affine_transform_aabbs(const de_affine *a, const de_aabb *in, de_aabb *out, u32 n);
+/**
+ * visible_out[i] = de_frustum_test_aabb(f, boxes[i]) ? 1 : 0 for i < n: one byte per box, 1 when
+ * the box may be visible, 0 when it is culled (outside a plane, or empty). The result is the
+ * same as the scalar test for every box, on every ISA. n = 0 does nothing.
+ */
+DE_API void de_frustum_cull_aabbs(const de_frustum *f, const de_aabb *boxes, u32 n,
+                                  u8 *visible_out);
+
 /* ================================ 4. Deterministic math (DENG-243) ========================= */
 
 /* Deterministic math (simulation). Strict IEEE, own transcendentals, no approximate

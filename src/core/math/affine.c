@@ -3,6 +3,7 @@
  * Column-major [L | t]: element (r, c) is m[c * 3 + r]; m[0..8] is the linear part L (the same
  * layout as de_mat3), m[9..11] the translation t. */
 #include "core/math/math_internal.h"
+#include "core/math/math_simd.h"
 
 static de_affine de__affine_make(const de_mat3 *l, de_vec3 t) {
     de_affine a;
@@ -28,7 +29,7 @@ de_affine de_affine_from_trs(de_vec3 t, de_quat r, de_vec3 s) {
     return de__affine_make(&l, t);
 }
 
-de_affine de_affine_mul(const de_affine *a, const de_affine *b) {
+de_affine de__affine_mul_scalar(const de_affine *a, const de_affine *b) {
     /* [La ta] [Lb tb] = [La Lb, La tb + ta] */
     de_mat3 la = de__affine_linear(a), lb = de__affine_linear(b);
     de_mat3 l = de_m3_mul(&la, &lb);

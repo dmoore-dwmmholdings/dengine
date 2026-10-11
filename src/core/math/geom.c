@@ -1,5 +1,6 @@
 /* geom.c: boxes, planes, rays and frustums, scalar reference (SPEC §5.4, DENG-241). */
 #include "core/math/math_internal.h"
+#include "core/math/math_simd.h"
 
 /* ---- de_aabb ---- */
 
@@ -219,7 +220,7 @@ de_frustum de_frustum_from_m4(const de_mat4 *view_proj) {
     return f;
 }
 
-bool de_frustum_test_aabb(const de_frustum *f, de_aabb box) {
+bool de__frustum_test_aabb_scalar(const de_frustum *f, de_aabb box) {
     if (de_aabb_is_empty(box))
         return false;
     for (int i = 0; i < 6; ++i) {
@@ -228,7 +229,16 @@ bool de_frustum_test_aabb(const de_frustum *f, de_aabb box) {
         de_vec3 pv =
             de__v3(p->n.x >= 0.0f ? box.max.x : box.min.x, p->n.y >= 0.0f ? box.max.y : box.min.y,
                    p->n.z >= 0.0f ? box.max.z : box.min.z);
-        if (de_plane_distance(*p, pv) < 0.0f)
+        /* One operation per statement, so no compiler fuses a multiply-add (C11 contraction
+         * applies within one expression only): the SIMD culls (DENG-242) evaluate exactly these
+         * roundings and must return the same result for every box. */
+        f32 dist = p->n.x * pv.x;
+        f32 dy = p->n.y * pv.y;
+        dist = dist + dy;
+        f32 dz = p->n.z * pv.z;
+        dist = dist + dz;
+        dist = dist + p->d;
+        if (dist < 0.0f)
             return false;
     }
     return true;
