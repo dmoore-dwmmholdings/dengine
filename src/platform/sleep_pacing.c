@@ -1,8 +1,9 @@
 /* sleep_pacing.c: precise sleep and the frame pacer (SPEC §6, §10.2 step 6; DENG-249).
  *
  * One file for every OS: only the coarse OS sleep differs. de_sleep_until_ns() lets the OS sleep
- * until DE_SLEEP_SPIN_NS before the deadline, then spins on de_time_now_ns(), so it never returns
- * early and is late only when the thread is preempted. */
+ * until a spin window before the deadline, then spins on de_time_now_ns(), so it never returns
+ * early. The window is DE_SLEEP_SPIN_NS plus what this host's OS sleeps have needed lately
+ * (DENG-361), so the return is late only when the thread is preempted. */
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -94,22 +95,62 @@ static void de__os_sleep(u64 ns) {
 /* OS sleeps shorter than this are not worth a system call: spin instead. */
 #define DE__MIN_OS_SLEEP_NS 100000ull
 
+/* The adaptive part of the spin window (DENG-361). Halving (below) absorbs timer leeway that
+ * grows with the request, but not a fixed wake-up latency: GitHub's macOS runners (VMs) woke a
+ * 0.5 ms nanosleep 3.5 to 6 ms late, so a 2 ms de_sleep_ns() overshot by 2.3 ms on average. An
+ * OS sleep of `asked` that started `spin` before its last useful moment keeps the deadline while
+ * it is late by at most `asked + spin`; only lateness beyond `asked` needs a wider spin window.
+ * de__sleep_extra_ns estimates that excess for the whole process (timer behaviour belongs to
+ * the host, not to a thread): it rises by a quarter of the gap toward each larger sample and
+ * falls by 1/64 toward each smaller one, so one preempted sleep moves it little while a steady
+ * latency floor is learned in a few sleeps. The base DE_SLEEP_SPIN_NS stays on top as slack.
+ * On a host with a sane timer the excess is 0 and the window is DE_SLEEP_SPIN_NS. */
+#define DE__SLEEP_EXTRA_MAX_NS 4000000u /* spin at most 5 ms per call; beyond that, be late */
+static de_atomic_u32 de__sleep_extra_ns = DE_ATOMIC_INIT(0);
+
+/* Racing threads may lose an update; the estimate only needs to be roughly right, so relaxed
+ * loads and stores do. */
+static void de__sleep_learn(u64 asked_ns, u64 slept_ns) {
+    u64 excess = slept_ns > 2 * asked_ns ? slept_ns - 2 * asked_ns : 0;
+    u32 sample = excess > DE__SLEEP_EXTRA_MAX_NS ? DE__SLEEP_EXTRA_MAX_NS : (u32)excess;
+    u32 est = de_atomic_load_u32(&de__sleep_extra_ns, DE_ATOMIC_RELAXED);
+    if (sample > est)
+        est += (sample - est + 3) / 4;
+    else
+        est -= (est - sample) / 64;
+    de_atomic_store_u32(&de__sleep_extra_ns, est, DE_ATOMIC_RELAXED);
+}
+
 void de_sleep_until_ns(u64 deadline_ns) {
+    bool measured = false;
     for (;;) {
         u64 now = de_time_now_ns();
         if (now >= deadline_ns)
             return;
         u64 left = deadline_ns - now;
-        if (left <= DE_SLEEP_SPIN_NS + DE__MIN_OS_SLEEP_NS)
+        u32 extra = de_atomic_load_u32(&de__sleep_extra_ns, DE_ATOMIC_RELAXED);
+        u64 spin = DE_SLEEP_SPIN_NS + extra;
+        if (left <= spin + DE__MIN_OS_SLEEP_NS) {
+            if (!measured && extra != 0 && left > DE_SLEEP_SPIN_NS + DE__MIN_OS_SLEEP_NS) {
+                /* Only the learned excess makes this call a pure spin, so it measures nothing.
+                 * Let the excess decay a little per such call: a program that only ever sleeps
+                 * a little longer than DE_SLEEP_SPIN_NS then asks the OS again now and then,
+                 * instead of spinning for good after one bad stretch. */
+                u32 decay = extra >= 64 ? extra / 64 : 1;
+                de_atomic_store_u32(&de__sleep_extra_ns, extra - decay, DE_ATOMIC_RELAXED);
+            }
             break;
-        u64 os_ns = left - DE_SLEEP_SPIN_NS;
-        /* Ask for half the time left. Timer leeway can grow with the requested time: macOS
-         * measured 50 % of it (8 ms late on a 16 ms nanosleep or mach_wait_until) for a
-         * throttled process, and a Linux guest in a VM on such a host inherits it (5 ms late on
-         * 11 ms). One long sleep would blow through the spin margin; halving stays early for any
-         * leeway below 100 %, at the cost of a few more wakeups (about 7 for a 16 ms wait). */
-        os_ns /= 2;
+        }
+        /* Ask for half the time left before the spin window. Timer leeway can grow with the
+         * requested time: macOS measured 50 % of it (8 ms late on a 16 ms nanosleep or
+         * mach_wait_until) for a throttled process, and a Linux guest in a VM on such a host
+         * inherits it (5 ms late on 11 ms). One long sleep would blow through the spin window;
+         * halving stays early for any leeway below 100 %, at the cost of a few more wakeups
+         * (about 7 for a 16 ms wait). */
+        u64 os_ns = (left - spin) / 2;
         de__os_sleep(os_ns);
+        de__sleep_learn(os_ns, de_time_now_ns() - now);
+        measured = true;
     }
     while (de_time_now_ns() < deadline_ns)
         de_cpu_pause();
