@@ -331,6 +331,42 @@
       "inherits": [
         "macos-dev"
       ]
+    },
+    {
+      "name": "ci-linux-asan",
+      "displayName": "CI: Linux x64 (Clang) Debug, ASan + UBSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "address,undefined"
+      }
+    },
+    {
+      "name": "ci-linux-tsan",
+      "displayName": "CI: Linux x64 (Clang) Debug, TSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-linux-clang",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "thread"
+      }
+    },
+    {
+      "name": "ci-macos-asan",
+      "displayName": "CI: macOS arm64 (Apple Clang) Debug, ASan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "inherits": [
+        "os-macos",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "address"
+      }
     }
   ],
   "buildPresets": [
@@ -523,6 +559,27 @@
         "host-darwin"
       ],
       "configurePreset": "dev"
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-asan"
+    },
+    {
+      "name": "ci-linux-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-tsan"
+    },
+    {
+      "name": "ci-macos-asan",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "ci-macos-asan"
     }
   ],
   "testPresets": [
@@ -708,6 +765,37 @@
         "host-darwin"
       ],
       "configurePreset": "dev"
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-asan",
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "ci-linux-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1"
+      }
+    },
+    {
+      "name": "ci-macos-asan",
+      "inherits": [
+        "host-darwin"
+      ],
+      "configurePreset": "ci-macos-asan",
+      "environment": {
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
+      }
     }
   ]
 }

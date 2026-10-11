@@ -38,7 +38,7 @@
 #   LLVMFuzzerTestOneInput() (tests/fuzz/de_fuzz.h) and no main().
 #   - libFuzzer build: when DE_FUZZ_LIBFUZZER is ON (default) and the C compiler accepts
 #     -fsanitize=fuzzer (Homebrew/upstream Clang; Apple Clang does not ship libFuzzer), the
-#     target is compiled and linked with -fsanitize=fuzzer,address. Not with DE_SANITIZE=thread.
+#     target is compiled and linked with -fsanitize=fuzzer,address. Never with TSan.
 #   - Otherwise it links tests/fuzz/de_fuzz_standalone.c, which replays the inputs.
 #   Either way it is registered as CTest entry `fuzz.<name>` with labels `fuzz;<module>`, which
 #   runs every file in CORPUS (relative to the calling CMakeLists.txt) once, without fuzzing
@@ -217,7 +217,7 @@ endfunction()
 # process with TSan.
 set(_de_libfuzzer_ok OFF)
 if(DE_BUILD_TESTS AND DE_FUZZ_LIBFUZZER AND CMAKE_C_COMPILER_ID MATCHES "Clang"
-   AND NOT DE_COMPILER_FRONTEND STREQUAL "MSVC" AND NOT DE_SANITIZE STREQUAL "thread")
+   AND NOT DE_COMPILER_FRONTEND STREQUAL "MSVC" AND NOT "thread" IN_LIST DE_SANITIZERS)
     include(CheckCSourceCompiles)
     set(CMAKE_REQUIRED_FLAGS "-fsanitize=fuzzer")
     set(CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=fuzzer")
