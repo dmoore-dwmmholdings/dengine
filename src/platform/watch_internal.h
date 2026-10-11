@@ -65,4 +65,44 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
 /** Test hook: number of changes waiting in the pending table (matured or not). */
 u32 de__watch_pending_count(de_file_watch *w);
 
+/* ---- Known directories (watch_common.c, used by watch_win32.c) ---------------------------- */
+
+/**
+ * The relative paths of the directories in a watched tree, for a backend whose OS events do not
+ * say whether a removed path was a directory (ReadDirectoryChangesW: a deleted path cannot be
+ * stat'ed). The backend fills it from a scan at start and keeps it current from its events.
+ * Paths as in de__watch_post (relative, `/` separators, not empty). One thread owns a set; it has
+ * no lock. Out of memory only makes it forget directories (they are then reported as files).
+ */
+typedef struct de__watch_dir {
+    char *path; /* NULL = empty slot */
+    u32 len;
+    u32 hash;
+} de__watch_dir;
+
+typedef struct de__watch_dirset {
+    const de_allocator *alloc;
+    de__watch_dir *slots; /* open addressing, linear probing, `cap` a power of two */
+    u32 count, cap;
+    bool nocase; /* compare ASCII letters without case (Windows file names) */
+} de__watch_dirset;
+
+void de__watch_dirset_init(de__watch_dirset *s, const de_allocator *a, bool nocase);
+void de__watch_dirset_free(de__watch_dirset *s);
+/** Forgets every directory (keeps the slots). */
+void de__watch_dirset_clear(de__watch_dirset *s);
+bool de__watch_dirset_has(const de__watch_dirset *s, const char *rel, size_t len);
+/** Adds one path. False when out of memory. */
+bool de__watch_dirset_add(de__watch_dirset *s, const char *rel, size_t len);
+/** Removes `rel` and every path below it. Returns whether `rel` itself was in the set. */
+bool de__watch_dirset_remove_tree(de__watch_dirset *s, const char *rel, size_t len);
+/**
+ * Adds `rel` (when not empty; "" is the watched directory itself) and the directories below it
+ * on disk, read under `native_root`, as deep as the watch reports: every level when `recursive`,
+ * otherwise only the top level of the watched directory. Links to directories count as
+ * directories, as the native listing reports them; a link cycle ends at DE_FS_PATH_MAX.
+ */
+void de__watch_dirset_scan(de__watch_dirset *s, const char *native_root, const char *rel,
+                           size_t len, bool recursive);
+
 #endif
