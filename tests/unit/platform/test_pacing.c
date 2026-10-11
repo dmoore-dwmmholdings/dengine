@@ -129,10 +129,15 @@ TEST(pacing, sleep_accuracy) {
     printf("  within +0.3 ms: %u / %d\n", within, SAMPLES);
 
     EXPECT_EQ(early, 0u);
-    if (on_ci())
-        EXPECT_GE(within * 100, (u32)SAMPLES * 50u); /* shared runners: half is enough */
-    else
+    if (on_ci()) {
+        /* Shared runners preempt the spin now and then. GitHub's macOS VMs, whose nanosleep
+         * wakes 1.5 to 6.3 ms late, measured 194 to 199 of 200 with the adaptive spin window
+         * (13 before it, DENG-361); Linux and Windows runners 200. 80 % leaves room for a noisy
+         * VM and still fails on a spin window that does not adapt. */
+        EXPECT_GE(within * 100, (u32)SAMPLES * 80u);
+    } else {
         EXPECT_GE(within * 100, (u32)SAMPLES * 95u);
+    }
 }
 
 TEST(pacing, pacer_60hz) {
