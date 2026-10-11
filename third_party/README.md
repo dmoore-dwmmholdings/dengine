@@ -45,8 +45,10 @@ third_party/<name>/
 
 The engine-owned files match the entry's `local` globs (default `CMakeLists.txt`, `de_*`,
 `smoke/**`, `patches/**`). `vendor.py` never touches them. Every other file must come from the
-archive. The `third_party/.gitattributes` file turns off line-ending conversion here, so that
-checkouts stay byte-identical on Windows too.
+archive, except the archive's `.gitignore` and `.gitattributes` files, which are never vendored.
+Every vendored file is committed: `vendor.py` fails when git ignores one (DENG-362). The
+`third_party/.gitattributes` file turns off line-ending conversion here, so that checkouts stay
+byte-identical on Windows too.
 
 ## CMake rules
 

@@ -5,6 +5,8 @@
 and the files taken from it. This tool downloads the archive, checks the hash, and writes the
 selected files into `third_party/<name>/`. `verify` checks that the tree in the repository is
 byte-identical to what the pinned archive gives, so a local edit to vendored code is detected.
+Upstream `.gitignore` and `.gitattributes` files are never vendored, and `fetch` and `verify` fail
+when git ignores a vendored file, so every vendored file is committed (DENG-362).
 
 Commands:
   fetch <name>... | --all   download, verify sha256, (re)write third_party/<name>/
@@ -63,6 +65,13 @@ FORBIDDEN_PATTERNS = re.compile(
 # Files in third_party/<name>/ that belong to the engine, not to the upstream archive, unless an
 # entry sets its own `local` list.
 DEFAULT_LOCAL = ["CMakeLists.txt", "de_*", "smoke/**", "patches/**"]
+
+# Git control files in an archive are never vendored, at any depth, whatever `files` selects. An
+# upstream `.gitignore` would stop git from committing vendored files (SDL ships one with `*.hlsl`
+# next to its shaders, DENG-362), and an upstream `.gitattributes` would override the `-text` rule
+# in third_party/.gitattributes. Neither is needed to build. A leftover one on disk fails `verify`
+# as an unexpected file.
+GIT_CONTROL_FILES = {".gitignore", ".gitattributes"}
 
 REQUIRED_KEYS = ("name", "version", "url", "sha256", "license", "files")
 KNOWN_KEYS = set(REQUIRED_KEYS) | {
@@ -460,6 +469,8 @@ def expected_tree(lib: Lib, archive: str, lib_dir: str) -> dict:
     tree: dict = {}
     used = [False] * len(lib.files_re)
     for rel in sorted(members):
+        if posixpath.basename(rel) in GIT_CONTROL_FILES:
+            continue
         hits = [i for i, p in enumerate(lib.files_re) if p.match(rel)]
         if not hits or match_any(rel, lib.exclude_re):
             continue
@@ -497,6 +508,40 @@ def scan_dir(lib: Lib, lib_dir: str) -> tuple:
             else:
                 managed[rel] = p
     return managed, local
+
+
+def git_ignored(lib: Lib, root: str, lib_dir: str, rels) -> list:
+    """Problems for vendored files that git ignores, so a commit would silently leave them out.
+
+    Runs `git check-ignore --no-index` (tracked files are checked too) on every path that the
+    archive gives. Returns [] when `root` is not inside a git work tree or git is not installed:
+    a tarball export of the repository has nothing to commit.
+    """
+    try:
+        r = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=root,
+                           capture_output=True, text=True)
+    except OSError:
+        return []
+    if r.returncode != 0 or r.stdout.strip() != "true":
+        return []
+    paths = [os.path.relpath(os.path.join(lib_dir, *rel.split("/")), root).replace(os.sep, "/")
+             for rel in sorted(rels)]
+    r = subprocess.run(["git", "check-ignore", "--no-index", "--verbose", "-z", "--stdin"],
+                       cwd=root, input="\0".join(paths) + "\0", capture_output=True, text=True)
+    if r.returncode not in (0, 1):  # 1: nothing ignored
+        return [f"{lib.name}: git check-ignore failed: {r.stderr.strip()}"]
+    # --verbose -z output: <source> NUL <line> NUL <pattern> NUL <path> NUL, per path whose last
+    # matching rule is an ignore rule or a negation ("!..."). A negation means "not ignored".
+    f = r.stdout.split("\0")
+    problems = []
+    for i in range(0, len(f) - 3, 4):
+        source, line, pattern, path = f[i:i + 4]
+        if pattern.startswith("!"):
+            continue
+        problems.append(
+            f"{lib.name}: {path} is ignored by git ({source}:{line}: {pattern}); a commit would "
+            "leave it out. Remove the rule, or add a negation to the root .gitignore")
+    return problems
 
 
 # --------------------------------------------------------------------------------------------
@@ -540,6 +585,11 @@ def cmd_fetch(libs: list, root: str, cache: str) -> int:
                 os.rmdir(dirpath)
         print(f"{lib.name} {lib.version}: wrote {len(tree)} files "
               f"({len(local)} local files kept)")
+        ignored = git_ignored(lib, root, lib_dir, tree)
+        for p in ignored:
+            print(f"FAIL {p}", file=sys.stderr)
+        if ignored:
+            return 1
     return 0
 
 
@@ -551,6 +601,8 @@ def verify_lib(lib: Lib, root: str, cache: str, offline: bool) -> list:
     except VendorError as e:
         return [str(e)]
     problems = check_tree(lib, lib_dir, tree)
+    if os.path.isdir(lib_dir):
+        problems += git_ignored(lib, root, lib_dir, tree)
     if not problems:
         print(f"ok   {lib.name} {lib.version} ({len(tree)} files)")
     return problems
