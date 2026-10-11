@@ -35,6 +35,12 @@ foreach(_de_queue_test test_spsc test_mpmc)
         target_include_directories(${_de_queue_test} PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endforeach()
+# DENG-370: under TSan, spsc.stress_1e7 took 33-50 s of its 60 s timeout on the GitHub runners
+# and timed out when other stress tests ran beside it. TSan checks the access pattern, which 2e6
+# elements through a 64-entry ring exercise as well; every other build keeps 1e7.
+if(TARGET test_spsc AND "thread" IN_LIST DE_SANITIZERS)
+    target_compile_definitions(test_spsc PRIVATE DE_SPSC_STRESS_COUNT=2000000ull)
+endif()
 
 # DENG-153: the name threads test starts threads with de_thread_create; the string and sort
 # tests include the internal headers "core/de_strbuf.h" and "core/de_sort.h".

@@ -15,13 +15,17 @@
  *
  * Memory: the watch record and one record per pending path, from the watch's allocator. A poll
  * with nothing pending touches no allocator. More than WATCH_MAX_PENDING pending paths (a huge
- * burst nobody polls) clears the table and reports a rescan of the root instead. */
+ * burst nobody polls) clears the table and reports a rescan of the root instead.
+ *
+ * Also here: de__watch_dirset, the set of known directories that the Windows backend keeps
+ * because a removed path cannot be stat'ed (DENG-370). It is portable, so every OS tests it. */
 #include <dengine/de_debug.h>
 #include <dengine/de_platform.h>
 
 #include "platform/vfs_internal.h"
 #include "platform/watch_internal.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #if DE__WATCH_ENABLED
@@ -407,6 +411,252 @@ u32 de__watch_pending_count(de_file_watch *w) {
     u32 n = w->count + (w->rescan ? 1u : 0u);
     de_mutex_unlock(&w->lock);
     return n;
+}
+
+/* ---- Known directories (de__watch_dirset) ------------------------------------------------- */
+
+static char fold_ascii(char c, bool nocase) {
+    return nocase && c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
+/* FNV-1a over the (folded) bytes: the set needs a hash that ignores case on Windows. */
+static u32 dir_hash(const char *p, size_t n, bool nocase) {
+    u32 h = 2166136261u;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= (u8)fold_ascii(p[i], nocase);
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static bool dir_eq(const char *a, const char *b, size_t n, bool nocase) {
+    if (!nocase)
+        return memcmp(a, b, n) == 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (fold_ascii(a[i], true) != fold_ascii(b[i], true))
+            return false;
+    }
+    return true;
+}
+
+/* Is `d` the path `rel` or below it? */
+static bool dir_in_tree(const de__watch_dir *d, const char *rel, size_t len, bool nocase) {
+    if (d->len < len || !dir_eq(d->path, rel, len, nocase))
+        return false;
+    return d->len == len || d->path[len] == '/';
+}
+
+void de__watch_dirset_init(de__watch_dirset *s, const de_allocator *a, bool nocase) {
+    memset(s, 0, sizeof *s);
+    s->alloc = a;
+    s->nocase = nocase;
+}
+
+void de__watch_dirset_clear(de__watch_dirset *s) {
+    for (u32 i = 0; i < s->cap; ++i) {
+        de__watch_dir *d = &s->slots[i];
+        if (d->path != NULL) {
+            DE_FREE(s->alloc, d->path, (size_t)d->len + 1);
+            memset(d, 0, sizeof *d);
+        }
+    }
+    s->count = 0;
+}
+
+void de__watch_dirset_free(de__watch_dirset *s) {
+    de__watch_dirset_clear(s);
+    if (s->slots != NULL)
+        DE_FREE(s->alloc, s->slots, (size_t)s->cap * sizeof *s->slots);
+    s->slots = NULL;
+    s->cap = 0;
+}
+
+/* The slot of `rel`, or UINT32_MAX. The table is never more than half full, so probing ends. */
+static u32 dir_find(const de__watch_dirset *s, const char *rel, size_t len, u32 h) {
+    if (s->cap == 0)
+        return UINT32_MAX;
+    u32 mask = s->cap - 1;
+    for (u32 i = h & mask; s->slots[i].path != NULL; i = (i + 1) & mask) {
+        const de__watch_dir *d = &s->slots[i];
+        if (d->hash == h && d->len == len && dir_eq(d->path, rel, len, s->nocase))
+            return i;
+    }
+    return UINT32_MAX;
+}
+
+static void dir_place(de__watch_dir *slots, u32 cap, de__watch_dir d) {
+    u32 mask = cap - 1;
+    u32 i = d.hash & mask;
+    while (slots[i].path != NULL)
+        i = (i + 1) & mask;
+    slots[i] = d;
+}
+
+static bool dir_grow(de__watch_dirset *s) {
+    u32 cap = s->cap != 0 ? s->cap * 2 : 64;
+    de__watch_dir *slots = (de__watch_dir *)DE_ALLOC(s->alloc, (size_t)cap * sizeof *slots,
+                                                     _Alignof(de__watch_dir), DE_MEM_GENERAL);
+    if (slots == NULL)
+        return false;
+    memset(slots, 0, (size_t)cap * sizeof *slots);
+    for (u32 i = 0; i < s->cap; ++i) {
+        if (s->slots[i].path != NULL)
+            dir_place(slots, cap, s->slots[i]);
+    }
+    if (s->slots != NULL)
+        DE_FREE(s->alloc, s->slots, (size_t)s->cap * sizeof *s->slots);
+    s->slots = slots;
+    s->cap = cap;
+    return true;
+}
+
+bool de__watch_dirset_has(const de__watch_dirset *s, const char *rel, size_t len) {
+    return dir_find(s, rel, len, dir_hash(rel, len, s->nocase)) != UINT32_MAX;
+}
+
+bool de__watch_dirset_add(de__watch_dirset *s, const char *rel, size_t len) {
+    if (len == 0 || len >= DE_FS_PATH_MAX)
+        return true; /* the watched directory itself, or a path no event can carry */
+    u32 h = dir_hash(rel, len, s->nocase);
+    if (dir_find(s, rel, len, h) != UINT32_MAX)
+        return true;
+    if ((s->count + 1) * 2 > s->cap && !dir_grow(s))
+        return false;
+    char *p = dup_str(s->alloc, rel, len);
+    if (p == NULL)
+        return false;
+    de__watch_dir d = {p, (u32)len, h};
+    dir_place(s->slots, s->cap, d);
+    s->count++;
+    return true;
+}
+
+/* Empties slot `i` with backward-shift deletion: later entries of the same probe run move back
+ * into the hole, so lookups need no tombstones. Entries only move into slots at or after `i`
+ * (cyclically), into the hole as it travels forward. */
+static void dir_unlink(de__watch_dirset *s, u32 i) {
+    u32 mask = s->cap - 1;
+    for (u32 j = (i + 1) & mask; s->slots[j].path != NULL; j = (j + 1) & mask) {
+        u32 home = s->slots[j].hash & mask;
+        /* The entry at j stays when its home slot lies in (i, j], cyclically. */
+        bool stays = i <= j ? (home > i && home <= j) : (home > i || home <= j);
+        if (stays)
+            continue;
+        s->slots[i] = s->slots[j];
+        i = j;
+    }
+    memset(&s->slots[i], 0, sizeof s->slots[i]);
+    s->count--;
+}
+
+bool de__watch_dirset_remove_tree(de__watch_dirset *s, const char *rel, size_t len) {
+    if (len == 0 || dir_find(s, rel, len, dir_hash(rel, len, s->nocase)) == UINT32_MAX)
+        return false;
+    /* One pass over the slots. A removal can pull an entry back into the slot just freed (or,
+     * for a probe run that wraps, from the start of the table into it), so the same slot is
+     * looked at again; nothing moves into a slot before it that was not already checked. */
+    for (u32 i = 0; i < s->cap;) {
+        de__watch_dir *d = &s->slots[i];
+        if (d->path != NULL && dir_in_tree(d, rel, len, s->nocase)) {
+            DE_FREE(s->alloc, d->path, (size_t)d->len + 1);
+            d->path = NULL;
+            dir_unlink(s, i);
+            continue;
+        }
+        ++i;
+    }
+    return true;
+}
+
+typedef struct dir_todo {
+    char *path;
+    u32 len;
+} dir_todo;
+
+typedef struct dir_scan {
+    de__watch_dirset *s;
+    dir_todo *todo; /* directories still to list (a stack: no recursion on the thread stack) */
+    u32 todo_count, todo_cap;
+    const char *parent; /* the directory being listed, relative */
+    size_t parent_len;
+    bool recursive;
+} dir_scan;
+
+static bool dir_scan_entry(const char *name, bool is_dir, void *user) {
+    dir_scan *sc = (dir_scan *)user;
+    if (!is_dir)
+        return true;
+    char rel[DE_FS_PATH_MAX];
+    size_t nl = strlen(name);
+    size_t sep = sc->parent_len > 0 ? 1u : 0u;
+    if (sc->parent_len + sep + nl >= sizeof rel)
+        return true; /* too long for an event path; also where a link cycle ends */
+    memcpy(rel, sc->parent, sc->parent_len);
+    if (sep != 0)
+        rel[sc->parent_len] = '/';
+    memcpy(rel + sc->parent_len + sep, name, nl);
+    size_t len = sc->parent_len + sep + nl;
+    rel[len] = '\0';
+    if (!de__watch_dirset_add(sc->s, rel, len) || !sc->recursive)
+        return true;
+    if (sc->todo_count == sc->todo_cap) {
+        u32 cap = sc->todo_cap != 0 ? sc->todo_cap * 2 : 16;
+        dir_todo *t =
+            (dir_todo *)DE_REALLOC(sc->s->alloc, sc->todo, (size_t)sc->todo_cap * sizeof *t,
+                                   (size_t)cap * sizeof *t, _Alignof(dir_todo), DE_MEM_GENERAL);
+        if (t == NULL)
+            return true;
+        sc->todo = t;
+        sc->todo_cap = cap;
+    }
+    char *p = dup_str(sc->s->alloc, rel, len);
+    if (p != NULL) {
+        sc->todo[sc->todo_count].path = p;
+        sc->todo[sc->todo_count].len = (u32)len;
+        sc->todo_count++;
+    }
+    return true;
+}
+
+void de__watch_dirset_scan(de__watch_dirset *s, const char *native_root, const char *rel,
+                           size_t len, bool recursive) {
+    if (len >= DE_FS_PATH_MAX)
+        return;
+    if (len > 0 && (!de__watch_dirset_add(s, rel, len) || !recursive))
+        return;
+    dir_scan sc;
+    memset(&sc, 0, sizeof sc);
+    sc.s = s;
+    sc.recursive = recursive;
+    size_t root_len = strlen(native_root);
+    bool root_sep = root_len > 0 && native_root[root_len - 1] != '/';
+    const char *cur = rel;
+    size_t cur_len = len;
+    char *owned = NULL;
+    for (;;) {
+        char native[DE_FS_PATH_MAX];
+        size_t sep = cur_len > 0 && root_sep ? 1u : 0u;
+        if (root_len + sep + cur_len < sizeof native) {
+            memcpy(native, native_root, root_len);
+            if (sep != 0)
+                native[root_len] = '/';
+            memcpy(native + root_len + sep, cur, cur_len);
+            native[root_len + sep + cur_len] = '\0';
+            sc.parent = cur;
+            sc.parent_len = cur_len;
+            (void)de__native_dir_list(native, dir_scan_entry, &sc); /* gone: nothing to add */
+        }
+        if (owned != NULL)
+            DE_FREE(s->alloc, owned, cur_len + 1);
+        if (sc.todo_count == 0)
+            break;
+        dir_todo t = sc.todo[--sc.todo_count];
+        owned = t.path;
+        cur = t.path;
+        cur_len = t.len;
+    }
+    if (sc.todo != NULL)
+        DE_FREE(s->alloc, sc.todo, (size_t)sc.todo_cap * sizeof *sc.todo);
 }
 
 /* ---- API ---------------------------------------------------------------------------------- */
