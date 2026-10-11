@@ -105,7 +105,8 @@ TEST(error, clear) {
 typedef struct thread_probe {
     int saw_error_at_start;
     const de_error *set_ptr;
-    char message[64];
+    /* Full size, so the copy below can never truncate (GCC -Wformat-truncation, DENG-356). */
+    char message[DE_ERROR_MESSAGE_MAX];
     int still_own_after;
 } thread_probe;
 
