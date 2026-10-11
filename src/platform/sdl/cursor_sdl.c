@@ -3,10 +3,10 @@
 #include "platform/sdl/sdl_internal.h"
 
 /* de_platform_cursor copies the first entries of SDL_SystemCursor. */
-DE_STATIC_ASSERT(SDL_SYSTEM_CURSOR_DEFAULT == (int)DE_CURSOR_DEFAULT &&
-                     SDL_SYSTEM_CURSOR_NWSE_RESIZE == (int)DE_CURSOR_RESIZE_NWSE &&
-                     SDL_SYSTEM_CURSOR_NS_RESIZE == (int)DE_CURSOR_RESIZE_NS &&
-                     SDL_SYSTEM_CURSOR_POINTER == (int)DE_CURSOR_POINTER,
+DE_STATIC_ASSERT((int)SDL_SYSTEM_CURSOR_DEFAULT == (int)DE_CURSOR_DEFAULT &&
+                     (int)SDL_SYSTEM_CURSOR_NWSE_RESIZE == (int)DE_CURSOR_RESIZE_NWSE &&
+                     (int)SDL_SYSTEM_CURSOR_NS_RESIZE == (int)DE_CURSOR_RESIZE_NS &&
+                     (int)SDL_SYSTEM_CURSOR_POINTER == (int)DE_CURSOR_POINTER,
                  "SDL system cursor order changed");
 
 /* The devices state when video is up, else NULL. */
