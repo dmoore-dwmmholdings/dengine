@@ -17,7 +17,8 @@
 #   license_file  licence file inside the archive (after `strip`); copied to <name>/LICENSE
 #                 (default "LICENSE")
 #   strip         leading path components removed from archive paths (default 1)
-#   files         globs of archive paths to vendor (`*` within a component, `**` across them)
+#   files         globs of archive paths to vendor (`*` within a component, `**` across them);
+#                 upstream `.gitignore` and `.gitattributes` files are never vendored (DENG-362)
 #   exclude       globs removed again from `files` (default [])
 #   local         globs of engine-owned files in third_party/<name>/ that the tool never touches
 #                 (default ["CMakeLists.txt", "de_*", "smoke/**", "patches/**"])
@@ -69,3 +70,47 @@ sha256 = "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515"
 license = "MIT OR Unlicense"
 # Later sprints append stb_image_write.h (S10, DENG-327) and stb_truetype.h (S28) here.
 files = ["stb_image.h", "stb_vorbis.c"]
+
+[[lib]]
+name = "sdl3"
+# SDL 3.4 is the maintained stable line; 3.2.30 (Jan 2026) was the last 3.2 release. DENG-245.
+version = "3.4.18"
+url = "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz"
+sha256 = "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3"
+license = "Zlib"
+# strip = 0 keeps the archive's top directory: SDL's own root CMakeLists.txt then lives in
+# third_party/sdl3/SDL3-<version>/, apart from the engine-owned third_party/sdl3/CMakeLists.txt.
+strip = 0
+license_file = "SDL3-3.4.18/LICENSE.txt"
+files = [
+    "SDL3-3.4.18/CMakeLists.txt",
+    "SDL3-3.4.18/LICENSE.txt",
+    "SDL3-3.4.18/REVISION.txt",
+    "SDL3-3.4.18/cmake/**",
+    "SDL3-3.4.18/include/**",
+    "SDL3-3.4.18/src/**",
+    "SDL3-3.4.18/wayland-protocols/**",
+]
+# Not vendored: SDL's own tests and the SDL_test library, examples, docs, and the source trees of
+# platforms the engine does not target (SPEC §3.1: Windows, Linux, macOS). The SDL sources that
+# include headers from these trees do so only under that platform's #ifdef.
+exclude = [
+    "SDL3-3.4.18/cmake/test/**",
+    "SDL3-3.4.18/src/test/**",
+    "SDL3-3.4.18/src/**/android/**",
+    "SDL3-3.4.18/src/**/emscripten/**",
+    "SDL3-3.4.18/src/**/haiku/**",
+    "SDL3-3.4.18/src/**/ios/**",
+    "SDL3-3.4.18/src/**/n3ds/**",
+    "SDL3-3.4.18/src/**/ngage/**",
+    "SDL3-3.4.18/src/**/ps2/**",
+    "SDL3-3.4.18/src/**/psp/**",
+    "SDL3-3.4.18/src/**/qnx/**",
+    "SDL3-3.4.18/src/**/riscos/**",
+    "SDL3-3.4.18/src/**/uikit/**",
+    "SDL3-3.4.18/src/**/vita/**",
+    "SDL3-3.4.18/src/video/openvr/**",
+]
+# SDL's MSVC `_alloca` check wrote test_malloc_alloca.c into the source tree on configure; the
+# patch writes it to the binary dir (see the patch header). DENG-367.
+patches = ["patches/0001-alloca-check-in-binary-dir.patch"]

@@ -22,6 +22,10 @@ import vendor  # noqa: E402
 
 FAILS: list = []
 
+# The user's and the system's git config (a global excludes file in particular) must not change
+# what the git cases see. main() points GIT_CONFIG_GLOBAL at an empty file in the temp dir.
+GIT_ENV = dict(os.environ, GIT_CONFIG_NOSYSTEM="1")
+
 UPSTREAM = {
     "LICENSE": b"MIT License\n\nCopyright (c) demo\n",
     "include/demo.h": b"#pragma once\nint demo(void);\n",
@@ -99,7 +103,11 @@ class Repo:
         cmd = [sys.executable, VENDOR, "--root", self.root, "--cache", self.cache]
         if fallback:
             cmd.append("--toml-fallback")
-        return subprocess.run(cmd + list(args), capture_output=True, text=True)
+        return subprocess.run(cmd + list(args), capture_output=True, text=True, env=GIT_ENV)
+
+    def git(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", self.root] + list(args), capture_output=True,
+                              text=True, env=GIT_ENV)
 
     def snapshot(self, name: str) -> dict:
         d = pathlib.Path(self.tp, name)
@@ -128,11 +136,66 @@ def test_toml_fallback() -> None:
                 "lib": [{"name": "n"}, {"name": "m"}]}, "minimal TOML reader")
 
 
+def test_git_ignore(base: str) -> None:
+    """Upstream git control files are not vendored; a git-ignored vendored file fails (DENG-362).
+
+    SDL 3.4.18 ships src/render/gpu/shaders/.gitignore with `*.hlsl`: the files were on disk, so
+    verify passed locally, but git never committed them and a fresh clone failed verify.
+    """
+    repo = Repo(os.path.join(base, "git"))
+    if repo.git("init", "-q").returncode != 0:
+        check(False, "git init for the git-ignore cases")
+        return
+    files = dict(UPSTREAM)
+    files["src/shaders/.gitignore"] = b"*.hlsl\n"
+    files["src/shaders/.gitattributes"] = b"* text eol=crlf\n"
+    files["src/shaders/color.frag.hlsl"] = b"float4 main() : SV_Target { return 1; }\n"
+    files["src/shaders/color.frag.h"] = b"/* compiled */\n"
+    arch = os.path.join(base, "gitdemo-1.0.tar.gz")
+    sha = make_tar(arch, files)
+    repo.config(entry("demo", pathlib.Path(arch).as_uri(), sha))
+    d = pathlib.Path(repo.tp, "demo")
+
+    r = repo.run("fetch", "demo")
+    check(r.returncode == 0, f"fetch with upstream git control files {r.stderr.strip()}")
+    check(not (d / "src" / "shaders" / ".gitignore").exists()
+          and not (d / "src" / "shaders" / ".gitattributes").exists(),
+          "upstream .gitignore and .gitattributes are not vendored")
+    check((d / "src" / "shaders" / "color.frag.hlsl").exists(), "the file it ignored is vendored")
+    repo.git("add", "-A")
+    listed = repo.git("ls-files").stdout.split()
+    check("third_party/demo/src/shaders/color.frag.hlsl" in listed, "git commits the .hlsl file")
+    check(repo.run("verify").returncode == 0, "verify passes in a git work tree")
+
+    # A leftover upstream .gitignore on disk is unexpected (and hides the file from git).
+    (d / "src" / "shaders" / ".gitignore").write_bytes(b"*.hlsl\n")
+    r = repo.run("verify")
+    check(r.returncode == 1 and "unexpected file src/shaders/.gitignore" in r.stderr
+          and "color.frag.hlsl is ignored by git" in r.stderr,
+          "verify flags a nested .gitignore and the file it hides")
+    (d / "src" / "shaders" / ".gitignore").unlink()
+
+    # A repository ignore rule that matches a vendored file fails verify and fetch, and names
+    # the rule; a later negation in the root .gitignore clears it.
+    gi = pathlib.Path(repo.root, ".gitignore")
+    gi.write_text("*.hlsl\n")
+    r = repo.run("verify")
+    check(r.returncode == 1 and "third_party/demo/src/shaders/color.frag.hlsl is ignored by git"
+          in r.stderr and ".gitignore:1: *.hlsl" in r.stderr, "verify flags a git-ignored file")
+    r = repo.run("fetch", "demo")
+    check(r.returncode == 1 and "is ignored by git" in r.stderr, "fetch flags a git-ignored file")
+    gi.write_text("*.hlsl\n!/third_party/**\n")
+    check(repo.run("verify").returncode == 0, "a root negation un-ignores the vendored tree")
+
+
 def main() -> int:
     test_globs()
     test_toml_fallback()
 
     with tempfile.TemporaryDirectory(prefix="de-vendor-selftest-") as base:
+        gitconfig = pathlib.Path(base, "gitconfig")
+        gitconfig.write_text("")
+        GIT_ENV["GIT_CONFIG_GLOBAL"] = str(gitconfig)
         repo = Repo(base)
         arch = os.path.join(base, "demo-1.0.tar.gz")
         sha = make_tar(arch, UPSTREAM)
@@ -253,6 +316,8 @@ def main() -> int:
         r = repo.run("fetch", "demo")
         check(r.returncode == 0 and (d / "demo-1.0" / "include" / "demo.h").exists()
               and (d / "LICENSE").exists(), "strip = 0 with license_file")
+
+        test_git_ignore(base)
 
     if FAILS:
         print(f"\n{len(FAILS)} case(s) failed", file=sys.stderr)

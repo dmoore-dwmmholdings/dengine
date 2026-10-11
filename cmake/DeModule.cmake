@@ -22,8 +22,10 @@
 #                  uses them with `#if DE_HAS_<X>`.
 #   LIBS           Other link items (de_tp_* vendored targets, system libraries, frameworks),
 #                  linked PRIVATE. They also reach consumers of the aggregate `dengine` library.
-#   DETERMINISTIC  SPEC §5.7: every TU of the module gets -ffp-contract=off (Clang/GCC) or
-#                  /fp:precise (MSVC). Sets the target property DE_DETERMINISTIC.
+#   DETERMINISTIC  SPEC §5.7: every TU of the module gets DE_DETERMINISTIC_FLAGS
+#                  (cmake/DeCompiler.cmake): -ffp-contract=off (Clang/GCC),
+#                  /clang:-ffp-contract=off (clang-cl) or /fp:precise (MSVC cl). Sets the target
+#                  property DE_DETERMINISTIC.
 #   OPTIONAL_OPTION  Name of a variable (usually DE_WITH_<X> or DE_HAS_<X>). The module is skipped
 #                  when it is false. Independently of this, a module is always skipped when
 #                  DE_HAS_<NAME> (cmake/DeOptions.cmake) is defined and false.
@@ -34,6 +36,13 @@
 # Other helpers:
 #   de_mark_deterministic_sources(<file>...)  per-file deterministic flags, for single files in
 #                                             a non-deterministic module (src/core/math/dmath*.c).
+#                                             Call it after de_add_module() in the same
+#                                             CMakeLists.txt. Each file is recorded in the global
+#                                             property DE_DETERMINISTIC_SOURCES as
+#                                             "<target>|<path relative to the module dir>", and
+#                                             each DETERMINISTIC module in
+#                                             DE_DETERMINISTIC_TARGETS; deterministic_asm_check
+#                                             (tests/checks/) disassembles their objects.
 #   de_add_subdirectories([DIR <dir>] [EXCLUDE <name>...])  add_subdirectory() for every
 #                                             immediate child dir of DIR (default: the current
 #                                             source dir) that has a CMakeLists.txt, sorted.
@@ -68,6 +77,8 @@ function(de_add_module)
 
     set(target de_${M_NAME})
     file(RELATIVE_PATH dir "${DE_ROOT_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Read by de_mark_deterministic_sources(), also when the module is skipped below.
+    set_property(DIRECTORY PROPERTY DE_MODULE_TARGET ${target})
 
     # ---- Enabled? ----
     string(TOUPPER "${M_NAME}" upper)
@@ -117,6 +128,7 @@ function(de_add_module)
 
     if(M_DETERMINISTIC)
         target_compile_options(${target} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+        set_property(GLOBAL APPEND PROPERTY DE_DETERMINISTIC_TARGETS ${target})
         set(det ON)
     else()
         set(det OFF)
@@ -135,9 +147,21 @@ function(de_add_module)
 endfunction()
 
 function(de_mark_deterministic_sources)
-    if(ARGN)
-        set_property(SOURCE ${ARGN} APPEND PROPERTY COMPILE_OPTIONS ${DE_DETERMINISTIC_FLAGS})
+    if(NOT ARGN)
+        return()
     endif()
+    set_property(SOURCE ${ARGN} APPEND PROPERTY COMPILE_OPTIONS ${DE_DETERMINISTIC_FLAGS})
+    get_property(target DIRECTORY PROPERTY DE_MODULE_TARGET)
+    if(NOT target)
+        message(FATAL_ERROR "de_mark_deterministic_sources: call it after de_add_module() in "
+                            "${CMAKE_CURRENT_LIST_FILE}")
+    endif()
+    foreach(src IN LISTS ARGN)
+        cmake_path(ABSOLUTE_PATH src BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE
+                   OUTPUT_VARIABLE abs)
+        file(RELATIVE_PATH rel "${CMAKE_CURRENT_SOURCE_DIR}" "${abs}")
+        set_property(GLOBAL APPEND PROPERTY DE_DETERMINISTIC_SOURCES "${target}|${rel}")
+    endforeach()
 endfunction()
 
 function(de_add_subdirectories)

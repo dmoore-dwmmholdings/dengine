@@ -36,7 +36,8 @@ jobs:
         run: cmake --preset "${PRESET}"
 
       # header_check (C11 + C++17 compile of every public header), layering_check
-      # (tools/check_layers/check_layers.py), layering_selftest and vendor_selftest.
+      # (tools/check_layers/check_layers.py), layering_selftest, vendor_selftest and
+      # deterministic_asm_check (builds the deterministic targets, then disassembles them).
       - name: ctest -L check
         run: ctest --preset "${PRESET}" -L check --output-on-failure
 

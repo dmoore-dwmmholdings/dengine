@@ -68,7 +68,7 @@ the cross-architecture determinism job in S05 (DENG-353) and S22 (DENG-136).
 
 | Job | What it runs | Local equivalent |
 |---|---|---|
-| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest` and `vendor_selftest`. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
+| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest` and `deterministic_asm_check` (which builds the deterministic targets itself). It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
 | vendor.py verify | `python tools/vendor/vendor.py verify`. The archives are cached in `~/.cache/dengine-vendor`, keyed by the hash of `third_party/vendor.toml`, so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify` |
 | clang-format (changed files) | `clang-format --dry-run --Werror` on the C and C++ files that the change adds or modifies, outside `third_party/`. | See below. |
 
