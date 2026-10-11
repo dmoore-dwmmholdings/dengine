@@ -1,0 +1,164 @@
+# setup-dengine: prepares a GitHub-hosted runner for a DEngine CMake preset (DENG-66).
+#
+# Installs pinned CMake and Ninja (pip wheels, the same version on every OS), Python, the MSVC
+# developer environment on Windows, makes sure the compiler for `compiler` exists (installing
+# LLVM pieces where the image lacks them), and sets up ccache (Linux, macOS) or sccache (Windows)
+# as the CMake compiler launcher. docs/ci.md describes how the workflows use it.
+#
+# The Windows SDK comes from the runner image. Nothing here caches or uploads SDK files
+# (CONVENTIONS §6): the compiler cache holds object files only.
+name: Set up DEngine build
+description: Pinned CMake, Ninja and Python; MSVC environment; compiler check; compiler cache.
+
+inputs:
+  compiler:
+    description: "apple-clang, clang, gcc, clang-cl or msvc"
+    required: true
+  cache-key:
+    description: >-
+      Compiler cache key, usually the preset name. Empty disables the compiler cache.
+    required: false
+    default: ""
+  cache-save:
+    description: "'true' saves the compiler cache at the end of the job."
+    required: false
+    default: "true"
+  sanitizers:
+    description: "'true' makes sure the Clang sanitizer runtimes are installed (Linux clang)."
+    required: false
+    default: "false"
+  python-version:
+    description: Python for the tools/ scripts (3.10+ needed; 3.11 has tomllib).
+    required: false
+    default: "3.11"
+  cmake-version:
+    description: CMake from PyPI. The project needs 3.28 or newer.
+    required: false
+    default: "3.31.6"
+  ninja-version:
+    description: Ninja from PyPI.
+    required: false
+    default: "1.13.2"
+
+runs:
+  using: composite
+  steps:
+    - name: Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: CMake and Ninja
+      shell: bash
+      env:
+        CMAKE_VERSION: ${{ inputs.cmake-version }}
+        NINJA_VERSION: ${{ inputs.ninja-version }}
+      run: |
+        python -m pip install --disable-pip-version-check --no-input \
+          "cmake==${CMAKE_VERSION}" "ninja==${NINJA_VERSION}"
+
+    - name: MSVC developer environment (x64)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      with:
+        arch: x64
+
+    - name: Compiler
+      shell: bash
+      env:
+        DE_COMPILER: ${{ inputs.compiler }}
+        DE_SANITIZERS: ${{ inputs.sanitizers }}
+      run: |
+        set -euo pipefail
+        case "${DE_COMPILER}" in
+          apple-clang)
+            xcrun clang --version
+            ;;
+          clang)
+            if ! command -v clang >/dev/null || ! command -v clang++ >/dev/null; then
+              sudo apt-get update -q
+              sudo apt-get install -y -q clang lld
+            fi
+            clang --version
+            if [ "${DE_SANITIZERS}" = "true" ]; then
+              probe="$(mktemp -d)"
+              echo 'int main(void) { return 0; }' > "${probe}/p.c"
+              if ! clang -fsanitize=address,undefined "${probe}/p.c" -o "${probe}/p" 2>/dev/null \
+                 || ! clang -fsanitize=thread "${probe}/p.c" -o "${probe}/p" 2>/dev/null; then
+                major="$(clang -dumpversion | cut -d. -f1)"
+                sudo apt-get update -q
+                sudo apt-get install -y -q "libclang-rt-${major}-dev"
+              fi
+            fi
+            ;;
+          gcc)
+            gcc --version
+            ;;
+          clang-cl)
+            if ! command -v clang-cl >/dev/null; then
+              choco install llvm --no-progress -y
+              echo "C:/Program Files/LLVM/bin" >> "${GITHUB_PATH}"
+              export PATH="/c/Program Files/LLVM/bin:${PATH}"
+            fi
+            clang-cl --version
+            ;;
+          msvc)
+            command -v cl
+            ;;
+          *)
+            echo "::error::setup-dengine: unknown compiler '${DE_COMPILER}'"
+            exit 1
+            ;;
+        esac
+
+    - name: Compiler cache (ccache)
+      if: inputs.cache-key != '' && runner.os != 'Windows'
+      uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+      with:
+        key: ${{ inputs.cache-key }}-${{ hashFiles('third_party/vendor.toml', 'CMakePresets.json') }}
+        # ccache-action appends "-" to each restore key itself.
+        restore-keys: ${{ inputs.cache-key }}
+        max-size: 500M
+        # Drop objects this job did not use, so 16 jobs x saved caches stay under the repo limit.
+        evict-old-files: job
+        save: ${{ inputs.cache-save }}
+        job-summary: ""
+
+    - name: Compiler cache (sccache)
+      if: inputs.cache-key != '' && runner.os == 'Windows'
+      uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+      with:
+        variant: sccache
+        key: ${{ inputs.cache-key }}-${{ hashFiles('third_party/vendor.toml', 'CMakePresets.json') }}
+        # ccache-action appends "-" to each restore key itself.
+        restore-keys: ${{ inputs.cache-key }}
+        max-size: 500M
+        # Drop objects this job did not use, so 16 jobs x saved caches stay under the repo limit.
+        evict-old-files: job
+        save: ${{ inputs.cache-save }}
+        job-summary: ""
+
+    - name: Use the compiler cache as CMake launcher
+      if: inputs.cache-key != ''
+      shell: bash
+      run: |
+        # CMake reads CMAKE_<LANG>_COMPILER_LAUNCHER from the environment, so no preset changes.
+        if [ "${RUNNER_OS}" = "Windows" ]; then launcher=sccache; else launcher=ccache; fi
+        for lang in C CXX OBJC OBJCXX; do
+          echo "CMAKE_${lang}_COMPILER_LAUNCHER=${launcher}" >> "${GITHUB_ENV}"
+        done
+
+    - name: Tool versions
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "cmake: $(command -v cmake)"; cmake --version | head -n 1
+        echo "ninja: $(command -v ninja)"; ninja --version
+        python --version
+        # The project needs CMake 3.28+; fail here rather than at configure time.
+        python - <<'EOF'
+        import re, subprocess, sys
+        out = subprocess.run(["cmake", "--version"], capture_output=True, text=True).stdout
+        ver = tuple(int(x) for x in re.search(r"(\d+)\.(\d+)", out).groups())
+        sys.exit(0 if ver >= (3, 28) else f"CMake {ver} is older than 3.28")
+        EOF

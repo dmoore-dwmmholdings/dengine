@@ -189,7 +189,7 @@ The options most often set on top of a preset:
 | `DE_WITH_<MOD>` | `ON` (`DE_WITH_STEAM`: `OFF`) | Removable modules: `AUDIO`, `NET`, `PHYSICS`, `UI`, `VFX`, `NAV`, `VIDEO`, `STEAM`. |
 | `DE_GPU_D3D12`, `DE_GPU_VULKAN`, `DE_GPU_METAL` | per platform | RHI backends. |
 | `DE_WARNINGS_AS_ERRORS` | `ON` | `-Werror` / `/WX`. Keep it on. |
-| `DE_SANITIZE` | empty | `address`, `undefined` or `thread` (MSVC and clang-cl: `address` only). |
+| `DE_SANITIZE` | empty | `address`, `undefined`, `thread`, or a comma list such as `address,undefined` (`address` and `thread` do not combine; MSVC and clang-cl: `address` only). The `ci-*` presets use it, see `docs/ci.md`. |
 
 `cmake --build --preset <name> --target de_print_config` prints the resolved configuration of a
 build directory (from `build/<preset>/de_config_dump.txt`).
