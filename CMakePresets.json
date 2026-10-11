@@ -226,6 +226,14 @@
       ]
     },
     {
+      "name": "linux-gcc-dev",
+      "displayName": "Linux x64 (GCC) Dev",
+      "inherits": [
+        "os-linux-gcc",
+        "cfg-dev"
+      ]
+    },
+    {
       "name": "linux-gcc-release",
       "displayName": "Linux x64 (GCC) Release",
       "inherits": [
@@ -358,14 +366,26 @@
     },
     {
       "name": "ci-macos-asan",
-      "displayName": "CI: macOS arm64 (Apple Clang) Debug, ASan",
-      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66).",
+      "displayName": "CI: macOS arm64 (Apple Clang) Debug, ASan + UBSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml (DENG-66, DENG-355).",
       "inherits": [
         "os-macos",
         "cfg-debug"
       ],
       "cacheVariables": {
-        "DE_SANITIZE": "address"
+        "DE_SANITIZE": "address,undefined"
+      }
+    },
+    {
+      "name": "ci-linux-gcc-tsan",
+      "displayName": "CI: Linux x64 (GCC) Debug, TSan",
+      "description": "Sanitizer job of .github/workflows/sanitizers.yml: catches GCC -Wtsan errors (DENG-355).",
+      "inherits": [
+        "os-linux-gcc",
+        "cfg-debug"
+      ],
+      "cacheVariables": {
+        "DE_SANITIZE": "thread"
       }
     }
   ],
@@ -468,6 +488,13 @@
         "host-linux"
       ],
       "configurePreset": "linux-gcc-debug"
+    },
+    {
+      "name": "linux-gcc-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-dev"
     },
     {
       "name": "linux-gcc-release",
@@ -580,6 +607,13 @@
         "host-darwin"
       ],
       "configurePreset": "ci-macos-asan"
+    },
+    {
+      "name": "ci-linux-gcc-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-gcc-tsan"
     }
   ],
   "testPresets": [
@@ -690,6 +724,13 @@
       "configurePreset": "linux-gcc-debug"
     },
     {
+      "name": "linux-gcc-dev",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "linux-gcc-dev"
+    },
+    {
       "name": "linux-gcc-release",
       "inherits": [
         "host-linux"
@@ -794,7 +835,18 @@
       ],
       "configurePreset": "ci-macos-asan",
       "environment": {
-        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
+        "ASAN_OPTIONS": "strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "ci-linux-gcc-tsan",
+      "inherits": [
+        "host-linux"
+      ],
+      "configurePreset": "ci-linux-gcc-tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1"
       }
     }
   ]

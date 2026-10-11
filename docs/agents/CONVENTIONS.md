@@ -9,9 +9,9 @@ Project documentation lives in the Trama space `DENG`. `docs/agents/DOCS.md` has
 | Item | Rule |
 |---|---|
 | `main` | Only completed sprints, merged with `--no-ff` and tagged `sxx-done`. |
-| Sprint branch | `sprint/<sxx>-<slug>`, cut from `main` at sprint start. The exact name is in the SPRINT PLAN (v2) in the epic description. |
+| Sprint branch | `sprint/<sxx>-<slug>`, cut from `main` at sprint start. The exact name is in the SPRINT PLAN (v2) in the epic description. Two sprint branches can be open at once, one per lane (LOOP.md §1.1). They never merge into each other; each gets the other's work through `main` (`Sync main into sprint/…` merges). |
 | Feature branch | `feature/<KEY>-<slug>`, cut from the sprint branch. One issue per branch. |
-| Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. |
+| Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. `.worktrees/_alt/` is the integration checkout of lane Alt, not a worker worktree. |
 | Commits | Commit at the **end of each issue**. Subject: `<KEY>: <summary>`. End with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. |
 | Merges | Only the orchestrator merges, one at a time, and verifies after each merge. |
 | Never | Force-push, rewrite shared history, commit build output, or commit vendored SDKs that are not allowed (see §6). |

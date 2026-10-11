@@ -103,7 +103,10 @@ class Repo:
 
     def snapshot(self, name: str) -> dict:
         d = pathlib.Path(self.tp, name)
-        return {str(p.relative_to(d)): p.read_bytes() for p in sorted(d.rglob("*")) if p.is_file()}
+        # POSIX separators on every OS: vendor.py's own file lists use "/" (its contract), so
+        # the expected sets below are written that way too.
+        return {p.relative_to(d).as_posix(): p.read_bytes()
+                for p in sorted(d.rglob("*")) if p.is_file()}
 
 
 def test_globs() -> None:

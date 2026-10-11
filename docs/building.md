@@ -15,10 +15,26 @@ ctest --preset dev            # run every test
 Use the same preset name for the configure, build and test steps. Each preset builds into
 `build/<preset>/`.
 
+Run the repository checks before you ask for a review:
+
+```sh
+ctest --preset dev -L check
+```
+
+| CTest entry | What it checks |
+|---|---|
+| `header_check` | Builds the target `de_header_check`: every `include/dengine/*.h` compiles on its own as C11 and as C++17. It is also part of the default build. |
+| `layering_check` | `tools/check_layers/check_layers.py`: every `#include` in `src/`, `tools/cook/lib/` and `include/dengine/` follows the module layers in `tools/check_layers/layers.toml` (SPEC §4.1). It writes the module graph to `build/<preset>/tools/check_layers/layers.dot`. |
+| `layering_selftest` | The layering checker on its own fixture trees. |
+| `vendor_selftest` | `tools/vendor/vendor.py` on a local fake archive: fetch, excludes, patches and verify. No network. It needs `git` on `PATH` (`git apply` applies the patches). |
+
+CI runs the same entries (`docs/ci.md`).
+
 Some useful variations:
 
 ```sh
 ctest --preset dev -L unit                      # unit tests only
+ctest --preset dev -L check                     # the repository checks (see below)
 ctest --preset dev -R <regex>                   # tests whose name matches
 cmake --build --preset dev --target de_core     # one target
 cmake --preset dev -DDE_SANITIZE=address        # a preset plus one extra cache variable
@@ -31,7 +47,10 @@ Every host needs:
 
 - **CMake 3.28 or newer.**
 - **Ninja.** Every preset uses the Ninja generator.
-- **Python 3.** The repository checks (`tools/`) use it.
+- **Python 3.10 or newer.** Configure stops without it: the repository checks in `tools/`
+  (`check_layers`, `vendor`) are CTest entries and need it (`find_package(Python3 3.10
+  REQUIRED)`). Python 3.11 or newer is better: the tools then read TOML with `tomllib` instead of
+  their own minimal reader. CI uses 3.11.
 - **Vulkan SDK** (optional). On macOS it enables the Vulkan backend through MoltenVK, for tests
   only. On Linux it is needed for the Vulkan backend.
 
@@ -55,7 +74,7 @@ that can use it (a `condition` on the host system), so `cmake --list-presets` on
 |---|---|---|---|---|
 | macOS | `macos-debug`, `macos-dev`, `macos-release`, `macos-shipping` | macOS | `macos-arm64.cmake` | Apple Clang, arm64, deployment target 14.0 |
 | Linux Clang | `linux-clang-debug`, `linux-clang-dev`, `linux-clang-release`, `linux-clang-shipping` | Linux | `linux-x64-clang.cmake` | primary Linux compiler |
-| Linux GCC | `linux-gcc-debug`, `linux-gcc-release` | Linux | `linux-x64-gcc.cmake` | portability check |
+| Linux GCC | `linux-gcc-debug`, `linux-gcc-dev`, `linux-gcc-release` | Linux | `linux-x64-gcc.cmake` | portability check |
 | Linux headless | `linux-headless-dev`, `linux-headless-release` | Linux | `linux-x64-clang.cmake` | `DE_HEADLESS=ON` (server) |
 | Windows clang-cl | `windows-clang-cl-debug`, `windows-clang-cl-dev`, `windows-clang-cl-release`, `windows-clang-cl-shipping` | Windows | none (`clang-cl` from the VS prompt) | primary Windows compiler |
 | Windows MSVC | `windows-msvc-debug`, `windows-msvc-release` | Windows | none (`cl` from the VS prompt) | portability check |
@@ -81,6 +100,13 @@ that can use it (a `condition` on the host system), so `cmake --list-presets` on
 options. Every preset uses Ninja, sets `DE_BUILD_TESTS=ON`, and builds into `build/<preset>/`.
 The warnings are always `-Wall -Wextra -Wpedantic -Wvla -Werror` (Clang, GCC) or `/W4 /WX`
 (MSVC, clang-cl), from `cmake/DeCompiler.cmake`.
+
+Debug information with MSVC and clang-cl: Debug and Dev use `/Zi` (one `.pdb` per target that
+every compile writes into). When a compiler launcher is set (`CMAKE_C_COMPILER_LAUNCHER` or
+`CMAKE_CXX_COMPILER_LAUNCHER`, as a cache variable or an environment variable), they use `/Z7`
+instead: the debug info goes into each `.obj`, so a compiler cache such as sccache can cache the
+compile. The linker writes the `.pdb` in both cases. To choose yourself, pass
+`-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=<value>` (`cmake/DeBuildTypes.cmake`).
 
 ### Adding a preset
 
@@ -189,6 +215,8 @@ The options most often set on top of a preset:
 | `DE_WITH_<MOD>` | `ON` (`DE_WITH_STEAM`: `OFF`) | Removable modules: `AUDIO`, `NET`, `PHYSICS`, `UI`, `VFX`, `NAV`, `VIDEO`, `STEAM`. |
 | `DE_GPU_D3D12`, `DE_GPU_VULKAN`, `DE_GPU_METAL` | per platform | RHI backends. |
 | `DE_WARNINGS_AS_ERRORS` | `ON` | `-Werror` / `/WX`. Keep it on. |
+| `DE_ENABLE_PROFILE` | `ON` | Define `DE_PROFILE=1` (profiler zones) in Release. Debug never defines it, Dev always does, Shipping never does. |
+| `DE_FUZZ_LIBFUZZER` | `ON` | Build the fuzz targets (`tests/fuzz/`) with libFuzzer (`-fsanitize=fuzzer,address`) when the compiler supports it: upstream or Homebrew Clang (not Apple Clang, not clang-cl), and not with `thread` in `DE_SANITIZE`. Otherwise, or when `OFF`, each target links a standalone driver that only replays its corpus. Either way `ctest -L fuzz` replays the corpora. The cache variable `DE_HAVE_LIBFUZZER` shows which build you got. |
 | `DE_SANITIZE` | empty | `address`, `undefined`, `thread`, or a comma list such as `address,undefined` (`address` and `thread` do not combine; MSVC and clang-cl: `address` only). The `ci-*` presets use it, see `docs/ci.md`. |
 
 `cmake --build --preset <name> --target de_print_config` prints the resolved configuration of a

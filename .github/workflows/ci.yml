@@ -30,14 +30,17 @@ jobs:
           # Windows x64: clang-cl is the primary compiler, MSVC must stay green (SPEC §2, §3.2).
           - { name: windows clang-cl Debug, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug }
           - { name: windows clang-cl Release, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-release }
-          # No compiler cache: Debug uses /Zi (one shared PDB per target), which sccache cannot
-          # cache correctly with cl. clang-cl writes CodeView into the .obj, so it is fine.
-          - { name: windows msvc Debug, os: windows-2022, compiler: msvc, preset: windows-msvc-debug, no-cache: true }
+          # With a compiler launcher set, Debug and Dev use /Z7 (cmake/DeBuildTypes.cmake), so
+          # sccache caches cl Debug builds too.
+          - { name: windows msvc Debug, os: windows-2022, compiler: msvc, preset: windows-msvc-debug }
           - { name: windows msvc Release, os: windows-2022, compiler: msvc, preset: windows-msvc-release }
           # Linux x64: Clang primary, GCC for portability.
           - { name: linux clang Debug, os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug }
           - { name: linux clang Release, os: ubuntu-24.04, compiler: clang, preset: linux-clang-release }
           - { name: linux gcc Debug, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-debug }
+          # Dev is optimized with asserts on: GCC's flow-based warnings (-Wformat-truncation,
+          # -Wstringop-*) fire here and not in Debug (DENG-356).
+          - { name: linux gcc Dev, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-dev }
           - { name: linux gcc Release, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-release }
           # macOS arm64: Apple Clang.
           - { name: macos apple-clang Debug, os: macos-14, compiler: apple-clang, preset: macos-debug }
@@ -53,7 +56,7 @@ jobs:
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: ${{ matrix.compiler }}
-          cache-key: ${{ !matrix.no-cache && matrix.preset || '' }}
+          cache-key: ${{ matrix.preset }}
           cache-save: ${{ github.event_name != 'pull_request' }}
 
       - name: Configure

@@ -199,11 +199,20 @@ TEST(selftest, float_eps) {
 static int g_skip_line;
 static int g_after_skip;
 
+/* The store after SKIP is unreachable on purpose: it proves SKIP does not return. MSVC cl
+ * warns C4702 (a code-generator warning, so the pragma has to sit outside the function). */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+#pragma warning(disable : 4702)
+#endif
 DE_TEST_CASE(case_skip, inner, skip) {
     g_skip_line = __LINE__ + 1;
     SKIP("not on this platform");
     g_after_skip = 1;
 }
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 
 TEST(selftest, skip_reports_skip) {
     de_test_result r;

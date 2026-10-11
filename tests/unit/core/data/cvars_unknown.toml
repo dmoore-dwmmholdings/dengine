@@ -1,0 +1,11 @@
+# Input of cvar.toml_unknown_pending (tests/unit/core/test_cvar.c): `known` is registered before
+# the load; every other key is not, so the load keeps it pending until its cvar is registered.
+known = 7
+
+[future.module]
+speed = 2.5
+mode = "fast"
+
+[future]
+enabled = true
+count = "12"

@@ -30,6 +30,8 @@ url = "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz"
 sha256 = "5738270935e7c3d38a79b3adf7c9692566ce7895a25f67de43ad52ab504acd32"
 license = "BSD-2-Clause"
 files = ["xxhash.h"]
+# UBSan fix in XXH_vld1q_u64() (misaligned NEON load, AArch64 GCC); see the patch header. DENG-358.
+patches = ["patches/0001-neon-unaligned-load-memcpy.patch"]
 
 [[lib]]
 name = "zstd"
@@ -55,6 +57,8 @@ url = "https://github.com/cktan/tomlc17/archive/refs/tags/R261003.tar.gz"
 sha256 = "48876f14bd7a123f95f16074dd0d5681f75c397c1bce61f1a52f42201f90eacc"
 license = "MIT"
 files = ["src/tomlc17.c", "src/tomlc17.h"]
+# UBSan fix in page_create() (null-pointer member access); see the patch header. DENG-356.
+patches = ["patches/0001-page-create-offsetof.patch"]
 
 [[lib]]
 name = "stb"

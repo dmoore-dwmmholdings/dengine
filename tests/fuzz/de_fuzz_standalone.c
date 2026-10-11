@@ -13,6 +13,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#endif
 #else
 #define _POSIX_C_SOURCE 200809L
 #include <dirent.h>
@@ -117,7 +120,7 @@ static int path_list_add(path_list *l, const char *dir, const char *name) {
 #if defined(_WIN32)
 static int list_dir(const char *dir, path_list *out) {
     char *pattern = join_path(dir, "*");
-    WIN32_FIND_DATAA fd;
+    WIN32_FIND_DATAA fd = {0}; /* zeroed: MSVC C4701 cannot see that h guards every read */
     HANDLE h = pattern ? FindFirstFileA(pattern, &fd) : INVALID_HANDLE_VALUE;
     free(pattern);
     if (h == INVALID_HANDLE_VALUE) {
@@ -167,7 +170,30 @@ static int is_dir(const char *path) {
 #endif
 }
 
+#if defined(_WIN32)
+/* A crash must end the process at once with a failing exit code, as it does on POSIX. By default
+ * the Windows CRT does not: in a Debug CRT, abort() and a failed assert() first open a modal
+ * "Debug Error!" message box, and abort() then asks Windows Error Reporting for a crash dump. On
+ * an unattended runner nobody closes the box, so CTest kills the run at its timeout instead of
+ * seeing the crash (fuzz.selftest_crash_detected, DENG-359). Send the CRT reports to stderr and
+ * skip the fault report; abort() then exits with code 3. */
+static void crash_without_dialogs(void) {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#if defined(_MSC_VER)
+    _set_abort_behavior(0, _CALL_REPORTFAULT);
+    /* These are no-ops (macros to 0) in a Release CRT, where no dialog is shown anyway. */
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#endif
+}
+#endif
+
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+    crash_without_dialogs();
+#endif
     int ok = 1;
     size_t runs = 1;
     static const uint8_t empty[1] = {0};

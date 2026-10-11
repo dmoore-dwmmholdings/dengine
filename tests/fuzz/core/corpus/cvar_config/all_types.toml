@@ -1,0 +1,21 @@
+volume = 2.5
+cheats = true
+
+[r]
+vsync = "off"
+
+[r.shadows]
+quality = -7
+filter = "pcss"
+
+[player]
+name = "Zoë"
+
+[net]
+rate = 0x40
+
+[cheat]
+god = true
+
+[dev]
+only = yes

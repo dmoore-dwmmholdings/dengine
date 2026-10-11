@@ -25,7 +25,7 @@ Related files: `docs/agents/LOOP.md` (orchestrator), `docs/agents/WORKER.md` (wo
 Titles are exact; `[[wikilinks]]` resolve against them, and Trama refuses a duplicate title.
 
 ```
-DEngine                          home: one-paragraph vision, current sprint and status, map of the space
+DEngine                          home: one-paragraph vision, current sprints (one per lane) and status, map of the space
 ├── Architecture                 layer bands, module graph, threading model, memory model, frame flow
 ├── Modules                      index table: module, source dir, layer, deterministic, status, page
 │   └── Module: <module>         one per module, e.g. "Module: core", "Module: gpu/vulkan", "Module: world/vfx"
@@ -81,8 +81,11 @@ A worker that changes the module graph, the threading model or another architect
 2. **Create** with `create_page` (`space: "DENG"`, `parent: "<parent title>"`).
 3. **Update with read-modify-write in one step.** `update_page` replaces the whole body, and other workers may edit the same page.
    - Call `get_page` immediately before `update_page`. Do no other work between the two calls.
+   - **Address the page by `id`** (from `get_page_tree`) in both calls. `get_page` by title can return the last *published* text instead of the current draft, and writing that back deletes other workers' unpublished changes.
    - Change only the sections about your work. Send back every other line unchanged.
    - Call `get_page` once more afterwards. If text from another agent is missing, put it back.
+   - Every issue embed (`![[andare:KEY]]`) that was on the page before your write must still be there after it. A missing embed means you wrote over someone else's work: restore their sections from the page as you read it.
+   - Write your page changes **after** your final rebase, as the last step before `In Review`, not early in the issue. A draft written hours before the merge is the one most likely to overwrite another worker's.
 4. **Link the issue.** After your last update of a page, call `link_to_issue` (`ref: "<KEY>"`) on it once. `pages_referencing <KEY>` then shows that the issue is documented.
 5. **Do not publish.** Workers leave their changes as drafts. The orchestrator publishes after a green merge, so the **published** version of a page always describes merged code.
 6. **Style.** Short sections. Plain sentences. Link repo files by path in backticks, other pages with `[[Title]]`, issues with their key. Say what is missing or deferred, with the issue key that tracks it. Do not paste large code blocks; point at the file.

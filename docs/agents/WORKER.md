@@ -2,7 +2,7 @@
 
 The orchestrator (`docs/agents/LOOP.md`) gives you **one** Andare issue, a **worktree** and a **feature branch**. You take the issue from `In Progress` to `In Review`: you build it, test it, commit it and report on it. The orchestrator merges your branch and sets the issue to Done.
 
-Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`, `Sprint epic`, and sometimes `Reason`.
+Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`, `Sprint epic`, `Parallel sprint`, and sometimes `Reason`.
 
 **Work only inside your worktree.** Use absolute paths. Do not `cd` into the main repo or into another worktree. Do not check out other branches.
 
@@ -16,7 +16,7 @@ Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`,
    - `docs/agents/CONVENTIONS.md` and `docs/agents/DOCS.md`,
    - the Trama pages that DOCS.md §5 lists for workers: `Architecture`, the `Module:` pages of the modules you change and call, the pages that reference your key or the epic, and the `Decision:` pages about your modules. They explain the code that earlier sprints merged into your base. If a page disagrees with the code, the code wins.
    - the SPEC.md sections and the `include/dengine/*.h` headers that the issue cites,
-   - the existing code in the module directories the issue touches. Earlier sprints are merged into your base.
+   - the existing code in the module directories the issue touches. Earlier sprints are merged into your base. The exception is the `Parallel sprint` in your prompt: it runs at the same time in the other lane (LOOP.md §1.1) and its code is **not** in your base. Do not use its APIs and do not edit its files. If your issue needs it, stop and report `RESULT: failed` with that reason.
 3. Set the status to **In Progress**: `set_issue_status <KEY> "In Progress"`. Use `update_issue` with `assignee: "this agent"` if the issue has no assignee.
 4. **Comment where you are building.** Post this comment before you write any code:
 

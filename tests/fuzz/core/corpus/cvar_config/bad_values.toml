@@ -1,0 +1,5 @@
+volume = nan
+r.vsync = [1, 2]
+player.name = 1979-05-27T07:32:00Z
+[r.shadows]
+filter = 7
