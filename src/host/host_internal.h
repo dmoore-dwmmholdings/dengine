@@ -47,6 +47,12 @@ typedef struct de__host {
     void *loop_clock_user;
     /** Frames the last de__loop_run completed (Startup not counted). */
     u64 loop_frames;
+
+    /* ---- DENG-95: headless mode (headless.c). ---- */
+    /** FixedUpdate runs of the last de__loop_run (written by the loop when it returns). */
+    u64 loop_fixed_steps;
+    /** de__headless_begin installed the stop handlers; de__headless_end removes them. */
+    bool headless_handlers;
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */
@@ -115,6 +121,40 @@ de_result de__loop_add_frame_end_hook(de__host *h, de__loop_hook_fn fn, void *us
  * by DENG-143). Same rules and results as de__loop_add_frame_end_hook.
  */
 de_result de__loop_add_frame_begin_hook(de__host *h, de__loop_hook_fn fn, void *user);
+
+/* ---------- Headless mode (headless.c; DENG-95) ---------- */
+
+/**
+ * Checks that `e` has no window, GPU device, renderer, audio device or UI, as a headless engine
+ * must not (SPEC §16.3).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`e` NULL) or DE_ERR_INTERNAL naming the first one found.
+ */
+de_result de__headless_check(const de_engine *e);
+
+/**
+ * Starts headless mode for the loop of `h` (its engine exists): checks the engine
+ * (de__headless_check), adds a frame-end hook and installs the stop handlers: SIGINT and SIGTERM
+ * on POSIX, a console control handler on Windows. A handler only sets an atomic flag; the hook
+ * then calls de_engine_request_quit, so the loop stops after the current frame. The handlers are
+ * process-wide: when another run owns them, this one logs a warning and has none. Logs one Info
+ * line. Main thread.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (no engine), DE_ERR_INTERNAL (the engine has a window
+ *         or device), DE_ERR_BUSY (the frame-end hook list is full) or DE_ERR_IO (the OS refused
+ *         a handler).
+ */
+de_result de__headless_begin(de__host *h);
+
+/** Restores the handlers de__headless_begin replaced and clears a pending stop. Call after the
+ * loop, before the engine is destroyed. Safe when de__headless_begin did not install them. */
+void de__headless_end(de__host *h);
+
+#if defined(_WIN32)
+/** The console control handler's body (`ctrl_type` is a CTRL_*_EVENT): sets the stop flag and
+ * returns true for Ctrl+C, Ctrl+Break, close, logoff and shutdown (the last three wait up to
+ * 4.5 s for de__headless_end); false for anything else. Exposed for tests: generating a real
+ * console event would also reach every other process on the console. */
+bool de__headless_on_console_ctrl(u32 ctrl_type);
+#endif
 
 DE_EXTERN_C_END
 #endif /* DE_HOST_HOST_INTERNAL_H */

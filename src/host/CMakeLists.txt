@@ -66,3 +66,22 @@ include(DeAddGame)
 # DENG-91: the main loop's timing core (fixed/variable steps, catch-up, alpha) and the loop's
 # internal types; loop.c itself is in the list above.
 target_sources(de_host PRIVATE timing.h timing.c loop_internal.h)
+
+# DENG-95: headless mode (headless.c: the engine check and the SIGINT/SIGTERM or console Ctrl
+# stop handlers around the main loop).
+target_sources(de_host PRIVATE headless.c)
+
+# DENG-95: the host-side asset switch. DE_HAS_ASSETS is 0 while the host creates no asset system
+# (de_engine.assets is NULL). Global (examples/ and tests/ read it) and passed to the host's C
+# code. While it is 0, `de_asset_stubs` exists: an INTERFACE target whose source, asset_stubs.c,
+# is compiled into each game that links it (never into de_host or `dengine`, which hold the real
+# de_asset with the same symbols). DENG-143 sets it to 1, creates the asset system in the engine
+# and deletes asset_stubs.c and this target.
+set(DE_HAS_ASSETS 0 CACHE INTERNAL "The host creates de_engine.assets (0: games link de_asset_stubs)")
+target_compile_definitions(de_host PRIVATE DE_HAS_ASSETS=${DE_HAS_ASSETS})
+if(NOT DE_HAS_ASSETS)
+    add_library(de_asset_stubs INTERFACE)
+    target_sources(de_asset_stubs INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/asset_stubs.c")
+    target_compile_definitions(de_asset_stubs INTERFACE DE_HAS_ASSETS=0)
+    target_link_libraries(de_asset_stubs INTERFACE de_config)
+endif()

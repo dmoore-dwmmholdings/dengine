@@ -367,6 +367,7 @@ de_result de__loop_run(de__host *h) {
 
     if (own_arenas)
         de_frame_arenas_shutdown();
+    h->loop_fixed_steps = ts.steps_total; /* DENG-95: the host's exit summary */
     if (r == DE_OK)
         DE_LOG(DE_LOG_DEBUG, h->log, "main loop: %llu frames, %llu FixedUpdate steps",
                (unsigned long long)h->loop_frames, (unsigned long long)ts.steps_total);
