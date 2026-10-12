@@ -10,7 +10,10 @@
  *              queued later overtakes the less urgent ones still queued (main thread enqueues;
  *              dispatch pops under `lock`).
  *   OPEN       the source is opened and its size queried (bytes_total is known from here on):
- *              a DE_TASK_POOL_BACKGROUND task, or inline without a task system. io_stage.c.
+ *              a DE_TASK_POOL_FRAME task, or inline without a task system. io_stage.c. Not the
+ *              background pool: its workers run below normal priority, and on Windows a busy
+ *              main thread and frame workers starved them for seconds (DENG-386). No stage of a
+ *              load runs on a below-normal thread.
  *   READ       one de_io_request on the process I/O threads (de_io_submit, S03); the callback
  *              runs on the I/O thread (DE_IO_CALLBACK_ON_IO_THREAD).
  *   DECODE     payloads tagged zstd (de__payload header) decompress on a DE_TASK_POOL_FRAME

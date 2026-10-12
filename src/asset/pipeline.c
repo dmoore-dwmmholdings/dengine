@@ -237,8 +237,13 @@ void de__pipeline_dispatch(de__pipeline *pl) {
         de_mutex_unlock(&pl->lock);
         if (job == NULL)
             break;
-        /* Opening a file can block: background workers, never a frame worker. */
-        de__pipeline_run(pl, DE_TASK_POOL_BACKGROUND, de__io_stage_open, job);
+        /* A frame worker, not a background worker (DENG-386). Background workers run below
+         * normal priority, and Windows schedules strictly by priority: under a busy main thread
+         * and frame workers (an uncapped loop, other processes) a background worker ran no open
+         * for seconds, and a job it held stayed in the OPEN/READ window while the rest of the
+         * queue passed it. The open is short (a file open and a size query; a pack lookup in
+         * S08), and at most io_limit of them run at once. */
+        de__pipeline_run(pl, DE_TASK_POOL_FRAME, de__io_stage_open, job);
     }
     tl_dispatching = 0;
 }
@@ -953,7 +958,7 @@ void de__pipeline_shutdown(de_asset_system *s) {
                 job_cancel(pl, job);
         }
         /* Wait for every job to come back: help with frame tasks on the main thread, else
-         * sleep briefly while the I/O and background threads finish. */
+         * sleep briefly while the I/O threads finish. */
         while (pl->live_jobs != 0) {
             pl_update(pl, s);
             if (pl->live_jobs == 0)
