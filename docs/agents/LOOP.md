@@ -179,9 +179,3 @@ When all 39 epics are Done, comment a final summary on DENG-1, set DENG-1 to Don
 macOS arm64 with: Xcode + command line tools, CMake ≥ 3.28, Ninja, Python 3.10+, git ≥ 2.40, the Vulkan SDK (MoltenVK). Optional, for Windows cross-compiles: `xwin` with the Windows SDK/CRT already downloaded. Downloading them means accepting Microsoft's license, so a **human** does it, not an agent. Optional: a Linux sysroot for Linux cross-compiles. Optional: a GitHub `origin` remote, so CI runs the full matrix.
 
 A worker that needs a missing prerequisite builds what it can and records the gap in `needs-hw-verify` (see CONVENTIONS.md). It does not install licensed SDKs.
-
-## 5. Transition (one time, 2026-10-11)
-
-1. Finish the current sprint S04 under the old rules: its last tasks merge into `sprint/s04-task-reflect`, and it closes into `main` with `--no-ff` and the tag `s04-done` as before.
-2. Then create `dev` from `main` (`git checkout -b dev main && git push -u origin dev`), switch the main repo directory to `dev`, and add `dev` to the branches the CI workflows accept (if they filter by branch).
-3. From then on this file applies as written. Remove this section once `dev` exists.
