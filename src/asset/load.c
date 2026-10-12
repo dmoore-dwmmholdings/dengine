@@ -9,6 +9,7 @@
 #include "asset/asset_internal.h"
 #include "asset/backend_internal.h"
 #include "asset/budget_internal.h" /* DENG-144 */
+#include "asset/mount_internal.h"  /* DENG-212 */
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
 
@@ -661,16 +662,46 @@ de_load_handle de_asset_load_many(de_asset_system *s, const de_asset_id *ids, u3
                           priority_from_flags(flags, DE__LOAD_PRIORITY_NORMAL));
 }
 
+/* DENG-212: the bundle `bundle` of the merged pack bundle tables (mount.c). False when no
+ * mounted pack defines it; else `*out` is the request (invalid only when out of memory). */
+static bool load_pack_bundle(de_asset_system *s, const char *bundle, u32 flags,
+                             de_load_handle *out) {
+    de__mount_bundle pb;
+    de_result r = de__mount_bundle_closure(s, bundle, &pb);
+    if (r == DE_ERR_NOT_FOUND)
+        return false;
+    *out = (de_load_handle){0};
+    if (r != DE_OK)
+        return true; /* out of memory: the error context is set */
+    *out = request_create(s, pb.ids, pb.count, flags,
+                          priority_from_flags(flags, (de__load_priority)pb.priority));
+    if (DE_HANDLE_VALID(*out))
+        de__mount_bundle_pin(s, &pb); /* `RESIDENT` pack bundles, like `resident = true` */
+    de__mount_bundle_free(s, &pb);
+    return true;
+}
+
 de_load_handle de_asset_load_bundle(de_asset_system *s, const char *bundle, u32 flags) {
     if (s == NULL || bundle == NULL) {
         (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_asset_load_bundle: NULL system or bundle");
         return (de_load_handle){0};
     }
+    /* DENG-212: PACKED mode takes bundles from the mounted packs first; SOURCE mode only when
+     * the manifest does not define the bundle. */
+    de_load_handle ph;
+    bool packed = s->desc.mode == DE_ASSET_MODE_PACKED;
+    if (packed && load_pack_bundle(s, bundle, flags, &ph))
+        return ph;
     const de__resolved *res = s->resolved;
     const de__resolved_bundle *rb = res != NULL ? de__resolved_find_bundle(res, bundle) : NULL;
+    if (rb == NULL && !packed && load_pack_bundle(s, bundle, flags, &ph))
+        return ph;
     if (rb == NULL) {
         char msg[DE__LOAD_MSG_MAX];
-        snprintf(msg, sizeof msg, "bundle \"%.200s\" is not in the asset manifest", bundle);
+        /* DENG-212: names the packs too when any are mounted (or in PACKED mode). The name is
+         * cut so that the longest message fits DE__LOAD_MSG_MAX (GCC -Wformat-truncation). */
+        snprintf(msg, sizeof msg, "bundle \"%.180s\" is not in the asset manifest%s", bundle,
+                 packed || de__mount_any(s) ? " or a mounted pack" : "");
         return request_create_failed(s, flags, DE_ERR_NOT_FOUND, msg);
     }
     de__load_priority priority =

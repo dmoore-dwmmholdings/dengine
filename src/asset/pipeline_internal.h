@@ -234,6 +234,10 @@ struct de_asset_load_ctx {
     u32 dep_slot_count;
     u32 visit_epoch; /**< cycle search marks */
     struct de_asset_load_ctx *visit_parent;
+
+    /* DENG-212: the pack read state of a job whose asset a mounted pack serves
+     * (mount_internal.h, pack_stage.c); NULL for every other job. Set at submit. */
+    struct de__pack_job *pack;
 };
 
 typedef struct de_asset_load_ctx de__pjob;
@@ -364,6 +368,10 @@ void de__io_stage_stop(de__pipeline *pl);
 void de__decompress_stage_run(void *job);
 /** decompress_stage.c: frees the decoder contexts. Main thread, nothing in flight. */
 void de__decompress_stage_shutdown(de__pipeline *pl);
+/** DENG-212: a ZSTD_DCtx for the calling thread (the frame worker's own, or a spare); NULL when
+ * out of memory. Give it back with de__decompress_dctx_give and the same `*spare`. */
+void *de__decompress_dctx_take(de__pipeline *pl, bool *spare);
+void de__decompress_dctx_give(de__pipeline *pl, void *dctx, bool spare);
 
 /** load_ctx.c: hands a job with its bytes to the loader: the main-thread list, a frame task,
  * or inline when already on a frame worker (or without a task system). */

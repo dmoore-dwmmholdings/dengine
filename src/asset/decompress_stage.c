@@ -153,6 +153,15 @@ void de__decompress_stage_run(void *user) {
     de__load_stage_begin(job, true);
 }
 
+/* DENG-212: the pack read path (pack_stage.c) decodes chunks with the same contexts. */
+void *de__decompress_dctx_take(de__pipeline *pl, bool *spare) {
+    return dctx_take(pl, spare);
+}
+
+void de__decompress_dctx_give(de__pipeline *pl, void *dctx, bool spare) {
+    dctx_give(pl, (ZSTD_DCtx *)dctx, spare);
+}
+
 void de__decompress_stage_shutdown(de__pipeline *pl) {
     for (u32 i = 0; i < pl->dctx_count; ++i)
         if (pl->dctx[i] != NULL)

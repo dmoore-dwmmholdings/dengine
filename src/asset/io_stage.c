@@ -8,6 +8,7 @@
 #include "asset/pipeline_internal.h"
 
 #include "asset/asset_internal.h"
+#include "asset/mount_internal.h" /* DENG-212 */
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -25,9 +26,8 @@ static de_result source_file_open(void *user, de_asset_system *s, const char *vp
                                   de__source_span *out) {
     (void)user;
     (void)id;
-    if (s->desc.mode == DE_ASSET_MODE_PACKED)
-        return DE_FAIL(DE_ERR_UNSUPPORTED,
-                       "packed mode reads packs, and the pack reader is not available yet");
+    if (s->desc.mode == DE_ASSET_MODE_PACKED) /* DENG-212: pack jobs never get here */
+        return DE_FAIL(DE_ERR_UNSUPPORTED, "packed mode loads assets only from mounted packs");
     de_file *f = NULL;
     de_result r = de_file_open(vpath, DE_FILE_READ, &f);
     if (r != DE_OK) {
@@ -160,6 +160,10 @@ static void open_abort(de__pjob *job) {
 
 void de__io_stage_open(void *user) {
     de__pjob *job = (de__pjob *)user;
+    if (job->pack != NULL) { /* DENG-212: a pack job reads its chunk runs (pack_stage.c) */
+        de__pack_stage_open(job);
+        return;
+    }
     de__pipeline *pl = job->pl;
     if (de__pjob_cancelled(job)) {
         open_abort(job);

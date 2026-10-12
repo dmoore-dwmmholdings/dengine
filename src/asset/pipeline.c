@@ -12,6 +12,7 @@
 #include "asset/backend_internal.h"
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
+#include "asset/mount_internal.h" /* DENG-212 */
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
 
@@ -388,6 +389,7 @@ static void job_free(de__pipeline *pl, de__pjob *job) {
         DE_FREE(pl->alloc, job->deps, sizeof(de_asset_id) * job->dep_capacity);
     if (job->span_open)
         pl->source.close(pl->source.user, &job->span);
+    de__pack_stage_free(job); /* DENG-212: the run table and the pack reference */
     if (job->buf != NULL)
         DE_FREE(pl->alloc, job->buf, (size_t)job->buf_size);
     if (job->raw != NULL)
@@ -766,6 +768,34 @@ static bool submit_cook(de__pipeline *pl, de_asset_system *s, u32 slot,
     return true;
 }
 
+/* DENG-212: an asset a mounted pack serves (every asset in PACKED mode; in SOURCE mode the IDs a
+ * pack overrides) is read from the pack (pack_stage.c). False: it is not. */
+static bool submit_pack(de__pipeline *pl, de_asset_system *s, u32 slot,
+                        de__load_priority priority) {
+    de__pack_plan plan;
+    if (!de__pack_stage_plan(s, slot, &plan))
+        return false;
+    if (plan.error != DE_OK) {
+        fail_early(s, slot, plan.error, "%s", plan.msg);
+        return true;
+    }
+    de__pjob *job =
+        job_new(pl, slot, de__slot_get(s, slot), &plan.asset, plan.type, plan.vpath, priority);
+    if (job != NULL && (!job_table_put(pl, job) || de__pack_stage_attach(job, &plan) != DE_OK)) {
+        job_free(pl, job);
+        job = NULL;
+    }
+    if (job == NULL) {
+        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", plan.asset.id);
+        return true;
+    }
+    de_mutex_lock(&pl->lock);
+    queue_push(pl, job);
+    de_mutex_unlock(&pl->lock);
+    de__pipeline_dispatch(pl);
+    return true;
+}
+
 static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priority priority) {
     de__pipeline *pl = (de__pipeline *)user;
     de_result r = pipeline_start(pl);
@@ -774,6 +804,8 @@ static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priorit
                    de_error_last() != NULL ? de_error_last()->message : de_result_str(r));
         return;
     }
+    if (submit_pack(pl, s, slot, priority)) /* DENG-212: before the cooker (packs win) */
+        return;
     if (submit_cook(pl, s, slot, priority)) /* DENG-209 */
         return;
     const de__slot *sl = de__slot_get(s, slot);
@@ -836,7 +868,9 @@ static void job_cancel(de__pipeline *pl, de__pjob *job) {
     }
     /* The job is alive until the main thread frees it, so its request is valid here. A read
      * that is still queued completes at once (its callback may run right here). */
-    if (io_cancel)
+    if (io_cancel && job->pack != NULL)
+        de__pack_stage_cancel(job); /* DENG-212: a pack job has one read per run */
+    else if (io_cancel)
         de_io_cancel(&job->io);
     /* WAIT_DEPS: the update hook discards it; every other stage brings it back to the main
      * thread through the finished list. */

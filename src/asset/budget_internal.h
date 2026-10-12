@@ -125,6 +125,11 @@ void de__budget_pin_bundle(de_asset_system *s, const de__resolved *res,
 /** load.c (de__slot_progress): `bytes` more were read. Any thread. */
 void de__budget_add_io_bytes(de_asset_system *s, u64 bytes);
 
+/**
+ * DENG-212 (de_asset_load_bundle of a pack bundle, after the request was created): pins the
+ * assets `ids` (the members of resident pack bundles) like de__budget_pin_bundle. Main thread.
+ */
+void de__budget_pin_ids(de_asset_system *s, const de_asset_id *ids, u32 count);
 /** True when slot `slot` is pinned by a resident bundle. For tests. */
 bool de__budget_is_resident(de_asset_system *s, u32 slot);
 
