@@ -135,3 +135,16 @@ exclude = ["public/TracyClient.F90"]
 # The Linux dlclose() override becomes optional (TRACY_NO_DLCLOSE_OVERRIDE, which the build
 # defines), so de_dylib_close and game hot reload unload libraries; see the patch header. DENG-94.
 patches = ["patches/0001-optional-dlclose-override.patch"]
+
+[[lib]]
+name = "monocypher"
+# Network crypto (SPEC §16.1, §22): XChaCha20-Poly1305, X25519, BLAKE2b for the net handshake and
+# packet encryption. 4.0.3 is the latest 4.x release (monocypher.org release tarball). DENG-52.
+version = "4.0.3"
+url = "https://monocypher.org/download/monocypher-4.0.3.tar.gz"
+sha256 = "8cc9bc341a66249016db9bd70e9142d8d0aef9945973744b1ac05dbc55d8ee66"
+license = "BSD-2-Clause OR CC0-1.0"
+license_file = "LICENCE.md"
+# The library (one TU) and upstream's small test-vector subset (the TIS-CI set), which the net
+# unit tests run on the host. The optional Ed25519/SHA-512 file is not used.
+files = ["src/monocypher.c", "src/monocypher.h", "tests/tis-ci-vectors.h"]

@@ -76,6 +76,7 @@ Engine modules link these targets through `de_add_module(... LIBS de_tp_<name>)`
 | stb | 2026-08-02-2c980bb | MIT OR Unlicense | `de_tp_stb` | `<stb_image.h>`, `<de_stb_vorbis.h>` | `stb_image.h` and `stb_vorbis.c`, with one implementation TU each. |
 | SDL3 | 3.4.18 | Zlib | `de_tp_sdl3` | `<SDL3/SDL.h>` (only in `src/platform/sdl/`) | Built by SDL's own CMake from `sdl3/SDL3-3.4.18/` (`strip = 0`), static, without audio, GPU, renderer, camera, OpenGL, tray, tests and examples. Not built with `DE_HEADLESS`. |
 | Tracy | 0.14.1 | BSD-3-Clause | `de_tp_tracy` | `<tracy/TracyC.h>` (only in `src/core/prof/prof_tracy.cpp`) | Profiler client, C++ behind the engine's C API (`de_debug.h`). `public/` only. Built from `public/TracyClient.cpp` with `TRACY_ON_DEMAND`, `TRACY_MANUAL_LIFETIME`, `TRACY_NO_FRAME_IMAGE`, `TRACY_NO_CRASH_HANDLER`; only for Dev and profiling Release builds, never Debug or Shipping. The profiler GUI must be 0.14.x. |
+| Monocypher | 4.0.3 | BSD-2-Clause OR CC0-1.0 | `de_tp_monocypher` | `<monocypher.h>` (only in `src/net/crypto.c`) | Network crypto: XChaCha20-Poly1305, X25519, BLAKE2b (DENG-52). `src/monocypher.{c,h}` and upstream's TIS-CI test-vector subset `tests/tis-ci-vectors.h` (used by the net unit tests). The optional Ed25519 file is not vendored. |
 
 ## Adding or updating a library
 
