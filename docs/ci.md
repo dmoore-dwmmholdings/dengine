@@ -27,7 +27,7 @@ runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
   host before they push.
 - What the quick tier misses (clang-cl, MSVC Release, GCC TSan, macOS jobs, headless Windows) is
   caught by the full run on `dev` after the merge; the orchestrator files a fix task for it.
-- `checks.yml` is small (three Ubuntu jobs) and always runs in full. `determinism.yml` (three
+- `checks.yml` is small (three Ubuntu jobs) and always runs in full. `determinism.yml` (five
   platform jobs and a diff job) has no tiers either.
 
 Every build job runs a preset from `CMakePresets.json`. To reproduce a job locally, run the same
@@ -61,8 +61,7 @@ artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporar
 (`LastTest.log`), `CMakeConfigureLog.yaml` and the config dump.
 
 GPU and golden-image jobs come in S10, self-hosted runners in S20 and the ABI check in S37. The
-cross-architecture determinism jobs are in `determinism.yml` (below); S22 (DENG-136) adds the
-physics scenarios to them.
+cross-architecture determinism jobs are in `determinism.yml` (below).
 
 ### `sanitizers.yml`: sanitizers
 
@@ -95,7 +94,7 @@ physics scenarios to them.
 
 | Job | What it runs | Local equivalent |
 |---|---|---|
-| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest` and `deterministic_asm_check` (which builds the deterministic targets itself). It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
+| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
 | vendor.py verify | `python tools/vendor/vendor.py verify`. The archives are cached in `~/.cache/dengine-vendor`, keyed by the hash of `third_party/vendor.toml`, so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify` |
 | clang-format (changed files) | `clang-format --dry-run --Werror` on the C and C++ files that the change adds or modifies, outside `third_party/`. | See below. |
 
@@ -116,30 +115,41 @@ Every other C and C++ file outside `third_party/` is formatted, the public heade
 
 ### `determinism.yml`: cross-platform determinism
 
-SPEC §19.4 and risk R6: every scenario in `tests/determinism/` must give the same per-tick world
-checksums on every platform. The harness and the scenarios are described in the Trama page
-`Testing`.
+SPEC §19.4 and risk R6: every scenario in `tests/determinism/` must give the same per-tick
+checksums on every platform and compiler. The harnesses and the scenarios are described in the
+Trama pages `Testing` and `Module: physics`.
 
 | Job | Runner | Preset |
 |---|---|---|
-| determinism linux-x86-64 | `ubuntu-24.04` | `linux-gcc-release` |
-| determinism windows-x86-64 | `windows-2022` | `windows-msvc-release` |
-| determinism macos-arm64 | `macos-14` | `macos-release` |
-| determinism diff (3 platforms) | `ubuntu-24.04` | none |
+| plan | `ubuntu-24.04` | none: holds the platform list |
+| determinism macos-arm64-clang | `macos-14` | `macos-release` |
+| determinism linux-x86-64-gcc | `ubuntu-24.04` | `linux-gcc-release` |
+| determinism linux-x86-64-clang | `ubuntu-24.04` | `linux-clang-release` |
+| determinism windows-x86-64-msvc | `windows-2022` | `windows-msvc-release` |
+| determinism windows-x86-64-clang-cl | `windows-2022` | `windows-clang-cl-release` |
+| determinism diff (all platforms) | `ubuntu-24.04` | none |
 
+- The `plan` step lists the platforms, one JSON line each. `determinism-run` is one matrix job over
+  that list and `determinism-diff` reads the same list, so a new platform is one appended line.
+  The first line (macOS arm64, where the golden files are made) is the diff reference.
 - Each `determinism-run` job builds only the target `de_determinism_tests` (every scenario
-  executable) and runs `ctest -L determinism`: worker counts, the checked-in golden files,
-  rollback and the harness self tests. So a platform that differs from the golden file fails here
-  already.
-- Then it uploads the `<scenario>.checksums` files that the tests wrote to
-  `build/<preset>/determinism/` as the artifact `determinism-<platform>` (kept for 14 days).
-- `determinism-diff` downloads the three artifacts and compares each file with the Linux one byte
-  for byte. It names the first differing tick and writes a table to the job summary. It runs also
-  when a platform job failed, and then fails if that platform's files are missing.
+  executable) and runs `ctest -L determinism`: worker counts, the checked-in golden files, the
+  harness self tests. So a platform that differs from a golden file fails here already.
+- Then it uploads what the tests wrote to `build/<preset>/determinism/` as the artifact
+  `determinism-<platform>` (kept for 14 days): `<scenario>.checksums` (one value per tick) and,
+  for the physics scenarios, `<scenario>.fields` (per-tick hashes of the field groups: positions,
+  rotations, velocities, mass, AABBs, other body fields, probe, ECS).
+- `determinism-diff` downloads every artifact and compares each file with the reference platform's
+  byte for byte. It names the first differing tick and, when both platforms have a `.fields`
+  file, the field groups that differ at that tick, and writes a table to the job summary. It runs
+  also when a platform job failed, and then fails if that platform's files are missing.
+- A new scenario needs no change here: its tests write the files and the diff job globs them.
 - Local equivalent: `ctest --preset dev -L determinism`. To check x86-64 on an arm64 Mac, configure
   `macos-dev` into its own directory with `-DCMAKE_OSX_ARCHITECTURES=x86_64`, build
   `de_determinism_tests` and run the tests under Rosetta 2 (`arch -x86_64`).
 - Start it on a branch with `gh workflow run Determinism --ref <branch>`.
+- The SPEC §5.7 source check (`check_determinism_src`, label `check`) is not a step here: as a
+  CTest entry it runs in `checks.yml` and in every `ci.yml` and `sanitizers.yml` job.
 
 ## Shared setup: `.github/actions/setup-dengine`
 

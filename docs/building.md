@@ -28,6 +28,8 @@ ctest --preset dev -L check
 | `layering_selftest` | The layering checker on its own fixture trees. |
 | `vendor_selftest` | `tools/vendor/vendor.py` on a local fake archive: fetch, excludes, patches and verify. No network. It needs `git` on `PATH` (`git apply` applies the patches). |
 | `deterministic_asm_check` | Builds the deterministic targets, then disassembles every object of a `DETERMINISTIC` module and every file passed to `de_mark_deterministic_sources()`, and fails on an FMA or approximate-reciprocal instruction (SPEC §5.7). It needs `llvm-objdump` or `objdump` at configure time; without one it is reported as skipped. It runs serially, because it drives the build. |
+| `check_determinism_src` | `tools/check_determinism_src.py` over the deterministic code listed in `tools/determinism_modules.toml`: no `<math.h>` or libm calls (use `de_dmath`), no approximate-reciprocal intrinsics, no fast-math pragmas or flags, no fast `de_v3_*`-style math, no hash-map iteration, no `rand()` (SPEC §5.7). It also checks `compile_commands.json` (every translation unit of those modules is compiled with `-ffp-contract=off`, `/clang:-ffp-contract=off` or `/fp:precise`) and that the table equals the `DETERMINISTIC` modules and `de_mark_deterministic_sources()` files of the build. A new deterministic module or file needs an entry in the table. |
+| `check_determinism_src_selftest` | The source checker on planted violations in a temporary tree. |
 
 CI runs the same entries (`docs/ci.md`).
 

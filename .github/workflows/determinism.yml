@@ -1,12 +1,17 @@
-# Determinism: the per-tick world checksums of every tests/determinism/ scenario must be the same
-# on Linux x86-64, Windows x86-64 and macOS arm64 (SPEC §19.4, §5.7, risk R6; DENG-353).
+# Determinism: the per-tick checksums of every tests/determinism/ scenario must be the same on
+# every platform and compiler of the list below: Linux x86-64 (GCC, Clang), Windows x86-64 (MSVC,
+# clang-cl) and macOS arm64 (Apple Clang) (SPEC §19.4, §5.7, risk R6; DENG-353, DENG-136).
 #
-# Each determinism-run job builds the scenario executables (target de_determinism_tests) in a
-# Release preset with that platform's main compiler, runs `ctest -L determinism` (worker counts,
-# the checked-in golden files, rollback, the harness self tests) and uploads the
-# <scenario>.checksums files the tests wrote to build/<preset>/determinism/. determinism-diff then
-# compares the three platforms' files byte for byte and names the first differing tick.
-# docs/ci.md describes the jobs; physics (DENG-136) and later modules add scenarios, not jobs.
+# `plan` holds the platform list, one JSON line per platform; determinism-run is one matrix job
+# over it and determinism-diff reads the same list, so a new platform is one appended line. Each
+# determinism-run job builds the scenario executables (target de_determinism_tests) in a Release
+# preset, runs `ctest -L determinism` (worker counts, the checked-in golden files, the harness
+# self tests) and uploads what the tests wrote to build/<preset>/determinism/: <scenario>.checksums
+# (one value per tick) and, for physics, <scenario>.fields (per-tick field-group hashes).
+# determinism-diff compares every platform's files with the first platform's byte for byte, names
+# the first differing tick and, where .fields files exist, the field groups that differ there.
+# New scenarios need no change here: the tests write their files and the diff job globs them.
+# docs/ci.md describes the jobs.
 name: Determinism
 
 on:
@@ -22,26 +27,43 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      platforms: ${{ steps.plan.outputs.platforms }}
+    steps:
+      - id: plan
+        shell: bash
+        run: |
+          # One platform per line (append-only): `platform` names the artifact, `preset` is a
+          # Release preset of CMakePresets.json, `compiler` the setup-dengine compiler. The first
+          # line is the reference of the diff job; it is the platform the golden files are made
+          # on (macOS arm64, the build host).
+          jobs=$(cat <<'EOF'
+          { "platform": "macos-arm64-clang", "os": "macos-14", "preset": "macos-release", "compiler": "apple-clang" }
+          { "platform": "linux-x86-64-gcc", "os": "ubuntu-24.04", "preset": "linux-gcc-release", "compiler": "gcc" }
+          { "platform": "linux-x86-64-clang", "os": "ubuntu-24.04", "preset": "linux-clang-release", "compiler": "clang" }
+          { "platform": "windows-x86-64-msvc", "os": "windows-2022", "preset": "windows-msvc-release", "compiler": "msvc" }
+          { "platform": "windows-x86-64-clang-cl", "os": "windows-2022", "preset": "windows-clang-cl-release", "compiler": "clang-cl" }
+          EOF
+          )
+          matrix=$(jq -cs '{include: .}' <<<"${jobs}")
+          platforms=$(jq -rs 'map(.platform) | join(" ")' <<<"${jobs}")
+          jq . <<<"${matrix}"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          echo "platforms=${platforms}" >> "${GITHUB_OUTPUT}"
+
   determinism-run:
     name: determinism ${{ matrix.platform }} (${{ matrix.preset }})
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: linux-x86-64
-            os: ubuntu-24.04
-            preset: linux-gcc-release
-            compiler: gcc
-          - platform: windows-x86-64
-            os: windows-2022
-            preset: windows-msvc-release
-            compiler: msvc
-          - platform: macos-arm64
-            os: macos-14
-            preset: macos-release
-            compiler: apple-clang
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       PRESET: ${{ matrix.preset }}
     steps:
@@ -71,7 +93,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: determinism-${{ matrix.platform }}
-          path: build/${{ matrix.preset }}/determinism/*.checksums
+          path: |
+            build/${{ matrix.preset }}/determinism/*.checksums
+            build/${{ matrix.preset }}/determinism/*.fields
           if-no-files-found: error
           retention-days: 14
 
@@ -85,11 +109,13 @@ jobs:
           retention-days: 7
 
   determinism-diff:
-    name: determinism diff (3 platforms)
-    needs: determinism-run
-    if: ${{ !cancelled() }}
+    name: determinism diff (all platforms)
+    needs: [plan, determinism-run]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      PLATFORMS: ${{ needs.plan.outputs.platforms }}
     steps:
       - name: Download checksums
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -101,42 +127,66 @@ jobs:
         shell: bash
         run: |
           set -u
-          ref=linux-x86-64
-          platforms="linux-x86-64 windows-x86-64 macos-arm64"
+          read -r -a platforms <<<"${PLATFORMS}"
+          ref=${platforms[0]}
+          others=("${platforms[@]:1}")
           status=0
-          for p in ${platforms}; do
+          for p in "${platforms[@]}"; do
             if [ ! -d "checksums/determinism-${p}" ]; then
               echo "::error::no checksums from ${p} (its determinism-run job failed early)"
               status=1
             fi
           done
           [ -d "checksums/determinism-${ref}" ] || exit 1
+          header="| Scenario | Ticks |"
+          rule="|---|---|"
+          for p in "${others[@]}"; do
+            header="${header} ${p} |"
+            rule="${rule}---|"
+          done
           {
-            echo "## Determinism: per-tick checksums"
+            echo "## Determinism: per-tick checksums against ${ref}"
             echo
-            echo "| Scenario | Ticks | windows-x86-64 vs ${ref} | macos-arm64 vs ${ref} |"
-            echo "|---|---|---|---|"
+            echo "${header}"
+            echo "${rule}"
           } >> "${GITHUB_STEP_SUMMARY}"
           for f in "checksums/determinism-${ref}"/*.checksums; do
             name=$(basename "${f}")
+            scenario=${name%.checksums}
             ticks=$(grep -vc '^#' "${f}")
-            row="| ${name%.checksums} | ${ticks} |"
-            for p in windows-x86-64 macos-arm64; do
+            row="| ${scenario} | ${ticks} |"
+            for p in "${others[@]}"; do
               g="checksums/determinism-${p}/${name}"
               if [ ! -f "${g}" ]; then
-                echo "::error::${name}: missing from ${p}"
+                echo "::error::${scenario}: missing from ${p}"
                 row="${row} missing |"
                 status=1
               elif cmp -s "${f}" "${g}"; then
-                echo "${name}: ${p} equals ${ref}"
+                echo "${scenario}: ${p} equals ${ref}"
                 row="${row} equal |"
               else
                 # Line 1 is the header, so line n holds tick n - 2.
                 first=$(diff "${f}" "${g}" | grep -m1 -oE '^[0-9]+' || true)
                 tick=$(( ${first:-2} - 2 ))
-                echo "::error::${name}: ${p} diverges from ${ref} at tick ${tick}"
+                echo "::error::${scenario}: ${p} diverges from ${ref} at tick ${tick}"
                 diff "${f}" "${g}" | head -n 20 || true
-                row="${row} **diverges at tick ${tick}** |"
+                cell="**diverges at tick ${tick}**"
+                # Physics scenarios also write per-tick field-group hashes: name the groups.
+                fa="checksums/determinism-${ref}/${scenario}.fields"
+                fb="checksums/determinism-${p}/${scenario}.fields"
+                if [ -f "${fa}" ] && [ -f "${fb}" ]; then
+                  groups=$(head -n 1 "${fa}" | sed -n 's/.*groups=//p')
+                  la=$(awk -v t="${tick}" '!/^#/ && $1 == t' "${fa}")
+                  lb=$(awk -v t="${tick}" '!/^#/ && $1 == t' "${fb}")
+                  differ=$(awk -v a="${la}" -v b="${lb}" -v g="${groups}" 'BEGIN {
+                    n = split(a, x, " "); split(b, y, " "); split(g, names, ",");
+                    out = "";
+                    for (i = 2; i <= n; i++) if (x[i] != y[i]) out = out (out == "" ? "" : ", ") names[i];
+                    print out }')
+                  echo "  field groups that differ at tick ${tick}: ${differ}"
+                  cell="${cell} (${differ})"
+                fi
+                row="${row} ${cell} |"
                 status=1
               fi
             done

@@ -57,3 +57,19 @@ function(de_det_add_tests)
 endfunction()
 
 de_add_subdirectories()
+
+# DENG-136: the SPEC §5.7 source check of every deterministic module and every
+# de_mark_deterministic_sources() file (tools/check_determinism_src.py, table
+# tools/determinism_modules.toml), label `check`, so checks.yml and every CI job run it.
+#   check_determinism_src           the sources, the compile flags in compile_commands.json, and
+#                                   the table against the CMake declarations of this build
+#   check_determinism_src_selftest  planted violations in a temporary tree
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_test(NAME check_determinism_src
+    COMMAND "${Python3_EXECUTABLE}" "${DE_ROOT_DIR}/tools/check_determinism_src.py"
+            --root "${DE_ROOT_DIR}" --build-dir "${CMAKE_BINARY_DIR}" --config "$<CONFIG>")
+add_test(NAME check_determinism_src_selftest
+    COMMAND "${Python3_EXECUTABLE}" "${DE_ROOT_DIR}/tools/check_determinism_src.py" --self-test)
+set_tests_properties(check_determinism_src check_determinism_src_selftest PROPERTIES
+    LABELS check
+    TIMEOUT 120)
