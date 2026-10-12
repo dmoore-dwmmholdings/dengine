@@ -836,8 +836,8 @@ de_result de_deserialize_object(const de_type_registry *r, de_type_id type, void
         return out;
     }
     case DE_SER_BINARY:
-        /* The binary serializer (DENG-296) dispatches from here. */
-        break;
+        /* The binary serializer (DENG-296, ser_binary.c), with its default options. */
+        return de_deserialize_binary(r, type, obj, opt, NULL, rd);
     }
     return DE_FAIL(DE_ERR_UNSUPPORTED, "de_deserialize_object: format %d is not available",
                    (int)opt->format);

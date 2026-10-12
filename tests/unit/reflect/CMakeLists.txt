@@ -36,3 +36,11 @@ if(DE_BUILD_TESTS)
             LABELS "unit;reflect" SKIP_RETURN_CODE 77 TIMEOUT 60)
     endif()
 endif()
+
+# DENG-296: binary serializer (bin.*). data/bin_golden_transform.bin is the golden byte layout;
+# the fast-path microbenchmark (bin.fast_path_pod) reads de_time_now_ns from de_platform.
+de_add_test(NAME bin SOURCES test_ser_binary.c LIBS de_reflect de_platform)
+if(TARGET test_bin)
+    target_compile_definitions(test_bin PRIVATE
+        "DE_BIN_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()

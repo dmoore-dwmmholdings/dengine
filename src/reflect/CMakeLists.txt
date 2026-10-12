@@ -21,3 +21,6 @@ de_add_module(
 # (core/de_toml_internal.h). Recorded in DE_MODULE_LIBS too, so the aggregate `dengine` links it.
 target_link_libraries(de_reflect PRIVATE de_tp_tomlc17)
 set_property(TARGET de_reflect APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+
+# DENG-296: binary serializer (ser_binary.c) and its documented byte layout.
+target_sources(de_reflect PRIVATE ser_binary_format.h ser_binary.c)
