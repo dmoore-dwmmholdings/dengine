@@ -35,3 +35,13 @@ endif()
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
                  "${CMAKE_CURRENT_BINARY_DIR}/test_sched_serial.cmake")
 endif()
+
+# DENG-292: task graphs (graph.*) and parallel_for (pfor.*). Same internal includes and labels as
+# above. graph.diamond/chain/fanout run 10k graph runs each; pfor.* cover 1e6-index loops.
+de_add_test(NAME graph SOURCES test_graph.c LIBS de_task LABELS unit tsan TIMEOUT 300)
+de_add_test(NAME pfor SOURCES test_parallel_for.c LIBS de_task LABELS unit tsan TIMEOUT 300)
+foreach(_de_task_test test_graph test_pfor)
+    if(TARGET ${_de_task_test})
+        target_include_directories(${_de_task_test} PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endforeach()

@@ -55,6 +55,10 @@
 #define DE__TASK_SPIN_ROUNDS 64u
 /** de_cpu_pause() calls per spin round. */
 #define DE__TASK_PAUSES_PER_ROUND 32u
+/** Nested de_task_wait levels on one thread that help with any task. A wait nested deeper only
+ * runs its own deque, the injection queue and (main thread) main-thread tasks, and never steals,
+ * so a thread's stack stays bounded (DENG-292; design note in graph.c). */
+#define DE__TASK_MAX_WAIT_DEPTH 32u
 /** Park timeout of a waiting thread registered on its counter, and of one that is not
  * (another thread is registered). The timeouts are a safety net, not the wake-up path. */
 #define DE__TASK_PARK_REGISTERED_NS   (2ull * 1000 * 1000)
@@ -115,7 +119,8 @@ typedef struct de__task_slot {
     de__task_block *blocks;
     de_atomic_u32 records_total; /* written by the owner only */
     u32 help_depth;
-    u64 rng; /* xorshift64 state for victim selection; affects scheduling only */
+    u32 wait_depth; /* de_task_wait calls active on this thread (DENG-292) */
+    u64 rng;        /* xorshift64 state for victim selection; affects scheduling only */
 
     /* Written by the owner only, read by destroy. */
     de_atomic_u64 submitted;
@@ -195,6 +200,9 @@ void de__task_counter_finish(de_task_system *ts, de__task_counter *c);
  * workers' deques from a random first victim.
  */
 de__task *de__task_find_work(de_task_system *ts, de__task_slot *self, bool with_main);
+/** Like de__task_find_work, but never steals: the main-thread queue (slot 0 and `with_main`), its
+ * own deque, then the injection queue. Used by deeply nested waits (DE__TASK_MAX_WAIT_DEPTH). */
+de__task *de__task_find_own_work(de_task_system *ts, de__task_slot *self, bool with_main);
 /** Pops one main-thread task (slot 0 only), or NULL. */
 de__task *de__task_pop_main(de_task_system *ts);
 /** Pops one background task, or NULL. */
@@ -209,6 +217,10 @@ void de__task_wake_main(de_task_system *ts);
 /** Thread entry points (worker.c). */
 i32 de__task_frame_worker_main(void *slot);
 i32 de__task_background_worker_main(void *slot);
+
+/** The grain de_task_parallel_for uses for `grain == 0`: max(1, count / (frame workers * 4)).
+ * Depends on the worker count, so it is not deterministic across machines (parallel_for.c). */
+u32 de__task_parallel_for_auto_grain(const de_task_system *ts, u32 count);
 
 /** Statistics for tests and DENG-293 profiling. */
 typedef struct de__task_stats {

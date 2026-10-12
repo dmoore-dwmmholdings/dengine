@@ -10,5 +10,7 @@ de_add_module(
         deque.c
         scheduler.c
         worker.c
+        graph.c
+        parallel_for.c
     DEPS core platform
 )
