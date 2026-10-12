@@ -225,6 +225,13 @@ DE_API de_result de_shape_get_mass_props(const de_physics_world *p, de_shape s, 
                                          de_mass_props *out);
 
 /* ---------- Collision filtering ---------- */
+/**
+ * Which bodies may touch. Two bodies a and b collide only if
+ * `(a.layer & b.mask) != 0 && (b.layer & a.mask) != 0`, and never when they share a non-zero
+ * group (`a.group == b.group && a.group != 0`, e.g. the bones of one ragdoll). Scene queries use
+ * the same rule with the query's filter as one side. Independently of the filter, the broadphase
+ * never pairs two bodies that are both static or kinematic.
+ */
 typedef struct de_collision_filter {
     u32 layer;
     u32 mask;

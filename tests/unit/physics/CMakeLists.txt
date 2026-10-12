@@ -66,3 +66,19 @@ message(STATUS "src/physics: ${_de_n} files clean")
                 -P "${CMAKE_CURRENT_BINARY_DIR}/physics_determinism_src.cmake")
     set_tests_properties(physics.determinism_src PROPERTIES LABELS "unit;physics" TIMEOUT 60)
 endif()
+
+# DENG-133: broadphase (AABB tree, pairs, filters, queries, golden pair-list vector). The
+# vector is a cross-platform contract like shapes_golden.txt; regenerate (never by hand) with
+#     DE_REGEN_GOLDEN=1 build/dev/tests/unit/physics/test_physics_broadphase --filter=physics_broadphase.test_pair_vector_golden
+de_add_test(NAME physics_aabb_tree SOURCES test_aabb_tree.c LIBS de_physics)
+de_add_test(NAME physics_broadphase SOURCES test_broadphase.c LIBS de_physics TIMEOUT 180)
+foreach(_de_phys_test test_physics_aabb_tree test_physics_broadphase)
+    if(TARGET ${_de_phys_test})
+        target_include_directories(${_de_phys_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_phys_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+if(TARGET test_physics_broadphase)
+    target_compile_definitions(test_physics_broadphase PRIVATE
+        "DE_PHYSICS_BROADPHASE_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/broadphase_golden.txt\"")
+endif()
