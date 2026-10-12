@@ -63,3 +63,13 @@ set(_de_with_cooker "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
 target_link_libraries(de_asset PRIVATE "$<${_de_with_cooker}:de_cooker>")
 set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS "$<${_de_with_cooker}:de_cooker>")
 target_compile_definitions(de_config INTERFACE "$<${_de_with_cooker}:DE_HAS_COOKER=1>")
+
+# DENG-212: .dpak packs at runtime. dpak/dpak_reader.c reads and checks packs (the format header
+# dpak/dpak_format.h is shared with the tools-only writer, tools/pack/lib, which the runtime never
+# links); mount.c is the priority mount stack (de_asset_pack_mount, merged bundle tables);
+# pack_stage.c reads pack-backed jobs as merged chunk runs and decodes the chunks on frame
+# workers. The reader streams the content hash with the vendored xxHash (de_tp_xxhash).
+target_sources(de_asset PRIVATE dpak/dpak_format.h dpak/dpak_reader.c dpak/dpak_reader.h mount.c
+                                mount_internal.h pack_stage.c)
+target_link_libraries(de_asset PRIVATE de_tp_xxhash)
+set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_xxhash)

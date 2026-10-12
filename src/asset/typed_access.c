@@ -12,6 +12,7 @@
 #include "asset/asset_internal.h"
 #include "asset/budget_internal.h"     /* DENG-144 */
 #include "asset/cook_stage_internal.h" /* DENG-209 */
+#include "asset/mount_internal.h"      /* DENG-212 */
 #include "asset/resolve_internal.h"
 
 #include <dengine/de_asset.h>
@@ -43,6 +44,18 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
     }
 
     const de__manifest_asset *ma = de__resolved_asset(s->resolved, id);
+    de__mount_entry pe;
+    if (ma == NULL && de__mount_lookup(s, id, &pe)) {
+        /* DENG-212: an asset of a mounted pack (PACKED mode has no manifest): its TOC type. */
+        if (want != 0 && pe.toc.type_hash != want) {
+            (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "asset %016llx of pack \"%s\" is not a %s",
+                          (unsigned long long)id.hash, pe.pack->vpath, type_name);
+            return 0;
+        }
+        if (de__slot_create(s, id, pe.toc.type_hash, &h) != DE_OK)
+            return 0;
+        return h;
+    }
     u64 sub_type = 0;
     if (ma == NULL && de__cook_stage_subasset_type(s, id, &sub_type)) {
         /* DENG-209: a sub-asset an in-process cook declared (cook_stage.c). */

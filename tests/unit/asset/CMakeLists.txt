@@ -91,3 +91,22 @@ if(TARGET test_asset_host)
         "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_ASSET_HOST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_host_tmp\"")
 endif()
+
+# DENG-212: .dpak reader (test_dpak_reader.c) and the pack mount stack through the real pipeline
+# (test_mount.c). The packs are built in-process with the DENG-211 writer (de_pack_lib), which is
+# linked into this test only: de_asset never links it. The writer is a tool library, so these
+# tests exist only when tools are built. Scratch directories of the build tree are mounted as
+# dpr:/ and mnt:/. Run under ASan and TSan (labels): untrusted pack bytes, I/O and frame threads.
+if(DE_BUILD_TOOLS)
+    de_add_test(NAME asset_pack SOURCES test_dpak_reader.c test_mount.c pack_test_util.h
+                LIBS de_asset de_platform de_task de_test_support de_pack_lib de_tp_zstd
+                LABELS unit tsan TIMEOUT 300)
+    if(TARGET test_asset_pack)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_pack_dpr"
+                            "${CMAKE_CURRENT_BINARY_DIR}/test_asset_pack_mnt")
+        target_include_directories(test_asset_pack PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_asset_pack PRIVATE
+            "DE_DPAK_READER_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_pack_dpr\""
+            "DE_MOUNT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_pack_mnt\"")
+    endif()
+endif()

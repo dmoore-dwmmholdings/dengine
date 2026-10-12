@@ -72,6 +72,11 @@ struct de_asset_system {
     /** budget.c: budgets, residency accounting, LRU lists (budget_internal.h); created by
      * de_asset_system_create. */
     struct de__budget *budget;
+
+    /* ---- DENG-212: pack mount stack (append below) --------------------------------------- */
+    /** mount.c: the mounted .dpak packs, highest priority first (mount_internal.h); NULL until
+     * the first de_asset_pack_mount. */
+    struct de__mount_stack *mounts;
 };
 
 /** The current locale, or NULL when none is set. */

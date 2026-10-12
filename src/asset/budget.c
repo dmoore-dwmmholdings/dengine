@@ -530,6 +530,26 @@ void de__budget_pin_bundle(de_asset_system *s, const de__resolved *res,
         budget_pin_members(s, b, &res->bundles[rb->depends[d]]);
 }
 
+/* DENG-212: the members of resident pack bundles (mount.c gives them as IDs). */
+void de__budget_pin_ids(de_asset_system *s, const de_asset_id *ids, u32 count) {
+    de__budget *b = s != NULL ? s->budget : NULL;
+    if (b == NULL)
+        return;
+    for (u32 i = 0; i < count; ++i) {
+        u32 h = de__slot_find(s, ids[i]);
+        if (h == 0)
+            continue;
+        de__budget_slot *rec = rec_get(s, b, h, true);
+        if (rec == NULL) {
+            DE_ERROR(s->log, "pack bundle: out of memory pinning asset %016llx",
+                     (unsigned long long)ids[i].hash);
+            continue;
+        }
+        rec->resident = 1;
+        rec_unlink(b, de__slot_handle_index(h), rec);
+    }
+}
+
 void de__budget_add_io_bytes(de_asset_system *s, u64 bytes) {
     de__budget *b = s != NULL ? s->budget : NULL;
     if (b != NULL && bytes != 0)

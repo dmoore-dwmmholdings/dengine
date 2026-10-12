@@ -143,7 +143,36 @@ DE_API de_result de_asset_manifest_load(de_asset_system *s, const char *vpath);
  */
 DE_API const de_asset_manifest_issue *de_asset_manifest_issues(const de_asset_system *s,
                                                                u32 *count);
+/* ---------- Packs (DENG-212) ---------- */
+/**
+ * Mounts the .dpak pack at the virtual path `vpath` (SPEC §11.7). Packs form a stack: a lookup
+ * walks it from the highest `priority` down, and among equal priorities the pack mounted last
+ * wins. The first pack that holds an asset ID serves it, so a patch, DLC or mod pack mounted
+ * above the base pack overrides the assets it contains (§21.3). Bundles merge the same way: the
+ * topmost pack that defines a bundle name defines the whole bundle.
+ *
+ * DE_ASSET_MODE_PACKED loads every asset from the mounted packs and needs no manifest: typed
+ * access and de_asset_load find the IDs and types in the packs, and de_asset_load_bundle takes the
+ * bundles of the packs (before the manifest's, if one is loaded). In DE_ASSET_MODE_SOURCE a
+ * mounted pack overrides the manifest source of the IDs it holds (patch testing in Dev) and the
+ * manifest's bundles win.
+ *
+ * The pack is checked at mount (header, version, platform, every offset and size; Debug builds
+ * also check the content hash), and its metadata and dictionaries are read; asset data is read
+ * when an asset loads. Assets already loaded keep their data. Main thread.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument, invalid path); DE_ERR_ALREADY_EXISTS
+ *         (that path is mounted); DE_ERR_NOT_FOUND / DE_ERR_IO (the file); DE_ERR_VERSION_MISMATCH
+ *         (another pack format version); DE_ERR_UNSUPPORTED (cooked for another platform);
+ *         DE_ERR_PARSE (not a pack, truncated or damaged); DE_ERR_OUT_OF_MEMORY. Failures set the
+ *         error context and leave the stack unchanged.
+ */
 DE_API de_result de_asset_pack_mount(de_asset_system *s, const char *vpath, i32 priority);
+/**
+ * Takes the pack mounted from `vpath` off the stack: later loads of its assets go to the next
+ * pack that holds them (or fail). Loads that read it now finish first; the file is closed when
+ * the last of them is done. Assets already loaded keep their data. A path that is not mounted is
+ * ignored with a warning. Main thread.
+ */
 DE_API void de_asset_pack_unmount(de_asset_system *s, const char *vpath);
 /**
  * Selects the locale for `[assets."<id>".locale]` source overrides (`"ja"`, `"pt-BR"`; NULL or
