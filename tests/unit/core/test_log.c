@@ -27,10 +27,12 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <process.h> /* _getpid */
 #define de_dup    _dup
 #define de_dup2   _dup2
 #define de_close  _close
 #define de_fileno _fileno
+#define de_getpid _getpid
 #else
 #include <signal.h>
 #include <sys/wait.h>
@@ -39,6 +41,7 @@
 #define de_dup2   dup2
 #define de_close  close
 #define de_fileno fileno
+#define de_getpid getpid
 #endif
 
 #define NS_PER_MS 1000000ull
@@ -582,9 +585,19 @@ TEST_F(log, null_allocator_uses_heap, log_fx) {
 
 /* ---- stderr before init ------------------------------------------------------------------ */
 
-/* Runs fn with stderr (fd 2) redirected to a file, and returns what was written. */
-static void capture_stderr(void (*fn)(void), char *out, size_t cap) {
-    const char *path = "test_log_stderr.txt";
+/* A scratch file name in the working directory that no other test process uses: CTest runs
+ * every test as its own process, in parallel, and all of them share the build directory. On
+ * Windows a second fopen of a file that another process holds open fails (DENG-382). */
+static void scratch_path(char *buf, size_t cap, const char *tag, const char *ext) {
+    int n = snprintf(buf, cap, "test_log_%s_%lu.%s", tag, (unsigned long)de_getpid(), ext);
+    ASSERT_TRUE(n > 0 && (size_t)n < cap);
+}
+
+/* Runs fn with stderr (fd 2) redirected to a file, and returns what was written. `tag` names
+ * the file (the calling test's name), see scratch_path(). */
+static void capture_stderr(const char *tag, void (*fn)(void), char *out, size_t cap) {
+    char path[128];
+    scratch_path(path, sizeof path, tag, "txt");
     FILE *tmp = fopen(path, "w+");
     ASSERT_TRUE(tmp != NULL);
     fflush(stderr);
@@ -613,7 +626,7 @@ static void pre_init_logging(void) {
 
 TEST_F(log, pre_init_stderr, log_fx) {
     static char out[4096];
-    capture_stderr(pre_init_logging, out, sizeof out);
+    capture_stderr("pre_init_stderr", pre_init_logging, out, sizeof out);
     char where[64];
     snprintf(where, sizeof where, "test_log.c:%u hello 42\n", (unsigned)pre_init_line);
     EXPECT_TRUE(strstr(out, "warn") != NULL);
@@ -624,7 +637,7 @@ TEST_F(log, pre_init_stderr, log_fx) {
     /* Sinks are not called before init. */
     capture_init(&f->cap, 16);
     de_log_add_sink(capture_sink, &f->cap);
-    capture_stderr(pre_init_logging, out, sizeof out);
+    capture_stderr("pre_init_stderr", pre_init_logging, out, sizeof out);
     EXPECT_EQ(f->cap.calls, 0u);
     EXPECT_TRUE(strstr(out, where) != NULL);
 
@@ -633,7 +646,7 @@ TEST_F(log, pre_init_stderr, log_fx) {
     d.no_console_sink = true;
     ASSERT_EQ(de_log_init(&d), DE_OK);
     de_log_shutdown();
-    capture_stderr(pre_init_logging, out, sizeof out);
+    capture_stderr("pre_init_stderr", pre_init_logging, out, sizeof out);
     EXPECT_TRUE(strstr(out, where) != NULL);
     EXPECT_EQ(f->cap.calls, 0u);
 }
@@ -662,11 +675,11 @@ static void set_no_color(const char *value) {
 TEST(log, console_plain_when_redirected) {
     static char out[4096];
     console_detected = true;
-    capture_stderr(run_console_detect, out, sizeof out);
+    capture_stderr("console_plain_when_redirected", run_console_detect, out, sizeof out);
     EXPECT_FALSE(console_detected);
 
     /* The console format written to a redirected stderr has no escape codes. */
-    capture_stderr(pre_init_logging, out, sizeof out);
+    capture_stderr("console_plain_when_redirected", pre_init_logging, out, sizeof out);
     EXPECT_TRUE(strstr(out, "hello 42") != NULL);
     EXPECT_TRUE(strchr(out, '\x1b') == NULL);
 }
@@ -686,7 +699,8 @@ TEST(log, console_no_color) {
 /* ---- File sink ---------------------------------------------------------------------------- */
 
 TEST_F(log, file_sink, log_fx) {
-    const char *path = "test_log_file_sink.log";
+    char path[128];
+    scratch_path(path, sizeof path, "file_sink", "log");
     de_log_file_sink *s = NULL;
     EXPECT_EQ(de_log_file_sink_open(NULL, &s), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_log_file_sink_open("no_such_dir_deng150/x.log", &s), DE_ERR_IO);
