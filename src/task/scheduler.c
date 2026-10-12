@@ -130,10 +130,15 @@ void de__task_counter_finish(de_task_system *ts, de__task_counter *c) {
     de_atomic_fetch_add_u64(&ts->counter_zero_events, 1, DE_ATOMIC_RELAXED);
     const u32 waiter = DE__COUNTER_WAITER(old);
     if (waiter != 0)
-        de_sem_post(&ts->slots[waiter - 1].park, 1);
+        de_sem_post(de__task_waiter_sem(ts, waiter), 1);
 }
 
-/* Registers slot id `id` (index + 1) as the counter's parked waiter. false when another
+de_sem *de__task_waiter_sem(de_task_system *ts, u32 id) {
+    DE_ASSERT(id != 0 && id <= ts->slot_count + DE__TASK_EXT_WAITERS);
+    return id <= ts->slot_count ? &ts->slots[id - 1].park : &ts->ext_park[id - ts->slot_count - 1];
+}
+
+/* Registers waiter id `id` (see task_internal.h) as the counter's parked waiter. false when another
  * thread is registered (this one then parks with a short timeout and polls). */
 static bool de__counter_register(de__task_counter *c, u32 id) {
     u64 s = de_atomic_load_u64(&c->state, DE_ATOMIC_ACQUIRE);
@@ -268,7 +273,7 @@ void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *
                 if (++spins < DE__TASK_SPIN_ROUNDS)
                     de_cpu_pause();
                 else
-                    de_sleep_ns(DE__TASK_EXTERNAL_POLL_NS / 5);
+                    de_sleep_ns(DE__TASK_INJECT_FULL_PAUSE_NS);
             }
         }
         de__task_wake_one(ts);
@@ -331,6 +336,58 @@ static bool de__wait_work_visible(de_task_system *ts, const de__task_slot *self,
     return de__deque_size_approx(&self->deque) != 0 || de_mpmc_size_approx(&ts->inject) != 0;
 }
 
+/* Claims a free external wait record: its index, or DE__TASK_EXT_WAITERS when none is free. */
+static u32 de__ext_wait_acquire(de_task_system *ts) {
+    u32 m = de_atomic_load_u32(&ts->ext_wait_free, DE_ATOMIC_RELAXED);
+    while (m != 0) {
+        u32 k = 0;
+        while ((m & (1u << k)) == 0)
+            ++k;
+        if (de_atomic_cas_weak_u32(&ts->ext_wait_free, &m, m & ~(1u << k), DE_ATOMIC_ACQUIRE,
+                                   DE_ATOMIC_RELAXED))
+            return k;
+    }
+    return DE__TASK_EXT_WAITERS;
+}
+
+static void de__ext_wait_release(de_task_system *ts, u32 k) {
+    de_atomic_fetch_or_u32(&ts->ext_wait_free, 1u << k, DE_ATOMIC_RELEASE);
+}
+
+/*
+ * Wait of a thread that is not a worker of `ts` (DENG-375). It cannot run tasks, so after a
+ * short spin it blocks in the OS until the task that finishes the counter posts its wait
+ * record. It must not spin or poll with de_sleep_ns: that sleep spins for anything shorter than
+ * DE_SLEEP_SPIN_NS, and a spinning waiter takes a core from the workers it waits for (on
+ * Windows it starved the lower-priority background workers for seconds; task_internal.h).
+ * A stale post left on a record by an earlier wait only makes one park return early.
+ */
+static void de__task_wait_external(de_task_system *ts, de__task_counter *c) {
+    for (u32 spins = 0; spins < DE__TASK_SPIN_ROUNDS; ++spins) {
+        if (de__counter_pending(c) == 0)
+            return;
+        de__spin_round();
+    }
+    const u32 k = de__ext_wait_acquire(ts);
+    if (k == DE__TASK_EXT_WAITERS) {
+        /* Every record is in use: poll, sleeping in the OS between looks. */
+        while (de__counter_pending(c) != 0)
+            (void)de_sem_wait_timeout(&ts->ext_nap, DE__TASK_PARK_UNREGISTERED_NS);
+        return;
+    }
+    const u32 id = ts->slot_count + 1 + k;
+    while (de__counter_pending(c) != 0) {
+        /* Registering every round costs one load once registered, and takes the counter over
+         * when another waiter of it left. Not registered: another thread is; poll. */
+        const bool registered = de__counter_register(c, id);
+        if (de__counter_pending(c) != 0)
+            (void)de_sem_wait_timeout(&ts->ext_park[k], registered ? DE__TASK_PARK_REGISTERED_NS
+                                                                   : DE__TASK_PARK_UNREGISTERED_NS);
+    }
+    de__counter_unregister(c, id); /* no-op unless still registered */
+    de__ext_wait_release(ts, k);
+}
+
 void de_task_wait(de_task_system *ts, de_task_counter *counter) {
     DE_ASSERT(ts != NULL && counter != NULL);
     de__task_counter *c = de__counter(counter);
@@ -338,14 +395,7 @@ void de_task_wait(de_task_system *ts, de_task_counter *counter) {
         return;
     de__task_slot *self = de__task_current_slot(ts);
     if (self == NULL) {
-        /* Not a worker of `ts`: it cannot run tasks, so it polls. */
-        u32 spins = 0;
-        while (de__counter_pending(c) != 0) {
-            if (++spins < DE__TASK_SPIN_ROUNDS)
-                de__spin_round();
-            else
-                de_sleep_ns(DE__TASK_EXTERNAL_POLL_NS);
-        }
+        de__task_wait_external(ts, c);
         return;
     }
     const bool frame = self->kind == DE__SLOT_FRAME;
@@ -437,7 +487,9 @@ static bool de__task_quiescent(const de_task_system *ts) {
 
 typedef struct de__task_init_state {
     u32 park_sems; /* slots whose park semaphore is initialised */
+    u32 ext_sems;  /* external wait records whose semaphore is initialised */
     u32 deques;    /* frame slots whose deque is initialised */
+    bool ext_nap;
     bool idle_sem;
     bool bg_sem;
     bool locks;
@@ -463,6 +515,10 @@ static void de__task_teardown(de_task_system *ts, const de__task_init_state *st)
         de__slot_free_blocks(ts, &ts->slots[i]);
     for (u32 i = 0; i < st->park_sems; ++i)
         de_sem_destroy(&ts->slots[i].park);
+    for (u32 i = 0; i < st->ext_sems; ++i)
+        de_sem_destroy(&ts->ext_park[i]);
+    if (st->ext_nap)
+        de_sem_destroy(&ts->ext_nap);
     if (st->inject)
         de_mpmc_destroy(&ts->inject);
     if (st->idle_sem)
@@ -565,6 +621,18 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
             goto fail;
         st.park_sems = i + 1;
     }
+    for (u32 i = 0; i < DE__TASK_EXT_WAITERS; ++i) {
+        if ((r = de_sem_init(&ts->ext_park[i], 0)) != DE_OK)
+            goto fail;
+        st.ext_sems = i + 1;
+    }
+    _Static_assert(DE__TASK_EXT_WAITERS >= 1 && DE__TASK_EXT_WAITERS <= 32,
+                   "ext_wait_free is a u32 bitmap");
+    de_atomic_store_u32(&ts->ext_wait_free, (u32)((1ull << DE__TASK_EXT_WAITERS) - 1u),
+                        DE_ATOMIC_RELAXED);
+    if ((r = de_sem_init(&ts->ext_nap, 0)) != DE_OK)
+        goto fail;
+    st.ext_nap = true;
     for (u32 i = 0; i < ts->frame_count; ++i) {
         if ((r = de__deque_init(&ts->slots[i].deque, DE__TASK_DEQUE_CAPACITY, a, tag)) != DE_OK)
             goto fail;
@@ -642,6 +710,8 @@ void de_task_system_destroy(de_task_system *ts) {
     }
     const de__task_init_state all = {
         .park_sems = ts->slot_count,
+        .ext_sems = DE__TASK_EXT_WAITERS,
+        .ext_nap = true,
         .deques = ts->frame_count,
         .idle_sem = true,
         .bg_sem = true,

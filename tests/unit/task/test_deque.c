@@ -81,12 +81,23 @@ TEST(deque, grow) {
 #define DQ_ITEMS   1000000u
 #define DQ_THIEVES 3u
 
+/* The owner must not finish before the thieves run: on a loaded Windows CI runner a new thread
+ * can wait a whole scheduling quantum (~190 ms on Windows Server) before it first runs, while
+ * the owner's 1e6 pushes take about 40 ms in Release, so the thieves found the deque empty and
+ * done (DENG-375). The owner therefore blocks until every thief has started (`started`, one post
+ * per thief) and, before its final drain, until some thief has stolen (`first_steal`, posted by
+ * each thief on its first steal). Both waits block in the OS, so the owner takes no core from
+ * the thieves; both have a timeout, after which the `stolen > 0` check reports the failure. */
 typedef struct dq_shared {
     de__deque *d;
     de_atomic_u32 *hits;
     de_atomic_u32 done; /* the owner has pushed and popped everything it will */
     de_atomic_u64 taken;
+    de_sem started;
+    de_sem first_steal;
 } dq_shared;
+
+#define DQ_WAIT_NS (10ull * 1000 * 1000 * 1000)
 
 static void dq_take(dq_shared *s, void *item) {
     de_atomic_fetch_add_u32(&s->hits[ITEM_ID(item)], 1, DE_ATOMIC_RELAXED);
@@ -95,12 +106,14 @@ static void dq_take(dq_shared *s, void *item) {
 static i32 dq_thief(void *p) {
     dq_shared *s = (dq_shared *)p;
     u64 n = 0;
+    de_sem_post(&s->started, 1);
     for (;;) {
         void *x = NULL;
         const de__steal_result r = de__deque_steal(s->d, &x);
         if (r == DE__STEAL_OK) {
             dq_take(s, x);
-            ++n;
+            if (n++ == 0)
+                de_sem_post(&s->first_steal, 1);
         } else if (r == DE__STEAL_EMPTY) {
             if (de_atomic_load_u32(&s->done, DE_ATOMIC_ACQUIRE) != 0 &&
                 de__deque_size_approx(s->d) == 0)
@@ -123,11 +136,17 @@ TEST(deque, concurrent_exactly_once) {
     ASSERT_TRUE(s.hits != NULL);
     de_atomic_init_u32(&s.done, 0);
     de_atomic_init_u64(&s.taken, 0);
+    ASSERT_EQ(de_sem_init(&s.started, 0), DE_OK);
+    ASSERT_EQ(de_sem_init(&s.first_steal, 0), DE_OK);
 
     de_thread *thieves[DQ_THIEVES];
     for (u32 i = 0; i < DQ_THIEVES; ++i)
         ASSERT_EQ(de_thread_create(dq_thief, &s, "dq-thief", DE_THREAD_NORMAL, 0, &thieves[i]),
                   DE_OK);
+    u32 started = 0;
+    for (u32 i = 0; i < DQ_THIEVES; ++i)
+        started += de_sem_wait_timeout(&s.started, DQ_WAIT_NS) ? 1u : 0u;
+    EXPECT_EQ(started, DQ_THIEVES);
 
     /* The owner pushes in bursts and pops some back, like a worker running nested work. */
     u64 owner_taken = 0;
@@ -141,6 +160,8 @@ TEST(deque, concurrent_exactly_once) {
             }
         }
     }
+    /* Leave the rest to the thieves until one has stolen (see dq_shared). */
+    const bool stole_before_drain = de_sem_wait_timeout(&s.first_steal, DQ_WAIT_NS);
     for (void *x; (x = de__deque_pop(&d)) != NULL;) {
         dq_take(&s, x);
         ++owner_taken;
@@ -155,7 +176,10 @@ TEST(deque, concurrent_exactly_once) {
     for (u32 i = 0; i < DQ_ITEMS; ++i)
         bad += de_atomic_load_u32(&s.hits[i], DE_ATOMIC_RELAXED) != 1u;
     EXPECT_EQ(bad, 0u);
+    EXPECT_TRUE(stole_before_drain);
     EXPECT_GT(stolen, 0u); /* the thieves did take part */
+    de_sem_destroy(&s.first_steal);
+    de_sem_destroy(&s.started);
     free(s.hits);
     de__deque_destroy(&d);
 }

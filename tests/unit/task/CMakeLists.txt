@@ -60,3 +60,27 @@ endforeach()
 if(TARGET test_det)
     target_compile_options(test_det PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-375: wake-up latency (wake.*): parked frame workers, parked counter waiters (main thread,
+# background worker, non-worker thread), and non-worker threads waiting on background work. The
+# tests assert wall-clock medians, so they carry the label `timing` and every entry runs alone
+# (Trama "Decision: Timing tests run serially and loosen their bounds on CI"); same include-file
+# approach as tests/unit/platform/CMakeLists.txt.
+de_add_test(NAME wake SOURCES test_wake.c LIBS de_task LABELS unit tsan timing TIMEOUT 120)
+if(TARGET test_wake)
+    target_include_directories(test_wake PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+if(TARGET test_wake AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_wake_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_wake_adds REGEX "^add_test\\(\\[==\\[wake\\.")
+    foreach(_de_line IN LISTS _de_wake_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                 "${CMAKE_CURRENT_BINARY_DIR}/test_wake_serial.cmake")
+endif()

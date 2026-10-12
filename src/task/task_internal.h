@@ -16,10 +16,20 @@
  * one exchange, so there is no ABA). After warm-up no submit allocates.
  *
  * Counters. de_task_counter's opaque bytes hold de__task_counter: one u64 with the pending
- * count in the low 32 bits and, in the high 32 bits, the slot index + 1 of a thread parked on
- * it (0 = none). The task that takes the count to zero reads the waiter in the same atomic
- * operation and posts that slot's park semaphore, and never touches the counter again, so the
- * waiter may free the counter as soon as it sees zero.
+ * count in the low 32 bits and, in the high 32 bits, the waiter id of a thread parked on it
+ * (0 = none). The task that takes the count to zero reads the waiter in the same atomic
+ * operation and posts that waiter's park semaphore, and never touches the counter again, so the
+ * waiter may free the counter as soon as it sees zero. Waiter ids: 1..slot_count is a slot
+ * (index + 1); slot_count + 1 + k is external wait record k.
+ *
+ * External wait records (DENG-375). A thread that is not a worker of the system cannot run
+ * tasks, so it must block in the OS while it waits: a thread that spins instead takes a core
+ * from the threads that run the tasks it waits for. On Windows, which schedules strictly by
+ * priority, a few such spinners at normal priority starved the background workers
+ * (THREAD_PRIORITY_BELOW_NORMAL) for seconds, until the OS's anti-starvation boost ran them.
+ * A non-worker waiter therefore takes one of DE__TASK_EXT_WAITERS records (a park semaphore,
+ * claimed in the `ext_wait_free` bitmap) for the length of the wait, registers it in the counter
+ * like a worker slot, and parks on it.
  *
  * Quiescence (destroy). Each slot counts the tasks its thread submitted and the tasks it ran,
  * each counter written by one thread only. If the sum of `completed` read first equals the sum
@@ -63,8 +73,11 @@
  * (another thread is registered). The timeouts are a safety net, not the wake-up path. */
 #define DE__TASK_PARK_REGISTERED_NS   (2ull * 1000 * 1000)
 #define DE__TASK_PARK_UNREGISTERED_NS (100ull * 1000)
-/** Sleep of a non-worker thread polling a counter. */
-#define DE__TASK_EXTERNAL_POLL_NS (50ull * 1000)
+/** Wait records for threads that are not workers (see the top of this file). A non-worker
+ * waiter that finds none free (more than this many wait at once) polls, parking on `ext_nap`. */
+#define DE__TASK_EXT_WAITERS 32u
+/** Pause of a non-worker submitter that finds the injection queue full. */
+#define DE__TASK_INJECT_FULL_PAUSE_NS (10ull * 1000)
 
 /* ---------- Records and counters ---------- */
 
@@ -161,6 +174,12 @@ struct de_task_system {
     de_mutex ext_lock;
     de_atomic_u64 ext_submitted;
 
+    /* External wait records (DENG-375): bit k set = ext_park[k] is free. `ext_nap` is never
+     * posted; a timed wait on it is an OS sleep. */
+    DE_ALIGN(DE_CACHE_LINE) de_atomic_u32 ext_wait_free;
+    de_sem ext_park[DE__TASK_EXT_WAITERS];
+    de_sem ext_nap;
+
     /* Statistics (tests, DENG-293). */
     DE_ALIGN(DE_CACHE_LINE) de_atomic_u64 counter_zero_events;
 
@@ -193,6 +212,8 @@ void de__task_set_current_slot(de__task_slot *slot);
 void de__task_execute(de_task_system *ts, de__task_slot *self, de__task *t);
 /** Decrements `c` by one finished task; wakes the parked waiter on the transition to zero. */
 void de__task_counter_finish(de_task_system *ts, de__task_counter *c);
+/** The park semaphore of waiter id `id` (a slot or an external wait record; see the top). */
+de_sem *de__task_waiter_sem(de_task_system *ts, u32 id);
 
 /**
  * Frame slot `self`: the next task it may run, or NULL. Order: the main-thread queue (only when

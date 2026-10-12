@@ -10,7 +10,7 @@
  *
  * stress.foreign_thread_submits: four threads that are not workers submit frame, background and
  * main-thread tasks (including bursts larger than the injection queue), run parallel_for and
- * graphs, while the main thread only pumps main-thread tasks.
+ * graphs, while the main thread only waits for them (running main-thread and frame tasks).
  *
  * Tasks never call ASSERT_* (not thread-safe): they count failures in g_fail, which the main
  * thread checks. */
@@ -407,10 +407,16 @@ typedef struct foreign {
     u64 frame_sent, bg_sent, main_sent;
     bool with_main; /* also submit main-thread tasks (the main thread pumps) */
     bool burst;     /* start with a burst larger than the injection queue */
-    de_atomic_u32 finished;
 } foreign;
 
 static de_atomic_u32 g_stop;
+
+/* The foreign threads still running, as a task counter: charged once per thread before it
+ * starts, finished by the thread as it ends (internal counter layout, task_internal.h). The
+ * main thread waits on it with de_task_wait, which runs main-thread tasks and wakes on each
+ * main-thread submit, so it pumps them without spinning: a spinning main thread takes a core
+ * from the threads it waits for (DENG-375). */
+static de_task_counter g_foreign_alive;
 
 static void foreign_frame(void *user) {
     foreign *f = (foreign *)user;
@@ -472,7 +478,7 @@ static i32 foreign_main_loop(void *user) {
         CHECK(de_atomic_load_u32(&f->main_ran, DE_ATOMIC_RELAXED) == f->main_sent);
     }
     sgraph_destroy(&f->graph);
-    de_atomic_store_u32(&f->finished, 1, DE_ATOMIC_RELEASE);
+    de__task_counter_finish(g_ts, de__counter(&g_foreign_alive));
     return 0;
 }
 
@@ -486,23 +492,15 @@ static void foreign_start(foreign *f, u32 id, u32 iterations, bool with_main, bo
     de_atomic_init_u32(&f->frame_ran, 0);
     de_atomic_init_u32(&f->bg_ran, 0);
     de_atomic_init_u32(&f->main_ran, 0);
-    de_atomic_init_u32(&f->finished, 0);
+    de_atomic_fetch_add_u64(&de__counter(&g_foreign_alive)->state, 1, DE_ATOMIC_RELAXED);
     char name[32];
     snprintf(name, sizeof name, "stress-foreign-%u", id);
     ASSERT_EQ(de_thread_create(foreign_main_loop, f, name, DE_THREAD_NORMAL, 0, &f->thread), DE_OK);
 }
 
-/* The main thread pumps main-thread tasks until every foreign thread has finished, then joins. */
+/* The main thread runs main-thread tasks until every foreign thread has finished, then joins. */
 static void foreign_join_all(foreign *fs, u32 n) {
-    for (;;) {
-        bool all = true;
-        for (u32 i = 0; i < n; ++i)
-            all = all && de_atomic_load_u32(&fs[i].finished, DE_ATOMIC_ACQUIRE) != 0;
-        if (all)
-            break;
-        if (de_task_pump_main(g_ts, 0) == 0)
-            de_sleep_ns(50000);
-    }
+    de_task_wait(g_ts, &g_foreign_alive);
     for (u32 i = 0; i < n; ++i) {
         EXPECT_EQ(de_thread_join(fs[i].thread), 0);
         EXPECT_EQ((u64)de_atomic_load_u32(&fs[i].frame_ran, DE_ATOMIC_RELAXED), fs[i].frame_sent);
@@ -521,9 +519,17 @@ static de_task_system *make_ts(u32 workers, u32 bg) {
     return ts;
 }
 
-/* Every submitted task ran once (no task runs now). */
+/* Every submitted task ran once. A graph node finishes its run's `done` counter inside its own
+ * task function, and the task counts as completed only after that function returns, so a
+ * waiter on `done` can get here while the last node's thread is still between the two (CI saw
+ * one task short on windows clang-cl Debug, DENG-375). Give it up to 2 s to finish. */
 static void expect_quiescent(void) {
-    const de__task_stats st = de__task_get_stats(g_ts);
+    de__task_stats st = de__task_get_stats(g_ts);
+    const u64 end = de_time_now_ns() + 2000000000ull;
+    while (st.submitted != st.completed && de_time_now_ns() < end) {
+        de_sleep_ns(2000000ull); /* mostly an OS sleep: the finishing thread needs the core */
+        st = de__task_get_stats(g_ts);
+    }
     printf("stress: %llu tasks submitted, %llu completed, %llu record blocks\n",
            (unsigned long long)st.submitted, (unsigned long long)st.completed,
            (unsigned long long)st.record_blocks);
