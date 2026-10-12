@@ -34,3 +34,8 @@ if(DE_BUILD_SHARED)
         C_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON)
 endif()
+
+# DENG-210: the cook cache `.decache` (decache.h): content-addressed entries compressed with zstd,
+# and the warm-path index (decache_index.c). zstd is in the runtime already (de_asset).
+target_sources(de_cooker PRIVATE decache.h decache.c decache_index.c)
+target_link_libraries(de_cooker PRIVATE de_tp_zstd)

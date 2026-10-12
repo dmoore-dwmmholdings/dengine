@@ -9,6 +9,7 @@
  */
 
 #include "cooker_internal.h"
+#include "decache.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -90,6 +91,11 @@ de_result de_cooker_create(const de_cooker_desc *desc, de_cooker **out) {
         }
         memcpy(c->cache_dir, d.cache_dir, c->cache_dir_size);
     }
+    /* DENG-210: the cook cache (opened on first use). */
+    if (de__decache_create(c) != DE_OK) {
+        de_cooker_destroy(c);
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_cooker_create: out of memory");
+    }
     *out = c;
     return DE_OK;
 }
@@ -98,6 +104,7 @@ void de_cooker_destroy(de_cooker *c) {
     if (c == NULL)
         return;
     const de_allocator *a = c->alloc;
+    de__decache_destroy(c); /* DENG-210: writes the cache index */
     if (c->cache_dir != NULL)
         DE_FREE(a, c->cache_dir, c->cache_dir_size);
     DE_FREE(a, c->types, sizeof(de__cooker_type) * DE__COOKER_MAX_TYPES);
@@ -301,16 +308,22 @@ de_result de_cooker_cook(de_cooker *c, const de_cook_input *in, de_cook_result *
     else if (slash != NULL)
         *slash = '\0';
 
-    void *source = NULL;
-    u64 source_size = 0;
-    de_result r = de_file_read_all(vpath, c->alloc, &source, &source_size);
+    u64 settings_hash = de_cook_settings_hash(a->settings, a->setting_count);
+
+    /* DENG-210, hook 1: a cache hit returns before the source is read. On a miss the lookup may
+     * hand over the source bytes it read to hash them. */
+    de__decache_probe probe;
+    if (de__decache_lookup(c, &probe, root, rel, a->id, type->name, type->importer_version,
+                           settings_hash, out) == DE_OK)
+        return DE_OK;
+    void *source = probe.source;
+    u64 source_size = probe.source_size;
+    de_result r = source != NULL ? DE_OK : de_file_read_all(vpath, c->alloc, &source, &source_size);
     if (r != DE_OK) {
         const de_error *e = de_error_last();
         return DE_FAIL(r, "asset \"%s\": cannot read source \"%s\": %s", a->id, rel,
                        e != NULL && e->result == r ? e->message : de_result_str(r));
     }
-
-    u64 settings_hash = de_cook_settings_hash(a->settings, a->setting_count);
 
     de_asset_import_ctx ctx[2];
     u32 runs = c->verify ? 2u : 1u;
@@ -342,6 +355,8 @@ de_result de_cooker_cook(de_cooker *c, const de_cook_input *in, de_cook_result *
                     a->id, type->name, (unsigned long long)hash[0], (unsigned long long)hash[1]);
     if (r == DE_OK)
         r = build_result(c, &ctx[0], settings_hash, hash[0], out);
+    if (r == DE_OK) /* DENG-210, hook 2 */
+        de__decache_store(c, &probe, source, source_size, out);
     for (u32 i = 0; i < runs; ++i)
         de__import_ctx_release(&ctx[i]);
     DE_FREE(c->alloc, source, (size_t)source_size + 1u);

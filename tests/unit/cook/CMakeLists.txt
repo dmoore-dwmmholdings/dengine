@@ -79,3 +79,14 @@ if(DE_BUILD_TESTS)
         SKIP_REGULAR_EXPRESSION "cooker_link_check: SKIPPED"
         TIMEOUT 60)
 endif()
+
+# DENG-210: the cook cache `.decache` (tools/cook/lib/decache*.c): hits skip the importer, every
+# key input misses, the warm path reads no source byte, touched files, damaged entries, and two
+# cookers storing the same key at once. Each test empties its own directory below ckt:/.
+de_add_test(NAME decache SOURCES test_decache.c LIBS de_cooker de_asset de_task de_platform)
+if(TARGET test_decache)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_decache_tmp")
+    target_include_directories(test_decache PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_decache PRIVATE
+        "DE_COOK_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_decache_tmp\"")
+endif()
