@@ -12,11 +12,9 @@ target_link_libraries(minimal_game PRIVATE de_build_flags)
 if(TARGET minimal_game_static)
     target_link_libraries(minimal_game_static PRIVATE de_build_flags)
 endif()
-# The host has no asset system yet (DE_HAS_ASSETS 0, src/host/CMakeLists.txt): the game links the
-# asset stubs, compiled into its own binary, never next to de_asset. DENG-143 removes this.
-if(TARGET de_asset_stubs)
-    target_link_libraries(minimal_game PRIVATE de_asset_stubs)
-endif()
+# The game loads `dev:/assets.toml` through the host's real asset system (DENG-143). Run it with
+# `--dev-dir <project dir>` so dev:/ names a directory with an assets.toml; the smoke tests below
+# use tests/smoke/data.
 
 # The Shipping-style static build of the same code, also in the library configurations: one
 # executable (main() from src/host/exe/static_main.c.in, de_host_desc.static_api =
@@ -30,9 +28,6 @@ if(DE_GAME_DYLIB)
     add_executable(minimal_game_static_exe minimal_game.c
                    "${CMAKE_CURRENT_BINARY_DIR}/minimal_game_static_main.c")
     target_link_libraries(minimal_game_static_exe PRIVATE dengine de_build_flags)
-    if(TARGET de_asset_stubs)
-        target_link_libraries(minimal_game_static_exe PRIVATE de_asset_stubs)
-    endif()
     set_target_properties(minimal_game_static_exe PROPERTIES
         OUTPUT_NAME minimal_game
         RUNTIME_OUTPUT_DIRECTORY "$<1:${_de_mg_static_dir}>"
@@ -44,7 +39,10 @@ endif()
 # smoke_minimal_game runs the configuration's normal form (`dengine --game <library>`, or the
 # static executable); smoke_minimal_game_static runs the static executable. Registered only when
 # the example exists, so -DDE_BUILD_EXAMPLES=OFF (no examples/) configures without them.
-if(DE_BUILD_TESTS AND TARGET minimal_game)
+# DENG-143: the real asset system loads `dev:/assets.toml`; `--dev-dir` mounts tests/smoke/data as
+# dev:/ (its manifest has the empty bundles `common` and `level_01`). Shipping has no dev:/ (the
+# host refuses --dev-dir there), so the smoke tests are not registered in Shipping.
+if(DE_BUILD_TESTS AND TARGET minimal_game AND NOT DE_IS_SHIPPING)
     set(_de_mg_frames 300)
     set(_de_mg_static_form "attached .statically linked.")
     if(DE_GAME_DYLIB)
@@ -64,11 +62,13 @@ if(DE_BUILD_TESTS AND TARGET minimal_game)
         "XDG_CACHE_HOME=${_de_mg_home}/cache" "APPDATA=${_de_mg_home}/appdata"
         "LOCALAPPDATA=${_de_mg_home}/localappdata")
     set(_de_mg_script "${DE_ROOT_DIR}/tests/smoke/minimal_game.cmake")
+    set(_de_mg_dev "--dev-dir|${DE_ROOT_DIR}/tests/smoke/data")
     add_test(NAME smoke_minimal_game COMMAND "${CMAKE_COMMAND}"
-        "-DCMD=${_de_mg_cmd}|--frames|${_de_mg_frames}" "-DFRAMES=${_de_mg_frames}"
+        "-DCMD=${_de_mg_cmd}|${_de_mg_dev}|--frames|${_de_mg_frames}" "-DFRAMES=${_de_mg_frames}"
         "-DFORM=${_de_mg_form}" -P "${_de_mg_script}")
     add_test(NAME smoke_minimal_game_static COMMAND "${CMAKE_COMMAND}"
-        "-DCMD=${_de_mg_static_cmd}|--frames|${_de_mg_frames}" "-DFRAMES=${_de_mg_frames}"
+        "-DCMD=${_de_mg_static_cmd}|${_de_mg_dev}|--frames|${_de_mg_frames}"
+        "-DFRAMES=${_de_mg_frames}"
         "-DFORM=${_de_mg_static_form}" "-DREJECT=attached from library" -P "${_de_mg_script}")
     set_tests_properties(smoke_minimal_game smoke_minimal_game_static PROPERTIES
         LABELS "smoke;host" TIMEOUT 150 ENVIRONMENT "${_de_mg_env}")

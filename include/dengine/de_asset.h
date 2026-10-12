@@ -11,6 +11,7 @@
 #ifndef DE_ASSET_H
 #define DE_ASSET_H
 #include "de_base.h"
+#include "de_ecs.h" /* de_event_type, de_resource_id (DENG-143) */
 #include "de_memory.h"
 #include "de_task.h"
 DE_EXTERN_C_BEGIN
@@ -91,10 +92,20 @@ typedef struct de_asset_system_desc {
 DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_system **out);
 /** Destroys the system and everything it owns, the manifest included. NULL is ignored. */
 DE_API void de_asset_system_destroy(de_asset_system *s);
-/* Call once per frame on the main thread: publishes finished loads, sends ECS events,
- * applies hot reloads, runs eviction. DENG-141: applies finished loads and updates request
- * states; `world` may be NULL (events come with DENG-143). DENG-144: then evicts unreferenced
- * assets of categories over budget (see de_asset_set_budgets) and samples the I/O rate. */
+/**
+ * Call once per frame on the main thread (the app host does, after the platform event pump and
+ * before `First`): applies finished loads and refreshes request states (DENG-141, DENG-142), and
+ * queues the asset events of those changes (DENG-143), then evicts unreferenced assets of
+ * categories over budget (DENG-144; see de_asset_set_budgets) and samples the I/O rate. Later
+ * step: hot reloads (S08). Never blocks on I/O; allocates nothing when nothing completed.
+ *
+ * The first call with a non-NULL `world` attaches the system to it (see "ECS events" below): it
+ * registers the `de_asset_event` payload type and its event type, inserts the resource
+ * `DeAssetSystemRef`, and adds the main-thread system `de.asset_events` to `DE_SCHEDULE_FIRST`,
+ * which sends the queued events. A later call with another world logs a warning and keeps the
+ * first one. With `world` NULL (tools, tests) no event is produced. The world must outlive the
+ * system: de_asset_system_destroy removes the system and the resource from it.
+ */
 DE_API void de_asset_system_update(de_asset_system *s, de_world *world);
 
 /* ---------- Manifest ---------- */
@@ -262,6 +273,29 @@ DE_API u32 de_asset_status_list(de_asset_system *s, de_load_handle h, de_asset_s
                                 u32 max);
 
 /* ---------- ECS events (registered by de_asset_system_update on first use) ---------- */
+/*
+ * Asset events (SPEC §11.3, §7.1; DENG-143). Read them like any ECS event: declare the type from
+ * de_asset_event_type() in `reads_events` and use de_event_reader_create / de_event_next. The
+ * payload type is registered as "de_asset_event" in the world's type registry.
+ *
+ * - DE_ASSET_EV_LOADED / DE_ASSET_EV_FAILED: an asset's slot reached READY / FAILED (`id`,
+ *   `state`, `error`; `handle` is 0). Sent once per load of the asset, and only when at least one
+ *   request that waits on the asset was made without DE_LOAD_NO_EVENTS. An asset that is already
+ *   READY when a request names it, and an ID that is not in the manifest, send no per-asset event
+ *   (the request's REQUEST_DONE reports them).
+ * - DE_ASSET_EV_REQUEST_DONE: load handle `handle` reached a final state (`state`: READY,
+ *   PARTIAL, FAILED or CANCELLED; `error`: the first failure in request order, or DE_OK); `id` is
+ *   0. Not sent for requests made with DE_LOAD_NO_EVENTS, nor for a request that
+ *   de_asset_release ends (its handle is stale by then).
+ * - DE_ASSET_EV_RELOADED (S08) and DE_ASSET_EV_EVICTED (DENG-144) go through the same path.
+ *
+ * Order: the order the changes happen on the main thread. Inside de_asset_system_update that is
+ * completion order (LOADED / FAILED), then request index order (REQUEST_DONE); changes made by
+ * calls between two updates (a request that is final at once, de_asset_cancel, de_asset_wait)
+ * come in call order. The events are queued and sent by the `de.asset_events` system at the start
+ * of `DE_SCHEDULE_FIRST`, after the event frame step, so each one is readable in that frame and
+ * the next (two-frame lifetime) even though the host updates assets before `First`.
+ */
 typedef enum de_asset_event_kind {
     DE_ASSET_EV_LOADED,
     DE_ASSET_EV_FAILED,
@@ -277,6 +311,19 @@ typedef struct de_asset_event {
     de_load_state state;
     de_result error;
 } de_asset_event;
+
+/** Resource holding the asset system of a world (SPEC §7.1), inserted by the first
+ * de_asset_system_update with that world; type name "DeAssetSystemRef". */
+typedef struct DeAssetSystemRef {
+    de_asset_system *ptr;
+} DeAssetSystemRef;
+
+/** The asset event type in the attached world, or an invalid type before the first
+ * de_asset_system_update with a world. Main thread. */
+DE_API de_event_type de_asset_event_type(const de_asset_system *s);
+/** The `DeAssetSystemRef` resource in the attached world, or an invalid id before the first
+ * de_asset_system_update with a world. Main thread. */
+DE_API de_resource_id de_asset_resource(const de_asset_system *s);
 
 /* ---------- Typed access (valid handle even before READY; data appears when loaded) ---------- */
 /**

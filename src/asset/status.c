@@ -58,10 +58,28 @@ void de__request_finish(de_asset_system *s, de__request *r, de_load_state state)
     r->progress = 1.0f;
     /* Nothing waits on the slots for this request any more; slots nobody else waits on get
      * their backend work cancelled (STOP_ON_ERROR, de_asset_cancel, release). */
-    for (u32 i = 0; i < r->count; ++i)
-        if (r->entries[i].slot != 0)
-            de__load_slot_unwant(s, r->entries[i].slot, (de__load_priority)r->priority);
-    /* DENG-143: DE_ASSET_EV_REQUEST_DONE goes here (unless r->flags has DE_LOAD_NO_EVENTS). */
+    const bool events = (r->flags & DE_LOAD_NO_EVENTS) == 0;
+    for (u32 i = 0; i < r->count; ++i) {
+        if (r->entries[i].slot == 0)
+            continue;
+        if (events) { /* DENG-143: this request no longer asks for the slot's events */
+            de__load_slot *ls = de__load_slot_find(s, r->entries[i].slot);
+            if (ls != NULL && ls->interest_events != 0)
+                ls->interest_events--;
+        }
+        de__load_slot_unwant(s, r->entries[i].slot, (de__load_priority)r->priority);
+    }
+    /* DENG-143: DE_ASSET_EV_REQUEST_DONE, unless the request asked for no events or is being
+     * released. The handle is rebuilt from the request's index and generation. */
+    if (events && !r->releasing && s->emit_fn != NULL && s->load != NULL) {
+        u32 index = (u32)(r - s->load->requests);
+        de_asset_event ev = {DE_ASSET_EV_REQUEST_DONE,
+                             {de__slot_handle_make(index, r->gen)},
+                             {0},
+                             state,
+                             r->first_error};
+        de__asset_emit(s, &ev);
+    }
 }
 
 void de__request_refresh(de_asset_system *s, de__request *r) {

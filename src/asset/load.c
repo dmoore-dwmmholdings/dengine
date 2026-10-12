@@ -131,6 +131,7 @@ static de__load_slot *load_slot_prepare(de_asset_system *s, de__load_state *L, u
         load_slot_clear_msg(s, ls);
         memset(ls->interest, 0, sizeof ls->interest);
         ls->interest_total = 0;
+        ls->interest_events = 0; /* DENG-143 */
         ls->priority = DE__LOAD_PRIORITY_NORMAL;
         ls->in_flight = 0;
         de_atomic_store_u32(&ls->started, 0, DE_ATOMIC_RELAXED);
@@ -157,7 +158,11 @@ static void load_slot_fail(de_asset_system *s, de__slot *sl, de__load_slot *ls, 
     u64 w = total > done ? total : done;
     de_atomic_store_u64(&ls->bytes_total, w, DE_ATOMIC_RELAXED);
     de_atomic_store_u64(&ls->bytes_done, w, DE_ATOMIC_RELAXED);
-    /* DENG-143: per-asset DE_ASSET_EV_FAILED goes here. */
+    /* DENG-143: per-asset DE_ASSET_EV_FAILED (only if a waiting request wants events). */
+    if (ls->interest_events != 0) {
+        de_asset_event ev = {DE_ASSET_EV_FAILED, {0}, sl->id, DE_LOAD_FAILED, sl->error};
+        de__asset_emit(s, &ev);
+    }
 }
 
 static void load_slot_ready(de_asset_system *s, u32 slot, de__slot *sl, de__load_slot *ls,
@@ -175,8 +180,12 @@ static void load_slot_ready(de_asset_system *s, u32 slot, de__slot *sl, de__load
         w = bytes; /* no progress was reported: weigh the asset by its resident size */
     de_atomic_store_u64(&ls->bytes_total, w, DE_ATOMIC_RELAXED);
     de_atomic_store_u64(&ls->bytes_done, w, DE_ATOMIC_RELAXED);
-    /* DENG-143: per-asset DE_ASSET_EV_LOADED goes here. */
     de__budget_on_publish(s, slot, bytes); /* DENG-144: residency accounting, LRU */
+    /* DENG-143: per-asset DE_ASSET_EV_LOADED (only if a waiting request wants events). */
+    if (ls->interest_events != 0) {
+        de_asset_event ev = {DE_ASSET_EV_LOADED, {0}, sl->id, DE_LOAD_READY, DE_OK};
+        de__asset_emit(s, &ev);
+    }
 }
 
 /* Starts loading `slot` with `priority`. Main thread. */
@@ -605,6 +614,9 @@ static de_load_handle request_create(de_asset_system *s, const de_asset_id *ids,
             e->error = DE_ERR_OUT_OF_MEMORY;
             continue;
         }
+        /* DENG-143: counted before the want, which can fail the slot at once (no backend). */
+        if ((flags & DE_LOAD_NO_EVENTS) == 0)
+            ls->interest_events++;
         load_slot_want(s, L, e->slot, sl, ls, priority);
     }
     de__request_refresh(s, r);
@@ -686,6 +698,8 @@ de_load_handle de_asset_load_bundle(de_asset_system *s, const char *bundle, u32 
     u32 n = 0;
     for (u32 d = 0; d < rb->depends_count; ++d) {
         const de__resolved_bundle *dep = &res->bundles[rb->depends[d]];
+        if (dep->member_count == 0)
+            continue; /* DENG-143: `ids` is NULL when every bundle is empty (UBSan) */
         memcpy(ids + n, dep->members, sizeof(de_asset_id) * dep->member_count);
         n += dep->member_count;
     }
@@ -711,8 +725,10 @@ void de_asset_release(de_asset_system *s, de_load_handle h) {
     de__request *r = de__request_get(s, h);
     if (r == NULL)
         return;
-    if (r->state < DE_LOAD_READY)
+    if (r->state < DE_LOAD_READY) {
+        r->releasing = true; /* DENG-143: the handle is stale at once: no REQUEST_DONE */
         de__request_finish(s, r, DE_LOAD_CANCELLED);
+    }
     for (u32 i = 0; i < r->count; ++i)
         if (r->entries[i].slot != 0)
             (void)de__slot_unref_handle(s, r->entries[i].slot);

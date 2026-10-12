@@ -4,13 +4,12 @@
  * Start order (and the reverse at exit):
  *   de_prof_init (first, before any thread or long-lived mutex; DENG-94) → de_thread_set_name
  *   → de_log_init (DENG-150) → de_fs_init (before any virtual path; DENG-247)
- *   → game.toml with its [cvars] → user:/config.toml → command line → de_cvar_lock_startup
- *   → engine → [headless: stop handlers] → game attach → init → register_types
- *   → register_systems → main loop → [headless: handlers restored] → shutdown → game detach
- *   → engine destroy → de_fs_shutdown → de_log_shutdown
- *   → de_prof_shutdown (last, after every thread has stopped).
- * The profiler, the log and the VFS are process-wide: when the caller has started one already
- * (a test, a tool), the host uses it and leaves it running.
+ *   → `--dev-dir` mounted as dev:/ (DENG-143) → game.toml with its [cvars] → user:/config.toml →
+ * command line → de_cvar_lock_startup → engine → [headless: stop handlers] → game attach → init →
+ * register_types → register_systems → main loop → [headless: handlers restored] → shutdown → game
+ * detach → engine destroy → de_fs_shutdown → de_log_shutdown → de_prof_shutdown (last, after every
+ * thread has stopped). The profiler, the log and the VFS are process-wide: when the caller has
+ * started one already (a test, a tool), the host uses it and leaves it running.
  *
  * Headless (DENG-95, headless.c): de_host_desc.headless (`dengine --headless`), any run of a
  * DE_HEADLESS build, or a platform without video. No window, GPU, renderer, audio or UI; the
@@ -41,11 +40,10 @@ void de__host_log_error(const char *what) {
         DE_ERROR(cat, "  caused by: %s [%s]", c->message, de_result_str(c->result));
 }
 
-/* `--game-toml <vpath>` or `--game-toml=<vpath>`; the last one wins. NULL when absent.
- * DE_ERR_INVALID_ARGUMENT for `--game-toml` without a value. */
-static de_result host_arg_game_toml(int argc, char **argv, const char **out) {
-    static const char opt[] = "--game-toml";
-    const size_t opt_len = sizeof opt - 1;
+/* `<opt> <value>` or `<opt>=<value>` (opt: "--game-toml", "--dev-dir"); the last one wins. NULL
+ * when absent. DE_ERR_INVALID_ARGUMENT for the option without a value. */
+static de_result host_arg_value(int argc, char **argv, const char *opt, const char **out) {
+    const size_t opt_len = strlen(opt);
     *out = NULL;
     for (int i = 1; i < argc && argv != NULL; ++i) {
         const char *arg = argv[i];
@@ -55,19 +53,45 @@ static de_result host_arg_game_toml(int argc, char **argv, const char **out) {
             *out = arg + opt_len + 1;
         } else if (arg[opt_len] == '\0') {
             if (i + 1 >= argc || argv[i + 1] == NULL)
-                return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "command line: --game-toml needs a value");
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "command line: %s needs a value", opt);
             *out = argv[++i];
         }
     }
     if (*out != NULL && (*out)[0] == '\0')
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "command line: --game-toml is empty");
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "command line: %s is empty", opt);
     return DE_OK;
+}
+
+/*
+ * DENG-143: `--dev-dir <native dir>` mounts that directory as `dev:/` (writable, priority 0), the
+ * project directory where the asset manifest and sources live (examples/minimal_game loads
+ * dev:/assets.toml). de_fs_init mounts no dev:/ outside Debug and Dev; this explicit option also
+ * works in Release (the headless CI jobs run the smoke tests there), but not in Shipping, which
+ * loads packs only: there it is ignored with a warning. Sets *mounted when this run mounted it.
+ */
+static de_result host_mount_dev_dir(de__host *h, bool *mounted) {
+    *mounted = false;
+    const char *dir = NULL;
+    DE_TRY(host_arg_value(h->desc.argc, h->desc.argv, "--dev-dir", &dir));
+    if (dir == NULL)
+        return DE_OK;
+#if defined(DE_SHIPPING)
+    DE_WARN(h->log, "--dev-dir %s ignored: Shipping builds have no dev:/", dir);
+    return DE_OK;
+#else
+    de_result r = de_fs_mount("dev", dir, DE_MOUNT_WRITABLE, 0);
+    if (r != DE_OK)
+        return DE_FAIL_WRAP(r, "--dev-dir %s: cannot mount it as dev:/", dir);
+    *mounted = true;
+    DE_INFO(h->log, "dev:/ is %s (--dev-dir)", dir);
+    return DE_OK;
+#endif
 }
 
 /* Project file, user config and command line, then the startup lock. */
 static de_result host_load_config(de__host *h) {
     const char *arg_toml = NULL;
-    DE_TRY(host_arg_game_toml(h->desc.argc, h->desc.argv, &arg_toml));
+    DE_TRY(host_arg_value(h->desc.argc, h->desc.argv, "--game-toml", &arg_toml));
     h->game_toml = arg_toml != NULL            ? arg_toml
                    : h->desc.game_toml != NULL ? h->desc.game_toml
                                                : DE_HOST_DEFAULT_GAME_TOML;
@@ -209,6 +233,9 @@ int de_host_run(const de_host_desc *desc) {
         r = DE_FAIL_WRAP(r, "file system init");
     }
 
+    bool dev_mounted = false; /* DENG-143: --dev-dir */
+    if (r == DE_OK)
+        r = host_mount_dev_dir(&h, &dev_mounted);
     if (r == DE_OK)
         r = host_load_config(&h);
     if (r == DE_OK)
@@ -221,6 +248,12 @@ int de_host_run(const de_host_desc *desc) {
                 (unsigned long long)h.loop_frames, (unsigned long long)h.loop_fixed_steps);
     }
 
+    if (dev_mounted && !own_fs) {
+        const char *dir = NULL;
+        (void)host_arg_value(h.desc.argc, h.desc.argv, "--dev-dir", &dir);
+        if (dir != NULL)
+            (void)de_fs_unmount("dev", dir);
+    }
     if (own_fs)
         de_fs_shutdown();
     if (own_log)

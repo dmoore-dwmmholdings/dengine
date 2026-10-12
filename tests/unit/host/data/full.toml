@@ -22,3 +22,8 @@ workers = 3
 
 [memory]
 frame_arena_mib = 32
+
+[assets]
+io_threads = 4
+hot_reload = false
+locale = "pt-BR"

@@ -1,0 +1,13 @@
+# The manifest of test_asset_events.c (DENG-143). The fake backend loads nothing from disk, so
+# the sources do not exist.
+[assets]
+"ev/a" = { type = "test_bytes", source = "a.bytes" }
+"ev/b" = { type = "test_bytes", source = "b.bytes" }
+"ev/c" = { type = "test_bytes", source = "c.bytes" }
+"ev/d" = { type = "test_bytes", source = "d.bytes" }
+
+[bundles.abc]
+assets = ["ev/a", "ev/b", "ev/c"]
+
+[bundles.empty]
+assets = []

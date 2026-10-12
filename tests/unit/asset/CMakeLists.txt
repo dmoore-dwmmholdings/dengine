@@ -71,3 +71,23 @@ if(TARGET test_asset_budget)
     target_compile_definitions(test_asset_budget PRIVATE
         "DE_ASSET_BUDGET_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_budget_tmp\"")
 endif()
+
+# DENG-143: asset ECS events and the DeAssetSystemRef resource (test_asset_events.c: a world, a
+# scripted backend; data/events/ mounted as evdata:/), and real loads through the app host
+# (test_asset_host.c: de__engine_create and de__loop_run with the test_bytes type; data/host/
+# mounted as dev:/; links de_host and reads its internal headers).
+de_add_test(NAME asset_events SOURCES test_asset_events.c
+            LIBS de_asset de_ecs de_reflect de_platform de_test_support)
+if(TARGET test_asset_events)
+    target_include_directories(test_asset_events PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_events PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()
+de_add_test(NAME asset_host SOURCES test_asset_host.c LIBS de_host TIMEOUT 120)
+if(TARGET test_asset_host)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_host_tmp")
+    target_include_directories(test_asset_host PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_host PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+        "DE_ASSET_HOST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_host_tmp\"")
+endif()

@@ -2,13 +2,14 @@
  * dengine_main.c: the `dengine` development host executable (SPEC §10.1).
  *
  *   dengine --game <path-to-game-library> [--game-dir <dir>] [--game-toml <vpath>]
- *           [--headless] [--frames N] [+cvar value ...]
+ *           [--dev-dir <dir>] [--headless] [--frames N] [+cvar value ...]
  *
  * It loads the game library (game.dll, libgame.so, libgame.dylib) that de_add_game() built and
  * runs it with de_host_run. Without --game, game.toml's `[game] library` names the library.
  * `game:/` is the game library's directory (where de_add_game() puts game.toml), unless
  * --game-dir names another one. Every argument, these included, is passed on to de_host_run:
- * it reads --game-toml and the `+cvar value` pairs, the main loop reads --frames (DENG-91).
+ * it reads --game-toml, --dev-dir (DENG-143) and the `+cvar value` pairs, the main loop reads
+ * --frames (DENG-91).
  *
  * The engine is linked into this executable and exported from it, so the game library binds to
  * it when it is loaded (cmake/DeAddGame.cmake). Shipping builds do not use this program: the
@@ -26,6 +27,7 @@ static void usage(FILE *out, const char *program) {
             "  --game-dir <dir>     the directory mounted as game:/ (default: the game library's\n"
             "                       directory, or this executable's without --game)\n"
             "  --game-toml <vpath>  the project file (default: game:/game.toml)\n"
+            "  --dev-dir <dir>      the project directory mounted as dev:/ (assets.toml, sources)\n"
             "  --headless           no window, GPU, audio or UI\n"
             "  --frames <n>         stop after n frames\n"
             "  +<cvar> <value>      set a cvar at startup\n",

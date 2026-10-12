@@ -1,0 +1,12 @@
+# The manifest of test_asset_host.c (DENG-143): two source files of the test-only `test_bytes`
+# type in one bundle, loaded through the app host's asset system. Mounted as dev:/.
+[project]
+asset_root = "assets"
+version = 1
+
+[assets]
+"host/one" = { type = "test_bytes", source = "one.bytes" }
+"host/two" = { type = "test_bytes", source = "two.bytes" }
+
+[bundles.pair]
+assets = ["host/*"]
