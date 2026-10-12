@@ -231,14 +231,23 @@ static bool enum_lookup(const de_enum_info *info, const char *name, i64 *out) {
     return false;
 }
 
-/* One ENUM value, or one FLAGS array item: a value name or an integer. */
+/* One ENUM value, or one FLAGS array item: a value name, an integer, or a "0x..." string (the
+ * writer's form for leftover flag bits above INT64_MAX; DENG-297). */
 static de_result read_enum_item(rctx *c, const de_field_info *f, const de_enum_info *info,
                                 const toml_datum_t *v, i64 *out) {
     if (v->type == TOML_STRING) {
-        if (!enum_lookup(info, v->u.str.ptr, out))
-            return fail(c, v, DE_ERR_PARSE, "\"%.64s\" is not a value of %s %s", v->u.str.ptr,
-                        f->kind == DE_FK_FLAGS ? "flags" : "enum", f->attrs.nested_type);
-        return DE_OK;
+        if (enum_lookup(info, v->u.str.ptr, out))
+            return DE_OK;
+        u64 bits;
+        if (de__ser_parse_hex64(v->u.str.ptr, (size_t)v->u.str.len, &bits)) {
+            if (f->size < 8 && bits >> (f->size * 8u) != 0)
+                return fail(c, v, DE_ERR_PARSE, "%.40s does not fit %u bytes", v->u.str.ptr,
+                            (unsigned)f->size);
+            *out = (i64)bits;
+            return DE_OK;
+        }
+        return fail(c, v, DE_ERR_PARSE, "\"%.64s\" is not a value of %s %s", v->u.str.ptr,
+                    f->kind == DE_FK_FLAGS ? "flags" : "enum", f->attrs.nested_type);
     }
     if (v->type == TOML_INT64) {
         if (!fits_bytes(v->u.int64, f->size))

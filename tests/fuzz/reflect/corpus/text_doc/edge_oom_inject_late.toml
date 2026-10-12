@@ -1,0 +1,9 @@
+#!?
+[[entity]]
+__type = "TAllKinds"
+__version = 1
+str = "abc"
+[[entity]]
+__type = "TInventory"
+__version = 1
+items = [{ id = 1 }]

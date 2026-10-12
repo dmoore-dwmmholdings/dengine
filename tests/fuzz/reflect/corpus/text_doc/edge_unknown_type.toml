@@ -1,0 +1,7 @@
+[[entity]]
+__type = "TNope"
+x = 1
+
+[[entity]]
+__type = "TVec"
+x = "a"

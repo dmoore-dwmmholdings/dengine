@@ -1,0 +1,12 @@
+__type = "TAllKinds"
+__version = 1
+u32v = 77
+i32v = -5
+str = "a long string that does not fit"
+samples = [1.0, 2.0, 3.0, 4.0]
+items = [{ id = 1, count = 2 }, { id = 3, count = 4 }]
+mode = "Run"
+layers = ["Ground", "Air"]
+unknown.nested = [1, "x", true, 2.5]
+list = [[1, 2], [3]]
+date = 1979-05-27T07:32:00Z
