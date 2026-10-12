@@ -31,3 +31,15 @@ if(TARGET de_input)
         endif()
     endforeach()
 endif()
+
+# DENG-87: haptics (rumble, trigger rumble, adaptive triggers) and gyro (calibration, aiming).
+# They use the mock device sink of haptics_internal.h, so no pad or SDL is needed.
+if(TARGET de_input)
+    de_add_test(NAME haptics SOURCES test_haptics.c LIBS de_input de_test_support)
+    de_add_test(NAME gyro SOURCES test_gyro.c LIBS de_input de_test_support)
+    foreach(_de_input_test test_haptics test_gyro)
+        if(TARGET ${_de_input_test})
+            target_include_directories(${_de_input_test} PRIVATE "${DE_ROOT_DIR}/src")
+        endif()
+    endforeach()
+endif()

@@ -468,7 +468,10 @@ typedef enum de_pad_cap {
     DE_PAD_CAP_GYRO = 1u << 3,
     DE_PAD_CAP_ACCEL = 1u << 4,
     DE_PAD_CAP_TOUCHPAD = 1u << 5,
-    DE_PAD_CAP_LED = 1u << 6
+    DE_PAD_CAP_LED = 1u << 6,
+    /** HD (voice-coil) haptics (DENG-87). Never set yet: SDL3 has no API for it, so no pad
+     * reports it and there is no HD haptics call. */
+    DE_PAD_CAP_HD_HAPTICS = 1u << 7
 } de_pad_cap;
 
 /** A connected gamepad (de_pad_info()). */
@@ -531,24 +534,172 @@ DE_API void de_text_input_stop(de_input *in);
  * input was not started through de_input (the platform decides what it sends). */
 DE_API void de_text_input_get(const de_input *in, de_text_input_state *out);
 
-/* ---------- Haptics and sensors ---------- */
+/* ---------- Haptics and sensors ----------
+ * Haptics (DENG-87). The engine owns effect durations: de_input_begin_frame() counts them down
+ * in frame time and stops an effect when it ends. A new call on the same pad replaces the
+ * running effect of that kind. Calls on a stale handle, or on a pad without the capability
+ * (de_gamepad_info.caps), do nothing (a Dev build logs the missing capability once per pad).
+ * Strengths are scaled by the saved cvars `input.haptics_scale` (float, [0, 1], default 1) and
+ * `input.haptics_enabled` (bool, default true); a change applies to running effects in the next
+ * frame. Main thread only. */
+
+/** Longest rumble or trigger rumble, in seconds; longer durations are cut to it. */
+#define DE_PAD_RUMBLE_MAX_SECONDS 60.0f
+
+/** Starts the rumble motors: `low` (left, low frequency) and `high` (right, high frequency) in
+ * [0, 1] (clamped, NaN is 0) for `seconds` of frame time. `seconds` <= 0 stops the rumble. Needs
+ * DE_PAD_CAP_RUMBLE. */
 DE_API void de_pad_rumble(de_input *in, de_gamepad p, f32 low, f32 high, f32 seconds);
+/** Rumble in the triggers (Xbox One / Series impulse triggers), like de_pad_rumble(). Needs
+ * DE_PAD_CAP_TRIGGER_RUMBLE. */
 DE_API void de_pad_trigger_rumble(de_input *in, de_gamepad p, f32 left, f32 right, f32 seconds);
+/** An adaptive trigger effect (de_pad_adaptive_trigger()). The meaning and the valid range of
+ * each field depend on `mode` (de_trigger_mode); fields a mode does not use are ignored. */
 typedef struct de_trigger_effect {
     u8 mode;
     u8 start, end;
     u8 strength;
     u8 frequency;
 } de_trigger_effect;
+/**
+ * Sets the adaptive trigger effect of one trigger (`right` or left) on a DualSense
+ * (DE_PAD_CAP_ADAPTIVE_TRIGGERS). The effect stays until the next call; NULL `fx` turns the
+ * trigger effect off. An effect with a field out of its range (de_trigger_mode) is ignored and
+ * logged. The engine builds the DualSense effect packet and sends it through
+ * de_platform_pad_send_effect().
+ */
 DE_API void de_pad_adaptive_trigger(de_input *in, de_gamepad p, bool right,
                                     const de_trigger_effect *fx);
-/** The pad's gyro, rad/s, after calibration (DENG-87; until then the latest raw sample). False
- * (and `*rad_per_sec` zero) for a stale handle or a pad that has sent no gyro sample yet. */
+/** The pad's gyro, rad/s, with the calibrated bias removed (de_pad_gyro_calibrate(); the raw
+ * value until a bias is known). The latest sample of the frame. False (and `*rad_per_sec` zero)
+ * for a stale handle or a pad that has sent no gyro sample yet. */
 DE_API bool de_pad_gyro(const de_input *in, de_gamepad p, de_vec3 *rad_per_sec);
 /** The pad's latest accelerometer sample, m/s², gravity included. False (and zero) for a stale
  * handle or a pad that has sent no accelerometer sample yet. */
 DE_API bool de_pad_accel(const de_input *in, de_gamepad p, de_vec3 *m_per_s2);
+/**
+ * Measures the gyro bias of pad `p` over the next `seconds` of frame time (clamped to [0.1, 10]).
+ * The pad should lie still: if its gyro moves (a per-axis standard deviation above 0.03 rad/s, or
+ * a mean above 0.15 rad/s) the calibration is rejected and the previous bias stays. On success
+ * the mean becomes the bias that de_pad_gyro() and de_pad_gyro_aim() remove. `seconds` <= 0 (or
+ * NaN) clears the bias. A call while a calibration runs restarts it. Progress and result:
+ * de_pad_gyro_calibration_state().
+ */
 DE_API void de_pad_gyro_calibrate(de_input *in, de_gamepad p, f32 seconds);
+
+/* ---- DENG-87: adaptive trigger modes, gyro calibration state and gyro aiming ---- */
+
+/**
+ * Adaptive trigger modes (de_trigger_effect.mode). Positions are trigger zones 0 (released) to
+ * 9 (fully pulled); strengths 1 (weak) to 8 (strong).
+ *
+ * | mode                   | fields used                                      | DualSense effect |
+ * |------------------------|--------------------------------------------------|------------------|
+ * | DE_TRIGGER_OFF         | none                                             | 0x05             |
+ * | DE_TRIGGER_FEEDBACK    | start 0..9, strength 1..8: resistance from start | 0x21             |
+ * | DE_TRIGGER_WEAPON      | start 2..7, end start+1..8, strength 1..8: a     | 0x25             |
+ * |                        | resistance that gives way at `end` (a trigger    |                  |
+ * |                        | break)                                           |                  |
+ * | DE_TRIGGER_VIBRATION   | start 0..9, strength (amplitude) 1..8, frequency | 0x26             |
+ * |                        | 1..255 Hz: vibration from start                  |                  |
+ *
+ * Strength 0 (and frequency 0 for vibration) is the same as DE_TRIGGER_OFF.
+ */
+typedef enum de_trigger_mode {
+    DE_TRIGGER_OFF,
+    DE_TRIGGER_FEEDBACK,
+    DE_TRIGGER_WEAPON,
+    DE_TRIGGER_VIBRATION,
+    DE_TRIGGER_MODE_COUNT_
+} de_trigger_mode;
+
+/** Gyro calibration state of a pad (de_pad_gyro_calibration_state()). */
+typedef enum de_gyro_calibration {
+    DE_GYRO_CALIB_NONE,               /**< no bias known: the gyro is used raw */
+    DE_GYRO_CALIB_RUNNING,            /**< de_pad_gyro_calibrate() is collecting samples */
+    DE_GYRO_CALIB_DONE,               /**< a bias (manual or automatic calibration) is applied */
+    DE_GYRO_CALIB_REJECTED_MOTION,    /**< the last calibration saw motion; old bias kept */
+    DE_GYRO_CALIB_REJECTED_NO_SAMPLES /**< the last calibration got no gyro sample */
+} de_gyro_calibration;
+
+/** The calibration state of pad `p`; `bias` (may be NULL) gets the bias in rad/s (zero when
+ * none). DE_GYRO_CALIB_NONE for a stale handle. */
+DE_API de_gyro_calibration de_pad_gyro_calibration_state(const de_input *in, de_gamepad p,
+                                                         de_vec3 *bias);
+
+/** Which rotation turns the aim left and right (de_gyro_settings.yaw_axis). */
+typedef enum de_gyro_yaw_axis {
+    DE_GYRO_YAW_LOCAL_Y, /**< turn the pad around its own up axis (yaw) */
+    DE_GYRO_YAW_LOCAL_Z, /**< tilt the pad sideways (roll), like a steering wheel */
+    /** Turn around the real-world up axis, found from the accelerometer, so yaw and roll both
+     * work however the pad is held ("player space"). Falls back to LOCAL_Y without
+     * accelerometer samples. */
+    DE_GYRO_YAW_PLAYER
+} de_gyro_yaw_axis;
+
+/** What the ratchet buttons and action do (de_gyro_settings.ratchet_mode). */
+typedef enum de_gyro_ratchet_mode {
+    DE_GYRO_RATCHET_HOLD_TO_PAUSE, /**< no aim output while the ratchet is held */
+    DE_GYRO_RATCHET_HOLD_TO_AIM    /**< aim output only while the ratchet is held */
+} de_gyro_ratchet_mode;
+
+/**
+ * Gyro processing and aim settings of a pad (de_pad_gyro_configure()). Start from
+ * de_gyro_settings_default(). Rates are physical rotation in rad/s, before the sensitivity.
+ *
+ * Per gyro sample the aim takes the yaw and pitch rates (yaw_axis), applies the tiered smoothing,
+ * then the tightening, then sensitivity and inversion, and integrates over the sample interval.
+ */
+typedef struct de_gyro_settings {
+    /** Aim radians per radian turned: x = yaw, y = pitch. Default 1, 1. */
+    de_vec2 sensitivity;
+    bool invert_x, invert_y;
+    de_gyro_yaw_axis yaw_axis; /**< default DE_GYRO_YAW_LOCAL_Y */
+    /** Below this rate the aim is scaled down linearly (rate / tightening), to hide small hand
+     * shake. 0 (default) is off. */
+    f32 tightening;
+    /** Tiered smoothing: rates below half this threshold are fully smoothed, rates above it are
+     * not smoothed, rates in between are blended. 0 (default) is off. */
+    f32 smoothing_threshold;
+    /** Smoothing window, seconds (at most 64 samples). Default 0.125. Clamped to [0, 1]. */
+    f32 smoothing_time;
+    /** Ratchet buttons: bit (1u << de_pad_button) per button. 0 (default) is no ratchet. While
+     * the ratchet suppresses the aim, de_pad_gyro_aim() gives exactly zero, and when it lets go,
+     * the aim resumes from the next sample, without the motion made meanwhile. */
+    u32 ratchet_buttons;
+    de_gyro_ratchet_mode ratchet_mode; /**< default DE_GYRO_RATCHET_HOLD_TO_PAUSE */
+    /** Ratchet action: an action (any binding, any device) that counts as held while
+     * de_action_held() is true in the frame view. Zero (default) is none. Works together with
+     * `ratchet_buttons` (either one holds). The aim of a frame is exactly zero as soon as the
+     * action is held in that frame's evaluation; actions are evaluated after the gyro update, so
+     * the integration itself (and the smoothing reset) follows the action one frame later. */
+    de_action ratchet_action;
+    /** Learn the bias whenever the pad lies still for a second (gyro and accelerometer steady).
+     * Default false: a slow, steady turn can look like a still pad. */
+    bool auto_calibrate;
+} de_gyro_settings;
+
+/** The default gyro settings (see de_gyro_settings). */
+DE_API de_gyro_settings de_gyro_settings_default(void);
+
+/**
+ * Sets the gyro settings of pad `p`. An invalid handle (id 0) sets them for every connected pad
+ * and makes them the settings that pads get when they connect. A stale handle does nothing.
+ * NULL `s` means de_gyro_settings_default(). NaN fields take their default value.
+ */
+DE_API void de_pad_gyro_configure(de_input *in, de_gamepad p, const de_gyro_settings *s);
+/** The gyro settings of pad `p`, or of new pads for an invalid handle (id 0). False (and the
+ * defaults in `*out`) for a stale handle. */
+DE_API bool de_pad_gyro_settings(const de_input *in, de_gamepad p, de_gyro_settings *out);
+
+/**
+ * Gyro aim of this frame: how far to turn the aim, in radians, from every gyro sample of the
+ * frame. +x is right and +y is up, like the sticks. The bias is removed and the settings of
+ * de_pad_gyro_configure() applied. False (and zero) for a stale handle or a pad without gyro
+ * samples.
+ */
+DE_API bool de_pad_gyro_aim(const de_input *in, de_gamepad p, de_vec2 *delta);
+/* ---- end DENG-87 ---- */
 
 /* ---------- Action maps ---------- */
 
