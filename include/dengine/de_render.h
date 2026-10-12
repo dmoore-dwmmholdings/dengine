@@ -83,21 +83,94 @@ DE_API void de_view_destroy(de_renderer *r, de_view v);
 DE_API void de_view_request_pick(de_renderer *r, de_view v, u32 x, u32 y, u64 request_id);
 DE_API bool de_view_pick_result(de_renderer *r, u64 request_id, u64 *entity_bits, u32 *triangle);
 
-/* ---------- Render graph (for engine passes and game-defined passes) ---------- */
+/* ---------- Render graph (for engine passes and game-defined passes) ----------
+ * SPEC §12.3 (DENG-171). A de_rg is one frame's graph. Passes declare what they read and write,
+ * the queue they run on and an execute callback; the graph derives the dependencies, culls passes
+ * whose results nobody uses, and issues every barrier (passes never do, SPEC §12.1).
+ *
+ * Declaration rules:
+ *   - Each write makes a new version of the resource (of the written subresources). A read sees
+ *     the latest version written by an earlier pass; passes run in declaration order unless the
+ *     compiler reorders independent ones.
+ *   - A pass that reads and then writes the same subresources (blending, depth test + write,
+ *     read-modify-write storage) declares both: de_rg_read for the old contents and de_rg_write
+ *     for the new ones. Read bits in a de_rg_write access without that de_rg_read are an error.
+ *     A render target that is blended onto or loaded is read with DE_ACCESS_RENDER_TARGET; the
+ *     graph cannot see blending, so without that read an earlier writer can be culled.
+ *   - Outputs are imported resources that some pass writes, resources passed to de_rg_export and
+ *     passes marked with de_rg_pass_side_effect. Every other pass whose writes do not reach an
+ *     output is culled: it never executes, and transients only it uses are never allocated.
+ *   - Access bits are de_gpu_access values. Writes: SHADER_WRITE, RENDER_TARGET, DEPTH_WRITE,
+ *     COPY_DST, ACCEL_WRITE. Reads: SHADER_READ, DEPTH_READ, INDIRECT, COPY_SRC, ACCEL_READ,
+ *     and RENDER_TARGET (the load or blend of a target that the pass also writes).
+ *     DE_ACCESS_PRESENT is only a final state (de_rg_export), never a pass access.
+ *   - Compute passes cannot use RENDER_TARGET or DEPTH_* access; copy passes only COPY_*.
+ *
+ * Building is single-threaded: one thread declares a graph. Bad handles, descs and queues are
+ * refused in every build; the access rules above are checked in Debug and Dev builds. A refused
+ * declaration sets the error context, logs to the `render` category and is dropped. Handles and
+ * pass pointers are valid for one frame only.
+ */
 typedef struct de_rg de_rg;
 typedef struct de_rg_pass de_rg_pass;
 DE_HANDLE(de_rg_resource);
 
+/**
+ * A range of mips and array layers of a texture. A count of 0 means "to the last one", so
+ * `(de_rg_subresource){0}` is the whole texture. Buffers are always accessed whole.
+ */
+typedef struct de_rg_subresource {
+    u32 mip_first, mip_count, layer_first, layer_count;
+} de_rg_subresource;
+
+/** Records the pass. `cmd` is open on the pass's queue; de_rg_texture / de_rg_buffer give the
+ * physical resources. Runs once per frame for each pass that is not culled. */
 typedef void (*de_rg_execute_fn)(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user);
 
+/** A transient texture: the graph allocates (and may alias) it for this frame only. `desc` is
+ * copied; `transient` is forced on. Invalid handle (error context set) for a bad desc. */
 DE_API de_rg_resource de_rg_create_texture(de_rg *g, const de_gpu_texture_desc *desc);
+/** A transient buffer (GPU_ONLY memory only), as de_rg_create_texture. */
 DE_API de_rg_resource de_rg_create_buffer(de_rg *g, const de_gpu_buffer_desc *desc);
+/**
+ * An external texture (swapchain image, history buffer) that is in `current_access` now.
+ * Importing the same texture twice in one frame returns the first handle. Its mip and layer
+ * counts are not known to the graph, so subresource ranges on it are not range-checked.
+ */
 DE_API de_rg_resource de_rg_import_texture(de_rg *g, de_gpu_texture t, u32 current_access);
+/** An external buffer that is in `current_access` now, as de_rg_import_texture. */
+DE_API de_rg_resource de_rg_import_buffer(de_rg *g, de_gpu_buffer b, u32 current_access);
+/**
+ * Marks `r` as a graph output: the passes that produce its final contents are never culled, and
+ * the graph leaves it in `final_access` at the end of the frame (DE_ACCESS_NONE: its last
+ * access; DE_ACCESS_PRESENT for a swapchain image). An exported transient is not aliased.
+ */
+DE_API void de_rg_export(de_rg *g, de_rg_resource r, u32 final_access);
+/** Names a resource for messages and the graph dump (imports have no name otherwise). The
+ * string is copied. */
+DE_API void de_rg_set_name(de_rg *g, de_rg_resource r, const char *name);
+
+/** Adds a pass. `name` is copied; `fn` may be NULL (a pass that only orders work). NULL when
+ * `queue` is not a de_gpu_queue value. */
 DE_API de_rg_pass *de_rg_add_pass(de_rg *g, const char *name, de_gpu_queue queue,
                                   de_rg_execute_fn fn, void *user);
+/** The pass has effects outside the graph (readback, a GPU counter): it is never culled. */
+DE_API void de_rg_pass_side_effect(de_rg_pass *p);
+/** Declares that `p` reads the whole of `r` with `access` (read bits, or RENDER_TARGET). */
 DE_API void de_rg_read(de_rg_pass *p, de_rg_resource r, u32 access);
+/** Declares that `p` writes the whole of `r` with `access` (write bits; read bits need a
+ * matching de_rg_read). */
 DE_API void de_rg_write(de_rg_pass *p, de_rg_resource r, u32 access);
+/** de_rg_read of a mip/layer range of a texture (an HZB pass reads mip N-1 and writes mip N). */
+DE_API void de_rg_read_sub(de_rg_pass *p, de_rg_resource r, de_rg_subresource sub, u32 access);
+/** de_rg_write of a mip/layer range of a texture. */
+DE_API void de_rg_write_sub(de_rg_pass *p, de_rg_resource r, de_rg_subresource sub, u32 access);
+/**
+ * The physical texture of `r`. Valid only inside `p`'s execute callback, and only for resources
+ * `p` declared; otherwise (checked in Debug and Dev) an invalid handle and an error.
+ */
 DE_API de_gpu_texture de_rg_texture(const de_rg_pass *p, de_rg_resource r);
+/** The physical buffer of `r`, as de_rg_texture. */
 DE_API de_gpu_buffer de_rg_buffer(const de_rg_pass *p, de_rg_resource r);
 
 /* Insertion points for custom passes in the per-view graph. */
