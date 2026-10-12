@@ -6,6 +6,8 @@
  * Integer-only and iterated in creation order (SPEC §5.7). */
 #include "change_internal.h"
 
+#include "system_internal.h" /* DENG-350: systems' last runs, per-run stamp tick */
+
 /* ---- World change tick ----------------------------------------------------------------------- */
 
 u32 ecs_change_tick_advance(de_world *w) {
@@ -51,7 +53,8 @@ void ecs_check_change_ticks(de_world *w) {
             q->this_run_tick = ecs_tick_clamp(q->this_run_tick, now);
         }
     }
-    /* DENG-350: clamp each system's last_run here, with ecs_tick_clamp(last_run, now). */
+    /* DENG-350: each system's last run. */
+    ecs_systems_clamp_ticks(w, now);
     w->change_check_tick = now;
 }
 
@@ -97,7 +100,9 @@ void ecs_entity_mark_changed(de_world *w, de_entity e, u32 component) {
     const u32 col = ecs_archetype_column(a, component);
     if (col == ECS_INVALID_INDEX)
         return; /* absent, or a tag (no ticks) */
-    ecs_mark_changed_row(a, rec->chunk, rec->row, col, w->change_tick);
+    /* DENG-350: inside a system, the system's run tick (like its query writes), so the system
+     * does not see its own change on its next run; else the current change tick. */
+    ecs_mark_changed_row(a, rec->chunk, rec->row, col, ecs_system_stamp_tick(w));
 }
 
 /* ---- Public API ------------------------------------------------------------------------------ */

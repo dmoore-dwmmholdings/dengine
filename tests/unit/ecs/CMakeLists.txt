@@ -115,3 +115,15 @@ foreach(_de_ecs_test test_snap test_checksum)
         target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-350: systems and schedules. Both run systems on task systems of several sizes: label tsan.
+# The target test_sched is taken by tests/unit/task, so the schedule tests are NAME ecs_sched
+# (CTest names ecs_sched.sched.<test>).
+de_add_test(NAME system SOURCES test_system.c LIBS de_ecs LABELS unit tsan TIMEOUT 120)
+de_add_test(NAME ecs_sched SOURCES test_schedule.c LIBS de_ecs LABELS unit tsan TIMEOUT 300)
+foreach(_de_ecs_test test_system test_ecs_sched)
+    if(TARGET ${_de_ecs_test})
+        target_include_directories(${_de_ecs_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

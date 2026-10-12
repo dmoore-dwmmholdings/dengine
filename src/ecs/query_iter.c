@@ -8,8 +8,9 @@
  *
  * Every slice goes through emit_rows -> emit_slice, the one place that applies the change
  * filters and builds a de_query_chunk. DENG-347's tick logic is there (the predicate and the
- * write marking in query_slice_done); DENG-350 adds per-range command buffers to emit_slice /
- * run_range.
+ * write marking in query_slice_done). DENG-350: inside a system, slices get a command buffer
+ * (query_run.commands: the system's own in de_query_each, one per range in de_query_par_each,
+ * acquired in par_range_fn, which also runs the range in the system's scope).
  *
  * Nothing here allocates. Iteration only reads the world and the query, except
  * de_query_par_each, which first writes the row prefix of each entry (entry[1]), and the write
@@ -18,6 +19,7 @@
 #include "query_internal.h"
 
 #include "change_internal.h" /* DENG-347: tick test and write marking */
+#include "system_internal.h" /* DENG-350: command buffers and the system scope of ranges */
 
 /* State shared by every slice of one de_query_each / de_query_par_each call. */
 typedef struct query_run {
@@ -27,6 +29,10 @@ typedef struct query_run {
     void *user;
     u32 grain;        /* rows per range (par_each) */
     u32 matched_rows; /* rows of the query's cached entries (the prefix total) */
+    /* DENG-350: the system running the iteration (NULL outside systems) and the buffer the
+     * slices get as de_query_chunk.commands (per range in par_each). */
+    const ecs_system *sys;
+    de_commands *commands;
 } query_run;
 
 bool ecs_change_filter_default(const ecs_query *q, const ecs_archetype *a, const ecs_chunk *ch,
@@ -65,6 +71,7 @@ static void emit_slice(const query_run *r, ecs_archetype *a, const ecs_chunk *ch
     qc.columns = columns;
     qc.range = range;
     qc.first_row = first_row;
+    qc.commands = r->commands; /* DENG-350 */
     r->fn(&qc, r->user);
     query_slice_done(r, a, ch, cols, row, count);
 }
@@ -134,6 +141,10 @@ void de_query_each(de_world *w, de_query qh, de_chunk_fn fn, void *user) {
     r.q = q;
     r.fn = fn;
     r.user = user;
+    /* DENG-350: inside a system, slices record into the system's own buffer. */
+    ECS_CHECK_QUERY(w, q);
+    r.sys = ecs_system_current(w);
+    r.commands = r.sys != NULL ? r.sys->ctx.commands : NULL;
     ecs_query_iter it;
     ecs_query_iter_init(q, &it, 0);
     ecs_archetype *a = NULL;
@@ -210,7 +221,20 @@ static void run_range(const query_run *r, u32 begin, u32 end) {
 }
 
 static void par_range_fn(u32 begin, u32 end, void *user) {
-    run_range((const query_run *)user, begin, end);
+    const query_run *r = (const query_run *)user;
+    if (r->sys == NULL) {
+        run_range(r, begin, end);
+        return;
+    }
+    /* DENG-350: inside a system each range records into its own buffer, key (system order,
+     * range + 1), and runs in the system's scope on whichever thread takes it (stamp tick,
+     * access and determinism checks). */
+    query_run rr = *r;
+    rr.commands = ecs_system_range_commands(r->sys, begin / r->grain);
+    ecs_system_scope scope;
+    ecs_system_scope_enter(r->sys, &scope);
+    run_range(&rr, begin, end);
+    ecs_system_scope_leave(r->sys, &scope);
 }
 
 void de_query_par_each(de_world *w, de_query qh, u32 grain_rows, de_chunk_fn fn, void *user) {
@@ -224,6 +248,8 @@ void de_query_par_each(de_world *w, de_query qh, u32 grain_rows, de_chunk_fn fn,
     r.fn = fn;
     r.user = user;
     r.grain = grain_rows != 0 ? grain_rows : DE_QUERY_DEFAULT_GRAIN_ROWS;
+    ECS_CHECK_QUERY(w, q); /* DENG-350 */
+    r.sys = ecs_system_current(w);
 
     /* Row prefix of each cached entry, for the ranges' binary search. */
     u32 total = 0;
@@ -249,6 +275,6 @@ void de_query_par_each(de_world *w, de_query qh, u32 grain_rows, de_chunk_fn fn,
     }
     for (u64 begin = 0; begin < total; begin += r.grain) {
         const u64 end = begin + r.grain < total ? begin + r.grain : total;
-        run_range(&r, (u32)begin, (u32)end);
+        par_range_fn((u32)begin, (u32)end, &r); /* DENG-350: same per-range buffers */
     }
 }

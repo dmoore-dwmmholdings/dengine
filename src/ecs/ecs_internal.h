@@ -221,6 +221,8 @@ struct de_world {
                                       first restore */
     struct ecs_ck_cache *ck;     /**< checksum.c: per-component field spans; NULL until the first
                                       de_world_checksum */
+    /* -- DENG-350: systems and schedules (append below; the rest is in system_internal.h) -- */
+    struct ecs_system_registry *systems; /**< NULL until the first de_system_add or run */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */

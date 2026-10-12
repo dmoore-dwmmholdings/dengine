@@ -9,6 +9,7 @@
  * The type -> slot hash map serves lookups only and is never iterated (SPEC §5.7 rule 5); world
  * teardown walks the dense slot array. */
 #include "ecs_internal.h"
+#include "system_internal.h" /* DENG-350: access checks inside systems */
 
 static u64 type_key_hash(u32 type_id) {
     return de_hash64(&type_id, sizeof type_id, 0);
@@ -162,6 +163,7 @@ de_resource_id de_resource_insert(de_world *w, de_type_id type, const void *init
 void *de_resource_get(de_world *w, de_resource_id id) {
     if (w == NULL)
         return NULL;
+    ECS_CHECK_RESOURCE(w, id.id); /* DENG-350: declared by the running system */
     const ecs_resource *r = resource_slot(w, id);
     return r != NULL ? r->data : NULL;
 }

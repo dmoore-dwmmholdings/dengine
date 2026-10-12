@@ -9,6 +9,7 @@
  * Event types live in a dense array in registration order; the type -> id hash map serves lookups
  * only and is never iterated (SPEC §5.7 rule 5). */
 #include "ecs_internal.h"
+#include "system_internal.h" /* DENG-350: access checks inside systems */
 
 #include <stdint.h>
 
@@ -115,6 +116,7 @@ de_event_type de_event_register(de_world *w, de_type_id payload) {
 }
 
 void de_event_send(de_world *w, de_event_type t, const void *payload) {
+    ECS_CHECK_EVENT(w, t.id, true); /* DENG-350: declared in writes_events */
     ecs_event_queue *q = w != NULL ? event_queue(w, t) : NULL;
     if (q == NULL || payload == NULL) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_event_send: invalid world, event type %u or payload",
@@ -141,6 +143,7 @@ void de_event_send(de_world *w, de_event_type t, const void *payload) {
 }
 
 de_event_reader de_event_reader_create(de_world *w, de_event_type t) {
+    ECS_CHECK_EVENT(w, t.id, false); /* DENG-350: declared in reads_events (or writes_events) */
     de_event_reader r;
     memset(&r, 0, sizeof r);
     const ecs_event_queue *q = w != NULL ? event_queue(w, t) : NULL;
@@ -154,6 +157,7 @@ de_event_reader de_event_reader_create(de_world *w, de_event_type t) {
 const void *de_event_next(de_world *w, de_event_reader *r) {
     if (w == NULL || r == NULL)
         return NULL;
+    ECS_CHECK_EVENT(w, r->type.id, false); /* DENG-350 */
     const ecs_event_queue *q = event_queue(w, r->type);
     if (q == NULL)
         return NULL;
