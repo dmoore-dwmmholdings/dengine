@@ -8,33 +8,127 @@
 #include "de_base.h"
 DE_EXTERN_C_BEGIN
 
-/* ---------- Profiling (S06 DENG-94): compiled out unless DE_PROFILE is defined (Dev/Release) */
+/* ---------- Profiling (S06 DENG-94) ----------
+ *
+ * SPEC §18.1. CPU zones, frame marks, plots, memory events, lock events, thread names and Warn+
+ * log messages, sent to the Tracy profiler (the vendored client, third_party/tracy/). Profiling is
+ * compiled in when DE_PROFILE is defined: Dev builds, and Release builds unless the CMake option
+ * DE_ENABLE_PROFILE is off. Shipping never defines it. Without DE_PROFILE every DE_PROFILE_* macro
+ * is ((void)0), its arguments are not evaluated, and no profiler code or Tracy symbol is linked.
+ * The CMake option DE_TRACY (default ON) picks the backend of DE_PROFILE builds: with it off they
+ * keep the calls but have no backend (de_prof_init returns DE_ERR_UNSUPPORTED).
+ *
+ * Nothing is sent before de_prof_init(): until then, and after de_prof_shutdown(), every
+ * de_prof_* call returns at once. de_prof_init() starts the Tracy client in on-demand mode: it
+ * listens for the profiler (TCP port 8086, or the next free one) and records nothing until one
+ * connects, so a Dev build that nobody profiles pays one atomic load and a branch per call.
+ *
+ * Lifetime rules. Call de_prof_init() first, before any engine thread is created (threads name
+ * themselves in the profiler when they start, de_mutex records its lock context when it is
+ * initialized, and memory events start with the hooks). Call de_prof_shutdown() last, after every
+ * thread that profiles, logs or allocates through a reporting allocator has stopped (so after
+ * de_log_shutdown). A zone must begin and end within one init/shutdown span.
+ *
+ * Names (zones, frames, plots, lock and memory pools) are kept by pointer: pass string literals
+ * or strings that live as long as the process.
+ */
+
+/** An open zone (de_prof_zone_begin_). Holds the backend's zone context. */
 typedef struct de_prof_zone {
     u64 opaque[2];
 } de_prof_zone;
+
+/** A source location: zone, lock or mark site. The backend keeps the pointer, so it must be
+ * static (DE_PROFILE_ZONE_BEGIN makes it so). `color` is 0xRRGGBB, 0 = default. */
 typedef struct de_prof_srcloc {
     const char *name, *function, *file;
     u32 line, color;
 } de_prof_srcloc;
+
+/**
+ * A profiled lock's context, in the lock's own storage (de_mutex holds one in DE_PROFILE
+ * builds). All zeros means "not profiled". Only meaningful between de_prof_init and
+ * de_prof_shutdown: a context from an earlier span is ignored.
+ */
+typedef struct de_prof_lock {
+    void *ctx;
+    u32 epoch;
+    u32 reserved_;
+} de_prof_lock;
+
+/**
+ * Starts the profiler backend, installs the memory hooks (de_mem_set_hooks, chained to the hooks
+ * installed before) and adds a log sink that sends Warn, Error and Fatal records as profiler
+ * messages. Allowed before de_log_init(). Calling it again while it runs does nothing.
+ *
+ * @return DE_OK; DE_ERR_UNSUPPORTED when the build has no backend (no DE_PROFILE, or DE_TRACY
+ *         off).
+ */
+DE_API de_result de_prof_init(void);
+
+/** Removes the log sink and the memory hooks and stops the backend. See the lifetime rules
+ * above. Does nothing if the profiler is not running. */
+DE_API void de_prof_shutdown(void);
+
+/** True between de_prof_init() and de_prof_shutdown(). */
+DE_API bool de_prof_running(void);
+
+/** True while a profiler is connected and receiving (on-demand mode records only then). */
+DE_API bool de_prof_connected(void);
+
+/* The functions below are what the DE_PROFILE_* macros and the engine's instrumented code call.
+ * They are defined in DE_PROFILE builds only; call them under #ifdef DE_PROFILE. */
 DE_API de_prof_zone de_prof_zone_begin_(const de_prof_srcloc *loc);
 DE_API void de_prof_zone_end_(de_prof_zone z);
+/** Frame mark. NULL is the main frame; another name is a secondary frame set. */
 DE_API void de_prof_frame_mark_(const char *name);
 DE_API void de_prof_plot_(const char *name, f64 value);
+/** Memory events in the pool `pool` (NULL: the unnamed pool). The engine allocators report
+ * through the memory hooks with the memory tag name as the pool; these are for other memory. */
 DE_API void de_prof_alloc_(const void *ptr, size_t size, const char *pool);
 DE_API void de_prof_free_(const void *ptr, const char *pool);
+/** Names the calling thread in the profiler. de_thread_set_name calls it, so every engine
+ * thread started after de_prof_init is named. The name is copied. */
+DE_API void de_prof_thread_name_(const char *name);
+
+/* Profiled locks (de_mutex uses these in DE_PROFILE builds). Order of calls around a lock:
+ * `if (de_prof_lock_before_(l)) { lock; de_prof_lock_after_(l); } else { lock; }`, then
+ * de_prof_lock_after_unlock_ after each unlock; for a try-lock, de_prof_lock_after_try_ after it.
+ * Every function ignores a lock with no context of the current span. */
+/** Gives `l` a lock context if the profiler runs (else zeroes it). `loc` must be static. */
+DE_API void de_prof_lock_init_(de_prof_lock *l, const de_prof_srcloc *loc);
+/** Releases the lock context of `l` and zeroes it. */
+DE_API void de_prof_lock_destroy_(de_prof_lock *l);
+/** Before a blocking lock. Returns true when de_prof_lock_after_ must follow the lock. */
+DE_API bool de_prof_lock_before_(de_prof_lock *l);
+DE_API void de_prof_lock_after_(de_prof_lock *l);
+DE_API void de_prof_lock_after_try_(de_prof_lock *l, bool acquired);
+DE_API void de_prof_lock_after_unlock_(de_prof_lock *l);
 
 #ifdef DE_PROFILE
+/** Opens zone `var` named `name` (a string literal); close it with DE_PROFILE_ZONE_END(var) in the
+ * same scope, on every path. Zones nest per thread and must close in reverse order. */
 #define DE_PROFILE_ZONE_BEGIN(var, name)                                                           \
     static const de_prof_srcloc var##_loc = {(name), __func__, __FILE__, (u32)__LINE__, 0};        \
     de_prof_zone var = de_prof_zone_begin_(&var##_loc)
-#define DE_PROFILE_ZONE_END(var) de_prof_zone_end_(var)
-#define DE_PROFILE_FRAME(name)   de_prof_frame_mark_(name)
-#define DE_PROFILE_PLOT(name, v) de_prof_plot_((name), (f64)(v))
+/** Like DE_PROFILE_ZONE_BEGIN with a 0xRRGGBB colour. */
+#define DE_PROFILE_ZONE_BEGIN_C(var, name, color)                                                  \
+    static const de_prof_srcloc var##_loc = {(name), __func__, __FILE__, (u32)__LINE__,            \
+                                             (u32)(color)};                                        \
+    de_prof_zone var = de_prof_zone_begin_(&var##_loc)
+#define DE_PROFILE_ZONE_END(var)          de_prof_zone_end_(var)
+#define DE_PROFILE_FRAME(name)            de_prof_frame_mark_(name)
+#define DE_PROFILE_PLOT(name, v)          de_prof_plot_((name), (f64)(v))
+#define DE_PROFILE_ALLOC(ptr, size, pool) de_prof_alloc_((ptr), (size_t)(size), (pool))
+#define DE_PROFILE_FREE(ptr, pool)        de_prof_free_((ptr), (pool))
 #else
-#define DE_PROFILE_ZONE_BEGIN(var, name) ((void)0)
-#define DE_PROFILE_ZONE_END(var)         ((void)0)
-#define DE_PROFILE_FRAME(name)           ((void)0)
-#define DE_PROFILE_PLOT(name, v)         ((void)0)
+#define DE_PROFILE_ZONE_BEGIN(var, name)          ((void)0)
+#define DE_PROFILE_ZONE_BEGIN_C(var, name, color) ((void)0)
+#define DE_PROFILE_ZONE_END(var)                  ((void)0)
+#define DE_PROFILE_FRAME(name)                    ((void)0)
+#define DE_PROFILE_PLOT(name, v)                  ((void)0)
+#define DE_PROFILE_ALLOC(ptr, size, pool)         ((void)0)
+#define DE_PROFILE_FREE(ptr, pool)                ((void)0)
 #endif
 
 /* ---------- Console variables (S02 DENG-154) ----------

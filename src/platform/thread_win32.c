@@ -11,6 +11,8 @@
 
 #include <dengine/de_platform.h>
 
+#include "platform/mutex_prof.h"
+
 #include <windows.h>
 #include <process.h>
 #include <limits.h>
@@ -101,6 +103,7 @@ static void de__copy_name(char *dst, size_t cap, const char *src) {
 void de_thread_set_name(const char *name) {
     if (!name)
         return;
+    de__thread_prof_name(name);
     char utf8[DE_THREAD_NAME_MAX + 1];
     wchar_t wide[DE_THREAD_NAME_MAX + 1];
     de__copy_name(utf8, sizeof utf8, name);
@@ -207,22 +210,29 @@ u32 de_cpu_logical_cores(void) {
 void de_mutex_init(de_mutex *m) {
     memset(m, 0, sizeof *m);
     InitializeSRWLock(de__srw(m));
+    de__mutex_prof_init(m);
 }
 
 void de_mutex_lock(de_mutex *m) {
+    const bool prof_after = de__mutex_prof_before(m);
     AcquireSRWLockExclusive(de__srw(m));
+    if (prof_after)
+        de__mutex_prof_after(m);
 }
 
 bool de_mutex_try_lock(de_mutex *m) {
-    return TryAcquireSRWLockExclusive(de__srw(m)) != 0;
+    const bool acquired = TryAcquireSRWLockExclusive(de__srw(m)) != 0;
+    de__mutex_prof_after_try(m, acquired);
+    return acquired;
 }
 
 void de_mutex_unlock(de_mutex *m) {
     ReleaseSRWLockExclusive(de__srw(m));
+    de__mutex_prof_after_unlock(m);
 }
 
 void de_mutex_destroy(de_mutex *m) {
-    (void)m; /* SRWLOCK owns no resources */
+    de__mutex_prof_destroy(m); /* SRWLOCK itself owns no resources */
 }
 
 /* ---------- Condition variable ---------- */
@@ -233,15 +243,22 @@ void de_cond_init(de_cond *c) {
 }
 
 void de_cond_wait(de_cond *c, de_mutex *m) {
+    de__mutex_prof_after_unlock(m);
     if (!SleepConditionVariableSRW(de__cv(c), de__srw(m), INFINITE, 0))
         DE__FATAL("SleepConditionVariableSRW");
+    de__mutex_prof_relocked(m);
 }
 
 bool de_cond_wait_timeout(de_cond *c, de_mutex *m, u64 timeout_ns) {
     u64 deadline = de__deadline_ns(timeout_ns);
-    if (SleepConditionVariableSRW(de__cv(c), de__srw(m), de__timeout_ms(timeout_ns), 0))
+    de__mutex_prof_after_unlock(m);
+    const BOOL woke =
+        SleepConditionVariableSRW(de__cv(c), de__srw(m), de__timeout_ms(timeout_ns), 0);
+    const DWORD err = woke ? 0 : GetLastError();
+    de__mutex_prof_relocked(m);
+    if (woke)
         return true;
-    if (GetLastError() != ERROR_TIMEOUT)
+    if (err != ERROR_TIMEOUT)
         DE__FATAL("SleepConditionVariableSRW");
     /* A timeout before the deadline is reported as a wakeup, which the contract allows
      * (spurious wakeups); the caller re-checks its predicate and waits again. Waiting again here

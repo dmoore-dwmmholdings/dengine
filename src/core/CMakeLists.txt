@@ -148,3 +148,22 @@ de_mark_deterministic_sources(math/dmath.c math/dmath64.c math/rng.c math/fpenv.
 # DENG-244: large-world transforms. Not deterministic-module code, but they use only + - * / and
 # sqrt and must give the same bits everywhere so simulation code can call them: no FP contraction.
 de_mark_deterministic_sources(math/dvec.c math/transform.c)
+
+# DENG-94: the profiler (de_debug.h, profiling section). prof.c is always built (without
+# DE_PROFILE it only has the de_prof_init stub). The Tracy backend, prof_tracy.cpp, is added when
+# third_party/tracy defined de_tp_tracy (DE_TRACY on, and a build type that can define
+# DE_PROFILE), and de_tp_tracy is linked only for the configs that define DE_PROFILE (they are
+# fixed by the build type for single-config generators). Recorded in DE_MODULE_LIBS too, so the
+# aggregate `dengine` library links it. Shipping never defines DE_PROFILE, so it has neither.
+target_sources(de_core PRIVATE prof/prof_internal.h prof/prof.c)
+if(DE_IS_SHIPPING AND "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_SHIPPING}" MATCHES "DE_PROFILE")
+    message(FATAL_ERROR "dengine: Shipping builds never define DE_PROFILE (SPEC §18.1); remove it "
+                        "from CMAKE_C_FLAGS")
+endif()
+if(TARGET de_tp_tracy)
+    set(_de_prof_cfg "$<OR:$<CONFIG:Dev>,$<AND:$<CONFIG:Release>,$<BOOL:${DE_ENABLE_PROFILE}>>>")
+    target_sources(de_core PRIVATE prof/prof_tracy.cpp)
+    target_compile_definitions(de_core PRIVATE DE_TRACY=1)
+    target_link_libraries(de_core PRIVATE "$<${_de_prof_cfg}:de_tp_tracy>")
+    set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS "$<${_de_prof_cfg}:de_tp_tracy>")
+endif()

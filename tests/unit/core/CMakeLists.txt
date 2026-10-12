@@ -20,6 +20,8 @@ de_add_test(NAME core
         test_tracking.c
         test_cvar.c
         test_core_stress.c
+        test_prof_off.c
+        test_prof_tracy.c
     LIBS de_core Threads::Threads
 )
 
@@ -88,3 +90,66 @@ endif()
 # DENG-155: the alloc guard of de_test_support (tests/support/), in its own executable so no
 # thread or hook of another test runs during its regions. CTest names: guard.<test>.
 de_add_test(NAME guard SOURCES test_alloc_guard.c LIBS de_test_support de_platform)
+
+# DENG-94: the profiler. test_core runs test_prof_off.c (the macros without DE_PROFILE) and
+# test_prof_tracy.c (the real backend: Tracy when de_tp_tracy is linked in this config).
+if(TARGET test_core AND TARGET de_tp_tracy)
+    target_compile_definitions(test_core PRIVATE
+        "$<$<OR:$<CONFIG:Dev>,$<AND:$<CONFIG:Release>,$<BOOL:${DE_ENABLE_PROFILE}>>>:DE_PROF_TEST_TRACY>")
+endif()
+# test_prof.c again with src/core/prof/prof.c compiled in under DE_PROF_MOCK, so the front end
+# calls the mock backend of the test. Its prof.o comes first, so the linker never takes de_core's
+# copy (both define the same symbols). CTest names: core_prof.<suite>.<test>.
+de_add_test(NAME core_prof
+    SOURCES
+        test_prof.c
+        ${DE_ROOT_DIR}/src/core/prof/prof.c
+    LIBS de_core de_platform Threads::Threads
+)
+if(TARGET test_core_prof)
+    target_compile_definitions(test_core_prof PRIVATE DE_PROF_MOCK=1)
+    target_include_directories(test_core_prof PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-94: prof_no_tracy_in_shipping (label `check`): no Tracy symbol in a Shipping `dengine`. In
+# a Shipping build it checks this build's library; otherwise it configures and builds a Shipping
+# `dengine` next to this build (build/<preset>/prof_shipping/, about 140 compile steps: SDL3 is
+# not compiled). See the script header.
+if(CMAKE_NM)
+    set(_de_prof_nm "${CMAKE_NM}")
+else()
+    find_program(_de_prof_nm NAMES llvm-nm nm)
+endif()
+if(TARGET de_tp_tracy)
+    set(_de_prof_expect_tracy 1)
+else()
+    set(_de_prof_expect_tracy 0)
+endif()
+if(DE_IS_SHIPPING)
+    set(_de_prof_is_shipping 1)
+else()
+    set(_de_prof_is_shipping 0)
+endif()
+add_test(NAME prof_no_tracy_in_shipping
+    COMMAND "${CMAKE_COMMAND}"
+        "-DDE_SOURCE_DIR=${DE_ROOT_DIR}"
+        "-DDE_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DDE_IS_SHIPPING=${_de_prof_is_shipping}"
+        "-DDE_NM=${_de_prof_nm}"
+        "-DDE_GENERATOR=${CMAKE_GENERATOR}"
+        "-DDE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DDE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+        "-DDE_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DDE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DDE_HEADLESS=${DE_HEADLESS}"
+        "-DDE_PARENT_LIB=$<TARGET_FILE:dengine>"
+        "-DDE_EXPECT_TRACY=${_de_prof_expect_tracy}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/prof_no_tracy_in_shipping.cmake")
+set_tests_properties(prof_no_tracy_in_shipping PROPERTIES
+    LABELS "check;core"
+    SKIP_REGULAR_EXPRESSION "prof_no_tracy_in_shipping: SKIPPED"
+    TIMEOUT 900)
+if(DE_IS_SHIPPING)
+    # It builds this build's dengine: no other test may drive the build at the same time.
+    set_tests_properties(prof_no_tracy_in_shipping PROPERTIES RUN_SERIAL TRUE)
+endif()

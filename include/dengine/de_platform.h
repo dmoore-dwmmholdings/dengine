@@ -996,9 +996,16 @@ DE_API u32 de_cpu_logical_cores(void);
  * Initialization failures of mutex, condvar and rwlock are fatal (they cannot fail on the
  * supported OSes short of memory corruption). */
 
-/** Non-recursive mutex. pthread mutex (macOS: first-fit policy) or SRWLOCK (Windows). */
+/**
+ * Non-recursive mutex. pthread mutex (macOS: first-fit policy) or SRWLOCK (Windows). In DE_PROFILE
+ * builds it also holds a profiler lock context (de_prof_lock, de_debug.h): a mutex initialized
+ * while the profiler runs reports its waits, acquisitions and releases (also around de_cond_wait).
+ */
 typedef struct de_mutex {
     DE_ALIGN(8) u8 opaque[64];
+#ifdef DE_PROFILE
+    u64 prof_[2]; /* de_prof_lock; internal */
+#endif
 } de_mutex;
 
 /** Condition variable, used with a de_mutex. Waits can wake spuriously: always wait in a loop. */
