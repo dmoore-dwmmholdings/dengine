@@ -1,0 +1,8 @@
+# Included from ../assets.toml; includes ../shared.toml relative to this file.
+[project]
+include = ["../shared.toml"]
+
+[assets."ui/banner"]
+type   = "texture"
+source = "textures/banner.png"
+srgb   = false

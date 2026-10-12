@@ -1,0 +1,7 @@
+# Stub of the audio.toml that examples/assets.toml includes (test fixture, DENG-138).
+[defaults.sound]
+volume = 1.0
+
+[assets]
+"sfx/jump" = { type = "sound", source = "audio/jump.wav" }
+"music/credits" = { type = "sound", source = "audio/credits.ogg", stream = true }

@@ -65,16 +65,62 @@ typedef struct de_asset_system_desc {
     const char *locale; /* "en", "ja", ... for locale overrides */
 } de_asset_system_desc;
 
+/**
+ * Creates an asset system. `(de_asset_system_desc){0}` is valid: the default heap, no task
+ * system, source mode, the defaults listed in the desc, and no locale. Strings in the desc are
+ * copied. The allocator (and `tasks`) must outlive the system.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`out` is NULL), DE_ERR_OUT_OF_MEMORY.
+ */
 DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_system **out);
+/** Destroys the system and everything it owns, the manifest included. NULL is ignored. */
 DE_API void de_asset_system_destroy(de_asset_system *s);
 /* Call once per frame on the main thread: publishes finished loads, sends ECS events,
  * applies hot reloads, runs eviction. */
 DE_API void de_asset_system_update(de_asset_system *s, de_world *world);
 
 /* ---------- Manifest ---------- */
-DE_API de_result de_asset_manifest_load(de_asset_system *s, const char *vpath); /* assets.toml */
+
+/** How bad a manifest issue is. */
+typedef enum de_asset_issue_severity {
+    DE_ASSET_ISSUE_INFO,    /**< noted, nothing to fix (e.g. the reserved `variants` key) */
+    DE_ASSET_ISSUE_WARNING, /**< ignored input, e.g. an unknown key */
+    DE_ASSET_ISSUE_ERROR    /**< the manifest is not usable */
+} de_asset_issue_severity;
+
+/** One problem found in a manifest. Strings stay valid until the next manifest load or destroy. */
+typedef struct de_asset_manifest_issue {
+    de_asset_issue_severity severity;
+    de_result code;       /**< DE_ERR_PARSE, or the read error of a file that could not be read */
+    const char *file;     /**< normalised virtual path of the manifest file */
+    const char *key_path; /**< TOML key path, e.g. `assets."ui/logo".type`; "" for the file */
+    u32 line;             /**< 1-based line, 0 when unknown */
+    const char *message;
+} de_asset_manifest_issue;
+
+/**
+ * Loads the project manifest `vpath` (`dev:/assets.toml`) and the files it includes
+ * (`[project] include`, relative to the including file). Every problem is collected, not just the
+ * first, and logged (category "asset"); de_asset_manifest_issues lists them. On success the new
+ * manifest replaces the previous one; on failure the previous one stays active.
+ * @return DE_OK, DE_ERR_PARSE (at least one error issue), DE_ERR_NOT_FOUND / DE_ERR_IO (the root
+ *         file could not be read), DE_ERR_INVALID_ARGUMENT (bad `vpath`), DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_asset_manifest_load(de_asset_system *s, const char *vpath);
+/**
+ * The issues of the last de_asset_manifest_load (successful or not), in file order then key
+ * order. `*count` gets their number (0 before any load). Valid until the next load or destroy.
+ * For tools (`de-cook --check`) and tests.
+ */
+DE_API const de_asset_manifest_issue *de_asset_manifest_issues(const de_asset_system *s,
+                                                               u32 *count);
 DE_API de_result de_asset_pack_mount(de_asset_system *s, const char *vpath, i32 priority);
 DE_API void de_asset_pack_unmount(de_asset_system *s, const char *vpath);
+/**
+ * Selects the locale for `[assets."<id>".locale]` source overrides (`"ja"`, `"pt-BR"`; NULL or
+ * "" = none). A tag without its own override falls back to its parent (`pt-BR` -> `pt`), then to
+ * the asset's `source`. The string is copied; a tag longer than 35 bytes is refused with a log
+ * warning and the previous locale stays.
+ */
 DE_API void de_asset_set_locale(de_asset_system *s, const char *locale);
 
 /* ---------- Loading (the "hook") ---------- */
