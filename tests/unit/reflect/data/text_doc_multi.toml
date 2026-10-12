@@ -1,0 +1,19 @@
+[[entity]]
+__type = "TTransform"
+__version = 1
+position = [1.0, -2.0, 1000000.25]
+rotation = [0.0, 0.0, 0.38268343, 0.9238795]
+scale = [1.0, 2.5, 0.001]
+
+[[item]]
+__type = "TItem"
+__version = 1
+id = 9
+count = -9
+
+[[entity]]
+__type = "TTransform"
+__version = 1
+position = [-1.0, -2.0, 1000000.25]
+rotation = [0.0, 0.0, 0.38268343, 0.9238795]
+scale = [4.0, 2.5, 0.001]

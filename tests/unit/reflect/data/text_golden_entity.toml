@@ -1,0 +1,17 @@
+__type = "TEntityData"
+__version = 1
+transform.position = [4.0, -2.0, 1000000.25]
+transform.rotation = [0.0, 0.0, 0.38268343, 0.9238795]
+transform.scale = [1.0, 2.5, 0.001]
+inventory.count = 3
+inventory.items = [
+    { id = 100, count = 0 },
+    { id = 101, count = 10 },
+    { id = 102, count = 20 },
+    { id = 0, count = 0 },
+    { id = 0, count = 0 },
+    { id = 0, count = 0 },
+    { id = 0, count = 0 },
+    { id = 0, count = 0 },
+]
+mode = "Run"

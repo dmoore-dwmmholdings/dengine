@@ -320,6 +320,127 @@ DE_API de_result de_serialize_object(const de_type_registry *r, de_type_id type,
 DE_API de_result de_deserialize_object(const de_type_registry *r, de_type_id type, void *obj,
                                        const de_ser_options *opt, de_reader *rd);
 
+/* ---- Text format (DENG-295) ---- */
+
+/*
+ * DE_SER_TEXT is TOML 1.0 (DENG-2 Q9), written by hand and read with the vendored tomlc17.
+ *
+ * de_serialize_object(..., {DE_SER_TEXT, ...}) writes one object: the keys `__type = "Name"` and
+ * `__version = N`, then each field whose flags include every bit of `opt->required_flags`
+ * (0 = all fields), in declaration order, `\n` line endings, no trailing spaces. The output for
+ * an object is always the same bytes, on every platform and in every C locale. A NULL `opt` means
+ * DE_SER_TEXT, all fields, no context.
+ *
+ * Field kinds: BOOL `true`/`false`; integers in decimal, except a U64 above INT64_MAX, which is a
+ * string "0x%016llx"; F32/F64 as the shortest decimal that reads back to the same bits, and
+ * `nan`, `inf`, `-inf`; VEC2/3/4, QUAT, COLOR, MAT4 (column-major) and DVEC3 as arrays of
+ * floats; NAME as its string where the build keeps names (DE_NAME_LOOKUP), else its hash as
+ * "0x..."; STRING as a TOML string; ENUM as the value's name (an integer if the value has none);
+ * FLAGS as an array of value names (plus an integer for bits without a name); STRUCT as dotted
+ * keys (`transform.position = [...]`), or an inline table inside an array; FIXED_ARRAY as an
+ * array (struct elements one inline table per line); ENTITY as its scene ID "0x..."; ASSET as
+ * `{ id = "0x...", path = "player/mesh" }`, the path only when de_name_str() knows the ID.
+ * Entities and assets go through `opt->ctx` (de_ser_context; NULL = raw values).
+ *
+ * de_deserialize_object(..., {DE_SER_TEXT, ...}) reads all of `rd` (until it reports 0 bytes),
+ * parses it and fills the fields named in it; `obj` should be constructed first
+ * (de_type_construct), because a field the text does not name keeps its value. Fields match by
+ * name. An unknown field is skipped with one warning (log category "reflect"). A value of the
+ * wrong type, an integer out of range, a string that does not fit, or an unknown enum name gives
+ * DE_ERR_PARSE with the field path ("items[2].count") and the line. Integers are accepted for
+ * float fields, decimal integers or "0x..." strings for U64 and ENTITY, any string for NAME (a
+ * "0x" and 1-16 hex digits string is read as the hash itself), and a plain path or "0x..."
+ * string for ASSET (the ID of a path is de_hash64 of its bytes). `__type`, if present, must name
+ * the type; a missing `__version` means the current version.
+ *
+ * Versions: a newer `__version` than the type's gives DE_ERR_VERSION_MISMATCH. An older one is
+ * read leniently: fields still match by name, and fields that no longer fit are skipped. Then, if
+ * the type has a `migrate` hook, it is called with the stored data: every stored value as one
+ * synthesized de_field_info (see below) over a scratch blob. If it returns false the object is
+ * dropped: DE_ERR_VERSION_MISMATCH, which callers treat as "skip this object". Without a hook,
+ * the read warns once and keeps what matched.
+ *
+ * Synthesized old fields (migrate): name = the key, with nested tables flattened to dotted names
+ * ("transform.position") and arrays of tables to "items[2].count"; booleans BOOL (1 byte),
+ * integers I64, floats F64, "0x..." strings U64 (raw IDs: entities and assets are not mapped),
+ * other strings STRING (NUL-terminated, length + 1 bytes), arrays of numbers / booleans / strings
+ * FIXED_ARRAY with attrs.nested_type "i64", "f64", "bool" or "string" (every element padded to
+ * the longest string + 1) and attrs.array_count. Offsets are 8-byte aligned; flags are 0. Mixed
+ * arrays and dates are not passed. The data is valid only during the call.
+ *
+ * Allocation: the writer allocates nothing. The reader takes its buffers from
+ * de_heap_allocator(); use de_text_doc_parse() to choose the allocator.
+ */
+
+/** A new stable scene ID (SPEC §9.2): 64 bits from the OS random source, never 0. Thread-safe. */
+DE_API u64 de_scene_id_new(void);
+
+/**
+ * Writes many objects into one TOML document, each as an entry of an array of tables:
+ *
+ *     [[entity]]
+ *     __type = "TTransform"
+ *     __version = 1
+ *     position = [0.0, 1.0, 2.0]
+ *
+ * Entries are separated by an empty line. Plain value; `(de_text_doc_writer){0}` is not ready
+ * until de_text_doc_begin().
+ */
+typedef struct de_text_doc_writer {
+    de_writer *w;
+    u32 object_count; /**< objects written so far */
+} de_text_doc_writer;
+
+/** Starts a document on `w` (which must outlive it). Writes nothing yet. */
+DE_API de_result de_text_doc_begin(de_text_doc_writer *doc, de_writer *w);
+
+/**
+ * Appends `obj` as a `[[table_key]]` entry, written like de_serialize_object (DE_SER_TEXT;
+ * `opt->format` is ignored). `table_key` is a TOML bare key: [A-Za-z0-9_-]+.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, or the writer's failure.
+ */
+DE_API de_result de_text_doc_write_object(de_text_doc_writer *doc, const char *table_key,
+                                          const de_type_registry *r, de_type_id type,
+                                          const void *obj, const de_ser_options *opt);
+
+/** Ends the document. Writes nothing; returns DE_OK unless `doc` is NULL. */
+DE_API de_result de_text_doc_end(de_text_doc_writer *doc);
+
+/** A parsed TOML document, for reading objects back. Read-only after parsing: thread-safe. */
+typedef struct de_text_doc de_text_doc;
+
+/**
+ * Parses `len` bytes of TOML. `a` NULL = de_heap_allocator(); it serves every allocation of the
+ * document and of de_text_doc_read_object, and must outlive the document. `source` names the text
+ * in messages (copied; NULL = "text").
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_PARSE (the message has the line) or
+ *         DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_text_doc_parse(const de_allocator *a, const char *text, size_t len,
+                                   const char *source, de_text_doc **out);
+
+/** Frees the document. NULL is ignored. */
+DE_API void de_text_doc_destroy(de_text_doc *doc);
+
+/**
+ * Number of `[[table_key]]` entries, or 0 if the key is missing or is not an array of tables.
+ * `table_key` NULL means the top-level table itself (a single-object document): 1.
+ */
+DE_API u32 de_text_doc_count(const de_text_doc *doc, const char *table_key);
+
+/** The `__type` string of entry `index` of `[[table_key]]` (NULL key = top level), or NULL. */
+DE_API const char *de_text_doc_type(const de_text_doc *doc, const char *table_key, u32 index);
+
+/**
+ * Reads entry `index` of `[[table_key]]` (NULL key = the top-level table) into `obj`, with the
+ * rules of de_deserialize_object.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad id, NULL argument, no such entry), DE_ERR_PARSE,
+ *         DE_ERR_VERSION_MISMATCH (newer version, or dropped by migrate) or DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_text_doc_read_object(const de_text_doc *doc, const char *table_key, u32 index,
+                                         const de_type_registry *r, de_type_id type, void *obj,
+                                         const de_ser_options *opt);
+
 /**
  * Field access by path, for UI binding, the inspector and scripting. A path is segments joined
  * by '.': a field name of the current struct, optionally followed by `[n]` on a FIXED_ARRAY
