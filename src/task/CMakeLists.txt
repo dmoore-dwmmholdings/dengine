@@ -12,5 +12,7 @@ de_add_module(
         worker.c
         graph.c
         parallel_for.c
+        profile.h
+        profile.c
     DEPS core platform
 )

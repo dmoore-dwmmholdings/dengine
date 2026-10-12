@@ -202,5 +202,30 @@ DE_API de_result de_task_graph_compile(de_task_graph *g); /* detects cycles */
  */
 DE_API void de_task_graph_run(de_task_graph *g, de_task_counter *done);
 
+/* ---------- Node statistics (DENG-293; SPEC §18.4 system timings) ----------
+ * Debug and Dev builds time every node run with de_time_now_ns() and keep the numbers per
+ * compiled node, for the stats overlay and the ECS inspector. Release and Shipping builds do not
+ * measure (de_task_graph_node_stats returns DE_ERR_UNSUPPORTED). In profile builds (DE_PROFILE)
+ * each node also runs inside a profiler zone named after the node. */
+
+/** Timings of one graph node since the graph was last compiled. */
+typedef struct de_task_node_stats {
+    u64 last_ns;     /**< duration of the most recent run of the node's fn */
+    u64 avg_ns;      /**< mean duration over `runs` (0 when it never ran) */
+    u64 runs;        /**< runs since the last compile */
+    u32 last_worker; /**< de_task_worker_index() of the last run (DE_TASK_WORKER_NONE: a
+                          background worker); DE_TASK_WORKER_NONE when it never ran */
+} de_task_node_stats;
+
+/**
+ * Reads the statistics of `node`. Any thread may call it at any time; the fields are exact when
+ * the graph is not running, and may mix two runs while it is.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (`g` or `out` NULL, `node` is not a node of `g`, or the
+ *         graph has not been compiled since the node was added); DE_ERR_UNSUPPORTED (Release and
+ *         Shipping builds: statistics are compiled out, `*out` is zeroed).
+ */
+DE_API de_result de_task_graph_node_stats(const de_task_graph *g, de_task_node node,
+                                          de_task_node_stats *out);
+
 DE_EXTERN_C_END
 #endif
