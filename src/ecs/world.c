@@ -124,6 +124,8 @@ void de_world_destroy(de_world *w) {
     ecs_queries_destroy(w);   /* DENG-346 */
     ecs_resources_destroy(w); /* DENG-348: after the entities, which may refer to resources */
     ecs_events_destroy(w);    /* DENG-348 */
+    ecs_snapshot_destroy(w);  /* DENG-352 */
+    ecs_checksum_destroy(w);  /* DENG-352 */
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
         ecs_archetype *a = ecs_archetype_at(w, ai);
         de_array_free(&a->chunks); /* the chunk blocks go back with the pool */

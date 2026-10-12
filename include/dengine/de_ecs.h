@@ -640,14 +640,95 @@ DE_API void de_system_set_enabled(de_world *w, de_system s, bool enabled);
 DE_API void de_world_run_schedule(de_world *w, de_schedule s, f32 dt, f32 alpha);
 
 /* ---------- Snapshots ---------- */
+/*
+ * World snapshots and the world checksum (SPEC §7.4, §5.7 rule 7, DENG-352).
+ *
+ * A snapshot holds the world tick, the entity allocator (every index's generation, which indices
+ * are alive, the LIFO free list) and, per non-empty archetype with at least one DE_COMP_SNAPSHOT
+ * component, its entity ids and one contiguous block per snapshot column (rows in table order).
+ * It is one block from the caller's allocator. It holds nothing else: no component without
+ * DE_COMP_SNAPSHOT, no resources, no events, no event reader state, no change ticks, no queries
+ * or commands. Rollback netcode (S33), replays, play-in-editor (S38) and the determinism tests
+ * use it.
+ *
+ * Snapshot components are copied as bytes, so they must be POD (`is_pod`; SPEC §7.1): take
+ * refuses a snapshot component whose type is not.
+ *
+ * A snapshot is an in-memory format for this process: restore it into the world it was taken
+ * from, or into a world with the same component registration (same ids, flags and sizes). It is
+ * not a file format (save games are S37).
+ *
+ * Threading: take, size and checksum only read the world (no other thread may change it while
+ * they run). Restore is a structural change: single-threaded and not allowed while a schedule
+ * runs.
+ */
 typedef struct de_world_snapshot {
-    void *data;
+    void *data; /**< the snapshot block (`size` bytes), owned by the allocator given to take */
     u64 size;
-    u64 tick;
+    u64 tick; /**< de_world_tick() at take */
 } de_world_snapshot;
+/**
+ * The size in bytes that de_world_snapshot_take() would allocate for the world as it is now, so
+ * callers can size a buffer pool or a snapshot ring up front. 0 for a NULL world.
+ */
+DE_API u64 de_world_snapshot_size(const de_world *w);
+/**
+ * Copies the world's entity allocator and every DE_COMP_SNAPSHOT component column into one block
+ * allocated from `a` (NULL means de_heap_allocator()). Free it with de_world_snapshot_free() and
+ * the same allocator. A world with no snapshot components gives a small, valid snapshot (the
+ * header and the entity allocator only).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` or `out` NULL), DE_ERR_UNSUPPORTED (a snapshot
+ *         component in use whose type is not POD) or DE_ERR_OUT_OF_MEMORY. On failure `*out` is
+ *         zeroed.
+ */
 DE_API de_result de_world_snapshot_take(de_world *w, const de_allocator *a, de_world_snapshot *out);
+/**
+ * Puts the world back in the state of `snap`:
+ *
+ * - The entity set, every index's generation and the free list become exactly the snapshot's, so
+ *   entity handles from take time are valid again and later spawns get the same ids.
+ * - Entities alive now but not in the snapshot (or alive with another generation) are despawned,
+ *   in ascending index order (destruct hooks run).
+ * - Entities in the snapshot but not alive now are re-created with their snapshot components only.
+ * - Entities alive in both keep their components without DE_COMP_SNAPSHOT; their snapshot
+ *   components become exactly the snapshot's set (added or removed as needed).
+ * - Snapshot component data is restored byte for byte. Rows a restore writes get `changed` = the
+ *   world's current change tick (re-created or added columns also get `added`); ticks are not part
+ *   of a snapshot.
+ * - Each archetype's rows are put back in the snapshot's row order when the entities are in the
+ *   same archetypes as at take time (always true when every component has DE_COMP_SNAPSHOT), so
+ *   iteration order after the restore is the take-time order.
+ * - The world tick becomes `snap->tick`.
+ *
+ * When an archetype still holds the snapshot's entities in the snapshot's order (only component
+ * data changed since take), its data is restored with one memcpy per column and chunk.
+ * Archetypes created since take stay (empty if every component has DE_COMP_SNAPSHOT). Resources,
+ * events, queries and recorded commands are not touched: apply or discard commands first.
+ *
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` or `snap` NULL, or a snapshot that is corrupt or
+ *         does not fit the world's components; the world is unchanged) or DE_ERR_OUT_OF_MEMORY.
+ *         Out of memory after the restore started leaves a valid world that is only partly
+ *         restored (some snapshot entities may be missing); restore again.
+ * Not allowed while a schedule runs (asserted in Debug and Dev).
+ */
 DE_API de_result de_world_snapshot_restore(de_world *w, const de_world_snapshot *snap);
+/** Frees the block of `snap` (allocated from `a`; NULL means de_heap_allocator()) and zeroes
+ * `*snap`. A NULL `snap` or an empty snapshot is ignored. */
 DE_API void de_world_snapshot_free(const de_allocator *a, de_world_snapshot *snap);
+/**
+ * XXH3-64 checksum of the world's logical content (SPEC §5.7 rule 7), for determinism tests and
+ * desync detection. It covers every alive entity in ascending index order (its index and
+ * generation) and, for each of its components in ascending component id whose flags intersect
+ * `component_flags_mask`, the component id and the bytes of each reflected field (de_type_fields;
+ * nested structs and arrays field by field, strings up to their terminator). Bytes no field
+ * covers (struct padding) never enter it, floats count by bit pattern, and tag components count
+ * by id. It does not depend on archetype creation order, chunk placement or row order. The world
+ * tick, change ticks, resources and events are not part of it.
+ *
+ * The value is the same on every supported platform (all are little-endian) for the same logical
+ * content and the same component registration order. Mask 0 covers the entities only. Allocates
+ * only the first time it meets a component (its field layout is cached). 0 for a NULL world.
+ */
 DE_API u64 de_world_checksum(de_world *w, u32 component_flags_mask);
 
 DE_EXTERN_C_END

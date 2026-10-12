@@ -216,6 +216,11 @@ struct de_world {
                                              first de_query_create */
     /* -- DENG-347: change detection (append below; the rest is in change_internal.h) -- */
     u32 change_check_tick; /**< change_tick at the last ecs_check_change_ticks */
+    /* -- DENG-352: snapshots and the world checksum (append below) -- */
+    struct ecs_snap_state *snap; /**< snapshot.c: restore scratch and counters; NULL until the
+                                      first restore */
+    struct ecs_ck_cache *ck;     /**< checksum.c: per-component field spans; NULL until the first
+                                      de_world_checksum */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -457,6 +462,32 @@ void ecs_commands_destroy(de_world *w);
 
 /** Destroys every query of the world and the query registry (de_world_destroy). */
 void ecs_queries_destroy(de_world *w);
+
+/* ---- Internal API: snapshots and checksum (snapshot.c, checksum.c, DENG-352) --------------- */
+
+/** Counters of de_world_snapshot_restore, summed over every restore of the world. Kept in every
+ * build type (like the edge-cache counters). */
+typedef struct ecs_snapshot_stats {
+    u64 restores;         /**< successful restores */
+    u64 fast_sections;    /**< sections whose table already held their rows in order */
+    u64 ordered_sections; /**< other sections whose rows were put back in snapshot order */
+    u64 loose_sections;   /**< sections whose entities ended up in several archetypes */
+    u64 block_copies;     /**< memcpy calls of one column of one chunk */
+    u64 row_copies;       /**< memcpy calls of one column of one row */
+    u64 despawned;        /**< entities despawned because the snapshot does not have them */
+    u64 recreated;        /**< entities re-created from the snapshot */
+    u64 moved;            /**< surviving entities moved to another archetype */
+    u64 row_swaps;        /**< row swaps that put a table back in snapshot order */
+} ecs_snapshot_stats;
+
+/** The world's restore counters (all zero before the first restore). */
+void ecs_snapshot_stats_get(const de_world *w, ecs_snapshot_stats *out);
+
+/** Frees the restore scratch (de_world_destroy). Safe when w->snap is NULL. */
+void ecs_snapshot_destroy(de_world *w);
+
+/** Frees the checksum's field-span cache (de_world_destroy). Safe when w->ck is NULL. */
+void ecs_checksum_destroy(de_world *w);
 
 DE_EXTERN_C_END
 
