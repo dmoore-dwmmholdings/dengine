@@ -4,9 +4,16 @@
  *
  * In SOURCE mode, an asset whose type has an `import` callback is cooked in-process before it is
  * loaded: pl_submit (pipeline.c) asks de__cook_stage_plan, creates the job, and
- * de__cook_stage_begin runs the cooker library (tools/cook/lib/, "cook/lib/de_cooker.h") on a
- * DE_TASK_POOL_BACKGROUND task. The cooked bytes go to the type's `load` like read bytes, and
- * the dependencies the importer declared become the job's dependencies.
+ * de__cook_stage_begin queues the cook for the stage's cook threads, which run the cooker
+ * library (tools/cook/lib/, "cook/lib/de_cooker.h"). The cooked bytes go to the type's `load`
+ * like read bytes, and the dependencies the importer declared become the job's dependencies.
+ *
+ * Cook threads (DENG-387): with a task system the stage starts 1 to 4 threads `de-cook-<n>` (one
+ * per 4 logical cores) at DE_THREAD_NORMAL on the first cook, and joins them at shutdown. They
+ * take the most urgent load priority first (the job's priority at submit), FIFO within it. Not
+ * the background pool: its workers run below normal priority and Windows starves them under a
+ * busy loop (Trama "Decision: Asset loads never wait on below-normal threads"). Not the frame
+ * pool: a cold cook may take long. Without a task system the cook runs inline.
  *
  * Sub-assets: each cook records the sub-assets it declared (`<id>#<name>`, type) in a table of
  * the stage. Typed access and the load API find their slots through it
@@ -69,6 +76,15 @@ void de__cook_stage_shutdown(de__pipeline *pl);
 /** True if `id` is a sub-asset an in-process cook declared; `*type_hash` gets de_hash64_str of
  * its type name. Main thread. */
 bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_hash);
+
+/** DENG-387: counters for tests. */
+typedef struct de__cook_stage_stats {
+    u32 threads;          /**< cook threads running (0: none yet, no task system, or no cooker) */
+    u64 cooks;            /**< cooks started (a cancelled job that never cooked is not counted) */
+    u64 cooks_on_threads; /**< of those, the ones that ran on a cook thread */
+} de__cook_stage_stats;
+/** The counters; zeroes before the first cook and in builds without the cooker. Main thread. */
+void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *out);
 
 DE_EXTERN_C_END
 

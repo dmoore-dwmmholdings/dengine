@@ -1,6 +1,7 @@
 /*
  * status.c: request aggregation, de_asset_status / _status_of / _status_list and de_asset_wait
- * (SPEC §11.3; DENG-141). See load_internal.h.
+ * (SPEC §11.3; DENG-141), and the wake object that blocking waits sleep on (DENG-387). See
+ * load_internal.h.
  *
  * A request's aggregate is cached on the request and recomputed (O(assets in the request)) when
  * it is created and by every de__load_update while it is not final, so de_asset_status is O(1)
@@ -24,8 +25,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* How long de_asset_wait sleeps between polls when it has nothing to help with. */
-#define DE__WAIT_POLL_NS 100000u /* 0.1 ms */
+/* The longest de_asset_wait blocks before it looks again without a wake-up: the safety net for
+ * main-thread tasks queued while it blocks (nothing posts the wake object for them). Every load
+ * of the pipeline and every queued completion wakes it at once (DENG-387). */
+#define DE__WAIT_SAFETY_NS 10000000u /* 10 ms */
 
 /* Writes the message of entry `i`'s failure into `out`. */
 static void entry_failure_msg(de_asset_system *s, const de__load_entry *e, char *out, size_t size) {
@@ -222,6 +225,104 @@ u32 de_asset_status_list(de_asset_system *s, de_load_handle h, de_asset_status_e
     return r->count;
 }
 
+/* ---- Wake object (DENG-387) ------------------------------------------------------------- */
+
+de_result de__asset_wake_init(de_asset_system *s) {
+    de__asset_wake *w = DE_NEW(s->alloc, de__asset_wake, DE_MEM_ASSET);
+    if (w == NULL)
+        return DE_ERR_OUT_OF_MEMORY;
+    memset(w, 0, sizeof *w);
+    de_mutex_init(&w->lock);
+    de_cond_init(&w->cond);
+    s->wake = w;
+    return DE_OK;
+}
+
+void de__asset_wake_shutdown(de_asset_system *s) {
+    de__asset_wake *w = s != NULL ? s->wake : NULL;
+    if (w == NULL)
+        return;
+    /* A producer that published the last job may still be inside the lock: wait for it. */
+    de_mutex_lock(&w->lock);
+    DE_ASSERT(w->waiters == 0);
+    de_mutex_unlock(&w->lock);
+    de_cond_destroy(&w->cond);
+    de_mutex_destroy(&w->lock);
+    DE_FREE(s->alloc, w, sizeof *w);
+    s->wake = NULL;
+}
+
+void de__asset_wake_begin(de_asset_system *s) {
+    if (s->wake != NULL)
+        de_mutex_lock(&s->wake->lock);
+}
+
+void de__asset_wake_end(de_asset_system *s) {
+    de__asset_wake *w = s->wake;
+    if (w == NULL)
+        return;
+    w->pending = true;
+    if (w->waiters != 0)
+        de_cond_broadcast(&w->cond);
+    de_mutex_unlock(&w->lock);
+}
+
+void de__asset_wake_signal(de_asset_system *s) {
+    de__asset_wake_begin(s);
+    de__asset_wake_end(s);
+}
+
+void de__asset_wake_reset(de_asset_system *s) {
+    de__asset_wake *w = s->wake;
+    if (w == NULL)
+        return;
+    de_mutex_lock(&w->lock);
+    w->pending = false;
+    de_mutex_unlock(&w->lock);
+}
+
+bool de__asset_wake_block(de_asset_system *s, u64 max_ns) {
+    de__asset_wake *w = s->wake;
+    if (w == NULL)
+        return false;
+    de_mutex_lock(&w->lock);
+    w->stats.blocks++;
+    if (w->pending) { /* progress came after the look: look again at once */
+        w->stats.signalled++;
+        de_mutex_unlock(&w->lock);
+        return true;
+    }
+    w->waiters++;
+    u64 start = de_time_now_ns();
+    u64 end = max_ns > UINT64_MAX - start ? UINT64_MAX : start + max_ns;
+    /* Condition waits can wake spuriously, and a timed wait can end a little early (timer
+     * granularity): wait again for the time left. */
+    while (!w->pending) {
+        u64 now = de_time_now_ns();
+        if (now >= end)
+            break;
+        (void)de_cond_wait_timeout(&w->cond, &w->lock, end - now);
+    }
+    w->waiters--;
+    bool woken = w->pending;
+    if (woken)
+        w->stats.signalled++;
+    else
+        w->stats.timeouts++;
+    de_mutex_unlock(&w->lock);
+    return woken;
+}
+
+void de__asset_wait_get_stats(const de_asset_system *s, de__asset_wait_stats *out) {
+    memset(out, 0, sizeof *out);
+    de__asset_wake *w = s != NULL ? s->wake : NULL;
+    if (w == NULL)
+        return;
+    de_mutex_lock(&w->lock);
+    *out = w->stats;
+    de_mutex_unlock(&w->lock);
+}
+
 /* ---- Wait ---------------------------------------------------------------------------------- */
 
 de_load_state de_asset_wait(de_asset_system *s, de_load_handle h, u64 timeout_ns) {
@@ -235,7 +336,20 @@ de_load_state de_asset_wait(de_asset_system *s, de_load_handle h, u64 timeout_ns
 #endif
     u64 start = de_time_now_ns();
     u64 deadline = timeout_ns > UINT64_MAX - start ? UINT64_MAX : start + timeout_ns;
+    if (s != NULL && s->wake != NULL) {
+        de_mutex_lock(&s->wake->lock);
+        s->wake->stats.waits++;
+        de_mutex_unlock(&s->wake->lock);
+    }
     for (;;) {
+        /* Clear the wake-up flag BEFORE looking: progress reported from here on keeps the
+         * wait below from blocking (DENG-387). */
+        if (s != NULL && s->wake != NULL) {
+            de_mutex_lock(&s->wake->lock);
+            s->wake->pending = false;
+            s->wake->stats.rounds++;
+            de_mutex_unlock(&s->wake->lock);
+        }
         de__load_update(s);
         const de__request *r = de__request_get(s, h);
         if (r == NULL)
@@ -251,13 +365,17 @@ de_load_state de_asset_wait(de_asset_system *s, de_load_handle h, u64 timeout_ns
             return r->state;
         }
         /* Help: main-thread tasks (main-thread loaders) when this is the task system's main
-         * thread; otherwise sleep briefly while the backend's threads work. */
+         * thread. Otherwise block in the OS until a load makes progress (a queued completion, a
+         * finished pipeline job, a main-thread load), never spinning: on Windows a spinning
+         * waiter starves the lower-priority threads it waits for (Trama "Decision: A waiting
+         * thread blocks in the OS; it never spins without a bound"). The timed wait is only the
+         * safety net for main-thread tasks queued while it blocks. */
         u32 ran = 0;
         if (s->tasks != NULL && de_task_worker_index() == 0)
             ran = de_task_pump_main(s->tasks, 0);
         if (ran == 0) {
             u64 left = deadline - now;
-            de_sleep_ns(left < DE__WAIT_POLL_NS ? left : DE__WAIT_POLL_NS);
+            (void)de__asset_wake_block(s, left < DE__WAIT_SAFETY_NS ? left : DE__WAIT_SAFETY_NS);
         }
     }
 }

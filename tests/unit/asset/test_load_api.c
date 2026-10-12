@@ -662,6 +662,62 @@ TEST_F(wait, wait_timeout, load_fx) {
     de_asset_release(f->s, h);
 }
 
+/* ---- wait.wait_blocks (DENG-387) ----------------------------------------------------------------
+ *
+ * de_asset_wait blocks in the OS (Trama "Decision: A waiting thread blocks in the OS; it never
+ * spins without a bound"). On a load that nobody completes it wakes only when its safety-net
+ * slice (10 ms) runs out: about 20 rounds in 200 ms, where the old 0.1 ms polling with a
+ * spinning de_sleep_ns ran about 2000. A completion from another thread ends a block at once
+ * (a signalled wake-up): a block with a 5 s limit returns long before it. */
+
+#define WAIT_SLICE_NS 10000000u /* DE__WAIT_SAFETY_NS in status.c */
+
+TEST_F(wait, wait_blocks, load_fx) {
+    load_test_install_text(f->s, k_load_manifest);
+    de_load_handle h = de_asset_load(f->s, id_of("data/a"), 0);
+
+    /* Held: nobody completes the load. */
+    const u64 hold_ns = 200000000u; /* 200 ms */
+    de__asset_wait_stats a, b;
+    de__asset_wait_get_stats(f->s, &a);
+    u64 t0 = de_time_now_ns();
+    EXPECT_EQ((int)de_asset_wait(f->s, h, hold_ns), (int)DE_LOAD_PENDING);
+    u64 took = de_time_now_ns() - t0;
+    de__asset_wait_get_stats(f->s, &b);
+    EXPECT_GE(took, hold_ns);
+    EXPECT_EQ(b.waits - a.waits, 1u);
+    /* Each round but the last ends one blocking wait; each block lasts a whole slice (or the
+     * rest of the timeout), so at most one round per slice, plus the first and the last. */
+    u64 rounds = b.rounds - a.rounds;
+    EXPECT_GE(rounds, 2u);
+    EXPECT_LE(rounds, took / WAIT_SLICE_NS + 2u);
+    EXPECT_EQ(b.blocks - a.blocks, rounds - 1u);
+    EXPECT_EQ(b.signalled - a.signalled, 0u); /* nothing reported progress */
+    EXPECT_EQ(b.timeouts - a.timeouts, rounds - 1u);
+    if (rounds > took / WAIT_SLICE_NS + 2u)
+        printf("  %llu rounds in %llu ns\n", (unsigned long long)rounds, (unsigned long long)took);
+
+    /* Another thread completes the load after 30 ms: the completion ends a block that would
+     * otherwise last 5 s (only a producer can end it early), and the wait applies it. */
+    late_ctx c = {f->s, de__slot_find(f->s, id_of("data/a")), 30000000u};
+    de_thread *t = NULL;
+    de__asset_wait_get_stats(f->s, &a);
+    t0 = de_time_now_ns();
+    de__asset_wake_reset(f->s);
+    ASSERT_EQ(de_thread_create(late_complete, &c, "late", DE_THREAD_NORMAL, 0, &t), DE_OK);
+    const u64 long_ns = (u64)5 * 1000000000u;
+    EXPECT_TRUE(de__asset_wake_block(f->s, long_ns));
+    took = de_time_now_ns() - t0;
+    EXPECT_LT(took, long_ns);
+    EXPECT_EQ((int)de_asset_wait(f->s, h, 10ull * 1000000000ull), (int)DE_LOAD_READY);
+    (void)de_thread_join(t);
+    de__asset_wait_get_stats(f->s, &b);
+    fake_backend_find(&f->fake, id_of("data/a"))->done = true;
+    EXPECT_EQ(b.signalled - a.signalled, 1u);
+    EXPECT_EQ(b.timeouts - a.timeouts, 0u);
+    de_asset_release(f->s, h);
+}
+
 /* ---- wait.wait_asserts_in_schedule (death test) ------------------------------------------------
  */
 

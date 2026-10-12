@@ -82,6 +82,9 @@ void de__load_stage_begin(de__pjob *job, bool on_frame_worker) {
         else
             pl->main_head = job;
         pl->main_tail = job;
+        /* DENG-387: wake a blocked waiter (de_asset_wait, the pipeline shutdown), which runs it
+         * in its next update. Under `lock`, so the job cannot be gone before the wake. */
+        de__asset_wake_signal(job->s);
         de_mutex_unlock(&pl->lock);
         return;
     }

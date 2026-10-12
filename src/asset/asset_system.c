@@ -76,6 +76,11 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
     s->desc = d;
     s->log = de_log_register_category("asset", DE_LOG_INFO);
 
+    /* DENG-387: the wake object of blocking waits, before anything can finish a load. */
+    if (de__asset_wake_init(s) != DE_OK) {
+        de_asset_system_destroy(s);
+        return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
+    }
     /* DENG-142: the load pipeline is the backend (it starts its threads on the first load). */
     if (de__pipeline_install(s) != DE_OK) {
         de_asset_system_destroy(s);
@@ -107,6 +112,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     de__manifest_destroy(s->manifest);
     de__manifest_destroy(s->failed_manifest);
     DE_FREE(a, s->cache_dir_buf, s->cache_dir_size);
+    de__asset_wake_shutdown(s); /* DENG-387: last; every job came back in the pipeline shutdown */
     DE_FREE(a, s, sizeof *s);
 }
 

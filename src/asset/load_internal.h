@@ -160,6 +160,64 @@ void de__load_update(de_asset_system *s);
  * every request (and its refs) and frees the load state. */
 void de__load_shutdown(de_asset_system *s);
 
+/* ---- DENG-387: waking a blocked waiter (status.c) -------------------------------------------
+ *
+ * de_asset_wait and the pipeline shutdown wait for loads that other threads finish. They block
+ * in the OS on the asset system's wake object (`s->wake`; Trama "Decision: A waiting thread
+ * blocks in the OS; it never spins without a bound"). A producer sets `pending` and signals
+ * whenever the main thread has something to apply: a queued completion (de__slot_complete), a
+ * finished pipeline job (de__pipeline_finish) or a main-thread load (de__load_stage_begin). The
+ * waiter clears `pending` BEFORE it looks for progress (de__load_update) and blocks only while
+ * `pending` is still clear, so a wake-up between the look and the block is not lost. A timed
+ * wait is only a safety net (main-thread tasks queued while it blocks).
+ *
+ * Lifetime: the asset system creates the object and destroys it last, after the pipeline
+ * shutdown. de__pipeline_finish publishes a job INSIDE de__asset_wake_begin/_end, so once the
+ * main thread has taken every job, no poster can still be inside the lock: the shutdown's
+ * lock/unlock is a barrier, and the object is freed after it.
+ */
+
+/** Wake-up counters for tests (main thread). */
+typedef struct de__asset_wait_stats {
+    u64 waits;     /**< de_asset_wait calls */
+    u64 rounds;    /**< de_asset_wait loop rounds (update + check) */
+    u64 blocks;    /**< de__asset_wake_block calls (de_asset_wait, the pipeline shutdown) */
+    u64 signalled; /**< blocks a producer ended, or that found `pending` already set */
+    u64 timeouts;  /**< blocks that ran out (the safety net, or the caller's deadline) */
+} de__asset_wait_stats;
+
+/** The wake object. Fields are guarded by `lock`. */
+typedef struct de__asset_wake {
+    de_mutex lock;
+    de_cond cond;
+    bool pending; /**< a producer reported progress since the waiter last cleared it */
+    u32 waiters;  /**< threads blocked in de__asset_wake_block */
+    de__asset_wait_stats stats;
+} de__asset_wake;
+
+/** de_asset_system_create: allocates the wake object. DE_ERR_OUT_OF_MEMORY. */
+de_result de__asset_wake_init(de_asset_system *s);
+/** de_asset_system_destroy, last (after the pipeline shutdown): barrier, then frees it. */
+void de__asset_wake_shutdown(de_asset_system *s);
+/** A producer: takes the wake lock. Publish the progress, then call de__asset_wake_end. Any
+ * thread. A producer may hold the pipeline's `lock` or the load state's `lock` while it calls
+ * this; the waiter takes neither of them while it holds the wake lock. */
+void de__asset_wake_begin(de_asset_system *s);
+/** A producer: sets `pending`, wakes a blocked waiter, releases the wake lock. */
+void de__asset_wake_end(de_asset_system *s);
+/** A producer whose progress is already published (and outlives the call): begin + end. */
+void de__asset_wake_signal(de_asset_system *s);
+/** The waiter, BEFORE it looks for progress: clears `pending`. */
+void de__asset_wake_reset(de_asset_system *s);
+/**
+ * The waiter: blocks until a producer sets `pending` or `max_ns` passed (a timed wait in the OS;
+ * on Windows it lasts at least one timer tick). Returns at once if `pending` is set. True when a
+ * producer ended the wait.
+ */
+bool de__asset_wake_block(de_asset_system *s, u64 max_ns);
+/** The counters (zeroes without a wake object). Main thread. */
+void de__asset_wait_get_stats(const de_asset_system *s, de__asset_wait_stats *out);
+
 DE_EXTERN_C_END
 
 #endif /* DE_ASSET_LOAD_INTERNAL_H */

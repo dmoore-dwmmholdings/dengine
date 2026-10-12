@@ -365,6 +365,7 @@ void de__slot_complete(de_asset_system *s, u32 slot, de_result result, u64 bytes
         q->text_len += msg_len;
     }
     de_mutex_unlock(&L->lock);
+    de__asset_wake_signal(s); /* DENG-387: a blocked de_asset_wait applies it now */
 }
 
 /* Applies one queued completion. Main thread. */
