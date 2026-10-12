@@ -43,6 +43,14 @@ typedef enum de__watch_raw {
      * what follows, such as the rename of an atomic save (DENG-383).
      */
     DE__WATCH_RAW_CREATED_OPEN,
+    /**
+     * Renamed away from `rel`, and the MOVED_TO with the same `cookie` is certain to follow
+     * (ReadDirectoryChangesW: both halves of a rename are reported, but a pending read completes
+     * on the first record, so the second can come in the next completion). Merges as MOVED_FROM,
+     * but the path is held until that MOVED_TO arrives (or the hold limit passes), so a poll
+     * between the two halves cannot deliver the source alone (DENG-385).
+     */
+    DE__WATCH_RAW_MOVED_FROM_PAIRED,
 } de__watch_raw;
 
 /** The parts of a watch the backends read. The rest is private to watch_common.c. */
@@ -71,10 +79,21 @@ void de__watch_backend_stop(de__watch_backend *b);
 void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_t rel_len,
                     bool is_dir, u64 cookie);
 
+/**
+ * Opens (`open` true) or closes a batch: the raw changes of one OS report, which the backend
+ * posts one by one. While a batch is open, de_file_watch_poll delivers nothing, so a backend
+ * thread that is delayed part-way through a report (a busy machine) cannot let the first
+ * changes of it mature alone (DENG-385). The backend closes every batch it opens, before it
+ * waits for the OS again. Thread-safe; batches nest (a count), so a test can hold one open
+ * while the backend opens and closes its own.
+ */
+void de__watch_batch(de_file_watch *w, bool open);
+
 /** Test hook: number of changes waiting in the pending table (matured or not). */
 u32 de__watch_pending_count(de_file_watch *w);
 
-/** Test hook: sets how long a path posted as CREATED_OPEN is held at most (default 10 s). */
+/** Test hook: sets how long a path posted as CREATED_OPEN or MOVED_FROM_PAIRED is held at most
+ * (default 10 s). */
 void de__watch_set_hold_limit(de_file_watch *w, u32 ms);
 
 /** The backend of `w` (for the backend's own test hooks). */

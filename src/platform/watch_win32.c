@@ -7,9 +7,11 @@
  * FILE_NOTIFY_CHANGE_DIR_NAME.
  *
  * Actions: ADDED -> CREATED, REMOVED -> DELETED, MODIFIED -> MODIFIED (directories are dropped
- * by the common layer), RENAMED_OLD_NAME / RENAMED_NEW_NAME -> MOVED_FROM / MOVED_TO. Windows
- * reports the two halves of a rename next to each other, so a counter is the cookie. A
- * completion with zero bytes (the buffer overflowed) or ERROR_NOTIFY_ENUM_DIR -> RESCAN.
+ * by the common layer), RENAMED_OLD_NAME / RENAMED_NEW_NAME -> MOVED_FROM_PAIRED / MOVED_TO.
+ * Windows reports the two halves of a rename next to each other, so a counter is the cookie. The
+ * halves can still come in two completions (a pending read completes on the first record), so
+ * the common layer holds the source until its MOVED_TO arrives (DENG-385). A completion with zero
+ * bytes (the buffer overflowed) or ERROR_NOTIFY_ENUM_DIR -> RESCAN.
  *
  * A removed path cannot be asked whether it was a directory, so the backend keeps the set of
  * directories in the tree (de__watch_dirset, DENG-370): scanned before create returns, then kept
@@ -18,7 +20,8 @@
  *
  * The first read is issued by the watcher thread before de__watch_backend_start returns (the
  * start waits for it), so changes made after create are not lost. The thread issues every
- * read itself because Windows cancels pending I/O of a thread that exits. */
+ * read itself because Windows cancels pending I/O of a thread that exits. It runs above normal
+ * priority, so busy normal-priority threads cannot starve it (DENG-385). */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -132,7 +135,11 @@ static void handle_buffer(de__watch_backend *b, DWORD bytes) {
             case FILE_ACTION_RENAMED_OLD_NAME:
                 ++b->cookie;
                 b->moved_dir = de__watch_dirset_remove_tree(&b->dirs, rel, len);
-                de__watch_post(b->w, DE__WATCH_RAW_MOVED_FROM, rel, len, b->moved_dir, b->cookie);
+                /* Windows reports a rename inside one directory as OLD_NAME + NEW_NAME and one
+                 * across directories as REMOVED + ADDED, so the NEW_NAME always follows, maybe in
+                 * the next completion: hold the source until it does (DENG-385). */
+                de__watch_post(b->w, DE__WATCH_RAW_MOVED_FROM_PAIRED, rel, len, b->moved_dir,
+                               b->cookie);
                 break;
             case FILE_ACTION_RENAMED_NEW_NAME:
                 /* Renamed again since: it was a directory if its old name was one. */
@@ -166,6 +173,37 @@ static void rescan_dirs(de__watch_backend *b) {
     de__watch_dirset_scan(&b->dirs, b->native_dir, "", 0, b->recursive);
 }
 
+/* Completions handled in one batch at most, so that a flood of changes still lets poll deliver
+ * between batches. */
+#define DRAIN_MAX 64
+
+/* Handles the completed read and every read that completes at once behind it (changes queued
+ * while the thread was busy), as one batch: poll delivers nothing until it is closed, so a
+ * thread delayed part-way through cannot let the first changes of a save mature alone
+ * (DENG-385). False when the directory went away. */
+static bool drain(de__watch_backend *b) {
+    for (int n = 0;; ++n) {
+        DWORD bytes = 0;
+        if (!GetOverlappedResult(b->dir, &b->ov, &bytes, FALSE)) {
+            DWORD err = GetLastError();
+            if (err != ERROR_NOTIFY_ENUM_DIR)
+                return false; /* the directory went away */
+            bytes = 0;
+        }
+        if (bytes == 0) {
+            rescan_dirs(b);
+            de__watch_post(b->w, DE__WATCH_RAW_RESCAN, "", 0, true, 0);
+        } else
+            handle_buffer(b, bytes);
+        if (!issue_read(b))
+            return false;
+        /* Changes queued since the last read complete the new one before it returns. */
+        if (n + 1 >= DRAIN_MAX || WaitForSingleObject(b->io_event, 0) != WAIT_OBJECT_0 ||
+            WaitForSingleObject(b->stop_event, 0) == WAIT_OBJECT_0)
+            return true;
+    }
+}
+
 static i32 watch_thread(void *user) {
     de__watch_backend *b = (de__watch_backend *)user;
     bool ok = issue_read(b);
@@ -178,10 +216,11 @@ static i32 watch_thread(void *user) {
     de_sem_post(&b->started, 1);
     if (!ok)
         return 1;
-    HANDLE waits[2] = {b->io_event, b->stop_event};
+    /* Stop first: WaitForMultipleObjects reports the lowest signalled index. */
+    HANDLE waits[2] = {b->stop_event, b->io_event};
     for (;;) {
         DWORD r = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
-        if (r != WAIT_OBJECT_0) {
+        if (r != WAIT_OBJECT_0 + 1) {
             /* Stop (or a failed wait): cancel the pending read and wait for it to end, so the
              * buffer is not written after it is freed. */
             DWORD n = 0;
@@ -189,19 +228,10 @@ static i32 watch_thread(void *user) {
             GetOverlappedResult(b->dir, &b->ov, &n, TRUE);
             return 0;
         }
-        DWORD bytes = 0;
-        if (!GetOverlappedResult(b->dir, &b->ov, &bytes, FALSE)) {
-            DWORD err = GetLastError();
-            if (err != ERROR_NOTIFY_ENUM_DIR)
-                return 1; /* the directory went away */
-            bytes = 0;
-        }
-        if (bytes == 0) {
-            rescan_dirs(b);
-            de__watch_post(b->w, DE__WATCH_RAW_RESCAN, "", 0, true, 0);
-        } else
-            handle_buffer(b, bytes);
-        if (!issue_read(b))
+        de__watch_batch(b->w, true);
+        ok = drain(b);
+        de__watch_batch(b->w, false);
+        if (!ok)
             return 1;
     }
 }
@@ -261,7 +291,12 @@ de_result de__watch_backend_start(de_file_watch *w, const de__watch_info *info,
         free_backend(b);
         return r;
     }
-    r = de_thread_create(watch_thread, b, "de-watch", DE_THREAD_LOW, 0, &b->thread);
+    /* Above normal: Windows schedules by strict priority, so a below-normal thread waits while
+     * normal threads keep every core busy (a game's task workers, a parallel test run), up to
+     * the seconds the balance set manager takes to boost it. The window counts from the post,
+     * so a starved watcher split an atomic save across polls (DENG-385). The thread sleeps
+     * between completions and does little work in them. */
+    r = de_thread_create(watch_thread, b, "de-watch", DE_THREAD_HIGH, 0, &b->thread);
     if (r != DE_OK) {
         de_sem_destroy(&b->started);
         free_backend(b);
