@@ -211,6 +211,9 @@ struct de_world {
     de_hashmap event_by_type;         /**< de_type_id.id -> u32 event type id; lookup only */
     /* -- DENG-349: command buffers (append below) -- */
     struct ecs_cmd_state *cmd; /**< commands.c; created by ecs_commands_init */
+    /* -- DENG-346: queries (append below) -- */
+    struct ecs_query_registry *queries; /**< query slots (query_internal.h); NULL until the
+                                             first de_query_create */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -447,6 +450,11 @@ void ecs_commands_destroy(de_world *w);
 
 /** Asserts (Debug, Dev) that `e` is not a pending id: immediate functions take real ids only. */
 #define ECS_ASSERT_NOT_PENDING(e) DE_ASSERT(!de_entity_is_pending(e))
+
+/* ---- Internal API: queries (query.c, DENG-346; the rest is in query_internal.h) ----------- */
+
+/** Destroys every query of the world and the query registry (de_world_destroy). */
+void ecs_queries_destroy(de_world *w);
 
 DE_EXTERN_C_END
 

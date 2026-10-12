@@ -67,3 +67,13 @@ if(TARGET test_commands)
     target_include_directories(test_commands PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_commands PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-346: queries. qpar.* runs de_query_par_each on task systems of several sizes: label tsan.
+de_add_test(NAME query SOURCES test_query.c LIBS de_ecs TIMEOUT 120)
+de_add_test(NAME qpar SOURCES test_query_par.c LIBS de_ecs LABELS unit tsan TIMEOUT 300)
+foreach(_de_ecs_test test_query test_qpar)
+    if(TARGET ${_de_ecs_test})
+        target_include_directories(${_de_ecs_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

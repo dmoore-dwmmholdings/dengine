@@ -121,6 +121,7 @@ void de_world_destroy(de_world *w) {
         return;
     ecs_commands_destroy(w); /* DENG-349: unapplied payloads, before anything they refer to */
     destruct_all(w);
+    ecs_queries_destroy(w);   /* DENG-346 */
     ecs_resources_destroy(w); /* DENG-348: after the entities, which may refer to resources */
     ecs_events_destroy(w);    /* DENG-348 */
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {

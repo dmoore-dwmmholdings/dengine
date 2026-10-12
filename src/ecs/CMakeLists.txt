@@ -23,3 +23,6 @@ target_sources(de_ecs PRIVATE structural.c archetype_graph.c)
 
 # DENG-349: command buffers, pending entity ids and deterministic apply.
 target_sources(de_ecs PRIVATE commands_internal.h commands.c)
+
+# DENG-346: queries (cached archetype matching, chunk iteration, par_each).
+target_sources(de_ecs PRIVATE query_internal.h query.c query_cache.c query_iter.c)
