@@ -128,11 +128,45 @@ DE_API de_component de_component_find(const de_world *w, const char *type_name);
  * memory runs out or every index is used.
  */
 DE_API de_entity de_entity_spawn(de_world *w);
+/**
+ * Destroys entity `e`: runs the destruct hook of each of its components, removes its row (the
+ * table's last row moves into the hole) and bumps the index's generation, so `e` and every copy
+ * of it are no longer alive. The index is reused by a later spawn (last freed, first reused) with
+ * the new generation. A dead or never-spawned `e` is ignored (a warning in Debug and Dev).
+ * Immediate: not allowed inside a running system (use de_cmd_despawn).
+ */
 DE_API void de_entity_despawn(de_world *w, de_entity e);
 /** true if `e` was spawned in this world and not despawned since (its generation matches). */
 DE_API bool de_entity_alive(const de_world *w, de_entity e);
+/**
+ * Adds component `c` to `e` and returns its data: zeroed, or initialised by the type's construct
+ * hook. If `e` already has `c`, nothing moves and the existing data is returned. Otherwise `e`
+ * moves to the archetype with `c` added (cached per archetype after the first move). For a tag
+ * the result is a non-NULL placeholder that must not be written through. Like every pointer into
+ * a table, the result is valid until the next structural change of the world.
+ * Returns NULL (and sets the error context) if `e` is not alive, `c` is not registered, or memory
+ * runs out; the world is then unchanged. Immediate: not allowed inside a running system (use
+ * de_cmd_add).
+ */
 DE_API void *de_entity_add(de_world *w, de_entity e, de_component c); /* returns zeroed data */
+/**
+ * Removes component `c` from `e`, running its destruct hook, and moves `e` to the archetype
+ * without `c`. Does nothing if `e` is not alive or has no `c`. Immediate: not allowed inside a
+ * running system (use de_cmd_remove).
+ */
 DE_API void de_entity_remove(de_world *w, de_entity e, de_component c);
+/**
+ * Spawns an entity directly in the archetype of the components `comps[0..n)` (any order;
+ * duplicates count once), with every component zeroed or constructed by its hook. Faster than a
+ * spawn followed by n adds: one row, no intermediate archetypes. Fill the data with
+ * de_entity_get(). `n` = 0 is a plain spawn.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` or `out` NULL, `comps` NULL with n > 0, or a
+ *         component that is not registered), DE_ERR_UNSUPPORTED (the row does not fit a chunk)
+ *         or DE_ERR_OUT_OF_MEMORY. On failure `*out` is DE_ENTITY_NULL and the world unchanged.
+ * Immediate: not allowed inside a running system.
+ */
+DE_API de_result de_entity_spawn_with(de_world *w, const de_component *comps, u32 n,
+                                      de_entity *out);
 /**
  * The data of component `c` of entity `e`, or NULL if `e` is not alive or has no `c`. For a tag
  * component the pointer is a non-NULL placeholder that must not be written through. The pointer

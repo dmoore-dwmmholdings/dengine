@@ -53,3 +53,10 @@ foreach(_de_ecs_test test_resource test_event)
         target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
+de_add_test(NAME structural SOURCES test_structural.c LIBS de_ecs TIMEOUT 120)
+if(TARGET test_structural)
+    target_include_directories(test_structural PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_structural PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

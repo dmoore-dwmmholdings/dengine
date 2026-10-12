@@ -121,6 +121,16 @@ typedef struct ecs_archetype {
     u32 pad_;                   /* explicit padding */
     DE_ARRAY(ecs_chunk) chunks; /**< dense; every chunk but the last is full */
     /* -- DENG-345: archetype edge cache (append below) -- */
+    /* Lazily built edges to the neighbouring archetypes (archetype_graph.c): `add_edges` maps a
+     * component this archetype lacks to the archetype with it added, `remove_edges` a component
+     * it has to the archetype without it. Each array is sorted by component id (binary search)
+     * and owned by the world allocator. A cache only: nothing iterates it to decide a result. */
+    struct ecs_edge *add_edges;
+    struct ecs_edge *remove_edges;
+    u32 add_edge_count, add_edge_capacity;
+    u32 remove_edge_count, remove_edge_capacity;
+    u64 edge_hits;   /**< add/remove target lookups from this archetype answered by an edge */
+    u64 edge_misses; /**< lookups that went to ecs_archetype_get_or_create (set hash + map) */
 } ecs_archetype;
 
 /** Key of de_world.archetype_by_set: a view of a sorted component-id array, compared by
@@ -275,6 +285,67 @@ de_result ecs_on_archetype_created(de_world *w, ecs_archetype_created_fn fn, voi
 
 /** Removes the first subscription with this (fn, user); keeps the order of the others. */
 void ecs_off_archetype_created(de_world *w, ecs_archetype_created_fn fn, void *user);
+
+/* ---- Internal API: archetype graph and structural changes (DENG-345) ------------------------ */
+
+/** One cached edge of the archetype graph. */
+typedef struct ecs_edge {
+    u32 component; /**< the component added or removed */
+    u32 target;    /**< index of the archetype it leads to */
+} ecs_edge;
+
+/**
+ * The archetype `a` plus `component` (a itself if it has it already). The first lookup per
+ * (archetype, component) goes through ecs_archetype_get_or_create (which may create the target,
+ * in operation order) and caches the edge, plus the reverse remove edge on the target; later
+ * lookups are a binary search. A failure to cache (out of memory) is ignored: the edge is a
+ * cache. @return DE_OK, DE_ERR_INVALID_ARGUMENT (`component` not registered),
+ * DE_ERR_UNSUPPORTED or DE_ERR_OUT_OF_MEMORY (no target; nothing changed).
+ */
+de_result ecs_archetype_add_target(de_world *w, ecs_archetype *a, u32 component,
+                                   ecs_archetype **out);
+
+/** The archetype `a` minus `component` (a itself if it lacks it). Same caching and results as
+ * ecs_archetype_add_target; caches the reverse add edge on the target. */
+de_result ecs_archetype_remove_target(de_world *w, ecs_archetype *a, u32 component,
+                                      ecs_archetype **out);
+
+/** Frees `a`'s edge arrays (de_world_destroy). */
+void ecs_archetype_edges_free(de_world *w, ecs_archetype *a);
+
+/** Archetype-graph counters, summed over every archetype in creation order. */
+typedef struct ecs_graph_stats {
+    u64 edge_hits;   /**< target lookups answered by a cached edge */
+    u64 edge_misses; /**< target lookups that hashed the set (ecs_archetype_get_or_create) */
+    u32 add_edges;   /**< cached add edges */
+    u32 remove_edges;
+} ecs_graph_stats;
+
+void ecs_graph_stats_get(const de_world *w, ecs_graph_stats *out);
+
+/**
+ * Adds `component` to alive entity `e` (structural.c). If `e` has it, nothing moves. Otherwise
+ * `e` moves to the add target; the new column is constructed (hook, or zero) and its ticks set
+ * (ecs_row_construct -> ecs_row_init_ticks). `*out_data` (may be NULL) gets the component's data,
+ * or the tag placeholder for a tag. DENG-349 applies deferred adds through this.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`e` not alive, `component` not registered),
+ *         DE_ERR_UNSUPPORTED or DE_ERR_OUT_OF_MEMORY (nothing changed).
+ */
+de_result ecs_entity_add(de_world *w, de_entity e, u32 component, void **out_data);
+
+/**
+ * Removes `component` from alive entity `e` (its destruct hook runs). Absent: DE_OK, nothing
+ * changes. @return DE_OK, DE_ERR_INVALID_ARGUMENT (`e` not alive) or DE_ERR_OUT_OF_MEMORY
+ * (nothing changed).
+ */
+de_result ecs_entity_remove(de_world *w, de_entity e, u32 component);
+
+/**
+ * Despawns alive entity `e`: destructs every column (column order), swap-removes the row
+ * (updating the record of the row that moves in) and frees the index (generation + 1, LIFO free
+ * list). Never allocates. @return DE_OK or DE_ERR_INVALID_ARGUMENT (`e` not alive; no change).
+ */
+de_result ecs_entity_despawn(de_world *w, de_entity e);
 
 /* ---- Internal API: tables (table.c, DENG-344) ----------------------------------------------- */
 

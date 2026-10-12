@@ -17,3 +17,6 @@ de_add_module(
 
 # DENG-348: resources and events.
 target_sources(de_ecs PRIVATE resource.c event.c)
+
+# DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
+target_sources(de_ecs PRIVATE structural.c archetype_graph.c)
