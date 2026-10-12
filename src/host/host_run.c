@@ -5,11 +5,17 @@
  *   de_prof_init (first, before any thread or long-lived mutex; DENG-94) → de_thread_set_name
  *   → de_log_init (DENG-150) → de_fs_init (before any virtual path; DENG-247)
  *   → game.toml with its [cvars] → user:/config.toml → command line → de_cvar_lock_startup
- *   → engine → game attach → init → register_types → register_systems → main loop
- *   → shutdown → game detach → engine destroy → de_fs_shutdown → de_log_shutdown
+ *   → engine → [headless: stop handlers] → game attach → init → register_types
+ *   → register_systems → main loop → [headless: handlers restored] → shutdown → game detach
+ *   → engine destroy → de_fs_shutdown → de_log_shutdown
  *   → de_prof_shutdown (last, after every thread has stopped).
  * The profiler, the log and the VFS are process-wide: when the caller has started one already
  * (a test, a tool), the host uses it and leaves it running.
+ *
+ * Headless (DENG-95, headless.c): de_host_desc.headless (`dengine --headless`), any run of a
+ * DE_HEADLESS build, or a platform without video. No window, GPU, renderer, audio or UI; the
+ * event pump still runs. SIGINT/SIGTERM (POSIX) or a console Ctrl event (Windows) quit after the
+ * current frame, and the run exits 0.
  *
  * Cvar precedence, lowest first: cvar defaults, game.toml [cvars], user:/config.toml, `+name
  * value` on the command line. All are startup values, so DE_CVAR_READONLY cvars take them.
@@ -100,9 +106,21 @@ static de_result host_run_game(de__host *h) {
     if (r != DE_OK)
         return r;
 
+    /* Headless (asked for, a DE_HEADLESS build, or a platform without video): from here until
+     * the loop ends, SIGINT/SIGTERM or a console Ctrl event quit after the current frame. */
+    if (de__engine_from(h->engine)->headless) {
+        r = de__headless_begin(h);
+        if (r != DE_OK) {
+            de__engine_destroy(h->engine);
+            h->engine = NULL;
+            return r;
+        }
+    }
+
     r = de__game_attach(h, &h->desc);
     if (r != DE_OK) {
         r = DE_FAIL_WRAP(r, "attaching the game");
+        de__headless_end(h);
         de__engine_destroy(h->engine);
         h->engine = NULL;
         return r;
@@ -119,6 +137,7 @@ static de_result host_run_game(de__host *h) {
         else
             r = DE_FAIL_WRAP(r, "game '%s': init failed", name);
         /* No shutdown: init did not succeed. */
+        de__headless_end(h);
         de__game_detach(h);
         de__engine_destroy(h->engine);
         h->engine = NULL;
@@ -130,6 +149,8 @@ static de_result host_run_game(de__host *h) {
         api->register_systems(e, e->world);
 
     r = de__loop_run(h);
+    /* The previous handlers again: a second signal during shutdown is not swallowed. */
+    de__headless_end(h);
 
     if (api->shutdown != NULL)
         api->shutdown(e);
@@ -144,6 +165,9 @@ int de_host_run(const de_host_desc *desc) {
     memset(&h, 0, sizeof h);
     if (desc != NULL)
         h.desc = *desc;
+#if defined(DE_HEADLESS)
+    h.desc.headless = true; /* a server build has no window, GPU, audio or UI to start */
+#endif
 
     /* Process-wide services: start each one the caller has not. */
     bool own_prof = false;
@@ -180,7 +204,8 @@ int de_host_run(const de_host_desc *desc) {
         de__host_log_error("de_host_run failed");
         exit_code = 1;
     } else {
-        DE_INFO(h.log, "%s exited normally", h.config.name);
+        DE_INFO(h.log, "%s exited normally (frames: %llu, FixedUpdate steps: %llu)", h.config.name,
+                (unsigned long long)h.loop_frames, (unsigned long long)h.loop_fixed_steps);
     }
 
     if (own_fs)

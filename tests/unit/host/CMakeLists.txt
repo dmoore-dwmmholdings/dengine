@@ -144,3 +144,20 @@ endif()
                      "${CMAKE_CURRENT_BINARY_DIR}/test_loop_timing_serial.cmake")
     endif()
 endif()
+
+# DENG-95: headless mode, the asset stubs and examples/minimal_game.c in-process. The executable
+# compiles examples/minimal_game.c (its de_game_get_api() is the static game of minimal_game.*)
+# and links de_asset_stubs like the example, while the host has no asset system (DE_HAS_ASSETS
+# 0). The smoke tests of the example itself are in examples/CMakeLists.txt.
+if(TARGET de_asset_stubs)
+    de_add_test(NAME headless
+        SOURCES test_headless.c "${DE_ROOT_DIR}/examples/minimal_game.c"
+        LIBS de_host de_asset_stubs TIMEOUT 300)
+    if(TARGET test_headless)
+        target_include_directories(test_headless PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_headless PRIVATE
+            DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+            DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_headless_tmp")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_headless_tmp")
+    endif()
+endif()
