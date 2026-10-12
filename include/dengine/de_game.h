@@ -57,6 +57,17 @@ typedef enum de_timing_mode {
     DE_TIMING_VARIABLE /* FixedUpdate once per frame with the frame delta */
 } de_timing_mode;
 
+/** Default de_timing.fixed_hz (game.toml `[timing] fixed_hz`). */
+#define DE_TIMING_DEFAULT_FIXED_HZ 60u
+/** Default de_timing.max_catchup_steps (game.toml `[timing] max_catchup_steps`). */
+#define DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS 4u
+/** Default de_timing.time_scale (game.toml `[timing] time_scale`). */
+#define DE_TIMING_DEFAULT_TIME_SCALE 1.0f
+/** Default de_timing.frame_cap_hz (game.toml `[timing] frame_cap_hz`): uncapped / vsync. */
+#define DE_TIMING_DEFAULT_FRAME_CAP_HZ 0u
+
+/** Main loop timing. The defaults (DE_TIMING_DEFAULT_*, mode DE_TIMING_FIXED) are what an empty
+ * game.toml gives. */
 typedef struct de_timing {
     de_timing_mode mode;
     u32 fixed_hz;          /* default 60 */
@@ -65,8 +76,20 @@ typedef struct de_timing {
     u32 frame_cap_hz;      /* 0 = uncapped / vsync */
 } de_timing;
 
-DE_API void de_engine_set_timing(de_engine *e, const de_timing *t); /* changeable at runtime */
+/**
+ * Changes the main loop timing at runtime; the loop uses it from its next frame. `*t` is copied.
+ * A `fixed_hz` of 0 means DE_TIMING_DEFAULT_FIXED_HZ; a negative or NaN `time_scale` means 1.0.
+ * NULL `e` or `t` is ignored. Call it from the main thread (or a DE_SYSTEM_MAIN_THREAD system).
+ */
+DE_API void de_engine_set_timing(de_engine *e, const de_timing *t);
+/** The timing the loop uses: game.toml's `[timing]`, or the last de_engine_set_timing().
+ * Zeroed for a NULL `e`. */
+DE_API de_timing de_engine_get_timing(const de_engine *e);
+/** Asks the main loop to stop after the current frame; the host then calls `shutdown`.
+ * Thread-safe (any thread, any system). NULL is ignored. */
 DE_API void de_engine_request_quit(de_engine *e);
+/** True once de_engine_request_quit() was called. Thread-safe. False for a NULL `e`. */
+DE_API bool de_engine_quit_requested(const de_engine *e);
 
 /* ---------- Game API ---------- */
 #define DE_GAME_API_VERSION 1
@@ -89,8 +112,13 @@ typedef struct de_game_api {
 #endif
 
 /* ---------- Host configuration (game.toml, overridable from the command line) ---------- */
+
+/** The project file de_host_run() reads when neither de_host_desc.game_toml nor the command line
+ * (`--game-toml <vpath>`) names one. */
+#define DE_HOST_DEFAULT_GAME_TOML "game:/game.toml"
+
 typedef struct de_host_desc {
-    const char *game_toml;         /* default "game:/game.toml" */
+    const char *game_toml;         /* virtual path; NULL = DE_HOST_DEFAULT_GAME_TOML */
     const char *game_library;      /* dev: path to game DLL; NULL = statically linked */
     const de_game_api *static_api; /* shipping: from de_game_get_api() */
     bool headless;                 /* dedicated server: no window, GPU, audio, UI */
@@ -98,7 +126,23 @@ typedef struct de_host_desc {
     char **argv;
 } de_host_desc;
 
-/* Runs the whole engine: create modules, load game, loop, shut down. Returns process exit code. */
+/**
+ * Runs the whole engine: create modules, load game, loop, shut down. A NULL `desc` is a zeroed
+ * one (which has no game, so it fails).
+ *
+ * Order: de_prof_init, de_log_init and de_fs_init (each only when the caller has not started it
+ * already; the host stops only what it started), then the project file (`--game-toml <vpath>`
+ * on the command line, else `desc->game_toml`, else DE_HOST_DEFAULT_GAME_TOML; a missing file
+ * gives the defaults) with its `[cvars]`, then `user:/config.toml` (de_cvar_load), the `+name
+ * value` pairs of the command line (de_cvar_apply_args) and de_cvar_lock_startup. Then it
+ * creates the engine, attaches the game (`api_version` must be DE_GAME_API_VERSION), and calls
+ * `init`, `register_types`, `register_systems`, runs the main loop, calls `shutdown`, and
+ * destroys everything in reverse order. `shutdown` is called only when `init` succeeded.
+ *
+ * Main thread only (the platform layer and the task system's worker 0 live there).
+ * @return the process exit code: 0 on success, 1 on any failure (the error and its cause chain
+ *         are logged in category "host").
+ */
 DE_API int de_host_run(const de_host_desc *desc);
 
 DE_EXTERN_C_END

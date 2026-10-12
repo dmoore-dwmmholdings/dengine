@@ -1,0 +1,4 @@
+[cvars]
+a.b.c.d.e.f.g.h.i.j.k.l = 1
+[cvars.x]
+y = [1, 2]
