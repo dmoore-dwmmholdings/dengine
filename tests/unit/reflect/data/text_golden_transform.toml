@@ -1,0 +1,5 @@
+__type = "TTransform"
+__version = 1
+position = [1.5, -2.0, 1000000.25]
+rotation = [0.0, 0.0, 0.38268343, 0.9238795]
+scale = [1.0, 2.5, 0.001]

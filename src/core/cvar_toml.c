@@ -23,6 +23,7 @@
 #include "core/de_compiler.h"
 #include "core/de_cvar_internal.h"
 #include "core/de_strbuf.h"
+#include "core/de_toml_internal.h"
 
 #include <limits.h>
 #include <math.h>
@@ -74,8 +75,9 @@ static void toml_hook_free(void *ptr) {
     DE_FREE(h->a, raw, h->size + TOML_HDR);
 }
 
-/* Installs the hooks once. Guarded by the registry lock; the cvar code is the only tomlc17 user
- * in the engine so far, so no other thread parses while they change. */
+/* Installs the hooks once. Guarded by the registry lock. Every tomlc17 user goes through
+ * de__toml_parse below, which installs them before its first parse, so no parse runs while they
+ * change. */
 static bool g_toml_hooks_installed; /* registry lock */
 
 static void toml_hooks_install(void) {
@@ -89,6 +91,23 @@ static void toml_hooks_install(void) {
         g_toml_hooks_installed = true;
     }
     de__cvar_unlock();
+}
+
+/* ---- Shared entry point (de_toml_internal.h) --------------------------------------------- */
+
+toml_result_t de__toml_parse(const de_allocator *a, const char *src, int len) {
+    toml_hooks_install();
+    const de_allocator *prev = t_toml_alloc;
+    t_toml_alloc = a != NULL ? a : de_heap_allocator();
+    toml_result_t res = toml_parse(src != NULL ? src : "", src != NULL ? len : 0);
+    t_toml_alloc = prev;
+    return res;
+}
+
+void de__toml_free(toml_result_t res) {
+    /* toml_free only frees, and each block header names its allocator, so the thread-local
+     * choice does not matter here. */
+    toml_free(res);
 }
 
 /* ---- Load -------------------------------------------------------------------------------- */
@@ -177,11 +196,8 @@ static de_result load_text(const char *text, size_t len, const char *source) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "%s: text is NULL", source);
     if (len > (size_t)INT_MAX)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "%s: %zu bytes is too large", source, len);
-    toml_hooks_install();
     const de_allocator *a = de__cvar_allocator();
-    t_toml_alloc = a;
-    toml_result_t res = toml_parse(text != NULL ? text : "", (int)len);
-    t_toml_alloc = NULL;
+    toml_result_t res = de__toml_parse(a, text, (int)len);
     de_result r = DE_OK;
     if (!res.ok) {
         r = DE_FAIL(DE_ERR_PARSE, "%s: %s", source, res.errmsg);
@@ -198,9 +214,7 @@ static de_result load_text(const char *text, size_t len, const char *source) {
             DE_FREE(a, c, sizeof(load_ctx));
         }
     }
-    t_toml_alloc = a;
-    toml_free(res);
-    t_toml_alloc = NULL;
+    de__toml_free(res);
     return r;
 }
 

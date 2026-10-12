@@ -1,0 +1,10 @@
+[[entity]]
+__type = "TInventory"
+[[entity.items]]
+id = 1
+[[entity.items]]
+id = 2
+[[prefab]]
+__type = "TEntityData"
+__version = 1
+mode = "Walk"

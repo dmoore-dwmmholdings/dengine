@@ -1,0 +1,4 @@
+entity = 5
+prefab = [1, 2]
+[object]
+x = 1

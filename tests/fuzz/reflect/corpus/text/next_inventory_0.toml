@@ -1,0 +1,9 @@
+__type = "TInventory"
+__version = 2
+count = 5502
+items = [
+    { id = 1780524521, count = 516912032 },
+    { id = 2085983639, count = 89037308 },
+    { id = 2648177307, count = 272387436 },
+]
+added = 4206108498

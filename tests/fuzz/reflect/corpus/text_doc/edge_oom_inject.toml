@@ -1,0 +1,4 @@
+#! fail allocation 6
+[[entity]]
+__type = "TTransform"
+position = [1, 2, 3]

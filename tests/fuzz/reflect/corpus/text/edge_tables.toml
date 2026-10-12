@@ -1,0 +1,6 @@
+[transform]
+position = [1, 2, 3]
+[transform.rotation]
+x = 1
+[[inventory.items]]
+id = 1

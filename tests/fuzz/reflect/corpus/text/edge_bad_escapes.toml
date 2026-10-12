@@ -1,0 +1,2 @@
+str = "\uD800\U0011FFFF\x41\q"
+name = "\u0000"
