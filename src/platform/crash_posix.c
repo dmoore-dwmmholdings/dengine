@@ -9,8 +9,9 @@
  * Everything on the signal path is async-signal-safe: open/write/close, time, getpid, raise,
  * sigaction, nanosleep, backtrace/backtrace_symbols_fd (backtrace is called once at install so
  * that glibc loads libgcc_s then, not in the handler), pthread_getname_np (a copy from the
- * thread structure on macOS, prctl on Linux) and, on macOS, pthread_get_stackaddr_np /
- * pthread_get_stacksize_np (reads of the thread structure).
+ * thread structure on macOS, prctl on Linux), getrlimit/setrlimit (Linux sanitizer builds; one
+ * system call each) and, on macOS, pthread_get_stackaddr_np / pthread_get_stacksize_np (reads
+ * of the thread structure).
  *
  * Signal backtraces on macOS are walked from the faulting thread's context (pc, lr, then the
  * frame-pointer chain), not taken with backtrace(): libc's backtrace() starts at the handler's
@@ -38,6 +39,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #if defined(__linux__)
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #endif
 #include <sys/types.h>
@@ -343,10 +345,44 @@ static void de__crash_write_backtrace(intptr_t fd, void *user) {
 
 static const de__crash_os_report g_os_report = {NULL, de__crash_write_backtrace, NULL};
 
+/* Sanitizer runtimes that set RLIMIT_CORE to 0 at startup to turn core dumps off
+ * (disable_coredump, on by default on 64-bit). */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define DE__CRASH_SANITIZER_NO_CORE 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define DE__CRASH_SANITIZER_NO_CORE 1
+#endif
+#endif
+#ifndef DE__CRASH_SANITIZER_NO_CORE
+#define DE__CRASH_SANITIZER_NO_CORE 0
+#endif
+
+/* Linux sanitizer builds (DENG-384): the runtime asks for no core dump by setting RLIMIT_CORE to
+ * 0, but when kernel.core_pattern pipes cores to a helper, the kernel ignores a limit of 0; only
+ * 1 turns a piped dump off. (Ubuntu's pattern pipes to systemd-coredump and passes it a fixed
+ * limit, so the helper does not check it either.) The dump of a sanitizer process streams its
+ * huge shadow mappings to the helper, and the dying process stays alive for minutes: a crashed
+ * multi-threaded TSan engine never ended within the test timeouts. A soft limit of 0 is raised
+ * to 1: still no core file (1 byte is below the ELF minimum) and no piped dump either. A limit
+ * above 0 (TSAN_OPTIONS=disable_coredump=0, ulimit -c) is kept. getrlimit/setrlimit are single
+ * system calls (prlimit64) in glibc and musl: no lock, no allocation. */
+static void de__crash_sanitizer_core_off(void) {
+#if defined(__linux__) && DE__CRASH_SANITIZER_NO_CORE
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_CORE, &rl) == 0 && rl.rlim_cur == 0 && rl.rlim_max >= 1) {
+        rl.rlim_cur = 1;
+        (void)setrlimit(RLIMIT_CORE, &rl);
+    }
+#endif
+}
+
 /* Restores the default action and re-raises: the signal is blocked while its handler runs, so
  * it is delivered (and kills the process) as the handler returns. A fault signal also re-faults
- * on return; either way the process dies with `sig`. */
+ * on return; either way the process dies with `sig`, in the faulting context, and the OS crash
+ * reporter or core dump sees the original signal. */
 static void de__crash_die(int sig) {
+    de__crash_sanitizer_core_off();
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = SIG_DFL;
