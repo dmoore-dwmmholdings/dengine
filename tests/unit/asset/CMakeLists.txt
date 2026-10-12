@@ -26,3 +26,11 @@ if(TARGET test_asset_resolve)
         "DE_ASSET_EXAMPLES_DIR=\"${DE_ROOT_DIR}/examples\""
         "DE_ASSET_RESOLVE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_resolve_tmp\"")
 endif()
+
+# DENG-140: slots, typed handles, refcounts, asset type registry (slots.c, asset_types.c,
+# typed_access.c). test_slots.c holds the `test_bytes` fixture type that later S07 tests reuse.
+de_add_test(NAME asset_slots SOURCES test_slots.c test_asset_types.c LIBS de_asset de_platform
+            TIMEOUT 300)
+if(TARGET test_asset_slots)
+    target_include_directories(test_asset_slots PRIVATE "${DE_ROOT_DIR}/src")
+endif()

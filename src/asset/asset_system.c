@@ -7,6 +7,7 @@
  */
 
 #include "asset/asset_internal.h"
+#include "asset/slots_internal.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -78,6 +79,8 @@ void de_asset_system_destroy(de_asset_system *s) {
     if (s == NULL)
         return;
     const de_allocator *a = s->alloc;
+    de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
+    de__asset_types_shutdown(s);       /* DENG-140 */
     de__resolved_destroy(s->resolved); /* DENG-139: before their manifests */
     de__resolved_destroy(s->failed_resolved);
     de__manifest_destroy(s->manifest);

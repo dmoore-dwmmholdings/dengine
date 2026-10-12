@@ -44,6 +44,8 @@ struct de_asset_system {
     de__resolved *failed_resolved;
 
     /* ---- DENG-140: slots, typed handles, type registry (append below) -------------------- */
+    struct de__slot_table *slots; /**< slots.c; NULL until the first slot (slots_internal.h) */
+    struct de__asset_type_registry *types; /**< asset_types.c; NULL until the first register */
 
     /* ---- DENG-141: load requests and status (append below) ------------------------------- */
 

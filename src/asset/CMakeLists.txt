@@ -9,6 +9,10 @@ de_add_module(
         asset_system.c
         manifest_internal.h
         manifest.c
+        slots_internal.h
+        slots.c
+        asset_types.c
+        typed_access.c
     DEPS core platform task reflect
     OPTIONAL_DEPS gpu
 )

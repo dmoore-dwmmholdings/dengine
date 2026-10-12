@@ -211,6 +211,20 @@ typedef struct de_asset_event {
 } de_asset_event;
 
 /* ---------- Typed access (valid handle even before READY; data appears when loaded) ---------- */
+/**
+ * Typed access (DENG-140): the handle of the slot of asset `id`, created on first use. The handle
+ * is valid before the asset is loaded and stays the same across reloads; it takes no reference
+ * (load the asset with de_asset_load / de_asset_load_bundle for that). Each function checks the
+ * asset's manifest `type` against its own (`de_asset_texture` wants `type = "texture"`, then
+ * "mesh", "model", "material", "sound", "font", "prefab", "blob"). Main thread.
+ *
+ * Returns an invalid handle (id 0) and sets the error context when `id` is 0 or the asset has
+ * another type (DE_ERR_INVALID_ARGUMENT), when the active manifest does not declare `id`
+ * (DE_ERR_NOT_FOUND), or when all 2^20 asset slots are in use (DE_ERR_OUT_OF_MEMORY).
+ *
+ * A handle is a 20-bit slot index and a 12-bit generation: once the asset is evicted and its slot
+ * freed, the old handle is stale and resolves to nothing.
+ */
 DE_API de_texture de_asset_texture(de_asset_system *s, de_asset_id id);
 DE_API de_mesh de_asset_mesh(de_asset_system *s, de_asset_id id);
 DE_API de_model de_asset_model(de_asset_system *s, de_asset_id id);
@@ -239,6 +253,19 @@ typedef struct de_asset_type_desc {
     bool main_thread_load;
 } de_asset_type_desc;
 
+/**
+ * Registers an asset type (DENG-140), so manifest assets with `type = "<name>"` can be imported
+ * and loaded. The desc, the name and the extension strings are copied; extensions may be written
+ * with or without the leading dot (`".png"` or `"png"`) and match without ASCII case. When two
+ * types claim one extension, the first keeps it (a warning is logged). `importer_version` is kept
+ * for the cook cache (S08). Main thread; register types before loading assets of them. Types are
+ * never unregistered; at most 256 exist.
+ *
+ * Returns an invalid handle (id 0) and sets the error context on failure:
+ * DE_ERR_INVALID_ARGUMENT (NULL argument; a name that is empty, longer than 63 bytes, or has
+ * spaces, quotes or non-ASCII bytes; a NULL or malformed extension), DE_ERR_ALREADY_EXISTS (a
+ * type with this name exists), DE_ERR_OUT_OF_MEMORY (256 types, or no memory).
+ */
 DE_API de_asset_type de_asset_type_register(de_asset_system *s, const de_asset_type_desc *desc);
 
 /* ---------- Streaming and residency ---------- */
