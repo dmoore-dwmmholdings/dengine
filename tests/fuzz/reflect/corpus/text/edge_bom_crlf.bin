@@ -1,0 +1,5 @@
+﻿__type = "TVec"
+__version = 1
+x = 1.5
+y = -0.0
+z = nan

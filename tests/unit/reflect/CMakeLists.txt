@@ -44,3 +44,18 @@ if(TARGET test_bin)
     target_compile_definitions(test_bin PRIVATE
         "DE_BIN_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 endif()
+
+# DENG-297: property tests (prop.*): random types and values through both serializers. The
+# default seed runs as one CTest entry per TEST; prop.seed_b and prop.seed_c run the whole
+# executable again with two other seeds (DE_PROP_SEED; a failure prints the seed it used).
+de_add_test(NAME prop SOURCES test_roundtrip_property.c LIBS de_reflect TIMEOUT 300)
+if(TARGET test_prop)
+    foreach(_de_prop_seed IN ITEMS b:0x5eed0b c:0xc0ffee5eed)
+        string(REPLACE ":" ";" _de_prop_pair "${_de_prop_seed}")
+        list(GET _de_prop_pair 0 _de_prop_name)
+        list(GET _de_prop_pair 1 _de_prop_value)
+        add_test(NAME prop.seed_${_de_prop_name} COMMAND test_prop)
+        set_tests_properties(prop.seed_${_de_prop_name} PROPERTIES
+            LABELS "unit;reflect" ENVIRONMENT "DE_PROP_SEED=${_de_prop_value}" TIMEOUT 600)
+    endforeach()
+endif()

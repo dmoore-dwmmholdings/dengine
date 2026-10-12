@@ -1,0 +1,6 @@
+u64v = "0xffffffffffffffff"
+entity = "0x00000000000000001"
+name = "0x"
+mesh = "0xffffffffffff"
+u32v = "0x10"
+layers = ["0x8000000000000000", "0x3"]

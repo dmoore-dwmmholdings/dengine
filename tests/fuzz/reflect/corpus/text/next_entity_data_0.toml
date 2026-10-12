@@ -1,0 +1,13 @@
+__type = "TEntityData"
+__version = 3
+transform.position = [-421235.183271338, -490333.4199574434, -174081.70797307242]
+transform.rotation = [-414.4042, 423.383, -278.0012, 20.59716]
+transform.scale = [-320.39468, 445.8472, -126.04612]
+inventory.count = 51506
+inventory.items = [
+    { id = 1041422929, count = 1775244552 },
+    { id = 541979477, count = -1449379462 },
+    { id = 4054788394, count = 745053044 },
+]
+inventory.added = 954980050
+mode = "Walk"
