@@ -15,6 +15,10 @@
 #                             but test_prof) starts no Tracy thread and opens no socket
 #   TRACY_NO_FRAME_IMAGE    no frame screenshots
 #   TRACY_NO_CRASH_HANDLER  the engine's crash handler (DENG-251) keeps the signal handlers
+#   TRACY_NO_DLCLOSE_OVERRIDE  (local patch) Linux: dlclose() unloads libraries, as de_dylib_close
+#                           and the game hot reload (DENG-93) need. Tracy may then fail to name
+#                           callstack frames of a library that was unloaded; the engine records
+#                           no callstacks by default.
 if(NOT DE_TRACY)
     return()
 endif()
@@ -33,7 +37,8 @@ target_compile_definitions(de_tp_tracy PUBLIC
     TRACY_MANUAL_LIFETIME
     TRACY_DELAYED_INIT
     TRACY_NO_FRAME_IMAGE
-    TRACY_NO_CRASH_HANDLER)
+    TRACY_NO_CRASH_HANDLER
+    TRACY_NO_DLCLOSE_OVERRIDE)
 # Vendored code: no engine warning flags, and its own warnings are off (CONVENTIONS §6).
 target_compile_options(de_tp_tracy PRIVATE $<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w,-w>)
 # The client's threads, dladdr (callstack decoding) and, on Windows, sockets and symbol lookup.

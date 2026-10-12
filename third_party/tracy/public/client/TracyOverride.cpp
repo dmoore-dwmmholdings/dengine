@@ -1,5 +1,5 @@
 #ifdef TRACY_ENABLE
-#  ifdef __linux__
+#  if defined( __linux__ ) && !defined( TRACY_NO_DLCLOSE_OVERRIDE )
 #    include "TracyDebug.hpp"
 #    ifdef TRACY_VERBOSE
 #      include <dlfcn.h>

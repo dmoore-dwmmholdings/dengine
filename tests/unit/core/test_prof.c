@@ -534,7 +534,10 @@ TEST(prof, mutex_lock_events_mock) {
     de_cond c;
     de_cond_init(&c);
     de_mutex_lock(&m);
-    EXPECT_FALSE(de_cond_wait_timeout(&c, &m, 1000000ull)); /* 1 ms, nobody signals */
+    /* 1 ms, nobody signals. The result is not checked: an early wakeup is allowed (Windows
+     * reports a timeout before the deadline as one). Either way the mutex is released and
+     * taken again. */
+    (void)de_cond_wait_timeout(&c, &m, 1000000ull);
     de_mutex_unlock(&m);
     de_cond_destroy(&c);
     de_mutex_lock(&before);

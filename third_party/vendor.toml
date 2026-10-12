@@ -132,3 +132,6 @@ license = "BSD-3-Clause"
 files = ["public/**"]
 # The Fortran binding is not used.
 exclude = ["public/TracyClient.F90"]
+# The Linux dlclose() override becomes optional (TRACY_NO_DLCLOSE_OVERRIDE, which the build
+# defines), so de_dylib_close and game hot reload unload libraries; see the patch header. DENG-94.
+patches = ["patches/0001-optional-dlclose-override.patch"]
