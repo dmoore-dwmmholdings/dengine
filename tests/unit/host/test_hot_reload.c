@@ -128,8 +128,8 @@ static void rm_tree(const char *vpath) {
 
 typedef struct hr_fx {
     de__host h;
-    char run[64];                 /* this test's directory under tmp:/ */
-    char watched[DE_FS_PATH_MAX]; /* native path of the library the "build" writes */
+    char run[64];                      /* this test's directory under tmp:/ */
+    char watched[DE_FS_PATH_MAX + 64]; /* native path of the library the "build" writes */
     bool tmp_mounted, fs, log, started;
 } hr_fx;
 
@@ -164,7 +164,7 @@ static void env_start(hr_fx *f) {
     ASSERT_EQ(de_fs_init(&fd), DE_OK);
     f->fs = true;
 
-    char name[DE_FS_PATH_MAX];
+    char name[64];
     ASSERT_EQ(de_dylib_platform_name("reload_game", name, sizeof name), DE_OK);
     snprintf(f->watched, sizeof f->watched, "%s/%s", lib, name);
 }
@@ -209,6 +209,8 @@ static void game_start(hr_fx *f, const char *first_library) {
 
 static void hr_fx_setup(hr_fx *f) {
 #if !DE__HOT_RELOAD
+    (void)f;
+    (void)env_start;
     SKIP("hot reload is compiled out in this build type (Debug and Dev only)");
 #else
     env_start(f);
