@@ -42,3 +42,7 @@ target_sources(de_asset PRIVATE pipeline.c pipeline_internal.h io_stage.c decomp
                                 load_ctx.c)
 target_link_libraries(de_asset PRIVATE de_tp_zstd)
 set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_zstd)
+
+# DENG-144: per-category budgets, residency accounting, LRU eviction of unreferenced assets,
+# resident bundles, de_asset_flush_unused (budget.c) and de_asset_get_stats (stats.c).
+target_sources(de_asset PRIVATE budget.c budget_internal.h stats.c)

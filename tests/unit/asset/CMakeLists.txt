@@ -60,3 +60,14 @@ if(TARGET test_asset_pipeline)
         "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_ASSET_PIPELINE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_pipeline_tmp\"")
 endif()
+
+# DENG-144: budgets, LRU eviction, resident bundles, flush, stats (budget.c, stats.c). A scripted
+# backend in the test file; budget.pipeline_reload runs the real pipeline on files written into a
+# scratch directory of the build tree (mounted as bud:/).
+de_add_test(NAME asset_budget SOURCES test_budget.c LIBS de_asset de_platform)
+if(TARGET test_asset_budget)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_budget_tmp")
+    target_include_directories(test_asset_budget PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_budget PRIVATE
+        "DE_ASSET_BUDGET_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_budget_tmp\"")
+endif()

@@ -8,6 +8,7 @@
 
 #include "asset/asset_internal.h"
 #include "asset/backend_internal.h"
+#include "asset/budget_internal.h" /* DENG-144 */
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
 
@@ -159,7 +160,8 @@ static void load_slot_fail(de_asset_system *s, de__slot *sl, de__load_slot *ls, 
     /* DENG-143: per-asset DE_ASSET_EV_FAILED goes here. */
 }
 
-static void load_slot_ready(de_asset_system *s, de__slot *sl, de__load_slot *ls, u64 bytes) {
+static void load_slot_ready(de_asset_system *s, u32 slot, de__slot *sl, de__load_slot *ls,
+                            u64 bytes) {
     ls->in_flight = 0;
     sl->state = DE_LOAD_READY;
     sl->error = DE_OK;
@@ -174,6 +176,7 @@ static void load_slot_ready(de_asset_system *s, de__slot *sl, de__load_slot *ls,
     de_atomic_store_u64(&ls->bytes_total, w, DE_ATOMIC_RELAXED);
     de_atomic_store_u64(&ls->bytes_done, w, DE_ATOMIC_RELAXED);
     /* DENG-143: per-asset DE_ASSET_EV_LOADED goes here. */
+    de__budget_on_publish(s, slot, bytes); /* DENG-144: residency accounting, LRU */
 }
 
 /* Starts loading `slot` with `priority`. Main thread. */
@@ -270,10 +273,14 @@ void de__load_slot_unwant(de_asset_system *s, u32 slot, de__load_priority priori
 
 /* ---- Backend entry points (any thread) ----------------------------------------------------- */
 
-static void atomic_max_u64(de_atomic_u64 *a, u64 v) {
+/* Raises `*a` to `v`; returns by how much it grew (0 when `v` was not larger). */
+static u64 atomic_max_u64(de_atomic_u64 *a, u64 v) {
     u64 cur = de_atomic_load_u64(a, DE_ATOMIC_RELAXED);
-    while (v > cur && !de_atomic_cas_weak_u64(a, &cur, v, DE_ATOMIC_RELAXED, DE_ATOMIC_RELAXED)) {
+    while (v > cur) {
+        if (de_atomic_cas_weak_u64(a, &cur, v, DE_ATOMIC_RELAXED, DE_ATOMIC_RELAXED))
+            return v - cur;
     }
+    return 0;
 }
 
 void de__slot_progress(de_asset_system *s, u32 slot, u64 bytes_done, u64 bytes_total) {
@@ -284,8 +291,9 @@ void de__slot_progress(de_asset_system *s, u32 slot, u64 bytes_done, u64 bytes_t
         return;
     if (bytes_total < bytes_done)
         bytes_total = bytes_done;
-    atomic_max_u64(&ls->bytes_total, bytes_total);
-    atomic_max_u64(&ls->bytes_done, bytes_done);
+    (void)atomic_max_u64(&ls->bytes_total, bytes_total);
+    /* DENG-144: the bytes read since the last report feed the I/O rate (de_asset_get_stats). */
+    de__budget_add_io_bytes(s, atomic_max_u64(&ls->bytes_done, bytes_done));
     de_atomic_store_u32(&ls->started, 1, DE_ATOMIC_RELEASE);
 }
 
@@ -358,11 +366,11 @@ static void load_apply(de_asset_system *s, const de__load_queue *q, const de__lo
     if (!ls->in_flight) {
         /* Cancelled, but the work raced to its end: a success is still a loaded asset. */
         if (c->result == DE_OK && sl->state != DE_LOAD_READY)
-            load_slot_ready(s, sl, ls, c->bytes);
+            load_slot_ready(s, c->slot, sl, ls, c->bytes);
         return;
     }
     if (c->result == DE_OK)
-        load_slot_ready(s, sl, ls, c->bytes);
+        load_slot_ready(s, c->slot, sl, ls, c->bytes);
     else
         load_slot_fail(s, sl, ls, c->result, c->msg_len != 0 ? q->text + c->msg_offset : NULL,
                        c->msg_len);
@@ -685,6 +693,8 @@ de_load_handle de_asset_load_bundle(de_asset_system *s, const char *bundle, u32 
         memcpy(ids + n, rb->members, sizeof(de_asset_id) * rb->member_count);
     n += rb->member_count;
     de_load_handle h = request_create(s, ids, n, flags, priority);
+    if (DE_HANDLE_VALID(h))
+        de__budget_pin_bundle(s, res, rb); /* DENG-144: `resident = true` bundles are pinned */
     if (ids != NULL)
         DE_FREE(s->alloc, ids, sizeof(de_asset_id) * (size_t)total);
     return h;
