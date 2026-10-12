@@ -296,6 +296,10 @@ struct de__pipeline {
         de_atomic_u64 submits, reads, io_cancelled, decoded, loads, main_loads, published, failed,
             discarded, unloads;
     } stats;
+
+    /* DENG-209: the in-process cooker and its sub-asset table (cook_stage.c); NULL until the
+     * first cook. */
+    struct de__cook_stage *cook;
 };
 
 /* ---- Lifetime (pipeline.c) ------------------------------------------------------------------ */

@@ -128,8 +128,12 @@ static void pt_unload(void *object, void *user) {
 }
 
 static de_result pt_import(de_asset_import_ctx *ctx) {
+#if DE_HAS_COOKER /* DENG-209: the in-process cooker runs it; its failure fails the load */
+    return de_asset_import_fail(ctx, DE_ERR_PARSE, "the pti importer refuses");
+#else
     (void)ctx;
     return DE_OK;
+#endif
 }
 
 /* ---- Fixture ------------------------------------------------------------------------------- */
@@ -448,7 +452,11 @@ TEST_F(pipeline, single_asset, pipe_fx) {
         de_result code;
         const char *msg;
     } fails[] = {{"missing", DE_ERR_NOT_FOUND, "nope.bin"},
+#if DE_HAS_COOKER
+                 {"cooked", DE_ERR_PARSE, "the pti importer refuses"},
+#else
                  {"cooked", DE_ERR_UNSUPPORTED, "cooker not available"},
+#endif
                  {"untyped", DE_ERR_UNSUPPORTED, "no asset type \"nobody\""}};
     for (u32 i = 0; i < 3; ++i) {
         h = de_asset_load(f->s, id_of(fails[i].id), 0);

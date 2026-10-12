@@ -51,3 +51,15 @@ target_sources(de_asset PRIVATE budget.c budget_internal.h stats.c)
 # `de_asset_event` and `DeAssetSystemRef` types, the event queue and its `de.asset_events` system
 # in First). The events go through de__asset_emit (asset_internal.h).
 target_sources(de_asset PRIVATE asset_events.c)
+
+# DENG-209: the COOK stage (cook_stage.c). Debug and Dev builds load source assets through the
+# cooker library in-process (SPEC §11.5): de_asset links de_cooker (tools/cook/lib/) and every
+# target sees DE_HAS_COOKER=1. Release and Shipping (and builds without tools) link no cooker; an
+# importer type then fails with "cooker not available". The cooker is in DE_MODULE_LIBS, so the
+# aggregate `dengine` brings it to its consumers in the same configurations. tools/ is added after
+# src/, so the target is named in generator expressions only.
+target_sources(de_asset PRIVATE cook_stage.c cook_stage_internal.h)
+set(_de_with_cooker "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
+target_link_libraries(de_asset PRIVATE "$<${_de_with_cooker}:de_cooker>")
+set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS "$<${_de_with_cooker}:de_cooker>")
+target_compile_definitions(de_config INTERFACE "$<${_de_with_cooker}:DE_HAS_COOKER=1>")

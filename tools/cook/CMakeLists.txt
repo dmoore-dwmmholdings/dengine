@@ -22,3 +22,8 @@ set_target_properties(de_cook_check PROPERTIES FOLDER "dengine/tools")
 add_executable(de-cook main.c)
 target_link_libraries(de-cook PRIVATE de_cook_check de_build_flags)
 set_target_properties(de-cook PROPERTIES FOLDER "dengine/tools")
+
+# DENG-209: the cooker library (tools/cook/lib/, target de_cooker), also linked by de_asset in
+# Debug and Dev builds. known_types.c takes its table from the cooker's engine type names.
+add_subdirectory(lib)
+target_include_directories(de_cook_check PRIVATE "${DE_ROOT_DIR}/tools")

@@ -170,6 +170,14 @@ paths = ["src/services/*"]    # steam, crash, mods, save, bind
 members = ["core", "platform"]
 why = "Logging and the heap need platform threads and atomics; platform uses the core allocator interface."
 
+# DENG-209: the cooker library (tools/cook/lib) reads the asset module's manifest types and
+# de_asset.h (type descs, the import context), and the asset module runs the cooker in Debug and
+# Dev builds (src/asset/cook_stage.c), so the two include each other. `cook` stays explicit_only:
+# no other module may include it.
+[[group]]
+members = ["asset", "cook"]
+why = "The cooker reads the asset module's manifest types and de_asset.h; the asset pipeline cooks source assets through it in Debug and Dev builds (DE_HAS_COOKER, SPEC §11.5)."
+
 # ---------------------------------------------------------------- same-band edges
 
 # runtime

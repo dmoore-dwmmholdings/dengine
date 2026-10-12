@@ -8,6 +8,7 @@
 #include "asset/pipeline_internal.h"
 
 #include "asset/asset_internal.h"
+#include "asset/cook_stage_internal.h" /* DENG-209 */
 #include "asset/backend_internal.h"
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
@@ -734,6 +735,32 @@ static bool source_path(const de_asset_system *s, const de__manifest_asset *a, c
     return de_path_normalize(joined, out, size) == DE_OK;
 }
 
+/* DENG-209: an asset whose type has an importer, or a sub-asset of a cooked asset, is cooked
+ * in-process (cook_stage.c), then loaded; without the cooker it fails here. False: the asset loads
+ * from its source as it is. */
+static bool submit_cook(de__pipeline *pl, de_asset_system *s, u32 slot,
+                        de__load_priority priority) {
+    de__cook_plan plan;
+    if (!de__cook_stage_plan(s, slot, &plan))
+        return false;
+    if (plan.error != DE_OK) {
+        fail_early(s, slot, plan.error, "%s", plan.msg);
+        return true;
+    }
+    de__pjob *job =
+        job_new(pl, slot, de__slot_get(s, slot), &plan.asset, plan.load_type, plan.vpath, priority);
+    if (job != NULL && !job_table_put(pl, job)) {
+        job_free(pl, job);
+        job = NULL;
+    }
+    if (job == NULL) {
+        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", plan.asset.id);
+        return true;
+    }
+    de__cook_stage_begin(job, &plan);
+    return true;
+}
+
 static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priority priority) {
     de__pipeline *pl = (de__pipeline *)user;
     de_result r = pipeline_start(pl);
@@ -742,6 +769,8 @@ static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priorit
                    de_error_last() != NULL ? de_error_last()->message : de_result_str(r));
         return;
     }
+    if (submit_cook(pl, s, slot, priority)) /* DENG-209 */
+        return;
     const de__slot *sl = de__slot_get(s, slot);
     const de__manifest_asset *a = sl != NULL ? de__resolved_asset(s->resolved, sl->id) : NULL;
     if (a == NULL || s->manifest == NULL) {
@@ -752,13 +781,6 @@ static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priorit
     const de_asset_type_desc *type = de__asset_type_get(s, de__slot_type(s, sl));
     if (type == NULL) {
         fail_early(s, slot, DE_ERR_UNSUPPORTED, "asset \"%s\": no asset type \"%s\" is registered",
-                   a->id, a->type);
-        return;
-    }
-    if (type->import != NULL) {
-        fail_early(s, slot, DE_ERR_UNSUPPORTED,
-                   "asset \"%s\": cooker not available (type \"%s\" has an importer; the "
-                   "cooker runs in-process from S08 on)",
                    a->id, a->type);
         return;
     }
@@ -950,6 +972,7 @@ void de__pipeline_shutdown(de_asset_system *s) {
         if (pl->dfs != NULL)
             DE_FREE(pl->alloc, pl->dfs, sizeof(de__pjob *) * pl->dfs_capacity);
     }
+    de__cook_stage_shutdown(pl); /* DENG-209: every job is back */
     de_mutex_destroy(&pl->dctx_lock);
     de_mutex_destroy(&pl->lock);
     s->pipeline = NULL;

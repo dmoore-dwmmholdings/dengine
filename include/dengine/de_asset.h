@@ -465,6 +465,107 @@ DE_API de_result de_asset_load_ctx_add_dependency(de_asset_load_ctx *ctx, de_ass
 DE_API de_result de_asset_load_ctx_fail(de_asset_load_ctx *ctx, de_result result, const char *fmt,
                                         ...) DE_PRINTF_FMT(3, 4);
 
+/* ---------- Import context (DENG-209) ----------
+ *
+ * A type's `import` (de_asset_type_desc.import) gets one de_asset_import_ctx per import. The
+ * cooker library runs it: `de-cook`, and in Debug and Dev builds the runtime itself, which cooks
+ * source assets in-process on a background task (SPEC §11.5). These functions exist only where
+ * the cooker is linked: in builds that define DE_HAS_COOKER (Debug and Dev with tools, the
+ * default) and in the tools. Release and Shipping link no cooker, so guard importer code with
+ * `#if DE_HAS_COOKER` and register `.import = NULL` there.
+ *
+ * An importer reads the source and the settings, writes the cooked bytes, and may declare
+ * dependencies, sub-assets and further source files. It must be deterministic: the same inputs
+ * give the same bytes. It must not read clocks, the environment, absolute paths, pointer values
+ * or uninitialised padding, and must not depend on the thread count or the thread it runs on.
+ * The cooker can run each import twice and compare (de_cooker_desc.verify_determinism, on by
+ * default in Debug builds). The context and everything it returns are valid only during the
+ * `import` call, on the thread that runs it.
+ *
+ * An importer returns DE_OK, or an error (the cook fails, and so does the asset's load).
+ */
+
+/** The platform a cook targets (the values match the `.dpak` header's platform). */
+typedef enum de_cook_platform {
+    DE_COOK_PLATFORM_HOST = 0, /**< only in a cooker desc: the platform the cooker runs on */
+    DE_COOK_PLATFORM_WINDOWS = 1,
+    DE_COOK_PLATFORM_LINUX = 2,
+    DE_COOK_PLATFORM_MACOS = 3
+} de_cook_platform;
+
+/** The source file's bytes and their count in `*size`. Never NULL ("" for an empty file). */
+DE_API const void *de_asset_import_source(const de_asset_import_ctx *ctx, u64 *size);
+/** The source path relative to the project's asset root (`textures/player.png`), normalised.
+ * Never an absolute path, so it may go into cooked data. */
+DE_API const char *de_asset_import_source_path(const de_asset_import_ctx *ctx);
+/** The asset being imported. */
+DE_API de_asset_id de_asset_import_id(const de_asset_import_ctx *ctx);
+/** The platform the cook targets (never DE_COOK_PLATFORM_HOST). */
+DE_API de_cook_platform de_asset_import_platform(const de_asset_import_ctx *ctx);
+/** The type's `user` pointer (de_asset_type_desc.user). */
+DE_API void *de_asset_import_user(const de_asset_import_ctx *ctx);
+
+/**
+ * The asset's settings from the manifest (`[defaults.<type>]` overlaid by the asset's own keys),
+ * as for de_asset_load_ctx_settings_*: each getter returns `fallback` when the key is missing or
+ * has another type; the float getter also accepts an integer. Every setting is part of the
+ * settings hash, whether the importer reads it or not.
+ */
+DE_API bool de_asset_import_setting_has(const de_asset_import_ctx *ctx, const char *key);
+DE_API bool de_asset_import_setting_bool(const de_asset_import_ctx *ctx, const char *key,
+                                         bool fallback);
+DE_API i64 de_asset_import_setting_int(const de_asset_import_ctx *ctx, const char *key,
+                                       i64 fallback);
+DE_API f64 de_asset_import_setting_float(const de_asset_import_ctx *ctx, const char *key,
+                                         f64 fallback);
+DE_API const char *de_asset_import_setting_string(const de_asset_import_ctx *ctx, const char *key,
+                                                  const char *fallback);
+/** A string-array setting: its items in `*items` (NULL when missing) and their count (0). */
+DE_API u32 de_asset_import_setting_string_array(const de_asset_import_ctx *ctx, const char *key,
+                                                const char *const **items);
+
+/**
+ * Reads another source file (a glTF buffer, an included file), `rel_path` relative to the
+ * directory of the source file (`../shared/pal.png` is fine). The normalised path must stay
+ * below the asset root. The file is recorded in the cook result's extra sources, so a change to
+ * it invalidates the cooked asset. `*data` (NUL-terminated after `*size` bytes) stays valid until
+ * the import returns.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument, an absolute or virtual path, a path that
+ *         leaves the asset root); DE_ERR_NOT_FOUND; DE_ERR_IO; DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_asset_import_read_file(de_asset_import_ctx *ctx, const char *rel_path,
+                                           const void **data, u64 *size);
+/** Appends `size` bytes to the cooked output (call it as often as needed).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`data` NULL with `size` > 0), DE_ERR_OUT_OF_MEMORY. */
+DE_API de_result de_asset_import_write(de_asset_import_ctx *ctx, const void *data, u64 size);
+/**
+ * Declares that the asset needs asset `id` at run time (a material's textures). The runtime
+ * loads it with the asset; packs store it in the TOC. Duplicates count once.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`id` 0), DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_asset_import_add_dependency(de_asset_import_ctx *ctx, de_asset_id id);
+/**
+ * Declares a sub-asset `<asset id>#<name>` (a model's meshes) with its own type and cooked
+ * bytes; the bytes are copied. The sub-asset loads with the loader of `type_name`.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument, an empty name or type, a name with `#`,
+ *         an ID that de_asset_id_from refuses); DE_ERR_ALREADY_EXISTS (the name was declared);
+ *         DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_asset_import_add_subasset(de_asset_import_ctx *ctx, const char *name,
+                                              const char *type_name, const void *data, u64 size);
+/** A scratch allocator for the importer's temporaries. Everything still allocated from it is
+ * freed when the import returns. Not thread-safe: use it on the importer's thread only. */
+DE_API const de_allocator *de_asset_import_allocator(de_asset_import_ctx *ctx);
+/**
+ * Records why the import fails: `result` (DE_OK becomes DE_ERR_INTERNAL) and a printf-style
+ * message, which the cook's error carries after `asset "<id>": `. Returns `result`, so an importer
+ * writes `return de_asset_import_fail(ctx, DE_ERR_PARSE, "bad header");`. The first recorded
+ * failure wins, and the cook fails even if the importer then returns DE_OK.
+ */
+DE_API de_result de_asset_import_fail(de_asset_import_ctx *ctx, de_result result, const char *fmt,
+                                      ...) DE_PRINTF_FMT(3, 4);
+/* ---------- End of the import context (DENG-209) ---------- */
+
 /* ---------- Streaming and residency ---------- */
 /*
  * Budgets and eviction (DENG-144, SPEC §11.8). Each READY asset counts its resident bytes (from
