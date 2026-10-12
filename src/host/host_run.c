@@ -21,6 +21,7 @@
  * value` on the command line. All are startup values, so DE_CVAR_READONLY cvars take them.
  */
 #include "host/host_internal.h"
+#include "host/host_crash.h" /* DENG-96 */
 
 #include <dengine/de_debug.h>
 
@@ -132,6 +133,7 @@ static de_result host_run_game(de__host *h) {
     const de_game_api *api = h->api;
     const char *name = api->name != NULL ? api->name : h->config.name;
     de_engine *e = h->engine;
+    (void)de__host_crash_attach(h); /* DENG-96: crash annotations, frame hook; logs a failure */
 
     /* DENG-93: systems the game adds carry its owner tag, so a hot reload can remove them. */
     de__world_set_system_owner(e->world, DE__HOST_GAME_SYSTEM_OWNER);

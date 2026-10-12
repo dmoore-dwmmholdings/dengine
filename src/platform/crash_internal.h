@@ -23,8 +23,9 @@
  *   build_id=<de_build_id()>                  always
  *   reason=<SIGSEGV | EXCEPTION_... | panic>  always
  *
- * Unknown keys must be ignored by readers. The scan deletes (or renames) the marker once the
- * upload callback has seen the report.
+ * Unknown keys must be ignored by readers. The next-launch scan (DENG-96,
+ * de__crash_upload_pending) renames the marker to `<stem>.sent` (or deletes it) right before the
+ * upload callback sees the report, so a report is never handed over twice.
  */
 #ifndef DE_PLATFORM_CRASH_INTERNAL_H
 #define DE_PLATFORM_CRASH_INTERNAL_H
@@ -166,5 +167,17 @@ u64 de__crash_annotation_dropped(void);
 
 /** Clears annotations, handlers and the dropped count. Tests only; not thread-safe. */
 void de__crash_reset_for_tests(void);
+
+/* ---------- Next-launch upload (crash_common.c; S06 DENG-96) ---------- */
+
+/**
+ * Hands every pending report in the dump directory to the installed upload callback, once each:
+ * renames `<stem>.pending` to `<stem>.sent` (deletes it when the rename fails) and then calls
+ * `upload` on the calling thread with `dump_path` = the minidump (Windows) or the text report,
+ * `log_path` = `<stem>.log_tail.txt` when it exists (else the text report) and `build_id` from
+ * the marker. de_crash_install calls it when it gets an `upload`. Never called from a crash.
+ * Returns the number of reports handed over (0 without an upload callback).
+ */
+u32 de__crash_upload_pending(void);
 
 #endif /* DE_PLATFORM_CRASH_INTERNAL_H */

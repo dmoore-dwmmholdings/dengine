@@ -88,3 +88,7 @@ endif()
 
 # DENG-93: game library hot reload (watch, copy, swap, ECS type sync) on DENG-91's frame-end hook.
 target_sources(de_host PRIVATE hot_reload.h hot_reload.c)
+
+# DENG-96: crash reporting (de_crash_install, the crash bundle of src/services/crash) and the
+# `quit` console command, wired into engine create and de_host_run (host_crash.c).
+target_sources(de_host PRIVATE host_crash.h host_crash.c)

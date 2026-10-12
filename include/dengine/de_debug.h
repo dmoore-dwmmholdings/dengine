@@ -335,9 +335,66 @@ DE_API const char *de_cvar_help(de_cvar cv);
 DE_API de_cvar_type de_cvar_get_type(de_cvar cv);
 DE_API u32 de_cvar_get_flags(de_cvar cv);
 
-/* ---------- Console commands (S06 DENG-96) ---------- */
-typedef void (*de_command_fn)(int argc, const char *const *argv, void *user);
-DE_API void de_command_register(const char *name, const char *help, de_command_fn fn, void *user);
+/* ---------- Console commands (S06 DENG-96) ----------
+ *
+ * SPEC §18.6. A process-wide registry of named commands that any module registers; the debug
+ * console (S30) and `exec` files run them through de_command_exec. A line is split into words at
+ * spaces and tabs. A word in double quotes keeps its spaces (`echo "a b" c` gives three words:
+ * echo, a b, c); `\"` is a literal quote and `\\` a literal backslash, inside or outside quotes;
+ * any other backslash is kept as it is (so `C:\dir` needs no escaping).
+ *
+ * The first word names a command or a cvar. Command names are matched without regard to ASCII
+ * case. When no command has the name, a cvar with that name (lowercased) is used:
+ * `r.vsync 0` sets it with de_cvar_set (several value words are joined with single spaces), and
+ * `r.vsync` alone logs its value.
+ *
+ * Built-in commands (always registered): `help [prefix]` lists commands, `cvars [prefix]` lists
+ * cvars with their values, `echo <words>` logs the words, `exec <vpath>` runs a file (one line
+ * per command, lines starting with `#` are comments). Output goes to the log, category `console`,
+ * at Info level; the console UI (S30) shows the log.
+ *
+ * Registration is thread-safe. de_command_exec is for the main thread (commands touch engine
+ * state); a command function runs on the thread that called de_command_exec, with no lock held,
+ * so it may register, unregister or execute commands itself.
+ */
+
+/** Longest command name, in bytes without the NUL. */
+#define DE_COMMAND_NAME_MAX 63
+/** Most words in one command line (more fail with DE_ERR_INVALID_ARGUMENT). */
+#define DE_COMMAND_MAX_ARGS 64
+/** Longest command line, in bytes without the NUL (longer fails with DE_ERR_INVALID_ARGUMENT). */
+#define DE_COMMAND_LINE_MAX 4095
+
+/**
+ * A command. `argv[0]` is the name as typed, `argv[1..argc-1]` the arguments with quotes and
+ * escapes removed; the strings are valid during the call only. Return DE_OK, or an error set
+ * with DE_FAIL (bad arguments: DE_ERR_INVALID_ARGUMENT); de_command_exec returns it.
+ */
+typedef de_result (*de_command_fn)(int argc, const char *const *argv, void *user);
+
+/**
+ * Registers command `name` (1 to DE_COMMAND_NAME_MAX bytes, no spaces, tabs, quotes or control
+ * characters). `help` is one line for `help` (may be NULL); name and help are copied.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL fn, bad name); DE_ERR_ALREADY_EXISTS (a command
+ *         with this name, in any case, exists: unregister it first); DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_command_register(const char *name, const char *help, de_command_fn fn,
+                                     void *user);
+
+/**
+ * Removes command `name` (any case). A game library unregisters its commands in `on_unload`, so
+ * a reload can register them again with the new code. Built-in commands can be removed too.
+ * @return DE_OK or DE_ERR_NOT_FOUND.
+ */
+DE_API de_result de_command_unregister(const char *name);
+
+/**
+ * Runs one command line (see the section comment). An empty line, or one whose first word starts
+ * with `#`, does nothing and returns DE_OK. Main thread.
+ * @return DE_OK; the command's result; DE_ERR_NOT_FOUND (no command or cvar with that name);
+ *         de_cvar_set's errors for a cvar; DE_ERR_INVALID_ARGUMENT (NULL line, a line longer
+ *         than DE_COMMAND_LINE_MAX, more than DE_COMMAND_MAX_ARGS words, an unclosed quote).
+ */
 DE_API de_result de_command_exec(const char *line);
 
 /* ---------- Stats overlay (S06 DENG-96) ---------- */
