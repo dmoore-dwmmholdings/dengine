@@ -1,0 +1,2 @@
+# Included by sorted/assets.toml. Sorts before it ("a_inc.toml" < "assets.toml").
+colour = "red"

@@ -1,0 +1,5 @@
+four_issues/assets.toml:8: error: asset "fx/spark": unknown asset type "gizmo" [assets."fx/spark".type]
+four_issues/assets.toml:9: error: asset "sfx/boom": source file four_issues/assets/audio/boom.wav does not exist [assets."sfx/boom".source]
+four_issues/assets.toml:15: error: bundle dependency cycle: a -> b -> a [bundles.b.depends]
+four_issues/assets.toml:19: warning: bundle "hud": glob "hud/*" matches no asset [bundles.hud.assets]
+de-cook --check: 3 errors, 1 warning, 0 notes

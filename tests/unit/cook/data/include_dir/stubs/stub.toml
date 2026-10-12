@@ -1,0 +1,6 @@
+# Stub include for the include_dir fixture (DENG-145). The unknown key is a warning that names
+# this file.
+colour = "red"
+
+[assets]
+"sfx/click" = { type = "sound", source = "audio/click.wav" }

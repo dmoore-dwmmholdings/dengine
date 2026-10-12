@@ -1,0 +1,4 @@
+# de-cook --check fixture (DENG-145): a type only `--types` makes known. No sources (--no-sources).
+[assets]
+"fx/spark" = { type = "gizmo", source = "fx/spark.bin" }
+"ui/font"  = { type = "font",  source = "fonts/ui.ttf" }

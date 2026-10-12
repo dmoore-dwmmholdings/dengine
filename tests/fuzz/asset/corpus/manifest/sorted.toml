@@ -1,0 +1,13 @@
+# de-cook --check fixture (DENG-145): issues come out sorted by file, then line, whatever order
+# the parser, resolver and validator found them in.
+[project]
+include = ["a_inc.toml"]
+
+[bundles.late]
+assets = ["nothing/*"]
+
+[assets]
+"fx/spark" = { type = "gizmo", source = "fx/spark.bin" }
+#%include
+# Included by sorted/assets.toml. Sorts before it ("a_inc.toml" < "assets.toml").
+colour = "red"

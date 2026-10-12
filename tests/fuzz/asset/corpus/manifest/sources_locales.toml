@@ -1,0 +1,16 @@
+[project]
+asset_root = 'assets'
+version = 3
+[assets]
+here = { type = 'texture', source = 'textures/here.png' }
+gone = { type = 'texture', source = 'textures/gone.png' }
+out = { type = 'texture', source = '../../../etc/passwd' }
+[assets.logo]
+type = 'texture'
+source = 'logo_en.png'
+[assets.logo.locale]
+ja = 'logo_ja.png'
+de = 'logo_de.png'
+pt = 'logo_pt.png'
+pt_BR = 'logo_br.png'
+zh-Hant-TW = 'logo_tw.png'

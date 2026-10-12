@@ -1,0 +1,30 @@
+[project]
+include = ['a.toml', 'sub/b.toml', '../escape.toml', 'a.toml']
+variants = ['x']
+[defaults.texture]
+srgb = true
+mips = 3
+bias = -0.5
+tags = ['a', 'b']
+name = 'n'
+[defaults.model]
+type = 'no'
+[assets]
+"t/one" = { type = 'texture', source = 's.png', srgb = false, extra = 1.5e300, list = [] }
+"t/two" = { type = 'texture', source = 's2.png', nested = { a = 1 } }
+[bundles.b]
+assets = ['t/*']
+resident = true
+priority = 'background'
+unknown = 1
+#%include
+[project]
+asset_root = 'other'
+include = ['b.toml', 'c/d.toml']
+[defaults.texture]
+srgb = false
+[assets]
+"t/one" = { type = 'texture', source = 'dup.png' }
+"inc/x" = { type = 'blob', source = 'x.bin' }
+[bundles.b]
+depends = ['b']
