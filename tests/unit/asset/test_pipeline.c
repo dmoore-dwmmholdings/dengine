@@ -206,8 +206,11 @@ static void pipe_fx_setup(pipe_fx *f) {
     fx_system(f, 2, true);
 }
 
+static de_atomic_u32 g_open_hold, g_open_reached; /* see hold_open */
+
 static void pipe_fx_teardown(pipe_fx *f) {
     de__io_test_set_chunk_hook(NULL);
+    de_atomic_store_u32(&g_open_hold, 0, DE_ATOMIC_RELEASE); /* a failed test cannot hang destroy */
     de_atomic_store_u32(&f->c.gate_closed, 0, DE_ATOMIC_RELEASE);
     de_asset_system_destroy(f->s);
     f->s = NULL;
@@ -304,14 +307,28 @@ static void drain(pipe_fx *f) {
     EXPECT_EQ(stats(f).live_jobs, 0u);
 }
 
-/* Updates until `flag` is non-zero. */
-static void wait_flag(pipe_fx *f, de_atomic_u32 *flag) {
+/* Updates until `counter` is at least `n`. */
+static void wait_count(pipe_fx *f, de_atomic_u32 *counter, u32 n) {
     u64 end = de_time_now_ns() + WAIT_NS;
-    while (de_atomic_load_u32(flag, DE_ATOMIC_ACQUIRE) == 0 && de_time_now_ns() < end) {
+    while (de_atomic_load_u32(counter, DE_ATOMIC_ACQUIRE) < n && de_time_now_ns() < end) {
         de_asset_system_update(f->s, NULL);
         de_sleep_ns(100000u);
     }
-    ASSERT_NE(de_atomic_load_u32(flag, DE_ATOMIC_ACQUIRE), 0u);
+    ASSERT_GE(de_atomic_load_u32(counter, DE_ATOMIC_ACQUIRE), n);
+}
+
+/* Updates until `flag` is non-zero. */
+static void wait_flag(pipe_fx *f, de_atomic_u32 *flag) {
+    wait_count(f, flag, 1);
+}
+
+/* Holds the OPEN stage: counts the opens that arrive (g_open_reached), then waits while
+ * g_open_hold is set. A held job keeps its place in the OPEN/READ window (2 x io_threads), so
+ * every later job stays QUEUED, and it reports no progress yet (DENG-380). */
+static void hold_open(void) {
+    (void)de_atomic_fetch_add_u32(&g_open_reached, 1, DE_ATOMIC_ACQ_REL);
+    while (de_atomic_load_u32(&g_open_hold, DE_ATOMIC_ACQUIRE) != 0)
+        de_sleep_ns(100000u);
 }
 
 /* A payload: header + body. */
@@ -342,6 +359,17 @@ static void *zstd_frame(const void *src, size_t n, size_t *out) {
 
 /* ---- pipeline.single_asset ------------------------------------------------------------------ */
 
+/* The default source behind hold_open. The OPEN stage reports the first progress (the size)
+ * only after `open` returns, so a held load stays PENDING. Without the hold, a fast background
+ * worker can make the request LOADING inside de_asset_load (DENG-380). */
+static de_result gated_open(void *user, de_asset_system *s, const char *vpath, de_asset_id id,
+                            de__source_span *out) {
+    (void)user;
+    hold_open();
+    const de__pipeline_source *d = de__pipeline_default_source();
+    return d->open(d->user, s, vpath, id, out);
+}
+
 TEST_F(pipeline, single_asset, pipe_fx) {
     put_text("one.bin", "hello world");
     put_text("one_ja.bin", "konnichiwa");
@@ -363,10 +391,20 @@ TEST_F(pipeline, single_asset, pipe_fx) {
                      "\"cooked\" = { type = \"pti\", source = \"one.bin\" }\n"
                      "\"untyped\" = { type = \"nobody\", source = \"one.bin\" }\n");
     de_asset_set_locale(f->s, "ja");
+    de__pipeline_source src = *de__pipeline_default_source();
+    src.open = gated_open;
+    de__pipeline_set_source(f->s, &src);
 
+    /* Submitted, no progress yet: PENDING, also across updates, until the open is let go. */
+    de_atomic_store_u32(&g_open_hold, 1, DE_ATOMIC_RELEASE);
     de_load_handle h = de_asset_load(f->s, id_of("one"), 0);
     de_load_info info;
     EXPECT_EQ((int)de_asset_status(f->s, h, &info), (int)DE_LOAD_PENDING);
+    EXPECT_EQ((int)state_of(f, "one"), (int)DE_LOAD_PENDING);
+    de_asset_system_update(f->s, NULL);
+    EXPECT_EQ((int)de_asset_status(f->s, h, &info), (int)DE_LOAD_PENDING);
+    EXPECT_EQ((int)state_of(f, "one"), (int)DE_LOAD_PENDING);
+    de_atomic_store_u32(&g_open_hold, 0, DE_ATOMIC_RELEASE);
     EXPECT_EQ((int)de_asset_wait(f->s, h, WAIT_NS), (int)DE_LOAD_READY);
     EXPECT_EQ((int)de_asset_status(f->s, h, &info), (int)DE_LOAD_READY);
     EXPECT_EQ(info.bytes_total, 11u); /* the file size, known after the size query */
@@ -674,7 +712,8 @@ TEST_F(pipeline, corrupt_zstd, pipe_fx) {
 static de_result slow_open(void *user, de_asset_system *s, const char *vpath, de_asset_id id,
                            de__source_span *out) {
     (void)user;
-    de_sleep_ns(1000000u); /* 1 ms per open: the queue stays long while the test watches */
+    hold_open();
+    de_sleep_ns(1000000u); /* 1 ms per open: the queue drains slowly after the hold */
     const de__pipeline_source *d = de__pipeline_default_source();
     return d->open(d->user, s, vpath, id, out);
 }
@@ -702,12 +741,27 @@ TEST_F(pipeline, priority_order, pipe_fx) {
         snprintf(name, sizeof name, "low/%u", i);
         low[i] = id_of(name);
     }
+    /* The first LOW jobs fill the OPEN/READ window (2 x 1 I/O thread) and wait in `open`; the
+     * other 98 stay QUEUED until the CRITICAL requests are in, however slow the runner is.
+     * (Waiting for the first LOW load instead raced: on a slow ASan runner the main thread saw
+     * it only after 99 LOW loads, with nothing left in the queue to overtake. DENG-380.) */
+    const u32 in_flight = 2;
+    de_atomic_store_u32(&g_open_reached, 0, DE_ATOMIC_RELAXED);
+    de_atomic_store_u32(&g_open_hold, 1, DE_ATOMIC_RELEASE);
     de_load_handle hl = de_asset_load_many(f->s, low, 100, DE_LOAD_PRIORITY_LOW);
-    wait_flag(f, &f->c.loads); /* the LOW loads are under way */
+    wait_count(f, &g_open_reached, in_flight);
+    EXPECT_EQ(de_atomic_load_u32(&g_open_reached, DE_ATOMIC_ACQUIRE), in_flight);
+    u32 queued = 0;
+    for (u32 i = 0; i < 100; ++i)
+        queued += de__pipeline_debug_stage(f->s, de__slot_find(f->s, low[i])) == DE__PJOB_QUEUED;
+    EXPECT_EQ(queued, 100u - in_flight);
     u32 started = de_atomic_load_u32(&f->c.seq, DE_ATOMIC_ACQUIRE);
+    EXPECT_EQ(started, 0u);
     de_load_handle hc = de_asset_load(f->s, id_of("crit"), DE_LOAD_PRIORITY_CRITICAL);
     /* A LOW asset still queued, asked for again as CRITICAL: it moves up (reprioritize). */
+    EXPECT_EQ(de__pipeline_debug_stage(f->s, slot_of(f, "low/99")), (u32)DE__PJOB_QUEUED);
     de_load_handle hr = de_asset_load(f->s, low[99], DE_LOAD_PRIORITY_CRITICAL);
+    de_atomic_store_u32(&g_open_hold, 0, DE_ATOMIC_RELEASE);
     EXPECT_EQ((int)de_asset_wait(f->s, hc, WAIT_NS), (int)DE_LOAD_READY);
     EXPECT_EQ((int)de_asset_wait(f->s, hr, WAIT_NS), (int)DE_LOAD_READY);
     EXPECT_EQ((int)de_asset_wait(f->s, hl, WAIT_NS), (int)DE_LOAD_READY);
@@ -722,9 +776,10 @@ TEST_F(pipeline, priority_order, pipe_fx) {
     printf("  LOW loads started before CRITICAL was issued: %u; LOW loaded before it: %u of 99; "
            "CRITICAL seq %u, reprioritized LOW seq %u\n",
            started, low_before, crit_seq, reprio_seq);
-    /* Only the LOW jobs already open or read (io_limit 2) or between read and load can still
-     * finish first; the rest of the queue waits. */
-    EXPECT_LE(low_before, started + 8u);
+    /* Only the LOW jobs held in the window, or taken from the queue after the CRITICAL ones and
+     * finished while those were still between read and load, can finish first; the rest of the
+     * queue waits. */
+    EXPECT_LE(low_before, in_flight + 8u);
     EXPECT_LT(crit_seq, 30u);
     EXPECT_LT(reprio_seq, 30u);
     de_asset_release(f->s, hl);
