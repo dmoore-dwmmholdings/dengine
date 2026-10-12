@@ -49,6 +49,7 @@ typedef struct de__type_entry {
     de_enum_info *enum_info; /* ENUM: current values */
     u64 hash;                /* current schema hash (nested hashes as registered now) */
     u64 registered_hash;     /* schema hash computed when this entry was last registered */
+    u32 bin_summary;         /* STRUCT: de__ser_binary_summary(cur), refreshed with `hash` */
 } de__type_entry;
 
 /** A bump block of registry memory. */
@@ -112,6 +113,18 @@ u64 de__reflect_hash_type(const de_type_registry *r, const de_type_desc *desc, u
 u64 de__reflect_hash_enum(const de_enum_info *e);
 /** Recomputes every entry's current hash (after a layout change of a nested type). */
 void de__reflect_rehash_all(de_type_registry *r);
+
+/* ---- ser_binary.c (DENG-296) --------------------------------------------------------------- */
+
+/* de__type_entry.bin_summary: what the binary serializer's memcpy fast path needs to know about a
+ * type, computed once per (re)registration so the per-object check is O(1). It depends only on
+ * data the schema hash covers, so it is refreshed exactly when the hash is. */
+#define DE__BIN_SUM_FLAGS_AND  0xFFu     /* AND of (flags & DE_FIELD_SCHEMA_FLAGS), recursive */
+#define DE__BIN_SUM_PACKED     (1u << 8) /* packed encoding == memory image (raw references) */
+#define DE__BIN_SUM_HAS_ENTITY (1u << 9) /* an ENTITY field, at any depth */
+
+/** The summary of a stored layout whose nested types are resolved in `r` (current layouts). */
+u32 de__ser_binary_summary(const de_type_registry *r, const de__type_layout *l, u32 depth);
 
 DE_EXTERN_C_END
 

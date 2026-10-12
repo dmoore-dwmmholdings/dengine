@@ -353,6 +353,8 @@ de_result de_type_register_ex(de_type_registry *r, const de_type_desc *desc, de_
         else
             e->hash = new_hash;
     }
+    /* DENG-296: the binary fast-path summary follows the hash (rehash_all refreshed the others). */
+    e->bin_summary = de__ser_binary_summary(r, e->cur, 0);
     if (out_id)
         *out_id = make_id(e, (u32)index);
     if (out_layout_changed)

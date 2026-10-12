@@ -459,5 +459,125 @@ DE_API de_result de_reflect_resolve_path(const de_type_registry *r, de_type_id t
                                          const char *path, const de_field_info **field,
                                          u32 *offset);
 
+/* ---------- Serialization: binary format (DENG-296) ----------
+ * The shipping format of SPEC §9.2: versioned, little-endian, with the schema hash of the type.
+ * The byte layout is documented in src/reflect/ser_binary_format.h. */
+
+/** Whether a binary object carries a schema block (de_ser_binary_options.schema). */
+typedef enum de_ser_binary_schema {
+    /** Self-describing in Debug and Dev builds (DE_DEBUG / DE_DEV), compact otherwise. */
+    DE_SER_BINARY_SCHEMA_DEFAULT = 0,
+    /** Write a schema block (field names, kinds, sizes, offsets, nested types). A reader whose
+     * type changed since (different schema hash) matches fields by name and runs `migrate`. */
+    DE_SER_BINARY_SELF_DESCRIBING,
+    /** No schema block: smaller, but only a reader with the same schema hash can load it
+     * (otherwise DE_ERR_VERSION_MISMATCH). For data that is rebuilt with the game (cooked). */
+    DE_SER_BINARY_COMPACT
+} de_ser_binary_schema;
+
+/** Counters the binary serializer adds to (never resets). For tests, tools and profiling. */
+typedef struct de_ser_binary_stats {
+    u64 objects_written;
+    u64 objects_read;   /**< objects that loaded (DE_OK) */
+    u64 fast_path;      /**< objects written or read as one memcpy of the whole object */
+    u64 field_wise;     /**< objects written, or read with a matching schema hash, per field */
+    u64 schema_matched; /**< objects read through their stored schema (schema hash differed) */
+    u64 migrations;     /**< migrate hook calls, nested types included */
+    u64 skipped_fields; /**< stored fields not loaded: unknown, or kind or size changed */
+    u64 warnings;       /**< warnings logged (category "reflect"; at most one per object read) */
+} de_ser_binary_stats;
+
+/** Binary-only options. NULL or `(de_ser_binary_options){0}` gives the defaults. */
+typedef struct de_ser_binary_options {
+    de_ser_binary_schema schema; /**< writing only */
+    de_ser_binary_stats *stats;  /**< optional; counters are added to */
+    /** Never take the memcpy fast path (tests and benchmarks compare the two paths). */
+    bool disable_fast_path;
+} de_ser_binary_options;
+
+/**
+ * Writes `obj` (an object of struct type `type`) as one binary object to `w`: header, optional
+ * schema block, then the fields selected by `opt->required_flags` (a field is written when
+ * `(flags & required_flags) == required_flags`, also inside nested structs). Entities and asset
+ * handles go through `opt->ctx` (each callback gets `ctx->user`; NULL = raw values). `opt` NULL
+ * means all fields and raw values; `opt->format` is ignored.
+ *
+ * Writes are batched (at most 1 KiB per call, larger runs in one call). Allocates nothing except
+ * thread scratch (de_scratch_begin) for the schema block's type table.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `r`, `obj` or `w`, a bad id, or required_flags
+ *         above 0xFF); or the writer's error. After an error, `w` may hold part of the object.
+ */
+DE_API de_result de_serialize_binary(const de_type_registry *r, de_type_id type, const void *obj,
+                                     const de_ser_options *opt, const de_ser_binary_options *bopt,
+                                     de_writer *w);
+
+/**
+ * Reads one binary object of struct type `type` from `rd` into `obj`. The object is not
+ * constructed first: pass an initialised object (de_type_construct); fields absent from the
+ * data, or not selected by `opt->required_flags`, keep their values.
+ *
+ * - Same schema hash as stored: the fields are read with the current layout; a POD type whose
+ *   packed encoding equals its memory image is read with one memcpy (de_ser_binary_stats).
+ * - Different hash and a schema block: the stored object is decoded into an image of its old
+ *   layout (old offsets and sizes), fields are matched by name (the same kind; STRING buffers,
+ *   FIXED_ARRAY counts and nested structs may change), stored fields that match nothing are
+ *   skipped with one warning per object, and when the stored version is older the type's
+ *   `migrate(obj, from_version, old_image, old_fields, n)` hook runs (nested types first).
+ *   old_fields describe the old image: name, kind, size, offset, flags, nested_type,
+ *   array_count. Strings in it live in thread scratch and are valid only during the call.
+ *   The image is untrusted input: check old_fields before reading it as an old struct, and
+ *   read it with memcpy (a nested image is only as aligned as its stored offset).
+ * - Different hash and no schema block: DE_ERR_VERSION_MISMATCH.
+ *
+ * Every length is checked against the payload and schema sizes: truncated or corrupt input gives
+ * DE_ERR_PARSE and never reads or writes out of bounds.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL arguments, bad id); DE_ERR_PARSE (not a binary
+ *         object of this type, truncated, corrupt); DE_ERR_VERSION_MISMATCH (newer version or
+ *         format, hash mismatch without a schema block, or `migrate` returned false); or the
+ *         reader's error. After DE_OK and DE_ERR_VERSION_MISMATCH the reader stands right after
+ *         the object; after other errors its position is unspecified. On DE_ERR_PARSE in the
+ *         same-hash path `obj` may be partly overwritten; the schema path writes `obj` only
+ *         after the whole object decoded.
+ */
+DE_API de_result de_deserialize_binary(const de_type_registry *r, de_type_id type, void *obj,
+                                       const de_ser_options *opt, const de_ser_binary_options *bopt,
+                                       de_reader *rd);
+
+/**
+ * A de_writer into memory: either a buffer that grows from an allocator (de_mem_writer_init) or
+ * a fixed caller buffer (de_mem_writer_init_fixed; a write that does not fit fails with
+ * DE_ERR_OUT_OF_MEMORY and writes nothing). Bytes written are data[0 .. size).
+ */
+typedef struct de_mem_writer {
+    u8 *data;
+    size_t size;
+    size_t capacity;
+    const de_allocator *a; /**< growth allocator; NULL for a fixed buffer */
+} de_mem_writer;
+
+/** A growing writer; `a` NULL = de_heap_allocator(). Free with de_mem_writer_free. */
+DE_API void de_mem_writer_init(de_mem_writer *mw, const de_allocator *a);
+/** A writer into `buf` (`capacity` bytes). Nothing to free. */
+DE_API void de_mem_writer_init_fixed(de_mem_writer *mw, void *buf, size_t capacity);
+/** Forgets the bytes written (size = 0) and keeps the buffer. */
+DE_API void de_mem_writer_reset(de_mem_writer *mw);
+/** Frees a growing writer's buffer and zeroes `mw`. A fixed writer is only zeroed. */
+DE_API void de_mem_writer_free(de_mem_writer *mw);
+/** The de_writer that appends to `mw`. `mw` must outlive it. */
+DE_API de_writer de_writer_from_mem(de_mem_writer *mw);
+
+/** A de_reader over `size` bytes at `data` (not copied); `pos` is the next byte to read. */
+typedef struct de_mem_reader {
+    const u8 *data;
+    size_t size;
+    size_t pos;
+} de_mem_reader;
+
+DE_API void de_mem_reader_init(de_mem_reader *mr, const void *data, size_t size);
+/** The de_reader that reads `mr` from `pos`; at the end it reports 0 bytes read. */
+DE_API de_reader de_reader_from_mem(de_mem_reader *mr);
+
 DE_EXTERN_C_END
 #endif

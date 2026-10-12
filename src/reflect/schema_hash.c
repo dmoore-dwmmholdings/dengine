@@ -141,5 +141,7 @@ void de__reflect_rehash_all(de_type_registry *r) {
         de__type_entry *e = &entries[i];
         e->hash = e->kind == DE__ENTRY_ENUM ? de__reflect_hash_enum(e->enum_info)
                                             : de__reflect_hash_type(r, &e->cur->desc, 0);
+        if (e->kind == DE__ENTRY_STRUCT)
+            e->bin_summary = de__ser_binary_summary(r, e->cur, 0); /* DENG-296 */
     }
 }
