@@ -164,6 +164,9 @@ static void reclaim(void *user, u32 kind, u32 index) {
         if (vt->buffer_destroy)
             vt->buffer_destroy(d, b);
         de__gpu_bindless_free(&d->bindless, DE__GPU_BINDLESS_BUFFER, b->bindless);
+        if (b->region)
+            de__gpu_transient_region_release(b->region);
+        b->region = NULL;
         break;
     }
     case DE__GPU_TEXTURE: {
@@ -171,6 +174,9 @@ static void reclaim(void *user, u32 kind, u32 index) {
         if (vt->texture_destroy)
             vt->texture_destroy(d, t);
         free_texture_indices(d, t);
+        if (t->region)
+            de__gpu_transient_region_release(t->region);
+        t->region = NULL;
         break;
     }
     case DE__GPU_SAMPLER: {
@@ -300,6 +306,7 @@ static void device_free(de_gpu_device *d, int stage) {
             de__gpu_pool_destroy(&d->pools[k]);
         de__gpu_bindless_destroy(&d->bindless);
     }
+    de__gpu_heaps_shutdown(d, stage >= 1);
     if (stage >= 1)
         d->vt->device_destroy(d);
     de__gpu_deferred_destroy(&d->deferred);
@@ -357,7 +364,13 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
     de_mutex_init(&d->cmd_lock);
     de__gpu_deferred_init(&d->deferred, a);
 
-    de_result r = vt->device_create(d, &dd, &d->caps);
+    /* Heaps first: the backend's device_create registers its memory classes. */
+    de_result r = de__gpu_heaps_init(d);
+    if (r != DE_OK) {
+        device_free(d, 0);
+        return r;
+    }
+    r = vt->device_create(d, &dd, &d->caps);
     if (r != DE_OK) {
         device_free(d, 0);
         return DE_FAIL_WRAP(r, "de_gpu_device_create: %s device", de_gpu_backend_name(backend));
@@ -426,7 +439,10 @@ void de_gpu_wait_idle(de_gpu_device *d) {
 #define BUFFER_BINDLESS_USAGE                                                                      \
     (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE)
 
-de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *desc) {
+/* de_gpu_buffer_create, or placed creation at (heap, offset) when `region` is set. */
+static de_gpu_buffer buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *desc,
+                                   de__gpu_heap *heap, u64 offset,
+                                   de__gpu_transient_region *region) {
     de_gpu_buffer h = {0};
     if (!d) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_buffer_create: device is NULL");
@@ -434,9 +450,9 @@ de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
     }
     if (de__gpu_validate_buffer_desc(d, desc) != DE_OK)
         return h;
-    if (!d->vt->buffer_create) {
-        de__gpu_fail(d, DE_ERR_UNSUPPORTED, "de_gpu_buffer_create: the %s backend has no buffers",
-                     d->vt->name);
+    if (region ? !d->vt->buffer_create_placed : !d->vt->buffer_create) {
+        de__gpu_fail(d, DE_ERR_UNSUPPORTED, "de_gpu_buffer_create: the %s backend has no %sbuffers",
+                     d->vt->name, region ? "placed " : "");
         return h;
     }
     void *e;
@@ -456,8 +472,12 @@ de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
             return h;
         }
     }
-    if (d->vt->buffer_create(d, b, desc) != DE_OK) {
+    b->region = region;
+    de_result r = region ? d->vt->buffer_create_placed(d, b, desc, heap, offset)
+                         : d->vt->buffer_create(d, b, desc);
+    if (r != DE_OK) {
         de__gpu_bindless_free(&d->bindless, DE__GPU_BINDLESS_BUFFER, b->bindless);
+        b->region = NULL;
         undo_slot(d, DE__GPU_BUFFER, id);
         return h;
     }
@@ -465,6 +485,17 @@ de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
         d->vt->bindless_write_buffer(d, b->bindless, b);
     h.id = id;
     return h;
+}
+
+de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *desc) {
+    return buffer_create(d, desc, NULL, 0, NULL);
+}
+
+de_gpu_buffer de__gpu_buffer_create_placed(de_gpu_device *d, const de_gpu_buffer_desc *desc,
+                                           de__gpu_heap *heap, u64 offset,
+                                           de__gpu_transient_region *region) {
+    DE_ASSERT(heap && region);
+    return buffer_create(d, desc, heap, offset, region);
 }
 
 void de_gpu_buffer_destroy(de_gpu_device *d, de_gpu_buffer b) {
@@ -572,17 +603,19 @@ void de__gpu_texture_wrap_finish(de_gpu_device *d, de__gpu_texture *t) {
             d->vt->bindless_write_texture(d, t->storage[m], t, m, true);
 }
 
-de_gpu_texture de_gpu_texture_create(de_gpu_device *d, const de_gpu_texture_desc *desc) {
+/* de_gpu_texture_create, or placed creation at (heap, offset) when `region` is set. */
+static de_gpu_texture texture_create(de_gpu_device *d, const de_gpu_texture_desc *desc,
+                                     de__gpu_heap *heap, u64 offset,
+                                     de__gpu_transient_region *region) {
     de_gpu_texture h = {0};
     if (!d) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_texture_create: device is NULL");
         return h;
     }
-    if (!d->vt->texture_create) {
+    if (region ? !d->vt->texture_create_placed : !d->vt->texture_create) {
         de__gpu_fail(d, DE_ERR_UNSUPPORTED,
-                     "de_gpu_texture_create: the %s backend has no "
-                     "textures",
-                     d->vt->name);
+                     "de_gpu_texture_create: the %s backend has no %stextures", d->vt->name,
+                     region ? "placed " : "");
         return h;
     }
     de__gpu_texture *t;
@@ -590,14 +623,29 @@ de_gpu_texture de_gpu_texture_create(de_gpu_device *d, const de_gpu_texture_desc
     if (!id)
         return h;
     de_gpu_texture_desc nd = texture_desc_of(t, desc->name);
-    if (d->vt->texture_create(d, t, &nd) != DE_OK) {
+    t->region = region;
+    de_result r = region ? d->vt->texture_create_placed(d, t, &nd, heap, offset)
+                         : d->vt->texture_create(d, t, &nd);
+    if (r != DE_OK) {
         free_texture_indices(d, t);
+        t->region = NULL;
         undo_slot(d, DE__GPU_TEXTURE, id);
         return h;
     }
     de__gpu_texture_wrap_finish(d, t);
     h.id = id;
     return h;
+}
+
+de_gpu_texture de_gpu_texture_create(de_gpu_device *d, const de_gpu_texture_desc *desc) {
+    return texture_create(d, desc, NULL, 0, NULL);
+}
+
+de_gpu_texture de__gpu_texture_create_placed(de_gpu_device *d, const de_gpu_texture_desc *desc,
+                                             de__gpu_heap *heap, u64 offset,
+                                             de__gpu_transient_region *region) {
+    DE_ASSERT(heap && region);
+    return texture_create(d, desc, heap, offset, region);
 }
 
 de_gpu_texture de__gpu_texture_wrap(de_gpu_device *d, const de_gpu_texture_desc *desc,

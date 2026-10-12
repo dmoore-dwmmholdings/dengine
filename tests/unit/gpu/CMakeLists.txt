@@ -18,3 +18,10 @@ de_add_test(NAME gpu
 if(TARGET test_gpu)
     target_include_directories(test_gpu PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-282: device memory heaps. The offset TLSF (gpu.gpu_tlsf.<test>) and the heap manager with
+# transient regions on the null backend (gpu.gpu_heap.<test>; gpu_heap.threads runs 8 threads on
+# one device). gpu.gpu_tlsf.perf asserts its 200 ms bound in Release and Shipping only.
+if(TARGET test_gpu)
+    target_sources(test_gpu PRIVATE test_gpu_tlsf.c test_gpu_heap.c)
+endif()

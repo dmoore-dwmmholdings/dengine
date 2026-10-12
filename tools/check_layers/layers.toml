@@ -65,7 +65,9 @@ paths = ["src/ecs"]
 [[module]]
 name = "gpu"
 band = "content"
-paths = ["src/gpu"]
+# src/gpu/memory/ is part of de_gpu (device heaps, DENG-282), not a backend: the literal path
+# beats the `src/gpu/*` wildcard below.
+paths = ["src/gpu", "src/gpu/memory"]
 
 [[module]]
 name = "gpu/*"
