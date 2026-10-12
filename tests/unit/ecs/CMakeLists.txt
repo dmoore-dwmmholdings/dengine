@@ -127,3 +127,32 @@ foreach(_de_ecs_test test_system test_ecs_sched)
         target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-351: hierarchy (hier.*) and transform propagation (xform.*). xform.* runs propagation on task
+# systems of several sizes (label tsan); xform.bitwise_across_workers also checks the 100k-entity
+# budget, so the xform executable carries the `timing` label and its tests run alone (RUN_SERIAL,
+# as for snap.* above).
+de_add_test(NAME hier SOURCES test_hierarchy.c LIBS de_ecs TIMEOUT 300)
+de_add_test(NAME xform SOURCES test_transform_propagate.c LIBS de_ecs LABELS unit tsan timing
+            TIMEOUT 300)
+if(TARGET test_xform AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    # Same mechanism as test_snapshot_serial.cmake: runs right after the xform list is included.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_xform_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_xform_adds REGEX "^add_test\\(\\[==\\[xform\\.")
+    foreach(_de_line IN LISTS _de_xform_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                 "${CMAKE_CURRENT_BINARY_DIR}/test_xform_serial.cmake")
+endif()
+foreach(_de_ecs_test test_hier test_xform)
+    if(TARGET ${_de_ecs_test})
+        target_include_directories(${_de_ecs_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

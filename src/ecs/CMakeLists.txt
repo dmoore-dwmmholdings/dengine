@@ -35,3 +35,7 @@ target_sources(de_ecs PRIVATE snapshot.c checksum.c)
 
 # DENG-350: systems, access sets, schedules (conflict DAG on the task graph) and debug checks.
 target_sources(de_ecs PRIVATE system_internal.h system.c access.c schedule.c debug_checks.c)
+
+# DENG-351: built-in components, the ChildOf / Children hierarchy and transform propagation.
+target_sources(de_ecs PRIVATE hierarchy_internal.h builtin_components.c hierarchy.c
+                              transform_propagate.c)

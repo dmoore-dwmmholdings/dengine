@@ -3,6 +3,7 @@
 #ifndef DE_ECS_H
 #define DE_ECS_H
 #include "de_base.h"
+#include "de_math.h" /* de_transform (DENG-351 built-in components) */
 #include "de_memory.h"
 #include "de_reflect.h"
 #include "de_task.h"
@@ -194,9 +195,8 @@ DE_API bool de_entity_has(const de_world *w, de_entity e, de_component c);
  */
 DE_API void de_entity_mark_changed(de_world *w, de_entity e, de_component c);
 
-/* Hierarchy (ChildOf / Children). Transform propagation is a built-in PostUpdate system. */
-DE_API void de_entity_set_parent(de_world *w, de_entity child, de_entity parent);
-DE_API de_entity de_entity_parent(const de_world *w, de_entity e);
+/* Hierarchy (ChildOf / Children) and transform propagation: see "Hierarchy and built-in
+ * components" at the end of this header (DENG-351). */
 
 /* ---------- Resources (typed singletons) ---------- */
 /*
@@ -500,7 +500,10 @@ typedef enum de_command_op {
     DE_CMD_DESPAWN = 2,
     DE_CMD_ADD = 3,
     DE_CMD_REMOVE = 4,
-    DE_CMD_SEND_EVENT = 5
+    DE_CMD_SEND_EVENT = 5,
+    /* DENG-351: hierarchy ops. */
+    DE_CMD_SET_PARENT = 6, /**< payload: the new parent (de_entity; DE_ENTITY_NULL detaches) */
+    DE_CMD_DESPAWN_RECURSIVE = 7 /**< no payload */
 } de_command_op;
 
 /** true if `e` is a pending id from de_cmd_spawn() (generation 0 and not DE_ENTITY_NULL). */
@@ -836,6 +839,146 @@ DE_API void de_world_snapshot_free(const de_allocator *a, de_world_snapshot *sna
  * only the first time it meets a component (its field layout is cached). 0 for a NULL world.
  */
 DE_API u64 de_world_checksum(de_world *w, u32 component_flags_mask);
+
+/* ---------- Hierarchy and built-in components ---------- */
+/*
+ * Hierarchy and transforms (SPEC §7.1 Relationships, §5.5 large worlds, §10.2 step 4; DENG-351).
+ *
+ * Built-in components. Four reflected types, registered in the world's type registry under these
+ * names and then as components of the world, in this order:
+ *   - DeTransform ("DeTransform"): the local transform, relative to the parent (or to the world
+ *     for a root). Flags DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE. Constructed as the identity.
+ *   - DeGlobalTransform ("DeGlobalTransform"): the world transform, written by transform
+ *     propagation. Derived data: no component flags (not in snapshots or saves). Constructed as
+ *     the identity.
+ *   - DeChildOf ("DeChildOf"): the parent, and the links of the parent's intrusive child list.
+ *     DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE.
+ *   - DeChildren ("DeChildren"): the first and last child and the child count.
+ *     DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE.
+ * The child list is intrusive (doubly linked through DeChildOf), so every component stays POD and
+ * the child order is the insertion order: deterministic, and the same after a snapshot restore.
+ *
+ * Registration is lazy: the first de_builtin_components() or de_entity_set_parent() call
+ * registers the four
+ * components and adds the transform propagation system. Their component ids are the next free ids
+ * at that point, so they are part of the determinism contract like every other component id: make
+ * that first call at the same point of the world's setup on every machine (normally right after
+ * de_world_create). It is single-threaded and not allowed while a schedule runs. Read-only calls
+ * (de_entity_parent, child iteration) on a world without built-ins return DE_ENTITY_NULL, and
+ * de_cmd_set_parent() needs the built-ins registered.
+ *
+ * Hierarchy rules:
+ *   - Change DeChildOf and DeChildren only through these functions (and the commands); never add,
+ *     remove or write them directly.
+ *   - An entity has DeChildOf exactly when it has a parent, and DeChildren exactly when it has at
+ *     least one child (it is removed with the last child). Any entity may be in a hierarchy; only
+ *     entities with DeTransform take part in transform propagation.
+ *   - de_entity_despawn() of a parent detaches its children first: they lose DeChildOf and become
+ *     roots (their DeTransform then counts as world-relative). Use de_entity_despawn_recursive()
+ *     to despawn a whole subtree. Snapshot restores do not detach: they restore the hierarchy
+ *     components as they were at take time.
+ *   - A change of parent marks the child's DeTransform and DeChildOf changed, and the DeChildren
+ *     of each parent whose list changed; links of siblings are rewritten without a mark.
+ *
+ * Transform propagation (the built-in system DE_TRANSFORM_PROPAGATE_SYSTEM in
+ * DE_SCHEDULE_POST_UPDATE): every root (an entity with DeTransform and without DeChildOf) gets
+ * global = local; then each root's subtree is walked depth first in child order and every
+ * descendant with DeTransform gets global = de_transform_mul(parent global, local). Translations
+ * compose in f64 (de_dvec3) and are never rounded to f32, so a 1 mm offset 100 km out keeps its
+ * precision; rotation and scale are f32 (SPEC §5.5; see de_transform_mul for the non-uniform scale
+ * rule). An entity without DeTransform stops the walk (as a descendant; at the top it is no
+ * root): neither it nor its subtree is propagated.
+ * Roots are split into fixed de_query_par_each ranges; a subtree is always handled by the range of
+ * its root, so the results are bit-identical for every worker count. Only + - * / and sqrt are
+ * used (no transcendental), so propagation obeys SPEC §5.7.
+ *   - Skip: an entity is recomputed only when its DeTransform or DeChildOf changed since the
+ *     system's last run, an ancestor was recomputed, or it has no DeGlobalTransform. Unchanged
+ *     subtrees are walked (one tick test per entity) but not recomputed or written.
+ *   - Missing DeGlobalTransform: an entity with DeTransform and no DeGlobalTransform gets one,
+ *     holding the computed world transform, through the range's command buffer, so it is there
+ *     after the PostUpdate sync point of the same run. Adding both components is not required.
+ *   - Systems that write DeTransform in PostUpdate should run before the propagation system
+ *     (de_system_desc.before = DE_TRANSFORM_PROPAGATE_SYSTEM); later writes are propagated on the
+ *     next run.
+ */
+
+/** The local transform of an entity (relative to its parent; to the world for a root). */
+typedef de_transform DeTransform;
+/** The world transform of an entity, written by transform propagation. */
+typedef de_transform DeGlobalTransform;
+/** The parent of an entity and its links in the parent's child list (DE_ENTITY_NULL at the ends).
+ */
+typedef struct DeChildOf {
+    de_entity parent;
+    de_entity next_sibling;
+    de_entity prev_sibling;
+} DeChildOf;
+/** The child list of an entity: first and last child (insertion order) and the count (>= 1). */
+typedef struct DeChildren {
+    de_entity first;
+    de_entity last;
+    u32 count;
+} DeChildren;
+
+/** Name of the built-in transform propagation system (DE_SCHEDULE_POST_UPDATE). Use it in
+ * de_system_desc.before / after. */
+#define DE_TRANSFORM_PROPAGATE_SYSTEM "de.transform_propagate"
+
+/** The component ids of the built-in components of a world. */
+typedef struct de_builtin_component_ids {
+    de_component transform;        /**< DeTransform */
+    de_component global_transform; /**< DeGlobalTransform */
+    de_component child_of;         /**< DeChildOf */
+    de_component children;         /**< DeChildren */
+} de_builtin_component_ids;
+
+/**
+ * The built-in component ids of `w`, registering the built-in components and adding the
+ * propagation system on the first call (see above). Later calls only read, and may run on any
+ * thread. On failure (NULL world, out of memory, a first call while a schedule runs, a type name
+ * or the system name taken with another layout) every id is invalid and the error context is set.
+ */
+DE_API de_builtin_component_ids de_builtin_components(de_world *w);
+
+/**
+ * Makes `parent` the parent of `child`: `child` is appended to the end of `parent`'s child list
+ * (DeChildOf added to the child, DeChildren to the parent as needed). DE_ENTITY_NULL detaches
+ * `child` (it loses DeChildOf and becomes a root). Setting the current parent again does nothing
+ * and keeps the child's place in the list. A parent that is `child` itself or one of its
+ * descendants would make a cycle: the call is rejected and changes nothing (a DE_ASSERT failure in
+ * Debug and Dev builds). Registers the built-ins on first use.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` NULL, `child` not alive, `parent` neither
+ *         DE_ENTITY_NULL nor alive, or a cycle) or DE_ERR_OUT_OF_MEMORY (nothing changed).
+ * Immediate: not allowed inside a running system (use de_cmd_set_parent).
+ */
+DE_API de_result de_entity_set_parent(de_world *w, de_entity child, de_entity parent);
+/** The parent of `e`, or DE_ENTITY_NULL (a root, not alive, or no built-ins). */
+DE_API de_entity de_entity_parent(const de_world *w, de_entity e);
+/** The first child of `parent` (insertion order), or DE_ENTITY_NULL. */
+DE_API de_entity de_entity_children_first(const de_world *w, de_entity parent);
+/** The next sibling of `child` in its parent's list, or DE_ENTITY_NULL after the last child.
+ * Iterate: for (c = de_entity_children_first(w, p); c.bits; c = de_entity_children_next(w, c)). */
+DE_API de_entity de_entity_children_next(const de_world *w, de_entity child);
+/** The number of children of `parent` (0 for none, not alive, or no built-ins). */
+DE_API u32 de_entity_children_count(const de_world *w, de_entity parent);
+/**
+ * Despawns `e` and all its descendants (post-order: the leftmost leaf first, each parent after
+ * its children) and removes `e` from its parent's list. A dead `e` is ignored. Without
+ * built-ins it is a plain despawn. Immediate: not allowed inside a running system (use
+ * de_cmd_despawn_recursive).
+ */
+DE_API void de_entity_despawn_recursive(de_world *w, de_entity e);
+/**
+ * Records de_entity_set_parent(child, parent) (DE_CMD_SET_PARENT). Both may be pending ids. At
+ * apply, a cycle, or a `child` or non-null `parent` that is not alive, drops the command (a
+ * warning in Debug and Dev; no assert: parallel systems may record conflicting changes). The
+ * built-ins must be registered (de_builtin_components); otherwise nothing is recorded and the
+ * error context is set.
+ */
+DE_API void de_cmd_set_parent(de_commands *c, de_entity child, de_entity parent);
+/** Records de_entity_despawn_recursive(e) (DE_CMD_DESPAWN_RECURSIVE). `e` may be pending (it then
+ * does not cancel the spawn, unlike de_cmd_despawn: the entity is spawned, then despawned). */
+DE_API void de_cmd_despawn_recursive(de_commands *c, de_entity e);
 
 DE_EXTERN_C_END
 #endif

@@ -2,6 +2,8 @@
 #include "ecs_internal.h"
 #include "system_internal.h" /* DENG-350 */
 
+#include "hierarchy_internal.h" /* DENG-351 */
+
 /* Compares archetype set keys by contents, so two sets with the same 64-bit hash never alias. */
 static bool set_key_eq(const void *a, const void *b, u32 key_size, void *user) {
     (void)key_size;
@@ -94,6 +96,9 @@ de_result de_world_create(const de_world_desc *desc, de_world **out) {
         return r;
     }
     DE_ASSERT(empty->index == ECS_EMPTY_ARCHETYPE);
+    /* DENG-351: the built-in components (DeTransform, DeGlobalTransform, DeChildOf, DeChildren)
+     * and the propagation system are registered on first use (de_builtin_components), not here:
+     * a world that never asks for them keeps component id 1 for its own first component. */
 
     *out = w;
     return DE_OK;
@@ -128,6 +133,7 @@ void de_world_destroy(de_world *w) {
     ecs_events_destroy(w);    /* DENG-348 */
     ecs_snapshot_destroy(w);  /* DENG-352 */
     ecs_checksum_destroy(w);  /* DENG-352 */
+    ecs_hier_destroy(w);      /* DENG-351: built-in ids and propagation counters */
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
         ecs_archetype *a = ecs_archetype_at(w, ai);
         de_array_free(&a->chunks); /* the chunk blocks go back with the pool */
