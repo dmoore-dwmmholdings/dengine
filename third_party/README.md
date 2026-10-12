@@ -71,7 +71,7 @@ Engine modules link these targets through `de_add_module(... LIBS de_tp_<name>)`
 | Library | Version | Licence | Target | Include | Notes |
 |---|---|---|---|---|---|
 | xxHash | 0.8.4 | BSD-2-Clause | `de_tp_xxhash` | `<xxhash.h>` | The library compiles `XXH_IMPLEMENTATION` once. For inlining, `#define XXH_INLINE_ALL` before the include. |
-| zstd | 1.5.7 | BSD-3-Clause | `de_tp_zstd` | `<zstd.h>` | common + compress + decompress. No legacy formats, no multithreading, no dictionary builder, no asm. Internal xxHash is namespaced `ZSTD_`. |
+| zstd | 1.5.7 | BSD-3-Clause | `de_tp_zstd`, `de_tp_zstd_dict` | `<zstd.h>`, `<zdict.h>` | common + compress + decompress. No legacy formats, no multithreading, no asm. Internal xxHash is namespaced `ZSTD_`. The dictionary builder (`lib/dictBuilder`) is the separate tools-only target `de_tp_zstd_dict` (DENG-211); the runtime never links it. |
 | tomlc17 | R261003 | MIT | `de_tp_tomlc17` | `<tomlc17.h>` | TOML parser. Its allocator hooks are process-global (`toml_set_option`). |
 | stb | 2026-08-02-2c980bb | MIT OR Unlicense | `de_tp_stb` | `<stb_image.h>`, `<de_stb_vorbis.h>` | `stb_image.h` and `stb_vorbis.c`, with one implementation TU each. |
 | SDL3 | 3.4.18 | Zlib | `de_tp_sdl3` | `<SDL3/SDL.h>` (only in `src/platform/sdl/`) | Built by SDL's own CMake from `sdl3/SDL3-3.4.18/` (`strip = 0`), static, without audio, GPU, renderer, camera, OpenGL, tray, tests and examples. Not built with `DE_HEADLESS`. |
