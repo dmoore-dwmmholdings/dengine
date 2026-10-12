@@ -34,6 +34,15 @@ typedef enum de__watch_raw {
     DE__WATCH_RAW_MOVED_TO,
     /** Events were lost: report the watched directory as MODIFIED. `rel` is ignored. */
     DE__WATCH_RAW_RESCAN,
+    /**
+     * A file created and still open for writing (inotify: IN_CREATE of a regular file, whose
+     * IN_CLOSE_WRITE follows). Merges as CREATED, but the path is held: it is not delivered
+     * until another raw change of it arrives (MODIFIED when the writer closes it, DELETED,
+     * MOVED_FROM, ...) and the debounce window passes after that, or until the hold limit
+     * (10 s) passes. A slow writer (an fsync longer than the window) then still merges with
+     * what follows, such as the rename of an atomic save (DENG-383).
+     */
+    DE__WATCH_RAW_CREATED_OPEN,
 } de__watch_raw;
 
 /** The parts of a watch the backends read. The rest is private to watch_common.c. */
@@ -64,6 +73,9 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
 
 /** Test hook: number of changes waiting in the pending table (matured or not). */
 u32 de__watch_pending_count(de_file_watch *w);
+
+/** Test hook: sets how long a path posted as CREATED_OPEN is held at most (default 10 s). */
+void de__watch_set_hold_limit(de_file_watch *w, u32 ms);
 
 /** The backend of `w` (for the backend's own test hooks). */
 de__watch_backend *de__watch_backend_of(de_file_watch *w);

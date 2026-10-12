@@ -18,6 +18,13 @@
  * removal twice, DENG-371) changes nothing, a MOVED_FROM is the move of a file created in this
  * window, and a MODIFIED makes it CREATED.
  *
+ * A path posted as CREATED_OPEN (a new file its writer still has open; inotify) is "held": poll
+ * skips it until another raw change of the path ends the hold (the writer's close, a removal,
+ * a rename) or WATCH_HOLD_LIMIT_MS passes. The debounce window counts from the last raw change
+ * as usual. Without the hold, a writer that keeps the file open longer than the window (an
+ * fsync under I/O load took 167 ms on CI) let the temporary of an atomic save be delivered as
+ * CREATED before its rename arrived (DENG-383).
+ *
  * Memory: the watch record and one record per pending path, from the watch's allocator. A poll
  * with nothing pending touches no allocator. More than WATCH_MAX_PENDING pending paths (a huge
  * burst nobody polls) clears the table and reports a rescan of the root instead.
@@ -40,6 +47,9 @@
 /* Recent MOVED_FROM cookies remembered for pairing. A rename's two halves arrive within
  * microseconds of each other, so a small ring is enough. */
 #define WATCH_MOVE_RING 256u
+/* Longest hold of a CREATED_OPEN path whose writer never closes it (a file kept open, or one
+ * created without write access, which reports no close). It is then delivered as CREATED. */
+#define WATCH_HOLD_LIMIT_MS 10000u
 
 typedef enum entry_state {
     ST_NONE,     /* nothing to report (merged away) */
@@ -61,6 +71,8 @@ typedef struct watch_entry {
     bool is_dir;
     bool prior_created; /* DELETED by a MOVED_FROM of a path CREATED in this window */
     bool transient;     /* NONE: created and gone again in this window (see the top) */
+    bool held;          /* CREATED_OPEN: the writer has not closed it yet (see the top) */
+    u64 held_ns;        /* when the hold started */
 } watch_entry;
 
 typedef struct move_rec {
@@ -86,6 +98,7 @@ struct de_file_watch {
     u32 move_next;
     bool rescan;
     u64 rescan_ns;
+    u64 hold_limit_ns; /* WATCH_HOLD_LIMIT_MS, or a test's value */
 
     de__watch_info info;
     char vdir[DE_FS_PATH_MAX]; /* normalised virtual path of the watched directory */
@@ -398,12 +411,18 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
     watch_entry *e = skip ? NULL : get_entry(w, rel, rel_len, now);
     if (e != NULL) {
         e->last_ns = now;
-        if (kind == DE__WATCH_RAW_CREATED || kind == DE__WATCH_RAW_MOVED_TO)
+        if (kind == DE__WATCH_RAW_CREATED || kind == DE__WATCH_RAW_CREATED_OPEN ||
+            kind == DE__WATCH_RAW_MOVED_TO)
             e->is_dir = is_dir;
         else
             e->is_dir = e->is_dir || is_dir;
+        /* Any other change of the path ends a hold: the writer closed it, or it went away. */
+        e->held = kind == DE__WATCH_RAW_CREATED_OPEN;
+        if (e->held)
+            e->held_ns = now;
         switch (kind) {
         case DE__WATCH_RAW_CREATED:
+        case DE__WATCH_RAW_CREATED_OPEN:
             apply_created(e);
             break;
         case DE__WATCH_RAW_MODIFIED:
@@ -430,6 +449,12 @@ u32 de__watch_pending_count(de_file_watch *w) {
     u32 n = w->count + (w->rescan ? 1u : 0u);
     de_mutex_unlock(&w->lock);
     return n;
+}
+
+void de__watch_set_hold_limit(de_file_watch *w, u32 ms) {
+    de_mutex_lock(&w->lock);
+    w->hold_limit_ns = (u64)ms * 1000000u;
+    de_mutex_unlock(&w->lock);
 }
 
 de__watch_backend *de__watch_backend_of(de_file_watch *w) {
@@ -724,6 +749,7 @@ de_result de_file_watch_create(const de_file_watch_desc *desc, de_file_watch **o
     w->fn = desc->fn;
     w->user = desc->user;
     w->debounce_ms = desc->debounce_ms;
+    w->hold_limit_ns = (u64)WATCH_HOLD_LIMIT_MS * 1000000u;
     /* Registered lazily (DENG-154 registry); registering again returns the same cvar. */
     w->debounce_cvar = register_debounce_cvar();
     de_error_clear(); /* a failed registration only means the default window */
@@ -795,7 +821,7 @@ u32 de_file_watch_poll(de_file_watch *w) {
     u32 kept = 0;
     for (u32 i = 0; i < w->count; ++i) {
         watch_entry *e = w->items[i];
-        if (now - e->last_ns >= window) {
+        if (now - e->last_ns >= window && (!e->held || now - e->held_ns >= w->hold_limit_ns)) {
             e->next = NULL;
             *tail = e;
             tail = &e->next;
