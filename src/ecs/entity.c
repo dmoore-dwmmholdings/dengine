@@ -6,6 +6,8 @@
  * on the free list. */
 #include "ecs_internal.h"
 
+#include "change_internal.h" /* DENG-347: a mutable get marks changed */
+
 ecs_record *ecs_entity_record(const de_world *w, de_entity e) {
     const u32 index = de_entity_index(e);
     const u32 gen = de_entity_generation(e);
@@ -111,8 +113,11 @@ static void *entity_component(const de_world *w, de_entity e, de_component c) {
 }
 
 void *de_entity_get(de_world *w, de_entity e, de_component c) {
-    /* DENG-347: a mutable get marks the row changed. */
-    return entity_component(w, e, c);
+    /* DENG-347: a mutable get marks the row changed (current change tick; tags have no ticks). */
+    void *data = entity_component(w, e, c);
+    if (data != NULL)
+        ecs_entity_mark_changed(w, e, c.id);
+    return data;
 }
 
 const void *de_entity_get_const(const de_world *w, de_entity e, de_component c) {

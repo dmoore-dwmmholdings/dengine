@@ -77,3 +77,10 @@ foreach(_de_ecs_test test_query test_qpar)
         target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-347: change detection. change.write_iter_marks runs de_query_par_each on task systems: tsan.
+de_add_test(NAME change SOURCES test_change.c LIBS de_ecs LABELS unit tsan TIMEOUT 120)
+if(TARGET test_change)
+    target_include_directories(test_change PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_change PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

@@ -140,7 +140,8 @@ DE_API void de_entity_despawn(de_world *w, de_entity e);
 DE_API bool de_entity_alive(const de_world *w, de_entity e);
 /**
  * Adds component `c` to `e` and returns its data: zeroed, or initialised by the type's construct
- * hook. If `e` already has `c`, nothing moves and the existing data is returned. Otherwise `e`
+ * hook. Its added and changed ticks are the current change tick. If `e` already has `c`, nothing
+ * moves and the existing data is returned and marked changed (not added). Otherwise `e`
  * moves to the archetype with `c` added (cached per archetype after the first move). For a tag
  * the result is a non-NULL placeholder that must not be written through. Like every pointer into
  * a table, the result is valid until the next structural change of the world.
@@ -171,12 +172,21 @@ DE_API de_result de_entity_spawn_with(de_world *w, const de_component *comps, u3
  * The data of component `c` of entity `e`, or NULL if `e` is not alive or has no `c`. For a tag
  * component the pointer is a non-NULL placeholder that must not be written through. The pointer
  * is valid until the next structural change of the world.
+ * A mutable get marks the component changed (DE_CHANGED), written or not; read through
+ * de_entity_get_const() to leave the change tick alone. Like a write, it must not run at the same
+ * time as another access to the same component of the same entity.
  */
 DE_API void *de_entity_get(de_world *w, de_entity e, de_component c); /* NULL if absent */
-/** Like de_entity_get(), read-only. */
+/** Like de_entity_get(), read-only. Does not mark the component changed. */
 DE_API const void *de_entity_get_const(const de_world *w, de_entity e, de_component c);
 /** true if `e` is alive and has component `c` (tags included). */
 DE_API bool de_entity_has(const de_world *w, de_entity e, de_component c);
+/**
+ * Marks component `c` of `e` changed: its changed tick becomes the world's current change tick,
+ * so DE_CHANGED filters report it once to every system on that system's next run (DENG-347).
+ * Does nothing if `e` is not alive, has no `c`, or `c` is a tag (tags have no change ticks).
+ * Allocates nothing. Thread rules: those of a write to that component.
+ */
 DE_API void de_entity_mark_changed(de_world *w, de_entity e, de_component c);
 
 /* Hierarchy (ChildOf / Children). Transform propagation is a built-in PostUpdate system. */
@@ -319,12 +329,26 @@ DE_API void de_world_update_events(de_world *w);
  * With ADDED / CHANGED filters a table chunk is delivered as its maximal runs of passing rows,
  * each still one contiguous slice.
  *
+ * Change detection (SPEC §7.1, DENG-347): every row of every data column stores an `added` and a
+ * `changed` tick (u32 counters, never time). Adding a component sets both to the world's current
+ * change tick. The component is marked changed by de_entity_mark_changed(), a mutable
+ * de_entity_get(), an add of a component the entity already has (also a deferred one), and by
+ * iteration: every row a query hands out is marked changed in each DE_WRITE and
+ * DE_OPTIONAL_WRITE column, whether the callback wrote it or not (conservative, as in Bevy).
+ * Read terms, de_entity_get_const() and tags never mark. Inside a system, DE_ADDED / DE_CHANGED
+ * pass the rows whose tick is newer than the system's last run and not newer than this run,
+ * compared modulo 2^32 (the schedule sets the window, DENG-350); ticks older than 2^30 are
+ * clamped, so a row untouched that long is never reported. Outside a system a query has no
+ * window yet, and ADDED / CHANGED pass every row (as on a system's first run).
+ *
  * Rules: the callback must not make structural changes (spawn, despawn, add, remove, register;
  * inside systems use commands) and must not destroy the query. Pointers in a chunk are valid
  * during the callback only.
  *
- * Threading: de_query_each() and de_query_count() only read the query and the world, so they may
- * run on many threads at once while nothing changes the world's structure. de_query_par_each()
+ * Threading: de_query_each() and de_query_count() only read the query and the world (apart from
+ * the changed ticks of the rows they hand out to write terms), so they may run on many threads at
+ * once while nothing changes the world's structure. de_query_par_each() marks each range's rows on
+ * the thread that runs the range. de_query_par_each()
  * writes per-query scratch: at most one par_each per query at a time. create and destroy are
  * single-threaded, like structural changes.
  */
@@ -489,8 +513,8 @@ DE_API void de_cmd_despawn(de_commands *c, de_entity e);
  * tag, a non-NULL placeholder that must not be written through, as de_entity_add() gives). Fill
  * it before the apply; the pointer stays valid until the buffer is applied. At apply the payload
  * is moved into the entity's row; if `e` already has `comp`, its old value is destructed and
- * replaced. Returns NULL and sets the error context if `c` is NULL, `comp` is not registered or
- * memory runs out; nothing is recorded then.
+ * replaced (and marked changed, not added). Returns NULL and sets the error context if `c` is NULL,
+ * `comp` is not registered or memory runs out; nothing is recorded then.
  */
 DE_API void *de_cmd_add(de_commands *c, de_entity e, de_component comp);
 /** Records a remove of component `comp` from `e` (real or pending). */

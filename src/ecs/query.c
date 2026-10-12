@@ -294,4 +294,5 @@ void ecs_query_set_change_window(de_world *w, de_query q, u32 last_run_tick, u32
         return;
     query->last_run_tick = last_run_tick;
     query->this_run_tick = this_run_tick;
+    query->change_window_set = true; /* DENG-347 */
 }

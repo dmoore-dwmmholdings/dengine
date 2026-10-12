@@ -7,11 +7,14 @@
  *
  * The "row added" path of a column is ecs_row_construct (table.c): the construct hook, or zero,
  * then ecs_row_init_ticks. Both ecs_entity_move (add) and ecs_entity_create (spawn_with) go
- * through it, once per new column, so DENG-347's tick semantics land in one place.
+ * through it, once per new column, so DENG-347's tick semantics land in one place. An add of a
+ * component the entity already has marks it changed instead (DENG-347, change.c).
  *
  * Immediate structural calls are not allowed while a schedule runs (systems use commands);
  * ECS_ASSERT_STRUCTURAL checks that in Debug and Dev. */
 #include "ecs_internal.h"
+
+#include "change_internal.h" /* DENG-347 */
 
 /* Component ids of a spawn_with set up to this size are copied on the stack. */
 #define SPAWN_WITH_STACK_IDS 64u
@@ -43,8 +46,12 @@ de_result ecs_entity_add(de_world *w, de_entity e, u32 component, void **out_dat
     ecs_archetype *src = ecs_archetype_at(w, rec->archetype);
     ecs_archetype *dst = NULL;
     DE_TRY(ecs_archetype_add_target(w, src, component, &dst));
+    /* DENG-347: an existing value is handed out for writing (DENG-349's deferred add replaces
+     * it), so it is marked changed; a new column gets its ticks in ecs_row_construct. */
     if (dst != src)
         DE_TRY(ecs_entity_move(w, e, dst)); /* constructs the new column (ecs_row_construct) */
+    else
+        ecs_entity_mark_changed(w, e, component);
     if (out_data != NULL)
         *out_data = record_data(w, rec, component);
     return DE_OK;
