@@ -328,12 +328,138 @@ DE_API void de_query_par_each(de_world *w, de_query q, u32 grain_rows, de_chunk_
 DE_API u32 de_query_count(de_world *w, de_query q);
 
 /* ---------- Commands (deferred structural changes) ---------- */
+/*
+ * Commands (SPEC §7.1, DENG-349). Code that may not change the world's structure right away (a
+ * running system, a parallel range, a hook) records spawn, despawn, add, remove and send-event
+ * commands into a command buffer. The buffers are applied at a sync point.
+ *
+ * Apply order is deterministic (SPEC §5.7 rule 5): first the main-thread buffer
+ * (de_world_commands), then every other buffer sorted by (system_order, range_index), the key it
+ * was acquired with (DENG-350 gives systems and query ranges their buffers). Inside a buffer,
+ * commands apply in record order. Thread ids, timing and the order in which buffers were acquired
+ * or filled never matter. Each command applies through the same code as the immediate API, so a
+ * sequence of commands gives the same world as the same immediate calls in apply order.
+ *
+ * Pending entities. de_cmd_spawn() cannot hand out a real id: real ids depend on the order of
+ * spawns and despawns, which is only known at apply. It returns a *pending* id: generation 0 (never
+ * a live entity) with the buffer slot and the spawn's index in that buffer in the low 32 bits.
+ * A pending id may be the target of later commands in any buffer of the same apply, and may be
+ * stored in a DE_FK_ENTITY field of a command payload (also inside nested structs and fixed
+ * arrays): apply allocates the real entity in apply order and replaces the pending id with it. A
+ * pending id is a placeholder: its bit pattern may differ between runs and must not be used for
+ * anything but these references. Immediate functions do not accept pending ids (asserted in Debug
+ * and Dev; de_entity_alive() returns false). After the apply, de_commands_resolve() gives the real
+ * id, until the next apply.
+ *
+ * Dropped commands. A command whose target is not alive when it applies (despawned earlier, or a
+ * pending id that is not spawned yet in apply order) is dropped, with a warning in Debug and Dev
+ * (log category `ecs`). A de_cmd_despawn() of a pending id cancels that spawn: the entity is never
+ * created, every command on it is dropped without a warning, and payload fields that refer to it
+ * become DE_ENTITY_NULL.
+ *
+ * Payloads. de_cmd_add() returns storage for the component inside the buffer; de_cmd_send_event()
+ * copies the event. Apply moves component payloads into the table (memcpy; components are
+ * trivially relocatable) and copies event payloads with de_event_send(). Payloads of commands
+ * that are dropped or never applied are destructed (destruct hook).
+ *
+ * Memory: a buffer keeps its pages, and the world its bookkeeping, after an apply, so recording
+ * and applying the same amount of commands again allocates nothing (steady state).
+ *
+ * Threading: one thread at a time records into one buffer. Different buffers may record on
+ * different threads at once, while nothing changes the world's structure. Apply is
+ * single-threaded and nothing may record while it runs.
+ */
 typedef struct de_commands de_commands;
-DE_API de_entity de_cmd_spawn(de_commands *c); /* reserved id, valid after apply */
+
+/** The kind of a recorded command (de_commands_iterate). DENG-351 appends hierarchy ops. */
+typedef enum de_command_op {
+    DE_CMD_SPAWN = 1,
+    DE_CMD_DESPAWN = 2,
+    DE_CMD_ADD = 3,
+    DE_CMD_REMOVE = 4,
+    DE_CMD_SEND_EVENT = 5
+} de_command_op;
+
+/** true if `e` is a pending id from de_cmd_spawn() (generation 0 and not DE_ENTITY_NULL). */
+static inline bool de_entity_is_pending(de_entity e) {
+    return (e.bits >> 32) == 0 && e.bits != 0;
+}
+
+/**
+ * Records a spawn of an entity with no components and returns its **pending** id (see above):
+ * the real id is allocated at apply, in apply order. Use the pending id as the target of later
+ * commands, or in DE_FK_ENTITY payload fields; de_commands_resolve() gives the real id after the
+ * apply. Returns DE_ENTITY_NULL (and sets the error context) if `c` is NULL, the buffer already
+ * has DE_CMD_MAX_SPAWNS spawns since its last apply, or memory runs out.
+ */
+DE_API de_entity de_cmd_spawn(de_commands *c); /* pending id; resolved at apply */
+/** Records a despawn of `e` (real or pending). A pending `e` cancels its spawn (see above). */
 DE_API void de_cmd_despawn(de_commands *c, de_entity e);
+/**
+ * Records an add of component `comp` to `e` (real or pending) and returns the component's
+ * payload storage inside the buffer: zeroed, or initialised by the type's construct hook (for a
+ * tag, a non-NULL placeholder that must not be written through, as de_entity_add() gives). Fill
+ * it before the apply; the pointer stays valid until the buffer is applied. At apply the payload
+ * is moved into the entity's row; if `e` already has `comp`, its old value is destructed and
+ * replaced. Returns NULL and sets the error context if `c` is NULL, `comp` is not registered or
+ * memory runs out; nothing is recorded then.
+ */
 DE_API void *de_cmd_add(de_commands *c, de_entity e, de_component comp);
+/** Records a remove of component `comp` from `e` (real or pending). */
 DE_API void de_cmd_remove(de_commands *c, de_entity e, de_component comp);
+/**
+ * Records a send of event `t` with a copy of `*payload` (the type's copy hook, or memcpy). At
+ * apply the event is sent with de_event_send(), so readers see deferred events in apply order.
+ * An invalid `t`, a NULL `payload` or out of memory records nothing and sets the error context.
+ */
 DE_API void de_cmd_send_event(de_commands *c, de_event_type t, const void *payload);
+
+/** Largest number of de_cmd_spawn() calls on one buffer between two applies (2^20). */
+#define DE_CMD_MAX_SPAWNS (1u << 20)
+
+/**
+ * The world's main-thread command buffer, for code outside systems. It is applied first by every
+ * apply (de_world_apply_commands, and the sync points of schedules, DENG-350). Created on first
+ * use; NULL (error context set) if `w` is NULL or memory runs out. Only the main thread records
+ * into it.
+ */
+DE_API de_commands *de_world_commands(de_world *w);
+/**
+ * Applies every recorded buffer of `w` (the main-thread buffer, then all others by
+ * (system_order, range_index)) and empties them. Single-threaded; not allowed while a schedule
+ * runs (asserted in Debug and Dev; schedules apply at their own sync points).
+ */
+DE_API void de_world_apply_commands(de_world *w);
+/**
+ * The real entity that pending id `pending` became at the last apply, or DE_ENTITY_NULL if it
+ * was cancelled, not applied (yet), or comes from an earlier apply. Valid until the next apply
+ * starts. A non-pending `pending` is returned unchanged.
+ */
+DE_API de_entity de_commands_resolve(const de_world *w, de_entity pending);
+
+/**
+ * One recorded command, as de_commands_iterate() shows it. `entity` is the target (the pending id
+ * for DE_CMD_SPAWN, DE_ENTITY_NULL for DE_CMD_SEND_EVENT). `payload` points into the buffer
+ * (`payload_size` bytes; NULL and 0 for commands without one) and is valid until the apply.
+ */
+typedef struct de_command {
+    de_command_op op;
+    u32 payload_size;
+    de_entity entity;
+    de_component component; /**< DE_CMD_ADD, DE_CMD_REMOVE */
+    de_event_type event;    /**< DE_CMD_SEND_EVENT */
+    const void *payload;
+} de_command;
+
+/** Called once per command, in record order. Return false to stop. */
+typedef bool (*de_command_visit_fn)(const de_command *cmd, void *user);
+/**
+ * Calls `fn` for each command recorded in `c` since its last apply, in record order (the order
+ * they will apply in). Read-only: the editor's undo/redo (S38) inspects buffers through it.
+ */
+DE_API void de_commands_iterate(const de_commands *c, de_command_visit_fn fn, void *user);
+/** Commands recorded in `c` since its last apply (0 for NULL). */
+DE_API u32 de_commands_count(const de_commands *c);
 
 /* ---------- Systems and schedules ---------- */
 typedef enum de_schedule {

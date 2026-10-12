@@ -20,3 +20,6 @@ target_sources(de_ecs PRIVATE resource.c event.c)
 
 # DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
 target_sources(de_ecs PRIVATE structural.c archetype_graph.c)
+
+# DENG-349: command buffers, pending entity ids and deterministic apply.
+target_sources(de_ecs PRIVATE commands_internal.h commands.c)

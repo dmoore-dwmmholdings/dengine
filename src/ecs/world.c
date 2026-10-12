@@ -64,7 +64,8 @@ de_result de_world_create(const de_world_desc *desc, de_world **out) {
         (r = de_hashmap_init(&w->component_by_type, &by_type)) != DE_OK ||
         (r = de_hashmap_init(&w->archetype_by_set, &by_set)) != DE_OK ||
         (r = ecs_resources_init(w)) != DE_OK || /* DENG-348 */
-        (r = ecs_events_init(w)) != DE_OK) {    /* DENG-348 */
+        (r = ecs_events_init(w)) != DE_OK ||    /* DENG-348 */
+        (r = ecs_commands_init(w)) != DE_OK) {  /* DENG-349 */
         de_world_destroy(w);
         return r;
     }
@@ -118,6 +119,7 @@ static void destruct_all(de_world *w) {
 void de_world_destroy(de_world *w) {
     if (w == NULL)
         return;
+    ecs_commands_destroy(w); /* DENG-349: unapplied payloads, before anything they refer to */
     destruct_all(w);
     ecs_resources_destroy(w); /* DENG-348: after the entities, which may refer to resources */
     ecs_events_destroy(w);    /* DENG-348 */

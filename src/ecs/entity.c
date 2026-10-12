@@ -96,6 +96,7 @@ bool de_entity_alive(const de_world *w, de_entity e) {
 static void *entity_component(const de_world *w, de_entity e, de_component c) {
     if (w == NULL)
         return NULL;
+    ECS_ASSERT_NOT_PENDING(e); /* DENG-349: pending ids are for commands only */
     const ecs_record *rec = ecs_entity_record(w, e);
     if (rec == NULL)
         return NULL;
@@ -121,6 +122,7 @@ const void *de_entity_get_const(const de_world *w, de_entity e, de_component c) 
 bool de_entity_has(const de_world *w, de_entity e, de_component c) {
     if (w == NULL)
         return false;
+    ECS_ASSERT_NOT_PENDING(e); /* DENG-349 */
     const ecs_record *rec = ecs_entity_record(w, e);
     return rec != NULL && ecs_archetype_has(ecs_archetype_at(w, rec->archetype), c.id);
 }
