@@ -8,13 +8,13 @@ Project documentation lives in the Trama space `DENG`. `docs/agents/DOCS.md` has
 
 | Item | Rule |
 |---|---|
-| `main` | Only completed sprints, merged with `--no-ff` and tagged `sxx-done`. |
-| Sprint branch | `sprint/<sxx>-<slug>`, cut from `main` at sprint start. The exact name is in the SPRINT PLAN (v2) in the epic description. Two sprint branches can be open at once, one per lane (LOOP.md §1.1). They never merge into each other; each gets the other's work through `main` (`Sync main into sprint/…` merges). |
-| Feature branch | `feature/<KEY>-<slug>`, cut from the sprint branch. One issue per branch. |
-| Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. `.worktrees/_alt/` is the integration checkout of lane Alt, not a worker worktree. |
+| `main` | Moves only when a sprint closes: fast-forward to the green `dev` commit the exit checks ran on, tagged `sxx-done` (LOOP.md §2.7). Nothing is committed to `main` directly. |
+| `dev` | The one integration branch. Every feature branch is cut from `dev` and merged back into it by the orchestrator. Tasks of several sprints run at once (LOOP.md §1.1). The `sprint/…` branches of S01–S04 are historical. |
+| Feature branch | `feature/<KEY>-<slug>`, cut from `dev`. One issue per branch. The worker pushes it to `origin` to run CI before review (WORKER.md Step 4). |
+| Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. |
 | Commits | Commit at the **end of each issue**. Subject: `<KEY>: <summary>`. End with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. |
 | Merges | Only the orchestrator merges, one at a time, and verifies after each merge. |
-| Never | Force-push, rewrite shared history, commit build output, or commit vendored SDKs that are not allowed (see §6). |
+| Never | Force-push a shared branch (`main`, `dev`), rewrite shared history, commit build output, or commit vendored SDKs that are not allowed (see §6). A worker may `--force-with-lease` its own feature branch after a rebase. |
 
 ## 2. Andare
 
@@ -25,7 +25,7 @@ Project documentation lives in the Trama space `DENG`. `docs/agents/DOCS.md` has
   - `agent-failed`: a worker failed once. The orchestrator retries once.
   - `needs-human`: escalated with `request_decision`. Agents leave it alone until a human answers.
   - `follow-up`: filed by the orchestrator from a worker's Follow-ups list.
-- Parallelism: tasks are linked with `blocked_by`. A task may start when all its blockers are Done. The wave number in the description and in the SPRINT PLAN only guide the order. **Owns paths** do not overlap within a wave.
+- Parallelism: tasks are linked with `blocked_by`, inside a sprint and across sprints. A task may start when all its blockers are Done and its **Owns paths** do not overlap a running task's (LOOP.md §2.3). The wave number in the description and in the SPRINT PLAN only guide the order.
 - Planning shorthand in issue descriptions: `Branch: feature/<KEY>-<slug>`. Here `<KEY>` means the issue's own key. Descriptions use real DENG keys. If you still meet an outline id (`T3`, `S05 T10`), the **Outline ids** list in that sprint's SPRINT PLAN (v2) (epic description) maps it to a key. Corrections that were first posted as comments have been folded into the descriptions; a later comment still wins over the description if they disagree.
 
 ## 3. Code (from SPEC §3.2, §4.2, §5.1)

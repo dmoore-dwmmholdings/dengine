@@ -2,27 +2,27 @@
 
 The orchestrator (`docs/agents/LOOP.md`) gives you **one** Andare issue, a **worktree** and a **feature branch**. You take the issue from `In Progress` to `In Review`: you build it, test it, commit it and report on it. The orchestrator merges your branch and sets the issue to Done.
 
-Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Sprint branch`, `Sprint epic`, `Parallel sprint`, and sometimes `Reason`.
+Your prompt gives: `KEY`, `Mode`, `Worktree`, `Feature branch`, `Base branch` (always `dev`, the integration branch), `Sprint epic`, and sometimes `Reason`.
 
 **Work only inside your worktree.** Use absolute paths. Do not `cd` into the main repo or into another worktree. Do not check out other branches.
 
 ---
 
 ## Step 1: Read and claim
-1. `get_issue <KEY>`. The `⚠ BLOCKED BY` banner lists every `blocked_by` link, also finished ones, so check each blocker's status. If a blocker is not `Done` or `Won't do`, stop and return `RESULT: failed` with the reason `blocked by <keys>`. Do not start.
+1. `get_issue <KEY>`. The `⚠ BLOCKED BY` banner lists every `blocked_by` link, also finished ones, so check each blocker's status. If a blocker is not `Done` or `Won't do`, stop and return `RESULT: blocked` (Step 5, blocked path) with `NEEDS: <keys>`. Do not start.
 2. Read the issue description in full. Then read:
    - the `## SPRINT PLAN (v2)` section of the epic description (`get_issue <EPIC>`),
    - **DENG-2** (decisions),
    - `docs/agents/CONVENTIONS.md` and `docs/agents/DOCS.md`,
    - the Trama pages that DOCS.md §5 lists for workers: `Architecture`, the `Module:` pages of the modules you change and call, the pages that reference your key or the epic, and the `Decision:` pages about your modules. They explain the code that earlier sprints merged into your base. If a page disagrees with the code, the code wins.
    - the SPEC.md sections and the `include/dengine/*.h` headers that the issue cites,
-   - the existing code in the module directories the issue touches. Earlier sprints are merged into your base. The exception is the `Parallel sprint` in your prompt: it runs at the same time in the other lane (LOOP.md §1.1) and its code is **not** in your base. Do not use its APIs and do not edit its files. If your issue needs it, stop and report `RESULT: failed` with that reason.
+   - the existing code in the module directories the issue touches. Your base is `dev`: it holds every task that is Done, from any sprint. Tasks of other sprints run at the same time (LOOP.md §1.1), and their code is **not** in your base until they are Done. Do not use the APIs or edit the files of a task that is not Done. If your task needs one of them and no `blocked_by` link says so, stop before you build and return `RESULT: blocked` (Step 5, blocked path) with the key of that task, or the API you looked for.
 3. Set the status to **In Progress**: `set_issue_status <KEY> "In Progress"`. Use `update_issue` with `assignee: "this agent"` if the issue has no assignee.
 4. **Comment where you are building.** Post this comment before you write any code:
 
 ```
 🚧 **Started** (<mode>)
-- Branch: `feature/<KEY>-<slug>` (from `sprint/<…>` @ <short sha of base>)
+- Branch: `feature/<KEY>-<slug>` (from `dev` @ <short sha of base>)
 - Worktree: `.worktrees/<KEY>`
 - Plan:
   - <3–8 bullets: files to create or change, approach, tests>
@@ -48,10 +48,9 @@ Run these in your worktree. The preset names come from `docs/building.md` once S
 4. The cross-compile presets that apply to your code, if the host has their prerequisites (see the **Verification matrix** in CONVENTIONS.md).
 5. The issue's acceptance criteria: check every box. If a criterion cannot be checked on this host, mark it `⏳ needs-hw` and say what has to run, and where.
 
-Then rebase onto the latest sprint branch and verify again:
+Then rebase onto the latest `dev` and verify again:
 ```
-git fetch . sprint/<…>:sprint/<…> 2>/dev/null || true   # sprint branch is local; usually a no-op
-git rebase sprint/<…>
+git rebase dev        # dev is a local branch of the main repo; your worktree sees it
 <rebuild + ctest>
 ```
 If the rebase has conflicts: resolve the trivial ones (append-only lists). Otherwise follow the fail path in Step 5.
@@ -68,7 +67,14 @@ If the rebase has conflicts: resolve the trivial ones (append-only lists). Other
 Refs: <KEY>, epic <EPIC>
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ```
-2. Do not push. Do not merge. The orchestrator does both.
+2. **Push and get CI green before you report.** CI runs the platforms the host cannot (MSVC `cl`, GCC, Linux and Windows, the sanitizers). A red job found after the merge costs a whole fix task, so find it here.
+   - From your worktree directory (so the command starts with `git push`): `git push -u origin feature/<KEY>-<slug>`. After a rebase use `git push --force-with-lease origin feature/<KEY>-<slug>`. Push only your own feature branch.
+   - Start the three workflows on it: `gh workflow run CI --ref feature/<KEY>-<slug>`, the same for `Sanitizers` and `Checks`.
+   - Find the run ids with `gh run list --branch feature/<KEY>-<slug> --limit 3`, then wait with `gh run watch <id> --exit-status` (or poll `gh run list`). Do not sleep in a loop without a bound: if CI has not finished after 45 minutes, report it as pending.
+   - On a red job: read `gh run view <id> --log-failed`, fix the cause in your branch, commit, push, and run CI again. Repeat until green.
+   - A job that is also red on `dev` (check `gh run list --branch dev --limit 3`) and that your change does not touch is **not yours**: do not fix it in your branch. Name the `dev` run in your report.
+   - If a push or `gh workflow run` is denied by a permission check, do not retry it or work around it. Report CI as `not-run` with the reason.
+   - Do not merge. The orchestrator merges into `dev`.
 3. **Attach the completion comment** to the issue:
 
 ```
@@ -87,6 +93,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 **Tests**
 - <list of test names> → <passed>/<total> on `<preset>`
 - cross-compile: <preset → ok | skipped (missing prerequisite)>
+- CI on <short sha>: CI <run URL> <green|red>, Sanitizers <run URL> <…>, Checks <run URL> <…>; red jobs that `dev` also has: <none | job → dev run URL>
 
 **Acceptance criteria**
 - [x] … 
@@ -116,7 +123,20 @@ COMMIT: <full sha>
 TESTS: <passed>/<total>
 NEEDS_HW: <yes|no>
 DOCS: <Trama page titles you created or updated, separated by " | ", or "none">
+CI: <green | red-preexisting (dev run URL) | pending | not-run: reason>
 NOTES: <one line, or "none". If DOCS is none but you changed code, say why here.>
+```
+
+**Blocked path.** Use it when your task needs code from a task that is not Done yet (Step 1). This is not a failure.
+1. Commit useful partial work as `<KEY>: WIP: <what>`, if there is any.
+2. Comment `⏸ **Blocked**: needs <key or API>`, and say what you looked for and where.
+3. Set the status to **To Do**.
+4. Return:
+```
+RESULT: blocked
+KEY: <KEY>
+BRANCH: feature/<KEY>-<slug>
+NEEDS: <issue keys, or the API / file names if you do not know the key>
 ```
 
 **Fail path.** Use it when you cannot finish: the work is impossible on this host and there is nothing useful to commit, a blocker is missing, or you hit an unresolvable conflict. Then:
@@ -133,8 +153,8 @@ REASON: <one line>
 
 ## Never
 - Change other issues' statuses. You may comment on related issues.
-- Edit files outside your worktree, or check out or modify `main` or the sprint branch.
-- Push, force-push, or rewrite history that you did not create in this issue.
+- Edit files outside your worktree, or check out or modify `main` or `dev`.
+- Push anything but your own feature branch. Force-push only your own feature branch, and only with `--force-with-lease`. Never rewrite history that you did not create in this issue.
 - Install licensed SDKs (Windows SDK, Steamworks), or accept licenses for the user.
 - Publish a Trama page, or edit a page your issue does not own (DOCS.md §3). Comment on it instead.
 - Weaken a test, or skip a check, to get to green. If a check is wrong, fix the check and say so in the report.
