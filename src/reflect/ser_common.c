@@ -94,7 +94,11 @@ de_result de__ser_out_flush(de__ser_out *o) {
 
 static void path_append(de__ser_path *p, const char *s, size_t n) {
     if (p->len + n + 1 > DE__SER_PATH_CAP) {
-        /* Cut: keep the start and mark it. Restoring an earlier length still works. */
+        /* Cut: keep the start and mark it. Restoring an earlier length still works. When
+         * len >= CAP - 1 the buffer is already full. The early return also bounds `room`, so GCC
+         * can see that the copy of room - 3 < n bytes stays inside `s` (-Warray-bounds). */
+        if (p->len >= DE__SER_PATH_CAP - 1)
+            return;
         size_t room = DE__SER_PATH_CAP - 1 - p->len;
         if (room > 3) {
             memcpy(p->buf + p->len, s, room - 3);

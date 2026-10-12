@@ -313,17 +313,17 @@ static bool same_f64(f64 a, f64 b) {
  * payload aside); returns the text. */
 static char *check_floats(text_fx *f, de_type_id t, const TFloats *in) {
     char *text = to_text(f->r, t, in, NULL);
-    if (text == NULL) {
-        FAIL("serialize failed");
-        return NULL;
-    }
+    if (text == NULL)
+        FAIL("serialize failed"); /* _Noreturn: a return after it is C4702 on MSVC */
     TFloats out;
     memset(&out, 0, sizeof out);
     EXPECT_EQ(from_text(f->r, t, &out, NULL, text), DE_OK);
     for (int i = 0; i < 64; ++i) {
         if (!same_f32(in->f[i], out.f[i])) {
-            printf("f32 %d: %.9g (0x%08x) came back as %.9g\n", i, (double)in->f[i],
-                   (unsigned)*(const u32 *)(const void *)&in->f[i], (double)out.f[i]);
+            u32 bits;
+            memcpy(&bits, &in->f[i], 4); /* not a pointer cast: GCC -Wstrict-aliasing */
+            printf("f32 %d: %.9g (0x%08x) came back as %.9g\n", i, (double)in->f[i], (unsigned)bits,
+                   (double)out.f[i]);
             FAIL("f32 did not round-trip");
         }
         if (!same_f64(in->d[i], out.d[i])) {

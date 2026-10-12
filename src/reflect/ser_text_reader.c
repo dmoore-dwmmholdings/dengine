@@ -825,8 +825,9 @@ de_result de_deserialize_object(const de_type_registry *r, de_type_id type, void
     switch (opt->format) {
     case DE_SER_TEXT: {
         const de_allocator *a = de_heap_allocator();
-        char *text;
-        size_t len, cap;
+        /* Zeroed: DE_TRY cannot show GCC that read_all's failure paths return != DE_OK. */
+        char *text = NULL;
+        size_t len = 0, cap = 0;
         DE_TRY(read_all(a, rd, &text, &len, &cap));
         toml_result_t res = de__toml_parse(a, text, (int)len);
         de_result out = res.ok ? de__ser_text_read_table(r, type, obj, opt, &res.toptab, a, "text")
