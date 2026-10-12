@@ -2,6 +2,9 @@
 # macOS, and TSan on Linux GCC. The presets (ci-*) set DE_SANITIZE; their test presets set
 # ASAN_/UBSAN_/TSAN_OPTIONS, so `ctest --preset ci-linux-asan` behaves the same locally
 # (docs/ci.md).
+#
+# Two tiers, as in ci.yml: a run on a feature/** branch is quick (the two Linux Clang jobs), every
+# other run is full; `gh workflow run Sanitizers -f tier=full` forces the full set.
 name: Sanitizers
 
 on:
@@ -9,6 +12,12 @@ on:
     branches: [main, dev, "sprint/**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tier:
+        description: "auto (quick on feature/**, full elsewhere), quick or full"
+        type: choice
+        options: [auto, quick, full]
+        default: auto
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,21 +27,51 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: plan (${{ inputs.tier || 'auto' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        shell: bash
+        env:
+          TIER: ${{ inputs.tier || 'auto' }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${TIER}" = auto ]; then
+            case "${REF}" in refs/heads/feature/*) TIER=quick ;; *) TIER=full ;; esac
+          fi
+          # One job per line; quick: true marks the quick tier. Workers run ci-macos-asan on the
+          # host before they push, so the quick tier keeps the two Linux Clang jobs.
+          # macOS ASan+UBSan: Apple Clang ASan alone missed UB in vendored code (DENG-356).
+          # GCC TSan: GCC rejects some atomics under TSan (-Wtsan, an error with -Werror), which
+          # Clang accepts; this job keeps platform/de_atomic.h building with GCC TSan (DENG-357).
+          jobs=$(cat <<'EOF'
+          { "name": "linux clang ASan+UBSan", "os": "ubuntu-24.04", "compiler": "clang", "preset": "ci-linux-asan", "flag": "-fsanitize=address,undefined", "quick": true }
+          { "name": "linux clang TSan", "os": "ubuntu-24.04", "compiler": "clang", "preset": "ci-linux-tsan", "flag": "-fsanitize=thread", "quick": true }
+          { "name": "macos apple-clang ASan+UBSan", "os": "macos-14", "compiler": "apple-clang", "preset": "ci-macos-asan", "flag": "-fsanitize=address,undefined" }
+          { "name": "linux gcc TSan", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "ci-linux-gcc-tsan", "flag": "-fsanitize=thread" }
+          EOF
+          )
+          if [ "${TIER}" = quick ]; then
+            matrix=$(jq -cs '{include: [.[] | select(.quick)]}' <<<"${jobs}")
+          else
+            matrix=$(jq -cs '{include: .}' <<<"${jobs}")
+          fi
+          echo "tier: ${TIER}"
+          jq . <<<"${matrix}"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
   sanitize:
     name: ${{ matrix.name }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { name: linux clang ASan+UBSan, os: ubuntu-24.04, compiler: clang, preset: ci-linux-asan, flag: "-fsanitize=address,undefined" }
-          - { name: linux clang TSan, os: ubuntu-24.04, compiler: clang, preset: ci-linux-tsan, flag: "-fsanitize=thread" }
-          # ASan+UBSan on macOS too: Apple Clang ASan alone missed UB in vendored code (DENG-356).
-          - { name: macos apple-clang ASan+UBSan, os: macos-14, compiler: apple-clang, preset: ci-macos-asan, flag: "-fsanitize=address,undefined" }
-          # GCC rejects some atomics under TSan (-Wtsan, an error with -Werror), which Clang
-          # accepts. This job keeps platform/de_atomic.h building with GCC TSan (DENG-357).
-          - { name: linux gcc TSan, os: ubuntu-24.04, compiler: gcc, preset: ci-linux-gcc-tsan, flag: "-fsanitize=thread" }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       PRESET: ${{ matrix.preset }}
       # The same values as the ci-* test presets; set here too so they show in the job log.

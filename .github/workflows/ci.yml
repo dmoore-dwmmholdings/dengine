@@ -3,6 +3,10 @@
 #   cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>
 # (docs/ci.md). GPU/golden jobs come in S10; sanitizers are in sanitizers.yml, repository checks
 # in checks.yml.
+#
+# Two tiers (docs/ci.md): `full` runs every job; `quick` runs the jobs marked quick below. A run
+# on a feature/** branch is quick, everything else is full; `gh workflow run CI -f tier=full`
+# forces the full matrix on any branch.
 name: CI
 
 on:
@@ -10,6 +14,12 @@ on:
     branches: [main, dev, "sprint/**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tier:
+        description: "auto (quick on feature/**, full elsewhere), quick or full"
+        type: choice
+        options: [auto, quick, full]
+        default: auto
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,35 +29,66 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: plan (${{ inputs.tier || 'auto' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        shell: bash
+        env:
+          TIER: ${{ inputs.tier || 'auto' }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${TIER}" = auto ]; then
+            case "${REF}" in refs/heads/feature/*) TIER=quick ;; *) TIER=full ;; esac
+          fi
+          # One job per line. quick: true marks the jobs of the quick tier. They are the ones
+          # that caught most branch failures: MSVC warnings (C4127, C4702, C4389, C4200), GCC
+          # flow warnings that only fire optimized (-Wmaybe-uninitialized, -Wformat-truncation),
+          # and the build without the GPU and window modules.
+          #
+          # Windows x64: clang-cl is the primary compiler, MSVC must stay green (SPEC §2, §3.2).
+          # With a compiler launcher set, Debug and Dev use /Z7 (cmake/DeBuildTypes.cmake), so
+          # sccache caches cl Debug builds too. Linux x64: Clang primary, GCC for portability;
+          # GCC Dev is optimized with asserts on, so its flow-based warnings fire there and not in
+          # Debug (DENG-356). macOS arm64: Apple Clang. Headless server builds: DE_HEADLESS=ON
+          # (SPEC §4.2).
+          jobs=$(cat <<'EOF'
+          { "name": "windows clang-cl Debug", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-debug" }
+          { "name": "windows clang-cl Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-release" }
+          { "name": "windows msvc Debug", "os": "windows-2022", "compiler": "msvc", "preset": "windows-msvc-debug", "quick": true }
+          { "name": "windows msvc Release", "os": "windows-2022", "compiler": "msvc", "preset": "windows-msvc-release" }
+          { "name": "linux clang Debug", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-debug" }
+          { "name": "linux clang Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-release" }
+          { "name": "linux gcc Debug", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-debug" }
+          { "name": "linux gcc Dev", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-dev", "quick": true }
+          { "name": "linux gcc Release", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-release" }
+          { "name": "macos apple-clang Debug", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-debug" }
+          { "name": "macos apple-clang Release", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-release" }
+          { "name": "headless linux Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-headless-release", "quick": true }
+          { "name": "headless windows Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-headless-release" }
+          EOF
+          )
+          if [ "${TIER}" = quick ]; then
+            matrix=$(jq -cs '{include: [.[] | select(.quick)]}' <<<"${jobs}")
+          else
+            matrix=$(jq -cs '{include: .}' <<<"${jobs}")
+          fi
+          echo "tier: ${TIER}"
+          jq . <<<"${matrix}"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: ${{ matrix.name }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Windows x64: clang-cl is the primary compiler, MSVC must stay green (SPEC §2, §3.2).
-          - { name: windows clang-cl Debug, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug }
-          - { name: windows clang-cl Release, os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-release }
-          # With a compiler launcher set, Debug and Dev use /Z7 (cmake/DeBuildTypes.cmake), so
-          # sccache caches cl Debug builds too.
-          - { name: windows msvc Debug, os: windows-2022, compiler: msvc, preset: windows-msvc-debug }
-          - { name: windows msvc Release, os: windows-2022, compiler: msvc, preset: windows-msvc-release }
-          # Linux x64: Clang primary, GCC for portability.
-          - { name: linux clang Debug, os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug }
-          - { name: linux clang Release, os: ubuntu-24.04, compiler: clang, preset: linux-clang-release }
-          - { name: linux gcc Debug, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-debug }
-          # Dev is optimized with asserts on: GCC's flow-based warnings (-Wformat-truncation,
-          # -Wstringop-*) fire here and not in Debug (DENG-356).
-          - { name: linux gcc Dev, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-dev }
-          - { name: linux gcc Release, os: ubuntu-24.04, compiler: gcc, preset: linux-gcc-release }
-          # macOS arm64: Apple Clang.
-          - { name: macos apple-clang Debug, os: macos-14, compiler: apple-clang, preset: macos-debug }
-          - { name: macos apple-clang Release, os: macos-14, compiler: apple-clang, preset: macos-release }
-          # Headless server builds (DE_HEADLESS=ON, SPEC §4.2).
-          - { name: headless linux Release, os: ubuntu-24.04, compiler: clang, preset: linux-headless-release }
-          - { name: headless windows Release, os: windows-2022, compiler: clang-cl, preset: windows-headless-release }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       PRESET: ${{ matrix.preset }}
     steps:
