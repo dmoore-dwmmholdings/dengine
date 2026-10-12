@@ -45,12 +45,27 @@
 /** Initial ring capacity when de__deque_init gets 0. */
 #define DE__DEQUE_DEFAULT_CAPACITY 1024u
 
-/** One ring. `slots` has mask + 1 entries; index i lives in slots[i & mask]. */
+/**
+ * One ring: this header, then mask + 1 slots (de_atomic_ptr) in the same allocation. Index i
+ * lives in de__ring_slots(r)[i & mask]. The slots are not a flexible array member because MSVC
+ * cl reports one as C4200 ("nonstandard extension") at /W4.
+ */
 typedef struct de__deque_ring {
     struct de__deque_ring *retired_next; /* owner only: the retired list */
     u64 mask;
-    de_atomic_ptr slots[];
 } de__deque_ring;
+
+/* The first slot starts right after the header: it must be aligned there, and the allocation
+ * (aligned for the header) must be aligned enough for it. */
+_Static_assert(sizeof(de__deque_ring) % DE_ALIGNOF(de_atomic_ptr) == 0,
+               "deque ring header size must keep the slots aligned");
+_Static_assert(DE_ALIGNOF(de_atomic_ptr) <= DE_ALIGNOF(de__deque_ring),
+               "deque ring alignment must cover the slot alignment");
+
+/** The slot array of `r`. */
+static inline de_atomic_ptr *de__ring_slots(de__deque_ring *r) {
+    return (de_atomic_ptr *)(r + 1);
+}
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(push)
