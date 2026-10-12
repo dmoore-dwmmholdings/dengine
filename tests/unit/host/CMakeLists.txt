@@ -189,3 +189,55 @@ if(DE_BUILD_TESTS AND DE_GAME_DYLIB AND NOT DE_BUILD_SHARED)
         add_dependencies(test_hot_reload ${DE_HOST_RELOAD_GAMES})
     endif()
 endif()
+
+# DENG-97: the zero-alloc frame test (SPEC §5.3). test_zero_alloc_frames.c runs the fixture game
+# fixtures/alloc_game.c headless through the host internals for 1060 frames and checks with the
+# alloc guard (de_test_support, DENG-155) that the last 1000 allocate nothing. Label `alloc-guard`.
+# `zero_alloc_selftest` is the same with ALLOC_GUARD_SELFTEST: the fixture makes one DE_ALLOC per
+# frame, so its test must fail (WILL_FAIL), and zero_alloc_selftest_names_tag checks that the
+# failure names the allocation's memory tag. The CI headless and sanitizer jobs run every CTest
+# entry, these included.
+foreach(_de_za zero_alloc zero_alloc_selftest)
+    de_add_test(NAME ${_de_za}
+        SOURCES test_zero_alloc_frames.c fixtures/alloc_game.c
+        LIBS de_host de_test_support LABELS unit alloc-guard TIMEOUT 300)
+    if(TARGET test_${_de_za})
+        target_include_directories(test_${_de_za} PRIVATE "${DE_ROOT_DIR}/src"
+                                   "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        target_compile_definitions(test_${_de_za} PRIVATE
+            DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+            DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_${_de_za}_tmp")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_${_de_za}_tmp")
+    endif()
+endforeach()
+if(TARGET test_zero_alloc_selftest)
+    target_compile_definitions(test_zero_alloc_selftest PRIVATE ALLOC_GUARD_SELFTEST=1)
+    if(CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        # One entry for the whole executable (no discovery in a cross build).
+        set_tests_properties(zero_alloc_selftest PROPERTIES WILL_FAIL TRUE)
+    else()
+        # Discovered entries are added at CTest time from the file that de_add_test's include
+        # script names in `_de_tests` (same pattern as loop_timing above): mark each WILL_FAIL.
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_zero_alloc_selftest_will_fail.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_za_adds REGEX "^add_test\\(")
+    foreach(_de_line IN LISTS _de_za_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES WILL_FAIL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+        set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                     "${CMAKE_CURRENT_BINARY_DIR}/test_zero_alloc_selftest_will_fail.cmake")
+        # WILL_FAIL passes on any failure; this entry checks that it is the guard's failure,
+        # with the tag name (exit code 1 from the runner, the site line, the FAIL line).
+        add_test(NAME zero_alloc_selftest_names_tag COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:test_zero_alloc_selftest>"
+            -DEXPECT_EXIT=1
+            "-DEXPECT=engine allocation, 64 bytes, tag [0-9]+ .alloc_game_selftest.|alloc guard: heap allocation in a guarded region"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/check_run.cmake")
+        set_tests_properties(zero_alloc_selftest_names_tag PROPERTIES
+            LABELS "unit;alloc-guard;host" TIMEOUT 300)
+    endif()
+endif()
