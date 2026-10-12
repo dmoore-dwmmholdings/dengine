@@ -50,18 +50,6 @@
 #define BUNDLE_FORK_TESTS 1
 #endif
 
-/* ThreadSanitizer builds (see the fork tests). */
-#if defined(__SANITIZE_THREAD__)
-#define BUNDLE_TSAN 1
-#elif defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-#define BUNDLE_TSAN 1
-#endif
-#endif
-#ifndef BUNDLE_TSAN
-#define BUNDLE_TSAN 0
-#endif
-
 #ifndef DE_BUNDLE_TEST_TMP_DIR
 #error "DE_BUNDLE_TEST_TMP_DIR must be defined by tests/unit/crash/CMakeLists.txt"
 #endif
@@ -459,20 +447,6 @@ static void guard_end_handler(const de_crash_context *ctx, void *user) {
     de_crash_write(ctx, "\n", 1);
 }
 
-/* Linux TSan: a multi-threaded process does not die from the platform handler's re-raise (the
- * runtime defers the raise and the process hangs after the report is complete). Under TSan the
- * fork children therefore end with this exit code from a last chained handler, after the report
- * and the bundle are written; every file is still checked. */
-#define CRASH_EXIT_TSAN 77
-
-#if BUNDLE_TSAN && !defined(_WIN32)
-static void tsan_exit_handler(const de_crash_context *ctx, void *user) {
-    (void)ctx;
-    (void)user;
-    _exit(CRASH_EXIT_TSAN);
-}
-#endif
-
 static void game_update(de_system_ctx *ctx) {
     (void)ctx;
     int run = g_game.update_runs++;
@@ -507,9 +481,6 @@ static de_result game_init(de_engine *e) {
     DE_TRY(de_command_exec("test.bundle.level 7"));
     if (g_game.guard)
         DE_TRY(de_crash_add_handler(guard_end_handler, NULL)); /* after the bundle's handler */
-#if BUNDLE_TSAN && !defined(_WIN32)
-    DE_TRY(de_crash_add_handler(tsan_exit_handler, NULL)); /* the last one */
-#endif
     return DE_OK;
 }
 
@@ -698,10 +669,8 @@ static int list_reports(const char *dir, char names[][128], int cap) {
     return n;
 }
 
-/* The child died from the SIGSEGV (or, under TSan, left through tsan_exit_handler). */
+/* The child died from the SIGSEGV, also under TSan (DENG-384). */
 static bool child_crashed(int status) {
-    if (BUNDLE_TSAN && WIFEXITED(status) && WEXITSTATUS(status) == CRASH_EXIT_TSAN)
-        return true;
     return WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV;
 }
 

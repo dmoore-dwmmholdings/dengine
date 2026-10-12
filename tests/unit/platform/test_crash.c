@@ -32,6 +32,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <stdatomic.h>
+#include <time.h>
+
 #include "de_alloc_guard.h"
 #define DE__CRASH_FORK_TESTS 1
 #endif
@@ -503,6 +506,77 @@ TEST(crash, panic_report) {
     EXPECT_TRUE(strstr(r, "panic_location: ") != NULL);
     EXPECT_TRUE(strstr(r, "child_panic") != NULL);
     EXPECT_GE(count_backtrace_frames(r), 3);
+    crash_dir_remove(&d);
+}
+
+/* Multi-threaded children (DENG-384): worker threads are running (sleeping in short naps) when
+ * the main thread crashes, as in a running engine. The process must still end with the original
+ * signal; under Linux TSan it used to stay alive while its huge core was piped to
+ * systemd-coredump. */
+#define MT_WORKERS 3
+static atomic_int g_mt_started;
+static atomic_int g_mt_stop; /* never set: the workers run until the process dies */
+
+static i32 mt_worker(void *user) {
+    (void)user;
+    atomic_fetch_add(&g_mt_started, 1);
+    while (!atomic_load(&g_mt_stop)) {
+        struct timespec ts = {0, 1000 * 1000};
+        (void)nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+static void mt_start_workers(const char *dir) {
+    if (de_crash_install(dir, NULL, NULL) != DE_OK)
+        _exit(2);
+    atomic_store(&g_mt_started, 0);
+    for (int i = 0; i < MT_WORKERS; i++) {
+        de_thread *t = NULL;
+        if (de_thread_create(mt_worker, NULL, "crash-mt", DE_THREAD_NORMAL, 0, &t) != DE_OK)
+            _exit(3);
+        /* never joined: the crash ends the process */
+    }
+    while (atomic_load(&g_mt_started) < MT_WORKERS) {
+        struct timespec ts = {0, 1000 * 1000};
+        (void)nanosleep(&ts, NULL);
+    }
+}
+
+static void child_segv_mt(const char *dir) {
+    mt_start_workers(dir);
+    crash_null();
+}
+
+static void child_panic_mt(const char *dir) {
+    mt_start_workers(dir);
+    DE_PANIC("mt boom");
+}
+
+/* One report with `reason`, and the process ended with `sig`. */
+static void expect_mt_report(const crash_dir *d, int status, int sig, const char *reason) {
+    expect_signal(status, sig);
+    char path[1024];
+    int count = 0;
+    ASSERT_TRUE(find_report(d, path, sizeof path, &count));
+    EXPECT_EQ(count, 1);
+    const char *r = read_file(path);
+    ASSERT_TRUE(r != NULL);
+    EXPECT_TRUE(strstr(r, reason) != NULL);
+    EXPECT_TRUE(strstr(r, "end of core report") != NULL);
+}
+
+TEST(crash, segv_multithreaded) {
+    crash_dir d;
+    crash_dir_make(&d);
+    expect_mt_report(&d, run_child(child_segv_mt, d.path), SIGSEGV, "reason: SIGSEGV");
+    crash_dir_remove(&d);
+}
+
+TEST(crash, panic_multithreaded) {
+    crash_dir d;
+    crash_dir_make(&d);
+    expect_mt_report(&d, run_child(child_panic_mt, d.path), SIGABRT, "panic: mt boom\n");
     crash_dir_remove(&d);
 }
 
