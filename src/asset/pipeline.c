@@ -9,6 +9,7 @@
 
 #include "asset/asset_internal.h"
 #include "asset/cook_stage_internal.h" /* DENG-209 */
+#include "asset/hot_reload_internal.h" /* DENG-214 */
 #include "asset/backend_internal.h"
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
@@ -214,6 +215,9 @@ void de__pipeline_job_fail(de__pjob *job, de_result code, const char *fmt, ...) 
 
 void de__pipeline_progress(de__pjob *job, u64 bytes_done, u64 bytes_total) {
     de__pipeline *pl = job->pl;
+    /* DENG-214: a reload job reports nothing; its READY slot is not loading. */
+    if (job->reload)
+        return;
     /* Under the lock: once cancel (which sets `cancelled` under it) returns, nothing more is
      * reported for this submission, even if the slot is submitted again at once. */
     de_mutex_lock(&pl->lock);
@@ -373,6 +377,8 @@ static void job_unload(de__pipeline *pl, de__pjob *job) {
 static void job_free(de__pipeline *pl, de__pjob *job) {
     de_asset_system *s = pl->s;
     DE_ASSERT(job->object == NULL);
+    if (job->reload)
+        de__asset_reload_job_gone(s, job); /* DENG-214 */
     job_table_remove(pl, job);
     wait_unlink(pl, job);
     if (job->all_prev != NULL)
@@ -395,7 +401,9 @@ static void job_free(de__pipeline *pl, de__pjob *job) {
         DE_FREE(pl->alloc, job->deps, sizeof(de_asset_id) * job->dep_capacity);
     if (job->span_open)
         pl->source.close(pl->source.user, &job->span);
-    de__pack_stage_free(job); /* DENG-212: the run table and the pack reference */
+    de__pack_stage_free(job);     /* DENG-212: the run table and the pack reference */
+    if (job->extra_paths != NULL) /* DENG-214 */
+        DE_FREE(pl->alloc, job->extra_paths, job->extra_size);
     if (job->buf != NULL)
         DE_FREE(pl->alloc, job->buf, (size_t)job->buf_size);
     if (job->raw != NULL)
@@ -418,6 +426,13 @@ static void job_fail_now(de__pipeline *pl, de__pjob *job, de_result code, const 
     u32 slot = job->slot;
     char text[DE__LOAD_MSG_MAX];
     snprintf(text, sizeof text, "%s", msg != NULL ? msg : "");
+    if (job->reload) {
+        /* DENG-214: a failed hot reload keeps the slot's object; hot reload keeps the error. */
+        de__asset_reload_failed(s, job, code != DE_OK ? code : DE_ERR_INTERNAL, text);
+        job_unload(pl, job);
+        job_free(pl, job);
+        return;
+    }
     job_unload(pl, job);
     job_free(pl, job);
     stat_add(&pl->stats.failed);
@@ -450,8 +465,17 @@ static void job_publish(de__pipeline *pl, de__pjob *job) {
         }
     }
 
-    /* Published again (a reload, or a retry after a cancel): the previous object goes to its
-     * type's unload, and the previous dependency refs are dropped. */
+    if (job->reload) {
+        /* DENG-214: a hot reload swaps the object in and retires the old one (hot_reload.c). */
+        de__asset_reload_swap(s, job, deps);
+        job_free(pl, job);
+        return;
+    }
+    if (s->reload != NULL)
+        de__asset_reload_record_paths(s, job); /* DENG-214: the paths this load read */
+
+    /* Published again (a retry after a cancel): the previous object goes to its type's unload,
+     * and the previous dependency refs are dropped. */
     void *old = de__slot_object(sl);
     if (old != NULL && old != job->object) {
         const de_asset_type_desc *td = de__asset_type_get(s, de__slot_type(s, sl));
@@ -748,53 +772,89 @@ static bool source_path(const de_asset_system *s, const de__manifest_asset *a, c
     return de_path_normalize(joined, out, size) == DE_OK;
 }
 
+/* DENG-214: an early failure of a submission. A load answers its slot with a queued failure; a
+ * reload job only sets the error context (de__pipeline_submit_reload returns NULL), because the
+ * slot keeps its object. */
+static void submit_fail(de_asset_system *s, u32 slot, bool reload, de_result code, const char *fmt,
+                        ...) DE_PRINTF_FMT(5, 6);
+static void submit_fail(de_asset_system *s, u32 slot, bool reload, de_result code, const char *fmt,
+                        ...) {
+    char msg[DE__LOAD_MSG_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    if (reload) {
+        (void)DE_FAIL(code, "%s", msg);
+        return;
+    }
+    fail_early(s, slot, code, "%s", msg);
+}
+
+/* A new job enters the slot -> job map, except a reload job (DENG-214), which the load API must
+ * never see (the slot is READY and may be submitted again after an eviction). */
+static bool job_register(de__pipeline *pl, de__pjob *job, bool reload) {
+    if (reload) {
+        job->reload = true;
+        return true;
+    }
+    return job_table_put(pl, job);
+}
+
 /* DENG-209: an asset whose type has an importer, or a sub-asset of a cooked asset, is cooked
  * in-process (cook_stage.c), then loaded; without the cooker it fails here. False: the asset loads
- * from its source as it is. */
-static bool submit_cook(de__pipeline *pl, de_asset_system *s, u32 slot,
-                        de__load_priority priority) {
+ * from its source as it is. `*out` gets the job (NULL when the submission failed). */
+static bool submit_cook(de__pipeline *pl, de_asset_system *s, u32 slot, de__load_priority priority,
+                        bool reload, de__pjob **out) {
     de__cook_plan plan;
+    *out = NULL;
     if (!de__cook_stage_plan(s, slot, &plan))
         return false;
     if (plan.error != DE_OK) {
-        fail_early(s, slot, plan.error, "%s", plan.msg);
+        submit_fail(s, slot, reload, plan.error, "%s", plan.msg);
         return true;
     }
     de__pjob *job =
         job_new(pl, slot, de__slot_get(s, slot), &plan.asset, plan.load_type, plan.vpath, priority);
-    if (job != NULL && !job_table_put(pl, job)) {
+    if (job != NULL && !job_register(pl, job, reload)) {
         job_free(pl, job);
         job = NULL;
     }
     if (job == NULL) {
-        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", plan.asset.id);
+        submit_fail(s, slot, reload, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory",
+                    plan.asset.id);
         return true;
     }
+    *out = job;
     de__cook_stage_begin(job, &plan);
     return true;
 }
 
 /* DENG-212: an asset a mounted pack serves (every asset in PACKED mode; in SOURCE mode the IDs a
  * pack overrides) is read from the pack (pack_stage.c). False: it is not. */
-static bool submit_pack(de__pipeline *pl, de_asset_system *s, u32 slot,
-                        de__load_priority priority) {
+static bool submit_pack(de__pipeline *pl, de_asset_system *s, u32 slot, de__load_priority priority,
+                        bool reload, de__pjob **out) {
     de__pack_plan plan;
+    *out = NULL;
     if (!de__pack_stage_plan(s, slot, &plan))
         return false;
     if (plan.error != DE_OK) {
-        fail_early(s, slot, plan.error, "%s", plan.msg);
+        submit_fail(s, slot, reload, plan.error, "%s", plan.msg);
         return true;
     }
     de__pjob *job =
         job_new(pl, slot, de__slot_get(s, slot), &plan.asset, plan.type, plan.vpath, priority);
-    if (job != NULL && (!job_table_put(pl, job) || de__pack_stage_attach(job, &plan) != DE_OK)) {
+    if (job != NULL &&
+        (!job_register(pl, job, reload) || de__pack_stage_attach(job, &plan) != DE_OK)) {
         job_free(pl, job);
         job = NULL;
     }
     if (job == NULL) {
-        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", plan.asset.id);
+        submit_fail(s, slot, reload, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory",
+                    plan.asset.id);
         return true;
     }
+    *out = job;
     de_mutex_lock(&pl->lock);
     queue_push(pl, job);
     de_mutex_unlock(&pl->lock);
@@ -802,57 +862,65 @@ static bool submit_pack(de__pipeline *pl, de_asset_system *s, u32 slot,
     return true;
 }
 
-static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priority priority) {
-    de__pipeline *pl = (de__pipeline *)user;
+/* One submission: a load (the backend's submit) or, with `reload`, a hot reload job (DENG-214).
+ * Returns the job, or NULL when the submission failed (answered as submit_fail says). */
+static de__pjob *submit_slot(de__pipeline *pl, de_asset_system *s, u32 slot,
+                             de__load_priority priority, bool reload) {
     de_result r = pipeline_start(pl);
     if (r != DE_OK) {
-        fail_early(s, slot, r, "the asset load pipeline could not start: %s",
-                   de_error_last() != NULL ? de_error_last()->message : de_result_str(r));
-        return;
+        submit_fail(s, slot, reload, r, "the asset load pipeline could not start: %s",
+                    de_error_last() != NULL ? de_error_last()->message : de_result_str(r));
+        return NULL;
     }
-    if (submit_pack(pl, s, slot, priority)) /* DENG-212: before the cooker (packs win) */
-        return;
-    if (submit_cook(pl, s, slot, priority)) /* DENG-209 */
-        return;
+    de__pjob *job = NULL;
+    if (submit_pack(pl, s, slot, priority, reload, &job)) /* DENG-212: before the cooker */
+        return job;
+    if (submit_cook(pl, s, slot, priority, reload, &job)) /* DENG-209 */
+        return job;
     const de__slot *sl = de__slot_get(s, slot);
     const de__manifest_asset *a = sl != NULL ? de__resolved_asset(s->resolved, sl->id) : NULL;
     if (a == NULL || s->manifest == NULL) {
-        fail_early(s, slot, DE_ERR_NOT_FOUND, "asset %016llx is not in the asset manifest",
-                   sl != NULL ? (unsigned long long)sl->id.hash : 0ull);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_NOT_FOUND, "asset %016llx is not in the asset manifest",
+                    sl != NULL ? (unsigned long long)sl->id.hash : 0ull);
+        return NULL;
     }
     const de_asset_type_desc *type = de__asset_type_get(s, de__slot_type(s, sl));
     if (type == NULL) {
-        fail_early(s, slot, DE_ERR_UNSUPPORTED, "asset \"%s\": no asset type \"%s\" is registered",
-                   a->id, a->type);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_UNSUPPORTED,
+                    "asset \"%s\": no asset type \"%s\" is registered", a->id, a->type);
+        return NULL;
     }
     if (type->load == NULL) {
-        fail_early(s, slot, DE_ERR_UNSUPPORTED, "asset \"%s\": type \"%s\" has no loader", a->id,
-                   a->type);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_UNSUPPORTED, "asset \"%s\": type \"%s\" has no loader",
+                    a->id, a->type);
+        return NULL;
     }
     char vpath[DE_FS_PATH_MAX];
     if (!source_path(s, a, vpath, sizeof vpath)) {
-        fail_early(s, slot, DE_ERR_INVALID_ARGUMENT,
-                   "asset \"%s\": source \"%s\" is not a valid path below the asset root", a->id,
-                   a->source);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_INVALID_ARGUMENT,
+                    "asset \"%s\": source \"%s\" is not a valid path below the asset root", a->id,
+                    a->source);
+        return NULL;
     }
-    de__pjob *job = job_new(pl, slot, sl, a, type, vpath, priority);
+    job = job_new(pl, slot, sl, a, type, vpath, priority);
     if (job == NULL) {
-        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", a->id);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", a->id);
+        return NULL;
     }
-    if (!job_table_put(pl, job)) {
+    if (!job_register(pl, job, reload)) {
         job_free(pl, job);
-        fail_early(s, slot, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", a->id);
-        return;
+        submit_fail(s, slot, reload, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory", a->id);
+        return NULL;
     }
     de_mutex_lock(&pl->lock);
     queue_push(pl, job);
     de_mutex_unlock(&pl->lock);
     de__pipeline_dispatch(pl);
+    return job;
+}
+
+static void pl_submit(void *user, de_asset_system *s, u32 slot, de__load_priority priority) {
+    (void)submit_slot((de__pipeline *)user, s, slot, priority, false);
 }
 
 static void job_cancel(de__pipeline *pl, de__pjob *job) {
@@ -906,6 +974,23 @@ static void pl_reprioritize(void *user, de_asset_system *s, u32 slot, de__load_p
         job->priority = (u8)priority;
     }
     de_mutex_unlock(&pl->lock);
+}
+
+/* ---- DENG-214: hot reload jobs ------------------------------------------------------------- */
+
+de__pjob *de__pipeline_submit_reload(de_asset_system *s, u32 slot, de__load_priority priority) {
+    de__pipeline *pl = s != NULL ? s->pipeline : NULL;
+    if (pl == NULL || de__slot_get(s, slot) == NULL) {
+        (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "asset hot reload: no pipeline or stale slot");
+        return NULL;
+    }
+    return submit_slot(pl, s, slot, priority, true);
+}
+
+void de__pipeline_cancel_reload(de_asset_system *s, de__pjob *job) {
+    if (s == NULL || s->pipeline == NULL || job == NULL || !job->reload || de__pjob_cancelled(job))
+        return;
+    job_cancel(s->pipeline, job);
 }
 
 /* The backend's update hook: main-thread loads, finished jobs, then waiting parents. */

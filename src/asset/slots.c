@@ -6,6 +6,7 @@
 #include "asset/slots_internal.h"
 
 #include "asset/asset_internal.h"
+#include "asset/hot_reload_internal.h" /* DENG-214: de__slot_swap, de__slot_for_each_live */
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -360,4 +361,36 @@ void de__slots_shutdown(de_asset_system *s) {
     de_pool_destroy(t->page_pool);
     DE_FREE(s->alloc, t, sizeof *t);
     s->slots = NULL;
+}
+
+/* ---- DENG-214: hot reload (version swap, live-slot walk) ---------------------------------- */
+
+void de__slot_swap(de_asset_system *s, u32 handle_id, void *object, u64 bytes, de_asset_id *deps,
+                   u32 dep_count, de__slot_swapped *old) {
+    de__slot *sl = de__slot_get(s, handle_id);
+    memset(old, 0, sizeof *old);
+    if (sl == NULL)
+        return;
+    old->object = de_atomic_exchange_ptr(&sl->object, object, DE_ATOMIC_ACQ_REL);
+    old->bytes = sl->bytes;
+    old->deps = sl->deps;
+    old->dep_count = sl->dep_count;
+    sl->bytes = bytes;
+    sl->deps = deps;
+    sl->dep_count = dep_count;
+    sl->error = DE_OK;
+    sl->version++; /* generation unchanged: every handle to the slot stays valid */
+}
+
+void de__slot_for_each_live(de_asset_system *s,
+                            void (*fn)(de_asset_system *s, u32 handle_id, void *user), void *user) {
+    de__slot_table *t = s != NULL ? s->slots : NULL;
+    if (t == NULL)
+        return;
+    for (u32 i = 0; i < t->slot_count; ++i) {
+        de__slot *sl = slots_at(t, i);
+        u32 gen = de_atomic_load_u32(&sl->live_gen, DE_ATOMIC_RELAXED);
+        if (gen != 0)
+            fn(s, de__slot_handle_make(i, gen), user);
+    }
 }

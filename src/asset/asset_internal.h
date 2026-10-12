@@ -83,6 +83,12 @@ struct de_asset_system {
      * load makes progress (load_internal.h, de__asset_wake). Created by de_asset_system_create,
      * destroyed last. */
     struct de__asset_wake *wake;
+
+    /* ---- DENG-214: hot reload (append below) --------------------------------------------- */
+    /** hot_reload.c: watches, the reverse index, the reload queue, per-asset reload errors and
+     * the retired objects (hot_reload_internal.h). NULL unless desc.hot_reload is set in a
+     * Debug or Dev build. Created by de_asset_system_create; read-only pointer afterwards. */
+    struct de__asset_reload *reload;
 };
 
 /** The current locale, or NULL when none is set. */
