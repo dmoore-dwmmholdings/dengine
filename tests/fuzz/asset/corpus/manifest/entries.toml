@@ -1,0 +1,9 @@
+[assets]
+'env/castle' = { type = 'model', source = 'castle.glb' }
+'ui/font' = { type = 'font', source = 'f.ttf' }
+'ui/a/b' = { type = 'font', source = 'g.ttf' }
+[bundles.'my level']
+assets = ['env/castle', 'env/castle', 'env/nope', 'env//bad', 'env/castle#Tower', '**', 'ui/?ont', 'ui/font#*']
+depends = ['ghost']
+[bundles.hud]
+assets = ['ui/*', 'hud/*', 'ui/**/b']

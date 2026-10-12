@@ -1,0 +1,13 @@
+[assets]
+x = { type = 't', source = 'x' }
+[bundles.a]
+assets = ['x']
+depends = ['b']
+[bundles.b]
+depends = ['c']
+[bundles.c]
+depends = ['a']
+[bundles.d]
+depends = ['a']
+[bundles.self]
+depends = ['self', 'self']

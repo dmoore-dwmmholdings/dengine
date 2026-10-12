@@ -1,0 +1,20 @@
+# de-cook --check golden fixture (DENG-145): exactly four issues, one of each kind.
+# expected.txt is the output, with the fixture directory written as "four_issues/".
+[project]
+asset_root = "assets"
+
+[assets]
+"ui/font"  = { type = "font",  source = "fonts/ui.ttf" }
+"fx/spark" = { type = "gizmo", source = "fx/spark.bin" }  # unknown type (the source exists)
+"sfx/boom" = { type = "sound", source = "audio/boom.wav" } # missing source
+
+[bundles.a]
+assets  = ["ui/font"]
+depends = ["b"]
+
+[bundles.b]
+assets  = ["sfx/boom"]
+depends = ["a"]  # closes the cycle a -> b -> a
+
+[bundles.hud]
+assets = ["hud/*"]  # a glob that matches nothing

@@ -1,0 +1,7 @@
+# de-cook --check fixture (DENG-145): stub.toml is not next to this file; tests pass
+# `-I include_dir/stubs` so it is read from there.
+[project]
+include = ["stub.toml"]
+
+[assets]
+"ui/font" = { type = "font", source = "fonts/ui.ttf" }

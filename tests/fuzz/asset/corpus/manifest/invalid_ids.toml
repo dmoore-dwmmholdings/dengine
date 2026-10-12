@@ -1,0 +1,12 @@
+[assets]
+'ok/one' = { type = 't', source = 'a' }
+'/abs' = { type = 't', source = 'b' }
+'a/../b' = { type = 't', source = 'c' }
+'m#x#y' = { type = 't', source = 'd' }
+'tail/' = { type = 't', source = 'e' }
+'dot/./x' = { type = 't', source = 'f' }
+"bad\u0001ctl" = { type = 't', source = 'g' }
+'sub#' = { type = 't', source = 'h' }
+'m#part/with/slash' = { type = 't', source = 'i' }
+[bundles.all]
+assets = ['**']

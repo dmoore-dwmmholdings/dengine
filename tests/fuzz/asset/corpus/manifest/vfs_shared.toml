@@ -1,0 +1,17 @@
+# Root manifest for the VFS test (de_asset_manifest_load with the default reader, DENG-138).
+[project]
+asset_root = "assets"
+version    = 2
+include    = ["sub/more.toml"]
+
+[defaults.texture]
+srgb = true
+
+[assets]
+"ui/icon" = { type = "texture", source = "textures/icon.png" }
+#%include
+# Included from sub/more.toml through "../shared.toml".
+[bundles.ui]
+assets   = ["ui/*"]
+priority = "critical"
+resident = true

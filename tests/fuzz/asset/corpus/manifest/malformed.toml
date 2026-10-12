@@ -1,0 +1,6 @@
+# Malformed on purpose (DENG-138): the table header on line 5 is not closed.
+[assets]
+"a" = { type = "blob", source = "a.bin" }
+
+[bundles.broken
+assets = ["a"]

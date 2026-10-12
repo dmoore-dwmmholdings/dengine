@@ -1,0 +1,8 @@
+[bundles.x]
+depends = ['z', 'y']
+[bundles.y]
+depends = ['w']
+[bundles.z]
+[bundles.w]
+[bundles.v]
+depends = ['x', 'z', 'x']

@@ -1,0 +1,8 @@
+# Stub of the characters.toml that examples/assets.toml includes (copy of the DENG-138 test fixture, for DENG-145).
+[assets]
+"player/model"  = { type = "model",   source = "models/player.glb" }
+"player/albedo" = { type = "texture", source = "textures/player_albedo.png", srgb = true }
+
+[bundles.player]
+assets  = ["player/*"]
+depends = ["common"]
