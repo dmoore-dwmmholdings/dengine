@@ -77,7 +77,7 @@ The **candidates** are the future sprints that have issues, in numeric order. A 
 For each candidate, find its epic from the fixed mapping: **the epic for sprint `Sxx` is `DENG-(xx+2)`**. For example, S01 → DENG-3, S20 → DENG-22, S39 → DENG-41. Confirm with `get_issue` that the summary starts with `[Sxx]`. Do **not** look up the epic by searching on the sprint name: AQL `sprint = "<name>"` returns nothing for some sprint names (S06, S18, S22, S34, S36).
 
 1. Take the first candidate whose epic has **no unfinished blocker** in `get_issue`. Usually this is the next sprint after the last one that closed.
-2. If there is none, and the other lane has an active sprint, look ahead: run the **parallel check** (§2.2.3) on the first **5** candidates, in numeric order. Take the first one that passes.
+2. If there is none, and the other lane has an active sprint, look ahead: run the **parallel check** (§2.2.3) on **every** candidate, in numeric order, and take the first one that passes. Stop at the first pass. Candidates with a still-valid `⏸ Not parallel` comment are skipped (§2.2.3), so later ticks only check what changed. The checks only read, so you may split the candidates over several read-only subagents and take the lowest-numbered pass.
 3. If nothing passes, this lane stays idle in this tick. Do not start a sprint whose epic still has an unfinished blocker.
 
 #### 2.2.2 Start the chosen sprint
