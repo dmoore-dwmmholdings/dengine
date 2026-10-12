@@ -212,18 +212,23 @@ static void de__fifo_append(de__task **head, de__task **tail, de__task *t) {
 
 /* ---------- Submit ---------- */
 
-/* Out of memory for a record: run the task now where that is allowed. */
+/* Out of memory for a record: run the task now where that is allowed. A pre-charged counter
+ * (de__task_submit_charged) is finished here, like de__task_execute would. */
 static void de__task_run_inline(de_task_system *ts, const de__task_slot *self, de_task_pool pool,
-                                de_task_fn fn, void *user) {
+                                de_task_fn fn, void *user, de__task_counter *charged) {
     if (pool == DE_TASK_POOL_MAIN_THREAD &&
         !(self != NULL && self->kind == DE__SLOT_FRAME && self->index == 0))
         DE_PANIC("de_task_submit: out of memory for a main-thread task record");
     DE_WARN(ts->log, "de_task_submit: out of memory for a task record; running it inline");
     fn(user);
+    if (charged != NULL)
+        de__task_counter_finish(ts, charged);
 }
 
-void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *user,
-                    de_task_counter *counter) {
+/* Submit. `c` is the task's counter (NULL: nobody waits); `charge`: add the task to it here
+ * (false: the caller charged it already). */
+static void de__task_submit_impl(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *user,
+                                 de__task_counter *c, bool charge) {
     DE_ASSERT(ts != NULL && fn != NULL);
     DE_ASSERT(pool == DE_TASK_POOL_FRAME || pool == DE_TASK_POOL_BACKGROUND ||
               pool == DE_TASK_POOL_MAIN_THREAD);
@@ -237,15 +242,15 @@ void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *
         de_mutex_unlock(&ts->ext_lock);
     }
     if (t == NULL) {
-        de__task_run_inline(ts, self, pool, fn, user);
+        de__task_run_inline(ts, self, pool, fn, user, charge ? NULL : c);
         return;
     }
     t->fn = fn;
     t->user = user;
     t->pool = (u32)pool;
-    t->counter = counter != NULL ? de__counter(counter) : NULL;
-    if (counter != NULL) {
-        const u64 old = de_atomic_fetch_add_u64(&t->counter->state, 1, DE_ATOMIC_RELAXED);
+    t->counter = c;
+    if (c != NULL && charge) {
+        const u64 old = de_atomic_fetch_add_u64(&c->state, 1, DE_ATOMIC_RELAXED);
         DE_ASSERT(DE__COUNTER_PENDING(old) != 0xFFFFFFFFu);
         (void)old;
     }
@@ -286,12 +291,24 @@ void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *
         de__task_wake_main(ts);
         break;
     case DE_TASK_POOL_BACKGROUND:
+        de__bg_note_submit(ts);
         de_mutex_lock(&ts->bg_lock);
         de__fifo_append(&ts->bg_head, &ts->bg_tail, t);
         de_mutex_unlock(&ts->bg_lock);
         de_sem_post(&ts->bg_sem, 1);
         break;
     }
+}
+
+void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *user,
+                    de_task_counter *counter) {
+    de__task_submit_impl(ts, pool, fn, user, counter != NULL ? de__counter(counter) : NULL, true);
+}
+
+void de__task_submit_charged(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *user,
+                             de__task_counter *charged) {
+    DE_ASSERT(charged != NULL);
+    de__task_submit_impl(ts, pool, fn, user, charged, false);
 }
 
 de__task *de__task_pop_background(de_task_system *ts) {
@@ -429,9 +446,17 @@ void de_task_wait(de_task_system *ts, de_task_counter *counter) {
         if (is_main)
             de_atomic_store_u32(&self->parked, 1, DE_ATOMIC_SEQ_CST);
         if (de__counter_pending(c) != 0 &&
-            !(frame && de__wait_work_visible(ts, self, is_main, steal)))
+            !(frame && de__wait_work_visible(ts, self, is_main, steal))) {
+            /* A background worker counts the park and the return from it, so the boost monitor
+             * sees it is not starved (DENG-388). */
+            const bool bg_events = self->kind == DE__SLOT_BACKGROUND && ts->bg_boost;
+            if (bg_events)
+                de__bg_event(ts, self, true);
             de_sem_wait_timeout(&self->park, registered ? DE__TASK_PARK_REGISTERED_NS
                                                         : DE__TASK_PARK_UNREGISTERED_NS);
+            if (bg_events)
+                de__bg_event(ts, self, false);
+        }
         if (is_main)
             de_atomic_store_u32(&self->parked, 0, DE_ATOMIC_RELAXED);
         spins = DE__TASK_SPIN_ROUNDS / 2;
@@ -474,6 +499,10 @@ de__task_stats de__task_get_stats(const de_task_system *ts) {
         st.submitted += de_atomic_load_u64(&ts->slots[i].submitted, DE_ATOMIC_ACQUIRE);
     st.submitted += de_atomic_load_u64(&ts->ext_submitted, DE_ATOMIC_ACQUIRE);
     st.counter_zero_events = de_atomic_load_u64(&ts->counter_zero_events, DE_ATOMIC_RELAXED);
+    st.bg_boosts = de_atomic_load_u64(&ts->bg_boosts, DE_ATOMIC_RELAXED);
+    st.bg_boost_ns = de_atomic_load_u64(&ts->bg_boost_ns, DE_ATOMIC_RELAXED);
+    st.bg_prio_failures = de_atomic_load_u32(&ts->bg_prio_failures, DE_ATOMIC_RELAXED);
+    st.bg_checks = de_atomic_load_u64(&ts->bg_checks, DE_ATOMIC_RELAXED);
     return st;
 }
 
@@ -490,6 +519,7 @@ typedef struct de__task_init_state {
     u32 ext_sems;  /* external wait records whose semaphore is initialised */
     u32 deques;    /* frame slots whose deque is initialised */
     bool ext_nap;
+    bool bg_monitor_sem;
     bool idle_sem;
     bool bg_sem;
     bool locks;
@@ -503,6 +533,12 @@ static void de__task_teardown(de_task_system *ts, const de__task_init_state *st)
         de_sem_post(&ts->idle_sem, ts->frame_count);
     if (st->bg_sem)
         de_sem_post(&ts->bg_sem, ts->bg_count);
+    /* The monitor first: it changes the background workers' priority. */
+    if (ts->bg_monitor != NULL) {
+        de_sem_post(&ts->bg_monitor_sem, 1);
+        de_thread_join(ts->bg_monitor);
+        ts->bg_monitor = NULL;
+    }
     for (u32 i = 0; i < ts->slot_count; ++i) {
         if (ts->slots[i].thread != NULL) {
             de_thread_join(ts->slots[i].thread);
@@ -519,6 +555,8 @@ static void de__task_teardown(de_task_system *ts, const de__task_init_state *st)
         de_sem_destroy(&ts->ext_park[i]);
     if (st->ext_nap)
         de_sem_destroy(&ts->ext_nap);
+    if (st->bg_monitor_sem)
+        de_sem_destroy(&ts->bg_monitor_sem);
     if (st->inject)
         de_mpmc_destroy(&ts->inject);
     if (st->idle_sem)
@@ -590,6 +628,12 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
     ts->external_slot = ts->frame_count + bg;
     ts->slot_count = ts->external_slot + 1;
     ts->pin_workers = d.pin_workers;
+#if defined(_WIN32)
+    ts->bg_boost = d.background_boost != DE_TASK_BG_BOOST_OFF;
+#else
+    ts->bg_boost = d.background_boost == DE_TASK_BG_BOOST_ON;
+#endif
+    de_atomic_store_u32(&ts->bg_can_boost, 1, DE_ATOMIC_RELAXED);
     ts->log = de_log_register_category("task", DE_LOG_INFO);
     ts->slots = (de__task_slot *)DE_ALLOC(a, sizeof(de__task_slot) * ts->slot_count,
                                           DE_ALIGNOF(de__task_slot), tag);
@@ -633,6 +677,9 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
     if ((r = de_sem_init(&ts->ext_nap, 0)) != DE_OK)
         goto fail;
     st.ext_nap = true;
+    if ((r = de_sem_init(&ts->bg_monitor_sem, 0)) != DE_OK)
+        goto fail;
+    st.bg_monitor_sem = true;
     for (u32 i = 0; i < ts->frame_count; ++i) {
         if ((r = de__deque_init(&ts->slots[i].deque, DE__TASK_DEQUE_CAPACITY, a, tag)) != DE_OK)
             goto fail;
@@ -656,6 +703,18 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
     de__tls_slot = &ts->slots[0];
 
     char name[32];
+    /* The monitor first, so that it never waits behind a starting thread: a starting thread
+     * holds the OS loader lock on Windows, and the monitor once waited 200 ms to 5 s behind a
+     * starved one before its first check (DENG-388). It reads the background workers' thread
+     * records only once a task has been submitted, which is after this function returns. It is
+     * time-critical so that it runs, and ends a slice on time, whatever keeps the cores busy; it
+     * sleeps almost all the time. */
+    if (ts->bg_boost) {
+        r = de_thread_create(de__task_bg_monitor_main, ts, "de-bg-boost", DE_THREAD_REALTIME, 0,
+                             &ts->bg_monitor);
+        if (r != DE_OK)
+            goto fail;
+    }
     for (u32 i = 1; i < ts->frame_count; ++i) {
         snprintf(name, sizeof name, "de-worker-%u", i);
         r = de_thread_create(de__task_frame_worker_main, &ts->slots[i], name, DE_THREAD_NORMAL, 0,
@@ -666,10 +725,18 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
     for (u32 i = 0; i < bg; ++i) {
         de__task_slot *s = &ts->slots[ts->frame_count + i];
         snprintf(name, sizeof name, "de-bg-%u", i);
+#if DE__TASK_BG_LOWERS_ITSELF
+        r = de_thread_create(de__task_background_worker_main, s, name, DE_THREAD_NORMAL, 0,
+                             &s->thread);
+        if (r != DE_OK)
+            goto fail;
+        de_sem_post(&s->park, 1); /* the worker lowers itself through its thread record */
+#else
         r = de_thread_create(de__task_background_worker_main, s, name, DE_THREAD_LOW, 0,
                              &s->thread);
         if (r != DE_OK)
             goto fail;
+#endif
     }
     if (ts->pin_workers)
         de__task_pin(ts);
@@ -712,6 +779,7 @@ void de_task_system_destroy(de_task_system *ts) {
         .park_sems = ts->slot_count,
         .ext_sems = DE__TASK_EXT_WAITERS,
         .ext_nap = true,
+        .bg_monitor_sem = true,
         .deques = ts->frame_count,
         .idle_sem = true,
         .bg_sem = true,

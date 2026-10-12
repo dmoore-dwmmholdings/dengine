@@ -14,6 +14,14 @@
  *                          cores + 2 threads that are not workers each wait for background
  *                          tasks, one at a time: the DENG-375 case. Spinning waiters starve the
  *                          background worker; blocking ones do not.
+ *   wake.background_frame_saturated
+ *                          background tasks submitted while every frame worker spins: time from
+ *                          the submit to the task's end. On Windows the below-normal background
+ *                          worker starved for about 4 s per task before the boost (DENG-388).
+ *   wake.background_boost_duty_cycle
+ *                          the boost policy (forced on, every OS): no raise while idle or while
+ *                          background tasks make progress; a task without visible progress is
+ *                          raised only within the budget (DENG-388).
  *
  * Each test prints its numbers and checks the median: under 5 ms when DE_CI or CI is set or in a
  * sanitizer build, under 1 ms on a developer machine. wake.external_waiters_and_background also
@@ -339,6 +347,248 @@ TEST(wake, external_waiters_and_background) {
            (double)total_bound / 1e6);
     EXPECT_LT(s.median, median_bound_ns());
     EXPECT_LT(total, total_bound);
+    de_task_system_destroy(g_ts);
+    g_ts = NULL;
+}
+
+/* ---------- Background boost (DENG-388) ---------- */
+
+static de_task_system *make_ts_boost(u32 workers, u32 bg, de_task_bg_boost boost) {
+    de_fp_env_init_thread();
+    de_task_system_desc d = {0};
+    d.worker_count = workers;
+    d.background_worker_count = bg;
+    d.background_boost = boost;
+    de_task_system *ts = NULL;
+    ASSERT_EQ(de_task_system_create(&d, &ts), DE_OK);
+    ASSERT_TRUE(ts != NULL);
+    return ts;
+}
+
+/* A frame task that keeps its worker busy until `g_spin_stop` is set. */
+static de_atomic_u32 g_spin_stop;
+static de_atomic_u32 g_spinning;
+static de_sem g_nap; /* never posted: a timed wait on it is an OS sleep */
+
+static void spin_fn(void *user) {
+    (void)user;
+    de_atomic_fetch_add_u32(&g_spinning, 1, DE_ATOMIC_RELAXED);
+    while (de_atomic_load_u32(&g_spin_stop, DE_ATOMIC_ACQUIRE) == 0)
+        de_cpu_pause();
+}
+
+#define SAT_SAMPLES 20u
+#define SAT_TASK_NS MS_NS(1)
+
+typedef struct sat_driver {
+    u64 lat[SAT_SAMPLES];
+    u32 n;
+    u32 stalled; /* samples during which the machine itself stalled (see sat_watch_main) */
+} sat_driver;
+
+typedef struct sat_task {
+    de_atomic_u64 end_ns;
+} sat_task;
+
+static void sat_bg_fn(void *user) {
+    sat_task *t = (sat_task *)user;
+    busy_for(SAT_TASK_NS);
+    de_atomic_store_u64(&t->end_ns, de_time_now_ns(), DE_ATOMIC_RELAXED);
+}
+
+/* A time-critical thread that only sleeps (1 ms timed waits, a timer tick on Windows) and
+ * records the longest gap between two of its wake-ups. Nothing in the test can keep it from
+ * running, so a gap far beyond a tick means the machine stalled every thread (a CI virtual
+ * machine that the host did not run): on one Windows runner the monitor, the driver and this
+ * kind of thread all stood still for 100-200 ms at a time. Such samples measure the host, not
+ * the scheduler, and are left out of the bound. */
+static de_atomic_u32 g_watch_stop;
+static de_atomic_u64 g_watch_gap;
+
+#define SAT_STALL_GAP_NS MS_NS(50)
+
+static i32 sat_watch_main(void *user) {
+    (void)user;
+    u64 last = de_time_now_ns();
+    while (de_atomic_load_u32(&g_watch_stop, DE_ATOMIC_ACQUIRE) == 0) {
+        (void)de_sem_wait_timeout(&g_nap, MS_NS(1));
+        const u64 now = de_time_now_ns();
+        const u64 gap = now - last;
+        last = now;
+        u64 cur = de_atomic_load_u64(&g_watch_gap, DE_ATOMIC_RELAXED);
+        while (gap > cur && !de_atomic_cas_weak_u64(&g_watch_gap, &cur, gap, DE_ATOMIC_RELAXED,
+                                                    DE_ATOMIC_RELAXED)) {
+        }
+    }
+    return 0;
+}
+
+/* Not a worker: one background task at a time, timed from the submit to the task's own end (so
+ * the driver's own wake-up is not part of it). Then it stops the spinning frame workers. It runs
+ * time-critical, so that only the background worker is measured: at normal priority it waited
+ * behind the spinners for a whole quantum (about 190 ms on Windows Server) before it even
+ * submitted, and above normal it still lost a quantum to spinners that had just woken (Windows
+ * runs a thread woken from a wait one level higher for a quantum). */
+static i32 sat_driver_main(void *user) {
+    sat_driver *d = (sat_driver *)user;
+    de_fp_env_init_thread();
+    /* Every frame worker (the main thread included) spins first. */
+    while (de_atomic_load_u32(&g_spinning, DE_ATOMIC_ACQUIRE) < de_task_worker_count(g_ts))
+        (void)de_sem_wait_timeout(&g_nap, MS_NS(1));
+    for (u32 i = 0; i < SAT_SAMPLES; ++i) {
+        sat_task t;
+        de_atomic_init_u64(&t.end_ns, 0);
+        de_task_counter c = {0};
+        de_atomic_store_u64(&g_watch_gap, 0, DE_ATOMIC_RELAXED);
+        const u64 t0 = de_time_now_ns();
+        de_task_submit(g_ts, DE_TASK_POOL_BACKGROUND, sat_bg_fn, &t, &c);
+        de_task_wait(g_ts, &c);
+        const u64 lat = de_atomic_load_u64(&t.end_ns, DE_ATOMIC_RELAXED) - t0;
+        const u64 gap = de_atomic_load_u64(&g_watch_gap, DE_ATOMIC_RELAXED);
+        if (gap > SAT_STALL_GAP_NS) {
+            printf("wake: sample %u (%.1f ms) left out: the watch thread stood still %.1f ms\n", i,
+                   (double)lat / 1e6, (double)gap / 1e6);
+            ++d->stalled;
+            continue;
+        }
+        d->lat[d->n++] = lat;
+    }
+    de_atomic_store_u32(&g_spin_stop, 1, DE_ATOMIC_RELEASE);
+    return 0;
+}
+
+static void bg_warm_fn(void *user) {
+    (void)user;
+}
+
+/* Background tasks submitted while every frame worker is busy (normal priority, every core):
+ * on Windows the below-normal background worker got no CPU until a frame worker's quantum ended
+ * (about 190 ms on Windows Server) or, often, until the OS's own anti-starvation boost (about
+ * 5 s; CI control runs with the boost off, DENG-388). With it, a stalled worker is raised at the
+ * next 10 ms check (on Windows 16 to 32 ms: timed waits end on 15.6 ms timer ticks) and runs its
+ * 1 ms task at once. In 400 CI runs (4 Windows jobs) the slowest task took 47 ms. */
+TEST(wake, background_frame_saturated) {
+    g_ts = make_ts_boost(0, 1, DE_TASK_BG_BOOST_AUTO);
+    de_atomic_store_u32(&g_spin_stop, 0, DE_ATOMIC_RELAXED);
+    de_atomic_store_u32(&g_spinning, 0, DE_ATOMIC_RELAXED);
+    ASSERT_EQ(de_sem_init(&g_nap, 0), DE_OK);
+
+    /* Steady state first: every thread started (a starting thread holds the OS loader lock on
+     * Windows, and a starved one there delays all others), the background worker has run a
+     * task, and the frame workers are parked. */
+    de_task_counter warm = {0};
+    de_task_submit(g_ts, DE_TASK_POOL_BACKGROUND, bg_warm_fn, NULL, &warm);
+    de_task_wait(g_ts, &warm);
+    ASSERT_TRUE(spin_until_u32(&g_ts->sleepers, g_ts->frame_count - 1, MS_NS(5000)));
+
+    static sat_driver drv;
+    memset(&drv, 0, sizeof drv);
+    de_atomic_store_u32(&g_watch_stop, 0, DE_ATOMIC_RELAXED);
+    de_thread *watch = NULL;
+    ASSERT_EQ(de_thread_create(sat_watch_main, NULL, "wake-watch", DE_THREAD_REALTIME, 0, &watch),
+              DE_OK);
+    de_thread *th = NULL;
+    ASSERT_EQ(de_thread_create(sat_driver_main, &drv, "wake-sat", DE_THREAD_REALTIME, 0, &th),
+              DE_OK);
+    /* One spinner per frame worker; the main thread runs one inside the wait. */
+    de_task_counter spinners = {0};
+    for (u32 i = 0; i < de_task_worker_count(g_ts); ++i)
+        de_task_submit(g_ts, DE_TASK_POOL_FRAME, spin_fn, NULL, &spinners);
+    de_task_wait(g_ts, &spinners);
+    EXPECT_EQ(de_thread_join(th), 0);
+    de_atomic_store_u32(&g_watch_stop, 1, DE_ATOMIC_RELEASE);
+    EXPECT_EQ(de_thread_join(watch), 0);
+    de_sem_destroy(&g_nap);
+
+    /* Most samples must count: a machine that stalls all the time is not measured at all. */
+    ASSERT_EQ(drv.n + drv.stalled, SAT_SAMPLES);
+    ASSERT_GE(drv.n, SAT_SAMPLES / 2);
+    const lat_summary s = summarize("bg task, frame workers saturated", drv.lat, drv.n);
+    const de__task_stats st = de__task_get_stats(g_ts);
+    printf("wake: %u frame workers spinning, %llu checks, %llu raises, %.1f ms raised, %u "
+           "priority failures\n",
+           de_task_worker_count(g_ts), (unsigned long long)st.bg_checks,
+           (unsigned long long)st.bg_boosts, (double)st.bg_boost_ns / 1e6, st.bg_prio_failures);
+    EXPECT_EQ(st.bg_prio_failures, 0u);
+    /* Windows (boost on): the documented bound is one or two checks, about 40 ms; a quantum
+     * (about 190 ms) means the boost did not work. Other OSes do not boost: their schedulers
+     * give the low priority a share (up to 95 ms per task on the macOS host with 15 spinners).
+     * CI and sanitizers get room. */
+#if defined(_WIN32)
+    EXPECT_LT(s.max, loose_bounds() ? MS_NS(150) : MS_NS(100));
+#else
+    EXPECT_LT(s.max, loose_bounds() ? MS_NS(500) : MS_NS(250));
+#endif
+    de_task_system_destroy(g_ts);
+    g_ts = NULL;
+}
+
+/* The boost's policy, on every OS (DE_TASK_BG_BOOST_ON; where the OS cannot change a priority the
+ * monitor still runs and counts): no raise while nothing is pending or while background tasks
+ * keep starting and ending, and a task that does nothing the monitor can see (it blocks in user
+ * code, as a starved or long-computing one would look) is raised again and again, but only for as
+ * much time as the budget allows: 1/8 of wall time after a burst of at most 32 ms. */
+static void bg_block_fn(void *user) {
+    (void)de_sem_wait_timeout((de_sem *)user, MS_NS(1000));
+}
+
+static void bg_short_fn(void *user) {
+    (void)user;
+    busy_for(US_NS(500));
+}
+
+TEST(wake, background_boost_duty_cycle) {
+    g_ts = make_ts_boost(1, 1, DE_TASK_BG_BOOST_ON);
+    ASSERT_EQ(de_sem_init(&g_nap, 0), DE_OK);
+
+    /* Idle: the monitor blocks; it neither checks nor raises. */
+    (void)de_sem_wait_timeout(&g_nap, MS_NS(300));
+    const de__task_stats s0 = de__task_get_stats(g_ts);
+    const u64 idle = s0.bg_boosts + s0.bg_checks;
+
+    /* Progress: 1000 short tasks back to back (about 0.5 s), each one waited for. A raise is
+     * legitimate only while one task was pending for a whole check (the low-priority worker did
+     * not run it at once): each task allows one raise per check interval it was pending. */
+    const u64 b0 = de__task_get_stats(g_ts).bg_boosts;
+    u64 allowed = 1; /* a scheduling hiccup on a shared runner */
+    for (u32 i = 0; i < 1000; ++i) {
+        de_task_counter c = {0};
+        const u64 t0 = de_time_now_ns();
+        de_task_submit(g_ts, DE_TASK_POOL_BACKGROUND, bg_short_fn, NULL, &c);
+        de_task_wait(g_ts, &c);
+        allowed += (de_time_now_ns() - t0) / DE__TASK_BG_CHECK_NS;
+    }
+    const u64 progressing = de__task_get_stats(g_ts).bg_boosts - b0;
+
+    /* No visible progress: one task blocked for 1 s. Wait until the burst allowance is back. */
+    (void)de_sem_wait_timeout(&g_nap, MS_NS(300));
+    de_sem block;
+    ASSERT_EQ(de_sem_init(&block, 0), DE_OK);
+    const de__task_stats s1 = de__task_get_stats(g_ts);
+    const u64 t0 = de_time_now_ns();
+    de_task_counter c = {0};
+    de_task_submit(g_ts, DE_TASK_POOL_BACKGROUND, bg_block_fn, &block, &c);
+    de_task_wait(g_ts, &c);
+    const u64 elapsed = de_time_now_ns() - t0;
+    const de__task_stats s2 = de__task_get_stats(g_ts);
+    const u64 raises = s2.bg_boosts - s1.bg_boosts;
+    const u64 raised_ns = s2.bg_boost_ns - s1.bg_boost_ns;
+    de_sem_destroy(&block);
+    de_sem_destroy(&g_nap);
+
+    /* Budget: the cap, 1/8 of the time, and the raise that overdraws it (one slice, which ends
+     * on a timer tick on Windows) plus the refill of one check interval (also tick-rounded). */
+    const u64 budget = DE__TASK_BG_CREDIT_CAP_NS + elapsed / DE__TASK_BG_SHARE_DIV + MS_NS(40);
+    printf(
+        "wake: boost: idle %llu checks+raises, progressing %llu (allowed %llu), blocked task %llu "
+        "raises for %.1f ms in %.0f ms (budget %.1f ms)\n",
+        (unsigned long long)idle, (unsigned long long)progressing, (unsigned long long)allowed,
+        (unsigned long long)raises, (double)raised_ns / 1e6, (double)elapsed / 1e6,
+        (double)budget / 1e6);
+    EXPECT_EQ(idle, 0u);
+    EXPECT_LE(progressing, allowed);
+    EXPECT_GE(raises, 3u);
+    EXPECT_LE(raised_ns, budget);
     de_task_system_destroy(g_ts);
     g_ts = NULL;
 }

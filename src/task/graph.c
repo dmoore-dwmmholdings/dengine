@@ -21,10 +21,14 @@
  * every pending counter from its template and submits the roots. graph_run_node runs the user
  * function, decrements each successor's pending counter once (acq_rel, so the predecessors'
  * writes are visible to the successor) and submits the successors it took to zero (frame nodes
- * onto the current worker's deque, main-thread nodes onto the main-thread queue), then takes one
- * off the done counter. Successors are always submitted before their predecessor's done
- * decrement, so the done counter cannot reach zero early. A run allocates nothing once the
- * scheduler's record pools have grown to the graph's width.
+ * onto the current worker's deque, main-thread nodes onto the main-thread queue). Every node task
+ * carries `done` as its task counter, charged in advance by the run (de__task_submit_charged), so
+ * the scheduler takes a node off `done` only after the node's function has returned and its
+ * completion is counted: a waiter on `done` sees every node task finished, in the task
+ * statistics too (DENG-388; before, the node decremented `done` inside its function).
+ * Successors are always submitted before their predecessor's done decrement, so the done counter
+ * cannot reach zero early. A run allocates nothing once the scheduler's record pools have grown
+ * to the graph's width.
  *
  * Wait-and-help. A thread waiting on a counter (a graph run from inside a task, a nested
  * de_task_parallel_for) keeps running other tasks, so nested waits never idle a worker and never
@@ -469,13 +473,14 @@ static void graph_run_node(void *p) {
     for (u32 k = 0; k < node->succ_count; ++k) {
         de__graph_node *s = &nodes[succ[k]];
         if (de_atomic_fetch_sub_u32(&s->pending, 1, DE_ATOMIC_ACQ_REL) == 1)
-            de_task_submit(ts, (de_task_pool)s->pool, graph_run_node, s, NULL);
+            de__task_submit_charged(ts, (de_task_pool)s->pool, graph_run_node, s, done);
     }
 #if DE__GRAPH_CHECKS
     de_atomic_fetch_sub_u32(&g->nodes_left, 1, DE_ATOMIC_RELEASE);
 #endif
-    /* Last: the waiter may destroy the graph as soon as `done` reaches zero. */
-    de__task_counter_finish(ts, done);
+    /* Nothing touches the graph after this. The scheduler takes the node off `done` once this
+     * function has returned and its completion is counted (de__task_execute); the waiter may
+     * destroy the graph as soon as `done` reaches zero. */
 }
 
 void de_task_graph_run(de_task_graph *g, de_task_counter *done) {
@@ -506,7 +511,7 @@ void de_task_graph_run(de_task_graph *g, de_task_counter *done) {
     /* The submits publish the resets and `done` (deque push and queue push are releases). */
     for (u32 i = 0; i < g->root_count; ++i) {
         de__graph_node *r = &nodes[g->roots[i]];
-        de_task_submit(g->ts, (de_task_pool)r->pool, graph_run_node, r, NULL);
+        de__task_submit_charged(g->ts, (de_task_pool)r->pool, graph_run_node, r, c);
     }
 }
 

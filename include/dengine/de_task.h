@@ -7,7 +7,9 @@
  *     de_task_wait() (or de_task_system_destroy()).
  *   - Background workers: `background_worker_count` threads named `de-bg-<n>` at DE_THREAD_LOW.
  *     They run DE_TASK_POOL_BACKGROUND tasks only, and frame workers never run those, so a long
- *     task (cooking, shader compiles, navmesh builds) never stalls a frame.
+ *     task (cooking, shader compiles, navmesh builds) never stalls a frame. On Windows, which
+ *     runs a below-normal thread only when no normal one is ready, a monitor thread gives them a
+ *     bounded share while the frame workers keep every core busy (de_task_bg_boost).
  *   - Any other thread may submit and wait. Its frame-pool submits go through a global injection
  *     queue; it never runs tasks.
  * Every engine-created worker calls de_fp_env_init_thread() and de_crash_thread_init() before it
@@ -54,6 +56,27 @@ typedef void (*de_range_fn)(u32 begin, u32 end, void *user);
 /** de_task_worker_index() on a thread that is not a frame worker of a live task system. */
 #define DE_TASK_WORKER_NONE 0xFFFFFFFFu
 
+/**
+ * Anti-starvation boost of the background workers (Trama "Decision: Background workers get a
+ * bounded share, never none"). While background tasks are pending, a monitor thread
+ * (`de-bg-boost`, DE_THREAD_REALTIME, blocked while nothing is pending) checks every 10 ms for a
+ * background worker that wants the CPU (it holds a task, or tasks are queued) but did nothing
+ * since the last check: no task started or ended, no park in de_task_wait. It raises that worker
+ * to DE_THREAD_REALTIME until the worker gives the core back (its task ends or it parks), for at
+ * most 2 ms (on Windows up to the next 15.6 ms timer tick). Raised time comes from a budget of
+ * 1/8 of wall time (bursts up to 32 ms), so all background workers together take at most about
+ * 1/8 of one core from frame workers that keep every core busy. A starved background worker
+ * waits one or two checks (on Windows about 16 to 40 ms) while the budget lasts, instead of a
+ * frame worker's quantum or the OS's own boost (about 190 ms to 5 s).
+ */
+typedef enum de_task_bg_boost {
+    DE_TASK_BG_BOOST_AUTO, /**< ON on Windows (strict priority scheduling), OFF elsewhere */
+    DE_TASK_BG_BOOST_OFF,  /**< never: background workers may starve while cores are busy */
+    /** Run the monitor on every OS. Where de_thread_set_priority is unsupported (macOS, Linux)
+     * it changes nothing; this is for tests of the policy. */
+    DE_TASK_BG_BOOST_ON
+} de_task_bg_boost;
+
 /** Parameters of de_task_system_create(). `(de_task_system_desc){0}` is valid. */
 typedef struct de_task_system_desc {
     /** Frame worker threads besides the main thread. 0 = de_cpu_logical_cores() - 1, at least
@@ -67,6 +90,8 @@ typedef struct de_task_system_desc {
      * pinned. Where the OS cannot pin (macOS), a message is logged once and the workers run
      * unpinned. */
     bool pin_workers;
+    /** Anti-starvation boost of the background workers; see de_task_bg_boost. */
+    de_task_bg_boost background_boost;
 } de_task_system_desc;
 
 /**
