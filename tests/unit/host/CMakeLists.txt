@@ -161,3 +161,31 @@ if(TARGET de_asset_stubs)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_headless_tmp")
     endif()
 endif()
+
+# DENG-93: game library hot reload. The reload_game_v1..v5 fixtures (fixtures/CMakeLists.txt)
+# call the engine, so test_hot_reload links the whole static engine and exports it, as the
+# `dengine` executable does (Trama "Decision: A game library binds to the engine in the host
+# process"), and they bind to it when they are loaded. It also calls the internal de__ / ecs_
+# functions, which a shared engine does not export: built only with a static engine where
+# de_add_game() builds libraries.
+if(DE_BUILD_TESTS AND DE_GAME_DYLIB AND NOT DE_BUILD_SHARED)
+    de_add_test(NAME hot_reload SOURCES test_hot_reload.c TIMEOUT 300)
+    if(TARGET test_hot_reload)
+        target_link_libraries(test_hot_reload PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,dengine>")
+        set_target_properties(test_hot_reload PROPERTIES ENABLE_EXPORTS ON)
+        if(APPLE)
+            target_link_options(test_hot_reload PRIVATE "LINKER:-export_dynamic")
+        endif()
+        target_include_directories(test_hot_reload PRIVATE "${DE_ROOT_DIR}/src"
+                                   "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        target_compile_definitions(test_hot_reload PRIVATE
+            DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_hot_reload_tmp"
+            DE_HOST_RELOAD_V1="$<TARGET_FILE:reload_game_v1>"
+            DE_HOST_RELOAD_V2="$<TARGET_FILE:reload_game_v2>"
+            DE_HOST_RELOAD_V3="$<TARGET_FILE:reload_game_v3>"
+            DE_HOST_RELOAD_V4="$<TARGET_FILE:reload_game_v4>"
+            DE_HOST_RELOAD_V5="$<TARGET_FILE:reload_game_v5>")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_hot_reload_tmp")
+        add_dependencies(test_hot_reload ${DE_HOST_RELOAD_GAMES})
+    endif()
+endif()

@@ -60,6 +60,8 @@ de_component de_component_register(de_world *w, de_type_id type, u32 flags) {
     info.name = desc->name;
     info.flags = flags;
     info.is_pod = desc->is_pod;
+    info.layout = desc; /* DENG-93: what de__world_sync_types compares against */
+    info.layout_hash = de_type_schema_hash(w->types, type);
     if (tag) {
         info.size = 0;
         info.align = 1;

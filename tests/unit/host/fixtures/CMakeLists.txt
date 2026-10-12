@@ -30,3 +30,32 @@ foreach(_de_variant STANDALONE BAD_VERSION NO_CALLBACK NO_SYMBOL)
         C_VISIBILITY_PRESET hidden
         FOLDER "dengine/tests")
 endforeach()
+
+# DENG-93: the hot reload test game (reload_game_v1.c, reload_game_v2.c; see the comment at the
+# top of reload_game_v1.c), five libraries built with de_add_game(). They call the engine, so
+# they load only into a process that exports it (test_hot_reload links the whole engine like
+# `dengine`). Only where de_add_game() builds libraries (not Shipping, not Windows without
+# DE_BUILD_SHARED).
+if(DE_GAME_DYLIB)
+    set(_de_reload_games
+        "v1|reload_game_v1.c|"
+        "v2|reload_game_v2.c|"
+        "v3|reload_game_v1.c|RELOAD_GAME_BAD_VERSION"
+        "v4|reload_game_v2.c|RELOAD_GAME_MIGRATE"
+        "v5|reload_game_v2.c|RELOAD_GAME_BAD_TYPES")
+    set(_de_reload_targets "")
+    foreach(_de_game IN LISTS _de_reload_games)
+        string(REPLACE "|" ";" _de_game "${_de_game}")
+        list(GET _de_game 0 _de_v)
+        list(GET _de_game 1 _de_src)
+        list(GET _de_game 2 _de_def)
+        de_add_game(NAME reload_game_${_de_v} SOURCES ${_de_src})
+        target_link_libraries(reload_game_${_de_v} PRIVATE de_build_flags)
+        target_include_directories(reload_game_${_de_v} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(_de_def)
+            target_compile_definitions(reload_game_${_de_v} PRIVATE ${_de_def})
+        endif()
+        list(APPEND _de_reload_targets reload_game_${_de_v})
+    endforeach()
+    set(DE_HOST_RELOAD_GAMES "${_de_reload_targets}" PARENT_SCOPE)
+endif()

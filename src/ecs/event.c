@@ -98,6 +98,8 @@ de_event_type de_event_register(de_world *w, de_type_id payload) {
     q.align = align;
     q.is_pod = desc->is_pod;
     q.hooks = desc->hooks;
+    q.layout = desc; /* DENG-93 */
+    q.layout_hash = de_type_schema_hash(w->types, payload);
     q.older = 0;
     de_array_init(&q.buf[0], w->a, q.size, q.align, DE_MEM_ECS);
     de_array_init(&q.buf[1], w->a, q.size, q.align, DE_MEM_ECS);

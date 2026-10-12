@@ -117,10 +117,14 @@ static de_result host_run_game(de__host *h) {
         }
     }
 
-    r = de__game_attach(h, &h->desc);
+    /* DENG-93: hot reload (Debug, Dev) makes the game attach from a copy of its library. */
+    r = de__hot_reload_init(h);
+    if (r == DE_OK)
+        r = de__game_attach(h, &h->desc);
     if (r != DE_OK) {
         r = DE_FAIL_WRAP(r, "attaching the game");
         de__headless_end(h);
+        de__hot_reload_shutdown(h);
         de__engine_destroy(h->engine);
         h->engine = NULL;
         return r;
@@ -129,9 +133,12 @@ static de_result host_run_game(de__host *h) {
     const char *name = api->name != NULL ? api->name : h->config.name;
     de_engine *e = h->engine;
 
+    /* DENG-93: systems the game adds carry its owner tag, so a hot reload can remove them. */
+    de__world_set_system_owner(e->world, DE__HOST_GAME_SYSTEM_OWNER);
     de_error_clear(); /* so a failed init without its own error context is told apart */
     r = api->init != NULL ? api->init(e) : DE_OK;
     if (r != DE_OK) {
+        de__world_set_system_owner(e->world, DE__SYSTEM_OWNER_ENGINE);
         if (de_error_last() == NULL)
             r = DE_FAIL(r, "game '%s': init returned %s", name, de_result_str(r));
         else
@@ -139,6 +146,7 @@ static de_result host_run_game(de__host *h) {
         /* No shutdown: init did not succeed. */
         de__headless_end(h);
         de__game_detach(h);
+        de__hot_reload_shutdown(h); /* DENG-93 */
         de__engine_destroy(h->engine);
         h->engine = NULL;
         return r;
@@ -147,14 +155,17 @@ static de_result host_run_game(de__host *h) {
         api->register_types(e, e->types);
     if (api->register_systems != NULL)
         api->register_systems(e, e->world);
+    de__world_set_system_owner(e->world, DE__SYSTEM_OWNER_ENGINE); /* DENG-93 */
 
     r = de__loop_run(h);
     /* The previous handlers again: a second signal during shutdown is not swallowed. */
     de__headless_end(h);
 
+    /* A hot reload swapped the table behind h->api (DENG-93): `api` names the current game. */
     if (api->shutdown != NULL)
         api->shutdown(e);
     de__game_detach(h);
+    de__hot_reload_shutdown(h);    /* DENG-93: after the copy is closed */
     de__engine_destroy(h->engine); /* sets no error: a loop failure stays de_error_last() */
     h->engine = NULL;
     return r;

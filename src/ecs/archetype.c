@@ -206,3 +206,9 @@ void ecs_off_archetype_created(de_world *w, ecs_archetype_created_fn fn, void *u
         }
     }
 }
+
+/* ---- DENG-93: hot reload -------------------------------------------------------------------- */
+
+u64 ecs_archetype_chunk_layout(const de_world *w, ecs_archetype *a, u32 rows, bool write) {
+    return chunk_layout(w, a, rows, write);
+}
