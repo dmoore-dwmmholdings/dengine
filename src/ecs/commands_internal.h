@@ -13,8 +13,13 @@
  *   - Each command is an ecs_cmd header followed by its payload at the payload type's alignment
  *     (at most DE_ECS_MAX_COMPONENT_ALIGN). Records are 8-byte aligned.
  *   - The world's ecs_cmd_state owns every buffer, indexed by slot. Slot 0 is the main-thread
- *     buffer (de_world_commands). Other slots are handed out by ecs_cmd_buffer_acquire and go
- *     back on a LIFO free list after each apply; their pages stay with them.
+ *     buffer (de_world_commands). Other slots are handed out by ecs_cmd_buffer_acquire; their
+ *     pages stay with them.
+ *   - A key (system_order, range_index) keeps its slot (DENG-379): `homes` maps each key to the
+ *     slot it had last. par_each ranges acquire in thread order, so a slot handed out in acquire
+ *     order could give a range that records a buffer with no pages, and steady-state runs would
+ *     allocate depending on timing. A key without a slot takes a spare slot (one the last apply
+ *     did not use; that slot's old key loses it) or a new one. Slots never decide apply order.
  *
  * Pending ids: generation 0, index = (slot + 1) << ECS_CMD_LOCAL_BITS | local spawn index. They
  * never collide with a live id (generation 0 is never live, DENG-344) and never equal
@@ -103,20 +108,25 @@ typedef struct ecs_cmd_state {
     de_mutex lock;                              /**< guards buffers, free_slots, active (acquire) */
     DE_ARRAY(de_commands *) buffers;            /**< by slot; [0] = the main-thread buffer */
     de_commands *main;                          /**< buffers[0], readable without the lock */
-    DE_ARRAY(u32) free_slots;                   /**< LIFO */
+    DE_ARRAY(u32) free_slots;                   /**< spare slots, LIFO; may list acquired ones */
     DE_ARRAY(ecs_cmd_active) active;            /**< acquired since the last apply, sorted by key */
     DE_ARRAY(ecs_cmd_type_refs) component_refs; /**< by component id - 1 (built lazily) */
     DE_ARRAY(ecs_cmd_type_refs) event_refs;     /**< by event type id - 1 */
     DE_ARRAY(u32) entity_offsets;               /**< storage of the two above */
     u64 epoch;                                  /**< applies so far */
     bool applying;
+    /** DENG-379: {key, slot} of every slot except 0, sorted by key. A slot's key is the key it
+     * was last acquired for (its system_order, range_index). Capacity >= slots - 1. */
+    DE_ARRAY(ecs_cmd_active) homes;
 } ecs_cmd_state;
 
 /**
  * The buffer for key (`system_order`, `range_index`), for DENG-350's systems and query ranges.
  * Thread-safe: any number of threads may acquire at once. Acquiring a key again before the next
  * apply returns the same buffer (one thread at a time may record into it). The key, not the
- * buffer's slot or the time of the acquire, decides where the buffer applies.
+ * buffer's slot or the time of the acquire, decides where the buffer applies. A key gets the
+ * buffer it had at its last acquire unless another key took it over since, so a steady set of
+ * keys allocates nothing once warm, in any acquire order.
  * Returns NULL (error context set) on out of memory or when ECS_CMD_MAX_SLOTS buffers are in use.
  */
 de_commands *ecs_cmd_buffer_acquire(de_world *w, u32 system_order, u32 range_index);
