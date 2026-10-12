@@ -183,6 +183,7 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     ad.io_threads = e->config.asset_io_threads;
     ad.hot_reload = e->config.asset_hot_reload;
     ad.locale = e->config.asset_locale[0] != '\0' ? e->config.asset_locale : NULL;
+    ad.types = e->pub.types; /* DENG-215: the scene and prefab importer reads components here */
     r = de_asset_system_create(&ad, &e->pub.assets);
     if (r != DE_OK)
         return engine_fail(e, r, "asset system");

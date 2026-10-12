@@ -1,0 +1,23 @@
+# Unknown input is skipped with a warning and the rest loads: an unknown component type (TNope),
+# an unknown field (THealth.bogus), a key that is neither `id`, `parent` nor a table (color), a
+# DeChildOf table (the hierarchy comes from `parent`) and an unknown top-level key (meta).
+meta = "not a scene key"
+
+[[entity]]
+id = "0x10"
+[entity.THealth]
+current = 1.0
+max = 2.0
+bogus = 3
+[entity.TNope]
+x = 1
+
+[[entity]]
+id = "0x20"
+parent = "0x10"
+color = "red"
+[entity.TTarget]
+target = "0x10"
+speed = 4.0
+[entity.DeChildOf]
+parent = "0x10"

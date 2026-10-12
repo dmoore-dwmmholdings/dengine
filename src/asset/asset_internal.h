@@ -111,6 +111,12 @@ void de__asset_events_attach(de_asset_system *s, de_world *world);
  * queue, clears `emit_fn`. The world must still exist. */
 void de__asset_events_detach(de_asset_system *s);
 
+/* ---- DENG-215: built-in asset types (blob_type.c) ---------------------------------------- */
+
+/** de_asset_system_create (unless desc.no_builtin_types): registers `blob`, `scene` and
+ * `prefab`. Main thread. */
+de_result de__register_builtin_types(de_asset_system *s);
+
 DE_EXTERN_C_END
 
 #endif /* DE_ASSET_INTERNAL_H */

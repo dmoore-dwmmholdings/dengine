@@ -1,0 +1,6 @@
+# Not a prefab: two roots. The prefab importer refuses it.
+[[entity]]
+id = "0x1"
+
+[[entity]]
+id = "0x2"

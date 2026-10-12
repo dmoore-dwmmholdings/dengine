@@ -130,3 +130,19 @@ if(TARGET test_asset_hot_reload)
         target_compile_definitions(test_asset_hot_reload PRIVATE DE_HR_WITH_PACK=0)
     endif()
 endif()
+
+# DENG-215: the built-in `blob`, `scene` and `prefab` types (src/asset/blob_type.c,
+# src/asset/scene/): blob bytes, the TOML scene/prefab importer, the cooked format, the loader and
+# de_prefab_instantiate. data/scenes/ is mounted read-only as scn:/. The cook tests run the
+# importer through the runtime pipeline and through a de_cooker (as de-cook does); both need
+# the cooker (DE_HAS_COOKER builds), and skip elsewhere.
+de_add_test(NAME asset_scene SOURCES test_blob_type.c test_scene_cook.c
+            LIBS de_asset de_ecs de_reflect de_task de_platform TIMEOUT 120)
+if(TARGET test_asset_scene)
+    target_include_directories(test_asset_scene PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_asset_scene PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS)
+        target_link_libraries(test_asset_scene PRIVATE "$<$<CONFIG:Debug,Dev>:de_cooker>")
+    endif()
+endif()
