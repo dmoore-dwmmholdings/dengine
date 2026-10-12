@@ -134,9 +134,11 @@ static inline const de__engine *de__engine_from_const(const de_engine *e) {
  * `game`, cvars (the registry is process-wide and created on first use: nothing to create),
  * the platform (de_platform_init; a platform that is already running is used as it is and not
  * shut down by destroy), the task system (`config.task_workers` frame workers), the type
- * registry, the ECS world, and a window from `[window]` unless headless (or the platform runs
- * without video). Optional modules (gpu, renderer, input, audio, physics, ui, ...) and `assets`
- * (until S07) stay NULL.
+ * registry, the ECS world and its built-in components (de_builtin_components: the transform and
+ * hierarchy components and the transform propagation system, registered before anything else so
+ * their ids are the same on every machine), and a window from `[window]` unless headless (or the
+ * platform runs without video). Optional modules (gpu, renderer, input, audio, physics, ui, ...)
+ * and `assets` (until S07) stay NULL.
  *
  * Main thread only: the calling thread becomes the platform's main thread and the task
  * system's worker 0. On failure everything created so far is destroyed in reverse order, `*out`

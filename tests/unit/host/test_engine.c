@@ -63,6 +63,14 @@ TEST(engine, create_destroy_no_leak) {
     EXPECT_EQ(de_task_worker_index(), 0u);         /* this thread is frame worker 0 */
     EXPECT_TRUE(de_platform_headless());
 
+    /* The ECS built-ins exist before the game registers anything (DENG-351). */
+    de_component tr = de_component_find(e->world, "DeTransform");
+    EXPECT_TRUE(DE_HANDLE_VALID(tr));
+    EXPECT_TRUE(DE_HANDLE_VALID(de_component_find(e->world, "DeGlobalTransform")));
+    EXPECT_TRUE(DE_HANDLE_VALID(de_component_find(e->world, "DeChildOf")));
+    EXPECT_TRUE(DE_HANDLE_VALID(de_component_find(e->world, "DeChildren")));
+    EXPECT_EQ(de_builtin_components(e->world).transform.id, tr.id); /* already registered */
+
     de_tracking_stats s = de_tracking_allocator_stats(&t);
     EXPECT_GT(s.alloc_count, 0u); /* everything went through the engine's allocator */
 
@@ -133,6 +141,43 @@ TEST(engine, zero_desc_headless_defaults) {
     EXPECT_EQ(t.frame_cap_hz, 0u);
     EXPECT_FALSE(DE_HANDLE_VALID(e->window));
     de__engine_destroy(e);
+}
+
+TEST(engine, builtin_components_registered_first) {
+    /* The built-in ids are part of the determinism contract: every engine registers them at the
+     * same point, so two engines give the same ids, and transform propagation runs in PostUpdate
+     * without the game asking for it. */
+    de__game_config c = small_config();
+    de__engine_desc d;
+    memset(&d, 0, sizeof d);
+    d.config = &c;
+    d.headless = true;
+    de_builtin_component_ids first;
+    memset(&first, 0, sizeof first);
+    for (int i = 0; i < 2; ++i) {
+        de_engine *e = NULL;
+        ASSERT_EQ(de__engine_create(&d, &e), DE_OK);
+        de_builtin_component_ids ids = de_builtin_components(e->world);
+        ASSERT_TRUE(DE_HANDLE_VALID(ids.transform));
+        ASSERT_TRUE(DE_HANDLE_VALID(ids.global_transform));
+        ASSERT_TRUE(DE_HANDLE_VALID(ids.child_of));
+        ASSERT_TRUE(DE_HANDLE_VALID(ids.children));
+        if (i == 0) {
+            first = ids;
+        } else {
+            EXPECT_EQ(ids.transform.id, first.transform.id);
+            EXPECT_EQ(ids.global_transform.id, first.global_transform.id);
+            EXPECT_EQ(ids.child_of.id, first.child_of.id);
+            EXPECT_EQ(ids.children.id, first.children.id);
+        }
+        /* A parent and child spawned now get their world transform from the PostUpdate run. */
+        de_entity parent = de_entity_spawn(e->world);
+        de_entity child = de_entity_spawn(e->world);
+        EXPECT_EQ(de_entity_set_parent(e->world, child, parent), DE_OK);
+        EXPECT_EQ(de_entity_children_count(e->world, parent), 1u);
+        EXPECT_EQ(de_world_run_schedule(e->world, DE_SCHEDULE_POST_UPDATE, 0.0f, 0.0f), DE_OK);
+        de__engine_destroy(e);
+    }
 }
 
 TEST(engine, create_bad_arguments) {
@@ -216,8 +261,10 @@ static void count_run(de_system_ctx *ctx) {
 static de_result game_init(de_engine *e) {
     g_game.init_at = ++g_game.seq;
     g_game.init_n++;
-    g_game.init_saw_modules = e != NULL && e->world != NULL && e->types != NULL &&
-                              e->tasks != NULL && e->allocator != NULL;
+    g_game.init_saw_modules =
+        e != NULL && e->world != NULL && e->types != NULL && e->tasks != NULL &&
+        e->allocator != NULL &&
+        DE_HANDLE_VALID(de_component_find(e->world, "DeTransform")); /* built-ins first */
     if (g_game.init_result != DE_OK)
         return DE_FAIL(g_game.init_result, "test game: init refuses (disk on fire)");
     return DE_OK;

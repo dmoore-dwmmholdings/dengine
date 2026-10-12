@@ -128,6 +128,19 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     if (r != DE_OK)
         return engine_fail(e, r, "ECS world");
 
+    /* 7b. The ECS built-ins (DeTransform, DeGlobalTransform, DeChildOf, DeChildren and the
+     * de.transform_propagate PostUpdate system; DENG-351) register on first use. Their component
+     * ids are part of the determinism contract, so the engine registers them at one fixed point:
+     * right after the world, before the game registers anything and before any schedule runs
+     * (Decision: ECS built-in components are registered on first use). */
+    de_error_clear();
+    de_builtin_component_ids builtins = de_builtin_components(e->pub.world);
+    if (!DE_HANDLE_VALID(builtins.transform)) {
+        const de_error *err = de_error_last();
+        return engine_fail(e, err != NULL ? err->result : DE_ERR_INTERNAL,
+                           "ECS built-in components");
+    }
+
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
      * has none. Assets (S07) and the optional modules stay NULL. */
     if (!e->headless) {
