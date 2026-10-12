@@ -11,7 +11,9 @@
  *   - Plaintext-with-MAC mode for Dev/Debug sessions that turn encryption off: the body stays
  *     readable and a 16-byte keyed BLAKE2b tag still authenticates it.
  *   - Key agreement: X25519 (crypto_x25519), then a keyed BLAKE2b KDF that gives one key per
- *     direction (client to server, server to client).
+ *     direction (client to server, server to client). With a connect token, the token's
+ *     connection key is mixed in first (de__net_derive_keys_psk, DENG-378): that is what
+ *     authenticates the server to the client and the client to the server.
  *   - Replay window: 256 sequences behind the newest one.
  *   - Constant-time compares (crypto_verify16/32) and crypto_wipe for every secret.
  *   - OS randomness (getentropy, rand_s) for ephemeral keys, token nonces and server secrets.
@@ -24,10 +26,10 @@
 
 #include <dengine/de_base.h>
 
-#define DE__NET_KEY_BYTES   32u /**< symmetric keys, X25519 keys and shared secrets */
-#define DE__NET_TAG_BYTES   16u /**< AEAD / MAC tag */
-#define DE__NET_NONCE_BYTES 24u /**< XChaCha20 nonce */
-#define DE__NET_AD_MAX      96u /**< largest associated data a packet uses (RESPONSE: 81) */
+#define DE__NET_KEY_BYTES   32u  /**< symmetric keys, X25519 keys and shared secrets */
+#define DE__NET_TAG_BYTES   16u  /**< AEAD / MAC tag */
+#define DE__NET_NONCE_BYTES 24u  /**< XChaCha20 nonce */
+#define DE__NET_AD_MAX      192u /**< largest associated data a packet uses (RESPONSE: 177) */
 
 /** Direction bit of the nonce: which side sealed the packet. */
 typedef enum de__net_dir {
@@ -96,6 +98,24 @@ bool de__net_derive_keys(de__net_keys *out, const u8 my_secret[DE__NET_KEY_BYTES
                          const u8 their_public[DE__NET_KEY_BYTES], u64 protocol_id,
                          const u8 client_pk[DE__NET_KEY_BYTES],
                          const u8 server_pk[DE__NET_KEY_BYTES]);
+
+/**
+ * de__net_derive_keys bound to a pre-shared connection key (DENG-378). The connection key comes
+ * from the connect token: the client has it in clear, the server reads it from the sealed part.
+ * The X25519 shared secret is mixed with it first:
+ *
+ *     prk = BLAKE2b-256(key = psk, "dengine net psk\0" | shared)
+ *
+ * and `prk` then takes the place of `shared` in the two KDF lines above. Without `psk` an
+ * attacker cannot get the keys even when it made the X25519 exchange itself (a man in the middle),
+ * and without the ephemeral X25519 secrets a later leak of `psk` does not open recorded sessions.
+ * `psk` NULL is de__net_derive_keys (a direct connect: no connection key). `prk` and the raw shared
+ * secret are wiped before return. False (keys wiped) for an all-zero shared secret.
+ */
+bool de__net_derive_keys_psk(de__net_keys *out, const u8 my_secret[DE__NET_KEY_BYTES],
+                             const u8 their_public[DE__NET_KEY_BYTES], u64 protocol_id,
+                             const u8 client_pk[DE__NET_KEY_BYTES],
+                             const u8 server_pk[DE__NET_KEY_BYTES], const u8 *psk);
 
 /** Keyed BLAKE2b with an output of `hash_bytes` (1 to 64). Used for the challenge cookie, the
  * DENIED proof and the plaintext-mode MAC. */

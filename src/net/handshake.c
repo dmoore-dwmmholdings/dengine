@@ -17,8 +17,10 @@
 
 /* Sealed body sizes. */
 #define CHALLENGE_BODY 40u /* epoch (8) + cookie (32) */
-#define RESPONSE_BODY  65u /* token (64) + flags (1) */
-#define ACCEPT_BODY    5u  /* slot (4) + flags (1) */
+#define RESPONSE_BODY  1u  /* flags (1); the token is a plaintext field (DENG-378) */
+/* RESPONSE plaintext fields: client_pk (32), epoch (8), cookie (32), token (96). */
+#define RESPONSE_EXTRA (DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES + DE__NET_TOKEN_BYTES)
+#define ACCEPT_BODY    5u /* slot (4) + flags (1) */
 
 /* The largest CHALLENGE and DENIED must not be bigger than a REQUEST (no amplification). */
 DE_STATIC_ASSERT(1u + DE__NET_VARINT_MAX + DE__NET_KEY_BYTES + CHALLENGE_BODY + DE__NET_TAG_BYTES <=
@@ -26,8 +28,8 @@ DE_STATIC_ASSERT(1u + DE__NET_VARINT_MAX + DE__NET_KEY_BYTES + CHALLENGE_BODY + 
                  "CHALLENGE must not be bigger than REQUEST");
 DE_STATIC_ASSERT(DE__NET_DENIED_BYTES <= DE__NET_REQUEST_BYTES, "DENIED must not be bigger");
 DE_STATIC_ASSERT(REQ_PADDING <= DE__NET_REQUEST_BYTES, "REQUEST layout");
-/* The largest associated data: RESPONSE (9 + 72), CHALLENGE (9 + 32 + 32). */
-DE_STATIC_ASSERT(9u + 72u <= DE__NET_AD_MAX && 9u + 64u <= DE__NET_AD_MAX, "AD size");
+/* The largest associated data: RESPONSE (9 + 168), CHALLENGE (9 + 32 + 32). */
+DE_STATIC_ASSERT(9u + RESPONSE_EXTRA <= DE__NET_AD_MAX && 9u + 64u <= DE__NET_AD_MAX, "AD size");
 
 /* ---------- REQUEST ---------- */
 
@@ -106,7 +108,7 @@ u32 de__net_packet_extra_bytes(de__net_packet_type type) {
     case DE__NET_PACKET_CHALLENGE:
         return DE__NET_KEY_BYTES; /* server_pk */
     case DE__NET_PACKET_RESPONSE:
-        return DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES; /* client_pk, epoch, cookie */
+        return RESPONSE_EXTRA; /* client_pk, epoch, cookie, token */
     default:
         return 0;
     }

@@ -1,6 +1,8 @@
 /* Tests for the connection layer (DENG-52): the challenge handshake over the loopback transport
  * and over UDP 127.0.0.1, payloads, tampering, replay, DENIED, timeouts with an injected clock,
- * the allocation-free stateless challenge, redundant DISCONNECTs and key wiping.
+ * the allocation-free stateless challenge, redundant DISCONNECTs and key wiping. DENG-378: the
+ * connection key of a token authenticates both ends (a man in the middle, a stolen token, a
+ * replayed RESPONSE), and what a direct connect still lacks.
  *
  * A "tap" socket sits between each endpoint and its loopback socket: it can hold back outgoing
  * datagrams (so a test can change and deliver them itself) or drop some of them. */
@@ -936,12 +938,15 @@ TEST(net, stateless_challenge_no_alloc) {
         q.protocol_id = k == 4 ? PROTOCOL_ID + 1 : PROTOCOL_ID;
         for (u32 i = 0; i < 32; ++i)
             q.client_pk[i] = (u8)(k * 40u + i + 1u);
+        u8 whole[DE_NET_CONNECT_TOKEN_BYTES]; /* only the sealed part goes on the wire */
+        memset(whole, 0, sizeof whole);
         if (k == 0)
-            make_token(r, 100, q.token);
+            make_token(r, 100, whole);
         else if (k == 1)
-            memset(q.token, 0x5A, sizeof q.token);
+            memset(whole, 0x5A, sizeof whole);
         else if (k == 2)
-            ASSERT_EQ(de_net_connect_token_generate(r->key, 5, NOW_UNIX - 10, 0, q.token), DE_OK);
+            ASSERT_EQ(de_net_connect_token_generate(r->key, 5, NOW_UNIX - 10, 0, whole), DE_OK);
+        memcpy(q.token, whole, sizeof q.token);
         /* k == 3: all-zero token (direct connect) */
         de__net_request_write(req[k], &q);
         if (k == 5)
@@ -1155,7 +1160,8 @@ TEST(net, handshake_key_wipe) {
     memcpy(sa.needles[1], ck->s2c, 32);
     memcpy(sa.needles[2], key, 32);
     memcpy(sa.needles[3], secret_msg, 32);
-    sa.needle_count = 4;
+    memcpy(sa.needles[4], token + DE_NET_CONNECT_TOKEN_SEALED_BYTES, 32); /* connection key */
+    sa.needle_count = 5;
     de__net_client_disconnect(client, 0);
     de__net_client_update(client);
     de__net_client_update(client);
@@ -1177,9 +1183,9 @@ TEST(net, handshake_key_wipe) {
     ASSERT_EQ(de__net_client_get_state(client), DE__NET_CLIENT_CONNECTED);
     ASSERT_EQ(de__net_client_send(client, secret_msg, sizeof secret_msg), DE_OK);
     de__net_server_update(server);
-    memcpy(sa.needles[4], ck->c2s, 32);
-    memcpy(sa.needles[5], ck->s2c, 32);
-    sa.needle_count = 6;
+    memcpy(sa.needles[5], ck->c2s, 32);
+    memcpy(sa.needles[6], ck->s2c, 32);
+    sa.needle_count = 7;
     de__net_client_destroy(client);
     de__net_server_destroy(server);
     EXPECT_EQ(sa.frees, 2u);
@@ -1228,5 +1234,311 @@ TEST(net, handshake_plaintext_mode) {
     rig_connect(r, 0, 1);
     EXPECT_FALSE(de__net_client_plaintext(r->client[0]));
     EXPECT_FALSE(de__net_server_slot(r->server, de__net_client_slot(r->client[0])).plaintext);
+    rig_destroy(r);
+}
+
+/* ---------- Server authentication (DENG-378) ---------- */
+
+/* The connection key mixed into the KDF: both ends agree only when they use the same key; without
+ * one it is the DENG-52 derivation. */
+TEST(net, kdf_connection_key) {
+    u8 cs[32], cp[32], ss[32], sp[32], psk[32], psk2[32];
+    ASSERT_EQ(de__net_x25519_keypair(cs, cp), DE_OK);
+    ASSERT_EQ(de__net_x25519_keypair(ss, sp), DE_OK);
+    ASSERT_EQ(de__net_random(psk, sizeof psk), DE_OK);
+    memcpy(psk2, psk, sizeof psk2);
+    psk2[31] ^= 1u;
+    de__net_keys client, server, other, plain;
+    ASSERT_TRUE(de__net_derive_keys_psk(&client, cs, sp, 77, cp, sp, psk));
+    ASSERT_TRUE(de__net_derive_keys_psk(&server, ss, cp, 77, cp, sp, psk));
+    EXPECT_MEMEQ(client.c2s, server.c2s, 32);
+    EXPECT_MEMEQ(client.s2c, server.s2c, 32);
+    EXPECT_NE(memcmp(client.c2s, client.s2c, 32), 0);
+    /* One bit of the key changes both keys. */
+    ASSERT_TRUE(de__net_derive_keys_psk(&other, ss, cp, 77, cp, sp, psk2));
+    EXPECT_NE(memcmp(client.c2s, other.c2s, 32), 0);
+    EXPECT_NE(memcmp(client.s2c, other.s2c, 32), 0);
+    /* No key: the DENG-52 derivation, and not the keyed one. */
+    ASSERT_TRUE(de__net_derive_keys_psk(&other, ss, cp, 77, cp, sp, NULL));
+    ASSERT_TRUE(de__net_derive_keys(&plain, ss, cp, 77, cp, sp));
+    EXPECT_MEMEQ(other.c2s, plain.c2s, 32);
+    EXPECT_MEMEQ(other.s2c, plain.s2c, 32);
+    EXPECT_NE(memcmp(client.c2s, plain.c2s, 32), 0);
+    /* A man in the middle runs X25519 with the client itself; without the key its keys differ. */
+    u8 ms[32], mp[32];
+    ASSERT_EQ(de__net_x25519_keypair(ms, mp), DE_OK);
+    de__net_keys victim, mitm;
+    ASSERT_TRUE(de__net_derive_keys_psk(&victim, cs, mp, 77, cp, mp, psk));
+    ASSERT_TRUE(de__net_derive_keys_psk(&mitm, ms, cp, 77, cp, mp, NULL));
+    EXPECT_NE(memcmp(victim.s2c, mitm.s2c, 32), 0);
+    EXPECT_NE(memcmp(victim.c2s, mitm.c2s, 32), 0);
+    /* A low-order point is still refused, key or not. */
+    static const u8 zero[32] = {0};
+    EXPECT_FALSE(de__net_derive_keys_psk(&other, cs, zero, 77, cp, zero, psk));
+    for (u32 i = 0; i < 32; ++i)
+        EXPECT_EQ(other.c2s[i] | other.s2c[i], 0);
+}
+
+/* What a host on the path can send as the server's answer to `request`: a CHALLENGE from its own
+ * X25519 key, bound to the REQUEST it saw, with the keys it can derive (`psk`: the key it uses,
+ * NULL for none). Returns the length; `keys` gets its keys. */
+static u32 mitm_challenge(const u8 *request, u32 request_bytes, const u8 *psk, u8 *out,
+                          de__net_keys *keys) {
+    de__net_request req;
+    ASSERT_TRUE(de__net_request_read(request, request_bytes, &req));
+    u8 digest[DE__NET_KEY_BYTES];
+    de__net_request_digest(digest, request);
+    u8 sk[DE__NET_KEY_BYTES], pk[DE__NET_KEY_BYTES];
+    ASSERT_EQ(de__net_x25519_keypair(sk, pk), DE_OK);
+    ASSERT_TRUE(
+        de__net_derive_keys_psk(keys, sk, req.client_pk, PROTOCOL_ID, req.client_pk, pk, psk));
+    u8 body[8 + DE__NET_KEY_BYTES];
+    de__net_put_u64(body, 1);   /* an epoch ... */
+    memset(body + 8, 0xC0, 32); /* ... and a cookie of its choice */
+    u32 n = de__net_packet_seal(out, DE__NET_PACKET_MAX, DE__NET_PACKET_CHALLENGE, PROTOCOL_ID, 0,
+                                pk, digest, body, sizeof body, keys->s2c, DE__NET_DIR_S2C,
+                                DE__NET_DOMAIN_CHALLENGE, false);
+    ASSERT_NE(n, 0u);
+    return n;
+}
+
+static bool all_zero(const u8 *p, u32 n) {
+    u8 any = 0;
+    for (u32 i = 0; i < n; ++i)
+        any |= p[i];
+    return any == 0;
+}
+
+/* A man in the middle answers the client's REQUEST as the server: the client drops every answer,
+ * holds no keys, and still connects to the real server. An impostor server (its own server key)
+ * can only refuse the token. */
+TEST(net, handshake_mitm_refused) {
+    rig_opts o = {0};
+    rig *r = rig_create(&o);
+    tap *ct = &r->client_tap[0];
+    tap *st = &r->server_tap;
+    u8 token[DE_NET_CONNECT_TOKEN_BYTES];
+    make_token(r, 1, token);
+    ct->hold = true;
+    ASSERT_EQ(de__net_client_connect(r->client[0], &r->server_addr, token), DE_OK);
+    u32 idx = tap_find(ct, DE__NET_PACKET_REQUEST);
+    u8 request[DE__NET_PACKET_MAX];
+    u32 request_bytes = ct->held_bytes[idx];
+    memcpy(request, ct->held[idx], request_bytes);
+    ct->hold = false;
+    /* The token on the wire is the sealed part only: the connection key is not in the REQUEST. */
+    EXPECT_MEMEQ(request + 42, token, DE_NET_CONNECT_TOKEN_SEALED_BYTES);
+    for (u32 i = 0; i + 32 <= request_bytes; ++i)
+        EXPECT_NE(memcmp(request + i, token + DE_NET_CONNECT_TOKEN_SEALED_BYTES, 32), 0);
+
+    /* The MITM's answers, sent from the server's address (it is on the path): with no key (the
+     * DENG-52 handshake, which this attack completed) and with guessed keys. */
+    u8 guess[DE__NET_KEY_BYTES];
+    memset(guess, 0, sizeof guess);
+    for (u32 attempt = 0; attempt < 3; ++attempt) {
+        if (attempt == 2)
+            ASSERT_EQ(de__net_random(guess, sizeof guess), DE_OK);
+        u8 pkt[DE__NET_PACKET_MAX];
+        de__net_keys mk;
+        u32 n = mitm_challenge(request, request_bytes, attempt == 0 ? NULL : guess, pkt, &mk);
+        u64 auth_before = de__net_client_stats(r->client[0])->dropped_auth;
+        tap_inject(st, &r->client_sock[0]->local, pkt, n);
+        de__net_client_update(r->client[0]);
+        EXPECT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_SENDING_REQUEST);
+        EXPECT_EQ(de__net_client_stats(r->client[0])->dropped_auth, auth_before + 1u);
+        /* No shared keys: the client kept nothing it derived. */
+        const de__net_keys *ck = de__net_client_keys(r->client[0]);
+        EXPECT_TRUE(all_zero(ck->c2s, 32) && all_zero(ck->s2c, 32));
+    }
+    EXPECT_EQ(r->cev[0].connected, 0u);
+    EXPECT_EQ(ct->sent_type[DE__NET_PACKET_RESPONSE], 0u);
+
+    /* The real server still connects: the REQUEST reaches it, the handshake completes. */
+    tap_inject(ct, &r->server_addr, request, request_bytes);
+    u32 steps = 0;
+    while (de__net_client_get_state(r->client[0]) != DE__NET_CLIENT_CONNECTED && steps < 20) {
+        rig_step(r, 1);
+        steps++;
+    }
+    ASSERT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_CONNECTED);
+    const de__net_keys *ck = de__net_client_keys(r->client[0]);
+    const de__net_keys *sk = de__net_server_slot_keys(r->server, de__net_client_slot(r->client[0]));
+    EXPECT_MEMEQ(ck->c2s, sk->c2s, 32);
+    EXPECT_MEMEQ(ck->s2c, sk->s2c, 32);
+    EXPECT_EQ(de__net_server_slot(r->server, de__net_client_slot(r->client[0])).client_id, 1u);
+
+    /* An impostor server at another address (the client was routed there) with its own server
+     * key: it cannot read the token, so it can only refuse it. */
+    de_net_address fake_addr = de_net_address_ipv4(127, 0, 0, 1, 40001);
+    de__socket *fake_sock = NULL;
+    ASSERT_EQ(de__loopback_open(r->net, &fake_addr, &fake_sock), DE_OK);
+    de__net_server_desc fd;
+    memset(&fd, 0, sizeof fd);
+    fd.socket = fake_sock;
+    fd.protocol_id = PROTOCOL_ID;
+    fd.max_peers = 4;
+    ASSERT_EQ(de_net_server_key_generate(fd.server_key), DE_OK);
+    fd.clock = clock_of(&r->clock);
+    de__net_server *fake = NULL;
+    ASSERT_EQ(de__net_server_create(&fd, &fake), DE_OK);
+    make_token(r, 2, token);
+    ASSERT_EQ(de__net_client_connect(r->client[1], &fake_addr, token), DE_OK);
+    for (u32 i = 0; i < 4; ++i) {
+        de__net_server_update(fake);
+        rig_step(r, 1);
+    }
+    EXPECT_EQ(de__net_client_get_state(r->client[1]), DE__NET_CLIENT_DISCONNECTED);
+    u8 detail = 0;
+    EXPECT_EQ(de__net_client_end_reason(r->client[1], &detail), DE__NET_END_DENIED);
+    EXPECT_EQ(detail, (u8)DE__NET_DENY_TOKEN_INVALID);
+    EXPECT_EQ(de__net_server_connected_count(fake), 0u);
+    const de__net_keys *k1 = de__net_client_keys(r->client[1]);
+    EXPECT_TRUE(all_zero(k1->c2s, 32) && all_zero(k1->s2c, 32));
+    de__net_server_destroy(fake);
+    de__socket_close(fake_sock);
+    rig_destroy(r);
+}
+
+/* A token captured on the wire is useless without the connection key: the thief never gets a
+ * connection, and the real client still connects with it. */
+TEST(net, handshake_stolen_token) {
+    rig_opts o = {0};
+    rig *r = rig_create(&o);
+    tap *ct = &r->client_tap[0];
+    u8 token[DE_NET_CONNECT_TOKEN_BYTES];
+    make_token(r, 7, token);
+
+    /* The real client's REQUEST and RESPONSE, captured. */
+    ct->hold = true;
+    ASSERT_EQ(de__net_client_connect(r->client[0], &r->server_addr, token), DE_OK);
+    u32 idx = tap_find(ct, DE__NET_PACKET_REQUEST);
+    tap_inject(ct, &r->server_addr, ct->held[idx], ct->held_bytes[idx]);
+    de__net_server_update(r->server);
+    de__net_client_update(r->client[0]);
+    ASSERT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_SENDING_RESPONSE);
+    idx = tap_find(ct, DE__NET_PACKET_RESPONSE);
+    u8 response[DE__NET_PACKET_MAX];
+    u32 response_bytes = ct->held_bytes[idx];
+    memcpy(response, ct->held[idx], response_bytes);
+    de__net_client_disconnect(r->client[0], 0); /* the real client waits */
+    ct->hold = false;
+
+    /* The thief has the sealed part (it is on the wire) and guesses the key. A token without a
+     * key is refused at once. */
+    u8 stolen[DE_NET_CONNECT_TOKEN_BYTES];
+    memcpy(stolen, token, DE_NET_CONNECT_TOKEN_SEALED_BYTES);
+    memset(stolen + DE_NET_CONNECT_TOKEN_SEALED_BYTES, 0, DE_NET_CONNECT_TOKEN_KEY_BYTES);
+    EXPECT_EQ(de__net_client_connect(r->client[1], &r->server_addr, stolen),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__net_client_get_state(r->client[1]), DE__NET_CLIENT_DISCONNECTED);
+    ASSERT_EQ(
+        de__net_random(stolen + DE_NET_CONNECT_TOKEN_SEALED_BYTES, DE_NET_CONNECT_TOKEN_KEY_BYTES),
+        DE_OK);
+    ASSERT_EQ(de__net_client_connect(r->client[1], &r->server_addr, stolen), DE_OK);
+    u32 steps = 0;
+    while (de__net_client_get_state(r->client[1]) != DE__NET_CLIENT_DISCONNECTED && steps < 200) {
+        rig_step(r, 50);
+        steps++;
+    }
+    /* The server answered the REQUESTs (the token is valid) but the thief could open none of the
+     * CHALLENGEs, so it never sent a RESPONSE and timed out. */
+    EXPECT_EQ(de__net_client_end_reason(r->client[1], NULL), DE__NET_END_CONNECT_TIMEOUT);
+    EXPECT_GE(de__net_client_stats(r->client[1])->dropped_auth, 1u);
+    EXPECT_EQ(r->client_tap[1].sent_type[DE__NET_PACKET_RESPONSE], 0u);
+    EXPECT_EQ(r->sev.connected, 0u);
+    EXPECT_EQ(de__net_server_connected_count(r->server), 0u);
+
+    /* The captured RESPONSE (it carries the token, a cookie and the client's key) does not help
+     * either: from the thief's address the cookie is wrong. */
+    u64 cookie_before = de__net_server_stats(r->server)->dropped_cookie;
+    tap_inject(&r->client_tap[1], &r->server_addr, response, response_bytes);
+    de__net_server_update(r->server);
+    EXPECT_EQ(de__net_server_stats(r->server)->dropped_cookie, cookie_before + 1u);
+    EXPECT_EQ(de__net_server_connected_count(r->server), 0u);
+
+    /* The real client connects with the same token. */
+    ASSERT_EQ(de__net_client_connect(r->client[0], &r->server_addr, token), DE_OK);
+    steps = 0;
+    while (de__net_client_get_state(r->client[0]) != DE__NET_CLIENT_CONNECTED && steps < 20) {
+        rig_step(r, 1);
+        steps++;
+    }
+    ASSERT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_CONNECTED);
+    EXPECT_EQ(de__net_server_slot(r->server, de__net_client_slot(r->client[0])).client_id, 7u);
+    rig_destroy(r);
+}
+
+/* A RESPONSE captured on the wire and sent again from the client's address after its connection
+ * ended: before DENG-378 it made a ghost slot (and blocked the client id) until the idle
+ * timeout. */
+TEST(net, handshake_response_replay) {
+    rig_opts o = {0};
+    rig *r = rig_create(&o);
+    tap *ct = &r->client_tap[0];
+    u8 token[DE_NET_CONNECT_TOKEN_BYTES];
+    make_token(r, 3, token);
+    ASSERT_EQ(de__net_client_connect(r->client[0], &r->server_addr, token), DE_OK);
+    de__net_server_update(r->server); /* CHALLENGE */
+    ct->hold = true;
+    de__net_client_update(r->client[0]); /* RESPONSE, held */
+    ct->hold = false;
+    u32 idx = tap_find(ct, DE__NET_PACKET_RESPONSE);
+    u8 response[DE__NET_PACKET_MAX];
+    u32 response_bytes = ct->held_bytes[idx];
+    memcpy(response, ct->held[idx], response_bytes);
+    tap_inject(ct, &r->server_addr, response, response_bytes);
+    de__net_server_update(r->server);
+    de__net_client_update(r->client[0]);
+    ASSERT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_CONNECTED);
+    EXPECT_EQ(r->sev.connected, 1u);
+
+    /* The client leaves; the RESPONSE comes again, inside its epoch, from the same address. */
+    de__net_client_disconnect(r->client[0], 0);
+    for (u32 i = 0; i < 3; ++i)
+        rig_step(r, 1);
+    ASSERT_EQ(de__net_server_connected_count(r->server), 0u);
+    u64 replay_before = de__net_server_stats(r->server)->dropped_replay;
+    tap_inject(ct, &r->server_addr, response, response_bytes);
+    de__net_server_update(r->server);
+    EXPECT_EQ(de__net_server_connected_count(r->server), 0u);
+    EXPECT_EQ(r->sev.connected, 1u);
+    EXPECT_EQ(de__net_server_stats(r->server)->dropped_replay, replay_before + 1u);
+
+    /* So the client id is free: the client comes back at once. */
+    rig_connect(r, 0, 3);
+    EXPECT_EQ(r->sev.connected, 2u);
+    rig_destroy(r);
+}
+
+/* What a direct connect (all-zero token) still lacks: no connection key, so a host on the path
+ * that answers the REQUEST itself completes the key exchange with the client. This test pins the
+ * documented gap (Trama "Decision: Connect tokens carry a connection key that authenticates both
+ * ends"); a change that closes it changes this test. */
+TEST(net, handshake_direct_connect_unauthenticated) {
+    rig_opts o = {0};
+    rig *r = rig_create(&o);
+    tap *ct = &r->client_tap[0];
+    ct->hold = true;
+    ASSERT_EQ(de__net_client_connect(r->client[0], &r->server_addr, NULL), DE_OK);
+    u32 idx = tap_find(ct, DE__NET_PACKET_REQUEST);
+    u8 request[DE__NET_PACKET_MAX];
+    u32 request_bytes = ct->held_bytes[idx];
+    memcpy(request, ct->held[idx], request_bytes);
+    ct->hold = false;
+    u8 pkt[DE__NET_PACKET_MAX];
+    de__net_keys mk;
+    u32 n = mitm_challenge(request, request_bytes, NULL, pkt, &mk);
+    tap_inject(&r->server_tap, &r->client_sock[0]->local, pkt, n);
+    de__net_client_update(r->client[0]);
+    EXPECT_EQ(de__net_client_get_state(r->client[0]), DE__NET_CLIENT_SENDING_RESPONSE);
+    const de__net_keys *ck = de__net_client_keys(r->client[0]);
+    EXPECT_MEMEQ(ck->c2s, mk.c2s, 32);
+    EXPECT_MEMEQ(ck->s2c, mk.s2c, 32);
+    /* A direct connect to the real server still works (DENG-2 Q15). */
+    de__net_client_disconnect(r->client[0], 0);
+    ASSERT_EQ(de__net_client_connect(r->client[1], &r->server_addr, NULL), DE_OK);
+    for (u32 i = 0; i < 4; ++i)
+        rig_step(r, 1);
+    EXPECT_EQ(de__net_client_get_state(r->client[1]), DE__NET_CLIENT_CONNECTED);
     rig_destroy(r);
 }
