@@ -1,0 +1,68 @@
+# tests/unit/physics: unit tests of module `physics` (de_physics, SPEC §13). Shared file
+# (append-only within S22): later S22 tasks add their own de_add_test() blocks below.
+#
+# One executable per suite (CTest names physics_world.<test>, physics_shapes.<test>, ...). The
+# tests include the internal headers ("physics/physics_internal.h", src/ is an include root) and
+# use the module's deterministic flags (no FP contraction), like the code they check.
+if(NOT TARGET de_physics)
+    return()
+endif()
+
+# DENG-132: world, bodies, shapes, convex hulls, mass properties.
+de_add_test(NAME physics_world SOURCES test_world_bodies.c LIBS de_physics)
+de_add_test(NAME physics_shapes SOURCES test_shapes.c LIBS de_physics)
+de_add_test(NAME physics_hull SOURCES test_convex_hull.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics_mass SOURCES test_mass.c LIBS de_physics)
+foreach(_de_phys_test test_physics_world test_physics_shapes test_physics_hull test_physics_mass)
+    if(TARGET ${_de_phys_test})
+        target_include_directories(${_de_phys_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_phys_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+# The checked-in vector of hull outputs and mass properties (physics_hull.golden_vector). x86-64
+# and arm64 must reproduce it bit for bit. Regenerate (never by hand) with
+#     DE_REGEN_GOLDEN=1 build/dev/tests/unit/physics/test_physics_hull --filter=physics_hull.golden_vector
+if(TARGET test_physics_hull)
+    target_compile_definitions(test_physics_hull PRIVATE
+        "DE_PHYSICS_SHAPES_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/shapes_golden.txt\"")
+endif()
+
+# DENG-132: SPEC §5.7 static check over src/physics/ (comments stripped): no <math.h>, no libm
+# sqrt (de_dsqrt / de_dsqrt64 instead), no fast-math de_math.h functions (sections 2 and 3: they
+# may use FMA or SIMD), no approximate reciprocal intrinsics, no hash-map iteration. DENG-136's
+# tools/check_determinism_src.py generalises this for every deterministic module.
+if(DE_BUILD_TESTS)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/physics_determinism_src.cmake" [=[
+file(GLOB_RECURSE _de_srcs "${DE_PHYSICS_DIR}/*.c" "${DE_PHYSICS_DIR}/*.h")
+if(NOT _de_srcs)
+    message(FATAL_ERROR "no sources found under ${DE_PHYSICS_DIR}")
+endif()
+set(_de_rules
+    "#[ \t]*include[ \t]*<math\\.h>"
+    "(^|[^A-Za-z0-9_])sqrtf?[ \t]*\\("
+    "(^|[^A-Za-z0-9_])de_(v2|v3|v4|quat|m3|m4|affine|aabb|plane|ray|frustum)_[a-z0-9_]+[ \t]*\\("
+    "_mm_(rcp|rsqrt)_(ps|ss)|vrecpe|vrsqrte"
+    "de_hashmap_iter_(begin|next)|de_hashmap_iter[ \t]")
+set(_de_bad "")
+foreach(_de_src IN LISTS _de_srcs)
+    file(READ "${_de_src}" _de_text)
+    string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" "" _de_text "${_de_text}")
+    string(REGEX REPLACE "//[^\n]*" "" _de_text "${_de_text}")
+    foreach(_de_rule IN LISTS _de_rules)
+        string(REGEX MATCHALL "${_de_rule}[^\n]*" _de_hits "${_de_text}")
+        foreach(_de_hit IN LISTS _de_hits)
+            string(APPEND _de_bad "  ${_de_src}: ${_de_hit}\n")
+        endforeach()
+    endforeach()
+endforeach()
+if(_de_bad)
+    message(FATAL_ERROR "src/physics breaks SPEC 5.7 (deterministic math only):\n${_de_bad}")
+endif()
+list(LENGTH _de_srcs _de_n)
+message(STATUS "src/physics: ${_de_n} files clean")
+]=])
+    add_test(NAME physics.determinism_src
+        COMMAND "${CMAKE_COMMAND}" "-DDE_PHYSICS_DIR=${DE_ROOT_DIR}/src/physics"
+                -P "${CMAKE_CURRENT_BINARY_DIR}/physics_determinism_src.cmake")
+    set_tests_properties(physics.determinism_src PROPERTIES LABELS "unit;physics" TIMEOUT 60)
+endif()
