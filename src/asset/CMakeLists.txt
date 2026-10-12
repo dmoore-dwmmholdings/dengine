@@ -26,3 +26,10 @@ set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 # DENG-139: asset IDs, globs on IDs, bundle resolution and validation (asset_id.c, glob.c,
 # resolve.c).
 target_sources(de_asset PRIVATE asset_id.c glob.c resolve.c resolve_internal.h)
+
+# DENG-141: load requests, status and wait (load.c, status.c), the backend seam
+# (backend_internal.h). de_asset_wait asserts outside ECS systems (ecs/in_schedule_internal.h),
+# so the module links de_ecs (ecs is in a lower band).
+target_sources(de_asset PRIVATE load.c load_internal.h status.c backend_internal.h)
+target_link_libraries(de_asset PUBLIC de_ecs)
+set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_DEPS ecs)

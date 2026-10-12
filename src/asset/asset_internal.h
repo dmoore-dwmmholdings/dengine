@@ -48,6 +48,9 @@ struct de_asset_system {
     struct de__asset_type_registry *types; /**< asset_types.c; NULL until the first register */
 
     /* ---- DENG-141: load requests and status (append below) ------------------------------- */
+    /** load.c: requests, per-slot load state, backend, completion queue (load_internal.h);
+     * NULL until the first request or backend. */
+    struct de__load_state *load;
 
     /* ---- DENG-142: load pipeline (append below) ------------------------------------------ */
 
