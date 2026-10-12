@@ -32,3 +32,12 @@ de_add_module(
     OPTIONAL_OPTION DE_WITH_PHYSICS
     DETERMINISTIC
 )
+
+# DENG-133: broadphase (static + dynamic AABB trees, sorted pair list, traversal for queries).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        broadphase/aabb_tree.h
+        broadphase/aabb_tree.c
+        broadphase/broadphase.h
+        broadphase/broadphase.c)
+endif()
