@@ -292,6 +292,42 @@ DE_API u32 de_event_reader_missed(const de_event_reader *r);
 DE_API void de_world_update_events(de_world *w);
 
 /* ---------- Queries ---------- */
+/*
+ * Queries (SPEC §7.2, DENG-346).
+ *
+ * A query is declared with terms and filters:
+ * - Terms are the components the callback gets data for: DE_READ / DE_WRITE (required), or
+ *   DE_OPTIONAL_READ / DE_OPTIONAL_WRITE (the entity may lack it; its column is then NULL).
+ * - Filters only select archetypes: DE_WITH (must have), DE_WITHOUT (must not have), DE_ADDED and
+ *   DE_CHANGED (must have, plus a per-row test of the component's change ticks; DENG-347).
+ * An archetype matches when it has every required term and every WITH / ADDED / CHANGED
+ * component, and no WITHOUT component.
+ *
+ * Caching: de_query_create() matches the existing archetypes once. After that, each new archetype
+ * is tested once against every live query when it is created, so keeping a query up to date
+ * costs O(new archetypes), never a rescan.
+ *
+ * Iteration order (SPEC §5.7 rule 5): matched archetypes in archetype creation order, then each
+ * table's chunks in order, then rows in order. Empty archetypes are skipped. The order depends
+ * only on the sequence of world operations, never on threads, timing or hash maps.
+ *
+ * Chunks: the callback gets contiguous slices of one table chunk (de_query_chunk): `count` rows,
+ * their entity ids, and per term a pointer to the first row's data of that column (SoA, aligned
+ * to the component's alignment), so a loop over `count` elements is SIMD friendly. Writing
+ * through a DE_WRITE column changes the component data seen by de_entity_get(). A tag term gets a
+ * non-NULL placeholder that must not be read or written; an absent optional term gets NULL.
+ * With ADDED / CHANGED filters a table chunk is delivered as its maximal runs of passing rows,
+ * each still one contiguous slice.
+ *
+ * Rules: the callback must not make structural changes (spawn, despawn, add, remove, register;
+ * inside systems use commands) and must not destroy the query. Pointers in a chunk are valid
+ * during the callback only.
+ *
+ * Threading: de_query_each() and de_query_count() only read the query and the world, so they may
+ * run on many threads at once while nothing changes the world's structure. de_query_par_each()
+ * writes per-query scratch: at most one par_each per query at a time. create and destroy are
+ * single-threaded, like structural changes.
+ */
 typedef enum de_access { DE_READ, DE_WRITE, DE_OPTIONAL_READ, DE_OPTIONAL_WRITE } de_access;
 typedef enum de_filter { DE_WITH, DE_WITHOUT, DE_ADDED, DE_CHANGED } de_filter;
 
@@ -304,27 +340,79 @@ typedef struct de_query_filter {
     de_filter filter;
 } de_query_filter;
 
+/** de_query_create() parameters. Both arrays are copied. */
 typedef struct de_query_desc {
-    const de_query_term *terms;
+    const de_query_term *terms; /**< at most DE_QUERY_MAX_TERMS; columns[i] matches terms[i] */
     u32 term_count;
-    const de_query_filter *filters;
+    const de_query_filter *filters; /**< at most DE_QUERY_MAX_FILTERS */
     u32 filter_count;
 } de_query_desc;
 
-/* A chunk is a contiguous run of rows in one archetype table. columns[i] matches terms[i]
- * (NULL for an absent optional term). */
+/** Most terms of one query. */
+#define DE_QUERY_MAX_TERMS 32u
+/** Most filters of one query. */
+#define DE_QUERY_MAX_FILTERS 32u
+/** de_query_par_each() rows per range when `grain_rows` is 0. A fixed number on every machine. */
+#define DE_QUERY_DEFAULT_GRAIN_ROWS 1024u
+
+/**
+ * A contiguous run of rows in one archetype table chunk. `columns[i]` matches the query's
+ * terms[i]: the data of row 0 of the slice, NULL for an absent optional term, a placeholder for a
+ * tag term.
+ *
+ * `first_row` is the position of the slice's first row in the query's row order: the rows of the
+ * matched archetypes, concatenated in iteration order, numbered from 0 (rows skipped by ADDED /
+ * CHANGED filters keep their numbers). `range` is the de_query_par_each() range the slice belongs
+ * to (first_row / grain_rows), and 0 in de_query_each(). Per-range partial results indexed by
+ * `range` and reduced in range order are the same for every worker count.
+ */
 typedef struct de_query_chunk {
     u32 count;
     const de_entity *entities;
     void **columns;
+    u32 range;
+    u32 first_row;
 } de_query_chunk;
 
 typedef void (*de_chunk_fn)(const de_query_chunk *chunk, void *user);
 
+/**
+ * Creates a query: copies the terms and filters, checks them and matches the existing
+ * archetypes. Returns an invalid handle and sets the error context on failure:
+ * DE_ERR_INVALID_ARGUMENT (`w` or `desc` NULL, a NULL array with a non-zero count, more than
+ * DE_QUERY_MAX_TERMS terms or DE_QUERY_MAX_FILTERS filters, an unregistered component, an
+ * unknown access or filter value, a component in two terms, or a DE_WITHOUT component that is
+ * also a term or another filter's component), DE_ERR_UNSUPPORTED (DE_ADDED / DE_CHANGED on a tag:
+ * tags have no change ticks) or DE_ERR_OUT_OF_MEMORY. A query with no terms and no filters
+ * matches every archetype. Not allowed while a schedule runs (systems get their queries from
+ * their desc, DENG-350).
+ */
 DE_API de_query de_query_create(de_world *w, const de_query_desc *desc);
+/**
+ * Destroys a query. Invalid or stale handles are ignored. Every query is destroyed with its
+ * world. Not allowed during an iteration of that query.
+ */
+DE_API void de_query_destroy(de_world *w, de_query q);
+/**
+ * Calls `fn(chunk, user)` for every non-empty slice of the query, in iteration order (above), on
+ * the calling thread. An invalid handle does nothing. Allocates nothing.
+ */
 DE_API void de_query_each(de_world *w, de_query q, de_chunk_fn fn, void *user);
-/* Parallel over fixed row ranges; deterministic split. */
+/**
+ * Parallel de_query_each() with a deterministic split. The query's rows, numbered in iteration
+ * order (de_query_chunk.first_row), are cut into ranges [k * grain_rows, (k + 1) * grain_rows);
+ * `grain_rows` 0 means DE_QUERY_DEFAULT_GRAIN_ROWS. Each range runs as one de_task_parallel_for
+ * chunk on the world's task system (serially on the calling thread, in range order, when the
+ * world has none) and is delivered as one or more slices, with `chunk->range` = k. Which rows
+ * form a range depends only on `grain_rows` and the world's data, never on the worker count.
+ * Returns when every range is done. Allocates nothing.
+ */
 DE_API void de_query_par_each(de_world *w, de_query q, u32 grain_rows, de_chunk_fn fn, void *user);
+/**
+ * The number of rows (entities) in the query's matched archetypes. ADDED / CHANGED filters are
+ * not applied: the count is the size of the row space that de_query_par_each() splits. 0 for an
+ * invalid handle.
+ */
 DE_API u32 de_query_count(de_world *w, de_query q);
 
 /* ---------- Commands (deferred structural changes) ---------- */

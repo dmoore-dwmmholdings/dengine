@@ -20,3 +20,6 @@ target_sources(de_ecs PRIVATE resource.c event.c)
 
 # DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
 target_sources(de_ecs PRIVATE structural.c archetype_graph.c)
+
+# DENG-346: queries (cached archetype matching, chunk iteration, par_each).
+target_sources(de_ecs PRIVATE query_internal.h query.c query_cache.c query_iter.c)

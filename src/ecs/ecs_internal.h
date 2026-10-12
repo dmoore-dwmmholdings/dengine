@@ -209,6 +209,9 @@ struct de_world {
     de_hashmap resource_by_type;      /**< de_type_id.id -> u32 resource id; lookup only */
     DE_ARRAY(ecs_event_queue) events; /**< event type id - 1; registration order */
     de_hashmap event_by_type;         /**< de_type_id.id -> u32 event type id; lookup only */
+    /* -- DENG-346: queries (append below) -- */
+    struct ecs_query_registry *queries; /**< query slots (query_internal.h); NULL until the
+                                             first de_query_create */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -432,6 +435,11 @@ void ecs_resources_destroy(de_world *w);
 /** Destructs every alive event and frees every event buffer, in registration order. Safe on a
  * world whose event fields are zeroed or initialised. */
 void ecs_events_destroy(de_world *w);
+
+/* ---- Internal API: queries (query.c, DENG-346; the rest is in query_internal.h) ----------- */
+
+/** Destroys every query of the world and the query registry (de_world_destroy). */
+void ecs_queries_destroy(de_world *w);
 
 DE_EXTERN_C_END
 
