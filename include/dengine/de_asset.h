@@ -21,7 +21,24 @@ typedef struct de_world de_world;
 typedef struct de_asset_id {
     u64 hash;
 } de_asset_id; /* hash of "player/model#Body" */
+/**
+ * The ID of the asset path `path`: de_hash64 (XXH3-64, seed 0) of its exact bytes, the same on
+ * every platform and in every build. The hash is part of the pack format: it never changes
+ * without a pack version bump. A hash of 0 is remapped to 1, so `{0}` always means "no asset".
+ *
+ * Rules (checked, never normalised; DENG-139): UTF-8, case-sensitive, `/` separates segments, no
+ * leading or trailing `/`, no empty, `.` or `..` segment, no control character, `\`, `*` or `?`.
+ * At most one `#` starts a non-empty sub-asset name (`"player/model#Body"`), which may contain
+ * `/`. Allocation-free; safe on any thread.
+ * @return the ID, or `{0}` with DE_ERR_INVALID_ARGUMENT in the error context for an invalid path.
+ */
 DE_API de_asset_id de_asset_id_from(const char *path);
+/**
+ * The path of `id` in the active manifest (reverse lookup for logs and tools), or NULL when no
+ * asset of the manifest has that ID (sub-asset IDs are not in the manifest). Valid until the next
+ * successful de_asset_manifest_load or destroy. Binary search; no allocation.
+ */
+DE_API const char *de_asset_id_path(const de_asset_system *s, de_asset_id id);
 
 DE_HANDLE(de_load_handle);
 DE_HANDLE(de_asset_type);

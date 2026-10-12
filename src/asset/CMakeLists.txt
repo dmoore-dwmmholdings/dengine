@@ -18,3 +18,7 @@ de_add_module(
 # aggregate `dengine` links it.
 target_link_libraries(de_asset PRIVATE de_tp_tomlc17)
 set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+
+# DENG-139: asset IDs, globs on IDs, bundle resolution and validation (asset_id.c, glob.c,
+# resolve.c).
+target_sources(de_asset PRIVATE asset_id.c glob.c resolve.c resolve_internal.h)

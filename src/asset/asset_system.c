@@ -78,6 +78,8 @@ void de_asset_system_destroy(de_asset_system *s) {
     if (s == NULL)
         return;
     const de_allocator *a = s->alloc;
+    de__resolved_destroy(s->resolved); /* DENG-139: before their manifests */
+    de__resolved_destroy(s->failed_resolved);
     de__manifest_destroy(s->manifest);
     de__manifest_destroy(s->failed_manifest);
     DE_FREE(a, s->cache_dir_buf, s->cache_dir_size);
@@ -104,36 +106,65 @@ de_result de_asset_manifest_load(de_asset_system *s, const char *vpath) {
     if (r != DE_OK)
         return r;
 
-    for (u32 i = 0; i < m->issue_count; ++i) {
-        const de__manifest_issue *is = &m->issues[i];
+    /* DENG-139: a manifest that parsed cleanly is resolved (IDs, bundle members, closures);
+     * its issue list (manifest issues + resolution issues) is the one logged and kept. */
+    de__resolved *res = NULL;
+    if (m->error_count == 0) {
+        de__resolve_desc rd = {.allocator = s->alloc};
+        r = de__manifest_resolve(m, &rd, &res);
+        if (r != DE_OK) {
+            de__manifest_destroy(m);
+            return r;
+        }
+    }
+    const de__manifest_issue *issues = res != NULL ? res->issues : m->issues;
+    u32 issue_count = res != NULL ? res->issue_count : m->issue_count;
+    u32 error_count = res != NULL ? res->error_count : m->error_count;
+
+    for (u32 i = 0; i < issue_count; ++i) {
+        const de__manifest_issue *is = &issues[i];
         DE_LOG(asset_issue_level(is->severity), s->log, "%s:%u: %s%s%s", is->file, is->line,
                is->key_path, is->key_path[0] != '\0' ? ": " : "", is->message);
     }
 
+    de__resolved_destroy(s->failed_resolved);
+    s->failed_resolved = NULL;
     de__manifest_destroy(s->failed_manifest);
     s->failed_manifest = NULL;
-    if (m->error_count != 0) {
+    if (error_count != 0) {
         s->failed_manifest = m;
+        s->failed_resolved = res;
         /* A root file that could not be read keeps its read error; anything else is a parse
          * error. */
         const de__manifest_issue *first = NULL;
-        for (u32 i = 0; i < m->issue_count && first == NULL; ++i)
-            if (m->issues[i].severity == DE_ASSET_ISSUE_ERROR)
-                first = &m->issues[i];
+        for (u32 i = 0; i < issue_count && first == NULL; ++i)
+            if (issues[i].severity == DE_ASSET_ISSUE_ERROR)
+                first = &issues[i];
         de_result code = (m->file_count == 0 && first != NULL) ? first->code : DE_ERR_PARSE;
         return DE_FAIL(code, "asset manifest %s: %u error%s; first: %s:%u: %s%s%s", m->root,
-                       m->error_count, m->error_count == 1 ? "" : "s", first->file, first->line,
+                       error_count, error_count == 1 ? "" : "s", first->file, first->line,
                        first->key_path, first->key_path[0] != '\0' ? ": " : "", first->message);
     }
+    de__resolved_destroy(s->resolved);
     de__manifest_destroy(s->manifest);
     s->manifest = m;
+    s->resolved = res;
     return DE_OK;
 }
 
 const de_asset_manifest_issue *de_asset_manifest_issues(const de_asset_system *s, u32 *count) {
     const de__manifest *m = NULL;
-    if (s != NULL)
-        m = s->failed_manifest != NULL ? s->failed_manifest : s->manifest;
+    const de__resolved *res = NULL; /* DENG-139: its list includes the manifest's issues */
+    if (s != NULL) {
+        bool failed = s->failed_manifest != NULL;
+        m = failed ? s->failed_manifest : s->manifest;
+        res = failed ? s->failed_resolved : s->resolved;
+    }
+    if (res != NULL) {
+        if (count != NULL)
+            *count = res->issue_count;
+        return res->issues;
+    }
     if (count != NULL)
         *count = m != NULL ? m->issue_count : 0u;
     return m != NULL ? m->issues : NULL;
