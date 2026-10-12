@@ -209,6 +209,8 @@ struct de_world {
     de_hashmap resource_by_type;      /**< de_type_id.id -> u32 resource id; lookup only */
     DE_ARRAY(ecs_event_queue) events; /**< event type id - 1; registration order */
     de_hashmap event_by_type;         /**< de_type_id.id -> u32 event type id; lookup only */
+    /* -- DENG-349: command buffers (append below) -- */
+    struct ecs_cmd_state *cmd; /**< commands.c; created by ecs_commands_init */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -432,6 +434,19 @@ void ecs_resources_destroy(de_world *w);
 /** Destructs every alive event and frees every event buffer, in registration order. Safe on a
  * world whose event fields are zeroed or initialised. */
 void ecs_events_destroy(de_world *w);
+
+/* ---- Internal API: command buffers (commands.c, DENG-349) ---------------------------------- */
+/* The full command-buffer API (acquire, apply) is in commands_internal.h. */
+
+/** Creates the world's command state (w->cmd). @return DE_OK or DE_ERR_OUT_OF_MEMORY. */
+de_result ecs_commands_init(de_world *w);
+
+/** Destructs the payloads of every unapplied command and frees all command memory. Safe when
+ * w->cmd is NULL. */
+void ecs_commands_destroy(de_world *w);
+
+/** Asserts (Debug, Dev) that `e` is not a pending id: immediate functions take real ids only. */
+#define ECS_ASSERT_NOT_PENDING(e) DE_ASSERT(!de_entity_is_pending(e))
 
 DE_EXTERN_C_END
 

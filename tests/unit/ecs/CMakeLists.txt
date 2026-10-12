@@ -60,3 +60,10 @@ if(TARGET test_structural)
     target_include_directories(test_structural PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_structural PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-349: command buffers (deferred structural changes, pending ids, deterministic apply).
+de_add_test(NAME commands SOURCES test_commands.c LIBS de_ecs LABELS tsan TIMEOUT 300)
+if(TARGET test_commands)
+    target_include_directories(test_commands PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_commands PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

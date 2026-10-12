@@ -88,6 +88,7 @@ void *de_entity_add(de_world *w, de_entity e, de_component c) {
         return NULL;
     }
     ECS_ASSERT_STRUCTURAL(w);
+    ECS_ASSERT_NOT_PENDING(e); /* DENG-349: pending ids are for commands only */
     void *data = NULL;
     if (ecs_entity_add(w, e, c.id, &data) != DE_OK)
         return NULL;
@@ -98,6 +99,7 @@ void de_entity_remove(de_world *w, de_entity e, de_component c) {
     if (w == NULL)
         return;
     ECS_ASSERT_STRUCTURAL(w);
+    ECS_ASSERT_NOT_PENDING(e); /* DENG-349: pending ids are for commands only */
     if (ecs_entity_record(w, e) == NULL)
         return; /* a dead entity has nothing to remove */
     (void)ecs_entity_remove(w, e, c.id);
@@ -107,6 +109,7 @@ void de_entity_despawn(de_world *w, de_entity e) {
     if (w == NULL)
         return;
     ECS_ASSERT_STRUCTURAL(w);
+    ECS_ASSERT_NOT_PENDING(e); /* DENG-349: pending ids are for commands only */
     if (ecs_entity_record(w, e) == NULL) {
 #if defined(DE_DEBUG) || defined(DE_DEV)
         DE_WARN(ecs_log_category(), "de_entity_despawn: entity 0x%016llx is not alive (ignored)",
