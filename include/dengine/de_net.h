@@ -6,6 +6,97 @@
 #include "de_ecs.h"
 DE_EXTERN_C_BEGIN
 
+/* ---------- Transport: network addresses (DENG-51) ---------- */
+
+/** Address family of a de_net_address. */
+typedef enum de_net_family {
+    DE_NET_FAMILY_NONE = 0, /**< no address (a zeroed de_net_address) */
+    DE_NET_FAMILY_IPV4 = 4,
+    DE_NET_FAMILY_IPV6 = 6
+} de_net_family;
+
+/**
+ * An IPv4 or IPv6 address and a UDP port. Plain data: copy it, compare it with
+ * de_net_address_equal (never memcmp), use de_net_address_hash as a hash-map key.
+ * `(de_net_address){0}` is "no address" (DE_NET_FAMILY_NONE).
+ *
+ * The transport never hands out IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`): a datagram that
+ * reaches a dual-stack IPv6 socket from an IPv4 peer reports the peer as DE_NET_FAMILY_IPV4, so
+ * one peer has one address whatever socket it reached. de_net_address_parse keeps a mapped
+ * address as written (IPv6), so `[::ffff:1.2.3.4]:5` and `1.2.3.4:5` are not equal.
+ */
+typedef struct de_net_address {
+    u16 family;   /**< de_net_family */
+    u16 port;     /**< host byte order; 0 = any (binding to it picks an ephemeral port) */
+    u8 addr[16];  /**< network byte order. IPv4 uses addr[0..3]; the other bytes are zero. */
+    u32 scope_id; /**< IPv6 zone index for link-local addresses (`%3`); 0 = none, and 0 for IPv4 */
+} de_net_address;
+DE_STATIC_ASSERT(sizeof(de_net_address) == 24, "de_net_address layout is part of the ABI");
+
+/** Buffer size that holds any de_net_address_to_string result with its NUL
+ * (`[ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255%4294967295]:65535` is 65 bytes). */
+#define DE_NET_ADDRESS_STRING_MAX 72
+
+/**
+ * Parses a numeric address with a port: `a.b.c.d:port` or `[ipv6]:port`, the IPv6 part in any
+ * RFC 4291 text form (`::` compression, a trailing dotted IPv4, hex in either case) with an
+ * optional numeric zone (`[fe80::1%3]:7777`). The port is required, 0 to 65535. IPv4 octets are
+ * decimal 0 to 255 without leading zeros (`010` is refused: other parsers read it as octal).
+ * No whitespace, no host names: names go through de_net_resolve. Pure function, any thread.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for a NULL argument; DE_ERR_PARSE for anything else,
+ *         with a message that says what is wrong. `*out` is zeroed on failure.
+ */
+DE_API de_result de_net_address_parse(const char *text, de_net_address *out);
+
+/**
+ * Formats `a` as de_net_address_parse reads it: `1.2.3.4:7777`, `[::1]:7777`, `[fe80::1%3]:9`.
+ * IPv6 uses the RFC 5952 canonical form (lowercase, longest run of two or more zero groups
+ * compressed, the first one on a tie, `::ffff:` mapped addresses with a dotted tail), so
+ * to_string then parse gives back an equal address. DE_NET_FAMILY_NONE (or an unknown family)
+ * gives `(none)`. Always NUL-terminates when `buf_size > 0`, cutting the text if it does not fit
+ * (DE_NET_ADDRESS_STRING_MAX always fits).
+ *
+ * @return the length of the full text without the NUL, as snprintf does.
+ */
+DE_API u32 de_net_address_to_string(const de_net_address *a, char *buf, u32 buf_size);
+
+/** True when both have the same family, port, address bytes (4 for IPv4) and zone. */
+DE_API bool de_net_address_equal(const de_net_address *a, const de_net_address *b);
+
+/** 64-bit hash of the fields that de_net_address_equal compares; equal addresses hash equal.
+ * Stable across runs and platforms. */
+DE_API u64 de_net_address_hash(const de_net_address *a);
+
+/** `0.0.0.0:port` or `[::]:port` (bind to every interface). Other families give NONE. */
+DE_API de_net_address de_net_address_any(de_net_family family, u16 port);
+
+/** `127.0.0.1:port` or `[::1]:port`. Other families give NONE. */
+DE_API de_net_address de_net_address_loopback(de_net_family family, u16 port);
+
+/** The IPv4 address `a.b.c.d:port`. */
+DE_API de_net_address de_net_address_ipv4(u8 a, u8 b, u8 c, u8 d, u16 port);
+
+/**
+ * Resolves `host:port` (or `[host]:port`; an IPv6 literal needs the brackets) with the OS
+ * resolver (getaddrinfo). A numeric address is parsed without asking the OS. **Blocks** for as
+ * long as DNS takes (seconds): call it only from the low-priority background task pool
+ * (de_task.h), never on the frame thread (SPEC §8).
+ *
+ * @param family  DE_NET_FAMILY_IPV4 or _IPV6 to keep only that family; DE_NET_FAMILY_NONE for
+ *                both, in the order the OS prefers (RFC 6724).
+ * @param out     receives up to `max` distinct addresses, each with the port.
+ * @param count   receives how many were written.
+ * @return DE_OK (at least one address); DE_ERR_INVALID_ARGUMENT (NULL argument, `max` 0);
+ *         DE_ERR_PARSE (no port, bad port, empty host); DE_ERR_NOT_FOUND (the name has no
+ *         address of the requested family); DE_ERR_NETWORK (the resolver failed, for example no
+ *         network). Thread-safe.
+ */
+DE_API de_result de_net_resolve(const char *text, de_net_family family, de_net_address *out,
+                                u32 max, u32 *count);
+
+/* ---------- End of transport: network addresses ---------- */
+
 typedef struct de_net_session de_net_session;
 DE_HANDLE(de_peer);
 DE_HANDLE(de_rpc);
@@ -16,10 +107,12 @@ typedef enum de_net_model {
     DE_NET_LOCKSTEP
 } de_net_model;
 typedef enum de_net_role { DE_NET_SERVER, DE_NET_CLIENT, DE_NET_HOST, DE_NET_PEER } de_net_role;
+/** What carries the datagrams. All three sit behind the same internal socket interface
+ * (src/net/net_internal.h), so the protocol above them does not change. */
 typedef enum de_net_transport {
-    DE_TRANSPORT_UDP,
-    DE_TRANSPORT_STEAM,
-    DE_TRANSPORT_LOOPBACK
+    DE_TRANSPORT_UDP,     /**< OS UDP sockets, IPv4 and dual-stack IPv6 (DENG-51) */
+    DE_TRANSPORT_STEAM,   /**< Steam Networking Sockets (S37, DENG-124) */
+    DE_TRANSPORT_LOOPBACK /**< in-process queues, no OS sockets: tests and listen servers */
 } de_net_transport;
 typedef enum de_channel {
     DE_CHANNEL_UNRELIABLE,
