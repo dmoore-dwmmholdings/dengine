@@ -45,3 +45,18 @@ foreach(_de_task_test test_graph test_pfor)
         target_include_directories(${_de_task_test} PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endforeach()
+
+# DENG-293: stress (stress.*, labels tsan + stress; ~3 s each, DE_STRESS_SECONDS overrides
+# mixed_3s), reduction determinism (det.*; FP contraction off like deterministic modules), node
+# statistics and profiling fallbacks (prof.*). Same internal includes as above.
+de_add_test(NAME stress SOURCES test_stress.c LIBS de_task LABELS unit tsan stress TIMEOUT 300)
+de_add_test(NAME det SOURCES test_determinism.c LIBS de_task LABELS unit tsan TIMEOUT 300)
+de_add_test(NAME prof SOURCES test_profile.c LIBS de_task LABELS unit tsan TIMEOUT 120)
+foreach(_de_task_test test_stress test_det test_prof)
+    if(TARGET ${_de_task_test})
+        target_include_directories(${_de_task_test} PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endforeach()
+if(TARGET test_det)
+    target_compile_options(test_det PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

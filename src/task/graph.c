@@ -40,6 +40,7 @@
  * popping them.
  */
 #include "task/task_internal.h"
+#include "task/profile.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +80,8 @@ typedef struct de__graph_node {
     u32 succ_begin; /* range in the successor array */
     u32 succ_count;
     de_atomic_u32 pending; /* predecessors not finished in the current run */
+    /* Profile srcloc and statistics (DENG-293, profile.h). */
+    de__task_node_prof prof;
 } de__graph_node;
 
 struct de_task_graph {
@@ -435,6 +438,7 @@ de_result de_task_graph_compile(de_task_graph *g) {
         node->succ_begin = succ_off[i];
         node->succ_count = succ_off[i + 1] - succ_off[i];
         de_atomic_init_u32(&node->pending, 0);
+        de__task_node_prof_init(&node->prof, descs[i].name);
     }
     if (kept > 0)
         memcpy(g->succ, succ_tmp, sizeof(u32) * kept);
@@ -456,7 +460,9 @@ static void graph_run_node(void *p) {
     de_task_system *ts = g->ts;
     de__task_counter *done = g->done;
 
+    DE__TASK_NODE_BEGIN(prof_scope, &node->prof);
     node->fn(node->user);
+    DE__TASK_NODE_END(prof_scope, &node->prof);
 
     de__graph_node *nodes = g->nodes;
     const u32 *succ = g->succ + node->succ_begin;
@@ -502,4 +508,25 @@ void de_task_graph_run(de_task_graph *g, de_task_counter *done) {
         de__graph_node *r = &nodes[g->roots[i]];
         de_task_submit(g->ts, (de_task_pool)r->pool, graph_run_node, r, NULL);
     }
+}
+
+/* ---------- Statistics (DENG-293) ---------- */
+
+de_result de_task_graph_node_stats(const de_task_graph *g, de_task_node node,
+                                   de_task_node_stats *out) {
+    if (out == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_task_graph_node_stats: out is NULL");
+    memset(out, 0, sizeof *out);
+    out->last_worker = DE_TASK_WORKER_NONE;
+    if (g == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_task_graph_node_stats: graph is NULL");
+    const u32 i = de__graph_index(g, node);
+    if (i == UINT32_MAX || !g->compiled || i >= g->node_count)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_task_graph_node_stats: %#x is not a compiled node of this graph",
+                       node.id);
+    if (!de__task_node_prof_read(&g->nodes[i].prof, out))
+        return DE_FAIL(DE_ERR_UNSUPPORTED,
+                       "de_task_graph_node_stats: statistics need a Debug or Dev build");
+    return DE_OK;
 }

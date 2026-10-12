@@ -12,6 +12,7 @@
  * on its way, and the worker consumes it with sem_wait (it returns at once).
  */
 #include "task/task_internal.h"
+#include "task/profile.h"
 
 #include <dengine/de_debug.h>
 #include <dengine/de_math.h>
@@ -137,7 +138,11 @@ i32 de__task_frame_worker_main(void *p) {
             if (!de__cancel_sleep(ts))
                 de_sem_wait(&ts->idle_sem);
         } else {
+            DE__TASK_PROF_PLOT_PARKED(&ts->sleepers);
+            DE_PROFILE_ZONE_BEGIN(park_zone, "task.park");
             de_sem_wait(&ts->idle_sem);
+            DE_PROFILE_ZONE_END(park_zone);
+            DE__TASK_PROF_PLOT_PARKED(&ts->sleepers);
         }
         spins = 0;
     }
