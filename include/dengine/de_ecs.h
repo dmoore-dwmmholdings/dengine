@@ -91,6 +91,10 @@ DE_API de_result de_world_create(const de_world_desc *desc, de_world **out);
 DE_API void de_world_destroy(de_world *w);
 /** The world's tick counter. 0 after create; schedules advance it (DENG-350). */
 DE_API u64 de_world_tick(const de_world *w);
+/** The type registry the world was created with (de_world_desc.types), or NULL for a NULL world.
+ * Modules use it to register the struct types of the resources and events they insert (DENG-308).
+ */
+DE_API de_type_registry *de_world_types(const de_world *w);
 
 /* ---------- Components ---------- */
 typedef enum de_component_flags {
