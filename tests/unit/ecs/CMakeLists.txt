@@ -43,3 +43,10 @@ message(STATUS "src/ecs: no hash map iteration in ${_de_n} files")
                 -P "${CMAKE_CURRENT_BINARY_DIR}/ecs_no_hashmap_iter.cmake")
     set_tests_properties(ecs.no_hashmap_iteration PROPERTIES LABELS "unit;ecs" TIMEOUT 60)
 endif()
+
+# DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
+de_add_test(NAME structural SOURCES test_structural.c LIBS de_ecs TIMEOUT 120)
+if(TARGET test_structural)
+    target_include_directories(test_structural PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_structural PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

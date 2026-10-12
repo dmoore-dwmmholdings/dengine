@@ -14,3 +14,6 @@ de_add_module(
     DEPS core task reflect
     DETERMINISTIC
 )
+
+# DENG-345: structural changes (add, remove, despawn, spawn_with) and the archetype edge cache.
+target_sources(de_ecs PRIVATE structural.c archetype_graph.c)

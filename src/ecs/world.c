@@ -120,6 +120,8 @@ void de_world_destroy(de_world *w) {
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
         ecs_archetype *a = ecs_archetype_at(w, ai);
         de_array_free(&a->chunks); /* the chunk blocks go back with the pool */
+        /* DENG-345: the archetype's edge cache. */
+        ecs_archetype_edges_free(w, a);
         DE_FREE(w->a, a, a->alloc_size);
     }
     de_pool_destroy(w->chunk_pool);
