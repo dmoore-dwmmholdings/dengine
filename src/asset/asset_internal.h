@@ -53,6 +53,9 @@ struct de_asset_system {
     struct de__load_state *load;
 
     /* ---- DENG-142: load pipeline (append below) ------------------------------------------ */
+    /** pipeline.c: the real load backend (pipeline_internal.h); created by
+     * de_asset_system_create, started on the first submit. */
+    struct de__pipeline *pipeline;
 
     /* ---- DENG-143: ECS events, host integration (append below) --------------------------- */
 

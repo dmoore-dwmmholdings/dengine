@@ -7,7 +7,8 @@
  */
 
 #include "asset/asset_internal.h"
-#include "asset/load_internal.h" /* DENG-141 */
+#include "asset/load_internal.h"     /* DENG-141 */
+#include "asset/pipeline_internal.h" /* DENG-142 */
 #include "asset/slots_internal.h"
 
 #include <dengine/de_asset.h>
@@ -72,6 +73,12 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
     s->desc = d;
     s->log = de_log_register_category("asset", DE_LOG_INFO);
 
+    /* DENG-142: the load pipeline is the backend (it starts its threads on the first load). */
+    if (de__pipeline_install(s) != DE_OK) {
+        de_asset_system_destroy(s);
+        return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
+    }
+
     *out = s;
     return DE_OK;
 }
@@ -81,6 +88,7 @@ void de_asset_system_destroy(de_asset_system *s) {
         return;
     const de_allocator *a = s->alloc;
     de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
+    de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
     de__asset_types_shutdown(s);       /* DENG-140 */
     de__resolved_destroy(s->resolved); /* DENG-139: before their manifests */

@@ -46,3 +46,17 @@ if(TARGET test_asset_load)
         "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_ASSET_EXAMPLES_DIR=\"${DE_ROOT_DIR}/examples\"")
 endif()
+
+# DENG-142: the load pipeline (pipeline.c and its stages) on real files: the tests write their
+# fixtures into a scratch directory of the build tree (mounted as pipe:/); data/pipeline/ holds
+# the checked-in zstd payload (mounted as pdata:/). stress_10k is the TSan stress run.
+de_add_test(NAME asset_pipeline SOURCES test_pipeline.c
+            LIBS de_asset de_platform de_task de_test_support de_tp_zstd
+            LABELS unit tsan TIMEOUT 300)
+if(TARGET test_asset_pipeline)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_pipeline_tmp")
+    target_include_directories(test_asset_pipeline PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_pipeline PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+        "DE_ASSET_PIPELINE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_pipeline_tmp\"")
+endif()

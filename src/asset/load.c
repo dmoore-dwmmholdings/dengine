@@ -368,6 +368,21 @@ static void load_apply(de_asset_system *s, const de__load_queue *q, const de__lo
                        c->msg_len);
 }
 
+/* DENG-142: a completion applied at once (main thread, backend `update` hook). */
+void de__slot_complete_now(de_asset_system *s, u32 slot, de_result result, u64 bytes,
+                           const char *msg) {
+    if (s == NULL || s->load == NULL || slot == 0)
+        return;
+    size_t n = msg != NULL ? strlen(msg) : 0u;
+    if (n >= DE__LOAD_MSG_MAX)
+        n = DE__LOAD_MSG_MAX - 1u;
+    de__load_queue q;
+    memset(&q, 0, sizeof q);
+    q.text = (char *)(uintptr_t)msg; /* read only by load_apply */
+    de__load_completion c = {slot, result, bytes, 0, (u32)n};
+    load_apply(s, &q, &c);
+}
+
 /* ---- Requests ------------------------------------------------------------------------------ */
 
 static de_load_handle request_handle(u32 index, u32 gen) {
@@ -710,6 +725,11 @@ void de__load_update(de_asset_system *s) {
         load_apply(s, q, &q->items[i]);
     q->count = 0;
     q->text_len = 0;
+
+    /* DENG-142: the backend's own main-thread step (the pipeline publishes finished jobs here),
+     * before the requests are refreshed, so they see its changes in this update. */
+    if (L->has_backend && L->backend.update != NULL)
+        L->backend.update(L->backend.user, s);
 
     /* Index order: refreshing one request never changes another's slots' states, except by
      * cancelling slots nobody else waits on. */
