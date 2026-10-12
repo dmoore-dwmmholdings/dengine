@@ -18,7 +18,7 @@ static de__deque_ring *de__ring_alloc(const de_allocator *a, u64 capacity, u32 t
     r->retired_next = NULL;
     r->mask = capacity - 1;
     for (u64 i = 0; i < capacity; ++i)
-        de_atomic_init_ptr(&r->slots[i], NULL);
+        de_atomic_init_ptr(&de__ring_slots(r)[i], NULL);
     return r;
 }
 
@@ -67,8 +67,8 @@ static de__deque_ring *de__deque_grow(de__deque *d, de__deque_ring *old, u64 t, 
     if (r == NULL)
         return NULL;
     for (u64 i = t; i != b; ++i) {
-        void *item = de_atomic_load_ptr(&old->slots[i & old->mask], DE_ATOMIC_RELAXED);
-        de_atomic_store_ptr(&r->slots[i & r->mask], item, DE_ATOMIC_RELAXED);
+        void *item = de_atomic_load_ptr(&de__ring_slots(old)[i & old->mask], DE_ATOMIC_RELAXED);
+        de_atomic_store_ptr(&de__ring_slots(r)[i & r->mask], item, DE_ATOMIC_RELAXED);
     }
     /* Thieves that loaded `old` keep reading it until they reload the ring; it stays valid. */
     old->retired_next = d->retired;
@@ -87,7 +87,7 @@ bool de__deque_push(de__deque *d, void *item) {
         if (r == NULL)
             return false;
     }
-    de_atomic_store_ptr(&r->slots[b & r->mask], item, DE_ATOMIC_RELAXED);
+    de_atomic_store_ptr(&de__ring_slots(r)[b & r->mask], item, DE_ATOMIC_RELAXED);
     /* Paper: release fence + relaxed store. Publishes the item and the record it points to. */
     de_atomic_store_u64(&d->bottom, b + 1, DE_ATOMIC_RELEASE);
     return true;
@@ -103,7 +103,7 @@ void *de__deque_pop(de__deque *d) {
         de_atomic_store_u64(&d->bottom, b + 1, DE_ATOMIC_RELEASE);
         return NULL;
     }
-    void *item = de_atomic_load_ptr(&r->slots[b & r->mask], DE_ATOMIC_RELAXED);
+    void *item = de_atomic_load_ptr(&de__ring_slots(r)[b & r->mask], DE_ATOMIC_RELAXED);
     if (t == b) {
         /* The last item: race the thieves for it through top. */
         if (!de_atomic_cas_u64(&d->top, &t, t + 1, DE_ATOMIC_SEQ_CST, DE_ATOMIC_RELAXED))
@@ -119,7 +119,7 @@ de__steal_result de__deque_steal(de__deque *d, void **out) {
     if (de__diff(t, b) >= 0)
         return DE__STEAL_EMPTY;
     de__deque_ring *r = (de__deque_ring *)de_atomic_load_ptr(&d->ring, DE_ATOMIC_ACQUIRE);
-    void *item = de_atomic_load_ptr(&r->slots[t & r->mask], DE_ATOMIC_RELAXED);
+    void *item = de_atomic_load_ptr(&de__ring_slots(r)[t & r->mask], DE_ATOMIC_RELAXED);
     if (!de_atomic_cas_u64(&d->top, &t, t + 1, DE_ATOMIC_SEQ_CST, DE_ATOMIC_RELAXED))
         return DE__STEAL_ABORT;
     *out = item;
