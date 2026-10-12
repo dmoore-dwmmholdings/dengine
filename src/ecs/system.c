@@ -8,6 +8,8 @@
  * once, so nothing keeps pointers into a freed system. */
 #include "system_internal.h"
 
+#include "in_schedule_internal.h" /* DENG-141 */
+
 #include "change_internal.h" /* ecs_tick_clamp */
 #include "commands_internal.h"
 #include "core/de_compiler.h"
@@ -420,6 +422,12 @@ const ecs_system *ecs_system_current(const de_world *w) {
     const ecs_system *s = ecs_tls_system;
     return s != NULL && s->w == w ? s : NULL;
 }
+
+/* ---- DENG-141: world-free "inside a system" query (in_schedule_internal.h) ----------------- */
+bool de__ecs_in_schedule(void) {
+    return ecs_tls_system != NULL;
+}
+/* ---- end DENG-141 --------------------------------------------------------------------------- */
 
 u32 ecs_system_stamp_tick(const de_world *w) {
     const ecs_system *s = ecs_system_current(w);

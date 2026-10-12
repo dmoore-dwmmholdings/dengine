@@ -7,6 +7,7 @@
  */
 
 #include "asset/asset_internal.h"
+#include "asset/load_internal.h" /* DENG-141 */
 #include "asset/slots_internal.h"
 
 #include <dengine/de_asset.h>
@@ -79,6 +80,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     if (s == NULL)
         return;
     const de_allocator *a = s->alloc;
+    de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
     de__asset_types_shutdown(s);       /* DENG-140 */
     de__resolved_destroy(s->resolved); /* DENG-139: before their manifests */
@@ -179,4 +181,13 @@ void de_asset_set_locale(de_asset_system *s, const char *locale) {
     if (!asset_store_locale(s, locale))
         DE_WARN(s->log, "de_asset_set_locale: \"%.40s...\" is longer than %d bytes; keeping \"%s\"",
                 locale, DE__ASSET_LOCALE_MAX, s->locale_buf);
+}
+
+/* Once per frame, main thread. Each S07 task adds its step here, in this order: load completions
+ * and request states (DENG-141), then events (DENG-143) and eviction (DENG-144). */
+void de_asset_system_update(de_asset_system *s, de_world *world) {
+    (void)world;
+    if (s == NULL)
+        return;
+    de__load_update(s); /* DENG-141 */
 }

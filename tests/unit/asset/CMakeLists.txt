@@ -34,3 +34,15 @@ de_add_test(NAME asset_slots SOURCES test_slots.c test_asset_types.c LIBS de_ass
 if(TARGET test_asset_slots)
     target_include_directories(test_asset_slots PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-141: load API, status and wait over a scripted fake backend (fake_backend.h, implemented
+# with the shared fixture in test_backend_fake.c). data/ is mounted as ldata:/, examples/ as
+# lex:/. de_test_support: the alloc guard (status allocates nothing).
+de_add_test(NAME asset_load SOURCES test_load_api.c test_backend_fake.c
+            LIBS de_asset de_ecs de_reflect de_platform de_test_support)
+if(TARGET test_asset_load)
+    target_include_directories(test_asset_load PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_load PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+        "DE_ASSET_EXAMPLES_DIR=\"${DE_ROOT_DIR}/examples\"")
+endif()

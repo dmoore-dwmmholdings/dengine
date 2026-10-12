@@ -92,7 +92,8 @@ DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_ass
 /** Destroys the system and everything it owns, the manifest included. NULL is ignored. */
 DE_API void de_asset_system_destroy(de_asset_system *s);
 /* Call once per frame on the main thread: publishes finished loads, sends ECS events,
- * applies hot reloads, runs eviction. */
+ * applies hot reloads, runs eviction. DENG-141: applies finished loads and updates request
+ * states; `world` may be NULL (events come with DENG-143). */
 DE_API void de_asset_system_update(de_asset_system *s, de_world *world);
 
 /* ---------- Manifest ---------- */
@@ -151,11 +152,46 @@ typedef enum de_load_flags {
     DE_LOAD_STOP_ON_ERROR = 1u << 5 /* cancel remaining assets after the first failure */
 } de_load_flags;
 
+/**
+ * Load requests (DENG-141, SPEC §11.3). Each call starts one request and returns its handle; poll
+ * it with de_asset_status. The request takes one reference on every asset it names and keeps it
+ * until de_asset_release, also after it is final. Assets that are already loaded count at once;
+ * the rest are handed to the load pipeline. Main thread.
+ *
+ * - de_asset_load_bundle: the bundle's members plus the members of every bundle it depends on
+ *   (transitively, dependencies first), each asset once.
+ * - de_asset_load_many: `ids` in order, duplicates dropped. `count` 0 is an empty request (READY).
+ * - Priority: the most urgent DE_LOAD_PRIORITY_* bit in `flags` (CRITICAL > HIGH > LOW >
+ *   BACKGROUND); with none, the bundle's manifest `priority`, else NORMAL. An asset that several
+ *   requests wait on loads with the most urgent of their priorities.
+ * - DE_LOAD_STOP_ON_ERROR: the first failed asset ends the request (PARTIAL if any asset is
+ *   ready, else FAILED) and cancels its assets that no other request waits on.
+ * - An unknown bundle or asset ID is not an error of the call: the request is FAILED (or the
+ *   asset counts as failed) with DE_ERR_NOT_FOUND in de_load_info. A failed asset is loaded
+ *   again by a later request once no waiting request still counts it as failed.
+ *
+ * @return The request handle (never 0 for an unknown bundle or ID). An invalid handle, with the
+ *         error context set, only for a NULL system or bundle name, `ids` NULL with `count` > 0
+ *         (DE_ERR_INVALID_ARGUMENT), or when out of memory or out of the 2^20 request slots
+ *         (DE_ERR_OUT_OF_MEMORY).
+ */
 DE_API de_load_handle de_asset_load_bundle(de_asset_system *s, const char *bundle, u32 flags);
+/** One asset; see de_asset_load_bundle. */
 DE_API de_load_handle de_asset_load(de_asset_system *s, de_asset_id id, u32 flags);
+/** Several assets; see de_asset_load_bundle. */
 DE_API de_load_handle de_asset_load_many(de_asset_system *s, const de_asset_id *ids, u32 count,
                                          u32 flags);
+/**
+ * Ends a request that is not final yet: it becomes DE_LOAD_CANCELLED at once, and the pipeline
+ * stops loading its assets that no other request waits on. The references stay until
+ * de_asset_release. A final request, or a stale handle, is left alone. Main thread.
+ */
 DE_API void de_asset_cancel(de_asset_system *s, de_load_handle h);
+/**
+ * Drops the request's references (cancelling it first if it is not final) and frees it; the
+ * handle is stale afterwards (status DE_LOAD_INVALID). Assets no request references any more stay
+ * loaded until eviction. A stale handle is ignored. Main thread.
+ */
 DE_API void de_asset_release(de_asset_system *s, de_load_handle h); /* drops the reference */
 
 /* ---------- Status ---------- */
@@ -169,6 +205,16 @@ typedef enum de_load_state {
     DE_LOAD_CANCELLED
 } de_load_state;
 
+/**
+ * Aggregate of a request (de_asset_status). States: PENDING until any asset reports progress or
+ * finishes, then LOADING; READY when every asset is loaded, PARTIAL when all finished (or
+ * STOP_ON_ERROR ended it) with at least one failed and one ready, FAILED when nothing is usable.
+ * `progress` is byte-weighted (bytes_done / bytes_total) while any size is known, else the share
+ * of finished assets; it never decreases, stays below 1.0 until the request is final, and is 1.0
+ * once it is (CANCELLED included). `first_failed`, `first_error` and `first_error_msg` describe the
+ * first failed asset in request order ({0}, DE_OK and "" when none failed; an unknown bundle sets
+ * only the error and message).
+ */
 typedef struct de_load_info {
     u32 assets_total, assets_ready, assets_failed;
     u64 bytes_total, bytes_done; /* bytes_total may grow as dependencies resolve */
@@ -178,18 +224,39 @@ typedef struct de_load_info {
     char first_error_msg[256];
 } de_load_info;
 
+/**
+ * The state of request `h` (DE_LOAD_INVALID for a stale or 0 handle), and its aggregate in
+ * `*info` when not NULL (zeroed for a stale handle). Cached: O(1), no allocation, so games call it
+ * every frame. The state moves on in de_asset_system_update, which applies finished loads.
+ * Main thread.
+ */
 DE_API de_load_state de_asset_status(de_asset_system *s, de_load_handle h,
                                      de_load_info *info /* nullable */);
+/** The state of one asset: DE_LOAD_INVALID if it was never requested (or has no slot), else
+ * PENDING, LOADING, READY, FAILED or CANCELLED. Main thread. */
 DE_API de_load_state de_asset_status_of(de_asset_system *s, de_asset_id id);
-/* Tools and tests only. Asserts if called from a frame-loop system in Dev builds. */
+/**
+ * Tools and tests only: blocks until request `h` is final or `timeout_ns` passed (UINT64_MAX =
+ * no limit, 0 = poll once), applying finished loads meanwhile and running main-thread tasks when
+ * called on the task system's main thread. Returns the state reached; on timeout also sets
+ * DE_ERR_TIMEOUT in the error context. Asserts (Debug/Dev) when called from inside an ECS system
+ * of a running schedule. Main thread.
+ */
 DE_API de_load_state de_asset_wait(de_asset_system *s, de_load_handle h, u64 timeout_ns);
 
 /* Per-asset listing for loading screens and debug UI. */
+/** One asset of a request: its state (de_asset_status_of) and its bytes (resident size when
+ * READY, else the bytes read so far). */
 typedef struct de_asset_status_entry {
     de_asset_id id;
     de_load_state state;
     u64 bytes;
 } de_asset_status_entry;
+/**
+ * Writes the first min(`max`, count) assets of request `h`, in request order, to `out` (NULL with
+ * `max` 0 to ask for the count) and returns the request's asset count (0 for a stale handle).
+ * O(assets); no allocation. Main thread.
+ */
 DE_API u32 de_asset_status_list(de_asset_system *s, de_load_handle h, de_asset_status_entry *out,
                                 u32 max);
 
