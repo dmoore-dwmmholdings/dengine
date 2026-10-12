@@ -335,6 +335,71 @@ typedef struct de_asset_type_desc {
  */
 DE_API de_asset_type de_asset_type_register(de_asset_system *s, const de_asset_type_desc *desc);
 
+/* ---------- Load context (DENG-142) ----------
+ *
+ * A type's `load` gets one de_asset_load_ctx per load. It runs on a frame worker of the task
+ * system (on the main thread, inside de_asset_system_update, when the type sets
+ * `main_thread_load`; on an I/O thread when the system has no task system). The context and the
+ * bytes are valid only during that call. These functions may be called only from the loader,
+ * on the thread that runs it. The asset system's allocator must be thread-safe: loads allocate
+ * from it on these threads.
+ *
+ * A loader returns DE_OK after de_asset_load_ctx_set_object, or an error (the asset is FAILED).
+ * An object set before a failure, or before the load was cancelled, is passed to the type's
+ * `unload`. Dependencies declared with de_asset_load_ctx_add_dependency are loaded at the
+ * asset's priority; the asset becomes READY in the same de_asset_system_update as the last of
+ * them, or FAILED if one fails (its message names the dependency and the dependency's cause).
+ */
+
+/** The bytes to load (the asset's stored bytes, decompressed) and their count in `*size`. Never
+ * NULL (an empty asset gives "" and 0). */
+DE_API const void *de_asset_load_ctx_data(const de_asset_load_ctx *ctx, u64 *size);
+/** The asset being loaded. */
+DE_API de_asset_id de_asset_load_ctx_id(const de_asset_load_ctx *ctx);
+/** The type's `user` pointer (de_asset_type_desc.user). */
+DE_API void *de_asset_load_ctx_user(const de_asset_load_ctx *ctx);
+
+/**
+ * The asset's settings from the manifest (`[defaults.<type>]` overlaid by the asset's own keys).
+ * Each getter returns `fallback` when the key is missing or has another type; the float getter
+ * also accepts an integer. Strings stay valid during the load.
+ */
+DE_API bool de_asset_load_ctx_settings_has(const de_asset_load_ctx *ctx, const char *key);
+DE_API bool de_asset_load_ctx_settings_bool(const de_asset_load_ctx *ctx, const char *key,
+                                            bool fallback);
+DE_API i64 de_asset_load_ctx_settings_int(const de_asset_load_ctx *ctx, const char *key,
+                                          i64 fallback);
+DE_API f64 de_asset_load_ctx_settings_float(const de_asset_load_ctx *ctx, const char *key,
+                                            f64 fallback);
+DE_API const char *de_asset_load_ctx_settings_string(const de_asset_load_ctx *ctx, const char *key,
+                                                     const char *fallback);
+/** A string-array setting: its items in `*items` (NULL when missing) and their count (0). */
+DE_API u32 de_asset_load_ctx_settings_string_array(const de_asset_load_ctx *ctx, const char *key,
+                                                   const char *const **items);
+
+/**
+ * Sets the live object the slot gets when the asset is published, and its resident size in
+ * bytes (for budgets). A second call replaces the first object, which goes to the type's
+ * `unload`.
+ */
+DE_API void de_asset_load_ctx_set_object(de_asset_load_ctx *ctx, void *object, u64 bytes);
+/**
+ * Declares that the asset needs asset `id` (a texture of a material, ...). The dependency is
+ * loaded at the asset's priority and held with an asset -> asset reference while the asset is
+ * loaded. Duplicates count once. A dependency cycle found at run time fails the asset that
+ * closes it (DE_ERR_PARSE).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`id` 0), DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_asset_load_ctx_add_dependency(de_asset_load_ctx *ctx, de_asset_id id);
+/**
+ * Records why the load fails: `result` (DE_OK becomes DE_ERR_INTERNAL) and a printf-style
+ * message, which the asset's failure message carries after `asset "<path>": `. Returns `result`,
+ * so a loader writes `return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "bad header");`. The
+ * first recorded failure wins.
+ */
+DE_API de_result de_asset_load_ctx_fail(de_asset_load_ctx *ctx, de_result result, const char *fmt,
+                                        ...) DE_PRINTF_FMT(3, 4);
+
 /* ---------- Streaming and residency ---------- */
 DE_API void de_asset_set_budgets(de_asset_system *s, const de_asset_budgets *b);
 DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref asset now */

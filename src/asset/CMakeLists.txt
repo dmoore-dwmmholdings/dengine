@@ -33,3 +33,12 @@ target_sources(de_asset PRIVATE asset_id.c glob.c resolve.c resolve_internal.h)
 target_sources(de_asset PRIVATE load.c load_internal.h status.c backend_internal.h)
 target_link_libraries(de_asset PUBLIC de_ecs)
 set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_DEPS ecs)
+
+# DENG-142: the load pipeline, the real backend (pipeline.c), its stages (io_stage.c: source
+# reads on the process I/O threads; decompress_stage.c: zstd payloads; load_ctx.c: loaders and
+# the de_asset_load_ctx accessors). zstd decodes in the runtime: de_tp_zstd, recorded in
+# DE_MODULE_LIBS so the aggregate `dengine` links it.
+target_sources(de_asset PRIVATE pipeline.c pipeline_internal.h io_stage.c decompress_stage.c
+                                load_ctx.c)
+target_link_libraries(de_asset PRIVATE de_tp_zstd)
+set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_zstd)

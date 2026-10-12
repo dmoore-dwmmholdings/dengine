@@ -55,6 +55,11 @@ typedef struct de__load_backend {
     void (*cancel)(void *user, de_asset_system *s, u32 slot);
     void (*reprioritize)(void *user, de_asset_system *s, u32 slot, de__load_priority priority);
     void *user;
+    /* DENG-142: optional (NULL = none). Called on the main thread by every de__load_update (so
+     * by de_asset_system_update and de_asset_wait), after the queued completions are applied and
+     * before the requests are refreshed. A backend that publishes from here with
+     * de__slot_complete_now makes the change visible to the requests in the same update. */
+    void (*update)(void *user, de_asset_system *s);
 } de__load_backend;
 
 /**
@@ -78,6 +83,15 @@ void de__slot_complete(de_asset_system *s, u32 slot, de_result result, u64 bytes
  * grow; 0 = unknown so far). Any thread; lock-free. Values only grow (smaller ones are ignored).
  */
 void de__slot_progress(de_asset_system *s, u32 slot, u64 bytes_done, u64 bytes_total);
+
+/**
+ * DENG-142: like de__slot_complete, but applied at once instead of queued: the slot's state
+ * changes before the call returns. Main thread only, and only from the backend's `update` hook
+ * (never from submit, cancel or reprioritize, which run while the load API walks its slots).
+ * `msg` (NULL = none) is the failure message, kept like a queued completion's.
+ */
+void de__slot_complete_now(de_asset_system *s, u32 slot, de_result result, u64 bytes,
+                           const char *msg);
 
 DE_EXTERN_C_END
 
