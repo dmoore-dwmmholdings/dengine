@@ -85,3 +85,6 @@ if(NOT DE_HAS_ASSETS)
     target_compile_definitions(de_asset_stubs INTERFACE DE_HAS_ASSETS=0)
     target_link_libraries(de_asset_stubs INTERFACE de_config)
 endif()
+
+# DENG-93: game library hot reload (watch, copy, swap, ECS type sync) on DENG-91's frame-end hook.
+target_sources(de_host PRIVATE hot_reload.h hot_reload.c)

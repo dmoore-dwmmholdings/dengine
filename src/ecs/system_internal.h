@@ -113,6 +113,8 @@ typedef struct ecs_system {
     u64 serial_runs;
     u32 serial_last_worker;
     size_t alloc_size;
+    /* -- DENG-93: hot reload (append below) -- */
+    u32 owner; /**< de_world.system_owner when it was added (0: the engine) */
 } ecs_system;
 
 /** One registry slot. `sys` is NULL while the slot is free or retired. */

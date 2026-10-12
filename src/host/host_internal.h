@@ -15,6 +15,7 @@
 #include "host/engine_internal.h"
 #include "host/game_module.h"   /* DENG-92: de__game_module */
 #include "host/loop_internal.h" /* DENG-91: the hook lists de__host holds */
+#include "host/hot_reload.h"    /* DENG-93: de__hot_reload */
 
 DE_EXTERN_C_BEGIN
 
@@ -53,6 +54,9 @@ typedef struct de__host {
     u64 loop_fixed_steps;
     /** de__headless_begin installed the stop handlers; de__headless_end removes them. */
     bool headless_handlers;
+
+    /* ---- DENG-93: game library hot reload (hot_reload.c). Zeroed: off. ---- */
+    de__hot_reload hot_reload;
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */
@@ -155,6 +159,15 @@ void de__headless_end(de__host *h);
  * console event would also reach every other process on the console. */
 bool de__headless_on_console_ctrl(u32 ctrl_type);
 #endif
+
+/* ---------- Hot reload swap (game_module.c; DENG-93) ---------- */
+
+/**
+ * Exchanges the attached game `m` with `other` (hot reload, DENG-93): everything but the
+ * `generation` counters, which stay with their modules. `h->api` points at `m->table`, so it
+ * names the other game's table afterwards. Neither library is opened or closed.
+ */
+void de__game_module_swap(de__game_module *m, de__game_module *other);
 
 DE_EXTERN_C_END
 #endif /* DE_HOST_HOST_INTERNAL_H */

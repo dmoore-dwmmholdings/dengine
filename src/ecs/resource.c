@@ -114,6 +114,8 @@ de_resource_id de_resource_insert(de_world *w, de_type_id type, const void *init
     r.align = desc->align ? desc->align : 1u;
     r.is_pod = desc->is_pod;
     r.hooks = desc->hooks;
+    r.layout = desc; /* DENG-93 */
+    r.layout_hash = de_type_schema_hash(w->types, type);
     if (init != NULL && !r.is_pod && r.hooks.copy == NULL) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                 "de_resource_insert: type '%s' is neither POD nor has a copy hook, so it cannot "

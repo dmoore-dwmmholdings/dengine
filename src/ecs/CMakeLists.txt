@@ -39,3 +39,6 @@ target_sources(de_ecs PRIVATE system_internal.h system.c access.c schedule.c deb
 # DENG-351: built-in components, the ChildOf / Children hierarchy and transform propagation.
 target_sources(de_ecs PRIVATE hierarchy_internal.h builtin_components.c hierarchy.c
                               transform_propagate.c)
+
+# DENG-93: internal hooks for game hot reload (system owners, component re-layout, type sync).
+target_sources(de_ecs PRIVATE hot_reload_internal.h hot_reload.c)

@@ -83,6 +83,11 @@ typedef struct ecs_component_info {
     u32 align;        /**< 1 for tags */
     bool is_pod;
     de_type_hooks hooks;
+    /* -- DENG-93: hot reload (append below) -- */
+    /** The type description the columns hold (registry-owned; it outlives every
+     * re-registration), and its schema hash then. de__world_sync_types compares them. */
+    const de_type_desc *layout;
+    u64 layout_hash;
 } ecs_component_info;
 
 /* ---- Archetypes and tables (DENG-344) ------------------------------------------------------- */
@@ -163,6 +168,9 @@ typedef struct ecs_resource {
     bool is_pod;
     de_type_hooks hooks;
     void *data; /**< `size` bytes aligned to `align` from the world allocator, or NULL */
+    /* -- DENG-93: hot reload (append below) -- */
+    const de_type_desc *layout; /**< the description `data` has (see ecs_component_info) */
+    u64 layout_hash;
 } ecs_resource;
 
 /**
@@ -179,6 +187,9 @@ typedef struct ecs_event_queue {
     de_type_hooks hooks;
     de_array buf[2];
     u64 start[2]; /**< sequence number of each buffer's first event */
+    /* -- DENG-93: hot reload (append below) -- */
+    const de_type_desc *layout; /**< the description the payloads have */
+    u64 layout_hash;
 } ecs_event_queue;
 
 /* ---- The world ------------------------------------------------------------------------------ */
@@ -225,6 +236,8 @@ struct de_world {
     struct ecs_system_registry *systems; /**< NULL until the first de_system_add or run */
     /* -- DENG-351: hierarchy and built-in components (append below; hierarchy_internal.h) -- */
     struct ecs_hier_state *hier; /**< NULL until the built-ins are registered */
+    /* -- DENG-93: hot reload (append below; the API is in hot_reload_internal.h) -- */
+    u32 system_owner; /**< owner tag de_system_add gives new systems (0: the engine) */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -492,6 +505,16 @@ void ecs_snapshot_destroy(de_world *w);
 
 /** Frees the checksum's field-span cache (de_world_destroy). Safe when w->ck is NULL. */
 void ecs_checksum_destroy(de_world *w);
+
+/* ---- Internal API: hot reload (archetype.c, hot_reload.c, DENG-93) ------------------------ */
+
+/**
+ * Bytes a chunk of `rows` rows takes with `a`'s columns (column sizes from `a->columns`,
+ * alignments from the component infos). With `write`, also stores each column's data and tick
+ * offsets in `a->columns`. The layout archetype_create uses; hot_reload.c re-lays out tables
+ * with it.
+ */
+u64 ecs_archetype_chunk_layout(const de_world *w, ecs_archetype *a, u32 rows, bool write);
 
 DE_EXTERN_C_END
 

@@ -224,6 +224,7 @@ static ecs_system *system_build(de_world *w, const de_system_desc *d) {
     s->flags = d->flags;
     s->enabled = true;
     s->serial_last_worker = DE_TASK_WORKER_NONE;
+    s->owner = w->system_owner; /* DENG-93 */
     s->queries = (de_query *)(void *)(mem + queries_off);
     s->query_count = d->query_count;
     ecs_access_item *items = (ecs_access_item *)(void *)(mem + items_off);

@@ -126,6 +126,19 @@ void de__game_module_unload(de__game_module *m) {
     m->generation = generation;
 }
 
+/* ---- DENG-93: hot reload swap entry point ---------------------------------------------- */
+
+void de__game_module_swap(de__game_module *m, de__game_module *other) {
+    if (m == NULL || other == NULL || m == other)
+        return;
+    const u32 gm = m->generation, go = other->generation;
+    de__game_module tmp = *m;
+    *m = *other;
+    *other = tmp;
+    m->generation = gm;
+    other->generation = go;
+}
+
 /* ---- [game] library --------------------------------------------------------------------- */
 
 static bool game_path_is_absolute(const char *p) {
