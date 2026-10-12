@@ -1,0 +1,24 @@
+# Every game.toml key, none at its default (test_game_toml.c: game_toml.full).
+[game]
+name = "Full Test"
+library = "libfulltest.dylib"
+
+[window]
+title = "Full Test Window"
+width = 1920
+height = 1080
+mode = "borderless"
+high_dpi = false
+
+[timing]
+mode = "variable"
+fixed_hz = 120
+max_catchup_steps = 8
+time_scale = 0.5
+frame_cap_hz = 144
+
+[tasks]
+workers = 3
+
+[memory]
+frame_arena_mib = 32

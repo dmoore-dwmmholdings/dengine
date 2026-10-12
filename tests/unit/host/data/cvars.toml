@@ -1,0 +1,15 @@
+# [cvars] values of every type, dotted and nested (test_game_toml.c: game_toml.cvars_applied).
+[game]
+name = "Cvar Test"
+
+[cvars]
+test.gt.flag = true
+test.gt.count = 42
+test.gt.scale = 0.25
+test.gt.label = "hello world"
+test.gt.ro = 7
+test.gt.later = 3
+test.gt.bad = "not a number"
+
+[cvars.test.gt2]
+nested = 11

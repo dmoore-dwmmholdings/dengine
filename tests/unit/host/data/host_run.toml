@@ -1,0 +1,10 @@
+# Project file of the de_host_run tests (test_engine.c).
+[game]
+name = "HostRunTest"
+
+[tasks]
+workers = 1
+
+[cvars]
+test.host.from_toml = 5
+test.host.override = 1

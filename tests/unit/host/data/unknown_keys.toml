@@ -1,0 +1,10 @@
+# Three unknown keys (top-level bar, window.foo, the audio table) between known ones
+# (test_game_toml.c: game_toml.unknown_key_warns).
+bar = 2
+
+[window]
+width = 800
+foo = 1
+
+[audio]
+volume = 0.5

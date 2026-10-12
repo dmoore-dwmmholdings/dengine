@@ -1,0 +1,9 @@
+# timing.mode is not "fixed" or "variable" (test_game_toml.c, test_engine.c).
+[game]
+name = "Bad Timing"
+
+[cvars]
+test.gt.not_applied = 5
+
+[timing]
+mode = "warp"

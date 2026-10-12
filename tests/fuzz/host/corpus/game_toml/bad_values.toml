@@ -1,0 +1,5 @@
+[timing]
+mode = 1
+fixed_hz = 99999999999999
+[window]
+width = -3
