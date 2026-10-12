@@ -60,11 +60,24 @@ struct de_asset_system {
     /* ---- DENG-143: ECS events, host integration (append below) --------------------------- */
 
     /* ---- DENG-144: budgets and eviction (append below) ----------------------------------- */
+    /** Event hook shared with DENG-143 (which sets it to its ECS sender): called for every asset
+     * event; NULL (the default from create) sends nothing. Main thread. Keep ONE copy of this
+     * field and of de__asset_emit when DENG-143 and DENG-144 are merged. */
+    void (*emit_fn)(de_asset_system *s, const de_asset_event *ev);
+    /** budget.c: budgets, residency accounting, LRU lists (budget_internal.h); created by
+     * de_asset_system_create. */
+    struct de__budget *budget;
 };
 
 /** The current locale, or NULL when none is set. */
 static inline const char *de__asset_locale(const de_asset_system *s) {
     return s->locale_buf[0] != '\0' ? s->locale_buf : NULL;
+}
+
+/* DENG-143 / DENG-144: sends one asset event through `emit_fn` (if set). Main thread. */
+static inline void de__asset_emit(de_asset_system *s, const de_asset_event *ev) {
+    if (s->emit_fn)
+        s->emit_fn(s, ev);
 }
 
 DE_EXTERN_C_END

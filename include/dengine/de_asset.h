@@ -93,7 +93,8 @@ DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_ass
 DE_API void de_asset_system_destroy(de_asset_system *s);
 /* Call once per frame on the main thread: publishes finished loads, sends ECS events,
  * applies hot reloads, runs eviction. DENG-141: applies finished loads and updates request
- * states; `world` may be NULL (events come with DENG-143). */
+ * states; `world` may be NULL (events come with DENG-143). DENG-144: then evicts unreferenced
+ * assets of categories over budget (see de_asset_set_budgets) and samples the I/O rate. */
 DE_API void de_asset_system_update(de_asset_system *s, de_world *world);
 
 /* ---------- Manifest ---------- */
@@ -289,8 +290,9 @@ typedef struct de_asset_event {
  * another type (DE_ERR_INVALID_ARGUMENT), when the active manifest does not declare `id`
  * (DE_ERR_NOT_FOUND), or when all 2^20 asset slots are in use (DE_ERR_OUT_OF_MEMORY).
  *
- * A handle is a 20-bit slot index and a 12-bit generation: once the asset is evicted and its slot
- * freed, the old handle is stale and resolves to nothing.
+ * A handle is a 20-bit slot index and a 12-bit generation: once a slot is freed, the old handle
+ * is stale and resolves to nothing. Eviction (DENG-144) does not free the slot: the handle stays
+ * valid, it resolves to no data until the asset is loaded again, then to the new data.
  */
 DE_API de_texture de_asset_texture(de_asset_system *s, de_asset_id id);
 DE_API de_mesh de_asset_mesh(de_asset_system *s, de_asset_id id);
@@ -306,6 +308,19 @@ DE_API const void *de_blob_data(de_asset_system *s, de_blob b, u64 *size);
 typedef struct de_asset_import_ctx de_asset_import_ctx; /* cooker side */
 typedef struct de_asset_load_ctx de_asset_load_ctx;     /* runtime side */
 
+/**
+ * The budget an asset type's resident bytes count against (DENG-144, SPEC §11.8). The zero value
+ * is CPU, so a zeroed de_asset_type_desc is a CPU type. Values outside the enum count as CPU.
+ * Note the order differs from de_asset_stats.bytes_resident (see DE_ASSET_BYTES_*).
+ */
+typedef enum de_asset_category {
+    DE_ASSET_CAT_CPU = 0,     /**< CPU-side data: de_asset_budgets.cpu_bytes (the default) */
+    DE_ASSET_CAT_GPU_TEXTURE, /**< de_asset_budgets.gpu_texture_bytes */
+    DE_ASSET_CAT_GPU_MESH,    /**< de_asset_budgets.gpu_mesh_bytes */
+    DE_ASSET_CAT_AUDIO,       /**< de_asset_budgets.audio_bytes */
+    DE_ASSET_CAT_COUNT
+} de_asset_category;
+
 typedef struct de_asset_type_desc {
     const char *name; /* manifest "type = ..." */
     const char *const *extensions;
@@ -318,6 +333,9 @@ typedef struct de_asset_type_desc {
     void (*unload)(void *object, void *user);
     void *user;
     bool main_thread_load;
+    /* DENG-144: the budget the type's resident bytes (de_asset_load_ctx_set_object) count
+     * against. Default (0) CPU. */
+    de_asset_category category;
 } de_asset_type_desc;
 
 /**
@@ -401,7 +419,33 @@ DE_API de_result de_asset_load_ctx_fail(de_asset_load_ctx *ctx, de_result result
                                         ...) DE_PRINTF_FMT(3, 4);
 
 /* ---------- Streaming and residency ---------- */
+/*
+ * Budgets and eviction (DENG-144, SPEC §11.8). Each READY asset counts its resident bytes (from
+ * de_asset_load_ctx_set_object) against the budget of its type's category. An asset that no load
+ * request and no other asset references is an eviction candidate; candidates are ordered least
+ * recently used first: by the frame (de_asset_system_update count) in which their last reference
+ * was dropped or typed access last touched them, then by asset ID, so the order never depends on
+ * thread timing. While a category is over its budget, de_asset_system_update evicts its
+ * candidates in that order, at most 64 per update. Members of a bundle with `resident = true`
+ * that were loaded through a bundle request are never evicted. A category that is over budget
+ * with no candidate left logs a warning (at most once per second per category); referenced
+ * assets are never evicted.
+ *
+ * Evicting an asset passes its object to the type's `unload`, drops the references it held on
+ * its dependencies, and sets its state back to DE_LOAD_INVALID. Its slot stays: typed handles
+ * keep working and the asset loads again on the next request. Each eviction sends one
+ * DE_ASSET_EV_EVICTED event (state DE_LOAD_INVALID).
+ */
+/**
+ * Sets the per-category budgets in bytes (0 = unlimited; NULL = all unlimited). The defaults
+ * come from de_asset_system_desc.budgets. Takes effect at the next de_asset_system_update.
+ * Main thread.
+ */
 DE_API void de_asset_set_budgets(de_asset_system *s, const de_asset_budgets *b);
+/**
+ * Evicts every candidate now (no per-call cap, budgets ignored), also the dependencies that an
+ * eviction leaves unreferenced. Resident bundle members and referenced assets stay. Main thread.
+ */
 DE_API void de_asset_flush_unused(de_asset_system *s); /* evict every zero-ref asset now */
 typedef struct de_streaming_source {
     f64 x, y, z;
@@ -415,6 +459,21 @@ typedef struct de_asset_stats {
     u64 bytes_resident[4]; /* gpu tex, gpu mesh, audio, cpu */
     u64 io_bytes_per_sec;
 } de_asset_stats;
+/** Indices of de_asset_stats.bytes_resident (DENG-144). */
+enum {
+    DE_ASSET_BYTES_GPU_TEXTURE = 0,
+    DE_ASSET_BYTES_GPU_MESH = 1,
+    DE_ASSET_BYTES_AUDIO = 2,
+    DE_ASSET_BYTES_CPU = 3
+};
+/**
+ * Residency counters (DENG-144): `bytes_resident` per category and `assets_resident` count the
+ * READY assets that hold an object; `loads_in_flight` the assets submitted to the load backend
+ * and not finished; `uploads_in_flight` is 0 until the GPU upload stage exists (S11);
+ * `io_bytes_per_sec` the bytes the backend reported read, averaged over the last second (it is
+ * sampled by de_asset_system_update). All zero for a NULL system. O(loaded slots) for
+ * `loads_in_flight`; no allocation. Main thread.
+ */
 DE_API de_asset_stats de_asset_get_stats(const de_asset_system *s);
 
 DE_EXTERN_C_END

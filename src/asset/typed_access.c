@@ -10,6 +10,7 @@
 #include "asset/slots_internal.h"
 
 #include "asset/asset_internal.h"
+#include "asset/budget_internal.h" /* DENG-144 */
 #include "asset/resolve_internal.h"
 
 #include <dengine/de_asset.h>
@@ -36,6 +37,7 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
                           (unsigned long long)id.hash, have, type_name);
             return 0;
         }
+        de__budget_touch(s, h); /* DENG-144: a typed access is a use (LRU) */
         return h;
     }
 

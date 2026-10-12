@@ -7,6 +7,7 @@
  */
 
 #include "asset/asset_internal.h"
+#include "asset/budget_internal.h"   /* DENG-144 */
 #include "asset/load_internal.h"     /* DENG-141 */
 #include "asset/pipeline_internal.h" /* DENG-142 */
 #include "asset/slots_internal.h"
@@ -14,6 +15,7 @@
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_platform.h> /* DENG-144: de_time_now_ns */
 
 #include <string.h>
 
@@ -78,6 +80,11 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
         de_asset_system_destroy(s);
         return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
     }
+    /* DENG-144: budgets (from desc.budgets), residency accounting, LRU lists. */
+    if (de__budget_init(s) != DE_OK) {
+        de_asset_system_destroy(s);
+        return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
+    }
 
     *out = s;
     return DE_OK;
@@ -91,6 +98,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
     de__asset_types_shutdown(s);       /* DENG-140 */
+    de__budget_shutdown(s);            /* DENG-144: records only; objects went with the slots */
     de__resolved_destroy(s->resolved); /* DENG-139: before their manifests */
     de__resolved_destroy(s->failed_resolved);
     de__manifest_destroy(s->manifest);
@@ -198,4 +206,6 @@ void de_asset_system_update(de_asset_system *s, de_world *world) {
     if (s == NULL)
         return;
     de__load_update(s); /* DENG-141 */
+    /* DENG-144: candidates, eviction while over budget, the I/O rate; advances the LRU frame. */
+    de__budget_update(s, de_time_now_ns());
 }
