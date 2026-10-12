@@ -755,7 +755,10 @@ static bool on_ci(void) {
     return env_flag("DE_CI") || env_flag("CI");
 }
 
-#define CAP_FRAMES 60
+#define CAP_FRAMES     60
+/* At most this many stall frames are excused (see check_cap). More means the pacer is wrong: a
+ * pacer at a third of the rate or less makes every frame a "stall". */
+#define CAP_MAX_STALLS (CAP_FRAMES / 2)
 static struct {
     u64 t[CAP_FRAMES + 1];
     u32 n;
@@ -769,9 +772,55 @@ static de_result cap_begin_hook(de__host *h, void *user) {
     return DE_OK;
 }
 
+/*
+ * Checks the CAP_FRAMES frame-begin times in g_cap against a cap of `hz`.
+ *
+ * Bounds on the average frame time, period P = 1000 / hz ms:
+ * - Host (CI unset), every build, ASan included: P ± 1 ms. This is DENG-91's acceptance
+ *   criterion; the local ci-macos-asan build measures P ± 0.1 ms, also beside a parallel suite.
+ * - CI (`CI` / `DE_CI` set), every build: P ± 2 ms ("Decision: Timing tests run serially and
+ *   loosen their bounds on CI"), and (DENG-381) the upper bound excuses stall frames. A stall
+ *   frame is longer than 2 P. The shared GitHub macOS runners stop the process for 100 ms and
+ *   more, with or without a sanitizer: one stall frame of 137.3 ms gave an average of 35.456 ms
+ *   (ASan+UBSan, dev @ 902b684) and 35.660 ms (Debug, DENG-382's branch); Release on DENG-381's
+ *   branch had 16 stall frames of up to 141.6 ms and 36.836 ms. After a deadline missed by more
+ *   than 2 P, de_frame_pacer restarts its schedule instead of running a burst of short frames
+ *   (its documented resync), so a stall is never caught up. The upper bound therefore counts
+ *   each stall frame as one period: the run, with every stall frame of d ms shortened to P,
+ *   must still average P + 2 ms or less. The excuse is off when more than CAP_MAX_STALLS
+ *   frames stall. The lower bound (a capped loop is never faster than the cap) gets no excuse.
+ *   The pacer's own wake-up accuracy is checked by the platform `pacing.*` tests.
+ */
+static void check_cap(u32 hz) {
+    const f64 period_ms = 1000.0 / hz;
+    const f64 avg_ms = (f64)(g_cap.t[CAP_FRAMES] - g_cap.t[0]) / CAP_FRAMES * 1e-6;
+    f64 min_ms = 1e9, max_ms = 0.0, stall_ms = 0.0;
+    u32 stalls = 0;
+    for (u32 i = 1; i <= CAP_FRAMES; ++i) {
+        const f64 d = (f64)(g_cap.t[i] - g_cap.t[i - 1]) * 1e-6;
+        min_ms = d < min_ms ? d : min_ms;
+        max_ms = d > max_ms ? d : max_ms;
+        if (d > 2.0 * period_ms) {
+            ++stalls;
+            stall_ms += d - period_ms;
+        }
+    }
+    const bool ci = on_ci();
+    const f64 tol_ms = ci ? 2.0 : 1.0;
+    const f64 excuse_ms = ci && stalls <= CAP_MAX_STALLS ? stall_ms / CAP_FRAMES : 0.0;
+    const f64 lo_ms = period_ms - tol_ms;
+    const f64 hi_ms = period_ms + tol_ms + excuse_ms;
+    printf("frame cap %u Hz: average %.3f ms over %d frames (min %.3f, max %.3f), %u stall "
+           "frame(s) > %.1f ms; bounds [%.3f, %.3f] ms%s\n",
+           hz, avg_ms, CAP_FRAMES, min_ms, max_ms, stalls, 2.0 * period_ms, lo_ms, hi_ms,
+           ci ? " (CI)" : "");
+    EXPECT_TRUE(avg_ms >= lo_ms);
+    EXPECT_TRUE(avg_ms <= hi_ms);
+}
+
 TEST(loop_timing, frame_cap) {
-    /* frame_cap_hz = 30 holds the average frame time at 33.3 ms ± 1 ms over 60 frames (±2 ms on
-     * shared CI runners). The real clock throughout. */
+    /* frame_cap_hz = 30 holds the average frame time at 33.3 ms ± 1 ms over 60 frames on the
+     * host; check_cap has the CI bounds. The real clock throughout. */
     de__game_config c = small_config();
     c.timing.frame_cap_hz = 30;
     de__host h;
@@ -781,19 +830,7 @@ TEST(loop_timing, frame_cap) {
     h.loop_max_frames = CAP_FRAMES + 1;
     ASSERT_EQ(de__loop_run(&h), DE_OK);
     ASSERT_EQ(g_cap.n, (u32)CAP_FRAMES + 1);
-
-    const f64 avg_ms = (f64)(g_cap.t[CAP_FRAMES] - g_cap.t[0]) / CAP_FRAMES * 1e-6;
-    f64 min_ms = 1e9, max_ms = 0.0;
-    for (u32 i = 1; i <= CAP_FRAMES; ++i) {
-        const f64 d = (f64)(g_cap.t[i] - g_cap.t[i - 1]) * 1e-6;
-        min_ms = d < min_ms ? d : min_ms;
-        max_ms = d > max_ms ? d : max_ms;
-    }
-    const f64 tol_ms = on_ci() ? 2.0 : 1.0;
-    printf("frame cap 30 Hz: average %.3f ms over %d frames (min %.3f, max %.3f), tolerance "
-           "±%.1f ms%s\n",
-           avg_ms, CAP_FRAMES, min_ms, max_ms, tol_ms, on_ci() ? " (CI)" : "");
-    EXPECT_FLOAT_EQ(avg_ms, 1000.0 / 30.0, tol_ms);
+    check_cap(30);
 
     /* A cap changed at run time applies from the next frame: 60 Hz now. */
     de_timing t = de_engine_get_timing(h.engine);
@@ -801,9 +838,8 @@ TEST(loop_timing, frame_cap) {
     de_engine_set_timing(h.engine, &t);
     memset(&g_cap, 0, sizeof g_cap);
     ASSERT_EQ(de__loop_run(&h), DE_OK);
-    const f64 avg60_ms = (f64)(g_cap.t[CAP_FRAMES] - g_cap.t[0]) / CAP_FRAMES * 1e-6;
-    printf("frame cap 60 Hz: average %.3f ms\n", avg60_ms);
-    EXPECT_FLOAT_EQ(avg60_ms, 1000.0 / 60.0, tol_ms);
+    ASSERT_EQ(g_cap.n, (u32)CAP_FRAMES + 1);
+    check_cap(60);
     host_stop(&h);
 }
 
