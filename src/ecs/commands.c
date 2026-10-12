@@ -504,7 +504,7 @@ static void apply_command(de_world *w, de_commands *c, ecs_cmd *cmd) {
         apply_send_event(w, cmd);
         return;
     }
-    DE_ASSERT(false && "unknown command op");
+    DE_PANIC("ecs: unknown command op %u", (unsigned)cmd->op); /* a corrupted buffer */
 }
 
 typedef struct apply_ctx {
