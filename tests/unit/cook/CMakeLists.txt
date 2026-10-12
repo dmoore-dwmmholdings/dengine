@@ -39,3 +39,43 @@ if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMU
     de__cook_cli_test(bad_option 2 "unknown option '--bogus'.*usage: de-cook --check"
         --check four_issues/assets.toml --bogus)
 endif()
+
+# DENG-209: the cooker library (tools/cook/lib/, de_cooker): registry, cooking, sub-assets,
+# dependencies, the determinism check, the settings hash, the import context, and the runtime
+# pipeline cooking in-process (cooker.runtime_source_mode, DE_HAS_COOKER builds; skipped in the
+# others). Sources are written into a scratch directory of the build tree (mounted as ckt:/).
+de_add_test(NAME cooker SOURCES test_cooker.c test_settings_hash.c test_import_ctx.c
+            LIBS de_cooker de_asset de_task de_platform)
+if(TARGET test_cooker)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_cooker_tmp")
+    target_include_directories(test_cooker PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_cooker PRIVATE
+        "DE_COOK_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_cooker_tmp\"")
+endif()
+
+# DENG-209: cooker_link_check: builds that do not cook in-process (Release, Shipping) link no
+# cooker symbol, and Debug/Dev builds do (the positive control). nm reads the aggregate `dengine`
+# library and cooker_link_probe, an executable that links `dengine` the way a game does and
+# creates an asset system (which installs the load pipeline, and with it the cook stage). See
+# check_cooker_link.cmake.
+if(DE_BUILD_TESTS)
+    add_executable(cooker_link_probe cooker_link_probe.c)
+    target_link_libraries(cooker_link_probe PRIVATE dengine de_build_flags)
+    set_target_properties(cooker_link_probe PROPERTIES FOLDER "dengine/tests")
+    if(CMAKE_NM)
+        set(_de_cook_nm "${CMAKE_NM}")
+    else()
+        find_program(_de_cook_nm NAMES llvm-nm nm)
+    endif()
+    add_test(NAME cooker_link_check
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDE_NM=${_de_cook_nm}"
+            "-DDE_EXPECT_COOKER=$<IF:$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>,1,0>"
+            "-DDE_FILES=$<TARGET_FILE:dengine>|$<TARGET_FILE:cooker_link_probe>"
+            "-DDE_CONFIG=$<CONFIG>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_cooker_link.cmake")
+    set_tests_properties(cooker_link_check PROPERTIES
+        LABELS "unit;cook"
+        SKIP_REGULAR_EXPRESSION "cooker_link_check: SKIPPED"
+        TIMEOUT 60)
+endif()
