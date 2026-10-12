@@ -10,5 +10,14 @@ de_add_module(
         validate.c
         schema_hash.c
         path.c
+        ser_internal.h
+        ser_common.c
+        ser_text_writer.c
+        ser_text_reader.c
     DEPS core
 )
+
+# DENG-295: the text serializer parses TOML with the vendored tomlc17, through core's entry point
+# (core/de_toml_internal.h). Recorded in DE_MODULE_LIBS too, so the aggregate `dengine` links it.
+target_link_libraries(de_reflect PRIVATE de_tp_tomlc17)
+set_property(TARGET de_reflect APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)

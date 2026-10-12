@@ -16,3 +16,23 @@ if(TARGET test_reg)
 endif()
 
 de_add_test(NAME path SOURCES test_path.c LIBS de_reflect)
+
+# DENG-295: the TOML text serializer. Golden files are in data/ (text_*.toml); check_toml.py
+# parses the same files with Python's tomllib (an independent TOML parser), and the C tests
+# compare the writer's output with them byte for byte.
+de_add_test(NAME text SOURCES test_ser_text.c LIBS de_reflect)
+if(TARGET test_text)
+    target_compile_definitions(test_text PRIVATE
+        "DE_REFLECT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()
+if(DE_BUILD_TESTS)
+    find_package(Python3 3.10 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        # Exit code 77 (skipped) when the interpreter is older than 3.11 (no tomllib).
+        add_test(NAME text.check_toml
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_toml.py"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/data")
+        set_tests_properties(text.check_toml PROPERTIES
+            LABELS "unit;reflect" SKIP_RETURN_CODE 77 TIMEOUT 60)
+    endif()
+endif()
