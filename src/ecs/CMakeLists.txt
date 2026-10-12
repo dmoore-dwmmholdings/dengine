@@ -14,3 +14,6 @@ de_add_module(
     DEPS core task reflect
     DETERMINISTIC
 )
+
+# DENG-348: resources and events.
+target_sources(de_ecs PRIVATE resource.c event.c)

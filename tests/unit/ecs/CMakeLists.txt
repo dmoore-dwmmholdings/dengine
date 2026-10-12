@@ -43,3 +43,13 @@ message(STATUS "src/ecs: no hash map iteration in ${_de_n} files")
                 -P "${CMAKE_CURRENT_BINARY_DIR}/ecs_no_hashmap_iter.cmake")
     set_tests_properties(ecs.no_hashmap_iteration PROPERTIES LABELS "unit;ecs" TIMEOUT 60)
 endif()
+
+# DENG-348: resources and events.
+de_add_test(NAME resource SOURCES test_resource.c LIBS de_ecs)
+de_add_test(NAME event SOURCES test_event.c LIBS de_ecs)
+foreach(_de_ecs_test test_resource test_event)
+    if(TARGET ${_de_ecs_test})
+        target_include_directories(${_de_ecs_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

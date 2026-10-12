@@ -139,6 +139,38 @@ typedef struct ecs_archetype_listener {
     void *user;
 } ecs_archetype_listener;
 
+/* ---- Resources and events (DENG-348) -------------------------------------------------------- */
+
+/**
+ * One resource slot. A slot is bound to its type for the life of the world; `data` is NULL while
+ * the resource is removed. The size, alignment and hooks are copied from reflection when the slot
+ * is created.
+ */
+typedef struct ecs_resource {
+    de_type_id type;
+    u32 size;
+    u32 align;
+    bool is_pod;
+    de_type_hooks hooks;
+    void *data; /**< `size` bytes aligned to `align` from the world allocator, or NULL */
+} ecs_resource;
+
+/**
+ * The two buffers of one event type. `buf[older]` holds last frame's events, with sequence
+ * numbers [start[older], start[older] + count); `buf[older ^ 1]` holds this frame's, starting at
+ * start[older] + buf[older].count. A buffer is a de_array of payloads (elem_size = payload size).
+ */
+typedef struct ecs_event_queue {
+    de_type_id payload;
+    u32 size;
+    u32 align;
+    bool is_pod;
+    u32 older; /**< 0 or 1: index of last frame's buffer */
+    de_type_hooks hooks;
+    de_array buf[2];
+    u64 start[2]; /**< sequence number of each buffer's first event */
+} ecs_event_queue;
+
 /* ---- The world ------------------------------------------------------------------------------ */
 
 struct de_world {
@@ -163,6 +195,10 @@ struct de_world {
     /** Returned by de_entity_get for tag components: non-NULL, never read or written. */
     u64 tag_placeholder[2];
     /* -- DENG-348: resources and events (append below) -- */
+    DE_ARRAY(ecs_resource) resources; /**< resource id - 1; first-insert order */
+    de_hashmap resource_by_type;      /**< de_type_id.id -> u32 resource id; lookup only */
+    DE_ARRAY(ecs_event_queue) events; /**< event type id - 1; registration order */
+    de_hashmap event_by_type;         /**< de_type_id.id -> u32 event type id; lookup only */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */
@@ -309,6 +345,22 @@ de_result ecs_entity_move(de_world *w, de_entity e, ecs_archetype *dst);
  * replace this definition (it lives in table.c in its own block).
  */
 void ecs_row_init_ticks(de_world *w, ecs_archetype *a, u32 chunk, u32 row, u32 column);
+
+/* ---- Internal API: resources and events (resource.c, event.c, DENG-348) -------------------- */
+
+/** Initialises the resource and event fields of a zeroed world. Allocates nothing. */
+de_result ecs_resources_init(de_world *w);
+de_result ecs_events_init(de_world *w);
+
+/**
+ * Destructs and frees every resource, in reverse first-insert order (later resources may refer to
+ * earlier ones). Safe on a world whose resource fields are zeroed or initialised.
+ */
+void ecs_resources_destroy(de_world *w);
+
+/** Destructs every alive event and frees every event buffer, in registration order. Safe on a
+ * world whose event fields are zeroed or initialised. */
+void ecs_events_destroy(de_world *w);
 
 DE_EXTERN_C_END
 

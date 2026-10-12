@@ -150,18 +150,112 @@ DE_API void de_entity_set_parent(de_world *w, de_entity child, de_entity parent)
 DE_API de_entity de_entity_parent(const de_world *w, de_entity e);
 
 /* ---------- Resources (typed singletons) ---------- */
+/*
+ * A resource is one value of a reflected struct type stored in the world (time, input state, the
+ * asset system pointer, the physics world, ...; SPEC §7.1). There is at most one resource per
+ * type. Each type gets its id when it is first inserted, and keeps it for the life of the world:
+ * removing the value and inserting it again gives the same id, and an id never names another
+ * type. Ids are dense, in first-insert order.
+ *
+ * Each value lives in its own block aligned to the type, so the pointer from de_resource_get()
+ * stays valid until the resource is removed or the world is destroyed; replacing the value keeps
+ * the same block.
+ *
+ * Threading: insert and remove are single-threaded; nothing else may touch resources while they
+ * run (inside a schedule, only an exclusive system may call them). de_resource_get() and
+ * de_resource_find() may run on many threads at once. Systems declare which resources they read
+ * or write (de_system_desc.resources), and the scheduler keeps writers apart (DENG-350).
+ */
+/**
+ * Stores a resource of struct type `type` (from the world's type registry) and returns its id.
+ *
+ * The value is a copy of `init` (the type's copy hook, or memcpy for a POD type), or, when `init`
+ * is NULL, a new value (the construct hook, or zero). If the world already has a resource of
+ * this type, the old value is destructed (destruct hook) and replaced in place, and the id stays
+ * the same. Passing the resource's own current value as `init` changes nothing.
+ *
+ * On failure returns an invalid id and sets the error context: DE_ERR_INVALID_ARGUMENT (bad
+ * world, unknown type, or `init` given for a type that is neither POD nor has a copy hook),
+ * DE_ERR_UNSUPPORTED (alignment above DE_ECS_MAX_COMPONENT_ALIGN) or DE_ERR_OUT_OF_MEMORY. A
+ * failed replace leaves the old value in place.
+ */
 DE_API de_resource_id de_resource_insert(de_world *w, de_type_id type, const void *init);
+/** The value of resource `id`, or NULL if `id` is invalid or the resource was removed. */
 DE_API void *de_resource_get(de_world *w, de_resource_id id);
+/** The id of the resource of type `type`, or an invalid id if the world has none (never
+ * inserted, or removed). Sets no error. */
+DE_API de_resource_id de_resource_find(const de_world *w, de_type_id type);
+/**
+ * Destructs (destruct hook) and frees the value of resource `id`. de_resource_get() then returns
+ * NULL until the type is inserted again, which gives back the same id. Ignores invalid or
+ * already removed ids.
+ */
+DE_API void de_resource_remove(de_world *w, de_resource_id id);
 
 /* ---------- Events (double-buffered; readable for two frames) ---------- */
+/*
+ * An event type is a queue of payloads of one reflected struct type (SPEC §7.1). Each type keeps
+ * two buffers: events sent this frame and events sent last frame. de_world_update_events() runs
+ * once per frame (at the start of DE_SCHEDULE_FIRST, DENG-350): it drops last frame's events and
+ * starts a new frame. So an event can be read during the frame it was sent and the next one.
+ *
+ * Every event of a type has a sequence number (0, 1, 2, ... in send order). A reader is plain
+ * data: the sequence number of the next event it reads, so it can live in a system's user data or
+ * a snapshot. Each reader sees each event at most once, in send order (SPEC §5.7). A reader that
+ * is not polled for two frames misses events; de_event_next() then skips to the oldest event
+ * still alive and adds the dropped ones to `missed`.
+ *
+ * Payloads are copied into the buffer (the type's copy hook, or memcpy for a POD type) and moved
+ * with memcpy when a buffer grows, so payload types are POD, or trivially relocatable with copy
+ * and destruct hooks. The destruct hook runs when an event is dropped. Buffers keep their
+ * capacity, so steady-state sending does not allocate.
+ *
+ * Threading: de_event_send() is not thread-safe for one event type: one sender at a time, and no
+ * reader at the same time (the scheduler orders writers by access sets, DENG-350; systems that
+ * run in parallel send through de_cmd_send_event()). Different event types may be sent from
+ * different threads at once. Readers of a type may run at the same time as each other.
+ * de_event_register() and de_world_update_events() are single-threaded.
+ */
 typedef struct de_event_reader {
-    u64 cursor;
+    u64 cursor; /**< sequence number of the next event to read */
     de_event_type type;
+    u32 missed; /**< events dropped before this reader read them (saturates) */
 } de_event_reader;
+/**
+ * Registers struct type `payload` of the world's type registry as an event type. Ids are dense,
+ * in registration order (1, 2, 3, ...). Registering a type again returns the same id.
+ *
+ * On failure returns an invalid id and sets the error context: DE_ERR_INVALID_ARGUMENT (bad
+ * world, unknown type, or a type that is neither POD nor has copy and destruct hooks),
+ * DE_ERR_UNSUPPORTED (alignment above DE_ECS_MAX_COMPONENT_ALIGN) or DE_ERR_OUT_OF_MEMORY.
+ */
 DE_API de_event_type de_event_register(de_world *w, de_type_id payload);
+/**
+ * Appends a copy of `*payload` (the event type's payload size) to this frame's events of `t`. If
+ * the buffer cannot grow, the event is dropped and the error context is set
+ * (DE_ERR_OUT_OF_MEMORY); an invalid `t` or NULL `payload` sets DE_ERR_INVALID_ARGUMENT.
+ */
 DE_API void de_event_send(de_world *w, de_event_type t, const void *payload);
+/**
+ * A reader of `t` that starts at the oldest event still alive (sent this frame or last frame).
+ * For an invalid `t` the reader's type is invalid and de_event_next() returns NULL.
+ */
 DE_API de_event_reader de_event_reader_create(de_world *w, de_event_type t);
+/**
+ * The next unread event payload of `r->type`, or NULL when the reader has read every event. The
+ * pointer is valid until the next de_event_send() of that type or de_world_update_events().
+ * Events dropped before the reader got to them are skipped and counted in `r->missed`.
+ */
 DE_API const void *de_event_next(de_world *w, de_event_reader *r); /* NULL when drained */
+/** Events `r` missed (dropped before it read them) since it was created. Saturates at
+ * 0xFFFFFFFF. */
+DE_API u32 de_event_reader_missed(const de_event_reader *r);
+/**
+ * Starts a new event frame for every event type, in registration order: drops the events sent
+ * the frame before last (destruct hooks run) and makes this frame's events last frame's. Runs at
+ * the start of DE_SCHEDULE_FIRST (DENG-350). Allocates nothing.
+ */
+DE_API void de_world_update_events(de_world *w);
 
 /* ---------- Queries ---------- */
 typedef enum de_access { DE_READ, DE_WRITE, DE_OPTIONAL_READ, DE_OPTIONAL_WRITE } de_access;
