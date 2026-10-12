@@ -1,8 +1,14 @@
-# src/task: module `task` (target de_task), layer runtime.
-# Stub source only, until the sprint that owns this module adds real code.
+# src/task: module `task` (target de_task), layer runtime. SPEC §8.
+# Append-only within S04: DENG-292 and DENG-293 add their sources to the SOURCES list, one per
+# line.
 de_add_module(
     NAME task
     LAYER runtime
-    SOURCES task_stub.c
+    SOURCES
+        task_internal.h
+        deque.h
+        deque.c
+        scheduler.c
+        worker.c
     DEPS core platform
 )
