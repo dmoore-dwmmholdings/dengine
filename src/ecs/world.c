@@ -62,7 +62,9 @@ de_result de_world_create(const de_world_desc *desc, de_world **out) {
     /* The maps allocate nothing at init, so de_world_destroy can free them in any state. */
     if ((r = de_hashmap_init(&w->component_by_name, &by_name)) != DE_OK ||
         (r = de_hashmap_init(&w->component_by_type, &by_type)) != DE_OK ||
-        (r = de_hashmap_init(&w->archetype_by_set, &by_set)) != DE_OK) {
+        (r = de_hashmap_init(&w->archetype_by_set, &by_set)) != DE_OK ||
+        (r = ecs_resources_init(w)) != DE_OK || /* DENG-348 */
+        (r = ecs_events_init(w)) != DE_OK) {    /* DENG-348 */
         de_world_destroy(w);
         return r;
     }
@@ -117,6 +119,8 @@ void de_world_destroy(de_world *w) {
     if (w == NULL)
         return;
     destruct_all(w);
+    ecs_resources_destroy(w); /* DENG-348: after the entities, which may refer to resources */
+    ecs_events_destroy(w);    /* DENG-348 */
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
         ecs_archetype *a = ecs_archetype_at(w, ai);
         de_array_free(&a->chunks); /* the chunk blocks go back with the pool */
