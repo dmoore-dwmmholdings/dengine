@@ -14,6 +14,7 @@
 #include <dengine/de_memory.h>
 
 #include "asset/manifest_internal.h"
+#include "asset/resolve_internal.h" /* DENG-139 */
 
 DE_EXTERN_C_BEGIN
 
@@ -35,6 +36,12 @@ struct de_asset_system {
     de_log_category log;           /**< "asset" */
 
     /* ---- DENG-139: asset IDs, globs, bundle closure (append below) ----------------------- */
+    /** The resolved view of `manifest` (IDs, bundle members and closures); NULL when
+     * `manifest` is NULL. Destroyed before its manifest. */
+    de__resolved *resolved;
+    /** The resolved view of `failed_manifest` when the load failed in resolution (its issues
+     * are the full list); else NULL. */
+    de__resolved *failed_resolved;
 
     /* ---- DENG-140: slots, typed handles, type registry (append below) -------------------- */
 

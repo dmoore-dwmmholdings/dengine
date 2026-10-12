@@ -12,3 +12,17 @@ if(TARGET test_asset)
         "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_ASSET_EXAMPLES_DIR=\"${DE_ROOT_DIR}/examples\"")
 endif()
+
+# DENG-139: asset IDs, globs on IDs, manifest resolution and validation. Own executable (CTest
+# names asset_id.*, glob.*, resolve.*). data/ is mounted as rdata:/, examples/ as rex:/, and a
+# scratch directory in the build tree as rtmp:/ (writable).
+de_add_test(NAME asset_resolve SOURCES test_asset_id.c test_glob.c test_resolve.c
+            LIBS de_asset de_platform)
+if(TARGET test_asset_resolve)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_resolve_tmp")
+    target_include_directories(test_asset_resolve PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_resolve PRIVATE
+        "DE_ASSET_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+        "DE_ASSET_EXAMPLES_DIR=\"${DE_ROOT_DIR}/examples\""
+        "DE_ASSET_RESOLVE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_resolve_tmp\"")
+endif()
