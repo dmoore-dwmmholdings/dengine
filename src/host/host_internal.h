@@ -13,6 +13,7 @@
 #include <dengine/de_game.h>
 
 #include "host/engine_internal.h"
+#include "host/game_module.h" /* DENG-92: de__game_module */
 
 DE_EXTERN_C_BEGIN
 
@@ -30,6 +31,8 @@ typedef struct de__host {
     const de_game_api *api;
     /** Log category "host". */
     de_log_category log;
+    /** DENG-92: the attached game (library or static); `api` points at `game.table`. */
+    de__game_module game;
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */
@@ -53,15 +56,18 @@ de_result de__loop_run(de__host *h);
 de_result de__game_api_check(const de_game_api *api);
 
 /**
- * Finds the game and sets `h->api`. DENG-90's stub uses `d->static_api` only (checked with
- * de__game_api_check); a `d->game_library` without a static API is DE_ERR_UNSUPPORTED until
- * DENG-92 loads libraries. Called after the engine exists and before `init`.
- * @return DE_OK, DE_ERR_INVALID_ARGUMENT (no game at all), DE_ERR_VERSION_MISMATCH or
- *         DE_ERR_UNSUPPORTED.
+ * Finds the game, loads it (game_module.h) and sets `h->api` to `&h->game.table`. The first
+ * match wins: `d->game_library` (a native path; a bare file name means the current directory),
+ * `d->static_api`, then game.toml's `[game] library` (resolved against game:/). The table is
+ * validated (version, name, required callbacks). Called after the engine exists and before
+ * `init`. Logs the game's name and where it came from at Info.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (no game at all, a NULL table, a missing name or
+ *         callback), DE_ERR_NOT_FOUND (no such library, or no de_game_api symbol in it),
+ *         DE_ERR_IO (the OS refused the library) or DE_ERR_VERSION_MISMATCH.
  */
 de_result de__game_attach(de__host *h, const de_host_desc *d);
 
-/** Lets go of the game (unloads its library, once DENG-92 loads one) and clears `h->api`.
+/** Lets go of the game: clears `h->api` and closes its library (de__game_module_unload).
  * Called after `shutdown` (or after a failed `init`), before the engine is destroyed. Safe to
  * call when nothing is attached. */
 void de__game_detach(de__host *h);

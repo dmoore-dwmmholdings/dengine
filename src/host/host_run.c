@@ -159,7 +159,10 @@ int de_host_run(const de_host_desc *desc) {
 
     int exit_code = 0;
     bool own_fs = false;
-    de_result r = de_fs_init(NULL);
+    de_fs_desc fsd;
+    memset(&fsd, 0, sizeof fsd);
+    fsd.game_dir = h.desc.game_dir; /* NULL: the executable's directory */
+    de_result r = de_fs_init(&fsd);
     if (r == DE_OK) {
         own_fs = true;
     } else if (r == DE_ERR_ALREADY_EXISTS) {

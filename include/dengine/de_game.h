@@ -118,12 +118,22 @@ typedef struct de_game_api {
 #define DE_HOST_DEFAULT_GAME_TOML "game:/game.toml"
 
 typedef struct de_host_desc {
-    const char *game_toml;         /* virtual path; NULL = DE_HOST_DEFAULT_GAME_TOML */
-    const char *game_library;      /* dev: path to game DLL; NULL = statically linked */
-    const de_game_api *static_api; /* shipping: from de_game_get_api() */
-    bool headless;                 /* dedicated server: no window, GPU, audio, UI */
+    const char *game_toml; /* virtual path; NULL = DE_HOST_DEFAULT_GAME_TOML */
+    /** Dev: native path of the game library (`game.dll`, `libgame.so`, `libgame.dylib`), which
+     * must export de_game_get_api(). Wins over `static_api`. When both are NULL, game.toml's
+     * `[game] library` is loaded (relative to `game:/`; without an extension the platform name
+     * is used: "game" → "libgame.dylib"). */
+    const char *game_library;
+    /** Shipping: de_game_get_api() of the statically linked game (de_add_game() generates the
+     * main() that passes it). */
+    const de_game_api *static_api;
+    bool headless; /* dedicated server: no window, GPU, audio, UI */
     int argc;
     char **argv;
+    /** Native directory for `game:/` (de_fs_desc.game_dir), which holds game.toml and the game's
+     * data; NULL = the directory of the executable. `dengine --game <lib>` sets it to the game
+     * library's directory. Ignored when the caller has called de_fs_init already. */
+    const char *game_dir;
 } de_host_desc;
 
 /**

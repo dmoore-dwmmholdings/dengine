@@ -24,3 +24,41 @@ de_add_module(
 # aggregate `dengine` links it.
 target_link_libraries(de_host PRIVATE de_tp_tomlc17)
 set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+
+# DENG-92: game attachment (game_module.c is in the list above), the `dengine` host executable
+# and de_add_game() (cmake/DeAddGame.cmake).
+target_sources(de_host PRIVATE game_module.h)
+
+# The `dengine` executable loads a game library (`dengine --game <lib>`). The target is
+# `dengine_exe` because `dengine` is the aggregate engine library; the file is `dengine`.
+# Shipping has no development host: each game is its own static executable (de_add_game).
+if(NOT DE_IS_SHIPPING)
+    add_executable(dengine_exe exe/dengine_main.c)
+    target_link_libraries(dengine_exe PRIVATE de_build_flags)
+    set_target_properties(dengine_exe PROPERTIES OUTPUT_NAME dengine FOLDER "dengine/host")
+    if(DE_BUILD_SHARED)
+        # The game library links the same shared dengine; nothing to export from here.
+        target_link_libraries(dengine_exe PRIVATE dengine)
+        if(WIN32)
+            add_custom_command(TARGET dengine_exe POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "$<TARGET_RUNTIME_DLLS:dengine_exe>" "$<TARGET_FILE_DIR:dengine_exe>"
+                COMMAND_EXPAND_LISTS)
+        endif()
+    elseif(WIN32)
+        # A Windows game DLL cannot bind to a static engine: de_add_game() builds static
+        # executables here (DE_GAME_DYLIB is FALSE), and this host loads only libraries that
+        # need nothing from the engine.
+        target_link_libraries(dengine_exe PRIVATE dengine)
+    else()
+        # Every engine object, exported, so a game library can call any DE_API function: the
+        # library leaves them undefined and binds them here when it is loaded.
+        target_link_libraries(dengine_exe PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,dengine>")
+        set_target_properties(dengine_exe PROPERTIES ENABLE_EXPORTS ON)
+        if(APPLE)
+            target_link_options(dengine_exe PRIVATE "LINKER:-export_dynamic")
+        endif()
+    endif()
+endif()
+
+include(DeAddGame)
