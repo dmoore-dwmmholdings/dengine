@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -288,6 +289,16 @@ u32 de_cpu_logical_cores(void) {
 
 /* ---------- Mutex ---------- */
 
+/* ---- Lock hooks (DENG-308; de_lock_set_hooks, platform/mutex_prof.h) ---- */
+
+de_atomic_ptr de__lock_hooks_slot = DE_ATOMIC_INIT(NULL);
+
+const de_lock_hooks *de_lock_set_hooks(const de_lock_hooks *hooks) {
+    /* acq_rel: publishes *hooks to lockers, and lets the caller read the old hooks safely. */
+    return (const de_lock_hooks *)de_atomic_exchange_ptr(
+        &de__lock_hooks_slot, (void *)(uintptr_t)hooks, DE_ATOMIC_ACQ_REL);
+}
+
 void de_mutex_init(de_mutex *m) {
     memset(m, 0, sizeof *m);
     pthread_mutexattr_t attr;
@@ -303,6 +314,7 @@ void de_mutex_init(de_mutex *m) {
 }
 
 void de_mutex_lock(de_mutex *m) {
+    de__lock_hook(m);
     const bool prof_after = de__mutex_prof_before(m);
     DE__CHECK(pthread_mutex_lock(de__mtx(m)));
     if (prof_after)
@@ -310,6 +322,7 @@ void de_mutex_lock(de_mutex *m) {
 }
 
 bool de_mutex_try_lock(de_mutex *m) {
+    de__lock_hook(m);
     int err = pthread_mutex_trylock(de__mtx(m));
     if (err == EBUSY) {
         de__mutex_prof_after_try(m, false);
@@ -424,6 +437,7 @@ void de_rwlock_init(de_rwlock *l) {
 }
 
 void de_rwlock_read_lock(de_rwlock *l) {
+    de__lock_hook(l);
     DE__CHECK(pthread_rwlock_rdlock(de__rwl(l)));
 }
 
@@ -432,6 +446,7 @@ void de_rwlock_read_unlock(de_rwlock *l) {
 }
 
 void de_rwlock_write_lock(de_rwlock *l) {
+    de__lock_hook(l);
     DE__CHECK(pthread_rwlock_wrlock(de__rwl(l)));
 }
 

@@ -147,3 +147,8 @@ void de_world_destroy(de_world *w) {
 u64 de_world_tick(const de_world *w) {
     return w ? w->tick : 0;
 }
+
+/* DENG-308: the registry, for modules that register their resource types (de_audio_attach). */
+de_type_registry *de_world_types(const de_world *w) {
+    return w ? w->types : NULL;
+}

@@ -1089,6 +1089,30 @@ DE_API void *de_tls_get(de_tls_key key);
 /** Sets the calling thread's value. DE_ERR_OUT_OF_MEMORY if the OS cannot store it. */
 DE_API de_result de_tls_set(de_tls_key key, void *value);
 
+/* ---------- Lock hooks (DENG-308) ----------
+ * A debugging aid for code that must never take a lock: the audio module's real-time guard
+ * (src/audio/rt_guard.c) installs it to catch a lock taken on the audio thread. */
+
+/**
+ * Callback that sees every lock attempt: de_mutex_lock, de_mutex_try_lock, de_rwlock_read_lock and
+ * de_rwlock_write_lock call `on_lock` first, on the calling thread, with the lock's address. It
+ * runs before the lock is taken, possibly on many threads at once, and must not take a de_mutex
+ * or de_rwlock itself. Debug and Dev builds only: Release and Shipping builds never call it.
+ */
+typedef struct de_lock_hooks {
+    void (*on_lock)(void *user, const void *lock);
+    void *user;
+} de_lock_hooks;
+
+/**
+ * Installs `hooks` (NULL uninstalls) and returns the hooks installed before. The rules are the
+ * ones of de_mem_set_hooks (de_memory.h): only the pointer is kept, so `*hooks` must stay valid and
+ * unchanged while installed; there is one slot and the last setter wins; chain to the returned
+ * hooks and put them back on uninstall, in reverse order of install. With no hooks installed a
+ * lock costs one relaxed atomic load more (Debug and Dev).
+ */
+DE_API const de_lock_hooks *de_lock_set_hooks(const de_lock_hooks *hooks);
+
 /* ==========================================================================================
  * End of the time and threads sections (DENG-147).
  * ========================================================================================== */

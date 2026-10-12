@@ -85,4 +85,27 @@ static inline void de__thread_prof_name(const char *name) {
 
 #endif /* DE_PROFILE */
 
+/* ---- Lock hooks (DENG-308): de_lock_set_hooks in de_platform.h ----
+ * The slot is defined, with de_lock_set_hooks, in thread_posix.c and thread_win32.c. Release and
+ * Shipping builds compile the call out. */
+#include "core/de_compiler.h"
+#include "platform/de_atomic.h"
+
+extern de_atomic_ptr de__lock_hooks_slot;
+
+#if defined(DE_DEBUG) || defined(DE_DEV)
+static inline void de__lock_hook(const void *lock) {
+    if (DE_LIKELY(de_atomic_load_ptr(&de__lock_hooks_slot, DE_ATOMIC_RELAXED) == NULL))
+        return;
+    const de_lock_hooks *h =
+        (const de_lock_hooks *)de_atomic_load_ptr(&de__lock_hooks_slot, DE_ATOMIC_ACQUIRE);
+    if (h != NULL && h->on_lock != NULL)
+        h->on_lock(h->user, lock);
+}
+#else
+static inline void de__lock_hook(const void *lock) {
+    (void)lock;
+}
+#endif
+
 #endif /* DE_PLATFORM_MUTEX_PROF_H */
