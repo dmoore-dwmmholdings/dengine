@@ -37,6 +37,18 @@ void de__io_test_set_chunk_hook(void (*fn)(de_io_request *req, u64 done));
 
 #define WAIT_NS ((u64)60 * 1000000000u)
 
+/* Every wait in these tests blocks in the OS: a timed wait on a semaphore that nobody posts
+ * (mount_once creates it). de_sleep_ns spins below about 1 ms, and on a busy Windows runner a
+ * spinning test thread takes a core from the very threads it waits for; their thread then waits
+ * a whole scheduling quantum while the other OPEN/READ place loads the queue (DENG-386; Trama
+ * "Decision: A waiting thread blocks in the OS; it never spins without a bound"). On Windows a
+ * nap lasts at least one timer tick (up to 15.6 ms). */
+static de_sem g_nap;
+
+static void nap_ns(u64 ns) {
+    (void)de_sem_wait_timeout(&g_nap, ns);
+}
+
 /* ---- The `pt` test type ----------------------------------------------------------------------
  *
  * Payload: an optional first line "deps:<id>,<id>,...", then anything. A payload that starts
@@ -75,7 +87,7 @@ static de_result pt_load(de_asset_load_ctx *ctx) {
     if (id.hash == de_atomic_load_u64(&c->gate_id, DE_ATOMIC_ACQUIRE)) {
         de_atomic_store_u32(&c->gate_reached, 1, DE_ATOMIC_RELEASE);
         while (de_atomic_load_u32(&c->gate_closed, DE_ATOMIC_ACQUIRE) != 0)
-            de_sleep_ns(100000u);
+            nap_ns(100000u);
     }
     u32 seq = de_atomic_fetch_add_u32(&c->seq, 1, DE_ATOMIC_ACQ_REL);
 
@@ -151,6 +163,7 @@ static void mount_once(void) {
     static bool mounted;
     if (mounted)
         return;
+    ASSERT_EQ(de_sem_init(&g_nap, 0), DE_OK); /* never posted, never destroyed */
     ASSERT_EQ(de_fs_mount("pipe", DE_ASSET_PIPELINE_TMP_DIR, DE_MOUNT_WRITABLE, 0), DE_OK);
     ASSERT_EQ(de_fs_mount("pdata", DE_ASSET_TEST_DATA_DIR "/pipeline", DE_MOUNT_READ_ONLY, 0),
               DE_OK);
@@ -193,6 +206,8 @@ static void fx_system(pipe_fx *f, u32 io_threads, bool with_tasks) {
     register_types(f);
 }
 
+static de_atomic_u32 g_open_off_frame; /* see hold_open */
+
 static void pipe_fx_setup(pipe_fx *f) {
     mount_once();
     f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_ASSET);
@@ -203,6 +218,7 @@ static void pipe_fx_setup(pipe_fx *f) {
     de_atomic_init_u32(&f->c.gate_closed, 0);
     de_atomic_init_u32(&f->c.gate_reached, 0);
     de_atomic_init_u64(&f->c.gate_id, 0);
+    de_atomic_store_u32(&g_open_off_frame, 0, DE_ATOMIC_RELAXED);
     f->main_thread = de_thread_current_id();
     de_fp_env_init_thread();
     de_task_system_desc td = {.worker_count = 4, .background_worker_count = 2};
@@ -306,7 +322,7 @@ static void drain(pipe_fx *f) {
     u64 end = de_time_now_ns() + WAIT_NS;
     while (stats(f).live_jobs != 0 && de_time_now_ns() < end) {
         de_asset_system_update(f->s, NULL);
-        de_sleep_ns(100000u);
+        nap_ns(100000u);
     }
     EXPECT_EQ(stats(f).live_jobs, 0u);
 }
@@ -316,7 +332,7 @@ static void wait_count(pipe_fx *f, de_atomic_u32 *counter, u32 n) {
     u64 end = de_time_now_ns() + WAIT_NS;
     while (de_atomic_load_u32(counter, DE_ATOMIC_ACQUIRE) < n && de_time_now_ns() < end) {
         de_asset_system_update(f->s, NULL);
-        de_sleep_ns(100000u);
+        nap_ns(100000u);
     }
     ASSERT_GE(de_atomic_load_u32(counter, DE_ATOMIC_ACQUIRE), n);
 }
@@ -326,13 +342,31 @@ static void wait_flag(pipe_fx *f, de_atomic_u32 *flag) {
     wait_count(f, flag, 1);
 }
 
+/* de_asset_wait, but blocking in the OS between updates: de_asset_wait polls with de_sleep_ns,
+ * which spins (DENG-386 follow-up). */
+static de_load_state wait_load(pipe_fx *f, de_load_handle h) {
+    u64 end = de_time_now_ns() + WAIT_NS;
+    de_asset_system_update(f->s, NULL);
+    de_load_state st = de_asset_status(f->s, h, NULL);
+    while ((st == DE_LOAD_PENDING || st == DE_LOAD_LOADING) && de_time_now_ns() < end) {
+        nap_ns(100000u);
+        de_asset_system_update(f->s, NULL);
+        st = de_asset_status(f->s, h, NULL);
+    }
+    return st;
+}
+
 /* Holds the OPEN stage: counts the opens that arrive (g_open_reached), then waits while
  * g_open_hold is set. A held job keeps its place in the OPEN/READ window (2 x io_threads), so
- * every later job stays QUEUED, and it reports no progress yet (DENG-380). */
+ * every later job stays QUEUED, and it reports no progress yet (DENG-380). Also counts opens
+ * that run off the frame workers (g_open_off_frame): with a task system, every open runs on a
+ * frame worker, never on a below-normal background worker (DENG-386). */
 static void hold_open(void) {
     (void)de_atomic_fetch_add_u32(&g_open_reached, 1, DE_ATOMIC_ACQ_REL);
+    if (de_task_worker_index() == DE_TASK_WORKER_NONE)
+        (void)de_atomic_fetch_add_u32(&g_open_off_frame, 1, DE_ATOMIC_ACQ_REL);
     while (de_atomic_load_u32(&g_open_hold, DE_ATOMIC_ACQUIRE) != 0)
-        de_sleep_ns(100000u);
+        nap_ns(100000u);
 }
 
 /* A payload: header + body. */
@@ -410,6 +444,7 @@ TEST_F(pipeline, single_asset, pipe_fx) {
     EXPECT_EQ((int)state_of(f, "one"), (int)DE_LOAD_PENDING);
     de_atomic_store_u32(&g_open_hold, 0, DE_ATOMIC_RELEASE);
     EXPECT_EQ((int)de_asset_wait(f->s, h, WAIT_NS), (int)DE_LOAD_READY);
+    EXPECT_EQ(de_atomic_load_u32(&g_open_off_frame, DE_ATOMIC_ACQUIRE), 0u); /* DENG-386 */
     EXPECT_EQ((int)de_asset_status(f->s, h, &info), (int)DE_LOAD_READY);
     EXPECT_EQ(info.bytes_total, 11u); /* the file size, known after the size query */
     EXPECT_EQ(info.bytes_done, 11u);
@@ -502,7 +537,7 @@ TEST_F(pipeline, dependency_chain, pipe_fx) {
         EXPECT_EQ(de_asset_status(f->s, h, NULL) == DE_LOAD_READY, root);
         if (root || de_time_now_ns() > end)
             break;
-        de_sleep_ns(50000u);
+        nap_ns(50000u);
     }
     ASSERT_EQ((int)de_asset_status(f->s, h, NULL), (int)DE_LOAD_READY);
     /* Each child is held by its parent with one asset ref; the parent lists its dependencies. */
@@ -721,7 +756,7 @@ static de_result slow_open(void *user, de_asset_system *s, const char *vpath, de
                            de__source_span *out) {
     (void)user;
     hold_open();
-    de_sleep_ns(1000000u); /* 1 ms per open: the queue drains slowly after the hold */
+    nap_ns(1000000u); /* 1 ms (a timer tick on Windows) per open: the queue drains slowly */
     const de__pipeline_source *d = de__pipeline_default_source();
     return d->open(d->user, s, vpath, id, out);
 }
@@ -752,7 +787,11 @@ TEST_F(pipeline, priority_order, pipe_fx) {
     /* The first LOW jobs fill the OPEN/READ window (2 x 1 I/O thread) and wait in `open`; the
      * other 98 stay QUEUED until the CRITICAL requests are in, however slow the runner is.
      * (Waiting for the first LOW load instead raced: on a slow ASan runner the main thread saw
-     * it only after 99 LOW loads, with nothing left in the queue to overtake. DENG-380.) */
+     * it only after 99 LOW loads, with nothing left in the queue to overtake. DENG-380.)
+     * On Windows CI the reprioritized `low/99` once loaded last: its open ran on a below-normal
+     * background worker that the OS did not run for seconds, while the other window place
+     * loaded the rest of the queue. Opens run on frame workers now (DENG-386), and the last
+     * check makes sure. */
     const u32 in_flight = 2;
     de_atomic_store_u32(&g_open_reached, 0, DE_ATOMIC_RELAXED);
     de_atomic_store_u32(&g_open_hold, 1, DE_ATOMIC_RELEASE);
@@ -770,9 +809,9 @@ TEST_F(pipeline, priority_order, pipe_fx) {
     EXPECT_EQ(de__pipeline_debug_stage(f->s, slot_of(f, "low/99")), (u32)DE__PJOB_QUEUED);
     de_load_handle hr = de_asset_load(f->s, low[99], DE_LOAD_PRIORITY_CRITICAL);
     de_atomic_store_u32(&g_open_hold, 0, DE_ATOMIC_RELEASE);
-    EXPECT_EQ((int)de_asset_wait(f->s, hc, WAIT_NS), (int)DE_LOAD_READY);
-    EXPECT_EQ((int)de_asset_wait(f->s, hr, WAIT_NS), (int)DE_LOAD_READY);
-    EXPECT_EQ((int)de_asset_wait(f->s, hl, WAIT_NS), (int)DE_LOAD_READY);
+    EXPECT_EQ((int)wait_load(f, hc), (int)DE_LOAD_READY);
+    EXPECT_EQ((int)wait_load(f, hr), (int)DE_LOAD_READY);
+    EXPECT_EQ((int)wait_load(f, hl), (int)DE_LOAD_READY);
 
     u32 crit_seq = obj_of(f, "crit")->seq;
     u32 reprio_seq = obj_of(f, "low/99")->seq;
@@ -790,6 +829,8 @@ TEST_F(pipeline, priority_order, pipe_fx) {
     EXPECT_LE(low_before, in_flight + 8u);
     EXPECT_LT(crit_seq, 30u);
     EXPECT_LT(reprio_seq, 30u);
+    /* Every open ran on a frame worker (normal priority), none on a background worker. */
+    EXPECT_EQ(de_atomic_load_u32(&g_open_off_frame, DE_ATOMIC_ACQUIRE), 0u);
     de_asset_release(f->s, hl);
     de_asset_release(f->s, hc);
     de_asset_release(f->s, hr);
@@ -806,7 +847,7 @@ static void hold_hook(de_io_request *req, u64 done) {
         return;
     de_atomic_store_u32(&g_hook_reached, 1, DE_ATOMIC_RELEASE);
     while (de_atomic_load_u32(&g_hook_hold, DE_ATOMIC_ACQUIRE) != 0)
-        de_sleep_ns(100000u);
+        nap_ns(100000u);
 }
 
 static void write_big(const char *name, size_t size) {
@@ -834,7 +875,7 @@ TEST_F(pipeline, cancel_io, pipe_fx) {
     while (de__pipeline_debug_stage(f->s, slot_of(f, "big2")) != DE__PJOB_READ &&
            de_time_now_ns() < end) {
         de_asset_system_update(f->s, NULL);
-        de_sleep_ns(100000u);
+        nap_ns(100000u);
     }
     EXPECT_EQ(de__pipeline_debug_stage(f->s, slot_of(f, "big1")), (u32)DE__PJOB_READ);
     EXPECT_EQ(de__pipeline_debug_stage(f->s, slot_of(f, "big2")), (u32)DE__PJOB_READ);
@@ -1075,7 +1116,7 @@ TEST_F(pipeline, stress_10k, pipe_fx) {
         de_asset_load_many(f->s, ids + 2u * quarter, 1000, DE_LOAD_PRIORITY_CRITICAL);
     for (u32 i = 0; i < 3; ++i) {
         de_asset_system_update(f->s, NULL);
-        de_sleep_ns(200000u);
+        nap_ns(200000u);
     }
     de_asset_cancel(f->s, hx);
     de_asset_release(f->s, hx);
