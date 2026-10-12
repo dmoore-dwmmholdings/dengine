@@ -308,6 +308,29 @@ static void de__spin_round(void) {
         de_cpu_pause();
 }
 
+de__task *de__task_find_own_work(de_task_system *ts, de__task_slot *self, bool with_main) {
+    DE_ASSERT(self->kind == DE__SLOT_FRAME);
+    de__task *t = NULL;
+    if (with_main && self->index == 0 && (t = de__task_pop_main(ts)) != NULL)
+        return t;
+    if ((t = (de__task *)de__deque_pop(&self->deque)) != NULL)
+        return t;
+    if (de_mpmc_try_pop(&ts->inject, &t))
+        return t;
+    return NULL;
+}
+
+/* Work this waiter would take (a deep, non-stealing waiter looks only at what it may run). */
+static bool de__wait_work_visible(de_task_system *ts, const de__task_slot *self, bool with_main,
+                                  bool steal) {
+    if (steal)
+        return de__task_work_visible(ts, self, with_main);
+    if (with_main && self->index == 0 &&
+        de_atomic_load_u32(&ts->main_count, DE_ATOMIC_SEQ_CST) != 0)
+        return true;
+    return de__deque_size_approx(&self->deque) != 0 || de_mpmc_size_approx(&ts->inject) != 0;
+}
+
 void de_task_wait(de_task_system *ts, de_task_counter *counter) {
     DE_ASSERT(ts != NULL && counter != NULL);
     de__task_counter *c = de__counter(counter);
@@ -328,11 +351,16 @@ void de_task_wait(de_task_system *ts, de_task_counter *counter) {
     const bool frame = self->kind == DE__SLOT_FRAME;
     const bool is_main = frame && self->index == 0;
     const u32 id = self->index + 1;
+    /* Wait-and-help (DENG-292): up to DE__TASK_MAX_WAIT_DEPTH nested waits help with any task;
+     * deeper ones never steal, which bounds the stack (see graph.c). */
+    const bool steal = self->wait_depth < DE__TASK_MAX_WAIT_DEPTH;
+    ++self->wait_depth;
     bool registered = false;
     u32 spins = 0;
     while (de__counter_pending(c) != 0) {
         if (frame) {
-            de__task *t = de__task_find_work(ts, self, is_main);
+            de__task *t = steal ? de__task_find_work(ts, self, is_main)
+                                : de__task_find_own_work(ts, self, is_main);
             if (t != NULL) {
                 de__task_execute(ts, self, t);
                 spins = 0;
@@ -350,7 +378,8 @@ void de_task_wait(de_task_system *ts, de_task_counter *counter) {
             registered = de__counter_register(c, id);
         if (is_main)
             de_atomic_store_u32(&self->parked, 1, DE_ATOMIC_SEQ_CST);
-        if (de__counter_pending(c) != 0 && !(frame && de__task_work_visible(ts, self, is_main)))
+        if (de__counter_pending(c) != 0 &&
+            !(frame && de__wait_work_visible(ts, self, is_main, steal)))
             de_sem_wait_timeout(&self->park, registered ? DE__TASK_PARK_REGISTERED_NS
                                                         : DE__TASK_PARK_UNREGISTERED_NS);
         if (is_main)
@@ -359,6 +388,7 @@ void de_task_wait(de_task_system *ts, de_task_counter *counter) {
     }
     if (registered)
         de__counter_unregister(c, id);
+    --self->wait_depth;
 }
 
 u32 de_task_pump_main(de_task_system *ts, u32 max) {

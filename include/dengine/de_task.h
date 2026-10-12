@@ -106,6 +106,10 @@ DE_API void de_task_submit(de_task_system *ts, de_task_pool pool, de_task_fn fn,
  * visible). A frame worker helps meanwhile: it runs tasks from its own deque, the injection
  * queue and other workers' deques, and on the main thread also main-thread tasks. Other threads
  * sleep. Background workers never help with frame tasks.
+ * Waits may nest (a task that waits, a nested de_task_parallel_for, a graph run from a task) and
+ * never deadlock fork-join work. The first 32 nested waits on a thread help with any task; deeper
+ * ones stop stealing from other workers and run only the thread's own queued tasks, the
+ * injection queue and (main thread) main-thread tasks, which bounds the stack.
  */
 DE_API void de_task_wait(de_task_system *ts,
                          de_task_counter *counter); /* helps run work while waiting */
@@ -119,24 +123,83 @@ DE_API bool de_task_done(const de_task_counter *counter);
  */
 DE_API u32 de_task_pump_main(de_task_system *ts, u32 max);
 
-/* Fixed-chunk parallel for. Chunk boundaries depend only on (count, grain), so results
- * are deterministic when fn is deterministic. Blocks until complete. */
+/**
+ * Fixed-chunk parallel for (SPEC §8, §5.7 rule 5). Calls `fn(begin, end, user)` once per chunk:
+ * chunk k covers `[k * grain, min((k + 1) * grain, count))`, so `begin / grain` is the chunk
+ * index. The boundaries depend only on (count, grain): with a deterministic `fn` that writes
+ * per-chunk results, reduced afterwards in chunk order, the result is the same on every machine
+ * and worker count. Which thread runs a chunk, and in which order chunks run, is not
+ * deterministic.
+ *
+ * The calling thread runs chunks too and returns when every chunk has finished (their writes
+ * are visible). Any thread may call it, including a task (nested loops wait and help, see
+ * de_task_wait). Allocates nothing. `count == 0` returns at once; a single chunk runs inline.
+ *
+ * @param grain  Indices per chunk. **0 picks max(1, count / (de_task_worker_count(ts) * 4)),
+ *               which depends on the machine's worker count: grain 0 is NOT deterministic
+ *               across machines and must not be used by deterministic code.** Deterministic
+ *               callers pass an explicit grain (the ECS de_query_par_each uses 1024 rows).
+ */
 DE_API void de_task_parallel_for(de_task_system *ts, u32 count, u32 grain, de_range_fn fn,
                                  void *user);
 
-/* ---------- Task graphs (built once, run many times) ---------- */
+/* ---------- Task graphs (built once, run many times) ----------
+ * A graph is built on one thread (add, depend), compiled, then run any number of times; the
+ * S05 ECS compiles each schedule into one. Building and compiling are not thread-safe and must
+ * not overlap a run. Changing a compiled graph (add or depend) marks it dirty: compile it again
+ * before the next run. Runs allocate nothing once the task system has warmed up. */
+
+/** One node of a task graph. `(de_task_node_desc){0}` is not valid: `fn` is required. */
 typedef struct de_task_node_desc {
-    const char *name; /* for Tracy and the stats overlay */
-    de_task_fn fn;
-    void *user;
+    /** For error messages, Tracy and the stats overlay; may be NULL. Not copied: it must stay
+     * valid while the graph exists (a string literal). */
+    const char *name;
+    de_task_fn fn; /**< required */
+    void *user;    /**< passed to fn */
+    /** Where the node runs. DE_TASK_POOL_MAIN_THREAD nodes run on the main thread, inside
+     * de_task_wait (a graph waited on from the main thread drains them) or de_task_pump_main. */
     de_task_pool pool;
 } de_task_node_desc;
 
+/**
+ * Creates an empty graph on `ts`; its memory comes from the task system's allocator.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (`ts` or `out` NULL); DE_ERR_OUT_OF_MEMORY.
+ */
 DE_API de_result de_task_graph_create(de_task_system *ts, de_task_graph **out);
+/** Frees the graph. It must not be running (wait for the last run's counter first). NULL does
+ * nothing. */
 DE_API void de_task_graph_destroy(de_task_graph *g);
+/**
+ * Adds a node. Returns its handle, or an invalid handle (id 0) when `desc` is NULL, `fn` is NULL,
+ * the pool is unknown, the graph has 2^24 - 1 nodes or memory runs out; the failure is also
+ * reported by the next de_task_graph_compile, so a build sequence needs only one check, at
+ * compile. Marks a compiled graph dirty.
+ */
 DE_API de_task_node de_task_graph_add(de_task_graph *g, const de_task_node_desc *desc);
+/**
+ * `after` starts only once `before` has finished (and sees its writes). Duplicate edges are
+ * allowed and count once. A handle that is not a node of `g` (or out of memory) is reported by
+ * the next compile. Marks a compiled graph dirty.
+ */
 DE_API void de_task_graph_depend(de_task_graph *g, de_task_node before, de_task_node after);
+/**
+ * Sorts the graph topologically and lays out its dependency counts and successor lists in one
+ * allocation. Call it after the last change and before the next run.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (a cycle: the message names its nodes in edge order,
+ *         `"a -> b -> a"`; or an earlier add/depend got bad arguments); DE_ERR_OUT_OF_MEMORY
+ *         (now or in an earlier add/depend). A failed compile leaves the graph not runnable.
+ */
 DE_API de_result de_task_graph_compile(de_task_graph *g); /* detects cycles */
+/**
+ * Starts one run of a compiled graph and returns at once: the roots are submitted, and each
+ * finishing node submits the successors it made ready (onto the current worker's deque; main-
+ * thread nodes onto the main-thread queue). `done` (required) is incremented by the node count
+ * and reaches zero when every node has finished: wait with de_task_wait(ts, done). Any thread
+ * may run a graph, including a task (its wait helps). One run at a time per graph. Running a graph
+ * changed since its last compile asserts in Debug and Dev builds (Release compiles it first).
+ * Overhead per node: one atomic decrement per successor edge, one submit, one decrement of
+ * `done`; no allocation.
+ */
 DE_API void de_task_graph_run(de_task_graph *g, de_task_counter *done);
 
 DE_EXTERN_C_END
