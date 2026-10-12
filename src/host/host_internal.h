@@ -65,10 +65,11 @@ typedef struct de__host {
  * Runs the main loop (SPEC §10.2) until it stops: DE_SCHEDULE_STARTUP once, then frames until
  * de_engine_request_quit (or DE_EV_QUIT from the platform) or the frame limit (`--frames N`, else
  * `h->loop_max_frames`); the frame in which quit is asked for completes. Each frame: event pump,
- * frame-begin hooks, First, PreUpdate, FixedUpdate 0..N times, Update, PostUpdate, Extract, Last,
- * frame-end hooks, frame arena swap, frame pacing. The timing (de_engine_get_timing) is read at
- * each frame start. Creates the frame arenas (de_frame_arenas_init) unless the caller has, and
- * destroys the ones it created before it returns. Main thread (frame worker 0) only.
+ * the asset system update (DENG-143; when the engine has one), frame-begin hooks, First, PreUpdate,
+ * FixedUpdate 0..N times, Update, PostUpdate, Extract, Last, frame-end hooks, frame arena swap,
+ * frame pacing. The timing (de_engine_get_timing) is read at each frame start. Creates the frame
+ * arenas (de_frame_arenas_init) unless the caller has, and destroys the ones it created before it
+ * returns. Main thread (frame worker 0) only.
  * @return DE_OK, DE_ERR_INVALID_ARGUMENT (no engine, or a bad `--frames` value), the frame
  *         arenas' error, or the first failed schedule's or hook's error (wrapped with its name).
  */
@@ -121,8 +122,9 @@ de_result de__loop_add_frame_end_hook(de__host *h, de__loop_hook_fn fn, void *us
 /**
  * Adds `fn(h, user)` to the hooks that run once per frame after the platform event pump (and the
  * input update), before `First`, in registration order. This is where per-frame work runs whose
- * results the frame's systems must see: the asset system update (de_asset_system_update, wired
- * by DENG-143). Same rules and results as de__loop_add_frame_end_hook.
+ * results the frame's systems must see. The asset system update (de_asset_system_update,
+ * DENG-143) is not a hook: the loop calls it itself, just before the hooks, so hooks already see
+ * that frame's load states. Same rules and results as de__loop_add_frame_end_hook.
  */
 de_result de__loop_add_frame_begin_hook(de__host *h, de__loop_hook_fn fn, void *user);
 

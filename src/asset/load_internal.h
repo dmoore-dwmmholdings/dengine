@@ -58,6 +58,9 @@ typedef struct de__load_slot {
     de_atomic_u64 bytes_total; /**< expected bytes; 0 = unknown (any thread; only grows) */
     char *error_msg;           /**< the last failure's message (system allocator), or NULL */
     u32 error_msg_size;
+    /** DENG-143: the waiting requests made without DE_LOAD_NO_EVENTS (part of
+     * `interest_total`); per-asset events are sent only while it is not 0. */
+    u32 interest_events;
 } de__load_slot;
 
 /** One asset of a request. */
@@ -84,7 +87,8 @@ typedef struct de__request {
     u32 first_failed;      /**< entry index of the first failure in request order, or NONE */
     de_result first_error; /**< DE_OK, or the first failure's code (also an unknown bundle) */
     char first_error_msg[DE__LOAD_MSG_MAX];
-    u32 free_next; /**< next free index + 1 (FIFO); 0 = end */
+    u32 free_next;  /**< next free index + 1 (FIFO); 0 = end */
+    bool releasing; /**< DENG-143: de_asset_release ends it (no REQUEST_DONE event) */
 } de__request;
 
 /** Completion queued by de__slot_complete. The message lives in the queue's text buffer. */

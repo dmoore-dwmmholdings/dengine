@@ -50,6 +50,8 @@ void de__game_config_defaults(de__game_config *out) {
     out->timing.frame_cap_hz = DE_TIMING_DEFAULT_FRAME_CAP_HZ;
     out->task_workers = 0;
     out->frame_arena_mib = DE__GAME_DEFAULT_FRAME_ARENA_MIB;
+    out->asset_io_threads = DE__GAME_DEFAULT_IO_THREADS; /* DENG-143 */
+    out->asset_hot_reload = true;
 }
 
 /* ---- Messages ---------------------------------------------------------------------------- */
@@ -303,6 +305,28 @@ static de_result gt_memory(gt_parser *p, const toml_datum_t *t) {
     return DE_OK;
 }
 
+/* DENG-143: [assets], the asset system's settings (read by de__engine_create). */
+static de_result gt_assets(gt_parser *p, const toml_datum_t *t) {
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        const toml_datum_t *v = &t->u.tab.value[i];
+        char path[GT_PATH_MAX];
+        if (!gt_path(path, sizeof path, "assets", t->u.tab.key[i], t->u.tab.len[i]))
+            return gt_fail(p, v, "assets", "key path longer than %d bytes", GT_PATH_MAX - 1);
+        de_result r = DE_OK;
+        if (gt_key_is(t, i, "io_threads"))
+            r = gt_u32(p, v, path, 1, DE__GAME_MAX_IO_THREADS, &p->cfg->asset_io_threads);
+        else if (gt_key_is(t, i, "hot_reload"))
+            r = gt_bool(p, v, path, &p->cfg->asset_hot_reload);
+        else if (gt_key_is(t, i, "locale"))
+            r = gt_string(p, v, path, p->cfg->asset_locale, sizeof p->cfg->asset_locale);
+        else
+            gt_unknown(p, v, path);
+        if (r != DE_OK)
+            return r;
+    }
+    return DE_OK;
+}
+
 /* ---- [cvars] ----------------------------------------------------------------------------- */
 
 /* Pass 1: every leaf is a bool, integer, float or string. `path` holds "cvars...." */
@@ -432,6 +456,8 @@ de_result de__game_config_parse(const char *text, size_t len, const char *source
             section = gt_tasks;
         else if (gt_key_is(top, i, "memory"))
             section = gt_memory;
+        else if (gt_key_is(top, i, "assets")) /* DENG-143 */
+            section = gt_assets;
         else if (gt_key_is(top, i, "cvars"))
             is_cvars = true;
         if (section == NULL && !is_cvars) {

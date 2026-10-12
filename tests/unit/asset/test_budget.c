@@ -108,6 +108,10 @@ static void bud_unload(void *object, void *user) {
 
 static void bud_emit(de_asset_system *s, const de_asset_event *ev) {
     (void)s;
+    /* DENG-143: LOADED / FAILED / REQUEST_DONE come through emit_fn too; these tests look at
+     * evictions only. */
+    if (ev->kind != DE_ASSET_EV_EVICTED)
+        return;
     bud_fx *f = g_fx;
     ASSERT_LT(f->event_count, BUD_MAX_EVENTS);
     f->events[f->event_count++] = *ev;

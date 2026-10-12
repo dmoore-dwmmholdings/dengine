@@ -94,6 +94,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     if (s == NULL)
         return;
     const de_allocator *a = s->alloc;
+    de__asset_events_detach(s);        /* DENG-143: first, so the teardown sends no events */
     de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
     de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
@@ -199,13 +200,15 @@ void de_asset_set_locale(de_asset_system *s, const char *locale) {
                 locale, DE__ASSET_LOCALE_MAX, s->locale_buf);
 }
 
-/* Once per frame, main thread. Each S07 task adds its step here, in this order: load completions
- * and request states (DENG-141), then events (DENG-143) and eviction (DENG-144). */
+/* Once per frame, main thread. Each S07 task adds its step here, in this order: the ECS
+ * attachment (DENG-143; first, so this update's events are queued), load completions and request
+ * states (DENG-141; they emit the events), then eviction (DENG-144). */
 void de_asset_system_update(de_asset_system *s, de_world *world) {
-    (void)world;
     if (s == NULL)
         return;
-    de__load_update(s); /* DENG-141 */
+    if (world != NULL)
+        de__asset_events_attach(s, world); /* DENG-143: once; then a pointer check */
+    de__load_update(s);                    /* DENG-141 */
     /* DENG-144: candidates, eviction while over budget, the I/O rate; advances the LRU frame. */
     de__budget_update(s, de_time_now_ns());
 }

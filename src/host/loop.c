@@ -3,8 +3,8 @@
  *
  * Startup once, then per frame:
  *   0. pacer begin, frame delta from the loop clock, timing changes (de_engine_set_timing) apply
- *   1. de_platform_pump (DE_EV_QUIT asks to quit), input update (no-op until S21), frame-begin
- *      hooks (asset system update, DENG-143)
+ *   1. de_platform_pump (DE_EV_QUIT asks to quit), input update (no-op until S21), the asset
+ *      system update (de_asset_system_update, DENG-143), frame-begin hooks
  *   2. First, PreUpdate
  *   3. FixedUpdate 0..N times (timing.c decides N, dt and alpha)
  *   4. Update, PostUpdate
@@ -297,6 +297,15 @@ de_result de__loop_run(de__host *h) {
             loop_input_update(h);
             DE_PROFILE_ZONE_END(z_pump);
         }
+#if DE_HAS_ASSETS
+        /* DENG-143: finished loads are published and their events queued before First, so this
+         * frame's systems see the new load states; de.asset_events sends the events in First. */
+        if (e->assets != NULL) {
+            DE_PROFILE_ZONE_BEGIN(z_assets, "AssetUpdate");
+            de_asset_system_update(e->assets, w);
+            DE_PROFILE_ZONE_END(z_assets);
+        }
+#endif
         r = loop_run_hooks(h, h->loop_hooks.frame_begin, &h->loop_hooks.frame_begin_count,
                            "frame-begin", frame);
         if (r != DE_OK)

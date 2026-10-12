@@ -1,9 +1,9 @@
 /*
- * test_headless.c: the host's headless mode (src/host/headless.c), the asset stubs
- * (src/host/asset_stubs.c) and examples/minimal_game.c run in-process (DENG-95).
+ * test_headless.c: the host's headless mode (src/host/headless.c) and examples/minimal_game.c
+ * run in-process (DENG-95), and the engine's asset system with `--dev-dir` (DENG-143).
  *
  * The executable links examples/minimal_game.c (its de_game_get_api() is the static game of the
- * minimal_game.* tests) and the de_asset_stubs target, the same way the example does.
+ * minimal_game.* tests), which loads dev:/assets.toml through the host's real asset system.
  * Every run here is headless, through de_host_run, with game:/ = tests/unit/host/data and user:/
  * and cache:/ in the build tree.
  */
@@ -331,97 +331,79 @@ TEST(headless, console_ctrl_quit) {
 
 #endif
 
-/* ---- headless.asset_stubs_ready --------------------------------------------------------- */
+/* ---- headless.engine_assets, headless.dev_dir_option (DENG-143) ------------------------- */
 
-TEST(headless, asset_stubs_ready) {
-    /* The stubs ignore the system pointer: the host has none (de_engine.assets is NULL). */
-    de_asset_system *s = NULL;
-    EXPECT_EQ(de_asset_manifest_load(s, "dev:/assets.toml"), DE_OK);
-    u32 issues = 7;
-    EXPECT_TRUE(de_asset_manifest_issues(s, &issues) == NULL);
-    EXPECT_EQ(issues, 0u);
+static struct {
+    bool have_assets;
+    bool type_valid;
+    bool resource_ok;
+    bool manifest_ok;
+    de_load_state level;
+} g_as;
 
-    de_load_handle h = de_asset_load_bundle(s, "level_01", DE_LOAD_PRIORITY_HIGH);
-    EXPECT_TRUE(DE_HANDLE_VALID(h));
-    de_load_info info;
-    memset(&info, 0xab, sizeof info);
-    EXPECT_EQ(de_asset_status(s, h, &info), DE_LOAD_READY);
-    EXPECT_EQ(info.assets_total, 0u);
-    EXPECT_EQ(info.assets_ready, 0u);
-    EXPECT_EQ(info.assets_failed, 0u);
-    EXPECT_EQ(info.bytes_total, 0u);
-    EXPECT_EQ(info.bytes_done, 0u);
-    EXPECT_EQ(info.first_failed.hash, 0u);
-    EXPECT_EQ(info.first_error, DE_OK);
-    EXPECT_STREQ(info.first_error_msg, "");
-    EXPECT_FLOAT_EQ(info.progress, 1.0f, 0.0f);
-    EXPECT_EQ(de_asset_status(s, h, NULL), DE_LOAD_READY);
-    EXPECT_EQ(de_asset_wait(s, h, 0), DE_LOAD_READY);
-    de_asset_release(s, h);
-
-    de_asset_id id = {42};
-    EXPECT_TRUE(DE_HANDLE_VALID(de_asset_load(s, id, DE_LOAD_DEFAULT)));
-    EXPECT_TRUE(DE_HANDLE_VALID(de_asset_load_many(s, &id, 1, DE_LOAD_DEFAULT)));
-
-    /* Everything else is invalid or empty. */
-    de_load_handle none = {0};
-    EXPECT_EQ(de_asset_status(s, none, &info), DE_LOAD_INVALID);
-    EXPECT_FLOAT_EQ(info.progress, 0.0f, 0.0f);
-    EXPECT_EQ(de_asset_status_of(s, id), DE_LOAD_INVALID);
-    EXPECT_EQ(de_asset_status_list(s, h, NULL, 0), 0u);
-    EXPECT_EQ(de_asset_id_from("player/model").hash, 0u);
-    EXPECT_TRUE(de_asset_id_path(s, id) == NULL);
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_texture(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_mesh(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_model(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_material(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_sound(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_font(s, id)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_prefab(s, id)));
-    de_blob b = de_asset_blob(s, id);
-    EXPECT_FALSE(DE_HANDLE_VALID(b));
-    u64 size = 9;
-    EXPECT_TRUE(de_blob_data(s, b, &size) == NULL);
-    EXPECT_EQ(size, 0u);
-    de_asset_type_desc td;
-    memset(&td, 0, sizeof td);
-    td.name = "thing";
-    EXPECT_FALSE(DE_HANDLE_VALID(de_asset_type_register(s, &td)));
-    de_asset_stats st = de_asset_get_stats(s);
-    EXPECT_EQ(st.assets_resident, 0u);
-
-    de_asset_system *made = (de_asset_system *)(void *)&size;
-    EXPECT_EQ(de_asset_system_create(NULL, &made), DE_ERR_UNSUPPORTED);
-    EXPECT_TRUE(made == NULL);
-    EXPECT_EQ(de_asset_pack_mount(s, "game:/a.dpak", 0), DE_ERR_UNSUPPORTED);
+static de_result assets_init(de_engine *e) {
+    g_as.have_assets = e->assets != NULL;
+    /* The engine attached the asset system to the world before the game: the event type and the
+     * resource exist already. */
+    g_as.type_valid = DE_HANDLE_VALID(de_asset_event_type(e->assets));
+    de_resource_id rid = de_asset_resource(e->assets);
+    const DeAssetSystemRef *ref = (const DeAssetSystemRef *)de_resource_get(e->world, rid);
+    g_as.resource_ok = ref != NULL && ref->ptr == e->assets;
+    g_as.manifest_ok = de_asset_manifest_load(e->assets, "dev:/assets.toml") == DE_OK;
     de_error_clear();
+    de_load_handle h = de_asset_load_bundle(e->assets, "level_01", DE_LOAD_DEFAULT);
+    g_as.level = de_asset_status(e->assets, h, NULL);
+    de_asset_release(e->assets, h);
+    return DE_OK;
+}
 
-    /* The type loader context (DENG-142): empty values and the fallbacks. */
-    EXPECT_TRUE(de_asset_load_ctx_data(NULL, &size) == NULL);
-    EXPECT_EQ(size, 0u);
-    EXPECT_EQ(de_asset_load_ctx_id(NULL).hash, 0u);
-    EXPECT_TRUE(de_asset_load_ctx_user(NULL) == NULL);
-    EXPECT_FALSE(de_asset_load_ctx_settings_has(NULL, "k"));
-    EXPECT_TRUE(de_asset_load_ctx_settings_bool(NULL, "k", true));
-    EXPECT_EQ(de_asset_load_ctx_settings_int(NULL, "k", 5), 5);
-    EXPECT_STREQ(de_asset_load_ctx_settings_string(NULL, "k", "fb"), "fb");
-    const char *const *items = (const char *const *)(void *)&size;
-    EXPECT_EQ(de_asset_load_ctx_settings_string_array(NULL, "k", &items), 0u);
-    EXPECT_TRUE(items == NULL);
-    EXPECT_EQ(de_asset_load_ctx_fail(NULL, DE_ERR_PARSE, "bad %d", 1), DE_ERR_PARSE);
-    EXPECT_EQ(de_asset_load_ctx_add_dependency(NULL, id), DE_ERR_UNSUPPORTED);
-    de_asset_load_ctx_set_object(NULL, NULL, 0);
-    de_error_clear();
+static void noop_systems(de_engine *e, de_world *w) {
+    (void)e;
+    (void)w;
+}
 
-    /* The setters do nothing (and do not crash on the NULL system). */
-    de_asset_cancel(s, h);
-    de_asset_pack_unmount(s, "game:/a.dpak");
-    de_asset_set_locale(s, "ja");
-    de_asset_set_budgets(s, NULL);
-    de_asset_flush_unused(s);
-    de_asset_set_streaming_sources(s, NULL, 0);
-    de_asset_system_update(s, NULL);
-    de_asset_system_destroy(s);
+static de_game_api assets_game(void) {
+    de_game_api api = plain_game("assets_test");
+    api.init = assets_init;
+    api.shutdown = noop_shutdown;
+    api.register_types = noop_types;
+    api.register_systems = noop_systems;
+    return api;
+}
+
+TEST(headless, engine_assets) {
+    /* No --dev-dir: the engine still has its asset system; dev:/ is not mounted. */
+    fs_start();
+    memset(&g_as, 0, sizeof g_as);
+    de_game_api api = assets_game();
+    EXPECT_EQ(run_host(&api, true, "2"), 0);
+    de_fs_shutdown();
+    EXPECT_TRUE(g_as.have_assets);
+    EXPECT_TRUE(g_as.type_valid);
+    EXPECT_TRUE(g_as.resource_ok);
+    EXPECT_FALSE(g_as.manifest_ok);        /* no dev:/assets.toml */
+    EXPECT_EQ(g_as.level, DE_LOAD_FAILED); /* no manifest: the bundle is unknown */
+}
+
+TEST(headless, dev_dir_option) {
+    /* `--dev-dir <dir>` mounts dev:/ for the run (also in Release) and unmounts it after. */
+    fs_start();
+    memset(&g_as, 0, sizeof g_as);
+    de_game_api api = assets_game();
+    de_host_desc d;
+    memset(&d, 0, sizeof d);
+    d.static_api = &api;
+    d.headless = true;
+    d.game_toml = "game:/host_run.toml";
+    char a0[] = "game", a1[] = "--dev-dir=" DE_HOST_SMOKE_DATA_DIR, a2[] = "--frames", a3[] = "2";
+    char *argv[4] = {a0, a1, a2, a3};
+    d.argv = argv;
+    d.argc = 4;
+    EXPECT_EQ(de_host_run(&d), 0);
+    EXPECT_TRUE(g_as.manifest_ok);
+    EXPECT_EQ(g_as.level, DE_LOAD_READY);             /* the smoke manifest's empty bundle */
+    EXPECT_FALSE(de_path_exists("dev:/assets.toml")); /* unmounted after the run */
+    de_fs_shutdown();
 }
 
 /* ---- minimal_game.* : examples/minimal_game.c in-process -------------------------------- */
@@ -508,9 +490,11 @@ static void mg_shutdown(de_engine *e) {
     g_mg.game->shutdown(e);
 }
 
-/* Runs minimal_game for `frames` frames and checks the spin replay. */
+/* Runs minimal_game for `frames` frames and checks the spin replay. The game loads
+ * dev:/assets.toml through the real asset system (DENG-143): dev:/ is the smoke manifest. */
 static void mg_run(bool variable, const char *frames, u32 expect_frames) {
     fs_start();
+    ASSERT_EQ(de_fs_mount("dev", DE_HOST_SMOKE_DATA_DIR, DE_MOUNT_READ_ONLY, 0), DE_OK);
     memset(&g_mg, 0, sizeof g_mg);
     g_mg.game = de_game_get_api();
     g_mg.variable = variable;

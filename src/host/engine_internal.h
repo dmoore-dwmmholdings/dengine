@@ -26,6 +26,7 @@ DE_EXTERN_C_BEGIN
  *               time_scale = 1.0  frame_cap_hz = 0
  *     [tasks]   workers = 0                  (frame workers besides the main thread; 0 = auto)
  *     [memory]  frame_arena_mib = 64
+ *     [assets]  io_threads = 2  hot_reload = true  locale = ""   (DENG-143)
  *     [cvars]   r.vsync = true               (any cvar, dotted keys or nested tables)
  *
  * Unknown keys and tables log a warning that names the key path ("window.foo"). A known key
@@ -53,6 +54,11 @@ DE_EXTERN_C_BEGIN
 #define DE__GAME_MAX_FRAME_CAP_HZ    10000u
 #define DE__GAME_MAX_WORKERS         256u
 #define DE__GAME_MAX_FRAME_ARENA_MIB 65536u
+#define DE__GAME_MAX_IO_THREADS      64u /* DENG-143: [assets] io_threads */
+
+/* DENG-143: [assets] defaults and the locale buffer (de_asset_set_locale keeps 35 bytes). */
+#define DE__GAME_DEFAULT_IO_THREADS 2u
+#define DE__GAME_LOCALE_MAX         36u /**< bytes of de__game_config.asset_locale, NUL included */
 
 /** The parsed project file. Plain data: copy it freely. */
 typedef struct de__game_config {
@@ -67,6 +73,10 @@ typedef struct de__game_config {
     u32 frame_arena_mib;                   /**< [memory] frame_arena_mib; 64 (read by DENG-91) */
     u32 unknown_keys;                      /**< keys that were warned about as unknown */
     u32 cvars_applied; /**< [cvars] values that were applied (or left pending) */
+    /* DENG-143: [assets], read by de__engine_create for the asset system. */
+    u32 asset_io_threads;                   /**< [assets] io_threads; 2 (1 to 64) */
+    bool asset_hot_reload;                  /**< [assets] hot_reload; true (Debug and Dev only) */
+    char asset_locale[DE__GAME_LOCALE_MAX]; /**< [assets] locale; "" = none */
 } de__game_config;
 
 /** Fills `*out` with the defaults above. */
@@ -119,6 +129,7 @@ typedef struct de__engine {
     bool owns_platform;       /* de_platform_init succeeded here; destroy shuts it down */
     de_log_category log_host; /* "host" */
     de_log_category log_game; /* "game" */
+    bool owns_io;             /* DENG-143: de_io_init succeeded here; destroy shuts it down */
 } de__engine;
 
 /** The internal engine of a public pointer (no check; `e` must come from de__engine_create). */
@@ -136,9 +147,13 @@ static inline const de__engine *de__engine_from_const(const de_engine *e) {
  * shut down by destroy), the task system (`config.task_workers` frame workers), the type
  * registry, the ECS world and its built-in components (de_builtin_components: the transform and
  * hierarchy components and the transform propagation system, registered before anything else so
- * their ids are the same on every machine), and a window from `[window]` unless headless (or the
+ * their ids are the same on every machine), the process I/O threads (de_io_init with `[assets]
+ * io_threads`; an I/O system that is already running is used as it is and not shut down by
+ * destroy) and the asset system (`assets`: source mode, packed in Shipping; attached to the world
+ * at once, so the asset event type and the DeAssetSystemRef resource exist before the game
+ * registers its systems; DENG-143), and a window from `[window]` unless headless (or the
  * platform runs without video). Optional modules (gpu, renderer, input, audio, physics, ui, ...)
- * and `assets` (until S07) stay NULL.
+ * stay NULL.
  *
  * Main thread only: the calling thread becomes the platform's main thread and the task
  * system's worker 0. On failure everything created so far is destroyed in reverse order, `*out`
@@ -149,9 +164,9 @@ static inline const de__engine *de__engine_from_const(const de_engine *e) {
  */
 de_result de__engine_create(const de__engine_desc *d, de_engine **out);
 
-/** Destroys in the exact reverse order of creation: window, world, type registry, task system
- * (its threads are joined), platform (if the engine started it), then the engine. NULL is
- * ignored. Main thread only. */
+/** Destroys in the exact reverse order of creation: window, asset system, I/O threads (if the
+ * engine started them), world, type registry, task system (its threads are joined), platform (if
+ * the engine started it), then the engine. NULL is ignored. Main thread only. */
 void de__engine_destroy(de_engine *e);
 
 DE_EXTERN_C_END

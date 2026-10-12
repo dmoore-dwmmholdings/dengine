@@ -91,6 +91,9 @@ TEST_F(game_toml, full, gt_fx) {
     EXPECT_EQ(c.timing.frame_cap_hz, 144u);
     EXPECT_EQ(c.task_workers, 3u);
     EXPECT_EQ(c.frame_arena_mib, 32u);
+    EXPECT_EQ(c.asset_io_threads, 4u); /* DENG-143: [assets] */
+    EXPECT_FALSE(c.asset_hot_reload);
+    EXPECT_STREQ(c.asset_locale, "pt-BR");
     EXPECT_EQ(c.unknown_keys, 0u);
     EXPECT_EQ(c.cvars_applied, 0u);
     EXPECT_EQ(warnings(), 0u);
@@ -126,6 +129,9 @@ TEST_F(game_toml, defaults, gt_fx) {
     EXPECT_TRUE(c.window_high_dpi);
     EXPECT_EQ(c.task_workers, 0u);
     EXPECT_EQ(c.frame_arena_mib, 64u);
+    EXPECT_EQ(c.asset_io_threads, 2u); /* DENG-143 */
+    EXPECT_TRUE(c.asset_hot_reload);
+    EXPECT_STREQ(c.asset_locale, "");
 
     /* A missing file gives the defaults (and an Info message, not a warning). */
     memset(&c, 0xAB, sizeof c);
@@ -136,7 +142,8 @@ TEST_F(game_toml, defaults, gt_fx) {
     EXPECT_TRUE(is_defaults(&c));
     ASSERT_EQ(de__game_config_parse(NULL, 0, NULL, &c), DE_OK);
     EXPECT_TRUE(is_defaults(&c));
-    static const char empty[] = "[game]\n[window]\n[timing]\n[tasks]\n[memory]\n[cvars]\n";
+    static const char empty[] =
+        "[game]\n[window]\n[timing]\n[tasks]\n[memory]\n[assets]\n[cvars]\n";
     ASSERT_EQ(de__game_config_parse(empty, sizeof empty - 1, NULL, &c), DE_OK);
     EXPECT_TRUE(is_defaults(&c));
     EXPECT_EQ(warnings(), 0u);
@@ -172,6 +179,11 @@ TEST_F(game_toml, bad_types, gt_fx) {
         {"[tasks]\nworkers = -1\n", "tasks.workers"},
         {"[tasks]\nworkers = 'many'\n", "tasks.workers"},
         {"[memory]\nframe_arena_mib = 0\n", "memory.frame_arena_mib"},
+        {"[assets]\nio_threads = 0\n", "assets.io_threads"}, /* DENG-143 */
+        {"[assets]\nio_threads = 65\n", "assets.io_threads"},
+        {"[assets]\nhot_reload = 'yes'\n", "assets.hot_reload"},
+        {"[assets]\nlocale = 'a-tag-that-is-much-longer-than-35-bytes'\n", "assets.locale"},
+        {"assets = 3\n", "assets"},
         {"window = 3\n", "window"},
         {"timing = 'fixed'\n", "timing"},
         {"[cvars]\nr.list = [1, 2]\n", "cvars.r.list"},

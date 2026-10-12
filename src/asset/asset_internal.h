@@ -58,6 +58,11 @@ struct de_asset_system {
     struct de__pipeline *pipeline;
 
     /* ---- DENG-143: ECS events, host integration (append below) --------------------------- */
+    /* `emit_fn` (the event hook) is in DENG-144's block below: one copy for both tasks. The
+     * first de_asset_system_update with a world sets it to the ECS sender of asset_events.c. */
+    /** asset_events.c: the attached world, the event type, the DeAssetSystemRef resource, the
+     * `de.asset_events` system and the queue of events not sent yet; NULL until attached. */
+    struct de__asset_events *events;
 
     /* ---- DENG-144: budgets and eviction (append below) ----------------------------------- */
     /** Event hook shared with DENG-143 (which sets it to its ECS sender): called for every asset
@@ -79,6 +84,15 @@ static inline void de__asset_emit(de_asset_system *s, const de_asset_event *ev) 
     if (s->emit_fn)
         s->emit_fn(s, ev);
 }
+
+/* ---- DENG-143: ECS events (asset_events.c) ----------------------------------------------- */
+
+/** First de_asset_system_update with a world: registers the event type and the resource and
+ * sets `emit_fn` (once; a later, different world gets a warning). Main thread. */
+void de__asset_events_attach(de_asset_system *s, de_world *world);
+/** de_asset_system_destroy: removes the system and the resource from the world, frees the
+ * queue, clears `emit_fn`. The world must still exist. */
+void de__asset_events_detach(de_asset_system *s);
 
 DE_EXTERN_C_END
 

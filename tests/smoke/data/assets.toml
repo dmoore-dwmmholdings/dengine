@@ -1,0 +1,20 @@
+# tests/smoke/data/assets.toml: the manifest of the minimal_game smoke tests (DENG-143). The tests
+# mount this directory as dev:/ (`--dev-dir`), and examples/minimal_game.c loads
+# dev:/assets.toml, then the bundle `level_01`.
+#
+# The bundles have no members: no asset type is built in before S08 (`blob`, DENG-215). An empty
+# bundle is READY as soon as it is requested, so the game logs `level_01 ready` through the real
+# asset system. Once `blob` exists, this manifest can list real blobs (follow-up for DENG-215).
+
+[project]
+asset_root = "assets"
+version = 1
+
+[bundles.common]
+assets = []
+resident = true
+
+[bundles.level_01]
+assets = []
+depends = ["common"]
+priority = "high"

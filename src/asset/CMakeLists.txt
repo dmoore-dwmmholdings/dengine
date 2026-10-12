@@ -46,3 +46,8 @@ set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_zstd)
 # DENG-144: per-category budgets, residency accounting, LRU eviction of unreferenced assets,
 # resident bundles, de_asset_flush_unused (budget.c) and de_asset_get_stats (stats.c).
 target_sources(de_asset PRIVATE budget.c budget_internal.h stats.c)
+
+# DENG-143: asset ECS events and the asset system as a world resource (asset_events.c: the
+# `de_asset_event` and `DeAssetSystemRef` types, the event queue and its `de.asset_events` system
+# in First). The events go through de__asset_emit (asset_internal.h).
+target_sources(de_asset PRIVATE asset_events.c)

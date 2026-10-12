@@ -20,6 +20,18 @@ static void engine_teardown(de__engine *e) {
         de_window_destroy(e->pub.window);
         e->pub.window = (de_window){0};
     }
+#if DE_HAS_ASSETS
+    /* DENG-143: before the world, which it detaches from (system, resource), and before the I/O
+     * threads its loads use. */
+    if (e->pub.assets != NULL) {
+        de_asset_system_destroy(e->pub.assets);
+        e->pub.assets = NULL;
+    }
+    if (e->owns_io) {
+        de_io_shutdown();
+        e->owns_io = false;
+    }
+#endif
     if (e->pub.world != NULL) {
         de_world_destroy(e->pub.world);
         e->pub.world = NULL;
@@ -144,8 +156,49 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
                            "ECS built-in components");
     }
 
+#if DE_HAS_ASSETS
+    /* 7c. Assets (DENG-143). The process I/O threads first: the asset pipeline uses them, and
+     * starts and stops its own only when nobody runs them, which would stop them under any other
+     * user. A caller that runs them already keeps them. */
+    de_io_desc iod;
+    memset(&iod, 0, sizeof iod);
+    iod.thread_count = e->config.asset_io_threads;
+    r = de_io_init(&iod);
+    if (r == DE_OK) {
+        e->owns_io = true;
+    } else if (r == DE_ERR_ALREADY_EXISTS) {
+        de_error_clear();
+    } else {
+        return engine_fail(e, r, "I/O threads");
+    }
+    de_asset_system_desc ad;
+    memset(&ad, 0, sizeof ad);
+    ad.allocator = a;
+    ad.tasks = e->pub.tasks;
+#if defined(DE_SHIPPING)
+    ad.mode = DE_ASSET_MODE_PACKED; /* cooked data from packs only (S08) */
+#else
+    ad.mode = DE_ASSET_MODE_SOURCE;
+#endif
+    ad.io_threads = e->config.asset_io_threads;
+    ad.hot_reload = e->config.asset_hot_reload;
+    ad.locale = e->config.asset_locale[0] != '\0' ? e->config.asset_locale : NULL;
+    r = de_asset_system_create(&ad, &e->pub.assets);
+    if (r != DE_OK)
+        return engine_fail(e, r, "asset system");
+    /* The first update with the world attaches the system to it (the de_asset_event type, the
+     * DeAssetSystemRef resource, the de.asset_events system in First). Here, at a fixed point
+     * before the game, so register_systems can name the event type and the resource, and so the
+     * engine owns the system (a hot reload removes only the game's systems). Nothing is loaded
+     * yet, so the update does nothing else. */
+    de_error_clear();
+    de_asset_system_update(e->pub.assets, e->pub.world);
+    if (!DE_HANDLE_VALID(de_asset_event_type(e->pub.assets)))
+        return engine_fail(e, DE_ERR_OUT_OF_MEMORY, "asset events");
+#endif
+
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
-     * has none. Assets (S07) and the optional modules stay NULL. */
+     * has none. The optional modules stay NULL. */
     if (!e->headless) {
         de_window_desc wnd;
         memset(&wnd, 0, sizeof wnd);

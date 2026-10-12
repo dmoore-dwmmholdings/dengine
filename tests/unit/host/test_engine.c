@@ -51,7 +51,12 @@ TEST(engine, create_destroy_no_leak) {
     EXPECT_TRUE(e->world != NULL);
     EXPECT_TRUE(de_world_types(e->world) == e->types);
     EXPECT_FALSE(DE_HANDLE_VALID(e->window)); /* headless: no window */
-    EXPECT_TRUE(e->assets == NULL);
+    /* DENG-143: the asset system exists and is attached to the world (event type, resource). */
+    ASSERT_TRUE(e->assets != NULL);
+    EXPECT_TRUE(DE_HANDLE_VALID(de_asset_event_type(e->assets)));
+    const DeAssetSystemRef *assets_ref =
+        (const DeAssetSystemRef *)de_resource_get(e->world, de_asset_resource(e->assets));
+    EXPECT_TRUE(assets_ref != NULL && assets_ref->ptr == e->assets);
     EXPECT_TRUE(e->gpu == NULL);
     EXPECT_TRUE(e->renderer == NULL);
     EXPECT_TRUE(e->input == NULL);
