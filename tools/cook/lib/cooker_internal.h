@@ -42,6 +42,8 @@ struct de_cooker {
 
     de__cooker_type *types;   /**< DE__COOKER_MAX_TYPES entries */
     de_atomic_u32 type_count; /**< release on register, acquire on read */
+
+    struct de__decache *cache; /**< DENG-210: the `.decache` of cache_dir (decache.h), or NULL */
 };
 
 /** The registered type `name`, or NULL (importer_registry.c). Any thread. */
