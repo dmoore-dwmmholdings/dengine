@@ -83,6 +83,10 @@ struct ecs_query {
     u32 last_run_tick;
     u32 this_run_tick;
     ecs_change_filter_fn change_filter;
+    /* DENG-347: false until ecs_query_set_change_window; without a window the change filters
+     * pass every row and write marking stamps the world's current change tick
+     * (change_internal.h). */
+    bool change_window_set;
     size_t alloc_size;
 };
 
@@ -161,7 +165,8 @@ bool ecs_query_iter_next(const de_world *w, const ecs_query *q, ecs_query_iter *
 
 /* ---- query_iter.c --------------------------------------------------------------------------- */
 
-/** The default change-filter predicate until DENG-347: every row passes. */
+/** The change-filter predicate of every query: the DE_ADDED / DE_CHANGED tick test of DENG-347
+ * (ecs_change_filter_ticks, change.c). */
 bool ecs_change_filter_default(const ecs_query *q, const ecs_archetype *a, const ecs_chunk *ch,
                                const u32 *filter_cols, u32 row);
 

@@ -214,6 +214,8 @@ struct de_world {
     /* -- DENG-346: queries (append below) -- */
     struct ecs_query_registry *queries; /**< query slots (query_internal.h); NULL until the
                                              first de_query_create */
+    /* -- DENG-347: change detection (append below; the rest is in change_internal.h) -- */
+    u32 change_check_tick; /**< change_tick at the last ecs_check_change_ticks */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */

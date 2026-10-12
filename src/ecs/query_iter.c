@@ -7,12 +7,17 @@
  * [k * grain, (k + 1) * grain), so which rows a range holds depends only on the grain and the data.
  *
  * Every slice goes through emit_rows -> emit_slice, the one place that applies the change
- * filters and builds a de_query_chunk. DENG-347 adds its tick logic there (the predicate and
- * query_slice_done); DENG-350 adds per-range command buffers to emit_slice / run_range.
+ * filters and builds a de_query_chunk. DENG-347's tick logic is there (the predicate and the
+ * write marking in query_slice_done); DENG-350 adds per-range command buffers to emit_slice /
+ * run_range.
  *
  * Nothing here allocates. Iteration only reads the world and the query, except
- * de_query_par_each, which first writes the row prefix of each entry (entry[1]). */
+ * de_query_par_each, which first writes the row prefix of each entry (entry[1]), and the write
+ * marking of DE_WRITE / DE_OPTIONAL_WRITE terms, which writes the changed ticks of the yielded
+ * rows (DENG-347). */
 #include "query_internal.h"
+
+#include "change_internal.h" /* DENG-347: tick test and write marking */
 
 /* State shared by every slice of one de_query_each / de_query_par_each call. */
 typedef struct query_run {
@@ -26,27 +31,17 @@ typedef struct query_run {
 
 bool ecs_change_filter_default(const ecs_query *q, const ecs_archetype *a, const ecs_chunk *ch,
                                const u32 *filter_cols, u32 row) {
-    /* DENG-347 replaces this with the added/changed tick test against the query's window
-     * [q->last_run_tick, q->this_run_tick]. Until then every row passes. */
-    (void)q;
-    (void)a;
-    (void)ch;
-    (void)filter_cols;
-    (void)row;
-    return true;
+    /* DENG-347: the added / changed tick test against the query's window
+     * (last_run_tick, this_run_tick] (change.c). */
+    return ecs_change_filter_ticks(q, a, ch, filter_cols, row);
 }
 
-/* Called after the callback has seen rows [row, row + count) of chunk `ch`. DENG-347 marks the
- * changed ticks of the write terms here (q->terms[i].access is DE_WRITE or DE_OPTIONAL_WRITE and
- * cols[i] a data column). */
+/* Called after the callback has seen rows [row, row + count) of chunk `ch`. DENG-347: marks the
+ * changed ticks of the yielded rows in every DE_WRITE / DE_OPTIONAL_WRITE data column
+ * (conservative: written or not). Only this slice's rows, on this thread: no atomics needed. */
 static void query_slice_done(const query_run *r, const ecs_archetype *a, const ecs_chunk *ch,
                              const u32 *cols, u32 row, u32 count) {
-    (void)r;
-    (void)a;
-    (void)ch;
-    (void)cols;
-    (void)row;
-    (void)count;
+    ecs_change_mark_slice(r->w, r->q, a, ch, cols, row, count);
 }
 
 /* Hands rows [row, row + count) of chunk `ch` of `a` to the callback as one slice. */

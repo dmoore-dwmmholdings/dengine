@@ -26,3 +26,6 @@ target_sources(de_ecs PRIVATE commands_internal.h commands.c)
 
 # DENG-346: queries (cached archetype matching, chunk iteration, par_each).
 target_sources(de_ecs PRIVATE query_internal.h query.c query_cache.c query_iter.c)
+
+# DENG-347: change detection (change ticks, ADDED / CHANGED row test, write marking, wrap clamp).
+target_sources(de_ecs PRIVATE change_internal.h change.c)
