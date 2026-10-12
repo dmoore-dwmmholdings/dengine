@@ -153,3 +153,14 @@ if(DE_IS_SHIPPING)
     # It builds this build's dengine: no other test may drive the build at the same time.
     set_tests_properties(prof_no_tracy_in_shipping PROPERTIES RUN_SERIAL TRUE)
 endif()
+
+# DENG-96: the console command registry. Its own executable, so the CTest names are
+# command.<test> and the process-wide registry and cvars start fresh in each test. It includes
+# the internal header "core/command_internal.h"; exec files go to a build-tree directory.
+de_add_test(NAME command SOURCES test_command.c LIBS de_platform)
+if(TARGET test_command)
+    target_include_directories(test_command PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_command PRIVATE
+        DE_COMMAND_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_command_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_command_tmp")
+endif()

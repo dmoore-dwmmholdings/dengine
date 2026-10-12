@@ -167,3 +167,6 @@ if(TARGET de_tp_tracy)
     target_link_libraries(de_core PRIVATE "$<${_de_prof_cfg}:de_tp_tracy>")
     set_property(TARGET de_core APPEND PROPERTY DE_MODULE_LIBS "$<${_de_prof_cfg}:de_tp_tracy>")
 endif()
+
+# DENG-96: the console command registry (de_debug.h, console commands section; SPEC §18.6).
+target_sources(de_core PRIVATE command_internal.h command.c)

@@ -12,6 +12,7 @@
 #include <dengine/de_platform.h>
 
 #include "platform/de_atomic.h"
+#include "platform/vfs_internal.h" /* DENG-96: native file calls of the next-launch scan */
 
 #include <signal.h>
 #include <string.h>
@@ -449,6 +450,9 @@ de_result de_crash_install(const char *dump_dir, de_crash_upload_fn upload, void
     g_upload = upload;
     g_upload_user = user;
     de_crash_thread_init();
+    /* DENG-96: hand the reports of earlier crashes to the game, here on the calling thread. */
+    if (upload != NULL)
+        (void)de__crash_upload_pending();
     return DE_OK;
 }
 
@@ -663,4 +667,190 @@ void de__crash_reset_for_tests(void) {
     for (u32 i = 0; i < DE_CRASH_MAX_HANDLERS; i++)
         de_atomic_store_u32(&g_handler_ready[i], 0, DE_ATOMIC_RELAXED);
     de_atomic_store_u32(&g_handler_next, 0, DE_ATOMIC_RELEASE);
+}
+
+/* ---------- Next-launch upload (S06 DENG-96) ----------
+ *
+ * de_crash_install(dir, upload, user) with an upload callback scans `dir` for the pending
+ * markers that earlier crashes left (`crash-*.pending`, format in crash_internal.h), and for each
+ * one: renames the marker to `<stem>.sent` (or deletes it when the rename fails), then calls
+ * `upload` once with the report's files. The marker is retired before the call, so a report is
+ * never handed over twice, even when the upload callback itself crashes or the process is killed
+ * during it. A marker that can be neither renamed nor deleted is skipped with a warning (it
+ * would otherwise be uploaded at every launch). This runs on the calling thread, never from a
+ * crash, and uses only platform file calls (no services/, no VFS: the dump directory is native).
+ */
+
+/* Marker names gathered per directory listing; a full batch triggers another listing. */
+#define DE__CRASH_SCAN_BATCH 32
+/* Bytes of a marker file name ("crash-<20>-<20>-<n>.pending" is at most 59). */
+#define DE__CRASH_SCAN_NAME_CAP 96
+/* Listings per scan: bounds the work when markers keep appearing or cannot be retired. */
+#define DE__CRASH_SCAN_ROUNDS 16
+/* Bytes read from a marker (three paths and two short values). */
+#define DE__CRASH_MARKER_MAX 4096
+
+typedef struct de__crash_scan {
+    char names[DE__CRASH_SCAN_BATCH][DE__CRASH_SCAN_NAME_CAP];
+    u32 count;
+    bool full;
+} de__crash_scan;
+
+static bool de__crash_has_suffix(const char *s, const char *suffix) {
+    size_t n = strlen(s), m = strlen(suffix);
+    return n >= m && memcmp(s + n - m, suffix, m) == 0;
+}
+
+static bool de__crash_scan_fn(const char *name, bool is_dir, void *user) {
+    de__crash_scan *sc = (de__crash_scan *)user;
+    if (is_dir || strncmp(name, "crash-", 6) != 0 || !de__crash_has_suffix(name, ".pending") ||
+        strlen(name) >= DE__CRASH_SCAN_NAME_CAP)
+        return true;
+    if (sc->count == DE__CRASH_SCAN_BATCH) {
+        sc->full = true;
+        return false;
+    }
+    memcpy(sc->names[sc->count++], name, strlen(name) + 1);
+    return true;
+}
+
+/* Copies the value of `key=` from the marker text into `out` (cap bytes); "" when absent. */
+static void de__crash_marker_value(const char *text, const char *key, char *out, size_t cap) {
+    size_t klen = strlen(key);
+    out[0] = '\0';
+    for (const char *line = text; line != NULL && *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        size_t len = end != NULL ? (size_t)(end - line) : strlen(line);
+        if (len > klen && memcmp(line, key, klen) == 0 && line[klen] == '=') {
+            size_t vlen = len - klen - 1;
+            if (vlen > 0 && line[klen + vlen] == '\r')
+                vlen--;
+            if (vlen >= cap)
+                vlen = cap - 1;
+            memcpy(out, line + klen + 1, vlen);
+            out[vlen] = '\0';
+            return;
+        }
+        line = end != NULL ? end + 1 : NULL;
+    }
+}
+
+/* Reads at most DE__CRASH_MARKER_MAX - 1 bytes of `path` into `out`, NUL-terminated. */
+static bool de__crash_read_marker(const char *path, char *out) {
+    de_file *f = NULL;
+    if (de__file_open_native(path, DE_FILE_READ, de_heap_allocator(), &f) != DE_OK) {
+        de_error_clear();
+        return false;
+    }
+    u64 total = 0;
+    for (;;) {
+        u64 got = 0;
+        if (de__file_pread(f, out + total, total, DE__CRASH_MARKER_MAX - 1 - total, &got) !=
+            DE_OK) {
+            de_error_clear();
+            break;
+        }
+        total += got;
+        if (got == 0 || total == DE__CRASH_MARKER_MAX - 1)
+            break;
+    }
+    de_file_close(f);
+    out[total] = '\0';
+    return total > 0;
+}
+
+/* Retires one marker and hands its report to `upload`. Returns true when `upload` was called. */
+static bool de__crash_upload_one(const char *dir, const char *name, de_crash_upload_fn upload,
+                                 void *user) {
+    static char marker[DE__CRASH_MARKER_MAX];
+    char sep[2] = {de__crash_os_separator(), '\0'};
+    char marker_path[DE__CRASH_PATH_CAP], sent_path[DE__CRASH_PATH_CAP];
+    char report[DE__CRASH_PATH_CAP], dump[DE__CRASH_PATH_CAP], tail[DE__CRASH_PATH_CAP];
+    char build_id[128];
+
+    marker_path[0] = '\0';
+    if (!de__crash_str_append(marker_path, sizeof marker_path, dir) ||
+        !de__crash_str_append(marker_path, sizeof marker_path, sep) ||
+        !de__crash_str_append(marker_path, sizeof marker_path, name))
+        return false;
+    size_t stem_len = strlen(marker_path) - (sizeof ".pending" - 1);
+    memcpy(sent_path, marker_path, stem_len);
+    sent_path[stem_len] = '\0';
+    de__crash_str_append(sent_path, sizeof sent_path, ".sent");
+
+    bool have_text = de__crash_read_marker(marker_path, marker);
+    if (!have_text)
+        marker[0] = '\0';
+
+    /* Retire the marker first: "never twice" wins over "at least once". */
+    if (de__native_rename_replace(marker_path, sent_path) != DE_OK &&
+        de__native_remove(marker_path) != DE_OK) {
+        de_error_clear();
+        DE_WARN(DE_LOG_CAT_PLATFORM,
+                "crash report marker %s can be neither renamed nor deleted; not uploading it",
+                marker_path);
+        return false;
+    }
+    de_error_clear();
+
+    de__crash_marker_value(marker, "report", report, sizeof report);
+    if (report[0] == '\0') { /* an empty or unreadable marker: the report is <stem>.txt */
+        memcpy(report, marker_path, stem_len);
+        report[stem_len] = '\0';
+        de__crash_str_append(report, sizeof report, ".txt");
+    }
+    de__crash_marker_value(marker, "dump", dump, sizeof dump);
+    de__crash_marker_value(marker, "build_id", build_id, sizeof build_id);
+
+    /* The log tail sits beside the report: <report stem>.log_tail.txt. */
+    tail[0] = '\0';
+    if (de__crash_has_suffix(report, ".txt")) {
+        size_t rs = strlen(report) - 4;
+        memcpy(tail, report, rs);
+        tail[rs] = '\0';
+        de__crash_str_append(tail, sizeof tail, ".log_tail.txt");
+        bool is_dir = false;
+        if (de__native_stat(tail, &is_dir) != DE_OK || is_dir)
+            tail[0] = '\0';
+    }
+
+    de_crash_report rep;
+    memset(&rep, 0, sizeof rep);
+    rep.dump_path = dump[0] != '\0' ? dump : report;
+    rep.log_path = tail[0] != '\0' ? tail : report;
+    rep.build_id = build_id[0] != '\0' ? build_id : "unknown";
+    rep.gpu_breadcrumbs = NULL;
+    rep.gpu_fault = false;
+    DE_INFO(DE_LOG_CAT_PLATFORM, "crash report %s (build %s) handed to the upload callback", report,
+            rep.build_id);
+    upload(&rep, user);
+    return true;
+}
+
+u32 de__crash_upload_pending(void) {
+    void *user = NULL;
+    de_crash_upload_fn upload = de__crash_upload(&user);
+    if (upload == NULL || g_dir[0] == '\0')
+        return 0;
+    u32 uploaded = 0;
+    de__crash_scan sc;
+    for (u32 round = 0; round < DE__CRASH_SCAN_ROUNDS; ++round) {
+        sc.count = 0;
+        sc.full = false;
+        if (de__native_dir_list(g_dir, de__crash_scan_fn, &sc) != DE_OK) {
+            de_error_clear();
+            DE_WARN(DE_LOG_CAT_PLATFORM, "crash dump directory %s cannot be listed", g_dir);
+            break;
+        }
+        bool retired_any = false;
+        for (u32 i = 0; i < sc.count; ++i) {
+            if (de__crash_upload_one(g_dir, sc.names[i], upload, user)) {
+                ++uploaded;
+                retired_any = true;
+            }
+        }
+        if (!sc.full || !retired_any)
+            break;
+    }
+    return uploaded;
 }

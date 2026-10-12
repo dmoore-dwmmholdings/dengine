@@ -6,6 +6,7 @@
  * created here: de_host_run starts them before the engine and stops them after it.
  */
 #include "host/engine_internal.h"
+#include "host/host_crash.h" /* DENG-96 */
 
 #include <dengine/de_debug.h>
 #include <dengine/de_math.h>
@@ -100,6 +101,8 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     }
     if (de_platform_headless())
         e->headless = true;
+    /* 4b. Crash reports and the `quit` command (DENG-96, host_crash.c); never fails. */
+    de__host_crash_engine_init(e);
 
     /* 5. Task system. The calling thread becomes frame worker 0 and runs tasks (deterministic
      * FixedUpdate systems among them), so it takes the deterministic FP mode first, like every
