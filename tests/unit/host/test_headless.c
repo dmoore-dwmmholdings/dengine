@@ -1,6 +1,7 @@
 /*
  * test_headless.c: the host's headless mode (src/host/headless.c) and examples/minimal_game.c
- * run in-process (DENG-95), and the engine's asset system with `--dev-dir` (DENG-143).
+ * run in-process (DENG-95), and the engine's asset system with `--dev-dir` (DENG-143; ignored in
+ * Shipping, DENG-389).
  *
  * The executable links examples/minimal_game.c (its de_game_get_api() is the static game of the
  * minimal_game.* tests), which loads dev:/assets.toml through the host's real asset system.
@@ -385,10 +386,33 @@ TEST(headless, engine_assets) {
     EXPECT_EQ(g_as.level, DE_LOAD_FAILED); /* no manifest: the bundle is unknown */
 }
 
+#if defined(DE_SHIPPING)
+/* DENG-389: Shipping ignores --dev-dir with a warning; this sink looks for it. It runs on the log
+ * thread; the test reads the flag after de_log_remove_sink, when the sink no longer runs. */
+static bool g_dev_dir_warned;
+
+static void dev_dir_sink(const de_log_record *rec, void *user) {
+    (void)user;
+    static const char needle[] = "ignored: Shipping builds have no dev:/";
+    size_t n = sizeof needle - 1;
+    if (rec->level != DE_LOG_WARN || rec->message.len < n)
+        return;
+    for (size_t i = 0; i + n <= rec->message.len; ++i)
+        if (memcmp(rec->message.ptr + i, needle, n) == 0)
+            g_dev_dir_warned = true;
+}
+#endif
+
 TEST(headless, dev_dir_option) {
-    /* `--dev-dir <dir>` mounts dev:/ for the run (also in Release) and unmounts it after. */
+    /* `--dev-dir <dir>` mounts dev:/ for the run (also in Release) and unmounts it after.
+     * Shipping loads packs only: it ignores the option with a warning and mounts nothing. */
     fs_start();
     memset(&g_as, 0, sizeof g_as);
+#if defined(DE_SHIPPING)
+    g_dev_dir_warned = false;
+    ASSERT_EQ(de_log_init(NULL), DE_OK); /* ours, so the sink stays until we remove it */
+    de_log_add_sink(dev_dir_sink, NULL);
+#endif
     de_game_api api = assets_game();
     de_host_desc d;
     memset(&d, 0, sizeof d);
@@ -400,8 +424,17 @@ TEST(headless, dev_dir_option) {
     d.argv = argv;
     d.argc = 4;
     EXPECT_EQ(de_host_run(&d), 0);
+#if defined(DE_SHIPPING)
+    de_log_flush();
+    de_log_remove_sink(dev_dir_sink, NULL);
+    de_log_shutdown();
+    EXPECT_TRUE(g_dev_dir_warned);
+    EXPECT_FALSE(g_as.manifest_ok);        /* no dev:/ during the run */
+    EXPECT_EQ(g_as.level, DE_LOAD_FAILED); /* no manifest: the bundle is unknown */
+#else
     EXPECT_TRUE(g_as.manifest_ok);
-    EXPECT_EQ(g_as.level, DE_LOAD_READY);             /* the smoke manifest's empty bundle */
+    EXPECT_EQ(g_as.level, DE_LOAD_READY); /* the smoke manifest's empty bundle */
+#endif
     EXPECT_FALSE(de_path_exists("dev:/assets.toml")); /* unmounted after the run */
     de_fs_shutdown();
 }

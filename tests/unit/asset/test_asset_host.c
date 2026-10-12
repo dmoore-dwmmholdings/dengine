@@ -6,6 +6,10 @@
  * the `test_bytes` fixture type (with a loader), loads the two-file bundle of data/host/
  * (mounted as dev:/) and runs the real main loop (de__loop_run) until the bundle is READY. A
  * main-thread Update system reads the asset events: one LOADED per asset and one REQUEST_DONE.
+ *
+ * Shipping (DENG-389): the host creates the asset system in PACKED mode, which reads cooked data
+ * from packs only, and no pack is mounted. The same bundle then fails cleanly: no loader call, one
+ * FAILED per asset and a FAILED REQUEST_DONE, all with an error result.
  */
 #include "de_test.h"
 #include "test_bytes_type.h"
@@ -66,8 +70,9 @@ static struct {
     u64 start_ns, ready_ns;
 } g_host;
 
-/* Update, main thread: reads the asset events every frame; quits two frames after READY (so a
- * late event would still be seen), or at the timeout. */
+/* Update, main thread: reads the asset events every frame; quits two frames after the request
+ * reaches a final state (READY, or FAILED in Shipping; `ready` means final), so a late event would
+ * still be seen, or at the timeout. */
 static void host_watch(de_system_ctx *ctx) {
     const de_asset_event *ev;
     while ((ev = (const de_asset_event *)de_event_next(ctx->world, &g_host.reader)) != NULL) {
@@ -146,37 +151,62 @@ static void run_bundle_ready(u32 frame_cap_hz) {
     h.loop_max_frames = 0; /* host_watch quits: two frames after READY, or at the timeout */
     EXPECT_EQ(de__loop_run(&h), DE_OK);
 
+#if defined(DE_SHIPPING)
+    /* PACKED, no pack mounted: the request ends FAILED, and both assets fail without a load. */
+    const de_load_state want = DE_LOAD_FAILED;
+    const de_asset_event_kind want_kind = DE_ASSET_EV_FAILED;
+    const u32 want_ready = 0u, want_failed = 2u;
+#else
+    const de_load_state want = DE_LOAD_READY;
+    const de_asset_event_kind want_kind = DE_ASSET_EV_LOADED;
+    const u32 want_ready = 2u, want_failed = 0u;
+#endif
     de_load_info info;
-    EXPECT_EQ(de_asset_status(e->assets, g_host.h, &info), DE_LOAD_READY);
+    EXPECT_EQ(de_asset_status(e->assets, g_host.h, &info), want);
     EXPECT_EQ(info.assets_total, 2u);
-    EXPECT_EQ(info.assets_ready, 2u);
-    EXPECT_EQ(de_atomic_load_u32(&g_loads, DE_ATOMIC_ACQUIRE), 2u);
+    EXPECT_EQ(info.assets_ready, want_ready);
+    EXPECT_EQ(info.assets_failed, want_failed);
+    EXPECT_EQ(de_atomic_load_u32(&g_loads, DE_ATOMIC_ACQUIRE), want_ready);
+#if defined(DE_SHIPPING)
+    EXPECT_NE(info.first_error, DE_OK);
+    printf("  PACKED: %s (%s)\n", de_result_str(info.first_error), info.first_error_msg);
+#else
     EXPECT_EQ(g_objs[0].first, 'o');
     EXPECT_EQ(g_objs[1].first, 't');
     EXPECT_GT(g_objs[0].size, 0u);
     EXPECT_GT(g_objs[1].size, g_objs[0].size);
+#endif
 
-    /* One LOADED per asset (completion order) and then one REQUEST_DONE, nothing else. */
+    /* One LOADED (Shipping: FAILED) per asset, in completion order, and then one REQUEST_DONE,
+     * nothing else. */
     ASSERT_EQ(g_host.got_count, 3u);
     u64 one = de_asset_id_from("host/one").hash, two = de_asset_id_from("host/two").hash;
-    EXPECT_EQ(g_host.got[0].kind, DE_ASSET_EV_LOADED);
-    EXPECT_EQ(g_host.got[1].kind, DE_ASSET_EV_LOADED);
+    EXPECT_EQ(g_host.got[0].kind, want_kind);
+    EXPECT_EQ(g_host.got[1].kind, want_kind);
     EXPECT_TRUE((g_host.got[0].id.hash == one && g_host.got[1].id.hash == two) ||
                 (g_host.got[0].id.hash == two && g_host.got[1].id.hash == one));
-    EXPECT_EQ(g_host.got[0].state, DE_LOAD_READY);
+    EXPECT_EQ(g_host.got[0].state, want);
+    EXPECT_EQ(g_host.got[1].state, want);
     EXPECT_EQ(g_host.got[2].kind, DE_ASSET_EV_REQUEST_DONE);
     EXPECT_EQ(g_host.got[2].handle.id, g_host.h.id);
-    EXPECT_EQ(g_host.got[2].state, DE_LOAD_READY);
+    EXPECT_EQ(g_host.got[2].state, want);
+#if defined(DE_SHIPPING)
+    EXPECT_NE(g_host.got[0].error, DE_OK);
+    EXPECT_NE(g_host.got[1].error, DE_OK);
+    EXPECT_NE(g_host.got[2].error, DE_OK);
+#else
     EXPECT_EQ(g_host.got[2].error, DE_OK);
-    printf("  bundle READY after %u frames (%.1f ms, frame cap %u Hz)\n", g_host.ready_frame + 1u,
+#endif
+    printf("  bundle %s after %u frames (%.1f ms, frame cap %u Hz)\n",
+           want == DE_LOAD_READY ? "READY" : "FAILED", g_host.ready_frame + 1u,
            (double)(g_host.ready_ns - g_host.start_ns) / 1e6, frame_cap_hz);
     EXPECT_TRUE(g_host.ready);
     EXPECT_LT(g_host.ready_ns - g_host.start_ns, HOST_READY_NS);
 
     de_asset_release(e->assets, g_host.h);
     de__engine_destroy(h.engine);
-    /* The asset system unloaded both objects through test_bytes. */
-    EXPECT_EQ(counters.unloads, 2u);
+    /* The asset system unloaded every loaded object through test_bytes (none in Shipping). */
+    EXPECT_EQ(counters.unloads, want_ready);
     de_fs_shutdown();
 }
 
