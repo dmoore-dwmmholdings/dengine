@@ -1,9 +1,11 @@
 # Continuous integration
 
-DEngine uses GitHub Actions. There are three workflows in `.github/workflows/`. They run on a push
-to `main`, `dev` or `sprint/**`, on every pull request, and by hand (`workflow_dispatch`). Each
-workflow has one concurrency group per branch, so a new run on a branch cancels the run that it
-replaces (also a second `gh workflow run` on the same branch).
+DEngine uses GitHub Actions. There are four workflows in `.github/workflows/`. `ci.yml`,
+`sanitizers.yml` and `checks.yml` run on a push to `main`, `dev` or `sprint/**`, on every pull
+request, and by hand (`workflow_dispatch`). `determinism.yml` runs on a push to `main`, `dev` or
+`sprint/**` and by hand, not on pull requests. Each workflow has one concurrency group per branch,
+so a new run on a branch cancels the run that it replaces (also a second `gh workflow run` on the
+same branch).
 
 ## Tiers: quick and full
 
@@ -25,7 +27,8 @@ runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
   host before they push.
 - What the quick tier misses (clang-cl, MSVC Release, GCC TSan, macOS jobs, headless Windows) is
   caught by the full run on `dev` after the merge; the orchestrator files a fix task for it.
-- `checks.yml` is small (three Ubuntu jobs) and always runs in full.
+- `checks.yml` is small (three Ubuntu jobs) and always runs in full. `determinism.yml` (three
+  platform jobs and a diff job) has no tiers either.
 
 Every build job runs a preset from `CMakePresets.json`. To reproduce a job locally, run the same
 preset on a host of the same OS (see `docs/building.md`):
@@ -57,8 +60,9 @@ The configure step prints `build/<preset>/de_config_dump.txt`. If a job fails, i
 artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporary/`
 (`LastTest.log`), `CMakeConfigureLog.yaml` and the config dump.
 
-GPU and golden-image jobs come in S10, self-hosted runners in S20, the ABI check in S37, and
-the cross-architecture determinism job in S05 (DENG-353) and S22 (DENG-136).
+GPU and golden-image jobs come in S10, self-hosted runners in S20 and the ABI check in S37. The
+cross-architecture determinism jobs are in `determinism.yml` (below); S22 (DENG-136) adds the
+physics scenarios to them.
 
 ### `sanitizers.yml`: sanitizers
 
@@ -109,6 +113,33 @@ git diff --name-only --diff-filter=ACMR sprint/<sprint> -- '*.c' '*.h' '*.cpp' '
 Objective-C files (`.m`, `.mm`) are not checked, because `.clang-format` has no ObjC section yet.
 Every other C and C++ file outside `third_party/` is formatted, the public headers in
 `include/dengine/` and `examples/minimal_game.c` included (DENG-355).
+
+### `determinism.yml`: cross-platform determinism
+
+SPEC §19.4 and risk R6: every scenario in `tests/determinism/` must give the same per-tick world
+checksums on every platform. The harness and the scenarios are described in the Trama page
+`Testing`.
+
+| Job | Runner | Preset |
+|---|---|---|
+| determinism linux-x86-64 | `ubuntu-24.04` | `linux-gcc-release` |
+| determinism windows-x86-64 | `windows-2022` | `windows-msvc-release` |
+| determinism macos-arm64 | `macos-14` | `macos-release` |
+| determinism diff (3 platforms) | `ubuntu-24.04` | none |
+
+- Each `determinism-run` job builds only the target `de_determinism_tests` (every scenario
+  executable) and runs `ctest -L determinism`: worker counts, the checked-in golden files,
+  rollback and the harness self tests. So a platform that differs from the golden file fails here
+  already.
+- Then it uploads the `<scenario>.checksums` files that the tests wrote to
+  `build/<preset>/determinism/` as the artifact `determinism-<platform>` (kept for 14 days).
+- `determinism-diff` downloads the three artifacts and compares each file with the Linux one byte
+  for byte. It names the first differing tick and writes a table to the job summary. It runs also
+  when a platform job failed, and then fails if that platform's files are missing.
+- Local equivalent: `ctest --preset dev -L determinism`. To check x86-64 on an arm64 Mac, configure
+  `macos-dev` into its own directory with `-DCMAKE_OSX_ARCHITECTURES=x86_64`, build
+  `de_determinism_tests` and run the tests under Rosetta 2 (`arch -x86_64`).
+- Start it on a branch with `gh workflow run Determinism --ref <branch>`.
 
 ## Shared setup: `.github/actions/setup-dengine`
 
