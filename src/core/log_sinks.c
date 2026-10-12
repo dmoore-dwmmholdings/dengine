@@ -20,7 +20,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h> /* _fileno, _get_osfhandle */
+#include <windows.h>
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING /* SDKs before Windows 10 1511 */
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+#else
 #include <unistd.h>
 #endif
 
@@ -43,17 +55,46 @@ const char *de__log_basename(const char *path) {
  * the process runs, so it is checked once. */
 static de_atomic_u32 de__console_mode;
 
+#if defined(_WIN32)
+/* Windows consoles show ANSI colours only with ENABLE_VIRTUAL_TERMINAL_PROCESSING (Windows 10
+ * 1511 and later). GetConsoleMode fails when stderr is a file or a pipe, and SetConsoleMode fails
+ * on an older console: both give plain output, so redirected output has no escape codes. The flag
+ * is set on stderr's own handle (the CRT fd 2, which follows _dup2), and is left on at exit, as
+ * Windows Terminal has it on by default anyway. */
+static bool de__stderr_is_vt_console(void) {
+    int fd = _fileno(stderr);
+    if (fd < 0) /* a GUI-subsystem process without a console gives -2 */
+        return false;
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE || h == NULL)
+        return false;
+    DWORD mode = 0;
+    if (!GetConsoleMode(h, &mode))
+        return false;
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        return true;
+    return SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+}
+#endif
+
+bool de__log_console_detect(void) {
+    /* NO_COLOR first, so a console whose user opted out keeps its mode untouched. */
+    const char *no_color = getenv("NO_COLOR");
+    if (no_color != NULL && no_color[0] != '\0')
+        return false;
+#if defined(_WIN32)
+    return de__stderr_is_vt_console();
+#else
+    return isatty(fileno(stderr)) != 0;
+#endif
+}
+
 static bool de__console_color(void) {
     u32 mode = de_atomic_load_u32(&de__console_mode, DE_ATOMIC_RELAXED);
     if (mode == 0) {
-#if defined(_WIN32)
-        /* Windows consoles need ENABLE_VIRTUAL_TERMINAL_PROCESSING for ANSI colours; the
-         * platform layer (S03) owns the console mode, so stay plain until then. */
-        mode = 1;
-#else
-        const char *no_color = getenv("NO_COLOR");
-        mode = isatty(fileno(stderr)) && (no_color == NULL || no_color[0] == '\0') ? 2u : 1u;
-#endif
+        /* Two threads may both detect on their first line; the answer and the console mode they
+         * set are the same, so the race is harmless. */
+        mode = de__log_console_detect() ? 2u : 1u;
         de_atomic_store_u32(&de__console_mode, mode, DE_ATOMIC_RELAXED);
     }
     return mode == 2;

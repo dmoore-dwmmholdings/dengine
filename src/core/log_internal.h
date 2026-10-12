@@ -38,6 +38,14 @@ void de__log_allocator(struct de_allocator *out);
  * synchronous path used before de_log_init(). */
 void de__log_write_console(const de_log_record *rec);
 
+/**
+ * Decides, without the cached answer, whether the console sink colours its lines: NO_COLOR is
+ * unset or empty, and stderr is a terminal. On Windows "terminal" means a console that accepts
+ * ENABLE_VIRTUAL_TERMINAL_PROCESSING, and this call turns the flag on (DENG-372). The console
+ * sink calls it once, on its first line.
+ */
+bool de__log_console_detect(void);
+
 /** The file name part of a path (after the last '/' or '\\'). NULL gives "?". */
 const char *de__log_basename(const char *path);
 
