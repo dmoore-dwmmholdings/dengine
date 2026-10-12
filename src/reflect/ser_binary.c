@@ -1214,7 +1214,8 @@ de_result de_deserialize_binary(const de_type_registry *r, de_type_id type, void
 
     u8 hb[DE__BIN_HEADER_SIZE];
     DE_TRY(read_exact(rd, hb, sizeof hb, "header"));
-    bin_header h;
+    /* Zeroed: DE_TRY cannot show GCC that parse_header's bad-magic path returns != DE_OK. */
+    bin_header h = {0};
     DE_TRY(parse_header(hb, &h));
     if (h.type_hash != e->name_hash)
         return DE_FAIL(DE_ERR_PARSE, "binary object: not an object of type '%s'", e->name);
