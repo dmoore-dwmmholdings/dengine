@@ -99,7 +99,7 @@ For each task in **review**:
    - Comment: `✅ Merged into dev @ <sha>. Build + tests green (<n> tests).` Add the worker's CI run URLs from its report.
    - Publish every Trama page in the worker's `DOCS:` line: `publish_page` (space `DENG`) with the note `<KEY> merged @ <sha>`. First check that each page still has the `![[andare:KEY]]` embed of every issue that was on its last published version (plus this one); `pages_referencing <KEY>` is the cheap way. If an embed is missing, the draft overwrote another worker's text: do not publish it; ask the owner of the lost text (resume that worker, or dispatch a docs fix) to restore it, then publish.
    - Set the issue to **Done**.
-   - `git push origin dev`. Never force. Then start CI on the new tip: `for w in CI Sanitizers Checks; do gh workflow run "$w" --ref dev; done`. The next preflight reads the result (§2.1.4).
+   - `git push origin dev`. Never force. The push starts the full CI matrix on the new tip (feature branches only ran the quick tier, docs/ci.md), so a job outside the quick tier can turn red here first. The next preflight reads the result (§2.1.4) and files a fix task for it. Do not also start the workflows by hand: a second run in the same concurrency group cancels the first.
    - `git worktree remove .worktrees/<KEY>`. Keep the feature branch.
 
 Within one sprint, follow the plan's *merge order* section where it gives one.
