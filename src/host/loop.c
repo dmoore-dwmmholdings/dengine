@@ -3,8 +3,9 @@
  *
  * Startup once, then per frame:
  *   0. pacer begin, frame delta from the loop clock, timing changes (de_engine_set_timing) apply
- *   1. de_platform_pump (DE_EV_QUIT asks to quit), input update (no-op until S21), the asset
- *      system update (de_asset_system_update, DENG-143), frame-begin hooks
+ *   1. de_platform_pump (DE_EV_QUIT asks to quit; every app event also goes to
+ *      de_input_app_event), input update (de_input_begin_frame, DENG-84), the asset system
+ *      update (de_asset_system_update, DENG-143), frame-begin hooks
  *   2. First, PreUpdate
  *   3. FixedUpdate 0..N times (timing.c decides N, dt and alpha)
  *   4. Update, PostUpdate
@@ -20,6 +21,7 @@
 #include "host/timing.h"
 
 #include <dengine/de_debug.h>
+#include <dengine/de_input.h> /* DENG-84 */
 
 #include <errno.h>
 #include <stdlib.h>
@@ -174,14 +176,19 @@ static void loop_pump(de__host *h) {
                 DE_INFO(h->log, "quit requested by the platform");
                 de_engine_request_quit(h->engine);
             }
+            /* DENG-84: window focus reaches the input state (a focus loss releases held keys). */
+            if (h->engine->input != NULL)
+                de_input_app_event(h->engine->input, &ev[i]);
         }
     } while (n == LOOP_EVENT_BATCH);
 }
 
-/* Step 1, second half: the input system's per-frame update (SPEC §15). No input system until
- * S21; the pump already routes raw input into the platform's ring. */
+/* Step 1, second half: the input system's per-frame update (SPEC §15). The pump routed raw input
+ * into the platform's ring; de_input_begin_frame drains it into the input state (DENG-84). The
+ * action maps are evaluated later, by the input.actions system in PreUpdate. */
 static void loop_input_update(de__host *h) {
-    (void)h;
+    if (h->engine->input != NULL)
+        de_input_begin_frame(h->engine->input);
 }
 
 /* Step 5, second half: kicks the render thread to record the extracted frame. No render thread

@@ -151,9 +151,11 @@ static inline const de__engine *de__engine_from_const(const de_engine *e) {
  * io_threads`; an I/O system that is already running is used as it is and not shut down by
  * destroy) and the asset system (`assets`: source mode, packed in Shipping; attached to the world
  * at once, so the asset event type and the DeAssetSystemRef resource exist before the game
- * registers its systems; DENG-143), and a window from `[window]` unless headless (or the
- * platform runs without video). Optional modules (gpu, renderer, input, audio, physics, ui, ...)
- * stay NULL.
+ * registers its systems; DENG-143), the input state (`input`: created with the engine
+ * allocator and attached to the world, so de_input_resource and the input.actions /
+ * input.fixed_tick systems exist before the game registers its systems; DENG-84), and a window
+ * from `[window]` unless headless (or the platform runs without video). Optional modules (gpu,
+ * renderer, audio, physics, ui, ...) stay NULL.
  *
  * Main thread only: the calling thread becomes the platform's main thread and the task
  * system's worker 0. On failure everything created so far is destroyed in reverse order, `*out`
@@ -164,9 +166,10 @@ static inline const de__engine *de__engine_from_const(const de_engine *e) {
  */
 de_result de__engine_create(const de__engine_desc *d, de_engine **out);
 
-/** Destroys in the exact reverse order of creation: window, asset system, I/O threads (if the
- * engine started them), world, type registry, task system (its threads are joined), platform (if
- * the engine started it), then the engine. NULL is ignored. Main thread only. */
+/** Destroys in the exact reverse order of creation: window, input (detached first; DENG-84),
+ * asset system, I/O threads (if the engine started them), world, type registry, task system (its
+ * threads are joined), platform (if the engine started it), then the engine. NULL is ignored.
+ * Main thread only. */
 void de__engine_destroy(de_engine *e);
 
 DE_EXTERN_C_END

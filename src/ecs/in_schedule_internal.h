@@ -21,6 +21,15 @@ DE_EXTERN_C_BEGIN
  */
 bool de__ecs_in_schedule(void);
 
+/* ---- DENG-84 ---- */
+/**
+ * The de_schedule (as an int) of the system the calling thread runs, or -1 outside every system.
+ * Like de__ecs_in_schedule: any world, any thread, no allocation. Input queries use it to read
+ * the per-tick action view inside FixedUpdate systems.
+ */
+int de__ecs_current_schedule(void);
+/* ---- end DENG-84 ---- */
+
 DE_EXTERN_C_END
 
 #endif /* DE_ECS_IN_SCHEDULE_INTERNAL_H */

@@ -14,3 +14,20 @@ if(TARGET de_input)
         endif()
     endforeach()
 endif()
+
+# DENG-84: action maps (bindings, composites, modifiers, interactions, tick view, TOML files).
+# DE_INPUT_TEST_DATA_DIR holds the action-map files of data/, which test_action_toml mounts as
+# game:/.
+if(TARGET de_input)
+    de_add_test(NAME action_map SOURCES test_action_map.c LIBS de_input de_test_support)
+    de_add_test(NAME action_interactions SOURCES test_action_interactions.c
+                LIBS de_input de_test_support)
+    de_add_test(NAME action_toml SOURCES test_action_toml.c LIBS de_input de_test_support)
+    foreach(_de_input_test test_action_map test_action_interactions test_action_toml)
+        if(TARGET ${_de_input_test})
+            target_include_directories(${_de_input_test} PRIVATE "${DE_ROOT_DIR}/src")
+            target_compile_definitions(${_de_input_test} PRIVATE
+                DE_INPUT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+        endif()
+    endforeach()
+endif()
