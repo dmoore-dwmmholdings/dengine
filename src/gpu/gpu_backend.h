@@ -31,6 +31,7 @@
 #define DE_GPU_BACKEND_H
 #include <dengine/de_gpu.h>
 #include "gpu/handle_pool.h"
+#include "gpu/memory/gpu_heap.h"
 
 /* ---------- Object kinds and records ---------- */
 
@@ -67,6 +68,7 @@ typedef struct de__gpu_buffer {
     u32 bindless; /**< DE__GPU_BINDLESS_BUFFER index or DE_GPU_BINDLESS_INVALID */
     void *mapped; /**< UPLOAD/READBACK: set by the backend's buffer_create */
     char name[DE__GPU_NAME_MAX];
+    de__gpu_transient_region *region; /**< placed in a transient region (DENG-282), or NULL */
 } de__gpu_buffer;
 
 typedef struct de__gpu_texture {
@@ -78,6 +80,7 @@ typedef struct de__gpu_texture {
     u32 sampled;   /**< DE__GPU_BINDLESS_SAMPLED_TEXTURE index or 0 */
     u32 storage[DE_GPU_MAX_MIPS]; /**< DE__GPU_BINDLESS_STORAGE_TEXTURE index per mip, or 0 */
     char name[DE__GPU_NAME_MAX];
+    de__gpu_transient_region *region; /**< placed in a transient region (DENG-282), or NULL */
 } de__gpu_texture;
 
 typedef struct de__gpu_sampler {
@@ -239,6 +242,29 @@ typedef struct de__gpu_backend_vtable {
     de_result (*query_heap_create)(de_gpu_device *d, de__gpu_query_heap *h,
                                    const de_gpu_query_heap_desc *desc);
     void (*query_heap_destroy)(de_gpu_device *d, de__gpu_query_heap *h);
+
+    /* Device memory heaps (DENG-282, gpu/memory/gpu_heap.h has the contract). heap_create makes
+     * the native heap of h->size bytes for class `cls` in DE__GPU_PAYLOAD(T, h)
+     * (`heap_payload_size` bytes) and may set h->mapped; heap_destroy releases it. Both run under
+     * the class mutex. NULL heap_create: de__gpu_mem_alloc fails with DE_ERR_UNSUPPORTED. */
+    u32 heap_payload_size;
+    de_result (*heap_create)(de_gpu_device *d, de__gpu_heap *h, const de__gpu_mem_class_desc *cls);
+    void (*heap_destroy)(de_gpu_device *d, de__gpu_heap *h);
+    /* Memory a resource would need: size, alignment, the classes it may live in. The desc is
+     * validated; texture descs have the defaults applied (height, layers, mips, samples >= 1). */
+    de_result (*buffer_requirements)(de_gpu_device *d, const de_gpu_buffer_desc *desc,
+                                     de__gpu_mem_req *out);
+    de_result (*texture_requirements)(de_gpu_device *d, const de_gpu_texture_desc *desc,
+                                      de__gpu_mem_req *out);
+    /* Placed creation (transient aliasing): like buffer_create / texture_create, but the
+     * resource uses `heap` memory at `offset` (requirements already checked). The record's
+     * `region` is set. buffer_destroy / texture_destroy release it without freeing memory. */
+    de_result (*buffer_create_placed)(de_gpu_device *d, de__gpu_buffer *b,
+                                      const de_gpu_buffer_desc *desc, de__gpu_heap *heap,
+                                      u64 offset);
+    de_result (*texture_create_placed)(de_gpu_device *d, de__gpu_texture *t,
+                                       const de_gpu_texture_desc *desc, de__gpu_heap *heap,
+                                       u64 offset);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -252,6 +278,12 @@ extern const de__gpu_backend_vtable de__gpu_null_vtable;
  */
 void de__gpu_null_set_manual_completion(de_gpu_device *d, bool manual);
 void de__gpu_null_complete(de_gpu_device *d, de_gpu_queue q, u64 value);
+/** Null backend heap counters (DENG-282): heaps alive, their bytes, heaps ever created. */
+void de__gpu_null_heap_counts(de_gpu_device *d, u32 *live, u64 *bytes, u32 *created);
+/** Where the null backend placed a buffer or texture (de__gpu_kind DE__GPU_BUFFER or
+ * DE__GPU_TEXTURE, handle id): false when it is not a placed resource of a null device. */
+bool de__gpu_null_placement(de_gpu_device *d, de__gpu_kind kind, u32 id, de__gpu_heap **heap,
+                            u64 *offset);
 
 /**
  * Overrides the table entry of `backend` (not DE_GPU_DEFAULT) at run time; NULL restores the
@@ -337,7 +369,8 @@ struct de_gpu_device {
     de_gpu_cmd *cmd_inflight_head[DE_QUEUE_COUNT_], *cmd_inflight_tail[DE_QUEUE_COUNT_];
     de_gpu_cmd *cmd_all;
     size_t cmd_bytes;
-    size_t bytes; /**< allocation size of this struct plus the backend payload */
+    size_t bytes;                /**< allocation size of this struct plus the backend payload */
+    struct de__gpu_heaps *heaps; /**< device memory heaps (gpu/memory/gpu_heap.c, DENG-282) */
 };
 
 static inline void *de__gpu_device_payload(de_gpu_device *d) {
@@ -362,6 +395,19 @@ de__gpu_query_heap *de__gpu_get_query_heap(de_gpu_device *d, de_gpu_query_heap h
 de_gpu_texture de__gpu_texture_wrap(de_gpu_device *d, const de_gpu_texture_desc *desc,
                                     de__gpu_texture **out);
 void de__gpu_texture_wrap_finish(de_gpu_device *d, de__gpu_texture *t);
+
+/**
+ * Creates a buffer / texture placed at (`heap`, `offset`) through buffer_create_placed /
+ * texture_create_placed, with the record's `region` set: de_gpu_buffer_create's path otherwise
+ * (validation, slot, bindless). For gpu_heap.c's de__gpu_place_transient_*; it has checked the
+ * requirements and takes the region reference on success.
+ */
+de_gpu_buffer de__gpu_buffer_create_placed(de_gpu_device *d, const de_gpu_buffer_desc *desc,
+                                           de__gpu_heap *heap, u64 offset,
+                                           de__gpu_transient_region *region);
+de_gpu_texture de__gpu_texture_create_placed(de_gpu_device *d, const de_gpu_texture_desc *desc,
+                                             de__gpu_heap *heap, u64 offset,
+                                             de__gpu_transient_region *region);
 
 /** Releases deferred destructions and command lists whose work completed. Returns the number of
  * objects released. */

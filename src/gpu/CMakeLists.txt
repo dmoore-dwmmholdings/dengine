@@ -14,6 +14,10 @@ de_add_module(
         bindless_alloc.c
         deferred_destroy.c
         null/null_backend.c
+        memory/gpu_tlsf.h
+        memory/gpu_tlsf.c
+        memory/gpu_heap.h
+        memory/gpu_heap.c
     DEPS core platform
 )
 
