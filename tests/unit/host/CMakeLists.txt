@@ -21,3 +21,90 @@ foreach(_de_host_test test_engine test_game_toml test_engine_window)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_de_host_test}_tmp")
     endif()
 endforeach()
+
+# DENG-92: game library loading. fixtures/ builds test_game with de_add_game() and the plain
+# libraries of test_game_module.c (see fixtures/CMakeLists.txt). The host_game_* entries run
+# the `dengine` executable (or, in the static form, test_game itself) through
+# fixtures/check_run.cmake, which checks the exit code and the log; HOME and the other user
+# directory variables point into the build tree, so no run writes into the real user profile.
+add_subdirectory(fixtures)
+de_add_test(NAME game_module SOURCES test_game_module.c LIBS de_host)
+if(TARGET test_game_module)
+    target_include_directories(test_game_module PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_game_module PRIVATE
+        DE_HOST_PLAIN_GAME_DIR="${DE_HOST_PLAIN_GAME_DIR}")
+    add_dependencies(test_game_module
+        test_game_standalone test_game_bad_version test_game_no_callback test_game_no_symbol)
+endif()
+
+if(DE_BUILD_TESTS)
+    set(_de_hg_home "${CMAKE_CURRENT_BINARY_DIR}/host_game_home")
+    file(MAKE_DIRECTORY "${_de_hg_home}")
+    set(_de_hg_env
+        "HOME=${_de_hg_home}" "XDG_DATA_HOME=${_de_hg_home}/data"
+        "XDG_CACHE_HOME=${_de_hg_home}/cache" "APPDATA=${_de_hg_home}/appdata"
+        "LOCALAPPDATA=${_de_hg_home}/localappdata")
+    set(_de_hg_script "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/check_run.cmake")
+    set(_de_hg_plain "${DE_HOST_PLAIN_GAME_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}test_game")
+    set(_de_hg_suffix "${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set(_de_hg_tests "")
+
+    # The fixture game runs: its callbacks in order, one frame, exit 0. game.toml came from
+    # de_add_game(GAME_TOML), found through game:/ = the game's directory.
+    set(_de_hg_expect "test_game: calls init,register_types,register_systems,update,shutdown|Fixture Game exited normally")
+    if(DE_GAME_DYLIB)
+        if(TARGET dengine_exe)
+            add_test(NAME host_game_run COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=$<TARGET_FILE:dengine_exe>|--headless|--game|$<TARGET_FILE:test_game>"
+                -DEXPECT_EXIT=0
+                "-DEXPECT=game 'test_game' attached from library|${_de_hg_expect}"
+                -P "${_de_hg_script}")
+            list(APPEND _de_hg_tests host_game_run)
+        endif()
+    else()
+        # Static form (Shipping, or Windows without DE_BUILD_SHARED): one executable, nothing
+        # loaded (de_host_desc.game_library is NULL, static_api is set).
+        add_test(NAME host_game_run COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:test_game>|--headless"
+            -DEXPECT_EXIT=0
+            "-DEXPECT=game 'test_game' attached .statically linked.|${_de_hg_expect}"
+            "-DREJECT=attached from library"
+            -P "${_de_hg_script}")
+        list(APPEND _de_hg_tests host_game_run)
+    endif()
+
+    # Every way a library can be refused: exit code 1 and the error in the log.
+    if(TARGET dengine_exe)
+        set(_de_hg_cases
+            "missing_library|${DE_HOST_PLAIN_GAME_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}no_such_game${_de_hg_suffix}|no such file.*DE_ERR_NOT_FOUND"
+            "missing_symbol|${_de_hg_plain}_no_symbol${_de_hg_suffix}|does not export de_game_get_api.. .DE_ERR_NOT_FOUND"
+            "bad_version|${_de_hg_plain}_bad_version${_de_hg_suffix}|DE_ERR_VERSION_MISMATCH"
+            "missing_callback|${_de_hg_plain}_no_callback${_de_hg_suffix}|de_game_api.register_systems callback .DE_ERR_INVALID_ARGUMENT")
+        foreach(_de_case IN LISTS _de_hg_cases)
+            string(REPLACE "|" ";" _de_case "${_de_case}")
+            list(GET _de_case 0 _de_name)
+            list(GET _de_case 1 _de_lib)
+            list(GET _de_case 2 _de_re)
+            add_test(NAME host_game_${_de_name} COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=$<TARGET_FILE:dengine_exe>|--headless|--game|${_de_lib}"
+                -DEXPECT_EXIT=1
+                "-DEXPECT=${_de_re}|de_host_run failed"
+                "-DREJECT=test_game: calls"
+                -P "${_de_hg_script}")
+            list(APPEND _de_hg_tests host_game_${_de_name})
+        endforeach()
+    endif()
+
+    # Only de_game_get_api is exported (macOS nm -gU; Linux nm -D).
+    if(DE_GAME_DYLIB AND NOT WIN32 AND CMAKE_NM)
+        add_test(NAME host_game_exports COMMAND "${CMAKE_COMMAND}"
+            "-DNM=${CMAKE_NM}" "-DLIB=$<TARGET_FILE:test_game>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/check_exports.cmake")
+        list(APPEND _de_hg_tests host_game_exports)
+    endif()
+
+    if(_de_hg_tests)
+        set_tests_properties(${_de_hg_tests} PROPERTIES
+            LABELS "unit;host" TIMEOUT 150 ENVIRONMENT "${_de_hg_env}")
+    endif()
+endif()

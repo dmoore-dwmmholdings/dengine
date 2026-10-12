@@ -1,0 +1,8 @@
+# Project file of the test_game fixture (DENG-92). de_add_game(GAME_TOML) copies it next to the
+# game binary, where it is game:/game.toml; check_run.cmake looks for the name below in the log
+# ("Fixture Game exited normally"), which proves the host read this file.
+[game]
+name = "Fixture Game"
+
+[tasks]
+workers = 1

@@ -413,9 +413,9 @@ TEST_F(engine, host_run_api_version_mismatch, host_fx) {
 TEST_F(engine, host_run_no_game, host_fx) {
     de_host_desc d = host_desc(NULL, "game:/host_run.toml");
     EXPECT_EQ(de_host_run(&d), 1);
-    d.game_library = "libnothing.dylib"; /* DENG-92 loads libraries */
+    d.game_library = "libnothing.dylib"; /* DENG-92: a library that is not there */
     EXPECT_EQ(de_host_run(&d), 1);
-    EXPECT_TRUE(logged("DE_ERR_UNSUPPORTED"));
+    EXPECT_TRUE(logged("DE_ERR_NOT_FOUND"));
 }
 
 TEST_F(engine, host_run_game_toml_arg, host_fx) {
