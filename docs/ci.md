@@ -1,8 +1,31 @@
 # Continuous integration
 
 DEngine uses GitHub Actions. There are three workflows in `.github/workflows/`. They run on a push
-to `main` or `sprint/**`, on every pull request, and by hand (`workflow_dispatch`). Each workflow
-has one concurrency group per branch, so a new push cancels the run that it replaces.
+to `main`, `dev` or `sprint/**`, on every pull request, and by hand (`workflow_dispatch`). Each
+workflow has one concurrency group per branch, so a new run on a branch cancels the run that it
+replaces (also a second `gh workflow run` on the same branch).
+
+## Tiers: quick and full
+
+Workers run CI on their `feature/**` branch before review (`docs/agents/WORKER.md`), up to six
+branches at a time, so the full matrix (17 build and sanitizer jobs, 6 of them on Windows) kept the
+runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
+
+| Tier | When | Jobs |
+|---|---|---|
+| quick | a run on a `feature/**` branch | windows msvc Debug, linux gcc Dev, headless linux Release, linux clang ASan+UBSan, linux clang TSan |
+| full | every other run: `dev`, `main`, `sprint/**`, pull requests | every job in the tables below |
+
+- A first `plan` job picks the tier and builds the matrix, so the jobs are listed once, in the
+  `plan` step, each with `"quick": true` if it is in the quick tier.
+- `gh workflow run CI --ref <branch> -f tier=full` (or `quick`) overrides the choice.
+- The quick jobs are the ones that caught most branch failures: MSVC warnings, GCC flow warnings
+  that only fire in optimized builds, the build without GPU and window modules, Linux-only UB and
+  data races. Workers also run `ci-macos-asan` and the `windows-xwin-dev` cross-build on the
+  host before they push.
+- What the quick tier misses (clang-cl, MSVC Release, GCC TSan, macOS jobs, headless Windows) is
+  caught by the full run on `dev` after the merge; the orchestrator files a fix task for it.
+- `checks.yml` is small (three Ubuntu jobs) and always runs in full.
 
 Every build job runs a preset from `CMakePresets.json`. To reproduce a job locally, run the same
 preset on a host of the same OS (see `docs/building.md`):
