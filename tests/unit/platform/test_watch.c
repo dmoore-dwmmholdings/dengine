@@ -533,6 +533,98 @@ TEST_F(watch, merge_transient, watch_fx) {
     EXPECT_EQ(de__watch_pending_count(w), 0u);
 }
 
+/* A new file whose writer still has it open is held past the debounce window until the next
+ * change of its path (DENG-383). On Linux CI, the fsync in de_file_write_all_atomic took up to
+ * 167 ms under I/O load: the temporary's CREATED was delivered before the rename, which then
+ * came out as RENAMED from the temporary. Synthetic posts, so the rules are checked without OS
+ * timing. */
+TEST_F(watch, merge_held, watch_fx) {
+    fresh_dir(f, "merge_held");
+    start(f, "scratch:/", true, 50);
+    de_file_watch *w = f->w;
+    /* Created and still open, for five windows: nothing is delivered. */
+    post(w, DE__WATCH_RAW_CREATED_OPEN, "save.txt.tmp", false, 0);
+    post(w, DE__WATCH_RAW_CREATED_OPEN, "new.txt", false, 0);
+    post(w, DE__WATCH_RAW_CREATED_OPEN, "gone.tmp", false, 0);
+    pump(w, f->r, 0, 250);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 0u);
+    ASSERT_EQ(de__watch_pending_count(w), 3u);
+    /* The writers close: the temporary is renamed over a new target (an atomic save, one
+     * MODIFIED), a file stays (CREATED), a file is removed (nothing). The window counts from
+     * the close. */
+    u64 closed = de_time_now_ns();
+    post(w, DE__WATCH_RAW_MODIFIED, "save.txt.tmp", false, 0);
+    post(w, DE__WATCH_RAW_MOVED_FROM, "save.txt.tmp", false, 83);
+    post(w, DE__WATCH_RAW_MOVED_TO, "save.txt", false, 83);
+    post(w, DE__WATCH_RAW_MODIFIED, "new.txt", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "gone.tmp", false, 0);
+    pump(w, f->r, 2, 300);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 2u);
+    int saved = find_event(f->r, "scratch:/save.txt", DE_WATCH_MODIFIED);
+    int created = find_event(f->r, "scratch:/new.txt", DE_WATCH_CREATED);
+    ASSERT_TRUE(saved >= 0);
+    ASSERT_TRUE(created >= 0);
+    EXPECT_GE(f->r->ev[saved].time_ns, closed + 50 * MS);
+    EXPECT_GE(f->r->ev[created].time_ns, closed + 50 * MS);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+    /* A writer that never closes: CREATED once the hold limit passes. */
+    memset(f->r, 0, sizeof *f->r);
+    de__watch_set_hold_limit(w, 200);
+    u64 opened = de_time_now_ns();
+    post(w, DE__WATCH_RAW_CREATED_OPEN, "kept_open.log", false, 0);
+    pump(w, f->r, 1, 100);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 1u);
+    EXPECT_STREQ(f->r->ev[0].path, "scratch:/kept_open.log");
+    EXPECT_EQ(f->r->ev[0].change, DE_WATCH_CREATED);
+    EXPECT_GE(f->r->ev[0].time_ns, opened + 200 * MS);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+}
+
+#if defined(__linux__)
+/* Opens `rel` for writing (created), writes `text` and keeps it open. */
+static de_file *open_writer(const watch_fx *f, const char *rel, const char *text) {
+    char p[SUBPATH_MAX];
+    native(f, rel, p, sizeof p);
+    de_file *file = NULL;
+    EXPECT_EQ(de__file_open_native(p, DE_FILE_WRITE, de_heap_allocator(), &file), DE_OK);
+    if (file != NULL)
+        EXPECT_EQ(de_file_write(file, text, strlen(text)), DE_OK);
+    return file;
+}
+
+/* An atomic save whose writer keeps the temporary open for longer than the debounce window,
+ * as a slow fsync does under I/O load (DENG-383), is still one MODIFIED for the target. inotify
+ * reports the writer's close; FSEvents and ReadDirectoryChangesW do not, so this is Linux only
+ * (platform: File Watching, known gaps). */
+TEST_F(watch, atomic_save_slow_writer, watch_fx) {
+    fresh_dir(f, "atomic_slow");
+    write_file(f, "target.txt", "old contents");
+    start(f, "scratch:/", true, 100);
+    const char *targets[] = {"target.txt", "fresh.txt"}; /* existing, then new */
+    for (int i = 0; i < 2; ++i) {
+        memset(f->r, 0, sizeof *f->r);
+        char tmp[64], vpath[64];
+        snprintf(tmp, sizeof tmp, "%s.tmp-slow", targets[i]);
+        snprintf(vpath, sizeof vpath, "scratch:/%s", targets[i]);
+        de_file *file = open_writer(f, tmp, "new contents");
+        ASSERT_TRUE(file != NULL);
+        pump(f->w, f->r, 0, 400); /* four windows with the temporary open */
+        u32 early = f->r->count;
+        de_file_close(file);
+        rename_path(f, tmp, targets[i]);
+        pump(f->w, f->r, 1, 500);
+        dump(f->r);
+        ASSERT_EQ(early, 0u);
+        ASSERT_EQ(f->r->count, 1u);
+        ASSERT_STREQ(f->r->ev[0].path, vpath);
+        ASSERT_EQ(f->r->ev[0].change, DE_WATCH_MODIFIED);
+    }
+}
+#endif
+
 #if defined(__APPLE__)
 /* File IDs far above any the volume has handed out: "created after the start" to the backend,
  * and never on disk, so lstat fails as for a file that is already gone. */

@@ -10,7 +10,13 @@
  *
  * Events: IN_CREATE -> CREATED, IN_CLOSE_WRITE -> MODIFIED (once per writer, not per write),
  * IN_DELETE -> DELETED, IN_MOVED_FROM / IN_MOVED_TO -> MOVED_FROM / MOVED_TO paired by the
- * inotify cookie, IN_Q_OVERFLOW -> RESCAN. */
+ * inotify cookie, IN_Q_OVERFLOW -> RESCAN.
+ *
+ * IN_CREATE of a regular file comes from open(O_CREAT), so its writer still has it open and
+ * IN_CLOSE_WRITE follows: it is posted as CREATED_OPEN, which holds the path until the next
+ * change (DENG-383). Otherwise a writer slower than the debounce window, such as the fsync of
+ * de_file_write_all_atomic under I/O load, gets its temporary file delivered as CREATED before
+ * the rename that makes it an atomic save. */
 #define _GNU_SOURCE /* pipe2, O_CLOEXEC */
 
 #include <dengine/de_platform.h>
@@ -197,6 +203,21 @@ static void remove_tree(de__watch_backend *b, const char *rel, size_t rel_len) {
     }
 }
 
+/* Whether IN_CREATE of the file `rel` is followed by an IN_CLOSE_WRITE: a regular file with one
+ * link was made by open(O_CREAT) (link(), symlink() and mknod() make others and report no
+ * close). A file that is gone already counts too: its IN_DELETE or IN_MOVED_FROM is queued and
+ * ends the hold. A file created without write access reports no close; the hold limit of the
+ * common layer covers it. */
+static bool created_open(const de__watch_backend *b, const char *rel, size_t rel_len) {
+    char path[DE_FS_PATH_MAX];
+    struct stat st;
+    if (!native_path(b, rel, rel_len, path, sizeof path))
+        return false;
+    if (lstat(path, &st) != 0)
+        return errno == ENOENT;
+    return S_ISREG(st.st_mode) && st.st_nlink == 1;
+}
+
 static void handle(de__watch_backend *b, const struct inotify_event *e) {
     if (e->mask & IN_Q_OVERFLOW) {
         de__watch_post(b->w, DE__WATCH_RAW_RESCAN, "", 0, true, 0);
@@ -217,7 +238,9 @@ static void handle(de__watch_backend *b, const struct inotify_event *e) {
         return;
     bool is_dir = (e->mask & IN_ISDIR) != 0;
     if (e->mask & IN_CREATE) {
-        de__watch_post(b->w, DE__WATCH_RAW_CREATED, rel, rl, is_dir, 0);
+        bool writing = !is_dir && created_open(b, rel, rl);
+        de__watch_post(b->w, writing ? DE__WATCH_RAW_CREATED_OPEN : DE__WATCH_RAW_CREATED, rel, rl,
+                       is_dir, 0);
         if (is_dir && b->recursive)
             add_tree(b, rel, rl, true);
     }

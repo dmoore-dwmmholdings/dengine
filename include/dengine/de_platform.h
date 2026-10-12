@@ -1388,7 +1388,9 @@ DE_API u32 de_io_pump(u32 max_completions);
  * under it with virtual paths. The OS reports changes on its own threads; the watch keeps them
  * in a pending table and merges them per path. A change is delivered once nothing has happened
  * to its path for the debounce window (editors save in bursts: temporary file, rename, several
- * writes). Callbacks run only inside de_file_watch_poll(), on the thread that calls it.
+ * writes). On Linux a new file counts as changing until its writer closes it (at most 10 s),
+ * so a writer slower than the window (an fsync under I/O load) still merges with what follows.
+ * Callbacks run only inside de_file_watch_poll(), on the thread that calls it.
  *
  * Merge rules for one path within a window: CREATED + MODIFIED -> CREATED; CREATED + DELETED ->
  * nothing; DELETED + CREATED -> MODIFIED (replaced); a rename -> one RENAMED with the new path
