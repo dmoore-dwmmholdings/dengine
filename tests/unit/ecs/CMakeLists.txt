@@ -84,3 +84,34 @@ if(TARGET test_change)
     target_include_directories(test_change PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_change PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-352: world snapshots (snap.*) and the world checksum (checksum.*). snap.perf_100k asserts
+# a wall-clock bound, so the snapshot executable (test_snap) carries the `timing` label and its
+# tests run alone (RUN_SERIAL; see Decision: Timing tests run serially and loosen their bounds on
+# CI).
+de_add_test(NAME snap SOURCES test_snapshot.c LIBS de_ecs LABELS unit timing TIMEOUT 300)
+if(TARGET test_snap AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    # de_add_test() registers one CTest entry per TEST from a generated file whose path its
+    # include file leaves in `_de_tests`. This file is appended to TEST_INCLUDE_FILES right after
+    # the snapshot one (before any later de_add_test), so `_de_tests` is still the snapshot list
+    # when it runs; it marks every snap.* entry RUN_SERIAL.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_snapshot_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_snap_adds REGEX "^add_test\\(\\[==\\[snap\\.")
+    foreach(_de_line IN LISTS _de_snap_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                 "${CMAKE_CURRENT_BINARY_DIR}/test_snapshot_serial.cmake")
+endif()
+de_add_test(NAME checksum SOURCES test_checksum.c LIBS de_ecs)
+foreach(_de_ecs_test test_snap test_checksum)
+    if(TARGET ${_de_ecs_test})
+        target_include_directories(${_de_ecs_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ecs_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
