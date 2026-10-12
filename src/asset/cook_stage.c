@@ -1,8 +1,9 @@
 /*
  * cook_stage.c: the COOK stage of the load pipeline (SPEC §11.5; DENG-209). See
  * cook_stage_internal.h. With DE_HAS_COOKER (Debug and Dev builds with tools) the stage runs the
- * cooker library in-process; without it, this file references no cooker symbol and an importer
- * type fails with "cooker not available", as it did in S07.
+ * cooker library in-process on its own normal-priority cook threads (DENG-387); without it, this
+ * file references no cooker symbol and an importer type fails with "cooker not available", as it
+ * did in S07.
  */
 
 #include "asset/cook_stage_internal.h"
@@ -15,9 +16,14 @@
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
+#include <dengine/de_debug.h> /* DENG-387: de_crash_thread_init on the cook threads */
+#include <dengine/de_math.h>  /* DENG-387: de_fp_env_init_thread on the cook threads */
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
 #include <dengine/de_task.h>
+
+#include "core/de_compiler.h"
+#include "platform/de_atomic.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -75,6 +81,11 @@ bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_
     return false;
 }
 
+void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *out) {
+    (void)s;
+    memset(out, 0, sizeof *out);
+}
+
 #else /* DE_HAS_COOKER */
 
 /* ---- The stage ------------------------------------------------------------------------------- */
@@ -88,21 +99,55 @@ typedef struct cook_sub {
     size_t name_size;
 } cook_sub;
 
+typedef struct cook_task cook_task;
+
+/* DENG-387: the most cook threads a stage starts (one per 4 logical cores, at least one). */
+#define DE__COOK_THREADS_MAX 4u
+
 struct de__cook_stage {
     de_cooker *cooker;
     de_mutex lock; /* guards the sub-asset table: cooks add on workers, the main thread reads */
     cook_sub *subs;
     u32 sub_count, sub_cap;
     de_hashmap sub_index; /* id hash -> index into subs (probed, never iterated) */
+
+    /* DENG-387: the cook threads (DE_THREAD_NORMAL) and their queue, one FIFO per load priority,
+     * guarded by q_lock. None without a task system: cooks then run inline. */
+    de_mutex q_lock;
+    de_cond q_cond;
+    cook_task *q_head[DE__LOAD_PRIORITY_COUNT], *q_tail[DE__LOAD_PRIORITY_COUNT];
+    bool stopping;
+    de_thread *threads[DE__COOK_THREADS_MAX];
+    u32 thread_count;
+    de_atomic_u64 cooks, cooks_on_threads;
 };
 
-/* The stage, created on the first cook. Main thread. */
+static void cook_task_run(void *user);
+static i32 cook_thread_main(void *user);
+
+/* Stops and joins the cook threads. Nothing may be queued. */
+static void threads_stop(de__cook_stage *cs) {
+    de_mutex_lock(&cs->q_lock);
+    cs->stopping = true;
+    de_cond_broadcast(&cs->q_cond);
+    de_mutex_unlock(&cs->q_lock);
+    for (u32 i = 0; i < cs->thread_count; ++i)
+        (void)de_thread_join(cs->threads[i]);
+    cs->thread_count = 0;
+}
+
+/* The stage, created on the first cook. Main thread. With a task system it starts the cook
+ * threads: normal priority, so no load waits on a below-normal thread (Trama "Decision: Asset
+ * loads never wait on below-normal threads"), and not the frame workers, so a long cook never
+ * stalls a frame. On failure the error context says why. */
 static de__cook_stage *stage_get(de__pipeline *pl) {
     if (pl->cook != NULL)
         return pl->cook;
     de__cook_stage *cs = DE_NEW(pl->alloc, de__cook_stage, DE_MEM_ASSET);
-    if (cs == NULL)
+    if (cs == NULL) {
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "out of memory for the cooker");
         return NULL;
+    }
     memset(cs, 0, sizeof *cs);
     de_cooker_desc cd = {.allocator = pl->alloc,
                          .tasks = pl->tasks,
@@ -119,9 +164,40 @@ static de__cook_stage *stage_get(de__pipeline *pl) {
     if (de_hashmap_init(&cs->sub_index, &hd) != DE_OK) {
         de_cooker_destroy(cs->cooker);
         DE_FREE(pl->alloc, cs, sizeof *cs);
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "out of memory for the cooker");
         return NULL;
     }
     de_mutex_init(&cs->lock);
+    de_mutex_init(&cs->q_lock);
+    de_cond_init(&cs->q_cond);
+    de_atomic_init_u64(&cs->cooks, 0);
+    de_atomic_init_u64(&cs->cooks_on_threads, 0);
+    if (pl->tasks != NULL) {
+        u32 n = de_cpu_logical_cores() / 4u;
+        n = n < 1u ? 1u : n > DE__COOK_THREADS_MAX ? DE__COOK_THREADS_MAX : n;
+        de_result r = DE_OK;
+        for (u32 i = 0; i < n && r == DE_OK; ++i) {
+            char name[24]; /* "de-cook-" and any u32 */
+            snprintf(name, sizeof name, "de-cook-%u", (unsigned)i);
+            r = de_thread_create(cook_thread_main, cs, name, DE_THREAD_NORMAL, 0,
+                                 &cs->threads[cs->thread_count]);
+            if (r == DE_OK)
+                cs->thread_count++;
+        }
+        if (cs->thread_count == 0) {
+            const de_error *e = de_error_last();
+            char msg[DE__LOAD_MSG_MAX]; /* the job's message adds the asset; keep 200 bytes */
+            snprintf(msg, sizeof msg, "%.200s", e != NULL ? e->message : de_result_str(r));
+            de_cond_destroy(&cs->q_cond);
+            de_mutex_destroy(&cs->q_lock);
+            de_mutex_destroy(&cs->lock);
+            de_hashmap_free(&cs->sub_index);
+            de_cooker_destroy(cs->cooker);
+            DE_FREE(pl->alloc, cs, sizeof *cs);
+            (void)DE_FAIL(r, "cannot start a cook thread: %s", msg);
+            return NULL;
+        }
+    }
     pl->cook = cs;
     return cs;
 }
@@ -130,6 +206,9 @@ void de__cook_stage_shutdown(de__pipeline *pl) {
     de__cook_stage *cs = pl != NULL ? pl->cook : NULL;
     if (cs == NULL)
         return;
+    threads_stop(cs); /* every job is back, so the queue is empty */
+    de_cond_destroy(&cs->q_cond);
+    de_mutex_destroy(&cs->q_lock);
     for (u32 i = 0; i < cs->sub_count; ++i)
         DE_FREE(pl->alloc, cs->subs[i].name, cs->subs[i].name_size);
     if (cs->subs != NULL)
@@ -186,6 +265,16 @@ static void subs_record(de__pipeline *pl, de__cook_stage *cs, de_asset_id parent
         cs->subs[cs->sub_count++] = e;
     }
     de_mutex_unlock(&cs->lock);
+}
+
+void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *out) {
+    memset(out, 0, sizeof *out);
+    const de__cook_stage *cs = s != NULL && s->pipeline != NULL ? s->pipeline->cook : NULL;
+    if (cs == NULL)
+        return;
+    out->threads = cs->thread_count;
+    out->cooks = de_atomic_load_u64(&cs->cooks, DE_ATOMIC_ACQUIRE);
+    out->cooks_on_threads = de_atomic_load_u64(&cs->cooks_on_threads, DE_ATOMIC_ACQUIRE);
 }
 
 bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_hash) {
@@ -296,7 +385,9 @@ bool de__cook_stage_plan(de_asset_system *s, u32 slot, de__cook_plan *p) {
     /* The cooker mirrors the runtime registration of the type. */
     de__cook_stage *cs = stage_get(pl);
     if (cs == NULL) {
-        plan_fail(p, DE_ERR_OUT_OF_MEMORY, "asset \"%s\": out of memory for the cooker", shown);
+        const de_error *e = de_error_last();
+        plan_fail(p, e != NULL ? e->result : DE_ERR_OUT_OF_MEMORY, "asset \"%s\": %s", shown,
+                  e != NULL ? e->message : "out of memory for the cooker");
         return true;
     }
     if (!de_cooker_has_type(cs->cooker, import_type->name) &&
@@ -316,11 +407,13 @@ bool de__cook_stage_plan(de_asset_system *s, u32 slot, de__cook_plan *p) {
     return true;
 }
 
-/* ---- The cook task (a background worker) ------------------------------------------------------
+/* ---- The cook task (a cook thread) -----------------------------------------------------------
  */
 
 /* What the task needs besides the job: one block with the strings. */
-typedef struct cook_task {
+struct cook_task {
+    cook_task *next; /* (q_lock) the queue of its priority */
+    u8 priority;     /* de__load_priority at submit */
     de__pjob *job;
     const de_asset_type_desc *import_type; /* registry entries never move */
     const char *parent_id;
@@ -328,7 +421,46 @@ typedef struct cook_task {
     const char *asset_root;
     const char *source;
     size_t size;
-} cook_task;
+};
+
+/* DENG-387: set on the cook threads (the stats count the cooks that ran there). */
+static DE_THREAD_LOCAL bool tl_cook_thread;
+
+/* The most urgent queued task, or NULL. Under q_lock. */
+static cook_task *queue_pop(de__cook_stage *cs) {
+    for (u32 p = 0; p < DE__LOAD_PRIORITY_COUNT; ++p) {
+        cook_task *t = cs->q_head[p];
+        if (t == NULL)
+            continue;
+        cs->q_head[p] = t->next;
+        if (cs->q_head[p] == NULL)
+            cs->q_tail[p] = NULL;
+        return t;
+    }
+    return NULL;
+}
+
+static i32 cook_thread_main(void *user) {
+    de__cook_stage *cs = (de__cook_stage *)user;
+    de_fp_env_init_thread(); /* as the task workers: importers run under the engine's FP mode */
+    de_crash_thread_init();
+    tl_cook_thread = true;
+    de_mutex_lock(&cs->q_lock);
+    for (;;) {
+        cook_task *t = queue_pop(cs);
+        if (t == NULL) {
+            if (cs->stopping)
+                break;
+            de_cond_wait(&cs->q_cond, &cs->q_lock);
+            continue;
+        }
+        de_mutex_unlock(&cs->q_lock);
+        cook_task_run(t);
+        de_mutex_lock(&cs->q_lock);
+    }
+    de_mutex_unlock(&cs->q_lock);
+    return 0;
+}
 
 static char *put_str(char **at, const char *src) {
     size_t n = strlen(src) + 1u;
@@ -357,6 +489,9 @@ static void cook_task_run(void *user) {
         de__pipeline_finish(job);
         return;
     }
+    (void)de_atomic_fetch_add_u64(&cs->cooks, 1, DE_ATOMIC_ACQ_REL);
+    if (tl_cook_thread)
+        (void)de_atomic_fetch_add_u64(&cs->cooks_on_threads, 1, DE_ATOMIC_ACQ_REL);
 
     /* The job's copies, not the manifest: a manifest reload may free it meanwhile. */
     de__manifest_asset a;
@@ -440,6 +575,9 @@ void de__cook_stage_begin(de__pjob *job, const de__cook_plan *p) {
         return;
     }
     char *at = (char *)(t + 1);
+    t->next = NULL;
+    t->priority =
+        job->priority < DE__LOAD_PRIORITY_COUNT ? job->priority : (u8)DE__LOAD_PRIORITY_NORMAL;
     t->job = job;
     t->import_type = p->import_type;
     t->parent_id = put_str(&at, p->parent_id);
@@ -447,13 +585,26 @@ void de__cook_stage_begin(de__pjob *job, const de__cook_plan *p) {
     t->source = put_str(&at, p->source);
     t->subasset = p->subasset != NULL ? put_str(&at, p->subasset) : NULL;
     t->size = size;
-    /* The cook reads files and may run long: a background worker, like the OPEN stage, and the
-     * job shows as OPEN (cancel then lets it finish and discards it). */
+    /* The job shows as OPEN (cancel then lets the cook finish and discards it). The cook reads
+     * files and may run long, so it runs on a cook thread, most urgent load priority first
+     * (DENG-387). Not DE_TASK_POOL_BACKGROUND: its workers run below normal priority, and on
+     * Windows a busy main thread and frame workers starve them for seconds, while a game waits
+     * on the cooked asset (Trama "Decision: Asset loads never wait on below-normal threads").
+     * Not DE_TASK_POOL_FRAME: a cold cook can take long, and it would stall the frame. */
     de__pjob_set_stage(job, DE__PJOB_OPEN);
-    if (pl->tasks != NULL)
-        de_task_submit(pl->tasks, DE_TASK_POOL_BACKGROUND, cook_task_run, t, &pl->task_counter);
+    de__cook_stage *cs = pl->cook;
+    if (cs == NULL || cs->thread_count == 0) {
+        cook_task_run(t); /* no task system: every stage runs inline */
+        return;
+    }
+    de_mutex_lock(&cs->q_lock);
+    if (cs->q_tail[t->priority] != NULL)
+        cs->q_tail[t->priority]->next = t;
     else
-        cook_task_run(t);
+        cs->q_head[t->priority] = t;
+    cs->q_tail[t->priority] = t;
+    de_cond_signal(&cs->q_cond);
+    de_mutex_unlock(&cs->q_lock);
 }
 
 #endif /* DE_HAS_COOKER */

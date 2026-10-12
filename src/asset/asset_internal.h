@@ -77,6 +77,12 @@ struct de_asset_system {
     /** mount.c: the mounted .dpak packs, highest priority first (mount_internal.h); NULL until
      * the first de_asset_pack_mount. */
     struct de__mount_stack *mounts;
+
+    /* ---- DENG-387: blocking waits (append below) ----------------------------------------- */
+    /** status.c: wakes a thread blocked in de_asset_wait or in the pipeline shutdown when a
+     * load makes progress (load_internal.h, de__asset_wake). Created by de_asset_system_create,
+     * destroyed last. */
+    struct de__asset_wake *wake;
 };
 
 /** The current locale, or NULL when none is set. */

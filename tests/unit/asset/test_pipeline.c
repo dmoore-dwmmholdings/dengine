@@ -18,6 +18,7 @@
 #include <dengine/de_task.h>
 
 #include "asset/asset_internal.h"
+#include "asset/cook_stage_internal.h" /* DENG-387 */
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
 #include "asset/pipeline_internal.h"
@@ -342,8 +343,8 @@ static void wait_flag(pipe_fx *f, de_atomic_u32 *flag) {
     wait_count(f, flag, 1);
 }
 
-/* de_asset_wait, but blocking in the OS between updates: de_asset_wait polls with de_sleep_ns,
- * which spins (DENG-386 follow-up). */
+/* Updates until `h` is final, blocking in the OS between updates (DENG-386). de_asset_wait
+ * blocks in the OS too since DENG-387; priority_order keeps this loop. */
 static de_load_state wait_load(pipe_fx *f, de_load_handle h) {
     u64 end = de_time_now_ns() + WAIT_NS;
     de_asset_system_update(f->s, NULL);
@@ -1145,4 +1146,160 @@ TEST_F(pipeline, stress_10k, pipe_fx) {
     drain(f);
     EXPECT_EQ(f->s->load->live_requests, 0u);
     free(ids);
+}
+
+/* ---- pipeline.cook_ready_uncapped (DENG-387) ---------------------------------------------------
+ *
+ * The COOK stage (DE_HAS_COOKER builds: Debug and Dev) runs on the stage's own cook threads at
+ * normal priority, never on a below-normal background worker: on Windows a busy main thread and
+ * busy frame workers starve those for seconds (Trama "Decision: Asset loads never wait on
+ * below-normal threads"). The main thread runs an uncapped loop (updates; no sleep, no wait)
+ * until 8 cooked assets are READY, within 5 s. Then the main thread blocks on the wake object of
+ * de_asset_wait (with a 5 s limit) while an importer holds a cook for about 20 ms: the pipeline's
+ * finished job ends the block (a signalled wake-up), and de_asset_wait applies it.
+ *
+ * The sources hold a nonce and the cook cache is in the scratch directory, so the importer runs
+ * (no cache hit), also when several copies of the test run at once. */
+
+#if DE_HAS_COOKER
+static de_atomic_u32 g_ptc_closed, g_ptc_reached;
+
+/* Copies the source. A source that starts with "HOLD" waits while g_ptc_closed is set. */
+static de_result ptc_import(de_asset_import_ctx *ctx) {
+    u64 n = 0;
+    const char *src = (const char *)de_asset_import_source(ctx, &n);
+    if (n >= 4 && memcmp(src, "HOLD", 4) == 0) {
+        de_atomic_store_u32(&g_ptc_reached, 1, DE_ATOMIC_RELEASE);
+        while (de_atomic_load_u32(&g_ptc_closed, DE_ATOMIC_ACQUIRE) != 0)
+            nap_ns(1000000u);
+    }
+    return de_asset_import_write(ctx, src, n);
+}
+
+static i32 ptc_open_later(void *user) {
+    (void)user;
+    nap_ns(20000000u); /* 20 ms */
+    de_atomic_store_u32(&g_ptc_closed, 0, DE_ATOMIC_RELEASE);
+    return 0;
+}
+#endif
+
+TEST_F(pipeline, cook_ready_uncapped, pipe_fx) {
+#if !DE_HAS_COOKER
+    SKIP("this build does not link the cooker (DE_HAS_COOKER: Debug and Dev with tools)");
+#else
+    /* A system with its cook cache in the scratch directory, and the `ptc` importer type. */
+    de_asset_system_destroy(f->s);
+    f->s = NULL;
+    de_asset_system_desc sd = {0};
+    sd.allocator = &f->alloc;
+    sd.tasks = f->tasks;
+    sd.io_threads = 2;
+    sd.cache_dir = "pipe:/decache";
+    ASSERT_EQ(de_asset_system_create(&sd, &f->s), DE_OK);
+    register_types(f);
+    static const char *const exts[] = {".ptc"};
+    de_asset_type_desc td = {0};
+    td.name = "ptc";
+    td.extensions = exts;
+    td.extension_count = 1;
+    td.load = pt_load;
+    td.unload = pt_unload;
+    td.import = ptc_import;
+    td.user = &f->c;
+    ASSERT_TRUE(DE_HANDLE_VALID(de_asset_type_register(f->s, &td)));
+
+    enum { N = 8 };
+    /* The time, and a stack address (ASLR differs per process): copies started at the same
+     * instant do not share file names. */
+    char here = 0;
+    const u64 stack_bits = (u64)(uintptr_t)&here;
+    const unsigned long long nonce =
+        (unsigned long long)(de_time_now_ns() ^ (stack_bits << 20) ^ (stack_bits >> 12));
+    char file[N + 1][64], text[N + 1][64], name[N + 1][16];
+    char manifest[2048];
+    int at = snprintf(manifest, sizeof manifest, "[assets]\n");
+    for (u32 i = 0; i <= N; ++i) {
+        snprintf(file[i], sizeof file[i], "ck_%llx_%u.bin", nonce, (unsigned)i);
+        snprintf(name[i], sizeof name[i], "ck%u", (unsigned)i);
+        if (i < N)
+            snprintf(text[i], sizeof text[i], "cooked %u %llx", (unsigned)i, nonce);
+        else
+            snprintf(text[i], sizeof text[i], "HOLD %llx", nonce);
+        char path[96];
+        snprintf(path, sizeof path, "pipe:/%.60s", file[i]);
+        ASSERT_EQ(de_file_write_all_atomic(path, text[i], strlen(text[i])), DE_OK);
+        at += snprintf(manifest + at, sizeof manifest - (size_t)at,
+                       "\"%s\" = { type = \"ptc\", source = \"%s\" }\n", name[i], file[i]);
+        ASSERT_LT((size_t)at, sizeof manifest);
+    }
+    install_manifest(f->s, manifest);
+
+    /* The uncapped loop. */
+    de_asset_id ids[N];
+    for (u32 i = 0; i < N; ++i)
+        ids[i] = id_of(name[i]);
+    const u64 bound = (u64)5 * 1000000000u;
+    u64 t0 = de_time_now_ns();
+    de_load_handle h = de_asset_load_many(f->s, ids, N, 0);
+    de_load_state st = DE_LOAD_PENDING;
+    u64 took = 0, frames = 0;
+    for (;;) {
+        de_asset_system_update(f->s, NULL);
+        ++frames;
+        st = de_asset_status(f->s, h, NULL);
+        took = de_time_now_ns() - t0;
+        if ((st != DE_LOAD_PENDING && st != DE_LOAD_LOADING) || took >= bound)
+            break;
+    }
+    EXPECT_EQ((int)st, (int)DE_LOAD_READY);
+    EXPECT_LT(took, bound);
+    if (st != DE_LOAD_READY || took >= bound)
+        printf("  %u cooked assets: state %d after %.1f ms (%llu frames)\n", (unsigned)N, (int)st,
+               (double)took / 1e6, (unsigned long long)frames);
+    for (u32 i = 0; i < N; ++i) {
+        const pt_obj *o = obj_of(f, name[i]);
+        ASSERT_TRUE(o != NULL);
+        EXPECT_EQ(o->size, (u64)strlen(text[i]));
+        EXPECT_MEMEQ(pt_bytes(o), text[i], strlen(text[i]));
+    }
+    /* Every cook ran on a cook thread. */
+    de__cook_stage_stats cs;
+    de__cook_stage_get_stats(f->s, &cs);
+    EXPECT_GE(cs.threads, 1u);
+    EXPECT_GE(cs.cooks, (u64)N);
+    EXPECT_EQ(cs.cooks_on_threads, cs.cooks);
+    de_asset_release(f->s, h);
+
+    /* A held cook: nothing reports progress to the main thread until the job finishes, and
+     * then the finished job ends the block, long before its 5 s limit. */
+    de_atomic_store_u32(&g_ptc_closed, 1, DE_ATOMIC_RELEASE);
+    de_atomic_store_u32(&g_ptc_reached, 0, DE_ATOMIC_RELEASE);
+    de__asset_wake_reset(f->s);
+    h = de_asset_load(f->s, id_of(name[N]), 0);
+    de_thread *opener = NULL;
+    ASSERT_EQ(de_thread_create(ptc_open_later, NULL, "ptc-open", DE_THREAD_NORMAL, 0, &opener),
+              DE_OK);
+    t0 = de_time_now_ns();
+    const bool woken = de__asset_wake_block(f->s, bound);
+    took = de_time_now_ns() - t0;
+    (void)de_thread_join(opener);
+    EXPECT_TRUE(woken);
+    EXPECT_LT(took, bound);
+    EXPECT_EQ((int)de_asset_wait(f->s, h, WAIT_NS), (int)DE_LOAD_READY);
+    EXPECT_EQ(de_atomic_load_u32(&g_ptc_reached, DE_ATOMIC_ACQUIRE), 1u);
+    const pt_obj *o = obj_of(f, name[N]);
+    ASSERT_TRUE(o != NULL);
+    EXPECT_MEMEQ(pt_bytes(o), text[N], strlen(text[N]));
+    de__cook_stage_get_stats(f->s, &cs);
+    EXPECT_EQ(cs.cooks_on_threads, cs.cooks);
+    de_asset_release(f->s, h);
+    drain(f);
+
+    for (u32 i = 0; i <= N; ++i) {
+        char path[96];
+        snprintf(path, sizeof path, "pipe:/%.60s", file[i]);
+        (void)de_file_delete(path);
+    }
+#endif
 }

@@ -184,12 +184,18 @@ void de__pipeline_run(de__pipeline *pl, de_task_pool pool, de_task_fn fn, de__pj
 
 void de__pipeline_finish(de__pjob *job) {
     de__pipeline *pl = job->pl;
+    de_asset_system *s = job->s;
     de__pjob_set_stage(job, DE__PJOB_FINISHED);
+    /* DENG-387: pushed inside the wake lock, which then wakes a blocked waiter. Once the main
+     * thread has taken the job, this thread may only be inside that lock, never after it: the
+     * system's destroy uses the lock as a barrier before it frees the wake object. */
+    de__asset_wake_begin(s);
     void *head = de_atomic_load_ptr(&pl->done_head, DE_ATOMIC_RELAXED);
     do {
         job->done_next = (de__pjob *)head;
     } while (
         !de_atomic_cas_weak_ptr(&pl->done_head, &head, job, DE_ATOMIC_RELEASE, DE_ATOMIC_RELAXED));
+    de__asset_wake_end(s);
 }
 
 void de__pipeline_job_fail(de__pjob *job, de_result code, const char *fmt, ...) {
@@ -992,8 +998,10 @@ void de__pipeline_shutdown(de_asset_system *s) {
                 job_cancel(pl, job);
         }
         /* Wait for every job to come back: help with frame tasks on the main thread, else
-         * sleep briefly while the I/O threads finish. */
+         * block until a job finishes (I/O threads, cook threads). DENG-387: a blocking wait,
+         * not a spinning sleep; the flag is cleared before the update looks. */
         while (pl->live_jobs != 0) {
+            de__asset_wake_reset(s);
             pl_update(pl, s);
             if (pl->live_jobs == 0)
                 break;
@@ -1001,7 +1009,7 @@ void de__pipeline_shutdown(de_asset_system *s) {
                 !de_task_done(&pl->task_counter))
                 de_task_wait(pl->tasks, &pl->task_counter);
             else
-                de_sleep_ns(50000u);
+                (void)de__asset_wake_block(s, 10000000u); /* 10 ms safety net */
         }
         if (pl->tasks != NULL && de_task_worker_index() == 0)
             de_task_wait(pl->tasks, &pl->task_counter);
