@@ -1,5 +1,29 @@
-/* de_gpu.h — thin bindless RHI over D3D12 (Windows), Vulkan (Linux), Metal (macOS). SPEC.md §12.1.
- * No implicit state tracking: barriers come from the render graph (de_render.h). */
+/* de_gpu.h — thin bindless RHI over D3D12 (Windows), Vulkan (Linux), Metal (macOS).
+ * SPEC.md §12.1.
+ *
+ * Shape (S09, DENG-281):
+ *   - One device per backend. `(de_gpu_device_desc){0}` picks the platform default backend;
+ *     DE_GPU_NULL is a device-less backend for headless code and tests (buffers live in CPU
+ *     memory, commands are no-ops, fences complete at submit).
+ *   - Objects are typed handles (DE_HANDLE): 20-bit slot index and 12-bit generation, never 0.
+ *     A stale handle (destroyed object, or a slot that was reused) is detected in every build:
+ *     the call fails (invalid handle, NULL or DE_GPU_BINDLESS_INVALID) and sets the error context.
+ *   - Bindless: buffers, textures, samplers (and TLASes from S16) get uint32 indices into global
+ *     descriptor tables at creation. Shaders index with them (shaders/common/bindless.slang).
+ *     Index 0 of every table is reserved and never handed out: DE_GPU_BINDLESS_INVALID.
+ *   - Destruction is deferred: a destroyed object's handle is invalid at once, but the object and
+ *     its bindless indices are released only after every queue has completed the work submitted
+ *     before the destroy call. Destroy an object only after the command lists that use it have
+ *     been submitted.
+ *   - No implicit state tracking: barriers come from the caller (the render graph, de_render.h).
+ *   - Validation: create descs and submits are checked in every build (a bad desc fails with
+ *     DE_ERR_INVALID_ARGUMENT and a message naming the field); command recording is checked in
+ *     Debug and Dev builds. Messages go to the error context (de_error_last) and to the `gpu`
+ *     log category.
+ *
+ * Threading: device create/destroy on one thread. Object create/destroy, bindless queries, fence
+ * calls and queue submits are thread-safe. A de_gpu_cmd is recorded by one thread at a time.
+ */
 #ifndef DE_GPU_H
 #define DE_GPU_H
 #include "de_base.h"
@@ -18,11 +42,27 @@ DE_HANDLE(de_gpu_swapchain);
 DE_HANDLE(de_gpu_fence);
 DE_HANDLE(de_gpu_query_heap);
 
+/** The reserved bindless index 0: "no index". Returned when an object has no index. */
+#define DE_GPU_BINDLESS_INVALID 0u
+/** Root/push-constant limit per pipeline (SPEC §12.1). */
+#define DE_GPU_MAX_PUSH_CONSTANT_BYTES 128u
+/** Most color attachments of a pipeline or render pass. */
+#define DE_GPU_MAX_COLOR_ATTACHMENTS 8u
+/** Most mip levels of a texture (a 32768-texel edge). */
+#define DE_GPU_MAX_MIPS 16u
+
+/**
+ * Backend. DE_GPU_DEFAULT (0) picks the platform default: D3D12 on Windows, Metal on macOS,
+ * Vulkan elsewhere (de_gpu_platform_default_backend). The numbering is not stable across versions;
+ * never store these values in files (cooked shaders use their own target enum).
+ */
 typedef enum de_gpu_backend {
+    DE_GPU_DEFAULT = 0,
     DE_GPU_D3D12,
     DE_GPU_VULKAN,
     DE_GPU_METAL,
-    DE_GPU_NULL
+    DE_GPU_NULL, /**< no device: CPU-memory buffers, no-op commands, fences done at submit */
+    DE_GPU_BACKEND_COUNT_
 } de_gpu_backend;
 typedef enum de_gpu_queue {
     DE_QUEUE_GRAPHICS,
@@ -31,11 +71,17 @@ typedef enum de_gpu_queue {
     DE_QUEUE_COUNT_
 } de_gpu_queue;
 
+/** "d3d12", "vulkan", "metal", "null", "default"; "unknown" when out of range. Never NULL. */
+DE_API const char *de_gpu_backend_name(de_gpu_backend b);
+/** The backend DE_GPU_DEFAULT stands for on this platform (never DE_GPU_DEFAULT or NULL). */
+DE_API de_gpu_backend de_gpu_platform_default_backend(void);
+
 /* ---------- Capabilities ---------- */
 typedef enum de_rt_support { DE_RT_NONE, DE_RT_API_ONLY, DE_RT_HARDWARE } de_rt_support;
 
+/** What the device can do. Filled by the backend at device creation; constant afterwards. */
 typedef struct de_gpu_caps {
-    de_gpu_backend backend;
+    de_gpu_backend backend; /**< the backend actually used (never DE_GPU_DEFAULT) */
     char device_name[128];
     u32 vendor_id, device_id;
     u64 dedicated_vram, shared_memory;
@@ -46,19 +92,41 @@ typedef struct de_gpu_caps {
     bool enhanced_barriers; /* D3D12 */
     bool async_compute;
     u32 wave_size_min, wave_size_max;
-    u32 max_bindless_textures, max_bindless_buffers;
+    /** Bindless table sizes, one index space each (index 0 reserved in every space). */
+    u32 max_bindless_textures;         /**< sampled textures */
+    u32 max_bindless_buffers;          /**< buffers */
+    u32 max_bindless_storage_textures; /**< storage (read-write) texture mips */
+    u32 max_bindless_samplers;         /**< samplers */
+    u32 max_bindless_accels;           /**< TLASes; 0 without ray tracing */
+    u32 max_push_constant_bytes;       /**< at most DE_GPU_MAX_PUSH_CONSTANT_BYTES */
+    u64 timestamp_frequency;           /**< timestamp ticks per second (de_gpu_cmd_timestamp) */
+    u32 mesh_max_output_vertices;      /**< per mesh-shader group; 0 without mesh shaders */
+    u32 mesh_max_output_primitives;    /**< per mesh-shader group; 0 without mesh shaders */
+    bool base_tier_ok;                 /**< meets the SPEC §3.3 Base tier for its backend */
+    char base_tier_reason[128];        /**< why not, when !base_tier_ok; "" otherwise */
 } de_gpu_caps;
 
+/** de_gpu_device_create() parameters. `(de_gpu_device_desc){0}` is valid. */
 typedef struct de_gpu_device_desc {
-    de_gpu_backend backend; /* DE_GPU_NULL = platform default */
-    i32 adapter_index;      /* -1 = best */
+    de_gpu_backend backend; /**< DE_GPU_DEFAULT (0) = platform default */
+    u32 adapter;            /**< 0 = best adapter; n = the n-th adapter (1-based) */
     bool debug_layer, gpu_validation, crash_breadcrumbs;
-    const de_allocator *allocator;
+    const de_allocator *allocator; /**< front-end and CPU-side memory; NULL = de_heap_allocator() */
 } de_gpu_device_desc;
 
+/**
+ * Creates a device. Fails with DE_ERR_UNSUPPORTED when the backend is not compiled into this
+ * build (or not registered), or the machine cannot run it; DE_ERR_DEVICE_LOST / DE_ERR_* from the
+ * backend otherwise. `*out` is NULL on failure.
+ */
 DE_API de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **out);
+/**
+ * Waits for the GPU, releases every deferred destruction, destroys objects that are still alive
+ * (logging a warning with their count per kind), then the device. NULL is ignored.
+ */
 DE_API void de_gpu_device_destroy(de_gpu_device *d);
 DE_API const de_gpu_caps *de_gpu_get_caps(const de_gpu_device *d);
+/** Waits until every queue is idle, then releases every deferred destruction. */
 DE_API void de_gpu_wait_idle(de_gpu_device *d);
 
 /* ---------- Formats and usage ---------- */
@@ -88,7 +156,8 @@ typedef enum de_gpu_format {
     DE_FMT_BC5_UNORM,
     DE_FMT_BC6H_UFLOAT,
     DE_FMT_BC7_UNORM,
-    DE_FMT_BC7_SRGB
+    DE_FMT_BC7_SRGB,
+    DE_FMT_COUNT_
 } de_gpu_format;
 
 typedef enum de_gpu_usage {
@@ -109,6 +178,14 @@ typedef enum de_gpu_usage {
 typedef enum de_gpu_memory { DE_MEM_GPU_ONLY, DE_MEM_UPLOAD, DE_MEM_READBACK } de_gpu_memory;
 
 /* ---------- Resources (each gets a bindless index on creation) ---------- */
+
+/**
+ * Buffer. `size` > 0 and `usage` != 0 are required. Usage rules: buffers take VERTEX, INDEX,
+ * CONSTANT, STORAGE, INDIRECT, ACCEL_*, COPY_*; UPLOAD buffers no STORAGE writes, ACCEL_STORAGE
+ * or COPY_DST; READBACK buffers only COPY_DST. `stride` (0 = raw) must be a multiple of 4 that
+ * divides `size`. A buffer with VERTEX, INDEX, CONSTANT or STORAGE usage gets a bindless index.
+ * `name` is copied (debug names, messages); it may be NULL.
+ */
 typedef struct de_gpu_buffer_desc {
     u64 size;
     u32 usage;
@@ -123,6 +200,16 @@ typedef enum de_gpu_texture_dim {
     DE_TEX_3D,
     DE_TEX_CUBE
 } de_gpu_texture_dim;
+
+/**
+ * Texture. `format` and `width` are required; `height` 0 means 1 for 2D, and `depth_or_layers` 0
+ * means 1 (6 for a cube, whose count must be a multiple of 6 with width == height). `mip_count` 0
+ * means 1; at most the full chain and DE_GPU_MAX_MIPS. `sample_count` 0 means 1; 2, 4 or 8 only
+ * for single-mip 2D textures without STORAGE. `usage` != 0: SAMPLED, STORAGE, RENDER_TARGET,
+ * DEPTH, COPY_*. DEPTH needs a depth format and excludes RENDER_TARGET and STORAGE; depth formats
+ * need DEPTH; block-compressed formats take only SAMPLED and COPY_* and need a width and height
+ * that are multiples of 4; sRGB formats cannot be STORAGE.
+ */
 typedef struct de_gpu_texture_desc {
     de_gpu_texture_dim dim;
     de_gpu_format format;
@@ -138,6 +225,7 @@ typedef enum de_gpu_address {
     DE_ADDR_MIRROR,
     DE_ADDR_BORDER
 } de_gpu_address;
+/** Sampler. `(de_gpu_sampler_desc){0}`: nearest, wrap, no anisotropy. `max_aniso` 0..16. */
 typedef struct de_gpu_sampler_desc {
     de_gpu_filter min, mag, mip;
     de_gpu_address u, v, w;
@@ -145,13 +233,32 @@ typedef struct de_gpu_sampler_desc {
     bool compare_reverse_z;
 } de_gpu_sampler_desc;
 
+/** Create functions return an invalid handle (id 0) on failure and set the error context. */
 DE_API de_gpu_buffer de_gpu_buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *desc);
 DE_API de_gpu_texture de_gpu_texture_create(de_gpu_device *d, const de_gpu_texture_desc *desc);
 DE_API de_gpu_sampler de_gpu_sampler_create(de_gpu_device *d, const de_gpu_sampler_desc *desc);
+/** Destroy functions: the handle is invalid at once; the object and its bindless indices are
+ * released after the GPU is done with the work submitted before the call. Invalid handles
+ * (including id 0) are ignored; stale ones also set the error context. */
 DE_API void de_gpu_buffer_destroy(de_gpu_device *d, de_gpu_buffer b); /* deferred until GPU done */
 DE_API void de_gpu_texture_destroy(de_gpu_device *d, de_gpu_texture t);
+DE_API void de_gpu_sampler_destroy(de_gpu_device *d, de_gpu_sampler s);
+/**
+ * CPU pointer to an UPLOAD or READBACK buffer, valid until the buffer is destroyed (persistent
+ * mapping). NULL, with an error, for a GPU_ONLY buffer or an invalid handle.
+ */
 DE_API void *de_gpu_buffer_map(de_gpu_device *d, de_gpu_buffer b); /* UPLOAD/READBACK only */
+/** The buffer's bindless index, or DE_GPU_BINDLESS_INVALID when it has none. */
 DE_API u32 de_gpu_buffer_bindless(de_gpu_device *d, de_gpu_buffer b);
+/**
+ * Bindless index of a texture view. Sampled and storage views are separate index spaces (tables):
+ *   - `storage == false`: the sampled view of the whole texture (all mips and layers), from the
+ *     sampled-texture table (`de_tex2d(idx)` and friends). Needs DE_USAGE_SAMPLED; `mip` must be 0.
+ *   - `storage == true`: the read-write view of mip `mip` (all layers), from the storage-texture
+ *     table (`de_rwtex2d(idx)`). Needs DE_USAGE_STORAGE; each mip has its own index.
+ * The same number can be valid in both spaces for different textures. Returns
+ * DE_GPU_BINDLESS_INVALID (and sets the error context) when the view does not exist.
+ */
 DE_API u32 de_gpu_texture_bindless(de_gpu_device *d, de_gpu_texture t, u32 mip, bool storage);
 DE_API u32 de_gpu_sampler_bindless(de_gpu_device *d, de_gpu_sampler s);
 
@@ -176,6 +283,12 @@ typedef enum de_gpu_blend {
     DE_BLEND_ADD
 } de_gpu_blend;
 
+/**
+ * Pipeline. Required blobs by kind: GRAPHICS `vs` (`ps` optional), MESH `ms` (`as`, `ps`
+ * optional; needs caps.mesh_shaders), COMPUTE `cs`. RAYTRACING is DE_ERR_UNSUPPORTED until S16.
+ * `push_constant_bytes` <= DE_GPU_MAX_PUSH_CONSTANT_BYTES and a multiple of 4. Color formats must
+ * be renderable color formats; `depth_format` a depth format or UNKNOWN; depth test/write need one.
+ */
 typedef struct de_gpu_pipeline_desc {
     de_gpu_pipeline_kind kind;
     de_gpu_shader_blob vs, ps, as, ms, cs; /* by kind */
@@ -194,7 +307,7 @@ typedef struct de_gpu_pipeline_desc {
 DE_API de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_desc *desc);
 DE_API void de_gpu_pipeline_destroy(de_gpu_device *d, de_gpu_pipeline p);
 
-/* ---------- Acceleration structures ---------- */
+/* ---------- Acceleration structures (S16: DE_ERR_UNSUPPORTED until then) ---------- */
 typedef struct de_gpu_blas_geometry {
     de_gpu_buffer vertices;
     u64 vertex_offset;
@@ -225,9 +338,22 @@ typedef struct de_gpu_tlas_instance {
     de_gpu_accel blas;
 } de_gpu_tlas_instance;
 
+/** Returns an invalid handle with DE_ERR_UNSUPPORTED on every backend until S16. */
 DE_API de_gpu_accel de_gpu_accel_create(de_gpu_device *d, const de_gpu_accel_desc *desc);
 DE_API void de_gpu_accel_destroy(de_gpu_device *d, de_gpu_accel a);
 DE_API u32 de_gpu_accel_bindless(de_gpu_device *d, de_gpu_accel tlas);
+
+/* ---------- Queries ---------- */
+typedef enum de_gpu_query_type { DE_QUERY_TIMESTAMP } de_gpu_query_type;
+/** Query heap. `count` > 0 is required. */
+typedef struct de_gpu_query_heap_desc {
+    de_gpu_query_type type;
+    u32 count;
+    const char *name;
+} de_gpu_query_heap_desc;
+DE_API de_gpu_query_heap de_gpu_query_heap_create(de_gpu_device *d,
+                                                  const de_gpu_query_heap_desc *desc);
+DE_API void de_gpu_query_heap_destroy(de_gpu_device *d, de_gpu_query_heap h);
 
 /* ---------- Command recording ---------- */
 typedef enum de_gpu_access {
@@ -263,6 +389,13 @@ typedef struct de_gpu_attachment {
     bool store;
 } de_gpu_attachment;
 
+/**
+ * Starts a command list for queue `q`. It is recorded by one thread, then handed to exactly one
+ * de_gpu_queue_submit() on the same queue; the device recycles it once the GPU is done. NULL on
+ * failure. In Debug and Dev builds every recording call checks its arguments and the command
+ * list's state (render pass open or not, pipeline bound, push-constant size, handles); a failed
+ * check logs to `gpu`, sets the error context and skips the command.
+ */
 DE_API de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name);
 DE_API void de_gpu_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count);
 DE_API void de_gpu_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
@@ -288,13 +421,19 @@ DE_API void de_gpu_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de_gpu_texture dst,
 DE_API void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
 DE_API void de_gpu_cmd_marker_pop(de_gpu_cmd *c);
 DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id); /* GPU crash diagnostics */
+/** Writes the GPU timestamp (caps.timestamp_frequency ticks per second) into query `index`. */
 DE_API void de_gpu_cmd_timestamp(de_gpu_cmd *c, de_gpu_query_heap h, u32 index);
+/** Copies queries [first, first + count) of `h` into `dst` at `dst_off` as u64 values. */
+DE_API void de_gpu_cmd_resolve_queries(de_gpu_cmd *c, de_gpu_query_heap h, u32 first, u32 count,
+                                       de_gpu_buffer dst, u64 dst_off);
 
 /* ---------- Submission and sync (timeline fences) ---------- */
 typedef struct de_gpu_wait {
     de_gpu_fence fence;
     u64 value;
 } de_gpu_wait;
+/** One submission: the command lists run in order after the waits; `signal` (optional) is set to
+ * `signal_value` when they complete. */
 typedef struct de_gpu_submit {
     de_gpu_cmd *const *cmds;
     u32 cmd_count;
@@ -304,9 +443,17 @@ typedef struct de_gpu_submit {
     u64 signal_value;
 } de_gpu_submit;
 
+/** Timeline fence starting at `initial`. Invalid handle on failure. */
 DE_API de_gpu_fence de_gpu_fence_create(de_gpu_device *d, u64 initial);
+DE_API void de_gpu_fence_destroy(de_gpu_device *d, de_gpu_fence f);
+/** The fence's completed value; 0 for an invalid handle. */
 DE_API u64 de_gpu_fence_value(de_gpu_device *d, de_gpu_fence f);
+/** Waits until the fence reaches `value`. DE_ERR_TIMEOUT after `timeout_ns` (0 = poll). */
 DE_API de_result de_gpu_fence_wait(de_gpu_device *d, de_gpu_fence f, u64 value, u64 timeout_ns);
+/**
+ * Submits command lists to queue `q` (every list must have been begun on `q`). Also releases
+ * deferred destructions whose work has completed. The lists are owned by the device afterwards.
+ */
 DE_API de_result de_gpu_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s);
 
 /* ---------- Swapchain ---------- */
@@ -321,6 +468,11 @@ typedef enum de_gpu_present {
     DE_PRESENT_MAILBOX,
     DE_PRESENT_IMMEDIATE
 } de_gpu_present;
+/**
+ * Swapchain for a window created with the backend's surface kind (de_window_desc.surface). The
+ * swapchain owns the drawable size: call de_gpu_swapchain_resize on DE_EV_WINDOW_RESIZED.
+ * `image_count` 0 = backend default. The null backend has no swapchain (DE_ERR_UNSUPPORTED).
+ */
 typedef struct de_gpu_swapchain_desc {
     de_window window;
     u32 image_count;
@@ -331,6 +483,7 @@ typedef struct de_gpu_swapchain_desc {
 
 DE_API de_gpu_swapchain de_gpu_swapchain_create(de_gpu_device *d,
                                                 const de_gpu_swapchain_desc *desc);
+DE_API void de_gpu_swapchain_destroy(de_gpu_device *d, de_gpu_swapchain s);
 DE_API de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s,
                                           de_gpu_texture *image);
 DE_API de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s);
