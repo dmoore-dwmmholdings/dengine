@@ -7,10 +7,11 @@
  */
 
 #include "asset/asset_internal.h"
-#include "asset/budget_internal.h"   /* DENG-144 */
-#include "asset/load_internal.h"     /* DENG-141 */
-#include "asset/mount_internal.h"    /* DENG-212 */
-#include "asset/pipeline_internal.h" /* DENG-142 */
+#include "asset/budget_internal.h"     /* DENG-144 */
+#include "asset/hot_reload_internal.h" /* DENG-214 */
+#include "asset/load_internal.h"       /* DENG-141 */
+#include "asset/mount_internal.h"      /* DENG-212 */
+#include "asset/pipeline_internal.h"   /* DENG-142 */
 #include "asset/slots_internal.h"
 
 #include <dengine/de_asset.h>
@@ -91,6 +92,11 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
         de_asset_system_destroy(s);
         return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
     }
+    /* DENG-214: hot reload, when desc.hot_reload is set (Debug and Dev builds). */
+    if (de__asset_reload_init(s) != DE_OK) {
+        de_asset_system_destroy(s);
+        return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
+    }
 
     *out = s;
     return DE_OK;
@@ -103,6 +109,7 @@ void de_asset_system_destroy(de_asset_system *s) {
     de__asset_events_detach(s);        /* DENG-143: first, so the teardown sends no events */
     de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
     de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */
+    de__asset_reload_shutdown(s);      /* DENG-214: no reload job left; before the slots */
     de__mount_shutdown(s);             /* DENG-212: no job reads a pack any more */
     de__slots_shutdown(s);             /* DENG-140: unloads objects through their types, so first */
     de__asset_types_shutdown(s);       /* DENG-140 */
@@ -216,6 +223,7 @@ void de_asset_system_update(de_asset_system *s, de_world *world) {
         return;
     if (world != NULL)
         de__asset_events_attach(s, world); /* DENG-143: once; then a pointer check */
+    de__asset_reload_update(s);            /* DENG-214: watches, manifest, reload jobs */
     de__load_update(s);                    /* DENG-141 */
     /* DENG-144: candidates, eviction while over budget, the I/O rate; advances the LRU frame. */
     de__budget_update(s, de_time_now_ns());

@@ -479,6 +479,36 @@ static const char *strip_prefix(const char *msg, const char *id) {
     return msg;
 }
 
+/* DENG-214: copies the cook's extra sources into the job as normalised virtual paths (below the
+ * asset root), for the hot reload index. Out of memory or an odd path only leaves a path out:
+ * hot reload then misses edits of that file. */
+static void extras_record(de__pjob *job, const char *asset_root, const de_cook_result *r) {
+    if (r->extra_source_count == 0)
+        return;
+    de__pipeline *pl = job->pl;
+    size_t size = 0;
+    for (u32 i = 0; i < r->extra_source_count; ++i)
+        size += strlen(asset_root) + 1u + strlen(r->extra_sources[i]) + 1u;
+    char *block = (char *)DE_ALLOC(pl->alloc, size, 1, DE_MEM_ASSET);
+    if (block == NULL)
+        return;
+    size_t at = 0;
+    u32 n = 0;
+    for (u32 i = 0; i < r->extra_source_count; ++i) {
+        char joined[DE_FS_PATH_MAX];
+        int w = snprintf(joined, sizeof joined, "%s/%s", asset_root, r->extra_sources[i]);
+        /* The normalised form is never longer than the joined one, which fits its share. */
+        if (w < 0 || (size_t)w >= sizeof joined ||
+            de_path_normalize(joined, block + at, size - at) != DE_OK)
+            continue;
+        at += strlen(block + at) + 1u;
+        n++;
+    }
+    job->extra_paths = block;
+    job->extra_size = size;
+    job->extra_count = n;
+}
+
 static void cook_task_run(void *user) {
     cook_task *t = (cook_task *)user;
     de__pjob *job = t->job;
@@ -519,6 +549,8 @@ static void cook_task_run(void *user) {
         return;
     }
     subs_record(pl, cs, de_asset_id_from(t->parent_id), &r);
+    if (job->s->reload != NULL)
+        extras_record(job, t->asset_root, &r); /* DENG-214: hot reload watches them */
 
     const void *bytes = r.data;
     u64 size = r.size;

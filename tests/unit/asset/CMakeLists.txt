@@ -110,3 +110,23 @@ if(DE_BUILD_TOOLS)
             "DE_MOUNT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_pack_mnt\"")
     endif()
 endif()
+
+# DENG-214: asset hot reload (test_asset_hot_reload.c: source edits, dependents, failures, extra
+# sources, manifest edits, deferred unloads, pack overrides, the real file watcher) and the
+# manifest diff (test_manifest_diff.c). The files go into a scratch directory of the build tree
+# (mounted as hr:/). With tools, the pack writer (de_pack_lib) builds the override pack of
+# hot_reload.pack_override_skipped (DE_HR_WITH_PACK).
+de_add_test(NAME asset_hot_reload SOURCES test_asset_hot_reload.c test_manifest_diff.c
+            LIBS de_asset de_platform de_task de_test_support LABELS unit tsan TIMEOUT 300)
+if(TARGET test_asset_hot_reload)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_asset_hot_reload_tmp")
+    target_include_directories(test_asset_hot_reload PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_asset_hot_reload PRIVATE
+        "DE_ASSET_HOT_RELOAD_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_asset_hot_reload_tmp\"")
+    if(DE_BUILD_TOOLS)
+        target_link_libraries(test_asset_hot_reload PRIVATE de_pack_lib de_tp_zstd)
+        target_compile_definitions(test_asset_hot_reload PRIVATE DE_HR_WITH_PACK=1)
+    else()
+        target_compile_definitions(test_asset_hot_reload PRIVATE DE_HR_WITH_PACK=0)
+    endif()
+endif()

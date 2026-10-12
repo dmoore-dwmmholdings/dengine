@@ -238,6 +238,18 @@ struct de_asset_load_ctx {
     /* DENG-212: the pack read state of a job whose asset a mounted pack serves
      * (mount_internal.h, pack_stage.c); NULL for every other job. Set at submit. */
     struct de__pack_job *pack;
+
+    /* DENG-214: hot reload (hot_reload_internal.h). */
+    /** (main) A reload job: the slot is READY and keeps its object until this job is swapped in
+     * (de__asset_reload_swap); a failure goes to de__asset_reload_failed, not to the slot. Not in
+     * the slot -> job map, so the load API never sees it. Set at submit. */
+    bool reload;
+    /** The cooker's extra sources as normalised virtual paths, NUL-separated (`extra_count` of
+     * them in `extra_size` bytes), written by the cook thread before it hands the job on; NULL
+     * without hot reload or extra sources. Freed with the job. */
+    char *extra_paths;
+    u32 extra_count;
+    size_t extra_size;
 };
 
 typedef struct de_asset_load_ctx de__pjob;
@@ -328,6 +340,21 @@ const de__pipeline_source *de__pipeline_default_source(void);
 void de__pipeline_get_stats(const de_asset_system *s, de__pipeline_stats *out);
 /** The stage of the live job of `slot`, or DE__PJOB_NONE. For tests. Main thread. */
 u32 de__pipeline_debug_stage(de_asset_system *s, u32 slot);
+
+/* ---- DENG-214: hot reload jobs (pipeline.c) ----------------------------------------------- */
+
+/**
+ * Starts a reload job for the READY slot `slot` (de__asset_reload_update): the same stages as a
+ * load (pack, cook or source path, chosen at submit), with `reload` set. Returns the job, or
+ * NULL with the error context set when it cannot start (the asset is no longer in the manifest,
+ * no loader, out of memory, ...). The job may already be finished when this returns (no task
+ * system); it is published by the next pipeline update. Main thread.
+ */
+struct de_asset_load_ctx *de__pipeline_submit_reload(de_asset_system *s, u32 slot,
+                                                     de__load_priority priority);
+/** Cancels a reload job a newer change replaces: it stops at its next stage boundary and is
+ * discarded on the main thread. Main thread. */
+void de__pipeline_cancel_reload(de_asset_system *s, struct de_asset_load_ctx *job);
 
 /* ---- Between the stages (pipeline.c) --------------------------------------------------------- */
 

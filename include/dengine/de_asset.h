@@ -81,6 +81,11 @@ typedef struct de_asset_system_desc {
     de_asset_budgets budgets;
     bool hot_reload;    /* dev builds only */
     const char *locale; /* "en", "ja", ... for locale overrides */
+    /* ---- DENG-214: hot reload ---- */
+    /** Hot reload (SPEC §11.9): the updates an old object stays loaded after a reload swapped
+     * a new one in, before it goes to its type's `unload` (GPU frames in flight may still use
+     * it). 0 = 3, the frames in flight. */
+    u32 reload_retire_frames;
 } de_asset_system_desc;
 
 /**
@@ -94,10 +99,12 @@ DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_ass
 DE_API void de_asset_system_destroy(de_asset_system *s);
 /**
  * Call once per frame on the main thread (the app host does, after the platform event pump and
- * before `First`): applies finished loads and refreshes request states (DENG-141, DENG-142), and
- * queues the asset events of those changes (DENG-143), then evicts unreferenced assets of
- * categories over budget (DENG-144; see de_asset_set_budgets) and samples the I/O rate. Later
- * step: hot reloads (S08). Never blocks on I/O; allocates nothing when nothing completed.
+ * before `First`): with hot reload on, first polls the file watches and starts the reloads of
+ * changed assets (DENG-214, see "Hot reload" below); then applies finished loads and swaps in
+ * finished reloads, refreshes request states (DENG-141, DENG-142), and queues the asset events of
+ * those changes (DENG-143), then evicts unreferenced assets of categories over budget (DENG-144;
+ * see de_asset_set_budgets) and samples the I/O rate. Never blocks on I/O; allocates nothing
+ * when nothing completed (and no file changed).
  *
  * The first call with a non-NULL `world` attaches the system to it (see "ECS events" below): it
  * registers the `de_asset_event` payload type and its event type, inserts the resource
@@ -412,6 +419,12 @@ typedef struct de_asset_type_desc {
     /* DENG-144: the budget the type's resident bytes (de_asset_load_ctx_set_object) count
      * against. Default (0) CPU. */
     de_asset_category category;
+    /* ---- DENG-214: hot reload ---- */
+    /** Optional. Hot reload (SPEC §11.9) calls it on the main thread, inside
+     * de_asset_system_update, for each loaded asset of this type whose dependency `dep` was
+     * reloaded, once per reload and after the swap: `object` is the dependent's live object,
+     * which can now rebind to the new data of `dep` (a material to its texture). NULL = none. */
+    void (*dependency_reloaded)(void *object, de_asset_id dep, void *user);
 } de_asset_type_desc;
 
 /**
@@ -652,6 +665,38 @@ enum {
  * `loads_in_flight`; no allocation. Main thread.
  */
 DE_API de_asset_stats de_asset_get_stats(const de_asset_system *s);
+
+/* ---------- Hot reload (DENG-214) ----------
+ *
+ * SPEC §11.9. With de_asset_system_desc.hot_reload set, Debug and Dev builds (never Shipping)
+ * watch the manifest files and the files every load read: its source (with the locale applied)
+ * and the extra sources its importer read (de_asset_import_read_file). When one changes, the
+ * next de_asset_system_update starts a reload of each loaded asset that read it: the asset is
+ * cooked again (Dev and Debug cook in-process) and loaded into a new object while the old one
+ * stays live. A later update (the same one when the work is quick) swaps the new object in
+ * behind the slot: typed handles stay valid and resolve to the new data, the slot's version is
+ * bumped, one DE_ASSET_EV_RELOADED event is sent (`id`, state READY, error DE_OK), and every
+ * loaded asset that depends on it gets its type's `dependency_reloaded`. The old object goes to
+ * `unload` reload_retire_frames updates later.
+ *
+ * A reload that fails keeps the old data, logs the cause at Error and sends no event;
+ * de_asset_last_error gives the message until a later reload succeeds. A changed manifest is
+ * loaded again: assets whose type, source or settings changed reload, added assets become
+ * loadable, removed ones keep their data while referenced (a warning is logged), and bundle
+ * changes apply to later loads. An asset whose type changed is not reloaded (its slot keeps the
+ * type it was created with; an error is kept for it). Assets that a mounted pack serves are not
+ * reloaded from source. In Release and Shipping builds `hot_reload` is ignored.
+ */
+/**
+ * The last error of asset `id`, for the debug UI (S30): the failure of its last hot reload while
+ * it still holds (the old data stays loaded), else, when the asset is FAILED, the failure of its
+ * last load; DE_OK when there is none (or no slot exists for `id`). The message, with its cause
+ * chain, is written to `msg` (`cap` bytes, always NUL-terminated; "" for DE_OK; `msg` may be
+ * NULL with `cap` 0). Does not set the error context. Main thread.
+ * @return The asset's error code, DE_OK, or DE_ERR_INVALID_ARGUMENT for a NULL system.
+ */
+DE_API de_result de_asset_last_error(de_asset_system *s, de_asset_id id, char *msg, u32 cap);
+/* ---------- End of hot reload (DENG-214) ---------- */
 
 DE_EXTERN_C_END
 #endif

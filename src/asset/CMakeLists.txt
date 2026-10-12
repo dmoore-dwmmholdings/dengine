@@ -73,3 +73,12 @@ target_sources(de_asset PRIVATE dpak/dpak_format.h dpak/dpak_reader.c dpak/dpak_
                                 mount_internal.h pack_stage.c)
 target_link_libraries(de_asset PRIVATE de_tp_xxhash)
 set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_xxhash)
+
+# DENG-214: asset hot reload (SPEC §11.9). hot_reload.c: file watches on the manifest files and
+# the asset root, the per-frame reload queue, reload jobs through the pipeline (cook threads and
+# frame workers, never the background pool), the frame-boundary swap, RELOADED events,
+# dependency_reloaded, deferred unloads and de_asset_last_error; compiled in Debug and Dev only
+# (Release and Shipping keep de_asset_last_error and no-op hooks). reverse_index.c: source path ->
+# asset IDs. manifest_diff.c: per-asset digests of two manifests and their diff.
+target_sources(de_asset PRIVATE hot_reload.c hot_reload_internal.h reverse_index.c
+                                manifest_diff.c)
