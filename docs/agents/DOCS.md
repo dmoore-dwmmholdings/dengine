@@ -25,7 +25,7 @@ Related files: `docs/agents/LOOP.md` (orchestrator), `docs/agents/WORKER.md` (wo
 Titles are exact; `[[wikilinks]]` resolve against them, and Trama refuses a duplicate title.
 
 ```
-DEngine                          home: one-paragraph vision, current sprints (one per lane) and status, map of the space
+DEngine                          home: one-paragraph vision, lead sprint, other open sprints and status, map of the space
 ├── Architecture                 layer bands, module graph, threading model, memory model, frame flow
 ├── Modules                      index table: module, source dir, layer, deterministic, status, page
 │   └── Module: <module>         one per module, e.g. "Module: core", "Module: gpu/vulkan", "Module: world/vfx"
