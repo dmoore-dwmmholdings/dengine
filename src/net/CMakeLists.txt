@@ -3,6 +3,9 @@
 # Transport (DENG-51): net_internal.h is the socket interface every backend implements;
 # socket.c the portable part, socket_posix.c / socket_win32.c the OS UDP sockets,
 # socket_loopback.c the in-process backend, net_address.c the address type.
+#
+# Handshake and crypto (DENG-52): crypto.c wraps Monocypher (de_tp_monocypher), connect_token.c
+# the connect tokens, handshake.c the packet codec, connection.c the client/server state machines.
 if(WIN32)
     set(_de_net_os win32)
 else()
@@ -12,6 +15,7 @@ set(_de_net_libs "")
 if(WIN32)
     list(APPEND _de_net_libs ws2_32) # Winsock 2 (socket_win32.c)
 endif()
+list(APPEND _de_net_libs de_tp_monocypher) # packet crypto (crypto.c, DENG-52)
 
 de_add_module(
     NAME net
@@ -22,6 +26,12 @@ de_add_module(
         socket.c
         socket_${_de_net_os}.c
         socket_loopback.c
+        crypto.h
+        crypto.c
+        connect_token.c
+        handshake.c
+        connection.h
+        connection.c
     DEPS platform ecs reflect
     OPTIONAL_DEPS physics
     OPTIONAL_OPTION DE_WITH_NET
