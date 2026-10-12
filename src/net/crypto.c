@@ -175,6 +175,14 @@ bool de__net_derive_keys(de__net_keys *out, const u8 my_secret[DE__NET_KEY_BYTES
                          const u8 their_public[DE__NET_KEY_BYTES], u64 protocol_id,
                          const u8 client_pk[DE__NET_KEY_BYTES],
                          const u8 server_pk[DE__NET_KEY_BYTES]) {
+    return de__net_derive_keys_psk(out, my_secret, their_public, protocol_id, client_pk, server_pk,
+                                   NULL);
+}
+
+bool de__net_derive_keys_psk(de__net_keys *out, const u8 my_secret[DE__NET_KEY_BYTES],
+                             const u8 their_public[DE__NET_KEY_BYTES], u64 protocol_id,
+                             const u8 client_pk[DE__NET_KEY_BYTES],
+                             const u8 server_pk[DE__NET_KEY_BYTES], const u8 *psk) {
     static const u8 zero[DE__NET_KEY_BYTES] = {0};
     u8 shared[DE__NET_KEY_BYTES];
     crypto_x25519(shared, my_secret, their_public);
@@ -184,6 +192,19 @@ bool de__net_derive_keys(de__net_keys *out, const u8 my_secret[DE__NET_KEY_BYTES
         crypto_wipe(shared, sizeof shared);
         crypto_wipe(out, sizeof *out);
         return false;
+    }
+    if (psk != NULL) {
+        /* Keyed with the connection key: the output is unknown to anyone without it, whatever
+         * they know about the X25519 exchange. Replaces `shared` in place. */
+        static const u8 label[16] = "dengine net psk";
+        u8 prk[DE__NET_KEY_BYTES];
+        crypto_blake2b_ctx ctx;
+        crypto_blake2b_keyed_init(&ctx, DE__NET_KEY_BYTES, psk, DE__NET_KEY_BYTES);
+        crypto_blake2b_update(&ctx, label, sizeof label);
+        crypto_blake2b_update(&ctx, shared, sizeof shared);
+        crypto_blake2b_final(&ctx, prk);
+        memcpy(shared, prk, sizeof shared);
+        crypto_wipe(prk, sizeof prk);
     }
     /* Labels are exactly 16 bytes (the NUL of the literal is not hashed). */
     kdf_one(out->c2s, shared, "dengine net c2s\0", protocol_id, client_pk, server_pk);

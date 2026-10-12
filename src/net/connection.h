@@ -1,5 +1,6 @@
 /* connection.h: connection packets, the challenge handshake and the connection lifecycle
- * (DENG-52, SPEC §16.1). Internal to the net module.
+ * (DENG-52, SPEC §16.1; connection keys and server authentication DENG-378). Internal to the net
+ * module.
  *
  * ==================================================================================================
  * Packet framing
@@ -12,21 +13,27 @@
  * sealed packet, so a packet of another game or version never authenticates.
  *
  *   type        dir  layout                                                         sealed with
- *   1 REQUEST   C>S  type | pid (8) | flags (1) | client_pk (32) | token (64) |      nothing
+ *   1 REQUEST   C>S  type | pid (8) | flags (1) | client_pk (32) | token (96) |      nothing
  *                    zero padding to DE__NET_REQUEST_BYTES (160)
  *   2 CHALLENGE S>C  type | seq | server_pk (32) | {epoch (8), cookie (32)} | tag   s2c, domain 1
  *   3 RESPONSE  C>S  type | seq | client_pk (32) | epoch (8) | cookie (32) |         c2s
- *                    {token (64), flags (1)} | tag
+ *                    token (96) | {flags (1)} | tag
  *   4 ACCEPT    S>C  type | seq | {slot (4), flags (1)} | tag                          s2c
  *   5 DENIED    S>C  type | reason (1) | proof (16)                                   (proof)
  *   6 KEEPALIVE both type | seq | {} | tag                                            session
  *   7 PAYLOAD   both type | seq | {data (1 .. DE__NET_PAYLOAD_MAX)} | tag             session
  *   8 DISCONNECT both type | seq | {code (1)} | tag                                   session
  *
+ * `token` is the sealed part of a connect token (DE_NET_CONNECT_TOKEN_SEALED_BYTES, de_net.h):
+ * opaque to the client, 96 zero bytes for a direct connect. The connection key that the token
+ * carries is never on the wire: the client has it in clear, the server opens it from the token.
+ * RESPONSE carries the token in clear (the server needs the key before it can open the body;
+ * the token is in the REQUEST in clear anyway).
+ *
  * `{...}` is the sealed body: XChaCha20-Poly1305 ciphertext followed by the 16-byte tag. The
  * nonce is `seq | direction | domain` (crypto.h); the associated data is `pid | type | the
- * plaintext fields between seq and the body` (server_pk; client_pk, epoch, cookie), and for a
- * CHALLENGE also the BLAKE2b-256 digest of the REQUEST it answers (not on the wire; the client
+ * plaintext fields between seq and the body` (server_pk; client_pk, epoch, cookie, token), and for
+ * a CHALLENGE also the BLAKE2b-256 digest of the REQUEST it answers (not on the wire; the client
  * keeps the digest of what it sent). So every byte of a sealed packet is authenticated, and a
  * CHALLENGE only opens for the exact REQUEST the client sent: a byte changed on the way, in
  * either packet, makes the client drop the CHALLENGE.
@@ -45,16 +52,24 @@
  *      server cannot be used to amplify a spoofed flood.
  *   2. Server, keeping no per-client state: checks size, pid, padding and the token (forged,
  *      expired, direct connect refused, server full, client id already connected: DENIED). Then
- *      X25519 of its epoch key and client_pk, the KDF (crypto.h) and a CHALLENGE sealed with s2c.
+ *      X25519 of its epoch key and client_pk, the KDF with the token's connection key
+ *      (de__net_derive_keys_psk; none for a direct connect) and a CHALLENGE sealed with s2c.
  *      The cookie is keyed BLAKE2b(epoch secret, client address | epoch | client_pk): only the
  *      holder of the address that sent the REQUEST receives it. The epoch secret and the epoch
  *      X25519 key pair rotate every DE__NET_EPOCH_NS; the current and the previous epoch are
  *      accepted, older cookies are not, and the old secrets are wiped.
- *   3. Client: X25519 of its secret and server_pk, the same KDF, opens the CHALLENGE (this
- *      authenticates the server's answer), wipes its secret, sends RESPONSE sealed with c2s.
- *   4. Server: recomputes the cookie (cheap, before any X25519), then the keys, opens the
- *      RESPONSE, checks the token again, takes a slot from the pool and answers ACCEPT. The
- *      connection exists from here; a repeated RESPONSE from that address gets the ACCEPT again.
+ *   3. Client: X25519 of its secret and server_pk, the same KDF with its connection key, opens
+ *      the CHALLENGE. With a token this authenticates the server: only a holder of the server key
+ *      (which opens the token) knows the connection key. A direct connect only gets an answer
+ *      bound to its REQUEST, from anyone who saw it. Wipes its secret and its connection key,
+ *      sends RESPONSE sealed with c2s.
+ *   4. Server: recomputes the cookie (cheap, before any X25519), opens the token again (AEAD,
+ *      cheap; DENIED when it no longer passes), refuses a RESPONSE it already accepted (a ring
+ *      of accepted epoch and client_pk pairs: a captured RESPONSE cannot be replayed into a
+ *      ghost slot while its epoch lives), then X25519 and the KDF, opens the RESPONSE (this
+ *      authenticates the client: it holds the connection key), takes a slot from the pool and
+ *      answers ACCEPT. The connection exists from here; a repeated RESPONSE from that address
+ *      gets the ACCEPT again.
  *   5. Client: opens ACCEPT, CONNECTED.
  *
  * DENIED is not sealed (the server has no key when it refuses a token). Its proof is
@@ -62,7 +77,8 @@
  * the context being the REQUEST digest (a DENIED answering a REQUEST) or the cookie (answering a
  * RESPONSE). A changed byte in the DENIED or in the packet it answers fails it, and a host that
  * never saw the REQUEST cannot forge it. A host that did see it can; it can also drop packets,
- * so nothing is lost.
+ * so nothing is lost. DENIED is not keyed with the connection key: the server refuses forged
+ * and expired tokens, whose key it cannot read.
  *
  * ==================================================================================================
  * Lifecycle
@@ -110,8 +126,8 @@ typedef enum de__net_packet_type {
 #define DE__NET_REQUEST_BYTES 160u
 /** Size of every DENIED. */
 #define DE__NET_DENIED_BYTES 18u
-/** Size of a connect token. */
-#define DE__NET_TOKEN_BYTES 64u
+/** Size of the token on the wire: the sealed part of a connect token (de_net.h). */
+#define DE__NET_TOKEN_BYTES 96u
 /** Length of a challenge epoch: the server's cookie secret and X25519 key rotate this often. */
 #define DE__NET_EPOCH_NS (10ull * 1000000000ull)
 /** How often a disconnect sends DISCONNECT. */
@@ -163,7 +179,7 @@ bool de__net_denied_read(const u8 *in, u32 bytes, u64 protocol_id,
                          const u8 client_pk[DE__NET_KEY_BYTES], const u8 context[DE__NET_KEY_BYTES],
                          de__net_deny_reason *reason);
 
-/** Size of the plaintext fields between seq and the sealed body, by type (32 for CHALLENGE, 72
+/** Size of the plaintext fields between seq and the sealed body, by type (32 for CHALLENGE, 168
  * for RESPONSE, else 0). */
 u32 de__net_packet_extra_bytes(de__net_packet_type type);
 
@@ -190,7 +206,7 @@ typedef struct de__net_packet {
 
 /**
  * Splits a datagram of a sealed type. Checks the type byte, the varint and the body size the
- * type allows (CHALLENGE 40, RESPONSE 65, ACCEPT 5, KEEPALIVE 0, DISCONNECT 1, PAYLOAD 1 to
+ * type allows (CHALLENGE 40, RESPONSE 1, ACCEPT 5, KEEPALIVE 0, DISCONNECT 1, PAYLOAD 1 to
  * DE__NET_PAYLOAD_MAX). False for anything else, including REQUEST and DENIED.
  */
 bool de__net_packet_parse(u8 *in, u32 bytes, de__net_packet *out);
@@ -200,6 +216,19 @@ bool de__net_packet_parse(u8 *in, u32 bytes, de__net_packet *out);
 bool de__net_packet_open(de__net_packet *p, u64 protocol_id, const u8 *bind,
                          const u8 key[DE__NET_KEY_BYTES], de__net_dir dir,
                          de__net_nonce_domain domain, bool plaintext_mode);
+
+/* ---------- Connect tokens (connect_token.c) ---------- */
+
+/**
+ * Opens the sealed part of a connect token and gives its values and its connection key. Does not
+ * check the expiry (the caller does: a server first authenticates a RESPONSE with the key, then
+ * refuses an expired token with DENIED). DE_OK; DE_ERR_NOT_FOUND (all zero: a direct connect);
+ * DE_ERR_PARSE (forged or changed). `out` and `key` are zeroed unless DE_OK. Sets no error
+ * context; the caller wipes `key`.
+ */
+de_result de__net_connect_token_open(const u8 server_key[DE__NET_KEY_BYTES],
+                                     const u8 sealed[DE__NET_TOKEN_BYTES],
+                                     de_net_connect_token_info *out, u8 key[DE__NET_KEY_BYTES]);
 
 /** The challenge cookie: keyed BLAKE2b-256(secret, address | epoch | client_pk). */
 void de__net_cookie(u8 out[DE__NET_KEY_BYTES], const u8 secret[DE__NET_KEY_BYTES],
@@ -257,7 +286,8 @@ typedef struct de__net_conn_stats {
     u64 packets_sent;       /**< datagrams handed to the socket */
     u64 dropped_malformed;  /**< size, type, varint, padding, flags or protocol id wrong */
     u64 dropped_auth;       /**< tag or DENIED proof did not verify */
-    u64 dropped_replay;     /**< sequence already received, or older than the window */
+    u64 dropped_replay;     /**< sequence already received, or older than the window; server: also a
+                                 RESPONSE already accepted (DENG-378) */
     u64 dropped_cookie;     /**< RESPONSE with an unknown epoch or a wrong cookie */
     u64 dropped_unexpected; /**< well-formed, but not for this state or from an unknown address */
     u64 requests;           /**< server: REQUESTs that passed the format checks */
@@ -283,7 +313,7 @@ typedef struct de__net_server_desc {
     de__socket *socket;            /**< bound socket; not owned, must outlive the server */
     u64 protocol_id;
     u32 max_peers;                     /**< slots; 0 = 1. At most 4096. */
-    u8 server_key[DE__NET_KEY_BYTES];  /**< opens connect tokens */
+    u8 server_key[DE__NET_KEY_BYTES];  /**< opens connect tokens (and their connection keys) */
     bool deny_direct_connect;          /**< refuse all-zero tokens (default: allow, DENG-2 Q15) */
     bool disable_encryption;           /**< Dev/Debug only; ignored in Release and Shipping */
     u32 recv_batch;                    /**< datagrams per socket receive; 0 = 32 */
@@ -359,12 +389,14 @@ de_result de__net_client_create(const de__net_client_desc *desc, de__net_client 
 /** Sends the outstanding DISCONNECTs, wipes every secret, frees. NULL is a no-op. */
 void de__net_client_destroy(de__net_client *c);
 /**
- * Starts a handshake with `server`. `token` NULL (or 64 zero bytes) asks for a direct connect.
- * From DISCONNECTED only (DE_ERR_BUSY otherwise). Sends the first REQUEST now.
- * DE_ERR_INTERNAL when the OS random source fails.
+ * Starts a handshake with `server`. `token` is a whole connect token (DE_NET_CONNECT_TOKEN_BYTES:
+ * sealed part, then the connection key). NULL, or an all-zero sealed part, asks for a direct
+ * connect (the key part is then ignored). From DISCONNECTED only (DE_ERR_BUSY otherwise).
+ * DE_ERR_INVALID_ARGUMENT for a token with a sealed part but an all-zero key (it could never
+ * connect). Sends the first REQUEST now. DE_ERR_INTERNAL when the OS random source fails.
  */
 de_result de__net_client_connect(de__net_client *c, const de_net_address *server,
-                                 const u8 token[DE__NET_TOKEN_BYTES]);
+                                 const u8 token[DE_NET_CONNECT_TOKEN_BYTES]);
 /** Receives and handles every waiting datagram, then runs the timers. */
 void de__net_client_update(de__net_client *c);
 /** Sends a PAYLOAD. DE_ERR_NOT_FOUND when not connected; DE_ERR_INVALID_ARGUMENT for 0 or more

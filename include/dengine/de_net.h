@@ -99,8 +99,13 @@ DE_API de_result de_net_resolve(const char *text, de_net_family family, de_net_a
 
 /* ---------- Transport: connect tokens (DENG-52) ---------- */
 
-/** Size of a connect token (de_net_desc.connect_token). */
-#define DE_NET_CONNECT_TOKEN_BYTES 64
+/** Size of a connect token (de_net_desc.connect_token): the sealed part, then the client's
+ * connection key (DENG-378; 64 bytes and no key in DENG-52). */
+#define DE_NET_CONNECT_TOKEN_BYTES 128
+/** Size of the sealed part, the first bytes of a token: the only part that goes on the wire. */
+#define DE_NET_CONNECT_TOKEN_SEALED_BYTES 96
+/** Size of the connection key, the last bytes of a token. A secret: it never goes on the wire. */
+#define DE_NET_CONNECT_TOKEN_KEY_BYTES 32
 /** Size of the server key that seals and opens connect tokens. */
 #define DE_NET_SERVER_KEY_BYTES 32
 
@@ -112,14 +117,25 @@ typedef struct de_net_connect_token_info {
 } de_net_connect_token_info;
 
 /**
- * Makes a connect token: the 24 bytes of `client_id`, `expire_unix_s` and `user`, sealed with
- * `server_key` (XChaCha20-Poly1305, a random 24-byte nonce), 64 bytes in all:
- * `nonce (24) | ciphertext (24) | tag (16)`. Only a holder of `server_key` can make or read a
- * token; a client hands it over as it got it (de_net_desc.connect_token). Normally a game
- * backend makes tokens; a dedicated server or a test may call this too. Thread-safe.
+ * Makes a connect token for one client, 128 bytes:
+ *
+ *     sealed part (96): nonce (24) | ciphertext of client_id, expire_unix_s, user, key (56) | tag
+ *     key (32):         the same connection key, in clear
+ *
+ * The connection key is new and random for each token. The sealed part is XChaCha20-Poly1305
+ * with `server_key`: only a holder of `server_key` can make or read it. Normally a game backend
+ * makes tokens and sends the whole 128 bytes to the client over a channel that is already secure
+ * (HTTPS): the key is a secret of that client. A dedicated server or a test may call this too.
+ * Thread-safe.
+ *
+ * The client sends only the sealed part; the server reads the key from it. Both mix the key into
+ * the session keys, so a host without it can neither act as the server to the client nor use a
+ * captured token (DENG-378, see the Trama page "Decision: Connect tokens carry a connection key
+ * that authenticates both ends").
  *
  * An all-zero token is not a token: it asks for a direct IP connect (DENG-2 Q15), which the
- * server allows or refuses by its own setting.
+ * server allows or refuses by its own setting. A direct connect has no connection key, so
+ * neither end is authenticated to the other.
  *
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument); DE_ERR_INTERNAL (the OS random source
  *         failed; `out` is zeroed).
@@ -129,17 +145,20 @@ DE_API de_result de_net_connect_token_generate(const u8 server_key[DE_NET_SERVER
                                                u8 out[DE_NET_CONNECT_TOKEN_BYTES]);
 
 /**
- * Opens a connect token on the server side. The token is valid while `now_unix_s` is less than
- * its `expire_unix_s`. Constant-time in the token bytes; sets no error context for a bad token
+ * Opens a connect token on the server side. Reads only the sealed part (the first
+ * DE_NET_CONNECT_TOKEN_SEALED_BYTES bytes), so `token` may be a whole token or just the sealed
+ * part a server receives. The token is valid while `now_unix_s` is less than its
+ * `expire_unix_s`. Constant-time in the token bytes; sets no error context for a bad token
  * (servers check untrusted tokens at packet rate). Thread-safe.
  *
- * @param out  receives the token's values on DE_OK; zeroed otherwise. May be NULL.
- * @return DE_OK; DE_ERR_NOT_FOUND (an all-zero token: a direct connect, no credentials);
+ * @param out  receives the token's values on DE_OK; zeroed otherwise. May be NULL. The
+ *             connection key is not returned: the connection layer reads it itself.
+ * @return DE_OK; DE_ERR_NOT_FOUND (an all-zero sealed part: a direct connect, no credentials);
  *         DE_ERR_PARSE (forged, changed, or sealed with another key); DE_ERR_TIMEOUT (expired);
  *         DE_ERR_INVALID_ARGUMENT (NULL key or token).
  */
 DE_API de_result de_net_connect_token_verify(const u8 server_key[DE_NET_SERVER_KEY_BYTES],
-                                             const u8 token[DE_NET_CONNECT_TOKEN_BYTES],
+                                             const u8 token[DE_NET_CONNECT_TOKEN_SEALED_BYTES],
                                              u64 now_unix_s, de_net_connect_token_info *out);
 
 /** Fills `out` with a new random server key (OS randomness). DE_ERR_INTERNAL when the OS random
@@ -178,12 +197,12 @@ typedef struct de_net_desc {
     de_net_transport transport;
     const char *address; /* "0.0.0.0:7777" to listen, "host:port" to connect */
     u32 max_peers;
-    u32 tick_rate_hz;        /* must match the fixed simulation rate */
-    u32 snapshot_rate_hz;    /* server-authoritative */
-    u32 rollback_max_frames; /* rollback, default 8 */
-    u32 input_delay_frames;  /* rollback / lockstep */
-    u8 connect_token[64];    /* issued by game backend or Steam */
-    bool encrypt;            /* default true */
+    u32 tick_rate_hz;                             /* must match the fixed simulation rate */
+    u32 snapshot_rate_hz;                         /* server-authoritative */
+    u32 rollback_max_frames;                      /* rollback, default 8 */
+    u32 input_delay_frames;                       /* rollback / lockstep */
+    u8 connect_token[DE_NET_CONNECT_TOKEN_BYTES]; /* issued by game backend or Steam */
+    bool encrypt;                                 /* default true */
 } de_net_desc;
 
 DE_API de_result de_net_create(const de_net_desc *desc, de_world *w, de_net_session **out);

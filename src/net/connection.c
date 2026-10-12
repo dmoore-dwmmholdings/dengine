@@ -1,5 +1,6 @@
-/* connection.c: the client and server connection state machines (DENG-52). The packet framing,
- * the handshake and the lifecycle are described at the top of connection.h.
+/* connection.c: the client and server connection state machines (DENG-52; connection keys and
+ * the accepted-RESPONSE ring DENG-378). The packet framing, the handshake and the lifecycle are
+ * described at the top of connection.h.
  *
  * Rules kept here:
  *   - Everything is allocated at create; update, send, kick and disconnect never allocate.
@@ -33,6 +34,9 @@
 #define MAX_PEERS_LIMIT      4096u
 /** Datagrams one update handles at most; the rest wait for the next update. */
 #define UPDATE_MAX_DATAGRAMS 4096u
+/** Accepted-RESPONSE ring: this many entries per peer slot, and at least ACCEPTED_MIN. */
+#define ACCEPTED_PER_PEER 4u
+#define ACCEPTED_MIN      64u
 
 /* ---------- Shared helpers ---------- */
 
@@ -170,6 +174,15 @@ typedef struct srv_epoch {
     u8 public_key[DE__NET_KEY_BYTES];
 } srv_epoch;
 
+/* A RESPONSE the server accepted: its epoch and the client's ephemeral public key. A client makes
+ * a new key pair for every handshake, so the pair names one RESPONSE; a RESPONSE that matches an
+ * entry is a replay. Entries need no expiry: once their epoch rotates out, the cookie check
+ * refuses the RESPONSE anyway. */
+typedef struct srv_accepted {
+    u64 epoch;
+    u8 client_pk[DE__NET_KEY_BYTES];
+} srv_accepted;
+
 struct de__net_server {
     const de_allocator *alloc;
     size_t alloc_size;
@@ -187,6 +200,9 @@ struct de__net_server {
     u64 challenge_seq; /* nonce sequence of CHALLENGEs, server-wide */
     u64 now_ns;
     srv_slot *slots;
+    srv_accepted *accepted; /* ring of accepted_cap entries; accepted_next is the oldest */
+    u32 accepted_cap;
+    u32 accepted_next;
     u32 recv_batch;
     de__datagram *msgs;
     u8 *recv_data;
@@ -288,20 +304,26 @@ static void srv_send_denied(de__net_server *s, const de_net_address *to, de__net
     s->stats.denied++;
 }
 
-/* Checks a token as REQUEST and RESPONSE both do. DE__NET_DENY_NONE when the client may have a
- * slot; `info` then holds the token (zeros for a direct connect). */
-static de__net_deny_reason srv_check_token(de__net_server *s, const u8 *token,
-                                           de_net_connect_token_info *info) {
-    de_result r = de_net_connect_token_verify(s->server_key, token, clock_unix(&s->clock), info);
-    if (r == DE_ERR_NOT_FOUND) {
+/* Opens a token (the sealed part from a REQUEST or a RESPONSE): its values and its connection
+ * key. DE_OK, DE_ERR_NOT_FOUND (direct connect: no key) or DE_ERR_PARSE (forged). */
+static de_result srv_open_token(const de__net_server *s, const u8 *token,
+                                de_net_connect_token_info *info, u8 key[DE__NET_KEY_BYTES]) {
+    return de__net_connect_token_open(s->server_key, token, info, key);
+}
+
+/* The server's rules for an opened token, as REQUEST and RESPONSE both apply them.
+ * DE__NET_DENY_NONE when the client may have a slot. */
+static de__net_deny_reason srv_token_policy(de__net_server *s, de_result opened,
+                                            const de_net_connect_token_info *info) {
+    if (opened == DE_ERR_NOT_FOUND) {
         if (s->deny_direct)
             return DE__NET_DENY_DIRECT_REFUSED;
-    } else if (r == DE_ERR_TIMEOUT) {
-        s->stats.tokens_expired++;
-        return DE__NET_DENY_TOKEN_EXPIRED;
-    } else if (r != DE_OK) {
+    } else if (opened != DE_OK) {
         s->stats.tokens_invalid++;
         return DE__NET_DENY_TOKEN_INVALID;
+    } else if (clock_unix(&s->clock) >= info->expire_unix_s) {
+        s->stats.tokens_expired++;
+        return DE__NET_DENY_TOKEN_EXPIRED;
     }
     if (srv_client_id_taken(s, info->client_id))
         return DE__NET_DENY_ALREADY_CONNECTED;
@@ -309,6 +331,27 @@ static de__net_deny_reason srv_check_token(de__net_server *s, const u8 *token,
         if (s->slots[i].state == DE__NET_SLOT_FREE)
             return DE__NET_DENY_NONE;
     return DE__NET_DENY_SERVER_FULL;
+}
+
+/* True when a RESPONSE with this epoch and client key was accepted before. Called only after the
+ * cookie check, so its cost (a walk of the ring, no crypto) is paid only for RESPONSEs that a
+ * host on the path of the REQUEST's address sent. */
+static bool srv_accepted_before(const de__net_server *s, u64 epoch,
+                                const u8 client_pk[DE__NET_KEY_BYTES]) {
+    for (u32 i = 0; i < s->accepted_cap; ++i)
+        if (s->accepted[i].epoch == epoch &&
+            memcmp(s->accepted[i].client_pk, client_pk, DE__NET_KEY_BYTES) == 0)
+            return true;
+    return false;
+}
+
+/* Remembers an accepted RESPONSE, over the oldest entry. */
+static void srv_remember_accepted(de__net_server *s, u64 epoch,
+                                  const u8 client_pk[DE__NET_KEY_BYTES]) {
+    srv_accepted *a = &s->accepted[s->accepted_next];
+    a->epoch = epoch;
+    memcpy(a->client_pk, client_pk, DE__NET_KEY_BYTES);
+    s->accepted_next = (s->accepted_next + 1u) % s->accepted_cap;
 }
 
 /* REQUEST from an address without a slot: answer with a CHALLENGE or DENIED, keep nothing. */
@@ -325,17 +368,26 @@ static void srv_on_request(de__net_server *s, const de_net_address *from, const 
     u8 digest[DE__NET_KEY_BYTES];
     de__net_request_digest(digest, data);
     de_net_connect_token_info info;
-    de__net_deny_reason why = srv_check_token(s, req.token, &info);
+    u8 psk[DE__NET_KEY_BYTES];
+    de_result opened = srv_open_token(s, req.token, &info, psk);
+    de__net_deny_reason why = srv_token_policy(s, opened, &info);
     de__net_wipe(&info, sizeof info);
     if (why != DE__NET_DENY_NONE) {
         srv_send_denied(s, from, why, req.client_pk, digest);
+        de__net_wipe(psk, sizeof psk);
         de__net_wipe(&req, sizeof req);
         return;
     }
     const srv_epoch *ep = &s->epochs[s->current_epoch];
     de__net_keys keys;
-    if (!ep->valid || !de__net_derive_keys(&keys, ep->secret, req.client_pk, s->protocol_id,
-                                           req.client_pk, ep->public_key)) {
+    /* With a token, the keys need its connection key: only the client that holds it can open the
+     * CHALLENGE (so a captured token is useless), and only a holder of the server key could have
+     * read it (so the client knows the answer is the server's). */
+    bool derived = ep->valid && de__net_derive_keys_psk(
+                                    &keys, ep->secret, req.client_pk, s->protocol_id, req.client_pk,
+                                    ep->public_key, opened == DE_OK ? psk : NULL);
+    de__net_wipe(psk, sizeof psk);
+    if (!derived) {
         s->stats.dropped_auth++; /* a low-order public key, or no randomness for an epoch */
         de__net_wipe(&req, sizeof req);
         return;
@@ -356,12 +408,14 @@ static void srv_on_request(de__net_server *s, const de_net_address *from, const 
     }
 }
 
-/* RESPONSE from an address without a slot: the cookie, then the keys, then the token; on success
- * the client gets a slot and an ACCEPT. */
+/* RESPONSE from an address without a slot: the cookie, the accepted ring, the token, then the
+ * keys; on success the client gets a slot and an ACCEPT. Every DENIED here answers a RESPONSE
+ * that authenticated (so a changed RESPONSE never makes the server refuse the real client). */
 static void srv_on_response(de__net_server *s, const de_net_address *from, de__net_packet *p) {
     const u8 *client_pk = p->extra;
     u64 epoch_id = de__net_get_u64(p->extra + DE__NET_KEY_BYTES);
     const u8 *cookie = p->extra + DE__NET_KEY_BYTES + 8u;
+    const u8 *token = p->extra + DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES;
     const srv_epoch *ep = srv_find_epoch(s, epoch_id);
     if (ep == NULL) {
         s->stats.dropped_cookie++;
@@ -375,32 +429,43 @@ static void srv_on_response(de__net_server *s, const de_net_address *from, de__n
         s->stats.dropped_cookie++;
         return;
     }
-    de__net_keys keys;
-    if (!de__net_derive_keys(&keys, ep->secret, client_pk, s->protocol_id, client_pk,
-                             ep->public_key) ||
-        !de__net_packet_open(p, s->protocol_id, NULL, keys.c2s, DE__NET_DIR_C2S,
-                             DE__NET_DOMAIN_SESSION, false)) {
-        de__net_wipe(&keys, sizeof keys);
-        s->stats.dropped_auth++;
-        return;
-    }
-    const u8 *token = p->body;
-    u8 flags = p->body[DE__NET_TOKEN_BYTES];
-    if ((flags & ~DE__NET_FLAG_PLAINTEXT) != 0) {
-        de__net_wipe(&keys, sizeof keys);
-        s->stats.dropped_malformed++;
+    if (srv_accepted_before(s, epoch_id, client_pk)) {
+        s->stats.dropped_replay++; /* a captured RESPONSE sent again after its connection ended */
         return;
     }
     de_net_connect_token_info info;
-    de__net_deny_reason why = srv_check_token(s, token, &info);
+    u8 psk[DE__NET_KEY_BYTES];
+    de_result opened = srv_open_token(s, token, &info, psk);
+    de__net_keys keys;
+    memset(&keys, 0, sizeof keys);
+    bool ok = opened != DE_ERR_PARSE && /* a forged token has no key: nothing to check with */
+              de__net_derive_keys_psk(&keys, ep->secret, client_pk, s->protocol_id, client_pk,
+                                      ep->public_key, opened == DE_OK ? psk : NULL);
+    de__net_wipe(psk, sizeof psk);
+    if (!ok || !de__net_packet_open(p, s->protocol_id, NULL, keys.c2s, DE__NET_DIR_C2S,
+                                    DE__NET_DOMAIN_SESSION, false)) {
+        de__net_wipe(&keys, sizeof keys);
+        de__net_wipe(&info, sizeof info);
+        s->stats.dropped_auth++;
+        return;
+    }
+    u8 flags = p->body[0];
     de__net_wipe(p->body, p->body_bytes);
+    if ((flags & ~DE__NET_FLAG_PLAINTEXT) != 0) {
+        de__net_wipe(&keys, sizeof keys);
+        de__net_wipe(&info, sizeof info);
+        s->stats.dropped_malformed++;
+        return;
+    }
+    de__net_deny_reason why = srv_token_policy(s, opened, &info);
     if (why != DE__NET_DENY_NONE) {
         de__net_wipe(&keys, sizeof keys);
         de__net_wipe(&info, sizeof info);
         srv_send_denied(s, from, why, client_pk, cookie);
         return;
     }
-    srv_slot *sl = srv_free_slot(s); /* srv_check_token saw one */
+    srv_remember_accepted(s, epoch_id, client_pk);
+    srv_slot *sl = srv_free_slot(s); /* srv_token_policy saw one */
     u32 gen = sl->generation + 1u;
     memset(sl, 0, sizeof *sl);
     sl->state = DE__NET_SLOT_CONNECTED;
@@ -506,8 +571,12 @@ de_result de__net_server_create(const de__net_server_desc *desc, de__net_server 
     if (batch > 1024u)
         batch = 1024u;
 
+    u32 accepted_cap = peers * ACCEPTED_PER_PEER;
+    if (accepted_cap < ACCEPTED_MIN)
+        accepted_cap = ACCEPTED_MIN;
     size_t off_slots = align_up(sizeof(de__net_server), 16);
-    size_t off_msgs = align_up(off_slots + (size_t)peers * sizeof(srv_slot), 16);
+    size_t off_accepted = align_up(off_slots + (size_t)peers * sizeof(srv_slot), 16);
+    size_t off_msgs = align_up(off_accepted + (size_t)accepted_cap * sizeof(srv_accepted), 16);
     size_t off_data = align_up(off_msgs + (size_t)batch * sizeof(de__datagram), 16);
     size_t size = off_data + (size_t)batch * DE__NET_PACKET_MAX;
     u8 *mem = (u8 *)DE_ALLOC(a, size, 16, DE_MEM_NET);
@@ -527,6 +596,8 @@ de_result de__net_server_create(const de__net_server_desc *desc, de__net_server 
     s->clock = desc->clock;
     s->cb = desc->callbacks;
     s->slots = (srv_slot *)(void *)(mem + off_slots);
+    s->accepted = (srv_accepted *)(void *)(mem + off_accepted);
+    s->accepted_cap = accepted_cap;
     s->recv_batch = batch;
     s->msgs = (de__datagram *)(void *)(mem + off_msgs);
     s->recv_data = mem + off_data;
@@ -671,8 +742,10 @@ struct de__net_client {
     de__net_end_reason end_reason;
     u8 end_detail;
     de_net_address server;
-    u8 token[DE__NET_TOKEN_BYTES];
-    u8 secret[DE__NET_KEY_BYTES]; /* ephemeral; wiped once the keys are derived */
+    u8 token[DE__NET_TOKEN_BYTES]; /* the sealed part; all zero for a direct connect */
+    u8 psk[DE__NET_KEY_BYTES];     /* the token's connection key; wiped once the keys are derived */
+    bool has_psk;                  /* false for a direct connect */
+    u8 secret[DE__NET_KEY_BYTES];  /* ephemeral; wiped once the keys are derived */
     u8 public_key[DE__NET_KEY_BYTES];
     u8 request_digest[DE__NET_KEY_BYTES]; /* of the REQUEST sent (resends are identical) */
     u64 epoch;
@@ -699,6 +772,8 @@ struct de__net_client {
 /* Wipes every secret and handshake value; keeps configuration, counters and the end reason. */
 static void cli_wipe_session(de__net_client *c) {
     de__net_wipe(c->token, sizeof c->token);
+    de__net_wipe(c->psk, sizeof c->psk);
+    c->has_psk = false;
     de__net_wipe(c->secret, sizeof c->secret);
     de__net_wipe(c->public_key, sizeof c->public_key);
     de__net_wipe(c->request_digest, sizeof c->request_digest);
@@ -730,17 +805,15 @@ static void cli_send_request(de__net_client *c) {
 }
 
 static void cli_send_response(de__net_client *c) {
-    u8 extra[DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES];
+    u8 extra[DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES + DE__NET_TOKEN_BYTES];
     memcpy(extra, c->public_key, DE__NET_KEY_BYTES);
     de__net_put_u64(extra + DE__NET_KEY_BYTES, c->epoch);
     memcpy(extra + DE__NET_KEY_BYTES + 8u, c->cookie, DE__NET_KEY_BYTES);
-    u8 body[DE__NET_TOKEN_BYTES + 1u];
-    memcpy(body, c->token, DE__NET_TOKEN_BYTES);
-    body[DE__NET_TOKEN_BYTES] = c->want_plaintext ? (u8)DE__NET_FLAG_PLAINTEXT : 0u;
+    memcpy(extra + DE__NET_KEY_BYTES + 8u + DE__NET_KEY_BYTES, c->token, DE__NET_TOKEN_BYTES);
+    u8 flags = c->want_plaintext ? (u8)DE__NET_FLAG_PLAINTEXT : 0u;
     u32 n = de__net_packet_seal(c->send_buf, DE__NET_PACKET_MAX, DE__NET_PACKET_RESPONSE,
-                                c->protocol_id, c->send_seq++, extra, NULL, body, sizeof body,
-                                c->keys.c2s, DE__NET_DIR_C2S, DE__NET_DOMAIN_SESSION, false);
-    de__net_wipe(body, sizeof body);
+                                c->protocol_id, c->send_seq++, extra, NULL, &flags, 1u, c->keys.c2s,
+                                DE__NET_DIR_C2S, DE__NET_DOMAIN_SESSION, false);
     if (n != 0)
         cli_send(c, c->send_buf, n);
 }
@@ -774,8 +847,10 @@ static void cli_end(de__net_client *c, de__net_end_reason reason, u8 detail) {
 static void cli_on_challenge(de__net_client *c, de__net_packet *p) {
     const u8 *server_pk = p->extra;
     de__net_keys keys;
-    if (!de__net_derive_keys(&keys, c->secret, server_pk, c->protocol_id, c->public_key,
-                             server_pk) ||
+    /* With a connection key, a CHALLENGE opens only if its sender could read the token: the
+     * server, or another holder of the server key. */
+    if (!de__net_derive_keys_psk(&keys, c->secret, server_pk, c->protocol_id, c->public_key,
+                                 server_pk, c->has_psk ? c->psk : NULL) ||
         !de__net_packet_open(p, c->protocol_id, c->request_digest, keys.s2c, DE__NET_DIR_S2C,
                              DE__NET_DOMAIN_CHALLENGE, false)) {
         de__net_wipe(&keys, sizeof keys);
@@ -788,6 +863,7 @@ static void cli_on_challenge(de__net_client *c, de__net_packet *p) {
     memcpy(c->cookie, p->body + 8, DE__NET_KEY_BYTES);
     de__net_wipe(p->body, p->body_bytes);
     de__net_wipe(c->secret, sizeof c->secret); /* forward secrecy: the keys are all we need */
+    de__net_wipe(c->psk, sizeof c->psk);
     c->state = DE__NET_CLIENT_SENDING_RESPONSE;
     cli_send_response(c);
 }
@@ -942,17 +1018,29 @@ void de__net_client_destroy(de__net_client *c) {
 }
 
 de_result de__net_client_connect(de__net_client *c, const de_net_address *server,
-                                 const u8 token[DE__NET_TOKEN_BYTES]) {
+                                 const u8 token[DE_NET_CONNECT_TOKEN_BYTES]) {
     if (c == NULL || server == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "net client connect: NULL argument");
     if (c->state != DE__NET_CLIENT_DISCONNECTED)
         return DE_FAIL(DE_ERR_BUSY, "net client connect: not disconnected (state %d)",
                        (int)c->state);
+    u8 any_sealed = 0, any_key = 0;
+    for (u32 i = 0; token != NULL && i < DE__NET_TOKEN_BYTES; ++i)
+        any_sealed |= token[i];
+    for (u32 i = 0; token != NULL && i < DE__NET_KEY_BYTES; ++i)
+        any_key |= token[DE__NET_TOKEN_BYTES + i];
+    if (any_sealed != 0 && any_key == 0)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "net client connect: the token has no connection key (its last %u bytes)",
+                       (u32)DE__NET_KEY_BYTES);
     cli_wipe_session(c);
     c->now_ns = clock_now(&c->clock);
     c->server = *server;
-    if (token != NULL)
+    if (any_sealed != 0) {
         memcpy(c->token, token, DE__NET_TOKEN_BYTES);
+        memcpy(c->psk, token + DE__NET_TOKEN_BYTES, DE__NET_KEY_BYTES);
+        c->has_psk = true;
+    }
     c->end_reason = DE__NET_END_NONE;
     c->end_detail = 0;
     de_result r = de__net_x25519_keypair(c->secret, c->public_key);
