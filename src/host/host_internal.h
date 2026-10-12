@@ -13,7 +13,8 @@
 #include <dengine/de_game.h>
 
 #include "host/engine_internal.h"
-#include "host/game_module.h" /* DENG-92: de__game_module */
+#include "host/game_module.h"   /* DENG-92: de__game_module */
+#include "host/loop_internal.h" /* DENG-91: the hook lists de__host holds */
 
 DE_EXTERN_C_BEGIN
 
@@ -33,16 +34,33 @@ typedef struct de__host {
     de_log_category log;
     /** DENG-92: the attached game (library or static); `api` points at `game.table`. */
     de__game_module game;
+
+    /* ---- DENG-91: main loop (loop.c). Zeroed: no hooks, no frame limit, the real clock. ---- */
+    /** Frame-begin and frame-end hooks (de__loop_add_frame_begin_hook / _end_hook). */
+    de__loop_hooks loop_hooks;
+    /** Stop after this many frames; 0 runs until quit. `--frames N` on the command line
+     * (desc.argv) overrides it. */
+    u64 loop_max_frames;
+    /** The loop's clock (frame deltas). NULL = de_time_now_ns. Frame pacing always sleeps on the
+     * real clock. For tests. */
+    de__loop_clock_fn loop_clock;
+    void *loop_clock_user;
+    /** Frames the last de__loop_run completed (Startup not counted). */
+    u64 loop_frames;
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */
 
 /**
- * Runs the main loop until it stops. DENG-90's stub runs DE_SCHEDULE_STARTUP once, then one
- * frame of every other schedule in de_schedule order (FixedUpdate once with dt = 1 / fixed_hz),
- * and returns. DENG-91 replaces it with the SPEC §10.2 loop (timing modes, catch-up, pacing,
- * de_engine_request_quit).
- * @return DE_OK, or the first failed schedule's error (wrapped with the schedule's name).
+ * Runs the main loop (SPEC §10.2) until it stops: DE_SCHEDULE_STARTUP once, then frames until
+ * de_engine_request_quit (or DE_EV_QUIT from the platform) or the frame limit (`--frames N`, else
+ * `h->loop_max_frames`); the frame in which quit is asked for completes. Each frame: event pump,
+ * frame-begin hooks, First, PreUpdate, FixedUpdate 0..N times, Update, PostUpdate, Extract, Last,
+ * frame-end hooks, frame arena swap, frame pacing. The timing (de_engine_get_timing) is read at
+ * each frame start. Creates the frame arenas (de_frame_arenas_init) unless the caller has, and
+ * destroys the ones it created before it returns. Main thread (frame worker 0) only.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (no engine, or a bad `--frames` value), the frame
+ *         arenas' error, or the first failed schedule's or hook's error (wrapped with its name).
  */
 de_result de__loop_run(de__host *h);
 
@@ -77,6 +95,26 @@ void de__game_detach(de__host *h);
 /** Logs `what` with the calling thread's last error (de_error_last) and its cause chain, at
  * Error level in category "host". */
 void de__host_log_error(const char *what);
+
+/* ---------- Main loop hooks (loop.c; DENG-91) ---------- */
+
+/**
+ * Adds `fn(h, user)` to the hooks that run once per frame after `Last`, before the frame arena
+ * swap and frame pacing, in registration order (SPEC §10.2 step 6). Users: hot reload (DENG-93),
+ * crash annotations (DENG-96), the zero-alloc window (DENG-97). Main thread; also allowed from a
+ * hook (the new hook runs from that frame's list if it comes later in it).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`h` or `fn` NULL) or DE_ERR_BUSY (DE__LOOP_MAX_HOOKS
+ *         frame-end hooks already).
+ */
+de_result de__loop_add_frame_end_hook(de__host *h, de__loop_hook_fn fn, void *user);
+
+/**
+ * Adds `fn(h, user)` to the hooks that run once per frame after the platform event pump (and the
+ * input update), before `First`, in registration order. This is where per-frame work runs whose
+ * results the frame's systems must see: the asset system update (de_asset_system_update, wired
+ * by DENG-143). Same rules and results as de__loop_add_frame_end_hook.
+ */
+de_result de__loop_add_frame_begin_hook(de__host *h, de__loop_hook_fn fn, void *user);
 
 DE_EXTERN_C_END
 #endif /* DE_HOST_HOST_INTERNAL_H */
