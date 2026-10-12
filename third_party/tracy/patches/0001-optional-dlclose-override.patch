@@ -1,0 +1,23 @@
+Tracy: make the Linux dlclose() override optional (TRACY_NO_DLCLOSE_OVERRIDE)
+
+On Linux, TracyClient.cpp defines a global dlclose() that does nothing, so that no shared object
+is unloaded while the profiler may still resolve its symbols. That holds for the whole process:
+in every engine build that links Tracy (Dev, and Release with DE_ENABLE_PROFILE) de_dylib_close()
+stopped unloading libraries. That breaks the game library hot reload (DENG-93) and the
+dylib.open_symbol_close test (a library opened again kept its globals; Linux CI, DENG-94).
+
+The engine captures no callstacks and runs no sampling by default, so it does not need the
+override. third_party/tracy/CMakeLists.txt defines TRACY_NO_DLCLOSE_OVERRIDE, and this patch
+makes the override honour it; without the macro the file behaves as upstream. Engine-local patch
+(DENG-94), applied by tools/vendor/vendor.py. Drop it when a pinned release has such a switch.
+
+diff --git a/public/client/TracyOverride.cpp b/public/client/TracyOverride.cpp
+--- a/public/client/TracyOverride.cpp
++++ b/public/client/TracyOverride.cpp
+@@ -1,5 +1,5 @@
+ #ifdef TRACY_ENABLE
+-#  ifdef __linux__
++#  if defined( __linux__ ) && !defined( TRACY_NO_DLCLOSE_OVERRIDE )
+ #    include "TracyDebug.hpp"
+ #    ifdef TRACY_VERBOSE
+ #      include <dlfcn.h>

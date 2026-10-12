@@ -217,6 +217,7 @@ The options most often set on top of a preset:
 | `DE_GPU_D3D12`, `DE_GPU_VULKAN`, `DE_GPU_METAL` | per platform | RHI backends. |
 | `DE_WARNINGS_AS_ERRORS` | `ON` | `-Werror` / `/WX`. Keep it on. |
 | `DE_ENABLE_PROFILE` | `ON` | Define `DE_PROFILE=1` (profiler zones) in Release. Debug never defines it, Dev always does, Shipping never does. |
+| `DE_TRACY` | `ON` | Use the vendored Tracy client (`third_party/tracy/`) as the profiler backend of the builds that define `DE_PROFILE`. `OFF` keeps the profiling calls but links no backend (`de_prof_init` returns `DE_ERR_UNSUPPORTED`) and no C++. Debug and Shipping never build Tracy. |
 | `DE_FUZZ_LIBFUZZER` | `ON` | Build the fuzz targets (`tests/fuzz/`) with libFuzzer (`-fsanitize=fuzzer,address`) when the compiler supports it: upstream or Homebrew Clang (not Apple Clang, not clang-cl), and not with `thread` in `DE_SANITIZE`. Otherwise, or when `OFF`, each target links a standalone driver that only replays its corpus. Either way `ctest -L fuzz` replays the corpora. The cache variable `DE_HAVE_LIBFUZZER` shows which build you got. |
 | `DE_SANITIZE` | empty | `address`, `undefined`, `thread`, or a comma list such as `address,undefined` (`address` and `thread` do not combine; MSVC and clang-cl: `address` only). The `ci-*` presets use it, see `docs/ci.md`. |
 

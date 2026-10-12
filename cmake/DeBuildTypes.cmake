@@ -13,6 +13,7 @@ include_guard(GLOBAL)
 set(DE_BUILD_TYPES Debug Dev Release Shipping)
 
 option(DE_ENABLE_PROFILE "Define DE_PROFILE (Tracy zones) in Release builds" ON)
+option(DE_TRACY "Use the Tracy client (third_party/tracy) as the backend of DE_PROFILE builds" ON)
 
 get_property(DE_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(DE_MULTI_CONFIG)

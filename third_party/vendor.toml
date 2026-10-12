@@ -118,3 +118,20 @@ exclude = [
 # SDL's MSVC `_alloca` check wrote test_malloc_alloca.c into the source tree on configure; the
 # patch writes it to the binary dir (see the patch header). DENG-367.
 patches = ["patches/0001-alloca-check-in-binary-dir.patch"]
+
+[[lib]]
+name = "tracy"
+# Profiler client (SPEC §18.1, §22: Dev only). The Tracy profiler GUI that connects to it must be
+# the same 0.14.x protocol version. DENG-94.
+version = "0.14.1"
+url = "https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.tar.gz"
+sha256 = "bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1"
+license = "BSD-3-Clause"
+# The client only: public/TracyClient.cpp is the single TU, the rest of public/ is what it and
+# public/tracy/TracyC.h include. No server, profiler GUI, tools, manual or examples.
+files = ["public/**"]
+# The Fortran binding is not used.
+exclude = ["public/TracyClient.F90"]
+# The Linux dlclose() override becomes optional (TRACY_NO_DLCLOSE_OVERRIDE, which the build
+# defines), so de_dylib_close and game hot reload unload libraries; see the patch header. DENG-94.
+patches = ["patches/0001-optional-dlclose-override.patch"]

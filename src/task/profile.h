@@ -14,9 +14,8 @@
  * and de__task_node_prof is one unused byte, so the node-run path is the same code as without the
  * hooks.
  *
- * The de_prof_* functions are declared in de_debug.h and implemented by the profiler backend
- * (Tracy, S06 DENG-94). Until a backend exists, profile.c defines no-op fallbacks: see the note
- * there.
+ * The de_prof_* functions are declared in de_debug.h and implemented in core
+ * (src/core/prof/, DENG-94): they send to Tracy after de_prof_init, and return at once before it.
  */
 #ifndef DE_TASK_PROFILE_H
 #define DE_TASK_PROFILE_H

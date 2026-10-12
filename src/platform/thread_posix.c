@@ -11,6 +11,7 @@
 #include <dengine/de_platform.h>
 
 #include "core/de_compiler.h"
+#include "platform/mutex_prof.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -103,6 +104,7 @@ static void de__copy_name(char *dst, size_t cap, const char *src) {
 void de_thread_set_name(const char *name) {
     if (!name)
         return;
+    de__thread_prof_name(name);
 #if defined(__APPLE__)
     char buf[DE_THREAD_NAME_MAX + 1];
     de__copy_name(buf, sizeof buf, name);
@@ -297,26 +299,35 @@ void de_mutex_init(de_mutex *m) {
 #endif
     DE__CHECK(pthread_mutex_init(de__mtx(m), &attr));
     pthread_mutexattr_destroy(&attr);
+    de__mutex_prof_init(m);
 }
 
 void de_mutex_lock(de_mutex *m) {
+    const bool prof_after = de__mutex_prof_before(m);
     DE__CHECK(pthread_mutex_lock(de__mtx(m)));
+    if (prof_after)
+        de__mutex_prof_after(m);
 }
 
 bool de_mutex_try_lock(de_mutex *m) {
     int err = pthread_mutex_trylock(de__mtx(m));
-    if (err == EBUSY)
+    if (err == EBUSY) {
+        de__mutex_prof_after_try(m, false);
         return false;
+    }
     if (err != 0)
         DE__FATAL("pthread_mutex_trylock", err);
+    de__mutex_prof_after_try(m, true);
     return true;
 }
 
 void de_mutex_unlock(de_mutex *m) {
     DE__CHECK(pthread_mutex_unlock(de__mtx(m)));
+    de__mutex_prof_after_unlock(m);
 }
 
 void de_mutex_destroy(de_mutex *m) {
+    de__mutex_prof_destroy(m);
     DE__CHECK(pthread_mutex_destroy(de__mtx(m)));
 }
 
@@ -337,7 +348,9 @@ void de_cond_init(de_cond *c) {
 }
 
 void de_cond_wait(de_cond *c, de_mutex *m) {
+    de__mutex_prof_after_unlock(m);
     DE__CHECK(pthread_cond_wait(de__cnd(c), de__mtx(m)));
+    de__mutex_prof_relocked(m);
 }
 
 #if !defined(__APPLE__)
@@ -362,6 +375,7 @@ static struct timespec de__abs_monotonic(u64 timeout_ns) {
 
 bool de_cond_wait_timeout(de_cond *c, de_mutex *m, u64 timeout_ns) {
     int err;
+    de__mutex_prof_after_unlock(m);
 #if defined(__APPLE__)
     struct timespec rel;
     u64 sec = timeout_ns / DE__NS_PER_S;
@@ -372,6 +386,7 @@ bool de_cond_wait_timeout(de_cond *c, de_mutex *m, u64 timeout_ns) {
     struct timespec abs = de__abs_monotonic(timeout_ns);
     err = pthread_cond_timedwait(de__cnd(c), de__mtx(m), &abs);
 #endif
+    de__mutex_prof_relocked(m);
     if (err == ETIMEDOUT)
         return false;
     if (err != 0)

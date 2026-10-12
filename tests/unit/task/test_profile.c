@@ -177,8 +177,8 @@ TEST(prof, node_stats_errors) {
 }
 
 #ifdef DE_PROFILE
-/* Profile builds link the de_prof_* fallbacks of src/task/profile.c (until the S06 backend):
- * every call must be a harmless no-op. */
+/* Profile builds link core's de_prof_* functions (src/core/prof/prof.c). This test never calls
+ * de_prof_init, so every call must be a harmless no-op. */
 TEST(prof, fallbacks_link) {
     static const de_prof_srcloc loc = {"prof.test", "fallbacks_link", __FILE__, 1u, 0u};
     const de_prof_zone z = de_prof_zone_begin_(&loc);
