@@ -25,6 +25,19 @@
  * fsync under I/O load took 167 ms on CI) let the temporary of an atomic save be delivered as
  * CREATED before its rename arrived (DENG-383).
  *
+ * A path posted as MOVED_FROM_PAIRED (Windows: the first half of a rename, whose second half is
+ * certain to follow) is held the same way until the MOVED_TO with its cookie arrives. A pending
+ * ReadDirectoryChangesW completes on the first record, so the two halves can come in two
+ * completions, and a busy machine can delay the watcher thread between them. Without the hold, a
+ * poll in that gap dropped the temporary of an atomic save (silent, it was created in this
+ * window) and the late MOVED_TO then made the target CREATED (DENG-385).
+ *
+ * A backend may post the changes of one OS report as a batch (de__watch_batch). While a batch
+ * is open, poll delivers nothing. The window counts from each post, so a backend thread delayed
+ * part-way through a report let its first change mature alone: under CPU load on CI the Windows
+ * watcher posted an atomic save's temporary as CREATED and stalled for 400 ms before posting
+ * the rest of the same report, and a poll in between delivered the temporary (DENG-385).
+ *
  * Memory: the watch record and one record per pending path, from the watch's allocator. A poll
  * with nothing pending touches no allocator. More than WATCH_MAX_PENDING pending paths (a huge
  * burst nobody polls) clears the table and reports a rescan of the root instead.
@@ -48,7 +61,9 @@
  * microseconds of each other, so a small ring is enough. */
 #define WATCH_MOVE_RING 256u
 /* Longest hold of a CREATED_OPEN path whose writer never closes it (a file kept open, or one
- * created without write access, which reports no close). It is then delivered as CREATED. */
+ * created without write access, which reports no close). It is then delivered as CREATED. Also
+ * the longest hold of a MOVED_FROM_PAIRED path whose MOVED_TO never comes (lost in a buffer
+ * overflow, which reports a rescan); it is then delivered as the DELETED it merged to. */
 #define WATCH_HOLD_LIMIT_MS 10000u
 
 typedef enum entry_state {
@@ -71,7 +86,8 @@ typedef struct watch_entry {
     bool is_dir;
     bool prior_created; /* DELETED by a MOVED_FROM of a path CREATED in this window */
     bool transient;     /* NONE: created and gone again in this window (see the top) */
-    bool held;          /* CREATED_OPEN: the writer has not closed it yet (see the top) */
+    bool held;          /* CREATED_OPEN: the writer has not closed it yet; MOVED_FROM_PAIRED:
+                           its MOVED_TO has not arrived yet (see the top) */
     u64 held_ns;        /* when the hold started */
 } watch_entry;
 
@@ -97,6 +113,7 @@ struct de_file_watch {
     move_rec moves[WATCH_MOVE_RING];
     u32 move_next;
     bool rescan;
+    u32 batch; /* open batches (de__watch_batch): while not 0, deliver nothing */
     u64 rescan_ns;
     u64 hold_limit_ns; /* WATCH_HOLD_LIMIT_MS, or a test's value */
 
@@ -356,6 +373,7 @@ static void apply_moved_to(de_file_watch *w, watch_entry *b, u64 cookie) {
         return;
     }
     a->cookie = 0;
+    a->held = false; /* the pair is complete (MOVED_FROM_PAIRED) */
     if (a->prior_created) {
         /* A file created in this window and renamed over `b`: an atomic save of `b`. */
         a->state = ST_NONE;
@@ -416,8 +434,9 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
             e->is_dir = is_dir;
         else
             e->is_dir = e->is_dir || is_dir;
-        /* Any other change of the path ends a hold: the writer closed it, or it went away. */
-        e->held = kind == DE__WATCH_RAW_CREATED_OPEN;
+        /* Any other change of the path ends a hold: the writer closed it, or it went away. A
+         * MOVED_TO with the cookie of a held MOVED_FROM_PAIRED ends that path's hold. */
+        e->held = kind == DE__WATCH_RAW_CREATED_OPEN || kind == DE__WATCH_RAW_MOVED_FROM_PAIRED;
         if (e->held)
             e->held_ns = now;
         switch (kind) {
@@ -432,6 +451,7 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
             apply_deleted(w, e);
             break;
         case DE__WATCH_RAW_MOVED_FROM:
+        case DE__WATCH_RAW_MOVED_FROM_PAIRED:
             apply_moved_from(w, e, cookie);
             break;
         case DE__WATCH_RAW_MOVED_TO:
@@ -441,6 +461,15 @@ void de__watch_post(de_file_watch *w, de__watch_raw kind, const char *rel, size_
             break;
         }
     }
+    de_mutex_unlock(&w->lock);
+}
+
+void de__watch_batch(de_file_watch *w, bool open) {
+    de_mutex_lock(&w->lock);
+    if (open)
+        w->batch++;
+    else if (w->batch > 0)
+        w->batch--;
     de_mutex_unlock(&w->lock);
 }
 
@@ -813,6 +842,12 @@ u32 de_file_watch_poll(de_file_watch *w) {
     bool rescan = false;
 
     de_mutex_lock(&w->lock);
+    if (w->batch != 0) {
+        /* The backend is part-way through one OS report: the rest of it may still merge with
+         * what is pending. The next poll after the batch closes delivers. */
+        de_mutex_unlock(&w->lock);
+        return 0;
+    }
     u64 now = de_time_now_ns();
     if (w->rescan && now - w->rescan_ns >= window) {
         rescan = true;

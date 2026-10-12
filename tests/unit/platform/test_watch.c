@@ -583,6 +583,81 @@ TEST_F(watch, merge_held, watch_fx) {
     EXPECT_EQ(de__watch_pending_count(w), 0u);
 }
 
+/* The two halves of a rename that the backend reports as a certain pair (Windows) arrive
+ * several windows apart, as when a pending ReadDirectoryChangesW completes on the first record
+ * and a busy machine delays the watcher thread before the second (DENG-385). The source is
+ * held until its MOVED_TO arrives, so an atomic save is still one MODIFIED of the target. */
+TEST_F(watch, merge_pair_held, watch_fx) {
+    fresh_dir(f, "merge_pair_held");
+    start(f, "scratch:/", true, 50);
+    de_file_watch *w = f->w;
+    /* An atomic save of a new target and a plain rename, each split after its first half. */
+    post(w, DE__WATCH_RAW_CREATED, "fresh.txt.tmp", false, 0);
+    post(w, DE__WATCH_RAW_MODIFIED, "fresh.txt.tmp", false, 0);
+    post(w, DE__WATCH_RAW_MOVED_FROM_PAIRED, "fresh.txt.tmp", false, 41);
+    post(w, DE__WATCH_RAW_MOVED_FROM_PAIRED, "old.txt", false, 42);
+    pump(w, f->r, 0, 250); /* five windows: nothing is delivered */
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 0u);
+    ASSERT_EQ(de__watch_pending_count(w), 2u);
+    u64 paired = de_time_now_ns();
+    post(w, DE__WATCH_RAW_MOVED_TO, "fresh.txt", false, 41);
+    post(w, DE__WATCH_RAW_MOVED_TO, "new.txt", false, 42);
+    pump(w, f->r, 2, 300);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 2u);
+    int saved = find_event(f->r, "scratch:/fresh.txt", DE_WATCH_MODIFIED);
+    int renamed = find_event(f->r, "scratch:/new.txt", DE_WATCH_RENAMED);
+    ASSERT_TRUE(saved >= 0);
+    ASSERT_TRUE(renamed >= 0);
+    EXPECT_STREQ(f->r->ev[renamed].old, "scratch:/old.txt");
+    EXPECT_GE(f->r->ev[saved].time_ns, paired + 50 * MS);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+    /* A pair whose second half is lost (an overflow): DELETED once the hold limit passes. */
+    memset(f->r, 0, sizeof *f->r);
+    de__watch_set_hold_limit(w, 200);
+    u64 moved = de_time_now_ns();
+    post(w, DE__WATCH_RAW_MOVED_FROM_PAIRED, "lost.txt", false, 43);
+    pump(w, f->r, 1, 100);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 1u);
+    EXPECT_STREQ(f->r->ev[0].path, "scratch:/lost.txt");
+    EXPECT_EQ(f->r->ev[0].change, DE_WATCH_DELETED);
+    EXPECT_GE(f->r->ev[0].time_ns, moved + 200 * MS);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+}
+
+/* A backend thread delayed part-way through one OS report (the CI trace: the Windows watcher
+ * posted an atomic save's temporary, then stalled for 400 ms before the rest of the same
+ * report). While its batch is open, poll delivers nothing, so the save is one MODIFIED of the
+ * target (DENG-385). */
+TEST_F(watch, merge_batch, watch_fx) {
+    fresh_dir(f, "merge_batch");
+    start(f, "scratch:/", true, 50);
+    de_file_watch *w = f->w;
+    post(w, DE__WATCH_RAW_MODIFIED, "before.txt", false, 0); /* already pending */
+    de__watch_batch(w, true);
+    post(w, DE__WATCH_RAW_CREATED, "target.txt.tmp", false, 0);
+    pump(w, f->r, 0, 250); /* five windows with the batch open: nothing is delivered */
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 0u);
+    post(w, DE__WATCH_RAW_MODIFIED, "target.txt.tmp", false, 0);
+    post(w, DE__WATCH_RAW_DELETED, "target.txt", false, 0);
+    post(w, DE__WATCH_RAW_MOVED_FROM, "target.txt.tmp", false, 51);
+    post(w, DE__WATCH_RAW_MOVED_TO, "target.txt", false, 51);
+    u64 closed = de_time_now_ns();
+    de__watch_batch(w, false);
+    pump(w, f->r, 2, 300);
+    dump(f->r);
+    ASSERT_EQ(f->r->count, 2u);
+    EXPECT_STREQ(f->r->ev[0].path, "scratch:/before.txt"); /* matured first, delivered first */
+    EXPECT_EQ(f->r->ev[0].change, DE_WATCH_MODIFIED);
+    EXPECT_STREQ(f->r->ev[1].path, "scratch:/target.txt");
+    EXPECT_EQ(f->r->ev[1].change, DE_WATCH_MODIFIED);
+    EXPECT_GE(f->r->ev[1].time_ns, closed);
+    EXPECT_EQ(de__watch_pending_count(w), 0u);
+}
+
 #if defined(__linux__)
 /* Opens `rel` for writing (created), writes `text` and keeps it open. */
 static de_file *open_writer(const watch_fx *f, const char *rel, const char *text) {

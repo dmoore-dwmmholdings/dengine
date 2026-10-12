@@ -241,6 +241,8 @@ static void fse_callback(ConstFSEventStreamRef stream, void *info, size_t n, voi
     de__watch_backend *b = (de__watch_backend *)info;
     CFArrayRef arr = (CFArrayRef)paths;
     char path[MAXPATHLEN * 2];
+    /* One report, one batch: poll delivers none of it until all of it is posted (DENG-385). */
+    de__watch_batch(b->w, true);
     for (size_t i = 0; i < n; ++i) {
         CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(arr, (CFIndex)i);
         if (d == NULL)
@@ -259,6 +261,7 @@ static void fse_callback(ConstFSEventStreamRef stream, void *info, size_t n, voi
         }
         handle_event(b, path, flags[i], ino);
     }
+    de__watch_batch(b->w, false);
 }
 
 typedef struct fse_inject {
