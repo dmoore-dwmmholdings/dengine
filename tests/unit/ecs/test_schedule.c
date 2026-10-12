@@ -1,6 +1,7 @@
 /* test_schedule.c: schedules: the conflict DAG, before / after, cycles, graph reuse, the command
  * sync point, deterministic spawning for every worker count, the event frame step in FIRST and
- * per-system change windows (DENG-350; SPEC §7.3, §8, §10.2, §5.7).
+ * per-system change windows (DENG-350; SPEC §7.3, §8, §10.2, §5.7). Range buffers allocate
+ * nothing once warm, in any acquire order (DENG-379).
  *
  * SCHED_SPAWN_TRACE is the test vector of sched.deterministic_spawn_ids_workers: an integer-only
  * hash of the world after each of 60 FixedUpdate ticks of three parallel spawning systems. It
@@ -8,6 +9,7 @@
  * reason to update it. */
 #include "ecs_test_util.h"
 
+#include "ecs/commands_internal.h"
 #include "ecs/query_internal.h"
 #include "ecs/system_internal.h"
 #include "platform/de_atomic.h"
@@ -438,6 +440,104 @@ TEST_F(sched, graph_reuse_no_alloc, ecs_fx) {
     de_task_system_destroy(ts);
     const de_tracking_stats tend = de_tracking_allocator_stats(&task_track);
     EXPECT_EQ(tend.blocks_live, 0u);
+}
+
+/* ---- sched.range_buffers_any_order_no_alloc ------------------------------------------------- */
+
+/* DENG-379. par_each ranges acquire their buffers in whatever order the worker threads reach
+ * them, and only some ranges record. graph_reuse_no_alloc failed once on a loaded CI runner: a
+ * recording range got a buffer that had no page yet. This test sets the acquire order itself.
+ * It acquires the same keys in forward, reverse and shuffled order, with uneven loads: every
+ * third key records nothing, the rest record one or two pages. After one apply in each order,
+ * no order may allocate. */
+#define RB_KEYS 48u
+
+static u32 rb_commands(u32 range) {
+    if (range % 3u == 0)
+        return 0;                        /* records nothing, like a range without matching rows */
+    return range % 3u == 1 ? 40u : 900u; /* one 16 KiB page, or two */
+}
+
+/* One cycle: acquire RB_KEYS keys of system order 5 in the order of `perm`, record, apply. */
+static void rb_cycle(de_world *w, const u32 *perm, de_entity target, de_component comp) {
+    for (u32 i = 0; i < RB_KEYS; ++i) {
+        const u32 range = perm[i] + 1u;
+        de_commands *c = ecs_cmd_buffer_acquire(w, 5u, range);
+        ASSERT_TRUE(c != NULL);
+        for (u32 k = 0; k < rb_commands(range); ++k)
+            de_cmd_remove(c, target, comp); /* the target lacks it: applies as a no-op */
+    }
+    ecs_cmd_apply_all(w);
+}
+
+TEST_F(sched, range_buffers_any_order_no_alloc, ecs_fx) {
+    const de_entity target = de_entity_spawn(f->w);
+    ASSERT_TRUE(de_entity_add(f->w, target, f->pos) != NULL);
+    u32 fwd[RB_KEYS], rev[RB_KEYS], mix[RB_KEYS];
+    for (u32 i = 0; i < RB_KEYS; ++i) {
+        fwd[i] = i;
+        rev[i] = RB_KEYS - 1u - i;
+        mix[i] = i;
+    }
+    /* Warm-up: one cycle in each of two orders. */
+    rb_cycle(f->w, fwd, target, f->vel);
+    rb_cycle(f->w, rev, target, f->vel);
+    const de_tracking_stats s0 = de_tracking_allocator_stats(&f->track);
+    u32 seed = 0x379u;
+    for (u32 cycle = 0; cycle < 60u; ++cycle) {
+        const u32 *perm = cycle % 3u == 0 ? fwd : cycle % 3u == 1 ? rev : mix;
+        if (cycle % 3u == 2) /* a fresh Fisher-Yates shuffle (LCG) every third cycle */
+            for (u32 i = RB_KEYS - 1u; i > 0; --i) {
+                seed = seed * 1664525u + 1013904223u;
+                const u32 j = (seed >> 8) % (i + 1u);
+                const u32 t = mix[i];
+                mix[i] = mix[j];
+                mix[j] = t;
+            }
+        rb_cycle(f->w, perm, target, f->vel);
+    }
+    const de_tracking_stats s1 = de_tracking_allocator_stats(&f->track);
+    EXPECT_EQ(s1.alloc_count, s0.alloc_count);
+    EXPECT_EQ(s1.realloc_count, s0.realloc_count);
+    EXPECT_EQ(s1.free_count, s0.free_count);
+
+    /* New keys of system order 6, then 7: order 7 takes over the buffers that order 5 left
+     * unused in the apply before. A key whose buffer was taken gets another one, and the apply
+     * order stays by key: (4, 1) before (5, 2), whatever the acquire order. */
+    for (u32 order = 6u; order <= 7u; ++order) {
+        for (u32 i = 0; i < RB_KEYS; ++i)
+            ASSERT_TRUE(ecs_cmd_buffer_acquire(f->w, order, i + 1u) != NULL);
+        ecs_cmd_apply_all(f->w);
+    }
+    de_commands *late = ecs_cmd_buffer_acquire(f->w, 5u, 2u);
+    de_commands *early = ecs_cmd_buffer_acquire(f->w, 4u, 1u);
+    ASSERT_TRUE(late != NULL && early != NULL && late != early);
+    EXPECT_TRUE(ecs_cmd_buffer_acquire(f->w, 5u, 2u) == late); /* same key, same buffer */
+    const de_entity a = de_cmd_spawn(late);
+    const de_entity b = de_cmd_spawn(early);
+    ecs_cmd_apply_all(f->w);
+    const de_entity ra = de_commands_resolve(f->w, a), rb = de_commands_resolve(f->w, b);
+    ASSERT_TRUE(de_entity_alive(f->w, ra) && de_entity_alive(f->w, rb));
+    EXPECT_LT(de_entity_index(rb), de_entity_index(ra)); /* (4, 1) spawned first */
+}
+
+/* At the slot limit, a new key set takes over the slots of the last apply's keys (DENG-379):
+ * two disjoint sets of ECS_CMD_MAX_SLOTS - 1 keys, one after the other, then the first again. */
+TEST_F(sched, range_buffers_slot_limit, ecs_fx) {
+    const u32 n = ECS_CMD_MAX_SLOTS - 1u; /* every slot but the main buffer's */
+    for (u32 pass = 0; pass < 3u; ++pass) {
+        const u32 order = pass == 1u ? 2u : 1u;
+        for (u32 i = 0; i < n; ++i)
+            ASSERT_TRUE(ecs_cmd_buffer_acquire(f->w, order, i + 1u) != NULL);
+        ecs_cmd_apply_all(f->w);
+        EXPECT_EQ(f->w->cmd->buffers.count, ECS_CMD_MAX_SLOTS);
+    }
+    /* One more key than slots is still refused. */
+    for (u32 i = 0; i < n; ++i)
+        ASSERT_TRUE(ecs_cmd_buffer_acquire(f->w, 3u, i + 1u) != NULL);
+    EXPECT_TRUE(ecs_cmd_buffer_acquire(f->w, 3u, n + 1u) == NULL);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_OUT_OF_MEMORY);
+    ecs_cmd_apply_all(f->w);
 }
 
 /* ---- sched.commands_sync_point -------------------------------------------------------------- */

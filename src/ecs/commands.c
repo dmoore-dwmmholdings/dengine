@@ -215,6 +215,7 @@ de_result ecs_commands_init(de_world *w) {
     DE_ARRAY_INIT_TAG(&st->component_refs, ecs_cmd_type_refs, w->a, DE_MEM_ECS);
     DE_ARRAY_INIT_TAG(&st->event_refs, ecs_cmd_type_refs, w->a, DE_MEM_ECS);
     DE_ARRAY_INIT_TAG(&st->entity_offsets, u32, w->a, DE_MEM_ECS);
+    DE_ARRAY_INIT_TAG(&st->homes, ecs_cmd_active, w->a, DE_MEM_ECS);
     de_mutex_init(&st->lock);
     w->cmd = st;
     /* Slot 0: the main-thread buffer, so de_world_commands never takes the lock. */
@@ -244,6 +245,7 @@ void ecs_commands_destroy(de_world *w) {
     de_array_free(&st->component_refs);
     de_array_free(&st->event_refs);
     de_array_free(&st->entity_offsets);
+    de_array_free(&st->homes);
     de_mutex_destroy(&st->lock);
     DE_FREE(w->a, st, sizeof *st);
     w->cmd = NULL;
@@ -253,10 +255,10 @@ static u64 active_key(u32 system_order, u32 range_index) {
     return ((u64)system_order << 32) | range_index;
 }
 
-/* First position in `st->active` whose key is >= `key` (binary search). */
-static u32 active_lower_bound(const ecs_cmd_state *st, u64 key) {
-    u32 lo = 0, hi = st->active.count;
-    const ecs_cmd_active *a = (const ecs_cmd_active *)st->active.data;
+/* First position in sorted list `list` (st->active or st->homes) whose key is >= `key`. */
+static u32 key_lower_bound(const de_array *list, u64 key) {
+    u32 lo = 0, hi = list->count;
+    const ecs_cmd_active *a = (const ecs_cmd_active *)list->data;
     while (lo < hi) {
         const u32 mid = lo + (hi - lo) / 2u;
         if (a[mid].key < key)
@@ -276,7 +278,7 @@ de_commands *ecs_cmd_buffer_acquire(de_world *w, u32 system_order, u32 range_ind
     const u64 key = active_key(system_order, range_index);
     de_mutex_lock(&st->lock);
     DE_ASSERT(!st->applying);
-    const u32 pos = active_lower_bound(st, key);
+    const u32 pos = key_lower_bound(&st->active, key);
     if (pos < st->active.count && DE_ARRAY_AT(&st->active, ecs_cmd_active, pos).key == key) {
         de_commands *c = buffer_at(st, DE_ARRAY_AT(&st->active, ecs_cmd_active, pos).slot);
         de_mutex_unlock(&st->lock);
@@ -288,25 +290,64 @@ de_commands *ecs_cmd_buffer_acquire(de_world *w, u32 system_order, u32 range_ind
         DE_FAIL(DE_ERR_OUT_OF_MEMORY, "ecs: out of memory for command buffers");
         return NULL;
     }
-    u32 slot;
-    if (!DE_ARRAY_POP(&st->free_slots, u32, &slot)) {
-        slot = st->buffers.count;
-        if (slot >= ECS_CMD_MAX_SLOTS) {
-            de_mutex_unlock(&st->lock);
-            DE_FAIL(DE_ERR_OUT_OF_MEMORY, "ecs: more than %u command buffers in use",
-                    ECS_CMD_MAX_SLOTS - 1u);
-            return NULL;
+    /* DENG-379: the key's own slot if it has one (never acquired by another key: a key takes
+     * another key's slot only from the spare list, and that removes the old key's home). */
+    u32 slot = UINT32_MAX;
+    const u32 home = key_lower_bound(&st->homes, key);
+    if (home < st->homes.count && DE_ARRAY_AT(&st->homes, ecs_cmd_active, home).key == key) {
+        slot = DE_ARRAY_AT(&st->homes, ecs_cmd_active, home).slot;
+        DE_ASSERT(!buffer_at(st, slot)->active);
+    } else {
+        /* No slot yet: a spare one (skipping spares that their own key took back since the
+         * last apply), else a new one. */
+        u32 spare;
+        while (DE_ARRAY_POP(&st->free_slots, u32, &spare)) {
+            if (!buffer_at(st, spare)->active) {
+                slot = spare;
+                break;
+            }
         }
-        de_commands *nc = buffer_create(w, slot);
-        /* The free list can hold every slot, so releasing at apply never allocates. */
-        if (nc == NULL || de_array_reserve(&st->free_slots, slot + 1u) != DE_OK ||
-            DE_ARRAY_PUSH(&st->buffers, de_commands *, nc) != DE_OK) {
-            if (nc != NULL)
-                buffer_free(w, nc);
-            de_mutex_unlock(&st->lock);
-            DE_FAIL(DE_ERR_OUT_OF_MEMORY, "ecs: out of memory for command buffers");
-            return NULL;
+        if (slot == UINT32_MAX && st->buffers.count >= ECS_CMD_MAX_SLOTS) {
+            /* At the slot limit: any slot not in use, even one the last apply used. */
+            for (u32 s = 1; s < st->buffers.count; ++s) {
+                if (!buffer_at(st, s)->active) {
+                    slot = s;
+                    break;
+                }
+            }
         }
+        if (slot != UINT32_MAX) {
+            /* Take it over: its old key loses its home. */
+            const de_commands *old = buffer_at(st, slot);
+            const u32 at =
+                key_lower_bound(&st->homes, active_key(old->system_order, old->range_index));
+            DE_ASSERT(at < st->homes.count &&
+                      DE_ARRAY_AT(&st->homes, ecs_cmd_active, at).slot == slot);
+            de_array_remove_ordered(&st->homes, at);
+        } else {
+            slot = st->buffers.count;
+            if (slot >= ECS_CMD_MAX_SLOTS) {
+                de_mutex_unlock(&st->lock);
+                DE_FAIL(DE_ERR_OUT_OF_MEMORY, "ecs: more than %u command buffers in use",
+                        ECS_CMD_MAX_SLOTS - 1u);
+                return NULL;
+            }
+            de_commands *nc = buffer_create(w, slot);
+            /* The spare list and the homes can hold every slot, so neither the release at
+             * apply nor a later take-over allocates. */
+            if (nc == NULL || de_array_reserve(&st->free_slots, slot + 1u) != DE_OK ||
+                de_array_reserve(&st->homes, slot) != DE_OK ||
+                DE_ARRAY_PUSH(&st->buffers, de_commands *, nc) != DE_OK) {
+                if (nc != NULL)
+                    buffer_free(w, nc);
+                de_mutex_unlock(&st->lock);
+                DE_FAIL(DE_ERR_OUT_OF_MEMORY, "ecs: out of memory for command buffers");
+                return NULL;
+            }
+        }
+        const ecs_cmd_active h = {key, slot, 0};
+        DE_VERIFY(de_array_insert(&st->homes, key_lower_bound(&st->homes, key), &h) ==
+                  DE_OK); /* reserved at slot creation */
     }
     de_commands *c = buffer_at(st, slot);
     c->system_order = system_order;
@@ -620,15 +661,17 @@ void ecs_cmd_apply_all(de_world *w) {
         apply_ctx ctx = {w, apply_order_at(st, i)};
         for_each_record(ctx.c, apply_one, &ctx);
     }
-    /* 4. Release: empty every buffer (pages kept) and give acquired slots back. In reverse, so a
-     *    run that acquires the same keys in the same order gets the same slots back. */
+    /* 4. Release. The spare list for the next acquires is every slot this apply did not use
+     *    (DENG-379): the keys of the used slots most likely come back and find them by their
+     *    home. Then empty every buffer (pages kept). */
+    st->free_slots.count = 0;
+    for (u32 slot = st->buffers.count; slot-- > 1u;)
+        if (!buffer_at(st, slot)->active)
+            DE_VERIFY(de_array_push(&st->free_slots, &slot) == DE_OK); /* reserved at creation */
     st->main->active = false;
     buffer_reset(st->main);
-    for (u32 i = st->active.count; i-- > 0;) {
-        const u32 slot = DE_ARRAY_AT(&st->active, ecs_cmd_active, i).slot;
-        buffer_reset(buffer_at(st, slot));
-        DE_VERIFY(de_array_push(&st->free_slots, &slot) == DE_OK); /* reserved at acquire */
-    }
+    for (u32 i = 0; i < st->active.count; ++i)
+        buffer_reset(buffer_at(st, DE_ARRAY_AT(&st->active, ecs_cmd_active, i).slot));
     st->active.count = 0;
     st->applying = false;
 }
