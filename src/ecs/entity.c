@@ -7,6 +7,7 @@
 #include "ecs_internal.h"
 
 #include "change_internal.h" /* DENG-347: a mutable get marks changed */
+#include "system_internal.h" /* DENG-350: access checks inside systems */
 
 ecs_record *ecs_entity_record(const de_world *w, de_entity e) {
     const u32 index = de_entity_index(e);
@@ -113,6 +114,7 @@ static void *entity_component(const de_world *w, de_entity e, de_component c) {
 }
 
 void *de_entity_get(de_world *w, de_entity e, de_component c) {
+    ECS_CHECK_COMPONENT(w, c.id, true); /* DENG-350: declared as a write by the running system */
     /* DENG-347: a mutable get marks the row changed (current change tick; tags have no ticks). */
     void *data = entity_component(w, e, c);
     if (data != NULL)
@@ -121,6 +123,7 @@ void *de_entity_get(de_world *w, de_entity e, de_component c) {
 }
 
 const void *de_entity_get_const(const de_world *w, de_entity e, de_component c) {
+    ECS_CHECK_COMPONENT(w, c.id, false); /* DENG-350: declared by the running system */
     return entity_component(w, e, c);
 }
 

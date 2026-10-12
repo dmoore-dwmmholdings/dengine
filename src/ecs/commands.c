@@ -14,6 +14,7 @@
  * To add an op (DENG-351): a value in de_command_op, a de_cmd_* recorder, a case in
  * apply_command() and, if it has a payload that owns resources, in destruct_payload(). */
 #include "commands_internal.h"
+#include "system_internal.h" /* DENG-350: no apply while a schedule runs */
 
 #include <stdint.h>
 
@@ -687,6 +688,9 @@ void de_world_apply_commands(de_world *w) {
     if (w == NULL)
         return;
     ECS_ASSERT_STRUCTURAL(w);
+    /* DENG-350: not even inside an exclusive system (which may use the immediate API): the
+     * schedule's buffers are acquired for the whole run and applied at its sync point. */
+    DE_ASSERT(w->systems == NULL || !w->systems->running);
     ecs_cmd_apply_all(w);
 }
 

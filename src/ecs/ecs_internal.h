@@ -216,6 +216,8 @@ struct de_world {
                                              first de_query_create */
     /* -- DENG-347: change detection (append below; the rest is in change_internal.h) -- */
     u32 change_check_tick; /**< change_tick at the last ecs_check_change_ticks */
+    /* -- DENG-350: systems and schedules (append below; the rest is in system_internal.h) -- */
+    struct ecs_system_registry *systems; /**< NULL until the first de_system_add or run */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */

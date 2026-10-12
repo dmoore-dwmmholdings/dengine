@@ -1,5 +1,6 @@
 /* world.c: world create/destroy and the world tick (DENG-344, SPEC §7.1). */
 #include "ecs_internal.h"
+#include "system_internal.h" /* DENG-350 */
 
 /* Compares archetype set keys by contents, so two sets with the same 64-bit hash never alias. */
 static bool set_key_eq(const void *a, const void *b, u32 key_size, void *user) {
@@ -119,6 +120,7 @@ static void destruct_all(de_world *w) {
 void de_world_destroy(de_world *w) {
     if (w == NULL)
         return;
+    ecs_systems_destroy(w);  /* DENG-350: schedule graphs and systems (queries go below) */
     ecs_commands_destroy(w); /* DENG-349: unapplied payloads, before anything they refer to */
     destruct_all(w);
     ecs_queries_destroy(w);   /* DENG-346 */

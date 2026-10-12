@@ -29,3 +29,6 @@ target_sources(de_ecs PRIVATE query_internal.h query.c query_cache.c query_iter.
 
 # DENG-347: change detection (change ticks, ADDED / CHANGED row test, write marking, wrap clamp).
 target_sources(de_ecs PRIVATE change_internal.h change.c)
+
+# DENG-350: systems, access sets, schedules (conflict DAG on the task graph) and debug checks.
+target_sources(de_ecs PRIVATE system_internal.h system.c access.c schedule.c debug_checks.c)

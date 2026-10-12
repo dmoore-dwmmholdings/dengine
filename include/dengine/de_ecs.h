@@ -89,7 +89,8 @@ DE_API de_result de_world_create(const de_world_desc *desc, de_world **out);
  * order) and frees all memory of the world. NULL is ignored.
  */
 DE_API void de_world_destroy(de_world *w);
-/** The world's tick counter. 0 after create; schedules advance it (DENG-350). */
+/** The world's tick counter: the simulation tick. 0 after create; each run of
+ * DE_SCHEDULE_FIXED_UPDATE moves it on by one at its end (DENG-350). */
 DE_API u64 de_world_tick(const de_world *w);
 /** The type registry the world was created with (de_world_desc.types), or NULL for a NULL world.
  * Modules use it to register the struct types of the resources and events they insert (DENG-308).
@@ -400,6 +401,12 @@ typedef struct de_query_chunk {
     void **columns;
     u32 range;
     u32 first_row;
+    /** (DENG-350) Inside a system: the command buffer for this slice. In de_query_par_each each
+     * range has its own buffer (key (system order, range + 1)), so ranges record in parallel and
+     * still apply in a fixed order; in de_query_each it is the system's own buffer
+     * (de_system_ctx.commands). Only the thread running the slice records into it. NULL outside
+     * systems (and if memory ran out). */
+    struct de_commands *commands;
 } de_query_chunk;
 
 typedef void (*de_chunk_fn)(const de_query_chunk *chunk, void *user);
@@ -578,6 +585,55 @@ DE_API void de_commands_iterate(const de_commands *c, de_command_visit_fn fn, vo
 DE_API u32 de_commands_count(const de_commands *c);
 
 /* ---------- Systems and schedules ---------- */
+/*
+ * Systems and schedules (SPEC §7.3, §8, DENG-350).
+ *
+ * A system is a function plus its declared access: the components of its queries (DE_READ /
+ * DE_OPTIONAL_READ and DE_ADDED / DE_CHANGED filters read, DE_WRITE / DE_OPTIONAL_WRITE write;
+ * DE_WITH / DE_WITHOUT are not access), the resources it reads or writes, and the event types it
+ * reads or sends. A DE_SYSTEM_EXCLUSIVE system has full access to the world and conflicts with
+ * every other system.
+ *
+ * Schedules run in the fixed order of de_schedule, driven by the host's main loop (SPEC §10.2):
+ * de_world_run_schedule() runs one. Inside a schedule, two systems conflict when both access the
+ * same component, resource or event type and at least one writes it. The schedule's order is a
+ * DAG: first the explicit `before` / `after` edges (by system name), then, for every conflicting
+ * pair that those do not already order, an edge from the system registered first to the other.
+ * Non-conflicting systems run in parallel on the world's task system (one compiled de_task_graph
+ * per schedule, reused until a system of that schedule is added or removed). Conflicting systems
+ * never overlap, and the order does not depend on the worker count.
+ *
+ * A run of a schedule:
+ * 1. DE_SCHEDULE_FIRST only: de_world_update_events() (the event frame step).
+ * 2. For every enabled system, single-threaded, in the schedule's order (a topological order of
+ *    the DAG, ties broken by registration order): it takes a change tick, its queries get the
+ *    change window (its last run, this run], and it gets a command buffer.
+ * 3. The systems run (in parallel where the DAG allows; serially in order when the world has no
+ *    task system). DE_SYSTEM_MAIN_THREAD systems run on the main thread only.
+ * 4. Sync point: every command buffer is applied (de_world_apply_commands order: the main-thread
+ *    buffer, then each system's buffers in schedule order, each system's own buffer before its
+ *    par_each range buffers in range order). Entities spawned by commands get the same ids for
+ *    every worker count.
+ * 5. DE_SCHEDULE_FIXED_UPDATE only: the world tick (de_world_tick) moves on by one.
+ *
+ * Inside a system: no immediate structural changes (spawn, despawn, add, remove, register,
+ * de_query_create): record commands into ctx->commands, or chunk->commands inside a query
+ * callback. Exclusive systems are the exception: nothing else runs beside them, so they may use
+ * the immediate API. A mutable de_entity_get() or de_entity_mark_changed() inside a system stamps
+ * the system's own run tick, like writes through its query terms, so a system never sees its own
+ * changes on its next run.
+ *
+ * Debug and Dev builds check every system (a DE_PANIC naming the system on a violation):
+ * de_entity_get() / de_entity_get_const(), query iteration, de_resource_get() and the event
+ * functions must stay inside the declared access (a write declaration allows reads too).
+ * DE_SYSTEM_DETERMINISTIC systems must run with the deterministic FP environment
+ * (de_fp_env_check()) and must not iterate a hash map (SPEC §5.7 rules 4 and 5); registering one
+ * outside DE_SCHEDULE_FIXED_UPDATE or DE_SCHEDULE_STARTUP logs a warning.
+ *
+ * Threading: de_system_add, de_system_remove and de_world_run_schedule are single-threaded and
+ * not allowed while a schedule runs. Run schedules that have main-thread systems from the task
+ * system's main thread (frame worker 0), which drains main-thread work while it waits.
+ */
 typedef enum de_schedule {
     DE_SCHEDULE_STARTUP,
     DE_SCHEDULE_FIRST,
@@ -590,14 +646,17 @@ typedef enum de_schedule {
     DE_SCHEDULE_COUNT_
 } de_schedule;
 
+/** What a system function gets. Valid during the call only. */
 typedef struct de_system_ctx {
     de_world *world;
-    de_commands *commands;   /* per-thread buffer, applied at the next sync point */
-    const de_query *queries; /* in the order declared in the system desc */
-    f32 dt;                  /* fixed dt in FIXED_UPDATE, frame dt otherwise */
-    f32 alpha;               /* interpolation alpha (fixed-step mode) */
-    u64 tick;
-    void *user;
+    /** The system's own command buffer, applied at the end of the schedule (NULL if memory ran
+     * out). Only the system's own thread records into it; query ranges use chunk->commands. */
+    de_commands *commands;
+    const de_query *queries; /**< created from de_system_desc.queries, in declared order */
+    f32 dt;                  /**< de_world_run_schedule's `dt` (fixed dt in FIXED_UPDATE) */
+    f32 alpha;               /**< de_world_run_schedule's `alpha` (fixed-step interpolation) */
+    u64 tick;                /**< de_world_tick() when the schedule started */
+    void *user;              /**< de_system_desc.user */
 } de_system_ctx;
 
 typedef void (*de_system_fn)(de_system_ctx *ctx);
@@ -613,6 +672,18 @@ typedef struct de_resource_access {
     de_access access;
 } de_resource_access;
 
+/**
+ * de_system_add() parameters. Everything is copied; the pointers need not outlive the call.
+ *
+ * - `name`: unique in the world (NULL: an unnamed system, which before / after cannot name).
+ * - `fn` (required), `user`, `flags` (de_system_flags), `schedule`.
+ * - `queries`: created with de_query_create(); ctx->queries[i] is queries[i].
+ * - `resources`: resource ids with DE_READ or DE_WRITE (the optional forms count as the same).
+ * - `reads_events` / `writes_events`: event types the system reads (de_event_next) or sends
+ *   (de_event_send). de_cmd_send_event() needs no declaration: it applies at the sync point.
+ * - `before` / `after`: names of systems of the same schedule this one runs before / after. A
+ *   name no system of the schedule has is ignored, with a warning when the schedule is built.
+ */
 typedef struct de_system_desc {
     const char *name;
     de_schedule schedule;
@@ -633,11 +704,46 @@ typedef struct de_system_desc {
     u32 after_count;
 } de_system_desc;
 
+/**
+ * Adds a system to its schedule, after every system added before it (registration order).
+ * Creates its queries and computes its access set; the schedule's graph is rebuilt on its next
+ * run. Returns an invalid handle and sets the error context on failure: DE_ERR_INVALID_ARGUMENT
+ * (`w` or `desc` NULL, no `fn`, an unknown schedule or flag, a NULL array with a non-zero count,
+ * an invalid resource id, event type or access value, a NULL before / after name, a query desc
+ * de_query_create() refuses, or before / after edges that form a cycle: the message names the
+ * systems, `"a -> b -> a"`), DE_ERR_ALREADY_EXISTS (the name is taken) or DE_ERR_OUT_OF_MEMORY.
+ * Not allowed while a schedule runs.
+ */
 DE_API de_system de_system_add(de_world *w, const de_system_desc *desc);
+/** Removes a system and destroys its queries. Invalid or stale handles are ignored. Not allowed
+ * while a schedule runs. */
 DE_API void de_system_remove(de_world *w, de_system s);
+/**
+ * Enables or disables a system (enabled after add). A disabled system is skipped: it takes no
+ * change tick, so on its next enabled run its change filters report everything since its last
+ * run. The schedule's graph does not change. Takes effect at the next run of its schedule.
+ */
 DE_API void de_system_set_enabled(de_world *w, de_system s, bool enabled);
-/* Builds (or reuses) the task graph for the schedule and runs it, then applies commands. */
-DE_API void de_world_run_schedule(de_world *w, de_schedule s, f32 dt, f32 alpha);
+/** true if `s` is a live system of `w` and enabled. */
+DE_API bool de_system_enabled(const de_world *w, de_system s);
+/**
+ * Runs schedule `s` once (see "A run of a schedule" above): builds its task graph if a system
+ * was added or removed since the last run, otherwise reuses it, runs the systems, then applies
+ * every command buffer. Allocates nothing once the graph is built and the command buffers have
+ * warmed up.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` NULL or an unknown schedule), DE_ERR_BUSY (called
+ *         while a schedule of `w` runs, for example from a system) or DE_ERR_OUT_OF_MEMORY
+ *         (building the graph; nothing ran).
+ */
+DE_API de_result de_world_run_schedule(de_world *w, de_schedule s, f32 dt, f32 alpha);
+/**
+ * Timings of system `s` (SPEC §18.4 inspector), from the schedule's task graph node
+ * (de_task_graph_node_stats) or, without a task system, measured the same way. Reset when the
+ * schedule's graph is rebuilt.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`w` or `out` NULL, `s` not a live system of `w`) or
+ *         DE_ERR_UNSUPPORTED (Release and Shipping builds, which do not measure; `*out` zeroed).
+ */
+DE_API de_result de_system_get_stats(const de_world *w, de_system s, de_task_node_stats *out);
 
 /* ---------- Snapshots ---------- */
 typedef struct de_world_snapshot {
