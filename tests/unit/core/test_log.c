@@ -638,6 +638,51 @@ TEST_F(log, pre_init_stderr, log_fx) {
     EXPECT_EQ(f->cap.calls, 0u);
 }
 
+/* ---- Console colour (DENG-372) ----------------------------------------------------------- */
+
+static bool console_detected;
+static void run_console_detect(void) {
+    console_detected = de__log_console_detect();
+}
+
+static void set_no_color(const char *value) {
+#if defined(_WIN32)
+    _putenv_s("NO_COLOR", value != NULL ? value : ""); /* "" removes it */
+#else
+    if (value != NULL)
+        setenv("NO_COLOR", value, 1);
+    else
+        unsetenv("NO_COLOR");
+#endif
+}
+
+/* Redirected stderr is never coloured: isatty fails on POSIX, GetConsoleMode on Windows (so the
+ * console mode is not touched). The terminal case needs a real console, see the Windows check in
+ * the DENG-372 report. */
+TEST(log, console_plain_when_redirected) {
+    static char out[4096];
+    console_detected = true;
+    capture_stderr(run_console_detect, out, sizeof out);
+    EXPECT_FALSE(console_detected);
+
+    /* The console format written to a redirected stderr has no escape codes. */
+    capture_stderr(pre_init_logging, out, sizeof out);
+    EXPECT_TRUE(strstr(out, "hello 42") != NULL);
+    EXPECT_TRUE(strchr(out, '\x1b') == NULL);
+}
+
+/* A non-empty NO_COLOR turns colour off whatever stderr is (https://no-color.org). */
+TEST(log, console_no_color) {
+    char saved[256];
+    const char *prev = getenv("NO_COLOR");
+    bool had = prev != NULL;
+    if (had)
+        snprintf(saved, sizeof saved, "%s", prev);
+    set_no_color("1");
+    EXPECT_FALSE(de__log_console_detect());
+    set_no_color(had ? saved : NULL);
+}
+
 /* ---- File sink ---------------------------------------------------------------------------- */
 
 TEST_F(log, file_sink, log_fx) {
