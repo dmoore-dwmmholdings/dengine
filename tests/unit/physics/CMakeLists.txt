@@ -82,3 +82,29 @@ if(TARGET test_physics_broadphase)
     target_compile_definitions(test_physics_broadphase PRIVATE
         "DE_PHYSICS_BROADPHASE_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/broadphase_golden.txt\"")
 endif()
+
+# DENG-134: narrowphase (specialized paths, SAT, GJK/EPA, midphase) and its golden vector.
+de_add_test(NAME physics_narrow SOURCES test_narrow_specialized.c LIBS de_physics de_test_support
+            TIMEOUT 120)
+foreach(_de_np_test test_physics_narrow)
+    if(TARGET ${_de_np_test})
+        target_include_directories(${_de_np_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_np_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+# The checked-in vector of contact sets (physics_narrow.golden_vector). x86-64 and arm64 must
+# reproduce it bit for bit. Regenerate (never by hand) with
+#     DE_REGEN_GOLDEN=1 build/dev/tests/unit/physics/test_physics_narrow --filter=physics_narrow.golden_vector
+if(TARGET test_physics_narrow)
+    target_compile_definitions(test_physics_narrow PRIVATE
+        "DE_PHYSICS_NARROW_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/narrow_golden.txt\"")
+endif()
+de_add_test(NAME physics_sat SOURCES test_sat.c LIBS de_physics)
+de_add_test(NAME physics_gjk SOURCES test_gjk_epa.c LIBS de_physics)
+de_add_test(NAME physics_midphase SOURCES test_midphase.c LIBS de_physics)
+foreach(_de_np_test test_physics_sat test_physics_gjk test_physics_midphase)
+    if(TARGET ${_de_np_test})
+        target_include_directories(${_de_np_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_np_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

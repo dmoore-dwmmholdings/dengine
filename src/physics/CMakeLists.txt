@@ -41,3 +41,17 @@ if(TARGET de_physics)
         broadphase/broadphase.h
         broadphase/broadphase.c)
 endif()
+
+# DENG-134: narrowphase (contact sets: specialized sphere/capsule paths, SAT, GJK/EPA, midphase).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        narrow/narrowphase.h
+        narrow/dispatch.c
+        narrow/sphere_capsule.c
+        narrow/sat_box.c
+        narrow/sat_hull.c
+        narrow/clip.c
+        narrow/gjk.c
+        narrow/epa.c
+        narrow/midphase.c)
+endif()
