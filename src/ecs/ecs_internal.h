@@ -7,8 +7,8 @@
  * functions, each in a block marked with its key, so merges stay trivial:
  *   - DENG-345 (structural changes): edge-cache fields at the end of ecs_archetype.
  *   - DENG-348 (resources, events): world fields at the end of de_world.
- *   - DENG-349 (commands), DENG-347 (change ticks), DENG-350 (systems), DENG-352 (snapshots):
- *     their own blocks at the end of de_world and of this file.
+ *   - DENG-349 (commands), DENG-347 (change ticks), DENG-350 (systems), DENG-352 (snapshots),
+ *     DENG-351 (hierarchy): their own blocks at the end of de_world and of this file.
  *
  * Internal functions use the prefix `ecs_` (module-private; never exported, never in a public
  * header).
@@ -223,6 +223,8 @@ struct de_world {
                                       de_world_checksum */
     /* -- DENG-350: systems and schedules (append below; the rest is in system_internal.h) -- */
     struct ecs_system_registry *systems; /**< NULL until the first de_system_add or run */
+    /* -- DENG-351: hierarchy and built-in components (append below; hierarchy_internal.h) -- */
+    struct ecs_hier_state *hier; /**< NULL until the built-ins are registered */
 };
 
 /* ---- Internal API: entities (entity.c, DENG-344) -------------------------------------------- */

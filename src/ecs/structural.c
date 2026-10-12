@@ -16,6 +16,8 @@
 
 #include "change_internal.h" /* DENG-347 */
 
+#include "hierarchy_internal.h" /* DENG-351 */
+
 /* Component ids of a spawn_with set up to this size are copied on the stack. */
 #define SPAWN_WITH_STACK_IDS 64u
 
@@ -124,6 +126,7 @@ void de_entity_despawn(de_world *w, de_entity e) {
 #endif
         return;
     }
+    ecs_hier_on_despawn(w, e); /* DENG-351: leave the parent's list; children become roots */
     (void)ecs_entity_despawn(w, e);
 }
 

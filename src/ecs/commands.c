@@ -16,6 +16,8 @@
 #include "commands_internal.h"
 #include "system_internal.h" /* DENG-350: no apply while a schedule runs */
 
+#include "hierarchy_internal.h" /* DENG-351: hierarchy ops, despawn detaches children */
+
 #include <stdint.h>
 
 #if defined(DE_DEBUG) || defined(DE_DEV)
@@ -473,6 +475,33 @@ static void apply_send_event(de_world *w, ecs_cmd *cmd) {
     destruct_payload(w, cmd);
 }
 
+/* DENG-351: DE_CMD_SET_PARENT. The payload is the new parent (real or pending, or null). */
+static void apply_set_parent(de_world *w, ecs_cmd *cmd) {
+    const de_entity child = command_target(w, cmd);
+    if (child.bits == 0)
+        return;
+    de_entity parent;
+    memcpy(&parent, cmd_payload(cmd), sizeof parent);
+    if (de_entity_is_pending(parent)) {
+        parent = pending_lookup(w->cmd, parent);
+        if (parent.bits == 0 || is_cancelled(parent)) {
+            CMD_WARN("ecs: deferred set_parent of 0x%016llx: the parent is a spawn that is "
+                     "cancelled or not applied yet; dropped",
+                     (unsigned long long)child.bits);
+            return;
+        }
+    }
+    if (w->hier == NULL)
+        return; /* recorded only with built-ins (de_cmd_set_parent); a guard */
+    if (parent.bits != 0 && ecs_entity_record(w, parent) == NULL) {
+        CMD_WARN("ecs: deferred set_parent of 0x%016llx under 0x%016llx, which is not alive at "
+                 "apply; dropped",
+                 (unsigned long long)child.bits, (unsigned long long)parent.bits);
+        return;
+    }
+    (void)ecs_hier_set_parent(w, child, parent, true); /* a cycle is dropped with a warning */
+}
+
 /* Applies one command of buffer `c`. */
 static void apply_command(de_world *w, de_commands *c, ecs_cmd *cmd) {
     switch ((de_command_op)cmd->op) {
@@ -488,8 +517,10 @@ static void apply_command(de_world *w, de_commands *c, ecs_cmd *cmd) {
     }
     case DE_CMD_DESPAWN: {
         const de_entity t = command_target(w, cmd);
-        if (t.bits != 0)
+        if (t.bits != 0) {
+            ecs_hier_on_despawn(w, t); /* DENG-351: as de_entity_despawn */
             (void)ecs_entity_despawn(w, t);
+        }
         return;
     }
     case DE_CMD_ADD:
@@ -504,6 +535,16 @@ static void apply_command(de_world *w, de_commands *c, ecs_cmd *cmd) {
     case DE_CMD_SEND_EVENT:
         apply_send_event(w, cmd);
         return;
+    /* DENG-351: hierarchy ops. */
+    case DE_CMD_SET_PARENT:
+        apply_set_parent(w, cmd);
+        return;
+    case DE_CMD_DESPAWN_RECURSIVE: {
+        const de_entity t = command_target(w, cmd);
+        if (t.bits != 0)
+            ecs_hier_despawn_recursive(w, t);
+        return;
+    }
     }
     DE_PANIC("ecs: unknown command op %u", (unsigned)cmd->op); /* a corrupted buffer */
 }
@@ -674,6 +715,31 @@ void de_cmd_send_event(de_commands *c, de_event_type t, const void *payload) {
         q->hooks.copy(dst, payload);
     else
         memcpy(dst, payload, q->size);
+}
+
+/* DENG-351: hierarchy commands. */
+void de_cmd_set_parent(de_commands *c, de_entity child, de_entity parent) {
+    if (c == NULL) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_cmd_set_parent: buffer is NULL");
+        return;
+    }
+    if (c->w->hier == NULL) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_cmd_set_parent: the built-in components are not "
+                                         "registered; call de_builtin_components() at setup");
+        return;
+    }
+    ecs_cmd *cmd =
+        record(c, DE_CMD_SET_PARENT, child, 0, (u32)sizeof(de_entity), (u32)DE_ALIGNOF(de_entity));
+    if (cmd != NULL)
+        memcpy(cmd_payload(cmd), &parent, sizeof parent);
+}
+
+void de_cmd_despawn_recursive(de_commands *c, de_entity e) {
+    if (c == NULL) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_cmd_despawn_recursive: buffer is NULL");
+        return;
+    }
+    (void)record(c, DE_CMD_DESPAWN_RECURSIVE, e, 0, 0, 1);
 }
 
 de_commands *de_world_commands(de_world *w) {
