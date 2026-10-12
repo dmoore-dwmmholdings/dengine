@@ -83,10 +83,15 @@ static const de_enum_value k_w_values[] = {
 
 /* ---- Random types --------------------------------------------------------------------------- */
 
+/* Room for "S%u" / "a%u" with any u32: one letter, 10 digits and the NUL. GCC cannot see that
+ * the indices stay below PROP_MAX_STRUCTS / PROP_MAX_FIELDS, and with -Werror its
+ * -Wformat-truncation needs the worst case to fit (DENG-376; the DENG-356 approach). */
+#define PROP_NAME_SIZE 12u
+
 typedef struct gtype {
-    char name[8];
+    char name[PROP_NAME_SIZE];
     de_field_info fields[PROP_MAX_FIELDS];
-    char fnames[PROP_MAX_FIELDS][8];
+    char fnames[PROP_MAX_FIELDS][PROP_NAME_SIZE];
     u32 field_count, size, align, height; /* height: struct levels below this type */
     de_type_id id;
 } gtype;
