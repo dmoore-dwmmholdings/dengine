@@ -62,3 +62,7 @@ if(NOT DE_IS_SHIPPING)
 endif()
 
 include(DeAddGame)
+
+# DENG-91: the main loop's timing core (fixed/variable steps, catch-up, alpha) and the loop's
+# internal types; loop.c itself is in the list above.
+target_sources(de_host PRIVATE timing.h timing.c loop_internal.h)

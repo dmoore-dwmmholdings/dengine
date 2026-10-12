@@ -252,15 +252,23 @@ static struct {
     de_result init_result;
     bool init_saw_modules, types_arg_ok, systems_arg_ok;
     int startup_runs, fixed_runs, update_runs, last_runs;
+    de_engine *engine;
 } g_game;
 
 static void count_run(de_system_ctx *ctx) {
     (*(int *)ctx->user)++;
 }
 
+/* The main loop runs until quit (DENG-91): the test game asks for it in its first frame. */
+static void quit_after_frame(de_system_ctx *ctx) {
+    (void)ctx;
+    de_engine_request_quit(g_game.engine);
+}
+
 static de_result game_init(de_engine *e) {
     g_game.init_at = ++g_game.seq;
     g_game.init_n++;
+    g_game.engine = e;
     g_game.init_saw_modules =
         e != NULL && e->world != NULL && e->types != NULL && e->tasks != NULL &&
         e->allocator != NULL &&
@@ -299,6 +307,12 @@ static void game_register_systems(de_engine *e, de_world *w) {
         sd.user = systems[i].counter;
         (void)de_system_add(w, &sd);
     }
+    de_system_desc quit;
+    memset(&quit, 0, sizeof quit);
+    quit.name = "test.quit";
+    quit.schedule = DE_SCHEDULE_LAST;
+    quit.fn = quit_after_frame;
+    (void)de_system_add(w, &quit);
 }
 
 static void game_shutdown(de_engine *e) {
@@ -370,7 +384,7 @@ TEST_F(engine, host_run_call_order, host_fx) {
     EXPECT_TRUE(g_game.init_saw_modules);
     EXPECT_TRUE(g_game.types_arg_ok);
     EXPECT_TRUE(g_game.systems_arg_ok);
-    /* The loop stub: Startup once, then one frame of every schedule. */
+    /* Startup once, then one frame (the game asks to quit in it), whose FixedUpdate runs once. */
     EXPECT_EQ(g_game.startup_runs, 1);
     EXPECT_EQ(g_game.fixed_runs, 1);
     EXPECT_EQ(g_game.update_runs, 1);

@@ -78,7 +78,10 @@ typedef struct de_timing {
 
 /**
  * Changes the main loop timing at runtime; the loop uses it from its next frame. `*t` is copied.
- * A `fixed_hz` of 0 means DE_TIMING_DEFAULT_FIXED_HZ; a negative or NaN `time_scale` means 1.0.
+ * A `fixed_hz` of 0 means DE_TIMING_DEFAULT_FIXED_HZ, a `max_catchup_steps` of 0 means
+ * DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS; a negative or NaN `time_scale` means 1.0. A `time_scale`
+ * of 0 pauses the simulation (no FixedUpdate; the interpolation alpha stays). A mode change
+ * empties the fixed-step accumulator; a `fixed_hz` change keeps the time accumulated so far.
  * NULL `e` or `t` is ignored. Call it from the main thread (or a DE_SYSTEM_MAIN_THREAD system).
  */
 DE_API void de_engine_set_timing(de_engine *e, const de_timing *t);

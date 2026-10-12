@@ -108,3 +108,39 @@ if(DE_BUILD_TESTS)
             LABELS "unit;host" TIMEOUT 150 ENVIRONMENT "${_de_hg_env}")
     endif()
 endif()
+
+# DENG-91: the main loop. `timing` tests the pure timing core (src/host/timing.c). `loop` runs the
+# loop on a fake clock, and once through de_host_run; it links de_test_support for the alloc
+# guard. `loop_timing` is test_loop.c built with DE_LOOP_TIMING_TESTS: only the wall-clock
+# frame-cap test. It has the label `timing` and every entry is RUN_SERIAL (see Trama "Decision:
+# Timing tests run serially and loosen their bounds on CI"; same snippet as
+# tests/unit/platform/CMakeLists.txt).
+de_add_test(NAME timing SOURCES test_timing.c LIBS de_host)
+de_add_test(NAME loop SOURCES test_loop.c LIBS de_host de_test_support TIMEOUT 300)
+de_add_test(NAME loop_timing SOURCES test_loop.c LIBS de_host LABELS unit timing TIMEOUT 120)
+foreach(_de_host_test test_timing test_loop test_loop_timing)
+    if(TARGET ${_de_host_test})
+        target_include_directories(${_de_host_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(${_de_host_test} PRIVATE
+            DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+            DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/${_de_host_test}_tmp")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_de_host_test}_tmp")
+    endif()
+endforeach()
+if(TARGET test_loop_timing)
+    target_compile_definitions(test_loop_timing PRIVATE DE_LOOP_TIMING_TESTS=1)
+    if(NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_loop_timing_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_loop_timing_adds REGEX "^add_test\\(")
+    foreach(_de_line IN LISTS _de_loop_timing_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+        set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                     "${CMAKE_CURRENT_BINARY_DIR}/test_loop_timing_serial.cmake")
+    endif()
+endif()

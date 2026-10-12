@@ -178,6 +178,8 @@ void de_engine_set_timing(de_engine *e, const de_timing *t) {
     de_timing v = *t;
     if (v.fixed_hz == 0)
         v.fixed_hz = DE_TIMING_DEFAULT_FIXED_HZ;
+    if (v.max_catchup_steps == 0) /* DENG-91: zero fields keep their defaults */
+        v.max_catchup_steps = DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS;
     if (!(v.time_scale >= 0.0f)) /* negative or NaN */
         v.time_scale = DE_TIMING_DEFAULT_TIME_SCALE;
     de__engine_from(e)->timing = v;
