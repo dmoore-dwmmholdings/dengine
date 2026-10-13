@@ -25,7 +25,7 @@ runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
   that only fire in optimized builds, the build without GPU and window modules, Linux-only UB and
   data races. Workers also run `ci-macos-asan` and the `windows-xwin-dev` cross-build on the
   host before they push.
-- What the quick tier misses (clang-cl, MSVC Release, GCC TSan, macOS jobs, headless Windows) is
+- What the quick tier misses (clang-cl, MSVC Release, Shipping, GCC TSan, macOS jobs, headless Windows) is
   caught by the full run on `dev` after the merge; the orchestrator files a fix task for it.
 - `checks.yml` is small (three Ubuntu jobs) and always runs in full. `determinism.yml` (five
   platform jobs and a diff job) has no tiers either.
@@ -53,8 +53,13 @@ configure, build and `ctest` for one preset.
 | linux clang Debug / Release | `ubuntu-24.04` | `linux-clang-debug`, `linux-clang-release` |
 | linux gcc Debug / Dev / Release | `ubuntu-24.04` | `linux-gcc-debug`, `linux-gcc-dev`, `linux-gcc-release` |
 | macos apple-clang Debug / Release | `macos-14` | `macos-debug`, `macos-release` |
+| windows clang-cl / linux clang / macos apple-clang Shipping | `windows-2022`, `ubuntu-24.04`, `macos-14` | `windows-clang-cl-shipping`, `linux-clang-shipping`, `macos-shipping` |
 | headless linux Release | `ubuntu-24.04` | `linux-headless-release` |
 | headless windows Release | `windows-2022` | `windows-headless-release` |
+
+The Shipping jobs build the `DE_SHIPPING` configuration (packed assets only, no cooker, no
+`dev:/`; SPEC §3) and are in the full tier only. Tests that need source mode or the cooker
+skip themselves there; a test that fails only in Shipping is a real failure.
 
 The configure step prints `build/<preset>/de_config_dump.txt`. If a job fails, it uploads the
 artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporary/`

@@ -55,7 +55,9 @@ jobs:
           # sccache caches cl Debug builds too. Linux x64: Clang primary, GCC for portability;
           # GCC Dev is optimized with asserts on, so its flow-based warnings fire there and not in
           # Debug (DENG-356). macOS arm64: Apple Clang. Headless server builds: DE_HEADLESS=ON
-          # (SPEC §4.2).
+          # (SPEC §4.2). Shipping (DE_SHIPPING: packed assets, no cooker, no dev:/) runs on each OS in
+          # the full tier only; before these jobs, Shipping-only test failures surfaced only in the
+          # sprint exit checks (DENG-389).
           jobs=$(cat <<'EOF'
           { "name": "windows clang-cl Debug", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-debug" }
           { "name": "windows clang-cl Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-release" }
@@ -68,6 +70,9 @@ jobs:
           { "name": "linux gcc Release", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-release" }
           { "name": "macos apple-clang Debug", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-debug" }
           { "name": "macos apple-clang Release", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-release" }
+          { "name": "windows clang-cl Shipping", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-shipping" }
+          { "name": "linux clang Shipping", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-shipping" }
+          { "name": "macos apple-clang Shipping", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-shipping" }
           { "name": "headless linux Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-headless-release", "quick": true }
           { "name": "headless windows Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-headless-release" }
           EOF
