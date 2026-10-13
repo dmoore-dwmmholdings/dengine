@@ -111,8 +111,12 @@ typedef struct de_shape_desc {
 } de_shape_desc;
 
 /**
- * Surface and bulk material. `density` in kg/m^3; 0 means DE_PHYSICS_DEFAULT_DENSITY. Friction
- * and restitution are used by the solver (S23).
+ * Surface and bulk material. `density` in kg/m^3; 0 means DE_PHYSICS_DEFAULT_DENSITY.
+ * `friction` (Coulomb coefficient, >= 0) and `restitution` (bounce, >= 0; 1 keeps the approach
+ * speed) are used by the solver (DENG-217): a contact uses sqrt(friction_a * friction_b) and
+ * max(restitution_a, restitution_b). A zeroed material is frictionless and does not bounce.
+ * Contacts closing slower than the restitution threshold (cvar
+ * `physics.solver.restitution_threshold`, 1 m/s) do not bounce.
  */
 typedef struct de_material_phys {
     f32 friction, restitution, density;
@@ -146,7 +150,8 @@ typedef struct de_mass_props {
  *   depend on it.
  * - `gravity`: m/s^2. The zero vector means the default (0, 0, -9.81); for zero gravity call
  *   de_physics_set_gravity() after create.
- * - `substeps`: solver substeps per step (S23); 0 = 4.
+ * - `substeps`: solver substeps per step (DENG-217); 0 = 4. More substeps make stacks and mass
+ *   ratios stiffer at a proportional solver cost.
  * - `max_bodies`: size of the preallocated body pool; 0 = DE_PHYSICS_DEFAULT_MAX_BODIES, at most
  *   DE_PHYSICS_MAX_BODIES_LIMIT. Creating more bodies fails.
  * - `deterministic`: S22 physics is always deterministic; false is treated as true (reserved for
@@ -180,14 +185,20 @@ DE_API void de_physics_destroy(de_physics_world *p);
 DE_API de_result de_physics_attach(de_physics_world *p, de_world *w, de_type_registry *types);
 /**
  * Advances the world by `dt` seconds (> 0, finite): one tick. Manual stepping for tests and tools;
- * the S23 FixedUpdate system calls it. Allocates nothing after create (pools only). An invalid
- * `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
+ * the S23 FixedUpdate system calls it. Collision (broadphase, narrowphase, persistent manifolds),
+ * then the sub-stepped soft-step solver (DENG-217, SPEC §13.1): `substeps` substeps of dt /
+ * substeps, each integrating velocities (gravity * gravity_scale, damping), warm starting,
+ * solving contacts with soft position correction, integrating positions and relaxing; then
+ * restitution. Dynamic bodies move by forces and contacts, kinematic bodies by their velocity
+ * (infinite mass), static bodies never. The first step allocates the collision and solver state;
+ * later steps allocate nothing. An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
  */
 DE_API void de_physics_step(de_physics_world *p, f32 dt); /* manual stepping (tests, tools) */
 /**
- * XXH3-64 of the simulation state: the tick, the gravity and substeps, and every live body in
- * ascending index order, field by field (never raw struct bytes). Equal states give equal values
- * on every platform. 0 for NULL.
+ * XXH3-64 of the simulation state: the tick, the gravity and substeps, every live body in
+ * ascending index order, field by field (never raw struct bytes), then the contact manifolds
+ * (with the solver's accumulated impulses) in key order. Equal states give equal values on every
+ * platform. 0 for NULL.
  */
 DE_API u64 de_physics_checksum(const de_physics_world *p);
 /** Ticks stepped since create. */
@@ -243,7 +254,9 @@ typedef struct de_collision_filter {
 #define DE_COLLISION_FILTER_DEFAULT_MASK  0xFFFFFFFFu
 
 /* ---------- Bodies (direct API: tests, tools, and the S23 ECS systems) ---------- */
-/** de_body_desc.flags. */
+/** de_body_desc.flags. LOCK_ROT_X/Y/Z: a dynamic body never rotates about that *world* axis
+ *  (the solver zeroes those rows and columns of its world inverse inertia and that component of
+ *  its angular velocity). */
 typedef enum de_body_flags {
     DE_BODY_FLAG_CCD = 1u << 0,
     DE_BODY_FLAG_ALLOW_SLEEP = 1u << 1,
@@ -265,7 +278,17 @@ typedef enum de_body_flags {
  * - `material`: density 0 means DE_PHYSICS_DEFAULT_DENSITY.
  * - `filter`: all zero means {DE_COLLISION_FILTER_DEFAULT_LAYER, DE_COLLISION_FILTER_DEFAULT_MASK,
  *   0}.
+ * - `linear_velocity`: of the center of mass (m/s); `angular_velocity`: rad/s about world axes.
+ * - `linear_damping`, `angular_damping` (1/s, >= 0 used): each substep h scales the velocity by
+ *   1 / (1 + h * damping).
+ * - `gravity_scale`: the body feels gravity * gravity_scale. Taken as given: 0 (a zeroed desc)
+ *   means no gravity, so set 1 for a normal falling body. Dynamic bodies only.
  * - `flags`: de_body_flags. `owner`: the ECS entity the body belongs to (DE_ENTITY_NULL for none).
+ * - `friction_axis`, `friction_secondary` (DENG-217): anisotropic friction. A non-zero
+ *   `friction_axis` is a body-local direction (normalized at create) along which
+ *   `material.friction` applies; `friction_secondary` (>= 0) applies across it in the contact
+ *   plane. Zero (the default) is isotropic. In a contact, the first body with an axis (A, then B)
+ *   sets the directions, and each direction mixes the two bodies' coefficients as sqrt(a * b).
  */
 typedef struct de_body_desc {
     de_body_type type;
@@ -278,13 +301,16 @@ typedef struct de_body_desc {
     f32 linear_damping, angular_damping, gravity_scale;
     u32 flags;
     de_entity owner;
+    de_vec3 friction_axis;  /* DENG-217: body-local; zero = isotropic friction */
+    f32 friction_secondary; /* DENG-217: friction across friction_axis */
 } de_body_desc;
 
 /**
  * Creates a body in the preallocated pool: the most recently freed index first (LIFO), else the
  * next unused one. Allocates nothing. On failure returns an invalid handle and sets the error
  * context: DE_ERR_INVALID_ARGUMENT (bad type, stale shape, non-finite transform or velocity,
- * negative mass, a dynamic body without a volume shape) or DE_ERR_OUT_OF_MEMORY (pool full).
+ * negative mass, negative or non-finite friction, restitution or friction_secondary, non-finite
+ * friction axis, a dynamic body without a volume shape) or DE_ERR_OUT_OF_MEMORY (pool full).
  */
 DE_API de_body de_body_create(de_physics_world *p, const de_body_desc *desc);
 /** Destroys a body; its handle and every copy of it become stale. Stale handles are ignored. */
@@ -298,8 +324,8 @@ DE_API bool de_body_get_transform(const de_physics_world *p, de_body b, de_trans
 /** Teleports a body (scale ignored, rotation normalized). false for a stale handle or a
  *  non-finite transform. */
 DE_API bool de_body_set_transform(de_physics_world *p, de_body b, const de_transform *t);
-/** Linear (m/s) and angular (rad/s, world axes) velocity; either output may be NULL. false for a
- *  stale handle. */
+/** Linear velocity of the center of mass (m/s) and angular velocity (rad/s, world axes); either
+ *  output may be NULL. false for a stale handle. */
 DE_API bool de_body_get_velocity(const de_physics_world *p, de_body b, de_vec3 *linear,
                                  de_vec3 *angular);
 /** Sets both velocities. false for a stale handle or a non-finite value. Static bodies keep zero

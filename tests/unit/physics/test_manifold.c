@@ -8,6 +8,7 @@
 
 #include "physics/contact/manifold.h"
 #include "physics/physics_internal.h"
+#include "physics/solver/solver_internal.h"
 
 #include <string.h>
 
@@ -330,6 +331,36 @@ TEST(physics_manifold, carry_by_feature_id) {
     EXPECT_TRUE(cur.points[2].normal_impulse == 1.0f && cur.points[2].tangent_impulse[1] == 20.0f);
 }
 
+/* DENG-217: a point whose feature id changed takes the impulses of the nearest unused old point
+ * within DE__CONTACT_CARRY_DIST (an id match always wins; each old point is used once). */
+TEST(physics_manifold, carry_by_proximity) {
+    de__manifold old, cur;
+    memset(&old, 0, sizeof old);
+    memset(&cur, 0, sizeof cur);
+    old.point_count = 4;
+    old.points[0] = point(0, 0, 0, 10);
+    old.points[1] = point(1, 0, 0, 11);
+    old.points[2] = point(1, 1, 0, 12);
+    old.points[3] = point(0.005f, 0, 0, 13);
+    for (u32 i = 0; i < 4; ++i)
+        old.points[i].normal_impulse = 1.0f + (f32)i;
+    cur.point_count = 4;
+    cur.points[0] = point(0.002f, 0, 0, 90); /* new id: nearest unused is old[0] (2 mm) */
+    cur.points[1] = point(1.003f, 0, 0, 91); /* new id: old[1] (3 mm) */
+    cur.points[2] = point(1, 1.5f, 0, 12);   /* id match wins over distance */
+    cur.points[3] = point(0.001f, 0, 0, 92); /* old[0] taken: old[3] (4 mm) */
+    de__manifold_carry(&cur, &old);
+    EXPECT_TRUE(cur.points[0].normal_impulse == 1.0f);
+    EXPECT_TRUE(cur.points[1].normal_impulse == 2.0f);
+    EXPECT_TRUE(cur.points[2].normal_impulse == 3.0f);
+    EXPECT_TRUE(cur.points[3].normal_impulse == 4.0f);
+    /* Beyond the distance: zero. */
+    cur.point_count = 1;
+    cur.points[0] = point(0.5f, 0.5f, 0, 93);
+    de__manifold_carry(&cur, &old);
+    EXPECT_TRUE(cur.points[0].normal_impulse == 0.0f);
+}
+
 static de__pose pose_at(f64 x, f64 y, f64 z) {
     de__pose p;
     p.position = (de_dvec3){x, y, z};
@@ -432,7 +463,9 @@ TEST(physics_manifold, resting_box_keeps_features_and_impulses) {
         EXPECT_FLOAT_EQ(m0->points[i].separation, -0.001f, 1e-5f);
     }
     const u32 mid = m0->id;
-    /* The solver's stand-in writes impulses once; nothing else touches them. */
+    /* The test writes impulses once; with the solver's contact class removed (DENG-217), nothing
+     * else touches them, so only the manifold carry-over is tested. */
+    de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_CONTACT);
     u32 n = 0;
     de__manifold *mm = de__contacts_manifolds_mut(p, &n);
     for (u32 i = 0; i < 4; ++i) {
@@ -470,6 +503,8 @@ TEST(physics_manifold, jittered_box_keeps_features) {
     u32 n = 0;
     de__manifold *m = de__contacts_manifolds_mut(p, &n);
     ASSERT_EQ(m->point_count, 4u);
+    /* Manifold carry-over only: the solver's contact class would rewrite the impulses. */
+    de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_CONTACT);
     u32 ids[4];
     for (u32 i = 0; i < 4; ++i) {
         ids[i] = m->points[i].feature_id;

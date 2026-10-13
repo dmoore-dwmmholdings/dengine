@@ -454,10 +454,8 @@ static void ks_script(de_phys_det_ctx *c, u64 tick) {
         const de_vec3 v = v3(-rw * s, rw * co, 2.0f * st->bob[k] * w * c2);
         const de_vec3 av = v3(0.8f * de_dsin(0.7f * theta + (f32)k), 0.3f + 0.1f * (f32)k,
                               0.9f * de_dcos(0.5f * theta));
-        /* Integrate from the body's own state, so a difference carries into later ticks. */
-        t.position = de_dv3_add(t.position, de_dv3_scale(de_dv3_from_v3(v), (f64)dt));
-        t.rotation = de_dintegrate_quat(t.rotation, av, dt);
-        de_body_set_transform(p, b, &t);
+        /* Since DENG-217 the step moves kinematic bodies by their velocity, from the body's own
+         * state, so a difference carries into later ticks. */
         de_body_set_velocity(p, b, v, av);
     }
 }

@@ -41,6 +41,8 @@ static u32 pool_fields(de__body_pool *pool, pool_field *f) {
     DE__FIELD(material);
     DE__FIELD(owner);
     DE__FIELD(world_aabb);
+    DE__FIELD(friction_axis);
+    DE__FIELD(friction_secondary);
 #undef DE__FIELD
     return n;
 }
@@ -166,6 +168,14 @@ de_body de_body_create(de_physics_world *p, const de_body_desc *desc) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_body_create: bad mass, density or damping");
         return none;
     }
+    /* DENG-217: friction and restitution feed the solver: finite and >= 0. */
+    if (!de__f32_finite(desc->material.friction) || desc->material.friction < 0.0f ||
+        !de__f32_finite(desc->material.restitution) || desc->material.restitution < 0.0f ||
+        !de__f32_finite(desc->friction_secondary) || desc->friction_secondary < 0.0f ||
+        !de__v3_finite(desc->friction_axis)) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_body_create: bad friction or restitution");
+        return none;
+    }
     de__shape *s = NULL;
     if (desc->shape.id != 0) {
         s = de__shape_get(p, desc->shape);
@@ -217,6 +227,9 @@ de_body de_body_create(de_physics_world *p, const de_body_desc *desc) {
     if (b->material[i].density == 0.0f)
         b->material[i].density = DE_PHYSICS_DEFAULT_DENSITY;
     b->owner[i] = desc->owner;
+    /* Zero stays zero (isotropic); anything else becomes a unit axis. */
+    b->friction_axis[i] = de_dnormalize_v3(desc->friction_axis);
+    b->friction_secondary[i] = desc->friction_secondary;
     body_set_mass(b, i, s, desc->mass);
     if (s != NULL)
         ++s->refcount;

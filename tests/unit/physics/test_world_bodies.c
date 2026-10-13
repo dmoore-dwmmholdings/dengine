@@ -482,6 +482,8 @@ TEST_F(physics_world, checksum_sensitivity, pw_fx) {
         {b->material, sizeof *b->material},
         {b->owner, sizeof *b->owner},
         {b->world_aabb, sizeof *b->world_aabb},
+        {b->friction_axis, sizeof *b->friction_axis}, /* DENG-217 */
+        {b->friction_secondary, sizeof *b->friction_secondary},
     };
     for (u32 k = 0; k < sizeof fields / sizeof fields[0]; ++k) {
         u8 *elem = (u8 *)fields[k].base + fields[k].elem * i;

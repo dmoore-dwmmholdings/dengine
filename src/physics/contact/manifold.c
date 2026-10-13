@@ -12,19 +12,54 @@ void de__manifold_carry(de__manifold *cur, const de__manifold *old) {
     cur->id = old->id;
     cur->serial = old->serial;
     cur->flags = (cur->flags & ~(u32)DE__MANIFOLD_BEGIN) | (u32)DE__MANIFOLD_PERSIST;
+    bool used[DE__MANIFOLD_MAX_POINTS] = {false};
+    bool matched[DE__MANIFOLD_MAX_POINTS] = {false};
+    const u32 n_old =
+        old->point_count < DE__MANIFOLD_MAX_POINTS ? old->point_count : DE__MANIFOLD_MAX_POINTS;
+    /* 1. By feature id. */
     for (u32 i = 0; i < cur->point_count; ++i) {
         de__contact *c = &cur->points[i];
         c->normal_impulse = 0.0f;
         c->tangent_impulse[0] = 0.0f;
         c->tangent_impulse[1] = 0.0f;
-        for (u32 j = 0; j < old->point_count; ++j) {
+        for (u32 j = 0; j < n_old; ++j) {
             const de__contact *o = &old->points[j];
-            if (o->feature_id == c->feature_id) {
+            if (!used[j] && o->feature_id == c->feature_id) {
                 c->normal_impulse = o->normal_impulse;
                 c->tangent_impulse[0] = o->tangent_impulse[0];
                 c->tangent_impulse[1] = o->tangent_impulse[1];
+                used[j] = true;
+                matched[i] = true;
                 break;
             }
+        }
+    }
+    /* 2. DENG-217: a point whose feature id changed (two equal aligned boxes clip to vertex or
+     * edge features by a hair) takes the impulses of the nearest unused old point within
+     * DE__CONTACT_CARRY_DIST on A; ties go to the lower old index. Without it the warm start of
+     * such corners is lost every few ticks and stacks jitter. */
+    for (u32 i = 0; i < cur->point_count; ++i) {
+        if (matched[i])
+            continue;
+        de__contact *c = &cur->points[i];
+        u32 best = DE__MANIFOLD_MAX_POINTS;
+        f32 best_d2 = DE__CONTACT_CARRY_DIST * DE__CONTACT_CARRY_DIST;
+        for (u32 j = 0; j < n_old; ++j) {
+            if (used[j])
+                continue;
+            const de_vec3 d = de__v3_sub(c->local_a, old->points[j].local_a);
+            const f32 d2 = de__v3_dot(d, d);
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best = j;
+            }
+        }
+        if (best < DE__MANIFOLD_MAX_POINTS) {
+            const de__contact *o = &old->points[best];
+            c->normal_impulse = o->normal_impulse;
+            c->tangent_impulse[0] = o->tangent_impulse[0];
+            c->tangent_impulse[1] = o->tangent_impulse[1];
+            used[best] = true;
         }
     }
 }

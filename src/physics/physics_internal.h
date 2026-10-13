@@ -260,6 +260,9 @@ typedef struct de__body_pool {
     de_material_phys *material; /**< density resolved (never 0) */
     de_entity *owner;
     de_aabb *world_aabb; /**< f32, outward-rounded from f64 */
+    /* DENG-217 (appended): anisotropic friction (de_body_desc). */
+    de_vec3 *friction_axis;  /**< unit body-local axis of material.friction; zero = isotropic */
+    f32 *friction_secondary; /**< friction across friction_axis (unused when isotropic) */
 
     void *block; /**< the one allocation behind every array above */
     size_t block_size;
