@@ -132,3 +132,10 @@ if(TARGET test_gpu_d3d12)
         target_sources(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_barriers.c")
     endif()
 endif()
+
+# DENG-290: tier evaluation (src/gpu/tier.c). test_gpu_tier.c runs de_gpu_evaluate_tier on
+# synthetic caps (GTX 1060, RTX 3070, M1, M3, Steam Deck, missing SM 6.6, ...) and on the null
+# device; CTest names gpu.gpu_tier.<test>. The de-caps JSON tests are in tools/caps/.
+if(TARGET test_gpu)
+    target_sources(test_gpu PRIVATE test_gpu_tier.c)
+endif()

@@ -18,6 +18,7 @@ de_add_module(
         memory/gpu_tlsf.c
         memory/gpu_heap.h
         memory/gpu_heap.c
+        tier.c
     DEPS core platform
 )
 
