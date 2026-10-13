@@ -59,7 +59,12 @@
 #define DE_VK_INSTANCE_FUNCS_OPT(X)                                                                \
     X(vkCreateDebugUtilsMessengerEXT)                                                              \
     X(vkDestroyDebugUtilsMessengerEXT)                                                             \
-    X(vkSetDebugUtilsObjectNameEXT)
+    X(vkSetDebugUtilsObjectNameEXT)                                                                \
+    X(vkDestroySurfaceKHR)                                                                         \
+    X(vkGetPhysicalDeviceSurfaceSupportKHR)                                                        \
+    X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR)                                                   \
+    X(vkGetPhysicalDeviceSurfaceFormatsKHR)                                                        \
+    X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 
 /** Device-level, required (Vulkan 1.3 core). */
 #define DE_VK_DEVICE_FUNCS(X)                                                                      \
@@ -106,10 +111,24 @@
     X(vkEndCommandBuffer)                                                                          \
     X(vkCmdPipelineBarrier2)                                                                       \
     X(vkCmdClearColorImage)                                                                        \
-    X(vkCmdFillBuffer)
+    X(vkCmdFillBuffer)                                                                             \
+    X(vkResetCommandPool)                                                                          \
+    X(vkCmdBeginRendering)                                                                         \
+    X(vkCmdEndRendering)                                                                           \
+    X(vkCmdSetViewport)                                                                            \
+    X(vkCmdSetScissor)                                                                             \
+    X(vkCmdCopyBuffer)                                                                             \
+    X(vkCmdCopyBufferToImage)                                                                      \
+    X(vkCmdCopyImageToBuffer)
 
 /** Device-level, optional (extensions): NULL when absent or not enabled. */
-#define DE_VK_DEVICE_FUNCS_OPT(X) X(vkGetDeviceFaultInfoEXT)
+#define DE_VK_DEVICE_FUNCS_OPT(X)                                                                  \
+    X(vkGetDeviceFaultInfoEXT)                                                                     \
+    X(vkCreateSwapchainKHR)                                                                        \
+    X(vkDestroySwapchainKHR)                                                                       \
+    X(vkGetSwapchainImagesKHR)                                                                     \
+    X(vkAcquireNextImageKHR)                                                                       \
+    X(vkQueuePresentKHR)
 
 /** Every entry point the backend calls, resolved by vk_loader.c. */
 typedef struct de__vk_fns {
@@ -222,6 +241,9 @@ void de__vk_fill_caps(const struct de__vk_device *vk, de_gpu_caps *caps);
 
 /* ---------- The device payload ---------- */
 
+/** Most swapchain acquires waiting for a graphics submit at once (one per live swapchain). */
+#define DE__VK_MAX_PENDING_ACQUIRES 16u
+
 typedef struct de__vk_queue {
     VkQueue queue;
     u32 family;
@@ -283,6 +305,14 @@ typedef struct de__vk_device {
     u64 *shadow[DE__VK_BINDING_COUNT];
 
     de_gpu_device *owner;
+
+    /* DENG-284: submission state, guarded by the queue's lock (queue_locks[queues[q].lock]). */
+    /** Internal timeline value last handed to vkQueueSubmit2, per de_gpu queue. */
+    u64 last_value[DE_QUEUE_COUNT_];
+    /** Swapchain acquires (vk_swapchain.c) that the next graphics-queue submit waits on; guarded
+     * by the graphics queue's lock. */
+    struct de__vk_acquire *pending_acquire[DE__VK_MAX_PENDING_ACQUIRES];
+    u32 pending_acquire_count;
 } de__vk_device;
 
 static inline de__vk_device *de__vk(de_gpu_device *d) {
@@ -407,5 +437,151 @@ bool de__gpu_vk_bindless_written(de_gpu_device *d, de__gpu_bindless_space space,
 u64 de__gpu_vk_buffer_handle(de_gpu_device *d, de_gpu_buffer b);
 u64 de__gpu_vk_texture_view(de_gpu_device *d, de_gpu_texture t, u32 mip, bool storage);
 u64 de__gpu_vk_sampler_handle(de_gpu_device *d, de_gpu_sampler s);
+
+/* ---------- Command lists, barriers, sync, swapchain (DENG-284) ---------- */
+
+/** A de_gpu_fence: a timeline semaphore. */
+typedef struct de__vk_fence {
+    VkSemaphore semaphore;
+} de__vk_fence;
+
+/** One swapchain acquire slot: the binary semaphore vkAcquireNextImageKHR signals, waited on by
+ * the next graphics submit (or by present when nothing was submitted). */
+typedef struct de__vk_acquire {
+    VkSemaphore semaphore;
+    u64 consumed_value; /**< graphics internal timeline value of the submit that waited on it */
+    bool pending;       /**< signalled by an acquire, not yet waited on */
+} de__vk_acquire;
+
+#define DE__VK_MAX_SWAPCHAIN_IMAGES 8u
+
+typedef struct de__vk_swapchain {
+    u64 surface; /**< VkSurfaceKHR */
+    VkSwapchainKHR swapchain;
+    VkFormat format;
+    VkPresentModeKHR mode;
+    VkExtent2D extent;
+    u32 image_count;
+    VkImage images[DE__VK_MAX_SWAPCHAIN_IMAGES];
+    de_gpu_texture textures[DE__VK_MAX_SWAPCHAIN_IMAGES];
+    /** Signalled by the timeline bridge submit, waited on by vkQueuePresentKHR (one per image). */
+    VkSemaphore present[DE__VK_MAX_SWAPCHAIN_IMAGES];
+    de__vk_acquire acquire[DE__VK_MAX_SWAPCHAIN_IMAGES + 1u];
+    u32 acquire_next; /**< next acquire slot (ring) */
+    u32 current;      /**< acquired image index, or UINT32_MAX */
+    u32 current_slot; /**< acquire slot of the acquired image */
+    bool suboptimal;  /**< the last acquire or present said VK_SUBOPTIMAL_KHR */
+} de__vk_swapchain;
+
+/** What one de_gpu_access bit (or a combination) means to Vulkan: the stages and accesses of that
+ * use and the image layout it needs. */
+typedef struct de__vk_access_info {
+    VkPipelineStageFlags2 stages;
+    VkAccessFlags2 access;
+    VkImageLayout layout; /**< images only */
+} de__vk_access_info;
+
+/** Device facts the barrier translation needs (vk_barriers.c). Pure data, so tests build it. */
+typedef struct de__vk_barrier_ctx {
+    VkPipelineStageFlags2 queue_stages; /**< stages the recording queue's family supports */
+    bool separate_depth_layouts;        /**< separateDepthStencilLayouts is enabled */
+    bool accel, rt_pipeline, mesh;      /**< ray tracing / mesh shader stages exist */
+    u32 cmd_family;                     /**< queue family the list is recorded for */
+    u32 family[DE_QUEUE_COUNT_];        /**< queue family of each de_gpu queue */
+    de_gpu_queue cmd_queue;             /**< queue the list is recorded for */
+} de__vk_barrier_ctx;
+
+/** One command list (de__gpu_cmd_payload): its own transient pool and primary command buffer. The
+ * front-end reuses a list only after its submission completed, so cmd_begin resets the pool, and
+ * a pool is only ever used by the one thread recording the list. */
+typedef struct de__vk_cmd {
+    VkCommandPool pool;
+    VkCommandBuffer cb;
+    /** Attachment views made by begin_render, destroyed when the list is reused or freed. */
+    VkImageView *views;
+    u32 view_count, view_cap;
+    VkExtent2D render_extent;       /**< of the open render pass (viewport flip) */
+    de__vk_barrier_ctx barrier_ctx; /**< made once at cmd_init (the queue never changes) */
+} de__vk_cmd;
+
+static inline de__vk_cmd *de__vk_cmd_of(de_gpu_cmd *c) {
+    return (de__vk_cmd *)de__gpu_cmd_payload(c);
+}
+
+/** The texture facts a barrier needs (from the record and its payload). */
+typedef struct de__vk_barrier_texture {
+    VkImage image;
+    VkImageAspectFlags aspect;
+    bool depth, stencil;
+    u32 mip_count, layers; /**< layers: 1 for 3D textures */
+} de__vk_barrier_texture;
+
+/**
+ * The stages, accesses and layout of `access` (de_gpu_access bits) for a texture (`image`) or a
+ * buffer, on a queue that supports `ctx->queue_stages`. Each bit comes from one table row; the
+ * layout of several bits is their common layout, the read-only depth layout for depth reads with
+ * shader reads, or GENERAL. `before` is the source side: NONE and PRESENT then wait for all prior
+ * commands (ALL_COMMANDS with no access), so the barrier chains after a swapchain acquire wait.
+ * Pure.
+ */
+de__vk_access_info de__vk_access_info_of(const de__vk_barrier_ctx *ctx, u32 access, bool image,
+                                         bool depth, bool stencil, bool before);
+/**
+ * Translates one de_gpu_barrier: fills `*img` for a texture (`tex` non-NULL) or `*buf` for a
+ * buffer (`buf_handle`), with the subresource range (0 counts = the rest) and, when the two
+ * queues are in different families, the queue-family ownership transfer half that the recording
+ * queue performs (release on src_queue, acquire on dst_queue). Pure.
+ */
+void de__vk_translate_barrier(const de__vk_barrier_ctx *ctx, const de_gpu_barrier *b,
+                              const de__vk_barrier_texture *tex, VkBuffer buf_handle,
+                              VkImageMemoryBarrier2 *img, VkBufferMemoryBarrier2 *buf);
+/** The barrier context of a device for a list recorded on queue `q`. */
+void de__vk_barrier_ctx_init(de_gpu_device *d, de_gpu_queue q, de__vk_barrier_ctx *ctx);
+/** The layout of a depth attachment: DEPTH_ATTACHMENT_OPTIMAL for depth-only formats when
+ * separate depth/stencil layouts are on, DEPTH_STENCIL_ATTACHMENT_OPTIMAL otherwise. */
+VkImageLayout de__vk_depth_write_layout(bool separate_depth_layouts, bool stencil);
+
+/* vk_barriers.c, vk_cmd.c */
+void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count);
+de_result de__vk_cmd_init(de_gpu_device *d, de_gpu_cmd *c);
+void de__vk_cmd_fini(de_gpu_device *d, de_gpu_cmd *c);
+de_result de__vk_cmd_begin(de_gpu_cmd *c, const char *name);
+void de__vk_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
+                             const de_gpu_attachment *depth);
+void de__vk_cmd_end_render(de_gpu_cmd *c);
+void de__vk_cmd_viewport(de_gpu_cmd *c, f32 x, f32 y, f32 w, f32 h);
+void de__vk_cmd_copy_buffer(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off, de__gpu_buffer *src,
+                            u64 src_off, u64 bytes);
+void de__vk_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de__gpu_texture *dst, u32 mip, u32 layer,
+                                       de__gpu_buffer *src, u64 src_off, u32 row_pitch);
+void de__vk_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off,
+                                       u32 row_pitch, de__gpu_texture *src, u32 mip, u32 layer);
+/** The VkBufferImageCopy of one mip/layer, rows `row_pitch` bytes apart (BC: rows of blocks).
+ * Pure. */
+void de__vk_buffer_image_copy(const de__gpu_texture *t, VkImageAspectFlags aspect, u32 mip,
+                              u32 layer, u64 offset, u32 row_pitch, VkBufferImageCopy *out);
+
+/* vk_sync.c */
+de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
+                              u64 queue_value);
+de_result de__vk_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial);
+void de__vk_fence_destroy(de_gpu_device *d, de__gpu_fence *f);
+u64 de__vk_fence_value(de_gpu_device *d, de__gpu_fence *f);
+de_result de__vk_fence_wait(de_gpu_device *d, de__gpu_fence *f, u64 value, u64 timeout_ns);
+/** True once the device is lost (every queue value then counts as complete). */
+bool de__vk_lost(de__vk_device *vk);
+/** Waits until queue `q`'s internal timeline reaches `value` (no timeout; false when lost). */
+bool de__vk_wait_queue_value(de__vk_device *vk, de_gpu_queue q, u64 value);
+/** A binary semaphore, or VK_NULL_HANDLE with the error set. */
+VkSemaphore de__vk_binary_semaphore(de_gpu_device *d, const char *what);
+
+/* vk_swapchain.c */
+de_result de__vk_swapchain_create(de_gpu_device *d, de__gpu_swapchain *s,
+                                  const de_gpu_swapchain_desc *desc);
+void de__vk_swapchain_destroy(de_gpu_device *d, de__gpu_swapchain *s);
+de_result de__vk_swapchain_acquire(de_gpu_device *d, de__gpu_swapchain *s, de_gpu_texture *image);
+de_result de__vk_swapchain_present(de_gpu_device *d, de__gpu_swapchain *s);
+de_result de__vk_swapchain_resize(de_gpu_device *d, de__gpu_swapchain *s, u32 w, u32 h);
+de_gpu_colorspace de__vk_swapchain_colorspace(de_gpu_device *d, de__gpu_swapchain *s);
 
 #endif

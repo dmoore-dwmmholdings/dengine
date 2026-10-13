@@ -273,6 +273,10 @@ typedef struct de__gpu_backend_vtable {
      * after the previous one (de__gpu_bindless_share_resource_numbering), so an index is the
      * descriptor slot. Samplers keep their own table. */
     bool bindless_shared_resource_heap;
+
+    /* Texture -> buffer copy (DENG-284), the reverse of cmd_copy_buffer_to_texture. */
+    void (*cmd_copy_texture_to_buffer)(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off,
+                                       u32 row_pitch, de__gpu_texture *src, u32 mip, u32 layer);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */

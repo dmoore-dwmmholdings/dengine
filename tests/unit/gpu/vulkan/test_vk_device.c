@@ -201,12 +201,3 @@ TEST(vk, required_features_reason) {
 
     de_heap_allocator()->free(de_heap_allocator()->user, p, sizeof *p);
 }
-
-TEST(vk, unsupported_until_deng284) {
-    de_gpu_device *d = open_device((de_gpu_device_desc){0});
-    /* Command lists and fences arrive with DENG-284; until then they fail cleanly. */
-    EXPECT_TRUE(de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "x") == NULL);
-    EXPECT_FALSE(DE_HANDLE_VALID(de_gpu_fence_create(d, 0)));
-    EXPECT_FALSE(DE_HANDLE_VALID(de_gpu_accel_create(d, &(de_gpu_accel_desc){0})));
-    de_gpu_device_destroy(d);
-}

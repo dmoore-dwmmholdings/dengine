@@ -98,3 +98,17 @@ if(TARGET test_gpu_d3d12)
     target_include_directories(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/src")
     de_d3d12_agility_deploy(test_gpu_d3d12)
 endif()
+
+# DENG-284: Vulkan command lists, barriers, fences and swapchains. test_vk_cmd.c (clear_readback,
+# copy_bc7_mips, cross_queue_timeline on the best device or adapter 1 forced; the pure
+# barrier_translation_table) and test_vk_swapchain.c (swapchain_present_resize on a hidden window;
+# skips without a display) join test_gpu_vulkan. With VK_LAYER_KHRONOS_validation installed they run
+# with synchronization validation and require zero validation errors.
+if(TARGET test_gpu_vulkan)
+    target_sources(test_gpu_vulkan PRIVATE vulkan/test_vk_cmd.c vulkan/test_vk_swapchain.c)
+    target_link_libraries(test_gpu_vulkan PRIVATE de_platform)
+    if(TARGET de_tp_sdl3) # the swapchain test resizes its window through SDL
+        target_link_libraries(test_gpu_vulkan PRIVATE de_tp_sdl3)
+        target_compile_definitions(test_gpu_vulkan PRIVATE DE_VK_TEST_SDL=1)
+    endif()
+endif()
