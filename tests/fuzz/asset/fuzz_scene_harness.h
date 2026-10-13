@@ -45,8 +45,11 @@ extern "C" {
 /** The asset ID of the one blob slot (the fixtures' `texture = "ui/heart"`). */
 #define FZ_SCENE_BLOB_ID "ui/heart"
 
-/** Prints `what` (and the last error) to stderr and aborts: a broken promise. */
-void fz_scene_fail(const char *target, const char *what);
+/**
+ * Prints `what` (and the last error) to stderr and aborts: a broken promise. DE_NORETURN, so no
+ * caller writes code after it: MSVC rejects that code as unreachable (C4702) in optimized builds.
+ */
+DE_NORETURN void fz_scene_fail(const char *target, const char *what);
 
 /** The shared registry (current versions) and asset system; built on first use. */
 de_type_registry *fz_scene_types(void);
