@@ -142,6 +142,8 @@ static f64 core_distance(const b2_core *A, const b2_core *B, de__d2 *pa, de__d2 
     const u32 ea = A->count >= 3u ? A->count : 1u;
     const u32 eb = B->count >= 3u ? B->count : 1u;
     f64 best = -1.0;
+    *pa = A->v[0];
+    *pb = B->v[0];
     for (u32 i = 0; i < ea; ++i) {
         const de__d2 a1 = A->v[i], a2 = A->v[A->count > 1u ? (i + 1u) % A->count : 0u];
         for (u32 j = 0; j < eb; ++j) {
@@ -236,7 +238,7 @@ static void mover_core(const b2_sweep *sw, bool fallback, f64 t, b2_core *out) {
 static f64 gap_at(const b2_sweep *sw, bool fallback, f64 t, de__d2 *normal) {
     b2_core mc;
     mover_core(sw, fallback, t, &mc);
-    de__d2 pa, pb;
+    de__d2 pa = de__d2_make(0.0, 0.0), pb = pa;
     const f64 d = core_distance(&sw->target, &mc, &pa, &pb);
     const f64 radii = sw->target.radius + mc.radius;
     if (!(d > 0.0)) {
