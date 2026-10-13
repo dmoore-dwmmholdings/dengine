@@ -14,10 +14,12 @@
  *     (cvar gpu.d3d12.force_legacy_barriers), so CI covers the fallback whatever the adapter.
  *   - swapchain_present_resize: 120 frames of acquire / clear / present on a hidden 320x240
  *     window, a resize of the window (to 200x150, through SDL) and of the swapchain, 30 more
- * frames, then 10 frames each with IMMEDIATE and MAILBOX swapchains. SKIPs without a video driver
- * (no desktop session). Every device has the debug layer and GPU-based validation on and must end
- * with zero debug-layer errors. They run on the best adapter (WARP on CI) and print which barrier
- * path it took.
+ * frames, 8 resizes each right after a present (DENG-402: the last present must be done before
+ * the buffers go), then 10 frames each with IMMEDIATE and MAILBOX swapchains, each destroyed
+ * right after a present. The debug-layer error count is checked after the resizes and destroys,
+ * so a failure names the step. SKIPs without a video driver (no desktop session). Every device has
+ * the debug layer and GPU-based validation on and must end with zero debug-layer errors. They run
+ * on the best adapter (WARP on CI) and print which barrier path it took.
  */
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -485,6 +487,14 @@ static void image_size(de_gpu_device *d, de_gpu_texture img, u32 *w, u32 *h) {
     *h = t ? t->height : 0u;
 }
 
+/* No debug-layer error so far; `step` names where in the test a new one came. */
+static void expect_no_debug_errors(de_gpu_device *d, const char *step) {
+    const u32 n = de__d3d12_debug_error_count(d);
+    if (n)
+        printf("debug-layer errors after %s: %u\n", step, n);
+    EXPECT_EQ(n, 0u);
+}
+
 TEST_F(d3d12, swapchain_present_resize, sc_fx) {
     de_gpu_device *d = f->gpu.d;
     print_mode(d);
@@ -534,6 +544,7 @@ TEST_F(d3d12, swapchain_present_resize, sc_fx) {
            (long)(rc.right - rc.left), (long)(rc.bottom - rc.top));
     const de_gpu_texture old = img;
     ASSERT_EQ(de_gpu_swapchain_resize(d, f->sc, pw2, ph2), DE_OK);
+    expect_no_debug_errors(d, "the first resize");
     EXPECT_TRUE(de__gpu_get_texture(d, old) == NULL);
     de_gpu_texture fresh = {0};
     ASSERT_EQ(de_gpu_swapchain_acquire(d, f->sc, &fresh), DE_OK);
@@ -554,6 +565,21 @@ TEST_F(d3d12, swapchain_present_resize, sc_fx) {
         presented += frame(f, n, &img) ? 1u : 0u;
     EXPECT_EQ(presented, 30u);
 
+    /* Resize right after a present, with nothing in between: the buffers are released only once
+     * that present is done with them (DENG-402). The swapchain's size need not be the window's. */
+    for (u32 n = 0; n < 8; ++n) {
+        EXPECT_TRUE(frame(f, n, &img));
+        const u32 rw = (n & 1u) ? pw2 : pw2 + 16u, rh = (n & 1u) ? ph2 : ph2 + 8u;
+        ASSERT_EQ(de_gpu_swapchain_resize(d, f->sc, rw, rh), DE_OK);
+        de_gpu_texture cur = {0};
+        ASSERT_EQ(de_gpu_swapchain_acquire(d, f->sc, &cur), DE_OK);
+        u32 cw = 0, ch = 0;
+        image_size(d, cur, &cw, &ch);
+        EXPECT_EQ(cw, rw);
+        EXPECT_EQ(ch, rh);
+    }
+    expect_no_debug_errors(d, "the resizes right after a present");
+
     /* The other present modes; the new swapchain replaces the destroyed one on the same window. */
     static const de_gpu_present k_modes[] = {DE_PRESENT_IMMEDIATE, DE_PRESENT_MAILBOX};
     for (u32 m = 0; m < 2; ++m) {
@@ -565,6 +591,11 @@ TEST_F(d3d12, swapchain_present_resize, sc_fx) {
         for (u32 n = 0; n < 10; ++n)
             presented += frame(f, n, &img) ? 1u : 0u;
         EXPECT_EQ(presented, 10u);
+        expect_no_debug_errors(d, m ? "the MAILBOX frames" : "the IMMEDIATE frames");
     }
+    /* Destroy right after a present; wait_idle releases it (deferred destruction). */
+    de_gpu_swapchain_destroy(d, f->sc);
+    f->sc = (de_gpu_swapchain){0};
     de_gpu_wait_idle(d);
+    expect_no_debug_errors(d, "the destroy right after a present");
 }
