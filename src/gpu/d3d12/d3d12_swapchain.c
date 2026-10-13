@@ -26,9 +26,18 @@
  * DE_ERR_DEVICE_LOST. DXGI swapchains do not go out of date: the window's new size takes effect at
  * de_gpu_swapchain_resize, which the host calls on DE_EV_WINDOW_RESIZED.
  *
- * Resize (and destroy): wait for the device to go idle, release the images (their handles turn
- * stale at once), ResizeBuffers, wrap the new images. A 0 width or height (a minimized window)
- * keeps the current images.
+ * Resize (and destroy): wait until no queue uses the images (below), release the images (their
+ * handles turn stale at once), ResizeBuffers, wrap the new images. A 0 width or height (a minimized
+ * window) keeps the current images.
+ *
+ * Waiting for the images (DENG-402): wait_idle waits for each queue's internal timeline, which a
+ * submit signals after its command lists. Present() queues its own work on the graphics queue
+ * after that signal, and that work reads the back buffer. So the internal timeline can complete
+ * while the last present still uses a buffer, and a release then (or ResizeBuffers, which frees
+ * the buffers) is an OBJECT_DELETED_WHILE_STILL_IN_USE error in the debug layer. idle() therefore
+ * also signals a fence of its own on the graphics queue, after everything queued so far, presents
+ * included, and waits for it. The frame-latency waitable is only an event handle that DXGI
+ * signals; it holds no reference to a buffer and needs no wait.
  */
 #include "gpu/d3d12/d3d12_internal.h"
 
@@ -41,7 +50,7 @@ static d3d12_swapchain *payload(de__gpu_swapchain *s) {
     return DE__GPU_PAYLOAD(d3d12_swapchain, s);
 }
 
-/* Releases the images' resources now (the GPU is idle) and destroys their handles. */
+/* Releases the images' resources now (after idle()) and destroys their handles. */
 static void drop_images(de_gpu_device *d, d3d12_swapchain *ds) {
     for (u32 i = 0; i < ds->image_count; ++i) {
         de__gpu_texture *t = de__gpu_get_texture(d, ds->images[i]);
@@ -95,6 +104,30 @@ static de_result wrap_images(de_gpu_device *d, d3d12_swapchain *ds) {
         ds->images[i] = h;
     }
     return DE_OK;
+}
+
+/* Waits until no queue uses the swapchain's buffers: every queue's internal timeline (wait_idle),
+ * and the graphics queue up to now, Present() included (see the file comment). The fence is made
+ * for the wait: resize and destroy are rare, and the swapchain payload stays as it is. */
+static void idle(de_gpu_device *d) {
+    d3d12_device *dd = de__d3d12(d);
+    d->vt->wait_idle(d);
+    ID3D12Fence *fence = NULL;
+    HRESULT hr = ID3D12Device_CreateFence(dd->dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence,
+                                          (void **)&fence);
+    if (SUCCEEDED(hr)) {
+        hr = ID3D12CommandQueue_Signal(dd->queues[DE_QUEUE_GRAPHICS].queue, fence, 1);
+        /* A NULL event blocks until the value is reached; a removed device completes every
+         * value (GetCompletedValue is UINT64_MAX). */
+        if (SUCCEEDED(hr) && ID3D12Fence_GetCompletedValue(fence) < 1)
+            hr = ID3D12Fence_SetEventOnCompletion(fence, 1, NULL);
+        ID3D12Fence_Release(fence);
+    }
+    if (FAILED(hr) && hr != DXGI_ERROR_DEVICE_REMOVED)
+        DE_WARN(d->log,
+                "d3d12: swapchain: cannot wait for the last present (HRESULT 0x%08lx); the "
+                "buffers are released after the last submit only",
+                (unsigned long)hr);
 }
 
 static void release(d3d12_swapchain *ds) {
@@ -182,7 +215,7 @@ de_result de__d3d12_swapchain_create(de_gpu_device *d, de__gpu_swapchain *s,
 
 void de__d3d12_swapchain_destroy(de_gpu_device *d, de__gpu_swapchain *s) {
     d3d12_swapchain *ds = payload(s);
-    d->vt->wait_idle(d);
+    idle(d);
     drop_images(d, ds);
     release(ds);
 }
@@ -226,7 +259,7 @@ de_result de__d3d12_swapchain_resize(de_gpu_device *d, de__gpu_swapchain *s, u32
     d3d12_swapchain *ds = payload(s);
     if (w == 0 || h == 0)
         return DE_OK; /* minimized: keep the images until the window has a size again */
-    d->vt->wait_idle(d);
+    idle(d);
     drop_images(d, ds);
     HRESULT hr = IDXGISwapChain4_ResizeBuffers(ds->sc, ds->image_count, w, h, DXGI_FORMAT_UNKNOWN,
                                                ds->flags);
