@@ -48,6 +48,27 @@ static bool ray(de_physics2d_world *p, f64 ox, f64 oy, f32 dx, f32 dy, f32 len, 
     return de_physics2d_raycast_ex(p, dp(ox, oy), de__v2(dx, dy), len, NULL, h);
 }
 
+/* Random draws in a fixed order (two draws inside one call's arguments would run in an
+ * unspecified order: Clang left to right, GCC and MSVC right to left). */
+static f64 rnd_c(de_rng *r, f64 span) {
+    return (de_rng_f64(r) - 0.5) * span;
+}
+static de_dpoint2d rnd_point(de_rng *r, f64 span) {
+    const f64 x = rnd_c(r, span);
+    const f64 y = rnd_c(r, span);
+    return dp(x, y);
+}
+static de_vec2 rnd_dir(de_rng *r) {
+    const f32 x = (f32)rnd_c(r, 1.0);
+    const f32 y = (f32)rnd_c(r, 1.0);
+    return de__v2(x, y);
+}
+static de_transform2d rnd_xf(de_rng *r, f64 span, f64 angle_scale) {
+    const de_dpoint2d o = rnd_point(r, span);
+    const f32 a = (f32)(de_rng_f64(r) * angle_scale);
+    return tu_xf(o.x, o.y, a);
+}
+
 static void make_bp(de_physics2d_world *p) {
     de__bp2d *bp = NULL;
     ASSERT_EQ(de__bp2d_ensure(p, &bp), DE_OK);
@@ -324,9 +345,8 @@ TEST(physics2d_query, rays_equal_brute_force) {
             make_bp(p);
         de_rng r2 = de_rng_seed(99, 3);
         for (u32 i = 0; i < 2000; ++i) {
-            const de_dpoint2d o =
-                dp((de_rng_f64(&r2) - 0.5) * 44.0, (de_rng_f64(&r2) - 0.5) * 44.0);
-            const de_vec2 d = de__v2((f32)(de_rng_f64(&r2) - 0.5), (f32)(de_rng_f64(&r2) - 0.5));
+            const de_dpoint2d o = rnd_point(&r2, 44.0);
+            const de_vec2 d = rnd_dir(&r2);
             const f32 len = (f32)(1.0 + de_rng_f64(&r2) * 30.0);
             de_ray_hit2d a, b;
             const bool ha = de_physics2d_raycast_ex(p, o, d, len, NULL, &a);
@@ -435,10 +455,8 @@ TEST(physics2d_query, casts_equal_brute_force_and_never_pass_contact) {
         de_rng r2 = de_rng_seed(5, 5);
         for (u32 i = 0; i < 600; ++i) {
             const de_shape s = qs[i % 4u];
-            const de_transform2d from =
-                tu_xf((de_rng_f64(&r2) - 0.5) * 40.0, (de_rng_f64(&r2) - 0.5) * 40.0,
-                      (f32)(de_rng_f64(&r2) * 6.0));
-            const de_vec2 d = de__v2((f32)(de_rng_f64(&r2) - 0.5), (f32)(de_rng_f64(&r2) - 0.5));
+            const de_transform2d from = rnd_xf(&r2, 40.0, 6.0);
+            const de_vec2 d = rnd_dir(&r2);
             const f32 len = (f32)(0.5 + de_rng_f64(&r2) * 15.0);
             de_ray_hit2d a, b;
             const bool ha = de_physics2d_shape_cast(p, s, &from, d, len, NULL, &a);
@@ -771,7 +789,7 @@ TEST(physics2d_query, far_from_origin) {
     u32 diff_body = 0, hits = 0;
     for (u32 i = 0; i < 1500; ++i) {
         const f64 x = (de_rng_f64(&r2) - 0.5) * 40.0, y = (de_rng_f64(&r2) - 0.5) * 40.0;
-        const de_vec2 d = de__v2((f32)(de_rng_f64(&r2) - 0.5), (f32)(de_rng_f64(&r2) - 0.5));
+        const de_vec2 d = rnd_dir(&r2);
         de_ray_hit2d ha, hb;
         bool ka, kb;
         if (i % 2u == 0u) {
@@ -908,8 +926,8 @@ TEST(physics2d_query, golden_vector) {
     tu_hash block = {0};
     de_rng r2 = de_rng_seed(0x5eed, 1);
     for (u32 i = 0; i < 10000; ++i) {
-        const de_dpoint2d o = dp((de_rng_f64(&r2) - 0.5) * 44.0, (de_rng_f64(&r2) - 0.5) * 44.0);
-        const de_vec2 d = de__v2((f32)(de_rng_f64(&r2) - 0.5), (f32)(de_rng_f64(&r2) - 0.5));
+        const de_dpoint2d o = rnd_point(&r2, 44.0);
+        const de_vec2 d = rnd_dir(&r2);
         const f32 len = (f32)(0.5 + de_rng_f64(&r2) * 25.0);
         de_ray_hit2d h;
         memset(&h, 0, sizeof h);
@@ -925,10 +943,8 @@ TEST(physics2d_query, golden_vector) {
         }
     }
     for (u32 i = 0; i < 1000; ++i) {
-        const de_transform2d from =
-            tu_xf((de_rng_f64(&r2) - 0.5) * 44.0, (de_rng_f64(&r2) - 0.5) * 44.0,
-                  (f32)(de_rng_f64(&r2) * 6.283));
-        const de_vec2 d = de__v2((f32)(de_rng_f64(&r2) - 0.5), (f32)(de_rng_f64(&r2) - 0.5));
+        const de_transform2d from = rnd_xf(&r2, 44.0, 6.283);
+        const de_vec2 d = rnd_dir(&r2);
         const f32 len = (f32)(0.5 + de_rng_f64(&r2) * 15.0);
         de_ray_hit2d h;
         memset(&h, 0, sizeof h);
