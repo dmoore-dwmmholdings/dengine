@@ -1,0 +1,87 @@
+# tools/determinism_modules.toml: the deterministic code (SPEC §5.7) that
+# tools/check_determinism_src.py checks (DENG-136). The CTest entry `check_determinism_src`
+# (label `check`) runs it on every build.
+#
+# [[module]]  A module declared with de_add_module(... DETERMINISTIC). `name` is the de_add_module
+#             NAME, `dir` its source directory. Every source under `dir` is scanned, and every
+#             translation unit under `dir` in compile_commands.json must be compiled without FP
+#             contraction (-ffp-contract=off, /clang:-ffp-contract=off or /fp:precise).
+# [[source]]  A file passed to de_mark_deterministic_sources() in a module that is not
+#             deterministic (the de_dmath implementation in core). `module` is the module that
+#             owns it.
+#
+# Optional keys of both: `allow` (rule ids that do not apply), `allow_calls` (libm functions that
+# may be called) and `why` (required with either). Rule ids: math-include, libm-call,
+# simd-approx, fast-math, fast-api, hashmap-iter, rand. Prefer de_dmath to an exception: only the
+# de_dmath implementation itself calls libm.
+#
+# Keep this table equal to the CMake declarations. With a build directory the check fails when a
+# DETERMINISTIC module (de_config_dump.txt) or a de_mark_deterministic_sources() file
+# (tests/checks/deterministic_objects_<config>.txt, the list deterministic_asm_check
+# disassembles) is missing here, or when an entry here is neither.
+
+# ---- DETERMINISTIC modules ----
+
+[[module]]
+name = "ecs"
+dir = "src/ecs"
+
+[[module]]
+name = "physics"
+dir = "src/physics"
+
+[[module]]
+name = "anim"
+dir = "src/anim"
+
+[[module]]
+name = "input"
+dir = "src/input"
+
+[[module]]
+name = "net"
+dir = "src/net"
+
+[[module]]
+name = "nav"
+dir = "src/gameplay/nav"
+
+# ---- de_mark_deterministic_sources() files (src/core/CMakeLists.txt) ----
+
+[[source]]
+path = "src/core/math/dmath.c"
+module = "core"
+allow = ["math-include"]
+allow_calls = ["sqrt", "sqrtf"]
+why = "implements de_dmath; sqrt and sqrtf are correctly rounded IEEE operations"
+
+[[source]]
+path = "src/core/math/dmath64.c"
+module = "core"
+allow = ["math-include"]
+allow_calls = ["sqrt"]
+why = "implements de_dmath (f64); sqrt is a correctly rounded IEEE operation"
+
+[[source]]
+path = "src/core/math/rng.c"
+module = "core"
+
+[[source]]
+path = "src/core/math/fpenv.c"
+module = "core"
+
+[[source]]
+path = "src/core/math/dvec.c"
+module = "core"
+allow = ["math-include"]
+allow_calls = ["sqrt"]
+why = "large-world vectors (de_dvec3); sqrt is a correctly rounded IEEE operation"
+
+# de_transform_from_affine decomposes a render-side de_affine with the fast de_m4 functions;
+# simulation code does not call it.
+[[source]]
+path = "src/core/math/transform.c"
+module = "core"
+allow = ["math-include", "fast-api"]
+allow_calls = ["sqrt"]
+why = "large-world transforms; sqrt is correctly rounded; fast de_m4 only for render-side affines"
