@@ -24,6 +24,9 @@ static const backend_entry k_backends[] = {
 #if DE_HAS_GPU_VULKAN
     {DE_GPU_VULKAN, &de__gpu_vulkan_vtable},
 #endif
+#if DE_HAS_GPU_METAL
+    {DE_GPU_METAL, &de__gpu_metal_vtable},
+#endif
 };
 
 /* Run-time overrides (de__gpu_register_backend). Static storage starts as NULL. */

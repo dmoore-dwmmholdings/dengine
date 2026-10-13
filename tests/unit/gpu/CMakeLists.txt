@@ -73,3 +73,7 @@ if(DE_HAS_GPU_VULKAN AND TARGET de_gpu_vulkan)
         target_include_directories(test_gpu_vulkan PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endif()
+
+# DENG-287: the Metal backend (tests/unit/gpu/metal/, executable test_gpu_metal). The directory
+# returns early when de_gpu_metal is not built.
+add_subdirectory(metal)

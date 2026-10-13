@@ -271,6 +271,8 @@ typedef struct de__gpu_backend_vtable {
 extern const de__gpu_backend_vtable de__gpu_null_vtable;
 /** Vulkan 1.3 (src/gpu/vulkan/, DENG-283), compiled with DE_HAS_GPU_VULKAN. */
 extern const de__gpu_backend_vtable de__gpu_vulkan_vtable;
+/** Metal 3 (src/gpu/metal/, DENG-287); built when DE_HAS_GPU_METAL. */
+extern const de__gpu_backend_vtable de__gpu_metal_vtable;
 
 /**
  * Null backend test hooks (null/null_backend.c). With manual completion on, a queue's internal

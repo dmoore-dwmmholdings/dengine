@@ -85,6 +85,7 @@ typedef struct de_gpu_caps {
     char device_name[128];
     u32 vendor_id, device_id;
     u64 dedicated_vram, shared_memory;
+    bool unified_memory; /**< CPU and GPU share one memory pool (Apple silicon, integrated GPUs) */
     de_rt_support raytracing; /* API_ONLY e.g. Metal on M1/M2 */
     bool ray_query, rt_pipelines, opacity_micromaps;
     bool mesh_shaders;
