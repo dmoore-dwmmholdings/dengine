@@ -587,7 +587,7 @@ TEST(action_map, no_alloc_per_frame) {
     ASSERT_TRUE(
         DE_HANDLE_VALID(add(in, m, "dash", DE_ACTION_BUTTON, DE_INTERACT_DOUBLE_TAP, jb, 1)));
     const u64 allocs = de_tracking_allocator_stats(&tracker).alloc_count;
-    EXPECT_EQ(allocs, 2u); /* the input state, then the action block */
+    EXPECT_EQ(allocs, 4u); /* the input state, the gyro and haptics state (DENG-87), the actions */
     pad_on(in);
 
     de_alloc_guard g;

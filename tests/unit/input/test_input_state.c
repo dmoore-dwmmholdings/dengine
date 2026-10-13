@@ -619,7 +619,9 @@ TEST(input_state, no_alloc_per_frame) {
     de_input *in = input_test_create(&ta);
     ASSERT_TRUE(in != NULL);
     const de_tracking_stats after_create = de_tracking_allocator_stats(&tracker);
-    EXPECT_EQ(after_create.alloc_count, 1u); /* one block, at create */
+    /* The state block at create, plus one per hook file that keeps state (DENG-87: gyro.c and
+     * haptics.c). Nothing after create. */
+    EXPECT_EQ(after_create.alloc_count, 3u);
 
     /* Warm up: first log / error / pad paths of this thread allocate their per-thread state. */
     input_test_pad_add(in, 1, DE_PLATFORM_PAD_XBOX, DE_PLATFORM_PAD_CAP_GYRO, "Xbox");
@@ -643,7 +645,7 @@ TEST(input_state, no_alloc_per_frame) {
     const de_tracking_stats st = de_tracking_allocator_stats(&tracker);
     EXPECT_EQ(st.alloc_count, after_create.alloc_count);
     de_input_destroy(in);
-    EXPECT_EQ(de_tracking_allocator_stats(&tracker).free_count, 1u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracker).free_count, after_create.alloc_count);
 }
 
 TEST(input_state, create_args) {
