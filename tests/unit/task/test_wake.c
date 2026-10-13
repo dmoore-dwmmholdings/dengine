@@ -18,6 +18,8 @@
  *                          background tasks submitted while every frame worker spins: time from
  *                          the submit to the task's end. On Windows the below-normal background
  *                          worker starved for about 4 s per task before the boost (DENG-388).
+ *                          Samples during which a core of the machine stood still are left out
+ *                          (one watch thread per core, DENG-397).
  *   wake.background_boost_duty_cycle
  *                          the boost policy (forced on, every OS): no raise while idle or while
  *                          background tasks make progress; a task without visible progress is
@@ -377,13 +379,18 @@ static void spin_fn(void *user) {
         de_cpu_pause();
 }
 
-#define SAT_SAMPLES 20u
-#define SAT_TASK_NS MS_NS(1)
+/* The driver takes samples until SAT_SAMPLES of them count, within SAT_MAX_ATTEMPTS samples and
+ * SAT_BUDGET_NS; fewer than SAT_MIN_COUNTED counted samples is a skip (see the test). */
+#define SAT_SAMPLES      20u
+#define SAT_MIN_COUNTED  10u
+#define SAT_MAX_ATTEMPTS 200u
+#define SAT_BUDGET_NS    MS_NS(30000)
+#define SAT_TASK_NS      MS_NS(1)
 
 typedef struct sat_driver {
     u64 lat[SAT_SAMPLES];
     u32 n;
-    u32 stalled; /* samples during which the machine itself stalled (see sat_watch_main) */
+    u32 stalled; /* samples during which a core stood still (see sat_watch_main) */
 } sat_driver;
 
 typedef struct sat_task {
@@ -396,31 +403,132 @@ static void sat_bg_fn(void *user) {
     de_atomic_store_u64(&t->end_ns, de_time_now_ns(), DE_ATOMIC_RELAXED);
 }
 
-/* A time-critical thread that only sleeps (1 ms timed waits, a timer tick on Windows) and
- * records the longest gap between two of its wake-ups. Nothing in the test can keep it from
- * running, so a gap far beyond a tick means the machine stalled every thread (a CI virtual
- * machine that the host did not run): on one Windows runner the monitor, the driver and this
- * kind of thread all stood still for 100-200 ms at a time. Such samples measure the host, not
- * the scheduler, and are left out of the bound. */
-static de_atomic_u32 g_watch_stop;
-static de_atomic_u64 g_watch_gap;
-
+/* Stall detection. A shared CI runner is a virtual machine, and its host does not always run it:
+ * the whole VM, or one virtual CPU, stands still for 100 ms to several seconds, whatever the
+ * priority of the threads on it. A sample that overlaps such a stall measures the host, not the
+ * scheduler, and is left out of the bounds.
+ *
+ * One time-critical watch thread per logical core, pinned to it where the OS allows, only sleeps
+ * (1 ms timed waits; a 15.6 ms timer tick on Windows) and notes each gap between two of its
+ * wake-ups that is longer than SAT_STALL_GAP_NS. Nothing in the test keeps such a thread from
+ * running for long: the only threads of its priority are the driver, the boost monitor, the
+ * other watchers and a raised background worker, which all run for at most a few ms at a time.
+ * So a long gap means its core stood still. A sample is left out when a noted gap overlaps it
+ * (from the submit to the task's end) by more than SAT_STALL_GAP_NS.
+ *
+ * DENG-388 had one unpinned watch thread and a "longest gap since the sample started" that the
+ * thread could record only once it woke up again. That missed two kinds of stall (DENG-397):
+ *   - one virtual CPU stood still (the driver's or the monitor's) while the watch thread ran on
+ *     another: a 204 ms sample during which the monitor made no check at all;
+ *   - a stall still going on when the sample ended: a 1581 ms sample counted, and the watch thread
+ *     reported its 3910 ms gap two samples later.
+ * So there is a watcher per core, and after each sample the driver waits until every watcher has
+ * woken up after the task's end, by which time every gap that overlaps the sample is noted. */
+#define SAT_MAX_WATCHERS 64u
 #define SAT_STALL_GAP_NS MS_NS(50)
+#define SAT_GAP_RING     64u
+/* How long the driver waits for every watcher to wake up after a sample. A watcher that does not
+ * wake up in that time stood still too. */
+#define SAT_WATCH_SETTLE_NS MS_NS(10000)
+
+typedef struct sat_gap {
+    de_atomic_u64 from_ns, to_ns;
+} sat_gap;
+
+typedef struct sat_watcher {
+    de_thread *thread;
+    de_atomic_u64 last_ns;   /* its latest wake-up; published after the gap it ends */
+    de_atomic_u32 gap_count; /* gaps noted so far; gap k is in gaps[k % SAT_GAP_RING] */
+    sat_gap gaps[SAT_GAP_RING];
+} sat_watcher;
+
+static sat_watcher g_watchers[SAT_MAX_WATCHERS];
+static u32 g_watcher_count;
+static de_atomic_u32 g_watch_stop;
 
 static i32 sat_watch_main(void *user) {
-    (void)user;
+    sat_watcher *w = (sat_watcher *)user;
     u64 last = de_time_now_ns();
+    de_atomic_store_u64(&w->last_ns, last, DE_ATOMIC_RELEASE);
     while (de_atomic_load_u32(&g_watch_stop, DE_ATOMIC_ACQUIRE) == 0) {
         (void)de_sem_wait_timeout(&g_nap, MS_NS(1));
         const u64 now = de_time_now_ns();
-        const u64 gap = now - last;
-        last = now;
-        u64 cur = de_atomic_load_u64(&g_watch_gap, DE_ATOMIC_RELAXED);
-        while (gap > cur && !de_atomic_cas_weak_u64(&g_watch_gap, &cur, gap, DE_ATOMIC_RELAXED,
-                                                    DE_ATOMIC_RELAXED)) {
+        if (now - last > SAT_STALL_GAP_NS) {
+            const u32 k = de_atomic_load_u32(&w->gap_count, DE_ATOMIC_RELAXED);
+            sat_gap *g = &w->gaps[k % SAT_GAP_RING];
+            de_atomic_store_u64(&g->from_ns, last, DE_ATOMIC_RELAXED);
+            de_atomic_store_u64(&g->to_ns, now, DE_ATOMIC_RELAXED);
+            de_atomic_store_u32(&w->gap_count, k + 1, DE_ATOMIC_RELEASE);
         }
+        last = now;
+        de_atomic_store_u64(&w->last_ns, now, DE_ATOMIC_RELEASE);
     }
     return 0;
+}
+
+static void sat_watchers_start(void) {
+    const u32 cores = de_cpu_logical_cores();
+    g_watcher_count = cores < SAT_MAX_WATCHERS ? cores : SAT_MAX_WATCHERS;
+    de_atomic_store_u32(&g_watch_stop, 0, DE_ATOMIC_RELAXED);
+    for (u32 i = 0; i < g_watcher_count; ++i) {
+        sat_watcher *w = &g_watchers[i];
+        de_atomic_init_u64(&w->last_ns, 0);
+        de_atomic_init_u32(&w->gap_count, 0);
+        char name[32];
+        snprintf(name, sizeof name, "wake-watch-%u", i);
+        ASSERT_EQ(de_thread_create(sat_watch_main, w, name, DE_THREAD_REALTIME, 0, &w->thread),
+                  DE_OK);
+        /* macOS has no hard affinity: there the watchers spread over the cores on their own. */
+        if (de_thread_set_affinity(w->thread, 1ull << i) != DE_OK)
+            de_error_clear();
+    }
+}
+
+static void sat_watchers_stop(void) {
+    de_atomic_store_u32(&g_watch_stop, 1, DE_ATOMIC_RELEASE);
+    for (u32 i = 0; i < g_watcher_count; ++i)
+        EXPECT_EQ(de_thread_join(g_watchers[i].thread), 0);
+}
+
+/* Gap counts of every watcher, taken before a sample starts. */
+static void sat_gap_marks(u32 *marks) {
+    for (u32 i = 0; i < g_watcher_count; ++i)
+        marks[i] = de_atomic_load_u32(&g_watchers[i].gap_count, DE_ATOMIC_ACQUIRE);
+}
+
+/* The longest stand-still of any core inside [from, to], and its core, once every watcher has
+ * woken up after `to`; UINT64_MAX when a watcher did not wake up within SAT_WATCH_SETTLE_NS or
+ * noted more gaps than its ring holds. `marks` are the gap counts from before the sample. */
+static u64 sat_stall_within(const u32 *marks, u64 from, u64 to, u32 *core) {
+    const u64 deadline = de_time_now_ns() + SAT_WATCH_SETTLE_NS;
+    u64 worst = 0;
+    *core = 0;
+    for (u32 i = 0; i < g_watcher_count; ++i) {
+        sat_watcher *w = &g_watchers[i];
+        *core = i;
+        while (de_atomic_load_u64(&w->last_ns, DE_ATOMIC_ACQUIRE) <= to) {
+            if (de_time_now_ns() > deadline)
+                return UINT64_MAX;
+            (void)de_sem_wait_timeout(&g_nap, MS_NS(1));
+        }
+        const u32 end = de_atomic_load_u32(&w->gap_count, DE_ATOMIC_ACQUIRE);
+        if (end - marks[i] >= SAT_GAP_RING - 1) /* the watcher may be rewriting the oldest */
+            return UINT64_MAX;
+        for (u32 k = marks[i]; k != end; ++k) {
+            const sat_gap *g = &w->gaps[k % SAT_GAP_RING];
+            const u64 gf = de_atomic_load_u64(&g->from_ns, DE_ATOMIC_RELAXED);
+            const u64 gt = de_atomic_load_u64(&g->to_ns, DE_ATOMIC_RELAXED);
+            const u64 a = gf > from ? gf : from;
+            const u64 b = gt < to ? gt : to;
+            if (b > a && b - a > worst) {
+                worst = b - a;
+                *core = i;
+            }
+        }
+    }
+    if (worst == 0)
+        *core = 0;
+    return worst;
 }
 
 /* Not a worker: one background task at a time, timed from the submit to the task's own end (so
@@ -435,22 +543,40 @@ static i32 sat_driver_main(void *user) {
     /* Every frame worker (the main thread included) spins first. */
     while (de_atomic_load_u32(&g_spinning, DE_ATOMIC_ACQUIRE) < de_task_worker_count(g_ts))
         (void)de_sem_wait_timeout(&g_nap, MS_NS(1));
-    for (u32 i = 0; i < SAT_SAMPLES; ++i) {
+    static u32 marks[SAT_MAX_WATCHERS];
+    const u64 start = de_time_now_ns();
+    for (u32 i = 0; d->n < SAT_SAMPLES && i < SAT_MAX_ATTEMPTS; ++i) {
+        if (i > 0 && de_time_now_ns() - start > SAT_BUDGET_NS)
+            break;
         sat_task t;
         de_atomic_init_u64(&t.end_ns, 0);
         de_task_counter c = {0};
-        de_atomic_store_u64(&g_watch_gap, 0, DE_ATOMIC_RELAXED);
+        const de__task_stats s0 = de__task_get_stats(g_ts);
+        sat_gap_marks(marks);
         const u64 t0 = de_time_now_ns();
         de_task_submit(g_ts, DE_TASK_POOL_BACKGROUND, sat_bg_fn, &t, &c);
         de_task_wait(g_ts, &c);
-        const u64 lat = de_atomic_load_u64(&t.end_ns, DE_ATOMIC_RELAXED) - t0;
-        const u64 gap = de_atomic_load_u64(&g_watch_gap, DE_ATOMIC_RELAXED);
-        if (gap > SAT_STALL_GAP_NS) {
-            printf("wake: sample %u (%.1f ms) left out: the watch thread stood still %.1f ms\n", i,
-                   (double)lat / 1e6, (double)gap / 1e6);
+        const u64 t1 = de_atomic_load_u64(&t.end_ns, DE_ATOMIC_RELAXED);
+        const u64 lat = t1 - t0;
+        u32 core = 0;
+        const u64 stall = sat_stall_within(marks, t0, t1, &core);
+        const de__task_stats s1 = de__task_get_stats(g_ts);
+        if (stall > SAT_STALL_GAP_NS) {
+            if (stall == UINT64_MAX)
+                printf("wake: sample %u (%.1f ms) left out: watcher %u did not keep up\n", i,
+                       (double)lat / 1e6, core);
+            else
+                printf("wake: sample %u (%.1f ms) left out: core %u stood still %.1f ms\n", i,
+                       (double)lat / 1e6, core, (double)stall / 1e6);
             ++d->stalled;
             continue;
         }
+        /* A slow sample that counts: what the monitor did meanwhile. */
+        if (lat > SAT_STALL_GAP_NS)
+            printf("wake: sample %u: %.1f ms, %llu checks, %llu raises, longest stand-still "
+                   "%.1f ms (core %u)\n",
+                   i, (double)lat / 1e6, (unsigned long long)(s1.bg_checks - s0.bg_checks),
+                   (unsigned long long)(s1.bg_boosts - s0.bg_boosts), (double)stall / 1e6, core);
         d->lat[d->n++] = lat;
     }
     de_atomic_store_u32(&g_spin_stop, 1, DE_ATOMIC_RELEASE);
@@ -466,7 +592,9 @@ static void bg_warm_fn(void *user) {
  * (about 190 ms on Windows Server) or, often, until the OS's own anti-starvation boost (about
  * 5 s; CI control runs with the boost off, DENG-388). With it, a stalled worker is raised at the
  * next 10 ms check (on Windows 16 to 32 ms: timed waits end on 15.6 ms timer ticks) and runs its
- * 1 ms task at once. In 400 CI runs (4 Windows jobs) the slowest task took 47 ms. */
+ * 1 ms task at once. DENG-397 stress (8 Windows Release runners, clang-cl and MSVC, 40 runs each,
+ * half of them beside a ctest -j4 loop and two busy loops): every sample 16.6 to 17.2 ms except a
+ * few, slowest 32 ms, no sample left out; with the boost off 50 of 50 runs failed. */
 TEST(wake, background_frame_saturated) {
     g_ts = make_ts_boost(0, 1, DE_TASK_BG_BOOST_AUTO);
     de_atomic_store_u32(&g_spin_stop, 0, DE_ATOMIC_RELAXED);
@@ -483,10 +611,7 @@ TEST(wake, background_frame_saturated) {
 
     static sat_driver drv;
     memset(&drv, 0, sizeof drv);
-    de_atomic_store_u32(&g_watch_stop, 0, DE_ATOMIC_RELAXED);
-    de_thread *watch = NULL;
-    ASSERT_EQ(de_thread_create(sat_watch_main, NULL, "wake-watch", DE_THREAD_REALTIME, 0, &watch),
-              DE_OK);
+    sat_watchers_start();
     de_thread *th = NULL;
     ASSERT_EQ(de_thread_create(sat_driver_main, &drv, "wake-sat", DE_THREAD_REALTIME, 0, &th),
               DE_OK);
@@ -496,25 +621,33 @@ TEST(wake, background_frame_saturated) {
         de_task_submit(g_ts, DE_TASK_POOL_FRAME, spin_fn, NULL, &spinners);
     de_task_wait(g_ts, &spinners);
     EXPECT_EQ(de_thread_join(th), 0);
-    de_atomic_store_u32(&g_watch_stop, 1, DE_ATOMIC_RELEASE);
-    EXPECT_EQ(de_thread_join(watch), 0);
+    sat_watchers_stop();
     de_sem_destroy(&g_nap);
 
-    /* Most samples must count: a machine that stalls all the time is not measured at all. */
-    ASSERT_EQ(drv.n + drv.stalled, SAT_SAMPLES);
-    ASSERT_GE(drv.n, SAT_SAMPLES / 2);
-    const lat_summary s = summarize("bg task, frame workers saturated", drv.lat, drv.n);
     const de__task_stats st = de__task_get_stats(g_ts);
-    printf("wake: %u frame workers spinning, %llu checks, %llu raises, %.1f ms raised, %u "
-           "priority failures\n",
-           de_task_worker_count(g_ts), (unsigned long long)st.bg_checks,
-           (unsigned long long)st.bg_boosts, (double)st.bg_boost_ns / 1e6, st.bg_prio_failures);
+    printf("wake: %u frame workers spinning, %u watchers, %u samples counted, %u left out, %llu "
+           "checks, %llu raises, %.1f ms raised, %u priority failures\n",
+           de_task_worker_count(g_ts), g_watcher_count, drv.n, drv.stalled,
+           (unsigned long long)st.bg_checks, (unsigned long long)st.bg_boosts,
+           (double)st.bg_boost_ns / 1e6, st.bg_prio_failures);
     EXPECT_EQ(st.bg_prio_failures, 0u);
-    /* Windows (boost on): the documented bound is one or two checks, about 40 ms; a quantum
-     * (about 190 ms) means the boost did not work. Other OSes do not boost: their schedulers
-     * give the low priority a share (up to 95 ms per task on the macOS host with 15 spinners).
-     * CI and sanitizers get room. */
+    /* A machine whose cores stood still in nearly every sample cannot measure the scheduler at
+     * all: that is a skip, not a pass (one CI runner left out 0 to 18 of 20 samples per run, most
+     * with a core standing still for 0.2 to 3.2 s, DENG-397). */
+    if (drv.n < SAT_MIN_COUNTED) {
+        de_task_system_destroy(g_ts);
+        g_ts = NULL;
+        SKIP("the runner's cores stood still in too many samples to measure anything");
+    }
+    const lat_summary s = summarize("bg task, frame workers saturated", drv.lat, drv.n);
+    /* Windows (boost on): the documented bound is one or two checks, about 16 to 40 ms; the 90th
+     * percentile (the second slowest of 20) must stay below 50 ms and the slowest below 150 ms
+     * on CI (100 ms locally). With the boost off, CI measured a 90th percentile of 100 to 194 ms
+     * in every run and a slowest task of up to 5.4 s (DENG-397). Other OSes do not boost: their
+     * schedulers give the low priority a share (up to 95 ms per task on the macOS host with 15
+     * spinners). CI and sanitizers get room. */
 #if defined(_WIN32)
+    EXPECT_LT(s.p90, MS_NS(50));
     EXPECT_LT(s.max, loose_bounds() ? MS_NS(150) : MS_NS(100));
 #else
     EXPECT_LT(s.max, loose_bounds() ? MS_NS(500) : MS_NS(250));
