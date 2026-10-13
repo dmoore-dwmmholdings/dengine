@@ -216,7 +216,7 @@ The options most often set on top of a preset:
 | `DE_BUILD_SHARED` | `OFF` | Build `dengine` as a shared library. Forced `OFF` in Shipping. |
 | `DE_HEADLESS` | `OFF` | Server build without renderer, GPU, audio or UI. |
 | `DE_WITH_<MOD>` | `ON` (`DE_WITH_STEAM`: `OFF`) | Removable modules: `AUDIO`, `NET`, `PHYSICS`, `UI`, `VFX`, `NAV`, `VIDEO`, `STEAM`. |
-| `DE_GPU_D3D12`, `DE_GPU_VULKAN`, `DE_GPU_METAL` | per platform | RHI backends. |
+| `DE_GPU_D3D12`, `DE_GPU_VULKAN`, `DE_GPU_METAL` | per platform; `DE_GPU_VULKAN` ON everywhere | RHI backends. Vulkan needs no SDK to build (vendored headers; libvulkan is opened at run time, `DE_VULKAN_LIBRARY` overrides which library). |
 | `DE_WARNINGS_AS_ERRORS` | `ON` | `-Werror` / `/WX`. Keep it on. |
 | `DE_ENABLE_PROFILE` | `ON` | Define `DE_PROFILE=1` (profiler zones) in Release. Debug never defines it, Dev always does, Shipping never does. |
 | `DE_TRACY` | `ON` | Use the vendored Tracy client (`third_party/tracy/`) as the profiler backend of the builds that define `DE_PROFILE`. `OFF` keeps the profiling calls but links no backend (`de_prof_init` returns `DE_ERR_UNSUPPORTED`) and no C++. Debug and Shipping never build Tracy. |

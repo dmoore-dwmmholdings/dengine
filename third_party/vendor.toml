@@ -292,3 +292,26 @@ license = "MIT"
 license_file = "LICENSE.md"
 # The library only (src/: meshoptimizer.h and its .cpp files); no gltfpack, demo, js or tools.
 files = ["src/**"]
+
+[[lib]]
+name = "vulkan_headers"
+# Khronos Vulkan-Headers (SPEC §22: "Vulkan headers"), for the Vulkan RHI backend (src/gpu/vulkan/,
+# DENG-283). Header-only. The backend loads libvulkan at run time (own loader, no volk, no VMA), so
+# the build needs no Vulkan SDK; the INTERFACE target defines VK_NO_PROTOTYPES. The issue named the
+# directory `vulkan-headers`; library directories are lower_snake_case (third_party/README.md).
+version = "vulkan-sdk-1.4.363.0"
+url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz"
+sha256 = "4a078be12bef21cfebc09d878b77a63cff9d68f899254a0b00d0e37ef73e7f7e"
+# The C headers are "Apache-2.0 OR MIT" (LICENSE.md); we take Apache-2.0, like zstd's BSD choice.
+license = "Apache-2.0"
+license_file = "LICENSES/Apache-2.0.txt"
+# The C headers only: include/vulkan/*.h (vulkan.h, vulkan_core.h, vk_platform.h, the platform
+# headers that vulkan.h includes on request, vk_icd.h, vk_layer.h) and the video codec headers that
+# vulkan_core.h includes. Not the C++ bindings (*.hpp, *.cppm), the registry or the tests.
+files = [
+    "LICENSE.md",
+    "LICENSES/Apache-2.0.txt",
+    "LICENSES/MIT.txt",
+    "include/vulkan/*.h",
+    "include/vk_video/*.h",
+]

@@ -21,6 +21,9 @@ typedef struct backend_entry {
  * and declares the vtable in gpu_backend.h. */
 static const backend_entry k_backends[] = {
     {DE_GPU_NULL, &de__gpu_null_vtable},
+#if DE_HAS_GPU_VULKAN
+    {DE_GPU_VULKAN, &de__gpu_vulkan_vtable},
+#endif
 };
 
 /* Run-time overrides (de__gpu_register_backend). Static storage starts as NULL. */
