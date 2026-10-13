@@ -296,6 +296,7 @@ typedef enum de__phys_ext_id {
     DE__PHYS_EXT_CHARACTER,      /**< S23 */
     DE__PHYS_EXT_CCD,            /**< DENG-219 (ccd_internal.h) */
     DE__PHYS_EXT_ECS,            /**< DENG-223 (ecs/phys_ecs.h) */
+    DE__PHYS_EXT_RAGDOLL,        /**< DENG-224 (ragdoll_internal.h) */
     DE__PHYS_EXT_RESERVED,
     DE__PHYS_EXT_COUNT
 } de__phys_ext_id;
