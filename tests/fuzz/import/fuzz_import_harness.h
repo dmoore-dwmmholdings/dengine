@@ -36,10 +36,6 @@ typedef enum fz_import_kind {
  * still runs). Texture cooks also get `compression = "none"` unless an input asks otherwise. */
 #define FZ_IMPORT_MAX_SIZE 64
 
-/** The `anim_sample_rate` setting (Hz) of the model targets: keeps the clip time table to the
- * source key times, so clip compression stays fast (fz_settings). */
-#define FZ_IMPORT_ANIM_SAMPLE_RATE 0.001
-
 /** "gltf", "fbx", "image", "ktx2". */
 const char *fz_import_kind_name(fz_import_kind kind);
 

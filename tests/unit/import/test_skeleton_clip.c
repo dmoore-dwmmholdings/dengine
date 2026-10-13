@@ -216,14 +216,19 @@ static f64 pos_diff(const f64 *a, const f64 *b) {
 }
 
 /* The source channel at time t: the test's own evaluator (key value at a key time; linear lerp,
- * normalised quaternion lerp on the short arc, step; cubic Hermite). */
+ * slerp on the short arc, step; cubic Hermite). */
 static void chan_value(const de_model_anim_channel *c, f64 t, f64 out[4]) {
     u32 n = c->components, kc = c->key_count;
     u32 stride = c->interp == DE_MODEL_INTERP_CUBIC ? 3u * n : n;
     u32 off = c->interp == DE_MODEL_INTERP_CUBIC ? n : 0u;
-    u32 lo = 0;
-    while (lo + 1u < kc && (f64)c->times[lo + 1u] <= t)
-        ++lo;
+    u32 lo = 0, hi = kc; /* the last key at or before t (0 when t is before every key) */
+    while (hi - lo > 1u) {
+        u32 mid = lo + (hi - lo) / 2u;
+        if ((f64)c->times[mid] <= t)
+            lo = mid;
+        else
+            hi = mid;
+    }
     const f32 *a = c->values + (u64)lo * stride + off;
     if (lo + 1u >= kc || t <= (f64)c->times[lo] || c->interp == DE_MODEL_INTERP_STEP) {
         for (u32 i = 0; i < n; ++i)
@@ -241,11 +246,29 @@ static void chan_value(const de_model_anim_channel *c, f64 t, f64 out[4]) {
                      (-2 * s3 + 3 * s2) * b[i] + (s3 - s2) * dt * ai[i];
         return;
     }
-    f64 sign = 1.0;
-    if (n == 4u && a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0.0f)
-        sign = -1.0;
+    if (n == 4u) {
+        f64 qa[4], qb[4], la = 0.0, lb = 0.0, d = 0.0;
+        for (u32 i = 0; i < 4; ++i) {
+            la += (f64)a[i] * a[i];
+            lb += (f64)b[i] * b[i];
+        }
+        for (u32 i = 0; i < 4; ++i) {
+            qa[i] = a[i] / sqrt(la);
+            qb[i] = b[i] / sqrt(lb);
+            d += qa[i] * qb[i];
+        }
+        f64 sign = d < 0.0 ? -1.0 : 1.0, th = acos(fmin(1.0, fabs(d)));
+        f64 wa = 1.0 - s, wb = s;
+        if (th > 1e-9) {
+            wa = sin((1.0 - s) * th) / sin(th);
+            wb = sin(s * th) / sin(th);
+        }
+        for (u32 i = 0; i < 4; ++i)
+            out[i] = wa * qa[i] + wb * sign * qb[i];
+        return;
+    }
     for (u32 i = 0; i < n; ++i)
-        out[i] = a[i] + (sign * b[i] - a[i]) * s;
+        out[i] = a[i] + (b[i] - a[i]) * s;
 }
 
 /* The source pose of the skeleton's joints at time t: rest pose (DSKL) with the IR channels. */
@@ -1070,4 +1093,127 @@ TEST_F(clip, fbx_roundtrip, anim_fx) {
     EXPECT_GT(b.times, 0u);
     EXPECT_FLE(b.max_pos, 1e-4 + 1e-7);
     EXPECT_FLE(b.max_ang, 0.05 * DEG + 1e-7);
+}
+
+/* ---- import_anim.clip.long_clip -------------------------------------------------------------- */
+
+/* Replaces every channel of f->ir.anims[0] (linear or step) by the clip, its key times
+ * multiplied by `stretch`, played forward and backward in turn until it lasts about `seconds`: a
+ * long take with no seams. Returns the new duration. */
+static f64 lengthen_anim(anim_fx *f, f64 seconds, f64 stretch) {
+    de_model_ir *ir = &f->ir;
+    de_model_anim *an = &ir->anims[0];
+    f64 d = 0.0;
+    for (u32 c = 0; c < an->channel_count; ++c)
+        if (an->channels[c].key_count != 0)
+            d = fmax(d, (f64)an->channels[c].times[an->channels[c].key_count - 1u]);
+    d *= stretch;
+    u32 cycles = (u32)ceil(seconds / d);
+    for (u32 c = 0; c < an->channel_count; ++c) {
+        de_model_anim_channel *ch = &an->channels[c];
+        ASSERT_TRUE(ch->interp != DE_MODEL_INTERP_CUBIC);
+        u32 kc = ch->key_count, n = ch->components, out = 0;
+        f32 *times = (f32 *)de_model_ir_array(ir, (u64)kc * cycles, sizeof(f32));
+        f32 *values = (f32 *)de_model_ir_array(ir, (u64)kc * cycles * n, sizeof(f32));
+        ASSERT_TRUE(times != NULL && values != NULL);
+        for (u32 y = 0; y < cycles; ++y)
+            for (u32 k = 0; k < kc; ++k) {
+                u32 src = (y % 2u) == 0 ? k : kc - 1u - k;
+                f64 ts = stretch * (f64)ch->times[src];
+                f64 t = (f64)y * d + ((y % 2u) == 0 ? ts : d - ts);
+                if (out > 0 && !((f32)t > times[out - 1u]))
+                    continue;
+                times[out] = (f32)t;
+                memcpy(values + (u64)out * n, ch->values + (u64)src * n, sizeof(f32) * n);
+                ++out;
+            }
+        ch->times = times;
+        ch->values = values;
+        ch->key_count = out;
+    }
+    an->duration = (f32)(d * cycles);
+    return d * cycles;
+}
+
+/* Cooks f->ir.anims[0] (lengthened to `seconds`, keys `stretch` times further apart) over the
+ * CesiumMan skeleton and checks the error at every 7th sample against the source. The cook time
+ * is printed, not checked (Testing: no wall-clock bounds in unit tests); the issue's budget is 2 s
+ * for 5 minutes in a Release build. */
+static void long_clip(anim_fx *f, f64 seconds, f64 stretch, de_model_clip_stats *st) {
+    load_engine_ir(f, "animdata", "CesiumMan.glb");
+    ASSERT_GE(f->ir.anim_count, 1u);
+    f64 dur = lengthen_anim(f, seconds, stretch);
+    de_model_anim_settings s;
+    de_model_anim_settings_default(&s);
+    de_model_buf sb, cb;
+    de_cooked_skeleton_view sk;
+    de_cooked_clip_view cv;
+    memset(&sk, 0, sizeof sk);
+    memset(&cv, 0, sizeof cv);
+    u64 t0 = de_time_now_ns();
+    synth_cook(&f->ir, &s, &sb, &cb, &sk, &cv, st);
+    f64 ms = (f64)(de_time_now_ns() - t0) / 1e6;
+    printf(
+        "  %.0f s clip, keys every %.3g s: %u samples, %u tracks (%u constant, %u raw), %u keys, "
+        "%u passes, %llu bytes, %.3g mm, %.4g deg; cooked in %.0f ms\n",
+        dur, stretch / 24.0, st->times, st->tracks, st->const_tracks, st->raw_tracks, st->keys,
+        st->iterations, (unsigned long long)st->bytes, st->max_position * 1000.0,
+        st->max_angle / DEG, ms);
+    EXPECT_FGE(cv.duration, seconds - 1.0);
+    EXPECT_FLE(st->max_position, (f64)s.error);
+    EXPECT_FLE(st->max_angle, (f64)s.error_angle);
+    /* Independent check: the model-space pose at every 7th sample, against the source. */
+    ASSERT_LE(sk.joint_count, 64u);
+    u32 node_of_joint[64];
+    match_joints(f, &sk, node_of_joint);
+    de_cooked_joint_pose dec[64], src[64];
+    f64 tr[64 * 10], md[64 * 12], msrc[64 * 12], max_pos = 0.0, max_ang = 0.0;
+    for (u32 i = 0; i < cv.time_count; i += 7u) {
+        f32 t = de_cooked_clip_time(&cv, i);
+        ASSERT_TRUE(de__anim_clip_sample(&cv, &sk, t, dec));
+        source_pose(&f->ir, &sk, node_of_joint, &f->ir.anims[0], (f64)t, src, tr);
+        for (u32 j = 0; j < sk.joint_count; ++j) {
+            f64 l[12];
+            trs_affine(tr + 10u * j, tr + 10u * j + 3, tr + 10u * j + 7, l);
+            u16 p = de_cooked_skeleton_parent(&sk, j);
+            if (p == DE_COOKED_SKEL_NO_PARENT)
+                memcpy(msrc + 12u * j, l, sizeof l);
+            else
+                aff_mul(msrc + 12u * p, l, msrc + 12u * j);
+        }
+        model_space(&sk, dec, md);
+        for (u32 j = 0; j < sk.joint_count; ++j) {
+            max_pos = fmax(max_pos, pos_diff(md + 12u * j, msrc + 12u * j));
+            max_ang = fmax(max_ang, orient_diff(md + 12u * j, msrc + 12u * j));
+        }
+    }
+    printf("    independent check: %.3g mm, %.4g deg\n", max_pos * 1000.0, max_ang / DEG);
+    EXPECT_FLE(max_pos, 1e-4 + 1e-7);
+    EXPECT_FLE(max_ang, 0.05 * DEG + 1e-7);
+}
+
+/* The issue's case is 5 minutes; Debug builds (the sanitizer jobs) cook 1 minute. */
+#if defined(DE_DEBUG)
+#define LONG_CLIP_SECONDS 60.0
+#else
+#define LONG_CLIP_SECONDS 300.0
+#endif
+
+TEST_F(clip, long_clip, anim_fx) {
+    /* DENG-399: a 5-minute take at 30 Hz on the CesiumMan skeleton, its 2 s walk (24 Hz keys)
+     * played forward and backward. */
+    de_model_clip_stats st;
+    memset(&st, 0, sizeof st);
+    long_clip(f, LONG_CLIP_SECONDS, 1.0, &st);
+    EXPECT_LE(st.iterations, 3u);
+}
+
+TEST_F(clip, long_smooth_clip, anim_fx) {
+    /* The same walk slowed down 150 times: one 5-minute take with a key every 6.25 s. Linear
+     * keys that far apart make long segments (up to MAX_SEGMENT samples), the case that cost
+     * O(samples x 256) evaluations per track before DENG-399. */
+    de_model_clip_stats st;
+    memset(&st, 0, sizeof st);
+    long_clip(f, LONG_CLIP_SECONDS, 150.0, &st);
+    EXPECT_LE(st.iterations, 3u);
 }

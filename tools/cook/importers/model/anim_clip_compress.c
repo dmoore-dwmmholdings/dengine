@@ -17,20 +17,29 @@
  *        - constant: every sample within the tolerance of one value: store that value;
  *        - uniform scale: x, y, z equal within a quarter of the tolerance: one component;
  *        - quantization: rotations smallest-three in 48 bits, translations and scales 16 bits over
- *          the track's [min, min + extent]; when that alone costs more than half the tolerance,
- *          raw f32;
- *        - key reduction: greedy, a key is dropped while the decoded linear interpolation of its
- *          neighbours stays within the tolerance at every sample in between.
+ *          the track's [min, min + extent]; when that alone costs more than 3/4 of the tolerance,
+ *          raw f32 only. The quantized values depend only on the samples, so they are computed
+ *          once per track and reused by every pass;
+ *        - key reduction: greedy from the first sample; each segment is the longest (up to
+ *          MAX_SEGMENT samples) whose decoded linear interpolation stays within the tolerance at
+ *          every sample in between. Its end is found by galloping and a binary search (DENG-399),
+ *          so a segment of L samples costs O(L log L) evaluations, not O(L^2);
+ *        - the quantized and the raw f32 encodings are both reduced, and the smaller is kept
+ *          (quantized on a tie); the raw reduction stops as soon as it cannot be smaller.
  *   5. Model-space check: every sample is decoded with the sampler's own helpers
  *      (de_cooked_clip.h), the joints are composed to model space next to the source pose, and
  *      each joint's position must be within `anim_error` and its orientation within
  *      `anim_error_angle` (at 90 % of each, a margin for the f32 decode). The tracks of a joint
- *      that fails, and of its ancestors, get half the tolerance and are encoded again; after 8
- *      passes they are stored raw with every key. Errors therefore never add up past the settings,
- *      whatever the chain length.
- *   The initial tolerance of a track: translation anim_error / 2 (divided by the parent's scale);
- *   rotation and scale min(anim_error_angle, anim_error / reach) / 2, where reach is the distance
+ *      that fails, and of its ancestors, get half the tolerance (a quarter, an eighth... when the
+ *      joint is 2, 4... times over the limit) and are encoded again; after 8 passes they are
+ *      stored raw with every key. Errors therefore never add up past the settings, whatever the
+ *      chain length.
+ *   The initial tolerance of a track: translation anim_error (divided by the parent's scale);
+ *   rotation and scale min(anim_error_angle, anim_error / reach), where reach is the distance
  *   from the joint to its farthest descendant (its "tip") in the rest pose.
+ *
+ * Cost: about samples x tracks x (log2(MAX_SEGMENT) + 27 smallest-three candidates) for the
+ * encoding, plus samples x joints per check pass; passes are few (one to three for most clips).
  *
  * Root motion: the tracks of the skeleton's root joint (the top joint of the skin) carry
  * DE_COOKED_CLIP_TRACK_ROOT. Loop hint: every track's first and last samples are within its
@@ -48,6 +57,7 @@
 #include "anim/formats/de_cooked_clip.h"
 #include "anim/formats/de_cooked_skeleton.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,10 +70,23 @@
 #define RAW_AFTER    8u
 /* Margin of the model-space check against the settings. */
 #define CHECK_MARGIN 0.9
+/* The smallest factor one check pass applies to a tolerance. */
+#define MIN_TIGHTEN (1.0 / 1024.0)
 /* Longest run of samples between two kept keys (bounds the cost of key reduction). */
 #define MAX_SEGMENT 256u
 /* Share of a track's tolerance that quantization may use; the rest is for key reduction. */
 #define QUANT_SHARE 0.75
+
+/* de_dsqrt64 and de_dsqrt, inline for the normal positive numbers that are nearly all of the
+ * calls here: for those, both are the correctly rounded IEEE sqrt, and no FTZ/DAZ mode changes
+ * it. Anything else (0, subnormal, negative, NaN, inf) goes to the de_dmath function itself. */
+static f64 sqrt64(f64 x) {
+    return x >= DBL_MIN && x <= DBL_MAX ? sqrt(x) : de_dsqrt64(x);
+}
+
+static f32 sqrt32(f32 x) {
+    return x >= FLT_MIN && x <= FLT_MAX ? sqrtf(x) : de_dsqrt(x);
+}
 
 static f64 absd(f64 x) {
     return x < 0.0 ? -x : x;
@@ -84,7 +107,7 @@ static f64 acos64(f64 d) {
 }
 
 static void quat_normalize(f64 q[4]) {
-    f64 n = de_dsqrt64(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    f64 n = sqrt64(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     if (n > 0.0) {
         for (u32 i = 0; i < 4; ++i)
             q[i] /= n;
@@ -105,7 +128,7 @@ static f64 quat_half_angle(const f64 a[4], const f64 b[4]) {
         c2 += (a[i] - b[i]) * (a[i] - b[i]);
         d += a[i] * b[i];
     }
-    f64 x = 0.5 * de_dsqrt64(c2);
+    f64 x = 0.5 * sqrt64(c2);
     if (x < 0.05) {
         f64 x2 = x * x;
         return 2.0 * x * (1.0 + x2 * (1.0 / 6.0 + x2 * (3.0 / 40.0 + x2 * (5.0 / 112.0))));
@@ -113,23 +136,29 @@ static f64 quat_half_angle(const f64 a[4], const f64 b[4]) {
     return acos64(d > 1.0 ? 1.0 : d < 0.0 ? 0.0 : d);
 }
 
-/* Shortest-arc slerp of unit quaternions. */
-static void slerp(const f64 a[4], const f64 b_in[4], f64 s, f64 out[4]) {
-    f64 b[4] = {b_in[0], b_in[1], b_in[2], b_in[3]};
-    f64 d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    if (d < 0.0) {
-        for (u32 i = 0; i < 4; ++i)
-            b[i] = -b[i];
+/* Shortest-arc slerp between two unit quaternions: the keys, b on a's side, and the angle. */
+typedef struct slerp_span {
+    f64 a[4], b[4], th, sn;
+} slerp_span;
+
+static void slerp_prepare(const f64 a[4], const f64 b_in[4], slerp_span *sp) {
+    f64 d = a[0] * b_in[0] + a[1] * b_in[1] + a[2] * b_in[2] + a[3] * b_in[3];
+    for (u32 i = 0; i < 4; ++i) {
+        sp->a[i] = a[i];
+        sp->b[i] = d < 0.0 ? -b_in[i] : b_in[i];
     }
+    sp->th = quat_half_angle(sp->a, sp->b);
+    sp->sn = sp->th > 1e-9 ? de_dsin64(sp->th) : 0.0;
+}
+
+static void slerp_at(const slerp_span *sp, f64 s, f64 out[4]) {
     f64 wa = 1.0 - s, wb = s;
-    f64 th = quat_half_angle(a, b);
-    if (th > 1e-9) {
-        f64 sn = de_dsin64(th);
-        wa = de_dsin64((1.0 - s) * th) / sn;
-        wb = de_dsin64(s * th) / sn;
+    if (sp->th > 1e-9) {
+        wa = de_dsin64((1.0 - s) * sp->th) / sp->sn;
+        wb = de_dsin64(s * sp->th) / sp->sn;
     }
     for (u32 i = 0; i < 4; ++i)
-        out[i] = wa * a[i] + wb * b[i];
+        out[i] = wa * sp->a[i] + wb * sp->b[i];
     quat_normalize(out);
 }
 
@@ -139,8 +168,16 @@ static const f32 *key_value(const de_model_anim_channel *c, u32 k) {
                                               : c->values + (u64)k * n;
 }
 
+/* The slerp span of the key interval chan_eval used last (the samples come in time order, so
+ * consecutive samples mostly share one; its angle then costs one acos instead of one per
+ * sample). */
+typedef struct chan_cache {
+    u32 lo; /* the interval's first key + 1; 0: none */
+    slerp_span span;
+} chan_cache;
+
 /* The source channel at time t (seconds), `components` values. */
-static void chan_eval(const de_model_anim_channel *c, f64 t, f64 out[4]) {
+static void chan_eval(const de_model_anim_channel *c, f64 t, f64 out[4], chan_cache *cache) {
     u32 n = c->components, kc = c->key_count;
     bool rot = c->path == DE_MODEL_ANIM_ROTATION;
     const f32 *v;
@@ -176,14 +213,18 @@ static void chan_eval(const de_model_anim_channel *c, f64 t, f64 out[4]) {
         } else {
             const f32 *p0 = key_value(c, lo), *p1 = key_value(c, hi);
             if (rot) {
-                f64 a[4], b[4];
-                for (u32 i = 0; i < 4; ++i) {
-                    a[i] = p0[i];
-                    b[i] = p1[i];
+                if (cache->lo != lo + 1u) {
+                    f64 a[4], b[4];
+                    for (u32 i = 0; i < 4; ++i) {
+                        a[i] = p0[i];
+                        b[i] = p1[i];
+                    }
+                    quat_normalize(a);
+                    quat_normalize(b);
+                    slerp_prepare(a, b, &cache->span);
+                    cache->lo = lo + 1u;
                 }
-                quat_normalize(a);
-                quat_normalize(b);
-                slerp(a, b, s, out);
+                slerp_at(&cache->span, s, out);
             } else {
                 for (u32 i = 0; i < n; ++i)
                     out[i] = (f64)p0[i] + ((f64)p1[i] - (f64)p0[i]) * s;
@@ -210,10 +251,19 @@ typedef struct track {
     u8 *bytes; /* the track's data */
     u64 byte_count;
     /* Scratch, N entries each. */
-    f64 *vals;  /* N x comps: the values to encode (uniform: one per sample) */
-    f32 *dec;   /* N x 4: decoded quantized values per sample */
+    f64 *vals;  /* N x comps: the values to encode: src, or uvals for a uniform scale */
+    f64 *uvals; /* N (scale tracks only): the uniform scale per sample */
+    f32 *dec;   /* qdec or rdec: the decoded values key reduction works on */
+    f32 *qdec;  /* N x 4: decoded quantized values per sample */
+    f32 *rdec;  /* N x 4: the raw f32 values per sample */
     u16 *codes; /* N x 4: quantized codes (QUANT16: comps; SMALLEST3: 3 words) */
-    u16 *keys;  /* kept sample indices */
+    /* What qdec/codes and rdec hold (encoding x 8 + components + 1; 0: nothing yet), the
+     * QUANT16 range and the largest quantization error (see quantize). */
+    u32 qkey, rkey;
+    f32 qmin[3], qext[3];
+    f64 qworst;
+    u16 *keys;  /* kept sample indices (raw f32) */
+    u16 *qkeys; /* kept sample indices (quantized) */
 } track;
 
 typedef struct clip_ctx {
@@ -253,7 +303,7 @@ static f64 track_err(const track *tk, const f32 *v, const f64 *src) {
         f64 e = 0.0;
         for (u32 i = 0; i < 3; ++i)
             e += ((f64)v[i] - src[i]) * ((f64)v[i] - src[i]);
-        return de_dsqrt64(e);
+        return sqrt64(e);
     }
     f64 e = 0.0;
     for (u32 i = 0; i < 3; ++i) {
@@ -275,7 +325,9 @@ static void s3_pack(u32 big, const u32 code[3], u16 w[3], f32 dec[4]) {
 /* Smallest-three code of quaternion q (three u16 words) and the value the sampler decodes. Each
  * component is rounded to the nearest step, then the 27 codes one step around are tried and the
  * one whose decoded rotation is closest to q is kept (the dropped component absorbs the rounding
- * of the others, so the nearest codes are not always the best). */
+ * of the others, so the nearest codes are not always the best). The candidates are decoded with
+ * the decoder's own f32 arithmetic (de_cooked_clip_s3_decode), from the three values each kept
+ * component can take; the winner is then packed and decoded by the decoder itself. */
 void de_model_clip_s3_encode(const f64 q_in[4], u16 w[3], f32 dec[4]) {
     f64 q[4] = {q_in[0], q_in[1], q_in[2], q_in[3]};
     quat_normalize(q);
@@ -284,40 +336,52 @@ void de_model_clip_s3_encode(const f64 q_in[4], u16 w[3], f32 dec[4]) {
         if (absd(q[i]) > absd(q[big]))
             big = i;
     f64 sign = q[big] < 0.0 ? -1.0 : 1.0;
-    i32 base[3] = {0, 0, 0};
+    u32 code[3][3] = {{0}}, at[3] = {0, 1, 2};
+    f32 cv[3][3] = {{0}}, sq[3][3] = {{0}};
     u32 k = 0;
     for (u32 i = 0; i < 4; ++i) {
         if (i == big)
             continue;
         f64 x = (sign * q[i] + (f64)DE_COOKED_CLIP_S3_RANGE) / (f64)DE_COOKED_CLIP_S3_STEP;
-        base[k++] = (i32)floor(x + 0.5);
+        i32 base = (i32)floor(x + 0.5);
+        for (i32 d = 0; d < 3; ++d) {
+            i32 v = base + d - 1;
+            u32 c = v<0 ? 0u : v>(i32) DE_COOKED_CLIP_S3_MAX ? DE_COOKED_CLIP_S3_MAX : (u32)v;
+            code[k][d] = c;
+            cv[k][d] = (f32)c * DE_COOKED_CLIP_S3_STEP - DE_COOKED_CLIP_S3_RANGE;
+            sq[k][d] = cv[k][d] * cv[k][d];
+        }
+        at[k++] = i;
     }
+    /* The score is cos^2 of the half angle to q: dot^2 / |decoded|^2. The decoder's
+     * rest = ((1 - c0^2) - c1^2) - c2^2 in f32, so its partial differences are shared by the
+     * candidates of the outer loops. */
     f64 best = -1.0;
-    for (i32 d0 = -1; d0 <= 1; ++d0)
-        for (i32 d1 = -1; d1 <= 1; ++d1)
-            for (i32 d2 = -1; d2 <= 1; ++d2) {
-                i32 dd[3] = {d0, d1, d2};
-                u32 code[3];
-                for (u32 c = 0; c < 3; ++c) {
-                    i32 v = base[c] + dd[c];
-                    code[c] =
-                        v<0 ? 0u : v>(i32) DE_COOKED_CLIP_S3_MAX ? DE_COOKED_CLIP_S3_MAX : (u32)v;
-                }
-                u16 tw[3];
-                f32 td[4];
-                s3_pack(big, code, tw, td);
-                f64 dot = 0.0, n = 0.0;
-                for (u32 c = 0; c < 4; ++c) {
-                    dot += q[c] * td[c];
-                    n += (f64)td[c] * td[c];
-                }
-                f64 score = n > 0.0 ? absd(dot) / de_dsqrt64(n) : 0.0;
+    u32 bd[3] = {1, 1, 1};
+    for (u32 d0 = 0; d0 < 3; ++d0) {
+        f32 r0 = 1.0f - sq[0][d0];
+        f64 dot0 = q[at[0]] * (f64)cv[0][d0], n0 = (f64)cv[0][d0] * (f64)cv[0][d0];
+        for (u32 d1 = 0; d1 < 3; ++d1) {
+            f32 r1 = r0 - sq[1][d1];
+            f64 dot1 = dot0 + q[at[1]] * (f64)cv[1][d1];
+            f64 n1 = n0 + (f64)cv[1][d1] * (f64)cv[1][d1];
+            for (u32 d2 = 0; d2 < 3; ++d2) {
+                f32 rest = r1 - sq[2][d2];
+                f64 bigv = rest > 0.0f ? (f64)sqrt32(rest) : 0.0;
+                f64 dot = dot1 + q[at[2]] * (f64)cv[2][d2] + q[big] * bigv;
+                f64 n = n1 + (f64)cv[2][d2] * (f64)cv[2][d2] + bigv * bigv;
+                f64 score = n > 0.0 ? dot * dot / n : 0.0;
                 if (score > best) {
                     best = score;
-                    memcpy(w, tw, sizeof tw);
-                    memcpy(dec, td, sizeof td);
+                    bd[0] = d0;
+                    bd[1] = d1;
+                    bd[2] = d2;
                 }
             }
+        }
+    }
+    const u32 pick[3] = {code[0][bd[0]], code[1][bd[1]], code[2][bd[2]]};
+    s3_pack(big, pick, w, dec);
 }
 
 /* The decoded value at sample i of the segment between kept samples a and b (the sampler's
@@ -333,14 +397,52 @@ static void seg_value(const clip_ctx *cc, const track *tk, u32 a, u32 b, u32 i, 
         out[c] = va[c] + (vb[c] - va[c]) * alpha;
 }
 
+/* Whether the segment between kept samples a and b reproduces every sample in between within the
+ * track's tolerance. The middle sample goes first: an overlong segment is usually furthest off
+ * there, so a failing probe of segment_end usually stops after one evaluation. */
 static bool seg_ok(const clip_ctx *cc, const track *tk, u32 a, u32 b) {
+    if (b - a < 2u)
+        return true;
+    u32 mid = a + (b - a) / 2u;
+    f32 v[4] = {0, 0, 0, 0};
+    seg_value(cc, tk, a, b, mid, v);
+    if (track_err(tk, v, tk->src + (u64)mid * tk->src_comps) > tk->tol)
+        return false;
     for (u32 i = a + 1u; i < b; ++i) {
-        f32 v[4] = {0, 0, 0, 0};
+        if (i == mid)
+            continue;
         seg_value(cc, tk, a, b, i, v);
         if (track_err(tk, v, tk->src + (u64)i * tk->src_comps) > tk->tol)
             return false;
     }
     return true;
+}
+
+/* The end of the segment that starts at kept sample a: a sample b in (a, limit] with seg_ok(a, b)
+ * and, when b < limit, not seg_ok(a, b + 1). Galloping, then a binary search, so a segment of
+ * length L costs O(L log L) evaluations instead of the O(L^2) of growing it one sample at a
+ * time. The result is deterministic (it depends only on seg_ok). */
+static u32 segment_end(const clip_ctx *cc, const track *tk, u32 a, u32 limit) {
+    u32 good = a + 1u, bad = 0, step = 2u;
+    while (good < limit) {
+        u32 probe = limit - a > step ? a + step : limit;
+        if (!seg_ok(cc, tk, a, probe)) {
+            bad = probe;
+            break;
+        }
+        good = probe;
+        step *= 2u;
+    }
+    if (bad == 0)
+        return good;
+    while (bad - good > 1u) {
+        u32 mid = good + (bad - good) / 2u;
+        if (seg_ok(cc, tk, a, mid))
+            good = mid;
+        else
+            bad = mid;
+    }
+    return good;
 }
 
 static void put_u16(u8 *p, u16 v) {
@@ -359,85 +461,112 @@ static void put_f32(u8 *p, f32 f) {
     put_u32(p, b);
 }
 
-/* Quantizes every sample of the track with encoding `enc` (QUANT16, SMALLEST3 or RAW) into
- * tk->codes and tk->dec; QUANT16 also fills qmin and qext. Returns the largest error of a decoded
- * sample against the source. */
+/* Quantizes every sample of the track with encoding `enc` (QUANT16, SMALLEST3 or RAW) and points
+ * tk->dec at the decoded values: tk->qdec (and tk->codes) for QUANT16 and SMALLEST3, tk->rdec for
+ * RAW; QUANT16 also fills qmin and qext. Returns the largest error of a decoded sample against the
+ * source (0 for RAW, which nothing compares). The values to encode depend only on the component
+ * count (a uniform scale has one), so a result is kept and reused while the encoding and the
+ * component count are the same: the passes of the model-space check do not quantize again. */
 static f64 quantize(track *tk, u32 n, u32 enc, f32 qmin[3], f32 qext[3]) {
     u32 comps = tk->comps, sc = tk->src_comps;
-    if (enc == DE_COOKED_CLIP_ENC_SMALLEST3) {
-        for (u32 i = 0; i < n; ++i)
-            de_model_clip_s3_encode(tk->vals + 4u * (u64)i, tk->codes + 4u * (u64)i,
-                                    tk->dec + 4u * (u64)i);
-    } else if (enc == DE_COOKED_CLIP_ENC_QUANT16) {
-        f32 step[3];
-        for (u32 c = 0; c < comps; ++c) {
-            f64 lo = tk->vals[c], hi = lo;
-            for (u32 i = 1; i < n; ++i) {
-                f64 x = tk->vals[(u64)i * comps + c];
-                lo = x < lo ? x : lo;
-                hi = x > hi ? x : hi;
-            }
-            qmin[c] = (f32)lo;
-            f64 ext = hi - (f64)qmin[c];
-            qext[c] = (f32)ext;
-            if ((f64)qext[c] < ext)
-                qext[c] = nextafterf(qext[c], HUGE_VALF);
-            step[c] = qext[c] * (1.0f / 65535.0f);
-        }
-        for (u32 i = 0; i < n; ++i)
-            for (u32 c = 0; c < comps; ++c) {
-                f64 x = step[c] > 0.0f
-                            ? (tk->vals[(u64)i * comps + c] - (f64)qmin[c]) / (f64)step[c]
-                            : 0.0;
-                f64 r = floor(x + 0.5);
-                u16 q = r <= 0.0                           ? (u16)0
-                        : r >= (f64)DE_COOKED_CLIP_Q16_MAX ? (u16)DE_COOKED_CLIP_Q16_MAX
-                                                           : (u16)r;
-                tk->codes[4u * (u64)i + c] = q;
-                tk->dec[4u * (u64)i + c] = qmin[c] + (f32)q * step[c];
-            }
-    } else {
+    u32 key = enc * 8u + comps + 1u;
+    if (enc == DE_COOKED_CLIP_ENC_RAW) {
+        tk->dec = tk->rdec;
+        if (tk->rkey == key)
+            return 0.0;
         for (u32 i = 0; i < n; ++i) {
             if (tk->channel == DE_COOKED_CLIP_CH_ROTATION) {
                 f64 q[4];
                 memcpy(q, tk->vals + 4u * (u64)i, sizeof q);
                 quat_normalize(q);
                 for (u32 c = 0; c < 4; ++c)
-                    tk->dec[4u * (u64)i + c] = (f32)q[c];
+                    tk->rdec[4u * (u64)i + c] = (f32)q[c];
             } else {
                 for (u32 c = 0; c < comps; ++c)
-                    tk->dec[4u * (u64)i + c] = (f32)tk->vals[(u64)i * comps + c];
+                    tk->rdec[4u * (u64)i + c] = (f32)tk->vals[(u64)i * comps + c];
             }
         }
+        tk->rkey = key;
+        return 0.0;
     }
-    f64 worst = 0.0;
-    for (u32 i = 0; i < n; ++i) {
-        f64 e = track_err(tk, tk->dec + 4u * (u64)i, tk->src + (u64)i * sc);
-        worst = e > worst ? e : worst;
+    tk->dec = tk->qdec;
+    if (tk->qkey != key) {
+        if (enc == DE_COOKED_CLIP_ENC_SMALLEST3) {
+            for (u32 i = 0; i < n; ++i)
+                de_model_clip_s3_encode(tk->vals + 4u * (u64)i, tk->codes + 4u * (u64)i,
+                                        tk->qdec + 4u * (u64)i);
+        } else {
+            f32 step[3];
+            for (u32 c = 0; c < comps; ++c) {
+                f64 lo = tk->vals[c], hi = lo;
+                for (u32 i = 1; i < n; ++i) {
+                    f64 x = tk->vals[(u64)i * comps + c];
+                    lo = x < lo ? x : lo;
+                    hi = x > hi ? x : hi;
+                }
+                tk->qmin[c] = (f32)lo;
+                f64 ext = hi - (f64)tk->qmin[c];
+                tk->qext[c] = (f32)ext;
+                if ((f64)tk->qext[c] < ext)
+                    tk->qext[c] = nextafterf(tk->qext[c], HUGE_VALF);
+                step[c] = tk->qext[c] * (1.0f / 65535.0f);
+            }
+            for (u32 i = 0; i < n; ++i)
+                for (u32 c = 0; c < comps; ++c) {
+                    f64 x = step[c] > 0.0f
+                                ? (tk->vals[(u64)i * comps + c] - (f64)tk->qmin[c]) / (f64)step[c]
+                                : 0.0;
+                    f64 r = floor(x + 0.5);
+                    u16 q = r <= 0.0                           ? (u16)0
+                            : r >= (f64)DE_COOKED_CLIP_Q16_MAX ? (u16)DE_COOKED_CLIP_Q16_MAX
+                                                               : (u16)r;
+                    tk->codes[4u * (u64)i + c] = q;
+                    tk->qdec[4u * (u64)i + c] = tk->qmin[c] + (f32)q * step[c];
+                }
+        }
+        f64 worst = 0.0;
+        for (u32 i = 0; i < n; ++i) {
+            f64 e = track_err(tk, tk->qdec + 4u * (u64)i, tk->src + (u64)i * sc);
+            worst = e > worst ? e : worst;
+        }
+        tk->qworst = worst;
+        tk->qkey = key;
     }
-    return worst;
+    for (u32 c = 0; c < 3; ++c) {
+        qmin[c] = tk->qmin[c];
+        qext[c] = tk->qext[c];
+    }
+    return tk->qworst;
 }
 
-/* Key reduction (greedy from the first sample; the last sample is always a key), then the bytes
- * of the track in its current encoding. */
-static void reduce_and_write(clip_ctx *cc, track *tk, const f32 qmin[3], const f32 qext[3]) {
-    u32 n = cc->n, comps = tk->comps;
-    u32 kc = 0;
-    tk->keys[kc++] = 0;
+/* Key reduction into `keys` (greedy from the first sample; the last sample is always a key).
+ * Returns the key count, or 0 when the track's bytes in encoding tk->enc would reach `give_up`
+ * (0: no limit) before the reduction ends: that encoding then loses against one of `give_up`
+ * bytes whatever the remaining keys are, so they are not searched. */
+static u32 reduce_keys(const clip_ctx *cc, const track *tk, u16 *keys, u64 give_up) {
+    u32 n = cc->n, kc = 0;
+    keys[kc++] = 0;
     if (tk->force_raw) {
         for (u32 i = 1; i < n; ++i)
-            tk->keys[kc++] = (u16)i;
-    } else {
-        u32 a = 0;
-        while (a < n - 1u) {
-            u32 b = a + 1u;
-            while (b + 1u < n && b + 1u - a <= MAX_SEGMENT && seg_ok(cc, tk, a, b + 1u))
-                ++b;
-            tk->keys[kc++] = (u16)b;
-            a = b;
-        }
+            keys[kc++] = (u16)i;
+        return kc;
     }
-    tk->key_count = kc;
+    u32 a = 0;
+    while (a < n - 1u) {
+        if (give_up != 0 && de_cooked_clip_track_bytes(tk->enc, tk->comps, kc + 1u) >= give_up)
+            return 0;
+        u32 limit = n - 1u - a > MAX_SEGMENT ? a + MAX_SEGMENT : n - 1u;
+        u32 b = segment_end(cc, tk, a, limit);
+        keys[kc++] = (u16)b;
+        a = b;
+    }
+    return kc;
+}
+
+/* The bytes of the track in encoding tk->enc (decoded values tk->dec) with the `kc` keys of
+ * `keys`, into tk->bytes. */
+static void write_track(track *tk, const u16 *keys, u32 kc, const f32 qmin[3], const f32 qext[3]) {
+    u32 comps = tk->comps;
     u8 *p = tk->bytes;
     if (tk->enc == DE_COOKED_CLIP_ENC_QUANT16) {
         for (u32 c = 0; c < comps; ++c) {
@@ -449,10 +578,10 @@ static void reduce_and_write(clip_ctx *cc, track *tk, const f32 qmin[3], const f
     u64 ib = de_cooked_clip_index_bytes(kc);
     memset(p, 0, (size_t)ib);
     for (u32 k = 0; k < kc; ++k)
-        put_u16(p + 2u * k, tk->keys[k]);
+        put_u16(p + 2u * k, keys[k]);
     p += ib;
     for (u32 k = 0; k < kc; ++k) {
-        u64 i = tk->keys[k];
+        u64 i = keys[k];
         switch (tk->enc) {
         case DE_COOKED_CLIP_ENC_QUANT16:
             for (u32 c = 0; c < comps; ++c)
@@ -468,7 +597,6 @@ static void reduce_and_write(clip_ctx *cc, track *tk, const f32 qmin[3], const f
             break;
         }
     }
-    tk->byte_count = de_cooked_clip_track_bytes(tk->enc, comps, kc);
 }
 
 /* Encodes one track at its current tolerance into tk->bytes. */
@@ -550,34 +678,42 @@ static void encode_track(clip_ctx *cc, track *tk) {
         }
     }
     u32 comps = tk->comps;
-    for (u32 i = 0; i < n; ++i) {
-        const f64 *s = tk->src + (u64)i * sc;
-        if (comps == 1u && sc == 3u)
+    tk->vals = tk->src;
+    if (comps == 1u && sc == 3u) {
+        tk->vals = tk->uvals;
+        for (u32 i = 0; i < n; ++i) {
+            const f64 *s = tk->src + (u64)i * 3u;
             tk->vals[i] = (s[0] + s[1] + s[2]) / 3.0;
-        else
-            for (u32 c = 0; c < comps; ++c)
-                tk->vals[(u64)i * comps + c] = s[c];
+        }
     }
 
     /* The quantized encoding, when its rounding leaves room for key reduction, and raw f32: the
-     * smaller is kept (quantized on a tie). */
+     * smaller is kept (quantized on a tie). Raw is reduced only until it is no longer smaller. */
     f32 qmin[3] = {0, 0, 0}, qext[3] = {0, 0, 0};
     u32 qenc = rot ? DE_COOKED_CLIP_ENC_SMALLEST3 : DE_COOKED_CLIP_ENC_QUANT16;
     bool try_q = !tk->force_raw && quantize(tk, n, qenc, qmin, qext) <= QUANT_SHARE * tk->tol;
     u64 qbytes = 0;
+    u32 qkeys = 0;
     if (try_q) {
         tk->enc = qenc;
-        reduce_and_write(cc, tk, qmin, qext);
-        qbytes = tk->byte_count;
+        qkeys = reduce_keys(cc, tk, tk->qkeys, 0);
+        qbytes = de_cooked_clip_track_bytes(qenc, comps, qkeys);
     }
     (void)quantize(tk, n, DE_COOKED_CLIP_ENC_RAW, qmin, qext);
     tk->enc = DE_COOKED_CLIP_ENC_RAW;
-    reduce_and_write(cc, tk, qmin, qext);
-    if (try_q && qbytes <= tk->byte_count) {
-        (void)quantize(tk, n, qenc, qmin, qext);
-        tk->enc = qenc;
-        reduce_and_write(cc, tk, qmin, qext);
+    u32 rkeys = reduce_keys(cc, tk, tk->keys, qbytes);
+    if (rkeys != 0) {
+        write_track(tk, tk->keys, rkeys, qmin, qext);
+        tk->key_count = rkeys;
+        tk->byte_count = de_cooked_clip_track_bytes(DE_COOKED_CLIP_ENC_RAW, comps, rkeys);
+        return;
     }
+    /* The quantized encoding wins: its codes and decoded values are still there (quantize). */
+    (void)quantize(tk, n, qenc, qmin, qext);
+    tk->enc = qenc;
+    write_track(tk, tk->qkeys, qkeys, qmin, qext);
+    tk->key_count = qkeys;
+    tk->byte_count = qbytes;
 }
 
 /* The sampler's view of one encoded track. */
@@ -618,13 +754,13 @@ static f64 orient_err(const f64 a[12], const f64 b[12]) {
         }
         if (!(la > 0.0) || !(lb > 0.0))
             continue;
-        la = de_dsqrt64(la);
-        lb = de_dsqrt64(lb);
+        la = sqrt64(la);
+        lb = sqrt64(lb);
         for (u32 r = 0; r < 3; ++r) {
             f64 x = a[c * 3 + r] / la - b[c * 3 + r] / lb;
             d += x * x;
         }
-        d = de_dsqrt64(d);
+        d = sqrt64(d);
         e = d > e ? d : e;
     }
     return e;
@@ -632,8 +768,10 @@ static f64 orient_err(const f64 a[12], const f64 b[12]) {
 
 /* Scratch of the model-space check, allocated once per clip. */
 typedef struct check_scratch {
-    bool *fail, *tighten;
-    i32 *track_of;               /* per joint x 3 channels: track index, -1 */
+    bool *fail;
+    f64 *excess;   /* per joint: largest error over its limit (position or orientation ratio) */
+    f64 *scale;    /* per joint: the factor its tracks' tolerances get (1: unchanged) */
+    i32 *track_of; /* per joint x 3 channels: track index, -1 */
     de_cooked_clip_track *views; /* per track */
     de_cooked_joint_pose *dec;   /* per joint */
     f64 *mdec, *msrc;            /* per joint: 12 */
@@ -647,6 +785,8 @@ static u32 check_model_space(clip_ctx *cc, const f64 *rest, check_scratch *x,
     u32 jc = sk->joint_count, failing = 0;
     f64 tol_p = CHECK_MARGIN * (f64)cc->s->error, tol_r = CHECK_MARGIN * (f64)cc->s->error_angle;
     memset(x->fail, 0, sizeof(bool) * jc);
+    for (u32 j = 0; j < jc; ++j)
+        x->excess[j] = 0.0;
     st->max_position = 0.0;
     st->max_angle = 0.0;
     for (u32 k = 0; k < cc->track_count; ++k)
@@ -690,11 +830,13 @@ static u32 check_model_space(clip_ctx *cc, const f64 *rest, check_scratch *x,
                 memcpy(a, ld, sizeof ld);
                 memcpy(b, ls, sizeof ls);
             }
-            f64 dp = de_dsqrt64((a[9] - b[9]) * (a[9] - b[9]) + (a[10] - b[10]) * (a[10] - b[10]) +
-                                (a[11] - b[11]) * (a[11] - b[11]));
+            f64 dp = sqrt64((a[9] - b[9]) * (a[9] - b[9]) + (a[10] - b[10]) * (a[10] - b[10]) +
+                            (a[11] - b[11]) * (a[11] - b[11]));
             f64 dr = orient_err(a, b);
             st->max_position = dp > st->max_position ? dp : st->max_position;
             st->max_angle = dr > st->max_angle ? dr : st->max_angle;
+            f64 ex = dp / tol_p > dr / tol_r ? dp / tol_p : dr / tol_r;
+            x->excess[j] = ex > x->excess[j] ? ex : x->excess[j];
             if ((dp > tol_p || dr > tol_r) && !x->fail[j]) {
                 x->fail[j] = true;
                 ++failing;
@@ -716,6 +858,14 @@ static int cand_cmp(const void *pa, const void *pb) {
     if (a->t != b->t)
         return a->t < b->t ? -1 : 1;
     return a->key < b->key ? -1 : a->key > b->key ? 1 : 0;
+}
+
+static de_result clip_too_long(const de_model_anim *anim, f64 duration,
+                               const de_model_anim_settings *s) {
+    return DE_FAIL(DE_ERR_UNSUPPORTED,
+                   "animation \"%s\": %.3f s at %g Hz with its source key times needs more than "
+                   "%u samples; lower `anim_sample_rate` or split the clip",
+                   anim->name, duration, (f64)s->sample_rate, DE_COOKED_CLIP_MAX_TIMES);
 }
 
 /* ---- Entry points ---------------------------------------------------------------------------- */
@@ -815,13 +965,11 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
         de_model_ir_warn(ir, "animation \"%s\": %u duplicate channel(s) ignored", anim->name, dups);
 
     /* 2. The time table. */
+    /* The grid alone must fit; the merged table is checked once the shared key times are
+     * merged (channels keyed at the same times add one sample, not one per channel). */
     f64 grid_f = duration * (f64)s->sample_rate;
-    if (!(grid_f + (f64)key_total < (f64)DE_COOKED_CLIP_MAX_TIMES))
-        return DE_FAIL(DE_ERR_UNSUPPORTED,
-                       "animation \"%s\": %.3f s at %g Hz with %llu source keys needs more than "
-                       "%u samples; lower `anim_sample_rate` or split the clip",
-                       anim->name, duration, (f64)s->sample_rate, (unsigned long long)key_total,
-                       DE_COOKED_CLIP_MAX_TIMES);
+    if (!(grid_f < (f64)DE_COOKED_CLIP_MAX_TIMES))
+        return clip_too_long(anim, duration, s);
     u32 grid = duration > 0.0 ? (u32)floor(grid_f + 0.5) : 0u;
     if (duration > 0.0 && grid == 0)
         grid = 1;
@@ -870,6 +1018,8 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
         else
             cc.times[n - 1u] = (f32)duration;
     }
+    if (n > DE_COOKED_CLIP_MAX_TIMES)
+        return clip_too_long(anim, duration, s);
     cc.n = n;
     cc.time_bytes = (u8 *)de_model_ir_array(ir, (u64)n * 4u, 1);
     if (cc.time_bytes == NULL)
@@ -905,19 +1055,29 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
         tk->src_ch = ch;
         tk->src_comps = tk->channel == DE_COOKED_CLIP_CH_ROTATION ? 4u : 3u;
         tk->flags = tk->joint == skel->root_joint ? DE_COOKED_CLIP_TRACK_ROOT : 0u;
-        tk->src = (f64 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(f64));
-        tk->vals = (f64 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(f64));
-        tk->dec = (f32 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(f32));
+        tk->src = (f64 *)de_model_ir_array(ir, (u64)n * tk->src_comps, sizeof(f64));
+        tk->vals = tk->src;
+        if (tk->channel == DE_COOKED_CLIP_CH_SCALE) {
+            tk->uvals = (f64 *)de_model_ir_array(ir, n, sizeof(f64));
+            if (tk->uvals == NULL)
+                return DE_ERR_OUT_OF_MEMORY;
+        }
+        tk->qdec = (f32 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(f32));
+        tk->rdec = (f32 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(f32));
+        tk->dec = tk->qdec;
         tk->codes = (u16 *)de_model_ir_array(ir, (u64)n * 4u, sizeof(u16));
         tk->keys = (u16 *)de_model_ir_array(ir, n, sizeof(u16));
+        tk->qkeys = (u16 *)de_model_ir_array(ir, n, sizeof(u16));
         tk->bytes = (u8 *)de_model_ir_array(
             ir, 24u + de_cooked_clip_index_bytes(n) + 16u * (u64)n + 16u, 1);
-        if (tk->src == NULL || tk->vals == NULL || tk->dec == NULL || tk->codes == NULL ||
-            tk->keys == NULL || tk->bytes == NULL)
+        if (tk->src == NULL || tk->qdec == NULL || tk->rdec == NULL || tk->codes == NULL ||
+            tk->keys == NULL || tk->qkeys == NULL || tk->bytes == NULL)
             return DE_ERR_OUT_OF_MEMORY;
+        chan_cache cache;
+        memset(&cache, 0, sizeof cache);
         for (u32 i = 0; i < n; ++i) {
             f64 v[4] = {0, 0, 0, 1};
-            chan_eval(ch, (f64)cc.times[i], v);
+            chan_eval(ch, (f64)cc.times[i], v, &cache);
             f64 *dst = tk->src + (u64)i * tk->src_comps;
             for (u32 c = 0; c < tk->src_comps; ++c)
                 dst[c] = v[c];
@@ -936,8 +1096,8 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
             const f64 *m = skel->rest_model + 12u * p;
             pscale = 0.0;
             for (u32 c = 0; c < 3; ++c) {
-                f64 l = de_dsqrt64(m[c * 3] * m[c * 3] + m[c * 3 + 1] * m[c * 3 + 1] +
-                                   m[c * 3 + 2] * m[c * 3 + 2]);
+                f64 l = sqrt64(m[c * 3] * m[c * 3] + m[c * 3 + 1] * m[c * 3 + 1] +
+                               m[c * 3 + 2] * m[c * 3 + 2]);
                 pscale = l > pscale ? l : pscale;
             }
             if (!(pscale > 1e-12))
@@ -954,15 +1114,16 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
     /* 4 and 5. Encode, check in model space, tighten what fails. */
     check_scratch x;
     x.fail = (bool *)de_model_ir_array(ir, jc, sizeof(bool));
-    x.tighten = (bool *)de_model_ir_array(ir, jc, sizeof(bool));
+    x.excess = (f64 *)de_model_ir_array(ir, jc, sizeof(f64));
+    x.scale = (f64 *)de_model_ir_array(ir, jc, sizeof(f64));
     x.track_of = (i32 *)de_model_ir_array(ir, (u64)jc * 3u, sizeof(i32));
     x.views = (de_cooked_clip_track *)de_model_ir_array(ir, cc.track_count + 1u,
                                                         sizeof(de_cooked_clip_track));
     x.dec = (de_cooked_joint_pose *)de_model_ir_array(ir, jc, sizeof(de_cooked_joint_pose));
     x.mdec = (f64 *)de_model_ir_array(ir, (u64)jc * 12u, sizeof(f64));
     x.msrc = (f64 *)de_model_ir_array(ir, (u64)jc * 12u, sizeof(f64));
-    if (x.fail == NULL || x.tighten == NULL || x.track_of == NULL || x.views == NULL ||
-        x.dec == NULL || x.mdec == NULL || x.msrc == NULL)
+    if (x.fail == NULL || x.excess == NULL || x.scale == NULL || x.track_of == NULL ||
+        x.views == NULL || x.dec == NULL || x.mdec == NULL || x.msrc == NULL)
         return DE_ERR_OUT_OF_MEMORY;
     for (u32 i = 0; i < jc * 3u; ++i)
         x.track_of[i] = -1;
@@ -976,17 +1137,26 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
         failing = check_model_space(&cc, rest, &x, st);
         if (failing == 0 || pass == CHECK_PASSES)
             break;
-        memset(x.tighten, 0, sizeof(bool) * jc);
+        /* A failing joint halves the tolerances of its chain; once per doubling of its excess
+         * past 2, so a chain far over the limit gets there in one or two passes instead of
+         * one pass per halving. An ancestor takes the smallest factor of its failing
+         * descendants (the factors are powers of two: exact and deterministic). */
         for (u32 j = 0; j < jc; ++j)
-            if (x.fail[j])
-                for (u32 a = j; a != DE_COOKED_SKEL_NO_PARENT && !x.tighten[a];
-                     a = skel->parents[a])
-                    x.tighten[a] = true;
+            x.scale[j] = 1.0;
+        for (u32 j = 0; j < jc; ++j) {
+            if (!x.fail[j])
+                continue;
+            f64 f = 0.5;
+            for (f64 e = x.excess[j]; e > 2.0 && f > MIN_TIGHTEN; e *= 0.5)
+                f *= 0.5;
+            for (u32 a = j; a != DE_COOKED_SKEL_NO_PARENT && x.scale[a] > f; a = skel->parents[a])
+                x.scale[a] = f;
+        }
         for (u32 k = 0; k < cc.track_count; ++k) {
             track *tk = &cc.tracks[k];
-            if (!x.tighten[tk->joint])
+            if (!(x.scale[tk->joint] < 1.0))
                 continue;
-            tk->tol *= 0.5;
+            tk->tol *= x.scale[tk->joint];
             tk->force_raw = pass >= RAW_AFTER;
             encode_track(&cc, tk);
         }

@@ -150,16 +150,12 @@ static u32 fz_hash(const u8 *p, size_t n) {
 static u32 fz_settings(fz_import_kind kind, const u8 *data, size_t size, de__manifest_kv *kv) {
     u32 n = 0;
     kv[n++] = kv_int("max_decoded_mib", FZ_IMPORT_MAX_DECODED_MIB);
-    if (kind == FZ_IMPORT_GLTF || kind == FZ_IMPORT_FBX) {
-        /* Clip compression (DENG-104) costs up to 256 track evaluations per sample, track and
-         * pass, and a hostile duration makes the sampling grid long: a 3.7 KB glTF with a
-         * 13584 s animation took 14 s per input at 30 Hz in a Debug ASan build (CI's limit is
-         * 10 s). A grid of one sample per 1000 s keeps the time table to the source key times,
-         * which a fuzz input can only hold a few thousand of. Smaller error bounds do not help:
-         * they add check passes. */
-        kv[n++] = kv_float("anim_sample_rate", FZ_IMPORT_ANIM_SAMPLE_RATE);
+    /* Models cook with the default `anim_sample_rate` (30 Hz). Clip compression costs about
+     * samples x tracks x log2(256) since DENG-399, and `max_decoded_mib` bounds samples x tracks:
+     * a long take that fills the budget cooks in about 1 s in a Debug ASan build
+     * (regressions/gltf/regress_clip_long_take.gltf is a smaller one). */
+    if (kind == FZ_IMPORT_GLTF || kind == FZ_IMPORT_FBX)
         return n;
-    }
     static const char *const usages[4] = {"color", "normal", "mask", "environment"};
     u32 h = fz_hash(data, size);
     kv[n++] = kv_int("max_size", FZ_IMPORT_MAX_SIZE);
