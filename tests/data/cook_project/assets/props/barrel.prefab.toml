@@ -1,0 +1,15 @@
+# A prefab: one root and one child, DeTransform only.
+[[entity]]
+id = "0x1"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[[entity]]
+id = "0x2"
+parent = "0x1"
+[entity.DeTransform]
+position = [0.0, 0.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]

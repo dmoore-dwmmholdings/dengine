@@ -1,0 +1,19 @@
+# DENG-213 fixture project, engine types only (blob, scene, prefab): what the real de-cook
+# executable cooks in the cook_cli.engine_project CTest case (tests/unit/cook/CMakeLists.txt).
+# Shares the assets/ directory with assets.toml.
+[project]
+asset_root = "assets"
+
+[assets]
+"data/hello"   = { type = "blob",   source = "data/hello.txt" }
+"data/big"     = { type = "blob",   source = "data/big.txt" }
+"levels/demo"  = { type = "scene",  source = "levels/demo.scene.toml" }
+"props/barrel" = { type = "prefab", source = "props/barrel.prefab.toml" }
+
+[bundles.core]
+assets = ["data/*"]
+resident = true
+
+[bundles.level_01]
+assets = ["levels/demo", "props/barrel"]
+depends = ["core"]

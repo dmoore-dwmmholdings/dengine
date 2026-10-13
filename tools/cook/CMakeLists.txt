@@ -27,3 +27,19 @@ set_target_properties(de-cook PROPERTIES FOLDER "dengine/tools")
 # Debug and Dev builds. known_types.c takes its table from the cooker's engine type names.
 add_subdirectory(lib)
 target_include_directories(de_cook_check PRIVATE "${DE_ROOT_DIR}/tools")
+
+# DENG-213: `de-cook cook` (cook_cmd.c): cooks a whole project through the cooker and its
+# `.decache` into one .dpak pack (de_pack_lib, tools/pack/lib). A library, so tests run it
+# in-process (tests/unit/cook/test_cook_cli.c, tests/unit/pack/test_pack_cli.c). It reads the
+# asset module's internals (manifest, resolve, type registry, pack reader) through the src/ root
+# and the cooker through the tools/ root. de_pack_lib is defined later (tools/pack sorts after
+# tools/cook); CMake resolves the name at generate time.
+add_library(de_cook_cmd STATIC cook_cmd.c cook_cmd.h)
+target_include_directories(de_cook_cmd
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+    PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+target_link_libraries(de_cook_cmd
+    PUBLIC de_cook_check de_asset de_reflect de_core
+    PRIVATE de_cooker de_pack_lib de_ecs de_task de_platform de_tp_xxhash de_build_flags)
+set_target_properties(de_cook_cmd PROPERTIES FOLDER "dengine/tools")
+target_link_libraries(de-cook PRIVATE de_cook_cmd)

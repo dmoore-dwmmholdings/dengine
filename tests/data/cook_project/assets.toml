@@ -1,0 +1,27 @@
+# DENG-213 fixture project: the full project, cooked in-process by tests/unit/cook/test_cook_cli.c
+# and tests/unit/pack/test_pack_cli.c. `cooktext` and the `CookSpin` component are registered by
+# the tests (de_cook_hooks); engine.toml is the part the real de-cook executable can cook.
+# DENG-216 appends fixtures here.
+[project]
+asset_root = "assets"
+
+[defaults.blob]
+compress = true
+
+[assets]
+"data/hello"    = { type = "blob",     source = "data/hello.txt" }
+"data/big"      = { type = "blob",     source = "data/big.txt" }
+"levels/demo"   = { type = "scene",    source = "levels/demo.scene.toml" }
+"props/barrel"  = { type = "prefab",   source = "props/barrel.prefab.toml" }
+"props/crate"   = { type = "prefab",   source = "props/crate.prefab.toml" }
+"text/greeting" = { type = "cooktext", source = "text/greeting.txt", dep = "data/hello" }
+"text/farewell" = { type = "cooktext", source = "text/farewell.txt" }
+
+[bundles.core]
+assets = ["data/*"]
+resident = true
+priority = "high"
+
+[bundles.level_01]
+assets = ["levels/demo", "props/*", "text/*"]
+depends = ["core"]
