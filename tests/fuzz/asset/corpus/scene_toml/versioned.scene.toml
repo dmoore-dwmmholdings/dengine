@@ -1,0 +1,17 @@
+# DENG-403 seed: component tables with `__version`: an older THealth ({ hp }, migrated at cook)
+# and a newer one (skipped with a warning), and an unknown field.
+[[entity]]
+id = "0x5"
+[entity.THealth]
+__version = 1
+hp = 42.0
+
+[[entity]]
+id = "0x6"
+[entity.THealth]
+__version = 99
+current = 1.0
+[entity.TTarget]
+__version = 1
+speed = 7.0
+bogus = "x"

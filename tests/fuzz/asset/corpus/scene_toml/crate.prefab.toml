@@ -1,0 +1,14 @@
+# A prefab: one root (0x1) and one child (0x2) that targets it.
+[[entity]]
+id = "0x1"
+[entity.THealth]
+current = 50.0
+max = 50.0
+
+[[entity]]
+id = "0x2"
+parent = "0x1"
+[entity.TTarget]
+target = "0x1"
+texture = "ui/heart"
+speed = 1.0

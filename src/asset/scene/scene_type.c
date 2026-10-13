@@ -145,12 +145,15 @@ de_result de__scene_view_parse(const void *data, u64 size, de__scene_view *out, 
             return view_fail(err, err_cap, DE_ERR_PARSE, "scene entity %u: bad component range",
                              (unsigned)i);
         next_comp += e.component_count;
-        /* Components of the entity: type indices ascending (each type once). */
+        /* Components of the entity: type indices ascending (each type once). Read the type index
+         * only: de__scene_comp_at also forms the data pointer, and the data offsets are checked
+         * below (an unchecked offset overflows the pointer; DENG-403,
+         * regress_comp_offset_overflow.dscn). */
         for (u32 k = 0; k < e.component_count; ++k) {
-            de__scene_comp_rec c = de__scene_comp_at(&v, e.first_component + k);
-            if (c.type_index >= v.type_count ||
-                (k != 0 &&
-                 c.type_index <= de__scene_comp_at(&v, e.first_component + k - 1u).type_index))
+            const u8 *cp = v.components + (size_t)(e.first_component + k) * DE__SCENE_COMP_SIZE;
+            u32 type_index = de__scene_get_u32(cp);
+            if (type_index >= v.type_count ||
+                (k != 0 && type_index <= de__scene_get_u32(cp - DE__SCENE_COMP_SIZE)))
                 return view_fail(err, err_cap, DE_ERR_PARSE, "scene entity %u: bad component types",
                                  (unsigned)i);
         }

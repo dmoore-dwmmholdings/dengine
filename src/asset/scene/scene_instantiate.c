@@ -125,9 +125,18 @@ de_result de_prefab_instantiate(de_asset_system *s, de_world *w, de_prefab p, de
     /* The scene's types as components of this world. */
     for (u32 t = 0; t < v->type_count; ++t) {
         de__scene_type_rec tr = de__scene_type_at(v, t);
-        types[t].comp = de_component_find(w, tr.name);
+        types[t].comp = (de_component){0};
         types[t].type = (de_type_id){0};
         types[t].tag = false;
+        /* The hierarchy links come from the `parent` records only, as in the importer (which never
+         * writes these). Links read from the file would name entities whose own links disagree,
+         * and the hierarchy walks would loop on them (DENG-403, builtins_hier.dscn). */
+        if (strcmp(tr.name, "DeChildOf") == 0 || strcmp(tr.name, "DeChildren") == 0) {
+            DE_WARN(s->log, "prefab %016llx: `%s` is skipped; the hierarchy comes from `parent`",
+                    (unsigned long long)sl->id.hash, tr.name);
+            continue;
+        }
+        types[t].comp = de_component_find(w, tr.name);
         const ecs_component_info *ci =
             DE_HANDLE_VALID(types[t].comp) ? ecs_component_get(w, types[t].comp.id) : NULL;
         if (ci == NULL) {
