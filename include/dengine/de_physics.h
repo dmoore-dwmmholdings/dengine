@@ -310,6 +310,66 @@ DE_API bool de_body_set_velocity(de_physics_world *p, de_body b, de_vec3 linear,
 DE_API bool de_body_get_mass_props(const de_physics_world *p, de_body b, de_mass_props *out);
 
 /* ---------- Queries ---------- */
+/*
+ * Scene queries (DENG-137, SPEC §13.1): rays, shape casts, overlaps and closest points against
+ * the bodies of a world, filtered like collisions.
+ *
+ * - Filter: a body is a candidate when it is alive, has a shape and passes the collision rule of
+ *   de_collision_filter with the query's filter as the other side. An all-zero query filter means
+ *   the body default {DE_COLLISION_FILTER_DEFAULT_LAYER, DE_COLLISION_FILTER_DEFAULT_MASK, 0}.
+ *   Trigger bodies (DE_BODY_FLAG_TRIGGER) are skipped unless
+ *   DE_PHYSICS_QUERY_INCLUDE_TRIGGERS is set. The body-type rule of the broadphase does not apply:
+ *   queries see static bodies too.
+ * - Rays and casts: `dir` need not be unit length (it is normalized in f64); `max_dist` > 0.
+ *   `fraction` is in [0, 1] of `max_dist`. `normal` is unit and faces the ray (against the
+ *   motion of a cast). A ray that starts inside a solid shape (not a mesh or heightfield) hits at
+ *   fraction 0 with normal -dir and point = origin; a cast that starts overlapping a body hits it
+ *   at fraction 0 with normal -dir and point = the cast's start position. Mesh and heightfield
+ *   triangles are two-sided unless DE_PHYSICS_QUERY_IGNORE_BACK_FACES is set (their front side is
+ *   the counter-clockwise side; a heightfield's front is +Z).
+ * - Ordering: the closest hit wins, ties to the lower body index; raycast_all keeps one hit per
+ *   body (its nearest) sorted by fraction, then body index; overlap results are sorted by body
+ *   index. When an output array is full, the first entries of that order are kept. Within one
+ *   body, ties go to the lower sub-shape.
+ * - `sub_shape`: mesh triangle index; heightfield triangle 2 * (row * (cols - 1) + col) + k;
+ *   compound child index; DE_SUB_SHAPE_NONE for the other kinds.
+ * - Large worlds: the query origin is f64, and shapes are tested in their own frame with the
+ *   offset formed in f64 first, so a query 100 km out behaves like one at the origin.
+ * - Determinism (SPEC §5.7): de_dmath only, traversal and tie rules fixed, results independent
+ *   of the broadphase tree shape. Queries never allocate (caller arrays, fixed stacks).
+ * - Threading: queries only read the world; any number may run at once, but not during
+ *   de_physics_step or any other write. Once the broadphase exists, queries walk its trees, so a
+ *   body moved by de_body_set_transform is found at its new place only after the broadphase has
+ *   followed it (its next update); until then the tree still holds its old box.
+ */
+
+/** de_ray_hit.sub_shape of a shape without sub-shapes (sphere, capsule, box, cylinder, hull). */
+#define DE_SUB_SHAPE_NONE 0xFFFFFFFFu
+
+/** de_physics_query_filter.flags. */
+typedef enum de_physics_query_flags {
+    /** Also report trigger bodies. */
+    DE_PHYSICS_QUERY_INCLUDE_TRIGGERS = 1u << 0,
+    /** Rays and casts pass through the back faces of mesh and heightfield triangles. */
+    DE_PHYSICS_QUERY_IGNORE_BACK_FACES = 1u << 1
+} de_physics_query_flags;
+
+/**
+ * Full query filter for the *_ex functions. `(de_physics_query_filter){0}` is the default filter,
+ * no flags and no ignored body. A NULL de_physics_query_filter pointer is the same.
+ */
+typedef struct de_physics_query_filter {
+    de_collision_filter filter; /**< all zero = the body default (see above) */
+    u32 flags;                  /**< de_physics_query_flags */
+    de_body ignore_body;        /**< never reported (e.g. the caster itself); invalid = none */
+} de_physics_query_filter;
+
+/**
+ * One hit. `point` is in world space: the hit point on the body's surface (ray, cast), or the
+ * closest point (closest_point). `fraction` is the distance along the ray or cast, or the
+ * closest-point distance, divided by `max_dist`. `entity` is the body's owner (DE_ENTITY_NULL for
+ * bodies outside the ECS).
+ */
 typedef struct de_ray_hit {
     de_entity entity;
     de_body body;
@@ -319,16 +379,72 @@ typedef struct de_ray_hit {
     u32 sub_shape;
 } de_ray_hit;
 
+/**
+ * Closest hit of the segment origin .. origin + normalize(dir) * max_dist. Writes *hit and
+ * returns true on a hit; returns false (and leaves *hit unchanged) on a miss or for invalid
+ * arguments (NULL world or hit, non-finite input, zero dir, max_dist <= 0).
+ */
 DE_API bool de_physics_raycast(const de_physics_world *p, de_dvec3 origin, de_vec3 dir,
                                f32 max_dist, de_collision_filter filter, de_ray_hit *hit);
+/**
+ * Every body the segment hits, one hit per body (its nearest), sorted by fraction then body
+ * index. Writes at most `max_hits` (the first ones of that order) and returns how many it wrote.
+ */
 DE_API u32 de_physics_raycast_all(const de_physics_world *p, de_dvec3 origin, de_vec3 dir,
                                   f32 max_dist, de_collision_filter filter, de_ray_hit *hits,
                                   u32 max_hits);
+/**
+ * Sweeps `shape` (convex, or a compound of convex children; not a mesh or heightfield) from
+ * `from` (position and rotation; scale ignored) along normalize(dir) * max_dist without
+ * rotating, and reports the first body it touches: fraction = time of impact, point on the
+ * body's surface, normal facing the cast. The shape need not belong to a body. Time of impact
+ * is found to about 1e-5 m (conservative advancement, so never past the contact).
+ */
 DE_API bool de_physics_shape_cast(const de_physics_world *p, de_shape shape,
                                   const de_transform *from, de_vec3 dir, f32 max_dist,
                                   de_collision_filter filter, de_ray_hit *hit);
+/**
+ * Bodies whose shape overlaps (or touches) `shape` placed at `at` (convex or a compound of
+ * convex children). Writes the owner entities of at most `max` bodies, in ascending body index
+ * (the lowest indices when there are more), and returns how many it wrote.
+ */
 DE_API u32 de_physics_overlap(const de_physics_world *p, de_shape shape, const de_transform *at,
                               de_collision_filter filter, de_entity *out, u32 max);
+
+/* Queries block (DENG-137 additions): closest point, full filter, query flags. */
+
+/**
+ * The point of any body's shape (a solid: inside counts) closest to `point`, within `max_dist`
+ * (>= 0). On a hit: `point` = that closest point, `fraction` = distance / max_dist (0 when
+ * max_dist is 0), `normal` = unit direction from the closest point toward `point` (a triangle's
+ * front normal when `point` lies on it; the zero vector when `point` is inside a solid), and
+ * `sub_shape`. Ties: lower body index, then lower sub-shape.
+ */
+DE_API bool de_physics_closest_point(const de_physics_world *p, de_dvec3 point, f32 max_dist,
+                                     de_collision_filter filter, de_ray_hit *hit);
+
+/** de_physics_raycast with a full filter (NULL = defaults). */
+DE_API bool de_physics_raycast_ex(const de_physics_world *p, de_dvec3 origin, de_vec3 dir,
+                                  f32 max_dist, const de_physics_query_filter *filter,
+                                  de_ray_hit *hit);
+/** de_physics_raycast_all with a full filter (NULL = defaults). */
+DE_API u32 de_physics_raycast_all_ex(const de_physics_world *p, de_dvec3 origin, de_vec3 dir,
+                                     f32 max_dist, const de_physics_query_filter *filter,
+                                     de_ray_hit *hits, u32 max_hits);
+/** de_physics_shape_cast with a full filter (NULL = defaults). */
+DE_API bool de_physics_shape_cast_ex(const de_physics_world *p, de_shape shape,
+                                     const de_transform *from, de_vec3 dir, f32 max_dist,
+                                     const de_physics_query_filter *filter, de_ray_hit *hit);
+/**
+ * de_physics_overlap with a full filter (NULL = defaults). Writes body handles to `bodies` and
+ * owner entities to `entities` (either may be NULL), at most `max` of each, ascending body index.
+ */
+DE_API u32 de_physics_overlap_ex(const de_physics_world *p, de_shape shape, const de_transform *at,
+                                 const de_physics_query_filter *filter, de_body *bodies,
+                                 de_entity *entities, u32 max);
+/** de_physics_closest_point with a full filter (NULL = defaults). */
+DE_API bool de_physics_closest_point_ex(const de_physics_world *p, de_dvec3 point, f32 max_dist,
+                                        const de_physics_query_filter *filter, de_ray_hit *hit);
 
 /* ---------- Joints ---------- */
 typedef enum de_joint_kind {

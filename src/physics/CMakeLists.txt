@@ -65,3 +65,14 @@ if(TARGET de_physics)
         contact/reduce.c
         contact/pair_cache.c)
 endif()
+
+# DENG-137: scene queries (raycast, raycast_all, shape cast, overlap, closest point).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        query/query_internal.h
+        query/raycast.c
+        query/ray_shapes.c
+        query/shape_cast.c
+        query/overlap.c
+        query/closest_point.c)
+endif()
