@@ -14,6 +14,7 @@
  * Extension points (append only, DENG-103 and DENG-104): model_mesh_stage and
  * model_emit_skeletons_and_clips below. DENG-102 adds its front end in model_load_source.
  */
+#include "fbx_import.h"
 #include "model_import.h"
 #include "model_internal.h"
 #include "model_ir.h"
@@ -30,7 +31,8 @@
 #include <stdio.h>
 #include <string.h>
 
-const char *const de_model_import_extensions[DE_MODEL_IMPORT_EXTENSION_COUNT] = {"gltf", "glb"};
+const char *const de_model_import_extensions[DE_MODEL_IMPORT_EXTENSION_COUNT] = {"gltf", "glb",
+                                                                                 "fbx"};
 
 /* ---- Sub-asset names ------------------------------------------------------------------------- */
 
@@ -355,10 +357,16 @@ static de_result read_file_cb(void *user, const char *rel, const void **data, u6
     return de_asset_import_read_file((de_asset_import_ctx *)user, rel, data, size);
 }
 
-/* Front ends by source type. DENG-102: `.fbx` goes to the FBX front end here. */
+/* Front ends by source type. FBX (DENG-102, fbx_import.c) gives the IR in engine axes already
+ * (its own basis change, from the file's axes or the `axis_up` / `axis_front` settings). */
 static de_result model_load_source(de_asset_import_ctx *ctx, const de_model_source *src,
                                    de_model_ir *ir, de_model_axes *axes) {
-    (void)ctx;
+    if (de_model_source_is_fbx(src)) {
+        de_model_fbx_options fo = {de_asset_import_setting_string(ctx, "axis_up", "auto"),
+                                   de_asset_import_setting_string(ctx, "axis_front", "auto")};
+        *axes = DE_MODEL_AXES_ENGINE;
+        return de_model_fbx_load(src, &fo, ir);
+    }
     *axes = DE_MODEL_AXES_GLTF;
     return de_model_gltf_load(src, ir);
 }

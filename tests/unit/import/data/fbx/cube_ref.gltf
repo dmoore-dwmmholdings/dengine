@@ -1,0 +1,110 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 24,
+   "max": [
+    0.5,
+    4.0,
+    1.0
+   ],
+   "min": [
+    -0.5,
+    0.0,
+    -1.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 36,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py (DENG-102)",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 288,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 288,
+   "byteOffset": 288
+  },
+  {
+   "buffer": 0,
+   "byteLength": 192,
+   "byteOffset": 576
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 768
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 840,
+   "uri": "data:application/octet-stream;base64,AAAAPwAAAAAAAIA/AAAAPwAAAAAAAIC/AAAAPwAAgEAAAIC/AAAAPwAAgEAAAIA/AAAAvwAAAAAAAIC/AAAAvwAAAAAAAIA/AAAAvwAAgEAAAIA/AAAAvwAAgEAAAIC/AAAAPwAAAAAAAIC/AAAAvwAAAAAAAIC/AAAAvwAAgEAAAIC/AAAAPwAAgEAAAIC/AAAAvwAAAAAAAIA/AAAAPwAAAAAAAIA/AAAAPwAAgEAAAIA/AAAAvwAAgEAAAIA/AAAAvwAAgEAAAIA/AAAAPwAAgEAAAIA/AAAAPwAAgEAAAIC/AAAAvwAAgEAAAIC/AAAAvwAAAAAAAIC/AAAAPwAAAAAAAIC/AAAAPwAAAAAAAIA/AAAAvwAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Box",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Box",
+   "rotation": [
+    0.0,
+    0.25881904510252074,
+    0.0,
+    0.9659258262890683
+   ],
+   "translation": [
+    2.0,
+    0.5,
+    -3.0
+   ]
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}
