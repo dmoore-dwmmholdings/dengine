@@ -101,8 +101,10 @@ void de_pack_usage(const de_pack_io *io, de_pack_stream s) {
         "                                 dependencies, name) and bundles\n"
         "  extract <pak> <sel> [-o <dir>] write the raw cooked bytes of the entries that\n"
         "                                 match <sel> into <dir> (default: .)\n"
-        "  verify <pak>                   check the header, the content hash, the TOC, every\n"
-        "                                 chunk and the dependencies\n"
+        "  verify <pak>                   check the header, the content hash, the TOC, the\n"
+        "                                 hash of every chunk and dictionary (format v2),\n"
+        "                                 that every chunk decodes, and the dependencies;\n"
+        "                                 names every damaged asset\n"
         "\n"
         "<sel>: 0x<hex> (an asset ID), a glob on asset paths (* ** ?; needs names), or an\n"
         "asset path (works on stripped packs). Files are named by asset path, or by ID.\n"
@@ -691,6 +693,9 @@ static int pk_extract(pk_run *run, int argc, const char *const *argv) {
 typedef struct pk_verify {
     pk_run *run;
     u32 problems, external;
+    u32 damaged;   /* assets with a damaged chunk or dictionary, or that do not decode */
+    u8 *chunk;     /* stored bytes of one chunk (format v2 hash check) */
+    u64 chunk_cap; /* bytes at `chunk` */
 } pk_verify;
 
 /* `asset "<name>" (0x<id>)` or `asset 0x<id>`. */
@@ -746,9 +751,73 @@ static de_result pk_content_hash(pk_run *run, u64 *out) {
     return r;
 }
 
+/* XXH3-64 of a dictionary's bytes (they are in the reader's metadata, but the reader does not
+ * hand them out: read them from the file). Returns 0 when they cannot be read. */
+static u64 pk_dict_hash(pk_run *run, const dpak_dict_entry *d) {
+    u8 *p = (u8 *)malloc(d->size != 0 ? d->size : 1u);
+    u64 got = 0, h = 0;
+    if (p != NULL && de_file_read(dpak_file(run->r), p, d->file_offset, d->size, &got) == DE_OK &&
+        got == d->size)
+        h = de_hash64(p, d->size, 0);
+    free(p);
+    return h;
+}
+
+/* Format v2: reads every chunk of TOC entry `index` and checks it against its hash; a chunk that
+ * names a damaged dictionary damages the asset too. One problem per damaged chunk, and one for
+ * the dictionaries, each naming the asset. */
+static void pk_verify_chunks(pk_verify *v, u32 index, const dpak_toc_entry *e,
+                             const bool *dict_bad) {
+    pk_run *run = v->run;
+    char msg[DE_ERROR_MESSAGE_MAX + 64];
+    bool bad_dict = false;
+    u32 dict_index = 0;
+    for (u32 k = 0; k < e->chunk_count; ++k) {
+        dpak_chunk_entry c;
+        dpak_chunk(run->r, e->first_chunk + k, &c);
+        if (c.dict_index != DPAK_DICT_NONE && dict_bad[c.dict_index] && !bad_dict) {
+            bad_dict = true;
+            dict_index = c.dict_index;
+        }
+        if (c.stored_size > v->chunk_cap) {
+            u8 *q = (u8 *)realloc(v->chunk, c.stored_size);
+            if (q == NULL) {
+                pk_problem(v, index, e->id, "out of memory");
+                return;
+            }
+            v->chunk = q;
+            v->chunk_cap = c.stored_size;
+        }
+        u64 got = 0;
+        if (de_file_read(dpak_file(run->r), v->chunk, c.file_offset, c.stored_size, &got) !=
+                DE_OK ||
+            got != c.stored_size) {
+            snprintf(msg, sizeof msg, "chunk %u of %u (offset %llu) cannot be read", (unsigned)k,
+                     (unsigned)e->chunk_count, (unsigned long long)c.file_offset);
+            pk_problem(v, index, e->id, msg);
+            continue;
+        }
+        de_error_clear();
+        if (dpak_check_chunk(run->r, &c, v->chunk) == DE_OK)
+            continue;
+        snprintf(msg, sizeof msg,
+                 "chunk %u of %u (%u bytes at offset %llu) is damaged: it hashes to %016llx, the "
+                 "chunk table says %016llx",
+                 (unsigned)k, (unsigned)e->chunk_count, (unsigned)c.stored_size,
+                 (unsigned long long)c.file_offset,
+                 (unsigned long long)de_hash64(v->chunk, c.stored_size, 0),
+                 (unsigned long long)c.hash);
+        pk_problem(v, index, e->id, msg);
+    }
+    if (bad_dict) {
+        snprintf(msg, sizeof msg, "uses dictionary %u, which is damaged", (unsigned)dict_index);
+        pk_problem(v, index, e->id, msg);
+    }
+}
+
 static int pk_verify_pack(pk_run *run) {
     const de_pack_io *io = run->io;
-    pk_verify v = {run, 0, 0};
+    pk_verify v = {.run = run};
     const dpak_header *h = dpak_get_header(run->r);
     u32 n = dpak_entry_count(run->r), nb = dpak_bundle_count(run->r);
     char msg[DE_ERROR_MESSAGE_MAX + 64];
@@ -765,13 +834,40 @@ static int pk_verify_pack(pk_run *run) {
         pk_problem(&v, DPAK_NOT_FOUND, 0, msg);
     }
 
+    /* Dictionaries (format v2): a damaged one damages every asset with a chunk that uses it. */
+    const u32 nd = dpak_dict_count(run->r);
+    bool *dict_bad = (bool *)calloc(nd != 0 ? nd : 1u, sizeof(bool));
+    if (dict_bad == NULL)
+        return pk_error(io, DE_PACK_EXIT_USAGE, "out of memory", NULL);
+    for (u32 d = 0; d < nd; ++d) {
+        de_error_clear();
+        if (dpak_check_dict(run->r, d) == DE_OK)
+            continue;
+        dict_bad[d] = true;
+        dpak_dict_entry de;
+        dpak_dict(run->r, d, &de);
+        const char *tn = pk_type_name(de.type_hash);
+        char type[24];
+        if (tn != NULL)
+            snprintf(type, sizeof type, "%s", tn);
+        else
+            snprintf(type, sizeof type, "0x%016llx", (unsigned long long)de.type_hash);
+        snprintf(msg, sizeof msg,
+                 "dictionary %u (type %s, %u bytes at offset %llu) is damaged: it hashes to "
+                 "%016llx, the table says %016llx",
+                 (unsigned)d, type, (unsigned)de.size, (unsigned long long)de.file_offset,
+                 (unsigned long long)pk_dict_hash(run, &de), (unsigned long long)de.hash);
+        pk_problem(&v, DPAK_NOT_FOUND, 0, msg);
+    }
+
     /* TOC order, names, every chunk, dependencies. */
     ZSTD_DCtx *dctx = ZSTD_createDCtx();
     u8 *buf = NULL;
     u64 cap = 0, chunks = 0;
-    if (dctx == NULL)
+    if (dctx == NULL) {
+        free(dict_bad);
         return pk_error(io, DE_PACK_EXIT_USAGE, "out of memory", NULL);
-    u32 damaged = 0;
+    }
     for (u32 i = 0; i < n; ++i) {
         dpak_toc_entry e;
         dpak_entry(run->r, i, &e);
@@ -789,22 +885,32 @@ static int pk_verify_pack(pk_run *run) {
                      (unsigned long long)de_asset_id_from(name).hash);
             pk_problem(&v, i, e.id, msg);
         }
-        if (e.raw_size + 1 > cap) {
-            u8 *q = (u8 *)realloc(buf, (size_t)e.raw_size + 1);
-            if (q == NULL) {
-                pk_problem(&v, i, e.id, "out of memory");
-                continue;
+        /* Format v2: every chunk against its hash, and the dictionaries it uses. A damaged
+         * asset is not decoded: its damage is already named, and the decode error would only
+         * repeat it. */
+        const u32 before = v.problems;
+        if (dpak_has_hashes(run->r))
+            pk_verify_chunks(&v, i, &e, dict_bad);
+        if (v.problems != before) {
+            v.damaged++;
+        } else {
+            if (e.raw_size + 1 > cap) {
+                u8 *q = (u8 *)realloc(buf, (size_t)e.raw_size + 1);
+                if (q == NULL) {
+                    pk_problem(&v, i, e.id, "out of memory");
+                    continue;
+                }
+                buf = q;
+                cap = e.raw_size + 1;
             }
-            buf = q;
-            cap = e.raw_size + 1;
-        }
-        de_error_clear();
-        if (dpak_read_entry(run->r, i, dctx, buf, e.raw_size) != DE_OK) {
-            const de_error *err = de_error_last();
-            snprintf(msg, sizeof msg, "does not decode: %s",
-                     err != NULL ? err->message : "unknown error");
-            pk_problem(&v, i, e.id, msg);
-            damaged++;
+            de_error_clear();
+            if (dpak_read_entry(run->r, i, dctx, buf, e.raw_size) != DE_OK) {
+                const de_error *err = de_error_last();
+                snprintf(msg, sizeof msg, "does not decode: %s",
+                         err != NULL ? err->message : "unknown error");
+                pk_problem(&v, i, e.id, msg);
+                v.damaged++;
+            }
         }
         for (u32 d = 0; d < e.dep_count; ++d) {
             u64 dep = dpak_dep(run->r, e.dep_first + d);
@@ -819,12 +925,24 @@ static int pk_verify_pack(pk_run *run) {
                       " depends on 0x%s, which is not in this pack (external)\n", hex);
         }
     }
+    bool dict_damaged = false;
+    for (u32 d = 0; d < nd; ++d)
+        dict_damaged = dict_damaged || dict_bad[d];
     free(buf);
+    free(v.chunk);
+    free(dict_bad);
     ZSTD_freeDCtx(dctx);
-    if (hash != h->content_hash && damaged == 0)
-        pk_puts(io, DE_PACK_STDOUT,
-                "note: every chunk decodes, so the damage is in a chunk stored raw or in the "
-                "metadata; format v1 has no per-asset hash to name it\n");
+    if (hash != h->content_hash && v.damaged == 0 && !dict_damaged) {
+        if (dpak_has_hashes(run->r))
+            pk_puts(io, DE_PACK_STDOUT,
+                    "note: every chunk and dictionary matches its hash, so the damage is in the "
+                    "metadata (the TOC and the other sections) or in padding; no asset data is "
+                    "damaged\n");
+        else
+            pk_puts(io, DE_PACK_STDOUT,
+                    "note: every chunk decodes, so the damage is in a chunk stored raw or in the "
+                    "metadata; format v1 has no per-asset hash to name it\n");
+    }
 
     /* Bundles: members and depends that this pack does not hold. */
     for (u32 b = 0; b < nb; ++b) {
@@ -866,8 +984,9 @@ static int pk_verify_pack(pk_run *run) {
                   (unsigned)nb, (unsigned)v.external);
         return DE_PACK_EXIT_OK;
     }
-    pk_printf(io, DE_PACK_STDOUT, ": FAILED (%u problem%s)\n", (unsigned)v.problems,
-              v.problems == 1 ? "" : "s");
+    pk_printf(io, DE_PACK_STDOUT, ": FAILED (%u problem%s, %u damaged asset%s)\n",
+              (unsigned)v.problems, v.problems == 1 ? "" : "s", (unsigned)v.damaged,
+              v.damaged == 1 ? "" : "s");
     return DE_PACK_EXIT_PROBLEMS;
 }
 

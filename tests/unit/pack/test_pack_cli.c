@@ -17,6 +17,7 @@
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
 #include "cook/lib/de_cooker.h"
+#include "dpak_writer.h"
 #include "pack_cmds.h"
 
 #define NO_COOKER_MSG "this build has no runtime importers (DE_HAS_COOKER: Debug and Dev)"
@@ -32,6 +33,25 @@ static int run_pack(const char *const *args) {
     cct_reset();
     de_pack_io io = {pk_test_write, NULL};
     return de_pack_main(cct_argc(args), args, &io);
+}
+
+/* Writes a copy of `pak` with byte `off` XOR `mask` as CCT_TMP/<rel>; its native path to `out`. */
+static void damaged_copy(const char *pak, u64 off, u8 mask, const char *rel, char *out,
+                         size_t cap) {
+    size_t n = 0;
+    u8 *bytes = cct_read(pak, &n);
+    ASSERT_TRUE(bytes != NULL && off < n);
+    bytes[off] ^= mask;
+    cct_put(rel, bytes, n);
+    free(bytes);
+    cct_path(out, cap, rel);
+}
+
+static u32 count_of(const char *hay, const char *needle) {
+    u32 n = 0;
+    for (const char *p = strstr(hay, needle); p != NULL; p = strstr(p + 1, needle))
+        ++n;
+    return n;
 }
 
 #if DE_HAS_COOKER
@@ -61,18 +81,6 @@ static u64 chunk_offset(const char *pak, const char *id, u16 *flags) {
     dpak_close(r);
     free(bytes);
     return c.file_offset;
-}
-
-/* Writes a copy of `pak` with byte `off` XOR `mask` as CCT_TMP/<rel>; its native path to `out`. */
-static void damaged_copy(const char *pak, u64 off, u8 mask, const char *rel, char *out,
-                         size_t cap) {
-    size_t n = 0;
-    u8 *bytes = cct_read(pak, &n);
-    ASSERT_TRUE(bytes != NULL && off < n);
-    bytes[off] ^= mask;
-    cct_put(rel, bytes, n);
-    free(bytes);
-    cct_path(out, cap, rel);
 }
 
 /* ---- A minimal JSON parser (syntax only) ---------------------------------------------------- */
@@ -183,12 +191,6 @@ static bool json_valid(const char *text) {
     return j.ok && *j.p == '\0';
 }
 
-static u32 count_of(const char *hay, const char *needle) {
-    u32 n = 0;
-    for (const char *p = strstr(hay, needle); p != NULL; p = strstr(p + 1, needle))
-        ++n;
-    return n;
-}
 #endif /* DE_HAS_COOKER */
 
 /* ---- test_pack_cli_verify_ok ------------------------------------------------------------------
@@ -235,9 +237,9 @@ TEST(pack_cli, verify_ok) {
 /* ---- test_pack_cli_verify_corrupt -------------------------------------------------------------
  */
 
-/* One flipped byte fails verify with exit 1. In a compressed chunk's frame header the chunk does
- * not decode and the asset is named; anywhere else the content hash catches it. A truncated
- * pack does not open. */
+/* One flipped byte fails verify with exit 1 (format v2, DENG-392). A byte in any chunk, raw or
+ * compressed, is named with the asset that owns the chunk (its chunk hash), and so is the content
+ * hash; a byte in the metadata only fails the content hash. A truncated pack does not open. */
 TEST(pack_cli, verify_corrupt) {
 #if !DE_HAS_COOKER
     SKIP(NO_COOKER_MSG);
@@ -253,9 +255,10 @@ TEST(pack_cli, verify_corrupt) {
     const char *args[] = {"verify", bad, NULL};
     ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
     EXPECT_TRUE(strstr(g_cct.out.p, "error: asset \"data/big\" (0x") != NULL);
-    EXPECT_TRUE(strstr(g_cct.out.p, "does not decode") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, "): chunk 0 of ") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, "is damaged") != NULL);
     EXPECT_TRUE(strstr(g_cct.out.p, "content hash mismatch") != NULL);
-    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (2 problems)") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (2 problems, 1 damaged asset)") != NULL);
 
     /* The same in a stripped pack: the asset is named by its ID. */
     char stripped[DE_FS_PATH_MAX];
@@ -264,24 +267,27 @@ TEST(pack_cli, verify_corrupt) {
     off = chunk_offset(stripped, "data/big", &flags);
     damaged_copy(stripped, off, 0x80, "verify_corrupt_stripped/big.dpak", bad, sizeof bad);
     char want[64];
-    snprintf(want, sizeof want, "error: asset 0x%016llx: does not decode",
+    snprintf(want, sizeof want, "error: asset 0x%016llx: chunk 0 of",
              (unsigned long long)de_asset_id_from("data/big").hash);
     ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
     EXPECT_TRUE(strstr(g_cct.out.p, want) != NULL);
 
-    /* data/hello: 13 bytes, stored raw. Only the content hash sees a flipped byte there. */
+    /* data/hello: 13 bytes, stored raw. Format v1 could not name it (it decodes); v2 can. */
     off = chunk_offset(pak, "data/hello", &flags);
     EXPECT_NE(flags & DPAK_CHUNK_RAW, 0u);
     damaged_copy(pak, off + 3, 0x20, "verify_corrupt/hello.dpak", bad, sizeof bad);
     ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
     EXPECT_TRUE(strstr(g_cct.out.p, "content hash mismatch") != NULL);
-    EXPECT_TRUE(strstr(g_cct.out.p, "every chunk decodes") != NULL);
-    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (1 problem)") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, "error: asset \"data/hello\" (0x") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (2 problems, 1 damaged asset)") != NULL);
 
-    /* A byte in the TOC (the type hash of the first entry): the content hash. */
+    /* A byte in the TOC (the type hash of the first entry): the content hash only, and the note
+     * that no asset data is damaged. */
     damaged_copy(pak, DPAK_HEADER_SIZE + 8, 0x01, "verify_corrupt/toc.dpak", bad, sizeof bad);
     ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
     EXPECT_TRUE(strstr(g_cct.out.p, "content hash mismatch") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, "every chunk and dictionary matches its hash") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (1 problem, 0 damaged assets)") != NULL);
 
     /* Truncated: the reader refuses it at open. */
     size_t n = 0;
@@ -298,6 +304,234 @@ TEST(pack_cli, verify_corrupt) {
     cct_path(bad, sizeof bad, "verify_corrupt/none.dpak");
     EXPECT_EQ(run_pack(args), DE_PACK_EXIT_USAGE);
 #endif
+}
+
+/* ---- Packs from the writer (DENG-392): every chunk, dictionaries, format v1 -------------------
+ * These packs come from the writer directly (tools/pack/lib), so they need no cooker and run in
+ * every build that has the tools. */
+
+/* xorshift64*: the same bytes on every host. */
+static u64 vc_rng(u64 *s) {
+    u64 x = *s;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *s = x;
+    return x * 0x2545F4914F6CDD1Dull;
+}
+
+/* 48 JSON-like records of type "rec" (a dictionary pays off for them), a 3000-byte noise asset
+ * (raw chunks) and a 5000-byte text asset (zstd chunks), in 1 KiB chunks. Written to
+ * CCT_TMP/<rel>; the native path goes to `out`. */
+static void vc_write_pack(u32 version, bool names, const char *rel, char *out, size_t cap) {
+    dpak_writer *w = NULL;
+    dpak_writer_desc wd = {.chunk_size = DPAK_MIN_CHUNK_SIZE,
+                           .alignment = 16,
+                           .zstd_level = 19,
+                           .use_dictionaries = true,
+                           .include_names = names,
+                           .format_version = version};
+    ASSERT_EQ(dpak_writer_create(&wd, &w), DE_OK);
+    static const char *const k_factions[] = {"bandits", "guards", "wildlife", "undead"};
+    char buf[2048], name[64];
+    for (u32 i = 0; i < 48u; ++i) {
+        u64 st = 7u + i;
+        size_t at = 0;
+        while (at < 900u) {
+            int n = snprintf(buf + at, sizeof buf - at,
+                             "{\"name\":\"enemy_%04u\",\"health\":%u,\"faction\":\"%s\","
+                             "\"ai\":{\"behaviour\":\"patrol\",\"aggro_radius\":%u}}\n",
+                             (unsigned)(vc_rng(&st) % 10000u), (unsigned)(vc_rng(&st) % 500u),
+                             k_factions[vc_rng(&st) % 4u], (unsigned)(vc_rng(&st) % 40u));
+            ASSERT_TRUE(n > 0);
+            at += (size_t)n;
+        }
+        snprintf(name, sizeof name, "recs/%02u", i);
+        ASSERT_EQ(dpak_writer_add(w, de_asset_id_from(name).hash, "rec", buf, at, NULL, 0, name),
+                  DE_OK);
+    }
+    u8 noise[3000];
+    u64 st = 99;
+    for (size_t i = 0; i < sizeof noise; ++i)
+        noise[i] = (u8)(vc_rng(&st) >> 56);
+    ASSERT_EQ(dpak_writer_add(w, de_asset_id_from("misc/noise").hash, "blob", noise, sizeof noise,
+                              NULL, 0, "misc/noise"),
+              DE_OK);
+    char text[5000];
+    for (size_t i = 0; i < sizeof text; ++i)
+        text[i] = "alpha bravo charlie delta "[(i * 7u + i / 26u) % 26u];
+    ASSERT_EQ(dpak_writer_add(w, de_asset_id_from("misc/text").hash, "blob", text, sizeof text,
+                              NULL, 0, "misc/text"),
+              DE_OK);
+    void *data = NULL;
+    u64 size = 0;
+    de_result r = dpak_writer_finish_memory(w, NULL, &data, &size);
+    dpak_writer_destroy(w);
+    ASSERT_EQ(r, DE_OK);
+    cct_put(rel, data, (size_t)size);
+    DE_FREE(de_heap_allocator(), data, (size_t)size);
+    cct_path(out, cap, rel);
+}
+
+/* A flipped byte in any chunk of any asset (raw, zstd or dictionary; first, middle or last byte)
+ * is reported with the asset ID that owns it, and only that asset. Several damaged assets are all
+ * reported. A stripped pack names them by ID. */
+TEST(pack_cli, verify_every_chunk) {
+    char pak[DE_FS_PATH_MAX], bad[DE_FS_PATH_MAX];
+    vc_write_pack(0, true, "verify_every/ok.dpak", pak, sizeof pak);
+    const char *ok_args[] = {"verify", pak, NULL};
+    ASSERT_EQ(run_pack(ok_args), DE_PACK_EXIT_OK);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": OK (platform any, 50 entries") != NULL);
+
+    size_t n = 0;
+    u8 *bytes = cct_read(pak, &n);
+    ASSERT_TRUE(bytes != NULL);
+    dpak_reader *r = NULL;
+    ASSERT_EQ(dpak_open_memory(bytes, n, NULL, &r), DE_OK);
+    ASSERT_EQ(dpak_dict_count(r), 1u);
+    u32 raw = 0, zstd = 0, dict = 0, runs = 0;
+    const char *args[] = {"verify", bad, NULL};
+    for (u32 i = 0; i < dpak_entry_count(r); ++i) {
+        dpak_toc_entry e;
+        dpak_entry(r, i, &e);
+        const char *name = dpak_name(r, i, NULL);
+        ASSERT_TRUE(name != NULL);
+        char want[160];
+        for (u32 k = 0; k < e.chunk_count; ++k) {
+            dpak_chunk_entry c;
+            dpak_chunk(r, e.first_chunk + k, &c);
+            raw += (c.flags & DPAK_CHUNK_RAW) != 0;
+            dict += (c.flags & DPAK_CHUNK_RAW) == 0 && c.dict_index != DPAK_DICT_NONE;
+            zstd += (c.flags & DPAK_CHUNK_RAW) == 0 && c.dict_index == DPAK_DICT_NONE;
+            const u64 at = c.file_offset + (u64)(runs % 3u == 0   ? 0u
+                                                 : runs % 3u == 1 ? c.stored_size / 2u
+                                                                  : c.stored_size - 1u);
+            ++runs;
+            damaged_copy(pak, at, 0x40, "verify_every/bad.dpak", bad, sizeof bad);
+            ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
+            snprintf(want, sizeof want, "error: asset \"%s\" (0x%016llx): chunk %u of %u (", name,
+                     (unsigned long long)e.id, (unsigned)k, (unsigned)e.chunk_count);
+            EXPECT_TRUE(strstr(g_cct.out.p, want) != NULL);
+            EXPECT_EQ(count_of(g_cct.out.p, "error: asset"), 1u);
+            EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (2 problems, 1 damaged asset)") != NULL);
+        }
+    }
+    EXPECT_GT(raw, 0u);
+    EXPECT_GT(zstd, 0u);
+    EXPECT_GT(dict, 0u);
+
+    /* Two assets at once: both are named. */
+    dpak_toc_entry e0, e1;
+    dpak_entry(r, 0, &e0);
+    dpak_entry(r, dpak_entry_count(r) - 1u, &e1);
+    dpak_chunk_entry c0, c1;
+    dpak_chunk(r, e0.first_chunk, &c0);
+    dpak_chunk(r, e1.first_chunk + e1.chunk_count - 1u, &c1);
+    bytes[c0.file_offset + 1u] ^= 0x02u;
+    bytes[c1.file_offset + c1.stored_size - 1u] ^= 0x02u;
+    cct_put("verify_every/two.dpak", bytes, n);
+    cct_path(bad, sizeof bad, "verify_every/two.dpak");
+    ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
+    EXPECT_EQ(count_of(g_cct.out.p, "error: asset"), 2u);
+    char hex[24];
+    snprintf(hex, sizeof hex, "(0x%016llx)", (unsigned long long)e0.id);
+    EXPECT_TRUE(strstr(g_cct.out.p, hex) != NULL);
+    snprintf(hex, sizeof hex, "(0x%016llx)", (unsigned long long)e1.id);
+    EXPECT_TRUE(strstr(g_cct.out.p, hex) != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (3 problems, 2 damaged assets)") != NULL);
+    dpak_close(r);
+    free(bytes);
+
+    /* Stripped: the asset is named by its ID. */
+    vc_write_pack(0, false, "verify_every/stripped.dpak", pak, sizeof pak);
+    bytes = cct_read(pak, &n);
+    ASSERT_TRUE(bytes != NULL);
+    ASSERT_EQ(dpak_open_memory(bytes, n, NULL, &r), DE_OK);
+    u32 k = dpak_find(r, de_asset_id_from("misc/noise").hash);
+    ASSERT_NE(k, DPAK_NOT_FOUND);
+    dpak_toc_entry e;
+    dpak_entry(r, k, &e);
+    dpak_chunk_entry c;
+    dpak_chunk(r, e.first_chunk + 1u, &c);
+    dpak_close(r);
+    free(bytes);
+    damaged_copy(pak, c.file_offset + 5u, 0x01, "verify_every/stripped_bad.dpak", bad, sizeof bad);
+    ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
+    char want[96];
+    snprintf(want, sizeof want, "error: asset 0x%016llx: chunk 1 of %u (", (unsigned long long)e.id,
+             (unsigned)e.chunk_count);
+    EXPECT_TRUE(strstr(g_cct.out.p, want) != NULL);
+}
+
+/* A damaged dictionary is reported, and so is every asset with a chunk that uses it. */
+TEST(pack_cli, verify_dictionary) {
+    char pak[DE_FS_PATH_MAX], bad[DE_FS_PATH_MAX];
+    vc_write_pack(0, true, "verify_dict/ok.dpak", pak, sizeof pak);
+    size_t n = 0;
+    u8 *bytes = cct_read(pak, &n);
+    ASSERT_TRUE(bytes != NULL);
+    dpak_reader *r = NULL;
+    ASSERT_EQ(dpak_open_memory(bytes, n, NULL, &r), DE_OK);
+    ASSERT_EQ(dpak_dict_count(r), 1u);
+    dpak_dict_entry d;
+    dpak_dict(r, 0, &d);
+    u32 users = 0;
+    for (u32 i = 0; i < dpak_entry_count(r); ++i) {
+        dpak_toc_entry e;
+        dpak_entry(r, i, &e);
+        bool uses = false;
+        for (u32 k = 0; k < e.chunk_count; ++k) {
+            dpak_chunk_entry c;
+            dpak_chunk(r, e.first_chunk + k, &c);
+            uses = uses || c.dict_index == 0u;
+        }
+        users += uses;
+    }
+    dpak_close(r);
+    free(bytes);
+    ASSERT_GT(users, 0u);
+    /* The last byte: zstd still parses the dictionary, so the pack opens. */
+    damaged_copy(pak, d.file_offset + d.size - 1u, 0x08, "verify_dict/bad.dpak", bad, sizeof bad);
+    const char *args[] = {"verify", bad, NULL};
+    ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
+    EXPECT_TRUE(strstr(g_cct.out.p, "error: dictionary 0 (type 0x") != NULL);
+    EXPECT_EQ(count_of(g_cct.out.p, "uses dictionary 0, which is damaged"), users);
+    char want[64];
+    snprintf(want, sizeof want, "%u damaged assets)", (unsigned)users);
+    EXPECT_TRUE(strstr(g_cct.out.p, want) != NULL);
+}
+
+/* Format v1 packs still verify. Without hashes, a damaged raw chunk is caught only by the content
+ * hash, as before v2. */
+TEST(pack_cli, verify_v1) {
+    char pak[DE_FS_PATH_MAX], bad[DE_FS_PATH_MAX];
+    vc_write_pack(1, true, "verify_v1/ok.dpak", pak, sizeof pak);
+    const char *ok_args[] = {"verify", pak, NULL};
+    ASSERT_EQ(run_pack(ok_args), DE_PACK_EXIT_OK);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": OK (platform any, 50 entries") != NULL);
+    const char *list_args[] = {"list", pak, NULL};
+    ASSERT_EQ(run_pack(list_args), DE_PACK_EXIT_OK);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": version 1,") != NULL);
+
+    size_t n = 0;
+    u8 *bytes = cct_read(pak, &n);
+    ASSERT_TRUE(bytes != NULL);
+    dpak_reader *r = NULL;
+    ASSERT_EQ(dpak_open_memory(bytes, n, NULL, &r), DE_OK);
+    EXPECT_FALSE(dpak_has_hashes(r));
+    dpak_toc_entry e;
+    dpak_entry(r, dpak_find(r, de_asset_id_from("misc/noise").hash), &e);
+    dpak_chunk_entry c;
+    dpak_chunk(r, e.first_chunk, &c);
+    dpak_close(r);
+    free(bytes);
+    ASSERT_NE(c.flags & DPAK_CHUNK_RAW, 0u);
+    damaged_copy(pak, c.file_offset + 9u, 0x01, "verify_v1/bad.dpak", bad, sizeof bad);
+    const char *args[] = {"verify", bad, NULL};
+    ASSERT_EQ(run_pack(args), DE_PACK_EXIT_PROBLEMS);
+    EXPECT_TRUE(strstr(g_cct.out.p, "content hash mismatch") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, "format v1 has no per-asset hash") != NULL);
+    EXPECT_TRUE(strstr(g_cct.out.p, ": FAILED (1 problem, 0 damaged assets)") != NULL);
 }
 
 /* ---- test_pack_cli_list_json ------------------------------------------------------------------

@@ -334,6 +334,30 @@ static void run_decode(void *user) {
     pending_done(pj);
 }
 
+/* Debug and Dev mounts check chunk hashes (dpak_open_desc.check_chunks, DENG-392). The chunks of
+ * an all-raw entry are read straight into the raw buffer and never pass dpak_decode_chunk, so
+ * their hashes are checked here, on the I/O thread. Returns false (and fails the job) on a
+ * damaged chunk. */
+static bool check_raw_run(de__pack_run *run) {
+    de__pack_job *pj = run->pj;
+    de__pjob *job = pj->job;
+    const dpak_reader *r = pj->pack->reader;
+    if (!dpak_checks_chunks(r))
+        return true;
+    for (u32 i = 0; i < run->count; ++i) {
+        dpak_chunk_entry c;
+        dpak_chunk(r, pj->toc.first_chunk + run->first + i, &c);
+        const u8 *src = (const u8 *)job->raw + (c.file_offset - pj->toc.data_offset);
+        de_error_clear();
+        if (dpak_check_chunk(r, &c, src) != DE_OK) {
+            const de_error *e = de_error_last();
+            fail_once(pj, DE_ERR_PARSE, "%s", e != NULL ? e->message : "damaged chunk");
+            return false;
+        }
+    }
+    return true;
+}
+
 /* A run's read is over (read, failed, cancelled, or never submitted): leave the I/O window with
  * the last one, then decode it or count it finished. */
 static void run_finished(de__pack_run *run, bool ok) {
@@ -352,7 +376,7 @@ static void run_finished(de__pack_run *run, bool ok) {
             run_decode(run);
         return;
     }
-    if (ok && !pj->compressed)
+    if (ok && !pj->compressed && check_raw_run(run))
         de__mount_count(job->s, 0, 0, run->count, 0); /* raw chunks need no decode */
     pending_done(pj);
 }

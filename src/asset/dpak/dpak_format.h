@@ -1,5 +1,5 @@
 /*
- * dpak_format.h: the .dpak pack archive format, version 1 (SPEC §11.7). Internal, header-only.
+ * dpak_format.h: the .dpak pack archive format, version 2 (SPEC §11.7). Internal, header-only.
  *
  * Include as "asset/dpak/dpak_format.h". Shared by the writer (tools/pack/lib/dpak_writer.c,
  * DENG-211) and the runtime reader (src/asset/dpak/, DENG-212). The reader must never include
@@ -22,6 +22,11 @@
  * Padding bytes are zero. The file ends with the last byte of asset data (or of the last
  * dictionary or section when no asset has data). The header's content_hash is XXH3-64 (seed 0,
  * de_hash64) of every byte after the header.
+ *
+ * Versions: 2 (DENG-392) adds a hash to every chunk entry and every dictionary entry, so a reader
+ * can tell which asset a damaged byte belongs to; those two records grow from 24 to 32 bytes.
+ * Everything else is the same as in version 1, which readers still accept. The record sizes and
+ * the chunk and dictionary encoders therefore take the pack's version.
  */
 #ifndef DE_ASSET_DPAK_FORMAT_H
 #define DE_ASSET_DPAK_FORMAT_H
@@ -43,7 +48,11 @@ DE_EXTERN_C_BEGIN
  * ID hash (de_hash64, seed 0, of the asset path; Trama "Decision: Names and asset IDs are XXH3-64
  * of the exact bytes") or to the type hash. Record the change in docs/formats/dpak.md.
  */
-#define DPAK_VERSION 1u
+#define DPAK_VERSION 2u
+/** Oldest format version a reader accepts. Version 1 has no chunk or dictionary hashes. */
+#define DPAK_VERSION_MIN 1u
+/** First version whose chunk and dictionary entries carry a hash. */
+#define DPAK_VERSION_HASHES 2u
 
 /** Size of the header in bytes; stored in the header too. */
 #define DPAK_HEADER_SIZE 256u
@@ -169,7 +178,7 @@ typedef struct dpak_toc_entry {
     u32 reserved;    /**< 60: 0 */
 } dpak_toc_entry;
 
-/** One chunk of an asset. 24 bytes. */
+/** One chunk of an asset. 32 bytes in version 2, 24 in version 1 (no `hash`). */
 typedef struct dpak_chunk_entry {
     u64 file_offset; /**<  0 */
     u32 stored_size; /**<  8: bytes in the file */
@@ -177,6 +186,7 @@ typedef struct dpak_chunk_entry {
     u16 dict_index;  /**< 16: index into DICTS, or DPAK_DICT_NONE */
     u16 flags;       /**< 18: dpak_chunk_flags */
     u32 reserved;    /**< 20: 0 */
+    u64 hash;        /**< 24: v2: de_hash64 of the stored_size stored bytes, seed 0; v1: 0 */
 } dpak_chunk_entry;
 
 /** One bundle (SPEC §11.1), so a packed game needs no assets.toml. 40 bytes. */
@@ -192,12 +202,13 @@ typedef struct dpak_bundle_entry {
     u32 priority;     /**< 36: dpak_priority */
 } dpak_bundle_entry;
 
-/** One zstd dictionary, trained for one asset type. 24 bytes. */
+/** One zstd dictionary, trained for one asset type. 32 bytes in version 2, 24 in version 1. */
 typedef struct dpak_dict_entry {
     u64 type_hash;   /**<  0: the type whose chunks may use it */
     u64 file_offset; /**<  8: the dictionary bytes (zstd dictionary format) */
     u32 size;        /**< 16: bytes */
     u32 zstd_id;     /**< 20: ZDICT_getDictID() of the dictionary (frames do not store it) */
+    u64 hash;        /**< 24: v2: de_hash64 of the `size` dictionary bytes, seed 0; v1: 0 */
 } dpak_dict_entry;
 
 /** The path of the TOC entry with the same index. 8 bytes. */
@@ -206,14 +217,18 @@ typedef struct dpak_name_entry {
     u32 len;    /**< 4: bytes, without the NUL; 0 when the writer had no name for the asset */
 } dpak_name_entry;
 
-/** Encoded size of each record. The structs have no implicit padding, so these equal sizeof. */
+/** Encoded size of each record in the current version. The structs have no implicit padding, so
+ * these equal sizeof. */
 #define DPAK_SECTION_DESC_SIZE 24u
 #define DPAK_TOC_ENTRY_SIZE    64u
-#define DPAK_CHUNK_ENTRY_SIZE  24u
+#define DPAK_CHUNK_ENTRY_SIZE  32u
 #define DPAK_BUNDLE_ENTRY_SIZE 40u
-#define DPAK_DICT_ENTRY_SIZE   24u
+#define DPAK_DICT_ENTRY_SIZE   32u
 #define DPAK_NAME_ENTRY_SIZE   8u
 #define DPAK_ID_SIZE           8u
+/** Version 1 sizes of the two records that version 2 grew (no hash at the end). */
+#define DPAK_CHUNK_ENTRY_SIZE_V1 24u
+#define DPAK_DICT_ENTRY_SIZE_V1  24u
 
 DE_STATIC_ASSERT(sizeof(dpak_section_desc) == DPAK_SECTION_DESC_SIZE, "dpak_section_desc size");
 DE_STATIC_ASSERT(sizeof(dpak_header) == DPAK_HEADER_SIZE, "dpak_header size");
@@ -225,20 +240,35 @@ DE_STATIC_ASSERT(sizeof(dpak_name_entry) == DPAK_NAME_ENTRY_SIZE, "dpak_name_ent
 DE_STATIC_ASSERT(DPAK_HEADER_SIZE == 64u + DPAK_SECTION_COUNT * DPAK_SECTION_DESC_SIZE,
                  "dpak header: 64 fixed bytes + the section table");
 
-/** Size in bytes of one record of section `s` (1 for STRINGS). */
-static inline u32 dpak_section_record_size(dpak_section s) {
+/** True if packs of format `version` store chunk and dictionary hashes. */
+static inline bool dpak_version_has_hashes(u32 version) {
+    return version >= DPAK_VERSION_HASHES;
+}
+
+/** Size in bytes of one chunk entry in a pack of format `version`. */
+static inline u32 dpak_chunk_entry_size(u32 version) {
+    return dpak_version_has_hashes(version) ? DPAK_CHUNK_ENTRY_SIZE : DPAK_CHUNK_ENTRY_SIZE_V1;
+}
+
+/** Size in bytes of one dictionary entry in a pack of format `version`. */
+static inline u32 dpak_dict_entry_size(u32 version) {
+    return dpak_version_has_hashes(version) ? DPAK_DICT_ENTRY_SIZE : DPAK_DICT_ENTRY_SIZE_V1;
+}
+
+/** Size in bytes of one record of section `s` in a pack of format `version` (1 for STRINGS). */
+static inline u32 dpak_section_record_size(u32 version, dpak_section s) {
     switch (s) {
     case DPAK_SECTION_TOC:
         return DPAK_TOC_ENTRY_SIZE;
     case DPAK_SECTION_CHUNKS:
-        return DPAK_CHUNK_ENTRY_SIZE;
+        return dpak_chunk_entry_size(version);
     case DPAK_SECTION_DEPS:
     case DPAK_SECTION_BUNDLE_IDS:
         return DPAK_ID_SIZE;
     case DPAK_SECTION_BUNDLES:
         return DPAK_BUNDLE_ENTRY_SIZE;
     case DPAK_SECTION_DICTS:
-        return DPAK_DICT_ENTRY_SIZE;
+        return dpak_dict_entry_size(version);
     case DPAK_SECTION_NAMES:
         return DPAK_NAME_ENTRY_SIZE;
     case DPAK_SECTION_STRINGS:
@@ -280,8 +310,11 @@ static inline u64 dpak_load_u64(const u8 *p) {
 }
 
 /* ---- Record encode/decode -------------------------------------------------------------------
- * Each encoder writes exactly DPAK_<RECORD>_SIZE bytes at `p`; each decoder reads that many.
- * Decoders do no validation: the reader checks the values (counts, offsets, sizes) itself. */
+ * Each encoder writes exactly DPAK_<RECORD>_SIZE bytes at `p`; each decoder reads that many. The
+ * chunk and dictionary encoders take the pack's version and write or read
+ * dpak_chunk_entry_size(version) / dpak_dict_entry_size(version) bytes: a version 1 record has no
+ * hash (the encoder drops it, the decoder sets it to 0). Decoders do no validation: the reader
+ * checks the values (counts, offsets, sizes) itself. */
 
 static inline void dpak_section_desc_store(u8 *p, const dpak_section_desc *s) {
     dpak_store_u64(p + 0, s->offset);
@@ -367,22 +400,25 @@ static inline void dpak_toc_entry_load(const u8 *p, dpak_toc_entry *e) {
     e->reserved = dpak_load_u32(p + 60);
 }
 
-static inline void dpak_chunk_entry_store(u8 *p, const dpak_chunk_entry *c) {
+static inline void dpak_chunk_entry_store(u8 *p, u32 version, const dpak_chunk_entry *c) {
     dpak_store_u64(p + 0, c->file_offset);
     dpak_store_u32(p + 8, c->stored_size);
     dpak_store_u32(p + 12, c->raw_size);
     dpak_store_u16(p + 16, c->dict_index);
     dpak_store_u16(p + 18, c->flags);
     dpak_store_u32(p + 20, c->reserved);
+    if (dpak_version_has_hashes(version))
+        dpak_store_u64(p + 24, c->hash);
 }
 
-static inline void dpak_chunk_entry_load(const u8 *p, dpak_chunk_entry *c) {
+static inline void dpak_chunk_entry_load(const u8 *p, u32 version, dpak_chunk_entry *c) {
     c->file_offset = dpak_load_u64(p + 0);
     c->stored_size = dpak_load_u32(p + 8);
     c->raw_size = dpak_load_u32(p + 12);
     c->dict_index = dpak_load_u16(p + 16);
     c->flags = dpak_load_u16(p + 18);
     c->reserved = dpak_load_u32(p + 20);
+    c->hash = dpak_version_has_hashes(version) ? dpak_load_u64(p + 24) : 0u;
 }
 
 static inline void dpak_bundle_entry_store(u8 *p, const dpak_bundle_entry *b) {
@@ -409,18 +445,21 @@ static inline void dpak_bundle_entry_load(const u8 *p, dpak_bundle_entry *b) {
     b->priority = dpak_load_u32(p + 36);
 }
 
-static inline void dpak_dict_entry_store(u8 *p, const dpak_dict_entry *d) {
+static inline void dpak_dict_entry_store(u8 *p, u32 version, const dpak_dict_entry *d) {
     dpak_store_u64(p + 0, d->type_hash);
     dpak_store_u64(p + 8, d->file_offset);
     dpak_store_u32(p + 16, d->size);
     dpak_store_u32(p + 20, d->zstd_id);
+    if (dpak_version_has_hashes(version))
+        dpak_store_u64(p + 24, d->hash);
 }
 
-static inline void dpak_dict_entry_load(const u8 *p, dpak_dict_entry *d) {
+static inline void dpak_dict_entry_load(const u8 *p, u32 version, dpak_dict_entry *d) {
     d->type_hash = dpak_load_u64(p + 0);
     d->file_offset = dpak_load_u64(p + 8);
     d->size = dpak_load_u32(p + 16);
     d->zstd_id = dpak_load_u32(p + 20);
+    d->hash = dpak_version_has_hashes(version) ? dpak_load_u64(p + 24) : 0u;
 }
 
 static inline void dpak_name_entry_store(u8 *p, const dpak_name_entry *n) {

@@ -185,14 +185,14 @@ static void pak_open(pak *k, const packbuf *b) {
     ASSERT_TRUE(b->size >= DPAK_HEADER_SIZE);
     ASSERT_TRUE(dpak_magic_ok(b->data));
     dpak_header_load(b->data, &k->h);
-    ASSERT_EQ(k->h.version, DPAK_VERSION);
+    ASSERT_TRUE(k->h.version >= DPAK_VERSION_MIN && k->h.version <= DPAK_VERSION);
     ASSERT_EQ(k->h.header_size, DPAK_HEADER_SIZE);
     ASSERT_EQ(k->h.file_size, b->size);
     ASSERT_EQ(k->h.reserved, 0u);
     for (u32 s = 0; s < (u32)DPAK_SECTION_COUNT; ++s) {
         const dpak_section_desc *d = &k->h.sections[s];
         ASSERT_EQ(d->reserved, 0u);
-        ASSERT_EQ(d->size, (u64)d->count * dpak_section_record_size((dpak_section)s));
+        ASSERT_EQ(d->size, (u64)d->count * dpak_section_record_size(k->h.version, (dpak_section)s));
         if (d->size == 0) {
             EXPECT_EQ(d->offset, 0u);
             continue;
@@ -205,7 +205,7 @@ static void pak_open(pak *k, const packbuf *b) {
 
 static const u8 *pak_rec(const pak *k, dpak_section s, u32 i) {
     DE_ASSERT(i < k->h.sections[s].count);
-    return k->p + k->h.sections[s].offset + (u64)i * dpak_section_record_size(s);
+    return k->p + k->h.sections[s].offset + (u64)i * dpak_section_record_size(k->h.version, s);
 }
 
 static dpak_toc_entry pak_toc(const pak *k, u32 i) {
@@ -216,7 +216,7 @@ static dpak_toc_entry pak_toc(const pak *k, u32 i) {
 
 static dpak_chunk_entry pak_chunk(const pak *k, u32 i) {
     dpak_chunk_entry c;
-    dpak_chunk_entry_load(pak_rec(k, DPAK_SECTION_CHUNKS, i), &c);
+    dpak_chunk_entry_load(pak_rec(k, DPAK_SECTION_CHUNKS, i), k->h.version, &c);
     return c;
 }
 
@@ -247,7 +247,7 @@ static u8 *pak_extract(const pak *k, u32 i) {
             memcpy(out + at, src, ch.raw_size);
         } else if (ch.dict_index != DPAK_DICT_NONE) {
             dpak_dict_entry d;
-            dpak_dict_entry_load(pak_rec(k, DPAK_SECTION_DICTS, ch.dict_index), &d);
+            dpak_dict_entry_load(pak_rec(k, DPAK_SECTION_DICTS, ch.dict_index), k->h.version, &d);
             ZSTD_DDict *dd = ZSTD_createDDict(k->p + d.file_offset, d.size);
             const size_t r =
                 ZSTD_decompress_usingDDict(dctx, out + at, ch.raw_size, src, ch.stored_size, dd);
@@ -274,7 +274,7 @@ static u64 pak_payload(const pak *k) {
         total += pak_chunk(k, i).stored_size;
     for (u32 i = 0; i < k->h.sections[DPAK_SECTION_DICTS].count; ++i) {
         dpak_dict_entry d;
-        dpak_dict_entry_load(pak_rec(k, DPAK_SECTION_DICTS, i), &d);
+        dpak_dict_entry_load(pak_rec(k, DPAK_SECTION_DICTS, i), k->h.version, &d);
         total += d.size;
     }
     return total;
@@ -300,12 +300,44 @@ TEST(dpak_writer, format_records) {
     EXPECT_MEMEQ(&t, &t2, sizeof t);
     EXPECT_EQ(dpak_load_u32(buf + 56), 10u); /* flags at offset 56 */
 
-    const dpak_chunk_entry c = {0x1122334455667788ull, 99, 65536, DPAK_DICT_NONE,
-                                DPAK_CHUNK_RAW,        0};
+    const dpak_chunk_entry c = {0x1122334455667788ull, 99, 65536, DPAK_DICT_NONE, DPAK_CHUNK_RAW, 0,
+                                0xA1A2A3A4A5A6A7A8ull};
     dpak_chunk_entry c2;
-    dpak_chunk_entry_store(buf, &c);
-    dpak_chunk_entry_load(buf, &c2);
+    memset(buf, 0xEE, sizeof buf);
+    dpak_chunk_entry_store(buf, DPAK_VERSION, &c);
+    dpak_chunk_entry_load(buf, DPAK_VERSION, &c2);
     EXPECT_MEMEQ(&c, &c2, sizeof c);
+    EXPECT_EQ(dpak_load_u64(buf + 24), 0xA1A2A3A4A5A6A7A8ull); /* v2: the hash at offset 24 */
+    EXPECT_EQ(buf[DPAK_CHUNK_ENTRY_SIZE], 0xEE);               /* and nothing after it */
+    /* Version 1: 24 bytes, no hash written, hash 0 on load. */
+    memset(buf, 0xEE, sizeof buf);
+    dpak_chunk_entry_store(buf, 1u, &c);
+    EXPECT_EQ(buf[DPAK_CHUNK_ENTRY_SIZE_V1], 0xEE);
+    dpak_chunk_entry_load(buf, 1u, &c2);
+    EXPECT_EQ(c2.hash, 0u);
+    EXPECT_EQ(c2.file_offset, c.file_offset);
+    EXPECT_EQ(c2.flags, c.flags);
+    EXPECT_EQ(dpak_section_record_size(1u, DPAK_SECTION_CHUNKS), 24u);
+    EXPECT_EQ(dpak_section_record_size(2u, DPAK_SECTION_CHUNKS), 32u);
+    EXPECT_EQ(dpak_section_record_size(1u, DPAK_SECTION_DICTS), 24u);
+    EXPECT_EQ(dpak_section_record_size(2u, DPAK_SECTION_DICTS), 32u);
+    EXPECT_EQ(dpak_section_record_size(1u, DPAK_SECTION_TOC),
+              dpak_section_record_size(2u, DPAK_SECTION_TOC));
+
+    const dpak_dict_entry dd = {0x0102030405060708ull, 4096, 1000, 0xCAFEu, 0xB1B2B3B4B5B6B7B8ull};
+    dpak_dict_entry dd2;
+    memset(buf, 0xEE, sizeof buf);
+    dpak_dict_entry_store(buf, DPAK_VERSION, &dd);
+    dpak_dict_entry_load(buf, DPAK_VERSION, &dd2);
+    EXPECT_MEMEQ(&dd, &dd2, sizeof dd);
+    EXPECT_EQ(dpak_load_u64(buf + 24), 0xB1B2B3B4B5B6B7B8ull);
+    EXPECT_EQ(buf[DPAK_DICT_ENTRY_SIZE], 0xEE);
+    memset(buf, 0xEE, sizeof buf);
+    dpak_dict_entry_store(buf, 1u, &dd);
+    EXPECT_EQ(buf[DPAK_DICT_ENTRY_SIZE_V1], 0xEE);
+    dpak_dict_entry_load(buf, 1u, &dd2);
+    EXPECT_EQ(dd2.hash, 0u);
+    EXPECT_EQ(dd2.zstd_id, 0xCAFEu);
 
     dpak_header h = {.magic = {'D', 'P', 'A', 'K'},
                      .version = 1,
@@ -554,12 +586,14 @@ TEST(dpak_writer, raw_fallback) {
 }
 
 /* Many small, similar records of one type: what per-type dictionaries are for. */
-static packbuf build_records(bool dicts, u32 records, u32 rare, bool reverse) {
+static packbuf build_records_v(bool dicts, u32 records, u32 rare, bool reverse, u32 version) {
     dpak_writer *w = NULL;
     packbuf out = {0};
-    ASSERT_EQ(
-        dpak_writer_create(&(dpak_writer_desc){.use_dictionaries = dicts, .zstd_level = 19}, &w),
-        DE_OK);
+    ASSERT_EQ(dpak_writer_create(&(dpak_writer_desc){.use_dictionaries = dicts,
+                                                     .zstd_level = 19,
+                                                     .format_version = version},
+                                 &w),
+              DE_OK);
     static const char *const factions[] = {"bandits", "guards", "wildlife", "undead"};
     char buf[1024];
     for (u32 j = 0; j < records + rare; ++j) {
@@ -595,6 +629,10 @@ static packbuf build_records(bool dicts, u32 records, u32 rare, bool reverse) {
     return out;
 }
 
+static packbuf build_records(bool dicts, u32 records, u32 rare, bool reverse) {
+    return build_records_v(dicts, records, rare, reverse, 0u);
+}
+
 TEST(dpak_writer, dictionaries) {
     /* 400 records of type "config" and 7 of "rare_config" (below DPAK_DICT_MIN_SAMPLES). */
     packbuf off = build_records(false, 400, DPAK_DICT_MIN_SAMPLES - 1u, false);
@@ -610,7 +648,7 @@ TEST(dpak_writer, dictionaries) {
     EXPECT_EQ(koff.h.sections[DPAK_SECTION_DICTS].count, 0u);
     ASSERT_EQ(kon.h.sections[DPAK_SECTION_DICTS].count, 1u);
     dpak_dict_entry d;
-    dpak_dict_entry_load(pak_rec(&kon, DPAK_SECTION_DICTS, 0), &d);
+    dpak_dict_entry_load(pak_rec(&kon, DPAK_SECTION_DICTS, 0), kon.h.version, &d);
     EXPECT_EQ(d.type_hash, de_hash64_str("config"));
     EXPECT_GT(d.size, 0u);
     EXPECT_LE(d.size, DPAK_DICT_MAX_SIZE);
@@ -774,4 +812,117 @@ TEST(dpak_writer, content_hash) {
     EXPECT_EQ(de_file_delete("packtest:/out.dpak"), DE_OK);
     EXPECT_EQ(de_fs_unmount("packtest", dir), DE_OK);
     packbuf_free(&b);
+}
+
+/* ---- Format version 2: chunk and dictionary hashes (DENG-392) ------------------------------- */
+
+/* Every chunk entry holds the XXH3-64 of its stored bytes, every dictionary entry that of its
+ * bytes: raw, zstd and dictionary chunks alike. */
+static void expect_hashes(const pak *k, u32 *raw, u32 *zstd, u32 *dict) {
+    for (u32 i = 0; i < k->h.sections[DPAK_SECTION_CHUNKS].count; ++i) {
+        const dpak_chunk_entry ch = pak_chunk(k, i);
+        EXPECT_EQ(ch.hash, de_hash64(k->p + ch.file_offset, ch.stored_size, 0));
+        EXPECT_EQ(ch.reserved, 0u);
+        if (ch.flags & DPAK_CHUNK_RAW)
+            ++*raw;
+        else if (ch.dict_index != DPAK_DICT_NONE)
+            ++*dict;
+        else
+            ++*zstd;
+    }
+    for (u32 i = 0; i < k->h.sections[DPAK_SECTION_DICTS].count; ++i) {
+        dpak_dict_entry d;
+        dpak_dict_entry_load(pak_rec(k, DPAK_SECTION_DICTS, i), k->h.version, &d);
+        EXPECT_EQ(d.hash, de_hash64(k->p + d.file_offset, d.size, 0));
+    }
+}
+
+TEST(dpak_writer, chunk_hashes) {
+    packbuf b = build(&(dpak_writer_desc){.include_names = true}, 0);
+    pak k;
+    pak_open(&k, &b);
+    EXPECT_EQ(k.h.version, DPAK_VERSION);
+    EXPECT_EQ(k.h.sections[DPAK_SECTION_CHUNKS].size,
+              (u64)k.h.sections[DPAK_SECTION_CHUNKS].count * DPAK_CHUNK_ENTRY_SIZE);
+    u32 raw = 0, zstd = 0, dict = 0;
+    expect_hashes(&k, &raw, &zstd, &dict);
+    EXPECT_GT(raw, 0u);
+    EXPECT_GT(zstd, 0u);
+    packbuf_free(&b);
+
+    packbuf r = build_records(true, 400, 0, false);
+    pak kr;
+    pak_open(&kr, &r);
+    ASSERT_EQ(kr.h.sections[DPAK_SECTION_DICTS].count, 1u);
+    EXPECT_EQ(kr.h.sections[DPAK_SECTION_DICTS].size, (u64)DPAK_DICT_ENTRY_SIZE);
+    raw = zstd = dict = 0;
+    expect_hashes(&kr, &raw, &zstd, &dict);
+    EXPECT_GT(dict, 0u);
+    packbuf_free(&r);
+}
+
+/* format_version 1 writes the version 1 layout (24-byte chunk and dictionary entries, no hashes)
+ * with the same data; 0 and DPAK_VERSION write version 2; anything else is refused. */
+TEST(dpak_writer, format_v1) {
+    dpak_writer *w = NULL;
+    EXPECT_EQ(dpak_writer_create(&(dpak_writer_desc){.format_version = DPAK_VERSION + 1u}, &w),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_TRUE(w == NULL);
+
+    packbuf v2 = build(&(dpak_writer_desc){.include_names = true}, 0);
+    packbuf v2x =
+        build(&(dpak_writer_desc){.include_names = true, .format_version = DPAK_VERSION}, 0);
+    ASSERT_EQ(v2.size, v2x.size);
+    EXPECT_MEMEQ(v2.data, v2x.data, (size_t)v2.size);
+    packbuf_free(&v2x);
+    packbuf v1 = build(&(dpak_writer_desc){.include_names = true, .format_version = 1u}, 0);
+    packbuf v1r = build(&(dpak_writer_desc){.include_names = true, .format_version = 1u}, 1);
+    ASSERT_EQ(v1.size, v1r.size); /* deterministic in version 1 too */
+    EXPECT_MEMEQ(v1.data, v1r.data, (size_t)v1.size);
+    packbuf_free(&v1r);
+
+    pak k1, k2;
+    pak_open(&k1, &v1);
+    pak_open(&k2, &v2);
+    EXPECT_EQ(k1.h.version, 1u);
+    EXPECT_EQ(k2.h.version, DPAK_VERSION);
+    const u32 nc = k1.h.sections[DPAK_SECTION_CHUNKS].count;
+    ASSERT_EQ(nc, k2.h.sections[DPAK_SECTION_CHUNKS].count);
+    EXPECT_EQ(k1.h.sections[DPAK_SECTION_CHUNKS].size, (u64)nc * DPAK_CHUNK_ENTRY_SIZE_V1);
+    for (u32 i = 0; i < nc; ++i) {
+        const dpak_chunk_entry a = pak_chunk(&k1, i), b = pak_chunk(&k2, i);
+        EXPECT_EQ(a.hash, 0u);
+        EXPECT_NE(b.hash, 0u);
+        ASSERT_EQ(a.stored_size, b.stored_size);
+        EXPECT_EQ(a.raw_size, b.raw_size);
+        EXPECT_EQ(a.flags, b.flags);
+        EXPECT_MEMEQ(k1.p + a.file_offset, k2.p + b.file_offset, a.stored_size);
+    }
+    for (u32 i = 0; i < k1.h.sections[DPAK_SECTION_TOC].count; ++i) {
+        u8 *a = pak_extract(&k1, i);
+        u8 *b = pak_extract(&k2, i);
+        ASSERT_TRUE(a != NULL && b != NULL);
+        EXPECT_MEMEQ(a, b, (size_t)pak_toc(&k1, i).raw_size);
+        free(a);
+        free(b);
+    }
+    packbuf_free(&v1);
+    packbuf_free(&v2);
+
+    /* With a dictionary: 24-byte dictionary entries, and the same dictionary bytes. */
+    packbuf d1 = build_records_v(true, 400, 0, false, 1u);
+    packbuf d2 = build_records_v(true, 400, 0, false, 0u);
+    pak kd1, kd2;
+    pak_open(&kd1, &d1);
+    pak_open(&kd2, &d2);
+    ASSERT_EQ(kd1.h.sections[DPAK_SECTION_DICTS].count, 1u);
+    EXPECT_EQ(kd1.h.sections[DPAK_SECTION_DICTS].size, (u64)DPAK_DICT_ENTRY_SIZE_V1);
+    dpak_dict_entry e1, e2;
+    dpak_dict_entry_load(pak_rec(&kd1, DPAK_SECTION_DICTS, 0), 1u, &e1);
+    dpak_dict_entry_load(pak_rec(&kd2, DPAK_SECTION_DICTS, 0), DPAK_VERSION, &e2);
+    EXPECT_EQ(e1.hash, 0u);
+    ASSERT_EQ(e1.size, e2.size);
+    EXPECT_MEMEQ(kd1.p + e1.file_offset, kd2.p + e2.file_offset, e1.size);
+    packbuf_free(&d1);
+    packbuf_free(&d2);
 }

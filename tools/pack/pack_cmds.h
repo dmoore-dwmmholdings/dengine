@@ -7,8 +7,9 @@
  *
  * `<pak>` is a native path. Packs of every platform are accepted. The pack reader is the runtime
  * one (src/asset/dpak/dpak_reader.h, DENG-212), which checks every offset, count and range at
- * open; `verify` adds the content hash, the decoding of every chunk, the name hashes and the
- * dependency check.
+ * open; `verify` adds the content hash, the hash of every chunk and dictionary (format v2,
+ * DENG-392: each damaged chunk is reported with the asset that owns it), the decoding of every
+ * chunk, the name hashes and the dependency check.
  *
  * `extract` selectors: `0x<hex>` (an asset ID), a glob on asset paths (`*` any run without `/`,
  * `**` any run, `?` one character but `/`; needs a pack with names), or an asset path (its ID is

@@ -10,7 +10,8 @@
  *   4. with use_dictionaries, train one dictionary per type (in type-hash order) from that type's
  *      chunks, recompress them with it, and keep it only if it pays for itself;
  *   5. lay out header, sections, dictionaries and data, encode everything little-endian into one
- *      zeroed block, and hash it.
+ *      zeroed block (in format version 2, with the XXH3-64 of every chunk's stored bytes and of
+ *      every dictionary in their table entries), and hash it.
  * Nothing depends on the add order (step 1), on addresses or on time, and zstd runs
  * single-threaded with fixed parameters, so the same inputs give the same bytes.
  */
@@ -71,6 +72,7 @@ typedef struct dpak__bundle {
 
 struct dpak_writer {
     const de_allocator *a;
+    u32 version; /* format version written: DPAK_VERSION, or DPAK_VERSION_MIN for compat tests */
     u32 platform;
     u8 build_id[16];
     u32 chunk_size;
@@ -157,6 +159,10 @@ de_result dpak_writer_create(const dpak_writer_desc *desc, dpak_writer **out) {
                        ZSTD_minCLevel(), ZSTD_maxCLevel());
     if (d.platform >= (u32)DPAK_PLATFORM_COUNT_)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "dpak: unknown platform %u", d.platform);
+    const u32 version = d.format_version ? d.format_version : DPAK_VERSION;
+    if (version < DPAK_VERSION_MIN || version > DPAK_VERSION)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "dpak: format version %u not in [%u, %u]", version,
+                       DPAK_VERSION_MIN, DPAK_VERSION);
 
     const de_allocator *a = d.allocator ? d.allocator : de_heap_allocator();
     dpak_writer *w = DE_NEW(a, dpak_writer, DE_MEM_ASSET);
@@ -164,6 +170,7 @@ de_result dpak_writer_create(const dpak_writer_desc *desc, dpak_writer **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "dpak: writer allocation failed");
     memset(w, 0, sizeof *w);
     w->a = a;
+    w->version = version;
     w->platform = d.platform;
     memcpy(w->build_id, d.build_id, sizeof w->build_id);
     w->chunk_size = chunk_size;
@@ -743,7 +750,7 @@ static de_result dpak__encode(dpak__build *b, const de_allocator *out_a, void **
 
     dpak_header h = {
         .magic = {(u8)DPAK_MAGIC_0, (u8)DPAK_MAGIC_1, (u8)DPAK_MAGIC_2, (u8)DPAK_MAGIC_3},
-        .version = DPAK_VERSION,
+        .version = w->version,
         .header_size = DPAK_HEADER_SIZE,
         .platform = w->platform,
         .flags = w->include_names ? DPAK_HEADER_HAS_NAMES : 0u,
@@ -763,7 +770,7 @@ static de_result dpak__encode(dpak__build *b, const de_allocator *out_a, void **
     };
     u64 off = DPAK_HEADER_SIZE;
     for (u32 s = 0; s < (u32)DPAK_SECTION_COUNT; ++s) {
-        const u64 size = (u64)counts[s] * dpak_section_record_size((dpak_section)s);
+        const u64 size = (u64)counts[s] * dpak_section_record_size(w->version, (dpak_section)s);
         if (size == 0)
             continue; /* empty: offset, size and count stay 0 */
         off = dpak__align_up(off, DPAK_SECTION_ALIGNMENT);
@@ -803,8 +810,10 @@ static de_result dpak__encode(dpak__build *b, const de_allocator *out_a, void **
             .file_offset = b->dicts[i].file_offset,
             .size = b->dicts[i].size,
             .zstd_id = b->dicts[i].zstd_id,
+            .hash = de_hash64(b->dicts[i].data, b->dicts[i].size, 0),
         };
-        dpak_dict_entry_store(dict_table + (size_t)i * DPAK_DICT_ENTRY_SIZE, &de);
+        dpak_dict_entry_store(dict_table + (size_t)i * dpak_dict_entry_size(w->version), w->version,
+                              &de);
         memcpy(buf + de.file_offset, b->dicts[i].data, b->dicts[i].size);
     }
     off = data_start;
@@ -844,8 +853,11 @@ static de_result dpak__encode(dpak__build *b, const de_allocator *out_a, void **
                 .raw_size = ch->raw_size,
                 .dict_index = ch->dict,
                 .flags = ch->flags,
+                .hash = de_hash64(ch->stored, ch->stored_size, 0),
             };
-            dpak_chunk_entry_store(chunk_table + (size_t)(first + c) * DPAK_CHUNK_ENTRY_SIZE, &ce);
+            dpak_chunk_entry_store(chunk_table +
+                                       (size_t)(first + c) * dpak_chunk_entry_size(w->version),
+                                   w->version, &ce);
             memcpy(buf + off, ch->stored, ch->stored_size);
             off += ch->stored_size;
             t.stored_size += ch->stored_size;

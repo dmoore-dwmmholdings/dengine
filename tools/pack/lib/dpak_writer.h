@@ -57,6 +57,11 @@ typedef struct dpak_writer_desc {
     /** Each asset's data starts on a multiple of this: a power of two in
      * [DPAK_MIN_ALIGNMENT, DPAK_MAX_ALIGNMENT]; 0 = DPAK_DEFAULT_ALIGNMENT (4096). */
     u32 alignment;
+    /** Format version to write, in [DPAK_VERSION_MIN, DPAK_VERSION]; 0 = DPAK_VERSION. Version 2
+     * stores a hash of every chunk and dictionary. Version 1 (no hashes) exists so tests and the
+     * fuzz corpus can check that readers still load old packs; it writes the bytes the version 1
+     * writer wrote. */
+    u32 format_version;
 } dpak_writer_desc;
 
 /**

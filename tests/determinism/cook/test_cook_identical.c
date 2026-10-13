@@ -117,7 +117,7 @@ static void cd_locate(const dpak_reader *r, u64 off, char *where, size_t cap, u3
         const dpak_section_desc *d = &h->sections[s];
         if (d->count == 0 || off < d->offset || off >= d->offset + d->size)
             continue;
-        const u64 rec = (off - d->offset) / dpak_section_record_size((dpak_section)s);
+        const u64 rec = (off - d->offset) / dpak_section_record_size(h->version, (dpak_section)s);
         snprintf(where, cap, "section %s, record %llu", k_sections[s], (unsigned long long)rec);
         if (s == DPAK_SECTION_TOC || s == DPAK_SECTION_NAMES)
             *entry = (u32)rec;

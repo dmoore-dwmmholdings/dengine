@@ -1,8 +1,9 @@
 /*
  * test_dpak_reader.c: the runtime .dpak reader (src/asset/dpak/dpak_reader.c, DENG-212) on packs
  * built in-process with the DENG-211 writer: byte-exact roundtrips (memory and file), dictionary
- * chunks, platform and version checks, truncation at every length class, mutated metadata, and
- * the optional content hash. Run under ASan: no input may make the reader read outside the pack.
+ * chunks, platform and version checks, truncation at every length class, mutated metadata, the
+ * optional content hash, and the format version 2 chunk and dictionary hashes with version 1
+ * packs still read (DENG-392). Run under ASan: no input may make the reader read outside the pack.
  *
  * Files go to a scratch directory of the build tree, mounted as dpr:/.
  */
@@ -169,7 +170,7 @@ TEST(dpak_reader, dictionary_chunks) {
     dpak_header h;
     dpak_header_load((const u8 *)data, &h);
     dpak_dict_entry d;
-    dpak_dict_entry_load((const u8 *)data + h.sections[DPAK_SECTION_DICTS].offset, &d);
+    dpak_dict_entry_load((const u8 *)data + h.sections[DPAK_SECTION_DICTS].offset, h.version, &d);
     u8 *copy = (u8 *)malloc((size_t)size);
     ASSERT_TRUE(copy != NULL);
     memcpy(copy, data, (size_t)size);
@@ -268,6 +269,8 @@ TEST(dpak_reader, bad_version) {
     dpak_store_u32(copy + 4, DPAK_VERSION + 1u);
     EXPECT_EQ(dpak_open_memory(copy, size, NULL, &r), DE_ERR_VERSION_MISMATCH);
     EXPECT_TRUE(strstr(de_error_last()->message, "format version") != NULL);
+    dpak_store_u32(copy + 4, DPAK_VERSION_MIN - 1u);
+    EXPECT_EQ(dpak_open_memory(copy, size, NULL, &r), DE_ERR_VERSION_MISMATCH);
     memcpy(copy, data, (size_t)size);
     dpak_store_u32(copy + 8, DPAK_HEADER_SIZE + 8u);
     EXPECT_EQ(dpak_open_memory(copy, size, NULL, &r), DE_ERR_VERSION_MISMATCH);
@@ -439,6 +442,149 @@ TEST(dpak_reader, verify) {
     dpak_close(r);
 
     free(copy);
+    heap_free(data, size);
+    pt_asset_free(a, 100);
+}
+
+/* ---- dpak_reader.chunk_hashes, version_1 (DENG-392) ----------------------------------------- */
+
+/* Format version 2: a flipped byte in any chunk (raw, zstd or dictionary) fails that chunk's hash.
+ * With check_chunks the reader refuses to decode it; a damaged dictionary is refused at open. */
+TEST(dpak_reader, chunk_hashes) {
+    mount_once();
+    static pt_asset a[100];
+    pt_make_100(a);
+    dpak_writer_desc wd = fast_desc();
+    void *data = NULL;
+    u64 size = 0;
+    pt_pack_memory(&wd, a, 100, &data, &size);
+    u8 *copy = (u8 *)malloc((size_t)size);
+    ASSERT_TRUE(copy != NULL);
+    memcpy(copy, data, (size_t)size);
+
+    dpak_reader *plain = NULL, *chk = NULL;
+    ASSERT_EQ(dpak_open_memory(copy, size, NULL, &plain), DE_OK);
+    ASSERT_EQ(dpak_open_memory(copy, size, &(dpak_open_desc){.check_chunks = true}, &chk), DE_OK);
+    EXPECT_TRUE(dpak_has_hashes(chk));
+    expect_roundtrip(chk, a, 100);
+    ASSERT_EQ(dpak_dict_count(chk), 1u);
+
+    u32 raw = 0, zstd = 0, dict = 0;
+    static u8 out[400u * 1024u];
+    for (u32 i = 0; i < dpak_entry_count(chk); ++i) {
+        dpak_toc_entry e;
+        dpak_entry(chk, i, &e);
+        ASSERT_LE(e.raw_size, (u64)sizeof out);
+        for (u32 k = 0; k < e.chunk_count; ++k) {
+            dpak_chunk_entry c;
+            dpak_chunk(chk, e.first_chunk + k, &c);
+            u8 *src = copy + c.file_offset;
+            ASSERT_EQ(dpak_check_chunk(chk, &c, src), DE_OK);
+            raw += (c.flags & DPAK_CHUNK_RAW) != 0;
+            dict += (c.flags & DPAK_CHUNK_RAW) == 0 && c.dict_index != DPAK_DICT_NONE;
+            zstd += (c.flags & DPAK_CHUNK_RAW) == 0 && c.dict_index == DPAK_DICT_NONE;
+            /* The first, the middle and the last byte. */
+            const u32 at[3] = {0u, c.stored_size / 2u, c.stored_size - 1u};
+            for (u32 j = 0; j < 3u; ++j) {
+                src[at[j]] ^= 0x04u;
+                EXPECT_EQ(dpak_check_chunk(chk, &c, src), DE_ERR_PARSE);
+                EXPECT_TRUE(strstr(de_error_last()->message, "is damaged") != NULL);
+                EXPECT_EQ(dpak_check_chunk(plain, &c, src), DE_ERR_PARSE);
+                EXPECT_EQ(dpak_read_entry(chk, i, NULL, out, e.raw_size), DE_ERR_PARSE);
+                src[at[j]] ^= 0x04u;
+            }
+        }
+        ASSERT_EQ(dpak_read_entry(chk, i, NULL, out, e.raw_size), DE_OK);
+    }
+    EXPECT_GT(raw, 0u);
+    EXPECT_GT(zstd, 0u);
+    EXPECT_GT(dict, 0u);
+    /* Without check_chunks a damaged raw chunk decodes (to wrong bytes): that is what the hash
+     * is for. */
+    for (u32 i = 0; i < dpak_entry_count(plain); ++i) {
+        dpak_toc_entry e;
+        dpak_entry(plain, i, &e);
+        dpak_chunk_entry c;
+        if (e.chunk_count == 0)
+            continue;
+        dpak_chunk(plain, e.first_chunk, &c);
+        if ((c.flags & DPAK_CHUNK_RAW) == 0)
+            continue;
+        copy[c.file_offset + 7u] ^= 0x01u;
+        EXPECT_EQ(dpak_read_entry(plain, i, NULL, out, e.raw_size), DE_OK);
+        EXPECT_EQ(dpak_read_entry(chk, i, NULL, out, e.raw_size), DE_ERR_PARSE);
+        copy[c.file_offset + 7u] ^= 0x01u;
+        break;
+    }
+
+    /* A damaged dictionary (its last byte: zstd still parses it) is refused at open with
+     * check_chunks; without, the pack opens and dpak_check_dict finds it. */
+    dpak_dict_entry d;
+    dpak_dict(chk, 0, &d);
+    EXPECT_EQ(dpak_check_dict(chk, 0), DE_OK);
+    EXPECT_EQ(dpak_check_dict(chk, 1), DE_OK); /* out of range: nothing to check */
+    dpak_close(plain);
+    dpak_close(chk);
+    copy[d.file_offset + d.size - 1u] ^= 0x01u;
+    EXPECT_EQ(dpak_open_memory(copy, size, &(dpak_open_desc){.check_chunks = true}, &chk),
+              DE_ERR_PARSE);
+    EXPECT_TRUE(strstr(de_error_last()->message, "dictionary 0 is damaged") != NULL);
+    ASSERT_EQ(dpak_open_memory(copy, size, NULL, &plain), DE_OK);
+    EXPECT_EQ(dpak_check_dict(plain, 0), DE_ERR_PARSE);
+    dpak_close(plain);
+    copy[d.file_offset + d.size - 1u] ^= 0x01u;
+
+    /* A file reader checks the same way. */
+    ASSERT_EQ(de_file_write_all_atomic("dpr:/hashes.dpak", data, size), DE_OK);
+    ASSERT_EQ(dpak_open("dpr:/hashes.dpak", &(dpak_open_desc){.check_chunks = true}, &chk), DE_OK);
+    expect_roundtrip(chk, a, 100);
+    EXPECT_EQ(dpak_check_dict(chk, 0), DE_OK);
+    dpak_close(chk);
+
+    free(copy);
+    heap_free(data, size);
+    pt_asset_free(a, 100);
+}
+
+/* Format version 1 packs (no hashes; 24-byte chunk and dictionary entries) still open, from
+ * memory and from a file, and read back byte for byte. The hash checks pass: there is nothing to
+ * check. */
+TEST(dpak_reader, version_1) {
+    mount_once();
+    static pt_asset a[100];
+    pt_make_100(a);
+    dpak_writer_desc wd = fast_desc();
+    wd.format_version = 1u;
+    void *data = NULL;
+    u64 size = 0;
+    pt_pack_memory(&wd, a, 100, &data, &size);
+    dpak_reader *r = NULL;
+    ASSERT_EQ(
+        dpak_open_memory(data, size, &(dpak_open_desc){.verify = true, .check_chunks = true}, &r),
+        DE_OK);
+    EXPECT_EQ(dpak_get_header(r)->version, 1u);
+    EXPECT_FALSE(dpak_has_hashes(r));
+    expect_roundtrip(r, a, 100);
+    ASSERT_EQ(dpak_dict_count(r), 1u);
+    dpak_dict_entry d;
+    dpak_dict(r, 0, &d);
+    EXPECT_EQ(d.hash, 0u);
+    EXPECT_EQ(dpak_check_dict(r, 0), DE_OK);
+    dpak_toc_entry e;
+    dpak_entry(r, 0, &e);
+    dpak_chunk_entry c;
+    dpak_chunk(r, e.first_chunk, &c);
+    EXPECT_EQ(c.hash, 0u);
+    u8 junk[16] = {0};
+    EXPECT_EQ(dpak_check_chunk(r, &(dpak_chunk_entry){.stored_size = 16}, junk), DE_OK);
+    dpak_close(r);
+
+    ASSERT_EQ(de_file_write_all_atomic("dpr:/v1.dpak", data, size), DE_OK);
+    ASSERT_EQ(
+        dpak_open("dpr:/v1.dpak", &(dpak_open_desc){.verify = true, .check_chunks = true}, &r),
+        DE_OK);
+    expect_roundtrip(r, a, 100);
+    dpak_close(r);
     heap_free(data, size);
     pt_asset_free(a, 100);
 }
