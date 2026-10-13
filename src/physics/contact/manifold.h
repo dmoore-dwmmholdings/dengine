@@ -7,11 +7,13 @@
  *   1. de__broadphase_update: the sorted pair list (pairs whose world AABBs are within the
  *      speculative margin, see de__broadphase_set_pair_distance).
  *   2. de__contacts_collide (pair_cache.c): de__collide per pair through de_task_parallel_for
- *      with a fixed grain (DE__CONTACT_PAIR_GRAIN). Each pair writes its candidate manifolds
- *      (reduced to <= 4 points, sorted by sub-shape key) into its own output slot. Where in the
- *      scratch pool a slot's entries land is not deterministic, but it is never observed: the
- *      merge reads the slots in pair order. When the pool overflows, the whole pass is redone on
- *      the calling thread in pair order, so what is dropped is deterministic too.
+ *      with a fixed grain (DE__CONTACT_PAIR_GRAIN) and the pair's speculative distance and
+ *      point filter (DENG-219: de__contacts_pair_speculative). Each pair writes its candidate
+ *      manifolds (reduced to <= 4 points, sorted by sub-shape key) into its own output slot.
+ *      Where in the scratch pool a slot's entries land is not deterministic, but it is never
+ *      observed: the merge reads the slots in pair order. When the pool overflows, the whole
+ *      pass is redone on the calling thread in pair order, so what is dropped is deterministic
+ *      too.
  *   3. de__contacts_merge (pair_cache.c): one serial pass in pair order over the slots and the
  *      previous tick's manifolds (both sorted by key) builds the new sorted manifold array:
  *      matched points carry their impulses, GJK single-point pairs accumulate points, keys that
@@ -244,6 +246,28 @@ void de__contacts_collide(de_physics_world *p, const de__bp_pair *pairs, u32 cou
  * dropped (logged once per overflow episode).
  */
 de_result de__contacts_merge(de_physics_world *p, const de__bp_pair *pairs, u32 count);
+
+/* ---- Per-pair speculative distance (DENG-219; see physics/ccd_internal.h) ---- */
+
+/**
+ * manifold.c: the speculative distance for the narrowphase of pair (a, b) in the step in
+ * progress: clamp((|v_b - v_a| + reach_a + reach_b) * dt, base, speculative_max), with the
+ * predicted velocities and angular reaches of de__ccd_prepare and base = c->speculative. Just
+ * `base` when CCD did not prepare this step or speculative_max <= base. Pure (any thread).
+ */
+f32 de__contacts_pair_speculative(const de_physics_world *p, const de__contacts *c, u32 a, u32 b);
+
+/**
+ * manifold.c: filters the points of sets[0..n) of pair (a, b) (A = body a), keeping their order.
+ * A point with separation <= base is kept. A farther one is kept when its separation is at most
+ * approach * dt, where approach is the relative normal approach speed of the two bodies at the
+ * point (predicted velocities, angular velocities at the anchors), and the pair may come within
+ * the slop during the step (de__ccd_pair_may_touch, evaluated once per call, only when needed).
+ * Call it when de__contacts_pair_speculative returned more than `base`; with `base` every point
+ * is kept anyway. Pure (any thread).
+ */
+void de__contacts_filter_speculative(const de_physics_world *p, const de__contacts *c, u32 a, u32 b,
+                                     de__contact_set *sets, u32 n);
 
 /* ---- Iteration API (the S23 solver, contact events, debug draw, checksum) ---- */
 

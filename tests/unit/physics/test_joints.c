@@ -353,10 +353,15 @@ TEST(physics_joints, chain_20_stays_connected) {
     const f64 h4 = chain_run(true, 4, &all);
     fprintf(stderr, "  hanging, 4 substeps: %.6f m (whole run %.6f m)\n", h4, all);
     EXPECT_TRUE(h4 < 3e-3);
-    /* Falling from horizontal and swinging: connected within a few millimetres. */
+    /* Falling from horizontal and swinging: connected within about a centimetre. The worst
+     * moment is the links whipping past each other near the end of the swing. DENG-219
+     * measured it at 8 substeps: 15.4 mm with the links in one collision group (joints alone),
+     * 12.6 mm with self-collision (speculative contacts stop the links on each other), and
+     * 6.4 mm before DENG-219, when the links sank up to 8 cm into each other and the soft
+     * push-out damped the swing. */
     const f64 s8 = chain_run(false, 8, &all);
     fprintf(stderr, "  swinging, 8 substeps: %.6f m\n", all);
-    EXPECT_TRUE(all < 1e-2);
+    EXPECT_TRUE(all < 2e-2);
     (void)s8;
 }
 

@@ -195,3 +195,14 @@ foreach(_de_ch_test test_physics_character test_physics_character_platforms)
         target_compile_options(${_de_ch_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-219: CCD. physics_ccd: bullets against a thin wall (1,000 random angles), meshes,
+# heightfields and compounds; documented tunnelling without the flag; fast drops on speculative
+# contacts; no ghost stops; predictive broadphase boxes and the per-pair speculative distance; no
+# allocation per step; worker-count invariance (label tsan: small scenes).
+de_add_test(NAME physics_ccd SOURCES test_ccd.c LIBS de_physics de_platform LABELS unit tsan
+            TIMEOUT 120)
+if(TARGET test_physics_ccd)
+    target_include_directories(test_physics_ccd PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_physics_ccd PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

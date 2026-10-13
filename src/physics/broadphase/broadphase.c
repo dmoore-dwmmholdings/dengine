@@ -19,7 +19,11 @@ struct de__broadphase {
     de__tree trees[DE__BP_TREE_COUNT];
 
     u32 *proxy; /**< [capacity] leaf of body i, or DE__TREE_NULL */
-    u8 *moved;  /**< [capacity] 1 when the proxy was (re)inserted since the last pair pass */
+    /* DENG-219: predictive growth of body i's box (de__broadphase_set_predict). */
+    de_vec3 *grow_lo; /**< [capacity] subtracted from world_aabb.min */
+    de_vec3 *grow_hi; /**< [capacity] added to world_aabb.max */
+    u8 *grown;        /**< [capacity] 1 when body i has a non-zero growth */
+    u8 *moved;        /**< [capacity] 1 when the proxy was (re)inserted since the last pair pass */
     u32 moved_count;
 
     u64 *cand[2]; /**< [max_pairs] sorted unique candidate keys; cand[cur] is live */
@@ -84,6 +88,29 @@ static de_aabb fat_box(const de_aabb *b, f32 margin) {
     return r;
 }
 
+/* DENG-219: body i's world box grown by its predictive growth, rounded outward (f64). */
+static de_aabb predict_box(const de__broadphase *bp, const de__body_pool *b, u32 i) {
+    const de_aabb *w = &b->world_aabb[i];
+    if (!bp->grown[i])
+        return *w;
+    const de_vec3 lo = bp->grow_lo[i], hi = bp->grow_hi[i];
+    de_aabb r;
+    r.min.x = de__f32_round_down((f64)w->min.x - (f64)lo.x);
+    r.min.y = de__f32_round_down((f64)w->min.y - (f64)lo.y);
+    r.min.z = de__f32_round_down((f64)w->min.z - (f64)lo.z);
+    r.max.x = de__f32_round_up((f64)w->max.x + (f64)hi.x);
+    r.max.y = de__f32_round_up((f64)w->max.y + (f64)hi.y);
+    r.max.z = de__f32_round_up((f64)w->max.z + (f64)hi.z);
+    return r;
+}
+
+static void clear_predict(de__broadphase *bp, u32 i) {
+    const de_vec3 zero = {0.0f, 0.0f, 0.0f};
+    bp->grow_lo[i] = zero;
+    bp->grow_hi[i] = zero;
+    bp->grown[i] = 0;
+}
+
 /* ---- Fixed scratch allocator for the radix sort ------------------------------------------- */
 
 static void *sort_scratch_alloc(void *user, size_t size, size_t align, u32 tag) {
@@ -117,7 +144,8 @@ static void proxy_insert(de_physics_world *p, de__broadphase *bp, u32 i) {
     const de_aabb *box = &p->bodies.world_aabb[i];
     if (!box_valid(box)) /* no shape: no proxy */
         return;
-    const u32 leaf = de__tree_insert(&bp->trees[tree_of(p, i)], fat_box(box, bp->margin), i);
+    const de_aabb pbox = predict_box(bp, &p->bodies, i);
+    const u32 leaf = de__tree_insert(&bp->trees[tree_of(p, i)], fat_box(&pbox, bp->margin), i);
     /* The pool holds 2 * max_bodies nodes: one leaf and at most one internal node per body. */
     DE_ASSERT(leaf != DE__TREE_NULL);
     bp->proxy[i] = leaf;
@@ -154,11 +182,15 @@ static void ext_destroy(de_physics_world *p, void *state) {
 }
 
 static void ext_body_added(de_physics_world *p, void *state, u32 index) {
-    proxy_insert(p, (de__broadphase *)state, index);
+    de__broadphase *bp = (de__broadphase *)state;
+    clear_predict(bp, index);
+    proxy_insert(p, bp, index);
 }
 
 static void ext_body_removed(de_physics_world *p, void *state, u32 index) {
-    proxy_remove(p, (de__broadphase *)state, index);
+    de__broadphase *bp = (de__broadphase *)state;
+    proxy_remove(p, bp, index);
+    clear_predict(bp, index);
 }
 
 static const de__phys_ext_vtbl k_bp_vtbl = {ext_destroy, ext_body_added, ext_body_removed};
@@ -242,14 +274,17 @@ de_result de__broadphase_create(de_physics_world *p, const de__broadphase_desc *
     bp->margin = margin;
     bp->pool.free_head = DE__TREE_NULL;
 
-    /* One block: proxy, moved, cand[0], cand[1], fresh, pairs, sort scratch. */
+    /* One block: proxy, moved, cand[0], cand[1], fresh, pairs, sort scratch, and (DENG-219)
+     * grow_lo, grow_hi, grown. */
     const size_t mp = (size_t)max_pairs;
-    size_t off[7], size = 0;
-    const size_t bytes[7] = {sizeof(u32) * capacity,     sizeof(u8) * capacity,
-                             sizeof(u64) * mp,           sizeof(u64) * mp,
-                             sizeof(de_sort_key64) * mp, sizeof(de__bp_pair) * mp,
-                             sizeof(de_sort_key64) * mp};
-    for (u32 k = 0; k < 7; ++k) {
+    enum { NB = 10 };
+    size_t off[NB], size = 0;
+    const size_t bytes[NB] = {sizeof(u32) * capacity,     sizeof(u8) * capacity,
+                              sizeof(u64) * mp,           sizeof(u64) * mp,
+                              sizeof(de_sort_key64) * mp, sizeof(de__bp_pair) * mp,
+                              sizeof(de_sort_key64) * mp, sizeof(de_vec3) * capacity,
+                              sizeof(de_vec3) * capacity, sizeof(u8) * capacity};
+    for (u32 k = 0; k < NB; ++k) {
         off[k] = align_up(size);
         size = off[k] + bytes[k];
     }
@@ -271,6 +306,9 @@ de_result de__broadphase_create(de_physics_world *p, const de__broadphase_desc *
     bp->pairs = (de__bp_pair *)(block + off[5]);
     bp->sort_buf = block + off[6];
     bp->sort_buf_size = bytes[6];
+    bp->grow_lo = (de_vec3 *)(block + off[7]); /* zeroed with the block: no growth */
+    bp->grow_hi = (de_vec3 *)(block + off[8]);
+    bp->grown = block + off[9];
     bp->sort_alloc.alloc = sort_scratch_alloc;
     bp->sort_alloc.realloc = sort_scratch_realloc;
     bp->sort_alloc.free = sort_scratch_free;
@@ -320,14 +358,14 @@ static void sync(de_physics_world *p, de__broadphase *bp) {
             continue;
         de__tree *t = &bp->trees[tree_of(p, i)];
         const de_aabb fat = de__tree_box(t, leaf);
-        /* With a pair distance d (DENG-135) the fat box must hold the world box grown by d, so
-         * two world boxes within d of each other always have overlapping fat boxes. */
-        const de_aabb need = bp->pair_distance > 0.0f
-                                 ? fat_box(&b->world_aabb[i], bp->pair_distance)
-                                 : b->world_aabb[i];
+        /* The fat box holds the predictive box (DENG-219; the world box without growth), and
+         * with a pair distance d (DENG-135) that box grown by d, so two predictive boxes within
+         * d of each other always have overlapping fat boxes. */
+        const de_aabb pbox = predict_box(bp, b, i);
+        const de_aabb need = bp->pair_distance > 0.0f ? fat_box(&pbox, bp->pair_distance) : pbox;
         if (de__aabb_contains(&fat, &need))
             continue;
-        de__tree_move(t, leaf, fat_box(&b->world_aabb[i], bp->margin));
+        de__tree_move(t, leaf, fat_box(&pbox, bp->margin));
         if (!bp->moved[i]) {
             bp->moved[i] = 1;
             ++bp->moved_count;
@@ -485,12 +523,13 @@ de_result de__broadphase_update(de_physics_world *p) {
         cand = out;
     }
 
-    /* 5. Output: the candidates whose world AABBs overlap (or are within pair_distance), already
-     *    sorted. */
+    /* 5. Output: the candidates whose predictive boxes (DENG-219; world AABBs without growth)
+     *    overlap (or are within pair_distance), already sorted. */
     u32 np = 0;
     for (u32 k = 0; k < bp->cand_count; ++k) {
         const u32 a = key_a(cand[k]), c = key_b(cand[k]);
-        if (!boxes_within(&b->world_aabb[a], &b->world_aabb[c], bp->pair_distance))
+        const de_aabb ba = predict_box(bp, b, a), bb = predict_box(bp, b, c);
+        if (!boxes_within(&ba, &bb, bp->pair_distance))
             continue;
         bp->pairs[np].a = a;
         bp->pairs[np].b = c;
@@ -519,6 +558,29 @@ void de__broadphase_set_pair_distance(de_physics_world *p, f32 distance) {
     if (!de__f32_finite(distance) || !(distance > 0.0f))
         distance = 0.0f;
     bp->pair_distance = de__minf(distance, bp->margin);
+}
+
+void de__broadphase_set_predict(de_physics_world *p, u32 index, de_vec3 lo, de_vec3 hi) {
+    de__broadphase *bp = p != NULL ? de__broadphase_get(p) : NULL;
+    if (bp == NULL || index >= bp->capacity)
+        return;
+    f32 g[6] = {lo.x, lo.y, lo.z, hi.x, hi.y, hi.z};
+    bool any = false;
+    for (u32 k = 0; k < 6; ++k) {
+        if (!de__f32_finite(g[k]) || !(g[k] > 0.0f))
+            g[k] = 0.0f;
+        any = any || g[k] > 0.0f;
+    }
+    bp->grow_lo[index] = de__v3(g[0], g[1], g[2]);
+    bp->grow_hi[index] = de__v3(g[3], g[4], g[5]);
+    bp->grown[index] = any ? 1u : 0u;
+}
+
+de_aabb de__broadphase_predict_box(const de_physics_world *p, u32 index) {
+    const de__broadphase *bp = de__broadphase_get(p);
+    if (bp == NULL)
+        return p->bodies.world_aabb[index];
+    return predict_box(bp, &p->bodies, index);
 }
 
 void de__broadphase_pairs(const de_physics_world *p, const de__bp_pair **pairs, u32 *count) {

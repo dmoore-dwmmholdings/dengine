@@ -4,6 +4,8 @@
  */
 #include "physics/contact/manifold.h"
 
+#include "physics/ccd_internal.h"
+
 #include <dengine/de_debug.h>
 
 /* ---- Per-manifold rules ------------------------------------------------------------------- */
@@ -173,6 +175,68 @@ void de__manifold_accumulate(de__manifold *cur, const de__manifold *old, de__pos
         for (u32 i = 0; i < count; ++i)
             cur->points[i] = pts[i];
         cur->point_count = count;
+    }
+}
+
+/* ---- Per-pair speculative distance (DENG-219) -------------------------------------------- */
+
+f32 de__contacts_pair_speculative(const de_physics_world *p, const de__contacts *c, u32 a, u32 b) {
+    const f32 base = c->speculative;
+    const de__ccd *ccd = de__ccd_current(p);
+    if (ccd == NULL || !(ccd->settings.speculative_max > base))
+        return base;
+    /* The fastest any point of B can approach any point of A along any direction. */
+    const de_vec3 dv = de__v3_sub(ccd->velocity[b], ccd->velocity[a]);
+    const f32 bound = de_dsqrt(de__v3_dot(dv, dv)) + ccd->reach[a] + ccd->reach[b];
+    const f32 d = bound * ccd->dt;
+    if (!(d > base))
+        return base;
+    return de__minf(d, ccd->settings.speculative_max);
+}
+
+/* Velocity of body i's material point at world offset r from its center of mass. */
+static de_vec3 point_velocity(const de_physics_world *p, const de__ccd *ccd, u32 i, de_vec3 local) {
+    const de__body_pool *b = &p->bodies;
+    const de_vec3 w = b->angular_velocity[i];
+    const de_vec3 v = ccd->velocity[i];
+    if (w.x == 0.0f && w.y == 0.0f && w.z == 0.0f)
+        return v;
+    const de_vec3 r = de__quat_rotate(b->rotation[i], de__v3_sub(local, b->local_com[i]));
+    return de__v3_add(v, de__v3_cross(w, r));
+}
+
+void de__contacts_filter_speculative(const de_physics_world *p, const de__contacts *c, u32 a, u32 b,
+                                     de__contact_set *sets, u32 n) {
+    const de__ccd *ccd = de__ccd_current(p);
+    if (ccd == NULL)
+        return;
+    const f32 base = c->speculative;
+    const f32 dt = ccd->dt;
+    /* 0 = not asked yet, 1 = they may touch, 2 = they stay apart this step. */
+    u32 touch = 0;
+    for (u32 s = 0; s < n; ++s) {
+        de__contact_set *set = &sets[s];
+        const de_vec3 nrm = set->normal; /* from A toward B */
+        u32 w = 0;
+        for (u32 k = 0; k < set->point_count; ++k) {
+            const de__contact_point *pt = &set->points[k];
+            bool keep = pt->separation <= base;
+            if (!keep) {
+                const de_vec3 va = point_velocity(p, ccd, a, pt->local_a);
+                const de_vec3 vb = point_velocity(p, ccd, b, pt->local_b);
+                const f32 approach = -de__v3_dot(de__v3_sub(vb, va), nrm);
+                keep = pt->separation <= approach * dt;
+                if (keep) {
+                    /* Closing along this normal; do the shapes really get there? */
+                    if (touch == 0)
+                        touch = de__ccd_pair_may_touch(p, a, b) ? 1u : 2u;
+                    keep = touch == 1u;
+                }
+            }
+            if (keep)
+                set->points[w++] = *pt;
+        }
+        set->point_count = w;
     }
 }
 

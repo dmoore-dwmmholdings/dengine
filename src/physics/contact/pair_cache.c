@@ -84,10 +84,14 @@ static void collide_pair(de__contacts *c, u32 i) {
     buf.capacity = DE__CONTACT_PAIR_MAX_SETS;
     buf.count = 0;
     buf.overflow = false;
-    /* Triggers report overlap only: no speculative distance. */
-    const u32 n = de__collide(sa, xa, sb, xb, trigger ? 0.0f : c->speculative, &buf);
+    /* Triggers report overlap only: no speculative distance. DENG-219: a pair that approaches
+     * fast gets a larger distance, then each point is kept by its own approach speed. */
+    const f32 spec = trigger ? 0.0f : de__contacts_pair_speculative(p, c, pr.a, pr.b);
+    const u32 n = de__collide(sa, xa, sb, xb, spec, &buf);
     if (buf.overflow)
         (void)de_atomic_fetch_add_u32(&c->sets_dropped, 1u, DE_ATOMIC_RELAXED);
+    if (spec > c->speculative)
+        de__contacts_filter_speculative(p, c, pr.a, pr.b, sets, n);
     u32 m = 0;
     for (u32 k = 0; k < n; ++k)
         if (sets[k].point_count > 0)

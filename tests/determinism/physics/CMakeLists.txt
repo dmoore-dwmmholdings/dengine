@@ -123,3 +123,7 @@ de_phys_det_add_scenarios(SOURCES scenarios_joints.c SCENARIOS pendulum chain_20
 
 # DENG-221 (S23): the character controller (slopes, stairs, a moving platform, pushed boxes).
 de_phys_det_add_scenarios(SOURCES scenarios_character.c SCENARIOS character_course)
+
+# DENG-219 (S23): continuous collision (bullets with time of impact against walls, a mesh and a
+# dynamic block; fast drops on predictive pairs and per-pair speculative contacts).
+de_phys_det_add_scenarios(SOURCES scenarios_ccd.c SCENARIOS bullet_wall fast_drop)
