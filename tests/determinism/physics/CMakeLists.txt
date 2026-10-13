@@ -116,3 +116,6 @@ de_phys_det_add_scenarios(SOURCES scenarios_solver.c SCENARIOS box_drop sphere_b
 # DENG-218 (S23): islands, sleeping and the graph-colored solver (a 10-row pyramid; sleep and every
 # kind of wake-up).
 de_phys_det_add_scenarios(SOURCES scenarios_islands.c SCENARIOS pyramid_10 sleep_wake)
+
+# DENG-221 (S23): the character controller (slopes, stairs, a moving platform, pushed boxes).
+de_phys_det_add_scenarios(SOURCES scenarios_character.c SCENARIOS character_course)
