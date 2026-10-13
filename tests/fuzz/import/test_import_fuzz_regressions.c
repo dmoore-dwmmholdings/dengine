@@ -10,6 +10,9 @@
  *     (`max_decoded_mib`) or over 16384, a KTX2 header that claims huge levels, a glTF accessor of
  *     2^25 zero vertices. (FBX: ufbx's own memory limit is set from the same setting; fuzz_fbx
  *     runs under libFuzzer's allocation limit.)
+ *   - prefab.cooked_to_dscn (DENG-400): a glTF and an FBX seed with a node hierarchy cook their
+ *     `#prefab` sub-asset to DSCN through the harness (the `prefab` importer is registered), so the
+ *     harness's DSCN check runs. Where de_asset has no cooker (Release), it stays TOML.
  *
  * Runs without libFuzzer, in every test build. Inputs are small; the whole test takes well under a
  * second natively (GCC TSan timed out on slow tests before, DENG-391).
@@ -20,6 +23,9 @@
 
 #include <dengine/de_base.h>
 #include <dengine/de_platform.h>
+
+#include "asset/manifest_internal.h"
+#include "asset/scene/scene_format.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,4 +204,66 @@ TEST(limits, gltf_accessor_over_budget) {
         "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[0,0,0]}]}";
     expect_refused(FZ_IMPORT_GLTF, (const u8 *)doc, sizeof doc - 1u, DE_ERR_UNSUPPORTED,
                    "max_decoded_mib");
+}
+
+/* ---- Prefab (DENG-400) ----------------------------------------------------------------------- */
+
+typedef struct fz_prefab_seen {
+    u32 count;
+    u64 size;
+    u32 entities;
+    char magic[5];
+    bool parsed;
+} fz_prefab_seen;
+
+static void prefab_output(const char *name, const char *type, const void *data, u64 size,
+                          void *user) {
+    fz_prefab_seen *p = (fz_prefab_seen *)user;
+    if (name == NULL || strcmp(type, "prefab") != 0)
+        return;
+    ++p->count;
+    p->size = size;
+    memset(p->magic, 0, sizeof p->magic);
+    if (size >= 4u)
+        memcpy(p->magic, data, 4);
+    de__scene_view v;
+    p->parsed = de__scene_view_parse(data, size, &v, NULL, 0) == DE_OK;
+    p->entities = p->parsed ? v.entity_count : 0u;
+}
+
+static void expect_prefab(fz_import_kind kind, const char *file) {
+    fz_mount();
+    char path[256];
+    snprintf(path, sizeof path, "fzimp:/corpus/%s/%s", fz_import_kind_name(kind), file);
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all(path, NULL, &data, &size), DE_OK);
+    de__manifest_kv kv;
+    memset(&kv, 0, sizeof kv);
+    kv.key = "max_decoded_mib";
+    kv.value.type = DE__MANIFEST_INT;
+    kv.value.u.i = FZ_IMPORT_MAX_DECODED_MIB;
+    fz_prefab_seen seen;
+    memset(&seen, 0, sizeof seen);
+    char msg[512];
+    de_result r = fz_import_cook(kind, (const u8 *)data, (size_t)size, &kv, 1, prefab_output, &seen,
+                                 msg, sizeof msg);
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1u);
+    printf("  %s: %s%s%s; prefab \"%s\", %llu bytes, %u entities\n", path, de_result_str(r),
+           r != DE_OK ? ": " : "", msg, seen.magic, (unsigned long long)seen.size, seen.entities);
+    ASSERT_EQ(r, DE_OK);
+    ASSERT_EQ(seen.count, 1u);
+#if DE_HAS_COOKER
+    /* The harness checked the DSCN already (fz_check_prefab); this checks that it ran. */
+    EXPECT_STREQ(seen.magic, DE__SCENE_MAGIC);
+    EXPECT_TRUE(seen.parsed);
+    EXPECT_GT(seen.entities, 1u); /* the model's root and the nodes under it */
+#else
+    EXPECT_FALSE(seen.parsed); /* no prefab importer: the TOML as it is */
+#endif
+}
+
+TEST(prefab, cooked_to_dscn) {
+    expect_prefab(FZ_IMPORT_GLTF, "hierarchy.gltf");
+    expect_prefab(FZ_IMPORT_FBX, "skinned.fbx");
 }

@@ -3,7 +3,8 @@
  *
  * glTF 2.0 (`.gltf` JSON, or `.glb` by its magic) through the `model` importer (DENG-101):
  * cgltf parse and validate, the IR, axes, the mesh stage (DENG-103), skeletons and clips
- * (DENG-104), materials, embedded textures through the texture importer, the prefab and DMDL.
+ * (DENG-104), materials, embedded textures through the texture importer, the prefab (cooked to
+ * DSCN by the `prefab` importer, DENG-400) and DMDL.
  * External buffers and images are never found.
  *
  * Every output goes back through its runtime parser (fuzz_import_harness.c). Seed corpus:

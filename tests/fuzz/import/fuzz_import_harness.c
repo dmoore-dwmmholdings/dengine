@@ -3,10 +3,11 @@
  * See fuzz_import_harness.h.
  *
  * Setup is done once, lazily (the standalone corpus runner has no LLVMFuzzerInitialize): one
- * cooker with the `model` and `texture` importers, and the `cook` log category silenced so the
- * importers' warnings do not slow the fuzzer down. The cooker is never destroyed; it is reachable
- * from a static, so LeakSanitizer does not report it. Everything an import allocates is freed
- * before fz_import_run returns.
+ * cooker with the `model` and `texture` importers and the runtime's `prefab` importer (DENG-400),
+ * and the `cook` and `asset` log categories silenced so the importers' warnings do not slow the
+ * fuzzer down. The cooker, and the type registry, world and asset system behind the prefab
+ * importer, are never destroyed; they are reachable from statics, so LeakSanitizer does not report
+ * them. Everything an import allocates is freed before fz_import_run returns.
  */
 #include "fuzz_import_harness.h"
 
@@ -14,10 +15,14 @@
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
+#include <dengine/de_ecs.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_reflect.h>
 
 #include "anim/formats/de_cooked_clip.h"
 #include "asset/manifest_internal.h"
+#include "asset/scene/scene_format.h"
+#include "asset/slots_internal.h"
 #include "cook/importers/model/model_import.h"
 #include "cook/importers/texture/texture_import.h"
 #include "cook/lib/cooker_internal.h"
@@ -31,6 +36,15 @@
 /* ---- Setup ----------------------------------------------------------------------------------- */
 
 static de_cooker *g_cooker;
+/* The prefab importer's runtime (DENG-400): the registry its components are reflected in, the
+ * world that registers the ECS built-ins (DeTransform, ...) in it, and the asset system that
+ * holds the `prefab` type and hands it the registry (de_asset_import_user). */
+static de_type_registry *g_types;
+static de_world *g_world;
+static de_asset_system *g_assets;
+/* Whether the `prefab` type came with its importer: only where de_asset links the cooker
+ * (DE_HAS_COOKER: Debug and Dev). Otherwise the prefab sub-asset stays TOML (pass-through). */
+static bool g_prefab_cooked;
 
 /* The texture importer as the harness registers it: every texture cook, the model's nested ones
  * included (they get only the model's settings), runs with `compression = "none"` and
@@ -68,6 +82,41 @@ static de_result fz_texture_import(de_asset_import_ctx *ctx) {
     return r;
 }
 
+/* Registers the runtime's `prefab` type (DENG-215) with the cooker, set up as de-cook sets it up
+ * (cc_setup_runtime): a type registry, a world for the ECS built-in components, and an asset
+ * system, whose built-in `prefab` type carries the importer. The model importer then cooks its
+ * `#prefab` sub-asset to DSCN through it (de_cooker_import_cook_subasset) instead of keeping the
+ * TOML. The asset system loads nothing, so it starts no threads. In a build whose de_asset has no
+ * cooker (Release with tools), the type has no importer and is not registered. */
+static void fz_register_prefab(de_cooker *c) {
+    if (de_type_registry_create(NULL, &g_types) != DE_OK)
+        abort();
+    de_world_desc wd;
+    memset(&wd, 0, sizeof wd);
+    wd.types = g_types;
+    if (de_world_create(&wd, &g_world) != DE_OK ||
+        !DE_HANDLE_VALID(de_builtin_components(g_world).transform))
+        abort();
+    de_asset_system_desc ad;
+    memset(&ad, 0, sizeof ad);
+    ad.types = g_types;
+    ad.io_threads = 1;
+    ad.cache_dir = "fuzzmem:/decache";
+    if (de_asset_system_create(&ad, &g_assets) != DE_OK)
+        abort();
+    /* The prefab importer warns through the `asset` category (components it does not know). */
+    de_log_set_level(de_log_register_category("asset", DE_LOG_INFO), DE_LOG_FATAL);
+    const de_asset_type_desc *prefab =
+        de__asset_type_get(g_assets, de__asset_type_find(g_assets, DE__PREFAB_TYPE_NAME));
+    if (prefab == NULL)
+        abort();
+    if (prefab->import == NULL)
+        return;
+    if (de_cooker_register_type(c, prefab) != DE_OK)
+        abort();
+    g_prefab_cooked = true;
+}
+
 static de_cooker *fz_cooker(void) {
     if (g_cooker != NULL)
         return g_cooker;
@@ -90,6 +139,7 @@ static de_cooker *fz_cooker(void) {
     if (de_cooker_register_type(c, &model) != DE_OK ||
         de_cooker_register_type(c, &texture) != DE_OK)
         abort();
+    fz_register_prefab(c);
     g_cooker = c;
     return c;
 }
@@ -211,6 +261,90 @@ static void fz_check_texture_output(fz_import_kind kind, const de_asset_import_c
         fz_fail(kind, "sub-asset", ctx->subs[0].name, "the texture importer declares none");
 }
 
+/* The prefab sub-asset (DENG-400): DSCN that the scene loader's parser accepts, as a prefab with
+ * exactly one root. Then every record is read the way de_prefab_instantiate reads it: the type
+ * table (every name registered, a NUL after it), each entity's parent and component range, each
+ * component's type index, and each component's binary object, decoded into an object of its type
+ * with de_deserialize_binary; it must decode and use exactly its bytes. Entity and asset fields are
+ * read as raw values (no world, no asset handles). */
+static void fz_check_prefab(fz_import_kind kind, const de__import_sub *s) {
+    de__scene_view v;
+    char err[256];
+    err[0] = '\0';
+    if (de__scene_view_parse(s->data, s->size, &v, err, sizeof err) != DE_OK)
+        fz_fail(kind, "DSCN prefab", s->name, err);
+    if (v.kind != DE__SCENE_KIND_PREFAB)
+        fz_fail(kind, "DSCN prefab", s->name, "its kind is not prefab");
+    if (v.root_count != 1u)
+        fz_fail(kind, "DSCN prefab", s->name, "a prefab has exactly one root");
+
+    /* The types: registered by name (the importer writes only types it found in the registry). */
+    de_type_id ids[64];
+    if (v.type_count > sizeof ids / sizeof ids[0])
+        fz_fail(kind, "DSCN prefab", s->name, "more component types than the registry holds");
+    for (u32 t = 0; t < v.type_count; ++t) {
+        de__scene_type_rec tr = de__scene_type_at(&v, t);
+        if (tr.name[tr.name_len] != '\0' || strlen(tr.name) != tr.name_len)
+            fz_fail(kind, "DSCN prefab", s->name, "a type name is not NUL-terminated");
+        ids[t] = de_type_find(g_types, tr.name);
+        if (!DE_HANDLE_VALID(ids[t]))
+            fz_fail(kind, "DSCN prefab", s->name, "a type is not in the registry");
+    }
+
+    /* The entities, their parents and components. */
+    u32 roots = 0, next_component = 0;
+    for (u32 i = 0; i < v.entity_count; ++i) {
+        de__scene_entity_rec e = de__scene_entity_at(&v, i);
+        if (e.scene_id == 0 || de__scene_find_entity(&v, e.scene_id) != i)
+            fz_fail(kind, "DSCN prefab", s->name, "an entity's scene ID does not find it");
+        if (e.parent == DE__SCENE_NO_PARENT)
+            ++roots;
+        else if (e.parent >= v.entity_count || e.parent == i)
+            fz_fail(kind, "DSCN prefab", s->name, "an entity's parent is out of range");
+        if (e.first_component != next_component ||
+            e.component_count > v.component_count - e.first_component)
+            fz_fail(kind, "DSCN prefab", s->name, "an entity's components are out of range");
+        next_component += e.component_count;
+        for (u32 k = 0; k < e.component_count; ++k) {
+            de__scene_comp_rec c = de__scene_comp_at(&v, e.first_component + k);
+            if (c.type_index >= v.type_count)
+                fz_fail(kind, "DSCN prefab", s->name, "a component's type is out of range");
+            const de_type_desc *td = de_type_get(g_types, ids[c.type_index]);
+            if (td == NULL)
+                fz_fail(kind, "DSCN prefab", s->name, "a component's type is not registered");
+            if (td->size == 0) /* a tag: no object (de_prefab_instantiate skips it too) */
+                continue;
+            u32 align = td->align != 0 ? td->align : 1u;
+            const de_allocator *a = de_heap_allocator();
+            void *obj = DE_ALLOC(a, td->size, align, DE_MEM_GENERAL);
+            if (obj == NULL)
+                abort();
+            if (de_type_construct(g_types, ids[c.type_index], obj) != DE_OK)
+                abort();
+            de_mem_reader mr;
+            de_mem_reader_init(&mr, c.data, c.size);
+            de_reader rd = de_reader_from_mem(&mr);
+            de_ser_options opt = {DE_SER_BINARY, DE_FIELD_SERIALIZE, NULL};
+            de_result r = de_deserialize_binary(g_types, ids[c.type_index], obj, &opt, NULL, &rd);
+            de_type_destruct(g_types, ids[c.type_index], obj);
+            DE_FREE(a, obj, td->size);
+            if (r != DE_OK)
+                fz_fail(kind, "DSCN prefab", s->name, "a component's object does not decode");
+            if (mr.pos != c.size)
+                fz_fail(kind, "DSCN prefab", s->name, "a component's object has extra bytes");
+        }
+    }
+    if (roots != 1u || next_component != v.component_count)
+        fz_fail(kind, "DSCN prefab", s->name, "its root or component counts are inconsistent");
+
+    /* The asset references: sorted, unique, never 0. */
+    for (u32 i = 0; i < v.asset_count; ++i) {
+        u64 id = de__scene_asset_at(&v, i);
+        if (id == 0 || (i != 0 && id <= de__scene_asset_at(&v, i - 1u)))
+            fz_fail(kind, "DSCN prefab", s->name, "its asset references are not sorted and unique");
+    }
+}
+
 static void fz_check_model_output(fz_import_kind kind, const de_asset_import_ctx *ctx) {
     const char *why = NULL;
     u32 counts[5] = {0, 0, 0, 0, 0}; /* mesh, material, texture, skeleton, clip */
@@ -244,7 +378,10 @@ static void fz_check_model_output(fz_import_kind kind, const de_asset_import_ctx
                 fz_fail(kind, "DCLP", s->name, "its skeleton ID names no skeleton sub-asset");
             if (!fz_walk_clip(s->data, s->size, sk->data, sk->size, &why))
                 fz_fail(kind, "DCLP", s->name, why);
-        } else if (strcmp(s->type, "prefab") != 0) {
+        } else if (strcmp(s->type, "prefab") == 0) {
+            if (g_prefab_cooked)
+                fz_check_prefab(kind, s);
+        } else {
             fz_fail(kind, "sub-asset of an unknown type", s->name, s->type);
         }
     }

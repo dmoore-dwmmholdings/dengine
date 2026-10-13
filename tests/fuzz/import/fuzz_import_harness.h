@@ -9,6 +9,11 @@
  * and no cache. External files a model names (glTF buffers and images, FBX textures) are never
  * found. Every output the import writes then goes through its runtime parser and the walkers of
  * fuzz_cooked_walk.h; a blob the parser refuses is an importer bug and aborts.
+ *
+ * The model's `#prefab` sub-asset is cooked to DSCN by the runtime's `prefab` importer (DENG-215,
+ * registered with the harness cooker since DENG-400) and checked with the scene loader's parser
+ * (de__scene_view_parse), every record and every component's binary object. Where de_asset has
+ * no cooker (Release), the prefab type has no importer and the sub-asset stays TOML.
  */
 #ifndef DE_FUZZ_IMPORT_HARNESS_H
 #define DE_FUZZ_IMPORT_HARNESS_H
