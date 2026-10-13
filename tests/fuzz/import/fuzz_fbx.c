@@ -2,7 +2,8 @@
  * fuzz_fbx.c: fuzz target fuzz_fbx (DENG-106, SPEC §19.1, §21.3).
  *
  * FBX (binary or ASCII) through the `model` importer: ufbx load from memory and the IR
- * conversion of de_model_fbx_load (DENG-102), then the same stages as fuzz_gltf.
+ * conversion of de_model_fbx_load (DENG-102), then the same stages as fuzz_gltf (the prefab cooked
+ * to DSCN included).
  *
  * Every output goes back through its runtime parser (fuzz_import_harness.c). Seed corpus:
  * corpus/fbx/; dictionary: dict/fbx.dict.

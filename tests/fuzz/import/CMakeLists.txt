@@ -3,7 +3,9 @@
 # (fuzz_import_harness.c) and check every blob they write with its runtime parser
 # (fuzz_cooked_walk.c). Each replays its seed corpus corpus/<target>/ under CTest (label `fuzz`),
 # with the libFuzzer dictionary dict/<target>.dict; make_corpus.py writes the corpora from the
-# unit-test fixtures. Importers are cooker code: tools builds only (as tests/unit/import).
+# unit-test fixtures. Importers are cooker code: tools builds only (as tests/unit/import). The
+# harness also registers the runtime's `prefab` importer (DENG-400), which needs a type registry and
+# an ECS world for the components (de_ecs, de_reflect).
 if(NOT DE_BUILD_TOOLS)
     return()
 endif()
@@ -12,7 +14,7 @@ set(_de_fz_import_sources fuzz_import_harness.c fuzz_import_harness.h fuzz_cooke
                           fuzz_cooked_walk.h)
 foreach(_de_fz IN ITEMS gltf fbx image ktx2)
     de_add_fuzz_target(NAME ${_de_fz} SOURCES fuzz_${_de_fz}.c ${_de_fz_import_sources}
-                       LIBS de_cooker de_asset de_anim de_platform
+                       LIBS de_cooker de_asset de_ecs de_reflect de_anim de_platform
                        CORPUS corpus/${_de_fz} DICT dict/${_de_fz}.dict)
     if(TARGET fuzz_${_de_fz})
         # The harness uses the cooker's import context ("cook/lib/cooker_internal.h") and the
@@ -26,7 +28,7 @@ endforeach()
 # de_result instead of allocating (CTest names import_fuzz_regressions.<suite>.<test>).
 de_add_test(NAME import_fuzz_regressions
             SOURCES test_import_fuzz_regressions.c ${_de_fz_import_sources}
-            LIBS de_cooker de_asset de_anim de_platform)
+            LIBS de_cooker de_asset de_ecs de_reflect de_anim de_platform)
 if(TARGET test_import_fuzz_regressions)
     target_include_directories(test_import_fuzz_regressions PRIVATE
         "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
@@ -39,7 +41,7 @@ endif()
 # importers cook from this directory's corpora, through the same harness (make_cooked_corpus.c).
 de_add_test(NAME cooked_corpus
             SOURCES make_cooked_corpus.c ${_de_fz_import_sources}
-            LIBS de_cooker de_asset de_anim de_platform)
+            LIBS de_cooker de_asset de_ecs de_reflect de_anim de_platform)
 if(TARGET test_cooked_corpus)
     target_include_directories(test_cooked_corpus PRIVATE
         "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
