@@ -81,3 +81,16 @@ endif()
 if(TARGET de_physics)
     add_subdirectory(2d)
 endif()
+
+# DENG-217: sub-stepped soft-step solver (constraint interface, contacts, integration) and the
+# hook stubs that DENG-218 (islands.c) and DENG-219 (ccd.c) replace; step.c runs the pipeline.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        solver/constraint.h
+        solver/solver_internal.h
+        solver/solver.c
+        solver/contact_solver.c
+        solver/integrate.c
+        islands.c
+        ccd.c)
+endif()

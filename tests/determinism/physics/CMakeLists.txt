@@ -109,3 +109,6 @@ de_phys_det_add_scenarios(SOURCES scenarios_collision.c
 
 # DENG-135 (S22): the collision pipeline (manifolds, touch state, warm-start carry-over).
 de_phys_det_add_scenarios(SOURCES scenarios_contacts.c SCENARIOS contact_pile)
+
+# DENG-217 (S23): the soft-step solver (falling and tumbling bodies, bounces, a stack of 10).
+de_phys_det_add_scenarios(SOURCES scenarios_solver.c SCENARIOS box_drop sphere_bounce stack_10)

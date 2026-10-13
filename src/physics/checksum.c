@@ -1,5 +1,6 @@
 /*
- * checksum.c: de_physics_checksum (DENG-132; DENG-135 added the contact state).
+ * checksum.c: de_physics_checksum (DENG-132; DENG-135 added the contact state; DENG-217 the
+ * anisotropic friction fields of the body record).
  *
  * XXH3-64 (de_hash64) over an explicit little-endian byte encoding of the state, never raw
  * struct bytes, so padding never leaks in: a header (tick, gravity, substeps, live body count),
@@ -13,7 +14,7 @@
 #include "physics/physics_internal.h"
 
 typedef struct ck_buf {
-    u8 b[256];
+    u8 b[320];
     u32 n;
 } ck_buf;
 
@@ -148,6 +149,8 @@ u64 de_physics_checksum(const de_physics_world *p) {
         ck_u64(&c, b->owner[i].bits);
         ck_v3(&c, b->world_aabb[i].min);
         ck_v3(&c, b->world_aabb[i].max);
+        ck_v3(&c, b->friction_axis[i]); /* DENG-217 */
+        ck_f32(&c, b->friction_secondary[i]);
         h = de_hash64(c.b, c.n, h);
     }
     return ck_contacts(p, h);

@@ -57,6 +57,9 @@ DE_EXTERN_C_BEGIN
 /** A new GJK point within this distance (m, on body A) of an accumulated one replaces it and takes
  *  its feature id and impulses. */
 #define DE__CONTACT_MERGE_DIST 0.01f
+/** A point whose feature id has no match in the last tick's manifold takes the impulses of the
+ *  nearest unmatched old point within this distance (m, on A's anchors; DENG-217). */
+#define DE__CONTACT_CARRY_DIST 0.01f
 /** Pairs per de_task_parallel_for chunk. A constant: chunk boundaries must not depend on the
  *  machine (SPEC §5.7 rule 5). */
 #define DE__CONTACT_PAIR_GRAIN 64u
@@ -168,8 +171,10 @@ f32 de__contact_quad_area(de_vec3 p0, de_vec3 p1, de_vec3 p2, de_vec3 p3, de_vec
 
 /**
  * manifold.c: carries warm-start data from `old` to `cur` (the same key, both alive): every point
- * of `cur` whose feature id is in `old` takes that point's impulses. Sets `cur->id`, `serial` and
- * the PERSIST flag from `old`.
+ * of `cur` whose feature id is in `old` takes that point's impulses; then (DENG-217) every other
+ * point takes those of the nearest old point not taken yet within DE__CONTACT_CARRY_DIST (A's
+ * anchors; ties: lower old index). The rest start at zero. Sets `cur->id`, `serial` and the
+ * PERSIST flag from `old`.
  */
 void de__manifold_carry(de__manifold *cur, const de__manifold *old);
 

@@ -132,6 +132,8 @@ static void pd_fields(const de_physics_world *p, u64 probe, u64 ecs, u64 *out) {
         pd_f32(&c, b->angular_damping[i]);
         pd_f32(&c, b->gravity_scale[i]);
         pd_u64(&c, b->owner[i].bits);
+        pd_v3(&c, b->friction_axis[i]); /* DENG-217 */
+        pd_f32(&c, b->friction_secondary[i]);
         pd_flush(&c, &out[DE_PHYS_DET_FIELD_BODY]);
     }
     out[DE_PHYS_DET_FIELD_PROBE] = probe;
@@ -322,6 +324,7 @@ typedef struct pd_body {
     f32 material[3]; /* friction, restitution, density */
     u64 owner;
     f32 aabb_min[3], aabb_max[3];
+    f32 friction_aniso[4]; /* DENG-217: friction axis x, y, z, friction_secondary */
 } pd_body;
 
 /* The world-level values of a capture. */
@@ -364,6 +367,7 @@ static const pd_field_desc g_body_fields[] = {
     PD_BF(owner, PD_U64, 1),
     PD_BF(aabb_min, PD_F32, 3),
     PD_BF(aabb_max, PD_F32, 3),
+    PD_BF(friction_aniso, PD_F32, 4),
 };
 #undef PD_BF
 #define PD_WF(name, kind, count) {#name, offsetof(pd_world, name), kind, count}
@@ -451,6 +455,8 @@ static de_result pd_capture_at(const de_phys_det_scenario *sc, const de_phys_det
             d->owner = b->owner[i].bits;
             pd_copy3(d->aabb_min, b->world_aabb[i].min);
             pd_copy3(d->aabb_max, b->world_aabb[i].max);
+            pd_copy3(d->friction_aniso, b->friction_axis[i]);
+            d->friction_aniso[3] = b->friction_secondary[i];
         }
     }
     de_phys_det_end(&s);

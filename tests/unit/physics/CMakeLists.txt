@@ -140,3 +140,17 @@ if(TARGET test_physics_query_ray)
     target_compile_definitions(test_physics_query_ray PRIVATE
         "DE_PHYSICS_QUERY_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/query_golden.txt\"")
 endif()
+
+# DENG-217: the soft-step solver. physics_solver_basic: integration, damping, kinematic bodies,
+# rotation locks, speed clamps, large worlds. physics_solver_contact: restitution, incline
+# friction, anisotropic friction. physics_solver_stack: stack of 10, 1:100 mass ratio, warm
+# start, the constraint interface, no allocation, worker-count invariance.
+de_add_test(NAME physics_solver_basic SOURCES test_solver_basic.c LIBS de_physics)
+de_add_test(NAME physics_solver_contact SOURCES test_solver_friction_restitution.c LIBS de_physics)
+de_add_test(NAME physics_solver_stack SOURCES test_solver_stack.c LIBS de_physics)
+foreach(_de_sv_test test_physics_solver_basic test_physics_solver_contact test_physics_solver_stack)
+    if(TARGET ${_de_sv_test})
+        target_include_directories(${_de_sv_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_sv_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
