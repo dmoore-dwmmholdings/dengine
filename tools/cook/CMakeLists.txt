@@ -68,3 +68,13 @@ target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect 
 # library, not part of de_cooker: its C++ shim and Slang stay out of every target that does not
 # cook shaders.
 add_subdirectory(importers/shader)
+
+# DENG-102: the FBX front end of the model importer (tools/cook/importers/model/fbx_*.c): ufbx
+# (tools-only vendored library) into the same model IR as glTF. Entry for the fuzz target:
+# "cook/importers/model/fbx_import.h" (de_model_fbx_load).
+target_sources(de_cooker PRIVATE
+    importers/model/fbx_import.h
+    importers/model/fbx_internal.h
+    importers/model/fbx_import.c
+    importers/model/fbx_material.c)
+target_link_libraries(de_cooker PRIVATE de_tp_ufbx)

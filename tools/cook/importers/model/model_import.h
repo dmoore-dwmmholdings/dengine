@@ -1,8 +1,8 @@
 /*
- * model_import.h: the `model` importer (DENG-101, SPEC §11.6): glTF 2.0 (`.gltf`, `.glb`) to
- * meshes, materials, textures and a prefab. Cooker-library code: it is compiled into `de_cooker`,
- * so it exists in the tools and in Debug and Dev builds (DE_HAS_COOKER), never in Release or
- * Shipping. Include as "cook/importers/model/model_import.h".
+ * model_import.h: the `model` importer (DENG-101, SPEC §11.6): glTF 2.0 (`.gltf`, `.glb`) and FBX
+ * (`.fbx`, DENG-102) to meshes, materials, textures and a prefab. Cooker-library code: it is
+ * compiled into `de_cooker`, so it exists in the tools and in Debug and Dev builds
+ * (DE_HAS_COOKER), never in Release or Shipping. Include as "cook/importers/model/model_import.h".
  *
  * Register it with the cooker (or, in the runtime, as de_asset_type_desc.import under
  * `#if DE_HAS_COOKER`, DENG-105):
@@ -17,6 +17,9 @@
  *   - `import_cameras` (bool, default false): cameras and lights are not imported yet; true logs
  *     a warning.
  *   - `generate_lods`, `lod_error`, `meshlets`: read by the mesh stage (DENG-103).
+ *   - `axis_up`, `axis_front` (strings, default "auto"; FBX only, DENG-102): override the file's
+ *     axis settings when they are wrong (fbx_import.h). `scale` multiplies after the FBX unit
+ *     conversion to metres.
  *
  * Output: the model bytes (DMDL, render/formats/de_cooked_model.h) and the sub-assets, in this
  * order: textures (`texture:<name>`, type `texture`, cooked by the registered texture importer),
@@ -35,8 +38,8 @@ DE_EXTERN_C_BEGIN
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
 #define DE_MODEL_IMPORTER_VERSION 1u
 
-#define DE_MODEL_IMPORT_EXTENSION_COUNT 2u
-/** ".gltf", ".glb". */
+#define DE_MODEL_IMPORT_EXTENSION_COUNT 3u
+/** ".gltf", ".glb", ".fbx" (DENG-102). */
 extern const char *const de_model_import_extensions[DE_MODEL_IMPORT_EXTENSION_COUNT];
 
 /** The importer (de_asset_type_desc.import). */

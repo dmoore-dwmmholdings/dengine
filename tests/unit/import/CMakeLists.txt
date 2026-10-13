@@ -19,3 +19,18 @@ if(TARGET test_import)
         "DE_IMPORT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_IMPORT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_import_tmp\"")
 endif()
+
+# DENG-102: the FBX front end of the model importer (fbx_import.c, ufbx): units and axes against
+# the glTF reference, the axis overrides, n-gons and the material split, PBR and legacy
+# materials, skins, baked animation stacks, determinism and corrupt input. CTest names
+# import_fbx.fbx.<test>. data/fbx/ is mounted read-only as fbx:/ (gen_fixtures.py output);
+# test_import_fbx_tmp/ in the build tree is ftmp:/.
+de_add_test(NAME import_fbx SOURCES test_fbx_import.c
+            LIBS de_cooker de_asset de_ecs de_reflect de_task de_platform TIMEOUT 120)
+if(TARGET test_import_fbx)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_import_fbx_tmp")
+    target_include_directories(test_import_fbx PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_import_fbx PRIVATE
+        "DE_IMPORT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+        "DE_IMPORT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_import_fbx_tmp\"")
+endif()
