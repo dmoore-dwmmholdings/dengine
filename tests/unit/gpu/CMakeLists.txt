@@ -55,3 +55,21 @@ if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
         endif()
     endif()
 endif()
+
+# DENG-283: the Vulkan backend (src/gpu/vulkan/). test_vk_device.c (device, caps, adapters, the pure
+# Base-tier check) and test_vk_resources.c (1000 buffers/textures/samplers, mapping, bindless
+# descriptors, placed resources, threads) build executable test_gpu_vulkan; CTest names
+# gpu_vulkan.vk.<test>. Without a Vulkan loader or driver the device tests SKIP with the reason;
+# DE_VULKAN_LIBRARY points them at a loader or ICD (the MoltenVK dylib on macOS). With
+# VK_LAYER_KHRONOS_validation installed they also require zero validation errors. DENG-284 appends
+# its command, sync and swapchain tests to this executable.
+if(DE_HAS_GPU_VULKAN AND TARGET de_gpu_vulkan)
+    de_add_test(NAME gpu_vulkan
+        SOURCES vulkan/test_vk_device.c vulkan/test_vk_resources.c
+        LIBS de_gpu de_gpu_vulkan de_tp_vulkan_headers
+        LABELS unit tsan
+        TIMEOUT 300)
+    if(TARGET test_gpu_vulkan)
+        target_include_directories(test_gpu_vulkan PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

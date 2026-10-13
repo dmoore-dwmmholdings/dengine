@@ -41,19 +41,15 @@ option(DE_WITH_STEAM "Build the Steam services module (needs the Steamworks SDK)
 
 # ---- GPU backends, defaulted per platform (SPEC §3.1) ----
 set(_de_d3d12_default OFF)
-set(_de_vulkan_default OFF)
 set(_de_metal_default OFF)
+# Vulkan builds everywhere (DENG-283): the headers are vendored (third_party/vulkan_headers) and
+# the backend opens libvulkan at run time, so no SDK is needed. It is the platform default only on
+# Linux; on Windows and macOS (MoltenVK) it is there for tests and for DE_GPU_VULKAN devices.
+set(_de_vulkan_default ON)
 if(WIN32)
     set(_de_d3d12_default ON)
 elseif(APPLE)
     set(_de_metal_default ON)
-    # Vulkan on macOS runs through MoltenVK, for tests only. Default it ON when the SDK exists.
-    find_package(Vulkan QUIET)
-    if(Vulkan_FOUND)
-        set(_de_vulkan_default ON)
-    endif()
-elseif(UNIX)
-    set(_de_vulkan_default ON)
 endif()
 option(DE_GPU_D3D12 "Build the D3D12 RHI backend" ${_de_d3d12_default})
 option(DE_GPU_VULKAN "Build the Vulkan RHI backend" ${_de_vulkan_default})
