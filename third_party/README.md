@@ -16,9 +16,11 @@ here. See "Prebuilt binaries" below.
    DENG-2 decisions issue. Its licence must be one that §22 lists. `tools/vendor/vendor.py` has the
    allowlist of SPDX expressions and refuses any other licence. To allow a new licence, first add
    the library to §22 or DENG-2, then extend `ALLOWED_LICENSES` in `vendor.py`.
-2. **Never vendor or download proprietary SDKs.** This includes the Steamworks SDK, the Windows
-   SDK and CRT, and the D3D12 Agility SDK. CMake finds them through a path that the user sets.
-   `vendor.py` refuses entries with these names or URLs.
+2. **Never vendor or download proprietary SDKs.** This includes the Steamworks SDK and the Windows
+   SDK and CRT. CMake finds them through a path that the user sets. `vendor.py` refuses entries
+   with these names or URLs. The D3D12 Agility SDK is not such an SDK: SPEC §22 lists it as a
+   Microsoft redistributable. Its headers are MIT and committed, and its runtime DLLs are a
+   prebuilt entry (rule 9) that is never committed (DENG-285).
 3. **One directory per library**: `third_party/<name>/`. `<name>` is lower_snake_case and is also
    the CMake target suffix: `de_tp_<name>`.
 4. **Every library is in `vendor.toml`.** Each entry pins the archive URL (a release tarball, or a
@@ -39,12 +41,13 @@ here. See "Prebuilt binaries" below.
    header.
 9. **Prebuilt binaries are pinned, not committed.** Use a `kind = "prebuilt"` entry only for a
    library on the §22 list that upstream ships as per-platform binaries and that the engine does
-   not build from source (today: Slang, DENG-289). The entry pins one archive per host
-   (`macos-arm64`, `linux-x64`, `windows-x64`) by URL and sha256. Its headers and `LICENSE` are
-   committed like any other library; the binaries are never committed, and a binary under
-   `third_party/<name>/` fails `vendor.py verify`. Rules 1, 2, 5 and 6 apply unchanged: one entry
-   per library (all hosts in the same entry), one version, an allowed licence, no proprietary
-   SDKs.
+   not build from source (today: Slang, DENG-289, and the D3D12 Agility SDK, DENG-285). The entry
+   pins one archive per host (`macos-arm64`, `linux-x64`, `windows-x64`) by URL and sha256. Its
+   headers and `LICENSE` are committed like any other library; the binaries are never committed,
+   and a binary under `third_party/<name>/` fails `vendor.py verify`. Rules 1, 2, 5 and 6 apply
+   unchanged: one entry per library (all hosts in the same entry), one version, an allowed
+   licence, no proprietary SDKs. An entry may list only the hosts that run the binaries (the
+   Agility SDK: `windows-x64`).
 
 ## Layout of a library directory
 
@@ -140,6 +143,7 @@ Engine modules link these targets through `de_add_module(... LIBS de_tp_<name>)`
 | Basis Universal | 2_50 | Apache-2.0 | `de_tp_basisu` | `<basisu_transcoder.h>` (C++, only in `tools/cook/importers/texture/texture_basis.cpp`) | The transcoder only (`transcoder/`, 26 files, plus `NOTICE`): the texture importer transcodes KTX2 ETC1S and UASTC payloads at cook time (DENG-98). Tools only. Chosen over KTX-Software/libktx, which bundles the same transcoder; the importer reads KTX2 containers itself. KTX2 zstd supercompression uses the vendored zstd through the engine-owned forwarder `zstd/zstd.h`. Built with `-fno-strict-aliasing` (upstream requires it) and without the mobile targets (PVRTC, ATC, FXT1, ETC2 EAC). |
 | meshoptimizer | 1.3 | MIT | `de_tp_meshoptimizer` | `<meshoptimizer.h>` (only in `tools/cook/importers/model/`) | Mesh optimization, meshlets and LOD simplification of the model importer (DENG-103). C++ (`src/*.cpp`) called only through its C API (DENG-2 Q1). Tools only: linked into the cooker library, never into Release or Shipping. `src/` only (no gltfpack, demo or js); release tarball. Built without FMA contraction. Its temporary memory comes from `operator new` (`meshopt_setAllocator` is process-wide, so the engine leaves it alone). |
 | Vulkan-Headers | vulkan-sdk-1.4.363.0 | Apache-2.0 (dual Apache-2.0 OR MIT; we take Apache-2.0) | `de_tp_vulkan_headers` (INTERFACE) | `<vulkan/vulkan.h>` (only in `src/gpu/vulkan/`) | Khronos C headers for the Vulkan RHI backend (DENG-283), with `VK_NO_PROTOTYPES`: nothing links a loader. The backend opens `libvulkan` at run time (`src/gpu/vulkan/vk_loader.c`), so no Vulkan SDK is needed to build. `include/vulkan/*.h` and `include/vk_video/*.h`; not the C++ bindings or the registry. |
+| D3D12 Agility SDK | 1.619.6 | MIT (headers); Microsoft DirectX terms (DLLs, `LICENSE.txt`) | `de_tp_d3d12_agility` (INTERFACE) | `<d3d12.h>` (only in `src/gpu/d3d12/`) | The D3D12 runtime (SPEC §3.1, §22: Microsoft redistributable), DENG-285. A **prebuilt** entry (`d3d12_agility`, the NuGet package): the four headers the backend uses, `LICENSE` and `LICENSE.txt` are committed; `D3D12Core.dll` and `d3d12SDKLayers.dll` (host `windows-x64` only) are extracted at configure time when the D3D12 backend is built, and `de_d3d12_agility_deploy(<target>)` copies them into `<exe dir>/D3D12/`. Executables that create D3D12 devices include `src/gpu/d3d12/d3d12_agility_exports.h` once. |
 
 ## SPEC §22 additions
 

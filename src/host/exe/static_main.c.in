@@ -11,6 +11,12 @@
 
 #include <string.h>
 
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+/* D3D12SDKVersion / D3D12SDKPath: the D3D12 Agility SDK runtime in D3D12/ next to this program
+ * (DENG-285; de_add_game copies it there). */
+#include "@DE_ROOT_DIR@/src/gpu/d3d12/d3d12_agility_exports.h"
+#endif
+
 /* Defined by the game, with DE_GAME_EXPORT. */
 const de_game_api *de_game_get_api(void);
 

@@ -141,6 +141,11 @@ function(de_add_game)
         configure_file("${DE__STATIC_MAIN_TEMPLATE}" "${main_c}" @ONLY)
         add_executable(${G_NAME} "${main_c}")
         target_link_libraries(${G_NAME} PRIVATE ${G_NAME}_static dengine)
+        # The D3D12 Agility SDK runtime next to the game (DENG-285): main() exports
+        # D3D12SDKVersion / D3D12SDKPath. A no-op without the D3D12 backend.
+        if(COMMAND de_d3d12_agility_deploy)
+            de_d3d12_agility_deploy(${G_NAME})
+        endif()
         set_target_properties(${G_NAME} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "$<1:${dir}>"
             FOLDER "dengine/games")

@@ -67,9 +67,11 @@ ALLOWED_LICENSES = {
 }
 
 # Proprietary SDKs that are never vendored or downloaded (CONVENTIONS §6). Matched against the
-# entry name and URL, case-insensitively.
+# entry name and URL, case-insensitively. The D3D12 Agility SDK is not one of them: SPEC §22 lists
+# it as a Microsoft redistributable, its headers are MIT, and its runtime DLLs are a prebuilt
+# entry that is never committed (DENG-285).
 FORBIDDEN_PATTERNS = re.compile(
-    r"steamworks|steam_?sdk|windows_?sdk|winsdk|xwin|msvc_?crt|vcruntime|agility", re.IGNORECASE
+    r"steamworks|steam_?sdk|windows_?sdk|winsdk|xwin|msvc_?crt|vcruntime", re.IGNORECASE
 )
 
 # Files in third_party/<name>/ that belong to the engine, not to the upstream archive, unless an

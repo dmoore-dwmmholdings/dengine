@@ -265,6 +265,14 @@ typedef struct de__gpu_backend_vtable {
     de_result (*texture_create_placed)(de_gpu_device *d, de__gpu_texture *t,
                                        const de_gpu_texture_desc *desc, de__gpu_heap *heap,
                                        u64 offset);
+
+    /* Bindless numbering (DENG-285). false: each index space numbers its own table from 1
+     * (Vulkan bindings, Metal arrays). true: the resource spaces (sampled textures, storage
+     * textures, buffers, acceleration structures) share one numbering, because D3D12 shaders
+     * index one ResourceDescriptorHeap with all of them: the front-end gives each space the range
+     * after the previous one (de__gpu_bindless_share_resource_numbering), so an index is the
+     * descriptor slot. Samplers keep their own table. */
+    bool bindless_shared_resource_heap;
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -273,6 +281,9 @@ extern const de__gpu_backend_vtable de__gpu_null_vtable;
 extern const de__gpu_backend_vtable de__gpu_vulkan_vtable;
 /** Metal 3 (src/gpu/metal/, DENG-287); built when DE_HAS_GPU_METAL. */
 extern const de__gpu_backend_vtable de__gpu_metal_vtable;
+#if DE_HAS_GPU_D3D12
+extern const de__gpu_backend_vtable de__gpu_d3d12_vtable; /* d3d12/d3d12_device.c, DENG-285 */
+#endif
 
 /**
  * Null backend test hooks (null/null_backend.c). With manual completion on, a queue's internal
@@ -300,8 +311,9 @@ const de__gpu_backend_vtable *de__gpu_find_backend(de_gpu_backend backend);
 /* ---------- Bindless index allocation (bindless_alloc.c) ---------- */
 
 typedef struct de__gpu_index_space {
-    u32 capacity; /**< table size; indices 1 .. capacity - 1 are handed out */
+    u32 capacity; /**< end of the range: indices first .. capacity - 1 are handed out */
     u32 next;     /**< next never-used index */
+    u32 first;    /**< first index of the range: 1, or where a shared numbering puts it */
     u32 *free;    /**< LIFO stack of released indices */
     u32 free_count, free_cap;
     u32 live;
@@ -315,6 +327,14 @@ typedef struct de__gpu_bindless {
 
 /** Table sizes from the caps (max_bindless_*). */
 void de__gpu_bindless_init(de__gpu_bindless *b, const de_allocator *alloc, const de_gpu_caps *caps);
+/**
+ * One numbering for the resource spaces (vtable `bindless_shared_resource_heap`, DENG-285), right
+ * after init: sampled textures take 1 .. T-1, storage textures T .. T+S-1, buffers the next B
+ * indices, acceleration structures the next A (T, S, B, A = the caps' max_bindless_* sizes), so
+ * the whole numbering needs T + S + B + A descriptor slots with slot 0 reserved. Samplers are
+ * unchanged.
+ */
+void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b);
 void de__gpu_bindless_destroy(de__gpu_bindless *b);
 /** A free index of `space`, or DE_GPU_BINDLESS_INVALID with DE_ERR_OUT_OF_MEMORY when full. */
 u32 de__gpu_bindless_alloc(de__gpu_bindless *b, de__gpu_bindless_space space);

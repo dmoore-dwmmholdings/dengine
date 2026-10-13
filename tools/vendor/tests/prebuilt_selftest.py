@@ -179,7 +179,7 @@ def test_config(repo: Repo, archives: dict, plain: str) -> None:
         "host with a bad sha256": prebuilt_entry(
             archives, hosts={"windows-x64": {"sha256": '"abc"'}}),
         "host with a proprietary SDK url": prebuilt_entry(
-            archives, hosts={"windows-x64": {"url": '"https://example.com/agility.zip"'}}),
+            archives, hosts={"windows-x64": {"url": '"https://example.com/steamworks_sdk.zip"'}}),
         "prebuilt entry outside the licence allowlist": prebuilt_entry(
             archives, top={"license": '"Proprietary"'}),
     }

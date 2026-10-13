@@ -315,3 +315,36 @@ files = [
     "include/vulkan/*.h",
     "include/vk_video/*.h",
 ]
+
+[[lib]]
+name = "d3d12_agility"
+# D3D12 Agility SDK (SPEC §22: Microsoft redistributable), the runtime of the D3D12 backend
+# (src/gpu/d3d12/, DENG-285). One NuGet package (a zip, no top directory) holds both parts:
+#   - committed: the D3D12 headers the backend compiles against (MIT, LICENSE-CODE.txt -> LICENSE)
+#     and LICENSE.txt, the Microsoft DirectX terms that cover the runtime DLLs;
+#   - prebuilt, windows-x64 only: D3D12Core.dll and d3d12SDKLayers.dll (the debug layer), listed in
+#     the package's "distributable files.txt". Extracted at configure time
+#     (third_party/d3d12_agility/CMakeLists.txt) and copied next to each executable that creates
+#     a D3D12 device, into <exe dir>/D3D12/ (D3D12SDKPath). Never committed.
+# `license` names the committed headers' licence. The headers must match the DLLs: the backend
+# checks D3D12_SDK_VERSION against src/gpu/d3d12/d3d12_agility_exports.h at compile time.
+kind = "prebuilt"
+version = "1.619.6"
+url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.6/microsoft.direct3d.d3d12.1.619.6.nupkg"
+sha256 = "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9"
+license = "MIT"
+license_file = "LICENSE-CODE.txt"
+strip = 0
+files = [
+    "LICENSE.txt",
+    "build/native/include/d3d12.h",
+    "build/native/include/d3d12sdklayers.h",
+    "build/native/include/d3dcommon.h",
+    "build/native/include/dxgiformat.h",
+]
+
+[lib.hosts.windows-x64]
+url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.6/microsoft.direct3d.d3d12.1.619.6.nupkg"
+sha256 = "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9"
+strip = 0
+files = ["build/native/bin/x64/D3D12Core.dll", "build/native/bin/x64/d3d12SDKLayers.dll"]

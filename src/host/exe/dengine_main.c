@@ -20,6 +20,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+/* D3D12SDKVersion / D3D12SDKPath: the D3D12 Agility SDK runtime in D3D12/ next to this program
+ * (DENG-285; src/host/CMakeLists.txt copies it there). */
+#include "../../gpu/d3d12/d3d12_agility_exports.h"
+#endif
+
 static void usage(FILE *out, const char *program) {
     fprintf(out,
             "usage: %s --game <library> [options] [+cvar value ...]\n"
