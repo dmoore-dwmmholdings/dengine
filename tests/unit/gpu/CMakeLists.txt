@@ -112,3 +112,23 @@ if(TARGET test_gpu_vulkan)
         target_compile_definitions(test_gpu_vulkan PRIVATE DE_VK_TEST_SDL=1)
     endif()
 endif()
+
+# DENG-286: D3D12 command lists, barriers, fences and swapchains (CTest names gpu_d3d12.d3d12.<test>).
+# test_d3d12_barrier_tables.c (barrier_translation_table, the pure translation) runs on every host:
+# without the D3D12 backend the test compiles src/gpu/d3d12/d3d12_barriers.c itself. On Windows,
+# test_d3d12_cmd.c (clear_readback, copy_bc7_mips, cross_queue_timeline, legacy_barriers_forced,
+# swapchain_present_resize; DENG-284's names and values) runs on the best adapter (WARP on CI) with
+# the debug layer.
+if(TARGET test_gpu_d3d12)
+    target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_barrier_tables.c)
+    if(DE_HAS_GPU_D3D12)
+        target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_cmd.c)
+        target_link_libraries(test_gpu_d3d12 PRIVATE de_platform)
+        if(TARGET de_tp_sdl3) # the swapchain test resizes its window through SDL
+            target_link_libraries(test_gpu_d3d12 PRIVATE de_tp_sdl3)
+            target_compile_definitions(test_gpu_d3d12 PRIVATE DE_D3D12_TEST_SDL=1)
+        endif()
+    else()
+        target_sources(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_barriers.c")
+    endif()
+endif()

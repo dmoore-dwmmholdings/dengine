@@ -18,6 +18,10 @@ de_add_module(
         d3d12_memory.c
         d3d12_resources.c
         d3d12_bindless.c
+        d3d12_barriers.c
+        d3d12_cmd.c
+        d3d12_sync.c
+        d3d12_swapchain.c
     DEPS gpu
     LIBS de_tp_d3d12_agility d3d12 dxgi
     OPTIONAL_OPTION DE_GPU_D3D12

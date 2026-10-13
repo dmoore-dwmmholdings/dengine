@@ -191,6 +191,7 @@ void de__d3d12_texture_destroy(de_gpu_device *d, de__gpu_texture *t) {
         ID3D12Resource_Release(dt->res);
     dt->res = NULL;
     de__gpu_mem_free(d, &dt->alloc);
+    de__d3d12_texture_legacy_release(d, t); /* DENG-286: legacy barrier states */
 }
 
 /* ---------- Samplers ---------- */
