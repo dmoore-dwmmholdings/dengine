@@ -157,3 +157,11 @@ if(TARGET de_physics)
         large_world.h
         large_world.c)
 endif()
+
+# DENG-224: ragdolls built from DENG-220 joints (one dynamic body per bone, cone-twist or hinge to
+# the parent, a 6-DOF motor joint for powered cone-twist bones, one collision group per ragdoll).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        ragdoll_internal.h
+        ragdoll.c)
+endif()

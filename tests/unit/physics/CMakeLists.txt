@@ -230,3 +230,13 @@ if(TARGET test_physics_large_world)
     target_include_directories(test_physics_large_world PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_physics_large_world PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-224: ragdolls. physics_ragdoll: a 15-bone humanoid (ragdoll_test_util.h, shared with the
+# ragdoll_stairs determinism scenario) built in bone order, refused descs, a 2 m drop that settles
+# in 3 s with joints together and limits held, a throw, the self-collision rule, a powered T-pose
+# and new motor targets, no allocation per step.
+de_add_test(NAME physics_ragdoll SOURCES test_ragdoll.c LIBS de_physics)
+if(TARGET test_physics_ragdoll)
+    target_include_directories(test_physics_ragdoll PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_physics_ragdoll PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

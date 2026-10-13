@@ -135,3 +135,20 @@ de_phys_det_add_scenarios(SOURCES scenarios_ecs.c SCENARIOS ecs_scene)
 # DENG-222 (S23): large worlds (a pyramid, a thrown ball, a pendulum and hinged planks, all at
 # (100 km, -100 km, 50 m)).
 de_phys_det_add_scenarios(SOURCES scenarios_large_world.c SCENARIOS stack_far)
+
+# DENG-224 (S23): the final dynamics set: tower_20, ragdoll_stairs, chain_bridge, bullet_spray and,
+# when the input module is built, character_walk (replays data/character_walk.deir through
+# physics.step) with its record check character_walk.live_equals_replay.
+set(_de_phys_det_dynamics tower_20 ragdoll_stairs chain_bridge bullet_spray)
+if(TARGET de_input)
+    list(APPEND _de_phys_det_dynamics character_walk)
+    target_link_libraries(test_det_physics PRIVATE de_input)
+    target_compile_definitions(test_det_physics PRIVATE
+        DE_PHYS_DET_HAS_INPUT=1
+        "DE_PHYS_DET_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    set(_de_phys_det_walk
+        determinism_physics_character_walk.live_equals_replay=character_walk.live_equals_replay)
+    de_det_add_tests(TARGET test_det_physics TESTS ${_de_phys_det_walk})
+    set_property(DIRECTORY APPEND PROPERTY DE_PHYS_DET_CASES ${_de_phys_det_walk})
+endif()
+de_phys_det_add_scenarios(SOURCES scenarios_dynamics.c SCENARIOS ${_de_phys_det_dynamics})

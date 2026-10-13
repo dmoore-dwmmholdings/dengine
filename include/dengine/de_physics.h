@@ -850,6 +850,144 @@ DE_API de_event_type de_physics_joint_break_event_type(const de_physics_world *p
  *  invalid handle (no body yet, or not attached). */
 DE_API de_body de_physics_entity_body(const de_physics_world *p, de_entity e);
 
+/* ---------- Ragdolls (DENG-224) ----------
+ * A ragdoll is a tree of bones (SPEC §13.4; DENG-2 Q14: the one optional physics feature of v1).
+ * Each bone is a dynamic body with its own capsule, box or sphere shape, and each bone except
+ * the root is held to its parent by a DENG-220 joint: cone-twist (the default; shoulders, hips,
+ * spine, neck) or hinge (knees, elbows). Nothing else is simulated: a ragdoll is a way to build
+ * and address those bodies and joints.
+ *
+ * - Bones: `bones[0]` is the root (parent DE_RAGDOLL_NO_PARENT); every other bone names a parent
+ *   with a lower index. `bind` is the bone's pose in model space; de_ragdoll_desc.transform places
+ *   the model in the world. A bone's origin is the joint with its parent.
+ * - Shapes: built by the ragdoll (owned and destroyed with it), placed in the bone's frame by
+ *   `shape_offset` (zero rotation = identity). The bone's body sits at the shape, so its mass
+ *   properties are the shape's. Capsule axis: the shape's local Z.
+ * - Joints: at the bone origin. `joint_rotation` (bone frame; zero = identity) orients the joint:
+ *   its X axis is the twist axis of a cone-twist or the axis of a hinge. Limits are relative to the
+ *   bind pose and always on: cone-twist twist in [limit_min, limit_max] about X and an elliptical
+ *   swing cone of half-angles swing_y (about Y) and swing_z (about Z); hinge angle in
+ *   [limit_min, limit_max]. Radians, within [-pi, pi]. Joints are rigid (DENG-220 softness).
+ * - Self-collision: the bones of a ragdoll never collide with each other. Unless `self_collision`
+ *   is set, they share one non-zero collision group: de_ragdoll_desc.filter.group, or (0) an
+ *   automatic group with DE_RAGDOLL_AUTO_GROUP_BIT set (games keep their own groups below it).
+ *   With `self_collision` the group is filter.group as given (0 = none): jointed pairs (parent and
+ *   child) stay excluded by their joints, and non-adjacent bones collide unless their layers and
+ *   masks (de_ragdoll_bone.filter) keep them apart.
+ * - Powered ragdolls: a bone with motor_max_force > 0 (N m) is driven toward a target rotation
+ *   relative to its parent (de_ragdoll_set_motor_targets; the bind pose until set). A hinge uses
+ *   its own position motor; a cone-twist bone gets a second joint, a 6-DOF whose angular axes are
+ *   free with position motors on twist and both swings. motor_hertz / motor_damping_ratio
+ *   (0 = as stiff as a rigid joint) shape the motors.
+ * - Activation: every bone starts with the rigid-body velocity of de_ragdoll_desc.linear_velocity
+ *   (of the root bone's center of mass) and angular_velocity.
+ * - Determinism (SPEC §5.7): bodies are created in bone order, then joints in bone order (each
+ *   bone's joint, then its motor joint), so equal inputs give equal body and joint indices.
+ *   de_dmath only. Create and destroy allocate (shapes, the ragdoll record); the getters and
+ *   setters do not, and a ragdoll adds no work to the step besides its bodies and joints.
+ * - Threading: like the body API (create, destroy and setters single-threaded).
+ */
+
+DE_HANDLE(de_ragdoll);
+
+/** Most bones of one ragdoll. */
+#define DE_RAGDOLL_MAX_BONES 128u
+/** de_ragdoll_bone.parent of the root bone. */
+#define DE_RAGDOLL_NO_PARENT 0xFFFFFFFFu
+/** Set in every automatic ragdoll collision group. */
+#define DE_RAGDOLL_AUTO_GROUP_BIT 0x80000000u
+
+typedef enum de_ragdoll_shape {
+    DE_RAGDOLL_SHAPE_CAPSULE = 0, /**< radius, half_height (axis along the shape's local Z) */
+    DE_RAGDOLL_SHAPE_BOX,         /**< half_extents */
+    DE_RAGDOLL_SHAPE_SPHERE       /**< radius */
+} de_ragdoll_shape;
+
+typedef enum de_ragdoll_joint {
+    DE_RAGDOLL_JOINT_CONE_TWIST = 0, /**< swing cone + twist range (the default) */
+    DE_RAGDOLL_JOINT_HINGE           /**< one axis, angle range */
+} de_ragdoll_joint;
+
+/** One bone of a de_ragdoll_desc (see the Ragdolls comment). */
+typedef struct de_ragdoll_bone {
+    u32 parent;        /**< lower bone index; DE_RAGDOLL_NO_PARENT for bones[0] only */
+    de_transform bind; /**< model-space bind pose (scale ignored; zero rotation = identity) */
+    de_ragdoll_shape shape;
+    f32 radius, half_height;   /**< capsule, sphere */
+    de_vec3 half_extents;      /**< box */
+    de_transform shape_offset; /**< shape frame in the bone frame (scale ignored) */
+    f32 mass;                  /**< kg; 0 = from the shape and de_ragdoll_desc.material.density */
+    de_ragdoll_joint joint;    /**< joint to the parent (ignored for the root) */
+    de_quat joint_rotation;    /**< joint frame in the bone frame; X = twist / hinge axis */
+    f32 limit_min, limit_max;  /**< cone-twist: twist range; hinge: angle range (rad) */
+    f32 swing_y, swing_z;      /**< cone-twist: swing half-angles about Y and Z (rad, >= 0) */
+    f32 motor_max_force;       /**< N m; 0 = not powered */
+    /** A non-zero layer or mask replaces the ragdoll's layer and mask for this bone; a non-zero
+     *  group replaces its group. */
+    de_collision_filter filter;
+} de_ragdoll_bone;
+
+/** de_ragdoll_create() parameters (see the Ragdolls comment). */
+typedef struct de_ragdoll_desc {
+    const de_ragdoll_bone *bones;
+    u32 bone_count;          /**< 1..DE_RAGDOLL_MAX_BONES */
+    de_transform transform;  /**< model -> world (f64 position; zero rotation = identity) */
+    de_vec3 linear_velocity; /**< of the root bone's center of mass at activation (m/s) */
+    de_vec3 angular_velocity;
+    de_material_phys material;  /**< every bone (density 0 = DE_PHYSICS_DEFAULT_DENSITY) */
+    de_collision_filter filter; /**< all zero = default layer and mask, automatic group */
+    bool self_collision;        /**< let non-adjacent bones collide (see above) */
+    f32 linear_damping, angular_damping;
+    u32 flags; /**< de_body_flags for every bone (DE_BODY_FLAG_ALLOW_SLEEP, _CCD) */
+    f32 motor_hertz, motor_damping_ratio; /**< powered bones; 0 = stiff */
+    de_entity owner;                      /**< owner of every bone body (DE_ENTITY_NULL: none) */
+} de_ragdoll_desc;
+
+/**
+ * Builds a ragdoll: its shapes, one dynamic body per bone (gravity scale 1), then the joints, in
+ * bone order. Allocates. On failure nothing is left behind and the result is invalid, with the
+ * error context set: DE_ERR_INVALID_ARGUMENT (NULL or empty bones, too many, a bad parent, a
+ * non-finite or negative value, limit_min > limit_max, an unknown shape or joint kind) or
+ * DE_ERR_OUT_OF_MEMORY (memory, or the body or joint pool is full).
+ */
+DE_API de_ragdoll de_ragdoll_create(de_physics_world *p, const de_ragdoll_desc *desc);
+/** Destroys the ragdoll's joints, bodies (which wakes what they touched) and shapes. Stale
+ *  handles are ignored. */
+DE_API void de_ragdoll_destroy(de_physics_world *p, de_ragdoll r);
+/** true if `r` is a live ragdoll of `p`. */
+DE_API bool de_ragdoll_valid(const de_physics_world *p, de_ragdoll r);
+/** Bones of a live ragdoll; 0 for a stale handle. */
+DE_API u32 de_ragdoll_bone_count(const de_physics_world *p, de_ragdoll r);
+/** The body of bone `bone`; invalid for a stale handle or a bad index. */
+DE_API de_body de_ragdoll_bone_body(const de_physics_world *p, de_ragdoll r, u32 bone);
+/** The joint between bone `bone` and its parent; invalid for the root. */
+DE_API de_joint de_ragdoll_bone_joint(const de_physics_world *p, de_ragdoll r, u32 bone);
+/**
+ * World pose of every bone (its origin and rotation; scale 1) into out[0..count). `count` must be
+ * the bone count. false for a stale handle, a wrong count, or a bone body destroyed elsewhere.
+ */
+DE_API bool de_ragdoll_get_pose(const de_physics_world *p, de_ragdoll r, de_transform *out,
+                                u32 count);
+/**
+ * Teleports every bone to the world poses bones[0..count) (count = the bone count; scale
+ * ignored) and wakes them. Velocities are kept (de_ragdoll_set_velocity). false, and nothing
+ * changes, for a stale handle, a wrong count or a non-finite pose.
+ */
+DE_API bool de_ragdoll_set_pose(de_physics_world *p, de_ragdoll r, const de_transform *bones,
+                                u32 count);
+/** Gives every bone the rigid-body velocity of `linear` (at the root bone's center of mass) and
+ *  `angular`. false for a stale handle or a non-finite value. */
+DE_API bool de_ragdoll_set_velocity(de_physics_world *p, de_ragdoll r, de_vec3 linear,
+                                    de_vec3 angular);
+/**
+ * Motor targets of a powered ragdoll: local[i] is bone i's target rotation relative to its parent
+ * bone (parent^-1 * bone, as in an animation's local pose; zero = the bind pose). local[0] and
+ * bones without a motor are ignored. `count` must be the bone count. A changed target wakes the
+ * bone's bodies. false for a stale handle, a wrong count or a non-finite rotation.
+ */
+DE_API bool de_ragdoll_set_motor_targets(de_physics_world *p, de_ragdoll r, const de_quat *local,
+                                         u32 count);
+
 /* ---------- 2D (same design, operates in the configured 2D plane) ---------- */
 /*
  * 2D physics (DENG-252 and the rest of S24, SPEC §13.3). Its own world type, de_physics2d_world,
