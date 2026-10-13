@@ -3,6 +3,7 @@
  * in bone order, poses, handles, destroy and rebuild), refused descs, a drop from 2 m that settles
  * within 3 s with joints together and limits held, a throw with limits held, the self-collision
  * rule, a powered ragdoll holding a T-pose and new motor targets, and no allocation per step.
+ * DENG-404: two ragdolls side by side, arms end to end, stay finite.
  */
 #include "joint_test_util.h"
 #include "ragdoll_test_util.h"
@@ -442,6 +443,56 @@ TEST(physics_ragdoll, self_collision) {
         between += (ra != 0u && rb != 0u && ra != rb) ? 1u : 0u;
     }
     EXPECT_GT(between, 0u); /* the two default ragdolls do touch each other */
+    de_physics_destroy(p);
+}
+
+/* The DENG-224 repro of DENG-404: two humanoids side by side, the second 0.6 m along +X, so
+ * the first's right upper arm and the second's right forearm lie end to end on one axis, 1.5 cm
+ * apart. The narrowphase made a -9.5 cm point there, and the friction clamp NaN velocities in
+ * the first step. Every bone stays finite, and the two arms never push each other. */
+TEST(physics_ragdoll, side_by_side_arms_stay_finite) {
+    de_physics_world *p = rd_world(64, NULL);
+    ASSERT_TRUE(p != NULL);
+    de_ragdoll_bone bones[RT_BONES];
+    rt_humanoid(bones, 0.0f);
+    de_ragdoll r[2];
+    for (u32 k = 0; k < 2u; ++k) {
+        const de_ragdoll_desc d = rt_desc(bones, st_xform(0.6 * k, 0, 0.5, st_quat_identity()));
+        r[k] = de_ragdoll_create(p, &d);
+        ASSERT_TRUE(DE_HANDLE_VALID(r[k]));
+    }
+    const de_body arm0 = de_ragdoll_bone_body(p, r[0], RT_UARM_R);
+    const de_body arm1 = de_ragdoll_bone_body(p, r[1], RT_FARM_R);
+    de_physics_step(p, ST_DT);
+    /* The arm pair's contact is the true 1.5 cm gap, not -9.5 cm. */
+    const de__manifold *m = NULL;
+    u32 mc = 0;
+    de__contacts_manifolds(p, &m, &mc);
+    const u32 i0 = de__handle_index(arm0.id), i1 = de__handle_index(arm1.id);
+    u32 arm_points = 0;
+    for (u32 i = 0; i < mc; ++i) {
+        if (!((m[i].key.a == i0 && m[i].key.b == i1) || (m[i].key.a == i1 && m[i].key.b == i0)))
+            continue;
+        for (u32 k = 0; k < m[i].point_count; ++k) {
+            ST_GT(m[i].points[k].separation, 0.014f);
+            ++arm_points;
+        }
+    }
+    EXPECT_EQ(arm_points, 1u);
+    bool finite = true;
+    for (u32 tick = 1; tick < 120u; ++tick) {
+        de_physics_step(p, ST_DT);
+        for (u32 k = 0; k < 2u; ++k)
+            for (u32 i = 0; i < RT_BONES; ++i) {
+                const de_body b = de_ragdoll_bone_body(p, r[k], i);
+                const de_vec3 v = st_vel(p, b), w = st_angvel(p, b);
+                finite = finite && v.x - v.x == 0.0f && v.y - v.y == 0.0f && v.z - v.z == 0.0f &&
+                         w.x - w.x == 0.0f && w.y - w.y == 0.0f && w.z - w.z == 0.0f;
+            }
+    }
+    EXPECT_TRUE(finite);
+    ST_LT(rd_max_speed(p, r[0]), 0.5f);
+    ST_LT(rd_max_speed(p, r[1]), 0.5f);
     de_physics_destroy(p);
 }
 
