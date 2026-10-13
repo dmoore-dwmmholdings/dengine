@@ -147,7 +147,7 @@ job fuzzes for real (SPEC §19.1, DENG-216):
 
 | Job | What it runs | Local equivalent |
 |---|---|---|
-| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
+| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test, `check_det_registered` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
 | vendor.py verify | `python tools/vendor/vendor.py verify --all-hosts`: every vendored tree, and the archive of every host of a prebuilt entry (DENG-390). The archives are cached in `~/.cache/dengine-vendor` (key `vendor-all-<hash of third_party/vendor.toml>`), so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify --all-hosts` |
 | clang-format (changed files) | `clang-format --dry-run --Werror` on the C and C++ files that the change adds or modifies, outside `third_party/`. | See below. |
 
@@ -217,7 +217,8 @@ Trama pages `Testing` and `Module: physics`.
   (`arch -x86_64`).
 - Start it on a branch with `gh workflow run Determinism --ref <branch>`.
 - The SPEC §5.7 source check (`check_determinism_src`, label `check`) is not a step here: as a
-  CTest entry it runs in `checks.yml` and in every `ci.yml` and `sanitizers.yml` job.
+  CTest entry it runs in `checks.yml` and in every `ci.yml` and `sanitizers.yml` job. The same
+  holds for `check_det_registered` (every determinism de_test case has a CTest entry).
 
 ## Shared setup: `.github/actions/setup-dengine`
 

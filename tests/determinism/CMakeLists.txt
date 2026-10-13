@@ -73,3 +73,22 @@ add_test(NAME check_determinism_src_selftest
 set_tests_properties(check_determinism_src check_determinism_src_selftest PROPERTIES
     LABELS check
     TIMEOUT 120)
+
+# DENG-396: every de_test case of a tests/determinism/ source that this build compiles has a
+# CTest entry, and every --filter= entry selects a case (tools/check_det_registered.py), label
+# `check`. It reads compile_commands.json and the CTestTestfile.cmake files, so it needs a
+# configured tree but no build. Not added where de_det_add_tests() registers nothing (a cross
+# build with no emulator).
+#   check_det_registered            the sources against the CTest entries of this build
+#   check_det_registered_selftest   planted trees: a left-out entry, a stale one, #if blocks
+if(NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    add_test(NAME check_det_registered
+        COMMAND "${Python3_EXECUTABLE}" "${DE_ROOT_DIR}/tools/check_det_registered.py"
+                --root "${DE_ROOT_DIR}" --build-dir "${CMAKE_BINARY_DIR}"
+                --det-source-dir "${CMAKE_CURRENT_SOURCE_DIR}"
+                --det-build-dir "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(check_det_registered PROPERTIES LABELS check TIMEOUT 120)
+endif()
+add_test(NAME check_det_registered_selftest
+    COMMAND "${Python3_EXECUTABLE}" "${DE_ROOT_DIR}/tools/check_det_registered.py" --self-test)
+set_tests_properties(check_det_registered_selftest PROPERTIES LABELS check TIMEOUT 120)
