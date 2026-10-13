@@ -1198,8 +1198,93 @@ DE_API de_result de_bindings_save(const de_input *in, const char *vpath);
  */
 DE_API de_result de_bindings_load(de_input *in, const char *vpath);
 
-/* Prompt glyphs (Xbox, PlayStation, Switch, Steam Deck, keyboard) for UI. */
+/* ---------- Prompt glyphs ---------- */
+
+/*
+ * Prompt glyphs (S21, DENG-88): which glyph a UI prompt ("Press [A] to jump") shows for an
+ * action, on the device the player uses now. This is the SDL3 path; Steam Input glyphs (S37)
+ * plug in through de_input_set_glyph_provider(). UI (S29) maps glyph IDs to images.
+ *
+ * A glyph ID is a static string "<family>/<control>": "kbm/key_space", "kbm/mouse_left",
+ * "kbm/wasd", "xbox/a", "ps/cross", "ps5/create", "switch/b", "deck/l4", "xbox/stick_left_up",
+ * "generic/unbound". Face buttons are positional: DE_PAD_SOUTH is "xbox/a", "ps/cross",
+ * "switch/b" (the Nintendo label at the south position) and "deck/a". Key IDs name the key
+ * position (de_key, USB HID), with the de_key_name() name, not what the layout prints on it;
+ * de_input_key_label() gives a label for that. IDs are a stable contract: an ID is never renamed
+ * or removed, new ones are only added. docs/input/glyph-ids.md lists every ID.
+ *
+ * The glyph family follows de_input_last_device(): keyboard and mouse give KBM, a pad gives the
+ * family of its de_pad_type. Before any input, and after the last used pad disconnects, it is
+ * the family of the first connected pad, or KBM when none is connected. It is updated once per
+ * frame, in de_input_begin_frame().
+ *
+ * Nothing here allocates. Main thread only for the setters; the queries are const.
+ */
+
+/** Glyph families (the first part of a glyph ID). */
+typedef enum de_glyph_family {
+    DE_GLYPH_FAMILY_KBM,     /**< keyboard and mouse: "kbm/..." */
+    DE_GLYPH_FAMILY_XBOX,    /**< "xbox/..." */
+    DE_GLYPH_FAMILY_PS,      /**< DualShock 4: "ps/..." */
+    DE_GLYPH_FAMILY_PS5,     /**< DualSense: "ps/...", except "ps5/create", "ps5/mute",
+                                  "ps5/touchpad" */
+    DE_GLYPH_FAMILY_SWITCH,  /**< Switch Pro controller and Joy-Cons: "switch/..." */
+    DE_GLYPH_FAMILY_DECK,    /**< Steam Deck and Steam Controller: "deck/..." */
+    DE_GLYPH_FAMILY_GENERIC, /**< other pads: "generic/..." */
+    DE_GLYPH_FAMILY_COUNT_
+} de_glyph_family;
+
+/** The glyph ID of an action with no binding that can be shown. */
+#define DE_GLYPH_ID_UNBOUND "generic/unbound"
+
+/** The name of family `f`: "kbm", "xbox", "ps", "ps5", "switch", "deck", "generic"; NULL when
+ * out of range. */
+DE_API const char *de_glyph_family_name(de_glyph_family f);
+/** The glyph family of this frame (see above). */
+DE_API de_glyph_family de_input_glyph_family(const de_input *in);
+/** True in the one frame in which the glyph family changed (the player switched devices, or the
+ * last used pad disconnected), so UI rebuilds its prompts. */
+DE_API bool de_input_glyph_family_changed(const de_input *in);
+
+/**
+ * The glyph ID of action `a` for the current glyph family (de_action_glyph_id_family() with
+ * de_input_glyph_family()). Never NULL; DE_GLYPH_ID_UNBOUND for an invalid action.
+ */
 DE_API const char *de_action_glyph_id(const de_input *in, de_action a);
+/**
+ * The glyph ID of action `a` for family `f`:
+ * 1. The glyph provider (de_input_set_glyph_provider), when one is set and it returns non-NULL.
+ * 2. The first binding (in index order) of the family's device class: keyboard and mouse
+ *    bindings for KBM, pad buttons, pad axes and the gyro for the pad families.
+ * 3. Else the first binding of the other class: KBM for a pad family; for KBM, the family of the
+ *    first connected pad, or GENERIC.
+ * 4. Else DE_GLYPH_ID_UNBOUND.
+ * A binding in a composite gives the composite's ID when its slots form a known set ("kbm/wasd",
+ * "kbm/arrows", "<pad family>/dpad"), else its own ID; a stick axis or the wheel in a composite
+ * gives its direction ("xbox/stick_left_up"). A modifier key (chord) is not part of the ID.
+ * Family-neutral controls use "generic/..." (the gyro: "generic/gyro"), and so do pad controls a
+ * family does not have. The string is static: never NULL, never freed.
+ */
+DE_API const char *de_action_glyph_id_family(const de_input *in, de_action a, de_glyph_family f);
+
+/** A glyph provider (S37 Steam Input): the glyph ID, or another static string, for action `a`
+ * and the family the lookup uses. NULL falls back to the engine's table. The returned string
+ * must stay valid until the provider changes. */
+typedef const char *(*de_glyph_provider_fn)(const de_input *in, de_action a, de_glyph_family f,
+                                            void *user);
+/** Sets the glyph provider, asked first by every glyph lookup. NULL `fn` removes it. */
+DE_API void de_input_set_glyph_provider(de_input *in, de_glyph_provider_fn fn, void *user);
+
+/** A key label callback: the text the user's layout prints on key `k` (UTF-8, valid until the
+ * callback changes), or NULL when it has none. */
+typedef const char *(*de_key_label_fn)(de_key k, void *user);
+/** Sets the key label callback (localized and layout key names, S28). NULL `fn` removes it. */
+DE_API void de_input_set_key_label_fn(de_input *in, de_key_label_fn fn, void *user);
+/** The display label of key `k`: the key label callback's text, else de_key_name(k) (NULL for a
+ * key without a name). */
+DE_API const char *de_input_key_label(const de_input *in, de_key k);
+/** The key of a "kbm/key_<name>" glyph ID, or DE_KEY_UNKNOWN for any other string or NULL. */
+DE_API de_key de_glyph_id_key(const char *id);
 
 /* ---------- Recording / replay (per fixed tick, resolved actions) ---------- */
 
