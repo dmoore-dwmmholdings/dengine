@@ -13,6 +13,9 @@
  *
  * Determinism (SPEC §5.7): bodies in ascending index, records in record order; the union-find
  * root is always the lowest slot, so the result does not depend on the union order.
+ *
+ * Large worlds (DENG-222): each island record gets its solve origin, the f64 position of its
+ * lowest-index body; constraint setup forms world points relative to it (physics/large_world.h).
  */
 #include "physics/islands.h"
 
@@ -222,6 +225,9 @@ void de__islands_build(de__solver *s) {
             de__island *isl = &is->islands[count];
             memset(isl, 0, sizeof *isl);
             isl->id = s->awake[k - 1u];
+            /* DENG-222: the solve origin is the f64 position of the lowest-index body (the
+             * root), so constraint setup forms world points near zero (large_world.h). */
+            isl->origin = s->p->bodies.position[isl->id];
             is->island_of_slot[k] = count++;
         } else {
             is->island_of_slot[k] = is->island_of_slot[root]; /* root < k: already numbered */

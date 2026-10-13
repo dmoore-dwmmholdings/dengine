@@ -221,3 +221,12 @@ foreach(_de_pe_test test_physics_ecs test_physics_contact_events test_physics_in
         target_compile_options(${_de_pe_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-222: large worlds. physics_large_world: de__phys_relative and island origins, a resting
+# stack of 10 at 100 km, origin vs offset trajectories, joints at 100 km, world AABBs and
+# broadphase pairs at 100 km.
+de_add_test(NAME physics_large_world SOURCES test_large_world.c LIBS de_physics)
+if(TARGET test_physics_large_world)
+    target_include_directories(test_physics_large_world PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_physics_large_world PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

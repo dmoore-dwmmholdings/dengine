@@ -4,10 +4,11 @@
  * manifold key order (record id = index in de__contacts_manifolds).
  *
  * Per point (Box2D v3 soft step, in 3D):
- *   - Anchors. The world anchor points of the manifold point on A and B are formed in f64 from
- *     the body positions; their midpoint is the contact point, and ra / rb (f32) are its offsets
- *     from the two centers of mass. The velocity Jacobians use these fixed anchors for the whole
- *     step. The current separation rotates the *core* anchors by each body's dq:
+ *   - Anchors. The world anchor points of the manifold point on A and B are formed in f64
+ *     relative to the island's solve origin (DENG-222, physics/large_world.h); their midpoint is
+ *     the contact point, and ra / rb (f32) are its offsets from the two centers of mass, each
+ *     rounded once (de__phys_relative). The velocity Jacobians use these fixed anchors for the
+ *     whole step. The current separation rotates the *core* anchors by each body's dq:
  *         s = dot((dpB - dpA) + (dqB cb - dqA ca), n) + base_separation,
  *         ca = ra - radius_a n,  cb = rb + radius_b n,  base_separation = separation -
  *         dot(cb - ca, n),
@@ -41,6 +42,7 @@
 #include "physics/solver/solver_internal.h"
 
 #include "physics/contact/manifold.h"
+#include "physics/large_world.h"
 #include "physics/shapes/shape_internal.h"
 
 typedef struct cs_point {
@@ -175,27 +177,27 @@ static void prepare(const de__solver_ctx *ctx, void *state, de__constraint *c) {
     const f32 ma = A->inv_mass, mb = B->inv_mass;
     cc->soft_static = (ma == 0.0f || mb == 0.0f) ? 1u : 0u;
 
+    /* Anchor setup (DENG-222, physics/large_world.h). World points are formed in f64 relative
+     * to the island's solve origin, so every f64 term is small, and only the offsets from the
+     * centers of mass are rounded to f32, once (de__phys_relative). */
+    const de_dvec3 o = de__phys_constraint_origin(ctx->solver, c);
+    const de_dvec3 xa = de__d3_sub(bp->position[a], o);
+    const de_dvec3 xb = de__d3_sub(bp->position[b], o);
     const de__dmat3 ra_m = de__dmat3_from_quat(bp->rotation[a]);
     const de__dmat3 rb_m = de__dmat3_from_quat(bp->rotation[b]);
-    const de_dvec3 ca =
-        de__d3_add(bp->position[a], de__dmat3_mul(&ra_m, de__d3_from(bp->local_com[a])));
-    const de_dvec3 cb =
-        de__d3_add(bp->position[b], de__dmat3_mul(&rb_m, de__d3_from(bp->local_com[b])));
+    const de_dvec3 ca = de__d3_add(xa, de__dmat3_mul(&ra_m, de__d3_from(bp->local_com[a])));
+    const de_dvec3 cb = de__d3_add(xb, de__dmat3_mul(&rb_m, de__d3_from(bp->local_com[b])));
     const de_vec3 n = cc->normal;
     const f32 rad_a = side_radius(p, a, m->key.child_a);
     const f32 rad_b = side_radius(p, b, m->key.child_b);
     for (u32 k = 0; k < m->point_count; ++k) {
         const de__contact *mp = &m->points[k];
         cs_point *cp = &cc->points[k];
-        const de_dvec3 pa =
-            de__d3_add(bp->position[a], de__dmat3_mul(&ra_m, de__d3_from(mp->local_a)));
-        const de_dvec3 pb =
-            de__d3_add(bp->position[b], de__dmat3_mul(&rb_m, de__d3_from(mp->local_b)));
+        const de_dvec3 pa = de__d3_add(xa, de__dmat3_mul(&ra_m, de__d3_from(mp->local_a)));
+        const de_dvec3 pb = de__d3_add(xb, de__dmat3_mul(&rb_m, de__d3_from(mp->local_b)));
         const de_dvec3 mid = de__d3_scale(de__d3_add(pa, pb), 0.5);
-        const de_dvec3 ra = de__d3_sub(mid, ca);
-        const de_dvec3 rb = de__d3_sub(mid, cb);
-        cp->ra = de__v3((f32)ra.x, (f32)ra.y, (f32)ra.z);
-        cp->rb = de__v3((f32)rb.x, (f32)rb.y, (f32)rb.z);
+        cp->ra = de__phys_relative(mid, ca);
+        cp->rb = de__phys_relative(mid, cb);
         cp->ca = de__v3_sub(cp->ra, de__v3_scale(n, rad_a));
         cp->cb = de__v3_add(cp->rb, de__v3_scale(n, rad_b));
         cp->base_separation = mp->separation - de__v3_dot(de__v3_sub(cp->cb, cp->ca), n);

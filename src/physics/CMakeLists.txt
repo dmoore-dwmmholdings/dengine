@@ -149,3 +149,11 @@ if(TARGET de_physics)
         ecs/contact_events.c
         ecs/interpolation.c)
 endif()
+
+# DENG-222: large worlds (island solve origins, f64 -> f32 relative conversion for constraint
+# setup, precision helpers; see large_world.h).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        large_world.h
+        large_world.c)
+endif()
