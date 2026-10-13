@@ -116,3 +116,7 @@ de_phys_det_add_scenarios(SOURCES scenarios_solver.c SCENARIOS box_drop sphere_b
 # DENG-218 (S23): islands, sleeping and the graph-colored solver (a 10-row pyramid; sleep and every
 # kind of wake-up).
 de_phys_det_add_scenarios(SOURCES scenarios_islands.c SCENARIOS pyramid_10 sleep_wake)
+
+# DENG-220 (S23): joints (pendulums of every kind, two chains of 20 with breaking and destruction,
+# motors and limits).
+de_phys_det_add_scenarios(SOURCES scenarios_joints.c SCENARIOS pendulum chain_20 hinge_motor)

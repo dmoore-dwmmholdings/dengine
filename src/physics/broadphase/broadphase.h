@@ -106,10 +106,18 @@ static inline bool de__bp_types_collide(u8 type_a, u8 type_b) {
     return type_a == (u8)DE_BODY_DYNAMIC || type_b == (u8)DE_BODY_DYNAMIC;
 }
 
-/** Both rules for live bodies a and b (a != b). */
+/**
+ * DENG-220 (joints/joint.c): true when a joint with collide_connected false links live bodies a
+ * and b. The broadphase drops such pairs (de__bp_should_collide); joint destroy makes the pair
+ * found again.
+ */
+bool de__joints_exclude_pair(const de_physics_world *p, u32 a, u32 b);
+
+/** Both rules for live bodies a and b (a != b), and no joint excludes the pair (DENG-220). */
 static inline bool de__bp_should_collide(const de_physics_world *p, u32 a, u32 b) {
     return de__bp_types_collide(p->bodies.type[a], p->bodies.type[b]) &&
-           de__collision_filter_test(p->bodies.filter[a], p->bodies.filter[b]);
+           de__collision_filter_test(p->bodies.filter[a], p->bodies.filter[b]) &&
+           (p->ext[DE__PHYS_EXT_JOINTS].state == NULL || !de__joints_exclude_pair(p, a, b));
 }
 
 /* ---- Lifetime ----------------------------------------------------------------------------- */

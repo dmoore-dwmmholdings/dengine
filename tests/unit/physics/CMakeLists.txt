@@ -170,3 +170,16 @@ foreach(_de_is_test test_physics_islands test_physics_sleep test_physics_graph_c
         target_compile_options(${_de_is_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-220: joints. physics_joints: API, pool, each kind, pendulum period, chain of 20,
+# collide_connected, 6-DOF locked = fixed, wake. physics_joint_limits: limits, motors, the cone,
+# break force, worker-count invariance (label tsan; scenes stay small).
+de_add_test(NAME physics_joints SOURCES test_joints.c LIBS de_physics)
+de_add_test(NAME physics_joint_limits SOURCES test_joint_limits_motors.c
+            LIBS de_physics de_platform LABELS unit tsan TIMEOUT 120)
+foreach(_de_jt_test test_physics_joints test_physics_joint_limits)
+    if(TARGET ${_de_jt_test})
+        target_include_directories(${_de_jt_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_jt_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

@@ -491,6 +491,77 @@ DE_API bool de_physics_closest_point_ex(const de_physics_world *p, de_dvec3 poin
                                         const de_physics_query_filter *filter, de_ray_hit *hit);
 
 /* ---------- Joints ---------- */
+/*
+ * Joints (DENG-220, SPEC §13.1). A joint holds two bodies (or a body and the world) together.
+ * Every joint is a soft-step constraint solved with the contacts (joints first, then contacts).
+ *
+ * Frames. `frame_a` is the joint frame on side A and `frame_b` on side B. On a body, the frame is
+ * in the body's local frame: position relative to the body origin (not the center of mass),
+ * rotation relative to the body. On the world side, it is in world space (f64 position). Scale is
+ * ignored; a zero rotation is the identity. The joint pulls frame B onto frame A. Its axes are
+ * the axes of frame A: X is the primary axis (hinge axis, slider axis, twist axis), Y and Z are
+ * the two others. Axis indices 0..2 are translations along X, Y, Z; 3..5 are rotations: 3 is the
+ * twist about X, 4 and 5 are the swing about Y and Z (a swing-twist split of B's rotation in A).
+ *
+ * Kinds:
+ * - DE_JOINT_FIXED: every degree of freedom locked.
+ * - DE_JOINT_HINGE: anchors together, X axes aligned; free rotation about X. With `enable_limit`
+ *   the angle stays in [limits_min[0], limits_max[0]] (radians, within [-pi, pi]). Motor: axis 0.
+ * - DE_JOINT_BALL: anchors together; rotation free.
+ * - DE_JOINT_SLIDER: rotation locked, B's anchor on A's X axis; free translation along X. With
+ *   `enable_limit` the offset stays in [limits_min[0], limits_max[0]] (m). Motor: axis 0.
+ * - DE_JOINT_DISTANCE: the distance between the anchors stays in [limits_min[0], limits_max[0]]
+ *   (m; min 0 is a rope). Both 0: the distance at create (a rod). `hertz` > 0 makes the range a
+ *   spring. Rotation free. Motor: axis 0 (along the anchor line).
+ * - DE_JOINT_CONE_TWIST: anchors together; B's X axis stays in an elliptical cone around A's X
+ *   axis with half-angles limits_max[4] (swing about Y) and limits_max[5] (swing about Z), and the
+ *   twist stays in [limits_min[3], limits_max[3]]. Angles in radians. Motor: axis 3 (twist).
+ *   Shoulders and hips of ragdolls.
+ * - DE_JOINT_6DOF: each axis is DE_JOINT_AXIS_LOCKED (at 0), _LIMITED ([limits_min[i],
+ *   limits_max[i]]) or _FREE (`axis_mode[i]`; a zeroed desc locks all six, like DE_JOINT_FIXED).
+ *   Motors on any axis that is not locked. Swing limits apply to each swing component separately.
+ *
+ * Motors (`motor_mode[i]`, de_joint_motor_mode): a velocity motor drives the joint speed along
+ * axis i to motor_target[i] (m/s or rad/s); a position motor drives the joint coordinate to
+ * motor_target[i] (m or rad) like a spring of `motor_hertz` and `motor_damping_ratio` (0: as stiff
+ * as a locked axis). Either uses at most motor_max_force[i] (N or N m); 0 disables the motor.
+ *
+ * Softness: `hertz` > 0 and `damping_ratio` make the locked axes and limits a spring; 0 is a rigid
+ * joint. Rigid joints are soft-step constraints of a quarter of the substep rate (60 Hz at 60 Hz
+ * and 4 substeps; cvars physics.joints.hertz, physics.joints.damping_ratio), so a joint stretches
+ * under load by about load / (effective mass * (2 pi hertz)^2): a hanging chain of 20 links sags
+ * about 2.6 mm per joint at the top with 4 substeps and 0.7 mm with 8.
+ *
+ * Breaking: with `break_force` > 0 the joint breaks when the force on its anchors (linear
+ * constraint impulse / substep) exceeds it in a step. A broken joint no longer constrains; it stays
+ * valid until it is destroyed (de_joint_is_broken, de_physics_joint_breaks).
+ *
+ * `collide_connected` false (the default): the two bodies never collide while the joint exists.
+ *
+ * Bodies: `body_a` / `body_b` are the bodies of the joint. An invalid handle is the world, unless
+ * the entity `a` / `b` is set: entity sides are resolved by the ECS systems (DENG-223), which
+ * fill the body handles. Both sides the world, or the same body twice, are errors. Destroying a
+ * body destroys its joints. Creating or destroying a joint wakes both bodies.
+ *
+ * Determinism (SPEC §5.7): joints are solved in joint index order (graph-colored with the rest).
+ * Memory: the first de_joint_create allocates the joint pool (cvar physics.joints.max_joints;
+ * 0 = between 64 and 4096, at most max_bodies); later creates and steps allocate nothing.
+ */
+
+/** de_joint_desc.motor_mode[i]. */
+typedef enum de_joint_motor_mode {
+    DE_JOINT_MOTOR_OFF = 0,  /**< no motor */
+    DE_JOINT_MOTOR_VELOCITY, /**< drive the speed along the axis to motor_target */
+    DE_JOINT_MOTOR_POSITION  /**< drive the coordinate along the axis to motor_target */
+} de_joint_motor_mode;
+
+/** de_joint_desc.axis_mode[i] (DE_JOINT_6DOF). */
+typedef enum de_joint_axis_mode {
+    DE_JOINT_AXIS_LOCKED = 0, /**< held at 0 */
+    DE_JOINT_AXIS_LIMITED,    /**< kept in [limits_min[i], limits_max[i]] */
+    DE_JOINT_AXIS_FREE        /**< not constrained */
+} de_joint_axis_mode;
+
 typedef enum de_joint_kind {
     DE_JOINT_FIXED,
     DE_JOINT_HINGE,
@@ -507,9 +578,50 @@ typedef struct de_joint_desc {
     f32 limits_min[6], limits_max[6]; /* per-axis for 6DOF; [0] used by 1-DOF joints */
     f32 motor_target[6], motor_max_force[6];
     f32 break_force; /* 0 = unbreakable */
+    /* DENG-220 (appended): see the Joints comment above. */
+    de_body body_a, body_b;               /* invalid = the world (or the entity, DENG-223) */
+    f32 hertz, damping_ratio;             /* softness of locked axes and limits; 0 = rigid */
+    de_joint_motor_mode motor_mode[6];    /* per axis; OFF by default */
+    f32 motor_hertz, motor_damping_ratio; /* position motors; 0 = stiff */
+    de_joint_axis_mode axis_mode[6];      /* DE_JOINT_6DOF only; LOCKED by default */
+    bool enable_limit;                    /* hinge, slider: limit axis 0 */
+    bool collide_connected;               /* false: the two bodies never collide */
 } de_joint_desc;
+/**
+ * Creates a joint (see the Joints comment). Allocates the joint pool on first use only. Wakes
+ * both bodies. On failure returns an invalid handle and sets the error context:
+ * DE_ERR_INVALID_ARGUMENT (unknown kind, stale body, both sides the world or the same body, an
+ * entity side without a body, non-finite frame, limits min > max where they apply, negative
+ * force, hertz or damping), DE_ERR_OUT_OF_MEMORY (pool full or not allocatable) or
+ * DE_ERR_ALREADY_EXISTS (another joint class is registered with the solver).
+ */
 DE_API de_joint de_joint_create(de_physics_world *p, const de_joint_desc *desc);
+/** Destroys a joint and wakes its bodies; stale handles are ignored. */
 DE_API void de_joint_destroy(de_physics_world *p, de_joint j);
+
+/* Joints block (DENG-220 additions). */
+
+/** true if `j` is a live joint of `p` (broken joints are live until destroyed). */
+DE_API bool de_joint_valid(const de_physics_world *p, de_joint j);
+/** true when the joint broke (break_force exceeded); false for a stale handle. */
+DE_API bool de_joint_is_broken(const de_physics_world *p, de_joint j);
+/** Sets motor_target[axis] (axis 0..5); wakes the bodies when the value changes. false for a
+ *  stale handle, a bad axis or a non-finite target. */
+DE_API bool de_joint_set_motor_target(de_physics_world *p, de_joint j, u32 axis, f32 target);
+
+/** A joint that broke in the last step. */
+typedef struct de_joint_break_event {
+    de_joint joint;
+    de_body body_a, body_b; /**< invalid for the world */
+    de_entity a, b;         /**< de_joint_desc.a / .b */
+    f32 force;              /**< the force that broke it (N) */
+} de_joint_break_event;
+
+/**
+ * The joints that broke in the last de_physics_step, in joint index order. Writes at most `max`
+ * events (out may be NULL when max is 0) and returns how many joints broke.
+ */
+DE_API u32 de_physics_joint_breaks(const de_physics_world *p, de_joint_break_event *out, u32 max);
 
 /* ---------- ECS components ---------- */
 typedef struct DeRigidBody {
