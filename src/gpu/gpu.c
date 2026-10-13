@@ -27,6 +27,9 @@ static const backend_entry k_backends[] = {
 #if DE_HAS_GPU_METAL
     {DE_GPU_METAL, &de__gpu_metal_vtable},
 #endif
+#if DE_HAS_GPU_D3D12
+    {DE_GPU_D3D12, &de__gpu_d3d12_vtable},
+#endif
 };
 
 /* Run-time overrides (de__gpu_register_backend). Static storage starts as NULL. */
@@ -384,6 +387,8 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
     d->caps.backend = backend;
 
     de__gpu_bindless_init(&d->bindless, a, &d->caps);
+    if (vt->bindless_shared_resource_heap)
+        de__gpu_bindless_share_resource_numbering(&d->bindless);
     for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k) {
         size_t elem = DE__GPU_ALIGN16(k_rec_size[k]) + vt->payload_size[k];
         r = de__gpu_pool_init(&d->pools[k], a, de__gpu_kind_name((de__gpu_kind)k), (u32)elem,

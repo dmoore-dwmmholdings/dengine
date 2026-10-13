@@ -77,3 +77,24 @@ endif()
 # DENG-287: the Metal backend (tests/unit/gpu/metal/, executable test_gpu_metal). The directory
 # returns early when de_gpu_metal is not built.
 add_subdirectory(metal)
+
+# DENG-285: the D3D12 backend, executable test_gpu_d3d12 (CTest names gpu_d3d12.d3d12.<test>).
+# d3d12.caps_evaluator and d3d12.bindless_shared_numbering run on every host: without the D3D12
+# backend the test compiles the pure caps evaluator (src/gpu/d3d12/d3d12_caps.c) itself. On
+# Windows it also creates devices (every adapter, WARP on CI), with the Agility runtime copied
+# next to it (the test exports D3D12SDKVersion / D3D12SDKPath).
+set(_de_d3d12_test_sources d3d12/test_d3d12_device.c)
+set(_de_d3d12_test_libs de_gpu)
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_d3d12_test_libs de_gpu_d3d12 de_tp_d3d12_agility)
+else()
+    list(APPEND _de_d3d12_test_sources "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_caps.c")
+endif()
+de_add_test(NAME gpu_d3d12
+    SOURCES ${_de_d3d12_test_sources}
+    LIBS ${_de_d3d12_test_libs}
+    TIMEOUT 300)
+if(TARGET test_gpu_d3d12)
+    target_include_directories(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/src")
+    de_d3d12_agility_deploy(test_gpu_d3d12)
+endif()

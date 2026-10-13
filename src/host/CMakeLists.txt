@@ -87,3 +87,10 @@ target_sources(de_host PRIVATE host_crash.h host_crash.c)
 
 # DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c).
 target_sources(de_host PRIVATE host_packs.h host_packs.c)
+
+# DENG-285: the D3D12 Agility SDK runtime (D3D12Core.dll, d3d12SDKLayers.dll) goes into D3D12/
+# next to the host executable, which exports D3D12SDKVersion / D3D12SDKPath (exe/dengine_main.c).
+# A no-op without the D3D12 backend (third_party/d3d12_agility/CMakeLists.txt).
+if(TARGET dengine_exe)
+    de_d3d12_agility_deploy(dengine_exe)
+endif()
