@@ -178,9 +178,12 @@ DE_API void de_physics_destroy(de_physics_world *p);
  * ECS integration (SPEC §13.1): registers the DeRigidBody, DeCollider and DeCharacter components
  * (with DE_COMP_SNAPSHOT) and their field types in `types`, and inserts a DePhysicsWorld resource
  * that points to `p` into `w`. `types` must be the type registry `w` was created with. Calling it
- * again for the same world is harmless. The FixedUpdate systems that sync components and bodies
- * come in S23. This is the only function of the module that touches the ECS.
- * @return DE_OK, DE_ERR_INVALID_ARGUMENT, or a registration error (see de_component_register).
+ * again for the same world is harmless. Since DENG-223 it also registers the contact and joint
+ * break event types and adds the systems DE_PHYSICS_STEP_SYSTEM and DE_PHYSICS_INTERPOLATE_SYSTEM
+ * (see "ECS integration" below). One physics world serves one ECS world. This is the only
+ * function of the module that touches the ECS.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_ALREADY_EXISTS (`p` is attached to another
+ *         ECS world), DE_ERR_OUT_OF_MEMORY, or a registration error (see de_component_register).
  */
 DE_API de_result de_physics_attach(de_physics_world *p, de_world *w, de_type_registry *types);
 /**
@@ -653,6 +656,9 @@ typedef struct DeRigidBody {
     f32 gravity_scale;
     bool ccd, allow_sleep, lock_rot_x, lock_rot_y, lock_rot_z;
     de_body body; /* internal, set by the physics system */
+    /* DENG-223 (appended): true = physics.interpolate leaves this body's DeGlobalTransform at the
+     * simulated pose (no fixed-step interpolation). */
+    bool no_interpolate;
 } DeRigidBody;
 /* DeCollider.shape is a runtime handle: snapshotted, not serialized (assets bind it, S23). */
 
@@ -762,6 +768,87 @@ typedef struct de_contact_event {
     de_vec3 normal;
     f32 impulse;
 } de_contact_event;
+
+/* ---------- ECS integration (DENG-223) ----------
+ * de_physics_attach() adds two systems to the ECS world (SPEC §13.1, §10.2):
+ *
+ * DE_PHYSICS_STEP_SYSTEM ("physics.step"), DE_SCHEDULE_FIXED_UPDATE, DE_SYSTEM_DETERMINISTIC.
+ * It declares write access to DeRigidBody, DeCharacter, DeTransform and the DePhysicsWorld
+ * resource, read access to DeCollider, and sends the two event types below. Each run (one tick of
+ * the fixed dt):
+ *   1. Removes the bodies of entities that were despawned or lost their components, in entity
+ *      index order.
+ *   2. Syncs ECS to physics, in archetype / row order of the changed components:
+ *      - An entity with DeRigidBody + DeCollider gets a body of DeRigidBody.type; DeCollider
+ *        without DeRigidBody gets a static body; DeCharacter (with or without the others) gets a
+ *        character (de_character_create, owner = the entity). DeTransform (optional; identity when
+ *        absent) is the world pose of the body origin (the character's capsule center); its
+ *        scale is ignored. Entities with a parent are not supported (DeTransform is read as the
+ *        world pose). A non-identity DeCollider.offset puts the shape in a one-child compound that
+ *        the system owns. DeRigidBody.body is set to the body. Bodies are created the tick the
+ *        components are seen, so an entity spawned before the run has its body after it.
+ *      - Changing DeRigidBody.type or .mass, or any DeCollider field, re-creates the body (same
+ *        pose and velocity, new handle; contacts end and begin again). Damping, gravity_scale,
+ *        ccd, allow_sleep and the rotation locks are applied in place.
+ *      - A DeRigidBody velocity or a DeTransform pose that a game changed (and that differs from
+ *        the body's) is pushed into the body: a teleport for dynamic and static bodies and
+ *        characters; for a kinematic body the pose is a target, reached exactly at the end of the
+ *        tick (its velocity is set for the step, then back to DeRigidBody's velocities).
+ *        Unchanged values are never written, so sleeping bodies stay asleep.
+ *   3. Moves every character (de_character_move with DeCharacter, in query order).
+ *   4. de_physics_step(dt).
+ *   5. Writes the pose of every dynamic and kinematic body and character back to DeTransform, and
+ *      the velocities of dynamic bodies to DeRigidBody, only when they changed.
+ *   6. Sends the contact events of the step, then the joint break events.
+ * Game systems in FixedUpdate that write these components run after physics.step unless they
+ * name it in de_system_desc.before (systems that conflict run in registration order).
+ *
+ * DE_PHYSICS_INTERPOLATE_SYSTEM ("physics.interpolate"), DE_SCHEDULE_POST_UPDATE, after
+ * DE_TRANSFORM_PROPAGATE_SYSTEM. Presentation only (not deterministic): for every dynamic and
+ * kinematic body (unless DeRigidBody.no_interpolate) and character without a parent, it writes
+ * DeGlobalTransform = the pose between the last two ticks, at the frame's alpha (position lerp in
+ * f64, rotation nlerp; alpha >= 1, as in variable timing, gives the last tick's pose exactly),
+ * and recomputes the DeGlobalTransform of its descendants. It never writes DeTransform or any
+ * other component FixedUpdate reads, so the simulation is the same with or without it.
+ *
+ * Contact events (de_contact_event), one per body pair and transition, in body-pair order:
+ *   - DE_CONTACT_BEGIN: the pair's first contact manifold (the shapes came within the
+ *     speculative margin). `a` / `b` are the owners of the lower / higher body index, `normal`
+ *     points from a to b, `point` is the mean of the contact points (world, f64) and `impulse`
+ *     the pair's summed normal impulse of the step (N s).
+ *   - DE_CONTACT_END: the pair's last manifold ended (they separated, or a body was destroyed:
+ *     its entity may be dead). point, normal and impulse are zero.
+ *   - DE_TRIGGER_ENTER / DE_TRIGGER_EXIT: the same for pairs with a trigger (DeCollider.is_trigger)
+ *     body, which never get a collision response. `point` is the other body's origin (b's when
+ *     both are triggers); normal and impulse are zero.
+ * An END sorts before a BEGIN of the same pair. Bodies outside the ECS have DE_ENTITY_NULL;
+ * pairs where both are DE_ENTITY_NULL send nothing.
+ *
+ * Joint breaks: each de_joint_break_event of de_physics_joint_breaks() after the step, with `a` /
+ * `b` filled from the bodies' owners when the joint was made with body handles.
+ *
+ * Entity joints: de_joint_create() resolves de_joint_desc.a / .b (when body_a / body_b are
+ * invalid) to the entities' bodies; an entity has a body once physics.step has run after it got
+ * its components (de_physics_entity_body). Despawning an entity destroys its body and its joints.
+ *
+ * DeRigidBody added through the ECS is constructed with gravity_scale 1 and allow_sleep true
+ * (type static, everything else 0).
+ *
+ * Lifetime: destroy the ECS world before the physics world (the systems point to it).
+ */
+
+/** Name of the FixedUpdate physics system (de_system_desc.before / after). */
+#define DE_PHYSICS_STEP_SYSTEM "physics.step"
+/** Name of the PostUpdate interpolation system. */
+#define DE_PHYSICS_INTERPOLATE_SYSTEM "physics.interpolate"
+
+/** The event type of de_contact_event in the attached ECS world (invalid before attach). */
+DE_API de_event_type de_physics_contact_event_type(const de_physics_world *p);
+/** The event type of de_joint_break_event in the attached ECS world (invalid before attach). */
+DE_API de_event_type de_physics_joint_break_event_type(const de_physics_world *p);
+/** The body physics.step made for entity `e` (rigid body, static collider or character), or an
+ *  invalid handle (no body yet, or not attached). */
+DE_API de_body de_physics_entity_body(const de_physics_world *p, de_entity e);
 
 /* ---------- 2D (same design, operates in the configured 2D plane) ---------- */
 /*

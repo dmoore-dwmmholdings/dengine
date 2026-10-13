@@ -206,3 +206,18 @@ if(TARGET test_physics_ccd)
     target_include_directories(test_physics_ccd PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_physics_ccd PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-223: the ECS systems. physics_ecs: spawn / despawn sync, component changes, static
+# colliders, kinematic targets, sleeping, characters, entity joints and break events, no
+# allocation per tick. physics_contact_events: begin / end, triggers, order, impulses.
+# physics_interpolation: alpha blend at 30 Hz / 144 Hz, variable-mode pass-through, the
+# simulation unchanged by interpolation, children, opt-out.
+de_add_test(NAME physics_ecs SOURCES test_physics_ecs.c LIBS de_physics)
+de_add_test(NAME physics_contact_events SOURCES test_contact_events.c LIBS de_physics)
+de_add_test(NAME physics_interpolation SOURCES test_interpolation.c LIBS de_physics)
+foreach(_de_pe_test test_physics_ecs test_physics_contact_events test_physics_interpolation)
+    if(TARGET ${_de_pe_test})
+        target_include_directories(${_de_pe_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_pe_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

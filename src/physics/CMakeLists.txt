@@ -136,3 +136,16 @@ endif()
 if(TARGET de_physics)
     target_sources(de_physics PRIVATE ccd_internal.h)
 endif()
+
+# DENG-223: the ECS systems (physics.step in FixedUpdate: ECS sync, character moves, step,
+# write-back, contact and joint break events; physics.interpolate in PostUpdate). ecs/attach.c is
+# in the DENG-132 list above.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        ecs/phys_ecs.h
+        ecs/entity_map.c
+        ecs/sync.c
+        ecs/systems.c
+        ecs/contact_events.c
+        ecs/interpolation.c)
+endif()
