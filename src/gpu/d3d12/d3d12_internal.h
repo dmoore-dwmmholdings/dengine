@@ -13,6 +13,8 @@
  * d3d12_resources.c (buffers, textures, samplers, formats), d3d12_bindless.c (descriptor heaps).
  * DENG-286: d3d12_cmd.c (command lists, render passes, copies), d3d12_barriers.c (barrier
  * translation, portable, and recording), d3d12_sync.c (submit, fences), d3d12_swapchain.c (DXGI).
+ * DENG-324: d3d12_root_signature.c, d3d12_pipeline.c (PSOs, DXIL reader), d3d12_pipeline_library.c,
+ * d3d12_draw.c (draws, dispatches, indirect).
  */
 #ifndef DE_GPU_D3D12_INTERNAL_H
 #define DE_GPU_D3D12_INTERNAL_H
@@ -238,6 +240,115 @@ de__d3d12_legacy_op de__d3d12_translate_legacy(de_gpu_queue cmd_queue, const de_
 /** D3D12 subresource index: mip + layer * mips + plane * mips * layers. */
 u32 de__d3d12_subresource(u32 mip, u32 layer, u32 plane, u32 mips, u32 layers);
 
+/* ---------- Pipelines: DXIL reader, pipeline keys, library file, scissor (portable, DENG-324) ---
+ *
+ * d3d12_pipeline.c and d3d12_pipeline_library.c keep these parts free of Windows headers, so the
+ * unit tests run them on every build host. */
+
+/* DXIL program kinds: DXIL::ShaderKind, the high 16 bits of DxilProgramHeader.ProgramVersion. */
+#define DE__DXIL_KIND_PIXEL         0u
+#define DE__DXIL_KIND_VERTEX        1u
+#define DE__DXIL_KIND_COMPUTE       5u
+#define DE__DXIL_KIND_MESH          13u
+#define DE__DXIL_KIND_AMPLIFICATION 14u
+/** Constant buffers a de__d3d12_dxil_info lists (more are counted, not listed). */
+#define DE__DXIL_MAX_CBUFFERS 8u
+
+/** One constant buffer of a DXIL module's `dx.resources` metadata. */
+typedef struct de__d3d12_dxil_cbuffer {
+    u32 space, lower_bound; /**< register space, first `b` register */
+    u32 size;               /**< bytes (the cbuffer layout's size, not rounded to 16) */
+} de__d3d12_dxil_cbuffer;
+
+/** What de__d3d12_dxil_scan read from a DXIL container. */
+typedef struct de__d3d12_dxil_info {
+    u32 kind;                /**< DE__DXIL_KIND_* */
+    u32 shader_model;        /**< 0x66 = 6.6 (D3D_SHADER_MODEL numbering) */
+    u32 threadgroup[3];      /**< compute, mesh, amplification (PSV0 v2+); 0 when unknown */
+    u32 push_constant_bytes; /**< size of the constant buffer at b0 space0 (root constants), or 0 */
+    u32 target_mask;         /**< pixel shaders: bit i set = SV_Target i is an output */
+    u32 cbuffer_count;       /**< constant buffers in dx.resources */
+    de__d3d12_dxil_cbuffer cbuffers[DE__DXIL_MAX_CBUFFERS];
+    bool has_psv;     /**< a PSV0 part with runtime info v2+ (threadgroup known) */
+    bool has_outputs; /**< an OSG1 or OSGN part (target_mask known) */
+    bool has_bitcode; /**< the module's metadata was read (push_constant_bytes known) */
+    /** What the bitcode reader saw (diagnostics for tests): module values counted, module-level
+     * integer constants, metadata ids, metadata record codes seen (bit n = code n < 64), named
+     * metadata names (the first ones, ';'-separated), and the !dx.resources tuple's id (~0u when
+     * none). */
+    struct {
+        u32 globals, constants, metadata;
+        u64 md_codes;
+        char names[96];
+        u32 resources;
+        char trace[256]; /**< how the !dx.resources walk went */
+    } bc;
+} de__d3d12_dxil_info;
+
+/**
+ * Reads a DXIL container (the bytes a pipeline gets for one stage): the DXBC container and its
+ * parts, the DXIL program header (kind, shader model), PSV0 (threadgroup size), OSG1/OSGN (pixel
+ * outputs) and the LLVM bitcode of the module, of which only the `dx.resources` constant buffers
+ * are read (a small bitstream reader, no LLVM). DE_ERR_PARSE with the reason in `why` when the
+ * bytes are not a well-formed DXIL container; DE_ERR_OUT_OF_MEMORY when `a` fails.
+ */
+de_result de__d3d12_dxil_scan(const void *code, u64 size, const de_allocator *a,
+                              de__d3d12_dxil_info *out, char *why, size_t why_cap);
+/** "pixel", "vertex", "compute", "mesh", "amplification", or "kind <n>". Never NULL. */
+const char *de__d3d12_dxil_kind_name(u32 kind);
+
+/** A pipeline's key in the pipeline library: a hash of everything that goes into its D3D12 state
+ * stream (the stage blobs' bytes, formats, blend, cull, depth). Equal descs give equal keys; the
+ * name and the threadgroup sizes are not part of it. */
+u64 de__d3d12_pipeline_key(const de_gpu_pipeline_desc *desc);
+
+/** A scissor rectangle as D3D12_RECT holds it. */
+typedef struct de__d3d12_rect {
+    i32 left, top, right, bottom;
+} de__d3d12_rect;
+/** D3D12_VIEWPORT_BOUNDS_MAX: scissor edges stay inside 0 .. this. */
+#define DE__D3D12_SCISSOR_MAX 32767
+/** de_gpu_cmd_scissor's rectangle cut to 0 .. DE__D3D12_SCISSOR_MAX (left <= right, top <=
+ * bottom). */
+de__d3d12_rect de__d3d12_scissor_rect(i32 x, i32 y, u32 w, u32 h);
+
+/* The pipeline library file (d3d12_pipeline_library.c): this header, `key_count` u64 keys (the
+ * pipelines stored in the library, de__d3d12_pipeline_key), then the bytes of
+ * ID3D12PipelineLibrary::Serialize. */
+#define DE__D3D12_PIPELINE_LIBRARY_MAGIC   0x4C504444u /* "DDPL" */
+#define DE__D3D12_PIPELINE_LIBRARY_VERSION 1u
+typedef struct de__d3d12_pipeline_library_file {
+    u32 magic, version;
+    u32 vendor_id, device_id;
+    u64 driver_version; /**< the adapter's user-mode driver version (4 x u16, high first) */
+    u32 key_count;
+    u32 reserved;  /**< 0 */
+    u64 data_size; /**< library bytes after the keys */
+    u64 data_hash; /**< de_hash64 of the keys and the library bytes, seed MAGIC */
+} de__d3d12_pipeline_library_file;
+DE_STATIC_ASSERT(sizeof(de__d3d12_pipeline_library_file) == 48, "pipeline library header");
+
+/** What de__d3d12_pipeline_library_check found in a file. */
+typedef struct de__d3d12_pipeline_library_view {
+    const u8 *keys; /**< key_count little-endian u64 (maybe unaligned) */
+    u32 key_count;
+    const u8 *data; /**< the serialized library */
+    u64 data_size;
+} de__d3d12_pipeline_library_view;
+
+/**
+ * Checks a pipeline library file for this adapter: size, magic and version, the checksum, the
+ * vendor and device IDs and the driver version. True with `out` set when it may go to
+ * CreatePipelineLibrary; false with the reason in `why` (a file made by another driver version
+ * says "driver").
+ */
+bool de__d3d12_pipeline_library_check(const void *file, u64 size, u32 vendor_id, u32 device_id,
+                                      u64 driver_version, de__d3d12_pipeline_library_view *out,
+                                      char *why, size_t why_cap);
+/** `<dir>/d3d12-<vendor>-<device>-<driver a.b.c.d>.bin` (hex IDs). False when it does not fit. */
+bool de__d3d12_pipeline_library_path(char *out, size_t cap, const char *dir, u32 vendor_id,
+                                     u32 device_id, u64 driver_version);
+
 /* ---------- The backend (Windows) ---------- */
 #if defined(_WIN32)
 
@@ -306,6 +417,8 @@ typedef struct d3d12_device {
     /* DENG-286: command lists and barriers. */
     de_atomic_u32 barrier_mode; /**< DE__D3D12_BARRIERS_*; chosen by the first cmd_init */
     de_atomic_u64 cmd_serial;   /**< numbers command-list recordings (legacy state tracking) */
+    /* DENG-324: root signature, command signatures, pipeline library (d3d12_pipeline.c). */
+    struct d3d12_pipe_state *pipe;
 } d3d12_device;
 
 typedef struct d3d12_buffer {
@@ -443,6 +556,12 @@ typedef struct d3d12_cmd {
     u64 serial;    /**< this recording's number (d3d12_device.cmd_serial) */
     bool enhanced; /**< the device records enhanced barriers */
     bool open;     /**< recording: Close() before ExecuteCommandLists */
+    /* DENG-324 (d3d12_draw.c): the recording (`serial`) that last set the graphics [0] and compute
+     * [1] root signature; the bound pipeline's kind; the list as ID3D12GraphicsCommandList6
+     * (DispatchMesh), queried on first use and not counted (the list holds the reference). */
+    u64 root_serial[2];
+    de_gpu_pipeline_kind bound_kind;
+    ID3D12GraphicsCommandList6 *list6;
 } d3d12_cmd;
 
 /** User fence payload: a timeline ID3D12Fence. */
@@ -517,6 +636,102 @@ de_gpu_colorspace de__d3d12_swapchain_colorspace(de_gpu_device *d, de__gpu_swapc
 /** Test hook: true when `d` is a D3D12 device that records enhanced barriers (decided by its first
  * command list; false before that, for other devices and with legacy barriers). */
 bool de__d3d12_enhanced_barriers_active(de_gpu_device *d);
+
+/* ---------- Pipelines, root signature, pipeline library, draws (DENG-324) ----------
+ *
+ * d3d12_root_signature.c (the global root signature), d3d12_pipeline.c (PSOs from state streams,
+ * the DXIL checks, device-level setup), d3d12_pipeline_library.c (ID3D12PipelineLibrary1 on disk),
+ * d3d12_draw.c (pipeline binding, root constants, draws, dispatches, ExecuteIndirect). */
+
+/** d3d12_pipe_state.library_state. */
+enum {
+    DE__D3D12_LIBRARY_OFF,     /**< no library: pipeline_cache_dir "" or no driver support */
+    DE__D3D12_LIBRARY_EMPTY,   /**< no file yet: an empty library */
+    DE__D3D12_LIBRARY_LOADED,  /**< started from the file */
+    DE__D3D12_LIBRARY_REJECTED /**< the file was refused (warning logged): an empty library */
+};
+
+/** Device-level pipeline state (d3d12_device.pipe), made by de__d3d12_pipelines_init. */
+typedef struct d3d12_pipe_state {
+    ID3D12Device1 *dev1;       /**< CreatePipelineLibrary */
+    ID3D12Device2 *dev2;       /**< CreatePipelineState (streams) */
+    ID3D12RootSignature *root; /**< the global root signature; NULL when unsupported */
+    char root_why[192];        /**< why there is no root signature */
+    ID3D12CommandSignature *sig_draw_indexed, *sig_dispatch, *sig_dispatch_mesh;
+    /* Pipeline library (d3d12_pipeline_library.c). */
+    ID3D12PipelineLibrary1 *library;
+    de_mutex lock; /**< library calls and `keys` */
+    u32 library_state;
+    char path[512]; /**< the library file, "" without one */
+    void *file;     /**< the loaded file: CreatePipelineLibrary needs it while the library lives */
+    u64 file_size;
+    u64 *keys; /**< pipelines in the library, sorted */
+    u32 key_count, key_cap;
+    u64 loaded_bytes;
+    u64 driver_version;
+    de_atomic_u32 hits, misses, stored;
+} d3d12_pipe_state;
+
+/** Pipeline payload. */
+typedef struct d3d12_pipeline {
+    ID3D12PipelineState *pso;
+    de_gpu_pipeline_kind kind;
+} d3d12_pipeline;
+
+/* d3d12_pipeline.c */
+/** Root signature, command signatures, pipeline library (`dir` as de_gpu_device_desc.
+ * pipeline_cache_dir). Fails only when out of memory: a device without SM 6.6 and binding tier 3
+ * gets no root signature, and its pipeline_create fails with DE_ERR_UNSUPPORTED. */
+de_result de__d3d12_pipelines_init(de_gpu_device *d, const char *dir);
+/** Saves the pipeline library and releases everything init made (also after a partial init). */
+void de__d3d12_pipelines_shutdown(de_gpu_device *d);
+de_result de__d3d12_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
+                                    const de_gpu_pipeline_desc *desc);
+void de__d3d12_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p);
+
+/* d3d12_root_signature.c */
+/** Serializes the global root signature (version 1.1): heap-direct-indexed flags, 32 root
+ * constants at b0 space0 for every stage. The caller releases `*out`. */
+de_result de__d3d12_root_signature_serialize(ID3DBlob **out);
+/** Makes d3d12_pipe_state.root, or leaves it NULL with root_why set. */
+void de__d3d12_root_signature_init(de_gpu_device *d);
+
+/* d3d12_pipeline_library.c */
+void de__d3d12_library_init(de_gpu_device *d, const char *dir);
+/** Saves the library when this device stored pipelines in it, then releases it. */
+void de__d3d12_library_shutdown(de_gpu_device *d);
+/** The PSO of `stream`: loaded from the library when it holds `key`, else created (and stored).
+ * Without a library: CreatePipelineState. Returns the HRESULT of the failing call. */
+HRESULT de__d3d12_library_pipeline(de_gpu_device *d, u64 key,
+                                   const D3D12_PIPELINE_STATE_STREAM_DESC *stream,
+                                   ID3D12PipelineState **out);
+
+/* d3d12_draw.c */
+void de__d3d12_command_signatures_init(de_gpu_device *d);
+void de__d3d12_cmd_set_pipeline(de_gpu_cmd *c, de__gpu_pipeline *p);
+void de__d3d12_cmd_push_constants(de_gpu_cmd *c, const void *data, u32 bytes);
+void de__d3d12_cmd_draw(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                        u32 first_instance);
+void de__d3d12_cmd_draw_indexed(de_gpu_cmd *c, u32 index_count, u32 instance_count, u32 first_index,
+                                i32 vertex_offset, u32 first_instance);
+void de__d3d12_cmd_set_index_buffer(de_gpu_cmd *c, de__gpu_buffer *b, u64 offset, bool index_u16);
+void de__d3d12_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
+void de__d3d12_cmd_dispatch(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__d3d12_cmd_dispatch_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset);
+void de__d3d12_cmd_draw_indexed_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                         de__gpu_buffer *count, u64 count_offset, u32 max_draws);
+void de__d3d12_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__d3d12_cmd_dispatch_mesh_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                          de__gpu_buffer *count, u64 count_offset, u32 max);
+
+/* Test hooks (tests/unit/gpu/d3d12/test_d3d12_pipeline.c). */
+/** True when `d` is a D3D12 device that can create pipelines; else false with the reason. */
+bool de__d3d12_pipelines_supported(de_gpu_device *d, const char **why);
+/** The pipeline library's DE__D3D12_LIBRARY_* state and counters: pipelines loaded from it
+ * (`hits`), created because it lacked them (`misses`), bytes of the file it started from, and the
+ * file's path. OFF for other devices. */
+u32 de__d3d12_pipeline_library_state(de_gpu_device *d, u32 *hits, u32 *misses, u64 *loaded_bytes,
+                                     const char **path);
 
 #endif /* _WIN32 */
 #endif
