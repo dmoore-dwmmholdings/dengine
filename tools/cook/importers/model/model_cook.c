@@ -15,6 +15,7 @@
  * Extension points (append only, DENG-103 and DENG-104): model_mesh_stage and
  * model_emit_skeletons_and_clips below. DENG-102 adds its front end in model_load_source.
  */
+#include "anim_cook.h"
 #include "fbx_import.h"
 #include "model_import.h"
 #include "model_internal.h"
@@ -317,15 +318,10 @@ static de_result model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, const 
                                                 de_model_ir *ir, const de_model_names *names,
                                                 de_asset_id *skeleton_ids, u32 *skeleton_count,
                                                 de_asset_id *clip_ids, u32 *clip_count) {
-    (void)ctx;
     (void)s;
-    (void)ir;
-    (void)names;
-    (void)skeleton_ids;
-    (void)clip_ids;
-    *skeleton_count = 0;
-    *clip_count = 0;
-    return DE_OK;
+    /* DENG-104: anim_skeleton.c and anim_clip_compress.c (settings `anim_*`, see anim_cook.h). */
+    return de_model_emit_skeletons_and_clips(ctx, ir, names, skeleton_ids, skeleton_count, clip_ids,
+                                             clip_count);
 }
 
 static de_asset_id sub_id(de_model_ir *ir, const char *model_id, const char *name) {

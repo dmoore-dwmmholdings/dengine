@@ -1,0 +1,13 @@
+Khronos glTF sample models used by tests/unit/import/test_skeleton_clip.c (DENG-104), copied
+unchanged from https://github.com/KhronosGroup/glTF-Sample-Assets (branch main, 2026-10-13).
+Each keeps its own licence, as stated in the sample's README there:
+
+  CesiumMan.glb                       (Models/CesiumMan/glTF-Binary)
+      (c) 2017, Cesium. Creative Commons Attribution 4.0 International (CC BY 4.0),
+      https://creativecommons.org/licenses/by/4.0/legalcode
+      The Cesium logo in its texture: (c) 2015, Cesium, Cesium Trademark or Logo
+      (LicenseRef-LegalMark-Cesium in the repository above).
+
+  RiggedFigure.glb                    (Models/RiggedFigure/glTF-Binary)
+      (c) 2017, Cesium. Creative Commons Attribution 4.0 International (CC BY 4.0),
+      https://creativecommons.org/licenses/by/4.0/legalcode

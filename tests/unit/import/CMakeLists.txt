@@ -53,3 +53,17 @@ if(TARGET test_import)
     target_sources(test_import PRIVATE mesh_fixtures.h test_meshlets.c test_mesh_lod.c)
     target_link_libraries(test_import PRIVATE de_tp_meshoptimizer)
 endif()
+
+# DENG-104: skeletons and animation clips of the model importer (anim_skeleton.c,
+# anim_clip_compress.c): skeleton order and inverse binds, clip round trip through the reference
+# sampler (de_anim, src/anim/formats/clip_decode.c), constant tracks, smallest-three rotations,
+# hemisphere flips, step and cubic resampling, compression ratio, determinism and settings. CTest
+# names import_anim.<skeleton|clip>.<test>. data/anim/ (Khronos CesiumMan and RiggedFigure) is
+# mounted as animdata:/, data/gltf/ as animgltf:/.
+de_add_test(NAME import_anim SOURCES test_skeleton_clip.c
+            LIBS de_cooker de_anim de_asset de_platform TIMEOUT 120)
+if(TARGET test_import_anim)
+    target_include_directories(test_import_anim PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_import_anim PRIVATE
+        "DE_IMPORT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()

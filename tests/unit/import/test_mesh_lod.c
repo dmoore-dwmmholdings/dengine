@@ -678,7 +678,8 @@ TEST_F(mesh, cook_deterministic, mlod_fx) {
     ASSERT_EQ(s1->size, s2->size);
     EXPECT_MEMEQ(s1->data, s2->data, (size_t)s1->size);
     EXPECT_EQ(r1.importer_version, DE_MODEL_IMPORTER_VERSION);
-    EXPECT_EQ(DE_MODEL_IMPORTER_VERSION, 2u);
+    /* At least version 2, the one that introduced DMSH v2 (DENG-104 made it 3). */
+    EXPECT_GE(DE_MODEL_IMPORTER_VERSION, 2u);
     de_cook_result_free(&r2);
 
     /* Each setting of the mesh stage is in the settings hash and changes the output. */

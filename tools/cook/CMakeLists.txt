@@ -117,3 +117,15 @@ target_sources(de_cooker PRIVATE ${_de_mesh_stage_sources})
 set_source_files_properties(${_de_mesh_stage_sources} TARGET_DIRECTORY de_cooker
     PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
 target_link_libraries(de_cooker PRIVATE de_tp_meshoptimizer)
+
+# DENG-104: skeletons and animation clips of the model importer (tools/cook/importers/model/):
+# skins → skeleton sub-assets (DSKL), animations → compressed clip sub-assets (DCLP). The cooked
+# formats are header-only in the anim module (src/anim/formats/); the reference sampler is
+# src/anim/formats/clip_decode.c in de_anim. anim_clip_compress.c evaluates its error with the
+# sampler's inline helpers, so it gets the deterministic flags (no FMA contraction) like de_anim.
+target_sources(de_cooker PRIVATE
+    importers/model/anim_cook.h
+    importers/model/anim_skeleton.c
+    importers/model/anim_clip_compress.c)
+set_source_files_properties(importers/model/anim_clip_compress.c TARGET_DIRECTORY de_cooker
+    PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
