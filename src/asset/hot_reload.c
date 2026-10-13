@@ -834,6 +834,14 @@ void de__asset_reload_swap(de_asset_system *s, de__pjob *job, de_asset_id *deps)
     ev.error = DE_OK;
     de__asset_emit(s, &ev);
 
+    /* DENG-289: the type's own reload callback, with the new object in place. */
+    const de_asset_type_desc *new_type = de__asset_type_get(s, de__slot_type(s, sl));
+    if (new_type != NULL && new_type->reloaded != NULL) {
+        void *object = de__slot_object(sl);
+        if (object != NULL)
+            new_type->reloaded(object, id, new_type->user);
+    }
+
     dep_walk w = {id, job->slot, 0};
     de__slot_for_each_live(s, dependents_fn, &w);
     R->stats.dependents += w.calls;

@@ -62,3 +62,9 @@ target_sources(de_cooker PRIVATE
 # de_tp_tomlc17: only for its include path ("reflect/ser_internal.h", the float and hex formatters
 # of the prefab TOML, includes the core TOML header).
 target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect de_tp_tomlc17)
+
+# DENG-289: the shader importer (importers/shader/, target de_cook_shader): `.slang` to SPIR-V,
+# DXIL and metallib with reflection, through the prebuilt Slang (third_party/slang/). A separate
+# library, not part of de_cooker: its C++ shim and Slang stay out of every target that does not
+# cook shaders.
+add_subdirectory(importers/shader)

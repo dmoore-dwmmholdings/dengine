@@ -901,3 +901,86 @@ TEST_F(hot_reload, off, hr_fx) {
     EXPECT_EQ(reloaded((de_asset_id){0}), 0u);
     de_asset_release(f->s, h);
 }
+
+/* ---- hot_reload.own_reloaded -------------------------------------------------------------------
+ *
+ * DENG-289: a type's `reloaded` runs once per reload of its own asset, after the swap (its
+ * `object` is the new live object), after the RELOADED event and before the dependents'
+ * dependency_reloaded. Assets of other types and failed reloads do not call it; a type without
+ * the callback (`hr`) behaves as before. */
+
+#if DE__ASSET_RELOAD_ENABLED
+static hr_fx *g_own_fx;
+static u32 g_own_calls;
+static de_asset_id g_own_id;
+static bool g_own_was_live;      /* `object` was the slot's object when the callback ran */
+static u32 g_own_events_seen;    /* RELOADED events captured when the callback ran */
+static u32 g_own_dep_calls_seen; /* dependency_reloaded calls made when the callback ran */
+
+static void own_reloaded(void *object, de_asset_id id, void *user) {
+    hr_counters *c = (hr_counters *)user;
+    g_own_calls++;
+    g_own_id = id;
+    g_own_was_live = object == (const void *)obj_of(g_own_fx, "self");
+    g_own_events_seen = reloaded(id);
+    g_own_dep_calls_seen = c->dep_calls;
+}
+#endif
+
+TEST_F(hot_reload, own_reloaded, hr_fx) {
+#if !DE__ASSET_RELOAD_ENABLED
+    SKIP("hot reload is compiled in Debug and Dev builds only");
+#else
+    fx_system(f, "own_reloaded", true, 0, false);
+    g_own_fx = f;
+    g_own_calls = 0;
+    static const char *const exts[] = {".hro"};
+    de_asset_type_desc d = {0};
+    d.name = "hro";
+    d.extensions = exts;
+    d.extension_count = 1;
+    d.load = hr_load;
+    d.unload = hr_unload;
+    d.reloaded = own_reloaded;
+    d.user = &f->c;
+    ASSERT_TRUE(DE_HANDLE_VALID(de_asset_type_register(f->s, &d)));
+    put(f, "self.hr", "self v1");
+    put(f, "user.hr", "user v1");
+    put(f, "plain.hr", "plain v1");
+    manifest(f, "[assets]\n"
+                "\"self\" = { type = \"hro\", source = \"self.hr\" }\n"
+                "\"user\" = { type = \"hr\", source = \"user.hr\", deps = [\"self\"] }\n"
+                "\"plain\" = { type = \"hr\", source = \"plain.hr\" }\n");
+    const char *const paths[] = {"user", "plain"};
+    de_load_handle h = load_all(f, paths, 2);
+    ASSERT_EQ((int)de_asset_status_of(f->s, id_of("self")), (int)DE_LOAD_READY);
+    EXPECT_EQ(g_own_calls, 0u); /* a first load is not a reload */
+
+    for (u32 round = 1; round <= 2; ++round) {
+        g_ev_count = 0;
+        char text[32];
+        snprintf(text, sizeof text, "self v%u", round + 1u);
+        put(f, "self.hr", text);
+        changed(f, "self.hr");
+        EXPECT_NE(pump(f), 0u);
+        EXPECT_EQ(g_own_calls, round);
+        EXPECT_EQ(g_own_id.hash, id_of("self").hash);
+        EXPECT_TRUE(g_own_was_live);
+        EXPECT_EQ(g_own_events_seen, 1u);            /* after RELOADED */
+        EXPECT_EQ(g_own_dep_calls_seen, round - 1u); /* before the dependents */
+        EXPECT_EQ(f->c.dep_calls, round);
+        EXPECT_STREQ(hr_bytes(obj_of(f, "self")), text);
+    }
+
+    /* Another type's reload, and a failed reload of `self`: no call. */
+    put(f, "plain.hr", "plain v2");
+    changed(f, "plain.hr");
+    EXPECT_NE(pump(f), 0u);
+    put(f, "self.hr", "FAIL now");
+    changed(f, "self.hr");
+    EXPECT_NE(pump(f), 0u);
+    EXPECT_EQ(g_own_calls, 2u);
+    EXPECT_STREQ(hr_bytes(obj_of(f, "self")), "self v3");
+    de_asset_release(f->s, h);
+#endif
+}

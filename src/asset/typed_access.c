@@ -114,3 +114,6 @@ de_prefab de_asset_prefab(de_asset_system *s, de_asset_id id) {
 de_blob de_asset_blob(de_asset_system *s, de_asset_id id) {
     return (de_blob){de__asset_handle_of(s, id, "blob")};
 }
+de_shader de_asset_shader(de_asset_system *s, de_asset_id id) {
+    return (de_shader){de__asset_handle_of(s, id, "shader")};
+}

@@ -32,3 +32,6 @@ foreach(_de_gpu_backend IN ITEMS d3d12 metal vulkan)
         target_link_libraries(de_gpu PUBLIC de_gpu_${_de_gpu_backend})
     endif()
 endforeach()
+
+# DENG-289: src/gpu/shader/ (the `shader` asset type) is its own module, target de_gpu_shader,
+# added by de_add_subdirectories() above: it depends on de_asset, which de_gpu must not.
