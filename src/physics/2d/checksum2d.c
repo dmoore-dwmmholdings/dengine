@@ -1,11 +1,14 @@
 /*
- * checksum2d.c: de_physics2d_checksum (DENG-252). DENG-253 adds the contact state.
+ * checksum2d.c: de_physics2d_checksum (DENG-252; DENG-253 appended the contact state).
  *
  * XXH3-64 (de_hash64) over an explicit little-endian byte encoding of the state, never raw struct
  * bytes (no padding leaks in): a header (tick, gravity, substeps, plane, live body count), then
- * one record per live body in ascending index order. Each record is hashed with the running value
- * as the seed. Floats are hashed by their bit patterns.
+ * one record per live body in ascending index order, then (DENG-253, once the contacts state
+ * exists) the manifolds in key order and the end records of the last step. Each record is hashed
+ * with the running value as the seed. Floats are hashed by their bit patterns. The contact part
+ * is appended after the bodies, so the body records hash as before.
  */
+#include "physics/2d/manifold2d.h"
 #include "physics/2d/p2d_internal.h"
 
 typedef struct ck_buf {
@@ -83,6 +86,53 @@ u64 de_physics2d_checksum(const de_physics2d_world *p) {
         ck_u64(&c, b->owner[i].bits);
         ck_v2(&c, b->world_aabb[i].min);
         ck_v2(&c, b->world_aabb[i].max);
+        h = de_hash64(c.b, c.n, h);
+    }
+
+    /* DENG-253: contacts (nothing before the first step created them). */
+    if (de__contacts2d_get(p) == NULL)
+        return h;
+    const de__manifold2d *m = NULL;
+    const de__contact_end2d *e = NULL;
+    u32 nm = 0, ne = 0;
+    de__contacts2d_manifolds(p, &m, &nm);
+    de__contacts2d_ended(p, &e, &ne);
+    c.n = 0;
+    ck_u32(&c, nm);
+    ck_u32(&c, ne);
+    h = de_hash64(c.b, c.n, h);
+    for (u32 i = 0; i < nm; ++i) {
+        const de__manifold2d *x = &m[i];
+        c.n = 0;
+        ck_u32(&c, x->key.a);
+        ck_u32(&c, x->key.b);
+        ck_u32(&c, x->key.child);
+        ck_u32(&c, x->gen_a);
+        ck_u32(&c, x->gen_b);
+        ck_u32(&c, x->id);
+        ck_u32(&c, x->flags);
+        ck_v2(&c, x->normal);
+        ck_u32(&c, x->point_count);
+        for (u32 j = 0; j < x->point_count && j < DE__P2D_MAX_POINTS; ++j) {
+            const de__contact2d *pt = &x->points[j];
+            ck_v2(&c, pt->local_a);
+            ck_v2(&c, pt->local_b);
+            ck_f32(&c, pt->separation);
+            ck_u32(&c, pt->feature_id);
+            ck_f32(&c, pt->normal_impulse);
+            ck_f32(&c, pt->tangent_impulse);
+        }
+        h = de_hash64(c.b, c.n, h);
+    }
+    for (u32 i = 0; i < ne; ++i) {
+        c.n = 0;
+        ck_u32(&c, e[i].key.a);
+        ck_u32(&c, e[i].key.b);
+        ck_u32(&c, e[i].key.child);
+        ck_u32(&c, e[i].gen_a);
+        ck_u32(&c, e[i].gen_b);
+        ck_u32(&c, e[i].id);
+        ck_u32(&c, e[i].flags);
         h = de_hash64(c.b, c.n, h);
     }
     return h;

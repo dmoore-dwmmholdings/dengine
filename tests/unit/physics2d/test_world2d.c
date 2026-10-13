@@ -611,6 +611,8 @@ TEST(physics2d_world, step_no_alloc) {
     for (u32 k = 0; k < 1000; ++k)
         (void)make_body(p, (de_body_type)(k % 3u), (k & 1u) ? box : hex, (f64)k);
     (void)make_body(p, DE_BODY_STATIC, chain, 0.0);
+    /* DENG-253: the first step creates the broadphase and the contacts state (warm-up). */
+    de_physics2d_step(p, 1.0f / 60.0f);
     const de_tracking_stats before = de_tracking_allocator_stats(&t);
     for (u32 s = 0; s < 120; ++s) {
         for (u32 k = 0; k < 1000; k += 7)

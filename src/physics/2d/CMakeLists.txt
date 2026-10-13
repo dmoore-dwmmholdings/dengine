@@ -20,3 +20,17 @@ target_sources(de_physics PRIVATE
     mass2d.c
     checksum2d.c
     step2d.c)
+
+# DENG-253: collision: 2D AABB trees and broadphase, narrowphase (circles, capsules, polygons,
+# segments, chain segments with ghost vertices), chain segment bounds, persistent manifolds and
+# the collision pipeline of the step.
+target_sources(de_physics PRIVATE
+    aabb_tree2d.h
+    aabb_tree2d.c
+    broadphase2d.h
+    broadphase2d.c
+    narrow2d.h
+    narrow2d.c
+    collide_chain2d.c
+    manifold2d.h
+    manifold2d.c)
