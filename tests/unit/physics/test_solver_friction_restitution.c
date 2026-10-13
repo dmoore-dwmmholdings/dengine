@@ -1,7 +1,9 @@
 /* test_solver_friction_restitution.c: contact materials of the soft-step solver (DENG-217, SPEC
  * §13.1): bounce heights against e^2 (restitution max-mixed, threshold), e = 0 does not bounce,
  * a box on an incline stays below the friction angle and slides above it (+-2 degrees),
- * sqrt friction mixing, and anisotropic friction picks its direction from the body axis. */
+ * sqrt friction mixing, and anisotropic friction picks its direction from the body axis.
+ * DENG-404: a subnormal friction pair on a speculative point, and two capsules end to end (one
+ * jointed, friction 0.6), stay finite. */
 #include "solver_test_util.h"
 
 #define PI_F 3.14159265359f
@@ -216,4 +218,131 @@ TEST(physics_solver_contact, body_material_validation) {
     EXPECT_TRUE(p->bodies.friction_axis[k].x == 0.0f && p->bodies.friction_axis[k].y == 0.0f &&
                 p->bodies.friction_axis[k].z == 0.0f);
     de_physics_destroy(p);
+}
+
+/* ---- degenerate friction (DENG-404) ------------------------------------------------------ */
+
+static bool fr_finite3(de_vec3 v) {
+    return v.x - v.x == 0.0f && v.y - v.y == 0.0f && v.z - v.z == 0.0f;
+}
+
+/* Smallest separation of the manifold points between bodies a and b (1 when there are none). */
+static f32 fr_pair_min_separation(const de_physics_world *p, de_body a, de_body b) {
+    const de__manifold *m = NULL;
+    u32 count = 0;
+    de__contacts_manifolds(p, &m, &count);
+    const u32 ia = de__handle_index(a.id), ib = de__handle_index(b.id);
+    f32 s = 1.0f;
+    for (u32 i = 0; i < count; ++i) {
+        if (!((m[i].key.a == ia && m[i].key.b == ib) || (m[i].key.a == ib && m[i].key.b == ia)))
+            continue;
+        for (u32 k = 0; k < m[i].point_count; ++k)
+            s = de__minf(s, m[i].points[k].separation);
+    }
+    return s;
+}
+
+/* A speculative point has no normal impulse yet, so the friction pair is clamped to the point
+ * ln = 0. A 1 kg unit box (tangent mass 0.25 at a corner) sliding at 1e-21 m/s gives a pair of
+ * about 1e-22: its squared length is a subnormal float, which de_dsqrt flushes to 0. The clamp
+ * divided by that root (0 / 0 = NaN). */
+TEST(physics_solver_contact, subnormal_friction_stays_finite) {
+    de_physics_world *p = st_world(16, NULL, NULL);
+    ASSERT_TRUE(p != NULL);
+    const de_shape g = st_box(p, 10.0f, 10.0f, 0.5f);
+    (void)st_body(p, DE_BODY_STATIC, g, st_xform(0, 0, -0.5, st_quat_identity()), 0.6f, 0.0f);
+    de_body_desc d;
+    memset(&d, 0, sizeof d);
+    d.type = DE_BODY_DYNAMIC;
+    d.shape = st_box(p, 0.5f, 0.5f, 0.5f);
+    d.transform = st_xform(0, 0, 0.51, st_quat_identity()); /* 1 cm above the ground */
+    d.mass = 1.0f;
+    d.material.friction = 0.6f;
+    d.linear_velocity = (de_vec3){1.0e-21f, 0.0f, 0.0f};
+    const de_body b = de_body_create(p, &d);
+    ASSERT_TRUE(DE_HANDLE_VALID(b));
+    for (u32 t = 0; t < 10u; ++t) {
+        de_physics_step(p, ST_DT);
+        EXPECT_TRUE(fr_finite3(st_vel(p, b)));
+        EXPECT_TRUE(fr_finite3(st_angvel(p, b)));
+    }
+    EXPECT_GT(de__contact_solver_points(p), 0u); /* the speculative point was solved */
+    ST_LT(st_lenf(st_vel(p, b)), 1.0e-6f);
+    EXPECT_FLOAT_EQ(st_pos(p, b).z, 0.51, 1e-6);
+    de_physics_destroy(p);
+}
+
+/*
+ * The DENG-224 case: two capsules end to end on one axis (X), the first held by a ball joint to
+ * the world at its far end, friction 0.6, no gravity. `x_b` places the second capsule.
+ *   - 0.31: the cores are 0.11 apart and the surfaces 1.5 cm. The narrowphase made a second,
+ *     extrapolated point with separation -(ra + rb) = -9.5 cm, the "deep overlap"; the push-out
+ *     and the subnormal friction clamp gave NaN velocities in the first step.
+ *   - 0.15: the cores overlap by 5 cm on the axis (coincident cores). The fallback normal (world
+ *     +Z) pushes the capsules apart sideways.
+ * Returns the largest speed seen; *min_sep is the smallest manifold separation of the pair after
+ * the last step.
+ */
+static f32 fr_capsules_end_to_end(f64 x_b, u32 ticks, f32 *min_sep, bool *finite) {
+    de_physics_world *p = st_world(16, NULL, NULL);
+    ASSERT_TRUE(p != NULL);
+    const de_quat along_x = st_quat_axis_angle((de_vec3){0, 1, 0}, 0.5f * PI_F);
+    de_shape_desc sd;
+    memset(&sd, 0, sizeof sd);
+    sd.kind = DE_SHAPE_CAPSULE;
+    sd.radius = 0.05f;
+    sd.half_height = 0.1f;
+    const de_shape sa = de_shape_create(p, &sd);
+    sd.radius = 0.045f;
+    const de_shape sb = de_shape_create(p, &sd);
+    de_body_desc d;
+    memset(&d, 0, sizeof d);
+    d.type = DE_BODY_DYNAMIC;
+    d.material.friction = 0.6f;
+    d.shape = sa;
+    d.transform = st_xform(0, 0, 0, along_x);
+    const de_body a = de_body_create(p, &d);
+    d.shape = sb;
+    d.transform = st_xform(x_b, 0, 0, along_x);
+    const de_body b = de_body_create(p, &d);
+    ASSERT_TRUE(DE_HANDLE_VALID(a) && DE_HANDLE_VALID(b));
+    de_joint_desc jd;
+    memset(&jd, 0, sizeof jd);
+    jd.kind = DE_JOINT_BALL;
+    jd.body_b = a;
+    jd.frame_a = st_xform(-0.15, 0, 0, st_quat_identity());
+    jd.frame_b = st_xform(0, 0, -0.15, st_quat_identity()); /* local -Z is world -X */
+    ASSERT_TRUE(DE_HANDLE_VALID(de_joint_create(p, &jd)));
+    f32 speed = 0.0f;
+    *finite = true;
+    for (u32 t = 0; t < ticks; ++t) {
+        de_physics_step(p, ST_DT);
+        const de_body both[2] = {a, b};
+        for (u32 k = 0; k < 2u; ++k) {
+            const de_vec3 v = st_vel(p, both[k]), w = st_angvel(p, both[k]);
+            if (!fr_finite3(v) || !fr_finite3(w))
+                *finite = false;
+            else
+                speed = de__maxf(speed, st_lenf(v));
+        }
+    }
+    *min_sep = fr_pair_min_separation(p, a, b);
+    de_physics_destroy(p);
+    return speed;
+}
+
+TEST(physics_solver_contact, capsules_end_to_end_jointed) {
+    bool finite = false;
+    f32 sep = 0.0f;
+    /* 1.5 cm apart: finite, nothing pushes, the speculative point keeps its true gap. */
+    const f32 near_speed = fr_capsules_end_to_end(0.31, 60u, &sep, &finite);
+    EXPECT_TRUE(finite);
+    ST_LT(near_speed, 1.0e-4f);
+    ST_GT(sep, 0.0149f);
+    ST_LT(sep, 0.0151f);
+    /* Cores overlapping on the axis: finite, and pushed apart within 1 s. */
+    const f32 deep_speed = fr_capsules_end_to_end(0.15, 60u, &sep, &finite);
+    EXPECT_TRUE(finite);
+    ST_LT(deep_speed, 3.5f); /* the push-out limit (3 m/s) plus the joint's reaction */
+    ST_GT(sep, -1.0e-3f);
 }

@@ -45,7 +45,10 @@ static bool seg_seg(const seg *a, const seg *b, const de__np_rel *rel, de__np_ma
         const bool b0_low = sb0 <= sb1;
         const f32 smin = b0_low ? sb0 : sb1, smax = b0_low ? sb1 : sb0;
         const f32 lo = smin > 0.0f ? smin : 0.0f, hi = smax < 1.0f ? smax : 1.0f;
-        if ((hi - lo) * (hi - lo) * la2 > 1e-6f) {
+        /* Only a real overlap: disjoint projections (hi < lo, end to end on one line) square to
+         * a positive length too, and gave a point extrapolated past A's end with separation
+         * -(ra + rb) (DENG-404). They take the single closest-point contact below. */
+        if (hi > lo && (hi - lo) * (hi - lo) * la2 > 1e-6f) {
             for (u32 k = 0; k < 2; ++k) {
                 const f32 sa = k == 0 ? lo : hi;
                 const bool from_a = k == 0 ? !(smin > 0.0f) : !(smax < 1.0f);

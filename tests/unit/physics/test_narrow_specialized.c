@@ -241,6 +241,40 @@ TEST(physics_narrow, capsule_capsule_parallel_two_points) {
     de_physics_destroy(p);
 }
 
+/* Capsules end to end on one axis (DENG-404). Disjoint projections are not an overlap: one
+ * closest-point contact with the true gap. Before, a second point was extrapolated past A's end
+ * with separation -(ra + rb). Cores that overlap on the axis are coincident: two points on the
+ * fallback normal (world +Z). */
+TEST(physics_narrow, capsule_capsule_end_to_end) {
+    de_physics_world *p;
+    ASSERT_EQ(de_physics_create(NULL, &p), DE_OK);
+    const de__shape *a = capsule(p, 0.05f, 0.1f), *b = capsule(p, 0.045f, 0.1f);
+    const de_quat ry = qaxis(0, 1, 0, 1.5707963f); /* axis along X */
+    de__contact_set s[CAP];
+    const f64 xs[2] = {0.31, 0.25}; /* surfaces 1.5 cm apart; caps 4.5 cm into each other */
+    const f32 seps[2] = {0.015f, -0.045f};
+    for (u32 i = 0; i < 2u; ++i) {
+        for (u32 swap = 0; swap < 2u; ++swap) {
+            const de__shape *first = swap ? b : a, *second = swap ? a : b;
+            const f64 x0 = swap ? xs[i] : 0.0, x1 = swap ? 0.0 : xs[i];
+            ASSERT_EQ(collide(first, pose(x0, 0, 0, ry), second, pose(x1, 0, 0, ry), 0.02f, s), 1u);
+            ASSERT_EQ(s[0].point_count, 1u);
+            EXPECT_FLOAT_EQ(s[0].points[0].separation, seps[i], 1e-5);
+            EXPECT_FLOAT_EQ(s[0].normal.x, swap ? -1.0 : 1.0, 1e-5);
+            EXPECT_EQ(s[0].points[0].feature_id,
+                      de__feature_id(de__feat(DE__FEAT_VERTEX, swap ? 0u : 1u),
+                                     de__feat(DE__FEAT_VERTEX, swap ? 1u : 0u)));
+        }
+    }
+    /* Cores overlapping by 5 cm on the axis. */
+    ASSERT_EQ(collide(a, pose(0, 0, 0, ry), b, pose(0.15, 0, 0, ry), 0.0f, s), 1u);
+    ASSERT_EQ(s[0].point_count, 2u);
+    EXPECT_FLOAT_EQ(s[0].normal.z, 1.0, 1e-6);
+    for (u32 k = 0; k < 2u; ++k)
+        EXPECT_FLOAT_EQ(s[0].points[k].separation, -0.095, 1e-5);
+    de_physics_destroy(p);
+}
+
 TEST(physics_narrow, zero_length_capsule_is_a_sphere) {
     de_physics_world *p;
     ASSERT_EQ(de_physics_create(NULL, &p), DE_OK);

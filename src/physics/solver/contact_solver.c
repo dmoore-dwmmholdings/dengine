@@ -278,13 +278,16 @@ static void friction_clamp(f32 *l0, f32 *l1, f32 mu0, f32 mu1, f32 ln) {
     if (a * a + b * b <= lim * lim)
         return;
     const f32 x = mu0 * *l0, y = mu1 * *l1;
-    const f32 len2 = x * x + y * y;
-    if (!(len2 > 0.0f)) {
+    /* Test the root, not len2: de_dsqrt flushes a subnormal len2 to 0 (DAZ, SPEC §5.7), and
+     * then s = ln / 0 and s * 0 is NaN. It happens with ln == 0 and a pair below about 1e-19
+     * (DENG-404). */
+    const f32 len = de_dsqrt(x * x + y * y);
+    if (!(len > 0.0f)) {
         *l0 = 0.0f;
         *l1 = 0.0f;
         return;
     }
-    const f32 s = ln / de_dsqrt(len2);
+    const f32 s = ln / len;
     *l0 = mu0 * x * s;
     *l1 = mu1 * y * s;
 }
