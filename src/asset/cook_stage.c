@@ -397,6 +397,19 @@ bool de__cook_stage_plan(de_asset_system *s, u32 slot, de__cook_plan *p) {
                   e != NULL ? e->message : "the cooker refused the type");
         return true;
     }
+    /* DENG-101: every other runtime type too, so an importer can cook a sub-asset through the
+     * importer of another type (de_cooker_import_cook_subasset: a model's textures and prefab)
+     * and the result does not depend on which assets were cooked first. Types registered later
+     * (a game reload) are added on the next plan. */
+    u32 type_count = 0;
+    const char *const *type_names = de__asset_type_names(s, &type_count);
+    for (u32 i = 0; i < type_count; ++i) {
+        if (de_cooker_has_type(cs->cooker, type_names[i]))
+            continue;
+        const de_asset_type_desc *t = de__asset_type_get(s, de__asset_type_find(s, type_names[i]));
+        if (t != NULL && de_cooker_register_type(cs->cooker, t) != DE_OK)
+            DE_WARN(s->log, "cook stage: the cooker refused type \"%s\"", type_names[i]);
+    }
 
     p->asset = *a;
     if (p->subasset != NULL)

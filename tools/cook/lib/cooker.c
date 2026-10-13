@@ -126,8 +126,9 @@ const char *de_cooker_cache_dir(const de_cooker *c) {
 /* ---- One import ------------------------------------------------------------------------------ */
 
 /* Runs the importer (or the pass-through copy for a type without one) on a prepared context.
- * DE_OK, or the failure recorded in ctx->fail_code and ctx->msg. */
-static de_result run_import(de_asset_import_ctx *ctx) {
+ * DE_OK, or the failure recorded in ctx->fail_code and ctx->msg. Also used for nested imports
+ * (import_subcook.c, DENG-101). */
+de_result de__cooker_run_import(de_asset_import_ctx *ctx) {
     if (ctx->type->import == NULL) /* no importer: the cooked bytes are the source bytes */
         return de_asset_import_write(ctx, ctx->source, ctx->source_size);
     de_error_clear(); /* a stale error of this thread must not become the importer's message */
@@ -341,7 +342,7 @@ de_result de_cooker_cook(de_cooker *c, const de_cook_input *in, de_cook_result *
         ctx[i].setting_count = a->setting_count;
     }
     for (u32 i = 0; i < runs && r == DE_OK; ++i) {
-        r = run_import(&ctx[i]);
+        r = de__cooker_run_import(&ctx[i]);
         if (r != DE_OK) {
             r = DE_FAIL(r, "asset \"%s\": %s", a->id, ctx[i].msg);
             break;

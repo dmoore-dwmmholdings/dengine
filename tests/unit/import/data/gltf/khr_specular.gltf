@@ -1,0 +1,152 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "max": [
+    1.0,
+    1,
+    0
+   ],
+   "min": [
+    0.0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 48
+  },
+  {
+   "buffer": 0,
+   "byteLength": 32,
+   "byteOffset": 96
+  },
+  {
+   "buffer": 0,
+   "byteLength": 12,
+   "byteOffset": 128
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 140,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAEAAgAAAAIAAwA="
+  }
+ ],
+ "extensionsUsed": [
+  "KHR_materials_specular"
+ ],
+ "images": [
+  {
+   "mimeType": "image/png",
+   "name": "col",
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAADklEQVR42mP4DwUMMAYAj4IP8SHNGCcAAAAASUVORK5CYII="
+  },
+  {
+   "mimeType": "image/png",
+   "name": "lin",
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mPQCKg4AQADTQG50V2uSwAAAABJRU5ErkJggg=="
+  },
+  {
+   "mimeType": "image/png",
+   "name": "nrm",
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mNoaPj/H4QZYAwAZ9IL+Q5/7FsAAAAASUVORK5CYII="
+  }
+ ],
+ "materials": [
+  {
+   "extensions": {
+    "KHR_materials_specular": {
+     "specularColorFactor": [
+      1,
+      0.5,
+      0.25
+     ],
+     "specularColorTexture": {
+      "index": 0
+     },
+     "specularFactor": 0.5,
+     "specularTexture": {
+      "index": 1
+     }
+    }
+   },
+   "name": "KHR_materials_specular"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "M",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "N"
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  },
+  {
+   "source": 2
+  }
+ ]
+}

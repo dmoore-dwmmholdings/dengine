@@ -1,0 +1,157 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 5,
+   "max": [
+    2,
+    1,
+    0
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 5,
+   "max": [
+    1,
+    1,
+    0
+   ],
+   "min": [
+    -1,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5121,
+   "count": 5,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 3,
+   "max": [
+    1,
+    1,
+    0
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 2,
+   "max": [
+    1,
+    0,
+    0
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 60,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 60,
+   "byteOffset": 60
+  },
+  {
+   "buffer": 0,
+   "byteLength": 5,
+   "byteOffset": 120
+  },
+  {
+   "buffer": 0,
+   "byteLength": 36,
+   "byteOffset": 128
+  },
+  {
+   "buffer": 0,
+   "byteLength": 24,
+   "byteOffset": 164
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 188,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAAAAAACAvwAAgD8AAAAAAAECAwQAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAA="
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Strips",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     },
+     "mode": 5
+    },
+    {
+     "attributes": {
+      "POSITION": 1
+     },
+     "indices": 2,
+     "mode": 6
+    },
+    {
+     "attributes": {
+      "POSITION": 3
+     },
+     "mode": 0
+    },
+    {
+     "attributes": {
+      "POSITION": 4
+     },
+     "mode": 1
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "S"
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}

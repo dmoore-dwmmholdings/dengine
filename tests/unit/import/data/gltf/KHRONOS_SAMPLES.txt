@@ -1,0 +1,21 @@
+Khronos glTF sample models used by tests/unit/import/test_gltf_import.c (DENG-101), copied
+unchanged from https://github.com/KhronosGroup/glTF-Sample-Assets (branch main, 2026-10-12).
+Each keeps its own licence, as stated in the sample's README there:
+
+  Box.gltf, Box0.bin                  (Models/Box/glTF)
+      (c) 2017, Cesium. Creative Commons Attribution 4.0 International (CC BY 4.0),
+      https://creativecommons.org/licenses/by/4.0/legalcode
+
+  BoxTextured.gltf, BoxTextured0.bin, CesiumLogoFlat.png   (Models/BoxTextured/glTF)
+      (c) 2017, Cesium. Creative Commons Attribution 4.0 International (CC BY 4.0),
+      https://creativecommons.org/licenses/by/4.0/legalcode
+
+  SimpleSparseAccessor.gltf, SimpleSparseAccessor.bin      (Models/SimpleSparseAccessor/glTF)
+      (c) 2017, Public. Creative Commons Attribution 4.0 International (CC BY 4.0),
+      https://creativecommons.org/licenses/by/4.0/legalcode
+
+  Duck.glb                            (Models/Duck/glTF-Binary)
+      (c) 2006, Sony. SCEA Shared Source License, Version 1.0; the licence text is in
+      SCEA_SHARED_SOURCE_LICENSE.txt next to this file.
+
+Every other .gltf file here is written by gen_fixtures.py (part of this repository).

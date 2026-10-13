@@ -43,3 +43,22 @@ target_link_libraries(de_cook_cmd
     PRIVATE de_cooker de_pack_lib de_ecs de_task de_platform de_tp_xxhash de_build_flags)
 set_target_properties(de_cook_cmd PROPERTIES FOLDER "dengine/tools")
 target_link_libraries(de-cook PRIVATE de_cook_cmd)
+
+# DENG-101: the model importer (tools/cook/importers/model/): glTF 2.0 → model IR → textures,
+# materials, meshes and a prefab (SPEC §11.6). Importers are cooker-library code, so the sources go
+# into de_cooker: the tools have them, and so do Debug and Dev builds (DE_HAS_COOKER), never
+# Release or Shipping. The cooked formats are header-only (src/render/formats/). Entry:
+# "cook/importers/model/model_import.h". cgltf and MikkTSpace are tools-only vendored libraries.
+target_sources(de_cooker PRIVATE
+    importers/model/model_import.h
+    importers/model/model_internal.h
+    importers/model/model_ir.h
+    importers/model/model_ir.c
+    importers/model/model_axes.c
+    importers/model/gltf_import.c
+    importers/model/model_material.c
+    importers/model/model_prefab.c
+    importers/model/model_cook.c)
+# de_tp_tomlc17: only for its include path ("reflect/ser_internal.h", the float and hex formatters
+# of the prefab TOML, includes the core TOML header).
+target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect de_tp_tomlc17)

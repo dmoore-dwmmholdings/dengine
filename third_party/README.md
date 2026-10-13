@@ -132,6 +132,17 @@ Engine modules link these targets through `de_add_module(... LIBS de_tp_<name>)`
 | SDL3 | 3.4.18 | Zlib | `de_tp_sdl3` | `<SDL3/SDL.h>` (only in `src/platform/sdl/`) | Built by SDL's own CMake from `sdl3/SDL3-3.4.18/` (`strip = 0`), static, without audio, GPU, renderer, camera, OpenGL, tray, tests and examples. Not built with `DE_HEADLESS`. |
 | Tracy | 0.14.1 | BSD-3-Clause | `de_tp_tracy` | `<tracy/TracyC.h>` (only in `src/core/prof/prof_tracy.cpp`) | Profiler client, C++ behind the engine's C API (`de_debug.h`). `public/` only. Built from `public/TracyClient.cpp` with `TRACY_ON_DEMAND`, `TRACY_MANUAL_LIFETIME`, `TRACY_NO_FRAME_IMAGE`, `TRACY_NO_CRASH_HANDLER`; only for Dev and profiling Release builds, never Debug or Shipping. The profiler GUI must be 0.14.x. |
 | Monocypher | 4.0.3 | BSD-2-Clause OR CC0-1.0 | `de_tp_monocypher` | `<monocypher.h>` (only in `src/net/crypto.c`) | Network crypto: XChaCha20-Poly1305, X25519, BLAKE2b (DENG-52). `src/monocypher.{c,h}` and upstream's TIS-CI test-vector subset `tests/tis-ci-vectors.h` (used by the net unit tests). The optional Ed25519 file is not vendored. |
+| cgltf | 1.15 | MIT | `de_tp_cgltf` | `<cgltf.h>` (only in `tools/cook/importers/model/`) | glTF 2.0 parser of the model importer (DENG-101). Tools only: linked into the cooker library, never into Release or Shipping. `cgltf.h` only (no `cgltf_write.h`); one implementation TU. |
+| MikkTSpace | 2020-03-25-3e895b4 | Zlib | `de_tp_mikktspace` | `<mikktspace.h>` (only in `tools/cook/importers/model/`) | Tangent generation of the model importer (DENG-101). Tools only. Upstream has no releases: pinned to its last commit. The archive has no licence file; the zlib licence is the header comment of `mikktspace.h`, which is copied to `LICENSE`. Not in the SPEC §22 table: added by DENG-101 (zlib, tools only); see "SPEC §22 additions" below. |
+
+## SPEC §22 additions
+
+Libraries vendored here that the SPEC §22 table does not list (policy 1: a DENG-2 decision or a
+task that adds them records them here):
+
+| Library | Licence | Use | Added by |
+|---|---|---|---|
+| MikkTSpace | Zlib | tangent space generation for imported models (tools only) | DENG-101 |
 
 ## Adding or updating a library
 

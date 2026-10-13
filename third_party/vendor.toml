@@ -165,3 +165,27 @@ license_file = "LICENCE.md"
 # The library (one TU) and upstream's small test-vector subset (the TIS-CI set), which the net
 # unit tests run on the host. The optional Ed25519/SHA-512 file is not used.
 files = ["src/monocypher.c", "src/monocypher.h", "tests/tis-ci-vectors.h"]
+
+[[lib]]
+name = "cgltf"
+# glTF 2.0 parser for the model importer (SPEC §11.6, §22), tools only: it is compiled into the
+# cooker library (tools/cook/importers/model/, DENG-101), never into Release or Shipping.
+version = "1.15"
+url = "https://github.com/jkuhlmann/cgltf/archive/refs/tags/v1.15.tar.gz"
+sha256 = "84e352092e5cd6aab7f66de62ddb66beb5e6f18d412ca9d12950d7a55bfef25a"
+license = "MIT"
+# The parser only; cgltf_write.h, the tests and the fuzzer are not used.
+files = ["cgltf.h"]
+
+[[lib]]
+name = "mikktspace"
+# MikkTSpace tangent generation for the model importer (DENG-101), tools only. Upstream has no
+# tags or releases: pinned to the last commit (2020-03-25). Added to SPEC §22 by DENG-101.
+version = "2020-03-25-3e895b4"
+url = "https://github.com/mmikk/MikkTSpace/archive/3e895b49d05ea07e4c2133156cfa94369e19e409.tar.gz"
+sha256 = "aeba65ddee85a679133d510d71d00b108f603752f90b15b9ecf7777033f6e351"
+license = "Zlib"
+# The archive has no licence file: the zlib licence is the comment at the top of mikktspace.h,
+# so that file is also copied to LICENSE.
+license_file = "mikktspace.h"
+files = ["mikktspace.c", "mikktspace.h"]
