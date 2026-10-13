@@ -518,13 +518,268 @@ typedef struct de_contact_event {
 } de_contact_event;
 
 /* ---------- 2D (same design, operates in the configured 2D plane) ---------- */
+/*
+ * 2D physics (DENG-252 and the rest of S24, SPEC §13.3). Its own world type, de_physics2d_world,
+ * built into the same deterministic module as 3D. Bodies and shapes use the de_body and de_shape
+ * handle types with the same packing, but a handle belongs to the world that made it: never pass
+ * a 2D handle to a 3D function or the reverse.
+ *
+ * Plane coordinates: 2D physics works in (x, y) of its plane. Positions are f64 (large worlds,
+ * like 3D); rotations, velocities and all shape data are f32. Angles are radians, counter-clockwise
+ * from +x to +y. How the plane maps into the world (SPEC §12.12: side view = world X-Z, top-down =
+ * world X-Y) is de_physics2d_desc.plane; the mapping and the ECS systems come with DENG-260.
+ * Mass is in kg, so a density is in kg/m^2 (area density).
+ *
+ * Determinism and threading: as for 3D (see the 3D notes above). de_physics2d_checksum() hashes
+ * the simulation state; bodies are processed in ascending body index.
+ */
+
+/** Shape kinds. Circle, capsule, box and polygon are solid (they have area and mass); segment and
+ *  chain are lines (static and kinematic bodies only). */
 typedef enum de_shape2d_kind {
     DE_SHAPE2D_CIRCLE,
     DE_SHAPE2D_CAPSULE,
     DE_SHAPE2D_BOX,
     DE_SHAPE2D_POLYGON,
-    DE_SHAPE2D_CHAIN
+    DE_SHAPE2D_CHAIN,
+    DE_SHAPE2D_SEGMENT
 } de_shape2d_kind;
+
+/** Which world plane the 2D plane is (SPEC §12.12). Used by the plane mapping (DENG-260). */
+typedef enum de_physics2d_plane {
+    /** Side view: plane x = world X, plane y = world Z (the camera looks along +Y). */
+    DE_PHYSICS2D_PLANE_SIDE,
+    /** Top-down: plane x = world X, plane y = world Y (the camera looks along -Z). */
+    DE_PHYSICS2D_PLANE_TOP_DOWN
+} de_physics2d_plane;
+
+/** A rotation in the plane: cos and sin of the angle. (1, 0) is no rotation. */
+typedef struct de_rot2d {
+    f32 c, s;
+} de_rot2d;
+
+/** Position (f64, plane coordinates) and rotation of a 2D body. */
+typedef struct de_transform2d {
+    f64 x, y;
+    de_rot2d rotation;
+} de_transform2d;
+
+/** An axis-aligned box in the plane. Empty when min > max. */
+typedef struct de_aabb2d {
+    de_vec2 min, max;
+} de_aabb2d;
+
+/**
+ * 2D mass properties: `mass` in kg, `area` in m^2, `center` (center of mass) in the shape's or
+ * body's local frame, `inertia` the rotational inertia about the center of mass (kg m^2).
+ */
+typedef struct de_mass_props2d {
+    f32 mass;
+    f32 area;
+    de_vec2 center;
+    f32 inertia;
+} de_mass_props2d;
+
+/** Most vertices of a polygon (SPEC §13.3). */
+#define DE_SHAPE2D_MAX_POLYGON_VERTICES 8u
+/** Most input points of a polygon (its hull must still have at most 8 vertices). */
+#define DE_SHAPE2D_MAX_POLYGON_INPUT 256u
+/** Most points of a chain. */
+#define DE_SHAPE2D_MAX_CHAIN_POINTS 65536u
+/** Density used when de_material_phys.density is 0 for a 2D body (kg/m^2). */
+#define DE_PHYSICS2D_DEFAULT_DENSITY 1.0f
+
+/** The rotation by `radians` (de_dsincos: deterministic). */
+DE_API de_rot2d de_rot2d_from_angle(f32 radians);
+/** The angle of `r` in [-pi, pi] (de_datan2). */
+DE_API f32 de_rot2d_angle(de_rot2d r);
+
+/**
+ * de_physics2d_create() parameters. `(de_physics2d_desc){0}` (or a NULL desc) gives the defaults.
+ *
+ * - `allocator`: everything the world allocates. NULL = de_heap_allocator(). Must outlive it.
+ * - `tasks`: the task system the step may use (DENG-253 on); NULL = single-threaded. Results never
+ *   depend on it.
+ * - `gravity`: m/s^2 in plane coordinates. The zero vector means the default of the plane:
+ *   (0, -9.81) for DE_PHYSICS2D_PLANE_SIDE, none for DE_PHYSICS2D_PLANE_TOP_DOWN. For zero gravity
+ *   in a side-view world call de_physics2d_set_gravity() after create.
+ * - `substeps`: solver substeps per step (DENG-254); 0 = 4.
+ * - `max_bodies`: size of the preallocated body pool; 0 = DE_PHYSICS_DEFAULT_MAX_BODIES, at most
+ *   DE_PHYSICS_MAX_BODIES_LIMIT.
+ * - `deterministic`: 2D physics is always deterministic; false is treated as true.
+ * - `plane`: the world plane (default side view).
+ */
+typedef struct de_physics2d_desc {
+    const de_allocator *allocator;
+    de_task_system *tasks;
+    de_vec2 gravity; /* default (0, -9.81) for the side plane */
+    u32 substeps;    /* default 4 */
+    u32 max_bodies;
+    bool deterministic; /* default true */
+    de_physics2d_plane plane;
+} de_physics2d_desc;
+
+/**
+ * Creates a 2D physics world and preallocates its body pool.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`out` NULL, `max_bodies` above the limit, an unknown
+ *         plane or a non-finite gravity) or DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_physics2d_create(const de_physics2d_desc *desc, de_physics2d_world **out);
+/** Destroys every body and shape and frees all memory of the world. NULL is ignored. */
+DE_API void de_physics2d_destroy(de_physics2d_world *p);
+/**
+ * Advances the world by `dt` seconds (> 0, finite): one tick. Allocates nothing after create
+ * (pools only). An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
+ */
+DE_API void de_physics2d_step(de_physics2d_world *p, f32 dt);
+/**
+ * XXH3-64 of the simulation state: the tick, gravity, substeps, plane, and every live body in
+ * ascending index order, field by field (never raw struct bytes). Equal states give equal values
+ * on every platform. 0 for NULL.
+ */
+DE_API u64 de_physics2d_checksum(const de_physics2d_world *p);
+/** Ticks stepped since create. */
+DE_API u64 de_physics2d_tick(const de_physics2d_world *p);
+/** Sets the gravity (m/s^2, plane coordinates; any finite vector, zero included). */
+DE_API void de_physics2d_set_gravity(de_physics2d_world *p, de_vec2 gravity);
+DE_API de_vec2 de_physics2d_get_gravity(const de_physics2d_world *p);
+/** The plane the world was created with. */
+DE_API de_physics2d_plane de_physics2d_get_plane(const de_physics2d_world *p);
+
+/**
+ * de_shape2d_create() parameters. Fill the fields of `kind`; the others are ignored. Shapes are in
+ * their own local frame; a body places that frame in the plane.
+ *
+ * - DE_SHAPE2D_CIRCLE: `radius` > 0 around `center`.
+ * - DE_SHAPE2D_CAPSULE: the segment `p1`..`p2` swept by `radius` > 0. p1 == p2 is a circle.
+ * - DE_SHAPE2D_BOX: `half_extents` > 0, centered on `center` and rotated by `angle`; a polygon of
+ *   4 vertices (rounded by `radius` >= 0).
+ * - DE_SHAPE2D_POLYGON: the convex hull of `points[0..point_count)` (3 to
+ *   DE_SHAPE2D_MAX_POLYGON_INPUT points), rounded by `radius` >= 0. Points closer than
+ *   `hull_tolerance` to an earlier point are dropped (welded), and so are points within it of the
+ *   line through their hull neighbours (collinear); 0 picks the largest of 1e-5, 1e-4 times the
+ *   longest side of the points' box and 4e-7 times the largest |coordinate|. The hull is stored
+ *   counter-clockwise. A hull of more than DE_SHAPE2D_MAX_POLYGON_VERTICES vertices, and points
+ *   that are all on one line or at one point, are rejected.
+ * - DE_SHAPE2D_SEGMENT: the two-sided segment `p1`..`p2` (p1 != p2). No area: static and kinematic
+ *   bodies only.
+ * - DE_SHAPE2D_CHAIN: use de_shape2d_chain_create().
+ */
+typedef struct de_shape2d_desc {
+    de_shape2d_kind kind;
+    de_vec2 center;       /* circle, box */
+    de_vec2 p1, p2;       /* capsule, segment */
+    de_vec2 half_extents; /* box */
+    f32 angle;            /* box, radians */
+    f32 radius;           /* circle, capsule (> 0); box, polygon rounding (>= 0) */
+    const de_vec2 *points;
+    u32 point_count;    /* polygon */
+    f32 hull_tolerance; /* polygon: weld / collinearity tolerance in meters; 0 = automatic */
+} de_shape2d_desc;
+
+/**
+ * Builds a shape (see de_shape2d_desc). Shapes are immutable and shared: any number of bodies may
+ * use one. May allocate. On failure returns an invalid handle and sets the error context:
+ * DE_ERR_INVALID_ARGUMENT (bad parameters, degenerate polygon, hull of more than 8 vertices) or
+ * DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_shape de_shape2d_create(de_physics2d_world *p, const de_shape2d_desc *desc);
+/**
+ * Builds a chain: the one-sided segments points[0]..points[1], ...,
+ * points[count-2]..points[count-1] and, when `loop`, points[count-1]..points[0]. A segment collides
+ * only on its right side (seen along its direction), like the edges of a counter-clockwise polygon:
+ * a counter-clockwise loop is solid inside; ground running right to left (-x) collides from above.
+ * Each segment keeps its neighbours' far points as ghost vertices for smooth collision (DENG-253);
+ * the open ends of a chain have no neighbour and are free corners. Needs 2 (open) or 3 (loop) to
+ * DE_SHAPE2D_MAX_CHAIN_POINTS finite points; consecutive points (and, for a loop, the last and the
+ * first) must be farther apart than max(1e-5, 4e-7 times the largest |coordinate|) meters. The
+ * points are copied. Static and kinematic bodies only. Same failures as de_shape2d_create.
+ */
+DE_API de_shape de_shape2d_chain_create(de_physics2d_world *p, const de_vec2 *points, u32 count,
+                                        bool loop);
+/**
+ * Destroys a shape. A shape still used by a body is not destroyed: the call returns DE_ERR_BUSY,
+ * logs a warning and changes nothing. A stale or invalid handle gives DE_ERR_INVALID_ARGUMENT.
+ */
+DE_API de_result de_shape2d_destroy(de_physics2d_world *p, de_shape s);
+/** true if `s` is a live shape of `p`. */
+DE_API bool de_shape2d_valid(const de_physics2d_world *p, de_shape s);
+/** The kind of a live shape, or false for a stale handle. */
+DE_API bool de_shape2d_get_kind(const de_physics2d_world *p, de_shape s, de_shape2d_kind *out);
+/** The shape's bounding box in its local frame (rounding radius included), or false. */
+DE_API bool de_shape2d_get_local_aabb(const de_physics2d_world *p, de_shape s, de_aabb2d *out);
+/**
+ * Mass properties of the shape filled with `density` (kg/m^2; 0 = DE_PHYSICS2D_DEFAULT_DENSITY).
+ * Exact for every solid kind, rounded polygons included. Segments and chains: all zero.
+ * @return DE_OK or DE_ERR_INVALID_ARGUMENT (stale handle, NULL `out`, negative density).
+ */
+DE_API de_result de_shape2d_get_mass_props(const de_physics2d_world *p, de_shape s, f32 density,
+                                           de_mass_props2d *out);
+
+/* de_body_flags that 2D uses: DE_BODY_FLAG_CCD (bullet, DENG-254), DE_BODY_FLAG_ALLOW_SLEEP,
+ * DE_BODY_FLAG_TRIGGER and DE_BODY2D_FLAG_FIXED_ROTATION. The other bits are ignored. */
+/** A 2D body that never rotates: its inverse inertia is 0 (de_body_flags bit LOCK_ROT_Z). */
+#define DE_BODY2D_FLAG_FIXED_ROTATION DE_BODY_FLAG_LOCK_ROT_Z
+/** A fast 2D body that gets swept collision (DENG-254) (de_body_flags bit CCD). */
+#define DE_BODY2D_FLAG_BULLET DE_BODY_FLAG_CCD
+
+/**
+ * de_body2d_create() parameters. `(de_body2d_desc){0}` is a static body at the origin with no
+ * shape.
+ *
+ * - `transform`: f64 position and rotation of the body origin. The rotation is normalized; (0, 0)
+ *   is no rotation.
+ * - `shape`: a live shape of the same world, or an invalid handle for no shape. A dynamic body
+ *   needs a solid shape (not a segment or a chain).
+ * - `mass`: kg; 0 = from the shape area and `material.density`. A positive mass rescales the
+ *   shape's inertia to it.
+ * - `material`: density in kg/m^2; 0 means DE_PHYSICS2D_DEFAULT_DENSITY.
+ * - `filter`: all zero means {DE_COLLISION_FILTER_DEFAULT_LAYER, DE_COLLISION_FILTER_DEFAULT_MASK,
+ *   0}.
+ * - `flags`: de_body_flags (see above). `owner`: the ECS entity (DE_ENTITY_NULL for none).
+ */
+typedef struct de_body2d_desc {
+    de_body_type type;
+    de_transform2d transform;
+    de_vec2 linear_velocity;
+    f32 angular_velocity; /* rad/s, counter-clockwise */
+    de_shape shape;
+    f32 mass;
+    de_material_phys material;
+    de_collision_filter filter;
+    f32 linear_damping, angular_damping, gravity_scale;
+    u32 flags;
+    de_entity owner;
+} de_body2d_desc;
+
+/**
+ * Creates a body in the preallocated pool: the most recently freed index first (LIFO), else the
+ * next unused one. Allocates nothing. On failure returns an invalid handle and sets the error
+ * context: DE_ERR_INVALID_ARGUMENT (bad type, stale shape, non-finite transform or velocity,
+ * negative mass, a dynamic body without a solid shape) or DE_ERR_OUT_OF_MEMORY (pool full).
+ */
+DE_API de_body de_body2d_create(de_physics2d_world *p, const de_body2d_desc *desc);
+/** Destroys a body; its handle and every copy of it become stale. Stale handles are ignored. */
+DE_API void de_body2d_destroy(de_physics2d_world *p, de_body b);
+/** true if `b` is a live body of `p`. */
+DE_API bool de_body2d_valid(const de_physics2d_world *p, de_body b);
+/** Live bodies. */
+DE_API u32 de_body2d_count(const de_physics2d_world *p);
+/** Position and rotation of a live body; false for a stale handle. */
+DE_API bool de_body2d_get_transform(const de_physics2d_world *p, de_body b, de_transform2d *out);
+/** Teleports a body (rotation normalized). false for a stale handle or a non-finite transform. */
+DE_API bool de_body2d_set_transform(de_physics2d_world *p, de_body b, const de_transform2d *t);
+/** Linear (m/s) and angular (rad/s) velocity; either output may be NULL. false for a stale
+ *  handle. */
+DE_API bool de_body2d_get_velocity(const de_physics2d_world *p, de_body b, de_vec2 *linear,
+                                   f32 *angular);
+/** Sets both velocities. false for a stale handle or a non-finite value. Static bodies keep zero
+ *  velocity. */
+DE_API bool de_body2d_set_velocity(de_physics2d_world *p, de_body b, de_vec2 linear, f32 angular);
+/** Mass properties of a live body in its local frame (mass 0 for static and kinematic bodies);
+ *  false for a stale handle. */
+DE_API bool de_body2d_get_mass_props(const de_physics2d_world *p, de_body b, de_mass_props2d *out);
+
 typedef struct DeRigidBody2D {
     de_body_type type;
     f32 mass;
@@ -534,7 +789,11 @@ typedef struct DeRigidBody2D {
     bool fixed_rotation, bullet;
     de_body body;
 } DeRigidBody2D;
+/* DeCollider2D.shape: a runtime handle of a shape built outside the component (chains, shared
+ * shapes; de_shape2d_chain_create). When it is valid it wins over kind / half_extents / radius /
+ * points (DENG-260 binds it). Snapshotted, not serialized. */
 typedef struct DeCollider2D {
+    de_shape shape;
     de_shape2d_kind kind;
     de_vec2 half_extents;
     f32 radius;
@@ -552,13 +811,10 @@ typedef struct DeCharacter2D {
     bool grounded;
 } DeCharacter2D;
 
-DE_API de_result de_physics2d_create(const de_physics_desc *desc, de_physics2d_world **out);
-DE_API void de_physics2d_destroy(de_physics2d_world *p);
 DE_API void de_physics2d_attach(de_physics2d_world *p, de_world *w);
 DE_API bool de_physics2d_raycast(const de_physics2d_world *p, de_vec2 origin, de_vec2 dir,
                                  f32 max_dist, de_collision_filter filter, de_entity *hit_entity,
                                  de_vec2 *point, de_vec2 *normal);
-DE_API u64 de_physics2d_checksum(const de_physics2d_world *p);
 
 DE_EXTERN_C_END
 #endif
