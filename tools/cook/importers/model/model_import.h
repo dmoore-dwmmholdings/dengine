@@ -51,7 +51,8 @@ DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
 #define DE_MODEL_IMPORTER_VERSION                                                                  \
-    3u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104) */
+    4u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104); 4: faster clip key           \
+          reduction and check passes (DENG-399) */
 
 /** Default of the `max_decoded_mib` setting (DENG-106) and its largest value (1 TiB). */
 #define DE_MODEL_MAX_DECODED_MIB_DEFAULT 1024
