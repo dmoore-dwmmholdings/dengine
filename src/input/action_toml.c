@@ -539,12 +539,109 @@ static de_result at_map(at_parser *p, const toml_datum_t *t, const char *path, c
     return DE_OK;
 }
 
+/* [contexts.<name>] (DENG-85): `maps = ["gameplay", "vehicle"]` (bottom to top; each a map of
+ * this file's [maps] or one that exists already) and `blocks_lower = true` (false makes the set
+ * passthrough). Pass 1 checks; pass 2 defines the sets with de_input_context_define, creating a
+ * listed map first when [maps] comes later in the file (its actions are added then). */
+static de_result at_contexts(at_parser *p, const toml_datum_t *top, const toml_datum_t *v,
+                             const char *path) {
+    if (v->type != TOML_TABLE)
+        return at_fail(p, v, path, "expected a table, found %s", at_type_name(v->type));
+    const toml_datum_t *file_maps = NULL;
+    for (int32_t i = 0; i < top->u.tab.size; ++i)
+        if (at_key_is(top, i, "maps") && top->u.tab.value[i].type == TOML_TABLE)
+            file_maps = &top->u.tab.value[i];
+    u32 new_sets = 0;
+    for (int32_t k = 0; k < v->u.tab.size; ++k) {
+        const toml_datum_t *cv = &v->u.tab.value[k];
+        char cp[AT_PATH_MAX];
+        if (!at_path(cp, sizeof cp, path, v->u.tab.key[k], v->u.tab.len[k]))
+            return at_fail(p, cv, path, "key too long");
+        char cname[DE_ACTION_NAME_MAX + 1];
+        DE_TRY(at_name(p, cv, cp, v->u.tab.key[k], v->u.tab.len[k], cname));
+        if (cv->type != TOML_TABLE)
+            return at_fail(p, cv, cp, "expected a table, found %s", at_type_name(cv->type));
+        de_action_map maps[DE_INPUT_CONTEXT_MAX_MAPS] = {{0}};
+        u32 count = 0;
+        bool blocks_lower = true, have_maps = false;
+        for (int32_t i = 0; i < cv->u.tab.size; ++i) {
+            const toml_datum_t *f = &cv->u.tab.value[i];
+            char kp[AT_PATH_MAX];
+            if (!at_path(kp, sizeof kp, cp, cv->u.tab.key[i], cv->u.tab.len[i]))
+                return at_fail(p, f, cp, "key too long");
+            if (at_key_is(cv, i, "blocks_lower")) {
+                DE_TRY(at_bool(p, f, kp, &blocks_lower));
+                continue;
+            }
+            if (!at_key_is(cv, i, "maps")) {
+                at_unknown(p, f, kp);
+                continue;
+            }
+            if (f->type != TOML_ARRAY)
+                return at_fail(p, f, kp, "expected an array of map names, found %s",
+                               at_type_name(f->type));
+            if (f->u.arr.size < 1 || f->u.arr.size > DE_INPUT_CONTEXT_MAX_MAPS)
+                return at_fail(p, f, kp, "%d maps (1 to %d)", (int)f->u.arr.size,
+                               DE_INPUT_CONTEXT_MAX_MAPS);
+            have_maps = true;
+            for (int32_t e = 0; e < f->u.arr.size; ++e) {
+                const toml_datum_t *ev = &f->u.arr.elem[e];
+                const toml_datum_t *at = ev->lineno > 0 ? ev : f;
+                if (ev->type != TOML_STRING)
+                    return at_fail(p, at, kp, "expected a map name, found %s",
+                                   at_type_name(ev->type));
+                char mname[DE_ACTION_NAME_MAX + 1];
+                DE_TRY(at_name(p, at, kp, ev->u.str.ptr, ev->u.str.len, mname));
+                for (int32_t d = 0; d < e; ++d)
+                    if (str_is(f->u.arr.elem[d].u.str.ptr, (size_t)f->u.arr.elem[d].u.str.len,
+                               mname))
+                        return at_fail(p, at, kp, "map '%s' is listed twice", mname);
+                bool known = DE_HANDLE_VALID(de_action_map_find(p->in, mname));
+                for (int32_t m = 0; !known && file_maps != NULL && m < file_maps->u.tab.size; ++m)
+                    known = at_key_is(file_maps, m, mname);
+                if (!known)
+                    return at_fail(p, at, kp, "unknown map '%s'", mname);
+                if (p->apply) {
+                    maps[count] = de_action_map_create(p->in, mname);
+                    if (!DE_HANDLE_VALID(maps[count]))
+                        return DE_FAIL_WRAP(DE_ERR_INVALID_ARGUMENT,
+                                            "%s: %s: could not create the map '%s'", p->source, kp,
+                                            mname);
+                }
+                count++;
+            }
+        }
+        if (!have_maps)
+            return at_fail(p, cv, cp, "missing 'maps'");
+        if (!p->apply) {
+            if (de__context_find(p->in, de_name_from(cname)) == DE__CONTEXT_NONE)
+                new_sets++;
+            continue;
+        }
+        const de_result r = de_input_context_define(
+            p->in, cname, maps, count, blocks_lower ? 0u : DE_INPUT_CONTEXT_PASSTHROUGH);
+        if (r != DE_OK)
+            return DE_FAIL_WRAP(r, "%s:%d: %s: could not define the context", p->source, cv->lineno,
+                                cp);
+    }
+    const struct de__actions *s = de__actions_state_const(p->in);
+    const u32 have = s != NULL ? s->context.set_count : 0u;
+    if (!p->apply && have + new_sets > DE_INPUT_MAX_CONTEXTS)
+        return at_fail(p, v, path, "%u named contexts (max %d)", (unsigned)(have + new_sets),
+                       DE_INPUT_MAX_CONTEXTS);
+    return DE_OK;
+}
+
 static de_result parse_top(at_parser *p, const toml_datum_t *top) {
     for (int32_t i = 0; i < top->u.tab.size; ++i) {
         const toml_datum_t *v = &top->u.tab.value[i];
         char path[AT_PATH_MAX];
         if (!at_path(path, sizeof path, "", top->u.tab.key[i], top->u.tab.len[i]))
             return at_fail(p, v, "(top level)", "key too long");
+        if (at_key_is(top, i, "contexts")) { /* DENG-85 */
+            DE_TRY(at_contexts(p, top, v, path));
+            continue;
+        }
         if (!at_key_is(top, i, "maps")) {
             at_unknown(p, v, path);
             continue;

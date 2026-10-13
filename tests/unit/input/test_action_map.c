@@ -112,12 +112,12 @@ TEST(action_map, button_from_key) {
     input_test_pad_button(in, 1, DE_PAD_SOUTH, false);
     act_frame(in);
 
-    /* Pop resets the actions of the map and makes them idle. */
+    /* Pop releases the actions of the map and makes them idle (DENG-85: at the next frame
+     * update, not at the call). */
     input_test_key(in, DE_KEY_SPACE, true);
     act_frame(in);
     EXPECT_TRUE(de_action_held(in, jump));
     de_action_map_pop(in, m);
-    EXPECT_FALSE(de_action_held(in, jump));
     act_frame(in);
     EXPECT_FALSE(de_action_held(in, jump));
     EXPECT_FALSE(de_action_triggered(in, jump));
@@ -256,6 +256,9 @@ TEST(action_map, chord_suppresses_plain) {
     const de_action special = add(in, m, "special", DE_ACTION_BUTTON, DE_INTERACT_PRESS, &chord, 1);
     /* Another map with plain E: a chord only suppresses inside its own map. */
     const de_action_map other = pushed_map(in, "ui");
+    /* DENG-85: a map above blocks the inputs it uses from the maps below; passthrough keeps this
+     * test about chords only. */
+    de_action_map_set_flags(in, other, DE_INPUT_CONTEXT_PASSTHROUGH);
     const de_action ui_use =
         add(in, other, "ui_use", DE_ACTION_BUTTON, DE_INTERACT_PRESS, &plain, 1);
     ASSERT_TRUE(DE_HANDLE_VALID(use) && DE_HANDLE_VALID(special) && DE_HANDLE_VALID(ui_use));

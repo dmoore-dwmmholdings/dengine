@@ -28,3 +28,7 @@ target_sources(de_input PRIVATE
     context_stack.c)
 target_link_libraries(de_input PRIVATE de_tp_tomlc17)
 set_property(TARGET de_input APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+
+# DENG-85: context stacks (context_stack.c replaces the DENG-84 minimal version; the state is in
+# context_internal.h, embedded in struct de__actions).
+target_sources(de_input PRIVATE context_internal.h)
