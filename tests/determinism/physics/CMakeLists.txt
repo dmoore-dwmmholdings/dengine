@@ -131,3 +131,7 @@ de_phys_det_add_scenarios(SOURCES scenarios_ccd.c SCENARIOS bullet_wall fast_dro
 # DENG-223 (S23): the physics ECS systems (entities spawned and despawned, static colliders, a
 # kinematic platform, a character, entity joints; contact and joint break events in the probe).
 de_phys_det_add_scenarios(SOURCES scenarios_ecs.c SCENARIOS ecs_scene)
+
+# DENG-222 (S23): large worlds (a pyramid, a thrown ball, a pendulum and hinged planks, all at
+# (100 km, -100 km, 50 m)).
+de_phys_det_add_scenarios(SOURCES scenarios_large_world.c SCENARIOS stack_far)

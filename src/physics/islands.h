@@ -71,8 +71,8 @@ enum {
 };
 
 /**
- * One island of this step. A POD: DENG-222 fills `origin` (the island's solve origin for large
- * worlds) and may append fields.
+ * One island of this step. A POD. `origin` is the island's solve origin for large worlds
+ * (DENG-222, physics/large_world.h): the f64 position of body `id`, set by de__islands_build.
  */
 typedef struct de__island {
     u32 id;               /**< lowest body index of the island */
@@ -81,7 +81,7 @@ typedef struct de__island {
     u32 constraint_count; /**< records whose sides are both in this island */
     u32 flags;            /**< DE__ISLAND_* */
     f32 min_sleep_time;   /**< smallest sleep timer of its bodies (sleep evaluation) */
-    de_dvec3 origin;      /**< DENG-222: solve origin (zero until then) */
+    de_dvec3 origin;      /**< DENG-222: solve origin = position of body `id` this step */
 } de__island;
 
 /** Counters of the last step. */
