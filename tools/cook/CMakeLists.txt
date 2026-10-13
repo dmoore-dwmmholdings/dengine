@@ -129,3 +129,15 @@ target_sources(de_cooker PRIVATE
     importers/model/anim_clip_compress.c)
 set_source_files_properties(importers/model/anim_clip_compress.c TARGET_DIRECTORY de_cooker
     PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
+
+# DENG-100: HDR environments of the texture importer (`usage = "environment"`): the source
+# (equirectangular, cube cross or KTX2 cube) to a cube with GGX-prefiltered mips and SH9
+# irradiance, cooked as a DTEX cube plus an ENVS trailer (src/render/formats/de_cooked_env.h).
+# The work runs on the cooker's task system in fixed (face, row) chunks; the files compile
+# without FMA contraction so a cook is the same bytes on every host and worker count.
+set(_de_env_importer_sources
+    importers/texture/env_prefilter.c
+    importers/texture/env_sh.c)
+target_sources(de_cooker PRIVATE importers/texture/env_internal.h ${_de_env_importer_sources})
+set_source_files_properties(${_de_env_importer_sources} TARGET_DIRECTORY de_cooker
+    PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")

@@ -478,3 +478,8 @@ de_result de_asset_import_fail(de_asset_import_ctx *ctx, de_result result, const
     va_end(ap);
     return code;
 }
+
+/* DENG-99: the cooker's task system, for importers that split one import into fixed chunks. */
+de_task_system *de_cooker_import_tasks(const de_asset_import_ctx *ctx) {
+    return ctx != NULL && ctx->c != NULL ? ctx->c->tasks : NULL;
+}

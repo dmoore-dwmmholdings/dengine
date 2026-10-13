@@ -18,8 +18,8 @@
  * Settings (the manifest asset and `[defaults.texture]`; every setting is in the settings hash,
  * so a change re-cooks):
  *   - `usage` (string, default "color"): "color", "normal" (tangent-space normal map; mips are
- *     renormalized), "mask" (linear data), "environment" (HDR environment; DENG-100 prefilters it,
- *     until then a plain RGBA16F texture).
+ *     renormalized), "mask" (linear data), "environment" (HDR environment: a cube with GGX
+ *     prefiltered mips and SH9 irradiance, render/formats/de_cooked_env.h; DENG-100).
  *   - `srgb` (bool): the colour channels are sRGB-encoded, and the cooked format is sRGB. Default:
  *     true for "color" with an 8- or 16-bit source (a KTX2 file's transfer function decides for
  *     KTX2), false otherwise. Ignored (with a warning) for float sources and normal maps.
@@ -33,6 +33,15 @@
  *   - `compression` (string, default "auto"): read by the BC stage (DENG-99). Until then every
  *     texture cooks uncompressed (RGBA8 UNORM or sRGB, RGBA16F for float sources), which is what
  *     "none" asks for; another value logs a warning.
+ *
+ * Environment settings (`usage = "environment"` only; DENG-100, env_internal.h):
+ *   - `env_size` (integer, default 256): cube face size, a power of two from 4 to 4096.
+ *   - `env_samples` (integer, default 1024): GGX samples per prefiltered texel, 1 to 65536.
+ *   - `rotation_deg` (float, default 0): rotation of the environment about +Z, counter-clockwise
+ *     seen from above.
+ *   - `clamp_luminance` (float > 0, optional): firefly clamp of the prefilter input.
+ * The source is equirectangular (2:1), a cube cross (4:3, 3:4) or a KTX2 cube. `mips`,
+ * `max_size`, `pixel_art`, `alpha_coverage` and `address` do not apply.
  *
  * KTX2 files with BC payloads are passed through with their mips (no re-encoding); ETC1S and
  * UASTC are transcoded at cook time (Basis Universal) and filtered like any other source.
@@ -50,7 +59,7 @@
 DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
-#define DE_TEXTURE_IMPORTER_VERSION 1u
+#define DE_TEXTURE_IMPORTER_VERSION 3u
 
 #define DE_TEXTURE_IMPORT_EXTENSION_COUNT 5u
 /** ".png", ".jpg", ".jpeg", ".exr", ".ktx2". */
