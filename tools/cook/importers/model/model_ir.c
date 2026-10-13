@@ -40,9 +40,11 @@ void de_model_ir_free(de_model_ir *ir) {
         b = next;
     }
     const char *log_name = ir->log_name;
+    u64 byte_limit = ir->byte_limit;
     memset(ir, 0, sizeof *ir);
     ir->alloc = a;
     ir->log_name = log_name;
+    ir->byte_limit = byte_limit;
 }
 
 void *de_model_ir_alloc(de_model_ir *ir, u64 size) {
@@ -53,6 +55,14 @@ void *de_model_ir_alloc(de_model_ir *ir, u64 size) {
         return NULL;
     }
     size_t total = head + (size_t)size;
+    if (ir->byte_limit != 0 && (ir->bytes > ir->byte_limit || total > ir->byte_limit - ir->bytes)) {
+        ir->over_limit = true;
+        (void)DE_FAIL(DE_ERR_UNSUPPORTED,
+                      "model import: the decoded data needs more than the limit of %llu MiB "
+                      "(setting `max_decoded_mib`)",
+                      (unsigned long long)(ir->byte_limit >> 20));
+        return NULL;
+    }
     de__model_block *b = (de__model_block *)DE_ALLOC(ir->alloc, total, 16, DE_MEM_ASSET);
     if (b == NULL) {
         (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "model import: out of memory (%llu bytes)",
@@ -60,6 +70,7 @@ void *de_model_ir_alloc(de_model_ir *ir, u64 size) {
         return NULL;
     }
     memset(b, 0, total);
+    ir->bytes += total;
     b->total = total;
     b->next = ir->blocks;
     ir->blocks = b;

@@ -14,6 +14,11 @@ set_target_properties(de_tp_stb PROPERTIES
     FOLDER "dengine/third_party")
 if(NOT DE_COMPILER_FRONTEND STREQUAL "MSVC")
     target_link_libraries(de_tp_stb PRIVATE m)
+    # stb_image's integer IDCT and colour conversion overflow `int` on hostile JPEG coefficients
+    # and rely on two's-complement wrapping (UBSan: "signed integer overflow" in stbi__idct_block,
+    # found by fuzz_image, DENG-106). -fwrapv makes that wrapping defined; a damaged JPEG still
+    # decodes to garbage pixels, never out of bounds. MSVC does not optimise on the overflow.
+    set_source_files_properties(de_tp_stb_image.c PROPERTIES COMPILE_OPTIONS -fwrapv)
 endif()
 
 # Smoke test, built with the engine's strict flags: proves the headers compile cleanly in engine

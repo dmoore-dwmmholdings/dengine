@@ -1,0 +1,102 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5122,
+   "count": 3,
+   "max": [
+    100,
+    100,
+    0
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5120,
+   "count": 3,
+   "normalized": true,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 3,
+   "normalized": true,
+   "type": "VEC2"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 24,
+   "byteOffset": 0,
+   "byteStride": 8
+  },
+  {
+   "buffer": 0,
+   "byteLength": 12,
+   "byteOffset": 24,
+   "byteStride": 4
+  },
+  {
+   "buffer": 0,
+   "byteLength": 12,
+   "byteOffset": 36
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 48,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAABkAAAAAAAAAAAAZAAAAAAAAAB/AAAAfwAAAH8AAAAAAP//AAAAAP//"
+  }
+ ],
+ "extensionsRequired": [
+  "KHR_mesh_quantization"
+ ],
+ "extensionsUsed": [
+  "KHR_mesh_quantization"
+ ],
+ "meshes": [
+  {
+   "name": "Q",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TEXCOORD_0": 2
+     }
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Q",
+   "scale": [
+    0.01,
+    0.01,
+    0.01
+   ]
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}

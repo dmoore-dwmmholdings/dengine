@@ -1,0 +1,149 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 3,
+   "max": [
+    1,
+    1,
+    1
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 36,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 36,
+   "byteOffset": 36
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 72
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 120,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AAAAAAAAgL8AAAAAAAAAAAAAgD8AAIA/"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Tri",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TANGENT": 2
+     }
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "children": [
+    1
+   ],
+   "name": "Parent",
+   "rotation": [
+    0,
+    0.7071067811865475,
+    0,
+    0.7071067811865476
+   ],
+   "scale": [
+    1,
+    2,
+    3
+   ],
+   "translation": [
+    1,
+    2,
+    3
+   ]
+  },
+  {
+   "children": [
+    2
+   ],
+   "mesh": 0,
+   "name": "Child",
+   "rotation": [
+    0.25881904510252074,
+    0,
+    0,
+    0.9659258262890683
+   ],
+   "scale": [
+    2,
+    2,
+    2
+   ],
+   "translation": [
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "matrix": [
+    0,
+    2,
+    0,
+    0,
+    -2,
+    0,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0,
+    1,
+    0,
+    0,
+    1
+   ],
+   "name": "Matrix"
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}

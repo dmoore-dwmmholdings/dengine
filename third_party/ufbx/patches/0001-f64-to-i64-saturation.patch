@@ -1,0 +1,25 @@
+ufbx: saturate ufbxi_f64_to_i64 below 2^63 (UBSan float-cast-overflow)
+
+ufbxi_f64_to_i64() converts a double to int64_t when `fabs(value) <= (double)INT64_MAX`.
+(double)INT64_MAX is 2^63 after rounding, which int64_t cannot hold, so a value of exactly
+2^63 passes the check and the conversion is undefined behaviour. UBSan stops at ufbx.c:1124
+"9.22337e+18 is outside the range of representable values of type 'long long'" when a binary
+FBX property holds 2^63 as a double (found by fuzz_fbx, DENG-106). Comparing with `<` sends
+2^63 to the saturating branch; every other value converts as before, so no FBX import changes.
+
+Engine-local patch (DENG-106), applied by tools/vendor/vendor.py. Drop it when a pinned ufbx
+release has the fix.
+
+diff --git a/ufbx.c b/ufbx.c
+--- a/ufbx.c
++++ b/ufbx.c
+@@ -1120,7 +1120,8 @@ static ufbxi_forceinline int32_t ufbxi_f64_to_i32(double value)
+ 
+ static ufbxi_forceinline int64_t ufbxi_f64_to_i64(double value)
+ {
+-	if (ufbx_fabs(value) <= (double)INT64_MAX) {
++	// (double)INT64_MAX rounds up to 2^63, which int64_t cannot hold: compare with `<`.
++	if (ufbx_fabs(value) < (double)INT64_MAX) {
+ 		return (int64_t)value;
+ 	} else {
+ 		return value >= 0.0 ? INT64_MAX : INT64_MIN;

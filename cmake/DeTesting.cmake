@@ -32,6 +32,7 @@
 #                    SOURCES <file>...
 #                    [LIBS <target-or-lib>...]
 #                    [CORPUS <dir>]
+#                    [DICT <file>]
 #                    [TIMEOUT <seconds>])
 #
 #   Builds the fuzz executable `fuzz_<name>` from SOURCES, which define
@@ -45,6 +46,9 @@
 #   (`-runs=0`). To fuzz for real, run the libFuzzer build by hand:
 #       build/<preset>/.../fuzz_<name> -max_total_time=60 <scratch-corpus-dir> <CORPUS>
 #   DE_HAVE_LIBFUZZER (cached) tells which build the configuration got.
+#   DICT (relative to the calling CMakeLists.txt) is a libFuzzer dictionary: the CTest command
+#   gets `-dict=<file>` after the corpus (the standalone runner ignores it), and the fuzz-smoke CI
+#   job passes it on (DENG-106).
 #
 # Neither function does anything when DE_BUILD_TESTS is OFF, so third_party/ and src/ may call
 # them unconditionally.
@@ -248,7 +252,7 @@ function(de_add_fuzz_target)
     if(NOT DE_BUILD_TESTS)
         return()
     endif()
-    cmake_parse_arguments(PARSE_ARGV 0 F "" "NAME;CORPUS;TIMEOUT" "SOURCES;LIBS")
+    cmake_parse_arguments(PARSE_ARGV 0 F "" "NAME;CORPUS;DICT;TIMEOUT" "SOURCES;LIBS")
     if(F_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "de_add_fuzz_target: unknown arguments: ${F_UNPARSED_ARGUMENTS}")
     endif()
@@ -286,6 +290,13 @@ function(de_add_fuzz_target)
                                 "directory")
         endif()
         list(APPEND args "${F_CORPUS}")
+    endif()
+    if(F_DICT)
+        cmake_path(ABSOLUTE_PATH F_DICT BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE)
+        if(NOT EXISTS "${F_DICT}")
+            message(FATAL_ERROR "de_add_fuzz_target(${F_NAME}): DICT '${F_DICT}' does not exist")
+        endif()
+        list(APPEND args "-dict=${F_DICT}")
     endif()
     de__test_labels(labels fuzz)
     # The working directory is the build dir, so a libFuzzer crash artifact never lands in the

@@ -189,6 +189,8 @@ license = "Zlib"
 # so that file is also copied to LICENSE.
 license_file = "mikktspace.h"
 files = ["mikktspace.c", "mikktspace.h"]
+# UBSan fix in FindGridCell() (NaN converted to int); see the patch header. DENG-106.
+patches = ["patches/0001-grid-cell-clamp-before-cast.patch"]
 
 [[lib]]
 name = "slang"
@@ -246,6 +248,8 @@ sha256 = "21edd1021dfb430e37aa6214c9b3bbaa5634b1859cbbef7231e738af4f19c956"
 license = "MIT OR Unlicense"
 # The library (one TU and its header); the tests, data and bindings are not used.
 files = ["ufbx.c", "ufbx.h"]
+# UBSan fix in ufbxi_f64_to_i64() (2^63 converted to int64_t); see the patch header. DENG-106.
+patches = ["patches/0001-f64-to-i64-saturation.patch"]
 
 [[lib]]
 name = "tinyexr"

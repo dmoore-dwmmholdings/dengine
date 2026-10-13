@@ -277,6 +277,36 @@ de_result de_tex_dtex_from_chain(const de_allocator *a, const de_tex_dtex_desc *
 de_result de_tex_dtex_from_blocks(const de_allocator *a, const de_tex_dtex_desc *d,
                                   const de_tex_blocks *b, u32 first_mip, de_tex_dtex *out);
 
+/* ---- Decoded-bytes limit (texture_decode.c; DENG-106) ---------------------------------------- */
+
+/** Default of the `max_decoded_mib` setting: the largest decoded image of one import. */
+#define DE_TEX_MAX_DECODED_MIB_DEFAULT 1024u
+/** Largest `max_decoded_mib` value accepted (1 TiB). */
+#define DE_TEX_MAX_DECODED_MIB_MAX (1u << 20)
+
+/**
+ * Carries the decoded-bytes limit of one import to the decoders: an allocator that forwards every
+ * call to `parent` and holds `limit`. The importer passes `&alloc` as the allocator of every stage,
+ * so the decoder signatures stay as they are. A decoder calls de_tex_limit_check with the size of
+ * the image it is about to decode, before any pixel is allocated (by it or by a third-party
+ * library).
+ */
+typedef struct de_tex_limit {
+    de_allocator alloc; /**< forwards to `parent`; give this to the stages */
+    const de_allocator *parent;
+    u64 limit; /**< bytes */
+} de_tex_limit;
+
+/** Sets up `l` (`parent` NULL = the heap). Returns `&l->alloc`. */
+const de_allocator *de_tex_limit_init(de_tex_limit *l, const de_allocator *parent, u64 limit);
+
+/**
+ * DE_OK when a decoded image of `bytes` (f32 RGBA, every layer and face; or the stored blocks of
+ * a BC pass-through) fits the limit of `a`. An allocator that is not a de_tex_limit has no limit.
+ * Else DE_ERR_UNSUPPORTED, with a message that names `what`, the size and the setting.
+ */
+de_result de_tex_limit_check(const de_allocator *a, u64 bytes, const char *what);
+
 DE_EXTERN_C_END
 
 #endif /* DE_TEXTURE_INTERNAL_H */

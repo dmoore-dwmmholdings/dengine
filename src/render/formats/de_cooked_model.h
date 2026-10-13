@@ -140,14 +140,15 @@ static inline bool de_cooked_model_parse(const void *data, u64 size, de_cooked_m
             w = "bad node record";
             goto fail;
         }
-        /* No cycle: walking up from any node ends within N steps. */
+        /* No cycle: walking up from any node ends within N steps. A parent of a later node is
+         * not checked yet: stop at one out of range (DENG-106: it was read past the table). */
         u32 at = parent, steps = 0;
-        while (at != DE_COOKED_NONE && steps <= out->node_count) {
+        while (at != DE_COOKED_NONE && at < out->node_count && steps <= out->node_count) {
             at = de_cooked_get_u32(out->nodes + (u64)at * DE_COOKED_MODEL_NODE_SIZE + 8);
             ++steps;
         }
         if (at != DE_COOKED_NONE) {
-            w = "node parent cycle";
+            w = at < out->node_count ? "node parent cycle" : "bad node record";
             goto fail;
         }
     }
