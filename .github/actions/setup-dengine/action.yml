@@ -3,7 +3,8 @@
 # Installs pinned CMake and Ninja (pip wheels, the same version on every OS), Python, the MSVC
 # developer environment on Windows, makes sure the compiler for `compiler` exists (installing
 # LLVM pieces where the image lacks them), and sets up ccache (Linux, macOS) or sccache (Windows)
-# as the CMake compiler launcher. docs/ci.md describes how the workflows use it.
+# as the CMake compiler launcher, and caches vendor.py's archive directory (prebuilt binaries
+# that a configure downloads, DENG-390). docs/ci.md describes how the workflows use it.
 #
 # The Windows SDK comes from the runner image. Nothing here caches or uploads SDK files
 # (CONVENTIONS §6): the compiler cache holds object files only.
@@ -137,6 +138,30 @@ runs:
         evict-old-files: job
         save: ${{ inputs.cache-save }}
         job-summary: ""
+
+    # Prebuilt binaries (`kind = "prebuilt"` in third_party/vendor.toml, DENG-390) are downloaded
+    # at configure time into vendor.py's cache, ~/.cache/dengine-vendor (DE_VENDOR_CACHE unset).
+    # Each OS keeps its own host's archives, keyed by the pin list. The directory is created
+    # first, so a run with nothing to download still saves a (small) cache entry.
+    - name: Vendor archive cache directory
+      shell: bash
+      run: mkdir -p ~/.cache/dengine-vendor
+
+    - name: Vendor archive cache
+      if: inputs.cache-save == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/dengine-vendor
+        key: vendor-host-${{ runner.os }}-${{ hashFiles('third_party/vendor.toml') }}
+        restore-keys: vendor-host-${{ runner.os }}-
+
+    - name: Vendor archive cache (restore only)
+      if: inputs.cache-save != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/dengine-vendor
+        key: vendor-host-${{ runner.os }}-${{ hashFiles('third_party/vendor.toml') }}
+        restore-keys: vendor-host-${{ runner.os }}-
 
     - name: Use the compiler cache as CMake launcher
       if: inputs.cache-key != ''

@@ -3,6 +3,13 @@
 DEngine builds from this repository alone. Every dependency is vendored here, pinned to an exact
 upstream version, and ships with its licence (SPEC §22, CONVENTIONS §6).
 
+**The one exception is prebuilt tool binaries** (policy rule 9). A library that ships only as
+large per-platform binaries, such as the Slang shader compiler (about 38 MB per platform), is
+pinned here by URL and sha256 for each host, but its binaries are not committed. The build
+downloads the archive for its host once into the vendor cache, checks the hash, and extracts the
+files into the build directory. The headers and the licence of such a library are still committed
+here. See "Prebuilt binaries" below.
+
 ## Policy
 
 1. **Allowed libraries only.** A library must be listed in the SPEC §22 table, or added on the
@@ -30,6 +37,14 @@ upstream version, and ships with its licence (SPEC §22, CONVENTIONS §6).
 8. **C++ libraries only behind a C interface inside one module** (SPEC §4.2, DENG-2 Q1). The
    `.cpp` shim lives in that module's `src/` directory. No third-party type appears in a public
    header.
+9. **Prebuilt binaries are pinned, not committed.** Use a `kind = "prebuilt"` entry only for a
+   library on the §22 list that upstream ships as per-platform binaries and that the engine does
+   not build from source (today: Slang, DENG-289). The entry pins one archive per host
+   (`macos-arm64`, `linux-x64`, `windows-x64`) by URL and sha256. Its headers and `LICENSE` are
+   committed like any other library; the binaries are never committed, and a binary under
+   `third_party/<name>/` fails `vendor.py verify`. Rules 1, 2, 5 and 6 apply unchanged: one entry
+   per library (all hosts in the same entry), one version, an allowed licence, no proprietary
+   SDKs.
 
 ## Layout of a library directory
 
@@ -49,6 +64,46 @@ archive, except the archive's `.gitignore` and `.gitattributes` files, which are
 Every vendored file is committed: `vendor.py` fails when git ignores one (DENG-362). The
 `third_party/.gitattributes` file turns off line-ending conversion here, so that checkouts stay
 byte-identical on Windows too.
+
+## Prebuilt binaries
+
+A prebuilt entry is a normal `[[lib]]` table with `kind = "prebuilt"`, followed by one
+`[lib.hosts.<host>]` table per host:
+
+```toml
+[[lib]]
+name = "<name>"
+kind = "prebuilt"
+version = "<version>"
+url = "<one host's archive>"        # the committed part: headers and LICENSE
+sha256 = "<sha256>"
+license = "<SPDX>"
+strip = 0
+files = ["include/*.h"]
+
+[lib.hosts.linux-x64]
+url = "<linux archive>"
+sha256 = "<sha256>"
+strip = 0
+files = ["lib/lib<name>*.so*"]      # what is extracted into the build directory
+
+[lib.hosts.macos-arm64]             # and windows-x64
+...
+```
+
+- `vendor.py fetch <name>` writes the committed part into `third_party/<name>/` and downloads
+  this host's archive into the vendor cache (`$DE_VENDOR_CACHE`, or `~/.cache/dengine-vendor`).
+  `--all-hosts` downloads every host's archive.
+- `vendor.py verify` checks the committed part byte for byte and this host's archive (sha256 and
+  `files`). `verify --all-hosts`, which the `Checks` CI job runs, checks every host's archive.
+- At configure time, `de_prebuilt_import(<name>)` (`cmake/DePrebuilt.cmake`) extracts the target
+  host's files into `<build>/prebuilt/<name>/`. It downloads the archive first if the cache does
+  not have it, and fails the configure on a hash mismatch. It extracts again only when the pin
+  changes or a file is missing. The library's `CMakeLists.txt` calls it only when a target that
+  is built needs the library, so other builds (Shipping, for example) download nothing.
+- A configure never writes into `third_party/`, also for prebuilt entries.
+
+The commands and the details are in `tools/vendor/README.md`.
 
 ## CMake rules
 

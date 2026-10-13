@@ -94,8 +94,8 @@ cross-architecture determinism jobs are in `determinism.yml` (below).
 
 | Job | What it runs | Local equivalent |
 |---|---|---|
-| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
-| vendor.py verify | `python tools/vendor/vendor.py verify`. The archives are cached in `~/.cache/dengine-vendor`, keyed by the hash of `third_party/vendor.toml`, so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify` |
+| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
+| vendor.py verify | `python tools/vendor/vendor.py verify --all-hosts`: every vendored tree, and the archive of every host of a prebuilt entry (DENG-390). The archives are cached in `~/.cache/dengine-vendor` (key `vendor-all-<hash of third_party/vendor.toml>`), so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify --all-hosts` |
 | clang-format (changed files) | `clang-format --dry-run --Werror` on the C and C++ files that the change adds or modifies, outside `third_party/`. | See below. |
 
 The format job compares against the pull request base. For a push, it compares against the
@@ -171,8 +171,16 @@ Every build job uses this composite action. It does these steps:
    `CMAKE_<LANG>_COMPILER_LAUNCHER` in the environment, so the presets do not change. Pull
    requests restore the cache but do not save it.
 
+5. Caches the vendor archive directory `~/.cache/dengine-vendor`, where a configure downloads the
+   prebuilt binaries of a `kind = "prebuilt"` entry (`cmake/DePrebuilt.cmake`, DENG-390). The
+   key is `vendor-host-<runner OS>-<hash of third_party/vendor.toml>`, so each OS keeps only its
+   own host's archives, and a new pin falls back to the newest cache of the same OS. The
+   directory is created first, so the step works when nothing was downloaded. With
+   `cache-save: false` (pull requests) the cache is restored but not saved.
+
 The Windows SDK comes from the runner image. No job caches or uploads SDK files
-(CONVENTIONS §6). The compiler cache holds object files only.
+(CONVENTIONS §6). The compiler cache holds object files only, and the vendor cache holds only the
+pinned archives of `third_party/vendor.toml`.
 
 Debug info and the cache: a local Debug or Dev build with `cl` or `clang-cl` uses `/Zi` (one
 shared program database per target), which sccache cannot cache with `cl`. Because the action

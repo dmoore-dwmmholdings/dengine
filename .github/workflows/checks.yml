@@ -1,6 +1,6 @@
 # Repository checks (SPEC §19.3): the public-header compile check and the layering check (the
-# CTest label `check`), the vendored trees against their pinned archives, and clang-format on
-# the C files a change touches. Local equivalents are in docs/ci.md.
+# CTest label `check`), the vendored trees and every host's prebuilt archive against their pins,
+# and clang-format on the C files a change touches. Local equivalents are in docs/ci.md.
 name: Checks
 
 on:
@@ -62,16 +62,20 @@ jobs:
           python-version: "3.11"
 
       # vendor.py keeps the pinned archives in ~/.cache/dengine-vendor (DE_VENDOR_CACHE unset), so
-      # a warm cache means verify does not download anything.
+      # a warm cache means verify does not download anything. This job holds every host's
+      # prebuilt archive; the build jobs cache only their own host's (vendor-host-<os>-*, set up
+      # by setup-dengine), so the key prefixes differ.
       - name: Cache vendor archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/dengine-vendor
-          key: vendor-${{ hashFiles('third_party/vendor.toml') }}
-          restore-keys: vendor-
+          key: vendor-all-${{ hashFiles('third_party/vendor.toml') }}
+          restore-keys: vendor-all-
 
+      # --all-hosts: a `kind = "prebuilt"` entry's archive is checked for every host (url and
+      # sha256), not only for this Linux runner's (DENG-390).
       - name: Verify vendored trees
-        run: python tools/vendor/vendor.py verify
+        run: python tools/vendor/vendor.py verify --all-hosts
 
   format:
     name: clang-format (changed files)
