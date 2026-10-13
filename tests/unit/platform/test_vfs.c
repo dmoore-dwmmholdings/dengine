@@ -227,6 +227,15 @@ TEST(vfs, reject_escape) {
 
     /* Mount arguments. */
     EXPECT_EQ(de_fs_mount("pack", dir, DE_MOUNT_READ_ONLY, 0), DE_ERR_UNSUPPORTED);
+    /* DENG-393: pack:/ is reserved and never mounted, so its paths never resolve. */
+    EXPECT_EQ(de_fs_mount("pack", dir, DE_MOUNT_WRITABLE, 10), DE_ERR_UNSUPPORTED);
+    EXPECT_EQ(de_fs_resolve("pack:/game.dpak", buf, sizeof buf), DE_ERR_NOT_FOUND);
+    void *pack_bytes = NULL;
+    u64 pack_size = 0;
+    EXPECT_EQ(de_file_read_all("pack:/data/hello", NULL, &pack_bytes, &pack_size),
+              DE_ERR_NOT_FOUND);
+    EXPECT_TRUE(pack_bytes == NULL);
+    de_error_clear();
     EXPECT_EQ(de_fs_mount("Bad", dir, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_fs_mount("", dir, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_fs_mount("x", NULL, DE_MOUNT_READ_ONLY, 0), DE_ERR_INVALID_ARGUMENT);

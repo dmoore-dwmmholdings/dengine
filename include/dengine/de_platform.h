@@ -1142,7 +1142,10 @@ DE_API const de_lock_hooks *de_lock_set_hooks(const de_lock_hooks *hooks);
  *   - `<root>` is 1 to DE_FS_ROOT_MAX bytes of `[a-z0-9_-]`. Standard roots (de_fs_init):
  *     `game:/` (install directory, read-only), `user:/` (saves, settings; writable), `cache:/`
  *     (writable), `dev:/` (project directory, Debug and Dev builds only). `pack:/` is reserved
- *     for pack archives (S08) and cannot be mounted.
+ *     and has no mounts: de_fs_mount refuses it, so a `pack:/` path is always DE_ERR_NOT_FOUND
+ *     (root not mounted). `.dpak` packs are not a VFS root; the asset system reads them by
+ *     asset ID (de_asset_pack_mount; Trama "Decision: There is no pack:/ VFS root; packs are
+ *     read only by asset ID", DENG-393).
  *   - `<path>` uses `/` separators and is UTF-8. Empty and `.` segments are dropped; `..` removes
  *     the segment before it. A `..` that would leave the root, a backslash, a `:`, a control
  *     byte or invalid UTF-8 is rejected with DE_ERR_INVALID_ARGUMENT, and so is a native path
@@ -1211,8 +1214,8 @@ DE_API void de_fs_shutdown(void);
  * mount comes first.
  * @param flags  de_mount_flags.
  * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad root name or path too long), DE_ERR_UNSUPPORTED
- *         (`pack`, reserved for S08), DE_ERR_NOT_FOUND (not a directory), DE_ERR_OUT_OF_MEMORY
- *         (DE_FS_MAX_MOUNTS reached).
+ *         (`pack`, reserved, never mountable), DE_ERR_NOT_FOUND (not a directory),
+ *         DE_ERR_OUT_OF_MEMORY (DE_FS_MAX_MOUNTS reached).
  */
 DE_API de_result de_fs_mount(const char *root, const char *native_dir, u32 flags, i32 priority);
 /** Removes the mount of `native_dir` under `root` (as given to de_fs_mount). DE_ERR_NOT_FOUND. */

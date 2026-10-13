@@ -241,3 +241,41 @@ endif()
             LABELS "unit;alloc-guard;host" TIMEOUT 300)
     endif()
 endif()
+
+# DENG-393: an engine on a real cooked pack in game:/ (test_packed_engine.c), in every build type.
+# game:/ is tests/data/packed_game/<host platform>/ (a pack cooked for another platform is refused,
+# which packed_engine.other_platform_pack checks with another platform's directory). Shipping
+# engine create mounts the pack itself (PACKED mode); the other builds mount it through the same
+# de__host_mount_packs. The packs are checked in because a Release or Shipping de-cook refuses to
+# cook; packed_game.packs_current re-cooks tests/data/cook_project/engine.toml for the three
+# platforms with the real de-cook (Debug and Dev only) and fails if a checked-in pack differs.
+# check_packed_game.cmake says how to regenerate them.
+if(WIN32)
+    set(_de_pg_host windows)
+    set(_de_pg_other linux)
+elseif(APPLE)
+    set(_de_pg_host macos)
+    set(_de_pg_other linux)
+else()
+    set(_de_pg_host linux)
+    set(_de_pg_other macos)
+endif()
+de_add_test(NAME packed_engine SOURCES test_packed_engine.c LIBS de_host TIMEOUT 120)
+if(TARGET test_packed_engine)
+    target_include_directories(test_packed_engine PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_packed_engine PRIVATE
+        DE_PACKED_GAME_DIR="${DE_ROOT_DIR}/tests/data/packed_game/${_de_pg_host}"
+        DE_PACKED_GAME_OTHER_DIR="${DE_ROOT_DIR}/tests/data/packed_game/${_de_pg_other}"
+        DE_COOK_PROJECT_ASSETS_DIR="${DE_ROOT_DIR}/tests/data/cook_project/assets"
+        DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_packed_engine_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_packed_engine_tmp")
+endif()
+if(DE_BUILD_TESTS AND DE_BUILD_TOOLS AND CMAKE_BUILD_TYPE MATCHES "^(Debug|Dev)$"
+   AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    add_test(NAME packed_game.packs_current
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDE_COOK=$<TARGET_FILE:de-cook>"
+            "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/packed_game_cook"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_packed_game.cmake")
+    set_tests_properties(packed_game.packs_current PROPERTIES LABELS "unit;host;cook" TIMEOUT 120)
+endif()

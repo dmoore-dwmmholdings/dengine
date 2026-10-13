@@ -7,7 +7,11 @@ kept in the repo, next to the code, because the code must match it byte for byte
   `src/asset/dpak/dpak_format.h`. It is internal, header-only, and shared by the writer and
   the reader.
 - Writer: `tools/pack/lib/dpak_writer.{h,c}` (target `de_pack_lib`, DENG-211).
-- Reader and mount stack: `src/asset/dpak/` (DENG-212).
+- Reader: `src/asset/dpak/dpak_reader.{h,c}` (DENG-212).
+- Mount stack (priorities, overrides, bundle lookup): `src/asset/mount.c` and
+  `src/asset/mount_internal.h`; pack loads in the pipeline: `src/asset/pack_stage.c` (DENG-212).
+  A packed (Shipping) engine mounts every `.dpak` of `game:/` at create: `src/host/host_packs.c`
+  (DENG-213). Packs are not a VFS root: `pack:/` is reserved and never mounted (DENG-393).
 
 Current version: **2**. Readers also accept version 1 (see "Version 1").
 

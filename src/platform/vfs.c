@@ -304,8 +304,13 @@ de_result de_fs_mount(const char *root, const char *native_dir, u32 flags, i32 p
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "de_fs_mount: bad root name '%s' (expected [a-z0-9_-]{1,%d})", root,
                        DE_FS_ROOT_MAX);
+    /* DENG-393: there is no pack:/ root. Packs are read by asset ID through the asset system
+     * (Trama "Decision: There is no pack:/ VFS root; packs are read only by asset ID"); the name
+     * stays reserved so no game builds on it. */
     if (strcmp(root, "pack") == 0)
-        return DE_FAIL(DE_ERR_UNSUPPORTED, "de_fs_mount: pack:/ is reserved for pack archives");
+        return DE_FAIL(DE_ERR_UNSUPPORTED,
+                       "de_fs_mount: pack:/ is reserved (packs mount in the asset "
+                       "system: de_asset_pack_mount)");
     size_t dl = strlen(native_dir);
     /* Keep one separator for "/" and "C:/"; strip the others. */
     while (dl > 1 && is_sep(native_dir[dl - 1]) && !(dl == 3 && native_dir[1] == ':'))
