@@ -1,11 +1,15 @@
 /*
- * checksum.c: de_physics_checksum (DENG-132; DENG-135 extends it with contact state).
+ * checksum.c: de_physics_checksum (DENG-132; DENG-135 added the contact state).
  *
  * XXH3-64 (de_hash64) over an explicit little-endian byte encoding of the state, never raw
  * struct bytes, so padding never leaks in: a header (tick, gravity, substeps, live body count),
- * then one record per live body in ascending index order. Each record is hashed with the running
- * value as the seed. Floats are hashed by their bit patterns.
+ * then one record per live body in ascending index order, then the contacts: a header (manifold
+ * and end-record counts), one record per manifold in key order (key, generations, id, flags,
+ * normal, then every point: anchors, separation, feature id, impulses) and one per end record.
+ * Each record is hashed with the running value as the seed. Floats are hashed by their bit
+ * patterns. A world that has not stepped yet hashes the contacts as zero counts.
  */
+#include "physics/contact/manifold.h"
 #include "physics/physics_internal.h"
 
 typedef struct ck_buf {
@@ -41,6 +45,60 @@ static void ck_v3(ck_buf *c, de_vec3 v) {
 static void ck_m3(ck_buf *c, const de_mat3 *m) {
     for (u32 i = 0; i < 9; ++i)
         ck_f32(c, m->m[i]);
+}
+
+static void ck_key(ck_buf *c, const de__contact_key *k, u32 gen_a, u32 gen_b) {
+    ck_u32(c, k->a);
+    ck_u32(c, k->b);
+    ck_u32(c, k->child_a);
+    ck_u32(c, k->sub_a);
+    ck_u32(c, k->child_b);
+    ck_u32(c, k->sub_b);
+    ck_u32(c, gen_a);
+    ck_u32(c, gen_b);
+}
+
+/* DENG-135: manifolds and end records, in key order. */
+static u64 ck_contacts(const de_physics_world *p, u64 h) {
+    const de__manifold *m = NULL;
+    const de__contact_end *e = NULL;
+    u32 nm = 0, ne = 0;
+    de__contacts_manifolds(p, &m, &nm);
+    de__contacts_ended(p, &e, &ne);
+    ck_buf c;
+    c.n = 0;
+    ck_u32(&c, nm);
+    ck_u32(&c, ne);
+    h = de_hash64(c.b, c.n, h);
+    for (u32 i = 0; i < nm; ++i) {
+        const de__manifold *x = &m[i];
+        c.n = 0;
+        ck_key(&c, &x->key, x->gen_a, x->gen_b);
+        ck_u32(&c, x->id);
+        ck_u32(&c, x->flags);
+        ck_v3(&c, x->normal);
+        ck_u32(&c, x->point_count);
+        ck_u32(&c, x->serial);
+        for (u32 k = 0; k < x->point_count; ++k) {
+            const de__contact *pt = &x->points[k];
+            ck_v3(&c, pt->local_a);
+            ck_v3(&c, pt->local_b);
+            ck_f32(&c, pt->separation);
+            ck_u32(&c, pt->feature_id);
+            ck_f32(&c, pt->normal_impulse);
+            ck_f32(&c, pt->tangent_impulse[0]);
+            ck_f32(&c, pt->tangent_impulse[1]);
+        }
+        h = de_hash64(c.b, c.n, h);
+    }
+    for (u32 i = 0; i < ne; ++i) {
+        c.n = 0;
+        ck_key(&c, &e[i].key, e[i].gen_a, e[i].gen_b);
+        ck_u32(&c, e[i].id);
+        ck_u32(&c, e[i].flags);
+        h = de_hash64(c.b, c.n, h);
+    }
+    return h;
 }
 
 u64 de_physics_checksum(const de_physics_world *p) {
@@ -92,5 +150,5 @@ u64 de_physics_checksum(const de_physics_world *p) {
         ck_v3(&c, b->world_aabb[i].max);
         h = de_hash64(c.b, c.n, h);
     }
-    return h;
+    return ck_contacts(p, h);
 }

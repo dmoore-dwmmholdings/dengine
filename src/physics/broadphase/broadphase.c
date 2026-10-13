@@ -13,6 +13,7 @@ struct de__broadphase {
     u32 capacity;  /**< max_bodies */
     u32 max_pairs; /**< capacity of every pair buffer */
     f32 margin;
+    f32 pair_distance; /**< DENG-135: output pairs whose world AABBs are this close (0..margin) */
 
     de__tree_pool pool;
     de__tree trees[DE__BP_TREE_COUNT];
@@ -319,7 +320,12 @@ static void sync(de_physics_world *p, de__broadphase *bp) {
             continue;
         de__tree *t = &bp->trees[tree_of(p, i)];
         const de_aabb fat = de__tree_box(t, leaf);
-        if (de__aabb_contains(&fat, &b->world_aabb[i]))
+        /* With a pair distance d (DENG-135) the fat box must hold the world box grown by d, so
+         * two world boxes within d of each other always have overlapping fat boxes. */
+        const de_aabb need = bp->pair_distance > 0.0f
+                                 ? fat_box(&b->world_aabb[i], bp->pair_distance)
+                                 : b->world_aabb[i];
+        if (de__aabb_contains(&fat, &need))
             continue;
         de__tree_move(t, leaf, fat_box(&b->world_aabb[i], bp->margin));
         if (!bp->moved[i]) {
@@ -333,6 +339,17 @@ void de__broadphase_sync(de_physics_world *p) {
     de__broadphase *bp = p != NULL ? de__broadphase_get(p) : NULL;
     if (bp != NULL)
         sync(p, bp);
+}
+
+/* World boxes a and b overlap, or (DENG-135) are within distance d on every axis. Such pairs are
+ * always candidates: sync keeps every fat box around its world box grown by d (d <= margin), and
+ * boxes within d have overlapping grown boxes (the f32 sums here round no further out than the
+ * outward-rounded grown boxes). */
+static bool boxes_within(const de_aabb *a, const de_aabb *b, f32 d) {
+    if (d == 0.0f)
+        return de__aabb_overlap(a, b);
+    return a->min.x <= b->max.x + d && b->min.x <= a->max.x + d && a->min.y <= b->max.y + d &&
+           b->min.y <= a->max.y + d && a->min.z <= b->max.z + d && b->min.z <= a->max.z + d;
 }
 
 /* Fat boxes of live bodies a and b overlap (both have proxies). */
@@ -468,11 +485,12 @@ de_result de__broadphase_update(de_physics_world *p) {
         cand = out;
     }
 
-    /* 5. Output: the candidates whose world AABBs overlap, already sorted. */
+    /* 5. Output: the candidates whose world AABBs overlap (or are within pair_distance), already
+     *    sorted. */
     u32 np = 0;
     for (u32 k = 0; k < bp->cand_count; ++k) {
         const u32 a = key_a(cand[k]), c = key_b(cand[k]);
-        if (!de__aabb_overlap(&b->world_aabb[a], &b->world_aabb[c]))
+        if (!boxes_within(&b->world_aabb[a], &b->world_aabb[c], bp->pair_distance))
             continue;
         bp->pairs[np].a = a;
         bp->pairs[np].b = c;
@@ -492,6 +510,15 @@ de_result de__broadphase_update(de_physics_world *p) {
     }
     bp->overflow_logged = false;
     return DE_OK;
+}
+
+void de__broadphase_set_pair_distance(de_physics_world *p, f32 distance) {
+    de__broadphase *bp = p != NULL ? de__broadphase_get(p) : NULL;
+    if (bp == NULL)
+        return;
+    if (!de__f32_finite(distance) || !(distance > 0.0f))
+        distance = 0.0f;
+    bp->pair_distance = de__minf(distance, bp->margin);
 }
 
 void de__broadphase_pairs(const de_physics_world *p, const de__bp_pair **pairs, u32 *count) {

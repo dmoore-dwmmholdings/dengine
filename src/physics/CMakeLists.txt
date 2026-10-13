@@ -55,3 +55,13 @@ if(TARGET de_physics)
         narrow/epa.c
         narrow/midphase.c)
 endif()
+
+# DENG-135: persistent contact manifolds (feature matching, reduction, accumulation, touch state)
+# and the collision pipeline wired into de_physics_step (step.c, checksum.c above).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        contact/manifold.h
+        contact/manifold.c
+        contact/reduce.c
+        contact/pair_cache.c)
+endif()

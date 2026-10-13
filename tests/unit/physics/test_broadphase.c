@@ -614,6 +614,7 @@ TEST(physics_broadphase, no_alloc_after_warmup) {
     static scene s;
     scene_init(&s, p, 1500, 14.0, 9, false);
     ASSERT_EQ(de__broadphase_update(p), DE_OK); /* warm-up: creates the broadphase */
+    de_physics_step(p, 1.0f / 60.0f);           /* and the contacts state (DENG-135) */
     const de_tracking_stats before = de_tracking_allocator_stats(&t);
     for (u32 tick = 0; tick < 120; ++tick) {
         scene_tick(&s, tick, 5, 20); /* includes body destroy + create */

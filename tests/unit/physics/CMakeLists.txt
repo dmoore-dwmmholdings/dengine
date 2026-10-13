@@ -108,3 +108,15 @@ foreach(_de_np_test test_physics_sat test_physics_gjk test_physics_midphase)
         target_compile_options(${_de_np_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-135: persistent contact manifolds (reduction, carry-over, accumulation, touch state,
+# triggers) and the collision pipeline of de_physics_step (worker-count invariance, overflow,
+# checksum, no allocation after warm-up).
+de_add_test(NAME physics_manifold SOURCES test_manifold.c LIBS de_physics)
+de_add_test(NAME physics_pipeline SOURCES test_collide_pipeline.c LIBS de_physics TIMEOUT 180)
+foreach(_de_ct_test test_physics_manifold test_physics_pipeline)
+    if(TARGET ${_de_ct_test})
+        target_include_directories(${_de_ct_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ct_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

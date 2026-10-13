@@ -15,7 +15,8 @@
  *
  * Pairs. de__broadphase_update keeps a persistent set of candidate pairs (proxies whose fat boxes
  * overlap and that may collide), updated from the moved proxies only, and outputs the candidates
- * whose world AABBs overlap (closed boxes: touching counts). The output is sorted by
+ * whose world AABBs overlap (closed boxes: touching counts; or, once DENG-135's step sets a pair
+ * distance, are within it: de__broadphase_set_pair_distance). The output is sorted by
  * (lower body index, higher body index) and contains each pair once, so it is exactly
  *
  *     { (a, b) : a < b, both bodies alive with a shape, de__bp_should_collide(a, b),
@@ -138,6 +139,14 @@ de_result de__broadphase_ensure(de_physics_world *p, de__broadphase **out);
  *         overlap, and a warning is logged on the first such update).
  */
 de_result de__broadphase_update(de_physics_world *p);
+
+/**
+ * DENG-135: from the next update on, output the candidates whose world AABBs are within
+ * `distance` (m) of each other on every axis instead of overlapping, so contacts within the
+ * speculative margin are found. Clamped to [0, margin] (a pair that close is always a candidate);
+ * 0 or a bad value restores plain overlap (the default). No effect before the broadphase exists.
+ */
+void de__broadphase_set_pair_distance(de_physics_world *p, f32 distance);
 
 /**
  * The output of the last de__broadphase_update: `*count` pairs sorted by (a, b), a < b. Valid
