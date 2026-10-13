@@ -9,6 +9,7 @@
 #include "host/host_crash.h" /* DENG-96 */
 
 #include <dengine/de_debug.h>
+#include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
 
 #include <string.h>
@@ -19,6 +20,13 @@ static void engine_teardown(de__engine *e) {
     if (DE_HANDLE_VALID(e->pub.window)) {
         de_window_destroy(e->pub.window);
         e->pub.window = (de_window){0};
+    }
+    /* DENG-84: input, created after the world: detached from the world (its two systems and its
+     * resource) before the world goes away. */
+    if (e->pub.input != NULL) {
+        de_input_detach(e->pub.input);
+        de_input_destroy(e->pub.input);
+        e->pub.input = NULL;
     }
 #if DE_HAS_ASSETS
     /* DENG-143: before the world, which it detaches from (system, resource), and before the I/O
@@ -197,6 +205,21 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     if (!DE_HANDLE_VALID(de_asset_event_type(e->pub.assets)))
         return engine_fail(e, DE_ERR_OUT_OF_MEMORY, "asset events");
 #endif
+
+    /* 7d. Input (DENG-84). After the world, which it joins as the de_input_resource resource
+     * with the input.actions (PreUpdate) and input.fixed_tick (FixedUpdate) systems, at a fixed
+     * point before the game registers its systems. The input follows the focus window (desc
+     * window 0), so it needs no window here; headless runs get an input state that sees no
+     * events. The loop feeds it (loop.c). */
+    de_input_desc indesc;
+    memset(&indesc, 0, sizeof indesc);
+    indesc.allocator = a;
+    r = de_input_create(&indesc, &e->pub.input);
+    if (r != DE_OK)
+        return engine_fail(e, r, "input");
+    r = de_input_attach(e->pub.input, e->pub.world);
+    if (r != DE_OK)
+        return engine_fail(e, r, "input attach");
 
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
      * has none. The optional modules stay NULL. */

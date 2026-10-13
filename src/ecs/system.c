@@ -430,6 +430,13 @@ bool de__ecs_in_schedule(void) {
 }
 /* ---- end DENG-141 --------------------------------------------------------------------------- */
 
+/* ---- DENG-84: the current system's schedule (in_schedule_internal.h) ---------------------- */
+int de__ecs_current_schedule(void) {
+    const ecs_system *s = ecs_tls_system;
+    return s != NULL ? (int)s->schedule : -1;
+}
+/* ---- end DENG-84 ---------------------------------------------------------------------------- */
+
 u32 ecs_system_stamp_tick(const de_world *w) {
     const ecs_system *s = ecs_system_current(w);
     return s != NULL ? s->this_run : w->change_tick;

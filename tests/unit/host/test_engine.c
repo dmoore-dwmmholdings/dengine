@@ -11,6 +11,7 @@
 #include "host/host_internal.h"
 
 #include <dengine/de_debug.h>
+#include <dengine/de_input.h> /* DENG-84 */
 
 #include <stdio.h>
 #include <string.h>
@@ -59,7 +60,15 @@ TEST(engine, create_destroy_no_leak) {
     EXPECT_TRUE(assets_ref != NULL && assets_ref->ptr == e->assets);
     EXPECT_TRUE(e->gpu == NULL);
     EXPECT_TRUE(e->renderer == NULL);
-    EXPECT_TRUE(e->input == NULL);
+    /* DENG-84: the input state exists and is attached to the world. */
+    ASSERT_TRUE(e->input != NULL);
+    {
+        const de_type_id it = de_type_find(e->types, "de_input_resource");
+        ASSERT_TRUE(DE_HANDLE_VALID(it));
+        const de_resource_id rid = de_resource_find(e->world, it);
+        const de_input_resource *ir = (const de_input_resource *)de_resource_get(e->world, rid);
+        EXPECT_TRUE(ir != NULL && ir->input == e->input);
+    }
     EXPECT_TRUE(e->audio == NULL);
     EXPECT_TRUE(e->physics == NULL);
     EXPECT_TRUE(e->ui == NULL);

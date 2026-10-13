@@ -551,7 +551,73 @@ DE_API bool de_pad_accel(const de_input *in, de_gamepad p, de_vec3 *m_per_s2);
 DE_API void de_pad_gyro_calibrate(de_input *in, de_gamepad p, f32 seconds);
 
 /* ---------- Action maps ---------- */
+
+/*
+ * Action maps (S21, DENG-84). Games read named actions, not devices. An action map is a named
+ * list of actions; each action has a type, an interaction and up to DE_ACTION_MAX_BINDINGS
+ * bindings to keys, mouse, pad buttons and axes, or the gyro. Maps are inactive until
+ * de_action_map_push(); de_action_map_pop() deactivates a map again (and resets its actions).
+ *
+ * Evaluation (system "input.actions", PreUpdate, after de_input_begin_frame), per active map in
+ * push order, per action in the order it was added, per binding in index order:
+ *   1. Each binding reads its source. Every value is in "action space": +x right, +y UP. Keys
+ *      and buttons give 0 or 1, pad axes their value (sticks [-1, 1], triggers [0, 1]), the
+ *      mouse delta its motion this frame in points (+y up, so the platform's +y down is
+ *      flipped), the wheel its notches, the gyro rad/s (de_pad_gyro). Pad sources read every
+ *      connected pad; the largest magnitude wins, ties go to the pad connected first.
+ *   2. Chords: a binding with `modifier_key` reads 0 unless that key is held. While a chord's
+ *      modifier is held, it suppresses every binding of the same map that has the same source
+ *      and code and no modifier (Shift+E suppresses plain E in that map).
+ *   3. Modifiers, in this fixed order: deadzone -> curve -> scale -> invert (see de_binding).
+ *   4. Composites: the bindings with a composite slot of one action form one composite. Each
+ *      slot is the largest value (floored at 0) of its bindings. 2D: (right - left, up - down),
+ *      scaled down to length 1 when it is longer (W+D gives (0.7071, 0.7071)). 1D:
+ *      positive - negative.
+ *   5. Combination: each other binding, and the composite, is a candidate; the candidate with
+ *      the largest magnitude wins. Ties go to the lower binding index (the composite has the
+ *      index of its first binding). So the result does not depend on hash or memory order.
+ *   6. The action is actuated while its magnitude (button value, |1D value|, 2D length) is at
+ *      least `press_threshold` (0.5 by default). The interaction turns actuation over time into
+ *      `triggered` (see de_interaction).
+ *
+ * Two views. The frame view is computed once per frame by "input.actions" (PreUpdate). The tick
+ * view is latched per fixed tick by "input.fixed_tick" (FixedUpdate): a trigger of the frame view
+ * since the previous tick is reported in exactly one tick, also when FixedUpdate runs 0 times in
+ * a frame (it then shows in the next tick) or N times (only the first of them). Queries from a
+ * FixedUpdate system read the tick view; every other caller reads the frame view. Systems that
+ * read actions declare DE_READ on de_input_resource, so they run after the input systems.
+ *
+ * Handles carry a generation. Maps and actions live as long as the input state; a stale or
+ * foreign handle reads as an idle action. Main thread only, except the const queries.
+ */
+
+/** Most action maps, actions and bindings one input state holds (all maps together). */
+#define DE_ACTION_MAX_MAPS           32
+#define DE_ACTION_MAX_ACTIONS        256
+#define DE_ACTION_MAX_BINDINGS_TOTAL 1024
+/** Most bindings of one action. */
+#define DE_ACTION_MAX_BINDINGS 16
+/** Longest map or action name, in bytes without the NUL. */
+#define DE_ACTION_NAME_MAX 63
+
+/** Defaults that a zero field of de_action_desc stands for. */
+#define DE_ACTION_DEFAULT_HOLD_SECONDS       0.5f
+#define DE_ACTION_DEFAULT_TAP_SECONDS        0.2f
+#define DE_ACTION_DEFAULT_DOUBLE_TAP_SECONDS 0.3f
+#define DE_ACTION_DEFAULT_PRESS_THRESHOLD    0.5f
+
 typedef enum de_action_type { DE_ACTION_BUTTON, DE_ACTION_AXIS1D, DE_ACTION_AXIS2D } de_action_type;
+/**
+ * When an action is `triggered` (de_action_triggered). "Press" is the frame the action becomes
+ * actuated, "release" the frame it stops; a press and a release inside one frame (a key that
+ * went down and up) count as both, with a held time of 0.
+ * - PRESS: in the press frame.
+ * - RELEASE: in the release frame.
+ * - HOLD: once per press, in the frame the action has been actuated for `hold_seconds`.
+ * - TAP: in the release frame, when it was actuated for less than `tap_seconds`.
+ * - DOUBLE_TAP: in the release frame of a tap whose press came at most `double_tap_seconds`
+ *   after the release of the previous tap. A third tap starts a new pair.
+ */
 typedef enum de_interaction {
     DE_INTERACT_PRESS,
     DE_INTERACT_RELEASE,
@@ -560,6 +626,17 @@ typedef enum de_interaction {
     DE_INTERACT_DOUBLE_TAP
 } de_interaction;
 
+/**
+ * Binding sources and the meaning of de_binding.code:
+ * - KEY: a de_key. MOUSE_BUTTON: a de_mouse_button. PAD_BUTTON: a de_pad_button.
+ * - PAD_AXIS: a de_pad_axis, or DE_BIND_LEFT_STICK / DE_BIND_RIGHT_STICK (2D, both axes).
+ * - MOUSE_DELTA, MOUSE_WHEEL: DE_BIND_AXIS_X, DE_BIND_AXIS_Y or DE_BIND_AXIS_XY (2D).
+ * - GYRO: DE_BIND_AXIS_X, _Y, _Z (rad/s around that pad axis) or DE_BIND_AXIS_XY (2D aim: x =
+ *   -gyro.y (turn right), y = gyro.x (tilt up)).
+ * A 2D code (stick, XY) binds a whole 2D action without a composite slot, or a button action
+ * (by its length). It is refused in a 1D action and in a composite slot. Keys and buttons in a
+ * 2D action need a composite slot.
+ */
 typedef enum de_binding_source {
     DE_BIND_KEY,
     DE_BIND_MOUSE_BUTTON,
@@ -567,18 +644,75 @@ typedef enum de_binding_source {
     DE_BIND_MOUSE_WHEEL,
     DE_BIND_PAD_BUTTON,
     DE_BIND_PAD_AXIS,
-    DE_BIND_GYRO
+    DE_BIND_GYRO,
+    DE_BIND_SOURCE_COUNT_
 } de_binding_source;
 
+/** de_binding.code values of the MOUSE_DELTA, MOUSE_WHEEL and GYRO sources. */
+#define DE_BIND_AXIS_X  0u
+#define DE_BIND_AXIS_Y  1u
+#define DE_BIND_AXIS_Z  2u
+#define DE_BIND_AXIS_XY 3u
+/** de_binding.code values of DE_BIND_PAD_AXIS for a whole stick (2D). */
+#define DE_BIND_LEFT_STICK  6u
+#define DE_BIND_RIGHT_STICK 7u
+
+/** de_binding.composite_slot values. 2D: up, down, left, right. 1D: positive, negative. */
+#define DE_COMPOSITE_NONE     (-1)
+#define DE_COMPOSITE_UP       0
+#define DE_COMPOSITE_DOWN     1
+#define DE_COMPOSITE_LEFT     2
+#define DE_COMPOSITE_RIGHT    3
+#define DE_COMPOSITE_POSITIVE 0
+#define DE_COMPOSITE_NEGATIVE 1
+
+/** Response curve shapes (de_response_curve.type). */
+typedef enum de_curve_type {
+    DE_CURVE_LINEAR, /**< out = in */
+    DE_CURVE_POWER,  /**< out = in ^ exponent (exponent > 0) */
+    DE_CURVE_CUSTOM  /**< piecewise linear through `points` (x strictly increasing) */
+} de_curve_type;
+/** Most points of a custom curve; at least 2. */
+#define DE_CURVE_MAX_POINTS 8
+
+/**
+ * A response curve, applied to a binding's magnitude (|value| in 1D, the length in 2D; the sign
+ * or direction is kept). A custom curve is clamped to its first and last point outside them.
+ * `(de_response_curve){0}` is linear.
+ */
+typedef struct de_response_curve {
+    de_curve_type type;
+    f32 exponent;    /**< DE_CURVE_POWER */
+    u32 point_count; /**< DE_CURVE_CUSTOM: 2 .. DE_CURVE_MAX_POINTS */
+    de_vec2 points[DE_CURVE_MAX_POINTS];
+} de_response_curve;
+
+/**
+ * One binding of an action. Modifiers apply in this fixed order: deadzone -> curve -> scale ->
+ * invert.
+ * - `deadzone` in [0, 1): magnitudes up to it give 0, and the rest is rescaled so the output
+ *   starts at 0 and reaches 1 at full deflection: (m - dz) / (1 - dz). Radial (on the length) for
+ *   2D codes, axial for 1D values. Pad axes are clamped to magnitude 1 after it.
+ * - `curve`: de_response_curve.
+ * - `scale`: multiplies the value; 0 means 1.
+ * - `invert`: negates a 1D value; negates y of a 2D value ("invert look").
+ * `(de_binding){0}` is key code 0 in composite slot 0: set `composite_slot` to DE_COMPOSITE_NONE
+ * for a binding that is not part of a composite.
+ */
 typedef struct de_binding {
     de_binding_source source;
     u32 code;          /* key / button / axis */
     i8 composite_slot; /* -1 none; 0..3 = up/down/left/right for 2D composites */
     f32 scale, deadzone;
     bool invert;
-    u32 modifier_key; /* 0 = none (e.g. Shift+key) */
+    u32 modifier_key;        /* 0 = none (e.g. Shift+key) */
+    de_response_curve curve; /**< DENG-84: linear when zeroed */
 } de_binding;
 
+/**
+ * de_action_add() parameters. Zero thresholds and times mean the DE_ACTION_DEFAULT_* values.
+ * `bindings` (`binding_count` <= DE_ACTION_MAX_BINDINGS) are copied.
+ */
 typedef struct de_action_desc {
     const char *name;
     de_action_type type;
@@ -587,18 +721,71 @@ typedef struct de_action_desc {
     const de_binding *bindings;
     u32 binding_count;
     bool rebindable;
+    f32 tap_seconds;        /**< DENG-84: TAP and DOUBLE_TAP; 0 = 0.2 s */
+    f32 double_tap_seconds; /**< DENG-84: DOUBLE_TAP window; 0 = 0.3 s */
+    f32 press_threshold;    /**< DENG-84: actuation magnitude; 0 = 0.5 */
 } de_action_desc;
 
+/** Creates the map `name` (1..DE_ACTION_NAME_MAX bytes), or returns the existing map of that
+ * name. The map starts inactive. Invalid handle (and the error context set) on a bad name or
+ * when DE_ACTION_MAX_MAPS are taken. Allocates the action storage on first use. */
 DE_API de_action_map de_action_map_create(de_input *in, const char *name);
+/**
+ * Adds an action to map `m`, copying `desc` and its bindings. An action of the same name in the
+ * map is replaced in place and keeps its handle (reloading a file). Invalid handle (and the error
+ * context set, DE_ERR_INVALID_ARGUMENT) for a bad desc: an unknown type, interaction or source,
+ * a code out of range, a binding that does not fit the action type (see de_binding_source), a
+ * deadzone outside [0, 1), a bad curve; or when the pools are full.
+ */
 DE_API de_action de_action_add(de_input *in, de_action_map m, const de_action_desc *desc);
+/**
+ * Loads action maps from a TOML file (DENG-2 Q9) and adds them like de_action_map_create /
+ * de_action_add (an existing map or action of the same name is updated):
+ *
+ *     [maps.gameplay.actions.move]
+ *     type = "axis2d"                       # "button" (default), "axis1d", "axis2d"
+ *     bindings = [ { key = "W", composite = "up" }, { key = "S", composite = "down" },
+ *                  { pad_axis = "left_stick", deadzone = 0.2 } ]
+ *     [maps.gameplay.actions.jump]
+ *     interaction = "press"                 # "release", "hold", "tap", "double_tap"
+ *     hold_seconds = 0.5                    # also tap_seconds, double_tap_seconds,
+ *     rebindable = true                     #   press_threshold
+ *     bindings = [ { key = "space" }, { pad_button = "south" }, { key = "e", modifier = "lshift" }
+ * ]
+ *
+ * A binding has one source key (key, mouse_button, mouse_delta, mouse_wheel, pad_button,
+ * pad_axis, gyro) with its name, and optionally composite ("up", "down", "left", "right",
+ * "positive", "negative"), modifier (a key name), scale, deadzone, invert, curve ("linear",
+ * "power", "custom"), exponent (power; default 2) and points ([[x, y], ...]; custom). Key names
+ * are de_key_name() names, ASCII case-insensitive. The whole file is checked before anything is
+ * added. Unknown keys log a warning (file and line) and are ignored.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for a bad value (the message names the file, line and
+ *         key: "game:/input.toml:12: maps.gameplay.actions.jump.type: ..."); DE_ERR_PARSE for
+ *         invalid TOML; or the error of reading the file.
+ */
 DE_API de_result de_action_maps_load(de_input *in, const char *vpath); /* TOML */
-DE_API void de_action_map_push(de_input *in, de_action_map m);         /* context stack */
+/** Activates map `m` (context stack; DENG-85 adds priorities and blocking). Pushing an active
+ * map again does nothing. */
+DE_API void de_action_map_push(de_input *in, de_action_map m); /* context stack */
+/** Deactivates map `m` and resets its actions to idle (no release trigger). */
 DE_API void de_action_map_pop(de_input *in, de_action_map m);
 
+/** True in the frame (or tick, see above) the action's interaction fires. */
 DE_API bool de_action_triggered(const de_input *in, de_action a);
+/** True while the action is actuated (magnitude >= press_threshold), whatever its interaction. */
 DE_API bool de_action_held(const de_input *in, de_action a);
+/** Button: its value (>= 0). 1D: its value. 2D: the length of its value. */
 DE_API f32 de_action_value(const de_input *in, de_action a);
+/** 2D: its value (+y up). Button and 1D: (value, 0). */
 DE_API de_vec2 de_action_value2(const de_input *in, de_action a);
+
+/** The map named `name`, or an invalid handle. */
+DE_API de_action_map de_action_map_find(const de_input *in, const char *name);
+/** The action named `name` in map `m`, or an invalid handle. */
+DE_API de_action de_action_find(const de_input *in, de_action_map m, const char *name);
+/** The name of an action or map ("" for an invalid handle). Valid while the input state lives. */
+DE_API const char *de_action_name(const de_input *in, de_action a);
+DE_API const char *de_action_map_name(const de_input *in, de_action_map m);
 
 /* ---------- Rebinding ---------- */
 DE_API void de_rebind_begin(de_input *in, de_action a, u32 binding_index,
