@@ -8,7 +8,9 @@
  * the collide_connected pair exclusion). Handles pack index + 1 and a generation like bodies.
  *
  * Solver. One constraint class, DE__CONSTRAINT_CLASS_JOINT, registered with the pool and capacity
- * max_joints. gather adds every live, unbroken joint in ascending joint index (record id and data
+ * max_joints, with physics.joints.iterations solve and relax passes per substep (DENG-398: 4 by
+ * default; the extra passes run over the joints only, before the pass over every constraint).
+ * gather adds every live, unbroken joint in ascending joint index (record id and data
  * = joint index) and starts from scratch on every call. prepare stores the step-start geometry in
  * the joint (anchors from the centers of mass, frame rotations, center offset in f64 -> f32).
  * warm_start / solve / relax rebuild the current geometry from the solver bodies' dp and dq and
@@ -17,10 +19,14 @@
  *
  * Rows (Box2D v3 soft step, in 3D). A 1-D row has a linear direction n and angular directions
  * a1 (A) and a2 (B): Cdot = n.(vB - vA) + a2.wB - a1.wA, an impulse l adds -mA l n, -IA l a1 to A
- * and +mB l n, +IB l a2 to B. Locked rows and limits use the joint softness in the biased solve and
- * no bias in relax (a joint with hertz > 0 uses its spring in both); limits are speculative while
- * inside the range (bias C / h). Blocks solve 3 (point, angular lock) or 2 (hinge axes) rows at
- * once. Order within a joint: motors, limits, then the locked rows, so the joint has the last word.
+ * and +mB l n, +IB l a2 to B. Locked rows use the joint softness in the biased solve and no bias in
+ * relax; limits use the limit softness the same way (a joint with hertz > 0 uses its spring for
+ * both, in both passes); limits are speculative while inside the range (bias C / h). DENG-398: the
+ * extra passes (ctx->pass > 0) run the motors and the locked rows; limits run once, in the pass
+ * over every class, at DENG-220's quarter of the substep rate: stiffer, repeated limit rows kept a
+ * resting ragdoll's ankle circling its cone limit. Blocks solve 3 (point, angular lock) or 2 (hinge
+ * axes) rows at once. Order within a joint: motors, limits, then the locked rows, so the joint has
+ * the last word.
  *
  * Determinism (SPEC §5.7): + - * /, de_dsqrt, de_datan2 and de_dnormalize_quat only; fixed order.
  */
@@ -36,18 +42,30 @@ DE_EXTERN_C_BEGIN
 #define DE__JOINTS_MAX_CVAR           "physics.joints.max_joints"
 #define DE__JOINTS_HERTZ_CVAR         "physics.joints.hertz"
 #define DE__JOINTS_DAMPING_RATIO_CVAR "physics.joints.damping_ratio"
-/** Stiffness of rigid joints: a quarter of the substep rate (60 Hz at 60 Hz x 4 substeps), or
- *  the cvar when it is set and lower. Stiffer joints make long chains unstable. */
-#define DE__JOINTS_HERTZ_SUBSTEP_RATIO   0.25f
-#define DE__JOINTS_DEFAULT_DAMPING_RATIO 2.0f
-#define DE__JOINTS_MIN_CAPACITY          64u
-#define DE__JOINTS_MAX_DEFAULT           4096u
+#define DE__JOINTS_ITERATIONS_CVAR    "physics.joints.iterations"
+/** Stiffness of the locked rows and position motors: half the substep rate (120 Hz at 60 Hz x 4
+ *  substeps) when joints get more than one solve and relax pass per substep (DENG-398), or the
+ *  cvar when it is set and lower. With one pass, a quarter of the substep rate (DENG-220): stiffer
+ *  joints then make long chains unstable, because one Gauss-Seidel pass does not carry a chain's
+ *  load to its top. Limits always use the quarter (DENG-398). */
+#define DE__JOINTS_HERTZ_SUBSTEP_RATIO        0.5f
+#define DE__JOINTS_HERTZ_SUBSTEP_RATIO_SINGLE 0.25f
+#define DE__JOINTS_DEFAULT_DAMPING_RATIO      2.0f
+/** With more than one pass, the locked rows and motors use this times the damping ratio
+ *  (DENG-398: 4 by default; with 2 a resting ragdoll's limbs kept jiggling). */
+#define DE__JOINTS_LOCKED_DAMPING_SCALE 2.0f
+/** Solve and relax passes per substep over the joints (de__solver_set_class_iterations), before
+ *  the pass over every constraint. */
+#define DE__JOINTS_DEFAULT_ITERATIONS 4u
+#define DE__JOINTS_MIN_CAPACITY       64u
+#define DE__JOINTS_MAX_DEFAULT        4096u
 /** No joint / end of a body's joint list. */
 #define DE__JOINT_NONE 0xFFFFFFFFu
 
 typedef struct de__joints_settings {
-    f32 hertz;         /**< rigid joint stiffness (Hz); 0 = a quarter of the substep rate */
+    f32 hertz;         /**< rigid joint stiffness (Hz); 0 = the substep-rate ratio above */
     f32 damping_ratio; /**< rigid joint damping ratio */
+    u32 iterations;    /**< solve and relax passes per substep (DENG-398), 1..8 */
 } de__joints_settings;
 
 /* ================================ Joint ================================================ */
@@ -104,7 +122,8 @@ typedef struct de__joints {
     const de_allocator *alloc;
     de_physics_world *p;
     de__joints_settings settings;
-    de__soft joint_soft; /**< this step: rigid joint softness (gather) */
+    de__soft joint_soft; /**< this step: locked-row and position-motor softness (gather) */
+    de__soft limit_soft; /**< this step: limit softness (gather; DENG-398) */
     u32 capacity;
     u32 high_water; /**< slots ever used */
     u32 live_count;
@@ -148,7 +167,9 @@ typedef struct de__jx {
     de_vec3 d;              /**< anchor B - anchor A (current) */
     de_quat qa, qb;         /**< current world rotations of frame A and B */
     bool use_bias;
-    de__soft soft; /**< locked rows and limits for this pass */
+    de__soft soft;       /**< locked rows for this pass */
+    de__soft limit_soft; /**< limits for this pass (DENG-398) */
+    bool extra;          /**< an extra pass (ctx->pass > 0): no limit rows (DENG-398) */
 } de__jx;
 
 /** A 1-D row (see the file comment). `mass` = 1 / effective mass (0 when it has none). */
@@ -156,6 +177,13 @@ typedef struct de__jrow {
     de_vec3 n, a1, a2;
     f32 mass;
 } de__jrow;
+
+/** True when a stage call must evaluate the motor and limit rows of `axis`: always in the pass over
+ *  every class, and in an extra pass (DENG-398) only when the axis has a motor (limits do not run
+ *  there). Lets the kinds skip their angle math (de_datan2) in the extra passes. */
+static inline bool de__jx_axis_rows(const de__jx *x, const de__joint *j, u32 axis) {
+    return !x->extra || j->motor_mode[axis] != 0u;
+}
 
 /* f32 quaternion helpers (+ - * / only). */
 static inline de_quat de__jq(f32 x, f32 y, f32 z, f32 w) {

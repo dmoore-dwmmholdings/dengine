@@ -1,6 +1,7 @@
 /*
  * joint_cone_twist.c: DE_JOINT_CONE_TWIST (DENG-220), for ragdoll shoulders and hips. Rows: the
- * twist motor and limit (axis 3) about B's X axis, the swing cone, then the point block.
+ * twist motor and limit (axis 3) along the twist Jacobian (twist_axis), the swing cone, then the
+ * point block.
  *
  * Cone. The swing of B's frame in A's frame (swing-twist split) is a rotation by angle theta about
  * the unit direction (0, uy, uz) of A's YZ plane. The elliptical cone with half-angles ay =
@@ -26,8 +27,17 @@ static bool cone(const de__jx *x, const de__joint *j, de_vec3 *axis, f32 *C, f32
     return true;
 }
 
+/* The twist row's Jacobian (DENG-398). With q = swing * twist, the twist angle changes at
+ * w_rel . (xa + xb) / (1 + xa . xb), where xa, xb are the X axes of frames A and B: turning B about
+ * its own X axis, and circling it around A's X axis, both twist it at the full rate. The axis xb
+ * alone (DENG-220) missed the second, so a limb circling its cone pressed into the twist limit
+ * along a direction that also pushes the circling: the limits pumped energy into it. */
 static de_vec3 twist_axis(const de__jx *x) {
-    return de__jq_axis(x->qb, 0);
+    const de_vec3 xa = de__jq_axis(x->qa, 0), xb = de__jq_axis(x->qb, 0);
+    const f32 c = 1.0f + de__v3_dot(xa, xb);
+    if (!(c > 1.0e-3f))
+        return xb; /* swung by almost pi: no twist rate; keep DENG-220's axis */
+    return de__v3_scale(de__v3_add(xa, xb), 1.0f / c);
 }
 
 static void cone_warm_start(de__jx *x, de__joint *j) {
@@ -43,6 +53,10 @@ static void cone_warm_start(de__jx *x, de__joint *j) {
 }
 
 static void cone_solve(de__jx *x, de__joint *j) {
+    if (!de__jx_axis_rows(x, j, 3)) {
+        de__jpoint_solve(x, &j->lin); /* extra pass without a twist motor: the point block only */
+        return;
+    }
     de_vec3 axis;
     f32 C, twist;
     const bool has_swing = cone(x, j, &axis, &C, &twist);

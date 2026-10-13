@@ -101,6 +101,13 @@ bool de__graph_color_validate(const de__solver *s);
  * then the overflow set serially.
  */
 void de__solver_run_stage(de__solver *s, de__solver_stage stage);
+/**
+ * solver_parallel.c (DENG-398): runs `stage` for the records of the classes whose iterations
+ * exceed `pass` only, colors in ascending order like de__solver_run_stage. Within a color, records
+ * are in record order, so a class's records are one contiguous range (found by binary search).
+ * That range is split into chunks of `grain` records; the overflow set runs serially.
+ */
+void de__solver_run_stage_extra(de__solver *s, de__solver_stage stage, u32 pass);
 /** solver_parallel.c: fn(s, begin, end) over solver slots [1, body_count) in fixed ranges of
  *  `body_grain` (DE__SOLVER_BODY_GRAIN) slots, on p->tasks when there is more than one range. */
 void de__solver_for_bodies(de__solver *s, void (*fn)(de__solver *s, u32 begin, u32 end));

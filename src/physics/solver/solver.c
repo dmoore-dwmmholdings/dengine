@@ -234,6 +234,21 @@ de_result de__solver_register_class(de_physics_world *p, u32 class_id,
     c->state = state;
     c->capacity = max_constraints;
     c->count = 0;
+    c->iterations = 1;
+    return DE_OK;
+}
+
+de_result de__solver_set_class_iterations(de_physics_world *p, u32 class_id, u32 iterations) {
+    de__solver *s = p != NULL ? de__solver_get(p) : NULL;
+    if (s == NULL || class_id >= DE__CONSTRAINT_CLASS_COUNT || s->classes[class_id].cls == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de__solver_set_class_iterations: class %u is not registered", class_id);
+    DE_ASSERT(!s->active);
+    s->classes[class_id].iterations =
+        iterations < 1u
+            ? 1u
+            : (iterations > DE__SOLVER_MAX_CLASS_ITERATIONS ? DE__SOLVER_MAX_CLASS_ITERATIONS
+                                                            : iterations);
     return DE_OK;
 }
 
@@ -410,8 +425,31 @@ void de__solver_warm_start(de__solver *s) {
     de__solver_run_stage(s, DE__STAGE_WARM_START);
 }
 
+/* Most iterations of a class with records this step (1 when none asks for more). */
+static u32 max_class_iterations(const de__solver *s) {
+    u32 n = 1;
+    for (u32 k = 0; k < DE__CONSTRAINT_CLASS_COUNT; ++k) {
+        const de__solver_class_slot *c = &s->classes[k];
+        if (c->cls != NULL && c->count > 0u && c->iterations > n)
+            n = c->iterations;
+    }
+    return n;
+}
+
+/* DENG-398: the extra passes of classes with more than one iteration, then the full pass over
+ * every record (so later classes, contacts, keep the last word). */
+static void run_iterated(de__solver *s, de__solver_stage stage) {
+    const u32 n = max_class_iterations(s);
+    for (u32 pass = 1; pass < n; ++pass) {
+        s->ctx.pass = pass; /* set before the workers start; read-only for them */
+        de__solver_run_stage_extra(s, stage, pass);
+    }
+    s->ctx.pass = 0;
+    de__solver_run_stage(s, stage);
+}
+
 void de__solver_solve(de__solver *s) {
-    de__solver_run_stage(s, DE__STAGE_SOLVE);
+    run_iterated(s, DE__STAGE_SOLVE);
 }
 
 void de__solver_integrate_positions(de__solver *s) {
@@ -419,7 +457,7 @@ void de__solver_integrate_positions(de__solver *s) {
 }
 
 void de__solver_relax(de__solver *s) {
-    de__solver_run_stage(s, DE__STAGE_RELAX);
+    run_iterated(s, DE__STAGE_RELAX);
     ++s->ctx.substep;
 }
 

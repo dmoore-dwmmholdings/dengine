@@ -195,6 +195,9 @@ typedef struct de__solver_ctx {
     f32 max_bias_velocity; /**< push-out speed limit of a penetrating contact, m/s */
     f32 restitution_threshold;
     f32 warm_start_scale; /**< 1, or 0 when warm starting is off */
+    /** DENG-398 (appended): 0 in the solve or relax pass over every class; 1, 2, ... in a class's
+     *  extra passes (de__solver_set_class_iterations). Other stages always see 0. */
+    u32 pass;
 } de__solver_ctx;
 
 /** A per-constraint stage function (prepare, warm_start, relax, restitution, store). */
@@ -244,6 +247,24 @@ de__constraint *de__solver_add_constraint(de__solver *s, u32 class_id, u32 id, u
 
 /** The solver slot of body `index` this step (DE__SOLVER_STATIC_SLOT when not awake). */
 u32 de__solver_slot(const de__solver *s, u32 body_index);
+
+/* ================================ Class iterations (DENG-398, appended) ================= */
+
+/** Most solve and relax passes per substep for one class. */
+#define DE__SOLVER_MAX_CLASS_ITERATIONS 8u
+
+/**
+ * Sets how many solve and relax passes registered class `class_id` gets per substep (1, the
+ * default after registration, to DE__SOLVER_MAX_CLASS_ITERATIONS; out-of-range values are
+ * clamped). Before the full pass over every record, the solver runs `iterations - 1` extra passes
+ * over this class's records only, with `ctx->pass` set to the pass number (1, 2, ...). These
+ * passes use the same colors and the same rules as every other stage, so classes solved later
+ * (contacts) still have the last word, and the worker count changes no bit. Joints use it
+ * (DENG-398): a long chain converges in a few passes, which lets the locked rows be twice as
+ * stiff and sag a quarter as much. Call it from create paths.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL world, id out of range, class not registered).
+ */
+de_result de__solver_set_class_iterations(de_physics_world *p, u32 class_id, u32 iterations);
 
 DE_EXTERN_C_END
 

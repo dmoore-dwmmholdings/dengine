@@ -79,6 +79,49 @@ void de__solver_run_stage(de__solver *s, de__solver_stage stage) {
     }
 }
 
+/* First position in order[0, n) whose record's class id is >= class_id (class ids do not decrease
+ * along a color: records are added classes ascending and colored in record order). */
+static u32 class_lower_bound(const de__solver *s, const u32 *order, u32 n, u32 class_id) {
+    u32 lo = 0, hi = n;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        if (s->constraints[order[mid]].class_id < class_id)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+void de__solver_run_stage_extra(de__solver *s, de__solver_stage stage, u32 pass) {
+    const de__coloring *g = s->coloring;
+    de_task_system *ts = s->p->tasks;
+    const u32 grain = g->grain > 0u ? g->grain : 1u;
+    for (u32 k = 0; k <= DE__GRAPH_OVERFLOW; ++k) {
+        const u32 first = g->start[k];
+        const u32 n = g->start[k + 1u] - first;
+        if (n == 0u)
+            continue;
+        const u32 *order = g->order + first;
+        for (u32 c = 0; c < DE__CONSTRAINT_CLASS_COUNT; ++c) {
+            const de__solver_class_slot *cl = &s->classes[c];
+            if (cl->cls == NULL || cl->count == 0u || cl->iterations <= pass)
+                continue;
+            const u32 lo = class_lower_bound(s, order, n, c);
+            const u32 hi = class_lower_bound(s, order, n, c + 1u);
+            if (hi <= lo)
+                continue;
+            /* One color's records write disjoint bodies, so running one class's range of it alone
+             * gives the same bits whatever the chunking. */
+            sp_run r = {s, order + lo, stage};
+            if (ts != NULL && hi - lo > grain && k != DE__GRAPH_OVERFLOW)
+                de_task_parallel_for(ts, hi - lo, grain, run_range, &r);
+            else
+                run_range(0, hi - lo, &r);
+        }
+    }
+}
+
 typedef struct sp_bodies {
     de__solver *s;
     void (*fn)(de__solver *s, u32 begin, u32 end);
