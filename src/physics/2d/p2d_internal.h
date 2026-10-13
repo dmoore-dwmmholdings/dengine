@@ -196,16 +196,28 @@ typedef struct de__chain_segment {
     u32 flags;
 } de__chain_segment;
 
+/** Most levels of a chain's segment bounds: 65536 segments need 17 (DENG-253). */
+#define DE__CHAIN_MAX_LEVELS 18u
+
 /**
  * A chain (DE_SHAPE2D_CHAIN): `point_count` points copied from the input and `segment_count`
  * segments (point_count - 1 open, point_count for a loop; segment i runs from points[i] to
  * points[(i + 1) % point_count]). Segment i is the sub-shape id i.
+ *
+ * DENG-253: `bounds` holds the per-segment bounds as an implicit hierarchy, level by level:
+ * level 0 (at bounds + level_offset[0]) is the box of every segment in order, and box j of level
+ * k + 1 is the union of boxes 2j and 2j + 1 of level k (the last box of an odd level is copied
+ * up alone). The top level has one box. Built with the chain (de__chain2d_build_bounds); the 2D
+ * midphase and queries walk it with de__chain2d_query / de__chain2d_raycast (narrow2d.h).
  */
 typedef struct de__chain2d {
     de_vec2 *points;
     de__chain_segment *segments;
+    de_aabb2d *bounds; /**< DENG-253: [de__chain2d_bounds_count(segment_count)] */
     u32 point_count;
     u32 segment_count;
+    u32 level_count; /**< DENG-253: levels of `bounds` (1 for a single segment) */
+    u32 level_offset[DE__CHAIN_MAX_LEVELS];
     bool loop;
 } de__chain2d;
 
@@ -437,6 +449,13 @@ bool de__poly2d_finish(de__polygon2d *poly);
 /** Validates the points and fills s (kind, chain arrays in s->data, local box). */
 de_result de__chain2d_build(de_physics2d_world *p, const de_vec2 *points, u32 count, bool loop,
                             de__shape2d *s);
+
+/* collide_chain2d.c (DENG-253) */
+/** Boxes of the segment bounds of a chain of `segment_count` (>= 1) segments, all levels. */
+u32 de__chain2d_bounds_count(u32 segment_count);
+/** Fills c->bounds (already allocated, de__chain2d_bounds_count boxes), level_count and
+ *  level_offset from c->segments. */
+void de__chain2d_build_bounds(de__chain2d *c);
 
 /* mass2d.c */
 void de__mass2d_circle(f64 r, de__d2 center, de__unit_mass2d *out);

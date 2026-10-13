@@ -24,3 +24,27 @@ if(TARGET test_physics2d_shapes)
     target_compile_definitions(test_physics2d_shapes PRIVATE
         "DE_PHYSICS2D_SHAPES_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/shapes2d_golden.txt\"")
 endif()
+
+# DENG-253: collision. Broadphase (trees, pairs against brute force, order independence, chain
+# segment bounds), narrowphase (pair functions, symmetry, chains, the 5,000-pair vector) and
+# manifolds (persistence, feature matching, touch flags, triggers, worker counts, the 1,000-body
+# pipeline vector). The worker-count tests start task systems: label tsan. Regenerate a vector
+# (never by hand) with DE_REGEN_GOLDEN=1 and --filter=<suite>.golden_vector / <suite>.pipeline_*.
+de_add_test(NAME physics2d_broadphase SOURCES test_broadphase2d.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics2d_narrow SOURCES test_narrow2d.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics2d_manifold SOURCES test_manifold2d.c LIBS de_physics de_platform
+            LABELS unit tsan TIMEOUT 180)
+foreach(_de_p2d_test test_physics2d_broadphase test_physics2d_narrow test_physics2d_manifold)
+    if(TARGET ${_de_p2d_test})
+        target_include_directories(${_de_p2d_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_p2d_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+if(TARGET test_physics2d_narrow)
+    target_compile_definitions(test_physics2d_narrow PRIVATE
+        "DE_PHYSICS2D_NARROW_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/narrow2d_golden.txt\"")
+endif()
+if(TARGET test_physics2d_manifold)
+    target_compile_definitions(test_physics2d_manifold PRIVATE
+        "DE_PHYSICS2D_PIPELINE_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/pipeline2d_golden.txt\"")
+endif()

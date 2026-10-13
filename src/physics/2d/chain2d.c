@@ -5,7 +5,8 @@
  * corners), as Box2D's chain segments do.
  *
  * Layout (one allocation, s->data): points[point_count], then segments[segment_count] at a
- * 16-byte boundary. Segment i runs from points[i] to points[(i + 1) % point_count].
+ * 16-byte boundary, then (DENG-253) the per-segment bounds at a 16-byte boundary. Segment i runs
+ * from points[i] to points[(i + 1) % point_count].
  */
 #include "physics/2d/p2d_internal.h"
 
@@ -46,7 +47,10 @@ de_result de__chain2d_build(de_physics2d_world *p, const de_vec2 *points, u32 co
     }
 
     const size_t pts_size = align_up(sizeof(de_vec2) * (size_t)count);
-    const size_t size = pts_size + sizeof(de__chain_segment) * (size_t)seg_count;
+    const size_t seg_size = align_up(sizeof(de__chain_segment) * (size_t)seg_count);
+    /* DENG-253: the per-segment bounds follow the segments. */
+    const size_t size =
+        pts_size + seg_size + sizeof(de_aabb2d) * (size_t)de__chain2d_bounds_count(seg_count);
     u8 *block = (u8 *)DE_ALLOC(p->alloc, size, DE__CHAIN_ALIGN, DE_MEM_PHYSICS);
     if (block == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de_shape2d_chain_create: %u points", count);
@@ -57,6 +61,7 @@ de_result de__chain2d_build(de_physics2d_world *p, const de_vec2 *points, u32 co
     de__chain2d *c = &s->u.chain;
     c->points = (de_vec2 *)block;
     c->segments = (de__chain_segment *)(block + pts_size);
+    c->bounds = (de_aabb2d *)(block + pts_size + seg_size);
     c->point_count = count;
     c->segment_count = seg_count;
     c->loop = loop;
@@ -82,6 +87,7 @@ de_result de__chain2d_build(de_physics2d_world *p, const de_vec2 *points, u32 co
         const de__d2 e = de__d2_sub(de__d2_from(g->p2), de__d2_from(g->p1));
         g->normal = de__v2_normalize_d(de__d2_make(e.y, -e.x));
     }
+    de__chain2d_build_bounds(c);
 
     /* Local box and bounding radius. */
     de__d2 lo = de__d2_from(points[0]), hi = lo;

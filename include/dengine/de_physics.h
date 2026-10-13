@@ -1099,14 +1099,17 @@ DE_API de_result de_physics2d_create(const de_physics2d_desc *desc, de_physics2d
 /** Destroys every body and shape and frees all memory of the world. NULL is ignored. */
 DE_API void de_physics2d_destroy(de_physics2d_world *p);
 /**
- * Advances the world by `dt` seconds (> 0, finite): one tick. Allocates nothing after create
- * (pools only). An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
+ * Advances the world by `dt` seconds (> 0, finite): one tick. Collision (DENG-253): broadphase,
+ * narrowphase (on `tasks` when set; the result never depends on it) and persistent contact
+ * manifolds. The first step creates the collision state (allocates); later steps allocate nothing.
+ * An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
  */
 DE_API void de_physics2d_step(de_physics2d_world *p, f32 dt);
 /**
- * XXH3-64 of the simulation state: the tick, gravity, substeps, plane, and every live body in
- * ascending index order, field by field (never raw struct bytes). Equal states give equal values
- * on every platform. 0 for NULL.
+ * XXH3-64 of the simulation state: the tick, gravity, substeps, plane, every live body in
+ * ascending index order, then (after the first step) the contact manifolds in key order and the
+ * contacts that ended in the last step, field by field (never raw struct bytes). Equal states give
+ * equal values on every platform. 0 for NULL.
  */
 DE_API u64 de_physics2d_checksum(const de_physics2d_world *p);
 /** Ticks stepped since create. */
