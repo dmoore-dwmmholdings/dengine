@@ -2,15 +2,16 @@
  * texture_encode.c: the encode stage and the DTEX writer of the texture importer (DENG-98,
  * SPEC §11.6).
  *
- * Extension point for DENG-99 (BC compression): de_tex_choose_format holds the format rules, and
- * k_encoders maps a de_gpu_format to the function that encodes one subresource. A BC encoder gets
- * the same input (a mip of f32 RGBA) and writes rows of 4x4 blocks with the given row pitch; the
- * DTEX writer computes block rows from de_cooked_texture_format_block, so adding a format is one
- * table row plus its function. This task implements the uncompressed outputs RGBA8_UNORM,
- * RGBA8_SRGB and RGBA16_FLOAT.
+ * de_tex_choose_format holds the format rules (since DENG-99 the `compression` table of
+ * texture_bc_rules.c), and k_encoders maps a de_gpu_format to the function that encodes one
+ * subresource. A BC encoder gets the same input (a mip of f32 RGBA) and writes rows of 4x4 blocks
+ * with the given row pitch; the DTEX writer computes block rows from
+ * de_cooked_texture_format_block. DENG-98 implements the uncompressed outputs RGBA8_UNORM,
+ * RGBA8_SRGB and RGBA16_FLOAT; DENG-99 the BC1/BC3/BC4/BC5/BC6H/BC7 rows (texture_bc.c).
  *
  * Built with the deterministic float flags (no FMA contraction; tools/cook/CMakeLists.txt).
  */
+#include "texture_bc.h"
 #include "texture_internal.h"
 
 #include <dengine/de_base.h>
@@ -23,11 +24,8 @@
 /* ---- Format rules ---------------------------------------------------------------------------- */
 
 de_gpu_format de_tex_choose_format(const de_tex_settings *s, const de_tex_image *img) {
-    /* DENG-99: `compression` ("auto", "bc7", ...) picks a BC format here. Until then every value
-     * gives an uncompressed format, which is what "none" asks for. */
-    if (img->hdr || s->usage == DE_COOKED_TEXTURE_USAGE_ENVIRONMENT)
-        return DE_FMT_RGBA16_FLOAT;
-    return s->srgb ? DE_FMT_RGBA8_SRGB : DE_FMT_RGBA8_UNORM;
+    /* DENG-99: the `compression` rules (texture_bc_rules.c). */
+    return de_tex_bc_choose_image(s, img).format;
 }
 
 /* ---- Half floats ----------------------------------------------------------------------------- */
@@ -153,34 +151,53 @@ static de_result enc_rgba16f(const f32 *rgba, u32 w, u32 h, u8 *dst, u32 pitch) 
 }
 
 typedef de_result (*encode_fn)(const f32 *rgba, u32 w, u32 h, u8 *dst, u32 pitch);
+/* DENG-99: encoders that take options and scratch (the BC formats). */
+typedef de_result (*encode_ex_fn)(const de_allocator *a, de_gpu_format format, const f32 *rgba,
+                                  u32 w, u32 h, u8 *dst, u32 pitch, const de_tex_encode_opts *o);
 
-/* Format -> encoder. DENG-99 appends the BC encoders. */
+/* Format -> encoder: `fn` for the plain formats, `ex` for the BC formats. */
 static const struct {
     de_gpu_format format;
     encode_fn fn;
+    encode_ex_fn ex;
 } k_encoders[] = {
-    {DE_FMT_RGBA8_UNORM, enc_rgba8_unorm},
-    {DE_FMT_RGBA8_SRGB, enc_rgba8_srgb},
-    {DE_FMT_RGBA16_FLOAT, enc_rgba16f},
+    {DE_FMT_RGBA8_UNORM, enc_rgba8_unorm, NULL},
+    {DE_FMT_RGBA8_SRGB, enc_rgba8_srgb, NULL},
+    {DE_FMT_RGBA16_FLOAT, enc_rgba16f, NULL},
+    /* DENG-99: block compression (texture_bc.c). */
+    {DE_FMT_BC1_SRGB, NULL, de_tex_bc_encode},
+    {DE_FMT_BC3_SRGB, NULL, de_tex_bc_encode},
+    {DE_FMT_BC4_UNORM, NULL, de_tex_bc_encode},
+    {DE_FMT_BC5_UNORM, NULL, de_tex_bc_encode},
+    {DE_FMT_BC6H_UFLOAT, NULL, de_tex_bc_encode},
+    {DE_FMT_BC7_UNORM, NULL, de_tex_bc_encode},
+    {DE_FMT_BC7_SRGB, NULL, de_tex_bc_encode},
 };
 
-static encode_fn find_encoder(de_gpu_format f) {
+static int find_encoder(de_gpu_format f) {
     for (u32 i = 0; i < (u32)(sizeof k_encoders / sizeof k_encoders[0]); ++i)
         if (k_encoders[i].format == f)
-            return k_encoders[i].fn;
-    return NULL;
+            return (int)i;
+    return -1;
 }
 
 bool de_tex_can_encode(de_gpu_format format) {
-    return find_encoder(format) != NULL;
+    return find_encoder(format) >= 0;
+}
+
+de_result de_tex_encode_ex(const de_allocator *a, de_gpu_format format, const f32 *rgba, u32 width,
+                           u32 height, u8 *dst, u32 row_pitch, const de_tex_encode_opts *opts) {
+    int i = find_encoder(format);
+    if (i < 0)
+        return DE_FAIL(DE_ERR_UNSUPPORTED, "texture: no encoder for format %u", (u32)format);
+    if (k_encoders[i].ex != NULL)
+        return k_encoders[i].ex(a, format, rgba, width, height, dst, row_pitch, opts);
+    return k_encoders[i].fn(rgba, width, height, dst, row_pitch);
 }
 
 de_result de_tex_encode(de_gpu_format format, const f32 *rgba, u32 width, u32 height, u8 *dst,
                         u32 row_pitch) {
-    encode_fn fn = find_encoder(format);
-    if (fn == NULL)
-        return DE_FAIL(DE_ERR_UNSUPPORTED, "texture: no encoder for format %u", (u32)format);
-    return fn(rgba, width, height, dst, row_pitch);
+    return de_tex_encode_ex(de_heap_allocator(), format, rgba, width, height, dst, row_pitch, NULL);
 }
 
 /* ---- DTEX writer ----------------------------------------------------------------------------- */
@@ -273,8 +290,8 @@ de_result de_tex_dtex_from_chain(const de_allocator *a, const de_tex_dtex_desc *
             u32 i = l * d->mip_count + m;
             u32 w = chain->width[m], h = chain->height[m];
             const f32 *src = chain->rgba[m] + (u64)l * w * h * 4u;
-            de_result r =
-                de_tex_encode(d->format, src, w, h, out->data + out->offset[i], out->row_pitch[i]);
+            de_result r = de_tex_encode_ex(a, d->format, src, w, h, out->data + out->offset[i],
+                                           out->row_pitch[i], &d->encode);
             if (r != DE_OK) {
                 de_tex_dtex_free(a, out);
                 return r;

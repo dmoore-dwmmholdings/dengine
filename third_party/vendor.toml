@@ -348,3 +348,52 @@ url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.6/m
 sha256 = "08f0489281401aa430fc37322d6c3fc98a8025175aacd714c10d562f4963f1e9"
 strip = 0
 files = ["build/native/bin/x64/D3D12Core.dll", "build/native/bin/x64/d3d12SDKLayers.dll"]
+
+[[lib]]
+name = "bc7enc_rdo"
+# BC1/BC3/BC4/BC5/BC7 encoders for the texture importer (SPEC §11.6, §22 "bc7enc_rdo or similar";
+# DENG-99): bc7enc (BC7), rgbcx (BC1 to BC5) and ert (the optional rate-distortion pass). Tools
+# only, C++ behind the importer's C shim tools/cook/importers/texture/texture_bc_enc.cpp
+# (DENG-2 Q1). Upstream has no tags or releases: pinned to a commit. MIT or public domain.
+version = "2026-07-31-b943862"
+url = "https://github.com/richgel999/bc7enc_rdo/archive/b9438627eef73a1157e84201b6fa6eb2ffd6d9f0.tar.gz"
+sha256 = "bbb33d1dbb6178a3a2c044956c3cc0b8ea9fc2f2903824379dd86f87d53b64c6"
+license = "MIT OR Unlicense"
+# The encoders only: bc7enc, rgbcx with its small ordering table (built with
+# RGBCX_USE_SMALLER_TABLES=1, so the 450 KB rgbcx_table4.h is not needed), ert and its header-only
+# helpers (utils.h, dds_defs.h), and bc7decomp (the BC7 unpacker ert needs). No command-line tool,
+# rdo_bc_encoder, utils.cpp, lodepng, miniz, ISPC kernel or ispc.exe.
+files = [
+    "bc7enc.cpp",
+    "bc7enc.h",
+    "rgbcx.cpp",
+    "rgbcx.h",
+    "rgbcx_table4_small.h",
+    "ert.cpp",
+    "ert.h",
+    "utils.h",
+    "dds_defs.h",
+    "bc7decomp.cpp",
+    "bc7decomp.h",
+]
+# 0001: UBSan fix in ert::hash_hsieh (misaligned uint16_t loads, a left shift of a negative
+# value); the hash values do not change. 0002: ert.h and utils.h include <stdint.h> (they use
+# the fixed-width types without it, which fails on Linux). See the patch headers. DENG-99.
+patches = [
+    "patches/0001-ert-hash-defined-behaviour.patch",
+    "patches/0002-stdint-includes.patch",
+]
+
+[[lib]]
+name = "bcdec"
+# Reference BC1 to BC7 decoder for the texture importer's tests (DENG-99): the BC tests decode the
+# cooked blocks with it and measure PSNR. Test-only: only tests/unit/import links it, never
+# de_cooker, de-cook or a runtime target. Header-only C. Upstream has no tags: pinned to a commit.
+version = "2026-09-02-80859ed"
+url = "https://github.com/iOrange/bcdec/archive/80859ed3b7afb1c527a2a99d70c61457bea72d0c.tar.gz"
+sha256 = "c54b589fd1db768994c8bb4bbe9dbd658fb9401ce56cb7a1c544cb1ca2c0a033"
+license = "MIT OR Unlicense"
+files = ["bcdec.h"]
+# UBSan fix in bcdec_bc7 (an uninitialized endpoint shifted before it is overwritten); decoded
+# texels do not change. See the patch header. DENG-99.
+patches = ["patches/0001-bc7-zero-endpoints.patch"]

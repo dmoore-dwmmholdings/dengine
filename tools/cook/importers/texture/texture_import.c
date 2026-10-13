@@ -4,13 +4,15 @@
  * and texture_internal.h for the pipeline.
  *
  * Extension points:
- *   - DENG-99 (BC compression): de_tex_choose_format and the encoder table (texture_encode.c);
- *     cook_image below needs no change.
+ *   - DENG-99 (BC compression): the `compression`, `quality` and `rdo_quality` settings
+ *     (read_settings), the format rules (texture_bc_rules.c, through de_tex_choose_format) and
+ *     the encoder table (texture_encode.c).
  *   - DENG-100 (HDR environments): the `usage = "environment"` branch in cook_image hands the
  *     decoded image to de_env_cook (env_prefilter.c, env_sh.c).
  *
  * Built with the deterministic float flags (no FMA contraction; tools/cook/CMakeLists.txt).
  */
+#include "texture_bc.h"
 #include "texture_import.h"
 #include "texture_internal.h"
 #include "env_internal.h"
@@ -85,11 +87,25 @@ static de_result read_settings(de_asset_import_ctx *ctx, de_tex_settings *s) {
     else
         return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
                                     "texture: address \"%s\" (wrap or clamp)", addr);
-    if (strcmp(s->compression, "none") != 0 && strcmp(s->compression, "auto") != 0)
-        DE_WARN(texture_log(),
-                "texture \"%s\": compression \"%s\" is not available yet (BC compression is "
-                "DENG-99); cooked uncompressed",
-                de_cooker_import_id_str(ctx), s->compression);
+    /* DENG-99: block compression settings. */
+    de_tex_compression comp;
+    if (!de_tex_compression_parse(s->compression, &comp))
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                    "texture: compression \"%s\" (auto, none, bc1, bc3, bc4, bc5, "
+                                    "bc6h or bc7)",
+                                    s->compression);
+    const char *quality = de_asset_import_setting_string(ctx, "quality", "normal");
+    if (!de_tex_quality_parse(quality, &s->quality))
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                    "texture: quality \"%s\" (fast, normal or high)", quality);
+    if (de_asset_import_setting_has(ctx, "rdo_quality")) {
+        f64 q = de_asset_import_setting_float(ctx, "rdo_quality", -1.0);
+        if (!(q >= 0.0 && q <= DE_TEXTURE_RDO_QUALITY_MAX))
+            return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                        "texture: rdo_quality must be a number from 0 (off) to %g",
+                                        DE_TEXTURE_RDO_QUALITY_MAX);
+        s->rdo_quality = (f32)q;
+    }
     return DE_OK;
 }
 
@@ -193,6 +209,34 @@ static de_result write_dtex(de_asset_import_ctx *ctx, const de_allocator *a, de_
     return r;
 }
 
+/* DENG-99: says where the format choice loses data or differs from the setting. */
+static void warn_choice(de_asset_import_ctx *ctx, const de_tex_settings *s,
+                        const de_tex_format_choice *c) {
+    const char *id = de_cooker_import_id_str(ctx);
+    const char *name = de_tex_compression_name(c->compression);
+    if (c->notes & DE_TEX_NOTE_UNALIGNED)
+        DE_WARN(texture_log(),
+                "texture \"%s\": compression \"%s\" needs a size that is a multiple of 4 (BC "
+                "blocks); cooked uncompressed",
+                id, s->compression);
+    if (c->notes & DE_TEX_NOTE_DROPS_ALPHA)
+        DE_WARN(texture_log(), "texture \"%s\": %s stores no alpha; the source's alpha is dropped",
+                id, name);
+    if (c->notes & DE_TEX_NOTE_DROPS_CHANNELS)
+        DE_WARN(texture_log(), "texture \"%s\": %s keeps only %s of the source's channels", id,
+                name, c->compression == DE_TEX_COMPRESSION_BC4 ? "red" : "red and green");
+    if (c->notes & DE_TEX_NOTE_CLAMPS_HDR)
+        DE_WARN(texture_log(), "texture \"%s\": %s is 8-bit; the float source is clamped to [0, 1]",
+                id, name);
+    if (c->notes & DE_TEX_NOTE_LINEAR_BC1_BC3)
+        DE_WARN(texture_log(),
+                "texture \"%s\": %s has only an sRGB format and the data is linear (srgb = false); "
+                "cooked as BC7 UNORM",
+                id, name);
+    if (c->notes & DE_TEX_NOTE_SRGB_IGNORED)
+        DE_WARN(texture_log(), "texture \"%s\": %s has no sRGB format; stored linear", id, name);
+}
+
 static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_tex_settings *s,
                             de_tex_image *img) {
     resolve_srgb(ctx, s, img);
@@ -213,10 +257,17 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
     memset(&mp, 0, sizeof mp);
     mp.address = s->address;
     mp.normal_map = normal;
-    de_gpu_format format = de_tex_choose_format(s, img);
+    de_tex_format_choice choice = de_tex_bc_choose_image(s, img);
+    de_gpu_format format = choice.format;
+    warn_choice(ctx, s, &choice);
     mp.alpha_coverage = s->alpha_coverage;
-    /* DENG-99: BC formats store alpha with other precision; 0 measures the float values. */
-    mp.alpha_levels = format == DE_FMT_RGBA8_UNORM || format == DE_FMT_RGBA8_SRGB ? 255u : 0u;
+    /* Coverage is measured on the alpha the format stores: 8-bit steps for RGBA8 and for the BC
+     * formats with alpha (BC3 and BC7 encode from 8-bit alpha); 0 measures the float values. */
+    mp.alpha_levels = format == DE_FMT_RGBA8_UNORM || format == DE_FMT_RGBA8_SRGB ||
+                              format == DE_FMT_BC3_SRGB || format == DE_FMT_BC7_UNORM ||
+                              format == DE_FMT_BC7_SRGB
+                          ? 255u
+                          : 0u;
     mp.full_chain = s->mips && !s->pixel_art;
     de_tex_chain chain;
     DE_TRY(de_tex_mips_build(a, img, &mp, &chain));
@@ -234,6 +285,9 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
     d.usage = s->usage;
     d.flags = (s->pixel_art ? DE_COOKED_TEXTURE_PIXEL_ART : 0u) |
               (has_alpha ? DE_COOKED_TEXTURE_HAS_ALPHA : 0u);
+    d.encode.quality = s->quality;
+    d.encode.rdo_quality = s->rdo_quality;
+    d.encode.tasks = de_cooker_import_tasks(ctx);
     de_tex_dtex t;
     de_result r = de_tex_dtex_from_chain(a, &d, &chain, &t);
     de_tex_chain_free(a, &chain);

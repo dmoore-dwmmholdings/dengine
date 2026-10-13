@@ -7,6 +7,7 @@
  * Built with the deterministic float flags (no FMA contraction; tools/cook/CMakeLists.txt).
  */
 #include "env_internal.h"
+#include "texture_bc.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -597,8 +598,12 @@ de_result de_env_cook(de_asset_import_ctx *ctx, const de_allocator *a, const de_
     }
     de_tex_dtex_desc d;
     memset(&d, 0, sizeof d);
-    /* The encode stage picks the format (RGBA16F, or BC6H by the compression rules). */
-    d.format = de_tex_choose_format(s, img);
+    /* The encode stage picks the format by the compression rules for the cube (DENG-99: BC6H
+     * for `auto`, RGBA16F for "none"), and encodes on the cooker's task system. */
+    d.format = de_tex_bc_choose_env(s, img, es.size).format;
+    d.encode.quality = s->quality;
+    d.encode.rdo_quality = s->rdo_quality;
+    d.encode.tasks = ts;
     d.dim = DE_TEX_CUBE;
     d.width = d.height = es.size;
     d.layers = 6;

@@ -140,16 +140,27 @@ static de__manifest_kv kv_float(const char *k, f64 v) {
     return kv;
 }
 
-/* Cooks `root`/`source` as texture asset "tex/test" with the given settings. */
+/* Cooks `root`/`source` as texture asset "tex/test" with the given settings. These tests check
+ * decoded texels, so `compression = "none"` is added unless the settings name a compression
+ * (DENG-99; the BC formats are tested in test_texture_bc.c). */
 static de_result cook_at(tex_fx *f, const char *root, const char *source, const de__manifest_kv *kv,
                          u32 n, de_cook_result *out) {
+    de__manifest_kv all[16];
+    bool has_compression = false;
+    ASSERT_TRUE(n < TEX_COUNT(all));
+    for (u32 i = 0; i < n; ++i) {
+        all[i] = kv[i];
+        has_compression = has_compression || strcmp(kv[i].key, "compression") == 0;
+    }
+    if (!has_compression)
+        all[n++] = kv_str("compression", "none");
     de__manifest_asset a;
     memset(&a, 0, sizeof a);
     a.id = "tex/test";
     a.type = "texture";
     a.source = source;
     a.file = "texd:/assets.toml";
-    a.settings = kv;
+    a.settings = all;
     a.setting_count = n;
     de_error_clear();
     return de_cooker_cook(f->c, &(de_cook_input){.asset = &a, .asset_root = root}, out);
@@ -1040,7 +1051,8 @@ TEST_F(texture, model_textures_cook_to_dtex, tex_fx) {
     EXPECT_STREQ(t->type, "texture");
     de_cooked_texture_view v;
     ASSERT_TRUE(view_of(t->data, t->size, &v));
-    EXPECT_EQ(v.format, (u32)DE_FMT_RGBA8_SRGB); /* base colour: srgb = true, usage = color */
+    /* Base colour: srgb = true, usage = color, compression = "auto" (DENG-99): BC7 sRGB. */
+    EXPECT_EQ(v.format, (u32)DE_FMT_BC7_SRGB);
     EXPECT_EQ(v.usage, (u32)DE_COOKED_TEXTURE_USAGE_COLOR);
     EXPECT_EQ(v.width, 256u);
     EXPECT_EQ(v.mip_count, 9u);
@@ -1054,7 +1066,10 @@ TEST_F(texture, model_textures_cook_to_dtex, tex_fx) {
     const de_cook_subasset *nrm = de_cook_result_subasset(&r, "texture:nrm");
     const de_cook_subasset *lin = de_cook_result_subasset(&r, "texture:lin");
     ASSERT_TRUE(nrm != NULL && lin != NULL);
+    /* Both images are smaller than a 4x4 block, so compression = "auto" keeps them uncompressed
+     * (DENG-99: BC needs mip 0 to be a multiple of 4). */
     ASSERT_TRUE(view_of(nrm->data, nrm->size, &v));
+    EXPECT_TRUE(v.width % 4u != 0 || v.height % 4u != 0);
     EXPECT_EQ(v.format, (u32)DE_FMT_RGBA8_UNORM);
     EXPECT_EQ(v.usage, (u32)DE_COOKED_TEXTURE_USAGE_NORMAL);
     ASSERT_TRUE(view_of(lin->data, lin->size, &v));
@@ -1137,7 +1152,7 @@ TEST_F(texture, runtime_in_process, tex_fx) {
         printf("  %s\n", info.first_error_msg);
     EXPECT_EQ((int)ls, (int)DE_LOAD_READY);
     EXPECT_TRUE(st.parsed);
-    EXPECT_EQ(st.format, (u32)DE_FMT_RGBA8_SRGB);
+    EXPECT_EQ(st.format, (u32)DE_FMT_BC7_SRGB); /* DENG-99: compression = "auto" */
     EXPECT_EQ(st.mips, 5u);
     de_asset_release(f->s, h);
     de_asset_system_destroy(f->s);
@@ -1198,7 +1213,8 @@ TEST_F(texture, de_cook_registers_texture, tex_fx) {
     static const struct {
         const char *id;
         u32 format;
-    } want[] = {{"ui/logo", DE_FMT_RGBA8_UNORM}, {"fx/bc", DE_FMT_BC7_SRGB}};
+    } want[] = {{"ui/logo", DE_FMT_BC7_UNORM}, /* DENG-99: auto, srgb = false */
+                {"fx/bc", DE_FMT_BC7_SRGB}};
     for (u32 i = 0; i < TEX_COUNT(want); ++i) {
         u32 idx = dpak_find(pk, de_asset_id_from(want[i].id).hash);
         ASSERT_TRUE(idx != DPAK_NOT_FOUND);
