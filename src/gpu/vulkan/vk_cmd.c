@@ -87,6 +87,7 @@ de_result de__vk_cmd_begin(de_gpu_cmd *c, const char *name) {
     /* The previous submission of this list has completed (front-end rule): its views and its
      * command memory can go. */
     drop_views(vk, vc);
+    vc->set_bound[0] = vc->set_bound[1] = false; /* DENG-323: rebind the bindless set */
     VkResult vr = vk->fn.vkResetCommandPool(vk->device, vc->pool, 0);
     if (vr != VK_SUCCESS)
         return de__vk_fail(d, vr, "vulkan: vkResetCommandPool(\"%s\")", c->name);

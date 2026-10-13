@@ -497,3 +497,159 @@ TEST_F(gpu_validation, copy_texture_to_buffer, val_fx) {
         DE_OK);
 #endif
 }
+
+/* DENG-323: pipeline stage/threadgroup checks (every build) and the S10 draw commands
+ * (Debug/Dev): draws, index buffers, scissor, mesh dispatch. */
+TEST_F(gpu_validation, pipeline_stages, val_fx) {
+    de_error_clear();
+    de_gpu_pipeline p = de_gpu_pipeline_create(
+        f->d, &(de_gpu_pipeline_desc){
+                  .kind = DE_PIPE_COMPUTE, .cs = k_blob, .ps = k_blob, .name = "stray"});
+    EXPECT_FALSE(DE_HANDLE_VALID(p));
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "de_gpu_pipeline_create(\"stray\")",
+                 "a compute pipeline has no ps stage, but the ps blob is set");
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                                             .vs = k_blob,
+                                                             .ps = {k_code, 0, "main"},
+                                                             .color_formats = {DE_FMT_RGBA8_UNORM},
+                                                             .color_count = 1});
+    EXPECT_FALSE(DE_HANDLE_VALID(p));
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "the ps blob has code but size 0");
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                             .cs = k_blob,
+                                                             .threadgroup_size = {64, 0, 1}});
+    EXPECT_FALSE(DE_HANDLE_VALID(p));
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "threadgroup_size (64, 0, 1) must be all 0 or all > 0");
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                                             .vs = k_blob,
+                                                             .threadgroup_size = {1, 1, 1}});
+    EXPECT_FALSE(DE_HANDLE_VALID(p));
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "only for compute and mesh pipelines");
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                             .cs = k_blob,
+                                                             .object_threadgroup_size = {1, 1, 1}});
+    EXPECT_FALSE(DE_HANDLE_VALID(p));
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "object_threadgroup_size",
+                 "only for a mesh pipeline with an as blob");
+    /* Valid sizes are kept on the record. */
+    de_error_clear();
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                             .cs = k_blob,
+                                                             .threadgroup_size = {8, 4, 2}});
+    ASSERT_TRUE(DE_HANDLE_VALID(p));
+    const de__gpu_pipeline *rec = de__gpu_get_pipeline(f->d, p);
+    ASSERT_TRUE(rec != NULL);
+    EXPECT_EQ(rec->threadgroup_size[0], 8u);
+    EXPECT_EQ(rec->threadgroup_size[1], 4u);
+    EXPECT_EQ(rec->threadgroup_size[2], 2u);
+    EXPECT_EQ(rec->object_threadgroup_size[0], 0u);
+    /* A mesh pipeline with an amplification shader takes both threadgroup sizes. */
+    de_error_clear();
+    p = de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_MESH,
+                                                             .as = k_blob,
+                                                             .ms = k_blob,
+                                                             .threadgroup_size = {32, 1, 1},
+                                                             .object_threadgroup_size = {1, 1, 1}});
+    if (de_gpu_get_caps(f->d)->mesh_shaders) {
+        EXPECT_TRUE(DE_HANDLE_VALID(p));
+    } else {
+        EXPECT_FALSE(DE_HANDLE_VALID(p));
+        EXPECT_ERROR(DE_ERR_UNSUPPORTED, "no mesh shaders");
+    }
+}
+
+TEST_F(gpu_validation, draw_commands, val_fx) {
+#if !DE__GPU_VALIDATE_COMMANDS
+    SKIP("command validation is compiled in Debug and Dev builds only");
+#else
+    de_gpu_pipeline gfx =
+        de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                                             .vs = k_blob,
+                                                             .ps = k_blob,
+                                                             .color_formats = {DE_FMT_RGBA8_UNORM},
+                                                             .color_count = 1,
+                                                             .name = "gfx"});
+    de_gpu_pipeline cs = de_gpu_pipeline_create(
+        f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE, .cs = k_blob, .name = "cs"});
+    de_gpu_texture rt =
+        de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.format = DE_FMT_RGBA8_UNORM,
+                                                           .width = 64,
+                                                           .height = 64,
+                                                           .usage = DE_USAGE_RENDER_TARGET,
+                                                           .name = "rt"});
+    de_gpu_buffer ib = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 64, .usage = DE_USAGE_INDEX, .name = "ib"});
+    de_gpu_buffer sb = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 64, .usage = DE_USAGE_STORAGE, .name = "sb"});
+    ASSERT_TRUE(DE_HANDLE_VALID(gfx) && DE_HANDLE_VALID(cs) && DE_HANDLE_VALID(rt) &&
+                DE_HANDLE_VALID(ib) && DE_HANDLE_VALID(sb));
+    de_gpu_cmd *c = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "draws");
+    ASSERT_TRUE(c != NULL);
+
+    /* Outside a render pass. */
+    de_error_clear();
+    de_gpu_cmd_draw(c, 3, 1, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "de_gpu_cmd_draw(\"draws\")", "no render pass is open");
+    de_gpu_cmd_scissor(c, 0, 0, 8, 8);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "de_gpu_cmd_scissor", "no render pass is open");
+    de_gpu_cmd_dispatch_mesh(c, 1, 1, 1);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "de_gpu_cmd_dispatch_mesh", "no render pass is open");
+
+    de_gpu_attachment color = {.texture = rt};
+    de_gpu_cmd_begin_render(c, &color, 1, NULL);
+    de_gpu_cmd_draw(c, 3, 1, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "no graphics pipeline is bound");
+    de_gpu_cmd_set_pipeline(c, gfx);
+    de_error_clear();
+    de_gpu_cmd_draw(c, 3, 1, 0, 0);
+    de_gpu_cmd_scissor(c, -4, -4, 8, 8); /* negative is fine: the backend cuts it */
+    EXPECT_TRUE(de_error_last() == NULL);
+    de_gpu_cmd_draw_indexed(c, 3, 1, 0, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "no index buffer is bound");
+    de_gpu_cmd_set_index_buffer(c, sb, 0, true);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "buffer \"sb\" lacks DE_USAGE_INDEX");
+    de_gpu_cmd_set_index_buffer(c, ib, 3, true);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "offset 3", "multiple of the index size (2)");
+    de_gpu_cmd_set_index_buffer(c, ib, 2, false);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "multiple of the index size (4)");
+    de_gpu_cmd_set_index_buffer(c, ib, 64, false);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "offset 64 is outside \"ib\"");
+    de_error_clear();
+    de_gpu_cmd_set_index_buffer(c, ib, 4, false);
+    de_gpu_cmd_draw_indexed(c, 3, 1, 0, 0, 0);
+    EXPECT_TRUE(de_error_last() == NULL);
+    de_gpu_cmd_dispatch_mesh(c, 1, 1, 1);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "no mesh pipeline is bound");
+    de_gpu_cmd_end_render(c);
+    /* A compute pipeline bound: draws refuse it. */
+    de_gpu_cmd_set_pipeline(c, cs);
+    de_gpu_cmd_begin_render(c, &color, 1, NULL);
+    de_gpu_cmd_draw(c, 3, 1, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "no graphics pipeline is bound");
+    de_gpu_cmd_end_render(c);
+    ASSERT_EQ(
+        de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
+        DE_OK);
+    /* A recycled list starts without an index buffer. */
+    de_gpu_wait_idle(f->d);
+    c = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "again");
+    ASSERT_TRUE(c != NULL);
+    de_gpu_cmd_begin_render(c, &color, 1, NULL);
+    de_gpu_cmd_set_pipeline(c, gfx);
+    de_error_clear();
+    de_gpu_cmd_draw_indexed(c, 3, 1, 0, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "no index buffer is bound");
+    de_gpu_cmd_end_render(c);
+    ASSERT_EQ(
+        de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
+        DE_OK);
+    /* Index buffers need the graphics queue. */
+    de_gpu_cmd *cc = de_gpu_cmd_begin(f->d, DE_QUEUE_COMPUTE, "compute");
+    ASSERT_TRUE(cc != NULL);
+    de_gpu_cmd_set_index_buffer(cc, ib, 0, true);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "index buffers need the graphics queue");
+    ASSERT_EQ(
+        de_gpu_queue_submit(f->d, DE_QUEUE_COMPUTE, &(de_gpu_submit){.cmds = &cc, .cmd_count = 1}),
+        DE_OK);
+#endif
+}
