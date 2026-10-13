@@ -39,6 +39,12 @@ bool de_tex_bc_is_bc(de_gpu_format format) {
 #define BC_TEXELS_RGBA8 64u
 #define BC_TEXELS_HALF  96u
 
+/* The largest half the BC6H encoder gets: 0x7BFE (65472), one step below the largest finite half
+ * (0x7BFF, 65504). fast_encode_bc6h asserts max < 0x7BFF on its low-variance path, and a block
+ * with one channel saturated at 0x7BFF and another varying reaches it with max = 0x7BFF
+ * (DENG-401). The step costs at most 0.05% at the very top of the range. */
+#define BC6H_HALF_MAX 0x7BFEu
+
 typedef struct bc_job {
     de_gpu_format format;
     const f32 *rgba;
@@ -90,8 +96,11 @@ static void gather(const bc_job *j, u32 bx, u32 by, u8 *out) {
             if (j->half) {
                 for (u32 c = 0; c < 3u; ++c) {
                     f32 v = s[c];
-                    v = v > 0.0f ? v : 0.0f; /* BC6H unsigned: negatives and NaN to 0 */
+                    /* BC6H unsigned: negatives, -Inf and NaN to 0. +Inf and values that
+                     * overflow a half convert to 0x7BFF, then go down to BC6H_HALF_MAX. */
+                    v = v > 0.0f ? v : 0.0f;
                     u16 h = de_tex_f32_to_f16(v);
+                    h = h < BC6H_HALF_MAX ? h : (u16)BC6H_HALF_MAX;
                     memcpy(out + (t * 3u + c) * 2u, &h, sizeof h);
                 }
             } else {
