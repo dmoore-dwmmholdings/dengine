@@ -207,6 +207,41 @@ const de_cook_subasset *de_cook_result_subasset(const de_cook_result *r, const c
  */
 u64 de_cook_settings_hash(const de__manifest_kv *settings, u32 count);
 
+/* ---- Sub-assets cooked by another importer (import_subcook.c, DENG-101) ---------------------- */
+
+/** The ID string of the asset an import context imports (`env/castle`); for building the IDs
+ * of its sub-assets as text (`env/castle#Body`). "" for NULL. */
+const char *de_cooker_import_id_str(const de_asset_import_ctx *ctx);
+
+/**
+ * Declares a sub-asset `<asset id>#<name>` of type `type_name` whose bytes come from running the
+ * importer registered for `type_name` on `source` (instead of bytes the caller cooked itself).
+ * The model importer cooks its textures (`texture`) and its prefab (`prefab`, TOML) this way.
+ * Call it from inside an import, on the import's thread.
+ *
+ * - The nested import gets `source`, the `settings` given here (only these; the manifest's
+ *   `[defaults.<type>]` do not apply), the ID `<asset id>#<name>`, and the outer import's source
+ *   path and directory: its de_asset_import_read_file reads relative to the outer source, and the
+ *   files it reads become extra sources of the outer cook.
+ * - Its dependencies are not recorded (a cook result has no per-sub-asset dependency list): the
+ *   sub-asset's loader declares what it needs (the scene loader does). Its own sub-assets are
+ *   refused (DE_ERR_UNSUPPORTED).
+ * - When `type_name` is not registered with the cooker, or is registered without an importer,
+ *   the sub-asset holds `source` unchanged (the cooker's pass-through rule) and `*cooked` is false.
+ *   Note: the outer asset's cook-cache key does not cover the nested type's registration or
+ *   importer version; bump the outer importer's version when that matters.
+ * - A failure of the nested import fails the outer import too (de_asset_import_fail with the
+ *   nested message) and is returned.
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument; a name de_asset_import_add_subasset
+ *         refuses); DE_ERR_ALREADY_EXISTS (the name was declared); DE_ERR_UNSUPPORTED (the nested
+ *         import declared sub-assets); the nested importer's error; DE_ERR_OUT_OF_MEMORY.
+ */
+de_result de_cooker_import_cook_subasset(de_asset_import_ctx *ctx, const char *name,
+                                         const char *type_name, const void *source, u64 size,
+                                         const de__manifest_kv *settings, u32 setting_count,
+                                         bool *cooked);
+
 DE_EXTERN_C_END
 
 #endif /* DE_COOKER_H */

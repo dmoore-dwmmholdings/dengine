@@ -110,6 +110,10 @@ void de__import_ctx_fail(de_asset_import_ctx *ctx, de_result code, const char *f
 /** XXH3-64 over every output of the context: bytes, dependencies, sub-assets, extra sources. */
 u64 de__import_ctx_output_hash(const de_asset_import_ctx *ctx);
 
+/** Runs the importer of ctx->type (or the pass-through copy) on a prepared context and frees its
+ * scratch blocks: DE_OK, or the failure recorded in ctx->fail_code and ctx->msg (cooker.c). */
+de_result de__cooker_run_import(de_asset_import_ctx *ctx);
+
 /** True if normalised virtual path `path` is `root` or below it; `*rel` gets the part below
  * (without the leading '/'; "" for the root itself). */
 bool de__cook_path_below(const char *root, const char *path, const char **rel);

@@ -39,3 +39,7 @@ endif()
 # and the warm-path index (decache_index.c). zstd is in the runtime already (de_asset).
 target_sources(de_cooker PRIVATE decache.h decache.c decache_index.c)
 target_link_libraries(de_cooker PRIVATE de_tp_zstd)
+
+# DENG-101: de_cooker_import_cook_subasset (de_cooker.h): a sub-asset cooked by the importer
+# registered for its type (the model importer's textures and prefab).
+target_sources(de_cooker PRIVATE import_subcook.c)
