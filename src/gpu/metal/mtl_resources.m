@@ -145,8 +145,13 @@ de_result de__mtl_texture_requirements(de_gpu_device *d, const de_gpu_texture_de
             d, desc, (MTLResourceOptions)m->resource_options[DE__GPU_MEM_CLASS_GPU_ONLY], &err);
         if (td == nil)
             return err;
+        /* Serialised: GitHub's paravirtual Metal driver crashed (SEGV in objc_msgSend inside
+         * AppleParavirtGPUMetalIOGPUFamily) with this query on 8 threads at once (DENG-288,
+         * gpu_metal.threads_create_destroy under ASan). Textures are made at load time. */
+        de_mutex_lock(&m->size_lock);
         const MTLSizeAndAlign sa =
             [(__bridge id<MTLDevice>)m->device heapTextureSizeAndAlignWithDescriptor:td];
+        de_mutex_unlock(&m->size_lock);
         out->size = sa.size;
         out->align = sa.align;
         out->class_mask = 1u << DE__GPU_MEM_CLASS_GPU_ONLY;
