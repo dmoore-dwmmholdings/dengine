@@ -95,3 +95,13 @@ if(TARGET de_input)
             DE_INPUT_GOLDEN_DIR="${DE_ROOT_DIR}/tests/determinism/input")
     endif()
 endif()
+
+# DENG-88: prompt glyphs. test_ids_documented reads docs/input/glyph-ids.md (DE_GLYPH_DOC).
+if(TARGET de_input)
+    de_add_test(NAME glyphs SOURCES test_glyphs.c LIBS de_input de_test_support)
+    if(TARGET test_glyphs)
+        target_include_directories(test_glyphs PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_glyphs PRIVATE
+            DE_GLYPH_DOC="${DE_ROOT_DIR}/docs/input/glyph-ids.md")
+    endif()
+endif()

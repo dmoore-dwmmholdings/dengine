@@ -48,3 +48,9 @@ target_sources(de_input PRIVATE
     record.c
     replay.c
     pack.c)
+
+# DENG-88: prompt glyph lookup (glyphs.c; the ID tables are data in glyph_table.inc, listed in
+# docs/input/glyph-ids.md).
+target_sources(de_input PRIVATE
+    glyph_table.inc
+    glyphs.c)

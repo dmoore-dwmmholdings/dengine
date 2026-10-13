@@ -127,6 +127,15 @@ struct de_input {
     struct de__actions *actions;
     struct de__gyro *gyro;
     struct de__haptics *haptics;
+
+    /* Prompt glyphs (DENG-88, glyphs.c). The family is updated once per frame by
+     * de__glyphs_frame_update; zero (KBM) until the first frame. */
+    de_glyph_provider_fn glyph_provider;
+    void *glyph_provider_user;
+    de_key_label_fn key_label_fn;
+    void *key_label_user;
+    de_glyph_family glyph_family;
+    bool glyph_family_changed; /**< the family changed in this frame */
 };
 
 /* ---------- Pads ---------- */
@@ -183,6 +192,13 @@ de_result de__haptics_init(de_input *in);
 void de__haptics_shutdown(de_input *in);
 /** haptics.c (DENG-87): advance rumble timers and send effects (de_input_begin_frame). */
 void de__haptics_update(de_input *in, f32 dt);
+
+/** glyphs.c (DENG-88): set this frame's glyph family and its change flag, from the last used
+ * device (end of de_input_begin_frame, after the events are applied). */
+void de__glyphs_frame_update(de_input *in);
+/** glyphs.c (DENG-88): writes up to `max` glyph IDs of the engine's tables to `out` and returns
+ * how many there are (some repeat). For the test that checks docs/input/glyph-ids.md. */
+u32 de__glyph_table_ids(const char **out, u32 max);
 
 DE_EXTERN_C_END
 #endif

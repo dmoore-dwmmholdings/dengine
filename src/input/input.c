@@ -310,6 +310,7 @@ void de__input_begin_frame_dt(de_input *in, f32 dt) {
 
     de__gyro_update(in, dt);
     de__haptics_update(in, dt);
+    de__glyphs_frame_update(in); /* DENG-88 */
 }
 
 void de_input_begin_frame(de_input *in) {
