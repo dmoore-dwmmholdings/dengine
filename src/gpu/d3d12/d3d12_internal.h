@@ -11,6 +11,8 @@
  * Files: d3d12_device.c (factory, adapters, debug layer, device, queues, vtable),
  * d3d12_caps.c (the evaluator), d3d12_memory.c (heaps, memory classes, requirements),
  * d3d12_resources.c (buffers, textures, samplers, formats), d3d12_bindless.c (descriptor heaps).
+ * DENG-286: d3d12_cmd.c (command lists, render passes, copies), d3d12_barriers.c (barrier
+ * translation, portable, and recording), d3d12_sync.c (submit, fences), d3d12_swapchain.c (DXGI).
  */
 #ifndef DE_GPU_D3D12_INTERNAL_H
 #define DE_GPU_D3D12_INTERNAL_H
@@ -73,6 +75,168 @@ typedef struct de__d3d12_features {
  * shader model 6.5. WARP reports ray tracing as DE_RT_API_ONLY (it runs, in software).
  */
 void de__d3d12_caps_evaluate(const de__d3d12_features *f, de_gpu_caps *caps);
+
+/* ---------- Barrier translation (portable, DENG-286; d3d12_barriers.c) ----------
+ *
+ * The de_gpu_access -> D3D12 tables as pure functions, so the unit test runs on every build host.
+ * The D3D12 values are plain numbers here; d3d12_barriers.c checks each one against d3d12.h with
+ * _Static_assert when it is compiled for Windows. */
+
+/* D3D12_BARRIER_SYNC */
+#define DE__D3D12_SYNC_NONE              0x0u
+#define DE__D3D12_SYNC_ALL               0x1u
+#define DE__D3D12_SYNC_DRAW              0x2u
+#define DE__D3D12_SYNC_INDEX_INPUT       0x4u
+#define DE__D3D12_SYNC_VERTEX_SHADING    0x8u
+#define DE__D3D12_SYNC_PIXEL_SHADING     0x10u
+#define DE__D3D12_SYNC_DEPTH_STENCIL     0x20u
+#define DE__D3D12_SYNC_RENDER_TARGET     0x40u
+#define DE__D3D12_SYNC_COMPUTE_SHADING   0x80u
+#define DE__D3D12_SYNC_RAYTRACING        0x100u
+#define DE__D3D12_SYNC_COPY              0x200u
+#define DE__D3D12_SYNC_EXECUTE_INDIRECT  0x800u
+#define DE__D3D12_SYNC_ALL_SHADING       0x1000u
+#define DE__D3D12_SYNC_NON_PIXEL_SHADING 0x2000u
+#define DE__D3D12_SYNC_BUILD_RTAS        0x800000u /* BUILD_RAYTRACING_ACCELERATION_STRUCTURE */
+/* D3D12_BARRIER_ACCESS */
+#define DE__D3D12_ACCESS_VERTEX_BUFFER       0x1u
+#define DE__D3D12_ACCESS_CONSTANT_BUFFER     0x2u
+#define DE__D3D12_ACCESS_INDEX_BUFFER        0x4u
+#define DE__D3D12_ACCESS_RENDER_TARGET       0x8u
+#define DE__D3D12_ACCESS_UNORDERED_ACCESS    0x10u
+#define DE__D3D12_ACCESS_DEPTH_STENCIL_WRITE 0x20u
+#define DE__D3D12_ACCESS_DEPTH_STENCIL_READ  0x40u
+#define DE__D3D12_ACCESS_SHADER_RESOURCE     0x80u
+#define DE__D3D12_ACCESS_INDIRECT_ARGUMENT   0x200u
+#define DE__D3D12_ACCESS_COPY_DEST           0x400u
+#define DE__D3D12_ACCESS_COPY_SOURCE         0x800u
+#define DE__D3D12_ACCESS_RTAS_READ           0x4000u /* RAYTRACING_ACCELERATION_STRUCTURE_READ */
+#define DE__D3D12_ACCESS_RTAS_WRITE          0x8000u
+#define DE__D3D12_ACCESS_NO_ACCESS           0x80000000u
+/* D3D12_BARRIER_LAYOUT */
+#define DE__D3D12_LAYOUT_UNDEFINED                 0xffffffffu
+#define DE__D3D12_LAYOUT_COMMON                    0u /* = PRESENT */
+#define DE__D3D12_LAYOUT_GENERIC_READ              1u
+#define DE__D3D12_LAYOUT_RENDER_TARGET             2u
+#define DE__D3D12_LAYOUT_UNORDERED_ACCESS          3u
+#define DE__D3D12_LAYOUT_DEPTH_STENCIL_WRITE       4u
+#define DE__D3D12_LAYOUT_DEPTH_STENCIL_READ        5u
+#define DE__D3D12_LAYOUT_SHADER_RESOURCE           6u
+#define DE__D3D12_LAYOUT_COPY_SOURCE               7u
+#define DE__D3D12_LAYOUT_COPY_DEST                 8u
+#define DE__D3D12_LAYOUT_DIRECT_QUEUE_GENERIC_READ 19u
+/* D3D12_RESOURCE_STATES (legacy barriers) */
+#define DE__D3D12_STATE_COMMON                     0x0u /* = PRESENT */
+#define DE__D3D12_STATE_VERTEX_AND_CONSTANT_BUFFER 0x1u
+#define DE__D3D12_STATE_INDEX_BUFFER               0x2u
+#define DE__D3D12_STATE_RENDER_TARGET              0x4u
+#define DE__D3D12_STATE_UNORDERED_ACCESS           0x8u
+#define DE__D3D12_STATE_DEPTH_WRITE                0x10u
+#define DE__D3D12_STATE_DEPTH_READ                 0x20u
+#define DE__D3D12_STATE_NON_PIXEL_SHADER_RESOURCE  0x40u
+#define DE__D3D12_STATE_PIXEL_SHADER_RESOURCE      0x80u
+#define DE__D3D12_STATE_INDIRECT_ARGUMENT          0x200u
+#define DE__D3D12_STATE_COPY_DEST                  0x400u
+#define DE__D3D12_STATE_COPY_SOURCE                0x800u
+#define DE__D3D12_STATE_RTAS                       0x400000u /* RAYTRACING_ACCELERATION_STRUCTURE */
+
+/** One side of a barrier in enhanced-barrier terms. `layout` is for textures (UNDEFINED for
+ * buffers). */
+typedef struct de__d3d12_access_info {
+    u32 sync, access, layout;
+} de__d3d12_access_info;
+
+/** What the translation needs to know about a texture. */
+typedef struct de__d3d12_texture_shape {
+    u32 mips;   /**< mip levels */
+    u32 layers; /**< array layers (cube faces count); 1 for 3D textures */
+    u32 planes; /**< 2 for depth-stencil formats, else 1 */
+    bool rt_ds; /**< has DE_USAGE_RENDER_TARGET or DE_USAGE_DEPTH (discard on first use) */
+} de__d3d12_texture_shape;
+
+/**
+ * Normalizes a de_gpu_access set for D3D12: a write access excludes every other bit (the first
+ * of RENDER_TARGET, DEPTH_WRITE, SHADER_WRITE, COPY_DST, ACCEL_WRITE is kept), PRESENT combined
+ * with anything else is dropped. Reads combine.
+ */
+u32 de__d3d12_access_normalize(u32 access);
+
+/**
+ * The enhanced-barrier sync, access and layout of `access` (de_gpu_access bits) used on queue
+ * `q`, for a texture or a buffer, on the source (`before`) or destination side:
+ *   - NONE before: wait for everything (SYNC_ALL), no access, layout UNDEFINED (contents
+ *     discarded); NONE after: SYNC_NONE and NO_ACCESS (the caller keeps the layout).
+ *   - PRESENT: layout PRESENT (COMMON), no access; SYNC_ALL before, SYNC_NONE after.
+ *   - One bit: the table in d3d12_barriers.c. Several reads: their syncs and accesses, layout
+ *     GENERIC_READ, or DIRECT_QUEUE_GENERIC_READ when depth reads are among them (graphics).
+ *   - The queue drops what it cannot do: a copy queue keeps SYNC_ALL / COPY and copy accesses and
+ *     uses layout COMMON; a compute queue has no draw, raster or depth stages (ALL_SHADING becomes
+ *     COMPUTE_SHADING). An empty access is NO_ACCESS, an empty sync NONE (with NO_ACCESS).
+ */
+de__d3d12_access_info de__d3d12_access_info_of(de_gpu_queue q, u32 access, bool texture,
+                                               bool before);
+
+/** One de_gpu_barrier as an enhanced texture or buffer barrier. */
+typedef struct de__d3d12_enhanced {
+    u32 sync_before, sync_after, access_before, access_after;
+    u32 layout_before, layout_after; /**< textures */
+    bool discard;                    /**< D3D12_TEXTURE_BARRIER_FLAG_DISCARD */
+    u32 mip_first, mip_count, layer_first, layer_count, plane_count; /**< resolved range */
+} de__d3d12_enhanced;
+
+/** Barrier halves of a queue-ownership transfer (src_queue != dst_queue). */
+typedef enum de__d3d12_transfer {
+    DE__D3D12_TRANSFER_NONE,    /**< same queue: an ordinary barrier */
+    DE__D3D12_TRANSFER_RELEASE, /**< recorded on src_queue: ends in COMMON, no later access */
+    DE__D3D12_TRANSFER_ACQUIRE, /**< recorded on dst_queue: starts from COMMON */
+    DE__D3D12_TRANSFER_FOREIGN  /**< recorded on a third queue: invalid, nothing is recorded */
+} de__d3d12_transfer;
+
+/** Which half of a transfer `b` is when recorded on `cmd_queue`. */
+de__d3d12_transfer de__d3d12_transfer_of(de_gpu_queue cmd_queue, const de_gpu_barrier *b);
+
+/** The subresource range of `b` on `tex` (0 counts = to the end), clamped to the texture. */
+void de__d3d12_barrier_range(const de_gpu_barrier *b, const de__d3d12_texture_shape *tex,
+                             u32 *mip_first, u32 *mip_count, u32 *layer_first, u32 *layer_count);
+
+/**
+ * `b` (texture when `tex` is set, else buffer) recorded on `cmd_queue` as an enhanced barrier.
+ * Returns false when nothing is recorded: NONE -> NONE, or a transfer recorded on a third queue.
+ * A transfer goes through the COMMON layout, the one every queue type can use: the release half
+ * ends in COMMON with SYNC_NONE / NO_ACCESS after it; the acquire half starts from COMMON with
+ * SYNC_NONE / NO_ACCESS before it. NONE before on a render target or depth buffer sets `discard`
+ * (graphics queue).
+ */
+bool de__d3d12_translate_enhanced(de_gpu_queue cmd_queue, const de_gpu_barrier *b,
+                                  const de__d3d12_texture_shape *tex, de__d3d12_enhanced *out);
+
+/**
+ * The legacy D3D12_RESOURCE_STATES of `access` on queue `q`. NONE is COMMON. Reads combine
+ * (SHADER_READ: NON_PIXEL | PIXEL_SHADER_RESOURCE, plus VERTEX_AND_CONSTANT_BUFFER | INDEX_BUFFER
+ * for buffers). A copy queue knows only COMMON, COPY_SOURCE and COPY_DEST; a compute queue has no
+ * render-target, depth, pixel-shader or index states. What the queue cannot hold is COMMON.
+ */
+u32 de__d3d12_legacy_state_of(de_gpu_queue q, u32 access, bool texture);
+
+/** What a legacy barrier records for one subresource (or a buffer). */
+typedef enum de__d3d12_legacy_op {
+    DE__D3D12_LEGACY_NOTHING,    /**< already in the state (or not for this queue) */
+    DE__D3D12_LEGACY_TRANSITION, /**< ResourceBarrier transition before -> after */
+    DE__D3D12_LEGACY_UAV         /**< state stays UNORDERED_ACCESS: a UAV barrier */
+} de__d3d12_legacy_op;
+
+/**
+ * `b` for one subresource whose tracked state is `current`, on `cmd_queue`. The state before is
+ * the tracked one (legacy barriers must name the real state, and D3D12 decays some resources to
+ * COMMON between submissions), or COMMON on the acquire half of a transfer; the state after is
+ * the barrier's `after` (NONE keeps the state), or COMMON on the release half. `*before` and
+ * `*after` are set in every case; `*after` is the new tracked state.
+ */
+de__d3d12_legacy_op de__d3d12_translate_legacy(de_gpu_queue cmd_queue, const de_gpu_barrier *b,
+                                               bool texture, u32 current, u32 *before, u32 *after);
+
+/** D3D12 subresource index: mip + layer * mips + plane * mips * layers. */
+u32 de__d3d12_subresource(u32 mip, u32 layer, u32 plane, u32 mips, u32 layers);
 
 /* ---------- The backend (Windows) ---------- */
 #if defined(_WIN32)
@@ -139,16 +303,31 @@ typedef struct d3d12_device {
     u32 class_textures;        /**< memory class of non-RT/DS textures */
     u32 class_rt_ds;           /**< memory class of render-target and depth textures */
     de__d3d12_features features;
+    /* DENG-286: command lists and barriers. */
+    de_atomic_u32 barrier_mode; /**< DE__D3D12_BARRIERS_*; chosen by the first cmd_init */
+    de_atomic_u64 cmd_serial;   /**< numbers command-list recordings (legacy state tracking) */
 } d3d12_device;
 
 typedef struct d3d12_buffer {
     ID3D12Resource *res;
     de__gpu_alloc alloc; /**< zero for a placed transient buffer (the region owns the memory) */
+    /* DENG-286, legacy barriers: the state set by the recording numbered `legacy_serial`. Buffers
+     * decay to COMMON at the end of every ExecuteCommandLists, so another serial means COMMON. */
+    u32 legacy_state;
+    u64 legacy_serial;
 } d3d12_buffer;
 
 typedef struct d3d12_texture {
     ID3D12Resource *res;
     de__gpu_alloc alloc;
+    /* DENG-286, legacy barriers: the tracked state of each subresource (index mip + layer * mips;
+     * every plane shares it). Inline when mips * layers <= DE_GPU_MAX_MIPS, else `legacy_sub`
+     * (allocated on the first legacy barrier, freed by texture_destroy). A texture last
+     * transitioned on the copy queue (`legacy_copy_serial`, another recording) decayed to COMMON.
+     */
+    u32 legacy_inline[DE_GPU_MAX_MIPS];
+    u32 *legacy_sub;
+    u64 legacy_copy_serial;
 } d3d12_texture;
 
 typedef struct d3d12_heap {
@@ -245,6 +424,99 @@ u32 de__d3d12_descriptor_bytes(de_gpu_device *d, bool sampler_heap, bool visible
 /** UTF-8 path of the D3D12Core.dll the process loaded ("" before the first device): the Agility
  * runtime in <exe dir>\D3D12\, or the OS copy in System32. */
 void de__d3d12_runtime_path(char *out, size_t cap);
+
+/* ---------- Command lists, barriers, sync, swapchains (DENG-286) ---------- */
+
+/** d3d12_device.barrier_mode. */
+enum { DE__D3D12_BARRIERS_UNSET, DE__D3D12_BARRIERS_ENHANCED, DE__D3D12_BARRIERS_LEGACY };
+
+/** Command-list payload (de__gpu_cmd_payload): one allocator and one list per front-end command
+ * list object, which the front-end reuses only after its submission completed. */
+typedef struct d3d12_cmd {
+    ID3D12CommandAllocator *alloc;
+    ID3D12GraphicsCommandList *list;
+    ID3D12GraphicsCommandList7 *list7; /**< for Barrier(); NULL with legacy barriers */
+    ID3D12DescriptorHeap *rtv_heap;    /**< graphics lists: begin_render's color views */
+    ID3D12DescriptorHeap *dsv_heap;    /**< graphics lists: begin_render's depth view */
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv_start, dsv_start;
+    u32 rtv_increment;
+    u64 serial;    /**< this recording's number (d3d12_device.cmd_serial) */
+    bool enhanced; /**< the device records enhanced barriers */
+    bool open;     /**< recording: Close() before ExecuteCommandLists */
+} d3d12_cmd;
+
+/** User fence payload: a timeline ID3D12Fence. */
+typedef struct d3d12_fence {
+    ID3D12Fence *fence;
+} d3d12_fence;
+
+/** DXGI_MAX_SWAP_CHAIN_BUFFERS. */
+#define DE__D3D12_SWAPCHAIN_MAX_IMAGES 16u
+
+/** Swapchain payload. */
+typedef struct d3d12_swapchain {
+    IDXGISwapChain4 *sc;
+    HANDLE waitable; /**< frame-latency waitable object */
+    HWND hwnd;
+    u32 image_count, width, height;
+    UINT flags;   /**< DXGI_SWAP_CHAIN_FLAG_* it was created with */
+    bool tearing; /**< ALLOW_TEARING is in `flags` */
+    bool waited;  /**< acquire waited on `waitable` since the last present */
+    de_gpu_texture images[DE__D3D12_SWAPCHAIN_MAX_IMAGES];
+} d3d12_swapchain;
+
+static inline d3d12_cmd *de__d3d12_cmd(de_gpu_cmd *c) {
+    return (d3d12_cmd *)de__gpu_cmd_payload(c);
+}
+
+/* d3d12_cmd.c */
+de_result de__d3d12_cmd_init(de_gpu_device *d, de_gpu_cmd *c);
+void de__d3d12_cmd_fini(de_gpu_device *d, de_gpu_cmd *c);
+de_result de__d3d12_cmd_begin(de_gpu_cmd *c, const char *name);
+void de__d3d12_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
+                                const de_gpu_attachment *depth);
+void de__d3d12_cmd_end_render(de_gpu_cmd *c);
+void de__d3d12_cmd_viewport(de_gpu_cmd *c, f32 x, f32 y, f32 w, f32 h);
+void de__d3d12_cmd_copy_buffer(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off, de__gpu_buffer *src,
+                               u64 src_off, u64 bytes);
+void de__d3d12_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de__gpu_texture *dst, u32 mip, u32 layer,
+                                          de__gpu_buffer *src, u64 src_off, u32 row_pitch);
+/** Texture -> buffer, the reverse of the above (vtable entry cmd_copy_texture_to_buffer, DENG-284's
+ * de_gpu_cmd_copy_texture_to_buffer). */
+void de__d3d12_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off,
+                                          u32 row_pitch, de__gpu_texture *src, u32 mip, u32 layer);
+/** Closes an open list before ExecuteCommandLists (queue_submit). */
+de_result de__d3d12_cmd_close(de_gpu_cmd *c);
+
+/* d3d12_barriers.c */
+/** Enhanced or legacy barriers for this device, chosen on the first call (see the file). */
+bool de__d3d12_use_enhanced_barriers(de_gpu_device *d);
+void de__d3d12_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count);
+de__d3d12_texture_shape de__d3d12_texture_shape_of(const de__gpu_texture *t);
+/** Frees a texture's legacy state array (texture_destroy). */
+void de__d3d12_texture_legacy_release(de_gpu_device *d, de__gpu_texture *t);
+
+/* d3d12_sync.c */
+de_result de__d3d12_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
+                                 u64 queue_value);
+de_result de__d3d12_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial);
+void de__d3d12_fence_destroy(de_gpu_device *d, de__gpu_fence *f);
+u64 de__d3d12_fence_value(de_gpu_device *d, de__gpu_fence *f);
+de_result de__d3d12_fence_wait(de_gpu_device *d, de__gpu_fence *f, u64 value, u64 timeout_ns);
+
+/* d3d12_swapchain.c */
+de_result de__d3d12_swapchain_create(de_gpu_device *d, de__gpu_swapchain *s,
+                                     const de_gpu_swapchain_desc *desc);
+void de__d3d12_swapchain_destroy(de_gpu_device *d, de__gpu_swapchain *s);
+de_result de__d3d12_swapchain_acquire(de_gpu_device *d, de__gpu_swapchain *s,
+                                      de_gpu_texture *image);
+de_result de__d3d12_swapchain_present(de_gpu_device *d, de__gpu_swapchain *s);
+de_result de__d3d12_swapchain_resize(de_gpu_device *d, de__gpu_swapchain *s, u32 w, u32 h);
+de_gpu_colorspace de__d3d12_swapchain_colorspace(de_gpu_device *d, de__gpu_swapchain *s);
+
+/** Test hook: true when `d` is a D3D12 device that records enhanced barriers (decided by its first
+ * command list; false before that, for other devices and with legacy barriers). */
+bool de__d3d12_enhanced_barriers_active(de_gpu_device *d);
 
 #endif /* _WIN32 */
 #endif

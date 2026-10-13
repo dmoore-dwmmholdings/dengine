@@ -18,8 +18,8 @@
  * gpu_validation adds GPU-based validation. The counts are test hooks.
  *
  * Queues: direct (DE_QUEUE_GRAPHICS), compute, copy, each with an ID3D12Fence that carries the
- * front-end's internal timeline (gpu_backend.h). Until DENG-286 a submit only signals that fence:
- * command lists, waits and user fences are DE_ERR_UNSUPPORTED (the value still completes).
+ * front-end's internal timeline (gpu_backend.h). Submission, fences, command lists, barriers and
+ * swapchains are in d3d12_sync.c, d3d12_cmd.c, d3d12_barriers.c and d3d12_swapchain.c (DENG-286).
  *
  * The IIDs of d3d12.h and dxgi1_6.h are defined in this file (initguid.h); nothing links
  * dxguid.lib, whose copy may be older than the Agility headers.
@@ -554,34 +554,7 @@ static void d3d12_device_destroy(de_gpu_device *d) {
     release_all(d);
 }
 
-/* ---------- Submission (signal only until DENG-286) ---------- */
-
-static void signal_value(d3d12_queue *dq, u64 value) {
-    u64 cur = de_atomic_load_u64(&dq->signaled, DE_ATOMIC_RELAXED);
-    while (cur < value && !de_atomic_cas_weak_u64(&dq->signaled, &cur, value, DE_ATOMIC_RELEASE,
-                                                  DE_ATOMIC_RELAXED)) {
-    }
-}
-
-static de_result d3d12_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
-                                    u64 queue_value) {
-    d3d12_queue *dq = &de__d3d12(d)->queues[q];
-    const bool work = s->cmd_count > 0 || s->wait_count > 0 || s->signal.id != 0;
-    HRESULT hr = work ? E_NOTIMPL : ID3D12CommandQueue_Signal(dq->queue, dq->fence, queue_value);
-    if (FAILED(hr)) {
-        /* The front-end has published queue_value: complete it from the CPU so deferred
-         * destruction and command-list recycling do not wait for it forever. */
-        ID3D12Fence_Signal(dq->fence, queue_value);
-    }
-    signal_value(dq, queue_value);
-    if (work)
-        return DE_FAIL(DE_ERR_UNSUPPORTED,
-                       "de_gpu_queue_submit: the d3d12 backend does not execute command lists, "
-                       "waits or fence signals yet (DENG-286)");
-    if (FAILED(hr))
-        return de__d3d12_fail(hr, "de_gpu_queue_submit: ID3D12CommandQueue::Signal");
-    return DE_OK;
-}
+/* ---------- Submission (d3d12_sync.c, DENG-286) ---------- */
 
 static u64 d3d12_queue_completed(de_gpu_device *d, de_gpu_queue q) {
     return ID3D12Fence_GetCompletedValue(de__d3d12(d)->queues[q].fence);
@@ -592,11 +565,13 @@ static u64 d3d12_queue_completed(de_gpu_device *d, de_gpu_queue q) {
 const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .name = "d3d12",
     .device_payload_size = sizeof(d3d12_device),
-    .cmd_payload_size = 0,
+    .cmd_payload_size = sizeof(d3d12_cmd),
     .payload_size =
         {
             [DE__GPU_BUFFER] = sizeof(d3d12_buffer),
             [DE__GPU_TEXTURE] = sizeof(d3d12_texture),
+            [DE__GPU_FENCE] = sizeof(d3d12_fence),
+            [DE__GPU_SWAPCHAIN] = sizeof(d3d12_swapchain),
         },
     .device_create = d3d12_device_create,
     .device_destroy = d3d12_device_destroy,
@@ -609,8 +584,27 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .bindless_write_buffer = de__d3d12_bindless_write_buffer,
     .bindless_write_texture = de__d3d12_bindless_write_texture,
     .bindless_write_sampler = de__d3d12_bindless_write_sampler,
-    .queue_submit = d3d12_queue_submit,
+    .cmd_init = de__d3d12_cmd_init,
+    .cmd_fini = de__d3d12_cmd_fini,
+    .cmd_begin = de__d3d12_cmd_begin,
+    .cmd_barriers = de__d3d12_cmd_barriers,
+    .cmd_begin_render = de__d3d12_cmd_begin_render,
+    .cmd_end_render = de__d3d12_cmd_end_render,
+    .cmd_viewport = de__d3d12_cmd_viewport,
+    .cmd_copy_buffer = de__d3d12_cmd_copy_buffer,
+    .cmd_copy_buffer_to_texture = de__d3d12_cmd_copy_buffer_to_texture,
+    .queue_submit = de__d3d12_queue_submit,
     .queue_completed = d3d12_queue_completed,
+    .fence_create = de__d3d12_fence_create,
+    .fence_destroy = de__d3d12_fence_destroy,
+    .fence_value = de__d3d12_fence_value,
+    .fence_wait = de__d3d12_fence_wait,
+    .swapchain_create = de__d3d12_swapchain_create,
+    .swapchain_destroy = de__d3d12_swapchain_destroy,
+    .swapchain_acquire = de__d3d12_swapchain_acquire,
+    .swapchain_present = de__d3d12_swapchain_present,
+    .swapchain_resize = de__d3d12_swapchain_resize,
+    .swapchain_colorspace = de__d3d12_swapchain_colorspace,
     .heap_payload_size = sizeof(d3d12_heap),
     .heap_create = de__d3d12_heap_create,
     .heap_destroy = de__d3d12_heap_destroy,
@@ -618,6 +612,7 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .texture_requirements = de__d3d12_texture_requirements,
     .buffer_create_placed = de__d3d12_buffer_create_placed,
     .texture_create_placed = de__d3d12_texture_create_placed,
+    .cmd_copy_texture_to_buffer = de__d3d12_cmd_copy_texture_to_buffer,
     .bindless_shared_resource_heap = true,
 };
 
