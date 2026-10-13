@@ -1,0 +1,26 @@
+bcdec: zero the BC7 endpoint array before use
+
+bcdec_bc7() declares `int endpoints[6][4]` without initializing it. For BC7 modes without an
+alpha channel, endpoints[i][3] is never read from the block, but the endpoint expansion still
+shifts it left (`endpoints[i][3] << (8 - j)`) before overwriting it with 0xFF. Shifting an
+indeterminate value is undefined behaviour; UBSan (Clang) stops at bcdec.h:1365 "left shift of
+2119877796 by 7 places cannot be represented in type 'int'" on the texture importer's BC7
+tests (DENG-99). Zero-initializing the array makes the shift defined; the decoded texels do not
+change.
+
+Engine-local patch (DENG-99), applied by tools/vendor/vendor.py. bcdec is test-only. Drop the
+patch when a pinned commit has the fix.
+
+diff --git a/bcdec.h b/bcdec.h
+index 553c3ec..23b1080 100644
+--- a/bcdec.h
++++ b/bcdec.h
+@@ -1252,7 +1252,7 @@ BCDECDEF void bcdec_bc7(const void* compressedBlock, void* decompressedBlock, in
+     bcdec__bitstream_t bstream;
+     int mode, partition, numPartitions, numEndpoints, i, j, k, rotation, partitionSet;
+     int indexSelectionBit, indexBits, indexBits2, index, index2;
+-    int endpoints[6][4];
++    int endpoints[6][4] = {{0}};
+     char indices[4][4];
+     int r, g, b, a;
+     int* weights, * weights2;

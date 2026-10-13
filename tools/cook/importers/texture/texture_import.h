@@ -30,9 +30,16 @@
  *     share of texels at or above it.
  *   - `max_size` (integer 1 to 16384, optional): the longest edge is scaled down to it.
  *   - `address` (string, default "wrap"): "wrap" or "clamp", how the mip filter reads past edges.
- *   - `compression` (string, default "auto"): read by the BC stage (DENG-99). Until then every
- *     texture cooks uncompressed (RGBA8 UNORM or sRGB, RGBA16F for float sources), which is what
- *     "none" asks for; another value logs a warning.
+ *   - `compression` (string, default "auto"): "auto", "none", "bc1", "bc3", "bc4", "bc5",
+ *     "bc6h" or "bc7" (DENG-99). "auto" picks by usage and source: BC7 for colour (sRGB when
+ *     `srgb`), BC5 for normal maps, BC4 for one-channel masks (BC7 UNORM for packed masks), BC6H
+ *     for float sources and environments, uncompressed for pixel art. "none" cooks RGBA8 UNORM or
+ *     sRGB, or RGBA16F for float sources. A choice that drops data logs a warning (texture_bc.h
+ *     has the full rules). Textures whose size is not a multiple of 4 cook uncompressed.
+ *   - `quality` (string, default "normal"): "fast", "normal" or "high", the BC encoders' effort.
+ *   - `rdo_quality` (float 0 to DE_TEXTURE_RDO_QUALITY_MAX, default 0 = off): the lambda of the
+ *     rate-distortion pass of BC1/BC3/BC4/BC5/BC7, which makes blocks compress better in the pack
+ *     at some loss of quality (BC6H ignores it).
  *
  * Environment settings (`usage = "environment"` only; DENG-100, env_internal.h):
  *   - `env_size` (integer, default 256): cube face size, a power of two from 4 to 4096.
@@ -58,8 +65,12 @@
 
 DE_EXTERN_C_BEGIN
 
-/** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
-#define DE_TEXTURE_IMPORTER_VERSION 3u
+/** Bump on any change of the importer's output: cached cooks of older versions are not reused.
+ * 3: HDR environments (DENG-100). 4: BC compression (DENG-99). */
+#define DE_TEXTURE_IMPORTER_VERSION 4u
+
+/** The largest `rdo_quality` (lambda of the rate-distortion pass). */
+#define DE_TEXTURE_RDO_QUALITY_MAX 100.0
 
 #define DE_TEXTURE_IMPORT_EXTENSION_COUNT 5u
 /** ".png", ".jpg", ".jpeg", ".exr", ".ktx2". */

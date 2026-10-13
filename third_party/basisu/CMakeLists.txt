@@ -11,8 +11,10 @@
 #                                  the vendored zstd (zstd/zstd.h forwards to third_party/zstd)
 #   BASISD_SUPPORT_PVRTC1/PVRTC2/ATC/FXT1/ETC2_EAC_A8/ETC2_EAC_RG11=0  mobile target formats the
 #                                  engine never transcodes to (SPEC §11.6: BC on every desktop
-#                                  GPU). Kept: RGBA32 (DENG-98), BC1/BC3/BC4/BC5/BC7 (DENG-99),
-#                                  ASTC (shared with the XUASTC and UASTC HDR decoders).
+#                                  GPU). Kept: RGBA32 (DENG-98), BC1/BC3/BC4/BC5/BC7 (unused:
+#                                  DENG-99 filters the RGBA32 output and encodes BC itself), ASTC
+#                                  (shared with the XUASTC and UASTC HDR decoders, and with the BC6H
+#                                  encoder the texture importer uses, DENG-99).
 add_library(de_tp_basisu STATIC transcoder/basisu_transcoder.cpp)
 target_include_directories(de_tp_basisu SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/transcoder")
 target_compile_definitions(de_tp_basisu PUBLIC
@@ -30,6 +32,10 @@ target_link_libraries(de_tp_basisu PRIVATE de_tp_zstd)
 # not optimize on strict aliasing). /bigobj: the TU is 1.6 MB of tables and templates.
 target_compile_options(de_tp_basisu PRIVATE
     "$<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w;/bigobj,-w;-fno-strict-aliasing>")
+# DENG-99: the texture importer's BC6H encoder is the transcoder's (astc_6x6_hdr::fast_encode_bc6h),
+# so the transcoder is built without FMA contraction too, like the other encoders and the importer:
+# its float decisions do not depend on the compiler's contraction default.
+target_compile_options(de_tp_basisu PRIVATE ${DE_DETERMINISTIC_FLAGS})
 set_target_properties(de_tp_basisu PROPERTIES
     POSITION_INDEPENDENT_CODE ${DE_BUILD_SHARED}
     FOLDER "dengine/third_party")

@@ -1,0 +1,34 @@
+bc7enc_rdo: include <stdint.h> in ert.h and utils.h
+
+ert.h and utils.h use uint8_t, uint32_t and the other fixed-width types but do not include
+<stdint.h>; they rely on another header bringing it in. With libstdc++ and libc++ on Linux
+nothing does, and ert.cpp fails to compile ("unknown type name 'uint8_t'", ert.h:24; DENG-99
+CI, Clang and GCC on Linux). The patch adds the include. No code changes.
+
+Engine-local patch (DENG-99), applied by tools/vendor/vendor.py. Drop it when a pinned commit
+has the fix.
+
+diff --git a/ert.h b/ert.h
+index d387f52..47bea00 100644
+--- a/ert.h
++++ b/ert.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <stdlib.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <math.h>
+diff --git a/utils.h b/utils.h
+index b806c58..481192c 100644
+--- a/utils.h
++++ b/utils.h
+@@ -6,6 +6,7 @@
+ #endif
+ 
+ #include <stdlib.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <math.h>

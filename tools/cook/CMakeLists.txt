@@ -141,3 +141,21 @@ set(_de_env_importer_sources
 target_sources(de_cooker PRIVATE importers/texture/env_internal.h ${_de_env_importer_sources})
 set_source_files_properties(${_de_env_importer_sources} TARGET_DIRECTORY de_cooker
     PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
+
+# DENG-99: block compression of the texture importer (tools/cook/importers/texture/texture_bc*):
+# the `compression` rules (texture_bc_rules.c), the BC encode stage (texture_bc.c, fixed block
+# ranges on the cooker's task system) and the C++ encoders behind texture_bc_enc.cpp: bc7enc_rdo
+# (BC1/BC3/BC4/BC5/BC7 and the rate-distortion pass) and the Basis Universal transcoder's BC6H
+# encoder (de_tp_basisu, already linked above). Tools-only libraries, linked only into de_cooker
+# (DENG-2 Q1). The C files are built without FMA contraction, like the rest of the importer.
+set(_de_texture_bc_sources
+    importers/texture/texture_bc.c
+    importers/texture/texture_bc_rules.c)
+target_sources(de_cooker PRIVATE
+    importers/texture/texture_bc.h
+    ${_de_texture_bc_sources}
+    importers/texture/texture_bc_enc.cpp)
+set_source_files_properties(${_de_texture_bc_sources} importers/texture/texture_bc_enc.cpp
+    TARGET_DIRECTORY de_cooker
+    PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
+target_link_libraries(de_cooker PRIVATE de_tp_bc7enc_rdo)

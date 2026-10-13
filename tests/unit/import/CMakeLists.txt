@@ -77,3 +77,14 @@ endif()
 if(TARGET test_import)
     target_sources(test_import PRIVATE test_env_prefilter.c)
 endif()
+
+# DENG-99: block compression of the texture importer (texture_bc*.c): BC1/BC3/BC4/BC5/BC6H/BC7
+# quality against the test-only reference decoder bcdec (de_tp_bcdec; never linked by de-cook),
+# the compression = "auto" rule table, padding of mips inside a block, identical output for 1, 4
+# and 16 workers, KTX2 Basis payloads to BC, and the settings. Built into test_import; CTest names
+# import.texture_bc.<test>. data/texture_bc/ (gen_bc_fixtures.py) is mounted as bcd:/, data/texture/
+# as bct:/.
+if(TARGET test_import)
+    target_sources(test_import PRIVATE test_texture_bc.c)
+    target_link_libraries(test_import PRIVATE de_tp_bcdec)
+endif()

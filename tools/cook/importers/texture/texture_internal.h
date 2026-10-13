@@ -23,12 +23,21 @@
 #include <dengine/de_base.h>
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_task.h>
 
 #include "render/formats/de_cooked_texture.h"
 
 DE_EXTERN_C_BEGIN
 
 /* ---- Settings (texture_import.c) ------------------------------------------------------------- */
+
+/** Encoder effort (`quality` setting, DENG-99): how hard the BC encoders search. The value 0 is
+ * the default, so a zeroed struct asks for normal quality. */
+typedef enum de_tex_quality {
+    DE_TEX_QUALITY_NORMAL = 0,
+    DE_TEX_QUALITY_FAST = 1,
+    DE_TEX_QUALITY_HIGH = 2
+} de_tex_quality;
 
 /** How the filter reads past an edge (`address` setting). */
 typedef enum de_tex_address { DE_TEX_ADDRESS_WRAP = 0, DE_TEX_ADDRESS_CLAMP = 1 } de_tex_address;
@@ -39,8 +48,10 @@ typedef struct de_tex_settings {
     bool srgb_set; /**< `srgb` was given */
     bool mips;     /**< full chain to 1x1 */
     de_cooked_texture_usage usage;
-    const char *compression; /**< "auto" by default; DENG-99 reads it, this importer honours
-                                  "none" (every value cooks uncompressed until DENG-99) */
+    const char *compression; /**< "auto" by default; checked by de_tex_compression_parse and
+                                  turned into a format by de_tex_bc_choose (texture_bc.h) */
+    de_tex_quality quality;  /**< `quality`: "fast", "normal" (default) or "high" (DENG-99) */
+    f32 rdo_quality;         /**< `rdo_quality`: lambda of the rate-distortion pass; 0 = off */
     bool pixel_art;          /**< no mips, nearest sampling flag */
     f32 alpha_coverage;      /**< alpha-test cutoff whose coverage the mips keep; 0 = off */
     u32 max_size;            /**< longest edge after import; 0 = no limit */
@@ -140,6 +151,10 @@ de_result de_tex_decode_ktx2(const de_allocator *a, const void *data, u64 size,
  */
 de_result de_tex_basis_decode(const de_allocator *a, const void *data, u64 size, de_tex_image *out);
 
+/** Starts the Basis Universal transcoder's global tables once (thread-safe). Its BC6H encoder
+ * (texture_bc_enc.cpp, DENG-99) needs them too, so both files start it through this one call. */
+void de_tex_basis_start(void);
+
 /* ---- sRGB (texture_mips.c) ------------------------------------------------------------------- */
 
 /** sRGB EOTF and its inverse on [0, 1] (values outside are clamped). Deterministic (de_dpow). */
@@ -192,6 +207,14 @@ f32 de_tex_alpha_coverage(const f32 *rgba, u32 width, u32 height, f32 cutoff);
 
 /* ---- Encode (texture_encode.c) --------------------------------------------------------------- */
 
+/** How the encoders work (DENG-99). `(de_tex_encode_opts){0}` is valid: normal quality, no
+ * rate-distortion pass, everything on the calling thread. The output never depends on `tasks`. */
+typedef struct de_tex_encode_opts {
+    de_tex_quality quality;
+    f32 rdo_quality;       /**< > 0: lambda of the rate-distortion pass of BC1/3/4/5/7 */
+    de_task_system *tasks; /**< NULL = the calling thread */
+} de_tex_encode_opts;
+
 /** Picks the cooked format for an image and the settings (DENG-99 adds the BC rules here). */
 de_gpu_format de_tex_choose_format(const de_tex_settings *s, const de_tex_image *img);
 
@@ -206,6 +229,10 @@ bool de_tex_can_encode(de_gpu_format format);
  */
 de_result de_tex_encode(de_gpu_format format, const f32 *rgba, u32 width, u32 height, u8 *dst,
                         u32 row_pitch);
+/** de_tex_encode with encoder options (DENG-99: quality, rate-distortion, tasks). NULL `opts`
+ * means `(de_tex_encode_opts){0}`. Encoders allocate (the BC block buffers) from `a`. */
+de_result de_tex_encode_ex(const de_allocator *a, de_gpu_format format, const f32 *rgba, u32 width,
+                           u32 height, u8 *dst, u32 row_pitch, const de_tex_encode_opts *opts);
 
 /** f32 to IEEE half (round to nearest even; NaN to 0; overflow to ±65504). */
 u16 de_tex_f32_to_f16(f32 f);
@@ -221,6 +248,7 @@ typedef struct de_tex_dtex_desc {
     u32 width, height, layers, mip_count;
     u32 flags; /**< DE_COOKED_TEXTURE_*; SRGB and CUBE are set from format and dim */
     de_cooked_texture_usage usage;
+    de_tex_encode_opts encode; /**< DENG-99: encoder options (zero = defaults) */
 } de_tex_dtex_desc;
 
 /**

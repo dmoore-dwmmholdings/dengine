@@ -1,0 +1,58 @@
+bc7enc_rdo ert: hash_hsieh without misaligned loads or a left shift of a negative value
+
+ert::hash_hsieh() hashes byte runs at any offset inside the block array (the match search of
+the rate-distortion pass). It read them as `*reinterpret_cast<const uint16_t*>(p)`, which is a
+misaligned load (undefined behaviour) for odd offsets, and shifted a negative `signed char`
+left by 18, which is undefined too. UBSan (Clang, -fsanitize=undefined) stops at ert.cpp:238
+"load of misaligned address" and ert.cpp:263 "left shift of negative value" on the texture
+importer's RDO tests (DENG-99).
+
+The loads now go through memcpy into a uint16_t, and the sign-extended byte is converted to
+uint32_t before the shift. Both give the same bits as before on every two's-complement host,
+so hash values and the encoder's output do not change.
+
+Engine-local patch (DENG-99), applied by tools/vendor/vendor.py. Drop it when a pinned commit
+has the fix.
+
+diff --git a/ert.cpp b/ert.cpp
+index 4a37f95..aaa51cf 100644
+--- a/ert.cpp
++++ b/ert.cpp
+@@ -233,7 +233,8 @@ namespace ert
+ 
+ 		while (len--)
+ 		{
+-			const uint16_t* pWords = reinterpret_cast<const uint16_t*>(pBuf);
++			uint16_t pWords[2];
++			memcpy(pWords, pBuf, sizeof(pWords));
+ 
+ 			h += pWords[0];
+ 
+@@ -253,16 +254,24 @@ namespace ert
+ 			h += h >> 1;
+ 			break;
+ 		case 2:
+-			h += *reinterpret_cast<const uint16_t*>(pBuf);
++		{
++			uint16_t w;
++			memcpy(&w, pBuf, sizeof(w));
++			h += w;
+ 			h ^= h << 11;
+ 			h += h >> 17;
+ 			break;
++		}
+ 		case 3:
+-			h += *reinterpret_cast<const uint16_t*>(pBuf);
++		{
++			uint16_t w;
++			memcpy(&w, pBuf, sizeof(w));
++			h += w;
+ 			h ^= h << 16;
+-			h ^= (static_cast<signed char>(pBuf[sizeof(uint16_t)])) << 18;
++			h ^= static_cast<uint32_t>(static_cast<int32_t>(static_cast<signed char>(pBuf[sizeof(uint16_t)]))) << 18;
+ 			h += h >> 11;
+ 			break;
++		}
+ 		default:
+ 			break;
+ 		}

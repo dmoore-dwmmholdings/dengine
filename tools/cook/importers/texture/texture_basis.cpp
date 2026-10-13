@@ -1,16 +1,16 @@
 // texture_basis.cpp: the Basis Universal transcoder behind the texture importer's C interface
-// (DENG-98; DENG-2 Q1: C++ only behind a C interface inside one module). It exports one C
-// function, de_tex_basis_decode (texture_internal.h).
+// (DENG-98; DENG-2 Q1: C++ only behind a C interface inside one module). It exports two C
+// functions, de_tex_basis_decode and de_tex_basis_start (texture_internal.h).
 //
 // A KTX2 file with ETC1S (BasisLZ) or UASTC LDR payloads is transcoded at cook time: level 0 of
 // every layer and face to RGBA8 (transcoder_texture_format::cTFRGBA32), which the importer then
-// filters and encodes like any other 8-bit source. DENG-99 can transcode UASTC to BC7 and ETC1S to
-// BC1/BC7 here instead (the transcoder has those targets built in, see
-// third_party/basisu/CMakeLists.txt).
+// filters and encodes like any other 8-bit source: since DENG-99 the `compression` rules pick BC7
+// (or BC1 with compression = "bc1") and the BC encoders write it, so max_size, alpha coverage and
+// a full mip chain work for Basis sources too. The transcoder's direct BC targets are not used.
 //
 // The transcoder allocates with new/malloc (tools only). Its global tables are set up once, by a
-// function-local static (thread-safe in C++11 and later); every call has its own ktx2_transcoder,
-// so imports on several threads do not share state.
+// function-local static in de_tex_basis_start (thread-safe in C++11 and later); every call has its
+// own ktx2_transcoder, so imports on several threads do not share state.
 #include "texture_internal.h"
 
 #include <dengine/de_base.h>
@@ -25,18 +25,10 @@
 
 namespace {
 
-void basis_start() {
-    static const bool started = [] {
-        basist::basisu_transcoder_init();
-        return true;
-    }();
-    (void)started;
-}
-
 de_result decode(const de_allocator *a, const void *data, u64 size, de_tex_image *out) {
     if (size > UINT32_MAX)
         return DE_FAIL(DE_ERR_UNSUPPORTED, "KTX2: the file is larger than 4 GiB");
-    basis_start();
+    de_tex_basis_start();
     basist::ktx2_transcoder t;
     if (!t.init(data, static_cast<std::uint32_t>(size)))
         return DE_FAIL(DE_ERR_PARSE, "KTX2: the Basis transcoder refused the file");
@@ -82,6 +74,16 @@ de_result decode(const de_allocator *a, const void *data, u64 size, de_tex_image
 }
 
 } // namespace
+
+// The one start of the transcoder's global tables. The BC6H encoder (texture_bc_enc.cpp, DENG-99)
+// calls it too: two separate statics could run basisu_transcoder_init on two threads at once.
+extern "C" void de_tex_basis_start(void) {
+    static const bool started = [] {
+        basist::basisu_transcoder_init();
+        return true;
+    }();
+    (void)started;
+}
 
 extern "C" de_result de_tex_basis_decode(const de_allocator *a, const void *data, u64 size,
                                          de_tex_image *out) {
