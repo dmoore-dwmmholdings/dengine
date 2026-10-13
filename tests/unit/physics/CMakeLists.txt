@@ -120,3 +120,23 @@ foreach(_de_ct_test test_physics_manifold test_physics_pipeline)
         target_compile_options(${_de_ct_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-137: scene queries. physics_query_ray holds the checked-in vector of 10,000 rays and 1,000
+# shape casts (physics_query_ray.golden_vector); x86-64 and arm64 must reproduce it bit for bit.
+# Regenerate (never by hand) with
+#     DE_REGEN_GOLDEN=1 build/dev/tests/unit/physics/test_physics_query_ray --filter=physics_query_ray.golden_vector
+# physics_query_cast includes the 4-thread concurrency smoke test, so it carries the tsan label.
+de_add_test(NAME physics_query_ray SOURCES test_query_raycast.c LIBS de_physics de_test_support
+            TIMEOUT 120)
+de_add_test(NAME physics_query_cast SOURCES test_query_cast_overlap.c
+            LIBS de_physics de_platform de_test_support LABELS unit tsan TIMEOUT 120)
+foreach(_de_q_test test_physics_query_ray test_physics_query_cast)
+    if(TARGET ${_de_q_test})
+        target_include_directories(${_de_q_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_q_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+if(TARGET test_physics_query_ray)
+    target_compile_definitions(test_physics_query_ray PRIVATE
+        "DE_PHYSICS_QUERY_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/query_golden.txt\"")
+endif()
