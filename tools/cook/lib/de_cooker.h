@@ -213,6 +213,12 @@ u64 de_cook_settings_hash(const de__manifest_kv *settings, u32 count);
  * of its sub-assets as text (`env/castle#Body`). "" for NULL. */
 const char *de_cooker_import_id_str(const de_asset_import_ctx *ctx);
 
+/** The task system of the cooker that runs an import (de_cooker_desc.tasks), or NULL (also for
+ * NULL). An importer may split one import over it with de_task_parallel_for and a fixed grain,
+ * so its output does not depend on the worker count (DENG-99: the texture importer's BC encode).
+ * With NULL it does the same work on the calling thread. */
+de_task_system *de_cooker_import_tasks(const de_asset_import_ctx *ctx);
+
 /**
  * Declares a sub-asset `<asset id>#<name>` of type `type_name` whose bytes come from running the
  * importer registered for `type_name` on `source` (instead of bytes the caller cooked itself).

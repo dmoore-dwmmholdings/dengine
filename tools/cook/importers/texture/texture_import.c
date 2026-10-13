@@ -6,12 +6,14 @@
  * Extension points:
  *   - DENG-99 (BC compression): de_tex_choose_format and the encoder table (texture_encode.c);
  *     cook_image below needs no change.
- *   - DENG-100 (HDR environments): the `usage = "environment"` branch in cook_image.
+ *   - DENG-100 (HDR environments): the `usage = "environment"` branch in cook_image hands the
+ *     decoded image to de_env_cook (env_prefilter.c, env_sh.c).
  *
  * Built with the deterministic float flags (no FMA contraction; tools/cook/CMakeLists.txt).
  */
 #include "texture_import.h"
 #include "texture_internal.h"
+#include "env_internal.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -196,8 +198,9 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
     resolve_srgb(ctx, s, img);
     if (img->cube && img->width != img->height)
         return de_asset_import_fail(ctx, DE_ERR_PARSE, "texture: cube faces are not square");
-    /* DENG-100: `usage = "environment"` prefilters a cube map and computes SH9 here. Until then
-     * it cooks as a plain HDR texture (RGBA16F) with the usual mips. */
+    /* DENG-100: an environment becomes a prefiltered cube with SH9 (env_prefilter.c). */
+    if (s->usage == DE_COOKED_TEXTURE_USAGE_ENVIRONMENT)
+        return de_env_cook(ctx, a, s, img);
     if (s->srgb && !img->hdr)
         to_linear(img);
     u64 texels = (u64)img->width * img->height * img->layers;
@@ -242,6 +245,10 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
 /* KTX2 with BC payloads: the stored levels, unchanged. */
 static de_result cook_blocks(de_asset_import_ctx *ctx, const de_allocator *a,
                              const de_tex_settings *s, const de_tex_blocks *b) {
+    if (s->usage == DE_COOKED_TEXTURE_USAGE_ENVIRONMENT)
+        return de_asset_import_fail(ctx, DE_ERR_UNSUPPORTED,
+                                    "texture: an environment cannot come from block-compressed "
+                                    "KTX2 levels (give a float or 8-bit source)");
     u32 first = 0;
     if (s->max_size != 0)
         while (first + 1u < b->mip_count &&

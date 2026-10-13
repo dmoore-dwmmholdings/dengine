@@ -67,3 +67,13 @@ if(TARGET test_import_anim)
     target_compile_definitions(test_import_anim PRIVATE
         "DE_IMPORT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 endif()
+
+# DENG-100: HDR environments (env_prefilter.c, env_sh.c): source layouts and face directions,
+# the GGX prefilter of a constant environment, mip sizes, SH9 irradiance (constant and
+# directional), rotation, byte-identical output across worker counts, the cooked DTEX + ENVS blob
+# and its parser. Built into test_import (its texd:/ and ttmp:/ mounts); CTest names
+# import.env.<test>. Faces are 8 to 32 texels with 64 samples or fewer, so each test stays fast
+# under the sanitizers.
+if(TARGET test_import)
+    target_sources(test_import PRIVATE test_env_prefilter.c)
+endif()

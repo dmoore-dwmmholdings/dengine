@@ -81,7 +81,8 @@ typedef enum de_cooked_texture_usage {
     DE_COOKED_TEXTURE_USAGE_COLOR = 0,      /**< colour (sRGB unless `srgb = false`) */
     DE_COOKED_TEXTURE_USAGE_NORMAL = 1,     /**< tangent-space normal map, xyz in rgb */
     DE_COOKED_TEXTURE_USAGE_MASK = 2,       /**< linear data (roughness, occlusion, masks) */
-    DE_COOKED_TEXTURE_USAGE_ENVIRONMENT = 3 /**< HDR environment (DENG-100 prefilters it) */
+    DE_COOKED_TEXTURE_USAGE_ENVIRONMENT = 3 /**< HDR environment: a prefiltered cube followed by
+                                                 an ENVS trailer (de_cooked_env.h, DENG-100) */
 } de_cooked_texture_usage;
 #define DE_COOKED_TEXTURE_USAGE_COUNT 4u
 
