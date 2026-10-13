@@ -8,9 +8,11 @@
  *
  *   1. de_det tick callback (outside the schedule): scenario->script(ctx, tick), then the
  *      test-only inject hook of the run options (de_phys_det_options.inject).
- *   2. de_world_run_schedule(FIXED_UPDATE): the exclusive deterministic system
- *      "physics.det_step" calls de_physics_step(physics, dt). S23's physics systems join the same
- *      schedule.
+ *   2. de_world_run_schedule(FIXED_UPDATE): the system "physics.step" that de_physics_attach adds
+ *      (DENG-223) syncs the ECS entities with physics bodies (scenarios may spawn them), moves
+ *      the ECS characters, and calls de_physics_step(physics, dt). Until DENG-223 the harness had
+ *      its own exclusive "physics.det_step"; for scenarios without physics components the two
+ *      give the same state.
  *   3. The tick's checksum: XXH3-64 over de_physics_checksum(physics), scenario->probe(ctx, tick)
  *      (0 when there is no probe) and de_world_checksum(world, DE_COMP_SNAPSHOT), in that order,
  *      as little-endian u64 values. Also, for diagnosis only, one hash per field group
@@ -130,8 +132,8 @@ typedef struct de_phys_det_session {
 
 /**
  * Starts a run: de_det_session_begin (FP mode, task system, registry, ECS world), then the
- * physics world (with the session's task system), de_physics_attach, the step system, and
- * scenario->setup. On failure everything is torn down again.
+ * physics world (with the session's task system), de_physics_attach (which adds physics.step),
+ * and scenario->setup. On failure everything is torn down again.
  * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad scenario) or the error of a failed step.
  */
 de_result de_phys_det_begin(de_phys_det_session *s, const de_phys_det_scenario *scenario,

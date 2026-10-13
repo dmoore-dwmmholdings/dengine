@@ -652,8 +652,9 @@ TEST(physics_world, attach_registers_components_and_resource) {
     const de_type_id t_rb = de_type_find(types, "DeRigidBody");
     const de_field_info *fi = de_type_fields(types, t_rb, &nf);
     ASSERT_TRUE(fi != NULL);
-    EXPECT_EQ(nf, 13u);
+    EXPECT_EQ(nf, 14u); /* DENG-223 appended no_interpolate */
     EXPECT_STREQ(fi[0].name, "type");
+    EXPECT_STREQ(fi[13].name, "no_interpolate");
     EXPECT_EQ((u32)fi[0].kind, (u32)DE_FK_ENUM);
     EXPECT_EQ(fi[12].flags & DE_FIELD_SERIALIZE, 0u); /* the body handle is not serialized */
     EXPECT_TRUE((fi[12].flags & DE_FIELD_SNAPSHOT) != 0);
@@ -680,6 +681,10 @@ TEST(physics_world, attach_registers_components_and_resource) {
     DeRigidBody *r = (DeRigidBody *)de_entity_get(w, e, rb);
     ASSERT_TRUE(r != NULL);
     EXPECT_EQ((u32)r->type, (u32)DE_BODY_STATIC);
+    /* DENG-223: the construct hook gives authored bodies gravity and sleeping. */
+    EXPECT_TRUE(r->gravity_scale == 1.0f);
+    EXPECT_TRUE(r->allow_sleep);
+    EXPECT_FALSE(r->no_interpolate);
     r->mass = 3.0f;
     EXPECT_TRUE(((const DeRigidBody *)de_entity_get_const(w, e, rb))->mass == 3.0f);
 

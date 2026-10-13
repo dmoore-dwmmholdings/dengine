@@ -448,9 +448,12 @@ static bool resolve_side(const de_physics_world *p, de_body b, de_entity e, u32 
         return true;
     }
     if (e.bits != 0u) {
+        /* DENG-223: an entity side is the body physics.step made for the entity. */
+        if (de__phys_ecs_entity_body(p, e, out))
+            return true;
         DE_FAIL(DE_ERR_INVALID_ARGUMENT,
-                "de_joint_create: entity side %s has no body (the ECS systems resolve entity "
-                "joints, DENG-223)",
+                "de_joint_create: entity side %s has no body (it gets one when physics.step runs "
+                "after it has DeRigidBody + DeCollider, DeCollider or DeCharacter)",
                 name);
         return false;
     }

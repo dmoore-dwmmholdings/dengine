@@ -168,11 +168,6 @@ static void pd_det_tick(de_world *w, u64 tick_index, void *state) {
         s->options.inject(&s->ctx, s->tick, s->options.inject_user);
 }
 
-static void pd_step_system(de_system_ctx *ctx) {
-    de_phys_det_session *s = (de_phys_det_session *)ctx->user;
-    de_physics_step(s->ctx.physics, s->ctx.dt);
-}
-
 de_result de_phys_det_begin(de_phys_det_session *s, const de_phys_det_scenario *scenario,
                             const de_phys_det_options *options) {
     if (s == NULL)
@@ -215,21 +210,11 @@ de_result de_phys_det_begin(de_phys_det_session *s, const de_phys_det_scenario *
     r = de_physics_create(&pd, &s->ctx.physics);
     if (r != DE_OK)
         goto fail;
+    /* DENG-223: attach adds the FixedUpdate system physics.step, which syncs the ECS entities
+     * (none in scenarios that make bodies directly) and calls de_physics_step(physics, dt). */
     r = de_physics_attach(s->ctx.physics, s->det.world, s->det.types);
     if (r != DE_OK)
         goto fail;
-
-    de_system_desc sd;
-    memset(&sd, 0, sizeof sd);
-    sd.name = "physics.det_step";
-    sd.schedule = DE_SCHEDULE_FIXED_UPDATE;
-    sd.fn = pd_step_system;
-    sd.user = s;
-    sd.flags = DE_SYSTEM_EXCLUSIVE | DE_SYSTEM_DETERMINISTIC;
-    if (!DE_HANDLE_VALID(de_system_add(s->det.world, &sd))) {
-        r = DE_FAIL_WRAP(DE_ERR_INVALID_ARGUMENT, "de_phys_det_begin: step system");
-        goto fail;
-    }
 
     if (scenario->state_size > 0) {
         s->state = DE_ALLOC(de_heap_allocator(), scenario->state_size, 16, DE_MEM_GENERAL);

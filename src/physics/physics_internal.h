@@ -295,6 +295,7 @@ typedef enum de__phys_ext_id {
     DE__PHYS_EXT_JOINTS,         /**< S23 */
     DE__PHYS_EXT_CHARACTER,      /**< S23 */
     DE__PHYS_EXT_CCD,            /**< DENG-219 (ccd_internal.h) */
+    DE__PHYS_EXT_ECS,            /**< DENG-223 (ecs/phys_ecs.h) */
     DE__PHYS_EXT_RESERVED,
     DE__PHYS_EXT_COUNT
 } de__phys_ext_id;
@@ -388,6 +389,10 @@ de_result de__body_pool_init(de__body_pool *pool, const de_allocator *a, u32 cap
 void de__body_pool_free(de__body_pool *pool, const de_allocator *a);
 /** shapes/shape.c: frees every shape (world destroy). */
 void de__shapes_free_all(de_physics_world *p);
+/** ecs/entity_map.c (DENG-223): the index of the body physics.step made for entity `e` in
+ *  *index; false (index untouched) when it has none or the world is not attached. The joints
+ *  resolve entity sides with it. */
+bool de__phys_ecs_entity_body(const de_physics_world *p, de_entity e, u32 *index);
 
 DE_EXTERN_C_END
 

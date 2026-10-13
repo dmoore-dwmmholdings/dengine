@@ -127,3 +127,7 @@ de_phys_det_add_scenarios(SOURCES scenarios_character.c SCENARIOS character_cour
 # DENG-219 (S23): continuous collision (bullets with time of impact against walls, a mesh and a
 # dynamic block; fast drops on predictive pairs and per-pair speculative contacts).
 de_phys_det_add_scenarios(SOURCES scenarios_ccd.c SCENARIOS bullet_wall fast_drop)
+
+# DENG-223 (S23): the physics ECS systems (entities spawned and despawned, static colliders, a
+# kinematic platform, a character, entity joints; contact and joint break events in the probe).
+de_phys_det_add_scenarios(SOURCES scenarios_ecs.c SCENARIOS ecs_scene)
