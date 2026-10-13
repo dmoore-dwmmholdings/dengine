@@ -501,5 +501,46 @@ DE_API de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s);
 DE_API de_result de_gpu_swapchain_resize(de_gpu_device *d, de_gpu_swapchain s, u32 w, u32 h);
 DE_API de_gpu_colorspace de_gpu_swapchain_colorspace(de_gpu_device *d, de_gpu_swapchain s);
 
+/* ---------- Tier evaluation (DENG-290; SPEC §3.3, §12.8, §24 R5/R7) ---------- */
+
+/** Rendering tier. NONE: the device meets neither tier (the renderer refuses it). */
+typedef enum de_gpu_tier { DE_GPU_TIER_NONE, DE_GPU_TIER_BASE, DE_GPU_TIER_RT } de_gpu_tier;
+
+/** Most reasons per tier in a de_gpu_tier_report; later ones are dropped. */
+#define DE_GPU_TIER_MAX_REASONS 6u
+/** Capacity of one reason string, including the NUL. */
+#define DE_GPU_TIER_REASON_BYTES 160u
+
+/** What de_gpu_evaluate_tier() decided, and why. Every string is NUL-terminated. */
+typedef struct de_gpu_tier_report {
+    bool base_ok;      /**< meets the Base tier (SPEC §3.3) for its backend */
+    bool rt_ok;        /**< meets the RT tier: Base + inline ray queries + hardware RT */
+    bool mesh_shaders; /**< mesh shaders usable (optional at both tiers; else compute expansion) */
+    de_gpu_tier recommended; /**< the tier the renderer should pick by default */
+    u32 base_reason_count;   /**< entries in base_reasons; 0 when base_ok */
+    u32 rt_reason_count;     /**< entries in rt_reasons; 0 when rt_ok */
+    char base_reasons[DE_GPU_TIER_MAX_REASONS][DE_GPU_TIER_REASON_BYTES]; /**< failed Base reqs */
+    char rt_reasons[DE_GPU_TIER_MAX_REASONS][DE_GPU_TIER_REASON_BYTES];   /**< failed RT reqs */
+    /** Why `recommended` is lower than the best tier met ("" when it is not). */
+    char recommended_reason[DE_GPU_TIER_REASON_BYTES];
+    /** The default-to-Base list entry the device matches ("Steam Deck", ...), or "". */
+    char default_base_device[64];
+} de_gpu_tier_report;
+
+/**
+ * Decides the tiers a device meets and the tier to use by default. Pure: reads only `caps` (and a
+ * built-in table), so it runs on synthetic caps anywhere.
+ *   - Base: the backend's own SPEC §3.3 check (`caps->base_tier_ok`, its reason quoted), plus
+ *     what the renderer needs from every backend: non-empty bindless tables for sampled and
+ *     storage textures, buffers and samplers, and DE_GPU_MAX_PUSH_CONSTANT_BYTES push constants.
+ *   - RT: Base, `caps->ray_query`, and `caps->raytracing == DE_RT_HARDWARE`.
+ *   - Recommended: RT when RT is met and the device is not on the default-to-Base list (Steam
+ *     Deck, Apple M1/M2 below Apple9: SPEC R7, DENG-2 Q4); else BASE when Base is met; else NONE.
+ * Every failed requirement gets a reason. `caps` NULL gives a NONE report with a reason.
+ */
+DE_API void de_gpu_evaluate_tier(const de_gpu_caps *caps, de_gpu_tier_report *out);
+/** "none", "base", "rt"; "unknown" when out of range. Never NULL. */
+DE_API const char *de_gpu_tier_name(de_gpu_tier t);
+
 DE_EXTERN_C_END
 #endif

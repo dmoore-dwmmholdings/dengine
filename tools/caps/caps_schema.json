@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dengine.caps/1",
+  "title": "de-caps --json output (DENG-290)",
+  "description": "Validated by tools/caps/check_caps_json.py, which implements the keywords used here: type, enum, const, required, properties, additionalProperties, items, minItems, maxItems, minimum, maximum, minLength, oneOf.",
+  "type": "object",
+  "required": [
+    "backends",
+    "engine_version",
+    "platform",
+    "schema"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "dengine.caps/1"
+    },
+    "engine_version": {
+      "type": "string",
+      "minLength": 5
+    },
+    "platform": {
+      "enum": [
+        "windows",
+        "macos",
+        "linux",
+        "other"
+      ]
+    },
+    "backends": {
+      "type": "array",
+      "items": {
+        "description": "One GPU backend. adapters is empty unless status is ok.",
+        "type": "object",
+        "required": [
+          "adapters",
+          "backend",
+          "default_adapter",
+          "default_error",
+          "error",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "enum": [
+              "d3d12",
+              "vulkan",
+              "metal",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "not built",
+              "no loader",
+              "no device",
+              "unavailable"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default_adapter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "default_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "adapters": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "description": "One adapter (de_gpu_device_desc.adapter = index). caps and tier are null when status is error.",
+              "type": "object",
+              "required": [
+                "caps",
+                "default",
+                "error",
+                "index",
+                "status",
+                "tier"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "status": {
+                  "enum": [
+                    "ok",
+                    "error"
+                  ]
+                },
+                "default": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "caps": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "description": "de_gpu_caps, one key per field",
+                      "type": "object",
+                      "required": [
+                        "async_compute",
+                        "backend",
+                        "base_tier_ok",
+                        "base_tier_reason",
+                        "dedicated_vram",
+                        "device_id",
+                        "device_name",
+                        "enhanced_barriers",
+                        "hdr_output",
+                        "max_bindless_accels",
+                        "max_bindless_buffers",
+                        "max_bindless_samplers",
+                        "max_bindless_storage_textures",
+                        "max_bindless_textures",
+                        "max_push_constant_bytes",
+                        "mesh_max_output_primitives",
+                        "mesh_max_output_vertices",
+                        "mesh_shaders",
+                        "opacity_micromaps",
+                        "ray_query",
+                        "raytracing",
+                        "rt_pipelines",
+                        "shared_memory",
+                        "timestamp_frequency",
+                        "unified_memory",
+                        "vendor",
+                        "vendor_id",
+                        "vrr",
+                        "wave_size_max",
+                        "wave_size_min"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "backend": {
+                          "enum": [
+                            "d3d12",
+                            "vulkan",
+                            "metal",
+                            "null"
+                          ]
+                        },
+                        "device_name": {
+                          "type": "string"
+                        },
+                        "vendor": {
+                          "type": "string"
+                        },
+                        "vendor_id": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "device_id": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "dedicated_vram": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "shared_memory": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "unified_memory": {
+                          "type": "boolean"
+                        },
+                        "raytracing": {
+                          "enum": [
+                            "none",
+                            "api_only",
+                            "hardware"
+                          ]
+                        },
+                        "ray_query": {
+                          "type": "boolean"
+                        },
+                        "rt_pipelines": {
+                          "type": "boolean"
+                        },
+                        "opacity_micromaps": {
+                          "type": "boolean"
+                        },
+                        "mesh_shaders": {
+                          "type": "boolean"
+                        },
+                        "mesh_max_output_vertices": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "mesh_max_output_primitives": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "hdr_output": {
+                          "type": "boolean"
+                        },
+                        "vrr": {
+                          "type": "boolean"
+                        },
+                        "enhanced_barriers": {
+                          "type": "boolean"
+                        },
+                        "async_compute": {
+                          "type": "boolean"
+                        },
+                        "wave_size_min": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "wave_size_max": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_bindless_textures": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_bindless_buffers": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_bindless_storage_textures": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_bindless_samplers": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_bindless_accels": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 4294967295
+                        },
+                        "max_push_constant_bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 128
+                        },
+                        "timestamp_frequency": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "base_tier_ok": {
+                          "type": "boolean"
+                        },
+                        "base_tier_reason": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "tier": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "description": "de_gpu_tier_report",
+                      "type": "object",
+                      "required": [
+                        "base_ok",
+                        "base_reasons",
+                        "default_base_device",
+                        "mesh_shaders",
+                        "recommended",
+                        "recommended_reason",
+                        "rt_ok",
+                        "rt_reasons"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "base_ok": {
+                          "type": "boolean"
+                        },
+                        "base_reasons": {
+                          "type": "array",
+                          "maxItems": 6,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "rt_ok": {
+                          "type": "boolean"
+                        },
+                        "rt_reasons": {
+                          "type": "array",
+                          "maxItems": 6,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "mesh_shaders": {
+                          "type": "boolean"
+                        },
+                        "recommended": {
+                          "enum": [
+                            "none",
+                            "base",
+                            "rt"
+                          ]
+                        },
+                        "recommended_reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "default_base_device": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
