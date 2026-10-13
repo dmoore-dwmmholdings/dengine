@@ -120,3 +120,6 @@ de_phys_det_add_scenarios(SOURCES scenarios_islands.c SCENARIOS pyramid_10 sleep
 # DENG-220 (S23): joints (pendulums of every kind, two chains of 20 with breaking and destruction,
 # motors and limits).
 de_phys_det_add_scenarios(SOURCES scenarios_joints.c SCENARIOS pendulum chain_20 hinge_motor)
+
+# DENG-221 (S23): the character controller (slopes, stairs, a moving platform, pushed boxes).
+de_phys_det_add_scenarios(SOURCES scenarios_character.c SCENARIOS character_course)

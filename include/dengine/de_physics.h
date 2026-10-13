@@ -658,6 +658,75 @@ typedef struct DePhysicsWorld {
     de_physics_world *world;
 } DePhysicsWorld;
 
+/* ---------- Character controller (DENG-221) ----------
+ * A kinematic capsule character controller (SPEC §13.1). Each character is a kinematic body
+ * with an upright capsule shape (the "proxy"), so dynamic bodies collide with it. The controller
+ * itself only uses the scene queries and the body API:
+ *
+ * - de_character_move() runs once per tick, before de_physics_step(). It depenetrates the
+ *   capsule from static and kinematic bodies, applies the game's intent, collides and slides
+ *   (shape casts, at most 4 iterations), climbs steps, snaps to the ground, follows moving
+ *   platforms and pushes dynamic bodies. It then sets the proxy's velocity so that the next
+ *   de_physics_step() carries the proxy exactly to the returned pose.
+ * - Position: the proxy's position is the center of the capsule. Up is world +Z; the capsule
+ *   never tilts, and its yaw only follows rotating platforms.
+ * - DeCharacter fields: `radius` and `height` (the total height, at least 2 * radius) size the
+ *   capsule at create; later changes are ignored (no resize). `step_height` (m), `max_slope_rad`
+ *   (the steepest walkable slope, below pi/2) and `skin_width` (the gap kept to surfaces, m) are
+ *   read on every move. A field that is 0 takes its DE_CHARACTER_DEFAULT_* value.
+ * - Input: `desired_velocity` (m/s, world). Its x and y are the walking velocity, applied as
+ *   given (the game owns acceleration and air control). A positive z jumps when the character
+ *   is grounded: the vertical velocity becomes desired_velocity.z. While airborne, the
+ *   controller integrates the world gravity's z component into the vertical velocity.
+ * - Outputs: `velocity` (the character's own displacement over dt, without depenetration and
+ *   platform carry; its z is also the vertical speed carried into the next airborne tick),
+ *   `grounded`, `ground_normal` (zero when airborne), `ground_entity` (the owner of the ground
+ *   body, DE_ENTITY_NULL when airborne or for bodies outside the ECS). `grounded` is also an
+ *   input: ground snapping and stepping run only when the character was grounded the tick before.
+ * - Slopes: a surface is walkable when normal.z >= cos(max_slope_rad). A capsule resting on an
+ *   edge (a stair nose) counts as supported when the face just inside the edge is walkable.
+ *   Steeper surfaces act as walls for walking (no climbing by projection) and the character slides
+ *   down them under gravity. Projection never adds speed.
+ * - Pushing: a dynamic body hit while moving gets an impulse at the contact point, at most what
+ *   makes it match the character's speed into it (shared by the mass ratio with the character
+ *   mass, cvar `physics.character.mass`, 80 kg) and at most push force * dt (cvar
+ *   `physics.character.push_force`, 1000 N). Each body is pushed at most once per move, in hit
+ *   order. Static and kinematic bodies are never pushed.
+ * - Determinism (SPEC §5.7): de_dmath only, fixed iteration caps, query results in their fixed
+ *   order (fraction, then body index). No allocation per move.
+ */
+
+/** Defaults of the DeCharacter parameters that are 0. */
+#define DE_CHARACTER_DEFAULT_RADIUS        0.3f
+#define DE_CHARACTER_DEFAULT_HEIGHT        1.8f
+#define DE_CHARACTER_DEFAULT_STEP_HEIGHT   0.3f
+#define DE_CHARACTER_DEFAULT_MAX_SLOPE_RAD 0.785398163f /* 45 degrees */
+#define DE_CHARACTER_DEFAULT_SKIN_WIDTH    0.02f
+
+/**
+ * Creates a character: a capsule shape of `c->radius` and `c->height` and a kinematic body with
+ * it, centered at `at->position` (rotation: its yaw is kept, tilt is not; scale ignored), owned by
+ * `owner` (DE_ENTITY_NULL for none). The body uses the default collision filter. Create-time
+ * call: it may allocate (the shape, and the controller state on the first character of a world).
+ * On failure returns an invalid handle and sets the error context: DE_ERR_INVALID_ARGUMENT (NULL
+ * or non-finite input, negative parameters, height < 2 * radius, max_slope_rad >= pi/2) or
+ * DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_body de_character_create(de_physics_world *p, const DeCharacter *c,
+                                   const de_transform *at, de_entity owner);
+/** Destroys a character's proxy body and its capsule shape. Stale handles are ignored. */
+DE_API void de_character_destroy(de_physics_world *p, de_body character);
+/**
+ * Moves a character for one tick of `dt` seconds (see the block comment): reads the parameters
+ * and `desired_velocity` of `io`, writes its outputs, sets the proxy's velocity for the next
+ * de_physics_step() and writes the pose the proxy will have after that step to `out` (may be
+ * NULL). Call it once per tick, before de_physics_step(). Allocates nothing.
+ * @return DE_OK, or DE_ERR_INVALID_ARGUMENT (NULL world or io, a body that is not a character,
+ *         dt not > 0 and finite, non-finite or negative parameters); nothing changes then.
+ */
+DE_API de_result de_character_move(de_physics_world *p, de_body character, DeCharacter *io, f32 dt,
+                                   de_transform *out);
+
 /* Contact events (sent each fixed step). */
 typedef enum de_contact_kind {
     DE_CONTACT_BEGIN,

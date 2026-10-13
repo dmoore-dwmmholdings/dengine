@@ -183,3 +183,15 @@ foreach(_de_jt_test test_physics_joints test_physics_joint_limits)
         target_compile_options(${_de_jt_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-221: the kinematic capsule character controller. physics_character: arguments, falling and
+# jumping, collide and slide, depenetration, slopes, steps, stairs, thin walls, no allocation.
+# physics_character_platforms: moving platforms, pushing dynamic bodies, determinism.
+de_add_test(NAME physics_character SOURCES test_character.c LIBS de_physics)
+de_add_test(NAME physics_character_platforms SOURCES test_character_platforms.c LIBS de_physics)
+foreach(_de_ch_test test_physics_character test_physics_character_platforms)
+    if(TARGET ${_de_ch_test})
+        target_include_directories(${_de_ch_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_ch_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

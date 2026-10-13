@@ -120,3 +120,12 @@ if(TARGET de_physics)
         joints/joint_cone_twist.c
         joints/joint_6dof.c)
 endif()
+
+# DENG-221: kinematic capsule character controller (collide and slide on the scene queries,
+# slopes, steps, ground snap, moving platforms, pushing dynamic bodies).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        character/character_internal.h
+        character/character.c
+        character/character_move.c)
+endif()
