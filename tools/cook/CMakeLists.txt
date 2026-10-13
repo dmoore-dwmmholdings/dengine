@@ -68,3 +68,26 @@ target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect 
 # library, not part of de_cooker: its C++ shim and Slang stay out of every target that does not
 # cook shaders.
 add_subdirectory(importers/shader)
+
+# DENG-98: the texture importer (tools/cook/importers/texture/): PNG, JPEG (stb_image), OpenEXR
+# (tinyexr), KTX2 (own container reader; Basis ETC1S/UASTC through the Basis Universal transcoder)
+# to DTEX (src/render/formats/de_cooked_texture.h) with linear-space mips. Cooker-library code like
+# the model importer: Debug and Dev builds and the tools, never Release or Shipping. Entry:
+# "cook/importers/texture/texture_import.h". tinyexr and basisu are tools-only libraries; the
+# importer reaches their C++ only through tinyexr's C declarations and texture_basis.cpp
+# (DENG-2 Q1). The filter, sRGB and encode files are built without FMA contraction, so a cook's
+# float results do not depend on the compiler's contraction choices.
+set(_de_texture_importer_sources
+    importers/texture/texture_import.c
+    importers/texture/texture_decode.c
+    importers/texture/texture_ktx2.c
+    importers/texture/texture_mips.c
+    importers/texture/texture_encode.c)
+target_sources(de_cooker PRIVATE
+    importers/texture/texture_import.h
+    importers/texture/texture_internal.h
+    ${_de_texture_importer_sources}
+    importers/texture/texture_basis.cpp)
+set_source_files_properties(${_de_texture_importer_sources} PROPERTIES
+    COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
+target_link_libraries(de_cooker PRIVATE de_tp_stb de_tp_tinyexr de_tp_basisu)

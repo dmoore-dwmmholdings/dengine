@@ -19,3 +19,13 @@ if(TARGET test_import)
         "DE_IMPORT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
         "DE_IMPORT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_import_tmp\"")
 endif()
+
+# DENG-98: the texture importer (tools/cook/importers/texture/): PNG/JPEG/EXR/KTX2 decode, linear
+# mips, the DTEX layout, determinism, rejection, the settings hash, model textures cooked to DTEX,
+# the Dev in-process cook and `de-cook cook`. In the same executable, CTest names
+# import.texture.<test>. data/texture/ is mounted read-only as texd:/ (gen_fixtures.py output),
+# data/gltf/ as texg:/, and test_import_tmp/ as ttmp:/. Links de_cook_cmd for `de-cook cook`.
+if(TARGET test_import)
+    target_sources(test_import PRIVATE test_texture_import.c)
+    target_link_libraries(test_import PRIVATE de_cook_cmd)
+endif()

@@ -234,3 +234,36 @@ url = "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-20
 sha256 = "fa7629c9ce59c87c821614ae4b52e52f785d4c659a5a06a89fa9ec86d615eeee"
 strip = 0
 files = ["bin/slang-compiler.dll", "bin/slang-glslang.dll"]
+
+[[lib]]
+name = "tinyexr"
+# OpenEXR decoder of the texture importer (SPEC §11.6, §22), tools only: compiled into the cooker
+# library (tools/cook/importers/texture/, DENG-98), never into Release or Shipping. C++ behind the
+# importer's C interface (DENG-2 Q1). The 1.x line: 3.x is a rewrite (a C library with GPU, SIMD
+# and codec trees) that the importer does not need.
+version = "1.0.13"
+url = "https://github.com/syoyo/tinyexr/archive/refs/tags/v1.0.13.tar.gz"
+sha256 = "01edf1e18e32e5503fdd2a35d62bb593109daa392324cec0157b150e5fd68077"
+license = "BSD-3-Clause"
+# The single header and the two reader headers it includes. Inflate comes from stb_image (the
+# build sets TINYEXR_USE_STB_ZLIB), so neither miniz nor the other deps/ are vendored.
+files = ["tinyexr.h", "exr_reader.hh", "streamreader.hh"]
+
+[[lib]]
+name = "basisu"
+# Basis Universal transcoder (SPEC §22 "libktx / Basis Universal"): the texture importer transcodes
+# KTX2 files with ETC1S (BasisLZ) or UASTC payloads at cook time (DENG-98). Tools only, C++ behind
+# the importer's C interface (DENG-2 Q1). Used instead of KTX-Software/libktx, which would bring a
+# second copy of this transcoder; the importer reads the KTX2 container itself. See the Trama page
+# "Decision: KTX2 import uses the Basis Universal transcoder and an own KTX2 reader, not libktx".
+version = "2_50"
+url = "https://github.com/BinomialLLC/basis_universal/archive/refs/tags/v2_50.tar.gz"
+sha256 = "216e49e1f4213d4bfa4afaa07527e16bac28533dddd444197d3aa19230ac130c"
+license = "Apache-2.0"
+# The transcoder only (no encoder, tools, tests, test files, WebGL or Python), and the NOTICE file
+# that Apache-2.0 §4(d) asks redistributions to carry.
+files = ["transcoder/*", "NOTICE"]
+# zstd/zstd.h: engine-owned forwarder to the vendored zstd (third_party/zstd/lib/zstd.h), because
+# the transcoder includes "../zstd/zstd.h" for KTX2 zstd supercompression. Upstream's bundled
+# single-file zstd is not vendored.
+local = ["CMakeLists.txt", "de_*", "smoke/**", "patches/**", "zstd/zstd.h"]
