@@ -16,7 +16,7 @@ runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
 | Tier | When | Jobs |
 |---|---|---|
 | quick | a run on a `feature/**` branch | windows msvc Debug, linux gcc Dev, headless linux Release, linux clang ASan+UBSan, linux clang TSan |
-| full | every other run: `dev`, `main`, `sprint/**`, pull requests | every job in the tables below |
+| full | every other run: `dev`, `main`, `sprint/**`, pull requests | every job in the tables below, the libFuzzer smoke run included |
 
 - A first `plan` job picks the tier and builds the matrix, so the jobs are listed once, in the
   `plan` step, each with `"quick": true` if it is in the quick tier.
@@ -25,10 +25,11 @@ runners queued. `ci.yml` and `sanitizers.yml` therefore have two tiers:
   that only fire in optimized builds, the build without GPU and window modules, Linux-only UB and
   data races. Workers also run `ci-macos-asan` and the `windows-xwin-dev` cross-build on the
   host before they push.
-- What the quick tier misses (clang-cl, MSVC Release, Shipping, GCC TSan, macOS jobs, headless Windows) is
-  caught by the full run on `dev` after the merge; the orchestrator files a fix task for it.
+- What the quick tier misses (clang-cl, MSVC Release, Shipping, GCC TSan, macOS jobs, headless Windows,
+  the libFuzzer smoke run) is caught by the full run on `dev` after the merge; the orchestrator
+  files a fix task for it.
 - `checks.yml` is small (three Ubuntu jobs) and always runs in full. `determinism.yml` (five
-  platform jobs and a diff job) has no tiers either.
+  platform jobs, two cook jobs and a diff job) has no tiers either.
 
 Every build job runs a preset from `CMakePresets.json`. To reproduce a job locally, run the same
 preset on a host of the same OS (see `docs/building.md`):
@@ -95,6 +96,46 @@ cross-architecture determinism jobs are in `determinism.yml` (below).
 - On macOS, the ASan+UBSan job runs locally with `cmake --preset ci-macos-asan`, then the
   build and test commands above.
 
+#### Fuzz smoke (full tier only)
+
+| Job | Runner | Preset |
+|---|---|---|
+| linux clang libFuzzer smoke (ASan+UBSan) | `ubuntu-24.04` | `ci-linux-asan` with `-DDE_FUZZ_LIBFUZZER=ON` and `-fsanitize=fuzzer-no-link` |
+
+The `sanitize` jobs only replay each fuzz target's corpus (the CTest entries `fuzz.<name>`). This
+job fuzzes for real (SPEC §19.1, DENG-216):
+
+- `-fsanitize=fuzzer-no-link` in `CMAKE_C_FLAGS` and `CMAKE_CXX_FLAGS` instruments every library,
+  so libFuzzer sees coverage inside the parsers, not only in the fuzz target's own file. The
+  configure step fails if the targets did not get libFuzzer (`DE_FUZZ_USES_LIBFUZZER`).
+- It lists the targets from CTest (label `fuzz`, without `selftest`: the harness self test has a
+  crash input on purpose), builds only those, and runs each for 60 s (`FUZZ_SECONDS`) from an
+  empty scratch directory plus its checked-in corpus.
+- Limits: `-timeout=10` (seconds per input), `-malloc_limit_mb=256`, `-rss_limit_mb=2048`. ASan
+  runs with `detect_leaks=1`.
+- A crash, leak, timeout or oversized allocation fails the job. The inputs that caused it and the
+  logs are uploaded as `fuzz-findings` (kept for 14 days). The job summary has a table of the
+  targets with their run counts.
+- When a run finds a bug: fix the parser, and add the input to the target's corpus as
+  `regress_<what>` (`tests/fuzz/asset/corpus/dpak_reader/` has an example).
+- New fuzz targets need no change here.
+- Local equivalent on macOS (Apple Clang has no libFuzzer; use Homebrew LLVM):
+
+  ```sh
+  cmake -S . -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=Dev \
+      -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
+      -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+      -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path) \
+      -DCMAKE_C_FLAGS=-fsanitize=fuzzer-no-link -DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link \
+      -DDE_SANITIZE=address,undefined -DDE_FUZZ_LIBFUZZER=ON
+  cmake --build build/fuzz --target fuzz_<name>
+  mkdir -p /tmp/fz && build/fuzz/tests/fuzz/<module>/fuzz_<name> -max_total_time=60 \
+      -timeout=10 -malloc_limit_mb=256 /tmp/fz tests/fuzz/<module>/corpus/<name>
+  ```
+
+  On macOS, LeakSanitizer reports libFuzzer's own `StartRssThread` allocation at exit. Suppress it
+  with `LSAN_OPTIONS=suppressions=<file>` and the line `leak:fuzzer::StartRssThread` in the file.
+
 ### `checks.yml`: repository checks
 
 | Job | What it runs | Local equivalent |
@@ -132,6 +173,8 @@ Trama pages `Testing` and `Module: physics`.
 | determinism linux-x86-64-clang | `ubuntu-24.04` | `linux-clang-release` |
 | determinism windows-x86-64-msvc | `windows-2022` | `windows-msvc-release` |
 | determinism windows-x86-64-clang-cl | `windows-2022` | `windows-clang-cl-release` |
+| determinism cook macos-arm64-clang | `macos-14` | `macos-dev` |
+| determinism cook linux-x86-64-gcc | `ubuntu-24.04` | `linux-gcc-dev` |
 | determinism diff (all platforms) | `ubuntu-24.04` | none |
 
 - The `plan` step lists the platforms, one JSON line each. `determinism-run` is one matrix job over
@@ -149,9 +192,22 @@ Trama pages `Testing` and `Module: physics`.
   file, the field groups that differ at that tick, and writes a table to the job summary. It runs
   also when a platform job failed, and then fails if that platform's files are missing.
 - A new scenario needs no change here: its tests write the files and the diff job globs them.
-- Local equivalent: `ctest --preset dev -L determinism`. To check x86-64 on an arm64 Mac, configure
-  `macos-dev` into its own directory with `-DCMAKE_OSX_ARCHITECTURES=x86_64`, build
-  `de_determinism_tests` and run the tests under Rosetta 2 (`arch -x86_64`).
+- **Cooking (DENG-216).** `determinism-cook` runs the `det.cook.*` tests
+  (`tests/determinism/cook/`): `de-cook cook` of `tests/data/cook_project` must give the same pack
+  and cache entries with a cold and a warm cache, with `--jobs 1` and `--jobs 8`, and from a copy of
+  the project at another path. These tests need the cooker, which only Debug and Dev builds have, so
+  the cook jobs use Dev presets on macOS arm64 and Linux x86-64 (the Release jobs above skip the
+  tests). The `plan` step holds the cook hosts as a second list. Each cook job uploads
+  `build/<preset>/determinism/cook_project.linux.dpak` (the pack cooked with `--platform linux`) and
+  `cook_project.linux.decache` (path, size and XXH3-64 of each cache entry) as
+  `determinism-cook-<platform>`. The step "Compare cooked packs" of `determinism-diff` compares them
+  with the first host's files byte for byte and writes the first differing byte offset to the job
+  summary. To find the asset that differs, download both artifacts and compare `de-pack list --json`
+  of the two packs, then `de-pack extract` the asset from each.
+- Local equivalent: `ctest --preset dev -L determinism` (the cook tests included). To check x86-64
+  on an arm64 Mac, configure `macos-dev` into its own directory with
+  `-DCMAKE_OSX_ARCHITECTURES=x86_64`, build `de_determinism_tests` and run the tests under Rosetta 2
+  (`arch -x86_64`).
 - Start it on a branch with `gh workflow run Determinism --ref <branch>`.
 - The SPEC §5.7 source check (`check_determinism_src`, label `check`) is not a step here: as a
   CTest entry it runs in `checks.yml` and in every `ci.yml` and `sanitizers.yml` job.

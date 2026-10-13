@@ -152,12 +152,13 @@ had no path for that asset.
 ## Reader checks
 
 A reader must not trust a pack. Before use it checks: the magic, `version` and `header_size`;
-`file_size` against the real size; every section inside the file and `size == count * record
-size`; TOC IDs strictly increasing; every chunk range, dependency range, bundle range, string
-range and dictionary range inside its section or the file; `chunk_count` against `raw_size` and
-`chunk_size`; `dict_index` against the DICTS count; and, for a RAW chunk, `stored_size ==
-raw_size`. `content_hash` detects corruption; checking it means reading the whole file once, so
-the reader may do it only on request (for example, `de-pack verify`).
+`file_size` against the real size; every section inside the file and `size == count * record size`,
+and every empty section (`count` 0) with `offset` and `size` 0 (DENG-216); TOC IDs strictly
+increasing; every chunk range, dependency range, bundle range, string range and dictionary range
+inside its section or the file; `chunk_count` against `raw_size` and `chunk_size`; `dict_index`
+against the DICTS count; and, for a RAW chunk, `stored_size == raw_size`. `content_hash` detects
+corruption; checking it means reading the whole file once, so the reader may do it only on request
+(for example, `de-pack verify`).
 
 ## Version history
 

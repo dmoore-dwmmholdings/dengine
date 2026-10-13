@@ -156,9 +156,14 @@ static de_result check_header(dpak_reader *r, u64 actual_size, const dpak_open_d
         const dpak_section_desc *s = &h->sections[i];
         u64 rec = dpak_section_record_size((dpak_section)i);
         if (s->count == 0) {
-            if (s->size != 0)
-                return DE_FAIL(DE_ERR_PARSE, "pack \"%s\": empty section %s has %llu bytes",
-                               r->path, section_name((dpak_section)i), (unsigned long long)s->size);
+            /* The format says offset, size and count are all 0. The offset matters too:
+             * section_ptr() adds it to the base pointer even for an empty section, and a pointer
+             * past the buffer is undefined behaviour (DENG-216 fuzzing). */
+            if (s->size != 0 || s->offset != 0)
+                return DE_FAIL(DE_ERR_PARSE,
+                               "pack \"%s\": empty section %s has offset %llu and %llu bytes",
+                               r->path, section_name((dpak_section)i),
+                               (unsigned long long)s->offset, (unsigned long long)s->size);
             continue;
         }
         if (s->size != (u64)s->count * rec || s->offset < DPAK_HEADER_SIZE ||

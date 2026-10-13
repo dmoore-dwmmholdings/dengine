@@ -5,6 +5,9 @@
 #
 # Two tiers, as in ci.yml: a run on a feature/** branch is quick (the two Linux Clang jobs), every
 # other run is full; `gh workflow run Sanitizers -f tier=full` forces the full set.
+#
+# The full tier also runs fuzz-smoke (SPEC §19.1; DENG-216): every libFuzzer target fuzzes for 60 s
+# under ASan+UBSan, starting from its checked-in corpus. The sanitize jobs only replay the corpora.
 name: Sanitizers
 
 on:
@@ -33,6 +36,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      tier: ${{ steps.plan.outputs.tier }}
     steps:
       - id: plan
         shell: bash
@@ -63,6 +67,7 @@ jobs:
           echo "tier: ${TIER}"
           jq . <<<"${matrix}"
           echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          echo "tier=${TIER}" >> "${GITHUB_OUTPUT}"
 
   sanitize:
     name: ${{ matrix.name }}
@@ -130,3 +135,132 @@ jobs:
             build/${{ matrix.preset }}/de_config_dump.txt
           if-no-files-found: ignore
           retention-days: 7
+
+  # DENG-216: libFuzzer smoke run, full tier only. Linux Clang Debug with ASan+UBSan (the
+  # ci-linux-asan preset) and DE_FUZZ_LIBFUZZER=ON; -fsanitize=fuzzer-no-link instruments every
+  # library too, so the fuzzer gets coverage from the parsers and not only from the fuzz target's
+  # own file. Each fuzz target (CTest label `fuzz`, the harness self test excluded: its crash input
+  # is reachable on purpose) runs for FUZZ_SECONDS from a scratch copy of its corpus. A crash,
+  # leak, timeout (10 s per input) or allocation over 256 MiB fails the job; the inputs that caused
+  # it are uploaded as `fuzz-findings`. Reproduce locally: docs/ci.md.
+  fuzz-smoke:
+    name: linux clang libFuzzer smoke (ASan+UBSan)
+    needs: plan
+    if: needs.plan.outputs.tier == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PRESET: ci-linux-asan
+      FUZZ_SECONDS: "60"
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-dengine
+        with:
+          compiler: clang
+          cache-key: ci-linux-fuzz
+          cache-save: ${{ github.event_name != 'pull_request' }}
+          sanitizers: "true"
+
+      - name: Reduce ASLR entropy for the sanitizer runtimes
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset "${PRESET}" -DDE_FUZZ_LIBFUZZER=ON \
+            -DCMAKE_C_FLAGS=-fsanitize=fuzzer-no-link -DCMAKE_CXX_FLAGS=-fsanitize=fuzzer-no-link
+          # Without libFuzzer the targets would only replay their corpora and the job would pass.
+          if ! grep -q '^DE_FUZZ_USES_LIBFUZZER:INTERNAL=ON$' "build/${PRESET}/CMakeCache.txt"; then
+            echo "::error::the fuzz targets were not built with libFuzzer"
+            exit 1
+          fi
+
+      - name: List the fuzz targets
+        id: targets
+        shell: bash
+        run: |
+          # The CTest entry fuzz.<name> runs the target fuzz_<name>. (CTest reports the command
+          # only once the executable exists, so the next steps read it after the build.)
+          targets=$(ctest --preset "${PRESET}" -N -L fuzz -LE selftest --show-only=json-v1 \
+            | jq -r '[.tests[].name | sub("^fuzz[.]"; "fuzz_")] | join(" ")')
+          echo "targets: ${targets}"
+          if [ -z "${targets}" ]; then
+            echo "::error::no fuzz targets found"
+            exit 1
+          fi
+          echo "build=${targets}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build the fuzz targets
+        shell: bash
+        env:
+          TARGETS: ${{ steps.targets.outputs.build }}
+        run: |
+          read -r -a targets <<<"${TARGETS}"
+          cmake --build --preset "${PRESET}" --target "${targets[@]}"
+
+      - name: Fuzz each target for ${{ env.FUZZ_SECONDS }} s
+        shell: bash
+        run: |
+          set -u
+          # fuzz.<name> runs `fuzz_<name> -runs=0 [<corpus dir>]`: take the path and the corpus.
+          ctest --preset "${PRESET}" -N -L fuzz -LE selftest --show-only=json-v1 \
+            | jq -c '[.tests[] | {name: .name, exe: .command[0], corpus: (.command[2] // "")}]' \
+            > fuzz-targets.json
+          if jq -e 'any(.[]; .exe == null)' fuzz-targets.json >/dev/null; then
+            echo "::error::a fuzz target was not built"
+            jq . fuzz-targets.json
+            exit 1
+          fi
+          mkdir -p fuzz-findings fuzz-work
+          status=0
+          {
+            echo "## libFuzzer smoke: ${FUZZ_SECONDS} s per target"
+            echo
+            echo "| Target | Result | Runs | Corpus |"
+            echo "|---|---|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          while read -r t; do
+            name=$(jq -r .name <<<"${t}")
+            exe=$(jq -r .exe <<<"${t}")
+            corpus=$(jq -r .corpus <<<"${t}")
+            work="fuzz-work/${name}"
+            mkdir -p "${work}"
+            echo "::group::${name}"
+            args=(-max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=2048
+                  -malloc_limit_mb=256 -print_final_stats=1
+                  -artifact_prefix="fuzz-findings/${name}-" "${work}")
+            if [ -n "${corpus}" ]; then
+              args+=("${corpus}")
+            fi
+            set +e
+            "${exe}" "${args[@]}" 2>&1 | tee "fuzz-work/${name}.log"
+            rc=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            runs=$(grep -m1 -oE 'stat::number_of_executed_units: *[0-9]+' "fuzz-work/${name}.log" \
+                   | grep -oE '[0-9]+$' || echo "?")
+            files=$(find "${work}" -type f | wc -l)
+            if [ "${rc}" -eq 0 ]; then
+              echo "| ${name} | ok | ${runs} | ${files} new |" >> "${GITHUB_STEP_SUMMARY}"
+            else
+              echo "::error::${name}: libFuzzer exit code ${rc} (inputs in the fuzz-findings artifact)"
+              echo "| ${name} | **failed (exit ${rc})** | ${runs} | ${files} new |" \
+                >> "${GITHUB_STEP_SUMMARY}"
+              status=1
+            fi
+          done < <(jq -c '.[]' fuzz-targets.json)
+          exit "${status}"
+
+      - name: Upload fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz-findings/
+            fuzz-work/*.log
+          if-no-files-found: ignore
+          retention-days: 14
