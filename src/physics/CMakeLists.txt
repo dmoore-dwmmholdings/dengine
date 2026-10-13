@@ -94,3 +94,14 @@ if(TARGET de_physics)
         islands.c
         ccd.c)
 endif()
+
+# DENG-218: islands and sleeping (islands.c replaces the DENG-217 stub), deterministic graph
+# coloring and the colored parallel stage runner of the solver.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        islands.h
+        sleep.c
+        solver/graph_color.h
+        solver/graph_color.c
+        solver/solver_parallel.c)
+endif()

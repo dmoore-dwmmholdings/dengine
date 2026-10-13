@@ -154,3 +154,19 @@ foreach(_de_sv_test test_physics_solver_basic test_physics_solver_contact test_p
         target_compile_options(${_de_sv_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
     endif()
 endforeach()
+
+# DENG-218: islands, sleeping, deterministic graph coloring and the colored parallel solver.
+# physics_solver_parallel holds the worker-count invariance and allocation checks run under TSan
+# (label tsan); its scenes stay small so the TSan Debug builds finish quickly.
+de_add_test(NAME physics_islands SOURCES test_islands.c LIBS de_physics)
+de_add_test(NAME physics_sleep SOURCES test_sleep.c LIBS de_physics)
+de_add_test(NAME physics_graph_color SOURCES test_graph_color.c LIBS de_physics)
+de_add_test(NAME physics_solver_parallel SOURCES test_solver_parallel.c
+            LIBS de_physics de_platform LABELS unit tsan TIMEOUT 120)
+foreach(_de_is_test test_physics_islands test_physics_sleep test_physics_graph_color
+        test_physics_solver_parallel)
+    if(TARGET ${_de_is_test})
+        target_include_directories(${_de_is_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_is_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()

@@ -112,3 +112,7 @@ de_phys_det_add_scenarios(SOURCES scenarios_contacts.c SCENARIOS contact_pile)
 
 # DENG-217 (S23): the soft-step solver (falling and tumbling bodies, bounces, a stack of 10).
 de_phys_det_add_scenarios(SOURCES scenarios_solver.c SCENARIOS box_drop sphere_bounce stack_10)
+
+# DENG-218 (S23): islands, sleeping and the graph-colored solver (a 10-row pyramid; sleep and every
+# kind of wake-up).
+de_phys_det_add_scenarios(SOURCES scenarios_islands.c SCENARIOS pyramid_10 sleep_wake)
