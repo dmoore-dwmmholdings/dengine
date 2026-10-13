@@ -105,3 +105,18 @@ if(TARGET de_physics)
         solver/graph_color.c
         solver/solver_parallel.c)
 endif()
+
+# DENG-220: joints (fixed, hinge, ball, slider, distance, cone-twist, 6-DOF; limits, motors,
+# break force) as the solver's joint constraint class.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        joints/joint_internal.h
+        joints/joint.c
+        joints/joint_fixed.c
+        joints/joint_hinge.c
+        joints/joint_ball.c
+        joints/joint_slider.c
+        joints/joint_distance.c
+        joints/joint_cone_twist.c
+        joints/joint_6dof.c)
+endif()
