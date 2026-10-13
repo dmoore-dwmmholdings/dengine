@@ -15,6 +15,10 @@ de_add_module(
         vk_memory.c
         vk_resources.c
         vk_bindless.c
+        vk_cmd.c
+        vk_barriers.c
+        vk_sync.c
+        vk_swapchain.c
     DEPS gpu
     LIBS de_tp_vulkan_headers
     OPTIONAL_OPTION DE_GPU_VULKAN

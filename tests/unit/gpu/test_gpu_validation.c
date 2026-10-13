@@ -423,3 +423,77 @@ TEST_F(gpu_validation, commands, val_fx) {
         DE_OK);
 #endif
 }
+
+/* DENG-284: de_gpu_cmd_copy_texture_to_buffer has the checks of the opposite copy. */
+TEST_F(gpu_validation, copy_texture_to_buffer, val_fx) {
+#if !DE__GPU_VALIDATE_COMMANDS
+    SKIP("command validation is compiled in Debug and Dev builds only");
+#else
+    de_gpu_buffer rb = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = 32768,
+                                                                        .usage = DE_USAGE_COPY_DST,
+                                                                        .memory = DE_MEM_READBACK,
+                                                                        .name = "rb"});
+    de_gpu_buffer up = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){
+                  .size = 1024, .usage = DE_USAGE_COPY_SRC, .memory = DE_MEM_UPLOAD, .name = "up"});
+    de_gpu_texture tex = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.format = DE_FMT_RGBA8_UNORM,
+                                     .width = 64,
+                                     .height = 64,
+                                     .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_COPY_SRC,
+                                     .name = "rt"});
+    de_gpu_texture bc =
+        de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.format = DE_FMT_BC7_UNORM,
+                                                           .width = 64,
+                                                           .height = 64,
+                                                           .mip_count = 4,
+                                                           .usage = DE_USAGE_SAMPLED,
+                                                           .name = "bc"});
+    ASSERT_TRUE(DE_HANDLE_VALID(rb) && DE_HANDLE_VALID(up) && DE_HANDLE_VALID(tex) &&
+                DE_HANDLE_VALID(bc));
+    de_gpu_cmd *c = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "readback");
+    ASSERT_TRUE(c != NULL);
+
+    de_error_clear();
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 256, tex, 0, 0); /* 64 rows x 256 */
+    EXPECT_TRUE(de_error_last() == NULL);
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 200, tex, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "de_gpu_cmd_copy_texture_to_buffer(\"readback\")",
+                 "row_pitch 200 must be a multiple of 256");
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 100, 256, tex, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "dst_off 100 is not a multiple of 512");
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 16896, 256, tex, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "needs 16384 bytes at 16896");
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 256, tex, 1, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "mip 1, but \"rt\" has 1");
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 256, tex, 0, 1);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "layer 1, but \"rt\" has 1");
+    de_gpu_cmd_copy_texture_to_buffer(c, up, 0, 256, tex, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "dst \"up\" lacks DE_USAGE_COPY_DST");
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 256, bc, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "src \"bc\" lacks DE_USAGE_COPY_SRC");
+    /* BC rows are rows of 4x4 blocks: mip 3 of 64x64 is 8x8 texels = 2 rows of 2 blocks. */
+    de_gpu_texture bc2 =
+        de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.format = DE_FMT_BC7_UNORM,
+                                                           .width = 64,
+                                                           .height = 64,
+                                                           .mip_count = 4,
+                                                           .usage = DE_USAGE_COPY_SRC,
+                                                           .name = "bc2"});
+    ASSERT_TRUE(DE_HANDLE_VALID(bc2));
+    de_error_clear();
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 32768 - 512, 256, bc2, 3, 0);
+    EXPECT_TRUE(de_error_last() == NULL);
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 32768 - 512, 256, bc2, 2, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "mip 2 needs 1024 bytes");
+    /* Not inside a render pass. */
+    de_gpu_attachment color = {.texture = tex};
+    de_gpu_cmd_begin_render(c, &color, 1, NULL);
+    de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, 256, tex, 0, 0);
+    EXPECT_ERROR(DE_ERR_INVALID_ARGUMENT, "copy inside a render pass");
+    de_gpu_cmd_end_render(c);
+    ASSERT_EQ(
+        de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
+        DE_OK);
+#endif
+}

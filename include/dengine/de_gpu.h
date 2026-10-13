@@ -419,6 +419,16 @@ DE_API void de_gpu_cmd_copy_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off
                                    u64 src_off, u64 bytes);
 DE_API void de_gpu_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de_gpu_texture dst, u32 mip, u32 layer,
                                               de_gpu_buffer src, u64 src_off, u32 row_pitch);
+/**
+ * Copies mip `mip` of layer `layer` of `src` (every slice of a 3D mip) into `dst` at `dst_off`,
+ * rows `row_pitch` bytes apart: the reverse of de_gpu_cmd_copy_buffer_to_texture, with the same
+ * layout rules (row_pitch a multiple of 256 and at least one row of texels, or of 4x4 blocks for
+ * BC formats; dst_off a multiple of 512). `src` needs DE_USAGE_COPY_SRC and must be in
+ * DE_ACCESS_COPY_SRC; `dst` needs DE_USAGE_COPY_DST. For readback (DENG-284).
+ */
+DE_API void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off,
+                                              u32 row_pitch, de_gpu_texture src, u32 mip,
+                                              u32 layer);
 DE_API void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
 DE_API void de_gpu_cmd_marker_pop(de_gpu_cmd *c);
 DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id); /* GPU crash diagnostics */

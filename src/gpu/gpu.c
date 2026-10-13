@@ -1410,6 +1410,54 @@ void de_gpu_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de_gpu_texture dst, u32 mi
         c->device->vt->cmd_copy_buffer_to_texture(c, t, mip, layer, sb, src_off, row_pitch);
 }
 
+void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off, u32 row_pitch,
+                                       de_gpu_texture src, u32 mip, u32 layer) {
+    static const char F[] = "de_gpu_cmd_copy_texture_to_buffer";
+    CMD_ENTER(F);
+    CHECK(!c->in_render, "%s(\"%s\"): copy inside a render pass", F, c->name);
+    CMD_RESOLVE(t, de__gpu_texture, DE__GPU_TEXTURE, src.id, F);
+    CMD_RESOLVE(db, de__gpu_buffer, DE__GPU_BUFFER, dst.id, F);
+    CHECK(t->usage & DE_USAGE_COPY_SRC, "%s(\"%s\"): src \"%s\" lacks DE_USAGE_COPY_SRC", F,
+          c->name, t->name);
+    CHECK(db->usage & DE_USAGE_COPY_DST, "%s(\"%s\"): dst \"%s\" lacks DE_USAGE_COPY_DST", F,
+          c->name, db->name);
+    CHECK(mip < t->mip_count, "%s(\"%s\"): mip %u, but \"%s\" has %u", F, c->name, mip, t->name,
+          t->mip_count);
+    CHECK(t->dim == DE_TEX_3D || layer < t->depth_or_layers,
+          "%s(\"%s\"): layer %u, but \"%s\" has %u", F, c->name, layer, t->name,
+          t->depth_or_layers);
+    CHECK(t->sample_count <= 1, "%s(\"%s\"): \"%s\" is multisampled; resolve it first", F, c->name,
+          t->name);
+#if DE__GPU_VALIDATE_COMMANDS
+    {
+        const bool bc = de__gpu_format_is_compressed(t->format);
+        u32 w = t->width >> mip, h = t->height >> mip;
+        w = w ? w : 1u;
+        h = h ? h : 1u;
+        u32 dz = 1u;
+        if (t->dim == DE_TEX_3D) {
+            dz = t->depth_or_layers >> mip;
+            dz = dz ? dz : 1u;
+        }
+        const u32 cols = bc ? (w + 3u) / 4u : w;
+        const u32 rows = bc ? (h + 3u) / 4u : h;
+        const u64 row_bytes = (u64)cols * de__gpu_format_block_bytes(t->format);
+        CHECK(row_pitch % COPY_ROW_PITCH_ALIGN == 0 && row_pitch >= row_bytes,
+              "%s(\"%s\"): row_pitch %u must be a multiple of %u and at least %llu", F, c->name,
+              row_pitch, COPY_ROW_PITCH_ALIGN, (unsigned long long)row_bytes);
+        CHECK(dst_off % COPY_OFFSET_ALIGN == 0, "%s(\"%s\"): dst_off %llu is not a multiple of %u",
+              F, c->name, (unsigned long long)dst_off, COPY_OFFSET_ALIGN);
+        const u64 need = (u64)row_pitch * rows * dz;
+        CHECK(dst_off <= db->size && need <= db->size - dst_off,
+              "%s(\"%s\"): mip %u needs %llu bytes at %llu; \"%s\" has %llu", F, c->name, mip,
+              (unsigned long long)need, (unsigned long long)dst_off, db->name,
+              (unsigned long long)db->size);
+    }
+#endif
+    if (c->device->vt->cmd_copy_texture_to_buffer)
+        c->device->vt->cmd_copy_texture_to_buffer(c, db, dst_off, row_pitch, t, mip, layer);
+}
+
 void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color) {
     CMD_ENTER("de_gpu_cmd_marker_push");
     ++c->marker_depth;

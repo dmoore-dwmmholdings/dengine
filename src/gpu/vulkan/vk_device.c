@@ -18,9 +18,8 @@
  * copy likewise (a transfer-only family first). de_gpu queues that share one VkQueue share its
  * submit mutex. Each de_gpu queue has a timeline semaphore for the front-end's internal timeline.
  *
- * Submission: until DENG-284, queue_submit only signals the internal timeline (an empty
- * vkQueueSubmit2), so deferred destruction works; command lists (cmd_init) and fences are
- * DE_ERR_UNSUPPORTED. DENG-284 replaces those entries in the vtable below.
+ * Submission, command lists, fences and swapchains (DENG-284): vk_sync.c, vk_cmd.c,
+ * vk_barriers.c and vk_swapchain.c; their entries are in the vtable below.
  */
 #include "gpu/vulkan/vk_internal.h"
 
@@ -707,7 +706,7 @@ static void vk_device_destroy(de_gpu_device *d) {
     teardown(d);
 }
 
-/* ---------- Internal timelines (placeholder submission until DENG-284) ---------- */
+/* ---------- Internal timelines ---------- */
 
 static void vk_wait_idle(de_gpu_device *d) {
     de__vk_device *vk = de__vk(d);
@@ -723,43 +722,6 @@ static void vk_wait_idle(de_gpu_device *d) {
         de_atomic_store_u32(&vk->lost, 1u, DE_ATOMIC_RELEASE);
 }
 
-static de_result vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
-                                 u64 queue_value) {
-    de__vk_device *vk = de__vk(d);
-    de__vk_queue *vq = &vk->queues[q];
-    /* Signal the internal timeline first in every case: the front-end has published the value. */
-    VkResult vr = VK_ERROR_DEVICE_LOST;
-    if (!is_lost(vk)) {
-        VkSemaphoreSubmitInfo sig;
-        memset(&sig, 0, sizeof sig);
-        sig.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        sig.semaphore = vq->timeline;
-        sig.value = queue_value;
-        sig.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        VkSubmitInfo2 si;
-        memset(&si, 0, sizeof si);
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        si.signalSemaphoreInfoCount = 1;
-        si.pSignalSemaphoreInfos = &sig;
-        de_mutex_lock(&vk->queue_locks[vq->lock]);
-        vr = vk->fn.vkQueueSubmit2(vq->queue, 1, &si, VK_NULL_HANDLE);
-        de_mutex_unlock(&vk->queue_locks[vq->lock]);
-    }
-    if (vr != VK_SUCCESS) {
-        /* The value can no longer be signalled in order: report every value as complete. */
-        de_atomic_store_u32(&vk->lost, 1u, DE_ATOMIC_RELEASE);
-        return de__vk_fail(d, vr, "vulkan: vkQueueSubmit2 on the %s queue",
-                           q == DE_QUEUE_GRAPHICS  ? "graphics"
-                           : q == DE_QUEUE_COMPUTE ? "compute"
-                                                   : "copy");
-    }
-    if (s->cmd_count || s->wait_count || s->signal.id)
-        return de__gpu_fail(d, DE_ERR_UNSUPPORTED,
-                            "de_gpu_queue_submit: the Vulkan backend has no command lists or "
-                            "fences yet (DENG-284)");
-    return DE_OK;
-}
-
 static u64 vk_queue_completed(de_gpu_device *d, de_gpu_queue q) {
     de__vk_device *vk = de__vk(d);
     if (is_lost(vk))
@@ -771,12 +733,6 @@ static u64 vk_queue_completed(de_gpu_device *d, de_gpu_queue q) {
         return UINT64_MAX;
     }
     return value;
-}
-
-static de_result vk_cmd_init(de_gpu_device *d, de_gpu_cmd *c) {
-    (void)c;
-    return de__gpu_fail(d, DE_ERR_UNSUPPORTED,
-                        "de_gpu_cmd_begin: the Vulkan backend has no command lists yet (DENG-284)");
 }
 
 /* ---------- Test hooks ---------- */
@@ -798,12 +754,14 @@ bool de__gpu_vk_validation_enabled(de_gpu_device *d) {
 const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .name = "vulkan",
     .device_payload_size = sizeof(de__vk_device),
-    .cmd_payload_size = 0,
+    .cmd_payload_size = sizeof(de__vk_cmd),
     .payload_size =
         {
             [DE__GPU_BUFFER] = sizeof(de__vk_buffer),
             [DE__GPU_TEXTURE] = sizeof(de__vk_texture),
             [DE__GPU_SAMPLER] = sizeof(de__vk_sampler),
+            [DE__GPU_SWAPCHAIN] = sizeof(de__vk_swapchain),
+            [DE__GPU_FENCE] = sizeof(de__vk_fence),
         },
     .device_create = vk_device_create,
     .device_destroy = vk_device_destroy,
@@ -817,9 +775,28 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .bindless_write_buffer = de__vk_bindless_write_buffer,
     .bindless_write_texture = de__vk_bindless_write_texture,
     .bindless_write_sampler = de__vk_bindless_write_sampler,
-    .cmd_init = vk_cmd_init,
-    .queue_submit = vk_queue_submit,
+    .cmd_init = de__vk_cmd_init,
+    .cmd_fini = de__vk_cmd_fini,
+    .cmd_begin = de__vk_cmd_begin,
+    .cmd_barriers = de__vk_cmd_barriers,
+    .cmd_begin_render = de__vk_cmd_begin_render,
+    .cmd_end_render = de__vk_cmd_end_render,
+    .cmd_viewport = de__vk_cmd_viewport,
+    .cmd_copy_buffer = de__vk_cmd_copy_buffer,
+    .cmd_copy_buffer_to_texture = de__vk_cmd_copy_buffer_to_texture,
+    .cmd_copy_texture_to_buffer = de__vk_cmd_copy_texture_to_buffer,
+    .queue_submit = de__vk_queue_submit,
     .queue_completed = vk_queue_completed,
+    .fence_create = de__vk_fence_create,
+    .fence_destroy = de__vk_fence_destroy,
+    .fence_value = de__vk_fence_value,
+    .fence_wait = de__vk_fence_wait,
+    .swapchain_create = de__vk_swapchain_create,
+    .swapchain_destroy = de__vk_swapchain_destroy,
+    .swapchain_acquire = de__vk_swapchain_acquire,
+    .swapchain_present = de__vk_swapchain_present,
+    .swapchain_resize = de__vk_swapchain_resize,
+    .swapchain_colorspace = de__vk_swapchain_colorspace,
     .heap_payload_size = sizeof(de__vk_heap),
     .heap_create = de__vk_heap_create,
     .heap_destroy = de__vk_heap_destroy,
