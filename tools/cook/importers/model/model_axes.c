@@ -29,15 +29,18 @@ void de_model_axes_matrix(de_model_axes from, f32 m[3][3]) {
     m[0][0] = m[1][1] = m[2][2] = 1.0f;
 }
 
+/* The helpers take C as non-const f64[3][3]: before C23, passing an f64[3][3] to a
+ * const f64 (*)[3] parameter is a constraint violation (GCC -Wpedantic). */
+
 /* v' = s * C * v (v has 3 floats). */
-static void xform_vec(const f64 c[3][3], f64 s, f32 *v) {
+static void xform_vec(f64 c[3][3], f64 s, f32 *v) {
     f64 in[3] = {v[0], v[1], v[2]};
     for (u32 i = 0; i < 3; ++i)
         v[i] = (f32)(s * (c[i][0] * in[0] + c[i][1] * in[1] + c[i][2] * in[2]));
 }
 
 /* For a signed permutation C: C · diag(s) · Cᵀ = diag(s'), s'[i] = s[column of row i]. */
-static void xform_scale(const f64 c[3][3], f32 *s) {
+static void xform_scale(f64 c[3][3], f32 *s) {
     f32 in[3] = {s[0], s[1], s[2]};
     for (u32 i = 0; i < 3; ++i)
         for (u32 j = 0; j < 3; ++j)
@@ -46,7 +49,7 @@ static void xform_scale(const f64 c[3][3], f32 *s) {
 }
 
 /* M' = U·C·M·C⁻¹·U⁻¹ for a column-major affine 4x4 (C⁻¹ = Cᵀ for a rotation). */
-static void xform_mat4(const f64 c[3][3], f64 s, f32 m[16]) {
+static void xform_mat4(f64 c[3][3], f64 s, f32 m[16]) {
     f64 a[3][3], t[3], r[3][3];
     for (u32 col = 0; col < 3; ++col)
         for (u32 row = 0; row < 3; ++row)
@@ -70,7 +73,7 @@ static void xform_mat4(const f64 c[3][3], f64 s, f32 m[16]) {
 }
 
 /* q' = C·q·C⁻¹ as a quaternion: the axis is rotated, the angle and w are kept. */
-static void xform_quat(const f64 c[3][3], f32 *q) {
+static void xform_quat(f64 c[3][3], f32 *q) {
     xform_vec(c, 1.0, q);
 }
 

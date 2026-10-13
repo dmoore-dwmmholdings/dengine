@@ -362,8 +362,9 @@ TEST_F(gltf, import_two_materials, imp_fx) {
     EXPECT_EQ(de_cooked_mesh_submesh(&mv, 1).material_id,
               de_asset_id_from("props/panels#material:Blue").hash);
     /* Submesh bounds: the second quad is at x in [2, 3]. */
-    EXPECT_FLOAT_EQ(de_cooked_mesh_submesh(&mv, 1).bounds_min[0], 2.0f, 0.0f);
-    EXPECT_FLOAT_EQ(de_cooked_mesh_submesh(&mv, 1).bounds_max[0], 3.0f, 0.0f);
+    de_cooked_submesh sm1 = de_cooked_mesh_submesh(&mv, 1); /* an lvalue (MSVC C4223) */
+    EXPECT_FLOAT_EQ(sm1.bounds_min[0], 2.0f, 0.0f);
+    EXPECT_FLOAT_EQ(sm1.bounds_max[0], 3.0f, 0.0f);
     de_cook_result_free(&r);
 }
 
@@ -510,7 +511,7 @@ TEST_F(gltf, generate_normals_tangents, imp_fx) {
 
 /* ---- import.gltf.axis_conversion_points ------------------------------------------------------ */
 
-static f64 det3(const f64 m[3][3]) {
+static f64 det3(f64 m[3][3]) {
     return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
            m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
            m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
@@ -955,13 +956,16 @@ TEST_F(gltf, prefab_golden_text, imp_fx) {
     DE_FREE(&f->alloc, golden, (size_t)golden_size + 1u);
 
     /* The prefab sub-asset cooks through the registered prefab importer (DSCN): the model root,
-     * the 4 scene nodes (NotInScene is left out), parents as in the file. */
+     * the 4 scene nodes (NotInScene is left out), parents as in the file. Release and Shipping
+     * builds compile the runtime prefab type without its importer (DE_HAS_COOKER), so there the
+     * sub-asset passes through as the TOML text. */
     make_cooker(f, true, false);
     de_cook_result r;
     ASSERT_EQ(cook(f, "props/robot", "hierarchy.gltf", NULL, 0, &r), DE_OK);
     const de_cook_subasset *p = sub(&r, "prefab");
     ASSERT_TRUE(p != NULL);
     EXPECT_STREQ(p->type, "prefab");
+#if DE_HAS_COOKER
     de__scene_view v;
     char err[256];
     ASSERT_EQ(de__scene_view_parse(p->data, p->size, &v, err, sizeof err), DE_OK);
@@ -975,6 +979,11 @@ TEST_F(gltf, prefab_golden_text, imp_fx) {
     /* DeTransform is known to the registry; DeMeshRenderer is not registered before S12. */
     ASSERT_EQ(v.type_count, 1u);
     EXPECT_STREQ(de__scene_type_at(&v, 0).name, "DeTransform");
+#else
+    EXPECT_EQ(p->size, b.size);
+    if (p->size == b.size)
+        EXPECT_MEMEQ(p->data, b.data, (size_t)b.size);
+#endif
     de_cook_result_free(&r);
 }
 
@@ -1101,6 +1110,7 @@ TEST_F(gltf, reject_truncated, imp_fx) {
  * sub-asset is cooked by the registered texture importer the first time already. The model,
  * mesh and material loaders are stand-ins (DENG-105 writes the real ones). */
 
+#if DE_HAS_COOKER
 typedef struct rt_state {
     const de_allocator *alloc;
     char texture_head[16]; /* the first bytes the texture loader saw */
@@ -1137,6 +1147,7 @@ static void copy_file(imp_fx *f, const char *from, const char *to) {
     ASSERT_EQ(de_file_write_all_atomic(to, p, n), DE_OK);
     DE_FREE(&f->alloc, p, (size_t)n + 1u);
 }
+#endif
 
 TEST_F(gltf, runtime_nested_types, imp_fx) {
 #if !DE_HAS_COOKER
