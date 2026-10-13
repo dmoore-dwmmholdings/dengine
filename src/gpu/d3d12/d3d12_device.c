@@ -431,6 +431,7 @@ static de_result create_queues(d3d12_device *dd) {
 /* Releases whatever device_create made (also after a partial create). */
 static void release_all(de_gpu_device *d) {
     d3d12_device *dd = de__d3d12(d);
+    de__d3d12_pipelines_shutdown(d); /* DENG-324: saves the pipeline library */
     de__d3d12_bindless_destroy(d);
     for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
         d3d12_queue *dq = &dd->queues[q];
@@ -513,6 +514,8 @@ static de_result d3d12_device_create(de_gpu_device *d, const de_gpu_device_desc 
     }
     if (r == DE_OK)
         r = de__d3d12_bindless_init(d);
+    if (r == DE_OK)
+        r = de__d3d12_pipelines_init(d, desc->pipeline_cache_dir); /* DENG-324 */
     if (r != DE_OK) {
         release_all(d);
         return r;
@@ -572,6 +575,7 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
             [DE__GPU_TEXTURE] = sizeof(d3d12_texture),
             [DE__GPU_FENCE] = sizeof(d3d12_fence),
             [DE__GPU_SWAPCHAIN] = sizeof(d3d12_swapchain),
+            [DE__GPU_PIPELINE] = sizeof(d3d12_pipeline),
         },
     .device_create = d3d12_device_create,
     .device_destroy = d3d12_device_destroy,
@@ -614,6 +618,20 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .texture_create_placed = de__d3d12_texture_create_placed,
     .cmd_copy_texture_to_buffer = de__d3d12_cmd_copy_texture_to_buffer,
     .bindless_shared_resource_heap = true,
+    /* DENG-324: pipelines, draws, dispatches (d3d12_pipeline.c, d3d12_draw.c). */
+    .pipeline_create = de__d3d12_pipeline_create,
+    .pipeline_destroy = de__d3d12_pipeline_destroy,
+    .cmd_set_pipeline = de__d3d12_cmd_set_pipeline,
+    .cmd_push_constants = de__d3d12_cmd_push_constants,
+    .cmd_draw = de__d3d12_cmd_draw,
+    .cmd_draw_indexed = de__d3d12_cmd_draw_indexed,
+    .cmd_set_index_buffer = de__d3d12_cmd_set_index_buffer,
+    .cmd_scissor = de__d3d12_cmd_scissor,
+    .cmd_dispatch = de__d3d12_cmd_dispatch,
+    .cmd_dispatch_indirect = de__d3d12_cmd_dispatch_indirect,
+    .cmd_draw_indexed_indirect = de__d3d12_cmd_draw_indexed_indirect,
+    .cmd_dispatch_mesh = de__d3d12_cmd_dispatch_mesh,
+    .cmd_dispatch_mesh_indirect = de__d3d12_cmd_dispatch_mesh_indirect,
 };
 
 /* ---------- Test hooks ---------- */

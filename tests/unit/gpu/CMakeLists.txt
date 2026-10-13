@@ -159,3 +159,29 @@ if(TARGET test_gpu_vulkan)
             "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
     endif()
 endif()
+
+# DENG-324: D3D12 pipelines, draws, dispatches and the pipeline library. test_d3d12_pipeline.c joins
+# test_gpu_d3d12 (CTest names gpu_d3d12.d3d12.<test>) with DENG-323's shared helper
+# data/pipelines/pipeline_shaders.c, which cooks the shared shaders to DXIL when the build has the
+# shader importer and the host has DXC (Windows CI). The pure tests (DXIL reader, library file,
+# keys, scissor) run on every host: without the D3D12 backend the test compiles the portable parts
+# of d3d12_pipeline.c and d3d12_pipeline_library.c itself. The library tests write below
+# <build>/tests/unit/gpu/test_gpu_d3d12_pipecache/ (mounted as d3d12cache:/).
+if(TARGET test_gpu_d3d12)
+    target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_pipeline.c data/pipelines/pipeline_shaders.c)
+    if(NOT DE_HAS_GPU_D3D12)
+        target_sources(test_gpu_d3d12 PRIVATE
+            "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_pipeline.c"
+            "${DE_ROOT_DIR}/src/gpu/d3d12/d3d12_pipeline_library.c")
+    endif()
+    target_include_directories(test_gpu_d3d12 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_gpu_d3d12_pipecache")
+    target_compile_definitions(test_gpu_d3d12 PRIVATE
+        "DE_D3D12_TEST_CACHE_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_d3d12_pipecache\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_d3d12 PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_gpu_d3d12 PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_d3d12 PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+endif()
