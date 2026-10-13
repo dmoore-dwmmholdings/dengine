@@ -3,7 +3,9 @@
  *
  * Instance: Vulkan 1.3 application info; VK_EXT_debug_utils when present (names and markers in
  * capture tools); VK_LAYER_KHRONOS_validation and a messenger when de_gpu_device_desc.debug_layer
- * (gpu_validation adds GPU-assisted and synchronization validation); the surface extensions the
+ * (gpu_validation adds GPU-assisted and synchronization validation; on a portability driver such
+ * as MoltenVK the instance is made again without GPU-assisted validation, whose instrumented
+ * shaders MoltenVK cannot compile); the surface extensions the
  * loader offers (VK_KHR_surface + win32/xlib/xcb/wayland/metal), so DENG-284 can present;
  * VK_KHR_portability_enumeration when offered (the macOS loader hides MoltenVK without it).
  *
@@ -19,7 +21,9 @@
  * submit mutex. Each de_gpu queue has a timeline semaphore for the front-end's internal timeline.
  *
  * Submission, command lists, fences and swapchains (DENG-284): vk_sync.c, vk_cmd.c,
- * vk_barriers.c and vk_swapchain.c; their entries are in the vtable below.
+ * vk_barriers.c and vk_swapchain.c; their entries are in the vtable below. Pipelines, draws and
+ * the pipeline cache (DENG-323): vk_pipeline.c, vk_draw.c, vk_pipeline_cache.c; the cache is
+ * created after the bindless set and saved in teardown before the device goes.
  */
 #include "gpu/vulkan/vk_internal.h"
 
@@ -256,13 +260,13 @@ static de_result create_instance(de_gpu_device *d, const de_gpu_device_desc *des
     VkDebugUtilsMessengerCreateInfoEXT mi;
     messenger_info(d, &mi);
     static const VkValidationFeatureEnableEXT k_vf[] = {
-        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
         VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT, /* left out when gpu_av_off (DENG-323) */
     };
     VkValidationFeaturesEXT vf;
     memset(&vf, 0, sizeof vf);
     vf.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
-    vf.enabledValidationFeatureCount = (u32)(sizeof k_vf / sizeof k_vf[0]);
+    vf.enabledValidationFeatureCount = vk->gpu_av_off ? 1u : (u32)(sizeof k_vf / sizeof k_vf[0]);
     vf.pEnabledValidationFeatures = k_vf;
     const void *next = NULL;
     if (vk->on.validation && vk->on.debug_utils) {
@@ -272,6 +276,7 @@ static de_result create_instance(de_gpu_device *d, const de_gpu_device_desc *des
     if (validation_features) {
         vf.pNext = next;
         next = &vf;
+        vk->gpu_av = !vk->gpu_av_off;
     }
     ci.pNext = next;
 
@@ -639,6 +644,7 @@ static void teardown(de_gpu_device *d) {
     if (vk->device) {
         if (vk->fn.vkDeviceWaitIdle && !is_lost(vk))
             vk->fn.vkDeviceWaitIdle(vk->device);
+        de__vk_pipeline_cache_shutdown(d); /* DENG-323: saves the cache file */
         de__vk_bindless_shutdown(d);
         for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
             if (vk->queues[q].timeline && vk->fn.vkDestroySemaphore)
@@ -674,6 +680,26 @@ static de_result vk_device_create(de_gpu_device *d, const de_gpu_device_desc *de
         r = create_instance(d, desc);
     if (r == DE_OK)
         r = pick_physical(d, desc);
+    if (r == DE_OK && vk->gpu_av && vk->phys.ext.portability_subset) {
+        /* DENG-323: MoltenVK cannot compile the shaders GPU-assisted validation instruments
+         * (SPIRV-Cross fails on its descriptor set), so every pipeline would fail. Start the
+         * instance again with synchronization validation only. */
+        DE_INFO(d->log,
+                "vulkan: \"%s\" is a portability driver: GPU-assisted validation is off, "
+                "synchronization validation stays on",
+                vk->phys.props.properties.deviceName);
+        if (vk->messenger && vk->fn.vkDestroyDebugUtilsMessengerEXT)
+            vk->fn.vkDestroyDebugUtilsMessengerEXT(vk->instance, vk->messenger, NULL);
+        vk->messenger = VK_NULL_HANDLE;
+        vk->fn.vkDestroyInstance(vk->instance, NULL);
+        vk->instance = VK_NULL_HANDLE;
+        vk->gpu_av = false;
+        vk->gpu_av_off = true;
+        vk->forced = false;
+        r = create_instance(d, desc);
+        if (r == DE_OK)
+            r = pick_physical(d, desc);
+    }
     if (r == DE_OK)
         r = plan_queues(d, &qp);
     if (r == DE_OK)
@@ -684,6 +710,8 @@ static de_result vk_device_create(de_gpu_device *d, const de_gpu_device_desc *de
         r = de__vk_memory_init(d);
     if (r == DE_OK)
         r = de__vk_bindless_init(d);
+    if (r == DE_OK)
+        r = de__vk_pipeline_cache_init(d, desc->pipeline_cache_dir); /* DENG-323 */
     if (r != DE_OK) {
         teardown(d);
         return r;
@@ -762,6 +790,7 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
             [DE__GPU_SAMPLER] = sizeof(de__vk_sampler),
             [DE__GPU_SWAPCHAIN] = sizeof(de__vk_swapchain),
             [DE__GPU_FENCE] = sizeof(de__vk_fence),
+            [DE__GPU_PIPELINE] = sizeof(de__vk_pipeline),
         },
     .device_create = vk_device_create,
     .device_destroy = vk_device_destroy,
@@ -804,4 +833,18 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .texture_requirements = de__vk_texture_requirements,
     .buffer_create_placed = de__vk_buffer_create_placed,
     .texture_create_placed = de__vk_texture_create_placed,
+    /* DENG-323: pipelines, draws, dispatches (vk_pipeline.c, vk_draw.c). */
+    .pipeline_create = de__vk_pipeline_create,
+    .pipeline_destroy = de__vk_pipeline_destroy,
+    .cmd_set_pipeline = de__vk_cmd_set_pipeline,
+    .cmd_push_constants = de__vk_cmd_push_constants,
+    .cmd_draw = de__vk_cmd_draw,
+    .cmd_draw_indexed = de__vk_cmd_draw_indexed,
+    .cmd_set_index_buffer = de__vk_cmd_set_index_buffer,
+    .cmd_scissor = de__vk_cmd_scissor,
+    .cmd_dispatch = de__vk_cmd_dispatch,
+    .cmd_dispatch_indirect = de__vk_cmd_dispatch_indirect,
+    .cmd_draw_indexed_indirect = de__vk_cmd_draw_indexed_indirect,
+    .cmd_dispatch_mesh = de__vk_cmd_dispatch_mesh,
+    .cmd_dispatch_mesh_indirect = de__vk_cmd_dispatch_mesh_indirect,
 };

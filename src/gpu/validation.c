@@ -342,11 +342,17 @@ static bool blob_ok(const de_gpu_shader_blob *b) {
     return b->code != NULL && b->size > 0;
 }
 
+static de_result validate_pipeline_stages(de_gpu_device *d, const de_gpu_pipeline_desc *desc,
+                                          const char *n); /* S10, end of file */
+
 de_result de__gpu_validate_pipeline_desc(de_gpu_device *d, const de_gpu_pipeline_desc *desc) {
     static const char F[] = "de_gpu_pipeline_create";
     if (!desc)
         return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT, "%s: desc is NULL", F);
     const char *n = nm(desc->name);
+    de_result stages = validate_pipeline_stages(d, desc, n);
+    if (stages != DE_OK)
+        return stages;
     u32 limit = d->caps.max_push_constant_bytes;
     if (limit == 0 || limit > DE_GPU_MAX_PUSH_CONSTANT_BYTES)
         limit = DE_GPU_MAX_PUSH_CONSTANT_BYTES;
@@ -491,5 +497,68 @@ de_result de__gpu_validate_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu
             return de__gpu_fail_handle(d, F, DE__GPU_FENCE, s->waits[i].fence.id);
     if (s->signal.id != 0 && !de__gpu_pool_get(&d->pools[DE__GPU_FENCE], s->signal.id))
         return de__gpu_fail_handle(d, F, DE__GPU_FENCE, s->signal.id);
+    return DE_OK;
+}
+
+/* ---------- Pipeline stages and threadgroups (S10, DENG-323) ---------- */
+
+static bool blob_empty(const de_gpu_shader_blob *b) {
+    return b->code == NULL && b->size == 0;
+}
+
+/* Blob/kind consistency: every blob is either empty or has code and a size, and a pipeline has no
+ * blob of a stage its kind does not use. Threadgroup sizes are all 0 or all > 0, and only where a
+ * stage has threadgroups. Unknown kinds are left to the caller. */
+static de_result validate_pipeline_stages(de_gpu_device *d, const de_gpu_pipeline_desc *desc,
+                                          const char *n) {
+    static const char F[] = "de_gpu_pipeline_create";
+    const struct {
+        const de_gpu_shader_blob *blob;
+        const char *name;
+        u32 kinds; /* bit per de_gpu_pipeline_kind that takes this stage */
+    } stages[] = {
+        {&desc->vs, "vs", 1u << DE_PIPE_GRAPHICS},
+        {&desc->ps, "ps", (1u << DE_PIPE_GRAPHICS) | (1u << DE_PIPE_MESH)},
+        {&desc->as, "as", 1u << DE_PIPE_MESH},
+        {&desc->ms, "ms", 1u << DE_PIPE_MESH},
+        {&desc->cs, "cs", 1u << DE_PIPE_COMPUTE},
+        {&desc->raygen, "raygen", 1u << DE_PIPE_RAYTRACING},
+        {&desc->miss, "miss", 1u << DE_PIPE_RAYTRACING},
+        {&desc->closest_hit, "closest_hit", 1u << DE_PIPE_RAYTRACING},
+        {&desc->any_hit, "any_hit", 1u << DE_PIPE_RAYTRACING},
+    };
+    static const char *const kind_names[] = {"graphics", "mesh", "compute", "ray-tracing"};
+    if ((u32)desc->kind > DE_PIPE_RAYTRACING)
+        return DE_OK;
+    for (u32 i = 0; i < sizeof stages / sizeof stages[0]; ++i) {
+        const de_gpu_shader_blob *b = stages[i].blob;
+        if (blob_empty(b))
+            continue;
+        if (!blob_ok(b))
+            return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                                "%s(\"%s\"): the %s blob has %s; give both code and size, or "
+                                "neither",
+                                F, n, stages[i].name,
+                                b->code ? "code but size 0"
+                                        : "a size but "
+                                          "no code");
+        if (!(stages[i].kinds & (1u << desc->kind)))
+            return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                                "%s(\"%s\"): a %s pipeline has no %s stage, but the %s blob is set",
+                                F, n, kind_names[desc->kind], stages[i].name, stages[i].name);
+    }
+    const u32 *tg = desc->threadgroup_size, *otg = desc->object_threadgroup_size;
+    const bool tg_any = tg[0] || tg[1] || tg[2], tg_all = tg[0] && tg[1] && tg[2];
+    const bool otg_any = otg[0] || otg[1] || otg[2], otg_all = otg[0] && otg[1] && otg[2];
+    if (tg_any && (!tg_all || (desc->kind != DE_PIPE_COMPUTE && desc->kind != DE_PIPE_MESH)))
+        return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                            "%s(\"%s\"): threadgroup_size (%u, %u, %u) must be all 0 or all > 0, "
+                            "and only for compute and mesh pipelines",
+                            F, n, tg[0], tg[1], tg[2]);
+    if (otg_any && (!otg_all || desc->kind != DE_PIPE_MESH || blob_empty(&desc->as)))
+        return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                            "%s(\"%s\"): object_threadgroup_size (%u, %u, %u) must be all 0 or all "
+                            "> 0, and only for a mesh pipeline with an as blob",
+                            F, n, otg[0], otg[1], otg[2]);
     return DE_OK;
 }

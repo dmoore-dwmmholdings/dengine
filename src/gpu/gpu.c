@@ -791,6 +791,10 @@ de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_d
         p->color_formats[i] = desc->color_formats[i];
     p->depth_format = desc->kind == DE_PIPE_COMPUTE ? DE_FMT_UNKNOWN : desc->depth_format;
     copy_name(p->name, desc->name);
+    for (u32 i = 0; i < 3; ++i) {
+        p->threadgroup_size[i] = desc->threadgroup_size[i];
+        p->object_threadgroup_size[i] = desc->object_threadgroup_size[i];
+    }
     if (d->vt->pipeline_create(d, p, desc) != DE_OK) {
         undo_slot(d, DE__GPU_PIPELINE, id);
         return h;
@@ -1073,6 +1077,7 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
     c->state = DE__GPU_CMD_RECORDING;
     c->in_render = false;
     c->has_pipeline = false;
+    c->has_index_buffer = false;
     c->push_limit = 0;
     c->marker_depth = 0;
     c->queue_value = 0;
@@ -1508,4 +1513,67 @@ void de_gpu_cmd_resolve_queries(de_gpu_cmd *c, de_gpu_query_heap h, u32 first, u
           c->name, count, (unsigned long long)dst_off, db->name, (unsigned long long)db->size);
     if (count && c->device->vt->cmd_resolve_queries)
         c->device->vt->cmd_resolve_queries(c, q, first, count, db, dst_off);
+}
+
+/* ---------- Draws, index buffer, scissor, mesh dispatch (S10, DENG-323) ---------- */
+
+void de_gpu_cmd_draw(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                     u32 first_instance) {
+    static const char F[] = "de_gpu_cmd_draw";
+    CMD_ENTER(F);
+    CHECK(c->in_render, "%s(\"%s\"): no render pass is open", F, c->name);
+    CHECK(c->has_pipeline && c->pipeline_kind == DE_PIPE_GRAPHICS,
+          "%s(\"%s\"): no graphics pipeline is bound", F, c->name);
+    if (vertex_count && instance_count && c->device->vt->cmd_draw)
+        c->device->vt->cmd_draw(c, vertex_count, instance_count, first_vertex, first_instance);
+}
+
+void de_gpu_cmd_draw_indexed(de_gpu_cmd *c, u32 index_count, u32 instance_count, u32 first_index,
+                             i32 vertex_offset, u32 first_instance) {
+    static const char F[] = "de_gpu_cmd_draw_indexed";
+    CMD_ENTER(F);
+    CHECK(c->in_render, "%s(\"%s\"): no render pass is open", F, c->name);
+    CHECK(c->has_pipeline && c->pipeline_kind == DE_PIPE_GRAPHICS,
+          "%s(\"%s\"): no graphics pipeline is bound", F, c->name);
+    CHECK(c->has_index_buffer, "%s(\"%s\"): no index buffer is bound (de_gpu_cmd_set_index_buffer)",
+          F, c->name);
+    if (index_count && instance_count && c->device->vt->cmd_draw_indexed)
+        c->device->vt->cmd_draw_indexed(c, index_count, instance_count, first_index, vertex_offset,
+                                        first_instance);
+}
+
+void de_gpu_cmd_set_index_buffer(de_gpu_cmd *c, de_gpu_buffer b, u64 offset, bool index_u16) {
+    static const char F[] = "de_gpu_cmd_set_index_buffer";
+    CMD_ENTER(F);
+    CHECK(c->queue == DE_QUEUE_GRAPHICS, "%s(\"%s\"): index buffers need the graphics queue", F,
+          c->name);
+    CMD_RESOLVE(ib, de__gpu_buffer, DE__GPU_BUFFER, b.id, F);
+    CHECK(ib->usage & DE_USAGE_INDEX, "%s(\"%s\"): buffer \"%s\" lacks DE_USAGE_INDEX", F, c->name,
+          ib->name);
+    CHECK(offset % (index_u16 ? 2u : 4u) == 0 && offset < ib->size,
+          "%s(\"%s\"): offset %llu is outside \"%s\" (%llu bytes) or not a multiple of the index "
+          "size (%u)",
+          F, c->name, (unsigned long long)offset, ib->name, (unsigned long long)ib->size,
+          index_u16 ? 2u : 4u);
+    c->has_index_buffer = true;
+    if (c->device->vt->cmd_set_index_buffer)
+        c->device->vt->cmd_set_index_buffer(c, ib, offset, index_u16);
+}
+
+void de_gpu_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h) {
+    static const char F[] = "de_gpu_cmd_scissor";
+    CMD_ENTER(F);
+    CHECK(c->in_render, "%s(\"%s\"): no render pass is open", F, c->name);
+    if (c->device->vt->cmd_scissor)
+        c->device->vt->cmd_scissor(c, x, y, w, h);
+}
+
+void de_gpu_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z) {
+    static const char F[] = "de_gpu_cmd_dispatch_mesh";
+    CMD_ENTER(F);
+    CHECK(c->in_render, "%s(\"%s\"): no render pass is open", F, c->name);
+    CHECK(c->has_pipeline && c->pipeline_kind == DE_PIPE_MESH,
+          "%s(\"%s\"): no mesh pipeline is bound", F, c->name);
+    if (x && y && z && c->device->vt->cmd_dispatch_mesh)
+        c->device->vt->cmd_dispatch_mesh(c, x, y, z);
 }

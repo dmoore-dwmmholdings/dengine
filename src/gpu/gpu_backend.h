@@ -95,6 +95,8 @@ typedef struct de__gpu_pipeline {
     de_gpu_format color_formats[DE_GPU_MAX_COLOR_ATTACHMENTS];
     de_gpu_format depth_format;
     char name[DE__GPU_NAME_MAX];
+    /** From the desc (S10, DENG-323): 0 when not given. */
+    u32 threadgroup_size[3], object_threadgroup_size[3];
 } de__gpu_pipeline;
 
 typedef struct de__gpu_accel {
@@ -137,6 +139,7 @@ struct de_gpu_cmd {
     struct de_gpu_cmd *next;     /**< free / in-flight list */
     struct de_gpu_cmd *all_next; /**< every command list of the device */
     char name[DE__GPU_NAME_MAX];
+    bool has_index_buffer; /**< de_gpu_cmd_set_index_buffer was called (S10, DENG-323) */
 };
 enum { DE__GPU_CMD_FREE, DE__GPU_CMD_RECORDING, DE__GPU_CMD_SUBMITTED };
 
@@ -277,6 +280,17 @@ typedef struct de__gpu_backend_vtable {
     /* Texture -> buffer copy (DENG-284), the reverse of cmd_copy_buffer_to_texture. */
     void (*cmd_copy_texture_to_buffer)(de_gpu_cmd *c, de__gpu_buffer *dst, u64 dst_off,
                                        u32 row_pitch, de__gpu_texture *src, u32 mip, u32 layer);
+
+    /* S10 draws (DENG-323). The front-end has checked the render pass, the bound pipeline's kind
+     * and (draw_indexed) that an index buffer is bound. cmd_scissor gets the rectangle as given
+     * (x or y may be negative: the backend cuts it to the render area). */
+    void (*cmd_draw)(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                     u32 first_instance);
+    void (*cmd_draw_indexed)(de_gpu_cmd *c, u32 index_count, u32 instance_count, u32 first_index,
+                             i32 vertex_offset, u32 first_instance);
+    void (*cmd_set_index_buffer)(de_gpu_cmd *c, de__gpu_buffer *b, u64 offset, bool index_u16);
+    void (*cmd_scissor)(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
+    void (*cmd_dispatch_mesh)(de_gpu_cmd *c, u32 x, u32 y, u32 z);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */

@@ -113,6 +113,14 @@ typedef struct de_gpu_device_desc {
     u32 adapter;            /**< 0 = best adapter; n = the n-th adapter (1-based) */
     bool debug_layer, gpu_validation, crash_breadcrumbs;
     const de_allocator *allocator; /**< front-end and CPU-side memory; NULL = de_heap_allocator() */
+    /**
+     * Directory (virtual path) of the persistent pipeline cache (S10, DENG-323): the backend loads
+     * its cache file from it at device creation and saves it there, atomically, at device destroy.
+     * NULL = "cache:/pipelines"; "" = no persistent cache. The file name names the backend, the
+     * vendor, the device and the driver version, so a driver update starts a new cache. A missing
+     * file is normal; an unreadable, corrupt or foreign one is ignored with a warning.
+     */
+    const char *pipeline_cache_dir;
 } de_gpu_device_desc;
 
 /**
@@ -286,9 +294,23 @@ typedef enum de_gpu_blend {
 
 /**
  * Pipeline. Required blobs by kind: GRAPHICS `vs` (`ps` optional), MESH `ms` (`as`, `ps`
- * optional; needs caps.mesh_shaders), COMPUTE `cs`. RAYTRACING is DE_ERR_UNSUPPORTED until S16.
- * `push_constant_bytes` <= DE_GPU_MAX_PUSH_CONSTANT_BYTES and a multiple of 4. Color formats must
- * be renderable color formats; `depth_format` a depth format or UNKNOWN; depth test/write need one.
+ * optional; needs caps.mesh_shaders, else DE_ERR_UNSUPPORTED), COMPUTE `cs`. RAYTRACING is
+ * DE_ERR_UNSUPPORTED until S16. Blobs of other stages must be empty. `push_constant_bytes` <=
+ * DE_GPU_MAX_PUSH_CONSTANT_BYTES, a multiple of 4, and at least what the shaders use (their
+ * reflection's push_constant_bytes). Color formats must be renderable color formats, one per
+ * pixel-shader output; `depth_format` a depth format or UNKNOWN; depth test/write need one.
+ *
+ * Fixed state, the same on every backend (S10, DENG-323):
+ *   - Every pipeline uses the bindless tables (shaders/common/bindless.slang) and one
+ *     push-constant block; there are no vertex buffers (shaders pull vertices from bindless
+ *     buffers) and the topology is a triangle list.
+ *   - Front faces are counter-clockwise in clip space (y up); `cull` drops back or front faces.
+ *   - Depth test (`depth_test`): reverse-Z, a fragment passes when its depth is >= the stored one
+ *     (GREATER_EQUAL). Depth is not clamped. No stencil.
+ *   - Blend (color, alpha): OPAQUE off; ALPHA (src*sa + dst*(1-sa), a + da*(1-sa)); PREMUL
+ *     (src + dst*(1-sa), a + da*(1-sa)); ADD (src + dst, a + da). All channels are written.
+ *   - Viewport and scissor are command state (de_gpu_cmd_viewport, de_gpu_cmd_scissor), set to
+ *     the whole render area by de_gpu_cmd_begin_render. One sample per pixel.
  */
 typedef struct de_gpu_pipeline_desc {
     de_gpu_pipeline_kind kind;
@@ -303,6 +325,16 @@ typedef struct de_gpu_pipeline_desc {
     u32 push_constant_bytes;      /* <= 128 */
     u32 rt_max_recursion, rt_payload_bytes;
     const char *name;
+    /**
+     * Threadgroup size of `cs` (COMPUTE) or of `ms` (MESH), from the shader's reflection
+     * (de__shader_reflection.threadgroup). All 0 = not given: Vulkan and D3D12 read it from the
+     * blob; Metal needs it for COMPUTE and MESH pipelines. When given, every element is > 0, and
+     * backends that can read it from the blob check that it matches.
+     */
+    u32 threadgroup_size[3];
+    /** Threadgroup size of `as` (amplification / task / object shader) of a MESH pipeline, from its
+     * reflection. All 0 = not given (as above). */
+    u32 object_threadgroup_size[3];
 } de_gpu_pipeline_desc;
 
 DE_API de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_desc *desc);
@@ -402,11 +434,23 @@ DE_API void de_gpu_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 coun
 DE_API void de_gpu_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
                                     const de_gpu_attachment *depth);
 DE_API void de_gpu_cmd_end_render(de_gpu_cmd *c);
+/** Binds a pipeline (and, on the first bind of its kind in the list, the bindless tables). */
 DE_API void de_gpu_cmd_set_pipeline(de_gpu_cmd *c, de_gpu_pipeline p);
+/** Sets push-constant bytes [0, bytes) of the bound pipeline (at most its push_constant_bytes). */
 DE_API void de_gpu_cmd_push_constants(de_gpu_cmd *c, const void *data, u32 bytes);
+/** Viewport in pixels from the top-left of the render area (y down); depth range 0..1. */
 DE_API void de_gpu_cmd_viewport(de_gpu_cmd *c, f32 x, f32 y, f32 w, f32 h);
+/**
+ * Indexed draws whose arguments the GPU wrote: `max_draws` records of 5 u32 (index_count,
+ * instance_count, first_index, vertex_offset as i32, first_instance), 20 bytes apart from
+ * `offset` of `args`. With a valid `count` buffer, the u32 at `count_offset` gives the number of
+ * draws, capped at `max_draws`. Both buffers need DE_USAGE_INDIRECT and DE_ACCESS_INDIRECT; the
+ * index buffer comes from de_gpu_cmd_set_index_buffer.
+ */
 DE_API void de_gpu_cmd_draw_indexed_indirect(de_gpu_cmd *c, de_gpu_buffer args, u64 offset,
                                              de_gpu_buffer count, u64 count_offset, u32 max_draws);
+/** Mesh dispatches whose arguments the GPU wrote: `max` records of 3 u32 (x, y, z), 12 bytes
+ * apart, with an optional count buffer as in de_gpu_cmd_draw_indexed_indirect. */
 DE_API void de_gpu_cmd_dispatch_mesh_indirect(de_gpu_cmd *c, de_gpu_buffer args, u64 offset,
                                               de_gpu_buffer count, u64 count_offset, u32 max);
 DE_API void de_gpu_cmd_dispatch(de_gpu_cmd *c, u32 x, u32 y, u32 z);
@@ -432,6 +476,28 @@ DE_API void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, 
 DE_API void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
 DE_API void de_gpu_cmd_marker_pop(de_gpu_cmd *c);
 DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id); /* GPU crash diagnostics */
+/* S10 (DENG-323): draws, index buffer, scissor, mesh dispatch. Draws and mesh dispatches need a
+ * render pass and a bound pipeline of their kind. SV_VertexID and SV_InstanceID do not portably
+ * include `first_vertex`, `vertex_offset` or `first_instance`: pass per-draw offsets in push
+ * constants (or in the index values) instead. */
+/** Draws `vertex_count` vertices of `instance_count` instances (GRAPHICS pipeline). */
+DE_API void de_gpu_cmd_draw(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                            u32 first_instance);
+/** Draws `index_count` indices from the bound index buffer (de_gpu_cmd_set_index_buffer). */
+DE_API void de_gpu_cmd_draw_indexed(de_gpu_cmd *c, u32 index_count, u32 instance_count,
+                                    u32 first_index, i32 vertex_offset, u32 first_instance);
+/**
+ * Binds the index buffer for de_gpu_cmd_draw_indexed and de_gpu_cmd_draw_indexed_indirect:
+ * u16 (`index_u16`) or u32 indices from `offset` (a multiple of the index size) of a buffer with
+ * DE_USAGE_INDEX. It stays bound until the list ends or another one is bound.
+ */
+DE_API void de_gpu_cmd_set_index_buffer(de_gpu_cmd *c, de_gpu_buffer b, u64 offset, bool index_u16);
+/** Scissor rectangle in pixels from the top-left of the render area (y down), like the viewport.
+ * Parts left of or above the render area are cut. */
+DE_API void de_gpu_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
+/** Dispatches x*y*z threadgroups of a MESH pipeline: of its amplification shader when it has
+ * one, else of its mesh shader. */
+DE_API void de_gpu_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z);
 /** Writes the GPU timestamp (caps.timestamp_frequency ticks per second) into query `index`. */
 DE_API void de_gpu_cmd_timestamp(de_gpu_cmd *c, de_gpu_query_heap h, u32 index);
 /** Copies queries [first, first + count) of `h` into `dst` at `dst_off` as u64 values. */

@@ -139,3 +139,23 @@ endif()
 if(TARGET test_gpu)
     target_sources(test_gpu PRIVATE test_gpu_tier.c)
 endif()
+
+# DENG-323: Vulkan pipelines, draws, dispatches and the pipeline cache. test_vk_pipeline.c joins
+# test_gpu_vulkan (CTest names gpu_vulkan.vk.<test>) with the shared S10 pipeline-test helper
+# data/pipelines/pipeline_shaders.c, which DENG-324 (D3D12) and DENG-325 (Metal) reuse: it cooks
+# data/pipelines/*.slang through the shader importer (DE_PIPE_TEST_COOK) when the build has it
+# (DE_BUILD_TOOLS and Slang, as gpu_shader above); otherwise the GPU pipeline tests skip. The cache
+# tests write below <build>/tests/unit/gpu/test_gpu_vulkan_pipecache/ (mounted as pipecache:/).
+if(TARGET test_gpu_vulkan)
+    target_sources(test_gpu_vulkan PRIVATE vulkan/test_vk_pipeline.c data/pipelines/pipeline_shaders.c)
+    target_include_directories(test_gpu_vulkan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_gpu_vulkan_pipecache")
+    target_compile_definitions(test_gpu_vulkan PRIVATE
+        "DE_PIPE_TEST_CACHE_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_vulkan_pipecache\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_vulkan PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_gpu_vulkan PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_vulkan PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+endif()

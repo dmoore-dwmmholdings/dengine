@@ -119,7 +119,25 @@
     X(vkCmdSetScissor)                                                                             \
     X(vkCmdCopyBuffer)                                                                             \
     X(vkCmdCopyBufferToImage)                                                                      \
-    X(vkCmdCopyImageToBuffer)
+    X(vkCmdCopyImageToBuffer)                                                                      \
+    X(vkCreateShaderModule)                                                                        \
+    X(vkDestroyShaderModule)                                                                       \
+    X(vkCreateGraphicsPipelines)                                                                   \
+    X(vkCreateComputePipelines)                                                                    \
+    X(vkDestroyPipeline)                                                                           \
+    X(vkCreatePipelineCache)                                                                       \
+    X(vkDestroyPipelineCache)                                                                      \
+    X(vkGetPipelineCacheData)                                                                      \
+    X(vkCmdBindPipeline)                                                                           \
+    X(vkCmdBindDescriptorSets)                                                                     \
+    X(vkCmdPushConstants)                                                                          \
+    X(vkCmdDraw)                                                                                   \
+    X(vkCmdDrawIndexed)                                                                            \
+    X(vkCmdBindIndexBuffer)                                                                        \
+    X(vkCmdDispatch)                                                                               \
+    X(vkCmdDispatchIndirect)                                                                       \
+    X(vkCmdDrawIndexedIndirect)                                                                    \
+    X(vkCmdDrawIndexedIndirectCount)
 
 /** Device-level, optional (extensions): NULL when absent or not enabled. */
 #define DE_VK_DEVICE_FUNCS_OPT(X)                                                                  \
@@ -128,7 +146,10 @@
     X(vkDestroySwapchainKHR)                                                                       \
     X(vkGetSwapchainImagesKHR)                                                                     \
     X(vkAcquireNextImageKHR)                                                                       \
-    X(vkQueuePresentKHR)
+    X(vkQueuePresentKHR)                                                                           \
+    X(vkCmdDrawMeshTasksEXT)                                                                       \
+    X(vkCmdDrawMeshTasksIndirectEXT)                                                               \
+    X(vkCmdDrawMeshTasksIndirectCountEXT)
 
 /** Every entry point the backend calls, resolved by vk_loader.c. */
 typedef struct de__vk_fns {
@@ -313,6 +334,17 @@ typedef struct de__vk_device {
      * by the graphics queue's lock. */
     struct de__vk_acquire *pending_acquire[DE__VK_MAX_PENDING_ACQUIRES];
     u32 pending_acquire_count;
+
+    /* DENG-323: the pipeline cache (vk_pipeline_cache.c). */
+    VkPipelineCache pipeline_cache;
+    char pipeline_cache_path[512];   /**< the cache file; "" = no persistent cache */
+    u32 pipeline_cache_state;        /**< de__vk_pipeline_cache_state */
+    u64 pipeline_cache_loaded;       /**< Vulkan cache bytes loaded at device creation */
+    u64 pipeline_cache_saved;        /**< Vulkan cache bytes last written (device destroy) */
+    de_atomic_u32 pipelines_created; /**< since device creation: no new pipeline, no save */
+    /** DENG-323: GPU-assisted validation is on (gpu_av), or was turned off for a portability
+     * driver (gpu_av_off: MoltenVK cannot compile instrumented shaders; vk_device.c). */
+    bool gpu_av, gpu_av_off;
 } de__vk_device;
 
 static inline de__vk_device *de__vk(de_gpu_device *d) {
@@ -502,6 +534,9 @@ typedef struct de__vk_cmd {
     u32 view_count, view_cap;
     VkExtent2D render_extent;       /**< of the open render pass (viewport flip) */
     de__vk_barrier_ctx barrier_ctx; /**< made once at cmd_init (the queue never changes) */
+    /** DENG-323 (vk_draw.c): the bindless set is bound at [0] graphics, [1] compute; cleared by
+     * cmd_begin, so the set is bound once per command buffer and bind point. */
+    bool set_bound[2];
 } de__vk_cmd;
 
 static inline de__vk_cmd *de__vk_cmd_of(de_gpu_cmd *c) {
@@ -583,5 +618,101 @@ de_result de__vk_swapchain_acquire(de_gpu_device *d, de__gpu_swapchain *s, de_gp
 de_result de__vk_swapchain_present(de_gpu_device *d, de__gpu_swapchain *s);
 de_result de__vk_swapchain_resize(de_gpu_device *d, de__gpu_swapchain *s, u32 w, u32 h);
 de_gpu_colorspace de__vk_swapchain_colorspace(de_gpu_device *d, de__gpu_swapchain *s);
+
+/* ---------- Pipelines, draws, pipeline cache (DENG-323) ---------- */
+
+/** A de_gpu_pipeline: the VkPipeline and its bind point. */
+typedef struct de__vk_pipeline {
+    VkPipeline pipeline;
+    VkPipelineBindPoint bind_point;
+} de__vk_pipeline;
+
+/** What de__vk_spirv_scan reads from one entry point of a SPIR-V module. */
+typedef struct de__vk_spirv_info {
+    u32 model;               /**< SpvExecutionModel of the entry point */
+    u32 local_size[3];       /**< LocalSize / LocalSizeId; 0 when not known (spec constants) */
+    u32 push_constant_bytes; /**< end of the last member of its push-constant block; 0 = none */
+    u32 output_locations;    /**< bit n: an Output variable at Location n (fragment outputs) */
+    char entry[64];          /**< the entry point's name in the module (cut to 63 bytes) */
+} de__vk_spirv_info;
+
+/** SPIR-V execution models the backend uses (spirv.h values). */
+enum {
+    DE__VK_SPIRV_VERTEX = 0,
+    DE__VK_SPIRV_FRAGMENT = 4,
+    DE__VK_SPIRV_GLCOMPUTE = 5,
+    DE__VK_SPIRV_TASK_EXT = 5364,
+    DE__VK_SPIRV_MESH_EXT = 5365
+};
+
+/**
+ * Reads entry point `entry` of a SPIR-V module (NULL or "" = the first one; a module with a
+ * single entry point matches any name, as Slang names it "main"): execution model,
+ * local size, push-constant bytes and output locations. `scratch` holds one u32 per SPIR-V id
+ * (allocated from `a` and freed before returning). Pure apart from the allocation. DE_ERR_PARSE
+ * with the reason in `why` for a module that is not SPIR-V, is truncated or lacks the entry point.
+ */
+de_result de__vk_spirv_scan(const void *code, u64 size, const char *entry, const de_allocator *a,
+                            de__vk_spirv_info *out, char *why, size_t why_cap);
+
+/* vk_pipeline.c */
+de_result de__vk_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
+                                 const de_gpu_pipeline_desc *desc);
+void de__vk_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p);
+
+/* vk_draw.c */
+void de__vk_cmd_set_pipeline(de_gpu_cmd *c, de__gpu_pipeline *p);
+void de__vk_cmd_push_constants(de_gpu_cmd *c, const void *data, u32 bytes);
+void de__vk_cmd_draw(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                     u32 first_instance);
+void de__vk_cmd_draw_indexed(de_gpu_cmd *c, u32 index_count, u32 instance_count, u32 first_index,
+                             i32 vertex_offset, u32 first_instance);
+void de__vk_cmd_set_index_buffer(de_gpu_cmd *c, de__gpu_buffer *b, u64 offset, bool index_u16);
+void de__vk_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
+void de__vk_cmd_dispatch(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__vk_cmd_dispatch_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset);
+void de__vk_cmd_draw_indexed_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                      de__gpu_buffer *count, u64 count_offset, u32 max_draws);
+void de__vk_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__vk_cmd_dispatch_mesh_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                       de__gpu_buffer *count, u64 count_offset, u32 max);
+/** The scissor rectangle of (x, y, w, h) cut to x, y >= 0 (Vulkan needs non-negative offsets).
+ * Pure. */
+VkRect2D de__vk_scissor_rect(i32 x, i32 y, u32 w, u32 h);
+
+/* vk_pipeline_cache.c */
+typedef enum de__vk_pipeline_cache_state {
+    DE__VK_PIPELINE_CACHE_OFF,      /**< no persistent cache ("" directory, or not set up) */
+    DE__VK_PIPELINE_CACHE_EMPTY,    /**< no file yet: an empty cache */
+    DE__VK_PIPELINE_CACHE_LOADED,   /**< the file was loaded */
+    DE__VK_PIPELINE_CACHE_REJECTED, /**< the file was unreadable, corrupt or foreign: ignored */
+} de__vk_pipeline_cache_state;
+/** The file header in front of the Vulkan cache data (little-endian, 32 bytes). */
+typedef struct de__vk_pipeline_cache_file {
+    u32 magic;   /**< DE__VK_PIPELINE_CACHE_MAGIC */
+    u32 version; /**< DE__VK_PIPELINE_CACHE_VERSION */
+    u64 data_size;
+    u64 data_hash; /**< de_hash64 of the data, seed DE__VK_PIPELINE_CACHE_MAGIC */
+    u32 vendor_id, device_id;
+} de__vk_pipeline_cache_file;
+#define DE__VK_PIPELINE_CACHE_MAGIC   0x43505644u /* "DVPC" */
+#define DE__VK_PIPELINE_CACHE_VERSION 1u
+/** Creates vk->pipeline_cache at device creation, from the file in `dir` (NULL = the default
+ * "cache:/pipelines", "" = none) when it is valid for this device. Fails only when Vulkan cannot
+ * create an empty cache. */
+de_result de__vk_pipeline_cache_init(de_gpu_device *d, const char *dir);
+/** Saves the cache (atomically) and destroys it. Before vkDestroyDevice; safe when not created. */
+void de__vk_pipeline_cache_shutdown(de_gpu_device *d);
+/**
+ * Checks a cache file for this device: the file header and checksum, then the Vulkan header
+ * (VkPipelineCacheHeaderVersionOne: size, version, vendor, device, pipelineCacheUUID). Returns
+ * the Vulkan data and its size, or NULL with the reason in `why`. Pure.
+ */
+const void *de__vk_pipeline_cache_check(const void *file, u64 size,
+                                        const VkPhysicalDeviceProperties *props, u64 *data_size,
+                                        char *why, size_t why_cap);
+
+/** Test hooks: the cache state, the bytes loaded and saved, and the cache file path. */
+u32 de__gpu_vk_pipeline_cache_state(de_gpu_device *d, u64 *loaded_bytes, const char **path);
 
 #endif
