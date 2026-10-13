@@ -8,15 +8,23 @@ byte-identical to what the pinned archive gives, so a local edit to vendored cod
 Upstream `.gitignore` and `.gitattributes` files are never vendored, and `fetch` and `verify` fail
 when git ignores a vendored file, so every vendored file is committed (DENG-362).
 
+A `kind = "prebuilt"` entry (DENG-390) also pins one binary archive per host in
+`[lib.hosts.<host>]` tables. Those archives are never committed: they stay in the cache, and
+`prebuilt` extracts the host's files into a build directory at configure time
+(cmake/DePrebuilt.cmake). The entry's own `url`/`files` are the committed part (headers, LICENSE).
+
 Commands:
   fetch <name>... | --all   download, verify sha256, (re)write third_party/<name>/
   verify [<name>...]        check archive hashes and that each tree matches its archive
+  prebuilt <name> --dest D  extract the host's prebuilt files of <name> into D
   list                      print the pinned libraries
   hash <url-or-file>        print the sha256 of an archive (to fill in a new vendor.toml entry)
 
-Archives are cached in $DE_VENDOR_CACHE, else ~/.cache/dengine-vendor. `verify` downloads a
-missing archive unless --offline is given. Exit status: 0 ok, 1 mismatch or download failure,
-2 bad vendor.toml or usage.
+`fetch` and `verify` check the prebuilt archive of this host only; `--all-hosts` checks every
+host's archive, `--host` picks another host. Archives are cached in $DE_VENDOR_CACHE, else
+~/.cache/dengine-vendor. `verify` and `prebuilt` download a missing archive unless --offline is
+given. Exit status: 0 ok, 1 mismatch or download failure, 2 bad vendor.toml or usage, 3 (`prebuilt`
+only) the entry has no archive for this host.
 
 Standard library only; Python 3.10+ (tomllib from 3.11, else a minimal parser for the subset of
 TOML that vendor.toml uses).
@@ -26,7 +34,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -75,8 +85,24 @@ GIT_CONTROL_FILES = {".gitignore", ".gitattributes"}
 
 REQUIRED_KEYS = ("name", "version", "url", "sha256", "license", "files")
 KNOWN_KEYS = set(REQUIRED_KEYS) | {
-    "license_file", "strip", "exclude", "local", "patches", "notes",
+    "license_file", "strip", "exclude", "local", "patches", "notes", "kind", "hosts",
 }
+
+# `kind`: "source" (the default) commits every selected file. "prebuilt" also pins per-host
+# binary archives in `hosts`, which stay in the cache and are extracted into a build directory.
+KINDS = ("source", "prebuilt")
+
+# Keys of one [lib.hosts.<host>] table.
+HOST_REQUIRED_KEYS = ("url", "sha256", "files")
+HOST_KNOWN_KEYS = set(HOST_REQUIRED_KEYS) | {"strip", "exclude", "notes"}
+
+# Host names: <os>-<arch>. v1 ships macos-arm64, linux-x64 and windows-x64 (DENG-2 Q3); the
+# pattern also accepts the other two arm64/x64 combinations so a later pin needs no code change.
+HOST_RE = re.compile(r"^(macos|linux|windows)-(arm64|x64)$")
+
+# Written into a `prebuilt --dest` directory; when it matches, a re-configure extracts nothing.
+PREBUILT_STAMP = ".de-prebuilt.json"
+EXIT_NO_HOST = 3
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -199,6 +225,13 @@ def parse_toml_minimal(text: str, name: str = "<toml>") -> dict:
             cur = root
             for p in m.group(1).split("."):
                 cur = cur.setdefault(p, {})
+                # [lib.hosts.x] after [[lib]] is a sub-table of the last [[lib]] element (TOML).
+                if isinstance(cur, list):
+                    if not cur:
+                        raise ConfigError(f"{name}:{lineno}: {m.group(1)}: empty array of tables")
+                    cur = cur[-1]
+                if not isinstance(cur, dict):
+                    raise ConfigError(f"{name}:{lineno}: {m.group(1)} is not a table")
             continue
         if "=" not in s:
             raise ConfigError(f"{name}:{lineno}: expected `key = value`")
@@ -318,10 +351,80 @@ class Lib:
             if not match_any(p, self.local_re):
                 raise ConfigError(f"{where}: patch {p!r} must match a `local` glob")
 
+        self.kind: str = d.get("kind", "source")
+        if self.kind not in KINDS:
+            raise ConfigError(f"{where}: `kind` must be one of {', '.join(KINDS)}")
+        hosts = d.get("hosts")
+        if self.kind == "prebuilt":
+            if not isinstance(hosts, dict) or not hosts:
+                raise ConfigError(
+                    f"{where}: a prebuilt entry needs at least one [lib.hosts.<host>] table")
+        elif hosts is not None:
+            raise ConfigError(f'{where}: `hosts` needs kind = "prebuilt"')
+        self.hosts: dict = {h: HostArchive(self, h, t, where)
+                            for h, t in sorted((hosts or {}).items())}
+
     @property
     def archive_name(self) -> str:
-        base = posixpath.basename(urllib.parse.urlparse(self.url).path) or "archive"
-        return f"{self.name}-{self.sha256[:16]}-{base}"
+        return cache_name(self.name, self.sha256, self.url)
+
+
+def cache_name(name: str, sha256: str, url: str) -> str:
+    """Archive file name in the cache. A host archive with the same URL and hash as the
+    entry's committed part (the usual prebuilt case) shares one cached file."""
+    base = posixpath.basename(urllib.parse.urlparse(url).path) or "archive"
+    return f"{name}-{sha256[:16]}-{base}"
+
+
+class HostArchive:
+    """One [lib.hosts.<host>] table of a prebuilt entry: a binary archive that is cached and
+    extracted into a build directory, never committed."""
+
+    def __init__(self, lib: Lib, host: str, d, where: str):
+        where = f"{where} [hosts.{host}]"
+        if not HOST_RE.match(host):
+            raise ConfigError(f"{where}: host must be <macos|linux|windows>-<arm64|x64>")
+        if not isinstance(d, dict):
+            raise ConfigError(f"{where}: must be a table")
+        unknown = set(d) - HOST_KNOWN_KEYS
+        if unknown:
+            raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+        for k in HOST_REQUIRED_KEYS:
+            if k not in d or d[k] in ("", []):
+                raise ConfigError(f"{where}: missing required key `{k}`")
+        self.lib = lib
+        self.host = host
+        self.name = f"{lib.name} [{host}]"  # for messages
+        self.version = lib.version
+        self.url: str = d["url"]
+        self.sha256: str = str(d["sha256"]).lower()
+        if not SHA_RE.match(self.sha256):
+            raise ConfigError(f"{where}: `sha256` must be 64 hex digits")
+        if FORBIDDEN_PATTERNS.search(self.url):
+            raise ConfigError(
+                f"{where}: proprietary SDKs are never vendored (CONVENTIONS §6); "
+                "CMake finds them through a user-set path")
+        self.strip: int = d.get("strip", 1)
+        if not isinstance(self.strip, int) or self.strip < 0:
+            raise ConfigError(f"{where}: `strip` must be a non-negative integer")
+        for key in ("files", "exclude"):
+            v = d.get(key, [])
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise ConfigError(f"{where}: `{key}` must be a list of strings")
+        self.files: list = d["files"]
+        self.exclude: list = d.get("exclude", [])
+        self.files_re = [glob_to_regex(p) for p in self.files]
+        self.exclude_re = [glob_to_regex(p) for p in self.exclude]
+
+    @property
+    def archive_name(self) -> str:
+        return cache_name(self.lib.name, self.sha256, self.url)
+
+    def stamp_key(self) -> dict:
+        """What decides the extracted file set; a change re-extracts."""
+        return {"name": self.lib.name, "version": self.version, "host": self.host,
+                "url": self.url, "sha256": self.sha256, "strip": self.strip,
+                "files": self.files, "exclude": self.exclude}
 
 
 def load_config(path: str, force_fallback: bool = False) -> list:
@@ -545,6 +648,179 @@ def git_ignored(lib: Lib, root: str, lib_dir: str, rels) -> list:
 
 
 # --------------------------------------------------------------------------------------------
+# Prebuilt archives (kind = "prebuilt"). Unlike read_archive(), these keep the file mode (an
+# executable must stay executable) and symlink targets (Linux .so names are symlinks).
+
+
+def current_host():
+    """This machine as a host name (`macos-arm64`, `linux-x64`, ...), or None if unknown."""
+    os_name = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(platform.system())
+    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(
+        platform.machine().lower())
+    return f"{os_name}-{arch}" if os_name and arch else None
+
+
+def read_archive_members(path: str, strip: int) -> dict:
+    """{relative path: (data | None, mode, link target | None)} for files and symlinks."""
+    out: dict = {}
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as z:
+            for info in z.infolist():
+                if info.is_dir():
+                    continue
+                rel = _safe_rel(info.filename, strip)
+                if rel is None:
+                    continue
+                mode = (info.external_attr >> 16) & 0o177777
+                if mode & 0o170000 == 0o120000:
+                    out[rel] = (None, 0o777, z.read(info).decode("utf-8"))
+                else:
+                    out[rel] = (z.read(info), (mode & 0o777) or 0o644, None)
+        return out
+    try:
+        tf = tarfile.open(path, "r:*")
+    except tarfile.TarError as e:
+        raise VendorError(f"{path}: not a tar or zip archive: {e}") from e
+    with tf:
+        for m in tf.getmembers():
+            if m.isdir():
+                continue
+            rel = _safe_rel(m.name, strip)
+            if rel is None:
+                continue
+            if m.issym():
+                out[rel] = (None, 0o777, m.linkname)
+            elif m.isfile() or m.islnk():  # extractfile() resolves a hard link to its target
+                f = tf.extractfile(m)
+                out[rel] = (f.read() if f else b"", (m.mode & 0o777) or 0o644, None)
+    return out
+
+
+def select_prebuilt(ha: HostArchive, archive: str) -> dict:
+    """The host archive's selected members: {rel: (data | None, mode, link | None)}.
+
+    Fails when a `files` glob matches nothing, or when a selected symlink points outside the
+    selection (the extracted link would dangle)."""
+    members = read_archive_members(archive, ha.strip)
+    sel: dict = {}
+    used = [False] * len(ha.files_re)
+    for rel in sorted(members):
+        if posixpath.basename(rel) in GIT_CONTROL_FILES:
+            continue
+        hits = [i for i, p in enumerate(ha.files_re) if p.match(rel)]
+        if not hits or match_any(rel, ha.exclude_re):
+            continue
+        for i in hits:
+            used[i] = True
+        sel[rel] = members[rel]
+    for i, ok in enumerate(used):
+        if not ok:
+            raise VendorError(f"{ha.name}: `files` glob {ha.files[i]!r} matches nothing")
+    for rel, (_, _, link) in sel.items():
+        if link is not None:
+            _resolve_link(ha, sel, rel)
+    return sel
+
+
+def _resolve_link(ha: HostArchive, sel: dict, rel: str) -> str:
+    """The selected regular file that symlink `rel` finally points to."""
+    seen = set()
+    cur = rel
+    while sel[cur][2] is not None:
+        if cur in seen:
+            raise VendorError(f"{ha.name}: symlink loop at {rel}")
+        seen.add(cur)
+        link = sel[cur][2]
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(cur), link))
+        if link.startswith("/") or target.startswith("../") or target == "..":
+            raise VendorError(f"{ha.name}: symlink {cur} -> {link} leaves the archive")
+        if target not in sel:
+            raise VendorError(
+                f"{ha.name}: symlink {cur} -> {link}: the target is not selected; add it to "
+                "`files`")
+        cur = target
+    return cur
+
+
+def write_prebuilt(ha: HostArchive, sel: dict, dest: str) -> None:
+    """Write the selection into `dest` (replaced as a whole) and the stamp file."""
+    parent = os.path.dirname(os.path.abspath(dest)) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix=".de-prebuilt-", dir=parent)
+    try:
+        links = []
+        for rel, (data, mode, link) in sorted(sel.items()):
+            p = os.path.join(tmp, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            if link is not None:
+                links.append((rel, p, link))
+                continue
+            with open(p, "wb") as f:
+                f.write(data)
+            os.chmod(p, mode | 0o600)
+        for rel, p, link in links:
+            try:
+                if os.name == "nt":
+                    raise OSError("no symlinks on Windows without developer mode")
+                os.symlink(link, p)
+            except OSError:
+                # Copy the file it points to (Windows; or a file system without symlinks).
+                data, mode, _ = sel[_resolve_link(ha, sel, rel)]
+                with open(p, "wb") as f:
+                    f.write(data)
+                os.chmod(p, mode | 0o600)
+        with open(os.path.join(tmp, PREBUILT_STAMP), "w", encoding="utf-8") as f:
+            json.dump({"key": ha.stamp_key(), "files": sorted(sel)}, f, indent=1)
+            f.write("\n")
+        if os.path.isdir(dest) and not os.path.islink(dest):
+            shutil.rmtree(dest)
+        elif os.path.lexists(dest):
+            os.unlink(dest)
+        os.replace(tmp, dest)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def prebuilt_up_to_date(ha: HostArchive, dest: str) -> bool:
+    """True when `dest` holds this exact pin's extraction (stamp matches, every file present)."""
+    try:
+        with open(os.path.join(dest, PREBUILT_STAMP), encoding="utf-8") as f:
+            stamp = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stamp, dict) or stamp.get("key") != ha.stamp_key():
+        return False
+    files = stamp.get("files")
+    return isinstance(files, list) and all(
+        isinstance(rel, str) and os.path.lexists(os.path.join(dest, *rel.split("/")))
+        for rel in files)
+
+
+def hosts_to_check(lib: Lib, host, all_hosts: bool) -> tuple:
+    """(host archives to check, note for a host the entry does not list or None)."""
+    if lib.kind != "prebuilt":
+        return [], None
+    if all_hosts:
+        return list(lib.hosts.values()), None
+    if host in lib.hosts:
+        return [lib.hosts[host]], None
+    listed = ", ".join(lib.hosts)
+    return [], (f"skip {lib.name} {lib.version}: no prebuilt archive for host {host or 'unknown'} "
+                f"(listed: {listed}; --all-hosts checks them all)")
+
+
+def check_host_archive(ha: HostArchive, cache: str, offline: bool) -> list:
+    """Problems with one host archive (hash, `files` selection); prints `ok` when none."""
+    try:
+        sel = select_prebuilt(ha, get_archive(ha, cache, offline))
+    except VendorError as e:
+        return [str(e)]
+    print(f"ok   {ha.name} {ha.version} ({len(sel)} prebuilt files, cached)")
+    return []
+
+
+# --------------------------------------------------------------------------------------------
 # Commands
 
 
@@ -566,7 +842,7 @@ def check_tree(lib: Lib, lib_dir: str, tree: dict) -> list:
     return problems
 
 
-def cmd_fetch(libs: list, root: str, cache: str) -> int:
+def cmd_fetch(libs: list, root: str, cache: str, host=None, all_hosts: bool = False) -> int:
     for lib in libs:
         lib_dir = os.path.join(root, "third_party", lib.name)
         archive = get_archive(lib, cache, offline=False)
@@ -590,6 +866,18 @@ def cmd_fetch(libs: list, root: str, cache: str) -> int:
             print(f"FAIL {p}", file=sys.stderr)
         if ignored:
             return 1
+        # A prebuilt entry: also download and check the host archive(s) into the cache. They are
+        # never written into third_party/.
+        archives, note = hosts_to_check(lib, host, all_hosts)
+        if note:
+            print(note)
+        problems = []
+        for ha in archives:
+            problems += check_host_archive(ha, cache, offline=False)
+        for p in problems:
+            print(f"FAIL {p}", file=sys.stderr)
+        if problems:
+            return 1
     return 0
 
 
@@ -608,10 +896,16 @@ def verify_lib(lib: Lib, root: str, cache: str, offline: bool) -> list:
     return problems
 
 
-def cmd_verify(libs: list, root: str, cache: str, offline: bool, scan_unlisted: bool) -> int:
+def cmd_verify(libs: list, root: str, cache: str, offline: bool, scan_unlisted: bool,
+               host=None, all_hosts: bool = False) -> int:
     problems = []
     for lib in libs:
         problems += verify_lib(lib, root, cache, offline)
+        archives, note = hosts_to_check(lib, host, all_hosts)
+        if note:
+            print(note)
+        for ha in archives:
+            problems += check_host_archive(ha, cache, offline)
     # A directory under third_party/ that vendor.toml does not know breaks the policy.
     tp = os.path.join(root, "third_party")
     names = {lib.name for lib in libs}
@@ -630,6 +924,26 @@ def cmd_list(libs: list) -> int:
     print(f"{'name':<{w}}  {'version':<{v}}  {'license':<24}  url")
     for lib in libs:
         print(f"{lib.name:<{w}}  {lib.version:<{v}}  {lib.license:<24}  {lib.url}")
+        for ha in lib.hosts.values():
+            print(f"{'':<{w}}  {'':<{v}}  {'prebuilt ' + ha.host:<24}  {ha.url}")
+    return 0
+
+
+def cmd_prebuilt(lib: Lib, host, cache: str, dest: str, offline: bool) -> int:
+    """Extract the host's prebuilt files of `lib` into `dest` (cmake/DePrebuilt.cmake)."""
+    if lib.kind != "prebuilt":
+        raise ConfigError(f'{lib.name} is not a prebuilt entry (kind = "{lib.kind}")')
+    if host not in lib.hosts:
+        print(f"vendor.py: {lib.name} {lib.version} has no prebuilt archive for host "
+              f"{host or 'unknown'} (listed: {', '.join(lib.hosts)})", file=sys.stderr)
+        return EXIT_NO_HOST
+    ha = lib.hosts[host]
+    if prebuilt_up_to_date(ha, dest):
+        print(f"{ha.name} {ha.version}: {dest} is up to date")
+        return 0
+    sel = select_prebuilt(ha, get_archive(ha, cache, offline))
+    write_prebuilt(ha, sel, dest)
+    print(f"{ha.name} {ha.version}: extracted {len(sel)} files into {dest}")
     return 0
 
 
@@ -659,13 +973,27 @@ def main(argv=None) -> int:
                     help="archive cache (default: $DE_VENDOR_CACHE or ~/.cache/dengine-vendor)")
     ap.add_argument("--toml-fallback", action="store_true",
                     help="use the built-in TOML reader even if tomllib exists (self-test)")
+    def host_args(p, all_hosts: bool) -> None:
+        p.add_argument("--host", help="prebuilt host, <macos|linux|windows>-<arm64|x64> "
+                       "(default: this machine)")
+        if all_hosts:
+            p.add_argument("--all-hosts", action="store_true",
+                           help="check the prebuilt archive of every host")
+
     sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fetch", help="download and (re)write third_party/<name>/")
     f.add_argument("names", nargs="*")
     f.add_argument("--all", action="store_true", help="every library in vendor.toml")
+    host_args(f, True)
     v = sub.add_parser("verify", help="check hashes and that the trees match their archives")
     v.add_argument("names", nargs="*")
     v.add_argument("--offline", action="store_true", help="never download; a missing archive fails")
+    host_args(v, True)
+    pb = sub.add_parser("prebuilt", help="extract the host's prebuilt files into --dest")
+    pb.add_argument("name")
+    pb.add_argument("--dest", required=True, help="output directory (replaced as a whole)")
+    pb.add_argument("--offline", action="store_true", help="never download; a missing archive fails")
+    host_args(pb, False)
     sub.add_parser("list", help="print the pinned libraries")
     h = sub.add_parser("hash", help="print the sha256 of an archive (URL or local file)")
     h.add_argument("src")
@@ -674,6 +1002,9 @@ def main(argv=None) -> int:
     root = os.path.abspath(args.root)
     config = args.config or os.path.join(root, "third_party", "vendor.toml")
     cache = os.path.abspath(args.cache) if args.cache else default_cache()
+    host = getattr(args, "host", None) or current_host()
+    if getattr(args, "host", None) and not HOST_RE.match(args.host):
+        ap.error(f"--host {args.host!r}: expected <macos|linux|windows>-<arm64|x64>")
 
     try:
         if args.cmd == "hash":
@@ -681,19 +1012,25 @@ def main(argv=None) -> int:
         libs = load_config(config, args.toml_fallback)
         if args.cmd == "list":
             return cmd_list(libs)
-        names = getattr(args, "names", [])
+        names = getattr(args, "names", None)
+        if args.cmd == "prebuilt":
+            names = [args.name]
         by_name = {lib.name: lib for lib in libs}
         for n in names:
             if n not in by_name:
                 raise ConfigError(f"unknown library {n!r} (see `vendor.py list`)")
         selected = [by_name[n] for n in names] if names else libs
+        if args.cmd == "prebuilt":
+            return cmd_prebuilt(selected[0], host, cache, os.path.abspath(args.dest),
+                                args.offline)
         if args.cmd == "fetch":
             if not names and not args.all:
                 ap.error("fetch needs library names or --all")
-            return cmd_fetch(selected, root, cache)
+            return cmd_fetch(selected, root, cache, host, args.all_hosts)
         if args.cmd == "verify":
             # With names, only those trees are checked (no scan for unlisted directories).
-            return cmd_verify(selected, root, cache, args.offline, scan_unlisted=not names)
+            return cmd_verify(selected, root, cache, args.offline, scan_unlisted=not names,
+                              host=host, all_hosts=args.all_hosts)
     except ConfigError as e:
         print(f"vendor.py: config error: {e}", file=sys.stderr)
         return 2

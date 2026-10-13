@@ -23,6 +23,23 @@
 #   local         globs of engine-owned files in third_party/<name>/ that the tool never touches
 #                 (default ["CMakeLists.txt", "de_*", "smoke/**", "patches/**"])
 #   patches       local patch files applied in order with `git apply` (prefer none) (default [])
+#   kind          "source" (default): every selected file is committed. "prebuilt": the keys
+#                 above are the committed part (headers, LICENSE), and per-host binary archives
+#                 are pinned in [lib.hosts.<host>] tables. Those archives are never committed:
+#                 vendor.py keeps them in its cache, and cmake/DePrebuilt.cmake extracts the
+#                 target host's files into the build directory at configure time (DENG-390)
+#
+# A prebuilt entry adds one table per host, right after its [[lib]] keys:
+#
+#   [lib.hosts.<host>]  host = macos-arm64 | linux-x64 | windows-x64
+#   url                 the host's release archive
+#   sha256              sha256 of that archive
+#   files               globs of archive paths to extract (symlinks need their target too)
+#   exclude             globs removed again from `files` (default [])
+#   strip               leading path components removed (default 1)
+#
+# The committed part usually points at one of the host archives (the headers are the same in
+# each); with the same url and sha256 both share one cached file.
 
 [[lib]]
 name = "xxhash"
