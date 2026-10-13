@@ -26,6 +26,7 @@
 #include "asset/manifest_internal.h"
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
+#include "cook/importers/texture/texture_import.h"
 #include "cook/lib/de_cooker.h"
 #include "cook/lib/decache.h"
 #include "dpak_writer.h"
@@ -639,6 +640,14 @@ static int cc_setup_runtime(cc_run *run) {
             de__asset_type_get(run->assets, de__asset_type_find(run->assets, names[i]));
         if (td == NULL || de_cooker_register_type(run->cooker, td) != DE_OK)
             return cc_io_error(io, "the cooker refused the asset type", names[i]);
+    }
+    /* DENG-98: the cooker library's own importers for engine types that the asset system does not
+     * register yet (the runtime `texture` type with its loader is DENG-105, which then registers
+     * the same importer and is mirrored above). */
+    if (!de_cooker_has_type(run->cooker, "texture")) {
+        de_asset_type_desc tex = de_texture_import_type_desc();
+        if (de_cooker_register_type(run->cooker, &tex) != DE_OK)
+            return cc_io_error(io, "the cooker refused the asset type", "texture");
     }
     return -1;
 }
