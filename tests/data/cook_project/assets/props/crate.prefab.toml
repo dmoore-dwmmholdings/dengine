@@ -1,0 +1,11 @@
+# A prefab with the test component CookSpin (registered by the tests), whose `icon` names the
+# blob data/hello: a cook dependency.
+[[entity]]
+id = "0x1"
+[entity.DeTransform]
+position = [1.0, 2.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.CookSpin]
+speed = 1.5
+icon = "data/hello"

@@ -84,3 +84,6 @@ target_sources(de_host PRIVATE hot_reload.h hot_reload.c)
 # DENG-96: crash reporting (de_crash_install, the crash bundle of src/services/crash) and the
 # `quit` console command, wired into engine create and de_host_run (host_crash.c).
 target_sources(de_host PRIVATE host_crash.h host_crash.c)
+
+# DENG-213: in PACKED mode (Shipping) engine create mounts every game:/*.dpak (host_packs.c).
+target_sources(de_host PRIVATE host_packs.h host_packs.c)

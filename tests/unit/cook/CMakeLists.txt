@@ -90,3 +90,42 @@ if(TARGET test_decache)
     target_compile_definitions(test_decache PRIVATE
         "DE_COOK_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_decache_tmp\"")
 endif()
+
+# DENG-213: `de-cook cook` (tools/cook/cook_cmd.c) in-process on the fixture project
+# tests/data/cook_project/ (identical runs, validation abort, stripped names, usage, the packed
+# host's game:/ packs through host/host_packs.h). cook_project_util.h is shared with
+# tests/unit/pack/test_pack_cli.c. Outputs go to a scratch directory of the build tree.
+de_add_test(NAME cook_cli SOURCES test_cook_cli.c
+            LIBS de_cook_cmd de_cooker de_host de_asset de_task de_platform TIMEOUT 300)
+if(TARGET test_cook_cli)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_cook_cli_tmp")
+    target_include_directories(test_cook_cli PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_cook_cli PRIVATE
+        "DE_COOK_CLI_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_cook_cli_tmp\""
+        "DE_COOK_PROJECT_DIR=\"${DE_ROOT_DIR}/tests/data/cook_project\""
+        "DE_COOK_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()
+
+# DENG-213: the real executables end to end: de-cook cooks the engine-types part of the fixture
+# project (engine.toml) into the build tree, then de-pack verifies, lists and extracts the pack
+# (tests/unit/pack/CMakeLists.txt, fixture cook_cli_engine_pack). The cache goes to the build
+# tree too, never next to the fixture. Cooking needs the runtime importers (DE_HAS_COOKER), so
+# those cases exist in Debug and Dev builds only; elsewhere `de-cook cook` refuses (exit 2).
+if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    de__cook_cli_test(cook_usage 2 "no --platform given.*usage: de-cook cook"
+        cook four_issues/assets.toml --out "${CMAKE_BINARY_DIR}/tests/cook_cli_out/abort")
+    if(CMAKE_BUILD_TYPE MATCHES "^(Debug|Dev)$")
+        set(_de_cook_cli_out "${CMAKE_BINARY_DIR}/tests/cook_cli_out")
+        de__cook_cli_test(engine_project 0
+            "de-cook cook: .*engine.dpak \\(linux\\).*assets cooked: 4 \\(\\+0 sub-assets\\), bundles: 2.*\\[4/4\\]"
+            cook "${DE_ROOT_DIR}/tests/data/cook_project/engine.toml" --platform linux
+            --out "${_de_cook_cli_out}" --cache "${_de_cook_cli_out}/cache" --pack-name engine
+            --jobs 2)
+        set_tests_properties(cook_cli.engine_project PROPERTIES
+            FIXTURES_SETUP cook_cli_engine_pack)
+        de__cook_cli_test(cook_validation_abort 1
+            "four_issues/assets.toml:8: error: .*nothing was cooked"
+            cook four_issues/assets.toml --platform macos --out "${_de_cook_cli_out}/abort"
+            --no-cache)
+    endif()
+endif()

@@ -3,13 +3,15 @@
  * the command, and the command's own code parses the rest.
  *
  *   de-cook --check <assets.toml> [options]    validate a manifest (check.c, DENG-145)
+ *   de-cook cook <assets.toml> [options]       cook a project into a pack (cook_cmd.c, DENG-213)
  *
- * S08 (DENG-213) adds the cook and pack commands here as further entries of `commands`.
+ * Later commands are further entries of `commands`.
  */
 #include <stdio.h>
 #include <string.h>
 
 #include "check.h"
+#include "cook_cmd.h"
 
 static void write_std(void *user, de_cook_stream stream, const char *text, size_t len) {
     (void)user;
@@ -24,6 +26,7 @@ typedef struct command {
 
 static const command commands[] = {
     {"--check", de_cook_check_main},
+    {"cook", de_cook_cook_main},
 };
 
 static void usage(const de_cook_io *io, de_cook_stream stream) {
@@ -31,6 +34,7 @@ static void usage(const de_cook_io *io, de_cook_stream stream) {
                                "\n"
                                "commands:\n"
                                "  --check    validate an asset manifest (assets.toml)\n"
+                               "  cook       cook a project into a .dpak pack\n"
                                "\n"
                                "`de-cook <command> --help` describes a command.\n"
                                "\n";

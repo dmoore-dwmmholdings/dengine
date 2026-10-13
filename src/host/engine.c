@@ -7,6 +7,7 @@
  */
 #include "host/engine_internal.h"
 #include "host/host_crash.h" /* DENG-96 */
+#include "host/host_packs.h" /* DENG-213 */
 
 #include <dengine/de_debug.h>
 #include <dengine/de_input.h> /* DENG-84 */
@@ -195,6 +196,24 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     r = de_asset_system_create(&ad, &e->pub.assets);
     if (r != DE_OK)
         return engine_fail(e, r, "asset system");
+    /* DENG-213: a packed game reads only packs. Every .dpak file of game:/ is mounted at
+     * priority 0 in file-name order (later names override earlier ones); see host_packs.h. A
+     * missing game:/ (an engine made without de_fs_init) counts as no pack. */
+    if (ad.mode == DE_ASSET_MODE_PACKED) {
+        u32 packs = 0;
+        r = de__host_mount_packs(e->pub.assets, DE__HOST_PACK_DIR, a, &packs);
+        if (r == DE_ERR_NOT_FOUND && packs == 0)
+            de_error_clear();
+        else if (r != DE_OK)
+            return engine_fail(e, r, "packs");
+        if (packs == 0)
+            DE_LOG(DE_LOG_WARN, e->log_host,
+                   "no .dpak pack in %s: a packed build loads assets from packs only",
+                   DE__HOST_PACK_DIR);
+        else
+            DE_LOG(DE_LOG_INFO, e->log_host, "mounted %u pack%s from %s", (unsigned)packs,
+                   packs == 1 ? "" : "s", DE__HOST_PACK_DIR);
+    }
     /* The first update with the world attaches the system to it (the de_asset_event type, the
      * DeAssetSystemRef resource, the de.asset_events system in First). Here, at a fixed point
      * before the game, so register_systems can name the event type and the resource, and so the
