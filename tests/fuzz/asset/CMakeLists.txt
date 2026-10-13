@@ -60,3 +60,15 @@ if(DE_BUILD_TOOLS)
             "DE_SCENE_CORPUS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/corpus\"")
     endif()
 endif()
+
+# DENG-395: fuzz_dpak_file, the .dpak file reader (dpak_open: read_meta, then de_file reads of
+# asset data). Each input is written to a scratch file in this build directory (mounted as
+# `fzdpak:/`; the environment variable DE_FUZZ_DPAK_FILE_DIR overrides it) and checked against
+# dpak_open_memory on the same bytes; see fuzz_dpak_file.c. Seeds: the dpak_reader corpus.
+de_add_fuzz_target(NAME dpak_file SOURCES fuzz_dpak_file.c LIBS de_asset de_platform de_tp_zstd
+                   CORPUS corpus/dpak_reader)
+if(TARGET fuzz_dpak_file)
+    target_include_directories(fuzz_dpak_file PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(fuzz_dpak_file PRIVATE
+        "DE_FUZZ_DPAK_FILE_DIR=\"${CMAKE_CURRENT_BINARY_DIR}\"")
+endif()

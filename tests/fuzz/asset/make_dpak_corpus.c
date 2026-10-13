@@ -343,6 +343,11 @@ static const mc_regression k_regressions[] = {
      * an empty section, and section_ptr() then formed a pointer far outside the buffer (UBSan
      * pointer-overflow in check_dicts). Empty sections must have offset 0. */
     {"regress_empty_section_offset.dpak", DE_ERR_PARSE, "empty section with an offset"},
+    /* DENG-395 (fuzz_dpak_file): dictionary.dpak with a damaged zstd chunk. Decoding it with a
+     * fresh ZSTD_DCtx made zstd's ZSTD_prefetchMatch() add 64 to a wrapped prefetch address
+     * (UBSan pointer-overflow in zstd_decompress_block.c). Fixed by the vendored zstd patch
+     * third_party/zstd/patches/0001-prefetch-wrapped-pointer-add.patch. The pack itself opens. */
+    {"regress_zstd_prefetch_overflow.dpak", DE_OK, "zstd prefetch pointer overflow"},
 };
 
 TEST(dpak_corpus, regressions) {
