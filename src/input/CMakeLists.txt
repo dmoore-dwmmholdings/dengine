@@ -32,3 +32,13 @@ set_property(TARGET de_input APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 # DENG-85: context stacks (context_stack.c replaces the DENG-84 minimal version; the state is in
 # context_internal.h, embedded in struct de__actions).
 target_sources(de_input PRIVATE context_internal.h)
+
+# DENG-89: recording / replay per fixed tick (.deir files) and netcode action packing. The module
+# is DETERMINISTIC as a whole (de_add_module above), so these sources already get
+# DE_DETERMINISTIC_FLAGS and tools/determinism_modules.toml covers them through its [[module]]
+# input entry; de_mark_deterministic_sources() is only for files of non-deterministic modules.
+target_sources(de_input PRIVATE
+    record_format.h
+    record.c
+    replay.c
+    pack.c)

@@ -54,3 +54,29 @@ if(TARGET de_input)
             DE_INPUT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
     endif()
 endif()
+
+# DENG-89: recording / replay (.deir) and netcode packing. test_record_replay also compiles the
+# scripted session of the determinism test vector (tests/determinism/input/input_script.c) and
+# checks the checked-in recording there (DE_INPUT_GOLDEN_DIR) with de_det_harness's checksum-file
+# reader. DE_INPUT_TEST_OUT_DIR is a scratch directory in the build tree, mounted writable.
+if(TARGET de_input)
+    set(_de_input_rec_out "${CMAKE_CURRENT_BINARY_DIR}/record_out")
+    file(MAKE_DIRECTORY "${_de_input_rec_out}")
+    de_add_test(NAME record_replay
+                SOURCES test_record_replay.c "${DE_ROOT_DIR}/tests/determinism/input/input_script.c"
+                LIBS de_input de_test_support de_det_harness)
+    de_add_test(NAME pack SOURCES test_pack.c LIBS de_input de_test_support)
+    foreach(_de_input_test test_record_replay test_pack)
+        if(TARGET ${_de_input_test})
+            target_include_directories(${_de_input_test} PRIVATE "${DE_ROOT_DIR}/src")
+        endif()
+    endforeach()
+    if(TARGET test_record_replay)
+        target_include_directories(test_record_replay PRIVATE
+            "${DE_ROOT_DIR}/tests/determinism/input")
+        target_compile_options(test_record_replay PRIVATE ${DE_DETERMINISTIC_FLAGS})
+        target_compile_definitions(test_record_replay PRIVATE
+            DE_INPUT_TEST_OUT_DIR="${_de_input_rec_out}"
+            DE_INPUT_GOLDEN_DIR="${DE_ROOT_DIR}/tests/determinism/input")
+    endif()
+endif()

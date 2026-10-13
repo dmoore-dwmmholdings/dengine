@@ -111,6 +111,11 @@ struct de__actions {
     /* DENG-85: `active` is the applied stack, bottom to top, each map once (kept for readers of
      * the DENG-84 fields); the full state is here (context_internal.h). */
     de__context_state context;
+
+    /* DENG-89: tick views of the netcode players 1 .. DE_INPUT_MAX_PLAYERS - 1, by action index
+     * (player 0 is de__action.tick). Written by de_input_unpack_actions (pack.c), read by the
+     * de_action_*_p queries. Zeroed with the block, so a slot nobody unpacked is idle. */
+    de__action_state players[DE_INPUT_MAX_PLAYERS - 1][DE_ACTION_MAX_ACTIONS];
 };
 
 /* ---------- Storage, handles, iteration (action_map.c) ---------- */
@@ -190,6 +195,9 @@ void de__action_tick_override(de_input *in, void (*fn)(de_input *in, u64 tick, v
                               void *user);
 /** True when the calling thread runs a FixedUpdate system (queries then read the tick view). */
 bool de__actions_in_fixed_update(void);
+
+/* DENG-89: recording, replay and packing (record.c, replay.c, pack.c) declare their shared
+ * internals in record_format.h. */
 
 /* ---------- Context stack (context_stack.c, DENG-85; state in context_internal.h) ---------- */
 

@@ -1043,19 +1043,162 @@ DE_API de_result de_bindings_load(de_input *in, const char *vpath);
 DE_API const char *de_action_glyph_id(const de_input *in, de_action a);
 
 /* ---------- Recording / replay (per fixed tick, resolved actions) ---------- */
+
+/*
+ * Recording, replay and netcode packing (S21, DENG-89). SPEC §15, §16.2, §19.4, §5.7.
+ *
+ * What is recorded is the resolved action stream: the tick view of every action (see "Two views"
+ * above), once per fixed tick, never raw devices. The stream is QUANTIZED, and the simulation
+ * reads the quantized values too, so a live run and its replay (or a remote peer that unpacks
+ * the same bytes) are bitwise identical on every platform:
+ *   - Button: `held` and `triggered`, one bit each. The value is 1 while held, else 0.
+ *   - 1D axis: x as an i16, round_half_away(clamp(v, -1, 1) * 32767). 2D axis: x and y the same.
+ *     The value read back is q / 32767.0f. `held` is derived from the quantized value
+ *     (magnitude >= press_threshold) and `triggered` is always false: axis actions carry no
+ *     interaction edges in the quantized stream (bind a button action for an edge). Values
+ *     outside [-1, 1] (mouse delta in points, scaled bindings) are clamped: give such bindings
+ *     a `scale` that maps the useful range into [-1, 1].
+ * Quantization is a tick override (action_internal.h). de_input_record_begin() and
+ * de_input_set_tick_quantization() turn it on, and it stays on until
+ * de_input_set_tick_quantization(in, false); a replay quantizes while it runs. Only the tick view
+ * is quantized and replayed; the frame view (queries outside FixedUpdate) stays live.
+ *
+ * File format (.deir v1, little-endian, src/input/record_format.h): magic "DEIR", version,
+ * the action-map schema hash (map and action names and action types in declaration order), the
+ * tick rate, the start tick and tick count, the action type table, then self-contained chunks of
+ * delta-encoded tick records, then an XXH3-64 checksum of everything before it.
+ *
+ * Threading: main thread only, like the rest of the input state. Destroy a recording before the
+ * input state it was made with.
+ */
 typedef struct de_input_recording de_input_recording;
-DE_API de_result de_input_record_begin(de_input *in, const de_allocator *a,
+
+/** Players with a tick view: 0 is the local player (the action's own tick view), 1 ..
+ * DE_INPUT_MAX_PLAYERS - 1 are slots that de_input_unpack_actions() fills (netcode). */
+#define DE_INPUT_MAX_PLAYERS 8
+/** Full-scale magnitude of a quantized axis value. */
+#define DE_INPUT_AXIS_QUANT 32767
+
+/** de_input_record_begin() parameters. `(de_input_record_desc){0}` is valid. */
+typedef struct de_input_record_desc {
+    /** Allocator of the recording (its chunks); NULL = the input state's allocator. */
+    const de_allocator *allocator;
+    /** Fixed ticks per second, stored in the file header; 0 = 60. */
+    u32 tick_rate;
+    /** Ticks to preallocate room for, at the worst-case record size of the current schema.
+     * Recording that many ticks allocates nothing in de_input_record_tick(). 0 = one chunk. */
+    u32 reserve_ticks;
+} de_input_record_desc;
+
+/**
+ * Starts a recording of every action of `in`, in declaration order (all maps, active or not).
+ * The schema (maps, actions and their types) is fixed from here on: adding an action, or
+ * replacing one with another type, makes the next de_input_record_tick() fail. Turns tick
+ * quantization on (see above); call it before the FixedUpdate of the first recorded tick.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `in` or `out`, no actions); DE_ERR_BUSY (another
+ *         tick override than recording and replay is installed); DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_input_record_begin(de_input *in, const de_input_record_desc *desc,
                                        de_input_recording **out);
-DE_API void de_input_record_tick(de_input *in, de_input_recording *rec, u64 tick);
+/**
+ * Appends the current tick view of every action as fixed tick `tick`. Call it once per fixed
+ * tick, after the tick's latch (from a FixedUpdate system that reads de_input_resource, or after
+ * the FixedUpdate run). Ticks must increase; gaps are allowed. Allocates only when a chunk fills
+ * (never within de_input_record_desc.reserve_ticks).
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (bad arguments, `tick` not after the last recorded tick,
+ *         a recording made by de_input_replay_load, or the schema changed);
+ *         DE_ERR_OUT_OF_MEMORY. A failed tick is not recorded; the recording stays valid.
+ */
+DE_API de_result de_input_record_tick(de_input *in, de_input_recording *rec, u64 tick);
+/**
+ * Writes the recording to `vpath` (any writable mount: "dev:/", "user:/"), replacing the file
+ * atomically. A loaded recording can be saved again; the bytes are the same.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT; DE_ERR_OUT_OF_MEMORY; the file error.
+ */
 DE_API de_result de_input_record_save(const de_input_recording *rec, const char *vpath);
+/**
+ * Loads a recording made with the same action-map schema as `in` and installs the replay tick
+ * override: from now on every fixed tick takes the tick view of every action from the
+ * recording (the tick selected by de_input_replay_tick), and live device input does not reach
+ * the tick view. The previous tick override is kept and comes back when the replay ends.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (bad arguments, or a schema-hash or action-type
+ *         mismatch: the message names both hashes); DE_ERR_PARSE (not a .deir file, a truncated
+ *         or corrupt file, a bad checksum); DE_ERR_VERSION_MISMATCH (another format version);
+ *         DE_ERR_BUSY (a replay of `in` is running); the file error; DE_ERR_OUT_OF_MEMORY.
+ */
 DE_API de_result de_input_replay_load(de_input *in, const char *vpath, de_input_recording **out);
-DE_API bool de_input_replay_tick(de_input *in, de_input_recording *rec,
-                                 u64 tick); /* false at end */
+/**
+ * Selects recorded tick `tick` (recording tick numbers: de_input_recording_first_tick() ..
+ * de_input_recording_last_tick()) for the next fixed tick: call it before that tick's
+ * FixedUpdate. A tick before the first is idle; a tick the recording skipped repeats the
+ * previous recorded state without its triggers. Seeking backwards works (it decodes from the
+ * start of the chunk). Each recorded trigger is reported in exactly one tick.
+ * @return true while `tick` is inside the recording; false after the last tick, which also
+ *         removes the replay override (the previous override is restored).
+ */
+DE_API bool de_input_replay_tick(de_input *in, de_input_recording *rec, u64 tick);
+/** Ends a replay if it still runs (restoring the previous tick override) and frees `rec`.
+ * NULL is ignored. */
+DE_API void de_input_recording_destroy(de_input_recording *rec);
+/** Recorded ticks. */
+DE_API u32 de_input_recording_tick_count(const de_input_recording *rec);
+/** The first and last recorded tick numbers (0 when the recording is empty). */
+DE_API u64 de_input_recording_first_tick(const de_input_recording *rec);
+DE_API u64 de_input_recording_last_tick(const de_input_recording *rec);
+/** The tick rate of the header (de_input_record_desc.tick_rate). */
+DE_API u32 de_input_recording_tick_rate(const de_input_recording *rec);
+/** The action-map schema hash of the recording. */
+DE_API u64 de_input_recording_schema(const de_input_recording *rec);
+/** The schema hash of the actions of `in` now (0 without actions). */
+DE_API u64 de_input_schema_hash(const de_input *in);
+/** Checksum of a recording: the trailing XXH3-64 of the file de_input_record_save() writes, so
+ * equal recordings give equal checksums on every platform (0 for NULL or out of memory). */
+DE_API u64 de_input_recording_checksum(const de_input_recording *rec);
+/** XXH3-64 of the quantized tick view of every action of `in` (player 0), in declaration order:
+ * the per-tick input checksum of determinism tests. 0 without actions. */
+DE_API u64 de_input_tick_checksum(const de_input *in);
+/**
+ * Keeps tick quantization on (or turns it off) outside recording and replay, so that the
+ * simulation reads quantized tick views in a live session too (lockstep and rollback netcode).
+ * During a replay, the setting applies when the replay ends. Turning it off leaves another
+ * (foreign) tick override alone.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `in`); DE_ERR_BUSY (turning it on while another
+ *         tick override is installed); DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_input_set_tick_quantization(de_input *in, bool on);
+/** True while the tick view is quantized (quantization on, a recording or a replay). */
+DE_API bool de_input_tick_quantization(const de_input *in);
 
 /* Serialized action state for netcode (rollback/lockstep exchange inputs, not raw devices). */
+
+/**
+ * Packs the quantized tick view of every action of map `m`, in declaration order, into a bit
+ * stream (first bit = bit 0 of byte 0): 2 bits per button (held, triggered), 16 per 1D axis, 32
+ * per 2D axis (x, then y), as two's-complement i16. The last byte is zero-padded. 16 buttons and
+ * 2 sticks take 12 bytes. The layout depends only on the map's action types, so it is the same
+ * on every platform.
+ * @return the bytes written; 0 for a bad map, a map without actions, or `max_bytes` too small.
+ */
 DE_API u32 de_input_pack_actions(const de_input *in, de_action_map m, void *dst, u32 max_bytes);
-DE_API void de_input_unpack_actions(de_input *in, de_action_map m, u32 player, const void *src,
+/** The bytes de_input_pack_actions() needs for map `m` (0 for a bad map). */
+DE_API u32 de_input_packed_size(const de_input *in, de_action_map m);
+/**
+ * Unpacks a de_input_pack_actions() stream of map `m` into player `player`'s tick view: player
+ * 0 overwrites the actions' own tick view (call it after the tick's latch), players 1 ..
+ * DE_INPUT_MAX_PLAYERS - 1 fill their slots (read with de_action_*_p). Axis `held` is derived
+ * from the unpacked value, as in quantization.
+ * @return true when applied; false (nothing changed) for a bad map or player, a size other than
+ *         de_input_packed_size(), set padding bits, or an axis value of -32768.
+ */
+DE_API bool de_input_unpack_actions(de_input *in, de_action_map m, u32 player, const void *src,
                                     u32 bytes);
+/** Per-player queries. Player 0 is de_action_triggered / held / value / value2 (tick view in
+ * FixedUpdate, else frame view); players 1 .. DE_INPUT_MAX_PLAYERS - 1 read their unpacked
+ * slot. False or zero for a bad handle or player. */
+DE_API bool de_action_triggered_p(const de_input *in, de_action a, u32 player);
+DE_API bool de_action_held_p(const de_input *in, de_action a, u32 player);
+DE_API f32 de_action_value_p(const de_input *in, de_action a, u32 player);
+DE_API de_vec2 de_action_value2_p(const de_input *in, de_action a, u32 player);
 
 DE_EXTERN_C_END
 #endif
