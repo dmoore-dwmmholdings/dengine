@@ -86,12 +86,21 @@ typedef struct de_asset_system_desc {
      * a new one in, before it goes to its type's `unload` (GPU frames in flight may still use
      * it). 0 = 3, the frames in flight. */
     u32 reload_retire_frames;
+    /* DENG-215: the type registry the `scene` and `prefab` importer reads component types from
+     * (normally the world's, de_world_types). NULL: scenes and prefabs fail to cook. Must outlive
+     * the system; only read (by cooks, on cook threads), so register types before loading. */
+    de_type_registry *types;
+    /* DENG-215: true = do not register the built-in types `blob`, `scene` and `prefab` at create
+     * (tests and tools that register their own types of those names). */
+    bool no_builtin_types;
 } de_asset_system_desc;
 
 /**
  * Creates an asset system. `(de_asset_system_desc){0}` is valid: the default heap, no task
  * system, source mode, the defaults listed in the desc, and no locale. Strings in the desc are
- * copied. The allocator (and `tasks`) must outlive the system.
+ * copied. The allocator (and `tasks`) must outlive the system. Unless `no_builtin_types`, the
+ * built-in types `blob`, `scene` and `prefab` are registered (DENG-215; see "Blobs, scenes and
+ * prefabs").
  * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`out` is NULL), DE_ERR_OUT_OF_MEMORY.
  */
 DE_API de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_system **out);
@@ -385,6 +394,12 @@ DE_API de_sound de_asset_sound(de_asset_system *s, de_asset_id id);
 DE_API de_font de_asset_font(de_asset_system *s, de_asset_id id);
 DE_API de_prefab de_asset_prefab(de_asset_system *s, de_asset_id id);
 DE_API de_blob de_asset_blob(de_asset_system *s, de_asset_id id);
+/**
+ * The bytes of a READY `blob` asset: exactly the source file's bytes, followed by a NUL that is
+ * not counted, with their count in `*size` (may be NULL). NULL (and size 0) for an invalid or
+ * stale handle, or a blob that is not loaded. Valid until the asset is evicted or reloaded. Any
+ * thread, as long as the asset stays loaded (DENG-215).
+ */
 DE_API const void *de_blob_data(de_asset_system *s, de_blob b, u64 *size);
 
 /* ---------- Custom asset types ---------- */
@@ -607,6 +622,60 @@ DE_API const de_allocator *de_asset_import_allocator(de_asset_import_ctx *ctx);
 DE_API de_result de_asset_import_fail(de_asset_import_ctx *ctx, de_result result, const char *fmt,
                                       ...) DE_PRINTF_FMT(3, 4);
 /* ---------- End of the import context (DENG-209) ---------- */
+
+/* ---------- Blobs, scenes and prefabs (DENG-215) ----------
+ *
+ * Built-in types, registered at de_asset_system_create (SPEC §11.1, §11.6, §9.2):
+ *
+ * - `blob`: raw bytes. Packs and the cooker copy the source unchanged (the asset setting
+ *   `compress = true|false` only decides whether a pack compresses it); de_blob_data reads them.
+ * - `scene` and `prefab`: TOML sources (DENG-2 Q9), cooked to a binary scene. A prefab has
+ *   exactly one root entity; a scene any number. Source:
+ *
+ *       [[entity]]
+ *       id = "0x9f3a6c0d5e2b4471"     # stable 64-bit scene ID (de_scene_id_new), or an integer
+ *       parent = "0x1c2d..."          # optional: another entity of the same file
+ *       [entity.Health]               # one table per component, named by its reflected type
+ *       current = 75.0
+ *       [entity.Sprite]
+ *       texture = "ui/heart"          # ASSET fields: an asset ID path (a cook dependency)
+ *       target = "0x1c2d..."          # ENTITY fields: the scene ID of an entity of the file
+ *
+ *   Component tables are read with the text serializer (de_deserialize_object rules) against
+ *   de_asset_system_desc.types and written with the binary serializer (self-describing). An
+ *   unknown component type, an unknown field and a key that is not `id`, `parent` or a table
+ *   log a warning and are skipped. `DeChildOf` and `DeChildren` tables are skipped too: the
+ *   hierarchy comes from `parent`. Asset references are cook dependencies and load before the
+ *   scene or prefab is READY. The output depends only on the content: entities are sorted by
+ *   scene ID and components by type name, so the key order of the TOML never matters.
+ */
+
+/** A `scene` asset as a de_prefab handle: a scene is a prefab with any number of roots, and
+ * de_prefab_instantiate spawns both. Like the typed accessors above (type "scene"). */
+DE_API de_prefab de_asset_scene(de_asset_system *s, de_asset_id id);
+
+/**
+ * Spawns a READY prefab or scene `p` into world `w` (immediate mode: main thread, not inside a
+ * running system; commands are a later task). Every entity is spawned with its components; each
+ * component is found in `w` by its type name (de_component_find) and read with the binary
+ * serializer from the world's type registry. A stored type version older than the registered one
+ * runs the type's `migrate` hook; a component whose type is not a component of `w` is skipped
+ * with a warning, and so is one that `migrate` drops. ENTITY fields that name a scene ID of the
+ * file point at the entity spawned for it (else DE_ENTITY_NULL); ASSET fields become typed
+ * handles (typed access by the field's asset type). Then `parent` links are set with
+ * de_entity_set_parent, children in scene-ID order, and the roots are parented to `parent`
+ * (DE_ENTITY_NULL: they stay roots).
+ *
+ * `out_root` (nullable) gets the root entity: the prefab's one root, or a scene's first root in
+ * scene-ID order (DE_ENTITY_NULL for an empty scene).
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL system or world, a handle that is not a prefab or
+ *         scene, `parent` not alive); DE_ERR_NOT_FOUND (not loaded); DE_ERR_PARSE (a component's
+ *         bytes are damaged); DE_ERR_OUT_OF_MEMORY; the ECS's errors. On failure every entity
+ *         spawned so far is despawned again.
+ */
+DE_API de_result de_prefab_instantiate(de_asset_system *s, de_world *w, de_prefab p,
+                                       de_entity parent, de_entity *out_root);
+/* ---------- End of blobs, scenes and prefabs (DENG-215) ---------- */
 
 /* ---------- Streaming and residency ---------- */
 /*

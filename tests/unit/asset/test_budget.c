@@ -145,7 +145,8 @@ static void register_types(bud_fx *f) {
 static void bud_fx_setup(bud_fx *f) {
     g_fx = f;
     f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_ASSET);
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.allocator = &f->alloc}, &f->s),
+    ASSERT_EQ(de_asset_system_create(
+                  &(de_asset_system_desc){.allocator = &f->alloc, .no_builtin_types = true}, &f->s),
               DE_OK);
     de__load_backend be = {
         .submit = bk_submit, .cancel = bk_cancel, .reprioritize = bk_reprioritize, .user = f};

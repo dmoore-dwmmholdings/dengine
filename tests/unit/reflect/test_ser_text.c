@@ -1126,3 +1126,50 @@ TEST(text, doc_arguments) {
     EXPECT_EQ(de_text_doc_begin(NULL, NULL), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_text_doc_end(NULL), DE_ERR_INVALID_ARGUMENT);
 }
+
+/* ---- de_text_doc_read_member (DENG-215) ----------------------------------------------------- */
+
+/* A component sub-table of a `[[entity]]` entry, as scene files hold them. */
+TEST_F(text, doc_read_member, text_fx) {
+    static const char k_text[] = "[[entity]]\n"
+                                 "id = 1\n"
+                                 "[entity.TItem]\n"
+                                 "id = 7\n"
+                                 "count = -3\n"
+                                 "\n"
+                                 "[[entity]]\n"
+                                 "id = 2\n"
+                                 "TItem = { count = 5, nope = 1 }\n"
+                                 "[TItem]\n"
+                                 "id = 9\n";
+    de_text_doc *d = NULL;
+    ASSERT_EQ(de_text_doc_parse(NULL, k_text, sizeof k_text - 1u, "scene.toml", &d), DE_OK);
+    TItem it = {0, 0};
+    ASSERT_EQ(de_text_doc_read_member(d, "entity", 0, "TItem", f->r, f->ids.item, &it, NULL),
+              DE_OK);
+    EXPECT_EQ(it.id, 7u);
+    EXPECT_EQ(it.count, -3);
+    it.id = 100; /* the inline table does not name `id`: it keeps its value */
+    ASSERT_EQ(de_text_doc_read_member(d, "entity", 1, "TItem", f->r, f->ids.item, &it, NULL),
+              DE_OK);
+    EXPECT_EQ(it.id, 100u);
+    EXPECT_EQ(it.count, 5);
+    EXPECT_TRUE(warned_about("nope"));
+    /* NULL key: a table of the top level. */
+    ASSERT_EQ(de_text_doc_read_member(d, NULL, 0, "TItem", f->r, f->ids.item, &it, NULL), DE_OK);
+    EXPECT_EQ(it.id, 9u);
+
+    EXPECT_EQ(de_text_doc_read_member(d, "entity", 0, "TMissing", f->r, f->ids.item, &it, NULL),
+              DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_text_doc_read_member(d, "entity", 0, "id", f->r, f->ids.item, &it, NULL),
+              DE_ERR_PARSE);
+    EXPECT_TRUE(strstr(last_message(), "not a table") != NULL);
+    EXPECT_EQ(de_text_doc_read_member(d, "entity", 2, "TItem", f->r, f->ids.item, &it, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_text_doc_read_member(d, "entity", 0, NULL, f->r, f->ids.item, &it, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_text_doc_read_member(NULL, "entity", 0, "TItem", f->r, f->ids.item, &it, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    de_text_doc_destroy(d);
+    de_error_clear();
+}

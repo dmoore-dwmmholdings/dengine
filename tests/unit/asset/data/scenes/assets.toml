@@ -1,0 +1,16 @@
+# DENG-215 fixtures: blobs, scenes and prefabs (tests/unit/asset/test_blob_type.c and
+# test_scene_cook.c). Mounted read-only as scn:/.
+[project]
+asset_root = "assets"
+
+[assets]
+"levels/level"     = { type = "scene",  source = "level.scene.toml" }
+"levels/reordered" = { type = "scene",  source = "level_reordered.scene.toml" }
+"levels/unknown"   = { type = "scene",  source = "unknown.scene.toml" }
+"levels/migrate"   = { type = "scene",  source = "migrate.scene.toml" }
+"levels/bad_ref"   = { type = "scene",  source = "bad_parent.scene.toml" }
+"props/crate"      = { type = "prefab", source = "crate.prefab.toml" }
+"props/two_roots"  = { type = "prefab", source = "two_roots.prefab.toml" }
+"ui/heart"         = { type = "blob",   source = "heart.bin", compress = false }
+"ui/empty"         = { type = "blob",   source = "empty.bin" }
+"ui/missing"       = { type = "blob",   source = "missing.bin" }

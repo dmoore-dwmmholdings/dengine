@@ -97,6 +97,14 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
         de_asset_system_destroy(s);
         return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_asset_system_create: out of memory");
     }
+    /* DENG-215: the built-in types `blob`, `scene` and `prefab`. */
+    if (!d.no_builtin_types) {
+        de_result br = de__register_builtin_types(s);
+        if (br != DE_OK) {
+            de_asset_system_destroy(s);
+            return DE_FAIL_WRAP(br, "de_asset_system_create: built-in asset types");
+        }
+    }
 
     *out = s;
     return DE_OK;

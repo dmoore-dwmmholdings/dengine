@@ -442,6 +442,24 @@ DE_API de_result de_text_doc_read_object(const de_text_doc *doc, const char *tab
                                          const de_ser_options *opt);
 
 /**
+ * Reads the table `member` of entry `index` of `[[table_key]]` (NULL key = the top-level table)
+ * into `obj`, with the rules of de_deserialize_object (DENG-215). A scene entity keeps one such
+ * table per component:
+ *
+ *     [[entity]]
+ *     id = "0x00000000000000a1"
+ *     [entity.Health]
+ *     current = 5.0
+ *
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (bad id, NULL argument, no such entry), DE_ERR_NOT_FOUND
+ *         (the entry has no key `member`), DE_ERR_PARSE (also: `member` is not a table),
+ *         DE_ERR_VERSION_MISMATCH or DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_text_doc_read_member(const de_text_doc *doc, const char *table_key, u32 index,
+                                         const char *member, const de_type_registry *r,
+                                         de_type_id type, void *obj, const de_ser_options *opt);
+
+/**
  * Field access by path, for UI binding, the inspector and scripting. A path is segments joined
  * by '.': a field name of the current struct, optionally followed by `[n]` on a FIXED_ARRAY
  * field; or, after a vector field (VEC2/3/4, DVEC3, QUAT, COLOR), a component `x` `y` `z` `w`

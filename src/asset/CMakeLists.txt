@@ -82,3 +82,10 @@ set_property(TARGET de_asset APPEND PROPERTY DE_MODULE_LIBS de_tp_xxhash)
 # asset IDs. manifest_diff.c: per-asset digests of two manifests and their diff.
 target_sources(de_asset PRIVATE hot_reload.c hot_reload_internal.h reverse_index.c
                                 manifest_diff.c)
+
+# DENG-215: the built-in asset types. blob_type.c: `blob` (raw bytes, de_blob_data) and the
+# registration of the built-ins at create; scene/: `scene` and `prefab` (scene_format.h: the cooked
+# format; scene_type.c: format check, loader, and the TOML importer, which exists only with the
+# cooker, DE_HAS_COOKER; scene_instantiate.c: de_prefab_instantiate).
+target_sources(de_asset PRIVATE blob_type.c scene/scene_format.h scene/scene_type.c
+                                scene/scene_instantiate.c)

@@ -1,0 +1,26 @@
+# Three entities in a chain (a1 -> b2 -> c3) and two component types. The same content as
+# level_reordered.scene.toml, written in another order: both cook to the same bytes.
+[[entity]]
+id = "0x00000000000000a1"
+[entity.THealth]
+current = 75.5
+max = 100.0
+
+[[entity]]
+id = "0x00000000000000b2"
+parent = "0x00000000000000a1"
+[entity.THealth]
+current = 10.0
+max = 20.0
+[entity.TTarget]
+target = "0x00000000000000c3"
+texture = "ui/heart"
+speed = 2.5
+
+[[entity]]
+id = "0x00000000000000c3"
+parent = "0x00000000000000b2"
+[entity.TTarget]
+target = "0x00000000000000a1"
+texture = "ui/heart"
+speed = -1.25

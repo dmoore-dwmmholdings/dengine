@@ -23,7 +23,8 @@ typedef struct types_fx {
 
 static void types_fx_setup(types_fx *f) {
     f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_ASSET);
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.allocator = &f->alloc}, &f->s),
+    ASSERT_EQ(de_asset_system_create(
+                  &(de_asset_system_desc){.allocator = &f->alloc, .no_builtin_types = true}, &f->s),
               DE_OK);
 }
 
@@ -214,7 +215,9 @@ TEST_F(asset_types, capacity_and_oom, types_fx) {
     de_tracking_allocator t2;
     de_allocator a2 = de_tracking_allocator_init(&t2, NULL, DE_MEM_ASSET);
     de_asset_system *s2 = NULL;
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.allocator = &a2}, &s2), DE_OK);
+    ASSERT_EQ(de_asset_system_create(
+                  &(de_asset_system_desc){.allocator = &a2, .no_builtin_types = true}, &s2),
+              DE_OK);
     for (i64 n = 0; n < 3; ++n) {
         de_tracking_allocator_fail_after(&t2, n);
         de_asset_type r = de_asset_type_register(s2, &(de_asset_type_desc){.name = "x"});

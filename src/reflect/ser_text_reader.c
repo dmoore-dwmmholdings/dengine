@@ -967,3 +967,29 @@ de_result de_text_doc_read_object(const de_text_doc *doc, const char *table_key,
     opt = default_options(opt, &defaults);
     return de__ser_text_read_table(r, type, obj, opt, t, doc->a, doc->source);
 }
+
+/* DENG-215: one sub-table of an entry (a component table of a scene entity). */
+de_result de_text_doc_read_member(const de_text_doc *doc, const char *table_key, u32 index,
+                                  const char *member, const de_type_registry *r, de_type_id type,
+                                  void *obj, const de_ser_options *opt) {
+    if (doc == NULL || member == NULL || r == NULL || obj == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_text_doc_read_member: NULL document, member, registry or object");
+    const toml_datum_t *t = doc_entry(doc, table_key, index);
+    if (t == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "%s: no entry %u of [[%s]]", doc->source,
+                       (unsigned)index, table_key ? table_key : "(top level)");
+    for (int32_t i = 0; i < t->u.tab.size; ++i) {
+        if (strcmp(t->u.tab.key[i], member) != 0)
+            continue;
+        const toml_datum_t *v = &t->u.tab.value[i];
+        if (v->type != TOML_TABLE)
+            return DE_FAIL(DE_ERR_PARSE, "%s:%d: %s is %s, not a table", doc->source,
+                           (int)v->lineno, member, toml_type_name(v->type));
+        de_ser_options defaults;
+        opt = default_options(opt, &defaults);
+        return de__ser_text_read_table(r, type, obj, opt, v, doc->a, doc->source);
+    }
+    return DE_FAIL(DE_ERR_NOT_FOUND, "%s: entry %u of [[%s]] has no table %s", doc->source,
+                   (unsigned)index, table_key ? table_key : "(top level)", member);
+}

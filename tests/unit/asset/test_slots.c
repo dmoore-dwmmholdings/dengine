@@ -88,7 +88,8 @@ typedef struct sys_fx {
 
 static void sys_fx_setup(sys_fx *f) {
     f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_ASSET);
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.allocator = &f->alloc}, &f->s),
+    ASSERT_EQ(de_asset_system_create(
+                  &(de_asset_system_desc){.allocator = &f->alloc, .no_builtin_types = true}, &f->s),
               DE_OK);
 }
 

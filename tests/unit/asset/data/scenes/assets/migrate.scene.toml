@@ -1,0 +1,6 @@
+# Cooked with THealth version 1 ({ hp }); instantiated where THealth is version 2
+# ({ current, max }) with a migrate hook.
+[[entity]]
+id = "0x5"
+[entity.THealth]
+hp = 42.0
