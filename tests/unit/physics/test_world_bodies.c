@@ -549,8 +549,12 @@ TEST(physics_world, step_no_alloc) {
     ASSERT_TRUE(DE_HANDLE_VALID(hull));
     for (u32 k = 0; k < 1000; ++k)
         (void)make_body(p, (de_body_type)(k % 3u), (k & 1u) ? box : hull, (f64)k);
+    /* Warm-up: the first step creates the broadphase and the contacts state (DENG-135). */
+    de_physics_step(p, 1.0f / 60.0f);
     const de_tracking_stats before = de_tracking_allocator_stats(&t);
-    for (u32 s = 0; s < 120; ++s) {
+    /* 30 steps: since DENG-135 every step collides the ~2000 overlapping pairs of this chain,
+     * which is slow in Debug sanitizer builds (TSan); the allocation check needs no more. */
+    for (u32 s = 0; s < 30; ++s) {
         for (u32 k = 0; k < 1000; k += 7)
             p->bodies.position[k].y += 0.01;
         de_physics_step(p, 1.0f / 60.0f);

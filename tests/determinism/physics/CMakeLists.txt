@@ -106,3 +106,6 @@ cmake_language(DEFER CALL de__phys_det_registry_test)
 # DENG-136 (S22): collision-only scenarios.
 de_phys_det_add_scenarios(SOURCES scenarios_collision.c
     SCENARIOS kinematic_sweep hull_builder mass_props)
+
+# DENG-135 (S22): the collision pipeline (manifolds, touch state, warm-start carry-over).
+de_phys_det_add_scenarios(SOURCES scenarios_contacts.c SCENARIOS contact_pile)
