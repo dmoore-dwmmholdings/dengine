@@ -25,6 +25,13 @@
  * whatever the insertion order, the move history, the fat margin or the tree shape (SPEC §13.2).
  * Duplicates are removed by sorting (de_radix_sort_u64), never by iterating a hash map.
  *
+ * Predictive boxes (DENG-219). de__ccd_prepare grows each moving body's box by its motion over
+ * the step (de__broadphase_set_predict). Every rule above then uses the *predictive* box
+ * (world_aabb grown, rounded outward) instead of world_aabb: the fat box holds it, and the output
+ * is the candidates whose predictive boxes overlap (or are within the pair distance). Zero growth
+ * (the default, and every static body) is exactly world_aabb, so growth only adds pairs and the
+ * output stays sorted by (a, b).
+ *
  * Memory. Everything is allocated at create from the world allocator: the node pool
  * (2 * max_bodies nodes), per-body proxy arrays, and the pair buffers (max_pairs entries,
  * `physics.broadphase.max_pairs`, 0 = 4 * max_bodies, at least 1024). Update, pair finding and the
@@ -172,6 +179,20 @@ void de__broadphase_sync(de_physics_world *p);
 
 /** Counters; zeroes when the broadphase was not created. */
 void de__broadphase_stats(const de_physics_world *p, de__bp_stats *out);
+
+/**
+ * DENG-219: predictive growth of body `index`'s box from the next update or sync on: `lo` is
+ * subtracted from world_aabb.min, `hi` added to world_aabb.max (m, per axis). Negative or
+ * non-finite components count as 0. The growth stays until set again; a new body (or a reused
+ * index) starts with none. No effect before the broadphase exists or for an index without a
+ * proxy slot.
+ */
+void de__broadphase_set_predict(de_physics_world *p, u32 index, de_vec3 lo, de_vec3 hi);
+
+/** DENG-219: body `index`'s predictive box (world_aabb grown by its growth, rounded outward);
+ *  world_aabb when it has none or the broadphase does not exist. `p` not NULL, `index` below
+ *  max_bodies. */
+de_aabb de__broadphase_predict_box(const de_physics_world *p, u32 index);
 
 /**
  * Checks both trees (de__tree_validate) and the proxy table: every live body with a shape has

@@ -11,6 +11,7 @@
 #include "physics/contact/manifold.h"
 #include "physics/physics_internal.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -233,6 +234,7 @@ TEST(physics_pipeline, manifold_invariants_and_touch_bookkeeping) {
     ASSERT_TRUE(prev != NULL);
     u32 n_prev = 0;
     u32 ticks_with_contacts = 0, total_begin = 0, total_end = 0, trigger_ticks = 0, accum = 0;
+    u32 spec_far = 0; /* DENG-219: points beyond the 2 cm margin (fast pairs) */
     u32 kinds_seen = 0, pairs_seen = 0;
     for (u32 t = 0; t < SC_TICKS; ++t) {
         scene_tick(&s, t);
@@ -273,7 +275,10 @@ TEST(physics_pipeline, manifold_invariants_and_touch_bookkeeping) {
             accum += (x->flags & (u32)DE__MANIFOLD_ACCUMULATE) ? 1u : 0u;
             points += x->point_count;
             for (u32 a = 0; a < x->point_count; ++a) {
-                EXPECT_TRUE(x->points[a].separation <= 0.0200001f);
+                /* DENG-219: the 2 cm margin, or up to physics.ccd.speculative_max (1 m) for a
+                 * pair that approaches fast (per-pair speculative distance). */
+                EXPECT_TRUE(x->points[a].separation <= 1.0000001f);
+                spec_far += x->points[a].separation > 0.0200001f ? 1u : 0u;
                 for (u32 b = a + 1; b < x->point_count; ++b)
                     EXPECT_NE(x->points[a].feature_id, x->points[b].feature_id);
             }
@@ -335,6 +340,7 @@ TEST(physics_pipeline, manifold_invariants_and_touch_bookkeeping) {
     EXPECT_GT(total_end, 100u);
     EXPECT_GT(trigger_ticks, 0u);
     EXPECT_GT(accum, 0u);
+    printf("  points beyond the 2 cm margin (per-pair speculative distance): %u\n", spec_far);
     EXPECT_EQ(kinds_seen, 0xFFu); /* every shape kind takes part */
     de_physics_destroy(s.p);
 }

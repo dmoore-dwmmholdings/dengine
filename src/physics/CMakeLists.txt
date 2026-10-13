@@ -129,3 +129,10 @@ if(TARGET de_physics)
         character/character.c
         character/character_move.c)
 endif()
+
+# DENG-219: CCD. ccd.c replaces the DENG-217 stub (listed above): per-body predictions for the
+# broadphase's predictive boxes and the per-pair speculative distance (contact/manifold.c), and
+# the swept time of impact of bullets (DE_BODY_FLAG_CCD).
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE ccd_internal.h)
+endif()

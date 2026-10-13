@@ -266,6 +266,27 @@ typedef enum de_body_flags {
     DE_BODY_FLAG_TRIGGER = 1u << 5
 } de_body_flags;
 
+/*
+ * Continuous collision (DENG-219, SPEC §13.1).
+ *
+ * - Speculative contacts (every body). Each step the broadphase grows a moving body's box by its
+ *   motion over the step (velocity * dt, plus its spin), so fast pairs are found before they
+ *   touch, and a pair that closes fast keeps contact points up to
+ *   clamp(approach speed * dt, physics.contact.speculative (2 cm), physics.ccd.speculative_max
+ *   (1 m)) apart; the solver lets such a gap close but no more. A far point is only kept when the
+ *   two bodies can really meet during the step, so a body passing close by a corner is not
+ *   stopped by it. Bodies faster than speculative_max per step can still pass through thin
+ *   geometry: give them DE_BODY_FLAG_CCD.
+ * - DE_BODY_FLAG_CCD (bullets; DeRigidBody.ccd). After the solver, an awake dynamic bullet is
+ *   swept from its start pose to its end pose (rotation included) against static and kinematic
+ *   bodies and dynamic bodies without the flag. If it ends inside or beyond one (or still closing
+ *   on it fast), it is put back at its time of impact, 5 mm short of the surface, keeping its
+ *   velocity; the next step's contact stops it. Bullets are not swept against each other. Cvar
+ *   physics.ccd.enabled (on) switches the sweep off.
+ * - All of it is deterministic (fixed body order, bounded iterations) and allocates nothing per
+ *   step.
+ */
+
 /**
  * de_body_create() parameters. `(de_body_desc){0}` is a static body at the origin with no shape.
  *
