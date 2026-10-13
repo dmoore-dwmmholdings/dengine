@@ -159,3 +159,22 @@ set_source_files_properties(${_de_texture_bc_sources} importers/texture/texture_
     TARGET_DIRECTORY de_cooker
     PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
 target_link_libraries(de_cooker PRIVATE de_tp_bc7enc_rdo)
+
+# DENG-394: `de-cook cook --game <lib>` loads a game library with the host's loader
+# (src/host/game_module.c, "host/game_module.h") and calls its register_types. A game library
+# binds to the engine in the host process (cmake/DeAddGame.cmake), so where de_add_game() builds
+# libraries with a static engine (macOS, Linux), de-cook links the whole engine and exports it,
+# as the `dengine` executable does. The whole archive comes after de_cook_check and de_cook_cmd
+# on the link line, before the module libraries they depend on, so no module object is linked
+# twice. On Windows without DE_BUILD_SHARED nothing is exported (like `dengine` there), and a
+# DE_BUILD_SHARED de-cook refuses --game (DE_COOK_SHARED_ENGINE; see cook_cmd.h).
+target_link_libraries(de_cook_cmd PRIVATE de_host)
+if(DE_BUILD_SHARED)
+    target_compile_definitions(de_cook_cmd PRIVATE DE_COOK_SHARED_ENGINE=1)
+elseif(DE_GAME_DYLIB)
+    target_link_libraries(de-cook PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,dengine>")
+    set_target_properties(de-cook PROPERTIES ENABLE_EXPORTS ON)
+    if(APPLE)
+        target_link_options(de-cook PRIVATE "LINKER:-export_dynamic")
+    endif()
+endif()

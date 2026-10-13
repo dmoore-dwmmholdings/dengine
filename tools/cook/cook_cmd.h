@@ -11,8 +11,11 @@
  *   2. The tool builds what the importers need: a type registry with the ECS built-in components
  *      (a world registers them), an asset system with `types` set to that registry (the scene and
  *      prefab importer reads component types from it, DENG-215), and a cooker that mirrors every
- *      asset type of that asset system. de_cook_hooks lets a caller add component and asset types
- *      first (the tests do; a game-library loader is a later task).
+ *      asset type of that asset system. `--game <library>` (DENG-394) loads a game library with
+ *      the host's loader (de_game_get_api) and calls only its `register_types`, with a de_engine
+ *      that holds the tool's allocator, task system (NULL with `--jobs 1`), registry, world and
+ *      asset system (every other field NULL). de_cook_hooks then lets a caller add more component
+ *      and asset types (the tests do). The library stays loaded until the command returns.
  *   3. Every manifest asset is cooked through the cooker and its `.decache` (`.decache/` next to
  *      the manifest unless `--cache` or `--no-cache`), in parallel on the task system
  *      (`de_task_parallel_for`, one asset per chunk). Each result lands in the slot of its asset,
@@ -29,6 +32,13 @@
  * Output: progress lines (`[k/n] <asset id>`) and diagnostics on stderr, the summary on stdout.
  * Exit codes (as `--check`): 0 cooked, 1 manifest errors or failed cooks (no pack is written),
  * 2 usage or I/O error.
+ *
+ * A game library binds to the engine in the host process (cmake/DeAddGame.cmake), so `de-cook`
+ * links the whole engine and exports it where de_add_game() builds libraries with a static
+ * engine (macOS, Linux). On Windows without DE_BUILD_SHARED it can load only libraries that need
+ * nothing from the engine, like the `dengine` host. A DE_BUILD_SHARED build refuses `--game`
+ * (exit 2): the library would bind to the shared dengine, a second engine without the tool's
+ * VFS mounts.
  *
  * `cook` needs the runtime importers, which exist only where the cooker is linked into the
  * runtime (DE_HAS_COOKER: Debug and Dev). Built from a Release or Shipping tree it refuses to run
@@ -49,7 +59,8 @@ DE_EXTERN_C_BEGIN
 typedef struct de_cook_hooks {
     /**
      * Called once, after the tool's type registry (with the ECS built-in components) and asset
-     * system (with the built-in asset types) exist and before the cooker copies the asset types:
+     * system (with the built-in asset types) exist, after the `--game` library's register_types
+     * (if any), and before the cooker copies the asset types:
      * register component types into `types` and asset types (with their importers) into `s`.
      * A result other than DE_OK stops the command with exit code 2.
      */
