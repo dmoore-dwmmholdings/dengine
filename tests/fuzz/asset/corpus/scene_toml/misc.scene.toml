@@ -1,0 +1,39 @@
+# DENG-403 seed: every field kind of TMisc, a tag (TMarker), a built-in (DeTransform), inline
+# tables, integer and hex IDs, and two roots.
+[[entity]]
+id = 1
+[entity.TMisc]
+flag = true
+i8v = -128
+i16v = -32768
+i32v = -2147483648
+i64v = -9223372036854775808
+u8v = 255
+u16v = 65535
+u32v = 4294967295
+u64v = 9223372036854775807
+f64v = 1.0e300
+v3 = [1.5, -2.25, 3.0]
+rot = [0.0, 0.0, 0.70710677, 0.70710677]
+name = "0x0522df9c0a3fe1d5"
+mood = "afraid"
+layers = ["ground", "air"]
+items = [{ id = 7, count = -3 }, { id = 8, count = 0 }, { id = 4294967295, count = 2147483647 }]
+samples = [0.0, -0.0, 1e-38, 3.4e38]
+[entity.TMarker]
+[entity.DeTransform]
+position = [1000000.5, -2.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 2.0, 1.0]
+
+[[entity]]
+id = "0xFFFFFFFFFFFFFFFF"
+parent = 1
+TMarker = {}
+TTarget = { target = 1, texture = "ui/heart", speed = 0.5 }
+THealth = { current = 3.0, max = 4.0 }
+
+[[entity]]
+id = "0x2"
+TMisc = { mood = "calm", layers = [], items = [{ id = 1, count = 1 }] }
+TTarget = { target = "0xFFFFFFFFFFFFFFFF", texture = "0x00000000000000ff" }

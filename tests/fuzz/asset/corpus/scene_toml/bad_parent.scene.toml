@@ -1,0 +1,4 @@
+# A parent that is not in the file: the importer refuses it.
+[[entity]]
+id = "0x1"
+parent = "0x99"

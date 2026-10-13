@@ -1,0 +1,23 @@
+# level.scene.toml with the entities, keys and tables in another order and other spellings.
+[[entity]]
+TTarget = { speed = -1.25e0, texture = "ui/heart", target = 161 }
+parent = "0xB2"
+id = 195
+
+[[entity]]
+parent = "0x00000000000000a1"
+id = "0x00000000000000b2"
+[entity.TTarget]
+speed = 2.50
+texture = "ui/heart"
+target = "0xc3"
+[entity.THealth]
+max = 20
+current = 1e1
+[entity.__dummy_never_read]
+# an unknown component: skipped with a warning, so the output does not change
+x = 1
+
+[[entity]]
+THealth = { max = 1e2, current = 75.50 }
+id = "0xa1"
