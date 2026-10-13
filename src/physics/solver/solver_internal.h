@@ -5,7 +5,7 @@
  * One step (step.c calls the stages in this order):
  *
  *   de__solver_begin          ensure the state, per-step constants (substep h, softness)
- *   de__islands_update        islands.c: which bodies are awake (stub: every non-static body)
+ *   de__islands_update        islands.c: wake requests, then which bodies are awake (DENG-218)
  *   de__solver_prepare        solver bodies of the awake bodies, gather + prepare constraints
  *   substeps x:
  *     de__solver_integrate_velocities   gravity x gravity_scale, damping v *= 1/(1+h c), clamps
@@ -17,11 +17,11 @@
  *   de__solver_store          impulses back into the manifolds (warm start of the next step)
  *   de__ccd_solve             ccd.c (stub; DENG-219)
  *   de__solver_finalize       velocities and f64 positions back to the body pool, AABBs, sync
- *   de__islands_finalize      islands.c (stub; DENG-218 sleep timers)
+ *   de__islands_finalize      islands.c / sleep.c: sleep timers, islands go to sleep (DENG-218)
  *
- * The stage functions of solver.c run serially in stable constraint order; DENG-218 owns
- * solver.c in wave 2 and replaces them with graph-colored parallel batches without touching
- * step.c. integrate.c provides the per-body kernels as ranges, so they can be split too.
+ * The stage functions of solver.c run the constraint stages as graph-colored batches and the
+ * per-body kernels in fixed ranges, in parallel on p->tasks (DENG-218; see graph_color.h);
+ * islands.c / sleep.c pick the awake bodies and put islands to sleep (see islands.h).
  *
  * Memory. The state is created by the first step (or de__solver_ensure / a class registration)
  * from the world allocator: the solver bodies (max_bodies + 1), the body -> slot map, the awake
@@ -106,8 +106,14 @@ struct de__solver {
     de__solver_stats stats;
     bool active; /**< between de__solver_prepare and de__solver_finalize */
 
-    void *block; /**< bodies, slot_of, awake */
+    void *block; /**< bodies, slot_of, awake, islands, coloring */
     size_t block_size;
+
+    /* DENG-218 (appended): islands and sleeping (physics/islands.h) and graph coloring
+     * (physics/solver/graph_color.h), carved from `block`; the coloring's record order shares
+     * the allocation of `constraints`. */
+    struct de__islands *islands;
+    struct de__coloring *coloring;
 };
 
 /* ================================ Lifetime ============================================= */
@@ -166,14 +172,15 @@ u32 de__contact_solver_points(const de_physics_world *p);
 /* ================================ Hooks (islands.c, ccd.c) ============================== */
 
 /**
- * islands.c (DENG-218 replaces it): once per step after the collision pipeline and before
- * de__solver_prepare. Calls de__solver_add_awake for every body to simulate this step, in
- * ascending body index. The stub adds every live dynamic and kinematic body (no sleeping).
+ * islands.c (DENG-218): once per step after the collision pipeline and before
+ * de__solver_prepare. Processes the wake requests, then calls de__solver_add_awake for every body
+ * to simulate this step, in ascending body index: every live kinematic body and every dynamic body
+ * that is not asleep (physics/islands.h).
  */
 void de__islands_update(de_physics_world *p, de__solver *s);
 /**
  * islands.c (DENG-218): once per step after de__solver_finalize (the body pool holds the new
- * velocities and positions): sleep timers, island splitting. The stub does nothing.
+ * velocities and positions): sleep timers; islands that rested long enough go to sleep.
  */
 void de__islands_finalize(de_physics_world *p, de__solver *s);
 /**

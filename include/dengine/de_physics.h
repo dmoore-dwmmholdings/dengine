@@ -335,6 +335,24 @@ DE_API bool de_body_set_velocity(de_physics_world *p, de_body b, de_vec3 linear,
  *  which have infinite mass); false for a stale handle. */
 DE_API bool de_body_get_mass_props(const de_physics_world *p, de_body b, de_mass_props *out);
 
+/* ---------- Sleeping (DENG-218) ----------
+ * Bodies touching each other through contacts or joints form islands (static and kinematic bodies
+ * never join one). An island falls asleep when every body has DE_BODY_FLAG_ALLOW_SLEEP and has
+ * moved slower than 0.05 m/s and 0.035 rad/s (cvars physics.sleep.linear_threshold,
+ * physics.sleep.angular_threshold) for 0.5 s (physics.sleep.time), and no moving kinematic body
+ * touches it. Sleeping bodies keep their pose, have zero velocity and cost no solver work. The
+ * whole island wakes at the next step when an awake body or a moving kinematic body starts
+ * touching it (or a joint links it), when the user gives one of its bodies a velocity or another
+ * transform (de_body_set_velocity, de_body_set_transform), when a body of the island or a body
+ * touching it is destroyed, or with de_body_wake. Without DE_BODY_FLAG_ALLOW_SLEEP a body never
+ * sleeps, and neither does any island it belongs to. */
+
+/** Wakes a sleeping body and its whole island (they move again from the next step). No effect on
+ *  an awake body or a stale handle. */
+DE_API void de_body_wake(de_physics_world *p, de_body b);
+/** true when the body is asleep and no wake is pending for it; false for a stale handle. */
+DE_API bool de_body_is_sleeping(const de_physics_world *p, de_body b);
+
 /* ---------- Queries ---------- */
 /*
  * Scene queries (DENG-137, SPEC §13.1): rays, shape casts, overlaps and closest points against

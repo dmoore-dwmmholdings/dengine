@@ -1,16 +1,20 @@
 /*
  * solver.c: the solver state, constraint class registration and the stage dispatchers of the
- * soft-step solver (DENG-217; see solver_internal.h). DENG-218 owns this file in wave 2 and
- * replaces the serial stage loops with graph-colored parallel batches.
+ * soft-step solver (DENG-217; DENG-218: islands, sleeping, graph-colored parallel batches; see
+ * solver_internal.h, islands.h and graph_color.h).
  *
- * Every stage here visits the constraint records in the order they were added (classes in
- * ascending id, each in its own stable order) and the solver bodies in ascending slot order
- * (= ascending body index), on the calling thread (SPEC §13.2, §5.7 rule 5).
+ * Records are added in a stable order (classes in ascending id, each in its own stable order) and
+ * colored in that order once per step (graph_color.c); every constraint stage runs the colors in
+ * order and splits each color into fixed chunks on p->tasks (solver_parallel.c). The per-body
+ * kernels run in fixed ranges of slots (ascending body index). Results do not depend on the worker
+ * count or on tasks == NULL (SPEC §13.2, §5.7 rule 5).
  */
 #include "physics/solver/solver_internal.h"
 
 #include "physics/broadphase/broadphase.h"
 #include "physics/contact/manifold.h"
+#include "physics/islands.h"
+#include "physics/solver/graph_color.h"
 
 #include <dengine/de_debug.h>
 
@@ -82,6 +86,11 @@ static size_t sv_align_up(size_t x) {
     return (x + (SV_ALIGN - 1u)) & ~(size_t)(SV_ALIGN - 1u);
 }
 
+/* The record array and the coloring's record order share one allocation. */
+static size_t records_bytes(u32 capacity) {
+    return sv_align_up(sizeof(de__constraint) * (size_t)capacity) + sizeof(u32) * (size_t)capacity;
+}
+
 static void solver_free(de__solver *s) {
     if (s == NULL)
         return;
@@ -93,7 +102,7 @@ static void solver_free(de__solver *s) {
     }
     const de_allocator *a = s->alloc;
     if (s->constraints != NULL)
-        DE_FREE(a, s->constraints, sizeof *s->constraints * (size_t)s->constraint_capacity);
+        DE_FREE(a, s->constraints, records_bytes(s->constraint_capacity));
     if (s->block != NULL)
         DE_FREE(a, s->block, s->block_size);
     DE_FREE(a, s, sizeof *s);
@@ -104,7 +113,18 @@ static void ext_destroy(de_physics_world *p, void *state) {
     solver_free((de__solver *)state);
 }
 
-static const de__phys_ext_vtbl k_solver_vtbl = {ext_destroy, NULL, NULL};
+/* Sleep state follows the body pool (index reuse, destroyed sleeping bodies). */
+static void ext_body_added(de_physics_world *p, void *state, u32 index) {
+    (void)p;
+    de__islands_body_added(((de__solver *)state)->islands, index);
+}
+
+static void ext_body_removed(de_physics_world *p, void *state, u32 index) {
+    (void)p;
+    de__islands_body_removed(((de__solver *)state)->islands, index);
+}
+
+static const de__phys_ext_vtbl k_solver_vtbl = {ext_destroy, ext_body_added, ext_body_removed};
 
 static void static_slot(de__solver_body *b) {
     memset(b, 0, sizeof *b);
@@ -129,18 +149,22 @@ static de_result solver_create(de_physics_world *p, de__solver **out) {
     size_t off_bodies = 0;
     size_t off_slot = sv_align_up(off_bodies + sizeof(de__solver_body) * ((size_t)cap + 1u));
     size_t off_awake = sv_align_up(off_slot + sizeof(u32) * (size_t)cap);
-    const size_t size = sv_align_up(off_awake + sizeof(u32) * (size_t)cap);
+    size_t off_islands = sv_align_up(off_awake + sizeof(u32) * (size_t)cap);
+    size_t off_coloring = sv_align_up(off_islands + de__islands_bytes(cap));
+    const size_t size = sv_align_up(off_coloring + de__coloring_bytes(cap + 1u));
     u8 *block = (u8 *)DE_ALLOC(a, size, SV_ALIGN, DE_MEM_PHYSICS);
     if (block == NULL) {
         DE_FREE(a, s, sizeof *s);
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__solver_ensure: %u solver bodies", cap);
     }
+    memset(block, 0, size);
     s->block = block;
     s->block_size = size;
     s->bodies = (de__solver_body *)(void *)(block + off_bodies);
     s->slot_of = (u32 *)(void *)(block + off_slot);
     s->awake = (u32 *)(void *)(block + off_awake);
-    memset(s->slot_of, 0, sizeof(u32) * (size_t)cap);
+    s->islands = de__islands_init(block + off_islands, cap);
+    s->coloring = de__coloring_init(block + off_coloring, cap + 1u);
     static_slot(&s->bodies[0]);
     s->body_count = 1;
     s->ctx.p = p;
@@ -191,17 +215,19 @@ de_result de__solver_register_class(de_physics_world *p, u32 class_id,
     if (total > 0x3FFFFFFFu)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__solver_register_class: too many constraints");
     if (total > s->constraint_capacity) {
-        de__constraint *nc = (de__constraint *)DE_ALLOC(s->alloc, sizeof *nc * (size_t)total,
-                                                        DE_ALIGNOF(de__constraint), DE_MEM_PHYSICS);
-        if (nc == NULL)
+        /* Records, then the coloring's record order (graph_color.h). */
+        u8 *mem = (u8 *)DE_ALLOC(s->alloc, records_bytes((u32)total), SV_ALIGN, DE_MEM_PHYSICS);
+        if (mem == NULL)
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__solver_register_class: %u records",
                            (u32)total);
         if (s->constraints != NULL)
-            DE_FREE(s->alloc, s->constraints,
-                    sizeof *s->constraints * (size_t)s->constraint_capacity);
-        s->constraints = nc;
+            DE_FREE(s->alloc, s->constraints, records_bytes(s->constraint_capacity));
+        s->constraints = (de__constraint *)(void *)mem;
         s->constraint_capacity = (u32)total;
         s->constraint_count = 0;
+        de__coloring_bind_order(
+            s->coloring, (u32 *)(void *)(mem + sv_align_up(sizeof(de__constraint) * (size_t)total)),
+            (u32)total);
     }
     de__solver_class_slot *c = &s->classes[class_id];
     c->cls = cls;
@@ -238,12 +264,39 @@ static u32 side_slot(const de__solver *s, u32 body, bool *writable) {
     return slot;
 }
 
+/* An awake side that may wake a sleeping one: a writable (awake dynamic) body, or a kinematic body
+ * that moves. */
+static bool side_active(const de__solver *s, u32 slot, bool writable) {
+    if (writable)
+        return true;
+    if (slot == DE__SOLVER_STATIC_SLOT)
+        return false;
+    const de__solver_body *b = &s->bodies[slot];
+    return (b->flags & DE__SOLVER_BODY_KINEMATIC) != 0u &&
+           (b->v.x != 0.0f || b->v.y != 0.0f || b->v.z != 0.0f || b->w.x != 0.0f ||
+            b->w.y != 0.0f || b->w.z != 0.0f);
+}
+
+static bool side_sleeping(const de__islands *is, u32 body) {
+    return body != DE__CONSTRAINT_NO_BODY && body < is->capacity && is->sleeping[body] != 0u;
+}
+
 de__constraint *de__solver_add_constraint(de__solver *s, u32 class_id, u32 id, u32 body_a,
                                           u32 body_b) {
     DE_ASSERT(class_id < DE__CONSTRAINT_CLASS_COUNT);
     bool wa, wb;
     const u32 sa = side_slot(s, body_a, &wa);
     const u32 sb = side_slot(s, body_b, &wb);
+    de__islands *is = s->islands;
+    if (is->stats.sleeping_bodies != 0u) {
+        /* A constraint between a sleeping body and an active one wakes the sleeper's island; the
+         * solver gathers again (de__solver_prepare). */
+        const bool za = side_sleeping(is, body_a), zb = side_sleeping(is, body_b);
+        if (za && !zb && side_active(s, sb, wb))
+            de__islands_request_wake(is, body_a);
+        else if (zb && !za && side_active(s, sa, wa))
+            de__islands_request_wake(is, body_b);
+    }
     if (!wa && !wb)
         return NULL;
     de__solver_class_slot *c = &s->classes[class_id];
@@ -307,61 +360,41 @@ u32 de__solver_add_awake(de__solver *s, u32 body_index) {
     return slot;
 }
 
-/* Calls stage `fn` of every record's class, in record order. */
-typedef enum sv_stage {
-    SV_PREPARE,
-    SV_WARM_START,
-    SV_SOLVE,
-    SV_RELAX,
-    SV_RESTITUTION,
-    SV_STORE
-} sv_stage;
+/* Back to an empty awake set (a constraint woke an island: collect and gather again). */
+static void reset_awake(de__solver *s) {
+    for (u32 k = 0; k < s->awake_count; ++k)
+        s->slot_of[s->awake[k]] = DE__SOLVER_STATIC_SLOT;
+    s->body_count = 1;
+    s->awake_count = 0;
+    s->constraint_count = 0;
+    for (u32 k = 0; k < DE__CONSTRAINT_CLASS_COUNT; ++k)
+        s->classes[k].count = 0;
+    s->stats.dropped = 0;
+}
 
-static void run_stage(de__solver *s, sv_stage stage) {
-    const de__solver_ctx *ctx = &s->ctx;
-    for (u32 i = 0; i < s->constraint_count; ++i) {
-        de__constraint *c = &s->constraints[i];
-        const de__solver_class_slot *k = &s->classes[c->class_id];
-        const de__constraint_class *cls = k->cls;
-        switch (stage) {
-        case SV_PREPARE:
-            if (cls->prepare != NULL)
-                cls->prepare(ctx, k->state, c);
-            break;
-        case SV_WARM_START:
-            if (cls->warm_start != NULL)
-                cls->warm_start(ctx, k->state, c);
-            break;
-        case SV_SOLVE:
-            cls->solve(ctx, k->state, c, true);
-            break;
-        case SV_RELAX:
-            if (cls->relax != NULL)
-                cls->relax(ctx, k->state, c);
-            else
-                cls->solve(ctx, k->state, c, false);
-            break;
-        case SV_RESTITUTION:
-            if (cls->restitution != NULL)
-                cls->restitution(ctx, k->state, c);
-            break;
-        case SV_STORE:
-            if (cls->store != NULL)
-                cls->store(ctx, k->state, c);
-            break;
-        }
-    }
+static void init_bodies(de__solver *s, u32 begin, u32 end) {
+    for (u32 k = begin; k < end; ++k)
+        de__integrate_init_body(s, s->awake[k - 1u], &s->bodies[k]);
 }
 
 void de__solver_prepare(de__solver *s) {
-    for (u32 k = 0; k < s->awake_count; ++k)
-        de__integrate_init_body(s, s->awake[k], &s->bodies[k + 1u]);
-    for (u32 k = 0; k < DE__CONSTRAINT_CLASS_COUNT; ++k) {
-        const de__solver_class_slot *c = &s->classes[k];
-        if (c->cls != NULL)
-            c->cls->gather(s, &s->ctx, c->state);
+    for (;;) {
+        de__solver_for_bodies(s, init_bodies);
+        for (u32 k = 0; k < DE__CONSTRAINT_CLASS_COUNT; ++k) {
+            const de__solver_class_slot *c = &s->classes[k];
+            if (c->cls != NULL)
+                c->cls->gather(s, &s->ctx, c->state);
+        }
+        if (!de__islands_wake_pending(s->islands))
+            break;
+        /* Each pass wakes at least one island, so this ends. */
+        reset_awake(s);
+        ++s->islands->stats.regathers;
+        de__islands_collect_awake(s->p, s);
     }
-    run_stage(s, SV_PREPARE);
+    de__islands_build(s);
+    de__graph_color(s);
+    de__solver_run_stage(s, DE__STAGE_PREPARE);
     s->stats.awake_bodies = s->awake_count;
     s->stats.constraints = s->constraint_count;
     for (u32 k = 0; k < DE__CONSTRAINT_CLASS_COUNT; ++k)
@@ -370,36 +403,36 @@ void de__solver_prepare(de__solver *s) {
 }
 
 void de__solver_integrate_velocities(de__solver *s) {
-    de__integrate_velocities(s, 1u, s->body_count);
+    de__solver_for_bodies(s, de__integrate_velocities);
 }
 
 void de__solver_warm_start(de__solver *s) {
-    run_stage(s, SV_WARM_START);
+    de__solver_run_stage(s, DE__STAGE_WARM_START);
 }
 
 void de__solver_solve(de__solver *s) {
-    run_stage(s, SV_SOLVE);
+    de__solver_run_stage(s, DE__STAGE_SOLVE);
 }
 
 void de__solver_integrate_positions(de__solver *s) {
-    de__integrate_positions(s, 1u, s->body_count);
+    de__solver_for_bodies(s, de__integrate_positions);
 }
 
 void de__solver_relax(de__solver *s) {
-    run_stage(s, SV_RELAX);
+    de__solver_run_stage(s, DE__STAGE_RELAX);
     ++s->ctx.substep;
 }
 
 void de__solver_restitution(de__solver *s) {
-    run_stage(s, SV_RESTITUTION);
+    de__solver_run_stage(s, DE__STAGE_RESTITUTION);
 }
 
 void de__solver_store(de__solver *s) {
-    run_stage(s, SV_STORE);
+    de__solver_run_stage(s, DE__STAGE_STORE);
 }
 
 void de__solver_finalize(de__solver *s) {
-    de__integrate_finalize(s, 1u, s->body_count);
+    de__solver_for_bodies(s, de__integrate_finalize);
     for (u32 k = 0; k < s->awake_count; ++k)
         s->slot_of[s->awake[k]] = DE__SOLVER_STATIC_SLOT;
     /* Proxies follow the moved bodies now, so queries between steps find them (the pair list of
