@@ -279,3 +279,16 @@ files = ["transcoder/*", "NOTICE"]
 # the transcoder includes "../zstd/zstd.h" for KTX2 zstd supercompression. Upstream's bundled
 # single-file zstd is not vendored.
 local = ["CMakeLists.txt", "de_*", "smoke/**", "patches/**", "zstd/zstd.h"]
+
+[[lib]]
+name = "meshoptimizer"
+# Mesh optimization, meshlets and LOD simplification for the model importer (SPEC §11.6, §22;
+# DENG-2 Q1: C++ behind its C API). Tools only: compiled into the cooker library
+# (tools/cook/importers/model/, DENG-103), never into Release or Shipping. Release tarball.
+version = "1.3"
+url = "https://github.com/zeux/meshoptimizer/releases/download/v1.3/meshoptimizer-1.3.tar.gz"
+sha256 = "d50a0b5e1323ba4379cdb32f89436c20652b7393445f8e18c88ae64445b67b77"
+license = "MIT"
+license_file = "LICENSE.md"
+# The library only (src/: meshoptimizer.h and its .cpp files); no gltfpack, demo, js or tools.
+files = ["src/**"]

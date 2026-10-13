@@ -101,3 +101,19 @@ target_sources(de_cooker PRIVATE
 set_source_files_properties(${_de_texture_importer_sources} PROPERTIES
     COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
 target_link_libraries(de_cooker PRIVATE de_tp_stb de_tp_tinyexr de_tp_basisu)
+
+# DENG-103: the mesh stage of the model importer: quantized vertices, the LOD chain and meshlets
+# (DMSH v2, src/render/formats/de_cooked_mesh.h) through meshoptimizer, a tools-only C++ library
+# called through its C API (DENG-2 Q1). Only de_cooker links it, so Release and Shipping never
+# contain it (cooker_link_check). The stage's own files compile without FMA contraction
+# (DE_DETERMINISTIC_FLAGS), like meshoptimizer, so their float decisions are the same on hosts
+# whose compilers contract by default.
+set(_de_mesh_stage_sources
+    importers/model/mesh_cook.c
+    importers/model/mesh_lod.c
+    importers/model/mesh_meshlets.c
+    importers/model/mesh_quantize.c)
+target_sources(de_cooker PRIVATE ${_de_mesh_stage_sources})
+set_source_files_properties(${_de_mesh_stage_sources} TARGET_DIRECTORY de_cooker
+    PROPERTIES COMPILE_OPTIONS "${DE_DETERMINISTIC_FLAGS}")
+target_link_libraries(de_cooker PRIVATE de_tp_meshoptimizer)
