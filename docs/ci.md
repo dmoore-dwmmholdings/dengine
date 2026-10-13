@@ -5,7 +5,9 @@ DEngine uses GitHub Actions. There are four workflows in `.github/workflows/`. `
 request, and by hand (`workflow_dispatch`). `determinism.yml` runs on a push to `main`, `dev` or
 `sprint/**` and by hand, not on pull requests. Each workflow has one concurrency group per branch,
 so a new run on a branch cancels the run that it replaces (also a second `gh workflow run` on the
-same branch).
+same branch). `dev` and `main` are the exception: a new run there waits for the running one to
+finish instead of cancelling it, and only the newest waiting run is kept. Merges land on `dev`
+faster than a full run takes, so cancelling left `dev` without a finished result.
 
 ## Tiers: quick and full
 

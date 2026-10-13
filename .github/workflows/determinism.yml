@@ -26,7 +26,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A push to dev or main never cancels the running run: merges land faster than a full run
+  # takes, so cancelling left dev with no finished result. The group keeps at most one queued
+  # run (the newest) behind the running one. Other refs cancel as before.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
