@@ -9,7 +9,7 @@ kept in the repo, next to the code, because the code must match it byte for byte
 - Writer: `tools/pack/lib/dpak_writer.{h,c}` (target `de_pack_lib`, DENG-211).
 - Reader and mount stack: `src/asset/dpak/` (DENG-212).
 
-Current version: **1**.
+Current version: **2**. Readers also accept version 1 (see "Version 1").
 
 ## Conventions
 
@@ -39,7 +39,7 @@ data (raw size 0) has no chunks and `data_offset` 0.
 | Offset | Type | Field | Meaning |
 |---|---|---|---|
 | 0 | u8[4] | magic | `D` `P` `A` `K` |
-| 4 | u32 | version | 1 |
+| 4 | u32 | version | 2 (1 for an old pack) |
 | 8 | u32 | header_size | 256 |
 | 12 | u32 | platform | 0 any, 1 Windows, 2 Linux, 3 macOS |
 | 16 | u8[16] | build_id | opaque, chosen by the cooker |
@@ -59,11 +59,11 @@ STRINGS), `u32 reserved` (0). `size == count * record size`.
 | Index | Section | Record | Size | Order and contents |
 |---|---|---|---|---|
 | 0 | TOC | toc entry | 64 | One per asset, sorted by `id`. IDs are unique. |
-| 1 | CHUNKS | chunk entry | 24 | Every chunk of every asset, in TOC order. |
+| 1 | CHUNKS | chunk entry | 32 | Every chunk of every asset, in TOC order. |
 | 2 | DEPS | u64 | 8 | Asset IDs. Each asset's range is sorted and has no duplicates. |
 | 3 | BUNDLES | bundle entry | 40 | Sorted by `name_hash`. Name hashes are unique. |
 | 4 | BUNDLE_IDS | u64 | 8 | Per bundle: its member asset IDs, then the name hashes of the bundles it depends on. Each list is sorted and has no duplicates. |
-| 5 | DICTS | dict entry | 24 | Sorted by `type_hash`. At most one per type. |
+| 5 | DICTS | dict entry | 32 | Sorted by `type_hash`. At most one per type. |
 | 6 | NAMES | name entry | 8 | Present only with `HAS_NAMES`. Count equals the TOC count; entry `i` is the path of TOC entry `i`. |
 | 7 | STRINGS | bytes | 1 | Asset paths (TOC order), then bundle names (BUNDLES order). Each string is followed by a NUL. |
 
@@ -85,7 +85,7 @@ STRINGS), `u32 reserved` (0). `size == count * record size`.
 
 Dependencies may name assets that are not in this pack (they may be in another mounted pack).
 
-### Chunk entry (24 bytes)
+### Chunk entry (32 bytes)
 
 | Offset | Type | Field | Meaning |
 |---|---|---|---|
@@ -95,11 +95,12 @@ Dependencies may name assets that are not in this pack (they may be in another m
 | 16 | u16 | dict_index | index into DICTS, or `0xFFFF` for no dictionary |
 | 18 | u16 | flags | bit 0 `RAW`: stored as is (`stored_size == raw_size`, no zstd frame) |
 | 20 | u32 | reserved | 0 |
+| 24 | u64 | hash | `de_hash64` of the `stored_size` stored bytes (version 2) |
 
 An asset's chunks are contiguous: chunk `k + 1` starts where chunk `k` ends. Each chunk that is
 not `RAW` is one complete zstd frame that decompresses alone (with its dictionary, if any) to
-`raw_size` bytes. The frame header has the content size, no checksum (the pack has its own
-content hash) and no dictionary ID (the chunk entry names the dictionary).
+`raw_size` bytes. The frame header has the content size, no zstd checksum (the chunk entry's
+`hash` covers the stored bytes) and no dictionary ID (the chunk entry names the dictionary).
 
 ### Bundle entry (40 bytes)
 
@@ -119,7 +120,7 @@ Bundle names are always stored, also in a stripped pack, so a packed game can lo
 name without `assets.toml`. Members and depends are not checked against this pack: a patch
 pack's bundle may name assets or bundles from another pack.
 
-### Dictionary entry (24 bytes)
+### Dictionary entry (32 bytes)
 
 | Offset | Type | Field | Meaning |
 |---|---|---|---|
@@ -127,11 +128,24 @@ pack's bundle may name assets or bundles from another pack.
 | 8 | u64 | file_offset | the dictionary bytes (zstd dictionary format) |
 | 16 | u32 | size | bytes |
 | 20 | u32 | zstd_id | `ZDICT_getDictID()` of the dictionary |
+| 24 | u64 | hash | `de_hash64` of the `size` dictionary bytes (version 2) |
 
 ### Name entry (8 bytes)
 
 `u32 offset` into STRINGS and `u32 len` (bytes, without the NUL). `len` 0 means that the writer
 had no path for that asset.
+
+## Hashes (version 2)
+
+Every chunk entry and every dictionary entry holds the XXH3-64 (seed 0) of the bytes it points
+to, exactly as stored in the file. A reader can then say which asset a damaged byte belongs to
+(the asset that owns the chunk, or every asset with a chunk that uses the dictionary) without
+decompressing anything, for raw and compressed chunks alike. The header's `content_hash` still
+covers every byte after the header, the metadata and the padding included.
+
+A pack carries no zstd frame checksums. They would not cover raw chunks or dictionaries, would
+need a full decode to check, and are 32 bits. See the Trama page "Decision: .dpak v2 stores an
+XXH3-64 of every chunk and dictionary".
 
 ## How the writer fills it
 
@@ -148,10 +162,15 @@ had no path for that asset.
   that makes it smaller. The dictionary is kept only if the bytes it saves are more than its own
   size.
 - Without `include_names` the NAMES section is absent and no asset path is in the file.
+- Each chunk entry's `hash` is the hash of the chunk's stored bytes (raw or compressed), and
+  each dictionary entry's `hash` that of the dictionary bytes.
+- With `format_version = 1` (for compatibility tests and fuzz seeds only) the writer writes the
+  version 1 layout. The bytes are the same as those of the version 1 writer.
 
 ## Reader checks
 
-A reader must not trust a pack. Before use it checks: the magic, `version` and `header_size`;
+A reader must not trust a pack. Before use it checks: the magic, `version` (1 or 2) and
+`header_size`;
 `file_size` against the real size; every section inside the file and `size == count * record size`,
 and every empty section (`count` 0) with `offset` and `size` 0 (DENG-216); TOC IDs strictly
 increasing; every chunk range, dependency range, bundle range, string range and dictionary range
@@ -160,11 +179,26 @@ against the DICTS count; and, for a RAW chunk, `stored_size == raw_size`. `conte
 corruption; checking it means reading the whole file once, so the reader may do it only on request
 (for example, `de-pack verify`).
 
+In a version 2 pack a reader may also check a chunk's `hash` before it decodes the chunk, and a
+dictionary's `hash` before it uses the dictionary. A mismatch means the bytes are damaged. The
+runtime does this in Debug and Dev builds (`check_chunks`). `de-pack verify` checks every chunk
+and dictionary and names every damaged asset.
+
+## Version 1
+
+Version 1 is version 2 without the two `hash` fields: the chunk entry and the dictionary entry
+are 24 bytes (the first 24 bytes of the version 2 records), so the CHUNKS and DICTS sections are
+`count * 24` bytes. Everything else is the same. A reader takes the record sizes from the
+header's `version`. A version 1 pack can say only through `content_hash` that it is damaged, and
+it names the damaged asset only when a chunk no longer decodes.
+
 ## Version history
 
 | Version | Change | Issue |
 |---|---|---|
 | 1 | First version: header, sorted TOC, 64 KiB zstd chunks, alignment, per-type dictionaries, bundles, optional names. | DENG-211 |
+| 2 | A `u64 hash` (XXH3-64 of the stored bytes) at the end of the chunk entry and of the dictionary entry; both grow from 24 to 32 bytes. Readers accept 1 and 2. | DENG-392 |
 
 Bump `DPAK_VERSION` (and add a row here) for any change to the layout or to the meaning of a
-field. Also bump it if the asset ID hash or the type hash changes.
+field. Also bump it if the asset ID hash or the type hash changes. `DPAK_VERSION_MIN` is the
+oldest version readers still accept.

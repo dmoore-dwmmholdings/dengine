@@ -8,17 +8,20 @@
  *
  *   - the header, then every TOC entry: dpak_find(id) gives back the same index (IDs are sorted
  *     and unique), the name ends in a NUL at its length, every dependency ID is readable;
- *   - every chunk is decoded with dpak_decode_chunk into a buffer of the chunk size. Open has
- *     checked that no chunk decodes to more than that; a zstd frame that claims more must fail;
+ *   - every chunk is checked against its hash (format v2; dpak_check_chunk) and decoded with
+ *     dpak_decode_chunk into a buffer of the chunk size. Open has checked that no chunk decodes
+ *     to more than that; a zstd frame that claims more must fail;
  *   - an entry of at most FZ_ENTRY_READ_MAX raw bytes is also read with dpak_read_entry, and when
  *     both reads succeed the bytes must be the same;
  *   - every bundle: dpak_bundle_find(name_hash) gives back the same index, the name ends in a NUL
  *     at its length, every member and depend ID is readable.
  *
- * Then the input is opened once more with `verify` and the host platform, for the content-hash
- * path and the platform check. FZ_DECODE_BUDGET caps the bytes decoded per input, so an input
- * with many chunks cannot time out. Nothing touches the file system, and everything is freed
- * before returning (LeakSanitizer runs under libFuzzer).
+ * Then the input is opened again with `check_chunks` (DENG-392): every dictionary is checked at
+ * open, and a chunk whose hash does not match must not decode. Then once more with `verify` and
+ * the host platform, for the content-hash path and the platform check. Both format versions are
+ * fuzzed: the seeds have version 2 packs and version 1 packs (v1_*.dpak). FZ_DECODE_BUDGET caps the
+ * bytes decoded per input, so an input with many chunks cannot time out. Nothing touches the file
+ * system, and everything is freed before returning (LeakSanitizer runs under libFuzzer).
  *
  * Seed corpus: corpus/dpak_reader/, packs written by the DENG-211 writer. make_dpak_corpus.c
  * makes them and checks that they still open (CTest dpak_corpus.*).
@@ -71,7 +74,13 @@ static bool fz_decode_entry(fz_state *st, const dpak_toc_entry *e, u8 *whole) {
             return false;
         st->budget -= c.raw_size;
         u8 *dst = whole != NULL ? whole + (u64)k * h->chunk_size : st->chunk;
-        if (dpak_decode_chunk(st->r, st->dctx, &c, base + c.file_offset, dst) != DE_OK) {
+        const bool hash_ok = dpak_check_chunk(st->r, &c, base + c.file_offset) == DE_OK;
+        if (!dpak_has_hashes(st->r) && !hash_ok)
+            abort(); /* version 1 has nothing to check */
+        de_result dec = dpak_decode_chunk(st->r, st->dctx, &c, base + c.file_offset, dst);
+        if (dpak_checks_chunks(st->r) && !hash_ok && dec == DE_OK)
+            abort(); /* check_chunks: a damaged chunk never decodes */
+        if (dec != DE_OK) {
             ok = false;
             continue;
         }
@@ -124,6 +133,22 @@ static void fz_walk_entries(fz_state *st) {
         abort(); /* index out of range */
 }
 
+static void fz_walk_dicts(fz_state *st) {
+    const u32 n = dpak_dict_count(st->r);
+    if (n != dpak_get_header(st->r)->sections[DPAK_SECTION_DICTS].count)
+        abort();
+    for (u32 i = 0; i < n; ++i) {
+        dpak_dict_entry d;
+        dpak_dict(st->r, i, &d);
+        de_result res = dpak_check_dict(st->r, i);
+        if (dpak_checks_chunks(st->r) && res != DE_OK)
+            abort(); /* open with check_chunks refused damaged dictionaries */
+        st->sink += d.hash + d.type_hash + (u64)res;
+    }
+    if (dpak_check_dict(st->r, n) != DE_OK)
+        abort(); /* out of range: nothing to check */
+}
+
 static void fz_walk_bundles(fz_state *st) {
     const u32 n = dpak_bundle_count(st->r);
     for (u32 i = 0; i < n; ++i) {
@@ -142,16 +167,20 @@ static void fz_walk_bundles(fz_state *st) {
     }
 }
 
-int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+/* Opens the input with `desc` and walks everything. Returns false when it does not open. */
+static bool fz_run(const uint8_t *data, size_t size, const dpak_open_desc *desc) {
     dpak_reader *r = NULL;
-    if (dpak_open_memory(data, size, &(dpak_open_desc){.platform = DPAK_PLATFORM_ANY}, &r) !=
-        DE_OK) {
+    if (dpak_open_memory(data, size, desc, &r) != DE_OK) {
         if (r != NULL)
             abort(); /* a failed open leaves *out NULL */
-        return 0;
+        return false;
     }
     const dpak_header *h = dpak_get_header(r);
     if (h->file_size != size || dpak_memory(r) != data || dpak_file(r) != NULL)
+        abort();
+    if (dpak_has_hashes(r) != (h->version >= DPAK_VERSION_HASHES))
+        abort();
+    if (dpak_checks_chunks(r) != (desc->check_chunks && dpak_has_hashes(r)))
         abort();
 
     fz_state *st = (fz_state *)malloc(sizeof *st);
@@ -164,11 +193,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (st->dctx == NULL)
         abort();
     st->sink = h->content_hash + h->flags + h->platform;
+    fz_walk_dicts(st);
     fz_walk_entries(st);
     fz_walk_bundles(st);
     ZSTD_freeDCtx(st->dctx);
     free(st);
     dpak_close(r);
+    return true;
+}
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    dpak_reader *r = NULL;
+    if (!fz_run(data, size, &(dpak_open_desc){.platform = DPAK_PLATFORM_ANY}))
+        return 0;
+    /* Hash checks on (format v2): damaged dictionaries are refused at open, damaged chunks at
+     * decode. */
+    (void)fz_run(data, size,
+                 &(dpak_open_desc){.platform = DPAK_PLATFORM_ANY, .check_chunks = true});
 
     /* The content hash and the host platform check. */
     r = NULL;

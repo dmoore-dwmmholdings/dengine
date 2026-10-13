@@ -716,8 +716,8 @@ TEST_F(mount, mount_errors, mnt_fx) {
     ASSERT_EQ(de_file_read_all("mnt:/e.dpak", NULL, &data, &size), DE_OK);
     u8 *p = (u8 *)data;
     dpak_store_u32(p + 4, DPAK_VERSION + 1u);
-    ASSERT_EQ(de_file_write_all_atomic("mnt:/v2.dpak", p, size), DE_OK);
-    EXPECT_EQ(de_asset_pack_mount(f->s, "mnt:/v2.dpak", 0), DE_ERR_VERSION_MISMATCH);
+    ASSERT_EQ(de_file_write_all_atomic("mnt:/future.dpak", p, size), DE_OK);
+    EXPECT_EQ(de_asset_pack_mount(f->s, "mnt:/future.dpak", 0), DE_ERR_VERSION_MISMATCH);
     dpak_store_u32(p + 4, DPAK_VERSION);
     ASSERT_EQ(de_file_write_all_atomic("mnt:/cut.dpak", p, size - 10u), DE_OK);
     EXPECT_EQ(de_asset_pack_mount(f->s, "mnt:/cut.dpak", 0), DE_ERR_PARSE);
@@ -729,6 +729,58 @@ TEST_F(mount, mount_errors, mnt_fx) {
     expect_bytes(f, "e/x", x, 1000);
     de_asset_pack_unmount(f->s, "mnt:/nothing.dpak");
     de_asset_pack_unmount(NULL, "mnt:/e.dpak");
+    free(x);
+}
+
+/* ---- mount.chunk_hashes --------------------------------------------------------------------- */
+
+/* DENG-392: Debug and Dev mounts check each chunk's hash before decoding it, so a flipped byte in
+ * a raw chunk (which decodes to wrong bytes without an error) fails the load. Debug builds refuse
+ * the pack at mount already (content hash). A version 1 pack, which has no hashes, still mounts
+ * and loads. */
+TEST_F(mount, chunk_hashes, mnt_fx) {
+    u8 *x = pt_make_bytes(PT_NOISE, 61, 5000); /* incompressible: one raw chunk */
+    one_asset_pack("mnt:/h.dpak", "h/raw", "pk_noise", x, 5000, DPAK_PLATFORM_ANY);
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all("mnt:/h.dpak", NULL, &data, &size), DE_OK);
+    u8 *p = (u8 *)data;
+    dpak_reader *r = NULL;
+    ASSERT_EQ(dpak_open_memory(p, size, NULL, &r), DE_OK);
+    dpak_toc_entry e;
+    dpak_entry(r, 0, &e);
+    dpak_chunk_entry c;
+    dpak_chunk(r, e.first_chunk, &c);
+    dpak_close(r);
+    ASSERT_NE(c.flags & DPAK_CHUNK_RAW, 0u);
+    p[c.file_offset + 100u] ^= 0x10u;
+    ASSERT_EQ(de_file_write_all_atomic("mnt:/h_bad.dpak", p, size), DE_OK);
+    DE_FREE(de_heap_allocator(), data, (size_t)size + 1u);
+#if defined(DE_DEBUG)
+    EXPECT_EQ(de_asset_pack_mount(f->s, "mnt:/h_bad.dpak", 0), DE_ERR_PARSE);
+#else
+    ASSERT_EQ(de_asset_pack_mount(f->s, "mnt:/h_bad.dpak", 0), DE_OK);
+#if defined(DE_DEV) && !defined(DE_SHIPPING)
+    EXPECT_EQ((int)load_one(f, "h/raw"), (int)DE_LOAD_FAILED);
+#else
+    EXPECT_EQ((int)load_one(f, "h/raw"), (int)DE_LOAD_READY); /* no check: wrong bytes */
+#endif
+    de_asset_pack_unmount(f->s, "mnt:/h_bad.dpak");
+    evict_all(f);
+#endif
+
+    /* Version 1: no hashes, the same bytes. */
+    pt_asset a;
+    memset(&a, 0, sizeof a);
+    snprintf(a.path, sizeof a.path, "h/v1");
+    a.type = "pk_noise";
+    a.data = x;
+    a.size = 5000;
+    dpak_writer_desc wd = {.zstd_level = 3, .format_version = 1u};
+    pt_pack_file(&wd, &a, 1, "mnt:/h_v1.dpak");
+    ASSERT_EQ(de_asset_pack_mount(f->s, "mnt:/h_v1.dpak", 0), DE_OK);
+    EXPECT_EQ((int)load_one(f, "h/v1"), (int)DE_LOAD_READY);
+    expect_bytes(f, "h/v1", x, 5000);
     free(x);
 }
 

@@ -5,6 +5,10 @@
  * "Reader checks"). Every size is computed in u64 and compared against the file size first, so an
  * overflow cannot pass a check: a crafted or truncated pack fails with DE_ERR_PARSE and never
  * makes the reader read outside its buffer (DENG-216 fuzzes dpak_open_memory).
+ *
+ * Versions 1 and 2 are read (DENG-392). They differ only in the chunk and dictionary entries:
+ * version 2 adds a hash to each, so the record sizes come from the header's version
+ * (dpak_section_record_size) and every chunk or dictionary entry is decoded with it.
  */
 
 #include "asset/dpak/dpak_reader.h"
@@ -31,6 +35,7 @@ struct dpak_reader {
     u64 meta_size;  /**< bytes at `base` (the whole pack for a memory reader) */
     ZSTD_DDict **ddicts;
     u32 ddict_count;
+    bool check_chunks;         /**< dpak_open_desc.check_chunks, and the pack has hashes (v2) */
     char path[DE_FS_PATH_MAX]; /**< for messages: the vpath, or "(memory)" */
 };
 
@@ -108,6 +113,13 @@ static u32 section_count(const dpak_reader *r, dpak_section s) {
     return r->h.sections[s].count;
 }
 
+/* Dictionary entry `index` (< the DICTS count; sections in memory). */
+static void dict_entry(const dpak_reader *r, u32 index, dpak_dict_entry *d) {
+    dpak_dict_entry_load(section_ptr(r, DPAK_SECTION_DICTS) +
+                             (u64)index * dpak_dict_entry_size(r->h.version),
+                         r->h.version, d);
+}
+
 /* The string at [off, off + len) of STRINGS, which must be followed by a NUL. */
 static bool string_ok(const dpak_reader *r, u32 off, u32 len) {
     u64 n = r->h.sections[DPAK_SECTION_STRINGS].size;
@@ -127,10 +139,10 @@ static const char *section_name(dpak_section s) {
 /* The fixed header fields. `actual_size` is the real size of the file or buffer. */
 static de_result check_header(dpak_reader *r, u64 actual_size, const dpak_open_desc *d) {
     const dpak_header *h = &r->h;
-    if (h->version != DPAK_VERSION)
+    if (h->version < DPAK_VERSION_MIN || h->version > DPAK_VERSION)
         return DE_FAIL(DE_ERR_VERSION_MISMATCH,
-                       "pack \"%s\": format version %u, this build reads version %u", r->path,
-                       h->version, DPAK_VERSION);
+                       "pack \"%s\": format version %u, this build reads versions %u to %u",
+                       r->path, h->version, DPAK_VERSION_MIN, DPAK_VERSION);
     if (h->header_size != DPAK_HEADER_SIZE)
         return DE_FAIL(DE_ERR_VERSION_MISMATCH, "pack \"%s\": header size %u, expected %u", r->path,
                        h->header_size, DPAK_HEADER_SIZE);
@@ -154,7 +166,7 @@ static de_result check_header(dpak_reader *r, u64 actual_size, const dpak_open_d
                        h->alignment);
     for (u32 i = 0; i < (u32)DPAK_SECTION_COUNT; ++i) {
         const dpak_section_desc *s = &h->sections[i];
-        u64 rec = dpak_section_record_size((dpak_section)i);
+        u64 rec = dpak_section_record_size(h->version, (dpak_section)i);
         if (s->count == 0) {
             /* The format says offset, size and count are all 0. The offset matters too:
              * section_ptr() adds it to the base pointer even for an empty section, and a pointer
@@ -196,12 +208,11 @@ static u64 sections_end(const dpak_header *h) {
  * last dictionary ends to `*end`. */
 static de_result check_dicts(dpak_reader *r, u64 *end) {
     u32 n = section_count(r, DPAK_SECTION_DICTS);
-    const u8 *p = section_ptr(r, DPAK_SECTION_DICTS);
     *end = 0;
     u64 prev = 0;
     for (u32 i = 0; i < n; ++i) {
         dpak_dict_entry d;
-        dpak_dict_entry_load(p + (u64)i * DPAK_DICT_ENTRY_SIZE, &d);
+        dict_entry(r, i, &d);
         if ((i != 0 && d.type_hash <= prev) || d.size == 0 ||
             !range_ok(d.file_offset, d.size, r->h.file_size))
             return DE_FAIL(DE_ERR_PARSE, "pack \"%s\": dictionary %u is out of range or order",
@@ -220,7 +231,6 @@ static de_result check_entries(dpak_reader *r) {
     u32 chunk_total = section_count(r, DPAK_SECTION_CHUNKS);
     u32 dep_total = section_count(r, DPAK_SECTION_DEPS);
     u32 dict_total = section_count(r, DPAK_SECTION_DICTS);
-    const u8 *dicts = section_ptr(r, DPAK_SECTION_DICTS);
     u64 cs = h->chunk_size;
     u64 next_chunk = 0;
     u64 prev_id = 0;
@@ -269,7 +279,7 @@ static de_result check_entries(dpak_reader *r) {
                     return DE_FAIL(DE_ERR_PARSE,
                                    "pack \"%s\": TOC entry %u: chunk %u names dictionary %u",
                                    r->path, i, k, c.dict_index);
-                dpak_dict_entry_load(dicts + (u64)c.dict_index * DPAK_DICT_ENTRY_SIZE, &d);
+                dict_entry(r, c.dict_index, &d);
                 if (d.type_hash != e.type_hash)
                     return DE_FAIL(DE_ERR_PARSE,
                                    "pack \"%s\": TOC entry %u: dictionary of another type", r->path,
@@ -325,15 +335,21 @@ static de_result make_ddicts(dpak_reader *r) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "pack \"%s\": out of memory", r->path);
     memset(r->ddicts, 0, sizeof(ZSTD_DDict *) * n);
     r->ddict_count = n;
-    const u8 *p = section_ptr(r, DPAK_SECTION_DICTS);
     for (u32 i = 0; i < n; ++i) {
         dpak_dict_entry d;
-        dpak_dict_entry_load(p + (u64)i * DPAK_DICT_ENTRY_SIZE, &d);
+        dict_entry(r, i, &d);
+        /* With check_chunks a damaged dictionary is refused here; without it, only when zstd
+         * cannot parse it (the hash then says why). de-pack verify opens without the check and
+         * calls dpak_check_dict itself, so it can name every asset that uses the dictionary. */
+        if (r->check_chunks)
+            DE_TRY(dpak_check_dict(r, i));
         r->ddicts[i] = ZSTD_createDDict_advanced(r->base + d.file_offset, d.size, ZSTD_dlm_byRef,
                                                  ZSTD_dct_auto, zs_mem(r->alloc));
-        if (r->ddicts[i] == NULL)
+        if (r->ddicts[i] == NULL) {
+            DE_TRY(dpak_check_dict(r, i));
             return DE_FAIL(DE_ERR_PARSE, "pack \"%s\": dictionary %u is not a zstd dictionary",
                            r->path, i);
+        }
         if (ZSTD_getDictID_fromDDict(r->ddicts[i]) != d.zstd_id)
             return DE_FAIL(DE_ERR_PARSE, "pack \"%s\": dictionary %u has ID %u, the table says %u",
                            r->path, i, ZSTD_getDictID_fromDDict(r->ddicts[i]), d.zstd_id);
@@ -374,6 +390,7 @@ static de_result verify_file(dpak_reader *r) {
 
 /* Everything after the header is at `base` (meta_size bytes, at least up to the dictionaries). */
 static de_result check_all(dpak_reader *r) {
+    r->check_chunks = r->check_chunks && dpak_version_has_hashes(r->h.version);
     de_result res = check_entries(r);
     if (res == DE_OK)
         res = check_bundles(r);
@@ -392,6 +409,7 @@ static dpak_reader *reader_new(const dpak_open_desc *desc, const char *path) {
         return NULL;
     memset(r, 0, sizeof *r);
     r->alloc = a;
+    r->check_chunks = desc != NULL && desc->check_chunks; /* masked by the version at check_all */
     size_t n = strlen(path);
     if (n >= sizeof r->path)
         n = sizeof r->path - 1u;
@@ -564,8 +582,17 @@ u32 dpak_find(const dpak_reader *r, u64 id) {
 }
 
 void dpak_chunk(const dpak_reader *r, u32 index, dpak_chunk_entry *out) {
-    dpak_chunk_entry_load(section_ptr(r, DPAK_SECTION_CHUNKS) + (u64)index * DPAK_CHUNK_ENTRY_SIZE,
-                          out);
+    dpak_chunk_entry_load(section_ptr(r, DPAK_SECTION_CHUNKS) +
+                              (u64)index * dpak_chunk_entry_size(r->h.version),
+                          r->h.version, out);
+}
+
+u32 dpak_dict_count(const dpak_reader *r) {
+    return section_count(r, DPAK_SECTION_DICTS);
+}
+
+void dpak_dict(const dpak_reader *r, u32 index, dpak_dict_entry *out) {
+    dict_entry(r, index, out);
 }
 
 u64 dpak_dep(const dpak_reader *r, u32 index) {
@@ -620,10 +647,49 @@ u64 dpak_bundle_id(const dpak_reader *r, u32 index) {
     return dpak_load_u64(section_ptr(r, DPAK_SECTION_BUNDLE_IDS) + (u64)index * DPAK_ID_SIZE);
 }
 
+/* ---- Hashes ---------------------------------------------------------------------------------- */
+
+bool dpak_has_hashes(const dpak_reader *r) {
+    return dpak_version_has_hashes(r->h.version);
+}
+
+bool dpak_checks_chunks(const dpak_reader *r) {
+    return r->check_chunks;
+}
+
+de_result dpak_check_chunk(const dpak_reader *r, const dpak_chunk_entry *c, const void *src) {
+    if (!dpak_version_has_hashes(r->h.version))
+        return DE_OK;
+    u64 got = de_hash64(src, c->stored_size, 0);
+    if (got != c->hash)
+        return DE_FAIL(DE_ERR_PARSE,
+                       "pack \"%s\": chunk at %llu is damaged (its bytes hash to %016llx, the "
+                       "chunk table says %016llx)",
+                       r->path, (unsigned long long)c->file_offset, (unsigned long long)got,
+                       (unsigned long long)c->hash);
+    return DE_OK;
+}
+
+de_result dpak_check_dict(const dpak_reader *r, u32 index) {
+    if (!dpak_version_has_hashes(r->h.version) || index >= section_count(r, DPAK_SECTION_DICTS))
+        return DE_OK;
+    dpak_dict_entry d;
+    dict_entry(r, index, &d);
+    u64 got = de_hash64(r->base + d.file_offset, d.size, 0); /* in the metadata block (open) */
+    if (got != d.hash)
+        return DE_FAIL(DE_ERR_PARSE,
+                       "pack \"%s\": dictionary %u is damaged (its bytes hash to %016llx, the "
+                       "table says %016llx)",
+                       r->path, index, (unsigned long long)got, (unsigned long long)d.hash);
+    return DE_OK;
+}
+
 /* ---- Data ------------------------------------------------------------------------------------ */
 
 de_result dpak_decode_chunk(const dpak_reader *r, void *dctx, const dpak_chunk_entry *c,
                             const void *src, void *dst) {
+    if (r->check_chunks)
+        DE_TRY(dpak_check_chunk(r, c, src));
     if ((c->flags & DPAK_CHUNK_RAW) != 0) {
         memcpy(dst, src, c->raw_size);
         return DE_OK;

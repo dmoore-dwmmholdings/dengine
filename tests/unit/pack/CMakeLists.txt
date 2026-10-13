@@ -17,7 +17,7 @@ endif()
 # --json, extract against the cooker's own output. Each test first cooks the fixture project
 # tests/data/cook_project/ with `de-cook cook` (tools/cook/cook_cmd.c) into a scratch directory.
 de_add_test(NAME pack_cli SOURCES test_pack_cli.c
-            LIBS de_pack_cmds de_cook_cmd de_cooker de_asset de_ecs de_task de_platform
+            LIBS de_pack_cmds de_cook_cmd de_cooker de_pack_lib de_asset de_ecs de_task de_platform
             TIMEOUT 300)
 if(TARGET test_pack_cli)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_pack_cli_tmp")

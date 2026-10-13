@@ -14,6 +14,11 @@
  * so the accessors below need no checks of their own and never read outside the file. Only the
  * content hash is optional (`verify`): it reads the whole file.
  *
+ * Format versions 1 and 2 are read. A version 2 pack has a hash of every chunk's stored bytes and
+ * of every dictionary (DENG-392): dpak_check_chunk / dpak_check_dict check one, and
+ * `check_chunks` makes dpak_decode_chunk check every chunk before it decodes it. Version 1 packs
+ * have no hashes; for them the checks always pass.
+ *
  * Memory: a file reader reads the metadata block (header, sections, dictionaries) once at open
  * and keeps the file open for the reads of asset data (de_file reads take an offset, so several
  * threads may read at once). A memory reader keeps a pointer to the caller's bytes, which must
@@ -48,6 +53,12 @@ typedef struct dpak_open_desc {
     u32 platform;
     /** Check the header's content_hash. Reads every byte of the file once. */
     bool verify;
+    /** Version 2 packs: check each dictionary's hash at open, and each chunk's hash in
+     * dpak_decode_chunk and dpak_read_entry before it is decoded, so a damaged chunk fails with
+     * DE_ERR_PARSE instead of decoding to wrong bytes. Costs one XXH3 pass over the stored bytes
+     * (much faster than zstd). The mount stack sets it in Debug and Dev builds. No effect on a
+     * version 1 pack. */
+    bool check_chunks;
 } dpak_open_desc;
 
 /** The dpak_platform value of this build's target (Windows, Linux or macOS). */
@@ -88,8 +99,13 @@ u32 dpak_entry_count(const dpak_reader *r);
 void dpak_entry(const dpak_reader *r, u32 index, dpak_toc_entry *out);
 /** The TOC index of asset `id` (binary search), or DPAK_NOT_FOUND. */
 u32 dpak_find(const dpak_reader *r, u64 id);
-/** Decodes chunk `index` of the CHUNKS section (an entry's chunks are first_chunk + k). */
+/** Decodes chunk `index` of the CHUNKS section (an entry's chunks are first_chunk + k). In a
+ * version 1 pack `out->hash` is 0. */
 void dpak_chunk(const dpak_reader *r, u32 index, dpak_chunk_entry *out);
+/** Number of dictionaries (DICTS entries). */
+u32 dpak_dict_count(const dpak_reader *r);
+/** Decodes dictionary entry `index` (< dpak_dict_count). In a version 1 pack `out->hash` is 0. */
+void dpak_dict(const dpak_reader *r, u32 index, dpak_dict_entry *out);
 /** Dependency `index` of the DEPS section (an entry's are dep_first + k): an asset ID. */
 u64 dpak_dep(const dpak_reader *r, u32 index);
 /**
@@ -111,14 +127,40 @@ const char *dpak_bundle_name(const dpak_reader *r, const dpak_bundle_entry *b);
 /** Entry `index` of the BUNDLE_IDS section: a member asset ID or a depend name hash. */
 u64 dpak_bundle_id(const dpak_reader *r, u32 index);
 
+/* ---- Hashes (format version 2) ------------------------------------------------------------- */
+
+/** True if the pack stores chunk and dictionary hashes (format version 2 and later). */
+bool dpak_has_hashes(const dpak_reader *r);
+
+/** True if the reader checks chunk hashes before decoding (`check_chunks` on a version 2 pack).
+ * A caller that uses stored bytes without dpak_decode_chunk (the raw read path of the load
+ * pipeline) calls dpak_check_chunk itself when this is true. */
+bool dpak_checks_chunks(const dpak_reader *r);
+
+/**
+ * Checks one chunk's stored bytes against its hash: `src` holds its chunk->stored_size bytes
+ * (from the file or from memory). Any thread.
+ * @return DE_OK (the hash matches, or the pack has no hashes); DE_ERR_PARSE (damaged: the
+ *         message names the pack, the chunk's file offset and both hashes).
+ */
+de_result dpak_check_chunk(const dpak_reader *r, const dpak_chunk_entry *chunk, const void *src);
+
+/**
+ * Checks dictionary `index` against its hash (the bytes are in the reader's metadata). Any thread.
+ * @return DE_OK (the hash matches, the pack has no hashes, or `index` is out of range);
+ *         DE_ERR_PARSE (damaged).
+ */
+de_result dpak_check_dict(const dpak_reader *r, u32 index);
+
 /* ---- Data ---------------------------------------------------------------------------------- */
 
 /**
  * Decodes one chunk: `src` holds its chunk->stored_size stored bytes, `dst` gets its
  * chunk->raw_size bytes. A RAW chunk is copied; a zstd chunk is decompressed with `dctx` (a
- * ZSTD_DCtx *), through its dictionary's ZSTD_DDict when it names one. Any thread.
- * @return DE_OK; DE_ERR_PARSE (a corrupt frame, or one whose size differs from raw_size). Sets
- *         the error context on failure.
+ * ZSTD_DCtx *), through its dictionary's ZSTD_DDict when it names one. With `check_chunks` the
+ * chunk's hash is checked first (dpak_check_chunk). Any thread.
+ * @return DE_OK; DE_ERR_PARSE (a corrupt frame, one whose size differs from raw_size, or a hash
+ *         mismatch). Sets the error context on failure.
  */
 de_result dpak_decode_chunk(const dpak_reader *r, void *dctx, const dpak_chunk_entry *chunk,
                             const void *src, void *dst);

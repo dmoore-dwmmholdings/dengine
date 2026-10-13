@@ -7,7 +7,10 @@
  * dependencies, bundles (depends, resident, every priority, a member from another pack), stripped
  * names, an empty pack, and the default 4096-byte alignment with full 64 KiB chunks. The other
  * seeds use 1 KiB chunks and small alignments, so they stay small and still have several chunks
- * per asset.
+ * per asset. Every seed is format version 2 (chunk and dictionary hashes, DENG-392), except the
+ * v1_* seeds: version 1 packs, which readers still accept. The writer writes version 1 byte for
+ * byte as the version 1 writer did, so v1_zstd_chunks.dpak and v1_dictionary.dpak are the
+ * zstd_chunks.dpak and dictionary.dpak seeds of DENG-216.
  *
  * CTest dpak_corpus.seeds checks that every seed file exists, opens with the content-hash check
  * and decodes, and has the feature it is there for, so a format change that turns the seeds into
@@ -96,6 +99,8 @@ typedef enum mc_feature {
     MC_HAS_DEPS = 1u << 6,   /* a dependency */
     MC_EMPTY = 1u << 7,      /* no entries and no bundles */
     MC_MULTI = 1u << 8,      /* an asset of several chunks */
+    MC_V2 = 1u << 9,         /* format version 2: chunk and dictionary hashes */
+    MC_V1 = 1u << 10,        /* format version 1: no hashes */
 } mc_feature;
 
 typedef struct mc_seed {
@@ -183,27 +188,36 @@ static const mc_seed k_seeds[] = {
     {"raw_chunks.dpak",
      MC_SMALL(.platform = DPAK_PLATFORM_LINUX, .alignment = 8, .zstd_level = 3,
               .include_names = true),
-     fill_raw, MC_HAS_RAW | MC_HAS_NAMES | MC_MULTI},
+     fill_raw, MC_HAS_RAW | MC_HAS_NAMES | MC_MULTI | MC_V2},
     {"zstd_chunks.dpak",
      MC_SMALL(.platform = DPAK_PLATFORM_ANY, .alignment = 16, .zstd_level = 3,
               .include_names = true),
-     fill_zstd, MC_HAS_ZSTD | MC_HAS_NAMES | MC_HAS_DEPS | MC_MULTI},
+     fill_zstd, MC_HAS_ZSTD | MC_HAS_NAMES | MC_HAS_DEPS | MC_MULTI | MC_V2},
     {"dictionary.dpak",
      MC_SMALL(.platform = DPAK_PLATFORM_MACOS, .alignment = 8, .include_names = true,
               .use_dictionaries = true, .zstd_level = 19),
-     fill_dict, MC_HAS_DICT | MC_HAS_ZSTD | MC_HAS_NAMES},
+     fill_dict, MC_HAS_DICT | MC_HAS_ZSTD | MC_HAS_NAMES | MC_V2},
     {"bundles.dpak",
      MC_SMALL(.platform = DPAK_PLATFORM_WINDOWS, .alignment = 64, .zstd_level = 3,
               .include_names = true),
-     fill_bundles, MC_HAS_BUNDLE | MC_HAS_RAW | MC_HAS_ZSTD | MC_HAS_NAMES},
+     fill_bundles, MC_HAS_BUNDLE | MC_HAS_RAW | MC_HAS_ZSTD | MC_HAS_NAMES | MC_V2},
     {"stripped.dpak", MC_SMALL(.platform = DPAK_PLATFORM_LINUX, .alignment = 8, .zstd_level = 3),
-     fill_stripped, MC_NO_NAMES | MC_HAS_BUNDLE | MC_HAS_DEPS | MC_HAS_RAW | MC_MULTI},
+     fill_stripped, MC_NO_NAMES | MC_HAS_BUNDLE | MC_HAS_DEPS | MC_HAS_RAW | MC_MULTI | MC_V2},
     {"empty.dpak", MC_SMALL(.platform = DPAK_PLATFORM_ANY, .zstd_level = 3), fill_empty,
-     MC_EMPTY | MC_NO_NAMES},
+     MC_EMPTY | MC_NO_NAMES | MC_V2},
     {"aligned_4096.dpak",
      {.platform = DPAK_PLATFORM_ANY, .zstd_level = 3, .include_names = true},
      fill_aligned,
-     MC_HAS_ZSTD | MC_HAS_NAMES | MC_HAS_DEPS | MC_MULTI},
+     MC_HAS_ZSTD | MC_HAS_NAMES | MC_HAS_DEPS | MC_MULTI | MC_V2},
+    /* Format version 1 (DENG-392): the version 1 layout must keep loading. */
+    {"v1_zstd_chunks.dpak",
+     MC_SMALL(.platform = DPAK_PLATFORM_ANY, .alignment = 16, .zstd_level = 3,
+              .include_names = true, .format_version = 1),
+     fill_zstd, MC_HAS_ZSTD | MC_HAS_NAMES | MC_HAS_DEPS | MC_MULTI | MC_V1},
+    {"v1_dictionary.dpak",
+     MC_SMALL(.platform = DPAK_PLATFORM_MACOS, .alignment = 8, .include_names = true,
+              .use_dictionaries = true, .zstd_level = 19, .format_version = 1),
+     fill_dict, MC_HAS_DICT | MC_HAS_ZSTD | MC_HAS_NAMES | MC_V1},
 };
 
 static void mc_build(const mc_seed *s, void **data, u64 *size) {
@@ -240,7 +254,8 @@ static u32 mc_check(const char *path) {
         FAIL("cannot read a seed (write the corpus with DE_DPAK_CORPUS_UPDATE=1)");
     }
     dpak_reader *r = NULL;
-    de_result res = dpak_open_memory(bytes, n, &(dpak_open_desc){.verify = true}, &r);
+    de_result res =
+        dpak_open_memory(bytes, n, &(dpak_open_desc){.verify = true, .check_chunks = true}, &r);
     if (res != DE_OK) {
         free(bytes);
         FAIL("a seed does not open (write the corpus again with DE_DPAK_CORPUS_UPDATE=1)");
@@ -248,6 +263,9 @@ static u32 mc_check(const char *path) {
     const dpak_header *h = dpak_get_header(r);
     u32 got = 0;
     got |= (h->flags & DPAK_HEADER_HAS_NAMES) != 0 ? MC_HAS_NAMES : MC_NO_NAMES;
+    got |= dpak_has_hashes(r) ? MC_V2 : MC_V1;
+    for (u32 i = 0; i < dpak_dict_count(r); ++i)
+        EXPECT_EQ(dpak_check_dict(r, i), DE_OK);
     if (dpak_entry_count(r) == 0 && dpak_bundle_count(r) == 0)
         got |= MC_EMPTY;
     for (u32 i = 0; i < dpak_bundle_count(r); ++i) {
@@ -266,6 +284,7 @@ static u32 mc_check(const char *path) {
         for (u32 k = 0; k < e.chunk_count; ++k) {
             dpak_chunk_entry c;
             dpak_chunk(r, e.first_chunk + k, &c);
+            EXPECT_EQ(dpak_check_chunk(r, &c, bytes + c.file_offset), DE_OK);
             if ((c.flags & DPAK_CHUNK_RAW) != 0)
                 got |= MC_HAS_RAW;
             else if (c.dict_index != DPAK_DICT_NONE)

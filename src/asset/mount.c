@@ -34,6 +34,15 @@ DE_STATIC_ASSERT(DPAK_PRIORITY_BACKGROUND == 4 && DE__LOAD_PRIORITY_BACKGROUND =
 #define DE__PACK_VERIFY false
 #endif
 
+/* Debug and Dev builds check each chunk's hash before it is decoded, and each dictionary's at
+ * mount (format version 2, DENG-392), so a damaged chunk fails its load instead of decoding to
+ * wrong bytes. One XXH3 pass over the stored bytes; Release and Shipping skip it. */
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+#define DE__PACK_CHECK_CHUNKS true
+#else
+#define DE__PACK_CHECK_CHUNKS false
+#endif
+
 /** Most assets one pack bundle closure may name. */
 #define DE__PACK_BUNDLE_MAX_IDS (1u << 24)
 
@@ -145,8 +154,10 @@ de_result de_asset_pack_mount(de_asset_system *s, const char *vpath, i32 priorit
         st->capacity = cap;
     }
 
-    dpak_open_desc od = {
-        .allocator = s->alloc, .platform = dpak_platform_host(), .verify = DE__PACK_VERIFY};
+    dpak_open_desc od = {.allocator = s->alloc,
+                         .platform = dpak_platform_host(),
+                         .verify = DE__PACK_VERIFY,
+                         .check_chunks = DE__PACK_CHECK_CHUNKS};
     dpak_reader *r = NULL;
     de_result res = dpak_open(norm, &od, &r);
     if (res != DE_OK)
