@@ -30,12 +30,18 @@
 #include "cook/lib/de_cooker.h"
 #include "cook/lib/decache.h"
 #include "dpak_writer.h"
+#include "host/game_module.h"
 
 #define XXH_STATIC_LINKING_ONLY
 #include <xxhash.h>
 
 #ifndef DE_HAS_COOKER
 #define DE_HAS_COOKER 0
+#endif
+
+/* DENG-394: 1 in a DE_BUILD_SHARED build, where `--game` is refused (see cc_load_game). */
+#ifndef DE_COOK_SHARED_ENGINE
+#define DE_COOK_SHARED_ENGINE 0
 #endif
 
 #define CC_ROOT          "cook"
@@ -121,6 +127,8 @@ void de_cook_cook_usage(const de_cook_io *io, de_cook_stream s) {
         "  --pack-name <name>     pack file name without .dpak (default: game)\n"
         "  --no-dictionaries      do not train zstd dictionaries per asset type\n"
         "  --verify-determinism   run every import twice and compare the outputs\n"
+        "  --game <library>       load a game library (de_add_game) and register its asset\n"
+        "                         and component types before cooking\n"
         "  -I, --include-dir <dir>\n"
         "                         read includes missing next to the including file from "
         "<dir>\n"
@@ -185,6 +193,7 @@ typedef struct cc_options {
     bool help;
     const char *include_dirs[CC_MAX_INCLUDES];
     u32 include_dir_count;
+    const char *game; /* DENG-394: --game <library>, a native path; NULL = none */
 } cc_options;
 
 /* `--name value` or `--name=value`. Returns the value, or NULL if `arg` is not this option.
@@ -308,6 +317,12 @@ static int cc_parse_args(int argc, const char *const *argv, cc_options *o, const
                 return cc_usage_error(
                     io, "--pack-name takes 1 to 64 of A-Z a-z 0-9 _ - . (not first), not", v);
             o->pack_name = v;
+        } else if ((v = cc_value_opt(argc, argv, &i, "--game", &missing)) != NULL || missing) {
+            if (missing || v[0] == '\0')
+                return cc_usage_error(io, "missing value for", "--game");
+            if (o->game != NULL)
+                return cc_usage_error(io, "more than one game library given:", v);
+            o->game = v;
         } else if ((v = cc_value_opt(argc, argv, &i, "--include-dir", &missing)) != NULL ||
                    missing || (v = cc_value_opt(argc, argv, &i, "-I", &missing)) != NULL ||
                    missing || (strncmp(arg, "-I", 2) == 0 && arg[2] != '\0')) {
@@ -419,6 +434,13 @@ typedef struct cc_run {
     de_asset_system *assets;
     de_cooker *cooker;
 
+    /* DENG-394: the game library of --game, and the engine its register_types got. Both live
+     * until the run ends: the types it registered point into the library, and a game may keep
+     * the engine pointer. */
+    de__game_module game;
+    de_engine engine;
+    u32 game_asset_types; /* asset types the game added */
+
     de__manifest *manifest;
     de__resolved *resolved;
 
@@ -455,6 +477,12 @@ static void cc_cleanup(cc_run *run) {
         (void)de_fs_unmount(CC_INC_ROOT, run->o->include_dirs[i]);
     if (run->root_mounted)
         (void)de_fs_unmount(CC_ROOT, run->dir);
+    /* Last: everything above may hold pointers into the game library (type names, importers,
+     * loaders, component hooks), and so may the error context (file and function names). */
+    if (run->game.api != NULL) {
+        de_error_clear();
+        de__game_module_unload(&run->game);
+    }
 }
 
 #if DE_HAS_COOKER /* the cook path; Release and Shipping trees only refuse (cc_cook) */
@@ -582,6 +610,65 @@ static de_result cc_make_native_dir(const char *path) {
     return r;
 }
 
+/* ---- Game library (DENG-394) ---------------------------------------------------------------- */
+
+/*
+ * Loads --game with the host's loader (de__game_module_load: de_game_get_api, the API version,
+ * the required callbacks) and calls the game's register_types, and nothing else: no init, no
+ * register_systems, no shutdown. The game gets a de_engine with the tool's allocator, task
+ * system (NULL with --jobs 1), type registry, world and asset system; every other field is NULL,
+ * as on a headless server without the optional modules. Its asset types (with their importers)
+ * and component types land in the tool's asset system and registry, so the cooker mirrors them
+ * like the built-in ones.
+ */
+static int cc_load_game(cc_run *run) {
+    const de_cook_io *io = run->io;
+    const char *arg = run->o->game;
+    de_error_clear();
+#if DE_COOK_SHARED_ENGINE
+    (void)arg;
+    /* With DE_BUILD_SHARED the library binds to the shared dengine, a second engine next to the
+     * one linked into this tool, whose VFS has none of the tool's mounts: importers that read
+     * files would fail. */
+    return cc_io_error(io,
+                       "--game needs a de-cook that exports its engine; this one was built with "
+                       "DE_BUILD_SHARED",
+                       NULL);
+#else
+    /* A bare file name would make the OS loader search its library path: take it from the
+     * current directory instead, like any other relative path. */
+    bool has_dir = strchr(arg, '/') != NULL;
+#ifdef _WIN32
+    has_dir = has_dir || strchr(arg, '\\') != NULL || (arg[0] != '\0' && arg[1] == ':');
+#endif
+    char path[DE_FS_PATH_MAX];
+    int n = snprintf(path, sizeof path, "%s%s", has_dir ? "" : "./", arg);
+    if (n < 0 || (size_t)n >= sizeof path)
+        return cc_io_error(io, "game library path too long:", arg);
+    u32 before = 0;
+    (void)de__asset_type_names(run->assets, &before);
+    if (de__game_module_load(&run->game, path) != DE_OK)
+        return cc_io_error(io, "cannot load the game library", arg);
+
+    de_engine *e = &run->engine;
+    memset(e, 0, sizeof *e);
+    e->allocator = run->a;
+    e->tasks = run->tasks;
+    e->types = run->types;
+    e->world = run->world;
+    e->assets = run->assets;
+    run->game.table.register_types(e, run->types);
+    /* register_types cannot report a failure; a type it did not register shows up as an unknown
+     * type in the manifest check. Drop what it left in the error context (it may point into
+     * the library). */
+    de_error_clear();
+    u32 after = 0;
+    (void)de__asset_type_names(run->assets, &after);
+    run->game_asset_types = after - before;
+    return -1;
+#endif
+}
+
 /* ---- Tool runtime: registry, world, asset system, cooker ---------------------------------- */
 
 static int cc_setup_runtime(cc_run *run) {
@@ -618,6 +705,11 @@ static int cc_setup_runtime(cc_run *run) {
     ad.io_threads = 1;
     if (de_asset_system_create(&ad, &run->assets) != DE_OK)
         return cc_io_error(io, "cannot create the asset system", NULL);
+    if (run->o->game != NULL) {
+        int rc = cc_load_game(run);
+        if (rc >= 0)
+            return rc;
+    }
     if (run->hooks != NULL && run->hooks->register_types != NULL) {
         de_error_clear();
         if (run->hooks->register_types(run->hooks->user, run->assets, run->types) != DE_OK)
@@ -1085,6 +1177,9 @@ static int cc_cook(cc_run *run) {
         cc_printf(io, DE_COOK_STDOUT, "  cache hits: %llu, misses: %llu, stores: %llu\n",
                   (unsigned long long)cs.hits, (unsigned long long)cs.misses,
                   (unsigned long long)cs.stores);
+    if (o->game != NULL)
+        cc_printf(io, DE_COOK_STDOUT, "  game: %s (%u asset types added)\n", run->game.table.name,
+                  (unsigned)run->game_asset_types);
     cc_printf(io, DE_COOK_STDOUT, "  bytes raw: %llu, stored: %llu, pack: %llu\n",
               (unsigned long long)t.raw, (unsigned long long)t.stored, (unsigned long long)t.file);
     cc_puts(io, DE_COOK_STDOUT, "  build id: ");

@@ -129,3 +129,58 @@ if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMU
             --no-cache)
     endif()
 endif()
+
+# DENG-394: `de-cook cook --game <lib>`. fixtures/ builds the game library cook_game (de_add_game,
+# where it builds libraries), which registers the fixture project's types, and the plain
+# libraries cook_game_plain and cook_game_no_symbol (every build). test_cook_game runs the
+# command in-process without hooks. Where cook_game exists with a static engine, the test links
+# the whole engine and exports it, as de-cook does (tools/cook/CMakeLists.txt), so the library
+# binds to it; the whole archive comes before the module libraries on the link line. Elsewhere
+# (Windows without DE_BUILD_SHARED, Shipping, DE_BUILD_SHARED) only the plain-library cases run.
+add_subdirectory(fixtures)
+set(_de_cook_game_exports FALSE)
+if(DE_GAME_DYLIB AND NOT DE_BUILD_SHARED)
+    set(_de_cook_game_exports TRUE)
+    de_add_test(NAME cook_game SOURCES test_cook_game.c
+                LIBS "$<LINK_LIBRARY:WHOLE_ARCHIVE,dengine>" de_cook_cmd de_cooker TIMEOUT 120)
+else()
+    de_add_test(NAME cook_game SOURCES test_cook_game.c
+                LIBS de_cook_cmd de_cooker de_host de_asset de_task de_platform TIMEOUT 120)
+endif()
+if(TARGET test_cook_game)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_cook_game_tmp")
+    target_include_directories(test_cook_game PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_cook_game PRIVATE
+        "DE_COOK_CLI_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_cook_game_tmp\""
+        "DE_COOK_PROJECT_DIR=\"${DE_ROOT_DIR}/tests/data/cook_project\""
+        "COOK_GAME_PLAIN_LIB=\"$<TARGET_FILE:cook_game_plain>\""
+        "COOK_GAME_NO_SYMBOL_LIB=\"$<TARGET_FILE:cook_game_no_symbol>\"")
+    add_dependencies(test_cook_game cook_game_plain cook_game_no_symbol)
+    if(_de_cook_game_exports)
+        target_compile_definitions(test_cook_game PRIVATE
+            "COOK_GAME_LIB=\"$<TARGET_FILE:cook_game>\"")
+        add_dependencies(test_cook_game cook_game)
+        set_target_properties(test_cook_game PROPERTIES ENABLE_EXPORTS ON)
+        if(APPLE)
+            target_link_options(test_cook_game PRIVATE "LINKER:-export_dynamic")
+        endif()
+    endif()
+endif()
+
+# DENG-394: the real executable with --game: the full fixture project (which needs the game's
+# types) cooks with cook_game where it exists; an unloadable library exits 2 on every platform.
+if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+   AND CMAKE_BUILD_TYPE MATCHES "^(Debug|Dev)$")
+    set(_de_cook_game_out "${CMAKE_BINARY_DIR}/tests/cook_cli_out/game")
+    if(_de_cook_game_exports)
+        de__cook_cli_test(game_project 0
+            "de-cook cook: .*game.dpak \\(linux\\).*assets cooked: 7 \\(\\+2 sub-assets\\), bundles: 2.*game: cook_game \\(1 asset types added\\)"
+            cook "${DE_ROOT_DIR}/tests/data/cook_project/assets.toml" --platform linux
+            --out "${_de_cook_game_out}" --no-cache --jobs 2 --game "$<TARGET_FILE:cook_game>")
+    endif()
+    de__cook_cli_test(game_no_symbol 2
+        "cannot load the game library .*does not export de_game_get_api"
+        cook "${DE_ROOT_DIR}/tests/data/cook_project/engine.toml" --platform linux
+        --out "${_de_cook_game_out}/nosym" --no-cache
+        --game "$<TARGET_FILE:cook_game_no_symbol>")
+endif()
