@@ -420,6 +420,58 @@ TEST_F(texture_bc, texture_bc6h_hdr_error, bc_fx) {
     EXPECT_TRUE(mr > 100.0f && fabsf(mg - mr) <= 0.1f * mr);
 }
 
+/* ---- import.texture_bc.texture_bc6h_out_of_range --------------------------------------------- */
+
+/* DENG-401: values BC6H unsigned cannot hold reach the encoder clamped, and no encoder assertion
+ * fires (Debug builds). Block 0: red at +Inf, 1e9 and 65504 (all saturated) with a slightly
+ * varying green, the low-variance path that asserted max < 0x7BFF. Block 1: red and blue only
+ * NaN, -Inf, negatives and -0 (they decode to 0), next to an ordinary green ramp. */
+TEST_F(texture_bc, texture_bc6h_out_of_range, bc_fx) {
+    enum { W = 8, H = 4 };
+    f32 src[W * H * 4];
+    for (u32 y = 0; y < H; ++y)
+        for (u32 x = 0; x < W; ++x) {
+            f32 *p = src + (y * W + x) * 4u;
+            u32 t = y * 4u + (x & 3u);
+            if (x < 4u) {
+                p[0] = t % 3u == 0 ? INFINITY : (t % 3u == 1 ? 1.0e9f : 65504.0f);
+                p[1] = 1.0f + 0.001f * (f32)t;
+                p[2] = 0.5f;
+            } else {
+                static const f32 bad[4] = {NAN, -INFINITY, -1.0f, -0.0f};
+                p[0] = bad[t % 4u];
+                p[1] = 0.25f * (f32)t;
+                p[2] = t % 2u == 0 ? -65504.0f : -NAN;
+            }
+            p[3] = 1.0f;
+        }
+    de_fp_env_init_thread();
+    static const de_tex_quality q[] = {DE_TEX_QUALITY_FAST, DE_TEX_QUALITY_NORMAL,
+                                       DE_TEX_QUALITY_HIGH};
+    for (u32 qi = 0; qi < BC_COUNT(q); ++qi) {
+        de_tex_encode_opts o;
+        memset(&o, 0, sizeof o);
+        o.quality = q[qi];
+        u8 blocks[2 * 16];
+        ASSERT_EQ(de_tex_bc_encode(&f->alloc, DE_FMT_BC6H_UFLOAT, src, W, H, blocks, 32, &o),
+                  DE_OK);
+        for (u32 b = 0; b < 2u; ++b) {
+            f32 pf[16 * 3];
+            bcdec_bc6h_float(blocks + b * 16u, pf, 12, 0);
+            for (u32 t = 0; t < 16u; ++t) {
+                for (u32 c = 0; c < 3u; ++c) {
+                    f32 v = pf[t * 3u + c];
+                    EXPECT_TRUE(isfinite(v) && v >= 0.0f);
+                    if (b == 0 && c == 0) /* saturated red: near the top of the half range */
+                        EXPECT_TRUE(v >= 60000.0f && v <= 65504.0f);
+                    else if (b == 1 && c != 1) /* NaN, -Inf, negatives, -0: zero */
+                        EXPECT_TRUE(v <= 0.01f);
+                }
+            }
+        }
+    }
+}
+
 /* ---- import.texture_bc.texture_bc6h_environment ---------------------------------------------- */
 
 TEST_F(texture_bc, texture_bc6h_environment, bc_fx) {
