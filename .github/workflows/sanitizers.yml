@@ -7,7 +7,8 @@
 # other run is full; `gh workflow run Sanitizers -f tier=full` forces the full set.
 #
 # The full tier also runs fuzz-smoke (SPEC §19.1; DENG-216): every libFuzzer target fuzzes for 60 s
-# under ASan+UBSan, starting from its checked-in corpus. The sanitize jobs only replay the corpora.
+# under ASan+UBSan, starting from its checked-in corpus plus the corpus that earlier runs grew
+# (actions/cache, DENG-395). The sanitize jobs only replay the checked-in corpora.
 name: Sanitizers
 
 on:
@@ -143,9 +144,17 @@ jobs:
   # ci-linux-asan preset) and DE_FUZZ_LIBFUZZER=ON; -fsanitize=fuzzer-no-link instruments every
   # library too, so the fuzzer gets coverage from the parsers and not only from the fuzz target's
   # own file. Each fuzz target (CTest label `fuzz`, the harness self test excluded: its crash input
-  # is reachable on purpose) runs for FUZZ_SECONDS from a scratch copy of its corpus. A crash,
-  # leak, timeout (10 s per input) or allocation over 256 MiB fails the job; the inputs that caused
-  # it are uploaded as `fuzz-findings`. Reproduce locally: docs/ci.md.
+  # is reachable on purpose) runs for FUZZ_SECONDS from its checked-in corpus and its cached corpus
+  # fuzz-corpus/<test name>/, where libFuzzer writes the new inputs. A crash, leak, timeout (10 s
+  # per input) or allocation over 256 MiB fails the job; the inputs that caused it are uploaded as
+  # `fuzz-findings`. Reproduce locally: docs/ci.md.
+  #
+  # DENG-395: fuzz-corpus/ is kept between runs with actions/cache, so coverage grows from run to
+  # run. A cache entry cannot be overwritten, so each run saves under a new key (run id and
+  # attempt) and the next run restores the newest entry by prefix: first this ref's, then any it
+  # may read (GitHub scopes caches to the branch, its pull request base and the default branch).
+  # After fuzzing, `-merge=1` keeps only the inputs that add coverage, so the cache stays small.
+  # Pull request runs restore but do not save. The checked-in seed corpora never change here.
   fuzz-smoke:
     name: linux clang libFuzzer smoke (ASan+UBSan)
     needs: plan
@@ -204,8 +213,21 @@ jobs:
           read -r -a targets <<<"${TARGETS}"
           cmake --build --preset "${PRESET}" --target "${targets[@]}"
 
+      - name: Restore the fuzz corpora
+        id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fuzz-corpus-${{ github.ref_name }}-
+            fuzz-corpus-
+
       - name: Fuzz each target for ${{ env.FUZZ_SECONDS }} s
+        id: fuzz
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.corpus.outputs.cache-matched-key }}
         run: |
           set -u
           # fuzz.<name> runs `fuzz_<name> -runs=0 [<corpus dir>] [-dict=<file>]`: take the path,
@@ -220,21 +242,35 @@ jobs:
             jq . fuzz-targets.json
             exit 1
           fi
-          mkdir -p fuzz-findings fuzz-work
+          mkdir -p fuzz-findings fuzz-work fuzz-corpus
+          # Drop the cached corpora of targets that no longer exist.
+          for d in fuzz-corpus/*/; do
+            [ -d "${d}" ] || continue
+            d=$(basename "${d}")
+            if ! jq -e --arg n "${d}" 'any(.[]; .name == $n)' fuzz-targets.json >/dev/null; then
+              echo "dropping the cached corpus of ${d}"
+              rm -rf "fuzz-corpus/${d}"
+            fi
+          done
           status=0
           {
             echo "## libFuzzer smoke: ${FUZZ_SECONDS} s per target"
             echo
-            echo "| Target | Result | Runs | Corpus |"
+            echo "Cached corpus: ${CACHE_HIT:-none (first run on this ref)}"
+            echo
+            echo "| Target | Result | Runs | Cached corpus: restored, after fuzzing, after merge |"
             echo "|---|---|---|---|"
           } >> "${GITHUB_STEP_SUMMARY}"
+          count() { find "$1" -type f | wc -l | tr -d ' '; }
           while read -r t; do
             name=$(jq -r .name <<<"${t}")
             exe=$(jq -r .exe <<<"${t}")
             corpus=$(jq -r .corpus <<<"${t}")
             dict=$(jq -r .dict <<<"${t}")
-            work="fuzz-work/${name}"
+            # libFuzzer writes new inputs to the first directory: the cached corpus.
+            work="fuzz-corpus/${name}"
             mkdir -p "${work}"
+            restored=$(count "${work}")
             echo "::group::${name}"
             args=(-max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=2048
                   -malloc_limit_mb=256 -print_final_stats=1
@@ -249,20 +285,49 @@ jobs:
             "${exe}" "${args[@]}" 2>&1 | tee "fuzz-work/${name}.log"
             rc=${PIPESTATUS[0]}
             set -e
+            fuzzed=$(count "${work}")
+            merged="-"
+            if [ "${rc}" -eq 0 ] && [ "${fuzzed}" -gt 0 ]; then
+              # Keep the inputs of the cached corpus that add coverage. A failed merge keeps the
+              # corpus as it is; it is not a finding.
+              min="fuzz-work/${name}.merged"
+              rm -rf "${min}"
+              mkdir -p "${min}"
+              if "${exe}" -merge=1 -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=256 \
+                   "${min}" "${work}" > "fuzz-work/${name}.merge.log" 2>&1; then
+                rm -rf "${work}"
+                mv "${min}" "${work}"
+                merged=$(count "${work}")
+              else
+                echo "::warning::${name}: corpus merge failed, the corpus is kept unmerged"
+                tail -n 20 "fuzz-work/${name}.merge.log"
+              fi
+            fi
             echo "::endgroup::"
             runs=$(grep -m1 -oE 'stat::number_of_executed_units: *[0-9]+' "fuzz-work/${name}.log" \
                    | grep -oE '[0-9]+$' || echo "?")
-            files=$(find "${work}" -type f | wc -l)
+            files="${restored}, ${fuzzed}, ${merged}"
             if [ "${rc}" -eq 0 ]; then
-              echo "| ${name} | ok | ${runs} | ${files} new |" >> "${GITHUB_STEP_SUMMARY}"
+              echo "| ${name} | ok | ${runs} | ${files} |" >> "${GITHUB_STEP_SUMMARY}"
             else
               echo "::error::${name}: libFuzzer exit code ${rc} (inputs in the fuzz-findings artifact)"
-              echo "| ${name} | **failed (exit ${rc})** | ${runs} | ${files} new |" \
+              echo "| ${name} | **failed (exit ${rc})** | ${runs} | ${files} |" \
                 >> "${GITHUB_STEP_SUMMARY}"
               status=1
             fi
           done < <(jq -c '.[]' fuzz-targets.json)
           exit "${status}"
+
+      # Also after a finding: the crash input is in fuzz-findings/, not in the corpus, and the
+      # other targets' corpora are still worth keeping.
+      - name: Save the fuzz corpora
+        if: >-
+          !cancelled() && github.event_name != 'pull_request' &&
+          (steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz-corpus
+          key: ${{ steps.corpus.outputs.cache-primary-key }}
 
       - name: Upload fuzz findings
         if: failure()

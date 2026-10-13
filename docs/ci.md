@@ -111,15 +111,37 @@ job fuzzes for real (SPEC §19.1, DENG-216):
   so libFuzzer sees coverage inside the parsers, not only in the fuzz target's own file. The
   configure step fails if the targets did not get libFuzzer (`DE_FUZZ_USES_LIBFUZZER`).
 - It lists the targets from CTest (label `fuzz`, without `selftest`: the harness self test has a
-  crash input on purpose), builds only those, and runs each for 60 s (`FUZZ_SECONDS`) from an
-  empty scratch directory plus its checked-in corpus. A target registered with
-  `de_add_fuzz_target(... DICT <file>)` also gets its libFuzzer dictionary (`-dict=<file>`, taken
-  from the CTest command; DENG-106).
+  crash input on purpose), builds only those, and runs each for 60 s (`FUZZ_SECONDS`) from its
+  cached corpus `fuzz-corpus/<test name>/` (below) plus its checked-in corpus. A target registered
+  with `de_add_fuzz_target(... DICT <file>)` also gets its libFuzzer dictionary (`-dict=<file>`,
+  taken from the CTest command; DENG-106).
+- **Cached corpus** (DENG-395). `fuzz-corpus/` is kept between runs with `actions/cache`, so each
+  run starts where the last one stopped and coverage grows:
+  - libFuzzer writes the new inputs to `fuzz-corpus/<test name>/`. After a clean run,
+    `-merge=1` keeps only the inputs of that directory that add coverage, so the cache stays
+    small. A failed merge keeps the corpus unmerged and only warns.
+  - A cache entry cannot be overwritten. Each run saves under a new key,
+    `fuzz-corpus-<ref name>-<run id>-<attempt>`, and the next run restores the newest entry whose
+    key starts with `fuzz-corpus-<ref name>-`, else `fuzz-corpus-`. GitHub lets a run read the
+    caches of its own branch, of a pull request's base branch, and of the default branch (`main`),
+    so a `feature/**` branch starts empty unless `main` has an entry; `dev` runs start from the
+    previous `dev` run.
+  - The corpus is saved also when a target finds something: the failing input goes to
+    `fuzz-findings/`, not into the corpus. Pull request runs restore but do not save. A cancelled
+    run saves nothing.
+  - The corpora of targets that no longer exist are dropped before fuzzing.
+  - The job summary names the restored cache key and, per target, the corpus size as restored,
+    after fuzzing and after the merge.
+  - The checked-in seed corpora (`tests/fuzz/<module>/corpus/`) never change in CI. To keep an
+    input for good (a regression), commit it as described below.
+  - To start from scratch, delete the `fuzz-corpus-*` entries under the repository's Actions →
+    Caches, or list them with `gh cache list --key fuzz-corpus-` and delete each with
+    `gh cache delete <key>`.
 - Limits: `-timeout=10` (seconds per input), `-malloc_limit_mb=256`, `-rss_limit_mb=2048`. ASan
   runs with `detect_leaks=1`.
 - A crash, leak, timeout or oversized allocation fails the job. The inputs that caused it and the
   logs are uploaded as `fuzz-findings` (kept for 14 days). The job summary has a table of the
-  targets with their run counts.
+  targets with their run counts and corpus sizes.
 - When a run finds a bug: fix the parser, and add the input to the target's corpus as
   `regress_<what>` (`tests/fuzz/asset/corpus/dpak_reader/` has an example). The importer targets
   (`tests/fuzz/import/`) keep theirs in `tests/fuzz/import/regressions/<target>/` instead, replayed
@@ -139,6 +161,10 @@ job fuzzes for real (SPEC §19.1, DENG-216):
       -timeout=10 -malloc_limit_mb=256 /tmp/fz tests/fuzz/<module>/corpus/<name>
   # importer targets: add -dict=tests/fuzz/import/dict/<name>.dict
   ```
+
+  `fuzz_dpak_file` (DENG-395) writes each input to `fuzz_dpak_file.<pid>.dpak` in its build
+  directory (`tests/fuzz/asset/`) and deletes it after the input; the environment variable
+  `DE_FUZZ_DPAK_FILE_DIR` names another directory. Its seeds are `corpus/dpak_reader/`.
 
   On macOS, LeakSanitizer reports libFuzzer's own `StartRssThread` allocation at exit. Suppress it
   with `LSAN_OPTIONS=suppressions=<file>` and the line `leak:fuzzer::StartRssThread` in the file.

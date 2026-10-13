@@ -1,0 +1,30 @@
+zstd: wrap the second prefetch address in ZSTD_prefetchMatch (pointer overflow, UBSan)
+
+ZSTD_prefetchMatch() computes the address of a match only to prefetch it. With a damaged frame,
+sequence.offset can be larger than the output so far, and the address wraps around. zstd computes
+it with ZSTD_wrappedPtrSub/ZSTD_wrappedPtrAdd (no_sanitize("pointer-overflow")) for that reason,
+but the second prefetch adds CACHELINE_SIZE to the wrapped address with a plain `+`. When the
+address is within 64 bytes of the top of the address space (a fresh DCtx has dictEnd == NULL, so
+NULL + prefetchPos - offset), that `+` overflows: undefined behaviour, and UBSan
+(-fsanitize=pointer-overflow, -fno-sanitize-recover) stops at zstd_decompress_block.c:1723
+"subtraction of unsigned offset ... overflowed". Nothing is dereferenced; only the prefetch
+address is affected.
+
+The patch uses ZSTD_wrappedPtrAdd for the second address too. The generated code is the same
+(a wrapping add), so speed and output do not change.
+
+Engine-local patch (DENG-395, found by fuzz_dpak_file), applied by tools/vendor/vendor.py.
+Drop this patch when a pinned release has the fix.
+
+diff --git a/lib/decompress/zstd_decompress_block.c b/lib/decompress/zstd_decompress_block.c
+--- a/lib/decompress/zstd_decompress_block.c
++++ b/lib/decompress/zstd_decompress_block.c
+@@ -1720,7 +1720,7 @@ size_t ZSTD_prefetchMatch(size_t prefetchPos, seq_t const sequence,
+         /* note : this operation can overflow when seq.offset is really too large, which can only happen when input is corrupted.
+          * No consequence though : memory address is only used for prefetching, not for dereferencing */
+         const BYTE* const match = ZSTD_wrappedPtrSub(ZSTD_wrappedPtrAdd(matchBase, prefetchPos), sequence.offset);
+-        PREFETCH_L1(match); PREFETCH_L1(match+CACHELINE_SIZE);   /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
++        PREFETCH_L1(match); PREFETCH_L1(ZSTD_wrappedPtrAdd(match, CACHELINE_SIZE));   /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
+     }
+     return prefetchPos + sequence.matchLength;
+ }

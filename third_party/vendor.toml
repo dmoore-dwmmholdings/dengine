@@ -71,6 +71,9 @@ files = [
 ]
 # x86-64 Huffman assembly: the build sets ZSTD_DISABLE_ASM so the C path is used everywhere.
 exclude = ["lib/decompress/*.S"]
+# UBSan fix in ZSTD_prefetchMatch() (pointer overflow of a prefetch address); see the patch
+# header. DENG-395.
+patches = ["patches/0001-prefetch-wrapped-pointer-add.patch"]
 
 [[lib]]
 name = "tomlc17"
