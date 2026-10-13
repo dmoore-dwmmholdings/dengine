@@ -10,9 +10,10 @@
  *   substeps x:
  *     de__solver_integrate_velocities   gravity x gravity_scale, damping v *= 1/(1+h c), clamps
  *     de__solver_warm_start
- *     de__solver_solve                  with position bias (soft step)
+ *     de__solver_solve                  with position bias (soft step); classes with more
+ *                                       iterations (joints, DENG-398) get extra passes first
  *     de__solver_integrate_positions    dp += h v, dq = integrate(dq, w, h)
- *     de__solver_relax                  without position bias
+ *     de__solver_relax                  without position bias (extra class passes first too)
  *   de__solver_restitution
  *   de__solver_store          impulses back into the manifolds (warm start of the next step)
  *   de__ccd_solve             ccd.c (stub; DENG-219)
@@ -83,6 +84,9 @@ typedef struct de__solver_class_slot {
     void *state;
     u32 capacity; /**< most records per step */
     u32 count;    /**< records this step */
+    /** DENG-398: solve and relax passes per substep (de__solver_set_class_iterations); 0 or 1 =
+     *  one pass. */
+    u32 iterations;
 } de__solver_class_slot;
 
 struct de__solver {

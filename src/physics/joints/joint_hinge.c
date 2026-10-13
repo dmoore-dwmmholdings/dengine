@@ -54,12 +54,14 @@ static void hinge_warm_start(de__jx *x, de__joint *j) {
 }
 
 static void hinge_solve(de__jx *x, de__joint *j) {
-    const de_vec3 a1 = de__jq_axis(x->qa, 0);
-    const de__jrow r = de__jrow_angular(x, a1);
-    const f32 angle = hinge_angle(x);
-    de__jrow_motor(x, j, 0, &r, angle, &j->motor[0]);
-    if (j->enable_limit)
-        de__jrow_limits(x, &r, angle, j->lo[0], j->hi[0], &j->lower[0], &j->upper[0]);
+    if (de__jx_axis_rows(x, j, 0)) {
+        const de_vec3 a1 = de__jq_axis(x->qa, 0);
+        const de__jrow r = de__jrow_angular(x, a1);
+        const f32 angle = hinge_angle(x);
+        de__jrow_motor(x, j, 0, &r, angle, &j->motor[0]);
+        if (j->enable_limit)
+            de__jrow_limits(x, &r, angle, j->lo[0], j->hi[0], &j->lower[0], &j->upper[0]);
+    }
     axes_solve(x, j);
     de__jpoint_solve(x, &j->lin);
 }

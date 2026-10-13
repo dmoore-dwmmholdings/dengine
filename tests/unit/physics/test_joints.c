@@ -1,7 +1,8 @@
 /*
  * test_joints.c: joints (DENG-220): the API and the pool, each kind holding its locked degrees of
- * freedom, the pendulum period, a hanging chain of 20, collide_connected, 6-DOF locked = fixed,
- * wake-up and large worlds. Limits, motors and breaking are in test_joint_limits_motors.c.
+ * freedom, the pendulum period, a chain of 20 (DENG-398: under 1 mm at 4 substeps),
+ * collide_connected, 6-DOF locked = fixed, wake-up and large worlds. Limits, motors and breaking
+ * are in test_joint_limits_motors.c.
  */
 #include "joint_test_util.h"
 
@@ -297,12 +298,19 @@ TEST(physics_joints, pendulum_period) {
 
 /* ================================ Chain of 20 ============================================= */
 
+/* What one run of the chain of 20 measured. */
+typedef struct jt_chain_result {
+    f64 end;       /**< worst separation of two joined anchors over the last second (m) */
+    f64 all;       /**< worst separation over the whole run (m) */
+    f64 end_speed; /**< fastest link over the last second (m/s) */
+} jt_chain_result;
+
 /*
- * 20 links (0.5 m boxes, 5 kg) on ball joints from a world pivot at (0, 0, 10). `hanging`: they
- * start hanging straight down at rest; else horizontal, so the chain falls and swings. Returns the
- * worst separation of two joined anchors (m) over the last second of 5 s.
+ * 20 links (0.5 m boxes, 5 kg) on ball joints from a world pivot at (0, 0, 10), for `ticks` steps
+ * of 1/60 s. `hanging`: they start hanging straight down at rest; else horizontal, so the chain
+ * falls and swings.
  */
-static f64 chain_run(bool hanging, u32 substeps, f64 *worst_all) {
+static jt_chain_result chain_run(bool hanging, u32 substeps, u32 ticks) {
     de_physics_desc pd;
     memset(&pd, 0, sizeof pd);
     pd.max_bodies = 32;
@@ -324,45 +332,208 @@ static f64 chain_run(bool hanging, u32 substeps, f64 *worst_all) {
         EXPECT_TRUE(DE_HANDLE_VALID(de_joint_create(p, &d)));
         prev = links[i];
     }
-    f64 worst = 0.0, worst_end = 0.0;
-    for (u32 tick = 0; tick < 300; ++tick) {
+    jt_chain_result r = {0.0, 0.0, 0.0};
+    for (u32 tick = 0; tick < ticks; ++tick) {
         de_physics_step(p, ST_DT);
         for (u32 i = 0; i < 20; ++i) {
             const de_dvec3 above = i == 0 ? (de_dvec3){0, 0, 10}
                                           : jt_world_point(p, links[i - 1], (de_dvec3){0.25, 0, 0});
             const f64 e = jt_dist(above, jt_world_point(p, links[i], (de_dvec3){-0.25, 0, 0}));
-            worst = e > worst ? e : worst;
-            if (tick >= 240)
-                worst_end = e > worst_end ? e : worst_end;
+            r.all = e > r.all ? e : r.all;
+            if (tick + 60u >= ticks) {
+                r.end = e > r.end ? e : r.end;
+                de_vec3 v;
+                EXPECT_TRUE(de_body_get_velocity(p, links[i], &v, NULL));
+                const f64 speed = de_dsqrt64((f64)v.x * v.x + (f64)v.y * v.y + (f64)v.z * v.z);
+                r.end_speed = speed > r.end_speed ? speed : r.end_speed;
+            }
         }
     }
     de_physics_destroy(p);
-    *worst_all = worst;
-    return worst_end;
+    return r;
 }
 
-TEST(physics_joints, chain_20_stays_connected) {
-    /* Soft joints sag in proportion to the load they carry: the top joint holds 19 links. The
-     * joint stiffness is a quarter of the substep rate, so 8 substeps (120 Hz) keep a hanging
-     * chain of 20 within 1 mm; the default 4 substeps (60 Hz) give about 2.6 mm. */
-    f64 all;
-    const f64 h8 = chain_run(true, 8, &all);
-    fprintf(stderr, "  hanging, 8 substeps: %.6f m (whole run %.6f m)\n", h8, all);
-    EXPECT_TRUE(h8 < 1e-3);
-    EXPECT_TRUE(all < 1.5e-3);
-    const f64 h4 = chain_run(true, 4, &all);
-    fprintf(stderr, "  hanging, 4 substeps: %.6f m (whole run %.6f m)\n", h4, all);
-    EXPECT_TRUE(h4 < 3e-3);
-    /* Falling from horizontal and swinging: connected within about a centimetre. The worst
-     * moment is the links whipping past each other near the end of the swing. DENG-219
-     * measured it at 8 substeps: 15.4 mm with the links in one collision group (joints alone),
-     * 12.6 mm with self-collision (speculative contacts stop the links on each other), and
-     * 6.4 mm before DENG-219, when the links sank up to 8 cm into each other and the soft
-     * push-out damped the swing. */
-    const f64 s8 = chain_run(false, 8, &all);
-    fprintf(stderr, "  swinging, 8 substeps: %.6f m\n", all);
-    EXPECT_TRUE(all < 2e-2);
-    (void)s8;
+/* Two tests, so each process stays short under TSan. */
+TEST(physics_joints, chain_20_hanging) {
+    /* Soft joints sag in proportion to the load they carry: the top joint holds 20 links. The
+     * locked rows get 4 solve and relax passes per substep, which carries a chain's load to its top
+     * and lets them be half the substep rate stiff (DENG-398; 120 Hz at 4 substeps). Measured:
+     * 0.66 mm at 4 substeps (2.6 mm with DENG-220's single pass at 60 Hz), 0.16 mm at 8. */
+    const jt_chain_result h4 = chain_run(true, 4, 600); /* 10 s */
+    fprintf(stderr, "  hanging, 4 substeps: %.6f m (whole run %.6f m), speed %.6f m/s\n", h4.end,
+            h4.all, h4.end_speed);
+    EXPECT_TRUE(h4.end < 1e-3);
+    EXPECT_TRUE(h4.all < 1e-3);
+    EXPECT_TRUE(h4.end_speed < 1e-3); /* at rest after 10 s: no instability */
+    const jt_chain_result h8 = chain_run(true, 8, 300);
+    fprintf(stderr, "  hanging, 8 substeps: %.6f m (whole run %.6f m), speed %.6f m/s\n", h8.end,
+            h8.all, h8.end_speed);
+    EXPECT_TRUE(h8.end < 2.5e-4);
+    EXPECT_TRUE(h8.all < 5e-4);
+    EXPECT_TRUE(h8.end_speed < 1e-3);
+}
+
+TEST(physics_joints, chain_20_swinging) {
+    /* Falling from horizontal and swinging for 5 s: the worst moment is the links whipping past
+     * each other near the end of the swing. DENG-219 measured 12.6 mm at 8 substeps with
+     * self-collision (speculative contacts stop the links on each other) and allowed 2 cm. With
+     * DENG-398's joint passes: 9.4 mm at 8 substeps and 39.1 mm at the default 4 (39.4 mm with a
+     * single pass). */
+    const jt_chain_result s8 = chain_run(false, 8, 300);
+    fprintf(stderr, "  swinging, 8 substeps: %.6f m\n", s8.all);
+    EXPECT_TRUE(s8.all < 1.5e-2);
+    const jt_chain_result s4 = chain_run(false, 4, 300);
+    fprintf(stderr, "  swinging, 4 substeps: %.6f m\n", s4.all);
+    EXPECT_TRUE(s4.all < 4.5e-2);
+}
+
+/* ================================ Class iterations (DENG-398) ============================ */
+
+/* Two probe classes in the spare ids: they log the order of their solve and relax calls. */
+typedef struct jt_probe {
+    u32 cls;
+} jt_probe;
+
+static de_body g_it_a, g_it_b;
+static u32 g_it_log[256];
+static u32 g_it_count;
+
+static void it_gather(de__solver *s, const de__solver_ctx *ctx, void *state) {
+    (void)ctx;
+    const jt_probe *pr = (const jt_probe *)state;
+    (void)de__solver_add_constraint(s, pr->cls, 0, de__handle_index(g_it_a.id),
+                                    de__handle_index(g_it_b.id));
+}
+
+static void it_solve(const de__solver_ctx *ctx, void *state, de__constraint *c, bool bias) {
+    const jt_probe *pr = (const jt_probe *)state;
+    EXPECT_EQ(c->class_id, pr->cls);
+    /* Substep 0 only: ctx->pass * 100 + class id * 2 + (relax ? 1 : 0). */
+    if (ctx->substep == 0u && g_it_count < 256u)
+        g_it_log[g_it_count++] = ctx->pass * 100u + pr->cls * 2u + (bias ? 0u : 1u);
+}
+
+static const de__constraint_class k_it_probe = {"it_probe", it_gather, NULL, NULL, it_solve,
+                                                NULL,       NULL,      NULL, NULL};
+
+TEST(physics_joints, class_iterations) {
+    de_physics_world *p = st_world(16, NULL, NULL);
+    ASSERT_TRUE(p != NULL);
+    de_physics_set_gravity(p, (de_vec3){0, 0, 0});
+    const de_shape box = st_box(p, 0.5f, 0.5f, 0.5f);
+    g_it_a = jt_dyn(p, box, st_xform(0, 0, 0, st_quat_identity()), 0.0f);
+    g_it_b = jt_dyn(p, box, st_xform(5, 0, 0, st_quat_identity()), 0.0f);
+    /* A real joint: its class gets the default 4 passes. */
+    const de_body c = jt_dyn(p, box, st_xform(0, 5, 0, st_quat_identity()), 0.0f);
+    const de_joint_desc jd =
+        jt_desc(DE_JOINT_BALL, c, (de_body){0}, (de_dvec3){0, 0, 0}, (de_dvec3){0, 5, 0});
+    ASSERT_TRUE(DE_HANDLE_VALID(de_joint_create(p, &jd)));
+    de__solver *s = de__solver_get(p);
+    ASSERT_TRUE(s != NULL);
+    EXPECT_EQ(s->classes[DE__CONSTRAINT_CLASS_JOINT].iterations, DE__JOINTS_DEFAULT_ITERATIONS);
+
+    static jt_probe two = {DE__CONSTRAINT_CLASS_JOINT_2}, three = {DE__CONSTRAINT_CLASS_CHARACTER};
+    EXPECT_EQ(de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_JOINT_2, 3),
+              DE_ERR_INVALID_ARGUMENT); /* not registered */
+    EXPECT_EQ(de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_COUNT, 3),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__solver_set_class_iterations(NULL, DE__CONSTRAINT_CLASS_JOINT, 3),
+              DE_ERR_INVALID_ARGUMENT);
+    ASSERT_EQ(de__solver_register_class(p, DE__CONSTRAINT_CLASS_JOINT_2, &k_it_probe, &two, 4),
+              DE_OK);
+    ASSERT_EQ(de__solver_register_class(p, DE__CONSTRAINT_CLASS_CHARACTER, &k_it_probe, &three, 4),
+              DE_OK);
+    EXPECT_EQ(s->classes[DE__CONSTRAINT_CLASS_JOINT_2].iterations, 1u);
+    /* Clamped to 1..DE__SOLVER_MAX_CLASS_ITERATIONS. */
+    EXPECT_EQ(de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_JOINT_2, 0), DE_OK);
+    EXPECT_EQ(s->classes[DE__CONSTRAINT_CLASS_JOINT_2].iterations, 1u);
+    EXPECT_EQ(de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_JOINT_2, 99), DE_OK);
+    EXPECT_EQ(s->classes[DE__CONSTRAINT_CLASS_JOINT_2].iterations, DE__SOLVER_MAX_CLASS_ITERATIONS);
+    EXPECT_EQ(de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_JOINT_2, 3), DE_OK);
+
+    g_it_count = 0;
+    de_physics_step(p, ST_DT);
+    /* Substep 0: the extra passes of JOINT_2 (3 iterations; ctx->pass 1 and 2) run first, over
+     * it alone; then the full pass over every class (ctx->pass 0), so the class with one pass
+     * (CHARACTER) comes last; the same for relax. The real joint's passes do not show here. */
+    const u32 J = DE__CONSTRAINT_CLASS_JOINT_2 * 2u, C = DE__CONSTRAINT_CLASS_CHARACTER * 2u;
+    const u32 want[8] = {100u + J, 200u + J, J, C, 101u + J, 201u + J, J + 1u, C + 1u};
+    EXPECT_EQ(g_it_count, 8u);
+    for (u32 k = 0; k < 8 && k < g_it_count; ++k)
+        EXPECT_EQ(g_it_log[k], want[k]);
+    /* Unregistering resets the class slot; registering again starts at 1. */
+    de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_JOINT_2);
+    EXPECT_EQ(de__solver_register_class(p, DE__CONSTRAINT_CLASS_JOINT_2, &k_it_probe, &two, 4),
+              DE_OK);
+    EXPECT_EQ(s->classes[DE__CONSTRAINT_CLASS_JOINT_2].iterations, 1u);
+    de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_JOINT_2);
+    de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_CHARACTER);
+    de_physics_destroy(p);
+}
+
+/* ================================ Twist Jacobian (DENG-398) ============================== */
+
+/* Kinetic energy of body b (J): mass m, and the inertia from the shape's box (half extents h). */
+static f64 jt_box_energy(const de_physics_world *p, de_body b, f64 m, de_vec3 h) {
+    de_vec3 v, w;
+    if (!de_body_get_velocity(p, b, &v, &w))
+        return 0.0;
+    de_transform t;
+    (void)de_body_get_transform(p, b, &t);
+    /* Angular velocity in the body frame. */
+    const de_vec3 wl = de__quat_rotate_f(de__jq_conj(t.rotation), w);
+    const f64 ix = m * ((f64)h.y * h.y + (f64)h.z * h.z) / 3.0;
+    const f64 iy = m * ((f64)h.x * h.x + (f64)h.z * h.z) / 3.0;
+    const f64 iz = m * ((f64)h.x * h.x + (f64)h.y * h.y) / 3.0;
+    return 0.5 * m * ((f64)v.x * v.x + (f64)v.y * v.y + (f64)v.z * v.z) +
+           0.5 * (ix * wl.x * wl.x + iy * wl.y * wl.y + iz * wl.z * wl.z);
+}
+
+TEST(physics_joints, cone_twist_limit_holds_while_circling) {
+    /* A box swung 0.5 rad out of a cone-twist joint (open cone, twist limit +-0.05) circles about
+     * A's X axis. Circling twists it at the full rate, so the twist limit holds it from the first
+     * tick. With the twist row along B's X axis alone (DENG-220) the row saw cos(0.5) of that rate:
+     * the twist overshot to 0.061, and in a resting ragdoll the mismatch kept limbs circling. The
+     * limit may only take energy out. */
+    de_physics_world *p = st_world(8, NULL, NULL);
+    ASSERT_TRUE(p != NULL);
+    de_physics_set_gravity(p, (de_vec3){0, 0, 0});
+    const de_vec3 h = {0.2f, 0.05f, 0.05f};
+    const de_shape box = st_box(p, h.x, h.y, h.z);
+    const de_quat tilt = st_quat_axis_angle((de_vec3){0, 1, 0}, 0.5f);
+    const de_body b = jt_dyn(p, box, st_xform(0, 0, 5, tilt), 2.0f);
+    de_joint_desc d =
+        jt_desc(DE_JOINT_CONE_TWIST, (de_body){0}, b, (de_dvec3){0, 0, 5}, (de_dvec3){0, 0, 0});
+    d.limits_min[3] = -0.05f;
+    d.limits_max[3] = 0.05f;
+    d.limits_max[4] = 1.2f;
+    d.limits_max[5] = 1.2f;
+    ASSERT_TRUE(DE_HANDLE_VALID(de_joint_create(p, &d)));
+    EXPECT_TRUE(de_body_set_velocity(p, b, (de_vec3){0, 0, 0}, (de_vec3){4.0f, 0.0f, 0.0f}));
+    const f64 e0 = jt_box_energy(p, b, 2.0, h);
+    f64 emax = e0;
+    f32 twist_max = 0.0f;
+    for (u32 tick = 0; tick < 300u; ++tick) {
+        de_physics_step(p, ST_DT);
+        const f64 e = jt_box_energy(p, b, 2.0, h);
+        emax = e > emax ? e : emax;
+        de_transform t;
+        (void)de_body_get_transform(p, b, &t);
+        f32 tw, sy, sz;
+        jt_angles(st_quat_identity(), st_quat_identity(), t.rotation, st_quat_identity(), &tw, &sy,
+                  &sz);
+        const f32 at = tw < 0.0f ? -tw : tw;
+        twist_max = at > twist_max ? at : twist_max;
+    }
+    const f64 e1 = jt_box_energy(p, b, 2.0, h);
+    fprintf(stderr,
+            "  circling at the twist limit: twist at most %.4f, energy %.4f J -> %.4f J (most "
+            "%.4f J)\n",
+            (f64)twist_max, e0, e1, emax);
+    EXPECT_TRUE(twist_max < 0.05f + 0.2f * JT_PI / 180.0f);
+    EXPECT_TRUE(emax < e0 * 1.001);
+    EXPECT_TRUE(e1 < e0);
+    de_physics_destroy(p);
 }
 
 /* ================================ collide_connected ====================================== */

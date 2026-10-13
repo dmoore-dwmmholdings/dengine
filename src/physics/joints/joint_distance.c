@@ -25,6 +25,8 @@ static void distance_warm_start(de__jx *x, de__joint *j) {
 }
 
 static void distance_solve(de__jx *x, de__joint *j) {
+    if (!de__jx_axis_rows(x, j, 0))
+        return; /* extra pass without a motor: the range is limit rows only */
     de_vec3 u;
     f32 len;
     if (!direction(x, &u, &len))

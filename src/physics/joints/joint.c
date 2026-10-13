@@ -82,14 +82,18 @@ static void jx_begin(de__jx *x, const de__solver_ctx *ctx, const de__joints *js,
     x->qa = de__jq_mul(A->dq, j->step.qa0);
     x->qb = de__jq_mul(B->dq, j->step.qb0);
     x->use_bias = use_bias;
+    x->extra = ctx->pass > 0u;
     if (j->hertz > 0.0f) {
         x->soft = j->step.spring;
+        x->limit_soft = j->step.spring;
     } else if (use_bias) {
         x->soft = js->joint_soft;
+        x->limit_soft = js->limit_soft;
     } else {
         x->soft.bias_rate = 0.0f;
         x->soft.mass_scale = 1.0f;
         x->soft.impulse_scale = 0.0f;
+        x->limit_soft = x->soft;
     }
 }
 
@@ -111,10 +115,22 @@ static void class_gather(de__solver *s, const de__solver_ctx *ctx, void *state) 
     de__joints *js = (de__joints *)state;
     /* From scratch on every call (the solver may gather again after a wake). */
     js->gathered = 0;
-    const f32 auto_hertz = DE__JOINTS_HERTZ_SUBSTEP_RATIO * ctx->inv_h;
+    /* DENG-398: with extra passes a chain converges, so the locked rows and motors may be twice
+     * as stiff, with twice the damping ratio. Limits stay at DENG-220's quarter of the substep
+     * rate. */
+    const bool multi = js->settings.iterations > 1u;
+    const f32 ratio =
+        multi ? DE__JOINTS_HERTZ_SUBSTEP_RATIO : DE__JOINTS_HERTZ_SUBSTEP_RATIO_SINGLE;
+    const f32 zeta = multi ? DE__JOINTS_LOCKED_DAMPING_SCALE * js->settings.damping_ratio
+                           : js->settings.damping_ratio;
+    const f32 auto_hertz = ratio * ctx->inv_h;
+    const f32 limit_hertz = DE__JOINTS_HERTZ_SUBSTEP_RATIO_SINGLE * ctx->inv_h;
     const f32 hertz =
         js->settings.hertz > 0.0f ? de__minf(js->settings.hertz, auto_hertz) : auto_hertz;
-    js->joint_soft = de__soft_make(hertz, js->settings.damping_ratio, ctx->h);
+    const f32 lhertz =
+        js->settings.hertz > 0.0f ? de__minf(js->settings.hertz, limit_hertz) : limit_hertz;
+    js->joint_soft = de__soft_make(hertz, zeta, ctx->h);
+    js->limit_soft = de__soft_make(lhertz, js->settings.damping_ratio, ctx->h);
 
     for (u32 i = 0; i < js->high_water; ++i) {
         const de__joint *j = &js->joints[i];
@@ -352,6 +368,17 @@ de_result de__joints_create(de_physics_world *p, u32 capacity) {
                                        "Physics: damping ratio of rigid joints (read when the "
                                        "joint pool is created)",
                                        (f64)DE__JOINTS_DEFAULT_DAMPING_RATIO, 0.0, 1000.0);
+    de_cvar_desc id;
+    memset(&id, 0, sizeof id);
+    id.name = DE__JOINTS_ITERATIONS_CVAR;
+    id.help = "Physics: solve and relax passes over the joints per substep (1 = one pass and "
+              "joints at a quarter of the substep rate; more = half the substep rate; read when "
+              "the joint pool is created)";
+    id.type = DE_CVAR_INT;
+    id.default_number = (f64)DE__JOINTS_DEFAULT_ITERATIONS;
+    id.min = 1.0;
+    id.max = (f64)DE__SOLVER_MAX_CLASS_ITERATIONS;
+    const de_cvar iter_cv = de_cvar_register(&id);
     if (capacity == 0u && DE_HANDLE_VALID(cap_cv) && de_cvar_int(cap_cv) > 0)
         capacity = (u32)de_cvar_int(cap_cv);
     if (capacity == 0u) {
@@ -376,6 +403,14 @@ de_result de__joints_create(de_physics_world *p, u32 capacity) {
         DE_HANDLE_VALID(zeta_cv) ? (f32)de_cvar_float(zeta_cv) : DE__JOINTS_DEFAULT_DAMPING_RATIO;
     if (!de__f32_finite(js->settings.damping_ratio) || js->settings.damping_ratio < 0.0f)
         js->settings.damping_ratio = DE__JOINTS_DEFAULT_DAMPING_RATIO;
+    js->settings.iterations = DE__JOINTS_DEFAULT_ITERATIONS;
+    if (DE_HANDLE_VALID(iter_cv)) {
+        const i64 n = de_cvar_int(iter_cv);
+        js->settings.iterations =
+            n < 1 ? 1u
+                  : (n > (i64)DE__SOLVER_MAX_CLASS_ITERATIONS ? DE__SOLVER_MAX_CLASS_ITERATIONS
+                                                              : (u32)n);
+    }
     js->capacity = capacity;
     js->body_capacity = p->bodies.capacity;
     const size_t off_joints = 0;
@@ -398,8 +433,13 @@ de_result de__joints_create(de_physics_world *p, u32 capacity) {
     for (u32 i = 0; i < js->body_capacity; ++i)
         js->heads[i] = DE__JOINT_NONE;
 
-    const de_result r =
+    de_result r =
         de__solver_register_class(p, DE__CONSTRAINT_CLASS_JOINT, &k_joint_class, js, capacity);
+    if (r == DE_OK) {
+        r = de__solver_set_class_iterations(p, DE__CONSTRAINT_CLASS_JOINT, js->settings.iterations);
+        if (r != DE_OK)
+            de__solver_unregister_class(p, DE__CONSTRAINT_CLASS_JOINT);
+    }
     if (r != DE_OK) {
         joints_free(js);
         return r;
@@ -844,13 +884,15 @@ void de__jrow_equality(de__jx *x, const de__jrow *r, f32 C, f32 *acc) {
 }
 
 void de__jrow_limit(de__jx *x, const de__jrow *r, f32 C, f32 *acc) {
+    if (x->extra)
+        return; /* limits run once per pass over every class (DENG-398) */
     f32 bias, ms = 1.0f, is = 0.0f;
     if (C > 0.0f) {
         bias = C * x->ctx->inv_h; /* speculative: may close the gap, no more */
     } else {
-        bias = x->soft.bias_rate * C;
-        ms = x->soft.mass_scale;
-        is = x->soft.impulse_scale;
+        bias = x->limit_soft.bias_rate * C;
+        ms = x->limit_soft.mass_scale;
+        is = x->limit_soft.impulse_scale;
     }
     const f32 cdot = de__jrow_cdot(x, r);
     const f32 l = -r->mass * ms * (cdot + bias) - is * *acc;
