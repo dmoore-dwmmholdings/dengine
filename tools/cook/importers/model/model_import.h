@@ -27,6 +27,11 @@
  *     conversion to metres.
  *   - `anim_sample_rate`, `anim_error`, `anim_error_angle`, `anim_joint_names`: skeleton and clip
  *     cooking (DENG-104, anim_cook.h).
+ *   - `max_decoded_mib` (integer, MiB, default 1024, 1 to 2^20; DENG-106): the most decoded data
+ *     one import may hold: every block of the model IR (vertex streams, indices, keys, the cooked
+ *     blobs), checked before each block is allocated; also the memory limit of each ufbx
+ *     allocator, and passed on to the texture cooks of the model's images. An import over it fails
+ *     with DE_ERR_UNSUPPORTED.
  *
  * Output: the model bytes (DMDL, render/formats/de_cooked_model.h) and the sub-assets, in this
  * order: textures (`texture:<name>`, type `texture`, cooked by the registered texture importer),
@@ -47,6 +52,10 @@ DE_EXTERN_C_BEGIN
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
 #define DE_MODEL_IMPORTER_VERSION                                                                  \
     3u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104) */
+
+/** Default of the `max_decoded_mib` setting (DENG-106) and its largest value (1 TiB). */
+#define DE_MODEL_MAX_DECODED_MIB_DEFAULT 1024
+#define DE_MODEL_MAX_DECODED_MIB_MAX     (1u << 20)
 
 #define DE_MODEL_IMPORT_EXTENSION_COUNT 3u
 /** ".gltf", ".glb", ".fbx" (DENG-102). */

@@ -30,6 +30,11 @@
  *     share of texels at or above it.
  *   - `max_size` (integer 1 to 16384, optional): the longest edge is scaled down to it.
  *   - `address` (string, default "wrap"): "wrap" or "clamp", how the mip filter reads past edges.
+ *   - `max_decoded_mib` (integer, MiB, default 1024, 1 to 2^20; DENG-106): the largest decoded
+ *     image one import may hold: f32 RGBA of every layer and face (16 bytes per texel), or the
+ *     stored blocks of a BC pass-through. The decoders check it from the file's header, before
+ *     they allocate; an image over it fails with DE_ERR_UNSUPPORTED. The default takes an 8192 x
+ *     8192 image; a 16384 x 16384 one needs 4096.
  *   - `compression` (string, default "auto"): "auto", "none", "bc1", "bc3", "bc4", "bc5",
  *     "bc6h" or "bc7" (DENG-99). "auto" picks by usage and source: BC7 for colour (sRGB when
  *     `srgb`), BC5 for normal maps, BC4 for one-channel masks (BC7 UNORM for packed masks), BC6H

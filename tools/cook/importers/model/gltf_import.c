@@ -1304,6 +1304,9 @@ static de_result load(gltf_ctx *g) {
     if (cr != cgltf_result_success)
         return cg_error(g, cr, "validation");
 
+    if (d->nodes_count > DE_MODEL_MAX_NODES)
+        return DE_FAIL(DE_ERR_UNSUPPORTED, "%s: %llu nodes, more than the limit of %u",
+                       g->src->path, (unsigned long long)d->nodes_count, DE_MODEL_MAX_NODES);
     ir->material_count = (u32)d->materials_count;
     ir->mesh_count = (u32)d->meshes_count;
     ir->node_count = (u32)d->nodes_count;

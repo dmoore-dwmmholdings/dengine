@@ -112,14 +112,18 @@ job fuzzes for real (SPEC §19.1, DENG-216):
   configure step fails if the targets did not get libFuzzer (`DE_FUZZ_USES_LIBFUZZER`).
 - It lists the targets from CTest (label `fuzz`, without `selftest`: the harness self test has a
   crash input on purpose), builds only those, and runs each for 60 s (`FUZZ_SECONDS`) from an
-  empty scratch directory plus its checked-in corpus.
+  empty scratch directory plus its checked-in corpus. A target registered with
+  `de_add_fuzz_target(... DICT <file>)` also gets its libFuzzer dictionary (`-dict=<file>`, taken
+  from the CTest command; DENG-106).
 - Limits: `-timeout=10` (seconds per input), `-malloc_limit_mb=256`, `-rss_limit_mb=2048`. ASan
   runs with `detect_leaks=1`.
 - A crash, leak, timeout or oversized allocation fails the job. The inputs that caused it and the
   logs are uploaded as `fuzz-findings` (kept for 14 days). The job summary has a table of the
   targets with their run counts.
 - When a run finds a bug: fix the parser, and add the input to the target's corpus as
-  `regress_<what>` (`tests/fuzz/asset/corpus/dpak_reader/` has an example).
+  `regress_<what>` (`tests/fuzz/asset/corpus/dpak_reader/` has an example). The importer targets
+  (`tests/fuzz/import/`) keep theirs in `tests/fuzz/import/regressions/<target>/` instead, replayed
+  by the CTest `import_fuzz_regressions.replay.<target>`, so the seed corpora stay the fixtures.
 - New fuzz targets need no change here.
 - Local equivalent on macOS (Apple Clang has no libFuzzer; use Homebrew LLVM):
 
@@ -133,6 +137,7 @@ job fuzzes for real (SPEC §19.1, DENG-216):
   cmake --build build/fuzz --target fuzz_<name>
   mkdir -p /tmp/fz && build/fuzz/tests/fuzz/<module>/fuzz_<name> -max_total_time=60 \
       -timeout=10 -malloc_limit_mb=256 /tmp/fz tests/fuzz/<module>/corpus/<name>
+  # importer targets: add -dict=tests/fuzz/import/dict/<name>.dict
   ```
 
   On macOS, LeakSanitizer reports libFuzzer's own `StartRssThread` allocation at exit. Suppress it

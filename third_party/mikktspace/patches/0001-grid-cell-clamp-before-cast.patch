@@ -1,0 +1,30 @@
+MikkTSpace: clamp the grid cell before the float-to-int conversion (UBSan float-cast-overflow)
+
+FindGridCell() converts g_iCells * (fVal - fMin) / (fMax - fMin) to int and clamps the int.
+When every vertex of a mesh has the same position, fMax == fMin and the value is 0/0 = NaN; an
+extent that overflows float gives NaN or a value out of the int range too. Converting those to
+int is undefined behaviour: UBSan stops at mikktspace.c:443 "nan is outside the range of
+representable values of type 'int'" (found by fuzz_gltf, DENG-106; a degenerate but valid glTF
+mesh with a normal map reaches it). The value is now clamped while it is a float. Every value
+that converted before gives the same cell, so tangents do not change.
+
+Engine-local patch (DENG-106), applied by tools/vendor/vendor.py. Upstream has no releases;
+drop the patch if the pinned commit changes to one with the fix.
+
+diff --git a/mikktspace.c b/mikktspace.c
+--- a/mikktspace.c
++++ b/mikktspace.c
+@@ -440,8 +440,11 @@ static const int g_iCells = 2048;
+ static NOINLINE int FindGridCell(const float fMin, const float fMax, const float fVal)
+ {
+ 	const float fIndex = g_iCells * ((fVal-fMin)/(fMax-fMin));
+-	const int iIndex = (int)fIndex;
+-	return iIndex < g_iCells ? (iIndex >= 0 ? iIndex : 0) : (g_iCells - 1);
++	// Clamp before the conversion: when every position is the same (fMax == fMin), or an extent
++	// overflows, fIndex is NaN or out of the int range, and the cast would be undefined.
++	if (!(fIndex >= 0.0f)) return 0;
++	if (fIndex >= (float)g_iCells) return g_iCells - 1;
++	return (int)fIndex;
+ }
+ 
+ static void MergeVertsFast(int piTriList_in_and_out[], STmpVert pTmpVert[], const SMikkTSpaceContext * pContext, const int iL_in, const int iR_in);

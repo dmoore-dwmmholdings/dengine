@@ -73,22 +73,29 @@ static void ufbx_free_cb(void *user, void *ptr, size_t size) {
         DE_FREE(a, ptr, nz(size));
 }
 
-static ufbx_allocator_opts allocator_opts(const de_allocator *a) {
+/* ufbx allocates from the IR's allocator, up to FBX_MEMORY_LIMIT or the IR's byte limit
+ * (`max_decoded_mib`, DENG-106), whichever is lower. */
+static ufbx_allocator_opts allocator_opts(const de_model_ir *ir) {
     ufbx_allocator_opts o;
     memset(&o, 0, sizeof o);
     o.allocator.alloc_fn = ufbx_alloc_cb;
     o.allocator.realloc_fn = ufbx_realloc_cb;
     o.allocator.free_fn = ufbx_free_cb;
-    o.allocator.user = (void *)(uintptr_t)a;
+    o.allocator.user = (void *)(uintptr_t)ir->alloc;
     o.memory_limit = FBX_MEMORY_LIMIT;
+    if (ir->byte_limit != 0 && ir->byte_limit < (u64)o.memory_limit)
+        o.memory_limit = (size_t)ir->byte_limit;
     return o;
 }
 
 static de_result ufbx_fail(const de_model_source *src, const ufbx_error *e, const char *stage) {
-    de_result r = e->type == UFBX_ERROR_OUT_OF_MEMORY ? DE_ERR_OUT_OF_MEMORY : DE_ERR_PARSE;
-    const char *what = e->type == UFBX_ERROR_MEMORY_LIMIT || e->type == UFBX_ERROR_ALLOCATION_LIMIT
-                           ? "the file needs more memory than the importer allows"
-                           : e->description.data;
+    bool limit = e->type == UFBX_ERROR_MEMORY_LIMIT || e->type == UFBX_ERROR_ALLOCATION_LIMIT;
+    de_result r = e->type == UFBX_ERROR_OUT_OF_MEMORY ? DE_ERR_OUT_OF_MEMORY
+                  : limit                             ? DE_ERR_UNSUPPORTED
+                                                      : DE_ERR_PARSE;
+    const char *what = limit ? "the file needs more memory than the importer allows (setting "
+                               "`max_decoded_mib`)"
+                             : e->description.data;
     return DE_FAIL(r, "%s: FBX %s: %s%s%.*s", src->path, stage, what, e->info_length ? ": " : "",
                    (int)e->info_length, e->info);
 }
@@ -777,8 +784,8 @@ static de_result import_anims(de__fbx_ctx *f, const u32 *node_map) {
             return DE_ERR_OUT_OF_MEMORY;
         ufbx_bake_opts bo;
         memset(&bo, 0, sizeof bo);
-        bo.temp_allocator = allocator_opts(ir->alloc);
-        bo.result_allocator = allocator_opts(ir->alloc);
+        bo.temp_allocator = allocator_opts(ir);
+        bo.result_allocator = allocator_opts(ir);
         bo.trim_start_time = true;
         bo.resample_rate = fps;
         ufbx_error err;
@@ -829,6 +836,9 @@ static de_result load(de__fbx_ctx *f, const de_model_fbx_options *opt) {
                                  UFBX_COORDINATE_AXIS_POSITIVE_Z};
     DE_TRY(source_axes(f, opt, &axes));
 
+    if (sc->nodes.count > DE_MODEL_MAX_NODES)
+        return DE_FAIL(DE_ERR_UNSUPPORTED, "%s: FBX: %llu nodes, more than the limit of %u",
+                       f->src->path, (unsigned long long)sc->nodes.count, DE_MODEL_MAX_NODES);
     /* ufbx node typed_id → IR node index (the root is not an IR node). */
     u32 *node_map = (u32 *)de_model_ir_array(ir, sc->nodes.count + 1u, sizeof(u32));
     if (node_map == NULL)
@@ -903,8 +913,8 @@ de_result de_model_fbx_load(const de_model_source *src, const de_model_fbx_optio
 
     ufbx_load_opts lo;
     memset(&lo, 0, sizeof lo);
-    lo.temp_allocator = allocator_opts(ir->alloc);
-    lo.result_allocator = allocator_opts(ir->alloc);
+    lo.temp_allocator = allocator_opts(ir);
+    lo.result_allocator = allocator_opts(ir);
     lo.file_format = UFBX_FILE_FORMAT_FBX;
     lo.no_format_from_extension = true;
     lo.target_unit_meters = 1.0;

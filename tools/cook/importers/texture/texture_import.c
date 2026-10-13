@@ -345,7 +345,19 @@ static de_result cook_blocks(de_asset_import_ctx *ctx, const de_allocator *a,
 de_result de_texture_import(de_asset_import_ctx *ctx) {
     de_tex_settings s;
     DE_TRY(read_settings(ctx, &s));
-    const de_allocator *a = de_asset_import_allocator(ctx);
+    /* DENG-106: `max_decoded_mib`, the largest decoded image; the decoders check it before they
+     * allocate (de_tex_limit carries it with the allocator). */
+    i64 mib = (i64)DE_TEX_MAX_DECODED_MIB_DEFAULT;
+    if (de_asset_import_setting_has(ctx, "max_decoded_mib")) {
+        mib = de_asset_import_setting_int(ctx, "max_decoded_mib", -1);
+        if (mib < 1 || mib > (i64)DE_TEX_MAX_DECODED_MIB_MAX)
+            return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                        "texture: max_decoded_mib must be an integer from 1 to %u",
+                                        DE_TEX_MAX_DECODED_MIB_MAX);
+    }
+    de_tex_limit limit;
+    const de_allocator *a =
+        de_tex_limit_init(&limit, de_asset_import_allocator(ctx), (u64)mib << 20);
     u64 size = 0;
     const void *src = de_asset_import_source(ctx, &size);
     de_tex_image img;

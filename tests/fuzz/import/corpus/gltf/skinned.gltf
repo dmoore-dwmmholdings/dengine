@@ -1,0 +1,196 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 3,
+   "max": [
+    1,
+    1,
+    0
+   ],
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5121,
+   "count": 3,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 2,
+   "type": "MAT4"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 2,
+   "max": [
+    1
+   ],
+   "min": [
+    0
+   ],
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC4"
+  }
+ ],
+ "animations": [
+  {
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "translation"
+     }
+    },
+    {
+     "sampler": 1,
+     "target": {
+      "node": 1,
+      "path": "rotation"
+     }
+    }
+   ],
+   "name": "Walk",
+   "samplers": [
+    {
+     "input": 4,
+     "output": 5
+    },
+    {
+     "input": 4,
+     "interpolation": "STEP",
+     "output": 6
+    }
+   ]
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_fixtures.py",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 36,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 12,
+   "byteOffset": 36
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 48
+  },
+  {
+   "buffer": 0,
+   "byteLength": 128,
+   "byteOffset": 96
+  },
+  {
+   "buffer": 0,
+   "byteLength": 8,
+   "byteOffset": 224
+  },
+  {
+   "buffer": 0,
+   "byteLength": 24,
+   "byteOffset": 232
+  },
+  {
+   "buffer": 0,
+   "byteLength": 32,
+   "byteOffset": 256
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 288,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAEAAAABAAAAAQAAAABAPwAAgD4AAAAAAAAAAAAAQD8AAIA+AAAAAAAAAAAAAEA/AACAPgAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAgD8AAAAAAACAPwAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA9AQ1PwAAAAD0BDU/"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Skinned",
+   "primitives": [
+    {
+     "attributes": {
+      "JOINTS_0": 1,
+      "POSITION": 0,
+      "WEIGHTS_0": 2
+     }
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "Body",
+   "skin": 0
+  },
+  {
+   "children": [
+    2
+   ],
+   "name": "Hip"
+  },
+  {
+   "name": "Knee",
+   "translation": [
+    0,
+    1,
+    0
+   ]
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1
+   ]
+  }
+ ],
+ "skins": [
+  {
+   "inverseBindMatrices": 3,
+   "joints": [
+    1,
+    2
+   ],
+   "name": "Rig",
+   "skeleton": 1
+  }
+ ]
+}

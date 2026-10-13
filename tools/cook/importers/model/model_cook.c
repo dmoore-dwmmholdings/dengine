@@ -268,12 +268,56 @@ static void model_write(de_model_buf *b, const de_model_ir *ir, const de_model_n
     de_model_buf_patch_u32(b, at_offsets + 20, (u32)b->size);
 }
 
+/* ---- Value checks (DENG-106) ----------------------------------------------------------------- */
+
+/* True when the `n` floats are finite (and at most `bound` in magnitude when `bound` > 0). */
+static bool floats_ok(const f32 *v, u64 n, f64 bound) {
+    if (v == NULL)
+        return true;
+    for (u64 i = 0; i < n; ++i) {
+        f64 x = v[i];
+        if (!isfinite(x) || (bound > 0.0 && fabs(x) > bound))
+            return false;
+    }
+    return true;
+}
+
+/* The cook stages turn floats into integers (quantization, meshoptimizer's bounds and cones) and
+ * square positions: a NaN, an infinity or a huge coordinate from a hostile file must fail the
+ * import, not reach them. Checked in engine coordinates, after `scale`. */
+static de_result check_values(const de_model_ir *ir, const char *path) {
+    static const char *const attr[] = {"position", "normal", "tangent", "UV0",
+                                       "UV1",      "colour", "weight"};
+    for (u32 m = 0; m < ir->mesh_count; ++m) {
+        const de_model_mesh *me = &ir->meshes[m];
+        u64 v = me->vertex_count;
+        const f32 *streams[7] = {me->position, me->normal, me->tangent, me->uv[0],
+                                 me->uv[1],    me->color0, me->weights0};
+        const u64 comps[7] = {3, 3, 4, 2, 2, 4, 4};
+        for (u32 k = 0; k < 7u; ++k)
+            if (!floats_ok(streams[k], v * comps[k], k == 0 ? DE_MODEL_MAX_COORDINATE : 0.0))
+                return DE_FAIL(DE_ERR_PARSE, "%s: mesh \"%s\": a %s is not a finite number%s", path,
+                               me->name, attr[k], k == 0 ? " or is over 1e9 m" : "");
+    }
+    for (u32 i = 0; i < ir->node_count; ++i) {
+        const de_model_node *n = &ir->nodes[i];
+        if (!floats_ok(n->translation, 3, DE_MODEL_MAX_COORDINATE) ||
+            !floats_ok(n->rotation, 4, 0) || !floats_ok(n->scale, 3, 0))
+            return DE_FAIL(DE_ERR_PARSE,
+                           "%s: node \"%s\": its transform is not finite or is over 1e9 m", path,
+                           n->name);
+    }
+    return DE_OK;
+}
+
 /* ---- The importer ---------------------------------------------------------------------------- */
 
 /** The importer's settings (all of them are in the settings hash, read or not). */
 typedef struct model_settings {
     f32 scale;
     bool import_cameras;
+    /* DENG-106: `max_decoded_mib` (0 when not given: the default), passed on to texture cooks. */
+    i64 max_decoded_mib;
     /* The mesh stage (DENG-103, mesh_cook.c). */
     de_model_mesh_settings mesh;
 } model_settings;
@@ -366,7 +410,7 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
     bool raw_textures = false;
     for (u32 i = 0; i < ir->texture_count; ++i) {
         const de_model_texture *t = &ir->textures[i];
-        de__manifest_kv kv[2];
+        de__manifest_kv kv[3];
         memset(kv, 0, sizeof kv);
         kv[0].key = "srgb";
         kv[0].value.type = DE__MANIFEST_BOOL;
@@ -374,9 +418,12 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
         kv[1].key = "usage";
         kv[1].value.type = DE__MANIFEST_STRING;
         kv[1].value.u.s = de_model_tex_usage_name(t->usage);
+        kv[2].key = "max_decoded_mib";
+        kv[2].value.type = DE__MANIFEST_INT;
+        kv[2].value.u.i = s->max_decoded_mib;
         bool cooked = false;
         DE_TRY(de_cooker_import_cook_subasset(ctx, names.textures[i], "texture", t->data, t->size,
-                                              kv, 2, &cooked));
+                                              kv, s->max_decoded_mib != 0 ? 3u : 2u, &cooked));
         raw_textures = raw_textures || !cooked;
         DE_TRY(de_asset_import_add_dependency(ctx, texture_ids[i]));
     }
@@ -476,9 +523,20 @@ de_result de_model_import(de_asset_import_ctx *ctx) {
                                     "(got %g)",
                                     max_pos);
     s.mesh.max_position_error = (f32)max_pos;
+    /* DENG-106: the decoded-bytes limit of the IR (and of ufbx's allocators, fbx_import.c). */
+    i64 mib = DE_MODEL_MAX_DECODED_MIB_DEFAULT;
+    if (de_asset_import_setting_has(ctx, "max_decoded_mib")) {
+        mib = de_asset_import_setting_int(ctx, "max_decoded_mib", -1);
+        if (mib < 1 || mib > (i64)DE_MODEL_MAX_DECODED_MIB_MAX)
+            return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                        "setting `max_decoded_mib` must be an integer from 1 to %u",
+                                        DE_MODEL_MAX_DECODED_MIB_MAX);
+        s.max_decoded_mib = mib;
+    }
 
     de_model_ir ir;
     de_model_ir_init(&ir, de_asset_import_allocator(ctx), de_cooker_import_id_str(ctx));
+    ir.byte_limit = (u64)mib << 20;
     if (s.import_cameras)
         de_model_ir_warn(&ir, "import_cameras: cameras and lights are not imported yet");
     u64 size = 0;
@@ -489,9 +547,17 @@ de_result de_model_import(de_asset_import_ctx *ctx) {
     de_result r = model_load_source(ctx, &src, &ir, &axes);
     if (r == DE_OK) {
         de_model_ir_convert_axes(&ir, axes, s.scale);
+        r = check_values(&ir, src.path);
+    }
+    if (r == DE_OK) {
         de_model_ir_compute_bounds(&ir);
         r = import_ir(ctx, &s, &ir);
     }
+    if (r != DE_OK && ir.over_limit) /* callers report a refused block as out of memory */
+        r = DE_FAIL(DE_ERR_UNSUPPORTED,
+                    "the decoded data needs more than the limit of %lld MiB (setting "
+                    "`max_decoded_mib`)",
+                    (long long)mib);
     if (r != DE_OK)
         (void)fail_from_error(ctx, r);
     de_model_ir_free(&ir);

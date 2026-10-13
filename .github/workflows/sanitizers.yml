@@ -208,9 +208,12 @@ jobs:
         shell: bash
         run: |
           set -u
-          # fuzz.<name> runs `fuzz_<name> -runs=0 [<corpus dir>]`: take the path and the corpus.
+          # fuzz.<name> runs `fuzz_<name> -runs=0 [<corpus dir>] [-dict=<file>]`: take the path,
+          # the corpus and the dictionary (DENG-106).
           ctest --preset "${PRESET}" -N -L fuzz -LE selftest --show-only=json-v1 \
-            | jq -c '[.tests[] | {name: .name, exe: .command[0], corpus: (.command[2] // "")}]' \
+            | jq -c '[.tests[] | {name: .name, exe: .command[0],
+                       corpus: ([(.command // [])[1:][] | select(startswith("-") | not)] | first // ""),
+                       dict: ([(.command // [])[1:][] | select(startswith("-dict="))] | first // "")}]' \
             > fuzz-targets.json
           if jq -e 'any(.[]; .exe == null)' fuzz-targets.json >/dev/null; then
             echo "::error::a fuzz target was not built"
@@ -229,12 +232,16 @@ jobs:
             name=$(jq -r .name <<<"${t}")
             exe=$(jq -r .exe <<<"${t}")
             corpus=$(jq -r .corpus <<<"${t}")
+            dict=$(jq -r .dict <<<"${t}")
             work="fuzz-work/${name}"
             mkdir -p "${work}"
             echo "::group::${name}"
             args=(-max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=2048
                   -malloc_limit_mb=256 -print_final_stats=1
                   -artifact_prefix="fuzz-findings/${name}-" "${work}")
+            if [ -n "${dict}" ]; then
+              args+=("${dict}")
+            fi
             if [ -n "${corpus}" ]; then
               args+=("${corpus}")
             fi

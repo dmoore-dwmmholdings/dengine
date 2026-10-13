@@ -69,6 +69,7 @@ de_result de_tex_image_alloc(const de_allocator *a, de_tex_image *img) {
     if (texels == 0 || bytes > (u64)SIZE_MAX)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "texture: image of %llu texels",
                        (unsigned long long)texels);
+    DE_TRY(de_tex_limit_check(a, bytes, "texture"));
     img->rgba = (f32 *)DE_ALLOC(a, (size_t)bytes, DE_ALIGNOF(f32), DE_MEM_ASSET);
     if (img->rgba == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "texture: out of memory for %ux%u texels", img->width,
@@ -76,6 +77,48 @@ de_result de_tex_image_alloc(const de_allocator *a, de_tex_image *img) {
     memset(img->rgba, 0, (size_t)bytes);
     img->rgba_bytes = bytes;
     return DE_OK;
+}
+
+/* ---- Decoded-bytes limit (DENG-106) ------------------------------------------------------- */
+
+static void *limit_alloc(void *user, size_t size, size_t align, u32 tag) {
+    const de_tex_limit *l = (const de_tex_limit *)user;
+    return DE_ALLOC(l->parent, size, align, tag);
+}
+
+static void *limit_realloc(void *user, void *ptr, size_t old_size, size_t new_size, size_t align,
+                           u32 tag) {
+    const de_tex_limit *l = (const de_tex_limit *)user;
+    return DE_REALLOC(l->parent, ptr, old_size, new_size, align, tag);
+}
+
+static void limit_free(void *user, void *ptr, size_t size) {
+    const de_tex_limit *l = (const de_tex_limit *)user;
+    DE_FREE(l->parent, ptr, size);
+}
+
+const de_allocator *de_tex_limit_init(de_tex_limit *l, const de_allocator *parent, u64 limit) {
+    memset(l, 0, sizeof *l);
+    l->parent = parent != NULL ? parent : de_heap_allocator();
+    l->limit = limit;
+    l->alloc.alloc = limit_alloc;
+    l->alloc.realloc = limit_realloc;
+    l->alloc.free = limit_free;
+    l->alloc.user = l;
+    return &l->alloc;
+}
+
+de_result de_tex_limit_check(const de_allocator *a, u64 bytes, const char *what) {
+    if (a == NULL || a->alloc != limit_alloc)
+        return DE_OK;
+    const de_tex_limit *l = (const de_tex_limit *)a->user;
+    if (bytes <= l->limit)
+        return DE_OK;
+    return DE_FAIL(DE_ERR_UNSUPPORTED,
+                   "%s: the decoded image needs %llu MiB, more than the limit of %llu MiB (setting "
+                   "`max_decoded_mib`)",
+                   what, (unsigned long long)((bytes + (1u << 20) - 1u) >> 20),
+                   (unsigned long long)(l->limit >> 20));
 }
 
 de_result de_tex_check_size(u32 width, u32 height, const char *what) {
@@ -89,6 +132,29 @@ de_result de_tex_check_size(u32 width, u32 height, const char *what) {
 
 /* ---- PNG and JPEG (stb_image) ---------------------------------------------------------------- */
 
+/* stb_image grows its IDAT buffer to the length a chunk header claims before it reads the chunk,
+ * so a 100-byte file could make it allocate up to 1 GiB. Every chunk of an in-memory PNG must fit
+ * in what is left of the file (DENG-106). */
+static de_result png_chunks_fit(const u8 *p, u64 size) {
+    u64 at = 8;               /* the signature */
+    while (at + 8u <= size) { /* stb_image reads a chunk once its length and type are there */
+        u64 len = ((u64)p[at] << 24) | ((u64)p[at + 1] << 16) | ((u64)p[at + 2] << 8) | p[at + 3];
+        if (len > size - at - 8u)
+            return DE_FAIL(DE_ERR_PARSE,
+                           "image: PNG chunk \"%c%c%c%c\" claims %llu bytes, more than the file "
+                           "has left",
+                           p[at + 4] >= 0x20 && p[at + 4] < 0x7F ? p[at + 4] : '?',
+                           p[at + 5] >= 0x20 && p[at + 5] < 0x7F ? p[at + 5] : '?',
+                           p[at + 6] >= 0x20 && p[at + 6] < 0x7F ? p[at + 6] : '?',
+                           p[at + 7] >= 0x20 && p[at + 7] < 0x7F ? p[at + 7] : '?',
+                           (unsigned long long)len);
+        if (memcmp(p + at + 4, "IEND", 4) == 0)
+            break;
+        at += 12u + len;
+    }
+    return DE_OK;
+}
+
 de_result de_tex_decode_stb(const de_allocator *a, const void *data, u64 size, de_tex_image *out) {
     memset(out, 0, sizeof *out);
     if (size > (u64)INT_MAX)
@@ -100,6 +166,10 @@ de_result de_tex_decode_stb(const de_allocator *a, const void *data, u64 size, d
         return DE_FAIL(DE_ERR_PARSE, "image: not a valid PNG or JPEG file (%s)",
                        stbi_failure_reason());
     DE_TRY(de_tex_check_size((u32)w, (u32)h, "image"));
+    /* Before stb_image allocates: its RGBA buffer is a quarter (half for 16 bits) of this. */
+    DE_TRY(de_tex_limit_check(a, (u64)w * (u64)h * 4u * sizeof(f32), "image"));
+    if (de_tex_sniff(data, size) == DE_TEX_SOURCE_PNG)
+        DE_TRY(png_chunks_fit(p, size));
     bool sixteen = stbi_is_16_bit_from_memory(p, len) != 0;
     out->width = (u32)w;
     out->height = (u32)h;
@@ -204,6 +274,16 @@ de_result de_tex_decode_exr(const de_allocator *a, const void *data, u64 size, d
     if (ir < 0 && iy < 0) {
         FreeEXRHeader(&hdr);
         return DE_FAIL(DE_ERR_UNSUPPORTED, "EXR: no R or Y channel");
+    }
+    /* Before tinyexr allocates: it decodes every channel to a 4-byte plane, so a file with many
+     * channels needs more than the f32 RGBA image. */
+    u64 texel_bytes = 4u * sizeof(f32);
+    if ((u64)hdr.num_channels * 4u > texel_bytes)
+        texel_bytes = (u64)hdr.num_channels * 4u;
+    r = de_tex_limit_check(a, (u64)w * (u64)h * texel_bytes, "EXR");
+    if (r != DE_OK) {
+        FreeEXRHeader(&hdr);
+        return r;
     }
     EXRImage img;
     InitEXRImage(&img);

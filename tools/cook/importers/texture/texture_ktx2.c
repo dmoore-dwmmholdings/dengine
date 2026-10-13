@@ -131,12 +131,25 @@ typedef struct ktx2_file {
     u64 size;
     u32 vk_format, type_size, width, height, depth, layers, faces, levels, scheme;
     u32 dfd_offset, dfd_length;
+    u64 sgd_offset, sgd_length; /* supercompression global data (BasisLZ) */
     u8 color_model, transfer;
     bool dfd_alpha; /* a sample with the alpha channel id */
     ktx2_level level[DE_COOKED_TEXTURE_MAX_MIPS];
 } ktx2_file;
 
-static de_result ktx2_parse(const void *data, u64 size, ktx2_file *f) {
+/* Bytes of the stored BC blocks of every level, layer and face of `f` in format `fmt`. */
+static u64 bc_bytes(const ktx2_file *f, de_gpu_format fmt, u32 levels) {
+    de_cooked_texture_block blk;
+    if (!de_cooked_texture_format_block(fmt, &blk))
+        return 0;
+    u64 total = 0;
+    for (u32 m = 0; m < levels; ++m)
+        total += de_cooked_texture_row_bytes(&blk, de_cooked_texture_mip_extent(f->width, m)) *
+                 de_cooked_texture_row_count(&blk, de_cooked_texture_mip_extent(f->height, m));
+    return total * f->layers * f->faces;
+}
+
+static de_result ktx2_parse(const de_allocator *a, const void *data, u64 size, ktx2_file *f) {
     memset(f, 0, sizeof *f);
     f->p = (const u8 *)data;
     f->size = size;
@@ -154,6 +167,8 @@ static de_result ktx2_parse(const void *data, u64 size, ktx2_file *f) {
     f->scheme = de_cooked_get_u32(h + 32);
     f->dfd_offset = de_cooked_get_u32(h + 36);
     f->dfd_length = de_cooked_get_u32(h + 40);
+    f->sgd_offset = de_cooked_get_u64(h + 52);
+    f->sgd_length = de_cooked_get_u64(h + 60);
     if (f->depth > 1)
         return DE_FAIL(DE_ERR_UNSUPPORTED, "KTX2: 3D textures are not supported");
     if (f->height == 0)
@@ -174,6 +189,13 @@ static de_result ktx2_parse(const void *data, u64 size, ktx2_file *f) {
         return DE_FAIL(DE_ERR_PARSE, "KTX2: %u levels for a %ux%u texture", nlevels, f->width,
                        f->height);
     f->levels = nlevels;
+    /* The decoded-bytes limit, from the header alone (DENG-106): the stored blocks of a BC
+     * pass-through, else level 0 of every layer and face as f32 RGBA. */
+    de_gpu_format bc = bc_format(f->vk_format);
+    u64 decoded = bc != DE_FMT_UNKNOWN
+                      ? bc_bytes(f, bc, nlevels)
+                      : (u64)f->width * f->height * f->layers * f->faces * 4u * sizeof(f32);
+    DE_TRY(de_tex_limit_check(a, decoded, "KTX2"));
     if ((u64)KTX2_HEADER_SIZE + (u64)nlevels * KTX2_LEVEL_SIZE > size)
         return DE_FAIL(DE_ERR_PARSE, "KTX2: the level index is cut off");
     for (u32 i = 0; i < nlevels; ++i) {
@@ -201,9 +223,10 @@ static de_result ktx2_parse(const void *data, u64 size, ktx2_file *f) {
 }
 
 /* The bytes of level `i`, zstd-decompressed into a block of `a` when the file is supercompressed
- * with zstd (*owned set; free with *owned_size). */
-static de_result level_bytes(const de_allocator *a, const ktx2_file *f, u32 i, const u8 **out,
-                             u64 *out_size, u8 **owned, u64 *owned_size) {
+ * with zstd (*owned set; free with *owned_size). `expected` is the size the level must have: a
+ * zstd frame that claims another size is refused before anything is allocated (DENG-106). */
+static de_result level_bytes(const de_allocator *a, const ktx2_file *f, u32 i, u64 expected,
+                             const u8 **out, u64 *out_size, u8 **owned, u64 *owned_size) {
     *owned = NULL;
     *owned_size = 0;
     const ktx2_level *l = &f->level[i];
@@ -219,6 +242,9 @@ static de_result level_bytes(const de_allocator *a, const ktx2_file *f, u32 i, c
     if (n == ZSTD_CONTENTSIZE_ERROR || n == ZSTD_CONTENTSIZE_UNKNOWN || n != l->uncompressed ||
         n > (u64)SIZE_MAX)
         return DE_FAIL(DE_ERR_PARSE, "KTX2: level %u: bad zstd frame", i);
+    if (n != expected)
+        return DE_FAIL(DE_ERR_PARSE, "KTX2: level %u holds %llu bytes, expected %llu", i, n,
+                       (unsigned long long)expected);
     u8 *buf = (u8 *)DE_ALLOC(a, n != 0 ? (size_t)n : 1u, 16, DE_MEM_ASSET);
     if (buf == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "KTX2: out of memory for level %u", i);
@@ -293,7 +319,7 @@ static de_result read_blocks(const de_allocator *a, const ktx2_file *f, de_gpu_f
         u64 n = 0;
         u8 *owned = NULL;
         u64 owned_size = 0;
-        de_result r = level_bytes(a, f, m, &src, &n, &owned, &owned_size);
+        de_result r = level_bytes(a, f, m, image_size[m] * images, &src, &n, &owned, &owned_size);
         if (r == DE_OK && n != image_size[m] * images)
             r = DE_FAIL(DE_ERR_PARSE, "KTX2: level %u holds %llu bytes, expected %llu", m,
                         (unsigned long long)n, (unsigned long long)(image_size[m] * images));
@@ -331,7 +357,7 @@ static de_result read_raw(const de_allocator *a, const ktx2_file *f, const raw_f
     u64 n = 0;
     u8 *owned = NULL;
     u64 owned_size = 0;
-    DE_TRY(level_bytes(a, f, 0, &src, &n, &owned, &owned_size));
+    DE_TRY(level_bytes(a, f, 0, image_bytes * img->layers, &src, &n, &owned, &owned_size));
     de_result r = DE_OK;
     if (n != image_bytes * img->layers)
         r = DE_FAIL(DE_ERR_PARSE, "KTX2: level 0 holds %llu bytes, expected %llu",
@@ -376,7 +402,7 @@ de_result de_tex_decode_ktx2(const de_allocator *a, const void *data, u64 size,
     memset(image, 0, sizeof *image);
     memset(blocks, 0, sizeof *blocks);
     ktx2_file f;
-    DE_TRY(ktx2_parse(data, size, &f));
+    DE_TRY(ktx2_parse(a, data, size, &f));
     if (f.vk_format == VK_UNDEFINED) {
         if (f.color_model != KHR_DF_MODEL_ETC1S && f.color_model != KHR_DF_MODEL_UASTC)
             return DE_FAIL(DE_ERR_UNSUPPORTED,
@@ -387,6 +413,40 @@ de_result de_tex_decode_ktx2(const de_allocator *a, const void *data, u64 size,
             f.scheme != KTX2_SUPERCOMPRESSION_ZSTD)
             return DE_FAIL(DE_ERR_UNSUPPORTED, "KTX2: supercompression scheme %u is not supported",
                            f.scheme);
+        /* The Basis transcoder copies the ETC1S global data header (20 bytes) and one 20-byte
+         * image descriptor per level, layer and face from the supercompression global data
+         * before it checks that the data is that long (DENG-106). */
+        if (f.scheme == KTX2_SUPERCOMPRESSION_BASISLZ &&
+            (!de_cooked_range_ok(size, f.sgd_offset, f.sgd_length) ||
+             f.sgd_length < 20u + 20u * (u64)f.levels * f.layers * f.faces))
+            return DE_FAIL(DE_ERR_PARSE, "KTX2: the BasisLZ global data is missing or cut off");
+        /* The transcoder allocates a level's uncompressedByteLength before it checks it: a level
+         * may not claim more than its UASTC blocks (16 bytes per 4x4 block, every layer and face;
+         * BasisLZ levels claim 0). DENG-106. */
+        /* UASTC levels hold exactly their blocks: uncompressedByteLength, the stored length (no
+         * supercompression) and a zstd frame's content size must all be that, or the transcoder
+         * stops on an assertion (found by fuzz_ktx2 in CI). */
+        for (u32 m = 0; m < f.levels; ++m) {
+            u64 bw = (de_cooked_texture_mip_extent(f.width, m) + 3u) / 4u;
+            u64 bh = (de_cooked_texture_mip_extent(f.height, m) + 3u) / 4u;
+            u64 most = bw * bh * 16u * f.layers * f.faces;
+            const ktx2_level *l = &f.level[m];
+            bool bad = l->uncompressed > most;
+            if (f.color_model == KHR_DF_MODEL_UASTC) {
+                bad = bad || l->uncompressed != most;
+                if (f.scheme == KTX2_SUPERCOMPRESSION_NONE)
+                    bad = bad || l->length != most;
+                else if (f.scheme == KTX2_SUPERCOMPRESSION_ZSTD)
+                    bad = bad || ZSTD_getFrameContentSize(f.p + l->offset, (size_t)l->length) !=
+                                     (unsigned long long)most;
+            }
+            if (bad)
+                return DE_FAIL(DE_ERR_PARSE,
+                               "KTX2: Basis level %u claims %llu bytes (%llu stored); its blocks "
+                               "take %llu",
+                               m, (unsigned long long)l->uncompressed,
+                               (unsigned long long)l->length, (unsigned long long)most);
+        }
         *kind = DE_TEX_KTX2_IMAGE;
         DE_TRY(de_tex_basis_decode(a, data, size, image));
         image->cube = f.faces == 6;

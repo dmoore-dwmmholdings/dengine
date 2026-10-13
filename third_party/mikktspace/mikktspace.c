@@ -440,8 +440,11 @@ static const int g_iCells = 2048;
 static NOINLINE int FindGridCell(const float fMin, const float fMax, const float fVal)
 {
 	const float fIndex = g_iCells * ((fVal-fMin)/(fMax-fMin));
-	const int iIndex = (int)fIndex;
-	return iIndex < g_iCells ? (iIndex >= 0 ? iIndex : 0) : (g_iCells - 1);
+	// Clamp before the conversion: when every position is the same (fMax == fMin), or an extent
+	// overflows, fIndex is NaN or out of the int range, and the cast would be undefined.
+	if (!(fIndex >= 0.0f)) return 0;
+	if (fIndex >= (float)g_iCells) return g_iCells - 1;
+	return (int)fIndex;
 }
 
 static void MergeVertsFast(int piTriList_in_and_out[], STmpVert pTmpVert[], const SMikkTSpaceContext * pContext, const int iL_in, const int iR_in);

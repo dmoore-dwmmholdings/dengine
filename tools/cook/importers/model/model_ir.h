@@ -77,6 +77,12 @@ typedef struct de_model_mesh {
 
 /* ---- Nodes ----------------------------------------------------------------------------------- */
 
+/** Most nodes one model may have (DENG-106): the front ends refuse more (DE_ERR_UNSUPPORTED). */
+#define DE_MODEL_MAX_NODES (1u << 20)
+/** Largest vertex coordinate (metres, after the axis conversion and `scale`) the importer accepts
+ * (DENG-106): the cook stages square and subtract positions in f32, which must stay finite. */
+#define DE_MODEL_MAX_COORDINATE 1.0e9
+
 typedef struct de_model_node {
     const char *name; /**< source name, "" if none */
     i32 parent;       /**< -1 for a root */
@@ -191,14 +197,22 @@ typedef struct de_model_ir {
 
     const de_allocator *alloc;
     de__model_block *blocks;
+
+    /* DENG-106: the decoded-bytes limit (`max_decoded_mib`). de_model_ir_alloc refuses a block
+     * that would take `bytes` over `byte_limit` (0 = no limit) and sets `over_limit`. */
+    u64 byte_limit;
+    u64 bytes;
+    bool over_limit;
 } de_model_ir;
 
 /** Starts an empty IR whose memory comes from `a` (NULL = the heap). */
 void de_model_ir_init(de_model_ir *ir, const de_allocator *a, const char *log_name);
-/** Frees everything de_model_ir_alloc gave out; the IR is empty afterwards. */
+/** Frees everything de_model_ir_alloc gave out; the IR is empty afterwards (it keeps its
+ * allocator, log name and byte limit). */
 void de_model_ir_free(de_model_ir *ir);
 /** `size` zeroed bytes (16-byte aligned) owned by the IR, or NULL with DE_ERR_OUT_OF_MEMORY in the
- * error context (also for a size that overflows). */
+ * error context (also for a size that overflows). Over the IR's byte limit: NULL with
+ * DE_ERR_UNSUPPORTED in the error context, and `over_limit` set (DENG-106). */
 void *de_model_ir_alloc(de_model_ir *ir, u64 size);
 /** `count` x `elem` zeroed bytes (overflow-checked). */
 void *de_model_ir_array(de_model_ir *ir, u64 count, u64 elem);
