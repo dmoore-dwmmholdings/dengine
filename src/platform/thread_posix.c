@@ -248,6 +248,15 @@ de_result de_thread_set_affinity(de_thread *t, u64 core_mask) {
 #endif
 }
 
+de_result de_thread_set_priority(de_thread *t, de_thread_priority prio) {
+    if (!t || (unsigned)prio >= 4u)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_thread_set_priority: no thread or bad priority");
+    /* See the header: macOS sets QoS only on the calling thread, and Linux needs privileges to
+     * raise one; both schedulers give lower priorities a smaller share rather than none. */
+    return DE_FAIL(DE_ERR_UNSUPPORTED, "de_thread_set_priority: not supported on this OS");
+}
+
 static DE_THREAD_LOCAL u32 de__tid_cache;
 
 u32 de_thread_current_id(void) {

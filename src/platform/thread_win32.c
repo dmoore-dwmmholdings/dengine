@@ -115,6 +115,9 @@ void de_thread_set_name(const char *name) {
     (void)SetThreadDescription(GetCurrentThread(), wide);
 }
 
+static const int de__win_prio_of[] = {THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_NORMAL,
+                                      THREAD_PRIORITY_ABOVE_NORMAL, THREAD_PRIORITY_TIME_CRITICAL};
+
 static unsigned __stdcall de__thread_main(void *arg) {
     de_thread *t = (de_thread *)arg;
     if (t->name[0] != '\0')
@@ -156,10 +159,8 @@ de_result de_thread_create(de_thread_fn fn, void *user, const char *name, de_thr
     }
     t->handle = (HANDLE)h;
 
-    static const int prio_of[] = {THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_NORMAL,
-                                  THREAD_PRIORITY_ABOVE_NORMAL, THREAD_PRIORITY_TIME_CRITICAL};
     if ((unsigned)prio < 4u && prio != DE_THREAD_NORMAL)
-        (void)SetThreadPriority(t->handle, prio_of[prio]); /* a hint; failure is ignored */
+        (void)SetThreadPriority(t->handle, de__win_prio_of[prio]); /* a hint; failure is ignored */
 
     if (ResumeThread(t->handle) == (DWORD)-1) {
         TerminateThread(t->handle, 1); /* never ran user code */
@@ -193,6 +194,16 @@ de_result de_thread_set_affinity(de_thread *t, u64 core_mask) {
                        "de_thread_set_affinity: SetThreadAffinityMask failed (%lu)",
                        (unsigned long)e);
     }
+    return DE_OK;
+}
+
+de_result de_thread_set_priority(de_thread *t, de_thread_priority prio) {
+    if (!t || (unsigned)prio >= 4u)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_thread_set_priority: no thread or bad priority");
+    if (!SetThreadPriority(t->handle, de__win_prio_of[prio]))
+        return DE_FAIL(DE_ERR_INTERNAL, "de_thread_set_priority: SetThreadPriority failed (%lu)",
+                       (unsigned long)GetLastError());
     return DE_OK;
 }
 

@@ -31,6 +31,37 @@
  * claimed in the `ext_wait_free` bitmap) for the length of the wait, registers it in the counter
  * like a worker slot, and parks on it.
  *
+ * Background boost (DENG-388). Windows runs a below-normal thread only when no thread of normal
+ * or higher priority is ready, so while normal threads keep every core busy the background
+ * workers (DE_THREAD_LOW) got no CPU until the OS's own anti-starvation boost, about 4 s later.
+ * When the boost is on (de_task_bg_boost; Windows by default) a monitor thread looks at the
+ * background workers every DE__TASK_BG_CHECK_NS while background tasks are pending:
+ *   - Each background worker counts *events* (`bg_events`): a task starts or ends, its thread
+ *     parks inside de_task_wait or returns from the park. A parked worker wakes on its park
+ *     timeout (2 ms, at most a 15.6 ms tick on Windows) and counts again, so a worker that should
+ *     run counts at least once per check unless it is not getting CPU time, or computes.
+ *   - A worker is *stalled* when it counted nothing since the last check and either holds a task
+ *     (`bg_holding`) or is idle while tasks are queued (`bg_queued`; its semaphore was posted).
+ *   - The monitor raises each stalled worker to DE_THREAD_REALTIME (time-critical, priority 15,
+ *     the level of Windows' own anti-starvation boost: above normal was not enough, because a
+ *     thread woken from a wait runs one quantum one level higher) and sets `bg_boosted`. The
+ *     worker lowers itself to DE_THREAD_LOW when it gives the core back (its task ends, or it
+ *     parks), after its bookkeeping, because a lowered thread may not run again for a while.
+ *     The monitor lowers it after DE__TASK_BG_SLICE_NS if it is still raised (a long task). So a
+ *     starved short step runs to its end at once.
+ *   - Startup: the monitor is created first and runs time-critical; on Windows the background
+ *     workers start at normal priority and lower themselves once started
+ *     (DE__TASK_BG_LOWERS_ITSELF). A thread that starts below normal can be starved while it
+ *     holds the OS loader lock, which every other starting thread needs; on CI that delayed the
+ *     monitor's first check by up to 5 s.
+ *   - Raised time is charged to a budget: it refills at 1/DE__TASK_BG_SHARE_DIV of wall time, up
+ *     to DE__TASK_BG_CREDIT_CAP_NS, and the monitor raises nobody while it is empty. That bounds
+ *     what background work takes from fully busy frame workers: 1/8 of one core, all background
+ *     workers together, after a burst of at most the cap.
+ * The monitor blocks on `bg_monitor_sem` while nothing is pending; the submit that takes
+ * `bg_pending` from 0 to 1 posts it when `bg_monitor_idle` is set (Dekker-style, seq_cst on both
+ * sides, like the idle frame workers in worker.c).
+ *
  * Quiescence (destroy). Each slot counts the tasks its thread submitted and the tasks it ran,
  * each counter written by one thread only. If the sum of `completed` read first equals the sum
  * of `submitted` read afterwards, no task was pending or running at the first read, and only a
@@ -78,6 +109,23 @@
 #define DE__TASK_EXT_WAITERS 32u
 /** Pause of a non-worker submitter that finds the injection queue full. */
 #define DE__TASK_INJECT_FULL_PAUSE_NS (10ull * 1000)
+/** Background boost (see the top of this file). The monitor's check interval and the longest
+ * time a stalled worker stays raised (both timed waits: on Windows they end on a timer tick, up
+ * to 15.6 ms later). */
+#define DE__TASK_BG_CHECK_NS (10ull * 1000 * 1000)
+#define DE__TASK_BG_SLICE_NS (2ull * 1000 * 1000)
+/** Windows: background workers start at normal priority and lower themselves to DE_THREAD_LOW
+ * once started. A thread that starts below normal can be starved while it holds the loader lock,
+ * and every thread started after it then waits too (DENG-388). Elsewhere the priority cannot be
+ * changed afterwards, and lower priorities still get a share of the CPU. */
+#if defined(_WIN32)
+#define DE__TASK_BG_LOWERS_ITSELF 1
+#else
+#define DE__TASK_BG_LOWERS_ITSELF 0
+#endif
+/** The raised-time budget refills at 1/DE__TASK_BG_SHARE_DIV of wall time, up to the cap. */
+#define DE__TASK_BG_SHARE_DIV     8u
+#define DE__TASK_BG_CREDIT_CAP_NS (32ull * 1000 * 1000)
 
 /* ---------- Records and counters ---------- */
 
@@ -144,6 +192,13 @@ typedef struct de__task_slot {
     de_atomic_u32 parked; /* slot 0: 1 while parked in a wait (main-thread queue wake-up) */
     de_sem park;
 
+    /* Background boost (background slots; DENG-388, see the top of this file). */
+    de_atomic_u32 bg_events;     /* written by the worker */
+    de_atomic_u32 bg_holding;    /* 1 while the worker runs a task (written by the worker) */
+    de_atomic_u32 bg_boosted;    /* 1 while raised: set by the monitor, taken by either */
+    de_atomic_u64 bg_boost_from; /* when the monitor raised it */
+    u32 bg_seen;                 /* monitor only: bg_events at the last check */
+
     /* Read-only after create. */
     struct de_task_system *ts;
     de_thread *thread; /* NULL for slot 0 and the external slot */
@@ -180,8 +235,22 @@ struct de_task_system {
     de_sem ext_park[DE__TASK_EXT_WAITERS];
     de_sem ext_nap;
 
+    /* Background boost (DENG-388; see the top of this file). */
+    DE_ALIGN(DE_CACHE_LINE) de_atomic_u32 bg_pending; /* submitted, not finished */
+    de_atomic_u32 bg_queued;                          /* submitted, not started */
+    de_atomic_u32 bg_can_boost;     /* 0 once the OS said priority changes are unsupported */
+    de_atomic_u32 bg_prio_failures; /* other failed priority changes (logged once) */
+    de_atomic_u64 bg_boost_used;    /* raised time (ns) not yet charged to the budget */
+    de_atomic_u32 bg_monitor_idle;  /* 1 while the monitor blocks with nothing pending */
+    de_sem bg_monitor_sem;          /* posted by a 0 -> 1 submit while idle, and at shutdown */
+    de_thread *bg_monitor;          /* NULL when the boost is off */
+    bool bg_boost;
+
     /* Statistics (tests, DENG-293). */
     DE_ALIGN(DE_CACHE_LINE) de_atomic_u64 counter_zero_events;
+    de_atomic_u64 bg_boosts;   /* times the monitor raised a worker (DENG-388) */
+    de_atomic_u64 bg_boost_ns; /* total raised time */
+    de_atomic_u64 bg_checks;   /* monitor checks made */
 
     /* Read-only after create. */
     DE_ALIGN(DE_CACHE_LINE) const de_allocator *allocator;
@@ -206,6 +275,12 @@ struct de_task_system {
 de__task_slot *de__task_current_slot(const de_task_system *ts);
 /** Sets the calling thread's slot (worker start, create) or clears it (NULL). */
 void de__task_set_current_slot(de__task_slot *slot);
+
+/** de_task_submit with a counter the caller has already charged for this task (task graphs:
+ * de_task_graph_run charges `done` with the node count). The task takes one off `charged` when
+ * it has run, after its completion is counted, like any task with a counter. */
+void de__task_submit_charged(de_task_system *ts, de_task_pool pool, de_task_fn fn, void *user,
+                             de__task_counter *charged);
 
 /** Runs `t` on the calling thread, which owns `self`: calls the function, recycles the record,
  * counts the completion and decrements the counter (waking its waiter). */
@@ -235,9 +310,19 @@ void de__task_wake_one(de_task_system *ts);
 /** After queueing a main-thread task: wakes slot 0 if it is parked in a wait. */
 void de__task_wake_main(de_task_system *ts);
 
+/** Before a background task becomes visible: counts it as pending and queued, and wakes an
+ * idle monitor (background boost). */
+void de__bg_note_submit(de_task_system *ts);
+/** A background worker's event (background boost): counts it and, when the worker `yields` the
+ * core (a task ends, the thread parks), lowers it if the monitor raised it. Call only when
+ * `ts->bg_boost`. */
+void de__bg_event(de_task_system *ts, de__task_slot *self, bool yields);
+
 /** Thread entry points (worker.c). */
 i32 de__task_frame_worker_main(void *slot);
 i32 de__task_background_worker_main(void *slot);
+/** The background boost monitor (worker.c); `p` is the task system. */
+i32 de__task_bg_monitor_main(void *p);
 
 /** The grain de_task_parallel_for uses for `grain == 0`: max(1, count / (frame workers * 4)).
  * Depends on the worker count, so it is not deterministic across machines (parallel_for.c). */
@@ -249,6 +334,10 @@ typedef struct de__task_stats {
     u64 completed;           /* tasks run, every pool */
     u64 counter_zero_events; /* counter transitions to zero */
     u64 record_blocks;       /* record blocks allocated, every slot */
+    u64 bg_boosts;           /* background workers raised (DENG-388) */
+    u64 bg_boost_ns;         /* total time background workers were raised */
+    u32 bg_prio_failures;    /* failed priority changes (other than unsupported) */
+    u64 bg_checks;           /* boost monitor checks made */
 } de__task_stats;
 /** Sums the per-slot counts. Exact when no task runs. */
 de__task_stats de__task_get_stats(const de_task_system *ts);

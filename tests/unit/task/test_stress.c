@@ -519,20 +519,20 @@ static de_task_system *make_ts(u32 workers, u32 bg) {
     return ts;
 }
 
-/* Every submitted task ran once. A graph node finishes its run's `done` counter inside its own
- * task function, and the task counts as completed only after that function returns, so a
- * waiter on `done` can get here while the last node's thread is still between the two (CI saw
- * one task short on windows clang-cl Debug, DENG-375). Give it up to 2 s to finish. */
+/* Every submitted task ran once, and is counted as completed by the time its counter's waiter
+ * returns: a task counts its completion before it takes itself off its counter. Graph nodes did
+ * not before DENG-388. A node finished its run's `done` counter inside its own function, so a
+ * waiter on `done` could get here while the last node's thread was still between the two, and
+ * on a loaded Windows runner that thread, a below-normal background worker, waited seconds for
+ * CPU time ("one task short", DENG-375 and DENG-388). Node tasks now carry `done` as their task
+ * counter, so the check is exact, with no grace period. */
 static void expect_quiescent(void) {
-    de__task_stats st = de__task_get_stats(g_ts);
-    const u64 end = de_time_now_ns() + 2000000000ull;
-    while (st.submitted != st.completed && de_time_now_ns() < end) {
-        de_sleep_ns(2000000ull); /* mostly an OS sleep: the finishing thread needs the core */
-        st = de__task_get_stats(g_ts);
-    }
-    printf("stress: %llu tasks submitted, %llu completed, %llu record blocks\n",
+    const de__task_stats st = de__task_get_stats(g_ts);
+    printf("stress: %llu tasks submitted, %llu completed, %llu record blocks; background boost: "
+           "%llu raises, %.1f ms\n",
            (unsigned long long)st.submitted, (unsigned long long)st.completed,
-           (unsigned long long)st.record_blocks);
+           (unsigned long long)st.record_blocks, (unsigned long long)st.bg_boosts,
+           (double)st.bg_boost_ns / 1e6);
     EXPECT_EQ(st.submitted, st.completed);
 }
 

@@ -981,6 +981,18 @@ DE_API i32 de_thread_join(de_thread *t);
  */
 DE_API de_result de_thread_set_affinity(de_thread *t, u64 core_mask);
 
+/**
+ * Changes the scheduling class of a running thread `t` (see de_thread_priority).
+ *
+ * Windows: `SetThreadPriority`, takes effect at once (a thread lowered below a ready one is
+ * preempted). macOS and Linux: DE_ERR_UNSUPPORTED. Their schedulers give a lower priority a
+ * smaller share of the CPU rather than none, macOS sets QoS only on the calling thread, and
+ * raising a thread on Linux needs privileges.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (`t` NULL or an unknown priority), DE_ERR_UNSUPPORTED,
+ *         or DE_ERR_INTERNAL.
+ */
+DE_API de_result de_thread_set_priority(de_thread *t, de_thread_priority prio);
+
 /** Names the calling thread (for threads the engine did not create, such as the main thread). */
 DE_API void de_thread_set_name(const char *name);
 
