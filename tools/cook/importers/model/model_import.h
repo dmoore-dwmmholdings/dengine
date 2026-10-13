@@ -25,13 +25,16 @@
  *   - `axis_up`, `axis_front` (strings, default "auto"; FBX only, DENG-102): override the file's
  *     axis settings when they are wrong (fbx_import.h). `scale` multiplies after the FBX unit
  *     conversion to metres.
+ *   - `anim_sample_rate`, `anim_error`, `anim_error_angle`, `anim_joint_names`: skeleton and clip
+ *     cooking (DENG-104, anim_cook.h).
  *
  * Output: the model bytes (DMDL, render/formats/de_cooked_model.h) and the sub-assets, in this
  * order: textures (`texture:<name>`, type `texture`, cooked by the registered texture importer),
  * materials (`material:<name>`, type `material`, DMAT), meshes (`<node name>`, type `mesh`,
- * DMSH v2: quantized vertices, LOD chain, meshlets; DENG-103), skeletons and clips (DENG-104),
- * the prefab (`prefab`, type `prefab`, cooked by the registered prefab importer from TOML). The
- * model depends on all of them.
+ * DMSH v2: quantized vertices, LOD chain, meshlets; DENG-103), skeletons (`skeleton:<name>`, type
+ * `skeleton`, DSKL, anim/formats/de_cooked_skeleton.h), clips (`anim:<name>`, type `anim_clip`,
+ * DCLP, anim/formats/de_cooked_clip.h), the prefab (`prefab`, type `prefab`, cooked by the
+ * registered prefab importer from TOML). The model depends on all of them.
  */
 #ifndef DE_COOK_MODEL_IMPORT_H
 #define DE_COOK_MODEL_IMPORT_H
@@ -42,7 +45,8 @@
 DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
-#define DE_MODEL_IMPORTER_VERSION 2u
+#define DE_MODEL_IMPORTER_VERSION                                                                  \
+    3u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104) */
 
 #define DE_MODEL_IMPORT_EXTENSION_COUNT 3u
 /** ".gltf", ".glb", ".fbx" (DENG-102). */
