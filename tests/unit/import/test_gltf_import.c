@@ -1050,10 +1050,21 @@ TEST_F(gltf, reject_truncated, imp_fx) {
     ASSERT_EQ(de_file_read_all("gltf:/Duck.glb", &f->alloc, &duck, &size), DE_OK);
     u8 *buf = (u8 *)DE_ALLOC(&f->alloc, (size_t)size, 16, DE_MEM_ASSET);
     ASSERT_TRUE(buf != NULL);
-    /* Every cut in the header and JSON, then every 97th byte: an error with a message, never a
-     * crash (run under ASan in CI). */
+    /* The layout comes from the GLB header: the 12-byte header, the JSON chunk (8-byte chunk
+     * header + JSON), then the BIN chunk header and its data. Parses are slow under GCC TSan
+     * (DENG-391), so the test tries every boundary byte but only a sample of the BIN data. */
+    const u8 *glb = (const u8 *)duck;
+    ASSERT_TRUE(size > 28u);
+    const u64 json_end = 20u + de_cooked_get_u32(glb + 12);
+    const u64 bin_start = json_end + 8u;
+    ASSERT_TRUE(bin_start + 64u < size);
+    /* Cuts: every byte through the header, the JSON chunk, the BIN chunk header and the first 64
+     * bytes of BIN data, then 256 cuts spread through the rest of BIN. Each is an error with a
+     * message, never a crash (run under ASan in CI). */
+    const u64 dense_cut_end = bin_start + 64u;
+    const u64 bin_cut_stride = (size - dense_cut_end) / 256u + 1u;
     u32 tried = 0;
-    for (u64 cut = 0; cut < size; cut += cut < 4096u ? 1u : 97u) {
+    for (u64 cut = 0; cut < size; cut += cut < dense_cut_end ? 1u : bin_cut_stride) {
         memcpy(buf, duck, (size_t)cut);
         de_model_ir ir;
         de_model_ir_init(&ir, &f->alloc, "trunc");
@@ -1068,9 +1079,11 @@ TEST_F(gltf, reject_truncated, imp_fx) {
         de_model_ir_free(&ir);
         ++tried;
     }
-    EXPECT_GT(tried, 4000u);
-    /* Flipped bytes anywhere: any result but a crash. */
-    for (u64 at = 0; at < size; at += 13u) {
+    EXPECT_GT((u64)tried, dense_cut_end + 200u);
+    /* Flipped bytes: any result but a crash. Each flip is a full load, so they are sparser:
+     * every 5th byte through the header, JSON and BIN chunk header, then 256 spread through BIN. */
+    const u64 bin_flip_stride = (size - bin_start) / 256u + 1u;
+    for (u64 at = 0; at < size; at += at < bin_start ? 5u : bin_flip_stride) {
         memcpy(buf, duck, (size_t)size);
         buf[at] ^= 0x5Au;
         de_model_ir ir;
