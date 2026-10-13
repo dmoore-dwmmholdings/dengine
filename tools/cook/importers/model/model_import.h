@@ -16,7 +16,12 @@
  *   - `scale` (float, default 1.0, > 0): uniform scale applied with the axis conversion.
  *   - `import_cameras` (bool, default false): cameras and lights are not imported yet; true logs
  *     a warning.
- *   - `generate_lods`, `lod_error`, `meshlets`: read by the mesh stage (DENG-103).
+ *   - `generate_lods` (bool, default true): the LOD chain (up to 8 LODs); false keeps LOD 0.
+ *   - `lod_error` (float, default 0.01, 0 to 1): the screen-space error, as a fraction of the
+ *     viewport height, at which the runtime switches LODs by default (stored in each mesh).
+ *   - `meshlets` (bool, default true): meshlets per LOD; false writes indexed LODs only (debug).
+ *   - `max_position_error` (float, metres, default 0.0005, >= 0): the largest position error
+ *     16-bit quantization may make; a mesh whose 16-bit step would exceed it keeps f32 positions.
  *   - `axis_up`, `axis_front` (strings, default "auto"; FBX only, DENG-102): override the file's
  *     axis settings when they are wrong (fbx_import.h). `scale` multiplies after the FBX unit
  *     conversion to metres.
@@ -24,8 +29,9 @@
  * Output: the model bytes (DMDL, render/formats/de_cooked_model.h) and the sub-assets, in this
  * order: textures (`texture:<name>`, type `texture`, cooked by the registered texture importer),
  * materials (`material:<name>`, type `material`, DMAT), meshes (`<node name>`, type `mesh`,
- * DMSH), skeletons and clips (DENG-104), the prefab (`prefab`, type `prefab`, cooked by the
- * registered prefab importer from TOML). The model depends on all of them.
+ * DMSH v2: quantized vertices, LOD chain, meshlets; DENG-103), skeletons and clips (DENG-104),
+ * the prefab (`prefab`, type `prefab`, cooked by the registered prefab importer from TOML). The
+ * model depends on all of them.
  */
 #ifndef DE_COOK_MODEL_IMPORT_H
 #define DE_COOK_MODEL_IMPORT_H
@@ -36,7 +42,7 @@
 DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
-#define DE_MODEL_IMPORTER_VERSION 1u
+#define DE_MODEL_IMPORTER_VERSION 2u
 
 #define DE_MODEL_IMPORT_EXTENSION_COUNT 3u
 /** ".gltf", ".glb", ".fbx" (DENG-102). */

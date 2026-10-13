@@ -7,8 +7,9 @@
  *   2. axis conversion to engine coordinates with the scale, bounds;
  *   3. sub-asset names (de_model_names_build: deterministic, collision-free);
  *   4. sub-assets in a fixed order: textures (through the registered `texture` importer),
- *      materials (DMAT), meshes (the mesh stage: DMSH v1; DENG-103 replaces it), skeletons and
- *      clips (DENG-104), the prefab (TOML through the registered `prefab` importer);
+ *      materials (DMAT), meshes (the mesh stage, mesh_cook.c: DMSH v2 with quantized vertices,
+ *      LODs and meshlets; DENG-103), skeletons and clips (DENG-104), the prefab (TOML through
+ *      the registered `prefab` importer);
  *   5. the model bytes (DMDL) and the dependencies on every sub-asset.
  *
  * Extension points (append only, DENG-103 and DENG-104): model_mesh_stage and
@@ -196,83 +197,7 @@ de_result de_model_names_build(de_model_ir *ir, de_model_names *out) {
     return ok ? DE_OK : DE_ERR_OUT_OF_MEMORY;
 }
 
-/* ---- Mesh and model writers ------------------------------------------------------------------ */
-
-void de_model_mesh_write(de_model_buf *b, const de_model_mesh *m, const de_asset_id *material_ids) {
-    const void *streams[DE_MODEL_ATTR_COUNT] = {m->position, m->normal, m->tangent, m->uv[0],
-                                                m->uv[1],    m->color0, m->joints0, m->weights0};
-    u32 stream_count = 0;
-    for (u32 a = 0; a < DE_MODEL_ATTR_COUNT; ++a)
-        if (streams[a] != NULL)
-            ++stream_count;
-    u64 start = b->size;
-    de_model_buf_put(b, DE_COOKED_MESH_MAGIC, 4);
-    de_model_buf_u32(b, DE_COOKED_MESH_VERSION);
-    de_model_buf_u32(b, 0); /* flags */
-    de_model_buf_u32(b, m->vertex_count);
-    de_model_buf_u32(b, m->index_count);
-    de_model_buf_u32(b, m->submesh_count);
-    de_model_buf_u32(b, stream_count);
-    de_model_buf_u32(b, DE_COOKED_INDEX_U32);
-    u64 at_tables = b->size;
-    de_model_buf_put(b, NULL, 16); /* table offsets and total size, patched below */
-    for (u32 k = 0; k < 3; ++k)
-        de_model_buf_f32(b, m->bounds_min[k]);
-    for (u32 k = 0; k < 3; ++k)
-        de_model_buf_f32(b, m->bounds_max[k]);
-    de_model_buf_put(b, NULL, 8);
-
-    u64 stream_table = b->size;
-    de_model_buf_put(b, NULL, (u64)stream_count * DE_COOKED_MESH_STREAM_SIZE);
-    de_model_buf_align(b, 16);
-    u64 sub_table = b->size;
-    for (u32 s = 0; s < m->submesh_count; ++s) {
-        const de_model_submesh *sm = &m->submeshes[s];
-        de_model_buf_u32(b, sm->index_first);
-        de_model_buf_u32(b, sm->index_count);
-        de_model_buf_u32(b, sm->vertex_first);
-        de_model_buf_u32(b, sm->vertex_count);
-        de_model_buf_u64(b, sm->material >= 0 ? material_ids[sm->material].hash : 0u);
-        for (u32 k = 0; k < 3; ++k)
-            de_model_buf_f32(b, sm->bounds_min[k]);
-        for (u32 k = 0; k < 3; ++k)
-            de_model_buf_f32(b, sm->bounds_max[k]);
-    }
-    u32 row = 0;
-    for (u32 a = 0; a < DE_MODEL_ATTR_COUNT; ++a) {
-        if (streams[a] == NULL)
-            continue;
-        de_model_buf_align(b, 16);
-        u64 off = b->size - start;
-        u32 fmt = de_cooked_stream_format(a);
-        u64 n = (u64)m->vertex_count *
-                (de_cooked_vertex_format_size(fmt) / (a == DE_MODEL_ATTR_JOINTS0 ? 2u : 4u));
-        if (a == DE_MODEL_ATTR_JOINTS0) {
-            for (u64 i = 0; i < n; ++i) {
-                u8 x[2] = {(u8)m->joints0[i], (u8)(m->joints0[i] >> 8)};
-                de_model_buf_put(b, x, 2);
-            }
-        } else {
-            const f32 *f = (const f32 *)streams[a];
-            for (u64 i = 0; i < n; ++i)
-                de_model_buf_f32(b, f[i]);
-        }
-        u64 rec = stream_table + (u64)row * DE_COOKED_MESH_STREAM_SIZE;
-        de_model_buf_patch_u32(b, rec, a);
-        de_model_buf_patch_u32(b, rec + 4, fmt);
-        de_model_buf_patch_u32(b, rec + 8, (u32)off);
-        de_model_buf_patch_u32(b, rec + 12, (u32)(b->size - start - off));
-        ++row;
-    }
-    de_model_buf_align(b, 16);
-    u64 index_off = b->size - start;
-    for (u32 i = 0; i < m->index_count; ++i)
-        de_model_buf_u32(b, m->indices[i]);
-    de_model_buf_patch_u32(b, at_tables, (u32)(stream_table - start));
-    de_model_buf_patch_u32(b, at_tables + 4, (u32)(sub_table - start));
-    de_model_buf_patch_u32(b, at_tables + 8, (u32)index_off);
-    de_model_buf_patch_u32(b, at_tables + 12, (u32)(b->size - start));
-}
+/* ---- The model writer ------------------------------------------------------------------ */
 
 /* The DMDL blob. `mesh_index[i]` is IR mesh i's index in `mesh_ids` (DE_COOKED_NONE if it was
  * not cooked); node skins point into `skeleton_ids` when there is one per IR skin. */
@@ -348,9 +273,8 @@ static void model_write(de_model_buf *b, const de_model_ir *ir, const de_model_n
 typedef struct model_settings {
     f32 scale;
     bool import_cameras;
-    /* Read for DENG-103's mesh stage. */
-    bool generate_lods, meshlets;
-    f32 lod_error;
+    /* The mesh stage (DENG-103, mesh_cook.c). */
+    de_model_mesh_settings mesh;
 } model_settings;
 
 static de_result read_file_cb(void *user, const char *rel, const void **data, u64 *size) {
@@ -372,18 +296,15 @@ static de_result model_load_source(de_asset_import_ctx *ctx, const de_model_sour
 }
 
 /*
- * DENG-103 extension point: the mesh stage. Called once per cooked mesh, in mesh order, with the
- * IR in engine coordinates; writes the mesh sub-asset's bytes to `out`. Version 1 writes the DMSH
- * v1 blob as it is. DENG-103 adds meshlets, quantization and the LOD chain here (mesh v2), using
- * `s->meshlets`, `s->generate_lods` and `s->lod_error`.
+ * The mesh stage (DENG-103, mesh_cook.c): called once per cooked mesh, in mesh order, with the IR
+ * in engine coordinates; writes the mesh sub-asset's bytes (DMSH v2: quantized vertices, the LOD
+ * chain, meshlets) to `out`.
  */
 static de_result model_mesh_stage(de_asset_import_ctx *ctx, const model_settings *s,
                                   de_model_ir *ir, u32 mesh, const de_asset_id *material_ids,
                                   de_model_buf *out) {
     (void)ctx;
-    (void)s;
-    de_model_mesh_write(out, &ir->meshes[mesh], material_ids);
-    return out->failed ? DE_ERR_OUT_OF_MEMORY : DE_OK;
+    return de_model_mesh_cook(ir, &ir->meshes[mesh], &s->mesh, material_ids, out);
 }
 
 /*
@@ -543,9 +464,22 @@ de_result de_model_import(de_asset_import_ctx *ctx) {
                                     "setting `scale` must be a number above 0 (got %g)", scale);
     s.scale = (f32)scale;
     s.import_cameras = de_asset_import_setting_bool(ctx, "import_cameras", false);
-    s.generate_lods = de_asset_import_setting_bool(ctx, "generate_lods", false);
-    s.meshlets = de_asset_import_setting_bool(ctx, "meshlets", false);
-    s.lod_error = (f32)de_asset_import_setting_float(ctx, "lod_error", 0.01);
+    s.mesh.generate_lods = de_asset_import_setting_bool(ctx, "generate_lods", true);
+    s.mesh.meshlets = de_asset_import_setting_bool(ctx, "meshlets", true);
+    f64 lod_error = de_asset_import_setting_float(ctx, "lod_error", 0.01);
+    if (!(lod_error >= 0.0) || !(lod_error <= 1.0))
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                    "setting `lod_error` must be a number from 0 to 1 (a fraction "
+                                    "of the viewport height; got %g)",
+                                    lod_error);
+    s.mesh.lod_error = (f32)lod_error;
+    f64 max_pos = de_asset_import_setting_float(ctx, "max_position_error", 0.0005);
+    if (!(max_pos >= 0.0) || !(max_pos < 1e6))
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                    "setting `max_position_error` must be a number of metres >= 0 "
+                                    "(got %g)",
+                                    max_pos);
+    s.mesh.max_position_error = (f32)max_pos;
 
     de_model_ir ir;
     de_model_ir_init(&ir, de_asset_import_allocator(ctx), de_cooker_import_id_str(ctx));

@@ -226,10 +226,6 @@ static bool has_dep(const de_cook_result *r, const char *id) {
     return false;
 }
 
-static f32 rd_f32(const u8 *p) {
-    return de_cooked_get_f32(p);
-}
-
 /* ---- import.gltf.import_box ------------------------------------------------------------------ */
 
 TEST_F(gltf, import_box, imp_fx) {
@@ -363,8 +359,9 @@ TEST_F(gltf, import_two_materials, imp_fx) {
               de_asset_id_from("props/panels#material:Blue").hash);
     /* Submesh bounds: the second quad is at x in [2, 3]. */
     de_cooked_submesh sm1 = de_cooked_mesh_submesh(&mv, 1); /* an lvalue (MSVC C4223) */
-    EXPECT_FLOAT_EQ(sm1.bounds_min[0], 2.0f, 0.0f);
-    EXPECT_FLOAT_EQ(sm1.bounds_max[0], 3.0f, 0.0f);
+    /* DMSH v2 (DENG-103): bounds of the quantized positions, widened by a few ulps. */
+    EXPECT_FLOAT_EQ(sm1.bounds_min[0], 2.0f, 1e-5f);
+    EXPECT_FLOAT_EQ(sm1.bounds_max[0], 3.0f, 1e-5f);
     de_cook_result_free(&r);
 }
 
@@ -700,9 +697,18 @@ TEST_F(gltf, scale_setting, imp_fx) {
     ASSERT_TRUE(sa != NULL && sb != NULL);
     ASSERT_TRUE(de_cooked_mesh_parse(sa->data, sa->size, &va, NULL));
     ASSERT_TRUE(de_cooked_mesh_parse(sb->data, sb->size, &vb, NULL));
-    EXPECT_FLOAT_EQ(rd_f32(va.streams[DE_COOKED_STREAM_POSITION] + 8), 1.0f, 0.0f);
-    EXPECT_FLOAT_EQ(rd_f32(vb.streams[DE_COOKED_STREAM_POSITION] + 8), 0.01f, 1e-8f);
-    EXPECT_FLOAT_EQ(vb.bounds_max[0], 0.01f, 1e-8f);
+    /* DMSH v2 (DENG-103) quantizes positions: compare decoded positions, within a 16-bit step. */
+    EXPECT_FLOAT_EQ(va.bounds_max[2], 1.0f, 1e-4f);
+    EXPECT_FLOAT_EQ(vb.bounds_max[2], 0.01f, 1e-6f);
+    EXPECT_FLOAT_EQ(vb.bounds_max[0], 0.01f, 1e-6f);
+    ASSERT_EQ(va.vertex_count, vb.vertex_count);
+    for (u32 i = 0; i < va.vertex_count; ++i) {
+        f32 pa[3], pb[3];
+        de_cooked_mesh_position(&va, i, pa);
+        de_cooked_mesh_position(&vb, i, pb);
+        for (u32 k = 0; k < 3; ++k)
+            EXPECT_FLOAT_EQ(pb[k], 0.01f * pa[k], 1e-6f);
+    }
     de_cook_result_free(&a);
     de_cook_result_free(&b);
 

@@ -44,3 +44,12 @@ if(TARGET test_import)
     target_sources(test_import PRIVATE test_texture_import.c)
     target_link_libraries(test_import PRIVATE de_cook_cmd)
 endif()
+
+# DENG-103: the mesh stage of the model importer (meshlets, quantization, the LOD chain; DMSH v2).
+# Built into test_import, so they share its data mount setup; CTest names import.mesh.<test>.
+# mesh_fixtures.h generates the bunny-class mesh. test_mesh_lod.c reproduces the LOD error metric
+# with meshoptimizer directly, so the test links it.
+if(TARGET test_import)
+    target_sources(test_import PRIVATE mesh_fixtures.h test_meshlets.c test_mesh_lod.c)
+    target_link_libraries(test_import PRIVATE de_tp_meshoptimizer)
+endif()
