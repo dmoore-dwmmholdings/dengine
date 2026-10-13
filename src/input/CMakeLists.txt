@@ -32,3 +32,9 @@ set_property(TARGET de_input APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
 # DENG-85: context stacks (context_stack.c replaces the DENG-84 minimal version; the state is in
 # context_internal.h, embedded in struct de__actions).
 target_sources(de_input PRIVATE context_internal.h)
+
+# DENG-86: runtime rebinding (listen mode, conflicts, policies, defaults) and the user bindings
+# file (user:/bindings.toml, read through core's tomlc17 entry point like action_toml.c).
+target_sources(de_input PRIVATE
+    rebind.c
+    bindings_io.c)
