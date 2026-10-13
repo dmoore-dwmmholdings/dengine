@@ -12,8 +12,9 @@
  *   - actions.c: the hooks of input.c (init, shutdown, frame update, fixed tick), the tick view
  *     latch and its override hook, and the public queries.
  *   - context_stack.c: which maps are active and in which order, and whether an input is
- *     consumed. Minimal here (pushed maps, in push order; nothing is consumed); DENG-85 replaces
- *     the file and keeps the de__context_* signatures below.
+ *     consumed. DENG-85 replaced the DENG-84 minimal version (context_internal.h): a stack with
+ *     the top map evaluated first, blocking of lower maps, named context sets, and transitions;
+ *     the de__context_* signatures below are unchanged.
  *   - action_toml.c: de_action_maps_load, and the name tables of binding sources, codes and
  *     composite slots (shared with DENG-86 save and DENG-88 glyphs).
  *
@@ -23,6 +24,7 @@
  * architecture. */
 #ifndef DE_INPUT_ACTION_INTERNAL_H
 #define DE_INPUT_ACTION_INTERNAL_H
+#include "context_internal.h" /* DENG-85: de__context_state */
 #include "input_internal.h"
 
 DE_EXTERN_C_BEGIN
@@ -106,6 +108,9 @@ struct de__actions {
     /* Context stack (context_stack.c). DENG-85 may add fields below. */
     u32 active[DE_ACTION_MAX_MAPS]; /**< active map indices, in push order */
     u32 active_count;
+    /* DENG-85: `active` is the applied stack, bottom to top, each map once (kept for readers of
+     * the DENG-84 fields); the full state is here (context_internal.h). */
+    de__context_state context;
 };
 
 /* ---------- Storage, handles, iteration (action_map.c) ---------- */
@@ -186,27 +191,31 @@ void de__action_tick_override(de_input *in, void (*fn)(de_input *in, u64 tick, v
 /** True when the calling thread runs a FixedUpdate system (queries then read the tick view). */
 bool de__actions_in_fixed_update(void);
 
-/* ---------- Context stack (context_stack.c; DENG-85 replaces it) ---------- */
+/* ---------- Context stack (context_stack.c, DENG-85; state in context_internal.h) ---------- */
 
 /** Called once when the action state is created / destroyed. */
 void de__context_init(de_input *in);
 void de__context_shutdown(de_input *in);
 /** Writes the maps to evaluate this frame to `out` (map indices, evaluation order: earlier maps
- * see inputs first) and returns how many. Minimal: the pushed maps in push order. */
+ * see inputs first) and returns how many. DENG-85: the applied stack from the top down, then the
+ * maps that are releasing (they read every input as consumed). */
 u32 de__context_active_maps(de_input *in, u32 *out, u32 max);
-/** Called at the start of each evaluation, before any map (DENG-85: reset consumed inputs). */
+/** Called at the start of each evaluation, before any map. DENG-85: applies the requested stack
+ * (transitions) and resets the consumed inputs. */
 void de__context_frame_begin(de_input *in);
 /**
  * "Is this input consumed?": asked for every binding before it is read. True makes the binding
- * read 0 this frame (DENG-85: a higher context blocked it). Minimal: always false.
+ * read 0 this frame. DENG-85: a blocking map above used the input, the binding is latched
+ * (held since before its map joined, or since a higher map consumed it), or the map is
+ * releasing.
  */
 bool de__context_binding_consumed(de_input *in, u32 map, u32 action, u32 binding,
                                   const de_binding *b);
 /** Called for every binding of an evaluated map whose raw input is active (non-zero before
- * modifiers), after its action is evaluated (DENG-85: mark it consumed for later maps).
- * Minimal: nothing. */
+ * modifiers), after its action is evaluated. DENG-85: a blocking map marks the input consumed
+ * for the maps below it. */
 void de__context_binding_used(de_input *in, u32 map, u32 action, u32 binding, const de_binding *b);
-/** Whether map index `map` is active. */
+/** Whether map index `map` is on the applied stack (DENG-85: not the requested one). */
 bool de__context_map_active(const de_input *in, u32 map);
 
 /* ---------- Names (action_toml.c) ---------- */

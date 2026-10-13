@@ -43,3 +43,14 @@ if(TARGET de_input)
         endif()
     endforeach()
 endif()
+
+# DENG-85: context stacks (order, blocking, passthrough, transitions, named sets, [contexts] in
+# files). data/contexts.toml is mounted as game:/.
+if(TARGET de_input)
+    de_add_test(NAME context_stack SOURCES test_context_stack.c LIBS de_input de_test_support)
+    if(TARGET test_context_stack)
+        target_include_directories(test_context_stack PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_context_stack PRIVATE
+            DE_INPUT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+    endif()
+endif()

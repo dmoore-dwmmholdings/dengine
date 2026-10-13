@@ -707,10 +707,12 @@ DE_API bool de_pad_gyro_aim(const de_input *in, de_gamepad p, de_vec2 *delta);
  * Action maps (S21, DENG-84). Games read named actions, not devices. An action map is a named
  * list of actions; each action has a type, an interaction and up to DE_ACTION_MAX_BINDINGS
  * bindings to keys, mouse, pad buttons and axes, or the gyro. Maps are inactive until
- * de_action_map_push(); de_action_map_pop() deactivates a map again (and resets its actions).
+ * de_action_map_push(); de_action_map_pop() deactivates a map again. Active maps form a context
+ * stack (DENG-85, see "Context stacks" below).
  *
- * Evaluation (system "input.actions", PreUpdate, after de_input_begin_frame), per active map in
- * push order, per action in the order it was added, per binding in index order:
+ * Evaluation (system "input.actions", PreUpdate, after de_input_begin_frame), per active map from
+ * the top of the context stack down, per action in the order it was added, per binding in index
+ * order:
  *   1. Each binding reads its source. Every value is in "action space": +x right, +y UP. Keys
  *      and buttons give 0 or 1, pad axes their value (sticks [-1, 1], triggers [0, 1]), the
  *      mouse delta its motion this frame in points (+y up, so the platform's +y down is
@@ -910,15 +912,27 @@ DE_API de_action de_action_add(de_input *in, de_action_map m, const de_action_de
  * "power", "custom"), exponent (power; default 2) and points ([[x, y], ...]; custom). Key names
  * are de_key_name() names, ASCII case-insensitive. The whole file is checked before anything is
  * added. Unknown keys log a warning (file and line) and are ignored.
+ *
+ * Named context sets (DENG-85; de_input_context_define) are tables of `contexts`. `maps` lists
+ * maps of the file or maps that exist, bottom to top; `blocks_lower = false` makes the set
+ * passthrough (default true):
+ *
+ *     [contexts.driving]
+ *     maps = ["gameplay", "vehicle"]
+ *     blocks_lower = true
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT for a bad value (the message names the file, line and
  *         key: "game:/input.toml:12: maps.gameplay.actions.jump.type: ..."); DE_ERR_PARSE for
  *         invalid TOML; or the error of reading the file.
  */
 DE_API de_result de_action_maps_load(de_input *in, const char *vpath); /* TOML */
-/** Activates map `m` (context stack; DENG-85 adds priorities and blocking). Pushing an active
- * map again does nothing. */
+/** Pushes map `m` on top of the context stack (see "Context stacks"): it becomes active, with
+ * the highest priority, at the next frame update. Pushing a map that is already on the stack
+ * does nothing. A full stack (DE_INPUT_CONTEXT_STACK_MAX) refuses the push: it logs an error and
+ * sets the error context (DE_ERR_OUT_OF_MEMORY). */
 DE_API void de_action_map_push(de_input *in, de_action_map m); /* context stack */
-/** Deactivates map `m` and resets its actions to idle (no release trigger). */
+/** Removes the topmost entry of map `m` from the context stack at the next frame update; its
+ * actions then see their inputs released (see "Context stacks"). A map below the top is removed
+ * in place (Debug and Dev builds log a warning). A map that is not on the stack: nothing. */
 DE_API void de_action_map_pop(de_input *in, de_action_map m);
 
 /** True in the frame (or tick, see above) the action's interaction fires. */
@@ -937,6 +951,83 @@ DE_API de_action de_action_find(const de_input *in, de_action_map m, const char 
 /** The name of an action or map ("" for an invalid handle). Valid while the input state lives. */
 DE_API const char *de_action_name(const de_input *in, de_action a);
 DE_API const char *de_action_map_name(const de_input *in, de_action_map m);
+
+/* ---------- Context stacks ---------- */
+
+/*
+ * Context stacks (S21, DENG-85). Games switch between input contexts (gameplay, menu, vehicle) by
+ * pushing and popping action maps, one at a time (de_action_map_push / pop) or as named sets
+ * (de_input_context_push / pop).
+ *
+ * - Priority. The top of the stack is evaluated first. A map that blocks lower maps (the default)
+ *   consumes each raw input that one of its bindings read as active this frame: maps below it
+ *   read that input as 0. Inputs it does not bind pass through. A passthrough map
+ *   (DE_INPUT_CONTEXT_PASSTHROUGH, for overlays such as a debug or photo mode) consumes nothing.
+ *   An input is one (source, code); a whole stick or an XY code overlaps its single axes.
+ * - When. Push and pop change the requested stack at once, in call order, and return errors at
+ *   once. The next frame update (system "input.actions") applies it, so every system of a frame
+ *   sees the same active maps, and the order of changes is deterministic.
+ * - Leaving the stack. The actions of a map that leaves see all their inputs released in that
+ *   frame update: `held` goes false and values go to 0, with the release edge an input release
+ *   gives (a RELEASE or TAP interaction fires). The map stays in evaluation, with every input
+ *   consumed, until its actions are idle and their last trigger has reached a fixed tick.
+ * - Joining the stack. A binding of a map that joins ignores its input while it is still held
+ *   from before (down and not pressed in this frame; a pad axis past the action's
+ *   press_threshold), until it is released. The same holds for an input that a higher map
+ *   consumed: when that map leaves, the lower map ignores the input until it is released. So
+ *   opening or closing a menu with a button never fires the action of that button below.
+ * - Mouse motion, the wheel and the gyro are never held over: they count only in the frame they
+ *   move.
+ * - Duplicates. Pushing a map that is already on the stack does nothing, and so does pushing a
+ *   named context whose group is on the stack. A named context pushes all its maps as one group,
+ *   also maps that are already on the stack below; such a map counts at its topmost entry.
+ *
+ * All storage is fixed (DE_INPUT_CONTEXT_STACK_MAX entries, DE_INPUT_MAX_CONTEXTS named sets);
+ * nothing here allocates after the first de_action_map_create. Main thread only.
+ */
+
+/** Most entries on the context stack (maps; a named context counts each of its maps). */
+#define DE_INPUT_CONTEXT_STACK_MAX 16
+/** Most named context sets, and most maps in one set. */
+#define DE_INPUT_MAX_CONTEXTS     32
+#define DE_INPUT_CONTEXT_MAX_MAPS 8
+/** Context flags (de_action_map_set_flags, de_input_context_define). 0: the map blocks lower
+ * maps (it consumes the inputs it uses). */
+#define DE_INPUT_CONTEXT_BLOCKS_LOWER 0u
+/** The map consumes nothing: lower maps see every input (overlays: debug, photo mode). */
+#define DE_INPUT_CONTEXT_PASSTHROUGH 0x1u
+
+/** Sets the context flags of map `m` (DE_INPUT_CONTEXT_PASSTHROUGH or 0). They apply from the
+ * next frame update. A map pushed by a named context is passthrough when the map or the context
+ * is. Ignored for an invalid handle. */
+DE_API void de_action_map_set_flags(de_input *in, de_action_map m, u32 flags);
+/** The context flags of map `m` (0 for an invalid handle). */
+DE_API u32 de_action_map_flags(const de_input *in, de_action_map m);
+/** True while map `m` is on the applied context stack (it changes at frame updates). */
+DE_API bool de_action_map_active(const de_input *in, de_action_map m);
+/**
+ * Defines the named context `name` (1..DE_ACTION_NAME_MAX bytes; looked up as
+ * de_name_from(name)): `count` (1..DE_INPUT_CONTEXT_MAX_MAPS) distinct maps, bottom to top, and
+ * `flags` for all of them. Defining a name again replaces its maps and flags; a group of it that
+ * is on the stack keeps the maps it pushed.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for a bad name, count, handle or a map listed twice;
+ *         DE_ERR_OUT_OF_MEMORY when DE_INPUT_MAX_CONTEXTS names are taken.
+ */
+DE_API de_result de_input_context_define(de_input *in, const char *name, const de_action_map *maps,
+                                         u32 count, u32 flags);
+/**
+ * Pushes the maps of named context `name` on the stack as one group (atomic: all or none).
+ * Pushing a context that is on the stack does nothing.
+ * @return DE_OK; DE_ERR_NOT_FOUND for an unknown name; DE_ERR_OUT_OF_MEMORY (and an error log)
+ *         when the group does not fit in DE_INPUT_CONTEXT_STACK_MAX.
+ */
+DE_API de_result de_input_context_push(de_input *in, de_name name);
+/**
+ * Removes the group of named context `name` from the stack (in place when it is not on top;
+ * Debug and Dev builds log a warning). A context that is not on the stack: DE_OK, nothing.
+ * @return DE_OK or DE_ERR_NOT_FOUND for an unknown name.
+ */
+DE_API de_result de_input_context_pop(de_input *in, de_name name);
 
 /* ---------- Rebinding ---------- */
 DE_API void de_rebind_begin(de_input *in, de_action a, u32 binding_index,

@@ -1,0 +1,32 @@
+# Context sets of a small game (DENG-85): loaded by test_context_stack.c with de_action_maps_load.
+# [contexts] comes first on purpose: a set may name maps that the file defines further down.
+
+[contexts.driving]
+maps = ["gameplay", "vehicle"]
+blocks_lower = true
+
+[contexts.pause]
+maps = ["menu"]
+
+[contexts.photo]
+maps = ["photo"]
+blocks_lower = false
+
+[maps.gameplay.actions.jump]
+bindings = [{ key = "space" }]
+
+[maps.gameplay.actions.move]
+type = "axis2d"
+bindings = [
+    { key = "W", composite = "up" },
+    { key = "S", composite = "down" },
+]
+
+[maps.vehicle.actions.accelerate]
+bindings = [{ key = "W" }]
+
+[maps.menu.actions.confirm]
+bindings = [{ key = "space" }]
+
+[maps.photo.actions.snap]
+bindings = [{ key = "space" }]
