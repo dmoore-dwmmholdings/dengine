@@ -54,3 +54,18 @@ if(TARGET de_input)
             DE_INPUT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
     endif()
 endif()
+
+# DENG-86: runtime rebinding (listen mode, conflicts, policies) and the user bindings file.
+# test_bindings_io mounts its own directories under DE_INPUT_TEST_TMP_DIR as user:/.
+if(TARGET de_input)
+    de_add_test(NAME rebind SOURCES test_rebind.c LIBS de_input de_test_support)
+    de_add_test(NAME bindings_io SOURCES test_bindings_io.c LIBS de_input de_test_support)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_bindings_io_tmp")
+    foreach(_de_input_test test_rebind test_bindings_io)
+        if(TARGET ${_de_input_test})
+            target_include_directories(${_de_input_test} PRIVATE "${DE_ROOT_DIR}/src")
+            target_compile_definitions(${_de_input_test} PRIVATE
+                DE_INPUT_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_bindings_io_tmp")
+        endif()
+    endforeach()
+endif()

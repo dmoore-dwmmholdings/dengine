@@ -111,6 +111,10 @@ struct de__actions {
     /* DENG-85: `active` is the applied stack, bottom to top, each map once (kept for readers of
      * the DENG-84 fields); the full state is here (context_internal.h). */
     de__context_state context;
+
+    /* Rebinding (rebind.c, DENG-86): listen mode and the default bindings; NULL until the first
+     * rebinding call needs it. */
+    struct de__rebind *rebind;
 };
 
 /* ---------- Storage, handles, iteration (action_map.c) ---------- */
@@ -233,6 +237,39 @@ bool de__binding_code_from_name(de_binding_source s, const char *name, size_t le
 /** Composite slot names: "up", "down", "left", "right" (2D), "positive", "negative" (1D). */
 const char *de__composite_name(de_action_type t, i8 slot);
 bool de__composite_from_name(const char *name, size_t len, de_action_type t, i8 *out);
+
+/* ---------- Rebinding (rebind.c, bindings_io.c; DENG-86) ---------- */
+
+/** Called by de__actions_frame_update after each evaluation: scans the frame for listen mode,
+ * then holds idle the actions of the map that listens and the actions bound to a swallowed input.
+ * Allocates nothing; does nothing before the first rebinding call. */
+void de__rebind_after_evaluate(de_input *in);
+/** Frees the rebinding state (de__actions_shutdown, before the action block). */
+void de__rebind_shutdown(de_input *in);
+/** The rebinding state, allocating it on first use. NULL (error context set) when out of
+ * memory or when there are no action maps. */
+struct de__rebind *de__rebind_get_or_create(de_input *in);
+/** Copies the default bindings of action index `ai` to `out` (up to `max`) and returns their
+ * count: the snapshot taken when rebinding first changed the action, or its current bindings
+ * when it has none (or the action was added again since). */
+u32 de__rebind_defaults(const de_input *in, u32 ai, de_binding *out, u32 max);
+/** Sets binding `index` of action index `ai` and records the change (defaults snapshotted
+ * first). Validated like de__action_set_binding. */
+de_result de__rebind_set(de_input *in, u32 ai, u32 index, const de_binding *b);
+/** True when two bindings of an action of `type` are the same: the fields the evaluation reads
+ * (the composite slot only outside button actions, the exponent and points only for their
+ * curve). */
+bool de__binding_same(de_action_type type, const de_binding *a, const de_binding *b);
+/** Whether binding `b` can bind an action of `type` (de__binding_validate's type rules, without
+ * setting the error context). */
+bool de__binding_fits(de_action_type type, const de_binding *b);
+/**
+ * de_bindings_load on text: parses `len` bytes named `source` in messages, checks the whole file,
+ * then resets every action to its defaults and applies the file. `warnings` (may be NULL) gets
+ * the number of skipped entries and unknown keys. Errors as de_bindings_load.
+ */
+de_result de__bindings_parse(de_input *in, const char *text, size_t len, const char *source,
+                             u32 *warnings);
 
 /* ---------- TOML (action_toml.c) ---------- */
 

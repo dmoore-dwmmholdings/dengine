@@ -1030,13 +1030,172 @@ DE_API de_result de_input_context_push(de_input *in, de_name name);
 DE_API de_result de_input_context_pop(de_input *in, de_name name);
 
 /* ---------- Rebinding ---------- */
-DE_API void de_rebind_begin(de_input *in, de_action a, u32 binding_index,
-                            const de_binding_source *allowed, u32 allowed_count);
-DE_API bool de_rebind_poll(de_input *in, de_binding *captured,
-                           de_action *conflict); /* true when done */
+
+/*
+ * Runtime rebinding (S21, DENG-86; DENG-2 Q17: remapping is the v1 accessibility feature). Every
+ * binding is addressed by (action, binding index), and an action can be rebound only when its
+ * desc had `rebindable` set. The API has no UI; S29 builds the rebinding screens on it.
+ *
+ * Listen mode. de_rebind_begin() starts listening for one binding slot. From the next frame on,
+ * each frame's raw events are scanned in arrival order (in the "input.actions" system, after the
+ * actions are evaluated, or by de_rebind_poll() when that runs first):
+ *   - The first down edge of an allowed source is captured: a key, a mouse button, a pad button.
+ *     An input that is already held when listening starts is captured only after it is released
+ *     and pressed again.
+ *   - Analog axes (pad sticks and triggers) are captured when they move past
+ *     DE_REBIND_AXIS_THRESHOLD from rest; an axis that is not at rest when listening starts must
+ *     come back first. The sign becomes part of the binding: a negative push gives `invert`
+ *     (pushing left on a stick gives "left_x, inverted"), so the pushed direction reads positive.
+ *     The mouse wheel is captured after DE_REBIND_AXIS_THRESHOLD notches, the same way.
+ *   - The mouse delta (DE_REBIND_MOUSE_DELTA_THRESHOLD points) and the gyro
+ *     (DE_REBIND_GYRO_THRESHOLD rad/s) are captured only when `allowed` lists them.
+ *   - Chords: a key or mouse button pressed while a modifier key (Ctrl, Shift, Alt, GUI; left or
+ *     right) is held is captured with that modifier as `modifier_key` (the lowest key code wins
+ *     when several are held). A modifier key pressed and released with no other key in between is
+ *     captured on its release, as a plain key.
+ *   - Cancel inputs (de_rebind_set_cancel_inputs(); Escape, pad Start and pad Guide by default)
+ *     end listening without a binding, whatever `allowed` says.
+ *   - A captured input that cannot bind the slot (a key for a stick slot of a 2D action, a
+ *     trigger for a 2D slot) is ignored and listening goes on. A 1D axis captured for a whole-2D
+ *     slot becomes its 2D code (left_x -> left_stick, mouse x -> xy).
+ * The captured binding keeps the slot's composite slot, and its scale, deadzone, curve (and, for
+ * 2D codes, invert) when the source is the same as before; otherwise those are zero (defaults).
+ *
+ * Suppression. While listening, the actions of the slot's map read as idle (like an inactive map:
+ * no trigger, not held, value 0), so the input being captured does not also play the game. The
+ * input that ends listening (the captured one, or the cancel input) is then swallowed: every
+ * action in any map with a binding to it reads as idle until it is released, so the newly bound
+ * action does not fire for the press that bound it. Other maps (the menu that hosts the
+ * rebinding UI) keep working while listening.
+ *
+ * Conflicts. A conflict is another rebindable action, of the same map or of a map that shares a
+ * named context set with it (de_input_context_define; whether or not the set is on the stack),
+ * that has a binding to the same input: same source and code, same modifier key, and for 1D axes
+ * the same direction (a whole stick or XY overlaps its axes). Unbound slots never conflict. The
+ * slot's own map is searched first, then the other maps in creation order.
+ *
+ * Defaults. The bindings an action has when rebinding first changes it are its defaults. Resets
+ * go back to them, and de_bindings_save() writes only the bindings that differ from them. If the
+ * game adds an action again (reloading action maps), de_action_add() replaces its bindings and
+ * those become the new defaults; load the user bindings again after that.
+ *
+ * Main thread only. Listening allocates nothing per frame.
+ */
+
+/** |value| an analog axis (pad stick or trigger, wheel notches) must pass to be captured. */
+#define DE_REBIND_AXIS_THRESHOLD 0.5f
+/** Mouse motion, in points summed since listening started, that captures the mouse delta. */
+#define DE_REBIND_MOUSE_DELTA_THRESHOLD 16.0f
+/** Gyro rate, rad/s, that captures a gyro axis. */
+#define DE_REBIND_GYRO_THRESHOLD 1.0f
+/** Most cancel inputs (de_rebind_set_cancel_inputs). */
+#define DE_REBIND_MAX_CANCEL_INPUTS 8
+/**
+ * The key code of an unbound slot: a binding { DE_BIND_KEY, DE_BIND_UNBOUND_KEY } never reads a
+ * value (HID usage 1, "ErrorRollOver", is not a key; no platform reports it). DE_REBIND_CLEAR_OTHER
+ * and de_rebind_clear() unbind a slot this way, so the binding indices of the action stay put. A
+ * whole-stick or xy slot of a 2D action cannot be unbound: it needs a 2D code.
+ */
+#define DE_BIND_UNBOUND_KEY 1u
+
+/** Where listen mode is (de_rebind_status). */
+typedef enum de_rebind_state {
+    DE_REBIND_IDLE,      /**< not started, or de_rebind_cancel() */
+    DE_REBIND_LISTENING, /**< de_rebind_begin() is waiting for an input */
+    DE_REBIND_CAPTURED,  /**< an input was captured (de_rebind_poll returns it once) */
+    DE_REBIND_CANCELLED  /**< a cancel input ended listening */
+} de_rebind_state;
+
+/** What de_rebind_apply() does with conflicting bindings (see "Conflicts" above). */
+typedef enum de_rebind_policy {
+    DE_REBIND_ALLOW,       /**< set the binding; conflicting bindings stay */
+    DE_REBIND_SWAP,        /**< every conflicting binding gets the slot's previous input */
+    DE_REBIND_CLEAR_OTHER, /**< every conflicting binding becomes unbound (DE_BIND_UNBOUND_KEY) */
+    DE_REBIND_POLICY_COUNT_
+} de_rebind_policy;
+
+/**
+ * Starts listening for binding `binding_index` of action `a` (see "Listen mode"); a listen that
+ * runs is replaced. `allowed` lists the sources that may be captured (`allowed_count` entries);
+ * NULL and 0 allow keys, mouse buttons, the mouse wheel, pad buttons and pad axes (not the mouse
+ * delta and the gyro). The actions of the slot's map read as idle from this call on.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for an invalid handle, an index out of range, an action
+ *         that is not rebindable, or a bad `allowed` list; DE_ERR_OUT_OF_MEMORY when the
+ *         rebinding state (about 110 KiB, allocated once) cannot be allocated.
+ */
+DE_API de_result de_rebind_begin(de_input *in, de_action a, u32 binding_index,
+                                 const de_binding_source *allowed, u32 allowed_count);
+/**
+ * True once, after an input was captured: `*captured` (may be NULL) gets the binding fitted to
+ * the slot, and `*conflict` (may be NULL) the first conflicting action in declaration order, or
+ * an invalid handle. The binding is not applied: the game chooses with de_rebind_apply(). False
+ * while listening, after a cancel, and on every later call.
+ */
+DE_API bool de_rebind_poll(de_input *in, de_binding *captured, de_action *conflict);
+/** Stops listening (no binding, nothing swallowed); the status becomes DE_REBIND_IDLE. */
 DE_API void de_rebind_cancel(de_input *in);
-DE_API de_result de_bindings_save(const de_input *in,
-                                  const char *vpath); /* "user:/bindings.toml" */
+/** Where listen mode is. */
+DE_API de_rebind_state de_rebind_status(const de_input *in);
+/**
+ * Sets the inputs that cancel listening: keys, mouse buttons or pad buttons (`source` and `code`
+ * of each binding; other fields are ignored). NULL restores the defaults (Escape, pad Start, pad
+ * Guide); a non-NULL list with `count` 0 means no input cancels (de_rebind_cancel() still does).
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for more than DE_REBIND_MAX_CANCEL_INPUTS inputs or an
+ *         input of another source; DE_ERR_OUT_OF_MEMORY as de_rebind_begin().
+ */
+DE_API de_result de_rebind_set_cancel_inputs(de_input *in, const de_binding *inputs, u32 count);
+/**
+ * Sets binding `binding_index` of rebindable action `a` to `b`, and handles the conflicting
+ * bindings (computed with `b`) by `policy`. SWAP gives each conflicting binding the slot's
+ * previous input (source, code, modifier, direction), keeping its own composite slot. The whole
+ * change is checked first: on an error nothing changes.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for an invalid handle or index, an action that is not
+ *         rebindable, a binding that does not fit the action, a conflicting slot that cannot take
+ *         the previous input (SWAP) or cannot be unbound (CLEAR_OTHER on a whole-stick slot), or
+ *         an unknown policy; DE_ERR_OUT_OF_MEMORY as de_rebind_begin().
+ */
+DE_API de_result de_rebind_apply(de_input *in, de_action a, u32 binding_index, const de_binding *b,
+                                 de_rebind_policy policy);
+/** Unbinds binding `binding_index` of rebindable action `a` (DE_BIND_UNBOUND_KEY, keeping its
+ * composite slot). Errors as de_rebind_apply(); a whole-stick or xy slot cannot be unbound. */
+DE_API de_result de_rebind_clear(de_input *in, de_action a, u32 binding_index);
+/** True for an unbound slot (DE_BIND_KEY with code DE_BIND_UNBOUND_KEY). */
+DE_API bool de_binding_is_unbound(const de_binding *b);
+
+/** Puts the bindings of action `a` back to its defaults. DE_ERR_INVALID_ARGUMENT for an invalid
+ * handle. An action that was never rebound is left as it is. */
+DE_API de_result de_bindings_reset_action(de_input *in, de_action a);
+/** de_bindings_reset_action() for every action of map `m`. */
+DE_API de_result de_bindings_reset_map(de_input *in, de_action_map m);
+/** de_bindings_reset_action() for every action. */
+DE_API void de_bindings_reset_all(de_input *in);
+
+/**
+ * Writes the user bindings to `vpath` ("user:/bindings.toml"): only the bindings that differ from
+ * the defaults, by map, action and binding index, with the key and button names of action-map
+ * files. The file is replaced atomically (de_file_write_all_atomic), so a crash leaves the old or
+ * the new file. A file with no override is still written.
+ *
+ *     version = 1
+ *     [maps.gameplay.actions.jump]
+ *     bindings = [ { index = 0, key = "f" }, { index = 1, pad_button = "east" } ]
+ *     [maps.gameplay.actions.move]
+ *     bindings = [ { index = 0, key = "i", composite = "up" }, { index = 3, unbound = true } ]
+ *
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL argument, bad path); or the error of writing.
+ */
+DE_API de_result de_bindings_save(const de_input *in, const char *vpath);
+/**
+ * Reads user bindings written by de_bindings_save(): every action goes back to its defaults, then
+ * the file's bindings are applied. The whole file is checked first. Entries for a map or action
+ * that does not exist, an action that is not rebindable, an index past the action's bindings, or
+ * a binding that does not fit the action (its type changed) are skipped with a warning. A key
+ * that is not known is also skipped with a warning.
+ * @return DE_OK; DE_ERR_PARSE for invalid TOML and DE_ERR_INVALID_ARGUMENT for a bad value
+ *         ("user:/bindings.toml:4: maps.gameplay.actions.jump.bindings[0].index: ..."), and then
+ *         no binding changes; or the error of reading the file (DE_ERR_NOT_FOUND when there is
+ *         none yet).
+ */
 DE_API de_result de_bindings_load(de_input *in, const char *vpath);
 
 /* Prompt glyphs (Xbox, PlayStation, Switch, Steam Deck, keyboard) for UI. */

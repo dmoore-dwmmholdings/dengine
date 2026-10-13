@@ -31,6 +31,7 @@ void de__actions_shutdown(de_input *in) {
     if (in == NULL || in->actions == NULL)
         return;
     de__context_shutdown(in);
+    de__rebind_shutdown(in); /* DENG-86 */
     DE_FREE(&in->alloc, in->actions, sizeof *in->actions);
     in->actions = NULL;
 }
@@ -41,6 +42,7 @@ void de__actions_frame_update(de_input *in, f32 dt) {
         return;
     s->frames++;
     de__actions_evaluate(in, dt);
+    de__rebind_after_evaluate(in); /* DENG-86: listen mode and swallowed inputs */
 }
 
 void de__actions_fixed_tick(de_input *in, u64 tick) {
