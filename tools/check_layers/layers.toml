@@ -74,6 +74,14 @@ name = "gpu/*"
 band = "content"
 paths = ["src/gpu/*"]
 
+# DENG-289: the `shader` asset type (src/gpu/shader/, target de_gpu_shader) is its own module, not
+# part of `gpu`: it reads the asset system, and `asset` may include `gpu`, so inside `gpu` it would
+# make the cycle asset -> gpu -> asset. Nothing includes it but tests and later renderer code.
+[[module]]
+name = "gpu/shader"
+band = "content"
+paths = ["src/gpu/shader"]
+
 [[module]]
 name = "cook"
 band = "content"
@@ -196,6 +204,11 @@ why = "Components are registered through reflection (SPEC §7.1); de_ecs.h inclu
 from = "gpu/*"
 to = "gpu"
 why = "Each RHI backend implements the de_gpu.h interface (SPEC §12.1)."
+
+[[allow]]
+from = "gpu/shader"
+to = "asset"
+why = "The shader asset type registers with the asset system and reads its slots (de_asset.h, asset/slots_internal.h; DENG-289)."
 
 [[allow]]
 from = "render"

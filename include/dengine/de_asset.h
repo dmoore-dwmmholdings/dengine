@@ -376,7 +376,7 @@ DE_API de_resource_id de_asset_resource(const de_asset_system *s);
  * is valid before the asset is loaded and stays the same across reloads; it takes no reference
  * (load the asset with de_asset_load / de_asset_load_bundle for that). Each function checks the
  * asset's manifest `type` against its own (`de_asset_texture` wants `type = "texture"`, then
- * "mesh", "model", "material", "sound", "font", "prefab", "blob"). Main thread.
+ * "mesh", "model", "material", "sound", "font", "prefab", "blob", "shader"). Main thread.
  *
  * Returns an invalid handle (id 0) and sets the error context when `id` is 0 or the asset has
  * another type (DE_ERR_INVALID_ARGUMENT), when the active manifest does not declare `id`
@@ -394,6 +394,9 @@ DE_API de_sound de_asset_sound(de_asset_system *s, de_asset_id id);
 DE_API de_font de_asset_font(de_asset_system *s, de_asset_id id);
 DE_API de_prefab de_asset_prefab(de_asset_system *s, de_asset_id id);
 DE_API de_blob de_asset_blob(de_asset_system *s, de_asset_id id);
+/** A `shader` asset (type "shader", DENG-289). The shader type is registered by the GPU side
+ * (src/gpu/shader/), which reads the cooked blobs behind the handle. */
+DE_API de_shader de_asset_shader(de_asset_system *s, de_asset_id id);
 /**
  * The bytes of a READY `blob` asset: exactly the source file's bytes, followed by a NUL that is
  * not counted, with their count in `*size` (may be NULL). NULL (and size 0) for an invalid or
@@ -440,6 +443,13 @@ typedef struct de_asset_type_desc {
      * reloaded, once per reload and after the swap: `object` is the dependent's live object,
      * which can now rebind to the new data of `dep` (a material to its texture). NULL = none. */
     void (*dependency_reloaded)(void *object, de_asset_id dep, void *user);
+    /* ---- DENG-289: own reload ---- */
+    /** Optional. Hot reload calls it on the main thread, inside de_asset_system_update, once for
+     * each reload of an asset of this type, right after the swap and the RELOADED event and
+     * before the dependents' dependency_reloaded: `object` is the asset's new live object, `id`
+     * the asset. The old object is still loaded (it goes to `unload` reload_retire_frames
+     * updates later). Shaders use it to rebuild their pipelines. NULL = none. */
+    void (*reloaded)(void *object, de_asset_id id, void *user);
 } de_asset_type_desc;
 
 /**

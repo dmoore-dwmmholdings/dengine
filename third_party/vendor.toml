@@ -189,3 +189,48 @@ license = "Zlib"
 # so that file is also copied to LICENSE.
 license_file = "mikktspace.h"
 files = ["mikktspace.c", "mikktspace.h"]
+
+[[lib]]
+name = "slang"
+# Shader compiler (SPEC §12.2, §22: tools and Dev hot reload only, never Shipping). C++ with a COM
+# style API; the engine calls it from one C++ shim with a C interface inside the shader importer
+# (tools/cook/importers/shader/slang_compile.cpp, DENG-2 Q1). Upstream ships it as per-host
+# binaries, so it is a prebuilt entry (DENG-390): the headers and the licence are committed, the
+# libraries are extracted into <build>/prebuilt/slang/ at configure time. The minimum set is the
+# compiler and glslang (SPIR-V); slang-llvm, the standard-module sources, slangc and the docs are
+# not taken. DXC (DXIL) is not in the archives: the importer skips DXIL when the host has none.
+# The importer loads the compiler with de_dylib_open at run time, so no target links it. DENG-289.
+kind = "prebuilt"
+version = "2026.19"
+url = "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-linux-x86_64-glibc-2.28.tar.gz"
+sha256 = "bd7afcb0956dee9304f44ed115e9aaa7140704271b5c3294bcb237e3ae67adc7"
+license = "Apache-2.0 WITH LLVM-exception"
+strip = 0
+# slang.h and what it and the COM smart pointer include. The C++ preludes, slang-gfx.h and
+# slang-llvm.h are for other uses of Slang.
+files = [
+    "include/slang.h",
+    "include/slang-deprecated.h",
+    "include/slang-image-format-defs.h",
+    "include/slang-com-helper.h",
+    "include/slang-com-ptr.h",
+    "include/slang-tag-version.h",
+]
+
+[lib.hosts.linux-x64]
+url = "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-linux-x86_64-glibc-2.28.tar.gz"
+sha256 = "bd7afcb0956dee9304f44ed115e9aaa7140704271b5c3294bcb237e3ae67adc7"
+strip = 0
+files = ["lib/libslang-compiler.so", "lib/libslang-compiler.so.0.2026.19", "lib/libslang-glslang-2026.19.so"]
+
+[lib.hosts.macos-arm64]
+url = "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-macos-aarch64.tar.gz"
+sha256 = "fa46822c92d81404a7951de3746093985c1e6f520f4b533e2aa3bea576f0f2f0"
+strip = 0
+files = ["lib/libslang-compiler.dylib", "lib/libslang-compiler.0.2026.19.dylib", "lib/libslang-glslang-2026.19.dylib"]
+
+[lib.hosts.windows-x64]
+url = "https://github.com/shader-slang/slang/releases/download/v2026.19/slang-2026.19-windows-x86_64.tar.gz"
+sha256 = "fa7629c9ce59c87c821614ae4b52e52f785d4c659a5a06a89fa9ec86d615eeee"
+strip = 0
+files = ["bin/slang-compiler.dll", "bin/slang-glslang.dll"]
