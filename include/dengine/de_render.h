@@ -15,7 +15,12 @@ DE_HANDLE(de_view);
 DE_HANDLE(de_tonemapper);
 DE_HANDLE(de_material_model);
 
-/* ---------- Quality ---------- */
+/* ---------- Quality (SPEC §12.8, §3.3; DENG-174) ----------
+ * The renderer runs at one of two tiers: Base (raster + screen-space and probe fallbacks) and RT
+ * (Base plus ray-traced effects). Each effect has a quality level. A preset is one fixed
+ * de_render_settings per (tier, Low..Ultra); any other settings are "Custom". The preset tables
+ * are documented in src/render/settings.c.
+ */
 typedef enum de_quality {
     DE_QUALITY_OFF,
     DE_QUALITY_LOW,
@@ -33,36 +38,101 @@ typedef enum de_upscaler {
 } de_upscaler;
 typedef enum de_gi_mode { DE_GI_STATIC_PROBES, DE_GI_SCREEN_SPACE, DE_GI_RT } de_gi_mode;
 
+/**
+ * What the renderer draws, and how well. de_renderer_set_settings clamps every field to the
+ * device (see there); `(de_render_settings){0}` is valid (Base, every effect off, then clamped:
+ * render_scale 0.33, one bounce).
+ */
 typedef struct de_render_settings {
-    de_tier tier; /* clamped to device caps */
+    /** DE_TIER_RT only on a device with ray tracing (hardware or API only) and inline ray
+     * queries; otherwise clamped to DE_TIER_BASE. */
+    de_tier tier;
     de_quality shadows, ao, reflections, gi, volumetrics, sss;
+    /** Ray-traced replacements of the Base effects (SPEC §12.8); all false at DE_TIER_BASE. */
     bool rt_shadows, rt_ao, rt_reflections, rt_gi, rt_refraction;
     de_upscaler upscaler;
-    f32 render_scale;          /* 0.33..1.0 */
-    f32 dynamic_res_target_ms; /* 0 = off */
-    bool path_tracer;          /* reference mode; requires RT tier */
-    u32 path_max_bounces;
+    f32 render_scale;          /**< 0.33..1.0 of the output resolution */
+    f32 dynamic_res_target_ms; /**< 0 = off */
+    bool path_tracer;          /**< reference mode; requires the RT tier */
+    u32 path_max_bounces;      /**< 1..64 */
 } de_render_settings;
 
-/* Picks a preset from device caps + a short benchmark (cached in user settings). */
+/**
+ * The preset `quality` (DE_QUALITY_LOW .. DE_QUALITY_ULTRA; other values are clamped into that
+ * range) of `tier` (an unknown tier gives DE_TIER_BASE). Presets are not clamped to a device:
+ * de_renderer_set_settings does that. Pure; any thread.
+ */
+DE_API de_render_settings de_render_settings_preset(de_tier tier, de_quality quality);
+/**
+ * True when `s` equals one of the presets field for field ("Custom" otherwise). NULL is not a
+ * preset. Pure; any thread.
+ */
+DE_API bool de_render_settings_is_preset(const de_render_settings *s);
+/**
+ * The settings the renderer would pick for its device: a preset chosen from the device caps
+ * (RT tier + High on discrete GPUs with hardware ray tracing; Base + Medium on Apple M1/M2, the
+ * Steam Deck and other integrated GPUs; SPEC R7, DENG-2 Q4), clamped to the device. S20
+ * (DENG-276) adds a first-run GPU benchmark behind this call. NULL `r` gives the Base Medium
+ * preset.
+ */
 DE_API de_render_settings de_render_settings_auto(de_renderer *r);
 
-/* ---------- Renderer ---------- */
+/* ---------- Renderer ----------
+ * The renderer owns the device-facing render state: settings and tier, per-frame fences and
+ * arenas, the frame graph, the swapchain (or an offscreen target without a window) and the
+ * runtime asset types of de_asset.h (texture, mesh, material, model) with their GPU uploads.
+ *
+ * Cvars (all DE_CVAR_SAVED; changes apply at the next de_renderer_render_frame): `r.tier`
+ * (auto, base, rt), `r.quality` (auto, low, medium, high, ultra, custom), `r.shadow_quality`,
+ * `r.ao_quality`, `r.reflection_quality`, `r.gi_quality`, `r.volumetric_quality`,
+ * `r.sss_quality` (off .. ultra), `r.rt_shadows`, `r.rt_ao`, `r.rt_reflections`, `r.rt_gi`,
+ * `r.rt_refraction`, `r.upscaler`, `r.render_scale`, `r.dynamic_res_target_ms`, `r.path_tracer`,
+ * `r.path_max_bounces`. Choosing a preset in `r.quality` sets every per-effect value; changing a
+ * per-effect cvar makes `r.quality` name the preset the settings now equal, or "custom". The
+ * renderer writes the settings it applies (clamped) back to the per-effect cvars. With several
+ * renderers in one process, only the first one created reads and writes the cvars.
+ */
 typedef struct de_renderer_desc {
-    de_gpu_device *device;
+    de_gpu_device *device; /**< required; must meet the Base tier (de_gpu_evaluate_tier) */
+    /** The asset system the renderer registers the texture, mesh, material and model types
+     * with (NULL: none). Destroy the asset system before the renderer. */
     de_asset_system *assets;
-    de_type_registry *types;
-    const de_allocator *allocator;
+    de_type_registry *types;       /**< for the render components (DENG-178) */
+    const de_allocator *allocator; /**< NULL = de_heap_allocator(); must be thread-safe */
+    /** The window to present to (a swapchain is made for it). Zero: the renderer draws into an
+     * offscreen target of its own. */
     de_window window;
-    u32 frames_in_flight; /* default 2 */
-    bool hdr_output;      /* if display supports it */
+    u32 frames_in_flight; /**< 0 = 2; clamped to 2..3 */
+    bool hdr_output;      /**< if the display supports it (S18; ignored until then) */
 } de_renderer_desc;
 
+/**
+ * Creates a renderer. The settings start from `r.tier` / `r.quality` and the other cvars
+ * ("auto": de_render_settings_auto), clamped to the device.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `desc`, `out` or device); DE_ERR_UNSUPPORTED
+ *         when the device is below the Base tier (the message gives de_gpu_evaluate_tier's
+ *         reasons) or cannot make the swapchain; DE_ERR_ALREADY_EXISTS when the asset system
+ *         has the render asset types already (one renderer per asset system); the RHI's and
+ *         the allocator's errors. `*out` is NULL on failure.
+ */
 DE_API de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out);
+/** Waits until the GPU is idle, then releases everything the renderer made. Destroy the asset
+ * system first (its unloads use the renderer's uploader), and the device after. NULL is
+ * ignored. */
 DE_API void de_renderer_destroy(de_renderer *r);
 /* Registers render components + the Extract system into the world. */
 DE_API void de_renderer_attach(de_renderer *r, de_world *w);
+/**
+ * Requests new settings; they apply at the next de_renderer_render_frame. Clamped to the device:
+ * RT tier only with ray tracing (hardware or API only) and inline ray queries; at the Base tier
+ * every `rt_*` and `path_tracer` are false; qualities and the upscaler outside their enums
+ * become Off and Auto; `render_scale` 0.33..1.0 (NaN: 1.0); `dynamic_res_target_ms` >= 0;
+ * `path_max_bounces` 1..64. Writes the cvars (`r.tier`, `r.quality` = the matching preset or
+ * "custom", and the per-effect ones). Main thread.
+ */
 DE_API void de_renderer_set_settings(de_renderer *r, const de_render_settings *s);
+/** The settings in effect (clamped), including a request not applied yet. Any thread. */
+DE_API de_render_settings de_renderer_get_settings(const de_renderer *r);
 /* Called by the host on the render thread after Extract. */
 DE_API de_result de_renderer_render_frame(de_renderer *r);
 

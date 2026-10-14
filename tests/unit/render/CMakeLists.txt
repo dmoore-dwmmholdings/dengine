@@ -59,3 +59,26 @@ if(TARGET test_render_loaders)
         endif()
     endif()
 endif()
+
+# DENG-174: the renderer, its settings, tiers, quality presets and cvars, executable
+# test_renderer; CTest names renderer.<test>. Pure settings tests on synthetic caps; the renderer
+# on the null backend and on Metal (macOS; skipped without a device or below the Base tier); 100
+# frames under the alloc guard. Scratch files (the asset cook cache) go below
+# <build>/tests/unit/render/test_renderer_tmp/ (mounted as rr:/).
+set(_de_rr_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_metal)
+    list(APPEND _de_rr_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+de_add_test(NAME renderer
+    SOURCES test_renderer_settings.c
+    LIBS ${_de_rr_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_renderer)
+    target_include_directories(test_renderer PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_renderer_tmp")
+    target_compile_definitions(test_renderer PRIVATE
+        "DE_RR_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_renderer_tmp\"")
+    target_link_libraries(test_renderer PRIVATE
+        "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+endif()
