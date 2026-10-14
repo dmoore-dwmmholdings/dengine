@@ -495,7 +495,8 @@ DE_API void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, 
 DE_API void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
 /** Closes the innermost region opened by de_gpu_cmd_marker_push. */
 DE_API void de_gpu_cmd_marker_pop(de_gpu_cmd *c);
-DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id); /* GPU crash diagnostics */
+/** Writes breadcrumb `id` (GPU crash diagnostics, DENG-328): see "GPU crash diagnostics" below. */
+DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id);
 /* S10 (DENG-323): draws, index buffer, scissor, mesh dispatch. Draws and mesh dispatches need a
  * render pass and a bound pipeline of their kind. SV_VertexID and SV_InstanceID do not portably
  * include `first_vertex`, `vertex_offset` or `first_instance`: pass per-draw offsets in push
@@ -677,6 +678,63 @@ typedef struct de_gpu_tier_report {
 DE_API void de_gpu_evaluate_tier(const de_gpu_caps *caps, de_gpu_tier_report *out);
 /** "none", "base", "rt"; "unknown" when out of range. Never NULL. */
 DE_API const char *de_gpu_tier_name(de_gpu_tier t);
+
+/* ---------- GPU crash diagnostics (S10, DENG-328; SPEC §18.5, §12.3) ----------
+ *
+ * de_gpu_device_desc.crash_breadcrumbs turns on everything below that costs GPU time: breadcrumb
+ * writes, D3D12 DRED (auto-breadcrumbs and page-fault reporting, set before the device is made),
+ * and Metal encoder execution status on every command buffer. VK_EXT_device_fault is used
+ * whenever the device has it. Device-lost handling itself is always on.
+ *
+ * Breadcrumbs. de_gpu_cmd_breadcrumb(c, id) records a GPU write that lands once every command
+ * recorded before it in the list has completed (on Metal and Vulkan it waits for that work, so
+ * it is also a barrier). The render graph writes one before each pass (`id` = pass index and
+ * frame parity, chosen by the caller). Outside render passes only (checked in Debug and Dev;
+ * ignored inside one in every build); a no-op without crash_breadcrumbs. No allocation: each
+ * queue has a ring of 2048 slots, and a list keeps up to 512 breadcrumbs per recording (more are
+ * dropped). Name ids with de_gpu_breadcrumb_name so reports can show names.
+ *
+ * Device lost. The first call that finds the device lost (a backend error DE_ERR_DEVICE_LOST:
+ * D3D12 removal, VK_ERROR_DEVICE_LOST; or, with crash_breadcrumbs, a Metal command buffer that
+ * failed on the GPU) builds a report: per queue the last breadcrumb that completed and the
+ * breadcrumbs submitted after it that did not, with their names, lists, queue values and the
+ * debug markers (de_gpu_cmd_marker_push) open when each was recorded; then the backend's data
+ * (DRED operation history and page fault, VK_EXT_device_fault addresses and vendor codes, Metal
+ * errors with each encoder's label, debug groups and status). It then sets the crash annotation
+ * `gpu_fault` (a one-line summary), keeps the report for the crash handler (a crash report
+ * written later in the process gets `<stem>.gpu_report.txt`, and the next launch's upload gets
+ * it as de_crash_report.gpu_breadcrumbs) and calls the device-lost callback once. From then on
+ * submits, fence waits, swapchain calls and creates fail with DE_ERR_DEVICE_LOST and recording
+ * calls do nothing, without reaching the GPU; destroys and de_gpu_device_destroy still work.
+ */
+
+/** Most bytes of a device-lost report, with the NUL. */
+#define DE_GPU_DEVICE_LOST_REPORT_MAX 16384u
+
+/** Called once when the device is lost, on the thread that found it, with the report (valid
+ * during the call). */
+typedef void (*de_gpu_device_lost_fn)(const char *report, void *user);
+
+/**
+ * Names breadcrumb `id` in reports (copied; at most 47 bytes are kept). Register each id once
+ * (again: the new name replaces the old). Thread-safe; not for per-frame use (may allocate).
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL device or name); DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_gpu_breadcrumb_name(de_gpu_device *d, u32 id, const char *name);
+/**
+ * Sets the device-lost callback (NULL removes it). It is called at most once per device; when the
+ * device is already lost and the callback has not run, it runs at once on this thread.
+ */
+DE_API void de_gpu_set_device_lost_callback(de_gpu_device *d, de_gpu_device_lost_fn fn, void *user);
+/**
+ * Copies the device-lost report into `buf` (NUL-terminated; at most DE_GPU_DEVICE_LOST_REPORT_MAX
+ * bytes are ever needed). Asks the backend first, so a loss no call has seen yet is reported.
+ * @return DE_OK; DE_ERR_NOT_FOUND (the device is not lost); DE_ERR_INVALID_ARGUMENT (NULL device
+ *         or buf, cap 0); DE_ERR_OUT_OF_MEMORY (cut to cap - 1 bytes).
+ */
+DE_API de_result de_gpu_device_lost_report(de_gpu_device *d, char *buf, u32 cap);
+/** True when the device is lost (asks the backend too; see de_gpu_device_lost_report). */
+DE_API bool de_gpu_device_is_lost(de_gpu_device *d);
 
 DE_EXTERN_C_END
 #endif

@@ -175,8 +175,10 @@ void de__crash_reset_for_tests(void);
  * renames `<stem>.pending` to `<stem>.sent` (deletes it when the rename fails) and then calls
  * `upload` on the calling thread with `dump_path` = the minidump (Windows) or the text report,
  * `log_path` = `<stem>.log_tail.txt` when it exists (else the text report) and `build_id` from
- * the marker. de_crash_install calls it when it gets an `upload`. Never called from a crash.
- * Returns the number of reports handed over (0 without an upload callback).
+ * the marker; DENG-328: `gpu_breadcrumbs` = the text of `<stem>.gpu_report.txt` (a GPU
+ * device-lost report, at most 16 KiB) and `gpu_fault` = true when that file exists.
+ * de_crash_install calls it when it gets an `upload`. Never called from a crash. Returns the number
+ * of reports handed over (0 without an upload callback).
  */
 u32 de__crash_upload_pending(void);
 

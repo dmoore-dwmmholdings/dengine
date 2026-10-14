@@ -25,6 +25,8 @@ set(_de_mtl_objc_sources
     # DENG-326: timestamps, debug groups, labels, capture
     mtl_query.m
     mtl_debug.m
+    # DENG-328: command-buffer errors, encoder status, breadcrumbs
+    mtl_errors.m
 )
 de_add_module(
     NAME gpu_metal

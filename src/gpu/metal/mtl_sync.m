@@ -25,8 +25,9 @@
  * ones after it on the queue may wait for its fence forever. The completion handler of every
  * command buffer therefore logs an error with the command buffer's label and sets the submit's
  * user fence from the CPU, so fence waits end (the front-end contract for a lost device); the
- * timeline value completes through the dispatch group either way. Full error reporting
- * (encoder-level status, device-lost state) is DENG-328.
+ * timeline value completes through the dispatch group either way. With crash_breadcrumbs the
+ * handler also records the failure (error, encoder status, shader logs) in the device's fault log
+ * before it completes the fence, and the device counts as lost (mtl_errors.m, DENG-328).
  */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -151,14 +152,18 @@ de_result de__mtl_fence_wait(de_gpu_device *d, de__gpu_fence *f, u64 value, u64 
  * fence (see the file comment). The block holds the events and the group, not the device: it may
  * run after the device is gone. */
 static void watch(id<MTLCommandBuffer> cb, dispatch_group_t group, de_log_category log,
-                  de_gpu_queue q, id<MTLSharedEvent> fence, u64 fence_value) {
+                  de_gpu_queue q, id<MTLSharedEvent> fence, u64 fence_value, void *fault) {
     const char *queue_name = k_queue_names[q];
+    id fault_log = (__bridge id)fault; /* DENG-328: the block retains the device's fault log */
     dispatch_group_enter(group);
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
       if (done.status == MTLCommandBufferStatusError) {
           DE_ERROR(log, "metal: command buffer \"%s\" on the %s queue failed: %s",
                    done.label ? done.label.UTF8String : "", queue_name,
                    done.error ? done.error.localizedDescription.UTF8String : "no error given");
+          /* DENG-328: the report's Metal section; before the fence, so a wait that ends here
+           * already sees the device lost. */
+          de__mtl_errors_record((__bridge void *)fault_log, (__bridge void *)done, queue_name);
           if (fence != nil && fence.signaledValue < fence_value)
               fence.signaledValue = fence_value;
       }
@@ -233,7 +238,7 @@ de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_su
             [enc waitForFence:qf];
             [enc updateFence:qf];
             [enc endEncoding];
-            watch(head, group, d->log, q, user, s->signal_value);
+            watch(head, group, d->log, q, user, s->signal_value, m->fault_log);
             last = head;
         }
         for (u32 i = 0; i < s->cmd_count; ++i) {
@@ -245,7 +250,7 @@ de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_su
             [last commit];
             last = (id<MTLCommandBuffer>)CFBridgingRelease(mc->cb);
             mc->cb = NULL;
-            watch(last, group, d->log, q, user, s->signal_value);
+            watch(last, group, d->log, q, user, s->signal_value, m->fault_log);
         }
         if (last == nil)
             return lost(d, q, group, queue_value, "no command buffer to signal");

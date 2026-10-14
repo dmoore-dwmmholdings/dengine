@@ -856,4 +856,8 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .cmd_marker_push = de__vk_cmd_marker_push,
     .cmd_marker_pop = de__vk_cmd_marker_pop,
     .object_name = de__vk_object_name,
+    /* DENG-328: breadcrumbs, device lost, VK_EXT_device_fault (vk_fault.c). */
+    .cmd_breadcrumb = de__vk_cmd_breadcrumb,
+    .device_lost = de__vk_device_lost,
+    .device_lost_report = de__vk_device_lost_report,
 };

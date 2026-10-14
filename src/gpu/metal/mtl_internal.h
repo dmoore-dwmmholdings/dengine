@@ -24,6 +24,7 @@
  *   mtl_icb.m        (DENG-325) indexed indirect draws; with a count buffer through an indirect
  *                    command buffer that a compute kernel encodes
  *   mtl_binary_archive.m (DENG-325) the MTLBinaryArchive pipeline cache
+ *   mtl_errors.m     (DENG-328) command-buffer errors and encoder status, breadcrumbs
  *
  * Residency (DENG-288): every resource the bindless table can name lives in a heap of the heap
  * list (de__mtl_heap_list): the class heaps and the internal heap of null descriptors. An encoder
@@ -136,6 +137,11 @@ typedef struct mtl_device {
     u32 *storage_slots;  /* the storage-table slot of each storage_objs entry */
     u32 *storage_pos;    /* storage-table slot -> index in storage_objs + 1; 0 = none */
     u32 storage_count;
+
+    /* DENG-328 (mtl_errors.m): crash diagnostics, with de_gpu_device_desc.crash_breadcrumbs. */
+    bool crash_diag;                  /* command buffers report encoder execution status */
+    void *fault_log;                  /* DEMtlFaultLog, retained; NULL when off */
+    void *bc_values[DE_QUEUE_COUNT_]; /* id<MTLBuffer>: breadcrumb values to copy, retained */
 } mtl_device;
 
 typedef struct mtl_buffer {
@@ -597,5 +603,27 @@ bool de__mtl_object_label(de_gpu_device *d, de__gpu_kind kind, u32 handle, char 
  * (mtl_device.storage_objs: every storage object on the useHeaps: path, the per-mip views with a
  * residency set). Copies up to `cap` (id<MTLTexture>) into `out`; returns the total count. */
 u32 de__mtl_storage_texture_list(de_gpu_device *d, void **out, u32 cap);
+
+/* ---------- DENG-328: GPU crash diagnostics (mtl_errors.m) ---------- */
+
+/** With desc->crash_breadcrumbs: the fault log and the breadcrumb staging buffers. */
+de_result de__mtl_errors_init(de_gpu_device *d, const de_gpu_device_desc *desc);
+void de__mtl_errors_shutdown(de_gpu_device *d);
+/** A new command buffer of queue `q` (retained id<MTLCommandBuffer>, NULL on failure): unretained
+ * references, and encoder execution status when crash diagnostics are on. */
+void *de__mtl_new_command_buffer(de_gpu_device *d, de_gpu_queue q);
+/** Records a failed command buffer (completion handler): `fault` is the device's fault_log (NULL:
+ * nothing), `command_buffer` the id<MTLCommandBuffer>. Marks the device lost. */
+void de__mtl_errors_record(void *fault, void *command_buffer, const char *queue);
+/** vtable device_lost / device_lost_report / cmd_breadcrumb. */
+bool de__mtl_device_lost(de_gpu_device *d);
+size_t de__mtl_device_lost_report(de_gpu_device *d, char *out, size_t cap);
+void de__mtl_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value);
+/** Test hook: records a simulated failed command buffer `list` on the compute queue (a page
+ * fault, with three encoders: a completed breadcrumb, a faulted compute encoder and a pending
+ * breadcrumb, all inside debug group `group`) exactly as the completion handler records a real
+ * one, so the device counts as lost. False without crash diagnostics. Apple GPUs discard
+ * out-of-bounds accesses instead of faulting, so tests cannot make a real fault on demand. */
+bool de__mtl_errors_simulate(de_gpu_device *d, const char *list, const char *group);
 
 #endif
