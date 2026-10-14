@@ -30,6 +30,11 @@ target_compile_definitions(test_det_physics PRIVATE
     "DE_DET_OUT_DIR=\"${DE_DET_OUT_DIR}\""
     "DE_PHYS_DET_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/golden\"")
 set_target_properties(test_det_physics PROPERTIES FOLDER "dengine/tests")
+# DENG-412: sanitizer builds run shorter checks (sanitizer_ticks, and the workers 1/4 cases skip
+# the workers 0 reference run when they match the golden file; harness.h).
+if(DE_SANITIZERS)
+    target_compile_definitions(test_det_physics PRIVATE DE_PHYS_DET_SANITIZED=1)
+endif()
 
 # Every scenario runs with these worker counts (DE_PHYS_DET_REGISTER in harness.h defines the
 # same three cases).
@@ -55,7 +60,8 @@ set(_de_phys_det_self
     determinism_physics_harness.detects_one_ulp=harness.detects_one_ulp
     determinism_physics_harness.workers_field_level=harness.workers_field_level
     determinism_physics_harness.scenarios_collide=harness.scenarios_collide
-    determinism_physics_harness.begin_errors=harness.begin_errors)
+    determinism_physics_harness.begin_errors=harness.begin_errors
+    determinism_physics_harness.sanitizer_ticks=harness.sanitizer_ticks)
 de_det_add_tests(TARGET test_det_physics TESTS ${_de_phys_det_self})
 set_property(DIRECTORY APPEND PROPERTY DE_PHYS_DET_CASES ${_de_phys_det_self})
 

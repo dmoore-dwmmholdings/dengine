@@ -37,6 +37,17 @@
  *   - State kept outside the physics world goes in ctx->state (state_size bytes, zeroed, owned by
  *     the harness). It is not rolled back by an ECS snapshot restore.
  *
+ * Sanitizer builds (DENG-412). A build with DE_SANITIZE set compiles this harness with
+ * DE_PHYS_DET_SANITIZED=1, and de_phys_det_check then does less work, so the slow scenarios stay
+ * well inside their CTest timeout under TSan:
+ *   - a scenario with `sanitizer_ticks` runs only that many ticks, and the check compares that
+ *     prefix of the full golden file (which must still hold `ticks` values). Set it on a scenario
+ *     whose sanitizer run comes near its timeout, and keep every scripted event inside the prefix;
+ *   - a workers 1/4 case runs the workers 0 reference only when its run does not match the golden
+ *     file. A match is enough: the workers_0 case checks the same golden file.
+ * Update mode always runs the full scenario. Other builds run the full scenario and the
+ * reference.
+ *
  * Golden files and outputs. golden/<name>.checksums (de_det_write_checksums format: a `#` header,
  * then one 16-digit hex value per tick) is a cross-platform contract: every platform, compiler and
  * worker count must reproduce it. The `workers_0` test also writes what it computed to
@@ -91,6 +102,9 @@ typedef struct de_phys_det_scenario {
     u32 max_bodies; /**< physics body pool; 0 = DE_PHYS_DET_DEFAULT_MAX_BODIES */
     f32 dt;         /**< fixed step; 0 = DE_DET_DEFAULT_DT (1/60) */
     u64 seed;       /**< 0 = DE_PHYS_DET_DEFAULT_SEED */
+    /** Ticks that de_phys_det_check runs in a sanitizer build (see the file comment), 1..ticks;
+     *  0 = ticks. */
+    u32 sanitizer_ticks;
 } de_phys_det_scenario;
 
 /** Field groups: one diagnostic hash each per tick. Names: de_phys_det_field_name(). */
@@ -177,15 +191,25 @@ const char *de_phys_det_field_name(u32 field);
 
 /**
  * The check behind every DE_PHYS_DET_REGISTER case (de_test.h checks; call it from a TEST only):
- *   - runs the scenario with `workers`; the run's checksums must change on most ticks;
+ *   - runs the scenario with `workers` for de_phys_det_check_ticks() ticks; the run's checksums
+ *     must change on most ticks;
  *   - workers 0: writes <out>/physics_<name>.checksums and .fields; in update mode also rewrites
  *     golden/<name>.checksums (Debug and Dev builds only);
  *   - workers > 0: runs workers 0 too and compares; on a divergence reports the first divergent
- *     tick and a field-level diff (de_phys_det_diff_at), and fails;
- *   - compares with golden/<name>.checksums; on a divergence reports the first divergent tick,
- *     the field groups of this run at that tick, and fails.
+ *     tick and a field-level diff (de_phys_det_diff_at), and fails. A sanitizer build does this
+ *     only when the golden comparison below fails or is skipped (update mode);
+ *   - compares with golden/<name>.checksums (all `ticks` values must be there; the ticks run are
+ *     compared); on a divergence reports the first divergent tick, the field groups of this run
+ *     at that tick, and fails.
  */
 void de_phys_det_check(const de_phys_det_scenario *scenario, u32 workers);
+
+/** Ticks that de_phys_det_check runs: scenario->sanitizer_ticks (when not 0) in a sanitizer
+ *  build outside update mode, else scenario->ticks. */
+u32 de_phys_det_check_ticks(const de_phys_det_scenario *scenario);
+
+/** true in a sanitizer build (DE_PHYS_DET_SANITIZED, set when DE_SANITIZE is not empty). */
+bool de_phys_det_sanitized(void);
 
 /** true when golden files are rewritten (--update-golden or DE_DET_UPDATE_GOLDEN=1). */
 bool de_phys_det_update_mode(void);

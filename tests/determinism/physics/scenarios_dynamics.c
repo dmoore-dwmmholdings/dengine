@@ -11,7 +11,9 @@
  *                   random poses and velocities. Ragdoll 2 is powered and switches its motor
  *                   targets every 100 ticks; ragdoll 4 collides with itself. Ragdoll 1 is
  *                   destroyed at tick 600 and built again at tick 610 (index reuse). The probe
- *                   hashes the joints (impulses, broken flags).
+ *                   hashes the joints (impulses, broken flags). Sanitizer builds run the first
+ *                   640 ticks (sanitizer_ticks; DENG-412): every drop, six motor switches, and
+ *                   the rebuild with 30 ticks after it.
  *   chain_bridge:   a bridge of 16 planks on hinges, hung from the world by four rope joints with
  *                   slack, loaded by ten boxes and balls dropped every 40 ticks, then a 900 kg
  *                   block at tick 600 that breaks the middle hinge (break force 25 kN; the
@@ -323,6 +325,9 @@ const de_phys_det_scenario de_phys_det_scenario_ragdoll_stairs = {
     .ticks = DY_TICKS,
     .state_size = (u32)sizeof(rs_state),
     .max_bodies = 160u,
+    /* Under CI TSan the full run took 130 s, and workers_1/_4 (two runs each) up to 287 s of
+     * their 300 s timeout (DENG-412). */
+    .sanitizer_ticks = 640u,
 };
 DE_PHYS_DET_REGISTER(ragdoll_stairs)
 

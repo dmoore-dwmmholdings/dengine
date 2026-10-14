@@ -299,5 +299,5 @@ static u64 es_probe(de_phys_det_ctx *c, u64 tick) {
 }
 
 const de_phys_det_scenario de_phys_det_scenario_ecs_scene = {
-    "ecs_scene", es_setup, es_script, es_probe, NULL, 240, (u32)sizeof(es_state), 1024, 0.0f, 0};
+    "ecs_scene", es_setup, es_script, es_probe, NULL, 240, (u32)sizeof(es_state), 1024, 0.0f, 0, 0};
 DE_PHYS_DET_REGISTER(ecs_scene)

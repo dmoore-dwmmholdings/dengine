@@ -31,6 +31,13 @@
 #define PD_CAN_UPDATE 0
 #endif
 
+/* DENG-412: a sanitizer build (DE_SANITIZE set) runs shorter checks; see harness.h. */
+#if defined(DE_PHYS_DET_SANITIZED) && DE_PHYS_DET_SANITIZED
+#define PD_SANITIZED 1
+#else
+#define PD_SANITIZED 0
+#endif
+
 static bool g_update_flag; /* --update-golden */
 
 /* ================================ Little-endian hashing ================================ */
@@ -175,6 +182,7 @@ de_result de_phys_det_begin(de_phys_det_session *s, const de_phys_det_scenario *
     memset(s, 0, sizeof *s);
     if (scenario == NULL || scenario->name == NULL || scenario->setup == NULL ||
         scenario->ticks == 0 || scenario->ticks > DE_PHYS_DET_MAX_TICKS ||
+        scenario->sanitizer_ticks > scenario->ticks ||
         !(scenario->dt >= 0.0f && scenario->dt < 1.0f))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_phys_det_begin: incomplete scenario");
 
@@ -275,19 +283,26 @@ void de_phys_det_end(de_phys_det_session *s) {
     memset(s, 0, sizeof *s);
 }
 
-de_result de_phys_det_run(const de_phys_det_scenario *scenario, const de_phys_det_options *options,
-                          u64 *out_checksums, u64 *out_fields) {
+/* The first `ticks` ticks of a run (de_phys_det_run runs them all). */
+static de_result pd_run(const de_phys_det_scenario *scenario, const de_phys_det_options *options,
+                        u32 ticks, u64 *out_checksums, u64 *out_fields) {
     if (scenario == NULL || out_checksums == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_phys_det_run: NULL argument");
     de_phys_det_session s;
     de_result r = de_phys_det_begin(&s, scenario, options);
-    for (u32 t = 0; t < scenario->ticks && r == DE_OK; ++t) {
+    for (u32 t = 0; t < ticks && t < scenario->ticks && r == DE_OK; ++t) {
         r = de_phys_det_step(&s, &out_checksums[t],
                              out_fields != NULL ? &out_fields[(size_t)t * DE_PHYS_DET_FIELD_COUNT]
                                                 : NULL);
     }
     de_phys_det_end(&s);
     return r;
+}
+
+de_result de_phys_det_run(const de_phys_det_scenario *scenario, const de_phys_det_options *options,
+                          u64 *out_checksums, u64 *out_fields) {
+    return pd_run(scenario, options, scenario != NULL ? scenario->ticks : 0u, out_checksums,
+                  out_fields);
 }
 
 /* ================================ Field-level diff ===================================== */
@@ -584,6 +599,19 @@ bool de_phys_det_update_mode(void) {
     return g_update_flag || (env != NULL && env[0] == '1');
 }
 
+bool de_phys_det_sanitized(void) {
+    return PD_SANITIZED != 0;
+}
+
+u32 de_phys_det_check_ticks(const de_phys_det_scenario *scenario) {
+    if (scenario == NULL)
+        return 0;
+    if (de_phys_det_sanitized() && !de_phys_det_update_mode() && scenario->sanitizer_ticks != 0 &&
+        scenario->sanitizer_ticks < scenario->ticks)
+        return scenario->sanitizer_ticks;
+    return scenario->ticks;
+}
+
 static u64 pd_seed(const de_phys_det_scenario *sc) {
     return sc->seed != 0 ? sc->seed : DE_PHYS_DET_DEFAULT_SEED;
 }
@@ -643,24 +671,79 @@ static void pd_print_error(const char *what, de_result r) {
     fprintf(stderr, "%s failed (%d): %s\n", what, (int)r, e != NULL ? e->message : "(no message)");
 }
 
+/* workers > 0: the workers 0 run must equal `run` tick for tick (`other` holds `ticks`). */
+static void pd_check_reference(const de_phys_det_scenario *sc, const de_phys_det_options *opt,
+                               const u64 *run, u64 *other, u32 ticks) {
+    const de_result r = pd_run(sc, NULL, ticks, other, NULL);
+    EXPECT_EQ(r, DE_OK);
+    char what[64];
+    snprintf(what, sizeof what, "%s: workers 0 vs %u", sc->name, opt->worker_count);
+    const u32 first = de_det_report(what, other, run, ticks);
+    if (first != DE_DET_NO_DIVERGENCE) {
+        de_phys_det_options base;
+        memset(&base, 0, sizeof base);
+        de_phys_det_diff_at(what, sc, &base, opt, first, NULL);
+    }
+    EXPECT_EQ(first, DE_DET_NO_DIVERGENCE);
+}
+
+/* `run` (`ticks` values) against golden/<name>.checksums, which must hold all sc->ticks values
+ * (`other` holds sc->ticks + 8). Returns true when it matches. */
+static bool pd_check_golden(const de_phys_det_scenario *sc, u32 workers, const u64 *run,
+                            const u64 *fields, u64 *other, u32 ticks) {
+    char golden[1024];
+    snprintf(golden, sizeof golden, "%s/%s.checksums", DE_PHYS_DET_GOLDEN_DIR, sc->name);
+    u32 n = 0;
+    const de_result r = de_det_read_checksums(golden, other, sc->ticks + 8u, &n);
+    if (r != DE_OK) {
+        pd_print_error(golden, r);
+        fprintf(stderr, "(generate it with --update-golden in a Debug or Dev build)\n");
+        EXPECT_EQ(r, DE_OK);
+        return false;
+    }
+    EXPECT_EQ(n, sc->ticks);
+    char what[96];
+    snprintf(what, sizeof what, "%s (workers %u): golden vs this build", sc->name, workers);
+    const u32 first = de_det_report(what, other, run, n < ticks ? n : ticks);
+    if (first != DE_DET_NO_DIVERGENCE) {
+        fprintf(stderr, "  field groups of this build at tick %u:", first);
+        for (u32 g = 0; g < (u32)DE_PHYS_DET_FIELD_COUNT; ++g) {
+            fprintf(stderr, " %s=%016llx", g_field_names[g],
+                    (unsigned long long)fields[(size_t)first * DE_PHYS_DET_FIELD_COUNT + g]);
+        }
+        fprintf(stderr,
+                "\n  (compare with physics_%s.fields of a platform that matches the golden "
+                "file; the Determinism CI diff job does this)\n",
+                sc->name);
+    }
+    EXPECT_EQ(first, DE_DET_NO_DIVERGENCE);
+    return n == sc->ticks && first == DE_DET_NO_DIVERGENCE;
+}
+
 void de_phys_det_check(const de_phys_det_scenario *sc, u32 workers) {
     ASSERT_TRUE(sc != NULL);
-    const u32 ticks = sc->ticks;
-    ASSERT_TRUE(ticks > 0 && ticks <= DE_PHYS_DET_MAX_TICKS);
+    ASSERT_TRUE(sc->ticks > 0 && sc->ticks <= DE_PHYS_DET_MAX_TICKS);
+    ASSERT_TRUE(sc->sanitizer_ticks <= sc->ticks);
+    const u32 full = sc->ticks;
+    const u32 ticks = de_phys_det_check_ticks(sc); /* < full only in a sanitizer build */
     const size_t nf = (size_t)ticks * DE_PHYS_DET_FIELD_COUNT;
     u64 *run = pd_alloc_u64(ticks);
     u64 *fields = pd_alloc_u64(nf);
-    u64 *other = pd_alloc_u64((size_t)ticks + 8u);
+    u64 *other = pd_alloc_u64((size_t)full + 8u);
     if (run == NULL || fields == NULL || other == NULL) {
         fprintf(stderr, "de_phys_det_check: out of memory\n");
         EXPECT_TRUE(false);
         goto done;
     }
+    if (ticks < full) {
+        fprintf(stderr, "determinism: %s: sanitizer build: %u of %u ticks\n", sc->name, ticks,
+                full);
+    }
 
     de_phys_det_options opt;
     memset(&opt, 0, sizeof opt);
     opt.worker_count = workers;
-    de_result r = de_phys_det_run(sc, &opt, run, fields);
+    de_result r = pd_run(sc, &opt, ticks, run, fields);
     if (r != DE_OK) {
         pd_print_error("de_phys_det_run", r);
         EXPECT_EQ(r, DE_OK);
@@ -681,11 +764,12 @@ void de_phys_det_check(const de_phys_det_scenario *sc, u32 workers) {
         EXPECT_EQ(pd_write_fields(path, sc, fields, ticks), DE_OK);
     }
 
-    char golden[1024];
-    snprintf(golden, sizeof golden, "%s/%s.checksums", DE_PHYS_DET_GOLDEN_DIR, sc->name);
     if (de_phys_det_update_mode()) {
 #if PD_CAN_UPDATE
         if (workers == 0) {
+            char golden[1024];
+            snprintf(golden, sizeof golden, "%s/%s.checksums", DE_PHYS_DET_GOLDEN_DIR, sc->name);
+            EXPECT_EQ(ticks, full); /* update mode always runs the full scenario */
             EXPECT_EQ(pd_write_checksums(golden, sc, run, ticks), DE_OK);
             fprintf(stderr, "determinism: rewrote %s\n", golden);
         }
@@ -696,54 +780,32 @@ void de_phys_det_check(const de_phys_det_scenario *sc, u32 workers) {
 #endif
     }
 
-    if (workers > 0) {
-        /* Same scenario without a task system: must be equal tick for tick. */
-        r = de_phys_det_run(sc, NULL, other, NULL);
-        EXPECT_EQ(r, DE_OK);
-        char what[64];
-        snprintf(what, sizeof what, "%s: workers 0 vs %u", sc->name, workers);
-        const u32 first = de_det_report(what, other, run, ticks);
-        if (first != DE_DET_NO_DIVERGENCE) {
-            de_phys_det_options base;
-            memset(&base, 0, sizeof base);
-            de_phys_det_diff_at(what, sc, &base, &opt, first, NULL);
-        }
-        EXPECT_EQ(first, DE_DET_NO_DIVERGENCE);
-    }
+    /* Same scenario without a task system: must be equal tick for tick. A sanitizer build runs
+     * it only when the golden comparison cannot vouch for it (below). */
+    if (workers > 0 && !de_phys_det_sanitized())
+        pd_check_reference(sc, &opt, run, other, ticks);
 
-    /* In update mode, the workers > 0 cases above compared against workers 0 already, and the
-     * golden file may be being rewritten by a parallel workers_0 process. */
-    if (de_phys_det_update_mode() && workers > 0)
-        goto done;
-    u32 n = 0;
-    r = de_det_read_checksums(golden, other, ticks + 8u, &n);
-    if (r != DE_OK) {
-        pd_print_error(golden, r);
-        fprintf(stderr, "(generate it with --update-golden in a Debug or Dev build)\n");
-        EXPECT_EQ(r, DE_OK);
-        goto done;
-    }
-    EXPECT_EQ(n, ticks);
-    char what[96];
-    snprintf(what, sizeof what, "%s (workers %u): golden vs this build", sc->name, workers);
-    const u32 first = de_det_report(what, other, run, n < ticks ? n : ticks);
-    if (first != DE_DET_NO_DIVERGENCE) {
-        fprintf(stderr, "  field groups of this build at tick %u:", first);
-        for (u32 g = 0; g < (u32)DE_PHYS_DET_FIELD_COUNT; ++g) {
-            fprintf(stderr, " %s=%016llx", g_field_names[g],
-                    (unsigned long long)fields[(size_t)first * DE_PHYS_DET_FIELD_COUNT + g]);
+    /* In update mode, the workers > 0 cases compare against workers 0 only: the golden file may
+     * be being rewritten by a parallel workers_0 process. */
+    bool golden_ok = false;
+    if (!(de_phys_det_update_mode() && workers > 0))
+        golden_ok = pd_check_golden(sc, workers, run, fields, other, ticks);
+
+    if (workers > 0 && de_phys_det_sanitized()) {
+        if (golden_ok) {
+            fprintf(stderr,
+                    "determinism: %s (workers %u): matches the golden file; the workers 0 run is "
+                    "left to the workers_0 case (sanitizer build)\n",
+                    sc->name, workers);
+        } else {
+            pd_check_reference(sc, &opt, run, other, ticks);
         }
-        fprintf(stderr,
-                "\n  (compare with physics_%s.fields of a platform that matches the golden "
-                "file; the Determinism CI diff job does this)\n",
-                sc->name);
     }
-    EXPECT_EQ(first, DE_DET_NO_DIVERGENCE);
 
 done:
     pd_free_u64(run, ticks);
     pd_free_u64(fields, nf);
-    pd_free_u64(other, (size_t)ticks + 8u);
+    pd_free_u64(other, (size_t)full + 8u);
 }
 
 /* ================================ main ================================================= */
