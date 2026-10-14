@@ -26,14 +26,18 @@
  * ResourceDescriptorHeap with them, shaders/common/bindless.slang), one range after the other:
  * the front-end's shared numbering (vtable bindless_shared_resource_heap). 1,000,000 descriptors
  * is the largest heap every resource binding tier allows. Acceleration structures get a range in
- * S16. */
+ * S16. After the numbered ranges comes one more buffer-sized range (DENG-410): the read-only view
+ * (SRV) of the buffer at index i is at slot i + DE__D3D12_BUFFER_SRV_OFFSET, for bindless.slang's
+ * de_robuffer / de_bytes (its DE__D3D12_BUFFER_SRV_OFFSET must be the same number; a change to
+ * either range is a cooked-shader format change). */
 #define DE__D3D12_BINDLESS_TEXTURES         500000u /* slots 0 .. 499999, 0 = the null descriptor */
 #define DE__D3D12_BINDLESS_STORAGE_TEXTURES 100000u /* slots 500000 .. 599999 */
-#define DE__D3D12_BINDLESS_BUFFERS          400000u /* slots 600000 .. 999999 */
+#define DE__D3D12_BINDLESS_BUFFERS          200000u /* slots 600000 .. 799999: the default view */
 #define DE__D3D12_BINDLESS_ACCELS           0u
+#define DE__D3D12_BUFFER_SRV_OFFSET         (DE__D3D12_BINDLESS_BUFFERS + DE__D3D12_BINDLESS_ACCELS)
 #define DE__D3D12_RESOURCE_HEAP_SIZE                                                               \
     (DE__D3D12_BINDLESS_TEXTURES + DE__D3D12_BINDLESS_STORAGE_TEXTURES +                           \
-     DE__D3D12_BINDLESS_BUFFERS + DE__D3D12_BINDLESS_ACCELS)
+     DE__D3D12_BINDLESS_BUFFERS + DE__D3D12_BINDLESS_ACCELS + DE__D3D12_BINDLESS_BUFFERS)
 /* D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE. */
 #define DE__D3D12_BINDLESS_SAMPLERS 2048u
 

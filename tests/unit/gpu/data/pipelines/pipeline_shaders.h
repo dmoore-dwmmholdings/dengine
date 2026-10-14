@@ -103,6 +103,32 @@ extern const de_pipe_test_pixel de_pipe_test_indirect_expect[3];
  * de_pipe_test_triangle_pos (first 0, green), so the expected pixels are the triangle test's
  * first two plus the clear color where C would be. */
 
+/**
+ * bindless_access.slang (`cs_main`, 64x1x1, 24 bytes: ro_upload, ro_gpu, raw_upload, raw_rw, dst,
+ * count; DENG-410): the four buffer accessors of bindless.slang. count = DE_PIPE_TEST_ACCESS_COUNT;
+ * dispatch ceil(count / 64) groups. Inputs:
+ *   ro_upload  UPLOAD, stride 4: DE_PIPE_TEST_ACCESS_RO_UPLOAD(i)          (de_robuffer)
+ *   ro_gpu     GPU_ONLY, stride 4, copied in, DE_ACCESS_SHADER_READ:
+ *              DE_PIPE_TEST_ACCESS_RO_GPU(i)                               (de_robuffer)
+ *   raw_upload UPLOAD, stride 0: DE_PIPE_TEST_ACCESS_RAW_SRC(i)            (de_bytes)
+ *   raw_rw     GPU_ONLY, stride 0, 2 * count words copied in, DE_ACCESS_SHADER_WRITE:
+ *              DE_PIPE_TEST_ACCESS_RAW_OLD(w)                              (de_rwbytes)
+ *   dst        GPU_ONLY, stride 4, DE_ACCESS_SHADER_WRITE                  (de_buffer)
+ * Expected: dst[i] = DE_PIPE_TEST_ACCESS_DST(i), raw_rw[w] = DE_PIPE_TEST_ACCESS_RAW_OUT(w).
+ */
+#define DE_PIPE_TEST_ACCESS_COUNT        256u
+#define DE_PIPE_TEST_ACCESS_RO_UPLOAD(i) ((u32)(i) * 5u + 3u)
+#define DE_PIPE_TEST_ACCESS_RO_GPU(i)    (((u32)(i) * 0x10001u) ^ 0xA5A5u)
+#define DE_PIPE_TEST_ACCESS_DST(i)                                                                 \
+    (DE_PIPE_TEST_ACCESS_RO_UPLOAD(i) * 3u + DE_PIPE_TEST_ACCESS_RO_GPU(i))
+#define DE_PIPE_TEST_ACCESS_RAW_SRC(i) (0x01000000u + (u32)(i) * 11u)
+#define DE_PIPE_TEST_ACCESS_RAW_OLD(w) ((u32)(w) * 0x101u)
+#define DE_PIPE_TEST_ACCESS_RAW_OUT(w)                                                             \
+    ((u32)(w) < DE_PIPE_TEST_ACCESS_COUNT                                                          \
+         ? DE_PIPE_TEST_ACCESS_RAW_OLD(w) + DE_PIPE_TEST_ACCESS_RAW_SRC(w)                         \
+         : DE_PIPE_TEST_ACCESS_RAW_OLD(w) +                                                        \
+               2u * DE_PIPE_TEST_ACCESS_RAW_SRC((u32)(w) - DE_PIPE_TEST_ACCESS_COUNT))
+
 DE_EXTERN_C_END
 
 #endif

@@ -83,7 +83,7 @@ const char *de__gpu_kind_name(de__gpu_kind k) {
 static de_result fail_v(de_gpu_device *d, de_result r, bool log, const char *fmt, va_list ap) {
     char msg[DE_ERROR_MESSAGE_MAX];
     vsnprintf(msg, sizeof msg, fmt, ap);
-    if (log)
+    if (log && d) /* no device: a backend's device-less call (DENG-410, enumerate_adapters) */
         DE_ERROR(d->log, "%s", msg);
     return de_error_set_(r, __FILE__, __LINE__, "de_gpu", "%s", msg);
 }

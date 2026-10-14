@@ -297,3 +297,44 @@ if(TARGET de_gpu_shader)
             "DE_SHADER_API_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_shader_api_tmp\"")
     endif()
 endif()
+
+# DENG-410: the adapter list (de_gpu_enumerate_adapters), the command-list reserve
+# (de_gpu_cmd_reserve) and bindless.slang's buffer accessors (de_robuffer, de_bytes, de_rwbytes,
+# through the shared shader data/pipelines/bindless_access.slang), the same tests on every backend
+# in the build (test_gpu_backends.c, executable test_gpu_backends, CTest names
+# gpu_backends.backends.<test>). Built like gpu_queries: Metal on macOS, Vulkan where a loader is
+# found (CI: the lavapipe golden job), D3D12 on Windows (CI: the vendored WARP).
+set(_de_backends_libs de_gpu de_platform)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_backends_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_backends_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_backends_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME gpu_backends
+    SOURCES test_gpu_backends.c data/pipelines/pipeline_shaders.c
+    LIBS ${_de_backends_libs}
+    LABELS unit gpu
+    TIMEOUT 300)
+if(TARGET test_gpu_backends)
+    target_include_directories(test_gpu_backends PRIVATE "${DE_ROOT_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    target_compile_definitions(test_gpu_backends PRIVATE
+        "DE_BINDLESS_SLANG_PATH=\"${DE_ROOT_DIR}/shaders/common/bindless.slang\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_backends PRIVATE de_gpu_shader de_cook_shader de_cooker
+            de_asset)
+        target_include_directories(test_gpu_backends PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_backends PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_gpu_backends)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_gpu_backends)
+        endif()
+    endif()
+endif()

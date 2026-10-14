@@ -6,15 +6,17 @@
  * device, reads its de_gpu_caps, runs de_gpu_evaluate_tier() and prints both: a summary table and
  * one block per adapter, or JSON with --json (the format of tools/caps/caps_schema.json).
  *
- * Adapters are probed through de_gpu_device_desc.adapter = 1, 2, ... until the backend says the
- * index is past the last adapter (DE_ERR_NOT_FOUND or DE_ERR_INVALID_ARGUMENT). A forced adapter
- * is created even when it is below the Base tier, so its caps and the reason are reported. Then
- * adapter 0 is created once to find the adapter the engine picks by default (Vulkan refuses
- * adapter 0 when no device meets the Base tier; that is reported as "no default").
+ * Adapters come from the public list, de_gpu_enumerate_adapters (DENG-410); each one is then
+ * created through de_gpu_device_desc.adapter = its index. A forced adapter is created even when it
+ * is below the Base tier, so its caps and the reason are reported; an adapter whose device fails
+ * is reported with the error. Then adapter 0 is created once to find the adapter the engine picks
+ * by default (Vulkan refuses adapter 0 when no device meets the Base tier; that is reported as
+ * "no default").
  *
- * A backend that cannot run here (no Vulkan loader, no driver, no adapter) is a line in the report,
- * not an error: the exit code is 0 whenever the report was written. 2 = bad arguments, 1 = the
- * report could not be written.
+ * A backend that cannot run here is a line in the report, not an error. Its status comes from the
+ * result of de_gpu_enumerate_adapters: DE_ERR_UNSUPPORTED "not built", DE_ERR_NOT_FOUND
+ * "no loader", another failure "unavailable", and an empty list "no device". The exit code is 0
+ * whenever the report was written. 2 = bad arguments, 1 = the report could not be written.
  */
 #include <dengine/de_gpu.h>
 
@@ -68,16 +70,16 @@ static void last_error_text(char *out, size_t cap) {
     snprintf(out, cap, "%s", e ? e->message : "unknown error");
 }
 
-/* A backend-level failure (nothing to probe on this machine), or NULL for an adapter-level one. */
-static const char *backend_status_from_error(const char *msg) {
-    if (strstr(msg, "not compiled into this build"))
+/* The backend status for a failed de_gpu_enumerate_adapters (its documented result codes). */
+static const char *backend_status_from_result(de_result r) {
+    switch (r) {
+    case DE_ERR_UNSUPPORTED:
         return "not built";
-    if (strstr(msg, "no Vulkan loader found"))
+    case DE_ERR_NOT_FOUND:
         return "no loader";
-    if (strstr(msg, "lists no device") || strstr(msg, "no Metal device") ||
-        strstr(msg, "lists no adapter"))
-        return "no device";
-    return NULL;
+    default:
+        return "unavailable";
+    }
 }
 
 /* ---------- Probing ---------- */
@@ -93,67 +95,52 @@ static bool same_device(const de_gpu_caps *a, const de_gpu_caps *b) {
            a->dedicated_vram == b->dedicated_vram && strcmp(a->device_name, b->device_name) == 0;
 }
 
+/* Lists the backend's adapters (de_gpu_enumerate_adapters), then creates a device on each one (or
+ * on `only_adapter`) through de_gpu_device_desc.adapter = its index. */
 static void probe_backend(backend_probe *bp, de_gpu_backend b, u32 only_adapter) {
     memset(bp, 0, sizeof *bp);
     bp->backend = b;
     bp->status = "ok";
 
-    /* The null backend ignores the adapter index: it has exactly one "adapter". */
-    const u32 first = b == DE_GPU_NULL ? 1u : (only_adapter ? only_adapter : 1u);
-    const u32 last = b == DE_GPU_NULL ? 1u : (only_adapter ? only_adapter : CAPS_MAX_ADAPTERS);
-    if (b == DE_GPU_NULL && only_adapter > 1) {
+    de_gpu_adapter_info list[CAPS_MAX_ADAPTERS];
+    u32 total = 0;
+    de_error_clear();
+    de_result r = de_gpu_enumerate_adapters(b, list, CAPS_MAX_ADAPTERS, &total);
+    if (r != DE_OK) {
+        bp->status = backend_status_from_result(r);
+        last_error_text(bp->error, sizeof bp->error);
+        return;
+    }
+    if (total == 0) {
         bp->status = "no device";
-        snprintf(bp->error, sizeof bp->error, "null: adapter %u requested; the null backend has 1",
-                 only_adapter);
+        snprintf(bp->error, sizeof bp->error, "%s: the backend runs here, but lists no adapter",
+                 de_gpu_backend_name(b));
+        return;
+    }
+    const u32 listed = total < CAPS_MAX_ADAPTERS ? total : CAPS_MAX_ADAPTERS;
+    if (only_adapter > listed) {
+        adapter_probe *ap = &bp->adapters[bp->adapter_count++];
+        ap->index = only_adapter;
+        snprintf(ap->error, sizeof ap->error, "%s: adapter %u requested; the backend lists %u",
+                 de_gpu_backend_name(b), only_adapter, total);
         return;
     }
 
+    const u32 first = only_adapter ? only_adapter : 1u;
+    const u32 last = only_adapter ? only_adapter : listed;
     for (u32 n = first; n <= last; ++n) {
+        adapter_probe *ap = &bp->adapters[bp->adapter_count++];
+        ap->index = n;
         de_gpu_device *d = NULL;
-        de_result r = create_device(b, b == DE_GPU_NULL ? 0u : n, &d);
-        if (r == DE_OK) {
-            adapter_probe *ap = &bp->adapters[bp->adapter_count++];
-            ap->index = n;
+        if (create_device(b, n, &d) == DE_OK) {
             ap->ok = true;
             ap->caps = *de_gpu_get_caps(d);
             de_gpu_evaluate_tier(&ap->caps, &ap->tier);
             de_gpu_device_destroy(d);
-            continue;
+        } else {
+            /* For example a Vulkan device below 1.3: reported, and the probe goes on. */
+            last_error_text(ap->error, sizeof ap->error);
         }
-        char msg[DE_ERROR_MESSAGE_MAX];
-        last_error_text(msg, sizeof msg);
-        const char *status = backend_status_from_error(msg);
-        const bool past_end = r == DE_ERR_NOT_FOUND || r == DE_ERR_INVALID_ARGUMENT;
-        if (status || (past_end && bp->adapter_count == 0 && n == first && !only_adapter)) {
-            /* Nothing to probe on this machine (or not one adapter). */
-            bp->status = status ? status : "no device";
-            snprintf(bp->error, sizeof bp->error, "%s", msg);
-            bp->adapter_count = 0;
-            return;
-        }
-        if (past_end && !only_adapter)
-            break; /* the end of the adapter list */
-        /* This adapter fails (for example a Vulkan device below 1.3): report it, try the next.
-         * The same failure twice in a row is a backend problem, not an adapter's. */
-        if (bp->adapter_count > 0 && !bp->adapters[bp->adapter_count - 1].ok &&
-            strcmp(bp->adapters[bp->adapter_count - 1].error, msg) == 0) {
-            bool all_failed = true;
-            for (u32 i = 0; i < bp->adapter_count; ++i)
-                all_failed = all_failed && !bp->adapters[i].ok;
-            if (all_failed) {
-                bp->status = "unavailable";
-                snprintf(bp->error, sizeof bp->error, "%s", msg);
-                bp->adapter_count = 0;
-                return;
-            }
-            break;
-        }
-        adapter_probe *ap = &bp->adapters[bp->adapter_count++];
-        ap->index = n;
-        ap->ok = false;
-        snprintf(ap->error, sizeof ap->error, "%s", msg);
-        if (only_adapter)
-            break;
     }
 
     /* The adapter that (de_gpu_device_desc){.backend = b} picks. */
@@ -162,10 +149,6 @@ static void probe_backend(backend_probe *bp, de_gpu_backend b, u32 only_adapter)
         any_ok = any_ok || bp->adapters[i].ok;
     if (!any_ok)
         return;
-    if (b == DE_GPU_NULL) {
-        bp->default_adapter = 1;
-        return;
-    }
     de_gpu_device *d = NULL;
     if (create_device(b, 0, &d) == DE_OK) {
         const de_gpu_caps *c = de_gpu_get_caps(d);
@@ -586,31 +569,27 @@ int main(int argc, char **argv) {
     de_log_set_level(de_log_register_category("gpu", DE_LOG_INFO),
                      opt.verbose ? DE_LOG_INFO : DE_LOG_FATAL);
 
-    de_gpu_backend list[DE_GPU_BACKEND_COUNT_];
-    u32 count = 0;
-    if (opt.backend_set) {
-        list[count++] = opt.backend;
-    } else {
-#ifdef DE_HAS_GPU_D3D12
-        list[count++] = DE_GPU_D3D12;
-#endif
-#ifdef DE_HAS_GPU_VULKAN
-        list[count++] = DE_GPU_VULKAN;
-#endif
-#ifdef DE_HAS_GPU_METAL
-        list[count++] = DE_GPU_METAL;
-#endif
-        if (all)
-            list[count++] = DE_GPU_NULL;
-    }
-
-    backend_probe *probes = (backend_probe *)calloc(count ? count : 1u, sizeof *probes);
+    /* Without --backend: every GPU backend in the build (one whose adapter list says "not
+     * compiled into this build" is left out), plus null with `all`. */
+    static const de_gpu_backend k_gpu_backends[] = {DE_GPU_D3D12, DE_GPU_VULKAN, DE_GPU_METAL};
+    const u32 max_count = (u32)(sizeof k_gpu_backends / sizeof k_gpu_backends[0]) + 1u;
+    backend_probe *probes = (backend_probe *)calloc(max_count, sizeof *probes);
     if (!probes) {
         fputs("de-caps: out of memory\n", stderr);
         return 1;
     }
-    for (u32 i = 0; i < count; ++i)
-        probe_backend(&probes[i], list[i], opt.adapter);
+    u32 count = 0;
+    if (opt.backend_set) {
+        probe_backend(&probes[count++], opt.backend, opt.adapter);
+    } else {
+        for (u32 i = 0; i < max_count - 1u; ++i) {
+            probe_backend(&probes[count], k_gpu_backends[i], opt.adapter);
+            if (strcmp(probes[count].status, "not built") != 0)
+                ++count;
+        }
+        if (all)
+            probe_backend(&probes[count++], DE_GPU_NULL, opt.adapter);
+    }
 
     if (opt.json)
         json_report(stdout, probes, count);

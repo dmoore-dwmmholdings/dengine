@@ -74,8 +74,9 @@ const de_pipe_test_pixel de_pipe_test_indirect_expect[3] = {
 #include "cook/lib/de_cooker.h"
 #include "gpu/shader/shader_internal.h"
 
-static const char *const k_files[] = {"triangle.slang", "compute.slang", "indirect_args.slang",
-                                      "push_limit.slang", "mesh.slang"};
+static const char *const k_files[] = {
+    "triangle.slang",   "compute.slang", "indirect_args.slang",
+    "push_limit.slang", "mesh.slang",    "bindless_access.slang" /* DENG-410 */};
 #define FILE_COUNT (sizeof k_files / sizeof k_files[0])
 
 typedef struct cooked {

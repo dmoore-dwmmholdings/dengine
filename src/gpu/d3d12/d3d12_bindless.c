@@ -11,9 +11,10 @@
  * (a null 2D texture SRV; a point/wrap sampler), DE_GPU_BINDLESS_INVALID.
  *
  * Views: sampled textures get an SRV of every mip and layer; storage textures a UAV per mip (all
- * layers). Buffers: GPU_ONLY buffers a UAV (bindless.slang reads buffers as RWStructuredBuffer),
- * UPLOAD buffers an SRV (an upload heap allows no UAV). A buffer with a stride gets a structured
- * view of that stride; stride 0 gives a raw (byte address) view.
+ * layers). Buffers: at the index, GPU_ONLY buffers a UAV (bindless.slang's de_buffer and
+ * de_rwbytes), UPLOAD buffers an SRV (an upload heap allows no UAV); at index +
+ * DE__D3D12_BUFFER_SRV_OFFSET every buffer an SRV (de_robuffer and de_bytes, DENG-410). A buffer
+ * with a stride gets structured views of that stride; stride 0 gives raw (byte address) views.
  *
  * Writes come from any thread: each touches only its own slot (Create*View and CopyDescriptors
  * are free-threaded for distinct destinations).
@@ -145,6 +146,14 @@ void de__d3d12_bindless_write_buffer(de_gpu_device *d, u32 index, de__gpu_buffer
                                       : DXGI_FORMAT_R32_TYPELESS;
     const bool raw = elements && !stride;
     const UINT count = (UINT)(elements ? elements : 1u);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+    memset(&srv, 0, sizeof srv);
+    srv.Format = fmt;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Buffer.NumElements = count;
+    srv.Buffer.StructureByteStride = stride;
+    srv.Buffer.Flags = raw ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE;
     const D3D12_CPU_DESCRIPTOR_HANDLE dst = de__d3d12_desc_cpu(&dd->resources, index, false);
     if (b->memory == DE_MEM_GPU_ONLY) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
@@ -156,17 +165,14 @@ void de__d3d12_bindless_write_buffer(de_gpu_device *d, u32 index, de__gpu_buffer
         uav.Buffer.Flags = raw ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
         ID3D12Device_CreateUnorderedAccessView(dd->dev, viewed, NULL, &uav, dst);
     } else {
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv;
-        memset(&srv, 0, sizeof srv);
-        srv.Format = fmt;
-        srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv.Buffer.NumElements = count;
-        srv.Buffer.StructureByteStride = stride;
-        srv.Buffer.Flags = raw ? D3D12_BUFFER_SRV_FLAG_RAW : D3D12_BUFFER_SRV_FLAG_NONE;
         ID3D12Device_CreateShaderResourceView(dd->dev, viewed, &srv, dst);
     }
     publish(dd, &dd->resources, index);
+    /* DENG-410: the read-only view, DE__D3D12_BUFFER_SRV_OFFSET slots on. */
+    const u32 ro = index + DE__D3D12_BUFFER_SRV_OFFSET;
+    ID3D12Device_CreateShaderResourceView(dd->dev, viewed, &srv,
+                                          de__d3d12_desc_cpu(&dd->resources, ro, false));
+    publish(dd, &dd->resources, ro);
 }
 
 void de__d3d12_bindless_write_texture(de_gpu_device *d, u32 index, de__gpu_texture *t, u32 mip,
