@@ -10,6 +10,15 @@
  *   - macOS 14 (no residency sets), or the cvar gpu.metal.force_use_heap set at device creation:
  *     every render and compute encoder calls useHeaps: for the whole list when it opens. The list
  *     is read under its lock, so a heap cannot be released while an encoder names it.
+ * Storage textures (DENG-407): shaders write the textures the storage table names, and Metal
+ * wants write usage named for each (shader validation drops the write and logs "MTLResourceUsage
+ * flags mismatch or missing for texture" otherwise). useHeaps: names a heap's resources for
+ * reading only, and a residency set of heaps does not cover texture views. So every render and
+ * compute encoder also calls useResources: with read-write usage for the storage-texture list
+ * (mtl_bindless.m): on the useHeaps: path every storage texture and the null one, on the
+ * residency-set path only the per-mip views (heap textures are covered by the set). The views are
+ * not added to the residency set: with textures in the set, Metal's GPU validation crashed in
+ * -[MTLGPUDebugCommandBuffer preCommit] while other threads released textures.
  * Either way, render and compute encoders get the argument buffer at buffer index 0 of every
  * stage. Blit encoders need neither: resources named by a command are resident by themselves.
  * Swapchain drawables are not in the table (no SAMPLED or STORAGE usage), so they need nothing.
@@ -133,10 +142,8 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
     } else {
         return;
     }
-    if (!m->use_heaps)
-        return;
     de_mutex_lock(&m->heap_lock);
-    for (u32 first = 0; first < m->heap_count; first += HEAP_CHUNK) {
+    for (u32 first = 0; m->use_heaps && first < m->heap_count; first += HEAP_CHUNK) {
         __unsafe_unretained id<MTLHeap> heaps[HEAP_CHUNK];
         u32 n = 0;
         for (; n < HEAP_CHUNK && first + n < m->heap_count; ++n)
@@ -148,6 +155,28 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
                   stages:(MTLRenderStages)m->render_stages];
         else
             [(__bridge id<MTLComputeCommandEncoder>)encoder useHeaps:heaps count:n];
+    }
+    /* DENG-407: write usage for the storage-texture list (with useHeaps:, the null storage
+     * texture first). */
+    const u32 extra = m->use_heaps ? 1u : 0u;
+    const u32 total = m->storage_count + extra;
+    const MTLResourceUsage rw = MTLResourceUsageRead | MTLResourceUsageWrite;
+    for (u32 first = 0; first < total; first += HEAP_CHUNK) {
+        __unsafe_unretained id<MTLResource> tex[HEAP_CHUNK];
+        u32 n = 0;
+        for (; n < HEAP_CHUNK && first + n < total; ++n) {
+            const u32 i = first + n;
+            tex[n] = i < extra ? (__bridge id<MTLTexture>)m->null_storage_texture
+                               : (__bridge id<MTLTexture>)m->storage_objs[i - extra];
+        }
+        if (kind == DE__MTL_ENC_RENDER)
+            [(__bridge id<MTLRenderCommandEncoder>)encoder
+                useResources:tex
+                       count:n
+                       usage:rw
+                      stages:(MTLRenderStages)m->render_stages];
+        else
+            [(__bridge id<MTLComputeCommandEncoder>)encoder useResources:tex count:n usage:rw];
     }
     de_mutex_unlock(&m->heap_lock);
 }
