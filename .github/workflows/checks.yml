@@ -1,6 +1,6 @@
 # Repository checks (SPEC §19.3): the public-header compile check and the layering check (the
 # CTest label `check`), the vendored trees and every host's prebuilt archive against their pins,
-# and clang-format on the C files a change touches. Local equivalents are in docs/ci.md.
+# and clang-format on the C and Objective-C files a change touches. Local equivalents are in docs/ci.md.
 name: Checks
 
 on:
@@ -128,9 +128,9 @@ jobs:
           fi
           echo "Comparing against ${base}"
           # Vendored code is byte-exact upstream and is never reformatted. Objective-C (.m, .mm)
-          # is left out until .clang-format has an ObjC section.
+          # uses the ObjC section of .clang-format (DENG-408).
           git diff --name-only --diff-filter=ACMR -z "${base}" HEAD -- \
-              '*.c' '*.h' '*.cpp' '*.hpp' '*.inl' ':!third_party/**' \
+              '*.c' '*.h' '*.cpp' '*.hpp' '*.inl' '*.m' '*.mm' ':!third_party/**' \
             > "${RUNNER_TEMP}/changed.txt"
           if [ ! -s "${RUNNER_TEMP}/changed.txt" ]; then
             echo "No changed C files."

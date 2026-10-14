@@ -217,7 +217,7 @@ job fuzzes for real (SPEC §19.1, DENG-216):
 |---|---|---|
 | header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test, `check_det_registered` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
 | vendor.py verify | `python tools/vendor/vendor.py verify --all-hosts`: every vendored tree, and the archive of every host of a prebuilt entry (DENG-390). The archives are cached in `~/.cache/dengine-vendor` (key `vendor-all-<hash of third_party/vendor.toml>`), so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify --all-hosts` |
-| clang-format (changed files) | `clang-format --dry-run --Werror` on the C and C++ files that the change adds or modifies, outside `third_party/`. | See below. |
+| clang-format (changed files) | `clang-format --dry-run --Werror` on the C, C++ and Objective-C files that the change adds or modifies, outside `third_party/`. | See below. |
 
 The format job compares against the pull request base. For a push, it compares against the
 previous tip of the branch. For a new branch or a manual run, it compares against the merge base
@@ -227,12 +227,13 @@ with the default branch. clang-format is pinned (`CLANG_FORMAT_VERSION` in `chec
 ```sh
 pip install clang-format==22.1.4
 git diff --name-only --diff-filter=ACMR sprint/<sprint> -- '*.c' '*.h' '*.cpp' '*.hpp' '*.inl' \
-    ':!third_party/**' | xargs clang-format --dry-run --Werror
+    '*.m' '*.mm' ':!third_party/**' | xargs clang-format --dry-run --Werror
 ```
 
-Objective-C files (`.m`, `.mm`) are not checked, because `.clang-format` has no ObjC section yet.
-Every other C and C++ file outside `third_party/` is formatted, the public headers in
-`include/dengine/` and `examples/minimal_game.c` included (DENG-355).
+Every C, C++ and Objective-C file outside `third_party/` is formatted, the public headers in
+`include/dengine/` and `examples/minimal_game.c` included (DENG-355). Objective-C files (`.m`,
+`.mm`) use the `Language: ObjC` section of `.clang-format`, which repeats the house rules of the
+`Cpp` section; change both sections together (DENG-408).
 
 ### `determinism.yml`: cross-platform determinism
 

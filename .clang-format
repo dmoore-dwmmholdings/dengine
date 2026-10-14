@@ -18,3 +18,32 @@ AllowShortLoopsOnASingleLine: false
 AlignConsecutiveMacros: Consecutive
 IndentCaseLabels: false
 SpaceAfterCStyleCast: false
+---
+# Objective-C: the Metal backend and its test helpers (src/gpu/metal/*.m, tests/unit/gpu/**/*.m,
+# src/platform/sdl/surface_metal.m). clang-format has no shared section that keeps C files on the
+# Cpp rules, so the house rules above are repeated here: change both sections together.
+Language: ObjC
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+DerivePointerAlignment: false
+SortIncludes: false
+IncludeBlocks: Preserve
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlignConsecutiveMacros: Consecutive
+IndentCaseLabels: false
+SpaceAfterCStyleCast: false
+# The LLVM Objective-C defaults, which the Metal code was written to: block bodies indented by 2,
+# `@property(...)` with no space, a space before a protocol list (`NSObject <Proto>`), a nested
+# block parameter on its own line.
+ObjCBlockIndentWidth: 2
+ObjCSpaceAfterProperty: false
+ObjCSpaceBeforeProtocolList: true
+ObjCBreakBeforeNestedBlockParam: true
+ObjCBinPackProtocolList: Auto
