@@ -26,11 +26,12 @@
 #endif
 
 /* The public stage values are the cooked format's (de_shader.h, shader_format.h). */
-DE_STATIC_ASSERT((int)DE_SHADER_STAGE_VERTEX == DE__SHADER_STAGE_VERTEX &&
-                     (int)DE_SHADER_STAGE_PIXEL == DE__SHADER_STAGE_PIXEL &&
-                     (int)DE_SHADER_STAGE_COMPUTE == DE__SHADER_STAGE_COMPUTE &&
-                     (int)DE_SHADER_STAGE_MESH == DE__SHADER_STAGE_MESH &&
-                     (int)DE_SHADER_STAGE_AMPLIFICATION == DE__SHADER_STAGE_AMPLIFICATION,
+/* Both sides cast: MSVC warns (C5287) on a comparison of two enum types. */
+DE_STATIC_ASSERT((int)DE_SHADER_STAGE_VERTEX == (int)DE__SHADER_STAGE_VERTEX &&
+                     (int)DE_SHADER_STAGE_PIXEL == (int)DE__SHADER_STAGE_PIXEL &&
+                     (int)DE_SHADER_STAGE_COMPUTE == (int)DE__SHADER_STAGE_COMPUTE &&
+                     (int)DE_SHADER_STAGE_MESH == (int)DE__SHADER_STAGE_MESH &&
+                     (int)DE_SHADER_STAGE_AMPLIFICATION == (int)DE__SHADER_STAGE_AMPLIFICATION,
                  "de_shader_stage matches de__shader_stage");
 
 /* ---- Format view ----------------------------------------------------------------------------- */
