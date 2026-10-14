@@ -46,6 +46,18 @@
 #endif
 #if defined(_WIN32) && DE_HAS_GPU_D3D12
 #include "gpu/d3d12/d3d12_internal.h"
+/* The Agility SDK exports of this executable (DENG-420). Without them the OS D3D12 runtime loads
+ * (C:\Windows\System32\D3D12Core.dll), and on it even the vendored WARP reports shader model
+ * 6.5: below the Base tier, no pipelines, so the scatter kernels never ran on CI. The runtime
+ * DLLs are copied to D3D12/ next to the executable (de_d3d12_agility_deploy). */
+#include "gpu/d3d12/d3d12_agility_exports.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 #if defined(DE_GS_TEST_COOK) && DE_GS_TEST_COOK
 #include <dengine/de_asset.h>
@@ -779,6 +791,52 @@ static bool cook_kernels(de_gpu_backend backend, gs_kernels *out, char *why, siz
 }
 #endif
 
+/* ---------- D3D12: which runtime and which WARP (DENG-420) ---------- */
+
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+/* Prints the path and file version of a loaded DLL (or that it is not loaded). */
+static void print_module(const char *dll) {
+    HMODULE m = GetModuleHandleA(dll);
+    if (m == NULL) {
+        printf("  %s: not loaded\n", dll);
+        return;
+    }
+    char path[MAX_PATH];
+    const DWORD n = GetModuleFileNameA(m, path, (DWORD)sizeof path);
+    if (n == 0 || n >= sizeof path) {
+        printf("  %s: loaded (path unknown)\n", dll);
+        return;
+    }
+    char version[64] = "?";
+    DWORD handle = 0;
+    const DWORD size = GetFileVersionInfoSizeA(path, &handle);
+    void *info = size != 0 ? malloc(size) : NULL;
+    if (info != NULL && GetFileVersionInfoA(path, 0, size, info)) {
+        VS_FIXEDFILEINFO *ffi = NULL;
+        UINT len = 0;
+        if (VerQueryValueA(info, "\\", (void **)&ffi, &len) && ffi != NULL && len != 0)
+            snprintf(version, sizeof version, "%u.%u.%u.%u", (unsigned)HIWORD(ffi->dwFileVersionMS),
+                     (unsigned)LOWORD(ffi->dwFileVersionMS), (unsigned)HIWORD(ffi->dwFileVersionLS),
+                     (unsigned)LOWORD(ffi->dwFileVersionLS));
+    }
+    free(info);
+    printf("  %s: %s (version %s)\n", dll, path, version);
+}
+
+/* The adapter, the D3D12 runtime and WARP this process loaded, the Base tier and pipelines. */
+static void print_d3d12(de_gpu_device *d) {
+    const de_gpu_caps *c = de_gpu_get_caps(d);
+    const char *why = NULL;
+    const bool pipes = de__d3d12_pipelines_supported(d, &why);
+    printf("D3D12 adapter \"%s\" (vendor 0x%04x, device 0x%04x): base tier %s%s%s; pipelines %s\n",
+           c->device_name, (unsigned)c->vendor_id, (unsigned)c->device_id,
+           c->base_tier_ok ? "ok" : "NO", c->base_tier_ok ? "" : ": ", c->base_tier_reason,
+           pipes ? "yes" : (why != NULL ? why : "no"));
+    print_module("D3D12Core.dll");
+    print_module("d3d10warp.dll");
+}
+#endif
+
 /* ---------- Opening ---------- */
 
 static bool backend_built(de_gpu_backend b) {
@@ -844,6 +902,10 @@ static void gsx_open(gsx *f, const open_opts *o) {
     const de_gpu_caps *caps = de_gpu_get_caps(f->dev);
     if (f->real_gpu) {
         printf("device: \"%s\" (%s)\n", caps->device_name, de_gpu_backend_name(o->backend));
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+        if (o->backend == DE_GPU_D3D12)
+            print_d3d12(f->dev);
+#endif
         if (o->backend == DE_GPU_METAL && !caps->base_tier_ok) {
             /* CI's macOS runner: a paravirtual GPU below the Base tier hangs on compute (DENG-328).
              * WARP and lavapipe run whatever their tier. */
@@ -867,13 +929,15 @@ static void gsx_open(gsx *f, const open_opts *o) {
                             .budget_bytes = o->budget_bytes};
     memcpy(d.initial_capacity, o->initial_capacity, sizeof d.initial_capacity);
     static const u32 dummy_code[4] = {0x07230203u, 0, 0, 0};
+    why[0] = '\0';
     if (o->scatter && o->backend == DE_GPU_NULL) {
         d.scatter_instances = (de_gpu_shader_blob){dummy_code, sizeof dummy_code, "cs"};
         d.scatter_lights = (de_gpu_shader_blob){dummy_code, sizeof dummy_code, "cs"};
         d.scatter_threadgroup[0] = 64;
         d.scatter_threadgroup[1] = d.scatter_threadgroup[2] = 1;
     } else if (o->scatter && !caps->base_tier_ok) {
-        /* No pipelines below the Base tier (CI's WARP has shader model 6.5): copy-only. */
+        /* No pipelines below the Base tier (a hardware device or WARP without shader model 6.6):
+         * copy-only. The vendored WARP with the Agility runtime is Base tier (DENG-420). */
         printf("scatter kernels unavailable (below the Base tier: %s): copy-only\n",
                caps->base_tier_reason);
     } else if (o->scatter) {
@@ -890,6 +954,20 @@ static void gsx_open(gsx *f, const open_opts *o) {
     ASSERT_EQ(de__gpu_scene_create(&d, &f->gs), DE_OK);
     if (f->real_gpu)
         printf("scatter: %s\n", de__gpu_scene_has_scatter(f->gs) ? "compute" : "copy-only");
+#if defined(_WIN32) && DE_HAS_GPU_D3D12 && defined(DE_D3D12_TEST_WARP_DLL) &&                      \
+    defined(DE_GS_TEST_COOK) && DE_GS_TEST_COOK
+    /* With the vendored WARP next to this executable and the shader importer (CI's Windows
+     * jobs), the scatter kernels must run: a fallback to the OS runtime or the OS WARP fails here
+     * instead of quietly going copy-only (DENG-420). Cooking DXIL needs DXC (dxcompiler), which
+     * the Windows runners have. */
+    if (o->backend == DE_GPU_D3D12 && o->scatter && caps->vendor_id == 0x1414u &&
+        caps->device_id == 0x8cu) {
+        EXPECT_TRUE(caps->base_tier_ok);
+        if (!de__gpu_scene_has_scatter(f->gs))
+            printf("WARP without the scatter kernels: %s\n", why[0] ? why : "?");
+        EXPECT_TRUE(de__gpu_scene_has_scatter(f->gs));
+    }
+#endif
     frw_init(&f->w, o->instances, o->lights, o->seed);
 }
 
