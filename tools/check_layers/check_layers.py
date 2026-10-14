@@ -11,12 +11,15 @@ module with the table in layers.toml, and fails when:
   - engine code includes a file under tools/ (other than the cooker library through an allow);
   - any file includes the umbrella header dengine.h (it is for games only);
   - a scanned file, a public header or an include target does not map to a module;
-  - the module graph has a cycle (Tarjan SCC; members of a [[group]] count as one node).
+  - the module graph has a cycle (Tarjan SCC; members of a [[group]] count as one node);
+  - a file under examples/ includes anything of the engine but public headers (DENG-327): an
+    example is written against include/dengine/ only, like a game. Files listed in an
+    [[example_internal]] entry (with the reason) are exempt; an entry whose file is gone fails.
 
 Every finding names the file and line. Exit status: 0 clean, 1 violations, 2 bad table or usage.
 
 Scanned: src/**/*.{c,h,m,mm,cpp,cc,inl}, tools/cook/lib/** (same extensions) and
-include/dengine/*.h. Standard library only; Python 3.10+ (tomllib from 3.11, else a minimal
+include/dengine/*.h; examples/** (same extensions) for the public-headers rule only. Standard library only; Python 3.10+ (tomllib from 3.11, else a minimal
 parser for the subset of TOML that layers.toml uses).
 """
 
@@ -38,6 +41,7 @@ SOURCE_EXTS = (".c", ".h", ".m", ".mm", ".cpp", ".cc", ".inl")
 PUBLIC_DIR = "include/dengine"
 UMBRELLA = "dengine.h"
 COOK_LIB_DIR = "tools/cook/lib"
+EXAMPLES_DIR = "examples"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]')
 PUBLIC_HEADER_RE = re.compile(r"^(de_[A-Za-z0-9_]+\.h|dengine\.h)$")
@@ -385,6 +389,20 @@ class Table:
                                  "and higher bands never are")
             self.allows.append(a)
 
+        # [[example_internal]]: files under examples/ that may include engine internals.
+        self.example_internal: dict[str, str] = {}
+        for i, e in enumerate(data.get("example_internal", [])):
+            f, why = e.get("file"), e.get("why")
+            where = f"[[example_internal]] #{i + 1}"
+            if not isinstance(f, str) or not f.startswith(EXAMPLES_DIR + "/"):
+                raise TableError(f"{where}: `file` must be a path under {EXAMPLES_DIR}/")
+            if not isinstance(why, str) or not why.strip():
+                raise TableError(f"[[example_internal]] {f}: `why` (the reason) is required")
+            unknown = set(e) - {"file", "why"}
+            if unknown:
+                raise TableError(f"[[example_internal]] {f}: unknown keys {sorted(unknown)}")
+            self.example_internal[f] = why
+
         self.forbids: list[dict] = []
         for i, f in enumerate(data.get("forbid", [])):
             frm, to, why = f.get("from"), f.get("to"), f.get("why")
@@ -478,6 +496,19 @@ def collect_files(root: str) -> list[str]:
     return sorted(set(files))
 
 
+def collect_example_files(root: str) -> list[str]:
+    files = []
+    base = os.path.join(root, EXAMPLES_DIR)
+    if os.path.isdir(base):
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            for fn in filenames:
+                if fn.endswith(SOURCE_EXTS):
+                    full = os.path.join(dirpath, fn)
+                    files.append(os.path.relpath(full, root).replace(os.sep, "/"))
+    return sorted(files)
+
+
 def scan_includes(path: str):
     """Yield (line, delimiter, target) for each #include outside /* */ and // comments."""
     try:
@@ -567,6 +598,50 @@ class Checker:
             return self._classify_path(posixpath.normpath(target))
         return None
 
+    def example_include_error(self, includer: str, delim: str, target: str):
+        """Error message for an include in an example file, or None if it is allowed."""
+        inc = f"<{target}>" if delim == "<" else f'"{target}"'
+        why = "examples include only public headers (<dengine/de_*.h>)"
+        if target.startswith("/") or re.match(r"^[A-Za-z]:", target):
+            return None
+        if target.startswith("dengine/"):
+            name = target[len("dengine/"):]
+            if name == UMBRELLA or (self.table.module_of_header(name)
+                                    and self._exists(f"{PUBLIC_DIR}/{name}")):
+                return None
+            return f"{inc} is not a public header in {PUBLIC_DIR}/"
+        if delim == '"':
+            cand = posixpath.normpath(posixpath.join(posixpath.dirname(includer), target))
+            if not cand.startswith("../") and self._exists(cand):
+                if cand.startswith(EXAMPLES_DIR + "/"):
+                    return None  # the example's own files (scanned too)
+                return f"{inc} resolves to {cand}; {why}"
+        segs = target.split("/")
+        for root in self.table.include_roots:
+            rel = posixpath.normpath(posixpath.join(root, target))
+            if self._exists(rel) or (len(segs) > 1
+                                     and segs[0] in self.table.root_dirs.get(root, ())):
+                return f"{inc} is engine-internal ({rel}); {why}"
+        return None  # the C library, the OS, third-party headers
+
+    def check_examples(self, violations: list) -> tuple[list[str], int]:
+        files = collect_example_files(self.root)
+        n_includes = 0
+        for rel in files:
+            if rel in self.table.example_internal:
+                continue
+            for line, delim, target in scan_includes(os.path.join(self.root, rel)):
+                n_includes += 1
+                msg = self.example_include_error(rel, delim, target)
+                if msg:
+                    violations.append((rel, line, msg))
+        if os.path.isdir(os.path.join(self.root, EXAMPLES_DIR)):
+            for f in sorted(self.table.example_internal):
+                if not self._exists(f):
+                    violations.append((f, 0, "[[example_internal]] names a file that does not "
+                                       "exist; remove the entry from tools/check_layers/layers.toml"))
+        return files, n_includes
+
     def file_module(self, rel: str):
         if rel.startswith(PUBLIC_DIR + "/"):
             return self.table.module_of_header(rel.rsplit("/", 1)[1])
@@ -619,6 +694,10 @@ class Checker:
                 if msg:
                     illegal.add((mod, dep))
                     violations.append((rel, line, msg))
+
+        ex_files, ex_includes = self.check_examples(violations)
+        files = files + ex_files
+        n_includes += ex_includes
 
         cycles = find_cycles(t, edges)
         return files, n_includes, edges, illegal, violations, cycles

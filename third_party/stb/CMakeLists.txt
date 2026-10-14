@@ -5,7 +5,9 @@
 # de_tp_stb: static library with one implementation TU per stb file.
 #   stb_image.h    `#include <stb_image.h>`         (impl: de_tp_stb_image.c)
 #   stb_vorbis.c   `#include <de_stb_vorbis.h>`     (header-only view; impl: de_tp_stb_vorbis.c)
+#   stb_image_write.h `#include <stb_image_write.h>` (impl: de_tp_stb_image_write.c; DENG-327)
 add_library(de_tp_stb STATIC de_tp_stb_image.c de_tp_stb_vorbis.c)
+target_sources(de_tp_stb PRIVATE de_tp_stb_image_write.c)
 target_include_directories(de_tp_stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 # Vendored code: no engine warning flags, and its own warnings are off (CONVENTIONS §6).
 target_compile_options(de_tp_stb PRIVATE $<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w,-w>)

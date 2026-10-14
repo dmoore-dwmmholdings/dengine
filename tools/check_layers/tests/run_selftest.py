@@ -59,6 +59,15 @@ CASES = {
         "src/core/x.c:2: error: \"newmod/n.h\" resolves to src/newmod/n.h, which is not in any "
         "module",
     ], []),
+    "examples": (1, [
+        "examples/demo/main.c:7: error: <dengine/de_bogus.h> is not a public header",
+        "examples/demo/main.c:8: error: \"gpu/gpu_internal.h\" is engine-internal "
+        "(src/gpu/gpu_internal.h)",
+        "examples/demo/main.c:9: error: \"../../src/gpu/gpu_internal.h\" resolves to "
+        "src/gpu/gpu_internal.h",
+        "examples/demo/gone.c: error: [[example_internal]] names a file that does not exist",
+        "4 violation(s)",
+    ], ["glue.c", "local.h", "main.c:1:", "main.c:3:", "main.c:5:"]),
     "bad_table": (2, ["[[allow]] a -> b: `why` (the reason) is required"], []),
     "bad_forbid": (2, ["[[allow]] anim -> physics contradicts [[forbid]] anim -> physics"], []),
 }

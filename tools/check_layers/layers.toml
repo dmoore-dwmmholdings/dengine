@@ -314,3 +314,12 @@ why = "physics, audio and anim never include each other (DENG-2); put the code i
 from = "audio"
 to = "anim"
 why = "physics, audio and anim never include each other (DENG-2); put the code in src/host/bridges/"
+
+# ---------------------------------------------------------------- examples (DENG-327)
+# Files under examples/ include only public headers (<dengine/de_*.h>), like a game. These
+# entries exempt one file each, with the reason. Remove an entry when its file no longer needs
+# engine internals (the check fails on an entry whose file is gone).
+
+[[example_internal]]
+file = "examples/hello_triangle/shader_glue.c"
+why = "Registers the `shader` asset type and reads cooked shader code (de__shader_type_register, de__shader_blob, de_shader_import), which have no public API yet (DENG-409), and holds the D3D12 Agility exports. main.c stays public-only through shader_glue.h."
