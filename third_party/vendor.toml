@@ -404,3 +404,59 @@ files = ["bcdec.h"]
 # UBSan fix in bcdec_bc7 (an uninitialized endpoint shifted before it is overwritten); decoded
 # texels do not change. See the patch header. DENG-99.
 patches = ["patches/0001-bc7-zero-endpoints.patch"]
+
+[[lib]]
+name = "dr_libs"
+# WAV and FLAC decoders of the sound importer (SPEC §11.6, §22: dr_wav, dr_flac), tools only:
+# compiled into the cooker library (tools/cook/importers/sound/, DENG-314), never into Release or
+# Shipping. Upstream has no tags for the repository: pinned to a master commit (2026-08-31),
+# dr_wav 0.14.6 and dr_flac 0.13.4. One entry for the repository; later users take more headers
+# here (dr_mp3.h is not used).
+version = "2026-08-31-dfe8377"
+url = "https://github.com/mackron/dr_libs/archive/dfe8377631000664666519fdb83da193fd8037f4.tar.gz"
+sha256 = "4654acb029f4f2a43ac2edb60c4cb09f40615b4b5bee9709954f910cb979e5fd"
+# LICENSE offers the Unlicense (public domain, alternative 1) or MIT No Attribution (MIT-0,
+# alternative 2), the same choice as stb.
+license = "MIT OR Unlicense"
+files = ["dr_wav.h", "dr_flac.h"]
+
+[[lib]]
+name = "opus"
+# Opus codec (SPEC §22 libopus, DENG-2 Q11): the sound importer encodes long sounds to Opus
+# streams (tools/cook/importers/sound/opus_encode.c, DENG-314) and the runtime decodes them
+# (DENG-313). Release tarball. Built by the engine's own CMakeLists.txt (not upstream's) as a
+# fixed-point codec without the float API, intrinsics, run-time CPU detection or the DNN features
+# (deep PLC, DRED, OSCE), so encoding is integer-only and gives the same bytes on every host.
+version = "1.6.1"
+url = "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz"
+sha256 = "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+license = "BSD-3-Clause"
+license_file = "COPYING"
+# The C sources of the CELT, SILK (fixed point) and Opus layers and the public headers. Not taken:
+# the float SILK encoder (silk/float), the per-architecture trees (x86, arm, mips), dnn/, tests,
+# docs and the build systems.
+files = [
+    "include/*.h",
+    "celt/*.c",
+    "celt/*.h",
+    "silk/*.c",
+    "silk/*.h",
+    "silk/fixed/*.c",
+    "silk/fixed/*.h",
+    "src/*.c",
+    "src/*.h",
+]
+# Demos and comparison tools; mini_kfft.c (QEXT only); the float-only tonality analysis
+# (analysis.c, mlp.c, mlp_data.c), which DISABLE_FLOAT_API leaves out. Their headers stay:
+# opus_encoder.c includes analysis.h in every configuration.
+exclude = [
+    "celt/opus_custom_demo.c",
+    "celt/mini_kfft.c",
+    "src/opus_demo.c",
+    "src/opus_compare.c",
+    "src/qext_compare.c",
+    "src/repacketizer_demo.c",
+    "src/analysis.c",
+    "src/mlp.c",
+    "src/mlp_data.c",
+]
