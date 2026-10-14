@@ -117,3 +117,18 @@ de_blob de_asset_blob(de_asset_system *s, de_asset_id id) {
 de_shader de_asset_shader(de_asset_system *s, de_asset_id id) {
     return (de_shader){de__asset_handle_of(s, id, "shader")};
 }
+
+/* DENG-105: the `prefab` dependency of a READY model (its `#prefab` sub-asset). */
+de_prefab de_model_prefab(de_asset_system *s, de_model m) {
+    const de__slot *sl = s != NULL ? de__slot_get(s, m.id) : NULL;
+    if (sl == NULL || sl->state != DE_LOAD_READY || sl->type_hash != de_hash64_str("model"))
+        return (de_prefab){0};
+    const u64 prefab = de_hash64_str("prefab");
+    for (u32 i = 0; i < sl->dep_count; ++i) {
+        u32 h = de__slot_find(s, sl->deps[i]);
+        const de__slot *d = h != 0 ? de__slot_get(s, h) : NULL;
+        if (d != NULL && d->type_hash == prefab)
+            return (de_prefab){h};
+    }
+    return (de_prefab){0};
+}

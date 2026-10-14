@@ -11,3 +11,25 @@ de_add_module(
         graph/rg_debug.c
     DEPS gpu asset ecs task
 )
+
+# DENG-105: the runtime `texture`, `mesh`, `material` and `model` asset types and their GPU upload
+# path (loaders/: the staging ring and the per-frame copy list, the four loaders,
+# de_render_register_asset_types; render_assets.h is the internal API S12 calls). In Debug and Dev
+# builds with the cooker (DE_HAS_COOKER, the same condition as de_asset) the `texture` and `model`
+# types also get their importers, so de_render links de_cooker there and includes the importer
+# headers through the tools/ root (tools/check_layers/layers.toml: render -> cook/importers).
+if(TARGET de_render) # not built in headless builds (DE_HEADLESS)
+    target_sources(de_render PRIVATE
+        loaders/render_assets.h
+        loaders/upload_ring.h
+        loaders/upload_ring.c
+        loaders/loaders_internal.h
+        loaders/texture_loader.c
+        loaders/mesh_loader.c
+        loaders/material_loader.c
+        loaders/loaders.c)
+    set(_de_render_with_cooker "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
+    target_link_libraries(de_render PRIVATE "$<${_de_render_with_cooker}:de_cooker>")
+    set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<${_de_render_with_cooker}:de_cooker>")
+    target_include_directories(de_render PRIVATE "${DE_ROOT_DIR}/tools")
+endif()

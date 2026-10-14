@@ -26,6 +26,10 @@
  *              an internal request (DE_LOAD_NO_EVENTS, the job's priority) and held with
  *              asset -> asset refs. The job is published READY in the same update as its last
  *              dependency, or FAILED (cause chain) when one fails or closes a cycle.
+ *   WAIT_UPLOAD (DENG-105) loaded and its dependencies READY, but its type's `ready` hook
+ *              returned DE_ERR_BUSY (the GPU copies of a texture or mesh are in flight). It stays
+ *              on the waiting list and the hook is asked again by every update; DE_OK publishes
+ *              it, any other result fails it. Types without the hook never get here.
  *
  * Every slot state change happens on the main thread, in the update hook, through
  * de__slot_complete_now (load_internal.h). A cancelled job reports nothing more: it is detached
@@ -169,7 +173,9 @@ typedef enum de__pjob_stage {
     DE__PJOB_LOAD,
     DE__PJOB_MAIN_LOAD,
     DE__PJOB_FINISHED,
-    DE__PJOB_WAIT_DEPS
+    DE__PJOB_WAIT_DEPS,
+    DE__PJOB_WAIT_UPLOAD /**< DENG-105: loaded, dependencies READY; its type's `ready` hook said
+                            DE_ERR_BUSY (GPU copies in flight). On the waiting list. */
 } de__pjob_stage;
 
 /** de__pipeline_debug_stage: no live job for the slot. */
@@ -340,6 +346,9 @@ const de__pipeline_source *de__pipeline_default_source(void);
 void de__pipeline_get_stats(const de_asset_system *s, de__pipeline_stats *out);
 /** The stage of the live job of `slot`, or DE__PJOB_NONE. For tests. Main thread. */
 u32 de__pipeline_debug_stage(de_asset_system *s, u32 slot);
+/** DENG-105: jobs in WAIT_UPLOAD (de_asset_stats.uploads_in_flight). O(waiting jobs). Main
+ * thread. */
+u32 de__pipeline_uploads_waiting(const de_asset_system *s);
 
 /* ---- DENG-214: hot reload jobs (pipeline.c) ----------------------------------------------- */
 
@@ -409,9 +418,10 @@ void de__load_stage_call(de__pjob *job);
 void de__load_stage_run(void *job);
 
 /**
- * GPU upload stage (S11): called after a successful `load`, on the loader's thread, before the
- * job goes back to the main thread. A no-op in S07; S11's staging ring and copy queue go here.
- * Returning an error fails the asset.
+ * GPU upload stage: called after a successful `load`, on the loader's thread, before the job goes
+ * back to the main thread. A no-op: DENG-105's GPU types stage their bytes in their loader and
+ * wait for the copies on the main thread through `ready` (WAIT_UPLOAD). Returning an error fails
+ * the asset.
  */
 de_result de__pipeline_upload_stage(de_asset_system *s, de_asset_load_ctx *ctx);
 

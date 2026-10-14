@@ -544,6 +544,38 @@ TEST(vk, barrier_translation_table) {
         EXPECT_EQ(acq.srcStageMask, S2(ALL_TRANSFER_BIT));
     }
 
+    /* DENG-105: an image handed from the copy queue to the graphics queue (the asset uploader's
+     * release + acquire). Different families: both halves carry the same transition. One family:
+     * the copy queue's barrier transitions, the graphics half keeps the layout it left. */
+    {
+        de_gpu_barrier b;
+        memset(&b, 0, sizeof b);
+        b.texture.id = 1;
+        b.before = DE_ACCESS_COPY_DST;
+        b.after = DE_ACCESS_SHADER_READ;
+        b.src_queue = DE_QUEUE_COPY;
+        b.dst_queue = DE_QUEUE_GRAPHICS;
+        VkImageMemoryBarrier2 rel, acq;
+        de__vk_translate_barrier(&cq, &b, &tex, VK_NULL_HANDLE, &rel, NULL);
+        de__vk_translate_barrier(&g, &b, &tex, VK_NULL_HANDLE, &acq, NULL);
+        EXPECT_EQ(rel.oldLayout, L(TRANSFER_DST_OPTIMAL));
+        EXPECT_EQ(rel.newLayout, L(SHADER_READ_ONLY_OPTIMAL));
+        EXPECT_EQ(acq.oldLayout, rel.oldLayout);
+        EXPECT_EQ(acq.newLayout, rel.newLayout);
+        de__vk_barrier_ctx same_g = g, same_c = cq;
+        same_g.family[DE_QUEUE_COPY] = 0;
+        same_c.family[DE_QUEUE_COPY] = 0;
+        same_c.cmd_family = 0;
+        de__vk_translate_barrier(&same_c, &b, &tex, VK_NULL_HANDLE, &rel, NULL);
+        de__vk_translate_barrier(&same_g, &b, &tex, VK_NULL_HANDLE, &acq, NULL);
+        EXPECT_EQ(rel.srcQueueFamilyIndex, (u32)VK_QUEUE_FAMILY_IGNORED);
+        EXPECT_EQ(rel.oldLayout, L(TRANSFER_DST_OPTIMAL));
+        EXPECT_EQ(rel.newLayout, L(SHADER_READ_ONLY_OPTIMAL));
+        EXPECT_EQ(acq.srcQueueFamilyIndex, (u32)VK_QUEUE_FAMILY_IGNORED);
+        EXPECT_EQ(acq.oldLayout, L(SHADER_READ_ONLY_OPTIMAL)); /* no second transition */
+        EXPECT_EQ(acq.newLayout, L(SHADER_READ_ONLY_OPTIMAL));
+    }
+
     /* Buffer <-> texture copy regions: row pitch in texels (BC: 4 per block). */
     {
         de__gpu_texture t;

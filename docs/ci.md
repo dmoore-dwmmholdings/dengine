@@ -99,7 +99,9 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
 
 - Each job builds only `de_golden`, `test_flip` and `hello_triangle` (and `hello_triangle_warp`
   on Windows), then runs the CTests `flip.*`, `golden.*` and its backend's `example_hello_*`
-  (DENG-327). So the Vulkan backend runs on CI here, on lavapipe.
+  (DENG-327). So the Vulkan backend runs on CI here, on lavapipe. The Linux entry also builds
+  `test_render_loaders` and runs `render_loaders.*` (DENG-105): asset uploads on the copy queue,
+  the hand-over to the graphics queue and byte-exact readback, with the validation layers.
 - The Linux and Windows entries then run `de-golden ... --scene rhi_clear` and require exit 0.
   Without that step a backend that skipped every scene would leave the job green.
 - The jobs restore the compiler cache of the build job with the same preset and do not save it.
