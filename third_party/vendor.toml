@@ -404,3 +404,30 @@ files = ["bcdec.h"]
 # UBSan fix in bcdec_bc7 (an uninitialized endpoint shifted before it is overwritten); decoded
 # texels do not change. See the patch header. DENG-99.
 patches = ["patches/0001-bc7-zero-endpoints.patch"]
+
+[[lib]]
+name = "d3d12_warp"
+# Microsoft Direct3D WARP (the NuGet package Microsoft.Direct3D.WARP), a newer software rasterizer
+# than the one in Windows. The WARP of the windows-2022 CI runners has shader model 6.2, no
+# enhanced barriers and no mesh shaders; this one has the Base tier (SM 6.6, binding tier 3) and
+# all three, so the D3D12 pipeline and enhanced-barrier tests run on CI (DENG-405, DENG-324,
+# DENG-286). TEST-ONLY: the licence (LICENSE.TXT) allows use "for testing purposes only" and
+# forbids sharing or distributing the DLL. So it is a prebuilt entry (DENG-390): only the licence
+# text is committed, and d3d10warp.dll (windows-x64) is extracted at configure time only when the
+# tests and the D3D12 backend are built (third_party/d3d12_warp/CMakeLists.txt), and copied next
+# to the D3D12 test executable only. It is never committed, shipped, packaged or uploaded as a CI
+# artifact. See third_party/README.md (policy rule 9).
+kind = "prebuilt"
+version = "1.0.21"
+url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg"
+sha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
+license = "LicenseRef-Microsoft-Direct3D-WARP"
+license_file = "LICENSE.TXT"
+strip = 0
+files = ["LICENSE.TXT"]
+
+[lib.hosts.windows-x64]
+url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg"
+sha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
+strip = 0
+files = ["build/native/bin/x64/d3d10warp.dll"]

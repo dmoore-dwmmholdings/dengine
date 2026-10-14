@@ -66,6 +66,14 @@ ALLOWED_LICENSES = {
     "Unicode-3.0",  # CLDR data (DENG-2 addendum)
 }
 
+# Licences of binaries that the tests may download and run, but that may not be shared or
+# redistributed. Allowed only on a `kind = "prebuilt"` entry, whose binaries are never committed;
+# the library's CMakeLists.txt deploys them next to test executables only, never into a shipped or
+# packaged target (third_party/README.md, policy rule 9).
+TEST_ONLY_LICENSES = {
+    "LicenseRef-Microsoft-Direct3D-WARP",  # d3d12_warp: "for testing purposes only" (DENG-405)
+}
+
 # Proprietary SDKs that are never vendored or downloaded (CONVENTIONS §6). Matched against the
 # entry name and URL, case-insensitively. The D3D12 Agility SDK is not one of them: SPEC §22 lists
 # it as a Microsoft redistributable, its headers are MIT, and its runtime DLLs are a prebuilt
@@ -323,7 +331,7 @@ class Lib:
         if not SHA_RE.match(self.sha256):
             raise ConfigError(f"{where}: `sha256` must be 64 hex digits")
         self.license: str = d["license"]
-        if self.license not in ALLOWED_LICENSES:
+        if self.license not in ALLOWED_LICENSES and self.license not in TEST_ONLY_LICENSES:
             raise ConfigError(
                 f"{where}: licence {self.license!r} is not in the SPEC §22 allowlist "
                 f"({', '.join(sorted(ALLOWED_LICENSES))})")
@@ -363,6 +371,10 @@ class Lib:
                     f"{where}: a prebuilt entry needs at least one [lib.hosts.<host>] table")
         elif hosts is not None:
             raise ConfigError(f'{where}: `hosts` needs kind = "prebuilt"')
+        if self.license in TEST_ONLY_LICENSES and self.kind != "prebuilt":
+            raise ConfigError(
+                f"{where}: licence {self.license!r} is test-only and forbids redistribution, so "
+                'it needs kind = "prebuilt" (binaries never committed)')
         self.hosts: dict = {h: HostArchive(self, h, t, where)
                             for h, t in sorted((hosts or {}).items())}
 

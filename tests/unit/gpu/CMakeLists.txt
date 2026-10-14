@@ -185,3 +185,14 @@ if(TARGET test_gpu_d3d12)
             "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
     endif()
 endif()
+
+# DENG-405: the vendored WARP (third_party/d3d12_warp, Microsoft.Direct3D.WARP, test-only). On
+# Windows x64 with DE_D3D12_TEST_WARP=ON, d3d10warp.dll is copied next to test_gpu_d3d12 so that
+# its WARP device is the vendored one: Base tier (shader model 6.6), enhanced barriers and mesh
+# shaders, so the DENG-324 pipeline tests and DENG-286's enhanced-barrier path run on CI.
+# d3d12.vendored_warp (test_d3d12_warp.c) checks that it is the WARP loaded and that it has those
+# features. Only this test executable gets the DLL.
+if(TARGET test_gpu_d3d12 AND DE_D3D12_WARP_DLL)
+    de_d3d12_warp_deploy(test_gpu_d3d12)
+    target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_warp.c)
+endif()

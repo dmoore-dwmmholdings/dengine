@@ -20,7 +20,8 @@ here. See "Prebuilt binaries" below.
    SDK and CRT. CMake finds them through a path that the user sets. `vendor.py` refuses entries
    with these names or URLs. The D3D12 Agility SDK is not such an SDK: SPEC §22 lists it as a
    Microsoft redistributable. Its headers are MIT and committed, and its runtime DLLs are a
-   prebuilt entry (rule 9) that is never committed (DENG-285).
+   prebuilt entry (rule 9) that is never committed (DENG-285). Microsoft Direct3D WARP is a
+   test-only binary, not an SDK and not a redistributable (rule 10, DENG-405).
 3. **One directory per library**: `third_party/<name>/`. `<name>` is lower_snake_case and is also
    the CMake target suffix: `de_tp_<name>`.
 4. **Every library is in `vendor.toml`.** Each entry pins the archive URL (a release tarball, or a
@@ -48,6 +49,20 @@ here. See "Prebuilt binaries" below.
    unchanged: one entry per library (all hosts in the same entry), one version, an allowed
    licence, no proprietary SDKs. An entry may list only the hosts that run the binaries (the
    Agility SDK: `windows-x64`).
+10. **Test-only binaries stay in the tests.** A binary whose licence allows use for testing but
+    forbids sharing or redistributing it may be pinned only as a `prebuilt` entry, with its
+    licence in `TEST_ONLY_LICENSES` in `vendor.py` (`vendor.py` refuses such a licence on any
+    other kind of entry). Only the licence text is committed. The binary is extracted only when
+    the tests are built, and only test executables get a copy: never `src/host/`, a game
+    (`cmake/DeAddGame.cmake`), a tool or a package. CI never uploads it as an artifact. Today
+    this is Microsoft Direct3D WARP (`d3d12_warp`, DENG-405).
+
+    *Decision (DENG-405):* the `Microsoft.Direct3D.WARP` licence (`d3d12_warp/LICENSE.TXT`) says
+    "for testing purposes only" and lets you "install and use any number of copies of the software
+    to develop and test your applications". Its §3(e) forbids to "share, publish, distribute, or
+    lease the software". So, unlike the Agility SDK, WARP is not a redistributable. The engine
+    uses it only to run the D3D12 tests on machines with no GPU (CI). Each build downloads it
+    from nuget.org into its own vendor cache, so the repository never distributes it.
 
 ## Layout of a library directory
 
@@ -145,6 +160,7 @@ Engine modules link these targets through `de_add_module(... LIBS de_tp_<name>)`
 | Vulkan-Headers | vulkan-sdk-1.4.363.0 | Apache-2.0 (dual Apache-2.0 OR MIT; we take Apache-2.0) | `de_tp_vulkan_headers` (INTERFACE) | `<vulkan/vulkan.h>` (only in `src/gpu/vulkan/`) | Khronos C headers for the Vulkan RHI backend (DENG-283), with `VK_NO_PROTOTYPES`: nothing links a loader. The backend opens `libvulkan` at run time (`src/gpu/vulkan/vk_loader.c`), so no Vulkan SDK is needed to build. `include/vulkan/*.h` and `include/vk_video/*.h`; not the C++ bindings or the registry. |
 | D3D12 Agility SDK | 1.619.6 | MIT (headers); Microsoft DirectX terms (DLLs, `LICENSE.txt`) | `de_tp_d3d12_agility` (INTERFACE) | `<d3d12.h>` (only in `src/gpu/d3d12/`) | The D3D12 runtime (SPEC §3.1, §22: Microsoft redistributable), DENG-285. A **prebuilt** entry (`d3d12_agility`, the NuGet package): the four headers the backend uses, `LICENSE` and `LICENSE.txt` are committed; `D3D12Core.dll` and `d3d12SDKLayers.dll` (host `windows-x64` only) are extracted at configure time when the D3D12 backend is built, and `de_d3d12_agility_deploy(<target>)` copies them into `<exe dir>/D3D12/`. Executables that create D3D12 devices include `src/gpu/d3d12/d3d12_agility_exports.h` once. |
 | bc7enc_rdo | 2026-07-31-b943862 | MIT OR Unlicense | `de_tp_bc7enc_rdo` | `<bc7enc.h>`, `<rgbcx.h>`, `<ert.h>`, `<bc7decomp.h>` (C++, only in `tools/cook/importers/texture/texture_bc_enc.cpp`) | BC1/BC3/BC4/BC5/BC7 encoders of the texture importer (DENG-99): bc7enc (BC7), rgbcx (BC1 to BC5), ert (the `rdo_quality` pass) and bc7decomp (the BC7 unpacker ert needs). Tools only: linked into the cooker library, never into Release or Shipping. 11 files, about 480 KB: no command-line tool, `rdo_bc_encoder`, `utils.cpp`, lodepng, miniz, ISPC kernel or `ispc.exe`, and rgbcx's small ordering table only (`RGBCX_USE_SMALLER_TABLES=1`, PUBLIC). Upstream has no tags: pinned to a commit. Built without FMA contraction. Two local patches: a UBSan fix in `ert::hash_hsieh` (misaligned loads, a negative shift; hash values unchanged), and `<stdint.h>` includes in `ert.h` and `utils.h` (they did not compile on Linux). BC6H is not here: the importer uses the Basis Universal transcoder's BC6H encoder (`de_tp_basisu`). |
+| Direct3D WARP | 1.0.21 | Microsoft Direct3D WARP terms (`LICENSE.TXT`; test-only, no redistribution) | none (`de_d3d12_warp_deploy(<target>)`) | – | **Test-only** software rasterizer for the D3D12 tests (DENG-405). A **prebuilt** entry (`d3d12_warp`, the NuGet package `Microsoft.Direct3D.WARP`). Only the licence text is committed. `d3d10warp.dll` (host `windows-x64` only) is extracted at configure time when the tests and the D3D12 backend are built and `DE_D3D12_TEST_WARP` is ON (the default). `de_d3d12_warp_deploy()` copies it next to `test_gpu_d3d12`, so the D3D12 runtime loads it instead of the WARP of Windows. The windows-2022 runners' own WARP has shader model 6.2. This one has the Base tier (SM 6.6), enhanced barriers and mesh shaders, so the D3D12 pipeline tests run on CI. Policy rule 10. |
 | bcdec | 2026-09-02-80859ed | MIT OR Unlicense | `de_tp_bcdec` | `<bcdec.h>` (only in `tests/unit/import/`) | **Test-only** reference BC1 to BC7 decoder (DENG-99): the BC tests decode the cooked blocks with it. Only test executables link it; `de_cooker`, `de-cook` and the runtime never do. `bcdec.h` only, one implementation TU (`de_tp_bcdec.c`). Upstream has no tags: pinned to a commit. One local patch (UBSan: an uninitialized BC7 endpoint is shifted; decoded texels unchanged). Not in the SPEC §22 table; see below. |
 
 ## SPEC §22 additions
@@ -156,6 +172,7 @@ task that adds them records them here):
 |---|---|---|---|
 | MikkTSpace | Zlib | tangent space generation for imported models (tools only) | DENG-101 |
 | bcdec | MIT OR Unlicense | reference BC decoder for the texture importer's tests (test-only) | DENG-99 |
+| Microsoft Direct3D WARP | Microsoft Direct3D WARP terms (test-only, no redistribution) | software D3D12 adapter for the D3D12 tests on CI (test-only, never shipped; SPEC §19 GPU tests on WARP) | DENG-405 |
 
 ## Adding or updating a library
 
