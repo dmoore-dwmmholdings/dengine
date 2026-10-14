@@ -4,14 +4,12 @@
  * the output graph composites every swapchain view, and a render-to-texture view composites its
  * output into its target. Declared in views_internal.h.
  *
- * Shaders: shaders/common/composite.slang (vs_main, ps_main). The renderer has no shader assets of
- * its own yet, so in builds with the cooker (DE_HAS_COOKER: Debug and Dev with the tools) it cooks
- * the file in-process at renderer create through the cooker's built-in shader importer, for the
- * device's target only, and keeps the two entry points' code. The source directory is mounted as
- * `derendershd:/` only for the cook. The null backend gets a placeholder blob (it compiles
- * nothing). Release and Shipping have no cooker: there the composite is not ready, composite
- * passes only clear their destination, and a warning says so (see the Decision page "Renderer
- * built-in shaders are cooked in-process in Dev builds").
+ * Shaders: the engine shader "composite" (shaders/common/composite.slang: vs_main, ps_main),
+ * loaded at renderer create through de__engine_shader_load (DENG-421, shaders/engine_shaders.h):
+ * cooked in-process through the cache in Dev builds, the embedded build-time cook otherwise, a
+ * placeholder on the null backend. Without code for the backend (a cross build without the
+ * build-time cook, DXIL without DXC) the composite is not ready: composite passes only clear their
+ * destination, and a warning says so.
  *
  * Pipelines: one per destination colour format, made at first use while a graph is built (render
  * thread), at most DE__COMPOSITE_MAX_FORMATS.
@@ -20,12 +18,7 @@
 
 #include "render/renderer_internal.h"
 #include "render/graph/rg_internal.h"
-
-#if DE_HAS_COOKER
-#include "asset/manifest_internal.h"
-#include "cook/lib/de_cooker.h"
-#include "gpu/shader/shader_internal.h"
-#endif
+#include "render/shaders/engine_shaders.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,9 +33,7 @@ struct de__composite {
     de_gpu_device *dev;
     const de_allocator *alloc;
     bool ready;
-    /** One block holding the vertex code then the pixel code (cooked builds). */
-    void *code;
-    size_t code_size;
+    de__engine_shader_code code; /**< vs_main, ps_main (DENG-421) */
     de_gpu_shader_blob vs, ps;
     u32 push_bytes;
     de_gpu_sampler sampler;
@@ -54,117 +45,6 @@ struct de__composite {
     u32 pipe_count;
     bool warned_pipe; /**< a pipeline failed or the table is full: logged once */
 };
-
-/* ---------- Shaders ---------- */
-
-#if DE_HAS_COOKER
-
-static const char *target_name(de__shader_target t) {
-    return t == DE__SHADER_TARGET_DXIL       ? "dxil"
-           : t == DE__SHADER_TARGET_METALLIB ? "metallib"
-                                             : "spirv";
-}
-
-/* The record of entry `entry` for `target` in a checked view, or false. */
-static bool find_entry(const de__shader_view *v, u32 target, const char *entry,
-                       de__shader_record *out) {
-    for (u32 e = 0; e < v->header.entry_count; ++e) {
-        const char *name = NULL;
-        (void)de__shader_view_entry(v, e, &name);
-        if (name == NULL || strcmp(name, entry) != 0)
-            continue;
-        const i32 ri = de__shader_view_find(v, target, 0, e);
-        if (ri < 0)
-            return false;
-        *out = de__shader_view_record(v, (u32)ri);
-        return true;
-    }
-    return false;
-}
-
-/* Cooks composite.slang for the device's target and copies the two entry points' code into
- * c->code. Returns false with the reason in `why`. */
-static bool cook_shaders(de__composite *c, char *why, size_t cap) {
-    de_asset_type_desc t;
-    if (!de_cooker_builtin_importer("shader", &t)) {
-        snprintf(why, cap, "this build has no shader importer (no Slang)");
-        return false;
-    }
-    const de__shader_target target = de__shader_target_for_backend(c->r->caps.backend);
-    if (de_fs_mount("derendershd", DE_RENDER_SHADER_DIR, 0, 0) != DE_OK) {
-        snprintf(why, cap, "cannot mount %s", DE_RENDER_SHADER_DIR);
-        return false;
-    }
-    de_cooker *ck = NULL;
-    bool ok = false;
-    de_cook_result res;
-    memset(&res, 0, sizeof res);
-    bool have_res = false;
-    if (de_cooker_create(
-            &(de_cooker_desc){.allocator = c->alloc, .verify_determinism = DE_COOK_VERIFY_OFF},
-            &ck) != DE_OK ||
-        de_cooker_register_type(ck, &t) != DE_OK) {
-        const de_error *e = de_error_last();
-        snprintf(why, cap, "cannot create the cooker: %.300s", e != NULL ? e->message : "?");
-        goto done;
-    }
-    const char *targets[1] = {target_name(target)};
-    de__manifest_kv kv;
-    memset(&kv, 0, sizeof kv);
-    kv.key = "targets";
-    kv.value.type = DE__MANIFEST_STRING_ARRAY;
-    kv.value.u.arr.items = targets;
-    kv.value.u.arr.count = 1;
-    de__manifest_asset a;
-    memset(&a, 0, sizeof a);
-    a.id = "engine/shaders/composite";
-    a.type = "shader";
-    a.source = "composite.slang";
-    a.file = "derendershd:/assets.toml";
-    a.settings = &kv;
-    a.setting_count = 1;
-    const de_cook_input in = {.asset = &a, .asset_root = "derendershd:/", .source = NULL};
-    if (de_cooker_cook(ck, &in, &res) != DE_OK) {
-        const de_error *e = de_error_last();
-        snprintf(why, cap, "cooking composite.slang for %s failed: %.300s", targets[0],
-                 e != NULL ? e->message : "?");
-        goto done;
-    }
-    have_res = true;
-    de__shader_view v;
-    de__shader_record vs, ps;
-    if (de__shader_view_init(res.data, res.size, &v) != DE_OK ||
-        !find_entry(&v, (u32)target, "vs_main", &vs) ||
-        !find_entry(&v, (u32)target, "ps_main", &ps)) {
-        snprintf(why, cap, "the cooked composite.slang has no vs_main/ps_main for %s", targets[0]);
-        goto done;
-    }
-    c->code_size = (size_t)vs.code_size + (size_t)ps.code_size;
-    c->code = DE_ALLOC(c->alloc, c->code_size, 16, DE_MEM_RENDER);
-    if (c->code == NULL) {
-        snprintf(why, cap, "out of memory");
-        goto done;
-    }
-    memcpy(c->code, v.base + vs.code_offset, (size_t)vs.code_size);
-    memcpy((u8 *)c->code + vs.code_size, v.base + ps.code_offset, (size_t)ps.code_size);
-    c->vs = (de_gpu_shader_blob){.code = c->code, .size = vs.code_size, .entry = "vs_main"};
-    c->ps = (de_gpu_shader_blob){
-        .code = (const u8 *)c->code + vs.code_size, .size = ps.code_size, .entry = "ps_main"};
-    c->push_bytes = vs.push_constant_bytes > ps.push_constant_bytes ? vs.push_constant_bytes
-                                                                    : ps.push_constant_bytes;
-    ok = true;
-done:
-    if (have_res)
-        de_cook_result_free(&res);
-    de_cooker_destroy(ck);
-    (void)de_fs_unmount("derendershd", DE_RENDER_SHADER_DIR);
-    return ok;
-}
-
-#endif /* DE_HAS_COOKER */
-
-/* The null backend compiles nothing: any non-empty code will do. */
-static const u32 k_placeholder_code[4] = {0x07230203u, 0x00010600u, 0u, 0u};
 
 de_result de__composite_create(de_renderer *r, de__composite **out) {
     *out = NULL;
@@ -187,28 +67,21 @@ de_result de__composite_create(de_renderer *r, de__composite **out) {
     }
     c->sampler_index = de_gpu_sampler_bindless(r->dev, c->sampler);
 
-    char why[512] = "";
-    if (r->caps.backend == DE_GPU_NULL) {
-        c->vs = (de_gpu_shader_blob){
-            .code = k_placeholder_code, .size = sizeof k_placeholder_code, .entry = "vs_main"};
-        c->ps = (de_gpu_shader_blob){
-            .code = k_placeholder_code, .size = sizeof k_placeholder_code, .entry = "ps_main"};
-        c->push_bytes = DE__COMPOSITE_PUSH_BYTES;
+    char why[768] = "";
+    static const char *const k_entries[2] = {"vs_main", "ps_main"};
+    if (de__engine_shader_load(r->dev, r->alloc, "composite", 0, k_entries, 2, &c->code, why,
+                               sizeof why) == DE_OK) {
+        c->vs = c->code.entries[0].blob;
+        c->ps = c->code.entries[1].blob;
+        c->push_bytes = c->code.push_constant_bytes != 0 ? c->code.push_constant_bytes
+                                                         : DE__COMPOSITE_PUSH_BYTES;
         c->ready = true;
-    } else {
-#if DE_HAS_COOKER
-        c->ready = cook_shaders(c, why, sizeof why);
-#else
-        snprintf(why, sizeof why,
-                 "this build has no cooker (Release, Shipping or no tools), and no cooked engine "
-                 "shaders exist yet");
-#endif
     }
     if (!c->ready)
         DE_WARN(r->log,
-                "renderer: no view composite on %s (%s): views render, but the output only "
-                "clears and render-to-texture targets need render_scale 1 and a full viewport",
-                de_gpu_backend_name(r->caps.backend), why);
+                "renderer: no view composite (%s): views render, but the output only clears and "
+                "render-to-texture targets stay unwritten",
+                why);
     *out = c;
     return DE_OK;
 }
@@ -221,13 +94,16 @@ void de__composite_destroy(de_renderer *r, de__composite *c) {
             de_gpu_pipeline_destroy(r->dev, c->pipes[i].pipeline);
     if (DE_HANDLE_VALID(c->sampler))
         de_gpu_sampler_destroy(r->dev, c->sampler);
-    if (c->code != NULL)
-        DE_FREE(c->alloc, c->code, c->code_size);
+    de__engine_shader_code_free(&c->code);
     DE_FREE(c->alloc, c, sizeof *c);
 }
 
 bool de__composite_ready(const de__composite *c) {
     return c != NULL && c->ready;
+}
+
+u32 de__composite_shader_origin(const de__composite *c) {
+    return c != NULL ? (u32)c->code.origin : 0u;
 }
 
 /* The pipeline for `format`, made at first use; invalid when it cannot be made. */

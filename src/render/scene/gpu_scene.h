@@ -424,10 +424,11 @@ typedef struct de__gpu_scene_desc {
     u32 scatter_threadgroup[3];
     u32 scatter_push_constant_bytes;
     /**
-     * No scatter blobs given: load the engine's own kernels. In builds with the cooker (Debug and
-     * Dev with the tools) shaders/scene/scatter.slang is cooked in-process for the device's
-     * target, as the view composite does (DENG-176); the null backend gets a placeholder; other
-     * builds, and devices below the Base tier, run copy-only (logged once).
+     * No scatter blobs given: load the engine's own kernels, the engine shader "scene_scatter"
+     * (DENG-421, render/shaders/engine_shaders.h: the in-process cook through the cache in Dev
+     * builds, the embedded build-time cook in every build, a placeholder on the null backend).
+     * Without code for the backend, and on devices below the Base tier, it runs copy-only
+     * (logged once).
      */
     bool builtin_scatter;
     /**

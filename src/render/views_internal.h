@@ -189,16 +189,18 @@ typedef struct de__composite_item {
 } de__composite_item;
 
 /**
- * Creates the composite of `r`: the linear-clamp sampler and the shaders of
- * shaders/common/composite.slang (cooked in-process in builds with the cooker; a placeholder blob
- * on the null backend). Without shaders (Release and Shipping, or a host that cannot cook the
- * backend's target) `*out` is still made, but de__composite_ready is false and composite passes
- * only clear; the reason is logged once.
+ * Creates the composite of `r`: the linear-clamp sampler and the engine shader "composite"
+ * (shaders/common/composite.slang, loaded through de__engine_shader_load; DENG-421). Without code
+ * for the backend (a cross build without the build-time cook, DXIL without DXC) `*out` is still
+ * made, but de__composite_ready is false and composite passes only clear; the reason is logged
+ * once.
  */
 de_result de__composite_create(de_renderer *r, de__composite **out);
 void de__composite_destroy(de_renderer *r, de__composite *c);
 /** True when composite passes can draw (shaders and the sampler exist). */
 bool de__composite_ready(const de__composite *c);
+/** Where the composite's shaders came from (de__engine_shader_origin; DENG-421). */
+u32 de__composite_shader_origin(const de__composite *c);
 /**
  * Adds a graphics pass `name` that renders into `dst` (format `dst_format`): cleared to `clear`
  * when it is not NULL, else loaded; then each item drawn into its rectangle. Declares the reads of
