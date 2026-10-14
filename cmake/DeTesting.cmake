@@ -126,6 +126,10 @@ if(DE_BUILD_TESTS AND NOT TARGET de_test_framework)
     add_library(de_test_framework STATIC "${DE_ROOT_DIR}/tests/unit/de_test.c")
     target_include_directories(de_test_framework PUBLIC "${DE_ROOT_DIR}/tests/unit")
     target_link_libraries(de_test_framework PRIVATE de_build_flags)
+    # DENG-418: de_test.c prints the stack of a crashing test and writes a minidump on Windows.
+    if(WIN32)
+        target_link_libraries(de_test_framework PRIVATE dbghelp)
+    endif()
     set_target_properties(de_test_framework PROPERTIES FOLDER "dengine/tests")
 endif()
 

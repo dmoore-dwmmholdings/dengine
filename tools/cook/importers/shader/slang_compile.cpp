@@ -191,7 +191,8 @@ struct slang_state {
 
 slang_state &state() {
     /* Never destroyed: the global session lives until the process exits, and the library is
-     * never closed (Slang's own atexit work runs from it). */
+     * never closed (Slang's own atexit work runs from it; on Windows see load() for the DLLs
+     * that must outlive it, DENG-418). */
     static slang_state *s = new slang_state();
     return *s;
 }
@@ -209,6 +210,24 @@ void load(slang_state &s) {
                   "this host in third_party/vendor.toml)");
     return;
 #else
+#if defined(_WIN32)
+    /* DENG-418: bcrypt.dll and bcryptprimitives.dll before Slang, never closed. The Windows
+     * slang-compiler.dll links its C runtime statically and loads bcrypt only when it first needs
+     * random bytes, so bcrypt and bcryptprimitives would be initialised after it, and Windows
+     * shuts DLLs down in the reverse order: at process exit they would be gone when Slang's own
+     * shutdown runs (its static and thread_local destructors, from DLL_PROCESS_DETACH), which
+     * calls BCryptGenRandom. That read freed RNG state and crashed the process now and then
+     * (an access violation in bcryptprimitives at exit; Windows Debug CI, cook_builtin.project and
+     * cook_cli.builtin_project). Loaded first, they are shut down after Slang. Both are system
+     * libraries (System32), so loading them by name finds no other copy. */
+    {
+        de_dylib *keep = nullptr;
+        (void)de_dylib_open("bcrypt.dll", &keep);
+        keep = nullptr;
+        (void)de_dylib_open("bcryptprimitives.dll", &keep);
+        de_error_clear(); /* a failure only leaves the old order; Slang still loads */
+    }
+#endif
     if (de_dylib_open(DE_SLANG_LIBRARY, &s.lib) != DE_OK) {
         const de_error *e = de_error_last();
         std::snprintf(s.why, sizeof s.why, "cannot open the Slang compiler \"%s\": %.200s",

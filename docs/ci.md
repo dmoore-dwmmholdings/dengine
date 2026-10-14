@@ -68,6 +68,16 @@ The configure step prints `build/<preset>/de_config_dump.txt`. If a job fails, i
 artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporary/`
 (`LastTest.log`), `CMakeConfigureLog.yaml` and the config dump.
 
+**Crashing tests (DENG-418).** CTest starts tests with Windows Error Reporting's crash dialog
+off, so Windows writes no crash dump for them. A de_test executable that crashes prints the
+exception and the crashing thread's stack itself on stderr: module, symbol, offset, and file
+and line where the build's PDB has them (`tests/unit/de_test.c`). `--output-on-failure` shows it
+in the job log. On Windows it also writes a minidump to `$DE_TEST_DUMP_DIR/<exe>.<pid>.dmp`. The
+Test step sets `DE_TEST_DUMP_DIR` to `build/<preset>/test-dumps/`, and `logs-<preset>` uploads
+that directory too. Open a dump with the job's build of the same commit (`cdb -z <dmp> -y
+<dir of the test's .pdb>`, then `.ecxr; kn`). The dumps hold thread stacks and the memory they
+reference, not module images.
+
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).
 
