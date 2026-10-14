@@ -597,61 +597,14 @@ TEST_F(rg_execute, stats_latency, xfx) {
 
 /* ---------- No heap allocation after warm-up (DENG-173, DENG-415) ---------- */
 
-/* Every thread of the task system must have started before a guarded region: a thread's first
- * access to a thread-local variable makes dyld allocate its TLS block (4640 bytes on macOS), and
- * under load a worker can start long after de_task_system_create returns. DENG-415: under a
- * loaded host the background worker (which no frame ever wakes) started inside the region of
- * no_heap_after_warmup. So: one background task, then one task per other frame worker, each held
- * until every frame worker holds one (the main thread only watches, so each task runs on its own
- * worker). Bounded waits: a worker that never starts fails the test instead of hanging it. */
-typedef struct warm_gate {
-    de_atomic_u32 arrived; /* bit per frame worker index that holds a task */
-    u32 want;              /* bits of every frame worker but the main thread */
-    de_atomic_u32 bg_ran;
-} warm_gate;
-
-static void warm_bg(void *user) {
-    de_atomic_store_u32(&((warm_gate *)user)->bg_ran, 1u, DE_ATOMIC_RELEASE);
-}
-
-static void warm_frame(void *user) {
-    warm_gate *w = (warm_gate *)user;
-    const u32 idx = de_task_worker_index();
-    if (idx != DE_TASK_WORKER_NONE && idx < 32u)
-        de_atomic_fetch_or_u32(&w->arrived, 1u << idx, DE_ATOMIC_ACQ_REL);
-    const u64 deadline = de_time_now_ns() + 10ull * 1000000000ull;
-    while ((de_atomic_load_u32(&w->arrived, DE_ATOMIC_ACQUIRE) & w->want) != w->want &&
-           de_time_now_ns() < deadline)
-        de_sleep_ns(10000);
-}
-
-static void warm_task_threads(de_task_system *ts) {
-    warm_gate w;
-    de_atomic_init_u32(&w.arrived, 0);
-    de_atomic_init_u32(&w.bg_ran, 0);
-    const u32 n = de_task_worker_count(ts); /* frame workers, main thread included */
-    w.want = ((n >= 32u ? 0xFFFFFFFFu : (1u << n) - 1u)) & ~1u;
-    de_task_counter c = {0};
-    de_task_submit(ts, DE_TASK_POOL_BACKGROUND, warm_bg, &w, &c);
-    for (u32 i = 1; i < n; ++i)
-        de_task_submit(ts, DE_TASK_POOL_FRAME, warm_frame, &w, &c);
-    const u64 deadline = de_time_now_ns() + 10ull * 1000000000ull;
-    while (((de_atomic_load_u32(&w.arrived, DE_ATOMIC_ACQUIRE) & w.want) != w.want ||
-            !de_atomic_load_u32(&w.bg_ran, DE_ATOMIC_ACQUIRE)) &&
-           de_time_now_ns() < deadline)
-        de_sleep_ns(10000);
-    de_task_wait(ts, &c);
-    EXPECT_EQ(de_atomic_load_u32(&w.arrived, DE_ATOMIC_ACQUIRE) & w.want, w.want);
-    EXPECT_EQ(de_atomic_load_u32(&w.bg_ran, DE_ATOMIC_ACQUIRE), 1u);
-}
-
 static void start_tasks(xfx *f) {
     ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 4,
                                                            .background_worker_count = 1,
                                                            .allocator = &f->alloc},
                                     &f->tasks),
               DE_OK);
-    warm_task_threads(f->tasks);
+    /* de_task_system_create returns once every task thread runs and has touched its thread-local
+     * storage (DENG-416), so no thread's first-use allocation lands in a guarded region below. */
 }
 
 /* The null device's internal timeline value of the last submit on each queue. */

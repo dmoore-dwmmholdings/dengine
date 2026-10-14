@@ -84,3 +84,27 @@ endif()
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
                  "${CMAKE_CURRENT_BINARY_DIR}/test_wake_serial.cmake")
 endif()
+
+# DENG-416: the start latch of de_task_system_create (start.*): task systems created while busy
+# threads load every core, each followed by a no-heap region (de_alloc_guard) that a late-starting
+# thread would fall into. Same internal includes as above; links the alloc guard (de_test_support).
+de_add_test(NAME start SOURCES test_start.c LIBS de_task de_test_support LABELS unit tsan TIMEOUT 120)
+if(TARGET test_start)
+    target_include_directories(test_start PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+# It loads every core for a moment, so it runs alone (RUN_SERIAL; same include-file approach as
+# test_wake above): other tests with time bounds must not run beside it.
+if(TARGET test_start AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_start_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_start_adds REGEX "^add_test\\(\\[==\\[start\\.")
+    foreach(_de_line IN LISTS _de_start_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                 "${CMAKE_CURRENT_BINARY_DIR}/test_start_serial.cmake")
+endif()

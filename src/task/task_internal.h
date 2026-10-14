@@ -262,6 +262,13 @@ struct de_task_system {
     u32 tag;
     de_log_category log;
     bool pin_workers;
+
+    /* Start latch (DENG-416): every thread that create starts posts it once after its thread init
+     * (FP mode, crash alt-stack, thread-local slot: the first touch of thread-local storage, which
+     * makes dyld allocate the thread's TLS block on macOS). de_task_system_create waits for all of
+     * them, so no thread's first-use allocations land after create returns (inside a caller's
+     * no-heap region, DENG-415). */
+    de_sem start_sem;
 };
 
 #if defined(_MSC_VER) && !defined(__clang__)
