@@ -22,6 +22,10 @@
  * real ECS loop: PostUpdate, Extract, de__render_extract_and_kick, with the asset update first,
  * as the host loop does.
  */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "de_test.h"
 
 #include <dengine/de_asset.h>
@@ -229,7 +233,7 @@ static bool mesh_entry(cfx *f, u32 i, de__gs_mesh *out) {
 static u32 check_entries(cfx *f) {
     u32 ready = 0;
     for (u32 i = 0; i < MESHES; ++i) {
-        de__gs_mesh e;
+        de__gs_mesh e = {0};
         if (!mesh_entry(f, i, &e) || !(e.flags & DE__GS_MESH_READY))
             continue;
         ++ready;
@@ -252,7 +256,7 @@ TEST_F(churn, unload_waits_for_frame_fence, cfx) {
     de_load_handle h = de_asset_load(f->s, mesh_id(0), 0);
     const de_entity e = spawn(f, 0, 0, 1.0);
     ASSERT_NE(e.bits, 0u);
-    de__gs_mesh entry;
+    de__gs_mesh entry = {0};
     bool ready = false;
     for (u32 i = 0; i < 2000 && !ready; ++i) {
         frame(f);
@@ -309,6 +313,16 @@ TEST_F(churn, unload_waits_for_frame_fence, cfx) {
         ready = mesh_entry(f, 0, &entry) && (entry.flags & DE__GS_MESH_READY);
         if (!ready)
             (void)de__asset_wake_block(f->s, 1000000u);
+    }
+    if (!ready) {
+        de_load_info info;
+        const de_load_state st = de_asset_status(f->s, h, &info);
+        const bool have = mesh_entry(f, 0, &entry);
+        printf("reload: state %d, ready %u/%u, failed %u, error %d \"%s\"; scene slot %s, flags "
+               "0x%x\n",
+               (int)st, info.assets_ready, info.assets_total, info.assets_failed,
+               (int)info.first_error, info.first_error_msg, have ? "yes" : "no",
+               have ? entry.flags : 0u);
     }
     EXPECT_TRUE(ready);
     (void)frames;
