@@ -71,6 +71,19 @@ artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporar
 GPU and golden-image jobs come in S10, self-hosted runners in S20 and the ABI check in S37. The
 cross-architecture determinism jobs are in `determinism.yml` (below).
 
+**D3D12 tests on WARP.** The hosted runners have no GPU, so the D3D12 tests (`gpu_d3d12.*`) run
+on WARP, the software adapter. They do not use the runner image's WARP, because it has shader
+model 6.2, no enhanced barriers and no mesh shaders. Instead, the Windows jobs that build tests
+download a newer WARP (`Microsoft.Direct3D.WARP`, the test-only prebuilt entry `d3d12_warp` in
+`third_party/vendor.toml`, DENG-405) at configure time, through the vendor cache. The build copies
+`d3d10warp.dll` next to `test_gpu_d3d12.exe`. This WARP has the Base tier (shader model 6.6,
+binding tier 3), enhanced barriers and mesh shaders. So the pipeline, draw, mesh and
+pipeline-library tests run on CI, and so does the enhanced-barrier path. `d3d12.vendored_warp`
+fails if the WARP in the test process is not the vendored one. Its licence forbids
+redistribution, so no job uploads it: the `logs-<preset>` artifact holds no binaries. To run the
+tests on the runner image's own WARP, configure with `-DDE_D3D12_TEST_WARP=OFF`. The quick tier
+has `windows msvc Debug`, so it also runs these tests.
+
 ### `sanitizers.yml`: sanitizers
 
 | Job | Runner | Preset | `DE_SANITIZE` |

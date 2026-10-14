@@ -35,6 +35,10 @@ LICENSE = b"MIT License\n\nCopyright (c) demo\n"
 HEADER = b"#pragma once\nint demo(void);\n"
 
 
+# A licence of vendor.TEST_ONLY_LICENSES (test-only binaries that may not be redistributed).
+TEST_ONLY_LICENSE = "LicenseRef-Microsoft-Direct3D-WARP"
+
+
 def host_files(host: str) -> dict:
     """Archive content for one host: committed part (LICENSE, include/) + binaries + noise."""
     files = {
@@ -182,6 +186,9 @@ def test_config(repo: Repo, archives: dict, plain: str) -> None:
             archives, hosts={"windows-x64": {"url": '"https://example.com/steamworks_sdk.zip"'}}),
         "prebuilt entry outside the licence allowlist": prebuilt_entry(
             archives, top={"license": '"Proprietary"'}),
+        # A test-only licence forbids redistribution: never on an entry that commits its files.
+        "test-only licence on a source entry": plain.replace(
+            'license = "MIT"', f'license = "{TEST_ONLY_LICENSE}"'),
     }
     for what, text in cases.items():
         repo.config(text)
@@ -189,6 +196,13 @@ def test_config(repo: Repo, archives: dict, plain: str) -> None:
             r = repo.run("list", fallback=fb)
             check(r.returncode == 2 and "config error" in r.stderr,
                   f"refuses {what} ({'fallback' if fb else 'tomllib'})")
+    # The same test-only licence is accepted on a prebuilt entry (DENG-405, d3d12_warp).
+    repo.config(prebuilt_entry(archives, top={"license": f'"{TEST_ONLY_LICENSE}"'}) + plain)
+    for fb in (False, True):
+        r = repo.run("list", fallback=fb)
+        check(r.returncode == 0,
+              f"accepts a test-only licence on a prebuilt entry "
+              f"({'fallback' if fb else 'tomllib'}) {r.stderr.strip()}")
     repo.config(prebuilt_entry(archives) + plain)
 
 
