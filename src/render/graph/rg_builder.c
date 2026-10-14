@@ -163,12 +163,14 @@ de_result de__rg_create(const de__rg_desc *desc, de_rg **out) {
 void de__rg_destroy(de_rg *g) {
     if (!g)
         return;
+    de__rg_compile_shutdown(g); /* DENG-172: cached plans and the transient pool */
     DE_FREE(g->alloc, g, sizeof *g);
 }
 
 void de__rg_reset(de_rg *g) {
     if (!g)
         return;
+    de__rg_compile_frame_end(g); /* DENG-172: the frame's plan binding ends */
     if (g->pass_count > g->hint_passes)
         g->hint_passes = g->pass_count;
     if (g->resource_count > g->hint_resources)

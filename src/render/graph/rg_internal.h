@@ -27,6 +27,7 @@
 #include <dengine/de_render.h>
 
 #include "core/de_strbuf.h"
+#include "gpu/memory/gpu_heap.h" /* DENG-172: transient regions (render -> gpu) */
 
 /** "No index" in every u32 index field. */
 #define DE__RG_NONE UINT32_MAX
@@ -170,6 +171,17 @@ struct de_rg {
     u32 hint_passes, hint_resources, hint_accesses, hint_edges;
 
     /* ---- DENG-172 compiled-graph state goes below this line ---- */
+    struct de__rg_plan **cache; /**< compiled plans, at most r.rg_cache_size (heap) */
+    u32 cache_count, cache_cap;
+    u64 cache_clock;          /**< LRU stamps */
+    de_cvar cache_size_cvar;  /**< r.rg_cache_size */
+    struct de__rg_plan *plan; /**< this frame's plan (de__rg_compile); NULL otherwise */
+    de_gpu_barrier *phys;     /**< this frame's barrier table with physical handles */
+    bool no_async_compute;    /**< de__rg_set_async_compute(g, false) */
+    u64 stat_compiles, stat_hits, stat_evictions;
+    de__gpu_transient_region *pool[DE__GPU_MEM_CLASS_MAX]; /**< transient region per class */
+    u64 pool_bytes[DE__GPU_MEM_CLASS_MAX];
+    u32 pool_gen; /**< bumped when a region is replaced: plans place their resources again */
 
     /* ---- DENG-173 execute state goes below this line ---- */
 };
@@ -230,5 +242,215 @@ de_result de__rg_dump_dot_file(const de_rg *g, const char *vpath);
 /** If r.rg_dump is set: writes the dump there, logs it and clears the cvar. Called by
  * de__rg_finalize. */
 void de__rg_dump_if_requested(de_rg *g);
+
+/* =================================================================================================
+ * DENG-172: the compiled graph (SPEC §12.3: schedule, async compute, transient aliasing,
+ * barriers, compiled-graph cache). Files: rg_compile.c (driver, binding, recording helpers),
+ * rg_schedule.c (steps, batches, fences), rg_barriers.c (state tracking, barriers, transfers),
+ * rg_alias.c (memory requirements, aliasing, the transient pool), rg_cache.c (key, LRU cache).
+ *
+ * Per frame, after de__rg_finalize:
+ *     de__rg_compile(g);          // cache hit: rebind; miss: compile and cache the plan
+ *     for each batch b of g->plan (in order):
+ *         cmd = de_gpu_cmd_begin(dev, b.queue, ...);
+ *         for each step s of b: de__rg_record_barriers(g, s, DE__RG_PRE, cmd);
+ *                               de__rg_execute_pass(g, step.pass, cmd)   (if step.pass is a pass)
+ *                               de__rg_record_barriers(g, s, DE__RG_POST, cmd);
+ *         submit after b's waits, signalling b.signal (DENG-173 maps signal numbers to values)
+ *
+ * The plan refers to resources and passes by index; physical handles are bound per frame (the
+ * per-frame table g->phys is on the frame arena), so a plan is reused while the declarations are
+ * the same. Plans live on the graph's allocator, not the frame arena.
+ * ============================================================================================== */
+
+/** Barrier slots of a step: recorded before the pass (transitions and acquires) or after it
+ * (releases of queue-ownership transfers). */
+enum { DE__RG_PRE = 0, DE__RG_POST = 1 };
+
+/** An abstract barrier of a plan. Ranges as in de_gpu_barrier (count 0 = to the last). */
+typedef struct de__rg_cbarrier {
+    u32 resource; /**< resource index */
+    u32 before, after;
+    u32 mip_first, mip_count, layer_first, layer_count;
+    de_gpu_queue src_queue, dst_queue; /**< differ for an ownership transfer (both halves) */
+} de__rg_cbarrier;
+
+/**
+ * One step of the schedule. Step 0 is the prologue and the last step the epilogue: both run on
+ * the graphics queue and have no pass, only barriers (imports handed to other queues at the
+ * start; final states and imports returned to graphics at the end). Steps 1 .. n are the live
+ * passes in declaration order, which is a topological order (every edge has from < to).
+ */
+typedef struct de__rg_step {
+    u32 pass;           /**< pass index; DE__RG_NONE for the prologue and the epilogue */
+    de_gpu_queue queue; /**< effective queue (compute folds into graphics without async compute) */
+    u32 batch;          /**< the batch that records it */
+    u32 barrier_first[2], barrier_count[2]; /**< [DE__RG_PRE], [DE__RG_POST] into barriers */
+} de__rg_step;
+
+/** A wait of a batch: `signal` n >= 1 is the n-th signal of `queue` in this frame; 0 is the last
+ * value `queue` signalled before this frame (the frame-entry join). */
+typedef struct de__rg_wait {
+    de_gpu_queue queue;
+    u32 signal;
+} de__rg_wait;
+
+/** One submission: its steps are recorded in order into command lists of `queue` and submitted
+ * after `waits`; when they complete, the queue's `signal`-th signal of the frame is set (0 = no
+ * signal). Batches are listed in a valid submission order (by their first step). */
+typedef struct de__rg_batch {
+    de_gpu_queue queue;
+    u32 step_first, step_count; /**< into batch_steps */
+    u32 wait_first, wait_count; /**< into waits */
+    u32 signal;
+} de__rg_batch;
+
+/** Where a transient lives: `size` bytes at `offset` of the pool region of `mem_class`. */
+typedef struct de__rg_transient {
+    u32 resource;
+    u32 mem_class;
+    u64 offset, size, align;
+    bool buffer;  /**< a buffer (never aliased); else a texture */
+    bool aliased; /**< shares memory with another transient of the plan */
+} de__rg_transient;
+
+/** A compiled graph. One heap block (`block_size` bytes) holds the struct and every array. */
+typedef struct de__rg_plan {
+    u64 hash; /**< of `key` */
+    u8 *key;  /**< the declarations the plan was compiled from (rg_cache.c) */
+    u32 key_size;
+    u64 last_use; /**< LRU stamp */
+    size_t block_size;
+    bool async_compute; /**< compute passes run on DE_QUEUE_COMPUTE */
+    u32 pass_count, resource_count;
+    de__rg_step *steps;
+    u32 step_count;
+    u32 *step_of_pass; /**< [pass_count]: the pass's step, DE__RG_NONE when culled */
+    de__rg_batch *batches;
+    u32 batch_count;
+    u32 *batch_steps;
+    de__rg_wait *waits;
+    u32 wait_count;
+    u32 signal_count[DE_QUEUE_COUNT_]; /**< signals per queue in a frame */
+    de__rg_cbarrier *barriers;         /**< grouped by step, then slot */
+    u32 barrier_count;
+    u32 *end_access; /**< [resource_count]: state at the end of the frame (imports: pass it to
+                          the next frame's import; NONE for transients that are not exported) */
+    de__rg_transient *transients;
+    u32 transient_count;
+    u32 *transient_of; /**< [resource_count]: index into transients, or DE__RG_NONE */
+    u64 class_bytes[DE__GPU_MEM_CLASS_MAX]; /**< pool bytes the plan needs per memory class */
+    u32 *placed;    /**< [transient_count]: placed texture / buffer ids (0 = not placed) */
+    u32 placed_gen; /**< g->pool_gen they were placed in; 0 = none */
+} de__rg_plan;
+
+/** Compile counters of a graph (de__rg_compile_stats). */
+typedef struct de__rg_stats {
+    u64 compiles;  /**< cache misses: plans compiled */
+    u64 hits;      /**< frames that reused a cached plan */
+    u64 evictions; /**< plans dropped by the LRU cap */
+    u32 cached;    /**< plans in the cache now */
+} de__rg_stats;
+
+/* ---------- Public-to-the-renderer entry points (rg_compile.c) ---------- */
+
+/**
+ * Compiles the finalized frame (or reuses the cached plan of the same declarations), places the
+ * transients and binds this frame's physical resources: after it, de_rg_texture / de_rg_buffer
+ * return the placed transients and g->plan / g->phys describe the frame. Needs g->device when
+ * any transient is used. No heap allocation on a cache hit once the pool is large enough.
+ * @return DE_OK; DE_ERR_BUSY (not finalized); DE_ERR_INVALID_ARGUMENT (no device, finalize
+ *         failed); DE_ERR_OUT_OF_MEMORY; errors of the transient placement.
+ */
+de_result de__rg_compile(de_rg *g);
+/** Records the barriers of step `step`, slot DE__RG_PRE or DE__RG_POST, into `cmd` (one
+ * de_gpu_cmd_barriers call; nothing when there are none). Thread-safe for different lists. */
+void de__rg_record_barriers(const de_rg *g, u32 step, u32 slot, de_gpu_cmd *cmd);
+/** The access resource `r` is left in at the end of the compiled frame (imports: pass it as
+ * `current_access` of the next frame's import). DE_ACCESS_NONE before de__rg_compile. */
+u32 de__rg_end_access(const de_rg *g, de_rg_resource r);
+/** Lets compute passes use the async compute queue when the device has one (default true). */
+void de__rg_set_async_compute(de_rg *g, bool allow);
+de__rg_stats de__rg_compile_stats(const de_rg *g);
+/** Drops every cached plan and the transient pool (deferred destruction keeps in-flight memory
+ * alive). Called by de__rg_destroy; also when the device changes. */
+void de__rg_compile_shutdown(de_rg *g);
+/** Called by de__rg_reset: the frame's plan binding ends. */
+void de__rg_compile_frame_end(de_rg *g);
+
+/* ---------- Compiler internals (shared by the DENG-172 files) ---------- */
+
+/** A dependency between two steps on different queues: `to` waits for `from`. */
+typedef struct de__rg_dep {
+    u32 from, to;
+} de__rg_dep;
+
+/** A barrier while compiling: the plan barrier plus where it is recorded. */
+typedef struct de__rg_tbarrier {
+    de__rg_cbarrier b;
+    u32 step, slot;
+} de__rg_tbarrier;
+
+/** Scratch state of one compilation, on the frame arena. Becomes a de__rg_plan (rg_cache.c). */
+typedef struct de__rg_cbuild {
+    de_rg *g;
+    de_arena *arena;
+    bool async_compute;
+    bool oom;
+    de__rg_step *steps;
+    u32 step_count;
+    u32 *step_of_pass;
+    de__rg_tbarrier *tb;
+    u32 tb_count, tb_cap;
+    de__rg_dep *deps;
+    u32 dep_count, dep_cap;
+    u32 *end_access;
+    de__rg_batch *batches;
+    u32 batch_count;
+    u32 *batch_steps;
+    de__rg_wait *waits;
+    u32 wait_count;
+    u32 signal_count[DE_QUEUE_COUNT_];
+    u32 *clock_in; /**< [step_count * DE_QUEUE_COUNT_]: per queue, 1 + the last step known done
+                        when the step starts (0 = none) */
+    de__rg_transient *transients;
+    u32 transient_count;
+    u32 *transient_of;
+    u64 class_bytes[DE__GPU_MEM_CLASS_MAX];
+} de__rg_cbuild;
+
+/** Arena array growth for the compiler (sets b->oom on failure). */
+void *de__rg_cgrow(de__rg_cbuild *b, void *old, u32 count, u32 *cap, u32 need, size_t elem);
+/** rg_schedule.c: steps (prologue, live passes, epilogue) and their effective queues. */
+bool de__rg_schedule_steps(de__rg_cbuild *b);
+/** rg_barriers.c: state tracking, barriers, transfers and cross-queue dependencies. */
+bool de__rg_plan_barriers(de__rg_cbuild *b);
+/** rg_schedule.c: batches, waits and signals from the dependencies; fills clock_in. */
+bool de__rg_schedule_batches(de__rg_cbuild *b);
+/** rg_alias.c: requirements, memory classes and offsets of the used transients. */
+de_result de__rg_alias_transients(de__rg_cbuild *b);
+/** rg_alias.c: true if step `a` completes before step `s` starts (same queue: a < s, and a
+ * first-use barrier from NONE waits for earlier work; other queues: through the waits). */
+bool de__rg_step_before(const de__rg_cbuild *b, u32 a, u32 s);
+/** rg_alias.c: grows the pool to the plan's needs and places its transients if needed. */
+de_result de__rg_pool_bind(de_rg *g, de__rg_plan *plan);
+/** rg_alias.c: destroys the plan's placed resources. */
+void de__rg_plan_unplace(de_rg *g, de__rg_plan *plan);
+/** rg_alias.c: releases the pool regions. */
+void de__rg_pool_release(de_rg *g);
+
+/** rg_cache.c: builds the cache key of the finalized frame on the arena. */
+bool de__rg_cache_key(de_rg *g, bool async_compute, u8 **key, u32 *size, u64 *hash);
+/** rg_cache.c: the cached plan with this key (its LRU stamp refreshed), or NULL. */
+de__rg_plan *de__rg_cache_find(de_rg *g, const u8 *key, u32 size, u64 hash);
+/** rg_cache.c: copies a compiled build into one heap block. NULL on out of memory. */
+de__rg_plan *de__rg_plan_create(de_rg *g, const de__rg_cbuild *b, const u8 *key, u32 key_size,
+                                u64 hash);
+/** rg_cache.c: inserts a plan, evicting the least recently used beyond r.rg_cache_size. */
+de_result de__rg_cache_insert(de_rg *g, de__rg_plan *plan);
+/** rg_cache.c: frees a plan (and destroys its placed resources). */
+void de__rg_plan_destroy(de_rg *g, de__rg_plan *plan);
+/** rg_cache.c: the cache capacity from r.rg_cache_size (registers it on first use). */
+u32 de__rg_cache_limit(de_rg *g);
 
 #endif /* DE_RENDER_RG_INTERNAL_H */

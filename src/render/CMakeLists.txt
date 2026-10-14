@@ -9,6 +9,11 @@ de_add_module(
         graph/rg_internal.h
         graph/rg_builder.c
         graph/rg_debug.c
+        graph/rg_compile.c
+        graph/rg_schedule.c
+        graph/rg_barriers.c
+        graph/rg_alias.c
+        graph/rg_cache.c
     DEPS gpu asset ecs task
 )
 

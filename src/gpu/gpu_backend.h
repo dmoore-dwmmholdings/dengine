@@ -371,6 +371,36 @@ void de__gpu_null_heap_counts(de_gpu_device *d, u32 *live, u64 *bytes, u32 *crea
 bool de__gpu_null_placement(de_gpu_device *d, de__gpu_kind kind, u32 id, de__gpu_heap **heap,
                             u64 *offset);
 
+/*
+ * Null backend command log (DENG-172; DENG-173 extends it: add ops at the end, append-only). With
+ * the log on, the null device records one entry per recorded command and per submit, in the order
+ * the calls reach the backend (a device-wide order under a lock; one list is recorded by one
+ * thread, so each list's entries are in its recording order). Tests compare it with golden lists.
+ * Recording calls that the front-end refuses (Debug/Dev validation) never reach the log.
+ */
+typedef enum de__gpu_null_op {
+    DE__GPU_NULL_OP_BARRIERS = 1, /**< de_gpu_cmd_barriers: the barriers are data[first, +count) */
+    DE__GPU_NULL_OP_SUBMIT = 2,   /**< de_gpu_queue_submit: a[0] lists, a[1] waits (data), a[2]
+                                       signal fence id, a[3] signal value */
+} de__gpu_null_op;
+
+typedef struct de__gpu_null_entry {
+    u32 op;                      /**< de__gpu_null_op */
+    de_gpu_queue queue;          /**< the list's queue / the submit's queue */
+    char list[DE__GPU_NAME_MAX]; /**< the command list's name (submit: its first list's) */
+    u64 a[4];                    /**< op arguments */
+    u32 data_first, data_count;  /**< barriers (OP_BARRIERS) or waits (OP_SUBMIT) */
+} de__gpu_null_entry;
+
+/** Turns the log on (clearing it) or off (keeping the entries). No effect on other backends. */
+void de__gpu_null_log_enable(de_gpu_device *d, bool on);
+/** Number of entries, and entry `i` (NULL when out of range). Read while nothing records. */
+u32 de__gpu_null_log_count(de_gpu_device *d);
+const de__gpu_null_entry *de__gpu_null_log_entry(de_gpu_device *d, u32 i);
+/** The barriers of an OP_BARRIERS entry / the waits of an OP_SUBMIT entry (NULL otherwise). */
+const de_gpu_barrier *de__gpu_null_log_barriers(de_gpu_device *d, const de__gpu_null_entry *e);
+const de_gpu_wait *de__gpu_null_log_waits(de_gpu_device *d, const de__gpu_null_entry *e);
+
 /**
  * Overrides the table entry of `backend` (not DE_GPU_DEFAULT) at run time; NULL restores the
  * built-in entry. For tests and out-of-tree backends; call before creating devices.

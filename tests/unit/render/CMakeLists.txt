@@ -12,12 +12,18 @@ endif()
 de_add_test(NAME render
     SOURCES
         test_rg_builder.c
+        test_rg_compile.c
     LIBS de_render de_gpu de_test_support)
 if(TARGET test_render)
     target_include_directories(test_render PRIVATE "${DE_ROOT_DIR}/src")
     # r.rg_dump test output (a writable mount).
     target_compile_definitions(test_render PRIVATE DE_RG_TEST_OUT_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+# DENG-172: the render graph compiler (test_rg_compile.c in test_render). CTest names:
+# render.rg_compile.<test>, render.rg_alias.<test>, render.rg_barriers.<test> and
+# render.rg_cache.<test>. The barrier goldens read the null backend's command log
+# (src/gpu/null/, "gpu/gpu_backend.h").
 
 # DENG-105: the runtime texture, mesh, material and model types and their upload path
 # (src/render/loaders/), executable test_render_loaders; CTest names
@@ -100,4 +106,33 @@ if(TARGET test_render_components)
     target_compile_definitions(test_render_components PRIVATE
         "DE_RC_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_render_components_tmp\""
         "DE_RC_TEST_IMPORT_DATA_DIR=\"${DE_ROOT_DIR}/tests/unit/import/data\"")
+endif()
+
+# DENG-172: the render graph compiler on real GPU backends (test_rg_gpu.c), executable
+# test_render_graph_gpu, CTest names render_graph_gpu.rg_gpu.smoke_<backend>: clears, copies, a
+# copy-queue ownership transfer and an aliased transient, read back. Each backend SKIPs when it is
+# not built or has no device (CI: Metal on the macOS runner, D3D12 on the vendored WARP).
+set(_de_rgg_libs de_render de_gpu de_test_support)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_rgg_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_rgg_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_rgg_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME render_graph_gpu
+    SOURCES test_rg_gpu.c
+    LIBS ${_de_rgg_libs}
+    LABELS unit gpu
+    TIMEOUT 120)
+if(TARGET test_render_graph_gpu)
+    target_include_directories(test_render_graph_gpu PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_render_graph_gpu)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_graph_gpu)
+        endif()
+    endif()
 endif()
