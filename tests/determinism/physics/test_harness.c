@@ -7,6 +7,9 @@
  *   harness.scenarios_collide      kinematic_sweep makes contacts on many ticks; hull_builder
  *                                  builds its hulls and rejects the planar clouds
  *   harness.begin_errors           incomplete scenarios and failing setups are refused cleanly
+ *   harness.sanitizer_ticks        sanitizer_ticks shortens the check only in a sanitizer build
+ *                                  (DENG-412), and a shortened check passes against the prefix
+ *                                  of the full golden file
  */
 #include "harness.h"
 
@@ -151,4 +154,29 @@ TEST(harness, begin_errors) {
     EXPECT_TRUE(s.ctx.physics == NULL); /* torn down and zeroed */
     de_phys_det_end(&s);                /* a zeroed session is ignored */
     EXPECT_EQ(de_phys_det_step(&s, NULL, NULL), DE_ERR_INVALID_ARGUMENT);
+}
+
+TEST(harness, sanitizer_ticks) {
+    de_phys_det_scenario sc = de_phys_det_scenario_kinematic_sweep;
+    const u32 full = sc.ticks;
+    ASSERT_GT(full, 100u);
+    EXPECT_EQ(de_phys_det_check_ticks(&sc), full); /* 0: the full scenario everywhere */
+    EXPECT_EQ(de_phys_det_check_ticks(NULL), 0u);
+
+    sc.sanitizer_ticks = full + 1u;
+    de_phys_det_session s;
+    EXPECT_EQ(de_phys_det_begin(&s, &sc, NULL), DE_ERR_INVALID_ARGUMENT);
+
+    sc.sanitizer_ticks = 100u;
+    const bool shorter = de_phys_det_sanitized() && !de_phys_det_update_mode();
+    EXPECT_EQ(de_phys_det_check_ticks(&sc), shorter ? 100u : full);
+    sc.sanitizer_ticks = full;
+    EXPECT_EQ(de_phys_det_check_ticks(&sc), full);
+
+    /* The whole check with 1 worker (workers 0 would rewrite the kinematic_sweep outputs that
+     * the kinematic_sweep.workers_0 case writes): in a sanitizer build, 100 ticks against the
+     * first 100 values of golden/kinematic_sweep.checksums, without the workers 0 run; elsewhere
+     * the full check. */
+    sc.sanitizer_ticks = 100u;
+    de_phys_det_check(&sc, 1u);
 }
