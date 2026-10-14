@@ -25,15 +25,6 @@
 #include "cook/lib/de_cooker.h"
 #endif
 
-/* The public stage values are the cooked format's (de_shader.h, shader_format.h). */
-/* Both sides cast: MSVC warns (C5287) on a comparison of two enum types. */
-DE_STATIC_ASSERT((int)DE_SHADER_STAGE_VERTEX == (int)DE__SHADER_STAGE_VERTEX &&
-                     (int)DE_SHADER_STAGE_PIXEL == (int)DE__SHADER_STAGE_PIXEL &&
-                     (int)DE_SHADER_STAGE_COMPUTE == (int)DE__SHADER_STAGE_COMPUTE &&
-                     (int)DE_SHADER_STAGE_MESH == (int)DE__SHADER_STAGE_MESH &&
-                     (int)DE_SHADER_STAGE_AMPLIFICATION == (int)DE__SHADER_STAGE_AMPLIFICATION,
-                 "de_shader_stage matches de__shader_stage");
-
 /* ---- Format view ----------------------------------------------------------------------------- */
 
 static u32 rd32(const u8 *p) {
@@ -424,6 +415,25 @@ const char *de__shader_permutation_defines(de_asset_system *s, de_shader shader,
     return de__shader_view_permutation(&o->view, i);
 }
 
+/* The public stage of a cooked one. A switch, not a cast: the enums are separate (and MSVC warns
+ * on a _Static_assert that compares two enum types, C5287). */
+static de_shader_stage public_stage(u32 stage) {
+    switch (stage) {
+    case DE__SHADER_STAGE_VERTEX:
+        return DE_SHADER_STAGE_VERTEX;
+    case DE__SHADER_STAGE_PIXEL:
+        return DE_SHADER_STAGE_PIXEL;
+    case DE__SHADER_STAGE_COMPUTE:
+        return DE_SHADER_STAGE_COMPUTE;
+    case DE__SHADER_STAGE_MESH:
+        return DE_SHADER_STAGE_MESH;
+    case DE__SHADER_STAGE_AMPLIFICATION:
+        return DE_SHADER_STAGE_AMPLIFICATION;
+    default:
+        return DE_SHADER_STAGE_NONE;
+    }
+}
+
 de_result de_shader_get_code(de_asset_system *assets, de_shader shader, de_gpu_backend backend,
                              u32 permutation, const char *entry, de_gpu_shader_blob *out,
                              de_shader_reflection *refl) {
@@ -432,7 +442,7 @@ de_result de_shader_get_code(de_asset_system *assets, de_shader shader, de_gpu_b
     de__shader_reflection r;
     DE_TRY(de__shader_blob(assets, shader, backend, permutation, entry, out, &r));
     if (refl != NULL) {
-        refl->stage = (de_shader_stage)r.stage;
+        refl->stage = public_stage(r.stage);
         memcpy(refl->threadgroup, r.threadgroup, sizeof refl->threadgroup);
         refl->push_constant_bytes = r.push_constant_bytes;
         refl->mesh_max_vertices = r.mesh_max_vertices;
