@@ -824,12 +824,19 @@ TEST_F(queries, markers_nested_metal, q_fx) {
     }
     de__mtl_capture_end(f->d);
     printf("capture: %s\n", trace);
-    u32 missing = 0;
-    for (u32 i = 0; i < 4; ++i)
-        if (!trace_has(trace, k_marker_names[i])) {
+    /* Metal may still be writing the document after stopCapture (seen once under a loaded
+     * ctest -j 8): look again for up to 10 s before deciding. */
+    u32 missing = 4;
+    for (u32 attempt = 0; attempt < 100 && missing; ++attempt) {
+        if (attempt)
+            de_sleep_ns((u64)100 * 1000 * 1000);
+        missing = 0;
+        for (u32 i = 0; i < 4; ++i)
+            missing += trace_has(trace, k_marker_names[i]) ? 0u : 1u;
+    }
+    for (u32 i = 0; i < 4 && missing; ++i)
+        if (!trace_has(trace, k_marker_names[i]))
             printf("debug group \"%s\" is not in the capture\n", k_marker_names[i]);
-            ++missing;
-        }
     if (missing && !de_gpu_get_caps(f->d)->base_tier_ok) {
         /* GitHub's paravirtual GPU (below the Base tier) writes a capture whose files do not hold
          * the names as plain bytes; the M-series host's captures do. */
