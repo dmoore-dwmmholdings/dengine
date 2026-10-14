@@ -777,6 +777,131 @@ bool de__gpu_vk_validation_enabled(de_gpu_device *d) {
     return d && d->vt == &de__gpu_vulkan_vtable && de__vk(d)->on.validation;
 }
 
+/* ---------- Adapter list (DENG-410) ---------- */
+
+/* The physical devices in the order pick_physical numbers them: the same loader search, an
+ * instance with the same enumeration flag (VK_KHR_portability_enumeration when offered) and the
+ * same MAX_PHYSICAL cut. No validation layer: it does not change the list. */
+static de_result vk_enumerate_adapters(de_gpu_adapter_info *out, u32 cap, u32 *count) {
+    const de_allocator *a = de_heap_allocator();
+    de__vk_device *vk = (de__vk_device *)DE_ALLOC(a, sizeof *vk, 16, DE_MEM_RENDER);
+    if (!vk)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "vulkan: adapter list");
+    memset(vk, 0, sizeof *vk); /* owner NULL: de__gpu_fail sets the error context, no log */
+    de_result r = de__vk_loader_open(vk);
+    if (r != DE_OK) {
+        r = DE_FAIL_WRAP(DE_ERR_NOT_FOUND, "vulkan: cannot list adapters");
+        goto done;
+    }
+
+    u32 n = 0;
+    VkResult vr = vk->fn.vkEnumerateInstanceExtensionProperties(NULL, &n, NULL);
+    if (vr < 0)
+        n = 0;
+    const size_t ext_bytes = (size_t)n * sizeof(VkExtensionProperties);
+    VkExtensionProperties *ext =
+        n ? (VkExtensionProperties *)DE_ALLOC(a, ext_bytes, 8, DE_MEM_RENDER) : NULL;
+    u32 got = ext ? n : 0u;
+    if (ext && vk->fn.vkEnumerateInstanceExtensionProperties(NULL, &got, ext) < 0)
+        got = 0;
+    const char *names[1];
+    u32 name_count = 0;
+    VkInstanceCreateFlags flags = 0;
+    if (list_has(ext, got, "VK_KHR_portability_enumeration")) {
+        names[name_count++] = "VK_KHR_portability_enumeration";
+        flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+    if (ext)
+        DE_FREE(a, ext, ext_bytes);
+    VkApplicationInfo app;
+    memset(&app, 0, sizeof app);
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.pApplicationName = "dengine";
+    app.pEngineName = "dengine";
+    app.apiVersion = VK_API_VERSION_1_3;
+    VkInstanceCreateInfo ci;
+    memset(&ci, 0, sizeof ci);
+    ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    ci.flags = flags;
+    ci.pApplicationInfo = &app;
+    ci.enabledExtensionCount = name_count;
+    ci.ppEnabledExtensionNames = names;
+    vr = vk->fn.vkCreateInstance(&ci, NULL, &vk->instance);
+    if (vr == VK_ERROR_INCOMPATIBLE_DRIVER) {
+        /* A loader without a driver (an ICD): it lists no device. */
+        vk->instance = VK_NULL_HANDLE;
+        *count = 0;
+        goto done;
+    }
+    if (vr != VK_SUCCESS) {
+        vk->instance = VK_NULL_HANDLE;
+        de_result code = de__vk_result_code(vr);
+        r = DE_FAIL(code != DE_OK ? code : DE_ERR_INTERNAL, "vulkan: vkCreateInstance (%s): %s",
+                    vk->lib_name, de__vk_result_name(vr));
+        goto done;
+    }
+    r = de__vk_loader_instance(vk);
+    if (r != DE_OK)
+        goto done;
+
+    VkPhysicalDevice list[MAX_PHYSICAL];
+    u32 total = MAX_PHYSICAL;
+    vr = vk->fn.vkEnumeratePhysicalDevices(vk->instance, &total, list);
+    if (vr < 0) {
+        de_result code = de__vk_result_code(vr);
+        r = DE_FAIL(code != DE_OK ? code : DE_ERR_INTERNAL,
+                    "vulkan: vkEnumeratePhysicalDevices: %s", de__vk_result_name(vr));
+        goto done;
+    }
+    for (u32 i = 0; i < total && i < cap; ++i) {
+        VkPhysicalDeviceProperties pr;
+        VkPhysicalDeviceMemoryProperties mem;
+        vk->fn.vkGetPhysicalDeviceProperties(list[i], &pr);
+        vk->fn.vkGetPhysicalDeviceMemoryProperties(list[i], &mem);
+        de_gpu_adapter_info *o = &out[i];
+        /* As de__vk_fill_caps: deviceName is 256 bytes, the name 128. */
+        size_t len = 0;
+        while (len + 1u < sizeof o->name && pr.deviceName[len])
+            ++len;
+        memcpy(o->name, pr.deviceName, len);
+        o->name[len] = '\0';
+        o->vendor_id = pr.vendorID;
+        o->device_id = pr.deviceID;
+        const bool discrete = pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        for (u32 h = 0; h < mem.memoryHeapCount; ++h) {
+            if (discrete && (mem.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+                o->dedicated_vram += mem.memoryHeaps[h].size;
+            else
+                o->shared_memory += mem.memoryHeaps[h].size;
+        }
+        switch (pr.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            o->type = DE_GPU_ADAPTER_DISCRETE;
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            o->type = DE_GPU_ADAPTER_INTEGRATED;
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            o->type = DE_GPU_ADAPTER_VIRTUAL;
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            o->type = DE_GPU_ADAPTER_SOFTWARE;
+            break;
+        default:
+            o->type = DE_GPU_ADAPTER_UNKNOWN;
+            break;
+        }
+    }
+    *count = total;
+
+done:
+    if (vk->instance && vk->fn.vkDestroyInstance)
+        vk->fn.vkDestroyInstance(vk->instance, NULL);
+    de__vk_loader_close(vk);
+    DE_FREE(a, vk, sizeof *vk);
+    return r;
+}
+
 /* ---------- The vtable ---------- */
 
 const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
@@ -860,4 +985,5 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .cmd_breadcrumb = de__vk_cmd_breadcrumb,
     .device_lost = de__vk_device_lost,
     .device_lost_report = de__vk_device_lost_report,
+    .enumerate_adapters = vk_enumerate_adapters, /* DENG-410 */
 };

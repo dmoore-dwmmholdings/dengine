@@ -344,6 +344,14 @@ typedef struct de__gpu_backend_vtable {
      * no backend section. */
     bool (*device_lost)(de_gpu_device *d);
     size_t (*device_lost_report)(de_gpu_device *d, char *out, size_t cap);
+
+    /* Adapter list (DENG-410, de_gpu_enumerate_adapters), without a device and from any thread:
+     * writes out[0 .. min(cap, total)) in de_gpu_device_desc.adapter order (the front-end sets
+     * `index`) and the total to *count. `out` is NULL when cap is 0. DE_ERR_NOT_FOUND when the
+     * backend's runtime is missing here; DE_OK with 0 when it lists no adapter. Fails with
+     * DE_FAIL (there is no device to log to). NULL: the front-end reports the device that
+     * adapter 0 creates as the only adapter. */
+    de_result (*enumerate_adapters)(de_gpu_adapter_info *out, u32 cap, u32 *count);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */

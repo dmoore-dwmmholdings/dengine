@@ -12,7 +12,8 @@
  *     created and destroyed twice on WARP with the debug layer: no debug-layer errors, no leaks.
  *   - d3d12.bindless_indices: a bindless index is the descriptor slot, at the expected place of
  *     its space's range; creating the object writes that slot in the mirror and in the
- *     shader-visible heap, and no other.
+ *     shader-visible heap, and not the next one. A buffer also writes its read-only view at
+ *     index + DE__D3D12_BUFFER_SRV_OFFSET (DENG-410).
  */
 #include "de_test.h"
 
@@ -80,14 +81,15 @@ TEST(d3d12, caps_evaluator) {
     EXPECT_EQ(c.wave_size_max, 32u);
     EXPECT_EQ(c.timestamp_frequency, (u64)10000000);
     EXPECT_EQ(c.max_push_constant_bytes, DE_GPU_MAX_PUSH_CONSTANT_BYTES);
-    /* The bindless tables fill the one 1,000,000-descriptor resource heap. */
+    /* The bindless tables, plus the buffers' read-only views (DENG-410: one more buffer-sized
+     * range), fill the one 1,000,000-descriptor resource heap. */
     EXPECT_EQ(c.max_bindless_textures, DE__D3D12_BINDLESS_TEXTURES);
     EXPECT_EQ(c.max_bindless_storage_textures, DE__D3D12_BINDLESS_STORAGE_TEXTURES);
     EXPECT_EQ(c.max_bindless_buffers, DE__D3D12_BINDLESS_BUFFERS);
     EXPECT_EQ(c.max_bindless_accels, 0u);
     EXPECT_EQ(c.max_bindless_samplers, 2048u);
-    EXPECT_EQ(c.max_bindless_textures + c.max_bindless_storage_textures + c.max_bindless_buffers +
-                  c.max_bindless_accels,
+    EXPECT_EQ(c.max_bindless_textures + c.max_bindless_storage_textures +
+                  2u * c.max_bindless_buffers + c.max_bindless_accels,
               1000000u);
 
     /* Below the Base tier: each missing item is named. */
@@ -614,10 +616,15 @@ TEST(d3d12, bindless_indices) {
     /* A structured GPU_ONLY buffer (a UAV), then a raw UPLOAD buffer (an SRV): the first two
      * slots of the buffer range. */
     de_gpu_buffer_desc bd = {.size = 1024, .usage = DE_USAGE_STORAGE, .stride = 16, .name = "b"};
+    slot_watch ro; /* DENG-410: the read-only view (SRV), DE__D3D12_BUFFER_SRV_OFFSET slots on */
     watch_begin(d, false, buffer0, &w);
+    watch_begin(d, false, buffer0 + DE__D3D12_BUFFER_SRV_OFFSET, &ro);
     de_gpu_buffer b = de_gpu_buffer_create(d, &bd);
     ASSERT_TRUE(DE_HANDLE_VALID(b));
     watch_end(d, de_gpu_buffer_bindless(d, b), &w);
+    watch_end(d, de_gpu_buffer_bindless(d, b) + DE__D3D12_BUFFER_SRV_OFFSET, &ro);
+    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET + DE__D3D12_BINDLESS_BUFFERS,
+              DE__D3D12_RESOURCE_HEAP_SIZE); /* the read-only range is the last one */
     de_gpu_buffer_desc ud = {
         .size = 64, .usage = DE_USAGE_CONSTANT, .memory = DE_MEM_UPLOAD, .name = "u"};
     watch_begin(d, false, buffer0 + 1, &w);

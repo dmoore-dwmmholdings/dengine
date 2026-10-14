@@ -567,6 +567,58 @@ static u64 d3d12_queue_completed(de_gpu_device *d, de_gpu_queue q) {
 
 /* ---------- The vtable ---------- */
 
+/* ---------- Adapter list (DENG-410) ---------- */
+
+/* list_adapters' order, as select_adapter numbers `adapter` n; the name, ids and memory as
+ * query_features reads them. A hardware adapter's type needs D3D12_FEATURE_ARCHITECTURE (UMA), so
+ * a device is made on it and released at once; one that refuses a device is UNKNOWN. */
+static de_result d3d12_enumerate_adapters(de_gpu_adapter_info *out, u32 cap, u32 *count) {
+    IDXGIFactory4 *factory = NULL;
+    HRESULT hr = CreateDXGIFactory2(0, &IID_IDXGIFactory4, (void **)&factory);
+    if (FAILED(hr))
+        return DE_FAIL(DE_ERR_NOT_FOUND, "d3d12: CreateDXGIFactory2: HRESULT 0x%08lx",
+                       (unsigned long)hr);
+    IDXGIAdapter1 *list[DE__D3D12_MAX_ADAPTERS];
+    const u32 n = list_adapters(factory, list, DE__D3D12_MAX_ADAPTERS);
+    for (u32 i = 0; i < n; ++i) {
+        if (i < cap) {
+            de_gpu_adapter_info *o = &out[i];
+            DXGI_ADAPTER_DESC1 ad;
+            if (SUCCEEDED(IDXGIAdapter1_GetDesc1(list[i], &ad))) {
+                char name[sizeof o->name];
+                if (WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name, (int)sizeof name,
+                                        NULL, NULL) <= 0)
+                    name[0] = '\0';
+                name[sizeof name - 1] = '\0';
+                memcpy(o->name, name, sizeof o->name);
+                o->vendor_id = ad.VendorId;
+                o->device_id = ad.DeviceId;
+                o->dedicated_vram = ad.DedicatedVideoMemory;
+                o->shared_memory = ad.SharedSystemMemory;
+                if (is_software(&ad)) {
+                    o->type = DE_GPU_ADAPTER_SOFTWARE;
+                } else {
+                    ID3D12Device *dev = NULL;
+                    o->type = DE_GPU_ADAPTER_UNKNOWN;
+                    if (SUCCEEDED(D3D12CreateDevice((IUnknown *)list[i], D3D_FEATURE_LEVEL_11_0,
+                                                    &IID_ID3D12Device, (void **)&dev))) {
+                        D3D12_FEATURE_DATA_ARCHITECTURE arch;
+                        memset(&arch, 0, sizeof arch);
+                        if (feature(dev, D3D12_FEATURE_ARCHITECTURE, &arch, sizeof arch))
+                            o->type =
+                                arch.UMA ? DE_GPU_ADAPTER_INTEGRATED : DE_GPU_ADAPTER_DISCRETE;
+                        ID3D12Device_Release(dev);
+                    }
+                }
+            }
+        }
+        IDXGIAdapter1_Release(list[i]);
+    }
+    IDXGIFactory4_Release(factory);
+    *count = n;
+    return DE_OK;
+}
+
 const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .name = "d3d12",
     .device_payload_size = sizeof(d3d12_device),
@@ -649,6 +701,7 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .cmd_breadcrumb = de__d3d12_cmd_breadcrumb,
     .device_lost = de__d3d12_device_lost,
     .device_lost_report = de__d3d12_device_lost_report,
+    .enumerate_adapters = d3d12_enumerate_adapters, /* DENG-410 */
 };
 
 /* ---------- Test hooks ---------- */

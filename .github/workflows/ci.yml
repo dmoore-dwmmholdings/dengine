@@ -162,8 +162,10 @@ jobs:
             # DENG-105: render_loaders.* uploads, hands over and reads back assets on lavapipe.
             # DENG-414: render_graph_gpu.* runs compiled render graphs (transfers, aliasing, a
             # transient buffer reused across frames) with validation + synchronization validation.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.)'
+            # DENG-410: gpu_backends.* (adapter list, command-list reserve, bindless.slang's
+            # read-only and byte-address buffer accessors) on lavapipe with validation.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022

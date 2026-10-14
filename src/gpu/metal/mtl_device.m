@@ -164,6 +164,35 @@ static void mtl_wait_idle(de_gpu_device *d) {
 
 /* ---------- The vtable ---------- */
 
+/* ---------- Adapter list (DENG-410) ---------- */
+
+/* MTLCopyAllDevices() in its order, as device_create numbers `adapter` n. The values are the ones
+ * de__mtl_caps_fill reports for the same device. */
+static de_result mtl_enumerate_adapters(de_gpu_adapter_info *out, u32 cap, u32 *count) {
+    @autoreleasepool {
+        NSArray<id<MTLDevice>> *all = MTLCopyAllDevices();
+        const u32 total = (u32)all.count;
+        for (u32 i = 0; i < total && i < cap; ++i) {
+            id<MTLDevice> dev = all[i];
+            de_gpu_caps c;
+            de__mtl_caps_fill((__bridge void *)dev, &c);
+            de_gpu_adapter_info *o = &out[i];
+            memcpy(o->name, c.device_name, sizeof o->name);
+            o->name[sizeof o->name - 1] = '\0';
+            o->vendor_id = c.vendor_id;
+            o->device_id = c.device_id;
+            o->dedicated_vram = c.dedicated_vram;
+            o->shared_memory = c.shared_memory;
+            /* Apple silicon has unified memory; an Intel Mac's integrated GPU is the low-power
+             * one; anything else (built-in or eGPU) has its own memory. */
+            o->type = dev.hasUnifiedMemory || dev.lowPower ? DE_GPU_ADAPTER_INTEGRATED
+                                                           : DE_GPU_ADAPTER_DISCRETE;
+        }
+        *count = total;
+    }
+    return DE_OK;
+}
+
 const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .name = "metal",
     .device_payload_size = sizeof(mtl_device),
@@ -246,6 +275,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_breadcrumb = de__mtl_cmd_breadcrumb,
     .device_lost = de__mtl_device_lost,
     .device_lost_report = de__mtl_device_lost_report,
+    .enumerate_adapters = mtl_enumerate_adapters, /* DENG-410 */
 };
 
 /* ---------- Accessors ---------- */

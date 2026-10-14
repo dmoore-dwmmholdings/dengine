@@ -1682,3 +1682,109 @@ void de_gpu_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z) {
     if (x && y && z && c->device->vt->cmd_dispatch_mesh)
         c->device->vt->cmd_dispatch_mesh(c, x, y, z);
 }
+
+/* ---------- Adapters (DENG-410) ---------- */
+
+/* A backend without an adapter list (the null backend, test overrides): the device that adapter 0
+ * creates is its one adapter. */
+static de_result adapters_from_device(de_gpu_backend backend, de_gpu_adapter_info *out, u32 cap,
+                                      u32 *count) {
+    de_gpu_device *d = NULL;
+    const de_gpu_device_desc desc = {.backend = backend};
+    de_result r = de_gpu_device_create(&desc, &d);
+    if (r != DE_OK)
+        return DE_FAIL_WRAP(r,
+                            "de_gpu_enumerate_adapters: the %s backend cannot list adapters, "
+                            "and its default device fails",
+                            de_gpu_backend_name(backend));
+    const de_gpu_caps *c = de_gpu_get_caps(d);
+    de_gpu_adapter_info info;
+    memset(&info, 0, sizeof info);
+    for (size_t i = 0; i + 1 < sizeof info.name && c->device_name[i]; ++i)
+        info.name[i] = c->device_name[i];
+    info.vendor_id = c->vendor_id;
+    info.device_id = c->device_id;
+    info.dedicated_vram = c->dedicated_vram;
+    info.shared_memory = c->shared_memory;
+    info.type = DE_GPU_ADAPTER_UNKNOWN;
+    de_gpu_device_destroy(d);
+    if (out && cap > 0)
+        out[0] = info;
+    *count = 1;
+    return DE_OK;
+}
+
+de_result de_gpu_enumerate_adapters(de_gpu_backend backend, de_gpu_adapter_info *out, u32 cap,
+                                    u32 *count) {
+    if (!count)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_enumerate_adapters: count is NULL");
+    *count = 0;
+    if (!out && cap > 0)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_gpu_enumerate_adapters: out is NULL with cap %u", cap);
+    if ((u32)backend >= DE_GPU_BACKEND_COUNT_)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_gpu_enumerate_adapters: backend %d is not a de_gpu_backend value",
+                       (int)backend);
+    const de_gpu_backend b = resolve_backend(backend);
+    const de__gpu_backend_vtable *vt = de__gpu_find_backend(b);
+    if (!vt)
+        return DE_FAIL(DE_ERR_UNSUPPORTED,
+                       "de_gpu_enumerate_adapters: the %s backend%s is not compiled into this "
+                       "build",
+                       de_gpu_backend_name(b),
+                       backend == DE_GPU_DEFAULT ? " (the platform default)" : "");
+    if (cap > 0)
+        memset(out, 0, sizeof *out * cap);
+    u32 total = 0;
+    const de_result r = vt->enumerate_adapters ? vt->enumerate_adapters(out, cap, &total)
+                                               : adapters_from_device(b, out, cap, &total);
+    if (r != DE_OK)
+        return r;
+    for (u32 i = 0; i < total && i < cap; ++i)
+        out[i].index = i + 1u;
+    *count = total;
+    return DE_OK;
+}
+
+/* ---------- Command-list reserve (DENG-410) ---------- */
+
+de_result de_gpu_cmd_reserve(de_gpu_device *d, de_gpu_queue q, u32 count) {
+    if (!d)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_cmd_reserve: device is NULL");
+    if ((u32)q >= DE_QUEUE_COUNT_)
+        return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                            "de_gpu_cmd_reserve: queue %d is not a de_gpu_queue value", (int)q);
+    if (de__gpu_poll_lost(d, "de_gpu_cmd_reserve"))
+        return de__gpu_lost_error("de_gpu_cmd_reserve");
+    de_mutex_lock(&d->cmd_lock);
+    u32 have = 0;
+    for (const de_gpu_cmd *c = d->cmd_all; c; c = c->all_next)
+        have += c->queue == q;
+    de_mutex_unlock(&d->cmd_lock);
+    /* Made like de_gpu_cmd_begin makes a list it cannot recycle, then put on the free list. */
+    for (; have < count; ++have) {
+        de_gpu_cmd *c = (de_gpu_cmd *)DE_ALLOC(d->alloc, d->cmd_bytes, 16, DE_MEM_RENDER);
+        if (!c)
+            return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_gpu_cmd_reserve: command list %u of %u",
+                                have + 1u, count);
+        memset(c, 0, d->cmd_bytes);
+        c->device = d;
+        c->queue = q;
+        if (d->vt->cmd_init) {
+            const de_result r = d->vt->cmd_init(d, c);
+            if (r != DE_OK) {
+                DE_FREE(d->alloc, c, d->cmd_bytes);
+                return de__gpu_check_lost(d, r, "de_gpu_cmd_reserve");
+            }
+        }
+        c->state = DE__GPU_CMD_FREE;
+        de_mutex_lock(&d->cmd_lock);
+        c->all_next = d->cmd_all;
+        d->cmd_all = c;
+        c->next = d->cmd_free[q];
+        d->cmd_free[q] = c;
+        de_mutex_unlock(&d->cmd_lock);
+    }
+    return DE_OK;
+}

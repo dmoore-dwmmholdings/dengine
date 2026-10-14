@@ -736,5 +736,58 @@ DE_API de_result de_gpu_device_lost_report(de_gpu_device *d, char *buf, u32 cap)
 /** True when the device is lost (asks the backend too; see de_gpu_device_lost_report). */
 DE_API bool de_gpu_device_is_lost(de_gpu_device *d);
 
+/* ---------- Adapters (DENG-410) ---------- */
+
+/** What kind of GPU an adapter is, as far as the backend can tell. */
+typedef enum de_gpu_adapter_type {
+    DE_GPU_ADAPTER_UNKNOWN,  /**< the backend cannot tell (a device-less backend, a failed query) */
+    DE_GPU_ADAPTER_DISCRETE, /**< its own memory */
+    DE_GPU_ADAPTER_INTEGRATED, /**< shares system memory (Apple silicon, iGPUs) */
+    DE_GPU_ADAPTER_VIRTUAL,    /**< a virtual machine's GPU (Vulkan reports it) */
+    DE_GPU_ADAPTER_SOFTWARE    /**< runs on the CPU: WARP, lavapipe / llvmpipe */
+} de_gpu_adapter_type;
+
+/** One adapter of a backend, as de_gpu_enumerate_adapters lists it. */
+typedef struct de_gpu_adapter_info {
+    /** 1-based position in the backend's list: de_gpu_device_desc.adapter = index creates a
+     * device on this adapter. */
+    u32 index;
+    de_gpu_adapter_type type;
+    /** The same values a device on this adapter reports in de_gpu_caps. */
+    char name[128];
+    u32 vendor_id, device_id;
+    u64 dedicated_vram, shared_memory;
+} de_gpu_adapter_info;
+
+/**
+ * Lists the adapters of `backend` (DE_GPU_DEFAULT = the platform's) in de_gpu_device_desc.adapter
+ * order, without keeping a device open. Writes the first min(cap, total) adapters to `out` (NULL
+ * is allowed when `cap` is 0) and the total to `*count`. An adapter is listed even when no device
+ * can be created on it (for example a Vulkan device below 1.3); de_gpu_device_create on its index
+ * then says why. Adapter 0 ("best") is not an entry: create a device with adapter 0 and compare
+ * its caps to find it. A backend that cannot list adapters without a device (the null backend)
+ * creates the device adapter 0 picks and reports it as its one adapter. Any thread; not for
+ * per-frame use (it loads the backend's runtime and may create and release devices).
+ * @return DE_OK, also with `*count` 0 (the backend runs here but lists no adapter);
+ *         DE_ERR_UNSUPPORTED (the backend is not compiled into this build);
+ *         DE_ERR_NOT_FOUND (its runtime is missing here: no Vulkan loader, no DXGI factory);
+ *         DE_ERR_INVALID_ARGUMENT (a bad backend value, NULL `count`, NULL `out` with `cap` > 0);
+ *         other codes from the backend.
+ */
+DE_API de_result de_gpu_enumerate_adapters(de_gpu_backend backend, de_gpu_adapter_info *out,
+                                           u32 cap, u32 *count);
+
+/* ---------- Command-list reserve (DENG-410) ---------- */
+
+/**
+ * Creates command lists for queue `q` until the device owns at least `count` of them (free,
+ * recording or in flight), so that up to `count` lists of that queue in use at once never
+ * allocate in de_gpu_cmd_begin. Lists are never freed before device destroy. Call it at load time
+ * (it allocates); any thread.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL device, bad queue); DE_ERR_OUT_OF_MEMORY or the
+ *         backend's error (the lists made so far stay); DE_ERR_DEVICE_LOST.
+ */
+DE_API de_result de_gpu_cmd_reserve(de_gpu_device *d, de_gpu_queue q, u32 count);
+
 DE_EXTERN_C_END
 #endif
