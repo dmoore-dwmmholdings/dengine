@@ -232,6 +232,10 @@ if(TARGET test_render_gpu_scene)
         target_compile_definitions(test_render_gpu_scene PRIVATE DE_GS_TEST_COOK=1)
     endif()
     if(DE_HAS_GPU_D3D12)
+        # DENG-420: test_gpu_scene.c includes the Agility exports, so the Agility runtime (not the
+        # OS one) loads and the vendored WARP is Base tier; version.lib reads the DLL versions it
+        # logs.
+        target_link_libraries(test_render_gpu_scene PRIVATE version)
         de_d3d12_agility_deploy(test_render_gpu_scene)
         if(DE_D3D12_WARP_DLL)
             de_d3d12_warp_deploy(test_render_gpu_scene)
