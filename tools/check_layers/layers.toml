@@ -248,6 +248,16 @@ to = "cook/importers"
 why = "Dev builds only (DE_HAS_COOKER): the runtime `texture` and `model` types register the texture and model importers (de_texture_import, de_model_import; DENG-105). Shipping does not link them."
 
 [[allow]]
+from = "render"
+to = "cook"
+why = "Dev builds only (DE_HAS_COOKER): the renderer cooks its built-in shaders (shaders/common/composite.slang) in-process with the cooker's built-in shader importer (src/render/passes/composite.c; DENG-176). Shipping does not link the cooker."
+
+[[allow]]
+from = "render"
+to = "gpu/shader"
+why = "The renderer reads the cooked shader format of its built-in shaders (gpu/shader/shader_internal.h: de__shader_view_*; DENG-176)."
+
+[[allow]]
 from = "gpu/shader"
 to = "cook"
 why = "Dev builds only (DE_HAS_COOKER): the runtime `shader` type takes the cooker's built-in shader importer (de_cooker_builtin_importer; DENG-409), so engine code never names tools/cook/importers/. Shipping does not link the cooker."

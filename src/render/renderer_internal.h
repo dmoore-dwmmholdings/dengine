@@ -10,13 +10,17 @@
  *      the GPU (the frame fence), then reset that slot's arena: nothing touches per-frame storage
  *      before this;
  *   2. apply settings (a de_renderer_set_settings request and cvar changes);
- *   3. de_render_uploader_flush (the copy-queue list of this frame's uploads);
- *   4. acquire the swapchain image (or take the offscreen target);
- *   5. build the frame graph on the slot's arena (clear the target, export it for present);
- *   6. record one graphics list: the uploader's acquire barriers first (before anything could
- *      use a new asset), then the passes; submit it waiting for the uploader's fence value and
- *      signalling the frame fence with N + 1; present.
- * DENG-176 replaces steps 5 and 6 with the per-view loop (src/render/views.c).
+ *   3. (DENG-176) the main-thread part, de__renderer_kick_prepare: de_render_uploader_flush (the
+ *      copy-queue list of this frame's uploads), then de_render_uploader_acquire_submit (their
+ *      acquire barriers on a graphics list of their own, waiting for the uploader's fence, so
+ *      they precede every graph of the frame in queue order), and the window's size. The host
+ *      path runs it on the main thread at the kick (de__render_extract_and_kick), before the
+ *      frame goes to the render thread; a direct call of de_renderer_render_frame runs it here;
+ *   4. resize the swapchain when the window's size changed, then acquire the swapchain image
+ *      (or take the offscreen target);
+ *   5. + 6. (DENG-176) de__views_render (src/render/views.c): every view's graph, then the
+ *      output graph (clear + composite into the target), each compiled and executed through the
+ *      render graph; then an empty graphics submit signals the frame fence with N + 1; present.
  */
 #ifndef DE_RENDER_RENDERER_INTERNAL_H
 #define DE_RENDER_RENDERER_INTERNAL_H
@@ -35,7 +39,7 @@ typedef struct de_render_uploader de_render_uploader;
 
 /** Most frames in flight (de_renderer_desc.frames_in_flight is clamped to 2..this). */
 #define DE__RENDER_MAX_FRAMES_IN_FLIGHT 3u
-/** Graphics command lists the renderer puts into the device's pool at create. The pool only
+/** Graphics command lists the renderer reserves at create (de_gpu_cmd_reserve). The pool only
  * recycles a list once the RHI has seen its work complete, which can lag the frame fence by a few
  * frames when the CPU is busy; a pool this deep keeps the frame loop from growing it. */
 #define DE__RENDER_CMD_PRIME (2u * DE__RENDER_MAX_FRAMES_IN_FLIGHT + 2u)
@@ -141,14 +145,18 @@ struct de_renderer {
     de_gpu_texture offscreen;
     f32 clear_color[4];
 
-    /* Per-frame scratch of the frame skeleton (DENG-176 replaces it). */
-    de_rg_resource target_res; /**< the target's graph handle this frame */
-
     de_render_stats stats;
 
     /* DENG-175: the render world, the Extract systems and the render thread (world/render_world.h);
      * NULL until de_renderer_attach. */
     struct de__render_world *render_world;
+
+    /* DENG-176: the views and the per-view frame pipeline (views_internal.h). */
+    struct de__views *views;
+    /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
+     * `lock`), and the size the swapchain was last made or resized for (render thread). */
+    u32 window_w, window_h;
+    u32 swapchain_w, swapchain_h;
 };
 
 /* ---------- Settings (settings.c) ---------- */
@@ -186,6 +194,17 @@ bool de__render_cvars_sync(de_renderer *r);
 /** Writes `r->settings` to the per-effect cvars (under `r->lock`), plus the selections that
  * `what` (DE__RCV_PUBLISH_*) names, then remembers the cvar values as seen. Only the owner. */
 void de__render_cvars_publish(de_renderer *r, u32 what);
+
+/* ---------- The main-thread part of a frame (renderer.c; DENG-176) ---------- */
+
+/**
+ * Step 3 of a frame: flushes the uploader and submits its acquire barriers, and samples the
+ * window's size. Main thread: de__render_extract_and_kick calls it before it hands the frame to
+ * the render thread (the render thread is idle then), so the uploader's main-thread calls never
+ * overlap de_asset_system_update. de_renderer_render_frame calls it itself when it is not called
+ * through the kick.
+ */
+void de__renderer_kick_prepare(de_renderer *r);
 
 /* ---------- Test hooks (renderer.c) ---------- */
 

@@ -164,6 +164,9 @@ de_result de__render_extract_and_kick(de_renderer *r, de_world *w) {
     r->stats.extract_lights = f->lights.live;
     r->stats.extract_cpu_ms = (f32)((f64)(de_time_now_ns() - rw->fill_start_ns) * 1e-6);
     de_atomic_store_u32(&f->state, DE__RW_READY, DE_ATOMIC_RELAXED);
+    /* DENG-176: the uploader's flush and acquire run here, on the main thread, while the render
+     * thread is idle (de__rw_begin waited for it), never during de_asset_system_update. */
+    de__renderer_kick_prepare(r);
 
     if (de_cvar_bool(rw->cv_pipelined) && start_thread(rw)) {
         /* The frame before is rendered (de__rw_begin waited): report its result once. */

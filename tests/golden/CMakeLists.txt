@@ -38,7 +38,8 @@ if(NOT DE_HAS_GPU OR NOT TARGET de_gpu)
 endif()
 
 set(DE_GOLDEN_SCENE_SOURCES
-    scenes/rhi_basic.c)
+    scenes/rhi_basic.c
+    render/views/views_scenes.c)
 
 add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
                          ${DE_GOLDEN_SCENE_SOURCES})
@@ -58,6 +59,9 @@ if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
     target_include_directories(de_golden PRIVATE "${DE_ROOT_DIR}/tools")
     target_compile_definitions(de_golden PRIVATE DE_GOLDEN_COOK=1)
 endif()
+# DENG-176: renderer scenes (render/views/) run the renderer, its ECS world and Extract, and include
+# renderer internals (src/ is on the include path).
+target_link_libraries(de_golden PRIVATE de_render de_ecs de_reflect de_task de_asset)
 if(TARGET de_gpu_d3d12)
     # D3D12: the Agility runtime next to the executable and its exports in it (DENG-285), and the
     # vendored WARP (test-only, third_party/README.md rule 10; de-golden is a test executable).
