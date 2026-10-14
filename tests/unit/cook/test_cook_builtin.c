@@ -6,12 +6,14 @@
  * itself. CTest names cook_builtin.<test>.
  *
  * Cooking needs the runtime importers (DE_HAS_COOKER: Debug and Dev); the shader checks need the
- * Slang compiler of this host. Without them the tests skip.
+ * Slang compiler of this host. Without them the tests skip. DENG-178 adds
+ * prefab_keeps_mesh_renderer (the render components of de-cook's tool world).
  */
 #include "cook_project_util.h"
 
 #include "asset/dpak/dpak_format.h"
 #include "asset/dpak/dpak_reader.h"
+#include "asset/scene/scene_format.h"
 #include "cook/lib/de_cooker.h"
 
 #if DE_COOK_TEST_SHADER_VIEW
@@ -293,6 +295,65 @@ TEST(cook_builtin, project_type_wins) {
     EXPECT_EQ(type, de_hash64_str("texture"));
     EXPECT_MEMEQ(t, "DTEX", 4); /* cooked by the built-in texture importer */
     free(t);
+    dpak_close(r);
+    free(pack);
+#endif
+}
+
+/* ---- cook_builtin.prefab_keeps_mesh_renderer ------------------------------------------------- */
+
+/* DENG-178: de-cook's tool world has the render components, so the prefab of a glTF model keeps
+ * its DeMeshRenderer (before, it was skipped as an unknown component). The cooked prefab's type
+ * table names DeMeshRenderer and DeTransform, the mesh node's entity has both, and the mesh and
+ * material IDs are its asset references. Headless builds have no render module: skipped. */
+TEST(cook_builtin, prefab_keeps_mesh_renderer) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#elif !DE_HAS_RENDER
+    SKIP("headless build: no render module, so de-cook has no render components");
+#else
+    static const char manifest[] = "[project]\nasset_root = \"assets\"\n[assets]\n"
+                                   "\"models/box\" = { type = \"model\", source = \"box.glb\" }\n";
+    cct_fresh("prefab");
+    cct_put("prefab/proj/assets.toml", manifest, sizeof manifest - 1);
+    size_t glb_size = 0;
+    u8 *glb = cct_read(DE_COOK_BUILTIN_PROJECT "/assets/models/box.glb", &glb_size);
+    ASSERT_TRUE(glb != NULL);
+    cct_put("prefab/proj/assets/box.glb", glb, glb_size);
+    free(glb);
+    char mpath[DE_FS_PATH_MAX], out[DE_FS_PATH_MAX];
+    cct_path(mpath, sizeof mpath, "prefab/proj/assets.toml");
+    cct_path(out, sizeof out, "prefab");
+    const char *a[] = {mpath, "--platform", "linux", "--out", out, "--no-cache", "--quiet", NULL};
+    ASSERT_EQ(cook_no_hooks(a, NULL), DE_COOK_EXIT_OK);
+    EXPECT_TRUE(strstr(g_cct.err.p, "DeMeshRenderer") == NULL);
+
+    size_t n = 0;
+    u8 *pack = read_pack("prefab/game.dpak", &n);
+    ASSERT_TRUE(pack != NULL);
+    dpak_reader *r = NULL;
+    ASSERT_EQ(dpak_open_memory(pack, n, &(dpak_open_desc){.verify = true}, &r), DE_OK);
+    u64 size = 0, type = 0;
+    u8 *pf = read_entry(r, "models/box#prefab", &size, &type);
+    ASSERT_TRUE(pf != NULL);
+    EXPECT_EQ(type, de_hash64_str("prefab"));
+    de__scene_view v;
+    char err[256];
+    ASSERT_EQ(de__scene_view_parse(pf, size, &v, err, sizeof err), DE_OK);
+    EXPECT_EQ((int)v.kind, (int)DE__SCENE_KIND_PREFAB);
+    /* Types sorted by name: DeMeshRenderer, DeTransform. */
+    ASSERT_EQ(v.type_count, 2u);
+    EXPECT_STREQ(de__scene_type_at(&v, 0).name, "DeMeshRenderer");
+    EXPECT_STREQ(de__scene_type_at(&v, 1).name, "DeTransform");
+    u32 renderers = 0;
+    for (u32 i = 0; i < v.entity_count; ++i) {
+        const de__scene_entity_rec e = de__scene_entity_at(&v, i);
+        for (u32 k = 0; k < e.component_count; ++k)
+            renderers += de__scene_comp_at(&v, e.first_component + k).type_index == 0u;
+    }
+    EXPECT_GE(renderers, 1u);
+    EXPECT_GE(v.asset_count, 2u); /* the mesh and the material */
+    free(pf);
     dpak_close(r);
     free(pack);
 #endif

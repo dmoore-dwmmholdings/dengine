@@ -14,6 +14,9 @@
 #include <dengine/de_math.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
+#if DE_HAS_RENDER
+#include <dengine/de_render.h>
+#endif
 #include <dengine/de_task.h>
 
 #include <stdarg.h>
@@ -695,6 +698,14 @@ static int cc_setup_runtime(cc_run *run) {
         return cc_io_error(io, "cannot create the ECS world", NULL);
     if (!DE_HANDLE_VALID(de_builtin_components(run->world).transform))
         return cc_io_error(io, "cannot register the ECS built-in components", NULL);
+#if DE_HAS_RENDER
+    /* DENG-178: the render components (DeMeshRenderer, DeCamera, DeLight, ...), so the prefabs
+     * of glTF models keep their DeMeshRenderer. A headless build has no render module: there
+     * they are unknown and skipped with a warning, as a game's own components are without
+     * --game. */
+    if (de_render_register_components(run->world) != DE_OK)
+        return cc_io_error(io, "cannot register the render components", NULL);
+#endif
     /* The asset system holds the asset types (built-ins at create) and gives the scene importer
      * its component registry (DENG-215). It loads nothing. */
     de_asset_system_desc ad;

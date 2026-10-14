@@ -82,3 +82,22 @@ if(TARGET test_renderer)
     target_link_libraries(test_renderer PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
 endif()
+
+# DENG-178: the render components (src/render/components.c), executable test_render_components;
+# CTest names render_components.<test>: registration (also through de_renderer_attach on the null
+# backend), the TOML round trip, the construct defaults, the field flags, and, with the cooker
+# (DE_HAS_COOKER), a glTF model's prefab instantiated with DeMeshRenderer. Scratch files go below
+# <build>/tests/unit/render/test_render_components_tmp/ (mounted as rc:/); hierarchy.gltf is read
+# from tests/unit/import/data/ (mounted as rcimp:/).
+de_add_test(NAME render_components
+    SOURCES test_render_components.c
+    LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
+    LABELS unit render
+    TIMEOUT 120)
+if(TARGET test_render_components)
+    target_include_directories(test_render_components PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_render_components_tmp")
+    target_compile_definitions(test_render_components PRIVATE
+        "DE_RC_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_render_components_tmp\""
+        "DE_RC_TEST_IMPORT_DATA_DIR=\"${DE_ROOT_DIR}/tests/unit/import/data\"")
+endif()
