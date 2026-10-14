@@ -453,4 +453,18 @@ void de__rg_plan_destroy(de_rg *g, de__rg_plan *plan);
 /** rg_cache.c: the cache capacity from r.rg_cache_size (registers it on first use). */
 u32 de__rg_cache_limit(de_rg *g);
 
+/* ---------- DENG-414: first use of a buffer on Vulkan (rg_barriers.c) ---------- */
+
+/** Every de_gpu_access bit a buffer can be in. */
+#define DE__RG_BUFFER_ACCESS_BITS                                                                  \
+    (DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE | DE_ACCESS_INDIRECT | DE_ACCESS_COPY_SRC |    \
+     DE_ACCESS_COPY_DST | DE_ACCESS_ACCEL_READ | DE_ACCESS_ACCEL_WRITE)
+/**
+ * `before` of the first barrier of a resource of `kind` in a frame (no earlier state): NONE
+ * (discard; it waits for earlier work of the queue), except for buffers on Vulkan, where a buffer
+ * barrier from NONE waits for nothing: there it is every buffer access, so a transient buffer's
+ * memory is not reused while the previous frame still uses it on the queue. Pure.
+ */
+u32 de__rg_first_use_before(de_gpu_backend backend, de__rg_res_kind kind);
+
 #endif /* DE_RENDER_RG_INTERNAL_H */

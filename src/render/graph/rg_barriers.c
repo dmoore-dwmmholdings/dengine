@@ -30,6 +30,18 @@
  * ranges (mip runs per layer row, then equal runs of consecutive rows), and every barrier of a
  * step is recorded with one de_gpu_cmd_barriers call (batched per pass).
  *
+ * First use of a buffer on Vulkan (DENG-414). NONE before is a discard; for an image it waits for
+ * all earlier work of the queue on every backend (Vulkan: ALL_COMMANDS with an UNDEFINED layout),
+ * and so does every barrier on D3D12 (SYNC_ALL) and Metal (fence epochs, a full barrier). A Vulkan
+ * buffer barrier has no layout, though: from NONE its source scope is empty, so it orders nothing.
+ * Transient buffers keep their placement across frames (and plans share the pool), so frame N+1's
+ * first write could race frame N's last reads or writes of the same bytes on the same queue. On
+ * Vulkan a buffer's first use therefore names every buffer access as `before`
+ * (de__rg_first_use_before): the source scope covers whatever the previous user of the memory did
+ * on this queue (the backend drops stages the queue cannot run and the AS bits without ray
+ * tracing). Earlier work on other queues is ordered by the frame joins (rg_schedule.c), whose
+ * semaphore waits cover all commands. Other backends keep NONE, which already orders.
+ *
  * End of frame (the epilogue, a graphics step after every pass): imports and exported resources
  * go to their final state on the graphics queue: the de_rg_export `final_access` when it is not
  * NONE, else the access of their last use (so an import always ends in one state, which
@@ -67,6 +79,7 @@ typedef struct cell_rect {
 typedef struct res_ctx {
     de__rg_cbuild *b;
     u32 resource;
+    u32 first_before;   /* `before` of a first use (de__rg_first_use_before) */
     const u32 *ms, *ls; /* split points */
     u32 nm, nl;         /* cells per row / rows */
     u32 cap_m, cap_l;   /* real counts (transient textures) or UINT32_MAX */
@@ -144,12 +157,13 @@ static de__rg_range cell_range(const res_ctx *c, u32 m, u32 l) {
 
 /* The transition of one cell to `want` on queue `q` at step `s`. `final`: the epilogue, where a
  * cell already in the wanted state needs nothing even after a write. */
-static cell_tr transition(const cell_state *st, u32 want, u32 q, u32 s, bool final) {
+static cell_tr transition(const cell_state *st, u32 want, u32 q, u32 s, bool final,
+                          u32 first_before) {
     cell_tr t = {0};
     if (st->queue == NOQ || st->access == DE_ACCESS_NONE) {
         if (final && want == DE_ACCESS_NONE)
             return t;
-        t = (cell_tr){true, DE_ACCESS_NONE, want, q, q, s};
+        t = (cell_tr){true, first_before, want, q, q, s};
     } else if (st->queue != q) {
         t = (cell_tr){true, st->access, want, st->queue, q, st->last};
     } else if (st->access != want ||
@@ -227,7 +241,7 @@ static bool apply_step(res_ctx *c, const u32 *want, u32 s, u32 q, bool final) {
         c->tr[i] = (cell_tr){0};
         if (!final && want[i] == DE_ACCESS_NONE)
             continue;
-        c->tr[i] = transition(&c->st[i], want[i], q, s, final);
+        c->tr[i] = transition(&c->st[i], want[i], q, s, final, c->first_before);
         any |= c->tr[i].valid;
     }
     if (any && !emit_rects(c, s))
@@ -252,6 +266,8 @@ static bool plan_resource(de__rg_cbuild *b, u32 ri) {
         return true;
 
     res_ctx c = {.b = b, .resource = ri};
+    const de_gpu_caps *caps = g->device ? de_gpu_get_caps(g->device) : NULL;
+    c.first_before = de__rg_first_use_before(caps ? caps->backend : DE_GPU_NULL, r->kind);
     const bool sized = r->kind == DE__RG_TEXTURE && !imported;
     c.cap_m = sized && r->mip_count ? r->mip_count : UINT32_MAX;
     c.cap_l = sized && r->layer_count ? r->layer_count : UINT32_MAX;
@@ -309,6 +325,12 @@ static bool plan_resource(de__rg_cbuild *b, u32 ri) {
         b->end_access[ri] = target;
     }
     return true;
+}
+
+u32 de__rg_first_use_before(de_gpu_backend backend, de__rg_res_kind kind) {
+    if (backend == DE_GPU_VULKAN && kind == DE__RG_BUFFER)
+        return DE__RG_BUFFER_ACCESS_BITS;
+    return DE_ACCESS_NONE;
 }
 
 bool de__rg_plan_barriers(de__rg_cbuild *b) {
