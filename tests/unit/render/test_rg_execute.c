@@ -8,11 +8,13 @@
 #include <dengine/de_gpu.h>
 #include <dengine/de_math.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_platform.h>
 #include <dengine/de_render.h>
 #include <dengine/de_task.h>
 
 #include "de_alloc_guard.h"
 #include "gpu/gpu_backend.h"
+#include "platform/de_atomic.h"
 #include "render/graph/rg_internal.h"
 
 #if DE_PIPE_TEST_COOK
@@ -593,24 +595,84 @@ TEST_F(rg_execute, stats_latency, xfx) {
     de_gpu_buffer_destroy(f->dev, rb);
 }
 
-/* After warm-up, frames of build + compile + parallel record + submit allocate nothing. */
-TEST_F(rg_execute, no_heap_after_warmup, xfx) {
-    open_null(f, true);
+/* ---------- No heap allocation after warm-up (DENG-173, DENG-415) ---------- */
+
+/* Every thread of the task system must have started before a guarded region: a thread's first
+ * access to a thread-local variable makes dyld allocate its TLS block (4640 bytes on macOS), and
+ * under load a worker can start long after de_task_system_create returns. DENG-415: under a
+ * loaded host the background worker (which no frame ever wakes) started inside the region of
+ * no_heap_after_warmup. So: one background task, then one task per other frame worker, each held
+ * until every frame worker holds one (the main thread only watches, so each task runs on its own
+ * worker). Bounded waits: a worker that never starts fails the test instead of hanging it. */
+typedef struct warm_gate {
+    de_atomic_u32 arrived; /* bit per frame worker index that holds a task */
+    u32 want;              /* bits of every frame worker but the main thread */
+    de_atomic_u32 bg_ran;
+} warm_gate;
+
+static void warm_bg(void *user) {
+    de_atomic_store_u32(&((warm_gate *)user)->bg_ran, 1u, DE_ATOMIC_RELEASE);
+}
+
+static void warm_frame(void *user) {
+    warm_gate *w = (warm_gate *)user;
+    const u32 idx = de_task_worker_index();
+    if (idx != DE_TASK_WORKER_NONE && idx < 32u)
+        de_atomic_fetch_or_u32(&w->arrived, 1u << idx, DE_ATOMIC_ACQ_REL);
+    const u64 deadline = de_time_now_ns() + 10ull * 1000000000ull;
+    while ((de_atomic_load_u32(&w->arrived, DE_ATOMIC_ACQUIRE) & w->want) != w->want &&
+           de_time_now_ns() < deadline)
+        de_sleep_ns(10000);
+}
+
+static void warm_task_threads(de_task_system *ts) {
+    warm_gate w;
+    de_atomic_init_u32(&w.arrived, 0);
+    de_atomic_init_u32(&w.bg_ran, 0);
+    const u32 n = de_task_worker_count(ts); /* frame workers, main thread included */
+    w.want = ((n >= 32u ? 0xFFFFFFFFu : (1u << n) - 1u)) & ~1u;
+    de_task_counter c = {0};
+    de_task_submit(ts, DE_TASK_POOL_BACKGROUND, warm_bg, &w, &c);
+    for (u32 i = 1; i < n; ++i)
+        de_task_submit(ts, DE_TASK_POOL_FRAME, warm_frame, &w, &c);
+    const u64 deadline = de_time_now_ns() + 10ull * 1000000000ull;
+    while (((de_atomic_load_u32(&w.arrived, DE_ATOMIC_ACQUIRE) & w.want) != w.want ||
+            !de_atomic_load_u32(&w.bg_ran, DE_ATOMIC_ACQUIRE)) &&
+           de_time_now_ns() < deadline)
+        de_sleep_ns(10000);
+    de_task_wait(ts, &c);
+    EXPECT_EQ(de_atomic_load_u32(&w.arrived, DE_ATOMIC_ACQUIRE) & w.want, w.want);
+    EXPECT_EQ(de_atomic_load_u32(&w.bg_ran, DE_ATOMIC_ACQUIRE), 1u);
+}
+
+static void start_tasks(xfx *f) {
     ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 4,
                                                            .background_worker_count = 1,
                                                            .allocator = &f->alloc},
                                     &f->tasks),
               DE_OK);
-    for (u32 i = 0; i < 2u * DE__RG_TIMING_SLOTS; ++i) {
-        frame_begin(f);
-        build_64(f);
-        frame_run(f, f->tasks, i);
-    }
+    warm_task_threads(f->tasks);
+}
+
+/* The null device's internal timeline value of the last submit on each queue. */
+static void null_submitted(xfx *f, u64 out[DE_QUEUE_COUNT_]) {
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+        out[q] = de_atomic_load_u64(&f->dev->submitted[q], DE_ATOMIC_ACQUIRE);
+}
+
+#define LAG_MAX 3u /* frames the null device's completion trails behind (late_recycle) */
+
+/* `count` frames of build + compile + parallel execute under the alloc guard. With `lag`, the
+ * null device (manual completion) completes each queue only up to its last submit of `lag`
+ * frames earlier, so the RHI recycles command lists late, while the graph's fences (user fences
+ * signal at submit) are already reached. On failure it prints every allocation site (the guard:
+ * kind, size, tag, call stack) and the tracking allocator's counts. */
+static void guarded_frames(xfx *f, u32 count, u32 lag, u64 hist[][DE_QUEUE_COUNT_], u32 *hn) {
     const de_tracking_stats before = de_tracking_allocator_stats(&f->track);
     de_alloc_guard guard = {0};
     de_alloc_guard_begin(&guard);
     de_result r = DE_OK;
-    for (u32 i = 0; i < 20 && r == DE_OK; ++i) {
+    for (u32 i = 0; i < count && r == DE_OK; ++i) {
         de__rg_reset(f->g);
         de_arena_reset(f->arena);
         r = de__rg_begin(f->g, f->arena);
@@ -623,12 +685,67 @@ TEST_F(rg_execute, no_heap_after_warmup, xfx) {
         if (r == DE_OK)
             r = de__rg_execute(f->g,
                                &(de__rg_execute_desc){.tasks = f->tasks, .frame_index = 100 + i});
+        if (hist) {
+            null_submitted(f, hist[*hn % (LAG_MAX + 1u)]);
+            ++*hn;
+            if (*hn > lag)
+                for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+                    de__gpu_null_complete(f->dev, (de_gpu_queue)q,
+                                          hist[(*hn - 1u - lag) % (LAG_MAX + 1u)][q]);
+        }
     }
     de_alloc_guard_end(&guard);
+    const de_tracking_stats after = de_tracking_allocator_stats(&f->track);
+    if (after.alloc_count != before.alloc_count || after.realloc_count != before.realloc_count)
+        printf("tracking allocator: %llu allocs, %llu reallocs, %+lld live bytes in the region "
+               "(sites above, from the guard)\n",
+               (unsigned long long)(after.alloc_count - before.alloc_count),
+               (unsigned long long)(after.realloc_count - before.realloc_count),
+               (long long)(after.bytes_live - before.bytes_live));
     ASSERT_EQ(r, DE_OK);
     DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
-    const de_tracking_stats after = de_tracking_allocator_stats(&f->track);
     EXPECT_EQ(after.alloc_count, before.alloc_count);
+    EXPECT_EQ(after.realloc_count, before.realloc_count);
+}
+
+/* After warm-up, frames of build + compile + parallel record + submit allocate nothing. */
+TEST_F(rg_execute, no_heap_after_warmup, xfx) {
+    open_null(f, true);
+    start_tasks(f);
+    for (u32 i = 0; i < 2u * DE__RG_TIMING_SLOTS; ++i) {
+        frame_begin(f);
+        build_64(f);
+        frame_run(f, f->tasks, i);
+    }
+    guarded_frames(f, 20, 0, NULL, NULL);
+    const de__rg_timings *t = de__rg_timings_get(f->g);
+    EXPECT_TRUE(t->valid);
+    EXPECT_EQ(t->pass_count, 64u);
+}
+
+/* DENG-415: the RHI recycles a command list only once it sees the list's work complete, which can
+ * trail the fences the caller waits on (DENG-174). Warm up with completion at submit, then run
+ * frames whose completion trails by LAG_MAX frames: the lists of three frames are still in flight
+ * when a frame begins its own, and execute must not allocate more. */
+TEST_F(rg_execute, no_heap_late_recycle, xfx) {
+    open_null(f, true);
+    start_tasks(f);
+    for (u32 i = 0; i < 2u * DE__RG_TIMING_SLOTS; ++i) {
+        frame_begin(f);
+        build_64(f);
+        frame_run(f, f->tasks, i);
+    }
+    de__gpu_null_set_manual_completion(f->dev, true);
+    u64 hist[LAG_MAX + 1u][DE_QUEUE_COUNT_];
+    u32 hn = 0;
+    guarded_frames(f, 20, LAG_MAX, hist, &hn);
+    /* The lists really were held: the device still has frames in flight. */
+    u32 inflight = 0;
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+        inflight += de_atomic_load_u64(&f->dev->submitted[q], DE_ATOMIC_ACQUIRE) >
+                    hist[(hn - 1u - LAG_MAX) % (LAG_MAX + 1u)][q];
+    EXPECT_GT(inflight, 0u);
+    de__gpu_null_set_manual_completion(f->dev, false);
     const de__rg_timings *t = de__rg_timings_get(f->g);
     EXPECT_TRUE(t->valid);
     EXPECT_EQ(t->pass_count, 64u);

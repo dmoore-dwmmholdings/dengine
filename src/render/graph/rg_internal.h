@@ -603,6 +603,9 @@ typedef struct de__rg_exec {
     u32 pub_cap;
     char *pub_text;
     u32 pub_text_cap;
+    /** DENG-415: command lists this graph has primed the device's pool with, per queue
+     * (DE__RG_TIMING_SLOTS + 1 frames' worth of its largest frame; see rg_execute.c). */
+    u32 primed[DE_QUEUE_COUNT_];
 } de__rg_exec;
 
 /* ---------- Entry points (rg_execute.c) ---------- */

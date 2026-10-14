@@ -120,6 +120,45 @@ static bool partition(de_rg *g, de__rg_exec *x, u32 target) {
     return true;
 }
 
+/* ---------- Command-list pool (DENG-415) ---------- */
+
+/* The RHI recycles a command list only once it has seen the list's work complete, and it looks
+ * only at a submit or wait_idle; both can trail the fences the caller waits on (DENG-174). A
+ * graph records up to `lists[q]` lists per frame on queue q. While it records frame N, the lists
+ * of frames the RHI has not seen complete are still taken, and so are those of a frame that did
+ * complete but was not collected yet (collection runs at frame N's first submit, after
+ * recording). So when a frame needs more lists than the pool was primed for, the graph holds
+ * (DE__RG_TIMING_SLOTS + 1) * lists[q] lists at once and submits them empty. A warmed-up frame
+ * then never allocates a list while the RHI's view of completion trails by up to
+ * DE__RG_TIMING_SLOTS - 1 frames (de__rg_timing_begin waits for frame N - DE__RG_TIMING_SLOTS on
+ * the graph's own timeline anyway). This runs only when the need grows (warm-up); the empty
+ * lists are named "<graph> prime". */
+static de_result prime_cmd_pool(de_rg *g, de__rg_exec *x, const u32 lists[DE_QUEUE_COUNT_]) {
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
+        const u32 need = lists[q] * (DE__RG_TIMING_SLOTS + 1u);
+        if (need <= x->primed[q])
+            continue;
+        de_gpu_cmd **held = DE_ARENA_PUSH(g->arena, de_gpu_cmd *, need);
+        if (!held)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY,
+                           "de__rg_execute: render graph \"%s\": the frame arena is full", g->name);
+        char name[96];
+        snprintf(name, sizeof name, "%.24s prime", g->name);
+        u32 n = 0;
+        while (n < need && (held[n] = de_gpu_cmd_begin(x->device, (de_gpu_queue)q, name)) != NULL)
+            ++n;
+        const de_gpu_submit s = {.cmds = held, .cmd_count = n};
+        const de_result r = n ? de_gpu_queue_submit(x->device, (de_gpu_queue)q, &s) : DE_OK;
+        if (n < need || r != DE_OK)
+            return DE_FAIL_WRAP(r != DE_OK ? r : DE_ERR_OUT_OF_MEMORY,
+                                "de__rg_execute: render graph \"%s\": priming %u command lists "
+                                "on the %s queue",
+                                g->name, need, de__rg_queue_name((de_gpu_queue)q));
+        x->primed[q] = need;
+    }
+    return DE_OK;
+}
+
 /* ---------- Recording ---------- */
 
 typedef struct rec_ctx {
@@ -235,6 +274,16 @@ de_result de__rg_execute(de_rg *g, const de__rg_execute_desc *desc) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY,
                        "de__rg_execute: render graph \"%s\": no memory for the partition", g->name);
     const u32 nc = x->chunk_count;
+    {
+        u32 lists[DE_QUEUE_COUNT_] = {0};
+        for (u32 k = 0; k < nc; ++k)
+            ++lists[x->chunks[k].queue];
+        lists[DE_QUEUE_GRAPHICS] += de__rg_timing_needs_resolve(x, DE__RG_HEAP_MAIN) ? 1u : 0u;
+        lists[DE_QUEUE_COPY] += de__rg_timing_needs_resolve(x, DE__RG_HEAP_COPY) ? 1u : 0u;
+        r = prime_cmd_pool(g, x, lists);
+        if (r != DE_OK)
+            return r;
+    }
     de_gpu_cmd **cmds = DE_ARENA_PUSH(g->arena, de_gpu_cmd *, nc + 2u);
     de_result *results = DE_ARENA_PUSH(g->arena, de_result, nc);
     u32 max_waits = 1;
