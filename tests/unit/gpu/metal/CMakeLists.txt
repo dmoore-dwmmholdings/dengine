@@ -33,3 +33,23 @@ if(TARGET test_gpu_metal)
         target_compile_definitions(test_gpu_metal PRIVATE DE_MTL_TEST_SDL=1)
     endif()
 endif()
+
+# DENG-325: pipelines, draws, dispatches, indirect-count draws (ICBs) and the binary archive
+# (test_mtl_pipeline.c: CTest gpu_metal.mtl.*, the names and expected values of DENG-323's Vulkan
+# tests). It uses DENG-323's shared helper ../data/pipelines/pipeline_shaders.c, which cooks the
+# shared shaders to metallib through the shader importer when the build has it (DE_BUILD_TOOLS and
+# Slang); otherwise the GPU pipeline tests skip. The archive tests write below
+# <build>/tests/unit/gpu/metal/test_gpu_metal_pipecache/ (mounted as mtlcache:/).
+if(TARGET test_gpu_metal)
+    target_sources(test_gpu_metal PRIVATE test_mtl_pipeline.c ../data/pipelines/pipeline_shaders.c)
+    target_include_directories(test_gpu_metal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../data/pipelines")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_gpu_metal_pipecache")
+    target_compile_definitions(test_gpu_metal PRIVATE
+        "DE_MTL_TEST_CACHE_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_metal_pipecache\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_metal PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_gpu_metal PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_metal PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/pipelines\"")
+    endif()
+endif()

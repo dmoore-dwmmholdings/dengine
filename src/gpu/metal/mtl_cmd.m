@@ -13,8 +13,10 @@
  * de_gpu_cmd_copy_texture_to_buffer).
  *
  * Render passes: one MTLRenderPassDescriptor from the attachments. `clear` loads with the clear
- * value, otherwise the old contents are loaded; `store` stores, otherwise they are discarded. A
- * D32_FLOAT_S8 depth attachment also sets the stencil attachment (cleared to 0). Copies use the
+ * value, otherwise the old contents are loaded; `store` stores, otherwise they are discarded (that
+ * store action is set when the encoder ends, so an indirect-count draw can split the pass,
+ * DENG-325). A D32_FLOAT_S8 depth attachment also sets the stencil attachment (cleared to 0).
+ * Copies use the
  * portable layout of de_gpu.h (row pitch a multiple of 256, offsets of 512); for BC formats a row
  * is a row of 4x4 blocks and the copy size is the mip's size in texels.
  */
@@ -39,12 +41,36 @@ de_result de__mtl_cmd_init(de_gpu_device *d, de_gpu_cmd *c) {
     return DE_OK;
 }
 
+/* DENG-325: begin_render leaves the store action of an attachment without `store` open
+ * (MTLStoreActionUnknown), so a render pass that is split for an indirect-count draw (mtl_icb.m)
+ * can still store it; the encoder's end decides (DontCare unless the pass was split). */
+static void resolve_store(mtl_cmd *mc, id<MTLRenderCommandEncoder> r, bool store_all) {
+    const u32 mask = mc->deferred_store;
+    mc->deferred_store = 0;
+    if (!mask || r == nil)
+        return;
+    const MTLStoreAction act = store_all ? MTLStoreActionStore : MTLStoreActionDontCare;
+    for (u32 i = 0; i < DE_GPU_MAX_COLOR_ATTACHMENTS; ++i)
+        if (mask & (1u << i))
+            [r setColorStoreAction:act atIndex:i];
+    if (mask & DE__MTL_STORE_DEPTH)
+        [r setDepthStoreAction:act];
+    if (mask & DE__MTL_STORE_STENCIL)
+        [r setStencilStoreAction:act];
+}
+
+void de__mtl_render_resolve_store(de_gpu_cmd *c, void *render_encoder, bool store_all) {
+    resolve_store(payload(c), (__bridge id<MTLRenderCommandEncoder>)render_encoder, store_all);
+}
+
 static void release_recording(mtl_cmd *mc) {
     @autoreleasepool {
         if (mc->encoder) {
             /* A list that was never submitted (device destroy): end the encoder, or Metal
              * asserts when the command buffer goes away with an encoder open. */
             id<MTLCommandEncoder> enc = (id<MTLCommandEncoder>)CFBridgingRelease(mc->encoder);
+            if (mc->kind == DE__MTL_ENC_RENDER)
+                resolve_store(mc, (id<MTLRenderCommandEncoder>)enc, false);
             [enc endEncoding];
         }
         if (mc->cb)
@@ -145,7 +171,8 @@ static void set_attachment(MTLRenderPassAttachmentDescriptor *a, id<MTLTexture> 
     else
         a.slice = src->layer;
     a.loadAction = src->clear ? MTLLoadActionClear : MTLLoadActionLoad;
-    a.storeAction = src->store ? MTLStoreActionStore : MTLStoreActionDontCare;
+    /* Without `store`: decided when the encoder ends (resolve_store, DENG-325). */
+    a.storeAction = src->store ? MTLStoreActionStore : MTLStoreActionUnknown;
 }
 
 void de__mtl_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
@@ -154,6 +181,7 @@ void de__mtl_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u3
     de__mtl_encoder_end(c);
     if (!mc->cb)
         return;
+    u32 deferred = 0;
     @autoreleasepool {
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
         for (u32 i = 0; i < color_count; ++i) {
@@ -162,6 +190,8 @@ void de__mtl_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u3
                 continue; /* stale handle: reported by the front-end in Debug/Dev */
             MTLRenderPassColorAttachmentDescriptor *a = rp.colorAttachments[i];
             set_attachment(a, tex, &colors[i]);
+            if (!colors[i].store)
+                deferred |= 1u << i;
             const f32 *cc = colors[i].clear_color;
             a.clearColor = MTLClearColorMake(cc[0], cc[1], cc[2], cc[3]);
         }
@@ -170,9 +200,13 @@ void de__mtl_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u3
             if (tex != nil) {
                 set_attachment(rp.depthAttachment, tex, depth);
                 rp.depthAttachment.clearDepth = depth->clear_depth;
+                if (!depth->store)
+                    deferred |= DE__MTL_STORE_DEPTH;
                 if (tex.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
                     set_attachment(rp.stencilAttachment, tex, depth);
                     rp.stencilAttachment.clearStencil = 0;
+                    if (!depth->store)
+                        deferred |= DE__MTL_STORE_STENCIL;
                 }
             }
         }
@@ -186,6 +220,7 @@ void de__mtl_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u3
         if (c->name[0])
             enc.label = [NSString stringWithUTF8String:c->name];
         de__mtl_encoder_started(c, (__bridge void *)enc, DE__MTL_ENC_RENDER);
+        mc->deferred_store = deferred;
     }
 }
 

@@ -32,6 +32,8 @@ static void device_release(de_gpu_device *d) {
     mtl_device *m = de__mtl_dev(d);
     @autoreleasepool {
         de__mtl_sync_drain(d);
+        de__mtl_pipeline_shutdown(d); /* DENG-325 */
+        de__mtl_archive_close(d);
         de__mtl_residency_shutdown(d);
         de__mtl_sync_shutdown(d);
         de__mtl_bindless_shutdown(d);
@@ -49,6 +51,8 @@ static void device_release(de_gpu_device *d) {
     de_mutex_destroy(&m->heap_lock);
     de_mutex_destroy(&m->sampler_lock);
     de_mutex_destroy(&m->size_lock);
+    de_mutex_destroy(&m->library_lock);
+    de_mutex_destroy(&m->archive_lock);
 }
 
 static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *desc,
@@ -57,6 +61,8 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
     de_mutex_init(&m->heap_lock);
     de_mutex_init(&m->sampler_lock);
     de_mutex_init(&m->size_lock);
+    de_mutex_init(&m->library_lock);
+    de_mutex_init(&m->archive_lock);
     de_result r = DE_OK;
     @autoreleasepool {
         id<MTLDevice> dev = nil;
@@ -101,6 +107,8 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
             r = de__mtl_sync_init(d);
         if (r == DE_OK)
             r = de__mtl_residency_init(d);
+        if (r == DE_OK)
+            de__mtl_archive_open(d, desc); /* DENG-325: never fails */
     }
     if (r != DE_OK) {
         device_release(d);
@@ -117,6 +125,7 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
 }
 
 static void mtl_device_destroy(de_gpu_device *d) {
+    de__mtl_archive_save(d); /* DENG-325 */
     device_release(d);
 }
 
@@ -163,6 +172,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
             [DE__GPU_SAMPLER] = sizeof(mtl_sampler),
             [DE__GPU_SWAPCHAIN] = sizeof(mtl_swapchain),
             [DE__GPU_FENCE] = sizeof(mtl_fence),
+            [DE__GPU_PIPELINE] = sizeof(mtl_pipeline),
         },
     .device_create = mtl_device_create,
     .device_destroy = mtl_device_destroy,
@@ -176,13 +186,21 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .bindless_write_buffer = de__mtl_bindless_write_buffer,
     .bindless_write_texture = de__mtl_bindless_write_texture,
     .bindless_write_sampler = de__mtl_bindless_write_sampler,
+    .pipeline_create = de__mtl_pipeline_create,
+    .pipeline_destroy = de__mtl_pipeline_destroy,
     .cmd_init = de__mtl_cmd_init,
-    .cmd_fini = de__mtl_cmd_fini,
-    .cmd_begin = de__mtl_cmd_begin,
+    .cmd_fini = de__mtl_draw_cmd_fini,
+    .cmd_begin = de__mtl_draw_cmd_begin,
     .cmd_barriers = de__mtl_cmd_barriers,
-    .cmd_begin_render = de__mtl_cmd_begin_render,
+    .cmd_begin_render = de__mtl_draw_begin_render,
     .cmd_end_render = de__mtl_cmd_end_render,
-    .cmd_viewport = de__mtl_cmd_viewport,
+    .cmd_set_pipeline = de__mtl_cmd_set_pipeline,
+    .cmd_push_constants = de__mtl_cmd_push_constants,
+    .cmd_viewport = de__mtl_draw_viewport,
+    .cmd_draw_indexed_indirect = de__mtl_cmd_draw_indexed_indirect,
+    .cmd_dispatch_mesh_indirect = de__mtl_cmd_dispatch_mesh_indirect,
+    .cmd_dispatch = de__mtl_cmd_dispatch,
+    .cmd_dispatch_indirect = de__mtl_cmd_dispatch_indirect,
     .cmd_copy_buffer = de__mtl_cmd_copy_buffer,
     .cmd_copy_buffer_to_texture = de__mtl_cmd_copy_buffer_to_texture,
     .queue_submit = de__mtl_queue_submit,
@@ -205,6 +223,12 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .buffer_create_placed = de__mtl_buffer_create_placed,
     .texture_create_placed = de__mtl_texture_create_placed,
     .cmd_copy_texture_to_buffer = de__mtl_cmd_copy_texture_to_buffer,
+    /* DENG-325 */
+    .cmd_draw = de__mtl_cmd_draw,
+    .cmd_draw_indexed = de__mtl_cmd_draw_indexed,
+    .cmd_set_index_buffer = de__mtl_cmd_set_index_buffer,
+    .cmd_scissor = de__mtl_cmd_scissor,
+    .cmd_dispatch_mesh = de__mtl_cmd_dispatch_mesh,
 };
 
 /* ---------- Accessors ---------- */

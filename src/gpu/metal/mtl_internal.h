@@ -18,6 +18,12 @@
  *   mtl_sync.m       (DENG-288) queue submit, queue fences, user fences (MTLSharedEvent)
  *   mtl_swapchain.m  (DENG-288) CAMetalLayer swapchain
  *   mtl_residency.m  (DENG-288) MTLResidencySet (macOS 15+) or useHeaps: per encoder (macOS 14)
+ *   mtl_pipeline.m   (DENG-325) render, mesh and compute pipeline states, the library cache
+ *   mtl_draw.m       (DENG-325) the per-list draw state: pipelines, push constants, viewport,
+ *                    scissor, draws, dispatches, mesh dispatches
+ *   mtl_icb.m        (DENG-325) indexed indirect draws; with a count buffer through an indirect
+ *                    command buffer that a compute kernel encodes
+ *   mtl_binary_archive.m (DENG-325) the MTLBinaryArchive pipeline cache
  *
  * Residency (DENG-288): every resource the bindless table can name lives in a heap of the heap
  * list (de__mtl_heap_list): the class heaps and the internal heap of null descriptors. An encoder
@@ -104,6 +110,21 @@ typedef struct mtl_device {
     u32 residency_gen;   /* heap_gen the residency set was built from; under heap_lock */
     de_mutex size_lock;  /* heapTextureSizeAndAlignWithDescriptor: (mtl_resources.m) */
     void *last_group[DE_QUEUE_COUNT_]; /* dispatch_group_t of the last submit (mtl_sync.m) */
+
+    /* DENG-325: pipelines (mtl_pipeline.m), the indirect-count kernel (mtl_icb.m) and the binary
+     * archive (mtl_binary_archive.m). */
+    de_mutex library_lock; /* the library cache and the ICB kernel */
+    void *libraries;       /* NSMutableDictionary: blob hash -> id<MTLLibrary>, retained */
+    void *icb_kernel; /* id<MTLComputePipelineState> of the ICB encoder (first use), retained */
+    de_mutex archive_lock;   /* the archive's additions and counters */
+    void *archive;           /* NSArray of one id<MTLBinaryArchive>, retained; NULL without one */
+    u32 archive_state;       /* DE__MTL_ARCHIVE_* */
+    u32 archive_hits;        /* pipelines found in the archive */
+    u32 archive_misses;      /* pipelines compiled (and added) */
+    bool archive_dirty;      /* pipelines added since it was loaded */
+    u64 pipeline_ns;         /* time spent in pipeline creation (logged at destroy) */
+    char archive_vpath[256]; /* virtual path of the archive file ("" without one) */
+    char archive_path[1024]; /* its native path */
 } mtl_device;
 
 typedef struct mtl_buffer {
@@ -228,6 +249,38 @@ typedef enum de__mtl_encoder_kind {
     DE__MTL_ENC_BLIT
 } de__mtl_encoder_kind;
 
+/* DENG-325 (mtl_draw.m, mtl_icb.m): the state a command list applies to each new encoder. */
+typedef struct mtl_draw_state {
+    void *pipeline;    /* bound id<MTL*PipelineState>, not retained (deferred destruction) */
+    void *depth_state; /* its id<MTLDepthStencilState>, not retained; NULL for compute */
+    u32 kind;          /* de_gpu_pipeline_kind of `pipeline` */
+    u32 cull;          /* MTLCullMode */
+    u32 push_stages;   /* DE__MTL_PUSH_* stages that get the push constants */
+    u32 push_bytes;    /* bytes setBytes passes at index 1 (0: none) */
+    u32 threadgroup[3], object_threadgroup[3];
+    u32 applied;        /* `encoders` count of the encoder the state was applied to; 0 = none */
+    u32 dirty;          /* DE__MTL_DIRTY_* not yet applied to that encoder */
+    void *index_buffer; /* id<MTLBuffer> of set_index_buffer, not retained */
+    u64 index_offset, index_address;
+    bool index_u16, has_viewport, has_scissor, has_depth;
+    f32 viewport[4];
+    i32 scissor_xy[2];
+    u32 scissor_wh[2];
+    u32 area[2];     /* width and height of the open render pass */
+    u32 color_count; /* the open render pass, kept for a split (mtl_icb.m) */
+    de_gpu_attachment colors[DE_GPU_MAX_COLOR_ATTACHMENTS], depth;
+    /* Indirect-count draws (mtl_icb.m): one ICB and one range buffer per list, reused. */
+    void *icb;     /* id<MTLIndirectCommandBuffer>, retained */
+    u32 icb_cap;   /* commands */
+    u32 icb_used;  /* commands encoded in this recording */
+    void *ranges;  /* id<MTLBuffer> of MTLIndirectCommandBufferExecutionRange, retained */
+    u32 range_cap; /* entries */
+    u32 range_used;
+    void *retired; /* NSMutableArray of ICBs and range buffers outgrown in this recording */
+    u32 splits;    /* render passes split for an indirect-count draw in this recording */
+    u8 push[DE_GPU_MAX_PUSH_CONSTANT_BYTES];
+} mtl_draw_state;
+
 typedef struct mtl_cmd {
     void *cb;          /* id<MTLCommandBuffer> being recorded (unretained references), retained */
     void *encoder;     /* id<MTLCommandEncoder> open, retained; NULL when none */
@@ -244,6 +297,10 @@ typedef struct mtl_cmd {
     u32 wait_stages;   /* render stages the `wait` fences guard (barrier `after` accesses) */
     u32 update_stages; /* render stages the open render encoder's update covers */
     u32 encoders;      /* encoders opened in this recording (statistics, tests) */
+    /* DENG-325: attachments whose store action is decided when the render encoder ends
+     * (MTLStoreActionUnknown at begin_render): bit i = color i, DE__MTL_STORE_DEPTH, _STENCIL. */
+    u32 deferred_store;
+    mtl_draw_state draw; /* DENG-325: pipeline and draw state (mtl_draw.m) */
 } mtl_cmd;
 
 typedef struct mtl_fence {
@@ -347,5 +404,119 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
 bool de__mtl_residency_uses_heaps(de_gpu_device *d);
 /** True when this build has the residency-set path (built with the macOS 15 SDK or later). */
 bool de__mtl_residency_sets_built(void);
+
+/* ---------- DENG-325: pipelines, draws, indirect command buffers, binary archives ----------
+ *
+ * Binding (shaders/common/bindless.slang, push_constants.slang): the bindless argument buffer at
+ * buffer index 0 (mtl_residency.m binds it on every new encoder) and the push constants with
+ * setBytes at buffer index 1 of every stage the pipeline has. A command list keeps the bound
+ * pipeline, its push constants, viewport and scissor (mtl_draw_state) and applies them to each
+ * encoder it opens, because Metal state does not outlive an encoder. */
+
+#define DE__MTL_STORE_DEPTH   (1u << 8)
+#define DE__MTL_STORE_STENCIL (1u << 9)
+
+/* Stages that get the push constants. */
+#define DE__MTL_PUSH_VERTEX   1u
+#define DE__MTL_PUSH_FRAGMENT 2u
+#define DE__MTL_PUSH_OBJECT   4u
+#define DE__MTL_PUSH_MESH     8u
+#define DE__MTL_PUSH_COMPUTE  16u
+
+/* Draw state not yet applied to the open encoder. */
+#define DE__MTL_DIRTY_PIPELINE 1u
+#define DE__MTL_DIRTY_PUSH     2u
+#define DE__MTL_DIRTY_VIEWPORT 4u
+#define DE__MTL_DIRTY_SCISSOR  8u
+#define DE__MTL_DIRTY_ALL      15u
+
+typedef struct mtl_pipeline {
+    void *state;       /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
+    void *depth_state; /* id<MTLDepthStencilState>, retained; NULL for compute */
+    u32 cull;          /* MTLCullMode */
+    u32 push_stages;   /* DE__MTL_PUSH_* */
+    u32 push_bytes;    /* setBytes size: push_constant_bytes or the shaders' binding size */
+    bool archive_hit;  /* found in the binary archive (tests) */
+} mtl_pipeline;
+
+/* ---------- mtl_pipeline.m ---------- */
+
+de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
+                                  const de_gpu_pipeline_desc *desc);
+void de__mtl_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p);
+/** Releases the library cache and the ICB kernel (device destroy). */
+void de__mtl_pipeline_shutdown(de_gpu_device *d);
+
+/* ---------- mtl_draw.m ---------- */
+
+/* Vtable entries that wrap mtl_cmd.m's (they keep the draw state) and the draw commands. */
+de_result de__mtl_draw_cmd_begin(de_gpu_cmd *c, const char *name);
+void de__mtl_draw_cmd_fini(de_gpu_device *d, de_gpu_cmd *c);
+void de__mtl_draw_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32 color_count,
+                               const de_gpu_attachment *depth);
+void de__mtl_draw_viewport(de_gpu_cmd *c, f32 x, f32 y, f32 w, f32 h);
+void de__mtl_cmd_set_pipeline(de_gpu_cmd *c, de__gpu_pipeline *p);
+void de__mtl_cmd_push_constants(de_gpu_cmd *c, const void *data, u32 bytes);
+void de__mtl_cmd_draw(de_gpu_cmd *c, u32 vertex_count, u32 instance_count, u32 first_vertex,
+                      u32 first_instance);
+void de__mtl_cmd_draw_indexed(de_gpu_cmd *c, u32 index_count, u32 instance_count, u32 first_index,
+                              i32 vertex_offset, u32 first_instance);
+void de__mtl_cmd_set_index_buffer(de_gpu_cmd *c, de__gpu_buffer *b, u64 offset, bool index_u16);
+void de__mtl_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
+void de__mtl_cmd_dispatch(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__mtl_cmd_dispatch_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset);
+void de__mtl_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+void de__mtl_cmd_dispatch_mesh_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                        de__gpu_buffer *count, u64 count_offset, u32 max);
+/** The open render encoder with the draw state applied (id<MTLRenderCommandEncoder>, not
+ * retained), or NULL outside a render pass. */
+void *de__mtl_draw_render_encoder(de_gpu_cmd *c);
+/** Pure: the scissor rectangle {x, y, w, h} of (x, y, w, h) cut to a w x h render area. */
+void de__mtl_scissor_rect(i32 x, i32 y, u32 w, u32 h, u32 area_w, u32 area_h, u32 out[4]);
+
+/* ---------- mtl_cmd.m (DENG-325 additions) ---------- */
+
+/** Sets the store actions that begin_render left open (MTLStoreActionUnknown): Store when
+ * `store_all`, else the attachments' own `store` (DontCare). Before the render encoder ends. */
+void de__mtl_render_resolve_store(de_gpu_cmd *c, void *render_encoder, bool store_all);
+
+/* ---------- mtl_icb.m ---------- */
+
+/** draw_indexed_indirect: plain indirect draws, or with a count buffer an indirect command
+ * buffer that a compute kernel encodes (the render pass is split around that kernel). */
+void de__mtl_cmd_draw_indexed_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 offset,
+                                       de__gpu_buffer *count, u64 count_offset, u32 max_draws);
+/** Releases a list's ICB objects (cmd_fini); `keep` = only the retired ones (cmd_begin). */
+void de__mtl_icb_release(mtl_draw_state *ds, bool keep);
+
+/* ---------- mtl_binary_archive.m ---------- */
+
+enum {
+    DE__MTL_ARCHIVE_NONE,     /* no pipeline cache ("" or no such mount) */
+    DE__MTL_ARCHIVE_EMPTY,    /* no file yet: a new archive */
+    DE__MTL_ARCHIVE_LOADED,   /* the file loaded */
+    DE__MTL_ARCHIVE_REJECTED, /* the file did not load: a new archive replaces it */
+};
+/** Opens (or starts) the archive of desc->pipeline_cache_dir at device creation. Never fails:
+ * without one, pipelines are compiled every time. */
+void de__mtl_archive_open(de_gpu_device *d, const de_gpu_device_desc *desc);
+/** Writes the archive back (atomically) when pipelines were added; device destroy. */
+void de__mtl_archive_save(de_gpu_device *d);
+void de__mtl_archive_close(de_gpu_device *d);
+/** NSArray<id<MTLBinaryArchive>> for a pipeline descriptor's binaryArchives (not retained), or
+ * NULL without an archive. */
+void *de__mtl_archive_list(de_gpu_device *d);
+/** Counts a pipeline found in the archive. */
+void de__mtl_archive_hit(de_gpu_device *d);
+/** Counts a miss and adds the pipeline's functions from `descriptor` (MTLRenderPipelineDescriptor,
+ * MTLMeshRenderPipelineDescriptor or MTLComputePipelineDescriptor) to the archive, compiling
+ * them. False when the archive did not take them. */
+bool de__mtl_archive_add(de_gpu_device *d, void *descriptor);
+/** State, counters and native path of the archive (tests). */
+u32 de__mtl_archive_state(de_gpu_device *d, u32 *hits, u32 *misses, const char **path);
+/** Pure: the file name `metal-<registryID hex>-<os build>.metallib`, the device name (letters and
+ * digits) standing in when `registry_id` is 0. */
+void de__mtl_archive_file_name(u64 registry_id, const char *device_name, const char *os_build,
+                               char *out, size_t cap);
 
 #endif

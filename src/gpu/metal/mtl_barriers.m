@@ -178,6 +178,8 @@ void de__mtl_encoder_end(de_gpu_cmd *c) {
                 break;
             }
         }
+        if (mc->kind == DE__MTL_ENC_RENDER) /* DENG-325: store actions left open */
+            de__mtl_render_resolve_store(c, (__bridge void *)enc, false);
         [enc endEncoding];
     }
     mc->kind = DE__MTL_ENC_NONE;
