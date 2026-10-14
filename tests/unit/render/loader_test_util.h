@@ -21,6 +21,7 @@
 #include "render/formats/de_cooked_mesh.h"
 #include "render/formats/de_cooked_texture.h"
 #include "render/loaders/render_assets.h"
+#include "render_d3d12_test.h" /* DENG-423: the D3D12 runtime check */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -365,6 +366,7 @@ static inline de_gpu_device *lt_device(de_gpu_backend b, const de_allocator *a, 
         return NULL;
     }
     printf("device: \"%s\" (%s)\n", de_gpu_get_caps(d)->device_name, de_gpu_backend_name(b));
+    render_d3d12_report(d); /* D3D12: the Agility runtime and the vendored WARP on CI (DENG-423) */
     return d;
 }
 
