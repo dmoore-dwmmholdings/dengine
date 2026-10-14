@@ -17,6 +17,11 @@ set(_de_mtl_objc_sources
     mtl_sync.m
     mtl_swapchain.m
     mtl_residency.m
+    # DENG-325: pipelines, draws, indirect-count draws (ICBs), the binary archive
+    mtl_pipeline.m
+    mtl_draw.m
+    mtl_icb.m
+    mtl_binary_archive.m
 )
 de_add_module(
     NAME gpu_metal
