@@ -152,3 +152,30 @@ de_add_test(NAME render_world
 if(TARGET test_render_world)
     target_include_directories(test_render_world PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-173: render graph record + submit (test_rg_execute.c), executable test_render_graph_execute,
+# CTest names render_graph_execute.rg_execute.<test>: the fixed partition and parallel recording
+# on the task system, the per-pass markers, timestamps and breadcrumbs (null backend command log),
+# culled passes, the published GPU timings and their latency, no heap allocation after warm-up
+# (null backend, every host), and metal_three_pass_readback (clear -> compute -> copy-queue
+# readback on Metal with API validation, DENG-323's compute shader cooked when the build has the
+# importer; SKIPs without a Metal device, below the Base tier or without the importer).
+set(_de_rgx_libs de_render de_gpu de_task de_platform de_test_support)
+if(TARGET de_gpu_metal)
+    list(APPEND _de_rgx_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+de_add_test(NAME render_graph_execute
+    SOURCES test_rg_execute.c "${DE_ROOT_DIR}/tests/unit/gpu/data/pipelines/pipeline_shaders.c"
+    LIBS ${_de_rgx_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_graph_execute)
+    target_include_directories(test_render_graph_execute PRIVATE "${DE_ROOT_DIR}/src"
+        "${DE_ROOT_DIR}/tests/unit/gpu/data/pipelines")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_graph_execute PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_graph_execute PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_graph_execute PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${DE_ROOT_DIR}/tests/unit/gpu/data/pipelines\"")
+    endif()
+endif()

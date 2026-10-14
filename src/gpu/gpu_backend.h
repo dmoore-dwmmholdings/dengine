@@ -382,6 +382,14 @@ typedef enum de__gpu_null_op {
     DE__GPU_NULL_OP_BARRIERS = 1, /**< de_gpu_cmd_barriers: the barriers are data[first, +count) */
     DE__GPU_NULL_OP_SUBMIT = 2,   /**< de_gpu_queue_submit: a[0] lists, a[1] waits (data), a[2]
                                        signal fence id, a[3] signal value */
+    /* DENG-173: markers, timers and breadcrumbs (the render graph's per-pass instrumentation). */
+    DE__GPU_NULL_OP_MARKER_PUSH = 3, /**< de_gpu_cmd_marker_push: `text` name, a[0] colour */
+    DE__GPU_NULL_OP_MARKER_POP = 4,  /**< de_gpu_cmd_marker_pop */
+    DE__GPU_NULL_OP_TIMESTAMP = 5,   /**< de_gpu_cmd_timestamp: `text` heap name, a[0] query */
+    DE__GPU_NULL_OP_BREADCRUMB = 6,  /**< de_gpu_cmd_breadcrumb (crash_breadcrumbs only): a[0]
+                                          the sequence value, a[1] the ring offset */
+    DE__GPU_NULL_OP_RESOLVE = 7,     /**< de_gpu_cmd_resolve_queries: `text` heap name, a[0]
+                                          first, a[1] count, a[2] dst offset */
 } de__gpu_null_op;
 
 typedef struct de__gpu_null_entry {
@@ -390,6 +398,7 @@ typedef struct de__gpu_null_entry {
     char list[DE__GPU_NAME_MAX]; /**< the command list's name (submit: its first list's) */
     u64 a[4];                    /**< op arguments */
     u32 data_first, data_count;  /**< barriers (OP_BARRIERS) or waits (OP_SUBMIT) */
+    char text[DE__GPU_NAME_MAX]; /**< DENG-173: marker name / query heap name (cut to fit) */
 } de__gpu_null_entry;
 
 /** Turns the log on (clearing it) or off (keeping the entries). No effect on other backends. */
@@ -400,6 +409,17 @@ const de__gpu_null_entry *de__gpu_null_log_entry(de_gpu_device *d, u32 i);
 /** The barriers of an OP_BARRIERS entry / the waits of an OP_SUBMIT entry (NULL otherwise). */
 const de_gpu_barrier *de__gpu_null_log_barriers(de_gpu_device *d, const de__gpu_null_entry *e);
 const de_gpu_wait *de__gpu_null_log_waits(de_gpu_device *d, const de__gpu_null_entry *e);
+/**
+ * DENG-173: the ticks the null backend's de_gpu_cmd_resolve_queries writes for query `i` of any
+ * heap (the null device never runs anything, so it makes them up): 1000 * (i + 1) * (i + 2) / 2.
+ * They increase with the index, and query i + 1 - query i = 1000 * (i + 2), so a timed region
+ * [2k, 2k + 1] lasts 1000 * (2k + 2) ticks (2 * (k + 1) us at the null 1 GHz): every region has
+ * its own length, and a test can see which region a reported time came from. The ticks are
+ * written whether or not the log is on.
+ */
+static inline u64 de__gpu_null_tick(u32 i) {
+    return 1000u * ((u64)i + 1u) * ((u64)i + 2u) / 2u;
+}
 
 /**
  * Overrides the table entry of `backend` (not DE_GPU_DEFAULT) at run time; NULL restores the

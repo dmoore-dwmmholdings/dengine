@@ -184,6 +184,7 @@ struct de_rg {
     u32 pool_gen; /**< bumped when a region is replaced: plans place their resources again */
 
     /* ---- DENG-173 execute state goes below this line ---- */
+    struct de__rg_exec *exec; /**< record + submit state (rg_execute.c); NULL before the first */
 };
 
 /* ---------- Lifecycle (rg_builder.c) ---------- */
@@ -466,5 +467,192 @@ u32 de__rg_cache_limit(de_rg *g);
  * memory is not reused while the previous frame still uses it on the queue. Pure.
  */
 u32 de__rg_first_use_before(de_gpu_backend backend, de__rg_res_kind kind);
+
+/* =================================================================================================
+ * DENG-173: record and submit (SPEC §12.3, §18.2, §18.3, §18.5, §8). Files: rg_execute.c
+ * (partition, parallel recording, submission, fences), rg_timing.c (per-pass GPU timers, the
+ * breadcrumb names, the published timings).
+ *
+ * Per frame, after de__rg_compile:
+ *     de__rg_execute(g, &desc);   // records every batch of g->plan and submits it
+ *     de__rg_reset(g);
+ *
+ * Partition. Each plan batch (one submission) is cut into chunks of consecutive steps: a step
+ * costs DE__RG_COST_PASS (a pass) or DE__RG_COST_EDGE (the prologue / epilogue) plus one per
+ * barrier call, and a chunk closes before the step that would take it past r.rg_record_cost
+ * (default 32, so about eight passes). Each chunk is one command list. The partition depends only
+ * on the plan and the cvar, never on the worker count, so the lists and the commands in each list
+ * are the same on 1 and on N workers (SPEC §8, §5.7 rule 5).
+ *
+ * Recording. de_task_parallel_for(tasks, chunk_count, grain 1): each chunk begins its own list
+ * (de_gpu_cmd_begin, named "<graph> b<batch>.<chunk>") and records its steps. Per pass step:
+ *     de_gpu_cmd_breadcrumb(id)            // id: de__rg_breadcrumb_id; names registered per slot
+ *     de_gpu_cmd_marker_push(pass name, colour of the queue)
+ *     de_gpu_cmd_timestamp(begin)          // r.rg_gpu_timers; outside the barrier lists
+ *     PRE barriers, the pass's callback, POST barriers
+ *     de_gpu_cmd_timestamp(end)
+ *     de_gpu_cmd_marker_pop
+ * The prologue writes the frame's first timestamp before its barriers and the epilogue the last
+ * one after its barriers (de_render_stats.gpu_ms is the time between them, on graphics). Culled
+ * passes are not steps: they record nothing.
+ *
+ * Pass callbacks run on task workers, several at once: a callback must be thread-safe, may touch
+ * only its own pass's resources, its user data and the render world, never the main (simulation)
+ * world.
+ *
+ * Submission (calling thread, plan order): one de_gpu_queue_submit per batch with the batch's
+ * lists. Signal n of queue q maps to `base[q] + n` on the graph's timeline fence of q (wait 0 =
+ * `base[q]`, the queue's last value before the frame); the last graphics batch also signals the
+ * frame end, `base[graphics] + signal_count + 1`, so wait 0 of graphics is the end of the
+ * previous frame. The timestamp resolves ride in one extra list appended to the last graphics
+ * submit (and one to the last copy submit). A caller fence (desc.frame_fence) is signalled by an
+ * empty graphics submit after everything.
+ * ============================================================================================== */
+
+/** Recording costs of a step (r.rg_record_cost is the target per command list). */
+#define DE__RG_COST_PASS       4u
+#define DE__RG_COST_EDGE       1u
+#define DE__RG_RECORD_COST_DEF 32
+/** Frames whose timings can be in flight at once (frames in flight + 1). */
+#define DE__RG_TIMING_SLOTS 4u
+/** Most queries in one timing heap (Metal's counter sample buffer limit). */
+#define DE__RG_MAX_QUERIES 4096u
+/** Timing heaps of a slot: graphics + compute share one (one clock domain on every backend);
+ * the copy queue needs its own (DENG-326). */
+enum { DE__RG_HEAP_MAIN = 0, DE__RG_HEAP_COPY = 1, DE__RG_HEAP_COUNT = 2 };
+/** Main-heap queries of the frame span (prologue start, epilogue end). Passes start at 2. */
+enum { DE__RG_QUERY_FRAME_BEGIN = 0, DE__RG_QUERY_FRAME_END = 1 };
+
+/** de__rg_execute settings. `(de__rg_execute_desc){0}` is valid. */
+typedef struct de__rg_execute_desc {
+    /** Records on the workers of this system; NULL records every list on the calling thread. */
+    struct de_task_system *tasks;
+    /** The caller's frame number: the published timings carry it (any increasing value). */
+    u64 frame_index;
+    /** Optional: set to `frame_value` (graphics queue) once the whole frame has completed. */
+    de_gpu_fence frame_fence;
+    u64 frame_value;
+} de__rg_execute_desc;
+
+/** A chunk of the partition: plan->batch_steps[first .. first + count) of batch `batch`,
+ * recorded into one command list. */
+typedef struct de__rg_chunk {
+    u32 batch;
+    u32 first, count;
+    de_gpu_queue queue;
+} de__rg_chunk;
+
+/** Timings of one frame, as published (de__rg_timings). Arrays have pass_count entries and stay
+ * valid until the next de__rg_execute that publishes. */
+typedef struct de__rg_timings {
+    bool valid;      /**< a frame's results have been read back */
+    u64 frame_index; /**< de__rg_execute_desc.frame_index of that frame */
+    u32 pass_count;  /**< executed passes, in schedule order */
+    const char *const *pass_names;
+    const f32 *pass_gpu_ms;         /**< 0 for a pass that was not timed */
+    const de_gpu_queue *pass_queue; /**< the queue it ran on */
+    f32 gpu_ms;        /**< prologue start to epilogue end on graphics; 0 when not timed */
+    f32 cpu_record_ms; /**< of the latest de__rg_execute (this is not late) */
+} de__rg_timings;
+
+/** One frame in flight: its query heaps, readback buffers and a copy of what it timed. */
+typedef struct de__rg_tslot {
+    bool pending;    /**< submitted; results not read back yet */
+    bool timed;      /**< r.rg_gpu_timers was on and the main heap exists */
+    u64 frame_index; /**< desc.frame_index */
+    u64 end_value;   /**< graphics timeline value that ends the frame */
+    u64 bc_hash;     /**< plan hash the breadcrumb names of this slot were registered for */
+    u32 bc_steps;    /**< step count of that plan; 0 = none registered */
+    de_gpu_query_heap heap[DE__RG_HEAP_COUNT];
+    de_gpu_buffer readback[DE__RG_HEAP_COUNT]; /**< heap_cap * 8 bytes, READBACK */
+    u32 heap_cap[DE__RG_HEAP_COUNT];
+    u32 used[DE__RG_HEAP_COUNT]; /**< queries written this frame */
+    u32 pass_count, pass_cap;
+    struct de__rg_tpass *passes; /**< [pass_count], schedule order */
+    char *names;                 /**< the pass names, NUL-separated */
+    u32 names_used, names_cap;
+} de__rg_tslot;
+
+/** A pass a slot timed. */
+typedef struct de__rg_tpass {
+    u32 query;          /**< begin query (end = +1) in its queue's heap; DE__RG_NONE = untimed */
+    u32 name_off;       /**< its name in de__rg_tslot.names */
+    de_gpu_queue queue; /**< the queue it ran on */
+} de__rg_tpass;
+
+/** Record + submit state of a graph (one heap block plus arrays that grow during warm-up). */
+typedef struct de__rg_exec {
+    de_gpu_device *device;
+    de_gpu_fence timeline[DE_QUEUE_COUNT_]; /**< per queue; made on first use */
+    u64 value[DE_QUEUE_COUNT_];             /**< last value submitted on each timeline */
+    u32 tag;                                /**< breadcrumb graph tag, 1..255 */
+    de_cvar timers_cvar;                    /**< r.rg_gpu_timers */
+    de_cvar cost_cvar;                      /**< r.rg_record_cost */
+    u64 frames;                             /**< executes so far (picks the slot) */
+    u32 slot;                               /**< this frame's slot */
+    bool copy_unsupported;                  /**< the device refused a copy-queue heap */
+    bool main_unsupported;                  /**< the device refused a graphics heap */
+    de__rg_chunk *chunks;                   /**< the last frame's partition */
+    u32 chunk_count, chunk_cap;
+    u32 *step_query; /**< [step]: begin query of the step's pass, DE__RG_NONE = untimed */
+    u32 step_cap;
+    de__rg_tslot slots[DE__RG_TIMING_SLOTS];
+    /* Published timings (de__rg_timings): copies that survive until the next publish. */
+    de__rg_timings pub;
+    void *pub_block; /**< one block: pub_cap name pointers, times and queues */
+    u32 pub_cap;
+    char *pub_text;
+    u32 pub_text_cap;
+} de__rg_exec;
+
+/* ---------- Entry points (rg_execute.c) ---------- */
+
+/**
+ * Records the compiled frame (g->plan, after de__rg_compile) and submits it: partition, parallel
+ * recording with markers, timers and breadcrumbs, submission in plan order with the plan's fences.
+ * Also reads back the timings of earlier frames that have completed (de__rg_timings). Call once
+ * per frame on the thread that declares the graph. No heap allocation once warmed up (the timing
+ * heaps, buffers and arrays grow with the largest graph seen).
+ * @return DE_OK; DE_ERR_BUSY (not compiled); DE_ERR_INVALID_ARGUMENT (no device); the RHI's
+ *         errors (a list that could not begin or a failed submit). Every batch is still submitted
+ *         (with what could be recorded) so the timelines stay consistent.
+ */
+de_result de__rg_execute(de_rg *g, const de__rg_execute_desc *desc);
+/** The graph's graphics timeline and the value that ends the last executed frame (wait for it
+ * before reusing that frame's resources). False before the first execute. */
+bool de__rg_frame_end(const de_rg *g, de_gpu_fence *fence, u64 *value);
+/** The latest published timings (zeroed, valid = false, until a frame has been read back). */
+const de__rg_timings *de__rg_timings_get(const de_rg *g);
+/** Copies the timings into the render-graph fields of `s`: gpu_ms, cpu_record_ms, pass_count,
+ * pass_names, pass_gpu_ms (pointers valid until the next de__rg_execute). */
+void de__rg_fill_stats(const de_rg *g, de_render_stats *s);
+/** The last executed frame's partition (for tests and the stats overlay). */
+const de__rg_chunk *de__rg_exec_chunks(const de_rg *g, u32 *count);
+/** The breadcrumb id of step `step` in timing slot `slot`: graph tag << 24 | slot << 22 | step. */
+u32 de__rg_breadcrumb_id(const de_rg *g, u32 slot, u32 step);
+/** Waits for the graph's submitted work, then frees the execute state (timelines, heaps,
+ * buffers). Called by de__rg_destroy. */
+void de__rg_execute_shutdown(de_rg *g);
+
+/* ---------- Timing internals (rg_timing.c, called by rg_execute.c) ---------- */
+
+/** Reads back every slot whose frame has completed and publishes the newest; then claims this
+ * frame's slot (waiting for it if it is still in flight), sizes its heaps for the plan, assigns
+ * the step queries (x->step_query), copies the pass names and registers the breadcrumb names
+ * when the slot's plan changed. */
+de_result de__rg_timing_begin(de_rg *g, de__rg_exec *x, u64 frame_index);
+/** Records the resolve of heap `heap` of this frame's slot into `cmd` (a list on graphics for
+ * the main heap, on copy for the copy heap). Nothing when no query of that heap was used. */
+void de__rg_timing_resolve(de_rg *g, de__rg_exec *x, u32 heap, de_gpu_cmd *cmd);
+/** True when heap `heap` of this frame's slot has queries to resolve. */
+bool de__rg_timing_needs_resolve(const de__rg_exec *x, u32 heap);
+/** The query heap of this frame's slot for a list on `q` (invalid when untimed). */
+de_gpu_query_heap de__rg_timing_heap(const de__rg_exec *x, de_gpu_queue q);
+/** Marks this frame's slot submitted: it completes at `end_value` on the graphics timeline. */
+void de__rg_timing_end(de__rg_exec *x, u64 end_value, f32 cpu_record_ms);
+/** Reads back the completed slots (de__rg_timing_begin does this too). `wait`: wait for all. */
+void de__rg_timing_collect(de_rg *g, de__rg_exec *x, bool wait);
+/** Destroys the heaps and buffers and frees the slot and published arrays. */
+void de__rg_timing_release(de_rg *g, de__rg_exec *x);
 
 #endif /* DE_RENDER_RG_INTERNAL_H */
