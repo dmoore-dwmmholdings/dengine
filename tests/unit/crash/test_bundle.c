@@ -8,8 +8,8 @@
  * children play later launches that install an upload callback. DE_TEST_KEEP=1 keeps the
  * directories, DE_TEST_VERBOSE=1 keeps the children's stderr.
  *
- * Every directory is a fresh one (mkdtemp, or a build-tree directory for the in-process tests),
- * so nothing is written into the real user profile. */
+ * Every directory is a fresh one (mkdtemp, or an emptied build-tree directory for the in-process
+ * tests, see tmp_dir()), so nothing is written into the real user profile. */
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS /* fopen */
 #endif
@@ -37,7 +37,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <wchar.h>
+#include <windows.h>
+#else
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -95,11 +101,81 @@ static bool file_exists(const char *path) {
     return true;
 }
 
-/* A fresh build-tree directory for an in-process test. */
+/* Deletes `path` and everything under it. Errors are ignored: a missing path is fine. */
+#if defined(_WIN32)
+static void rm_tree_w(const wchar_t *path) {
+    DWORD attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES)
+        return;
+    if ((attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        (void)DeleteFileW(path);
+        return;
+    }
+    wchar_t p[1024];
+    if (swprintf(p, 1024, L"%ls\\*", path) < 0)
+        return;
+    WIN32_FIND_DATAW e;
+    HANDLE h = FindFirstFileW(p, &e);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (wcscmp(e.cFileName, L".") == 0 || wcscmp(e.cFileName, L"..") == 0)
+                continue;
+            if (swprintf(p, 1024, L"%ls\\%ls", path, e.cFileName) >= 0)
+                rm_tree_w(p);
+        } while (FindNextFileW(h, &e));
+        FindClose(h);
+    }
+    (void)RemoveDirectoryW(path);
+}
+
+static void rm_tree(const char *path) {
+    wchar_t w[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1024) != 0)
+        rm_tree_w(w);
+}
+#else
+static void rm_tree(const char *path) {
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
+        (void)unlink(path);
+        return;
+    }
+    struct dirent *e;
+    char p[1024];
+    while ((e = readdir(dir)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        snprintf(p, sizeof p, "%s/%s", path, e->d_name);
+        rm_tree(p);
+    }
+    closedir(dir);
+    (void)rmdir(path);
+}
+#endif
+
+/* DE_TEST_KEEP=1 keeps the test directories for a look afterwards. */
+static bool keep_dirs(void) {
+    const char *keep = getenv("DE_TEST_KEEP");
+    return keep != NULL && keep[0] == '1';
+}
+
+/* A fresh, empty build-tree directory for an in-process test. The pid keeps parallel test
+ * processes apart, but CTest runs thousands of processes and the OS reuses pids, so a directory
+ * of that name can already exist with an earlier run's files (stale `.pending` markers made
+ * upload_marker_scan see extra reports, DENG-411). It is therefore deleted first. Two live
+ * processes never share a pid, so nothing else uses the directory meanwhile. */
 static void tmp_dir(char *out, size_t cap, const char *name) {
     snprintf(out, cap, "%s/%s_%llu", DE_BUNDLE_TEST_TMP_DIR, name,
              (unsigned long long)de__crash_os_pid());
+    rm_tree(out);
     ASSERT_EQ(de__crash_os_mkdirs(out), DE_OK);
+}
+
+/* Deletes a tmp_dir() directory at the end of a test that passed its checks (DE_TEST_KEEP=1
+ * keeps it). A failed ASSERT returns before this, so its files stay for a look. */
+static void tmp_dir_remove(const char *dir) {
+    if (!keep_dirs())
+        rm_tree(dir);
 }
 
 /* ---- Log ring ---------------------------------------------------------------------------- */
@@ -182,6 +258,7 @@ TEST(bundle, log_ring_wraps) {
     EXPECT_EQ(strlen(text), len);
     EXPECT_EQ(memcmp(text, out, len), 0);
     remove(path);
+    tmp_dir_remove(dir);
 
     de_log_remove_sink(de__crash_log_ring_sink, NULL);
     de_log_shutdown();
@@ -404,6 +481,7 @@ TEST(bundle, upload_marker_scan) {
     ASSERT_TRUE(write_text(p, "report=x\n"));
     ASSERT_EQ(de_crash_install(dir, NULL, NULL), DE_OK);
     EXPECT_TRUE(file_exists(p));
+    tmp_dir_remove(dir);
 }
 
 /* ---- The game the host tests run ---------------------------------------------------------- */
@@ -589,6 +667,7 @@ TEST(bundle, host_annotations_present) {
             *c = '/';
     EXPECT_STREQ(got, crashes);
     EXPECT_TRUE(de__crash_bundle_installed());
+    tmp_dir_remove(root);
 }
 
 TEST(bundle, crash_disabled_by_cvar) {
@@ -605,6 +684,7 @@ TEST(bundle, crash_disabled_by_cvar) {
     EXPECT_FALSE(g_game.crash_active);
     EXPECT_STREQ(g_game.annot[0], "");
     EXPECT_STREQ(de__crash_dump_dir(), "");
+    tmp_dir_remove(root);
 }
 
 /* ---- Fork tests (POSIX) ----------------------------------------------------------------- */
@@ -623,29 +703,9 @@ static void crash_dir_make(crash_dir *d) {
     ASSERT_TRUE(mkdtemp(d->path) != NULL);
 }
 
-static void rm_tree(const char *path) {
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
-        (void)unlink(path);
-        return;
-    }
-    struct dirent *e;
-    char p[1024];
-    while ((e = readdir(dir)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
-            continue;
-        snprintf(p, sizeof p, "%s/%s", path, e->d_name);
-        rm_tree(p);
-    }
-    closedir(dir);
-    (void)rmdir(path);
-}
-
 static void crash_dir_remove(crash_dir *d) {
-    const char *keep = getenv("DE_TEST_KEEP");
-    if (keep != NULL && keep[0] == '1')
-        return;
-    rm_tree(d->path);
+    if (!keep_dirs())
+        rm_tree(d->path);
 }
 
 /* A report is `crash-<t>-<pid>[-n].txt`: no dot before ".txt". Finds the newest name (reports
