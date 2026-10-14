@@ -238,3 +238,41 @@ if(TARGET test_gpu_queries)
         endif()
     endif()
 endif()
+
+# DENG-328: GPU crash diagnostics (test_breadcrumbs.c, executable test_breadcrumbs, CTest names
+# gpu_breadcrumbs.breadcrumbs.<test>): breadcrumbs, device-lost reports and the crash bundle on a
+# wrapped null backend (every host; the fork test on POSIX), breadcrumb ring writes on each GPU
+# backend compiled in (DENG-323's compute shader, cooked when the build has the importer), and the
+# Metal command-buffer error report (a simulated failure through de__mtl_errors_simulate).
+set(_de_breadcrumbs_libs de_gpu de_platform)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_breadcrumbs_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_breadcrumbs_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_breadcrumbs_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME gpu_breadcrumbs
+    SOURCES test_breadcrumbs.c data/pipelines/pipeline_shaders.c
+    LIBS ${_de_breadcrumbs_libs}
+    LABELS unit gpu
+    TIMEOUT 300)
+if(TARGET test_gpu_breadcrumbs)
+    target_include_directories(test_gpu_breadcrumbs PRIVATE "${DE_ROOT_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_breadcrumbs PRIVATE de_gpu_shader de_cook_shader de_cooker
+            de_asset)
+        target_include_directories(test_gpu_breadcrumbs PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_breadcrumbs PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_gpu_breadcrumbs)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_gpu_breadcrumbs)
+        endif()
+    endif()
+endif()

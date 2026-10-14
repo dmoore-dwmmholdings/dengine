@@ -99,15 +99,16 @@ de_result de__mtl_cmd_begin(de_gpu_cmd *c, const char *name) {
     mtl_device *m = de__mtl_dev(c->device);
     release_recording(mc);
     @autoreleasepool {
-        id<MTLCommandQueue> q = (__bridge id<MTLCommandQueue>)m->queues[c->queue];
-        id<MTLCommandBuffer> cb = [q commandBufferWithUnretainedReferences];
-        if (cb == nil)
+        /* DENG-328: with encoder execution status when crash diagnostics are on. */
+        void *made = de__mtl_new_command_buffer(c->device, c->queue);
+        if (made == NULL)
             return de__gpu_fail(c->device, DE_ERR_DEVICE_LOST,
                                 "de_gpu_cmd_begin(\"%s\"): metal: no command buffer",
                                 name ? name : "");
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)made;
         if (name && name[0])
             cb.label = [NSString stringWithUTF8String:name];
-        mc->cb = (void *)CFBridgingRetain(cb);
+        mc->cb = made;
     }
     mc->render_ended = false;
     mc->fence_used = 0;

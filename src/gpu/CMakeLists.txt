@@ -20,6 +20,8 @@ de_add_module(
         memory/gpu_heap.c
         tier.c
         query.c
+        breadcrumbs_internal.h
+        breadcrumbs.c
     DEPS core platform
 )
 

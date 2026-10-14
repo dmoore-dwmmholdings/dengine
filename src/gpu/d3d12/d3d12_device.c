@@ -499,6 +499,8 @@ static de_result d3d12_device_create(de_gpu_device *d, const de_gpu_device_desc 
         dd->factory = NULL;
         r = de__d3d12_fail(hr, "d3d12: CreateDXGIFactory2");
     }
+    if (r == DE_OK && desc->crash_breadcrumbs)
+        de__d3d12_dred_enable(dd); /* DENG-328: DRED applies only to devices made after it */
     if (r == DE_OK)
         r = select_adapter(dd, desc->adapter);
     if (r == DE_OK) {
@@ -643,6 +645,10 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .object_name = de__d3d12_object_name,
     .queue_timestamp_frequency = de__d3d12_queue_timestamp_frequency,
     .queue_timestamp_now = de__d3d12_queue_timestamp_now,
+    /* DENG-328: breadcrumbs, device lost, DRED (d3d12_dred.c). */
+    .cmd_breadcrumb = de__d3d12_cmd_breadcrumb,
+    .device_lost = de__d3d12_device_lost,
+    .device_lost_report = de__d3d12_device_lost_report,
 };
 
 /* ---------- Test hooks ---------- */

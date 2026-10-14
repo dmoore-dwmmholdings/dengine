@@ -419,6 +419,8 @@ typedef struct d3d12_device {
     de_atomic_u64 cmd_serial;   /**< numbers command-list recordings (legacy state tracking) */
     /* DENG-324: root signature, command signatures, pipeline library (d3d12_pipeline.c). */
     struct d3d12_pipe_state *pipe;
+    /* DENG-328 (d3d12_dred.c): DRED was switched on before the device was made. */
+    bool dred;
 } d3d12_device;
 
 typedef struct d3d12_buffer {
@@ -562,6 +564,9 @@ typedef struct d3d12_cmd {
     u64 root_serial[2];
     de_gpu_pipeline_kind bound_kind;
     ID3D12GraphicsCommandList6 *list6;
+    /* DENG-328 (d3d12_dred.c): the list as ID3D12GraphicsCommandList2 (WriteBufferImmediate),
+     * queried on the first breadcrumb and not counted, like list6. */
+    ID3D12GraphicsCommandList2 *list2;
 } d3d12_cmd;
 
 /** User fence payload: a timeline ID3D12Fence. */
@@ -760,6 +765,16 @@ void de__d3d12_object_name(de_gpu_device *d, de__gpu_kind kind, void *rec, const
  * buffer, texture, pipeline, fence or query heap; false when it has none or `id` is stale. */
 bool de__d3d12_object_debug_name(de_gpu_device *d, de__gpu_kind kind, u32 id, char *out,
                                  size_t cap);
+
+/* ---------- DENG-328: GPU crash diagnostics (d3d12_dred.c) ---------- */
+
+/** Turns DRED on (auto-breadcrumbs, contexts, page faults) for devices made after it; sets
+ * dd->dred. Call right before D3D12CreateDevice. */
+void de__d3d12_dred_enable(d3d12_device *dd);
+/** vtable cmd_breadcrumb (WriteBufferImmediate, MARKER_OUT), device_lost, device_lost_report. */
+void de__d3d12_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value);
+bool de__d3d12_device_lost(de_gpu_device *d);
+size_t de__d3d12_device_lost_report(de_gpu_device *d, char *out, size_t cap);
 
 #endif /* _WIN32 */
 #endif

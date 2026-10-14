@@ -37,6 +37,7 @@ static void device_release(de_gpu_device *d) {
         de__mtl_residency_shutdown(d);
         de__mtl_sync_shutdown(d);
         de__mtl_bindless_shutdown(d);
+        de__mtl_errors_shutdown(d); /* DENG-328 */
         for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
             release(&m->timeline[q]);
             release(&m->queues[q]);
@@ -109,6 +110,8 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
             r = de__mtl_residency_init(d);
         if (r == DE_OK)
             de__mtl_archive_open(d, desc); /* DENG-325: never fails */
+        if (r == DE_OK)
+            r = de__mtl_errors_init(d, desc); /* DENG-328 */
     }
     if (r != DE_OK) {
         device_release(d);
@@ -239,6 +242,10 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_marker_pop = de__mtl_cmd_marker_pop,
     .object_name = de__mtl_object_name,
     .queue_timestamp_now = de__mtl_queue_timestamp_now,
+    /* DENG-328: command-buffer errors, breadcrumbs (mtl_errors.m) */
+    .cmd_breadcrumb = de__mtl_cmd_breadcrumb,
+    .device_lost = de__mtl_device_lost,
+    .device_lost_report = de__mtl_device_lost_report,
 };
 
 /* ---------- Accessors ---------- */

@@ -3,6 +3,7 @@
  * backend contract and de_gpu.h for the API.
  */
 #include "gpu/gpu_backend.h"
+#include "gpu/breadcrumbs_internal.h" /* DENG-328 */
 
 #include <string.h>
 
@@ -151,6 +152,16 @@ static void *resolve(de_gpu_device *d, de__gpu_kind kind, u32 id, const char *fu
         de__gpu_fail_handle(d, func, kind, id);
     return rec;
 }
+
+/* DENG-328: a lost device fails creates at once (the error context says so); `h` is the invalid
+ * handle to return. */
+#define LOST_CREATE(d, F, h)                                                                       \
+    do {                                                                                           \
+        if (de__gpu_is_lost(d)) {                                                                  \
+            de__gpu_lost_error(F);                                                                 \
+            return h;                                                                              \
+        }                                                                                          \
+    } while (0)
 
 /* ---------- Reclaiming and deferred destruction ---------- */
 
@@ -310,6 +321,7 @@ static void free_cmds(de_gpu_device *d) {
 /* Frees everything device_create set up. `stage`: 0 = before the backend device, 1 = backend
  * device exists, 2 = bindless and pools set up too. */
 static void device_free(de_gpu_device *d, int stage) {
+    de__gpu_crash_free(d); /* DENG-328 */
     if (stage >= 2) {
         for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k)
             de__gpu_pool_destroy(&d->pools[k]);
@@ -372,6 +384,7 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
     }
     de_mutex_init(&d->cmd_lock);
     de__gpu_deferred_init(&d->deferred, a);
+    de_atomic_init_u32(&d->lost, 0); /* DENG-328 */
 
     /* Heaps first: the backend's device_create registers its memory classes. */
     de_result r = de__gpu_heaps_init(d);
@@ -398,6 +411,12 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
             return r;
         }
     }
+    /* DENG-328: crash diagnostics (breadcrumb rings are buffers, so after the pools). */
+    r = de__gpu_crash_init(d);
+    if (r != DE_OK) {
+        de_gpu_device_destroy(d);
+        return r;
+    }
     DE_INFO(d->log, "gpu device: %s backend, \"%s\"", de_gpu_backend_name(backend),
             d->caps.device_name);
     *out = d;
@@ -408,6 +427,7 @@ void de_gpu_device_destroy(de_gpu_device *d) {
     if (!d)
         return;
     d->vt->wait_idle(d);
+    de__gpu_crash_release(d); /* DENG-328: the breadcrumb rings are not leaks */
     /* Swapchains first: their images are textures they destroy themselves. */
     for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k) {
         u32 order = k == 0 ? DE__GPU_SWAPCHAIN : (k == DE__GPU_SWAPCHAIN ? 0u : k);
@@ -459,6 +479,7 @@ static de_gpu_buffer buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_buffer_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_buffer_create", h); /* DENG-328 */
     if (de__gpu_validate_buffer_desc(d, desc) != DE_OK)
         return h;
     if (region ? !d->vt->buffer_create_placed : !d->vt->buffer_create) {
@@ -626,6 +647,7 @@ static de_gpu_texture texture_create(de_gpu_device *d, const de_gpu_texture_desc
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_texture_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_texture_create", h); /* DENG-328 */
     if (region ? !d->vt->texture_create_placed : !d->vt->texture_create) {
         de__gpu_fail(d, DE_ERR_UNSUPPORTED,
                      "de_gpu_texture_create: the %s backend has no %stextures", d->vt->name,
@@ -723,6 +745,7 @@ de_gpu_sampler de_gpu_sampler_create(de_gpu_device *d, const de_gpu_sampler_desc
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_sampler_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_sampler_create", h); /* DENG-328 */
     if (de__gpu_validate_sampler_desc(d, desc) != DE_OK)
         return h;
     if (!d->vt->sampler_create) {
@@ -775,6 +798,7 @@ de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_d
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_pipeline_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_pipeline_create", h); /* DENG-328 */
     if (de__gpu_validate_pipeline_desc(d, desc) != DE_OK)
         return h;
     if (!d->vt->pipeline_create) {
@@ -847,6 +871,7 @@ de_gpu_query_heap de_gpu_query_heap_create(de_gpu_device *d, const de_gpu_query_
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_query_heap_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_query_heap_create", h); /* DENG-328 */
     if (de__gpu_validate_query_heap_desc(d, desc) != DE_OK)
         return h;
     if (!d->vt->query_heap_create) {
@@ -887,6 +912,7 @@ de_gpu_fence de_gpu_fence_create(de_gpu_device *d, u64 initial) {
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_fence_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_fence_create", h); /* DENG-328 */
     if (!d->vt->fence_create) {
         de__gpu_fail(d, DE_ERR_UNSUPPORTED, "de_gpu_fence_create: the %s backend has no fences",
                      d->vt->name);
@@ -926,13 +952,23 @@ de_result de_gpu_fence_wait(de_gpu_device *d, de_gpu_fence h, u64 value, u64 tim
         return DE_ERR_INVALID_ARGUMENT;
     if (!d->vt->fence_wait)
         return de__gpu_fail(d, DE_ERR_UNSUPPORTED, "de_gpu_fence_wait: no fence support");
-    return d->vt->fence_wait(d, f, value, timeout_ns);
+    /* DENG-328: a lost device fails at once, and a wait that ends because the device was lost
+     * (a Metal command buffer that failed completes its fences) reports the loss. */
+    if (de__gpu_poll_lost(d, "de_gpu_fence_wait"))
+        return de__gpu_lost_error("de_gpu_fence_wait");
+    de_result r =
+        de__gpu_check_lost(d, d->vt->fence_wait(d, f, value, timeout_ns), "de_gpu_fence_wait");
+    if (r != DE_ERR_DEVICE_LOST && de__gpu_poll_lost(d, "de_gpu_fence_wait"))
+        return de__gpu_lost_error("de_gpu_fence_wait");
+    return r;
 }
 
 de_result de_gpu_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s) {
     if (!d)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_queue_submit: device is NULL");
     DE_TRY(de__gpu_validate_submit(d, q, s));
+    if (de__gpu_poll_lost(d, "de_gpu_queue_submit")) /* DENG-328 */
+        return de__gpu_lost_error("de_gpu_queue_submit");
 #if DE__GPU_VALIDATE_COMMANDS
     for (u32 i = 0; i < s->cmd_count; ++i)
         if (s->cmds[i]->marker_depth != 0)
@@ -945,6 +981,7 @@ de_result de_gpu_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     u64 value = de_atomic_load_u64(&d->submitted[q], DE_ATOMIC_RELAXED) + 1u;
     /* Published before the backend call: a destroy racing with this submit must wait for it. */
     de_atomic_store_u64(&d->submitted[q], value, DE_ATOMIC_RELEASE);
+    de__gpu_breadcrumb_submitted(d, q, s, value); /* DENG-328 */
     de_result r = d->vt->queue_submit(d, q, s, value);
     de_mutex_lock(&d->cmd_lock);
     for (u32 i = 0; i < s->cmd_count; ++i) {
@@ -961,8 +998,10 @@ de_result de_gpu_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     de_mutex_unlock(&d->cmd_lock);
     de_mutex_unlock(&d->submit_lock[q]);
     de__gpu_collect(d);
-    if (r != DE_OK)
+    if (r != DE_OK) {
+        de__gpu_check_lost(d, r, "de_gpu_queue_submit"); /* DENG-328 */
         return DE_FAIL_WRAP(r, "de_gpu_queue_submit: %s backend", d->vt->name);
+    }
     return DE_OK;
 }
 
@@ -974,6 +1013,7 @@ de_gpu_swapchain de_gpu_swapchain_create(de_gpu_device *d, const de_gpu_swapchai
         DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_swapchain_create: device is NULL");
         return h;
     }
+    LOST_CREATE(d, "de_gpu_swapchain_create", h); /* DENG-328 */
     if (de__gpu_validate_swapchain_desc(d, desc) != DE_OK)
         return h;
     if (!d->vt->swapchain_create) {
@@ -1019,8 +1059,11 @@ de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s, de_gpu_
     de__gpu_swapchain *sc = swapchain(d, s, F);
     if (!sc)
         return DE_ERR_INVALID_ARGUMENT;
-    return d->vt->swapchain_acquire ? d->vt->swapchain_acquire(d, sc, image)
-                                    : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
+    if (de__gpu_is_lost(d)) /* DENG-328 */
+        return de__gpu_lost_error(F);
+    return d->vt->swapchain_acquire
+               ? de__gpu_check_lost(d, d->vt->swapchain_acquire(d, sc, image), F)
+               : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
 }
 
 de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s) {
@@ -1028,7 +1071,9 @@ de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s) {
     de__gpu_swapchain *sc = swapchain(d, s, F);
     if (!sc)
         return DE_ERR_INVALID_ARGUMENT;
-    return d->vt->swapchain_present ? d->vt->swapchain_present(d, sc)
+    if (de__gpu_is_lost(d)) /* DENG-328 */
+        return de__gpu_lost_error(F);
+    return d->vt->swapchain_present ? de__gpu_check_lost(d, d->vt->swapchain_present(d, sc), F)
                                     : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
 }
 
@@ -1037,7 +1082,9 @@ de_result de_gpu_swapchain_resize(de_gpu_device *d, de_gpu_swapchain s, u32 w, u
     de__gpu_swapchain *sc = swapchain(d, s, F);
     if (!sc)
         return DE_ERR_INVALID_ARGUMENT;
-    return d->vt->swapchain_resize ? d->vt->swapchain_resize(d, sc, w, h)
+    if (de__gpu_is_lost(d)) /* DENG-328 */
+        return de__gpu_lost_error(F);
+    return d->vt->swapchain_resize ? de__gpu_check_lost(d, d->vt->swapchain_resize(d, sc, w, h), F)
                                    : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
 }
 
@@ -1060,6 +1107,10 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
                      "de_gpu_cmd_begin: queue %d is not a "
                      "de_gpu_queue value",
                      (int)q);
+        return NULL;
+    }
+    if (de__gpu_poll_lost(d, "de_gpu_cmd_begin")) { /* DENG-328 */
+        de__gpu_lost_error("de_gpu_cmd_begin");
         return NULL;
     }
     de_mutex_lock(&d->cmd_lock);
@@ -1093,10 +1144,13 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
     c->marker_depth = 0;
     c->marker_render_base = 0; /* DENG-326 */
     c->marker_text_used = 0;
+    c->bc_ranges = 0; /* DENG-328 */
+    c->bc_dropped = 0;
     c->queue_value = 0;
     c->next = NULL;
     copy_name(c->name, name);
-    if (d->vt->cmd_begin && d->vt->cmd_begin(c, name) != DE_OK) {
+    if (d->vt->cmd_begin &&
+        de__gpu_check_lost(d, d->vt->cmd_begin(c, name), "de_gpu_cmd_begin") != DE_OK) {
         c->state = DE__GPU_CMD_FREE;
         de_mutex_lock(&d->cmd_lock);
         c->next = d->cmd_free[q];
@@ -1124,7 +1178,7 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
  * reported in Debug/Dev. */
 #define CMD_ENTER(F)                                                                               \
     (void)(F);                                                                                     \
-    if (!c)                                                                                        \
+    if (!c || de__gpu_is_lost(c->device)) /* DENG-328: nothing reaches a lost device */            \
         return;                                                                                    \
     CHECK(c->state == DE__GPU_CMD_RECORDING,                                                       \
           "%s(\"%s\"): the command list is not recording "                                         \
@@ -1509,9 +1563,16 @@ void de_gpu_cmd_marker_pop(de_gpu_cmd *c) {
 }
 
 void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id) {
-    CMD_ENTER("de_gpu_cmd_breadcrumb");
-    if (c->device->vt->cmd_breadcrumb)
-        c->device->vt->cmd_breadcrumb(c, id);
+    static const char F[] = "de_gpu_cmd_breadcrumb";
+    CMD_ENTER(F);
+    /* DENG-328: Vulkan and Metal write breadcrumbs with transfer/blit commands. */
+    CHECK(!c->in_render,
+          "%s(\"%s\"): breadcrumb inside a render pass; write it before begin_render or after "
+          "end_render",
+          F, c->name);
+    if (c->in_render)
+        return;
+    de__gpu_breadcrumb_record(c, id);
 }
 
 void de_gpu_cmd_timestamp(de_gpu_cmd *c, de_gpu_query_heap h, u32 index) {

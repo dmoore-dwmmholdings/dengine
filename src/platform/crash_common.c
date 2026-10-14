@@ -735,8 +735,8 @@ static void de__crash_marker_value(const char *text, const char *key, char *out,
     }
 }
 
-/* Reads at most DE__CRASH_MARKER_MAX - 1 bytes of `path` into `out`, NUL-terminated. */
-static bool de__crash_read_marker(const char *path, char *out) {
+/* Reads at most `cap` - 1 bytes of `path` into `out`, NUL-terminated (DENG-328: any size). */
+static bool de__crash_read_text(const char *path, char *out, u64 cap) {
     de_file *f = NULL;
     if (de__file_open_native(path, DE_FILE_READ, de_heap_allocator(), &f) != DE_OK) {
         de_error_clear();
@@ -745,19 +745,27 @@ static bool de__crash_read_marker(const char *path, char *out) {
     u64 total = 0;
     for (;;) {
         u64 got = 0;
-        if (de__file_pread(f, out + total, total, DE__CRASH_MARKER_MAX - 1 - total, &got) !=
-            DE_OK) {
+        if (de__file_pread(f, out + total, total, cap - 1 - total, &got) != DE_OK) {
             de_error_clear();
             break;
         }
         total += got;
-        if (got == 0 || total == DE__CRASH_MARKER_MAX - 1)
+        if (got == 0 || total == cap - 1)
             break;
     }
     de_file_close(f);
     out[total] = '\0';
     return total > 0;
 }
+
+/* Reads at most DE__CRASH_MARKER_MAX - 1 bytes of `path` into `out`, NUL-terminated. */
+static bool de__crash_read_marker(const char *path, char *out) {
+    return de__crash_read_text(path, out, DE__CRASH_MARKER_MAX);
+}
+
+/* DENG-328: bytes of `<stem>.gpu_report.txt` handed to the upload (the GPU module's report is at
+ * most DE_GPU_DEVICE_LOST_REPORT_MAX = 16 KiB). */
+#define DE__CRASH_GPU_REPORT_MAX (16u * 1024u)
 
 /* Retires one marker and hands its report to `upload`. Returns true when `upload` was called. */
 static bool de__crash_upload_one(const char *dir, const char *name, de_crash_upload_fn upload,
@@ -814,13 +822,26 @@ static bool de__crash_upload_one(const char *dir, const char *name, de_crash_upl
             tail[0] = '\0';
     }
 
+    /* DENG-328: a GPU device-lost report beside it, `<report stem>.gpu_report.txt`, written by
+     * src/gpu/breadcrumbs.c's chained handler when a device was lost before the crash. */
+    static char gpu_text[DE__CRASH_GPU_REPORT_MAX];
+    bool gpu_fault = false;
+    if (de__crash_has_suffix(report, ".txt")) {
+        char gpu[DE__CRASH_PATH_CAP];
+        size_t rs = strlen(report) - 4;
+        memcpy(gpu, report, rs);
+        gpu[rs] = '\0';
+        if (de__crash_str_append(gpu, sizeof gpu, ".gpu_report.txt"))
+            gpu_fault = de__crash_read_text(gpu, gpu_text, sizeof gpu_text);
+    }
+
     de_crash_report rep;
     memset(&rep, 0, sizeof rep);
     rep.dump_path = dump[0] != '\0' ? dump : report;
     rep.log_path = tail[0] != '\0' ? tail : report;
     rep.build_id = build_id[0] != '\0' ? build_id : "unknown";
-    rep.gpu_breadcrumbs = NULL;
-    rep.gpu_fault = false;
+    rep.gpu_breadcrumbs = gpu_fault ? gpu_text : NULL;
+    rep.gpu_fault = gpu_fault;
     DE_INFO(DE_LOG_CAT_PLATFORM, "crash report %s (build %s) handed to the upload callback", report,
             rep.build_id);
     upload(&rep, user);

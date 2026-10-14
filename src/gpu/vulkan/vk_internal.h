@@ -762,4 +762,9 @@ u32 de__gpu_vk_debug_captured(de_gpu_device *d, char *message, size_t message_ca
 /** The VkCommandBuffer of a list being recorded (as u64), 0 for another backend's list. */
 u64 de__gpu_vk_cmd_buffer(de_gpu_cmd *c);
 
+/* vk_fault.c (DENG-328): breadcrumbs, the device-lost poll and VK_EXT_device_fault. */
+void de__vk_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value);
+bool de__vk_device_lost(de_gpu_device *d);
+size_t de__vk_device_lost_report(de_gpu_device *d, char *out, size_t cap);
+
 #endif

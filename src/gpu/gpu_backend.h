@@ -131,6 +131,13 @@ typedef struct de__gpu_query_heap {
 #define DE__GPU_MARKER_LEVELS 32u
 #define DE__GPU_MARKER_TEXT   1024u
 
+/** Breadcrumbs (DENG-328): u32 slots in each queue's ring buffer, sequence numbers a command list
+ * reserves at a time, and the chunks one recording keeps (DE__GPU_BC_RANGES * DE__GPU_BC_CHUNK
+ * breadcrumbs per recording; more are dropped and counted). */
+#define DE__GPU_BC_SLOTS  2048u
+#define DE__GPU_BC_CHUNK  16u
+#define DE__GPU_BC_RANGES 32u
+
 /** Front-end part of a command list. The backend payload follows (de__gpu_cmd_payload). */
 struct de_gpu_cmd {
     de_gpu_device *device;
@@ -154,6 +161,13 @@ struct de_gpu_cmd {
     u16 marker_offset[DE__GPU_MARKER_LEVELS]; /**< where each level's name starts */
     u32 marker_color[DE__GPU_MARKER_LEVELS];  /**< 0xRRGGBB of each level */
     char marker_text[DE__GPU_MARKER_TEXT];
+    /* DENG-328 (breadcrumbs.c): the breadcrumb sequence numbers this recording took, as chunks of
+     * DE__GPU_BC_CHUNK numbers reserved from the queue's counter (`bc_first[i]`, `bc_used[i]` of
+     * them used). Breadcrumbs past DE__GPU_BC_RANGES chunks are counted in `bc_dropped`. */
+    u32 bc_ranges;
+    u32 bc_dropped;
+    u32 bc_first[DE__GPU_BC_RANGES];
+    u8 bc_used[DE__GPU_BC_RANGES];
 };
 enum { DE__GPU_CMD_FREE, DE__GPU_CMD_RECORDING, DE__GPU_CMD_SUBMITTED };
 
@@ -230,7 +244,10 @@ typedef struct de__gpu_backend_vtable {
                                        de__gpu_buffer *src, u64 src_off, u32 row_pitch);
     void (*cmd_marker_push)(de_gpu_cmd *c, const char *name, u32 color);
     void (*cmd_marker_pop)(de_gpu_cmd *c);
-    void (*cmd_breadcrumb)(de_gpu_cmd *c, u32 id);
+    /* DENG-328: write the u32 `value` at byte `offset` (a multiple of 4) of `ring`, a READBACK
+     * buffer, once every command recorded before it in the list has completed. Outside render
+     * passes only (the front-end skips it inside one). NULL: no breadcrumbs. */
+    void (*cmd_breadcrumb)(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value);
     void (*cmd_timestamp)(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index);
     void (*cmd_resolve_queries)(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
                                 de__gpu_buffer *dst, u64 dst_off);
@@ -316,6 +333,17 @@ typedef struct de__gpu_backend_vtable {
     void (*object_name)(de_gpu_device *d, de__gpu_kind kind, void *rec, const char *name);
     u64 (*queue_timestamp_frequency)(de_gpu_device *d, de_gpu_queue q);
     bool (*queue_timestamp_now)(de_gpu_device *d, de_gpu_queue q, u64 *ticks);
+
+    /* GPU crash diagnostics (DENG-328, breadcrumbs.c). device_lost: true once the backend knows
+     * the device is lost or faulted, also when no call has returned DE_ERR_DEVICE_LOST yet (a
+     * Metal command buffer that failed); polled by submits, fence waits, cmd_begin and the report
+     * calls, so it must be cheap. NULL: only DE_ERR_DEVICE_LOST results count.
+     * device_lost_report: appends the backend's own fault data (DRED, VK_EXT_device_fault, Metal
+     * command-buffer errors) as text to `out` (`cap` bytes, NUL-terminated); returns the length
+     * written. Called once, on the thread that saw the loss, never from a crash handler. NULL:
+     * no backend section. */
+    bool (*device_lost)(de_gpu_device *d);
+    size_t (*device_lost_report)(de_gpu_device *d, char *out, size_t cap);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -442,6 +470,10 @@ struct de_gpu_device {
      * the profiler span it was made in. Under the queue's submit_lock. */
     u32 prof_gpu_context[DE_QUEUE_COUNT_];
     u32 prof_gpu_span[DE_QUEUE_COUNT_];
+    /** DENG-328 (breadcrumbs.c): set once the device is lost (every later call fails fast), and
+     * the crash diagnostics state (report, breadcrumb rings, names, callback). */
+    de_atomic_u32 lost;
+    struct de__gpu_crash *crash;
 };
 
 static inline void *de__gpu_device_payload(de_gpu_device *d) {
@@ -545,5 +577,23 @@ bool de__gpu_format_is_srgb(de_gpu_format f);
 u32 de__gpu_format_block_bytes(de_gpu_format f);
 const char *de__gpu_format_name(de_gpu_format f);
 const char *de__gpu_kind_name(de__gpu_kind k);
+
+/* ---------- GPU crash diagnostics (breadcrumbs.c, DENG-328) ---------- */
+
+/** True once the device is lost (cheap: one atomic load). */
+static inline bool de__gpu_is_lost(de_gpu_device *d) {
+    return de_atomic_load_u32(&d->lost, DE_ATOMIC_ACQUIRE) != 0;
+}
+/** de__gpu_is_lost, or the backend's device_lost poll says so (then the loss is handled here, on
+ * the calling thread, by de__gpu_device_lost(d, `where`)). */
+bool de__gpu_poll_lost(de_gpu_device *d, const char *where);
+/** Handles a loss seen by `where` (a function name): marks the device lost, builds the report,
+ * sets the `gpu_fault` crash annotation and calls the callback. Only the first call does it. */
+void de__gpu_device_lost(de_gpu_device *d, const char *where);
+/** `r` unchanged; when it is DE_ERR_DEVICE_LOST, de__gpu_device_lost(d, where) first. */
+de_result de__gpu_check_lost(de_gpu_device *d, de_result r, const char *where);
+/** DE_ERR_DEVICE_LOST with the error context "<where>: the GPU device is lost" (no log line: a
+ * lost device fails every call). */
+de_result de__gpu_lost_error(const char *where);
 
 #endif
