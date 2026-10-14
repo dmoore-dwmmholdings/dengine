@@ -614,7 +614,144 @@ int de_test_main(int argc, char **argv) {
 }
 
 #ifndef DE_TEST_NO_MAIN
+/* ---- Windows: report a crash (DENG-418) ------------------------------------------------------
+ *
+ * CTest starts tests with SEM_NOGPFAULTERRORBOX, so Windows Error Reporting writes nothing for a
+ * test that crashes, and CTest only says "Exception: SegFault". This unhandled-exception filter
+ * prints the exception and the faulting thread's stack (module!symbol+offset, file:line where the
+ * PDB has it) on stderr, which CTest shows with --output-on-failure, and writes a minidump to
+ * $DE_TEST_DUMP_DIR/<exe>.<pid>.dmp when that variable is set (CI uploads the directory). It runs
+ * on the crashing thread, also during process exit (DLL detach), when no other thread is left.
+ * A test that installs its own handler (the crash module's tests) replaces it; that is fine. */
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+/* dbghelp.h needs windows.h first. */
+#include <dbghelp.h>
+
+static void de__test_print_frame(HANDLE proc, DWORD64 pc, unsigned i) {
+    char module[MAX_PATH] = "?";
+    HMODULE mod = NULL;
+    DWORD64 base = 0;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)(uintptr_t)pc, &mod) &&
+        GetModuleFileNameA(mod, module, (DWORD)sizeof module) != 0)
+        base = (DWORD64)(uintptr_t)mod;
+    const char *name = strrchr(module, '\\');
+    name = name != NULL ? name + 1 : module;
+    union {
+        SYMBOL_INFO info;
+        char bytes[sizeof(SYMBOL_INFO) + 256];
+    } sym;
+    memset(&sym, 0, sizeof sym);
+    sym.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym.info.MaxNameLen = 255;
+    DWORD64 disp = 0;
+    IMAGEHLP_LINE64 line;
+    memset(&line, 0, sizeof line);
+    line.SizeOfStruct = sizeof line;
+    DWORD line_disp = 0;
+    if (SymFromAddr(proc, pc, &disp, &sym.info)) {
+        if (SymGetLineFromAddr64(proc, pc, &line_disp, &line))
+            fprintf(stderr, "  #%02u %s!%s+0x%llx (%s:%lu)\n", i, name, sym.info.Name,
+                    (unsigned long long)disp, line.FileName, (unsigned long)line.LineNumber);
+        else
+            fprintf(stderr, "  #%02u %s!%s+0x%llx\n", i, name, sym.info.Name,
+                    (unsigned long long)disp);
+    } else {
+        fprintf(stderr, "  #%02u %s+0x%llx\n", i, name, (unsigned long long)(pc - base));
+    }
+}
+
+static void de__test_write_dump(EXCEPTION_POINTERS *ep) {
+    char dir[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA("DE_TEST_DUMP_DIR", dir, (DWORD)sizeof dir);
+    if (n == 0 || n >= sizeof dir)
+        return;
+    char exe[MAX_PATH] = "test";
+    GetModuleFileNameA(NULL, exe, (DWORD)sizeof exe);
+    const char *base = strrchr(exe, '\\');
+    base = base != NULL ? base + 1 : exe;
+    char path[2 * MAX_PATH];
+    snprintf(path, sizeof path, "%s\\%s.%lu.dmp", dir, base, (unsigned long)GetCurrentProcessId());
+    CreateDirectoryA(dir, NULL);
+    HANDLE f =
+        CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE)
+        return;
+    MINIDUMP_EXCEPTION_INFORMATION mei;
+    mei.ThreadId = GetCurrentThreadId();
+    mei.ExceptionPointers = ep;
+    mei.ClientPointers = FALSE;
+    BOOL ok = MiniDumpWriteDump(
+        GetCurrentProcess(), GetCurrentProcessId(), f,
+        (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo), &mei,
+        NULL, NULL);
+    CloseHandle(f);
+    fprintf(stderr, "de_test: minidump %s: %s\n", ok ? "written" : "FAILED", path);
+}
+
+static LONG WINAPI de__test_unhandled(EXCEPTION_POINTERS *ep) {
+    static volatile LONG once;
+    if (InterlockedExchange(&once, 1) != 0)
+        return EXCEPTION_CONTINUE_SEARCH;
+    const EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    fflush(stdout);
+    fprintf(stderr, "\nde_test: unhandled exception 0x%08lx at %p (thread %lu)\n",
+            (unsigned long)er->ExceptionCode, er->ExceptionAddress,
+            (unsigned long)GetCurrentThreadId());
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+        fprintf(stderr, "de_test: %s of address %p\n",
+                er->ExceptionInformation[0] == 0   ? "read"
+                : er->ExceptionInformation[0] == 8 ? "execute"
+                                                   : "write",
+                (void *)er->ExceptionInformation[1]);
+#if defined(_M_X64) || defined(_M_ARM64)
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    SymInitialize(proc, NULL, TRUE);
+    CONTEXT ctx = *ep->ContextRecord;
+    STACKFRAME64 sf;
+    memset(&sf, 0, sizeof sf);
+#if defined(_M_X64)
+    const DWORD machine = IMAGE_FILE_MACHINE_AMD64;
+    sf.AddrPC.Offset = ctx.Rip;
+    sf.AddrFrame.Offset = ctx.Rbp;
+    sf.AddrStack.Offset = ctx.Rsp;
+#else
+    const DWORD machine = IMAGE_FILE_MACHINE_ARM64;
+    sf.AddrPC.Offset = ctx.Pc;
+    sf.AddrFrame.Offset = ctx.Fp;
+    sf.AddrStack.Offset = ctx.Sp;
+#endif
+    sf.AddrPC.Mode = AddrModeFlat;
+    sf.AddrFrame.Mode = AddrModeFlat;
+    sf.AddrStack.Mode = AddrModeFlat;
+    fprintf(stderr, "de_test: stack of the crashing thread:\n");
+    for (unsigned i = 0; i < 64; ++i) {
+        if (!StackWalk64(machine, proc, GetCurrentThread(), &sf, &ctx, NULL,
+                         SymFunctionTableAccess64, SymGetModuleBase64, NULL) ||
+            sf.AddrPC.Offset == 0)
+            break;
+        de__test_print_frame(proc, sf.AddrPC.Offset, i);
+    }
+#endif
+    fflush(stderr);
+    de__test_write_dump(ep);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif /* _WIN32 */
+
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(de__test_unhandled);
+#endif
     return de_test_main(argc, argv);
 }
 #endif

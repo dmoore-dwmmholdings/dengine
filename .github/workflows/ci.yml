@@ -120,6 +120,10 @@ jobs:
 
       - name: Test
         shell: bash
+        # DENG-418: a de_test executable that crashes prints its stack on stderr and, on Windows,
+        # writes a minidump into DE_TEST_DUMP_DIR (uploaded below with the test logs).
+        env:
+          DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
       - name: Upload test logs
@@ -131,6 +135,7 @@ jobs:
             build/${{ matrix.preset }}/Testing/Temporary/
             build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ matrix.preset }}/de_config_dump.txt
+            build/${{ matrix.preset }}/test-dumps/
           if-no-files-found: ignore
           retention-days: 7
 
