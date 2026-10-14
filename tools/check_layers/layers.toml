@@ -81,6 +81,7 @@ paths = ["src/gpu/*"]
 name = "gpu/shader"
 band = "content"
 paths = ["src/gpu/shader"]
+headers = ["de_shader.h"]  # DENG-409: the public shader API (register the type, get the code)
 
 [[module]]
 name = "cook"
@@ -89,7 +90,7 @@ paths = ["tools/cook/lib"]
 explicit_only = true
 
 # DENG-105: the importers (tools/cook/importers/) are compiled into the cooker library (de_cooker,
-# and de_cook_shader for shaders), so the runtime may name them only where it links the cooker
+# the shader importer too since DENG-409), so the runtime may name them only where it links the cooker
 # (DE_HAS_COOKER): the render asset types register de_texture_import and de_model_import. Their
 # own files are not scanned (like the rest of tools/); explicit_only keeps every other engine
 # module out.
@@ -246,6 +247,11 @@ from = "render"
 to = "cook/importers"
 why = "Dev builds only (DE_HAS_COOKER): the runtime `texture` and `model` types register the texture and model importers (de_texture_import, de_model_import; DENG-105). Shipping does not link them."
 
+[[allow]]
+from = "gpu/shader"
+to = "cook"
+why = "Dev builds only (DE_HAS_COOKER): the runtime `shader` type takes the cooker's built-in shader importer (de_cooker_builtin_importer; DENG-409), so engine code never names tools/cook/importers/. Shipping does not link the cooker."
+
 # gameplay
 [[allow]]
 from = "ui"
@@ -334,8 +340,5 @@ why = "physics, audio and anim never include each other (DENG-2); put the code i
 # ---------------------------------------------------------------- examples (DENG-327)
 # Files under examples/ include only public headers (<dengine/de_*.h>), like a game. These
 # entries exempt one file each, with the reason. Remove an entry when its file no longer needs
-# engine internals (the check fails on an entry whose file is gone).
-
-[[example_internal]]
-file = "examples/hello_triangle/shader_glue.c"
-why = "Registers the `shader` asset type and reads cooked shader code (de__shader_type_register, de__shader_blob, de_shader_import), which have no public API yet (DENG-409), and holds the D3D12 Agility exports. main.c stays public-only through shader_glue.h."
+# engine internals (the check fails on an entry whose file is gone). None today: DENG-409 gave
+# hello_triangle's shader_glue.c a public API (de_shader.h) and removed it.

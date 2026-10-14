@@ -10,6 +10,7 @@
 #include "de_ecs.h"
 #include "de_asset.h"
 #include "de_gpu.h"
+#include "de_shader.h"
 #include "de_render.h"
 #include "de_anim.h"
 #include "de_physics.h"

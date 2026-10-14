@@ -3,14 +3,14 @@
  * `gpu/shader` (target de_gpu_shader): it sits between the RHI and the asset system, reading
  * cooked blobs (shader_format.h) behind de_shader handles for pipeline creation (S10+).
  *
- * The renderer, or whoever creates pipelines, registers the type once per asset system:
+ * The renderer, or whoever creates pipelines, registers the type once per asset system. In
+ * Debug and Dev builds with the tools (DE_HAS_COOKER) the type gets the cooker library's built-in
+ * shader importer (de_cooker_builtin_importer), so SOURCE mode compiles .slang on demand; other
+ * builds load cooked data only (DENG-409). Code without the renderer uses the public de_shader.h
+ * (de_shader_register_type, de_shader_get_code), which has no reload callbacks.
  *
  *     de__shader_types *st = NULL;
  *     de__shader_type_desc d = {0};
- *   #if DE_HAS_COOKER   // Debug and Dev: SOURCE mode compiles .slang on demand
- *     d.import = de_shader_import;                     // tools/cook/importers/shader/
- *     d.importer_version = de_shader_importer_version();
- *   #endif
  *     DE_TRY(de__shader_type_register(assets, &d, &st));
  *     ...
  *     de_shader sh = de_asset_shader(assets, de_asset_id_from("shaders/blur"));
@@ -45,10 +45,10 @@ typedef struct de__shader_types de__shader_types;
 
 typedef struct de__shader_type_desc {
     const de_allocator *allocator; /**< the type's own memory; NULL = de_heap_allocator() */
-    /** The importer (de_shader_import) in builds with the cooker; NULL loads cooked data only
-     * (packs, or a SOURCE-mode file that is already cooked). */
+    /** The importer; NULL = the cooker's built-in shader importer in builds with the cooker
+     * (DE_HAS_COOKER), cooked data only elsewhere. Tests pass their own. */
     de_result (*import)(de_asset_import_ctx *ctx);
-    u32 importer_version; /**< de_shader_importer_version() with `import` */
+    u32 importer_version; /**< with `import`: its version */
 } de__shader_type_desc;
 
 /**
@@ -115,7 +115,7 @@ typedef struct de__shader_view {
 
 /**
  * Checks a cooked blob and fills `out`: magic, version, table bounds, NUL-terminated strings,
- * records in range and sorted. Allocation-free; any thread.
+ * records in range and sorted. Allocation-free; any thread. On failure `*out` is zeroed.
  * @return DE_OK, DE_ERR_VERSION_MISMATCH (another format version) or DE_ERR_PARSE (the reason
  *         is in the error context).
  */

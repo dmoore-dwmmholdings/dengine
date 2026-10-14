@@ -22,3 +22,16 @@ de_add_fuzz_target(NAME d3d12_dxil
 if(TARGET fuzz_d3d12_dxil)
     target_include_directories(fuzz_d3d12_dxil PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-409: fuzz_shader_view, the cooked `shader` asset check (de__shader_view_init in
+# src/gpu/shader/shader_type.c) and the view accessors. The seed corpus holds blobs cooked by
+# `de-cook cook` (SPIR-V and metallib, SPIR-V only) and small hand-made blobs at the format's edges.
+if(TARGET de_gpu_shader)
+    de_add_fuzz_target(NAME shader_view
+                       SOURCES fuzz_shader_view.c
+                       LIBS de_gpu_shader de_asset de_gpu de_core
+                       CORPUS corpus/shader_view)
+    if(TARGET fuzz_shader_view)
+        target_include_directories(fuzz_shader_view PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

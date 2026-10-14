@@ -54,6 +54,20 @@ const char *const *de_cooker_engine_type_names(u32 *count);
 /** True if `name` is one of the engine type names. */
 bool de_cooker_is_engine_type(const char *name);
 
+/**
+ * The importer the cooker library has built in for engine type `name` (DENG-409;
+ * tools/cook/importers/engine_importers.c): `texture` (DENG-98), `model` (DENG-101) and `shader`
+ * (DENG-289). On true `*out` holds an importer-only type desc: `name`, `extensions`,
+ * `extension_count`, `importer_version` and `import`; no loader, `user` NULL. The pointers in it
+ * are static. False for any other name, and for NULL arguments. Any thread.
+ *
+ * Its users: `de-cook cook` registers every built-in importer of a type the project did not
+ * register itself (tools/cook/cook_cmd.c), and runtime types of Debug and Dev builds take their
+ * importer from here under `#if DE_HAS_COOKER` (the `shader` type: src/gpu/shader/shader_type.c),
+ * so engine code never includes tools/cook/importers/.
+ */
+bool de_cooker_builtin_importer(const char *name, de_asset_type_desc *out);
+
 /** "windows", "linux", "macos"; "host" for DE_COOK_PLATFORM_HOST; "unknown" otherwise. */
 const char *de_cook_platform_name(de_cook_platform p);
 /** The platform this program was built for (never DE_COOK_PLATFORM_HOST). */

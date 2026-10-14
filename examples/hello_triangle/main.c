@@ -17,6 +17,7 @@
 #include <dengine/de_gpu.h>
 #include <dengine/de_math.h>
 #include <dengine/de_platform.h>
+#include <dengine/de_shader.h>
 #include <dengine/de_task.h>
 
 #include <stb_image.h>
@@ -25,8 +26,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "shader_glue.h"
 
 #define FRAMES_IN_FLIGHT 2u
 #define OFFSCREEN_SIZE   256u /* the --offscreen target; the --check pixels assume it */
@@ -51,7 +50,6 @@ typedef struct app {
     options o;
     de_task_system *tasks;
     de_asset_system *assets;
-    hello_shaders *shader_types;
     de_load_handle load;
     const char *cache_root; /* "hcache" (--cache-dir) or "cache" */
     bool platform;
@@ -172,7 +170,9 @@ static int load_assets(app *a) {
     ad.mode = a->o.pack != NULL ? DE_ASSET_MODE_PACKED : DE_ASSET_MODE_SOURCE;
     if (de_asset_system_create(&ad, &a->assets) != DE_OK)
         return fail("de_asset_system_create");
-    if (hello_shaders_register(a->assets, &a->shader_types) != DE_OK)
+    /* The `shader` type (de_shader.h): in Debug and Dev builds with the tools it cooks .slang
+     * sources in SOURCE mode through the in-process cooker. */
+    if (de_shader_register_type(a->assets, NULL) != DE_OK)
         return fail("registering the shader type");
     if (a->o.pack != NULL) {
         /* PACKED mode: a pack cooked from assets.toml; its directory becomes hpack:/. */
@@ -186,13 +186,14 @@ static int load_assets(app *a) {
             de_asset_pack_mount(a->assets, vpath, 0) != DE_OK)
             return fail("mounting --pack");
     } else {
-        if (!hello_shaders_can_cook()) {
-            fprintf(stderr, "hello_triangle: this build cannot cook shaders (Release, Shipping "
-                            "or no tools): run with --pack\n");
-            return EXIT_SKIP;
-        }
+#if DE_HAS_COOKER /* Debug and Dev builds with the tools: the in-process cooker */
         if (de_asset_manifest_load(a->assets, "hello:/assets.toml") != DE_OK)
             return fail("de_asset_manifest_load");
+#else
+        fprintf(stderr, "hello_triangle: this build cannot cook shaders (Release, Shipping "
+                        "or no tools): run with --pack\n");
+        return EXIT_SKIP;
+#endif
     }
     const de_asset_id ids[3] = {de_asset_id_from("shaders/triangle"),
                                 de_asset_id_from("shaders/quad"),
@@ -219,15 +220,17 @@ static int make_pipeline(app *a) {
                                .color_count = 1,
                                .cull = DE_CULL_NONE,
                                .name = asset};
-    u32 vs_bytes = 0, ps_bytes = 0;
-    if (hello_shader_get(a->assets, sh, a->backend, "vs_main", &pd.vs, &vs_bytes) != DE_OK ||
-        hello_shader_get(a->assets, sh, a->backend, "ps_main", &pd.ps, &ps_bytes) != DE_OK) {
+    de_shader_reflection vs, ps;
+    if (de_shader_get_code(a->assets, sh, a->backend, 0, "vs_main", &pd.vs, &vs) != DE_OK ||
+        de_shader_get_code(a->assets, sh, a->backend, 0, "ps_main", &pd.ps, &ps) != DE_OK) {
         /* DE_ERR_NOT_FOUND: not cooked for this backend's target (DXIL without DXC). */
         bool missing = de_error_last() != NULL && de_error_last()->result == DE_ERR_NOT_FOUND;
         int rc = fail("getting the shader code for this backend");
         return missing ? EXIT_SKIP : rc;
     }
-    pd.push_constant_bytes = vs_bytes > ps_bytes ? vs_bytes : ps_bytes;
+    pd.push_constant_bytes = vs.push_constant_bytes > ps.push_constant_bytes
+                                 ? vs.push_constant_bytes
+                                 : ps.push_constant_bytes;
     a->pipe = de_gpu_pipeline_create(a->d, &pd);
     return DE_HANDLE_VALID(a->pipe) ? 0 : fail("de_gpu_pipeline_create");
 }
@@ -540,7 +543,6 @@ static void shutdown(app *a) {
         de_asset_release(a->assets, a->load);
         de_asset_system_destroy(a->assets);
     }
-    hello_shaders_destroy(a->shader_types);
     if (a->tasks != NULL)
         de_task_system_destroy(a->tasks);
     de_fs_shutdown();

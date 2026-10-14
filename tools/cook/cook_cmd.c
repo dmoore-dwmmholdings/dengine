@@ -26,7 +26,6 @@
 #include "asset/manifest_internal.h"
 #include "asset/resolve_internal.h"
 #include "asset/slots_internal.h"
-#include "cook/importers/texture/texture_import.h"
 #include "cook/lib/de_cooker.h"
 #include "cook/lib/decache.h"
 #include "dpak_writer.h"
@@ -733,13 +732,19 @@ static int cc_setup_runtime(cc_run *run) {
         if (td == NULL || de_cooker_register_type(run->cooker, td) != DE_OK)
             return cc_io_error(io, "the cooker refused the asset type", names[i]);
     }
-    /* DENG-98: the cooker library's own importers for engine types that the asset system does not
-     * register yet (the runtime `texture` type with its loader is DENG-105, which then registers
-     * the same importer and is mirrored above). */
-    if (!de_cooker_has_type(run->cooker, "texture")) {
-        de_asset_type_desc tex = de_texture_import_type_desc();
-        if (de_cooker_register_type(run->cooker, &tex) != DE_OK)
-            return cc_io_error(io, "the cooker refused the asset type", "texture");
+    /* DENG-98, DENG-409: the cooker library's built-in importers (texture, model, shader) for
+     * the engine types this asset system did not register. The tool has no renderer, so its asset
+     * system has none of them unless the game or the hooks registered one, which is mirrored
+     * above and wins. */
+    u32 engine_count = 0;
+    const char *const *engine = de_cooker_engine_type_names(&engine_count);
+    for (u32 i = 0; i < engine_count; ++i) {
+        de_asset_type_desc builtin;
+        if (de_cooker_has_type(run->cooker, engine[i]) ||
+            !de_cooker_builtin_importer(engine[i], &builtin))
+            continue;
+        if (de_cooker_register_type(run->cooker, &builtin) != DE_OK)
+            return cc_io_error(io, "the cooker refused the asset type", engine[i]);
     }
     return -1;
 }

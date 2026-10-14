@@ -63,10 +63,10 @@ target_sources(de_cooker PRIVATE
 # of the prefab TOML, includes the core TOML header).
 target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect de_tp_tomlc17)
 
-# DENG-289: the shader importer (importers/shader/, target de_cook_shader): `.slang` to SPIR-V,
-# DXIL and metallib with reflection, through the prebuilt Slang (third_party/slang/). A separate
-# library, not part of de_cooker: its C++ shim and Slang stay out of every target that does not
-# cook shaders.
+# DENG-289: the shader importer (importers/shader/): `.slang` to SPIR-V, DXIL and metallib with
+# reflection, through the prebuilt Slang (third_party/slang/, opened at run time). Since DENG-409
+# its sources are part of de_cooker (like the other importers), so the built-in importer table
+# names it; `de_cook_shader` remains as an INTERFACE alias of de_cooker.
 add_subdirectory(importers/shader)
 
 # DENG-102: the FBX front end of the model importer (tools/cook/importers/model/fbx_*.c): ufbx
@@ -178,3 +178,10 @@ elseif(DE_GAME_DYLIB)
         target_link_options(de-cook PRIVATE "LINKER:-export_dynamic")
     endif()
 endif()
+
+# DENG-409: the cooker library's built-in importer table (importers/engine_importers.c,
+# de_cooker_builtin_importer in lib/de_cooker.h): texture, model and shader. `de-cook cook`
+# registers each one the project did not register; the runtime `shader` type of Debug and Dev
+# builds takes its importer from it. The shader importer itself joined de_cooker in
+# importers/shader/CMakeLists.txt (added above).
+target_sources(de_cooker PRIVATE importers/engine_importers.c)

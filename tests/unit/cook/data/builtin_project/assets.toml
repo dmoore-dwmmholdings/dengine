@@ -1,0 +1,17 @@
+# DENG-409 fixture project: engine asset types with built-in importers only (texture, model,
+# shader), so `de-cook cook` cooks it without a game library or hooks. Used by
+# tests/unit/cook/test_cook_builtin.c (in-process) and the CTest cook_cli.builtin_project (the
+# real executable).
+[project]
+asset_root = "assets"
+
+[assets]
+"shaders/triangle" = { type = "shader", source = "shaders/triangle.slang" }
+# Every target: each one the cooking host can compile is in the pack (SPIR-V everywhere with
+# Slang, metallib on macOS, DXIL with DXC), the others are skipped with a warning.
+"shaders/blur" = { type = "shader", source = "shaders/blur.slang", targets = ["spirv", "dxil", "metallib"], permutations = ["", "WIDE=1"] }
+"textures/checker" = { type = "texture", source = "textures/checker.png" }
+"models/box" = { type = "model", source = "models/box.glb" }
+
+[bundles.shaders]
+assets = ["shaders/*"]

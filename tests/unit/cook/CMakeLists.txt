@@ -184,3 +184,32 @@ if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMU
         --out "${_de_cook_game_out}/nosym" --no-cache
         --game "$<TARGET_FILE:cook_game_no_symbol>")
 endif()
+
+# DENG-409: the cooker's built-in importers (de_cooker_builtin_importer: texture, model, shader)
+# and `de-cook cook` on the engine-types-only project data/builtin_project/ (two `.slang` shaders,
+# a PNG, a glTF), in-process without hooks (test_cook_builtin.c, CTest names
+# cook_builtin.<test>), and the real executable (cook_cli.builtin_project). The shader checks read
+# the cooked format through de_gpu_shader (de__shader_view_init) where a GPU module is built.
+de_add_test(NAME cook_builtin SOURCES test_cook_builtin.c
+            LIBS de_cook_cmd de_cooker de_host de_asset de_task de_platform TIMEOUT 300)
+if(TARGET test_cook_builtin)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_cook_builtin_tmp")
+    target_include_directories(test_cook_builtin PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_cook_builtin PRIVATE
+        "DE_COOK_CLI_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_cook_builtin_tmp\""
+        "DE_COOK_PROJECT_DIR=\"${DE_ROOT_DIR}/tests/data/cook_project\""
+        "DE_COOK_BUILTIN_PROJECT=\"${CMAKE_CURRENT_SOURCE_DIR}/data/builtin_project\"")
+    if(TARGET de_gpu_shader)
+        target_link_libraries(test_cook_builtin PRIVATE de_gpu_shader)
+        target_compile_definitions(test_cook_builtin PRIVATE DE_COOK_TEST_SHADER_VIEW=1)
+    endif()
+endif()
+if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+   AND CMAKE_BUILD_TYPE MATCHES "^(Debug|Dev)$")
+    set(_de_cook_builtin_out "${CMAKE_BINARY_DIR}/tests/cook_cli_out/builtin")
+    de__cook_cli_test(builtin_project 0
+        "de-cook cook: .*builtin.dpak \\(linux\\).*assets cooked: 4 \\(\\+3 sub-assets\\), bundles: 1"
+        cook builtin_project/assets.toml --platform linux --out "${_de_cook_builtin_out}"
+        --cache "${_de_cook_builtin_out}/cache" --pack-name builtin --jobs 2)
+    set_tests_properties(cook_cli.builtin_project PROPERTIES TIMEOUT 300)
+endif()
