@@ -14,6 +14,10 @@
  * Test hook: with manual completion (de__gpu_null_set_manual_completion), the queue timelines
  * complete only as far as de__gpu_null_complete says (or fully on wait_idle), so deferred
  * destruction can be observed step by step. User fences still signal at submit.
+ *
+ * Command log (DENG-172, gpu_backend.h): with de__gpu_null_log_enable, barrier calls and submits
+ * are recorded as entries (one per command, in order) for golden tests; DENG-173 adds more ops.
+ * The log is off by default and then costs one atomic load per barrier call and submit.
  */
 #include "gpu/gpu_backend.h"
 
@@ -25,6 +29,15 @@ typedef struct null_device {
     de_atomic_u32 manual;
     de_atomic_u32 heaps_live, heaps_created;
     de_atomic_u64 heap_bytes;
+    /* DENG-172: the command log (gpu_backend.h). Arrays on the device allocator, under log_lock. */
+    de_atomic_u32 log_on;
+    de_mutex log_lock;
+    de__gpu_null_entry *log;
+    u32 log_count, log_cap;
+    de_gpu_barrier *log_barriers;
+    u32 log_barrier_count, log_barrier_cap;
+    de_gpu_wait *log_waits;
+    u32 log_wait_count, log_wait_cap;
 } null_device;
 
 typedef struct null_buffer {
@@ -62,6 +75,13 @@ static de_result null_device_create(de_gpu_device *d, const de_gpu_device_desc *
     de_atomic_init_u32(&n->heaps_live, 0);
     de_atomic_init_u32(&n->heaps_created, 0);
     de_atomic_init_u64(&n->heap_bytes, 0);
+    de_atomic_init_u32(&n->log_on, 0);
+    de_mutex_init(&n->log_lock);
+    n->log = NULL;
+    n->log_barriers = NULL;
+    n->log_waits = NULL;
+    n->log_count = n->log_cap = n->log_barrier_count = n->log_barrier_cap = 0;
+    n->log_wait_count = n->log_wait_cap = 0;
 
     memset(caps, 0, sizeof *caps);
     caps->backend = DE_GPU_NULL;
@@ -83,8 +103,11 @@ static de_result null_device_create(de_gpu_device *d, const de_gpu_device_desc *
     return DE_OK;
 }
 
+static void null_log_free(de_gpu_device *d);
+
 static void null_device_destroy(de_gpu_device *d) {
-    (void)d;
+    null_log_free(d);
+    de_mutex_destroy(&nd(d)->log_lock);
 }
 
 static void null_wait_idle(de_gpu_device *d) {
@@ -181,9 +204,13 @@ static void fence_signal(null_fence *nf, u64 value) {
     }
 }
 
+static void null_log_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s);
+
 static de_result null_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                                    u64 queue_value) {
     null_device *n = nd(d);
+    if (de_atomic_load_u32(&n->log_on, DE_ATOMIC_ACQUIRE))
+        null_log_submit(d, q, s);
     if (s->signal.id) {
         de__gpu_fence *f = de__gpu_get_fence(d, s->signal);
         if (f)
@@ -285,6 +312,8 @@ static de_result null_texture_create_placed(de_gpu_device *d, de__gpu_texture *t
     return DE_OK;
 }
 
+static void null_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count);
+
 const de__gpu_backend_vtable de__gpu_null_vtable = {
     .name = "null",
     .device_payload_size = sizeof(null_device),
@@ -316,6 +345,7 @@ const de__gpu_backend_vtable de__gpu_null_vtable = {
     .texture_requirements = null_texture_requirements,
     .buffer_create_placed = null_buffer_create_placed,
     .texture_create_placed = null_texture_create_placed,
+    .cmd_barriers = null_cmd_barriers, /* DENG-172: only feeds the command log */
 };
 
 void de__gpu_null_set_manual_completion(de_gpu_device *d, bool manual) {
@@ -370,4 +400,140 @@ bool de__gpu_null_placement(de_gpu_device *d, de__gpu_kind kind, u32 id, de__gpu
     if (offset)
         *offset = off;
     return true;
+}
+
+/* ---------- Command log (DENG-172) ---------- */
+
+/* Grows a log array to hold `need` elements; false on out of memory (the entry is dropped). */
+static bool log_grow(de_gpu_device *d, void **arr, u32 count, u32 *cap, u32 need, size_t elem) {
+    if (need <= *cap)
+        return true;
+    u32 nc = *cap ? *cap * 2u : 64u;
+    while (nc < need)
+        nc *= 2u;
+    void *p = DE_ALLOC(d->alloc, (size_t)nc * elem, 16, DE_MEM_RENDER);
+    if (!p)
+        return false;
+    if (count)
+        memcpy(p, *arr, (size_t)count * elem);
+    if (*arr)
+        DE_FREE(d->alloc, *arr, (size_t)*cap * elem);
+    *arr = p;
+    *cap = nc;
+    return true;
+}
+
+/* Appends an entry with `count` data elements (copied from `data`); under log_lock. */
+static void log_append(de_gpu_device *d, const de__gpu_null_entry *e, const void *data, u32 count) {
+    null_device *n = nd(d);
+    de_mutex_lock(&n->log_lock);
+    bool ok =
+        log_grow(d, (void **)&n->log, n->log_count, &n->log_cap, n->log_count + 1u, sizeof *n->log);
+    de__gpu_null_entry x = *e;
+    if (ok && e->op == DE__GPU_NULL_OP_BARRIERS) {
+        ok = log_grow(d, (void **)&n->log_barriers, n->log_barrier_count, &n->log_barrier_cap,
+                      n->log_barrier_count + count, sizeof *n->log_barriers);
+        if (ok && count)
+            memcpy(&n->log_barriers[n->log_barrier_count], data, sizeof *n->log_barriers * count);
+        x.data_first = n->log_barrier_count;
+        if (ok)
+            n->log_barrier_count += count;
+    } else if (ok && e->op == DE__GPU_NULL_OP_SUBMIT) {
+        ok = log_grow(d, (void **)&n->log_waits, n->log_wait_count, &n->log_wait_cap,
+                      n->log_wait_count + count, sizeof *n->log_waits);
+        if (ok && count)
+            memcpy(&n->log_waits[n->log_wait_count], data, sizeof *n->log_waits * count);
+        x.data_first = n->log_wait_count;
+        if (ok)
+            n->log_wait_count += count;
+    }
+    x.data_count = count;
+    if (ok)
+        n->log[n->log_count++] = x;
+    de_mutex_unlock(&n->log_lock);
+}
+
+static void copy_list_name(char *dst, const char *src) {
+    size_t i = 0;
+    for (; src && src[i] && i + 1u < DE__GPU_NAME_MAX; ++i)
+        dst[i] = src[i];
+    dst[i] = 0;
+}
+
+static void null_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
+    de_gpu_device *d = c->device;
+    if (!de_atomic_load_u32(&nd(d)->log_on, DE_ATOMIC_ACQUIRE))
+        return;
+    de__gpu_null_entry e;
+    memset(&e, 0, sizeof e);
+    e.op = DE__GPU_NULL_OP_BARRIERS;
+    e.queue = c->queue;
+    copy_list_name(e.list, c->name);
+    log_append(d, &e, b, count);
+}
+
+static void null_log_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s) {
+    de__gpu_null_entry e;
+    memset(&e, 0, sizeof e);
+    e.op = DE__GPU_NULL_OP_SUBMIT;
+    e.queue = q;
+    copy_list_name(e.list, s->cmd_count ? s->cmds[0]->name : "");
+    e.a[0] = s->cmd_count;
+    e.a[1] = s->wait_count;
+    e.a[2] = s->signal.id;
+    e.a[3] = s->signal_value;
+    log_append(d, &e, s->waits, s->wait_count);
+}
+
+static void null_log_free(de_gpu_device *d) {
+    null_device *n = nd(d);
+    if (n->log)
+        DE_FREE(d->alloc, n->log, sizeof *n->log * n->log_cap);
+    if (n->log_barriers)
+        DE_FREE(d->alloc, n->log_barriers, sizeof *n->log_barriers * n->log_barrier_cap);
+    if (n->log_waits)
+        DE_FREE(d->alloc, n->log_waits, sizeof *n->log_waits * n->log_wait_cap);
+    n->log = NULL;
+    n->log_barriers = NULL;
+    n->log_waits = NULL;
+    n->log_count = n->log_cap = n->log_barrier_count = n->log_barrier_cap = 0;
+    n->log_wait_count = n->log_wait_cap = 0;
+}
+
+void de__gpu_null_log_enable(de_gpu_device *d, bool on) {
+    if (!d || d->vt != &de__gpu_null_vtable)
+        return;
+    null_device *n = nd(d);
+    if (on) {
+        de_mutex_lock(&n->log_lock);
+        n->log_count = n->log_barrier_count = n->log_wait_count = 0;
+        de_mutex_unlock(&n->log_lock);
+    }
+    de_atomic_store_u32(&n->log_on, on ? 1u : 0u, DE_ATOMIC_RELEASE);
+}
+
+u32 de__gpu_null_log_count(de_gpu_device *d) {
+    if (!d || d->vt != &de__gpu_null_vtable)
+        return 0;
+    return nd(d)->log_count;
+}
+
+const de__gpu_null_entry *de__gpu_null_log_entry(de_gpu_device *d, u32 i) {
+    if (!d || d->vt != &de__gpu_null_vtable || i >= nd(d)->log_count)
+        return NULL;
+    return &nd(d)->log[i];
+}
+
+const de_gpu_barrier *de__gpu_null_log_barriers(de_gpu_device *d, const de__gpu_null_entry *e) {
+    if (!d || d->vt != &de__gpu_null_vtable || !e || e->op != DE__GPU_NULL_OP_BARRIERS)
+        return NULL;
+    const null_device *n = nd(d);
+    return n->log_barriers ? n->log_barriers + e->data_first : NULL; /* NULL: nothing logged */
+}
+
+const de_gpu_wait *de__gpu_null_log_waits(de_gpu_device *d, const de__gpu_null_entry *e) {
+    if (!d || d->vt != &de__gpu_null_vtable || !e || e->op != DE__GPU_NULL_OP_SUBMIT)
+        return NULL;
+    const null_device *n = nd(d);
+    return n->log_waits ? n->log_waits + e->data_first : NULL; /* NULL: no wait logged yet */
 }
