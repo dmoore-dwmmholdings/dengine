@@ -109,7 +109,7 @@ static NSString *const k_kernel =
      "    array<sampler, 2048> samplers;\n"
      "    array<ulong, 65536> buffers;\n"
      "};\n"
-     "struct Push { uint tex; uint rw; uint smp; uint in_buf; uint out_buf; };\n"
+     "struct Push { uint tex; uint rw; uint smp; uint in_buf; uint out_buf; uint view; };\n"
      "kernel void check(Heap constant* heap [[buffer(0)]],\n"
      "                  Push constant* pc [[buffer(1)]]) {\n"
      "    float4 a = heap->textures[pc->tex].read(uint2(0, 0));\n"
@@ -123,6 +123,7 @@ static NSString *const k_kernel =
      "    out[0] = a; out[1] = b; out[2] = c;\n"
      "    out[3] = d; out[4] = n; out[5] = nb;\n"
      "    heap->rw[pc->rw].write(float4(0.25, 0.5, 0.75, 1.0), uint2(0, 0));\n"
+     "    heap->rw[pc->view].write(float4(1.0, 0.75, 0.5, 0.25), uint2(0, 0));\n"
      "}\n";
 
 static int fail(char *err, size_t cap, const char *what, NSError *e) {
@@ -164,9 +165,24 @@ int de_test_mtl_upload_rgba8(de_gpu_device *d, de_gpu_texture t, const u8 rgba[4
     }
 }
 
-int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[5], de_gpu_buffer out_gpu,
+/* Copies texel (0, 0) of `level` of an RGBA8 texture into `dst` at `offset`. */
+static void copy_texel(id<MTLBlitCommandEncoder> blit, id<MTLTexture> tex, u32 level,
+                       id<MTLBuffer> dst, u32 offset) {
+    [blit copyFromTexture:tex
+                     sourceSlice:0
+                     sourceLevel:level
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(1, 1, 1)
+                        toBuffer:dst
+               destinationOffset:offset
+          destinationBytesPerRow:4
+        destinationBytesPerImage:4];
+}
+
+int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[6], de_gpu_buffer out_gpu,
                                 de_gpu_buffer out_readback, u64 bytes, de_gpu_texture rw,
-                                u8 rw_after[4], char *err, size_t cap) {
+                                de_gpu_texture rw_mips, u8 rw_after[4], u8 rw_mip1_after[4],
+                                char *err, size_t cap) {
     @autoreleasepool {
         id<MTLDevice> dev = (__bridge id<MTLDevice>)de__mtl_device_object(d);
         MTLCompileOptions *opts = [MTLCompileOptions new];
@@ -182,24 +198,30 @@ int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[5], de_gpu_buff
 
         id<MTLCommandQueue> q =
             (__bridge id<MTLCommandQueue>)de__mtl_queue_object(d, DE_QUEUE_COMPUTE);
-        id<MTLCommandBuffer> cb = [q commandBuffer];
+        /* Shader validation logs what it rejects (and skips the access) in the command buffer's
+         * logs; the encoder status makes the log name the kernel. */
+        MTLCommandBufferDescriptor *cbd = [MTLCommandBufferDescriptor new];
+        cbd.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
+        id<MTLCommandBuffer> cb = [q commandBufferWithDescriptor:cbd];
         id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
         [enc setComputePipelineState:pso];
-        const u8 *cpu = NULL;
-        [enc setBuffer:(__bridge id<MTLBuffer>)de__mtl_bindless_buffer(d, &cpu) offset:0 atIndex:0];
-        [enc setBytes:push length:5 * sizeof(u32) atIndex:1];
-        /* Residency: every heap the table can point into (mtl_internal.h). */
-        void *heaps[64];
-        const u32 n = de__mtl_heap_list(d, heaps, 64);
-        for (u32 i = 0; i < n && i < 64; ++i)
-            [enc useHeap:(__bridge id<MTLHeap>)heaps[i]];
+        [enc setBytes:push length:6 * sizeof(u32) atIndex:1];
+        /* Residency and the table at buffer index 0, as the backend's own compute encoders get
+         * them. This command buffer bypasses de_gpu_queue_submit, which brings the residency set
+         * up to date with the heaps created since the last submit, so sync it here. */
+        de__mtl_residency_sync(d);
+        de__mtl_residency_encoder(d, (__bridge void *)enc, DE__MTL_ENC_COMPUTE);
         [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
         [enc endEncoding];
         if (!run_and_wait(cb, err, cap))
             return 0;
+        for (id<MTLFunctionLog> log in cb.logs) {
+            snprintf(err, cap, "Metal shader validation: %s", log.description.UTF8String);
+            return 0;
+        }
 
-        /* Copy the results and the written storage texel to CPU-visible memory. */
-        id<MTLBuffer> texel = [dev newBufferWithLength:4 options:MTLResourceStorageModeShared];
+        /* Copy the results and the written storage texels to CPU-visible memory. */
+        id<MTLBuffer> texels = [dev newBufferWithLength:8 options:MTLResourceStorageModeShared];
         cb = [(__bridge id<MTLCommandQueue>)de__mtl_queue_object(d, DE_QUEUE_COPY) commandBuffer];
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         [blit copyFromBuffer:(__bridge id<MTLBuffer>)de__mtl_buffer_object(d, out_gpu)
@@ -207,19 +229,14 @@ int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[5], de_gpu_buff
                      toBuffer:(__bridge id<MTLBuffer>)de__mtl_buffer_object(d, out_readback)
             destinationOffset:0
                          size:bytes];
-        [blit copyFromTexture:(__bridge id<MTLTexture>)de__mtl_texture_object(d, rw, -1)
-                         sourceSlice:0
-                         sourceLevel:0
-                        sourceOrigin:MTLOriginMake(0, 0, 0)
-                          sourceSize:MTLSizeMake(1, 1, 1)
-                            toBuffer:texel
-                   destinationOffset:0
-              destinationBytesPerRow:4
-            destinationBytesPerImage:4];
+        copy_texel(blit, (__bridge id<MTLTexture>)de__mtl_texture_object(d, rw, -1), 0, texels, 0);
+        copy_texel(blit, (__bridge id<MTLTexture>)de__mtl_texture_object(d, rw_mips, -1), 1,
+                   texels, 4);
         [blit endEncoding];
         if (!run_and_wait(cb, err, cap))
             return 0;
-        memcpy(rw_after, texel.contents, 4);
+        memcpy(rw_after, texels.contents, 4);
+        memcpy(rw_mip1_after, (const u8 *)texels.contents + 4, 4);
         return 1;
     }
 }

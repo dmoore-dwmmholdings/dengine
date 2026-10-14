@@ -40,15 +40,21 @@ int de_test_mtl_upload_rgba8(de_gpu_device *d, de_gpu_texture t, const u8 rgba[4
 
 /**
  * Runs a compute kernel that reads the bindless table at buffer index 0 with Slang's
- * DeBindlessHeap layout. push = {sampled texture, storage texture, sampler, input buffer, output
- * buffer} indices. It writes float4s to the output buffer (bindless): [0] the sampled texel, [1]
- * the storage texel, [2] the sampled texel through the sampler, [3] input buffer element 0, [4]
- * texture slot 0, [5] buffer slot 0; then writes (0.25, 0.5, 0.75, 1) to the storage texture.
- * `out_gpu` is copied to `out_readback` (`bytes`) and the storage texel to `rw_after`.
+ * DeBindlessHeap layout, on the backend's residency path (de__mtl_residency_encoder: the
+ * residency set, or useHeaps: plus the storage textures' useResources:, DENG-407). push =
+ * {sampled texture, storage texture, sampler, input buffer, output buffer, storage view} indices.
+ * It writes float4s to the output buffer (bindless): [0] the sampled texel, [1] the storage
+ * texel, [2] the sampled texel through the sampler, [3] input buffer element 0, [4] texture slot
+ * 0, [5] buffer slot 0; then writes (0.25, 0.5, 0.75, 1) to the storage texture (push[1], mip 0 of
+ * `rw`) and (1, 0.75, 0.5, 0.25) to the storage view (push[5], mip 1 of `rw_mips`).
+ * `out_gpu` is copied to `out_readback` (`bytes`), texel (0, 0) of mip 0 of `rw` to `rw_after`
+ * and texel (0, 0) of mip 1 of `rw_mips` to `rw_mip1_after`. A message that Metal shader
+ * validation logs for the kernel's command buffer is a failure (0, the message in `err`).
  */
-int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[5], de_gpu_buffer out_gpu,
+int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[6], de_gpu_buffer out_gpu,
                                 de_gpu_buffer out_readback, u64 bytes, de_gpu_texture rw,
-                                u8 rw_after[4], char *err, size_t cap);
+                                de_gpu_texture rw_mips, u8 rw_after[4], u8 rw_mip1_after[4],
+                                char *err, size_t cap);
 
 /* ---------- Fixture for the C tests (needs de_test.h first) ---------- */
 #if defined(DE_TEST_H)

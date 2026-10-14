@@ -38,19 +38,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Before main and before any Metal call: Metal shader validation too, for the mtl.* tests (CTest
- * runs one test per process with --filter=<suite>.<test>). Not for the whole executable: DENG-287's
- * bindless_gpu_read loses its storage-texture write under shader validation (on dev as well; a
- * follow-up of DENG-288). Not on CI (the CI variable is set): with shader validation on, the
- * paravirtual GPU of GitHub's macOS runners intermittently reported
- * kIOGPUCommandBufferCallbackErrorHang, which also killed other test processes' GPU work. */
+/* Before main and before any Metal call: Metal shader validation too, for the mtl.* tests and
+ * test_mtl_resources.c's bindless_gpu_read* tests (CTest runs one test per process with
+ * --filter=<suite>.<test>). Not for the whole executable: the mtl_archive.* tests need it off
+ * (shader validation switches the binary archive off, DENG-325). Not on CI (the CI variable is
+ * set): with shader validation on, the paravirtual GPU of GitHub's macOS runners intermittently
+ * reported kIOGPUCommandBufferCallbackErrorHang, which also killed other test processes' GPU
+ * work. */
 __attribute__((constructor)) static void enable_shader_validation(void) {
+    static const char k_bindless[] = "--filter=gpu_metal.bindless_gpu_read";
     if (getenv("CI"))
         return;
     char **argv = *_NSGetArgv();
     const int argc = *_NSGetArgc();
     for (int i = 1; i < argc; ++i)
-        if (strncmp(argv[i], "--filter=mtl.", 13) == 0)
+        if (strncmp(argv[i], "--filter=mtl.", 13) == 0 ||
+            strncmp(argv[i], k_bindless, sizeof k_bindless - 1) == 0)
             setenv("MTL_SHADER_VALIDATION", "1", 0);
 }
 

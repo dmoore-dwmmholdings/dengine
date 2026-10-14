@@ -10,6 +10,14 @@
  * every slot whose resource was destroyed holds a null resource: a 1x1 RGBA8 texture (sampled),
  * a 1x1 RGBA8 read-write texture (storage), a nearest/wrap sampler and a 4 KiB buffer, all zero.
  * They live in the backend's own private heap, which is the first heap of the residency list.
+ *
+ * Storage textures (DENG-407): the objects behind the storage slots that residency must name
+ * with write usage are also kept in a dense list, mtl_device.storage_objs, which every render and
+ * compute encoder passes to useResources: (mtl_residency.m). Metal treats what useHeaps: makes
+ * resident as read-only, and a residency set of heaps does not cover texture views: without the
+ * list, Metal shader validation drops every shader write to a storage texture on the useHeaps:
+ * path, and every write through a per-mip view on the residency-set path. So the list holds every
+ * storage object on the useHeaps: path, and only the per-mip views with a residency set.
  */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -42,6 +50,53 @@ static void put(mtl_device *m, de__gpu_bindless_space space, u32 index, u64 valu
     DE_ASSERT((u32)space < 4u && index < k_table_size[space]);
     memcpy(m->bindless_cpu + k_table_offset[space] + (size_t)index * DE__MTL_BINDLESS_ENTRY_BYTES,
            &value, sizeof value);
+}
+
+/* ---------- The storage-texture list (DENG-407) ---------- */
+
+/* Names `obj` at storage slot `index` (a new slot, or a new object for it). */
+static void storage_list_set(mtl_device *m, u32 index, void *obj) {
+    DE_ASSERT(index < DE__MTL_BINDLESS_STORAGE_TEXTURES);
+    de_mutex_lock(&m->heap_lock);
+    const u32 pos = m->storage_pos[index];
+    if (pos == 0) {
+        DE_ASSERT(m->storage_count < DE__MTL_BINDLESS_STORAGE_TEXTURES);
+        const u32 i = m->storage_count++;
+        m->storage_objs[i] = obj;
+        m->storage_slots[i] = index;
+        m->storage_pos[index] = i + 1;
+    } else {
+        m->storage_objs[pos - 1] = obj;
+    }
+    de_mutex_unlock(&m->heap_lock);
+}
+
+/* Drops storage slot `index` from the list: the last entry moves into its place. */
+static void storage_list_remove(mtl_device *m, u32 index) {
+    DE_ASSERT(index < DE__MTL_BINDLESS_STORAGE_TEXTURES);
+    de_mutex_lock(&m->heap_lock);
+    const u32 pos = m->storage_pos[index];
+    if (pos != 0) {
+        const u32 i = pos - 1, last = --m->storage_count;
+        m->storage_objs[i] = m->storage_objs[last];
+        m->storage_slots[i] = m->storage_slots[last];
+        m->storage_pos[m->storage_slots[i]] = i + 1;
+        m->storage_objs[last] = NULL;
+        m->storage_pos[index] = 0;
+    }
+    de_mutex_unlock(&m->heap_lock);
+}
+
+u32 de__mtl_storage_texture_list(de_gpu_device *d, void **out, u32 cap) {
+    if (!de__mtl_device_object(d))
+        return 0;
+    mtl_device *m = de__mtl_dev(d);
+    de_mutex_lock(&m->heap_lock);
+    const u32 n = m->storage_count;
+    for (u32 i = 0; i < n && i < cap; ++i)
+        out[i] = m->storage_objs[i];
+    de_mutex_unlock(&m->heap_lock);
+    return n;
 }
 
 static u64 resource_id(id<MTLTexture> t) {
@@ -167,6 +222,18 @@ de_result de__mtl_bindless_init(de_gpu_device *d) {
         m->bindless = (void *)CFBridgingRetain(table);
         m->bindless_cpu = (u8 *)table.contents;
 
+        /* The storage-texture list: one block, objects, then slots, then positions. */
+        const size_t n = DE__MTL_BINDLESS_STORAGE_TEXTURES;
+        u8 *block = (u8 *)DE_ALLOC(d->alloc, n * (sizeof(void *) + 2 * sizeof(u32)), 16,
+                                   DE_MEM_RENDER);
+        if (!block)
+            return de__gpu_fail(d, DE_ERR_OUT_OF_MEMORY, "metal: storage-texture list");
+        memset(block, 0, n * (sizeof(void *) + 2 * sizeof(u32)));
+        m->storage_objs = (void **)block;
+        m->storage_slots = (u32 *)(block + n * sizeof(void *));
+        m->storage_pos = m->storage_slots + n;
+        m->storage_count = 0;
+
         de_result r = create_null_resources(d, m, dev);
         if (r != DE_OK)
             return r;
@@ -199,6 +266,14 @@ void de__mtl_bindless_shutdown(de_gpu_device *d) {
         release(&m->bindless);
         m->bindless_cpu = NULL;
     }
+    if (m->storage_objs) {
+        DE_ASSERT(m->storage_count == 0); /* every storage texture is destroyed first */
+        DE_FREE(d->alloc, m->storage_objs,
+                DE__MTL_BINDLESS_STORAGE_TEXTURES * (sizeof(void *) + 2 * sizeof(u32)));
+    }
+    m->storage_objs = NULL;
+    m->storage_slots = m->storage_pos = NULL;
+    m->storage_count = 0;
 }
 
 /* ---------- Writes (vtable) ---------- */
@@ -217,6 +292,11 @@ void de__mtl_bindless_write_texture(de_gpu_device *d, u32 index, de__gpu_texture
     put(de__mtl_dev(d),
         storage ? DE__GPU_BINDLESS_STORAGE_TEXTURE : DE__GPU_BINDLESS_SAMPLED_TEXTURE, index,
         resource_id((__bridge id<MTLTexture>)obj));
+    /* Residency names it with write usage (DENG-407): every storage object with useHeaps:, only
+     * the per-mip views with a residency set. use_heaps is fixed before the first texture. */
+    mtl_device *m = de__mtl_dev(d);
+    if (storage && (m->use_heaps || obj == mt->views[mip]))
+        storage_list_set(m, index, obj);
 }
 
 void de__mtl_bindless_write_sampler(de_gpu_device *d, u32 index, de__gpu_sampler *s) {
@@ -228,6 +308,8 @@ void de__mtl_bindless_clear(de_gpu_device *d, de__gpu_bindless_space space, u32 
     mtl_device *m = de__mtl_dev(d);
     if ((u32)space < 4u && m->bindless_cpu)
         put(m, space, index, m->null_ids[space]);
+    if (space == DE__GPU_BINDLESS_STORAGE_TEXTURE && m->storage_objs)
+        storage_list_remove(m, index);
 }
 
 void *de__mtl_bindless_buffer(de_gpu_device *d, const u8 **cpu) {

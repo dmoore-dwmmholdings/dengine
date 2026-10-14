@@ -125,6 +125,17 @@ typedef struct mtl_device {
     u64 pipeline_ns;         /* time spent in pipeline creation (logged at destroy) */
     char archive_vpath[256]; /* virtual path of the archive file ("" without one) */
     char archive_path[1024]; /* its native path */
+
+    /* DENG-407: the texture objects of the storage table that residency names with write usage
+     * (mtl_bindless.m, mtl_residency.m), under heap_lock: every one on the useHeaps: path (it
+     * names heap resources for reading only), only the per-mip views with a residency set (a set
+     * of heaps does not cover views). Metal shader validation drops a shader write to a texture
+     * the encoder does not name with write usage. Render and compute encoders pass the list to
+     * useResources: with read-write usage. */
+    void **storage_objs; /* id<MTLTexture>, not retained (the texture payload owns it); dense */
+    u32 *storage_slots;  /* the storage-table slot of each storage_objs entry */
+    u32 *storage_pos;    /* storage-table slot -> index in storage_objs + 1; 0 = none */
+    u32 storage_count;
 } mtl_device;
 
 typedef struct mtl_buffer {
@@ -579,5 +590,12 @@ void de__mtl_capture_end(de_gpu_device *d);
 /** The Metal label of a buffer, texture, fence or query heap (UTF-8, cut to `cap`); false when
  * the object has none or `handle` (an id) is stale. */
 bool de__mtl_object_label(de_gpu_device *d, de__gpu_kind kind, u32 handle, char *out, size_t cap);
+
+/* ---------- DENG-407: storage textures and residency ---------- */
+
+/** The storage-texture objects that render and compute encoders name with read-write usage
+ * (mtl_device.storage_objs: every storage object on the useHeaps: path, the per-mip views with a
+ * residency set). Copies up to `cap` (id<MTLTexture>) into `out`; returns the total count. */
+u32 de__mtl_storage_texture_list(de_gpu_device *d, void **out, u32 cap);
 
 #endif
