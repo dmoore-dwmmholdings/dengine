@@ -9,7 +9,7 @@ Project documentation lives in the Trama space `DENG`. `docs/agents/DOCS.md` has
 | Item | Rule |
 |---|---|
 | `main` | Moves only when a sprint closes: fast-forward to the green `dev` commit the exit checks ran on, tagged `sxx-done` (LOOP.md §2.7). Nothing is committed to `main` directly. |
-| `dev` | The one integration branch. Every feature branch is cut from `dev` and merged back into it by the orchestrator. Tasks of several sprints run at once (LOOP.md §1.1). The `sprint/…` branches of S01–S04 are historical. |
+| `dev` | The one integration branch. Every feature branch is cut from `dev` and merged back into it by the orchestrator. Only the lead sprint's tasks run (LOOP.md §1.1). The `sprint/…` branches of S01–S04 are historical. |
 | Feature branch | `feature/<KEY>-<slug>`, cut from `dev`. One issue per branch. The worker pushes it to `origin` to run CI before review (WORKER.md Step 4). |
 | Worktrees | `.worktrees/<KEY>/` (gitignored). The orchestrator creates and removes them. |
 | Commits | Commit at the **end of each issue**. Subject: `<KEY>: <summary>`. End with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. |

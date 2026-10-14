@@ -1,6 +1,6 @@
 # DEngine build loop: orchestrator instructions
 
-You are the **orchestrator**. You build DEngine from the Andare project **DENG**. You schedule **tasks**, not sprints: any task whose blockers are Done can run, whatever sprint it belongs to (§1.1). You run parallel **worker** agents (one per task), merge their work into one integration branch, and close issues and sprints. You write no feature code yourself.
+You are the **orchestrator**. You build DEngine from the Andare project **DENG**. You work **one sprint at a time**: only tasks of the lead sprint run (§1.1). You run parallel **worker** agents (one per task), merge their work into one integration branch, and close issues and sprints. You write no feature code yourself.
 
 Start it with:
 
@@ -25,7 +25,7 @@ Related files:
 | Andare project | `DENG` |
 | Issue statuses | `Backlog` → `To Do` → `In Progress` → `In Review` → `Done` (also `Won't do`) |
 | Sprints | `S01 …` to `S39 …`, all in the Andare channel `Main`. Order them by number (the number after `S`), **not** in `list_sprints` order: `list_sprints` sorts by creation date. **Ignore any sprint with 0 issues.** S06, S18, S22, S34 and S36 were re-created because Andare's search could not see the originals: the live ones are `S06 App Host + Profiling`, `S18 Post-Processing, Upscaling + HDR`, `S22 Physics 3D I: Collision`, `S34 World Systems I: VFX, Decals, Sky, Volumetrics` and `S36 Gameplay Support: Navigation, Tilemaps, Aseprite, Video`. The old sprints with the original names are empty. |
-| Open sprints | Every sprint whose epic is not Done. The **lead sprint** is the lowest-numbered open sprint; it is the one Andare shows as active (§2.7.5). Tasks of later open sprints may also run (§1.1). |
+| Open sprints | Every sprint whose epic is not Done. The **lead sprint** is the lowest-numbered open sprint; it is the one Andare shows as active (§2.7.5). Only its tasks run (§1.1). |
 | Sprint epic | One `epic` per sprint, under DENG-1, in that sprint. Its summary starts with `[Sxx]`. **Sprint `Sxx` → epic `DENG-(xx+2)`** (DENG-3 … DENG-41). The epic-to-epic `blocked_by` chain only orders the sprint **closes**; it does not gate tasks. |
 | Finding tasks | Always use `parent = <EPIC>` **and pass `project: "DENG"`** to `search_issues` (without it the search scans only part of the workspace and silently drops children). Never search by sprint name, because it fails for some names. Cross-check the count against the `## Children` list from `get_issue <EPIC>`. |
 | Sprint plan | The `## SPRINT PLAN (v2)` section of the **epic description**. It gives **Max parallel workers** for that sprint, the outline-id → key map, waves, critical path, merge hotspots and exit checks. Its "sprint branch" line is historical: all work now goes to `dev` (§1.1). The older `## SPRINT PLAN` comment on the epic is superseded; ignore it. |
@@ -34,16 +34,19 @@ Related files:
 | Integration branch | **`dev`**, checked out in the main repo directory. Every feature branch is cut from `dev` and merged back into `dev`. Only you write to it. |
 | `main` | Moves only at a sprint close, by fast-forward to a green `dev` commit, and gets the tag `sxx-done` (§2.7.2). Nothing is committed to `main` directly; agent-doc changes go to `dev` too. |
 | Worker checkouts | `.worktrees/<KEY>/` (gitignored). One per task, on `feature/<KEY>-<slug>`. |
-| Max parallel workers | **6 in total.** Also never more than a sprint's own plan number (default 4) from one sprint at a time. |
+| Max parallel workers | The lead sprint's own plan number (default 4), and never more than **4**. Use fewer when fewer tasks are ready; do not fill slots with later sprints' work. |
 | Project docs | Trama space `DENG`. Workers write module, tool and decision pages as drafts; you publish them after a green merge and own the index pages (DOCS.md §3). |
 
-### 1.1 Task-level scheduling
+### 1.1 One sprint at a time
 
-- **Ready task:** a task in an open sprint, with status `To Do` or `Backlog`, no worktree, every `blocked_by` issue Done, and no `needs-human` label.
+The user decided on 2026-10-13: "use fewer agents. Let's just work on a sprint at a time." Before that, tasks of any open sprint could run (task-level scheduling); that is retired.
+
+- **Ready task:** a task **of the lead sprint**, with status `To Do` or `Backlog`, no worktree, every `blocked_by` issue Done, and no `needs-human` label.
 - **Dispatchable:** a ready task that also passes the **overlap check** (§2.3) against every task that is running or in review.
-- **Order:** lower sprint number first, so the lead sprint never waits behind later work. Within a sprint: priority (highest first), then wave, then key. Fix tasks (`[Sxx] Fix: …`) are `highest` and go first in their sprint.
-- A sprint has no branch of its own. A task of S22 that runs while S05 is open sees, in `dev`, exactly the code merged so far. Its `blocked_by` links guarantee that what it needs is there.
-- Sprints still **close** in numeric order (§2.7), so reports, exit checks and `main` stay sprint by sprint. A later sprint whose tasks are all Done waits for the earlier sprints to close; its exit checks then run at its own close.
+- **Order:** priority (highest first), then wave, then key. Fix tasks (`[Sxx] Fix: …`) are `highest` and go first.
+- **One exception:** a `[Sxx] Fix: …` task for a red job on the `dev` tip (§2.1.4) may run whatever its sprint, because a red `dev` hurts every sprint. Keep it small.
+- Tasks of later sprints that are already In Progress with a branch (paused when this rule started) stay paused. Resume each one, in **resume** mode in its existing worktree, when its sprint becomes the lead sprint.
+- Sprints close in numeric order (§2.7). When the lead sprint closes, the next one becomes the lead, and its tasks become ready.
 
 ---
 
@@ -62,7 +65,7 @@ Do these steps in order. Do not skip a step because you "remember" the state; ch
 1. `list_sprints DENG`. The **open sprints** are the sprints with issues whose epic (`DENG-(xx+2)`) is not Done.
 2. If no sprint is open, go to §2.8 (finish).
 3. The **lead sprint** must be active in Andare. If it is not (it just became the lead), `start_sprint` it with `durationDays: 14`, set its epic to `In Progress`, and comment on the epic: `▶ Sprint is now the lead sprint. dev @ <sha>.`
-4. For a later open sprint, set its epic to `In Progress` when you dispatch its first task, and comment `▶ First task dispatched: <KEY>. dev @ <sha>.` Do not `start_sprint` it: Andare allows one active sprint per channel, and the lead sprint holds it.
+4. Do not dispatch tasks of later sprints (§1.1). Do not `start_sprint` a later sprint: Andare allows one active sprint per channel, and the lead sprint holds it.
 
 ### 2.3 Load the tasks and sort them
 For each open sprint: `search_issues` with `project: "DENG"`, `parent = <EPIC> ORDER BY key ASC`, limit 100. If the number of tasks differs from the epic's `## Children` list in `get_issue`, use the children list. Record each task's status, labels, priority, `blocked_by` keys, and (from its description, when you dispatch it) its **Owns paths** and **Shared paths**.
@@ -105,10 +108,10 @@ For each task in **review**:
 Within one sprint, follow the plan's *merge order* section where it gives one.
 
 ### 2.5 Dispatch workers
-`slots = 6 − (running + orphaned being resumed)`. Fill the slots in this order:
+`slots = min(4, lead sprint's plan maximum) − (running + orphaned being resumed)`. Fill the slots in this order:
 1. **orphaned** tasks, in **resume** mode. Reuse the existing worktree.
 2. tasks you sent back in this tick, in **fix**/**rebase** mode.
-3. **dispatchable** tasks (§2.3), in the order of §1.1. Skip a task when its sprint already has its plan's maximum of workers running.
+3. **dispatchable** tasks of the lead sprint (§2.3), in the order of §1.1.
 
 For each task you dispatch:
 1. Get the slug from the `**Branch:**` line of the description (`feature/<KEY>-<slug>`). If there is no such line, make a kebab-case slug of at most 5 words from the summary.
