@@ -37,7 +37,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (r != DE_OK) {
         if (r != DE_ERR_PARSE && r != DE_ERR_VERSION_MISMATCH)
             abort();
-        static const de__shader_view zero;
+        static const de__shader_view zero = {0};
         if (memcmp(&v, &zero, sizeof v) != 0)
             abort(); /* a refused blob leaves nothing behind */
         return 0;
