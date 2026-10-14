@@ -1,7 +1,13 @@
 /*
  * shader_type.c: the runtime `shader` asset type (SPEC §11.6, §12.2; DENG-289). See
- * shader_internal.h. The loader checks the cooked blob (shader_format.h) and keeps a copy; the
- * accessors find a record by (target, permutation, entry) and hand out pointers into the copy.
+ * shader_internal.h and the public de_shader.h (DENG-409). The loader checks the cooked blob
+ * (shader_format.h) and keeps a copy; the accessors find a record by (target, permutation, entry)
+ * and hand out pointers into the copy.
+ *
+ * DENG-409: in builds with the cooker (DE_HAS_COOKER: Debug and Dev with the tools) a type
+ * registered without an importer takes the cooker library's built-in shader importer
+ * (de_cooker_builtin_importer, tools/cook/lib/de_cooker.h), so SOURCE mode cooks `.slang` sources
+ * without the caller naming tools code. layers.toml allows gpu/shader -> cook for this.
  */
 #include "gpu/shader/shader_internal.h"
 
@@ -11,8 +17,21 @@
 #include <dengine/de_base.h>
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
+#include <dengine/de_shader.h>
 
 #include <string.h>
+
+#if DE_HAS_COOKER
+#include "cook/lib/de_cooker.h"
+#endif
+
+/* The public stage values are the cooked format's (de_shader.h, shader_format.h). */
+DE_STATIC_ASSERT((int)DE_SHADER_STAGE_VERTEX == DE__SHADER_STAGE_VERTEX &&
+                     (int)DE_SHADER_STAGE_PIXEL == DE__SHADER_STAGE_PIXEL &&
+                     (int)DE_SHADER_STAGE_COMPUTE == DE__SHADER_STAGE_COMPUTE &&
+                     (int)DE_SHADER_STAGE_MESH == DE__SHADER_STAGE_MESH &&
+                     (int)DE_SHADER_STAGE_AMPLIFICATION == DE__SHADER_STAGE_AMPLIFICATION,
+                 "de_shader_stage matches de__shader_stage");
 
 /* ---- Format view ----------------------------------------------------------------------------- */
 
@@ -70,8 +89,7 @@ static bool string_ok(const de__shader_view *v, u32 off) {
     return off < v->header.strings_size;
 }
 
-de_result de__shader_view_init(const void *data, u64 size, de__shader_view *out) {
-    memset(out, 0, sizeof *out);
+static de_result view_init(const void *data, u64 size, de__shader_view *out) {
     if (data == NULL || size < sizeof(de__shader_header))
         return DE_FAIL(DE_ERR_PARSE, "cooked shader: %llu bytes is too short",
                        (unsigned long long)size);
@@ -132,6 +150,14 @@ de_result de__shader_view_init(const void *data, u64 size, de__shader_view *out)
     return DE_OK;
 }
 
+de_result de__shader_view_init(const void *data, u64 size, de__shader_view *out) {
+    memset(out, 0, sizeof *out);
+    de_result r = view_init(data, size, out);
+    if (r != DE_OK)
+        memset(out, 0, sizeof *out); /* DENG-409: a refused blob leaves no half-checked view */
+    return r;
+}
+
 /* ---- The loaded object ----------------------------------------------------------------------- */
 
 /* One allocation: this header, then the blob (16-byte aligned, as its code offsets assume). */
@@ -155,8 +181,8 @@ struct de__shader_types {
     u32 cb_count;
 };
 
-static de_result shader_load(de_asset_load_ctx *ctx) {
-    de__shader_types *t = (de__shader_types *)de_asset_load_ctx_user(ctx);
+/* Loads into one block from `alloc`. */
+static de_result shader_load_into(de_asset_load_ctx *ctx, const de_allocator *alloc) {
     u64 n = 0;
     const void *src = de_asset_load_ctx_data(ctx, &n);
     de__shader_view check;
@@ -170,7 +196,7 @@ static de_result shader_load(de_asset_load_ctx *ctx) {
         return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "cooked shader too large");
     size_t block = DE__SHADER_OBJ_DATA_OFFSET + (size_t)n;
     de__shader_obj *o =
-        (de__shader_obj *)DE_ALLOC(t->alloc, block, DE__SHADER_CODE_ALIGN, DE_MEM_ASSET);
+        (de__shader_obj *)DE_ALLOC(alloc, block, DE__SHADER_CODE_ALIGN, DE_MEM_ASSET);
     if (o == NULL)
         return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY,
                                       "no memory for a %llu-byte cooked shader",
@@ -178,11 +204,22 @@ static de_result shader_load(de_asset_load_ctx *ctx) {
     memset(o, 0, sizeof *o);
     u8 *copy = (u8 *)o + DE__SHADER_OBJ_DATA_OFFSET;
     memcpy(copy, src, (size_t)n);
-    o->alloc = t->alloc;
+    o->alloc = alloc;
     o->block_size = block;
     (void)de__shader_view_init(copy, n, &o->view); /* checked above: the same bytes */
     de_asset_load_ctx_set_object(ctx, o, n);
     return DE_OK;
+}
+
+/* de__shader_type_register: `user` is the registration state. */
+static de_result shader_load(de_asset_load_ctx *ctx) {
+    const de__shader_types *t = (const de__shader_types *)de_asset_load_ctx_user(ctx);
+    return shader_load_into(ctx, t->alloc);
+}
+
+/* de_shader_register_type: `user` is the allocator itself (no state to free). */
+static de_result shader_load_plain(de_asset_load_ctx *ctx) {
+    return shader_load_into(ctx, (const de_allocator *)de_asset_load_ctx_user(ctx));
 }
 
 static void shader_unload(void *object, void *user) {
@@ -199,6 +236,39 @@ static void shader_reloaded(void *object, de_asset_id id, void *user) {
         t->cb[i].fn(id, t->cb[i].user);
 }
 
+/* Registers the type with `load` and `user`. The importer is `import`, or in builds with the
+ * cooker the built-in one when `import` is NULL. Returns the result; the error context is set. */
+static de_result register_type(de_asset_system *s, de_result (*import)(de_asset_import_ctx *ctx),
+                               u32 importer_version, de_result (*load)(de_asset_load_ctx *ctx),
+                               void *user,
+                               void (*reloaded)(void *object, de_asset_id id, void *user)) {
+    static const char *const exts[] = {".slang"};
+    de_asset_type_desc td;
+    memset(&td, 0, sizeof td);
+    td.name = "shader";
+    td.extensions = exts;
+    td.extension_count = 1;
+    td.import = import;
+    td.importer_version = import != NULL ? importer_version : 1u;
+#if DE_HAS_COOKER
+    de_asset_type_desc builtin;
+    if (import == NULL && de_cooker_builtin_importer("shader", &builtin)) {
+        td.import = builtin.import;
+        td.importer_version = builtin.importer_version;
+    }
+#endif
+    td.load = load;
+    td.unload = shader_unload;
+    td.user = user;
+    td.category = DE_ASSET_CAT_CPU;
+    td.reloaded = reloaded;
+    if (!DE_HANDLE_VALID(de_asset_type_register(s, &td))) {
+        const de_error *e = de_error_last();
+        return e != NULL && e->result != DE_OK ? e->result : DE_ERR_INTERNAL;
+    }
+    return DE_OK;
+}
+
 de_result de__shader_type_register(de_asset_system *s, const de__shader_type_desc *d,
                                    de__shader_types **out) {
     if (out != NULL)
@@ -212,27 +282,21 @@ de_result de__shader_type_register(de_asset_system *s, const de__shader_type_des
     memset(t, 0, sizeof *t);
     t->alloc = a;
 
-    static const char *const exts[] = {".slang"};
-    de_asset_type_desc td;
-    memset(&td, 0, sizeof td);
-    td.name = "shader";
-    td.extensions = exts;
-    td.extension_count = 1;
-    td.importer_version = d->import != NULL ? d->importer_version : 1u;
-    td.import = d->import;
-    td.load = shader_load;
-    td.unload = shader_unload;
-    td.user = t;
-    td.category = DE_ASSET_CAT_CPU;
-    td.reloaded = shader_reloaded;
-    if (!DE_HANDLE_VALID(de_asset_type_register(s, &td))) {
-        const de_error *e = de_error_last();
-        de_result r = e != NULL && e->result != DE_OK ? e->result : DE_ERR_INTERNAL;
+    de_result r = register_type(s, d->import, d->importer_version, shader_load, t, shader_reloaded);
+    if (r != DE_OK) {
         DE_FREE(a, t, sizeof *t);
         return r;
     }
     *out = t;
     return DE_OK;
+}
+
+de_result de_shader_register_type(de_asset_system *assets, const de_allocator *allocator) {
+    if (assets == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_shader_register_type: assets is NULL");
+    const de_allocator *a = allocator != NULL ? allocator : de_heap_allocator();
+    /* The loader needs only the allocator: it is the type's `user`, nothing to free later. */
+    return register_type(assets, NULL, 0, shader_load_plain, (void *)a, NULL);
 }
 
 void de__shader_types_destroy(de__shader_types *t) {
@@ -357,4 +421,21 @@ const char *de__shader_permutation_defines(de_asset_system *s, de_shader shader,
     if (o == NULL || i >= o->view.header.permutation_count)
         return NULL;
     return de__shader_view_permutation(&o->view, i);
+}
+
+de_result de_shader_get_code(de_asset_system *assets, de_shader shader, de_gpu_backend backend,
+                             u32 permutation, const char *entry, de_gpu_shader_blob *out,
+                             de_shader_reflection *refl) {
+    if (refl != NULL)
+        memset(refl, 0, sizeof *refl);
+    de__shader_reflection r;
+    DE_TRY(de__shader_blob(assets, shader, backend, permutation, entry, out, &r));
+    if (refl != NULL) {
+        refl->stage = (de_shader_stage)r.stage;
+        memcpy(refl->threadgroup, r.threadgroup, sizeof refl->threadgroup);
+        refl->push_constant_bytes = r.push_constant_bytes;
+        refl->mesh_max_vertices = r.mesh_max_vertices;
+        refl->mesh_max_primitives = r.mesh_max_primitives;
+    }
+    return DE_OK;
 }

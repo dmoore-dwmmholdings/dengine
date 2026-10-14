@@ -60,16 +60,24 @@ On the console, the example prints the scene, the backend and the device, then
 ## Shaders and assets
 
 `assets.toml` lists `shaders/triangle.slang` and `shaders/quad.slang` as `shader` assets, and the
-checker PNG as a `blob` asset. There is no texture importer until S11, so the example decodes the
-PNG with `stb_image`. In Debug and Dev builds the asset system cooks the shaders in-process when
+checker PNG as a `blob` asset. The engine has no runtime `texture` type yet (DENG-105), so the
+example decodes the PNG with `stb_image`. In Debug and Dev builds the asset system cooks the shaders in-process when
 they first load (SOURCE mode), for the targets the host can build: metallib and SPIR-V on macOS,
 DXIL and SPIR-V on Windows, SPIR-V on Linux. The cook cache keeps the results. Release builds have
 no cooker, so they need `--pack`.
 
-`shader_glue.c` is the only file that uses engine internals. The engine has no public API yet that
-registers the `shader` asset type or gives the code of a cooked shader to `de_gpu_pipeline_create`
-(see DENG-409). `main.c` includes only public headers. `tools/check_layers` checks this
-(`layering_check`).
+`main.c` includes only public headers, like a game, and `tools/check_layers` checks this
+(`layering_check`). It registers the `shader` asset type with `de_shader_register_type` and gets
+the code of each entry point for `de_gpu_pipeline_create` with `de_shader_get_code`, both from
+`include/dengine/de_shader.h` (DENG-409).
+
+To run from a pack, cook `assets.toml` with `de-cook` for this platform and pass the pack:
+
+```sh
+build/dev/tools/cook/de-cook cook examples/hello_triangle/assets.toml --platform macos \
+    --out build/hello_pack --pack-name hello
+build/dev/examples/hello_triangle/hello_triangle --scene quad --pack build/hello_pack/hello.dpak
+```
 
 ## Tests
 
@@ -79,6 +87,10 @@ CTest runs each scene on each backend that the build has: `example_hello_triangl
 (the macOS CI runners have a paravirtual Metal device without Metal 3). On Windows,
 the D3D12 tests use a copy of the example that has the vendored WARP next to it
 (`third_party/d3d12_warp`, test-only), so they also run on CI machines that have no GPU.
+
+In Debug and Dev builds, `example_hello_cook_pack` cooks `assets.toml` into `hello.dpak` with
+the real `de-cook`, and `example_hello_quad_<backend>_pack` runs the quad scene from that pack
+(`--pack`, PACKED mode).
 
 ```sh
 ctest --preset dev -R example_hello

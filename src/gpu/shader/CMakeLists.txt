@@ -16,3 +16,13 @@ de_add_module(
     DEPS gpu asset
     OPTIONAL_OPTION DE_HAS_GPU
 )
+
+# DENG-409: in Debug and Dev builds with the tools (DE_HAS_COOKER) the type takes the cooker
+# library's built-in shader importer (de_cooker_builtin_importer, "cook/lib/de_cooker.h"), like
+# de_asset links the cooker for its COOK stage (src/asset/CMakeLists.txt). Release and Shipping
+# link no cooker. tools/ is added after src/, so the target is named in generator expressions.
+# The public API of the module is include/dengine/de_shader.h (layers.toml: `headers`).
+if(TARGET de_gpu_shader)
+    target_link_libraries(de_gpu_shader PRIVATE
+        "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+endif()

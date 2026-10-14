@@ -1,12 +1,14 @@
 /*
  * shader_importer.h: the `shader` importer (SPEC §11.6, §12.2; DENG-289): a `.slang` source to
  * SPIR-V, DXIL and metallib per permutation and entry point, with reflection, in the cooked
- * format of src/gpu/shader/shader_format.h. Tools-only code (target de_cook_shader): de-cook and
- * the in-process cooker of Debug and Dev builds use it, never Release or Shipping. Include as
- * "cook/importers/shader/shader_importer.h".
+ * format of src/gpu/shader/shader_format.h. Cooker-library code (part of de_cooker since
+ * DENG-409): de-cook and the in-process cooker of Debug and Dev builds use it, never Release or
+ * Shipping. Include as "cook/importers/shader/shader_importer.h" (tools and tests only).
  *
- * Register it with a cooker, or pass it to the runtime type (de__shader_type_register,
- * src/gpu/shader/shader_internal.h) under `#if DE_HAS_COOKER`:
+ * The cooker's built-in importer table hands it out (de_cooker_builtin_importer("shader")):
+ * `de-cook cook` registers it, and so does the runtime type of Debug and Dev builds
+ * (de__shader_type_register, de_shader_register_type). A tool or a test can register it with a
+ * cooker itself:
  *
  *     de_asset_type_desc t = {.name = "shader", .import = de_shader_import,
  *                             .importer_version = de_shader_importer_version(),

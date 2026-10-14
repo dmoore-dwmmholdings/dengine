@@ -276,3 +276,24 @@ if(TARGET test_gpu_breadcrumbs)
         endif()
     endif()
 endif()
+
+# DENG-409: the public shader API (include/dengine/de_shader.h: de_shader_register_type,
+# de_shader_get_code) and the runtime type registered without an importer: in Debug and Dev builds
+# with the tools both cook `.slang` in SOURCE mode through the cooker's built-in importer; in other
+# builds the type has no importer and the source is refused as a cooked blob. CTest names
+# gpu_shader_api.shader_api.<test>.
+if(TARGET de_gpu_shader)
+    de_add_test(NAME gpu_shader_api
+        SOURCES test_shader_api.c
+        LIBS de_gpu_shader de_asset de_task de_platform
+        TIMEOUT 300)
+    if(TARGET test_gpu_shader_api)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_gpu_shader_api_tmp")
+        target_include_directories(test_gpu_shader_api PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_link_libraries(test_gpu_shader_api PRIVATE
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+        target_compile_definitions(test_gpu_shader_api PRIVATE
+            "DE_SHADER_API_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_shader_api_tmp\"")
+    endif()
+endif()
