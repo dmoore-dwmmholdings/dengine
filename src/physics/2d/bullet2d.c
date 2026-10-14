@@ -82,6 +82,7 @@ static u32 local_core(const de__shape2d *s, const de__chain_segment *seg, de_vec
 }
 
 static void core_place(const de_vec2 *pts, u32 n, f32 r, de__d2 pos, de_rot2d q, b2_core *out) {
+    memset(out, 0, sizeof *out); /* every point defined, also past n (GCC -Wmaybe-uninitialized) */
     for (u32 i = 0; i < n; ++i)
         out->v[i] = de__d2_add(pos, de__rot2d_apply_d(q, de__d2_from(pts[i])));
     out->count = n;
@@ -295,6 +296,7 @@ static f64 end_gap(const b2_sweep *sw, bool fallback, de__d2 *normal) {
         return sep;
     const de__xf2d xm = pose_at(&sw->m, 1.0);
     de__contact_set2d set;
+    memset(&set, 0, sizeof set);
     if (de__collide2d(sw->target_shape, sw->target_pose, sw->shape, xm, sw->target_child, 0.0f,
                       &set) == 0u)
         return sep; /* zero normal: counts as "on the other side" */
