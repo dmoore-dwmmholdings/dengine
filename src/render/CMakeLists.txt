@@ -33,3 +33,13 @@ if(TARGET de_render) # not built in headless builds (DE_HEADLESS)
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<${_de_render_with_cooker}:de_cooker>")
     target_include_directories(de_render PRIVATE "${DE_ROOT_DIR}/tools")
 endif()
+
+# DENG-174: the renderer (renderer.c: create/destroy, attach, the frame skeleton; DENG-176 replaces
+# the frame graph body) and its settings (settings.c: the quality preset tables, the clamp to the
+# device caps, the caps-only auto selection DENG-276 builds on, the r.* cvars).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        renderer_internal.h
+        renderer.c
+        settings.c)
+endif()
