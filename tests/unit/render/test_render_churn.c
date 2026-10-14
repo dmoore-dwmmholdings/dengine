@@ -39,6 +39,8 @@
 #include <dengine/de_task.h>
 
 #include "asset/load_internal.h"
+#include "asset/pipeline_internal.h"
+#include "asset/slots_internal.h"
 #include "loader_test_util.h"
 #include "render/components_internal.h"
 #include "render/loaders/render_assets.h"
@@ -49,9 +51,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MESHES    8u
-#define MATERIALS 4u
-#define ENTITIES  256u
+#define MESHES      8u
+#define MATERIALS   4u
+#define RCH_WAIT_NS (10ull * 1000000000ull) /* a load's deadline */
+#define ENTITIES    256u
 
 typedef struct cfx {
     de_tracking_allocator track, dev_track;
@@ -247,6 +250,20 @@ static u32 check_entries(cfx *f) {
     return ready;
 }
 
+/* Frames until mesh `i`'s GPU-scene entry is READY, by deadline (the I/O thread reads the file:
+ * slow on some CI hosts, and a frame can be much shorter than the read). */
+static bool pump_until_ready(cfx *f, u32 i, de__gs_mesh *entry) {
+    const u64 t0 = de_time_now_ns();
+    for (;;) {
+        frame(f);
+        if (mesh_entry(f, i, entry) && (entry->flags & DE__GS_MESH_READY))
+            return true;
+        if (de_time_now_ns() - t0 > RCH_WAIT_NS)
+            return false;
+        (void)de__asset_wake_block(f->s, 2000000u);
+    }
+}
+
 /* ---- churn.unload_waits_for_frame_fence ------------------------------------------------------ */
 
 TEST_F(churn, unload_waits_for_frame_fence, cfx) {
@@ -258,12 +275,7 @@ TEST_F(churn, unload_waits_for_frame_fence, cfx) {
     ASSERT_NE(e.bits, 0u);
     de__gs_mesh entry = {0};
     bool ready = false;
-    for (u32 i = 0; i < 2000 && !ready; ++i) {
-        frame(f);
-        ready = mesh_entry(f, 0, &entry) && (entry.flags & DE__GS_MESH_READY);
-        if (!ready)
-            (void)de__asset_wake_block(f->s, 1000000u);
-    }
+    ready = pump_until_ready(f, 0, &entry);
     ASSERT_TRUE(ready);
     const de_render_mesh *rec = de_render_mesh_get(f->s, de_asset_mesh(f->s, mesh_id(0)));
     ASSERT_TRUE(rec != NULL);
@@ -308,21 +320,21 @@ TEST_F(churn, unload_waits_for_frame_fence, cfx) {
     /* Loaded again: a new record, READY again in the scene. */
     h = de_asset_load(f->s, mesh_id(0), 0);
     ready = false;
-    for (u32 i = 0; i < 2000 && !ready; ++i) {
-        frame(f);
-        ready = mesh_entry(f, 0, &entry) && (entry.flags & DE__GS_MESH_READY);
-        if (!ready)
-            (void)de__asset_wake_block(f->s, 1000000u);
-    }
+    ready = pump_until_ready(f, 0, &entry);
     if (!ready) {
         de_load_info info;
         const de_load_state st = de_asset_status(f->s, h, &info);
         const bool have = mesh_entry(f, 0, &entry);
-        printf("reload: state %d, ready %u/%u, failed %u, error %d \"%s\"; scene slot %s, flags "
-               "0x%x\n",
+        const de_render_upload_stats us = de_render_uploader_stats(u);
+        printf("reload: state %d, ready %u/%u, failed %u, error %d \"%s\"; stage %u, uploads in "
+               "flight %u, uploader queued %u submitted %llu completed %llu; scene slot %s, "
+               "flags 0x%x\n",
                (int)st, info.assets_ready, info.assets_total, info.assets_failed,
-               (int)info.first_error, info.first_error_msg, have ? "yes" : "no",
-               have ? entry.flags : 0u);
+               (int)info.first_error, info.first_error_msg,
+               de__pipeline_debug_stage(f->s, de__slot_find(f->s, mesh_id(0))),
+               de_asset_get_stats(f->s).uploads_in_flight, us.queued,
+               (unsigned long long)us.submitted, (unsigned long long)us.completed,
+               have ? "yes" : "no", have ? entry.flags : 0u);
     }
     EXPECT_TRUE(ready);
     (void)frames;
