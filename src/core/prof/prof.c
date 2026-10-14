@@ -277,6 +277,49 @@ void de_prof_lock_after_unlock_(de_prof_lock *l) {
         be->lock_after_unlock(ctx);
 }
 
+/* ---------- GPU zones (DENG-326) ---------- */
+
+/* Context ids are handed out once per process (Tracy keeps 255); query ids only need to be unique
+ * among zones in flight, and a zone is sent with its times at once, so one wrapping counter
+ * serves every context. */
+static de_atomic_u32 de__prof_gpu_next_ctx = DE_ATOMIC_INIT(0);
+static de_atomic_u32 de__prof_gpu_next_query = DE_ATOMIC_INIT(0);
+
+u32 de__prof_gpu_span(void) {
+    return de__prof_be() != NULL ? de_atomic_load_u32(&de__prof.epoch, DE_ATOMIC_RELAXED) : 0;
+}
+
+u32 de__prof_gpu_context(const char *name, i64 gpu_time, f32 period_ns, u32 api) {
+    const de__prof_backend *be = de__prof_be();
+    if (be == NULL || be->gpu_context == NULL)
+        return DE__PROF_GPU_NO_CONTEXT;
+    const u32 id = de_atomic_fetch_add_u32(&de__prof_gpu_next_ctx, 1u, DE_ATOMIC_RELAXED);
+    if (id >= 255u)
+        return DE__PROF_GPU_NO_CONTEXT;
+    if (name == NULL)
+        name = "";
+    be->gpu_context((u8)id, name, strlen(name), gpu_time, period_ns, (u8)api);
+    return id;
+}
+
+void de__prof_gpu_zone_begin(u32 ctx, const char *name, u32 color, i64 gpu_time) {
+    const de__prof_backend *be = de__prof_be();
+    if (be == NULL || be->gpu_zone_begin == NULL || ctx >= 255u)
+        return;
+    if (name == NULL)
+        name = "";
+    const u32 q = de_atomic_fetch_add_u32(&de__prof_gpu_next_query, 1u, DE_ATOMIC_RELAXED);
+    be->gpu_zone_begin((u8)ctx, (u16)q, name, strlen(name), color & 0xFFFFFFu, gpu_time);
+}
+
+void de__prof_gpu_zone_end(u32 ctx, i64 gpu_time) {
+    const de__prof_backend *be = de__prof_be();
+    if (be == NULL || be->gpu_zone_end == NULL || ctx >= 255u)
+        return;
+    const u32 q = de_atomic_fetch_add_u32(&de__prof_gpu_next_query, 1u, DE_ATOMIC_RELAXED);
+    be->gpu_zone_end((u8)ctx, (u16)q, gpu_time);
+}
+
 #else /* !DE_PROFILE */
 
 de_result de_prof_init(void) {

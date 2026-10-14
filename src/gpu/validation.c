@@ -428,7 +428,7 @@ de_result de__gpu_validate_pipeline_desc(de_gpu_device *d, const de_gpu_pipeline
 
 /* ---------- Queries, swapchains, submits ---------- */
 
-#define MAX_QUERIES 65536u
+#define MAX_QUERIES DE_GPU_MAX_QUERIES
 
 de_result de__gpu_validate_query_heap_desc(de_gpu_device *d, const de_gpu_query_heap_desc *desc) {
     static const char F[] = "de_gpu_query_heap_create";
@@ -442,6 +442,10 @@ de_result de__gpu_validate_query_heap_desc(de_gpu_device *d, const de_gpu_query_
     if (desc->count == 0 || desc->count > MAX_QUERIES)
         return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT, "%s(\"%s\"): count %u is outside 1..%u", F,
                             nm(desc->name), desc->count, MAX_QUERIES);
+    if ((u32)desc->queue >= DE_QUEUE_COUNT_) /* DENG-326 */
+        return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
+                            "%s(\"%s\"): queue %d is not a de_gpu_queue value", F, nm(desc->name),
+                            (int)desc->queue);
     return DE_OK;
 }
 

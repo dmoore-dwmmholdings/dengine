@@ -23,6 +23,8 @@ de_add_module(
         vk_pipeline.c
         vk_pipeline_cache.c
         vk_draw.c
+        vk_query.c
+        vk_debug.c
     DEPS gpu
     LIBS de_tp_vulkan_headers
     OPTIONAL_OPTION DE_GPU_VULKAN

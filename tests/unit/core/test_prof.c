@@ -41,6 +41,9 @@ typedef enum ev_kind {
     EV_LOCK_AFTER,
     EV_LOCK_AFTER_TRY,
     EV_LOCK_AFTER_UNLOCK,
+    EV_GPU_CONTEXT, /* DENG-326 */
+    EV_GPU_BEGIN,
+    EV_GPU_END,
 } ev_kind;
 
 typedef struct ev {
@@ -219,6 +222,40 @@ static void m_lock_after_unlock(void *ctx) {
     mock_push(&e);
 }
 
+/* DENG-326: GPU zones. `id` = context, `size` = query id, `value` = GPU time; the context's
+ * period goes in `color` (as ns * 1000) and its API in `sev`. */
+static void m_gpu_context(u8 ctx, const char *name, size_t len, i64 gpu_time, f32 period_ns,
+                          u8 api) {
+    ev e = ev_make(EV_GPU_CONTEXT);
+    size_t n = len < sizeof e.text - 1 ? len : sizeof e.text - 1;
+    memcpy(e.text, name, n);
+    e.text[n] = '\0';
+    e.id = ctx;
+    e.value = (f64)gpu_time;
+    e.color = (u32)(period_ns * 1000.0f + 0.5f);
+    e.sev = api;
+    mock_push(&e);
+}
+static void m_gpu_zone_begin(u8 ctx, u16 query, const char *name, size_t len, u32 color,
+                             i64 gpu_time) {
+    ev e = ev_make(EV_GPU_BEGIN);
+    size_t n = len < sizeof e.text - 1 ? len : sizeof e.text - 1;
+    memcpy(e.text, name, n);
+    e.text[n] = '\0';
+    e.id = ctx;
+    e.size = query;
+    e.color = color;
+    e.value = (f64)gpu_time;
+    mock_push(&e);
+}
+static void m_gpu_zone_end(u8 ctx, u16 query, i64 gpu_time) {
+    ev e = ev_make(EV_GPU_END);
+    e.id = ctx;
+    e.size = query;
+    e.value = (f64)gpu_time;
+    mock_push(&e);
+}
+
 const de__prof_backend de__prof_mock_backend = {
     "mock",          m_startup,        m_shutdown,
     m_connected,     m_zone_begin,     m_zone_end,
@@ -226,6 +263,7 @@ const de__prof_backend de__prof_mock_backend = {
     m_free,          m_message,        m_thread_name,
     m_lock_announce, m_lock_terminate, m_lock_before,
     m_lock_after,    m_lock_after_try, m_lock_after_unlock,
+    m_gpu_context,   m_gpu_zone_begin, m_gpu_zone_end,
 };
 
 /* Copies the events of `thread` (0: every thread) whose kind is in [first, last] into `out`. */
@@ -609,6 +647,67 @@ TEST(prof, thread_names_mock) {
     n = mock_events(tid, EV_THREAD_NAME, EV_THREAD_NAME, g_evs, MOCK_MAX);
     ASSERT_EQ(n, 1u); /* named from inside the new thread, before its entry point */
     EXPECT_STREQ(g_evs[0].text, "prof-worker");
+}
+
+/* ---- GPU zones (DENG-326) ----------------------------------------------------------------- */
+
+TEST(prof, gpu_zones_mock) {
+    mock_reset();
+    /* Stopped: no span, no context, nothing sent. */
+    EXPECT_EQ(de__prof_gpu_span(), 0u);
+    EXPECT_EQ(de__prof_gpu_context("gpu", 1, 1.0f, DE__PROF_GPU_API_METAL),
+              DE__PROF_GPU_NO_CONTEXT);
+    de__prof_gpu_zone_begin(0, "x", 0, 1);
+    de__prof_gpu_zone_end(0, 2);
+    EXPECT_EQ(mock.count, 0u);
+
+    ASSERT_EQ(de_prof_init(), DE_OK);
+    const u32 span = de__prof_gpu_span();
+    EXPECT_NE(span, 0u);
+    const u32 ctx = de__prof_gpu_context("M5 graphics", 1000, 41.5f, DE__PROF_GPU_API_VULKAN);
+    ASSERT_NE(ctx, DE__PROF_GPU_NO_CONTEXT);
+    EXPECT_LT(ctx, 255u);
+    char name[8] = "outer";
+    de__prof_gpu_zone_begin(ctx, name, 0x123456u, 1100);
+    memcpy(name, "XXXXX", 6); /* the name was copied */
+    de__prof_gpu_zone_begin(ctx, "inner", 0, 1200);
+    de__prof_gpu_zone_end(ctx, 1300);
+    de__prof_gpu_zone_end(ctx, 1400);
+    de__prof_gpu_zone_begin(255u, "bad context", 0, 1); /* out of range: dropped */
+    de_prof_shutdown();
+    EXPECT_EQ(de__prof_gpu_span(), 0u);
+
+    const u32 n = mock_events(0, EV_GPU_CONTEXT, EV_GPU_END, g_evs, MOCK_MAX);
+    ASSERT_EQ(n, 5u);
+    EXPECT_EQ(g_evs[0].kind, EV_GPU_CONTEXT);
+    EXPECT_STREQ(g_evs[0].text, "M5 graphics");
+    EXPECT_EQ(g_evs[0].id, (u64)ctx);
+    EXPECT_TRUE(g_evs[0].value == 1000.0);
+    EXPECT_EQ(g_evs[0].color, 41500u);
+    EXPECT_EQ(g_evs[0].sev, (int)DE__PROF_GPU_API_VULKAN);
+    EXPECT_EQ(g_evs[1].kind, EV_GPU_BEGIN);
+    EXPECT_STREQ(g_evs[1].text, "outer");
+    EXPECT_EQ(g_evs[1].color, 0x123456u);
+    EXPECT_TRUE(g_evs[1].value == 1100.0);
+    EXPECT_EQ(g_evs[2].kind, EV_GPU_BEGIN);
+    EXPECT_STREQ(g_evs[2].text, "inner");
+    EXPECT_EQ(g_evs[3].kind, EV_GPU_END);
+    EXPECT_TRUE(g_evs[3].value == 1300.0);
+    EXPECT_EQ(g_evs[4].kind, EV_GPU_END);
+    EXPECT_TRUE(g_evs[4].value == 1400.0);
+    /* Every event has its own query id. */
+    for (u32 i = 1; i < 5; ++i) {
+        EXPECT_EQ(g_evs[i].id, (u64)ctx);
+        for (u32 j = i + 1; j < 5; ++j)
+            EXPECT_NE(g_evs[i].size, g_evs[j].size);
+    }
+
+    /* A new span is a new span; context ids are not reused. */
+    ASSERT_EQ(de_prof_init(), DE_OK);
+    EXPECT_NE(de__prof_gpu_span(), span);
+    const u32 ctx2 = de__prof_gpu_context("again", 0, 1.0f, DE__PROF_GPU_API_CUSTOM);
+    EXPECT_NE(ctx2, ctx);
+    de_prof_shutdown();
 }
 
 #else /* !DE_PROFILE */

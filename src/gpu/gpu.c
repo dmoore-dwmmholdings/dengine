@@ -476,6 +476,7 @@ static de_gpu_buffer buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
     b->memory = desc->memory;
     b->stride = desc->stride;
     copy_name(b->name, desc->name);
+    de__gpu_default_name(b->name, DE__GPU_BUFFER, id); /* DENG-326 */
     if (desc->usage & BUFFER_BINDLESS_USAGE) {
         b->bindless = de__gpu_bindless_alloc(&d->bindless, DE__GPU_BINDLESS_BUFFER);
         if (!b->bindless) {
@@ -494,6 +495,7 @@ static de_gpu_buffer buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *d
     }
     if (b->bindless && d->vt->bindless_write_buffer)
         d->vt->bindless_write_buffer(d, b->bindless, b);
+    de__gpu_name_object(d, DE__GPU_BUFFER, id, b, b->name); /* DENG-326 */
     h.id = id;
     return h;
 }
@@ -567,6 +569,7 @@ static u32 texture_alloc(de_gpu_device *d, const de_gpu_texture_desc *desc, de__
     t->usage = desc->usage;
     t->transient = desc->transient;
     copy_name(t->name, desc->name);
+    de__gpu_default_name(t->name, DE__GPU_TEXTURE, id); /* DENG-326 */
     bool ok = true;
     if (t->usage & DE_USAGE_SAMPLED) {
         t->sampled = de__gpu_bindless_alloc(&d->bindless, DE__GPU_BINDLESS_SAMPLED_TEXTURE);
@@ -644,6 +647,7 @@ static de_gpu_texture texture_create(de_gpu_device *d, const de_gpu_texture_desc
         return h;
     }
     de__gpu_texture_wrap_finish(d, t);
+    de__gpu_name_object(d, DE__GPU_TEXTURE, id, t, t->name); /* DENG-326 */
     h.id = id;
     return h;
 }
@@ -746,6 +750,7 @@ de_gpu_sampler de_gpu_sampler_create(de_gpu_device *d, const de_gpu_sampler_desc
     }
     if (d->vt->bindless_write_sampler)
         d->vt->bindless_write_sampler(d, s->bindless, s);
+    de__gpu_name_object(d, DE__GPU_SAMPLER, id, s, NULL); /* DENG-326: no desc name */
     h.id = id;
     return h;
 }
@@ -791,6 +796,7 @@ de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_d
         p->color_formats[i] = desc->color_formats[i];
     p->depth_format = desc->kind == DE_PIPE_COMPUTE ? DE_FMT_UNKNOWN : desc->depth_format;
     copy_name(p->name, desc->name);
+    de__gpu_default_name(p->name, DE__GPU_PIPELINE, id); /* DENG-326 */
     for (u32 i = 0; i < 3; ++i) {
         p->threadgroup_size[i] = desc->threadgroup_size[i];
         p->object_threadgroup_size[i] = desc->object_threadgroup_size[i];
@@ -799,6 +805,7 @@ de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_d
         undo_slot(d, DE__GPU_PIPELINE, id);
         return h;
     }
+    de__gpu_name_object(d, DE__GPU_PIPELINE, id, p, p->name); /* DENG-326 */
     h.id = id;
     return h;
 }
@@ -857,10 +864,13 @@ de_gpu_query_heap de_gpu_query_heap_create(de_gpu_device *d, const de_gpu_query_
     q->type = desc->type;
     q->count = desc->count;
     copy_name(q->name, desc->name);
+    q->queue = desc->queue;                                /* DENG-326 */
+    de__gpu_default_name(q->name, DE__GPU_QUERY_HEAP, id); /* DENG-326 */
     if (d->vt->query_heap_create(d, q, desc) != DE_OK) {
         undo_slot(d, DE__GPU_QUERY_HEAP, id);
         return h;
     }
+    de__gpu_name_object(d, DE__GPU_QUERY_HEAP, id, q, q->name); /* DENG-326 */
     h.id = id;
     return h;
 }
@@ -892,6 +902,7 @@ de_gpu_fence de_gpu_fence_create(de_gpu_device *d, u64 initial) {
         undo_slot(d, DE__GPU_FENCE, id);
         return h;
     }
+    de__gpu_name_object(d, DE__GPU_FENCE, id, f, NULL); /* DENG-326: no desc name */
     h.id = id;
     return h;
 }
@@ -1080,6 +1091,8 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
     c->has_index_buffer = false;
     c->push_limit = 0;
     c->marker_depth = 0;
+    c->marker_render_base = 0; /* DENG-326 */
+    c->marker_text_used = 0;
     c->queue_value = 0;
     c->next = NULL;
     copy_name(c->name, name);
@@ -1189,6 +1202,7 @@ void de_gpu_cmd_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u32
     }
 #endif
     c->in_render = true;
+    c->marker_render_base = c->marker_depth; /* DENG-326 */
     if (c->device->vt->cmd_begin_render)
         c->device->vt->cmd_begin_render(c, colors, color_count, depth);
 }
@@ -1197,6 +1211,14 @@ void de_gpu_cmd_end_render(de_gpu_cmd *c) {
     static const char F[] = "de_gpu_cmd_end_render";
     CMD_ENTER(F);
     CHECK(c->in_render, "%s(\"%s\"): no render pass is open", F, c->name);
+#if DE__GPU_VALIDATE_COMMANDS
+    /* DENG-326: reported, but the pass still ends (skipping it would leave the list unusable). */
+    if (c->marker_depth != c->marker_render_base)
+        de__gpu_fail(c->device, DE_ERR_INVALID_ARGUMENT,
+                     "%s(\"%s\"): %u marker(s) pushed inside the render pass are still open; pop "
+                     "them before end_render",
+                     F, c->name, c->marker_depth - c->marker_render_base);
+#endif
     c->in_render = false;
     if (c->device->vt->cmd_end_render)
         c->device->vt->cmd_end_render(c);
@@ -1466,16 +1488,22 @@ void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst
 void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color) {
     CMD_ENTER("de_gpu_cmd_marker_push");
     ++c->marker_depth;
+    de__gpu_cmd_marker_record(c, name, color); /* DENG-326 */
     if (c->device->vt->cmd_marker_push)
-        c->device->vt->cmd_marker_push(c, name ? name : "", color);
+        c->device->vt->cmd_marker_push(c, name ? name : "", color & 0xFFFFFFu);
 }
 
 void de_gpu_cmd_marker_pop(de_gpu_cmd *c) {
     static const char F[] = "de_gpu_cmd_marker_pop";
     CMD_ENTER(F);
     CHECK(c->marker_depth > 0, "%s(\"%s\"): no marker_push to pop", F, c->name);
-    if (c->marker_depth > 0)
-        --c->marker_depth;
+    CHECK(!c->in_render || c->marker_depth > c->marker_render_base,
+          "%s(\"%s\"): the marker was pushed before the render pass; pop it after end_render", F,
+          c->name);
+    if (c->marker_depth == 0)
+        return; /* DENG-326: nothing to pop in any build (backends must stay balanced) */
+    --c->marker_depth;
+    de__gpu_cmd_marker_forget(c); /* DENG-326 */
     if (c->device->vt->cmd_marker_pop)
         c->device->vt->cmd_marker_pop(c);
 }
@@ -1492,6 +1520,18 @@ void de_gpu_cmd_timestamp(de_gpu_cmd *c, de_gpu_query_heap h, u32 index) {
     CMD_RESOLVE(q, de__gpu_query_heap, DE__GPU_QUERY_HEAP, h.id, F);
     CHECK(index < q->count, "%s(\"%s\"): query %u, but \"%s\" has %u", F, c->name, index, q->name,
           q->count);
+    /* DENG-326: Metal samples time only between encoders; copy-queue heaps are their own type. */
+    CHECK(!c->in_render,
+          "%s(\"%s\"): timestamp inside a render pass; write it before "
+          "begin_render or after end_render",
+          F, c->name);
+    CHECK((q->queue == DE_QUEUE_COPY) == (c->queue == DE_QUEUE_COPY),
+          "%s(\"%s\"): query heap \"%s\" is for the %s queue, the list is on the %s queue", F,
+          c->name, q->name, q->queue == DE_QUEUE_COPY ? "copy" : "graphics/compute",
+          c->queue == DE_QUEUE_COPY ? "copy" : "graphics/compute");
+    /* In every build: no backend sees a timestamp inside a render pass (Metal ends encoders). */
+    if (c->in_render)
+        return;
     if (c->device->vt->cmd_timestamp)
         c->device->vt->cmd_timestamp(c, q, index);
 }
@@ -1506,6 +1546,10 @@ void de_gpu_cmd_resolve_queries(de_gpu_cmd *c, de_gpu_query_heap h, u32 first, u
     CHECK(first <= q->count && count <= q->count - first,
           "%s(\"%s\"): queries [%u, +%u) are outside \"%s\" (%u)", F, c->name, first, count,
           q->name, q->count);
+    CHECK((q->queue == DE_QUEUE_COPY) == (c->queue == DE_QUEUE_COPY), /* DENG-326 */
+          "%s(\"%s\"): query heap \"%s\" is for the %s queue, the list is on the %s queue", F,
+          c->name, q->name, q->queue == DE_QUEUE_COPY ? "copy" : "graphics/compute",
+          c->queue == DE_QUEUE_COPY ? "copy" : "graphics/compute");
     CHECK(db->usage & DE_USAGE_COPY_DST, "%s(\"%s\"): dst \"%s\" lacks DE_USAGE_COPY_DST", F,
           c->name, db->name);
     CHECK(dst_off % 8u == 0 && dst_off <= db->size && (u64)count * 8u <= db->size - dst_off,

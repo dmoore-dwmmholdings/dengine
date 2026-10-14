@@ -196,3 +196,45 @@ if(TARGET test_gpu_d3d12 AND DE_D3D12_WARP_DLL)
     de_d3d12_warp_deploy(test_gpu_d3d12)
     target_sources(test_gpu_d3d12 PRIVATE d3d12/test_d3d12_warp.c)
 endif()
+
+# DENG-326: timestamps, readback, debug markers and object names on every backend
+# (test_gpu_queries.c, executable test_gpu_queries, CTest names gpu_queries.queries.<test>). The
+# front-end tests run on the null backend everywhere; the backend tests create devices of each
+# backend compiled into the build (Metal on macOS, Vulkan where a loader is found, D3D12 on Windows,
+# where CI runs them on the vendored WARP) and use DENG-323's shared compute shader, cooked through
+# the shader importer when the build has it (else they skip). markers_nested_metal turns on
+# MTL_CAPTURE_ENABLED and writes a .gputrace under <build>/tests/unit/gpu/test_gpu_queries_tmp/.
+set(_de_queries_libs de_gpu de_platform)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_queries_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_queries_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_queries_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME gpu_queries
+    SOURCES test_gpu_queries.c data/pipelines/pipeline_shaders.c
+    LIBS ${_de_queries_libs}
+    LABELS unit gpu
+    TIMEOUT 300)
+if(TARGET test_gpu_queries)
+    target_include_directories(test_gpu_queries PRIVATE "${DE_ROOT_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_gpu_queries_tmp")
+    target_compile_definitions(test_gpu_queries PRIVATE
+        "DE_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_gpu_queries_tmp\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_queries PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_gpu_queries PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_queries PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_gpu_queries)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_gpu_queries)
+        endif()
+    endif()
+endif()

@@ -27,6 +27,8 @@ de_add_module(
         d3d12_pipeline.c
         d3d12_pipeline_library.c
         d3d12_draw.c
+        d3d12_query.c
+        d3d12_debug.c
     DEPS gpu
     LIBS de_tp_d3d12_agility d3d12 dxgi
     OPTIONAL_OPTION DE_GPU_D3D12
