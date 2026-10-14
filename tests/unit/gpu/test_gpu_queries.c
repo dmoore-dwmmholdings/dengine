@@ -24,6 +24,9 @@
  * layer when installed; D3D12 on the best adapter (CI: the vendored WARP) with the debug layer;
  * Metal with API validation (MTL_DEBUG_LAYER=1). Each requires zero validation errors.
  */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L /* setenv */
+#endif
 #include "de_test.h"
 
 #include <dengine/de_debug.h>
@@ -42,6 +45,8 @@
 #endif
 #if DE_HAS_GPU_METAL
 #include "gpu/metal/mtl_internal.h"
+
+#include <dirent.h>
 #endif
 #if defined(_WIN32) && DE_HAS_GPU_D3D12
 #include "gpu/d3d12/d3d12_agility_exports.h"
@@ -771,6 +776,29 @@ static bool file_has(const char *file, const char *text) {
     return false;
 }
 
+/* True when a file of the .gputrace bundle `dir` contains `text`; lists the files the first
+ * time. */
+static bool trace_has(const char *dir, const char *text) {
+    static bool listed;
+    DIR *dp = opendir(dir);
+    if (!dp)
+        return false;
+    bool found = false;
+    struct dirent *e;
+    while (!found && (e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.')
+            continue;
+        char path[700];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (!listed)
+            printf("  capture file %s\n", e->d_name);
+        found = file_has(path, text);
+    }
+    listed = true;
+    closedir(dp);
+    return found;
+}
+
 TEST_F(queries, markers_nested_metal, q_fx) {
     /* Capture must be allowed before the process's first Metal device. */
     set_env("MTL_CAPTURE_ENABLED", "1");
@@ -796,15 +824,22 @@ TEST_F(queries, markers_nested_metal, q_fx) {
     }
     de__mtl_capture_end(f->d);
     printf("capture: %s\n", trace);
-    char file[600], file2[600];
-    snprintf(file, sizeof file, "%s/capture", trace);
-    snprintf(file2, sizeof file2, "%s/unsorted-capture", trace);
-    for (u32 i = 0; i < 4; ++i) {
-        const bool found = file_has(file, k_marker_names[i]) || file_has(file2, k_marker_names[i]);
-        if (!found)
+    u32 missing = 0;
+    for (u32 i = 0; i < 4; ++i)
+        if (!trace_has(trace, k_marker_names[i])) {
             printf("debug group \"%s\" is not in the capture\n", k_marker_names[i]);
-        EXPECT_TRUE(found);
+            ++missing;
+        }
+    if (missing && !de_gpu_get_caps(f->d)->base_tier_ok) {
+        /* GitHub's paravirtual GPU (below the Base tier) writes a capture whose files do not hold
+         * the names as plain bytes; the M-series host's captures do. */
+        snprintf(f->skip, sizeof f->skip,
+                 "markers recorded and ran; this device's capture (below the Base tier: \"%s\") "
+                 "does not store the group names as plain bytes",
+                 de_gpu_get_caps(f->d)->device_name);
+        SKIP(f->skip);
     }
+    EXPECT_EQ(missing, 0u);
 }
 
 TEST_F(queries, object_names_metal, q_fx) {
