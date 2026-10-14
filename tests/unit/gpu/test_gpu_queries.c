@@ -20,6 +20,10 @@
  *   - object_names_vk: a validation error forced on a named buffer inside nested markers: the
  *     layer's message and objects name the buffer and its command-buffer labels are the markers.
  *   - object_names_metal / object_names_d3d12: the native objects carry the names.
+ *   - resolve_lists_in_flight_metal (DENG-419): one heap timed and resolved by 24 lists, three in
+ *     flight at once (the render graph's frame slots, but sharing a heap), so different listener
+ *     threads resolve into the same staging memory; every frame's two values are in order. Run
+ *     under TSan, it checks the hand-off between the recording thread and the listener blocks.
  * Vulkan runs on the best Base-tier device or adapter 1 forced (MoltenVK), with the validation
  * layer when installed; D3D12 on the best adapter (CI: the vendored WARP) with the debug layer;
  * Metal with API validation (MTL_DEBUG_LAYER=1). Each requires zero validation errors.
@@ -759,6 +763,82 @@ static void run_markers(q_fx *f, de_gpu_backend backend) {
 
 TEST_F(queries, timestamps_metal, q_fx) {
     run_timestamps(f, DE_GPU_METAL);
+}
+
+/* DENG-419: frames of T0, a 1 MiB copy, T1 and a resolve of one heap, three lists in flight. A
+ * list that is still in flight is not recycled, so consecutive frames use different lists, and
+ * so different resolve listeners (threads) write the heap's staging buffer. */
+TEST_F(queries, resolve_lists_in_flight_metal, q_fx) {
+    enum { FRAMES = 24, IN_FLIGHT = 3, COPY_BYTES = 1u << 20 };
+    open_backend(f, DE_GPU_METAL);
+    de_gpu_device *d = f->d;
+    de_gpu_query_heap heap = de_gpu_query_heap_create(
+        d, &(de_gpu_query_heap_desc){.count = 2, .name = "in flight timestamps"});
+    if (!DE_HANDLE_VALID(heap)) {
+        snprintf(f->skip, sizeof f->skip, "no timestamps: %s", errchain(f->err, sizeof f->err));
+        SKIP(f->skip);
+    }
+    de_gpu_buffer a = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = COPY_BYTES,
+                                                                    .usage = DE_USAGE_COPY_SRC,
+                                                                    .name = "in flight src"});
+    de_gpu_buffer b = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = COPY_BYTES,
+                                                                    .usage = DE_USAGE_COPY_DST,
+                                                                    .name = "in flight dst"});
+    de_gpu_buffer rb[IN_FLIGHT];
+    for (u32 i = 0; i < IN_FLIGHT; ++i)
+        rb[i] = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = 16,
+                                                              .usage = DE_USAGE_COPY_DST,
+                                                              .memory = DE_MEM_READBACK,
+                                                              .name = "in flight readback"});
+    de_gpu_fence fence = de_gpu_fence_create(d, 0);
+    ASSERT_TRUE(DE_HANDLE_VALID(a) && DE_HANDLE_VALID(b) && DE_HANDLE_VALID(fence));
+    de_gpu_cmd *lists[IN_FLIGHT] = {NULL, NULL, NULL};
+    u32 changed = 0, checked = 0; /* frames whose list differs from the previous frame's */
+
+    for (u32 frame = 0; frame < FRAMES + IN_FLIGHT; ++frame) {
+        const u32 slot = frame % IN_FLIGHT;
+        if (frame >= IN_FLIGHT) {
+            /* The frame that used this slot is done: its values are in its readback buffer. */
+            ASSERT_EQ(de_gpu_fence_wait(d, fence, frame - IN_FLIGHT + 1u, WAIT_NS), DE_OK);
+            const u64 *t = (const u64 *)de_gpu_buffer_map(d, rb[slot]);
+            ASSERT_TRUE(t != NULL);
+            if (!(t[0] != 0 && t[0] != UINT64_MAX && t[1] > t[0]))
+                printf("frame %u: T0 %llu, T1 %llu\n", frame - IN_FLIGHT, (unsigned long long)t[0],
+                       (unsigned long long)t[1]);
+            EXPECT_TRUE(t[0] != 0 && t[0] != UINT64_MAX);
+            EXPECT_GT(t[1], t[0]);
+            ++checked;
+        }
+        if (frame >= FRAMES)
+            continue;
+        de_error_clear();
+        de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "in flight frame");
+        ASSERT_TRUE(c != NULL);
+        changed += frame && lists[(slot + IN_FLIGHT - 1u) % IN_FLIGHT] != c ? 1u : 0u;
+        lists[slot] = c;
+        de_gpu_barrier bs[3] = {
+            buf_barrier(a, DE_ACCESS_NONE, DE_ACCESS_COPY_SRC),
+            buf_barrier(b, frame ? DE_ACCESS_COPY_DST : DE_ACCESS_NONE, DE_ACCESS_COPY_DST),
+            buf_barrier(rb[slot], DE_ACCESS_NONE, DE_ACCESS_COPY_DST)};
+        de_gpu_cmd_barriers(c, bs, 3);
+        de_gpu_cmd_timestamp(c, heap, 0);
+        de_gpu_cmd_copy_buffer(c, b, 0, a, 0, COPY_BYTES);
+        de_gpu_cmd_timestamp(c, heap, 1);
+        de_gpu_cmd_resolve_queries(c, heap, 0, 2, rb[slot], 0);
+        EXPECT_TRUE(de_error_last() == NULL);
+        de_gpu_submit s = {.cmds = &c, .cmd_count = 1, .signal = fence, .signal_value = frame + 1u};
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &s), DE_OK);
+    }
+    printf("%u frames checked; %u of %u frames used another list than the frame before\n", checked,
+           changed, (unsigned)FRAMES - 1u);
+    EXPECT_EQ(checked, (u32)FRAMES);
+    EXPECT_EQ(changed, (u32)FRAMES - 1u); /* the previous frame's list is still in flight */
+    de_gpu_fence_destroy(d, fence);
+    for (u32 i = 0; i < IN_FLIGHT; ++i)
+        de_gpu_buffer_destroy(d, rb[i]);
+    de_gpu_buffer_destroy(d, b);
+    de_gpu_buffer_destroy(d, a);
+    de_gpu_query_heap_destroy(d, heap);
 }
 
 /* True when `file` contains `text` (binary search of the bytes). */

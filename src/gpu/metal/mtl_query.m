@@ -22,6 +22,19 @@
  * signal. The event and listener live on the command list (made on its first resolve). The
  * command buffers do not retain the heap: the front-end's deferred destruction keeps it alive
  * until the lists that use it complete, and the listener block retains what it reads.
+ *
+ * Hand-off (DENG-419). Metal runs the listener block on a GCD thread that IOSurface's event
+ * callback starts; nothing on that path orders it after the recording thread for the thread
+ * sanitizer (nor, formally, for the C11 memory model): the block's captured values, written by
+ * the block copy inside notifyListener:, and the heap's staging buffer, written by earlier blocks
+ * of other lists on other listener threads, would be read and written without a visible
+ * happens-before. Each heap therefore has one counter, `handoff`, changed only by acq_rel
+ * read-modify-writes: the recording thread bumps it after notifyListener: (publishing the block),
+ * a block acquires it before it reads anything captured, and bumps it again after it wrote the
+ * staging buffer (publishing its values to the heap's next resolve). Because every change is a
+ * read-modify-write, each one continues the release sequence of all earlier ones, so a block
+ * sees everything any thread did before its own resolve was recorded. Real overlap (two lists
+ * resolving the same queries at the same time, which the API does not allow) is still reported.
  */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -89,6 +102,7 @@ de_result de__mtl_query_heap_create(de_gpu_device *d, de__gpu_query_heap *h,
         memset(staging.contents, 0xFF, staging.length); /* "never written" until resolved */
         qh->samples = (void *)CFBridgingRetain(samples);
         qh->staging = (void *)CFBridgingRetain(staging);
+        de_atomic_init_u64(&qh->handoff, 0);
     }
     return DE_OK;
 }
@@ -182,11 +196,14 @@ void de__mtl_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first
         const u64 ready = mc->resolve_value + 1u, done = mc->resolve_value + 2u;
         mc->resolve_value = done;
 
+        de_atomic_u64 *handoff = &qh->handoff; /* the heap outlives the block (file comment) */
         [cb encodeSignalEvent:ev value:ready];
         [ev notifyListener:listener
                    atValue:ready
                      block:^(id<MTLSharedEvent> e, uint64_t value) {
                        (void)value;
+                       /* Before any captured value: see "Hand-off" (DENG-419). */
+                       (void)de_atomic_fetch_add_u64(handoff, 1u, DE_ATOMIC_ACQ_REL);
                        NSData *data = [samples resolveCounterRange:NSMakeRange(first, count)];
                        u8 *out = (u8 *)staging.contents + (size_t)first * sizeof(u64);
                        const size_t want = (size_t)count * sizeof(u64);
@@ -195,8 +212,13 @@ void de__mtl_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first
                            memcpy(out, data.bytes, got < want ? got : want);
                        if (got < want) /* not written: "never written" */
                            memset(out + got, 0xFF, want - got);
+                       /* Publishes the staging writes to the heap's next resolve. */
+                       (void)de_atomic_fetch_add_u64(handoff, 1u, DE_ATOMIC_ACQ_REL);
                        e.signaledValue = done;
                      }];
+        /* Publishes the block (copied with its captures inside notifyListener:) to the thread
+         * that will run it. */
+        (void)de_atomic_fetch_add_u64(&qh->handoff, 1u, DE_ATOMIC_ACQ_REL);
         [cb encodeWaitForEvent:ev value:done];
 
         id<MTLBlitCommandEncoder> blit =
