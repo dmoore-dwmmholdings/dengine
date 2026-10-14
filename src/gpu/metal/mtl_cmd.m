@@ -85,6 +85,7 @@ void de__mtl_cmd_fini(de_gpu_device *d, de_gpu_cmd *c) {
     (void)d;
     mtl_cmd *mc = payload(c);
     release_recording(mc);
+    de__mtl_query_cmd_fini(c); /* DENG-326: the resolve event and listener */
     if (mc->fences) {
         @autoreleasepool {
             (void)CFBridgingRelease(mc->fences);

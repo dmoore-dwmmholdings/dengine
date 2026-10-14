@@ -19,6 +19,7 @@ de_add_module(
         memory/gpu_heap.h
         memory/gpu_heap.c
         tier.c
+        query.c
     DEPS core platform
 )
 

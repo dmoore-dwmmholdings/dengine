@@ -133,12 +133,63 @@ void lock_after_unlock(void *ctx) {
     ___tracy_after_unlock_lockable_ctx(lock_ctx(ctx));
 }
 
+/* GPU zones (DENG-326): the serial GPU C API, the one for timestamps collected after the fact.
+ * Each zone event is followed at once by its GPU time, because the GPU work has already run. */
+static_assert(DE__PROF_GPU_API_VULKAN == 2 && DE__PROF_GPU_API_D3D12 == 4 &&
+                  DE__PROF_GPU_API_METAL == 6 && DE__PROF_GPU_API_CUSTOM == 7,
+              "Tracy GpuContextType numbering");
+
+void gpu_context(u8 ctx, const char *name, size_t len, i64 gpu_time, f32 period_ns, u8 api) {
+    ___tracy_gpu_new_context_data nc;
+    nc.gpuTime = gpu_time;
+    nc.period = period_ns;
+    nc.context = ctx;
+    nc.flags = 0;
+    nc.type = api;
+    ___tracy_emit_gpu_new_context_serial(nc);
+    if (len > 0) {
+        ___tracy_gpu_context_name_data cn;
+        cn.context = ctx;
+        cn.name = name;
+        cn.len = static_cast<uint16_t>(len < 0xFFFFu ? len : 0xFFFFu);
+        ___tracy_emit_gpu_context_name_serial(cn);
+    }
+}
+
+void gpu_time(u8 ctx, u16 query, i64 gpu_time) {
+    ___tracy_gpu_time_data t;
+    t.gpuTime = gpu_time;
+    t.queryId = query;
+    t.context = ctx;
+    ___tracy_emit_gpu_time_serial(t);
+}
+
+void gpu_zone_begin(u8 ctx, u16 query, const char *name, size_t len, u32 color, i64 time) {
+    static const char k_where[] = "gpu";
+    ___tracy_gpu_zone_begin_data z;
+    z.srcloc = ___tracy_alloc_srcloc_name(0, k_where, sizeof k_where - 1, k_where,
+                                          sizeof k_where - 1, name, len, color);
+    z.queryId = query;
+    z.context = ctx;
+    ___tracy_emit_gpu_zone_begin_alloc_serial(z);
+    gpu_time(ctx, query, time);
+}
+
+void gpu_zone_end(u8 ctx, u16 query, i64 time) {
+    ___tracy_gpu_zone_end_data z;
+    z.queryId = query;
+    z.context = ctx;
+    ___tracy_emit_gpu_zone_end_serial(z);
+    gpu_time(ctx, query, time);
+}
+
 } // namespace
 
 extern "C" const de__prof_backend de__prof_tracy_backend = {
-    "tracy",       startup,        shutdown,    connected,  zone_begin,     zone_end,
-    frame_mark,    plot,           alloc,       free_,      message,        thread_name,
-    lock_announce, lock_terminate, lock_before, lock_after, lock_after_try, lock_after_unlock,
+    "tracy",       startup,        shutdown,     connected,  zone_begin,     zone_end,
+    frame_mark,    plot,           alloc,        free_,      message,        thread_name,
+    lock_announce, lock_terminate, lock_before,  lock_after, lock_after_try, lock_after_unlock,
+    gpu_context,   gpu_zone_begin, gpu_zone_end,
 };
 
 #endif /* DE_PROFILE && DE_TRACY */

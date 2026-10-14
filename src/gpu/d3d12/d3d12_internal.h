@@ -733,5 +733,33 @@ bool de__d3d12_pipelines_supported(de_gpu_device *d, const char **why);
 u32 de__d3d12_pipeline_library_state(de_gpu_device *d, u32 *hits, u32 *misses, u64 *loaded_bytes,
                                      const char **path);
 
+/* ---------- Timestamps, markers, names (DENG-326) ----------
+ * d3d12_query.c (query heaps, EndQuery, ResolveQueryData, per-queue frequency and calibration) and
+ * d3d12_debug.c (PIX-compatible BeginEvent/EndEvent, SetName). */
+
+/** Query heap payload. */
+typedef struct d3d12_query_heap {
+    ID3D12QueryHeap *heap;
+} d3d12_query_heap;
+
+/* d3d12_query.c */
+de_result de__d3d12_query_heap_create(de_gpu_device *d, de__gpu_query_heap *h,
+                                      const de_gpu_query_heap_desc *desc);
+void de__d3d12_query_heap_destroy(de_gpu_device *d, de__gpu_query_heap *h);
+void de__d3d12_cmd_timestamp(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index);
+void de__d3d12_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
+                                   de__gpu_buffer *dst, u64 dst_off);
+u64 de__d3d12_queue_timestamp_frequency(de_gpu_device *d, de_gpu_queue q);
+bool de__d3d12_queue_timestamp_now(de_gpu_device *d, de_gpu_queue q, u64 *ticks);
+
+/* d3d12_debug.c */
+void de__d3d12_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
+void de__d3d12_cmd_marker_pop(de_gpu_cmd *c);
+void de__d3d12_object_name(de_gpu_device *d, de__gpu_kind kind, void *rec, const char *name);
+/** Test hook: the debug name (WKPDID_D3DDebugObjectNameW, as UTF-8) of the D3D12 object behind a
+ * buffer, texture, pipeline, fence or query heap; false when it has none or `id` is stale. */
+bool de__d3d12_object_debug_name(de_gpu_device *d, de__gpu_kind kind, u32 id, char *out,
+                                 size_t cap);
+
 #endif /* _WIN32 */
 #endif

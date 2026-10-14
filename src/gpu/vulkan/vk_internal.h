@@ -64,7 +64,9 @@
     X(vkGetPhysicalDeviceSurfaceSupportKHR)                                                        \
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR)                                                   \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR)                                                        \
-    X(vkGetPhysicalDeviceSurfacePresentModesKHR)
+    X(vkGetPhysicalDeviceSurfacePresentModesKHR)                                                   \
+    X(vkCmdBeginDebugUtilsLabelEXT) /* DENG-326: markers (vk_debug.c) */                           \
+    X(vkCmdEndDebugUtilsLabelEXT)
 
 /** Device-level, required (Vulkan 1.3 core). */
 #define DE_VK_DEVICE_FUNCS(X)                                                                      \
@@ -137,7 +139,12 @@
     X(vkCmdDispatch)                                                                               \
     X(vkCmdDispatchIndirect)                                                                       \
     X(vkCmdDrawIndexedIndirect)                                                                    \
-    X(vkCmdDrawIndexedIndirectCount)
+    X(vkCmdDrawIndexedIndirectCount)                                                               \
+    X(vkCreateQueryPool) /* DENG-326: timestamps (vk_query.c) */                                   \
+    X(vkDestroyQueryPool)                                                                          \
+    X(vkCmdResetQueryPool)                                                                         \
+    X(vkCmdWriteTimestamp2)                                                                        \
+    X(vkCmdCopyQueryPoolResults)
 
 /** Device-level, optional (extensions): NULL when absent or not enabled. */
 #define DE_VK_DEVICE_FUNCS_OPT(X)                                                                  \
@@ -345,6 +352,8 @@ typedef struct de__vk_device {
     /** DENG-323: GPU-assisted validation is on (gpu_av), or was turned off for a portability
      * driver (gpu_av_off: MoltenVK cannot compile instrumented shaders; vk_device.c). */
     bool gpu_av, gpu_av_off;
+    /** DENG-326: the test hook's capturing messenger (vk_debug.c), or NULL. */
+    struct de__vk_debug_capture *capture;
 } de__vk_device;
 
 static inline de__vk_device *de__vk(de_gpu_device *d) {
@@ -714,5 +723,43 @@ const void *de__vk_pipeline_cache_check(const void *file, u64 size,
 
 /** Test hooks: the cache state, the bytes loaded and saved, and the cache file path. */
 u32 de__gpu_vk_pipeline_cache_state(de_gpu_device *d, u64 *loaded_bytes, const char **path);
+
+/* ---------- Timestamps, markers, names (DENG-326) ---------- */
+
+/** A de_gpu_query_heap: a VkQueryPool of timestamps. */
+typedef struct de__vk_query_heap {
+    VkQueryPool pool;
+    /** timestampValidBits of each de_gpu queue's family (0: that queue cannot write them). */
+    u32 valid_bits[DE_QUEUE_COUNT_];
+} de__vk_query_heap;
+
+/* vk_query.c */
+de_result de__vk_query_heap_create(de_gpu_device *d, de__gpu_query_heap *h,
+                                   const de_gpu_query_heap_desc *desc);
+void de__vk_query_heap_destroy(de_gpu_device *d, de__gpu_query_heap *h);
+void de__vk_cmd_timestamp(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index);
+void de__vk_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
+                                de__gpu_buffer *dst, u64 dst_off);
+
+/* vk_debug.c */
+void de__vk_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
+void de__vk_cmd_marker_pop(de_gpu_cmd *c);
+void de__vk_object_name(de_gpu_device *d, de__gpu_kind kind, void *rec, const char *name);
+/** Names one Vulkan object through VK_EXT_debug_utils (nothing without it). */
+void de__vk_set_name(de__vk_device *vk, VkObjectType type, u64 handle, const char *name);
+/** The label colour of a 0xRRGGBB marker colour: all zero (the tool's default) for 0. Pure. */
+void de__vk_label_color(u32 rgb, float out[4]);
+
+/* Test hooks (vk_debug.c). */
+/** Starts (`on`) or stops a second debug messenger that keeps the last validation error: its
+ * message, its objects' names and the command-buffer labels open at it. False when the device has
+ * no validation layer (or is not a Vulkan device). Stop it before destroying the device. */
+bool de__gpu_vk_debug_capture(de_gpu_device *d, bool on);
+/** Errors the capturing messenger saw; copies the last one's message, its objects' names
+ * (";"-separated) and its command-buffer labels ("outer/inner"). */
+u32 de__gpu_vk_debug_captured(de_gpu_device *d, char *message, size_t message_cap, char *objects,
+                              size_t objects_cap, char *labels, size_t labels_cap);
+/** The VkCommandBuffer of a list being recorded (as u64), 0 for another backend's list. */
+u64 de__gpu_vk_cmd_buffer(de_gpu_cmd *c);
 
 #endif

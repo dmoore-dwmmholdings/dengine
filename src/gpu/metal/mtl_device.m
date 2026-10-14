@@ -173,6 +173,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
             [DE__GPU_SWAPCHAIN] = sizeof(mtl_swapchain),
             [DE__GPU_FENCE] = sizeof(mtl_fence),
             [DE__GPU_PIPELINE] = sizeof(mtl_pipeline),
+            [DE__GPU_QUERY_HEAP] = sizeof(mtl_query_heap), /* DENG-326 */
         },
     .device_create = mtl_device_create,
     .device_destroy = mtl_device_destroy,
@@ -229,6 +230,15 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_set_index_buffer = de__mtl_cmd_set_index_buffer,
     .cmd_scissor = de__mtl_cmd_scissor,
     .cmd_dispatch_mesh = de__mtl_cmd_dispatch_mesh,
+    /* DENG-326: timestamps, debug groups, labels (mtl_query.m, mtl_debug.m) */
+    .query_heap_create = de__mtl_query_heap_create,
+    .query_heap_destroy = de__mtl_query_heap_destroy,
+    .cmd_timestamp = de__mtl_cmd_timestamp,
+    .cmd_resolve_queries = de__mtl_cmd_resolve_queries,
+    .cmd_marker_push = de__mtl_cmd_marker_push,
+    .cmd_marker_pop = de__mtl_cmd_marker_pop,
+    .object_name = de__mtl_object_name,
+    .queue_timestamp_now = de__mtl_queue_timestamp_now,
 };
 
 /* ---------- Accessors ---------- */

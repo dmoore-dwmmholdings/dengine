@@ -301,6 +301,15 @@ typedef struct mtl_cmd {
      * (MTLStoreActionUnknown at begin_render): bit i = color i, DE__MTL_STORE_DEPTH, _STENCIL. */
     u32 deferred_store;
     mtl_draw_state draw; /* DENG-325: pipeline and draw state (mtl_draw.m) */
+    /* DENG-326 (mtl_debug.m): per open marker level, the `encoders` count of the render encoder
+     * its debug group was pushed on, or 0 when it is on the command buffer. Written at push,
+     * read at pop of the same recording (the front-end's marker_depth indexes it). */
+    u32 marker_encoder[DE__GPU_MARKER_LEVELS];
+    /* DENG-326 (mtl_query.m): resolves wait for the CPU through this event (made on the list's
+     * first resolve, reused by its later recordings; released by cmd_fini). */
+    void *resolve_event;    /* id<MTLSharedEvent>, retained */
+    void *resolve_listener; /* MTLSharedEventListener, retained */
+    u64 resolve_value;      /* the last value used on resolve_event */
 } mtl_cmd;
 
 typedef struct mtl_fence {
@@ -518,5 +527,57 @@ u32 de__mtl_archive_state(de_gpu_device *d, u32 *hits, u32 *misses, const char *
  * digits) standing in when `registry_id` is 0. */
 void de__mtl_archive_file_name(u64 registry_id, const char *device_name, const char *os_build,
                                char *out, size_t cap);
+
+/* ---------- DENG-326: timestamps, debug groups, labels, capture ----------
+ *
+ * Timestamps (mtl_query.m): Apple GPUs sample the timestamp counter set only at stage (encoder)
+ * boundaries, so de_gpu_cmd_timestamp is a small blit encoder of its own whose start is sampled
+ * into the heap's MTLCounterSampleBuffer, ordered after every earlier encoder and before every
+ * later one (a full barrier). GPU-side resolveCounters: writes zeros on these GPUs (checked on an
+ * M5 Pro), so a resolve signals an event, a listener resolves the samples on the CPU
+ * (resolveCounterRange:) into the heap's staging buffer and signals back, and a blit copies them
+ * into the destination: later commands of the list wait for it. */
+
+/** Most timestamps in one heap: a counter sample buffer holds 32 KiB of 8-byte samples. */
+#define DE__MTL_MAX_QUERIES 4096u
+
+typedef struct mtl_query_heap {
+    void *samples; /* id<MTLCounterSampleBuffer>, shared storage, retained */
+    void *staging; /* id<MTLBuffer>, shared: count resolved u64, then 16 bytes the timestamp
+                      encoders fill (their one command) */
+} mtl_query_heap;
+
+/* mtl_query.m */
+de_result de__mtl_query_heap_create(de_gpu_device *d, de__gpu_query_heap *h,
+                                    const de_gpu_query_heap_desc *desc);
+void de__mtl_query_heap_destroy(de_gpu_device *d, de__gpu_query_heap *h);
+void de__mtl_cmd_timestamp(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index);
+void de__mtl_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
+                                 de__gpu_buffer *dst, u64 dst_off);
+/** The GPU time now (sampleTimestamps:gpuTimestamp:, nanoseconds). */
+bool de__mtl_queue_timestamp_now(de_gpu_device *d, de_gpu_queue q, u64 *ticks);
+/** Releases a list's resolve event and listener (cmd_fini). */
+void de__mtl_query_cmd_fini(de_gpu_cmd *c);
+
+/* mtl_debug.m */
+/** Debug groups: on the open render encoder inside a render pass, else on the command buffer
+ * (after ending the open blit or compute encoder, so the group holds exactly the encoders made
+ * inside it). */
+void de__mtl_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
+void de__mtl_cmd_marker_pop(de_gpu_cmd *c);
+/** Labels: buffers, textures (and their storage views), fences, query heaps. Pipeline and sampler
+ * labels are fixed at creation by Metal: pipelines take theirs from the record's name. */
+void de__mtl_object_name(de_gpu_device *d, de__gpu_kind kind, void *rec, const char *name);
+
+/* Test hooks (mtl_debug.m). */
+/** Starts a programmatic GPU capture of the device into the .gputrace document `path` (it must
+ * not exist). DE_ERR_UNSUPPORTED when the process cannot capture: MTL_CAPTURE_ENABLED=1 must be
+ * in the environment before the first Metal device (or the app's Info.plist enables capture). */
+de_result de__mtl_capture_begin(de_gpu_device *d, const char *path);
+/** Ends the capture and writes the document. */
+void de__mtl_capture_end(de_gpu_device *d);
+/** The Metal label of a buffer, texture, fence or query heap (UTF-8, cut to `cap`); false when
+ * the object has none or `handle` (an id) is stale. */
+bool de__mtl_object_label(de_gpu_device *d, de__gpu_kind kind, u32 handle, char *out, size_t cap);
 
 #endif

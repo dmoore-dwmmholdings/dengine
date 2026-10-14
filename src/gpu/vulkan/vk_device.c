@@ -791,6 +791,7 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
             [DE__GPU_SWAPCHAIN] = sizeof(de__vk_swapchain),
             [DE__GPU_FENCE] = sizeof(de__vk_fence),
             [DE__GPU_PIPELINE] = sizeof(de__vk_pipeline),
+            [DE__GPU_QUERY_HEAP] = sizeof(de__vk_query_heap), /* DENG-326 */
         },
     .device_create = vk_device_create,
     .device_destroy = vk_device_destroy,
@@ -847,4 +848,12 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .cmd_draw_indexed_indirect = de__vk_cmd_draw_indexed_indirect,
     .cmd_dispatch_mesh = de__vk_cmd_dispatch_mesh,
     .cmd_dispatch_mesh_indirect = de__vk_cmd_dispatch_mesh_indirect,
+    /* DENG-326: timestamps, markers, names (vk_query.c, vk_debug.c). */
+    .query_heap_create = de__vk_query_heap_create,
+    .query_heap_destroy = de__vk_query_heap_destroy,
+    .cmd_timestamp = de__vk_cmd_timestamp,
+    .cmd_resolve_queries = de__vk_cmd_resolve_queries,
+    .cmd_marker_push = de__vk_cmd_marker_push,
+    .cmd_marker_pop = de__vk_cmd_marker_pop,
+    .object_name = de__vk_object_name,
 };

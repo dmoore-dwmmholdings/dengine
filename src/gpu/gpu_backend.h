@@ -117,6 +117,7 @@ typedef struct de__gpu_query_heap {
     de_gpu_query_type type;
     u32 count;
     char name[DE__GPU_NAME_MAX];
+    de_gpu_queue queue; /**< from the desc (DENG-326): COPY heaps serve copy lists only */
 } de__gpu_query_heap;
 
 #define DE__GPU_ALIGN16(n) (((n) + 15u) & ~(size_t)15u)
@@ -124,6 +125,11 @@ typedef struct de__gpu_query_heap {
 #define DE__GPU_PAYLOAD(T, rec) ((T *)(void *)((u8 *)(rec) + DE__GPU_ALIGN16(sizeof *(rec))))
 
 /* ---------- Command lists ---------- */
+
+/** Open debug markers a command list keeps names for (deeper ones are counted only), and the bytes
+ * of name text it keeps for them (DENG-326). */
+#define DE__GPU_MARKER_LEVELS 32u
+#define DE__GPU_MARKER_TEXT   1024u
 
 /** Front-end part of a command list. The backend payload follows (de__gpu_cmd_payload). */
 struct de_gpu_cmd {
@@ -140,6 +146,14 @@ struct de_gpu_cmd {
     struct de_gpu_cmd *all_next; /**< every command list of the device */
     char name[DE__GPU_NAME_MAX];
     bool has_index_buffer; /**< de_gpu_cmd_set_index_buffer was called (S10, DENG-323) */
+    /* DENG-326 (query.c): the open debug markers, outermost first. Names are copied into
+     * `marker_text` (cut to fit), so a marker never allocates; read them with
+     * de__gpu_cmd_marker_*. Levels past DE__GPU_MARKER_LEVELS are only counted (marker_depth). */
+    u32 marker_render_base;                   /**< marker_depth when the open render pass began */
+    u32 marker_text_used;                     /**< bytes of marker_text in use */
+    u16 marker_offset[DE__GPU_MARKER_LEVELS]; /**< where each level's name starts */
+    u32 marker_color[DE__GPU_MARKER_LEVELS];  /**< 0xRRGGBB of each level */
+    char marker_text[DE__GPU_MARKER_TEXT];
 };
 enum { DE__GPU_CMD_FREE, DE__GPU_CMD_RECORDING, DE__GPU_CMD_SUBMITTED };
 
@@ -291,6 +305,17 @@ typedef struct de__gpu_backend_vtable {
     void (*cmd_set_index_buffer)(de_gpu_cmd *c, de__gpu_buffer *b, u64 offset, bool index_u16);
     void (*cmd_scissor)(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
     void (*cmd_dispatch_mesh)(de_gpu_cmd *c, u32 x, u32 y, u32 z);
+
+    /* Debug names and timestamps (DENG-326). object_name gives the native object(s) behind a
+     * record the name `name` (never empty: the desc's name, or "<kind>#<slot>" in Debug/Dev);
+     * the front-end calls it after every successful create of a buffer, texture, sampler,
+     * pipeline, fence or query heap, with the record (`rec`) of that kind. NULL: no names.
+     * queue_timestamp_frequency: ticks per second of queue `q` (NULL: caps.timestamp_frequency).
+     * queue_timestamp_now: the GPU timestamp of queue `q` now, for profiler calibration (NULL or
+     * false: unknown). */
+    void (*object_name)(de_gpu_device *d, de__gpu_kind kind, void *rec, const char *name);
+    u64 (*queue_timestamp_frequency)(de_gpu_device *d, de_gpu_queue q);
+    bool (*queue_timestamp_now)(de_gpu_device *d, de_gpu_queue q, u64 *ticks);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -413,6 +438,10 @@ struct de_gpu_device {
     size_t cmd_bytes;
     size_t bytes;                /**< allocation size of this struct plus the backend payload */
     struct de__gpu_heaps *heaps; /**< device memory heaps (gpu/memory/gpu_heap.c, DENG-282) */
+    /** DENG-326 (query.c): the profiler's GPU context of each queue: its id + 1 (0 = none) and
+     * the profiler span it was made in. Under the queue's submit_lock. */
+    u32 prof_gpu_context[DE_QUEUE_COUNT_];
+    u32 prof_gpu_span[DE_QUEUE_COUNT_];
 };
 
 static inline void *de__gpu_device_payload(de_gpu_device *d) {
@@ -460,6 +489,29 @@ u32 de__gpu_deferred_count(de_gpu_device *d);
 u32 de__gpu_live_count(de_gpu_device *d, de__gpu_kind kind);
 /** Indices handed out in one bindless space. */
 u32 de__gpu_bindless_count(de_gpu_device *d, de__gpu_bindless_space space);
+
+/* ---------- Debug markers, names, timestamps (query.c, DENG-326) ---------- */
+
+/** Records a pushed marker (front-end stack) after c->marker_depth was incremented. */
+void de__gpu_cmd_marker_record(de_gpu_cmd *c, const char *name, u32 color);
+/** Drops the innermost recorded marker, after c->marker_depth was decremented. */
+void de__gpu_cmd_marker_forget(de_gpu_cmd *c);
+/** Open markers of a list being recorded (c->marker_depth, also those too deep to keep). */
+u32 de__gpu_cmd_marker_depth(const de_gpu_cmd *c);
+/** Name of open marker `level` (0 = outermost); "" past the levels kept or the depth. */
+const char *de__gpu_cmd_marker_name(const de_gpu_cmd *c, u32 level);
+/** Colour (0xRRGGBB) of open marker `level`; 0 past the levels kept. */
+u32 de__gpu_cmd_marker_color(const de_gpu_cmd *c, u32 level);
+/** The open markers as "outer/inner/innermost" (cut to `cap`, always terminated); returns the
+ * length written. For crash reports (DENG-328). */
+size_t de__gpu_cmd_marker_path(const de_gpu_cmd *c, char *out, size_t cap);
+/** 1 in Debug and Dev builds: unnamed objects get "<kind>#<slot>" (record and native object). */
+#define DE__GPU_DEFAULT_NAMES DE__GPU_VALIDATE_COMMANDS
+/** Fills an empty record name with "<kind>#<slot>" (`id` is the handle id), in Debug and Dev. */
+void de__gpu_default_name(char name[DE__GPU_NAME_MAX], de__gpu_kind kind, u32 id);
+/** Calls the backend's object_name for a new object, when it has one and the name is not empty.
+ * `name` NULL: the kind's default name in Debug/Dev, else nothing. */
+void de__gpu_name_object(de_gpu_device *d, de__gpu_kind kind, u32 id, void *rec, const char *name);
 
 /* ---------- Validation (validation.c) ---------- */
 

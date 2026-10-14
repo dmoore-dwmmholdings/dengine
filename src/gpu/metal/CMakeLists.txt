@@ -22,6 +22,9 @@ set(_de_mtl_objc_sources
     mtl_draw.m
     mtl_icb.m
     mtl_binary_archive.m
+    # DENG-326: timestamps, debug groups, labels, capture
+    mtl_query.m
+    mtl_debug.m
 )
 de_add_module(
     NAME gpu_metal

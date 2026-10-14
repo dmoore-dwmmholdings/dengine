@@ -378,12 +378,24 @@ DE_API u32 de_gpu_accel_bindless(de_gpu_device *d, de_gpu_accel tlas);
 
 /* ---------- Queries ---------- */
 typedef enum de_gpu_query_type { DE_QUERY_TIMESTAMP } de_gpu_query_type;
-/** Query heap. `count` > 0 is required. */
+/**
+ * Query heap (S10, DENG-326): `count` timestamp queries, 1 .. DE_GPU_MAX_QUERIES. `queue` is the
+ * queue whose command lists write it: a heap for DE_QUEUE_GRAPHICS or DE_QUEUE_COMPUTE serves
+ * both of those queues; a DE_QUEUE_COPY heap serves only copy lists. A device that cannot time
+ * copies refuses a copy heap with DE_ERR_UNSUPPORTED (D3D12 without copy-queue timestamps, Vulkan
+ * with a transfer-only copy family): time copies on the graphics or compute queue there.
+ * A query holds its value until it is written again; resolve only queries written by this list
+ * or by a list submitted before it.
+ */
 typedef struct de_gpu_query_heap_desc {
     de_gpu_query_type type;
     u32 count;
     const char *name;
+    de_gpu_queue queue; /**< DENG-326; 0 = DE_QUEUE_GRAPHICS */
 } de_gpu_query_heap_desc;
+/** Most queries in one heap. Metal holds at most 4096 (its counter sample buffer limit) and
+ * refuses more with DE_ERR_UNSUPPORTED. */
+#define DE_GPU_MAX_QUERIES 65536u
 DE_API de_gpu_query_heap de_gpu_query_heap_create(de_gpu_device *d,
                                                   const de_gpu_query_heap_desc *desc);
 DE_API void de_gpu_query_heap_destroy(de_gpu_device *d, de_gpu_query_heap h);
@@ -473,7 +485,15 @@ DE_API void de_gpu_cmd_copy_buffer_to_texture(de_gpu_cmd *c, de_gpu_texture dst,
 DE_API void de_gpu_cmd_copy_texture_to_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off,
                                               u32 row_pitch, de_gpu_texture src, u32 mip,
                                               u32 layer);
+/**
+ * Opens a named debug region (S10, DENG-326) that capture tools show: VK_EXT_debug_utils labels
+ * on Vulkan, PIX-compatible events on D3D12, debug groups on Metal. `color` is 0xRRGGBB (0 = the
+ * tool's default; D3D12 events carry no colour). Regions nest and must be closed by
+ * de_gpu_cmd_marker_pop before the list is submitted; a region opened inside a render pass
+ * closes before de_gpu_cmd_end_render (checked in Debug and Dev). The name is copied.
+ */
 DE_API void de_gpu_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
+/** Closes the innermost region opened by de_gpu_cmd_marker_push. */
 DE_API void de_gpu_cmd_marker_pop(de_gpu_cmd *c);
 DE_API void de_gpu_cmd_breadcrumb(de_gpu_cmd *c, u32 id); /* GPU crash diagnostics */
 /* S10 (DENG-323): draws, index buffer, scissor, mesh dispatch. Draws and mesh dispatches need a
@@ -498,9 +518,25 @@ DE_API void de_gpu_cmd_scissor(de_gpu_cmd *c, i32 x, i32 y, u32 w, u32 h);
 /** Dispatches x*y*z threadgroups of a MESH pipeline: of its amplification shader when it has
  * one, else of its mesh shader. */
 DE_API void de_gpu_cmd_dispatch_mesh(de_gpu_cmd *c, u32 x, u32 y, u32 z);
-/** Writes the GPU timestamp (caps.timestamp_frequency ticks per second) into query `index`. */
+/**
+ * Writes the GPU time into query `index` of `h` once the commands recorded before it have
+ * finished (S10, DENG-326). Ticks run at de_gpu_timestamp_frequency(d, queue) per second; convert
+ * a difference with de_gpu_timestamp_to_ms. Outside render passes only. Values are monotonic in
+ * the order of the timestamps within one list. Per backend:
+ *   - Vulkan: vkCmdWriteTimestamp2 at ALL_COMMANDS (the query is reset just before).
+ *   - D3D12: EndQuery on a TIMESTAMP (copy queue: COPY_QUEUE_TIMESTAMP) heap.
+ *   - Metal: Apple GPUs sample time only at encoder (stage) boundaries, so a timestamp ends the
+ *     open encoder and becomes a small blit encoder of its own that samples at its start. It
+ *     waits for every earlier encoder of the list and every later encoder waits for it: a
+ *     timestamp is also a full barrier on Metal.
+ */
 DE_API void de_gpu_cmd_timestamp(de_gpu_cmd *c, de_gpu_query_heap h, u32 index);
-/** Copies queries [first, first + count) of `h` into `dst` at `dst_off` as u64 values. */
+/**
+ * Copies queries [first, first + count) of `h` into `dst` at `dst_off` (a multiple of 8) as u64
+ * ticks, in order. Outside render passes. `dst` needs DE_USAGE_COPY_DST and must be in
+ * DE_ACCESS_COPY_DST; typically a DE_MEM_READBACK buffer read after the list's fence. A query that
+ * was never written resolves to an undefined value (UINT64_MAX on Metal).
+ */
 DE_API void de_gpu_cmd_resolve_queries(de_gpu_cmd *c, de_gpu_query_heap h, u32 first, u32 count,
                                        de_gpu_buffer dst, u64 dst_off);
 
@@ -566,6 +602,40 @@ DE_API de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s,
 DE_API de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s);
 DE_API de_result de_gpu_swapchain_resize(de_gpu_device *d, de_gpu_swapchain s, u32 w, u32 h);
 DE_API de_gpu_colorspace de_gpu_swapchain_colorspace(de_gpu_device *d, de_gpu_swapchain s);
+
+/* ---------- Timestamps and GPU profiler zones (S10, DENG-326; SPEC §12.3, §18.1) ---------- */
+
+/**
+ * Timestamp ticks per second of queue `q` (de_gpu_cmd_timestamp). Usually caps.timestamp_frequency;
+ * D3D12 asks each queue (its copy queue may count at another rate). 0 for a NULL device.
+ */
+DE_API u64 de_gpu_timestamp_frequency(de_gpu_device *d, de_gpu_queue q);
+/** `ticks` (a difference of two timestamps of queue `q`) in milliseconds. 0 for a NULL device. */
+DE_API f64 de_gpu_timestamp_to_ms(de_gpu_device *d, de_gpu_queue q, u64 ticks);
+
+/**
+ * One timed GPU region for de_gpu_profile_zones: `begin` and `end` index the resolved ticks.
+ * Regions are listed in the order they were opened; `depth` is 0 at the top level, and a region
+ * at depth n + 1 lies inside the nearest earlier region at depth n (what a stack of
+ * marker_push / marker_pop scopes gives).
+ */
+typedef struct de_gpu_zone {
+    const char *name; /**< copied */
+    u32 color;        /**< 0xRRGGBB, 0 = default */
+    u32 begin, end;   /**< indices into `ticks` */
+    u32 depth;
+} de_gpu_zone;
+
+/**
+ * Sends timed regions of queue `q` to the profiler as GPU zones (SPEC §18.1): one Tracy GPU
+ * context per device and queue, made on first use. `ticks` are `tick_count` resolved timestamps
+ * of `q` (de_gpu_cmd_resolve_queries, read back after the list completed). Regions with an index
+ * out of range or an unwritten tick (0 or UINT64_MAX) are skipped, with their children. Does
+ * nothing unless the build has DE_PROFILE and the profiler runs (de_prof_init); never refers to
+ * Tracy otherwise. Thread-safe: it holds the queue's submit lock while it sends.
+ */
+DE_API void de_gpu_profile_zones(de_gpu_device *d, de_gpu_queue q, const de_gpu_zone *zones,
+                                 u32 zone_count, const u64 *ticks, u32 tick_count);
 
 /* ---------- Tier evaluation (DENG-290; SPEC §3.3, §12.8, §24 R5/R7) ---------- */
 
