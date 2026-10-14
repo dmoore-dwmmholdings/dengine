@@ -121,6 +121,13 @@ DE_API de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **
  * ignored. */
 DE_API void de_renderer_destroy(de_renderer *r);
 /* Registers render components + the Extract system into the world. */
+/**
+ * (DENG-175) Also adds the Extract systems (`de.render.extract_views`, `_meshes`, `_lights` in
+ * DE_SCHEDULE_EXTRACT) that copy cameras, mesh renderers, lights and the environment into the
+ * renderer's render world. Attaching the same world again changes nothing; attaching another
+ * world switches the render world to it. One renderer per world. Destroy the renderer before the
+ * world (de_renderer_destroy removes its systems). Main thread, not while a schedule runs.
+ */
 DE_API void de_renderer_attach(de_renderer *r, de_world *w);
 /**
  * Requests new settings; they apply at the next de_renderer_render_frame. Clamped to the device:
@@ -134,6 +141,12 @@ DE_API void de_renderer_set_settings(de_renderer *r, const de_render_settings *s
 /** The settings in effect (clamped), including a request not applied yet. Any thread. */
 DE_API de_render_settings de_renderer_get_settings(const de_renderer *r);
 /* Called by the host on the render thread after Extract. */
+/**
+ * (DENG-175) The host does not call it directly: after the Extract schedule it hands the
+ * extracted frame to the render thread (cvar `r.pipelined`, default 1), which calls this while
+ * the simulation runs the next frame; with `r.pipelined = 0` it runs right after Extract on the
+ * main thread. One thread at a time.
+ */
 DE_API de_result de_renderer_render_frame(de_renderer *r);
 
 /* ---------- Views ---------- */
@@ -469,6 +482,10 @@ typedef struct de_render_stats {
     u32 pass_count;
     const char *const *pass_names;
     const f32 *pass_gpu_ms;
+    /* Extract (DENG-175), written on the main thread at each kick: */
+    u32 extract_instances; /**< mesh instances in the render world */
+    u32 extract_lights;    /**< lights in the render world */
+    f32 extract_cpu_ms;    /**< from taking the render-world buffer to the kick */
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 

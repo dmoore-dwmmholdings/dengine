@@ -9,7 +9,7 @@
  *   2. First, PreUpdate
  *   3. FixedUpdate 0..N times (timing.c decides N, dt and alpha)
  *   4. Update, PostUpdate
- *   5. Extract, render thread kick (no-op until S12)
+ *   5. Extract, render thread kick (de__render_extract_and_kick, DENG-175)
  *   6. Last, frame-end hooks, frame arena swap, frame pacing
  *
  * Nothing here allocates per frame: the hook lists are fixed arrays in de__host, the event
@@ -22,6 +22,9 @@
 
 #include <dengine/de_debug.h>
 #include <dengine/de_input.h> /* DENG-84 */
+#if DE_HAS_RENDER
+#include "render/world/render_world.h" /* DENG-175: de__render_extract_and_kick */
+#endif
 
 #include <errno.h>
 #include <stdlib.h>
@@ -191,10 +194,15 @@ static void loop_input_update(de__host *h) {
         de_input_begin_frame(h->engine->input);
 }
 
-/* Step 5, second half: kicks the render thread to record the extracted frame. No render thread
- * until S12 (pipelined rendering). */
+/* Step 5, second half: kicks the render thread to record the extracted frame (DENG-175; a frame
+ * error is logged by the renderer). Nothing without a renderer. */
 static void loop_render_kick(de__host *h) {
+#if DE_HAS_RENDER
+    if (h->engine->renderer != NULL)
+        (void)de__render_extract_and_kick(h->engine->renderer, h->engine->world);
+#else
     (void)h;
+#endif
 }
 
 /* Rate-limited "fell behind" warning state. */

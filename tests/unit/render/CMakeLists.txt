@@ -136,3 +136,19 @@ if(TARGET test_render_graph_gpu)
         endif()
     endif()
 endif()
+
+# DENG-175: the render world, the Extract systems and the pipelined render thread
+# (src/render/world/), executable test_render_world; CTest names render_world.extract.<test>
+# (test_extract.c: f32 transforms relative to the render origin, rebases, change lists, removals,
+# no heap allocation once warm) and render_world.render_thread.<test> (test_render_thread.c: the
+# simulation runs exactly one frame ahead of a slow render thread; r.pipelined 0 and 1 give the
+# same render world). test_render_world.h is their shared fixture (defined in test_extract.c), on
+# the null backend. The pipelined test is an S12 exit check under TSan (ci-linux-tsan).
+de_add_test(NAME render_world
+    SOURCES test_extract.c test_render_thread.c
+    LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
+    LABELS unit render
+    TIMEOUT 300)
+if(TARGET test_render_world)
+    target_include_directories(test_render_world PRIVATE "${DE_ROOT_DIR}/src")
+endif()

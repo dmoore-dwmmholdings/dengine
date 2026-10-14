@@ -145,6 +145,10 @@ struct de_renderer {
     de_rg_resource target_res; /**< the target's graph handle this frame */
 
     de_render_stats stats;
+
+    /* DENG-175: the render world, the Extract systems and the render thread (world/render_world.h);
+     * NULL until de_renderer_attach. */
+    struct de__render_world *render_world;
 };
 
 /* ---------- Settings (settings.c) ---------- */
