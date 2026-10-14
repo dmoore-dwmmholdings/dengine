@@ -160,8 +160,10 @@ jobs:
             preset: linux-clang-debug
             backend: vulkan
             # DENG-105: render_loaders.* uploads, hands over and reads back assets on lavapipe.
-            targets: de_golden test_flip hello_triangle test_render_loaders
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.)'
+            # DENG-414: render_graph_gpu.* runs compiled render graphs (transfers, aliasing, a
+            # transient buffer reused across frames) with validation + synchronization validation.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
