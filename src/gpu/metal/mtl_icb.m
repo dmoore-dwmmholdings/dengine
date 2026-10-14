@@ -219,8 +219,8 @@ void de__mtl_cmd_draw_indexed_indirect(de_gpu_cmd *c, de__gpu_buffer *args, u64 
             plain_draws(c, args, offset, max_draws);
             return;
         }
-        if (max_draws == 0 || !mc->encoder || mc->kind != DE__MTL_ENC_RENDER ||
-            mc->render_ended || !ds->index_buffer || ds->kind != DE_PIPE_GRAPHICS)
+        if (max_draws == 0 || !mc->encoder || mc->kind != DE__MTL_ENC_RENDER || mc->render_ended ||
+            !ds->index_buffer || ds->kind != DE_PIPE_GRAPHICS)
             return;
         if (max_draws > ICB_MAX_COMMANDS) {
             DE_WARN(c->device->log,

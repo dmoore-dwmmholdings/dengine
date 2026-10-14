@@ -70,10 +70,9 @@ void de__mtl_caps_fill(void *device, de_gpu_caps *caps) {
         caps->max_bindless_storage_textures = DE__MTL_BINDLESS_STORAGE_TEXTURES;
         caps->max_bindless_buffers = DE__MTL_BINDLESS_BUFFERS;
         u64 samplers = dev.maxArgumentBufferSamplerCount;
-        caps->max_bindless_samplers = samplers < DE__MTL_BINDLESS_SAMPLERS
-                                          ? (u32)samplers
-                                          : DE__MTL_BINDLESS_SAMPLERS;
-        caps->max_bindless_accels = 0; /* S16 */
+        caps->max_bindless_samplers =
+            samplers < DE__MTL_BINDLESS_SAMPLERS ? (u32)samplers : DE__MTL_BINDLESS_SAMPLERS;
+        caps->max_bindless_accels = 0;                                  /* S16 */
         caps->max_push_constant_bytes = DE_GPU_MAX_PUSH_CONSTANT_BYTES; /* setBytes, index 1 */
 
         /* GPU timestamps (counter samples, sampleTimestamps:gpuTimestamp:) count nanoseconds,

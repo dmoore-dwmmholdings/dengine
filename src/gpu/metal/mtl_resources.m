@@ -175,8 +175,8 @@ static de_result place_buffer(de_gpu_device *d, de__gpu_buffer *b, const de_gpu_
         if (buf == nil)
             return de__gpu_fail(d, DE_ERR_OUT_OF_MEMORY,
                                 "metal: buffer \"%s\" (%llu bytes) at offset %llu of heap \"%s\"",
-                                b->name, (unsigned long long)desc->size,
-                                (unsigned long long)offset, h.label.UTF8String);
+                                b->name, (unsigned long long)desc->size, (unsigned long long)offset,
+                                h.label.UTF8String);
         if (b->name[0])
             buf.label = [NSString stringWithUTF8String:b->name];
         mtl_buffer *mb = DE__GPU_PAYLOAD(mtl_buffer, b);
@@ -384,8 +384,8 @@ static void *make_sampler(de_gpu_device *d, const de_gpu_sampler_desc *desc) {
         sd.sAddressMode = address_mode(desc->u, border);
         sd.tAddressMode = address_mode(desc->v, border);
         sd.rAddressMode = address_mode(desc->w, border);
-        if (border && (desc->u == DE_ADDR_BORDER || desc->v == DE_ADDR_BORDER ||
-                       desc->w == DE_ADDR_BORDER))
+        if (border &&
+            (desc->u == DE_ADDR_BORDER || desc->v == DE_ADDR_BORDER || desc->w == DE_ADDR_BORDER))
             sd.borderColor = MTLSamplerBorderColorTransparentBlack;
         NSUInteger aniso = desc->max_aniso >= 1.0f ? (NSUInteger)desc->max_aniso : 1u;
         sd.maxAnisotropy = aniso > 16u ? 16u : aniso;

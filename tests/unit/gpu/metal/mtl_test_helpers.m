@@ -230,8 +230,8 @@ int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[6], de_gpu_buff
             destinationOffset:0
                          size:bytes];
         copy_texel(blit, (__bridge id<MTLTexture>)de__mtl_texture_object(d, rw, -1), 0, texels, 0);
-        copy_texel(blit, (__bridge id<MTLTexture>)de__mtl_texture_object(d, rw_mips, -1), 1,
-                   texels, 4);
+        copy_texel(blit, (__bridge id<MTLTexture>)de__mtl_texture_object(d, rw_mips, -1), 1, texels,
+                   4);
         [blit endEncoding];
         if (!run_and_wait(cb, err, cap))
             return 0;

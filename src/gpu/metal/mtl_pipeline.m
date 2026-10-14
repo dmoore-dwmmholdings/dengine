@@ -137,8 +137,8 @@ static id<MTLFunction> function_of(de_gpu_device *d, const de__gpu_pipeline *p, 
         } else {
             NSString *list = [names componentsJoinedByString:@"\", \""];
             de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
-                         F "(\"%s\"): %s metallib has no function \"%s\" (it has \"%s\")",
-                         pname(p), stage, b->entry ? b->entry : "", list.UTF8String);
+                         F "(\"%s\"): %s metallib has no function \"%s\" (it has \"%s\")", pname(p),
+                         stage, b->entry ? b->entry : "", list.UTF8String);
             return nil;
         }
     }
@@ -265,9 +265,9 @@ static u32 struct_used(MTLStructType *st) {
 }
 
 typedef struct push_info {
-    u32 stages;   /* DE__MTL_PUSH_* with a binding at index 1 */
-    u32 size;     /* largest binding size */
-    u32 used;     /* largest member coverage */
+    u32 stages;        /* DE__MTL_PUSH_* with a binding at index 1 */
+    u32 size;          /* largest binding size */
+    u32 used;          /* largest member coverage */
     const char *stage; /* the stage with the largest coverage */
 } push_info;
 
@@ -389,7 +389,7 @@ static void set_blend(MTLRenderPipelineColorAttachmentDescriptor *a, de_gpu_blen
             set_blend((rd).colorAttachments[i_], (desc)->blend[i_]);                               \
         }                                                                                          \
         if ((p)->depth_format != DE_FMT_UNKNOWN) {                                                 \
-            (rd).depthAttachmentPixelFormat =                                                  \
+            (rd).depthAttachmentPixelFormat =                                                      \
                 (MTLPixelFormat)de__mtl_pixel_format((p)->depth_format);                           \
             if ((p)->depth_format == DE_FMT_D32_FLOAT_S8)                                          \
                 (rd).stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;           \
@@ -398,14 +398,15 @@ static void set_blend(MTLRenderPipelineColorAttachmentDescriptor *a, de_gpu_blen
     } while (0)
 
 static MTLCullMode cull_mode(de_gpu_cull c) {
-    return c == DE_CULL_BACK ? MTLCullModeBack : c == DE_CULL_FRONT ? MTLCullModeFront
-                                                                    : MTLCullModeNone;
+    return c == DE_CULL_BACK    ? MTLCullModeBack
+           : c == DE_CULL_FRONT ? MTLCullModeFront
+                                : MTLCullModeNone;
 }
 
 static id<MTLDepthStencilState> depth_state(de_gpu_device *d, const de_gpu_pipeline_desc *desc) {
     MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
-    dd.depthCompareFunction = desc->depth_test ? MTLCompareFunctionGreaterEqual
-                                               : MTLCompareFunctionAlways;
+    dd.depthCompareFunction =
+        desc->depth_test ? MTLCompareFunctionGreaterEqual : MTLCompareFunctionAlways;
     dd.depthWriteEnabled = desc->depth_write ? YES : NO;
     return [(__bridge id<MTLDevice>)de__mtl_dev(d)->device newDepthStencilStateWithDescriptor:dd];
 }
@@ -619,8 +620,8 @@ de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
             r = create_compute(d, p, mp, desc);
             break;
         default:
-            r = de__gpu_fail(d, DE_ERR_UNSUPPORTED, F "(\"%s\"): metal: pipeline kind %d",
-                             pname(p), (int)desc->kind);
+            r = de__gpu_fail(d, DE_ERR_UNSUPPORTED, F "(\"%s\"): metal: pipeline kind %d", pname(p),
+                             (int)desc->kind);
             break;
         }
         if (r == DE_OK && desc->kind != DE_PIPE_COMPUTE) {

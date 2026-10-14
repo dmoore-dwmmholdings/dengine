@@ -210,10 +210,9 @@ de_result de__mtl_bindless_init(de_gpu_device *d) {
     @autoreleasepool {
         mtl_device *m = de__mtl_dev(d);
         id<MTLDevice> dev = (__bridge id<MTLDevice>)m->device;
-        id<MTLBuffer> table =
-            [dev newBufferWithLength:DE__MTL_BINDLESS_BYTES
-                             options:MTLResourceStorageModeShared |
-                                     MTLResourceHazardTrackingModeUntracked];
+        id<MTLBuffer> table = [dev newBufferWithLength:DE__MTL_BINDLESS_BYTES
+                                               options:MTLResourceStorageModeShared |
+                                                       MTLResourceHazardTrackingModeUntracked];
         if (table == nil)
             return de__gpu_fail(d, DE_ERR_OUT_OF_MEMORY,
                                 "metal: bindless argument buffer (%u bytes)",
@@ -224,8 +223,8 @@ de_result de__mtl_bindless_init(de_gpu_device *d) {
 
         /* The storage-texture list: one block, objects, then slots, then positions. */
         const size_t n = DE__MTL_BINDLESS_STORAGE_TEXTURES;
-        u8 *block = (u8 *)DE_ALLOC(d->alloc, n * (sizeof(void *) + 2 * sizeof(u32)), 16,
-                                   DE_MEM_RENDER);
+        u8 *block =
+            (u8 *)DE_ALLOC(d->alloc, n * (sizeof(void *) + 2 * sizeof(u32)), 16, DE_MEM_RENDER);
         if (!block)
             return de__gpu_fail(d, DE_ERR_OUT_OF_MEMORY, "metal: storage-texture list");
         memset(block, 0, n * (sizeof(void *) + 2 * sizeof(u32)));

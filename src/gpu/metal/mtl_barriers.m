@@ -238,8 +238,10 @@ void de__mtl_cmd_finish(de_gpu_cmd *c) {
         id<MTLFence> qf = (__bridge id<MTLFence>)m->queue_fence[c->queue];
         id<MTLBlitCommandEncoder> tail = [cb blitCommandEncoder];
         if (tail == nil) {
-            DE_ERROR(c->device->log, "metal: \"%s\": no tail encoder; the queue fence is not "
-                                     "updated", c->name);
+            DE_ERROR(c->device->log,
+                     "metal: \"%s\": no tail encoder; the queue fence is not "
+                     "updated",
+                     c->name);
             return;
         }
         tail.label = @"de queue fence";
