@@ -159,8 +159,7 @@ void de__mtl_capture_end(de_gpu_device *d) {
     }
 }
 
-bool de__mtl_object_label(de_gpu_device *d, de__gpu_kind kind, u32 handle, char *out,
-                          size_t cap) {
+bool de__mtl_object_label(de_gpu_device *d, de__gpu_kind kind, u32 handle, char *out, size_t cap) {
     if (out && cap)
         out[0] = '\0';
     if (!is_metal(d) || !out || cap == 0)

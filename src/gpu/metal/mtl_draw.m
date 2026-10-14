@@ -67,8 +67,8 @@ void de__mtl_draw_begin_render(de_gpu_cmd *c, const de_gpu_attachment *colors, u
     mtl_draw_state *ds = state_of(c);
     de__mtl_cmd_begin_render(c, colors, color_count, depth);
     /* Kept for a split (mtl_icb.m), and for the render area. */
-    ds->color_count = color_count < DE_GPU_MAX_COLOR_ATTACHMENTS ? color_count
-                                                                   : DE_GPU_MAX_COLOR_ATTACHMENTS;
+    ds->color_count =
+        color_count < DE_GPU_MAX_COLOR_ATTACHMENTS ? color_count : DE_GPU_MAX_COLOR_ATTACHMENTS;
     if (ds->color_count)
         memcpy(ds->colors, colors, sizeof(de_gpu_attachment) * ds->color_count);
     ds->has_depth = depth != NULL;
@@ -100,10 +100,10 @@ void de__mtl_draw_viewport(de_gpu_cmd *c, f32 x, f32 y, f32 w, f32 h) {
 
 void de__mtl_scissor_rect(i32 x, i32 y, u32 w, u32 h, u32 area_w, u32 area_h, u32 out[4]) {
     i64 x0 = x, y0 = y, x1 = (i64)x + (i64)w, y1 = (i64)y + (i64)h;
-    x0 = x0 < 0 ? 0 : x0 > (i64)area_w ? (i64)area_w : x0;
-    y0 = y0 < 0 ? 0 : y0 > (i64)area_h ? (i64)area_h : y0;
-    x1 = x1 < 0 ? 0 : x1 > (i64)area_w ? (i64)area_w : x1;
-    y1 = y1 < 0 ? 0 : y1 > (i64)area_h ? (i64)area_h : y1;
+    x0 = x0 < 0 ? 0 : (x0 > (i64)area_w ? (i64)area_w : x0);
+    y0 = y0 < 0 ? 0 : (y0 > (i64)area_h ? (i64)area_h : y0);
+    x1 = x1 < 0 ? 0 : (x1 > (i64)area_w ? (i64)area_w : x1);
+    y1 = y1 < 0 ? 0 : (y1 > (i64)area_h ? (i64)area_h : y1);
     if (x0 > x1)
         x0 = x1;
     if (y0 > y1)
@@ -141,8 +141,7 @@ void *de__mtl_draw_render_encoder(de_gpu_cmd *c) {
         [r setFrontFacingWinding:MTLWindingCounterClockwise];
     }
     if ((dirty & DE__MTL_DIRTY_VIEWPORT) && ds->has_viewport)
-        de__mtl_cmd_viewport(c, ds->viewport[0], ds->viewport[1], ds->viewport[2],
-                             ds->viewport[3]);
+        de__mtl_cmd_viewport(c, ds->viewport[0], ds->viewport[1], ds->viewport[2], ds->viewport[3]);
     if ((dirty & DE__MTL_DIRTY_SCISSOR) && ds->has_scissor) {
         u32 s[4];
         de__mtl_scissor_rect(ds->scissor_xy[0], ds->scissor_xy[1], ds->scissor_wh[0],

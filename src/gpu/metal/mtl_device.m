@@ -156,8 +156,8 @@ static void mtl_wait_idle(de_gpu_device *d) {
         for (u32 i = 0; i < 100000 && mtl_queue_completed(d, (de_gpu_queue)q) < target; ++i)
             de_sleep_ns(10000);
         if (mtl_queue_completed(d, (de_gpu_queue)q) < target)
-            DE_WARN(d->log, "metal: wait_idle: the %s queue is at %llu, not %llu",
-                    k_queue_names[q], (unsigned long long)mtl_queue_completed(d, (de_gpu_queue)q),
+            DE_WARN(d->log, "metal: wait_idle: the %s queue is at %llu, not %llu", k_queue_names[q],
+                    (unsigned long long)mtl_queue_completed(d, (de_gpu_queue)q),
                     (unsigned long long)target);
     }
 }

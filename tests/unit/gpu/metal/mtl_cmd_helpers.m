@@ -41,8 +41,8 @@ static NSString *const k_copy_kernel =
      "    for (uint i = 0; i < pc->count; ++i) out[i] = in[i] * 2.0;\n"
      "}\n";
 
-int de_test_mtl_dispatch_copy(de_gpu_device *d, void *compute_encoder, u32 in_index,
-                              u32 out_index, u32 count, char *err, size_t cap) {
+int de_test_mtl_dispatch_copy(de_gpu_device *d, void *compute_encoder, u32 in_index, u32 out_index,
+                              u32 count, char *err, size_t cap) {
     @autoreleasepool {
         id<MTLDevice> dev = (__bridge id<MTLDevice>)de__mtl_device_object(d);
         MTLCompileOptions *opts = [MTLCompileOptions new];

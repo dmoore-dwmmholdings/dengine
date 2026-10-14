@@ -32,9 +32,9 @@
 #include <string.h>
 
 /** Bytes of fault text kept per device; command buffers recorded in full. */
-#define FAULT_TEXT  8192u
-#define FAULT_CBS   4u
-#define FAULT_LOGS  4u
+#define FAULT_TEXT 8192u
+#define FAULT_CBS  4u
+#define FAULT_LOGS 4u
 
 @interface DEMtlFaultLog : NSObject {
   @public
@@ -118,8 +118,8 @@ static void fput(DEMtlFaultLog *f, const char *fmt, ...) {
  * error, each encoder's status) and its shader logs (may be nil). */
 static void describe(DEMtlFaultLog *f, NSString *label, NSError *err, id<MTLLogContainer> logs,
                      const char *queue) {
-    fput(f, "command buffer \"%s\" on the %s queue failed: %s %s (code %ld)\n", str(label),
-         queue, err ? str(err.domain) : "no error", err ? cb_error_name(err.code) : "",
+    fput(f, "command buffer \"%s\" on the %s queue failed: %s %s (code %ld)\n", str(label), queue,
+         err ? str(err.domain) : "no error", err ? cb_error_name(err.code) : "",
          err ? (long)err.code : 0L);
     if (err) {
         fput(f, "  %s\n", str(err.localizedDescription));
@@ -215,13 +215,13 @@ bool de__mtl_errors_simulate(de_gpu_device *d, const char *list, const char *gro
                                                  groups:@[ g ]
                                                   state:MTLCommandEncoderErrorStatePending],
         ];
-        NSError *under = [NSError
-            errorWithDomain:@"IOGPUCommandQueueErrorDomain"
-                       code:3
-                   userInfo:@{
-                       NSLocalizedDescriptionKey :
-                           @"Caused GPU Address Fault Error (simulated by the test)"
-                   }];
+        NSError *under =
+            [NSError errorWithDomain:@"IOGPUCommandQueueErrorDomain"
+                                code:3
+                            userInfo:@{
+                                NSLocalizedDescriptionKey :
+                                    @"Caused GPU Address Fault Error (simulated by the test)"
+                            }];
         NSError *err = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                            code:MTLCommandBufferErrorPageFault
                                        userInfo:@{
@@ -256,10 +256,9 @@ de_result de__mtl_errors_init(de_gpu_device *d, const de_gpu_device_desc *desc) 
         m->fault_log = (void *)CFBridgingRetain(f);
         id<MTLDevice> dev = (__bridge id<MTLDevice>)m->device;
         for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
-            id<MTLBuffer> v =
-                [dev newBufferWithLength:DE__GPU_BC_SLOTS * 4u
-                                 options:MTLResourceStorageModeShared |
-                                         MTLResourceHazardTrackingModeUntracked];
+            id<MTLBuffer> v = [dev newBufferWithLength:DE__GPU_BC_SLOTS * 4u
+                                               options:MTLResourceStorageModeShared |
+                                                       MTLResourceHazardTrackingModeUntracked];
             if (v == nil)
                 return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "metal: breadcrumb staging buffer");
             v.label = @"de breadcrumb values";
@@ -312,8 +311,9 @@ size_t de__mtl_device_lost_report(de_gpu_device *d, char *out, size_t cap) {
     DEMtlFaultLog *f = (__bridge DEMtlFaultLog *)de__mtl_dev(d)->fault_log;
     int w;
     if (f == nil) {
-        w = snprintf(out, cap,
-                     "command-buffer error capture is off (de_gpu_device_desc.crash_breadcrumbs)\n");
+        w = snprintf(
+            out, cap,
+            "command-buffer error capture is off (de_gpu_device_desc.crash_breadcrumbs)\n");
     } else {
         os_unfair_lock_lock(&f->lock);
         if (f->failures == 0)

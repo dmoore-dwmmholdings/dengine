@@ -72,16 +72,18 @@ de_result de__mtl_swapchain_create(de_gpu_device *d, de__gpu_swapchain *s,
     @autoreleasepool {
         id obj = (__bridge id)nw.metal_layer;
         if (![obj isKindOfClass:[CAMetalLayer class]])
-            return de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: metal: the window's layer is not a "
-                                                       "CAMetalLayer", F);
+            return de__gpu_fail(d, DE_ERR_UNSUPPORTED,
+                                "%s: metal: the window's layer is not a "
+                                "CAMetalLayer",
+                                F);
         CAMetalLayer *layer = (CAMetalLayer *)obj;
         layer.device = (__bridge id<MTLDevice>)de__mtl_dev(d)->device;
         layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
         layer.framebufferOnly = NO;
         layer.maximumDrawableCount = count;
         layer.allowsNextDrawableTimeout = YES;
-        ms->present = desc->present == DE_PRESENT_IMMEDIATE ? DE_PRESENT_IMMEDIATE
-                                                            : DE_PRESENT_VSYNC;
+        ms->present =
+            desc->present == DE_PRESENT_IMMEDIATE ? DE_PRESENT_IMMEDIATE : DE_PRESENT_VSYNC;
         layer.displaySyncEnabled = ms->present != DE_PRESENT_IMMEDIATE;
         if (w && h)
             layer.drawableSize = CGSizeMake(w, h);
@@ -117,8 +119,7 @@ de_result de__mtl_swapchain_acquire(de_gpu_device *d, de__gpu_swapchain *s, de_g
     @autoreleasepool {
         id<CAMetalDrawable> dr = [layer_of(ms) nextDrawable];
         if (dr == nil)
-            return DE_FAIL(DE_ERR_TIMEOUT, "%s: metal: no drawable became free within a second",
-                           F);
+            return DE_FAIL(DE_ERR_TIMEOUT, "%s: metal: no drawable became free within a second", F);
         id<MTLTexture> tex = dr.texture;
         de_gpu_texture_desc td = {.dim = DE_TEX_2D,
                                   .format = DE_FMT_BGRA8_SRGB,

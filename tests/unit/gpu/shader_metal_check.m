@@ -6,16 +6,15 @@
 #include <stdio.h>
 
 /* 1: the library loads and has `entry`; 0: it does not (reason in `err`); -1: no Metal device. */
-int de_test_metallib_load(const void *data, size_t size, const char *entry, char *err,
-                          size_t cap);
+int de_test_metallib_load(const void *data, size_t size, const char *entry, char *err, size_t cap);
 
-int de_test_metallib_load(const void *data, size_t size, const char *entry, char *err,
-                          size_t cap) {
+int de_test_metallib_load(const void *data, size_t size, const char *entry, char *err, size_t cap) {
     @autoreleasepool {
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         if (dev == nil)
             return -1;
-        dispatch_data_t d = dispatch_data_create(data, size, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        dispatch_data_t d =
+            dispatch_data_create(data, size, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
         NSError *e = nil;
         id<MTLLibrary> lib = [dev newLibraryWithData:d error:&e];
         if (lib == nil) {
