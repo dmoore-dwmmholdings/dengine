@@ -194,3 +194,16 @@ if(TARGET de_render)
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS
         "$<TARGET_NAME_IF_EXISTS:de_gpu_shader>")
 endif()
+
+# DENG-229: the visibility-buffer frame (passes/vis/: vis_frame.c registers the view stage
+# "vis.frame" and calls the stages of vis_stages.h in order; cull_instances.c is GPU instance
+# culling; vis_stages_stub.c holds the stages later S13 tasks implement). Its shaders are engine
+# shaders (shaders/engine_shaders.cmake, DENG-421): vis_instance_cull is
+# shaders/culling/instance_cull.slang, which imports shaders/scene/ and shaders/visbuffer/.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/vis/vis_stages.h
+        passes/vis/vis_frame.c
+        passes/vis/vis_stages_stub.c
+        passes/vis/cull_instances.c)
+endif()
