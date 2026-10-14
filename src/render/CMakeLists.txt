@@ -58,3 +58,15 @@ if(TARGET de_render)
         components_internal.h
         components.c)
 endif()
+
+# DENG-175: the render world (world/render_world.c: the f32 render-world buffers, slot pools and the
+# render origin), the Extract systems (world/extract.c, added by de_renderer_attach) and the render
+# thread with the Extract handoff (world/render_thread.c; de__render_extract_and_kick, called by the
+# host main loop at step 5).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        world/render_world.h
+        world/render_world.c
+        world/extract.c
+        world/render_thread.c)
+endif()

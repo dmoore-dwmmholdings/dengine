@@ -12,6 +12,7 @@
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
+#include "render/world/render_world.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -216,6 +217,7 @@ fail:
 void de_renderer_destroy(de_renderer *r) {
     if (r == NULL)
         return;
+    de__render_world_destroy(r); /* DENG-175: render thread, Extract systems */
     if (r->frame_index > 0)
         (void)de_gpu_fence_wait(r->dev, r->frame_fence, r->frame_index,
                                 DE__RENDER_FENCE_TIMEOUT_NS);
@@ -230,6 +232,7 @@ void de_renderer_attach(de_renderer *r, de_world *w) {
     /* ---- DENG-178: register the render components here (one call) ---- */
     de__render_components_attach(r, w);
     /* ---- DENG-175: register the Extract systems here (one call) ---- */
+    de__render_world_attach(r, w);
 }
 
 /* ---------- Settings ---------- */
