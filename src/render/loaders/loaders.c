@@ -48,6 +48,7 @@ typedef struct model_obj {
     de_asset_id *mesh_ids, *material_ids;
     u32 *node_mesh; /* per node: index into mesh_ids, DE_COOKED_NONE */
     u64 prefab_id;
+    de__render_retire retire_; /* DENG-422 */
 } model_obj;
 
 de_result de__model_load(de_asset_load_ctx *ctx) {
@@ -113,11 +114,18 @@ de_result de__model_load(de_asset_load_ctx *ctx) {
     return DE_OK;
 }
 
+static void model_free(de_render_uploader *u, void *object) {
+    model_obj *m = (model_obj *)object;
+    DE_FREE(u->alloc, m, m->pub.block_size_);
+}
+
+/* The record waits for the frame fence like the others (DENG-422): the render thread never
+ * reads models, but the rule is per type, not per reader. */
 void de__model_unload(void *object, void *user) {
     de_render_uploader *u = (de_render_uploader *)user;
     model_obj *m = (model_obj *)object;
     if (m != NULL)
-        DE_FREE(u->alloc, m, m->pub.block_size_);
+        de__uploader_retire(u, &m->retire_, m, model_free);
 }
 
 /* Main thread, every sub-asset READY: IDs to handles. A sub-asset this runtime cannot name (its
@@ -248,6 +256,7 @@ void de_render_uploader_destroy(de_render_uploader *u) {
     if (u == NULL)
         return;
     const de_allocator *a = u->alloc;
+    de__uploader_retire_all(u); /* DENG-422: the renderer waited for the GPU */
     de__uploader_fini(u);
     DE_FREE(a, u, sizeof *u);
 }

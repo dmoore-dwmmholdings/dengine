@@ -214,6 +214,8 @@ de_result de__uploader_init(de_render_uploader *u, u64 ring_bytes, u64 frame_cap
         align_up(ring_bytes != 0 ? ring_bytes : (u64)128 << 20, DE__UPLOAD_TEXTURE_ALIGN);
     u->frame_cap = frame_cap_bytes;
     u->test_fence_cap = UINT64_MAX;
+    u->test_frame_cap = UINT64_MAX;
+    de_atomic_init_u64(&u->retire_value, 0);
     de_mutex_init(&u->lock);
     u->records =
         (de__ring_record *)DE_ALLOC(u->alloc, sizeof(de__ring_record) * DE__UPLOAD_MAX_RECORDS,
@@ -440,6 +442,7 @@ static void record_piece(de_gpu_cmd *cmd, const de__upload *up, const de__upload
 void de_render_uploader_flush(de_render_uploader *u) {
     if (u == NULL)
         return;
+    (void)de__render_uploader_retire_poll(u); /* DENG-422: unloads whose frames completed */
     de_mutex_lock(&u->lock);
     observe_fence(u);
     ring_retire(u);
@@ -687,5 +690,123 @@ void de__uploader_stage_close(de_render_uploader *u, u32 record, de_gpu_fence fe
     r->fence = DE_HANDLE_VALID(fence) ? value : 0;
     r->closed = true;
     ring_retire(u);
+    de_mutex_unlock(&u->lock);
+}
+
+/* ---- Deferred unloads (DENG-422, render_assets.h) ---------------------------------------------
+ */
+
+void de__render_uploader_set_frame_fence(de_render_uploader *u, de_gpu_fence fence) {
+    if (u == NULL)
+        return;
+    de_mutex_lock(&u->lock);
+    u->frame_fence = fence;
+    de_mutex_unlock(&u->lock);
+}
+
+void de__render_uploader_frame_prepared(de_render_uploader *u, u64 frame_index) {
+    if (u != NULL)
+        de_atomic_store_u64(&u->retire_value, frame_index + 1u, DE_ATOMIC_RELEASE);
+}
+
+void de__uploader_retire(de_render_uploader *u, de__render_retire *node, void *object,
+                         void (*free_fn)(de_render_uploader *u, void *object)) {
+    de_mutex_lock(&u->lock);
+    /* Read under the lock, so the list stays in ascending order. */
+    const u64 value = de_atomic_load_u64(&u->retire_value, DE_ATOMIC_ACQUIRE);
+    /* No frame fence (no renderer), or no frame prepared yet: nothing can name the object. */
+    const bool now = !DE_HANDLE_VALID(u->frame_fence) || value == 0;
+    if (!now) {
+        node->next = NULL;
+        node->value = value;
+        node->object = object;
+        node->free_fn = free_fn;
+        if (u->retire_tail != NULL)
+            u->retire_tail->next = node;
+        else
+            u->retire_head = node;
+        u->retire_tail = node;
+        u->retire_pending++;
+    }
+    de_mutex_unlock(&u->lock);
+    if (now)
+        free_fn(u, object);
+}
+
+/* Takes the retired objects whose value `completed` has reached (all with UINT64_MAX) off the
+ * list; returns the chain. Lock held. */
+static de__render_retire *retire_take(de_render_uploader *u, u64 completed) {
+    de__render_retire *first = u->retire_head, *last = NULL;
+    de__render_retire *n = u->retire_head;
+    /* Values are ascending (frames are prepared in order), so stop at the first one not done. */
+    while (n != NULL && n->value <= completed) {
+        last = n;
+        n = n->next;
+        u->retire_pending--;
+    }
+    if (last == NULL)
+        return NULL;
+    u->retire_head = n;
+    if (n == NULL)
+        u->retire_tail = NULL;
+    last->next = NULL;
+    return first;
+}
+
+static u32 retire_free(de_render_uploader *u, de__render_retire *chain) {
+    u32 freed = 0;
+    while (chain != NULL) {
+        de__render_retire *next = chain->next;
+        chain->free_fn(u, chain->object); /* frees the record holding `chain` */
+        chain = next;
+        ++freed;
+    }
+    return freed;
+}
+
+u32 de__render_uploader_retire_poll(de_render_uploader *u) {
+    if (u == NULL)
+        return 0;
+    de_mutex_lock(&u->lock);
+    de__render_retire *chain = NULL;
+    if (u->retire_head != NULL && DE_HANDLE_VALID(u->frame_fence)) {
+        u64 completed = de_gpu_fence_value(u->dev, u->frame_fence);
+        if (completed > u->test_frame_cap)
+            completed = u->test_frame_cap;
+        chain = retire_take(u, completed);
+    }
+    de_mutex_unlock(&u->lock);
+    /* Outside the lock: the free functions release uploads, which take it. */
+    const u32 freed = retire_free(u, chain);
+    if (freed != 0) {
+        de_mutex_lock(&u->lock);
+        u->retire_freed += freed;
+        de_mutex_unlock(&u->lock);
+    }
+    return freed;
+}
+
+void de__uploader_retire_all(de_render_uploader *u) {
+    de_mutex_lock(&u->lock);
+    de__render_retire *chain = retire_take(u, UINT64_MAX);
+    de_mutex_unlock(&u->lock);
+    const u32 freed = retire_free(u, chain);
+    de_mutex_lock(&u->lock);
+    u->retire_freed += freed;
+    de_mutex_unlock(&u->lock);
+}
+
+void de__render_uploader_retire_stats(de_render_uploader *u, u32 *pending, u64 *freed) {
+    de_mutex_lock(&u->lock);
+    if (pending != NULL)
+        *pending = u->retire_pending;
+    if (freed != NULL)
+        *freed = u->retire_freed;
+    de_mutex_unlock(&u->lock);
+}
+
+void de__render_uploader_test_hold_frames(de_render_uploader *u, u64 cap) {
+    de_mutex_lock(&u->lock);
+    u->test_frame_cap = cap;
     de_mutex_unlock(&u->lock);
 }

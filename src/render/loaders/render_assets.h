@@ -140,6 +140,41 @@ de_render_upload_stats de_render_uploader_stats(const de_render_uploader *u);
 /** The fence the copy lists signal (one value per submitted flush). */
 de_gpu_fence de_render_uploader_fence(const de_render_uploader *u);
 
+/* ---------- Deferred unloads (DENG-422) ----------
+ *
+ * With pipelined rendering the render thread records frame N while the main thread runs
+ * de_asset_system_update for N + 1, and frames N - 1 .. N are in flight on the GPU. The GPU scene
+ * reads mesh, material and texture records only on the main thread, at the kick (render/scene/
+ * gpu_scene.h), but the entries it uploaded name the objects' bindless indices until the next
+ * kick repacks them. So the four types' `unload` cancels the object's pending upload at once and
+ * keeps the record and its GPU objects on the uploader's retire list until the renderer's frame
+ * fence reaches the value of the last frame prepared before the unload; the next flush (the kick)
+ * frees them. Without a frame fence (no renderer: tools, tests) they are freed at once.
+ */
+
+/** A record waiting on the retire list (embedded in each record; internal). */
+typedef struct de__render_retire {
+    struct de__render_retire *next;
+    u64 value; /**< the frame-fence value after which nothing uses the object */
+    void *object;
+    void (*free_fn)(de_render_uploader *u, void *object);
+} de__render_retire;
+
+/** The renderer's frame fence (frame n signals n + 1): unloads wait for it from now on. Main
+ * thread, before the first frame. An invalid fence turns the deferral off. */
+void de__render_uploader_set_frame_fence(de_render_uploader *u, de_gpu_fence fence);
+/** The renderer prepares frame `frame_index` (the kick, main thread): an object unloaded from now
+ * on may be named by that frame, so it waits for fence value frame_index + 1. */
+void de__render_uploader_frame_prepared(de_render_uploader *u, u64 frame_index);
+/** Frees the retired objects whose frame-fence value has completed. Main thread; the flush calls
+ * it. Returns how many it freed. */
+u32 de__render_uploader_retire_poll(de_render_uploader *u);
+/** Tests: objects waiting on the retire list, and freed from it so far. */
+void de__render_uploader_retire_stats(de_render_uploader *u, u32 *pending, u64 *freed);
+/** Tests: the retire list sees the frame fence's completed value as at most `cap` (UINT64_MAX =
+ * off), as if the GPU were late. */
+void de__render_uploader_test_hold_frames(de_render_uploader *u, u64 cap);
+
 /* ---------- Runtime records (the slots' objects) ---------- */
 
 /** The environment data of a texture cooked with `usage = "environment"` (ENVS, de_cooked_env.h),
@@ -165,6 +200,7 @@ typedef struct de_render_texture {
     de_render_env env; /**< valid when has_env */
     struct de__upload *upload_;
     size_t block_size_;
+    de__render_retire retire_; /**< internal: the retire list (DENG-422) */
 } de_render_texture;
 
 /** The GPU buffers of a mesh. */
@@ -206,6 +242,7 @@ typedef struct de_render_mesh {
     u64 gpu_bytes;
     struct de__upload *upload_;
     size_t block_size_;
+    de__render_retire retire_; /**< internal: the retire list (DENG-422) */
 } de_render_mesh;
 
 /** A loaded `material` (DMAT): the CPU parameters; the GPU material tables are S12/S14. */
@@ -220,6 +257,7 @@ typedef struct de_render_material {
     de_texture textures[DE_COOKED_TEX_COUNT];
     de_asset_id texture_ids[DE_COOKED_TEX_COUNT];
     u8 texcoord[DE_COOKED_TEX_COUNT];
+    de__render_retire retire_; /**< internal: the retire list (DENG-422) */
 } de_render_material;
 
 /** One node of a loaded model. */

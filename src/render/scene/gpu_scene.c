@@ -1529,19 +1529,24 @@ void de__gpu_scene_frame_end(de__gpu_scene *gs, de_rg *g, bool submitted) {
 
 /* ---------- The renderer's frame (DENG-176 views) ---------- */
 
-de_result de__gpu_scene_frame(de__gpu_scene *gs, const de__render_world_frame *f, de_arena *arena,
-                              u64 frame_index) {
-    if (gs == NULL || arena == NULL)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__gpu_scene_frame: NULL argument");
+de_result de__gpu_scene_prepare(de__gpu_scene *gs, const de__render_world_frame *f) {
+    if (gs == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__gpu_scene_prepare: NULL scene");
     if (f == NULL) {
+        gs->frame = NULL;
         gs->frame_no++; /* views still rotate their previous matrices */
         return DE_OK;
     }
-    de_result r = de__gpu_scene_update(gs, f);
-    if (r != DE_OK)
-        return r;
+    return de__gpu_scene_update(gs, f); /* the only place that reads asset records */
+}
+
+de_result de__gpu_scene_frame(de__gpu_scene *gs, de_arena *arena, u64 frame_index) {
+    if (gs == NULL || arena == NULL)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__gpu_scene_frame: NULL argument");
+    if (gs->frame == NULL)
+        return DE_OK; /* nothing prepared (no render world, or the update failed) */
     de_rg *g = gs->graph;
-    r = de__rg_begin(g, arena);
+    de_result r = de__rg_begin(g, arena);
     if (r == DE_OK)
         r = de__gpu_scene_add_passes(gs, g);
     bool executed = false;

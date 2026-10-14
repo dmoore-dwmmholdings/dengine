@@ -213,6 +213,8 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
             res = DE_FAIL_WRAP(res, "de_renderer_create: registering the render asset types");
             goto fail;
         }
+        /* DENG-422: unloaded assets stay alive until the frames that could name them complete. */
+        de__render_uploader_set_frame_fence(r->uploader, r->frame_fence);
     }
 
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
@@ -298,9 +300,17 @@ void de__renderer_kick_prepare(de_renderer *r) {
     if (r == NULL)
         return;
     if (r->uploader != NULL) {
-        de_render_uploader_flush(r->uploader);
+        de_render_uploader_flush(r->uploader); /* also frees unloads whose frames completed */
         (void)de_render_uploader_acquire_submit(r->uploader);
+        /* DENG-422: from here on an unload may be named by frame `frame_index`. */
+        de__render_uploader_frame_prepared(r->uploader, r->frame_index);
     }
+    /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
+     * never on the render thread. The buffer is the one this kick hands over (or the last one). */
+    const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
+    if (gr != DE_OK)
+        DE_ERROR(r->log, "renderer: frame %llu: GPU scene: %s", (unsigned long long)r->frame_index,
+                 de_error_last() != NULL ? de_error_last()->message : de_result_str(gr));
     if (DE_HANDLE_VALID(r->window)) {
         u32 w = 0, h = 0;
         de_window_size_pixels(r->window, &w, &h);
@@ -367,7 +377,7 @@ de_result de_renderer_render_frame(de_renderer *r) {
 
     /* DENG-177: the GPU scene's uploads, once per frame in its own graph; queue order makes
      * them visible to every view graph. */
-    const de_result sr = de__gpu_scene_frame(r->gpu_scene, de__render_world_current(r), arena, n);
+    const de_result sr = de__gpu_scene_frame(r->gpu_scene, arena, n);
     if (sr != DE_OK)
         DE_ERROR(r->log, "renderer: frame %llu: GPU scene: %s", (unsigned long long)n,
                  de_error_last() != NULL ? de_error_last()->message : de_result_str(sr));

@@ -36,6 +36,7 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
 
+#include "platform/de_atomic.h"
 #include "render/loaders/render_assets.h"
 
 DE_EXTERN_C_BEGIN
@@ -162,7 +163,21 @@ struct de_render_uploader {
     u32 st_last_pieces;
     /* Tests: the completed value the uploader sees is at most this (UINT64_MAX = off). */
     u64 test_fence_cap;
+    /* Deferred unloads (DENG-422, render_assets.h). Under `lock`, except retire_value. */
+    de_gpu_fence frame_fence;   /**< the renderer's; invalid: unloads free at once */
+    de_atomic_u64 retire_value; /**< fence value an object unloaded now waits for (0: none) */
+    struct de__render_retire *retire_head, *retire_tail; /**< FIFO, values ascending */
+    u32 retire_pending;
+    u64 retire_freed;
+    u64 test_frame_cap; /**< tests: completed frame-fence value seen is at most this */
 };
+
+/** Unload of a render asset object (the four types' `unload`): frees it with `free_fn` now, or
+ * puts it on the retire list (render_assets.h, DENG-422). Any thread. */
+void de__uploader_retire(de_render_uploader *u, struct de__render_retire *node, void *object,
+                         void (*free_fn)(de_render_uploader *u, void *object));
+/** Frees every retired object now (the uploader's destroy; the GPU must be idle). */
+void de__uploader_retire_all(de_render_uploader *u);
 
 /**
  * Creates the ring and the fence of `u` (its `alloc` and `dev` set): a `ring_bytes` UPLOAD buffer
