@@ -222,6 +222,13 @@ static bool uploads_waiting(lfx *f) {
     return de_asset_get_stats(f->s).uploads_in_flight != 0;
 }
 
+/* Both textures of material_depends_textures wait for the fence, their copies submitted: only
+ * then does lifting the fence hold make all of them ready in one update (DENG-413). */
+static bool two_uploads_submitted(lfx *f) {
+    return de_asset_get_stats(f->s).uploads_in_flight == 2u &&
+           de_render_uploader_stats(f->u).queued == 0u;
+}
+
 static de_asset_id id(const char *path) {
     return de_asset_id_from(path);
 }
@@ -337,12 +344,16 @@ TEST_F(loaders, material_depends_textures, lfx) {
                 "\"mat/m\" = { type = \"material\", source = \"m.dmat\" }\n");
     de__uploader_test_hold_fence(f->u, 0);
     de_load_handle h = de_asset_load(f->s, id("mat/m"), 0);
-    ASSERT_TRUE(pump_until(f, uploads_waiting));
+    /* Not "some upload waits": the second texture may still be loading on a slow worker (TSan),
+     * and then it is rightly not READY one update after the hold is lifted (DENG-413). */
+    ASSERT_TRUE(pump_until(f, two_uploads_submitted));
     for (u32 i = 0; i < 5; ++i) {
         frame(f);
         EXPECT_EQ((int)de_asset_status_of(f->s, id("mat/m")), (int)DE_LOAD_LOADING);
         EXPECT_EQ((int)de_asset_status_of(f->s, id("mat/albedo")), (int)DE_LOAD_LOADING);
+        EXPECT_EQ((int)de_asset_status_of(f->s, id("mat/normal")), (int)DE_LOAD_LOADING);
     }
+    EXPECT_EQ(de_asset_get_stats(f->s).uploads_in_flight, 2u);
     de__uploader_test_hold_fence(f->u, UINT64_MAX);
     frame(f);
     EXPECT_EQ((int)de_asset_status_of(f->s, id("mat/albedo")), (int)DE_LOAD_READY);
