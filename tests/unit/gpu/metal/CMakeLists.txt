@@ -18,3 +18,18 @@ if(TARGET test_gpu_metal)
     target_include_directories(test_gpu_metal PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_definitions(test_gpu_metal PRIVATE "DE_TEST_ROOT_DIR=\"${DE_ROOT_DIR}\"")
 endif()
+
+# DENG-288: command lists, barriers, fences, residency (test_mtl_cmd.c: CTest gpu_metal.mtl.*, the
+# same names and expected values as DENG-284's Vulkan tests where they overlap) and the
+# CAMetalLayer swapchain (test_mtl_swapchain.c: a hidden window; skips without a display).
+# mtl_cmd_helpers.m is their Objective-C side. test_mtl_cmd.c also turns Metal shader validation
+# on (MTL_SHADER_VALIDATION=1) in processes that run an mtl.* test.
+if(TARGET test_gpu_metal)
+    target_sources(test_gpu_metal PRIVATE test_mtl_cmd.c test_mtl_swapchain.c mtl_cmd_helpers.m)
+    set_source_files_properties(mtl_cmd_helpers.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(test_gpu_metal PRIVATE de_platform "-framework QuartzCore")
+    if(TARGET de_tp_sdl3) # the swapchain test resizes its window through SDL
+        target_link_libraries(test_gpu_metal PRIVATE de_tp_sdl3)
+        target_compile_definitions(test_gpu_metal PRIVATE DE_MTL_TEST_SDL=1)
+    endif()
+endif()

@@ -87,6 +87,7 @@ de_result de__mtl_heap_list_add(de_gpu_device *d, mtl_heap *h) {
     if (r == DE_OK) {
         h->slot = m->heap_count;
         m->heaps[m->heap_count++] = h;
+        ++m->heap_gen; /* the residency set follows (DENG-288) */
     }
     de_mutex_unlock(&m->heap_lock);
     return r;
@@ -100,6 +101,7 @@ void de__mtl_heap_list_remove(de_gpu_device *d, mtl_heap *h) {
         mtl_heap *last = m->heaps[--m->heap_count];
         m->heaps[h->slot] = last;
         last->slot = h->slot;
+        ++m->heap_gen;
     }
     de_mutex_unlock(&m->heap_lock);
 }

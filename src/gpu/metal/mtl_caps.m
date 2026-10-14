@@ -7,7 +7,6 @@
  */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#include <mach/mach_time.h>
 
 #include "gpu/metal/mtl_internal.h"
 
@@ -77,12 +76,11 @@ void de__mtl_caps_fill(void *device, de_gpu_caps *caps) {
         caps->max_bindless_accels = 0; /* S16 */
         caps->max_push_constant_bytes = DE_GPU_MAX_PUSH_CONSTANT_BYTES; /* setBytes, index 1 */
 
-        /* Apple-silicon GPU timestamps count in the mach time base (sampleTimestamps: returns
-         * equal CPU and GPU deltas), so the frequency is mach ticks per second. */
-        mach_timebase_info_data_t tb;
-        mach_timebase_info(&tb);
-        caps->timestamp_frequency =
-            tb.numer ? (u64)1000000000u * tb.denom / tb.numer : (u64)1000000000u;
+        /* GPU timestamps (counter samples, sampleTimestamps:gpuTimestamp:) count nanoseconds,
+         * not mach ticks: DENG-288 measured a 10.043 ms command buffer as 10,043,083 counter
+         * ticks on an M5 Pro, and sampleTimestamps: gives its CPU time in ns too (mach ticks
+         * times 125/3). gpu_metal.mtl.timestamp_frequency checks this on every run. */
+        caps->timestamp_frequency = (u64)1000000000u;
 
         const char *why = NULL;
         if (!metal3)

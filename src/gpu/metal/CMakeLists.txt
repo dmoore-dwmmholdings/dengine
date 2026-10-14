@@ -12,6 +12,11 @@ set(_de_mtl_objc_sources
     mtl_memory.m
     mtl_resources.m
     mtl_bindless.m
+    mtl_cmd.m
+    mtl_barriers.m
+    mtl_sync.m
+    mtl_swapchain.m
+    mtl_residency.m
 )
 de_add_module(
     NAME gpu_metal

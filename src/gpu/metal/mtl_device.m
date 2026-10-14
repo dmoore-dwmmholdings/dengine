@@ -5,9 +5,8 @@
  *
  * Queue timelines: the front-end's internal value per queue is an MTLSharedEvent the queue
  * signals at the end of each submission (queue_submit / queue_completed / wait_idle). Command
- * lists, barriers, user fences and the swapchain come with DENG-288; until then a submit commits a
- * command buffer that only signals the timeline, and command recording is the front-end's
- * validated no-op (every cmd_* entry is NULL).
+ * lists, barriers, submission, user fences, the swapchain and residency are DENG-288's
+ * (mtl_cmd.m, mtl_barriers.m, mtl_sync.m, mtl_swapchain.m, mtl_residency.m).
  *
  * API validation is the Metal debug layer, switched on by the environment (MTL_DEBUG_LAYER=1)
  * before the first device of the process; desc->debug_layer cannot turn it on later.
@@ -32,6 +31,9 @@ static void release(void **p) {
 static void device_release(de_gpu_device *d) {
     mtl_device *m = de__mtl_dev(d);
     @autoreleasepool {
+        de__mtl_sync_drain(d);
+        de__mtl_residency_shutdown(d);
+        de__mtl_sync_shutdown(d);
         de__mtl_bindless_shutdown(d);
         for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
             release(&m->timeline[q]);
@@ -46,6 +48,7 @@ static void device_release(de_gpu_device *d) {
     m->heap_count = m->heap_cap = 0;
     de_mutex_destroy(&m->heap_lock);
     de_mutex_destroy(&m->sampler_lock);
+    de_mutex_destroy(&m->size_lock);
 }
 
 static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *desc,
@@ -53,6 +56,7 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
     mtl_device *m = de__mtl_dev(d);
     de_mutex_init(&m->heap_lock);
     de_mutex_init(&m->sampler_lock);
+    de_mutex_init(&m->size_lock);
     de_result r = DE_OK;
     @autoreleasepool {
         id<MTLDevice> dev = nil;
@@ -93,6 +97,10 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
         }
         if (r == DE_OK)
             r = de__mtl_bindless_init(d);
+        if (r == DE_OK)
+            r = de__mtl_sync_init(d);
+        if (r == DE_OK)
+            r = de__mtl_residency_init(d);
     }
     if (r != DE_OK) {
         device_release(d);
@@ -113,27 +121,6 @@ static void mtl_device_destroy(de_gpu_device *d) {
 }
 
 /* ---------- Queue timelines ---------- */
-
-static de_result mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
-                                  u64 queue_value) {
-    (void)s; /* command lists record nothing until DENG-288; user fences do not exist yet */
-    mtl_device *m = de__mtl_dev(d);
-    @autoreleasepool {
-        id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)m->queues[q];
-        id<MTLSharedEvent> ev = (__bridge id<MTLSharedEvent>)m->timeline[q];
-        id<MTLCommandBuffer> cb = [queue commandBufferWithUnretainedReferences];
-        if (cb == nil) {
-            /* The front-end already published queue_value: complete it, or deferred
-             * destruction waits forever. */
-            ev.signaledValue = queue_value;
-            return DE_FAIL(DE_ERR_DEVICE_LOST, "metal: no command buffer from the %s queue",
-                           k_queue_names[q]);
-        }
-        [cb encodeSignalEvent:ev value:queue_value];
-        [cb commit];
-    }
-    return DE_OK;
-}
 
 static u64 mtl_queue_completed(de_gpu_device *d, de_gpu_queue q) {
     return ((__bridge id<MTLSharedEvent>)de__mtl_dev(d)->timeline[q]).signaledValue;
@@ -168,12 +155,14 @@ static void mtl_wait_idle(de_gpu_device *d) {
 const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .name = "metal",
     .device_payload_size = sizeof(mtl_device),
-    .cmd_payload_size = 0,
+    .cmd_payload_size = sizeof(mtl_cmd),
     .payload_size =
         {
             [DE__GPU_BUFFER] = sizeof(mtl_buffer),
             [DE__GPU_TEXTURE] = sizeof(mtl_texture),
             [DE__GPU_SAMPLER] = sizeof(mtl_sampler),
+            [DE__GPU_SWAPCHAIN] = sizeof(mtl_swapchain),
+            [DE__GPU_FENCE] = sizeof(mtl_fence),
         },
     .device_create = mtl_device_create,
     .device_destroy = mtl_device_destroy,
@@ -187,8 +176,27 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .bindless_write_buffer = de__mtl_bindless_write_buffer,
     .bindless_write_texture = de__mtl_bindless_write_texture,
     .bindless_write_sampler = de__mtl_bindless_write_sampler,
-    .queue_submit = mtl_queue_submit,
+    .cmd_init = de__mtl_cmd_init,
+    .cmd_fini = de__mtl_cmd_fini,
+    .cmd_begin = de__mtl_cmd_begin,
+    .cmd_barriers = de__mtl_cmd_barriers,
+    .cmd_begin_render = de__mtl_cmd_begin_render,
+    .cmd_end_render = de__mtl_cmd_end_render,
+    .cmd_viewport = de__mtl_cmd_viewport,
+    .cmd_copy_buffer = de__mtl_cmd_copy_buffer,
+    .cmd_copy_buffer_to_texture = de__mtl_cmd_copy_buffer_to_texture,
+    .queue_submit = de__mtl_queue_submit,
     .queue_completed = mtl_queue_completed,
+    .fence_create = de__mtl_fence_create,
+    .fence_destroy = de__mtl_fence_destroy,
+    .fence_value = de__mtl_fence_value,
+    .fence_wait = de__mtl_fence_wait,
+    .swapchain_create = de__mtl_swapchain_create,
+    .swapchain_destroy = de__mtl_swapchain_destroy,
+    .swapchain_acquire = de__mtl_swapchain_acquire,
+    .swapchain_present = de__mtl_swapchain_present,
+    .swapchain_resize = de__mtl_swapchain_resize,
+    .swapchain_colorspace = de__mtl_swapchain_colorspace,
     .heap_payload_size = sizeof(mtl_heap),
     .heap_create = de__mtl_heap_create,
     .heap_destroy = de__mtl_heap_destroy,
@@ -196,6 +204,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .texture_requirements = de__mtl_texture_requirements,
     .buffer_create_placed = de__mtl_buffer_create_placed,
     .texture_create_placed = de__mtl_texture_create_placed,
+    .cmd_copy_texture_to_buffer = de__mtl_cmd_copy_texture_to_buffer,
 };
 
 /* ---------- Accessors ---------- */
