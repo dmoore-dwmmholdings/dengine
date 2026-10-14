@@ -45,7 +45,7 @@ if(DE_HAS_GPU_D3D12)
     list(APPEND _de_rl_libs de_gpu_d3d12 de_tp_d3d12_agility)
 endif()
 de_add_test(NAME render_loaders
-    SOURCES test_upload_ring.c test_render_loaders.c
+    SOURCES test_upload_ring.c test_render_loaders.c render_d3d12_test.c
     LIBS ${_de_rl_libs}
     LABELS unit gpu
     TIMEOUT 300)
@@ -59,6 +59,8 @@ if(TARGET test_render_loaders)
     target_link_libraries(test_render_loaders PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
     if(DE_HAS_GPU_D3D12)
+        # DENG-423: the deploy adds the Agility exports; version.lib for render_d3d12_test.h.
+        target_link_libraries(test_render_loaders PRIVATE version)
         de_d3d12_agility_deploy(test_render_loaders)
         if(DE_D3D12_WARP_DLL)
             de_d3d12_warp_deploy(test_render_loaders)
@@ -123,13 +125,15 @@ if(DE_HAS_GPU_D3D12)
     list(APPEND _de_rgg_libs de_gpu_d3d12 de_tp_d3d12_agility)
 endif()
 de_add_test(NAME render_graph_gpu
-    SOURCES test_rg_gpu.c
+    SOURCES test_rg_gpu.c render_d3d12_test.c
     LIBS ${_de_rgg_libs}
     LABELS unit gpu
     TIMEOUT 120)
 if(TARGET test_render_graph_gpu)
     target_include_directories(test_render_graph_gpu PRIVATE "${DE_ROOT_DIR}/src")
     if(DE_HAS_GPU_D3D12)
+        # DENG-423: the deploy adds the Agility exports; version.lib for render_d3d12_test.h.
+        target_link_libraries(test_render_graph_gpu PRIVATE version)
         de_d3d12_agility_deploy(test_render_graph_gpu)
         if(DE_D3D12_WARP_DLL)
             de_d3d12_warp_deploy(test_render_graph_gpu)
@@ -218,7 +222,7 @@ if(DE_HAS_GPU_D3D12)
     list(APPEND _de_gs_libs de_gpu_d3d12 de_tp_d3d12_agility)
 endif()
 de_add_test(NAME render_gpu_scene
-    SOURCES test_gpu_scene.c
+    SOURCES test_gpu_scene.c render_d3d12_test.c
     LIBS ${_de_gs_libs}
     LABELS unit gpu render
     TIMEOUT 300)
@@ -232,9 +236,9 @@ if(TARGET test_render_gpu_scene)
         target_compile_definitions(test_render_gpu_scene PRIVATE DE_GS_TEST_COOK=1)
     endif()
     if(DE_HAS_GPU_D3D12)
-        # DENG-420: test_gpu_scene.c includes the Agility exports, so the Agility runtime (not the
-        # OS one) loads and the vendored WARP is Base tier; version.lib reads the DLL versions it
-        # logs.
+        # DENG-420, DENG-423: de_d3d12_agility_deploy gives the executable the Agility exports,
+        # so the Agility runtime (not the OS one) loads and the vendored WARP is Base tier;
+        # version.lib reads the DLL versions render_d3d12_test.h logs.
         target_link_libraries(test_render_gpu_scene PRIVATE version)
         de_d3d12_agility_deploy(test_render_gpu_scene)
         if(DE_D3D12_WARP_DLL)

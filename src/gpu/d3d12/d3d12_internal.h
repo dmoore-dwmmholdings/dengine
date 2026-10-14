@@ -119,6 +119,7 @@ void de__d3d12_caps_evaluate(const de__d3d12_features *f, de_gpu_caps *caps);
 #define DE__D3D12_ACCESS_RTAS_READ           0x4000u /* RAYTRACING_ACCELERATION_STRUCTURE_READ */
 #define DE__D3D12_ACCESS_RTAS_WRITE          0x8000u
 #define DE__D3D12_ACCESS_NO_ACCESS           0x80000000u
+#define DE__D3D12_ACCESS_COMMON              0x0u /* every access its layout allows (DENG-423) */
 /* D3D12_BARRIER_LAYOUT */
 #define DE__D3D12_LAYOUT_UNDEFINED                 0xffffffffu
 #define DE__D3D12_LAYOUT_COMMON                    0u /* = PRESENT */

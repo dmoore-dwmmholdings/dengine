@@ -84,6 +84,14 @@ redistribution, so no job uploads it: the `logs-<preset>` artifact holds no bina
 tests on the runner image's own WARP, configure with `-DDE_D3D12_TEST_WARP=OFF`. The quick tier
 has `windows msvc Debug`, so it also runs these tests.
 
+**The Agility runtime (DENG-423).** WARP has shader model 6.6 only on the Agility D3D12 runtime
+(`<exe dir>/D3D12/`), which the loader uses only for an executable that exports
+`D3D12SDKVersion`/`D3D12SDKPath`. `de_d3d12_agility_deploy()` copies the runtime and adds the
+exports to its target (unless a source includes `gpu/d3d12/d3d12_agility_exports.h` already), and
+the check `agility_exports_check` (label `check`, Windows) reads the export table of every deployed
+executable. The render tests that create D3D12 devices log their runtime and WARP and, on the
+vendored WARP, require the Agility runtime and the Base tier (`tests/unit/render/render_d3d12_test.c`).
+
 #### Golden images (`golden` job, full tier only)
 
 The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes of
@@ -103,7 +111,9 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   `test_render_loaders` and runs `render_loaders.*` (DENG-105): asset uploads on the copy queue,
   the hand-over to the graphics queue and byte-exact readback, with the validation layers. It
   also builds `test_render_graph_gpu` (`render_graph_gpu.*`, DENG-414) and `test_render_gpu_scene`
-  (`render_gpu_scene.*`, DENG-177: the GPU scene tables uploaded and read back every frame).
+  (`render_gpu_scene.*`, DENG-177: the GPU scene tables uploaded and read back every frame). The
+  Windows entry also builds those three and runs their `_d3d12` tests with `ctest -V`, so its log
+  shows the D3D12 runtime and the WARP each one ran on (DENG-423).
 - The Linux and Windows entries then run `de-golden ... --scene rhi_clear` and require exit 0.
   Without that step a backend that skipped every scene would leave the job green.
 - The jobs restore the compiler cache of the build job with the same preset and do not save it.

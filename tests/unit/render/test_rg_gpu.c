@@ -18,6 +18,7 @@
 #include <dengine/de_render.h>
 
 #include "render/graph/rg_internal.h"
+#include "render_d3d12_test.h" /* DENG-423: the D3D12 runtime check */
 
 #if DE_HAS_GPU_VULKAN
 #include "gpu/vulkan/vk_internal.h"
@@ -135,6 +136,7 @@ static void start(gfx *f, de_gpu_backend b) {
     }
     printf("device: \"%s\" (%s), async compute %d\n", de_gpu_get_caps(f->dev)->device_name,
            de_gpu_backend_name(b), de_gpu_get_caps(f->dev)->async_compute);
+    render_d3d12_report(f->dev); /* D3D12: the Agility runtime and the vendored WARP on CI */
     ASSERT_EQ(de__rg_create(
                   &(de__rg_desc){.allocator = &f->alloc, .device = f->dev, .name = "smoke"}, &f->g),
               DE_OK);
