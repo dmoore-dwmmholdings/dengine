@@ -199,3 +199,42 @@ de_add_test(NAME views
 if(TARGET test_views)
     target_include_directories(test_views PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-177: the GPU scene (src/render/scene/), executable test_gpu_scene; CTest names
+# render_gpu_scene.gpu_scene.<test>. Synthetic render-world buffers and fake mesh/material
+# records drive it. On the null backend every frame's upload plan is applied to CPU copies of the
+# tables; random_ops_readback_{metal,vulkan,d3d12} read the tables back from the GPU (each SKIPs
+# without its device; CI: Vulkan on lavapipe in the golden job, D3D12 on the vendored WARP) with
+# shaders/scene/scatter.slang cooked at test time when the build has the shader importer
+# (DE_GS_TEST_COOK; copy-only otherwise). layout_match parses shaders/scene/scene_types.slang.
+set(_de_gs_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_gs_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_gs_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_gs_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME render_gpu_scene
+    SOURCES test_gpu_scene.c
+    LIBS ${_de_gs_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_gpu_scene)
+    target_include_directories(test_render_gpu_scene PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_gpu_scene PRIVATE
+        "DE_GS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_gpu_scene PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_gpu_scene PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_gpu_scene PRIVATE DE_GS_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_render_gpu_scene)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_gpu_scene)
+        endif()
+    endif()
+endif()

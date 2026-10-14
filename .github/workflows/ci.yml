@@ -164,8 +164,10 @@ jobs:
             # transient buffer reused across frames) with validation + synchronization validation.
             # DENG-410: gpu_backends.* (adapter list, command-list reserve, bindless.slang's
             # read-only and byte-address buffer accessors) on lavapipe with validation.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.)'
+            # DENG-177: render_gpu_scene.* uploads the GPU scene tables (growth copies, copy runs,
+            # the scatter.slang kernels) and reads them back every frame for 1000 frames.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022

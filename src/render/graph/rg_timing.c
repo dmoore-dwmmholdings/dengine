@@ -337,7 +337,11 @@ void de__rg_timing_resolve(de_rg *g, de__rg_exec *x, u32 heap, de_gpu_cmd *cmd) 
     de_gpu_barrier b;
     memset(&b, 0, sizeof b);
     b.buffer = ts->readback[heap];
-    b.before = DE_ACCESS_NONE; /* last read by the CPU after an earlier frame completed */
+    /* Last written by the resolve of the frame that used this slot before, then read by the
+     * CPU. On Vulkan a buffer barrier from NONE has no source scope, so it would not order this
+     * write after that one (DENG-414); de__rg_first_use_before gives every buffer access there
+     * (DENG-177: found by synchronization validation on lavapipe). */
+    b.before = de__rg_first_use_before(de_gpu_get_caps(x->device)->backend, DE__RG_BUFFER);
     b.after = DE_ACCESS_COPY_DST;
     b.src_queue = b.dst_queue = q;
     de_gpu_cmd_barriers(cmd, &b, 1);
