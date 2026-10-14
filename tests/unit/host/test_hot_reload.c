@@ -144,6 +144,10 @@ static void env_start(hr_fx *f) {
     /* CTest runs the tests of this file in parallel processes: the pid keeps them apart. */
     snprintf(f->run, sizeof f->run, "run-%010lu-%02u", hr_getpid(), g_run_counter++);
     char v[DE_FS_PATH_MAX];
+    /* The OS reuses pids: an earlier run that stopped before env_end left this directory, with
+     * its library copies, behind (DENG-411). Start from an empty one. */
+    snprintf(v, sizeof v, "tmp:/%s", f->run);
+    rm_tree(v);
     const char *dirs[] = {"lib", "user", "cache"};
     for (u32 i = 0; i < 3; ++i) {
         snprintf(v, sizeof v, "tmp:/%s/%s", f->run, dirs[i]);
