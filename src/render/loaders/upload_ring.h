@@ -111,6 +111,9 @@ typedef struct de__ring_record {
     u64 begin, end; /**< positions */
     u64 fence;      /**< the fence value after which nothing reads it (valid when closed) */
     bool closed;
+    /** A stage record (de__uploader_stage, DENG-177): `fence` is a value of this fence, not of the
+     * uploader's. Invalid for the uploader's own records. */
+    de_gpu_fence ext;
 } de__ring_record;
 
 /** A release whose acquire half the graphics queue still has to record. */
@@ -203,6 +206,35 @@ void de__upload_release(de_render_uploader *u, de__upload *up);
 /** Tests: the uploader sees the fence's completed value as at most `cap` (UINT64_MAX = off), as
  * if the GPU were late. */
 void de__uploader_test_hold_fence(de_render_uploader *u, u64 cap);
+
+/* ---- Stages: ring space for a caller that records its own copies (DENG-177) ------------------
+ *
+ * The GPU scene (src/render/scene/) stages its per-frame table updates in this ring instead of a
+ * staging buffer of its own, and copies them in a render-graph pass on the graphics queue. A
+ * stage is a ring record like any other (the tail moves over records in order), except that it
+ * retires on a fence of the caller's: the value the frame that reads it signals when it is done.
+ * The per-frame cap (asset.upload_mb_per_frame) does not apply to stages.
+ */
+
+/** One stage: where its bytes go. */
+typedef struct de__upload_stage {
+    u8 *ptr;            /**< the reservation in the mapped ring (write the bytes here) */
+    u64 offset;         /**< its offset in `ring` (the copies' source offset) */
+    de_gpu_buffer ring; /**< the ring buffer (DE_MEM_UPLOAD, COPY_SRC) */
+    u32 record;         /**< for de__uploader_stage_close */
+} de__upload_stage;
+
+/**
+ * Reserves `size` bytes aligned to `align` (a power of two, at most 512) now, in a record of its
+ * own, after retiring what completed. Any thread (it takes the lock).
+ * @return DE_OK; DE_ERR_BUSY when the ring has no room now (retry after earlier frames
+ *         complete); DE_ERR_UNSUPPORTED (with a message) when `size` is 0 or larger than the ring.
+ */
+de_result de__uploader_stage(de_render_uploader *u, u64 size, u64 align, de__upload_stage *out);
+/** Closes stage `record`: it retires once `fence` reaches `value`. Call it once per stage, after
+ * the copies that read it are submitted (or, when they never will be, with an invalid fence:
+ * it retires at once). Any thread. */
+void de__uploader_stage_close(de_render_uploader *u, u32 record, de_gpu_fence fence, u64 value);
 
 DE_EXTERN_C_END
 

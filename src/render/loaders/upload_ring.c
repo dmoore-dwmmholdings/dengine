@@ -46,10 +46,19 @@ static void record_close(de_render_uploader *u, u32 abs, u64 fence) {
     r->closed = true;
 }
 
+/* A closed record whose readers are done: the uploader's fence, or a stage's own (DENG-177). */
+static bool record_done(de_render_uploader *u, const de__ring_record *r) {
+    if (!r->closed)
+        return false;
+    if (DE_HANDLE_VALID(r->ext))
+        return de_gpu_fence_value(u->dev, r->ext) >= r->fence;
+    return r->fence <= u->completed;
+}
+
 static void ring_retire(de_render_uploader *u) {
     while (u->rec_count != 0) {
         const de__ring_record *r = record_at(u, u->rec_first);
-        if (!r->closed || r->fence > u->completed)
+        if (!record_done(u, r))
             break;
         u->tail = r->end;
         u->rec_first++;
@@ -96,6 +105,7 @@ static bool ring_reserve(de_render_uploader *u, u64 size, u64 align, u64 *off, u
     r->end = end;
     r->fence = 0;
     r->closed = false;
+    r->ext = (de_gpu_fence){0};
     u->rec_count++;
     u->head = end;
     return true;
@@ -191,7 +201,7 @@ static void fail_all(de_render_uploader *u, de_result r, de__upload *done, u64 f
     u->release_count = w;
     for (u32 i = 0; i < u->rec_count; ++i) {
         de__ring_record *rec = record_at(u, u->rec_first + i);
-        if (rec->closed && rec->fence == failed_value)
+        if (rec->closed && !DE_HANDLE_VALID(rec->ext) && rec->fence == failed_value)
             rec->fence = u->submitted;
     }
 }
@@ -641,4 +651,41 @@ u32 de_render_uploader_acquire_submit(de_render_uploader *u) {
                          .wait_count = n != 0 ? 1u : 0u};
     (void)de_gpu_queue_submit(u->dev, DE_QUEUE_GRAPHICS, &sub);
     return n;
+}
+
+/* ---- Stages (DENG-177) ------------------------------------------------------------------------
+ */
+
+de_result de__uploader_stage(de_render_uploader *u, u64 size, u64 align, de__upload_stage *out) {
+    memset(out, 0, sizeof *out);
+    if (size == 0 || size > u->ring_size || align == 0 || align > DE__UPLOAD_TEXTURE_ALIGN ||
+        (align & (align - 1u)) != 0)
+        return DE_FAIL(DE_ERR_UNSUPPORTED,
+                       "a %llu-byte stage (alignment %llu) does not fit the %llu-byte upload ring",
+                       (unsigned long long)size, (unsigned long long)align,
+                       (unsigned long long)u->ring_size);
+    de_mutex_lock(&u->lock);
+    observe_fence(u);
+    ring_retire(u);
+    u64 off = 0;
+    u32 rec = 0;
+    const bool ok = ring_reserve(u, size, align, &off, &rec);
+    de_mutex_unlock(&u->lock);
+    if (!ok)
+        return DE_ERR_BUSY;
+    out->ptr = u->ring_ptr + off;
+    out->offset = off;
+    out->ring = u->ring;
+    out->record = rec;
+    return DE_OK;
+}
+
+void de__uploader_stage_close(de_render_uploader *u, u32 record, de_gpu_fence fence, u64 value) {
+    de_mutex_lock(&u->lock);
+    de__ring_record *r = record_at(u, record);
+    r->ext = fence;
+    r->fence = DE_HANDLE_VALID(fence) ? value : 0;
+    r->closed = true;
+    ring_retire(u);
+    de_mutex_unlock(&u->lock);
 }

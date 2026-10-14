@@ -91,3 +91,20 @@ if(TARGET de_render)
     target_link_libraries(de_render PRIVATE "${_de_render_shader_lib}")
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "${_de_render_shader_lib}")
 endif()
+
+# DENG-177: the GPU scene (scene/gpu_table.c: one persistent table with its slot allocator, dirty
+# set and GPU-side growth; scene/gpu_scene.c: the instance, mesh, material, light and per-view
+# tables mirrored from the render world, staged in the DENG-105 upload ring and uploaded by
+# render-graph passes; the Slang side is shaders/scene/). de_renderer_create makes one and
+# de_renderer_render_frame drives it: the uploads once per frame before the views, the scene
+# constants in a stage of each view's graph (DENG-176).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        scene/gpu_scene.h
+        scene/gpu_table.c
+        scene/gpu_scene.c)
+    # In Debug and Dev with the cooker the renderer cooks scene/scatter.slang in-process (as
+    # DENG-176's composite does with DE_RENDER_SHADER_DIR).
+    target_compile_definitions(de_render PRIVATE
+        "DE_RENDER_SCENE_SHADER_DIR=\"${DE_ROOT_DIR}/shaders/scene\"")
+endif()

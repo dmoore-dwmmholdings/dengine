@@ -659,7 +659,10 @@ TEST_F(views, pass_registration_order, vfx) {
     de__gpu_null_log_enable(f->d, true);
     ASSERT_EQ(frame(f), DE_OK);
     de__gpu_null_log_enable(f->d, false);
-    static const char *const want[] = {"view.debug_clear", "p1", "p2", "p3", "p4", "p5", "p6"};
+    /* "gpu_scene.view" (DENG-177): the GPU scene's stage right after the debug clear, which
+     * uploads each view's new scene constants in its first frame. */
+    static const char *const want[] = {
+        "view.debug_clear", "gpu_scene.view", "p1", "p2", "p3", "p4", "p5", "p6"};
     const u32 nw = (u32)(sizeof want / sizeof want[0]);
     u32 seen[2] = {0, 0};
     bool ok = true;

@@ -157,6 +157,10 @@ struct de_renderer {
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
     u32 window_w, window_h;
     u32 swapchain_w, swapchain_h;
+
+    /* DENG-177: the GPU scene (scene/gpu_scene.h); made by de_renderer_create, driven by the
+     * per-view frame (DENG-176). */
+    struct de__gpu_scene *gpu_scene;
 };
 
 /* ---------- Settings (settings.c) ---------- */

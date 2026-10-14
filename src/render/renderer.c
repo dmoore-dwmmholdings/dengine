@@ -14,6 +14,7 @@
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
 #include "render/views_internal.h"
+#include "render/scene/gpu_scene.h"
 #include "render/world/render_world.h"
 
 #include "gpu/gpu_backend.h" /* de__gpu_get_texture: the target's size and format */
@@ -23,10 +24,26 @@
 
 /* ---------- Create / destroy ---------- */
 
+/* DENG-177: the first stage of every view (right after "view.debug_clear"): the view's scene
+ * constants entry of the GPU scene, so the stages after it read the tables through it. */
+static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
+    de_renderer *r = (de_renderer *)user;
+    de__gpu_view_params p = {
+        .view = vf->view_matrix, .proj = vf->proj, .width = vf->width, .height = vf->height};
+    if (vf->camera != NULL)
+        p.camera_position = vf->camera->offset;
+    const u32 slot = (vf->view.id & 0xFFu) - 1u; /* views.c: slot + 1 in the low byte */
+    const de_result res = de__gpu_scene_view_pass(r->gpu_scene, vf->graph, slot, &p);
+    if (res != DE_OK)
+        DE_ERROR(r->log, "renderer: view \"%s\": GPU scene constants: %s", vf->name,
+                 de_result_str(res));
+}
+
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
-    de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
+    de__views_destroy(r);                /* DENG-176: view graphs, outputs, the composite */
+    de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
     if (r->uploader != NULL && !r->uploader_orphaned)
         de_render_uploader_destroy(r->uploader);
     if (r->graph != NULL)
@@ -198,6 +215,22 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         }
     }
 
+    /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
+    res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
+                                                     .allocator = a,
+                                                     .assets = r->assets,
+                                                     .uploader = r->uploader,
+                                                     .initial_capacity[DE__GS_VIEWS] = DE__VIEW_MAX,
+                                                     .builtin_scatter = true,
+                                                     .views_in_view_graphs = true},
+                               &r->gpu_scene);
+    if (res == DE_OK)
+        res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN + 1, "gpu_scene.view",
+                                      gpu_scene_view_stage, r);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: GPU scene");
+        goto fail;
+    }
     DE_INFO(r->log, "renderer: %s (%s), tier %s, %u frames in flight%s", r->caps.device_name,
             de_gpu_backend_name(r->caps.backend), r->settings.tier == DE_TIER_RT ? "rt" : "base",
             r->frames_in_flight, DE_HANDLE_VALID(r->swapchain) ? "" : ", offscreen");
@@ -332,8 +365,17 @@ de_result de_renderer_render_frame(de_renderer *r) {
     de__views_set_output_size(r, t != NULL ? t->width : 0, t != NULL ? t->height : 0,
                               t != NULL ? t->format : DE__RENDER_OFFSCREEN_FORMAT);
 
+    /* DENG-177: the GPU scene's uploads, once per frame in its own graph; queue order makes
+     * them visible to every view graph. */
+    const de_result sr = de__gpu_scene_frame(r->gpu_scene, de__render_world_current(r), arena, n);
+    if (sr != DE_OK)
+        DE_ERROR(r->log, "renderer: frame %llu: GPU scene: %s", (unsigned long long)n,
+                 de_error_last() != NULL ? de_error_last()->message : de_result_str(sr));
+
     /* 5 + 6. The views, then the output graph; the frame fence is signalled with N + 1. */
     const de_result vr = de__views_render(r, arena, target, final_access, n);
+    de__gpu_scene_views_end(r->gpu_scene, r->frame_fence, n + 1u); /* DENG-177 */
+    de__gpu_scene_fill_stats(r->gpu_scene, &r->stats);
     r->frame_index = n + 1u;
     if (DE_HANDLE_VALID(r->swapchain)) {
         const de_result p = de_gpu_swapchain_present(r->dev, r->swapchain);

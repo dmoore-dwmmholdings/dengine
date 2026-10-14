@@ -557,6 +557,13 @@ typedef struct de_render_stats {
     u32 extract_instances; /**< mesh instances in the render world */
     u32 extract_lights;    /**< lights in the render world */
     f32 extract_cpu_ms;    /**< from taking the render-world buffer to the kick */
+    /* GPU scene (DENG-177), written on the thread that renders: */
+    u64 gpu_scene_upload_bytes; /**< bytes the last frame uploaded into the scene tables */
+    u32 gpu_scene_instances;    /**< instance table slots in use (high-water mark) */
+    u32 gpu_scene_lights;       /**< light table slots in use */
+    u32 gpu_scene_meshes;       /**< meshes the instances use */
+    u32 gpu_scene_materials;    /**< materials the instances use */
+    u64 gpu_scene_gpu_bytes;    /**< GPU memory of the scene tables and scratch buffers */
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 
