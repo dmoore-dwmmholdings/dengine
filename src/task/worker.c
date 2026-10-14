@@ -109,6 +109,7 @@ static void de__worker_thread_init(de__task_slot *self) {
     de_fp_env_init_thread();
     de_crash_thread_init();
     de__task_set_current_slot(self);
+    de_sem_post(&self->ts->start_sem, 1); /* DENG-416: started; create may return */
 }
 
 i32 de__task_frame_worker_main(void *p) {
@@ -264,6 +265,9 @@ static void de__bg_snapshot(de_task_system *ts) {
 i32 de__task_bg_monitor_main(void *p) {
     de_task_system *ts = (de_task_system *)p;
     de_crash_thread_init();
+    de__task_set_current_slot(
+        NULL); /* DENG-416: touch thread-local storage before create returns */
+    de_sem_post(&ts->start_sem, 1);
     i64 credit = (i64)DE__TASK_BG_CREDIT_CAP_NS; /* raised time the budget allows (ns) */
     u64 credit_at = de_time_now_ns();
     bool watching = false; /* bg_seen holds the counts of the previous check */

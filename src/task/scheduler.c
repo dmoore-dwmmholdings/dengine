@@ -524,6 +524,7 @@ typedef struct de__task_init_state {
     bool bg_sem;
     bool locks;
     bool inject;
+    bool start_sem; /* DENG-416 */
 } de__task_init_state;
 
 /* Stops the threads that were started and frees what was initialised. */
@@ -563,6 +564,8 @@ static void de__task_teardown(de_task_system *ts, const de__task_init_state *st)
         de_sem_destroy(&ts->idle_sem);
     if (st->bg_sem)
         de_sem_destroy(&ts->bg_sem);
+    if (st->start_sem)
+        de_sem_destroy(&ts->start_sem);
     if (st->locks) {
         de_mutex_destroy(&ts->main_lock);
         de_mutex_destroy(&ts->bg_lock);
@@ -698,6 +701,9 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
     if ((r = de_mpmc_init(&ts->inject, &qd)) != DE_OK)
         goto fail;
     st.inject = true;
+    if ((r = de_sem_init(&ts->start_sem, 0)) != DE_OK)
+        goto fail;
+    st.start_sem = true;
 
     /* The creating thread is frame worker 0. */
     de__tls_slot = &ts->slots[0];
@@ -737,6 +743,14 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
         if (r != DE_OK)
             goto fail;
 #endif
+    }
+    /* DENG-416: return only once every thread started above runs and has touched its
+     * thread-local storage (the start latch, task_internal.h). On a loaded host a thread can start
+     * long after its create call; its first-use allocations must not land in the caller's frame. */
+    {
+        const u32 started = (ts->frame_count - 1u) + bg + (ts->bg_boost ? 1u : 0u);
+        for (u32 i = 0; i < started; ++i)
+            de_sem_wait(&ts->start_sem);
     }
     if (ts->pin_workers)
         de__task_pin(ts);
@@ -785,6 +799,7 @@ void de_task_system_destroy(de_task_system *ts) {
         .bg_sem = true,
         .locks = true,
         .inject = true,
+        .start_sem = true,
     };
     de__task_teardown(ts, &all);
 }
