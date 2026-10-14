@@ -159,8 +159,9 @@ jobs:
             compiler: clang
             preset: linux-clang-debug
             backend: vulkan
-            targets: de_golden test_flip hello_triangle
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$)'
+            # DENG-105: render_loaders.* uploads, hands over and reads back assets on lavapipe.
+            targets: de_golden test_flip hello_triangle test_render_loaders
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022

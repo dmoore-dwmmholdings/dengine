@@ -7,6 +7,7 @@
 #include "asset/asset_internal.h"
 #include "asset/budget_internal.h"
 #include "asset/load_internal.h"
+#include "asset/pipeline_internal.h" /* DENG-105: uploads_in_flight */
 #include "asset/slots_internal.h"
 
 #include <dengine/de_asset.h>
@@ -48,6 +49,6 @@ de_asset_stats de_asset_get_stats(const de_asset_system *s) {
         st.io_bytes_per_sec = b->io_rate;
     }
     st.loads_in_flight = stats_loads_in_flight(s);
-    st.uploads_in_flight = 0; /* S11: the GPU upload stage */
+    st.uploads_in_flight = de__pipeline_uploads_waiting(s); /* DENG-105 */
     return st;
 }

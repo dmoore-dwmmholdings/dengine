@@ -88,6 +88,17 @@ band = "content"
 paths = ["tools/cook/lib"]
 explicit_only = true
 
+# DENG-105: the importers (tools/cook/importers/) are compiled into the cooker library (de_cooker,
+# and de_cook_shader for shaders), so the runtime may name them only where it links the cooker
+# (DE_HAS_COOKER): the render asset types register de_texture_import and de_model_import. Their
+# own files are not scanned (like the rest of tools/); explicit_only keeps every other engine
+# module out.
+[[module]]
+name = "cook/importers"
+band = "content"
+paths = ["tools/cook/importers"]
+explicit_only = true
+
 [[module]]
 name = "asset"
 band = "content"
@@ -229,6 +240,11 @@ why = "GPU-resident asset types (textures, buffers) are created through the RHI 
 from = "asset"
 to = "cook"
 why = "Dev builds only (DE_HAS_COOKER): the asset pipeline runs the cooker library in-process (SPEC §11.5, S08 DENG-209). Shipping does not link it."
+
+[[allow]]
+from = "render"
+to = "cook/importers"
+why = "Dev builds only (DE_HAS_COOKER): the runtime `texture` and `model` types register the texture and model importers (de_texture_import, de_model_import; DENG-105). Shipping does not link them."
 
 # gameplay
 [[allow]]

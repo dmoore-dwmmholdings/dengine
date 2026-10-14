@@ -398,6 +398,15 @@ DE_API de_blob de_asset_blob(de_asset_system *s, de_asset_id id);
  * (src/gpu/shader/), which reads the cooked blobs behind the handle. */
 DE_API de_shader de_asset_shader(de_asset_system *s, de_asset_id id);
 /**
+ * The prefab of model `m` (DENG-105). The model importer cooks the node hierarchy of a model into
+ * its sub-asset `<model>#prefab` (type `prefab`, DENG-101), which is a dependency of the model and
+ * so is READY with it. de_asset_prefab refuses the model's own ID (its type is `model`); pass the
+ * model's handle here, or the sub-asset's ID to de_asset_prefab:
+ * `de_asset_prefab(s, de_asset_id_from("props/crate#prefab"))`. Returns an invalid handle (no
+ * error context) when `m` is stale, is not a READY `model`, or has no prefab. Main thread.
+ */
+DE_API de_prefab de_model_prefab(de_asset_system *s, de_model m);
+/**
  * The bytes of a READY `blob` asset: exactly the source file's bytes, followed by a NUL that is
  * not counted, with their count in `*size` (may be NULL). NULL (and size 0) for an invalid or
  * stale handle, or a blob that is not loaded. Valid until the asset is evicted or reloaded. Any
@@ -450,6 +459,17 @@ typedef struct de_asset_type_desc {
      * the asset. The old object is still loaded (it goes to `unload` reload_retire_frames
      * updates later). Shaders use it to rebuild their pipelines. NULL = none. */
     void (*reloaded)(void *object, de_asset_id id, void *user);
+    /* ---- DENG-105: publish after the GPU uploads ---- */
+    /** Optional. Called on the main thread, inside de_asset_system_update, before a loaded object
+     * of this type is published: after `load` returned it and the asset's dependencies are READY
+     * (for a hot reload: before the swap). DE_OK publishes it now. DE_ERR_BUSY keeps the asset
+     * LOADING (it counts in de_asset_stats.uploads_in_flight) and asks again at every later
+     * update. Any other result fails the asset, with the error context's message when its code
+     * matches. The render types use it so that a texture or mesh is READY only once the GPU has
+     * completed its copies (SPEC §11.4), and to turn asset IDs into typed handles, which is
+     * main-thread work. A load that is cancelled while it waits gives its object to `unload`.
+     * NULL = publish at once. */
+    de_result (*ready)(void *object, void *user);
 } de_asset_type_desc;
 
 /**
@@ -738,7 +758,8 @@ enum {
 /**
  * Residency counters (DENG-144): `bytes_resident` per category and `assets_resident` count the
  * READY assets that hold an object; `loads_in_flight` the assets submitted to the load backend
- * and not finished; `uploads_in_flight` is 0 until the GPU upload stage exists (S11);
+ * and not finished; `uploads_in_flight` the loaded assets that wait for their GPU copies (their
+ * type's `ready` hook said DE_ERR_BUSY; DENG-105);
  * `io_bytes_per_sec` the bytes the backend reported read, averaged over the last second (it is
  * sampled by de_asset_system_update). All zero for a NULL system. O(loaded slots) for
  * `loads_in_flight`; no allocation. Main thread.

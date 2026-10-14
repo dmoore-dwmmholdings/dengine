@@ -177,6 +177,12 @@ void de__vk_translate_barrier(const de__vk_barrier_ctx *ctx, const de_gpu_barrie
             src.stages = 0;
             src.access = 0;
         }
+    } else if (image && b->src_queue != b->dst_queue && ctx->cmd_queue == b->dst_queue) {
+        /* DENG-105: both queues in one family, so no ownership transfer: the barrier recorded on
+         * src_queue already changed the layout, and the image is in the new one. The dst_queue
+         * half keeps it (a memory dependency only); a second transition would start from a
+         * layout the image is no longer in. */
+        src.layout = dst.layout;
     }
 
     if (image) {

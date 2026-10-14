@@ -268,8 +268,9 @@ void de__pipeline_io_done(de__pipeline *pl) {
 }
 
 de_result de__pipeline_upload_stage(de_asset_system *s, de_asset_load_ctx *ctx) {
-    /* S11: GPU-resident types hand their data to the staging ring and the copy queue here; the
-     * job then waits for the upload before it goes back to the main thread. */
+    /* DENG-105: GPU types stage their bytes in their own loader (src/render/loaders/), which may
+     * not block a frame worker until the copy queue is done. The job waits for the upload on the
+     * main thread instead, through the type's `ready` hook (job_try_publish). */
     (void)s;
     (void)ctx;
     return DE_OK;
@@ -505,6 +506,33 @@ static void job_publish(de__pipeline *pl, de__pjob *job) {
     de__slot_complete_now(s, slot, DE_OK, bytes, NULL);
 }
 
+/* DENG-105: publishes a loaded job whose dependencies are READY, unless its type's `ready` hook
+ * says the object is not ready yet (DE_ERR_BUSY: GPU copies still in flight). Then the job waits
+ * on the waiting list in WAIT_UPLOAD and is asked again by every update. Any other result of the
+ * hook fails the job. Returns true when the job left (published or failed). */
+static bool job_try_publish(de__pipeline *pl, de__pjob *job) {
+    if (job->type->ready != NULL && job->object != NULL) {
+        de_error_clear();
+        de_result r = job->type->ready(job->object, job->type->user);
+        if (r == DE_ERR_BUSY) {
+            if (!job->waiting)
+                wait_link(pl, job);
+            de__pjob_set_stage(job, DE__PJOB_WAIT_UPLOAD);
+            return false;
+        }
+        if (r != DE_OK) {
+            /* Through the job's message, as for a failed load (prefixed with the asset). */
+            const de_error *e = de_error_last();
+            de__pipeline_job_fail(job, r, "%s",
+                                  e != NULL && e->result == r ? e->message : de_result_str(r));
+            job_fail_now(pl, job, r, job->msg);
+            return true;
+        }
+    }
+    job_publish(pl, job);
+    return true;
+}
+
 /* ---- Dependencies (main thread) ---------------------------------------------------------------
  */
 
@@ -675,10 +703,11 @@ static void resolve_waiting(de__pipeline *pl) {
                 continue;
             }
             const de__load_entry *failed = NULL;
-            deps_state st = job_deps_state(pl, job, &failed);
+            /* DENG-105: a job without dependencies waits here only for its `ready` hook. */
+            deps_state st = job->dep_count != 0 ? job_deps_state(pl, job, &failed) : DEPS_READY;
             if (st == DEPS_READY) {
-                job_publish(pl, job);
-                changed = true;
+                if (job_try_publish(pl, job))
+                    changed = true;
             } else if (st == DEPS_FAILED) {
                 job_fail_dep(pl, job, failed);
                 changed = true;
@@ -700,7 +729,7 @@ static void job_finished(de__pipeline *pl, de__pjob *job) {
         return;
     }
     if (job->dep_count == 0) {
-        job_publish(pl, job);
+        (void)job_try_publish(pl, job); /* DENG-105: may wait in WAIT_UPLOAD */
         return;
     }
     job_start_deps(pl, job);
@@ -946,8 +975,8 @@ static void job_cancel(de__pipeline *pl, de__pjob *job) {
         de__pack_stage_cancel(job); /* DENG-212: a pack job has one read per run */
     else if (io_cancel)
         de_io_cancel(&job->io);
-    /* WAIT_DEPS: the update hook discards it; every other stage brings it back to the main
-     * thread through the finished list. */
+    /* WAIT_DEPS, WAIT_UPLOAD: the update hook discards it; every other stage brings it back to the
+     * main thread through the finished list. */
 }
 
 static void pl_cancel(void *user, de_asset_system *s, u32 slot) {
@@ -1134,6 +1163,15 @@ void de__pipeline_get_stats(const de_asset_system *s, de__pipeline_stats *out) {
     out->discarded = de_atomic_load_u64(&pl->stats.discarded, DE_ATOMIC_RELAXED);
     out->unloads = de_atomic_load_u64(&pl->stats.unloads, DE_ATOMIC_RELAXED);
     out->live_jobs = pl->live_jobs;
+}
+
+u32 de__pipeline_uploads_waiting(const de_asset_system *s) {
+    const de__pipeline *pl = s != NULL ? s->pipeline : NULL;
+    u32 n = 0;
+    for (const de__pjob *j = pl != NULL ? pl->wait_head : NULL; j != NULL; j = j->wait_next)
+        if (de_atomic_load_u32(&j->stage, DE_ATOMIC_ACQUIRE) == DE__PJOB_WAIT_UPLOAD)
+            n++;
+    return n;
 }
 
 u32 de__pipeline_debug_stage(de_asset_system *s, u32 slot) {
