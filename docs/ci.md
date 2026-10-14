@@ -68,8 +68,8 @@ The configure step prints `build/<preset>/de_config_dump.txt`. If a job fails, i
 artifact `logs-<preset>` (kept for 7 days). The artifact holds `Testing/Temporary/`
 (`LastTest.log`), `CMakeConfigureLog.yaml` and the config dump.
 
-GPU and golden-image jobs come in S10, self-hosted runners in S20 and the ABI check in S37. The
-cross-architecture determinism jobs are in `determinism.yml` (below).
+The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
+The cross-architecture determinism jobs are in `determinism.yml` (below).
 
 **D3D12 tests on WARP.** The hosted runners have no GPU, so the D3D12 tests (`gpu_d3d12.*`) run
 on WARP, the software adapter. They do not use the runner image's WARP, because it has shader
@@ -83,6 +83,35 @@ fails if the WARP in the test process is not the vendored one. Its licence forbi
 redistribution, so no job uploads it: the `logs-<preset>` artifact holds no binaries. To run the
 tests on the runner image's own WARP, configure with `-DDE_D3D12_TEST_WARP=OFF`. The quick tier
 has `windows msvc Debug`, so it also runs these tests.
+
+#### Golden images (`golden` job, full tier only)
+
+The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes of
+`tests/golden/` and compares them with the references in `tests/golden/refs/` by LDR-FLIP. The
+`golden` job is a matrix of three entries. It runs only when the run is in the full tier: its
+`if:` repeats the tier choice of the `plan` job (`-f tier=full`, or a run outside `feature/**`).
+
+| Job | Runner | Preset | Backend |
+|---|---|---|---|
+| golden linux vulkan (lavapipe) | `ubuntu-24.04` | `linux-clang-debug` | Vulkan on Mesa lavapipe (`mesa-vulkan-drivers`, with `vulkan-validationlayers`; `VK_DRIVER_FILES` and `VK_ICD_FILENAMES` name only the lavapipe ICD) |
+| golden windows d3d12 (WARP) | `windows-2022` | `windows-clang-cl-debug` | D3D12 on the vendored WARP (`--warp`), with the debug layer |
+| golden macos metal (hosted, skips below Base) | `macos-14` | `macos-debug` | Metal; every scene reports SKIPPED, because the runner's paravirtual device is below the Base tier |
+
+- Each job builds only `de_golden`, `test_flip` and `hello_triangle` (and `hello_triangle_warp`
+  on Windows), then runs the CTests `flip.*`, `golden.*` and its backend's `example_hello_*`
+  (DENG-327). So the Vulkan backend runs on CI here, on lavapipe.
+- The Linux and Windows entries then run `de-golden ... --scene rhi_clear` and require exit 0.
+  Without that step a backend that skipped every scene would leave the job green.
+- The jobs restore the compiler cache of the build job with the same preset and do not save it.
+- On a failure, the artifact `golden-<backend>` (14 days) holds `build/<preset>/golden/` (each
+  scene's image; for a failed comparison also the reference and the FLIP heat map, in the layout
+  of `tests/golden/refs/`) and `Testing/Temporary/`. It holds PNG files and logs only, never the
+  WARP DLL.
+- References are never written on CI: `de-golden --update-refs` refuses to run when `CI` is set.
+  Take a reviewed image from the artifact instead (`docs/testing/golden.md`).
+- The Windows build jobs above also run `golden.d3d12.*` on WARP, since they deploy the vendored
+  WARP next to `de-golden` too. Linux build jobs have no Vulkan driver, so `golden.vulkan.*` skips
+  there.
 
 ### `sanitizers.yml`: sanitizers
 
