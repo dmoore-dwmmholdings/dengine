@@ -562,6 +562,9 @@ typedef struct mtl_query_heap {
     void *samples; /* id<MTLCounterSampleBuffer>, shared storage, retained */
     void *staging; /* id<MTLBuffer>, shared: count resolved u64, then 16 bytes the timestamp
                       encoders fill (their one command) */
+    /* DENG-419: the hand-off between the threads that record resolves and the listener blocks
+     * that run them (mtl_query.m). Only ever changed by acq_rel read-modify-writes. */
+    de_atomic_u64 handoff;
 } mtl_query_heap;
 
 /* mtl_query.m */
