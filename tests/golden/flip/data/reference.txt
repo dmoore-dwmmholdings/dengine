@@ -1,0 +1,10 @@
+# FLIP validation pairs (DENG-329), written by make_reference.py with flip-evaluator 1.7.
+# name reference.png test.png ppd mean p99 max  (ppd 0 = the default viewing setup, 67.020643)
+identical gradient.png gradient.png 0.0000 0.000000000 0.000000000 0.000000000
+gradient_noise gradient.png gradient_noise_test.png 0.0000 0.071156323 0.171440482 0.283440322
+shapes_shift shapes.png shapes_shift_test.png 0.0000 0.137392446 0.700573623 0.804344118
+checker_blur checker.png checker_blur_test.png 0.0000 0.206810728 0.386427402 0.399797171
+patches_swap patches.png patches_swap_test.png 0.0000 0.755780399 0.999610662 0.999737024
+flat_plus8 flat.png flat_plus8_test.png 0.0000 0.135802269 0.135797605 0.135797605
+shapes_noise_ppd30 shapes.png shapes_noise_ppd30_test.png 30.0000 0.234349623 0.482214481 0.589640141
+checker_shift_ppd120 checker.png checker_shift_ppd120_test.png 120.0000 0.529077828 0.968743205 0.977129698

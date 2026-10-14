@@ -1,0 +1,59 @@
+# tests/golden/scenes.toml: the golden scenes and how each is judged (DENG-329). One table per
+# scene, [scene.<name>], for every DE_GOLDEN_SCENE; de-golden refuses a scene without its table and
+# a table without its scene. CMake reads the table names: each scene gets the CTest
+# golden.<backend>.<scene> on every backend this build has. docs/testing/golden.md has the details.
+#
+#   threshold_mean  the largest mean LDR-FLIP error that passes (required)
+#   threshold_p99   the largest 99th-percentile error that passes (required)
+#   backends        default ["metal", "vulkan", "d3d12"]
+#   tiers           default ["base"]; "rt" renders and compares at the RT tier (refs/<b>/rt/)
+#   requires        caps the device must have, else SKIPPED: mesh_shaders, ray_query,
+#                   rt_pipelines, hardware_rt, async_compute
+#   size            default 512 (square), or [width, height]
+#   format          "rgba8" (default) or "rgba16f" (read back tone-mapped)
+#   reference       use another scene's reference images (default: the scene's own)
+#   expect_fail     the harness self test: passes only when the comparison fails
+#
+# Thresholds: the references are per backend, so a run on the machine that made them is exact
+# (FLIP 0). The thresholds allow for other devices and drivers of the same backend: interpolation,
+# filtering and rasterization differ by a code value or so, which LDR-FLIP rates at about 0.02 on
+# flat color. A color off by 8/255 on flat color rates about 0.14 and fails every scene below.
+
+[scene.rhi_clear]
+description = "RGBA16F target cleared to (0.25, 0.5, 4.0, 1); the readback is tone-mapped"
+format = "rgba16f"
+threshold_mean = 0.005
+threshold_p99 = 0.02
+
+[scene.rhi_triangle]
+description = "four triangles: interpolated colors, reverse-Z depth test, back-face culling"
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rhi_textured_quad]
+description = "rotated quad sampling a 32x32 texture through bindless indices, linear, repeat"
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rhi_compute_gradient]
+description = "compute shader writes the image into a buffer, copied into the target"
+threshold_mean = 0.005
+threshold_p99 = 0.02
+
+[scene.rhi_indirect_count]
+description = "compute writes 4 indexed draw records and the count 3: three triangles appear"
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rhi_mesh_triangle]
+description = "amplification + mesh shader hexagon fan with vertex colors"
+requires = ["mesh_shaders"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rhi_selftest_perturbed]
+description = "self test: rhi_triangle with every vertex color off by 8/255 must fail"
+reference = "rhi_triangle"
+expect_fail = true
+threshold_mean = 0.005
+threshold_p99 = 0.05
