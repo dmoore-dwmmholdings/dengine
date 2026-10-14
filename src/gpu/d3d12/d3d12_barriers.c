@@ -147,6 +147,13 @@ de__d3d12_access_info de__d3d12_access_info_of(de_gpu_queue q, u32 access, bool 
             r.layout = DE__D3D12_LAYOUT_COMMON;
         if (texture && q == DE_QUEUE_COPY)
             r.layout = DE__D3D12_LAYOUT_COMMON;
+        /* Enhanced-barrier rule (debug layer message 1331): with AccessBefore NO_ACCESS the
+         * LayoutBefore must be UNDEFINED or the SyncBefore NONE. A before side that waits for
+         * everything in a defined layout (PRESENT, or NONE on a copy queue, which has no
+         * UNDEFINED -> COMMON transition) names ACCESS_COMMON instead: every access that layout
+         * allows. DENG-423 found it once the render tests ran on the Agility runtime. */
+        if (before && texture && r.layout != DE__D3D12_LAYOUT_UNDEFINED)
+            r.access = DE__D3D12_ACCESS_COMMON;
         return r;
     }
     u32 sync = 0, acc = 0, layout = DE__D3D12_LAYOUT_COMMON;
@@ -342,6 +349,7 @@ SAME(DE__D3D12_ACCESS_COPY_SOURCE, D3D12_BARRIER_ACCESS_COPY_SOURCE);
 SAME(DE__D3D12_ACCESS_RTAS_READ, D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ);
 SAME(DE__D3D12_ACCESS_RTAS_WRITE, D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE);
 SAME(DE__D3D12_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_NO_ACCESS);
+SAME(DE__D3D12_ACCESS_COMMON, D3D12_BARRIER_ACCESS_COMMON);
 SAME(DE__D3D12_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_UNDEFINED);
 SAME(DE__D3D12_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_COMMON);
 SAME(DE__D3D12_LAYOUT_COMMON, D3D12_BARRIER_LAYOUT_PRESENT);

@@ -80,7 +80,7 @@ TEST(d3d12, barrier_translation_table) {
     EXPECT_EQ(a.layout, LAYOUT(COMMON));
     a = de__d3d12_access_info_of(G, DE_ACCESS_PRESENT, true, true);
     EXPECT_EQ(a.sync, SYNC(ALL));
-    EXPECT_EQ(a.access, ACC(NO_ACCESS));
+    EXPECT_EQ(a.access, ACC(COMMON)); /* NO_ACCESS needs UNDEFINED or SYNC_NONE (DENG-423) */
     EXPECT_EQ(a.layout, LAYOUT(COMMON));
     /* NONE: before = contents discarded (UNDEFINED) after everything; after = no later use. */
     a = de__d3d12_access_info_of(G, DE_ACCESS_NONE, true, true);
@@ -141,6 +141,23 @@ TEST(d3d12, barrier_translation_table) {
     a = de__d3d12_access_info_of(X, DE_ACCESS_NONE, true, true);
     EXPECT_EQ(a.sync, SYNC(ALL));
     EXPECT_EQ(a.layout, LAYOUT(COMMON)); /* no UNDEFINED -> COMMON transition on a copy queue */
+    EXPECT_EQ(a.access, ACC(COMMON));    /* so not NO_ACCESS (debug layer message 1331) */
+    /* The rule on every queue, for textures and buffers, both sides: AccessBefore NO_ACCESS
+     * goes with LayoutBefore UNDEFINED or SyncBefore NONE (DENG-423). */
+    {
+        static const u32 k_all[] = {DE_ACCESS_NONE,          DE_ACCESS_PRESENT,
+                                    DE_ACCESS_SHADER_READ,   DE_ACCESS_SHADER_WRITE,
+                                    DE_ACCESS_RENDER_TARGET, DE_ACCESS_DEPTH_WRITE,
+                                    DE_ACCESS_COPY_SRC,      DE_ACCESS_COPY_DST};
+        const de_gpu_queue qs[3] = {G, C, X};
+        for (u32 qi = 0; qi < 3; ++qi)
+            for (u32 i = 0; i < sizeof k_all / sizeof k_all[0]; ++i)
+                for (u32 tex = 0; tex < 2; ++tex) {
+                    a = de__d3d12_access_info_of(qs[qi], k_all[i], tex != 0, true);
+                    if (a.access == ACC(NO_ACCESS) && tex != 0)
+                        EXPECT_TRUE(a.layout == LAYOUT(UNDEFINED) || a.sync == SYNC(NONE));
+                }
+    }
     /* Compute queue: no input assembler, raster or depth; ALL_SHADING is compute shading. */
     a = de__d3d12_access_info_of(C, DE_ACCESS_SHADER_READ, false, false);
     EXPECT_EQ(a.sync, SYNC(COMPUTE_SHADING));
