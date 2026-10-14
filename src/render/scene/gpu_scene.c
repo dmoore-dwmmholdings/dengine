@@ -11,13 +11,7 @@
 #include "render/loaders/upload_ring.h"
 #include "render/world/render_world.h"
 
-#if DE_HAS_COOKER
-#include <dengine/de_platform.h>
-
-#include "asset/manifest_internal.h"
-#include "cook/lib/de_cooker.h"
-#include "gpu/shader/shader_internal.h"
-#endif
+#include "render/shaders/engine_shaders.h" /* DENG-421: the scatter kernels */
 
 #include <math.h>
 #include <stdio.h>
@@ -813,142 +807,33 @@ typedef struct gs_scatter_pc {
 
 /* ---------- The engine's scatter kernels ---------- */
 
-#if DE_HAS_COOKER
-static const char *cook_target_name(de__shader_target t) {
-    return t == DE__SHADER_TARGET_DXIL       ? "dxil"
-           : t == DE__SHADER_TARGET_METALLIB ? "metallib"
-                                             : "spirv";
-}
-
-static bool cook_find(const de__shader_view *v, u32 target, const char *entry,
-                      de__shader_record *out) {
-    for (u32 e = 0; e < v->header.entry_count; ++e) {
-        const char *name = NULL;
-        (void)de__shader_view_entry(v, e, &name);
-        if (name == NULL || strcmp(name, entry) != 0)
-            continue;
-        const i32 ri = de__shader_view_find(v, target, 0, e);
-        if (ri < 0)
-            return false;
-        *out = de__shader_view_record(v, (u32)ri);
-        return true;
-    }
-    return false;
-}
-
-/* Cooks shaders/scene/scatter.slang for the device's target (DENG-176's in-process cook, see
- * passes/composite.c) and copies the two entry points' code into one block (`*code`). */
-static bool cook_kernels(de__gpu_scene *gs, de__gpu_scene_desc *d, void **code, size_t *size,
-                         char *why, size_t cap) {
-    de_asset_type_desc t;
-    if (!de_cooker_builtin_importer("shader", &t)) {
-        snprintf(why, cap, "this build has no shader importer (no Slang)");
-        return false;
-    }
-    const de__shader_target target =
-        de__shader_target_for_backend(de_gpu_get_caps(gs->dev)->backend);
-    if (de_fs_mount("descenshd", DE_RENDER_SCENE_SHADER_DIR, 0, 0) != DE_OK) {
-        snprintf(why, cap, "cannot mount %s", DE_RENDER_SCENE_SHADER_DIR);
-        return false;
-    }
-    de_cooker *ck = NULL;
-    bool ok = false, have_res = false;
-    de_cook_result res;
-    memset(&res, 0, sizeof res);
-    if (de_cooker_create(
-            &(de_cooker_desc){.allocator = gs->alloc, .verify_determinism = DE_COOK_VERIFY_OFF},
-            &ck) != DE_OK ||
-        de_cooker_register_type(ck, &t) != DE_OK) {
-        const de_error *e = de_error_last();
-        snprintf(why, cap, "cannot create the cooker: %.300s", e != NULL ? e->message : "?");
-        goto done;
-    }
-    const char *targets[1] = {cook_target_name(target)};
-    de__manifest_kv kv;
-    memset(&kv, 0, sizeof kv);
-    kv.key = "targets";
-    kv.value.type = DE__MANIFEST_STRING_ARRAY;
-    kv.value.u.arr.items = targets;
-    kv.value.u.arr.count = 1;
-    de__manifest_asset a;
-    memset(&a, 0, sizeof a);
-    a.id = "engine/shaders/scene/scatter";
-    a.type = "shader";
-    a.source = "scatter.slang";
-    a.file = "descenshd:/assets.toml";
-    a.settings = &kv;
-    a.setting_count = 1;
-    const de_cook_input in = {.asset = &a, .asset_root = "descenshd:/", .source = NULL};
-    if (de_cooker_cook(ck, &in, &res) != DE_OK) {
-        const de_error *e = de_error_last();
-        snprintf(why, cap, "cooking scatter.slang for %s failed: %.300s", targets[0],
-                 e != NULL ? e->message : "?");
-        goto done;
-    }
-    have_res = true;
-    de__shader_view v;
-    de__shader_record ri, rl;
-    if (de__shader_view_init(res.data, res.size, &v) != DE_OK ||
-        !cook_find(&v, (u32)target, "cs_scatter_instances", &ri) ||
-        !cook_find(&v, (u32)target, "cs_scatter_lights", &rl)) {
-        snprintf(why, cap, "the cooked scatter.slang has no kernels for %s", targets[0]);
-        goto done;
-    }
-    *size = (size_t)ri.code_size + (size_t)rl.code_size;
-    *code = DE_ALLOC(gs->alloc, *size, 16, DE_MEM_RENDER);
-    if (*code == NULL) {
-        snprintf(why, cap, "out of memory");
-        goto done;
-    }
-    memcpy(*code, v.base + ri.code_offset, (size_t)ri.code_size);
-    memcpy((u8 *)*code + ri.code_size, v.base + rl.code_offset, (size_t)rl.code_size);
-    d->scatter_instances =
-        (de_gpu_shader_blob){.code = *code, .size = ri.code_size, .entry = "cs_scatter_instances"};
-    d->scatter_lights = (de_gpu_shader_blob){.code = (const u8 *)*code + ri.code_size,
-                                             .size = rl.code_size,
-                                             .entry = "cs_scatter_lights"};
-    memcpy(d->scatter_threadgroup, ri.threadgroup, sizeof d->scatter_threadgroup);
-    d->scatter_push_constant_bytes = ri.push_constant_bytes > rl.push_constant_bytes
-                                         ? ri.push_constant_bytes
-                                         : rl.push_constant_bytes;
-    ok = true;
-done:
-    if (have_res)
-        de_cook_result_free(&res);
-    de_cooker_destroy(ck);
-    (void)de_fs_unmount("descenshd", DE_RENDER_SCENE_SHADER_DIR);
-    return ok;
-}
-#endif
-
-/* The null backend compiles nothing: any non-empty code will do. */
-static const u32 k_placeholder_code[4] = {0x07230203u, 0x00010600u, 0u, 0u};
-
-/* Fills the scatter blobs of `d` with the engine's kernels, or leaves them empty (copy-only). */
+/* Fills the scatter blobs of `d` with the engine shader "scene_scatter" (DENG-421,
+ * render/shaders/engine_shaders.h: cooked in-process in Dev builds, the embedded build-time cook
+ * otherwise, a placeholder on the null backend), or leaves them empty (copy-only). The code block
+ * it allocated, if any, goes to `*code` / `*size` (freed after the pipelines are made). */
 static void builtin_kernels(de__gpu_scene *gs, de__gpu_scene_desc *d, void **code, size_t *size) {
     const de_gpu_caps *caps = de_gpu_get_caps(gs->dev);
-    char why[512] = "";
-    if (caps->backend == DE_GPU_NULL) {
-        d->scatter_instances = (de_gpu_shader_blob){
-            .code = k_placeholder_code, .size = sizeof k_placeholder_code, .entry = "cs"};
-        d->scatter_lights = d->scatter_instances;
-        d->scatter_threadgroup[0] = DE__GS_SCATTER_GROUP;
-        d->scatter_threadgroup[1] = d->scatter_threadgroup[2] = 1;
-        return;
-    }
-    if (!caps->base_tier_ok) {
+    char why[768] = "";
+    if (caps->backend != DE_GPU_NULL && !caps->base_tier_ok) {
         snprintf(why, sizeof why, "below the Base tier: %s", caps->base_tier_reason);
     } else {
-#if DE_HAS_COOKER
-        if (cook_kernels(gs, d, code, size, why, sizeof why))
+        static const char *const k_entries[2] = {"cs_scatter_instances", "cs_scatter_lights"};
+        de__engine_shader_code es;
+        if (de__engine_shader_load(gs->dev, gs->alloc, "scene_scatter", 0, k_entries, 2, &es, why,
+                                   sizeof why) == DE_OK) {
+            d->scatter_instances = es.entries[0].blob;
+            d->scatter_lights = es.entries[1].blob;
+            memcpy(d->scatter_threadgroup, es.entries[0].threadgroup,
+                   sizeof d->scatter_threadgroup);
+            if (d->scatter_threadgroup[0] == 0) { /* a placeholder without reflection */
+                d->scatter_threadgroup[0] = DE__GS_SCATTER_GROUP;
+                d->scatter_threadgroup[1] = d->scatter_threadgroup[2] = 1;
+            }
+            d->scatter_push_constant_bytes = es.push_constant_bytes;
+            *code = es.block; /* NULL for embedded and placeholder code (static data) */
+            *size = es.block_size;
             return;
-#else
-        (void)code;
-        (void)size;
-        snprintf(why, sizeof why,
-                 "this build has no cooker (Release, Shipping or no tools), and no cooked engine "
-                 "shaders exist yet");
-#endif
+        }
     }
     DE_WARN(gs->log,
             "gpu scene: no scatter kernels on %s (%s): changed entries are copied one "

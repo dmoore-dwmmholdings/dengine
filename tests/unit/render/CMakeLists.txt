@@ -246,3 +246,43 @@ if(TARGET test_render_gpu_scene)
         endif()
     endif()
 endif()
+
+# DENG-421: the engine shaders (src/render/shaders/engine_shaders.{h,c}; shaders/engine_shaders.cmake),
+# executable test_engine_shaders; CTest names engine_shaders.<test>: the generated table, errors,
+# the null placeholder, the Dev cook cache (a cold cache cooks, the next load hits), the embedded
+# blobs making pipelines with the in-process cook off, and a second renderer's composite coming
+# from the cache (Dev) or the embedded blob (Release, Shipping). GPU tests use the first backend
+# with a Base-tier device and SKIP without one. DE_ESH_TEST_EMBEDDED: this build embeds blobs.
+set(_de_esh_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_metal)
+    list(APPEND _de_esh_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_esh_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_esh_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME engine_shaders
+    SOURCES test_engine_shaders.c
+    LIBS ${_de_esh_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_engine_shaders)
+    target_include_directories(test_engine_shaders PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_engine_shaders_tmp")
+    if(DE_ENGINE_SHADERS_BUILD_COOK)
+        set(_de_esh_embedded 1)
+    else()
+        set(_de_esh_embedded 0)
+    endif()
+    target_compile_definitions(test_engine_shaders PRIVATE
+        "DE_ESH_TEST_EMBEDDED=${_de_esh_embedded}"
+        "DE_ESH_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_engine_shaders_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_engine_shaders)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_engine_shaders)
+        endif()
+    endif()
+endif()

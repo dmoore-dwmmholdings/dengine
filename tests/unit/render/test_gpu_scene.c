@@ -39,6 +39,7 @@
 #include "render/loaders/render_assets.h"
 #include "render/renderer_internal.h"
 #include "render/scene/gpu_scene.h"
+#include "render/shaders/engine_shaders.h"
 #include "render/world/render_world.h"
 
 #if DE_HAS_GPU_VULKAN
@@ -809,7 +810,10 @@ typedef struct open_opts {
     de_gpu_backend backend;
     u32 instances, lights; /* fake render-world capacity */
     u32 initial_capacity[DE__GS_TABLE_COUNT];
-    bool scatter;      /* null: dummy scatter pipelines; GPU: the cooked kernels when available */
+    bool scatter; /* null: dummy scatter pipelines; GPU: the cooked kernels when available */
+    /* DENG-421: the engine's own kernels (builtin_scatter: the engine shader "scene_scatter",
+     * embedded at build time in every build type); they must be there on a Base-tier device */
+    bool builtin;
     u64 staging_bytes; /* own ring */
     u64 budget_bytes;
     u64 seed;
@@ -872,7 +876,20 @@ static void gsx_open(gsx *f, const open_opts *o) {
     memcpy(d.initial_capacity, o->initial_capacity, sizeof d.initial_capacity);
     static const u32 dummy_code[4] = {0x07230203u, 0, 0, 0};
     why[0] = '\0';
-    if (o->scatter && o->backend == DE_GPU_NULL) {
+    if (o->builtin) {
+        d.builtin_scatter = true;
+        if (caps->base_tier_ok) {
+            /* No code for this backend's target in this build (DXIL needs DXC on the build host):
+             * nothing to test here. */
+            static const char *const k_entries[2] = {"cs_scatter_instances", "cs_scatter_lights"};
+            de__engine_shader_code es;
+            if (de__engine_shader_load(f->dev, NULL, "scene_scatter", 0, k_entries, 2, &es, why,
+                                       sizeof why) != DE_OK)
+                SKIP(why);
+            printf("scene_scatter: %s\n", de__engine_shader_origin_name(es.origin));
+            de__engine_shader_code_free(&es);
+        }
+    } else if (o->scatter && o->backend == DE_GPU_NULL) {
         d.scatter_instances = (de_gpu_shader_blob){dummy_code, sizeof dummy_code, "cs"};
         d.scatter_lights = (de_gpu_shader_blob){dummy_code, sizeof dummy_code, "cs"};
         d.scatter_threadgroup[0] = 64;
@@ -894,6 +911,8 @@ static void gsx_open(gsx *f, const open_opts *o) {
         }
     }
     ASSERT_EQ(de__gpu_scene_create(&d, &f->gs), DE_OK);
+    if (o->builtin && caps->base_tier_ok)
+        ASSERT_TRUE(de__gpu_scene_has_scatter(f->gs)); /* DENG-421: in every build type */
     if (f->real_gpu)
         printf("scatter: %s\n", de__gpu_scene_has_scatter(f->gs) ? "compute" : "copy-only");
 #if defined(_WIN32) && DE_HAS_GPU_D3D12 && defined(DE_D3D12_TEST_WARP_DLL) &&                      \
@@ -1421,12 +1440,13 @@ TEST_F(gpu_scene, incremental_bytes_scatter, gsx) {
 
 /* ---------- random_ops_readback: 1000 frames of random changes, every table checked ---------- */
 
-static void random_ops(gsx *f, de_gpu_backend b, bool scatter, u32 frames) {
+static void random_ops_ex(gsx *f, de_gpu_backend b, bool scatter, bool builtin, u32 frames) {
     gsx_open(f, &(open_opts){.backend = b,
                              .instances = 1500,
                              .lights = 96,
                              .initial_capacity = {64, 4, 4, 16, 1},
                              .scatter = scatter,
+                             .builtin = builtin,
                              .seed = 0xDE177ull});
     populate(f, 40, 4);
     ASSERT_TRUE(gsx_frame(f));
@@ -1444,6 +1464,24 @@ static void random_ops(gsx *f, de_gpu_backend b, bool scatter, u32 frames) {
            st->count[DE__GS_INSTANCES], st->count[DE__GS_LIGHTS], st->live_meshes,
            st->live_materials, st->growths, (unsigned long long)st->total_bytes);
     EXPECT_GT(st->growths, 0u);
+}
+
+static void random_ops(gsx *f, de_gpu_backend b, bool scatter, u32 frames) {
+    random_ops_ex(f, b, scatter, false, frames);
+}
+
+/* DENG-421: the engine's built-in kernels (embedded at build time, or cooked through the Dev
+ * cache), so Release and Shipping builds run the compute scatter too. */
+TEST_F(gpu_scene, random_ops_readback_metal_builtin, gsx) {
+    random_ops_ex(f, DE_GPU_METAL, true, true, 300);
+}
+
+TEST_F(gpu_scene, random_ops_readback_vulkan_builtin, gsx) {
+    random_ops_ex(f, DE_GPU_VULKAN, true, true, 300);
+}
+
+TEST_F(gpu_scene, random_ops_readback_d3d12_builtin, gsx) {
+    random_ops_ex(f, DE_GPU_D3D12, true, true, 300);
 }
 
 TEST_F(gpu_scene, random_ops_readback_null, gsx) {
