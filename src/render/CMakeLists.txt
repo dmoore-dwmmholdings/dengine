@@ -43,3 +43,13 @@ if(TARGET de_render)
         renderer.c
         settings.c)
 endif()
+
+# DENG-178: the render components of de_render.h (DeCamera, DeMeshRenderer, DeLight, ...):
+# reflection, construct hooks and ECS registration (components.c; de_render_register_components,
+# called by de_renderer_attach and by de-cook's tool world). components_internal.h holds the
+# per-world component ids (the DeRenderComponents resource) for Extract (DENG-175).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        components_internal.h
+        components.c)
+endif()

@@ -185,3 +185,8 @@ endif()
 # builds takes its importer from it. The shader importer itself joined de_cooker in
 # importers/shader/CMakeLists.txt (added above).
 target_sources(de_cooker PRIVATE importers/engine_importers.c)
+
+# DENG-178: `de-cook cook` registers the render components (de_render_register_components) in its
+# tool world, so the prefabs of glTF models keep DeMeshRenderer. Not in headless builds (no
+# de_render; cook_cmd.c tests DE_HAS_RENDER).
+target_link_libraries(de_cook_cmd PRIVATE "$<TARGET_NAME_IF_EXISTS:de_render>")

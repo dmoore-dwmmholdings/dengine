@@ -413,6 +413,53 @@ typedef struct DeWater {
     f32 choppiness;
 } DeWater;
 
+/* ---------- Component registration (DENG-178; SPEC §9.1, §20.1) ---------- */
+
+/**
+ * Registers the render components above with the world: their reflected types (fields, units,
+ * ranges, tooltips) in the world's type registry (de_world_types), the enums `de_projection`
+ * and `de_light_kind`, and each type as an ECS component (DE_COMP_SNAPSHOT | DE_COMP_SERIALIZE),
+ * so de_component_find(w, "DeCamera") finds it and scenes and prefabs (TOML, DENG-2 Q9) can name
+ * it. It also registers the ECS built-in components (de_builtin_components: DeTransform, ...),
+ * which every rendered entity has. de_renderer_attach calls it; a tool or a server without a
+ * renderer (de-cook) calls it directly, because it needs no GPU.
+ *
+ * Field flags: every authorable field is DE_FIELD_SERIALIZE | DE_FIELD_SNAPSHOT; every asset
+ * handle also DE_FIELD_ASSET_REF, so it is written as its asset ID, never as the handle value;
+ * the runtime handles `DeCamera.view` and `DeCamera.tonemapper` are DE_FIELD_SNAPSHOT |
+ * DE_FIELD_EDITOR_HIDDEN only (never serialized). Units are "m", "rad", "m/s", "h", "deg",
+ * "1/m", "EV100", and "lux|lm|nit" for DeLight.intensity.
+ *
+ * Defaults: each type has a construct hook, so de_entity_add, de_type_construct and the scene
+ * reader start every component (also from zeroed memory) at these values; other fields are 0.
+ * - DeCamera: perspective, fov_y 60 degrees (1.0471976 rad), ortho_height 10 m, near_z 0.1 m,
+ *   exposure_ev100 NaN (auto exposure).
+ * - DeMeshRenderer: layer_mask ~0u, cast_shadows and visible_in_rt true.
+ * - DeLight: DE_LIGHT_POINT, white, de_light_default_intensity(DE_LIGHT_POINT), range 0
+ *   (physical cutoff), spot_outer pi/4 (spot_inner 0), area_size 1 x 1 m, source_radius
+ *   0.05 m, cast_shadows true.
+ * - DeEnvironment: intensity 1. DeSprite: uv_rect (0, 0, 1, 1), size 1 x 1 m, pivot (0.5, 0.5),
+ *   white, cast_shadows true.
+ * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.
+ * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
+ * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
+ * - DeTerrain: cell_size 1 m, height_scale 100 m. DeWater: wind (5, 0) m/s, choppiness 1.
+ *
+ * Idempotent per world: a second call on the same world (de_renderer_attach after a world
+ * reload) changes nothing. Worlds that share a registry share the types. Main thread, not while
+ * a schedule runs.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (`w` NULL); DE_ERR_ALREADY_EXISTS (the registry has
+ *         another type of one of the names); the registry's and the ECS's errors.
+ */
+DE_API de_result de_render_register_components(de_world *w);
+
+/**
+ * A physically plausible intensity for a light of `kind`, in its unit (DeLight.intensity):
+ * directional 100000 lux (direct sunlight), point and spot 800 lm (a 60 W incandescent bulb),
+ * rect and disk 1000 nit. An unknown kind gives the point value. Pure; any thread.
+ */
+DE_API f32 de_light_default_intensity(de_light_kind kind);
+
 /* ---------- Stats ---------- */
 typedef struct de_render_stats {
     f32 gpu_ms, cpu_record_ms;

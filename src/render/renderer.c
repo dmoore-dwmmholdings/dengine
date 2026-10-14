@@ -9,6 +9,7 @@
  */
 #include "render/renderer_internal.h"
 
+#include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
 
@@ -227,6 +228,7 @@ void de_renderer_attach(de_renderer *r, de_world *w) {
         return;
     r->world = w;
     /* ---- DENG-178: register the render components here (one call) ---- */
+    de__render_components_attach(r, w);
     /* ---- DENG-175: register the Extract systems here (one call) ---- */
 }
 
