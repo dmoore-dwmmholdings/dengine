@@ -5,14 +5,18 @@
  *
  * Later S12 tasks edit this file in fixed places only:
  *   - DENG-178 and DENG-175 each add one call in de_renderer_attach (marked below);
- *   - DENG-176 replaces the body of render_frame_graph (the per-view loop in views.c).
+ *   - DENG-176 replaced the frame graph with the per-view loop in views.c (de__views_render)
+ *     and added de__renderer_kick_prepare (the main-thread part of a frame).
  */
 #include "render/renderer_internal.h"
 
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
+#include "render/views_internal.h"
 #include "render/world/render_world.h"
+
+#include "gpu/gpu_backend.h" /* de__gpu_get_texture: the target's size and format */
 
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +26,7 @@
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     if (r->uploader != NULL && !r->uploader_orphaned)
         de_render_uploader_destroy(r->uploader);
     if (r->graph != NULL)
@@ -49,28 +54,6 @@ static void base_reasons(const de_gpu_tier_report *rep, char *buf, size_t cap) {
             break;
         n += (size_t)w < cap - n ? (size_t)w : cap - n - 1;
     }
-}
-
-/* Fills the device's graphics command-list pool (zero per-frame allocation, SPEC §5.3): begins
- * DE__RENDER_CMD_PRIME lists at once and submits them empty; de_gpu_wait_idle (the end of create)
- * returns them to the pool. */
-static de_result prime_cmd_pool(de_renderer *r) {
-    de_gpu_cmd *cmds[DE__RENDER_CMD_PRIME];
-    u32 n = 0;
-    for (; n < DE__RENDER_CMD_PRIME; ++n) {
-        cmds[n] = de_gpu_cmd_begin(r->dev, DE_QUEUE_GRAPHICS, "renderer prime");
-        if (cmds[n] == NULL)
-            break;
-    }
-    if (n == 0)
-        return DE_FAIL_WRAP(DE_ERR_INTERNAL, "de_renderer_create: command lists");
-    const de_gpu_submit s = {.cmds = cmds, .cmd_count = n};
-    const de_result res = de_gpu_queue_submit(r->dev, DE_QUEUE_GRAPHICS, &s);
-    if (res != DE_OK)
-        return DE_FAIL_WRAP(res, "de_renderer_create: priming the command lists");
-    return n == DE__RENDER_CMD_PRIME
-               ? DE_OK
-               : DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_renderer_create: command lists");
 }
 
 de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
@@ -154,9 +137,13 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
     }
 
-    res = prime_cmd_pool(r);
-    if (res != DE_OK)
+    /* The device's graphics command-list pool (zero per-frame allocation, SPEC §5.3); each graph
+     * also reserves its own lists when it first executes (DENG-415). */
+    res = de_gpu_cmd_reserve(r->dev, DE_QUEUE_GRAPHICS, DE__RENDER_CMD_PRIME);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: command lists");
         goto fail;
+    }
 
     /* Output: a swapchain for the window, else an offscreen target of our own. */
     if (DE_HANDLE_VALID(r->window)) {
@@ -169,6 +156,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
                                de_gpu_backend_name(r->caps.backend));
             goto fail;
         }
+        de_window_size_pixels(r->window, &r->window_w, &r->window_h);
+        r->swapchain_w = r->window_w;
+        r->swapchain_h = r->window_h;
     } else {
         r->offscreen = de_gpu_texture_create(
             r->dev, &(de_gpu_texture_desc){.format = DE__RENDER_OFFSCREEN_FORMAT,
@@ -180,6 +170,13 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
             res = DE_FAIL_WRAP(DE_ERR_INTERNAL, "de_renderer_create: offscreen target");
             goto fail;
         }
+    }
+
+    /* DENG-176: the views (the main view, the pass-registration list, the composite). */
+    res = de__views_create(r);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: views");
+        goto fail;
     }
 
     /* Last, because the asset registry cannot unregister: the runtime texture, mesh, material
@@ -201,7 +198,6 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         }
     }
 
-    de_gpu_wait_idle(r->dev); /* the primed command lists go back to the pool */
     DE_INFO(r->log, "renderer: %s (%s), tier %s, %u frames in flight%s", r->caps.device_name,
             de_gpu_backend_name(r->caps.backend), r->settings.tier == DE_TIER_RT ? "rt" : "base",
             r->frames_in_flight, DE_HANDLE_VALID(r->swapchain) ? "" : ", offscreen");
@@ -264,59 +260,22 @@ const de_render_stats *de_renderer_stats(const de_renderer *r) {
 
 /* ---------- Frame ---------- */
 
-static void clear_pass(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
-    de_renderer *r = (de_renderer *)user;
-    de_gpu_attachment color = {
-        .texture = de_rg_texture(pass, r->target_res), .clear = true, .store = true};
-    memcpy(color.clear_color, r->clear_color, sizeof color.clear_color);
-    de_gpu_cmd_begin_render(cmd, &color, 1, NULL);
-    de_gpu_cmd_end_render(cmd);
-}
-
-/*
- * Steps 5 and 6 of a frame (renderer_internal.h): the frame graph clears `target` and leaves it in
- * `final_access`; `cmd` is open on the graphics queue and already holds the uploader's acquire
- * barriers. Until the render graph compiler and recorder exist (DENG-172, DENG-173), the target's
- * two barriers are recorded here around the live passes. DENG-176 replaces this function's body
- * with the per-view loop (src/render/views.c).
- */
-static de_result render_frame_graph(de_renderer *r, de_arena *arena, de_gpu_cmd *cmd,
-                                    de_gpu_texture target, u32 final_access) {
-    de_rg *g = r->graph;
-    de_result res = de__rg_begin(g, arena);
-    if (res != DE_OK) {
-        const de_gpu_barrier b = {
-            .texture = target, .before = DE_ACCESS_NONE, .after = final_access};
-        de_gpu_cmd_barriers(cmd, &b, 1);
-        return res;
+/* Step 3 (renderer_internal.h): the main-thread part of a frame. */
+void de__renderer_kick_prepare(de_renderer *r) {
+    if (r == NULL)
+        return;
+    if (r->uploader != NULL) {
+        de_render_uploader_flush(r->uploader);
+        (void)de_render_uploader_acquire_submit(r->uploader);
     }
-    r->target_res = de_rg_import_texture(g, target, DE_ACCESS_NONE);
-    de_rg_set_name(g, r->target_res, DE_HANDLE_VALID(r->swapchain) ? "swapchain" : "offscreen");
-    de_rg_pass *clear = de_rg_add_pass(g, "clear", DE_QUEUE_GRAPHICS, clear_pass, r);
-    de_rg_write(clear, r->target_res, DE_ACCESS_RENDER_TARGET);
-    de_rg_export(g, r->target_res, final_access);
-    res = de__rg_finalize(g);
-    if (res == DE_OK) {
-        de_gpu_barrier b = {.texture = target,
-                            .before = DE_ACCESS_NONE, /* cleared: the old contents go */
-                            .after = DE_ACCESS_RENDER_TARGET};
-        de_gpu_cmd_barriers(cmd, &b, 1);
-        for (u32 i = 0; i < g->pass_count; ++i)
-            de__rg_execute_pass(g, i, cmd);
-        b.before = DE_ACCESS_RENDER_TARGET;
-        b.after = final_access;
-        de_gpu_cmd_barriers(cmd, &b, 1);
-        r->stats.pass_count = g->pass_count - g->culled_count;
-    } else {
-        /* Nothing drawn; the target still ends in its final state (a swapchain image must be
-         * presentable). */
-        const de_gpu_barrier b = {
-            .texture = target, .before = DE_ACCESS_NONE, .after = final_access};
-        de_gpu_cmd_barriers(cmd, &b, 1);
-        r->stats.pass_count = 0;
+    if (DE_HANDLE_VALID(r->window)) {
+        u32 w = 0, h = 0;
+        de_window_size_pixels(r->window, &w, &h);
+        de_mutex_lock(&r->lock);
+        r->window_w = w;
+        r->window_h = h;
+        de_mutex_unlock(&r->lock);
     }
-    de__rg_reset(g);
-    return res;
 }
 
 de_result de_renderer_render_frame(de_renderer *r) {
@@ -341,61 +300,47 @@ de_result de_renderer_render_frame(de_renderer *r) {
     r->frame = r->settings;
     de_mutex_unlock(&r->lock);
 
-    /* 3. This frame's copies. */
-    if (r->uploader != NULL)
-        de_render_uploader_flush(r->uploader);
+    /* 3. The main-thread part, unless the kick ran it on the main thread already. */
+    if (de__render_world_current(r) == NULL)
+        de__renderer_kick_prepare(r);
 
-    /* 4. The target. */
+    /* 4. The target: the swapchain (resized to the window first) or the offscreen texture. */
     de_gpu_texture target = r->offscreen;
     u32 final_access = DE__RENDER_OFFSCREEN_FINAL_ACCESS;
     if (DE_HANDLE_VALID(r->swapchain)) {
-        const de_result a = de_gpu_swapchain_acquire(r->dev, r->swapchain, &target);
-        if (a == DE_ERR_BUSY) {
-            /* No image (minimised, resizing): nothing to draw, but the uploads still need their
-             * acquire halves, or the uploader stalls. */
-            if (r->uploader != NULL)
-                (void)de_render_uploader_acquire_submit(r->uploader);
-            return DE_OK;
+        de_mutex_lock(&r->lock);
+        const u32 ww = r->window_w, wh = r->window_h;
+        de_mutex_unlock(&r->lock);
+        if (ww == 0 || wh == 0)
+            return DE_OK; /* minimised: nothing to draw */
+        if (ww != r->swapchain_w || wh != r->swapchain_h) {
+            const de_result rs = de_gpu_swapchain_resize(r->dev, r->swapchain, ww, wh);
+            if (rs != DE_OK)
+                return DE_FAIL_WRAP(rs, "de_renderer_render_frame: swapchain resize to %ux%u", ww,
+                                    wh);
+            r->swapchain_w = ww;
+            r->swapchain_h = wh;
         }
+        const de_result a = de_gpu_swapchain_acquire(r->dev, r->swapchain, &target);
+        if (a == DE_ERR_BUSY)
+            return DE_OK; /* no image (minimised, resizing): nothing to draw */
         if (a != DE_OK)
             return DE_FAIL_WRAP(a, "de_renderer_render_frame: swapchain image");
         final_access = DE_ACCESS_PRESENT;
     }
+    const de__gpu_texture *t = de__gpu_get_texture(r->dev, target);
+    de__views_set_output_size(r, t != NULL ? t->width : 0, t != NULL ? t->height : 0,
+                              t != NULL ? t->format : DE__RENDER_OFFSCREEN_FORMAT);
 
-    /* 5 + 6. One graphics list: acquire barriers of the uploads, then the frame graph. */
-    de_gpu_cmd *cmd = de_gpu_cmd_begin(r->dev, DE_QUEUE_GRAPHICS, "frame");
-    if (cmd == NULL)
-        return DE_FAIL_WRAP(DE_ERR_INTERNAL, "de_renderer_render_frame: command list");
-    de_gpu_wait waits[1];
-    u32 wait_count = 0;
-    if (r->uploader != NULL) {
-        de_gpu_wait w = {0};
-        (void)de_render_uploader_acquire(r->uploader, cmd, &w);
-        if (DE_HANDLE_VALID(w.fence) && w.value != 0)
-            waits[wait_count++] = w;
-    }
-    const de_result gr = render_frame_graph(r, arena, cmd, target, final_access);
-    if (gr != DE_OK) {
-        /* Still submitted: the list holds the uploads' acquire barriers and must not leak. */
-        DE_ERROR(r->log, "renderer: frame %llu: the frame graph failed", (unsigned long long)n);
-    }
-    const de_gpu_submit s = {.cmds = &cmd,
-                             .cmd_count = 1,
-                             .waits = waits,
-                             .wait_count = wait_count,
-                             .signal = r->frame_fence,
-                             .signal_value = n + 1u};
-    const de_result sr = de_gpu_queue_submit(r->dev, DE_QUEUE_GRAPHICS, &s);
-    if (sr != DE_OK)
-        return DE_FAIL_WRAP(sr, "de_renderer_render_frame: submit of frame %llu",
-                            (unsigned long long)n);
+    /* 5 + 6. The views, then the output graph; the frame fence is signalled with N + 1. */
+    const de_result vr = de__views_render(r, arena, target, final_access, n);
     r->frame_index = n + 1u;
     if (DE_HANDLE_VALID(r->swapchain)) {
         const de_result p = de_gpu_swapchain_present(r->dev, r->swapchain);
         if (p != DE_OK && p != DE_ERR_BUSY)
             return DE_FAIL_WRAP(p, "de_renderer_render_frame: present");
     }
-    return gr == DE_OK ? DE_OK : DE_FAIL_WRAP(gr, "de_renderer_render_frame: frame graph");
+    return vr;
 }
 
 /* ---------- Test hooks ---------- */

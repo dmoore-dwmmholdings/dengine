@@ -179,3 +179,23 @@ if(TARGET test_render_graph_execute)
             "DE_PIPE_TEST_DATA_DIR=\"${DE_ROOT_DIR}/tests/unit/gpu/data/pipelines\"")
     endif()
 endif()
+
+# DENG-176: views and the per-view frame pipeline (src/render/views.c, passes/composite.c),
+# executable test_views; CTest names views.<test>: the main view and camera binding, split screen
+# (two graph instances), render to texture consumed in the same frame, independent render scales,
+# the compiled-graph cache in a steady frame (no heap allocation), deferred release, hooks and
+# registered stages in slot then registration order, per-view settings (null backend); and on
+# Metal (macOS, API validation on; SKIPs without a device or below the Base tier) a split-screen
+# + render-to-texture readback and views destroyed while frames are in flight.
+set(_de_rv_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_metal)
+    list(APPEND _de_rv_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+de_add_test(NAME views
+    SOURCES test_views.c
+    LIBS ${_de_rv_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_views)
+    target_include_directories(test_views PRIVATE "${DE_ROOT_DIR}/src")
+endif()

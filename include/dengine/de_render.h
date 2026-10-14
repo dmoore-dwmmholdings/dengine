@@ -149,22 +149,73 @@ DE_API de_render_settings de_renderer_get_settings(const de_renderer *r);
  */
 DE_API de_result de_renderer_render_frame(de_renderer *r);
 
-/* ---------- Views ---------- */
+/* ---------- Views ----------
+ * SPEC §12.4, §12.5, §12.9, §20.1 (DENG-176). A view is one camera's rendering: the main view
+ * (made with the renderer), split-screen views, render-to-texture views (in-world screens, editor
+ * viewports later) and, later, shadow views. Each view has its own render graph (so its compiled
+ * graph stays cached), its own settings and its own internal resolution: its viewport in pixels
+ * times its render_scale.
+ *
+ * Cameras: a DeCamera renders through DeCamera.view (zero: the main view). When several cameras
+ * name the same view, the first one Extract copied wins. A view without a camera is skipped.
+ * Projections are reverse-Z (de_m4_perspective_rz; de_m4_ortho_rz with a far plane at 100 km),
+ * with the aspect ratio of the view's viewport.
+ *
+ * Each frame the views render in `order` (lower first; equal orders in creation order), then their
+ * outputs are scaled (bilinear) into their viewports on the swapchain (or the renderer's offscreen
+ * target). A render-to-texture view writes its `target` and leaves it in DE_ACCESS_SHADER_READ, so
+ * a view with a higher `order`, or a material, can sample it in the same frame.
+ *
+ * Until the visibility buffer (S13) a view only clears to a debug colour hashed from its name.
+ * Changes made with these functions apply from the next de_renderer_render_frame. Main thread
+ * (de_view_color and de_view_size: inside hooks, on the render thread).
+ */
 typedef enum de_projection { DE_PROJ_PERSPECTIVE, DE_PROJ_ORTHOGRAPHIC } de_projection;
 
 typedef struct de_view_desc {
-    de_gpu_texture target; /* zero = swapchain */
-    f32 viewport[4];       /* normalized x, y, w, h; zero = full */
-    i32 order;             /* composition order */
-    bool pixel_art;        /* see de_pixel_art_settings */
-    const char *name;
+    /** Zero: the swapchain (or offscreen target). Else a 2D texture with DE_USAGE_RENDER_TARGET |
+     * DE_USAGE_SAMPLED that the view renders into (render to texture); it must outlive the view. */
+    de_gpu_texture target;
+    /** Normalized x, y, w, h of the target (y down); all zero = the whole target. */
+    f32 viewport[4];
+    i32 order;        /**< render and composition order: lower first */
+    bool pixel_art;   /**< stored; S19 renders it (see de_pixel_art_settings) */
+    const char *name; /**< copied (31 bytes); NULL or "": "view<n>" */
 } de_view_desc;
 
+/**
+ * Creates a view. Invalid handle (error context set) when `desc` is NULL, the viewport is not a
+ * rectangle inside 0..1, the target is not a live 2D texture with RENDER_TARGET | SAMPLED usage,
+ * or 32 views exist already.
+ */
 DE_API de_view de_view_create(de_renderer *r, const de_view_desc *desc);
+/**
+ * Destroys a view; the handle is stale at once. Its GPU objects are released once the frames in
+ * flight that used them are done. The main view cannot be destroyed (error context set, warning
+ * logged); a stale handle is ignored.
+ */
 DE_API void de_view_destroy(de_renderer *r, de_view v);
 /* Visibility-buffer picking: entity bits under a pixel, read back next frame. */
 DE_API void de_view_request_pick(de_renderer *r, de_view v, u32 x, u32 y, u64 request_id);
 DE_API bool de_view_pick_result(de_renderer *r, u64 request_id, u64 *entity_bits, u32 *triangle);
+
+/** The main view, made with the renderer (target zero, the whole viewport, order 0, name
+ * "main"). A DeCamera whose `view` is zero renders through it. */
+DE_API de_view de_renderer_main_view(const de_renderer *r);
+/**
+ * Gives the view settings of its own (copied, clamped to the device like
+ * de_renderer_set_settings). NULL: the view follows the renderer's settings again (the default).
+ * Either way a view never renders above the renderer's tier.
+ */
+DE_API void de_view_set_settings(de_renderer *r, de_view v, const de_render_settings *s);
+/**
+ * Sets the view's internal resolution scale, which overrides `render_scale` of its settings
+ * (clamped to 0.33..1.0 like the settings). 0, a negative value or NaN: the settings' value again.
+ */
+DE_API void de_view_set_render_scale(de_renderer *r, de_view v, f32 scale);
+/** The settings the view renders with: its own or the renderer's, its render_scale, the
+ * renderer's tier as a cap, clamped. The renderer's settings for a stale handle. */
+DE_API de_render_settings de_view_get_settings(de_renderer *r, de_view v);
 
 /* ---------- Render graph (for engine passes and game-defined passes) ----------
  * SPEC §12.3 (DENG-171). A de_rg is one frame's graph. Passes declare what they read and write,
@@ -266,7 +317,27 @@ typedef enum de_rg_hook {
     DE_HOOK_UI
 } de_rg_hook;
 typedef void (*de_rg_hook_fn)(de_rg *g, de_view v, void *user);
+/**
+ * (DENG-176) Adds `fn` to every view's graph at point `at`: it is called on the render thread
+ * while the view's graph is built, with that graph and view, and declares passes there. Where
+ * each point sits in the frame pipeline (SPEC §12.5): AFTER_GBUFFER after the visibility and
+ * material stages; AFTER_LIGHTING after lighting and RT effects; AFTER_TRANSPARENT after
+ * transparency; BEFORE_TONEMAP / AFTER_TONEMAP around the tonemapper in post; UI after the
+ * engine's UI composite. Hooks at one point run in the order they were added. At most 32 hooks;
+ * a NULL `fn`, an unknown point or a full list is refused (error context set and logged). Main
+ * thread; applies from the next frame. There is no removal yet.
+ */
 DE_API void de_render_add_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, void *user);
+/**
+ * Inside a de_render_add_hook callback for view `v` (render thread): the colour target its later
+ * passes draw into (a de_rg resource of `v`'s graph, DE_FMT_RGBA16_FLOAT: linear HDR scene colour,
+ * at the view's internal size). A pass that
+ * draws onto it declares de_rg_read(p, color, DE_ACCESS_RENDER_TARGET) and de_rg_write(...).
+ * An invalid handle anywhere else.
+ */
+DE_API de_rg_resource de_view_color(de_renderer *r, de_view v);
+/** Inside a hook for `v`: the view's internal size in pixels; 0 x 0 anywhere else. */
+DE_API void de_view_size(de_renderer *r, de_view v, u32 *width, u32 *height);
 
 /* ---------- Tonemappers (pluggable) ---------- */
 typedef enum de_builtin_tonemapper {

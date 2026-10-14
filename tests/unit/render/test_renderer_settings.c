@@ -496,8 +496,13 @@ TEST_F(renderer, create_args, rfx) {
     EXPECT_TRUE(de_renderer_stats(NULL) == NULL);
     EXPECT_TRUE(de_renderer_stats(f->r) != NULL);
     EXPECT_EQ(de_renderer_stats(f->r)->pass_count, 0u);
+    /* DENG-176: the pass list is the render graphs' published timings, one frame late on the
+     * null device. No view has a camera, so the frame is the output graph's clear. */
     ASSERT_EQ(de_renderer_render_frame(f->r), DE_OK);
-    EXPECT_EQ(de_renderer_stats(f->r)->pass_count, 1u); /* the clear */
+    ASSERT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    EXPECT_EQ(de_renderer_stats(f->r)->pass_count, 1u);
+    ASSERT_TRUE(de_renderer_stats(f->r)->pass_names != NULL);
+    EXPECT_STREQ(de_renderer_stats(f->r)->pass_names[0], "output");
 }
 
 TEST_F(renderer, below_base_refused, rfx) {

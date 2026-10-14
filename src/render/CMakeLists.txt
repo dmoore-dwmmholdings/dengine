@@ -72,3 +72,22 @@ if(TARGET de_render)
         world/extract.c
         world/render_thread.c)
 endif()
+
+# DENG-176: views and the per-view frame pipeline (views.c, views_internal.h: the view table, the
+# pass-registration list, de__views_render, called by de_renderer_render_frame) and the view
+# composite (passes/composite.c; shaders/common/composite.slang). In Debug and Dev with the cooker
+# the renderer cooks composite.slang in-process from DE_RENDER_SHADER_DIR with the cooker's
+# built-in shader importer and reads the cooked format through de_gpu_shader
+# (tools/check_layers/layers.toml: render -> cook, render -> gpu/shader).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        views_internal.h
+        views.c
+        passes/composite.c)
+    target_compile_definitions(de_render PRIVATE
+        "DE_RENDER_SHADER_DIR=\"${DE_ROOT_DIR}/shaders/common\"")
+    set(_de_render_shader_lib
+        "$<$<AND:${_de_render_with_cooker},$<TARGET_EXISTS:de_gpu_shader>>:de_gpu_shader>")
+    target_link_libraries(de_render PRIVATE "${_de_render_shader_lib}")
+    set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "${_de_render_shader_lib}")
+endif()

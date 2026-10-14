@@ -57,3 +57,9 @@ reference = "rhi_triangle"
 expect_fail = true
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.views_split_screen]
+description = "renderer views: split screen (right half at render_scale 0.5), a picture-in-picture view, and a render-to-texture view sampled by the left view in the same frame (DENG-176)"
+size = [1280, 720]
+threshold_mean = 0.005
+threshold_p99 = 0.05

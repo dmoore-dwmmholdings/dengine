@@ -47,7 +47,7 @@ CASES = {
     "tools": (1, [
         "src/render/r.c:1: error: engine module render includes "
         "\"../../tools/pack/lib/pack_writer.h\" under tools/",
-        "src/render/r.c:2: error: restricted include: render (content) includes cook (content)",
+        "src/gpu/g.c:1: error: restricted include: gpu (content) includes cook (content)",
         "2 violation(s)",
     ], ["src/asset/a.c"]),
     "umbrella": (1, ["src/host/h.c:1: error: host includes the umbrella header "
