@@ -163,6 +163,7 @@ de_result de__rg_create(const de__rg_desc *desc, de_rg **out) {
 void de__rg_destroy(de_rg *g) {
     if (!g)
         return;
+    de__rg_execute_shutdown(g); /* DENG-173: timelines, timing heaps (waits for the GPU) */
     de__rg_compile_shutdown(g); /* DENG-172: cached plans and the transient pool */
     DE_FREE(g->alloc, g, sizeof *g);
 }

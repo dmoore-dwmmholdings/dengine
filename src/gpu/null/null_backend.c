@@ -18,6 +18,10 @@
  * Command log (DENG-172, gpu_backend.h): with de__gpu_null_log_enable, barrier calls and submits
  * are recorded as entries (one per command, in order) for golden tests; DENG-173 adds more ops.
  * The log is off by default and then costs one atomic load per barrier call and submit.
+ *
+ * DENG-173: markers, timestamps, breadcrumbs and resolves are logged too (their cmd_* entries
+ * only feed the log), and a resolve writes made-up ticks (de__gpu_null_tick) into the destination
+ * buffer when it is mapped, so the render graph's GPU timers can be tested without a GPU.
  */
 #include "gpu/gpu_backend.h"
 
@@ -313,6 +317,13 @@ static de_result null_texture_create_placed(de_gpu_device *d, de__gpu_texture *t
 }
 
 static void null_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count);
+/* DENG-173: markers, timers and breadcrumbs (the log; resolves also write made-up ticks). */
+static void null_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color);
+static void null_cmd_marker_pop(de_gpu_cmd *c);
+static void null_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value);
+static void null_cmd_timestamp(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index);
+static void null_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
+                                     de__gpu_buffer *dst, u64 dst_off);
 
 const de__gpu_backend_vtable de__gpu_null_vtable = {
     .name = "null",
@@ -345,7 +356,12 @@ const de__gpu_backend_vtable de__gpu_null_vtable = {
     .texture_requirements = null_texture_requirements,
     .buffer_create_placed = null_buffer_create_placed,
     .texture_create_placed = null_texture_create_placed,
-    .cmd_barriers = null_cmd_barriers, /* DENG-172: only feeds the command log */
+    .cmd_barriers = null_cmd_barriers,       /* DENG-172: only feeds the command log */
+    .cmd_marker_push = null_cmd_marker_push, /* DENG-173 */
+    .cmd_marker_pop = null_cmd_marker_pop,
+    .cmd_breadcrumb = null_cmd_breadcrumb,
+    .cmd_timestamp = null_cmd_timestamp,
+    .cmd_resolve_queries = null_cmd_resolve_queries,
 };
 
 void de__gpu_null_set_manual_completion(de_gpu_device *d, bool manual) {
@@ -536,4 +552,68 @@ const de_gpu_wait *de__gpu_null_log_waits(de_gpu_device *d, const de__gpu_null_e
         return NULL;
     const null_device *n = nd(d);
     return n->log_waits ? n->log_waits + e->data_first : NULL; /* NULL: no wait logged yet */
+}
+
+/* ---------- Markers, timers and breadcrumbs (DENG-173) ---------- */
+
+/* Starts an entry of `op` for list `c` with `text` (may be NULL); false when the log is off. */
+static bool log_entry(de_gpu_cmd *c, u32 op, const char *text, de__gpu_null_entry *e) {
+    if (!de_atomic_load_u32(&nd(c->device)->log_on, DE_ATOMIC_ACQUIRE))
+        return false;
+    memset(e, 0, sizeof *e);
+    e->op = op;
+    e->queue = c->queue;
+    copy_list_name(e->list, c->name);
+    copy_list_name(e->text, text);
+    return true;
+}
+
+static void null_cmd_marker_push(de_gpu_cmd *c, const char *name, u32 color) {
+    de__gpu_null_entry e;
+    if (!log_entry(c, DE__GPU_NULL_OP_MARKER_PUSH, name, &e))
+        return;
+    e.a[0] = color;
+    log_append(c->device, &e, NULL, 0);
+}
+
+static void null_cmd_marker_pop(de_gpu_cmd *c) {
+    de__gpu_null_entry e;
+    if (log_entry(c, DE__GPU_NULL_OP_MARKER_POP, NULL, &e))
+        log_append(c->device, &e, NULL, 0);
+}
+
+static void null_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 value) {
+    (void)ring; /* the null device runs nothing, so the slot is never written */
+    de__gpu_null_entry e;
+    if (!log_entry(c, DE__GPU_NULL_OP_BREADCRUMB, NULL, &e))
+        return;
+    e.a[0] = value;
+    e.a[1] = offset;
+    log_append(c->device, &e, NULL, 0);
+}
+
+static void null_cmd_timestamp(de_gpu_cmd *c, de__gpu_query_heap *h, u32 index) {
+    de__gpu_null_entry e;
+    if (!log_entry(c, DE__GPU_NULL_OP_TIMESTAMP, h->name, &e))
+        return;
+    e.a[0] = index;
+    log_append(c->device, &e, NULL, 0);
+}
+
+static void null_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first, u32 count,
+                                     de__gpu_buffer *dst, u64 dst_off) {
+    if (dst->mapped && dst_off <= dst->size && (u64)count * 8u <= dst->size - dst_off) {
+        u8 *p = (u8 *)dst->mapped + dst_off;
+        for (u32 i = 0; i < count; ++i) {
+            const u64 t = de__gpu_null_tick(first + i);
+            memcpy(p + (size_t)i * 8u, &t, sizeof t);
+        }
+    }
+    de__gpu_null_entry e;
+    if (!log_entry(c, DE__GPU_NULL_OP_RESOLVE, h->name, &e))
+        return;
+    e.a[0] = first;
+    e.a[1] = count;
+    e.a[2] = dst_off;
+    log_append(c->device, &e, NULL, 0);
 }
