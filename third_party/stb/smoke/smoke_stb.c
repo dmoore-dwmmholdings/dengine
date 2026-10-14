@@ -1,7 +1,11 @@
-/* Smoke test for de_tp_stb: decode a 1x1 PNG with stb_image, and check that stb_vorbis links and
- * rejects data that is not Ogg Vorbis. */
+/* Smoke test for de_tp_stb: decode a 1x1 PNG with stb_image, check that stb_vorbis links and
+ * rejects data that is not Ogg Vorbis, and that a PNG from stb_image_write (DENG-327) decodes to
+ * the same pixels. */
 #include <de_stb_vorbis.h>
 #include <stb_image.h>
+#include <stb_image_write.h>
+
+#include <string.h>
 
 #include "de_test.h"
 
@@ -35,4 +39,38 @@ TEST(de_tp_smoke_stb, vorbis_rejects_non_ogg) {
         stb_vorbis_close(v);
     EXPECT_TRUE(v == NULL);
     EXPECT_NE(err, (int)VORBIS__no_error);
+}
+
+/* stb_image_write (DENG-327): a 3x2 RGBA8 PNG written to memory decodes to the same bytes. */
+typedef struct png_sink {
+    unsigned char data[1024];
+    int size;
+    int overflow;
+} png_sink;
+
+static void png_write(void *ctx, void *data, int size) {
+    png_sink *s = (png_sink *)ctx;
+    if (size < 0 || s->size + size > (int)sizeof s->data) {
+        s->overflow = 1;
+        return;
+    }
+    memcpy(s->data + s->size, data, (size_t)size);
+    s->size += size;
+}
+
+TEST(de_tp_smoke_stb, write_png_roundtrip) {
+    unsigned char px[3 * 2 * 4];
+    for (int i = 0; i < (int)sizeof px; ++i)
+        px[i] = (unsigned char)(i * 11 + 3);
+    static png_sink sink;
+    memset(&sink, 0, sizeof sink);
+    ASSERT_NE(stbi_write_png_to_func(png_write, &sink, 3, 2, 4, px, 3 * 4), 0);
+    ASSERT_EQ(sink.overflow, 0);
+    int w = 0, h = 0, comp = 0;
+    unsigned char *back = stbi_load_from_memory(sink.data, sink.size, &w, &h, &comp, 4);
+    ASSERT_TRUE(back != NULL);
+    EXPECT_EQ(w, 3);
+    EXPECT_EQ(h, 2);
+    EXPECT_MEMEQ(back, px, sizeof px);
+    stbi_image_free(back);
 }

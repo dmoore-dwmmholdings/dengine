@@ -1,0 +1,21 @@
+bands = ["foundation", "content"]
+include_roots = ["src"]
+
+[[module]]
+name = "core"
+band = "foundation"
+paths = ["src/core"]
+headers = ["de_base.h"]
+
+[[module]]
+name = "gpu"
+band = "content"
+paths = ["src/gpu"]
+
+[[example_internal]]
+file = "examples/demo/glue.c"
+why = "fixture: uses an internal header"
+
+[[example_internal]]
+file = "examples/demo/gone.c"
+why = "fixture: the file does not exist"

@@ -1,0 +1,15 @@
+# hello_triangle asset manifest (DENG-327). Sources are relative to this file. main.c mounts this
+# directory read-only as `hello:/` and loads `hello:/assets.toml`.
+#
+# Shaders cook in SOURCE mode (Debug and Dev, the in-process cooker) for the targets the host can
+# build: macOS metallib + SPIR-V, Windows DXIL + SPIR-V, Linux SPIR-V.
+
+[assets]
+"shaders/triangle" = { type = "shader", source = "shaders/triangle.slang" }
+"shaders/quad"     = { type = "shader", source = "shaders/quad.slang" }
+# There is no texture importer until S11: the PNG is a `blob` (its exact bytes) that main.c
+# decodes with stb_image.
+"textures/checker" = { type = "blob", source = "textures/checker.png", compress = false }
+
+[bundles.hello]
+assets = ["shaders/*", "textures/*"]
