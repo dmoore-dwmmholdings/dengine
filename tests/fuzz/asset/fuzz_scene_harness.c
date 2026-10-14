@@ -134,7 +134,7 @@ static bool health_migrate(void *obj, u32 from_version, const void *old_data,
     return from_version == 1;
 }
 
-void fz_scene_fail(const char *target, const char *what) {
+DE_NORETURN void fz_scene_fail(const char *target, const char *what) {
     const de_error *e = de_error_last();
     fprintf(stderr, "fuzz_%s: %s (last error: %s)\n", target, what,
             e != NULL && e->result != DE_OK ? e->message : "none");
@@ -301,7 +301,6 @@ static u32 chk_id_to_asset(u64 id, const char *asset_type, void *user) {
         if (de__scene_asset_at(v, i) == id)
             return i + 1u;
     fz_scene_fail("scene", "the importer wrote an asset ID that is not in the reference table");
-    return 0;
 }
 
 void fz_scene_check_cooked(const char *target, const de__scene_view *v,
