@@ -503,3 +503,28 @@ if(TARGET test_render_classify)
         endif()
     endif()
 endif()
+
+# DENG-239: vis-buffer picking (src/render/passes/vis/picking.c; engine shader vis_pick,
+# shaders/visbuffer/pick.slang), executable test_render_picking; CTest names
+# render_picking.<suite>.<test>. Picks on both raster paths checked against known triangles and
+# against the vis buffer read back, background and outside pixels, the latency and keep windows,
+# the render_scale mapping and the layer mask; the request cap, the public API and the pass list on
+# the null backend. picking.*_{metal,vulkan,d3d12} SKIP without the device (the mesh-path test also
+# without mesh shaders; CI: lavapipe and WARP golden jobs).
+de_add_test(NAME render_picking
+    SOURCES test_picking.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_picking)
+    target_include_directories(test_render_picking PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_picking PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_picking PRIVATE version)
+        de_d3d12_agility_deploy(test_render_picking)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_picking)
+        endif()
+    endif()
+endif()

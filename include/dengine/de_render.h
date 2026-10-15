@@ -195,9 +195,38 @@ DE_API de_view de_view_create(de_renderer *r, const de_view_desc *desc);
  * logged); a stale handle is ignored.
  */
 DE_API void de_view_destroy(de_renderer *r, de_view v);
-/* Visibility-buffer picking: entity bits under a pixel, read back next frame. */
+/* ---------- Picking (SPEC §20.1; DENG-239) ----------
+ * What is under a pixel of a view, read from the view's visibility buffer: the entity (its
+ * de_entity bits, as the render world has them) and the triangle. Only visibility-buffer geometry
+ * is pickable (opaque and alpha-tested meshes); translucent and forward-only objects are not.
+ * Main thread.
+ */
+/** Triangle of a pick that hit nothing (and of every background pick). */
+#define DE_PICK_TRIANGLE_NONE 0xFFFFFFFFu
+/**
+ * Asks what is under pixel (`x`, `y`) of view `v` in the frame the next de_renderer_render_frame
+ * renders. The coordinates are pixels of the view's output (its viewport on its target, origin at
+ * the top left); they are mapped to the view's internal resolution (render_scale). At most 16
+ * requests per view and frame: more are dropped (a warning in Debug and Dev builds). A stale or
+ * invalid view handle is ignored. Reusing an ID forgets the stored result of the earlier request
+ * with it. No heap allocation.
+ */
 DE_API void de_view_request_pick(de_renderer *r, de_view v, u32 x, u32 y, u64 request_id);
+/**
+ * The result of request `request_id`: true once the frame that rendered it has completed on the
+ * GPU (normally one or two frames later, at most three), with `*entity_bits` the entity under the
+ * pixel (0: background, or outside the view) and `*triangle` the triangle there, as (meshlet << 7)
+ * | triangle in the meshlet, meshlet being the index into the mesh's meshlets in DMSH order (every
+ * LOD; DE_PICK_TRIANGLE_NONE for background). Results are kept for 8 frames after they become
+ * available. False for an unknown or expired ID, a request still in flight, and requests of a
+ * view destroyed before they were rendered. Either pointer may be NULL.
+ */
 DE_API bool de_view_pick_result(de_renderer *r, u64 request_id, u64 *entity_bits, u32 *triangle);
+/**
+ * The layers the view draws: an instance is drawn when its DeMeshRenderer.layer_mask shares a
+ * bit with `mask`. 0 (the default) means every layer.
+ */
+DE_API void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask);
 
 /** The main view, made with the renderer (target zero, the whole viewport, order 0, name
  * "main"). A DeCamera whose `view` is zero renders through it. */

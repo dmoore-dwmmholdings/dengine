@@ -258,3 +258,10 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/classify.c)
 endif()
+
+# DENG-239: vis-buffer picking (passes/vis/picking.c; engine shader vis_pick,
+# shaders/visbuffer/pick.slang): de_view_request_pick / de_view_pick_result read the entity and
+# triangle under a pixel back from the view's vis buffer, one to three frames later.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/picking.c)
+endif()

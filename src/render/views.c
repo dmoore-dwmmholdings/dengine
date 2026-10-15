@@ -41,6 +41,7 @@ typedef struct view_main {
     de_render_settings settings; /**< clamped to the device when set */
     f32 render_scale;            /**< 0: the settings' render_scale */
     u32 seq;                     /**< creation sequence: ties of `order` */
+    u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask (0: every layer) */
 } view_main;
 
 /** The render-thread side of a view slot. */
@@ -366,6 +367,27 @@ void de_view_set_render_scale(de_renderer *r, de_view v, f32 scale) {
     if (m != NULL)
         m->render_scale = scale > 0.0f ? scale : 0.0f; /* NaN and <= 0: the settings' */
     de_mutex_unlock(&vs->lock);
+}
+
+void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask) {
+    de__views *vs = views_of(r);
+    if (vs == NULL)
+        return;
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m != NULL)
+        m->layer_mask = mask;
+    de_mutex_unlock(&vs->lock);
+}
+
+bool de__view_valid(const de_renderer *r, de_view v) {
+    de__views *vs = views_of(r);
+    if (vs == NULL)
+        return false;
+    de_mutex_lock(&vs->lock);
+    const bool ok = main_of(vs, v) != NULL;
+    de_mutex_unlock(&vs->lock);
+    return ok;
 }
 
 de_render_settings de_view_get_settings(de_renderer *r, de_view v) {
@@ -752,6 +774,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.width = s->w;
     vf.height = s->h;
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
+    vf.layer_mask = s->copy.layer_mask; /* DENG-239 */
     matrices(vf.camera, s->vp, &vf);
     vf.prev_view_proj = s->has_prev ? s->prev_view_proj : vf.view_proj;
     const u32 t_access = rtt ? target_access_before(vs, slot, pos) : DE_ACCESS_NONE;
@@ -1056,6 +1079,7 @@ bool de__view_info_get(const de_renderer *r, de_view v, de__view_info *out) {
     out->executed = (u32)s->executed;
     out->order = s->copy.order;
     out->settings = s->eff;
+    out->layer_mask = s->copy.layer_mask; /* DENG-239 */
     return true;
 }
 
@@ -1082,6 +1106,11 @@ u32 de__views_last_order(const de_renderer *r, de_view *out, u32 cap) {
     for (u32 k = 0; k < vs->last_order_count && k < cap; ++k)
         out[k] = vs->last_order[k];
     return vs->last_order_count;
+}
+
+struct de__vis_shared *de__views_vis(const de_renderer *r) {
+    const de__views *vs = views_of(r);
+    return vs != NULL ? vs->vis : NULL;
 }
 
 de__composite *de__views_composite(const de_renderer *r) {
