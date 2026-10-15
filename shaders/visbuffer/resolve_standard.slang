@@ -10,7 +10,8 @@
 //                        materials/standard/standard.slang; DENG-299): one
 //                        64-thread group per tile of a model's tile list, for every model with no
 //                        kernel of its own (Standard, and the built-in ids not implemented yet)
-//   cs_resolve_unlit     de_resolve_tiles<ResolveUnlitModel>, for the Unlit model
+//   cs_resolve_unlit     de_resolve_tiles<UnlitModel> (materials/unlit/unlit.slang; DENG-301),
+//                        for the Unlit model
 //
 // A game's material model (de_material_model_register) brings its own cs_resolve_model, the same
 // generic kernel specialised for its type. The kernel, the ResolveParams push constants and the
@@ -21,6 +22,7 @@ import push_constants;
 import "../scene/scene_types";
 import "../visbuffer/resolve_model";
 import "../materials/standard/standard";
+import "../materials/unlit/unlit";
 import "../visbuffer/feedback";
 
 [shader("compute")]
@@ -65,5 +67,5 @@ void cs_resolve_standard(uint3 group : SV_GroupID, uint3 thread : SV_GroupThread
 void cs_resolve_unlit(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
                       uniform ResolveParams pc)
 {
-    de_resolve_tiles<ResolveUnlitModel>(group, thread.x, pc);
+    de_resolve_tiles<UnlitModel>(group, thread.x, pc);
 }
