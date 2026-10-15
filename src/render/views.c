@@ -19,6 +19,7 @@
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
 #include "render/passes/forward/forward.h"
+#include "render/passes/sss/sss.h"
 #include "render/renderer_internal.h"
 #include "render/world/render_world.h"
 
@@ -129,6 +130,9 @@ typedef struct de__views {
     de__output_basic *output_basic;
     /* DENG-305: the forward transparent pass (passes/forward/), the stage "forward.transparent". */
     struct de__forward *forward;
+    /* DENG-306: screen-space subsurface scattering (passes/sss/sss.c), the stage "sss" (after
+     * lighting, before the transparent slot). */
+    struct de__sss *sss;
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -1062,6 +1066,10 @@ de_result de__views_create(de_renderer *r) {
     res = de__forward_create(r, vs->vis, vs->lighting, &vs->forward);
     if (res != DE_OK)
         return res;
+    /* DENG-306: subsurface scattering registers its stage "sss" (after lighting). */
+    res = de__sss_create(r, vs->vis, vs->lighting, &vs->sss);
+    if (res != DE_OK)
+        return res;
     /* DENG-304: the output pass registers its stage "output.basic" (where the tonemapper goes). */
     return de__output_basic_create(r, vs->lighting, &vs->output_basic);
 }
@@ -1072,6 +1080,7 @@ void de__views_destroy(de_renderer *r) {
         return;
     de__output_basic_destroy(vs->output_basic); /* DENG-304 */
     de__forward_destroy(vs->forward);           /* DENG-305 */
+    de__sss_destroy(vs->sss);                   /* DENG-306 */
     de__lighting_destroy(vs->lighting);         /* DENG-303 */
     de__vis_frame_destroy(r, vs->vis);          /* DENG-229 */
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)

@@ -23,6 +23,9 @@ __exported import "../lighting/ibl";
 /// DeLightingView.flags
 public static const uint DE_LIGHTING_ORTHO = 1; // an orthographic projection
 public static const uint DE_LIGHTING_SPLIT = 2; // r.split_lighting: diffuse / specular targets
+/// DENG-306: subsurface scattering runs after lighting: SUBSURFACE pixels write their diffuse to
+/// the diffuse target only, and their specular to the lighting target.
+public static const uint DE_LIGHTING_SSS = 4;
 /// Directional lights shaded at most (more are counted, not shaded).
 public static const uint DE_LIGHTING_MAX_DIRECTIONAL = 4;
 /// Byte offsets of the light counters (a raw buffer of DE_LIGHTING_COUNTER_BYTES).
@@ -115,24 +118,24 @@ public SurfaceData de_surface_specular_only(SurfaceData s)
     return t;
 }
 
-/// Adds the light reaching `s` from direction `wi` (world) with illuminance `e` (rgb lux).
-void add_light<M : IMaterialModel>(inout DeDirect r, SurfaceData s, ShadingFrame f, float3 wo,
-                                   float3 wi, float3 e, bool split)
+/// Adds the light reaching `s` from direction `wi` (world) with illuminance `e` (rgb lux). The
+/// split is the model's own (DENG-306: evaluate_split), exact for metals too.
+void add_light<M : IMaterialSplitModel>(inout DeDirect r, SurfaceData s, ShadingFrame f,
+                                        float3 wo, float3 wi, float3 e, bool split)
 {
     float3 wil = f.to_local(wi);
     if (!(wil.z > 0.0) && (s.features & DE_MATERIAL_FEATURE_TRANSMISSION) == 0u)
         return;
-    float3 total = M.evaluate(s, wo, wil) * e;
     if (split)
     {
-        float3 spec = M.evaluate(de_surface_specular_only(s), wo, wil) * e;
-        r.specular += spec;
-        r.diffuse += max(total - spec, float3(0.0, 0.0, 0.0));
+        float3 diffuse;
+        float3 total = M.evaluate_split(s, wo, wil, diffuse) * e;
+        diffuse *= e;
+        r.diffuse += diffuse;
+        r.specular += total - diffuse;
+        return;
     }
-    else
-    {
-        r.diffuse += total;
-    }
+    r.diffuse += M.evaluate(s, wo, wil) * e;
 }
 
 /// The direct light at surface `s` (point `p`, unit direction `v` towards the eye, pixel `px` for
@@ -140,10 +143,11 @@ void add_light<M : IMaterialModel>(inout DeDirect r, SurfaceData s, ShadingFrame
 /// `cluster`, shaded through model M (area lights through LTC with the surface's Standard
 /// parameters: F0 = 0.04 specular for dielectrics and the base colour for metals, F90 = specular
 /// for dielectrics). With `split` false everything is in `diffuse`.
-public DeDirect evaluate_direct_clustered<M : IMaterialModel>(SurfaceData s, float3 p, float3 v,
-                                                              uint2 px, DeLightingView lv,
-                                                              DeClusterLists cl, uint cluster,
-                                                              bool split)
+public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s, float3 p,
+                                                                   float3 v, uint2 px,
+                                                                   DeLightingView lv,
+                                                                   DeClusterLists cl,
+                                                                   uint cluster, bool split)
 {
     DeDirect r;
     r.diffuse = float3(0.0, 0.0, 0.0);

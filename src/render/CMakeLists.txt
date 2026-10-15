@@ -347,3 +347,13 @@ if(TARGET de_render)
         passes/forward/transparent_sort.c
         passes/forward/forward_transparent.c)
 endif()
+
+# DENG-306: screen-space separable subsurface scattering with the Burley profile
+# (passes/sss/sss.c: the profile in double precision, the kernel tables, the view stage "sss"
+# after lighting; engine shader sss_separable, shaders/sss/sss_separable.slang with the pure
+# profile functions of shaders/sss/burley_profile.slang that the path tracer reuses, DENG-73).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/sss/sss.h
+        passes/sss/sss.c)
+endif()

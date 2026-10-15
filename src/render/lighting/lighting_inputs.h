@@ -33,6 +33,10 @@ typedef struct de__lighting_inputs {
     de_rg_resource indirect_specular;  /**< RGB: indirect specular radiance (DENG-304) */
     /** The scale of the lighting output (pre-exposure; DENG-304 sets it). 0 = 1. */
     f32 pre_exposure;
+    /** DENG-306: the view's subsurface scattering runs after lighting (its `sss` quality is not
+     * DE_QUALITY_OFF): the frame gets a diffuse target, and SUBSURFACE pixels write their diffuse
+     * light only there (the SSS pass adds it back blurred). The lighting stage sets it. */
+    bool subsurface;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 

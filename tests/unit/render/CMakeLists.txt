@@ -794,3 +794,28 @@ if(TARGET test_render_forward_transparent)
         endif()
     endif()
 endif()
+
+# DENG-306: screen-space separable subsurface scattering with the Burley profile
+# (src/render/passes/sss/, shaders/sss/), executable test_render_sss; CTest names
+# render_sss.sss.<test>. The CPU tests check the kernel tables against the numerically integrated
+# profile, the shader constants and SssParams' size, and (a null-backend renderer) that sss off
+# dispatches nothing. The GPU tests (_metal, _vulkan, _d3d12; SKIP without the device) run the
+# vis frame, lighting and SSS over planes (lighting_fixture.h) and compare with sss off: unflagged
+# pixels bitwise, a depth edge without bleeding, a constant world-space radius at two distances.
+de_add_test(NAME render_sss
+    SOURCES test_sss.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_sss)
+    target_include_directories(test_render_sss PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_sss PRIVATE
+        "DE_SSS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_sss PRIVATE version)
+        de_d3d12_agility_deploy(test_render_sss)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_sss)
+        endif()
+    endif()
+endif()

@@ -55,7 +55,7 @@ enum {
 /** de__cluster_light flags (axis[3] as bits). */
 enum { DE__CLUSTER_LIGHT_PROXY = 1u, DE__CLUSTER_LIGHT_SHADOWS = 2u };
 /** de__lighting_view.flags */
-enum { DE__LIGHTING_ORTHO = 1u, DE__LIGHTING_SPLIT = 2u };
+enum { DE__LIGHTING_ORTHO = 1u, DE__LIGHTING_SPLIT = 2u, DE__LIGHTING_SSS = 4u /* DENG-306 */ };
 /** Directional lights shaded at most. */
 #define DE__LIGHTING_MAX_DIRECTIONAL 4u
 /** Byte offsets of the light counters (lighting_common.slang DE_LIGHTING_COUNTER_*). */
@@ -177,16 +177,18 @@ typedef struct de__lighting_context {
     de__cluster_grid grid;
     de__lighting_view view; /**< the constants uploaded this frame */
     u32 local_capacity, list_capacity;
-    de_rg_resource bounds;            /**< 32 bytes per cluster (min, max float4; view space) */
-    de_rg_resource lights;            /**< de__cluster_light[local_capacity] */
-    de_rg_resource dir_lights;        /**< de__cluster_light[DE__LIGHTING_MAX_DIRECTIONAL] */
-    de_rg_resource grid_buf;          /**< u32 x 2 per cluster: offset, count */
-    de_rg_resource list;              /**< u32 per entry */
-    de_rg_resource counters;          /**< DE__LIGHTING_COUNTER_* */
-    de_rg_resource tile_counters;     /**< u32 per material model: tiles lit */
-    de_rg_resource diffuse, specular; /**< RGBA16F split targets (invalid when not split) */
-    de_rg_resource heatmap;           /**< RGBA16F cluster heatmap (r.cluster_debug) */
-    bool lit;                         /**< the deferred pass was added */
+    de_rg_resource bounds;        /**< 32 bytes per cluster (min, max float4; view space) */
+    de_rg_resource lights;        /**< de__cluster_light[local_capacity] */
+    de_rg_resource dir_lights;    /**< de__cluster_light[DE__LIGHTING_MAX_DIRECTIONAL] */
+    de_rg_resource grid_buf;      /**< u32 x 2 per cluster: offset, count */
+    de_rg_resource list;          /**< u32 per entry */
+    de_rg_resource counters;      /**< DE__LIGHTING_COUNTER_* */
+    de_rg_resource tile_counters; /**< u32 per material model: tiles lit */
+    /** RGBA16F split targets (invalid when not split). DENG-306: with the subsurface input and
+     * no r.split_lighting, only `diffuse` (written at SUBSURFACE pixels, not cleared). */
+    de_rg_resource diffuse, specular;
+    de_rg_resource heatmap; /**< RGBA16F cluster heatmap (r.cluster_debug) */
+    bool lit;               /**< the deferred pass was added */
     /* ---- DENG-304 ---- */
     de_rg_resource target; /**< the HDR lighting target it lit (vc->gbuffer[DE__GB_LIGHTING]) */
     u32 width, height;     /**< its size (the view's internal size) */

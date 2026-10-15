@@ -142,7 +142,9 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   factor, emissive proxies, the diffuse / specular split, the cluster sets), and
   `test_render_ibl_exposure` (`render_ibl_exposure.*`, DENG-304: image-based lighting against
   white-furnace and rotation references, the strip copy of a BC6H environment cube, EV100 exposure
-  and the output pass). The Windows entry
+  and the output pass), and `test_render_sss` (`render_sss.*`, DENG-306: separable Burley
+  subsurface scattering against the same frame with it off: unflagged pixels bitwise, no bleeding
+  across a depth edge, a constant world-space radius at two distances). The Windows entry
   also builds those and
   runs their `_d3d12` tests with
   `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423). The

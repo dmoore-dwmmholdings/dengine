@@ -16,10 +16,12 @@
 // evaluate_direct_clustered<M> (lighting_common.slang) over the view's directional lights and its
 // cluster's local lights, plus evaluate_indirect_split (IBL, DENG-304). The radiance, times
 // pre_exposure (the view's exposure, exposure.c), is added to
-// the HDR lighting target (which already holds the emission the resolve wrote). Split pixels
-// (DE_LIGHTING_SPLIT, or the G-buffer's subsurface flag) also get their diffuse and specular parts
-// in separate targets when the frame has them; a subsurface pixel's diffuse part then goes only to
-// the diffuse target (the SSS pass, DENG-306, adds it back blurred).
+// the HDR lighting target (which already holds the emission the resolve wrote). With
+// DE_LIGHTING_SPLIT every pixel also gets its diffuse and specular parts in separate targets. With
+// DE_LIGHTING_SSS (DENG-306: the view's sss quality is on, the frame has a diffuse target) a
+// pixel with the G-buffer's subsurface flag writes its diffuse part only to the diffuse target and
+// its specular part to the lighting target; the SSS pass (passes/sss/sss.c) adds the diffuse back
+// blurred. The split is the model's own (IMaterialSplitModel.evaluate_split, exact for metals).
 //
 // The kernel is generic over the material model (material_interface.slang); this file instantiates
 // it for the built-in Standard model, which also lights the built-ins not implemented yet and game
@@ -61,7 +63,7 @@ public struct LightingParams
 };
 
 /// One dispatch of the tiles of model pc.model through model M (thread `t` of the group).
-public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingParams pc)
+public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, LightingParams pc)
 {
     uint index = de_vis_group_index(group);
     uint count = de_bytes(pc.args).load(pc.model * 16u + 12u);
@@ -78,7 +80,10 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
     Texture2D<float4> gb1 = de_tex2d(pc.gb1);
     Texture2D<float4> gb2 = de_tex2d(pc.gb2);
     RWTexture2D<float4> lighting = de_rwtex2d(pc.lighting);
-    bool targets = pc.diffuse != DE_BINDLESS_INVALID && pc.specular != DE_BINDLESS_INVALID;
+    bool has_diffuse = pc.diffuse != DE_BINDLESS_INVALID;
+    bool has_specular = pc.specular != DE_BINDLESS_INVALID;
+    bool split_all = has_diffuse && has_specular && (lv.flags & DE_LIGHTING_SPLIT) != 0u;
+    bool sss_on = has_diffuse && (lv.flags & DE_LIGHTING_SSS) != 0u; // DENG-306
     bool ortho = (lv.flags & DE_LIGHTING_ORTHO) != 0u;
     float3 forward_eye = normalize(sc.view[2].xyz); // towards the eye (view space +z)
     float2 inv_size = float2(1.0 / float(pc.width), 1.0 / float(pc.height));
@@ -108,8 +113,10 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
         uint cluster = de_cluster_index(lv, p, view_depth);
         SurfaceData s = de_surface_from_gb(g);
         s.brdf_lut = lv.brdf_lut; // the Standard model's energy LUT (DENG-299)
-        bool sss = (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
-        bool split = targets && (sss || (lv.flags & DE_LIGHTING_SPLIT) != 0u);
+        // DENG-306: a subsurface pixel's diffuse goes to the diffuse target only, where the SSS
+        // pass blurs it; without the SSS pass it is lit like any other pixel.
+        bool sss = sss_on && (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
+        bool split = sss || split_all;
         DeDirect d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split);
         float3 ind_d, ind_s;
         evaluate_indirect_split(s, pos, v, p, lv, ind_d, ind_s); // DENG-304: IBL
@@ -117,9 +124,10 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
         if (split)
         {
             de_rwtex2d(pc.diffuse)[p] = float4((d.diffuse + ind_d) * e, 1.0);
-            de_rwtex2d(pc.specular)[p] = float4((d.specular + ind_s) * e, 1.0);
+            if (has_specular)
+                de_rwtex2d(pc.specular)[p] = float4((d.specular + ind_s) * e, 1.0);
         }
-        float3 add = sss && split ? d.specular + ind_s : d.diffuse + d.specular + ind_d + ind_s;
+        float3 add = sss ? d.specular + ind_s : d.diffuse + d.specular + ind_d + ind_s;
         lighting[p] = float4(lit.rgb + add * e, lit.a);
     }
 }

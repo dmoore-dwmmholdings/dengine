@@ -67,7 +67,7 @@ public struct StandardStack
 };
 
 /// The Standard model with the lobes of `FEATURES` compiled in.
-public struct StandardModelT<let FEATURES : uint> : IMaterialModel
+public struct StandardModelT<let FEATURES : uint> : IMaterialSplitModel
 {
     public typealias Params = DeGpuMaterial;
 
@@ -121,7 +121,9 @@ public struct StandardModelT<let FEATURES : uint> : IMaterialModel
             s.features |= DE_MATERIAL_FEATURE_TRANSMISSION;
         if (m.extra.y > 0.0)
             s.features |= DE_MATERIAL_FEATURE_DIFFUSE_TRANSMISSION;
-        if (m.extra.z > 0.0)
+        // DENG-306: subsurface scattering needs an amount and a mean free path (the screen-space
+        // pass, passes/sss/sss.c, reads both from the material; de__material_features agrees).
+        if (m.extra.z > 0.0 && max(m.subsurface.x, max(m.subsurface.y, m.subsurface.z)) > 0.0)
             s.features |= DE_MATERIAL_FEATURE_SUBSURFACE;
         if (m.clearcoat.x > 0.0)
             s.features |= DE_MATERIAL_FEATURE_CLEARCOAT;
@@ -263,7 +265,9 @@ public struct StandardModelT<let FEATURES : uint> : IMaterialModel
             f += de_transmission_evaluate(k.trans, wo, wi, dt) * k.keep_o;
             d += dt * k.keep_o;
         }
-        // 5. subsurface (DENG-306): insertion point SSS
+        // 5. subsurface (DENG-306): insertion point SSS. No lobe: the diffuse share `d` is what the
+        //    screen-space pass (passes/sss/sss.c) blurs with the Burley profile at SUBSURFACE
+        //    pixels, and what the path tracer's random walk replaces (S17, DENG-73).
         diffuse = d;
         return f;
     }
