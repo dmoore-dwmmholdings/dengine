@@ -250,3 +250,11 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/raster_alpha.c)
 endif()
+
+# DENG-237: material classification (passes/vis/classify.c): the vis IDs copied into a raw buffer,
+# then one group per screen tile bins the tiles by material model (DeGpuMaterial.model) into
+# per-model tile lists with indirect dispatch arguments for resolve (DENG-238). Engine shader
+# vis_classify (shaders/visbuffer/classify.slang).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/classify.c)
+endif()

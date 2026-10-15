@@ -478,3 +478,28 @@ if(TARGET test_render_raster_alpha)
         endif()
     endif()
 endif()
+
+# DENG-237: material classification (src/render/passes/vis/classify.c, the engine shader
+# vis_classify), executable test_render_classify; CTest names render_classify.<suite>.<test>.
+# Synthetic GPU-scene tables, visible lists and vis-ID images drive the classify stage alone; the
+# per-model tile lists, the background list, the masks and the indirect arguments are compared
+# with a CPU reference. The GPU tests run per backend (_metal, _vulkan, _d3d12; SKIP without the
+# device; CI: lavapipe and WARP golden jobs); classify.layout_match parses
+# shaders/visbuffer/classify.slang.
+de_add_test(NAME render_classify
+    SOURCES test_classify.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_classify)
+    target_include_directories(test_render_classify PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_classify PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_classify PRIVATE version)
+        de_d3d12_agility_deploy(test_render_classify)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_classify)
+        endif()
+    endif()
+endif()

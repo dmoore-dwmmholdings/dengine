@@ -357,6 +357,8 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
             vc->scene_instances = de__gpu_scene_import(d->gpu_scene, g, DE__GS_INSTANCES);
             vc->scene_meshes = de__gpu_scene_import(d->gpu_scene, g, DE__GS_MESHES);
             vc->scene_materials = de__gpu_scene_import(d->gpu_scene, g, DE__GS_MATERIALS);
+            /* DENG-237: classification reads the table's entries */
+            vc->scene_material_count = de__gpu_scene_table(d->gpu_scene, DE__GS_MATERIALS).count;
             vc->scene_views = de__gpu_scene_import(d->gpu_scene, g, DE__GS_VIEWS);
         }
     }

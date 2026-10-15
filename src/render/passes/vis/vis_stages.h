@@ -477,6 +477,32 @@ typedef struct de__vis_context {
      * is an entry of the alpha region. Invalid when the phase did not cull. */
     de_rg_resource raster_args_alpha[DE__VIS_PHASES];
 
+    /* ---- DENG-237: material classification (classify.c; all invalid / 0 when it did not run) ----
+     */
+    /** Entries of scene_materials (the GPU scene's material table count; vis_frame.c). */
+    u32 scene_material_count;
+    /** The vis IDs as a raw buffer (u32 per pixel, rows `vis_ids_pitch` bytes apart; copied from
+     * vis_ids by "vis.classify.copy"): vis_ids has no sampled or storage view, and a uint image in
+     * the float-typed bindless tables fails Vulkan validation. DE_ACCESS_SHADER_READ for readers
+     * (resolve, DENG-238). */
+    de_rg_resource vis_ids_buffer;
+    u32 vis_ids_pitch;
+    /** Tiles of classify_tile x classify_tile pixels: classify_tiles_x x classify_tiles_y. */
+    u32 classify_tile, classify_tiles_x, classify_tiles_y, classify_tile_count;
+    /**
+     * Per list (DE__VIS_CLASSIFY_LISTS: material model m < DE__GS_MATERIAL_MODELS, then
+     * DE__VIS_CLASSIFY_BACKGROUND), the tiles that hold it: raw u32 entries, list k at entry
+     * k * classify_tile_count, each tile packed as x | y << 16 (DE__VIS_CLASSIFY_TILE_*), in no
+     * particular order. A tile appears once in the list of each model it holds, and in the
+     * background list when a pixel holds no ID.
+     */
+    de_rg_resource classify_tiles;
+    /** Per list, a DeVisDispatchArgs (16 bytes, list k at byte 16 k; INDIRECT): one group per
+     * tile of the list (de_vis_dispatch_args), count = the list's length. */
+    de_rg_resource classify_args;
+    /** Per tile, its model mask (bit m: model m; raw u32 at entry y * classify_tiles_x + x). */
+    de_rg_resource classify_masks;
+
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -738,6 +764,21 @@ typedef struct de__vis_raster_compute_debug {
 void de__vis_raster_compute_set_debug(de__vis_shared *s, const de__vis_raster_compute_debug *d);
 /** The `public static const uint` values of vis_expand.slang. */
 const de__vis_layout_const *de__vis_raster_compute_layout_consts(u32 *count);
+
+/* ---------- Material classification (classify.c), DENG-237 ---------- */
+
+/** Lists of classify_tiles: one per material model, then the background list. */
+#define DE__VIS_CLASSIFY_LISTS      (DE__GS_MATERIAL_MODELS + 1u)
+#define DE__VIS_CLASSIFY_BACKGROUND DE__GS_MATERIAL_MODELS
+/** A tile entry: x in the low 16 bits, y in the high 16. */
+#define DE__VIS_CLASSIFY_TILE_BITS 16u
+/** Threads per group of cs_classify (one group per tile). */
+#define DE__VIS_CLASSIFY_GROUP 64u
+/** The model of a material entry as classification reads it: its `model` when the slot names a
+ * READY entry of the table, else DE__GS_MATERIAL_MODEL_STANDARD (the default material). */
+u32 de__vis_classify_model(const de__gs_material *materials, u32 material_count, u32 slot);
+/** The `public static const uint` values of classify.slang. */
+const de__vis_layout_const *de__vis_classify_layout_consts(u32 *count);
 
 DE_EXTERN_C_END
 

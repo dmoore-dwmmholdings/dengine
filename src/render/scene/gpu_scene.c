@@ -84,6 +84,12 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_MATERIAL_READY", DE__GS_MATERIAL_READY},
     {"DE_GPU_MATERIAL_DOUBLE_SIDED", DE__GS_MATERIAL_DOUBLE_SIDED},
     {"DE_GPU_MATERIAL_UNLIT", DE__GS_MATERIAL_UNLIT},
+    {"DE_GPU_MATERIAL_MODEL_STANDARD", DE__GS_MATERIAL_MODEL_STANDARD},
+    {"DE_GPU_MATERIAL_MODEL_UNLIT", DE__GS_MATERIAL_MODEL_UNLIT},
+    {"DE_GPU_MATERIAL_MODEL_SPRITE", DE__GS_MATERIAL_MODEL_SPRITE},
+    {"DE_GPU_MATERIAL_MODEL_TERRAIN", DE__GS_MATERIAL_MODEL_TERRAIN},
+    {"DE_GPU_MATERIAL_MODEL_WATER", DE__GS_MATERIAL_MODEL_WATER},
+    {"DE_GPU_MATERIAL_MODELS", DE__GS_MATERIAL_MODELS},
     {"DE_GPU_LIGHT_LIVE", DE__GS_LIGHT_LIVE},
     {"DE_GPU_LIGHT_CAST_SHADOWS", DE__GS_LIGHT_CAST_SHADOWS},
     {"DE_GPU_INSTANCE_MATERIALS", DE__GS_INSTANCE_MATERIALS},
@@ -531,6 +537,8 @@ static void pack_material(const de__gpu_scene *gs, de_material h, de__gs_materia
     f4(&o->subsurface, s->subsurface_radius.x, s->subsurface_radius.y, s->subsurface_radius.z,
        s->anisotropy_rotation);
     o->alpha_mode = m->alpha_mode;
+    /* DENG-237: Standard or Unlit until S14's material models (DENG-298) set it. */
+    o->model = s->unlit ? DE__GS_MATERIAL_MODEL_UNLIT : DE__GS_MATERIAL_MODEL_STANDARD;
     o->flags = DE__GS_MATERIAL_READY | (s->double_sided ? DE__GS_MATERIAL_DOUBLE_SIDED : 0u) |
                (s->unlit ? DE__GS_MATERIAL_UNLIT : 0u);
     o->cooked_flags = m->flags;
