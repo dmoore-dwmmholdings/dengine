@@ -151,6 +151,7 @@ void cs_resolve(uint3 id : SV_DispatchThreadID, uniform SkParams pc)
     v.uv[0] = float2(0.0, 0.0);
     v.uv[1] = float2(0.0, 0.0);
     v.has_tangent = true;
+    v.object_scale = 1.0;
     TextureLodInfo lod;
     lod.dx[0] = float2(0.0, 0.0);
     lod.dx[1] = float2(0.0, 0.0);

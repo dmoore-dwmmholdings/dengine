@@ -56,6 +56,9 @@ public struct VertexAttribs
     public float4 color;            // vertex colour 0 (white without colours)
     public float2 uv[2];            // UV0, UV1 (0 without the stream)
     public bool has_tangent;        // the mesh has a tangent stream
+    // ---- DENG-301 ----
+    public float object_scale;      // the instance's uniform-scale estimate (|det|^(1/3)):
+                                    // object-space lengths (KHR volume thickness) to world
 };
 
 /// How textures are sampled at the point: UV derivatives per UV set (analytic one-pixel
@@ -99,6 +102,13 @@ public struct SurfaceData
     public float iridescence;           // factor 0..1
     public float iridescence_ior;
     public float iridescence_thickness; // nm; 0 = no film
+    // ---- DENG-301: transmission (KHR_materials_transmission / volume / diffuse_transmission) ----
+    public float transmission;               // specular transmission factor 0..1
+    public float thickness;                  // world units; 0 = thin-walled
+    public float3 attenuation_color;         // KHR volume: the colour after attenuation_distance
+    public float attenuation_distance;       // world units; >= 1e30 = no absorption
+    public float diffuse_transmission;       // factor 0..1
+    public float3 diffuse_transmission_color;
 };
 
 /// A SurfaceData with every field set: grey 0.5 dielectric, roughness 0.5, normal +Z, no
@@ -131,6 +141,12 @@ public SurfaceData de_surface_default()
     s.iridescence = 0.0;
     s.iridescence_ior = 1.3;
     s.iridescence_thickness = 0.0;
+    s.transmission = 0.0;
+    s.thickness = 0.0;
+    s.attenuation_color = float3(1.0, 1.0, 1.0);
+    s.attenuation_distance = 1.0e30;
+    s.diffuse_transmission = 0.0;
+    s.diffuse_transmission_color = float3(1.0, 1.0, 1.0);
     return s;
 }
 

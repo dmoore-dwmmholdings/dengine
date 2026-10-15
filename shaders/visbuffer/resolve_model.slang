@@ -21,8 +21,8 @@
 // the SurfaceData, and the thin G-buffer (gbuffer.slang), the motion vector and the emission go
 // to the targets. A surface with DE_MATERIAL_FEATURE_UNLIT keeps GB1 cleared.
 //
-// The S13 Unlit model is here too (ResolveUnlitModel; DENG-301 replaces it). The Standard model
-// is materials/standard/standard.slang (DENG-299).
+// The models are elsewhere: Standard in materials/standard/standard.slang (DENG-299), Unlit in
+// materials/unlit/unlit.slang (DENG-301).
 module resolve_model;
 
 import bindless;
@@ -139,6 +139,7 @@ public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, out Textur
     v.uv[0] = de_resolve_uv(r, 0u, lod.dx[0], lod.dy[0]);
     v.uv[1] = de_resolve_uv(r, 1u, lod.dx[1], lod.dy[1]);
     v.has_tangent = de_vis_mesh_has_stream(r.mesh, DE_VIS_STREAM_TANGENT);
+    v.object_scale = pow(abs(de_vis_transform_det(r.inst.transform)), 1.0 / 3.0); // DENG-301
     lod.sampler = 0u;
     lod.feedback = 0u;
     lod.feedback_capacity = 0u;
@@ -197,60 +198,3 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
         }
     }
 }
-
-/* ---------- The S13 Unlit model (DENG-238; S14 DENG-301 replaces it) ---------- */
-
-/// S13 Unlit: base colour x factor x vertex colour, emitted as is (plus the emissive term); no
-/// BSDF. GB1 stays cleared.
-public struct ResolveUnlitModel : IMaterialModel
-{
-    public typealias Params = DeGpuMaterial;
-
-    public static Params load_params(DeGpuMaterial material)
-    {
-        return material;
-    }
-
-    public static SurfaceData resolve_gbuffer(Params m, VertexAttribs v, TextureLodInfo lod)
-    {
-        float4 base = m.base_color * v.color *
-                      de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod,
-                                        float4(1.0, 1.0, 1.0, 1.0));
-        SurfaceData s = de_surface_default();
-        s.base_color = base.rgb;
-        s.ao = 1.0;
-        s.normal = v.normal;
-        s.roughness = 0.0;
-        s.metallic = 0.0;
-        s.specular = 0.0;
-        s.emissive = base.rgb + m.emissive.rgb * m.emissive.w;
-        s.model = m.model & (DE_GPU_MATERIAL_MODELS - 1u);
-        s.features = DE_MATERIAL_FEATURE_UNLIT;
-        return s;
-    }
-
-    public static float3 evaluate(SurfaceData s, float3 wo, float3 wi)
-    {
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    public static float pdf(SurfaceData s, float3 wo, float3 wi)
-    {
-        return 0.0;
-    }
-
-    public static BsdfSample sample(SurfaceData s, float3 wo, float3 u)
-    {
-        BsdfSample r;
-        r.wi = float3(0.0, 0.0, 1.0);
-        r.weight = float3(0.0, 0.0, 0.0);
-        r.pdf = 0.0;
-        r.lobe = 0u;
-        return r;
-    }
-
-    public static uint lobes(SurfaceData s)
-    {
-        return 0u;
-    }
-};
