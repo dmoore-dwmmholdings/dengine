@@ -279,6 +279,7 @@ void cs_meshlet_cull(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
         return;
     DeVisWorkItem item = de_robuffer<DeVisWorkItem>(pc.work_items)[item_index];
     DeVisCullView v = de_robuffer<DeVisCullView>(pc.cull_view)[pc.cull_view_index];
+    de_cull_occlusion_begin(v); // DENG-233: the view's HZB for cull_occlusion_test (phase 2)
     DeGpuInstance inst = de_robuffer<DeGpuInstance>(pc.instances)[item.instance];
     DeGpuMesh mesh = de_robuffer<DeGpuMesh>(pc.meshes)[inst.mesh];
 

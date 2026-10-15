@@ -403,6 +403,7 @@ de_result de__vk_texture_create_placed(de_gpu_device *d, de__gpu_texture *t,
 }
 
 void de__vk_texture_destroy(de_gpu_device *d, de__gpu_texture *t) {
+    de__vk_bindless_clear_texture(d, t); /* its indices: the dummies again (vk_bindless.c) */
     release_texture(d, t);
 }
 

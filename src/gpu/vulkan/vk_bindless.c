@@ -285,6 +285,26 @@ void de__vk_bindless_write_sampler(de_gpu_device *d, u32 index, de__gpu_sampler 
     write_sampler(de__vk(d), index, DE__GPU_PAYLOAD(de__vk_sampler, s)->sampler);
 }
 
+/* A destroyed texture's indices get the dummies again (as Metal clears them), before its views
+ * go. The GPU is done with the texture (it is destroyed when its frames completed), so the writes
+ * touch no descriptor a pending command buffer uses. Without them a freed index keeps a view that
+ * no longer exists, and the validation layers' GPU-assisted validation (VVL 1.3.275, the lavapipe
+ * CI job) re-checks every index a shader ever read against the set's current contents: a
+ * destroyed view there crashes the layer (DENG-233: the render graph destroys and re-places its
+ * transient textures when its memory pool grows). */
+void de__vk_bindless_clear_texture(de_gpu_device *d, const de__gpu_texture *t) {
+    de__vk_device *vk = de__vk(d);
+    if (vk->set == VK_NULL_HANDLE || !vk->null_sampled_view || !vk->null_storage_view)
+        return;
+    if (t->sampled != 0)
+        write_image(vk, DE__VK_BINDING_SAMPLED_IMAGES, t->sampled, vk->null_sampled_view,
+                    VK_IMAGE_LAYOUT_GENERAL);
+    for (u32 m = 0; m < DE_GPU_MAX_MIPS; ++m)
+        if (t->storage[m] != 0)
+            write_image(vk, DE__VK_BINDING_STORAGE_IMAGES, t->storage[m], vk->null_storage_view,
+                        VK_IMAGE_LAYOUT_GENERAL);
+}
+
 /* ---------- Index 0: zeroed dummies ---------- */
 
 static de_result alloc_bind(de_gpu_device *d, VkMemoryRequirements mr, bool linear, u32 slot) {

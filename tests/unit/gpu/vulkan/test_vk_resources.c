@@ -418,8 +418,23 @@ TEST_F(vk, bindless_indices, vk_fx) {
     ASSERT_TRUE(de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_BUFFER, bi, &h));
     EXPECT_EQ(h, de__gpu_vk_buffer_handle(f->d, b2));
 
-    de_gpu_buffer_destroy(f->d, b2);
+    /* A destroyed texture's indices hold the dummies again (DENG-233), not its destroyed views. */
+    u64 dummy_sampled = 0, dummy_storage = 0;
+    ASSERT_TRUE(
+        de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_SAMPLED_TEXTURE, 0, &dummy_sampled));
+    ASSERT_TRUE(
+        de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_STORAGE_TEXTURE, 0, &dummy_storage));
     de_gpu_texture_destroy(f->d, t);
+    de_gpu_wait_idle(f->d);
+    ASSERT_TRUE(de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_SAMPLED_TEXTURE, ti, &h));
+    EXPECT_EQ(h, dummy_sampled);
+    for (u32 m = 0; m < 3; ++m) {
+        ASSERT_TRUE(de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_STORAGE_TEXTURE,
+                                                storage_idx[m], &h));
+        EXPECT_EQ(h, dummy_storage);
+    }
+
+    de_gpu_buffer_destroy(f->d, b2);
     de_gpu_sampler_destroy(f->d, s);
 #endif
 }

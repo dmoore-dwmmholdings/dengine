@@ -25,20 +25,6 @@ void de__vis_raster(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     (void)phase;
 }
 
-/* ---------- hzb_build (DENG-233) ---------- */
-
-de_result de__vis_hzb_build_init(de__vis_shared *s) {
-    (void)s;
-    return DE_OK;
-}
-void de__vis_hzb_build_shutdown(de__vis_shared *s) {
-    (void)s;
-}
-void de__vis_hzb_build(de_rg *g, de__vis_context *vc) {
-    (void)g;
-    (void)vc;
-}
-
 /* ---------- raster_alpha (DENG-236) ---------- */
 
 de_result de__vis_raster_alpha_init(de__vis_shared *s) {

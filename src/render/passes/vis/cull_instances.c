@@ -3,24 +3,32 @@
  * §12.5 step 1, §11.8 LOD; DENG-229). shaders/culling/instance_cull.slang has the kernels and
  * the LOD rule; vis_stages.h the stage contract and the CPU reference functions defined here.
  *
- * Phase 1 of one view, four passes on the graphics queue:
+ * Per view and phase, three passes on the graphics queue, then one stats pass after phase 2:
  *
- *   vis.cull_instances.clear  zeroes the counters                    counters: SHADER_WRITE
- *   vis.cull_instances        one thread per instance slot           instances, meshes: READ;
- *                                                                    counters: READ + WRITE;
- *                                                                    work items: SHADER_WRITE
- *   vis.cull_instances.args   meshlet culling's dispatch arguments   counters: READ; args: WRITE
- *   vis.cull_instances.stats  copies the counters into the view's    counters: COPY_SRC;
- *                             readback buffer (side effect)          readback: COPY_DST
+ *   vis.cull_instances[2].clear  zeroes the counters                counters: SHADER_WRITE
+ *   vis.cull_instances[2]        one thread per instance slot       instances, meshes: READ;
+ *                                                                   counters: READ + WRITE;
+ *                                                                   work items: SHADER_WRITE;
+ *                                                                   visibility: READ (phase 1),
+ *                                                                   READ + WRITE (phase 2);
+ *                                                                   HZB: READ (phase 2)
+ *   vis.cull_instances[2].args   meshlet culling's dispatch args    counters: READ; args: WRITE
+ *   vis.cull_instances.stats     both phases' counters into the     counters: COPY_SRC;
+ *                                view's readback buffer (side       readback: COPY_DST
+ *                                effect)
  *
- * The work list, the counters and the arguments are transients of the view's graph
- * (de__vis_context.work_items / instance_counters / cull_args). With every later stage stubbed,
- * nothing reads the arguments and the graph culls the args pass; the stats pass keeps the clear
- * and the cull alive. Phase 2 is DENG-233's (it adds nothing here yet).
+ * Two-phase occlusion (DENG-233, instance_cull.slang; occlusion.c has the per-view visibility
+ * flags): phase 1 draws what was visible after the last frame, phase 2 (after the HZB) tests
+ * every frustum-visible instance, draws the newly visible ones and rewrites the flags. Both
+ * phases use the same cull constants (written in phase 1). Each phase has its own work list,
+ * counters and arguments (de__vis_context.work_items / instance_counters / cull_args, indexed by
+ * DE__VIS_PHASE_INDEX). With every later stage stubbed nothing reads the arguments and the graph
+ * culls the args passes; the stats pass and the visibility flags keep the clears and the culls.
  *
  * Per view slot: an UPLOAD buffer with DE__VIS_FRAME_RING de__vis_cull_view entries (the CPU
  * writes frame N's entry N % ring while building the graph; the GPU reads it with de_robuffer)
- * and a READBACK buffer with the counters of the same frames. A frame reads back the newest
+ * and a READBACK buffer with the counters of the same frames (phase 1's, then phase 2's, 16 bytes
+ * each). A frame reads back the newest
  * completed frame's counters (de__vis_stats; de_render_stats.instances_visible), and grows the
  * work list when that frame asked for more items than it held: items past the capacity are
  * dropped by the kernel and counted, so the next frames recover, with a warning.
@@ -66,6 +74,9 @@ typedef struct ci_view {
     de__vis_stats stats; /**< the newest read back */
     u32 capacity;        /**< work items (grows, never shrinks) */
     bool warned_max;
+    /* DENG-233: phase 1 of this frame, for phase 2 */
+    u32 frame_slot, frame_count, frame_capacity;
+    bool frame_ready;
     /* r.cull_freeze */
     bool frozen;
     de__vis_cull_view frozen_view;
@@ -309,15 +320,21 @@ static void read_stats(ci_view *pv, u64 completed) {
     }
     if (best < 0)
         return;
-    u32 c[4];
+    u32 c[8]; /* phase 1's counters, then phase 2's (DENG-233) */
     memcpy(c, pv->stats_map + (size_t)best * CI_STATS_STRIDE, sizeof c);
+    const u32 v1 = c[DE__VIS_COUNTER_INSTANCES_VISIBLE / 4u];
+    const u32 v2 = c[4u + DE__VIS_COUNTER_INSTANCES_VISIBLE / 4u];
     pv->stats = (de__vis_stats){.valid = true,
                                 .frame = pv->slot_frame[best],
                                 .work_items = c[DE__VIS_COUNTER_WORK_ITEMS / 4u],
-                                .instances_visible = c[DE__VIS_COUNTER_INSTANCES_VISIBLE / 4u],
+                                .instances_visible = v1 + v2,
                                 .instances_tested = c[DE__VIS_COUNTER_INSTANCES_TESTED / 4u],
-                                .meshlets = c[DE__VIS_COUNTER_MESHLETS / 4u],
-                                .work_capacity = pv->slot_capacity[best]};
+                                .meshlets = c[DE__VIS_COUNTER_MESHLETS / 4u] +
+                                            c[4u + DE__VIS_COUNTER_MESHLETS / 4u],
+                                .work_capacity = pv->slot_capacity[best],
+                                .instances_visible_phase1 = v1,
+                                .instances_visible_phase2 = v2,
+                                .work_items_phase2 = c[4u + DE__VIS_COUNTER_WORK_ITEMS / 4u]};
 }
 
 static u32 pow2_at_least(u64 v) {
@@ -337,20 +354,21 @@ static u32 work_capacity(de__vis_shared *s, ci_view *pv, const de__vis_context *
     if (pv->capacity > cap)
         cap = pv->capacity;
     const de__vis_stats *st = &pv->stats;
-    if (st->valid && st->work_items > st->work_capacity) {
-        const u32 want = pow2_at_least((u64)st->work_items + st->work_items / 4u);
+    const u32 asked =
+        st->work_items > st->work_items_phase2 ? st->work_items : st->work_items_phase2;
+    if (st->valid && asked > st->work_capacity) {
+        const u32 want = pow2_at_least((u64)asked + asked / 4u);
         if (want > cap) {
             DE_WARN(s->log,
                     "vis: view slot %u: the work list overflowed in frame %llu (%u work items "
                     "for %u entries; the rest were not drawn); it grows to %u",
-                    vc->view_slot, (unsigned long long)st->frame, st->work_items, st->work_capacity,
-                    want);
+                    vc->view_slot, (unsigned long long)st->frame, asked, st->work_capacity, want);
             cap = want;
         } else if (cap == CI_MAX_CAPACITY && !pv->warned_max) {
             DE_WARN(s->log,
                     "vis: view slot %u: %u work items do not fit the largest work list (%u): "
                     "the rest are not drawn",
-                    vc->view_slot, st->work_items, CI_MAX_CAPACITY);
+                    vc->view_slot, asked, CI_MAX_CAPACITY);
             pv->warned_max = true;
         }
     }
@@ -366,6 +384,7 @@ typedef struct ci_pass {
     ci_params pc;
     u32 groups;
     de_rg_resource instances, meshes, work_items, counters, args;
+    de_rg_resource counters1; /**< phase 2's stats pass: phase 1's counters */
     de_gpu_buffer stats;
     u64 stats_offset;
 } ci_pass;
@@ -407,8 +426,11 @@ static void args_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 
 static void stats_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const ci_pass *p = (const ci_pass *)user;
-    de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset, de_rg_buffer(pass, p->counters), 0,
-                           DE__VIS_COUNTER_BYTES);
+    if (DE_HANDLE_VALID(p->counters1))
+        de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset, de_rg_buffer(pass, p->counters1), 0,
+                               DE__VIS_COUNTER_BYTES);
+    de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset + DE__VIS_COUNTER_BYTES,
+                           de_rg_buffer(pass, p->counters), 0, DE__VIS_COUNTER_BYTES);
 }
 
 static ci_pass *pass_data(de__vis_context *vc, const de__vis_kernel *k, const ci_pass *base) {
@@ -421,14 +443,114 @@ static ci_pass *pass_data(de__vis_context *vc, const de__vis_kernel *k, const ci
     return p;
 }
 
+/* The transients and the clear, cull and args passes of one phase (DENG-233: phase 1 reads last
+ * frame's visibility flags; phase 2 reads the HZB and rewrites them). */
+static bool add_phase(de_rg *g, de__vis_context *vc, ci_state *st, ci_view *pv,
+                      de__vis_phase phase) {
+    const u32 cap = pv->frame_capacity, count = pv->frame_count, slot = pv->frame_slot;
+    const bool p2 = phase == DE__VIS_PHASE_2;
+    const de_rg_resource items = de_rg_create_buffer(
+        g, &(de_gpu_buffer_desc){.size = (u64)cap * sizeof(de__vis_work_item),
+                                 .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                 .stride = (u32)sizeof(de__vis_work_item),
+                                 .name = p2 ? "vis.work_items2" : "vis.work_items"});
+    const de_rg_resource counters = de_rg_create_buffer(
+        g, &(de_gpu_buffer_desc){.size = DE__VIS_COUNTER_BYTES,
+                                 .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                 .name = p2 ? "vis.instance_counters2" : "vis.instance_counters"});
+    const de_rg_resource args = de_rg_create_buffer(
+        g, &(de_gpu_buffer_desc){.size = sizeof(de__vis_dispatch_args),
+                                 .usage = DE_USAGE_STORAGE | DE_USAGE_INDIRECT | DE_USAGE_COPY_SRC,
+                                 .stride = (u32)sizeof(de__vis_dispatch_args),
+                                 .name = p2 ? "vis.cull_args2" : "vis.cull_args"});
+    if (!DE_HANDLE_VALID(items) || !DE_HANDLE_VALID(counters) || !DE_HANDLE_VALID(args))
+        return false; /* error set; finalize reports it */
+    const ci_pass base = {
+        .dev = vc->shared->dev,
+        .pc = {.cull_view = pv->cull_bindless, .cull_view_index = slot, .phase = (u32)phase},
+        .groups = (count + CI_GROUP - 1u) / CI_GROUP,
+        .instances = vc->scene_instances,
+        .meshes = vc->scene_meshes,
+        .work_items = items,
+        .counters = counters,
+        .args = args,
+        .stats = pv->stats_buf,
+        .stats_offset = (u64)slot * CI_STATS_STRIDE};
+    ci_pass *pc = pass_data(vc, &st->clear, &base), *pu = pass_data(vc, &st->cull, &base),
+            *pa = pass_data(vc, &st->args, &base);
+    if (pc == NULL || pu == NULL || pa == NULL) {
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "vis: instance culling: the frame arena is full");
+        return false;
+    }
+    de_rg_pass *p = de_rg_add_pass(g, p2 ? "vis.cull_instances2.clear" : "vis.cull_instances.clear",
+                                   DE_QUEUE_GRAPHICS, clear_execute, pc);
+    de_rg_write(p, counters, DE_ACCESS_SHADER_WRITE);
+
+    p = de_rg_add_pass(g, p2 ? "vis.cull_instances2" : "vis.cull_instances", DE_QUEUE_GRAPHICS,
+                       cull_execute, pu);
+    de_rg_read(p, vc->scene_instances, DE_ACCESS_SHADER_READ);
+    de_rg_read(p, vc->scene_meshes, DE_ACCESS_SHADER_READ);
+    de_rg_read(p, counters, DE_ACCESS_SHADER_READ); /* atomics: read-modify-write */
+    de_rg_write(p, counters, DE_ACCESS_SHADER_WRITE);
+    de_rg_write(p, items, DE_ACCESS_SHADER_WRITE);
+    if (DE_HANDLE_VALID(vc->visibility)) {
+        de_rg_read(p, vc->visibility, DE_ACCESS_SHADER_READ);
+        if (p2)
+            de_rg_write(p, vc->visibility, DE_ACCESS_SHADER_WRITE);
+    }
+    if (p2 && DE_HANDLE_VALID(vc->hzb))
+        de_rg_read(p, vc->hzb, DE_ACCESS_SHADER_READ);
+
+    p = de_rg_add_pass(g, p2 ? "vis.cull_instances2.args" : "vis.cull_instances.args",
+                       DE_QUEUE_GRAPHICS, args_execute, pa);
+    de_rg_read(p, counters, DE_ACCESS_SHADER_READ);
+    de_rg_write(p, args, DE_ACCESS_SHADER_WRITE);
+
+    const u32 i = DE__VIS_PHASE_INDEX(phase);
+    vc->work_items[i] = items;
+    vc->instance_counters[i] = counters;
+    vc->cull_args[i] = args;
+    return true;
+}
+
+/* After phase 2: both phases' counters into the view's readback entry of this frame. */
+static void add_stats(de_rg *g, de__vis_context *vc, ci_view *pv) {
+    ci_pass *ps = (ci_pass *)de_arena_push_zero(vc->arena, sizeof *ps, 16);
+    if (ps == NULL)
+        return;
+    ps->counters1 = vc->instance_counters[0];
+    ps->counters = vc->instance_counters[1];
+    ps->stats = pv->stats_buf;
+    ps->stats_offset = (u64)pv->frame_slot * CI_STATS_STRIDE;
+    de_rg_pass *p =
+        de_rg_add_pass(g, "vis.cull_instances.stats", DE_QUEUE_GRAPHICS, stats_execute, ps);
+    de_rg_pass_side_effect(p);
+    if (DE_HANDLE_VALID(ps->counters1))
+        de_rg_read(p, ps->counters1, DE_ACCESS_COPY_SRC);
+    de_rg_read(p, ps->counters, DE_ACCESS_COPY_SRC);
+    const de_rg_resource rb = de_rg_import_buffer(g, pv->stats_buf, pv->stats_access);
+    de_rg_set_name(g, rb, "vis.cull_stats");
+    de_rg_write(p, rb, DE_ACCESS_COPY_DST);
+    pv->stats_access = DE_ACCESS_COPY_DST; /* the epilogue leaves it in its last access */
+    pv->slot_frame[pv->frame_slot] = vc->frame_index;
+    pv->slot_capacity[pv->frame_slot] = pv->frame_capacity;
+    pv->slot_live[pv->frame_slot] = true;
+}
+
 void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
-    if (phase != DE__VIS_PHASE_1)
-        return; /* DENG-233: phase 2 re-tests phase 1's occlusion rejects */
     de__vis_shared *s = vc->shared;
     ci_state *st = (ci_state *)s->stage[DE__VIS_STAGE_CULL_INSTANCES];
     if (st == NULL || vc->view_slot >= DE__VIEW_MAX)
         return;
     ci_view *pv = &st->views[vc->view_slot];
+    if (phase == DE__VIS_PHASE_2) {
+        /* DENG-233: the same constants, after the HZB was built; then the stats of both. */
+        if (pv->frame_ready && add_phase(g, vc, st, pv, phase))
+            add_stats(g, vc, pv);
+        pv->frame_ready = false;
+        return;
+    }
+    pv->frame_ready = false;
     if (vc->view_new || pv->handle.id != vc->view.id) {
         view_release(s, pv);
         pv->handle = vc->view;
@@ -479,75 +601,25 @@ void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
     cv.instance_count = count;
     cv.layer_mask = vc->layer_mask;
     cv.work_capacity = cap;
+    /* DENG-233: the HZB phase 2 tests against, and both phases' visibility flags. r.cull_disable
+     * also turns occlusion off. */
+    if (vc->occlusion && DE_HANDLE_VALID(vc->visibility) && !vc->cull_disable)
+        cv.flags |= DE__VIS_CULL_OCCLUSION;
+    cv.visibility = DE_HANDLE_VALID(vc->visibility) ? vc->visibility_bindless : 0u;
+    cv.visibility_count = vc->visibility_count;
+    if (DE_HANDLE_VALID(vc->hzb)) {
+        cv.hzb = vc->hzb_bindless;
+        cv.hzb_width = vc->hzb_width;
+        cv.hzb_height = vc->hzb_height;
+        cv.hzb_mips = vc->hzb_mips;
+    }
     memcpy(pv->cull_map + (size_t)slot * sizeof cv, &cv, sizeof cv);
     vc->cull = cv;
     vc->cull_view_bindless = pv->cull_bindless;
     vc->cull_view_index = slot;
     vc->work_capacity = cap;
-
-    /* Transients. */
-    const de_rg_resource items =
-        de_rg_create_buffer(g, &(de_gpu_buffer_desc){.size = (u64)cap * sizeof(de__vis_work_item),
-                                                     .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
-                                                     .stride = (u32)sizeof(de__vis_work_item),
-                                                     .name = "vis.work_items"});
-    const de_rg_resource counters =
-        de_rg_create_buffer(g, &(de_gpu_buffer_desc){.size = DE__VIS_COUNTER_BYTES,
-                                                     .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
-                                                     .name = "vis.instance_counters"});
-    const de_rg_resource args = de_rg_create_buffer(
-        g, &(de_gpu_buffer_desc){.size = sizeof(de__vis_dispatch_args),
-                                 .usage = DE_USAGE_STORAGE | DE_USAGE_INDIRECT | DE_USAGE_COPY_SRC,
-                                 .stride = (u32)sizeof(de__vis_dispatch_args),
-                                 .name = "vis.cull_args"});
-    if (!DE_HANDLE_VALID(items) || !DE_HANDLE_VALID(counters) || !DE_HANDLE_VALID(args))
-        return; /* error set; finalize reports it */
-
-    const ci_pass base = {
-        .dev = s->dev,
-        .pc = {.cull_view = pv->cull_bindless, .cull_view_index = slot, .phase = (u32)phase},
-        .groups = (count + CI_GROUP - 1u) / CI_GROUP,
-        .instances = vc->scene_instances,
-        .meshes = vc->scene_meshes,
-        .work_items = items,
-        .counters = counters,
-        .args = args,
-        .stats = pv->stats_buf,
-        .stats_offset = (u64)slot * CI_STATS_STRIDE};
-    ci_pass *pc = pass_data(vc, &st->clear, &base), *pu = pass_data(vc, &st->cull, &base),
-            *pa = pass_data(vc, &st->args, &base), *ps = pass_data(vc, NULL, &base);
-    if (pc == NULL || pu == NULL || pa == NULL || ps == NULL) {
-        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "vis: instance culling: the frame arena is full");
-        return;
-    }
-    de_rg_pass *p =
-        de_rg_add_pass(g, "vis.cull_instances.clear", DE_QUEUE_GRAPHICS, clear_execute, pc);
-    de_rg_write(p, counters, DE_ACCESS_SHADER_WRITE);
-
-    p = de_rg_add_pass(g, "vis.cull_instances", DE_QUEUE_GRAPHICS, cull_execute, pu);
-    de_rg_read(p, vc->scene_instances, DE_ACCESS_SHADER_READ);
-    de_rg_read(p, vc->scene_meshes, DE_ACCESS_SHADER_READ);
-    de_rg_read(p, counters, DE_ACCESS_SHADER_READ); /* atomics: read-modify-write */
-    de_rg_write(p, counters, DE_ACCESS_SHADER_WRITE);
-    de_rg_write(p, items, DE_ACCESS_SHADER_WRITE);
-
-    p = de_rg_add_pass(g, "vis.cull_instances.args", DE_QUEUE_GRAPHICS, args_execute, pa);
-    de_rg_read(p, counters, DE_ACCESS_SHADER_READ);
-    de_rg_write(p, args, DE_ACCESS_SHADER_WRITE);
-
-    p = de_rg_add_pass(g, "vis.cull_instances.stats", DE_QUEUE_GRAPHICS, stats_execute, ps);
-    de_rg_pass_side_effect(p);
-    de_rg_read(p, counters, DE_ACCESS_COPY_SRC);
-    const de_rg_resource rb = de_rg_import_buffer(g, pv->stats_buf, pv->stats_access);
-    de_rg_set_name(g, rb, "vis.cull_stats");
-    de_rg_write(p, rb, DE_ACCESS_COPY_DST);
-    pv->stats_access = DE_ACCESS_COPY_DST; /* the epilogue leaves it in its last access */
-    pv->slot_frame[slot] = vc->frame_index;
-    pv->slot_capacity[slot] = cap;
-    pv->slot_live[slot] = true;
-
-    const u32 i = DE__VIS_PHASE_INDEX(phase);
-    vc->work_items[i] = items;
-    vc->instance_counters[i] = counters;
-    vc->cull_args[i] = args;
+    pv->frame_slot = slot;
+    pv->frame_count = count;
+    pv->frame_capacity = cap;
+    pv->frame_ready = add_phase(g, vc, st, pv, phase);
 }

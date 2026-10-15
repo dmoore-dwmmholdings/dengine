@@ -718,6 +718,8 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     if (!first) /* keep the earlier phase's entries */
         de_rg_read(p, vc->visible_meshlets, DE_ACCESS_SHADER_READ);
     de_rg_write(p, vc->visible_meshlets, DE_ACCESS_SHADER_WRITE);
+    if (!p1 && DE_HANDLE_VALID(vc->hzb)) /* DENG-233: phase 2's occlusion test samples it */
+        de_rg_read(p, vc->hzb, DE_ACCESS_SHADER_READ);
 
     p = de_rg_add_pass(g, p1 ? "vis.cull_meshlets.args" : "vis.cull_meshlets.args.phase2",
                        DE_QUEUE_GRAPHICS, args_execute, pa);
