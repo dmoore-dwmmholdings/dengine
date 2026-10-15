@@ -10,6 +10,7 @@
 #include "render/loaders/render_assets.h"
 #include "render/loaders/upload_ring.h"
 #include "render/materials/material_models.h"
+#include "render/passes/forward/forward.h"
 #include "render/renderer_internal.h"
 #include "render/scene/gpu_scene.h"
 
@@ -479,6 +480,8 @@ void de__material_fill_stats(const de_renderer *r, de_render_stats *s) {
         s->permutations_per_model[m] = de__material_permutations_compiled(m, m < models);
         pipelines += s->permutations_per_model[m];
     }
+    /* DENG-305: the forward transparent pass's pipelines, made with the renderer as well. */
+    pipelines += de__forward_pipeline_count(de__views_forward(r));
     s->material_pipelines = pipelines;
     const de__gpu_scene_stats *gs = de__gpu_scene_stats_get(r->gpu_scene);
     s->material_permutation_switches = gs != NULL ? gs->permutation_switches : 0u;

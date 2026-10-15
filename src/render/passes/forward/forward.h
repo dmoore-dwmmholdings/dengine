@@ -10,16 +10,16 @@
  *                          scene-colour copy and the draws, blended into the view's HDR lighting
  *                          target before output.basic reads it (DENG-304).
  *
- * Routing: a submesh whose material is forward (READY and alpha_mode blend, or transmission > 0:
- * DE_MATERIAL_FEATURE_FORWARD's definition) never enters the visibility buffer. Meshlet culling
- * (meshlet_cull.slang meshlet_bucket) sends its meshlets to DE__VIS_BUCKET_FORWARD, which is only
- * counted; this pass draws them. The list itself is built on the CPU from the render world each
- * frame (the instance's world bounds against the view's culling frustum and layer mask), sorted
- * back to front by the view-space depth of the bounds centre, ties broken by the entity bits, then
- * by the gather order (instance slot): a total order, so the same scene and camera give the same
- * order every frame. Each listed instance draws LOD 0's meshlets (one instanced draw per instance:
- * DE__FWD_VERTICES vertices per meshlet instance), back faces first, then front faces, when one of
- * its forward materials is double-sided.
+ * Routing: a submesh whose material is forward (READY with DE_MATERIAL_FEATURE_FORWARD in its
+ * CPU-derived features: alpha blend, or transmission > 0) never enters the visibility buffer.
+ * Meshlet culling (meshlet_cull.slang meshlet_bucket) sends its meshlets to DE__VIS_BUCKET_FORWARD,
+ * which is only counted; this pass draws them. The list itself is built on the CPU from the render
+ * world each frame (the instance's world bounds against the view's culling frustum and layer mask),
+ * sorted back to front by the view-space depth of the bounds centre, ties broken by the entity
+ * bits, then by the gather order (instance slot): a total order, so the same scene and camera give
+ * the same order every frame. Each listed instance draws LOD 0's meshlets (one instanced draw per
+ * instance: DE__FWD_VERTICES vertices per meshlet instance), back faces first, then front faces,
+ * when one of its forward materials is double-sided.
  *
  * Threads: create and destroy on the main thread; the stage and de__forward_build on the render
  * thread, one view at a time; pass callbacks on task workers.
@@ -33,6 +33,7 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_render.h>
 
+#include "render/materials/material_models.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/scene/gpu_scene.h"
 
@@ -46,8 +47,6 @@ struct de__lighting_context;
  * The shader's constants (forward_transparent.slang; the test forward.layout_match compares)
  * ============================================================================================== */
 
-/** de_cooked_alpha_mode blend (forward_routing.slang DE_FWD_ALPHA_MODE_BLEND). */
-#define DE__FWD_ALPHA_MODE_BLEND 2u
 /** Which faces a draw keeps (ForwardParams.side). */
 enum { DE__FWD_SIDE_FRONT = 0u, DE__FWD_SIDE_BACK = 1u };
 /** Vertices per meshlet instance: three per triangle slot (DE_VIS_MESHLET_MAX_TRIANGLES). */
@@ -85,11 +84,12 @@ typedef struct de__transparent_item {
     u32 meshlet_first, meshlet_count; /**< LOD 0's meshlets */
 } de__transparent_item;
 
-/** The C mirror of forward_routing.slang de_material_forward: material entry `m` is READY and
- * blends or transmits. (DENG-302: a test of its CPU-derived FORWARD feature bit instead.) */
+/** The C mirror of forward_routing.slang de_material_forward: material entry `m` is READY and its
+ * CPU-derived features (DENG-302 de__material_features) have DE__MATERIAL_FEATURE_FORWARD (alpha
+ * blend, or transmission > 0). */
 static inline bool de__forward_material(const de__gs_material *m) {
     return (m->flags & DE__GS_MATERIAL_READY) != 0u &&
-           (m->alpha_mode == DE__FWD_ALPHA_MODE_BLEND || m->clearcoat.v[3] > 0.0f);
+           (m->features & DE__MATERIAL_FEATURE_FORWARD) != 0u;
 }
 
 /** True when `a` draws before `b`: farther first, then the smaller entity, then the smaller index

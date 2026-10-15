@@ -47,6 +47,7 @@
 #include "render/lighting/lighting.h"
 #include "render/loaders/render_assets.h"
 #include "render/materials/brdf_luts.h"
+#include "render/materials/material_instances.h"
 #include "render/materials/material_models.h"
 #include "render/passes/forward/forward.h"
 #include "render/passes/vis/gbuffer.h"
@@ -1307,22 +1308,27 @@ TEST(forward, forward_sort_stable_ties) {
     free(scratch);
 }
 
-/* forward_routing_predicate: the C mirror of forward_routing.slang. */
+/* forward_routing_predicate: the C mirror of forward_routing.slang, on the features DENG-302
+ * derives: blend and transmission are forward, opaque and mask are not, nor a block not READY. */
 TEST(forward, forward_routing_predicate) {
+    de_standard_material sm;
+    memset(&sm, 0, sizeof sm);
+    sm.base_color = (de_vec4){1, 1, 1, 1};
     de__gs_material m;
     memset(&m, 0, sizeof m);
-    EXPECT_FALSE(de__forward_material(&m)); /* not READY */
     m.flags = DE__GS_MATERIAL_READY;
+    m.features = de__material_features(&sm, DE_COOKED_ALPHA_OPAQUE, 0);
     EXPECT_FALSE(de__forward_material(&m)); /* opaque */
-    m.alpha_mode = 1u;
+    m.features = de__material_features(&sm, DE_COOKED_ALPHA_MASK, 0);
     EXPECT_FALSE(de__forward_material(&m)); /* mask: the vis buffer's alpha bucket */
-    m.alpha_mode = DE__FWD_ALPHA_MODE_BLEND;
+    m.features = de__material_features(&sm, DE_COOKED_ALPHA_BLEND, 0);
     EXPECT_TRUE(de__forward_material(&m));
-    m.alpha_mode = 0u;
-    m.clearcoat.v[3] = 0.25f; /* transmission */
+    sm.transmission = 0.25f;
+    m.features = de__material_features(&sm, DE_COOKED_ALPHA_OPAQUE, 0);
     EXPECT_TRUE(de__forward_material(&m));
+    EXPECT_TRUE((m.features & DE__MATERIAL_FEATURE_TRANSMISSION) != 0u);
     m.flags = 0u;
-    EXPECT_FALSE(de__forward_material(&m));
+    EXPECT_FALSE(de__forward_material(&m)); /* not READY */
 }
 
 static char *read_text(const char *path) {
@@ -1361,8 +1367,7 @@ TEST(forward, layout_match) {
     EXPECT_EQ(const_of(t, "DE_FWD_SIDE_BACK"), (i64)DE__FWD_SIDE_BACK);
     EXPECT_EQ(const_of(t, "DE_FWD_VERTICES"), (i64)DE__FWD_VERTICES);
     EXPECT_EQ(const_of(t, "DE_FWD_SCENE_COLOR_BPP"), (i64)DE__FWD_SCENE_COLOR_BPP);
-    EXPECT_EQ(const_of(r, "DE_FWD_ALPHA_MODE_BLEND"), (i64)DE__FWD_ALPHA_MODE_BLEND);
-    EXPECT_EQ(const_of(r, "DE_FWD_ALPHA_MODE_BLEND"), (i64)DE_COOKED_ALPHA_BLEND);
+    EXPECT_TRUE(strstr(r, "DE_MATERIAL_FEATURE_FORWARD") != NULL); /* the routing bit */
     EXPECT_EQ(const_of(c, "DE_VIS_BUCKET_FORWARD"), (i64)DE__VIS_BUCKET_FORWARD);
     EXPECT_EQ(const_of(c, "DE_VIS_MESHLET_COUNTER_FORWARD"), (i64)DE__VIS_MESHLET_COUNTER_FORWARD);
     /* ForwardParams: 12 uints, then DeClusterLists (8). */

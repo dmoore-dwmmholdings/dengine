@@ -1142,6 +1142,11 @@ struct de__lighting *de__views_lighting(const de_renderer *r) {
     return vs != NULL ? vs->lighting : NULL;
 }
 
+struct de__forward *de__views_forward(const de_renderer *r) {
+    const de__views *vs = views_of(r);
+    return vs != NULL ? vs->forward : NULL;
+}
+
 de__composite *de__views_composite(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs != NULL ? vs->composite : NULL;

@@ -4,20 +4,17 @@
 // forward pass's vertex shader (forward_transparent.slang) draws only such submeshes. The C mirror
 // is de__forward_material (src/render/passes/forward/forward.h); both must give the same answer.
 //
-// A material is forward when it is READY and blends (alpha_mode blend) or transmits (KHR
-// transmission > 0, DeGpuMaterial.clearcoat.w): DE_MATERIAL_FEATURE_FORWARD's definition. When the
-// material record carries a CPU-derived feature word (DENG-302), the body becomes a test of that
-// bit, here and in the C mirror, and nothing else changes.
+// A material is forward when it is READY and its CPU-derived feature word (DeGpuMaterial.features,
+// DENG-302's de__material_features) has DE_MATERIAL_FEATURE_FORWARD: alpha blend, or transmission
+// > 0.
 module forward_routing;
 
 import "../scene/scene_types";
-
-/// DeGpuMaterial.alpha_mode of a blended material (de_cooked_alpha_mode blend).
-public static const uint DE_FWD_ALPHA_MODE_BLEND = 2;
+import "../materials/material_interface"; // DE_MATERIAL_FEATURE_FORWARD
 
 /// True when material record `m` draws in the forward transparent pass, not the vis buffer.
 public bool de_material_forward(DeGpuMaterial m)
 {
     return (m.flags & DE_GPU_MATERIAL_READY) != 0u &&
-           (m.alpha_mode == DE_FWD_ALPHA_MODE_BLEND || m.clearcoat.w > 0.0);
+           (m.features & DE_MATERIAL_FEATURE_FORWARD) != 0u;
 }

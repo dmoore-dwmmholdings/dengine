@@ -81,9 +81,10 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             (const de__gs_material *)de__gpu_scene_entry(v->gs, DE__GS_MATERIALS, s);
         if (m == NULL || !de__forward_material(m))
             continue;
-        mat[s] = (u8)(MAT_FORWARD |
-                      ((m->flags & DE__GS_MATERIAL_DOUBLE_SIDED) != 0u ? MAT_DOUBLE_SIDED : 0u) |
-                      (m->clearcoat.v[3] > 0.0f ? MAT_TRANSMISSIVE : 0u));
+        mat[s] =
+            (u8)(MAT_FORWARD |
+                 ((m->flags & DE__GS_MATERIAL_DOUBLE_SIDED) != 0u ? MAT_DOUBLE_SIDED : 0u) |
+                 ((m->features & DE__MATERIAL_FEATURE_TRANSMISSION) != 0u ? MAT_TRANSMISSIVE : 0u));
         c.forward_materials++;
     }
     if (c.forward_materials == 0) {
