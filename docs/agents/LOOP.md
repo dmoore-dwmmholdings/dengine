@@ -34,7 +34,7 @@ Related files:
 | Integration branch | **`dev`**, checked out in the main repo directory. Every feature branch is cut from `dev` and merged back into `dev`. Only you write to it. |
 | `main` | Moves only at a sprint close, by fast-forward to a green `dev` commit, and gets the tag `sxx-done` (§2.7.2). Nothing is committed to `main` directly; agent-doc changes go to `dev` too. |
 | Worker checkouts | `.worktrees/<KEY>/` (gitignored). One per task, on `feature/<KEY>-<slug>`. |
-| Max parallel workers | The lead sprint's own plan number (default 4), and never more than **4**. Use fewer when fewer tasks are ready; do not fill slots with later sprints' work. |
+| Max parallel agents | **2 in total, at any time** (user decision 2026-10-14: "At most 2 agents running at any time. Want to slow usage"). This counts every agent you start: task workers **and** helpers (docs helpers, checkers). A helper takes a worker slot while it runs. Use fewer when fewer tasks are ready; do not fill slots with later sprints' work. The sprint plan's own maximum no longer matters, because it is higher. |
 | Project docs | Trama space `DENG`. Workers write module, tool and decision pages as drafts; you publish them after a green merge and own the index pages (DOCS.md §3). |
 
 ### 1.1 One sprint at a time
@@ -108,7 +108,7 @@ For each task in **review**:
 Within one sprint, follow the plan's *merge order* section where it gives one.
 
 ### 2.5 Dispatch workers
-`slots = min(4, lead sprint's plan maximum) − (running + orphaned being resumed)`. Fill the slots in this order:
+`slots = 2 − (running workers + running helpers + orphaned being resumed)`. Fill the slots in this order:
 1. **orphaned** tasks, in **resume** mode. Reuse the existing worktree.
 2. tasks you sent back in this tick, in **fix**/**rebase** mode.
 3. **dispatchable** tasks of the lead sprint (§2.3), in the order of §1.1.
