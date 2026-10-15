@@ -68,6 +68,11 @@
 #include <string.h>
 
 #define WAIT_NS (10ull * 1000000000ull)
+/* The first frame of a test also pays for the driver compiling the vis frame's shaders: llvmpipe
+ * (lavapipe) JIT-compiles each kernel at its first dispatch, about 12 s for the whole frame on a
+ * CI runner with a cold shader cache and GPU-assisted validation (DENG-428). Waits before the
+ * first frame completes get this bound; every later wait must finish within WAIT_NS. */
+#define FIRST_FRAME_WAIT_NS (120ull * 1000000000ull)
 
 static void *zalloc(size_t n) {
     void *p = calloc(1, n ? n : 1);
@@ -438,6 +443,7 @@ typedef struct rsx {
     de_gpu_texture tex[MAX_TEX + 1];
     u32 tex_count;
     rs_result res;
+    bool warm; /* a frame completed, so the kernels are compiled (FIRST_FRAME_WAIT_NS) */
     /* Classification's per-model counts of each frame (by frame % 8), for the tile check. */
     u32 list_counts[8][DE__GS_MATERIAL_MODELS];
     u64 list_frame[8];
@@ -632,6 +638,8 @@ static u32 rsx_mesh_plane(rsx *f, u32 cols, u32 rows, f32 size, f32 uv_repeat, b
 
 /* ---------- Textures ---------- */
 
+static bool rsx_wait(rsx *f, u64 v, const char *what);
+
 typedef struct tex_pass {
     rsx *f;
     de_rg_resource t;
@@ -707,7 +715,7 @@ static u32 rsx_texture(rsx *f, u32 size, const u8 *mip_r, u8 g, u8 b) {
                                                           .frame_fence = f->fence,
                                                           .frame_value = n + 1}),
               DE_OK);
-    ASSERT_EQ(de_gpu_fence_wait(f->dev, f->fence, n + 1, WAIT_NS), DE_OK);
+    ASSERT_TRUE(rsx_wait(f, n + 1, "texture upload"));
     de_gpu_buffer_destroy(f->dev, tp->src);
     free(tp);
     return id;
@@ -756,6 +764,24 @@ static void *rows_of(const u8 *m, const rb_item *it, u32 w, u32 h, u32 bpp) {
     for (u32 y = 0; y < h; ++y)
         memcpy(out + (size_t)y * w * bpp, m + it->off + (u64)y * it->pitch, (size_t)w * bpp);
     return out;
+}
+
+/* Waits for value `v` of the fixture's fence (FIRST_FRAME_WAIT_NS until a frame completed, then
+ * WAIT_NS). On a timeout it says which wait failed, after how long and where the fence is. */
+static bool rsx_wait(rsx *f, u64 v, const char *what) {
+    const u64 t0 = de_time_now_ns();
+    const de_result r =
+        de_gpu_fence_wait(f->dev, f->fence, v, f->warm ? WAIT_NS : FIRST_FRAME_WAIT_NS);
+    const f64 ms = (f64)(de_time_now_ns() - t0) / 1e6;
+    if (r == DE_OK) {
+        if (!f->warm && strcmp(what, "frame") == 0)
+            printf("first frame (includes the shader compile at first use): %.0f ms\n", ms);
+        return true;
+    }
+    fprintf(stderr, "%s: the fence wait for value %llu failed after %.0f ms (%s); fence at %llu\n",
+            what, (unsigned long long)v, ms, de_result_str(r),
+            (unsigned long long)de_gpu_fence_value(f->dev, f->fence));
+    return false;
 }
 
 /* Builds, runs and waits for one frame; fills f->res. */
@@ -871,8 +897,9 @@ static bool rsx_frame(rsx *f) {
         de__gpu_scene_debug_pack(f->gs, DE__GS_INSTANCES, i, &res->inst[i]);
     de__gpu_scene_debug_pack(f->gs, DE__GS_VIEWS, 0, &res->view);
     de__gpu_scene_frame_end(f->gs, f->g, true);
-    if (de_gpu_fence_wait(f->dev, f->fence, n + 1, WAIT_NS) != DE_OK)
+    if (!rsx_wait(f, n + 1, "frame"))
         return false;
+    f->warm = true;
     if (!want)
         return true;
     const u8 *m = (const u8 *)de_gpu_buffer_map(f->dev, f->rb);
@@ -1528,7 +1555,7 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
                                                           .frame_fence = f->fence,
                                                           .frame_value = n + 1}),
               DE_OK);
-    ASSERT_EQ(de_gpu_fence_wait(f->dev, f->fence, n + 1, WAIT_NS), DE_OK);
+    ASSERT_TRUE(rsx_wait(f, n + 1, "LOD reference"));
     const u8 *map = (const u8 *)de_gpu_buffer_map(f->dev, f->rb);
     u32 n_px = 0, bad = 0;
     f64 worst = 0.0, lo = 99.0, hi = 0.0;
