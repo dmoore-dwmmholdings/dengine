@@ -682,3 +682,36 @@ if(TARGET test_render_standard_layers)
         endif()
     endif()
 endif()
+
+# DENG-304: image-based lighting, EV100 exposure and the basic output pass (src/render/lighting/
+# ibl.c, exposure.c, src/render/passes/output_basic.c; shaders/lighting/ibl.slang,
+# shaders/post/output_basic.slang), executable test_render_ibl_exposure; CTest names
+# render_ibl_exposure.<suite>.<test>. The GPU tests (_metal, _vulkan, _d3d12; SKIP without the
+# device; CI: lavapipe and WARP golden jobs) light planes of a fake render world with a synthetic
+# RGBA16F environment cube: the diffuse and metal white furnaces, rotation, the ambient fallback,
+# the EV100 scale of lighting and emission, the output kernel's clamp and sRGB OETF, and a forward
+# kernel calling evaluate_indirect (tests/unit/render/data/ibl_forward.slang, cooked at test time:
+# DE_IBL_TEST_COOK; SKIP without the shader importer) equal to the deferred pass.
+de_add_test(NAME render_ibl_exposure
+    SOURCES test_ibl_exposure.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_ibl_exposure)
+    target_include_directories(test_render_ibl_exposure PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_ibl_exposure PRIVATE
+        "DE_IBL_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_IBL_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_ibl_exposure PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_ibl_exposure PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_ibl_exposure PRIVATE DE_IBL_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_ibl_exposure PRIVATE version)
+        de_d3d12_agility_deploy(test_render_ibl_exposure)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_ibl_exposure)
+        endif()
+    endif()
+endif()

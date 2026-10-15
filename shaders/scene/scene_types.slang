@@ -179,6 +179,6 @@ public struct DeSceneConstants
     public uint light_count;
     public uint view_slot;
     public uint flags;
-    public uint reserved0;
-    public uint reserved1;
+    public float pre_exposure;      // DENG-304: radiance written to HDR targets is x this (0 = 1)
+    public float prev_pre_exposure; // the previous frame's (temporal passes rescale history by it)
 };

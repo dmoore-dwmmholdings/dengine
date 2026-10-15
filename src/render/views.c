@@ -124,6 +124,8 @@ typedef struct de__views {
     /* DENG-303: clustered and deferred lighting (lighting/lighting_pass.c), the stage "lighting".
      */
     de__lighting *lighting;
+    /* DENG-304: the basic output pass (passes/output_basic.c), the stage "output.basic". */
+    de__output_basic *output_basic;
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -1050,15 +1052,20 @@ de_result de__views_create(de_renderer *r) {
     if (res != DE_OK)
         return res;
     /* DENG-303: lighting registers its stage "lighting" (after the vis frame of each view). */
-    return de__lighting_create(r, vs->vis, &vs->lighting);
+    res = de__lighting_create(r, vs->vis, &vs->lighting);
+    if (res != DE_OK)
+        return res;
+    /* DENG-304: the output pass registers its stage "output.basic" (where the tonemapper goes). */
+    return de__output_basic_create(r, vs->lighting, &vs->output_basic);
 }
 
 void de__views_destroy(de_renderer *r) {
     de__views *vs = r->views;
     if (vs == NULL)
         return;
-    de__lighting_destroy(vs->lighting); /* DENG-303 */
-    de__vis_frame_destroy(r, vs->vis);  /* DENG-229 */
+    de__output_basic_destroy(vs->output_basic); /* DENG-304 */
+    de__lighting_destroy(vs->lighting);         /* DENG-303 */
+    de__vis_frame_destroy(r, vs->vis);          /* DENG-229 */
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
         release_now(r, vs->rs[i].graph, vs->rs[i].output);
     for (u32 i = 0; i < vs->retired_count; ++i)
@@ -1120,6 +1127,11 @@ u32 de__views_last_order(const de_renderer *r, de_view *out, u32 cap) {
 struct de__vis_shared *de__views_vis(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs != NULL ? vs->vis : NULL;
+}
+
+struct de__lighting *de__views_lighting(const de_renderer *r) {
+    const de__views *vs = views_of(r);
+    return vs != NULL ? vs->lighting : NULL;
 }
 
 de__composite *de__views_composite(const de_renderer *r) {

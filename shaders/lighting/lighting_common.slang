@@ -18,6 +18,7 @@ __exported import "../lighting/lights";
 __exported import "../lighting/lighting_inputs";
 __exported import "../materials/material_interface";
 import "../lighting/ltc";
+__exported import "../lighting/ibl";
 
 /// DeLightingView.flags
 public static const uint DE_LIGHTING_ORTHO = 1; // an orthographic projection
@@ -33,7 +34,7 @@ public static const uint DE_LIGHTING_COUNTER_ENTRIES = 16;    // entries after t
 public static const uint DE_LIGHTING_COUNTER_DROPPED = 20;    // entries past the list capacity
 public static const uint DE_LIGHTING_COUNTER_BYTES = 32;
 
-/// One view's lighting constants (176 bytes; lighting.h de__lighting_view), uploaded per frame.
+/// One view's lighting constants (368 bytes; lighting.h de__lighting_view), uploaded per frame.
 public struct DeLightingView
 {
     public uint tiles_x;
@@ -50,7 +51,7 @@ public struct DeLightingView
     public float log_bias;
     public float cutoff;         // lux at which a light's derived range ends (r.light_cutoff_lux)
     public float emissive_threshold; // nit m^2 above which an emissive mesh gets a proxy light
-    public float pre_exposure;   // lighting output scale (1 until exposure, DENG-304)
+    public float pre_exposure;   // lighting output scale (exposure.c, DENG-304)
     public uint proxy_capacity;  // emissive proxies at most per frame
     public uint flags;           // DE_LIGHTING_*
     public uint light_slots;     // the GPU scene's light table slots
@@ -58,6 +59,7 @@ public struct DeLightingView
     public uint brdf_lut;        // the energy LUT's bindless index (SurfaceData.brdf_lut; DENG-299)
     public float4 inv_proj[4];   // clip -> view space (rows)
     public LightingInputs inputs;
+    public DeIbl ibl;            // DENG-304: image-based lighting (ibl.slang)
 };
 
 /// Where a view's cluster lists are (bindless indices, all read-only for shading).
@@ -197,11 +199,25 @@ public DeDirect evaluate_direct_clustered<M : IMaterialModel>(SurfaceData s, flo
     return r;
 }
 
-/// Indirect light leaving `s` towards the eye: the indirect inputs (0 without producers). DENG-304
-/// implements image-based lighting here.
-public float3 evaluate_indirect(SurfaceData s, float3 p, float3 v, uint2 px, DeLightingView lv)
+/// Indirect light leaving `s` towards the eye, split into its diffuse and specular parts (not
+/// pre-exposed): image-based lighting (ibl.slang, DENG-304) with the G-buffer AO times the AO
+/// input, blended with the indirect override inputs where a producer wrote them (S15).
+public void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLightingView lv,
+                                    out float3 diffuse, out float3 specular)
 {
     float ao = s.ao * de_input_ao(lv.inputs, px);
-    return (de_input_indirect_diffuse(lv.inputs, px) + de_input_indirect_specular(lv.inputs, px)) *
-           ao;
+    de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular);
+    float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
+    float4 os = de_input_indirect_specular_override(lv.inputs, px);
+    diffuse = lerp(diffuse, od.rgb * ao, saturate(od.a));
+    specular = lerp(specular, os.rgb, saturate(os.a));
+}
+
+/// Indirect light leaving `s` towards the eye (evaluate_indirect_split's sum). The deferred pass
+/// and the forward pass (DENG-305) both use it.
+public float3 evaluate_indirect(SurfaceData s, float3 p, float3 v, uint2 px, DeLightingView lv)
+{
+    float3 d, sp;
+    evaluate_indirect_split(s, p, v, px, lv, d, sp);
+    return d + sp;
 }

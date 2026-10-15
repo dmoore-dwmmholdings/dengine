@@ -1440,13 +1440,22 @@ TEST(vis_frame, renderer_stage) {
             continue;
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
-    EXPECT_STREQ(got, "view.debug_clear,gpu_scene.view,vis.depth_clear,vis.cull_instances.clear,"
-                      "vis.cull_instances,vis.cull_instances.args,vis.cull_meshlets.clear,"
-                      "vis.cull_meshlets,vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,"
-                      "vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,vis.cull_instances2.clear,"
-                      "vis.cull_instances2,"
-                      "vis.cull_instances2.args,vis.cull_instances.stats,vis.cull_meshlets.phase2,"
-                      "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
+    /* DENG-304: the output pass reads the lighting target, so lighting, the resolve and
+     * classification run, and the view's colour is the output pass's (the debug clear's write is
+     * overwritten, so it is culled). */
+    EXPECT_STREQ(got,
+                 "gpu_scene.view,vis.depth_clear,vis.cull_instances.clear,"
+                 "vis.cull_instances,vis.cull_instances.args,vis.cull_meshlets.clear,"
+                 "vis.cull_meshlets,vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,"
+                 "vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,vis.cull_instances2.clear,"
+                 "vis.cull_instances2,"
+                 "vis.cull_instances2.args,vis.cull_instances.stats,vis.cull_meshlets.phase2,"
+                 "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats,vis.raster.mesh.phase2,"
+                 "vis.classify.copy,vis.classify.clear,vis.classify,vis.classify.args,"
+                 "vis.resolve.clear,vis.resolve.feedback,vis.resolve,lighting.cluster_bounds,"
+                 "lighting.lights_clear,lighting.lights_prep,lighting.lights_count,"
+                 "lighting.lights_scan,lighting.lights_fill,lighting.deferred,output.basic,"
+                 "view.resolve");
     const de_render_stats *rs = de_renderer_stats(r);
     for (u32 i = 0; i < 4; ++i)
         RUN_FRAME();

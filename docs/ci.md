@@ -139,7 +139,10 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   against CPU and forward-rendered references), and `test_render_clustered_lights`
   (`render_clustered_lights.*`, DENG-303: the clustered light lists and the deferred lighting pass
   against CPU references: light units, spot cones, ranges, area lights against a numerical form
-  factor, emissive proxies, the diffuse / specular split, the cluster sets). The Windows entry
+  factor, emissive proxies, the diffuse / specular split, the cluster sets), and
+  `test_render_ibl_exposure` (`render_ibl_exposure.*`, DENG-304: image-based lighting against
+  white-furnace and rotation references, the strip copy of a BC6H environment cube, EV100 exposure
+  and the output pass). The Windows entry
   also builds those and
   runs their `_d3d12` tests with
   `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423). The

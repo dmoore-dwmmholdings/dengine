@@ -60,6 +60,20 @@ public float de_input_contact_shadow(LightingInputs i, uint2 p)
     return de_input_load(i.contact_shadows, p, float4(1.0, 1.0, 1.0, 1.0)).r;
 }
 
+/// DENG-304: the indirect inputs override image-based lighting. rgb: the radiance leaving pixel
+/// `p` (diffuse: before AO); a: its weight over the IBL estimate (0 without a producer, so the
+/// IBL stays). S15 producers (probes, SSR, SSGI) write a < 1 to blend.
+public float4 de_input_indirect_diffuse_override(LightingInputs i, uint2 p)
+{
+    return de_input_load(i.indirect_diffuse, p, float4(0.0, 0.0, 0.0, 0.0));
+}
+
+/// The specular override of pixel `p` (as de_input_indirect_diffuse_override).
+public float4 de_input_indirect_specular_override(LightingInputs i, uint2 p)
+{
+    return de_input_load(i.indirect_specular, p, float4(0.0, 0.0, 0.0, 0.0));
+}
+
 /// Indirect diffuse radiance leaving pixel `p` (0 without a producer).
 public float3 de_input_indirect_diffuse(LightingInputs i, uint2 p)
 {

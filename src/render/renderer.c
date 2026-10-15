@@ -12,6 +12,7 @@
 
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
+#include "render/lighting/lighting.h"
 #include "render/loaders/render_assets.h"
 #include "render/materials/brdf_luts.h"
 #include "render/materials/material_models.h"
@@ -21,6 +22,7 @@
 
 #include "gpu/gpu_backend.h" /* de__gpu_get_texture: the target's size and format */
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,6 +37,11 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
     if (vf->camera != NULL)
         p.camera_position = vf->camera->offset;
     const u32 slot = (vf->view.id & 0xFFu) - 1u; /* views.c: slot + 1 in the low byte */
+    /* DENG-304: the view's exposure of this frame (lighting/exposure.c) for every pass that writes
+     * radiance, and the previous frame's for temporal passes. */
+    p.pre_exposure = de__lighting_view_exposure(
+        de__views_lighting(r), slot, vf->view, vf->frame_index,
+        vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, &p.prev_pre_exposure);
     const de_result res = de__gpu_scene_view_pass(r->gpu_scene, vf->graph, slot, &p);
     if (res != DE_OK)
         DE_ERROR(r->log, "renderer: view \"%s\": GPU scene constants: %s", vf->name,
@@ -326,6 +333,8 @@ void de__renderer_kick_prepare(de_renderer *r) {
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
+    /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */
+    de__lighting_prepare_environment(de__views_lighting(r), r->assets, de__render_world_last(r));
     if (gr != DE_OK)
         DE_ERROR(r->log, "renderer: frame %llu: GPU scene: %s", (unsigned long long)r->frame_index,
                  de_error_last() != NULL ? de_error_last()->message : de_result_str(gr));
