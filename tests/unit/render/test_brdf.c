@@ -9,8 +9,8 @@
  *                       engine's shaders/ on the same root, run on backend <b> (metal, vulkan,
  *                       d3d12; SKIP without the device or the shader importer): every function's
  *                       GPU value against the C reference (1e-4 relative), the albedo estimator
- *                       from the GPU's samples, and reciprocity of the S13 Standard BSDF through
- *                       IMaterialModel.evaluate
+ *                       from the GPU's samples, and reciprocity of a GGX + Lambert test BSDF
+ *                       built from the modules (the S13 placeholder Standard; DENG-299)
  *   material_model.*    the feature flags (material_interface.slang == material_models.h), the
  *                       registry's ids and limits (null device), and de_material_model_register
  *                       with shader assets cooked from
@@ -718,8 +718,8 @@ static void gpu_albedo_estimator(bk_fx *f, de_gpu_backend b) {
     }
 }
 
-/* evaluate(wo, wi) / cos_i == evaluate(wi, wo) / cos_o of the S13 Standard BSDF on the GPU
- * (through IMaterialModel), 1e-5 relative. */
+/* f(wo, wi) == f(wi, wo) (evaluate / cos) of the GGX + Lambert test BSDF on the GPU, 1e-5
+ * relative. */
 static void gpu_reciprocity(bk_fx *f, de_gpu_backend b) {
     bk_run(f, b);
     u32 bad = 0, nonzero = 0;

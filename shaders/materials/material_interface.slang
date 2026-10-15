@@ -83,7 +83,34 @@ public struct SurfaceData
     public float3 emissive;   // radiance the surface emits
     public uint model;        // material model id (< DE_GPU_MATERIAL_MODELS)
     public uint features;     // DE_MATERIAL_FEATURE_*
+    // ---- DENG-299 ----
+    public float3 specular_color; // KHR_materials_specular colour (dielectric F0 tint), linear
+    public float ior;             // KHR_materials_ior (dielectric F0 = ((ior - 1) / (ior + 1))^2)
+    public uint brdf_lut;         // bindless index of the energy LUT (brdf/energy.slang), set by
+                                  // the pass that shades; DE_BINDLESS_INVALID: analytic fallback
 };
+
+/// A SurfaceData with every field set: grey 0.5 dielectric, roughness 0.5, normal +Z, no
+/// tangent, no emission, Standard, no features, specular 1 (white), IOR 1.5, no LUT. Models and
+/// passes start from it so fields added later have a value.
+public SurfaceData de_surface_default()
+{
+    SurfaceData s;
+    s.base_color = float3(0.5, 0.5, 0.5);
+    s.ao = 1.0;
+    s.normal = float3(0.0, 0.0, 1.0);
+    s.roughness = 0.5;
+    s.tangent = float4(0.0, 0.0, 0.0, 1.0);
+    s.metallic = 0.0;
+    s.specular = 1.0;
+    s.emissive = float3(0.0, 0.0, 0.0);
+    s.model = DE_GPU_MATERIAL_MODEL_STANDARD;
+    s.features = 0u;
+    s.specular_color = float3(1.0, 1.0, 1.0);
+    s.ior = 1.5;
+    s.brdf_lut = DE_BINDLESS_INVALID;
+    return s;
+}
 
 /// A material model. Every requirement is static: a model is a type, not an object.
 public interface IMaterialModel
@@ -168,7 +195,7 @@ public DeGbSurface de_surface_to_gb(SurfaceData s)
 /// lighting target already holds it), the features the G-buffer flags name.
 public SurfaceData de_surface_from_gb(DeGbSurface g)
 {
-    SurfaceData s;
+    SurfaceData s = de_surface_default(); // DENG-299: specular colour 1, IOR 1.5, no LUT
     s.base_color = g.base_color;
     s.ao = g.ao;
     s.normal = g.normal;

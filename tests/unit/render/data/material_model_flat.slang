@@ -17,7 +17,7 @@ struct FlatModel : IMaterialModel
 
     static SurfaceData resolve_gbuffer(Params m, VertexAttribs v, TextureLodInfo lod)
     {
-        SurfaceData s;
+        SurfaceData s = de_surface_default();
         s.base_color = m.base_color.rgb * float3(0.25, 0.5, 1.0);
         s.ao = 1.0;
         s.normal = v.normal;

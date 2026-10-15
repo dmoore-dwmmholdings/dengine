@@ -1,6 +1,7 @@
 // tests/unit/render/data/brdf_kernels.slang: test_brdf.c's GPU side (DENG-298). Evaluates the
-// functions of shaders/brdf/ and the S13 Standard model's BSDF (through IMaterialModel) for a
-// list of cases the test wrote, so the test can compare them with tests/unit/render/brdf_ref.c.
+// functions of shaders/brdf/ and a reciprocal test BSDF built from them (the S13 placeholder
+// Standard; DENG-299 replaced the model itself) for a list of cases the test wrote, so the test
+// can compare them with tests/unit/render/brdf_ref.c.
 // Cooked at test time with the engine's shaders/ directory and this one on one asset root.
 import bindless;
 import push_constants;
@@ -9,8 +10,6 @@ import "brdf/ggx";
 import "brdf/fresnel";
 import "brdf/diffuse";
 import "brdf/sampling";
-import "materials/material_interface";
-import "visbuffer/resolve_model";
 
 /// Floats each case writes (test_brdf.c BK_OUT).
 static const uint BK_OUT = 24;
@@ -23,37 +22,30 @@ struct BrdfParams
     uint reserved;
 };
 
-/// The Standard model's BSDF x cos for a grey surface (only the BSDF inputs are set).
+/// The reciprocal test BSDF (the S13 placeholder Standard, brdf_ref.c brdf_standard_*) for a grey
+/// surface: GGX with Schlick Fresnel (F0 = 0.04 x specular for dielectrics, the base colour for
+/// metals) plus Lambert weighted by (1 - F)(1 - metallic); x cos(theta_i).
 float standard_eval(float base, float roughness, float metallic, float3 wo, float3 wi)
 {
-    SurfaceData s;
-    s.base_color = float3(base, base, base);
-    s.ao = 1.0;
-    s.normal = float3(0.0, 0.0, 1.0);
-    s.roughness = roughness;
-    s.tangent = float4(0.0, 0.0, 0.0, 1.0);
-    s.metallic = metallic;
-    s.specular = 1.0;
-    s.emissive = float3(0.0, 0.0, 0.0);
-    s.model = 0u;
-    s.features = 0u;
-    return ResolveStandardModel.evaluate(s, wo, wi).x;
+    if (!(wo.z > 0.0) || !(wi.z > 0.0))
+        return 0.0;
+    float a = max(roughness * roughness, 1e-3);
+    float3 h = normalize(wo + wi);
+    float f0 = lerp(0.04, base, metallic);
+    float f = de_fresnel_schlick1(f0, 1.0, dot(wo, h));
+    float spec = f * de_ggx_specular(a, a, wo, wi);
+    float diff = (1.0 - f) * ((1.0 - metallic) * DE_INV_PI) * base;
+    return (spec + diff) * wi.z;
 }
 
+/// Its sampling density: VNDF with probability 0.5 + 0.5 metallic, else the cosine hemisphere.
 float standard_pdf(float roughness, float metallic, float3 wo, float3 wi)
 {
-    SurfaceData s;
-    s.base_color = float3(0.5, 0.5, 0.5);
-    s.ao = 1.0;
-    s.normal = float3(0.0, 0.0, 1.0);
-    s.roughness = roughness;
-    s.tangent = float4(0.0, 0.0, 0.0, 1.0);
-    s.metallic = metallic;
-    s.specular = 1.0;
-    s.emissive = float3(0.0, 0.0, 0.0);
-    s.model = 0u;
-    s.features = 0u;
-    return ResolveStandardModel.pdf(s, wo, wi);
+    if (!(wo.z > 0.0) || !(wi.z > 0.0))
+        return 0.0;
+    float a = max(roughness * roughness, 1e-3);
+    float ps = 0.5 + 0.5 * metallic;
+    return ps * de_ggx_reflect_pdf(a, a, wo, wi) + (1.0 - ps) * de_cosine_hemisphere_pdf(wi.z);
 }
 
 [shader("compute")]

@@ -592,3 +592,34 @@ if(TARGET test_render_brdf)
         endif()
     endif()
 endif()
+
+# DENG-299: the Standard material model's base (shaders/materials/standard/, shaders/brdf/energy.slang)
+# and its energy LUT (src/render/materials/brdf_luts.c), executable test_render_standard; CTest
+# names render_standard.standard.<test>. lut_reference_sane checks the CPU reference; the GPU tests
+# (_metal, _vulkan, _d3d12; SKIP without the device or the shader importer) make the LUT with the
+# engine shader brdf_lut_gen and cook tests/unit/render/data/standard_kernels.slang at test time
+# (DE_STD_TEST_COOK; the engine's shaders/ and data/ on one root): the LUT against the CPU, the
+# white and dielectric furnaces, sample / pdf consistency, the KHR F0 rules, emission.
+de_add_test(NAME render_standard
+    SOURCES test_standard_base.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_standard)
+    target_include_directories(test_render_standard PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_standard PRIVATE
+        "DE_STD_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_STD_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_standard PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_standard PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_standard PRIVATE DE_STD_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_standard PRIVATE version)
+        de_d3d12_agility_deploy(test_render_standard)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_standard)
+        endif()
+    endif()
+endif()

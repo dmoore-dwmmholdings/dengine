@@ -166,6 +166,10 @@ struct de_renderer {
      * de_material_model_register's game models; made before the views (the vis resolve reads
      * it). */
     struct de__material_models *material_models;
+
+    /* DENG-299: the Standard model's energy LUT (materials/brdf_luts.h), made at create;
+     * de__renderer_brdf_lut gives its bindless index. */
+    struct de__brdf_luts *brdf_luts;
 };
 
 /* ---------- Settings (settings.c) ---------- */
