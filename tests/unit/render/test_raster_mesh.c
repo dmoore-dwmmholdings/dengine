@@ -235,7 +235,9 @@ static void mesh_build(fmesh *fm, const mesh_style *st, rng *g, de_gpu_device *d
             u = u < 0.0f ? 0.0f : u > 1.0f ? 1.0f : u;
             const u16 q = (u16)lrintf(u * 65535.0f);
             memcpy(vbytes + (size_t)v * 8u + 2u * c, &q, 2);
-            fm->pos[3 * v + c] = off[c] + ((f32)q / 65535.0f) * scale[c]; /* vis_decode's order */
+            /* de_cooked_mesh_position and vis_decode: offset + q * step (DENG-235 fixed the
+             * decode, which divided by 65535 again) */
+            fm->pos[3 * v + c] = off[c] + (f32)q * (scale[c] / 65535.0f);
         }
     }
     free(raw);
@@ -312,7 +314,7 @@ static void mesh_build(fmesh *fm, const mesh_style *st, rng *g, de_gpu_device *d
         m->bounds_max[c] = mx[c];
         m->sphere[c] = 0.5f * (mn[c] + mx[c]);
         m->position_offset[c] = st->quantized ? off[c] : 0.0f;
-        m->position_scale[c] = st->quantized ? scale[c] : 1.0f;
+        m->position_scale[c] = st->quantized ? scale[c] / 65535.0f : 1.0f; /* one step of q */
         d2 += (mx[c] - mn[c]) * (mx[c] - mn[c]);
     }
     m->sphere[3] = 0.5f * sqrtf(d2);

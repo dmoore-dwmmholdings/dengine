@@ -233,3 +233,13 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/raster_mesh.c)
 endif()
+
+# DENG-235: the compute-expansion raster path (passes/vis/raster_compute.c), the fallback where
+# mesh shaders are missing (and on the CI software rasterizers): per visible meshlet a compute
+# group culls triangles and appends them to a triangle buffer (engine shader vis_raster_expand,
+# shaders/visbuffer/vis_expand.slang), then one indexed indirect draw per phase writes the vis ID
+# and depth (engine shader vis_raster_draw, shaders/visbuffer/vis_vs_ps.slang). Both import
+# DENG-234's shaders/visbuffer/vis_decode.slang.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/raster_compute.c)
+endif()

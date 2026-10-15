@@ -428,3 +428,29 @@ if(TARGET test_render_raster_mesh)
         endif()
     endif()
 endif()
+
+# DENG-235: the compute-expansion raster path (src/render/passes/vis/raster_compute.c, the engine
+# shaders vis_raster_expand and vis_raster_draw), executable test_render_raster_compute; CTest
+# names render_raster_compute.<suite>.<test>. Meshes of real triangles (meshlet bounds from
+# meshoptimizer, as the cooker's); the vis ID and depth images against a CPU rasterizer, both
+# culling phases, the overflow clamp, and the mesh path (DENG-234) where the device has it. The GPU tests
+# run per backend (_metal, _vulkan, _d3d12; SKIP without the device; CI: Vulkan on lavapipe and
+# D3D12 on the vendored WARP in the golden jobs); raster_compute.layout_match parses
+# shaders/visbuffer/vis_expand.slang and vis_vs_ps.slang.
+de_add_test(NAME render_raster_compute
+    SOURCES test_raster_compute.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_tp_meshoptimizer
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_raster_compute)
+    target_include_directories(test_render_raster_compute PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_raster_compute PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_raster_compute PRIVATE version)
+        de_d3d12_agility_deploy(test_render_raster_compute)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_raster_compute)
+        endif()
+    endif()
+endif()

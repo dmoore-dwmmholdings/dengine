@@ -18,11 +18,15 @@
  * `case` below. */
 
 de_result de__vis_raster_init(de__vis_shared *s) {
-    DE_TRY(de__vis_raster_mesh_init(s)); /* DENG-234 */
-    return DE_OK;
+    DE_TRY(de__vis_raster_mesh_init(s));                /* DENG-234 */
+    const de_result r = de__vis_raster_compute_init(s); /* DENG-235 */
+    if (r != DE_OK)
+        de__vis_raster_mesh_shutdown(s);
+    return r;
 }
 void de__vis_raster_shutdown(de__vis_shared *s) {
-    de__vis_raster_mesh_shutdown(s); /* DENG-234 */
+    de__vis_raster_compute_shutdown(s); /* DENG-235 */
+    de__vis_raster_mesh_shutdown(s);    /* DENG-234 */
 }
 void de__vis_raster(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     if (phase == DE__VIS_PHASE_1)
@@ -31,7 +35,10 @@ void de__vis_raster(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     case DE__VIS_RASTER_MESH:
         de__vis_raster_mesh(g, vc, phase);
         break;
-    default: /* DE__VIS_RASTER_NONE; DE__VIS_RASTER_COMPUTE until DENG-235 adds its case */
+    case DE__VIS_RASTER_COMPUTE:
+        de__vis_raster_compute(g, vc, phase);
+        break;
+    default: /* DE__VIS_RASTER_NONE */
         break;
     }
 }
