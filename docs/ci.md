@@ -129,7 +129,11 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   `test_render_raster_mesh` (`render_raster_mesh.*`, DENG-234: the mesh-shader vis-buffer raster
   compared with a CPU rasterizer). The Windows entry also builds those seven and runs their
   `_d3d12` tests with
-  `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423).
+  `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423). The
+  Linux entry also builds `test_gpu_vulkan` and runs `gpu_vulkan.*` (DENG-426): the Vulkan
+  backend's own device, resource, command, sync and pipeline tests, with validation and
+  synchronization validation. lavapipe has one queue, so it also covers de_gpu queues that share
+  a VkQueue; `swapchain_present_resize` skips there (no display).
 - The Linux and Windows entries then run `de-golden ... --scene rhi_clear` and require exit 0.
   Without that step a backend that skipped every scene would leave the job green.
 - The jobs restore the compiler cache of the build job with the same preset and do not save it.

@@ -614,6 +614,8 @@ static de_result setup_queues(de_gpu_device *d, const queue_plan *qp) {
                 vq->lock = vk->queues[p].lock;
         if (vq->lock == vk->queue_lock_count)
             ++vk->queue_lock_count;
+        else
+            vk->lock_shared[vq->lock] = true; /* DENG-426: deferred submits (vk_sync.c) */
 
         VkSemaphoreTypeCreateInfo ti;
         memset(&ti, 0, sizeof ti);
@@ -644,6 +646,7 @@ static void teardown(de_gpu_device *d) {
     if (vk->device) {
         if (vk->fn.vkDeviceWaitIdle && !is_lost(vk))
             vk->fn.vkDeviceWaitIdle(vk->device);
+        de__vk_deferred_free(d);           /* DENG-426: submits that never reached the GPU */
         de__vk_pipeline_cache_shutdown(d); /* DENG-323: saves the cache file */
         de__vk_bindless_shutdown(d);
         for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)

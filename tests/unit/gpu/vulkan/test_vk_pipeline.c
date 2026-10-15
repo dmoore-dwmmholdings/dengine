@@ -233,8 +233,14 @@ static void begin_target(de_gpu_cmd *c, const target *t) {
 /* end_render and the copy to the readback buffer. */
 static void end_target(de_gpu_cmd *c, const target *t) {
     de_gpu_cmd_end_render(c);
-    de_gpu_barrier b = tex_barrier(t->color, DE_ACCESS_RENDER_TARGET, DE_ACCESS_COPY_SRC);
-    de_gpu_cmd_barriers(c, &b, 1);
+    /* The readback buffer from its last use (a copy of an earlier pass, which the test waited
+     * for on the host): what the render graph records for a buffer it imports in COPY_DST.
+     * Vulkan needs no barrier after that host wait, but synchronization validation (VVL 1.3.275,
+     * CI's lavapipe) does not see timeline-semaphore host waits and reports a WRITE_AFTER_WRITE
+     * hazard without it (DENG-426). */
+    de_gpu_barrier b[2] = {tex_barrier(t->color, DE_ACCESS_RENDER_TARGET, DE_ACCESS_COPY_SRC),
+                           buf_barrier(t->readback, DE_ACCESS_COPY_DST, DE_ACCESS_COPY_DST)};
+    de_gpu_cmd_barriers(c, b, 2);
     de_gpu_cmd_copy_texture_to_buffer(c, t->readback, 0, PITCH, t->color, 0, 0);
 }
 
@@ -764,7 +770,9 @@ TEST_F(vk, pipeline_cache_roundtrip, pipe_fx) {
     void *file = NULL;
     u64 size = 0;
     ASSERT_EQ(de_file_read_all(path, NULL, &file, &size), DE_OK);
-    EXPECT_GT(size, (u64)sizeof(de__vk_pipeline_cache_file) + 32u);
+    /* Our header and at least the Vulkan cache header (32 bytes). A driver may store no
+     * pipelines in its cache: lavapipe's data is the Vulkan header alone (DENG-426). */
+    EXPECT_GE(size, (u64)sizeof(de__vk_pipeline_cache_file) + 32u);
     DE_FREE(de_heap_allocator(), file, (size_t)size + 1u);
 
     /* Second run: the cache loads, and creation is (usually) faster. */
@@ -812,7 +820,9 @@ TEST_F(vk, pipeline_cache_corrupt, pipe_fx) {
     void *file = NULL;
     u64 size = 0;
     ASSERT_EQ(de_file_read_all(path, NULL, &file, &size), DE_OK);
-    ASSERT_GT(size, (u64)sizeof(de__vk_pipeline_cache_file) + 32u);
+    /* At least the Vulkan cache header, which the cases below change (lavapipe stores nothing
+     * else, DENG-426). */
+    ASSERT_GE(size, (u64)sizeof(de__vk_pipeline_cache_file) + 32u);
     u8 *good = (u8 *)file;
     static u8 bad[1u << 20];
     ASSERT_LE(size, (u64)sizeof bad);

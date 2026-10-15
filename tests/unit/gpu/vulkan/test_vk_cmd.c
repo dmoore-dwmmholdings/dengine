@@ -148,8 +148,13 @@ TEST_F(vk, clear_readback, cmd_fx) {
         de_gpu_cmd_begin_render(c, &color, 1, NULL);
         de_gpu_cmd_viewport(c, 0.0f, 0.0f, (f32)W, (f32)H);
         de_gpu_cmd_end_render(c);
-        b = tex_barrier(tex, DE_ACCESS_RENDER_TARGET, DE_ACCESS_COPY_SRC);
-        de_gpu_cmd_barriers(c, &b, 1);
+        /* The readback buffer from its last use (pass 0's copy, waited for on the host): Vulkan
+         * needs no barrier after that host wait, but synchronization validation (VVL 1.3.275,
+         * CI's lavapipe) does not see timeline-semaphore host waits and reports a
+         * WRITE_AFTER_WRITE hazard without it (DENG-426). */
+        de_gpu_barrier bb[2] = {tex_barrier(tex, DE_ACCESS_RENDER_TARGET, DE_ACCESS_COPY_SRC),
+                                buf_barrier(rb, DE_ACCESS_COPY_DST, DE_ACCESS_COPY_DST)};
+        de_gpu_cmd_barriers(c, bb, 2);
         de_gpu_cmd_copy_texture_to_buffer(c, rb, 0, PITCH, tex, 0, 0);
         EXPECT_TRUE(de_error_last() == NULL); /* every command passed validation */
         submit_wait(f->d, DE_QUEUE_GRAPHICS, c, fence, pass + 1u);
