@@ -381,9 +381,43 @@ DE_API de_tonemapper de_tonemapper_builtin(de_renderer *r, de_builtin_tonemapper
 DE_API de_tonemapper de_tonemapper_register(de_renderer *r, const char *name, de_shader shader,
                                             u32 param_bytes);
 
-/* ---------- Material models (pluggable Slang modules) ---------- */
+/* ---------- Material models (SPEC §12.6; DENG-298) ----------
+ * A material model is a Slang type implementing IMaterialModel
+ * (shaders/materials/material_interface.slang: resolve_gbuffer, evaluate, sample, pdf). Its id is
+ * what a material's `model` selects; the vis-buffer resolve runs one kernel per model, specialised
+ * for that type at compile time. Built-in ids: "standard" 0, "unlit" 1, "sprite" 2, "terrain" 3,
+ * "water" 4 (sprite, terrain and water resolve as standard until their sprints). Game models get
+ * ids 5 to 31 in registration order: at most 32 models in all, because material classification
+ * keeps a screen tile's models in one 32-bit mask.
+ */
+
+/**
+ * Registers game material model `name` (1 to 31 bytes, unique) from `module`, a READY `shader`
+ * asset of `r`'s asset system whose source implements the model and instantiates the resolve
+ * kernel for it:
+ *
+ *     import "visbuffer/resolve_model";  // relative to the source: the engine's shaders/
+ *                                         // mounted with the project's sources
+ *     struct ToonModel : IMaterialModel { ... }
+ *     [shader("compute")] [numthreads(64, 1, 1)]
+ *     void cs_resolve_model(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
+ *                           uniform ResolveParams pc)
+ *     { de_resolve_tiles<ToonModel>(group, thread.x, pc); }
+ *
+ * A type that does not implement IMaterialModel fails the shader's cook (Slang names the missing
+ * requirement); a shader without that kernel is rejected here. The model's pipeline is made now;
+ * later reloads of the shader do not replace it. Main thread, between frames.
+ * @return the model (de_material_model_id gives its id); invalid on failure, with the reason in
+ *         the error context: a NULL argument, no asset system, a bad or taken name, the shader not
+ *         loaded (DE_ERR_BUSY), a shader without a valid `cs_resolve_model`, or all 32 ids taken
+ *         (DE_ERR_BUSY).
+ */
 DE_API de_material_model de_material_model_register(de_renderer *r, const char *name,
                                                     de_shader module);
+/** The model registered as `name` (a built-in name or a game model's); invalid if there is none. */
+DE_API de_material_model de_material_model_find(de_renderer *r, const char *name);
+/** The id of `model` (what a material's model id holds, 0..31); 0 (standard) when invalid. */
+DE_API u32 de_material_model_id(de_material_model model);
 
 /* ===================== ECS components ===================== */
 

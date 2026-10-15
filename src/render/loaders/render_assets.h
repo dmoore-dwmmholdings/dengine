@@ -258,6 +258,9 @@ typedef struct de_render_material {
     de_asset_id texture_ids[DE_COOKED_TEX_COUNT];
     u8 texcoord[DE_COOKED_TEX_COUNT];
     de__render_retire retire_; /**< internal: the retire list (DENG-422) */
+    /** DENG-298: the material model id (de_material_model_id) when it is a game model's (5..31);
+     * 0 = the built-in the parameters select (Unlit when `standard.unlit`, else Standard). */
+    u32 model;
 } de_render_material;
 
 /** One node of a loaded model. */

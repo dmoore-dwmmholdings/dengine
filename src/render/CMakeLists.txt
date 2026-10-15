@@ -276,3 +276,14 @@ if(TARGET de_render)
         passes/vis/gbuffer.h
         passes/vis/resolve.c)
 endif()
+
+# DENG-298: the material model registry (materials/material_models.c: the built-in ids, game
+# models from de_material_model_register with their resolve pipelines, the material feature
+# flags). The Slang side: shaders/materials/material_interface.slang (IMaterialModel) and the BSDF
+# modules of shaders/brdf/; the resolve kernel is generic over the model
+# (shaders/visbuffer/resolve_model.slang).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        materials/material_models.h
+        materials/material_models.c)
+endif()

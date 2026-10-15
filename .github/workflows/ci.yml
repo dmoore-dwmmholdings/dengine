@@ -190,8 +190,10 @@ jobs:
             # DENG-239: render_picking.* reads entities and triangles back from the vis buffer.
             # DENG-238: render_resolve.* resolves planes through the whole vis frame (positions,
             # UVs, LOD against a forward pass, motion, feedback) against CPU references.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_alpha test_gpu_vulkan test_render_raster_compute test_render_classify test_render_picking test_render_resolve
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.|render_raster_alpha\.|render_classify\.|render_picking\.|render_resolve\.)'
+            # DENG-298: render_brdf.* runs the BSDF modules (shaders/brdf/) and the S13 Standard
+            # BSDF on the GPU against a C reference; render_resolve.* also a game material model.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_alpha test_gpu_vulkan test_render_raster_compute test_render_classify test_render_picking test_render_resolve test_render_brdf
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.|render_raster_alpha\.|render_classify\.|render_picking\.|render_resolve\.|render_brdf\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
@@ -201,9 +203,9 @@ jobs:
             # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
             # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
             # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve
+            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf
             tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
-            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve)\..*_d3d12$'
+            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf)\..*_d3d12$'
             require: --backend d3d12 --warp
           - name: macos metal (hosted, skips below Base)
             os: macos-14

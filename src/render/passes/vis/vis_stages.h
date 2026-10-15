@@ -364,6 +364,8 @@ typedef struct de__vis_shared {
     /* ---- DENG-239: picking (picking.c) ---- */
     void *pick; /**< picking.c's state: request queues, readback rings, results (lock inside) */
     /* ---- later S13 tasks: append fields here ---- */
+    /* ---- DENG-298: the material model registry (de__vis_shared_desc.material_models) ---- */
+    const struct de__material_models *material_models;
 } de__vis_shared;
 
 /** What the CPU last read back for one view (one to a few frames late). */
@@ -549,6 +551,9 @@ typedef struct de__vis_shared_desc {
     de_gpu_device *device;
     const de_allocator *allocator; /**< NULL = the heap */
     de_renderer *renderer;         /**< NULL for tests */
+    /** DENG-298: the material model registry whose game models the resolve dispatches (their
+     * resolve pipelines); NULL = the built-in models only. Must outlive the vis frame. */
+    const struct de__material_models *material_models;
 } de__vis_shared_desc;
 
 /**

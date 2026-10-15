@@ -559,3 +559,36 @@ if(TARGET test_render_resolve)
         endif()
     endif()
 endif()
+
+# DENG-298: the BSDF modules (shaders/brdf/), the material interface and the material model
+# registry, executable test_render_brdf; CTest names render_brdf.<suite>.<test>. brdf.* check the C
+# reference (brdf_ref.c, test-only: not part of de_render): the VNDF pdf integrates to 1, the
+# albedo estimator matches a quadrature, reciprocity, Fresnel. brdf.gpu_*_<backend> cook
+# tests/unit/render/data/brdf_kernels.slang at test time (DE_BRDF_TEST_COOK; the engine's shaders/
+# and data/ on one root) and compare the GPU's values with the C reference (_metal, _vulkan,
+# _d3d12; SKIP without the device or the shader importer). material_model.* check the feature
+# flags against shaders/materials/material_interface.slang, the registry's ids and limits, and
+# de_material_model_register with the data/material_model_*.slang shader assets (null backend).
+de_add_test(NAME render_brdf
+    SOURCES test_brdf.c brdf_ref.c brdf_ref.h render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_brdf)
+    target_include_directories(test_render_brdf PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_brdf PRIVATE
+        "DE_BRDF_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_BRDF_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_brdf PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_brdf PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_brdf PRIVATE DE_BRDF_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_brdf PRIVATE version)
+        de_d3d12_agility_deploy(test_render_brdf)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_brdf)
+        endif()
+    endif()
+endif()

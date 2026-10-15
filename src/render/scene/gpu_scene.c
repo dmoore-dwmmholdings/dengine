@@ -537,8 +537,10 @@ static void pack_material(const de__gpu_scene *gs, de_material h, de__gs_materia
     f4(&o->subsurface, s->subsurface_radius.x, s->subsurface_radius.y, s->subsurface_radius.z,
        s->anisotropy_rotation);
     o->alpha_mode = m->alpha_mode;
-    /* DENG-237: Standard or Unlit until S14's material models (DENG-298) set it. */
-    o->model = s->unlit ? DE__GS_MATERIAL_MODEL_UNLIT : DE__GS_MATERIAL_MODEL_STANDARD;
+    /* DENG-237: Standard or Unlit; DENG-298: or the game model the material names. */
+    o->model = m->model > DE__GS_MATERIAL_MODEL_WATER && m->model < DE__GS_MATERIAL_MODELS
+                   ? m->model
+                   : (s->unlit ? DE__GS_MATERIAL_MODEL_UNLIT : DE__GS_MATERIAL_MODEL_STANDARD);
     o->flags = DE__GS_MATERIAL_READY | (s->double_sided ? DE__GS_MATERIAL_DOUBLE_SIDED : 0u) |
                (s->unlit ? DE__GS_MATERIAL_UNLIT : 0u);
     o->cooked_flags = m->flags;

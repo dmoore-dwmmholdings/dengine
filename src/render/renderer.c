@@ -13,6 +13,7 @@
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
+#include "render/materials/material_models.h"
 #include "render/views_internal.h"
 #include "render/scene/gpu_scene.h"
 #include "render/world/render_world.h"
@@ -42,7 +43,8 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
-    de__views_destroy(r);                /* DENG-176: view graphs, outputs, the composite */
+    de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
+    de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
     if (r->uploader != NULL && !r->uploader_orphaned)
         de_render_uploader_destroy(r->uploader);
@@ -187,6 +189,13 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
             res = DE_FAIL_WRAP(DE_ERR_INTERNAL, "de_renderer_create: offscreen target");
             goto fail;
         }
+    }
+
+    /* DENG-298: the material models, before the views (the vis frame's resolve reads them). */
+    res = de__material_models_create(r->dev, r->alloc, &r->material_models);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: material models");
+        goto fail;
     }
 
     /* DENG-176: the views (the main view, the pass-registration list, the composite). */
