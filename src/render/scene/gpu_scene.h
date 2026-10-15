@@ -107,6 +107,16 @@ enum {
 enum { DE__GS_MESH_READY = 1u, DE__GS_MESH_MESHLETS = 2u };
 /** DeGpuMaterial.flags */
 enum { DE__GS_MATERIAL_READY = 1u, DE__GS_MATERIAL_DOUBLE_SIDED = 2u, DE__GS_MATERIAL_UNLIT = 4u };
+/** DeGpuMaterial.model (DENG-237): the built-in material models (DENG-2 Q12); game models get the
+ * ids after them (S14 DENG-298). At most DE__GS_MATERIAL_MODELS (one u32 bit each). */
+enum {
+    DE__GS_MATERIAL_MODEL_STANDARD = 0u,
+    DE__GS_MATERIAL_MODEL_UNLIT = 1u,
+    DE__GS_MATERIAL_MODEL_SPRITE = 2u,
+    DE__GS_MATERIAL_MODEL_TERRAIN = 3u,
+    DE__GS_MATERIAL_MODEL_WATER = 4u
+};
+#define DE__GS_MATERIAL_MODELS 32u
 /** DeGpuLight.flags */
 enum { DE__GS_LIGHT_LIVE = 1u, DE__GS_LIGHT_CAST_SHADOWS = 2u };
 /** Sizes of the arrays in the entries. */
@@ -194,7 +204,11 @@ typedef struct de__gs_float4 {
     F(de__gs_uint, uint, flags, )                                                                  \
     F(de__gs_uint, uint, texcoord_bits, )                                                          \
     F(de__gs_uint, uint, cooked_flags, )                                                           \
-    F(de__gs_uint4, uint4, textures, [5])
+    F(de__gs_uint4, uint4, textures, [5])                                                          \
+    F(de__gs_uint, uint, model, )                                                                  \
+    F(de__gs_uint, uint, reserved0, )                                                              \
+    F(de__gs_uint, uint, reserved1, )                                                              \
+    F(de__gs_uint, uint, reserved2, )
 
 #define DE__GS_LIGHT_FIELDS(F)                                                                     \
     F(de__gs_float4, float4, transform, [3])                                                       \
@@ -243,7 +257,7 @@ typedef struct de__gs_instance {
 typedef struct de__gs_mesh {
     DE__GS_MESH_FIELDS(DE__GS_DECLARE_FIELD)
 } de__gs_mesh;
-/** DeGpuMaterial (256 bytes, provisional). */
+/** DeGpuMaterial (272 bytes, provisional; DENG-237 appended `model`, which S14 DENG-302 keeps). */
 typedef struct de__gs_material {
     DE__GS_MATERIAL_FIELDS(DE__GS_DECLARE_FIELD)
 } de__gs_material;
@@ -260,7 +274,7 @@ typedef struct de__gs_view {
 DE_STATIC_ASSERT(sizeof(de__gs_mesh_lod) == 32, "DeGpuMeshLod is 32 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_instance) == 208, "DeGpuInstance is 208 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_mesh) == 480, "DeGpuMesh is 480 bytes");
-DE_STATIC_ASSERT(sizeof(de__gs_material) == 256, "DeGpuMaterial is 256 bytes");
+DE_STATIC_ASSERT(sizeof(de__gs_material) == 272, "DeGpuMaterial is 272 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_light) == 112, "DeGpuLight is 112 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_view) == 432, "DeSceneConstants is 432 bytes");
 DE_STATIC_ASSERT(offsetof(de__gs_instance, mesh) == 144 &&

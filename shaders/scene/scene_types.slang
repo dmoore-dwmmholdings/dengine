@@ -40,6 +40,16 @@ public static const uint DE_GPU_MATERIAL_READY = 1; // the material is loaded
 public static const uint DE_GPU_MATERIAL_DOUBLE_SIDED = 2;
 public static const uint DE_GPU_MATERIAL_UNLIT = 4;
 
+/// DeGpuMaterial.model: the material model (SPEC §12.6; DENG-237). Built-in ids first (DENG-2
+/// Q12), game models (de_material_model_register, S14 DENG-298) after them; at most
+/// DE_GPU_MATERIAL_MODELS models, so a tile's model set is one uint (material classification).
+public static const uint DE_GPU_MATERIAL_MODEL_STANDARD = 0;
+public static const uint DE_GPU_MATERIAL_MODEL_UNLIT = 1;
+public static const uint DE_GPU_MATERIAL_MODEL_SPRITE = 2;
+public static const uint DE_GPU_MATERIAL_MODEL_TERRAIN = 3;
+public static const uint DE_GPU_MATERIAL_MODEL_WATER = 4;
+public static const uint DE_GPU_MATERIAL_MODELS = 32;
+
 /// DeGpuLight.flags
 public static const uint DE_GPU_LIGHT_LIVE = 1;
 public static const uint DE_GPU_LIGHT_CAST_SHADOWS = 2;
@@ -109,8 +119,8 @@ public struct DeGpuMesh
     public DeGpuMeshLod lods[8];
 };
 
-/// One material (256 bytes): the provisional packing of de_standard_material (S14 replaces it
-/// with material instances, DENG-302).
+/// One material (272 bytes): the provisional packing of de_standard_material (S14 replaces it
+/// with material instances, DENG-302, which must keep `model`).
 public struct DeGpuMaterial
 {
     public float4 base_color;
@@ -128,6 +138,10 @@ public struct DeGpuMaterial
     public uint texcoord_bits;      // bit s: texture slot s samples UV1
     public uint cooked_flags;       // DE_COOKED_MAT_* (the KHR extensions used)
     public uint4 textures[5];       // sampled bindless index per de_cooked_tex_slot, 0 = none
+    public uint model;              // DE_GPU_MATERIAL_MODEL_* (< DE_GPU_MATERIAL_MODELS; DENG-237)
+    public uint reserved0;
+    public uint reserved1;
+    public uint reserved2;
 };
 
 /// One light (112 bytes). Slot = the render world's light slot (DENG-175).
