@@ -12,11 +12,17 @@
  *   render_churn.churn.unload_waits_for_frame_fence  unpipelined, step by step: an unloaded mesh
  *       waits on the retire list while the frame fence is held, its GPU-scene entry stops being
  *       READY at the next kick, and it is freed by the first kick after the fence passes.
- *   render_churn.churn.pipelined_churn_1000          r.pipelined = 1, 1000 frames of loads,
- *       releases, evictions (de_asset_flush_unused), spawns, despawns and moves with a fixed seed;
- *       every 50 frames (render thread idle) every READY mesh entry of the GPU scene names the
- *       bindless indices of a live record. Run under TSan and ASan (CI: ci-linux-tsan,
+ *   render_churn.churn.pipelined_churn_1000          r.pipelined = 1, at least 1000 frames of
+ *       loads, releases, evictions (de_asset_flush_unused), spawns, despawns and moves with a fixed
+ *       seed; every 50 frames (render thread idle) every READY mesh entry of the GPU scene names
+ *       the bindless indices of a live record. Run under TSan and ASan (CI: ci-linux-tsan,
  *       ASan+UBSan; local: macOS) for the data-race and use-after-free part.
+ *
+ * Progress is driven by state with deadlines, never by a frame count alone (DENG-425): a frame of
+ * a Release build on the null backend is well under a millisecond, while a load waits for the I/O
+ * thread (a first read on a Windows runner can take longer than hundreds of frames). So the churn
+ * starts after every asset has been READY once, mostly releases only loads that have finished,
+ * and runs past 1000 frames until enough records went through the retire list (or a deadline).
  *
  * Null backend, the real asset system (cooked DMSH and DMAT blobs from loader_test_util.h), the
  * real ECS loop: PostUpdate, Extract, de__render_extract_and_kick, with the asset update first,
@@ -51,10 +57,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MESHES      8u
-#define MATERIALS   4u
-#define RCH_WAIT_NS (10ull * 1000000000ull) /* a load's deadline */
-#define ENTITIES    256u
+#define MESHES       8u
+#define MATERIALS    4u
+#define RCH_WAIT_NS  (10ull * 1000000000ull) /* a load's deadline */
+#define RCH_CHURN_NS (60ull * 1000000000ull) /* the churn's deadline past its 1000 frames */
+#define RCH_FREED    20u                     /* records the churn must free through the list */
+#define ENTITIES     256u
 
 typedef struct cfx {
     de_tracking_allocator track, dev_track;
@@ -343,14 +351,58 @@ TEST_F(churn, unload_waits_for_frame_fence, cfx) {
 
 /* ---- churn.pipelined_churn_1000 -------------------------------------------------------------- */
 
+/* A load request that is no longer waiting for the pipeline. */
+static bool load_finished(cfx *f, de_load_handle h) {
+    const de_load_state st = de_asset_status(f->s, h, NULL);
+    return st != DE_LOAD_PENDING && st != DE_LOAD_LOADING;
+}
+
 TEST_F(churn, pipelined_churn_1000, cfx) {
     start(f, "pipelined", true);
     de_render_uploader *u = de__renderer_uploader(f->r);
     ASSERT_TRUE(u != NULL);
+
+    /* Warm-up: every mesh and material READY once (the first reads of the files are the slow
+     * ones), then released: the churn's first flush_unused unloads them. */
+    de_asset_id all[MESHES + MATERIALS];
+    for (u32 i = 0; i < MESHES; ++i)
+        all[i] = mesh_id(i);
+    for (u32 i = 0; i < MATERIALS; ++i)
+        all[MESHES + i] = mat_id(i);
+    const de_load_handle warm = de_asset_load_many(f->s, all, MESHES + MATERIALS, 0);
+    const u64 w0 = de_time_now_ns();
+    while (de_asset_status(f->s, warm, NULL) != DE_LOAD_READY) {
+        if (de_time_now_ns() - w0 > RCH_WAIT_NS) {
+            de_load_info info;
+            const de_load_state st = de_asset_status(f->s, warm, &info);
+            printf("warm-up: state %d, ready %u/%u, failed %u, error %d \"%s\"\n", (int)st,
+                   info.assets_ready, info.assets_total, info.assets_failed, (int)info.first_error,
+                   info.first_error_msg);
+            de_asset_release(f->s, warm);
+            ASSERT_TRUE(false); /* the assets never loaded */
+        }
+        frame(f);
+        (void)de__asset_wake_block(f->s, 2000000u);
+    }
+    de_asset_release(f->s, warm);
+
     de_load_handle held[32];
     u32 held_count = 0;
-    u32 max_ready = 0, unload_calls = 0;
-    for (u32 n = 0; n < 1000; ++n) {
+    u32 max_ready = 0, unload_calls = 0, cancels = 0;
+    u32 pending = 0;
+    u64 freed0 = 0, freed = 0;
+    de__render_uploader_retire_stats(u, &pending, &freed0);
+    const u64 t0 = de_time_now_ns();
+    u32 n = 0;
+    for (;; ++n) {
+        if (n >= 1000u && (n % 50u) == 0u) {
+            /* At least 1000 frames; then until enough records went through the retire list and
+             * the GPU scene used loaded meshes, or the deadline. */
+            de__render_uploader_retire_stats(u, &pending, &freed);
+            if ((freed - freed0 > RCH_FREED && max_ready > 0) ||
+                de_time_now_ns() - t0 > RCH_CHURN_NS)
+                break;
+        }
         const u32 ops = 1u + rnd(f) % 6u;
         for (u32 k = 0; k < ops; ++k) {
             const u32 op = rnd(f) % 100u;
@@ -358,9 +410,14 @@ TEST_F(churn, pipelined_churn_1000, cfx) {
                 const de_asset_id ids[2] = {mesh_id(rnd(f) % MESHES), mat_id(rnd(f) % MATERIALS)};
                 held[held_count++] = de_asset_load_many(f->s, ids, 2, 0);
             } else if (op < 38u && held_count != 0) {
+                /* Release a finished load; one release in four also cancels a load in flight. */
                 const u32 i = rnd(f) % held_count;
-                de_asset_release(f->s, held[i]);
-                held[i] = held[--held_count];
+                const bool cancel = rnd(f) % 4u == 0u;
+                if (cancel || load_finished(f, held[i])) {
+                    cancels += load_finished(f, held[i]) ? 0u : 1u;
+                    de_asset_release(f->s, held[i]);
+                    held[i] = held[--held_count];
+                }
             } else if (op < 60u && f->ent_count < ENTITIES) {
                 const de_entity e =
                     spawn(f, rnd(f) % MESHES, rnd(f) % MATERIALS, (f64)(rnd(f) % 1000u));
@@ -397,14 +454,14 @@ TEST_F(churn, pipelined_churn_1000, cfx) {
         }
     }
     de__render_world_wait_idle(f->r);
-    u32 pending = 0;
-    u64 freed = 0;
     de__render_uploader_retire_stats(u, &pending, &freed);
-    printf("churn: %u flushes, %llu records freed after their frames, %u still waiting, up to %u "
-           "READY meshes in the GPU scene\n",
-           unload_calls, (unsigned long long)freed, pending, max_ready);
-    EXPECT_GT(freed, 20u);    /* the churn really unloaded records through the retire list */
-    EXPECT_GT(max_ready, 0u); /* and the GPU scene really used loaded meshes */
+    printf("churn: %u frames in %.1f ms, %u flushes, %u loads cancelled, %llu records freed after "
+           "their frames, %u still waiting, up to %u READY meshes in the GPU scene\n",
+           n, (double)(de_time_now_ns() - t0) / 1e6, unload_calls, cancels,
+           (unsigned long long)(freed - freed0), pending, max_ready);
+    EXPECT_GE(n, 1000u);
+    EXPECT_GT(freed - freed0, (u64)RCH_FREED); /* the churn unloaded records through the list */
+    EXPECT_GT(max_ready, 0u);                  /* and the GPU scene used loaded meshes */
     for (u32 i = 0; i < held_count; ++i)
         de_asset_release(f->s, held[i]);
 }
