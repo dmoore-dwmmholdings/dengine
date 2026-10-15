@@ -103,6 +103,8 @@ static const de__vis_layout_const k_consts[] = {
     {"DE_VIS_MESHLET_CASTERS_ONLY", DE__VIS_MESHLET_CASTERS_ONLY},
     {"DE_VIS_BUCKET_OPAQUE", DE__VIS_BUCKET_OPAQUE},
     {"DE_VIS_BUCKET_NONE", DE__VIS_BUCKET_NONE},
+    {"DE_VIS_MESHLET_COUNTER_FORWARD", DE__VIS_MESHLET_COUNTER_FORWARD}, /* DENG-305 */
+    {"DE_VIS_BUCKET_FORWARD", DE__VIS_BUCKET_FORWARD},
     {"DE_VIS_MESHLET_RECORD_BYTES", DE_COOKED_MESHLET_SIZE},
 };
 
@@ -465,7 +467,8 @@ static void read_stats(mc_view *pv, u64 completed) {
                                 .capacity = pv->slot_capacity[best],
                                 .alpha = c[DE__VIS_MESHLET_COUNTER_ALPHA / 4u],
                                 .alpha_phase1 = c[DE__VIS_MESHLET_COUNTER_ALPHA_PHASE1 / 4u],
-                                .alpha_capacity = pv->slot_alpha_capacity[best]};
+                                .alpha_capacity = pv->slot_alpha_capacity[best],
+                                .forward = c[DE__VIS_MESHLET_COUNTER_FORWARD / 4u]};
 }
 
 static u32 pow2_at_least(u64 v) {

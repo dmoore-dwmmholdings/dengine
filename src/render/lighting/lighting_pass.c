@@ -705,6 +705,11 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const de_rg_resource ltc2 = de_rg_import_texture(g, lt->ltc2, DE_ACCESS_SHADER_READ);
     de_rg_set_name(g, ltc1, "lighting.ltc1");
     de_rg_set_name(g, ltc2, "lighting.ltc2");
+    lc->ltc1 = ltc1; /* DENG-305: the forward pass reads the same lists and tables */
+    lc->ltc2 = ltc2;
+    lc->constants_bindless = vs->constants_bindless;
+    lc->constants_entry = vs->entry;
+    lc->sampler_bindless = lt->sampler_bindless;
 
     /* The split targets. */
     if (split) {

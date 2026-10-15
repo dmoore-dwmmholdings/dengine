@@ -1858,3 +1858,21 @@ void de__gpu_scene_debug_pack(const de__gpu_scene *gs, de__gs_table_id t, u32 sl
         return;
     pack_entry(gs, t, slot, out);
 }
+
+/* ---------- DENG-305: CPU reads for the forward transparent pass ---------- */
+
+bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh,
+                                  const u32 **materials) {
+    if (gs == NULL || s >= gs->inst_cap)
+        return false;
+    *mesh = gs->inst_mesh[s];
+    *materials = &gs->inst_mat[(size_t)s * DE__GS_INSTANCE_MATERIALS];
+    return true;
+}
+
+const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot) {
+    if (gs == NULL || (t != DE__GS_MESHES && t != DE__GS_MATERIALS))
+        return NULL;
+    const de__gpu_table *tb = &gs->tables[t];
+    return slot < tb->count ? tb->shadow + (size_t)slot * tb->stride : NULL;
+}

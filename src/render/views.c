@@ -18,6 +18,7 @@
 
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
+#include "render/passes/forward/forward.h"
 #include "render/renderer_internal.h"
 #include "render/world/render_world.h"
 
@@ -126,6 +127,8 @@ typedef struct de__views {
     de__lighting *lighting;
     /* DENG-304: the basic output pass (passes/output_basic.c), the stage "output.basic". */
     de__output_basic *output_basic;
+    /* DENG-305: the forward transparent pass (passes/forward/), the stage "forward.transparent". */
+    struct de__forward *forward;
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -1055,6 +1058,10 @@ de_result de__views_create(de_renderer *r) {
     res = de__lighting_create(r, vs->vis, &vs->lighting);
     if (res != DE_OK)
         return res;
+    /* DENG-305: the forward transparent pass registers "forward.transparent" (after lighting). */
+    res = de__forward_create(r, vs->vis, vs->lighting, &vs->forward);
+    if (res != DE_OK)
+        return res;
     /* DENG-304: the output pass registers its stage "output.basic" (where the tonemapper goes). */
     return de__output_basic_create(r, vs->lighting, &vs->output_basic);
 }
@@ -1064,6 +1071,7 @@ void de__views_destroy(de_renderer *r) {
     if (vs == NULL)
         return;
     de__output_basic_destroy(vs->output_basic); /* DENG-304 */
+    de__forward_destroy(vs->forward);           /* DENG-305 */
     de__lighting_destroy(vs->lighting);         /* DENG-303 */
     de__vis_frame_destroy(r, vs->vis);          /* DENG-229 */
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
@@ -1132,6 +1140,11 @@ struct de__vis_shared *de__views_vis(const de_renderer *r) {
 struct de__lighting *de__views_lighting(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs != NULL ? vs->lighting : NULL;
+}
+
+struct de__forward *de__views_forward(const de_renderer *r) {
+    const de__views *vs = views_of(r);
+    return vs != NULL ? vs->forward : NULL;
 }
 
 de__composite *de__views_composite(const de_renderer *r) {

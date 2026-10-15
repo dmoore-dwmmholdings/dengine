@@ -671,7 +671,8 @@ typedef struct de_render_stats {
     u32 permutations_per_model[32]; /**< resolve permutations compiled per model id (0 = Standard;
                                        sprite, terrain, water share Standard's) */
     u32 material_permutation_switches; /**< materials whose permutation changed at the last kick */
-    u32 material_pipelines; /**< material pipelines created so far (permutations + game models) */
+    u32 material_pipelines; /**< material pipelines created so far (permutations + game models +
+                               the forward transparent pass's, DENG-305) */
     u32 material_uploads;   /**< material parameter blocks the last frame uploaded */
     u32 material_instances; /**< live runtime instances (de_material_create_instance) */
 } de_render_stats;

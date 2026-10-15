@@ -7,7 +7,10 @@
  *
  * Per view and frame, on the graphics queue, when classification ran (DENG-237):
  *
- *   vis.resolve.clear      the G-buffer targets to 0                  targets: SHADER_WRITE
+ *   vis.resolve.clear_lighting  DENG-305: the lighting target to 0 as a  lighting: RENDER_TARGET
+ *                          render target (the forward pass blends into it; D3D12 needs a render
+ *                          target's first use in a frame to be a clear or discard, not a UAV write)
+ *   vis.resolve.clear      the other G-buffer targets to 0            targets: SHADER_WRITE
  *   vis.resolve.feedback   feedback to "none", tile counters to 0     feedback, counters: WRITE
  *   vis.resolve            one indirect dispatch per material model   ID buffer, tile lists,
  *                          on its tile list (classify_args, byte      tables, visible list: READ;
@@ -307,6 +310,16 @@ static void clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     de_gpu_cmd_dispatch(cmd, (pc.width + 7u) / 8u, (pc.height + 7u) / 8u, 1);
 }
 
+/* DENG-305: the lighting target is also a render target (the forward pass blends into it), so on
+ * D3D12 its first use in a frame must be a render-target clear or discard, not a UAV write. */
+static void clear_lighting_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const rs_pass *p = (const rs_pass *)user;
+    const de_gpu_attachment color = {
+        .texture = de_rg_texture(pass, p->targets[DE__GB_LIGHTING]), .clear = true, .store = true};
+    de_gpu_cmd_begin_render(cmd, &color, 1, NULL);
+    de_gpu_cmd_end_render(cmd);
+}
+
 static void feedback_clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const rs_pass *p = (const rs_pass *)user;
     const rs_params pc = params(p, pass);
@@ -376,12 +389,14 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
         static const char *const k_names[DE__GB_COUNT] = {"vis.gb0", "vis.gb1", "vis.gb2",
                                                           "vis.motion", "vis.lighting"};
         vc->gbuffer[t] = de_rg_create_texture(
-            g,
-            &(de_gpu_texture_desc){.format = de__gb_format(t),
-                                   .width = vc->width,
-                                   .height = vc->height,
-                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
-                                   .name = k_names[t]});
+            g, &(de_gpu_texture_desc){.format = de__gb_format(t),
+                                      .width = vc->width,
+                                      .height = vc->height,
+                                      .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED |
+                                               DE_USAGE_COPY_SRC |
+                                               /* DENG-305: the forward pass blends into it */
+                                               (t == DE__GB_LIGHTING ? DE_USAGE_RENDER_TARGET : 0u),
+                                      .name = k_names[t]});
         if (!DE_HANDLE_VALID(vc->gbuffer[t]))
             return; /* error set; finalize reports it */
     }
@@ -455,14 +470,22 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
     rs_pass b_rb = base;
     b_rb.feedback = feedback;
     b_rb.counters = counters;
-    rs_pass *pc = pass_data(vc, &b_clear), *pf = pass_data(vc, &b_fb), *pr = pass_data(vc, &b_res),
-            *pb = pass_data(vc, &b_rb);
-    if (pc == NULL || pf == NULL || pr == NULL || pb == NULL)
+    /* DENG-305: the compute clear leaves the lighting target to vis.resolve.clear_lighting. */
+    rs_pass b_clear_cs = b_clear;
+    b_clear_cs.targets[DE__GB_LIGHTING] = (de_rg_resource){0};
+    rs_pass *pl = pass_data(vc, &b_clear);
+    rs_pass *pc = pass_data(vc, &b_clear_cs), *pf = pass_data(vc, &b_fb),
+            *pr = pass_data(vc, &b_res), *pb = pass_data(vc, &b_rb);
+    if (pl == NULL || pc == NULL || pf == NULL || pr == NULL || pb == NULL)
         return;
 
-    de_rg_pass *p = de_rg_add_pass(g, "vis.resolve.clear", DE_QUEUE_GRAPHICS, clear_execute, pc);
+    de_rg_pass *p = de_rg_add_pass(g, "vis.resolve.clear_lighting", DE_QUEUE_GRAPHICS,
+                                   clear_lighting_execute, pl); /* DENG-305 */
+    de_rg_write(p, vc->gbuffer[DE__GB_LIGHTING], DE_ACCESS_RENDER_TARGET);
+    p = de_rg_add_pass(g, "vis.resolve.clear", DE_QUEUE_GRAPHICS, clear_execute, pc);
     for (u32 t = 0; t < DE__GB_COUNT; ++t)
-        de_rg_write(p, vc->gbuffer[t], DE_ACCESS_SHADER_WRITE);
+        if (t != DE__GB_LIGHTING)
+            de_rg_write(p, vc->gbuffer[t], DE_ACCESS_SHADER_WRITE);
     if (debug) {
         de_rg_write(p, vc->resolve_debug_pos, DE_ACCESS_SHADER_WRITE);
         de_rg_write(p, vc->resolve_debug_uv, DE_ACCESS_SHADER_WRITE);

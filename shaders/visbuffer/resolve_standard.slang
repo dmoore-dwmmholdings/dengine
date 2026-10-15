@@ -3,7 +3,8 @@
 // runs it once per view and frame, after classification (DENG-237):
 //
 //   cs_resolve_clear     8 x 8 threads per group over the view: the G-buffer targets (and the
-//                        test-only debug targets) to 0
+//                        test-only debug targets) to 0; the lighting target only when given
+//                        (resolve.c clears it as a render target first: DENG-305)
 //   cs_feedback_clear    64 threads per group: the feedback buffer to DE_FEEDBACK_NONE, the
 //                        processed-tile counters to 0
 //   cs_resolve_standard  de_resolve_tiles<StandardModel> (resolve_model.slang, the model in
@@ -42,7 +43,8 @@ void cs_resolve_clear(uint3 id : SV_DispatchThreadID, uniform ResolveParams pc)
     de_rwtex2d(pc.gb1)[id.xy] = z;
     de_rwtex2d(pc.gb2)[id.xy] = z;
     de_rwtex2d(pc.motion)[id.xy] = z;
-    de_rwtex2d(pc.lighting)[id.xy] = z;
+    if (pc.lighting != DE_BINDLESS_INVALID) // DENG-305: resolve.c clears it as a render target
+        de_rwtex2d(pc.lighting)[id.xy] = z;
     if ((pc.flags & DE_RESOLVE_DEBUG) != 0u)
     {
         de_rwtex2d(pc.debug_pos)[id.xy] = z;

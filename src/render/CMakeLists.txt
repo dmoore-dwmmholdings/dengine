@@ -335,3 +335,15 @@ if(TARGET de_render)
         materials/material_instances.h
         materials/material_instances.c)
 endif()
+
+# DENG-305: the forward transparent pass (passes/forward/: forward.h the internal API;
+# transparent_sort.c the per-view list and its back-to-front sort, forward_transparent.c the stage
+# "forward.transparent" in DE__VIEW_SLOT_TRANSPARENT and its draws). Engine shader
+# forward_transparent (shaders/forward/forward_transparent.slang); meshlet culling keeps forward
+# materials out of the vis buffer through shaders/forward/forward_routing.slang.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/forward/forward.h
+        passes/forward/transparent_sort.c
+        passes/forward/forward_transparent.c)
+endif()

@@ -259,6 +259,10 @@ struct de__vis_shared *de__views_vis(const de_renderer *r);
 /** DENG-304: the renderer's lighting (render/lighting/lighting.h); NULL before de__views_create.
  * The kick snapshots the environment into it; the GPU scene's view stage asks it for exposure. */
 struct de__lighting *de__views_lighting(const de_renderer *r);
+/** DENG-305: the renderer's forward transparent pass (render/passes/forward/forward.h); NULL before
+ * de__views_create or without a vis frame. Its pipelines count in
+ * de_render_stats.material_pipelines. */
+struct de__forward *de__views_forward(const de_renderer *r);
 /** DENG-239: true when `v` is a live view of `r` (takes the views lock). Any thread. */
 bool de__view_valid(const de_renderer *r, de_view v);
 
