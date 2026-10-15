@@ -29,6 +29,7 @@ import "../materials/material_interface";
 import "../brdf/bsdf_common";
 import "../brdf/energy";
 import "../materials/standard/standard_base";
+import "../materials/standard/layer_anisotropy";
 
 /// DeIbl.flags: an environment strip is bound (else the constant ambient).
 public static const uint DE_IBL_ENVIRONMENT = 1;
@@ -148,8 +149,6 @@ public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float 
                             out float3 diffuse, out float3 specular)
 {
     float3 n = s.normal;
-    // DENG-300 hook (anisotropy): with DE_MATERIAL_FEATURE_ANISOTROPY, bend n towards the
-    // anisotropic lobe here (layer_anisotropy.slang's bent normal) before the reflection below.
     float nov = max(dot(n, v), 1e-4);
     float r = saturate(s.roughness);
     StandardFresnel fr = de_standard_fresnel(s);
@@ -159,9 +158,21 @@ public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float 
     float3 spec_albedo = de_energy_specular_albedo(t, fr.f0, fr.f90, true, spec_avg);
     float3 albedo = s.base_color * (1.0 - saturate(s.metallic));
     diffuse = albedo * (de_ibl_irradiance(ibl, n) * DE_INV_PI) * (1.0 - ed) * ao;
-    float3 refl = reflect(-v, n);
+    // DENG-300: an anisotropic surface reflects around the KHR bent normal (needs a tangent frame;
+    // the thin G-buffer has none, so deferred surfaces stay isotropic).
+    float3 rn = n;
+    if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u && s.anisotropy > 0.0 &&
+        dot(s.tangent.xyz, s.tangent.xyz) > 0.0)
+    {
+        float3 tg = normalize(s.tangent.xyz - n * dot(n, s.tangent.xyz));
+        float3 bt = cross(n, tg) * (s.tangent.w < 0.0 ? -1.0 : 1.0);
+        float3 at = normalize(tg * s.anisotropy_direction.x + bt * s.anisotropy_direction.y);
+        float3 ab = cross(n, at);
+        rn = de_anisotropy_bent_normal(n, at, ab, v, s.anisotropy, r);
+    }
+    float3 refl = reflect(-v, rn);
     float horizon = min(1.0 + dot(refl, n), 1.0);
-    float3 dir = de_ibl_dominant_dir(n, refl, r);
+    float3 dir = de_ibl_dominant_dir(rn, refl, r);
     specular = de_ibl_radiance(ibl, dir, r) * spec_albedo *
                (de_ibl_specular_occlusion(nov, ao, r) * horizon * horizon);
 }
