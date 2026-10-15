@@ -392,9 +392,26 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     de__vis_pick(g, vc); /* DENG-239: reads this frame's vis IDs and visible list */
     de__vis_classify(g, vc);
     de__vis_resolve(g, vc);
+    /* DENG-303: later stages of this view graph (lighting) find the context. */
+    s->frame_context[d->view_slot] = vc;
+    s->frame_context_graph[d->view_slot] = g;
+    s->frame_context_frame[d->view_slot] = d->frame_index;
+    s->frame_context_view[d->view_slot] = d->view;
     if (out != NULL)
         *out = vc;
     return DE_OK;
+}
+
+de__vis_context *de__vis_frame_context(const de__vis_shared *s, de_view view, const de_rg *g,
+                                       u64 frame_index) {
+    if (s == NULL || g == NULL)
+        return NULL;
+    /* Compare the keys, never the context: an old frame's arena memory is reused. */
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i)
+        if (s->frame_context[i] != NULL && s->frame_context_graph[i] == g &&
+            s->frame_context_frame[i] == frame_index && s->frame_context_view[i].id == view.id)
+            return s->frame_context[i];
+    return NULL;
 }
 
 /* =================================================================================================

@@ -366,6 +366,12 @@ typedef struct de__vis_shared {
     /* ---- later S13 tasks: append fields here ---- */
     /* ---- DENG-298: the material model registry (de__vis_shared_desc.material_models) ---- */
     const struct de__material_models *material_models;
+    /* ---- DENG-303: each view slot's context of the frame being built (de__vis_frame_context):
+     * the context (on that graph's frame arena) and the keys that say it is still current ---- */
+    struct de__vis_context *frame_context[DE__VIEW_MAX];
+    const de_rg *frame_context_graph[DE__VIEW_MAX];
+    u64 frame_context_frame[DE__VIEW_MAX];
+    de_view frame_context_view[DE__VIEW_MAX];
 } de__vis_shared;
 
 /** What the CPU last read back for one view (one to a few frames late). */
@@ -562,6 +568,13 @@ typedef struct de__vis_shared_desc {
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT; DE_ERR_OUT_OF_MEMORY; a stage init's error.
  */
 de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared **out);
+/**
+ * DENG-303: the context de__vis_frame_build made for view `view` in graph `g` in frame
+ * `frame_index` (a later stage of the same view graph reads it: lighting), or NULL when that frame
+ * built none (the frame is off, the view has no camera). Render thread, while `g` is being built.
+ */
+struct de__vis_context *de__vis_frame_context(const de__vis_shared *s, de_view view, const de_rg *g,
+                                              u64 frame_index);
 /** Runs every stage's shutdown and frees `s` (GPU objects through deferred destruction). */
 void de__vis_shared_destroy(de__vis_shared *s);
 /**

@@ -17,6 +17,7 @@
 #include "render/views_internal.h"
 
 #include "render/graph/rg_internal.h"
+#include "render/lighting/lighting.h"
 #include "render/renderer_internal.h"
 #include "render/world/render_world.h"
 
@@ -120,6 +121,9 @@ typedef struct de__views {
     bool composite_warned;
     /* DENG-229: the visibility-buffer frame (passes/vis/vis_frame.c), the stage "vis.frame". */
     struct de__vis_shared *vis;
+    /* DENG-303: clustered and deferred lighting (lighting/lighting_pass.c), the stage "lighting".
+     */
+    de__lighting *lighting;
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -1042,14 +1046,19 @@ de_result de__views_create(de_renderer *r) {
     if (res != DE_OK)
         return res;
     /* DENG-229: the visibility-buffer frame registers its stage "vis.frame". */
-    return de__vis_frame_create(r, &vs->vis);
+    res = de__vis_frame_create(r, &vs->vis);
+    if (res != DE_OK)
+        return res;
+    /* DENG-303: lighting registers its stage "lighting" (after the vis frame of each view). */
+    return de__lighting_create(r, vs->vis, &vs->lighting);
 }
 
 void de__views_destroy(de_renderer *r) {
     de__views *vs = r->views;
     if (vs == NULL)
         return;
-    de__vis_frame_destroy(r, vs->vis); /* DENG-229 */
+    de__lighting_destroy(vs->lighting); /* DENG-303 */
+    de__vis_frame_destroy(r, vs->vis);  /* DENG-229 */
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
         release_now(r, vs->rs[i].graph, vs->rs[i].output);
     for (u32 i = 0; i < vs->retired_count; ++i)
