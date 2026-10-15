@@ -191,6 +191,11 @@ typedef struct de__lighting_context {
     de_rg_resource target; /**< the HDR lighting target it lit (vc->gbuffer[DE__GB_LIGHTING]) */
     u32 width, height;     /**< its size (the view's internal size) */
     de_rg_resource strip;  /**< the environment strip it read (import), invalid without one */
+    /* ---- DENG-305: what the forward transparent pass shades with (as the deferred pass) ---- */
+    de_rg_resource ltc1, ltc2; /**< the LTC tables (imports, DE_ACCESS_SHADER_READ) */
+    u32 constants_bindless;    /**< the view's DeLightingView ring (de_robuffer) */
+    u32 constants_entry;       /**< this frame's entry in it */
+    u32 sampler_bindless;      /**< the LTC tables' sampler */
 } de__lighting_context;
 
 /**

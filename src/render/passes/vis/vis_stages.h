@@ -222,6 +222,7 @@ DE_STATIC_ASSERT(sizeof(de__vis_raster_args) == 32, "DeVisRasterArgs is 32 bytes
 #define DE__VIS_MESHLET_COUNTER_PHASE1       8u  /**< entries stored after phase 1 */
 #define DE__VIS_MESHLET_COUNTER_ALPHA        16u /**< DENG-236: alpha-tested asked for */
 #define DE__VIS_MESHLET_COUNTER_ALPHA_PHASE1 20u /**< alpha entries stored after phase 1 */
+#define DE__VIS_MESHLET_COUNTER_FORWARD      24u /**< DENG-305: forward meshlets (not stored) */
 #define DE__VIS_MESHLET_COUNTER_BYTES        32u
 /** MeshletCullParams.flags */
 enum {
@@ -233,6 +234,9 @@ enum {
 #define DE__VIS_BUCKET_OPAQUE 0u
 #define DE__VIS_BUCKET_ALPHA  1u /**< DENG-236: the submesh material is alpha-tested (mask) */
 #define DE__VIS_BUCKET_NONE   0xFFFFFFFFu
+/** DENG-305: the submesh material is forward (blended or transmissive): counted, never stored;
+ * the forward transparent pass (passes/forward/) draws it. */
+#define DE__VIS_BUCKET_FORWARD 2u
 /** DeGpuMaterial.alpha_mode of an alpha-tested material (de_cooked_alpha_mode mask). */
 #define DE__VIS_ALPHA_MODE_MASK 1u
 /** Margin of the small-meshlet test in pixels (DE_VIS_SMALL_EPS_PX). */
@@ -308,6 +312,9 @@ typedef struct de__vis_meshlet_stats {
     u32 alpha;          /**< alpha-tested meshlets asked for, both phases */
     u32 alpha_phase1;   /**< alpha entries stored by phase 1 */
     u32 alpha_capacity; /**< the capacity of that frame's alpha region */
+    /* DENG-305 */
+    u32 forward; /**< forward meshlets (blended or transmissive) kept out of the list, both phases
+                  */
 } de__vis_meshlet_stats;
 
 /* =================================================================================================

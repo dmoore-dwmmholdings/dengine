@@ -768,3 +768,29 @@ if(TARGET test_render_material_instances)
     target_link_libraries(test_render_material_instances PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
 endif()
+
+# DENG-305: the forward transparent pass (src/render/passes/forward/; engine shader
+# forward_transparent), executable test_render_forward_transparent; CTest names
+# render_forward_transparent.forward.<test>. The GPU tests run the whole vis frame, lighting and the
+# forward pass over planes of a fake render world: routing out of the vis buffer, no work without a
+# visible transparent, back-to-front compositing against a CPU blend, forward against deferred
+# lighting, double-sided draws and the scene-colour copy; per backend (_metal, _vulkan, _d3d12; SKIP
+# without the device; CI: lavapipe and WARP golden jobs). The CPU tests check the sort, the routing
+# predicate and the shader constants (layout_match parses shaders/forward/ and meshlet_cull.slang).
+de_add_test(NAME render_forward_transparent
+    SOURCES test_forward_transparent.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_forward_transparent)
+    target_include_directories(test_render_forward_transparent PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_forward_transparent PRIVATE
+        "DE_FWD_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_forward_transparent PRIVATE version)
+        de_d3d12_agility_deploy(test_render_forward_transparent)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_forward_transparent)
+        endif()
+    endif()
+endif()

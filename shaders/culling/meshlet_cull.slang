@@ -25,6 +25,11 @@
 // 2 after it (DE_VIS_MESHLET_COUNTER_ALPHA, _ALPHA_PHASE1), with their own raster arguments. So
 // the packed vis IDs of both buckets share one index space and stay unique.
 //
+// DENG-305: a meshlet whose submesh material is forward (blended or transmissive;
+// forward/forward_routing.slang de_material_forward) goes to DE_VIS_BUCKET_FORWARD: it is never
+// appended to the list (the forward transparent pass draws it after lighting), only counted
+// (DE_VIS_MESHLET_COUNTER_FORWARD).
+//
 // The tests (the CPU reference is in cull_meshlets.c; vis_stages.h declares it):
 //
 //   Frustum   The meshlet's bounding sphere (DMSH v2 record, object space) transformed by the
@@ -61,6 +66,7 @@ import push_constants;
 import "../scene/scene_types";
 import "../visbuffer/vis_types";
 import cull_common;
+import "../forward/forward_routing"; // DENG-305
 
 /// Counters (a raw buffer of DE_VIS_MESHLET_COUNTER_BYTES): byte offsets of each u32.
 public static const uint DE_VIS_MESHLET_COUNTER_VISIBLE = 0; // visible meshlets asked for, both
@@ -72,6 +78,8 @@ public static const uint DE_VIS_MESHLET_COUNTER_ALPHA = 16;  // DENG-236: alpha-
                                                               // asked for, both phases
 public static const uint DE_VIS_MESHLET_COUNTER_ALPHA_PHASE1 = 20; // alpha entries stored after
                                                                     // phase 1
+public static const uint DE_VIS_MESHLET_COUNTER_FORWARD = 24; // DENG-305: forward meshlets (not
+                                                               // in the vis buffer), both phases
 public static const uint DE_VIS_MESHLET_COUNTER_BYTES = 32;
 
 /// MeshletCullParams.flags
@@ -85,6 +93,7 @@ public static const uint DE_VIS_BUCKET_ALPHA = 1; // DENG-236: alpha-tested (alp
 /// DeGpuMaterial.alpha_mode of an alpha-tested material (de_cooked_alpha_mode).
 public static const uint DE_VIS_ALPHA_MODE_MASK = 1;
 public static const uint DE_VIS_BUCKET_NONE = 0xFFFFFFFF;
+public static const uint DE_VIS_BUCKET_FORWARD = 2; // DENG-305: blended or transmissive (counted)
 
 /// Bytes of one DMSH v2 meshlet record (render/formats/de_cooked_mesh.h).
 public static const uint DE_VIS_MESHLET_RECORD_BYTES = 64;
@@ -254,9 +263,9 @@ bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, Meshl
     return cull_occlusion_test(b, pc.phase);
 }
 
-/// The output bucket of a visible meshlet: alpha-tested when the submesh's material is a READY
-/// material with alpha_mode mask (DENG-236), else opaque. Blended materials draw opaque here
-/// until their forward pass (S14).
+/// The output bucket of a visible meshlet: forward when the submesh's material is blended or
+/// transmissive (DENG-305), alpha-tested when it is a READY material with alpha_mode mask
+/// (DENG-236), else opaque.
 uint meshlet_bucket(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
 {
     if (submesh >= DE_GPU_INSTANCE_MATERIALS || pc.materials == 0)
@@ -265,6 +274,8 @@ uint meshlet_bucket(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
     if (slot == DE_GPU_NONE || slot >= pc.material_count)
         return DE_VIS_BUCKET_OPAQUE;
     DeGpuMaterial mat = de_robuffer<DeGpuMaterial>(pc.materials)[slot];
+    if (de_material_forward(mat))
+        return DE_VIS_BUCKET_FORWARD; // DENG-305: the forward transparent pass draws it
     if ((mat.flags & DE_GPU_MATERIAL_READY) != 0 && mat.alpha_mode == DE_VIS_ALPHA_MODE_MASK)
         return DE_VIS_BUCKET_ALPHA;
     return DE_VIS_BUCKET_OPAQUE;
@@ -301,7 +312,7 @@ void append_compacted_at(bool want, DeVisMeshlet e, DeRWBytes counters, uint cou
 void cs_meshlet_cull_clear(uniform MeshletCullParams pc)
 {
     de_rwbytes(pc.counters).store4(0, uint4(0, 0, 0, 0));
-    de_rwbytes(pc.counters).store4(16, uint4(0, 0, 0, 0)); // DENG-236: the alpha counters
+    de_rwbytes(pc.counters).store4(16, uint4(0, 0, 0, 0)); // DENG-236 alpha, DENG-305 forward
 }
 
 [shader("compute")]
@@ -347,6 +358,9 @@ void cs_meshlet_cull(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
                      pc.visible, pc.capacity);
     append_compacted_at(bucket == DE_VIS_BUCKET_ALPHA, e, counters, DE_VIS_MESHLET_COUNTER_ALPHA,
                         pc.visible, pc.capacity, pc.alpha_capacity);
+    uint nf = WaveActiveCountBits(bucket == DE_VIS_BUCKET_FORWARD); // DENG-305: counted only
+    if (nf != 0 && WaveIsFirstLane())
+        counters.atomic_add(DE_VIS_MESHLET_COUNTER_FORWARD, nf);
 }
 
 /// The raster arguments of entries [first, first + count) (both paths, DeVisRasterArgs).

@@ -596,6 +596,16 @@ void de__gpu_scene_debug_apply(const de__gpu_scene *gs, de__gs_table_id t, u8 *m
  * the frame given to update(); meshes, materials and views from their CPU copies). */
 void de__gpu_scene_debug_pack(const de__gpu_scene *gs, de__gs_table_id t, u32 slot, void *out);
 
+/* ---- DENG-305: CPU reads of the tables the last update() made (the forward transparent pass's
+ * list, on the render thread while the frame's view graphs are built): what the GPU holds once
+ * that frame's uploads ran. Valid until the next update(). ---- */
+/** Instance slot `s`'s mesh slot (`*mesh`) and its DE__GS_INSTANCE_MATERIALS material slots
+ * (`*materials`), DE__GS_NONE where none. False for a slot past the instance arrays. */
+bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh, const u32 **materials);
+/** The CPU copy of entry `slot` of the mesh or material table (NULL for another table or a slot
+ * past its count). */
+const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot);
+
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_SCENE_GPU_SCENE_H */

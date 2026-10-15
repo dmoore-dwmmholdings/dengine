@@ -201,8 +201,10 @@ jobs:
             # DENG-304: render_ibl_exposure.* image-based lighting (furnaces, rotation, the strip
             # copy of a BC6H cube), EV100 exposure and the output pass.
             # DENG-301: render_transmission.* transmission, volume, diffuse transmission, Unlit.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_alpha test_gpu_vulkan test_render_raster_compute test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_transmission
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.|render_raster_alpha\.|render_classify\.|render_picking\.|render_resolve\.|render_brdf\.|render_standard\.|render_clustered_lights\.|render_standard_layers\.|render_ibl_exposure\.|render_transmission\.)'
+            # DENG-305: render_forward_transparent.* the forward transparent pass (routing, the
+            # back-to-front blend against a CPU reference, forward vs deferred, the scene colour).
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_alpha test_gpu_vulkan test_render_raster_compute test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_transmission test_render_forward_transparent
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.|render_raster_alpha\.|render_classify\.|render_picking\.|render_resolve\.|render_brdf\.|render_standard\.|render_clustered_lights\.|render_standard_layers\.|render_ibl_exposure\.|render_transmission\.|render_forward_transparent\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
@@ -212,9 +214,9 @@ jobs:
             # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
             # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
             # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_transmission
+            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_transmission test_render_forward_transparent
             tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
-            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf|render_standard|render_clustered_lights|render_standard_layers|render_ibl_exposure|render_transmission)\..*_d3d12$'
+            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf|render_standard|render_clustered_lights|render_standard_layers|render_ibl_exposure|render_transmission|render_forward_transparent)\..*_d3d12$'
             require: --backend d3d12 --warp
           - name: macos metal (hosted, skips below Base)
             os: macos-14
