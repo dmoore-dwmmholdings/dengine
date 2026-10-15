@@ -1485,7 +1485,7 @@ static u32 compare_lists(const lx_result *r, u32 cap, u64 *total, u32 *marginal)
     *marginal = 0;
     for (u32 c = 0; c < g->count; ++c) {
         f32 lo[3], hi[3];
-        de__cluster_bounds(g, r->lc.view.inv_proj, c, lo, hi);
+        de__cluster_bounds(g, &r->lc.view.inv_proj[0][0], c, lo, hi);
         for (u32 k = 0; k < 3; ++k) {
             const f32 glo = r->bounds[8u * c + k], ghi = r->bounds[8u * c + 4u + k];
             bounds_bad +=
@@ -1589,7 +1589,7 @@ static void overflow(lx *f, de_gpu_backend b) {
         entries += r->grid[2u * c + 1u];
         EXPECT_TRUE(r->grid[2u * c + 1u] <= 4u);
         f32 lo[3], hi[3];
-        de__cluster_bounds(&r->lc.grid, r->lc.view.inv_proj, c, lo, hi);
+        de__cluster_bounds(&r->lc.grid, &r->lc.view.inv_proj[0][0], c, lo, hi);
         u32 lo_cnt = 0, hi_cnt = 0; /* decisive touches; with the marginal ones */
         for (u32 i = 0; i < 24u; ++i) {
             const i32 t = cpu_touch(&r->lights[i], lo, hi);
@@ -1727,7 +1727,7 @@ TEST(clustered_lights, lights_ltc_polygon_vs_numeric) {
         const f64 want = ff_numeric(c, axf, ayf, hx, hy, disk, ff, p, n);
         if (want < 0.01)
             continue;
-        const f64 got = de__ltc_polygon((const f32(*)[3])q, nq);
+        const f64 got = de__ltc_polygon(&q[0][0], nq);
         const f64 e = fabs(got - want) / want;
         worst = e > worst ? e : worst;
         EXPECT_TRUE(e <= 0.02);
@@ -1825,7 +1825,7 @@ TEST(clustered_lights, clusters_conservative_random) {
         const u32 c = (de__cluster_slice(&g, depth) * g.tiles_y + py / g.tile_px) * g.tiles_x +
                       px / g.tile_px;
         f32 lo[3], hi[3];
-        de__cluster_bounds(&g, ip, c, lo, hi);
+        de__cluster_bounds(&g, &ip[0][0], c, lo, hi);
         for (u32 i = 0; i < NL; ++i) {
             const de__cluster_light *l = &ls[i];
             const f32 v[3] = {q[0] - l->bound[0], q[1] - l->bound[1], q[2] - l->bound[2]};

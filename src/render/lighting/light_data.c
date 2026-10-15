@@ -102,11 +102,11 @@ f32 de__cluster_slice_depth(const de__cluster_grid *g, u32 k) {
     return expf(((f32)k - g->log_bias) / g->log_scale);
 }
 
-static void unproject(const f32 m[4][4], f32 x, f32 y, f32 z, f32 out[3]) {
+static void unproject(const f32 *m, f32 x, f32 y, f32 z, f32 out[3]) {
     const f32 c[4] = {x, y, z, 1.0f};
     f32 v[4];
     for (u32 r = 0; r < 4; ++r)
-        v[r] = m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2] + m[r][3] * c[3];
+        v[r] = m[4 * r] * c[0] + m[4 * r + 1] * c[1] + m[4 * r + 2] * c[2] + m[4 * r + 3] * c[3];
     for (u32 k = 0; k < 3; ++k)
         out[k] = v[k] / v[3];
 }
@@ -118,7 +118,7 @@ static void at_depth(const f32 a[3], const f32 b[3], f32 depth, f32 out[3]) {
         out[k] = a[k] + (b[k] - a[k]) * t;
 }
 
-void de__cluster_bounds(const de__cluster_grid *g, const f32 inv_proj[4][4], u32 c, f32 lo[3],
+void de__cluster_bounds(const de__cluster_grid *g, const f32 *inv_proj, u32 c, f32 lo[3],
                         f32 hi[3]) {
     const u32 tx = c % g->tiles_x;
     const u32 ty = (c / g->tiles_x) % g->tiles_y;
@@ -206,11 +206,11 @@ static void norm3(f32 v[3]) {
             v[j] /= l;
 }
 
-f32 de__ltc_polygon(const f32 p[][3], u32 n) {
+f32 de__ltc_polygon(const f32 *p, u32 n) {
     f32 c[17][3];
     u32 m = 0;
     for (u32 i = 0; i < n && i < 16u; ++i) {
-        const f32 *a = p[i], *b = p[(i + 1u) % n];
+        const f32 *a = p + 3u * i, *b = p + 3u * ((i + 1u) % n);
         const bool ia = a[2] >= 0.0f, ib = b[2] >= 0.0f;
         if (ia && m < 16u) {
             memcpy(c[m], a, sizeof(f32) * 3u);

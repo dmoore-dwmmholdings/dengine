@@ -122,15 +122,16 @@ de__cluster_grid de__cluster_grid_make(u32 width, u32 height, u32 tile_px, u32 s
 u32 de__cluster_slice(const de__cluster_grid *g, f32 depth);
 /** The near depth of slice `k` (k >= slices: a large value). */
 f32 de__cluster_slice_depth(const de__cluster_grid *g, u32 k);
-/** The view-space AABB of cluster `c` (cluster_build.slang's arithmetic; inv_proj rows). */
-void de__cluster_bounds(const de__cluster_grid *g, const f32 inv_proj[4][4], u32 c, f32 lo[3],
+/** The view-space AABB of cluster `c` (cluster_build.slang's arithmetic; `inv_proj`: the 16
+ * floats of de__lighting_view.inv_proj, rows). */
+void de__cluster_bounds(const de__cluster_grid *g, const f32 *inv_proj, u32 c, f32 lo[3],
                         f32 hi[3]);
 /** light_cull.slang de_light_touches: may local light `l` light the AABB lo..hi? */
 bool de__cluster_light_touches(const de__cluster_light *l, const f32 lo[3], const f32 hi[3]);
 
-/** The LTC form factor (cosine-weighted solid angle / pi) of polygon `p` (n <= 16 points
- * relative to the shading point, z up), clipped to z >= 0: ltc.slang de_ltc_polygon. */
-f32 de__ltc_polygon(const f32 p[][3], u32 n);
+/** The LTC form factor (cosine-weighted solid angle / pi) of polygon `p` (n <= 16 points, x y z
+ * each, relative to the shading point, z up), clipped to z >= 0: ltc.slang de_ltc_polygon. */
+f32 de__ltc_polygon(const f32 *p, u32 n);
 
 /* =================================================================================================
  * The stage

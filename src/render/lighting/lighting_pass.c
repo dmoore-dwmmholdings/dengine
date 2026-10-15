@@ -555,12 +555,12 @@ static lp_pass *pass_data(de__vis_context *vc, const lp_pass *base) {
 }
 
 /* The camera's near plane and far plane (+inf for an infinite projection) from inv_proj rows. */
-static void near_far(const f32 ip[4][4], f32 *near_z, f32 *far_z) {
+static void near_far(const f32 *ip, f32 *near_z, f32 *far_z) {
     f32 v[2][4];
     for (u32 i = 0; i < 2; ++i) {
         const f32 z = i == 0 ? 1.0f : 0.0f; /* reverse-Z: 1 = near, 0 = far */
         for (u32 r = 0; r < 4; ++r)
-            v[i][r] = ip[r][2] * z + ip[r][3];
+            v[i][r] = ip[4 * r + 2] * z + ip[4 * r + 3];
     }
     *near_z = fabsf(v[0][3]) > 1e-20f ? -v[0][2] / v[0][3] : 0.0f;
     *far_z = fabsf(v[1][3]) > 1e-20f ? -v[1][2] / v[1][3] : INFINITY;
@@ -572,7 +572,7 @@ static void fill_view(de__lighting *lt, const de__vis_context *vc, const de__lig
     de__lighting_view *lv = &lc->view;
     de__lighting_inv_proj(&vc->proj, lv->inv_proj);
     f32 near_z, cam_far;
-    near_far(lv->inv_proj, &near_z, &cam_far);
+    near_far(&lv->inv_proj[0][0], &near_z, &cam_far);
     f32 far_z = (f32)de_cvar_float(lt->cv_far);
     if (!(far_z > 0.0f))
         far_z = (f32)LP_FAR_DEFAULT;
