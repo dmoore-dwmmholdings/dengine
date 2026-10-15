@@ -24,6 +24,9 @@
  * CPU tests: the EV100 formula, the NaN fallback and the previous-frame exposure, the SH9 packing
  * and its irradiance, the strip mip counts.
  */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L /* setenv (loader_test_util.h) */
+#endif
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -1026,7 +1029,7 @@ static void cube_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 
 /* An RGBA16F cube (ENV_FACE, ENV_MIPS mips), face k of every mip the constant `rgb[k]`, uploaded
  * in a graph of its own; lx.cube. */
-static void env_cube(lx *f, const f32 rgb[6][3]) {
+static void env_cube(lx *f, const f32 *rgb) { /* rgb[3 face + channel] */
     if (DE_HANDLE_VALID(f->cube)) {
         de_gpu_wait_idle(f->dev);
         de_gpu_texture_destroy(f->dev, f->cube);
@@ -1066,7 +1069,7 @@ static void env_cube(lx *f, const f32 rgb[6][3]) {
                 for (u32 x = 0; x < s; ++x) {
                     u16 *t = (u16 *)(void *)(map + cp->off[m][k] + (u64)y * cp->pitch[m] + 8u * x);
                     for (u32 c = 0; c < 3; ++c)
-                        t[c] = f32_to_half(rgb[k][c]);
+                        t[c] = f32_to_half(rgb[3u * k + c]);
                     t[3] = f32_to_half(1.0f);
                 }
     }
@@ -1090,7 +1093,7 @@ static void env_cube(lx *f, const f32 rgb[6][3]) {
 }
 
 /* The environment of lx.cube with SH9 `sh` (NULL: zero), intensity and rotation. */
-static void env_set(lx *f, const f32 sh[9][3], f32 intensity, f32 rotation) {
+static void env_set(lx *f, const f32 *sh, f32 intensity, f32 rotation) { /* sh[3 k + c] */
     de__ibl_environment e;
     memset(&e, 0, sizeof e);
     e.valid = true;
@@ -1114,8 +1117,8 @@ static void env_uniform(lx *f, f32 l) {
         faces[k][0] = faces[k][1] = faces[k][2] = l;
     for (u32 c = 0; c < 3; ++c)
         sh[0][c] = (f32)(PI_D * l / SH_Y0);
-    env_cube(f, faces);
-    env_set(f, sh, 1.0f, 0.0f);
+    env_cube(f, &faces[0][0]);
+    env_set(f, &sh[0][0], 1.0f, 0.0f);
 }
 
 /* Planes of 2 x 2 patches of 1 m (mesh 1-based id). */
@@ -1213,7 +1216,7 @@ static void rotation(lx *f, de_gpu_backend b) {
               material_add(1.0f, 0.0f, 1.0f, 0.5f));
     const f32 faces[6][3] = {{4.0f, 0.5f, 0.5f}, {0.5f, 4.0f, 0.5f}, {0.5f, 0.5f, 4.0f},
                              {3.0f, 3.0f, 0.5f}, {0.3f, 0.3f, 0.3f}, {0.1f, 0.1f, 0.1f}};
-    env_cube(f, faces);
+    env_cube(f, &faces[0][0]);
     f32 sh[9][3];
     memset(sh, 0, sizeof sh);
     for (u32 c = 0; c < 3; ++c) {
@@ -1223,7 +1226,7 @@ static void rotation(lx *f, de_gpu_backend b) {
     f32 diffuse_mean[2] = {0, 0};
     for (u32 pass = 0; pass < 2; ++pass) {
         const f32 rot = pass == 0 ? 0.0f : (f32)(PI_D * 0.5);
-        env_set(f, (const f32(*)[3])sh, 1.0f, rot);
+        env_set(f, &sh[0][0], 1.0f, rot);
         lx_run(f);
         const lx_result *r = &f->res;
         u32 nd = 0, ns = 0, bad = 0;
@@ -1529,7 +1532,7 @@ static void deferred_forward(lx *f, de_gpu_backend b) {
     world_set(&f->w, 2, sq, at(2.5f, 0, 0), material_add(0.3f, 0.05f, 0.4f, 1.0f));
     const f32 faces[6][3] = {{4.0f, 0.5f, 0.5f}, {0.5f, 4.0f, 0.5f}, {0.5f, 0.5f, 4.0f},
                              {3.0f, 3.0f, 0.5f}, {0.3f, 0.3f, 0.3f}, {0.1f, 0.1f, 0.1f}};
-    env_cube(f, faces);
+    env_cube(f, &faces[0][0]);
     f32 sh[9][3];
     memset(sh, 0, sizeof sh);
     for (u32 c = 0; c < 3; ++c) {
@@ -1538,7 +1541,7 @@ static void deferred_forward(lx *f, de_gpu_backend b) {
         sh[2][c] = 0.7f;
         sh[6][c] = 0.2f;
     }
-    env_set(f, (const f32(*)[3])sh, 1.5f, 0.7f);
+    env_set(f, &sh[0][0], 1.5f, 0.7f);
     f->pre_exposure = 0.25f;
     lx_run(f);
     f->pre_exposure = 0.0f;
