@@ -23,8 +23,9 @@
  * the bytes are the sRGB values the harness compares). The models load first (the scenes name
  * their meshes, sub-assets the asset system knows once a model is in), then the scene with its
  * materials, textures and environment. Frames run (r.pipelined 0; the kick also flushes the GPU
- * uploads the loads wait for) until the image settles; the per-pixel median of the last three
- * frames is copied into the harness target.
+ * uploads the loads wait for) until the image settles: no pixel changes for three frames in a
+ * row, also under Metal shader validation (DENG-430). The last image is copied into the harness
+ * target.
  *
  * Known gaps the references hold (follow-ups, not threshold slack): deferred lighting does not
  * apply the Standard layers of opaque surfaces (DENG-429: the clearcoat, sheen, anisotropy and
@@ -66,12 +67,7 @@
 #define MG_FRAME_WAIT_NS (120ull * 1000000000ull)
 #define MG_MIN_FRAMES    6u   /* frames before the image may count as settled */
 #define MG_MAX_FRAMES    240u /* the image must settle before this */
-#define MG_SETTLED       3u   /* consecutive frames within the flicker budget (the median: 3) */
-/* The share of pixels that may still change between settled frames: textured surfaces of the
- * resolve flicker in small patches under Metal shader validation (MTL_SHADER_VALIDATION=1, which
- * the golden CTests set; DENG-430), about 0.6 % of the gallery's pixels. Without it the images
- * settle exactly. */
-#define MG_FLICKER_BUDGET 0.01
+#define MG_SETTLED       3u   /* consecutive frames in which no pixel changes */
 /* Furnace: the environment's radiance (1 nit x intensity 1) times the exposure of EV100 0. */
 #define MG_FURNACE_EXPECTED  (1.0 / 1.2)
 #define MG_FURNACE_TOLERANCE 0.02
@@ -113,7 +109,6 @@ typedef struct mg {
     de_load_handle model_load[MG_MODEL_COUNT];
     u32 pitch;
     u8 *now, *prev;
-    u8 *hist[MG_SETTLED]; /**< the last MG_SETTLED images (the result is their median) */
 } mg;
 
 static void mg_cvar(const char *name, const char *value) {
@@ -332,8 +327,6 @@ static void mg_close(mg *m) {
         de_gpu_texture_destroy(d, m->target);
     free(m->now);
     free(m->prev);
-    for (u32 i = 0; i < MG_SETTLED; ++i)
-        free(m->hist[i]);
     mg_cvar("r.pipelined", "1");
 }
 
@@ -359,15 +352,12 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     const size_t bytes = (size_t)m.pitch * ctx->height;
     m.now = (u8 *)calloc(bytes, 1);
     m.prev = (u8 *)calloc(bytes, 1);
-    for (u32 i = 0; i < MG_SETTLED; ++i)
-        m.hist[i] = (u8 *)calloc(bytes, 1);
     de_fp_env_init_thread();
     char cache[96];
     snprintf(cache, sizeof cache, "galcache:/%s", mg_backend_dir(ctx->backend));
     if (!de_path_exists(cache))
         (void)de_dir_create(cache);
-    if (m.now == NULL || m.prev == NULL || m.hist[0] == NULL || m.hist[1] == NULL ||
-        m.hist[2] == NULL ||
+    if (m.now == NULL || m.prev == NULL ||
         de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &m.tasks) != DE_OK ||
         de_type_registry_create(NULL, &m.types) != DE_OK ||
         de_world_create(&(de_world_desc){.types = m.types, .tasks = m.tasks}, &m.world) != DE_OK ||
@@ -463,10 +453,9 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     }
     camera->view = m.view;
 
-    /* Frames until the image settles: at most MG_FLICKER_BUDGET of the pixels change by more than
-     * one code value (light-list order comes from atomics, so the last bit may flicker anyway)
-     * for MG_SETTLED frames in a row. */
-    const u32 budget = (u32)(MG_FLICKER_BUDGET * (f64)ctx->width * (f64)ctx->height);
+    /* Frames until the image settles: no pixel changes by more than one code value (light-list
+     * order comes from atomics, so the last bit may flicker) for MG_SETTLED frames in a row. Before
+     * DENG-430 textured surfaces flickered here under Metal shader validation. */
     u32 settled = 0, k = 0, changed = 0;
     for (; k < MG_MAX_FRAMES && settled < MG_SETTLED; ++k) {
         if (!mg_frame(&m) || !mg_read(&m)) {
@@ -474,19 +463,15 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
             return;
         }
         changed = k > 0 ? mg_changed(&m) : ctx->width * ctx->height;
-        settled = k >= MG_MIN_FRAMES && changed <= budget ? settled + 1u : 0u;
-        memcpy(m.hist[k % MG_SETTLED], m.now, bytes);
+        settled = k >= MG_MIN_FRAMES && changed == 0u ? settled + 1u : 0u;
         u8 *t = m.prev;
         m.prev = m.now;
         m.now = t;
     }
-    /* The result: the per-byte median of the last MG_SETTLED images, so a patch that flickers in
-     * one of them (DENG-430) does not reach the comparison. */
-    for (size_t i = 0; i < bytes; ++i) {
-        const u8 a = m.hist[0][i], b = m.hist[1][i], c = m.hist[2][i];
-        const u8 lo = a < b ? a : b, hi = a < b ? b : a;
-        m.now[i] = c < lo ? lo : (c > hi ? hi : c);
-    }
+    /* m.prev holds the last image. */
+    u8 *last = m.prev;
+    m.prev = m.now;
+    m.now = last;
     printf("  %s settled after %u frames (%u pixels changed in the last one)\n", o->scene, k,
            changed);
     if (settled < MG_SETTLED) {
