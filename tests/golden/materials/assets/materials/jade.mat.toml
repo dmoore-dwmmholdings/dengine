@@ -1,0 +1,6 @@
+# jade (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.3, 0.75, 0.45]
+metallic = 0.0
+roughness = 0.3
+subsurface = 1.0
+subsurface_radius = [0.3, 0.8, 0.4]

@@ -1,0 +1,5 @@
+# backdrop (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.6, 0.6, 0.6]
+base_color_tex = "tex/checker"
+metallic = 0.0
+unlit = true

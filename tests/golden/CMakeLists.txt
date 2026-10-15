@@ -42,7 +42,8 @@ set(DE_GOLDEN_SCENE_SOURCES
     render/views/views_scenes.c
     visbuffer/vis_golden.c
     visbuffer/vis_golden.h
-    visbuffer/vis_scenes.c)
+    visbuffer/vis_scenes.c
+    materials/materials_scenes.c)
 
 add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
                          ${DE_GOLDEN_SCENE_SOURCES})
@@ -69,6 +70,13 @@ target_link_libraries(de_golden PRIVATE de_render de_ecs de_reflect de_task de_a
 # procedural meshes through the model importer (cook/importers/model/, part of de_cooker; with
 # DE_GOLDEN_COOK only, else they skip).
 target_include_directories(de_golden PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/visbuffer")
+# DENG-307: the materials gallery (materials/) runs the renderer and the asset system in SOURCE mode
+# over materials/assets/ (cooked on load with DE_GOLDEN_COOK only, else the scenes skip), with a
+# cook cache per backend in the build tree.
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_MATERIALS_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/materials/assets\""
+    "DE_GOLDEN_MATERIALS_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/materials_cache\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/materials_cache")
 if(TARGET de_gpu_d3d12)
     # D3D12: the Agility runtime next to the executable and its exports in it (DENG-285), and the
     # vendored WARP (test-only, third_party/README.md rule 10; de-golden is a test executable).

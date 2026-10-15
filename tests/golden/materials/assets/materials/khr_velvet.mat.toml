@@ -1,0 +1,6 @@
+# khr_velvet (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.25, 0.04, 0.08]
+metallic = 0.0
+roughness = 0.8
+sheen_color = [1.0, 0.45, 0.6]
+sheen_roughness = 0.4

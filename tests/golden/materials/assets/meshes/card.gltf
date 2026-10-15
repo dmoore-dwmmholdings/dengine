@@ -1,0 +1,111 @@
+{
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 9,
+   "max": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "min": [
+    -0.5,
+    -0.5,
+    0.0
+   ],
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 9,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 9,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 9,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5123,
+   "count": 24,
+   "type": "SCALAR"
+  }
+ ],
+ "asset": {
+  "generator": "dengine gen_assets.py (DENG-307)",
+  "version": "2.0"
+ },
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteLength": 108,
+   "byteOffset": 0
+  },
+  {
+   "buffer": 0,
+   "byteLength": 108,
+   "byteOffset": 108
+  },
+  {
+   "buffer": 0,
+   "byteLength": 144,
+   "byteOffset": 216
+  },
+  {
+   "buffer": 0,
+   "byteLength": 72,
+   "byteOffset": 360
+  },
+  {
+   "buffer": 0,
+   "byteLength": 48,
+   "byteOffset": 432
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 480,
+   "uri": "data:application/octet-stream;base64,AAAAvwAAAD8AAAAAAAAAAAAAAD8AAAAAAAAAPwAAAD8AAAAAAAAAvwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPwAAAAAAAAAAAAAAvwAAAL8AAAAAAAAAAAAAAL8AAAAAAAAAPwAAAL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAIA/AAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAIA/AAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAAA/AAAAAAAAgD8AAAAAAAAAAAAAAD8AAAA/AAAAPwAAgD8AAAA/AAAAAAAAgD8AAAA/AACAPwAAgD8AAIA/AAADAAEAAQADAAQAAQAEAAIAAgAEAAUAAwAGAAQABAAGAAcABAAHAAUABQAHAAgA"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "card",
+   "primitives": [
+    {
+     "attributes": {
+      "NORMAL": 1,
+      "POSITION": 0,
+      "TANGENT": 2,
+      "TEXCOORD_0": 3
+     },
+     "indices": 4
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "mesh": 0,
+   "name": "card"
+  }
+ ],
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}

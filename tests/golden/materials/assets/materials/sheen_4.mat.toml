@@ -1,0 +1,6 @@
+# sheen_4 (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.08, 0.08, 0.08]
+metallic = 0.0
+roughness = 0.9
+sheen_color = [1.0, 1.0, 1.0]
+sheen_roughness = 0.5

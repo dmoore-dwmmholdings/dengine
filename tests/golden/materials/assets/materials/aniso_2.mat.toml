@@ -1,0 +1,6 @@
+# aniso_2 (DENG-307 materials gallery; written by gen_assets.py)
+anisotropy = 0.8
+anisotropy_rotation = 0.0
+base_color = [0.95, 0.95, 0.95]
+metallic = 1.0
+roughness = 0.4

@@ -1,0 +1,6 @@
+# skin (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.85, 0.6, 0.5]
+metallic = 0.0
+roughness = 0.5
+subsurface = 1.0
+subsurface_radius = [1.0, 0.35, 0.2]

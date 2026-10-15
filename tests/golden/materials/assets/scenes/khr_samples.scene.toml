@@ -1,0 +1,323 @@
+# Khronos sample stand-ins (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -9.5, 1.3]
+rotation = [0.681998, 0.0, 0.0, 0.731354]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.733038
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 1.0
+rotation = 0.0
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.0, 0.0, 6.0]
+rotation = [0.32619, -0.102847, -0.282571, 0.896201]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_DIRECTIONAL"
+color = [1.0, 0.97, 0.92]
+intensity = 1.5
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [-4.6, 0.0, 2.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_00"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [-3.9, 0.0, 2.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_01"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [-3.2, 0.0, 2.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_02"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000015"
+[entity.DeTransform]
+position = [-4.6, 0.0, 1.9]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_10"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000016"
+[entity.DeTransform]
+position = [-3.9, 0.0, 1.9]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_11"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000017"
+[entity.DeTransform]
+position = [-3.2, 0.0, 1.9]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_12"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000018"
+[entity.DeTransform]
+position = [-4.6, 0.0, 1.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_20"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000019"
+[entity.DeTransform]
+position = [-3.9, 0.0, 1.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_21"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001a"
+[entity.DeTransform]
+position = [-3.2, 0.0, 1.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.6, 0.6, 0.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_coat_22"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001b"
+[entity.DeTransform]
+position = [-1.0, 0.3, 1.25]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.4, 1.2, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/khr_velvet"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001c"
+[entity.DeTransform]
+position = [-1.0, 0.85, 1.95]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.4, 0.25, 1.4]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/khr_velvet"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001d"
+[entity.DeTransform]
+position = [-1.6, 0.3, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.12, 0.12, 1.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/khr_velvet"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001e"
+[entity.DeTransform]
+position = [-0.4, 0.3, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.12, 0.12, 1.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/khr_velvet"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x000000000000001f"
+[entity.DeTransform]
+position = [1.4, 0.0, 2.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 0.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_irid_0"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000020"
+[entity.DeTransform]
+position = [2.35, 0.0, 2.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 0.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_irid_1"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000021"
+[entity.DeTransform]
+position = [3.3, 0.0, 2.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 0.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_irid_2"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000022"
+[entity.DeTransform]
+position = [-3.9, 0.0, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.85, 0.85, 0.85]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_trans_0"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000023"
+[entity.DeTransform]
+position = [-2.9, 0.0, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.85, 0.85, 0.85]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_trans_1"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000024"
+[entity.DeTransform]
+position = [-1.9, 0.0, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.85, 0.85, 0.85]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_trans_2"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000025"
+[entity.DeTransform]
+position = [-0.9, 0.0, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.85, 0.85, 0.85]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["mat/khr_trans_3"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000026"
+[entity.DeTransform]
+position = [-2.4, 1.2, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.4, 1.0, 1.4]
+[entity.DeMeshRenderer]
+mesh = "mesh/card#card"
+materials = ["mat/backdrop"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000027"
+[entity.DeTransform]
+position = [1.4, 0.0, 0.3]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.1, 1.1, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/cylinder#cylinder"
+materials = ["mat/khr_brushed"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000028"
+[entity.DeTransform]
+position = [3.3, 0.0, 0.3]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.1, 1.1, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/cylinder#cylinder"
+materials = ["mat/khr_plain_steel"]
+layer_mask = 1
+cast_shadows = false
+
+[[entity]]
+id = "0x0000000000000029"
+[entity.DeTransform]
+position = [0.0, 1.0, -0.9]
+rotation = [-0.707107, 0.0, 0.0, 0.707107]
+scale = [12.0, 1.0, 8.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/card#card"
+materials = ["mat/floor"]
+layer_mask = 1
+cast_shadows = false
