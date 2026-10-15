@@ -4,7 +4,9 @@
  * the material names is a dependency (de_asset_load_ctx_add_dependency), so the material is READY
  * only once its textures are, and fails with the first texture that fails (S07 fan-out). The
  * `ready` hook turns the texture IDs into de_texture handles: typed access is main-thread work,
- * and by then every texture has its slot. The GPU material tables are S12/S14.
+ * and by then every texture has its slot. The GPU scene packs the record into the material's
+ * parameter block (DENG-302); publishing and unloading bump the uploader's material epoch, so the
+ * scene re-checks its blocks in the next frame.
  */
 
 #include "render/loaders/loaders_internal.h"
@@ -48,6 +50,9 @@ static void standard_from(de_standard_material *s, const de_cooked_material_view
     s->attenuation_color = vec3(p->attenuation_color);
     s->attenuation_distance = p->attenuation_distance;
     s->diffuse_transmission = p->diffuse_transmission;
+    s->diffuse_transmission_color = vec3(p->diffuse_transmission_color); /* DENG-302 */
+    s->subsurface = p->subsurface;                                       /* DMAT v2 (DENG-302) */
+    s->subsurface_radius = vec3(p->subsurface_radius);
     s->anisotropy = p->anisotropy;
     s->anisotropy_rotation = p->anisotropy_rotation;
     s->iridescence = p->iridescence;
@@ -84,6 +89,7 @@ de_result de__material_load(de_asset_load_ctx *ctx) {
     m->flags = v.flags;
     m->alpha_mode = v.alpha_mode;
     m->params = v.params;
+    m->model_hash = v.model_hash;
     for (u32 i = 0; i < v.texture_count; ++i) {
         const de_cooked_material_tex *t = &v.textures[i];
         m->texture_ids[t->slot].hash = t->asset_id;
@@ -100,8 +106,10 @@ static void material_free(de_render_uploader *u, void *object) {
 void de__material_unload(void *object, void *user) {
     de_render_uploader *u = (de_render_uploader *)user;
     de_render_material *m = (de_render_material *)object;
-    if (m != NULL) /* after the frame fence (DENG-422) */
-        de__uploader_retire(u, &m->retire_, m, material_free);
+    if (m == NULL)
+        return;
+    de__uploader_materials_changed(u);                     /* DENG-302: its block loses READY */
+    de__uploader_retire(u, &m->retire_, m, material_free); /* after the frame fence (DENG-422) */
 }
 
 /* Main thread, with every texture READY: IDs to handles. */
@@ -123,5 +131,6 @@ de_result de__material_ready(void *object, void *user) {
         if (m->texture_ids[s].hash != 0 && !DE_HANDLE_VALID(m->textures[s]))
             return DE_FAIL_WRAP(DE_ERR_NOT_FOUND, "texture %016llx of the material has no handle",
                                 (unsigned long long)m->texture_ids[s].hash);
+    de__uploader_materials_changed(u); /* DENG-302: published (or reloaded) now */
     return DE_OK;
 }

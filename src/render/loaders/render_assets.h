@@ -59,8 +59,9 @@ typedef struct de_render_uploader de_render_uploader;
  * (de_asset_type_register), with loaders that create their GPU objects on `d`, and creates the
  * uploader they share (`*out`). In builds with the cooker (DE_HAS_COOKER: Debug and Dev) the
  * `texture` and `model` types also get their importers (de_texture_import, de_model_import), so
- * source assets cook in-process; `mesh` and `material` are sub-asset types of the model importer
- * and have none. The upload ring has `staging_ring_bytes` of the system's desc.
+ * source assets cook in-process; `mesh` is a sub-asset type of the model importer and has none;
+ * `material` is too, and has the `.mat.toml` importer (de_mat_toml_import, DENG-302). The upload
+ * ring has `staging_ring_bytes` of the system's desc.
  *
  * `a` (NULL = the heap) must be thread-safe; it holds the uploader and every runtime record.
  * Destroy the asset system first (its unloads use the uploader), then the uploader, then `d`.
@@ -245,7 +246,9 @@ typedef struct de_render_mesh {
     de__render_retire retire_; /**< internal: the retire list (DENG-422) */
 } de_render_mesh;
 
-/** A loaded `material` (DMAT): the CPU parameters; the GPU material tables are S12/S14. */
+/** A loaded `material` (DMAT): the CPU parameters. The GPU scene packs them into the material's
+ * parameter block (render/materials/material_params.h, DENG-302); de_material_set_params changes
+ * them in place (main thread). */
 typedef struct de_render_material {
     /** The parameters as de_render.h stores them, texture handles included. */
     de_standard_material standard;
@@ -261,6 +264,10 @@ typedef struct de_render_material {
     /** DENG-298: the material model id (de_material_model_id) when it is a game model's (5..31);
      * 0 = the built-in the parameters select (Unlit when `standard.unlit`, else Standard). */
     u32 model;
+    /** DENG-302: the model the cooked material names (DMAT v2 header word 28): 0 = none (`model`
+     * decides), else de_cooked_material_model_hash of the model's name, resolved against the
+     * renderer's models each time the block is packed (a game model may register later). */
+    u32 model_hash;
 } de_render_material;
 
 /** One node of a loaded model. */

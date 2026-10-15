@@ -323,3 +323,15 @@ if(TARGET de_render)
         lighting/exposure.c
         passes/output_basic.c)
 endif()
+
+# DENG-302: material instances (materials/material_instances.c: the 256-byte parameter block of
+# materials/material_params.h and shaders/materials/material_params.slang, the feature bits and
+# resolve permutations, the runtime instance pool, de_material_set_params and friends). The GPU
+# scene packs each referenced material's block (scene/gpu_scene.c); the `.mat.toml` importer is
+# cooker code (tools/cook/importers/material/).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        materials/material_params.h
+        materials/material_instances.h
+        materials/material_instances.c)
+endif()

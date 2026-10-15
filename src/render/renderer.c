@@ -15,6 +15,7 @@
 #include "render/lighting/lighting.h"
 #include "render/loaders/render_assets.h"
 #include "render/materials/brdf_luts.h"
+#include "render/materials/material_instances.h"
 #include "render/materials/material_models.h"
 #include "render/views_internal.h"
 #include "render/scene/gpu_scene.h"
@@ -55,6 +56,7 @@ static void renderer_free(de_renderer *r) {
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
+    de__material_instances_destroy(r->material_instances); /* DENG-302: after the GPU scene */
     if (r->uploader != NULL && !r->uploader_orphaned)
         de_render_uploader_destroy(r->uploader);
     if (r->graph != NULL)
@@ -242,6 +244,18 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         de__render_uploader_set_frame_fence(r->uploader, r->frame_fence);
     }
 
+    /* ---- DENG-302: material instances (asset records and runtime instances) ---- */
+    res =
+        de__material_instances_create(&(de__material_instances_desc){.allocator = a,
+                                                                     .assets = r->assets,
+                                                                     .uploader = r->uploader,
+                                                                     .models = r->material_models},
+                                      &r->material_instances);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: material instances");
+        goto fail;
+    }
+
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
     res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
                                                      .allocator = a,
@@ -249,7 +263,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
                                                      .uploader = r->uploader,
                                                      .initial_capacity[DE__GS_VIEWS] = DE__VIEW_MAX,
                                                      .builtin_scatter = true,
-                                                     .views_in_view_graphs = true},
+                                                     .views_in_view_graphs = true,
+                                                     .materials = r->material_instances,
+                                                     .material_models = r->material_models},
                                &r->gpu_scene);
     if (res == DE_OK)
         res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN + 1, "gpu_scene.view",
@@ -333,6 +349,7 @@ void de__renderer_kick_prepare(de_renderer *r) {
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
+    r->material_instances_live = de__material_instances_live(r->material_instances); /* DENG-302 */
     /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */
     de__lighting_prepare_environment(de__views_lighting(r), r->assets, de__render_world_last(r));
     if (gr != DE_OK)
@@ -413,6 +430,7 @@ de_result de_renderer_render_frame(de_renderer *r) {
     const de_result vr = de__views_render(r, arena, target, final_access, n);
     de__gpu_scene_views_end(r->gpu_scene, r->frame_fence, n + 1u); /* DENG-177 */
     de__gpu_scene_fill_stats(r->gpu_scene, &r->stats);
+    de__material_fill_stats(r, &r->stats); /* DENG-302 */
     r->frame_index = n + 1u;
     if (DE_HANDLE_VALID(r->swapchain)) {
         const de_result p = de_gpu_swapchain_present(r->dev, r->swapchain);

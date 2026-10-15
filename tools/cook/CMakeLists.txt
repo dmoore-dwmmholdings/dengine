@@ -190,3 +190,10 @@ target_sources(de_cooker PRIVATE importers/engine_importers.c)
 # tool world, so the prefabs of glTF models keep DeMeshRenderer. Not in headless builds (no
 # de_render; cook_cmd.c tests DE_HAS_RENDER).
 target_link_libraries(de_cook_cmd PRIVATE "$<TARGET_NAME_IF_EXISTS:de_render>")
+
+# DENG-302: the `material` importer for `.mat.toml` files (importers/material/): a material written
+# by hand, cooked to DMAT v2 (render/formats/de_cooked_material.h); its texture asset IDs are cook
+# dependencies. TOML through core/de_toml_internal.h (de_core); de_tp_tomlc17 for its header.
+target_sources(de_cooker PRIVATE
+    importers/material/mat_toml_import.h
+    importers/material/mat_toml_import.c)

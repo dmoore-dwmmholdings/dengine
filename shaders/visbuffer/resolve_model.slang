@@ -99,7 +99,7 @@ public DeGpuMaterial de_resolve_material_of(uint slot, DeSceneConstants sc)
         m.clearcoat = float4(0.0, 0.0, 1.5, 0.0);
         m.extra = float4(0.0, 0.0, 0.0, 0.0);
         m.flags = 0u;
-        m.texcoord_bits = 0u;
+        m.features = 0u;
         m.model = DE_GPU_MATERIAL_MODEL_STANDARD;
         m.textures[0] = uint4(0, 0, 0, 0);
         m.textures[1] = uint4(0, 0, 0, 0);
@@ -113,8 +113,8 @@ public DeGpuMaterial de_resolve_material_of(uint slot, DeSceneConstants sc)
 /// The bindless index of texture slot `s` of `m` (0 = none) and the UV set it samples.
 public uint de_resolve_texture(DeGpuMaterial m, uint s, out uint set)
 {
-    set = (m.texcoord_bits >> s) & 1u;
-    return m.textures[s >> 2][s & 3u];
+    set = de_material_texcoord(m, s);
+    return de_material_texture(m, s);
 }
 
 /// Samples texture slot `s` of `m` at the point; `fallback` without a texture.

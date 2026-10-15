@@ -5,6 +5,8 @@
 #include "render/materials/material_models.h"
 
 #include "platform/de_atomic.h"
+#include "render/formats/de_cooked_material.h"
+#include "render/materials/material_instances.h"
 #include "render/renderer_internal.h"
 #include "render/scene/gpu_scene.h"
 
@@ -98,6 +100,14 @@ u32 de__material_models_find(const de__material_models *m, const char *name) {
     const u32 n = de__material_models_count(m);
     for (u32 i = 0; i < n; ++i)
         if (strcmp(m->entries[i].name, name) == 0)
+            return i;
+    return DE__MATERIAL_MODEL_MAX;
+}
+
+u32 de__material_models_find_hash(const de__material_models *m, u32 hash) {
+    const u32 n = de__material_models_count(m);
+    for (u32 i = 0; hash != 0 && i < n; ++i)
+        if (de_cooked_material_model_hash(m->entries[i].name) == hash)
             return i;
     return DE__MATERIAL_MODEL_MAX;
 }
@@ -226,6 +236,8 @@ de_material_model de_material_model_register(de_renderer *r, const char *name, d
     if (de__material_models_add(r->material_models, name, &code, &refl, &id) != DE_OK)
         return none;
     DE_INFO(r->log, "material model \"%s\" registered with id %u", name, id);
+    /* DENG-302: materials that name it (DMAT model hash) resolve to it from the next kick. */
+    de__material_instances_touch(r->material_instances);
     return (de_material_model){id + 1u};
 }
 

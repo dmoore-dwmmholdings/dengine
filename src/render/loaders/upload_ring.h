@@ -170,7 +170,18 @@ struct de_render_uploader {
     u32 retire_pending;
     u64 retire_freed;
     u64 test_frame_cap; /**< tests: completed frame-fence value seen is at most this */
+    /* DENG-302: bumped whenever the GPU material blocks may need a repack (a material published,
+     * reloaded or unloaded; a texture reloaded or unloaded). The GPU scene re-checks every
+     * referenced material in the frame after a change (render/materials/material_instances.h).
+     * Any thread. */
+    de_atomic_u64 material_epoch;
 };
+
+/** DENG-302: a material or texture changed (de_render_uploader.material_epoch). Any thread. */
+static inline void de__uploader_materials_changed(de_render_uploader *u) {
+    if (u != NULL)
+        (void)de_atomic_fetch_add_u64(&u->material_epoch, 1u, DE_ATOMIC_RELEASE);
+}
 
 /** Unload of a render asset object (the four types' `unload`): frees it with `free_fn` now, or
  * puts it on the retire list (render_assets.h, DENG-422). Any thread. */

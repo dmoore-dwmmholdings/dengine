@@ -53,7 +53,7 @@ bool alpha_test(DeSceneConstants sc, uint material, float2 uv, uint sampler)
         return true;
     DeGpuMaterial m = de_robuffer<DeGpuMaterial>(sc.materials)[material];
     float a = m.base_color.w;
-    uint tex = m.textures[0].x; // DE_VIS_ALPHA_TEX_BASE_COLOR
+    uint tex = de_material_texture(m, 0); // DE_VIS_ALPHA_TEX_BASE_COLOR
     if (tex != DE_BINDLESS_INVALID)
         a *= de_tex2d(tex).Sample(de_sampler(sampler), uv).a;
     return a >= m.pbr.w; // alpha_cutoff

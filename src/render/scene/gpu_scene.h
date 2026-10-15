@@ -16,9 +16,10 @@
  *              mesh and material slots, layer mask, flags, entity bits for picking.
  *   MESHES     one entry per mesh handle some instance uses (refcounted): the bindless indices of
  *              the mesh buffers, counts, quantization, bounds and the LOD table (DENG-105 records).
- *   MATERIALS  one entry per material handle some instance uses: de_standard_material packed with
- *              its textures' bindless indices. Provisional: S14 (DENG-302) replaces the layout,
- *              and the packing is its own function (pack_material) so that edit stays small.
+ *   MATERIALS  one entry per material handle some instance uses: its parameter block (DENG-302,
+ *              render/materials/material_params.h, packed by de__material_pack): the model, the
+ *              feature bits, the Standard parameters and the textures' bindless indices. An
+ *              instance's empty material slot takes its mesh's default material for that submesh.
  *   LIGHTS     one entry per render-world light slot: transform rows, colour, the DeLight
  *              parameters (pack_light; S14 DENG-303 changes it).
  *   VIEWS      the scene constants: one entry per view slot (de__gpu_scene_set_view): the tables'
@@ -42,9 +43,14 @@
  * Uploads. update() takes the render world's dirty and removed lists (every slot after
  * `origin_changed`, and in the first frame) and refreshes the mesh, material and view entries
  * (they are packed and compared with a CPU copy each frame, so a hot reload or a texture that
- * finishes loading updates them). add_passes() packs every changed entry straight into DENG-105's
- * upload ring (de__uploader_stage: the renderer's uploader, or the scene's own ring without an
- * asset system) and adds up to three passes on DE_QUEUE_GRAPHICS:
+ * finishes loading updates them). DENG-302: with a material instance pool (the renderer), only the
+ * material blocks marked since the last update are packed (de__gpu_scene_material_changed, new
+ * slots), unless the pool's epoch moved (a material or texture published, reloaded or unloaded):
+ * then every referenced block is re-checked once.
+ *
+ * add_passes() packs every changed entry straight into DENG-105's upload ring (de__uploader_stage:
+ * the renderer's uploader, or the scene's own ring without an asset system) and adds up to three
+ * passes on DE_QUEUE_GRAPHICS:
  *   gpu_scene.grow     a table that grew: the old buffer is copied into the new one on the GPU
  *   gpu_scene.upload   runs of at least DE__GS_COPY_MIN_RUN changed entries: copy_buffer from the
  *                      ring; shorter runs: their entries and slots into GPU_ONLY scratch buffers
@@ -79,6 +85,8 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_render.h>
 
+#include "render/materials/material_params.h"
+
 #include <stddef.h>
 
 DE_EXTERN_C_BEGIN
@@ -105,8 +113,12 @@ enum {
 };
 /** DeGpuMesh.flags */
 enum { DE__GS_MESH_READY = 1u, DE__GS_MESH_MESHLETS = 2u };
-/** DeGpuMaterial.flags */
-enum { DE__GS_MATERIAL_READY = 1u, DE__GS_MATERIAL_DOUBLE_SIDED = 2u, DE__GS_MATERIAL_UNLIT = 4u };
+/** DeGpuMaterial.flags (render/materials/material_params.h, DENG-302) */
+enum {
+    DE__GS_MATERIAL_READY = DE__MATERIAL_FLAG_READY,
+    DE__GS_MATERIAL_DOUBLE_SIDED = DE__MATERIAL_FLAG_DOUBLE_SIDED,
+    DE__GS_MATERIAL_UNLIT = DE__MATERIAL_FLAG_UNLIT
+};
 /** DeGpuMaterial.model (DENG-237): the built-in material models (DENG-2 Q12); game models get the
  * ids after them (S14 DENG-298). At most DE__GS_MATERIAL_MODELS (one u32 bit each). */
 enum {
@@ -122,18 +134,9 @@ enum { DE__GS_LIGHT_LIVE = 1u, DE__GS_LIGHT_CAST_SHADOWS = 2u };
 /** Sizes of the arrays in the entries. */
 #define DE__GS_INSTANCE_MATERIALS 8u
 #define DE__GS_MESH_LODS          8u
-#define DE__GS_MATERIAL_TEXTURES  20u
+#define DE__GS_MATERIAL_TEXTURES  DE__MATERIAL_TEXTURES
 
-/* Field types. Each is 4 bytes aligned, so the C layout is the packed one; the 16-byte types are
- * placed at multiples of 16 (checked below), which is where std430, Metal and D3D12 put them. */
-typedef u32 de__gs_uint;
-typedef f32 de__gs_float;
-typedef struct de__gs_uint4 {
-    u32 v[4];
-} de__gs_uint4;
-typedef struct de__gs_float4 {
-    f32 v[4];
-} de__gs_float4;
+/* Field types: de__gs_uint, de__gs_float, de__gs_uint4, de__gs_float4 (material_params.h). */
 
 /*
  * The one definition of each entry: F(c_type, slang_type, name, array_dims). It declares the C
@@ -189,26 +192,8 @@ typedef struct de__gs_float4 {
     F(de__gs_uint4, uint4, stream_format, [2])                                                     \
     F(de__gs_mesh_lod, DeGpuMeshLod, lods, [8])
 
-#define DE__GS_MATERIAL_FIELDS(F)                                                                  \
-    F(de__gs_float4, float4, base_color, )                                                         \
-    F(de__gs_float4, float4, emissive, )                                                           \
-    F(de__gs_float4, float4, pbr, )                                                                \
-    F(de__gs_float4, float4, specular, )                                                           \
-    F(de__gs_float4, float4, clearcoat, )                                                          \
-    F(de__gs_float4, float4, sheen, )                                                              \
-    F(de__gs_float4, float4, volume, )                                                             \
-    F(de__gs_float4, float4, extra, )                                                              \
-    F(de__gs_float4, float4, iridescence, )                                                        \
-    F(de__gs_float4, float4, subsurface, )                                                         \
-    F(de__gs_uint, uint, alpha_mode, )                                                             \
-    F(de__gs_uint, uint, flags, )                                                                  \
-    F(de__gs_uint, uint, texcoord_bits, )                                                          \
-    F(de__gs_uint, uint, cooked_flags, )                                                           \
-    F(de__gs_uint4, uint4, textures, [5])                                                          \
-    F(de__gs_uint, uint, model, )                                                                  \
-    F(de__gs_uint, uint, reserved0, )                                                              \
-    F(de__gs_uint, uint, reserved1, )                                                              \
-    F(de__gs_uint, uint, reserved2, )
+/* DeGpuMaterial: the material parameter block (DENG-302), defined in material_params.h. */
+#define DE__GS_MATERIAL_FIELDS(F) DE__MATERIAL_PARAMS_FIELDS(F)
 
 #define DE__GS_LIGHT_FIELDS(F)                                                                     \
     F(de__gs_float4, float4, transform, [3])                                                       \
@@ -257,10 +242,8 @@ typedef struct de__gs_instance {
 typedef struct de__gs_mesh {
     DE__GS_MESH_FIELDS(DE__GS_DECLARE_FIELD)
 } de__gs_mesh;
-/** DeGpuMaterial (272 bytes, provisional; DENG-237 appended `model`, which S14 DENG-302 keeps). */
-typedef struct de__gs_material {
-    DE__GS_MATERIAL_FIELDS(DE__GS_DECLARE_FIELD)
-} de__gs_material;
+/** DeGpuMaterial (256 bytes): the material parameter block (material_params.h, DENG-302). */
+typedef de__material_params de__gs_material;
 /** DeGpuLight (112 bytes). */
 typedef struct de__gs_light {
     DE__GS_LIGHT_FIELDS(DE__GS_DECLARE_FIELD)
@@ -274,7 +257,6 @@ typedef struct de__gs_view {
 DE_STATIC_ASSERT(sizeof(de__gs_mesh_lod) == 32, "DeGpuMeshLod is 32 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_instance) == 208, "DeGpuInstance is 208 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_mesh) == 480, "DeGpuMesh is 480 bytes");
-DE_STATIC_ASSERT(sizeof(de__gs_material) == 272, "DeGpuMaterial is 272 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_light) == 112, "DeGpuLight is 112 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_view) == 432, "DeSceneConstants is 432 bytes");
 DE_STATIC_ASSERT(offsetof(de__gs_instance, mesh) == 144 &&
@@ -282,9 +264,6 @@ DE_STATIC_ASSERT(offsetof(de__gs_instance, mesh) == 144 &&
                  "DeGpuInstance layout");
 DE_STATIC_ASSERT(offsetof(de__gs_mesh, position_offset) == 48 && offsetof(de__gs_mesh, lods) == 224,
                  "DeGpuMesh layout");
-DE_STATIC_ASSERT(offsetof(de__gs_material, alpha_mode) == 160 &&
-                     offsetof(de__gs_material, textures) == 176,
-                 "DeGpuMaterial layout");
 DE_STATIC_ASSERT(offsetof(de__gs_light, kind) == 96, "DeGpuLight layout");
 DE_STATIC_ASSERT(offsetof(de__gs_view, camera_position) == 320 &&
                      offsetof(de__gs_view, instances) == 384,
@@ -414,6 +393,10 @@ typedef struct de__gpu_scene_assets {
     /** The sampled bindless index of `t`, or DE_GPU_BINDLESS_INVALID while it is not loaded. */
     u32 (*texture_bindless)(void *user, de_texture t);
     void *user;
+    /** DENG-302, optional: the default material of submesh `submesh` of READY mesh `mesh` (an
+     * instance's empty material slot takes it); invalid for none. NULL: empty slots stay empty
+     * (DE_GPU_NONE). The asset-system resolver uses the mesh record's submesh material IDs. */
+    de_material (*default_material)(void *user, de_mesh mesh, u32 submesh);
 } de__gpu_scene_assets;
 
 /** de__gpu_scene_create settings. `(desc){0}` with a device is valid. */
@@ -453,6 +436,14 @@ typedef struct de__gpu_scene_desc {
      * give it initial_capacity[DE__GS_VIEWS] slots.
      */
     bool views_in_view_graphs;
+    /**
+     * DENG-302: the material instance pool (the renderer's). Material records come from it
+     * (asset materials and runtime instances), blocks are packed only when marked or when its
+     * epoch moves, and the DMAT model names resolve through `material_models`. NULL: the records
+     * come from `assets` / `resolver`, and every referenced block is packed each frame.
+     */
+    struct de__material_instances *materials;
+    const struct de__material_models *material_models;
 } de__gpu_scene_desc;
 
 /** One view's matrices for its scene constants (de__gpu_scene_set_view). */
@@ -486,6 +477,14 @@ typedef struct de__gpu_scene_stats {
     /** DENG-236: referenced materials that are READY and alpha-tested (alpha_mode mask), as the
      * last update packed them. 0: the alpha-tested raster adds no pass. */
     u32 mask_materials;
+    /** DENG-302: material blocks the last update packed (marked, new or re-checked). */
+    u32 material_packs;
+    /** DENG-302: READY referenced materials whose resolve permutation or model changed in the
+     * last update (de__material_permutation_of). */
+    u32 permutation_switches;
+    /** DENG-302: the resolve permutation each model's tiles use this frame: the largest of its
+     * READY referenced materials' (0 without any). */
+    u32 material_permutation[DE__GS_MATERIAL_MODELS];
 } de__gpu_scene_stats;
 
 /** A table as readers see it. */
@@ -575,6 +574,17 @@ void de__gpu_scene_fill_stats(const de__gpu_scene *gs, de_render_stats *s);
 u32 de__gpu_scene_mesh_slot(const de__gpu_scene *gs, de_mesh m);
 /** The material slot of `m` (DE__GS_NONE when no instance uses it). */
 u32 de__gpu_scene_material_slot(const de__gpu_scene *gs, de_material m);
+
+/**
+ * DENG-302: material `m`'s parameters changed (de_material_set_params, an instance destroyed):
+ * its block is packed at the next update, if an instance uses it. Main thread (update's thread),
+ * any time between updates. NULL `gs` ok.
+ */
+void de__gpu_scene_material_changed(de__gpu_scene *gs, de_material m);
+
+/** DENG-302: the resolve permutation the tiles of `model` use this frame (index into
+ * de__material_permutations), as the last update chose it. Thread that renders. */
+u32 de__gpu_scene_material_permutation(const de__gpu_scene *gs, u32 model);
 /** True when the scene was created with scatter pipelines. */
 bool de__gpu_scene_has_scatter(const de__gpu_scene *gs);
 
