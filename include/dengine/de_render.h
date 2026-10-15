@@ -493,7 +493,47 @@ typedef struct de_standard_material {
     f32 alpha_cutoff;
     u32 alpha_mode; /* opaque, mask, blend */
     bool double_sided, unlit;
+    /* DENG-302: KHR_materials_diffuse_transmission's colour factor, linear (cooked default white;
+     * a zeroed struct is black). */
+    de_vec3 diffuse_transmission_color;
 } de_standard_material;
+
+/* ---------- Material instances (SPEC §12.6; DENG-302) ----------
+ * Every material is a parameter block in one bindless buffer: a loaded `material` asset (cooked
+ * from a model or a `.mat.toml` file), or a runtime instance, a copy of another material for
+ * per-entity tweaks. Changing parameters never creates or rebuilds a pipeline: the renderer
+ * uploads the changed blocks at the next frame, and a change of the features a material uses
+ * (clearcoat 0 -> 0.5) selects another of the shader permutations compiled when the renderer was
+ * made (de_render_stats.permutations_per_model, material_permutation_switches). All four are
+ * main-thread calls, between frames; the change shows from the next frame on.
+ */
+
+/**
+ * Sets every parameter of material `m` (READY asset or runtime instance) to `*params`, textures
+ * included: the six texture fields replace those slots (zero clears one; the caller keeps those
+ * textures loaded); slots de_standard_material has no field for keep their textures. `unlit`
+ * switches a built-in material between the Standard and Unlit models. A hot reload of an asset
+ * replaces what this set with the cooked values.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `r` or `params`, an invalid or stale `m`, an
+ *         `alpha_mode` above 2); DE_ERR_BUSY (the asset is not loaded yet).
+ */
+DE_API de_result de_material_set_params(de_renderer *r, de_material m,
+                                        const de_standard_material *params);
+/** The parameters of material `m` into `*out` (as de_material_set_params takes them).
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_BUSY (not loaded). */
+DE_API de_result de_material_get_params(de_renderer *r, de_material m, de_standard_material *out);
+/**
+ * A runtime instance of READY material `base`: a copy of its parameters, textures and model that
+ * de_material_set_params changes without touching `base`. Use it like any material
+ * (DeMeshRenderer.materials). It does not keep `base` or its textures loaded. At most 16384
+ * instances are alive at once.
+ * @return the instance; invalid on failure, with the reason in the error context (NULL `r`, an
+ *         invalid `base`, DE_ERR_BUSY for a `base` not loaded yet, DE_ERR_OUT_OF_MEMORY).
+ */
+DE_API de_material de_material_create_instance(de_renderer *r, de_material base);
+/** Destroys runtime instance `m` (its handle becomes stale; instances that still use it draw the
+ * default material). Not for asset materials (release their load handles). */
+DE_API void de_material_destroy_instance(de_renderer *r, de_material m);
 
 /* ---------- 2D ---------- */
 typedef enum de_plane_2d { DE_PLANE_SIDE_XZ, DE_PLANE_TOP_XY } de_plane_2d;
@@ -627,6 +667,13 @@ typedef struct de_render_stats {
     u32 gpu_scene_meshes;       /**< meshes the instances use */
     u32 gpu_scene_materials;    /**< materials the instances use */
     u64 gpu_scene_gpu_bytes;    /**< GPU memory of the scene tables and scratch buffers */
+    /* Materials (DENG-302), written at each kick: */
+    u32 permutations_per_model[32]; /**< resolve permutations compiled per model id (0 = Standard;
+                                       sprite, terrain, water share Standard's) */
+    u32 material_permutation_switches; /**< materials whose permutation changed at the last kick */
+    u32 material_pipelines; /**< material pipelines created so far (permutations + game models) */
+    u32 material_uploads;   /**< material parameter blocks the last frame uploaded */
+    u32 material_instances; /**< live runtime instances (de_material_create_instance) */
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 

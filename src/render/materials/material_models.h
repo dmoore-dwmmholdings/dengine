@@ -97,6 +97,9 @@ u32 de__material_models_count(const de__material_models *m);
 const char *de__material_models_name(const de__material_models *m, u32 id);
 /** The id of the model called `name`, or DE__MATERIAL_MODEL_MAX. Any thread. */
 u32 de__material_models_find(const de__material_models *m, const char *name);
+/** DENG-302: the id of the model whose name has DMAT model hash `hash`
+ * (de_cooked_material_model_hash), or DE__MATERIAL_MODEL_MAX (also for 0). Any thread. */
+u32 de__material_models_find_hash(const de__material_models *m, u32 hash);
 /** The resolve pipeline of game model `id`; invalid for a built-in or free id (NULL `m` ok). Any
  * thread. */
 de_gpu_pipeline de__material_models_resolve_pipeline(const de__material_models *m, u32 id);

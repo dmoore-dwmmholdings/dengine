@@ -170,6 +170,12 @@ struct de_renderer {
     /* DENG-299: the Standard model's energy LUT (materials/brdf_luts.h), made at create;
      * de__renderer_brdf_lut gives its bindless index. */
     struct de__brdf_luts *brdf_luts;
+
+    /* DENG-302: material instances (materials/material_instances.h): the asset materials' records
+     * and the runtime instances the GPU scene packs into parameter blocks; made before the GPU
+     * scene. */
+    struct de__material_instances *material_instances;
+    u32 material_instances_live; /**< live runtime instances at the last kick (stats) */
 };
 
 /* ---------- Settings (settings.c) ---------- */

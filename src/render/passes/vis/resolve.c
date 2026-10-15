@@ -35,6 +35,7 @@
 #include "render/passes/vis/vis_stages.h"
 
 #include "render/materials/material_models.h"
+#include "render/materials/material_params.h"
 #include "render/passes/vis/gbuffer.h"
 
 #include <stdio.h>
@@ -69,7 +70,11 @@ typedef struct rs_view {
 } rs_view;
 
 typedef struct rs_state {
-    de__vis_kernel clear, feedback_clear, standard, unlit;
+    de__vis_kernel clear, feedback_clear, unlit;
+    /* DENG-302: the Standard resolve permutations (de__material_permutations), smallest first;
+     * the last one has every feature. */
+    de__vis_kernel standard[DE__MATERIAL_PERMUTATIONS_MAX];
+    u32 standard_count;
     de_gpu_sampler sampler;
     u32 sampler_bindless;
     u32 feedback_capacity;
@@ -116,7 +121,8 @@ static void state_free(de__vis_shared *s, rs_state *st) {
         view_release(s, &st->views[i]);
     de__vis_kernel_destroy(s, &st->clear);
     de__vis_kernel_destroy(s, &st->feedback_clear);
-    de__vis_kernel_destroy(s, &st->standard);
+    for (u32 i = 0; i < DE__MATERIAL_PERMUTATIONS_MAX; ++i)
+        de__vis_kernel_destroy(s, &st->standard[i]);
     de__vis_kernel_destroy(s, &st->unlit);
     if (DE_HANDLE_VALID(st->sampler))
         de_gpu_sampler_destroy(s->dev, st->sampler);
@@ -148,10 +154,17 @@ de_result de__vis_resolve_init(de__vis_shared *s) {
                       : DE_FAIL_WRAP(DE_ERR_INTERNAL, "vis: resolve sampler");
     if (r == DE_OK) {
         st->sampler_bindless = de_gpu_sampler_bindless(s->dev, st->sampler);
-        static const char *const k_entries[4] = {"cs_resolve_clear", "cs_feedback_clear",
-                                                 "cs_resolve_standard", "cs_resolve_unlit"};
+        /* DENG-302: every Standard permutation is made now (pre-warmed), so a material's
+         * features crossing to another permutation never creates a pipeline. */
+        u32 nperm = 0;
+        const de__material_permutation *perm =
+            de__material_permutations(DE__GS_MATERIAL_MODEL_STANDARD, &nperm);
+        const char *entries[3u + DE__MATERIAL_PERMUTATIONS_MAX] = {
+            "cs_resolve_clear", "cs_feedback_clear", "cs_resolve_unlit"};
+        for (u32 i = 0; i < nperm; ++i)
+            entries[3u + i] = perm[i].entry;
         de__engine_shader_code code;
-        r = de__vis_shader_load(s, "vis_resolve", k_entries, 4, &code);
+        r = de__vis_shader_load(s, "vis_resolve", entries, 3u + nperm, &code);
         if (r == DE_OK) {
             static const u32 g8[3] = {8u, 8u, 1u}, g64[3] = {64u, 1u, 1u};
             const u32 pb = (u32)sizeof(rs_params);
@@ -160,10 +173,13 @@ de_result de__vis_resolve_init(de__vis_shared *s) {
                 r = de__vis_kernel_create(s, &code, 1, "vis feedback clear", g64, pb,
                                           &st->feedback_clear);
             if (r == DE_OK)
-                r = de__vis_kernel_create(s, &code, 2, "vis resolve standard", g64, pb,
-                                          &st->standard);
-            if (r == DE_OK)
-                r = de__vis_kernel_create(s, &code, 3, "vis resolve unlit", g64, pb, &st->unlit);
+                r = de__vis_kernel_create(s, &code, 2, "vis resolve unlit", g64, pb, &st->unlit);
+            for (u32 i = 0; i < nperm && r == DE_OK; ++i) {
+                char name[64];
+                snprintf(name, sizeof name, "vis resolve standard %u", i);
+                r = de__vis_kernel_create(s, &code, 3u + i, name, g64, pb, &st->standard[i]);
+            }
+            st->standard_count = r == DE_OK ? nperm : 0u;
             de__engine_shader_code_free(&code);
         }
     }
@@ -249,7 +265,8 @@ typedef struct rs_pass {
     de_gpu_device *dev;
     rs_state *st;
     const de__material_models
-        *models; /**< game models' resolve pipelines (DENG-298); may be NULL */
+        *models;                     /**< game models' resolve pipelines (DENG-298); may be NULL */
+    u8 perm[DE__GS_MATERIAL_MODELS]; /**< DENG-302: each built-in model's Standard permutation */
     rs_params pc;
     u32 groups_x, groups_y;
     de_rg_resource ids, lists, args, scene, visible, feedback, counters, debug_pos, debug_uv;
@@ -306,9 +323,13 @@ static void resolve_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user)
         /* DENG-298: a game model's own kernel (de_material_model_register), Unlit's, else the
          * Standard one (Standard and the built-ins not implemented yet). */
         de_gpu_pipeline pipe = de__material_models_resolve_pipeline(p->models, m);
-        if (!DE_HANDLE_VALID(pipe))
-            pipe =
-                m == DE__GS_MATERIAL_MODEL_UNLIT ? p->st->unlit.pipeline : p->st->standard.pipeline;
+        if (!DE_HANDLE_VALID(pipe)) {
+            /* DENG-302: the smallest Standard permutation covering this model's materials. */
+            const u32 k =
+                p->perm[m] < p->st->standard_count ? p->perm[m] : p->st->standard_count - 1u;
+            pipe = m == DE__GS_MATERIAL_MODEL_UNLIT ? p->st->unlit.pipeline
+                                                    : p->st->standard[k].pipeline;
+        }
         pc.model = m;
         de_gpu_cmd_set_pipeline(cmd, pipe);
         de_gpu_cmd_push_constants(cmd, &pc, (u32)sizeof pc);
@@ -410,6 +431,11 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
                            .flags = debug ? RS_DEBUG : 0u},
                     .rb = pv->rb,
                     .rb_offset = (u64)ring * st->entry_bytes};
+    /* DENG-302: this frame's permutations (chosen at the kick; no GPU scene: every feature). */
+    for (u32 m = 0; m < DE__GS_MATERIAL_MODELS; ++m)
+        base.perm[m] =
+            (u8)(vc->gpu_scene != NULL ? de__gpu_scene_material_permutation(vc->gpu_scene, m)
+                                       : (st->standard_count != 0 ? st->standard_count - 1u : 0u));
     /* Each pass names only the resources it declares (de_rg_* need a declared access). */
     rs_pass b_clear = base;
     memcpy(b_clear.targets, vc->gbuffer, sizeof b_clear.targets);

@@ -7,7 +7,7 @@
  *   model     de_model_import (glTF, GLB, FBX -> DMDL plus texture, material, mesh, skeleton,
  *             clip and prefab sub-assets, which the model depends on)
  *   mesh      none: sub-assets of models (DMSH v2)
- *   material  none: sub-assets of models (DMAT)
+ *   material  de_mat_toml_import (`.mat.toml` -> DMAT, DENG-302); also sub-assets of models
  *
  * The model loader keeps the node table and, in `ready` (main thread, every sub-asset READY),
  * resolves the mesh, material and prefab IDs to handles. A model's sub-asset dependencies come
@@ -29,6 +29,7 @@
 #include <dengine/de_memory.h>
 
 #if DE_HAS_COOKER
+#include "cook/importers/material/mat_toml_import.h"
 #include "cook/importers/model/model_import.h"
 #include "cook/importers/texture/texture_import.h"
 #endif
@@ -217,6 +218,8 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
         td[0].importer_version = DE_TEXTURE_IMPORTER_VERSION;
         td[3].import = de_model_import;
         td[3].importer_version = DE_MODEL_IMPORTER_VERSION;
+        td[2].import = de_mat_toml_import; /* DENG-302 */
+        td[2].importer_version = DE_MAT_TOML_IMPORTER_VERSION;
     }
 #else
     td[0].extensions = k_texture_exts;

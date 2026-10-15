@@ -48,8 +48,8 @@ public static const uint DE_STD_TEX_DIFFUSE_TRANSMISSION_COLOR = 15; // sRGB col
 
 /// Sets the transmission inputs of `s` from the material record alone (lighting): transmission
 /// (DeGpuMaterial.clearcoat.w), thickness (extra.x, object space; no instance scale here),
-/// attenuation (volume), diffuse transmission (extra.y; its colour white), and the TRANSMISSION
-/// + FORWARD, VOLUME and DIFFUSE_TRANSMISSION features.
+/// attenuation (volume), diffuse transmission (extra.y; its colour the record's, DENG-302), and
+/// the TRANSMISSION + FORWARD, VOLUME and DIFFUSE_TRANSMISSION features.
 public void de_transmission_from_material(inout SurfaceData s, DeGpuMaterial m)
 {
     s.transmission = saturate(m.clearcoat.w);
@@ -57,7 +57,7 @@ public void de_transmission_from_material(inout SurfaceData s, DeGpuMaterial m)
     s.attenuation_color = m.volume.rgb;
     s.attenuation_distance = m.volume.w;
     s.diffuse_transmission = saturate(m.extra.y);
-    s.diffuse_transmission_color = float3(1.0, 1.0, 1.0);
+    s.diffuse_transmission_color = de_material_diffuse_transmission_color(m); // DENG-302
     de_transmission_set_features(s);
 }
 
@@ -86,7 +86,7 @@ public void de_transmission_resolve(inout SurfaceData s, DeGpuMaterial m, Vertex
     s.attenuation_color = m.volume.rgb;
     s.attenuation_distance = m.volume.w;
     s.diffuse_transmission = saturate(m.extra.y);
-    s.diffuse_transmission_color = float3(1.0, 1.0, 1.0);
+    s.diffuse_transmission_color = de_material_diffuse_transmission_color(m); // DENG-302
     float4 white = float4(1.0, 1.0, 1.0, 1.0);
     if (s.transmission > 0.0)
         s.transmission *= de_resolve_sample(m, DE_STD_TEX_TRANSMISSION, v, lod, white).r;
@@ -96,7 +96,7 @@ public void de_transmission_resolve(inout SurfaceData s, DeGpuMaterial m, Vertex
     {
         s.diffuse_transmission *= de_resolve_sample(m, DE_STD_TEX_DIFFUSE_TRANSMISSION, v, lod,
                                                     white).a;
-        s.diffuse_transmission_color =
+        s.diffuse_transmission_color *=
             de_resolve_sample(m, DE_STD_TEX_DIFFUSE_TRANSMISSION_COLOR, v, lod, white).rgb;
     }
     de_transmission_set_features(s);

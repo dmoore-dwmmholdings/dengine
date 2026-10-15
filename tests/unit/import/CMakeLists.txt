@@ -88,3 +88,16 @@ if(TARGET test_import)
     target_sources(test_import PRIVATE test_texture_bc.c)
     target_link_libraries(test_import PRIVATE de_tp_bcdec)
 endif()
+
+# DENG-302: the `.mat.toml` material importer (tools/cook/importers/material/): values, defaults,
+# flags, textures and dependencies, game-model hashes, unknown keys and wrong types, byte-identical
+# output for reordered keys. CTest names import_material.import.<test>. Sources go to
+# test_import_material_tmp/ in the build tree (mtmp:/).
+de_add_test(NAME import_material SOURCES test_mat_toml.c
+            LIBS de_cooker de_asset de_platform TIMEOUT 60)
+if(TARGET test_import_material)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_import_material_tmp")
+    target_include_directories(test_import_material PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_import_material PRIVATE
+        "DE_IMPORT_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_import_material_tmp\"")
+endif()

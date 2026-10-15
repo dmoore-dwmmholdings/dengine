@@ -151,11 +151,16 @@ void de__texture_unload(void *object, void *user) {
     if (t == NULL)
         return;
     /* Now: no more copies into it. Later (frame fence, DENG-422): the texture and the record. */
+    de__uploader_materials_changed(u); /* DENG-302: blocks naming it lose its index */
     de__upload_release(u, t->upload_);
     t->upload_ = NULL;
     de__uploader_retire(u, &t->retire_, t, texture_retired);
 }
 
 de_result de__texture_ready(void *object, void *user) {
-    return de__upload_poll((de_render_uploader *)user, ((de_render_texture *)object)->upload_);
+    de_render_uploader *u = (de_render_uploader *)user;
+    const de_result r = de__upload_poll(u, ((de_render_texture *)object)->upload_);
+    if (r == DE_OK) /* DENG-302: published now (a first load, or a reload swapped in next) */
+        de__uploader_materials_changed(u);
+    return r;
 }

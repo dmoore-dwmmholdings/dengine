@@ -22,6 +22,9 @@
 // the origin). Table entries are indexed by slot; a free slot has flags without ..._LIVE.
 module scene_types;
 
+// DeGpuMaterial, the material parameter block, and its constants (DENG-302).
+__exported import "../materials/material_params";
+
 /// "No entry": a mesh or material index that names nothing.
 public static const uint DE_GPU_NONE = 0xFFFFFFFF;
 
@@ -34,11 +37,6 @@ public static const uint DE_GPU_INSTANCE_HAS_BOUNDS = 8;     // aabb_* and spher
 /// DeGpuMesh.flags
 public static const uint DE_GPU_MESH_READY = 1;    // the mesh is loaded; the fields are valid
 public static const uint DE_GPU_MESH_MESHLETS = 2; // it has meshlet buffers
-
-/// DeGpuMaterial.flags
-public static const uint DE_GPU_MATERIAL_READY = 1; // the material is loaded
-public static const uint DE_GPU_MATERIAL_DOUBLE_SIDED = 2;
-public static const uint DE_GPU_MATERIAL_UNLIT = 4;
 
 /// DeGpuMaterial.model: the material model (SPEC §12.6; DENG-237). Built-in ids first (DENG-2
 /// Q12), game models (de_material_model_register, S14 DENG-298) after them; at most
@@ -58,8 +56,6 @@ public static const uint DE_GPU_LIGHT_CAST_SHADOWS = 2;
 public static const uint DE_GPU_INSTANCE_MATERIALS = 8;
 /// LOD records per mesh (DMSH v2).
 public static const uint DE_GPU_MESH_LODS = 8;
-/// Texture slots per material (de_cooked_tex_slot; 20 = 5 x uint4, the last one unused).
-public static const uint DE_GPU_MATERIAL_TEXTURES = 20;
 
 /// One mesh instance (208 bytes). Slot = the render world's instance slot (DENG-175).
 public struct DeGpuInstance
@@ -117,31 +113,6 @@ public struct DeGpuMesh
     public uint4 stream_offset[2];  // byte offset of each de_cooked_stream in `vertices`, NONE
     public uint4 stream_format[2];  // de_cooked_vertex_format, 0 = none
     public DeGpuMeshLod lods[8];
-};
-
-/// One material (272 bytes): the provisional packing of de_standard_material (S14 replaces it
-/// with material instances, DENG-302, which must keep `model`).
-public struct DeGpuMaterial
-{
-    public float4 base_color;
-    public float4 emissive;         // rgb, strength
-    public float4 pbr;              // metallic, roughness, normal_scale, alpha_cutoff
-    public float4 specular;         // specular_color rgb, specular
-    public float4 clearcoat;        // clearcoat, clearcoat_roughness, ior, transmission
-    public float4 sheen;            // sheen_color rgb, sheen_roughness
-    public float4 volume;           // attenuation_color rgb, attenuation_distance
-    public float4 extra;            // thickness, diffuse_transmission, subsurface, anisotropy
-    public float4 iridescence;      // iridescence, ior, thickness_min, thickness_max
-    public float4 subsurface;       // subsurface_radius rgb, anisotropy_rotation
-    public uint alpha_mode;         // 0 opaque, 1 mask, 2 blend
-    public uint flags;              // DE_GPU_MATERIAL_*
-    public uint texcoord_bits;      // bit s: texture slot s samples UV1
-    public uint cooked_flags;       // DE_COOKED_MAT_* (the KHR extensions used)
-    public uint4 textures[5];       // sampled bindless index per de_cooked_tex_slot, 0 = none
-    public uint model;              // DE_GPU_MATERIAL_MODEL_* (< DE_GPU_MATERIAL_MODELS; DENG-237)
-    public uint reserved0;
-    public uint reserved1;
-    public uint reserved2;
 };
 
 /// One light (112 bytes). Slot = the render world's light slot (DENG-175).

@@ -550,15 +550,16 @@ static bool check_material(u32 id, u32 slot, const de__gs_material *e) {
              st->base_color.w),
         "base_color");
     CHK(f4eq(&e->pbr, st->metallic, st->roughness, st->normal_scale, st->alpha_cutoff), "pbr");
-    CHK(e->alpha_mode == m->alpha_mode && e->cooked_flags == m->flags, "modes");
+    CHK(e->alpha_mode == m->alpha_mode, "alpha mode"); /* DENG-302: the block's header */
+    CHK(e->features == de__material_features(st, m->alpha_mode, e->model), "features");
     CHK(e->flags ==
             (DE__GS_MATERIAL_READY | (st->double_sided ? DE__GS_MATERIAL_DOUBLE_SIDED : 0u) |
              (st->unlit ? DE__GS_MATERIAL_UNLIT : 0u)),
         "flags");
     for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
         const u32 want = DE_HANDLE_VALID(m->textures[t]) ? fake_texture(NULL, m->textures[t]) : 0u;
-        CHK(e->textures[t / 4u].v[t % 4u] == want, "textures");
-        CHK(((e->texcoord_bits >> t) & 1u) == (m->texcoord[t] != 0 ? 1u : 0u), "texcoord_bits");
+        CHK(de__material_params_texture(e, t) == want, "textures");
+        CHK(de__material_params_texcoord(e, t) == (m->texcoord[t] != 0 ? 1u : 0u), "texcoord");
     }
     return ok;
 }

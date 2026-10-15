@@ -6,9 +6,11 @@
 
 #include <dengine/de_debug.h>
 
+#include "core/de_bitset.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
 #include "render/loaders/upload_ring.h"
+#include "render/materials/material_instances.h"
 #include "render/world/render_world.h"
 
 #include "render/shaders/engine_shaders.h" /* DENG-421: the scatter kernels */
@@ -45,14 +47,12 @@ static const u32 k_strides[DE__GS_TABLE_COUNT] = {
 #define ROW_LOD(c, s, n, d)   DE__GS_ROW(de__gs_mesh_lod, c, s, n, d)
 #define ROW_INST(c, s, n, d)  DE__GS_ROW(de__gs_instance, c, s, n, d)
 #define ROW_MESH(c, s, n, d)  DE__GS_ROW(de__gs_mesh, c, s, n, d)
-#define ROW_MAT(c, s, n, d)   DE__GS_ROW(de__gs_material, c, s, n, d)
 #define ROW_LIGHT(c, s, n, d) DE__GS_ROW(de__gs_light, c, s, n, d)
 #define ROW_VIEW(c, s, n, d)  DE__GS_ROW(de__gs_view, c, s, n, d)
 
 static const de__gs_layout_field k_lod_fields[] = {DE__GS_MESH_LOD_FIELDS(ROW_LOD)};
 static const de__gs_layout_field k_inst_fields[] = {DE__GS_INSTANCE_FIELDS(ROW_INST)};
 static const de__gs_layout_field k_mesh_fields[] = {DE__GS_MESH_FIELDS(ROW_MESH)};
-static const de__gs_layout_field k_mat_fields[] = {DE__GS_MATERIAL_FIELDS(ROW_MAT)};
 static const de__gs_layout_field k_light_fields[] = {DE__GS_LIGHT_FIELDS(ROW_LIGHT)};
 static const de__gs_layout_field k_view_fields[] = {DE__GS_VIEW_FIELDS(ROW_VIEW)};
 
@@ -63,7 +63,6 @@ static const de__gs_layout k_layouts[] = {
     LAYOUT("DeGpuMeshLod", de__gs_mesh_lod, k_lod_fields),
     LAYOUT("DeGpuInstance", de__gs_instance, k_inst_fields),
     LAYOUT("DeGpuMesh", de__gs_mesh, k_mesh_fields),
-    LAYOUT("DeGpuMaterial", de__gs_material, k_mat_fields),
     LAYOUT("DeGpuLight", de__gs_light, k_light_fields),
     LAYOUT("DeSceneConstants", de__gs_view, k_view_fields),
 };
@@ -81,9 +80,6 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_INSTANCE_HAS_BOUNDS", DE__GS_INSTANCE_HAS_BOUNDS},
     {"DE_GPU_MESH_READY", DE__GS_MESH_READY},
     {"DE_GPU_MESH_MESHLETS", DE__GS_MESH_MESHLETS},
-    {"DE_GPU_MATERIAL_READY", DE__GS_MATERIAL_READY},
-    {"DE_GPU_MATERIAL_DOUBLE_SIDED", DE__GS_MATERIAL_DOUBLE_SIDED},
-    {"DE_GPU_MATERIAL_UNLIT", DE__GS_MATERIAL_UNLIT},
     {"DE_GPU_MATERIAL_MODEL_STANDARD", DE__GS_MATERIAL_MODEL_STANDARD},
     {"DE_GPU_MATERIAL_MODEL_UNLIT", DE__GS_MATERIAL_MODEL_UNLIT},
     {"DE_GPU_MATERIAL_MODEL_SPRITE", DE__GS_MATERIAL_MODEL_SPRITE},
@@ -94,7 +90,6 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_LIGHT_CAST_SHADOWS", DE__GS_LIGHT_CAST_SHADOWS},
     {"DE_GPU_INSTANCE_MATERIALS", DE__GS_INSTANCE_MATERIALS},
     {"DE_GPU_MESH_LODS", DE__GS_MESH_LODS},
-    {"DE_GPU_MATERIAL_TEXTURES", DE__GS_MATERIAL_TEXTURES},
 };
 
 const de__gs_layout_const *de__gs_layout_consts(u32 *count) {
@@ -104,7 +99,8 @@ const de__gs_layout_const *de__gs_layout_consts(u32 *count) {
 
 DE_STATIC_ASSERT(DE__RW_MATERIALS == DE__GS_INSTANCE_MATERIALS, "materials per instance");
 DE_STATIC_ASSERT(DE_COOKED_MESH_MAX_LODS == DE__GS_MESH_LODS, "LODs per mesh");
-DE_STATIC_ASSERT(DE_COOKED_TEX_COUNT <= DE__GS_MATERIAL_TEXTURES, "texture slots per material");
+DE_STATIC_ASSERT(DE_COOKED_TEX_COUNT == DE__GS_MATERIAL_TEXTURES, "texture slots per material");
+DE_STATIC_ASSERT(sizeof(de__gs_material) == DE__MATERIAL_PARAMS_SIZE, "material block stride");
 DE_STATIC_ASSERT(DE_COOKED_STREAM_COUNT == 8, "stream_offset / stream_format hold 8 streams");
 
 /* ---------- The scene ---------- */
@@ -187,6 +183,15 @@ struct de__gpu_scene {
     u32 *mesh_refs, *mat_refs;
     u32 mesh_cap, mat_cap;
     gs_map mesh_map, mat_map;
+    /* DENG-302: material instances. `mat_dirty` (a bit per material slot) marks the blocks to
+     * pack at the next update; `mesh_changed` (a bit per mesh slot) the meshes whose entry changed
+     * in this update (their instances re-resolve their default materials). */
+    struct de__material_instances *materials;
+    const struct de__material_models *material_models;
+    u64 *mat_dirty;
+    u64 *mesh_changed;
+    u64 mat_epoch; /* the pool's epoch at the last full re-check */
+    u32 perm_count[DE__GS_MATERIAL_MODELS][DE__MATERIAL_PERMUTATIONS_MAX];
     /* Views. */
     gs_view *views;
     u32 view_cap;
@@ -414,6 +419,17 @@ static u32 res_texture(void *user, de_texture t) {
     const de_render_texture *rt = de_render_texture_get((de_asset_system *)user, t);
     return rt != NULL ? rt->bindless : DE_GPU_BINDLESS_INVALID;
 }
+/* DENG-302: submesh `k`'s default material (main thread: a typed accessor). */
+static de_material res_default_material(void *user, de_mesh mesh, u32 k) {
+    de_asset_system *s = (de_asset_system *)user;
+    const de_render_mesh *m = de_render_mesh_get(s, mesh);
+    if (m == NULL || k >= m->submesh_count || m->submeshes[k].material.hash == 0)
+        return (de_material){0};
+    const de_material h = de_asset_material(s, m->submeshes[k].material);
+    if (!DE_HANDLE_VALID(h))
+        de_error_clear(); /* not in the manifest: the engine's default */
+    return h;
+}
 
 /* ---------- Packing (one function per table: S14 edits pack_material and pack_light) ---------- */
 
@@ -514,43 +530,16 @@ static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
     }
 }
 
-/* Provisional (S14 DENG-302 replaces it with material instances). */
+/* The material's parameter block (DENG-302: render/materials/material_instances.h). */
 static void pack_material(const de__gpu_scene *gs, de_material h, de__gs_material *o) {
-    memset(o, 0, sizeof *o);
-    const de_render_material *m = gs->assets.material != NULL && DE_HANDLE_VALID(h)
-                                      ? gs->assets.material(gs->assets.user, h)
-                                      : NULL;
-    if (m == NULL)
-        return;
-    const de_standard_material *s = &m->standard;
-    f4(&o->base_color, s->base_color.x, s->base_color.y, s->base_color.z, s->base_color.w);
-    f4(&o->emissive, s->emissive.x, s->emissive.y, s->emissive.z, s->emissive_strength);
-    f4(&o->pbr, s->metallic, s->roughness, s->normal_scale, s->alpha_cutoff);
-    f4(&o->specular, s->specular_color.x, s->specular_color.y, s->specular_color.z, s->specular);
-    f4(&o->clearcoat, s->clearcoat, s->clearcoat_roughness, s->ior, s->transmission);
-    f4(&o->sheen, s->sheen_color.x, s->sheen_color.y, s->sheen_color.z, s->sheen_roughness);
-    f4(&o->volume, s->attenuation_color.x, s->attenuation_color.y, s->attenuation_color.z,
-       s->attenuation_distance);
-    f4(&o->extra, s->thickness, s->diffuse_transmission, s->subsurface, s->anisotropy);
-    f4(&o->iridescence, s->iridescence, s->iridescence_ior, s->iridescence_thickness_min,
-       s->iridescence_thickness_max);
-    f4(&o->subsurface, s->subsurface_radius.x, s->subsurface_radius.y, s->subsurface_radius.z,
-       s->anisotropy_rotation);
-    o->alpha_mode = m->alpha_mode;
-    /* DENG-237: Standard or Unlit; DENG-298: or the game model the material names. */
-    o->model = m->model > DE__GS_MATERIAL_MODEL_WATER && m->model < DE__GS_MATERIAL_MODELS
-                   ? m->model
-                   : (s->unlit ? DE__GS_MATERIAL_MODEL_UNLIT : DE__GS_MATERIAL_MODEL_STANDARD);
-    o->flags = DE__GS_MATERIAL_READY | (s->double_sided ? DE__GS_MATERIAL_DOUBLE_SIDED : 0u) |
-               (s->unlit ? DE__GS_MATERIAL_UNLIT : 0u);
-    o->cooked_flags = m->flags;
-    for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
-        if (m->texcoord[t] != 0)
-            o->texcoord_bits |= 1u << t;
-        if (DE_HANDLE_VALID(m->textures[t]) && gs->assets.texture_bindless != NULL)
-            o->textures[t / 4u].v[t % 4u] =
-                gs->assets.texture_bindless(gs->assets.user, m->textures[t]);
+    const de_render_material *m = NULL;
+    if (DE_HANDLE_VALID(h)) {
+        if (gs->materials != NULL)
+            m = de__material_instances_get(gs->materials, h);
+        else if (gs->assets.material != NULL)
+            m = gs->assets.material(gs->assets.user, h);
     }
+    de__material_pack(m, gs->material_models, gs->assets.texture_bindless, gs->assets.user, o);
 }
 
 /* prev_view moved from its origin onto `origin` (the camera did not move; the numbers did). */
@@ -631,6 +620,10 @@ static de_result ensure_slot_arrays(de__gpu_scene *gs) {
                         (size_t)gs->mesh_cap * sizeof(de_mesh),
                         (size_t)mt->capacity * sizeof(de_mesh)))
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: mesh slots");
+        if (!grow_bytes(gs->alloc, (void **)&gs->mesh_changed,
+                        (size_t)((gs->mesh_cap + 63u) / 64u) * sizeof(u64),
+                        (size_t)((mt->capacity + 63u) / 64u) * sizeof(u64)))
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: mesh slots");
         gs->mesh_cap = mt->capacity;
     }
     const de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
@@ -640,9 +633,25 @@ static de_result ensure_slot_arrays(de__gpu_scene *gs) {
                         (size_t)gs->mat_cap * sizeof(de_material),
                         (size_t)at->capacity * sizeof(de_material)))
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: material slots");
+        if (!grow_bytes(gs->alloc, (void **)&gs->mat_dirty,
+                        (size_t)((gs->mat_cap + 63u) / 64u) * sizeof(u64),
+                        (size_t)((at->capacity + 63u) / 64u) * sizeof(u64)))
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: material slots");
         gs->mat_cap = at->capacity;
     }
     return DE_OK;
+}
+
+/* DENG-302: counts a READY block (`delta` +1 or -1) under its model's resolve permutation. */
+static void perm_count_add(de__gpu_scene *gs, const de__gs_material *e, i32 delta) {
+    if ((e->flags & DE__GS_MATERIAL_READY) == 0 || e->model >= DE__GS_MATERIAL_MODELS)
+        return;
+    const u32 p = de__material_permutation_of(e->model, e->features);
+    u32 *c = &gs->perm_count[e->model][p < DE__MATERIAL_PERMUTATIONS_MAX ? p : 0u];
+    if (delta > 0)
+        ++*c;
+    else if (*c != 0)
+        --*c;
 }
 
 /* A reference on the slot of handle id `id` in table `t` (a new slot for a new handle). */
@@ -667,6 +676,7 @@ static u32 ref_acquire(de__gpu_scene *gs, de__gs_table_id t, u32 id) {
     } else {
         gs->mat_refs[s] = 1;
         gs->mat_handle[s].id = id;
+        gs->mat_dirty[s / 64u] |= (u64)1 << (s % 64u); /* DENG-302: pack it */
     }
     de__gpu_table_mark(tb, s); /* a new slot holds whatever the buffer had: upload it */
     return s;
@@ -686,6 +696,9 @@ static void ref_release(de__gpu_scene *gs, de__gs_table_id t, u32 s) {
     } else {
         map_remove(&gs->mat_map, gs->mat_handle[s].id);
         gs->mat_handle[s].id = 0;
+        gs->mat_dirty[s / 64u] &= ~((u64)1 << (s % 64u));
+        perm_count_add(
+            gs, (const de__gs_material *)(const void *)(tb->shadow + (size_t)s * tb->stride), -1);
     }
     memset(tb->shadow + (size_t)s * tb->stride, 0, tb->stride);
     de__gpu_table_free(tb, s);
@@ -704,7 +717,11 @@ static void inst_resolve(de__gpu_scene *gs, u32 s) {
                            ? ref_acquire(gs, DE__GS_MESHES, in->mesh[s].id)
                            : DE__GS_NONE;
     for (u32 k = 0; k < DE__GS_INSTANCE_MATERIALS; ++k) {
-        const de_material m = in->materials[(size_t)s * DE__RW_MATERIALS + k];
+        de_material m = in->materials[(size_t)s * DE__RW_MATERIALS + k];
+        /* DENG-302 (DENG-231 note): an empty slot takes the mesh's default for that submesh. */
+        if (live && !DE_HANDLE_VALID(m) && DE_HANDLE_VALID(in->mesh[s]) &&
+            gs->assets.default_material != NULL)
+            m = gs->assets.default_material(gs->assets.user, in->mesh[s], k);
         mats[k] =
             live && DE_HANDLE_VALID(m) ? ref_acquire(gs, DE__GS_MATERIALS, m.id) : DE__GS_NONE;
     }
@@ -713,10 +730,37 @@ static void inst_resolve(de__gpu_scene *gs, u32 s) {
         ref_release(gs, DE__GS_MATERIALS, old_mats[k]);
 }
 
-/* Packs every referenced mesh and material and marks the ones whose entry changed (a new slot,
- * a mesh that finished loading or reloaded, a texture that arrived). */
+/* Packs material slot `s` and marks it when its block changed; keeps the permutation counts.
+ * Returns true when the block changed. */
+static bool refresh_material(de__gpu_scene *gs, u32 s) {
+    de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
+    de__gs_material *e = &gs->entry_tmp.material;
+    pack_material(gs, gs->mat_handle[s], e);
+    gs->stats.material_packs++;
+    de__gs_material *sh = (de__gs_material *)(void *)(at->shadow + (size_t)s * at->stride);
+    if (memcmp(sh, e, sizeof *e) == 0)
+        return false;
+    const bool was = (sh->flags & DE__GS_MATERIAL_READY) != 0;
+    const bool is = (e->flags & DE__GS_MATERIAL_READY) != 0;
+    if (was && is &&
+        (sh->model != e->model || de__material_permutation_of(sh->model, sh->features) !=
+                                      de__material_permutation_of(e->model, e->features)))
+        gs->stats.permutation_switches++;
+    perm_count_add(gs, sh, -1);
+    perm_count_add(gs, e, +1);
+    memcpy(sh, e, sizeof *e);
+    de__gpu_table_mark(at, s);
+    return true;
+}
+
+/* Packs every referenced mesh and marks the ones whose entry changed (a new slot, a mesh that
+ * finished loading or reloaded); their instances re-resolve their default materials. Then the
+ * material blocks: every referenced one without a material pool or after its epoch moved
+ * (published, reloaded, unloaded materials and textures; a game model registered), else only the
+ * marked ones (DENG-302). */
 static void refresh_small_tables(de__gpu_scene *gs) {
     de__gpu_table *mt = &gs->tables[DE__GS_MESHES];
+    bool meshes_changed = false;
     for (u32 s = 0; s < mt->count; ++s) {
         if (gs->mesh_refs[s] == 0)
             continue;
@@ -726,23 +770,66 @@ static void refresh_small_tables(de__gpu_scene *gs) {
         if (memcmp(sh, e, sizeof *e) != 0) {
             memcpy(sh, e, sizeof *e);
             de__gpu_table_mark(mt, s);
+            gs->mesh_changed[s / 64u] |= (u64)1 << (s % 64u);
+            meshes_changed = true;
         }
     }
-    de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
-    u32 masks = 0; /* DENG-236 */
-    for (u32 s = 0; s < at->count; ++s) {
-        if (gs->mat_refs[s] == 0)
-            continue;
-        de__gs_material *e = &gs->entry_tmp.material;
-        pack_material(gs, gs->mat_handle[s], e);
-        masks += (e->flags & DE__GS_MATERIAL_READY) != 0 && e->alpha_mode == 1u; /* mask */
-        u8 *sh = at->shadow + (size_t)s * at->stride;
-        if (memcmp(sh, e, sizeof *e) != 0) {
-            memcpy(sh, e, sizeof *e);
-            de__gpu_table_mark(at, s);
+    /* DENG-302: a mesh loaded or reloaded: its instances take its (new) default materials. */
+    if (meshes_changed && gs->assets.default_material != NULL && gs->frame != NULL) {
+        de__gpu_table *it = &gs->tables[DE__GS_INSTANCES];
+        const u32 n =
+            gs->frame->instances.count < gs->inst_cap ? gs->frame->instances.count : gs->inst_cap;
+        for (u32 i = 0; i < n; ++i) {
+            const u32 ms = gs->inst_mesh[i];
+            if (ms != DE__GS_NONE && (gs->mesh_changed[ms / 64u] >> (ms % 64u) & 1u) != 0u) {
+                inst_resolve(gs, i);
+                de__gpu_table_mark(it, i);
+            }
         }
+    }
+    if (meshes_changed)
+        memset(gs->mesh_changed, 0, (size_t)((gs->mesh_cap + 63u) / 64u) * sizeof(u64));
+
+    de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
+    gs->stats.material_packs = 0;
+    gs->stats.permutation_switches = 0;
+    const u64 epoch = gs->materials != NULL ? de__material_instances_epoch(gs->materials) : 0u;
+    const bool all = gs->materials == NULL || epoch != gs->mat_epoch;
+    gs->mat_epoch = epoch;
+    const u32 words = (at->count + 63u) / 64u;
+    if (all) {
+        for (u32 s = 0; s < at->count; ++s)
+            if (gs->mat_refs[s] != 0)
+                (void)refresh_material(gs, s);
+    } else {
+        for (u32 w = 0; w < words; ++w) {
+            u64 bits = gs->mat_dirty[w];
+            while (bits != 0) {
+                const u32 b = (u32)de__bitset_ctz64(bits);
+                bits &= bits - 1u;
+                const u32 s = w * 64u + b;
+                if (s < at->count && gs->mat_refs[s] != 0)
+                    (void)refresh_material(gs, s);
+            }
+        }
+    }
+    memset(gs->mat_dirty, 0, (size_t)((gs->mat_cap + 63u) / 64u) * sizeof(u64));
+    /* DENG-236: READY alpha-tested materials; DENG-302: each model's permutation this frame. */
+    u32 masks = 0;
+    for (u32 s = 0; s < at->count; ++s) {
+        const de__gs_material *e =
+            (const de__gs_material *)(const void *)(at->shadow + (size_t)s * at->stride);
+        masks += gs->mat_refs[s] != 0 && (e->flags & DE__GS_MATERIAL_READY) != 0 &&
+                 e->alpha_mode == 1u; /* mask */
     }
     gs->stats.mask_materials = masks;
+    for (u32 m = 0; m < DE__GS_MATERIAL_MODELS; ++m) {
+        u32 sel = 0;
+        for (u32 p = 0; p < DE__MATERIAL_PERMUTATIONS_MAX; ++p)
+            if (gs->perm_count[m][p] != 0)
+                sel = p;
+        gs->stats.material_permutation[m] = sel;
+    }
 }
 
 /* ---------- Create / destroy ---------- */
@@ -792,6 +879,10 @@ void de__gpu_scene_destroy(de__gpu_scene *gs) {
         DE_FREE(a, gs->mat_refs, (size_t)gs->mat_cap * sizeof(u32));
     if (gs->mat_handle)
         DE_FREE(a, gs->mat_handle, (size_t)gs->mat_cap * sizeof(de_material));
+    if (gs->mat_dirty)
+        DE_FREE(a, gs->mat_dirty, (size_t)((gs->mat_cap + 63u) / 64u) * sizeof(u64));
+    if (gs->mesh_changed)
+        DE_FREE(a, gs->mesh_changed, (size_t)((gs->mesh_cap + 63u) / 64u) * sizeof(u64));
     if (gs->views)
         DE_FREE(a, gs->views, (size_t)gs->view_cap * sizeof(gs_view));
     map_free(a, &gs->mesh_map);
@@ -882,6 +973,10 @@ de_result de__gpu_scene_create(const de__gpu_scene_desc *d, de__gpu_scene **out)
                                             .user = d->assets};
     }
     gs->asset_system = d->assets;
+    if (d->resolver.mesh == NULL && d->assets != NULL)
+        gs->assets.default_material = res_default_material; /* DENG-302 */
+    gs->materials = d->materials;
+    gs->material_models = d->material_models;
     gs->scratch[SCR_INSTANCES] =
         (gs_scratch){.stride = (u32)sizeof(de__gs_instance), .name = "gpu scene instance scatter"};
     gs->scratch[SCR_LIGHTS] =
@@ -1716,6 +1811,17 @@ u32 de__gpu_scene_mesh_slot(const de__gpu_scene *gs, de_mesh m) {
 
 u32 de__gpu_scene_material_slot(const de__gpu_scene *gs, de_material m) {
     return gs != NULL && DE_HANDLE_VALID(m) ? map_get(&gs->mat_map, m.id) : DE__GS_NONE;
+}
+
+void de__gpu_scene_material_changed(de__gpu_scene *gs, de_material m) {
+    const u32 s = gs != NULL && DE_HANDLE_VALID(m) ? map_get(&gs->mat_map, m.id) : DE__GS_NONE;
+    if (s != DE__GS_NONE && s < gs->mat_cap)
+        gs->mat_dirty[s / 64u] |= (u64)1 << (s % 64u);
+}
+
+u32 de__gpu_scene_material_permutation(const de__gpu_scene *gs, u32 model) {
+    return gs != NULL && model < DE__GS_MATERIAL_MODELS ? gs->stats.material_permutation[model]
+                                                        : 0u;
 }
 
 bool de__gpu_scene_has_scatter(const de__gpu_scene *gs) {

@@ -12,6 +12,12 @@
 //                        kernel of its own (Standard, and the built-in ids not implemented yet)
 //   cs_resolve_unlit     de_resolve_tiles<UnlitModel> (materials/unlit/unlit.slang; DENG-301),
 //                        for the Unlit model
+//   cs_resolve_standard_base, cs_resolve_standard_clearcoat
+//                        (DENG-302) the Standard resolve permutations without layers and with the
+//                        clearcoat only (StandardModelT<F>); src/render/materials/material_params.h
+//                        lists the permutations (base, clearcoat, cs_resolve_standard: all), and
+//                        the resolve pass runs each model's tiles with the smallest one that covers
+//                        the features of the model's materials this frame
 //
 // A game's material model (de_material_model_register) brings its own cs_resolve_model, the same
 // generic kernel specialised for its type. The kernel, the ResolveParams push constants and the
@@ -68,4 +74,21 @@ void cs_resolve_unlit(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
                       uniform ResolveParams pc)
 {
     de_resolve_tiles<UnlitModel>(group, thread.x, pc);
+}
+
+// DENG-302: the Standard permutations (material_params.h de__material_permutations).
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cs_resolve_standard_base(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
+                              uniform ResolveParams pc)
+{
+    de_resolve_tiles<StandardModelT<0> >(group, thread.x, pc);
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void cs_resolve_standard_clearcoat(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
+                                   uniform ResolveParams pc)
+{
+    de_resolve_tiles<StandardModelT<DE_MATERIAL_FEATURE_CLEARCOAT> >(group, thread.x, pc);
 }

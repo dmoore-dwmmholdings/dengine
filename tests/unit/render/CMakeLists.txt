@@ -746,3 +746,25 @@ if(TARGET test_render_transmission)
         endif()
     endif()
 endif()
+
+# DENG-302: material instances (src/render/materials/material_instances.c, material_params.h,
+# shaders/materials/material_params.slang), executable test_render_material_instances; CTest names
+# render_material_instances.materials.<test>: the parameter block layout, the feature rules, no
+# pipeline for parameter changes (1000 materials a frame), dirty uploads, permutation switches,
+# texture hot reload rebinding, runtime instances, mesh default materials. Null backend, the real
+# asset system and ECS loop.
+de_add_test(NAME render_material_instances
+    SOURCES test_material_instances.c
+    LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
+    LABELS unit render
+    TIMEOUT 300)
+if(TARGET test_render_material_instances)
+    target_include_directories(test_render_material_instances PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_render_material_instances_tmp")
+    target_compile_definitions(test_render_material_instances PRIVATE
+        "DE_RMI_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_render_material_instances_tmp\""
+        "DE_RMI_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_RMI_TEST_TEXTURE_DIR=\"${DE_ROOT_DIR}/tests/unit/import/data/texture\"")
+    target_link_libraries(test_render_material_instances PRIVATE
+        "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+endif()

@@ -216,6 +216,7 @@ de_result de__uploader_init(de_render_uploader *u, u64 ring_bytes, u64 frame_cap
     u->test_fence_cap = UINT64_MAX;
     u->test_frame_cap = UINT64_MAX;
     de_atomic_init_u64(&u->retire_value, 0);
+    de_atomic_init_u64(&u->material_epoch, 1); /* DENG-302: never 0 (a scene starts at 0) */
     de_mutex_init(&u->lock);
     u->records =
         (de__ring_record *)DE_ALLOC(u->alloc, sizeof(de__ring_record) * DE__UPLOAD_MAX_RECORDS,

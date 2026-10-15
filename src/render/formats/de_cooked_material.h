@@ -1,11 +1,14 @@
 /*
- * de_cooked_material.h: the cooked standard material format DMAT, version 1 (SPEC §12.6; DENG-101).
+ * de_cooked_material.h: the cooked standard material format DMAT, version 2 (SPEC
+ * §12.6; DENG-101, DENG-302).
  * Internal; include as "render/formats/de_cooked_material.h".
  *
  * A `material` asset holding the parameters of de_standard_material (de_render.h) with texture
  * asset IDs instead of handles. The model importer writes one per source material
- * (`<model>#material:<name>`); the runtime material loader (DENG-105) turns the IDs into handles.
- * Version 1 covers glTF 2.0 metallic-roughness and the KHR_materials_* extensions of SPEC §12.6.
+ * (`<model>#material:<name>`), the `.mat.toml` importer one per file (DENG-302); the runtime
+ * material loader (DENG-105) turns the IDs into handles. Version 1 covers glTF 2.0
+ * metallic-roughness and the KHR_materials_* extensions of SPEC §12.6; version 2 (DENG-302) adds
+ * the subsurface parameters and the material model.
  *
  * Every field is little-endian (de_cooked_le.h). Layout:
  *
@@ -14,15 +17,21 @@
  *                 4  u32   format version (DE_COOKED_MATERIAL_VERSION)
  *                 8  u32   flags (DE_COOKED_MAT_*)
  *                12  u32   alpha mode (de_cooked_alpha_mode)
- *                16  u32   parameter bytes P (DE_COOKED_MATERIAL_PARAMS_SIZE in version 1)
+ *                16  u32   parameter bytes P (DE_COOKED_MATERIAL_PARAMS_SIZE; version 1: 164)
  *                20  u32   texture count T (at most DE_COOKED_TEX_COUNT)
  *                24  u32   total size of the blob (32 + P + 16 T)
- *                28  u32   reserved, 0
- *   parameters  P bytes: the f32 fields of de_cooked_material_params, in declaration order.
+ *                28  u32   material model (version 2): 0 = the built-in model the flags select
+ *                           (Standard, or Unlit with DE_COOKED_MAT_UNLIT); otherwise
+ *                           de_cooked_material_model_hash of the model's name ("standard",
+ *                           "unlit", ... or a game model's, de_material_model_register).
+ *                           Version 1: reserved, 0.
+ *   parameters  P bytes: the f32 fields of de_cooked_material_params, in declaration order
+ *               (version 1: the first DE_COOKED_MATERIAL_PARAM_FLOATS_V1 of them; the parser fills
+ *               the rest with their defaults).
  *   textures    T x 16: u32 slot (de_cooked_tex_slot), u32 texcoord set (0 or 1), u64 texture
  *               asset ID (never 0). Sorted by slot, each slot once.
  *
- * Bump DE_COOKED_MATERIAL_VERSION on any change.
+ * Bump DE_COOKED_MATERIAL_VERSION on any change. The parser reads versions 1 and 2.
  */
 #ifndef DE_RENDER_FORMATS_COOKED_MATERIAL_H
 #define DE_RENDER_FORMATS_COOKED_MATERIAL_H
@@ -36,7 +45,7 @@
 DE_EXTERN_C_BEGIN
 
 #define DE_COOKED_MATERIAL_MAGIC       "DMAT"
-#define DE_COOKED_MATERIAL_VERSION     1u
+#define DE_COOKED_MATERIAL_VERSION     2u
 #define DE_COOKED_MATERIAL_HEADER_SIZE 32u
 #define DE_COOKED_MATERIAL_TEX_SIZE    16u
 
@@ -90,7 +99,8 @@ typedef enum de_cooked_tex_slot {
 /**
  * The scalar parameters (glTF factors). Only f32 fields, so there is no padding; the encoding is
  * the fields in this order. de_standard_material has no field yet for occlusion_strength,
- * clearcoat_normal_scale and diffuse_transmission_color (S12 maps them).
+ * clearcoat_normal_scale and diffuse_transmission_color (S12 maps them). Version 2 appends the
+ * subsurface fields (DENG-302); version 1 ends at alpha_cutoff.
  */
 typedef struct de_cooked_material_params {
     f32 base_color[4]; /**< linear RGBA */
@@ -114,10 +124,14 @@ typedef struct de_cooked_material_params {
     f32 anisotropy, anisotropy_rotation;
     f32 iridescence, iridescence_ior, iridescence_thickness_min, iridescence_thickness_max;
     f32 alpha_cutoff;
+    /* Version 2 (DENG-302): */
+    f32 subsurface;
+    f32 subsurface_radius[3]; /**< metres per channel */
 } de_cooked_material_params;
 
-#define DE_COOKED_MATERIAL_PARAM_FLOATS 41u
-#define DE_COOKED_MATERIAL_PARAMS_SIZE  (DE_COOKED_MATERIAL_PARAM_FLOATS * 4u)
+#define DE_COOKED_MATERIAL_PARAM_FLOATS    45u
+#define DE_COOKED_MATERIAL_PARAM_FLOATS_V1 41u
+#define DE_COOKED_MATERIAL_PARAMS_SIZE     (DE_COOKED_MATERIAL_PARAM_FLOATS * 4u)
 DE_STATIC_ASSERT(sizeof(de_cooked_material_params) == DE_COOKED_MATERIAL_PARAMS_SIZE,
                  "de_cooked_material_params must be packed f32 fields");
 
@@ -145,7 +159,21 @@ static inline de_cooked_material_params de_cooked_material_params_default(void) 
     m.iridescence_thickness_min = 100.0f;
     m.iridescence_thickness_max = 400.0f;
     m.alpha_cutoff = 0.5f;
+    for (u32 i = 0; i < 3; ++i)
+        m.subsurface_radius[i] = 1.0f;
     return m;
+}
+
+/** The value of header word 28 for model `name` (DENG-302): the low 32 bits of FNV-1a 64 over
+ * the name's bytes, never 0 (0 becomes 1). Pure. */
+static inline u32 de_cooked_material_model_hash(const char *name) {
+    u64 h = 0xcbf29ce484222325ull;
+    for (const unsigned char *p = (const unsigned char *)name; p != NULL && *p != 0; ++p) {
+        h ^= (u64)*p;
+        h *= 0x100000001b3ull;
+    }
+    const u32 v = (u32)h;
+    return v != 0 ? v : 1u;
 }
 
 /** One texture reference of a material. */
@@ -157,8 +185,10 @@ typedef struct de_cooked_material_tex {
 
 /** A checked, decoded DMAT blob. */
 typedef struct de_cooked_material_view {
+    u32 version; /**< 1 or 2 */
     u32 flags;
     u32 alpha_mode;
+    u32 model_hash; /**< header word 28: 0, or de_cooked_material_model_hash of the model name */
     de_cooked_material_params params;
     u32 texture_count;
     de_cooked_material_tex textures[DE_COOKED_TEX_COUNT];
@@ -182,16 +212,20 @@ static inline bool de_cooked_material_parse(const void *data, u64 size,
         w = "not a cooked material (magic)";
         goto fail;
     }
-    if (de_cooked_get_u32(p + 4) != DE_COOKED_MATERIAL_VERSION) {
+    out->version = de_cooked_get_u32(p + 4);
+    if (out->version != 1u && out->version != DE_COOKED_MATERIAL_VERSION) {
         w = "unsupported format version";
         goto fail;
     }
+    const u32 nfloats =
+        out->version == 1u ? DE_COOKED_MATERIAL_PARAM_FLOATS_V1 : DE_COOKED_MATERIAL_PARAM_FLOATS;
+    out->model_hash = out->version == 1u ? 0u : de_cooked_get_u32(p + 28);
     out->flags = de_cooked_get_u32(p + 8);
     out->alpha_mode = de_cooked_get_u32(p + 12);
     u32 psize = de_cooked_get_u32(p + 16);
     out->texture_count = de_cooked_get_u32(p + 20);
     u32 total = de_cooked_get_u32(p + 24);
-    if (out->alpha_mode > DE_COOKED_ALPHA_BLEND || psize != DE_COOKED_MATERIAL_PARAMS_SIZE ||
+    if (out->alpha_mode > DE_COOKED_ALPHA_BLEND || psize != nfloats * 4u ||
         out->texture_count > DE_COOKED_TEX_COUNT ||
         (u64)total != (u64)DE_COOKED_MATERIAL_HEADER_SIZE + psize +
                           (u64)out->texture_count * DE_COOKED_MATERIAL_TEX_SIZE ||
@@ -199,8 +233,10 @@ static inline bool de_cooked_material_parse(const void *data, u64 size,
         w = "bad sizes or alpha mode";
         goto fail;
     }
+    out->params = de_cooked_material_params_default(); /* version 1: the v2 fields' defaults */
     f32 f[DE_COOKED_MATERIAL_PARAM_FLOATS];
-    for (u32 i = 0; i < DE_COOKED_MATERIAL_PARAM_FLOATS; ++i)
+    memcpy(f, &out->params, sizeof f);
+    for (u32 i = 0; i < nfloats; ++i)
         f[i] = de_cooked_get_f32(p + DE_COOKED_MATERIAL_HEADER_SIZE + 4u * i);
     memcpy(&out->params, f, sizeof f);
     const u8 *t = p + DE_COOKED_MATERIAL_HEADER_SIZE + psize;
