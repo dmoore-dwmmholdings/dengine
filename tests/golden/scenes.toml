@@ -109,11 +109,10 @@ threshold_p99 = 0.05
 # scenes, reused by S20 DENG-278: keep the names). Each scene runs the renderer and the asset system
 # over materials/assets/ until the image settles (fixed EV100, output.basic, no temporal effect).
 # Thresholds per scene, from the observed Metal (M5 Pro) vs lavapipe spread with about 1.5x
-# margin (Metal vs WARP is smaller). A backend reproduces its own reference exactly; under Metal
-# shader validation (the CTests) textured surfaces flicker in a few patches (DENG-430), which the
-# scene's per-pixel median of its last three frames mostly removes (measured mean <= 0.0003, p99
-# <= 0.0035). A layer that renders wrong is a bug of its owning task (a follow-up issue, e.g.
-# DENG-429), never a reason to loosen these.
+# margin (Metal vs WARP is smaller). A backend reproduces its own reference exactly, also under
+# Metal shader validation (the CTests) since DENG-430 fixed the resolve's flicker there. A layer
+# that renders wrong is a bug of its owning task (a follow-up issue, e.g. DENG-429), never a
+# reason to loosen these.
 [scene.materials_gallery_ibl]
 description = "materials gallery, every layer (metallic x roughness, IOR, specular, emissive, clearcoat, sheen, anisotropy, iridescence, transmission, volume, diffuse transmission, subsurface, Unlit, alpha mask, alpha blend) lit by a sky environment (DENG-307)"
 size = [512, 224]

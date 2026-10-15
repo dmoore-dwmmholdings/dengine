@@ -151,9 +151,9 @@ and `de_prefab_instantiate`.
 - `assets/gen_assets.py` writes every asset (Python 3 standard library). Edit the script, run it,
   re-bake the references.
 - The cook cache is per backend in the build tree (`tests/golden/materials_cache/`).
-- A scene runs frames until at most 1 % of its pixels change between frames, three frames in a
-  row, and compares the per-pixel median of those three. This damps the flicker of textured
-  surfaces under Metal shader validation (DENG-430).
+- A scene runs frames until no pixel changes for three frames in a row, then compares the last
+  one. This also holds under Metal shader validation since DENG-430, so a flicker fails the
+  scene.
 - Thresholds: per scene in `scenes.toml`, from the Metal vs lavapipe spread (about 1.5x margin).
 - Determinism: a fixed EV100 on each scene's `DeCamera`, `output.basic` as the output stage, no
   temporal effects.

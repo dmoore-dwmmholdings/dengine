@@ -101,11 +101,16 @@ public DeResolvePoint de_resolve_point(uint id, uint2 pixel, float2 size, DeScen
                      de_vis_meshlet_vertex(r.mesh, r.meshlet, lv.y),
                      de_vis_meshlet_vertex(r.mesh, r.meshlet, lv.z));
     float3 w[3];
-    for (uint k = 0; k < 3u; ++k)
-    {
-        r.object_pos[k] = de_vis_mesh_position(r.mesh, r.vertex[k]);
-        w[k] = de_vis_transform_point(r.inst.transform, r.object_pos[k]);
-    }
+    // Unrolled on purpose (DENG-430): a loop storing r.object_pos[k] with a dynamic k (an array
+    // inside this ~800-byte struct, in thread memory) gave values that changed from frame to frame
+    // under Metal shader validation (MTL_SHADER_VALIDATION=1), so textured surfaces flickered.
+    // Every index was in range; the instrumented code was not stable.
+    r.object_pos[0] = de_vis_mesh_position(r.mesh, r.vertex.x);
+    r.object_pos[1] = de_vis_mesh_position(r.mesh, r.vertex.y);
+    r.object_pos[2] = de_vis_mesh_position(r.mesh, r.vertex.z);
+    w[0] = de_vis_transform_point(r.inst.transform, r.object_pos[0]);
+    w[1] = de_vis_transform_point(r.inst.transform, r.object_pos[1]);
+    w[2] = de_vis_transform_point(r.inst.transform, r.object_pos[2]);
     // NDC of the pixel centre and of its right and lower neighbours (y up in NDC).
     float2 step = 2.0 / size;
     float2 ndc = float2((float(pixel.x) + 0.5) * step.x - 1.0, 1.0 - (float(pixel.y) + 0.5) * step.y);
