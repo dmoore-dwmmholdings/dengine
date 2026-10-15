@@ -349,6 +349,8 @@ typedef struct de__vis_shared {
     /* ---- DENG-233: occlusion (occlusion.c) and the HZB (hzb.c) ---- */
     void *occlusion; /**< occlusion.c's state: per-view visibility flags, the debug kernel */
     de_cvar cv_occlusion, cv_occlusion_reset, cv_occlusion_cut_m, cv_hzb_debug, cv_hzb_single_pass;
+    /* ---- DENG-235: the compute-expansion raster path (raster_compute.c) ---- */
+    void *raster_compute; /**< raster_compute.c's state: kernels, pipelines, per-view stats */
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_shared;
 
@@ -658,6 +660,49 @@ u32 de__vis_mesh_dispatch_count(u32 capacity);
 void de__vis_mesh_dispatch_groups(u32 count, u32 k, u32 *x, u32 *y);
 /** The `public static const uint` values of vis_decode.slang and vis_mesh.slang (DENG-234). */
 const de__vis_layout_const *de__vis_raster_layout_consts(u32 *count);
+
+/* ---------- Compute-expansion raster (raster_compute.c), DENG-235 ---------- */
+
+/** Byte offsets of the expansion counters (vis_expand.slang DE_VIS_EXPAND_COUNTER_*; a raw
+ * 16-byte buffer, both phases). */
+#define DE__VIS_EXPAND_COUNTER_TRIANGLES 0u  /**< kept triangles asked for (> capacity: dropped) */
+#define DE__VIS_EXPAND_COUNTER_PHASE1    4u  /**< triangle slots stored after phase 1 */
+#define DE__VIS_EXPAND_COUNTER_TESTED    8u  /**< triangles of the expanded meshlets */
+#define DE__VIS_EXPAND_COUNTER_MESHLETS  12u /**< meshlets expanded */
+#define DE__VIS_EXPAND_COUNTER_BYTES     16u
+/** ExpandParams.flags: per-triangle culling (r.raster_tri_cull). */
+#define DE__VIS_EXPAND_TRI_CULL 1u
+/** Threads per group of cs_expand (one per triangle of a meshlet). */
+#define DE__VIS_EXPAND_GROUP 128u
+/** Default of r.raster_compute_max_tris, and the largest value it takes. */
+#define DE__VIS_RASTER_COMPUTE_MAX_TRIS_DEFAULT (1u << 24)
+#define DE__VIS_RASTER_COMPUTE_MAX_TRIS_LIMIT   (1u << 26)
+
+/** The compute path's stages (vis_stages_stub.c's raster switch calls them). */
+de_result de__vis_raster_compute_init(de__vis_shared *s);
+void de__vis_raster_compute_shutdown(de__vis_shared *s);
+void de__vis_raster_compute(de_rg *g, de__vis_context *vc, de__vis_phase phase);
+
+/** What the CPU last read back of one view's expansion (one to a few frames late). */
+typedef struct de__vis_raster_compute_stats {
+    bool valid;
+    u64 frame;
+    u32 triangles; /**< kept triangles asked for, both phases (> capacity: some not drawn) */
+    u32 phase1;    /**< triangle slots stored by phase 1 */
+    u32 tested;    /**< triangles of the expanded meshlets, both phases */
+    u32 meshlets;  /**< meshlets expanded, both phases */
+    u32 capacity;  /**< triangle slots of that frame's buffers */
+} de__vis_raster_compute_stats;
+/** The latest stats raster_compute read back for view slot `slot` (zeroed when none). */
+de__vis_raster_compute_stats de__vis_view_raster_compute_stats(const de__vis_shared *s, u32 slot);
+/** Test overrides of the compute path (zero: none). */
+typedef struct de__vis_raster_compute_debug {
+    u32 capacity_fixed; /**< a fixed triangle capacity (0: grow as needed), still at most
+                             r.raster_compute_max_tris */
+} de__vis_raster_compute_debug;
+void de__vis_raster_compute_set_debug(de__vis_shared *s, const de__vis_raster_compute_debug *d);
+/** The `public static const uint` values of vis_expand.slang. */
+const de__vis_layout_const *de__vis_raster_compute_layout_consts(u32 *count);
 
 DE_EXTERN_C_END
 

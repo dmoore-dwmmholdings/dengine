@@ -125,9 +125,11 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   `test_render_vis` (`render_vis.*`, DENG-229: GPU instance culling compared with its CPU
   reference), `test_render_meshlet_cull` (`render_meshlet_cull.*`, DENG-231: GPU meshlet
   culling compared with its CPU reference and the triangles), `test_render_occlusion`
-  (`render_occlusion.*`, DENG-233: the HZB and two-phase occlusion culling), and
+  (`render_occlusion.*`, DENG-233: the HZB and two-phase occlusion culling),
   `test_render_raster_mesh` (`render_raster_mesh.*`, DENG-234: the mesh-shader vis-buffer raster
-  compared with a CPU rasterizer). The Windows entry also builds those seven and runs their
+  compared with a CPU rasterizer), and `test_render_raster_compute` (`render_raster_compute.*`,
+  DENG-235: the compute-expansion vis-buffer raster, the path these software rasterizers run,
+  compared with a CPU rasterizer). The Windows entry also builds those eight and runs their
   `_d3d12` tests with
   `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423). The
   Linux entry also builds `test_gpu_vulkan` and runs `gpu_vulkan.*` (DENG-426): the Vulkan

@@ -181,8 +181,11 @@ jobs:
             # (VK_EXT_mesh_shader) and compares the IDs with a CPU rasterizer.
             # DENG-426: gpu_vulkan.* (test_gpu_vulkan: the Vulkan backend's device, resource,
             # command, sync, swapchain and pipeline tests) with validation + sync validation.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_gpu_vulkan
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.)'
+            # DENG-235: render_raster_compute.* runs the compute-expansion raster (the vis-buffer
+            # path where mesh shaders are missing) and compares the vis ID and depth with a CPU
+            # rasterizer; moltenvk_smoke is its small Vulkan scene.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_gpu_vulkan test_render_raster_compute
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
@@ -192,9 +195,9 @@ jobs:
             # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
             # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
             # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh
+            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute
             tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
-            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh)\..*_d3d12$'
+            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute)\..*_d3d12$'
             require: --backend d3d12 --warp
           - name: macos metal (hosted, skips below Base)
             os: macos-14

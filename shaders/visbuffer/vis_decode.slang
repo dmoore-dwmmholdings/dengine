@@ -95,8 +95,9 @@ public uint3 de_vis_meshlet_triangle(DeGpuMesh mesh, DeVisMeshletInfo m, uint t)
     return uint3(de_vis_load_u8(b, at), de_vis_load_u8(b, at + 1u), de_vis_load_u8(b, at + 2u));
 }
 
-/// Object-space position of mesh vertex `vertex`: UNORM16X4 (offset + q / 65535 * scale) or
-/// F32X3, as the mesh's position stream is stored.
+/// Object-space position of mesh vertex `vertex`: UNORM16X4 (offset + q * scale, where scale is
+/// one step of q: the cooker's (max - min) / 65535, de_cooked_mesh_position) or F32X3, as the
+/// mesh's position stream is stored.
 public float3 de_vis_mesh_position(DeGpuMesh mesh, uint vertex)
 {
     DeBytes s = de_bytes(mesh.vertices);
@@ -104,7 +105,7 @@ public float3 de_vis_mesh_position(DeGpuMesh mesh, uint vertex)
     if (mesh.stream_format[0].x == DE_VIS_VF_F32X3)
         return asfloat(s.load3(base + vertex * 12u));
     uint2 q = s.load2(base + vertex * 8u);
-    float3 u = float3(float(q.x & 0xFFFFu), float(q.x >> 16), float(q.y & 0xFFFFu)) / 65535.0;
+    float3 u = float3(float(q.x & 0xFFFFu), float(q.x >> 16), float(q.y & 0xFFFFu));
     return mesh.position_offset.xyz + u * mesh.position_scale.xyz;
 }
 
