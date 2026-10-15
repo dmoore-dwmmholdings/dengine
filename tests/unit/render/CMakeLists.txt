@@ -369,3 +369,37 @@ if(TARGET test_render_meshlet_cull)
         endif()
     endif()
 endif()
+
+# DENG-233: the HZB and two-phase occlusion culling (src/render/passes/vis/hzb.c, occlusion.c),
+# executable test_render_occlusion; CTest names render_occlusion.<suite>.<test>. test_hzb.c: the
+# HZB against a CPU min/max reduction for odd and non-power-of-two sizes, the grouped and the
+# one-dispatch-per-mip paths, and the conservativeness of the occlusion test against a CPU
+# ray-cast reference; test_two_phase.c: an occluder wall (rejection, reveal without a pop),
+# camera cuts, new instances, occlusion off. occlusion_fixture.c is their fixture: a GPU scene of
+# boxes and a CPU ray-cast phase-1 depth (raster does not exist yet). The GPU tests run per
+# backend (_metal, _vulkan, _d3d12; SKIP without the device; CI: lavapipe and WARP golden jobs).
+set(_de_occ_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_occ_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_occ_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_occ_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME render_occlusion
+    SOURCES test_hzb.c test_two_phase.c occlusion_fixture.c render_d3d12_test.c
+    LIBS ${_de_occ_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_occlusion)
+    target_include_directories(test_render_occlusion PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_occlusion PRIVATE version)
+        de_d3d12_agility_deploy(test_render_occlusion)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_occlusion)
+        endif()
+    endif()
+endif()

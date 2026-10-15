@@ -153,7 +153,11 @@ typedef struct de__vis_cull_view {
     f32 lod[4];                         /**< LOD scale, orthographic (0/1), LOD bias, 0 */
     f32 view_proj[4][4];                /**< the culling view-projection, rows */
     u32 instance_count, layer_mask, work_capacity, flags;
-    u32 reserved[8];
+    /* DENG-233: the view's HZB (sampled bindless index, mip 0 size, mips; 0 = none) and its
+     * visibility flags (bindless index; slots the last frame wrote, 0 = no history). */
+    u32 hzb, hzb_width, hzb_height, hzb_mips;
+    u32 visibility, visibility_count;
+    u32 reserved0, reserved1;
 } de__vis_cull_view;
 DE_STATIC_ASSERT(sizeof(de__vis_cull_view) == 224, "DeVisCullView is 224 bytes");
 
@@ -342,6 +346,9 @@ typedef struct de__vis_shared {
     /** de_render_stats.instances_visible: the frame the sum belongs to. */
     u64 stats_frame;
     bool stats_any;
+    /* ---- DENG-233: occlusion (occlusion.c) and the HZB (hzb.c) ---- */
+    void *occlusion; /**< occlusion.c's state: per-view visibility flags, the debug kernel */
+    de_cvar cv_occlusion, cv_occlusion_reset, cv_occlusion_cut_m, cv_hzb_debug, cv_hzb_single_pass;
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_shared;
 
@@ -349,11 +356,15 @@ typedef struct de__vis_shared {
 typedef struct de__vis_stats {
     bool valid;            /**< a frame of this view was read back */
     u64 frame;             /**< the frame it describes */
-    u32 work_items;        /**< work items asked for (> the capacity: some were dropped) */
-    u32 instances_visible; /**< phase 1 */
+    u32 work_items;        /**< phase 1 work items asked for (> the capacity: some dropped) */
+    u32 instances_visible; /**< drawn in phase 1 plus phase 2 */
     u32 instances_tested;  /**< live instances with a READY meshlet mesh and a matching layer */
     u32 meshlets;          /**< meshlets of the visible instances' LODs */
     u32 work_capacity;     /**< the capacity of that frame's work list */
+    /* DENG-233 */
+    u32 instances_visible_phase1; /**< drawn in phase 1 (visible last frame) */
+    u32 instances_visible_phase2; /**< drawn in phase 2 (newly visible: passed the HZB test) */
+    u32 work_items_phase2;        /**< phase 2 work items asked for */
 } de__vis_stats;
 
 /** One view's frame of the visibility buffer: what the stages read and publish. */
@@ -406,6 +417,29 @@ typedef struct de__vis_context {
     de_rg_resource raster_args[DE__VIS_PHASES]; /**< de__vis_raster_args (INDIRECT) */
     de__vis_meshlet_stats meshlet_stats;        /**< the latest read back (late) */
 
+    /* ---- DENG-233: depth, HZB and two-phase occlusion (all invalid / 0 without instances) ---- */
+    /**
+     * The view's depth: DE_FMT_D32_FLOAT at depth_width x depth_height (the internal size),
+     * reverse-Z (0 = far). "vis.depth_clear" clears it before phase 1; each raster pass loads
+     * and writes it (de_rg_read DE_ACCESS_DEPTH_READ + de_rg_write DE_ACCESS_DEPTH_READ |
+     * DE_ACCESS_DEPTH_WRITE). hzb_build reads it (DE_ACCESS_SHADER_READ) after phase 1. Tests
+     * may give their own (de__vis_frame_desc.depth_override, any float format).
+     */
+    de_rg_resource depth;
+    u32 depth_width, depth_height;
+    /** The view's HZB (hzb.c; imported, R32F, min depth per texel; mip 0 is the previous power
+     * of two of the depth size). hzb_build writes it, phase 2 reads it (SHADER_READ). */
+    de_rg_resource hzb;
+    u32 hzb_width, hzb_height, hzb_mips;
+    u32 hzb_bindless; /**< sampled (all mips, Load) */
+    /** The view's visibility flags (occlusion.c; imported raw buffer, u32 per instance slot, 1 =
+     * visible after phase 2). Phase 1 reads them, phase 2 rewrites slots [0, instance_count). */
+    de_rg_resource visibility;
+    u32 visibility_bindless;
+    u32 visibility_count; /**< slots the last frame wrote; 0 = no history this frame */
+    bool occlusion;       /**< r.occlusion: two-phase occlusion on */
+    bool occlusion_reset; /**< no history this frame (new view, camera cut, r.occlusion_reset) */
+
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -423,6 +457,10 @@ typedef struct de__vis_frame_desc {
     const de_render_settings *settings;
     u32 layer_mask;          /**< 0: all layers */
     u32 work_capacity_fixed; /**< tests: 0 = automatic */
+    /** DENG-233, tests: the phase-1 depth comes from this resource of the graph (a float texture
+     * the caller wrote, of the given size) instead of the cleared D32 depth and raster. */
+    de_rg_resource depth_override;
+    u32 depth_override_width, depth_override_height;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */
@@ -513,6 +551,45 @@ typedef struct de__vis_layout_const {
     u32 value;
 } de__vis_layout_const;
 const de__vis_layout_const *de__vis_layout_consts(u32 *count);
+
+/* ---------- HZB (hzb.c) and occlusion (occlusion.c), DENG-233 ---------- */
+
+/** HZB reduction ops (hzb_build.slang DE_HZB_OP_*). */
+enum { DE__VIS_HZB_OP_MIN = 0u, DE__VIS_HZB_OP_MAX = 1u };
+/** Most HZB mips (mip 0 at most 2^15 wide). */
+#define DE__VIS_HZB_MAX_MIPS 16u
+
+/** The HZB size for a source of `w` x `h`: the previous power of two in each dimension (at least
+ * 1), and its mip count (a full chain). */
+void de__vis_hzb_size(u32 w, u32 h, u32 *hzb_w, u32 *hzb_h, u32 *mips);
+/** An HZB to build: a texture of the graph (an import, or a transient: R32F, `mips` mips,
+ * STORAGE | SAMPLED) and its size. Its storage views are resolved when the passes execute. */
+typedef struct de__vis_hzb_target {
+    de_rg_resource resource;
+    u32 width, height, mips;
+} de__vis_hzb_target;
+/**
+ * Adds the passes that build `t` from `src` (a sampled float texture of the graph, `src_w` x
+ * `src_h`, read DE_ACCESS_SHADER_READ) with reduction `op`: "vis.hzb.level0", then either
+ * "vis.hzb.reduce<n>" (6 mips per dispatch, `single_pass`) or one "vis.hzb.mip<n>" per mip.
+ * Main use: the hzb_build stage; tests and S15 call it directly.
+ */
+void de__vis_hzb_add_passes(de__vis_shared *s, de_rg *g, de_rg_resource src, u32 src_w, u32 src_h,
+                            const de__vis_hzb_target *t, u32 op, bool single_pass);
+/** Before the stages (vis_frame.c): makes the view's HZB the size of its depth and fills the
+ * context's HZB fields. */
+void de__vis_hzb_prepare(de_rg *g, de__vis_context *vc);
+/** Before the stages (vis_frame.c): the view's visibility flags (grown with the instance table,
+ * history copied), the cut detection and the context's occlusion fields. */
+void de__vis_occlusion_prepare(de_rg *g, de__vis_context *vc);
+/** occlusion.c's state (vis_frame.c create / destroy). */
+de_result de__vis_occlusion_init(de__vis_shared *s);
+void de__vis_occlusion_shutdown(de__vis_shared *s);
+/**
+ * r.hzb_debug: a pass that draws HZB mip `mip` of `vc`'s view into a new RGBA16F texture of the
+ * internal size, returned (invalid when there is no HZB). The renderer makes it the view's colour.
+ */
+de_rg_resource de__vis_hzb_debug(de_rg *g, de__vis_context *vc, u32 mip);
 
 /** The latest stats cull_instances read back for view slot `slot` (zeroed when none). */
 de__vis_stats de__vis_view_stats(const de__vis_shared *s, u32 slot);

@@ -320,9 +320,10 @@ static void icx_teardown(icx *f) {
     if (f->alloc.alloc)
         EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0);
     /* The cvars are process-wide: back to their defaults. */
-    const char *const names[] = {"r.cull_freeze", "r.cull_disable", "r.lod_error_px", "r.lod_bias"};
-    const char *const values[] = {"0", "0", "1", "0"};
-    for (u32 i = 0; i < 4; ++i) {
+    const char *const names[] = {"r.cull_freeze", "r.cull_disable", "r.lod_error_px", "r.lod_bias",
+                                 "r.occlusion"};
+    const char *const values[] = {"0", "0", "1", "0", "1"};
+    for (u32 i = 0; i < 5; ++i) {
         const de_cvar cv = de_cvar_find(names[i]);
         if (DE_HANDLE_VALID(cv))
             (void)de_cvar_set(cv, values[i]);
@@ -409,6 +410,10 @@ static void icx_open(icx *f, de_gpu_backend backend, u32 instances, u64 seed) {
         snprintf(why, sizeof why, "the vis frame is off: %.600s", f->vis->why);
         SKIP(why);
     }
+    /* These tests check frustum culling: with two-phase occlusion off (DENG-233) phase 1 draws
+     * every frustum-visible instance and phase 2 none. test_hzb.c and test_two_phase.c test the
+     * occlusion. */
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.occlusion"), "0"), DE_OK);
     world_init(&f->w, instances, seed);
 }
 
@@ -1281,18 +1286,26 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     de__vis_context *vc = NULL;
     ASSERT_TRUE(icx_frame(f, &vc));
     de__gpu_null_log_enable(f->dev, false);
-    char got[512];
+    char got[1024];
     markers(f->dev, "vis.", got, sizeof got);
-    /* DENG-231: meshlet culling reads the arguments and its stats pass keeps it alive. */
-    EXPECT_STREQ(got, "vis.cull_instances.clear,vis.cull_instances,vis.cull_instances.args,"
-                      "vis.cull_instances.stats,vis.cull_meshlets.clear,vis.cull_meshlets,"
-                      "vis.cull_meshlets.args,vis.cull_meshlets.stats");
+    /* DENG-231: meshlet culling reads the arguments and its stats pass keeps it alive. DENG-233:
+     * the depth clear, the HZB (1280 x 720 depth: a 1024 x 512 HZB of 11 mips, mip 0 then mips
+     * 1-6 and 7-10 in two reduce passes) and phase 2 of both culling stages run too. */
+    EXPECT_STREQ(got, "vis.depth_clear,vis.cull_instances.clear,vis.cull_instances,"
+                      "vis.cull_instances.args,vis.cull_meshlets.clear,vis.cull_meshlets,"
+                      "vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,"
+                      "vis.cull_instances2.clear,vis.cull_instances2,vis.cull_instances2.args,"
+                      "vis.cull_instances.stats,vis.cull_meshlets.phase2,"
+                      "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
     /* The context: phase 1's outputs, nothing for phase 2 or the stubbed stages. */
     ASSERT_TRUE(vc != NULL);
     EXPECT_TRUE(DE_HANDLE_VALID(vc->work_items[0]));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->cull_args[0]));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->instance_counters[0]));
-    EXPECT_FALSE(DE_HANDLE_VALID(vc->work_items[1]));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->work_items[1])); /* phase 2 (DENG-233) */
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->depth));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->hzb));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->visibility));
     EXPECT_EQ(vc->instance_count, 300u);
     EXPECT_TRUE(vc->view_new);
     EXPECT_GE(vc->work_capacity, 4096u);
@@ -1303,7 +1316,7 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     EXPECT_TRUE(DE_HANDLE_VALID(vc->visible_meshlets));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->meshlet_counters));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->raster_args[0]));
-    EXPECT_FALSE(DE_HANDLE_VALID(vc->raster_args[1]));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->raster_args[1])); /* phase 2 (DENG-233) */
     EXPECT_GE(vc->visible_capacity, 65536u);
 
     /* A reader of the arguments keeps the args pass. */
@@ -1315,9 +1328,12 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     f->real_gpu = false;
     f->readback = false;
     markers(f->dev, "vis.", got, sizeof got);
-    EXPECT_STREQ(got, "vis.cull_instances.clear,vis.cull_instances,vis.cull_instances.args,"
-                      "vis.cull_instances.stats,vis.cull_meshlets.clear,vis.cull_meshlets,"
-                      "vis.cull_meshlets.args,vis.cull_meshlets.stats");
+    EXPECT_STREQ(got, "vis.depth_clear,vis.cull_instances.clear,vis.cull_instances,"
+                      "vis.cull_instances.args,vis.cull_meshlets.clear,vis.cull_meshlets,"
+                      "vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,"
+                      "vis.cull_instances2.clear,vis.cull_instances2,vis.cull_instances2.args,"
+                      "vis.cull_instances.stats,vis.cull_meshlets.phase2,"
+                      "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
     EXPECT_FALSE(vc->view_new);
     EXPECT_EQ(vc->cull_view_index, 1u);
 
@@ -1406,7 +1422,7 @@ TEST(vis_frame, renderer_stage) {
     RUN_FRAME();
     de__gpu_null_log_enable(d, false);
     /* The main view's graph: the debug clear, the scene constants, then the vis frame. */
-    char got[512];
+    char got[1024];
     got[0] = '\0';
     size_t at = 0;
     const u32 n = de__gpu_null_log_count(d);
@@ -1416,10 +1432,12 @@ TEST(vis_frame, renderer_stage) {
             continue;
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
-    EXPECT_STREQ(got, "view.debug_clear,gpu_scene.view,vis.cull_instances.clear,"
-                      "vis.cull_instances,vis.cull_instances.args,vis.cull_instances.stats,"
-                      "vis.cull_meshlets.clear,vis.cull_meshlets,vis.cull_meshlets.args,"
-                      "vis.cull_meshlets.stats");
+    EXPECT_STREQ(got, "view.debug_clear,gpu_scene.view,vis.depth_clear,vis.cull_instances.clear,"
+                      "vis.cull_instances,vis.cull_instances.args,vis.cull_meshlets.clear,"
+                      "vis.cull_meshlets,vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,"
+                      "vis.hzb.reduce6,vis.cull_instances2.clear,vis.cull_instances2,"
+                      "vis.cull_instances2.args,vis.cull_instances.stats,vis.cull_meshlets.phase2,"
+                      "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
     const de_render_stats *rs = de_renderer_stats(r);
     for (u32 i = 0; i < 4; ++i)
         RUN_FRAME();
@@ -1443,6 +1461,23 @@ TEST(vis_frame, renderer_stage) {
     (void)cvar_set("r.cull_disable", "1");
     RUN_FRAME();
     (void)cvar_set("r.cull_disable", "0");
+    /* r.hzb_debug (DENG-233, Dev only): the view shows an HZB mip, composited into its output. */
+    if (cvar_set("r.hzb_debug", "2")) {
+        de__gpu_null_log_enable(d, true);
+        RUN_FRAME();
+        de__gpu_null_log_enable(d, false);
+        bool debug = false, resolve = false;
+        for (u32 i = 0; i < de__gpu_null_log_count(d); ++i) {
+            const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
+            if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
+                continue;
+            debug |= strcmp(e->text, "vis.hzb_debug") == 0;
+            resolve |= strcmp(e->text, "view.resolve") == 0;
+        }
+        EXPECT_TRUE(debug);
+        EXPECT_TRUE(resolve);
+        (void)cvar_set("r.hzb_debug", "-1");
+    }
 #undef RUN_FRAME
     (void)de_cvar_set(pipelined, "1");
     de_renderer_destroy(r);

@@ -459,6 +459,8 @@ void de__vk_bindless_write_buffer(de_gpu_device *d, u32 index, de__gpu_buffer *b
 void de__vk_bindless_write_texture(de_gpu_device *d, u32 index, de__gpu_texture *t, u32 mip,
                                    bool storage);
 void de__vk_bindless_write_sampler(de_gpu_device *d, u32 index, de__gpu_sampler *s);
+/* Points a destroyed texture's indices at the index-0 dummies (vk_bindless.c). */
+void de__vk_bindless_clear_texture(de_gpu_device *d, const de__gpu_texture *t);
 
 /* ---------- Test hooks ---------- */
 

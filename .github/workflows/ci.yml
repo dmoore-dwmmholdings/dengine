@@ -175,8 +175,10 @@ jobs:
             # bindless byte buffers) and compares it with the CPU reference instance by instance.
             # DENG-231: render_meshlet_cull.* runs GPU meshlet culling (meshlet_cull.slang, wave
             # intrinsics) and compares it with the CPU reference and the triangles.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.)'
+            # DENG-233: render_occlusion.* builds HZBs (bit-exact against the CPU) and runs
+            # two-phase occlusion culling on an occluder wall, cuts and new instances.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
@@ -186,9 +188,9 @@ jobs:
             # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
             # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
             # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull
+            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion
             tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
-            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull)\..*_d3d12$'
+            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion)\..*_d3d12$'
             require: --backend d3d12 --warp
           - name: macos metal (hosted, skips below Base)
             os: macos-14

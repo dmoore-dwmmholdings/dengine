@@ -215,3 +215,14 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/cull_meshlets.c)
 endif()
+
+# DENG-233: the HZB of each view (passes/vis/hzb.c; engine shader vis_hzb_build,
+# shaders/culling/hzb_build.slang) and two-phase occlusion culling (passes/vis/occlusion.c: the
+# per-view visibility flags, camera-cut detection, the r.hzb_debug view; engine shader
+# vis_occlusion, shaders/culling/occlusion.slang, which cull_common.slang imports for
+# cull_occlusion_test).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/vis/hzb.c
+        passes/vis/occlusion.c)
+endif()

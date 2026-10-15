@@ -148,6 +148,39 @@ static void register_cvars(de__vis_shared *s) {
         .default_number = 0,
         .min = -7,
         .max = 7});
+    /* DENG-233: occlusion and the HZB. */
+    s->cv_occlusion = de_cvar_register(
+        &(de_cvar_desc){.name = "r.occlusion",
+                        .help = "GPU culling: two-phase occlusion culling against each view's HZB",
+                        .type = DE_CVAR_BOOL,
+                        .default_number = 1});
+    s->cv_occlusion_reset = de_cvar_register(&(de_cvar_desc){
+        .name = "r.occlusion_reset",
+        .help = "GPU culling: forget the occlusion history for one frame (a camera cut); clears "
+                "itself",
+        .type = DE_CVAR_BOOL});
+    s->cv_occlusion_cut_m = de_cvar_register(&(de_cvar_desc){
+        .name = "r.occlusion_cut_m",
+        .help = "GPU culling: a camera move longer than this (metres) between frames is a cut: "
+                "the occlusion history is dropped for one frame",
+        .type = DE_CVAR_FLOAT,
+        .default_number = 10.0,
+        .min = 0.01,
+        .max = 1.0e6});
+    s->cv_hzb_debug = de_cvar_register(
+        &(de_cvar_desc){.name = "r.hzb_debug",
+                        .help = "Show HZB mip N of each view instead of its colour (-1: off)",
+                        .type = DE_CVAR_INT,
+                        .flags = DE_CVAR_DEV_ONLY,
+                        .default_number = -1,
+                        .min = -1,
+                        .max = DE__VIS_HZB_MAX_MIPS - 1});
+    s->cv_hzb_single_pass = de_cvar_register(&(de_cvar_desc){
+        .name = "r.hzb_single_pass",
+        .help = "HZB: reduce 6 mips per dispatch through groupshared memory (0: one dispatch "
+                "per mip)",
+        .type = DE_CVAR_BOOL,
+        .default_number = 1});
 }
 
 static void shutdown_stages(de__vis_shared *s, u32 count) {
@@ -191,6 +224,22 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
         de_error_clear(); /* the create succeeds */
         break;
     }
+    if (s->enabled) {
+        /* DENG-233: the per-view visibility flags and the HZB debug kernel. */
+        const de_result r = de__vis_occlusion_init(s);
+        if (r == DE_ERR_UNSUPPORTED) {
+            const de_error *e = de_error_last();
+            snprintf(s->why, sizeof s->why, "%.250s", e != NULL ? e->message : "no shaders");
+            shutdown_stages(s, DE__VIS_STAGE_COUNT);
+            s->enabled = false;
+            DE_WARN(s->log, "vis: the visibility-buffer frame is off: %s", s->why);
+            de_error_clear();
+        } else if (r != DE_OK) {
+            shutdown_stages(s, DE__VIS_STAGE_COUNT);
+            DE_FREE(a, s, sizeof *s);
+            return DE_FAIL_WRAP(r, "vis: occlusion");
+        }
+    }
     *out = s;
     return DE_OK;
 }
@@ -198,6 +247,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
 void de__vis_shared_destroy(de__vis_shared *s) {
     if (s == NULL)
         return;
+    de__vis_occlusion_shutdown(s); /* DENG-233 */
     if (s->enabled)
         shutdown_stages(s, DE__VIS_STAGE_COUNT);
     DE_FREE(s->alloc, s, sizeof *s);
@@ -206,6 +256,46 @@ void de__vis_shared_destroy(de__vis_shared *s) {
 /* =================================================================================================
  * One view
  * ============================================================================================== */
+
+/* "vis.depth_clear": the depth starts each frame at 0 (reverse-Z far). */
+static void depth_clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const de_rg_resource *depth = (const de_rg_resource *)user;
+    const de_gpu_attachment a = {
+        .texture = de_rg_texture(pass, *depth), .clear = true, .clear_depth = 0.0f, .store = true};
+    de_gpu_cmd_begin_render(cmd, NULL, 0, &a);
+    de_gpu_cmd_end_render(cmd);
+}
+
+/* DENG-233: the view's depth (cleared, or the test's), its HZB and its visibility flags. */
+static void prepare_occlusion(de__vis_shared *s, de_rg *g, const de__vis_frame_desc *d,
+                              de__vis_context *vc) {
+    if (DE_HANDLE_VALID(d->depth_override)) {
+        vc->depth = d->depth_override;
+        vc->depth_width = d->depth_override_width;
+        vc->depth_height = d->depth_override_height;
+    } else if (vc->width > 0 && vc->height > 0) {
+        vc->depth = de_rg_create_texture(
+            g, &(de_gpu_texture_desc){.format = DE_FMT_D32_FLOAT,
+                                      .width = vc->width,
+                                      .height = vc->height,
+                                      .usage = DE_USAGE_DEPTH | DE_USAGE_SAMPLED,
+                                      .name = "vis.depth"});
+        de_rg_resource *user = (de_rg_resource *)de_arena_push(g->arena, sizeof *user, 8);
+        if (DE_HANDLE_VALID(vc->depth) && user != NULL) {
+            *user = vc->depth;
+            de_rg_pass *p =
+                de_rg_add_pass(g, "vis.depth_clear", DE_QUEUE_GRAPHICS, depth_clear_execute, user);
+            de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_WRITE);
+            vc->depth_width = vc->width;
+            vc->depth_height = vc->height;
+        } else {
+            vc->depth = (de_rg_resource){0};
+        }
+    }
+    (void)s;
+    de__vis_hzb_prepare(g, vc);
+    de__vis_occlusion_prepare(g, vc);
+}
 
 static bool mat_is_zero(const de_mat4 *m) {
     for (u32 i = 0; i < 16; ++i)
@@ -269,6 +359,10 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
         }
     }
 
+    /* DENG-233: the depth, the HZB and the visibility flags of a view that culls. */
+    if (vc->instance_count > 0)
+        prepare_occlusion(s, g, d, vc);
+
     de__vis_cull_instances(g, vc, DE__VIS_PHASE_1);
     de__vis_cull_meshlets(g, vc, DE__VIS_PHASE_1);
     de__vis_raster(g, vc, DE__VIS_PHASE_1);
@@ -324,6 +418,15 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
     }
     if (vc != NULL && vc->stats.valid)
         r->stats.instances_visible += vc->stats.instances_visible;
+    /* r.hzb_debug (DENG-233): the view shows one HZB mip instead of its colour. */
+    const i64 mip = DE_HANDLE_VALID(s->cv_hzb_debug) ? de_cvar_int(s->cv_hzb_debug) : -1;
+    if (vc != NULL && mip >= 0) {
+        const de_rg_resource dbg = de__vis_hzb_debug(vf->graph, vc, (u32)mip);
+        if (DE_HANDLE_VALID(dbg)) {
+            vf->color = dbg;
+            vf->color_format = DE_FMT_RGBA16_FLOAT;
+        }
+    }
 }
 
 de_result de__vis_frame_create(de_renderer *r, struct de__vis_shared **out) {

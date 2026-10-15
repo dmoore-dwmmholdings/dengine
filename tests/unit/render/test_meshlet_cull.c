@@ -498,9 +498,9 @@ static void mcx_teardown(mcx *f) {
         EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0);
     /* The cvars are process-wide: back to their defaults. */
     const char *const names[] = {"r.cull_meshlet_cone", "r.cull_small_tri", "r.cull_disable",
-                                 "r.lod_bias"};
-    const char *const values[] = {"1", "1", "0", "0"};
-    for (u32 i = 0; i < 4; ++i) {
+                                 "r.lod_bias", "r.occlusion"};
+    const char *const values[] = {"1", "1", "0", "0", "1"};
+    for (u32 i = 0; i < 5; ++i) {
         const de_cvar cv = de_cvar_find(names[i]);
         if (DE_HANDLE_VALID(cv))
             (void)de_cvar_set(cv, values[i]);
@@ -587,6 +587,11 @@ static void mcx_open(mcx *f, de_gpu_backend backend, u32 instances) {
     const de_cvar bias = de_cvar_find("r.lod_bias");
     if (DE_HANDLE_VALID(bias))
         (void)de_cvar_set(bias, "-7");
+    /* DENG-233: without occlusion, phase 1 culls every frustum-visible instance (a new view's
+     * first frame would otherwise test everything in phase 2). test_two_phase.c tests occlusion. */
+    const de_cvar occ = de_cvar_find("r.occlusion");
+    if (DE_HANDLE_VALID(occ))
+        (void)de_cvar_set(occ, "0");
 }
 
 /* Adds mesh `style` (built and uploaded); returns its 1-based id. */
@@ -980,7 +985,10 @@ static void frustum_cpu_ref(mcx *f, de_gpu_backend b) {
             small_n += o.culled[DE__VIS_MESHLET_CULLED_SMALL];
             EXPECT_GT(o.tested, 30000u);
             expect_args(&f->res.args[0], 0, f->res.visible_stored);
-            EXPECT_FALSE(f->res.args_valid[1]); /* no phase-2 work items */
+            /* DENG-233: phase 2 runs too; with occlusion off it draws nothing, an empty range
+             * after phase 1's entries. */
+            EXPECT_TRUE(f->res.args_valid[1]);
+            expect_args(&f->res.args[1], f->res.visible_stored, 0);
         }
     }
     printf("%u meshlets tested in 8 frames; %u cone-culled, %u small-culled\n", total, cone,
