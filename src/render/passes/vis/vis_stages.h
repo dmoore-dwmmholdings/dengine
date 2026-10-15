@@ -196,6 +196,107 @@ i32 de__vis_instance_test(const de__vis_cull_view *v, const de__gs_instance *ins
                           const de__gs_mesh *m, u32 *lod);
 
 /* =================================================================================================
+ * C mirror of shaders/culling/meshlet_cull.slang and DeVisRasterArgs (DENG-231)
+ * ============================================================================================== */
+
+/** DeVisRasterArgs (vis_types.slang): one phase's raster arguments. The mesh-shader dispatch is at
+ * byte DE__VIS_RASTER_ARGS_MESH, the compute-expansion dispatch (a de__vis_dispatch_args) at
+ * DE__VIS_RASTER_ARGS_EXPAND; the phase's entries of the visible list are [first, first + count).
+ */
+typedef struct de__vis_raster_args {
+    u32 mesh_x, mesh_y, mesh_z, first;
+    u32 expand_x, expand_y, expand_z, count;
+} de__vis_raster_args;
+DE_STATIC_ASSERT(sizeof(de__vis_raster_args) == 32, "DeVisRasterArgs is 32 bytes");
+#define DE__VIS_RASTER_ARGS_MESH   0u
+#define DE__VIS_RASTER_ARGS_EXPAND 16u
+
+/** Byte offsets of the meshlet-cull counters (a raw 16-byte buffer, both phases). */
+#define DE__VIS_MESHLET_COUNTER_VISIBLE 0u /**< visible asked for (> capacity: dropped) */
+#define DE__VIS_MESHLET_COUNTER_TESTED  4u /**< meshlets tested */
+#define DE__VIS_MESHLET_COUNTER_PHASE1  8u /**< entries stored after phase 1 */
+#define DE__VIS_MESHLET_COUNTER_BYTES   16u
+/** MeshletCullParams.flags */
+enum {
+    DE__VIS_MESHLET_CONE = 1u,        /**< backface-cone test (r.cull_meshlet_cone) */
+    DE__VIS_MESHLET_SMALL = 2u,       /**< small-meshlet test (r.cull_small_tri) */
+    DE__VIS_MESHLET_CASTERS_ONLY = 4u /**< only instances with DE__GS_INSTANCE_CAST_SHADOWS */
+};
+/** Output buckets of meshlet_cull.slang's meshlet_bucket (DENG-236 adds the alpha-tested one). */
+#define DE__VIS_BUCKET_OPAQUE 0u
+#define DE__VIS_BUCKET_NONE   0xFFFFFFFFu
+/** Margin of the small-meshlet test in pixels (DE_VIS_SMALL_EPS_PX). */
+#define DE__VIS_SMALL_EPS_PX (1.0f / 32.0f)
+
+/** The culling data of one DMSH v2 meshlet record (object space). */
+typedef struct de__vis_meshlet_bounds {
+    f32 sphere[4]; /**< centre xyz, radius */
+    f32 apex[4];   /**< cone apex xyz, cutoff (>= 1: no cone) */
+    f32 axis[3];   /**< cone axis */
+    u32 submesh;
+} de__vis_meshlet_bounds;
+
+/** Decodes record `meshlet` of a DMSH v2 meshlet table (DE_COOKED_MESHLET_SIZE bytes each). */
+de__vis_meshlet_bounds de__vis_meshlet_bounds_load(const u8 *records, u32 meshlet);
+
+/** What cs_meshlet_cull decides for one meshlet (de__vis_meshlet_test). */
+typedef enum de__vis_meshlet_result {
+    DE__VIS_MESHLET_VISIBLE = 0,
+    DE__VIS_MESHLET_CULLED_INSTANCE, /**< layer mask, or not a shadow caster in a casters view */
+    DE__VIS_MESHLET_CULLED_FRUSTUM,
+    DE__VIS_MESHLET_CULLED_CONE,
+    DE__VIS_MESHLET_CULLED_SMALL
+} de__vis_meshlet_result;
+
+/** The kernel's inputs that are not in the cull view (its push constants). */
+typedef struct de__vis_meshlet_params {
+    u32 flags;                        /**< DE__VIS_MESHLET_* */
+    f32 width, height;                /**< internal size in pixels */
+    const de__gs_material *materials; /**< the materials table (NULL: none) */
+    u32 material_count;
+} de__vis_meshlet_params;
+
+/*
+ * CPU reference of meshlet_cull.slang (the same arithmetic, in the same order). The occlusion hook
+ * is not modelled (the DENG-229 stub: visible).
+ */
+/** True when the cone test may cull meshlets of `submesh` of `inst`: a READY, single-sided
+ * material in its slot. */
+bool de__vis_meshlet_cone_allowed(const de__gs_instance *inst, u32 submesh,
+                                  const de__vis_meshlet_params *p);
+/** The object-space cone test: true when every triangle faces away from the culling camera. */
+bool de__vis_meshlet_cone_culled(const de__gs_instance *inst, const de__vis_meshlet_bounds *m,
+                                 const de__vis_cull_view *v);
+/** The small-meshlet test of world sphere (c, r): true when it covers no pixel centre. */
+bool de__vis_meshlet_small_culled(const de__vis_cull_view *v, const f32 c[3], f32 r, f32 width,
+                                  f32 height);
+/** The pixel rectangle the small test uses: false when the sphere reaches the near plane (the
+ * test is skipped). `rect` = x0, x1, y0, y1. */
+bool de__vis_meshlet_screen_rect(const de__vis_cull_view *v, const f32 c[3], f32 r, f32 width,
+                                 f32 height, f32 rect[4]);
+/** The world bounding sphere of meshlet `m` of `inst` (centre exact, radius x max axis scale). */
+void de__vis_meshlet_world_sphere(const de__gs_instance *inst, const de__vis_meshlet_bounds *m,
+                                  f32 c[3], f32 *r);
+/**
+ * Every test of one meshlet, in the kernel's order. `marginal` (may be NULL) is set when a test
+ * on the way to the result was within a float tolerance of its threshold (the GPU may decide
+ * either way there).
+ */
+de__vis_meshlet_result de__vis_meshlet_test(const de__vis_cull_view *v, const de__gs_instance *inst,
+                                            const de__vis_meshlet_bounds *m,
+                                            const de__vis_meshlet_params *p, bool *marginal);
+
+/** What the CPU last read back of one view's meshlet culling (one to a few frames late). */
+typedef struct de__vis_meshlet_stats {
+    bool valid;
+    u64 frame;
+    u32 visible;  /**< visible meshlets asked for, both phases (> capacity: some dropped) */
+    u32 tested;   /**< meshlets tested, both phases */
+    u32 phase1;   /**< entries stored by phase 1 */
+    u32 capacity; /**< the capacity of that frame's visible list */
+} de__vis_meshlet_stats;
+
+/* =================================================================================================
  * Stages
  * ============================================================================================== */
 
@@ -295,6 +396,15 @@ typedef struct de__vis_context {
     de_rg_resource cull_args[DE__VIS_PHASES];         /**< de__vis_dispatch_args (INDIRECT) */
     de_rg_resource instance_counters[DE__VIS_PHASES]; /**< DE__VIS_COUNTER_* (raw) */
     de__vis_stats stats;                              /**< the latest read back (late) */
+
+    /* Meshlet culling (cull_meshlets.c, DENG-231). One visible list per view and frame: phase 1
+     * fills it from entry 0, phase 2 appends after phase 1 (raster_args[i].first). */
+    bool casters_only;               /**< the view draws shadow casters only (no such view yet) */
+    u32 visible_capacity;            /**< entries of visible_meshlets */
+    de_rg_resource visible_meshlets; /**< de__vis_meshlet[visible_capacity] */
+    de_rg_resource meshlet_counters; /**< DE__VIS_MESHLET_COUNTER_* (raw) */
+    de_rg_resource raster_args[DE__VIS_PHASES]; /**< de__vis_raster_args (INDIRECT) */
+    de__vis_meshlet_stats meshlet_stats;        /**< the latest read back (late) */
 
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
@@ -406,6 +516,17 @@ const de__vis_layout_const *de__vis_layout_consts(u32 *count);
 
 /** The latest stats cull_instances read back for view slot `slot` (zeroed when none). */
 de__vis_stats de__vis_view_stats(const de__vis_shared *s, u32 slot);
+
+/** The `public static const uint` values of meshlet_cull.slang (DENG-231). */
+const de__vis_layout_const *de__vis_meshlet_layout_consts(u32 *count);
+/** The latest stats cull_meshlets read back for view slot `slot` (zeroed when none). */
+de__vis_meshlet_stats de__vis_view_meshlet_stats(const de__vis_shared *s, u32 slot);
+/** Test overrides of meshlet culling (zero: none). */
+typedef struct de__vis_meshlet_debug {
+    u32 capacity_fixed; /**< a fixed visible-list capacity (0: grow as needed) */
+    bool casters_only;  /**< force de__vis_context.casters_only */
+} de__vis_meshlet_debug;
+void de__vis_meshlet_set_debug(de__vis_shared *s, const de__vis_meshlet_debug *d);
 
 DE_EXTERN_C_END
 

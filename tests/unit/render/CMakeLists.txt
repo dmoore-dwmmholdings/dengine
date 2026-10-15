@@ -344,3 +344,28 @@ if(TARGET test_render_churn)
     target_link_libraries(test_render_churn PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
 endif()
+
+# DENG-231: GPU meshlet culling (src/render/passes/vis/cull_meshlets.c, the engine shader
+# vis_meshlet_cull), executable test_render_meshlet_cull; CTest names render_meshlet_cull.<suite>.
+# <test>. Meshes of real triangles get their meshlet bounds from meshoptimizer (as the cooker's),
+# so the test links it. meshlet_cull.*_{metal,vulkan,d3d12} compare the visible list with the CPU
+# reference and the triangles (SKIP without the device; CI: Vulkan on lavapipe and D3D12 on the
+# vendored WARP in the golden jobs); the CPU tests parse shaders/culling/meshlet_cull.slang and
+# shaders/visbuffer/vis_types.slang.
+de_add_test(NAME render_meshlet_cull
+    SOURCES test_meshlet_cull.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_tp_meshoptimizer
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_meshlet_cull)
+    target_include_directories(test_render_meshlet_cull PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_meshlet_cull PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_meshlet_cull PRIVATE version)
+        de_d3d12_agility_deploy(test_render_meshlet_cull)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_meshlet_cull)
+        endif()
+    endif()
+endif()
