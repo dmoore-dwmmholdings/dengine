@@ -179,10 +179,19 @@ public interface IMaterialModel
 /// shades through it: subsurface pixels and the split targets (r.split_lighting) take `diffuse`
 /// as what the screen-space subsurface scattering blurs, and evaluate - diffuse as specular.
 /// Exact for metals too, where evaluating with base colour 0 is not (their F0 is the base colour).
+///
+/// DENG-429: deferred lighting rebuilds the surface from the thin G-buffer, which keeps no layer
+/// or transmission parameters, and restores them from the pixel's material with
+/// `layers_from_material`.
 public interface IMaterialSplitModel : IMaterialModel
 {
     /// evaluate(s, wo, wi), with its diffuse share in `diffuse` (BSDF x |cos(theta_i)|).
     static float3 evaluate_split(SurfaceData s, float3 wo, float3 wi, out float3 diffuse);
+
+    /// The parameters the G-buffer does not keep, from the material record alone (factors,
+    /// colours, roughness; no textures): for a pass that rebuilt `s` with de_surface_from_gb and
+    /// found the pixel's material (deferred lighting). Sets or clears the features it covers.
+    static void layers_from_material(inout SurfaceData s, DeGpuMaterial m);
 };
 
 /// Samples `texture` (bindless index; `fallback` when DE_BINDLESS_INVALID) with UV set `set` of

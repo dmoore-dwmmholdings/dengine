@@ -27,10 +27,11 @@
  * row, also under Metal shader validation (DENG-430). The last image is copied into the harness
  * target.
  *
- * Known gaps the references hold (follow-ups, not threshold slack): deferred lighting does not
- * apply the Standard layers of opaque surfaces (DENG-429: the clearcoat, sheen, anisotropy and
- * iridescence rows look like the base); IBL has no clearcoat or sheen term (DENG-304); rough
- * transmission darkens (single scattering, DENG-301); transparents draw LOD 0 (DENG-305).
+ * Known gaps the references hold (follow-ups, not threshold slack): IBL has no clearcoat, sheen
+ * or iridescence term (DENG-304), so under the sky alone those rows look like the base (they show
+ * under the lights since DENG-429, which made deferred lighting apply the layers of opaque
+ * surfaces); rough transmission darkens (single scattering, DENG-301); transparents draw LOD 0
+ * (DENG-305).
  *
  * Golden determinism: fixed EV100 on each scene's DeCamera (no auto exposure), a fixed camera,
  * output.basic (DENG-304) as the output stage, no temporal effect. assets/gen_assets.py writes

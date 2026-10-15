@@ -37,7 +37,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/** deferred_lighting.slang LightingParams (112 bytes). */
+/** deferred_lighting.slang LightingParams (128 bytes, DE_GPU_MAX_PUSH_CONSTANT_BYTES). */
 typedef struct lp_params {
     u32 view, entry, scene, view_slot;
     u32 depth, gb0, gb1, gb2;
@@ -46,8 +46,11 @@ typedef struct lp_params {
     u32 model, width, height, tile_counters;
     /* DeClusterLists */
     u32 lights, dir_lights, grid, list, counters, ltc1, ltc2, sampler;
+    /* DENG-429: the pixel's material and triangle */
+    u32 ids, ids_pitch, visible, visible_count;
 } lp_params;
-DE_STATIC_ASSERT(sizeof(lp_params) == 112, "LightingParams is 112 bytes");
+DE_STATIC_ASSERT(sizeof(lp_params) == 128, "LightingParams is 128 bytes");
+DE_STATIC_ASSERT(sizeof(lp_params) <= DE_GPU_MAX_PUSH_CONSTANT_BYTES, "push constants");
 
 /* Cvar defaults. */
 #define LP_TILE_DEFAULT         64
@@ -472,6 +475,7 @@ typedef struct lp_pass {
     u32 groups_x, groups_y;
     de_rg_resource depth, gb[3], lighting, diffuse, specular, lists, args, tile_counters;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
+    de_rg_resource ids, visible; /**< DENG-429: the vis IDs and the visible list */
     de_rg_resource inputs[6];
     u8 *inputs_dst; /**< the inputs of this frame's constants entry (the deferred pass) */
     de_gpu_buffer rb;
@@ -506,6 +510,8 @@ static lp_params params(const lp_pass *p, const de_rg_pass *pass) {
     pc.counters = buf_index(p, pass, p->counters);
     pc.ltc1 = tex_index(p, pass, p->ltc1, false);
     pc.ltc2 = tex_index(p, pass, p->ltc2, false);
+    pc.ids = buf_index(p, pass, p->ids); /* DENG-429; 0 (invalid) outside the deferred pass */
+    pc.visible = buf_index(p, pass, p->visible);
     return pc;
 }
 
@@ -777,6 +783,11 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.counters = lc->counters;
         b.ltc1 = ltc1;
         b.ltc2 = ltc2;
+        /* DENG-429: the pixel's material (and triangle) through its vis ID. */
+        b.ids = vc->vis_ids_buffer;
+        b.visible = vc->visible_meshlets;
+        b.pc.ids_pitch = vc->vis_ids_pitch;
+        b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
         const de_rg_resource inputs[6] = {in.ao,
                                           in.shadow_directional,
                                           in.shadow_local,
@@ -806,6 +817,11 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, vc->classify_tiles, DE_ACCESS_SHADER_READ);
         de_rg_read(p, vc->classify_args, DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
         de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
+        const de_rg_resource material_reads[5] = {b.ids, b.visible, vc->scene_instances,
+                                                  vc->scene_meshes, vc->scene_materials};
+        for (u32 i = 0; i < 5; ++i) /* DENG-429 */
+            if (DE_HANDLE_VALID(material_reads[i]))
+                de_rg_read(p, material_reads[i], DE_ACCESS_SHADER_READ);
         de_rg_read(p, lc->lights, DE_ACCESS_SHADER_READ);
         de_rg_read(p, lc->dir_lights, DE_ACCESS_SHADER_READ);
         de_rg_read(p, lc->grid_buf, DE_ACCESS_SHADER_READ);

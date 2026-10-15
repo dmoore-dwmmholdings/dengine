@@ -12,7 +12,10 @@
 //   cs_cluster_heatmap       8 x 8 threads per group: the debug view of the cluster light counts
 //                            (r.cluster_debug)
 //
-// Per pixel: the surface from the G-buffer (de_surface_from_gb), the position from the depth, then
+// Per pixel: the surface from the G-buffer (de_surface_from_gb), completed from the pixel's
+// material (DENG-429: vis ID -> visible meshlet -> instance -> submesh slot, then the model's
+// layers_from_material: clearcoat, sheen, anisotropy, iridescence, transmission; the triangle's
+// tangent for anisotropy), the position from the depth, then
 // evaluate_direct_clustered<M> (lighting_common.slang) over the view's directional lights and its
 // cluster's local lights, plus evaluate_indirect_split (IBL, DENG-304). The radiance, times
 // pre_exposure (the view's exposure, exposure.c), is added to
@@ -31,12 +34,14 @@ import push_constants;
 import "../lighting/lighting_common";
 import "../materials/standard/standard";
 import "../visbuffer/gbuffer";
+import "../visbuffer/resolve_common";
+import "../visbuffer/vis_decode";
 import "../visbuffer/vis_types";
 
 /// Threads per group of de_lighting_tiles.
 public static const uint DE_LIGHTING_GROUP = 64;
 
-/// Push constants of every kernel (112 bytes; lighting_pass.c lp_params).
+/// Push constants of every kernel (128 bytes, the limit; lighting_pass.c lp_params).
 public struct LightingParams
 {
     public uint view;       // DeLightingView ring (de_robuffer)
@@ -60,7 +65,62 @@ public struct LightingParams
     public uint height;
     public uint tile_counters; // raw u32 per model: tiles lit (tests)
     public DeClusterLists cl;
+    // DENG-429: the pixel's material and triangle (the layers the G-buffer does not keep).
+    public uint ids;           // the vis IDs (raw u32), rows `ids_pitch` bytes apart
+    public uint ids_pitch;
+    public uint visible;       // de_robuffer<DeVisMeshlet>: the view's visible-meshlet list
+    public uint visible_count; // its entries (opaque and alpha regions)
 };
+
+/// The READY material of the pixel at `p` (through its vis ID, the visible meshlet, the instance
+/// and the submesh's slot, as the resolve finds it); false for none (the surface then keeps what
+/// the G-buffer gave). `id` is the pixel's vis ID.
+bool pixel_material(uint2 p, DeSceneConstants sc, LightingParams pc, out uint id,
+                    out DeGpuMaterial m)
+{
+    m = (DeGpuMaterial)0;
+    id = DE_VIS_ID_EMPTY;
+    if (pc.ids == DE_BINDLESS_INVALID || pc.visible == DE_BINDLESS_INVALID ||
+        sc.materials == DE_BINDLESS_INVALID)
+        return false;
+    id = de_bytes(pc.ids).load(p.y * pc.ids_pitch + p.x * 4u);
+    if (id == DE_VIS_ID_EMPTY)
+        return false;
+    uint entry = de_vis_id_meshlet(id);
+    if (entry >= pc.visible_count)
+        return false;
+    DeVisMeshlet vm = de_robuffer<DeVisMeshlet>(pc.visible)[entry];
+    DeGpuInstance inst = de_robuffer<DeGpuInstance>(sc.instances)[vm.instance];
+    if (inst.mesh == DE_GPU_NONE || inst.mesh >= sc.mesh_count)
+        return false;
+    DeGpuMesh mesh = de_robuffer<DeGpuMesh>(sc.meshes)[inst.mesh];
+    if (mesh.meshlets == DE_BINDLESS_INVALID || vm.meshlet >= mesh.meshlet_count)
+        return false;
+    uint slot = de_vis_instance_material(inst, de_vis_meshlet_info(mesh, vm.meshlet).submesh);
+    if (slot == DE_GPU_NONE || slot >= sc.material_count)
+        return false;
+    m = de_robuffer<DeGpuMaterial>(sc.materials)[slot];
+    return (m.flags & DE_GPU_MATERIAL_READY) != 0u;
+}
+
+/// The tangent frame of an anisotropic pixel, which the G-buffer does not keep: the triangle's
+/// interpolated tangent, as the resolve computes it (resolve_common.slang), with the
+/// double-sided flip. Without a tangent stream the surface keeps none (the frame is then built
+/// from the normal, as in the resolve).
+void pixel_tangent(inout SurfaceData s, uint id, uint2 p, DeSceneConstants sc, LightingParams pc,
+                   DeGpuMaterial m, float3 v)
+{
+    DeResolvePoint r = de_resolve_point(id, p, float2(float(pc.width), float(pc.height)), sc,
+                                        pc.visible, pc.visible_count);
+    if (!r.valid || !de_vis_mesh_has_stream(r.mesh, DE_VIS_STREAM_TANGENT))
+        return;
+    float4 tangent;
+    float3 geometric;
+    de_resolve_normal(r, tangent, geometric);
+    if ((m.flags & DE_GPU_MATERIAL_DOUBLE_SIDED) != 0u && dot(geometric, v) < 0.0)
+        tangent.w = -tangent.w;
+    s.tangent = tangent;
+}
 
 /// One dispatch of the tiles of model pc.model through model M (thread `t` of the group).
 public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, LightingParams pc)
@@ -113,6 +173,16 @@ public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, Ligh
         uint cluster = de_cluster_index(lv, p, view_depth);
         SurfaceData s = de_surface_from_gb(g);
         s.brdf_lut = lv.brdf_lut; // the Standard model's energy LUT (DENG-299)
+        // DENG-429: the layers and transmission parameters from the pixel's material, and the
+        // tangent frame for anisotropy.
+        uint id;
+        DeGpuMaterial m;
+        if (pixel_material(p, sc, pc, id, m))
+        {
+            M.layers_from_material(s, m);
+            if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u)
+                pixel_tangent(s, id, p, sc, pc, m, v);
+        }
         // DENG-306: a subsurface pixel's diffuse goes to the diffuse target only, where the SSS
         // pass blurs it; without the SSS pass it is lit like any other pixel.
         bool sss = sss_on && (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
