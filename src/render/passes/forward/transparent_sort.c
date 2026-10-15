@@ -123,7 +123,8 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
         if ((in->layer_mask[s] & v->layer_mask) == 0)
             continue;
         const de_aabb *b = &in->bounds[s];
-        if (frustum && !de__vis_cull_aabb(cv, &b->min.x, &b->max.x))
+        const f32 lo[3] = {b->min.x, b->min.y, b->min.z}, hi[3] = {b->max.x, b->max.y, b->max.z};
+        if (frustum && !de__vis_cull_aabb(cv, lo, hi))
             continue;
         if (n == cap) {
             const u32 ncap = cap ? cap * 2u : 64u;

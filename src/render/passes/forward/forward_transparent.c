@@ -126,7 +126,7 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
         fw->enabled = true;
     } else if (r == DE_ERR_UNSUPPORTED) {
         const de_error *e = de_error_last();
-        snprintf(fw->why, sizeof fw->why, "%s", e != NULL ? e->message : "no engine shaders");
+        snprintf(fw->why, sizeof fw->why, "%.200s", e != NULL ? e->message : "no engine shaders");
         DE_WARN(vis->log, "forward: the transparent pass is off: %s", fw->why);
         de_error_clear();
     } else {
