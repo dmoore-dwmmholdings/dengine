@@ -17,6 +17,18 @@
  * when the submit fails: a failure (or VK_ERROR_DEVICE_LOST) marks the device lost, and a lost
  * device reports every value as complete. A command buffer that cannot be ended is left out and
  * the submit is reported failed after the timeline signal went in.
+ *
+ * Deferred submits (DENG-426). de_gpu lets a wait be submitted before its signal. Vulkan runs a
+ * VkQueue's submissions in order, so when de_gpu queues share one VkQueue (lavapipe has a single
+ * queue: graphics, compute and copy all map to it) a wait whose signal is submitted later to the
+ * same VkQueue would block it forever. On a shared VkQueue, a submit with a wait whose value no
+ * submission has been asked to signal yet (de__vk_fence.submitted; fences are only signalled by
+ * submits) is held back, as are the later submits of the same de_gpu queue (each queue's internal
+ * timeline must be signalled in order). Every successful submit that signals a fence then
+ * re-checks the held-back submits of every queue lock and hands over those whose waits are now
+ * covered, in order. On distinct VkQueues nothing is held back: Vulkan's wait-before-signal works
+ * there. Swapchain present (vk_swapchain.c) does not go through this: it must not follow a
+ * graphics submit that is still held back.
  */
 #include "gpu/vulkan/vk_internal.h"
 
@@ -81,6 +93,7 @@ bool de__vk_wait_queue_value(de__vk_device *vk, de_gpu_queue q, u64 value) {
 de_result de__vk_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial) {
     de__vk_fence *vf = DE__GPU_PAYLOAD(de__vk_fence, f);
     vf->semaphore = make_semaphore(d, VK_SEMAPHORE_TYPE_TIMELINE, initial, "fence");
+    de_atomic_init_u64(&vf->submitted, initial);
     return vf->semaphore ? DE_OK : DE_ERR_OUT_OF_MEMORY;
 }
 
@@ -155,6 +168,151 @@ static void host_visibility_barrier(de__vk_device *vk, VkCommandBuffer cb) {
 /* Small submits use the stack; larger ones (rare) the device allocator. */
 #define LOCAL 16u
 
+/* ---------- Deferred submits (DENG-426; file comment) ---------- */
+
+typedef struct de__vk_deferred {
+    struct de__vk_deferred *next;
+    de_gpu_queue q;
+    u32 ncb, nwait, nsig;
+    size_t bytes; /**< of this allocation (the arrays follow the struct) */
+    VkCommandBufferSubmitInfo *cbs;
+    VkSemaphoreSubmitInfo *waits, *sigs;
+    de__vk_fence **wait_fences; /**< per wait: its fence, NULL for a swapchain acquire */
+    de__vk_fence *signal_fence; /**< the de_gpu_submit signal, or NULL */
+} de__vk_deferred;
+
+/* True when every fence wait of the submit is covered: some submission handed to the VkQueues
+ * signals a value at least as large. */
+static bool waits_covered(de__vk_fence *const *fences, const VkSemaphoreSubmitInfo *waits, u32 n) {
+    for (u32 i = 0; i < n; ++i)
+        if (fences[i] &&
+            de_atomic_load_u64(&fences[i]->submitted, DE_ATOMIC_ACQUIRE) < waits[i].value)
+            return false;
+    return true;
+}
+
+static void note_signal(de__vk_fence *f, u64 value) {
+    if (!f)
+        return;
+    u64 cur = de_atomic_load_u64(&f->submitted, DE_ATOMIC_RELAXED);
+    while (cur < value && !de_atomic_cas_weak_u64(&f->submitted, &cur, value, DE_ATOMIC_RELEASE,
+                                                  DE_ATOMIC_RELAXED))
+        ;
+}
+
+static VkResult submit_now(de__vk_device *vk, VkQueue queue, const VkCommandBufferSubmitInfo *cbs,
+                           u32 ncb, const VkSemaphoreSubmitInfo *waits, u32 nwait,
+                           const VkSemaphoreSubmitInfo *sigs, u32 nsig) {
+    if (de__vk_lost(vk))
+        return VK_ERROR_DEVICE_LOST;
+    VkSubmitInfo2 si;
+    memset(&si, 0, sizeof si);
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+    si.waitSemaphoreInfoCount = nwait;
+    si.pWaitSemaphoreInfos = nwait ? waits : NULL;
+    si.commandBufferInfoCount = ncb;
+    si.pCommandBufferInfos = ncb ? cbs : NULL;
+    si.signalSemaphoreInfoCount = nsig;
+    si.pSignalSemaphoreInfos = sigs;
+    return vk->fn.vkQueueSubmit2(queue, 1, &si, VK_NULL_HANDLE);
+}
+
+/* Copies a submit into a held-back entry at the end of `lock`'s list (the lock is held). */
+static bool defer(de_gpu_device *d, u32 lock, de_gpu_queue q, const VkCommandBufferSubmitInfo *cbs,
+                  u32 ncb, const VkSemaphoreSubmitInfo *waits, de__vk_fence *const *wait_fences,
+                  u32 nwait, const VkSemaphoreSubmitInfo *sigs, u32 nsig,
+                  de__vk_fence *signal_fence) {
+    de__vk_device *vk = de__vk(d);
+    const size_t bytes = sizeof(de__vk_deferred) + (size_t)ncb * sizeof *cbs +
+                         (size_t)(nwait + nsig) * sizeof *waits +
+                         (size_t)nwait * sizeof(de__vk_fence *);
+    de__vk_deferred *e = (de__vk_deferred *)DE_ALLOC(d->alloc, bytes, 16, DE_MEM_RENDER);
+    if (!e)
+        return false;
+    memset(e, 0, sizeof *e);
+    e->q = q;
+    e->ncb = ncb;
+    e->nwait = nwait;
+    e->nsig = nsig;
+    e->bytes = bytes;
+    u8 *p = (u8 *)(e + 1);
+    e->cbs = (VkCommandBufferSubmitInfo *)p;
+    p += (size_t)ncb * sizeof *cbs;
+    e->waits = (VkSemaphoreSubmitInfo *)p;
+    p += (size_t)nwait * sizeof *waits;
+    e->sigs = (VkSemaphoreSubmitInfo *)p;
+    p += (size_t)nsig * sizeof *waits;
+    e->wait_fences = (de__vk_fence **)p;
+    if (ncb)
+        memcpy(e->cbs, cbs, (size_t)ncb * sizeof *cbs);
+    if (nwait) {
+        memcpy(e->waits, waits, (size_t)nwait * sizeof *waits);
+        memcpy(e->wait_fences, wait_fences, (size_t)nwait * sizeof *wait_fences);
+    }
+    memcpy(e->sigs, sigs, (size_t)nsig * sizeof *sigs);
+    e->signal_fence = signal_fence;
+    de__vk_deferred **tail = &vk->deferred[lock];
+    while (*tail)
+        tail = &(*tail)->next;
+    *tail = e;
+    return true;
+}
+
+/* Hands over the held-back submits of `lock` whose waits are covered, in order (an entry waits
+ * while an earlier one of its de_gpu queue is still held). Takes the lock. True when any went. */
+static bool flush_lock(de_gpu_device *d, u32 lock) {
+    de__vk_device *vk = de__vk(d);
+    de_mutex_lock(&vk->queue_locks[lock]);
+    bool any = false;
+    bool progress = true;
+    while (progress && vk->deferred[lock]) {
+        progress = false;
+        bool blocked[DE_QUEUE_COUNT_] = {false};
+        for (de__vk_deferred **at = &vk->deferred[lock]; *at;) {
+            de__vk_deferred *e = *at;
+            if (blocked[e->q] || !waits_covered(e->wait_fences, e->waits, e->nwait)) {
+                blocked[e->q] = true;
+                at = &e->next;
+                continue;
+            }
+            const VkResult vr = submit_now(vk, vk->queues[e->q].queue, e->cbs, e->ncb, e->waits,
+                                           e->nwait, e->sigs, e->nsig);
+            if (vr != VK_SUCCESS)
+                mark_lost(vk); /* every value counts as complete from now on */
+            else if (e->signal_fence)
+                note_signal(e->signal_fence, e->sigs[e->nsig - 1u].value);
+            *at = e->next;
+            DE_FREE(d->alloc, e, e->bytes);
+            progress = any = true;
+        }
+    }
+    de_mutex_unlock(&vk->queue_locks[lock]);
+    return any;
+}
+
+/* Until nothing more goes: a submit handed over on one lock may cover a wait on another. */
+static void flush_all(de_gpu_device *d) {
+    de__vk_device *vk = de__vk(d);
+    bool any = true;
+    while (any) {
+        any = false;
+        for (u32 l = 0; l < vk->queue_lock_count; ++l)
+            if (vk->lock_shared[l])
+                any |= flush_lock(d, l);
+    }
+}
+
+void de__vk_deferred_free(de_gpu_device *d) {
+    de__vk_device *vk = de__vk(d);
+    for (u32 l = 0; l < DE_QUEUE_COUNT_; ++l) {
+        while (vk->deferred[l]) {
+            de__vk_deferred *e = vk->deferred[l];
+            vk->deferred[l] = e->next;
+            DE_FREE(d->alloc, e, e->bytes);
+        }
+    }
+}
+
 de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                               u64 queue_value) {
     de__vk_device *vk = de__vk(d);
@@ -162,6 +320,8 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
 
     VkCommandBufferSubmitInfo cb_local[LOCAL];
     VkSemaphoreSubmitInfo wait_local[LOCAL + DE__VK_MAX_PENDING_ACQUIRES];
+    de__vk_fence *wait_fence_local[LOCAL + DE__VK_MAX_PENDING_ACQUIRES];
+    de__vk_fence **wait_fences = wait_fence_local;
     VkCommandBufferSubmitInfo *cbs = cb_local;
     VkSemaphoreSubmitInfo *waits = wait_local;
     const u32 wait_cap = s->wait_count + DE__VK_MAX_PENDING_ACQUIRES;
@@ -169,10 +329,13 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     const size_t wait_bytes = (size_t)wait_cap * sizeof *waits;
     if (s->cmd_count > LOCAL)
         cbs = (VkCommandBufferSubmitInfo *)DE_ALLOC(d->alloc, cb_bytes, 8, DE_MEM_RENDER);
-    if (wait_cap > LOCAL + DE__VK_MAX_PENDING_ACQUIRES)
+    const size_t wf_bytes = (size_t)wait_cap * sizeof *wait_fences;
+    if (wait_cap > LOCAL + DE__VK_MAX_PENDING_ACQUIRES) {
         waits = (VkSemaphoreSubmitInfo *)DE_ALLOC(d->alloc, wait_bytes, 8, DE_MEM_RENDER);
+        wait_fences = (de__vk_fence **)DE_ALLOC(d->alloc, wf_bytes, 8, DE_MEM_RENDER);
+    }
     de_result r = DE_OK;
-    if (!cbs || !waits) {
+    if (!cbs || !waits || !wait_fences) {
         /* Still signal the value below (with no work), then report. */
         r = DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_gpu_queue_submit: submit info");
     }
@@ -202,7 +365,8 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
             continue; /* the front-end reported it */
         memset(&waits[nwait], 0, sizeof waits[nwait]);
         waits[nwait].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        waits[nwait].semaphore = DE__GPU_PAYLOAD(de__vk_fence, f)->semaphore;
+        wait_fences[nwait] = DE__GPU_PAYLOAD(de__vk_fence, f);
+        waits[nwait].semaphore = wait_fences[nwait]->semaphore;
         waits[nwait].value = s->waits[i].value;
         waits[nwait].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         ++nwait;
@@ -216,9 +380,11 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     sig[nsig].value = queue_value;
     sig[nsig].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     ++nsig;
+    de__vk_fence *signal_fence = NULL;
     if (r == DE_OK && s->signal.id) {
         de__gpu_fence *f = de__gpu_get_fence(d, s->signal);
         if (f) {
+            signal_fence = DE__GPU_PAYLOAD(de__vk_fence, f);
             sig[nsig].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             sig[nsig].semaphore = DE__GPU_PAYLOAD(de__vk_fence, f)->semaphore;
             sig[nsig].value = s->signal_value;
@@ -238,21 +404,30 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
             waits[nwait].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             waits[nwait].semaphore = vk->pending_acquire[i]->semaphore;
             waits[nwait].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            wait_fences[nwait] = NULL; /* a binary semaphore an acquire signalled */
             ++nwait;
             ++nacq;
         }
     }
-    if (!de__vk_lost(vk)) {
-        VkSubmitInfo2 si;
-        memset(&si, 0, sizeof si);
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        si.waitSemaphoreInfoCount = nwait;
-        si.pWaitSemaphoreInfos = nwait ? waits : NULL;
-        si.commandBufferInfoCount = ncb;
-        si.pCommandBufferInfos = ncb ? cbs : NULL;
-        si.signalSemaphoreInfoCount = nsig;
-        si.pSignalSemaphoreInfos = sig;
-        vr = vk->fn.vkQueueSubmit2(vq->queue, 1, &si, VK_NULL_HANDLE);
+    /* DENG-426: on a shared VkQueue, hold the submit back while a wait is not covered yet, or
+     * while an earlier submit of this queue is held back. */
+    bool held = false;
+    if (vk->lock_shared[vq->lock] && !de__vk_lost(vk)) {
+        bool earlier = false;
+        for (const de__vk_deferred *e = vk->deferred[vq->lock]; e && !earlier; e = e->next)
+            earlier = e->q == q;
+        if (earlier || !waits_covered(wait_fences, waits, nwait)) {
+            held = defer(d, vq->lock, q, cbs, ncb, waits, wait_fences, nwait, sig, nsig,
+                         nsig > 1u ? signal_fence : NULL);
+            if (!held && r == DE_OK)
+                r = DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_gpu_queue_submit: a held-back submit");
+            vr = held ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+    }
+    if (!held && vr != VK_ERROR_OUT_OF_HOST_MEMORY) {
+        vr = submit_now(vk, vq->queue, cbs, ncb, waits, nwait, sig, nsig);
+        if (vr == VK_SUCCESS && nsig > 1u)
+            note_signal(signal_fence, sig[1].value);
     }
     if (vr == VK_SUCCESS) {
         vk->last_value[q] = queue_value;
@@ -265,10 +440,15 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     }
     de_mutex_unlock(&vk->queue_locks[vq->lock]);
 
+    /* A signal went in: submits held back on shared VkQueues may be covered now. */
+    if (vr == VK_SUCCESS && !held && nsig > 1u)
+        flush_all(d);
     if (cbs != cb_local && cbs)
         DE_FREE(d->alloc, cbs, cb_bytes);
     if (waits != wait_local && waits)
         DE_FREE(d->alloc, waits, wait_bytes);
+    if (wait_fences != wait_fence_local && wait_fences)
+        DE_FREE(d->alloc, wait_fences, wf_bytes);
     if (vr != VK_SUCCESS) {
         /* The value can no longer be signalled in order: report every value as complete. */
         mark_lost(vk);

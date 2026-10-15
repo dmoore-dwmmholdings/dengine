@@ -341,6 +341,11 @@ typedef struct de__vk_device {
      * by the graphics queue's lock. */
     struct de__vk_acquire *pending_acquire[DE__VK_MAX_PENDING_ACQUIRES];
     u32 pending_acquire_count;
+    /** DENG-426: per queue lock, the submits held back because a wait's signal has not been
+     * submitted yet and the VkQueue is shared (vk_sync.c); guarded by that lock. */
+    struct de__vk_deferred *deferred[DE_QUEUE_COUNT_];
+    /** Per queue lock: more than one de_gpu queue submits to its VkQueue (set at creation). */
+    bool lock_shared[DE_QUEUE_COUNT_];
 
     /* DENG-323: the pipeline cache (vk_pipeline_cache.c). */
     VkPipelineCache pipeline_cache;
@@ -486,6 +491,10 @@ u64 de__gpu_vk_sampler_handle(de_gpu_device *d, de_gpu_sampler s);
 /** A de_gpu_fence: a timeline semaphore. */
 typedef struct de__vk_fence {
     VkSemaphore semaphore;
+    /** DENG-426: the largest value a submission handed to vkQueueSubmit2 signals (the initial
+     * value before any): a wait on a VkQueue that other de_gpu queues share is held back until
+     * its value is covered (vk_sync.c, "Deferred submits"). */
+    de_atomic_u64 submitted;
 } de__vk_fence;
 
 /** One swapchain acquire slot: the binary semaphore vkAcquireNextImageKHR signals, waited on by
@@ -611,6 +620,8 @@ void de__vk_buffer_image_copy(const de__gpu_texture *t, VkImageAspectFlags aspec
 de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                               u64 queue_value);
 de_result de__vk_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial);
+/** Frees the submits still held back (device teardown; they never reached the GPU). */
+void de__vk_deferred_free(de_gpu_device *d);
 void de__vk_fence_destroy(de_gpu_device *d, de__gpu_fence *f);
 u64 de__vk_fence_value(de_gpu_device *d, de__gpu_fence *f);
 de_result de__vk_fence_wait(de_gpu_device *d, de__gpu_fence *f, u64 value, u64 timeout_ns);

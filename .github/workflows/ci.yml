@@ -179,8 +179,10 @@ jobs:
             # two-phase occlusion culling on an occluder wall, cuts and new instances.
             # DENG-234: render_raster_mesh.* draws the vis buffer with mesh shaders
             # (VK_EXT_mesh_shader) and compares the IDs with a CPU rasterizer.
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.)'
+            # DENG-426: gpu_vulkan.* (test_gpu_vulkan: the Vulkan backend's device, resource,
+            # command, sync, swapchain and pipeline tests) with validation + sync validation.
+            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_gpu_vulkan
+            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.)'
             require: --backend vulkan
           - name: windows d3d12 (WARP)
             os: windows-2022
