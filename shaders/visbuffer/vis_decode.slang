@@ -163,3 +163,32 @@ public float de_vis_ndc_area2(float2 a, float2 b, float2 c)
 {
     return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
 }
+
+// ---- DENG-236 (additions; the functions above are unchanged) ----
+
+/// The vertex stream of UV set 0 (de_cooked_stream) and its two formats (de_cooked_vertex_format).
+public static const uint DE_VIS_STREAM_UV0 = 3;
+public static const uint DE_VIS_VF_F32X2 = 1;
+public static const uint DE_VIS_VF_UNORM16X2 = 8;
+
+/// UV set 0 of mesh vertex `vertex`: UNORM16X2 (DeGpuMesh.uv_transform[0]: offset xy + q * scale
+/// zw, q the raw u16, as de_cooked_mesh_uv) or F32X2; (0, 0) for a mesh without UV0.
+public float2 de_vis_mesh_uv0(DeGpuMesh mesh, uint vertex)
+{
+    uint format = mesh.stream_format[0].w;
+    uint base = mesh.stream_offset[0].w;
+    DeBytes s = de_bytes(mesh.vertices);
+    if (format == DE_VIS_VF_F32X2)
+        return asfloat(s.load2(base + vertex * 8u));
+    if (format != DE_VIS_VF_UNORM16X2)
+        return float2(0.0, 0.0);
+    uint q = s.load(base + vertex * 4u);
+    float4 t = mesh.uv_transform[0];
+    return t.xy + float2(float(q & 0xFFFFu), float(q >> 16)) * t.zw;
+}
+
+/// UV set 0 of local vertex `v` of meshlet `m`.
+public float2 de_vis_meshlet_uv0(DeGpuMesh mesh, DeVisMeshletInfo m, uint v)
+{
+    return de_vis_mesh_uv0(mesh, de_vis_meshlet_vertex(mesh, m, v));
+}

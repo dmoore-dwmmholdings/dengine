@@ -368,11 +368,12 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     de__vis_cull_instances(g, vc, DE__VIS_PHASE_1);
     de__vis_cull_meshlets(g, vc, DE__VIS_PHASE_1);
     de__vis_raster(g, vc, DE__VIS_PHASE_1);
+    de__vis_raster_alpha(g, vc, DE__VIS_PHASE_1); /* DENG-236: before the HZB (cutout occluders) */
     de__vis_hzb_build(g, vc);
     de__vis_cull_instances(g, vc, DE__VIS_PHASE_2);
     de__vis_cull_meshlets(g, vc, DE__VIS_PHASE_2);
     de__vis_raster(g, vc, DE__VIS_PHASE_2);
-    de__vis_raster_alpha(g, vc);
+    de__vis_raster_alpha(g, vc, DE__VIS_PHASE_2);
     de__vis_classify(g, vc);
     de__vis_resolve(g, vc);
     if (out != NULL)

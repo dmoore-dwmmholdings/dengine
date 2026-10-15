@@ -50,13 +50,14 @@
 #define MC_MIN_CAPACITY (1u << 16)
 #define MC_MAX_CAPACITY DE__VIS_ID_MAX_VISIBLE_MESHLETS
 
-/** The kernels' push constants (meshlet_cull.slang MeshletCullParams, 64 bytes). */
+/** The kernels' push constants (meshlet_cull.slang MeshletCullParams, 80 bytes). */
 typedef struct mc_params {
     u32 cull_view, cull_view_index, instances, meshes, materials, material_count;
     u32 work_items, work_args, visible, counters, raster_args, capacity, phase, flags;
     f32 width, height;
+    u32 alpha_capacity, alpha_raster_args, reserved0, reserved1; /* DENG-236 */
 } mc_params;
-DE_STATIC_ASSERT(sizeof(mc_params) == 64, "MeshletCullParams is 64 bytes");
+DE_STATIC_ASSERT(sizeof(mc_params) == 80, "MeshletCullParams is 80 bytes");
 
 /** One view slot's persistent objects. */
 typedef struct mc_view {
@@ -70,6 +71,8 @@ typedef struct mc_view {
     de__vis_meshlet_stats stats; /**< the newest read back */
     u32 capacity;                /**< visible-list entries (grows, never shrinks) */
     bool warned_max;
+    u32 alpha_capacity;                          /**< DENG-236: alpha-region entries (grows) */
+    u32 slot_alpha_capacity[DE__VIS_FRAME_RING]; /**< of each ring frame */
 } mc_view;
 
 typedef struct mc_state {
@@ -90,6 +93,10 @@ static const de__vis_layout_const k_consts[] = {
     {"DE_VIS_MESHLET_COUNTER_VISIBLE", DE__VIS_MESHLET_COUNTER_VISIBLE},
     {"DE_VIS_MESHLET_COUNTER_TESTED", DE__VIS_MESHLET_COUNTER_TESTED},
     {"DE_VIS_MESHLET_COUNTER_PHASE1", DE__VIS_MESHLET_COUNTER_PHASE1},
+    {"DE_VIS_MESHLET_COUNTER_ALPHA", DE__VIS_MESHLET_COUNTER_ALPHA},
+    {"DE_VIS_MESHLET_COUNTER_ALPHA_PHASE1", DE__VIS_MESHLET_COUNTER_ALPHA_PHASE1},
+    {"DE_VIS_BUCKET_ALPHA", DE__VIS_BUCKET_ALPHA},
+    {"DE_VIS_ALPHA_MODE_MASK", DE__VIS_ALPHA_MODE_MASK},
     {"DE_VIS_MESHLET_COUNTER_BYTES", DE__VIS_MESHLET_COUNTER_BYTES},
     {"DE_VIS_MESHLET_CONE", DE__VIS_MESHLET_CONE},
     {"DE_VIS_MESHLET_SMALL", DE__VIS_MESHLET_SMALL},
@@ -447,14 +454,18 @@ static void read_stats(mc_view *pv, u64 completed) {
     }
     if (best < 0)
         return;
-    u32 c[4];
+    u32 c[DE__VIS_MESHLET_COUNTER_BYTES / 4u];
     memcpy(c, pv->stats_map + (size_t)best * MC_STATS_STRIDE, sizeof c);
-    pv->stats = (de__vis_meshlet_stats){.valid = true,
-                                        .frame = pv->slot_frame[best],
-                                        .visible = c[DE__VIS_MESHLET_COUNTER_VISIBLE / 4u],
-                                        .tested = c[DE__VIS_MESHLET_COUNTER_TESTED / 4u],
-                                        .phase1 = c[DE__VIS_MESHLET_COUNTER_PHASE1 / 4u],
-                                        .capacity = pv->slot_capacity[best]};
+    pv->stats =
+        (de__vis_meshlet_stats){.valid = true,
+                                .frame = pv->slot_frame[best],
+                                .visible = c[DE__VIS_MESHLET_COUNTER_VISIBLE / 4u],
+                                .tested = c[DE__VIS_MESHLET_COUNTER_TESTED / 4u],
+                                .phase1 = c[DE__VIS_MESHLET_COUNTER_PHASE1 / 4u],
+                                .capacity = pv->slot_capacity[best],
+                                .alpha = c[DE__VIS_MESHLET_COUNTER_ALPHA / 4u],
+                                .alpha_phase1 = c[DE__VIS_MESHLET_COUNTER_ALPHA_PHASE1 / 4u],
+                                .alpha_capacity = pv->slot_alpha_capacity[best]};
 }
 
 static u32 pow2_at_least(u64 v) {
@@ -494,6 +505,35 @@ static u32 visible_capacity(de__vis_shared *s, mc_state *st, mc_view *pv,
     return cap;
 }
 
+/* DENG-236: the alpha region's capacity this frame: at least DE__VIS_ALPHA_MIN_CAPACITY, grown
+ * like the list from what a frame read back asked for (with a warning); at most one mesh-shader
+ * dispatch (DE__VIS_MESH_GROUPS_MAX), and the opaque entries and the alpha region together stay
+ * within the vis ID's limit. */
+static u32 alpha_capacity(de__vis_shared *s, mc_view *pv, const de__vis_context *vc, u32 opaque) {
+    /* One mesh-shader dispatch draws the whole region (raster_alpha.c). */
+    u32 room = MC_MAX_CAPACITY - opaque;
+    if (room > DE__VIS_MESH_GROUPS_MAX)
+        room = DE__VIS_MESH_GROUPS_MAX;
+    u32 cap = pv->alpha_capacity > DE__VIS_ALPHA_MIN_CAPACITY ? pv->alpha_capacity
+                                                              : DE__VIS_ALPHA_MIN_CAPACITY;
+    const de__vis_meshlet_stats *ms = &pv->stats;
+    if (ms->valid && ms->alpha > ms->alpha_capacity) {
+        const u32 want = pow2_at_least((u64)ms->alpha + ms->alpha / 4u);
+        if (want > cap) {
+            DE_WARN(s->log,
+                    "vis: view slot %u: the alpha-tested meshlets overflowed in frame %llu (%u for "
+                    "%u entries; the rest were not drawn); the region grows to %u",
+                    vc->view_slot, (unsigned long long)ms->frame, ms->alpha, ms->alpha_capacity,
+                    want);
+            cap = want;
+        }
+    }
+    if (cap > room)
+        cap = room;
+    pv->alpha_capacity = cap;
+    return cap;
+}
+
 /* de_render_stats.meshlets_visible: the sum over this frame's views of what each read back. */
 static void publish_stats(de__vis_shared *s, mc_state *st, const de__vis_context *vc) {
     if (s->renderer == NULL)
@@ -515,7 +555,7 @@ typedef struct mc_pass {
     de__vis_kernel kernel;
     mc_params pc;
     de_rg_resource instances, meshes, materials, work_items, work_args, visible, counters,
-        raster_args;
+        raster_args, alpha_raster_args;
     de_gpu_buffer stats;
     u64 stats_offset;
 } mc_pass;
@@ -556,6 +596,7 @@ static void args_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     mc_params pc = p->pc;
     pc.counters = bindless_of(p, pass, p->counters);
     pc.raster_args = bindless_of(p, pass, p->raster_args);
+    pc.alpha_raster_args = bindless_of(p, pass, p->alpha_raster_args);
     set_kernel(cmd, p, &pc);
     de_gpu_cmd_dispatch(cmd, 1, 1, 1);
 }
@@ -605,6 +646,7 @@ static void add_stats_pass(de_rg *g, de__vis_context *vc, mc_view *pv) {
     pv->stats_access = DE_ACCESS_COPY_DST; /* the epilogue leaves it in its last access */
     pv->slot_frame[slot] = vc->frame_index;
     pv->slot_capacity[slot] = vc->visible_capacity;
+    pv->slot_alpha_capacity[slot] = vc->visible_alpha_capacity;
     pv->slot_live[slot] = true;
 }
 
@@ -639,8 +681,10 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     const bool first = !DE_HANDLE_VALID(vc->meshlet_counters);
     if (first) {
         const u32 cap = visible_capacity(s, st, pv, vc);
+        /* DENG-236: the alpha bucket's region follows the opaque entries in the same list. */
+        const u32 alpha_cap = alpha_capacity(s, pv, vc, cap);
         const de_rg_resource list = de_rg_create_buffer(
-            g, &(de_gpu_buffer_desc){.size = (u64)cap * sizeof(de__vis_meshlet),
+            g, &(de_gpu_buffer_desc){.size = ((u64)cap + alpha_cap) * sizeof(de__vis_meshlet),
                                      .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
                                      .stride = (u32)sizeof(de__vis_meshlet),
                                      .name = "vis.visible_meshlets"});
@@ -651,6 +695,7 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
         if (!DE_HANDLE_VALID(list) || !DE_HANDLE_VALID(counters))
             return; /* error set; finalize reports it */
         vc->visible_capacity = cap;
+        vc->visible_alpha_capacity = alpha_cap;
         vc->visible_meshlets = list;
         vc->meshlet_counters = counters;
     }
@@ -660,7 +705,14 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
                                  .stride = (u32)sizeof(de__vis_raster_args),
                                  .name = phase == DE__VIS_PHASE_1 ? "vis.raster_args"
                                                                   : "vis.raster_args.phase2"});
-    if (!DE_HANDLE_VALID(raster_args))
+    const de_rg_resource alpha_args = de_rg_create_buffer(
+        g,
+        &(de_gpu_buffer_desc){.size = sizeof(de__vis_raster_args),
+                              .usage = DE_USAGE_STORAGE | DE_USAGE_INDIRECT | DE_USAGE_COPY_SRC,
+                              .stride = (u32)sizeof(de__vis_raster_args),
+                              .name = phase == DE__VIS_PHASE_1 ? "vis.raster_args_alpha"
+                                                               : "vis.raster_args_alpha.phase2"});
+    if (!DE_HANDLE_VALID(raster_args) || !DE_HANDLE_VALID(alpha_args))
         return;
 
     u32 flags = 0;
@@ -683,7 +735,8 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
                .phase = (u32)phase,
                .flags = flags,
                .width = (f32)vc->width,
-               .height = (f32)vc->height},
+               .height = (f32)vc->height,
+               .alpha_capacity = vc->visible_alpha_capacity},
         .instances = vc->scene_instances,
         .meshes = vc->scene_meshes,
         .materials = materials ? vc->scene_materials : (de_rg_resource){0},
@@ -691,7 +744,8 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
         .work_args = vc->cull_args[pi],
         .visible = vc->visible_meshlets,
         .counters = vc->meshlet_counters,
-        .raster_args = raster_args};
+        .raster_args = raster_args,
+        .alpha_raster_args = alpha_args};
     mc_pass *pc = first ? pass_data(vc, &st->clear, &base) : NULL;
     mc_pass *pu = pass_data(vc, &st->cull, &base), *pa = pass_data(vc, &st->args, &base);
     if ((first && pc == NULL) || pu == NULL || pa == NULL) {
@@ -726,7 +780,9 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     de_rg_read(p, vc->meshlet_counters, DE_ACCESS_SHADER_READ);
     de_rg_write(p, vc->meshlet_counters, DE_ACCESS_SHADER_WRITE); /* phase 1 stores its end */
     de_rg_write(p, raster_args, DE_ACCESS_SHADER_WRITE);
+    de_rg_write(p, alpha_args, DE_ACCESS_SHADER_WRITE); /* DENG-236 */
     vc->raster_args[pi] = raster_args;
+    vc->raster_args_alpha[pi] = alpha_args;
 
     if (phase == DE__VIS_PHASE_2)
         add_stats_pass(g, vc, pv);

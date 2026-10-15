@@ -12,11 +12,18 @@
 //                          bucket is appended with one atomic add per wave (wave compaction).
 //                          Entries past the list's capacity are dropped but counted.
 //   cs_meshlet_cull_args   one thread per phase: the phase's range of the visible list and the
-//                          raster arguments of both raster paths (DeVisRasterArgs)
+//                          raster arguments of both raster paths (DeVisRasterArgs), for the opaque
+//                          and (DENG-236) the alpha-tested bucket
 //
 // Both phases append to the same visible-meshlet list: phase 1 from entry 0, phase 2 after the
 // last entry phase 1 stored (DE_VIS_MESHLET_COUNTER_PHASE1), so every entry, and the packed vis ID
 // that names it, is unique within the view's frame.
+//
+// Buckets (DENG-236): meshlet_bucket() sends a meshlet whose submesh material is alpha-tested (a
+// READY material with alpha_mode mask) to the alpha bucket. Its entries live in the same list,
+// after the opaque entries' capacity: [capacity, capacity + alpha_capacity), phase 1 first, phase
+// 2 after it (DE_VIS_MESHLET_COUNTER_ALPHA, _ALPHA_PHASE1), with their own raster arguments. So
+// the packed vis IDs of both buckets share one index space and stay unique.
 //
 // The tests (the CPU reference is in cull_meshlets.c; vis_stages.h declares it):
 //
@@ -61,15 +68,22 @@ public static const uint DE_VIS_MESHLET_COUNTER_VISIBLE = 0; // visible meshlets
 public static const uint DE_VIS_MESHLET_COUNTER_TESTED = 4;  // meshlets tested, both phases
 public static const uint DE_VIS_MESHLET_COUNTER_PHASE1 = 8;  // entries stored after phase 1: the
                                                               // first entry of phase 2
-public static const uint DE_VIS_MESHLET_COUNTER_BYTES = 16;
+public static const uint DE_VIS_MESHLET_COUNTER_ALPHA = 16;  // DENG-236: alpha-tested meshlets
+                                                              // asked for, both phases
+public static const uint DE_VIS_MESHLET_COUNTER_ALPHA_PHASE1 = 20; // alpha entries stored after
+                                                                    // phase 1
+public static const uint DE_VIS_MESHLET_COUNTER_BYTES = 32;
 
 /// MeshletCullParams.flags
 public static const uint DE_VIS_MESHLET_CONE = 1;         // backface-cone test (r.cull_meshlet_cone)
 public static const uint DE_VIS_MESHLET_SMALL = 2;        // small-meshlet test (r.cull_small_tri)
 public static const uint DE_VIS_MESHLET_CASTERS_ONLY = 4; // only DE_GPU_INSTANCE_CAST_SHADOWS
 
-/// Output buckets (meshlet_bucket). DENG-236 adds the alpha-tested one.
+/// Output buckets (meshlet_bucket).
 public static const uint DE_VIS_BUCKET_OPAQUE = 0;
+public static const uint DE_VIS_BUCKET_ALPHA = 1; // DENG-236: alpha-tested (alpha_mode mask)
+/// DeGpuMaterial.alpha_mode of an alpha-tested material (de_cooked_alpha_mode).
+public static const uint DE_VIS_ALPHA_MODE_MASK = 1;
 public static const uint DE_VIS_BUCKET_NONE = 0xFFFFFFFF;
 
 /// Bytes of one DMSH v2 meshlet record (render/formats/de_cooked_mesh.h).
@@ -97,6 +111,10 @@ struct MeshletCullParams
     uint flags;           // DE_VIS_MESHLET_*
     float width;          // the view's internal size in pixels (small-meshlet test)
     float height;
+    uint alpha_capacity;    // DENG-236: entries of the alpha bucket (after `capacity`)
+    uint alpha_raster_args; // DeVisRasterArgs of the phase's alpha bucket (args kernel: WRITE)
+    uint reserved0;
+    uint reserved1;
 };
 
 /// One meshlet record's culling data (object space).
@@ -236,10 +254,19 @@ bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, Meshl
     return cull_occlusion_test(b, pc.phase);
 }
 
-/// The output bucket of a visible meshlet. The routing point of the visible list: DENG-236 adds
-/// the alpha-tested bucket here (from the submesh's material), and a list per bucket below.
+/// The output bucket of a visible meshlet: alpha-tested when the submesh's material is a READY
+/// material with alpha_mode mask (DENG-236), else opaque. Blended materials draw opaque here
+/// until their forward pass (S14).
 uint meshlet_bucket(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
 {
+    if (submesh >= DE_GPU_INSTANCE_MATERIALS || pc.materials == 0)
+        return DE_VIS_BUCKET_OPAQUE;
+    uint slot = inst.materials[submesh >> 2][submesh & 3];
+    if (slot == DE_GPU_NONE || slot >= pc.material_count)
+        return DE_VIS_BUCKET_OPAQUE;
+    DeGpuMaterial mat = de_robuffer<DeGpuMaterial>(pc.materials)[slot];
+    if ((mat.flags & DE_GPU_MATERIAL_READY) != 0 && mat.alpha_mode == DE_VIS_ALPHA_MODE_MASK)
+        return DE_VIS_BUCKET_ALPHA;
     return DE_VIS_BUCKET_OPAQUE;
 }
 
@@ -248,6 +275,14 @@ uint meshlet_bucket(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
 /// control flow): the wave operations need all of them.
 void append_compacted(bool want, DeVisMeshlet e, DeRWBytes counters, uint counter, uint list,
                       uint capacity)
+{
+    append_compacted_at(want, e, counters, counter, list, 0u, capacity);
+}
+
+/// append_compacted into the list's entries [offset, offset + capacity) (DENG-236: a bucket's
+/// region of the one list).
+void append_compacted_at(bool want, DeVisMeshlet e, DeRWBytes counters, uint counter, uint list,
+                         uint offset, uint capacity)
 {
     uint n = WaveActiveCountBits(want);
     if (n == 0)
@@ -258,7 +293,7 @@ void append_compacted(bool want, DeVisMeshlet e, DeRWBytes counters, uint counte
     base = WaveReadLaneFirst(base);
     uint at = base + WavePrefixSum(want ? 1u : 0u);
     if (want && at < capacity)
-        de_buffer<DeVisMeshlet>(list)[at] = e;
+        de_buffer<DeVisMeshlet>(list)[offset + at] = e;
 }
 
 [shader("compute")]
@@ -266,6 +301,7 @@ void append_compacted(bool want, DeVisMeshlet e, DeRWBytes counters, uint counte
 void cs_meshlet_cull_clear(uniform MeshletCullParams pc)
 {
     de_rwbytes(pc.counters).store4(0, uint4(0, 0, 0, 0));
+    de_rwbytes(pc.counters).store4(16, uint4(0, 0, 0, 0)); // DENG-236: the alpha counters
 }
 
 [shader("compute")]
@@ -309,6 +345,24 @@ void cs_meshlet_cull(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
     e.meshlet = meshlet;
     append_compacted(bucket == DE_VIS_BUCKET_OPAQUE, e, counters, DE_VIS_MESHLET_COUNTER_VISIBLE,
                      pc.visible, pc.capacity);
+    append_compacted_at(bucket == DE_VIS_BUCKET_ALPHA, e, counters, DE_VIS_MESHLET_COUNTER_ALPHA,
+                        pc.visible, pc.capacity, pc.alpha_capacity);
+}
+
+/// The raster arguments of entries [first, first + count) (both paths, DeVisRasterArgs).
+DeVisRasterArgs raster_args_of(uint first, uint count)
+{
+    uint2 g = de_vis_dispatch_groups(count);
+    DeVisRasterArgs a;
+    a.mesh_x = g.x;
+    a.mesh_y = g.y;
+    a.mesh_z = 1u;
+    a.first = first;
+    a.expand_x = g.x;
+    a.expand_y = g.y;
+    a.expand_z = 1u;
+    a.count = count;
+    return a;
 }
 
 [shader("compute")]
@@ -334,4 +388,15 @@ void cs_meshlet_cull_args(uniform MeshletCullParams pc)
     a.expand_z = 1u;
     a.count = count;
     de_buffer<DeVisRasterArgs>(pc.raster_args)[0] = a;
+    // DENG-236: the alpha bucket, the same way within its region of the list.
+    if (pc.alpha_raster_args == 0)
+        return;
+    uint alpha_stored = min(c.load(DE_VIS_MESHLET_COUNTER_ALPHA), pc.alpha_capacity);
+    uint alpha_first = 0;
+    if (pc.phase == 1)
+        c.store(DE_VIS_MESHLET_COUNTER_ALPHA_PHASE1, alpha_stored);
+    else
+        alpha_first = min(c.load(DE_VIS_MESHLET_COUNTER_ALPHA_PHASE1), alpha_stored);
+    de_buffer<DeVisRasterArgs>(pc.alpha_raster_args)[0] =
+        raster_args_of(pc.capacity + alpha_first, alpha_stored - alpha_first);
 }

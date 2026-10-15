@@ -43,19 +43,7 @@ void de__vis_raster(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     }
 }
 
-/* ---------- raster_alpha (DENG-236) ---------- */
-
-de_result de__vis_raster_alpha_init(de__vis_shared *s) {
-    (void)s;
-    return DE_OK;
-}
-void de__vis_raster_alpha_shutdown(de__vis_shared *s) {
-    (void)s;
-}
-void de__vis_raster_alpha(de_rg *g, de__vis_context *vc) {
-    (void)g;
-    (void)vc;
-}
+/* raster_alpha: DENG-236, raster_alpha.c. */
 
 /* ---------- classify (DENG-237) ---------- */
 

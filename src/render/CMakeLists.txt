@@ -243,3 +243,10 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/raster_compute.c)
 endif()
+
+# DENG-236: the alpha-tested raster (passes/vis/raster_alpha.c; engine shader vis_alpha,
+# shaders/visbuffer/vis_alpha.slang): mask materials' meshlets, routed to their own bucket by
+# meshlet culling, drawn with an alpha test after each phase's opaque raster, on both paths.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/raster_alpha.c)
+endif()

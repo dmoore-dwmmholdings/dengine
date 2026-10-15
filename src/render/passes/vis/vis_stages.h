@@ -16,11 +16,12 @@
  *     de__vis_cull_instances(g, vc, PHASE_1)   instances -> work items (cull_instances.c)
  *     de__vis_cull_meshlets(g, vc, PHASE_1)    work items -> visible meshlets (DENG-231)
  *     de__vis_raster(g, vc, PHASE_1)           visible meshlets -> vis buffer + depth (DENG-234/5)
+ *     de__vis_raster_alpha(g, vc, PHASE_1)     alpha-tested meshlets, same targets (DENG-236)
  *     de__vis_hzb_build(g, vc)                 depth -> HZB (DENG-233)
  *     de__vis_cull_instances(g, vc, PHASE_2)   (DENG-233: what phase 1 rejected, against the HZB)
  *     de__vis_cull_meshlets(g, vc, PHASE_2)
  *     de__vis_raster(g, vc, PHASE_2)
- *     de__vis_raster_alpha(g, vc)              alpha-tested materials (DENG-236)
+ *     de__vis_raster_alpha(g, vc, PHASE_2)
  *     de__vis_classify(g, vc)                  tiles by material model (DENG-237)
  *     de__vis_resolve(g, vc)                   attributes, thin G-buffer, feedback (DENG-238)
  *
@@ -215,20 +216,25 @@ DE_STATIC_ASSERT(sizeof(de__vis_raster_args) == 32, "DeVisRasterArgs is 32 bytes
 #define DE__VIS_RASTER_ARGS_MESH   0u
 #define DE__VIS_RASTER_ARGS_EXPAND 16u
 
-/** Byte offsets of the meshlet-cull counters (a raw 16-byte buffer, both phases). */
-#define DE__VIS_MESHLET_COUNTER_VISIBLE 0u /**< visible asked for (> capacity: dropped) */
-#define DE__VIS_MESHLET_COUNTER_TESTED  4u /**< meshlets tested */
-#define DE__VIS_MESHLET_COUNTER_PHASE1  8u /**< entries stored after phase 1 */
-#define DE__VIS_MESHLET_COUNTER_BYTES   16u
+/** Byte offsets of the meshlet-cull counters (a raw 32-byte buffer, both phases). */
+#define DE__VIS_MESHLET_COUNTER_VISIBLE      0u  /**< visible asked for (> capacity: dropped) */
+#define DE__VIS_MESHLET_COUNTER_TESTED       4u  /**< meshlets tested */
+#define DE__VIS_MESHLET_COUNTER_PHASE1       8u  /**< entries stored after phase 1 */
+#define DE__VIS_MESHLET_COUNTER_ALPHA        16u /**< DENG-236: alpha-tested asked for */
+#define DE__VIS_MESHLET_COUNTER_ALPHA_PHASE1 20u /**< alpha entries stored after phase 1 */
+#define DE__VIS_MESHLET_COUNTER_BYTES        32u
 /** MeshletCullParams.flags */
 enum {
     DE__VIS_MESHLET_CONE = 1u,        /**< backface-cone test (r.cull_meshlet_cone) */
     DE__VIS_MESHLET_SMALL = 2u,       /**< small-meshlet test (r.cull_small_tri) */
     DE__VIS_MESHLET_CASTERS_ONLY = 4u /**< only instances with DE__GS_INSTANCE_CAST_SHADOWS */
 };
-/** Output buckets of meshlet_cull.slang's meshlet_bucket (DENG-236 adds the alpha-tested one). */
+/** Output buckets of meshlet_cull.slang's meshlet_bucket. */
 #define DE__VIS_BUCKET_OPAQUE 0u
+#define DE__VIS_BUCKET_ALPHA  1u /**< DENG-236: the submesh material is alpha-tested (mask) */
 #define DE__VIS_BUCKET_NONE   0xFFFFFFFFu
+/** DeGpuMaterial.alpha_mode of an alpha-tested material (de_cooked_alpha_mode mask). */
+#define DE__VIS_ALPHA_MODE_MASK 1u
 /** Margin of the small-meshlet test in pixels (DE_VIS_SMALL_EPS_PX). */
 #define DE__VIS_SMALL_EPS_PX (1.0f / 32.0f)
 
@@ -298,6 +304,10 @@ typedef struct de__vis_meshlet_stats {
     u32 tested;   /**< meshlets tested, both phases */
     u32 phase1;   /**< entries stored by phase 1 */
     u32 capacity; /**< the capacity of that frame's visible list */
+    /* DENG-236: the alpha-tested bucket */
+    u32 alpha;          /**< alpha-tested meshlets asked for, both phases */
+    u32 alpha_phase1;   /**< alpha entries stored by phase 1 */
+    u32 alpha_capacity; /**< the capacity of that frame's alpha region */
 } de__vis_meshlet_stats;
 
 /* =================================================================================================
@@ -458,6 +468,15 @@ typedef struct de__vis_context {
      */
     de_rg_resource vis_ids;
 
+    /* ---- DENG-236: the alpha-tested bucket (cull_meshlets.c, raster_alpha.c) ---- */
+    /** Entries of the alpha bucket's region of visible_meshlets: [visible_capacity,
+     * visible_capacity + visible_alpha_capacity). Its packed vis IDs share the list's index space,
+     * so a reader decodes them like the opaque ones. */
+    u32 visible_alpha_capacity;
+    /** Each phase's raster arguments of the alpha bucket (de__vis_raster_args, INDIRECT): `first`
+     * is an entry of the alpha region. Invalid when the phase did not cull. */
+    de_rg_resource raster_args_alpha[DE__VIS_PHASES];
+
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -551,7 +570,9 @@ void de__vis_hzb_build(de_rg *g, de__vis_context *vc);
 
 de_result de__vis_raster_alpha_init(de__vis_shared *s);
 void de__vis_raster_alpha_shutdown(de__vis_shared *s);
-void de__vis_raster_alpha(de_rg *g, de__vis_context *vc);
+/** DENG-236: called after each phase's opaque raster (vis_frame.c), so phase 1's HZB holds the
+ * alpha-tested occluders too. */
+void de__vis_raster_alpha(de_rg *g, de__vis_context *vc, de__vis_phase phase);
 
 de_result de__vis_classify_init(de__vis_shared *s);
 void de__vis_classify_shutdown(de__vis_shared *s);
@@ -660,6 +681,20 @@ u32 de__vis_mesh_dispatch_count(u32 capacity);
 void de__vis_mesh_dispatch_groups(u32 count, u32 k, u32 *x, u32 *y);
 /** The `public static const uint` values of vis_decode.slang and vis_mesh.slang (DENG-234). */
 const de__vis_layout_const *de__vis_raster_layout_consts(u32 *count);
+
+/* ---------- Alpha-tested raster (DENG-236: raster_alpha.c) ---------- */
+
+/** The `public static const uint` values of vis_alpha.slang. */
+const de__vis_layout_const *de__vis_raster_alpha_layout_consts(u32 *count);
+/** Alpha-bucket entries at least (the region grows from what was read back, as the list). */
+#define DE__VIS_ALPHA_MIN_CAPACITY 4096u
+/** Pipelines raster_alpha.c made (tests: the opaque paths' pipelines carry no alpha state). */
+typedef struct de__vis_raster_alpha_info {
+    bool mesh;    /**< the mesh-shader alpha pipeline exists */
+    bool compute; /**< the compute path's alpha draw pipeline exists */
+    u32 sampler;  /**< the bindless index of the sampler the alpha test uses */
+} de__vis_raster_alpha_info;
+de__vis_raster_alpha_info de__vis_raster_alpha_get_info(const de__vis_shared *s);
 
 /* ---------- Compute-expansion raster (raster_compute.c), DENG-235 ---------- */
 
