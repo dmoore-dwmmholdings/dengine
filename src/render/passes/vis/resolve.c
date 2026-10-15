@@ -1,8 +1,9 @@
 /*
  * resolve.c: the material resolve, the last stage of the visibility-buffer frame (SPEC §12.5 step
- * 4, §11.8; DENG-238). shaders/visbuffer/resolve_standard.slang (engine shader `vis_resolve`) has
- * the kernels, resolve_common.slang the reconstruction, gbuffer.slang / gbuffer.h the G-buffer
- * contract, feedback.slang the texture-streaming feedback.
+ * 4, §11.8; DENG-238, DENG-298). shaders/visbuffer/resolve_standard.slang (engine shader
+ * `vis_resolve`) has the kernels, resolve_model.slang the kernel body generic over the material
+ * model (materials/material_interface.slang), resolve_common.slang the reconstruction,
+ * gbuffer.slang / gbuffer.h the G-buffer contract, feedback.slang the texture-streaming feedback.
  *
  * Per view and frame, on the graphics queue, when classification ran (DENG-237):
  *
@@ -10,9 +11,11 @@
  *   vis.resolve.feedback   feedback to "none", tile counters to 0     feedback, counters: WRITE
  *   vis.resolve            one indirect dispatch per material model   ID buffer, tile lists,
  *                          on its tile list (classify_args, byte      tables, visible list: READ;
- *                          16 m): Unlit (model 1) through its own     args: INDIRECT + READ;
- *                          kernel, every other model through the      targets, feedback, counters:
- *                          Standard one                               READ + WRITE
+ *                          16 m): a registered game model         args: INDIRECT + READ;
+ *                          (DENG-298) through its own kernel,         targets, feedback, counters:
+ *                          Unlit (model 1) through cs_resolve_unlit,  READ + WRITE
+ *                          every other model through the Standard
+ *                          one
  *   vis.resolve.readback   the counters and the feedback into the     COPY_SRC; readback ring:
  *                          view's readback ring (side effect; only    COPY_DST
  *                          with r.texture_feedback 1)
@@ -31,6 +34,7 @@
  */
 #include "render/passes/vis/vis_stages.h"
 
+#include "render/materials/material_models.h"
 #include "render/passes/vis/gbuffer.h"
 
 #include <stdio.h>
@@ -38,7 +42,7 @@
 
 DE_STATIC_ASSERT(DE__GB_COUNT == 5, "de__vis_context.gbuffer holds the gbuffer.h targets");
 
-/** The kernels' push constants (resolve_standard.slang ResolveParams, 112 bytes). */
+/** The kernels' push constants (resolve_model.slang ResolveParams, 112 bytes). */
 typedef struct rs_params {
     u32 ids, pitch, width, height, tile, tiles_x, tile_count, lists, args, model, scene, view_slot;
     u32 visible, visible_count, sampler, frame;
@@ -46,6 +50,8 @@ typedef struct rs_params {
     u32 feedback, feedback_capacity, counters, debug_pos, debug_uv, flags, reserved;
 } rs_params;
 DE_STATIC_ASSERT(sizeof(rs_params) == 112, "ResolveParams is 112 bytes");
+DE_STATIC_ASSERT(sizeof(rs_params) == DE__MATERIAL_MODEL_RESOLVE_PUSH,
+                 "a game model's cs_resolve_model takes ResolveParams");
 
 /** ResolveParams.flags */
 #define RS_DEBUG 1u
@@ -242,6 +248,8 @@ static void read_stats(const rs_state *st, rs_view *pv, u64 completed) {
 typedef struct rs_pass {
     de_gpu_device *dev;
     rs_state *st;
+    const de__material_models
+        *models; /**< game models' resolve pipelines (DENG-298); may be NULL */
     rs_params pc;
     u32 groups_x, groups_y;
     de_rg_resource ids, lists, args, scene, visible, feedback, counters, debug_pos, debug_uv;
@@ -295,10 +303,14 @@ static void resolve_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user)
     rs_params pc = params(p, pass);
     const de_gpu_buffer args = de_rg_buffer(pass, p->args);
     for (u32 m = 0; m < DE__GS_MATERIAL_MODELS; ++m) {
-        const de__vis_kernel *k =
-            m == DE__GS_MATERIAL_MODEL_UNLIT ? &p->st->unlit : &p->st->standard;
+        /* DENG-298: a game model's own kernel (de_material_model_register), Unlit's, else the
+         * Standard one (Standard and the built-ins not implemented yet). */
+        de_gpu_pipeline pipe = de__material_models_resolve_pipeline(p->models, m);
+        if (!DE_HANDLE_VALID(pipe))
+            pipe =
+                m == DE__GS_MATERIAL_MODEL_UNLIT ? p->st->unlit.pipeline : p->st->standard.pipeline;
         pc.model = m;
-        de_gpu_cmd_set_pipeline(cmd, k->pipeline);
+        de_gpu_cmd_set_pipeline(cmd, pipe);
         de_gpu_cmd_push_constants(cmd, &pc, (u32)sizeof pc);
         de_gpu_cmd_dispatch_indirect(cmd, args, (u64)m * 16u);
     }
@@ -383,6 +395,7 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
     const u32 ring = (u32)(vc->frame_index % DE__VIS_FRAME_RING);
     rs_pass base = {.dev = s->dev,
                     .st = st,
+                    .models = s->material_models,
                     .pc = {.pitch = vc->vis_ids_pitch,
                            .width = vc->width,
                            .height = vc->height,

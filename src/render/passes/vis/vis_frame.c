@@ -200,6 +200,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__vis_shared_create: no memory");
     memset(s, 0, sizeof *s);
     s->renderer = desc->renderer;
+    s->material_models = desc->material_models;
     s->dev = desc->device;
     s->alloc = a;
     s->log = de_log_register_category("render", DE_LOG_INFO);
@@ -453,8 +454,12 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
 de_result de__vis_frame_create(de_renderer *r, struct de__vis_shared **out) {
     *out = NULL;
     de__vis_shared *s = NULL;
-    de_result res = de__vis_shared_create(
-        &(de__vis_shared_desc){.device = r->dev, .allocator = r->alloc, .renderer = r}, &s);
+    de_result res =
+        de__vis_shared_create(&(de__vis_shared_desc){.device = r->dev,
+                                                     .allocator = r->alloc,
+                                                     .renderer = r,
+                                                     .material_models = r->material_models},
+                              &s);
     if (res != DE_OK)
         return res;
     res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, DE__VIS_FRAME_ORDER, "vis.frame",

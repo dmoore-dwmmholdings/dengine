@@ -1,0 +1,7 @@
+# tests/unit/render/data/material_models.toml: the shader assets of test_brdf.c's material model
+# registration tests (DENG-298). The test mounts this directory and the engine's shaders/ on one
+# root, so the sources can import the engine's material modules.
+[assets]
+"models/flat" = { type = "shader", source = "material_model_flat.slang" }
+"models/none" = { type = "shader", source = "material_model_none.slang" }
+"models/bad" = { type = "shader", source = "material_model_bad.slang" }

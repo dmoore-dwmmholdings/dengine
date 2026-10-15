@@ -39,6 +39,7 @@
 #include "render/formats/de_cooked_mesh.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
+#include "render/materials/material_models.h"
 #include "render/passes/vis/gbuffer.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/scene/gpu_scene.h"
@@ -432,6 +433,7 @@ typedef struct rsx {
     de_rg *g;
     de__gpu_scene *gs;
     de__vis_shared *vis;
+    de__material_models *models; /* DENG-298: the game models the resolve dispatches */
     de_gpu_fence fence;
     u64 frames;
     de_gpu_buffer rb;
@@ -511,6 +513,7 @@ static void rsx_teardown(rsx *f) {
     if (f->dev)
         de_gpu_wait_idle(f->dev);
     de__vis_shared_destroy(f->vis);
+    de__material_models_destroy(f->models);
     de__gpu_scene_destroy(f->gs);
     for (u32 i = 0; i < MAX_MESHES; ++i)
         mesh_free(&g_mesh[i], f->dev);
@@ -611,8 +614,11 @@ static void rsx_open(rsx *f, de_gpu_backend backend) {
                              .staging_bytes = (u64)16 << 20};
     gd.initial_capacity[DE__GS_INSTANCES] = 32;
     ASSERT_EQ(de__gpu_scene_create(&gd, &f->gs), DE_OK);
-    ASSERT_EQ(de__vis_shared_create(
-                  &(de__vis_shared_desc){.device = f->dev, .allocator = &f->alloc}, &f->vis),
+    ASSERT_EQ(de__material_models_create(f->dev, &f->alloc, &f->models), DE_OK);
+    ASSERT_EQ(de__vis_shared_create(&(de__vis_shared_desc){.device = f->dev,
+                                                           .allocator = &f->alloc,
+                                                           .material_models = f->models},
+                                    &f->vis),
               DE_OK);
     if (!f->vis->enabled) {
         snprintf(why, sizeof why, "the vis frame is off: %.600s", f->vis->why);
@@ -1309,6 +1315,91 @@ static void unlit_dispatch(rsx *f, de_gpu_backend b) {
     EXPECT_GT(st.tiles[DE__GS_MATERIAL_MODEL_STANDARD], 0u);
 }
 
+#if defined(DE_RS_TEST_COOK) && DE_RS_TEST_COOK
+static void cook_entry_or_skip(rsx *f, const char *source, const char *entry, de_cook_result *res,
+                               de_gpu_shader_blob *out, de__shader_record *rec);
+#endif
+
+/* resolve_game_model_dispatch (DENG-298): a game material model (data/material_model_flat.slang,
+ * de_resolve_tiles<FlatModel>) registered with id 5 resolves its material's pixels through its own
+ * kernel: GB2 holds model 5, the lighting target FlatModel's emission and GB0 its base colour; the
+ * Standard pixels next to it are unchanged. */
+static void game_model_dispatch(rsx *f, de_gpu_backend b) {
+    rsx_open(f, b);
+#if defined(DE_RS_TEST_COOK) && DE_RS_TEST_COOK
+    de_cook_result res;
+    de_gpu_shader_blob code;
+    de__shader_record rec;
+    cook_entry_or_skip(f, "material_model_flat.slang", DE__MATERIAL_MODEL_RESOLVE_ENTRY, &res,
+                       &code, &rec);
+    de_shader_reflection refl;
+    memset(&refl, 0, sizeof refl);
+    refl.stage =
+        rec.stage == DE__SHADER_STAGE_COMPUTE ? DE_SHADER_STAGE_COMPUTE : DE_SHADER_STAGE_NONE;
+    memcpy(refl.threadgroup, rec.threadgroup, sizeof refl.threadgroup);
+    refl.push_constant_bytes = rec.push_constant_bytes;
+    u32 id = 0;
+    const de_result added = de__material_models_add(f->models, "flat", &code, &refl, &id);
+    de_cook_result_free(&res);
+    ASSERT_EQ(added, DE_OK);
+    ASSERT_EQ(id, 5u);
+
+    const u32 a = rsx_mesh_plane(f, 2, 2, 1.0f, 1.0f, false);
+    const u32 m_std = material_add((de_vec4){0.9f, 0.9f, 0.9f, 1.0f});
+    const u32 m_flat = material_add((de_vec4){0.8f, 0.8f, 0.8f, 1.0f});
+    g_mat[m_flat - 1u].model = id;
+    const de_affine l = trs((de_vec3){-1.2f, 0, 0}, (de_vec3){0, 0, 1}, 0.0f, 1.0f);
+    const de_affine rr = trs((de_vec3){1.2f, 0, 0}, (de_vec3){0, 0, 1}, 0.0f, 1.0f);
+    world_set(&f->w, 0, a, l, l, m_std);
+    world_set(&f->w, 1, a, rr, rr, m_flat);
+    de__vis_resolve_stats st = {0};
+    for (u32 i = 0; i < 4u && !st.valid; ++i) {
+        ASSERT_TRUE(rsx_frame(f));
+        st = de__vis_view_resolve_stats(f->vis, 0);
+    }
+    ASSERT_TRUE(st.valid);
+    const rs_result *r = &f->res;
+    /* FlatModel: base colour x (0.25, 0.5, 1), roughness 0.75, emission (0.125, 0.25, 0.5). */
+    const f32 want_base[3] = {0.2f, 0.4f, 0.8f};
+    u32 flat = 0, standard = 0;
+    for (size_t i = 0; i < (size_t)r->width * r->height; ++i) {
+        const px_tri t = pixel_triangle(f, r->ids[i]);
+        if (!t.ok)
+            continue;
+        const u32 g2 = r->gb[2][i];
+        if (t.slot == 1u) {
+            ++flat;
+            EXPECT_EQ((g2 >> 8) & 255u, 5u);
+            EXPECT_EQ((g2 >> 16) & 255u, 0u); /* no flags */
+            for (u32 c = 0; c < 3u; ++c) {
+                const f32 lin =
+                    de__gb_srgb_decode((f32)((r->gb[0][i] >> (8u * c)) & 255u) / 255.0f);
+                EXPECT_TRUE(fabsf(lin - want_base[c]) <= 0.01f);
+            }
+            EXPECT_TRUE(fabsf(r->lighting[4 * i] - 0.125f) <= 1e-3f);
+            EXPECT_TRUE(fabsf(r->lighting[4 * i + 1] - 0.25f) <= 1e-3f);
+            EXPECT_TRUE(fabsf(r->lighting[4 * i + 2] - 0.5f) <= 1e-3f);
+            EXPECT_TRUE(fabsf(r->lighting[4 * i + 3] - 1.0f) <= 1e-3f);
+            EXPECT_EQ((r->gb[1][i] >> 20) & 1023u, 767u); /* roughness 0.75 x 1023, rounded */
+        } else {
+            ++standard;
+            EXPECT_EQ((g2 >> 8) & 255u, (u32)DE__GS_MATERIAL_MODEL_STANDARD);
+            EXPECT_TRUE(r->lighting[4 * i] == 0.0f);
+        }
+        if (flat > 400u && standard > 400u)
+            break;
+    }
+    printf("game model: %u flat px, %u standard px; tiles: standard %u, flat %u\n", flat, standard,
+           st.tiles[0], st.tiles[5]);
+    EXPECT_GT(flat, 100u);
+    EXPECT_GT(standard, 100u);
+    EXPECT_GT(st.tiles[5], 0u);
+    EXPECT_GT(st.tiles[DE__GS_MATERIAL_MODEL_STANDARD], 0u);
+#else
+    SKIP("this build has no shader importer (DE_BUILD_TOOLS off or no Slang)");
+#endif
+}
+
 /* resolve_only_listed_tiles: each model's dispatch processed exactly the tiles of its list in
  * classification's arguments of the same frame. */
 static void only_listed(rsx *f, de_gpu_backend b) {
@@ -1377,6 +1468,83 @@ static bool find_entry(const de__shader_view *v, u32 target, const char *name,
     return false;
 }
 
+/* "rsdata:/": tests/unit/render/data/ over the engine's shaders/ (DENG-298: a game model's source
+ * imports the engine's resolve modules by their paths below shaders/). */
+static bool rs_mount(void) {
+    static int mounted = -1;
+    if (mounted < 0)
+        mounted = de_fs_mount("rsdata", DE_VIS_TEST_SHADER_DIR, 0, 0) == DE_OK &&
+                  de_fs_mount("rsdata", DE_RS_TEST_DATA_DIR, 0, 1) == DE_OK;
+    return mounted == 1;
+}
+
+/* Cooks data/<source> for the fixture's backend and returns entry `entry` (its code in `*res`,
+ * freed by the caller with de_cook_result_free); false with `why`. */
+static bool cook_entry(rsx *f, const char *source, const char *entry, de_cook_result *res,
+                       de_gpu_shader_blob *out, de__shader_record *rec, char *why, size_t cap) {
+    const de__shader_target target = de__shader_target_for_backend(f->backend);
+    char msg[200];
+    memset(res, 0, sizeof *res);
+    if (!de__slang_available(msg, sizeof msg)) {
+        snprintf(why, cap, "no Slang compiler: %.150s", msg);
+        return false;
+    }
+    if (!rs_mount()) {
+        snprintf(why, cap, "cannot mount the test sources");
+        return false;
+    }
+    de_cooker *c = NULL;
+    de_cooker_desc cd = {.verify_determinism = DE_COOK_VERIFY_OFF};
+    static const char *const exts[] = {".slang"};
+    de_asset_type_desc t;
+    memset(&t, 0, sizeof t);
+    t.name = "shader";
+    t.extensions = exts;
+    t.extension_count = 1;
+    t.importer_version = de_shader_importer_version();
+    t.import = de_shader_import;
+    const char *targets[1] = {target_name(target)};
+    de__manifest_kv kv;
+    memset(&kv, 0, sizeof kv);
+    kv.key = "targets";
+    kv.value.type = DE__MANIFEST_STRING_ARRAY;
+    kv.value.u.arr.items = targets;
+    kv.value.u.arr.count = 1;
+    de__manifest_asset a;
+    memset(&a, 0, sizeof a);
+    a.id = source;
+    a.type = "shader";
+    a.source = source;
+    a.file = "rsdata:/assets.toml";
+    a.settings = &kv;
+    a.setting_count = 1;
+    de_result r = DE_OK;
+    if (de_cooker_create(&cd, &c) != DE_OK || de_cooker_register_type(c, &t) != DE_OK)
+        r = DE_ERR_INTERNAL;
+    if (r == DE_OK) {
+        de_cook_input in = {.asset = &a, .asset_root = "rsdata:/", .source = NULL};
+        r = de_cooker_cook(c, &in, res);
+    }
+    de__shader_view view;
+    const bool ok = r == DE_OK && de__shader_view_init(res->data, res->size, &view) == DE_OK &&
+                    find_entry(&view, (u32)target, entry, out, rec);
+    if (!ok)
+        snprintf(why, cap, "%s did not cook: %.300s", source,
+                 de_error_last() ? de_error_last()->message : "?");
+    de_cooker_destroy(c);
+    return ok;
+}
+
+/* cook_entry, or SKIP with the reason. */
+static void cook_entry_or_skip(rsx *f, const char *source, const char *entry, de_cook_result *res,
+                               de_gpu_shader_blob *out, de__shader_record *rec) {
+    static char why[400];
+    if (!cook_entry(f, source, entry, res, out, rec, why, sizeof why)) {
+        de_cook_result_free(res);
+        SKIP(why);
+    }
+}
+
 /* The reference pipeline (data/resolve_lod_ref.slang cooked for `backend`); invalid with `why`. */
 static de_gpu_pipeline ref_pipeline(rsx *f, char *why, size_t cap) {
     const de__shader_target target = de__shader_target_for_backend(f->backend);
@@ -1385,9 +1553,7 @@ static de_gpu_pipeline ref_pipeline(rsx *f, char *why, size_t cap) {
         snprintf(why, cap, "no Slang compiler: %.150s", msg);
         return (de_gpu_pipeline){0};
     }
-    static bool mounted;
-    if (!mounted && de_fs_mount("rsdata", DE_RS_TEST_DATA_DIR, 0, 0) == DE_OK)
-        mounted = true;
+    const bool mounted = rs_mount();
     de_cooker *c = NULL;
     de_cooker_desc cd = {.verify_determinism = DE_COOK_VERIFY_OFF};
     static const char *const exts[] = {".slang"};
@@ -1618,6 +1784,9 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(resolve, only_listed_tiles_##sfx, rsx) {                                                \
         only_listed(f, backend);                                                                   \
+    }                                                                                              \
+    TEST_F(resolve, game_model_dispatch_##sfx, rsx) {                                              \
+        game_model_dispatch(f, backend);                                                           \
     }
 
 GPU_TESTS(metal, DE_GPU_METAL)
@@ -1697,11 +1866,12 @@ static char *read_text(const char *path) {
     return s;
 }
 
-/* The `public static const uint` values of resolve_standard.slang, gbuffer.slang and
- * feedback.slang against the C table, and ResolveParams's size. */
+/* The `public static const uint` values of resolve_model.slang (DENG-298 moved the kernel and
+ * ResolveParams there from resolve_standard.slang), gbuffer.slang and feedback.slang against the C
+ * table, and ResolveParams's size. */
 TEST(resolve, layout_match) {
-    static const char *const files[3] = {"visbuffer/resolve_standard.slang",
-                                         "visbuffer/gbuffer.slang", "visbuffer/feedback.slang"};
+    static const char *const files[3] = {"visbuffer/resolve_model.slang", "visbuffer/gbuffer.slang",
+                                         "visbuffer/feedback.slang"};
     u32 count = 0, found = 0;
     const de__vis_layout_const *k = de__vis_resolve_layout_consts(&count);
     for (u32 fi = 0; fi < 3; ++fi) {
@@ -1734,7 +1904,7 @@ TEST(resolve, layout_match) {
             u32 fields = 0;
             for (const char *ln = ps; ln != NULL && pe != NULL && ln < pe;
                  ln = strchr(ln + 1, '\n'))
-                fields += strncmp(ln, "\n    uint ", 10) == 0;
+                fields += strncmp(ln, "\n    public uint ", 17) == 0;
             EXPECT_EQ(fields * 4u, 112u);
         }
         free(text);
