@@ -403,3 +403,28 @@ if(TARGET test_render_occlusion)
         endif()
     endif()
 endif()
+
+# DENG-234: the mesh-shader vis-buffer raster (src/render/passes/vis/raster_mesh.c; engine shader
+# vis_mesh, shaders/visbuffer/vis_mesh.slang and vis_decode.slang), executable
+# test_render_raster_mesh; CTest names render_raster_mesh.<suite>.<test>. Meshes of grid patches
+# with every buffer the raster reads (meshoptimizer meshlet bounds, as the cooker's); the vis IDs
+# and the depth are compared with a CPU rasterizer. raster_mesh.*_{metal,vulkan,d3d12} SKIP
+# without the device or mesh shaders (CI: lavapipe and WARP golden jobs); the CPU tests parse the
+# shaders and the embedded cook.
+de_add_test(NAME render_raster_mesh
+    SOURCES test_raster_mesh.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_tp_meshoptimizer
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_raster_mesh)
+    target_include_directories(test_render_raster_mesh PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_raster_mesh PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_raster_mesh PRIVATE version)
+        de_d3d12_agility_deploy(test_render_raster_mesh)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_raster_mesh)
+        endif()
+    endif()
+endif()

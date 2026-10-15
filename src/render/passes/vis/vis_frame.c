@@ -278,7 +278,8 @@ static void prepare_occlusion(de__vis_shared *s, de_rg *g, const de__vis_frame_d
             g, &(de_gpu_texture_desc){.format = DE_FMT_D32_FLOAT,
                                       .width = vc->width,
                                       .height = vc->height,
-                                      .usage = DE_USAGE_DEPTH | DE_USAGE_SAMPLED,
+                                      .usage = DE_USAGE_DEPTH | DE_USAGE_SAMPLED |
+                                               DE_USAGE_COPY_SRC, /* tests read it */
                                       .name = "vis.depth"});
         de_rg_resource *user = (de_rg_resource *)de_arena_push(g->arena, sizeof *user, 8);
         if (DE_HANDLE_VALID(vc->depth) && user != NULL) {
@@ -288,6 +289,7 @@ static void prepare_occlusion(de__vis_shared *s, de_rg *g, const de__vis_frame_d
             de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_WRITE);
             vc->depth_width = vc->width;
             vc->depth_height = vc->height;
+            vc->depth_target = true; /* DENG-234: raster draws into it */
         } else {
             vc->depth = (de_rg_resource){0};
         }

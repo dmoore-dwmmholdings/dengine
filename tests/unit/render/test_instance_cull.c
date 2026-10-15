@@ -1290,10 +1290,14 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     markers(f->dev, "vis.", got, sizeof got);
     /* DENG-231: meshlet culling reads the arguments and its stats pass keeps it alive. DENG-233:
      * the depth clear, the HZB (1280 x 720 depth: a 1024 x 512 HZB of 11 mips, mip 0 then mips
-     * 1-6 and 7-10 in two reduce passes) and phase 2 of both culling stages run too. */
+     * 1-6 and 7-10 in two reduce passes) and phase 2 of both culling stages run too. DENG-234:
+     * the null device has mesh shaders, so the vis-ID clear and phase 1's mesh raster run (its
+     * depth feeds the HZB); phase 2's raster has no reader yet (classify, DENG-237), so the graph
+     * culls it. */
     EXPECT_STREQ(got, "vis.depth_clear,vis.cull_instances.clear,vis.cull_instances,"
                       "vis.cull_instances.args,vis.cull_meshlets.clear,vis.cull_meshlets,"
-                      "vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,"
+                      "vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,vis.hzb.level0,"
+                      "vis.hzb.reduce0,vis.hzb.reduce6,"
                       "vis.cull_instances2.clear,vis.cull_instances2,vis.cull_instances2.args,"
                       "vis.cull_instances.stats,vis.cull_meshlets.phase2,"
                       "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
@@ -1306,6 +1310,9 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     EXPECT_TRUE(DE_HANDLE_VALID(vc->depth));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->hzb));
     EXPECT_TRUE(DE_HANDLE_VALID(vc->visibility));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->vis_ids)); /* DENG-234 */
+    EXPECT_TRUE(vc->depth_target);
+    EXPECT_EQ(vc->raster_path, (u32)DE__VIS_RASTER_MESH);
     EXPECT_EQ(vc->instance_count, 300u);
     EXPECT_TRUE(vc->view_new);
     EXPECT_GE(vc->work_capacity, 4096u);
@@ -1330,7 +1337,8 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     markers(f->dev, "vis.", got, sizeof got);
     EXPECT_STREQ(got, "vis.depth_clear,vis.cull_instances.clear,vis.cull_instances,"
                       "vis.cull_instances.args,vis.cull_meshlets.clear,vis.cull_meshlets,"
-                      "vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,"
+                      "vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,vis.hzb.level0,"
+                      "vis.hzb.reduce0,vis.hzb.reduce6,"
                       "vis.cull_instances2.clear,vis.cull_instances2,vis.cull_instances2.args,"
                       "vis.cull_instances.stats,vis.cull_meshlets.phase2,"
                       "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
@@ -1434,8 +1442,9 @@ TEST(vis_frame, renderer_stage) {
     }
     EXPECT_STREQ(got, "view.debug_clear,gpu_scene.view,vis.depth_clear,vis.cull_instances.clear,"
                       "vis.cull_instances,vis.cull_instances.args,vis.cull_meshlets.clear,"
-                      "vis.cull_meshlets,vis.cull_meshlets.args,vis.hzb.level0,vis.hzb.reduce0,"
-                      "vis.hzb.reduce6,vis.cull_instances2.clear,vis.cull_instances2,"
+                      "vis.cull_meshlets,vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,"
+                      "vis.hzb.level0,vis.hzb.reduce0,vis.hzb.reduce6,vis.cull_instances2.clear,"
+                      "vis.cull_instances2,"
                       "vis.cull_instances2.args,vis.cull_instances.stats,vis.cull_meshlets.phase2,"
                       "vis.cull_meshlets.args.phase2,vis.cull_meshlets.stats");
     const de_render_stats *rs = de_renderer_stats(r);
