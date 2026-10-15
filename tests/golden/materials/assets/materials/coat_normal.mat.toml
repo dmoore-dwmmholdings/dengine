@@ -1,0 +1,7 @@
+# coat_normal (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.8, 0.12, 0.08]
+clearcoat = 1.0
+clearcoat_normal_tex = "tex/bumps"
+clearcoat_roughness = 0.05
+metallic = 0.0
+roughness = 0.6

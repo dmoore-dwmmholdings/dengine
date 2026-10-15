@@ -1,0 +1,6 @@
+# khr_brushed (DENG-307 materials gallery; written by gen_assets.py)
+anisotropy = 0.9
+base_color = [0.92, 0.92, 0.92]
+double_sided = true
+metallic = 1.0
+roughness = 0.35

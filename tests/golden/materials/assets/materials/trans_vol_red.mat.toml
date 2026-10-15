@@ -1,0 +1,8 @@
+# trans_vol_red (DENG-307 materials gallery; written by gen_assets.py)
+attenuation_color = [0.9, 0.2, 0.15]
+attenuation_distance = 0.5
+base_color = [1.0, 1.0, 1.0]
+metallic = 0.0
+roughness = 0.0
+thickness = 1.0
+transmission = 1.0

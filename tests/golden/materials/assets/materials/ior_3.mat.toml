@@ -1,0 +1,5 @@
+# ior_3 (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.05, 0.05, 0.05]
+ior = 1.8
+metallic = 0.0
+roughness = 0.15

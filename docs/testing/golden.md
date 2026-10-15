@@ -133,6 +133,34 @@ it fails, as it must.
 - When a change alters a scene on purpose, update the references of every backend in the same
   change, and say why in the commit message.
 
+## The materials gallery (DENG-307)
+
+`tests/golden/materials/` holds one of the three Milestone 1 reference scenes (SPEC §23). S20
+(DENG-278) reuses it, so its path and scene names stay. Its scenes run the engine as a game does:
+the asset system in SOURCE mode over `materials/assets/`, which cooks the glTF meshes, PNG and EXR
+textures, `.mat.toml` materials and `.scene.toml` scenes on load, then the renderer, an ECS world
+and `de_prefab_instantiate`.
+
+| Scene | What |
+|---|---|
+| `materials_gallery_ibl` | every material layer, one row each, lit by a sky environment |
+| `materials_gallery_lights` | the same gallery lit by a sun, a point, a spot, a rect and a disk light |
+| `materials_furnace` | white spheres in a uniform environment; C checks every sphere interior is within 2 % of the radiance × exposure |
+| `materials_khr_samples` | procedural stand-ins for five Khronos sample models (`assets/LICENSES.md`) |
+
+- `assets/gen_assets.py` writes every asset (Python 3 standard library). Edit the script, run it,
+  re-bake the references.
+- The cook cache is per backend in the build tree (`tests/golden/materials_cache/`).
+- A scene runs frames until at most 1 % of its pixels change between frames, three frames in a
+  row, and compares the per-pixel median of those three. This damps the flicker of textured
+  surfaces under Metal shader validation (DENG-430).
+- Thresholds: per scene in `scenes.toml`, from the Metal vs lavapipe spread (about 1.5x margin).
+- Determinism: a fixed EV100 on each scene's `DeCamera`, `output.basic` as the output stage, no
+  temporal effects.
+- A layer that renders wrong gets a follow-up issue against its owning task, and its references
+  are re-baked when the fix lands. Thresholds are not loosened for it. The references hold known
+  gaps, listed in `materials_scenes.c`.
+
 ## LDR-FLIP
 
 `tests/golden/flip/` is a C implementation of LDR-FLIP (Andersson et al., HPG 2020), written from

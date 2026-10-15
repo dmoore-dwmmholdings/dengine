@@ -1,0 +1,5 @@
+# blend_30 (DENG-307 materials gallery; written by gen_assets.py)
+alpha_mode = "blend"
+base_color = [0.2, 0.5, 1.0, 0.3]
+metallic = 0.0
+roughness = 0.3

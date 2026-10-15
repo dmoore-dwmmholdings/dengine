@@ -1,0 +1,5 @@
+# khr_plain_steel (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.92, 0.92, 0.92]
+double_sided = true
+metallic = 1.0
+roughness = 0.35

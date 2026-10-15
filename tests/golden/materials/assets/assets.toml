@@ -1,0 +1,111 @@
+# The materials gallery (DENG-307; written by gen_assets.py: edit the script, not this
+# file). Mounted read-only by tests/golden/materials/materials_scenes.c, cooked in-process
+# (SOURCE mode) by the engine's importers.
+[project]
+asset_root = "."
+
+[defaults.model]
+generate_lods = false
+
+[assets]
+"mesh/sphere" = { type = "model", source = "meshes/sphere.gltf" }
+"mesh/card" = { type = "model", source = "meshes/card.gltf" }
+"mesh/box" = { type = "model", source = "meshes/box.gltf" }
+"mesh/cylinder" = { type = "model", source = "meshes/cylinder.gltf" }
+"tex/checker" = { type = "texture", source = "textures/checker.png" }
+"tex/cutout" = { type = "texture", source = "textures/cutout.png" }
+"tex/leaf" = { type = "texture", source = "textures/leaf.png" }
+"tex/bumps" = { type = "texture", source = "textures/bumps_normal.png", usage = "normal" }
+"env/sky" = { type = "texture", source = "env/sky.exr", usage = "environment", env_size = 32, env_samples = 256, compression = "none" }
+"env/uniform" = { type = "texture", source = "env/uniform.exr", usage = "environment", env_size = 8, env_samples = 64, compression = "none" }
+"mat/aniso_0" = { type = "material", source = "materials/aniso_0.mat.toml" }
+"mat/aniso_1" = { type = "material", source = "materials/aniso_1.mat.toml" }
+"mat/aniso_2" = { type = "material", source = "materials/aniso_2.mat.toml" }
+"mat/aniso_3" = { type = "material", source = "materials/aniso_3.mat.toml" }
+"mat/aniso_4" = { type = "material", source = "materials/aniso_4.mat.toml" }
+"mat/aniso_5" = { type = "material", source = "materials/aniso_5.mat.toml" }
+"mat/backdrop" = { type = "material", source = "materials/backdrop.mat.toml" }
+"mat/blend_30" = { type = "material", source = "materials/blend_30.mat.toml" }
+"mat/blend_70" = { type = "material", source = "materials/blend_70.mat.toml" }
+"mat/blend_red" = { type = "material", source = "materials/blend_red.mat.toml" }
+"mat/coat_half" = { type = "material", source = "materials/coat_half.mat.toml" }
+"mat/coat_metal" = { type = "material", source = "materials/coat_metal.mat.toml" }
+"mat/coat_normal" = { type = "material", source = "materials/coat_normal.mat.toml" }
+"mat/coat_r0" = { type = "material", source = "materials/coat_r0.mat.toml" }
+"mat/coat_r1" = { type = "material", source = "materials/coat_r1.mat.toml" }
+"mat/coat_r2" = { type = "material", source = "materials/coat_r2.mat.toml" }
+"mat/diel_r0" = { type = "material", source = "materials/diel_r0.mat.toml" }
+"mat/diel_r1" = { type = "material", source = "materials/diel_r1.mat.toml" }
+"mat/diel_r2" = { type = "material", source = "materials/diel_r2.mat.toml" }
+"mat/diel_r3" = { type = "material", source = "materials/diel_r3.mat.toml" }
+"mat/diel_r4" = { type = "material", source = "materials/diel_r4.mat.toml" }
+"mat/diel_r5" = { type = "material", source = "materials/diel_r5.mat.toml" }
+"mat/emit_0" = { type = "material", source = "materials/emit_0.mat.toml" }
+"mat/emit_1" = { type = "material", source = "materials/emit_1.mat.toml" }
+"mat/emit_2" = { type = "material", source = "materials/emit_2.mat.toml" }
+"mat/emit_3" = { type = "material", source = "materials/emit_3.mat.toml" }
+"mat/emit_4" = { type = "material", source = "materials/emit_4.mat.toml" }
+"mat/emit_5" = { type = "material", source = "materials/emit_5.mat.toml" }
+"mat/floor" = { type = "material", source = "materials/floor.mat.toml" }
+"mat/furnace_diel_r0" = { type = "material", source = "materials/furnace_diel_r0.mat.toml" }
+"mat/furnace_diel_r1" = { type = "material", source = "materials/furnace_diel_r1.mat.toml" }
+"mat/furnace_diel_r5" = { type = "material", source = "materials/furnace_diel_r5.mat.toml" }
+"mat/furnace_metal_r1" = { type = "material", source = "materials/furnace_metal_r1.mat.toml" }
+"mat/furnace_metal_r2" = { type = "material", source = "materials/furnace_metal_r2.mat.toml" }
+"mat/furnace_metal_r5" = { type = "material", source = "materials/furnace_metal_r5.mat.toml" }
+"mat/ior_0" = { type = "material", source = "materials/ior_0.mat.toml" }
+"mat/ior_1" = { type = "material", source = "materials/ior_1.mat.toml" }
+"mat/ior_2" = { type = "material", source = "materials/ior_2.mat.toml" }
+"mat/ior_3" = { type = "material", source = "materials/ior_3.mat.toml" }
+"mat/ior_4" = { type = "material", source = "materials/ior_4.mat.toml" }
+"mat/irid_0" = { type = "material", source = "materials/irid_0.mat.toml" }
+"mat/irid_1" = { type = "material", source = "materials/irid_1.mat.toml" }
+"mat/irid_2" = { type = "material", source = "materials/irid_2.mat.toml" }
+"mat/irid_3" = { type = "material", source = "materials/irid_3.mat.toml" }
+"mat/irid_4" = { type = "material", source = "materials/irid_4.mat.toml" }
+"mat/irid_5" = { type = "material", source = "materials/irid_5.mat.toml" }
+"mat/jade" = { type = "material", source = "materials/jade.mat.toml" }
+"mat/khr_brushed" = { type = "material", source = "materials/khr_brushed.mat.toml" }
+"mat/khr_coat_00" = { type = "material", source = "materials/khr_coat_00.mat.toml" }
+"mat/khr_coat_01" = { type = "material", source = "materials/khr_coat_01.mat.toml" }
+"mat/khr_coat_02" = { type = "material", source = "materials/khr_coat_02.mat.toml" }
+"mat/khr_coat_10" = { type = "material", source = "materials/khr_coat_10.mat.toml" }
+"mat/khr_coat_11" = { type = "material", source = "materials/khr_coat_11.mat.toml" }
+"mat/khr_coat_12" = { type = "material", source = "materials/khr_coat_12.mat.toml" }
+"mat/khr_coat_20" = { type = "material", source = "materials/khr_coat_20.mat.toml" }
+"mat/khr_coat_21" = { type = "material", source = "materials/khr_coat_21.mat.toml" }
+"mat/khr_coat_22" = { type = "material", source = "materials/khr_coat_22.mat.toml" }
+"mat/khr_irid_0" = { type = "material", source = "materials/khr_irid_0.mat.toml" }
+"mat/khr_irid_1" = { type = "material", source = "materials/khr_irid_1.mat.toml" }
+"mat/khr_irid_2" = { type = "material", source = "materials/khr_irid_2.mat.toml" }
+"mat/khr_plain_steel" = { type = "material", source = "materials/khr_plain_steel.mat.toml" }
+"mat/khr_trans_0" = { type = "material", source = "materials/khr_trans_0.mat.toml" }
+"mat/khr_trans_1" = { type = "material", source = "materials/khr_trans_1.mat.toml" }
+"mat/khr_trans_2" = { type = "material", source = "materials/khr_trans_2.mat.toml" }
+"mat/khr_trans_3" = { type = "material", source = "materials/khr_trans_3.mat.toml" }
+"mat/khr_velvet" = { type = "material", source = "materials/khr_velvet.mat.toml" }
+"mat/leaf" = { type = "material", source = "materials/leaf.mat.toml" }
+"mat/mask" = { type = "material", source = "materials/mask.mat.toml" }
+"mat/metal_r0" = { type = "material", source = "materials/metal_r0.mat.toml" }
+"mat/metal_r1" = { type = "material", source = "materials/metal_r1.mat.toml" }
+"mat/metal_r2" = { type = "material", source = "materials/metal_r2.mat.toml" }
+"mat/metal_r3" = { type = "material", source = "materials/metal_r3.mat.toml" }
+"mat/metal_r4" = { type = "material", source = "materials/metal_r4.mat.toml" }
+"mat/metal_r5" = { type = "material", source = "materials/metal_r5.mat.toml" }
+"mat/sheen_0" = { type = "material", source = "materials/sheen_0.mat.toml" }
+"mat/sheen_1" = { type = "material", source = "materials/sheen_1.mat.toml" }
+"mat/sheen_2" = { type = "material", source = "materials/sheen_2.mat.toml" }
+"mat/sheen_3" = { type = "material", source = "materials/sheen_3.mat.toml" }
+"mat/sheen_4" = { type = "material", source = "materials/sheen_4.mat.toml" }
+"mat/sheen_5" = { type = "material", source = "materials/sheen_5.mat.toml" }
+"mat/skin" = { type = "material", source = "materials/skin.mat.toml" }
+"mat/spec_0" = { type = "material", source = "materials/spec_0.mat.toml" }
+"mat/trans_rough" = { type = "material", source = "materials/trans_rough.mat.toml" }
+"mat/trans_thin" = { type = "material", source = "materials/trans_thin.mat.toml" }
+"mat/trans_vol_blue" = { type = "material", source = "materials/trans_vol_blue.mat.toml" }
+"mat/trans_vol_red" = { type = "material", source = "materials/trans_vol_red.mat.toml" }
+"mat/unlit" = { type = "material", source = "materials/unlit.mat.toml" }
+"scenes/furnace" = { type = "scene", source = "scenes/furnace.scene.toml" }
+"scenes/gallery_ibl" = { type = "scene", source = "scenes/gallery_ibl.scene.toml" }
+"scenes/gallery_lights" = { type = "scene", source = "scenes/gallery_lights.scene.toml" }
+"scenes/khr_samples" = { type = "scene", source = "scenes/khr_samples.scene.toml" }

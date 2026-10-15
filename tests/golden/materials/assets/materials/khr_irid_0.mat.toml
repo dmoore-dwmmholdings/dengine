@@ -1,0 +1,8 @@
+# khr_irid_0 (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.9, 0.9, 0.9]
+iridescence = 1.0
+iridescence_ior = 1.33
+iridescence_thickness_max = 400.0
+iridescence_thickness_min = 200.0
+metallic = 1.0
+roughness = 0.05

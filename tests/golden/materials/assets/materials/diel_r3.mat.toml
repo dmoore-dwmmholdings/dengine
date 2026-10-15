@@ -1,0 +1,4 @@
+# diel_r3 (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.8, 0.12, 0.08]
+metallic = 0.0
+roughness = 0.6
