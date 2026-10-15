@@ -24,6 +24,10 @@
  *     flight at once (the render graph's frame slots, but sharing a heap), so different listener
  *     threads resolve into the same staging memory; every frame's two values are in order. Run
  *     under TSan, it checks the hand-off between the recording thread and the listener blocks.
+ *   - destroy_with_resolve_in_flight_metal (DENG-424): each of 40 frames makes a heap, times and
+ *     resolves it, submits, and destroys the heap at once (three frames in flight). The front-end
+ *     reuses the freed slots, so new heaps land where heaps with pending resolve blocks were;
+ *     every frame's values still arrive in order. Run under TSan and ASan.
  * Vulkan runs on the best Base-tier device or adapter 1 forced (MoltenVK), with the validation
  * layer when installed; D3D12 on the best adapter (CI: the vendored WARP) with the debug layer;
  * Metal with API validation (MTL_DEBUG_LAYER=1). Each requires zero validation errors.
@@ -768,6 +772,86 @@ TEST_F(queries, timestamps_metal, q_fx) {
 /* DENG-419: frames of T0, a 1 MiB copy, T1 and a resolve of one heap, three lists in flight. A
  * list that is still in flight is not recycled, so consecutive frames use different lists, and
  * so different resolve listeners (threads) write the heap's staging buffer. */
+/* DENG-424: heaps destroyed right after the submit of their resolve, while the resolve's
+ * listener block may still be pending; the next heaps reuse their slots (the front-end releases
+ * a slot once the GPU is done and hands it out again first). */
+TEST_F(queries, destroy_with_resolve_in_flight_metal, q_fx) {
+    enum { FRAMES = 40, IN_FLIGHT = 3, COPY_BYTES = 1u << 20 };
+    open_backend(f, DE_GPU_METAL);
+    de_gpu_device *d = f->d;
+    de_gpu_query_heap probe =
+        de_gpu_query_heap_create(d, &(de_gpu_query_heap_desc){.count = 2, .name = "probe"});
+    if (!DE_HANDLE_VALID(probe)) {
+        snprintf(f->skip, sizeof f->skip, "no timestamps: %s", errchain(f->err, sizeof f->err));
+        SKIP(f->skip);
+    }
+    de_gpu_query_heap_destroy(d, probe);
+    de_gpu_buffer a = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = COPY_BYTES,
+                                                                    .usage = DE_USAGE_COPY_SRC,
+                                                                    .name = "destroy src"});
+    de_gpu_buffer b = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = COPY_BYTES,
+                                                                    .usage = DE_USAGE_COPY_DST,
+                                                                    .name = "destroy dst"});
+    de_gpu_buffer rb[IN_FLIGHT];
+    for (u32 i = 0; i < IN_FLIGHT; ++i)
+        rb[i] = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = 16,
+                                                              .usage = DE_USAGE_COPY_DST,
+                                                              .memory = DE_MEM_READBACK,
+                                                              .name = "destroy readback"});
+    de_gpu_fence fence = de_gpu_fence_create(d, 0);
+    ASSERT_TRUE(DE_HANDLE_VALID(a) && DE_HANDLE_VALID(b) && DE_HANDLE_VALID(fence));
+    u32 slots[FRAMES];
+    u32 reused = 0, checked = 0;
+
+    for (u32 frame = 0; frame < FRAMES + IN_FLIGHT; ++frame) {
+        const u32 slot = frame % IN_FLIGHT;
+        if (frame >= IN_FLIGHT) {
+            ASSERT_EQ(de_gpu_fence_wait(d, fence, frame - IN_FLIGHT + 1u, WAIT_NS), DE_OK);
+            const u64 *t = (const u64 *)de_gpu_buffer_map(d, rb[slot]);
+            ASSERT_TRUE(t != NULL);
+            EXPECT_TRUE(t[0] != 0 && t[0] != UINT64_MAX);
+            EXPECT_GT(t[1], t[0]);
+            ++checked;
+        }
+        if (frame >= FRAMES)
+            continue;
+        de_error_clear();
+        de_gpu_query_heap heap = de_gpu_query_heap_create(
+            d, &(de_gpu_query_heap_desc){.count = 2, .name = "destroyed in flight"});
+        ASSERT_TRUE(DE_HANDLE_VALID(heap));
+        slots[frame] = heap.id & (DE__GPU_POOL_MAX_SLOTS - 1u);
+        for (u32 j = 0; j < frame; ++j)
+            if (slots[j] == slots[frame]) {
+                ++reused;
+                break;
+            }
+        de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "destroy in flight");
+        ASSERT_TRUE(c != NULL);
+        de_gpu_barrier bs[3] = {
+            buf_barrier(a, DE_ACCESS_NONE, DE_ACCESS_COPY_SRC),
+            buf_barrier(b, frame ? DE_ACCESS_COPY_DST : DE_ACCESS_NONE, DE_ACCESS_COPY_DST),
+            buf_barrier(rb[slot], DE_ACCESS_NONE, DE_ACCESS_COPY_DST)};
+        de_gpu_cmd_barriers(c, bs, 3);
+        de_gpu_cmd_timestamp(c, heap, 0);
+        de_gpu_cmd_copy_buffer(c, b, 0, a, 0, COPY_BYTES);
+        de_gpu_cmd_timestamp(c, heap, 1);
+        de_gpu_cmd_resolve_queries(c, heap, 0, 2, rb[slot], 0);
+        EXPECT_TRUE(de_error_last() == NULL);
+        de_gpu_submit s = {.cmds = &c, .cmd_count = 1, .signal = fence, .signal_value = frame + 1u};
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &s), DE_OK);
+        de_gpu_query_heap_destroy(d, heap); /* the resolve is in flight */
+    }
+    printf("%u frames checked; %u heaps reused a slot of a heap destroyed in flight\n", checked,
+           reused);
+    EXPECT_EQ(checked, (u32)FRAMES);
+    EXPECT_GT(reused, 0u);
+    de_gpu_fence_destroy(d, fence);
+    for (u32 i = 0; i < IN_FLIGHT; ++i)
+        de_gpu_buffer_destroy(d, rb[i]);
+    de_gpu_buffer_destroy(d, b);
+    de_gpu_buffer_destroy(d, a);
+}
+
 TEST_F(queries, resolve_lists_in_flight_metal, q_fx) {
     enum { FRAMES = 24, IN_FLIGHT = 3, COPY_BYTES = 1u << 20 };
     open_backend(f, DE_GPU_METAL);
