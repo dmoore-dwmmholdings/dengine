@@ -31,6 +31,7 @@ import "../../brdf/ggx";
 import "../../brdf/fresnel";
 import "../../brdf/sampling";
 import "../../brdf/energy";
+import "../../brdf/thin_film";
 import "../material_interface";
 
 /// Rec. 709 luminance, to weigh coloured albedos for lobe selection.
@@ -67,8 +68,8 @@ public StandardFresnel de_standard_fresnel(SurfaceData s)
 /// What evaluate, sample and pdf share for one surface and view direction.
 public struct StandardBase
 {
-    public float roughness;
-    public float alpha;
+    public float roughness;   // the perceptual roughness of the energy LUT lookups
+    public float alpha;       // GGX alpha (isotropic)
     public StandardFresnel fresnel;
     public EnergyTerms e_o;   // the energy LUT at mu_o
     public bool multiscatter; // the Kulla-Conty lobe is on
@@ -77,15 +78,51 @@ public struct StandardBase
     public float3 ed_avg;     // and its average
     public float3 diffuse;    // base colour x (1 - metallic) / pi
     public float p_specular;  // the probability that sample picks the VNDF lobe
+    // ---- DENG-300: the layers that modify the base lobe ----
+    public float ax, ay;      // GGX alpha along the anisotropy direction and across it
+    public float2 aniso;      // the anisotropy direction in the local frame (cos, sin); (1, 0) none
+    public bool iridescent;   // the Fresnel goes through the thin film
+    public float irid_factor, irid_ior, irid_thickness;
+    public float albedo;      // the luminance of the lobes' albedo at wo (layer lobe selection)
 };
 
 /// The shared terms for surface `s` seen from local `wo` (wo.z > 0). `multiscatter` false
-/// leaves out the compensation lobe (tests show what it adds).
+/// leaves out the compensation lobe (tests show what it adds). The base without layers.
 public StandardBase de_standard_base(SurfaceData s, float3 wo, bool multiscatter)
 {
+    return de_standard_base_t<0>(s, wo, multiscatter);
+}
+
+/// de_standard_base with the base-modifying layers compiled in by F (DE_MATERIAL_FEATURE_*, a
+/// compile-time set) and present in s.features: ANISOTROPY (KHR_materials_anisotropy: alpha_t =
+/// mix(alpha, 1, strength^2) along s.anisotropy_direction) and IRIDESCENCE
+/// (KHR_materials_iridescence: the Fresnel mixed with the thin film's by the factor). The _t
+/// functions take the same F; a layer F leaves out costs nothing (its code is not compiled).
+public StandardBase de_standard_base_t<let F : uint>(SurfaceData s, float3 wo, bool multiscatter)
+{
+    uint features = F & s.features;
     StandardBase b;
     b.roughness = saturate(s.roughness);
     b.alpha = de_ggx_alpha(b.roughness);
+    b.ax = b.alpha;
+    b.ay = b.alpha;
+    b.aniso = float2(1.0, 0.0);
+    if ((F & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u &&
+        (features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u && s.anisotropy > 0.0)
+    {
+        float k = saturate(s.anisotropy);
+        b.ax = lerp(b.alpha, 1.0, k * k);
+        float l = length(s.anisotropy_direction);
+        b.aniso = l > 0.0 ? s.anisotropy_direction / l : float2(1.0, 0.0);
+        // The energy terms of an anisotropic lobe: those of the mean width sqrt(ax ay).
+        b.roughness = sqrt(sqrt(b.ax * b.ay));
+    }
+    b.iridescent = (F & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u &&
+                   (features & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u && s.iridescence > 0.0 &&
+                   s.iridescence_thickness > 0.0;
+    b.irid_factor = saturate(s.iridescence);
+    b.irid_ior = s.iridescence_ior;
+    b.irid_thickness = s.iridescence_thickness;
     b.fresnel = de_standard_fresnel(s);
     b.e_o = de_energy_lookup(s.brdf_lut, wo.z, b.roughness);
     b.multiscatter = multiscatter;
@@ -99,19 +136,48 @@ public StandardBase de_standard_base(SurfaceData s, float3 wo, bool multiscatter
     float ms = luminance(b.fms) * (1.0 - b.e_o.e());
     float df = luminance(b.diffuse * DE_PI * (1.0 - b.ed_o));
     float total = ss + ms + df;
+    b.albedo = total;
     b.p_specular = total > 0.0 ? saturate(ss / total) : 1.0;
     return b;
 }
 
-/// BSDF x cos(theta_i) of the base lobes for local `wo`, `wi` (0 unless both are above the
-/// surface).
-public float3 de_standard_base_evaluate(StandardBase b, SurfaceData s, float3 wo, float3 wi)
+/// Local direction `v` in the anisotropy frame (x along the anisotropy direction).
+float3 to_aniso<let F : uint>(StandardBase b, float3 v)
 {
+    if ((F & DE_MATERIAL_FEATURE_ANISOTROPY) == 0u)
+        return v;
+    return float3(v.x * b.aniso.x + v.y * b.aniso.y, v.y * b.aniso.x - v.x * b.aniso.y, v.z);
+}
+float3 from_aniso<let F : uint>(StandardBase b, float3 v)
+{
+    if ((F & DE_MATERIAL_FEATURE_ANISOTROPY) == 0u)
+        return v;
+    return float3(v.x * b.aniso.x - v.y * b.aniso.y, v.x * b.aniso.y + v.y * b.aniso.x, v.z);
+}
+
+/// The specular Fresnel at cos(theta_d) `mu` (wo.h): Schlick (f0, f90), mixed with the thin
+/// film's when iridescent.
+public float3 de_standard_base_fresnel_t<let F : uint>(StandardBase b, float mu)
+{
+    float3 f = de_fresnel_schlick(b.fresnel.f0, b.fresnel.f90, mu);
+    if ((F & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u && b.iridescent)
+        f = lerp(f, de_thin_film_fresnel(1.0, b.irid_ior, mu, b.irid_thickness, b.fresnel.f0),
+                 b.irid_factor);
+    return f;
+}
+
+/// BSDF x cos(theta_i) of the base lobes for local `wo`, `wi` (0 unless both are above the
+/// surface); `diffuse` gets the diffuse lobe's share.
+public float3 de_standard_base_evaluate_split_t<let F : uint>(StandardBase b, SurfaceData s,
+                                                             float3 wo, float3 wi,
+                                                             out float3 diffuse)
+{
+    diffuse = float3(0.0, 0.0, 0.0);
     if (!(wo.z > 0.0) || !(wi.z > 0.0))
         return float3(0.0, 0.0, 0.0);
     float3 h = normalize(wo + wi);
-    float3 f = de_fresnel_schlick(b.fresnel.f0, b.fresnel.f90, dot(wo, h));
-    float3 r = f * de_ggx_specular(b.alpha, b.alpha, wo, wi);
+    float3 f = de_standard_base_fresnel_t<F>(b, dot(wo, h));
+    float3 r = f * de_ggx_specular(b.ax, b.ay, to_aniso<F>(b, wo), to_aniso<F>(b, wi));
     EnergyTerms e_i = de_energy_lookup(s.brdf_lut, wi.z, b.roughness);
     if (b.multiscatter)
         r += b.fms * de_energy_ms(b.e_o.e(), e_i.e(), b.e_o.e_avg());
@@ -119,23 +185,32 @@ public float3 de_standard_base_evaluate(StandardBase b, SurfaceData s, float3 wo
     float3 ed_i = de_energy_specular_albedo(e_i, b.fresnel.f0_d, b.fresnel.f90_d, b.multiscatter,
                                             ed_avg_i);
     float3 coupling = (1.0 - b.ed_o) * (1.0 - ed_i) / max(1.0 - b.ed_avg, float3(1e-4, 1e-4, 1e-4));
-    r += b.diffuse * coupling;
-    return r * wi.z;
+    diffuse = b.diffuse * coupling * wi.z;
+    return r * wi.z + diffuse;
+}
+
+/// BSDF x cos(theta_i) of the base lobes for local `wo`, `wi`.
+public float3 de_standard_base_evaluate_t<let F : uint>(StandardBase b, SurfaceData s, float3 wo,
+                                                       float3 wi)
+{
+    float3 unused;
+    return de_standard_base_evaluate_split_t<F>(b, s, wo, wi, unused);
 }
 
 /// The density with which de_standard_base_sample returns `wi` for `wo`, over the whole sphere: a
 /// VNDF sample can reflect below the horizon (evaluate is 0 there), so the density integrates to 1
 /// over the sphere, not over the upper hemisphere.
-public float de_standard_base_pdf(StandardBase b, float3 wo, float3 wi)
+public float de_standard_base_pdf_t<let F : uint>(StandardBase b, float3 wo, float3 wi)
 {
     if (!(wo.z > 0.0))
         return 0.0;
-    return b.p_specular * de_ggx_reflect_pdf(b.alpha, b.alpha, wo, wi) +
+    return b.p_specular * de_ggx_reflect_pdf(b.ax, b.ay, to_aniso<F>(b, wo), to_aniso<F>(b, wi)) +
            (1.0 - b.p_specular) * de_cosine_hemisphere_pdf(wi.z);
 }
 
 /// A direction for `wo` from uniform `u` (u.z picks the lobe), with its weight evaluate / pdf.
-public BsdfSample de_standard_base_sample(StandardBase b, SurfaceData s, float3 wo, float3 u)
+public BsdfSample de_standard_base_sample_t<let F : uint>(StandardBase b, SurfaceData s, float3 wo,
+                                                          float3 u)
 {
     BsdfSample r;
     r.wi = float3(0.0, 0.0, 1.0);
@@ -146,7 +221,8 @@ public BsdfSample de_standard_base_sample(StandardBase b, SurfaceData s, float3 
         return r;
     if (u.z < b.p_specular)
     {
-        r.wi = de_reflect(wo, de_ggx_vndf_sample(b.alpha, b.alpha, wo, u.xy));
+        float3 h = from_aniso<F>(b, de_ggx_vndf_sample(b.ax, b.ay, to_aniso<F>(b, wo), u.xy));
+        r.wi = de_reflect(wo, h);
         r.lobe = DE_BSDF_LOBE_SPECULAR;
     }
     else
@@ -154,8 +230,32 @@ public BsdfSample de_standard_base_sample(StandardBase b, SurfaceData s, float3 
         r.wi = de_sample_cosine_hemisphere(u.xy);
         r.lobe = DE_BSDF_LOBE_DIFFUSE;
     }
-    r.pdf = de_standard_base_pdf(b, wo, r.wi);
+    r.pdf = de_standard_base_pdf_t<F>(b, wo, r.wi);
     if (r.pdf > 0.0)
-        r.weight = de_standard_base_evaluate(b, s, wo, r.wi) / r.pdf;
+        r.weight = de_standard_base_evaluate_t<F>(b, s, wo, r.wi) / r.pdf;
     return r;
+}
+
+/* ---- The base without layers (DENG-299's functions): F = 0 ---- */
+
+public float3 de_standard_base_fresnel(StandardBase b, float mu)
+{
+    return de_standard_base_fresnel_t<0>(b, mu);
+}
+public float3 de_standard_base_evaluate_split(StandardBase b, SurfaceData s, float3 wo, float3 wi,
+                                              out float3 diffuse)
+{
+    return de_standard_base_evaluate_split_t<0>(b, s, wo, wi, diffuse);
+}
+public float3 de_standard_base_evaluate(StandardBase b, SurfaceData s, float3 wo, float3 wi)
+{
+    return de_standard_base_evaluate_t<0>(b, s, wo, wi);
+}
+public float de_standard_base_pdf(StandardBase b, float3 wo, float3 wi)
+{
+    return de_standard_base_pdf_t<0>(b, wo, wi);
+}
+public BsdfSample de_standard_base_sample(StandardBase b, SurfaceData s, float3 wo, float3 u)
+{
+    return de_standard_base_sample_t<0>(b, s, wo, u);
 }
