@@ -33,3 +33,5 @@ de_engine_shader(lighting_cull      lighting/light_cull.slang)
 de_engine_shader(lighting_deferred  lighting/deferred_lighting.slang)
 de_engine_shader(post_output_basic  post/output_basic.slang)
 de_engine_shader(forward_transparent forward/forward_transparent.slang)
+# DENG-306: screen-space separable subsurface scattering (Burley profile; burley_profile.slang).
+de_engine_shader(sss_separable      sss/sss_separable.slang)

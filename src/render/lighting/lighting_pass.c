@@ -66,6 +66,7 @@ DE_STATIC_ASSERT(sizeof(lp_params) == 112, "LightingParams is 112 bytes");
 static const de__lighting_const k_consts[] = {
     {"DE_LIGHTING_ORTHO", DE__LIGHTING_ORTHO},
     {"DE_LIGHTING_SPLIT", DE__LIGHTING_SPLIT},
+    {"DE_LIGHTING_SSS", DE__LIGHTING_SSS},
     {"DE_LIGHTING_MAX_DIRECTIONAL", DE__LIGHTING_MAX_DIRECTIONAL},
     {"DE_LIGHTING_COUNTER_LOCAL", DE__LIGHTING_COUNTER_LOCAL},
     {"DE_LIGHTING_COUNTER_DIRECTIONAL", DE__LIGHTING_COUNTER_DIRECTIONAL},
@@ -580,7 +581,7 @@ static void near_far(const f32 *ip, f32 *near_z, f32 *far_z) {
 
 /* The constants of one view and frame (lc->view, lc->grid, the capacities). */
 static void fill_view(de__lighting *lt, const de__vis_context *vc, const de__lighting_inputs *in,
-                      bool split, de__lighting_context *lc) {
+                      bool split, bool sss, de__lighting_context *lc) {
     de__lighting_view *lv = &lc->view;
     de__lighting_inv_proj(&vc->proj, lv->inv_proj);
     f32 near_z, cam_far;
@@ -635,7 +636,8 @@ static void fill_view(de__lighting *lt, const de__vis_context *vc, const de__lig
     lv->pre_exposure = in->pre_exposure > 0.0f ? in->pre_exposure : ex_now ? ex->current : 1.0f;
     lv->proxy_capacity = proxies > 0 ? (u32)proxies : 0u;
     const bool ortho = vc->proj.m[11] == 0.0f; /* row 3 is (0, 0, -1, 0) in a perspective */
-    lv->flags = (ortho ? DE__LIGHTING_ORTHO : 0u) | (split ? DE__LIGHTING_SPLIT : 0u);
+    lv->flags = (ortho ? DE__LIGHTING_ORTHO : 0u) | (split ? DE__LIGHTING_SPLIT : 0u) |
+                (sss ? DE__LIGHTING_SSS : 0u);
     lv->light_slots = light_slots;
     lv->brdf_lut = lt->brdf_lut;
     lv->instance_slots =
@@ -675,7 +677,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool heatmap =
         lt->debug.heatmap || (DE_HANDLE_VALID(lt->cv_debug) && de_cvar_bool(lt->cv_debug));
     const bool readback = lt->debug.readback || heatmap;
-    fill_view(lt, vc, &in, split, lc);
+    const bool sss = in.subsurface; /* DENG-306 */
+    fill_view(lt, vc, &in, split, sss, lc);
     lc->target = vc->gbuffer[DE__GB_LIGHTING];
     lc->width = vc->width;
     lc->height = vc->height;
@@ -711,7 +714,20 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     lc->constants_entry = vs->entry;
     lc->sampler_bindless = lt->sampler_bindless;
 
-    /* The split targets. */
+    /* The split targets. DENG-306: subsurface scattering alone needs only the diffuse target, and
+     * no clear (the SSS pass reads it at SUBSURFACE pixels only, which the deferred pass writes).
+     */
+    if (sss && !split) {
+        lc->diffuse = de_rg_create_texture(
+            g,
+            &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
+                                   .width = vc->width,
+                                   .height = vc->height,
+                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
+                                   .name = "lighting.diffuse"});
+        if (!DE_HANDLE_VALID(lc->diffuse))
+            return DE_OK;
+    }
     if (split) {
         lc->diffuse = de_rg_create_texture(
             g,
@@ -784,6 +800,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             de_rg_write(p, lc->diffuse, DE_ACCESS_SHADER_WRITE);
             de_rg_read(p, lc->specular, DE_ACCESS_SHADER_READ);
             de_rg_write(p, lc->specular, DE_ACCESS_SHADER_WRITE);
+        } else if (DE_HANDLE_VALID(lc->diffuse)) {
+            de_rg_write(p, lc->diffuse, DE_ACCESS_SHADER_WRITE); /* DENG-306: SSS pixels only */
         }
         de_rg_read(p, vc->classify_tiles, DE_ACCESS_SHADER_READ);
         de_rg_read(p, vc->classify_args, DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
@@ -887,6 +905,10 @@ static void lighting_stage(de__view_frame *vf, void *user) {
     (void)de__lighting_view_exposure(
         lt, vc->view_slot, vf->view, vf->frame_index,
         vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, NULL);
+    /* DENG-306: the SSS stage runs after this one when the view's sss quality is on. */
+    de__lighting_inputs *in = de__lighting_view_inputs(lt, vc->view_slot);
+    if (in != NULL)
+        in->subsurface = vf->settings != NULL && vf->settings->sss != DE_QUALITY_OFF;
     de__lighting_context *lc = NULL;
     const de_result res = de__lighting_build(lt, vf->graph, vc, &lc);
     if (res != DE_OK) {

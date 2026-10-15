@@ -1456,7 +1456,8 @@ TEST(vis_frame, renderer_stage) {
                  "vis.resolve.clear_lighting,vis.resolve.clear,vis.resolve.feedback,vis.resolve,"
                  "lighting.cluster_bounds,"
                  "lighting.lights_clear,lighting.lights_prep,lighting.lights_count,"
-                 "lighting.lights_scan,lighting.lights_fill,lighting.deferred,output.basic,"
+                 "lighting.lights_scan,lighting.lights_fill,lighting.deferred,sss.clear,sss.tiles,"
+                 "sss.args,sss.blur_h,sss.blur_v,output.basic,"
                  "view.resolve");
     const de_render_stats *rs = de_renderer_stats(r);
     for (u32 i = 0; i < 4; ++i)

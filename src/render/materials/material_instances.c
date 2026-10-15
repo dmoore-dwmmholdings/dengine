@@ -79,7 +79,8 @@ u32 de__material_features(const de_standard_material *s, u32 alpha_mode, u32 mod
         f |= DE__MATERIAL_FEATURE_VOLUME;
     if (s->diffuse_transmission > 0.0f)
         f |= DE__MATERIAL_FEATURE_DIFFUSE_TRANSMISSION;
-    if (s->subsurface > 0.0f)
+    if (s->subsurface > 0.0f && (s->subsurface_radius.x > 0.0f || s->subsurface_radius.y > 0.0f ||
+                                 s->subsurface_radius.z > 0.0f)) /* DENG-306 */
         f |= DE__MATERIAL_FEATURE_SUBSURFACE;
     if (model == DE__GS_MATERIAL_MODEL_UNLIT)
         f |= DE__MATERIAL_FEATURE_UNLIT;

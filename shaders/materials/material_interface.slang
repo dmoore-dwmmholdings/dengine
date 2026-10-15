@@ -175,6 +175,16 @@ public interface IMaterialModel
     static uint lobes(SurfaceData s);
 };
 
+/// DENG-306: a model whose BSDF splits into its diffuse share and the rest. Deferred lighting
+/// shades through it: subsurface pixels and the split targets (r.split_lighting) take `diffuse`
+/// as what the screen-space subsurface scattering blurs, and evaluate - diffuse as specular.
+/// Exact for metals too, where evaluating with base colour 0 is not (their F0 is the base colour).
+public interface IMaterialSplitModel : IMaterialModel
+{
+    /// evaluate(s, wo, wi), with its diffuse share in `diffuse` (BSDF x |cos(theta_i)|).
+    static float3 evaluate_split(SurfaceData s, float3 wo, float3 wi, out float3 diffuse);
+};
+
 /// Samples `texture` (bindless index; `fallback` when DE_BINDLESS_INVALID) with UV set `set` of
 /// `v` and its derivatives in `lod`, and records the mip in the feedback when `lod.record`.
 public float4 de_material_sample(TextureLodInfo lod, VertexAttribs v, uint texture, uint set,

@@ -154,7 +154,8 @@ struct de_standard_material;
  * `s`, alpha mode `alpha_mode` (de_cooked_alpha_mode) and model `model`. The rules match the
  * shader's (standard.slang and the layers): CLEARCOAT clearcoat > 0; SHEEN a sheen colour channel
  * > 0; ANISOTROPY anisotropy > 0; IRIDESCENCE iridescence > 0 with a thickness > 0;
- * TRANSMISSION transmission > 0; DIFFUSE_TRANSMISSION > 0; SUBSURFACE > 0;
+ * TRANSMISSION transmission > 0; DIFFUSE_TRANSMISSION > 0; SUBSURFACE subsurface > 0 with a
+ * subsurface_radius channel > 0 (DENG-306);
  * UNLIT the Unlit model; FORWARD alpha blend or transmission > 0; DOUBLE_SIDED; ALPHA_MASK alpha
  * mask. TRANSMISSION, VOLUME (thickness > 0 with transmission or diffuse transmission > 0),
  * DIFFUSE_TRANSMISSION and FORWARD follow de_transmission_set_features (DENG-301,
