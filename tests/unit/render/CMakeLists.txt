@@ -325,3 +325,22 @@ if(TARGET test_render_vis)
         endif()
     endif()
 endif()
+
+# DENG-422: asset unloads against the render thread (src/render/loaders/ retire list, the GPU
+# scene's prepare at the kick), executable test_render_churn; CTest names render_churn.churn.<test>:
+# an unloaded mesh waits for the frame fence, and 1000 frames of load/unload/spawn churn with
+# r.pipelined = 1 (null backend, the real asset system and ECS loop). The data-race and
+# use-after-free part runs under TSan (ci-linux-tsan) and ASan (CI and ci-macos-asan).
+de_add_test(NAME render_churn
+    SOURCES test_render_churn.c
+    LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
+    LABELS unit render
+    TIMEOUT 300)
+if(TARGET test_render_churn)
+    target_include_directories(test_render_churn PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_render_churn_tmp")
+    target_compile_definitions(test_render_churn PRIVATE
+        "DE_RCH_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_render_churn_tmp\"")
+    target_link_libraries(test_render_churn PRIVATE
+        "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+endif()

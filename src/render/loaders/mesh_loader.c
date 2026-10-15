@@ -36,6 +36,7 @@ static void mesh_free(de_render_uploader *u, de_render_mesh *m) {
     if (m == NULL)
         return;
     de__upload_release(u, m->upload_);
+    m->upload_ = NULL;
     for (u32 i = 0; i < DE_RENDER_MESH_BUFFER_COUNT; ++i)
         if (DE_HANDLE_VALID(m->buffers[i]))
             de_gpu_buffer_destroy(u->dev, m->buffers[i]);
@@ -206,8 +207,20 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
     return DE_OK;
 }
 
+/* The retire list's free (DENG-422): the upload was released at the unload. */
+static void mesh_retired(de_render_uploader *u, void *object) {
+    mesh_free(u, (de_render_mesh *)object);
+}
+
 void de__mesh_unload(void *object, void *user) {
-    mesh_free((de_render_uploader *)user, (de_render_mesh *)object);
+    de_render_uploader *u = (de_render_uploader *)user;
+    de_render_mesh *m = (de_render_mesh *)object;
+    if (m == NULL)
+        return;
+    /* Now: no more copies into it. Later (frame fence, DENG-422): the buffers and the record. */
+    de__upload_release(u, m->upload_);
+    m->upload_ = NULL;
+    de__uploader_retire(u, &m->retire_, m, mesh_retired);
 }
 
 de_result de__mesh_ready(void *object, void *user) {

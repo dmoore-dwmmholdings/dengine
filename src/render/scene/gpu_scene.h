@@ -58,10 +58,12 @@
  * bytes; what does not fit (or a ring that stays full) uploads in the next frames (the slots stay
  * dirty). A frame that was not submitted marks everything dirty again.
  *
- * Threads: every function on the thread that renders, one call at a time. The pass callbacks run
- * on task workers (DENG-173) and only read this frame's plan. The asset accessors (mesh,
- * material and texture records) are called in update(); see "Known gaps" on the Trama page
- * "render: GPU Scene" for the pipelined case.
+ * Threads: one call at a time. update() (de__gpu_scene_prepare) reads asset records, so it runs
+ * where the asset system is not being updated: the renderer calls it on the main thread at the
+ * kick, while the render thread is idle (DENG-422). Everything else may run on the thread that
+ * renders. The pass callbacks run on task workers (DENG-173) and only read this frame's plan.
+ * Records of unloaded assets stay alive until the frame fence passes the frames that could name
+ * them (render/loaders/render_assets.h, "Deferred unloads").
  *
  * Memory: tables, scratch buffers and CPU arrays grow (doubling) with the scene and never shrink.
  * A scene that does not grow allocates nothing per frame (render_gpu_scene.gpu_scene.
@@ -513,14 +515,20 @@ de_result de__gpu_scene_add_passes(de__gpu_scene *gs, de_rg *g);
 void de__gpu_scene_frame_end(de__gpu_scene *gs, de_rg *g, bool submitted);
 
 /**
- * The renderer's whole once-per-frame step (`de_renderer_render_frame`, before the views): update
- * with `f` (NULL: a frame without a render world, only the frame counter moves), then the upload
- * passes in the scene's own graph on `arena`, compiled and executed when there are any
- * (`frame_index` labels its timings), then de__gpu_scene_frame_end. Queue order makes the uploads
- * visible to every view graph after it.
+ * The renderer's per-frame step, part 1, on the MAIN thread at the kick (de__renderer_kick_prepare,
+ * DENG-422): de__gpu_scene_update with `f`, the render-world buffer about to be rendered (NULL: a
+ * frame without a render world; only the frame counter moves). This is the only call that reads
+ * asset records (mesh, material, texture): the render thread never touches the asset system,
+ * which the main thread updates while the render thread records. The render thread is idle here.
  */
-de_result de__gpu_scene_frame(de__gpu_scene *gs, const struct de__render_world_frame *f,
-                              de_arena *arena, u64 frame_index);
+de_result de__gpu_scene_prepare(de__gpu_scene *gs, const struct de__render_world_frame *f);
+/**
+ * Part 2, on the thread that renders (de_renderer_render_frame, before the views): the upload
+ * passes of what part 1 prepared, in the scene's own graph on `arena`, compiled and executed when
+ * there are any (`frame_index` labels its timings), then de__gpu_scene_frame_end. Queue order
+ * makes the uploads visible to every view graph after it. Reads no asset record.
+ */
+de_result de__gpu_scene_frame(de__gpu_scene *gs, de_arena *arena, u64 frame_index);
 /**
  * Inside view slot `slot`'s graph `g` (a view stage, DENG-176): sets its scene constants
  * (de__gpu_scene_set_view) and, when the packed entry changed, stages it and adds the copy pass

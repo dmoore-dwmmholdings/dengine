@@ -93,10 +93,15 @@ de_result de__material_load(de_asset_load_ctx *ctx) {
     return DE_OK;
 }
 
+static void material_free(de_render_uploader *u, void *object) {
+    DE_FREE(u->alloc, object, sizeof(de_render_material));
+}
+
 void de__material_unload(void *object, void *user) {
     de_render_uploader *u = (de_render_uploader *)user;
-    if (object != NULL)
-        DE_FREE(u->alloc, object, sizeof(de_render_material));
+    de_render_material *m = (de_render_material *)object;
+    if (m != NULL) /* after the frame fence (DENG-422) */
+        de__uploader_retire(u, &m->retire_, m, material_free);
 }
 
 /* Main thread, with every texture READY: IDs to handles. */

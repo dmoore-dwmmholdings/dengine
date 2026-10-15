@@ -34,9 +34,15 @@ static void texture_free(de_render_uploader *u, de_render_texture *t) {
     if (t == NULL)
         return;
     de__upload_release(u, t->upload_); /* first: the flush must not copy into a dead texture */
+    t->upload_ = NULL;
     if (DE_HANDLE_VALID(t->texture))
         de_gpu_texture_destroy(u->dev, t->texture);
     DE_FREE(u->alloc, t, t->block_size_);
+}
+
+/* The retire list's free (DENG-422): the upload was released at the unload. */
+static void texture_retired(de_render_uploader *u, void *object) {
+    texture_free(u, (de_render_texture *)object);
 }
 
 de_result de__texture_load(de_asset_load_ctx *ctx) {
@@ -140,7 +146,14 @@ de_result de__texture_load(de_asset_load_ctx *ctx) {
 }
 
 void de__texture_unload(void *object, void *user) {
-    texture_free((de_render_uploader *)user, (de_render_texture *)object);
+    de_render_uploader *u = (de_render_uploader *)user;
+    de_render_texture *t = (de_render_texture *)object;
+    if (t == NULL)
+        return;
+    /* Now: no more copies into it. Later (frame fence, DENG-422): the texture and the record. */
+    de__upload_release(u, t->upload_);
+    t->upload_ = NULL;
+    de__uploader_retire(u, &t->retire_, t, texture_retired);
 }
 
 de_result de__texture_ready(void *object, void *user) {
