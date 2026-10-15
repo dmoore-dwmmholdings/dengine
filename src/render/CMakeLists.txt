@@ -265,3 +265,14 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/vis/picking.c)
 endif()
+
+# DENG-238: the material resolve (passes/vis/resolve.c, gbuffer.h): per material model, an
+# indirect dispatch over classification's tile list reconstructs each pixel's surface and writes
+# the thin G-buffer, motion vectors, emissive and the texture-streaming feedback. Engine shader
+# vis_resolve (shaders/visbuffer/resolve_standard.slang, which imports resolve_common.slang,
+# gbuffer.slang and feedback.slang).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        passes/vis/gbuffer.h
+        passes/vis/resolve.c)
+endif()

@@ -370,6 +370,20 @@ public struct DeRWBytes
         return old;
 #endif
     }
+    /// Atomically keeps the smaller of the 32-bit word at byte `offset` and `v`; returns the value
+    /// it held before (DENG-238: the texture-streaming feedback keeps the finest mip asked for).
+    /// Relaxed order, as atomic_add.
+    public uint atomic_min(uint offset, uint v)
+    {
+#if defined(DE_SHADER_TARGET_METAL)
+        Atomic<uint> *a = (Atomic<uint> *)de__heap.buffers[index];
+        return a[offset >> 2].min(v);
+#else
+        uint old;
+        view().InterlockedMin(offset, v, old);
+        return old;
+#endif
+    }
 }
 
 /// The buffer at bindless index `idx`, read-write, as bytes.

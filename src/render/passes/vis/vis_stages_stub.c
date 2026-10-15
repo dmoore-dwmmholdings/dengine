@@ -7,7 +7,7 @@
  *   cull_meshlets  DENG-231        raster        DENG-234 (mesh shaders), DENG-235 (compute):
  *                                                the path switch below stays here
  *   hzb_build      DENG-233        raster_alpha  DENG-236
- *   classify       DENG-237 (classify.c)    resolve       DENG-238
+ *   classify       DENG-237 (classify.c)    resolve       DENG-238 (resolve.c)
  */
 #include "render/passes/vis/vis_stages.h"
 
@@ -45,16 +45,4 @@ void de__vis_raster(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
 
 /* raster_alpha: DENG-236, raster_alpha.c. */
 
-/* ---------- resolve (DENG-238) ---------- */
-
-de_result de__vis_resolve_init(de__vis_shared *s) {
-    (void)s;
-    return DE_OK;
-}
-void de__vis_resolve_shutdown(de__vis_shared *s) {
-    (void)s;
-}
-void de__vis_resolve(de_rg *g, de__vis_context *vc) {
-    (void)g;
-    (void)vc;
-}
+/* resolve: DENG-238, resolve.c. */
