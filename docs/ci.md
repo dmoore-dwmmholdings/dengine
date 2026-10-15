@@ -131,9 +131,11 @@ The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes
   DENG-235: the compute-expansion vis-buffer raster, the path these software rasterizers run,
   compared with a CPU rasterizer), `test_render_raster_alpha` (`render_raster_alpha.*`,
   DENG-236: alpha-tested meshlets on both raster paths, a cutout compared with a CPU rasterizer,
-  and a cutout occluder in the HZB), and `test_render_classify` (`render_classify.*`, DENG-237:
-  material classification of synthetic vis buffers compared with a CPU reference). The Windows
-  entry also builds those ten and runs their `_d3d12` tests with
+  and a cutout occluder in the HZB), `test_render_classify` (`render_classify.*`, DENG-237:
+  material classification of synthetic vis buffers compared with a CPU reference), and
+  `test_render_picking` (`render_picking.*`, DENG-239: entities and triangles read back from the
+  vis buffer under a pixel, on both raster paths). The Windows entry also builds those eleven and
+  runs their `_d3d12` tests with
   `ctest -V`, so its log shows the D3D12 runtime and the WARP each one ran on (DENG-423). The
   Linux entry also builds `test_gpu_vulkan` and runs `gpu_vulkan.*` (DENG-426): the Vulkan
   backend's own device, resource, command, sync and pipeline tests, with validation and

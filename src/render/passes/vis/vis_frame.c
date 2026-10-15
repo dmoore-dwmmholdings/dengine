@@ -240,6 +240,15 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
             return DE_FAIL_WRAP(r, "vis: occlusion");
         }
     }
+    /* DENG-239: picking (its CPU state also when the frame is off). */
+    const de_result pr = de__vis_pick_init(s);
+    if (pr != DE_OK) {
+        de__vis_occlusion_shutdown(s);
+        if (s->enabled)
+            shutdown_stages(s, DE__VIS_STAGE_COUNT);
+        DE_FREE(a, s, sizeof *s);
+        return DE_FAIL_WRAP(pr, "vis: picking");
+    }
     *out = s;
     return DE_OK;
 }
@@ -247,6 +256,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
 void de__vis_shared_destroy(de__vis_shared *s) {
     if (s == NULL)
         return;
+    de__vis_pick_shutdown(s);      /* DENG-239 */
     de__vis_occlusion_shutdown(s); /* DENG-233 */
     if (s->enabled)
         shutdown_stages(s, DE__VIS_STAGE_COUNT);
@@ -341,6 +351,8 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->origin = d->origin;
     vc->settings = d->settings;
     vc->layer_mask = d->layer_mask != 0 ? d->layer_mask : ~0u;
+    vc->output_width = d->output_width != 0 ? d->output_width : d->width;     /* DENG-239 */
+    vc->output_height = d->output_height != 0 ? d->output_height : d->height; /* DENG-239 */
     vc->work_capacity_fixed = d->work_capacity_fixed;
     vc->cull_freeze = de_cvar_bool(s->cv_cull_freeze);
     vc->cull_disable = de_cvar_bool(s->cv_cull_disable);
@@ -376,6 +388,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     de__vis_cull_meshlets(g, vc, DE__VIS_PHASE_2);
     de__vis_raster(g, vc, DE__VIS_PHASE_2);
     de__vis_raster_alpha(g, vc, DE__VIS_PHASE_2);
+    de__vis_pick(g, vc); /* DENG-239: reads this frame's vis IDs and visible list */
     de__vis_classify(g, vc);
     de__vis_resolve(g, vc);
     if (out != NULL)
@@ -402,7 +415,10 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .view_matrix = vf->view_matrix,
                             .proj = vf->proj,
                             .prev_view_proj = vf->prev_view_proj,
-                            .settings = vf->settings};
+                            .settings = vf->settings,
+                            .layer_mask = vf->layer_mask,       /* DENG-239 */
+                            .output_width = vf->viewport_px[2], /* DENG-239: pick coordinates */
+                            .output_height = vf->viewport_px[3]};
     if (vf->camera != NULL)
         d.camera_position = vf->camera->offset;
     if (vf->world != NULL)

@@ -361,6 +361,8 @@ typedef struct de__vis_shared {
     de_cvar cv_occlusion, cv_occlusion_reset, cv_occlusion_cut_m, cv_hzb_debug, cv_hzb_single_pass;
     /* ---- DENG-235: the compute-expansion raster path (raster_compute.c) ---- */
     void *raster_compute; /**< raster_compute.c's state: kernels, pipelines, per-view stats */
+    /* ---- DENG-239: picking (picking.c) ---- */
+    void *pick; /**< picking.c's state: request queues, readback rings, results (lock inside) */
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_shared;
 
@@ -503,6 +505,11 @@ typedef struct de__vis_context {
     /** Per tile, its model mask (bit m: model m; raw u32 at entry y * classify_tiles_x + x). */
     de_rg_resource classify_masks;
 
+    /* ---- DENG-239: picking (picking.c) ---- */
+    /** The view's output size in pixels (its viewport): pick coordinates are in it. Equal to the
+     * internal size when the desc gives none. */
+    u32 output_width, output_height;
+
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -524,6 +531,8 @@ typedef struct de__vis_frame_desc {
      * the caller wrote, of the given size) instead of the cleared D32 depth and raster. */
     de_rg_resource depth_override;
     u32 depth_override_width, depth_override_height;
+    /** DENG-239: the view's output size (pick coordinates); 0: the internal size. */
+    u32 output_width, output_height;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */
@@ -779,6 +788,49 @@ const de__vis_layout_const *de__vis_raster_compute_layout_consts(u32 *count);
 u32 de__vis_classify_model(const de__gs_material *materials, u32 material_count, u32 slot);
 /** The `public static const uint` values of classify.slang. */
 const de__vis_layout_const *de__vis_classify_layout_consts(u32 *count);
+
+/* ---------- Picking (picking.c), DENG-239 ---------- */
+
+/** Requests per view and frame (de_view_request_pick). */
+#define DE__VIS_PICK_MAX 16u
+/** Frames a result stays after it became available. */
+#define DE__VIS_PICK_KEEP_FRAMES 8u
+/** Results kept at once: every view's requests of DE__VIS_PICK_KEEP_FRAMES frames. */
+#define DE__VIS_PICK_RESULTS (DE__VIEW_MAX * DE__VIS_PICK_MAX * DE__VIS_PICK_KEEP_FRAMES)
+/** One result as the pick kernel writes it (pick.slang DePickResult, 16 bytes). */
+typedef struct de__vis_pick_gpu_result {
+    u32 entity_lo, entity_hi, triangle, hit;
+} de__vis_pick_gpu_result;
+DE_STATIC_ASSERT(sizeof(de__vis_pick_gpu_result) == 16, "DePickResult is 16 bytes");
+
+/** Picking's state (always made, also when the frame is off: requests then never complete). The
+ * kernel is loaded when the frame is on. Called by de__vis_shared_create / _destroy. */
+de_result de__vis_pick_init(de__vis_shared *s);
+void de__vis_pick_shutdown(de__vis_shared *s);
+/**
+ * The pick stage (vis_frame.c, after phase 2's alpha raster, before classify): takes the view's
+ * queued requests, maps them to internal pixels and adds "vis.pick.copy" (the vis IDs into a raw
+ * buffer), "vis.pick" (one 16-thread group: vis ID -> visible meshlet -> instance -> entity bits,
+ * triangle) and "vis.pick.readback" (into the view's readback ring). No pass without requests.
+ * Also collects completed frames' results.
+ */
+void de__vis_pick(de_rg *g, de__vis_context *vc);
+/** de_view_request_pick on the vis frame (main thread). False when the request was dropped. */
+bool de__vis_pick_request(de__vis_shared *s, de_view v, u32 x, u32 y, u64 id);
+/** de_view_pick_result on the vis frame (main thread). */
+bool de__vis_pick_result(de__vis_shared *s, u64 id, u64 *entity_bits, u32 *triangle);
+/** Counters for tests. */
+typedef struct de__vis_pick_stats {
+    u64 requested;  /**< requests queued */
+    u64 dropped;    /**< requests over DE__VIS_PICK_MAX (or stale views) */
+    u64 dispatched; /**< requests that reached a pick pass */
+    u64 completed;  /**< results stored */
+    u64 lost;       /**< requests whose frame was overwritten before it completed */
+    u32 warnings;   /**< drop warnings logged */
+} de__vis_pick_stats;
+de__vis_pick_stats de__vis_pick_get_stats(const de__vis_shared *s);
+/** The `public static const uint` values of pick.slang. */
+const de__vis_layout_const *de__vis_pick_layout_consts(u32 *count);
 
 DE_EXTERN_C_END
 

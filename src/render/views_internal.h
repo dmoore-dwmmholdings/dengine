@@ -141,6 +141,8 @@ typedef struct de__view_frame {
      */
     de_rg_resource color;
     de_gpu_format color_format;
+    /** DENG-239: de_view_set_layer_mask (0: every layer). */
+    u32 layer_mask;
 } de__view_frame;
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */
@@ -222,6 +224,7 @@ typedef struct de__view_info {
     u32 executed; /**< frames whose graph was executed */
     i32 order;
     de_render_settings settings; /**< effective settings of the last frame */
+    u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask as of the last frame */
 } de__view_info;
 
 /** False for a stale handle or a view the render side has not seen yet. Call while no frame is
@@ -250,6 +253,11 @@ struct de__vis_shared;
 de_result de__vis_frame_create(de_renderer *r, struct de__vis_shared **out);
 /** Releases it (the GPU must be idle). NULL is ignored. */
 void de__vis_frame_destroy(de_renderer *r, struct de__vis_shared *s);
+/** DENG-239: the renderer's visibility-buffer frame (picking reaches it); NULL before
+ * de__views_create. */
+struct de__vis_shared *de__views_vis(const de_renderer *r);
+/** DENG-239: true when `v` is a live view of `r` (takes the views lock). Any thread. */
+bool de__view_valid(const de_renderer *r, de_view v);
 
 DE_EXTERN_C_END
 
