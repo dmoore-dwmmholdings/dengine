@@ -63,3 +63,44 @@ description = "renderer views: split screen (right half at render_scale 0.5), a 
 size = [1280, 720]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+# DENG-240: the S13 visibility buffer (tests/golden/visbuffer/). Each scene runs the vis frame for
+# several frames and checks in C, with the 0.01 % edge-tie budget, that culling on == culling off
+# (and on Metal the mesh path == the compute path); the picture is the decoded vis IDs as flat
+# colours (or the G-buffer panels). The thresholds are the rhi_* ones: a picture that moves by a
+# pixel at an edge stays far below them, a wrong instance or a missing meshlet does not.
+[scene.vis_cull_frustum]
+description = "instances around and behind a camera turning a full circle in 6 frames; culling on == off on every frame (DENG-240)"
+size = [320, 192]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.vis_cull_occlusion_path]
+description = "city blocks, a scripted 30-frame camera walk down a street; two-phase occlusion on == culling off on every frame (DENG-240)"
+size = [320, 192]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.vis_cull_small]
+description = "1600 sub-pixel spheres 60 to 220 m away; the small-meshlet test removes meshlets, on == off (DENG-240)"
+size = [320, 192]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.vis_paths_equal]
+description = "mixed meshes: single- and double-sided, mirrored, alpha-tested cutouts; compute path on == off, and mesh path == compute path on Metal (DENG-240)"
+size = [320, 192]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.vis_gbuffer_debug_views]
+description = "the thin G-buffer of the material resolve: normal, base colour and motion panels, one box moving (DENG-240)"
+size = [576, 160]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.vis_stats_sanity]
+description = "a wall with props in front and behind it: per-frame instance stats in range; phase 2 draws all on the first frame and none once the history holds the wall (DENG-240)"
+size = [320, 192]
+threshold_mean = 0.005
+threshold_p99 = 0.05

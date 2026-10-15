@@ -39,7 +39,10 @@ endif()
 
 set(DE_GOLDEN_SCENE_SOURCES
     scenes/rhi_basic.c
-    render/views/views_scenes.c)
+    render/views/views_scenes.c
+    visbuffer/vis_golden.c
+    visbuffer/vis_golden.h
+    visbuffer/vis_scenes.c)
 
 add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
                          ${DE_GOLDEN_SCENE_SOURCES})
@@ -62,6 +65,10 @@ endif()
 # DENG-176: renderer scenes (render/views/) run the renderer, its ECS world and Extract, and include
 # renderer internals (src/ is on the include path).
 target_link_libraries(de_golden PRIVATE de_render de_ecs de_reflect de_task de_asset)
+# DENG-240: the vis-buffer scenes (visbuffer/) drive the S13 vis frame directly and cook their
+# procedural meshes through the model importer (cook/importers/model/, part of de_cooker; with
+# DE_GOLDEN_COOK only, else they skip).
+target_include_directories(de_golden PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/visbuffer")
 if(TARGET de_gpu_d3d12)
     # D3D12: the Agility runtime next to the executable and its exports in it (DENG-285), and the
     # vendored WARP (test-only, third_party/README.md rule 10; de-golden is a test executable).
