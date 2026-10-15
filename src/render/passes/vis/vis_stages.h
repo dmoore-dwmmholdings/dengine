@@ -440,6 +440,22 @@ typedef struct de__vis_context {
     bool occlusion;       /**< r.occlusion: two-phase occlusion on */
     bool occlusion_reset; /**< no history this frame (new view, camera cut, r.occlusion_reset) */
 
+    /* ---- DENG-234: the raster stages' outputs (raster_mesh.c; vis_stages_stub.c picks the path)
+     * ---- */
+    /** True when `depth` is the frame's D32 depth (a raster target); false for a test's
+     * depth_override, which no raster pass may write (the raster stages then add nothing). */
+    bool depth_target;
+    /** The raster path of this frame (de__vis_raster_choose). */
+    u32 raster_path;
+    /**
+     * The vis buffer: DE_FMT_R32_UINT at width x height, one packed vis ID per pixel
+     * (de__vis_id_pack: the entry of visible_meshlets << 7 | the triangle in the meshlet),
+     * DE__VIS_ID_EMPTY where nothing was drawn. Made and cleared by de__vis_raster_targets in
+     * phase 1; each raster pass loads and writes it (DE_ACCESS_RENDER_TARGET), together with
+     * `depth`. Invalid when no raster ran (no instances, no depth target).
+     */
+    de_rg_resource vis_ids;
+
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -604,6 +620,44 @@ typedef struct de__vis_meshlet_debug {
     bool casters_only;  /**< force de__vis_context.casters_only */
 } de__vis_meshlet_debug;
 void de__vis_meshlet_set_debug(de__vis_shared *s, const de__vis_meshlet_debug *d);
+
+/* ---------- Raster (DENG-234: raster_mesh.c; DENG-235: the compute path) ---------- */
+
+/** The raster paths (r.raster_path; de__vis_context.raster_path). */
+typedef enum de__vis_raster_path {
+    DE__VIS_RASTER_NONE = 0, /**< nothing draws (no path available) */
+    DE__VIS_RASTER_MESH,     /**< mesh shaders (raster_mesh.c, DENG-234) */
+    DE__VIS_RASTER_COMPUTE   /**< compute expansion (DENG-235) */
+} de__vis_raster_path;
+/**
+ * The path of this frame: r.raster_path (auto, mesh, compute); `auto` and `mesh` pick the mesh
+ * path when the device has mesh shaders (de_gpu_caps.mesh_shaders) and its pipeline was made,
+ * else the compute path. vis_stages_stub.c dispatches on it.
+ */
+de__vis_raster_path de__vis_raster_choose(const de__vis_shared *s);
+/**
+ * The vis buffer of `vc` (de__vis_context.vis_ids): made once per frame (later calls return it)
+ * and cleared to DE__VIS_ID_EMPTY by "vis.vis_ids_clear". Invalid without a depth target or
+ * instances. Every raster path calls it before its first pass.
+ */
+de_rg_resource de__vis_raster_targets(de_rg *g, de__vis_context *vc);
+/** The mesh path (raster_mesh.c): state, and one phase's passes ("vis.raster.mesh[.phase2]"). */
+de_result de__vis_raster_mesh_init(de__vis_shared *s);
+void de__vis_raster_mesh_shutdown(de__vis_shared *s);
+void de__vis_raster_mesh(de_rg *g, de__vis_context *vc, de__vis_phase phase);
+/** True when the mesh path can draw on this device (its pipeline exists). */
+bool de__vis_raster_mesh_ready(const de__vis_shared *s);
+
+/** Mesh-shader groups of one dispatch at most (vis_mesh.slang DE_VIS_MESH_GROUPS_MAX; 2^22, the
+ * total-group limit of D3D12 and VK_EXT_mesh_shader). More visible meshlets take several. */
+#define DE__VIS_MESH_GROUPS_MAX (1u << 22)
+/** Mesh dispatches a phase records for a visible list of `capacity` entries (at least 1). */
+u32 de__vis_mesh_dispatch_count(u32 capacity);
+/** The groups (x, y) of mesh dispatch `k` of a phase of `count` meshlets (cs_raster_mesh_split:
+ * (1, 1) for a dispatch past the count, whose one group draws nothing). */
+void de__vis_mesh_dispatch_groups(u32 count, u32 k, u32 *x, u32 *y);
+/** The `public static const uint` values of vis_decode.slang and vis_mesh.slang (DENG-234). */
+const de__vis_layout_const *de__vis_raster_layout_consts(u32 *count);
 
 DE_EXTERN_C_END
 

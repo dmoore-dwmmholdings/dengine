@@ -226,3 +226,10 @@ if(TARGET de_render)
         passes/vis/hzb.c
         passes/vis/occlusion.c)
 endif()
+
+# DENG-234: the mesh-shader vis-buffer raster (passes/vis/raster_mesh.c; engine shader vis_mesh,
+# shaders/visbuffer/vis_mesh.slang, which imports shaders/visbuffer/vis_decode.slang). The raster
+# stage in vis_stages_stub.c picks the mesh or the compute path (r.raster_path).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/raster_mesh.c)
+endif()
