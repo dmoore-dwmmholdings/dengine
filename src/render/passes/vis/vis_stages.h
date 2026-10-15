@@ -212,11 +212,10 @@ DE_STATIC_ASSERT(sizeof(de__vis_raster_args) == 32, "DeVisRasterArgs is 32 bytes
 #define DE__VIS_RASTER_ARGS_EXPAND 16u
 
 /** Byte offsets of the meshlet-cull counters (a raw 16-byte buffer, both phases). */
-#define DE__VIS_MESHLET_COUNTER_VISIBLE 0u /**< visible meshlets asked for (> capacity: dropped)   \
-                                            */
-#define DE__VIS_MESHLET_COUNTER_TESTED 4u  /**< meshlets tested */
-#define DE__VIS_MESHLET_COUNTER_PHASE1 8u  /**< entries stored after phase 1 */
-#define DE__VIS_MESHLET_COUNTER_BYTES  16u
+#define DE__VIS_MESHLET_COUNTER_VISIBLE 0u /**< visible asked for (> capacity: dropped) */
+#define DE__VIS_MESHLET_COUNTER_TESTED  4u /**< meshlets tested */
+#define DE__VIS_MESHLET_COUNTER_PHASE1  8u /**< entries stored after phase 1 */
+#define DE__VIS_MESHLET_COUNTER_BYTES   16u
 /** MeshletCullParams.flags */
 enum {
     DE__VIS_MESHLET_CONE = 1u,        /**< backface-cone test (r.cull_meshlet_cone) */

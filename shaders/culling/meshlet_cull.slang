@@ -284,7 +284,10 @@ void cs_meshlet_cull(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
 
     uint lane = thread.x;
     uint meshlet = item.meshlet_first + lane;
-    bool tested = lane < item.meshlet_count && meshlet < mesh.meshlet_count;
+    // A mesh without a meshlet buffer (bindless 0) has nothing to read: its meshlets are not
+    // tested. (D3D12 has no null descriptor at slot 0's read-only view.)
+    bool tested = lane < item.meshlet_count && meshlet < mesh.meshlet_count &&
+                  mesh.meshlets != DE_BINDLESS_INVALID;
     bool instance_ok = (inst.layer_mask & v.layer_mask) != 0 &&
                        ((pc.flags & DE_VIS_MESHLET_CASTERS_ONLY) == 0 ||
                         (inst.flags & DE_GPU_INSTANCE_CAST_SHADOWS) != 0);
