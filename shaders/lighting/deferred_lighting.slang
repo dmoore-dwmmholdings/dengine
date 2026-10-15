@@ -14,7 +14,8 @@
 //
 // Per pixel: the surface from the G-buffer (de_surface_from_gb), the position from the depth, then
 // evaluate_direct_clustered<M> (lighting_common.slang) over the view's directional lights and its
-// cluster's local lights, plus evaluate_indirect. The radiance, times pre_exposure, is added to
+// cluster's local lights, plus evaluate_indirect_split (IBL, DENG-304). The radiance, times
+// pre_exposure (the view's exposure, exposure.c), is added to
 // the HDR lighting target (which already holds the emission the resolve wrote). Split pixels
 // (DE_LIGHTING_SPLIT, or the G-buffer's subsurface flag) also get their diffuse and specular parts
 // in separate targets when the frame has them; a subsurface pixel's diffuse part then goes only to
@@ -110,14 +111,15 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
         bool sss = (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
         bool split = targets && (sss || (lv.flags & DE_LIGHTING_SPLIT) != 0u);
         DeDirect d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split);
-        float3 indirect = evaluate_indirect(s, pos, v, p, lv);
+        float3 ind_d, ind_s;
+        evaluate_indirect_split(s, pos, v, p, lv, ind_d, ind_s); // DENG-304: IBL
         float e = lv.pre_exposure;
         if (split)
         {
-            de_rwtex2d(pc.diffuse)[p] = float4(d.diffuse * e, 1.0);
-            de_rwtex2d(pc.specular)[p] = float4(d.specular * e, 1.0);
+            de_rwtex2d(pc.diffuse)[p] = float4((d.diffuse + ind_d) * e, 1.0);
+            de_rwtex2d(pc.specular)[p] = float4((d.specular + ind_s) * e, 1.0);
         }
-        float3 add = sss && split ? d.specular + indirect : d.diffuse + d.specular + indirect;
+        float3 add = sss && split ? d.specular + ind_s : d.diffuse + d.specular + ind_d + ind_s;
         lighting[p] = float4(lit.rgb + add * e, lit.a);
     }
 }

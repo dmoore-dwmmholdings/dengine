@@ -312,3 +312,14 @@ if(TARGET de_render)
         lighting/lighting_pass.c
         lighting/ltc_data.c)
 endif()
+
+# DENG-304: image-based lighting (lighting/ibl.c: the environment snapshot and its 2D strip;
+# shaders/lighting/ibl.slang), physical exposure (lighting/exposure.c: EV100, per-view current and
+# previous exposure) and the basic output pass (passes/output_basic.c; engine shader
+# post_output_basic, shaders/post/output_basic.slang) until the S18 tonemappers.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        lighting/ibl.c
+        lighting/exposure.c
+        passes/output_basic.c)
+endif()

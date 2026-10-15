@@ -601,6 +601,8 @@ static void pack_view(const de__gpu_scene *gs, u32 slot, de__gs_view *o) {
     o->light_count = gs->tables[DE__GS_LIGHTS].count;
     o->view_slot = slot;
     o->flags = v->cur.flags;
+    o->pre_exposure = v->cur.pre_exposure;           /* DENG-304 */
+    o->prev_pre_exposure = v->cur.prev_pre_exposure; /* DENG-304 */
 }
 
 /* Entry `slot` of table `t` as this frame uploads it. */

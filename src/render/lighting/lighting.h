@@ -37,6 +37,9 @@
 
 DE_EXTERN_C_BEGIN
 
+struct de_asset_system;
+struct de__render_world_frame;
+
 /* =================================================================================================
  * GPU layouts (lights.slang, lighting_common.slang; the test lighting.layout_match compares)
  * ============================================================================================== */
@@ -77,7 +80,21 @@ typedef struct de__cluster_light {
 } de__cluster_light;
 DE_STATIC_ASSERT(sizeof(de__cluster_light) == 96, "DeClusterLight is 96 bytes");
 
-/** DeLightingView (176 bytes): one view's lighting constants for one frame. */
+/** DeIbl flags (ibl.slang). */
+enum { DE__IBL_ENVIRONMENT = 1u };
+/** Rows of the environment strip (ibl.slang DE_IBL_STRIP_FACES). */
+#define DE__IBL_STRIP_FACES 6u
+
+/** ibl.slang DeIbl (192 bytes): one view's image-based lighting constants. */
+typedef struct de__ibl_gpu {
+    f32 sh[9][4];    /**< irradiance SH9 E_k (rgb) x intensity; sh[0][3]: the intensity */
+    f32 rotation[4]; /**< cos, sin of the rotation about +Z, mip_per_roughness, last strip mip */
+    f32 ambient[4];  /**< rgb: the constant radiance without an environment */
+    u32 strip, sampler, face_size, flags;
+} de__ibl_gpu;
+DE_STATIC_ASSERT(sizeof(de__ibl_gpu) == 192, "DeIbl is 192 bytes");
+
+/** DeLightingView (368 bytes): one view's lighting constants for one frame. */
 typedef struct de__lighting_view {
     u32 tiles_x, tiles_y, slices, tile_px;
     u32 cluster_count, max_per_cluster, list_capacity, local_capacity;
@@ -88,8 +105,9 @@ typedef struct de__lighting_view {
     u32 brdf_lut;       /**< the Standard model's energy LUT (de__renderer_brdf_lut; 0 = none) */
     f32 inv_proj[4][4]; /**< clip -> view, rows */
     de__lighting_inputs_gpu inputs;
+    de__ibl_gpu ibl; /**< DENG-304 */
 } de__lighting_view;
-DE_STATIC_ASSERT(sizeof(de__lighting_view) == 176, "DeLightingView is 176 bytes");
+DE_STATIC_ASSERT(sizeof(de__lighting_view) == 368, "DeLightingView is 368 bytes");
 
 /* =================================================================================================
  * The arithmetic (light_data.c; lights.slang and the cluster grid in C)
@@ -169,6 +187,10 @@ typedef struct de__lighting_context {
     de_rg_resource diffuse, specular; /**< RGBA16F split targets (invalid when not split) */
     de_rg_resource heatmap;           /**< RGBA16F cluster heatmap (r.cluster_debug) */
     bool lit;                         /**< the deferred pass was added */
+    /* ---- DENG-304 ---- */
+    de_rg_resource target; /**< the HDR lighting target it lit (vc->gbuffer[DE__GB_LIGHTING]) */
+    u32 width, height;     /**< its size (the view's internal size) */
+    de_rg_resource strip;  /**< the environment strip it read (import), invalid without one */
 } de__lighting_context;
 
 /**
@@ -207,6 +229,103 @@ typedef struct de__lighting_const {
     u32 value;
 } de__lighting_const;
 const de__lighting_const *de__lighting_layout_consts(u32 *count);
+
+/**
+ * DENG-304: the context de__lighting_build published for view `view` in graph `g` in frame
+ * `frame_index` (the output pass reads its lighting target), or NULL when that frame lit nothing.
+ * Render thread, while `g` is being built.
+ */
+de__lighting_context *de__lighting_frame_context(const de__lighting *lt, de_view view,
+                                                 const de_rg *g, u64 frame_index);
+
+/* ---------- Image-based lighting (ibl.c, DENG-304) ---------- */
+
+/** The environment lighting uses: snapshotted at the kick from the render world's DeEnvironment
+ * and its HDRI's texture record (de__lighting_prepare_environment), or set by a test. */
+typedef struct de__ibl_environment {
+    bool valid;          /**< false: no environment (r.ambient_fallback) */
+    de_gpu_texture cube; /**< the cooked prefiltered cube (DE_ACCESS_SHADER_READ between graphs) */
+    u32 format;          /**< de_gpu_format */
+    u32 face_size, mip_count;
+    f32 mip_per_roughness; /**< mip = perceptual roughness x this */
+    f32 sh9[9][3];         /**< irradiance coefficients E_k (de_cooked_env.h) */
+    f32 intensity;         /**< DeEnvironment.intensity */
+    f32 rotation;          /**< DeEnvironment.rotation (radians about +Z) */
+} de__ibl_environment;
+
+/** Sets the environment of the next builds. Main thread with the render thread idle (the kick), or
+ * a test between frames. NULL: none. */
+void de__lighting_set_environment(de__lighting *lt, const de__ibl_environment *env);
+/**
+ * The kick's snapshot (de__renderer_kick_prepare, main thread, render thread idle; DENG-422: the
+ * only place lighting reads asset records): the first DeEnvironment of `frame` (may be NULL) and
+ * its HDRI's record from `assets` (may be NULL). An HDRI that is not loaded, not a cooked
+ * environment or not a cube gives no environment.
+ */
+void de__lighting_prepare_environment(de__lighting *lt, struct de_asset_system *assets,
+                                      const struct de__render_world_frame *frame);
+/** The strip mips of a `face_size` cube of `mip_count` mips in `format`: every mip, but for block
+ * formats only those whose faces are at least one block (4 texels). */
+u32 de__ibl_strip_mips(u32 format, u32 face_size, u32 mip_count);
+/** Packs DeIbl: `env` (NULL or invalid: the ambient `ambient_nits`), the strip's bindless index and
+ * mips, the sampler. Pure. */
+void de__ibl_pack(const de__ibl_environment *env, u32 strip, u32 strip_mips, u32 sampler,
+                  f32 ambient_nits, de__ibl_gpu *out);
+/** ibl.slang de_ibl_irradiance in C: E(n) (rgb) of `g` at unit world normal `n`. */
+void de__ibl_irradiance(const de__ibl_gpu *g, const f32 n[3], f32 out[3]);
+/** ibl.slang de_ibl_rotate in C. */
+void de__ibl_rotate(const de__ibl_gpu *g, const f32 d[3], f32 out[3]);
+
+/* ---------- Exposure (exposure.c, DENG-304) ---------- */
+
+/** Default of r.exposure_ev100_default: EV100 15, the sunny-16 rule (the default directional light
+ * is 100000 lux). */
+#define DE__EXPOSURE_EV100_DEFAULT 15.0
+/** The exposure of EV100 `ev100`: 1 / (1.2 x 2^ev100) (lens and sensor constants q K / S folded
+ * into the 1.2 of the saturation-based ISO speed). */
+f32 de__exposure_from_ev100(f32 ev100);
+/** One view's exposure: this frame's and the previous frame's. */
+typedef struct de__exposure_state {
+    de_view view; /**< the view it belongs to (another view in the slot resets it) */
+    u64 frame;    /**< the frame `current` is for */
+    bool valid;
+    f32 ev100;    /**< this frame's EV100 */
+    f32 current;  /**< this frame's exposure */
+    f32 previous; /**< the previous frame's (this frame's in the view's first frame) */
+} de__exposure_state;
+/**
+ * The exposure of `view` in frame `frame` from the camera's EV100 (NaN: `fallback_ev100`; S18's
+ * auto exposure, DENG-160, replaces only this source). The first call of a frame shifts `current`
+ * into `previous`; later calls of the same frame return the same values. `*prev` (may be NULL)
+ * gets the previous frame's exposure.
+ */
+f32 de__exposure_update(de__exposure_state *s, de_view view, u64 frame, f32 camera_ev100,
+                        f32 fallback_ev100, f32 *prev);
+/** The exposure of view slot `slot` for `frame` (de__exposure_update with r.exposure_ev100_default
+ * as the fallback). Render thread (the GPU scene's view stage, then lighting). */
+f32 de__lighting_view_exposure(de__lighting *lt, u32 slot, de_view view, u64 frame,
+                               f32 camera_ev100, f32 *prev);
+
+/* ---------- The output pass (passes/output_basic.c, DENG-304) ---------- */
+
+typedef struct de__output_basic de__output_basic;
+/** Makes the output pass's state (engine shader post_output_basic) on `vis`'s device. Off without
+ * shader code (logged); NULL `vis` or a frame that is off: off. */
+de_result de__output_basic_create_ex(de__vis_shared *vis, de__output_basic **out);
+void de__output_basic_destroy(de__output_basic *ob);
+bool de__output_basic_enabled(const de__output_basic *ob);
+/**
+ * Adds "output.basic" to `g`: `src` (the pre-exposed HDR lighting target, sampled) clamped to
+ * [0, 1] into a new RGBA16F texture of `width` x `height` (linear: the sRGB swapchain encodes),
+ * or with `encode` the sRGB OETF applied too (for targets that do not encode). Returns the new
+ * texture, invalid when nothing was added. `arena` holds the pass data.
+ */
+de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *arena,
+                                    de_rg_resource src, u32 width, u32 height, bool encode);
+/** Creates the renderer's output pass and registers its view stage "output.basic" at
+ * (DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP), where DE_HOOK_BEFORE_TONEMAP and
+ * DE_HOOK_AFTER_TONEMAP sit around it. Main thread, from de__views_create. */
+de_result de__output_basic_create(de_renderer *r, de__lighting *lt, de__output_basic **out);
 
 /* ---------- The renderer (views.c) ---------- */
 
@@ -267,7 +386,37 @@ struct de__lighting {
         cv_emissive_max, cv_split, cv_debug;
     de__lighting_debug debug;
     de__lighting_view_state views[DE__VIEW_MAX];
+    /* ---- DENG-304 ---- */
+    /* Each view slot's context of the frame being built (de__lighting_frame_context) and the keys
+     * that say it is still current. */
+    de__lighting_context *frame_context[DE__VIEW_MAX];
+    const de_rg *frame_context_graph[DE__VIEW_MAX];
+    u64 frame_context_frame[DE__VIEW_MAX];
+    de_view frame_context_view[DE__VIEW_MAX];
+    /* Image-based lighting (ibl.c): the environment, its strip (a 2D texture, the cube's faces
+     * stacked; DE_ACCESS_SHADER_READ between graphs once copied), the trilinear sampler. */
+    de__ibl_environment env;
+    de_gpu_texture strip;
+    de__ibl_environment strip_env; /**< what `strip` holds */
+    u32 strip_bindless, strip_mips;
+    bool strip_ready; /**< the copy into `strip` was added to a graph */
+    de_gpu_sampler ibl_sampler;
+    u32 ibl_sampler_bindless;
+    de_cvar cv_ambient, cv_ev100_default;
+    /* Exposure (exposure.c), per view slot. */
+    de__exposure_state exposure[DE__VIEW_MAX];
 };
+
+/** ibl.c: the sampler and cvars (from de__lighting_create_ex) and their release. */
+de_result de__ibl_init(de__lighting *lt);
+void de__ibl_shutdown(de__lighting *lt);
+/**
+ * ibl.c, from de__lighting_build: packs `lc->view.ibl` from the current environment and, when the
+ * environment's cube changed, makes the strip and adds "lighting.ibl_strip_read" /
+ * "lighting.ibl_strip_write" (the cube's faces through a transient buffer into the strip) to `g`.
+ * Sets `lc->strip` to the strip's import when the deferred pass samples it.
+ */
+void de__ibl_build(de__lighting *lt, de_rg *g, de__lighting_context *lc);
 
 /**
  * Adds the cluster passes of one view (clusters.c): "lighting.cluster_bounds",

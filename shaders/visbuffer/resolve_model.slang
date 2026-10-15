@@ -187,7 +187,9 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
             de_rwtex2d(pc.gb1)[p] = gb1_encode(g);
         de_rwtex2d(pc.gb2)[p] = gb2_encode(g);
         de_rwtex2d(pc.motion)[p] = float4(de_resolve_motion(r, sc), 0.0, 0.0);
-        de_rwtex2d(pc.lighting)[p] = float4(s.emissive, 1.0);
+        // DENG-304: emission is pre-exposed like every radiance in the HDR lighting target.
+        float exposure = sc.pre_exposure > 0.0 ? sc.pre_exposure : 1.0;
+        de_rwtex2d(pc.lighting)[p] = float4(s.emissive * exposure, 1.0);
         if ((pc.flags & DE_RESOLVE_DEBUG) != 0u)
         {
             de_rwtex2d(pc.debug_pos)[p] = float4(v.position, 1.0);

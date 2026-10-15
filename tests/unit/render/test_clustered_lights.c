@@ -1891,12 +1891,17 @@ static u32 struct_words(const char *text, const char *name) {
             ++s;
         if (strncmp(s, "public ", 7) == 0)
             s += 7;
+        const char *semi = strchr(s, ';');
+        const char *br = strchr(s, '[');
+        const u32 n = br != NULL && semi != NULL && br < semi ? (u32)strtoul(br + 1, NULL, 10) : 1u;
         if (strncmp(s, "float4 ", 7) == 0)
-            words += strstr(s, "[4]") != NULL && strstr(s, "[4]") < strchr(s, ';') ? 16u : 4u;
+            words += 4u * n;
         else if (strncmp(s, "uint ", 5) == 0 || strncmp(s, "float ", 6) == 0)
-            words += 1u;
+            words += n;
         else if (strncmp(s, "LightingInputs ", 15) == 0 || strncmp(s, "DeClusterLists ", 15) == 0)
             words += 8u;
+        else if (strncmp(s, "DeIbl ", 6) == 0) /* DENG-304 */
+            words += 48u;
     }
     return words;
 }
@@ -1908,11 +1913,11 @@ TEST(clustered_lights, layout_match) {
         "lighting/lighting_common.slang",   "lighting/lights.slang",
         "lighting/light_cull.slang",        "lighting/ltc.slang",
         "lighting/deferred_lighting.slang", "lighting/lighting_inputs.slang",
-        "lighting/cluster_build.slang"};
+        "lighting/cluster_build.slang",     "lighting/ibl.slang"};
     u32 count = 0, found = 0;
     const de__lighting_const *k = de__lighting_layout_consts(&count);
-    char *texts[7] = {0};
-    for (u32 fi = 0; fi < 7u; ++fi) {
+    char *texts[8] = {0};
+    for (u32 fi = 0; fi < 8u; ++fi) {
         char path[1024];
         snprintf(path, sizeof path, "%s/%s", DE_LIGHTS_TEST_SHADER_DIR, files[fi]);
         texts[fi] = read_text(path);
@@ -1945,14 +1950,15 @@ TEST(clustered_lights, layout_match) {
     EXPECT_EQ(struct_words(texts[4], "LightingParams") * 4u, 112u);
     EXPECT_EQ(struct_words(texts[5], "LightingInputs") * 4u, (u32)sizeof(de__lighting_inputs_gpu));
     EXPECT_EQ(struct_words(texts[6], "ClusterBuildParams") * 4u, 32u);
-    for (u32 fi = 0; fi < 7u; ++fi)
+    EXPECT_EQ(struct_words(texts[7], "DeIbl") * 4u, (u32)sizeof(de__ibl_gpu)); /* DENG-304 */
+    for (u32 fi = 0; fi < 8u; ++fi)
         free(texts[fi]);
 }
 
-/* lighting.renderer_stage: the renderer registers "lighting" after the vis frame; on the null
- * backend nothing reads the lighting target, so the graph culls every lighting pass; with
- * r.cluster_debug the heatmap becomes the view's colour and the cluster and deferred passes run
- * (the deferred pass for the readback of its tile counters). */
+/* lighting.renderer_stage: the renderer registers "lighting" after the vis frame and the output
+ * pass (DENG-304) reads its target, so the cluster and deferred passes run and "output.basic"
+ * makes the view's colour; with r.cluster_debug the heatmap is the view's colour instead (no
+ * output pass). */
 TEST(lighting, renderer_stage) {
     de_tracking_allocator track;
     de_allocator a = de_tracking_allocator_init(&track, NULL, DE_MEM_RENDER);
@@ -2012,7 +2018,7 @@ TEST(lighting, renderer_stage) {
         RUN_FRAME();
         de__gpu_null_log_enable(d, false);
         u32 lighting = 0;
-        bool deferred = false, heatmap = false, bounds = false;
+        bool deferred = false, heatmap = false, bounds = false, output = false;
         for (u32 i = 0; i < de__gpu_null_log_count(d); ++i) {
             const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
             if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
@@ -2021,11 +2027,18 @@ TEST(lighting, renderer_stage) {
             deferred |= strcmp(e->text, "lighting.deferred") == 0;
             heatmap |= strcmp(e->text, "lighting.heatmap") == 0;
             bounds |= strcmp(e->text, "lighting.cluster_bounds") == 0;
+            output |= strcmp(e->text, "output.basic") == 0;
         }
-        printf("%s: %u lighting passes\n", heat ? "r.cluster_debug 1" : "default", lighting);
+        printf("%s: %u lighting passes%s\n", heat ? "r.cluster_debug 1" : "default", lighting,
+               output ? ", output.basic" : "");
         if (!heat) {
-            EXPECT_EQ(lighting, 0u);
+            /* DENG-304: the output pass reads the lighting target, so lighting runs. */
+            EXPECT_TRUE(deferred);
+            EXPECT_TRUE(bounds);
+            EXPECT_FALSE(heatmap);
+            EXPECT_TRUE(output);
         } else {
+            EXPECT_FALSE(output); /* the heatmap is the view's colour */
             EXPECT_TRUE(deferred);
             EXPECT_TRUE(heatmap);
             EXPECT_TRUE(bounds);

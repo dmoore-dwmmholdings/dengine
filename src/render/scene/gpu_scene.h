@@ -240,8 +240,8 @@ typedef struct de__gs_float4 {
     F(de__gs_uint, uint, light_count, )                                                            \
     F(de__gs_uint, uint, view_slot, )                                                              \
     F(de__gs_uint, uint, flags, )                                                                  \
-    F(de__gs_uint, uint, reserved0, )                                                              \
-    F(de__gs_uint, uint, reserved1, )
+    F(de__gs_float, float, pre_exposure, )                                                         \
+    F(de__gs_float, float, prev_pre_exposure, )
 
 #define DE__GS_DECLARE_FIELD(ctype, stype, name, dims) ctype name dims;
 
@@ -462,6 +462,9 @@ typedef struct de__gpu_view_params {
     de_vec3 camera_position; /**< relative to the render origin */
     u32 width, height;       /**< the view's internal resolution in pixels */
     u32 flags;               /**< DeSceneConstants.flags (free for the caller) */
+    /** DENG-304: this frame's and the previous frame's exposure (lighting/exposure.c): passes
+     * that write radiance multiply it by pre_exposure (0 = 1). */
+    f32 pre_exposure, prev_pre_exposure;
 } de__gpu_view_params;
 
 /** Counters (de__gpu_scene_stats). */

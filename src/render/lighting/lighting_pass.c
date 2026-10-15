@@ -25,9 +25,12 @@
  */
 #include "render/lighting/lighting.h"
 
+#include "render/graph/rg_internal.h"
+
 #include "render/materials/brdf_luts.h"
 #include "render/passes/vis/gbuffer.h"
 #include "render/renderer_internal.h"
+#include "render/world/render_world.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -82,6 +85,8 @@ static const de__lighting_const k_consts[] = {
     {"DE_LTC_SIZE", DE__LTC_SIZE},
     {"DE_LTC_DISK_SIDES", 12u},
     {"DE_LIGHTING_GROUP", 64u},
+    {"DE_IBL_ENVIRONMENT", DE__IBL_ENVIRONMENT}, /* DENG-304 */
+    {"DE_IBL_STRIP_FACES", DE__IBL_STRIP_FACES},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -191,6 +196,7 @@ void de__lighting_destroy(de__lighting *lt) {
         de_gpu_texture_destroy(lt->dev, lt->ltc2);
     if (DE_HANDLE_VALID(lt->sampler))
         de_gpu_sampler_destroy(lt->dev, lt->sampler);
+    de__ibl_shutdown(lt); /* DENG-304 */
     DE_FREE(lt->alloc, lt, sizeof *lt);
 }
 
@@ -331,6 +337,8 @@ de_result de__lighting_create_ex(const de__lighting_desc *desc, de__lighting **o
     lt->log = de_log_register_category("render", DE_LOG_INFO);
     register_cvars(lt);
     if (lt->vis == NULL || !lt->vis->enabled) {
+        (void)de__ibl_init(lt); /* the cvars (the exposure is used without the vis frame too) */
+        de_error_clear();
         snprintf(lt->why, sizeof lt->why, "the visibility-buffer frame is off");
         *out = lt; /* off: nothing to light */
         return DE_OK;
@@ -338,6 +346,8 @@ de_result de__lighting_create_ex(const de__lighting_desc *desc, de__lighting **o
     de_result r = kernels_load(lt);
     if (r == DE_OK)
         r = ltc_create(lt);
+    if (r == DE_OK)
+        r = de__ibl_init(lt); /* DENG-304 */
     if (r == DE_ERR_UNSUPPORTED) {
         const de_error *e = de_error_last();
         snprintf(lt->why, sizeof lt->why, "%.250s", e != NULL ? e->message : "no engine shaders");
@@ -617,7 +627,12 @@ static void fill_view(de__lighting *lt, const de__vis_context *vc, const de__lig
     if (!(lv->cutoff > 0.0f))
         lv->cutoff = (f32)LP_CUTOFF_DEFAULT;
     lv->emissive_threshold = (f32)de_cvar_float(lt->cv_emissive_threshold);
-    lv->pre_exposure = in->pre_exposure > 0.0f ? in->pre_exposure : 1.0f;
+    /* DENG-304: the view's exposure of this frame (exposure.c), unless a producer overrides it. */
+    const de__exposure_state *ex =
+        vc->view_slot < DE__VIEW_MAX ? &lt->exposure[vc->view_slot] : NULL;
+    const bool ex_now =
+        ex != NULL && ex->valid && ex->view.id == vc->view.id && ex->frame == vc->frame_index;
+    lv->pre_exposure = in->pre_exposure > 0.0f ? in->pre_exposure : ex_now ? ex->current : 1.0f;
     lv->proxy_capacity = proxies > 0 ? (u32)proxies : 0u;
     const bool ortho = vc->proj.m[11] == 0.0f; /* row 3 is (0, 0, -1, 0) in a perspective */
     lv->flags = (ortho ? DE__LIGHTING_ORTHO : 0u) | (split ? DE__LIGHTING_SPLIT : 0u);
@@ -661,6 +676,10 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         lt->debug.heatmap || (DE_HANDLE_VALID(lt->cv_debug) && de_cvar_bool(lt->cv_debug));
     const bool readback = lt->debug.readback || heatmap;
     fill_view(lt, vc, &in, split, lc);
+    lc->target = vc->gbuffer[DE__GB_LIGHTING];
+    lc->width = vc->width;
+    lc->height = vc->height;
+    de__ibl_build(lt, g, lc); /* DENG-304: the environment (lc->view.ibl, the strip) */
     vs->entry = (u32)(vc->frame_index % DE__VIS_FRAME_RING);
     u8 *entry = vs->constants_map + (size_t)vs->entry * sizeof(de__lighting_view);
     memcpy(entry, &lc->view, sizeof lc->view);
@@ -771,6 +790,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, lc->counters, DE_ACCESS_SHADER_READ);
         de_rg_read(p, ltc1, DE_ACCESS_SHADER_READ);
         de_rg_read(p, ltc2, DE_ACCESS_SHADER_READ);
+        if (DE_HANDLE_VALID(lc->strip))
+            de_rg_read(p, lc->strip, DE_ACCESS_SHADER_READ); /* DENG-304: the environment */
         for (u32 i = 0; i < 6; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
@@ -825,9 +846,25 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             vs->slot_live[vs->entry] = true;
         }
     }
+    /* DENG-304: the output pass finds the context. */
+    lt->frame_context[slot] = lc;
+    lt->frame_context_graph[slot] = g;
+    lt->frame_context_frame[slot] = vc->frame_index;
+    lt->frame_context_view[slot] = vc->view;
     if (out != NULL)
         *out = lc;
     return DE_OK;
+}
+
+de__lighting_context *de__lighting_frame_context(const de__lighting *lt, de_view view,
+                                                 const de_rg *g, u64 frame_index) {
+    if (lt == NULL || g == NULL)
+        return NULL;
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i) /* the keys, never the context: arenas are reused */
+        if (lt->frame_context[i] != NULL && lt->frame_context_graph[i] == g &&
+            lt->frame_context_frame[i] == frame_index && lt->frame_context_view[i].id == view.id)
+            return lt->frame_context[i];
+    return NULL;
 }
 
 /* =================================================================================================
@@ -841,6 +878,10 @@ static void lighting_stage(de__view_frame *vf, void *user) {
     de__vis_context *vc = de__vis_frame_context(lt->vis, vf->view, vf->graph, vf->frame_index);
     if (vc == NULL)
         return;
+    /* DENG-304: this frame's exposure (the GPU scene's view stage asked first; same value). */
+    (void)de__lighting_view_exposure(
+        lt, vc->view_slot, vf->view, vf->frame_index,
+        vf->camera != NULL ? vf->camera->camera.exposure_ev100 : (f32)NAN, NULL);
     de__lighting_context *lc = NULL;
     const de_result res = de__lighting_build(lt, vf->graph, vc, &lc);
     if (res != DE_OK) {

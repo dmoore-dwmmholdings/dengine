@@ -256,6 +256,9 @@ void de__vis_frame_destroy(de_renderer *r, struct de__vis_shared *s);
 /** DENG-239: the renderer's visibility-buffer frame (picking reaches it); NULL before
  * de__views_create. */
 struct de__vis_shared *de__views_vis(const de_renderer *r);
+/** DENG-304: the renderer's lighting (render/lighting/lighting.h); NULL before de__views_create.
+ * The kick snapshots the environment into it; the GPU scene's view stage asks it for exposure. */
+struct de__lighting *de__views_lighting(const de_renderer *r);
 /** DENG-239: true when `v` is a live view of `r` (takes the views lock). Any thread. */
 bool de__view_valid(const de_renderer *r, de_view v);
 
