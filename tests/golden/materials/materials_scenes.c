@@ -85,15 +85,17 @@
 #define MG_RUNTIME_COOKS 0
 #endif
 
-/* The gallery's models (assets.toml): each scene names their meshes. */
-#define MG_MODEL_COUNT 4u
-static const char *const k_models[MG_MODEL_COUNT] = {"mesh/sphere", "mesh/card", "mesh/box",
-                                                     "mesh/cylinder"};
-
 typedef struct mg_opts {
     const char *scene; /**< the scene asset */
     bool furnace;      /**< check the furnace in C */
 } mg_opts;
+
+#if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
+
+/* The gallery's models (assets.toml): each scene names their meshes. */
+#define MG_MODEL_COUNT 4u
+static const char *const k_models[MG_MODEL_COUNT] = {"mesh/sphere", "mesh/card", "mesh/box",
+                                                     "mesh/cylinder"};
 
 typedef struct mg {
     de_golden_ctx *ctx;
@@ -336,11 +338,6 @@ static void mg_close(mg *m) {
 }
 
 static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
-#if !DE_GOLDEN_COOK || !MG_RUNTIME_COOKS
-    (void)o;
-    de_golden_skip(ctx, "this build's asset system cannot cook sources (Release and Shipping have "
-                        "no importers; DE_HAS_COOKER): the gallery's assets are cooked on load");
-#else
     if (!ctx->caps->base_tier_ok) {
         de_golden_skip(ctx, "below the Base tier (the renderer needs it): %s",
                        ctx->caps->base_tier_reason);
@@ -508,8 +505,17 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         de_gpu_cmd_copy_buffer_to_texture(ctx->cmd, ctx->target, 0, 0, up, 0, m.pitch);
     }
     mg_close(&m);
-#endif
 }
+
+#else /* !(DE_GOLDEN_COOK && MG_RUNTIME_COOKS) */
+
+static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
+    (void)o;
+    de_golden_skip(ctx, "this build's asset system cannot cook sources (Release and Shipping have "
+                        "no importers; DE_HAS_COOKER): the gallery's assets are cooked on load");
+}
+
+#endif
 
 DE_GOLDEN_SCENE(materials_gallery_ibl) {
     mg_run(ctx, &(mg_opts){.scene = "scenes/gallery_ibl"});
