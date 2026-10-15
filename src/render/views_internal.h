@@ -238,6 +238,19 @@ void de__view_debug_color(const char *name, f32 out[4]);
 /** The renderer's composite (tests draw with it from a hook). */
 de__composite *de__views_composite(const de_renderer *r);
 
+/* ---------- Visibility buffer (passes/vis/vis_frame.c; DENG-229) ---------- */
+
+struct de__vis_shared;
+/**
+ * Creates the renderer's visibility-buffer frame (src/render/passes/vis/vis_stages.h) and
+ * registers its view stage "vis.frame" at (DE__VIEW_SLOT_VISIBILITY, 0). Without shader code for
+ * the backend (a build without the build-time cook, DENG-421) the frame is made but off, with a
+ * warning. Main thread, from de__views_create.
+ */
+de_result de__vis_frame_create(de_renderer *r, struct de__vis_shared **out);
+/** Releases it (the GPU must be idle). NULL is ignored. */
+void de__vis_frame_destroy(de_renderer *r, struct de__vis_shared *s);
+
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_VIEWS_INTERNAL_H */

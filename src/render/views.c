@@ -117,6 +117,8 @@ typedef struct de__views {
     f32 *stat_ms;
     u32 stat_cap;
     bool composite_warned;
+    /* DENG-229: the visibility-buffer frame (passes/vis/vis_frame.c), the stage "vis.frame". */
+    struct de__vis_shared *vis;
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -1012,14 +1014,19 @@ de_result de__views_create(de_renderer *r) {
     if (!DE_HANDLE_VALID(vs->main_view))
         return DE_FAIL_WRAP(DE_ERR_INTERNAL, "views: the main view");
     /* Temporary view content until the visibility buffer (S13): a debug clear. */
-    return de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN, "view.debug_clear",
-                                   debug_clear_stage, NULL);
+    res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN, "view.debug_clear",
+                                  debug_clear_stage, NULL);
+    if (res != DE_OK)
+        return res;
+    /* DENG-229: the visibility-buffer frame registers its stage "vis.frame". */
+    return de__vis_frame_create(r, &vs->vis);
 }
 
 void de__views_destroy(de_renderer *r) {
     de__views *vs = r->views;
     if (vs == NULL)
         return;
+    de__vis_frame_destroy(r, vs->vis); /* DENG-229 */
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
         release_now(r, vs->rs[i].graph, vs->rs[i].output);
     for (u32 i = 0; i < vs->retired_count; ++i)

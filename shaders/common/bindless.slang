@@ -14,8 +14,8 @@
 //
 //   de_buffer<T>(idx)    read-write, T elements   DE_ACCESS_SHADER_WRITE (reads may go with it)
 //   de_robuffer<T>(idx)  read-only, T elements    DE_ACCESS_SHADER_READ; UPLOAD buffers too
-//   de_rwbytes(idx)      read-write, byte address DE_ACCESS_SHADER_WRITE
-//   de_bytes(idx)        read-only, byte address  DE_ACCESS_SHADER_READ; UPLOAD buffers too
+//   de_rwbytes(idx)      read-write, byte address DE_ACCESS_SHADER_WRITE; also atomic_add
+//   de_bytes(idx)       read-only, byte address  DE_ACCESS_SHADER_READ; UPLOAD buffers too
 //
 // Vulkan and Metal see the same buffer through all four. D3D12 has a view per access: the index
 // holds the read-write view (UAV) of a GPU_ONLY buffer, or the read-only view (SRV) of an UPLOAD
@@ -354,6 +354,20 @@ public struct DeRWBytes
         w[o + 3] = v.w;
 #else
         view().Store4(offset, v);
+#endif
+    }
+    /// Atomically adds `v` to the 32-bit word at byte `offset` (a multiple of 4) and returns the
+    /// value it held before (DENG-229: GPU culling appends to work lists with it). Relaxed order:
+    /// the pass that reads the result runs after a barrier.
+    public uint atomic_add(uint offset, uint v)
+    {
+#if defined(DE_SHADER_TARGET_METAL)
+        Atomic<uint> *a = (Atomic<uint> *)de__heap.buffers[index];
+        return a[offset >> 2].add(v);
+#else
+        uint old;
+        view().InterlockedAdd(offset, v, old);
+        return old;
 #endif
     }
 }

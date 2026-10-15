@@ -16,3 +16,4 @@
 
 de_engine_shader(composite      common/composite.slang)
 de_engine_shader(scene_scatter  scene/scatter.slang)
+de_engine_shader(vis_instance_cull  culling/instance_cull.slang)

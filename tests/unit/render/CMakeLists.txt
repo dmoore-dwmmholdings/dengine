@@ -286,3 +286,42 @@ if(TARGET test_engine_shaders)
         endif()
     endif()
 endif()
+
+# DENG-229: GPU instance culling and the visibility-buffer frame skeleton (src/render/passes/vis/),
+# executable test_render_vis; CTest names render_vis.<suite>.<test>. A fake render world and fake
+# mesh records drive a GPU scene; the vis frame is built into the same graph and a test pass reads
+# back the work list, counters and dispatch arguments, compared field by field with the CPU
+# reference (vis_stages.h). instance_cull.*_{metal,vulkan,d3d12} run on each GPU backend (SKIP
+# without the device; the engine shader vis_instance_cull, DENG-421; CI: Vulkan on lavapipe and
+# D3D12 on the vendored WARP in the golden jobs); vis_frame.* and the CPU
+# tests run on the null backend. vis.layout_match parses shaders/visbuffer/vis_types.slang and
+# shaders/culling/cull_common.slang.
+set(_de_vis_libs de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support)
+if(TARGET de_gpu_vulkan)
+    list(APPEND _de_vis_libs de_gpu_vulkan de_tp_vulkan_headers)
+endif()
+if(TARGET de_gpu_metal)
+    list(APPEND _de_vis_libs de_gpu_metal "-framework Metal" "-framework Foundation")
+endif()
+if(DE_HAS_GPU_D3D12)
+    list(APPEND _de_vis_libs de_gpu_d3d12 de_tp_d3d12_agility)
+endif()
+de_add_test(NAME render_vis
+    SOURCES test_instance_cull.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_vis)
+    target_include_directories(test_render_vis PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_vis PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        # DENG-423: the Agility exports and runtime (and the vendored WARP on CI), as
+        # test_render_gpu_scene; version.lib reads the DLL versions render_d3d12_test.h logs.
+        target_link_libraries(test_render_vis PRIVATE version)
+        de_d3d12_agility_deploy(test_render_vis)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_vis)
+        endif()
+    endif()
+endif()
