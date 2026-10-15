@@ -62,7 +62,7 @@
 /* ---------- lut_reference_sane (CPU) ---------- */
 
 TEST(standard, lut_reference_sane) {
-    float *t = (float *)malloc(sizeof(float) * 4u * LUT_N * LUT_N);
+    float *t = (float *)malloc(sizeof(float) * 4u * LUT_N * DE__BRDF_LUT_ROWS);
     ASSERT_TRUE(t != NULL);
     de__brdf_lut_reference(4096u, t);
     for (u32 j = 0; j < LUT_N; ++j) {
@@ -110,6 +110,11 @@ typedef struct sb_fx {
     de__brdf_luts *luts;
     u32 lut;
     char why[700];
+    /* Buffers of sb_run, destroyed at teardown: a buffer freed between runs can come back at the
+     * same memory, and Vulkan's synchronization validation then sees two unordered copies into
+     * it (the fence waits order them, but not in its model). */
+    de_gpu_buffer keep[32];
+    u32 keep_count;
 } sb_fx;
 
 static void sb_fx_setup(sb_fx *f) {
@@ -141,6 +146,8 @@ static void sb_fx_teardown(sb_fx *f) {
         for (u32 k = 0; k < K_COUNT; ++k)
             if (DE_HANDLE_VALID(f->pipe[k]))
                 de_gpu_pipeline_destroy(f->dev, f->pipe[k]);
+        for (u32 k = 0; k < f->keep_count; ++k)
+            de_gpu_buffer_destroy(f->dev, f->keep[k]);
         de__brdf_luts_destroy(f->luts);
         de_gpu_wait_idle(f->dev);
         EXPECT_EQ(validation_errors(f->dev), 0u);
@@ -433,9 +440,15 @@ static float *sb_run(sb_fx *f, u32 k, const sk_case *cases, u32 count, u32 per_c
     x.params[5] = grid_x;
     sb_submit(f, run_record, &x);
     memcpy(res, de_gpu_buffer_map(f->dev, x.rb), (size_t)x.out_bytes);
-    de_gpu_buffer_destroy(f->dev, x.in);
-    de_gpu_buffer_destroy(f->dev, x.out);
-    de_gpu_buffer_destroy(f->dev, x.rb);
+    if (f->keep_count + 3u <= sizeof f->keep / sizeof f->keep[0]) {
+        f->keep[f->keep_count++] = x.in;
+        f->keep[f->keep_count++] = x.out;
+        f->keep[f->keep_count++] = x.rb;
+    } else {
+        de_gpu_buffer_destroy(f->dev, x.in);
+        de_gpu_buffer_destroy(f->dev, x.out);
+        de_gpu_buffer_destroy(f->dev, x.rb);
+    }
     return res;
 }
 
@@ -467,8 +480,8 @@ static void case_means(const float *res, u32 count, u32 per_case, u32 col, doubl
 
 static void luts_match_cpu(sb_fx *f, de_gpu_backend b) {
     sb_open(f, b, false);
-    const u32 floats = 4u * LUT_N * LUT_N;
-    const u32 pitch = LUT_N * 16u; /* 512 bytes: a multiple of 256 */
+    const u32 floats = 4u * LUT_N * DE__BRDF_LUT_ROWS; /* energy and sheen (DENG-300) rows */
+    const u32 pitch = LUT_N * 16u;                     /* 512 bytes: a multiple of 256 */
     float *ref = (float *)malloc(sizeof(float) * floats);
     ASSERT_TRUE(ref != NULL);
     de__brdf_lut_reference(16384u, ref);
@@ -481,11 +494,11 @@ static void luts_match_cpu(sb_fx *f, de_gpu_backend b) {
         u64 v = 0;
         const de_gpu_fence fence = de__brdf_luts_fence(l, &v);
         ASSERT_EQ(de_gpu_fence_wait(f->dev, fence, v, WAIT_NS), DE_OK);
-        const de_gpu_buffer rb =
-            de_gpu_buffer_create(f->dev, &(de_gpu_buffer_desc){.size = (u64)pitch * LUT_N,
-                                                               .usage = DE_USAGE_COPY_DST,
-                                                               .memory = DE_MEM_READBACK,
-                                                               .name = "lut readback"});
+        const de_gpu_buffer rb = de_gpu_buffer_create(
+            f->dev, &(de_gpu_buffer_desc){.size = (u64)pitch * DE__BRDF_LUT_ROWS,
+                                          .usage = DE_USAGE_COPY_DST,
+                                          .memory = DE_MEM_READBACK,
+                                          .name = "lut readback"});
         ASSERT_TRUE(DE_HANDLE_VALID(rb));
         de_error_clear();
         de_gpu_cmd *c = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "lut readback");
@@ -513,7 +526,7 @@ static void luts_match_cpu(sb_fx *f, de_gpu_backend b) {
     }
     double worst[4] = {0, 0, 0, 0};
     u32 bad = 0;
-    for (u32 t = 0; t < LUT_N * LUT_N; ++t)
+    for (u32 t = 0; t < LUT_N * DE__BRDF_LUT_ROWS; ++t)
         for (u32 ch = 0; ch < 4u; ++ch) {
             const double d = fabs((double)got[0][t * 4u + ch] - (double)ref[t * 4u + ch]);
             if (d > worst[ch])

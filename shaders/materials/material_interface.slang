@@ -88,10 +88,22 @@ public struct SurfaceData
     public float ior;             // KHR_materials_ior (dielectric F0 = ((ior - 1) / (ior + 1))^2)
     public uint brdf_lut;         // bindless index of the energy LUT (brdf/energy.slang), set by
                                   // the pass that shades; DE_BINDLESS_INVALID: analytic fallback
+    // ---- DENG-300: the Standard model's layers (KHR_materials_*) ----
+    public float clearcoat;             // clearcoat factor (x texture), 0 = none
+    public float clearcoat_roughness;   // perceptual
+    public float3 clearcoat_normal;     // world, unit (the vertex normal without a coat normal map)
+    public float3 sheen_color;          // linear; 0 = no sheen
+    public float sheen_roughness;
+    public float anisotropy;            // strength 0..1
+    public float2 anisotropy_direction; // in the tangent frame (x = tangent, y = bitangent), unit
+    public float iridescence;           // factor 0..1
+    public float iridescence_ior;
+    public float iridescence_thickness; // nm; 0 = no film
 };
 
 /// A SurfaceData with every field set: grey 0.5 dielectric, roughness 0.5, normal +Z, no
-/// tangent, no emission, Standard, no features, specular 1 (white), IOR 1.5, no LUT. Models and
+/// tangent, no emission, Standard, no features, specular 1 (white), IOR 1.5, no LUT, no layers
+/// (clearcoat 0 with the shading normal, no sheen, no anisotropy, no iridescence). Models and
 /// passes start from it so fields added later have a value.
 public SurfaceData de_surface_default()
 {
@@ -109,6 +121,16 @@ public SurfaceData de_surface_default()
     s.specular_color = float3(1.0, 1.0, 1.0);
     s.ior = 1.5;
     s.brdf_lut = DE_BINDLESS_INVALID;
+    s.clearcoat = 0.0;
+    s.clearcoat_roughness = 0.0;
+    s.clearcoat_normal = s.normal;
+    s.sheen_color = float3(0.0, 0.0, 0.0);
+    s.sheen_roughness = 0.0;
+    s.anisotropy = 0.0;
+    s.anisotropy_direction = float2(1.0, 0.0);
+    s.iridescence = 0.0;
+    s.iridescence_ior = 1.3;
+    s.iridescence_thickness = 0.0;
     return s;
 }
 
@@ -199,6 +221,7 @@ public SurfaceData de_surface_from_gb(DeGbSurface g)
     s.base_color = g.base_color;
     s.ao = g.ao;
     s.normal = g.normal;
+    s.clearcoat_normal = g.normal; // DENG-300: the layers' parameters come from the material
     s.roughness = g.roughness;
     s.tangent = float4(0.0, 0.0, 0.0, 1.0);
     s.metallic = g.metallic;

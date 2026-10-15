@@ -19,9 +19,12 @@
 // Composition chain. DENG-300 (layers) and DENG-301 (transmission) edit it in wave 3, DENG-306
 // (subsurface) in wave 4: each adds its step at its insertion point and nowhere else.
 //
-//   1. base          diffuse + GGX single and multiple scattering (DENG-299)
+//   1. base          diffuse + GGX single and multiple scattering (DENG-299); iridescence makes
+//                    its Fresnel a thin film's, anisotropy its GGX lobe anisotropic (DENG-300;
+//                    standard_base.slang, inputs in layer_iridescence / layer_anisotropy.slang)
 //   2. sheen         [DENG-300: insertion point S]  scales what is below by its albedo
-//   3. clearcoat     [DENG-300: insertion point C]  over everything below
+//                    (layer_sheen.slang)
+//   3. clearcoat     [DENG-300: insertion point C]  over everything below (layer_clearcoat.slang)
 //   4. transmission  [DENG-301: insertion point T]  transmission, diffuse transmission, volume
 //   5. subsurface    [DENG-306: insertion point SSS] the diffuse goes to the SSS target
 module standard;
@@ -30,12 +33,28 @@ import bindless;
 __exported import "../material_interface";
 import "../../brdf/bsdf_common";
 import "../../brdf/energy";
+import "../../brdf/sampling";
 import "../../scene/scene_types";
 import "../../visbuffer/resolve_model";
 import standard_base;
+import layer_sheen;
+import layer_clearcoat;
+import layer_anisotropy;
+import layer_iridescence;
 
 /// Every lobe the Standard model has (DENG-300 / DENG-301 / DENG-306 add their bits here).
 public static const uint DE_STANDARD_FEATURES_ALL = 0xFFFFFFFF;
+
+/// The lobes of one surface and view direction (StandardModelT.stack).
+public struct StandardStack
+{
+    public StandardBase base;
+    public bool has_sheen;
+    public SheenLayer sheen; // set when has_sheen
+    public bool has_coat;
+    public ClearcoatLayer coat; // set when has_coat
+    public float p_base, p_sheen, p_coat; // sample's lobe probabilities
+};
 
 /// The Standard model with the lobes of `FEATURES` compiled in.
 public struct StandardModelT<let FEATURES : uint> : IMaterialModel
@@ -96,36 +115,162 @@ public struct StandardModelT<let FEATURES : uint> : IMaterialModel
             s.features |= DE_MATERIAL_FEATURE_SUBSURFACE;
         if (m.clearcoat.x > 0.0)
             s.features |= DE_MATERIAL_FEATURE_CLEARCOAT;
+        // DENG-300: the layers' inputs (each sets or clears its feature bit).
+        if ((FEATURES & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u)
+            de_iridescence_resolve(s, m, v, lod);
+        if ((FEATURES & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u)
+            de_anisotropy_resolve(s, m, v, lod);
+        if ((FEATURES & DE_MATERIAL_FEATURE_SHEEN) != 0u)
+            de_sheen_resolve(s, m, v, lod); // insertion point S
+        if ((FEATURES & DE_MATERIAL_FEATURE_CLEARCOAT) != 0u)
+            de_clearcoat_resolve(s, m, v, lod); // insertion point C
+        // insertion points T, SSS
         return s;
+    }
+
+    /// The layers' inputs from the material record alone, for a pass that rebuilt `s` from the
+    /// thin G-buffer (de_surface_from_gb) and has the pixel's material (lighting): factors,
+    /// colours, roughness, the coat on the shading normal; no textures.
+    public static void layers_from_material(inout SurfaceData s, DeGpuMaterial m)
+    {
+        if ((FEATURES & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u)
+            de_iridescence_from_material(s, m);
+        if ((FEATURES & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u)
+            de_anisotropy_from_material(s, m);
+        if ((FEATURES & DE_MATERIAL_FEATURE_SHEEN) != 0u)
+            de_sheen_from_material(s, m);
+        if ((FEATURES & DE_MATERIAL_FEATURE_CLEARCOAT) != 0u)
+            de_clearcoat_from_material(s, m);
+        // insertion points T, SSS
+    }
+
+    /// The layers compiled in (constants: a pass that leaves one out has none of its code).
+    static const bool HAS_SHEEN = (FEATURES & DE_MATERIAL_FEATURE_SHEEN) != 0u;
+    static const bool HAS_COAT = (FEATURES & DE_MATERIAL_FEATURE_CLEARCOAT) != 0u;
+
+    /// The lobes of `s` for view `wo`: the base, then each layer on top, with the probabilities
+    /// sample picks them with (by albedo at wo).
+    static StandardStack stack(SurfaceData s, float3 wo)
+    {
+        StandardStack k;
+        k.base = de_standard_base_t<FEATURES>(s, wo, true);
+        k.has_sheen = HAS_SHEEN && (s.features & DE_MATERIAL_FEATURE_SHEEN) != 0u;
+        k.has_coat = HAS_COAT && (s.features & DE_MATERIAL_FEATURE_CLEARCOAT) != 0u;
+        float w_base = k.base.albedo, w_sheen = 0.0, w_coat = 0.0;
+        // insertion point S
+        if (HAS_SHEEN && k.has_sheen)
+        {
+            k.sheen = de_sheen_layer(s, wo);
+            w_base *= saturate(1.0 - k.sheen.k * k.sheen.e_o);
+            w_sheen = dot(de_sheen_albedo_o(k.sheen), float3(0.2126, 0.7152, 0.0722));
+        }
+        // insertion point C
+        if (HAS_COAT && k.has_coat)
+        {
+            k.coat = de_clearcoat_layer(s, wo);
+            float keep = saturate(1.0 - k.coat.e_o);
+            w_base *= keep;
+            w_sheen *= keep;
+            w_coat = k.coat.e_o;
+        }
+        // insertion points T, SSS
+        float total = w_base + w_sheen + w_coat;
+        k.p_base = total > 0.0 ? w_base / total : 1.0;
+        k.p_sheen = total > 0.0 ? w_sheen / total : 0.0;
+        k.p_coat = total > 0.0 ? w_coat / total : 0.0;
+        return k;
+    }
+
+    /// BSDF x cos(theta_i), and the share of it that is the diffuse lobe (`diffuse`; what lighting
+    /// separates for subsurface scattering, DENG-303 / DENG-306). The rest is specular: GGX,
+    /// multi-scatter, sheen, coat. Splitting by evaluating with base_color 0 does not work:
+    /// metals take their F0 from the base colour.
+    public static float3 evaluate_split(SurfaceData s, float3 wo, float3 wi, out float3 diffuse)
+    {
+        StandardStack k = stack(s, wo);
+        // 1. base (DENG-299; iridescence and anisotropy inside, DENG-300)
+        float3 d;
+        float3 f = de_standard_base_evaluate_split_t<FEATURES>(k.base, s, wo, wi, d);
+        // 2. sheen (DENG-300): insertion point S
+        if (HAS_SHEEN && k.has_sheen)
+        {
+            float keep = de_sheen_scale(k.sheen, wi);
+            f = f * keep + de_sheen_evaluate(k.sheen, wo, wi);
+            d *= keep;
+        }
+        // 3. clearcoat (DENG-300): insertion point C
+        if (HAS_COAT && k.has_coat)
+        {
+            float keep = de_clearcoat_scale(k.coat, wi);
+            f = f * keep + de_clearcoat_evaluate(k.coat, wi);
+            d *= keep;
+        }
+        // 4. transmission, diffuse transmission, volume (DENG-301): insertion point T
+        // 5. subsurface (DENG-306): insertion point SSS
+        diffuse = d;
+        return f;
     }
 
     public static float3 evaluate(SurfaceData s, float3 wo, float3 wi)
     {
-        // 1. base (DENG-299)
-        StandardBase b = de_standard_base(s, wo, true);
-        float3 f = de_standard_base_evaluate(b, s, wo, wi);
-        // 2. sheen (DENG-300): insertion point S
-        // 3. clearcoat (DENG-300): insertion point C
-        // 4. transmission, diffuse transmission, volume (DENG-301): insertion point T
-        // 5. subsurface (DENG-306): insertion point SSS
-        return f;
+        float3 unused;
+        return evaluate_split(s, wo, wi, unused);
+    }
+
+    static float stack_pdf(StandardStack k, float3 wo, float3 wi)
+    {
+        // The same chain as evaluate: each step mixes its density in.
+        float p = k.p_base * de_standard_base_pdf_t<FEATURES>(k.base, wo, wi);
+        if (HAS_SHEEN && k.has_sheen) // insertion point S
+            p += k.p_sheen * de_sheen_pdf(wi);
+        if (HAS_COAT && k.has_coat) // insertion point C
+            p += k.p_coat * de_clearcoat_pdf(k.coat, wi);
+        // insertion points T, SSS
+        return p;
     }
 
     public static float pdf(SurfaceData s, float3 wo, float3 wi)
     {
-        // The same chain as evaluate: each step mixes its density in.
-        StandardBase b = de_standard_base(s, wo, true);
-        float p = de_standard_base_pdf(b, wo, wi);
-        // insertion points S, C, T, SSS
-        return p;
+        if (!(wo.z > 0.0))
+            return 0.0;
+        return stack_pdf(stack(s, wo), wo, wi);
     }
 
     public static BsdfSample sample(SurfaceData s, float3 wo, float3 u)
     {
         // The same chain as evaluate: each step takes its share of u.z.
-        StandardBase b = de_standard_base(s, wo, true);
-        BsdfSample r = de_standard_base_sample(b, s, wo, u);
-        // insertion points S, C, T, SSS
+        StandardStack k = stack(s, wo);
+        BsdfSample r;
+        r.wi = float3(0.0, 0.0, 1.0);
+        r.weight = float3(0.0, 0.0, 0.0);
+        r.pdf = 0.0;
+        r.lobe = 0u;
+        if (!(wo.z > 0.0))
+            return r;
+        bool layered = (HAS_SHEEN && k.has_sheen) || (HAS_COAT && k.has_coat);
+        if (!layered || u.z < k.p_base)
+        {
+            float3 ub = float3(u.xy, k.p_base > 0.0 ? saturate(u.z / k.p_base) : 0.0);
+            r = de_standard_base_sample_t<FEATURES>(k.base, s, wo, ub);
+            if (!layered)
+                return r; // the base alone: its own pdf and weight
+        }
+        else if (HAS_SHEEN && u.z < k.p_base + k.p_sheen) // insertion point S
+        {
+            r.wi = de_sample_cosine_hemisphere(u.xy);
+            r.lobe = DE_BSDF_LOBE_SPECULAR;
+        }
+        else if (HAS_COAT) // insertion point C
+        {
+            r.wi = de_clearcoat_sample(k.coat, u.xy);
+            r.lobe = DE_BSDF_LOBE_SPECULAR;
+        }
+        // insertion points T, SSS
+        r.pdf = stack_pdf(k, wo, r.wi);
+        float3 unused;
+        r.weight = float3(0.0, 0.0, 0.0);
+        if (r.pdf > 0.0)
+            r.weight = evaluate_split(s, wo, r.wi, unused) / r.pdf;
         return r;
     }
 
@@ -134,7 +279,7 @@ public struct StandardModelT<let FEATURES : uint> : IMaterialModel
         uint l = DE_BSDF_LOBE_SPECULAR;
         if (s.metallic < 1.0 || s.roughness > 0.0)
             l |= DE_BSDF_LOBE_DIFFUSE; // the diffuse and the multi-scatter lobes
-        // insertion points S, C, T (DE_BSDF_LOBE_TRANSMISSION), SSS
+        // insertion points S, C (both specular), T (DE_BSDF_LOBE_TRANSMISSION), SSS
         return l;
     }
 };

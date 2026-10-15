@@ -650,3 +650,35 @@ if(TARGET test_render_clustered_lights)
         endif()
     endif()
 endif()
+
+# DENG-300: the Standard model's layers (shaders/materials/standard/layer_*.slang, shaders/brdf/sheen
+# and thin_film.slang; the sheen rows of the LUT in src/render/materials/brdf_luts.c), executable
+# test_render_standard_layers; CTest names render_standard_layers.layers.<test>. The GPU tests
+# (_metal, _vulkan, _d3d12; SKIP without the device or the shader importer) cook
+# tests/unit/render/data/standard_layers_kernels.slang at test time (DE_LAY_TEST_COOK; the engine's
+# shaders/ and data/ on one root): furnaces, the sheen LUT against the CPU, anisotropy and
+# iridescence identities, the thin film against a spectral reference, sample / pdf consistency.
+# flags_compile_out cooks data/standard_layers_flags.slang to SPIR-V and compares code sizes.
+de_add_test(NAME render_standard_layers
+    SOURCES test_standard_layers.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_standard_layers)
+    target_include_directories(test_render_standard_layers PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_standard_layers PRIVATE
+        "DE_LAY_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_LAY_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_standard_layers PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_standard_layers PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_standard_layers PRIVATE DE_LAY_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_standard_layers PRIVATE version)
+        de_d3d12_agility_deploy(test_render_standard_layers)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_standard_layers)
+        endif()
+    endif()
+endif()
