@@ -35,6 +35,22 @@
  * read-modify-write, each one continues the release sequence of all earlier ones, so a block
  * sees everything any thread did before its own resolve was recorded. Real overlap (two lists
  * resolving the same queries at the same time, which the API does not allow) is still reported.
+ *
+ * Destroy (DENG-424). The front-end destroys a heap only after the GPU completed the lists that
+ * used it (deferred destruction), and a resolve's command buffer cannot complete before its
+ * block ran (it waits for the event value the block sets last), so a block never outlives its
+ * heap: a probe that marked destroyed counters never saw a block after its heap's destroy. Destroy
+ * still does an acq_rel read-modify-write on `handoff` first, so the heap's teardown, and the
+ * front-end's reuse of its slot for the next heap, happen after the last block in the C11 sense
+ * too, not only in time.
+ *
+ * Thread sanitizer (DENG-424). TSan checks an atomic read-modify-write's own memory access before
+ * it applies the operation's acquire, so the block's first RMW raced in its view with the plain
+ * writes that made the counter: the heap's init and the front-end's zeroing of a reused slot, made
+ * after the list's listener already existed. The hand-off through Metal (event signal, IOSurface
+ * notification, a GCD thread) is real but invisible to TSan, so it is annotated: the recording
+ * thread calls __tsan_release on the counter after notifyListener:, and the block calls
+ * __tsan_acquire before it touches anything. These are no-ops outside TSan builds.
  */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -45,6 +61,22 @@
 
 /* Bytes after the resolved values that timestamp encoders fill. */
 #define SCRATCH_BYTES 16u
+
+/* TSan annotations for the hand-off through Metal's event path (see "Thread sanitizer"). */
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DE__MTL_TSAN 1
+#endif
+#endif
+#if defined(DE__MTL_TSAN)
+void __tsan_acquire(void *addr);
+void __tsan_release(void *addr);
+#define DE__MTL_TSAN_ACQUIRE(p) __tsan_acquire((void *)(p))
+#define DE__MTL_TSAN_RELEASE(p) __tsan_release((void *)(p))
+#else
+#define DE__MTL_TSAN_ACQUIRE(p) ((void)(p))
+#define DE__MTL_TSAN_RELEASE(p) ((void)(p))
+#endif
 
 static mtl_query_heap *payload(de__gpu_query_heap *h) {
     return DE__GPU_PAYLOAD(mtl_query_heap, h);
@@ -110,6 +142,8 @@ de_result de__mtl_query_heap_create(de_gpu_device *d, de__gpu_query_heap *h,
 void de__mtl_query_heap_destroy(de_gpu_device *d, de__gpu_query_heap *h) {
     (void)d;
     mtl_query_heap *qh = payload(h);
+    /* After every finished block of this heap (see "Destroy"). */
+    (void)de_atomic_fetch_add_u64(&qh->handoff, 1u, DE_ATOMIC_ACQ_REL);
     @autoreleasepool {
         if (qh->samples)
             (void)CFBridgingRelease(qh->samples);
@@ -202,7 +236,9 @@ void de__mtl_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first
                    atValue:ready
                      block:^(id<MTLSharedEvent> e, uint64_t value) {
                        (void)value;
-                       /* Before any captured value: see "Hand-off" (DENG-419). */
+                       /* Before any captured value: see "Hand-off" (DENG-419) and "Thread
+                        * sanitizer" (DENG-424). */
+                       DE__MTL_TSAN_ACQUIRE(handoff);
                        (void)de_atomic_fetch_add_u64(handoff, 1u, DE_ATOMIC_ACQ_REL);
                        NSData *data = [samples resolveCounterRange:NSMakeRange(first, count)];
                        u8 *out = (u8 *)staging.contents + (size_t)first * sizeof(u64);
@@ -219,6 +255,7 @@ void de__mtl_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 first
         /* Publishes the block (copied with its captures inside notifyListener:) to the thread
          * that will run it. */
         (void)de_atomic_fetch_add_u64(&qh->handoff, 1u, DE_ATOMIC_ACQ_REL);
+        DE__MTL_TSAN_RELEASE(&qh->handoff); /* the same, for TSan (DENG-424) */
         [cb encodeWaitForEvent:ev value:done];
 
         id<MTLBlitCommandEncoder> blit =
