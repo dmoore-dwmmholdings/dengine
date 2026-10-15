@@ -10,21 +10,6 @@
  */
 #include "render/passes/vis/vis_stages.h"
 
-/* ---------- cull_meshlets (DENG-231) ---------- */
-
-de_result de__vis_cull_meshlets_init(de__vis_shared *s) {
-    (void)s;
-    return DE_OK;
-}
-void de__vis_cull_meshlets_shutdown(de__vis_shared *s) {
-    (void)s;
-}
-void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
-    (void)g;
-    (void)vc;
-    (void)phase;
-}
-
 /* ---------- raster (DENG-234, DENG-235) ---------- */
 
 de_result de__vis_raster_init(de__vis_shared *s) {

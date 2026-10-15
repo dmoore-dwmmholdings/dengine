@@ -1270,9 +1270,9 @@ static void markers(de_gpu_device *d, const char *prefix, char *out, size_t cap)
     }
 }
 
-/* vis_frame_stub_graph_builds: with every later stage stubbed the frame builds; only the
- * instance-culling passes exist, the arguments nothing reads are culled, the stats readback keeps
- * the cull alive; steady frames hit the compiled-graph cache and allocate nothing. */
+/* vis_frame_stub_graph_builds: with the later stages stubbed the frame builds; the instance- and
+ * meshlet-culling passes exist (meshlet culling reads the arguments, and the stats readbacks keep
+ * both alive; DENG-231); steady frames hit the compiled-graph cache and allocate nothing. */
 TEST_F(vis_frame, stub_graph_builds, icx) {
     icx_open(f, DE_GPU_NULL, 512u, 11u);
     scene_random(f, 300u, NULL, 0, NULL);
@@ -1283,7 +1283,10 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     de__gpu_null_log_enable(f->dev, false);
     char got[512];
     markers(f->dev, "vis.", got, sizeof got);
-    EXPECT_STREQ(got, "vis.cull_instances.clear,vis.cull_instances,vis.cull_instances.stats");
+    /* DENG-231: meshlet culling reads the arguments and its stats pass keeps it alive. */
+    EXPECT_STREQ(got, "vis.cull_instances.clear,vis.cull_instances,vis.cull_instances.args,"
+                      "vis.cull_instances.stats,vis.cull_meshlets.clear,vis.cull_meshlets,"
+                      "vis.cull_meshlets.args,vis.cull_meshlets.stats");
     /* The context: phase 1's outputs, nothing for phase 2 or the stubbed stages. */
     ASSERT_TRUE(vc != NULL);
     EXPECT_TRUE(DE_HANDLE_VALID(vc->work_items[0]));
@@ -1296,6 +1299,12 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     EXPECT_EQ(vc->cull.instance_count, 300u);
     EXPECT_EQ(vc->cull.work_capacity, vc->work_capacity);
     EXPECT_EQ(vc->cull_view_index, 0u);
+    /* Meshlet culling (DENG-231): one list for both phases, phase 1's raster arguments. */
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->visible_meshlets));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->meshlet_counters));
+    EXPECT_TRUE(DE_HANDLE_VALID(vc->raster_args[0]));
+    EXPECT_FALSE(DE_HANDLE_VALID(vc->raster_args[1]));
+    EXPECT_GE(vc->visible_capacity, 65536u);
 
     /* A reader of the arguments keeps the args pass. */
     f->readback = true;
@@ -1307,7 +1316,8 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
     f->readback = false;
     markers(f->dev, "vis.", got, sizeof got);
     EXPECT_STREQ(got, "vis.cull_instances.clear,vis.cull_instances,vis.cull_instances.args,"
-                      "vis.cull_instances.stats");
+                      "vis.cull_instances.stats,vis.cull_meshlets.clear,vis.cull_meshlets,"
+                      "vis.cull_meshlets.args,vis.cull_meshlets.stats");
     EXPECT_FALSE(vc->view_new);
     EXPECT_EQ(vc->cull_view_index, 1u);
 
@@ -1407,11 +1417,14 @@ TEST(vis_frame, renderer_stage) {
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
     EXPECT_STREQ(got, "view.debug_clear,gpu_scene.view,vis.cull_instances.clear,"
-                      "vis.cull_instances,vis.cull_instances.stats");
+                      "vis.cull_instances,vis.cull_instances.args,vis.cull_instances.stats,"
+                      "vis.cull_meshlets.clear,vis.cull_meshlets,vis.cull_meshlets.args,"
+                      "vis.cull_meshlets.stats");
     const de_render_stats *rs = de_renderer_stats(r);
     for (u32 i = 0; i < 4; ++i)
         RUN_FRAME();
     EXPECT_EQ(rs->instances_visible, 0u); /* nothing is loaded: no mesh is READY */
+    EXPECT_EQ(rs->meshlets_visible, 0u);
     u64 compiles = 0, hits = 0;
     de__view_graph_stats(r, de_renderer_main_view(r), &compiles, &hits);
     for (u32 i = 0; i < 5; ++i)

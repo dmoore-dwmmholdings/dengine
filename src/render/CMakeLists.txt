@@ -207,3 +207,11 @@ if(TARGET de_render)
         passes/vis/vis_stages_stub.c
         passes/vis/cull_instances.c)
 endif()
+
+# DENG-231: GPU meshlet culling (passes/vis/cull_meshlets.c, the cull_meshlets stage of
+# vis_stages.h): frustum, backface-cone and small-meshlet tests per meshlet of each work item, the
+# visible-meshlet list and the raster arguments of both phases. Its shader is the engine shader
+# vis_meshlet_cull (shaders/culling/meshlet_cull.slang).
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/vis/cull_meshlets.c)
+endif()

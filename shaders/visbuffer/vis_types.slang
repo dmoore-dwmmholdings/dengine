@@ -132,3 +132,26 @@ public DeVisDispatchArgs de_vis_dispatch_args(uint count)
     a.count = count;
     return a;
 }
+
+/// The raster arguments of one culling phase (32 bytes; DENG-231). Meshlet culling
+/// (shaders/culling/meshlet_cull.slang) writes one per phase for both raster paths. The phase's
+/// visible meshlets are the entries [first, first + count) of the view's visible-meshlet list
+/// (DeVisMeshlet): phase 2's entries follow phase 1's, so a packed vis ID names one entry.
+///   bytes  0..11  de_gpu_cmd_dispatch_mesh_indirect arguments: one mesh-shader group per visible
+///                 meshlet of the phase, de_vis_dispatch_groups(count) (DENG-234)
+///   bytes 12..15  first: the phase's first entry
+///   bytes 16..31  de_gpu_cmd_dispatch_indirect arguments and count, as DeVisDispatchArgs: one
+///                 group per visible meshlet (DENG-235)
+/// Like DeVisDispatchArgs they are always valid (x, y >= 1): a group whose de_vis_group_index is
+/// >= count does nothing, and entry first + index is the meshlet it draws.
+public struct DeVisRasterArgs
+{
+    public uint mesh_x;
+    public uint mesh_y;
+    public uint mesh_z;
+    public uint first;
+    public uint expand_x;
+    public uint expand_y;
+    public uint expand_z;
+    public uint count;
+};
