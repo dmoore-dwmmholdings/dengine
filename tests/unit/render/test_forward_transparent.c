@@ -20,6 +20,10 @@
  *                                       back to front (the golden), at every covered pixel
  *   forward_lighting_matches_deferred   a blended quad of alpha 1 against the same quad opaque
  *                                       (deferred), point-lit: within 1 %
+ *   deferred_layers_*_match_forward     (DENG-429) the same with a clearcoat, sheen, iridescence
+ *                                       or anisotropy layer: the deferred pass restores the layer
+ *                                       from the pixel's material, so it matches the forward pass
+ *                                       within 1 % (and differs from the plain base)
  *   forward_double_sided_two_draws      a double-sided quad seen from behind: back then front
  *                                       draw, visible; single-sided: one draw, culled
  *   forward_scene_color_copy            a transmissive quad over an emissive floor: the copy is
@@ -1040,16 +1044,58 @@ static void back_to_front(lx *f, de_gpu_backend b) {
     EXPECT_EQ(bad, 0u);
 }
 
+/* The Standard layers the deferred comparisons cover (DENG-429). */
+typedef enum fx_layer {
+    FX_LAYER_NONE,
+    FX_LAYER_CLEARCOAT,
+    FX_LAYER_SHEEN,
+    FX_LAYER_IRIDESCENCE,
+    FX_LAYER_ANISOTROPY
+} fx_layer;
+
 /* A Standard quad blended with alpha 1 against the same quad opaque (deferred), lit by a point
- * light and the sun: within 1 % at every interior pixel. */
-static void matches_deferred(lx *f, de_gpu_backend b) {
+ * light and the sun: within 1 % at every interior pixel. With a layer (DENG-429), the deferred
+ * pass must restore it from the pixel's material (the G-buffer does not keep it); the forward pass
+ * resolves it per fragment. */
+static void matches_deferred_layer(lx *f, de_gpu_backend b, fx_layer layer) {
     lx_open(f, b);
     lx_floor(f, mat_unlit(0.0f, 0.0f, 0.0f, 1.0f, 0));
     /* Values the thin G-buffer stores exactly (8-bit sRGB base colour 128, roughness 153 / 255),
      * so the comparison measures the shading, not the deferred path's quantization. */
     const u32 quad = mat_standard(0.2158605f, 1.0f, DE_COOKED_ALPHA_BLEND, false);
-    mat_of(quad)->standard.roughness = 0.6f;
-    world_set(&f->w, 1, lx_mesh_plane(f, 2, 2, 2.0f), at(0, 0, 3), quad);
+    de_standard_material *sm = &mat_of(quad)->standard;
+    sm->roughness = 0.6f;
+    switch (layer) {
+    case FX_LAYER_CLEARCOAT:
+        sm->clearcoat = 1.0f;
+        /* Rough enough that the G-buffer's 11-bit normal does not move the coat's peak (a
+         * roughness of 0.15 differs by up to 6 % at the peak, from the normal alone). */
+        sm->clearcoat_roughness = 0.4f;
+        break;
+    case FX_LAYER_SHEEN:
+        sm->sheen_color = (de_vec3){1.0f, 0.6f, 0.3f};
+        sm->sheen_roughness = 0.5f;
+        break;
+    case FX_LAYER_IRIDESCENCE:
+        sm->iridescence = 1.0f;
+        sm->iridescence_ior = 1.3f;
+        sm->iridescence_thickness_min = 100.0f;
+        sm->iridescence_thickness_max = 400.0f;
+        sm->roughness = 0.4f; /* 102 / 255 */
+        break;
+    case FX_LAYER_ANISOTROPY:
+        sm->anisotropy = 0.8f;
+        sm->anisotropy_rotation = 0.5f;
+        sm->roughness = 0.4f; /* 102 / 255 */
+        break;
+    case FX_LAYER_NONE:
+        break;
+    }
+    /* Anisotropy: the quad turned a quarter about +z, so its tangent (world +y) is not the frame
+     * the normal alone would give (+x); the deferred pass must take the triangle's tangent. */
+    const f32 turn = layer == FX_LAYER_ANISOTROPY ? 1.5707963f : 0.0f;
+    world_set(&f->w, 1, lx_mesh_plane(f, 2, 2, 2.0f),
+              trs((de_vec3){0, 0, 3}, (de_vec3){0, 0, 1}, turn, 1.0f), quad);
     point_light(f, 0, 0.6f, 0.4f, 5.0f, 3000.0f);
     const DeLight sun = {.kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = 4.0f};
     world_light(&f->w, 1, &sun,
@@ -1083,7 +1129,33 @@ static void matches_deferred(lx *f, de_gpu_backend b) {
     EXPECT_TRUE(checked > 2000u);
     EXPECT_TRUE(peak > 0.01f);
     EXPECT_EQ(bad, 0u);
+    if (layer != FX_LAYER_NONE) {
+        /* The layer shows: the same quad deferred without it differs (before DENG-429 the
+         * deferred pass lit every layered surface as the plain base). */
+        memcpy(fwd, f->res.lighting, npx * sizeof(f32));
+        sm = &mat_of(quad)->standard;
+        sm->clearcoat = 0.0f;
+        sm->sheen_color = (de_vec3){0.0f, 0.0f, 0.0f};
+        sm->iridescence = 0.0f;
+        sm->anisotropy = 0.0f;
+        lx_run(f);
+        f32 change = 0.0f;
+        for (u32 y = 0; y < f->height; ++y)
+            for (u32 x = 0; x < f->width; ++x) {
+                if (covers(f, x, y, 0, 0, 3, 2.0f, 0.05f) != 1)
+                    continue;
+                const f32 *a = px_of(fwd, f, x, y), *d = px_of(f->res.lighting, f, x, y);
+                for (u32 ch = 0; ch < 3; ++ch)
+                    change = fmaxf(change, fabsf(a[ch] - d[ch]) / fmaxf(d[ch], 1e-6f));
+            }
+        printf("largest change against the plain base: %.4f\n", change);
+        EXPECT_TRUE(change > 0.05f);
+    }
     free(fwd);
+}
+
+static void matches_deferred(lx *f, de_gpu_backend b) {
+    matches_deferred_layer(f, b, FX_LAYER_NONE);
 }
 
 /* A quad turned away from the camera: double-sided, it draws twice (back faces, then front
@@ -1189,6 +1261,18 @@ static void scene_color(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(forward, forward_lighting_matches_deferred_##sfx, lx) {                                 \
         matches_deferred(f, backend);                                                              \
+    }                                                                                              \
+    TEST_F(forward, deferred_layers_clearcoat_match_forward_##sfx, lx) {                           \
+        matches_deferred_layer(f, backend, FX_LAYER_CLEARCOAT);                                    \
+    }                                                                                              \
+    TEST_F(forward, deferred_layers_sheen_match_forward_##sfx, lx) {                               \
+        matches_deferred_layer(f, backend, FX_LAYER_SHEEN);                                        \
+    }                                                                                              \
+    TEST_F(forward, deferred_layers_iridescence_match_forward_##sfx, lx) {                         \
+        matches_deferred_layer(f, backend, FX_LAYER_IRIDESCENCE);                                  \
+    }                                                                                              \
+    TEST_F(forward, deferred_layers_anisotropy_match_forward_##sfx, lx) {                          \
+        matches_deferred_layer(f, backend, FX_LAYER_ANISOTROPY);                                   \
     }                                                                                              \
     TEST_F(forward, forward_double_sided_two_draws_##sfx, lx) {                                    \
         double_sided(f, backend);                                                                  \
