@@ -192,3 +192,85 @@ public float2 de_vis_meshlet_uv0(DeGpuMesh mesh, DeVisMeshletInfo m, uint v)
 {
     return de_vis_mesh_uv0(mesh, de_vis_meshlet_vertex(mesh, m, v));
 }
+
+// ---- DENG-238 (additions; the functions above are unchanged): the other vertex streams ----
+
+/// The vertex streams of normals, tangents, UV set 1 and colour 0 (de_cooked_stream) and their
+/// formats (de_cooked_vertex_format).
+public static const uint DE_VIS_STREAM_NORMAL = 1;
+public static const uint DE_VIS_STREAM_TANGENT = 2;
+public static const uint DE_VIS_STREAM_UV1 = 4;
+public static const uint DE_VIS_STREAM_COLOR0 = 5;
+public static const uint DE_VIS_VF_OCT16 = 6;
+public static const uint DE_VIS_VF_OCT16_SIGN = 7;
+public static const uint DE_VIS_VF_UNORM8X4 = 9;
+
+/// A signed 16-bit value as snorm (de_cooked_snorm16: max(q / 32767, -1)).
+float vis_snorm16(uint q)
+{
+    int v = int(q << 16) >> 16;
+    return max(float(v) / 32767.0, -1.0);
+}
+
+/// The unit vector of an octahedral pair (de_cooked_oct_decode).
+float3 vis_oct_decode(float x, float y)
+{
+    float z = 1.0 - abs(x) - abs(y);
+    float t = z < 0.0 ? -z : 0.0;
+    x += x >= 0.0 ? -t : t;
+    y += y >= 0.0 ? -t : t;
+    return normalize(float3(x, y, z));
+}
+
+/// True when mesh `mesh` stores stream `stream` (0 .. 7).
+public bool de_vis_mesh_has_stream(DeGpuMesh mesh, uint stream)
+{
+    return mesh.stream_format[stream >> 2][stream & 3u] != 0u &&
+           mesh.stream_offset[stream >> 2][stream & 3u] != DE_GPU_NONE;
+}
+
+/// The object-space normal of mesh vertex `vertex` (OCT16), (0, 0, 1) without normals.
+public float3 de_vis_mesh_normal(DeGpuMesh mesh, uint vertex)
+{
+    if (mesh.stream_format[0].y != DE_VIS_VF_OCT16)
+        return float3(0.0, 0.0, 1.0);
+    uint q = de_bytes(mesh.vertices).load(mesh.stream_offset[0].y + vertex * 4u);
+    return vis_oct_decode(vis_snorm16(q & 0xFFFFu), vis_snorm16(q >> 16));
+}
+
+/// The object-space tangent of mesh vertex `vertex` (OCT16_SIGN): xyz unit, w the bitangent sign
+/// (de_cooked_mesh_tangent); (1, 0, 0, 1) without tangents.
+public float4 de_vis_mesh_tangent(DeGpuMesh mesh, uint vertex)
+{
+    if (mesh.stream_format[0].z != DE_VIS_VF_OCT16_SIGN)
+        return float4(1.0, 0.0, 0.0, 1.0);
+    uint q = de_bytes(mesh.vertices).load(mesh.stream_offset[0].z + vertex * 4u);
+    uint qy = (q >> 16) & 0xFFFEu;
+    float3 t = vis_oct_decode(vis_snorm16(q & 0xFFFFu), vis_snorm16(qy));
+    return float4(t, (q & 0x10000u) != 0u ? -1.0 : 1.0);
+}
+
+/// UV set 1 of mesh vertex `vertex` (as de_vis_mesh_uv0, with DeGpuMesh.uv_transform[1]).
+public float2 de_vis_mesh_uv1(DeGpuMesh mesh, uint vertex)
+{
+    uint format = mesh.stream_format[1].x;
+    uint base = mesh.stream_offset[1].x;
+    DeBytes s = de_bytes(mesh.vertices);
+    if (format == DE_VIS_VF_F32X2)
+        return asfloat(s.load2(base + vertex * 8u));
+    if (format != DE_VIS_VF_UNORM16X2)
+        return float2(0.0, 0.0);
+    uint q = s.load(base + vertex * 4u);
+    float4 t = mesh.uv_transform[1];
+    return t.xy + float2(float(q & 0xFFFFu), float(q >> 16)) * t.zw;
+}
+
+/// Colour 0 of mesh vertex `vertex` (UNORM8X4, linear RGBA), white without colours.
+public float4 de_vis_mesh_color0(DeGpuMesh mesh, uint vertex)
+{
+    if (mesh.stream_format[1].y != DE_VIS_VF_UNORM8X4)
+        return float4(1.0, 1.0, 1.0, 1.0);
+    uint q = de_bytes(mesh.vertices).load(mesh.stream_offset[1].y + vertex * 4u);
+    return float4(float(q & 0xFFu), float((q >> 8) & 0xFFu), float((q >> 16) & 0xFFu),
+                  float(q >> 24)) / 255.0;
+}

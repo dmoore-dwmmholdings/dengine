@@ -528,3 +528,34 @@ if(TARGET test_render_picking)
         endif()
     endif()
 endif()
+
+# DENG-238: the material resolve (src/render/passes/vis/resolve.c, gbuffer.h; the engine shader
+# vis_resolve), executable test_render_resolve; CTest names render_resolve.<suite>.<test>. Planes of
+# meshlet patches with every vertex stream and test textures go through the whole vis frame; the
+# reconstructed positions and UVs against a CPU ray cast, motion vectors, the feedback, the Unlit
+# dispatch and the tile counts. texture_lod_vs_hw cooks tests/unit/render/data/resolve_lod_ref.slang
+# at test time (DE_RS_TEST_COOK; it SKIPs without the shader importer). The GPU tests run per
+# backend (_metal, _vulkan, _d3d12; SKIP without the device; CI: lavapipe and WARP golden jobs).
+de_add_test(NAME render_resolve
+    SOURCES test_resolve.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_resolve)
+    target_include_directories(test_render_resolve PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_resolve PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_RS_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_resolve PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_resolve PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_resolve PRIVATE DE_RS_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_resolve PRIVATE version)
+        de_d3d12_agility_deploy(test_render_resolve)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_resolve)
+        endif()
+    endif()
+endif()

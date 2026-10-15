@@ -510,6 +510,15 @@ typedef struct de__vis_context {
      * internal size when the desc gives none. */
     u32 output_width, output_height;
 
+    /* ---- DENG-238: material resolve (resolve.c; gbuffer.h has the layout; invalid when it did not
+     * run) ---- */
+    /** The thin G-buffer at width x height, indexed DE__GB0 .. DE__GB_LIGHTING (gbuffer.h):
+     * GB0..GB2, motion vectors and the HDR lighting target (emissive). Left in
+     * DE_ACCESS_SHADER_WRITE; readers declare their access (STORAGE | SAMPLED | COPY_SRC). */
+    de_rg_resource gbuffer[5];
+    /** Tests (de__vis_resolve_set_debug): RGBA32F world position (xyz, 1) and UV0 / UV1 per
+     * pixel of a resolved surface. Invalid otherwise. */
+    de_rg_resource resolve_debug_pos, resolve_debug_uv;
     /* ---- later S13 tasks: append fields here ---- */
 } de__vis_context;
 
@@ -831,6 +840,32 @@ typedef struct de__vis_pick_stats {
 de__vis_pick_stats de__vis_pick_get_stats(const de__vis_shared *s);
 /** The `public static const uint` values of pick.slang. */
 const de__vis_layout_const *de__vis_pick_layout_consts(u32 *count);
+
+/* ---------- Material resolve (resolve.c), DENG-238 ---------- */
+
+/** Most sampled-texture indices the feedback buffer covers (u32 each). */
+#define DE__VIS_FEEDBACK_MAX 65536u
+/** The value of a texture no recorded pixel sampled (feedback.slang DE_FEEDBACK_NONE). */
+#define DE__VIS_FEEDBACK_NONE 255u
+/** What the CPU last read back of one view's resolve (one to a few frames late). */
+typedef struct de__vis_resolve_stats {
+    bool valid;
+    u64 frame;
+    u32 tiles[DE__GS_MATERIAL_MODELS]; /**< tiles each model's dispatch processed */
+    const u32 *feedback; /**< finest mip per sampled-texture index, DE__VIS_FEEDBACK_NONE: not
+                              sampled (valid until the view's next frame reads back) */
+    u32 feedback_count;  /**< entries of `feedback` */
+} de__vis_resolve_stats;
+de__vis_resolve_stats de__vis_view_resolve_stats(const de__vis_shared *s, u32 slot);
+/** Test overrides of the resolve. */
+typedef struct de__vis_resolve_debug {
+    bool targets;  /**< also write resolve_debug_pos / resolve_debug_uv */
+    bool readback; /**< read the feedback and tile counters back (as r.texture_feedback 1) */
+} de__vis_resolve_debug;
+void de__vis_resolve_set_debug(de__vis_shared *s, const de__vis_resolve_debug *d);
+/** The `public static const uint` values of resolve_standard.slang, gbuffer.slang and
+ * feedback.slang. */
+const de__vis_layout_const *de__vis_resolve_layout_consts(u32 *count);
 
 DE_EXTERN_C_END
 
