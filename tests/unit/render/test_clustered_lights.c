@@ -7,8 +7,8 @@
  * camera 10 m above looking down) and lights; the whole vis frame runs (with the resolve's debug
  * position target), then de__lighting_build, and a test pass reads back the lighting target, the
  * G-buffer, the split targets and the cluster lists. The CPU reference shades each pixel from its
- * decoded G-buffer with the Standard model of brdf_ref.c (the C mirror of resolve_model.slang's
- * evaluate), the light units of light_data.c, and the cluster bounds and light tests of
+ * decoded G-buffer (materials with specular 0 and metallic 0, for which the Standard model is
+ * exactly Lambert), the light units of light_data.c, and the cluster bounds and light tests of
  * light_data.c. Area lights are compared with a numerical integration of the form factor.
  * The GPU tests run per backend (_metal, _vulkan, _d3d12; SKIP without the device or the engine
  * shaders; CI: lavapipe and WARP).
@@ -31,12 +31,12 @@
 #include <dengine/de_platform.h>
 #include <dengine/de_render.h>
 
-#include "brdf_ref.h"
 #include "gpu/gpu_backend.h"
 #include "render/formats/de_cooked_material.h"
 #include "render/formats/de_cooked_mesh.h"
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
+#include "render/materials/brdf_luts.h"
 #include "render/loaders/render_assets.h"
 #include "render/materials/material_models.h"
 #include "render/passes/vis/gbuffer.h"
@@ -432,6 +432,7 @@ typedef struct lx {
     de__vis_shared *vis;
     de__material_models *models;
     de__lighting *lt;
+    de__brdf_luts *luts; /* the Standard model's energy LUT (DENG-299) */
     de_gpu_fence fence;
     u64 frames;
     de_gpu_buffer rb;
@@ -505,6 +506,7 @@ static void lx_teardown(lx *f) {
     if (f->dev)
         de_gpu_wait_idle(f->dev);
     de__lighting_destroy(f->lt);
+    de__brdf_luts_destroy(f->luts);
     de__vis_shared_destroy(f->vis);
     de__material_models_destroy(f->models);
     de__gpu_scene_destroy(f->gs);
@@ -620,9 +622,17 @@ static void lx_open(lx *f, de_gpu_backend backend) {
         snprintf(why, sizeof why, "the vis frame is off: %.600s", f->vis->why);
         SKIP(why);
     }
+    ASSERT_EQ(de__brdf_luts_create(f->dev, &f->alloc, &f->luts), DE_OK);
+    u64 lut_value = 0;
+    const de_gpu_fence lut_fence = de__brdf_luts_fence(f->luts, &lut_value);
+    if (DE_HANDLE_VALID(lut_fence))
+        ASSERT_EQ(de_gpu_fence_wait(f->dev, lut_fence, lut_value, FIRST_FRAME_WAIT_NS), DE_OK);
     ASSERT_EQ(
-        de__lighting_create_ex(
-            &(de__lighting_desc){.device = f->dev, .allocator = &f->alloc, .vis = f->vis}, &f->lt),
+        de__lighting_create_ex(&(de__lighting_desc){.device = f->dev,
+                                                    .allocator = &f->alloc,
+                                                    .vis = f->vis,
+                                                    .brdf_lut = de__brdf_luts_bindless(f->luts)},
+                               &f->lt),
         DE_OK);
     if (!de__lighting_enabled(f->lt)) {
         snprintf(why, sizeof why, "lighting is off: %.600s", f->lt->why);
@@ -934,36 +944,13 @@ static bool surf_at(const lx_result *r, size_t i, surf *s) {
     return true;
 }
 
-/* A local frame around n. */
-static void frame_of(const f32 n[3], f32 t[3], f32 b[3]) {
-    const f32 a[3] = {fabsf(n[0]) < 0.9f ? 1.0f : 0.0f, fabsf(n[0]) < 0.9f ? 0.0f : 1.0f, 0.0f};
-    t[0] = a[1] * n[2] - a[2] * n[1];
-    t[1] = a[2] * n[0] - a[0] * n[2];
-    t[2] = a[0] * n[1] - a[1] * n[0];
-    const f32 l = sqrtf(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
-    for (u32 k = 0; k < 3; ++k)
-        t[k] /= l;
-    b[0] = n[1] * t[2] - n[2] * t[1];
-    b[1] = n[2] * t[0] - n[0] * t[2];
-    b[2] = n[0] * t[1] - n[1] * t[0];
-}
-
-static brdf_v3 to_local(const f32 v[3], const f32 t[3], const f32 b[3], const f32 n[3]) {
-    return brdf_v3_make(v[0] * t[0] + v[1] * t[1] + v[2] * t[2],
-                        v[0] * b[0] + v[1] * b[1] + v[2] * b[2],
-                        v[0] * n[0] + v[1] * n[1] + v[2] * n[2]);
-}
-
-/* BSDF x cos of the Standard model (base `base`) for light from world direction `wi`. */
-static f32 ref_eval(const lx *f, const surf *s, f32 base, f32 roughness, const f32 wi[3]) {
-    f32 wo[3] = {f->eye.x - s->pos[0], f->eye.y - s->pos[1], f->eye.z - s->pos[2]};
-    const f32 l = sqrtf(wo[0] * wo[0] + wo[1] * wo[1] + wo[2] * wo[2]);
-    for (u32 k = 0; k < 3; ++k)
-        wo[k] /= l;
-    f32 t[3], b[3];
-    frame_of(s->n, t, b);
-    return brdf_standard_evaluate(base, roughness, s->metallic, s->specular,
-                                  to_local(wo, t, b, s->n), to_local(wi, t, b, s->n));
+/* BSDF x cos of the test materials for light from world direction `wi`. The GPU tests' materials
+ * have metallic 0 and specular 0, so the Standard model's dielectric F0 and F90 are 0: no specular
+ * lobe, and the diffuse coupling (1 - Ed) is 1. The model is then exactly Lambert, base / pi, and
+ * the references do not depend on the model's specular details (DENG-299 and later layers). */
+static f32 ref_eval(const surf *s, f32 base, const f32 wi[3]) {
+    const f32 c = wi[0] * s->n[0] + wi[1] * s->n[1] + wi[2] * s->n[2];
+    return c > 0.0f ? base / (f32)PI_D * c : 0.0f;
 }
 
 /* A punctual light of the test (shading units: candela, or lux for directional). */
@@ -1001,13 +988,13 @@ static f32 ref_illuminance(const ref_light *l, const f32 p[3], f32 cutoff, f32 w
 }
 
 /* The reference radiance of surface s from the lights (white). */
-static f32 ref_radiance(const lx *f, const surf *s, const ref_light *ls, u32 n, f32 base) {
+static f32 ref_radiance(const surf *s, const ref_light *ls, u32 n, f32 base) {
     f32 sum = 0.0f;
     for (u32 i = 0; i < n; ++i) {
         f32 wi[3];
         const f32 e = ref_illuminance(&ls[i], s->pos, 0.05f, wi);
         if (e > 0.0f)
-            sum += e * ref_eval(f, s, base, s->roughness, wi);
+            sum += e * ref_eval(s, base, wi);
     }
     return sum;
 }
@@ -1043,7 +1030,7 @@ static void point_lumens(lx *f, de_gpu_backend b) {
         surf s;
         if (!surf_at(r, i, &s))
             continue;
-        const f32 want = ref_radiance(f, &s, &L, 1, s.base);
+        const f32 want = ref_radiance(&s, &L, 1, s.base);
         const f32 got = r->lighting[4 * i];
         if (want < 0.05f)
             continue;
@@ -1056,7 +1043,7 @@ static void point_lumens(lx *f, de_gpu_backend b) {
             f32 wi[3];
             const f32 e_here = ref_illuminance(&L, s.pos, 0.05f, wi);
             const f32 d2 = s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1] + 1.0f;
-            foot_e = got / ref_eval(f, &s, s.base, s.roughness, wi) * d2 *
+            foot_e = got / ref_eval(&s, s.base, wi) * d2 *
                      (e_here > 0.0f ? (L.intensity / d2) / e_here : 1.0f);
         }
     }
@@ -1071,7 +1058,7 @@ static void point_lumens(lx *f, de_gpu_backend b) {
 /* lights_sun_lux: a 100000 lux directional light 30 degrees off the normal. */
 static void sun_lux(lx *f, de_gpu_backend b) {
     lx_open(f, b);
-    lx_floor(f, material_add(0.5f, 0.7f, 0.0f, 0.5f));
+    lx_floor(f, material_add(0.5f, 0.7f, 0.0f, 0.0f));
     const de_affine xf = pointing(0, 0, 5, (de_vec3){1, 0, 0}, 30.0f * (f32)PI_D / 180.0f);
     world_light(
         &f->w, 0,
@@ -1089,7 +1076,7 @@ static void sun_lux(lx *f, de_gpu_backend b) {
         surf s;
         if (!surf_at(r, i, &s))
             continue;
-        const f32 want = ref_radiance(f, &s, &L, 1, s.base);
+        const f32 want = ref_radiance(&s, &L, 1, s.base);
         const f32 got = r->lighting[4 * i];
         ++checked;
         const f32 e = fabsf(got - want) / want;
@@ -1107,7 +1094,7 @@ static void sun_lux(lx *f, de_gpu_backend b) {
  * inside the inner cone, nothing outside the outer one, the t^2 falloff between. */
 static void spot_cone(lx *f, de_gpu_backend b) {
     lx_open(f, b);
-    lx_floor(f, material_add(0.8f, 0.6f, 0.0f, 0.5f));
+    lx_floor(f, material_add(0.8f, 0.6f, 0.0f, 0.0f));
     const f32 inner = 15.0f * (f32)PI_D / 180.0f, outer = 25.0f * (f32)PI_D / 180.0f;
     world_light(&f->w, 0,
                 &(DeLight){.kind = DE_LIGHT_SPOT,
@@ -1131,7 +1118,7 @@ static void spot_cone(lx *f, de_gpu_backend b) {
         if (!surf_at(r, i, &s))
             continue;
         const f32 ang = atan2f(sqrtf(s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1]), 3.0f);
-        const f32 want = ref_radiance(f, &s, &L, 1, s.base);
+        const f32 want = ref_radiance(&s, &L, 1, s.base);
         const f32 got = r->lighting[4 * i];
         peak = want > peak ? want : peak;
         if (ang > outer + 0.01f) {
@@ -1157,7 +1144,7 @@ static void spot_cone(lx *f, de_gpu_backend b) {
  * 0 there), and a 1 lm light without range ends at its derived range sqrt(I / cutoff). */
 static void range_cutoff(lx *f, de_gpu_backend b) {
     lx_open(f, b);
-    lx_floor(f, material_add(0.8f, 0.6f, 0.0f, 0.5f));
+    lx_floor(f, material_add(0.8f, 0.6f, 0.0f, 0.0f));
     world_light(
         &f->w, 0,
         &(DeLight){.kind = DE_LIGHT_POINT, .color = {1, 1, 1}, .intensity = 1000.0f, .range = 2.0f},
@@ -1192,7 +1179,7 @@ static void range_cutoff(lx *f, de_gpu_backend b) {
             bad += got != 0.0f;
         } else {
             ++within;
-            const f32 want = ref_radiance(f, &s, L, 2, s.base);
+            const f32 want = ref_radiance(&s, L, 2, s.base);
             bad += !close_to(got, want, 0.01f, 1e-3f);
         }
     }
@@ -1313,7 +1300,7 @@ static void emissive_proxy(lx *f, de_gpu_backend b) {
         surf s;
         if (!surf_at(r, i, &s) || s.pos[2] > 0.5f)
             continue; /* the emitter itself */
-        const f32 want = ref_radiance(f, &s, &L, 1, s.base);
+        const f32 want = ref_radiance(&s, &L, 1, s.base);
         const f32 got = r->lighting[4 * i];
         ++checked;
         bad += !close_to(got, want, 0.015f, 1e-3f);
@@ -1386,12 +1373,15 @@ static void only_classified(lx *f, de_gpu_backend b) {
     EXPECT_EQ(bad, 0u);
 }
 
-/* lighting_split_diffuse_specular: with r.split_lighting the diffuse and specular targets hold
- * the two parts (specular = the model with base colour 0), they add up to the lighting target,
- * and the lighting target is the same as without the split. */
+/* lighting_split_diffuse_specular: with r.split_lighting the diffuse and specular targets add up
+ * to the lighting target, which is the same as without the split; for a dielectric the specular
+ * part does not change with the base colour and the diffuse part scales with it (the split's
+ * definition: specular = the model with base colour 0). */
 static void split(lx *f, de_gpu_backend b) {
     lx_open(f, b);
-    lx_floor(f, material_add(0.6f, 0.4f, 0.3f, 0.5f));
+    const u32 dark = material_add(0.2f, 0.4f, 0.0f, 0.5f);
+    const u32 light = material_add(0.8f, 0.4f, 0.0f, 0.5f);
+    lx_floor(f, light);
     world_light(&f->w, 0,
                 &(DeLight){.kind = DE_LIGHT_POINT, .color = {1, 1, 1}, .intensity = 3000.0f},
                 at(1.0f, -0.5f, 1.5f));
@@ -1399,37 +1389,56 @@ static void split(lx *f, de_gpu_backend b) {
                 &(DeLight){.kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = 2000.0f},
                 pointing(0, 0, 5, (de_vec3){0, 1, 0}, 0.4f));
     lx_run(f);
-    f32 *plain = (f32 *)zalloc((size_t)f->width * f->height * 4u * sizeof(f32));
-    memcpy(plain, f->res.lighting, (size_t)f->width * f->height * 4u * sizeof(f32));
+    const size_t n = (size_t)f->width * f->height * 4u;
+    f32 *plain = (f32 *)zalloc(n * sizeof(f32));
+    memcpy(plain, f->res.lighting, n * sizeof(f32));
     EXPECT_TRUE(f->res.diffuse == NULL);
     ASSERT_TRUE(cvar_set("r.split_lighting", "1"));
     lx_run(f);
-    const lx_result *r = &f->res;
-    ASSERT_TRUE(r->diffuse != NULL && r->specular != NULL);
-    const de_affine dxf = pointing(0, 0, 5, (de_vec3){0, 1, 0}, 0.4f);
-    const ref_light L[2] = {{.kind = DE__LIGHT_POINT,
-                             .pos = {1.0f, -0.5f, 1.5f},
-                             .intensity = 3000.0f / (4.0f * (f32)PI_D)},
-                            {.kind = DE__LIGHT_DIRECTIONAL,
-                             .dir = {-dxf.m[6], -dxf.m[7], -dxf.m[8]},
-                             .intensity = 2000.0f}};
+    ASSERT_TRUE(f->res.diffuse != NULL && f->res.specular != NULL);
+    f32 *dif_l = (f32 *)zalloc(n * sizeof(f32)), *spe_l = (f32 *)zalloc(n * sizeof(f32));
+    memcpy(dif_l, f->res.diffuse, n * sizeof(f32));
+    memcpy(spe_l, f->res.specular, n * sizeof(f32));
+    const f32 base_l = de__gb_srgb_decode(de__gb_srgb_encode(0.8f));
     u32 checked = 0, bad = 0;
-    for (size_t i = 0; i < (size_t)r->width * r->height; ++i) {
+    f64 sum_spec = 0.0, sum_total = 0.0;
+    {
+        const lx_result *r = &f->res;
+        for (size_t i = 0; i < n / 4u; ++i) {
+            surf s;
+            if (!surf_at(r, i, &s))
+                continue;
+            ++checked;
+            const f32 total = r->lighting[4 * i];
+            bad += !close_to(dif_l[4 * i] + spe_l[4 * i], total, 0.004f, 1e-3f);
+            bad += !close_to(total, plain[4 * i], 0.002f, 1e-3f);
+            bad += dif_l[4 * i] < 0.0f || spe_l[4 * i] < 0.0f;
+            sum_spec += spe_l[4 * i];
+            sum_total += total;
+        }
+    }
+    /* The same floor with base colour 0.2. */
+    world_set(&f->w, 0, f->w.f.instances.mesh[0].id, at(0, 0, 0), dark);
+    lx_run(f);
+    const lx_result *r = &f->res;
+    ASSERT_TRUE(r->diffuse != NULL);
+    u32 compared = 0;
+    for (size_t i = 0; i < n / 4u; ++i) {
         surf s;
-        if (!surf_at(r, i, &s))
+        if (!surf_at(r, i, &s) || !(plain[4 * i + 3] > 0.5f))
             continue;
-        ++checked;
-        const f32 total = r->lighting[4 * i], dif = r->diffuse[4 * i], spe = r->specular[4 * i];
-        const f32 want_spec = ref_radiance(f, &s, L, 2, 0.0f);
-        const f32 want_total = ref_radiance(f, &s, L, 2, s.base);
-        bad += !close_to(dif + spe, total, 0.004f, 1e-3f);
-        bad += !close_to(spe, want_spec, 0.01f, 1e-3f);
-        bad += !close_to(dif, want_total - want_spec, 0.01f, 2e-3f * want_total + 1e-3f);
-        bad += !close_to(total, plain[4 * i], 0.002f, 1e-3f);
+        ++compared;
+        bad += !close_to(r->specular[4 * i], spe_l[4 * i], 0.004f, 1e-3f);
+        bad += !close_to(r->diffuse[4 * i] * (base_l / s.base), dif_l[4 * i], 0.006f, 2e-3f);
     }
     free(plain);
-    printf("split: %u px, %u bad\n", checked, bad);
+    free(dif_l);
+    free(spe_l);
+    printf("split: %u px (%u compared across base colours), specular %.1f%% of the light, %u bad\n",
+           checked, compared, 100.0 * sum_spec / (sum_total > 0.0 ? sum_total : 1.0), bad);
     EXPECT_GT(checked, 1000u);
+    EXPECT_GT(compared, 1000u);
+    EXPECT_TRUE(sum_spec > 0.01 * sum_total);
     EXPECT_EQ(bad, 0u);
 }
 

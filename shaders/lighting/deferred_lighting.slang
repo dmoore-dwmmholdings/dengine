@@ -4,7 +4,7 @@
 //
 //   cs_lighting_clear_split  8 x 8 threads per group: the diffuse and specular targets to 0 (only
 //                            when the frame has them)
-//   cs_lighting_standard     de_lighting_tiles<ResolveStandardModel>: one 64-thread group per tile
+//   cs_lighting_standard     de_lighting_tiles<StandardModel>: one 64-thread group per tile
 //                            of a material model's tile list (classification, DENG-237; an indirect
 //                            dispatch per model), one thread per pixel of the tile whose G-buffer
 //                            model is the dispatch's model. Unlit (model 1) is never dispatched,
@@ -26,7 +26,7 @@
 import bindless;
 import push_constants;
 import "../lighting/lighting_common";
-import "../visbuffer/resolve_model";
+import "../materials/standard/standard";
 import "../visbuffer/gbuffer";
 import "../visbuffer/vis_types";
 
@@ -106,6 +106,7 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
         float view_depth = -dot(sc.view[2], float4(pos, 1.0));
         uint cluster = de_cluster_index(lv, p, view_depth);
         SurfaceData s = de_surface_from_gb(g);
+        s.brdf_lut = lv.brdf_lut; // the Standard model's energy LUT (DENG-299)
         bool sss = (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
         bool split = targets && (sss || (lv.flags & DE_LIGHTING_SPLIT) != 0u);
         DeDirect d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split);
@@ -126,7 +127,7 @@ public void de_lighting_tiles<M : IMaterialModel>(uint3 group, uint t, LightingP
 void cs_lighting_standard(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
                           uniform LightingParams pc)
 {
-    de_lighting_tiles<ResolveStandardModel>(group, thread.x, pc);
+    de_lighting_tiles<StandardModel>(group, thread.x, pc);
 }
 
 [shader("compute")]

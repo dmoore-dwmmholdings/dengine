@@ -628,13 +628,13 @@ endif()
 # lighting_cull, lighting_deferred), executable test_render_clustered_lights; CTest names
 # render_clustered_lights.<suite>.<test>. The GPU tests run the whole vis frame and the lighting
 # build over planes and lights of a fake render world and compare the lighting target, the split
-# targets and the cluster lists with CPU references (brdf_ref.c's Standard model, light_data.c's
+# targets and the cluster lists with CPU references (Lambert materials, light_data.c's
 # units and cluster arithmetic, a numerical form factor for the area lights); per backend (_metal,
 # _vulkan, _d3d12; SKIP without the device; CI: lavapipe and WARP golden jobs). The CPU tests
 # check the units, the LTC integral and tables, the grid, a conservative random cluster test and
 # the shader constants and struct sizes (layout_match parses shaders/lighting/).
 de_add_test(NAME render_clustered_lights
-    SOURCES test_clustered_lights.c brdf_ref.c brdf_ref.h render_d3d12_test.c
+    SOURCES test_clustered_lights.c render_d3d12_test.c
     LIBS ${_de_vis_libs}
     LABELS unit gpu render
     TIMEOUT 300)

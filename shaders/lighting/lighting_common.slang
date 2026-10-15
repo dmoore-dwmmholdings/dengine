@@ -55,7 +55,7 @@ public struct DeLightingView
     public uint flags;           // DE_LIGHTING_*
     public uint light_slots;     // the GPU scene's light table slots
     public uint instance_slots;  // its instance table slots
-    public uint reserved;
+    public uint brdf_lut;        // the energy LUT's bindless index (SurfaceData.brdf_lut; DENG-299)
     public float4 inv_proj[4];   // clip -> view space (rows)
     public LightingInputs inputs;
 };

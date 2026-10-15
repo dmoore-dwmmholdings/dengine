@@ -84,7 +84,8 @@ typedef struct de__lighting_view {
     f32 near_z, far_z, log_scale, log_bias;
     f32 cutoff, emissive_threshold, pre_exposure;
     u32 proxy_capacity;
-    u32 flags, light_slots, instance_slots, reserved;
+    u32 flags, light_slots, instance_slots;
+    u32 brdf_lut;       /**< the Standard model's energy LUT (de__renderer_brdf_lut; 0 = none) */
     f32 inv_proj[4][4]; /**< clip -> view, rows */
     de__lighting_inputs_gpu inputs;
 } de__lighting_view;
@@ -143,6 +144,7 @@ typedef struct de__lighting_desc {
     de_gpu_device *device;
     const de_allocator *allocator; /**< NULL = the heap */
     de__vis_shared *vis;           /**< the vis frame whose contexts it lights */
+    u32 brdf_lut; /**< the energy LUT's bindless index (de__renderer_brdf_lut), 0 = none */
 } de__lighting_desc;
 
 /** Makes the lighting state: cvars, kernels (engine shaders lighting_*), the LTC textures (one
@@ -250,6 +252,7 @@ struct de__lighting {
     const de_allocator *alloc;
     de_log_category log;
     struct de__vis_shared *vis;
+    u32 brdf_lut; /**< de__lighting_desc.brdf_lut */
     bool enabled;
     char why[256];
     de__vis_kernel cluster_build; /* lighting_clusters */

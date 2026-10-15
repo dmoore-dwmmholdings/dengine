@@ -25,6 +25,7 @@
  */
 #include "render/lighting/lighting.h"
 
+#include "render/materials/brdf_luts.h"
 #include "render/passes/vis/gbuffer.h"
 #include "render/renderer_internal.h"
 
@@ -326,6 +327,7 @@ de_result de__lighting_create_ex(const de__lighting_desc *desc, de__lighting **o
     lt->dev = desc->device;
     lt->alloc = a;
     lt->vis = desc->vis;
+    lt->brdf_lut = desc->brdf_lut;
     lt->log = de_log_register_category("render", DE_LOG_INFO);
     register_cvars(lt);
     if (lt->vis == NULL || !lt->vis->enabled) {
@@ -620,6 +622,7 @@ static void fill_view(de__lighting *lt, const de__vis_context *vc, const de__lig
     const bool ortho = vc->proj.m[11] == 0.0f; /* row 3 is (0, 0, -1, 0) in a perspective */
     lv->flags = (ortho ? DE__LIGHTING_ORTHO : 0u) | (split ? DE__LIGHTING_SPLIT : 0u);
     lv->light_slots = light_slots;
+    lv->brdf_lut = lt->brdf_lut;
     lv->instance_slots =
         lv->emissive_threshold > 0.0f && lv->proxy_capacity > 0 ? vc->instance_count : 0u;
 }
@@ -854,8 +857,12 @@ static void lighting_stage(de__view_frame *vf, void *user) {
 de_result de__lighting_create(de_renderer *r, de__vis_shared *vis, de__lighting **out) {
     *out = NULL;
     de__lighting *lt = NULL;
-    de_result res = de__lighting_create_ex(
-        &(de__lighting_desc){.device = r->dev, .allocator = r->alloc, .vis = vis}, &lt);
+    de_result res =
+        de__lighting_create_ex(&(de__lighting_desc){.device = r->dev,
+                                                    .allocator = r->alloc,
+                                                    .vis = vis,
+                                                    .brdf_lut = de__renderer_brdf_lut(r)},
+                               &lt);
     if (res != DE_OK)
         return res;
     res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, 0, "lighting", lighting_stage, lt);
