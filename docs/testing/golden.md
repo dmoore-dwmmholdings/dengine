@@ -154,6 +154,7 @@ and `de_prefab_instantiate`.
 - A scene runs frames until at most 1 % of its pixels change between frames, three frames in a
   row, and compares the per-pixel median of those three. This damps the flicker of textured
   surfaces under Metal shader validation (DENG-430).
+- Thresholds: per scene in `scenes.toml`, from the Metal vs lavapipe spread (about 1.5x margin).
 - Determinism: a fixed EV100 on each scene's `DeCamera`, `output.basic` as the output stage, no
   temporal effects.
 - A layer that renders wrong gets a follow-up issue against its owning task, and its references

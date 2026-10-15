@@ -108,7 +108,8 @@ threshold_p99 = 0.05
 # DENG-307: the materials gallery (tests/golden/materials/; one of the three Milestone 1 reference
 # scenes, reused by S20 DENG-278: keep the names). Each scene runs the renderer and the asset system
 # over materials/assets/ until the image settles (fixed EV100, output.basic, no temporal effect).
-# The thresholds are the rhi_* ones. A backend reproduces its own reference exactly; under Metal
+# Thresholds per scene, from the observed Metal (M5 Pro) vs lavapipe spread with about 1.5x
+# margin (Metal vs WARP is smaller). A backend reproduces its own reference exactly; under Metal
 # shader validation (the CTests) textured surfaces flicker in a few patches (DENG-430), which the
 # scene's per-pixel median of its last three frames mostly removes (measured mean <= 0.0003, p99
 # <= 0.0035). A layer that renders wrong is a bug of its owning task (a follow-up issue, e.g.
@@ -116,23 +117,23 @@ threshold_p99 = 0.05
 [scene.materials_gallery_ibl]
 description = "materials gallery, every layer (metallic x roughness, IOR, specular, emissive, clearcoat, sheen, anisotropy, iridescence, transmission, volume, diffuse transmission, subsurface, Unlit, alpha mask, alpha blend) lit by a sky environment (DENG-307)"
 size = [512, 224]
-threshold_mean = 0.005
-threshold_p99 = 0.05
+threshold_mean = 0.008  # Metal vs lavapipe: mean 0.0055, p99 0.027
+threshold_p99 = 0.04
 
 [scene.materials_gallery_lights]
-description = "materials gallery lit by a sun, a point, a spot, a rect and a disk light in physical units at EV100 11, no environment (DENG-307)"
+description = "materials gallery lit by a sun, a point, a spot, a rect and a disk light in physical units at EV100 0, no environment (DENG-307)"
 size = [512, 224]
-threshold_mean = 0.005
-threshold_p99 = 0.05
+threshold_mean = 0.007  # Metal vs lavapipe: mean 0.0044, p99 0.022
+threshold_p99 = 0.035
 
 [scene.materials_furnace]
 description = "white dielectric and metal spheres in a uniform environment: every sphere interior within 2 % of the environment radiance x exposure, checked in C (DENG-307)"
 size = [256, 192]
-threshold_mean = 0.005
-threshold_p99 = 0.05
+threshold_mean = 0.001  # Metal vs lavapipe and WARP: mean 0.000003, p99 0
+threshold_p99 = 0.01
 
 [scene.materials_khr_samples]
 description = "procedural stand-ins for the Khronos ClearCoatTest, SheenChair, IridescenceLamp, TransmissionTest and AnisotropyBarnLamp sample models (DENG-307)"
 size = [448, 256]
-threshold_mean = 0.005
-threshold_p99 = 0.05
+threshold_mean = 0.006  # Metal vs lavapipe: mean 0.0037, p99 0.027
+threshold_p99 = 0.04

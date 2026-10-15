@@ -77,6 +77,14 @@
 #define MG_FURNACE_TOLERANCE 0.02
 #define MG_FURNACE_ERODE     3 /* pixels from a sphere's silhouette that are not checked */
 
+/* The runtime cooks sources on load (SOURCE mode) only with the importers: Debug and Dev builds
+ * with the tools (DE_HAS_COOKER). */
+#if defined(DE_HAS_COOKER) && DE_HAS_COOKER
+#define MG_RUNTIME_COOKS 1
+#else
+#define MG_RUNTIME_COOKS 0
+#endif
+
 /* The gallery's models (assets.toml): each scene names their meshes. */
 #define MG_MODEL_COUNT 4u
 static const char *const k_models[MG_MODEL_COUNT] = {"mesh/sphere", "mesh/card", "mesh/box",
@@ -328,9 +336,10 @@ static void mg_close(mg *m) {
 }
 
 static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
-#if !DE_GOLDEN_COOK
+#if !DE_GOLDEN_COOK || !MG_RUNTIME_COOKS
     (void)o;
-    de_golden_skip(ctx, "this build has no cooker: the gallery's assets are cooked on load");
+    de_golden_skip(ctx, "this build's asset system cannot cook sources (Release and Shipping have "
+                        "no importers; DE_HAS_COOKER): the gallery's assets are cooked on load");
 #else
     if (!ctx->caps->base_tier_ok) {
         de_golden_skip(ctx, "below the Base tier (the renderer needs it): %s",
