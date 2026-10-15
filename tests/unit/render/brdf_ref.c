@@ -196,7 +196,7 @@ float brdf_radical_inverse2(u32 i) {
     return (float)i * 2.3283064365386963e-10f;
 }
 
-/* ---------- The S13 Standard model (resolve_model.slang ResolveStandardModel) ---------- */
+/* ---------- The test BSDF of data/brdf_kernels.slang (the S13 placeholder Standard) ---------- */
 
 static float standard_alpha(float roughness) {
     const float a = roughness * roughness;

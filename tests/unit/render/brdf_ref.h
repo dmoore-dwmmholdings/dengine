@@ -45,8 +45,8 @@ float brdf_cosine_hemisphere_pdf(float cos_theta);
 brdf_v3 brdf_sample_uniform_sphere(float u0, float u1);
 float brdf_radical_inverse2(u32 i);
 
-/* The S13 Standard model of shaders/visbuffer/resolve_model.slang (ResolveStandardModel) for a
- * grey base colour: evaluate (BSDF x cos(theta_i)), pdf. */
+/* The reciprocal test BSDF of data/brdf_kernels.slang (the S13 placeholder Standard model, which
+ * DENG-299 replaced) for a grey base colour: evaluate (BSDF x cos(theta_i)), pdf. */
 float brdf_standard_evaluate(float base, float roughness, float metallic, float specular,
                              brdf_v3 wo, brdf_v3 wi);
 float brdf_standard_pdf(float roughness, float metallic, brdf_v3 wo, brdf_v3 wi);

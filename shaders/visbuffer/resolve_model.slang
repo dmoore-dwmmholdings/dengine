@@ -21,16 +21,12 @@
 // the SurfaceData, and the thin G-buffer (gbuffer.slang), the motion vector and the emission go
 // to the targets. A surface with DE_MATERIAL_FEATURE_UNLIT keeps GB1 cleared.
 //
-// The S13 built-in models are here too: ResolveStandardModel (glTF metallic-roughness inputs, a
-// plain GGX + Lambert BSDF) and ResolveUnlitModel. S14 replaces them (DENG-299 Standard, DENG-301
-// Unlit) without changing this file's kernel.
+// The S13 Unlit model is here too (ResolveUnlitModel; DENG-301 replaces it). The Standard model
+// is materials/standard/standard.slang (DENG-299).
 module resolve_model;
 
 import bindless;
 __exported import "../materials/material_interface";
-import "../brdf/ggx";
-import "../brdf/fresnel";
-import "../brdf/sampling";
 import "../scene/scene_types";
 import "../visbuffer/vis_types";
 import "../visbuffer/vis_decode";
@@ -200,141 +196,7 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
     }
 }
 
-/* ---------- The S13 built-in models (DENG-238; S14 DENG-299 / DENG-301 replace them) ---------- */
-
-/// The glTF metallic-roughness inputs of S13: base colour x factor x vertex colour,
-/// metallic-roughness (B, G) x factors, a tangent-space normal map scaled by normal_scale,
-/// occlusion (R), emissive x strength. BSDF: GGX specular with Schlick Fresnel (F0 = 0.04 x
-/// specular for dielectrics, the base colour for metals) plus Lambert diffuse weighted by
-/// (1 - F)(1 - metallic).
-public struct ResolveStandardModel : IMaterialModel
-{
-    public typealias Params = DeGpuMaterial;
-
-    public static Params load_params(DeGpuMaterial material)
-    {
-        return material;
-    }
-
-    public static SurfaceData resolve_gbuffer(Params m, VertexAttribs v, TextureLodInfo lod)
-    {
-        float3 n = v.normal;
-        float4 tangent = v.tangent;
-        // Double-sided materials face the viewer.
-        if ((m.flags & DE_GPU_MATERIAL_DOUBLE_SIDED) != 0u && dot(v.geometric_normal, v.view) < 0.0)
-        {
-            n = -n;
-            tangent.w = -tangent.w;
-        }
-        float4 white = float4(1.0, 1.0, 1.0, 1.0);
-        float4 base = m.base_color * v.color *
-                      de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod, white);
-        float4 mr = de_resolve_sample(m, DE_RESOLVE_TEX_METAL_ROUGH, v, lod, white);
-        float4 nm = de_resolve_sample(m, DE_RESOLVE_TEX_NORMAL, v, lod, float4(0.5, 0.5, 1.0, 1.0));
-        float4 ao = de_resolve_sample(m, DE_RESOLVE_TEX_OCCLUSION, v, lod, white);
-        float4 em = de_resolve_sample(m, DE_RESOLVE_TEX_EMISSIVE, v, lod, white);
-        uint unused;
-        if (de_resolve_texture(m, DE_RESOLVE_TEX_NORMAL, unused) != DE_BINDLESS_INVALID &&
-            v.has_tangent)
-        {
-            float3 tn = (nm.xyz * 2.0 - 1.0) * float3(m.pbr.z, m.pbr.z, 1.0);
-            float3 t = normalize(tangent.xyz - n * dot(n, tangent.xyz));
-            float3 b = cross(n, t) * tangent.w;
-            n = normalize(t * tn.x + b * tn.y + n * tn.z);
-        }
-        SurfaceData s;
-        s.base_color = base.rgb;
-        s.ao = ao.r;
-        s.normal = n;
-        s.roughness = saturate(m.pbr.y * mr.g);
-        s.tangent = v.has_tangent ? tangent : float4(0.0, 0.0, 0.0, 1.0);
-        s.metallic = saturate(m.pbr.x * mr.b);
-        s.specular = m.specular.w;
-        s.emissive = m.emissive.rgb * m.emissive.w * em.rgb;
-        s.model = m.model & (DE_GPU_MATERIAL_MODELS - 1u);
-        s.features = 0u;
-        if ((m.flags & DE_GPU_MATERIAL_DOUBLE_SIDED) != 0u)
-            s.features |= DE_MATERIAL_FEATURE_DOUBLE_SIDED;
-        if (m.clearcoat.w > 0.0)
-            s.features |= DE_MATERIAL_FEATURE_TRANSMISSION;
-        if (m.extra.y > 0.0)
-            s.features |= DE_MATERIAL_FEATURE_DIFFUSE_TRANSMISSION;
-        if (m.extra.z > 0.0)
-            s.features |= DE_MATERIAL_FEATURE_SUBSURFACE;
-        if (m.clearcoat.x > 0.0)
-            s.features |= DE_MATERIAL_FEATURE_CLEARCOAT;
-        return s;
-    }
-
-    static float alpha_of(SurfaceData s)
-    {
-        return max(s.roughness * s.roughness, 1e-3);
-    }
-    static float3 f0_of(SurfaceData s)
-    {
-        float d = 0.04 * s.specular;
-        return lerp(float3(d, d, d), s.base_color, s.metallic);
-    }
-    /// Probability of picking the specular lobe in sample.
-    static float specular_probability(SurfaceData s)
-    {
-        return 0.5 + 0.5 * s.metallic;
-    }
-
-    public static float3 evaluate(SurfaceData s, float3 wo, float3 wi)
-    {
-        if (!(wo.z > 0.0) || !(wi.z > 0.0))
-            return float3(0.0, 0.0, 0.0);
-        float a = alpha_of(s);
-        float3 h = normalize(wo + wi);
-        float3 f = de_fresnel_schlick(f0_of(s), float3(1.0, 1.0, 1.0), dot(wo, h));
-        float3 spec = f * de_ggx_specular(a, a, wo, wi);
-        float3 diff = (1.0 - f) * ((1.0 - s.metallic) * DE_INV_PI) * s.base_color;
-        return (spec + diff) * wi.z;
-    }
-
-    public static float pdf(SurfaceData s, float3 wo, float3 wi)
-    {
-        if (!(wo.z > 0.0) || !(wi.z > 0.0))
-            return 0.0;
-        float a = alpha_of(s);
-        float ps = specular_probability(s);
-        return ps * de_ggx_reflect_pdf(a, a, wo, wi) + (1.0 - ps) * de_cosine_hemisphere_pdf(wi.z);
-    }
-
-    public static BsdfSample sample(SurfaceData s, float3 wo, float3 u)
-    {
-        BsdfSample r;
-        r.wi = float3(0.0, 0.0, 1.0);
-        r.weight = float3(0.0, 0.0, 0.0);
-        r.pdf = 0.0;
-        r.lobe = 0u;
-        if (!(wo.z > 0.0))
-            return r;
-        float ps = specular_probability(s);
-        if (u.z < ps)
-        {
-            float a = alpha_of(s);
-            r.wi = de_reflect(wo, de_ggx_vndf_sample(a, a, wo, u.xy));
-            r.lobe = DE_BSDF_LOBE_SPECULAR;
-        }
-        else
-        {
-            r.wi = de_sample_cosine_hemisphere(u.xy);
-            r.lobe = DE_BSDF_LOBE_DIFFUSE;
-        }
-        r.pdf = pdf(s, wo, r.wi);
-        if (r.pdf > 0.0)
-            r.weight = evaluate(s, wo, r.wi) / r.pdf;
-        return r;
-    }
-
-    public static uint lobes(SurfaceData s)
-    {
-        return s.metallic < 1.0 ? (DE_BSDF_LOBE_DIFFUSE | DE_BSDF_LOBE_SPECULAR)
-                                : DE_BSDF_LOBE_SPECULAR;
-    }
-};
+/* ---------- The S13 Unlit model (DENG-238; S14 DENG-301 replaces it) ---------- */
 
 /// S13 Unlit: base colour x factor x vertex colour, emitted as is (plus the emissive term); no
 /// BSDF. GB1 stays cleared.
@@ -352,12 +214,11 @@ public struct ResolveUnlitModel : IMaterialModel
         float4 base = m.base_color * v.color *
                       de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod,
                                         float4(1.0, 1.0, 1.0, 1.0));
-        SurfaceData s;
+        SurfaceData s = de_surface_default();
         s.base_color = base.rgb;
         s.ao = 1.0;
         s.normal = v.normal;
         s.roughness = 0.0;
-        s.tangent = float4(0.0, 0.0, 0.0, 1.0);
         s.metallic = 0.0;
         s.specular = 0.0;
         s.emissive = base.rgb + m.emissive.rgb * m.emissive.w;

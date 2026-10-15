@@ -287,3 +287,13 @@ if(TARGET de_render)
         materials/material_models.h
         materials/material_models.c)
 endif()
+
+# DENG-299: the Standard material model's energy LUT (materials/brdf_luts.c: the split-sum DFG and
+# the multi-scatter averages, generated at renderer start by the engine shader brdf_lut_gen,
+# shaders/brdf/lut_gen.slang, and a CPU reference). The model itself is
+# shaders/materials/standard/ (standard.slang, standard_base.slang) on shaders/brdf/energy.slang.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE
+        materials/brdf_luts.h
+        materials/brdf_luts.c)
+endif()

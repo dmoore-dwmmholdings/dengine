@@ -6,7 +6,8 @@
 //                        test-only debug targets) to 0
 //   cs_feedback_clear    64 threads per group: the feedback buffer to DE_FEEDBACK_NONE, the
 //                        processed-tile counters to 0
-//   cs_resolve_standard  de_resolve_tiles<ResolveStandardModel> (resolve_model.slang): one
+//   cs_resolve_standard  de_resolve_tiles<StandardModel> (resolve_model.slang, the model in
+//                        materials/standard/standard.slang; DENG-299): one
 //                        64-thread group per tile of a model's tile list, for every model with no
 //                        kernel of its own (Standard, and the built-in ids not implemented yet)
 //   cs_resolve_unlit     de_resolve_tiles<ResolveUnlitModel>, for the Unlit model
@@ -19,6 +20,7 @@ import bindless;
 import push_constants;
 import "../scene/scene_types";
 import "../visbuffer/resolve_model";
+import "../materials/standard/standard";
 import "../visbuffer/feedback";
 
 [shader("compute")]
@@ -55,7 +57,7 @@ void cs_feedback_clear(uint3 id : SV_DispatchThreadID, uniform ResolveParams pc)
 void cs_resolve_standard(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID,
                          uniform ResolveParams pc)
 {
-    de_resolve_tiles<ResolveStandardModel>(group, thread.x, pc);
+    de_resolve_tiles<StandardModel>(group, thread.x, pc);
 }
 
 [shader("compute")]

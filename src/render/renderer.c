@@ -13,6 +13,7 @@
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/loaders/render_assets.h"
+#include "render/materials/brdf_luts.h"
 #include "render/materials/material_models.h"
 #include "render/views_internal.h"
 #include "render/scene/gpu_scene.h"
@@ -45,6 +46,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 static void renderer_free(de_renderer *r) {
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
+    de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
     if (r->uploader != NULL && !r->uploader_orphaned)
         de_render_uploader_destroy(r->uploader);
@@ -195,6 +197,13 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     res = de__material_models_create(r->dev, r->alloc, &r->material_models);
     if (res != DE_OK) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: material models");
+        goto fail;
+    }
+
+    /* DENG-299: the energy LUT, generated on the graphics queue before any frame. */
+    res = de__brdf_luts_create(r->dev, r->alloc, &r->brdf_luts);
+    if (res != DE_OK) {
+        res = DE_FAIL_WRAP(res, "de_renderer_create: brdf LUT");
         goto fail;
     }
 
