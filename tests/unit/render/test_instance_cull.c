@@ -1293,7 +1293,7 @@ TEST_F(vis_frame, stub_graph_builds, icx) {
      * 1-6 and 7-10 in two reduce passes) and phase 2 of both culling stages run too. DENG-234:
      * the null device has mesh shaders, so the vis-ID clear and phase 1's mesh raster run (its
      * depth feeds the HZB); phase 2's raster has no reader yet (classify, DENG-237), so the graph
-     * culls it. */
+     * culls it. DENG-236: no mask material, so no alpha-tested raster pass. */
     EXPECT_STREQ(got, "vis.depth_clear,vis.cull_instances.clear,vis.cull_instances,"
                       "vis.cull_instances.args,vis.cull_meshlets.clear,vis.cull_meshlets,"
                       "vis.cull_meshlets.args,vis.vis_ids_clear,vis.raster.mesh,vis.hzb.level0,"

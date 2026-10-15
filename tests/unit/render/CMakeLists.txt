@@ -454,3 +454,27 @@ if(TARGET test_render_raster_compute)
         endif()
     endif()
 endif()
+
+# DENG-236: the alpha-tested raster (src/render/passes/vis/raster_alpha.c; engine shader
+# vis_alpha, shaders/visbuffer/vis_alpha.slang), executable test_render_raster_alpha; CTest names
+# render_raster_alpha.<suite>.<test>. A cutout quad (checker alpha) against a CPU rasterizer on both
+# raster paths, the alpha bucket's routing, an empty bucket, and a cutout wall in phase 1's HZB.
+# raster_alpha.*_{metal,vulkan,d3d12} SKIP without the device (the mesh-path test also without mesh
+# shaders; CI: lavapipe and WARP golden jobs).
+de_add_test(NAME render_raster_alpha
+    SOURCES test_raster_alpha.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_raster_alpha)
+    target_include_directories(test_render_raster_alpha PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_raster_alpha PRIVATE
+        "DE_VIS_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_raster_alpha PRIVATE version)
+        de_d3d12_agility_deploy(test_render_raster_alpha)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_raster_alpha)
+        endif()
+    endif()
+endif()

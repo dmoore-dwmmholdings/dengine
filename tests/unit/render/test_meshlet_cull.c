@@ -1420,13 +1420,13 @@ TEST(meshlet_cull, layout_match) {
         ++found;
     }
     EXPECT_EQ(found, count);
-    /* MeshletCullParams: 16 four-byte fields. */
+    /* MeshletCullParams: 20 four-byte fields. */
     const char *ps = strstr(text, "struct MeshletCullParams");
     const char *pe = ps != NULL ? strstr(ps, "};") : NULL;
     u32 fields = 0;
     for (const char *ln = ps; ln != NULL && pe != NULL && ln < pe; ln = strchr(ln + 1, '\n'))
         fields += strncmp(ln, "\n    uint ", 10) == 0 || strncmp(ln, "\n    float ", 11) == 0;
-    EXPECT_EQ(fields * 4u, 64u);
+    EXPECT_EQ(fields * 4u, 80u); /* DENG-236: + alpha_capacity, alpha_raster_args, 2 reserved */
     free(text);
     /* DeVisRasterArgs: 8 uint fields. */
     snprintf(path, sizeof path, "%s/visbuffer/vis_types.slang", DE_VIS_TEST_SHADER_DIR);

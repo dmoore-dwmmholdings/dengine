@@ -717,17 +717,20 @@ static void refresh_small_tables(de__gpu_scene *gs) {
         }
     }
     de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
+    u32 masks = 0; /* DENG-236 */
     for (u32 s = 0; s < at->count; ++s) {
         if (gs->mat_refs[s] == 0)
             continue;
         de__gs_material *e = &gs->entry_tmp.material;
         pack_material(gs, gs->mat_handle[s], e);
+        masks += (e->flags & DE__GS_MATERIAL_READY) != 0 && e->alpha_mode == 1u; /* mask */
         u8 *sh = at->shadow + (size_t)s * at->stride;
         if (memcmp(sh, e, sizeof *e) != 0) {
             memcpy(sh, e, sizeof *e);
             de__gpu_table_mark(at, s);
         }
     }
+    gs->stats.mask_materials = masks;
 }
 
 /* ---------- Create / destroy ---------- */

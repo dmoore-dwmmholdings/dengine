@@ -466,6 +466,9 @@ typedef struct de__gpu_scene_stats {
     u64 gpu_bytes;                         /**< tables and scratch buffers */
     u64 deferred_frames;                   /**< frames that left changes for later (budget, ring) */
     u32 growths;                           /**< table capacity changes so far */
+    /** DENG-236: referenced materials that are READY and alpha-tested (alpha_mode mask), as the
+     * last update packed them. 0: the alpha-tested raster adds no pass. */
+    u32 mask_materials;
 } de__gpu_scene_stats;
 
 /** A table as readers see it. */
