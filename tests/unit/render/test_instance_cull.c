@@ -1434,12 +1434,49 @@ TEST(vis_frame, renderer_stage) {
     got[0] = '\0';
     size_t at = 0;
     const u32 n = de__gpu_null_log_count(d);
+    bool resolved = false, trace = false, ssr_resolved = false, lit = false, history = false;
+    u32 closest_passes = 0;
     for (u32 i = 0; i < n; ++i) {
         const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
         if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
             continue;
+        /* DENG-339: validate the new final-depth/SSR/history chain independently while
+         * retaining the exact pre-existing visibility/lighting pass-order assertion. */
+        if (strcmp(e->text, "vis.resolve") == 0)
+            resolved = true;
+        if (resolved && strncmp(e->text, "vis.hzb.", 8) == 0) {
+            ++closest_passes;
+            continue;
+        }
+        if (strcmp(e->text, "ssr.trace") == 0) {
+            EXPECT_TRUE(resolved && closest_passes > 0);
+            trace = true;
+            continue;
+        }
+        if (strcmp(e->text, "ssr.resolve") == 0) {
+            EXPECT_TRUE(trace);
+            ssr_resolved = true;
+            continue;
+        }
+        if (strcmp(e->text, "lighting.deferred") == 0) {
+            EXPECT_TRUE(ssr_resolved);
+            lit = true;
+        }
+        if (strcmp(e->text, "screen.history_capture") == 0) {
+            EXPECT_TRUE(lit);
+            history = true;
+            continue;
+        }
+        if (strcmp(e->text, "output.basic") == 0)
+            EXPECT_TRUE(history);
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
+    EXPECT_TRUE(trace && ssr_resolved && history);
+    de__view_info vi;
+    ASSERT_TRUE(de__view_info_get(r, de_renderer_main_view(r), &vi));
+    u32 hw, hh, mips;
+    de__vis_hzb_size(vi.width, vi.height, &hw, &hh, &mips);
+    EXPECT_EQ(closest_passes, mips);
     /* DENG-304: the output pass reads the lighting target, so lighting, the resolve and
      * classification run, and the view's colour is the output pass's (the debug clear's write is
      * overwritten, so it is culled). DENG-305: the lighting target is cleared as a render target

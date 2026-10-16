@@ -237,6 +237,8 @@ bool de__view_info_get(const de_renderer *r, de_view v, de__view_info *out);
 void de__view_graph_stats(const de_renderer *r, de_view v, u64 *compiles, u64 *hits);
 /** Retired views whose GPU objects are not released yet. */
 u32 de__views_retired_count(const de_renderer *r);
+/** Metal pre-record retirement drains. Read only with the render thread idle. */
+u64 de__views_resource_drains(const de_renderer *r);
 /** The order in which the last frame built the views (handles), and its count. */
 u32 de__views_last_order(const de_renderer *r, de_view *out, u32 cap);
 /** The debug colour of a view named `name` (the "view.debug_clear" stage; linear RGBA). */

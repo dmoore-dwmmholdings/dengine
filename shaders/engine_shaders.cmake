@@ -38,3 +38,5 @@ de_engine_shader(sss_separable      sss/sss_separable.slang)
 
 de_engine_shader(probe_prefilter probes/probe_prefilter.slang)
 de_engine_shader(reflection_probe_sample probes/reflection_probe_sample.slang)
+de_engine_shader(ssr_resolve ssr/ssr_resolve.slang)
+de_engine_shader(ssr_trace ssr/ssr_trace.slang)

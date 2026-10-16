@@ -220,9 +220,8 @@ public void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px,
     }
     de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular,localRadiance);
     float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
-    float4 os = de_input_indirect_specular_override(lv.inputs, px);
     diffuse = lerp(diffuse, od.rgb * ao, saturate(od.a));
-    specular = lerp(specular, os.rgb, saturate(os.a));
+    specular = de_input_compose_specular(lv.inputs,px,specular);
 }
 
 /// Indirect light leaving `s` towards the eye (evaluate_indirect_split's sum). The deferred pass

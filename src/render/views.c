@@ -19,6 +19,7 @@
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
 #include "render/probes/probes_internal.h"
+#include "render/passes/ssr/ssr_internal.h"
 #include "render/passes/forward/forward.h"
 #include "render/passes/sss/sss.h"
 #include "render/renderer_internal.h"
@@ -136,6 +137,7 @@ typedef struct de__views {
     /* DENG-306: screen-space subsurface scattering (passes/sss/sss.c), the stage "sss" (after
      * lighting, before the transparent slot). */
     struct de__sss *sss;
+    u64 resource_drains; /**< Metal global storage-residency retirement transitions. */
 } de__views;
 
 /* ---------- Handles ---------- */
@@ -836,6 +838,16 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     if (res == DE_OK)
         res = de__rg_compile(g);
     if (res == DE_OK) {
+        /* Metal declares every live storage view resident on each encoder. A retired view
+         * must leave that global list before recording: collection on the first submit can
+         * otherwise destroy it while later recorded chunks still reference it. Drain actual
+         * retirements, including cached-plan returns and delayed history replacement. Steady
+         * frames with no retirement do not wait; continuous streaming can incur this stall. */
+        if (de_gpu_get_caps(r->dev)->backend == DE_GPU_METAL &&
+            de__gpu_deferred_count(r->dev) != 0) {
+            de_gpu_wait_idle(r->dev);
+            ++vs->resource_drains;
+        }
         res = de__rg_execute(g, &(de__rg_execute_desc){.frame_index = frame_index});
         /* Submitted (perhaps partly): the states below are what the epilogue leaves, or, when a
          * list failed, unknown, so the next frame discards. */
@@ -845,6 +857,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
             s->target_access = after;
         s->ok = res == DE_OK;
     }
+    de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
     de__rg_reset(g);
     if (res != DE_OK) {
         view_failed(r, s, "frame graph");
@@ -1182,4 +1195,9 @@ void de__view_capture_camera(de_renderer *r, de_view view, const de__rw_view *ca
         }
     }
     de_mutex_unlock(&vs->lock);
+}
+
+u64 de__views_resource_drains(const de_renderer *r) {
+    const de__views *vs = views_of(r);
+    return vs ? vs->resource_drains : 0;
 }

@@ -1,4 +1,5 @@
 #include "render/probes/probes_internal.h"
+#include "render/passes/ssr/ssr_internal.h"
 /*
  * renderer.c: de_renderer create / destroy / attach and the frame skeleton (SPEC §12, §12.8, §8;
  * DENG-174). The frame order and the struct are in renderer_internal.h; settings, presets and
@@ -53,6 +54,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
@@ -226,6 +228,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     }
 
     res = de__probes_create(r, &r->probes);
+    if (res != DE_OK)
+        goto fail;
+    res = de__ssr_create(r, &r->ssr);
     if (res != DE_OK)
         goto fail;
 
