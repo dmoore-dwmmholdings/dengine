@@ -145,8 +145,23 @@ public float de_ibl_specular_occlusion(float nov, float ao, float roughness)
 /// The environment's light leaving surface `s` towards `v` (unit, world, towards the eye): the
 /// diffuse and specular parts (rgb nits, not pre-exposed), with `ao` the ambient occlusion. `lut`:
 /// the energy LUT (DE_BINDLESS_INVALID: the analytic fallback).
+public float3 de_ibl_reflection_direction(SurfaceData s,float3 v) {
+    float3 n=s.normal;float r=saturate(s.roughness);
+    float3 rn = n;
+    if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u && s.anisotropy > 0.0 &&
+        dot(s.tangent.xyz, s.tangent.xyz) > 0.0)
+    {
+        float3 tg = normalize(s.tangent.xyz - n * dot(n, s.tangent.xyz));
+        float3 bt = cross(n, tg) * (s.tangent.w < 0.0 ? -1.0 : 1.0);
+        float3 at = normalize(tg * s.anisotropy_direction.x + bt * s.anisotropy_direction.y);
+        float3 ab = cross(n, at);
+        rn = de_anisotropy_bent_normal(n, at, ab, v, s.anisotropy, r);
+    }
+    return de_ibl_dominant_dir(rn,reflect(-v,rn),r);
+}
+
 public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float ao,
-                            out float3 diffuse, out float3 specular)
+                            out float3 diffuse, out float3 specular, float4 localRadiance = float4(0,0,0,0))
 {
     float3 n = s.normal;
     float nov = max(dot(n, v), 1e-4);
@@ -173,6 +188,6 @@ public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float 
     float3 refl = reflect(-v, rn);
     float horizon = min(1.0 + dot(refl, n), 1.0);
     float3 dir = de_ibl_dominant_dir(rn, refl, r);
-    specular = de_ibl_radiance(ibl, dir, r) * spec_albedo *
+    specular = lerp(de_ibl_radiance(ibl, dir, r), localRadiance.rgb, saturate(localRadiance.a)) * spec_albedo *
                (de_ibl_specular_occlusion(nov, ao, r) * horizon * horizon);
 }

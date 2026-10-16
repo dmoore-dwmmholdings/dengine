@@ -13,7 +13,7 @@ module lighting_inputs;
 
 import bindless;
 
-/// The inputs of one view and frame (32 bytes; DeLightingView.inputs).
+/// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
 public struct LightingInputs
 {
     public uint ao;                 // R: ambient occlusion (screen space), 1 = none
@@ -24,6 +24,11 @@ public struct LightingInputs
     public uint indirect_specular;  // RGB: indirect specular radiance (DENG-304)
     public uint reserved0;
     public uint reserved1;
+    public uint probe_records;
+    public uint probe_list;
+    public uint probe_entry;
+    public uint probe_sampler;
+    public float4 probe_view_z;
 };
 
 /// Texel `p` of input texture `index`, or `fallback` without one.

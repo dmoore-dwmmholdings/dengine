@@ -476,7 +476,9 @@ typedef struct lp_pass {
     de_rg_resource depth, gb[3], lighting, diffuse, specular, lists, args, tile_counters;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     de_rg_resource ids, visible; /**< DENG-429: the vis IDs and the visible list */
-    de_rg_resource inputs[6];
+    de_rg_resource inputs[8];
+    u32 probe_entry, probe_sampler;
+    f32 probe_view_z[4];
     u8 *inputs_dst; /**< the inputs of this frame's constants entry (the deferred pass) */
     de_gpu_buffer rb;
     u64 rb_offset;
@@ -534,7 +536,13 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .shadow_local = tex_index(p, pass, p->inputs[2], false),
         .contact_shadows = tex_index(p, pass, p->inputs[3], false),
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
-        .indirect_specular = tex_index(p, pass, p->inputs[5], false)};
+        .indirect_specular = tex_index(p, pass, p->inputs[5], false),
+        .probe_records = buf_index(p, pass, p->inputs[6]),
+        .probe_list = buf_index(p, pass, p->inputs[7]),
+        .probe_entry = p->probe_entry,
+        .probe_sampler = p->probe_sampler,
+        .probe_view_z = {p->probe_view_z[0], p->probe_view_z[1], p->probe_view_z[2],
+                         p->probe_view_z[3]}};
     memcpy(p->inputs_dst, &in, sizeof in);
     const de_gpu_buffer args = de_rg_buffer(pass, p->args);
     de_gpu_cmd_set_pipeline(cmd, p->lt->deferred.pipeline);
@@ -685,6 +693,10 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool readback = lt->debug.readback || heatmap;
     const bool sss = in.subsurface; /* DENG-306 */
     fill_view(lt, vc, &in, split, sss, lc);
+    lc->probe_records = in.probe_records;
+    lc->probe_list = in.probe_list;
+    lc->probe_texture_count = in.probe_texture_count;
+    memcpy(lc->probe_textures, in.probe_textures, sizeof lc->probe_textures);
     lc->target = vc->gbuffer[DE__GB_LIGHTING];
     lc->width = vc->width;
     lc->height = vc->height;
@@ -788,13 +800,18 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.visible = vc->visible_meshlets;
         b.pc.ids_pitch = vc->vis_ids_pitch;
         b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
-        const de_rg_resource inputs[6] = {in.ao,
+        const de_rg_resource inputs[8] = {in.ao,
                                           in.shadow_directional,
                                           in.shadow_local,
                                           in.contact_shadows,
                                           in.indirect_diffuse,
-                                          in.indirect_specular};
+                                          in.indirect_specular,
+                                          in.probe_records,
+                                          in.probe_list};
         memcpy(b.inputs, inputs, sizeof inputs);
+        b.probe_entry = in.probe_entry;
+        b.probe_sampler = in.probe_sampler;
+        memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
@@ -831,9 +848,11 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, ltc2, DE_ACCESS_SHADER_READ);
         if (DE_HANDLE_VALID(lc->strip))
             de_rg_read(p, lc->strip, DE_ACCESS_SHADER_READ); /* DENG-304: the environment */
-        for (u32 i = 0; i < 6; ++i)
+        for (u32 i = 0; i < 8; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
+        for (u32 i = 0; i < in.probe_texture_count; ++i)
+            de_rg_read(p, in.probe_textures[i], DE_ACCESS_SHADER_READ);
         de_rg_read(p, lc->tile_counters, DE_ACCESS_SHADER_READ); /* atomics */
         de_rg_write(p, lc->tile_counters, DE_ACCESS_SHADER_WRITE);
         lc->lit = true;

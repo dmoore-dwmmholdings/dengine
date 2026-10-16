@@ -93,6 +93,26 @@ static void fill_environment(const de_query_chunk *c, void *user) {
     f->environment_count += c->count;
 }
 
+static void fill_probes(const de_query_chunk *c, void *user) {
+    de__render_world_frame *f = (de__render_world_frame *)user;
+    const DeGlobalTransform *g = (const DeGlobalTransform *)c->columns[0];
+    const DeReflectionProbe *p = (const DeReflectionProbe *)c->columns[1];
+    for (u32 i = 0; i < c->count; ++i) {
+        de__probe_snapshot v = {c->entities[i].bits, g[i].position, g[i].rotation, p[i]};
+        u32 at = 0;
+        while (at < f->probe_count && (f->probes[at].probe.priority > v.probe.priority ||
+                                       (f->probes[at].probe.priority == v.probe.priority &&
+                                        f->probes[at].entity < v.entity)))
+            ++at;
+        if (at >= 64)
+            continue;
+        u32 n = f->probe_count < 64 ? f->probe_count++ : 63;
+        for (u32 k = n; k > at; --k)
+            f->probes[k] = f->probes[k - 1];
+        f->probes[at] = v;
+    }
+}
+
 static void sys_views(de_system_ctx *ctx) {
     de__render_world *rw = (de__render_world *)ctx->user;
     if (ctx->world != rw->world)
@@ -112,6 +132,12 @@ static void sys_views(de_system_ctx *ctx) {
         DE_ERROR(rw->log, "render world: %u cameras dropped in frame %llu", vc.dropped,
                  (unsigned long long)rw->frame);
     de_query_each(ctx->world, ctx->queries[1], fill_environment, f);
+    f->probe_count = 0;
+    de_query_each(ctx->world, ctx->queries[2], fill_probes, f);
+    u32 probes_seen = de_query_count(ctx->world, ctx->queries[2]);
+    if (probes_seen > 64)
+        DE_WARN(rw->log, "probe extraction: %u exceed capacity; retaining highest priority 64",
+                probes_seen);
 }
 
 /* ---------- Mesh instances ---------- */
@@ -309,14 +335,17 @@ static bool add_systems(de__render_world *rw, de_world *w) {
     const de_query_term cam_terms[2] = {{rw->builtins.global_transform, DE_READ},
                                         {rw->ids.camera, DE_READ}};
     const de_query_term env_terms[1] = {{rw->ids.environment, DE_READ}};
-    const de_query_desc view_queries[2] = {{.terms = cam_terms, .term_count = 2},
-                                           {.terms = env_terms, .term_count = 1}};
+    const de_query_term probe_terms[2] = {{rw->builtins.global_transform, DE_READ},
+                                          {rw->ids.reflection_probe, DE_READ}};
+    const de_query_desc view_queries[3] = {{.terms = cam_terms, .term_count = 2},
+                                           {.terms = env_terms, .term_count = 1},
+                                           {.terms = probe_terms, .term_count = 2}};
     const de_system views = de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
                                                                .schedule = DE_SCHEDULE_EXTRACT,
                                                                .fn = sys_views,
                                                                .user = rw,
                                                                .queries = view_queries,
-                                                               .query_count = 2});
+                                                               .query_count = 3});
     if (!DE_HANDLE_VALID(views))
         return false;
     const de_system meshes =

@@ -357,3 +357,8 @@ if(TARGET de_render)
         passes/sss/sss.h
         passes/sss/sss.c)
 endif()
+
+# DENG-340: shared probe capture, cube pool and versioned bake infrastructure.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE probes/probe_capture.c probes/probe_store.c probes/probe_bake.c probes/reflection_probes.c)
+endif()

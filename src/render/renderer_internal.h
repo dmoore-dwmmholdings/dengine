@@ -153,6 +153,7 @@ struct de_renderer {
 
     /* DENG-176: the views and the per-view frame pipeline (views_internal.h). */
     struct de__views *views;
+    struct de__probes *probes;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
     u32 window_w, window_h;

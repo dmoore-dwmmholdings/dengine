@@ -819,3 +819,25 @@ if(TARGET test_render_sss)
         endif()
     endif()
 endif()
+
+# DENG-340: real RTT radiance capture, probe storage, GPU prefilter and bake contracts.
+de_add_test(NAME render_reflection_probes
+    SOURCES test_reflection_probes.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_reflection_probes)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/probe_tmp")
+    target_compile_definitions(test_render_reflection_probes PRIVATE "DE_PROBE_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/probe_tmp\"")
+    target_include_directories(test_render_reflection_probes PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    if(DE_HAS_COOKER)
+        target_link_libraries(test_render_reflection_probes PRIVATE de_cooker)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_reflection_probes PRIVATE version)
+        de_d3d12_agility_deploy(test_render_reflection_probes)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_reflection_probes)
+        endif()
+    endif()
+endif()

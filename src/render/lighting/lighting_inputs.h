@@ -37,15 +37,22 @@ typedef struct de__lighting_inputs {
      * DE_QUALITY_OFF): the frame gets a diffuse target, and SUBSURFACE pixels write their diffuse
      * light only there (the SSS pass adds it back blurred). The lighting stage sets it. */
     bool subsurface;
+    de_rg_resource probe_records, probe_list; /**< DENG-340: clustered raw probe radiance. */
+    u32 probe_entry, probe_sampler;
+    f32 probe_view_z[4];
+    de_rg_resource probe_textures[64];
+    u32 probe_texture_count;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
-/** lighting_inputs.slang LightingInputs (32 bytes): bindless indices, 0 = none. */
+/** lighting_inputs.slang LightingInputs (64 bytes): bindless indices, 0 = none. */
 typedef struct de__lighting_inputs_gpu {
     u32 ao, shadow_directional, shadow_local, contact_shadows;
     u32 indirect_diffuse, indirect_specular, reserved0, reserved1;
+    u32 probe_records, probe_list, probe_entry, probe_sampler;
+    f32 probe_view_z[4];
 } de__lighting_inputs_gpu;
-DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 32, "LightingInputs is 32 bytes");
+DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 64, "LightingInputs is 64 bytes");
 
 /** The LTC tables (ltc_data.c; shaders/lighting/ltc.slang DE_LTC_SIZE). */
 #define DE__LTC_SIZE 64

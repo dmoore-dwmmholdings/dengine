@@ -1041,7 +1041,7 @@ static u32 struct_words(const char *text, const char *name) {
         else if (strncmp(s, "uint ", 5) == 0 || strncmp(s, "float ", 6) == 0)
             words += n;
         else if (strncmp(s, "LightingInputs ", 15) == 0 || strncmp(s, "DeClusterLists ", 15) == 0)
-            words += 8u;
+            words += strncmp(s, "LightingInputs ", 15) == 0 ? 16u : 8u;
         else if (strncmp(s, "DeIbl ", 6) == 0) /* DENG-304 */
             words += 48u;
     }

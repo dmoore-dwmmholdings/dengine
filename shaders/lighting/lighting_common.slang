@@ -12,6 +12,7 @@
 // covers view depth [near (far/near)^(k/(S-1)), near (far/near)^((k+1)/(S-1))); the last slice
 // extends from `far` to infinity. Index = (slice x tiles_y + tile y) x tiles_x + tile x.
 module lighting_common;
+import "../probes/reflection_probe_sample";
 
 import bindless;
 __exported import "../lighting/lights";
@@ -37,7 +38,7 @@ public static const uint DE_LIGHTING_COUNTER_ENTRIES = 16;    // entries after t
 public static const uint DE_LIGHTING_COUNTER_DROPPED = 20;    // entries past the list capacity
 public static const uint DE_LIGHTING_COUNTER_BYTES = 32;
 
-/// One view's lighting constants (368 bytes; lighting.h de__lighting_view), uploaded per frame.
+/// One view's lighting constants (400 bytes; lighting.h de__lighting_view), uploaded per frame.
 public struct DeLightingView
 {
     public uint tiles_x;
@@ -210,7 +211,14 @@ public void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px,
                                     out float3 diffuse, out float3 specular)
 {
     float ao = s.ao * de_input_ao(lv.inputs, px);
-    de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular);
+    float4 localRadiance=float4(0,0,0,0);
+    if(lv.inputs.probe_records!=0 && lv.inputs.probe_list!=0) {
+        float view_depth=-dot(lv.inputs.probe_view_z,float4(p,1));
+        uint cluster=de_cluster_index(lv,px,view_depth);
+        localRadiance=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,
+            lv.inputs.probe_sampler,cluster,p,de_ibl_reflection_direction(s,v),s.roughness);
+    }
+    de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular,localRadiance);
     float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
     float4 os = de_input_indirect_specular_override(lv.inputs, px);
     diffuse = lerp(diffuse, od.rgb * ao, saturate(od.a));

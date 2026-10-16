@@ -310,6 +310,12 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
     for (u32 i = 0; i < 8; ++i)
         if (DE_HANDLE_VALID(reads[i]))
             de_rg_read(p, reads[i], DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->probe_records))
+        de_rg_read(p, lc->probe_records, DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->probe_list))
+        de_rg_read(p, lc->probe_list, DE_ACCESS_SHADER_READ);
+    for (u32 i = 0; i < lc->probe_texture_count; ++i)
+        de_rg_read(p, lc->probe_textures[i], DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(pd->scene_color))
         de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
 
