@@ -744,6 +744,25 @@ static void sphere_blend_test(lx *f, de_gpu_backend backend) {
                 EXPECT_TRUE(found);
                 previous = result[i * 4];
             }
+            if (projection == 1 && ray == 4) {
+                /* Preserve all original seam queries, then mix fallback and covered lanes in
+                 * one wave. Unconditional sampling must only use bounded valid records. */
+                f32 expected[8];
+                for (u32 i = 0; i < 8; ++i)
+                    expected[i] = i < 4 ? 1.f : result[i * 4];
+                for (u32 i = 0; i < 4; ++i) {
+                    de_vec3 p = de_v3_add(cam.position, de_v3_scale(cam.forward, i == 1   ? -1.f
+                                                                                 : i == 2 ? 201.f
+                                                                                          : 10.f));
+                    if (i == 3)
+                        p = de_v3_add(p, de_v3_scale(right, 1000.f));
+                    memcpy(queries[i].position, &p, 12);
+                    queries[i].identity[0] = i == 0 ? 999u : 123u;
+                }
+                shadow_queries(f, records, queries, 8, 1, 0, result);
+                for (u32 i = 0; i < 8; ++i)
+                    EXPECT_FLOAT_EQ(result[i * 4], expected[i], 0);
+            }
         }
     EXPECT_GT(transitions, 10u);
     printf(

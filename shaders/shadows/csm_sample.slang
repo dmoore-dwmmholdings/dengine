@@ -19,8 +19,11 @@ float csm_one(CsmCascade c, float3 p, float3 n)
     float3 uvz = float3(dot(c.matrix[0], h), dot(c.matrix[1], h), dot(c.matrix[2], h));
     uvz.xy = uvz.xy * float2(0.5, -0.5) + 0.5;
     uvz.z += c.light.w * c.params.x * (0.5 + min(slope, 4.0));
-    if (any(uvz.xy < 0.0) || any(uvz.xy > 1.0) || uvz.z < 0.0) return 1.0;
-    return shadow_filter(c.map, uvz, 1.5 / float(c.map.resolution));
+    // Keep resource access outside lane-dependent early returns. The filter clamps its loads;
+    // receivers outside this projection still return the same unshadowed fallback.
+    bool covered = all(uvz.xy >= 0.0) && all(uvz.xy <= 1.0) && uvz.z >= 0.0;
+    float value = shadow_filter(c.map, uvz, 1.5 / float(max(c.map.resolution, 1u)));
+    return covered ? value : 1.0;
 }
 /// Identity comes from the directional cluster record, independent of atomic list order.
 public float csm_shadow(uint metadata, float3 p, float3 n, uint2 identity)
@@ -28,29 +31,43 @@ public float csm_shadow(uint metadata, float3 p, float3 n, uint2 identity)
     if (metadata == 0u) return 1.0;
     CsmCascade head = de_robuffer<CsmCascade>(metadata)[0];
     float distance = dot(p - head.sphere.xyz, head.light.xyz);
-    if (distance < 0.0 || distance > head.sphere.w) return 1.0;
     uint lights = min(head.identity.x, 2u), cascades = min(head.identity.y, 4u);
+    // Record 1 is bounded even for an unmatched/out-of-range receiver. Select first, then
+    // sample outside the divergent search: inactive search lanes must not carry an undefined
+    // resource pointer into a nested PCF loop on portable SIMD backends.
+    uint selected = 1u, following = 1u;
+    float blend = 0.0;
+    bool found = false;
     for (uint l = 0; l < lights; ++l)
     {
         uint base = 1u + l * cascades;
         CsmCascade first = de_robuffer<CsmCascade>(metadata)[base];
-        if (any(first.identity.xy != identity)) continue;
         for (uint i = 0; i < cascades; ++i)
         {
             CsmCascade c = de_robuffer<CsmCascade>(metadata)[base + i];
             float radius = length(p - c.sphere.xyz) / c.sphere.w;
-            if (radius > 1.0) continue;
-            float value = csm_one(c, p, n);
-            if (i + 1u < cascades && radius > 0.9)
+            if (!found && all(first.identity.xy == identity) && radius <= 1.0)
             {
-                CsmCascade next = de_robuffer<CsmCascade>(metadata)[base + i + 1u];
-                if (length(p - next.sphere.xyz) <= next.sphere.w)
-                    value = lerp(value, csm_one(next, p, n), smoothstep(0.9, 1.0, radius));
+                selected = following = base + i;
+                found = true;
+                if (i + 1u < cascades && radius > 0.9)
+                {
+                    CsmCascade next = de_robuffer<CsmCascade>(metadata)[base + i + 1u];
+                    if (length(p - next.sphere.xyz) <= next.sphere.w)
+                    {
+                        following = base + i + 1u;
+                        blend = smoothstep(0.9, 1.0, radius);
+                    }
+                }
             }
-            return value;
         }
     }
-    return 1.0;
+    CsmCascade primary = de_robuffer<CsmCascade>(metadata)[selected];
+    CsmCascade secondary = de_robuffer<CsmCascade>(metadata)[following];
+    // Deliberately evaluate both bounded maps even when blend is zero or eligibility is false.
+    // This costs two PCF evaluations but keeps resource access out of divergent selection flow.
+    float value = lerp(csm_one(primary, p, n), csm_one(secondary, p, n), blend);
+    return found && distance >= 0.0 && distance <= head.sphere.w ? value : 1.0;
 }
 
 // Internal acceptance/readback hook; every backend runs the same production sampler.
