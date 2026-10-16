@@ -114,7 +114,7 @@ static de_result block_get(de__shadow_views *s, u32 index, shadow_block **out) {
 }
 static void rows(de__gs_float4 out[4], const de_mat4 *m) {
     for (u32 r = 0; r < 4; ++r)
-        out[r] = (de__gs_float4){m->m[r], m->m[4 + r], m->m[8 + r], m->m[12 + r]};
+        out[r] = (de__gs_float4){.v = {m->m[r], m->m[4 + r], m->m[8 + r], m->m[12 + r]}};
 }
 typedef struct shadow_clear {
     de_rg_resource target;
@@ -158,9 +158,9 @@ de_result de__shadow_view_build(de__shadow_views *s, de_rg *g, const de__shadow_
     rows(sc.view_proj, &vp);
     rows(sc.inv_view_proj, &inv);
     rows(sc.prev_view_proj, &vp);
-    sc.camera_position = (de__gs_float4){d->camera.x, d->camera.y, d->camera.z, 0};
-    sc.viewport =
-        (de__gs_float4){(f32)d->width, (f32)d->height, 1.f / (f32)d->width, 1.f / (f32)d->height};
+    sc.camera_position = (de__gs_float4){.v = {d->camera.x, d->camera.y, d->camera.z, 0}};
+    sc.viewport = (de__gs_float4){
+        .v = {(f32)d->width, (f32)d->height, 1.f / (f32)d->width, 1.f / (f32)d->height}};
     const de__gpu_scene_table_info it = de__gpu_scene_table(d->scene, DE__GS_INSTANCES);
     const de__gpu_scene_table_info mt = de__gpu_scene_table(d->scene, DE__GS_MESHES);
     const de__gpu_scene_table_info at = de__gpu_scene_table(d->scene, DE__GS_MATERIALS);

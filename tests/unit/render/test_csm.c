@@ -597,7 +597,7 @@ static void filter_test(lx *f, de_gpu_backend backend) {
     EXPECT_GT(partial, 200u);
     // Reverse-Z and absent-map endpoints must remain exact for every kernel size.
     for (u32 i = 0; i < 96; ++i)
-        query[i].position[2] = (i & 1) ? 0 : 1;
+        query[i].position[2] = (i & 1) ? 0.f : 1.f;
     shadow_queries(f, records, query, 96, 0, 3.5f / 64, &result[0][0]);
     for (u32 i = 0; i < 96; ++i)
         EXPECT_FLOAT_EQ(result[i][0], (i & 1) ? 0 : 1, 0);
@@ -625,7 +625,7 @@ static void sphere_blend_test(lx *f, de_gpu_backend backend) {
                                   .distance = 200,
                                   .tan_half_fov = .6f,
                                   .aspect = 1.7f,
-                                  .ortho_half_height = projection ? 5 : 0};
+                                  .ortho_half_height = projection ? 5.f : 0.f};
             de__csm_cascade cascades[4];
             ASSERT_EQ(de__csm_fit(&cam, (de_vec3){.2f, .3f, -1}, 4, 2048, cascades), DE_OK);
             de_vec3 right = de_v3_normalize(de_v3_cross(cam.forward, (de_vec3){0, 1, 0})),
