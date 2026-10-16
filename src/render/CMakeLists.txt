@@ -383,3 +383,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE shadows/csm.c)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/ao/gtao.c passes/ao/gtao_internal.h)
+endif()

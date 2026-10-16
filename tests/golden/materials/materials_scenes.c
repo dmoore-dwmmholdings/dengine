@@ -394,6 +394,7 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     rs.reflections = DE_QUALITY_OFF;
     rs.gi = DE_QUALITY_OFF;      /* S14 materials/IBL references; S15 validates GI independently. */
     rs.shadows = DE_QUALITY_OFF; /* Preserve S14 materials/IBL scope; CSM has S15 GPU references. */
+    rs.ao = DE_QUALITY_OFF;      /* Preserve S14 scope; GTAO has independent S15 acceptance. */
     de_renderer_set_settings(m.r, &rs);
 
     m.target = de_gpu_texture_create(

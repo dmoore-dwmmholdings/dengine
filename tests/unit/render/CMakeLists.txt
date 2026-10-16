@@ -897,3 +897,19 @@ if(TARGET test_render_csm)
         endif()
     endif()
 endif()
+
+de_add_test(NAME render_gtao
+    SOURCES test_gtao.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_gtao)
+    target_include_directories(test_render_gtao PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_gtao PRIVATE version)
+        de_d3d12_agility_deploy(test_render_gtao)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_gtao)
+        endif()
+    endif()
+endif()

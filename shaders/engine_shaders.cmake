@@ -46,3 +46,6 @@ de_engine_shader(ssgi_filter ssgi/ssgi_filter.slang)
 
 de_engine_shader(shadow_depth shadows/shadow_depth.slang)
 de_engine_shader(shadow_sample shadows/csm_sample.slang)
+
+de_engine_shader(gtao ao/gtao.slang)
+de_engine_shader(gtao_filter ao/gtao_filter.slang)
