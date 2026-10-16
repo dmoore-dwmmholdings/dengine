@@ -1434,7 +1434,7 @@ TEST(vis_frame, renderer_stage) {
     got[0] = '\0';
     size_t at = 0;
     const u32 n = de__gpu_null_log_count(d);
-    bool resolved = false, trace = false, resolve = false, lit = false, history = false;
+    bool resolved = false, trace = false, ssr_resolved = false, lit = false, history = false;
     u32 closest_passes = 0;
     for (u32 i = 0; i < n; ++i) {
         const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
@@ -1455,11 +1455,11 @@ TEST(vis_frame, renderer_stage) {
         }
         if (strcmp(e->text, "ssr.resolve") == 0) {
             EXPECT_TRUE(trace);
-            resolve = true;
+            ssr_resolved = true;
             continue;
         }
         if (strcmp(e->text, "lighting.deferred") == 0) {
-            EXPECT_TRUE(resolve);
+            EXPECT_TRUE(ssr_resolved);
             lit = true;
         }
         if (strcmp(e->text, "screen.history_capture") == 0) {
@@ -1471,7 +1471,7 @@ TEST(vis_frame, renderer_stage) {
             EXPECT_TRUE(history);
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
-    EXPECT_TRUE(trace && resolve && history);
+    EXPECT_TRUE(trace && ssr_resolved && history);
     de__view_info vi;
     ASSERT_TRUE(de__view_info_get(r, de_renderer_main_view(r), &vi));
     u32 hw, hh, mips;
