@@ -75,6 +75,10 @@ de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resol
 void de__probe_capture_destroy(de__probe_capture *c);
 void de__probe_capture_at_position(de__probe_capture *c, de_dvec3 position, de_dvec3 origin,
                                    u32 face_mask);
+/** With filter=false, s/handle are ignored, including NULL/invalid. Raw mip 0 contains the
+ * scheduled faces in GENERAL (SHADER_READ|SHADER_WRITE), accessed by per-mip storage descriptors.
+ * This supports independent low-resolution radiance integration (including 32 square captures).
+ * The caller owns subsequent GPU barriers, completion/fence lifetime and capture destruction. */
 de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s,
                                      de__probe_handle handle, bool filter);
 /** Upload/read canonical packed bytes; bake calls wait for GPU, ordinary upload queues copies. */

@@ -259,6 +259,58 @@ TEST(probes, probe_bake_reload_identical) {
     free(payload);
     free(blob);
 }
+static void raw_capture32(pfx *f, de_gpu_backend backend) {
+    open_renderer(f, backend);
+    colored_room(f);
+    f->scene.f.probe_count = 0;
+    de__probe_capture capture;
+    ASSERT_EQ(de__probe_capture_init(&capture, f->r, 32), DE_OK);
+    de__probe_capture_at_position(&capture, (de_dvec3){0}, (de_dvec3){0}, 63);
+    room_frame(f);
+    EXPECT_EQ(de__views_last_order(f->r, NULL, 0), 6u);
+    de__probe_handle invalid = {.slot = DE__PROBE_NONE};
+    EXPECT_NE(de__probe_capture_complete(&capture, NULL, invalid, true), DE_OK);
+    ASSERT_EQ(de__probe_capture_complete(&capture, NULL, invalid, false), DE_OK);
+    EXPECT_EQ(capture.raw_access, DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE);
+    EXPECT_NE(de_gpu_texture_bindless(f->dev, capture.raw, 0, true), 0u);
+    const u32 pitch = 512;
+    de_gpu_buffer rb =
+        de_gpu_buffer_create(f->dev, &(de_gpu_buffer_desc){.size = (u64)pitch * 32 * 6,
+                                                           .usage = DE_USAGE_COPY_DST,
+                                                           .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(DE_HANDLE_VALID(rb));
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "probe.raw32_readback");
+    ASSERT_TRUE(cmd);
+    const de_gpu_barrier before = {
+        .texture = capture.raw, .before = capture.raw_access, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &before, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, rb, 0, pitch, capture.raw, 0, 0);
+    const de_gpu_barrier after = {
+        .texture = capture.raw, .before = DE_ACCESS_COPY_SRC, .after = capture.raw_access};
+    de_gpu_cmd_barriers(cmd, &after, 1);
+    ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_wait_idle(f->dev);
+    const u8 *pixels = de_gpu_buffer_map(f->dev, rb);
+    ASSERT_TRUE(pixels);
+    for (u32 face = 0; face < 6; ++face) {
+        const u16 *center = (const u16 *)(pixels + (face * 32 + 16) * pitch + 16 * 8);
+        for (u32 c = 0; c < 3; ++c)
+            EXPECT_FLOAT_EQ(half_to_f32(center[c]), room_colors[face][c], .02f);
+    }
+    de_gpu_buffer_destroy(f->dev, rb);
+    de__probe_capture_destroy(&capture);
+}
+TEST_F(probes, raw_capture32_without_store_metal, pfx) {
+    raw_capture32(f, DE_GPU_METAL);
+}
+TEST_F(probes, raw_capture32_without_store_vulkan, pfx) {
+    raw_capture32(f, DE_GPU_VULKAN);
+}
+TEST_F(probes, raw_capture32_without_store_d3d12, pfx) {
+    raw_capture32(f, DE_GPU_D3D12);
+}
 static void capture_colors(pfx *f, de_gpu_backend backend, bool time_slice) {
     open_renderer(f, backend);
     colored_room(f);

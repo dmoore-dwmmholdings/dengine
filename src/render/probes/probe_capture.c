@@ -220,8 +220,8 @@ static void strip_to_cube(de__probe_capture *c, de__probe_store *s, de__probe_ha
 }
 de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, de__probe_handle h,
                                      bool filter) {
-    if (!c || !c->initialized || !de__probe_store_valid(s, h) ||
-        s->slots[h.slot].resolution != c->resolution)
+    if (!c || !c->initialized ||
+        (filter && (!de__probe_store_valid(s, h) || s->slots[h.slot].resolution != c->resolution)))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe capture: invalid store handle");
     for (u32 f = 0; f < 6; ++f)
         if (c->scheduled & (1u << f)) {
