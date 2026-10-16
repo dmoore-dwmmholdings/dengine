@@ -63,15 +63,17 @@ de_vec3 de__probe_parallax(const DeReflectionProbe *p, de_vec3 x, de_vec3 d) {
 #include <stdio.h>
 typedef struct probe_filter_params {
     u32 src, dst, size, face, mip, mips, sampler, samples;
+    u32 raw_mips[12];
 } probe_filter_params;
-DE_STATIC_ASSERT(sizeof(probe_filter_params) == 32, "ProbeFilterParams is 32 bytes");
+DE_STATIC_ASSERT(sizeof(probe_filter_params) == 80, "ProbeFilterParams is 80 bytes");
 static void capture_barrier(de_gpu_cmd *cmd, de_gpu_texture texture, u32 before, u32 after) {
     const de_gpu_barrier b = {.texture = texture, .before = before, .after = after};
     de_gpu_cmd_barriers(cmd, &b, 1);
 }
 static void filter_dispatch(de__probe_capture *c, de_gpu_cmd *cmd, const de__vis_kernel *kernel,
                             probe_filter_params pc, u32 width, u32 height) {
-    (void)c;
+    for (u32 m = 0; m < c->mips; ++m)
+        pc.raw_mips[m] = de_gpu_texture_bindless(c->renderer->dev, c->raw, m, true);
     de_gpu_cmd_set_pipeline(cmd, kernel->pipeline);
     de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
     de_gpu_cmd_dispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
@@ -127,9 +129,11 @@ de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resol
     }
     desc.height = resolution * 6;
     desc.mip_count = c->mips;
-    desc.usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST;
+    desc.usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC;
     desc.name = "probe.raw_radiance";
     c->raw = de_gpu_texture_create(r->dev, &desc);
+    desc.name = "probe.filtered_scratch";
+    c->filtered = de_gpu_texture_create(r->dev, &desc);
     c->transfer_bytes = (u64)resolution * resolution * 6 * 8 + 4096;
     c->transfer = de_gpu_buffer_create(
         r->dev, &(de_gpu_buffer_desc){.size = c->transfer_bytes,
@@ -141,7 +145,8 @@ de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resol
                                                                       .u = DE_ADDR_CLAMP,
                                                                       .v = DE_ADDR_CLAMP,
                                                                       .w = DE_ADDR_CLAMP});
-    if (!DE_HANDLE_VALID(c->raw) || !DE_HANDLE_VALID(c->transfer) || !DE_HANDLE_VALID(c->sampler)) {
+    if (!DE_HANDLE_VALID(c->raw) || !DE_HANDLE_VALID(c->filtered) ||
+        !DE_HANDLE_VALID(c->transfer) || !DE_HANDLE_VALID(c->sampler)) {
         result = DE_ERR_OUT_OF_MEMORY;
         goto fail;
     }
@@ -164,6 +169,7 @@ void de__probe_capture_destroy(de__probe_capture *c) {
     de__vis_kernel_destroy(vis, &c->downsample);
     de__vis_kernel_destroy(vis, &c->prefilter);
     de_gpu_texture_destroy(r->dev, c->raw);
+    de_gpu_texture_destroy(r->dev, c->filtered);
     de_gpu_buffer_destroy(r->dev, c->transfer);
     de_gpu_sampler_destroy(r->dev, c->sampler);
     memset(c, 0, sizeof *c);
@@ -183,32 +189,33 @@ void de__probe_capture_at_position(de__probe_capture *c, de_dvec3 position, de_d
         de__view_capture_camera(c->renderer, c->views[i], (mask & (1u << i)) ? &camera : NULL);
     }
 }
-/* The strips are the exact 2D mirror of cube faces. Transfer each mip through aligned rows. */
+/* Prefilter scratch stays storage-only. A GPU buffer copies its exact bytes into the
+ * canonical cube and a sampled-only mirror, so each bindless view has one consistent layout. */
 static void strip_to_cube(de__probe_capture *c, de__probe_store *s, de__probe_handle h,
                           de_gpu_cmd *cmd) {
-    de_gpu_device *dev = c->renderer->dev;
     const de__probe_slot *slot = &s->slots[h.slot];
-    de_gpu_texture strip = slot->strip;
-    capture_barrier(cmd, strip, DE_ACCESS_SHADER_READ, DE_ACCESS_COPY_SRC);
+    capture_barrier(cmd, c->filtered, c->filtered_access, DE_ACCESS_COPY_SRC);
+    capture_barrier(cmd, slot->strip, slot->ready ? DE_ACCESS_SHADER_READ : DE_ACCESS_NONE,
+                    DE_ACCESS_COPY_DST);
     capture_barrier(cmd, s->cube, s->cube_access, DE_ACCESS_COPY_DST);
-    for (u32 m = 0; m < s->slots[h.slot].mips; ++m) {
-        u32 n = s->slots[h.slot].resolution >> m, pitch = (n * 8 + 511u) & ~511u;
-        const de_gpu_barrier b = {
+    for (u32 m = 0; m < slot->mips; ++m) {
+        u32 n = slot->resolution >> m, pitch = (n * 8 + 511u) & ~511u;
+        const de_gpu_barrier before = {
             .buffer = c->transfer, .before = c->transfer_access, .after = DE_ACCESS_COPY_DST};
-        de_gpu_cmd_barriers(cmd, &b, 1);
-        de_gpu_cmd_copy_texture_to_buffer(cmd, c->transfer, 0, pitch, strip, m, 0);
-        const de_gpu_barrier a = {
+        de_gpu_cmd_barriers(cmd, &before, 1);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, c->transfer, 0, pitch, c->filtered, m, 0);
+        const de_gpu_barrier after = {
             .buffer = c->transfer, .before = DE_ACCESS_COPY_DST, .after = DE_ACCESS_COPY_SRC};
-        de_gpu_cmd_barriers(cmd, &a, 1);
+        de_gpu_cmd_barriers(cmd, &after, 1);
         c->transfer_access = DE_ACCESS_COPY_SRC;
-        for (u32 f = 0; f < 6; ++f) {
-            u64 off = (u64)f * n * pitch;
-            de_gpu_cmd_copy_buffer_to_texture(cmd, s->cube, m + s->slots[h.slot].mip_base,
-                                              h.slot * 6 + f, c->transfer, off, pitch);
-        }
+        for (u32 face = 0; face < 6; ++face)
+            de_gpu_cmd_copy_buffer_to_texture(cmd, s->cube, m + slot->mip_base, h.slot * 6 + face,
+                                              c->transfer, (u64)face * n * pitch, pitch);
+        de_gpu_cmd_copy_buffer_to_texture(cmd, slot->strip, m, 0, c->transfer, 0, pitch);
     }
-    (void)dev;
-    capture_barrier(cmd, strip, DE_ACCESS_COPY_SRC, DE_ACCESS_SHADER_READ);
+    capture_barrier(cmd, c->filtered, DE_ACCESS_COPY_SRC, DE_ACCESS_SHADER_WRITE);
+    c->filtered_access = DE_ACCESS_SHADER_WRITE;
+    capture_barrier(cmd, slot->strip, DE_ACCESS_COPY_DST, DE_ACCESS_SHADER_READ);
     capture_barrier(cmd, s->cube, DE_ACCESS_COPY_DST, DE_ACCESS_SHADER_READ);
 }
 de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, de__probe_handle h,
@@ -236,27 +243,26 @@ de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, d
                                       .face = f};
             filter_dispatch(c, cmd, &c->copy, pc, c->resolution, c->resolution);
         }
-    capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_WRITE, DE_ACCESS_SHADER_READ);
-    c->raw_access = DE_ACCESS_SHADER_READ;
+    capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_WRITE,
+                    DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE);
+    c->raw_access = DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE;
     if (filter) {
         for (u32 m = 1; m < c->mips; ++m) {
-            capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_READ,
+            capture_barrier(cmd, c->raw, c->raw_access,
                             DE_ACCESS_SHADER_WRITE | DE_ACCESS_SHADER_READ);
-            probe_filter_params pc = {.src = de_gpu_texture_bindless(dev, c->raw, 0, false),
+            probe_filter_params pc = {.src = de_gpu_texture_bindless(dev, c->raw, m - 1, true),
                                       .dst = de_gpu_texture_bindless(dev, c->raw, m, true),
                                       .size = c->resolution >> m,
                                       .mip = m};
             filter_dispatch(c, cmd, &c->downsample, pc, pc.size, pc.size * 6);
             capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_WRITE | DE_ACCESS_SHADER_READ,
-                            DE_ACCESS_SHADER_READ);
+                            c->raw_access);
         }
-        const de__probe_slot *slot = &s->slots[h.slot];
-        de_gpu_texture strip = slot->strip;
-        capture_barrier(cmd, strip, s->slots[h.slot].ready ? DE_ACCESS_SHADER_READ : DE_ACCESS_NONE,
-                        DE_ACCESS_SHADER_WRITE);
+        capture_barrier(cmd, c->filtered, c->filtered_access, DE_ACCESS_SHADER_WRITE);
+        c->filtered_access = DE_ACCESS_SHADER_WRITE;
         for (u32 m = 0; m < c->mips; ++m) {
-            probe_filter_params pc = {.src = de_gpu_texture_bindless(dev, c->raw, 0, false),
-                                      .dst = de_gpu_texture_bindless(dev, strip, m, true),
+            probe_filter_params pc = {.src = 0,
+                                      .dst = de_gpu_texture_bindless(dev, c->filtered, m, true),
                                       .size = c->resolution,
                                       .mip = m,
                                       .mips = c->mips,
@@ -265,7 +271,6 @@ de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, d
             filter_dispatch(c, cmd, &c->prefilter, pc, c->resolution >> m,
                             (c->resolution >> m) * 6);
         }
-        capture_barrier(cmd, strip, DE_ACCESS_SHADER_WRITE, DE_ACCESS_SHADER_READ);
         strip_to_cube(c, s, h, cmd);
         s->cube_access = DE_ACCESS_SHADER_READ;
     }

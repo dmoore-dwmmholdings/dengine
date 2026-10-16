@@ -63,13 +63,13 @@ typedef struct de__probe_capture {
     u32 resolution, mips, scheduled;
     de_view views[6];
     u32 expected_executed[6];
-    de_gpu_texture targets[6], raw;
+    de_gpu_texture targets[6], raw, filtered;
     de_gpu_buffer transfer;
     u64 transfer_bytes;
     de_gpu_sampler sampler;
     de__vis_kernel copy, downsample, prefilter;
     bool initialized;
-    u32 raw_access, transfer_access;
+    u32 raw_access, filtered_access, transfer_access;
 } de__probe_capture;
 de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resolution);
 void de__probe_capture_destroy(de__probe_capture *c);

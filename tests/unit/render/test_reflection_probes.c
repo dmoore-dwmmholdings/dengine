@@ -113,6 +113,17 @@ static void open_renderer(pfx *f, de_gpu_backend backend) {
     (void)de_cvar_set(de_cvar_find("r.pipelined"), "0");
     (void)de_cvar_set(de_cvar_find("r.probe_faces_per_frame"), "6");
     (void)de_cvar_set(de_cvar_find("r.probe_pool_size"), "16");
+    /* VVL 1.3.275 checks bindless image layouts at list end (DENG-235/DENG-427).
+     * Match the shared lighting fixture: one graph command list, validation remains on. */
+    if (backend == DE_GPU_VULKAN) {
+        de_cvar cost = de_cvar_find("r.rg_record_cost");
+        if (DE_HANDLE_VALID(cost))
+            ASSERT_EQ(de_cvar_set(cost, "1048576"), DE_OK);
+        else {
+            char *args[] = {"test", "+r.rg_record_cost", "1048576"};
+            ASSERT_EQ(de_cvar_apply_args(3, args), DE_OK);
+        }
+    }
 }
 static const f32 room_colors[6][3] = {{2, .1f, .2f}, {.1f, 3, .3f}, {.2f, .3f, 4},
                                       {2, 3, .2f},   {.2f, 3, 4},   {2, .2f, 4}};

@@ -82,13 +82,13 @@ de__probe_handle de__probe_store_alloc_resolution(de__probe_store *s, u64 owner,
     for (u32 n = s->resolution; n > resolution; n >>= 1)
         ++p->mip_base;
     p->strip = de_gpu_texture_create(
-        s->dev, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
-                                       .width = resolution,
-                                       .height = resolution * 6u,
-                                       .mip_count = p->mips,
-                                       .usage = DE_USAGE_SAMPLED | DE_USAGE_STORAGE |
-                                                DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST,
-                                       .name = "probe.filtered_strip"});
+        s->dev,
+        &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
+                               .width = resolution,
+                               .height = resolution * 6u,
+                               .mip_count = p->mips,
+                               .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST,
+                               .name = "probe.filtered_strip"});
     if (!DE_HANDLE_VALID(p->strip))
         return (de__probe_handle){DE__PROBE_NONE, 0};
     p->owner = owner;

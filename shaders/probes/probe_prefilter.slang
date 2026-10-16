@@ -2,7 +2,7 @@
 module probe_prefilter;
 import bindless;
 import "../lighting/ibl";
-struct ProbeFilterParams { uint src; uint dst; uint size; uint face; uint mip; uint mips; uint sampler; uint samples; };
+struct ProbeFilterParams { uint src; uint dst; uint size; uint face; uint mip; uint mips; uint sampler; uint samples; uint4 raw_mips[3]; };
 float3 face_dir(uint f, float2 st) {
     if(f==0) return normalize(float3(1,-st.y,-st.x));
     if(f==1) return normalize(float3(-1,-st.y,st.x));
@@ -11,16 +11,27 @@ float3 face_dir(uint f, float2 st) {
     if(f==4) return normalize(float3(st.x,-st.y,1));
     return normalize(float3(-st.x,-st.y,-1));
 }
+// Storage-only source views stay GENERAL while building and filtering the chain. Manual
+// face-clamped bilinear/trilinear filtering matches DENG-100 without sampling a full-chain
+// SHADER_READ view while another mip is being written.
+float3 source_bilinear(ProbeFilterParams pc,uint face,float2 st,uint mip) {
+    uint n=max(pc.size>>mip,1u);
+    float2 pixel=(st*.5+.5)*float(n)-.5;
+    int2 lo=int2(floor(pixel)),hi=lo+1;
+    float2 fraction=frac(pixel);
+    lo=clamp(lo,int2(0),int2(int(n)-1));hi=clamp(hi,int2(0),int2(int(n)-1));
+    int offset=int(face*n);
+    uint source=pc.raw_mips[mip/4][mip%4];
+    float3 a=de_rwtex2d(source)[int2(lo.x,lo.y+offset)].rgb;
+    float3 b=de_rwtex2d(source)[int2(hi.x,lo.y+offset)].rgb;
+    float3 c=de_rwtex2d(source)[int2(lo.x,hi.y+offset)].rgb;
+    float3 d=de_rwtex2d(source)[int2(hi.x,hi.y+offset)].rgb;
+    return lerp(lerp(a,b,fraction.x),lerp(c,d,fraction.x),fraction.y);
+}
 float3 radiance(ProbeFilterParams pc,float3 d,float lod) {
-    float2 st; uint f=de_ibl_cube_face(d,st);
-    uint lo=uint(floor(lod)), hi=min(lo+1,pc.mips-1);
-    float3 vals[2];
-    for(uint i=0;i<2;++i) {
-        uint m=i==0?lo:hi, n=max(pc.size>>m,1u);
-        float2 uv=clamp(st*.5+.5,.5/float(n),1-.5/float(n));
-        vals[i]=de_tex2d(pc.src).SampleLevel(de_sampler(pc.sampler),float2(uv.x,(float(f)+uv.y)/6.0),float(m)).rgb;
-    }
-    return lerp(vals[0],vals[1],frac(lod));
+    float2 st;uint face=de_ibl_cube_face(d,st);
+    uint lo=uint(floor(lod)),hi=min(lo+1,pc.mips-1);
+    return lerp(source_bilinear(pc,face,st,lo),source_bilinear(pc,face,st,hi),frac(lod));
 }
 [shader("compute")] [numthreads(8,8,1)]
 void cs_probe_copy(uint3 id:SV_DispatchThreadID,uniform ProbeFilterParams pc) {
@@ -31,8 +42,8 @@ void cs_probe_copy(uint3 id:SV_DispatchThreadID,uniform ProbeFilterParams pc) {
 void cs_probe_downsample(uint3 id:SV_DispatchThreadID,uniform ProbeFilterParams pc) {
     if(id.x>=pc.size || id.y>=pc.size*6) return;
     uint2 q=id.xy*2;
-    float4 v=(de_tex2d(pc.src).Load(int3(q,pc.mip-1))+de_tex2d(pc.src).Load(int3(q+uint2(1,0),pc.mip-1))+
-              de_tex2d(pc.src).Load(int3(q+uint2(0,1),pc.mip-1))+de_tex2d(pc.src).Load(int3(q+1,pc.mip-1)))*.25;
+    float4 v=(de_rwtex2d(pc.src)[q]+de_rwtex2d(pc.src)[q+uint2(1,0)]+
+              de_rwtex2d(pc.src)[q+uint2(0,1)]+de_rwtex2d(pc.src)[q+1])*.25;
     de_rwtex2d(pc.dst)[id.xy]=v;
 }
 [shader("compute")] [numthreads(8,8,1)]
