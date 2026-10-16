@@ -73,7 +73,7 @@ de_result de__gi_layout_make(const DeIrradianceVolume *v, de__gi_layout *out) {
 u64 de__gi_settings_hash(const de__irradiance_snapshot *v) {
     u8 b[112] = {0};
     u32 off = 4;
-    de_cooked_put_u32(b, 0x31434347u); /* cell-centered v1 */
+    de_cooked_put_u32(b, 0x32434347u); /* cell-centered, normal-only packed quantizer v2 */
     const f64 p[3] = {v->position.x, v->position.y, v->position.z};
     for (u32 i = 0; i < 3; ++i) {
         u64 x;
@@ -102,7 +102,7 @@ u64 de__gi_settings_hash(const de__irradiance_snapshot *v) {
     return gi_hash(b, off);
 }
 static bool gi_layout_valid(const de__gi_layout *l) {
-    if (!l)
+    if (!l || l->counts[0] < 2 || l->counts[1] < 2 || l->counts[2] < 2)
         return false;
     DeIrradianceVolume v = {.extent = {1, 1, 1}, .intensity = 1, .bounces = l->bounces};
     memcpy(v.counts, l->counts, sizeof v.counts);
@@ -173,8 +173,11 @@ de_result de__gi_blob_read(const void *src, u64 size, u64 hash, de__gi_layout *l
     if (tag != 1 || bytes < 32 || de_cooked_get_u32(b + 20) != 1 || gi_get64(b + 24))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GI bake: layout version");
     DeIrradianceVolume v = {.extent = {1, 1, 1}, .intensity = 1};
-    for (u32 i = 0; i < 3; ++i)
+    for (u32 i = 0; i < 3; ++i) {
         v.counts[i] = de_cooked_get_u32(b + i * 4);
+        if (v.counts[i] < 2)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GI bake: explicit counts required");
+    }
     v.bounces = de_cooked_get_u32(b + 12);
     de__gi_layout parsed;
     if (de__gi_layout_make(&v, &parsed) != DE_OK || !v.bounces)
@@ -300,10 +303,15 @@ static de_result gi_reserve(struct de__irradiance *s, gi_record *rec,
     de_gpu_cmd *cmd = gi_begin(s, "gi.initialize");
     if (!cmd)
         goto fail;
+    // Establish every candidate storage image before the first bindless dispatch.
+    // All storage descriptors are visible together, including the second atlas.
+    for (u32 i = 0; i < 2; ++i) {
+        gi_barrier(cmd, candidate.irradiance[i], DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+        gi_barrier(cmd, candidate.distance[i], DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+    }
     for (u32 i = 0; i < 2; ++i)
         for (u32 t = 0; t < 2; ++t) {
             de_gpu_texture texture = t ? candidate.distance[i] : candidate.irradiance[i];
-            gi_barrier(cmd, texture, DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
             gi_bake_params pc = {.irradiance =
                                      de_gpu_texture_bindless(s->renderer->dev, texture, 0, true),
                                  .columns = t ? l.dw : l.iw,

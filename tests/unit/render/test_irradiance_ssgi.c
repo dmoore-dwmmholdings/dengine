@@ -141,6 +141,7 @@ static void open_renderer(gifx *f, de_gpu_backend backend) {
     de_renderer_attach(f->r, f->ecs);
     (void)de_cvar_set(de_cvar_find("r.pipelined"), "0");
     (void)de_cvar_set(de_cvar_find("r.probe_faces_per_frame"), "6");
+    (void)de_cvar_set(de_cvar_find("r.gi_faces_per_frame"), "6");
     (void)de_cvar_set(de_cvar_find("r.probe_pool_size"), "16");
     /* VVL 1.3.275 checks bindless image layouts at list end (DENG-235/DENG-427).
      * Match the shared lighting fixture: one graph command list, validation remains on. */
@@ -280,7 +281,7 @@ TEST(gi, blob_hostile_and_inplace) {
     payload[(size_t)l.iw * l.ih * 4 + 1] = 0x7c;
     EXPECT_NE(de__gi_blob_write(blob, bytes, 17, &l, payload), DE_OK);
     // A checksum-valid hostile body must be rejected by the READER too.
-    for (u32 kind = 0; kind < 8; ++kind) {
+    for (u32 kind = 0; kind < 11; ++kind) {
         memset(payload, 0, (size_t)l.payload_bytes);
         ASSERT_EQ(de__gi_blob_write(blob, bytes, 17, &l, payload), DE_OK);
         if (kind == 0)
@@ -299,9 +300,16 @@ TEST(gi, blob_hostile_and_inplace) {
             put_u32(blob + 68, 0);
         if (kind == 7)
             put_u32(blob + 64, 0x3f000000u);
+        if (kind >= 8)
+            put_u32(blob + 48 + (kind - 8) * 4, 0); // persisted counts cannot use defaults
         ASSERT_EQ(de__probe_envelope_write(blob, bytes, "DEGI", 1, 17, blob + 48, bytes - 48),
                   DE_OK);
         EXPECT_NE(de__gi_blob_read(blob, bytes, 17, &parsed, &data), DE_OK);
+    }
+    for (u32 axis = 0; axis < 3; ++axis) {
+        de__gi_layout invalid = l;
+        invalid.counts[axis] = 0;
+        EXPECT_NE(de__gi_blob_write(blob, bytes, 17, &invalid, payload), DE_OK);
     }
     free(blob);
     free(payload);
@@ -393,7 +401,9 @@ static void bake_constant(gifx *f, de_gpu_backend backend) {
     EXPECT_EQ(info.faces, 0u);
     EXPECT_FALSE(info.ready);
     de__irradiance_debug_skip_depth(f->r, 0);
-    for (u32 i = 0; i < 8; ++i)
+    // One face per frame proves the raw GPU transfer preserves all prior faces.
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.gi_faces_per_frame"), "1"), DE_OK);
+    for (u32 i = 0; i < 48; ++i)
         room_frame(f);
     ASSERT_TRUE(de__irradiance_get(f->r, 77, &info));
     ASSERT_TRUE(info.ready);
@@ -721,12 +731,10 @@ static u32 cpu_packed_component(f32 value, u32 mantissa) {
     if (!isfinite(value))
         value = value > 0.f ? 60000.f : 0.f;
     value = fminf(fmaxf(value, 0), 60000);
-    if (value == 0)
+    if (value < ldexpf(1.f, -14))
         return 0;
     int e = 0;
     f64 significand = frexp((f64)value, &e) * 2;
-    if (e - 1 < -14)
-        return (u32)floor(ldexp((f64)value, 14 + (int)mantissa));
     return (u32)(e - 1 + 15) << mantissa | (u32)floor((significand - 1) * (f64)(1u << mantissa));
 }
 static void quantizer_boundary(gifx *f, de_gpu_backend backend) {
@@ -960,6 +968,14 @@ static void view_read_hook(de_rg *g, de_view view, void *user) {
     de_rg_write(p, de_rg_import_buffer(g, f->view_readback, DE_ACCESS_COPY_DST),
                 DE_ACCESS_COPY_DST);
     de_rg_pass_side_effect(p);
+    // Restore the sampled depth/G-buffer and storage lighting states after the
+    // copy, as in lighting_fixture: legacy VVL rechecks bindless descriptors at
+    // the end of the recorded list. The readback must not leave TRANSFER_SRC.
+    p = de_rg_add_pass(g, "test.gi_view_restore", DE_QUEUE_GRAPHICS, NULL, NULL);
+    de_rg_pass_side_effect(p);
+    for (u32 i = 0; i < 4; ++i)
+        de_rg_read(p, f->reads[i], DE_ACCESS_SHADER_READ);
+    de_rg_write(p, f->reads[4], DE_ACCESS_SHADER_WRITE);
 }
 static void camera_at(gifx *f, de_vec3 eye, de_vec3 target) {
     de_mat4 view = de_m4_look_at(eye, target, (de_vec3){0, 0, 1}),

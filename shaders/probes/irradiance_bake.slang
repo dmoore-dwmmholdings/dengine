@@ -29,12 +29,11 @@ void cs_gi_distance(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
 float gi_quantize(float value,uint mantissa) {
     if(!isfinite(value))value=value>0?60000:0;
     value=clamp(value,0,60000);
-    uint bits=asuint(value),exponent=(bits>>23)&255u;
-    uint drop=23u-mantissa;
-    if(exponent>=113u)return asfloat(bits&~((1u<<drop)-1u));
-    uint shift=(113u-exponent)+drop;
-    uint fraction=shift>=32u?0u:((bits&0x7fffffu)|0x800000u)>>shift;
-    return float(fraction)*asfloat((127u-14u-mantissa)<<23);
+    // Packed-format subnormals may flush on Vulkan storage conversion. Use the
+    // same canonical FTZ policy on every backend: values below 2^-14 are zero.
+    if(value<asfloat(113u<<23))return 0;
+    uint bits=asuint(value),drop=23u-mantissa;
+    return asfloat(bits&~((1u<<drop)-1u));
 }
 [shader("compute")][numthreads(8,8,1)]
 void cs_gi_integrate(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
