@@ -913,3 +913,19 @@ if(TARGET test_render_gtao)
         endif()
     endif()
 endif()
+
+# DENG-342: independent physical refraction and current-frame Gaussian-pyramid acceptance.
+de_add_test(NAME render_ss_refraction
+    SOURCES test_ss_refraction.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip
+    LABELS "unit;render;gpu" TIMEOUT 300)
+if(TARGET test_render_ss_refraction)
+    target_include_directories(test_render_ss_refraction PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_ss_refraction PRIVATE version)
+        de_d3d12_agility_deploy(test_render_ss_refraction)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_ss_refraction)
+        endif()
+    endif()
+endif()

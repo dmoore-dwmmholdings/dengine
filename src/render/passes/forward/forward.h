@@ -7,8 +7,8 @@
  *                          render world and the GPU scene, and the back-to-front sort. Pure.
  *   forward_transparent.c  the stage "forward.transparent" at (DE__VIEW_SLOT_TRANSPARENT, 0): the
  *                          pipeline (made, so pre-warmed, at renderer creation), the optional
- *                          scene-colour copy and the draws, blended into the view's HDR lighting
- *                          target before output.basic reads it (DENG-304).
+ *                          scene-colour snapshot/pyramid and the draws, blended into the view's HDR
+ * lighting target before output.basic reads it (DENG-304).
  *
  * Routing: a submesh whose material is forward (READY with DE_MATERIAL_FEATURE_FORWARD in its
  * CPU-derived features: alpha blend, or transmission > 0) never enters the visibility buffer.
@@ -54,15 +54,16 @@ enum { DE__FWD_SIDE_FRONT = 0u, DE__FWD_SIDE_BACK = 1u };
 /** Bytes per pixel of the scene-colour copy (the RGBA16F lighting target's texels). */
 #define DE__FWD_SCENE_COLOR_BPP 8u
 
-/** forward_transparent.slang ForwardParams (80 bytes). */
+/** forward_transparent.slang ForwardParams (96 bytes). */
 typedef struct de__fwd_params {
     u32 view, entry, scene, view_slot;
     u32 instance, meshlet_first, side, sampler;
     u32 scene_color, scene_color_pitch, width, height;
+    u32 scene_depth, scene_depth_pitch, scene_color_levels, refraction;
     /* DeClusterLists */
     u32 lights, dir_lights, grid, list, counters, ltc1, ltc2, ltc_sampler;
 } de__fwd_params;
-DE_STATIC_ASSERT(sizeof(de__fwd_params) == 80, "ForwardParams is 80 bytes");
+DE_STATIC_ASSERT(sizeof(de__fwd_params) == 96, "ForwardParams is 96 bytes");
 
 /* =================================================================================================
  * The list (transparent_sort.c)
@@ -109,9 +110,10 @@ typedef struct de__transparent_view {
 
 /** What the gather counted. */
 typedef struct de__transparent_counts {
-    u32 forward_materials; /**< forward materials among the GPU scene's referenced materials */
-    u32 candidates;        /**< live instances with a forward submesh and a drawable mesh */
-    u32 listed;            /**< ... that passed the layer mask and the frustum */
+    u32 forward_materials;  /**< forward materials among the GPU scene's referenced materials */
+    u32 candidates;         /**< live instances with a forward submesh and a drawable mesh */
+    u32 listed;             /**< ... that passed the layer mask and the frustum */
+    bool allocation_failed; /**< distinguish an empty list from arena exhaustion */
 } de__transparent_counts;
 
 /**
@@ -142,9 +144,11 @@ typedef struct de__forward_context {
     u32 draw_count;
     de__transparent_counts counts;
     de_rg_resource target;      /**< the HDR lighting target it blended into */
-    de_rg_resource scene_color; /**< the scene-colour copy (raw RGBA16F rows), invalid when no
+    de_rg_resource scene_color; /**< the scene-colour pyramid (packed RGBA16F rows), invalid when no
                                      listed material transmits */
     u32 scene_color_pitch;
+    de_rg_resource scene_depth;
+    u32 scene_depth_pitch, scene_color_levels;
 } de__forward_context;
 
 /** Makes the pass's state on `vis`'s device: its pipeline (pre-warmed: no pipeline is made while

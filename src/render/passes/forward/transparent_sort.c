@@ -73,6 +73,10 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
         return 0;
     u8 *mat = (u8 *)de_arena_push_zero(arena, mt.count, 16);
     if (mat == NULL) {
+        if (counts != NULL) {
+            c.allocation_failed = true;
+            *counts = c;
+        }
         (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: the frame arena is full");
         return 0;
     }
@@ -132,6 +136,10 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             de__transparent_item *grown =
                 (de__transparent_item *)de_arena_push(arena, (size_t)ncap * sizeof *grown, 16);
             if (grown == NULL) {
+                if (counts != NULL) {
+                    c.allocation_failed = true;
+                    *counts = c;
+                }
                 (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: the frame arena is full");
                 return 0;
             }

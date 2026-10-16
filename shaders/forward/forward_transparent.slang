@@ -21,10 +21,10 @@
 // own view depth, plus evaluate_indirect_split (IBL) and the emission, times pre_exposure. Coverage
 // alpha = base colour alpha x vertex colour alpha x base-colour texture alpha; the output is
 // premultiplied. A transmissive surface (KHR transmission) also passes the background through:
-// the scene-colour copy (the lighting target before this pass) at the same pixel, without a
-// refraction offset (S15 DENG-342 adds screen-space refraction), times transmission x (1 -
-// metallic) x base colour x (1 - Fresnel) x the volume's Beer-Lambert transmittance over its
-// thickness (volume.slang volume_transmittance). Unlit (model 1) blends its emission only. Game
+// current opaque HDR Gaussian pyramid along a bounded two-interface volume proxy and opaque
+// depth trace (DENG-342), with raw incident probe/sky fallback, times transmission x (1 - metallic)
+// x base colour x (1 - Fresnel) x Beer over travelled world distance. r.refraction=0 preserves
+// the historical same-pixel/nominal-thickness path. Unlit (model 1) blends its emission only. Game
 // models shade as Standard (as deferred lighting does).
 import bindless;
 import push_constants;
@@ -37,6 +37,8 @@ import "../materials/standard/standard";
 import "../materials/standard/volume";
 import "../materials/unlit/unlit";
 import "../forward/forward_routing";
+import ss_refraction;
+import scene_color_pyramid;
 
 /// ForwardParams.side
 public static const uint DE_FWD_SIDE_FRONT = 0;
@@ -46,7 +48,7 @@ public static const uint DE_FWD_VERTICES = 372;
 /// Bytes per pixel of the scene-colour copy (RGBA16F).
 public static const uint DE_FWD_SCENE_COLOR_BPP = 8;
 
-/// Push constants of the vertex / pixel pair (80 bytes; forward.h de__fwd_params).
+/// Push constants of the vertex / pixel pair (96 bytes; forward.h de__fwd_params).
 public struct ForwardParams
 {
     public uint view;          // DeLightingView ring (de_robuffer)
@@ -61,6 +63,10 @@ public struct ForwardParams
     public uint scene_color_pitch; // its row pitch in bytes
     public uint width;         // the view's internal size
     public uint height;
+    public uint scene_depth;
+    public uint scene_depth_pitch;
+    public uint scene_color_levels;
+    public uint refraction;
     public DeClusterLists cl;
 };
 
@@ -168,13 +174,6 @@ FwdVertex vs_forward(uint vid : SV_VertexID, uint iid : SV_InstanceID, uniform F
     return o;
 }
 
-/// The scene-colour copy at pixel `p` (pre-exposed radiance).
-float3 fwd_scene_color(ForwardParams pc, uint2 p)
-{
-    uint2 h = de_bytes(pc.scene_color).load2(p.y * pc.scene_color_pitch + p.x * 8u);
-    return float3(f16tof32(h.x & 0xFFFFu), f16tof32(h.x >> 16), f16tof32(h.y & 0xFFFFu));
-}
-
 [shader("fragment")]
 float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
 {
@@ -199,6 +198,9 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
     v.tangent = float4(tl > 0.0 ? i.tangent.xyz * rsqrt(tl) : float3(1.0, 0.0, 0.0),
                        i.tangent.w < 0.0 ? -1.0 : 1.0);
     v.geometric_normal = i.geometric;
+    float3 base_normal = v.normal;
+    float curvature = refraction_curvature(ddx(i.world), ddy(i.world),
+                                           ddx(base_normal), ddy(base_normal));
     float3 to_eye = fwd_ortho(sc) ? sc.view[2].xyz : sc.camera_position.xyz - i.world;
     float el = dot(to_eye, to_eye);
     v.view = el > 0.0 ? to_eye * rsqrt(el) : v.normal;
@@ -225,31 +227,73 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         SurfaceData u = UnlitModel.resolve_gbuffer(UnlitModel.load_params(m), v, lod);
         return float4(u.emissive * e * alpha, alpha);
     }
+    // A volume backface represents the glass-to-air interface. The generic double-sided
+    // material resolve flips normals for opaque sheets; preserve outward normals for this case.
+    if (pc.refraction != 0 && (m.features & DE_MATERIAL_FEATURE_TRANSMISSION) != 0u &&
+        m.extra.x > 0 && dot(base_normal, v.view) < 0)
+        m.flags &= ~DE_GPU_MATERIAL_DOUBLE_SIDED;
     SurfaceData s = StandardModel.resolve_gbuffer(StandardModel.load_params(m), v, lod);
     s.brdf_lut = lv.brdf_lut;
-    float view_depth = -dot(sc.view[2], float4(i.world, 1.0));
-    uint cluster = de_cluster_index(lv, px, view_depth);
-    DeDirect d =
-        evaluate_direct_clustered<StandardModel>(s, i.world, v.view, px, lv, pc.cl, cluster, false);
-    float3 ind_d, ind_s;
-    evaluate_indirect_split(s, i.world, v.view, px, lv, ind_d, ind_s);
     float t = (s.features & DE_MATERIAL_FEATURE_TRANSMISSION) != 0u
                   ? saturate(s.transmission) * (1.0 - saturate(s.metallic))
                   : 0.0;
+    bool identity = pc.refraction != 0 && t > 0 && abs(s.ior - 1) < 1e-3;
+    // With equal indices there is no dielectric interface, even at grazing incidence.
+    // Keep this specialization local to transmissive materials; opaque shading is unchanged.
+    if (identity)
+        s.specular = 0;
+    float view_depth = -dot(sc.view[2], float4(i.world, 1.0));
+    uint cluster = de_cluster_index(lv, px, view_depth);
+    DeDirect d = evaluate_direct_clustered<StandardModel>(s, i.world, v.view, px, lv, pc.cl,
+                                                          cluster, pc.refraction != 0 && t > 0);
+    float3 ind_d, ind_s;
+    evaluate_indirect_split(s, i.world, v.view, px, lv, ind_d, ind_s);
     // The transmitted part takes the reflected diffuse's place (as the BSDF's keep).
     float3 lit = d.diffuse + d.specular + ind_d * (1.0 - t) + ind_s + s.emissive;
     float3 rgb = lit * e;
-    if (t > 0.0 && pc.scene_color != DE_BINDLESS_INVALID)
-    {
-        float nov = saturate(dot(s.normal, v.view));
-        float r0 = (s.ior - 1.0) / (s.ior + 1.0);
-        float3 f0 = min(r0 * r0 * s.specular_color, float3(1.0, 1.0, 1.0)) * s.specular;
-        float k = pow(1.0 - nov, 5.0);
-        float3 f = f0 + (float3(s.specular, s.specular, s.specular) - f0) * k;
-        float3 through = t * s.base_color * (float3(1.0, 1.0, 1.0) - saturate(f)) *
-                         volume_transmittance(s.attenuation_color, s.attenuation_distance,
-                                              s.thickness);
-        rgb += fwd_scene_color(pc, px) * through; // already pre-exposed
+    if (t > 0.0 && pc.refraction == 0 && pc.scene_color != DE_BINDLESS_INVALID) {
+        float nov = saturate(dot(s.normal, v.view)), r0 = (s.ior - 1) / (s.ior + 1);
+        float3 f0 = min(r0 * r0 * s.specular_color, float3(1)) * s.specular;
+        float3 f = f0 + (float3(s.specular) - f0) * pow(1 - nov, 5);
+        float3 through =
+            t * s.base_color * (float3(1) - saturate(f)) *
+            volume_transmittance(s.attenuation_color, s.attenuation_distance, s.thickness);
+        rgb += scene_color_load(pc.scene_color, uint4(pc.width, pc.height, pc.scene_color_pitch, 0),
+                                int2(px))
+                   .rgb *
+               through;
+    } else if (t > 0.0 && pc.refraction != 0) {
+        RefractionScene scene;
+        scene.color = pc.scene_color;
+        scene.depth = pc.scene_depth;
+        scene.width = pc.width;
+        scene.height = pc.height;
+        scene.depth_pitch = pc.scene_depth_pitch;
+        scene.levels = pc.scene_color_levels;
+        scene.reserved0 = 0;
+        scene.reserved1 = 0;
+        RefractionResult ray = ss_refract(scene, sc, lv, cluster, px, i.world, v.view, s.normal,
+                                          base_normal, curvature, s.thickness, s.ior, s.roughness);
+        if (ray.tir) {
+            // All energy in the transmitting dielectric lobe is reflected at TIR. Raw incident
+            // radiance is already pre-exposed; replace its Schlick-weighted IBL contribution.
+            if (dot(v.view, base_normal) < 0)
+                rgb = (d.specular + s.emissive) * e + ray.radiance;
+            else
+                // A proxy's exit-interface TIR replaces only the transmitting portion; retain
+                // the independently shaded opaque mixture at its actual entry interface.
+                rgb += t * (ray.radiance - ind_s * e);
+        } else {
+            float nov = saturate(abs(dot(s.normal, v.view)));
+            float r0 = (s.ior - 1.0) / (s.ior + 1.0);
+            float3 f0 = min(r0 * r0 * s.specular_color, float3(1.0, 1.0, 1.0)) * s.specular;
+            float k = pow(1.0 - nov, 5.0);
+            float3 f = identity ? float3(0) : f0 + (float3(s.specular) - f0) * k;
+            float3 through =
+                t * s.base_color * (float3(1) - saturate(f)) *
+                volume_transmittance(s.attenuation_color, s.attenuation_distance, ray.distance);
+            rgb += ray.radiance * through;
+        }
     }
     return float4(rgb * alpha, alpha);
 }

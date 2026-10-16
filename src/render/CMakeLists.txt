@@ -387,3 +387,8 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/ao/gtao.c passes/ao/gtao_internal.h)
 endif()
+
+# DENG-342: current-frame opaque HDR Gaussian pyramid for refraction.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/forward/scene_color_pyramid.c passes/forward/scene_color_pyramid.h)
+endif()
