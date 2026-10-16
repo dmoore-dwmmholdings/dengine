@@ -159,6 +159,7 @@ struct de_renderer {
     struct de__irradiance *irradiance;
     struct de__ssgi *ssgi;
     struct de__csm *csm;
+    struct de__gtao *gtao;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
     u32 window_w, window_h;

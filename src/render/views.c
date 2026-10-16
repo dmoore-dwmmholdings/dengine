@@ -1,4 +1,5 @@
 #include "render/shadows/shadows_internal.h"
+#include "render/passes/ao/gtao_internal.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
 /*
@@ -864,6 +865,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     }
     de__csm_complete(r->csm, vf.view, g, shadow_attempted, res == DE_OK);
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
+    de__gtao_complete(r->gtao, vf.view, g, shadow_attempted, res == DE_OK);
     de__irradiance_view_complete(r, vf.view, res == DE_OK);
     de__ssgi_view_complete(r->ssgi, vf.view, frame_index, res == DE_OK);
     de__rg_reset(g);

@@ -26,6 +26,7 @@ DE_EXTERN_C_BEGIN
 #define DE__INPUT_SPECULAR_OPAQUE 1u
 #define DE__INPUT_DIFFUSE_OPAQUE  2u
 #define DE__INPUT_SHADOW_METADATA 4u
+#define DE__INPUT_AO_GTAO 8u
 
 /** The resources one view's lighting reads this frame (invalid = none). */
 typedef struct de__lighting_inputs {
@@ -54,6 +55,8 @@ typedef struct de__lighting_inputs {
      * with DE__INPUT_SHADOW_METADATA; the legacy RGBA texture input remains supported. */
     de_rg_resource shadow_records, shadow_textures[8];
     u32 shadow_texture_count;
+    bool ao_gtao; /**< Raw opaque-surface visibility: min with material AO, RGB multi-bounce. */
+    de_rg_resource ao_bent; /**< Optional world-oct RG8; reserved for explicit AO consumers. */
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 

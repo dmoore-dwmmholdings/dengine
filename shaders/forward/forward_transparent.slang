@@ -185,6 +185,10 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         lv.inputs.indirect_specular = 0u;
     if ((lv.inputs.reserved0 & DE_INPUT_DIFFUSE_OPAQUE) != 0u)
         lv.inputs.indirect_diffuse = 0u;
+    if ((lv.inputs.reserved0 & DE_INPUT_AO_GTAO) != 0u) {
+        lv.inputs.ao = 0u;
+        lv.inputs.reserved0 &= ~DE_INPUT_AO_GTAO;
+    }
     uint2 px = uint2(i.pos.xy);
     DeGpuMaterial m = de_resolve_material_of(i.material, sc);
     VertexAttribs v;

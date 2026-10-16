@@ -1437,6 +1437,7 @@ TEST(vis_frame, renderer_stage) {
     bool resolved = false, trace = false, ssr_resolved = false, lit = false, history = false;
     u32 closest_passes = 0;
     bool gi_trace = false, gi_resolved = false;
+    u32 ao_step=0;
     for (u32 i = 0; i < n; ++i) {
         const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
         if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
@@ -1449,7 +1450,17 @@ TEST(vis_frame, renderer_stage) {
             ++closest_passes;
             continue;
         }
+        if (strncmp(e->text, "gtao.", 5) == 0) {
+            static const char *const names[] = {"gtao.raw", "gtao.spatial", "gtao.temporal",
+                                                "gtao.pack", "gtao.publish"};
+            ASSERT_TRUE(ao_step < sizeof names / sizeof names[0]);
+            EXPECT_TRUE(resolved && closest_passes > 0);
+            EXPECT_STREQ(e->text, names[ao_step]);
+            ++ao_step;
+            continue;
+        }
         if (strcmp(e->text, "ssr.trace") == 0) {
+            EXPECT_EQ(ao_step, 5u);
             EXPECT_TRUE(resolved && closest_passes > 0);
             trace = true;
             continue;
@@ -1486,6 +1497,7 @@ TEST(vis_frame, renderer_stage) {
     }
     EXPECT_TRUE(trace && ssr_resolved && history);
     EXPECT_TRUE(gi_trace && gi_resolved);
+    EXPECT_EQ(ao_step, 5u);
     de__view_info vi;
     ASSERT_TRUE(de__view_info_get(r, de_renderer_main_view(r), &vi));
     u32 hw, hh, mips;

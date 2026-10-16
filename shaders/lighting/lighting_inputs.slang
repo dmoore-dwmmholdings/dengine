@@ -17,6 +17,7 @@ public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-
 
 /// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
 public static const uint DE_INPUT_SHADOW_METADATA = 4;
+public static const uint DE_INPUT_AO_GTAO = 8u;
 
 public struct LightingInputs
 {

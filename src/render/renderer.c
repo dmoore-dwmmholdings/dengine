@@ -1,4 +1,5 @@
 #include "render/shadows/shadows_internal.h"
+#include "render/passes/ao/gtao_internal.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
 #include "render/probes/probes_internal.h"
@@ -58,6 +59,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
     de__csm_destroy(r->csm);
+    de__gtao_destroy(r->gtao);
     de__ssgi_destroy(r->ssgi);
     de__irradiance_destroy(r->irradiance);
     de__ssr_destroy(r->ssr);
@@ -249,6 +251,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
 
     res = de__csm_create(r, &r->csm);
+    if (res != DE_OK)
+        goto fail;
+    res = de__gtao_create(r, &r->gtao);
     if (res != DE_OK)
         goto fail;
 

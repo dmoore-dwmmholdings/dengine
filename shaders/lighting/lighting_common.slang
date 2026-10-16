@@ -209,31 +209,53 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
 }
 
 /// Indirect light leaving `s` towards the eye, split into its diffuse and specular parts (not
-/// pre-exposed): image-based lighting (ibl.slang, DENG-304) with the G-buffer AO times the AO
-/// input, blended with the indirect override inputs where a producer wrote them (S15).
-public void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLightingView lv,
-                                    out float3 diffuse, out float3 specular)
-{
-    float ao = s.ao * de_input_ao(lv.inputs, px);
-    float4 localRadiance=float4(0,0,0,0);
-    if(lv.inputs.probe_records!=0 && lv.inputs.probe_list!=0) {
-        float view_depth=-dot(lv.inputs.probe_view_z,float4(p,1));
-        uint cluster=de_cluster_index(lv,px,view_depth);
+/// pre-exposed): GTAO uses min(material AO, input AO) with diffuse multibounce; legacy inputs
+/// retain their multiplicative AO contract. Indirect overrides share the same composition.
+public
+float3 de_ao_multibounce(float visibility, float3 diffuse_albedo) {
+    float3 rho = saturate(diffuse_albedo);
+    float3 a = 2.0404 * rho - 0.3324, b = -4.7951 * rho + 0.6417, c = 2.7552 * rho + 0.6903;
+    return saturate(max(float3(visibility), ((a * visibility + b) * visibility + c) * visibility));
+}
+public
+void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLightingView lv,
+                             out float3 diffuse, out float3 specular) {
+    bool gtao = (lv.inputs.reserved0 & DE_INPUT_AO_GTAO) != 0u;
+    float raw_ao = de_input_ao(lv.inputs, px);
+    float ao = gtao ? min(s.ao, raw_ao) : s.ao * raw_ao;
+    float3 diffuse_ao =
+        gtao ? de_ao_multibounce(ao, s.base_color * (1 - saturate(s.metallic))) : float3(ao);
+    float4 localRadiance = float4(0, 0, 0, 0);
+    if (lv.inputs.probe_records != 0 && lv.inputs.probe_list != 0) {
+        float view_depth = -dot(lv.inputs.probe_view_z, float4(p, 1));
+        uint cluster = de_cluster_index(lv, px, view_depth);
         localRadiance=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,
             lv.inputs.probe_sampler,cluster,p,de_ibl_reflection_direction(s,v),s.roughness);
     }
     de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular,localRadiance);
-    float4 gi=gi_irradiance(lv.inputs.reserved1,p,s.normal,v);
-    if(gi.a>0) {
-        DeIbl unit=(DeIbl)0;unit.ambient=float4(1,1,1,0);
-        float3 response,unused;
-        de_ibl_evaluate(s,v,unit,lv.brdf_lut,1,response,unused);
+    if (gtao)
+        diffuse *= ao > 0 ? diffuse_ao / ao : float3(0);
+    float4 gi = gi_irradiance(lv.inputs.reserved1, p, s.normal, v);
+    if (gi.a > 0) {
+        DeIbl unit = (DeIbl)0;
+        unit.ambient = float4(1, 1, 1, 0);
+        float3 response, unused;
+        de_ibl_evaluate(s, v, unit, lv.brdf_lut, 1, response, unused);
         // Unit ambient is pi irradiance. Preserve the exact shared energy/material response.
-        diffuse=diffuse*(1-gi.a)+gi.rgb*(response*DE_INV_PI)*ao;
+        diffuse = diffuse * (1 - gi.a) + gi.rgb * (response * DE_INV_PI) * diffuse_ao;
     }
     float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
-    diffuse = lerp(diffuse, od.rgb * ao, saturate(od.a));
-    specular = de_input_compose_specular(lv.inputs,px,specular);
+    diffuse = lerp(diffuse, od.rgb * diffuse_ao, saturate(od.a));
+    if (gtao) {
+        float4 ssr = de_input_indirect_specular_override(lv.inputs, px);
+        float nov = max(dot(s.normal, v), 1e-4), r = saturate(s.roughness);
+        float material = de_ibl_specular_occlusion(nov, s.ao, r);
+        float combined = de_ibl_specular_occlusion(nov, ao, r);
+        // SSR already contains the material's Lagarde factor: replace, never multiply it twice.
+        ssr.rgb *= material > 0 ? combined / material : 0;
+        specular = lerp(specular, ssr.rgb, saturate(ssr.a));
+    } else
+        specular = de_input_compose_specular(lv.inputs, px, specular);
 }
 
 /// Indirect light leaving `s` towards the eye (evaluate_indirect_split's sum). The deferred pass

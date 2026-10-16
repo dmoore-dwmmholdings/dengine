@@ -94,6 +94,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_INPUT_SPECULAR_OPAQUE", DE__INPUT_SPECULAR_OPAQUE},
     {"DE_INPUT_DIFFUSE_OPAQUE", DE__INPUT_DIFFUSE_OPAQUE},
     {"DE_INPUT_SHADOW_METADATA", DE__INPUT_SHADOW_METADATA},
+    {"DE_INPUT_AO_GTAO", DE__INPUT_AO_GTAO},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -833,7 +834,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
         b.input_flags = (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
                         (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u) |
-                        (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u);
+                        (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u) |
+                        (in.ao_gtao ? DE__INPUT_AO_GTAO : 0u);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;
