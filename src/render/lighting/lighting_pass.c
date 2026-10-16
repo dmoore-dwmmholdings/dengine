@@ -91,6 +91,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_LIGHTING_GROUP", 64u},
     {"DE_IBL_ENVIRONMENT", DE__IBL_ENVIRONMENT}, /* DENG-304 */
     {"DE_IBL_STRIP_FACES", DE__IBL_STRIP_FACES},
+    {"DE_INPUT_SPECULAR_OPAQUE", DE__INPUT_SPECULAR_OPAQUE},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -479,7 +480,8 @@ typedef struct lp_pass {
     de_rg_resource inputs[8];
     u32 probe_entry, probe_sampler;
     f32 probe_view_z[4];
-    u8 *inputs_dst; /**< the inputs of this frame's constants entry (the deferred pass) */
+    u8 *inputs_dst;  /**< the inputs of this frame's constants entry (the deferred pass) */
+    u32 input_flags; /**< DENG-339: bit 0 is an opaque-only indirect specular override. */
     de_gpu_buffer rb;
     u64 rb_offset;
 } lp_pass;
@@ -537,6 +539,7 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .contact_shadows = tex_index(p, pass, p->inputs[3], false),
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
         .indirect_specular = tex_index(p, pass, p->inputs[5], false),
+        .reserved0 = p->input_flags,
         .probe_records = buf_index(p, pass, p->inputs[6]),
         .probe_list = buf_index(p, pass, p->inputs[7]),
         .probe_entry = p->probe_entry,
@@ -813,6 +816,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.probe_sampler = in.probe_sampler;
         memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
+        b.input_flags = in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u;
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;

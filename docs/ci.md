@@ -104,6 +104,11 @@ vendored WARP, require the Agility runtime and the Base tier (`tests/unit/render
 
 #### Golden images (`golden` job, full tier only)
 
+DENG-339 adds `test_render_ssr` / `render_ssr.*` to the explicit full-tier lavapipe and
+WARP selections: the tracing, mirror reference, exposure, HDR convergence, edge/fallback,
+forward transparency and history lifecycle cases must execute on the supported backend.
+Native Metal verification runs on the development host.
+
 The golden-image harness (`docs/testing/golden.md`, DENG-329) renders the scenes of
 `tests/golden/` and compares them with the references in `tests/golden/refs/` by LDR-FLIP. The
 `golden` job is a matrix of three entries. It runs only when the run is in the full tier: its

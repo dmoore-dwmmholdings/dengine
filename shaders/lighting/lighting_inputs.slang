@@ -12,6 +12,7 @@
 module lighting_inputs;
 
 import bindless;
+public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
 /// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
 public struct LightingInputs
@@ -77,6 +78,13 @@ public float4 de_input_indirect_diffuse_override(LightingInputs i, uint2 p)
 public float4 de_input_indirect_specular_override(LightingInputs i, uint2 p)
 {
     return de_input_load(i.indirect_specular, p, float4(0.0, 0.0, 0.0, 0.0));
+}
+
+/// Material-weighted unexposed outgoing specular, over probe/sky by SSR confidence.
+public float3 de_input_compose_specular(LightingInputs i,uint2 p,float3 fallback)
+{
+    float4 ssr=de_input_indirect_specular_override(i,p);
+    return lerp(fallback,ssr.rgb,saturate(ssr.a));
 }
 
 /// Indirect diffuse radiance leaving pixel `p` (0 without a producer).

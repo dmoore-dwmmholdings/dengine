@@ -180,6 +180,9 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
 {
     DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.view_slot];
     DeLightingView lv = de_robuffer<DeLightingView>(pc.view)[pc.entry];
+    // SSR is weighted for this pixel's opaque G-buffer surface, not the transparent material.
+    if ((lv.inputs.reserved0 & DE_INPUT_SPECULAR_OPAQUE) != 0u)
+        lv.inputs.indirect_specular = 0u;
     uint2 px = uint2(i.pos.xy);
     DeGpuMaterial m = de_resolve_material_of(i.material, sc);
     VertexAttribs v;

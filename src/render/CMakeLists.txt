@@ -362,3 +362,8 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE probes/probe_capture.c probes/probe_store.c probes/probe_bake.c probes/reflection_probes.c)
 endif()
+
+# DENG-339: reusable final-depth pyramid and lit HDR scene history, with SSR consumers.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/ssr/scene_history.c passes/ssr/ssr.c)
+endif()

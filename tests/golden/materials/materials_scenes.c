@@ -388,7 +388,10 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
      * the layouts at the end of each list; DENG-235, DENG-427). */
     if (ctx->backend == DE_GPU_VULKAN)
         mg_cvar("r.rg_record_cost", "1048576");
-    const de_render_settings rs = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_HIGH);
+    de_render_settings rs = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_HIGH);
+    /* These S14 references isolate materials and IBL. Stochastic screen-space reflections
+     * have independent CPU/G-buffer references and temporal tests in test_render_ssr. */
+    rs.reflections = DE_QUALITY_OFF;
     de_renderer_set_settings(m.r, &rs);
 
     m.target = de_gpu_texture_create(
