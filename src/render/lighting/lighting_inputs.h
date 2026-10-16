@@ -26,7 +26,7 @@ DE_EXTERN_C_BEGIN
 #define DE__INPUT_SPECULAR_OPAQUE 1u
 #define DE__INPUT_DIFFUSE_OPAQUE  2u
 #define DE__INPUT_SHADOW_METADATA 4u
-#define DE__INPUT_AO_GTAO 8u
+#define DE__INPUT_AO_GTAO         8u
 
 /** The resources one view's lighting reads this frame (invalid = none). */
 typedef struct de__lighting_inputs {

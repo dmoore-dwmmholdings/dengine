@@ -1056,21 +1056,21 @@ static void composition_oracle(lx *f, de_gpu_backend backend) {
         double nov = q->view_roughness[2], rough = q->view_roughness[3];
         double combined = lagarde64(nov, visibility, rough),
                original = lagarde64(nov, material, rough);
-        double confidence = diffuse[i * 4 + 3];
+        double blend_confidence = diffuse[i * 4 + 3];
         for (u32 channel = 0; channel < 3; ++channel) {
             double factor =
                 flag ? multibounce64(visibility, q->color_ao[channel] * (1 - q->material[0]))
                      : visibility;
             double gi_scale = q->material[2] == 1 ? .4 + .6 * irradiance[channel] / PI64 : 1;
             double probe_scale = q->material[2] == 2 ? .6 + .4 * probe_color[channel] : 1;
-            double expected_d = (result[i * 16 + 8 + channel] * gi_scale * (1 - confidence) +
-                                 diffuse[i * 4 + channel] * confidence) *
+            double expected_d = (result[i * 16 + 8 + channel] * gi_scale * (1 - blend_confidence) +
+                                 diffuse[i * 4 + channel] * blend_confidence) *
                                 factor;
             double override =
                 specular[i * 4 + channel] * (flag ? (original > 0 ? combined / original : 0) : 1);
             double expected_s =
-                result[i * 16 + 12 + channel] * probe_scale * combined * (1 - confidence) +
-                override * confidence;
+                result[i * 16 + 12 + channel] * probe_scale * combined * (1 - blend_confidence) +
+                override * blend_confidence;
             EXPECT_FLOAT_EQ(result[i * 16 + channel], expected_d, 3e-5);
             EXPECT_FLOAT_EQ(result[i * 16 + 4 + channel], expected_s, 3e-5);
         }

@@ -1437,7 +1437,7 @@ TEST(vis_frame, renderer_stage) {
     bool resolved = false, trace = false, ssr_resolved = false, lit = false, history = false;
     u32 closest_passes = 0;
     bool gi_trace = false, gi_resolved = false;
-    u32 ao_step=0;
+    u32 ao_step = 0;
     for (u32 i = 0; i < n; ++i) {
         const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
         if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
