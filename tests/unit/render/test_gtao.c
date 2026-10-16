@@ -396,6 +396,11 @@ static void raw_geometry(lx *f, de_gpu_backend backend, bool corner, de_quality 
         barrier.after = DE_ACCESS_COPY_SRC;
         de_gpu_cmd_barriers(cmd, &barrier, 1);
         de_gpu_cmd_copy_texture_to_buffer(cmd, readback, 0, opitch, output, 0, 0);
+        /* Keep live bindless storage descriptors in their GENERAL resting state before the
+         * filtered graph records unrelated initialization draws. The copied buffer owns proof. */
+        barrier.before = DE_ACCESS_COPY_SRC;
+        barrier.after = DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE;
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
         ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
                                       &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
                   DE_OK);
