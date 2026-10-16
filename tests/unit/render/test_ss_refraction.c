@@ -1614,6 +1614,9 @@ static double independent_ggx_tir(ray_v view, ray_v light, ray_v normal, double 
     }
     return fresnel * d / (1 + lambda_v + lambda_l) / (4 * no_v);
 }
+static u32 normal_texture_bindless(void *user, de_texture texture) {
+    return texture.id == 1 ? *(const u32 *)user : 0;
+}
 static void forward_tir_reference(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__forward_create_ex(f->vis, f->lt, &f->forward), DE_OK);
@@ -1696,6 +1699,46 @@ static void forward_tir_reference(lx *f, de_gpu_backend backend) {
            checked, max_error);
     EXPECT_TRUE(checked > 2500);
     EXPECT_TRUE(max_error < .002);
+    // Effective transmission zero must retain the original double-sided opaque resolve,
+    // including backfaces. Test metallic suppression and a sampled zero transmission map.
+    g_mat[mat - 1].alpha_mode = DE_COOKED_ALPHA_BLEND;
+    u8 zero_raw[256] = {0};
+    de_gpu_texture zero =
+        upload_image_usage(f, 1, 1, DE_FMT_RGBA16_FLOAT, zero_raw, 256, DE_USAGE_SAMPLED);
+    u32 zero_index = de_gpu_texture_bindless(f->dev, zero, 0, false);
+    de__gpu_scene_destroy(f->gs);
+    f->gs = NULL;
+    de__gpu_scene_desc gd = {.device = f->dev,
+                             .allocator = &f->alloc,
+                             .resolver = {.user = &zero_index,
+                                          .mesh = fake_mesh,
+                                          .material = fake_material,
+                                          .texture_bindless = normal_texture_bindless},
+                             .staging_bytes = (u64)16 << 20};
+    gd.initial_capacity[DE__GS_INSTANCES] = 32;
+    gd.initial_capacity[DE__GS_LIGHTS] = MAX_LIGHTS;
+    ASSERT_EQ(de__gpu_scene_create(&gd, &f->gs), DE_OK);
+    m->transmission = 1;
+    for (u32 opaque_case = 0; opaque_case < 2; ++opaque_case) {
+        m->metallic = opaque_case ? 0 : 1;
+        g_mat[mat - 1].textures[DE_COOKED_TEX_TRANSMISSION].id = opaque_case ? 1 : 0;
+        u32 passes;
+        ASSERT_TRUE(cvar_set("r.refraction", "0"));
+        float *off = forward_frame(f, opaque, pitch, .7f, true, ambient, &passes);
+        ASSERT_TRUE(cvar_set("r.refraction", "1"));
+        float *on = forward_frame(f, opaque, pitch, .7f, true, ambient, &passes);
+        EXPECT_EQ(memcmp(off, on, w * h * 4 * sizeof(float)), 0);
+        double energy = 0;
+        for (u32 pixel = 0; pixel < w * h; ++pixel)
+            energy += on[pixel * 4] + on[pixel * 4 + 1] + on[pixel * 4 + 2];
+        EXPECT_TRUE(energy > 1);
+        printf("full forward effective transmission zero backface case%u: %u exact ON/OFF pixels, "
+               "energy%.9g\n",
+               opaque_case, w * h, energy);
+        free(off);
+        free(on);
+    }
+    de_gpu_texture_destroy(f->dev, zero);
     EXPECT_EQ(validation_errors(f->dev), 0u);
 }
 TEST_F(refraction, forward_tir_energy_metal, lx) {
@@ -1708,9 +1751,6 @@ TEST_F(refraction, forward_tir_energy_d3d12, lx) {
     forward_tir_reference(f, DE_GPU_D3D12);
 }
 
-static u32 normal_texture_bindless(void *user, de_texture texture) {
-    return texture.id == 1 ? *(const u32 *)user : 0;
-}
 static void forward_proxy_exit_reference(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__forward_create_ex(f->vis, f->lt, &f->forward), DE_OK);

@@ -227,16 +227,18 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         SurfaceData u = UnlitModel.resolve_gbuffer(UnlitModel.load_params(m), v, lod);
         return float4(u.emissive * e * alpha, alpha);
     }
-    // A volume backface represents the glass-to-air interface. The generic double-sided
-    // material resolve flips normals for opaque sheets; preserve outward normals for this case.
-    if (pc.refraction != 0 && (m.features & DE_MATERIAL_FEATURE_TRANSMISSION) != 0u &&
-        m.extra.x > 0 && dot(base_normal, v.view) < 0)
-        m.flags &= ~DE_GPU_MATERIAL_DOUBLE_SIDED;
     SurfaceData s = StandardModel.resolve_gbuffer(StandardModel.load_params(m), v, lod);
-    s.brdf_lut = lv.brdf_lut;
     float t = (s.features & DE_MATERIAL_FEATURE_TRANSMISSION) != 0u
                   ? saturate(s.transmission) * (1.0 - saturate(s.metallic))
                   : 0.0;
+    // Only an effectively transmitting volume backface represents the glass-to-air
+    // interface. Resolve textures/metallicity first so opaque double-sided shading is unchanged.
+    if (pc.refraction != 0 && t > 0 && s.thickness > 0 && dot(base_normal, v.view) < 0)
+    {
+        m.flags &= ~DE_GPU_MATERIAL_DOUBLE_SIDED;
+        s = StandardModel.resolve_gbuffer(StandardModel.load_params(m), v, lod);
+    }
+    s.brdf_lut = lv.brdf_lut;
     bool identity = pc.refraction != 0 && t > 0 && abs(s.ior - 1) < 1e-3;
     // With equal indices there is no dielectric interface, even at grazing incidence.
     // Keep this specialization local to transmissive materials; opaque shading is unchanged.
