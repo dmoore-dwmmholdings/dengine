@@ -66,7 +66,10 @@
 #include <string.h>
 
 #define MI_WAIT_NS (20ull * 1000000000ull)
-#define MI_MAX     1024u
+/* Loading 1000 separate files under parallel Windows Debug CI is fixture setup, not the
+ * incremental-upload performance/behavior check. Keep a finite bound below CTest's 300 s. */
+#define MI_STARTUP_WAIT_NS (120ull * 1000000000ull)
+#define MI_MAX             1024u
 
 typedef struct mfx {
     de_tracking_allocator track, dev_track;
@@ -181,6 +184,85 @@ static de_entity spawn(mfx *f, de_material m, f64 x) {
     return e;
 }
 
+typedef struct readiness {
+    u32 states[DE_LOAD_CANCELLED + 1];
+    u32 incomplete, terminal;
+    de_asset_id first;
+    de_load_state first_state;
+    char first_name[32];
+} readiness;
+
+static void check_asset(mfx *f, readiness *r, de_asset_id id, const char *name) {
+    const de_load_state state = de_asset_status_of(f->s, id);
+    ++r->states[state];
+    if (state == DE_LOAD_READY)
+        return;
+    ++r->incomplete;
+    const bool terminal = state == DE_LOAD_INVALID || state == DE_LOAD_PARTIAL ||
+                          state == DE_LOAD_FAILED || state == DE_LOAD_CANCELLED;
+    /* Prefer a failed asset to a pending one in diagnostics, even if it sorts later. */
+    if (r->first.hash == 0 || (terminal && r->terminal == 0)) {
+        r->first = id;
+        r->first_state = state;
+        (void)snprintf(r->first_name, sizeof r->first_name, "%s", name);
+    }
+    if (terminal)
+        ++r->terminal;
+}
+
+static readiness asset_readiness(mfx *f) {
+    readiness r = {0};
+    check_asset(f, &r, de_asset_id_from("mi/mesh"), "mi/mesh");
+    for (u32 i = 0; i < f->count; ++i) {
+        char name[32];
+        (void)snprintf(name, sizeof name, "mi/mat%u", i);
+        check_asset(f, &r, mat_id(i), name);
+    }
+    return r;
+}
+
+static void readiness_diagnostic(mfx *f, const readiness *r, u64 elapsed, u32 rounds) {
+    char error[256] = "";
+    (void)de_asset_last_error(f->s, r->first, error, sizeof error);
+    const de_asset_stats assets = de_asset_get_stats(f->s);
+    de__asset_wait_stats waits;
+    de__asset_wait_get_stats(f->s, &waits);
+    printf("material fixture startup %.3f s, %u rounds: %u/%u ready, "
+           "%u pending, %u loading, %u terminal; first incomplete %s state %d error '%s'; "
+           "loads %u uploads %u; wake blocks %llu signalled %llu timeouts %llu\n",
+           (double)elapsed / 1e9, rounds, r->states[DE_LOAD_READY], f->count + 1,
+           r->states[DE_LOAD_PENDING], r->states[DE_LOAD_LOADING], r->terminal,
+           r->first.hash ? r->first_name : "none", (int)r->first_state, error,
+           assets.loads_in_flight, assets.uploads_in_flight, (unsigned long long)waits.blocks,
+           (unsigned long long)waits.signalled, (unsigned long long)waits.timeouts);
+}
+
+static void wait_assets(mfx *f) {
+    const u64 t0 = de_time_now_ns();
+    u32 rounds = 0;
+    for (;;) {
+        /* As in the loader fixture: flush copies, clear the previous wake BEFORE checking
+         * publication, then block for new progress. A stale pending signal otherwise spins.
+         * ECS extraction/rendering is unnecessary until assets are ready and entities exist. */
+        de_render_uploader_flush(de__renderer_uploader(f->r));
+        de__asset_wake_reset(f->s);
+        de_asset_system_update(f->s, NULL);
+        ++rounds;
+        const readiness r = asset_readiness(f);
+        const u64 elapsed = de_time_now_ns() - t0;
+        if (r.incomplete == 0) {
+            readiness_diagnostic(f, &r, elapsed, rounds);
+            return;
+        }
+        if (r.terminal != 0 || elapsed >= MI_STARTUP_WAIT_NS) {
+            readiness_diagnostic(f, &r, elapsed, rounds);
+            FAIL("material fixture assets failed or exceeded the startup deadline");
+        }
+        const u64 remaining = MI_STARTUP_WAIT_NS - elapsed;
+        (void)de__asset_wake_block(f->s, remaining < 2000000u ? remaining : 2000000u);
+    }
+}
+
 static void start(mfx *f, const char *name, start_opts o) {
     de_fp_env_init_thread();
     snprintf(f->dir, sizeof f->dir, "rmi:/%s", name);
@@ -256,28 +338,10 @@ static void start(mfx *f, const char *name, start_opts o) {
     for (u32 i = 0; i < o.materials; ++i) {
         f->loads[f->load_count++] = de_asset_load(f->s, mat_id(i), 0);
         f->mats[i] = de_asset_material(f->s, mat_id(i));
-        if (!o.no_entities)
-            ASSERT_NE(spawn(f, f->mats[i], (f64)i).bits, 0u);
     }
-    const u64 t0 = de_time_now_ns();
-    for (;;) {
-        frame(f);
-        bool ready = de_asset_status_of(f->s, de_asset_id_from("mi/mesh")) == DE_LOAD_READY;
-        for (u32 i = 0; ready && i < o.materials; ++i)
-            ready = de_asset_status_of(f->s, mat_id(i)) == DE_LOAD_READY;
-        if (ready)
-            break;
-        if (de_time_now_ns() - t0 >= MI_WAIT_NS) { /* why it never got READY */
-            printf("mesh %d", (int)de_asset_status_of(f->s, de_asset_id_from("mi/mesh")));
-            for (u32 i = 0; i < o.materials && i < 4u; ++i)
-                printf(" mat%u %d", i, (int)de_asset_status_of(f->s, mat_id(i)));
-            char msg[256] = "";
-            (void)de_asset_last_error(f->s, mat_id(0), msg, sizeof msg);
-            printf(" (%s)\n", msg);
-        }
-        ASSERT_TRUE(de_time_now_ns() - t0 < MI_WAIT_NS);
-        (void)de__asset_wake_block(f->s, 2000000u);
-    }
+    wait_assets(f);
+    for (u32 i = 0; !o.no_entities && i < o.materials; ++i)
+        ASSERT_NE(spawn(f, f->mats[i], (f64)i).bits, 0u);
     frame(f); /* the blocks of the last materials to publish */
     frame(f);
 }
