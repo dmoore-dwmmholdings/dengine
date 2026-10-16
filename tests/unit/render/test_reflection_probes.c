@@ -782,6 +782,30 @@ static void renderer_lru(pfx *f, de_gpu_backend backend) {
     ASSERT_EQ(de__views_last_order(f->r, original, 6), 6u);
     ASSERT_TRUE(de__probes_info(f->r, 42, &a));
     EXPECT_TRUE(a.ready);
+    /* Failed lazy initialization of a second resolution preserves the current capture and
+     * resident radiance; readback must not dereference the failed candidate's cleared renderer. */
+    de_view spare[DE__VIEW_MAX];
+    u32 spare_count = 0;
+    while (spare_count < DE__VIEW_MAX) {
+        de_view view = de_view_create(f->r, &(de_view_desc){.name = "probe.retry_spare"});
+        if (!DE_HANDLE_VALID(view))
+            break;
+        spare[spare_count++] = view;
+    }
+    ASSERT_TRUE(spare_count >= 5);
+    for (u32 i = 0; i < 5; ++i)
+        de_view_destroy(f->r, spare[--spare_count]);
+    de__probes_prepare(f->r, &f->scene.f); /* Five free slots: the sixth face must fail. */
+    for (u32 i = 0; i < spare_count; ++i)
+        de_view_destroy(f->r, spare[i]);
+    de_error_clear();
+    ASSERT_TRUE(de__probes_info(f->r, 42, &a));
+    EXPECT_TRUE(a.ready);
+    u64 bytes = de__probe_payload_size(64);
+    u8 *saved = malloc((size_t)bytes);
+    ASSERT_TRUE(saved);
+    ASSERT_EQ(de__probes_readback(f->r, 42, saved, bytes), DE_OK);
+    free(saved);
     room_frame(f);
     ASSERT_EQ(de__views_last_order(f->r, switched, 6), 6u);
     for (u32 i = 0; i < 6; ++i)

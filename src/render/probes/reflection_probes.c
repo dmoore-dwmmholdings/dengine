@@ -262,18 +262,19 @@ void de__probes_prepare(de_renderer *r, const de__render_world_frame *world) {
         resolution = 128;
     if (!s->capacity && de__probe_store_init(s, r->dev, r->alloc, 256, capacity) != DE_OK)
         return;
+    /* Keep one lazy capture per supported resolution: switching probes must not churn
+     * persistent view graphs or reinterpret retired bindless descriptor indices. */
+    de__probe_capture *candidate = &p->captures[resolution == 64 ? 0 : resolution == 128 ? 1 : 2];
+    if (!candidate->initialized) {
+        if (de__probe_capture_init(candidate, r, resolution) != DE_OK)
+            return;
+    }
+    p->capture = candidate;
     if (!de__probe_store_valid(s, rec->handle))
         rec->handle =
             de__probe_store_alloc_resolution(s, rec->snapshot.entity, r->frame_index, resolution);
     if (!de__probe_store_valid(s, rec->handle))
         return;
-    /* Keep one lazy capture per supported resolution: switching probes must not churn
-     * persistent view graphs or reinterpret retired bindless descriptor indices. */
-    p->capture = &p->captures[resolution == 64 ? 0 : resolution == 128 ? 1 : 2];
-    if (!p->capture->initialized) {
-        if (de__probe_capture_init(p->capture, r, resolution) != DE_OK)
-            return;
-    }
     if (!rec->loaded && DE_HANDLE_VALID(rec->snapshot.probe.bake) && r->assets) {
         u64 size = 0;
         const void *blob = de_blob_data(r->assets, rec->snapshot.probe.bake, &size), *data = NULL;
