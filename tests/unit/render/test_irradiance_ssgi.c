@@ -659,7 +659,8 @@ TEST_F(gi, irradiance_bake_reload_identical_d3d12, gifx) {
 }
 static void gi_queries(gifx *f, const de__gi_gpu *volumes, u32 volume_count, const f32 *queries,
                        u32 count, f32 *result) {
-    de__gi_gpu records[9] = {{0}};
+    de__gi_gpu records[9];
+    memset(records, 0, sizeof records);
     records[0].counts[0] = volume_count;
     memcpy(records + 1, volumes, (size_t)volume_count * sizeof *volumes);
     de_gpu_buffer metadata = upload_buf(f->dev, records, sizeof records);
@@ -718,7 +719,7 @@ static void gi_queries(gifx *f, const de__gi_gpu *volumes, u32 volume_count, con
 }
 static u32 cpu_packed_component(f32 value, u32 mantissa) {
     if (!isfinite(value))
-        value = value > 0 ? 60000 : 0;
+        value = value > 0.f ? 60000.f : 0.f;
     value = fminf(fmaxf(value, 0), 60000);
     if (value == 0)
         return 0;
