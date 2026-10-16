@@ -457,6 +457,28 @@ typedef struct DeLight {
     bool cast_shadows;
 } DeLight;
 
+/** Local radiance influence. Extent is half size (sphere uses extent.x), in metres. */
+typedef enum de_probe_shape { DE_PROBE_BOX, DE_PROBE_SPHERE } de_probe_shape;
+typedef enum de_probe_update {
+    DE_PROBE_ONCE,
+    DE_PROBE_ON_REQUEST,
+    DE_PROBE_EVERY_N_FRAMES
+} de_probe_update;
+typedef struct DeReflectionProbe {
+    de_probe_shape shape;
+    de_vec3 extent;
+    f32 blend_distance;
+    bool box_projection;
+    u32 resolution; /**< 0 = 128; otherwise 64, 128 or 256. */
+    de_probe_update update;
+    u32 update_interval; /**< Frames between periodic updates; 0 = 60. */
+    i32 priority;        /**< Higher priority captures and blends first; ties use entity bits. */
+    f32 intensity;
+    de_blob bake; /**< Optional versioned .deprobe blob; stale settings trigger capture. */
+} DeReflectionProbe;
+/** Schedule a probe for recapture. Main thread, between Extract kicks. */
+DE_API de_result de_render_probe_request_update(de_renderer *r, de_entity entity);
+
 typedef struct DeEnvironment {
     de_texture hdri; /* zero = procedural sky (DeSky) */
     f32 intensity;

@@ -35,3 +35,6 @@ de_engine_shader(post_output_basic  post/output_basic.slang)
 de_engine_shader(forward_transparent forward/forward_transparent.slang)
 # DENG-306: screen-space separable subsurface scattering (Burley profile; burley_profile.slang).
 de_engine_shader(sss_separable      sss/sss_separable.slang)
+
+de_engine_shader(probe_prefilter probes/probe_prefilter.slang)
+de_engine_shader(reflection_probe_sample probes/reflection_probe_sample.slang)

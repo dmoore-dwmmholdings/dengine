@@ -246,3 +246,17 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     de_rg_write(p, lc->list, DE_ACCESS_SHADER_WRITE);
     return true;
 }
+
+/* DENG-340: probe lists use exactly the S14 froxel bounds and grid math. CPU writes a warm
+ * upload ring; GPU intersects probes and constructs fixed-capacity index lists. */
+void de__probe_cluster_bounds(const de__cluster_grid *grid, const de_mat4 *proj, f32 *bounds) {
+    f32 inv[4][4];
+    de__lighting_inv_proj(proj, inv);
+    for (u32 i = 0; i < grid->count; ++i) {
+        f32 lo[3], hi[3];
+        de__cluster_bounds(grid, &inv[0][0], i, lo, hi);
+        memcpy(bounds + (size_t)i * 8, lo, 3 * sizeof(f32));
+        memcpy(bounds + (size_t)i * 8 + 4, hi, 3 * sizeof(f32));
+        bounds[(size_t)i * 8 + 3] = bounds[(size_t)i * 8 + 7] = 0;
+    }
+}

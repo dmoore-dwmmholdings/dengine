@@ -1,3 +1,4 @@
+#include "render/probes/probes_internal.h"
 /*
  * renderer.c: de_renderer create / destroy / attach and the frame skeleton (SPEC §12, §12.8, §8;
  * DENG-174). The frame order and the struct are in renderer_internal.h; settings, presets and
@@ -52,6 +53,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__probes_destroy(r, r->probes);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
@@ -223,6 +225,10 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
     }
 
+    res = de__probes_create(r, &r->probes);
+    if (res != DE_OK)
+        goto fail;
+
     /* Last, because the asset registry cannot unregister: the runtime texture, mesh, material
      * and model types and the uploader they share (DENG-105). */
     if (r->assets != NULL) {
@@ -348,6 +354,7 @@ void de__renderer_kick_prepare(de_renderer *r) {
     }
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
+    de__probes_prepare(r, de__render_world_last(r));
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
     r->material_instances_live = de__material_instances_live(r->material_instances); /* DENG-302 */
     /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */

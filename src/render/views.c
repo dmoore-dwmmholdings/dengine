@@ -18,6 +18,7 @@
 
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
+#include "render/probes/probes_internal.h"
 #include "render/passes/forward/forward.h"
 #include "render/passes/sss/sss.h"
 #include "render/renderer_internal.h"
@@ -40,6 +41,8 @@ typedef struct view_main {
     i32 order;
     bool pixel_art; /**< stored; S19 renders it */
     char name[DE__VIEW_NAME_MAX];
+    bool capture;
+    de__rw_view capture_camera;
     bool has_settings;
     de_render_settings settings; /**< clamped to the device when set */
     f32 render_scale;            /**< 0: the settings' render_scale */
@@ -781,7 +784,8 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.graph = g;
     vf.name = s->copy.name;
     vf.world = world;
-    vf.camera = &world->views[s->camera];
+    vf.camera = s->copy.capture ? &s->copy.capture_camera : &world->views[s->camera];
+    vf.probe_capture = s->copy.capture;
     vf.settings = &s->eff;
     vf.frame_index = frame_index;
     vf.width = s->w;
@@ -988,6 +992,9 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
     collect_retired(r, vs);
     const de__render_world_frame *world = de__render_world_current(r);
     bind_cameras(vs, world);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i)
+        if (vs->rs[i].live && vs->rs[i].copy.capture)
+            vs->rs[i].active = true;
     sort_views(vs);
 
     r->stats.gpu_ms = 0.0f;
@@ -1003,6 +1010,7 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
     for (u32 k = 0; k < vs->order_count; ++k)
         vs->last_order[k] = make_handle(vs->order[k], vs->rs[vs->order[k]].gen);
 
+    de__probes_after_views(r, arena, frame_index);
     const de_result out = render_output(r, vs, arena, target, final_access, frame_index);
     if (out == DE_OK) {
         add_stats(r, vs, r->graph, &stat_count);
@@ -1159,4 +1167,19 @@ struct de__forward *de__views_forward(const de_renderer *r) {
 de__composite *de__views_composite(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs != NULL ? vs->composite : NULL;
+}
+
+void de__view_capture_camera(de_renderer *r, de_view view, const de__rw_view *camera) {
+    de__views *vs = r->views;
+    de_mutex_lock(&vs->lock);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i) {
+        view_main *m = &vs->main[i];
+        if (m->alive && make_handle(i, m->gen).id == view.id) {
+            m->capture = camera != NULL;
+            if (camera)
+                m->capture_camera = *camera;
+            break;
+        }
+    }
+    de_mutex_unlock(&vs->lock);
 }

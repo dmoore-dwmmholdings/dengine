@@ -323,3 +323,23 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
         if (de_light_touches(de_robuffer<DeClusterLight>(pc.lights)[i], lo, hi))
             de_buffer<uint>(pc.list)[cell.x + k++] = i;
 }
+
+// DENG-340: immutable probe records begin with world position/radius. Froxel bounds use the
+// same S14 grid as lights. Lists retain stable priority/entity order and never truncate below
+// the renderer's explicit 64-probe capacity.
+struct ProbeCullParams { uint bounds; uint probes; uint list; uint count; uint clusters; uint scene; uint slot; uint entry; uint bounds_offset; uint reserved0; uint reserved1; uint reserved2; };
+[shader("compute")] [numthreads(64,1,1)]
+void cs_probe_cluster_list(uint3 id:SV_DispatchThreadID,uniform ProbeCullParams pc) {
+    if(id.x>=pc.clusters)return;
+    DeSceneConstants sc=de_robuffer<DeSceneConstants>(pc.scene)[pc.slot];
+    float3 lo=asfloat(de_bytes(pc.bounds).load4(pc.bounds_offset+id.x*32)).xyz;
+    float3 hi=asfloat(de_bytes(pc.bounds).load4(pc.bounds_offset+id.x*32+16)).xyz;
+    uint count=0;
+    for(uint i=0;i<pc.count;++i) {
+        float4 sphere=asfloat(de_bytes(pc.probes).load4((pc.entry*64+i)*80));
+        float3 center=float3(dot(sc.view[0],float4(sphere.xyz,1)),dot(sc.view[1],float4(sphere.xyz,1)),dot(sc.view[2],float4(sphere.xyz,1)));
+        float3 d=center-clamp(center,lo,hi);
+        if(dot(d,d)<=sphere.w*sphere.w) de_rwbytes(pc.list).store((id.x*65+1+count++)*4,i);
+    }
+    de_rwbytes(pc.list).store(id.x*65*4,count);
+}

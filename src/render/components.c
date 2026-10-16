@@ -422,6 +422,43 @@ static de_result reg_water(de_world *w, de_component *out) {
     return register_component(w, DE_TYPE_DESC(DeWater, 1, k_fields), construct_water, out);
 }
 
+/* ---- DeReflectionProbe (DENG-340) ------------------------------------------------------- */
+static void construct_reflection_probe(void *obj) {
+    DeReflectionProbe *p = (DeReflectionProbe *)obj;
+    memset(p, 0, sizeof *p);
+    p->extent = (de_vec3){5, 5, 5};
+    p->blend_distance = 1;
+    p->box_projection = true;
+    p->resolution = 128;
+    p->update_interval = 60;
+    p->intensity = 1;
+}
+static de_result reg_reflection_probe(de_world *w, de_component *out) {
+    static const de_enum_value shapes[] = {{"DE_PROBE_BOX", DE_PROBE_BOX},
+                                           {"DE_PROBE_SPHERE", DE_PROBE_SPHERE}};
+    static const de_enum_value updates[] = {{"DE_PROBE_ONCE", DE_PROBE_ONCE},
+                                            {"DE_PROBE_ON_REQUEST", DE_PROBE_ON_REQUEST},
+                                            {"DE_PROBE_EVERY_N_FRAMES", DE_PROBE_EVERY_N_FRAMES}};
+    DE_TRY(ensure_enum(de_world_types(w), "de_probe_shape", shapes, 2));
+    DE_TRY(ensure_enum(de_world_types(w), "de_probe_update", updates, 3));
+    static const de_field_info fields[] = {
+        DE_FIELD_EX(DeReflectionProbe, shape, DE_FK_ENUM, AUTHORED,
+                    {0, 0, 0, 0, "de_probe_shape", 0}),
+        DE_FIELD(DeReflectionProbe, extent, DE_FK_VEC3, AUTHORED),
+        DE_FIELD(DeReflectionProbe, blend_distance, DE_FK_F32, AUTHORED),
+        DE_FIELD(DeReflectionProbe, box_projection, DE_FK_BOOL, AUTHORED),
+        DE_FIELD(DeReflectionProbe, resolution, DE_FK_U32, AUTHORED),
+        DE_FIELD_EX(DeReflectionProbe, update, DE_FK_ENUM, AUTHORED,
+                    {0, 0, 0, 0, "de_probe_update", 0}),
+        DE_FIELD(DeReflectionProbe, update_interval, DE_FK_U32, AUTHORED),
+        DE_FIELD(DeReflectionProbe, priority, DE_FK_I32, AUTHORED),
+        DE_FIELD(DeReflectionProbe, intensity, DE_FK_F32, AUTHORED),
+        DE_FIELD_EX(DeReflectionProbe, bake, DE_FK_ASSET, ASSET_REF, {0, 0, 0, 0, "blob", 0}),
+    };
+    return register_component(w, DE_TYPE_DESC(DeReflectionProbe, 1, fields),
+                              construct_reflection_probe, out);
+}
+
 /* ---- Registration ------------------------------------------------------------------------ */
 
 /* Registration order = component id order. Append new components at the end. */
@@ -440,6 +477,7 @@ static const struct {
     {reg_particle_system, offsetof(DeRenderComponents, particle_system)},
     {reg_terrain, offsetof(DeRenderComponents, terrain)},
     {reg_water, offsetof(DeRenderComponents, water)},
+    {reg_reflection_probe, offsetof(DeRenderComponents, reflection_probe)},
 };
 
 /* The resource type: component ids only, no reflected fields (never serialized). */

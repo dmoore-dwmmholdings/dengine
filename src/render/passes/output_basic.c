@@ -138,6 +138,11 @@ static void output_stage(de__view_frame *vf, void *user) {
         de__lighting_frame_context(ob->lighting, vf->view, vf->graph, vf->frame_index);
     if (lc == NULL || !lc->lit || !DE_HANDLE_VALID(lc->target))
         return;
+    if (vf->probe_capture) {
+        vf->color = lc->target;
+        vf->color_format = DE_FMT_RGBA16_FLOAT;
+        return;
+    }
     const de_rg_resource out = de__output_basic_add(ob, vf->graph, vf->graph->arena, lc->target,
                                                     lc->width, lc->height, false);
     if (DE_HANDLE_VALID(out)) {

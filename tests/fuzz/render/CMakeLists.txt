@@ -12,3 +12,11 @@ if(TARGET fuzz_cooked_render)
     target_include_directories(fuzz_cooked_render PRIVATE
         "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tests/fuzz/import")
 endif()
+
+# DENG-340: shipping .deprobe parser (version, settings hash, lengths and payload checksum).
+if(TARGET de_render)
+    de_add_fuzz_target(NAME probe_blob SOURCES fuzz_probe_blob.c LIBS de_render de_platform CORPUS corpus/probe_blob)
+    if(TARGET fuzz_probe_blob)
+        target_include_directories(fuzz_probe_blob PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

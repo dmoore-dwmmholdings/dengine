@@ -143,6 +143,7 @@ typedef struct de__view_frame {
     de_gpu_format color_format;
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
+    bool probe_capture; /**< Fixed radiance capture: no temporal effects or probes. */
 } de__view_frame;
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */
@@ -159,6 +160,8 @@ de_result de__view_register_stage(de_renderer *r, de__view_slot slot, i32 order,
 /** Removes every stage registered with (`fn`, `user`). Main thread. */
 void de__view_unregister_stage(de_renderer *r, de__view_stage_fn fn, void *user);
 
+/** Main-thread override for a generic radiance capture view. NULL disables it. */
+void de__view_capture_camera(de_renderer *r, de_view view, const struct de__rw_view *camera);
 /* ---------- renderer.c calls ---------- */
 
 /** Creates the views of `r` (the main view, the debug-clear stage, the composite). */
