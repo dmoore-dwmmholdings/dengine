@@ -279,7 +279,8 @@ jobs:
         run: |
           command -v gdb
           timeout --signal=TERM --kill-after=10s 300s gdb --batch --return-child-result \
-            -ex 'set pagination off' -ex run -ex 'thread apply all bt' \
+            -ex 'set pagination off' -ex run -ex 'p $_siginfo' -ex 'info all-registers' \
+            -ex 'x/16i $pc' -ex 'disassemble /r $pc-64,$pc+64' -ex 'info proc mappings' -ex 'thread apply all bt' \
             --args "build/${PRESET}/tests/unit/render/test_render_csm" \
             --filter=csm.sphere_selection_blend_vulkan
 

@@ -531,6 +531,10 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
                  0,
                  0};
     memcpy(&pc[5], &radius, 4);
+    fprintf(stderr, "CSM query descriptors metadata=%u input=%u output=%u maps=%u,%u,%u,%u\n",
+            pc[0], pc[1], pc[2], records[1].map.texture, records[2].map.texture,
+            records[3].map.texture, records[4].map.texture);
+    fflush(stderr);
     fprintf(stderr, "CSM query count=%u mode=%u: record begin\n", count, mode);
     fflush(stderr);
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "shadow.query");
