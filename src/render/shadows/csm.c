@@ -76,16 +76,27 @@ de_result de__csm_fit(const de__csm_camera *cam, de_vec3 direction, u32 count, u
         view.m[6] = back.y;
         view.m[10] = back.z;
         view.m[14] = -cz - upstream;
-        out[i] = (de__csm_cascade){
-            .view = view,
-            .proj = de_m4_ortho_rz(-radius, radius, -radius, radius, 0, upstream + radius),
-            .center = center,
-            .radius = radius,
-            .texel = texel,
-            .near_distance = splits[i],
-            .far_distance = splits[i + 1]};
+        /* Keep initialized payload stores independent of the aligned struct's tail padding. */
+        out[i].view = view;
+        out[i].proj = de_m4_ortho_rz(-radius, radius, -radius, radius, 0, upstream + radius);
+        out[i].center = center;
+        out[i].radius = radius;
+        out[i].texel = texel;
+        out[i].near_distance = splits[i];
+        out[i].far_distance = splits[i + 1];
     }
     return DE_OK;
+}
+
+/* de_mat4 aligns the fit to 16 bytes; tail padding is not part of cascade coverage/cadence. */
+static bool same_fit(const de__csm_cascade *a, const de__csm_cascade *b) {
+    return memcmp(&a->view, &b->view, sizeof a->view) == 0 &&
+           memcmp(&a->proj, &b->proj, sizeof a->proj) == 0 &&
+           memcmp(&a->center, &b->center, sizeof a->center) == 0 &&
+           memcmp(&a->radius, &b->radius, sizeof a->radius) == 0 &&
+           memcmp(&a->texel, &b->texel, sizeof a->texel) == 0 &&
+           memcmp(&a->near_distance, &b->near_distance, sizeof a->near_distance) == 0 &&
+           memcmp(&a->far_distance, &b->far_distance, sizeof a->far_distance) == 0;
 }
 
 #include "render/renderer_internal.h"
@@ -379,7 +390,7 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
                 de_rg_import_texture(vf->graph, v->mirrors[layer], v->mirror_access[layer]);
             bool update = vf->probe_capture || c < 2 || vf->frame_index % cadence == 0 || changed ||
                           !v->valid[layer] || v->entities[l] != world->entity[index] ||
-                          memcmp(&v->fit[layer], &fitted[c], sizeof fitted[c]) != 0;
+                          !same_fit(&v->fit[layer], &fitted[c]);
             if (update) {
                 DE_TRY(de__shadow_view_build(
                     s->pool, vf->graph,

@@ -60,6 +60,16 @@ TEST(csm, practical_splits) {
         EXPECT_TRUE(s[i] > s[i - 1]);
     }
 }
+/* Compare every fit payload byte exactly, excluding aligned aggregate tail padding. */
+static void expect_same_fit(const de__csm_cascade *a, const de__csm_cascade *b) {
+    EXPECT_EQ(memcmp(&a->view, &b->view, sizeof a->view), 0);
+    EXPECT_EQ(memcmp(&a->proj, &b->proj, sizeof a->proj), 0);
+    EXPECT_EQ(memcmp(&a->center, &b->center, sizeof a->center), 0);
+    EXPECT_EQ(memcmp(&a->radius, &b->radius, sizeof a->radius), 0);
+    EXPECT_EQ(memcmp(&a->texel, &b->texel, sizeof a->texel), 0);
+    EXPECT_EQ(memcmp(&a->near_distance, &b->near_distance, sizeof a->near_distance), 0);
+    EXPECT_EQ(memcmp(&a->far_distance, &b->far_distance, sizeof a->far_distance), 0);
+}
 typedef struct depth_copy {
     de_rg_resource depth, mirror, scratch, readback;
     u32 layer, pitch;
@@ -254,7 +264,8 @@ static void shadow_depth_test(lx *f, de_gpu_backend backend, bool mesh) {
                 cam.forward = de_v3_normalize((de_vec3){pass < 4 ? 1e-7f : 1e-8f, 0, -1});
             }
             ASSERT_EQ(de__csm_fit(&cam, direction, 4, 64, c), DE_OK);
-            EXPECT_EQ(memcmp(base, c, sizeof c), 0);
+            for (u32 i = 0; i < 4; ++i)
+                expect_same_fit(&base[i], &c[i]);
             u32 cascade = pass < 4 ? 0 : (pass - 4) / 2;
             desc.view = c[cascade].view;
             desc.proj = c[cascade].proj;
@@ -460,6 +471,13 @@ TEST(csm, quality_and_coverage) {
     }
 }
 TEST(csm, stable_cpu_snapping) {
+    EXPECT_EQ(sizeof(de_mat4), 64u);
+    EXPECT_EQ(sizeof(de_vec3), 12u);
+    EXPECT_EQ(offsetof(de__csm_cascade, center), 128u);
+    EXPECT_EQ(offsetof(de__csm_cascade, far_distance) + sizeof(f32), 156u);
+    printf("CSM fit layout: sizeof=%zu, payload_end=%zu, tail_padding=%zu\n",
+           sizeof(de__csm_cascade), offsetof(de__csm_cascade, far_distance) + sizeof(f32),
+           sizeof(de__csm_cascade) - (offsetof(de__csm_cascade, far_distance) + sizeof(f32)));
     de__csm_camera a = {.position = {0, 0, 10},
                         .forward = {0, 0, -1},
                         .near_z = .1f,
@@ -471,7 +489,8 @@ TEST(csm, stable_cpu_snapping) {
     a.position.x += c[0].texel * .05f;
     a.forward = de_v3_normalize((de_vec3){1e-7f, 0, -1});
     ASSERT_EQ(de__csm_fit(&a, (de_vec3){0, 0, -1}, 4, 2048, d), DE_OK);
-    EXPECT_EQ(memcmp(c, d, sizeof c), 0);
+    for (u32 i = 0; i < 4; ++i)
+        expect_same_fit(&c[i], &d[i]);
 }
 typedef struct shadow_query {
     f32 position[4], normal[4];
@@ -479,6 +498,8 @@ typedef struct shadow_query {
 } shadow_query;
 static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_query *queries,
                            u32 count, u32 mode, f32 radius, f32 *result) {
+    fprintf(stderr, "CSM query count=%u mode=%u: buffers begin\n", count, mode);
+    fflush(stderr);
     de_gpu_buffer metadata = upload_buf(f->dev, records, 9 * sizeof *records);
     de_gpu_buffer input = upload_buf(f->dev, queries, (u64)count * sizeof *queries);
     de_gpu_buffer output = de_gpu_buffer_create(
@@ -495,7 +516,11 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
     de__engine_shader_code code;
     de__vis_kernel kernel;
     ASSERT_EQ(de__vis_shader_load(f->vis, "shadow_sample", &entry, 1, &code), DE_OK);
+    fprintf(stderr, "CSM query count=%u mode=%u: kernel create begin\n", count, mode);
+    fflush(stderr);
     ASSERT_EQ(de__vis_kernel_create(f->vis, &code, 0, entry, group, 32, &kernel), DE_OK);
+    fprintf(stderr, "CSM query count=%u mode=%u: kernel create complete\n", count, mode);
+    fflush(stderr);
     de__engine_shader_code_free(&code);
     u32 pc[8] = {de_gpu_buffer_bindless(f->dev, metadata),
                  de_gpu_buffer_bindless(f->dev, input),
@@ -506,6 +531,8 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
                  0,
                  0};
     memcpy(&pc[5], &radius, 4);
+    fprintf(stderr, "CSM query count=%u mode=%u: record begin\n", count, mode);
+    fflush(stderr);
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "shadow.query");
     ASSERT_TRUE(cmd);
     de_gpu_barrier barrier = {
@@ -518,11 +545,19 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
     barrier.after = DE_ACCESS_COPY_SRC;
     de_gpu_cmd_barriers(cmd, &barrier, 1);
     de_gpu_cmd_copy_buffer(cmd, rb, 0, output, 0, (u64)count * 16);
+    fprintf(stderr, "CSM query count=%u mode=%u: submit begin\n", count, mode);
+    fflush(stderr);
     ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
                                   &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
               DE_OK);
+    fprintf(stderr, "CSM query count=%u mode=%u: submit complete; wait begin\n", count, mode);
+    fflush(stderr);
     de_gpu_wait_idle(f->dev);
+    fprintf(stderr, "CSM query count=%u mode=%u: wait complete; readback begin\n", count, mode);
+    fflush(stderr);
     memcpy(result, de_gpu_buffer_map(f->dev, rb), (size_t)count * 16);
+    fprintf(stderr, "CSM query count=%u mode=%u: readback complete\n", count, mode);
+    fflush(stderr);
     de__vis_kernel_destroy(f->vis, &kernel);
     de_gpu_buffer_destroy(f->dev, metadata);
     de_gpu_buffer_destroy(f->dev, input);
