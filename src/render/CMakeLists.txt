@@ -367,3 +367,12 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/ssr/scene_history.c passes/ssr/ssr.c)
 endif()
+
+# DENG-341: DDGI-compatible irradiance volumes and screen-space diffuse GI.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE probes/irradiance_volume.c)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/ssgi/ssgi.c)
+endif()

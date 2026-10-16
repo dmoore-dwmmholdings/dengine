@@ -92,6 +92,7 @@ typedef enum de__render_cvar_id {
     DE__RCV_DYN_RES_MS,
     DE__RCV_PATH_TRACER,
     DE__RCV_PATH_BOUNCES,
+    DE__RCV_GI_MODE,
     DE__RCV_COUNT
 } de__render_cvar_id;
 
@@ -155,6 +156,8 @@ struct de_renderer {
     struct de__views *views;
     struct de__probes *probes;
     struct de__ssr *ssr;
+    struct de__irradiance *irradiance;
+    struct de__ssgi *ssgi;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
     u32 window_w, window_h;

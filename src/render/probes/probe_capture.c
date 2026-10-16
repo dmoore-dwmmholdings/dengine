@@ -129,12 +129,15 @@ de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resol
     }
     desc.height = resolution * 6;
     desc.mip_count = c->mips;
-    desc.usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC;
+    desc.usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST;
     desc.name = "probe.raw_radiance";
     c->raw = de_gpu_texture_create(r->dev, &desc);
     desc.name = "probe.filtered_scratch";
     c->filtered = de_gpu_texture_create(r->dev, &desc);
     c->transfer_bytes = (u64)resolution * resolution * 6 * 8 + 4096;
+    // New GPU-only storage can reuse a retired transfer-source heap range.
+    // Keep a conservative first-use transfer execution dependency (no image layout).
+    c->transfer_access = DE_ACCESS_COPY_SRC;
     c->transfer = de_gpu_buffer_create(
         r->dev, &(de_gpu_buffer_desc){.size = c->transfer_bytes,
                                       .usage = DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST,
@@ -234,17 +237,48 @@ de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, d
     de_gpu_cmd *cmd = de_gpu_cmd_begin(dev, DE_QUEUE_GRAPHICS, "probe.capture_prefilter");
     if (!cmd)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "probe capture: command list");
-    capture_barrier(cmd, c->raw, c->raw_access, DE_ACCESS_SHADER_WRITE);
-    for (u32 f = 0; f < 6; ++f)
-        if (c->scheduled & (1u << f)) {
-            probe_filter_params pc = {.src = de_gpu_texture_bindless(dev, c->targets[f], 0, false),
-                                      .dst = de_gpu_texture_bindless(dev, c->raw, 0, true),
-                                      .size = c->resolution,
-                                      .face = f};
-            filter_dispatch(c, cmd, &c->copy, pc, c->resolution, c->resolution);
-        }
-    capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_WRITE,
-                    DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE);
+    if (!filter) {
+        // Raw capture uses GPU copies only. Preserve unscheduled faces in the
+        // transfer buffer, overwrite scheduled faces, then upload the full strip.
+        // This also avoids binding global sampled/storage descriptor arrays for a
+        // copy after a live main view. Uncaptured faces are never consumed.
+        const u32 pitch = c->resolution * 8;
+        capture_barrier(cmd, c->raw, c->raw_access, DE_ACCESS_COPY_SRC);
+        de_gpu_barrier transfer = {
+            .buffer = c->transfer, .before = c->transfer_access, .after = DE_ACCESS_COPY_DST};
+        de_gpu_cmd_barriers(cmd, &transfer, 1);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, c->transfer, 0, pitch, c->raw, 0, 0);
+        transfer.before = DE_ACCESS_COPY_DST;
+        de_gpu_cmd_barriers(cmd, &transfer, 1); // order overlapping transfer writes
+        for (u32 f = 0; f < 6; ++f)
+            if (c->scheduled & (1u << f)) {
+                capture_barrier(cmd, c->targets[f], DE_ACCESS_SHADER_READ, DE_ACCESS_COPY_SRC);
+                de_gpu_cmd_copy_texture_to_buffer(cmd, c->transfer, (u64)f * c->resolution * pitch,
+                                                  pitch, c->targets[f], 0, 0);
+                capture_barrier(cmd, c->targets[f], DE_ACCESS_COPY_SRC, DE_ACCESS_SHADER_READ);
+            }
+        transfer.before = DE_ACCESS_COPY_DST;
+        transfer.after = DE_ACCESS_COPY_SRC;
+        de_gpu_cmd_barriers(cmd, &transfer, 1);
+        c->transfer_access = DE_ACCESS_COPY_SRC;
+        capture_barrier(cmd, c->raw, DE_ACCESS_COPY_SRC, DE_ACCESS_COPY_DST);
+        de_gpu_cmd_copy_buffer_to_texture(cmd, c->raw, 0, 0, c->transfer, 0, pitch);
+        capture_barrier(cmd, c->raw, DE_ACCESS_COPY_DST,
+                        DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE);
+    } else {
+        capture_barrier(cmd, c->raw, c->raw_access, DE_ACCESS_SHADER_WRITE);
+        for (u32 f = 0; f < 6; ++f)
+            if (c->scheduled & (1u << f)) {
+                probe_filter_params pc = {.src =
+                                              de_gpu_texture_bindless(dev, c->targets[f], 0, false),
+                                          .dst = de_gpu_texture_bindless(dev, c->raw, 0, true),
+                                          .size = c->resolution,
+                                          .face = f};
+                filter_dispatch(c, cmd, &c->copy, pc, c->resolution, c->resolution);
+            }
+        capture_barrier(cmd, c->raw, DE_ACCESS_SHADER_WRITE,
+                        DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE);
+    }
     c->raw_access = DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE;
     if (filter) {
         for (u32 m = 1; m < c->mips; ++m) {

@@ -55,6 +55,7 @@ typedef struct de_render_settings {
     f32 dynamic_res_target_ms; /**< 0 = off */
     bool path_tracer;          /**< reference mode; requires the RT tier */
     u32 path_max_bounces;      /**< 1..64 */
+    de_gi_mode gi_mode;        /**< Static volumes, screen-space plus volumes, or reserved RT. */
 } de_render_settings;
 
 /**
@@ -699,6 +700,21 @@ typedef struct de_render_stats {
     u32 material_instances; /**< live runtime instances (de_material_create_instance) */
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
+
+/** Static diffuse GI volume, in the global transform's rotated local coordinates. Extent is
+ * half-size in metres. Zero counts derive max(2,ceil(2*extent/spacing)) (spacing 0 defaults to 2m).
+ * Probes are cell-centered with step 2*extent/counts; influence covers the entire extent.
+ * Explicit counts must be >=2 on each axis. The baker uses a deterministic whole-grid iteration;
+ * bounces 0 defaults to 2, maximum 8. A matching blob skips capture in Shipping too. */
+typedef struct DeIrradianceVolume {
+    de_vec3 extent;
+    f32 spacing;
+    u32 counts[3];
+    f32 intensity, blend_distance;
+    i32 priority;
+    u32 bounces;
+    de_blob bake;
+} DeIrradianceVolume;
 
 DE_EXTERN_C_END
 #endif

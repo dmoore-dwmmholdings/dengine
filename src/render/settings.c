@@ -85,6 +85,7 @@ de_render_settings de_render_settings_preset(de_tier tier, de_quality quality) {
     s.ao = p->ao;
     s.reflections = p->reflections;
     s.gi = p->gi;
+    s.gi_mode = DE_GI_SCREEN_SPACE;
     s.volumetrics = p->volumetrics;
     s.sss = p->sss;
     s.rt_shadows = p->rt_shadows;
@@ -109,7 +110,8 @@ bool de__render_settings_equal(const de_render_settings *a, const de_render_sett
            a->rt_refraction == b->rt_refraction && a->upscaler == b->upscaler &&
            a->render_scale == b->render_scale &&
            a->dynamic_res_target_ms == b->dynamic_res_target_ms &&
-           a->path_tracer == b->path_tracer && a->path_max_bounces == b->path_max_bounces;
+           a->path_tracer == b->path_tracer && a->path_max_bounces == b->path_max_bounces &&
+           a->gi_mode == b->gi_mode;
 }
 
 bool de__render_settings_match(const de_render_settings *s, de_quality *quality) {
@@ -153,6 +155,10 @@ void de__render_settings_clamp(const de_gpu_caps *caps, const de_gpu_tier_report
     s->ao = clamp_quality(s->ao);
     s->reflections = clamp_quality(s->reflections);
     s->gi = clamp_quality(s->gi);
+    if ((u32)s->gi_mode > DE_GI_RT)
+        s->gi_mode = DE_GI_STATIC_PROBES;
+    if (s->tier == DE_TIER_BASE && s->gi_mode == DE_GI_RT)
+        s->gi_mode = DE_GI_SCREEN_SPACE;
     s->volumetrics = clamp_quality(s->volumetrics);
     s->sss = clamp_quality(s->sss);
     if (s->tier == DE_TIER_BASE) {
@@ -215,6 +221,7 @@ static const char *const k_tier_names[] = {"auto", "base", "rt"};
 static const char *const k_quality_sel_names[] = {"auto", "low",   "medium",
                                                   "high", "ultra", "custom"};
 static const char *const k_quality_names[] = {"off", "low", "medium", "high", "ultra"};
+static const char *const k_gi_mode_names[] = {"static_probes", "screen_space", "rt"};
 static const char *const k_upscaler_names[] = {"none", "taa", "fsr", "metalfx", "auto"};
 
 _Static_assert(sizeof k_tier_names / sizeof k_tier_names[0] == DE__RENDER_TIER_SEL_COUNT,
@@ -296,6 +303,9 @@ void de__render_cvars_init(de_renderer *r) {
     h[DE__RCV_PATH_TRACER] = reg_bool("r.path_tracer", "Path-traced reference mode (RT tier)");
     h[DE__RCV_PATH_BOUNCES] = reg_number("r.path_max_bounces", "Path tracer bounces, 1 to 64",
                                          DE_CVAR_INT, PRESET_PATH_BOUNCES, 1.0, 64.0);
+    h[DE__RCV_GI_MODE] =
+        reg_enum("r.gi_mode", "Diffuse GI: static_probes, screen_space, rt (reserved)",
+                 k_gi_mode_names, 3, "screen_space");
     void *expected = NULL;
     r->cvars.owner =
         de_atomic_cas_ptr(&g_cvar_owner, &expected, r, DE_ATOMIC_ACQ_REL, DE_ATOMIC_ACQUIRE);
@@ -363,6 +373,7 @@ static de_render_settings from_cvars(const de__render_cvar_snapshot *s, de_tier 
     o.ao = snap_quality(s, DE__RCV_AO);
     o.reflections = snap_quality(s, DE__RCV_REFLECTIONS);
     o.gi = snap_quality(s, DE__RCV_GI);
+    o.gi_mode = (de_gi_mode)(u32)s->v[DE__RCV_GI_MODE];
     o.volumetrics = snap_quality(s, DE__RCV_VOLUMETRICS);
     o.sss = snap_quality(s, DE__RCV_SSS);
     o.rt_shadows = s->v[DE__RCV_RT_SHADOWS] != 0.0;
@@ -466,6 +477,7 @@ void de__render_cvars_publish(de_renderer *r, u32 what) {
     put_quality(r, DE__RCV_AO, s->ao);
     put_quality(r, DE__RCV_REFLECTIONS, s->reflections);
     put_quality(r, DE__RCV_GI, s->gi);
+    put(r, DE__RCV_GI_MODE, (f64)s->gi_mode, k_gi_mode_names[s->gi_mode]);
     put_quality(r, DE__RCV_VOLUMETRICS, s->volumetrics);
     put_quality(r, DE__RCV_SSS, s->sss);
     put_bool(r, DE__RCV_RT_SHADOWS, s->rt_shadows);

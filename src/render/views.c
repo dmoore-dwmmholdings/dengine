@@ -1,3 +1,5 @@
+#include "render/passes/ssgi/ssgi_internal.h"
+#include "render/probes/irradiance_internal.h"
 /*
  * views.c: views and the per-view frame pipeline (SPEC §12.4, §12.5, §12.9, §20.1; DENG-176).
  * views_internal.h describes the model, the pass-registration list and one frame.
@@ -858,6 +860,8 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->ok = res == DE_OK;
     }
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
+    de__irradiance_view_complete(r, vf.view, res == DE_OK);
+    de__ssgi_view_complete(r->ssgi, vf.view, frame_index, res == DE_OK);
     de__rg_reset(g);
     if (res != DE_OK) {
         view_failed(r, s, "frame graph");
@@ -1024,6 +1028,7 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
         vs->last_order[k] = make_handle(vs->order[k], vs->rs[vs->order[k]].gen);
 
     de__probes_after_views(r, arena, frame_index);
+    de__irradiance_after_views(r, frame_index);
     const de_result out = render_output(r, vs, arena, target, final_access, frame_index);
     if (out == DE_OK) {
         add_stats(r, vs, r->graph, &stat_count);

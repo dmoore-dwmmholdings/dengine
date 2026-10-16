@@ -113,6 +113,27 @@ static void fill_probes(const de_query_chunk *c, void *user) {
     }
 }
 
+static void fill_irradiance(const de_query_chunk *c, void *user) {
+    de__render_world_frame *f = user;
+    const DeGlobalTransform *g = c->columns[0];
+    const DeIrradianceVolume *v = c->columns[1];
+    for (u32 i = 0; i < c->count; ++i) {
+        de__irradiance_snapshot x = {c->entities[i].bits, g[i].position, g[i].rotation, v[i]};
+        u32 at = 0;
+        while (at < f->irradiance_count &&
+               (f->irradiance[at].volume.priority > x.volume.priority ||
+                (f->irradiance[at].volume.priority == x.volume.priority &&
+                 f->irradiance[at].entity < x.entity)))
+            ++at;
+        if (at >= 8)
+            continue;
+        u32 n = f->irradiance_count < 8 ? f->irradiance_count++ : 7;
+        for (u32 k = n; k > at; --k)
+            f->irradiance[k] = f->irradiance[k - 1];
+        f->irradiance[at] = x;
+    }
+}
+
 static void sys_views(de_system_ctx *ctx) {
     de__render_world *rw = (de__render_world *)ctx->user;
     if (ctx->world != rw->world)
@@ -134,6 +155,13 @@ static void sys_views(de_system_ctx *ctx) {
     de_query_each(ctx->world, ctx->queries[1], fill_environment, f);
     f->probe_count = 0;
     de_query_each(ctx->world, ctx->queries[2], fill_probes, f);
+    f->irradiance_count = 0;
+    de_query_each(ctx->world, ctx->queries[3], fill_irradiance, f);
+    u32 volumes_seen = de_query_count(ctx->world, ctx->queries[3]);
+    if (volumes_seen > 8)
+        DE_WARN(rw->log,
+                "irradiance extraction: %u volumes exceed capacity 8; retaining highest priority",
+                volumes_seen);
     u32 probes_seen = de_query_count(ctx->world, ctx->queries[2]);
     if (probes_seen > 64)
         DE_WARN(rw->log, "probe extraction: %u exceed capacity; retaining highest priority 64",
@@ -337,15 +365,18 @@ static bool add_systems(de__render_world *rw, de_world *w) {
     const de_query_term env_terms[1] = {{rw->ids.environment, DE_READ}};
     const de_query_term probe_terms[2] = {{rw->builtins.global_transform, DE_READ},
                                           {rw->ids.reflection_probe, DE_READ}};
-    const de_query_desc view_queries[3] = {{.terms = cam_terms, .term_count = 2},
+    const de_query_term gi_terms[2] = {{rw->builtins.global_transform, DE_READ},
+                                       {rw->ids.irradiance_volume, DE_READ}};
+    const de_query_desc view_queries[4] = {{.terms = cam_terms, .term_count = 2},
                                            {.terms = env_terms, .term_count = 1},
-                                           {.terms = probe_terms, .term_count = 2}};
+                                           {.terms = probe_terms, .term_count = 2},
+                                           {.terms = gi_terms, .term_count = 2}};
     const de_system views = de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
                                                                .schedule = DE_SCHEDULE_EXTRACT,
                                                                .fn = sys_views,
                                                                .user = rw,
                                                                .queries = view_queries,
-                                                               .query_count = 3});
+                                                               .query_count = 4});
     if (!DE_HANDLE_VALID(views))
         return false;
     const de_system meshes =

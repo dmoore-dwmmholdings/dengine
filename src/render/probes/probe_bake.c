@@ -18,41 +18,59 @@ static void put64(u8 *p, u64 n) {
 static u64 get64(const u8 *p) {
     return de_cooked_get_u32(p) | ((u64)de_cooked_get_u32(p + 4) << 32);
 }
+de_result de__probe_envelope_write(void *dst, u64 size, const char magic[4], u32 tag, u64 settings,
+                                   const void *payload, u64 bytes) {
+    if (!dst || !magic || !payload || size < DE__PROBE_BLOB_HEADER ||
+        size - DE__PROBE_BLOB_HEADER != bytes)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe envelope: size");
+    u8 *b = dst;
+    memset(b, 0, DE__PROBE_BLOB_HEADER);
+    memcpy(b, magic, 4);
+    de_cooked_put_u32(b + 4, 1);
+    de_cooked_put_u32(b + 8, DE__PROBE_BLOB_HEADER);
+    de_cooked_put_u32(b + 12, tag);
+    put64(b + 16, settings);
+    put64(b + 24, bytes);
+    put64(b + 32, bytes_hash(payload, bytes));
+    memmove(b + DE__PROBE_BLOB_HEADER, payload, (size_t)bytes);
+    return DE_OK;
+}
+de_result de__probe_envelope_read(const void *src, u64 size, const char magic[4], u64 settings,
+                                  u32 *tag, const void **payload, u64 *bytes) {
+    if (payload)
+        *payload = NULL;
+    if (!src || !magic || !tag || !payload || !bytes || size < DE__PROBE_BLOB_HEADER)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe envelope: truncated");
+    const u8 *b = src;
+    if (memcmp(b, magic, 4) || de_cooked_get_u32(b + 4) != 1 ||
+        de_cooked_get_u32(b + 8) != DE__PROBE_BLOB_HEADER || get64(b + 16) != settings ||
+        get64(b + 40) || get64(b + 24) != size - DE__PROBE_BLOB_HEADER ||
+        bytes_hash(b + DE__PROBE_BLOB_HEADER, get64(b + 24)) != get64(b + 32))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe envelope: corrupt or stale");
+    *tag = de_cooked_get_u32(b + 12);
+    *bytes = get64(b + 24);
+    *payload = b + DE__PROBE_BLOB_HEADER;
+    return DE_OK;
+}
 de_result de__probe_blob_write(void *dst, u64 size, u64 settings, u32 resolution,
                                const void *payload) {
-    if (!dst || !payload || (resolution != 64 && resolution != 128 && resolution != 256))
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: invalid input");
-    u64 n = de__probe_payload_size(resolution);
-    if (size != DE__PROBE_BLOB_HEADER + n)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: output size");
-    u8 *b = (u8 *)dst;
-    memset(b, 0, DE__PROBE_BLOB_HEADER);
-    memcpy(b, "DEPR", 4);
-    de_cooked_put_u32(b + 4, DE__PROBE_BLOB_VERSION);
-    de_cooked_put_u32(b + 8, DE__PROBE_BLOB_HEADER);
-    de_cooked_put_u32(b + 12, resolution);
-    put64(b + 16, settings);
-    put64(b + 24, n);
-    put64(b + 32, bytes_hash(payload, n));
-    memcpy(b + DE__PROBE_BLOB_HEADER, payload, (size_t)n);
-    return DE_OK;
+    if (resolution != 64 && resolution != 128 && resolution != 256)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: resolution");
+    return de__probe_envelope_write(dst, size, "DEPR", resolution, settings, payload,
+                                    de__probe_payload_size(resolution));
 }
 de_result de__probe_blob_read(const void *src, u64 size, u64 settings, u32 *resolution,
                               const void **payload) {
-    if (payload)
+    u64 bytes = 0;
+    u32 tag = 0;
+    if (!resolution || !payload)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: arguments");
+    DE_TRY(de__probe_envelope_read(src, size, "DEPR", settings, &tag, payload, &bytes));
+    if ((tag != 64 && tag != 128 && tag != 256) || bytes != de__probe_payload_size(tag)) {
         *payload = NULL;
-    if (!src || !resolution || !payload || size < DE__PROBE_BLOB_HEADER)
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: truncated header");
-    const u8 *b = (const u8 *)src;
-    u32 r = de_cooked_get_u32(b + 12);
-    if (memcmp(b, "DEPR", 4) || de_cooked_get_u32(b + 4) != DE__PROBE_BLOB_VERSION ||
-        de_cooked_get_u32(b + 8) != DE__PROBE_BLOB_HEADER || (r != 64 && r != 128 && r != 256) ||
-        get64(b + 16) != settings || get64(b + 24) != de__probe_payload_size(r) ||
-        size - DE__PROBE_BLOB_HEADER != get64(b + 24) || get64(b + 40) != 0 ||
-        bytes_hash(b + DE__PROBE_BLOB_HEADER, get64(b + 24)) != get64(b + 32))
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: stale, corrupt or unsupported bake");
-    *resolution = r;
-    *payload = b + DE__PROBE_BLOB_HEADER;
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe blob: layout");
+    }
+    *resolution = tag;
     return DE_OK;
 }
 u64 de__probe_settings_hash(const de__probe_snapshot *p) {

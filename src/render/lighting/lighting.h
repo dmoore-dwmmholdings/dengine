@@ -200,6 +200,8 @@ typedef struct de__lighting_context {
     u32 sampler_bindless;      /**< the LTC tables' sampler */
     de_rg_resource probe_records, probe_list, probe_textures[64];
     u32 probe_texture_count;
+    de_rg_resource gi_records, gi_textures[16], gi_buffers[8];
+    u32 gi_texture_count, gi_buffer_count;
 } de__lighting_context;
 
 /**

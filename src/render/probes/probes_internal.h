@@ -50,6 +50,12 @@ de_result de__probe_blob_write(void *dst, u64 size, u64 settings_hash, u32 resol
                                const void *payload);
 de_result de__probe_blob_read(const void *src, u64 size, u64 settings_hash, u32 *resolution,
                               const void **payload);
+/** Shared 48-byte envelope. DEPR v1 callers retain their exact existing bytes. Payloads
+ * define their own bounded layout; readers validate semantic contents after this checksum. */
+de_result de__probe_envelope_write(void *dst, u64 size, const char magic[4], u32 tag, u64 settings,
+                                   const void *payload, u64 bytes);
+de_result de__probe_envelope_read(const void *src, u64 size, const char magic[4], u64 settings,
+                                  u32 *tag, const void **payload, u64 *bytes);
 u64 de__probe_settings_hash(const de__probe_snapshot *p);
 /** Cube camera directions match de_cooked_env_face_direction, no temporal history. */
 void de__probe_face_camera(de_dvec3 position, de_dvec3 origin, u32 face, de__rw_view *out);
