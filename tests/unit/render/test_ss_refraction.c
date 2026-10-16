@@ -1720,7 +1720,7 @@ static void forward_tir_reference(lx *f, de_gpu_backend backend) {
     ASSERT_EQ(de__gpu_scene_create(&gd, &f->gs), DE_OK);
     m->transmission = 1;
     for (u32 opaque_case = 0; opaque_case < 2; ++opaque_case) {
-        m->metallic = opaque_case ? 0 : 1;
+        m->metallic = opaque_case ? 0.0f : 1.0f;
         g_mat[mat - 1].textures[DE_COOKED_TEX_TRANSMISSION].id = opaque_case ? 1 : 0;
         u32 passes;
         ASSERT_TRUE(cvar_set("r.refraction", "0"));
