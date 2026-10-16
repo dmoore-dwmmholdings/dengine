@@ -1,3 +1,4 @@
+#include "render/shadows/shadows_internal.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
 /*
@@ -836,6 +837,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         de_rg_export(g, target_res, DE_ACCESS_SHADER_READ);
     de_rg_export(g, vf.output, DE_ACCESS_SHADER_READ);
 
+    bool shadow_attempted = false;
     de_result res = de__rg_finalize(g);
     if (res == DE_OK)
         res = de__rg_compile(g);
@@ -850,6 +852,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
             de_gpu_wait_idle(r->dev);
             ++vs->resource_drains;
         }
+        shadow_attempted = true;
         res = de__rg_execute(g, &(de__rg_execute_desc){.frame_index = frame_index});
         /* Submitted (perhaps partly): the states below are what the epilogue leaves, or, when a
          * list failed, unknown, so the next frame discards. */
@@ -859,6 +862,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
             s->target_access = after;
         s->ok = res == DE_OK;
     }
+    de__csm_complete(r->csm, vf.view, g, shadow_attempted, res == DE_OK);
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
     de__irradiance_view_complete(r, vf.view, res == DE_OK);
     de__ssgi_view_complete(r->ssgi, vf.view, frame_index, res == DE_OK);

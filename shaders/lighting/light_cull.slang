@@ -157,11 +157,11 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
             float3 zc = float3(g.transform[0].z, g.transform[1].z, g.transform[2].z);
             DeClusterLight l;
             l.position = float4(0.0, 0.0, 0.0, 0.0);
-            l.direction = float4(normalize(-zc), 0.0);
+            l.direction = float4(normalize(-zc), max(g.params.w, 0.0));
             l.color = float4(g.color.rgb * g.color.w, -1.0);
             l.shape = float4(0.0, 0.0, 0.0, asfloat(DE_LIGHT_KIND_DIRECTIONAL));
             l.axis = float4(0.0, 0.0, 0.0, 0.0);
-            l.bound = float4(0.0, 0.0, 0.0, 1e30);
+            l.bound = float4(asfloat(g.entity_lo), asfloat(g.entity_hi), 0.0, 1e30);
             de_buffer<DeClusterLight>(pc.dir_lights)[i] = l;
             return;
         }

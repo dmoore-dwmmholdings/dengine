@@ -14,6 +14,7 @@
 module lighting_common;
 import "../probes/reflection_probe_sample";
 import "../probes/irradiance_sample";
+import "../shadows/csm_sample";
 
 import bindless;
 __exported import "../lighting/lights";
@@ -164,7 +165,9 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
     {
         DeClusterLight l = de_robuffer<DeClusterLight>(cl.dir_lights)[i];
         DeLightHit h = de_light_punctual(l, p);
-        float vis = de_input_shadow_directional(lv.inputs, px, i);
+        float vis = (lv.inputs.reserved0 & DE_INPUT_SHADOW_METADATA) != 0u ?
+            csm_shadow(lv.inputs.shadow_directional, p, s.normal, asuint(l.bound.xy)) :
+            de_input_shadow_directional(lv.inputs, px, i);
         if (i == 0u)
             vis *= de_input_contact_shadow(lv.inputs, px);
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);

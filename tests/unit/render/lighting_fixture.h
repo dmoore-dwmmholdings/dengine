@@ -10,6 +10,8 @@
 #define DE_TEST_RENDER_LIGHTING_FIXTURE_H
 
 #include "render/passes/sss/sss.h"
+#include "render/shadows/shadows_internal.h"
+#include "render/passes/forward/forward.h"
 #define WAIT_NS             (10ull * 1000000000ull)
 #define FIRST_FRAME_WAIT_NS (120ull * 1000000000ull) /* lavapipe JIT (DENG-428) */
 #define PI_D                3.14159265358979323846
@@ -387,6 +389,9 @@ typedef struct lx {
     /* DENG-306: subsurface scattering after lighting (NULL: none). The test makes it with
      * de__sss_create_ex; lx_frame then asks lighting for the subsurface split and builds the SSS
      * passes at sss_quality, and keeps the frame's context in sss_frame. */
+    de__csm *csm;
+    de__forward *forward;
+    de_quality shadow_quality;
     de__sss *sss;
     de_quality sss_quality;
     de__sss_context *sss_frame;
@@ -397,6 +402,7 @@ typedef struct lx {
     world w;
     de_vec3 eye, target;
     f32 fov;
+    f32 ortho_height;
     u32 width, height;
     lx_result res;
 } lx;
@@ -456,6 +462,10 @@ static inline void free_result(lx_result *r) {
 }
 
 static inline void lx_teardown(lx *f) {
+    de__forward_destroy(f->forward);
+    f->forward = NULL;
+    de__csm_destroy(f->csm);
+    f->csm = NULL;
     if (f->g) {
         de__rg_reset(f->g);
         de__rg_destroy(f->g);
@@ -670,7 +680,11 @@ static inline void rb_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *use
 
 static inline void camera(const lx *f, de_mat4 *view, de_mat4 *proj) {
     *view = de_m4_look_at(f->eye, f->target, (de_vec3){0.0f, 1.0f, 0.0f});
-    *proj = de_m4_perspective_rz(f->fov, (f32)f->width / (f32)f->height, 0.1f);
+    if (f->ortho_height > 0) {
+        f32 h = .5f * f->ortho_height, w = h * (f32)f->width / (f32)f->height;
+        *proj = de_m4_ortho_rz(-w, w, -h, h, .1f, 100000);
+    } else
+        *proj = de_m4_perspective_rz(f->fov, (f32)f->width / (f32)f->height, 0.1f);
 }
 
 static inline u64 align_up(u64 v, u64 a) {
@@ -743,6 +757,28 @@ static inline bool lx_frame(lx *f) {
     if (de__vis_frame_build(f->vis, f->g, &d, &vc) != DE_OK || vc == NULL)
         return false;
     EXPECT_TRUE(de__vis_frame_context(f->vis, d.view, f->g, n) == vc);
+    if (f->csm) {
+        de__rw_view cam = {.offset = f->eye,
+                           .camera = {.near_z = .1f,
+                                      .projection = f->ortho_height > 0 ? DE_PROJ_ORTHOGRAPHIC
+                                                                        : DE_PROJ_PERSPECTIVE}};
+        de_render_settings settings = {.shadows = f->shadow_quality};
+        de__view_frame vf = {.view = d.view,
+                             .graph = f->g,
+                             .world = &f->w.f,
+                             .camera = &cam,
+                             .settings = &settings,
+                             .frame_index = n,
+                             .width = f->width,
+                             .height = f->height,
+                             .view_matrix = view,
+                             .proj = proj};
+        if (de__csm_build(f->csm, &vf, vc) != DE_OK) {
+            de__csm_complete(f->csm, d.view, f->g, false, false);
+            return false;
+        }
+        de__csm_publish(f->csm, d.view, f->g, n, de__lighting_view_inputs(f->lt, 0));
+    }
     de__lighting_context *lc = NULL;
     if (f->sss != NULL) /* DENG-306: SUBSURFACE pixels split their diffuse off for the SSS pass */
         de__lighting_view_inputs(f->lt, 0)->subsurface = f->sss_quality != DE_QUALITY_OFF;
@@ -752,6 +788,11 @@ static inline bool lx_frame(lx *f) {
     if (f->sss != NULL && lc != NULL &&
         de__sss_build(f->sss, f->g, vc, lc, f->sss_quality, &f->sss_frame) != DE_OK)
         return false;
+    if (f->forward && lc) {
+        de__forward_context *forward_context = NULL;
+        if (de__forward_build(f->forward, f->g, vc, lc, &f->w.f, &forward_context) != DE_OK)
+            return false;
+    }
     rb_pass *rp = NULL;
     if (lc != NULL) {
         rp = (rb_pass *)de_arena_push_zero(f->arena, sizeof *rp, 16);
@@ -831,10 +872,12 @@ static inline bool lx_frame(lx *f) {
     de_result r = de__rg_finalize(f->g);
     if (r == DE_OK)
         r = de__rg_compile(f->g);
+    bool csm_attempted = r == DE_OK;
     if (r == DE_OK)
         r = de__rg_execute(f->g, &(de__rg_execute_desc){.frame_index = n,
                                                         .frame_fence = f->fence,
                                                         .frame_value = n + 1});
+    de__csm_complete(f->csm, d.view, f->g, csm_attempted, r == DE_OK);
     if (r != DE_OK) {
         fprintf(stderr, "frame %llu: %s\n", (unsigned long long)n,
                 de_error_last() ? de_error_last()->message : "?");

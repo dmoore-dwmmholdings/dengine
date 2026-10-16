@@ -183,9 +183,10 @@ de_result de__vis_raster_mesh_init(de__vis_shared *s) {
         st->mesh_push = push_size(ms);
         de_gpu_pipeline_desc md = {.kind = DE_PIPE_MESH,
                                    .ms = ms->blob,
-                                   .ps = code.entries[1].blob,
+                                   .ps = s->depth_only ? (de_gpu_shader_blob){0}
+                                                       : code.entries[1].blob,
                                    .color_formats = {DE_FMT_R32_UINT},
-                                   .color_count = 1,
+                                   .color_count = s->depth_only ? 0u : 1u,
                                    .depth_format = DE_FMT_D32_FLOAT,
                                    .cull = DE_CULL_NONE,
                                    .depth_test = true,
@@ -246,6 +247,8 @@ static void clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 }
 
 de_rg_resource de__vis_raster_targets(de_rg *g, de__vis_context *vc) {
+    if (vc->depth_only)
+        return vc->depth; /* Target validity only; no ID image is created. */
     if (DE_HANDLE_VALID(vc->vis_ids))
         return vc->vis_ids;
     rm_state *st = state_of(vc->shared);
@@ -286,6 +289,8 @@ typedef struct mesh_pass {
     rm_params pc;
     u32 push_bytes;
     de_rg_resource vis_ids, depth, args, split_args, visible;
+    bool depth_only;
+    u32 layer, rect[4];
     u32 dispatches; /**< > 1: split_args holds one DeVisMeshArgs per dispatch */
 } mesh_pass;
 
@@ -308,13 +313,21 @@ static void split_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 
 static void mesh_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const mesh_pass *p = (const mesh_pass *)user;
-    const de_gpu_attachment color = {.texture = de_rg_texture(pass, p->vis_ids), .store = true};
-    const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
+    const de_gpu_attachment color = {.texture = p->depth_only ? (de_gpu_texture){0}
+                                                              : de_rg_texture(pass, p->vis_ids),
+                                     .store = true};
+    const de_gpu_attachment depth = {
+        .texture = de_rg_texture(pass, p->depth), .layer = p->layer, .store = true};
     const de_gpu_buffer args = de_rg_buffer(pass, p->args);
     rm_params pc = p->pc;
     pc.args = de_gpu_buffer_bindless(p->dev, args);
     pc.visible = de_gpu_buffer_bindless(p->dev, de_rg_buffer(pass, p->visible));
-    de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+    de_gpu_cmd_begin_render(cmd, p->depth_only ? NULL : &color, p->depth_only ? 0u : 1u, &depth);
+    if (p->rect[2]) {
+        de_gpu_cmd_viewport(cmd, (f32)p->rect[0], (f32)p->rect[1], (f32)p->rect[2],
+                            (f32)p->rect[3]);
+        de_gpu_cmd_scissor(cmd, (i32)p->rect[0], (i32)p->rect[1], p->rect[2], p->rect[3]);
+    }
     de_gpu_cmd_set_pipeline(cmd, p->pipeline);
     if (p->dispatches <= 1u) {
         pc.base = 0;
@@ -353,7 +366,7 @@ void de__vis_raster_mesh(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     }
     const de_cvar tc = st->cv_tri_cull;
     const rm_params pc = {.scene = vc->scene_views_bindless,
-                          .view_slot = vc->view_slot,
+                          .view_slot = vc->scene_view_slot,
                           .visible = 0, /* the transients' indices: at execute */
                           .flags = !DE_HANDLE_VALID(tc) || de_cvar_bool(tc) ? RM_TRI_CULL : 0u,
                           .split_count = dispatches};
@@ -362,7 +375,10 @@ void de__vis_raster_mesh(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     mp->visible = vc->visible_meshlets;
     mp->pc = pc;
     mp->push_bytes = st->mesh_push;
-    mp->vis_ids = ids;
+    mp->depth_only = vc->depth_only;
+    mp->layer = vc->depth_layer;
+    memcpy(mp->rect, vc->raster_rect, sizeof mp->rect);
+    mp->vis_ids = vc->vis_ids;
     mp->depth = vc->depth;
     mp->args = vc->raster_args[pi];
     mp->dispatches = dispatches;
@@ -400,8 +416,11 @@ void de__vis_raster_mesh(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     de_rg_read(p, vc->raster_args[pi], DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
     if (dispatches > 1u)
         de_rg_read(p, mp->split_args, DE_ACCESS_INDIRECT);
-    de_rg_read(p, ids, DE_ACCESS_RENDER_TARGET);
-    de_rg_write(p, ids, DE_ACCESS_RENDER_TARGET);
+    if (!vc->depth_only) {
+        de_rg_read(p, ids, DE_ACCESS_RENDER_TARGET);
+        de_rg_write(p, ids, DE_ACCESS_RENDER_TARGET);
+    }
     de_rg_read(p, vc->depth, DE_ACCESS_DEPTH_READ);
     de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_READ | DE_ACCESS_DEPTH_WRITE);
+    vc->raster_recorded = true;
 }

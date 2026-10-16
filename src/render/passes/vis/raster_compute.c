@@ -135,18 +135,19 @@ static void state_free(de__vis_shared *s, rc_state *st) {
 /* The draw pipeline: the vis-ID target and the D32 reverse-Z depth (test and write). */
 static de_result make_pipeline(de__vis_shared *s, const de__engine_shader_code *code,
                                u32 push_bytes, de_gpu_pipeline *out) {
-    *out =
-        de_gpu_pipeline_create(s->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
-                                                               .vs = code->entries[0].blob,
-                                                               .ps = code->entries[1].blob,
-                                                               .color_formats = {DE_FMT_R32_UINT},
-                                                               .color_count = 1,
-                                                               .depth_format = DE_FMT_D32_FLOAT,
-                                                               .cull = DE_CULL_NONE,
-                                                               .depth_test = true,
-                                                               .depth_write = true,
-                                                               .push_constant_bytes = push_bytes,
-                                                               .name = "vis raster draw"});
+    *out = de_gpu_pipeline_create(
+        s->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                        .vs = code->entries[0].blob,
+                                        .ps = s->depth_only ? (de_gpu_shader_blob){0}
+                                                            : code->entries[1].blob,
+                                        .color_formats = {DE_FMT_R32_UINT},
+                                        .color_count = s->depth_only ? 0u : 1u,
+                                        .depth_format = DE_FMT_D32_FLOAT,
+                                        .cull = DE_CULL_NONE,
+                                        .depth_test = true,
+                                        .depth_write = true,
+                                        .push_constant_bytes = push_bytes,
+                                        .name = "vis raster draw"});
     if (DE_HANDLE_VALID(*out))
         return DE_OK;
     const de_error *er = de_error_last();
@@ -350,6 +351,8 @@ typedef struct rc_pass {
     de_rg_resource instances, meshes, materials, scene, visible, raster_args, counters, tris,
         indices, draw_args, vis_id, depth;
     de_gpu_pipeline draw;
+    bool depth_only;
+    u32 layer, rect[4];
     de_gpu_buffer stats;
     u64 stats_offset;
 } rc_pass;
@@ -387,15 +390,23 @@ static void kernel_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) 
 
 static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const rc_pass *p = (const rc_pass *)user;
-    const de_gpu_attachment color = {.texture = de_rg_texture(pass, p->vis_id), .store = true};
-    const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
+    const de_gpu_attachment color = {.texture = p->depth_only ? (de_gpu_texture){0}
+                                                              : de_rg_texture(pass, p->vis_id),
+                                     .store = true};
+    const de_gpu_attachment depth = {
+        .texture = de_rg_texture(pass, p->depth), .layer = p->layer, .store = true};
     const rc_draw_params dp = {.instances = bindless_of(p, pass, p->instances),
                                .meshes = bindless_of(p, pass, p->meshes),
                                .scene = bindless_of(p, pass, p->scene),
                                .view_slot = p->pc.view_slot,
                                .visible = bindless_of(p, pass, p->visible),
                                .tris = bindless_of(p, pass, p->tris)};
-    de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+    de_gpu_cmd_begin_render(cmd, p->depth_only ? NULL : &color, p->depth_only ? 0u : 1u, &depth);
+    if (p->rect[2]) {
+        de_gpu_cmd_viewport(cmd, (f32)p->rect[0], (f32)p->rect[1], (f32)p->rect[2],
+                            (f32)p->rect[3]);
+        de_gpu_cmd_scissor(cmd, (i32)p->rect[0], (i32)p->rect[1], p->rect[2], p->rect[3]);
+    }
     de_gpu_cmd_set_pipeline(cmd, p->draw);
     de_gpu_cmd_push_constants(cmd, &dp, (u32)sizeof dp);
     de_gpu_cmd_set_index_buffer(cmd, de_rg_buffer(pass, p->indices), 0, false);
@@ -532,7 +543,7 @@ void de__vis_raster_compute(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
         .dev = s->dev,
         .pc = {.material_count =
                    materials ? de__gpu_scene_table(vc->gpu_scene, DE__GS_MATERIALS).count : 0u,
-               .view_slot = vc->view_slot,
+               .view_slot = vc->scene_view_slot,
                .capacity = pv->frame_capacity,
                .phase = (u32)phase,
                .flags = flags,
@@ -550,7 +561,10 @@ void de__vis_raster_compute(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
         .draw_args = draw_args,
         .vis_id = vc->vis_ids,
         .depth = vc->depth,
-        .draw = st->draw};
+        .draw = st->draw,
+        .depth_only = vc->depth_only,
+        .layer = vc->depth_layer,
+        .rect = {vc->raster_rect[0], vc->raster_rect[1], vc->raster_rect[2], vc->raster_rect[3]}};
     /* Each pass's data names only the resources it declares (de_rg_buffer needs a declared
      * access). */
     rc_pass b_clear = {.dev = s->dev, .pc = base.pc, .counters = pv->counters};
@@ -611,11 +625,24 @@ void de__vis_raster_compute(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
     de_rg_read(p, vc->scene_instances, DE_ACCESS_SHADER_READ);
     de_rg_read(p, vc->scene_meshes, DE_ACCESS_SHADER_READ);
     de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
-    de_rg_read(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
-    de_rg_write(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+    if (!vc->depth_only) {
+        de_rg_read(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+        de_rg_write(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+    }
     de_rg_read(p, vc->depth, DE_ACCESS_DEPTH_READ);
     de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_READ | DE_ACCESS_DEPTH_WRITE);
+    vc->raster_recorded = true;
 
-    if (!p1)
+    if (!p1 || vc->depth_only)
         add_stats_pass(g, vc, pv);
+}
+
+void de__vis_raster_compute_abort(de__vis_shared *s, u32 slot, u64 frame) {
+    rc_state *st = (rc_state *)s->raster_compute;
+    if (!st || slot >= DE__VIEW_MAX)
+        return;
+    u32 ring = (u32)(frame % DE__VIS_FRAME_RING);
+    if (st->views[slot].slot_frame[ring] == frame)
+        st->views[slot].slot_live[ring] = false;
+    st->views[slot].frame_graph = NULL;
 }

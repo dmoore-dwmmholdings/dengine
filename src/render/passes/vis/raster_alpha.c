@@ -167,9 +167,11 @@ de_result de__vis_raster_alpha_init(de__vis_shared *s) {
         }
     }
     if (r == DE_OK) {
-        static const char *const k_entries[4] = {"ms_alpha", "ps_alpha_mesh", "vs_alpha",
-                                                 "ps_alpha_draw"};
-        r = de__vis_shader_load(s, "vis_alpha", k_entries, 4, &code);
+        const char *const k_entries[4] = {
+            "ms_alpha", s->depth_only ? "ps_shadow_alpha_mesh" : "ps_alpha_mesh", "vs_alpha",
+            s->depth_only ? "ps_shadow_alpha_draw" : "ps_alpha_draw"};
+        r = de__vis_shader_load(s, s->depth_only ? "shadow_depth" : "vis_alpha", k_entries, 4,
+                                &code);
         if (r == DE_OK) {
             st->draw_push = push_of(code.entries[2].push_constant_bytes, (u32)sizeof(ra_params));
             r = make_pipeline(s,
@@ -177,7 +179,7 @@ de_result de__vis_raster_alpha_init(de__vis_shared *s) {
                                                       .vs = code.entries[2].blob,
                                                       .ps = code.entries[3].blob,
                                                       .color_formats = {DE_FMT_R32_UINT},
-                                                      .color_count = 1,
+                                                      .color_count = s->depth_only ? 0u : 1u,
                                                       .depth_format = DE_FMT_D32_FLOAT,
                                                       .cull = DE_CULL_NONE,
                                                       .depth_test = true,
@@ -193,7 +195,7 @@ de_result de__vis_raster_alpha_init(de__vis_shared *s) {
                                                           .ms = code.entries[0].blob,
                                                           .ps = code.entries[1].blob,
                                                           .color_formats = {DE_FMT_R32_UINT},
-                                                          .color_count = 1,
+                                                          .color_count = s->depth_only ? 0u : 1u,
                                                           .depth_format = DE_FMT_D32_FLOAT,
                                                           .cull = DE_CULL_NONE,
                                                           .depth_test = true,
@@ -244,6 +246,8 @@ typedef struct ra_pass {
     ra_expand_params ec;
     de_rg_resource instances, meshes, materials, scene, visible, args, counters, tris, indices,
         draw_args, vis_ids, depth;
+    bool depth_only;
+    u32 layer, rect[4];
 } ra_pass;
 
 static u32 bindless_of(const ra_pass *p, const de_rg_pass *pass, de_rg_resource r) {
@@ -260,9 +264,17 @@ static ra_params draw_params(const ra_pass *p, const de_rg_pass *pass) {
 }
 
 static void begin_targets(de_gpu_cmd *cmd, const ra_pass *p, const de_rg_pass *pass) {
-    const de_gpu_attachment color = {.texture = de_rg_texture(pass, p->vis_ids), .store = true};
-    const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
-    de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+    const de_gpu_attachment color = {.texture = p->depth_only ? (de_gpu_texture){0}
+                                                              : de_rg_texture(pass, p->vis_ids),
+                                     .store = true};
+    const de_gpu_attachment depth = {
+        .texture = de_rg_texture(pass, p->depth), .layer = p->layer, .store = true};
+    de_gpu_cmd_begin_render(cmd, p->depth_only ? NULL : &color, p->depth_only ? 0u : 1u, &depth);
+    if (p->rect[2]) {
+        de_gpu_cmd_viewport(cmd, (f32)p->rect[0], (f32)p->rect[1], (f32)p->rect[2],
+                            (f32)p->rect[3]);
+        de_gpu_cmd_scissor(cmd, (i32)p->rect[0], (i32)p->rect[1], p->rect[2], p->rect[3]);
+    }
 }
 
 static void mesh_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
@@ -326,8 +338,10 @@ static void declare_draw(de_rg_pass *p, const de__vis_context *vc) {
     if (DE_HANDLE_VALID(vc->scene_materials))
         de_rg_read(p, vc->scene_materials, DE_ACCESS_SHADER_READ);
     de_rg_read(p, vc->visible_meshlets, DE_ACCESS_SHADER_READ);
-    de_rg_read(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
-    de_rg_write(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+    if (!vc->depth_only) {
+        de_rg_read(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+        de_rg_write(p, vc->vis_ids, DE_ACCESS_RENDER_TARGET);
+    }
     de_rg_read(p, vc->depth, DE_ACCESS_DEPTH_READ);
     de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_READ | DE_ACCESS_DEPTH_WRITE);
 }
@@ -345,6 +359,7 @@ static void mesh_phase(de_rg *g, de__vis_context *vc, ra_state *st, const ra_pas
                                    DE_QUEUE_GRAPHICS, mesh_execute, pm);
     declare_draw(p, vc);
     de_rg_read(p, vc->raster_args_alpha[pi], DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
+    vc->alpha_recorded = true;
 }
 
 static void compute_phase(de_rg *g, de__vis_context *vc, ra_state *st, const ra_pass *base, bool p1,
@@ -456,6 +471,7 @@ static void compute_phase(de_rg *g, de__vis_context *vc, ra_state *st, const ra_
     de_rg_read(p, draw_args, DE_ACCESS_INDIRECT);
     de_rg_read(p, pv->indices, DE_ACCESS_SHADER_READ); /* the index buffer */
     de_rg_read(p, pv->tris, DE_ACCESS_SHADER_READ);
+    vc->alpha_recorded = true;
 }
 
 void de__vis_raster_alpha(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
@@ -480,12 +496,12 @@ void de__vis_raster_alpha(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     const bool tri_cull = !DE_HANDLE_VALID(tc) || de_cvar_bool(tc);
     const ra_pass base = {
         .dev = vc->shared->dev,
-        .pc = {.view_slot = vc->view_slot,
+        .pc = {.view_slot = vc->scene_view_slot,
                .flags = tri_cull ? RA_TRI_CULL : 0u,
                .sampler = st->sampler_bindless},
         .ec = {.material_count =
                    materials ? de__gpu_scene_table(vc->gpu_scene, DE__GS_MATERIALS).count : 0u,
-               .view_slot = vc->view_slot,
+               .view_slot = vc->scene_view_slot,
                .flags = tri_cull ? DE__VIS_EXPAND_TRI_CULL : 0u,
                .width = (f32)vc->width,
                .height = (f32)vc->height},
@@ -495,10 +511,20 @@ void de__vis_raster_alpha(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
         .scene = vc->scene_views,
         .visible = vc->visible_meshlets,
         .vis_ids = vc->vis_ids,
-        .depth = vc->depth};
+        .depth = vc->depth,
+        .depth_only = vc->depth_only,
+        .layer = vc->depth_layer,
+        .rect = {vc->raster_rect[0], vc->raster_rect[1], vc->raster_rect[2], vc->raster_rect[3]}};
     const bool p1 = phase == DE__VIS_PHASE_1;
     if (mesh)
         mesh_phase(g, vc, st, &base, p1, pi);
     else
         compute_phase(g, vc, st, &base, p1, pi);
+}
+
+void de__vis_raster_alpha_abort(de__vis_shared *s, u32 slot, u64 frame) {
+    (void)frame;
+    ra_state *st = state_of(s);
+    if (st && slot < DE__VIEW_MAX)
+        st->views[slot].frame_graph = NULL;
 }
