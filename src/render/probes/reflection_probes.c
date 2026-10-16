@@ -35,7 +35,8 @@ static void probe_blend_stage(de__view_frame *vf, void *user);
 struct de__probes {
     de_renderer *renderer;
     de__probe_store pools[1];
-    de__probe_capture capture;
+    de__probe_capture captures[3];
+    de__probe_capture *capture;
     probe_record records[DE__PROBE_MAX];
     u32 count, active, pool_size;
     de_cvar cv_faces, cv_pool;
@@ -67,7 +68,7 @@ static de_result bake_command(int argc, const char *const *argv, void *user) {
         if (!blob)
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "probe bake: blob");
         de_result result =
-            de__probe_store_readback(&p->capture, s, rec->handle, blob + DE__PROBE_BLOB_HEADER);
+            de__probe_store_readback(p->capture, s, rec->handle, blob + DE__PROBE_BLOB_HEADER);
         if (result == DE_OK)
             result =
                 de__probe_blob_write(blob, size, rec->hash, s->slots[rec->handle.slot].resolution,
@@ -89,6 +90,7 @@ de_result de__probes_create(de_renderer *r, struct de__probes **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "probes: state");
     memset(p, 0, sizeof *p);
     p->renderer = r;
+    p->capture = &p->captures[0];
     p->active = DE__PROBE_NONE;
     p->cv_faces = de_cvar_register(&(de_cvar_desc){.name = "r.probe_faces_per_frame",
                                                    .type = DE_CVAR_INT,
@@ -125,7 +127,8 @@ void de__probes_destroy(de_renderer *r, struct de__probes *p) {
     de_gpu_buffer_destroy(r->dev, p->gpu);
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
         de_gpu_buffer_destroy(r->dev, p->blend_views[i].bounds);
-    de__probe_capture_destroy(&p->capture);
+    for (u32 i = 0; i < 3; ++i)
+        de__probe_capture_destroy(&p->captures[i]);
     for (u32 i = 0; i < 1; ++i)
         de__probe_store_destroy(&p->pools[i]);
     DE_FREE(r->alloc, p, sizeof *p);
@@ -147,8 +150,9 @@ void de__probes_prepare(de_renderer *r, const de__render_world_frame *world) {
     struct de__probes *p = r->probes;
     if (!p)
         return;
-    if (p->capture.initialized)
-        de__probe_capture_at_position(&p->capture, (de_dvec3){0}, (de_dvec3){0}, 0);
+    for (u32 i = 0; i < 3; ++i)
+        if (p->captures[i].initialized)
+            de__probe_capture_at_position(&p->captures[i], (de_dvec3){0}, (de_dvec3){0}, 0);
     u32 capacity = (u32)de_cvar_int(p->cv_pool);
     if (!capacity)
         capacity = 16;
@@ -263,9 +267,11 @@ void de__probes_prepare(de_renderer *r, const de__render_world_frame *world) {
             de__probe_store_alloc_resolution(s, rec->snapshot.entity, r->frame_index, resolution);
     if (!de__probe_store_valid(s, rec->handle))
         return;
-    if (!p->capture.initialized || p->capture.resolution != resolution) {
-        de__probe_capture_destroy(&p->capture);
-        if (de__probe_capture_init(&p->capture, r, resolution) != DE_OK)
+    /* Keep one lazy capture per supported resolution: switching probes must not churn
+     * persistent view graphs or reinterpret retired bindless descriptor indices. */
+    p->capture = &p->captures[resolution == 64 ? 0 : resolution == 128 ? 1 : 2];
+    if (!p->capture->initialized) {
+        if (de__probe_capture_init(p->capture, r, resolution) != DE_OK)
             return;
     }
     if (!rec->loaded && DE_HANDLE_VALID(rec->snapshot.probe.bake) && r->assets) {
@@ -274,7 +280,7 @@ void de__probes_prepare(de_renderer *r, const de__render_world_frame *world) {
         u32 baked_resolution;
         if (blob && de__probe_blob_read(blob, size, rec->hash, &baked_resolution, &data) == DE_OK &&
             baked_resolution == resolution &&
-            de__probe_store_upload(&p->capture, s, rec->handle, data) == DE_OK) {
+            de__probe_store_upload(p->capture, s, rec->handle, data) == DE_OK) {
             rec->loaded = true;
             rec->queued = false;
             rec->last_capture = r->frame_index;
@@ -294,22 +300,22 @@ void de__probes_prepare(de_renderer *r, const de__render_world_frame *world) {
             mask |= 1u << f;
             --budget;
         }
-    de__probe_capture_at_position(&p->capture, rec->snapshot.position,
+    de__probe_capture_at_position(p->capture, rec->snapshot.position,
                                   world ? world->origin : (de_dvec3){0}, mask);
 }
 void de__probes_after_views(de_renderer *r, de_arena *arena, u64 frame) {
     (void)arena;
     struct de__probes *p = r->probes;
-    if (!p || p->active == DE__PROBE_NONE || !p->capture.scheduled)
+    if (!p || p->active == DE__PROBE_NONE || !p->capture->scheduled)
         return;
     probe_record *rec = &p->records[p->active];
-    u32 faces = rec->faces | p->capture.scheduled;
-    if (de__probe_capture_complete(&p->capture, &p->pools[rec->pool], rec->handle, faces == 63) !=
+    u32 faces = rec->faces | p->capture->scheduled;
+    if (de__probe_capture_complete(p->capture, &p->pools[rec->pool], rec->handle, faces == 63) !=
         DE_OK)
         return;
     rec->faces = faces;
     for (u32 f = 0; f < 6; ++f)
-        if (p->capture.scheduled & (1u << f))
+        if (p->capture->scheduled & (1u << f))
             ++rec->capture_faces;
     if (faces == 63) {
         rec->queued = false;
@@ -321,9 +327,10 @@ void de__probes_after_views(de_renderer *r, de_arena *arena, u64 frame) {
 bool de__probes_capture_view(const de_renderer *r, de_view view) {
     if (!r || !r->probes)
         return false;
-    for (u32 i = 0; i < 6; ++i)
-        if (r->probes->capture.views[i].id == view.id)
-            return true;
+    for (u32 c = 0; c < 3; ++c)
+        for (u32 i = 0; i < 6; ++i)
+            if (r->probes->captures[c].views[i].id == view.id)
+                return true;
     return false;
 }
 
@@ -442,7 +449,7 @@ static void probe_blend_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *u
 static void probe_blend_stage(de__view_frame *vf, void *user) {
     struct de__probes *p = (struct de__probes *)user;
     de_renderer *r = p->renderer;
-    if (vf->probe_capture || !p->count || !p->capture.initialized ||
+    if (vf->probe_capture || !p->count || !p->capture->initialized ||
         vf->settings->reflections == DE_QUALITY_OFF)
         return;
     de__vis_context *vc =
@@ -495,7 +502,7 @@ static void probe_blend_stage(de__view_frame *vf, void *user) {
     inputs->probe_records = records;
     inputs->probe_list = c->list;
     inputs->probe_entry = entry;
-    inputs->probe_sampler = de_gpu_sampler_bindless(r->dev, p->capture.sampler);
+    inputs->probe_sampler = de_gpu_sampler_bindless(r->dev, p->capture->sampler);
     for (u32 k = 0; k < 4; ++k)
         inputs->probe_view_z[k] = vf->view_matrix.m[k * 4 + 2];
     inputs->probe_texture_count = 0;
@@ -539,7 +546,7 @@ de_result de__probes_readback(de_renderer *r, u64 entity, void *payload, u64 siz
                 return DE_FAIL(DE_ERR_NOT_FOUND, "probe readback: nonresident");
             if (size != de__probe_payload_size(s->slots[rec->handle.slot].resolution))
                 return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "probe readback: size");
-            return de__probe_store_readback(&p->capture, s, rec->handle, payload);
+            return de__probe_store_readback(p->capture, s, rec->handle, payload);
         }
     return DE_FAIL(DE_ERR_NOT_FOUND, "probe readback: entity");
 }

@@ -778,9 +778,14 @@ static void renderer_lru(pfx *f, de_gpu_backend backend) {
     f->scene.f.probes[1].probe.resolution = 128;
     room_frame(f);
     de__probe_info a, b;
+    de_view original[6], switched[6], restored[6];
+    ASSERT_EQ(de__views_last_order(f->r, original, 6), 6u);
     ASSERT_TRUE(de__probes_info(f->r, 42, &a));
     EXPECT_TRUE(a.ready);
     room_frame(f);
+    ASSERT_EQ(de__views_last_order(f->r, switched, 6), 6u);
+    for (u32 i = 0; i < 6; ++i)
+        EXPECT_NE(original[i].id, switched[i].id);
     ASSERT_TRUE(de__probes_info(f->r, 42, &a));
     ASSERT_TRUE(de__probes_info(f->r, 43, &b));
     EXPECT_FALSE(a.ready);
@@ -788,6 +793,9 @@ static void renderer_lru(pfx *f, de_gpu_backend backend) {
     EXPECT_EQ(b.resolution, 128u);
     ASSERT_EQ(de_render_probe_request_update(f->r, (de_entity){42}), DE_OK);
     room_frame(f);
+    ASSERT_EQ(de__views_last_order(f->r, restored, 6), 6u);
+    for (u32 i = 0; i < 6; ++i)
+        EXPECT_EQ(original[i].id, restored[i].id);
     ASSERT_TRUE(de__probes_info(f->r, 42, &a));
     ASSERT_TRUE(de__probes_info(f->r, 43, &b));
     EXPECT_TRUE(a.ready);
