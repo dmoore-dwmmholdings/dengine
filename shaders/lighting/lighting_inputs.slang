@@ -12,6 +12,7 @@
 module lighting_inputs;
 
 import bindless;
+public static const uint DE_INPUT_DIFFUSE_OPAQUE = 2u;
 public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
 /// The inputs of one view and frame (64 bytes; DeLightingView.inputs).

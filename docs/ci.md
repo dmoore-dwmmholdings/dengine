@@ -413,3 +413,8 @@ and replace the SHA and the comment in every file that uses the action.
   pull request: a use-after-free in a test for ASan, an upward `#include` for
   `layering_check`, or a public header that uses a type it does not include for
   `header_check`. Then close the pull request and delete the branch.
+
+DENG-341 adds `test_render_irradiance_ssgi` / `render_irradiance_ssgi.*` to both explicit
+full-tier GPU selections. The suite executes real six-view irradiance bakes, packed-asset
+reload, static DDGI composition and half-resolution temporal SSGI on lavapipe and WARP.
+Native Metal verification also enables `MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1`.

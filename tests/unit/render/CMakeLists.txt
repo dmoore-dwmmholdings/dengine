@@ -858,3 +858,26 @@ if(TARGET test_render_ssr)
         endif()
     endif()
 endif()
+
+# DENG-341: real irradiance-volume bake and screen-space diffuse GI acceptance.
+de_add_test(NAME render_irradiance_ssgi SOURCES test_irradiance_ssgi.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_pack_lib LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_irradiance_ssgi)
+    target_include_directories(test_render_irradiance_ssgi PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    # Parallel CTest can execute supported GPU backends together; packs and cache files must
+    # not share a physical directory across the three reload fixture variants.
+    foreach(_de_gi_backend IN ITEMS metal vulkan d3d12)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gi_tmp/${_de_gi_backend}")
+    endforeach()
+    target_compile_definitions(test_render_irradiance_ssgi PRIVATE "DE_GI_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/gi_tmp\"")
+    if(DE_HAS_COOKER)
+        target_link_libraries(test_render_irradiance_ssgi PRIVATE de_cooker)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_irradiance_ssgi PRIVATE version)
+        de_d3d12_agility_deploy(test_render_irradiance_ssgi)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_irradiance_ssgi)
+        endif()
+    endif()
+endif()

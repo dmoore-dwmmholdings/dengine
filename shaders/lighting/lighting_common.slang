@@ -13,6 +13,7 @@
 // extends from `far` to infinity. Index = (slice x tiles_y + tile y) x tiles_x + tile x.
 module lighting_common;
 import "../probes/reflection_probe_sample";
+import "../probes/irradiance_sample";
 
 import bindless;
 __exported import "../lighting/lights";
@@ -219,6 +220,14 @@ public void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px,
             lv.inputs.probe_sampler,cluster,p,de_ibl_reflection_direction(s,v),s.roughness);
     }
     de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular,localRadiance);
+    float4 gi=gi_irradiance(lv.inputs.reserved1,p,s.normal,v);
+    if(gi.a>0) {
+        DeIbl unit=(DeIbl)0;unit.ambient=float4(1,1,1,0);
+        float3 response,unused;
+        de_ibl_evaluate(s,v,unit,lv.brdf_lut,1,response,unused);
+        // Unit ambient is pi irradiance. Preserve the exact shared energy/material response.
+        diffuse=diffuse*(1-gi.a)+gi.rgb*(response*DE_INV_PI)*ao;
+    }
     float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
     diffuse = lerp(diffuse, od.rgb * ao, saturate(od.a));
     specular = de_input_compose_specular(lv.inputs,px,specular);

@@ -24,6 +24,7 @@
 DE_EXTERN_C_BEGIN
 
 #define DE__INPUT_SPECULAR_OPAQUE 1u
+#define DE__INPUT_DIFFUSE_OPAQUE  2u
 
 /** The inputs one view's lighting reads this frame (render-graph textures; invalid = none). */
 typedef struct de__lighting_inputs {
@@ -45,6 +46,9 @@ typedef struct de__lighting_inputs {
     de_rg_resource probe_textures[64];
     u32 probe_texture_count;
     bool indirect_specular_opaque; /**< G-buffer-only override; forward keeps probe/sky. */
+    de_rg_resource gi_records, gi_textures[16], gi_buffers[8];
+    u32 gi_texture_count, gi_buffer_count;
+    bool indirect_diffuse_opaque;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 

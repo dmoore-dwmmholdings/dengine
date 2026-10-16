@@ -1436,6 +1436,7 @@ TEST(vis_frame, renderer_stage) {
     const u32 n = de__gpu_null_log_count(d);
     bool resolved = false, trace = false, ssr_resolved = false, lit = false, history = false;
     u32 closest_passes = 0;
+    bool gi_trace = false, gi_resolved = false;
     for (u32 i = 0; i < n; ++i) {
         const de__gpu_null_entry *e = de__gpu_null_log_entry(d, i);
         if (e->op != DE__GPU_NULL_OP_MARKER_PUSH || strncmp(e->list, "view:main", 9) != 0)
@@ -1458,8 +1459,20 @@ TEST(vis_frame, renderer_stage) {
             ssr_resolved = true;
             continue;
         }
+        // DENG-341 reuses the same final pyramid, then resolves opaque diffuse before lighting.
+        if (strcmp(e->text, "ssgi.trace") == 0) {
+            EXPECT_TRUE(ssr_resolved && closest_passes > 0);
+            gi_trace = true;
+            continue;
+        }
+        if (strcmp(e->text, "ssgi.resolve") == 0) {
+            EXPECT_TRUE(gi_trace);
+            gi_resolved = true;
+            continue;
+        }
         if (strcmp(e->text, "lighting.deferred") == 0) {
             EXPECT_TRUE(ssr_resolved);
+            EXPECT_TRUE(gi_resolved);
             lit = true;
         }
         if (strcmp(e->text, "screen.history_capture") == 0) {
@@ -1472,6 +1485,7 @@ TEST(vis_frame, renderer_stage) {
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
     EXPECT_TRUE(trace && ssr_resolved && history);
+    EXPECT_TRUE(gi_trace && gi_resolved);
     de__view_info vi;
     ASSERT_TRUE(de__view_info_get(r, de_renderer_main_view(r), &vi));
     u32 hw, hh, mips;

@@ -132,6 +132,13 @@ typedef struct de__probe_snapshot {
     DeReflectionProbe probe;
 } de__probe_snapshot;
 
+typedef struct de__irradiance_snapshot {
+    u64 entity;
+    de_dvec3 position;
+    de_quat rotation;
+    DeIrradianceVolume volume;
+} de__irradiance_snapshot;
+
 /** The environment: the first DeEnvironment in query order. */
 typedef struct de__rw_environment {
     u64 entity; /**< 0: no DeEnvironment */
@@ -164,6 +171,8 @@ typedef struct de__render_world_frame {
     de__rw_environment environment;
     u32 probe_count;
     de__probe_snapshot probes[64];
+    u32 irradiance_count;
+    de__irradiance_snapshot irradiance[8];
     u32 environment_count; /**< DeEnvironment entities seen (only the first is used) */
 
     /** Slots written this frame (new, changed, prev catch-up), ascending. After an origin change

@@ -459,6 +459,31 @@ static de_result reg_reflection_probe(de_world *w, de_component *out) {
                               construct_reflection_probe, out);
 }
 
+static void construct_irradiance_volume(void *obj) {
+    DeIrradianceVolume *v = obj;
+    memset(v, 0, sizeof *v);
+    v->extent = (de_vec3){5, 5, 5};
+    v->spacing = 2;
+    v->intensity = 1;
+    v->blend_distance = 1;
+    v->bounces = 2;
+}
+static de_result reg_irradiance_volume(de_world *w, de_component *out) {
+    static const de_field_info fields[] = {
+        DE_FIELD(DeIrradianceVolume, extent, DE_FK_VEC3, AUTHORED),
+        DE_FIELD(DeIrradianceVolume, spacing, DE_FK_F32, AUTHORED),
+        DE_FIELD_EX(DeIrradianceVolume, counts, DE_FK_FIXED_ARRAY, AUTHORED,
+                    {0, 0, 0, "Probe counts; all zero derives from spacing", "u32", 3}),
+        DE_FIELD(DeIrradianceVolume, intensity, DE_FK_F32, AUTHORED),
+        DE_FIELD(DeIrradianceVolume, blend_distance, DE_FK_F32, AUTHORED),
+        DE_FIELD(DeIrradianceVolume, priority, DE_FK_I32, AUTHORED),
+        DE_FIELD(DeIrradianceVolume, bounces, DE_FK_U32, AUTHORED),
+        DE_FIELD_EX(DeIrradianceVolume, bake, DE_FK_ASSET, ASSET_REF, {0, 0, 0, 0, "blob", 0}),
+    };
+    return register_component(w, DE_TYPE_DESC(DeIrradianceVolume, 1, fields),
+                              construct_irradiance_volume, out);
+}
+
 /* ---- Registration ------------------------------------------------------------------------ */
 
 /* Registration order = component id order. Append new components at the end. */
@@ -478,6 +503,7 @@ static const struct {
     {reg_terrain, offsetof(DeRenderComponents, terrain)},
     {reg_water, offsetof(DeRenderComponents, water)},
     {reg_reflection_probe, offsetof(DeRenderComponents, reflection_probe)},
+    {reg_irradiance_volume, offsetof(DeRenderComponents, irradiance_volume)},
 };
 
 /* The resource type: component ids only, no reflected fields (never serialized). */

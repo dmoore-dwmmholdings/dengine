@@ -44,7 +44,8 @@ typedef struct ssr_pass {
 } ssr_pass;
 static void common_stage(de__view_frame *vf, void *user) {
     de__ssr *s = user;
-    if (vf->settings->reflections == DE_QUALITY_OFF && vf->settings->gi == DE_QUALITY_OFF)
+    if (vf->settings->reflections == DE_QUALITY_OFF &&
+        (vf->settings->gi == DE_QUALITY_OFF || vf->settings->gi_mode == DE_GI_STATIC_PROBES))
         return;
     const de__vis_context *vc = de__vis_frame_context(s->vis, vf->view, vf->graph, vf->frame_index);
     (void)de__scene_history_prepare(s->history, vf, vc);

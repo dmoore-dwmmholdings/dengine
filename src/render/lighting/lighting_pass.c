@@ -92,6 +92,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_IBL_ENVIRONMENT", DE__IBL_ENVIRONMENT}, /* DENG-304 */
     {"DE_IBL_STRIP_FACES", DE__IBL_STRIP_FACES},
     {"DE_INPUT_SPECULAR_OPAQUE", DE__INPUT_SPECULAR_OPAQUE},
+    {"DE_INPUT_DIFFUSE_OPAQUE", DE__INPUT_DIFFUSE_OPAQUE},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -477,7 +478,7 @@ typedef struct lp_pass {
     de_rg_resource depth, gb[3], lighting, diffuse, specular, lists, args, tile_counters;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     de_rg_resource ids, visible; /**< DENG-429: the vis IDs and the visible list */
-    de_rg_resource inputs[8];
+    de_rg_resource inputs[9];
     u32 probe_entry, probe_sampler;
     f32 probe_view_z[4];
     u8 *inputs_dst;  /**< the inputs of this frame's constants entry (the deferred pass) */
@@ -540,6 +541,7 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
         .indirect_specular = tex_index(p, pass, p->inputs[5], false),
         .reserved0 = p->input_flags,
+        .reserved1 = buf_index(p, pass, p->inputs[8]),
         .probe_records = buf_index(p, pass, p->inputs[6]),
         .probe_list = buf_index(p, pass, p->inputs[7]),
         .probe_entry = p->probe_entry,
@@ -696,6 +698,11 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool readback = lt->debug.readback || heatmap;
     const bool sss = in.subsurface; /* DENG-306 */
     fill_view(lt, vc, &in, split, sss, lc);
+    lc->gi_records = in.gi_records;
+    lc->gi_texture_count = in.gi_texture_count;
+    lc->gi_buffer_count = in.gi_buffer_count;
+    memcpy(lc->gi_textures, in.gi_textures, sizeof lc->gi_textures);
+    memcpy(lc->gi_buffers, in.gi_buffers, sizeof lc->gi_buffers);
     lc->probe_records = in.probe_records;
     lc->probe_list = in.probe_list;
     lc->probe_texture_count = in.probe_texture_count;
@@ -803,20 +810,22 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.visible = vc->visible_meshlets;
         b.pc.ids_pitch = vc->vis_ids_pitch;
         b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
-        const de_rg_resource inputs[8] = {in.ao,
+        const de_rg_resource inputs[9] = {in.ao,
                                           in.shadow_directional,
                                           in.shadow_local,
                                           in.contact_shadows,
                                           in.indirect_diffuse,
                                           in.indirect_specular,
                                           in.probe_records,
-                                          in.probe_list};
+                                          in.probe_list,
+                                          in.gi_records};
         memcpy(b.inputs, inputs, sizeof inputs);
         b.probe_entry = in.probe_entry;
         b.probe_sampler = in.probe_sampler;
         memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
-        b.input_flags = in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u;
+        b.input_flags = (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
+                        (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;
@@ -852,9 +861,15 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, ltc2, DE_ACCESS_SHADER_READ);
         if (DE_HANDLE_VALID(lc->strip))
             de_rg_read(p, lc->strip, DE_ACCESS_SHADER_READ); /* DENG-304: the environment */
-        for (u32 i = 0; i < 8; ++i)
+        for (u32 i = 0; i < 9; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
+        for (u32 i = 0; i < in.gi_texture_count; ++i) {
+            de_rg_read(p, in.gi_textures[i], DE_ACCESS_SHADER_READ);
+            de_rg_write(p, in.gi_textures[i], DE_ACCESS_SHADER_WRITE);
+        }
+        for (u32 i = 0; i < in.gi_buffer_count; ++i)
+            de_rg_read(p, in.gi_buffers[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.probe_texture_count; ++i)
             de_rg_read(p, in.probe_textures[i], DE_ACCESS_SHADER_READ);
         de_rg_read(p, lc->tile_counters, DE_ACCESS_SHADER_READ); /* atomics */
