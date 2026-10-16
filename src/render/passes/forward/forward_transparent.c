@@ -6,14 +6,11 @@
  * Per view and frame, in DE__VIEW_SLOT_TRANSPARENT, after lighting (the context
  * de__lighting_build published for the view) and before output.basic reads the lighting target:
  *
- *   (transparent_sort.c)   the list: gathered from the render world, sorted back to front
- *   forward.scene_color    only when a listed material transmits: the     lighting target:
- *                          lighting target's texels into a transient raw   COPY_SRC; buffer:
- *                          buffer (rows of DE__FWD_SCENE_COLOR_BPP bytes)  COPY_DST
- *   forward.transparent    one instanced draw per instance and side, in   lighting target: RT
- *                          list order (back faces of double-sided ones     (load, blend); depth:
- *                          first): DE_BLEND_PREMUL into the target          test only; lists,
- *                                                                          tables: SHADER_READ
+ * transparent_sort.c gathers and sorts the visible list back to front.
+ * forward.scene_color snapshots current opaque HDR and depth to transient packed buffers;
+ * forward.scene_color.mipN builds Gaussian colour levels. r.refraction=0 copies mip0 alone.
+ * forward.transparent draws each instance and side in list order (double-sided back faces
+ * first), blending into the HDR target while testing reverse-Z depth without writing it.
  *
  * No pass at all when nothing transparent is in view (the list is empty, or no material in the
  * scene is forward). The pipeline is made at create (pre-warmed): a transparent object appearing
@@ -21,11 +18,13 @@
  * the lighting constants of the view's lighting context (lighting.h), as the deferred pass does.
  *
  * Limits: picking reads the vis buffer only, so transparent surfaces cannot be picked; the
- * screen-space lighting inputs (AO, shadows; lighting_inputs.h) are the opaque surface's at the
- * pixel; sorting is per instance (intersecting or self-overlapping transparent meshes can
- * composite out of order); the transmitted background is not refracted (S15 DENG-342).
+ * opaque AO/SSR/SSGI are cleared for transparent receivers; CSM and IBL use the surface's own
+ * position. Sorting is per instance (intersecting or self-overlapping transparent meshes can
+ * composite out of order). Screen-space refraction uses a bounded volume exit proxy, at most
+ * eight opaque-depth steps, and direction-correct raw probe/sky fallback beyond the viewport.
  */
 #include "render/passes/forward/forward.h"
+#include "render/passes/forward/scene_color_pyramid.h"
 
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
@@ -38,9 +37,11 @@
 struct de__forward {
     de__vis_shared *vis;
     de__lighting *lighting;
+    de__scene_color_pyramid *pyramid;
     de_gpu_device *dev;
     const de_allocator *alloc;
     bool enabled;
+    de_cvar cv_refraction;
     char why[256];
     de_gpu_pipeline pipeline; /**< vs_forward + ps_forward */
     u32 push_bytes;
@@ -51,7 +52,7 @@ struct de__forward {
 typedef struct fw_pass {
     de__forward *fw;
     de__fwd_params pc;
-    de_rg_resource target, depth, scene_color, views;
+    de_rg_resource target, depth, scene_color, scene_depth, views;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     const de__forward_draw *draws;
     u32 draw_count;
@@ -78,6 +79,13 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
     fw->lighting = lighting;
     fw->dev = vis->dev;
     fw->alloc = vis->alloc;
+    fw->cv_refraction = de_cvar_register(&(de_cvar_desc){
+        .name = "r.refraction",
+        .help =
+            "Current-frame screen-space refraction; off preserves legacy same-pixel transmission",
+        .type = DE_CVAR_BOOL,
+        .flags = DE_CVAR_SAVED,
+        .default_number = 1});
     if (!vis->enabled || !de__lighting_enabled(lighting)) {
         snprintf(fw->why, sizeof fw->why, "%s",
                  !vis->enabled ? "the vis frame is off" : "lighting is off");
@@ -122,6 +130,8 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
             }
         }
     }
+    if (r == DE_OK)
+        r = de__scene_color_create(vis, &fw->pyramid);
     if (r == DE_OK) {
         fw->enabled = true;
     } else if (r == DE_ERR_UNSUPPORTED) {
@@ -140,6 +150,7 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
 void de__forward_destroy(de__forward *fw) {
     if (fw == NULL)
         return;
+    de__scene_color_destroy(fw->pyramid);
     if (DE_HANDLE_VALID(fw->pipeline))
         de_gpu_pipeline_destroy(fw->dev, fw->pipeline);
     if (DE_HANDLE_VALID(fw->sampler))
@@ -163,8 +174,8 @@ static u32 buf_index(const fw_pass *p, const de_rg_pass *pass, de_rg_resource r)
     return DE_HANDLE_VALID(r) ? de_gpu_buffer_bindless(p->fw->dev, de_rg_buffer(pass, r)) : 0u;
 }
 
-static void copy_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
-    const fw_pass *p = (const fw_pass *)user;
+static void legacy_copy_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const fw_pass *p = user;
     de_gpu_cmd_copy_texture_to_buffer(cmd, de_rg_buffer(pass, p->scene_color), 0,
                                       p->pc.scene_color_pitch, de_rg_texture(pass, p->target), 0,
                                       0);
@@ -175,6 +186,7 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     de__fwd_params pc = p->pc;
     pc.scene = buf_index(p, pass, p->views);
     pc.scene_color = buf_index(p, pass, p->scene_color);
+    pc.scene_depth = buf_index(p, pass, p->scene_depth);
     pc.lights = buf_index(p, pass, p->lights);
     pc.dir_lights = buf_index(p, pass, p->dir_lights);
     pc.grid = buf_index(p, pass, p->grid);
@@ -204,10 +216,6 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     de_gpu_cmd_end_render(cmd);
 }
 
-static u32 align_up(u32 v, u32 a) {
-    return (v + a - 1u) / a * a;
-}
-
 de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                             de__lighting_context *lc, const de__render_world_frame *world,
                             de__forward_context **out) {
@@ -229,8 +237,10 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
     de__transparent_item *items = NULL;
     de__transparent_counts counts = {0};
     const u32 n = de__transparent_gather(&tv, vc->arena, &items, &counts);
+    if (counts.allocation_failed)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: transparent gather");
     if (n == 0)
-        return DE_OK; /* nothing transparent in view: no pass (an arena error is set) */
+        return DE_OK; /* nothing transparent in view */
     de__transparent_item *scratch =
         (de__transparent_item *)de_arena_push(vc->arena, (size_t)n * sizeof *scratch, 16);
     de__forward_draw *draws =
@@ -259,8 +269,9 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
     *pd = (fw_pass){.fw = fw,
                     .pc = {.view = lc->constants_bindless,
                            .entry = lc->constants_entry,
-                           .view_slot = vc->view_slot,
+                           .view_slot = vc->scene_view_slot,
                            .sampler = fw->sampler_bindless,
+                           .refraction = !fw->cv_refraction.id || de_cvar_bool(fw->cv_refraction),
                            .width = lc->width,
                            .height = lc->height,
                            .ltc_sampler = lc->sampler_bindless},
@@ -279,22 +290,37 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
 
     /* The scene colour behind the transmissive surfaces (the lighting target as lighting left
      * it), copied only when one is listed. */
-    if (transmissive) {
-        const u32 pitch = align_up(lc->width * DE__FWD_SCENE_COLOR_BPP, 256u);
+    if (transmissive && !pd->pc.refraction) {
+        pd->pc.scene_color_pitch = (lc->width * 8u + 255u) & ~255u;
+        pd->pc.scene_color_levels = 1;
         pd->scene_color = de_rg_create_buffer(
-            g, &(de_gpu_buffer_desc){.size = (u64)pitch * lc->height,
+            g, &(de_gpu_buffer_desc){.size = (u64)pd->pc.scene_color_pitch * lc->height,
                                      .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_DST,
                                      .name = "forward.scene_color"});
-        if (!DE_HANDLE_VALID(pd->scene_color))
-            return DE_OK; /* error set; finalize reports it */
-        pd->pc.scene_color_pitch = pitch;
-        de_rg_pass *p =
-            de_rg_add_pass(g, "forward.scene_color", DE_QUEUE_GRAPHICS, copy_execute, pd);
-        de_rg_read(p, lc->target, DE_ACCESS_COPY_SRC);
-        de_rg_write(p, pd->scene_color, DE_ACCESS_COPY_DST);
+        if (!pd->scene_color.id)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: legacy scene copy");
+        de_rg_pass *copy =
+            de_rg_add_pass(g, "forward.scene_color", DE_QUEUE_GRAPHICS, legacy_copy_execute, pd);
+        if (!copy)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: legacy copy pass");
+        de_rg_read(copy, lc->target, DE_ACCESS_COPY_SRC);
+        de_rg_write(copy, pd->scene_color, DE_ACCESS_COPY_DST);
+    } else if (transmissive) {
+        de__scene_color_context context;
+        de_result result = de__scene_color_build(fw->pyramid, g, vc->arena, lc->target, vc->depth,
+                                                 lc->width, lc->height, &context);
+        if (result != DE_OK)
+            return result;
+        pd->scene_color = context.color;
+        pd->scene_depth = context.depth;
+        pd->pc.scene_color_pitch = context.layout.level[0].pitch;
+        pd->pc.scene_depth_pitch = context.layout.depth_pitch;
+        pd->pc.scene_color_levels = context.layout.count;
     }
 
     de_rg_pass *p = de_rg_add_pass(g, "forward.transparent", DE_QUEUE_GRAPHICS, draw_execute, pd);
+    if (!p)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: draw pass");
     de_rg_read(p, lc->target, DE_ACCESS_RENDER_TARGET);
     de_rg_write(p, lc->target, DE_ACCESS_RENDER_TARGET);
     /* The pipeline writes no depth, but the attachment is bound in its write layout. */
@@ -328,9 +354,15 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
         de_rg_read(p, lc->probe_list, DE_ACCESS_SHADER_READ);
     for (u32 i = 0; i < lc->probe_texture_count; ++i)
         de_rg_read(p, lc->probe_textures[i], DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(pd->scene_color))
+    if (DE_HANDLE_VALID(pd->scene_color)) {
         de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
+        if (pd->scene_depth.id)
+            de_rg_read(p, pd->scene_depth, DE_ACCESS_SHADER_READ);
+    }
 
+    if (g->oom || g->error_count)
+        return DE_FAIL(g->oom ? DE_ERR_OUT_OF_MEMORY : DE_ERR_INTERNAL,
+                       "forward: incomplete graph declarations");
     *fc = (de__forward_context){.items = items,
                                 .count = n,
                                 .draws = draws,
@@ -338,7 +370,10 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                                 .counts = counts,
                                 .target = lc->target,
                                 .scene_color = pd->scene_color,
-                                .scene_color_pitch = pd->pc.scene_color_pitch};
+                                .scene_color_pitch = pd->pc.scene_color_pitch,
+                                .scene_depth = pd->scene_depth,
+                                .scene_depth_pitch = pd->pc.scene_depth_pitch,
+                                .scene_color_levels = pd->pc.scene_color_levels};
     if (out != NULL)
         *out = fc;
     return DE_OK;
@@ -359,6 +394,7 @@ static void forward_stage(de__view_frame *vf, void *user) {
         return;
     const de_result res = de__forward_build(fw, vf->graph, vc, lc, vf->world, NULL);
     if (res != DE_OK) {
+        vf->graph->oom = true;
         const de_error *e = de_error_last();
         DE_ERROR(fw->vis->log, "forward: view \"%s\": %s", vf->name,
                  e != NULL ? e->message : de_result_str(res));

@@ -110,6 +110,7 @@ typedef struct mg {
     de_load_handle model_load[MG_MODEL_COUNT];
     u32 pitch;
     u8 *now, *prev;
+    bool saved_refraction, refraction_changed;
 } mg;
 
 static void mg_cvar(const char *name, const char *value) {
@@ -302,6 +303,8 @@ static bool mg_wait(mg *m, de_load_handle h, const char *what, u64 t0) {
 static void mg_close(mg *m) {
     if (m->r != NULL)
         de__render_world_wait_idle(m->r);
+    if (m->refraction_changed)
+        mg_cvar("r.refraction", m->saved_refraction ? "1" : "0");
     if (m->assets != NULL && DE_HANDLE_VALID(m->scene_load))
         de_asset_release(m->assets, m->scene_load);
     for (u32 i = 0; m->assets != NULL && i < MG_MODEL_COUNT; ++i)
@@ -382,6 +385,11 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         mg_close(&m);
         return;
     }
+    m.saved_refraction = de_cvar_bool(de_cvar_find("r.refraction"));
+    m.refraction_changed = true;
+    mg_cvar(
+        "r.refraction",
+        "0"); /* Historical S14 same-pixel transmission; S15 has independent physical references. */
     de_renderer_attach(m.r, m.world);
     mg_cvar("r.pipelined", "0");
     /* Vulkan: one command list per submission (CI's VVL 1.3.275 checks bindless accesses against

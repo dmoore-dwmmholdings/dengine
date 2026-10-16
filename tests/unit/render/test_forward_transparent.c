@@ -1204,6 +1204,8 @@ static void scene_color(lx *f, de_gpu_backend b) {
     lx_open(f, b);
     const f32 floor_c[3] = {2.0f, 4.0f, 6.0f};
     lx_floor(f, mat_unlit(floor_c[0], floor_c[1], floor_c[2], 1.0f, 0));
+    /* A uniform radiance field over the whole viewport remains uniform at every Gaussian mip. */
+    world_set(&f->w, 0, 1, trs((de_vec3){0, 0, 0}, (de_vec3){0, 0, 1}, 0, 2), 1);
     const u32 quad = mat_standard(1.0f, 1.0f, DE_COOKED_ALPHA_OPAQUE, false);
     de_standard_material *s = &mat_of(quad)->standard;
     s->transmission = 1.0f;
@@ -1215,9 +1217,12 @@ static void scene_color(lx *f, de_gpu_backend b) {
     lx_run(f);
     ASSERT_TRUE(f->res.forward);
     EXPECT_TRUE(f->res.scene_color);
-    EXPECT_EQ(f->res.forward_passes, 2u);
+    u32 levels = 1;
+    for (u32 w = f->width, h = f->height; w > 1 || h > 1;
+         w = w > 1 ? w / 2 : 1, h = h > 1 ? h / 2 : 1)
+        ++levels;
+    EXPECT_EQ(f->res.forward_passes, levels + 1u);
     const f32 e = f->res.pre_exposure;
-    const f32 absorb[3] = {powf(0.25f, 0.5f), 1.0f, 1.0f}; /* exp(-ln(1/c) / d x thickness) */
     u32 checked = 0, bad = 0;
     for (u32 y = 0; y < f->height; ++y)
         for (u32 x = 0; x < f->width; ++x) {
@@ -1227,6 +1232,8 @@ static void scene_color(lx *f, de_gpu_backend b) {
             pixel_on_plane(f, x, y, 3.0f, p);
             const f32 v[3] = {f->eye.x - p[0], f->eye.y - p[1], f->eye.z - 3.0f};
             const f32 nov = v[2] / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            const f32 internal_cos = sqrtf(1.0f - (1.0f - nov * nov) / (1.5f * 1.5f));
+            const f32 absorb[3] = {powf(.25f, .5f / internal_cos), 1, 1};
             const f32 f0 = 0.04f, fr = f0 + (1.0f - f0) * powf(1.0f - nov, 5.0f);
             const f32 *got = px_of(f->res.lighting, f, x, y);
             checked++;
@@ -1454,7 +1461,7 @@ TEST(forward, layout_match) {
     EXPECT_TRUE(strstr(r, "DE_MATERIAL_FEATURE_FORWARD") != NULL); /* the routing bit */
     EXPECT_EQ(const_of(c, "DE_VIS_BUCKET_FORWARD"), (i64)DE__VIS_BUCKET_FORWARD);
     EXPECT_EQ(const_of(c, "DE_VIS_MESHLET_COUNTER_FORWARD"), (i64)DE__VIS_MESHLET_COUNTER_FORWARD);
-    /* ForwardParams: 12 uints, then DeClusterLists (8). */
+    /* ForwardParams: 16 uints, then DeClusterLists (8). */
     const char *ps = strstr(t, "struct ForwardParams\n");
     const char *pe = ps != NULL ? strstr(ps, "};") : NULL;
     ASSERT_TRUE(ps != NULL && pe != NULL);
