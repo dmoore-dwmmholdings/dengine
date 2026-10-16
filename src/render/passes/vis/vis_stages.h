@@ -348,6 +348,7 @@ typedef enum de__vis_stage_id {
 
 /** The vis frame's state of one renderer (de__vis_shared_create). */
 typedef struct de__vis_shared {
+    bool depth_only;       /**< Internal shadow pool: cull and raster only, no IDs/HZB/resolve. */
     de_renderer *renderer; /**< NULL when a test drives the frame */
     de_gpu_device *dev;
     const de_allocator *alloc;
@@ -419,6 +420,7 @@ typedef struct de__vis_context {
     /* The GPU scene (DE_ACCESS_SHADER_READ imports; invalid when the table has no buffer). */
     u32 instance_count; /**< instance slots (high-water mark) */
     de_rg_resource scene_instances, scene_meshes, scene_materials, scene_views;
+    u32 scene_view_slot;      /**< Independent of the pool-local scratch slot. */
     u32 scene_views_bindless; /**< the scene-constants table (view entry `view_slot`) */
 
     /* Cvars of this frame. */
@@ -474,6 +476,10 @@ typedef struct de__vis_context {
     /** True when `depth` is the frame's D32 depth (a raster target); false for a test's
      * depth_override, which no raster pass may write (the raster stages then add nothing). */
     bool depth_target;
+    bool depth_only;
+    bool raster_recorded, alpha_recorded; /**< Shadow completion requires actual draw passes. */
+    u32 depth_layer;
+    u32 raster_rect[4]; /**< x,y,w,h; zero width means the full target. */
     /** The raster path of this frame (de__vis_raster_choose). */
     u32 raster_path;
     /**
@@ -561,6 +567,7 @@ typedef struct de__vis_frame_desc {
 
 /** de__vis_shared_create settings. */
 typedef struct de__vis_shared_desc {
+    bool depth_only;
     de_gpu_device *device;
     const de_allocator *allocator; /**< NULL = the heap */
     de_renderer *renderer;         /**< NULL for tests */
@@ -650,6 +657,14 @@ void de__vis_classify(de_rg *g, de__vis_context *vc);
 de_result de__vis_resolve_init(de__vis_shared *s);
 void de__vis_resolve_shutdown(de__vis_shared *s);
 void de__vis_resolve(de_rg *g, de__vis_context *vc);
+
+/** Discard a depth-only context whose graph was never submitted; invalidate frame-local
+ * transient handles and unexecuted counter readbacks without retiring live GPU objects. */
+void de__vis_shadow_abort(de__vis_shared *s, u32 slot, u64 frame);
+void de__vis_cull_instances_abort(de__vis_shared *s, u32 slot, u64 frame);
+void de__vis_cull_meshlets_abort(de__vis_shared *s, u32 slot, u64 frame);
+void de__vis_raster_compute_abort(de__vis_shared *s, u32 slot, u64 frame);
+void de__vis_raster_alpha_abort(de__vis_shared *s, u32 slot, u64 frame);
 
 /* ---------- Tests ---------- */
 

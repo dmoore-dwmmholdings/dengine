@@ -25,8 +25,9 @@ DE_EXTERN_C_BEGIN
 
 #define DE__INPUT_SPECULAR_OPAQUE 1u
 #define DE__INPUT_DIFFUSE_OPAQUE  2u
+#define DE__INPUT_SHADOW_METADATA 4u
 
-/** The inputs one view's lighting reads this frame (render-graph textures; invalid = none). */
+/** The resources one view's lighting reads this frame (invalid = none). */
 typedef struct de__lighting_inputs {
     de_rg_resource ao;                 /**< R: ambient occlusion (S15) */
     de_rg_resource shadow_directional; /**< RGBA: directional lights 0..3 visibility (S15) */
@@ -49,6 +50,10 @@ typedef struct de__lighting_inputs {
     de_rg_resource gi_records, gi_textures[16], gi_buffers[8];
     u32 gi_texture_count, gi_buffer_count;
     bool indirect_diffuse_opaque;
+    /** CSM metadata buffer plus its sampled-only 2D mirrors. The GPU reuses shadow_directional
+     * with DE__INPUT_SHADOW_METADATA; the legacy RGBA texture input remains supported. */
+    de_rg_resource shadow_records, shadow_textures[8];
+    u32 shadow_texture_count;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
@@ -56,7 +61,7 @@ typedef struct de__lighting_inputs {
 typedef struct de__lighting_inputs_gpu {
     u32 ao, shadow_directional, shadow_local, contact_shadows;
     u32 indirect_diffuse, indirect_specular;
-    u32 reserved0; /**< DE__INPUT_SPECULAR_OPAQUE: G-buffer-only material response. */
+    u32 reserved0; /**< DE__INPUT_* flags: opaque overrides and directional metadata. */
     u32 reserved1;
     u32 probe_records, probe_list, probe_entry, probe_sampler;
     f32 probe_view_z[4];

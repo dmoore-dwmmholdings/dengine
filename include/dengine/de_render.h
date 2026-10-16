@@ -454,7 +454,7 @@ typedef struct DeLight {
     f32 range;     /* meters; 0 = physical falloff cutoff */
     f32 spot_inner, spot_outer;
     de_vec2 area_size;
-    f32 source_radius; /* soft shadow size */
+    f32 source_radius; /* directional: angular radius (radians); local: radius (metres) */
     bool cast_shadows;
 } DeLight;
 

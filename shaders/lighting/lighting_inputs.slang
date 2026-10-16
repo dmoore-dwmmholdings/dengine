@@ -16,10 +16,12 @@ public static const uint DE_INPUT_DIFFUSE_OPAQUE = 2u;
 public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
 /// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
+public static const uint DE_INPUT_SHADOW_METADATA = 4;
+
 public struct LightingInputs
 {
     public uint ao;                 // R: ambient occlusion (screen space), 1 = none
-    public uint shadow_directional; // RGBA: visibility of directional lights 0..3, 1 = lit
+    public uint shadow_directional; // CSM metadata when SHADOW_METADATA is set; otherwise RGBA: visibility of directional lights 0..3, 1 = lit
     public uint shadow_local;       // R: visibility of the local lights (S15 defines the layout)
     public uint contact_shadows;    // R: contact-shadow visibility of the main directional light
     public uint indirect_diffuse;   // RGB: indirect diffuse irradiance x albedo / pi (DENG-304)
@@ -50,6 +52,7 @@ public float de_input_ao(LightingInputs i, uint2 p)
 /// Visibility of directional light `light` (0..3) at pixel `p` (1 without a producer).
 public float de_input_shadow_directional(LightingInputs i, uint2 p, uint light)
 {
+    if ((i.reserved0 & DE_INPUT_SHADOW_METADATA) != 0u) return 1.0;
     float4 v = de_input_load(i.shadow_directional, p, float4(1.0, 1.0, 1.0, 1.0));
     return light == 0u ? v.x : light == 1u ? v.y : light == 2u ? v.z : v.w;
 }

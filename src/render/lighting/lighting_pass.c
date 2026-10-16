@@ -93,6 +93,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_IBL_STRIP_FACES", DE__IBL_STRIP_FACES},
     {"DE_INPUT_SPECULAR_OPAQUE", DE__INPUT_SPECULAR_OPAQUE},
     {"DE_INPUT_DIFFUSE_OPAQUE", DE__INPUT_DIFFUSE_OPAQUE},
+    {"DE_INPUT_SHADOW_METADATA", DE__INPUT_SHADOW_METADATA},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -535,7 +536,9 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
      * the GPU reads after the submission. */
     const de__lighting_inputs_gpu in = {
         .ao = tex_index(p, pass, p->inputs[0], false),
-        .shadow_directional = tex_index(p, pass, p->inputs[1], false),
+        .shadow_directional = (p->input_flags & DE__INPUT_SHADOW_METADATA)
+                                  ? buf_index(p, pass, p->inputs[1])
+                                  : tex_index(p, pass, p->inputs[1], false),
         .shadow_local = tex_index(p, pass, p->inputs[2], false),
         .contact_shadows = tex_index(p, pass, p->inputs[3], false),
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
@@ -698,6 +701,9 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool readback = lt->debug.readback || heatmap;
     const bool sss = in.subsurface; /* DENG-306 */
     fill_view(lt, vc, &in, split, sss, lc);
+    lc->shadow_records = in.shadow_records;
+    lc->shadow_texture_count = in.shadow_texture_count;
+    memcpy(lc->shadow_textures, in.shadow_textures, sizeof lc->shadow_textures);
     lc->gi_records = in.gi_records;
     lc->gi_texture_count = in.gi_texture_count;
     lc->gi_buffer_count = in.gi_buffer_count;
@@ -810,22 +816,24 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.visible = vc->visible_meshlets;
         b.pc.ids_pitch = vc->vis_ids_pitch;
         b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
-        const de_rg_resource inputs[9] = {in.ao,
-                                          in.shadow_directional,
-                                          in.shadow_local,
-                                          in.contact_shadows,
-                                          in.indirect_diffuse,
-                                          in.indirect_specular,
-                                          in.probe_records,
-                                          in.probe_list,
-                                          in.gi_records};
+        const de_rg_resource inputs[9] = {
+            in.ao,
+            DE_HANDLE_VALID(in.shadow_records) ? in.shadow_records : in.shadow_directional,
+            in.shadow_local,
+            in.contact_shadows,
+            in.indirect_diffuse,
+            in.indirect_specular,
+            in.probe_records,
+            in.probe_list,
+            in.gi_records};
         memcpy(b.inputs, inputs, sizeof inputs);
         b.probe_entry = in.probe_entry;
         b.probe_sampler = in.probe_sampler;
         memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
         b.input_flags = (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
-                        (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u);
+                        (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u) |
+                        (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;
@@ -864,6 +872,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         for (u32 i = 0; i < 9; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
+        for (u32 i = 0; i < in.shadow_texture_count; ++i)
+            de_rg_read(p, in.shadow_textures[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.gi_texture_count; ++i) {
             de_rg_read(p, in.gi_textures[i], DE_ACCESS_SHADER_READ);
             de_rg_write(p, in.gi_textures[i], DE_ACCESS_SHADER_WRITE);

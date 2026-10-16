@@ -41,7 +41,7 @@ public static const float DE_LIGHT_PI = 3.14159265358979323846;
 public struct DeClusterLight
 {
     public float4 position;  // render-origin relative xyz; w = range r (m; directional: 0)
-    public float4 direction; // the direction the light points (unit); w = source radius (m)
+    public float4 direction; // the direction the light points (unit); w = source radius (directional: angular radians; local: metres)
     public float4 color;     // colour x intensity in shading units (cd, lux, nits); w = cos(outer)
     public float4 shape;     // x 1 / (cos inner - cos outer); y, z area half extents (m); w kind
     public float4 axis;      // area light X axis (unit) xyz; w flags (DE_CLUSTER_LIGHT_*)

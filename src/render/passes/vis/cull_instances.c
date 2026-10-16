@@ -71,6 +71,7 @@ typedef struct ci_view {
     u64 slot_frame[DE__VIS_FRAME_RING];
     u32 slot_capacity[DE__VIS_FRAME_RING];
     bool slot_live[DE__VIS_FRAME_RING];
+    bool slot_single_phase[DE__VIS_FRAME_RING];
     de__vis_stats stats; /**< the newest read back */
     u32 capacity;        /**< work items (grows, never shrinks) */
     bool warned_max;
@@ -322,6 +323,8 @@ static void read_stats(ci_view *pv, u64 completed) {
         return;
     u32 c[8]; /* phase 1's counters, then phase 2's (DENG-233) */
     memcpy(c, pv->stats_map + (size_t)best * CI_STATS_STRIDE, sizeof c);
+    if (pv->slot_single_phase[best])
+        memset(c + 4, 0, 4 * sizeof(u32));
     const u32 v1 = c[DE__VIS_COUNTER_INSTANCES_VISIBLE / 4u];
     const u32 v2 = c[4u + DE__VIS_COUNTER_INSTANCES_VISIBLE / 4u];
     pv->stats = (de__vis_stats){.valid = true,
@@ -429,8 +432,9 @@ static void stats_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     if (DE_HANDLE_VALID(p->counters1))
         de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset, de_rg_buffer(pass, p->counters1), 0,
                                DE__VIS_COUNTER_BYTES);
-    de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset + DE__VIS_COUNTER_BYTES,
-                           de_rg_buffer(pass, p->counters), 0, DE__VIS_COUNTER_BYTES);
+    if (DE_HANDLE_VALID(p->counters))
+        de_gpu_cmd_copy_buffer(cmd, p->stats, p->stats_offset + DE__VIS_COUNTER_BYTES,
+                               de_rg_buffer(pass, p->counters), 0, DE__VIS_COUNTER_BYTES);
 }
 
 static ci_pass *pass_data(de__vis_context *vc, const de__vis_kernel *k, const ci_pass *base) {
@@ -527,7 +531,8 @@ static void add_stats(de_rg *g, de__vis_context *vc, ci_view *pv) {
     de_rg_pass_side_effect(p);
     if (DE_HANDLE_VALID(ps->counters1))
         de_rg_read(p, ps->counters1, DE_ACCESS_COPY_SRC);
-    de_rg_read(p, ps->counters, DE_ACCESS_COPY_SRC);
+    if (DE_HANDLE_VALID(ps->counters))
+        de_rg_read(p, ps->counters, DE_ACCESS_COPY_SRC);
     const de_rg_resource rb = de_rg_import_buffer(g, pv->stats_buf, pv->stats_access);
     de_rg_set_name(g, rb, "vis.cull_stats");
     de_rg_write(p, rb, DE_ACCESS_COPY_DST);
@@ -535,6 +540,7 @@ static void add_stats(de_rg *g, de__vis_context *vc, ci_view *pv) {
     pv->slot_frame[pv->frame_slot] = vc->frame_index;
     pv->slot_capacity[pv->frame_slot] = pv->frame_capacity;
     pv->slot_live[pv->frame_slot] = true;
+    pv->slot_single_phase[pv->frame_slot] = vc->depth_only;
 }
 
 void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
@@ -622,4 +628,16 @@ void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
     pv->frame_count = count;
     pv->frame_capacity = cap;
     pv->frame_ready = add_phase(g, vc, st, pv, phase);
+    if (vc->depth_only && pv->frame_ready)
+        add_stats(g, vc, pv);
+}
+
+void de__vis_cull_instances_abort(de__vis_shared *s, u32 slot, u64 frame) {
+    ci_state *st = (ci_state *)s->stage[DE__VIS_STAGE_CULL_INSTANCES];
+    if (!st || slot >= DE__VIEW_MAX)
+        return;
+    u32 ring = (u32)(frame % DE__VIS_FRAME_RING);
+    if (st->views[slot].slot_frame[ring] == frame)
+        st->views[slot].slot_live[ring] = false;
+    st->views[slot].frame_ready = false;
 }

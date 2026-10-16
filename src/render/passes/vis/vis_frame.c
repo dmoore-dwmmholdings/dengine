@@ -199,6 +199,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
     if (s == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__vis_shared_create: no memory");
     memset(s, 0, sizeof *s);
+    s->depth_only = desc->depth_only;
     s->renderer = desc->renderer;
     s->material_models = desc->material_models;
     s->dev = desc->device;
@@ -207,6 +208,10 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
     register_cvars(s);
     s->enabled = true;
     for (u32 i = 0; i < DE__VIS_STAGE_COUNT; ++i) {
+        if (s->depth_only && i != DE__VIS_STAGE_CULL_INSTANCES &&
+            i != DE__VIS_STAGE_CULL_MESHLETS && i != DE__VIS_STAGE_RASTER &&
+            i != DE__VIS_STAGE_RASTER_ALPHA)
+            continue;
         const de_result r = k_stages[i].init(s);
         if (r == DE_OK)
             continue;
@@ -225,7 +230,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
         de_error_clear(); /* the create succeeds */
         break;
     }
-    if (s->enabled) {
+    if (s->enabled && !s->depth_only) {
         /* DENG-233: the per-view visibility flags and the HZB debug kernel. */
         const de_result r = de__vis_occlusion_init(s);
         if (r == DE_ERR_UNSUPPORTED) {
@@ -242,7 +247,7 @@ de_result de__vis_shared_create(const de__vis_shared_desc *desc, de__vis_shared 
         }
     }
     /* DENG-239: picking (its CPU state also when the frame is off). */
-    const de_result pr = de__vis_pick_init(s);
+    const de_result pr = s->depth_only ? DE_OK : de__vis_pick_init(s);
     if (pr != DE_OK) {
         de__vis_occlusion_shutdown(s);
         if (s->enabled)
@@ -338,6 +343,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->gpu_scene = d->gpu_scene;
     vc->view = d->view;
     vc->view_slot = d->view_slot;
+    vc->scene_view_slot = d->view_slot;
     vc->view_new = s->views[d->view_slot].id != d->view.id;
     s->views[d->view_slot] = d->view;
     vc->frame_index = d->frame_index;
@@ -492,4 +498,13 @@ de_result de__vis_frame_create(de_renderer *r, struct de__vis_shared **out) {
 void de__vis_frame_destroy(de_renderer *r, struct de__vis_shared *s) {
     (void)r; /* the stage list goes with the views */
     de__vis_shared_destroy(s);
+}
+
+void de__vis_shadow_abort(de__vis_shared *s, u32 slot, u64 frame) {
+    if (!s || !s->depth_only)
+        return;
+    de__vis_cull_instances_abort(s, slot, frame);
+    de__vis_cull_meshlets_abort(s, slot, frame);
+    de__vis_raster_compute_abort(s, slot, frame);
+    de__vis_raster_alpha_abort(s, slot, frame);
 }

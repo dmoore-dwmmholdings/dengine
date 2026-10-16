@@ -392,7 +392,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     /* These S14 references isolate materials and IBL. Stochastic screen-space reflections
      * have independent CPU/G-buffer references and temporal tests in test_render_ssr. */
     rs.reflections = DE_QUALITY_OFF;
-    rs.gi = DE_QUALITY_OFF; /* S14 materials/IBL references; S15 validates GI independently. */
+    rs.gi = DE_QUALITY_OFF;      /* S14 materials/IBL references; S15 validates GI independently. */
+    rs.shadows = DE_QUALITY_OFF; /* Preserve S14 materials/IBL scope; CSM has S15 GPU references. */
     de_renderer_set_settings(m.r, &rs);
 
     m.target = de_gpu_texture_create(

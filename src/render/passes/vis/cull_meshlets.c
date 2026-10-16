@@ -787,6 +787,15 @@ void de__vis_cull_meshlets(de_rg *g, de__vis_context *vc, de__vis_phase phase) {
     vc->raster_args[pi] = raster_args;
     vc->raster_args_alpha[pi] = alpha_args;
 
-    if (phase == DE__VIS_PHASE_2)
+    if (phase == DE__VIS_PHASE_2 || vc->depth_only)
         add_stats_pass(g, vc, pv);
+}
+
+void de__vis_cull_meshlets_abort(de__vis_shared *s, u32 slot, u64 frame) {
+    mc_state *st = (mc_state *)s->stage[DE__VIS_STAGE_CULL_MESHLETS];
+    if (!st || slot >= DE__VIEW_MAX)
+        return;
+    u32 ring = (u32)(frame % DE__VIS_FRAME_RING);
+    if (st->views[slot].slot_frame[ring] == frame)
+        st->views[slot].slot_live[ring] = false;
 }

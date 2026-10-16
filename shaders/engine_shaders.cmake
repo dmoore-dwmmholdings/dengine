@@ -43,3 +43,6 @@ de_engine_shader(ssr_trace ssr/ssr_trace.slang)
 de_engine_shader(irradiance_bake probes/irradiance_bake.slang)
 de_engine_shader(ssgi_trace ssgi/ssgi_trace.slang)
 de_engine_shader(ssgi_filter ssgi/ssgi_filter.slang)
+
+de_engine_shader(shadow_depth shadows/shadow_depth.slang)
+de_engine_shader(shadow_sample shadows/csm_sample.slang)
