@@ -35,8 +35,31 @@ float gi_quantize(float value,uint mantissa) {
     uint bits=asuint(value),drop=23u-mantissa;
     return asfloat(bits&~((1u<<drop)-1u));
 }
+// Separate 48-byte block: every offset/pitch is a uint32 word in one GPU buffer.
+struct GiIntegrateParams {
+    uint buffer, probe, columns, reserved;
+    uint raw_offset, raw_pitch, distance_offset, distance_pitch;
+    uint irradiance_offset, irradiance_pitch, moments_offset, moments_pitch;
+};
+uint gi_pack_component(float value,uint mantissa) {
+    uint bits=asuint(gi_quantize(value,mantissa));
+    if(bits==0)return 0;
+    return ((((bits>>23)&255u)-112u)<<mantissa)|((bits&0x7fffffu)>>(23u-mantissa));
+}
+uint gi_pack(float3 value) {
+    return gi_pack_component(value.x,6)|(gi_pack_component(value.y,6)<<11)|
+           (gi_pack_component(value.z,5)<<22);
+}
+// Positive normalized half, round toward zero; no hardware storage rounding.
+uint gi_pack_half(float value) {
+    value=isfinite(value)?saturate(value):1;
+    uint bits=asuint(value),exponent=(bits>>23)&255u;
+    if(exponent>=113u)return ((exponent-112u)<<10)|((bits&0x7fffffu)>>13);
+    uint shift=126u-exponent;
+    return shift>=32u?0u:((bits&0x7fffffu)|0x800000u)>>min(shift,31u);
+}
 [shader("compute")][numthreads(8,8,1)]
-void cs_gi_integrate(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
+void cs_gi_integrate(uint3 id:SV_DispatchThreadID,uniform GiIntegrateParams pc) {
     if(any(id.xy>=18))return;
     float3 mnormal=gi_oct_decode((float2(gi_border(id.xy,16))-.5)/16);
     float3 inormal=gi_oct_decode((float2(gi_border(id.xy,8))-.5)/8);
@@ -46,11 +69,14 @@ void cs_gi_integrate(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
         float3 direction=gi_face(face,st);
         float solid_angle=4.0/(32*32*pow(1+dot(st,st),1.5));
         float w=max(dot(mnormal,direction),0);w=pow(w,512)*solid_angle;
-        float distance=de_rwtex2d(pc.distances)[uint2(x,y+face*32)].r;
+        uint row=y+face*32;
+        float distance=asfloat(de_robuffer<uint>(pc.buffer)[pc.distance_offset+row*pc.distance_pitch+x]);
         moments+=float2(distance,distance*distance)*w;moment_total+=w;
         if(all(id.xy<10)) {
             float c=max(dot(inormal,direction),0)*solid_angle;
-            float3 sample=de_rwtex2d(pc.raw)[uint2(x,y+face*32)].rgb;
+            uint at=pc.raw_offset+row*pc.raw_pitch+x*2;
+            uint rg=de_robuffer<uint>(pc.buffer)[at],ba=de_robuffer<uint>(pc.buffer)[at+1];
+            float3 sample=float3(f16tof32(rg&65535u),f16tof32(rg>>16),f16tof32(ba&65535u));
             radiance+=max(float3(0),all(isfinite(sample))?sample:float3(0))*c;
             cosine_total+=c;
         }
@@ -59,22 +85,21 @@ void cs_gi_integrate(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
     // True irradiance (not E/pi). Normalize cubature to pi to preserve a constant environment.
     if(all(id.xy<10)) {
         float3 e=clamp(radiance*3.141592653589793/max(cosine_total,1e-8),0,60000);
-        de_rwtex2d(pc.irradiance)[tile*10+id.xy]=float4(gi_quantize(e.x,6),gi_quantize(e.y,6),gi_quantize(e.z,5),1);
+        uint2 pixel=tile*10+id.xy;
+        de_buffer<uint>(pc.buffer)[pc.irradiance_offset+pixel.y*pc.irradiance_pitch+pixel.x]=gi_pack(e);
     }
-    de_rwtex2d(pc.moments)[tile*18+id.xy]=float4(saturate(moments/max(moment_total,1e-8)),0,0);
-}
-
-[shader("compute")][numthreads(8,8,1)]
-void cs_gi_clear(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
-    if(id.x>=pc.columns||id.y>=pc.probes)return;
-    de_rwtex2d(pc.irradiance)[id.xy]=pc.operation==0?float4(0):float4(1,1,0,0);
+    float2 normalized=saturate(moments/max(moment_total,1e-8));
+    uint2 pixel=tile*18+id.xy;
+    de_buffer<uint>(pc.buffer)[pc.moments_offset+pixel.y*pc.moments_pitch+pixel.x]=
+        gi_pack_half(normalized.x)|(gi_pack_half(normalized.y)<<16);
 }
 
 [shader("compute")][numthreads(64,1,1)]
 void cs_gi_quantize(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {
     if(id.x>=pc.probes)return;
     float3 value=de_robuffer<float4>(pc.raw)[id.x].rgb;
-    de_rwtex2d(pc.irradiance)[uint2(id.x,0)]=float4(gi_quantize(value.x,6),gi_quantize(value.y,6),gi_quantize(value.z,5),1);
+    de_buffer<uint>(pc.irradiance)[id.x]=gi_pack(value);
+    de_buffer<uint>(pc.irradiance)[id.x+pc.probes]=gi_pack_half(value.x)|(gi_pack_half(value.y)<<16);
 }
 [shader("compute")][numthreads(64,1,1)]
 void cs_gi_sample_reference(uint3 id:SV_DispatchThreadID,uniform GiBakeParams pc) {

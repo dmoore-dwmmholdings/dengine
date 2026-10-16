@@ -49,7 +49,8 @@ typedef struct de__irradiance_info {
     u32 bounce, probe, faces, captures;
     bool ready, baked;
     de_gpu_texture irradiance, distance, raw_radiance, raw_distance;
-    de_gpu_buffer classification;
+    de_gpu_buffer classification, convolution;
+    u64 convolution_capacity;
 } de__irradiance_info;
 bool de__irradiance_get(const de_renderer *r, u64 entity, de__irradiance_info *out);
 de_result de__irradiance_readback(de_renderer *r, u64 entity, void *payload, u64 bytes);

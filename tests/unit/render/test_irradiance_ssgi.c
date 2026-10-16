@@ -737,11 +737,21 @@ static u32 cpu_packed_component(f32 value, u32 mantissa) {
     f64 significand = frexp((f64)value, &e) * 2;
     return (u32)(e - 1 + 15) << mantissa | (u32)floor((significand - 1) * (f64)(1u << mantissa));
 }
+static u32 cpu_normalized_half(f32 value) {
+    if (!isfinite(value))
+        value = 1.f;
+    value = fminf(fmaxf(value, 0.f), 1.f);
+    if (value < ldexpf(1.f, -14))
+        return (u32)floor(ldexp((f64)value, 24));
+    int exponent = 0;
+    f64 significand = frexp((f64)value, &exponent) * 2;
+    return (u32)(exponent - 1 + 15) << 10 | (u32)floor((significand - 1) * 1024);
+}
 static void quantizer_boundary(gifx *f, de_gpu_backend backend) {
     open_renderer(f, backend);
-    f32 values[64][4] = {{0}};
-    for (u32 i = 0; i < 60; ++i) {
-        f32 boundary = ldexpf(1, (int)(i / 3) - 18);
+    f32 values[96][4] = {{0}};
+    for (u32 i = 0; i < 90; ++i) {
+        f32 boundary = ldexpf(1, (int)(i / 3) - 24);
         u32 bits;
         memcpy(&bits, &boundary, 4);
         bits += (i % 3 == 0 ? 0 : i % 3 == 1 ? 0xffffffffu : 1u);
@@ -749,20 +759,24 @@ static void quantizer_boundary(gifx *f, de_gpu_backend backend) {
         memcpy(&value, &bits, 4);
         values[i][0] = values[i][1] = values[i][2] = value;
     }
-    values[60][0] = values[60][1] = values[60][2] = 60000;
-    values[61][0] = INFINITY;
-    values[61][1] = -INFINITY;
-    values[61][2] = NAN;
-    values[62][0] = 0x1p-149f;
-    values[62][1] = -1;
-    values[62][2] = 65000;
-    values[63][0] = values[63][1] = values[63][2] = 100000;
+    values[90][0] = values[90][1] = values[90][2] = 60000;
+    values[91][0] = INFINITY;
+    values[91][1] = -INFINITY;
+    values[91][2] = NAN;
+    values[92][0] = 0x1p-149f;
+    values[92][1] = -1;
+    values[92][2] = 65000;
+    values[93][0] = values[93][1] = values[93][2] = 100000;
+    values[94][0] = values[94][1] = values[94][2] = 0.f;
+    values[95][0] = values[95][1] = values[95][2] = 1.f;
     de_gpu_buffer input = upload_buf(f->dev, values, sizeof values);
-    de_gpu_texture out = de_gpu_texture_create(
-        f->dev, &(de_gpu_texture_desc){.width = 64,
-                                       .height = 1,
-                                       .format = DE_FMT_R11G11B10_FLOAT,
-                                       .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    de_gpu_buffer out = de_gpu_buffer_create(
+        f->dev,
+        &(de_gpu_buffer_desc){.size = 192 * 4, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    de_gpu_buffer readback = de_gpu_buffer_create(
+        f->dev, &(de_gpu_buffer_desc){
+                    .size = 192 * 4, .usage = DE_USAGE_COPY_DST, .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(readback.id);
     ASSERT_TRUE(out.id);
     de__vis_shared *vis = de__views_vis(f->r);
     const char *entry = "cs_gi_quantize";
@@ -774,7 +788,7 @@ static void quantizer_boundary(gifx *f, de_gpu_backend backend) {
     de__engine_shader_code_free(&code);
     u32 pc[12] = {de_gpu_buffer_bindless(f->dev, input),
                   0,
-                  de_gpu_texture_bindless(f->dev, out, 0, true),
+                  de_gpu_buffer_bindless(f->dev, out),
                   0,
                   0,
                   0,
@@ -783,31 +797,36 @@ static void quantizer_boundary(gifx *f, de_gpu_backend backend) {
                   0,
                   0,
                   0,
-                  64};
+                  96};
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "gi.quantizer_boundary");
     ASSERT_TRUE(cmd);
-    de_gpu_barrier b = {.texture = out, .before = DE_ACCESS_NONE, .after = DE_ACCESS_SHADER_WRITE};
+    de_gpu_barrier b = {.buffer = out, .before = DE_ACCESS_NONE, .after = DE_ACCESS_SHADER_WRITE};
     de_gpu_cmd_barriers(cmd, &b, 1);
     de_gpu_cmd_set_pipeline(cmd, kernel.pipeline);
     de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
-    de_gpu_cmd_dispatch(cmd, 1, 1, 1);
+    de_gpu_cmd_dispatch(cmd, 2, 1, 1);
     b.before = DE_ACCESS_SHADER_WRITE;
-    b.after = DE__GI_ACCESS;
+    b.after = DE_ACCESS_COPY_SRC;
     de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_buffer(cmd, readback, 0, out, 0, 192 * 4);
     ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
                                   &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
               DE_OK);
-    u32 actual[64];
-    read_storage_texture(f, out, 64, 1, 4, actual);
-    for (u32 i = 0; i < 64; ++i) {
+    u32 actual[192];
+    de_gpu_wait_idle(f->dev);
+    memcpy(actual, de_gpu_buffer_map(f->dev, readback), sizeof actual);
+    for (u32 i = 0; i < 96; ++i) {
         u32 expected = cpu_packed_component(values[i][0], 6) |
                        cpu_packed_component(values[i][1], 6) << 11 |
                        cpu_packed_component(values[i][2], 5) << 22;
         EXPECT_EQ(actual[i], expected);
+        EXPECT_EQ(actual[i + 96],
+                  cpu_normalized_half(values[i][0]) | cpu_normalized_half(values[i][1]) << 16);
     }
     de__vis_kernel_destroy(vis, &kernel);
     de_gpu_buffer_destroy(f->dev, input);
-    de_gpu_texture_destroy(f->dev, out);
+    de_gpu_buffer_destroy(f->dev, out);
+    de_gpu_buffer_destroy(f->dev, readback);
 }
 TEST_F(gi, packed_quantizer_boundary_metal, gifx) {
     quantizer_boundary(f, DE_GPU_METAL);
@@ -1467,6 +1486,29 @@ static de_result fail_gi_texture(de_gpu_device *dev, de__gpu_texture *texture,
     (void)desc;
     return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "injected GI atlas failure");
 }
+static const char *gi_failed_buffer_name;
+static u32 gi_failed_buffers;
+static de_result fail_gi_named_buffer(de_gpu_device *dev, de__gpu_buffer *buffer,
+                                      const de_gpu_buffer_desc *desc) {
+    if (desc->name && strcmp(desc->name, gi_failed_buffer_name) == 0) {
+        ++gi_failed_buffers;
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "injected GI named buffer failure");
+    }
+    return gi_original_backend->buffer_create(dev, buffer, desc);
+}
+static u32 gi_reported_submit_failures;
+static de_result fail_gi_reported_submit(de_gpu_device *dev, de_gpu_queue queue,
+                                         const de_gpu_submit *submit, u64 value) {
+    de_result result = gi_original_backend->queue_submit(dev, queue, submit, value);
+    if (result == DE_OK && submit->cmd_count == 1 &&
+        strcmp(submit->cmds[0]->name, "gi.integrate") == 0) {
+        // Execute normally so the backend's internal timeline still completes,
+        // but report failure: publication must be conservative even if GPU work ran.
+        ++gi_reported_submit_failures;
+        return DE_FAIL(DE_ERR_INTERNAL, "injected GI reported submission failure");
+    }
+    return result;
+}
 static void allocation_retry(gifx *f, de_gpu_backend backend) {
     open_renderer(f, backend);
     constant_room(f);
@@ -1494,11 +1536,89 @@ static void allocation_retry(gifx *f, de_gpu_backend backend) {
     ASSERT_TRUE(after);
     ASSERT_EQ(de__irradiance_readback(f->r, 77, after, old.layout.payload_bytes), DE_OK);
     EXPECT_EQ(memcmp(payload, after, (size_t)old.layout.payload_bytes), 0);
+    // Failure after atlas/classification creation must preserve the ready record.
+    gi_original_backend = original;
+    failing = *original;
+    failing.buffer_create = fail_gi_named_buffer;
+    gi_failed_buffer_name = "gi.initialize_upload";
+    gi_failed_buffers = 0;
+    f->dev->vt = &failing;
+    de__irradiance_prepare(f->r, &f->scene.f);
+    f->dev->vt = original;
+    de_error_clear();
+    EXPECT_EQ(gi_failed_buffers, 1u);
+    ASSERT_TRUE(de__irradiance_get(f->r, 77, &preserved));
+    EXPECT_TRUE(preserved.ready);
+    EXPECT_EQ(preserved.irradiance.id, old.irradiance.id);
+    ASSERT_EQ(de__irradiance_readback(f->r, 77, after, old.layout.payload_bytes), DE_OK);
+    EXPECT_EQ(memcmp(payload, after, (size_t)old.layout.payload_bytes), 0);
     for (u32 i = 0; i < 8; ++i)
         room_frame(f);
     ASSERT_TRUE(de__irradiance_get(f->r, 77, &preserved));
     EXPECT_TRUE(preserved.ready);
     EXPECT_NE(preserved.irradiance.id, old.irradiance.id);
+    old = preserved;
+    ASSERT_EQ(de__irradiance_readback(f->r, 77, payload, old.layout.payload_bytes), DE_OK);
+    // A second, larger volume requires scratch growth, but may not damage the
+    // first ready volume or publish a partially integrated probe on OOM.
+    f->scene.f.irradiance_count = 2;
+    f->scene.f.irradiance[1] = f->scene.f.irradiance[0];
+    f->scene.f.irradiance[1].entity = 88;
+    for (u32 axis = 0; axis < 3; ++axis)
+        f->scene.f.irradiance[1].volume.counts[axis] = 3;
+    gi_failed_buffer_name = "gi.convolution";
+    gi_failed_buffers = 0;
+    f->dev->vt = &failing;
+    room_frame(f);
+    f->dev->vt = original;
+    de_error_clear();
+    EXPECT_EQ(gi_failed_buffers, 1u);
+    de__irradiance_info pending;
+    ASSERT_TRUE(de__irradiance_get(f->r, 88, &pending));
+    EXPECT_FALSE(pending.ready);
+    EXPECT_EQ(pending.probe, 0u);
+    EXPECT_EQ(pending.bounce, 0u);
+    EXPECT_EQ(pending.faces, 63u);
+    EXPECT_EQ(pending.captures, 1u);
+    EXPECT_EQ(pending.convolution.id, old.convolution.id);
+    EXPECT_EQ(pending.convolution_capacity, old.convolution_capacity);
+    ASSERT_EQ(de__irradiance_readback(f->r, 77, after, old.layout.payload_bytes), DE_OK);
+    EXPECT_EQ(memcmp(payload, after, (size_t)old.layout.payload_bytes), 0);
+    room_frame(f);
+    ASSERT_TRUE(de__irradiance_get(f->r, 88, &pending));
+    EXPECT_EQ(pending.probe, 1u);
+    EXPECT_EQ(pending.captures, 1u); // integration retry skips recapture
+    EXPECT_EQ(pending.faces, 0u);
+    EXPECT_TRUE(pending.convolution_capacity > old.convolution_capacity);
+    EXPECT_TRUE(pending.convolution_capacity <= 8ull * 1024 * 1024);
+    const de_gpu_texture unpublished = pending.irradiance;
+    failing = *original;
+    failing.queue_submit = fail_gi_reported_submit;
+    gi_reported_submit_failures = 0;
+    f->dev->vt = &failing;
+    room_frame(f);
+    f->dev->vt = original;
+    de_error_clear();
+    EXPECT_EQ(gi_reported_submit_failures, 1u);
+    ASSERT_TRUE(de__irradiance_get(f->r, 88, &pending));
+    EXPECT_FALSE(pending.ready);
+    EXPECT_EQ(pending.irradiance.id, unpublished.id);
+    EXPECT_EQ(pending.probe, 1u);
+    EXPECT_EQ(pending.bounce, 0u);
+    EXPECT_EQ(pending.faces, 63u);
+    EXPECT_EQ(pending.captures, 2u);
+    room_frame(f);
+    ASSERT_TRUE(de__irradiance_get(f->r, 88, &pending));
+    EXPECT_EQ(pending.probe, 2u);
+    EXPECT_EQ(pending.captures, 2u);
+    EXPECT_EQ(pending.faces, 0u);
+    for (u32 i = 0; i < 25; ++i)
+        room_frame(f);
+    ASSERT_TRUE(de__irradiance_get(f->r, 88, &pending));
+    EXPECT_TRUE(pending.ready);
+    EXPECT_EQ(pending.captures, 27u);
+    ASSERT_EQ(de__irradiance_readback(f->r, 77, after, old.layout.payload_bytes), DE_OK);
+    EXPECT_EQ(memcmp(payload, after, (size_t)old.layout.payload_bytes), 0);
     free(payload);
     free(after);
 }

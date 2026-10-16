@@ -73,7 +73,8 @@ de_result de__gi_layout_make(const DeIrradianceVolume *v, de__gi_layout *out) {
 u64 de__gi_settings_hash(const de__irradiance_snapshot *v) {
     u8 b[112] = {0};
     u32 off = 4;
-    de_cooked_put_u32(b, 0x32434347u); /* cell-centered, normal-only packed quantizer v2 */
+    de_cooked_put_u32(
+        b, 0x33434347u); /* cell-centered, normal-only irradiance / truncating half moments v3 */
     const f64 p[3] = {v->position.x, v->position.y, v->position.z};
     for (u32 i = 0; i < 3; ++i) {
         u64 x;
@@ -214,6 +215,14 @@ typedef struct gi_bake_params {
     u32 operation, probes;
 } gi_bake_params;
 DE_STATIC_ASSERT(sizeof(gi_bake_params) == 48, "GiBakeParams 48 bytes");
+/* GiIntegrateParams: offsets/pitches are uint32 words in one GPU-only buffer. */
+typedef struct gi_integrate_params {
+    u32 buffer, probe, columns, reserved;
+    u32 raw_offset, raw_pitch, distance_offset, distance_pitch;
+    u32 irradiance_offset, irradiance_pitch, moments_offset, moments_pitch;
+} gi_integrate_params;
+DE_STATIC_ASSERT(sizeof(gi_integrate_params) == 48, "GiIntegrateParams 48 bytes");
+
 struct de__irradiance {
     de_renderer *renderer;
     de__vis_shared *vis;
@@ -222,7 +231,10 @@ struct de__irradiance {
     de__probe_capture capture;
     de_gpu_texture distances;
     u32 distance_access;
-    de__vis_kernel integrate, depth, clear;
+    de__vis_kernel integrate, depth;
+    de_gpu_buffer convolution;
+    u64 convolution_capacity;
+    u32 convolution_access;
     de_atomic_u32 depth_recorded;
     u32 depth_success, skip_depth;
     de_gpu_buffer metadata[DE__VIEW_MAX][4];
@@ -235,6 +247,7 @@ struct de__irradiance {
 static de_result gi_bake_command(int argc, const char *const *argv, void *user);
 static void gi_stage(de__view_frame *vf, void *user);
 static void gi_barrier(de_gpu_cmd *cmd, de_gpu_texture texture, u32 before, u32 after);
+static u64 gi_staging_size(const de__gi_layout *l);
 static void gi_release(struct de__irradiance *s, gi_record *rec) {
     for (u32 i = 0; i < 2; ++i) {
         de_gpu_texture_destroy(s->renderer->dev, rec->irradiance[i]);
@@ -270,6 +283,7 @@ static de_result gi_reserve(struct de__irradiance *s, gi_record *rec,
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "GI: total atlas cap64MiB");
     gi_record candidate = {
         .snapshot = *snapshot, .layout = l, .hash = de__gi_settings_hash(snapshot), .live = true};
+    de_gpu_buffer staging = {0};
     de_gpu_texture_desc d = {.width = l.iw,
                              .height = l.ih,
                              .format = DE_FMT_R11G11B10_FLOAT,
@@ -300,36 +314,46 @@ static de_result gi_reserve(struct de__irradiance *s, gi_record *rec,
     if (!map)
         goto fail;
     memset(map, 0, (size_t)l.probes * 16);
+    // Copy-only initialization never binds the global image descriptor arrays.
+    // Later candidates may publish descriptors while this submission is pending.
+    const u32 pitches[] = {(l.iw * 4 + 511u) & ~511u, (l.dw * 4 + 511u) & ~511u};
+    const u64 moment_offset = (u64)pitches[0] * l.ih;
+    staging = de_gpu_buffer_create(s->renderer->dev,
+                                   &(de_gpu_buffer_desc){.size = gi_staging_size(&l),
+                                                         .memory = DE_MEM_UPLOAD,
+                                                         .usage = DE_USAGE_COPY_SRC,
+                                                         .name = "gi.initialize_upload"});
+    u8 *initial = staging.id ? de_gpu_buffer_map(s->renderer->dev, staging) : NULL;
+    if (!initial)
+        goto fail;
+    memset(initial, 0, (size_t)gi_staging_size(&l));
+    for (u32 y = 0; y < l.dh; ++y)
+        for (u32 x = 0; x < l.dw; ++x)
+            de_cooked_put_u32(initial + moment_offset + (u64)y * pitches[1] + x * 4,
+                              0x3c003c00u); // normalized no-hit mean/mean-squared = (1,1)
     de_gpu_cmd *cmd = gi_begin(s, "gi.initialize");
     if (!cmd)
         goto fail;
-    // Establish every candidate storage image before the first bindless dispatch.
-    // All storage descriptors are visible together, including the second atlas.
     for (u32 i = 0; i < 2; ++i) {
-        gi_barrier(cmd, candidate.irradiance[i], DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
-        gi_barrier(cmd, candidate.distance[i], DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
-    }
-    for (u32 i = 0; i < 2; ++i)
+        const de_gpu_texture textures[] = {candidate.irradiance[i], candidate.distance[i]};
         for (u32 t = 0; t < 2; ++t) {
-            de_gpu_texture texture = t ? candidate.distance[i] : candidate.irradiance[i];
-            gi_bake_params pc = {.irradiance =
-                                     de_gpu_texture_bindless(s->renderer->dev, texture, 0, true),
-                                 .columns = t ? l.dw : l.iw,
-                                 .probes = t ? l.dh : l.ih,
-                                 .operation = t};
-            de_gpu_cmd_set_pipeline(cmd, s->clear.pipeline);
-            de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
-            de_gpu_cmd_dispatch(cmd, (pc.columns + 7) / 8, (pc.probes + 7) / 8, 1);
-            gi_barrier(cmd, texture, DE_ACCESS_SHADER_WRITE, DE__GI_ACCESS);
+            gi_barrier(cmd, textures[t], DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
+            de_gpu_cmd_copy_buffer_to_texture(cmd, textures[t], 0, 0, staging,
+                                              t ? moment_offset : 0, pitches[t]);
+            gi_barrier(cmd, textures[t], DE_ACCESS_COPY_DST, DE__GI_ACCESS);
         }
+    }
     if (de_gpu_queue_submit(s->renderer->dev, DE_QUEUE_GRAPHICS,
                             &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}) != DE_OK)
         goto fail;
+    de_gpu_buffer_destroy(s->renderer->dev, staging);
+    staging = (de_gpu_buffer){0};
     candidate.access[0] = candidate.access[1] = DE__GI_ACCESS;
     gi_release(s, rec);
     *rec = candidate;
     return DE_OK;
 fail:
+    de_gpu_buffer_destroy(s->renderer->dev, staging);
     gi_release(s, &candidate);
     return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "GI: atlas allocation");
 }
@@ -476,19 +500,16 @@ de_result de__irradiance_create(de_renderer *r, struct de__irradiance **out) {
                                                 .default_number = 6});
     de_result result = DE_OK;
     if (s->vis && s->vis->enabled) {
-        const char *entries[] = {"cs_gi_distance", "cs_gi_integrate", "cs_gi_clear"};
+        const char *entries[] = {"cs_gi_distance", "cs_gi_integrate"};
         de__engine_shader_code code;
-        result = de__vis_shader_load(s->vis, "irradiance_bake", entries, 3, &code);
+        result = de__vis_shader_load(s->vis, "irradiance_bake", entries, 2, &code);
         if (result == DE_OK) {
             const u32 group[] = {8, 8, 1};
             result = de__vis_kernel_create(s->vis, &code, 0, entries[0], group,
                                            sizeof(gi_bake_params), &s->depth);
             if (result == DE_OK)
                 result = de__vis_kernel_create(s->vis, &code, 1, entries[1], group,
-                                               sizeof(gi_bake_params), &s->integrate);
-            if (result == DE_OK)
-                result = de__vis_kernel_create(s->vis, &code, 2, entries[2], group,
-                                               sizeof(gi_bake_params), &s->clear);
+                                               sizeof(gi_integrate_params), &s->integrate);
             de__engine_shader_code_free(&code);
         }
     }
@@ -520,7 +541,7 @@ void de__irradiance_destroy(struct de__irradiance *s) {
             de_gpu_buffer_destroy(s->renderer->dev, s->metadata[i][j]);
     de__vis_kernel_destroy(s->vis, &s->depth);
     de__vis_kernel_destroy(s->vis, &s->integrate);
-    de__vis_kernel_destroy(s->vis, &s->clear);
+    de_gpu_buffer_destroy(s->renderer->dev, s->convolution);
     DE_FREE(s->renderer->alloc, s, sizeof *s);
 }
 static void gi_barrier(de_gpu_cmd *cmd, de_gpu_texture texture, u32 before, u32 after) {
@@ -682,7 +703,7 @@ void de__irradiance_prepare(de_renderer *r, const de__render_world_frame *world)
             continue;
         }
         if (rec->hash != de__gi_settings_hash(v) || !rec->layout.probes) {
-            if (!s->clear.pipeline.id)
+            if (!s->integrate.pipeline.id)
                 continue;
             if (gi_reserve(s, rec, v) != DE_OK) {
                 DE_WARN(r->log,
@@ -798,29 +819,80 @@ void de__irradiance_after_views(de_renderer *r, u64 frame) {
     if (rec->faces != 63)
         return;
     u32 write = rec->last ^ 1u;
+    const u32 raw_pitch = 256, distance_pitch = 256;
+    const u64 raw_bytes = (u64)raw_pitch * 192, distance_bytes = (u64)distance_pitch * 192;
+    const u32 e_pitch = (rec->layout.iw * 4 + 511u) & ~511u;
+    const u32 m_pitch = (rec->layout.dw * 4 + 511u) & ~511u;
+    const u64 e_offset = raw_bytes + distance_bytes;
+    const u64 m_offset = e_offset + (u64)e_pitch * rec->layout.ih;
+    const u64 bytes = m_offset + (u64)m_pitch * rec->layout.dh;
+    if (bytes > 8ull * 1024 * 1024)
+        return; // checked padded scratch bound, separate from the logical atlas budget
+    if (s->convolution_capacity < bytes) {
+        de_gpu_buffer candidate = de_gpu_buffer_create(
+            r->dev,
+            &(de_gpu_buffer_desc){.size = bytes,
+                                  .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST,
+                                  .name = "gi.convolution"});
+        if (!candidate.id)
+            return; // preserve old scratch and completed probe/atlas publication for retry
+        de_gpu_buffer_destroy(r->dev, s->convolution);
+        s->convolution = candidate;
+        s->convolution_capacity = bytes;
+        // A GPU-only heap range may previously have been a retired BRDF upload.
+        // Transfer-source scope supplies an execution dependency even on first use.
+        s->convolution_access = DE_ACCESS_COPY_SRC;
+    }
     de_gpu_cmd *cmd = gi_begin(s, "gi.integrate");
     if (!cmd)
         return;
-    gi_barrier(cmd, s->capture.raw, s->capture.raw_access, DE__GI_ACCESS);
-    gi_barrier(cmd, s->distances, s->distance_access, DE__GI_ACCESS);
-    gi_barrier(cmd, rec->irradiance[write], rec->access[write], DE_ACCESS_SHADER_WRITE);
-    gi_barrier(cmd, rec->distance[write], rec->access[write], DE_ACCESS_SHADER_WRITE);
-    gi_bake_params pc = {.raw = de_gpu_texture_bindless(r->dev, s->capture.raw, 0, true),
-                         .distances = de_gpu_texture_bindless(r->dev, s->distances, 0, true),
-                         .irradiance =
-                             de_gpu_texture_bindless(r->dev, rec->irradiance[write], 0, true),
-                         .moments = de_gpu_texture_bindless(r->dev, rec->distance[write], 0, true),
-                         .probe = rec->probe,
-                         .columns = rec->layout.columns,
-                         .range = rec->layout.range};
+    const de_gpu_texture textures[] = {s->capture.raw, s->distances, rec->irradiance[write],
+                                       rec->distance[write]};
+    const u32 access[] = {s->capture.raw_access, s->distance_access, rec->access[write],
+                          rec->access[write]};
+    const u64 offsets[] = {0, raw_bytes, e_offset, m_offset};
+    const u32 pitches[] = {raw_pitch, distance_pitch, e_pitch, m_pitch};
+    de_gpu_barrier buffer = {
+        .buffer = s->convolution, .before = s->convolution_access, .after = DE_ACCESS_COPY_DST};
+    de_gpu_cmd_barriers(cmd, &buffer, 1);
+    for (u32 i = 0; i < 4; ++i) {
+        gi_barrier(cmd, textures[i], access[i], DE_ACCESS_COPY_SRC);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, s->convolution, offsets[i], pitches[i], textures[i],
+                                          0, 0);
+        if (i < 2)
+            gi_barrier(cmd, textures[i], DE_ACCESS_COPY_SRC, DE__GI_ACCESS);
+    }
+    buffer.before = DE_ACCESS_COPY_DST;
+    buffer.after = DE__GI_ACCESS;
+    de_gpu_cmd_barriers(cmd, &buffer, 1);
+    const gi_integrate_params pc = {.buffer = de_gpu_buffer_bindless(r->dev, s->convolution),
+                                    .probe = rec->probe,
+                                    .columns = rec->layout.columns,
+                                    .raw_offset = 0,
+                                    .raw_pitch = raw_pitch / 4,
+                                    .distance_offset = (u32)(raw_bytes / 4),
+                                    .distance_pitch = distance_pitch / 4,
+                                    .irradiance_offset = (u32)(e_offset / 4),
+                                    .irradiance_pitch = e_pitch / 4,
+                                    .moments_offset = (u32)(m_offset / 4),
+                                    .moments_pitch = m_pitch / 4};
     de_gpu_cmd_set_pipeline(cmd, s->integrate.pipeline);
     de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
     de_gpu_cmd_dispatch(cmd, 3, 3, 1);
-    gi_barrier(cmd, rec->irradiance[write], DE_ACCESS_SHADER_WRITE, DE__GI_ACCESS);
-    gi_barrier(cmd, rec->distance[write], DE_ACCESS_SHADER_WRITE, DE__GI_ACCESS);
+    buffer.before = DE__GI_ACCESS;
+    buffer.after = DE_ACCESS_COPY_SRC;
+    de_gpu_cmd_barriers(cmd, &buffer, 1);
+    for (u32 i = 2; i < 4; ++i) {
+        gi_barrier(cmd, textures[i], DE_ACCESS_COPY_SRC, DE_ACCESS_COPY_DST);
+        de_gpu_cmd_copy_buffer_to_texture(cmd, textures[i], 0, 0, s->convolution, offsets[i],
+                                          pitches[i]);
+        gi_barrier(cmd, textures[i], DE_ACCESS_COPY_DST, DE__GI_ACCESS);
+    }
     if (de_gpu_queue_submit(r->dev, DE_QUEUE_GRAPHICS,
                             &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}) != DE_OK)
         return;
+    s->convolution_access = DE_ACCESS_COPY_SRC;
+    s->capture.raw_access = s->distance_access = DE__GI_ACCESS;
     rec->access[write] = DE__GI_ACCESS;
     rec->faces = 0;
     if (++rec->probe == rec->layout.probes) {
@@ -849,7 +921,9 @@ bool de__irradiance_get(const de_renderer *r, u64 entity, de__irradiance_info *o
                                          .distance = v->distance[v->last],
                                          .raw_radiance = s->capture.raw,
                                          .raw_distance = s->distances,
-                                         .classification = v->classification};
+                                         .classification = v->classification,
+                                         .convolution = s->convolution,
+                                         .convolution_capacity = s->convolution_capacity};
             out->gpu = gi_gpu(v, s->origin, true);
             out->gpu.textures[0] = de_gpu_texture_bindless(r->dev, out->irradiance, 0, true);
             out->gpu.textures[1] = de_gpu_texture_bindless(r->dev, out->distance, 0, true);

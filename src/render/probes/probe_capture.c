@@ -135,6 +135,9 @@ de_result de__probe_capture_init(de__probe_capture *c, de_renderer *r, u32 resol
     desc.name = "probe.filtered_scratch";
     c->filtered = de_gpu_texture_create(r->dev, &desc);
     c->transfer_bytes = (u64)resolution * resolution * 6 * 8 + 4096;
+    // New GPU-only storage can reuse a retired transfer-source heap range.
+    // Keep a conservative first-use transfer execution dependency (no image layout).
+    c->transfer_access = DE_ACCESS_COPY_SRC;
     c->transfer = de_gpu_buffer_create(
         r->dev, &(de_gpu_buffer_desc){.size = c->transfer_bytes,
                                       .usage = DE_USAGE_COPY_SRC | DE_USAGE_COPY_DST,
