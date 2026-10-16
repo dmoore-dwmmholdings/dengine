@@ -546,7 +546,7 @@ static void gpu_projection_blend(pfx *f, de_gpu_backend backend) {
     probe_reference_run(f, records, 1, queries, COUNT, out);
     for (u32 i = 0; i < COUNT; ++i) {
         const f32 *q = queries + i * 8;
-        f32 t = 1e30;
+        f32 t = 1e30f;
         for (u32 k = 0; k < 3; ++k)
             if (fabsf(q[4 + k]) > 1e-6f)
                 t = fminf(t, ((q[4 + k] > 0 ? 5.f : -5.f) - q[k]) / q[4 + k]);
