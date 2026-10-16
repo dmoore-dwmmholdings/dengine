@@ -498,8 +498,6 @@ typedef struct shadow_query {
 } shadow_query;
 static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_query *queries,
                            u32 count, u32 mode, f32 radius, f32 *result) {
-    fprintf(stderr, "CSM query count=%u mode=%u: buffers begin\n", count, mode);
-    fflush(stderr);
     de_gpu_buffer metadata = upload_buf(f->dev, records, 9 * sizeof *records);
     de_gpu_buffer input = upload_buf(f->dev, queries, (u64)count * sizeof *queries);
     de_gpu_buffer output = de_gpu_buffer_create(
@@ -516,11 +514,7 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
     de__engine_shader_code code;
     de__vis_kernel kernel;
     ASSERT_EQ(de__vis_shader_load(f->vis, "shadow_sample", &entry, 1, &code), DE_OK);
-    fprintf(stderr, "CSM query count=%u mode=%u: kernel create begin\n", count, mode);
-    fflush(stderr);
     ASSERT_EQ(de__vis_kernel_create(f->vis, &code, 0, entry, group, 32, &kernel), DE_OK);
-    fprintf(stderr, "CSM query count=%u mode=%u: kernel create complete\n", count, mode);
-    fflush(stderr);
     de__engine_shader_code_free(&code);
     u32 pc[8] = {de_gpu_buffer_bindless(f->dev, metadata),
                  de_gpu_buffer_bindless(f->dev, input),
@@ -531,12 +525,6 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
                  0,
                  0};
     memcpy(&pc[5], &radius, 4);
-    fprintf(stderr, "CSM query descriptors metadata=%u input=%u output=%u maps=%u,%u,%u,%u\n",
-            pc[0], pc[1], pc[2], records[1].map.texture, records[2].map.texture,
-            records[3].map.texture, records[4].map.texture);
-    fflush(stderr);
-    fprintf(stderr, "CSM query count=%u mode=%u: record begin\n", count, mode);
-    fflush(stderr);
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "shadow.query");
     ASSERT_TRUE(cmd);
     de_gpu_barrier barrier = {
@@ -549,19 +537,11 @@ static void shadow_queries(lx *f, const de__csm_gpu records[9], const shadow_que
     barrier.after = DE_ACCESS_COPY_SRC;
     de_gpu_cmd_barriers(cmd, &barrier, 1);
     de_gpu_cmd_copy_buffer(cmd, rb, 0, output, 0, (u64)count * 16);
-    fprintf(stderr, "CSM query count=%u mode=%u: submit begin\n", count, mode);
-    fflush(stderr);
     ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
                                   &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
               DE_OK);
-    fprintf(stderr, "CSM query count=%u mode=%u: submit complete; wait begin\n", count, mode);
-    fflush(stderr);
     de_gpu_wait_idle(f->dev);
-    fprintf(stderr, "CSM query count=%u mode=%u: wait complete; readback begin\n", count, mode);
-    fflush(stderr);
     memcpy(result, de_gpu_buffer_map(f->dev, rb), (size_t)count * 16);
-    fprintf(stderr, "CSM query count=%u mode=%u: readback complete\n", count, mode);
-    fflush(stderr);
     de__vis_kernel_destroy(f->vis, &kernel);
     de_gpu_buffer_destroy(f->dev, metadata);
     de_gpu_buffer_destroy(f->dev, input);

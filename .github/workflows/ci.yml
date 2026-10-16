@@ -245,7 +245,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers gdb
+            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
           ls /usr/share/vulkan/icd.d
           # lvp_icd.json (Mesa 25) or lvp_icd.<arch>.json (older Mesa).
           icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
@@ -271,18 +271,6 @@ jobs:
         run: |
           read -r -a targets <<<"${TARGETS}"
           cmake --build --preset "${PRESET}" --target "${targets[@]}"
-
-      # Temporary DENG-335 crash localization; remove before final acceptance head.
-      - name: Diagnose Vulkan CSM sphere query
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          command -v gdb
-          timeout --signal=TERM --kill-after=10s 300s gdb --batch --return-child-result \
-            -ex 'set pagination off' -ex run -ex 'p $_siginfo' -ex 'info all-registers' \
-            -ex 'x/16i $pc' -ex 'disassemble /r $pc-64,$pc+64' -ex 'info proc mappings' -ex 'thread apply all bt' \
-            --args "build/${PRESET}/tests/unit/render/test_render_csm" \
-            --filter=csm.sphere_selection_blend_vulkan
 
       - name: Golden and example tests
         shell: bash
