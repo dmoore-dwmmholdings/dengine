@@ -603,7 +603,9 @@ static u8 display_byte(f32 x) {
 static void cpu_response(const f32 *lut, f32 mu, f32 rough, const f32 base[3], f32 metal, f32 spec,
                          f32 out[3]) {
     const u32 n = DE__BRDF_LUT_SIZE;
-    f32 x = fminf(fmaxf(mu * n - 0.5f, 0), n - 1), y = fminf(fmaxf(rough * (n - 1), 0), n - 1);
+    const f32 upper = (f32)(n - 1);
+    f32 x = fminf(fmaxf(mu * (f32)n - 0.5f, 0), upper);
+    f32 y = fminf(fmaxf(rough * upper, 0), upper);
     u32 x0 = (u32)x, y0 = (u32)y, x1 = x0 + 1 < n ? x0 + 1 : x0, y1 = y0 + 1 < n ? y0 + 1 : y0;
     f32 fx = x - x0, fy = y - y0, t[4];
     for (u32 c = 0; c < 4; ++c) {
