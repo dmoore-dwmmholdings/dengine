@@ -37,6 +37,9 @@ fi
         "${VK_DRIVER_FILES:-}" "${VK_ICD_FILENAMES:-}" "${MESA_SHADER_CACHE_DIR}"
     printf 'LP_NUM_THREADS=%s\nLP_PERF=%s\nLP_NO_RAST=%s\n' \
         "${LP_NUM_THREADS:-<unset>}" "${LP_PERF:-<unset>}" "${LP_NO_RAST:-<unset>}"
+    printf 'CTEST_PARALLEL_LEVEL=%s\nGITHUB_RUN_ID=%s\nGITHUB_JOB=%s\nRUNNER_NAME=%s\n' \
+        "${CTEST_PARALLEL_LEVEL:-<unset>}" "${GITHUB_RUN_ID:-<unset>}" \
+        "${GITHUB_JOB:-<unset>}" "${RUNNER_NAME:-<unset>}"
 } > "${out}/metadata.txt" 2>&1
 
 # Separate unchanged, untraced/unprofiled controls distinguish observer overhead. The two pairs

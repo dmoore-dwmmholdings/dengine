@@ -52,6 +52,8 @@ jobs:
       - name: Profiling tools and original lavapipe driver
         shell: bash
         run: |
+          mkdir -p build/cluster-fence-diagnostics
+          exec > >(tee build/cluster-fence-diagnostics/setup.txt) 2>&1
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers libvulkan1 \
             vulkan-tools vulkan-validationlayers linux-tools-common linux-tools-generic
@@ -59,8 +61,13 @@ jobs:
           test -n "${icd}"
           echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
           echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
-          perf_bin=$(find /usr/lib/linux-tools -name perf -type f | sort | tail -n 1)
+          # Ubuntu's kernel-specific perf entries may be symlinks to the shared tools package.
+          dpkg-query -L 'linux-tools-*' > build/cluster-fence-diagnostics/tool-package-files.txt
+          perf_bin=$(find -L /usr/lib/linux-tools -name perf -type f | sort -V | tail -n 1)
           test -n "${perf_bin}"
+          perf_bin=$(readlink -f "${perf_bin}")
+          test -x "${perf_bin}"
+          "${perf_bin}" --version
           echo "PERF_BIN=${perf_bin}" >> "${GITHUB_ENV}"
           # This disposable runner records user-space stacks, without running the test as root.
           sudo sysctl kernel.perf_event_paranoid=1
