@@ -5179,6 +5179,8 @@ static int stbi__parse_png_file(stbi__png *z, int scan, int req_comp)
                   s->img_n = pal_img_n;
                return 1;
             }
+            // Empty IDAT chunks contribute no bytes; idata may still be NULL.
+            if (c.length == 0) break;
             if (c.length > (1u << 30)) return stbi__err("IDAT size limit", "IDAT section larger than 2^30 bytes");
             if ((int)(ioff + c.length) < (int)ioff) return 0;
             if (ioff + c.length > idata_limit) {
