@@ -1438,7 +1438,7 @@ static de_gpu_pipeline forward_pipeline(lx *f, char *why, size_t cap) {
                 &(de_gpu_pipeline_desc){
                     .kind = DE_PIPE_COMPUTE,
                     .cs = {.code = view.base + rec.code_offset, .size = rec.code_size, .entry = n},
-                    .push_constant_bytes = 48,
+                    .push_constant_bytes = 64,
                     .threadgroup_size = {rec.threadgroup[0], rec.threadgroup[1],
                                          rec.threadgroup[2]},
                     .name = "test ibl forward"});
@@ -1455,14 +1455,14 @@ static de_gpu_pipeline forward_pipeline(lx *f, char *why, size_t cap) {
 typedef struct fwd_pass {
     lx *f;
     de_gpu_pipeline pipe;
-    de_rg_resource depth, gb[3], out, scene, strip;
-    u32 view, entry, scene_index;
+    de_rg_resource depth, gb[3], out, scene, strip, ids, visible, instances, meshes, materials;
+    u32 view, entry, scene_index, ids_pitch, visible_count;
 } fwd_pass;
 
 static void fwd_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const fwd_pass *p = (const fwd_pass *)user;
     de_gpu_device *dev = p->f->dev;
-    const u32 params[12] = {p->view,
+    const u32 params[16] = {p->view,
                             p->entry,
                             p->scene_index,
                             0u,
@@ -1473,7 +1473,11 @@ static void fwd_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
                             de_gpu_texture_bindless(dev, de_rg_texture(pass, p->out), 0, true),
                             p->f->width,
                             p->f->height,
-                            0u};
+                            0u,
+                            de_gpu_buffer_bindless(dev, de_rg_buffer(pass, p->ids)),
+                            p->ids_pitch,
+                            de_gpu_buffer_bindless(dev, de_rg_buffer(pass, p->visible)),
+                            p->visible_count};
     de_gpu_cmd_set_pipeline(cmd, p->pipe);
     de_gpu_cmd_push_constants(cmd, params, sizeof params);
     de_gpu_cmd_dispatch(cmd, (p->f->width + 7u) / 8u, (p->f->height + 7u) / 8u, 1);
@@ -1488,6 +1492,13 @@ static void forward_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) 
     p->depth = vc->depth;
     for (u32 t = 0; t < 3; ++t)
         p->gb[t] = vc->gbuffer[DE__GB0 + t];
+    p->ids = vc->vis_ids_buffer;
+    p->ids_pitch = vc->vis_ids_pitch;
+    p->visible = vc->visible_meshlets;
+    p->visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
+    p->instances = vc->scene_instances;
+    p->meshes = vc->scene_meshes;
+    p->materials = vc->scene_materials;
     p->scene = vc->scene_views;
     p->strip = lc->strip;
     p->view = f->lt->views[0].constants_bindless;
@@ -1504,6 +1515,11 @@ static void forward_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) 
     for (u32 t = 0; t < 3; ++t)
         de_rg_read(pass, p->gb[t], DE_ACCESS_SHADER_READ);
     de_rg_read(pass, p->scene, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, p->ids, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, p->visible, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, p->instances, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, p->meshes, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, p->materials, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(p->strip))
         de_rg_read(pass, p->strip, DE_ACCESS_SHADER_READ);
     de_rg_write(pass, p->out, DE_ACCESS_SHADER_WRITE);
@@ -1515,7 +1531,7 @@ static void forward_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) 
 
 /* ibl_deferred_forward_equal: the deferred pass's indirect light (a scene without lights) equals
  * evaluate_indirect called by a forward kernel on the same G-buffer texels. */
-static void deferred_forward(lx *f, de_gpu_backend b) {
+static void deferred_forward(lx *f, de_gpu_backend b, bool layered) {
     lx_open(f, b);
 #if defined(DE_IBL_TEST_COOK) && DE_IBL_TEST_COOK
     static char why[800];
@@ -1530,6 +1546,20 @@ static void deferred_forward(lx *f, de_gpu_backend b) {
     world_set(&f->w, 1, sq, trs((de_vec3){0, 0, 0}, (de_vec3){1, 0, 0}, -0.3f, 1.0f),
               material_add(0.9f, 0.25f, 1.0f, 0.5f));
     world_set(&f->w, 2, sq, at(2.5f, 0, 0), material_add(0.3f, 0.05f, 0.4f, 1.0f));
+    if (layered) {
+        g_mat[0].standard.clearcoat = 1;
+        g_mat[0].standard.clearcoat_roughness = .15f;
+        g_mat[1].standard.sheen_color = (de_vec3){.8f, .2f, .4f};
+        g_mat[1].standard.sheen_roughness = .8f;
+        g_mat[2].standard.clearcoat = 1;
+        g_mat[2].standard.clearcoat_roughness = .3f;
+        g_mat[2].standard.sheen_color = (de_vec3){.2f, .7f, .4f};
+        g_mat[2].standard.sheen_roughness = .6f;
+        g_mat[2].standard.iridescence = 1;
+        g_mat[2].standard.iridescence_ior = 1.3f;
+        g_mat[2].standard.iridescence_thickness_min = 350;
+        g_mat[2].standard.iridescence_thickness_max = 350;
+    }
     const f32 faces[6][3] = {{4.0f, 0.5f, 0.5f}, {0.5f, 4.0f, 0.5f}, {0.5f, 0.5f, 4.0f},
                              {3.0f, 3.0f, 0.5f}, {0.3f, 0.3f, 0.3f}, {0.1f, 0.1f, 0.1f}};
     env_cube(f, &faces[0][0]);
@@ -1570,6 +1600,7 @@ static void deferred_forward(lx *f, de_gpu_backend b) {
 #else
     (void)f;
     (void)b;
+    (void)layered;
     SKIP("this build has no shader importer (DE_BUILD_TOOLS off or no Slang)");
 #endif
 }
@@ -1803,7 +1834,10 @@ static void strip_copy(lx *f, de_gpu_backend b) {
         exposure_scale(f, backend);                                                                \
     }                                                                                              \
     TEST_F(ibl, ibl_deferred_forward_equal_##sfx, lx) {                                            \
-        deferred_forward(f, backend);                                                              \
+        deferred_forward(f, backend, false);                                                       \
+    }                                                                                              \
+    TEST_F(ibl, ibl_layered_deferred_forward_equal_##sfx, lx) {                                    \
+        deferred_forward(f, backend, true);                                                        \
     }                                                                                              \
     TEST_F(ibl, output_basic_srgb_encode_##sfx, lx) {                                              \
         output_encode(f, backend);                                                                 \

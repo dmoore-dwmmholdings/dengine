@@ -136,3 +136,9 @@ description = "procedural stand-ins for the Khronos ClearCoatTest, SheenChair, I
 size = [448, 256]
 threshold_mean = 0.006  # Metal vs lavapipe: mean 0.0037, p99 0.027
 threshold_p99 = 0.04
+
+[scene.materials_layers_furnace]
+description = "coat1, sheen1 and combined white spheres: actual renderer energy within unchanged 2 % furnace limit (DENG-431)"
+size = [256, 192]
+threshold_mean = 0.001
+threshold_p99 = 0.01

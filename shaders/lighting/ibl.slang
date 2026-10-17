@@ -30,6 +30,8 @@ import "../brdf/bsdf_common";
 import "../brdf/energy";
 import "../materials/standard/standard_base";
 import "../materials/standard/layer_anisotropy";
+import "../brdf/sheen";
+import "../brdf/thin_film";
 
 /// DeIbl.flags: an environment strip is bound (else the constant ambient).
 public static const uint DE_IBL_ENVIRONMENT = 1;
@@ -145,8 +147,9 @@ public float de_ibl_specular_occlusion(float nov, float ao, float roughness)
 /// The environment's light leaving surface `s` towards `v` (unit, world, towards the eye): the
 /// diffuse and specular parts (rgb nits, not pre-exposed), with `ao` the ambient occlusion. `lut`:
 /// the energy LUT (DE_BINDLESS_INVALID: the analytic fallback).
-public float3 de_ibl_reflection_direction(SurfaceData s,float3 v) {
-    float3 n=s.normal;float r=saturate(s.roughness);
+public float3 de_ibl_reflection_direction(SurfaceData s, float3 v) {
+    float3 n = s.normal;
+    float r = saturate(s.roughness);
     float3 rn = n;
     if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u && s.anisotropy > 0.0 &&
         dot(s.tangent.xyz, s.tangent.xyz) > 0.0)
@@ -157,24 +160,59 @@ public float3 de_ibl_reflection_direction(SurfaceData s,float3 v) {
         float3 ab = cross(n, at);
         rn = de_anisotropy_bent_normal(n, at, ab, v, s.anisotropy, r);
     }
-    return de_ibl_dominant_dir(rn,reflect(-v,rn),r);
+    return de_ibl_dominant_dir(rn, reflect(-v, rn), r);
 }
 
-public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float ao,
-                            out float3 diffuse, out float3 specular, float4 localRadiance = float4(0,0,0,0))
+public bool de_ibl_has_film(SurfaceData s) {
+    return (s.features & DE_MATERIAL_FEATURE_IRIDESCENCE) != 0u &&
+           s.iridescence > 0.0 && s.iridescence_thickness > 0.0;
+}
+public bool de_ibl_has_sheen(SurfaceData s) {
+    return (s.features & DE_MATERIAL_FEATURE_SHEEN) != 0u && any(s.sheen_color > 0.0);
+}
+public bool de_ibl_has_coat(SurfaceData s) {
+    return (s.features & DE_MATERIAL_FEATURE_CLEARCOAT) != 0u && s.clearcoat > 0.0;
+}
+public float3 de_ibl_coat_normal(SurfaceData s) {
+    float len = length(s.clearcoat_normal);
+    return len > 0.0 ? s.clearcoat_normal / len : s.normal;
+}
+public float3 de_ibl_coat_direction(SurfaceData s, float3 v) {
+    float3 n = de_ibl_coat_normal(s);
+    return de_ibl_dominant_dir(n, reflect(-v, n), saturate(s.clearcoat_roughness));
+}
+public float3 de_ibl_sheen_direction(SurfaceData s, float3 v) {
+    return de_ibl_dominant_dir(s.normal, reflect(-v, s.normal), de_sheen_roughness(s.sheen_roughness));
+}
+
+/// Base GGX/diffuse response only. SSR's thin G-buffer producer calls this without layers;
+/// explicit film inputs still affect the base response when a caller supplies them.
+public void de_ibl_evaluate_base(SurfaceData s, float3 v, DeIbl ibl, uint lut, float ao,
+                                out float3 diffuse, out float3 specular,
+                                float4 localRadiance = float4(0, 0, 0, 0))
 {
     float3 n = s.normal;
     float nov = max(dot(n, v), 1e-4);
     float r = saturate(s.roughness);
     StandardFresnel fr = de_standard_fresnel(s);
+    if (de_ibl_has_film(s)) {
+        // IBL approximation: view-angle film replaces split-sum F0. Couple the dielectric
+        // diffuse and existing multiple scattering to the same reflectance, so a white
+        // dielectric cannot gain the film response on top of unchanged diffuse energy.
+        float factor = saturate(s.iridescence);
+        fr.f0 = lerp(fr.f0, saturate(de_thin_film_fresnel(1.0, s.iridescence_ior, nov,
+                      s.iridescence_thickness, fr.f0)), factor);
+        fr.f0_d = lerp(fr.f0_d, saturate(de_thin_film_fresnel(1.0, s.iridescence_ior, nov,
+                        s.iridescence_thickness, fr.f0_d)), factor);
+    }
     EnergyTerms t = de_energy_lookup(lut, nov, r);
     float3 ed_avg, spec_avg;
     float3 ed = de_energy_specular_albedo(t, fr.f0_d, fr.f90_d, true, ed_avg);
     float3 spec_albedo = de_energy_specular_albedo(t, fr.f0, fr.f90, true, spec_avg);
     float3 albedo = s.base_color * (1.0 - saturate(s.metallic));
     diffuse = albedo * (de_ibl_irradiance(ibl, n) * DE_INV_PI) * (1.0 - ed) * ao;
-    // DENG-300: an anisotropic surface reflects around the KHR bent normal (needs a tangent frame;
-    // the thin G-buffer has none, so deferred surfaces stay isotropic).
+    // DENG-300: an anisotropic surface reflects around the KHR bent normal when the caller
+    // supplies a tangent frame; a bare thin G-buffer surface remains isotropic.
     float3 rn = n;
     if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u && s.anisotropy > 0.0 &&
         dot(s.tangent.xyz, s.tangent.xyz) > 0.0)
@@ -190,4 +228,73 @@ public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float 
     float3 dir = de_ibl_dominant_dir(rn, refl, r);
     specular = lerp(de_ibl_radiance(ibl, dir, r), localRadiance.rgb, saturate(localRadiance.a)) * spec_albedo *
                (de_ibl_specular_occlusion(nov, ao, r) * horizon * horizon);
+}
+
+/// Separate base and added layers: SSR replaces only the base, never the coat or sheen.
+/// This shader-local result does not change any C/GPU parameter or G-buffer layout.
+public struct DeIblResult {
+    public float3 diffuse;
+    public float3 specular;
+    public float3 base_specular;
+    public float3 layers_specular;
+    public float base_attenuation;
+};
+public DeIblResult de_ibl_evaluate_layers(SurfaceData s, float3 v, DeIbl ibl, uint lut, float ao,
+    float4 localRadiance = float4(0), float4 localCoat = float4(0), float4 localSheen = float4(0)) {
+    DeIblResult result;
+    de_ibl_evaluate_base(s, v, ibl, lut, ao, result.diffuse, result.base_specular, localRadiance);
+    result.specular = result.base_specular;
+    result.layers_specular = float3(0);
+    result.base_attenuation = 1.0;
+    bool sheen = de_ibl_has_sheen(s), coat = de_ibl_has_coat(s);
+    if (sheen) {
+        float roughness = de_sheen_roughness(s.sheen_roughness);
+        float mu = max(dot(s.normal, v), 1e-4);
+        // The fitted Charlie visibility can integrate above one at smooth grazing angles.
+        // Normalize only its IBL directional energy, consistently on both sides of the
+        // layer composition; the raw LUT and direct Charlie BRDF remain unchanged.
+        float energy = saturate(de_sheen_albedo(lut, mu, roughness));
+        float weight = max(s.sheen_color.x, max(s.sheen_color.y, s.sheen_color.z));
+        float keep = saturate(1.0 - weight * energy);
+        result.diffuse *= keep;
+        result.base_specular *= keep;
+        result.base_attenuation *= keep;
+        float3 light = lerp(de_ibl_radiance(ibl, de_ibl_sheen_direction(s, v), roughness),
+                             localSheen.rgb, saturate(localSheen.a));
+        float horizon = min(1.0 + dot(reflect(-v, s.normal), s.normal), 1.0);
+        result.layers_specular = s.sheen_color * energy * light *
+            (de_ibl_specular_occlusion(mu, ao, roughness) * horizon * horizon);
+    }
+    if (coat) {
+        float3 normal = de_ibl_coat_normal(s);
+        float mu = dot(normal, v);
+        if (mu > 0.0) {
+            float roughness = saturate(s.clearcoat_roughness);
+            EnergyTerms energy = de_energy_lookup(lut, mu, roughness);
+            // A single-scatter dielectric coat: deliberately no base GGX MS compensation.
+            float albedo = saturate(s.clearcoat) * (0.04 * energy.a + energy.b);
+            float keep = saturate(1.0 - albedo);
+            result.diffuse *= keep;
+            result.base_specular *= keep;
+            result.layers_specular *= keep;
+            result.base_attenuation *= keep;
+            float3 light = lerp(de_ibl_radiance(ibl, de_ibl_coat_direction(s, v), roughness),
+                                 localCoat.rgb, saturate(localCoat.a));
+            float horizon = min(1.0 + dot(reflect(-v, normal), normal), 1.0);
+            result.layers_specular += light * albedo *
+                (de_ibl_specular_occlusion(mu, ao, roughness) * horizon * horizon);
+        }
+    }
+    if (sheen || coat)
+        result.specular = result.base_specular + result.layers_specular;
+    return result;
+}
+
+/// Shared deferred/forward and unit-ambient diffuse response, retaining existing callers.
+public void de_ibl_evaluate(SurfaceData s, float3 v, DeIbl ibl, uint lut, float ao,
+    out float3 diffuse, out float3 specular, float4 localRadiance = float4(0),
+    float4 localCoat = float4(0), float4 localSheen = float4(0)) {
+    DeIblResult result = de_ibl_evaluate_layers(s, v, ibl, lut, ao, localRadiance, localCoat, localSheen);
+    diffuse = result.diffuse;
+    specular = result.specular;
 }

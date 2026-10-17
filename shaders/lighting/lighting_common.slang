@@ -21,6 +21,7 @@ __exported import "../lighting/lights";
 __exported import "../lighting/lighting_inputs";
 __exported import "../materials/material_interface";
 import "../lighting/ltc";
+import "../brdf/sheen";
 __exported import "../lighting/ibl";
 
 /// DeLightingView.flags
@@ -225,14 +226,26 @@ void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLigh
     float ao = gtao ? min(s.ao, raw_ao) : s.ao * raw_ao;
     float3 diffuse_ao =
         gtao ? de_ao_multibounce(ao, s.base_color * (1 - saturate(s.metallic))) : float3(ao);
-    float4 localRadiance = float4(0, 0, 0, 0);
+    float4 localRadiance = float4(0), localCoat = float4(0), localSheen = float4(0);
     if (lv.inputs.probe_records != 0 && lv.inputs.probe_list != 0) {
         float view_depth = -dot(lv.inputs.probe_view_z, float4(p, 1));
         uint cluster = de_cluster_index(lv, px, view_depth);
-        localRadiance=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,
-            lv.inputs.probe_sampler,cluster,p,de_ibl_reflection_direction(s,v),s.roughness);
+        localRadiance = de_probe_radiance(lv.inputs.probe_records, lv.inputs.probe_list,
+            lv.inputs.probe_entry, lv.inputs.probe_sampler, cluster, p,
+            de_ibl_reflection_direction(s, v), s.roughness);
+        if (de_ibl_has_coat(s))
+            localCoat = de_probe_radiance(lv.inputs.probe_records, lv.inputs.probe_list,
+                lv.inputs.probe_entry, lv.inputs.probe_sampler, cluster, p,
+                de_ibl_coat_direction(s, v), saturate(s.clearcoat_roughness));
+        if (de_ibl_has_sheen(s))
+            localSheen = de_probe_radiance(lv.inputs.probe_records, lv.inputs.probe_list,
+                lv.inputs.probe_entry, lv.inputs.probe_sampler, cluster, p,
+                de_ibl_sheen_direction(s, v), de_sheen_roughness(s.sheen_roughness));
     }
-    de_ibl_evaluate(s, v, lv.ibl, lv.brdf_lut, ao, diffuse, specular,localRadiance);
+    DeIblResult ibl = de_ibl_evaluate_layers(s, v, lv.ibl, lv.brdf_lut, ao,
+                                            localRadiance, localCoat, localSheen);
+    diffuse = ibl.diffuse;
+    specular = ibl.specular;
     if (gtao)
         diffuse *= ao > 0 ? diffuse_ao / ao : float3(0);
     float4 gi = gi_irradiance(lv.inputs.reserved1, p, s.normal, v);
@@ -245,17 +258,66 @@ void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLigh
         diffuse = diffuse * (1 - gi.a) + gi.rgb * (response * DE_INV_PI) * diffuse_ao;
     }
     float4 od = de_input_indirect_diffuse_override(lv.inputs, px);
-    diffuse = lerp(diffuse, od.rgb * diffuse_ao, saturate(od.a));
+    bool layers = de_ibl_has_coat(s) || de_ibl_has_sheen(s);
+    bool film = de_ibl_has_film(s);
+    bool opaque_diffuse = (lv.inputs.reserved0 & DE_INPUT_DIFFUSE_OPAQUE) != 0u;
+    if (opaque_diffuse && (layers || film) && od.a > 0) {
+        // SSGI preweights outgoing diffuse using the thin G-buffer material. Convert
+        // that baseline to this layered response before applying diffuse AO once.
+        SurfaceData producer = s;
+        producer.features = 0u;
+        producer.ior = 1.5;
+        producer.specular_color = float3(1);
+        producer.tangent = float4(0, 0, 0, 1);
+        DeIbl unit = (DeIbl)0;
+        unit.ambient = float4(1);
+        float3 denominator, numerator, unused;
+        de_ibl_evaluate_base(producer, v, unit, lv.brdf_lut, 1, denominator, unused);
+        de_ibl_evaluate(s, v, unit, lv.brdf_lut, 1, numerator, unused);
+        float3 target = od.rgb * diffuse_ao;
+        target.x = denominator.x > 1e-8 ? target.x * numerator.x / denominator.x : diffuse.x;
+        target.y = denominator.y > 1e-8 ? target.y * numerator.y / denominator.y : diffuse.y;
+        target.z = denominator.z > 1e-8 ? target.z * numerator.z / denominator.z : diffuse.z;
+        diffuse = lerp(diffuse, target, saturate(od.a));
+    } else {
+        diffuse = lerp(diffuse, od.rgb * diffuse_ao, saturate(od.a));
+    }
+    float4 ssr = de_input_indirect_specular_override(lv.inputs, px);
     if (gtao) {
-        float4 ssr = de_input_indirect_specular_override(lv.inputs, px);
         float nov = max(dot(s.normal, v), 1e-4), r = saturate(s.roughness);
         float material = de_ibl_specular_occlusion(nov, s.ao, r);
         float combined = de_ibl_specular_occlusion(nov, ao, r);
-        // SSR already contains the material's Lagarde factor: replace, never multiply it twice.
+        // SSR already contains material AO: convert to the combined factor exactly once.
         ssr.rgb *= material > 0 ? combined / material : 0;
+    }
+    bool opaque_specular = (lv.inputs.reserved0 & DE_INPUT_SPECULAR_OPAQUE) != 0u;
+    if (opaque_specular && film && ssr.a > 0) {
+        // The actual SSR producer has only quantized G-buffer parameters, including AO.
+        // Opaque deferred surfaces retain these base values; layer material data adds the
+        // film later. Reweight only the base response, never a summed coat/sheen result.
+        SurfaceData producer = s;
+        producer.features = 0u;
+        producer.ior = 1.5;
+        producer.specular_color = float3(1);
+        producer.tangent = float4(0, 0, 0, 1);
+        DeIbl unit = (DeIbl)0;
+        unit.ambient = float4(1);
+        float3 unused, denominator, numerator;
+        de_ibl_evaluate_base(producer, v, unit, lv.brdf_lut, s.ao, unused, denominator);
+        de_ibl_evaluate_base(s, v, unit, lv.brdf_lut, s.ao, unused, numerator);
+        float3 target = ssr.rgb * ibl.base_attenuation;
+        target.x = denominator.x > 1e-8 ? target.x * numerator.x / denominator.x : ibl.base_specular.x;
+        target.y = denominator.y > 1e-8 ? target.y * numerator.y / denominator.y : ibl.base_specular.y;
+        target.z = denominator.z > 1e-8 ? target.z * numerator.z / denominator.z : ibl.base_specular.z;
+        specular = lerp(ibl.base_specular, target, saturate(ssr.a)) + ibl.layers_specular;
+    } else if (opaque_specular && layers) {
+        // Coat attenuates the sheen too; SSR replaces only the attenuated base GGX lobe.
+        specular = lerp(ibl.base_specular, ssr.rgb * ibl.base_attenuation, saturate(ssr.a)) +
+                   ibl.layers_specular;
+    } else {
+        // Preserve the original no-layer arithmetic, including legacy AO composition.
         specular = lerp(specular, ssr.rgb, saturate(ssr.a));
-    } else
-        specular = de_input_compose_specular(lv.inputs, px, specular);
+    }
 }
 
 /// Indirect light leaving `s` towards the eye (evaluate_indirect_split's sum). The deferred pass

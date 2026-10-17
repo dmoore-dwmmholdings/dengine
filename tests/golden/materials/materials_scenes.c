@@ -27,11 +27,10 @@
  * row, also under Metal shader validation (DENG-430). The last image is copied into the harness
  * target.
  *
- * Known gaps the references hold (follow-ups, not threshold slack): IBL has no clearcoat, sheen
- * or iridescence term (DENG-304), so under the sky alone those rows look like the base (they show
- * under the lights since DENG-429, which made deferred lighting apply the layers of opaque
- * surfaces); rough transmission darkens (single scattering, DENG-301); transparents draw LOD 0
- * (DENG-305).
+ * DENG-431 applies coat, sheen and film to the shared IBL path. The additional layer furnace
+ * checks actual coat1, sheen1 and combined white spheres with the same 2 % energy limit.
+ * Remaining gaps: rough transmission darkens (single scattering, DENG-301); transparents
+ * draw LOD 0 (DENG-305).
  *
  * Golden determinism: fixed EV100 on each scene's DeCamera (no auto exposure), a fixed camera,
  * output.basic (DENG-304) as the output stage, no temporal effect. assets/gen_assets.py writes
@@ -531,4 +530,8 @@ DE_GOLDEN_SCENE(materials_furnace) {
 
 DE_GOLDEN_SCENE(materials_khr_samples) {
     mg_run(ctx, &(mg_opts){.scene = "scenes/khr_samples"});
+}
+
+DE_GOLDEN_SCENE(materials_layers_furnace) {
+    mg_run(ctx, &(mg_opts){.scene = "scenes/layers_furnace", .furnace = true});
 }

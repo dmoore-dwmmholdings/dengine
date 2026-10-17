@@ -47,12 +47,15 @@ generate_lods = false
 "mat/emit_4" = { type = "material", source = "materials/emit_4.mat.toml" }
 "mat/emit_5" = { type = "material", source = "materials/emit_5.mat.toml" }
 "mat/floor" = { type = "material", source = "materials/floor.mat.toml" }
+"mat/furnace_coat" = { type = "material", source = "materials/furnace_coat.mat.toml" }
 "mat/furnace_diel_r0" = { type = "material", source = "materials/furnace_diel_r0.mat.toml" }
 "mat/furnace_diel_r1" = { type = "material", source = "materials/furnace_diel_r1.mat.toml" }
 "mat/furnace_diel_r5" = { type = "material", source = "materials/furnace_diel_r5.mat.toml" }
 "mat/furnace_metal_r1" = { type = "material", source = "materials/furnace_metal_r1.mat.toml" }
 "mat/furnace_metal_r2" = { type = "material", source = "materials/furnace_metal_r2.mat.toml" }
 "mat/furnace_metal_r5" = { type = "material", source = "materials/furnace_metal_r5.mat.toml" }
+"mat/furnace_sheen" = { type = "material", source = "materials/furnace_sheen.mat.toml" }
+"mat/furnace_stack" = { type = "material", source = "materials/furnace_stack.mat.toml" }
 "mat/ior_0" = { type = "material", source = "materials/ior_0.mat.toml" }
 "mat/ior_1" = { type = "material", source = "materials/ior_1.mat.toml" }
 "mat/ior_2" = { type = "material", source = "materials/ior_2.mat.toml" }
@@ -109,3 +112,4 @@ generate_lods = false
 "scenes/gallery_ibl" = { type = "scene", source = "scenes/gallery_ibl.scene.toml" }
 "scenes/gallery_lights" = { type = "scene", source = "scenes/gallery_lights.scene.toml" }
 "scenes/khr_samples" = { type = "scene", source = "scenes/khr_samples.scene.toml" }
+"scenes/layers_furnace" = { type = "scene", source = "scenes/layers_furnace.scene.toml" }
