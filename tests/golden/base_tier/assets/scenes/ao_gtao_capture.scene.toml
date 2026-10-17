@@ -1,0 +1,144 @@
+# Base-tier ao_gtao (DENG-343) (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -13.0, 7.0]
+rotation = [0.573576, 0.0, 0.0, 0.819152]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.872665
+near_z = 0.1
+exposure_ev100 = 3.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 2.0, -0.15]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [12.0, 16.0, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/floor"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.0, 7.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [12.0, 0.3, 6.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [-6.0, 2.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.3, 10.0, 6.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/red"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [6.0, 2.0, 3.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.3, 10.0, 6.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/green"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [-2.0, 2.0, 0.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.6, 1.6, 1.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000015"
+[entity.DeTransform]
+position = [0.0, 2.0, 0.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.6, 1.6, 1.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000016"
+[entity.DeTransform]
+position = [2.0, 2.0, 0.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.6, 1.6, 1.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000017"
+[entity.DeTransform]
+position = [-3.0, -1.0, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 0.1, 0.4]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000018"
+[entity.DeTransform]
+position = [-3.0, -0.7, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 0.1, 0.4]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000019"
+[entity.DeTransform]
+position = [-3.0, -0.4, 0.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 0.1, 0.4]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["mat/white"]
+layer_mask = 1
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001a"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 0.8
+rotation = 0.0

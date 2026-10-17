@@ -1,0 +1,36 @@
+[project]
+asset_root = "."
+
+[defaults.model]
+generate_lods = false
+
+[assets]
+"mesh/box" = {type="model", source="meshes/box.gltf"}
+"mesh/sphere" = {type="model", source="meshes/sphere.gltf"}
+"mesh/card" = {type="model", source="meshes/card.gltf"}
+"mesh/cylinder" = {type="model", source="meshes/cylinder.gltf"}
+"tex/checker" = {type="texture",source="textures/checker.png"}
+"env/sky" = {type="texture",source="env/sky.exr",usage="environment",env_size=32,env_samples=256,compression="none"}
+"mat/white" = {type="material",source="materials/white.mat.toml"}
+"mat/red" = {type="material",source="materials/red.mat.toml"}
+"mat/green" = {type="material",source="materials/green.mat.toml"}
+"mat/floor" = {type="material",source="materials/floor.mat.toml"}
+"mat/mirror" = {type="material",source="materials/mirror.mat.toml"}
+"mat/glass" = {type="material",source="materials/glass.mat.toml"}
+"mat/emit" = {type="material",source="materials/emit.mat.toml"}
+"bake/reflection.deprobe" = {type="blob",source="bakes/reflection.deprobe"}
+"bake/irradiance.degi" = {type="blob",source="bakes/irradiance.degi"}
+"scenes/shadows_csm_capture" = {type="scene",source="scenes/shadows_csm_capture.scene.toml"}
+"scenes/shadows_local_capture" = {type="scene",source="scenes/shadows_local_capture.scene.toml"}
+"scenes/shadows_pcss_contact_capture" = {type="scene",source="scenes/shadows_pcss_contact_capture.scene.toml"}
+"scenes/ao_gtao_capture" = {type="scene",source="scenes/ao_gtao_capture.scene.toml"}
+"scenes/reflections_ssr_probes_capture" = {type="scene",source="scenes/reflections_ssr_probes_capture.scene.toml"}
+"scenes/gi_probes_ssgi_capture" = {type="scene",source="scenes/gi_probes_ssgi_capture.scene.toml"}
+"scenes/refraction_ss_capture" = {type="scene",source="scenes/refraction_ss_capture.scene.toml"}
+"scenes/shadows_csm" = {type="scene",source="scenes/shadows_csm.scene.toml"}
+"scenes/shadows_local" = {type="scene",source="scenes/shadows_local.scene.toml"}
+"scenes/shadows_pcss_contact" = {type="scene",source="scenes/shadows_pcss_contact.scene.toml"}
+"scenes/ao_gtao" = {type="scene",source="scenes/ao_gtao.scene.toml"}
+"scenes/reflections_ssr_probes" = {type="scene",source="scenes/reflections_ssr_probes.scene.toml"}
+"scenes/gi_probes_ssgi" = {type="scene",source="scenes/gi_probes_ssgi.scene.toml"}
+"scenes/refraction_ss" = {type="scene",source="scenes/refraction_ss.scene.toml"}
