@@ -12,6 +12,9 @@
 #include "render/passes/sss/sss.h"
 #include "render/shadows/shadows_internal.h"
 #include "render/passes/forward/forward.h"
+#if DE_HAS_GPU_VULKAN
+#include "gpu/vulkan/vk_internal.h"
+#endif
 #define WAIT_NS             (10ull * 1000000000ull)
 #define FIRST_FRAME_WAIT_NS (120ull * 1000000000ull) /* lavapipe JIT (DENG-428) */
 #define PI_D                3.14159265358979323846
@@ -379,7 +382,7 @@ typedef struct lx {
     de_arena *arena;
     de_gpu_device *dev;
     de_gpu_backend backend;
-    bool real_gpu, warm;
+    bool real_gpu, warm, sync_diagnostics;
     de_rg *g;
     de__gpu_scene *gs;
     de__vis_shared *vis;
@@ -461,7 +464,29 @@ static inline void free_result(lx_result *r) {
     memset(r, 0, sizeof *r);
 }
 
+static inline void lx_sync_dump(lx *f, const char *stage, bool query_completed) {
+#if DE_HAS_GPU_VULKAN
+    if (f->sync_diagnostics)
+        de__gpu_vk_sync_diagnostics_dump(f->dev, f->fence, stage, query_completed);
+#else
+    (void)f;
+    (void)stage;
+    (void)query_completed;
+#endif
+}
+
+static inline void lx_diag_stage(lx *f, const char *stage, u64 *previous) {
+    if (f->sync_diagnostics) {
+        const u64 now = de_time_now_ns();
+        fprintf(stderr, "lx-diag t_ns=%llu stage=%s frame=%llu elapsed_ns=%llu\n",
+                (unsigned long long)now, stage, (unsigned long long)f->frames,
+                (unsigned long long)(now - *previous));
+        *previous = now;
+    }
+}
+
 static inline void lx_teardown(lx *f) {
+    lx_sync_dump(f, "teardown-begin", true);
     de__forward_destroy(f->forward);
     f->forward = NULL;
     de__csm_destroy(f->csm);
@@ -472,6 +497,7 @@ static inline void lx_teardown(lx *f) {
     }
     if (f->dev)
         de_gpu_wait_idle(f->dev);
+    lx_sync_dump(f, "teardown-after-existing-idle", true);
     de__sss_destroy(f->sss); /* DENG-306 */
     de__lighting_destroy(f->lt);
     de__brdf_luts_destroy(f->luts);
@@ -559,6 +585,14 @@ static inline void lx_open(lx *f, de_gpu_backend backend) {
                  de_error_last() ? de_error_last()->message : "?");
         SKIP(why);
     }
+#if DE_HAS_GPU_VULKAN
+    const char *diagnostics = getenv("DE_VK_SYNC_DIAGNOSTICS");
+    if (backend == DE_GPU_VULKAN && diagnostics && strcmp(diagnostics, "1") == 0) {
+        f->sync_diagnostics = true;
+        de__gpu_vk_sync_diagnostics_enable(f->dev);
+        fprintf(stderr, "lx-diag enabled: validation unchanged, engine pipeline_cache_dir empty\n");
+    }
+#endif
     const de_gpu_caps *caps = de_gpu_get_caps(f->dev);
     printf("device: \"%s\" (%s)\n", caps->device_name, de_gpu_backend_name(backend));
     render_d3d12_report(f->dev);
@@ -708,10 +742,22 @@ static inline f32 *halves_of(const u8 *m, const rb_item *it, u32 w, u32 h) {
 }
 
 static inline bool lx_wait(lx *f, u64 v, const char *what) {
+    const u64 begin = f->sync_diagnostics ? de_time_now_ns() : 0;
+    lx_sync_dump(f, "wait-begin", false);
     const u64 t0 = de_time_now_ns();
     const de_result r =
         de_gpu_fence_wait(f->dev, f->fence, v, f->warm ? WAIT_NS : FIRST_FRAME_WAIT_NS);
-    const f64 ms = (f64)(de_time_now_ns() - t0) / 1e6;
+    const u64 wait_end = de_time_now_ns();
+    const f64 ms = (f64)(wait_end - t0) / 1e6;
+    lx_sync_dump(f, r == DE_OK ? "wait-complete" : "wait-failed", true);
+    if (f->sync_diagnostics)
+        fprintf(stderr,
+                "lx-diag t_ns=%llu wait-value=%llu pre_snapshot_ns=%llu api_wait_ns=%llu "
+                "post_snapshot_ns=%llu wall_ns=%llu\n",
+                (unsigned long long)de_time_now_ns(), (unsigned long long)v,
+                (unsigned long long)(t0 - begin), (unsigned long long)(wait_end - t0),
+                (unsigned long long)(de_time_now_ns() - wait_end),
+                (unsigned long long)(de_time_now_ns() - begin));
     if (r == DE_OK) {
         if (!f->warm)
             printf("first frame (includes the shader compile at first use): %.0f ms\n", ms);
@@ -725,6 +771,9 @@ static inline bool lx_wait(lx *f, u64 v, const char *what) {
 
 /* Builds, runs and waits for one frame; fills f->res. */
 static inline bool lx_frame(lx *f) {
+    u64 diag_mark = f->sync_diagnostics ? de_time_now_ns() : 0;
+    const u64 frame_begin = diag_mark;
+    lx_diag_stage(f, "frame-begin", &diag_mark);
     const u64 n = f->frames++;
     world_begin(&f->w);
     de_mat4 view, proj;
@@ -869,14 +918,19 @@ static inline bool lx_frame(lx *f) {
             if (DE_HANDLE_VALID(storage[i]))
                 de_rg_write(p, storage[i], DE_ACCESS_SHADER_WRITE);
     }
+    lx_diag_stage(f, "build-end", &diag_mark);
     de_result r = de__rg_finalize(f->g);
+    lx_diag_stage(f, "finalize-end", &diag_mark);
     if (r == DE_OK)
         r = de__rg_compile(f->g);
+    lx_diag_stage(f, "compile-end", &diag_mark);
     bool csm_attempted = r == DE_OK;
     if (r == DE_OK)
         r = de__rg_execute(f->g, &(de__rg_execute_desc){.frame_index = n,
                                                         .frame_fence = f->fence,
                                                         .frame_value = n + 1});
+    lx_diag_stage(f, "record-submit-end", &diag_mark);
+    lx_sync_dump(f, "record-submit-end", false);
     de__csm_complete(f->csm, d.view, f->g, csm_attempted, r == DE_OK);
     if (r != DE_OK) {
         fprintf(stderr, "frame %llu: %s\n", (unsigned long long)n,
@@ -888,7 +942,13 @@ static inline bool lx_frame(lx *f) {
     free_result(res);
     res->frame = n;
     de__gpu_scene_frame_end(f->gs, f->g, true);
-    if (!lx_wait(f, n + 1, "frame"))
+    lx_diag_stage(f, "pre-wait-end", &diag_mark);
+    const bool waited = lx_wait(f, n + 1, "frame");
+    lx_diag_stage(f, "wait-return", &diag_mark);
+    if (f->sync_diagnostics)
+        fprintf(stderr, "lx-diag frame=%llu frame_to_wait_return_ns=%llu\n", (unsigned long long)n,
+                (unsigned long long)(de_time_now_ns() - frame_begin));
+    if (!waited)
         return false;
     f->warm = true;
     if (lc == NULL)

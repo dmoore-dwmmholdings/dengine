@@ -32,6 +32,8 @@
  */
 #include "gpu/vulkan/vk_internal.h"
 
+#include <dengine/de_platform.h>
+#include <stdio.h>
 #include <string.h>
 
 bool de__vk_lost(de__vk_device *vk) {
@@ -200,6 +202,79 @@ static void note_signal(de__vk_fence *f, u64 value) {
         ;
 }
 
+void de__gpu_vk_sync_diagnostics_enable(de_gpu_device *d) {
+    if (d && d->vt == &de__gpu_vulkan_vtable)
+        de__vk(d)->sync_diagnostics = true;
+}
+
+void de__gpu_vk_sync_diagnostics_dump(de_gpu_device *d, de_gpu_fence fence, const char *stage,
+                                      bool query_completed) {
+    if (!d || d->vt != &de__gpu_vulkan_vtable || !de__vk(d)->sync_diagnostics)
+        return;
+    de__vk_device *vk = de__vk(d);
+    const u64 begin = de_time_now_ns();
+    fprintf(stderr,
+            "vk-sync snapshot-begin t_ns=%llu stage=%s query_counters=%u validation=%u "
+            "gpu_av=%u\n",
+            (unsigned long long)begin, stage, (unsigned)query_completed,
+            (unsigned)vk->on.validation, (unsigned)vk->gpu_av);
+    /* One coherent CPU submission snapshot. Never wait for GPU progress or flush held work. */
+    for (u32 l = 0; l < vk->queue_lock_count; ++l)
+        de_mutex_lock(&vk->queue_locks[l]);
+    de__gpu_fence *f = DE_HANDLE_VALID(fence) ? de__gpu_get_fence(d, fence) : NULL;
+    if (f) {
+        de__vk_fence *vf = DE__GPU_PAYLOAD(de__vk_fence, f);
+        u64 completed = 0;
+        const VkResult vr =
+            query_completed
+                ? vk->fn.vkGetSemaphoreCounterValue(vk->device, vf->semaphore, &completed)
+                : VK_NOT_READY;
+        fprintf(stderr,
+                "vk-sync t_ns=%llu stage=%s fence=%u submitted=%llu completed=%llu query=%d\n",
+                (unsigned long long)de_time_now_ns(), stage, fence.id,
+                (unsigned long long)de_atomic_load_u64(&vf->submitted, DE_ATOMIC_ACQUIRE),
+                (unsigned long long)completed, (int)vr);
+    }
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
+        u64 completed = 0;
+        const VkResult vr =
+            query_completed
+                ? vk->fn.vkGetSemaphoreCounterValue(vk->device, vk->queues[q].timeline, &completed)
+                : VK_NOT_READY;
+        fprintf(stderr,
+                "vk-sync queue=%s lock=%u shared=%u accepted=%llu submitted=%llu completed=%llu "
+                "query=%d\n",
+                queue_name((de_gpu_queue)q), vk->queues[q].lock,
+                (unsigned)vk->lock_shared[vk->queues[q].lock],
+                (unsigned long long)vk->last_value[q], (unsigned long long)vk->sync_submitted[q],
+                (unsigned long long)completed, (int)vr);
+    }
+    for (u32 l = 0; l < vk->queue_lock_count; ++l) {
+        u32 count = 0;
+        for (const de__vk_deferred *e = vk->deferred[l]; e; e = e->next) {
+            if (count++ >= 32u)
+                continue;
+            fprintf(stderr,
+                    "vk-sync held lock=%u queue=%s signal=%llu commands=%u waits=%u covered=%u\n",
+                    l, queue_name(e->q), (unsigned long long)e->sigs[0].value, e->ncb, e->nwait,
+                    (unsigned)waits_covered(e->wait_fences, e->waits, e->nwait));
+            for (u32 w = 0; w < e->nwait && w < 8u; ++w)
+                if (e->wait_fences[w])
+                    fprintf(stderr, "vk-sync held-wait value=%llu submitted=%llu\n",
+                            (unsigned long long)e->waits[w].value,
+                            (unsigned long long)de_atomic_load_u64(&e->wait_fences[w]->submitted,
+                                                                   DE_ATOMIC_ACQUIRE));
+        }
+        fprintf(stderr, "vk-sync held-total lock=%u count=%u details_limit=32 waits_limit=8\n", l,
+                count);
+    }
+    for (u32 l = vk->queue_lock_count; l > 0; --l)
+        de_mutex_unlock(&vk->queue_locks[l - 1u]);
+    fprintf(stderr, "vk-sync snapshot-end t_ns=%llu stage=%s elapsed_ns=%llu\n",
+            (unsigned long long)de_time_now_ns(), stage,
+            (unsigned long long)(de_time_now_ns() - begin));
+}
+
 static VkResult submit_now(de__vk_device *vk, VkQueue queue, const VkCommandBufferSubmitInfo *cbs,
                            u32 ncb, const VkSemaphoreSubmitInfo *waits, u32 nwait,
                            const VkSemaphoreSubmitInfo *sigs, u32 nsig) {
@@ -279,8 +354,15 @@ static bool flush_lock(de_gpu_device *d, u32 lock) {
                                            e->nwait, e->sigs, e->nsig);
             if (vr != VK_SUCCESS)
                 mark_lost(vk); /* every value counts as complete from now on */
-            else if (e->signal_fence)
-                note_signal(e->signal_fence, e->sigs[e->nsig - 1u].value);
+            else {
+                vk->sync_submitted[e->q] = e->sigs[0].value;
+                if (e->signal_fence)
+                    note_signal(e->signal_fence, e->sigs[e->nsig - 1u].value);
+            }
+            if (vk->sync_diagnostics && vk->sync_trace_count[e->q]++ < 128u)
+                fprintf(stderr, "vk-sync t_ns=%llu flush queue=%s value=%llu result=%d\n",
+                        (unsigned long long)de_time_now_ns(), queue_name(e->q),
+                        (unsigned long long)e->sigs[0].value, (int)vr);
             *at = e->next;
             DE_FREE(d->alloc, e, e->bytes);
             progress = any = true;
@@ -395,6 +477,24 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
 
     VkResult vr = VK_ERROR_DEVICE_LOST;
     de_mutex_lock(&vk->queue_locks[vq->lock]);
+    const bool trace = vk->sync_diagnostics && vk->sync_trace_count[q]++ < 128u;
+    const u64 submit_begin = trace ? de_time_now_ns() : 0;
+    if (trace)
+        fprintf(stderr,
+                "vk-sync t_ns=%llu submit-begin queue=%s value=%llu commands=%u waits=%u "
+                "fence=%u fence_value=%llu\n",
+                (unsigned long long)submit_begin, queue_name(q), (unsigned long long)queue_value,
+                ncb, nwait, s->signal.id, (unsigned long long)s->signal_value);
+    if (trace) {
+        for (u32 i = 0; i < s->cmd_count && i < 4u; ++i)
+            fprintf(stderr, "vk-sync command=%s\n", s->cmds[i]->name);
+        for (u32 i = 0; i < nwait && i < 8u; ++i)
+            if (wait_fences[i])
+                fprintf(stderr, "vk-sync submit-wait value=%llu submitted=%llu\n",
+                        (unsigned long long)waits[i].value,
+                        (unsigned long long)de_atomic_load_u64(&wait_fences[i]->submitted,
+                                                               DE_ATOMIC_ACQUIRE));
+    }
     /* Swapchain acquires wait for the next graphics submit (guarded by the graphics lock). */
     const bool takes_acquires = r == DE_OK && q == DE_QUEUE_GRAPHICS;
     u32 nacq = 0;
@@ -426,6 +526,8 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
     }
     if (!held && vr != VK_ERROR_OUT_OF_HOST_MEMORY) {
         vr = submit_now(vk, vq->queue, cbs, ncb, waits, nwait, sig, nsig);
+        if (vr == VK_SUCCESS)
+            vk->sync_submitted[q] = queue_value;
         if (vr == VK_SUCCESS && nsig > 1u)
             note_signal(signal_fence, sig[1].value);
     }
@@ -438,6 +540,12 @@ de_result de__vk_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
         if (nacq)
             vk->pending_acquire_count = 0;
     }
+    if (trace)
+        fprintf(
+            stderr,
+            "vk-sync t_ns=%llu submit-end queue=%s value=%llu held=%u result=%d elapsed_ns=%llu\n",
+            (unsigned long long)de_time_now_ns(), queue_name(q), (unsigned long long)queue_value,
+            (unsigned)held, (int)vr, (unsigned long long)(de_time_now_ns() - submit_begin));
     de_mutex_unlock(&vk->queue_locks[vq->lock]);
 
     /* A signal went in: submits held back on shared VkQueues may be covered now. */

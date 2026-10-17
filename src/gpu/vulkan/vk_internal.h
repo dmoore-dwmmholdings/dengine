@@ -335,8 +335,13 @@ typedef struct de__vk_device {
     de_gpu_device *owner;
 
     /* DENG-284: submission state, guarded by the queue's lock (queue_locks[queues[q].lock]). */
-    /** Internal timeline value last handed to vkQueueSubmit2, per de_gpu queue. */
+    /** Last accepted internal timeline value, including held submits, per de_gpu queue. */
     u64 last_value[DE_QUEUE_COUNT_];
+    /** Diagnostic distinction: largest internal signal actually handed to vkQueueSubmit2. */
+    u64 sync_submitted[DE_QUEUE_COUNT_];
+    /** Private opt-in diagnostics, enabled before concurrent device use. Counts use queue locks. */
+    bool sync_diagnostics;
+    u32 sync_trace_count[DE_QUEUE_COUNT_];
     /** Swapchain acquires (vk_swapchain.c) that the next graphics-queue submit waits on; guarded
      * by the graphics queue's lock. */
     struct de__vk_acquire *pending_acquire[DE__VK_MAX_PENDING_ACQUIRES];
@@ -473,6 +478,11 @@ void de__vk_bindless_clear_texture(de_gpu_device *d, const de__gpu_texture *t);
 u32 de__gpu_vk_validation_messages(de_gpu_device *d, u32 *warnings);
 /** True when VK_LAYER_KHRONOS_validation is active on the device. */
 bool de__gpu_vk_validation_enabled(de_gpu_device *d);
+/** Enable bounded synchronization trace before submitting work (diagnostic fixture only). */
+void de__gpu_vk_sync_diagnostics_enable(de_gpu_device *d);
+/** Read-only fence/queue/deferred snapshot; no extra wait, flush or signal. Opt-in only. */
+void de__gpu_vk_sync_diagnostics_dump(de_gpu_device *d, de_gpu_fence fence, const char *stage,
+                                      bool query_completed);
 /**
  * Debug/Dev builds: the Vulkan handle (VkImageView, VkSampler or VkBuffer, as u64) last written
  * at `index` of bindless space `space`; 0 when nothing was. Release builds keep no record and
