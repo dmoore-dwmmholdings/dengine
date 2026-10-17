@@ -407,7 +407,7 @@ static u32 material_add(de_vec4 base) {
 
 typedef struct rs_result {
     bool valid;
-    u32 width, height;
+    u32 width, height, motion_usage;
     u32 *ids;      /* vis IDs */
     f32 *pos;      /* xyzw per pixel (debug) */
     f32 *uv;       /* uv0 uv1 per pixel (debug) */
@@ -445,6 +445,7 @@ typedef struct rsx {
     de_gpu_texture tex[MAX_TEX + 1];
     u32 tex_count;
     rs_result res;
+    const de_render_settings *settings;
     bool warm; /* a frame completed, so the kernels are compiled (FIRST_FRAME_WAIT_NS) */
     /* Classification's per-model counts of each frame (by frame % 8), for the tile check. */
     u32 list_counts[8][DE__GS_MATERIAL_MODELS];
@@ -819,7 +820,8 @@ static bool rsx_frame(rsx *f) {
                                   .view_matrix = view,
                                   .proj = proj,
                                   .camera_position = f->eye,
-                                  .origin = f->w.f.origin};
+                                  .origin = f->w.f.origin,
+                                  .settings = f->settings};
     de__vis_context *vc = NULL;
     if (de__vis_frame_build(f->vis, f->g, &d, &vc) != DE_OK || vc == NULL)
         return false;
@@ -897,6 +899,8 @@ static bool rsx_frame(rsx *f) {
     rs_result *res = &f->res;
     free_result(res);
     res->frame = n;
+    const u32 motion = de__rg_resource_index(f->g, vc->gbuffer[DE__GB_MOTION]);
+    res->motion_usage = motion != DE__RG_NONE ? f->g->resources[motion].tex.usage : 0u;
     res->inst_count = de__gpu_scene_table(f->gs, DE__GS_INSTANCES).count;
     res->inst = (de__gs_instance *)zalloc((size_t)res->inst_count * sizeof(de__gs_instance));
     for (u32 i = 0; i < res->inst_count; ++i)
@@ -1152,6 +1156,22 @@ static void motion_static(rsx *f, de_gpu_backend b) {
     printf("static: %u px, %u with motion\n", covered, bad);
     EXPECT_GT(covered, 1000u);
     EXPECT_EQ(bad, 0u);
+    EXPECT_TRUE((f->res.motion_usage & DE_USAGE_SAMPLED) != 0u); /* NULL legacy settings */
+    de_render_settings settings = {0};
+    f->settings = &settings;
+    for (u32 reader = 0; reader < 4; ++reader) {
+        settings.ao = reader == 1u ? DE_QUALITY_LOW : DE_QUALITY_OFF;
+        settings.reflections = reader == 2u ? DE_QUALITY_LOW : DE_QUALITY_OFF;
+        settings.gi = reader == 3u ? DE_QUALITY_LOW : DE_QUALITY_OFF;
+        ASSERT_TRUE(rsx_frame(f));
+        ASSERT_TRUE(f->res.valid);
+        EXPECT_EQ((f->res.motion_usage & DE_USAGE_SAMPLED) != 0u, reader != 0u);
+        EXPECT_EQ(f->res.motion_usage & (DE_USAGE_STORAGE | DE_USAGE_COPY_SRC),
+                  DE_USAGE_STORAGE | DE_USAGE_COPY_SRC);
+        for (size_t i = 0; i < (size_t)f->width * f->height * 2u; ++i)
+            EXPECT_TRUE(fabsf(f->res.motion[i]) <= 1e-5f);
+    }
+    f->settings = NULL;
 }
 
 /* The expected motion of pixel i (current instance rows from res, previous transform `prev`). */
