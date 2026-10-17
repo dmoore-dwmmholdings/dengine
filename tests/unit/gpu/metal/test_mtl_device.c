@@ -75,7 +75,7 @@ TEST_F(gpu_metal, device_caps, mtl_fx) {
     EXPECT_EQ(c->max_bindless_storage_textures, 16384u);
     EXPECT_EQ(c->max_bindless_buffers, 65536u);
     EXPECT_EQ(c->max_bindless_samplers, i->max_samplers < 2048u ? (u32)i->max_samplers : 2048u);
-    EXPECT_EQ(c->max_bindless_accels, 0u);
+    EXPECT_EQ(c->max_bindless_accels, i->raytracing ? 65536u : 0u);
     EXPECT_EQ(c->max_push_constant_bytes, DE_GPU_MAX_PUSH_CONSTANT_BYTES);
     EXPECT_GT(c->timestamp_frequency, 0u);
 

@@ -39,6 +39,7 @@
 #import <Metal/Metal.h>
 
 #include "gpu/metal/mtl_internal.h"
+#include "gpu/metal/mtl_accel_internal.h"
 
 #include <string.h>
 
@@ -572,6 +573,14 @@ static de_result create_compute(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipel
     if (p->name[0])
         cd.label = label_of(p);
     cd.computeFunction = cs;
+    id<MTLLibrary> library = library_of(d, p, "cs", &desc->cs);
+    id<MTLFunction> intersection = nil;
+    if ([library.functionNames containsObject:@"de_metal_intersection"]) {
+        intersection = [library newFunctionWithName:@"de_metal_intersection"];
+        MTLLinkedFunctions *linked = [MTLLinkedFunctions new];
+        linked.functions = @[intersection];
+        cd.linkedFunctions = linked;
+    }
     cd.binaryArchives = (__bridge NSArray *)de__mtl_archive_list(d);
     id<MTLDevice> dev = (__bridge id<MTLDevice>)de__mtl_dev(d)->device;
     MTLAutoreleasedComputePipelineReflection refl = nil;
@@ -597,6 +606,9 @@ static de_result create_compute(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipel
     push_info pi = {0};
     push_scan(&pi, refl.bindings, DE__MTL_PUSH_COMPUTE, "cs");
     DE_TRY(push_check(d, p, mp, &pi));
+    if (intersection)
+        DE_TRY(de__mtl_intersection_table(d, (__bridge void *)st, (__bridge void *)intersection,
+                                          &mp->intersection_table));
     mp->state = (void *)CFBridgingRetain(st);
     mp->archive_hit = hit;
     return DE_OK;
@@ -634,7 +646,8 @@ de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
             mp->cull = (u32)cull_mode(desc->cull);
         }
         if (r != DE_OK) {
-            release(&mp->state);
+            release(&mp->intersection_table);
+        release(&mp->state);
             release(&mp->depth_state);
         }
     }
@@ -645,6 +658,7 @@ void de__mtl_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p) {
     (void)d;
     mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
     @autoreleasepool {
+        release(&mp->intersection_table);
         release(&mp->state);
         release(&mp->depth_state);
     }

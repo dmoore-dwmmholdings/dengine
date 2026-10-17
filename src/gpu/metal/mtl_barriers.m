@@ -27,6 +27,7 @@
 #import <Metal/Metal.h>
 
 #include "gpu/metal/mtl_internal.h"
+#include "gpu/metal/mtl_accel_internal.h"
 
 #include <string.h>
 
@@ -107,6 +108,9 @@ static void wait_fence(id<MTLCommandEncoder> encoder, de__mtl_encoder_kind kind,
     case DE__MTL_ENC_COMPUTE:
         [(id<MTLComputeCommandEncoder>)encoder waitForFence:fence];
         break;
+    case DE__MTL_ENC_ACCEL:
+        [(id<MTLAccelerationStructureCommandEncoder>)encoder waitForFence:fence];
+        break;
     case DE__MTL_ENC_BLIT:
         [(id<MTLBlitCommandEncoder>)encoder waitForFence:fence];
         break;
@@ -145,8 +149,10 @@ void de__mtl_encoder_started(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind 
     }
     mc->enc_fence = f;
     mc->update_stages = all;
-    if (kind == DE__MTL_ENC_RENDER || kind == DE__MTL_ENC_COMPUTE)
+    if (kind == DE__MTL_ENC_RENDER || kind == DE__MTL_ENC_COMPUTE) {
         de__mtl_residency_encoder(c->device, encoder, kind);
+        de__mtl_accel_residency(c, encoder, kind);
+    }
     mc->encoder = (void *)CFBridgingRetain(enc);
     mc->kind = (u32)kind;
     mc->render_ended = false;
@@ -170,6 +176,9 @@ void de__mtl_encoder_end(de_gpu_cmd *c) {
                 break;
             case DE__MTL_ENC_COMPUTE:
                 [(id<MTLComputeCommandEncoder>)enc updateFence:f];
+                break;
+            case DE__MTL_ENC_ACCEL:
+                [(id<MTLAccelerationStructureCommandEncoder>)enc updateFence:f];
                 break;
             case DE__MTL_ENC_BLIT:
                 [(id<MTLBlitCommandEncoder>)enc updateFence:f];
