@@ -555,6 +555,8 @@ enum { DE__D3D12_BARRIERS_UNSET, DE__D3D12_BARRIERS_ENHANCED, DE__D3D12_BARRIERS
 typedef struct d3d12_cmd {
     ID3D12CommandAllocator *alloc;
     ID3D12GraphicsCommandList *list;
+    ID3D12RootSignature *accel_root;
+    ID3D12PipelineState *accel_pipeline;
     ID3D12GraphicsCommandList7 *list7; /**< for Barrier(); NULL with legacy barriers */
     ID3D12DescriptorHeap *rtv_heap;    /**< graphics lists: begin_render's color views */
     ID3D12DescriptorHeap *dsv_heap;    /**< graphics lists: begin_render's depth view */
@@ -781,5 +783,22 @@ void de__d3d12_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u
 bool de__d3d12_device_lost(de_gpu_device *d);
 size_t de__d3d12_device_lost_report(de_gpu_device *d, char *out, size_t cap);
 
+/* DENG-42: DXR AS payload and entry points. */
+typedef struct d3d12_accel {
+    de__gpu_buffer *storage, *postbuild, *readback;
+    D3D12_RAYTRACING_GEOMETRY_DESC *geometry;
+} d3d12_accel;
+de_result de__d3d12_accel_sizes(de_gpu_device *, const de_gpu_accel_desc *, de_gpu_accel_sizes *);
+de_result de__d3d12_accel_create(de_gpu_device *, de__gpu_accel *, const de_gpu_accel_desc *);
+void de__d3d12_accel_destroy(de_gpu_device *, de__gpu_accel *);
+u64 de__d3d12_accel_address(de_gpu_device *, de__gpu_accel *);
+void de__d3d12_accel_blas(de_gpu_cmd *, de__gpu_accel *, bool);
+void de__d3d12_accel_tlas(de_gpu_cmd *, de__gpu_accel *, de__gpu_buffer *, u32, bool);
+void de__d3d12_accel_emit(de_gpu_cmd *, de__gpu_accel *);
+bool de__d3d12_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
+void de__d3d12_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
+bool de__d3d12_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32, u32);
+void de__d3d12_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
+void de__d3d12_accel_dependency(de_gpu_cmd *);
 #endif /* _WIN32 */
 #endif

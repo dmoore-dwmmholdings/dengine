@@ -29,6 +29,7 @@ static const VkDescriptorType k_types[DE__VK_BINDING_COUNT] = {
     [DE__VK_BINDING_STORAGE_IMAGES] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     [DE__VK_BINDING_SAMPLERS] = VK_DESCRIPTOR_TYPE_SAMPLER,
     [DE__VK_BINDING_STORAGE_BUFFERS] = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    [DE__VK_BINDING_ACCELS] = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
 };
 
 static u32 min3(u32 a, u32 b, u32 c) {
@@ -39,7 +40,17 @@ static u32 min3(u32 a, u32 b, u32 c) {
 /* Table sizes: the constants, or less on a forced device with smaller limits (at least 1). */
 static void table_sizes(de__vk_device *vk) {
     const VkPhysicalDeviceVulkan12Properties *p = &vk->phys.p12;
-    u32 s[DE__VK_BINDING_COUNT];
+    u32 s[DE__VK_BINDING_COUNT] = {0};
+    if (vk->on.accel) {
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR ap = {0};
+        ap.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+        VkPhysicalDeviceProperties2 props = {0};
+        props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        props.pNext = &ap;
+        vk->fn.vkGetPhysicalDeviceProperties2(vk->phys.handle, &props);
+        s[DE__VK_BINDING_ACCELS] = min3(4096, ap.maxDescriptorSetUpdateAfterBindAccelerationStructures,
+                                      ap.maxPerStageDescriptorUpdateAfterBindAccelerationStructures);
+    }
     s[DE__VK_BINDING_SAMPLED_IMAGES] =
         min3(DE__VK_BINDLESS_TEXTURES, p->maxPerStageDescriptorUpdateAfterBindSampledImages,
              p->maxDescriptorSetUpdateAfterBindSampledImages);
@@ -52,7 +63,7 @@ static void table_sizes(de__vk_device *vk) {
     s[DE__VK_BINDING_STORAGE_BUFFERS] =
         min3(DE__VK_BINDLESS_BUFFERS, p->maxPerStageDescriptorUpdateAfterBindStorageBuffers,
              p->maxDescriptorSetUpdateAfterBindStorageBuffers);
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i)
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i)
         vk->table_size[i] = s[i] ? s[i] : 1u;
 }
 
@@ -62,7 +73,7 @@ static void layout_info(const de__vk_device *vk, VkDescriptorSetLayoutBinding b[
                         VkDescriptorSetLayoutBindingFlagsCreateInfo *fi,
                         VkDescriptorSetLayoutCreateInfo *li) {
     memset(b, 0, sizeof(VkDescriptorSetLayoutBinding) * DE__VK_BINDING_COUNT);
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i) {
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i) {
         b[i].binding = i;
         b[i].descriptorType = k_types[i];
         b[i].descriptorCount = vk->table_size[i];
@@ -73,13 +84,13 @@ static void layout_info(const de__vk_device *vk, VkDescriptorSetLayoutBinding b[
     }
     memset(fi, 0, sizeof *fi);
     fi->sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    fi->bindingCount = DE__VK_BINDING_COUNT;
+    fi->bindingCount = vk->on.accel ? DE__VK_BINDING_COUNT : 4u;
     fi->pBindingFlags = f;
     memset(li, 0, sizeof *li);
     li->sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li->pNext = fi;
     li->flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    li->bindingCount = DE__VK_BINDING_COUNT;
+    li->bindingCount = fi->bindingCount;
     li->pBindings = b;
 }
 
@@ -106,7 +117,7 @@ static de_result check_layout_support(de_gpu_device *d) {
     if (layout_supported(vk))
         return DE_OK;
     u32 total = 0;
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i)
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i)
         total += vk->table_size[i];
     vk->base_ok = false;
     snprintf(vk->base_reason, sizeof vk->base_reason,
@@ -119,7 +130,7 @@ static de_result check_layout_support(de_gpu_device *d) {
                             vk->phys.props.properties.deviceName, vk->base_reason);
     for (;;) {
         bool shrunk = false;
-        for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i)
+        for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i)
             if (vk->table_size[i] > 16u) {
                 vk->table_size[i] /= 2u;
                 shrunk = true;
@@ -146,7 +157,7 @@ static de_result create_layouts(de_gpu_device *d) {
     VkDescriptorSetLayoutCreateInfo li;
     layout_info(vk, b, f, &fi, &li);
     VkDescriptorPoolSize sizes[DE__VK_BINDING_COUNT];
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i) {
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i) {
         sizes[i].type = k_types[i];
         sizes[i].descriptorCount = vk->table_size[i];
     }
@@ -163,7 +174,7 @@ static de_result create_layouts(de_gpu_device *d) {
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     pi.maxSets = 1;
-    pi.poolSizeCount = DE__VK_BINDING_COUNT;
+    pi.poolSizeCount = fi.bindingCount;
     pi.pPoolSizes = sizes;
     vr = vk->fn.vkCreateDescriptorPool(vk->device, &pi, NULL, &vk->descriptor_pool);
     if (vr != VK_SUCCESS) {
@@ -501,7 +512,7 @@ de_result de__vk_bindless_init(de_gpu_device *d) {
     vk->max_storage_range = vk->phys.props.properties.limits.maxStorageBufferRange;
     DE_TRY(create_layouts(d));
 #if DE__GPU_VALIDATE_COMMANDS
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i) {
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i) {
         const size_t bytes = (size_t)vk->table_size[i] * sizeof(u64);
         vk->shadow[i] = (u64 *)DE_ALLOC(d->alloc, bytes, 8, DE_MEM_RENDER);
         if (!vk->shadow[i])
@@ -552,7 +563,7 @@ void de__vk_bindless_shutdown(de_gpu_device *d) {
     vk->descriptor_pool = VK_NULL_HANDLE;
     vk->set_layout = VK_NULL_HANDLE;
     vk->set = VK_NULL_HANDLE;
-    for (u32 i = 0; i < DE__VK_BINDING_COUNT; ++i) {
+    for (u32 i = 0; i < (vk->on.accel ? DE__VK_BINDING_COUNT : 4u); ++i) {
         if (vk->shadow[i])
             DE_FREE(d->alloc, vk->shadow[i], (size_t)vk->table_size[i] * sizeof(u64));
         vk->shadow[i] = NULL;

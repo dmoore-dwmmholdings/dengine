@@ -156,7 +156,15 @@
     X(vkQueuePresentKHR)                                                                           \
     X(vkCmdDrawMeshTasksEXT)                                                                       \
     X(vkCmdDrawMeshTasksIndirectEXT)                                                               \
-    X(vkCmdDrawMeshTasksIndirectCountEXT)
+    X(vkCmdDrawMeshTasksIndirectCountEXT) \
+    X(vkCreateAccelerationStructureKHR) \
+    X(vkDestroyAccelerationStructureKHR) \
+    X(vkGetAccelerationStructureBuildSizesKHR) \
+    X(vkGetAccelerationStructureDeviceAddressKHR) \
+    X(vkCmdBuildAccelerationStructuresKHR) \
+    X(vkCmdWriteAccelerationStructuresPropertiesKHR) \
+    X(vkCmdCopyAccelerationStructureKHR) \
+    X(vkGetQueryPoolResults)
 
 /** Every entry point the backend calls, resolved by vk_loader.c. */
 typedef struct de__vk_fns {
@@ -243,7 +251,8 @@ enum {
     DE__VK_BINDING_STORAGE_IMAGES = 1,
     DE__VK_BINDING_SAMPLERS = 2,
     DE__VK_BINDING_STORAGE_BUFFERS = 3,
-    DE__VK_BINDING_COUNT = 4
+    DE__VK_BINDING_ACCELS = 4,
+    DE__VK_BINDING_COUNT = 5
 };
 
 /**
@@ -780,4 +789,25 @@ void de__vk_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32 
 bool de__vk_device_lost(de_gpu_device *d);
 size_t de__vk_device_lost_report(de_gpu_device *d, char *out, size_t cap);
 
+/* DENG-42 */
+typedef struct de__vk_accel {
+    VkAccelerationStructureKHR handle;
+    de__gpu_buffer *storage;
+    VkQueryPool query;
+    VkAccelerationStructureGeometryKHR *geometry;
+    VkAccelerationStructureBuildRangeInfoKHR *ranges;
+    u32 *counts;
+    u32 scratch_alignment;
+} de__vk_accel;
+de_result de__vk_accel_sizes(de_gpu_device *, const de_gpu_accel_desc *, de_gpu_accel_sizes *);
+de_result de__vk_accel_create(de_gpu_device *, de__gpu_accel *, const de_gpu_accel_desc *);
+void de__vk_accel_destroy(de_gpu_device *, de__gpu_accel *);
+u64 de__vk_accel_address(de_gpu_device *, de__gpu_accel *);
+void de__vk_accel_blas(de_gpu_cmd *, de__gpu_accel *, bool);
+void de__vk_accel_tlas(de_gpu_cmd *, de__gpu_accel *, de__gpu_buffer *, u32, bool);
+void de__vk_accel_emit(de_gpu_cmd *, de__gpu_accel *);
+bool de__vk_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
+void de__vk_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
+bool de__vk_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32, u32);
+void de__vk_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
 #endif

@@ -166,6 +166,7 @@ typedef enum de_gpu_format {
     DE_FMT_BC6H_UFLOAT,
     DE_FMT_BC7_UNORM,
     DE_FMT_BC7_SRGB,
+    DE_FMT_RGB32_FLOAT, /**< S16: float3 acceleration-structure positions. */
     DE_FMT_COUNT_
 } de_gpu_format;
 
@@ -340,7 +341,7 @@ typedef struct de_gpu_pipeline_desc {
 DE_API de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_desc *desc);
 DE_API void de_gpu_pipeline_destroy(de_gpu_device *d, de_gpu_pipeline p);
 
-/* ---------- Acceleration structures (S16: DE_ERR_UNSUPPORTED until then) ---------- */
+/* ---------- Acceleration structures ---------- */
 typedef struct de_gpu_blas_geometry {
     de_gpu_buffer vertices;
     u64 vertex_offset;
@@ -371,10 +372,23 @@ typedef struct de_gpu_tlas_instance {
     de_gpu_accel blas;
 } de_gpu_tlas_instance;
 
-/** Returns an invalid handle with DE_ERR_UNSUPPORTED on every backend until S16. */
+/** Copies geometry descriptions; their buffers must remain alive through every build. */
 DE_API de_gpu_accel de_gpu_accel_create(de_gpu_device *d, const de_gpu_accel_desc *desc);
 DE_API void de_gpu_accel_destroy(de_gpu_device *d, de_gpu_accel a);
 DE_API u32 de_gpu_accel_bindless(de_gpu_device *d, de_gpu_accel tlas);
+
+/** Prebuild requirements; all zero on invalid input or unsupported devices. */
+typedef struct de_gpu_accel_sizes {
+    u64 accel_bytes, build_scratch_bytes, update_scratch_bytes;
+} de_gpu_accel_sizes;
+DE_API de_gpu_accel_sizes de_gpu_accel_query_sizes(de_gpu_device *d,
+                                                  const de_gpu_accel_desc *desc);
+/** Outside rendering, after a BLAS build with allow_compaction. */
+DE_API void de_gpu_cmd_accel_emit_compacted_size(de_gpu_cmd *c, de_gpu_accel blas);
+/** False until the emitting submission completed; never waits for the GPU. */
+DE_API bool de_gpu_accel_compacted_size(de_gpu_device *d, de_gpu_accel blas, u64 *out_bytes);
+/** Requires a completed compacted-size query. Caller retains ownership of src. */
+DE_API de_gpu_accel de_gpu_cmd_accel_compact(de_gpu_cmd *c, de_gpu_accel src);
 
 /* ---------- Queries ---------- */
 typedef enum de_gpu_query_type { DE_QUERY_TIMESTAMP } de_gpu_query_type;
@@ -469,6 +483,9 @@ DE_API void de_gpu_cmd_dispatch(de_gpu_cmd *c, u32 x, u32 y, u32 z);
 DE_API void de_gpu_cmd_dispatch_indirect(de_gpu_cmd *c, de_gpu_buffer args, u64 offset);
 DE_API void de_gpu_cmd_dispatch_rays(de_gpu_cmd *c, u32 w, u32 h, u32 depth);
 DE_API void de_gpu_cmd_build_blas(de_gpu_cmd *c, de_gpu_accel blas, bool update);
+/** Builds/refits consume compute pipeline state; bind the user pipeline before dispatching.
+ * Instance buffers contain 60-byte de_gpu_tlas_instance records. A stale/unbuilt BLAS handle
+ * is translated to an inactive native instance (mask zero, address zero). */
 DE_API void de_gpu_cmd_build_tlas(de_gpu_cmd *c, de_gpu_accel tlas, de_gpu_buffer instances,
                                   u32 count, bool update);
 DE_API void de_gpu_cmd_copy_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off, de_gpu_buffer src,

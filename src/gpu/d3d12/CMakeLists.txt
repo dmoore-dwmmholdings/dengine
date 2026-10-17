@@ -17,6 +17,7 @@ de_add_module(
         d3d12_agility_exports.h
         d3d12_caps.c
         d3d12_device.c
+        d3d12_accel.c
         d3d12_memory.c
         d3d12_resources.c
         d3d12_bindless.c

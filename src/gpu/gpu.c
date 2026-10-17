@@ -3,6 +3,7 @@
  * backend contract and de_gpu.h for the API.
  */
 #include "gpu/gpu_backend.h"
+#include "gpu/gpu_accel_internal.h"
 #include "gpu/breadcrumbs_internal.h" /* DENG-328 */
 
 #include <string.h>
@@ -215,6 +216,8 @@ static void reclaim(void *user, u32 kind, u32 index) {
         if (vt->accel_destroy)
             vt->accel_destroy(d, a);
         de__gpu_bindless_free(&d->bindless, DE__GPU_BINDLESS_ACCEL, a->bindless);
+        if (a->geometries)
+            DE_FREE(d->alloc, a->geometries, a->desc.geometry_count * sizeof *a->geometries);
         break;
     }
     case DE__GPU_SWAPCHAIN:
@@ -310,6 +313,7 @@ static void free_cmds(de_gpu_device *d) {
     de_gpu_cmd *c = d->cmd_all;
     while (c) {
         de_gpu_cmd *next = c->all_next;
+        de__gpu_accel_cmd_fini(c);
         if (d->vt->cmd_fini)
             d->vt->cmd_fini(d, c);
         DE_FREE(d->alloc, c, d->cmd_bytes);
@@ -468,7 +472,7 @@ void de_gpu_wait_idle(de_gpu_device *d) {
 /* ---------- Buffers ---------- */
 
 #define BUFFER_BINDLESS_USAGE                                                                      \
-    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE)
+    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT)
 
 /* de_gpu_buffer_create, or placed creation at (heap, offset) when `region` is set. */
 static de_gpu_buffer buffer_create(de_gpu_device *d, const de_gpu_buffer_desc *desc,
@@ -841,26 +845,11 @@ void de_gpu_pipeline_destroy(de_gpu_device *d, de_gpu_pipeline p) {
 /* ---------- Acceleration structures (S16) ---------- */
 
 de_gpu_accel de_gpu_accel_create(de_gpu_device *d, const de_gpu_accel_desc *desc) {
-    de_gpu_accel h = {0};
-    (void)desc;
-    if (!d) {
-        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_gpu_accel_create: device is NULL");
-        return h;
-    }
-    de__gpu_fail(d, DE_ERR_UNSUPPORTED,
-                 "de_gpu_accel_create: acceleration structures are not available before S16");
-    return h;
+    return de__gpu_accel_create(d, desc, 0);
 }
 
 void de_gpu_accel_destroy(de_gpu_device *d, de_gpu_accel a) {
     destroy_object(d, DE__GPU_ACCEL, a.id, "de_gpu_accel_destroy");
-}
-
-u32 de_gpu_accel_bindless(de_gpu_device *d, de_gpu_accel tlas) {
-    if (!d)
-        return DE_GPU_BINDLESS_INVALID;
-    de__gpu_accel *a = (de__gpu_accel *)resolve(d, DE__GPU_ACCEL, tlas.id, "de_gpu_accel_bindless");
-    return a ? a->bindless : DE_GPU_BINDLESS_INVALID;
 }
 
 /* ---------- Query heaps ---------- */
@@ -988,6 +977,7 @@ de_result de_gpu_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_sub
         de_gpu_cmd *c = s->cmds[i];
         c->state = DE__GPU_CMD_SUBMITTED;
         c->queue_value = value;
+        de__gpu_accel_submitted(c, value);
         c->next = NULL;
         if (d->cmd_inflight_tail[q])
             d->cmd_inflight_tail[q]->next = c;
@@ -1147,6 +1137,8 @@ de_gpu_cmd *de_gpu_cmd_begin(de_gpu_device *d, de_gpu_queue q, const char *name)
     c->bc_ranges = 0; /* DENG-328 */
     c->bc_dropped = 0;
     c->queue_value = 0;
+    ++c->accel_serial;
+    c->accel_cursor = c->accel_scratch;
     c->next = NULL;
     copy_name(c->name, name);
     if (d->vt->cmd_begin &&
@@ -1401,21 +1393,6 @@ void de_gpu_cmd_dispatch_rays(de_gpu_cmd *c, u32 w, u32 h, u32 depth) {
     (void)h;
     (void)depth;
     rt_unsupported(c, "de_gpu_cmd_dispatch_rays");
-}
-
-void de_gpu_cmd_build_blas(de_gpu_cmd *c, de_gpu_accel blas, bool update) {
-    (void)blas;
-    (void)update;
-    rt_unsupported(c, "de_gpu_cmd_build_blas");
-}
-
-void de_gpu_cmd_build_tlas(de_gpu_cmd *c, de_gpu_accel tlas, de_gpu_buffer instances, u32 count,
-                           bool update) {
-    (void)tlas;
-    (void)instances;
-    (void)count;
-    (void)update;
-    rt_unsupported(c, "de_gpu_cmd_build_tlas");
 }
 
 void de_gpu_cmd_copy_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off, de_gpu_buffer src,

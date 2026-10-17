@@ -294,7 +294,21 @@ void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
                                          DE__GPU_PAYLOAD(de__vk_buffer, bb)->buffer, NULL,
                                          &bufs[nb++]);
             }
-            /* Acceleration structures: S16. */
+            else if (x->accel.id) {
+                VkMemoryBarrier2 m = {0};
+                m.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                de__vk_access_info src = de__vk_access_info_of(&vc->barrier_ctx, x->before, false, false, false, true);
+                de__vk_access_info dst = de__vk_access_info_of(&vc->barrier_ctx, x->after, false, false, false, false);
+                m.srcStageMask = src.stages;
+                m.srcAccessMask = src.access;
+                m.dstStageMask = dst.stages;
+                m.dstAccessMask = dst.access;
+                VkDependencyInfo dep = {0};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers = &m;
+                vk->fn.vkCmdPipelineBarrier2(vc->cb, &dep);
+            }
         }
         if (ni == 0 && nb == 0)
             continue;

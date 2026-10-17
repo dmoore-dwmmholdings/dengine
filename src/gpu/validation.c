@@ -37,6 +37,7 @@ static const fmt_info k_formats[DE_FMT_COUNT_] = {
     [DE_FMT_RG32_UINT] = {"DE_FMT_RG32_UINT", false, false, false, 8},
     [DE_FMT_R32_FLOAT] = {"DE_FMT_R32_FLOAT", false, false, false, 4},
     [DE_FMT_RG32_FLOAT] = {"DE_FMT_RG32_FLOAT", false, false, false, 8},
+    [DE_FMT_RGB32_FLOAT] = {"DE_FMT_RGB32_FLOAT", false, false, false, 12},
     [DE_FMT_RGBA32_FLOAT] = {"DE_FMT_RGBA32_FLOAT", false, false, false, 16},
     [DE_FMT_R11G11B10_FLOAT] = {"DE_FMT_R11G11B10_FLOAT", false, false, false, 4},
     [DE_FMT_RGB10A2_UNORM] = {"DE_FMT_RGB10A2_UNORM", false, false, false, 4},
