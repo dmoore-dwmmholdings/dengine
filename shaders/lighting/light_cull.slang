@@ -25,6 +25,7 @@
 // not, and shading does not depend on the order beyond float summation.
 import bindless;
 import push_constants;
+import "../shadows/atlas_sample";
 import "../lighting/lighting_common";
 
 /// Threads of cs_light_scan.
@@ -73,7 +74,7 @@ void push_local(CullParams pc, DeLightingView lv, DeClusterLight l)
 }
 
 /// The cluster light of GPU-scene light `g` (not directional).
-DeClusterLight local_light(DeGpuLight g, DeSceneConstants sc, DeLightingView lv)
+DeClusterLight local_light(DeGpuLight g, DeSceneConstants sc, DeLightingView lv, uint atlas)
 {
     DeClusterLight l;
     uint kind = g.kind;
@@ -121,6 +122,9 @@ DeClusterLight local_light(DeGpuLight g, DeSceneConstants sc, DeLightingView lv)
     l.color = float4(color, cos_o);
     l.shape = float4(1.0 / max(cos_i - cos_o, 1e-4), half_x, half_y, asfloat(kind));
     uint flags = (g.flags & DE_GPU_LIGHT_CAST_SHADOWS) != 0u ? DE_CLUSTER_LIGHT_SHADOWS : 0u;
+    // Bits 8..15 are an immutable per-view face-record index, resolved before atomic compaction.
+    // Shared GPU-scene records and the 96-byte cluster ABI remain unchanged.
+    flags |= atlas_find(atlas, uint2(g.entity_lo,g.entity_hi)) << 8u;
     l.axis = float4(kind == DE_LIGHT_KIND_SPOT ? dir_to_view(sc, dir) : ax, asfloat(flags));
     l.bound = float4(to_view(sc, pos), range + extent);
     return l;
@@ -167,7 +171,7 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
         }
         if (g.kind > DE_LIGHT_KIND_DISK)
             return;
-        push_local(pc, lv, local_light(g, sc, lv));
+        push_local(pc, lv, local_light(g, sc, lv, pc.reserved1));
         return;
     }
     // Emissive proxies.

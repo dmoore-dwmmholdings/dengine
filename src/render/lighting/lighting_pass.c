@@ -95,6 +95,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_INPUT_DIFFUSE_OPAQUE", DE__INPUT_DIFFUSE_OPAQUE},
     {"DE_INPUT_SHADOW_METADATA", DE__INPUT_SHADOW_METADATA},
     {"DE_INPUT_AO_GTAO", DE__INPUT_AO_GTAO},
+    {"DE_INPUT_ATLAS_METADATA", DE__INPUT_ATLAS_METADATA},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -540,7 +541,9 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .shadow_directional = (p->input_flags & DE__INPUT_SHADOW_METADATA)
                                   ? buf_index(p, pass, p->inputs[1])
                                   : tex_index(p, pass, p->inputs[1], false),
-        .shadow_local = tex_index(p, pass, p->inputs[2], false),
+        .shadow_local = (p->input_flags & DE__INPUT_ATLAS_METADATA)
+                            ? buf_index(p, pass, p->inputs[2])
+                            : tex_index(p, pass, p->inputs[2], false),
         .contact_shadows = tex_index(p, pass, p->inputs[3], false),
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
         .indirect_specular = tex_index(p, pass, p->inputs[5], false),
@@ -703,6 +706,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     const bool sss = in.subsurface; /* DENG-306 */
     fill_view(lt, vc, &in, split, sss, lc);
     lc->shadow_records = in.shadow_records;
+    lc->atlas_records = in.atlas_records;
+    lc->atlas_texture = in.atlas_texture;
     lc->shadow_texture_count = in.shadow_texture_count;
     memcpy(lc->shadow_textures, in.shadow_textures, sizeof lc->shadow_textures);
     lc->gi_records = in.gi_records;
@@ -820,7 +825,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         const de_rg_resource inputs[9] = {
             in.ao,
             DE_HANDLE_VALID(in.shadow_records) ? in.shadow_records : in.shadow_directional,
-            in.shadow_local,
+            DE_HANDLE_VALID(in.atlas_records) ? in.atlas_records : in.shadow_local,
             in.contact_shadows,
             in.indirect_diffuse,
             in.indirect_specular,
@@ -835,7 +840,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.input_flags = (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
                         (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u) |
                         (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u) |
-                        (in.ao_gtao ? DE__INPUT_AO_GTAO : 0u);
+                        (in.ao_gtao ? DE__INPUT_AO_GTAO : 0u) |
+                        (DE_HANDLE_VALID(in.atlas_records) ? DE__INPUT_ATLAS_METADATA : 0u);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;
@@ -876,6 +882,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.shadow_texture_count; ++i)
             de_rg_read(p, in.shadow_textures[i], DE_ACCESS_SHADER_READ);
+        if (DE_HANDLE_VALID(in.atlas_texture))
+            de_rg_read(p, in.atlas_texture, DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.gi_texture_count; ++i) {
             de_rg_read(p, in.gi_textures[i], DE_ACCESS_SHADER_READ);
             de_rg_write(p, in.gi_textures[i], DE_ACCESS_SHADER_WRITE);

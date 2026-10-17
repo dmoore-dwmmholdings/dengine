@@ -385,18 +385,25 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
         !view_ensure(s, st, pv, vc->view_slot))
         return;
 
+    /* Only AO/SSR/SSGI currently sample motion. Do not publish an unused sampled descriptor
+     * for a storage-written image; NULL settings retain the legacy standalone resolve contract. */
+    const de_render_settings *settings = vc->settings;
+    const bool sampled_motion = !settings || settings->ao != DE_QUALITY_OFF ||
+                                settings->reflections != DE_QUALITY_OFF ||
+                                settings->gi != DE_QUALITY_OFF;
     for (u32 t = 0; t < DE__GB_COUNT; ++t) {
         static const char *const k_names[DE__GB_COUNT] = {"vis.gb0", "vis.gb1", "vis.gb2",
                                                           "vis.motion", "vis.lighting"};
         vc->gbuffer[t] = de_rg_create_texture(
-            g, &(de_gpu_texture_desc){.format = de__gb_format(t),
-                                      .width = vc->width,
-                                      .height = vc->height,
-                                      .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED |
-                                               DE_USAGE_COPY_SRC |
-                                               /* DENG-305: the forward pass blends into it */
-                                               (t == DE__GB_LIGHTING ? DE_USAGE_RENDER_TARGET : 0u),
-                                      .name = k_names[t]});
+            g, &(de_gpu_texture_desc){
+                   .format = de__gb_format(t),
+                   .width = vc->width,
+                   .height = vc->height,
+                   .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC |
+                            (t != DE__GB_MOTION || sampled_motion ? DE_USAGE_SAMPLED : 0u) |
+                            /* DENG-305: the forward pass blends into it */
+                            (t == DE__GB_LIGHTING ? DE_USAGE_RENDER_TARGET : 0u),
+                   .name = k_names[t]});
         if (!DE_HANDLE_VALID(vc->gbuffer[t]))
             return; /* error set; finalize reports it */
     }

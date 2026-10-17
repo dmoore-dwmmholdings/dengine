@@ -18,6 +18,7 @@ public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-
 /// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
 public static const uint DE_INPUT_SHADOW_METADATA = 4;
 public static const uint DE_INPUT_AO_GTAO = 8u;
+public static const uint DE_INPUT_ATLAS_METADATA = 16u;
 
 public struct LightingInputs
 {
@@ -62,6 +63,7 @@ public float de_input_shadow_directional(LightingInputs i, uint2 p, uint light)
 /// without a producer; S15 replaces the body when it defines the layout).
 public float de_input_shadow_local(LightingInputs i, uint2 p, uint light)
 {
+    if ((i.reserved0 & DE_INPUT_ATLAS_METADATA) != 0u) return 1.0;
     return de_input_load(i.shadow_local, p, float4(1.0, 1.0, 1.0, 1.0)).r;
 }
 

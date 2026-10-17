@@ -390,6 +390,7 @@ typedef struct lx {
      * de__sss_create_ex; lx_frame then asks lighting for the subsurface split and builds the SSS
      * passes at sss_quality, and keeps the frame's context in sss_frame. */
     de__csm *csm;
+    de__shadow_atlas *atlas; /* DENG-336: optional production local-shadow owner. */
     de__forward *forward;
     de_quality shadow_quality;
     de__sss *sss;
@@ -466,6 +467,8 @@ static inline void lx_teardown(lx *f) {
     f->forward = NULL;
     de__csm_destroy(f->csm);
     f->csm = NULL;
+    de__shadow_atlas_destroy(f->atlas);
+    f->atlas = NULL;
     if (f->g) {
         de__rg_reset(f->g);
         de__rg_destroy(f->g);
@@ -757,7 +760,7 @@ static inline bool lx_frame(lx *f) {
     if (de__vis_frame_build(f->vis, f->g, &d, &vc) != DE_OK || vc == NULL)
         return false;
     EXPECT_TRUE(de__vis_frame_context(f->vis, d.view, f->g, n) == vc);
-    if (f->csm) {
+    if (f->csm || f->atlas) {
         de__rw_view cam = {.offset = f->eye,
                            .camera = {.near_z = .1f,
                                       .projection = f->ortho_height > 0 ? DE_PROJ_ORTHOGRAPHIC
@@ -773,11 +776,16 @@ static inline bool lx_frame(lx *f) {
                              .height = f->height,
                              .view_matrix = view,
                              .proj = proj};
-        if (de__csm_build(f->csm, &vf, vc) != DE_OK) {
+        if (f->csm && de__csm_build(f->csm, &vf, vc) != DE_OK) {
             de__csm_complete(f->csm, d.view, f->g, false, false);
             return false;
         }
         de__csm_publish(f->csm, d.view, f->g, n, de__lighting_view_inputs(f->lt, 0));
+        if (f->atlas && de__shadow_atlas_build(f->atlas, &vf, vc) != DE_OK) {
+            de__shadow_atlas_complete(f->atlas, d.view, f->g, false, false);
+            return false;
+        }
+        de__shadow_atlas_publish(f->atlas, d.view, f->g, n, de__lighting_view_inputs(f->lt, 0));
     }
     de__lighting_context *lc = NULL;
     if (f->sss != NULL) /* DENG-306: SUBSURFACE pixels split their diffuse off for the SSS pass */
@@ -878,6 +886,7 @@ static inline bool lx_frame(lx *f) {
                                                         .frame_fence = f->fence,
                                                         .frame_value = n + 1});
     de__csm_complete(f->csm, d.view, f->g, csm_attempted, r == DE_OK);
+    de__shadow_atlas_complete(f->atlas, d.view, f->g, csm_attempted, r == DE_OK);
     if (r != DE_OK) {
         fprintf(stderr, "frame %llu: %s\n", (unsigned long long)n,
                 de_error_last() ? de_error_last()->message : "?");

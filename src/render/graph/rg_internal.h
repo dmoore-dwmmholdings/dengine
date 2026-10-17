@@ -631,6 +631,11 @@ const de__rg_timings *de__rg_timings_get(const de_rg *g);
 void de__rg_fill_stats(const de_rg *g, de_render_stats *s);
 /** The last executed frame's partition (for tests and the stats overlay). */
 const de__rg_chunk *de__rg_exec_chunks(const de_rg *g, u32 *count);
+/** Production recording partition. Optional per-queue native capacities include `reserved`
+ * wait/signal heads and timestamp resolves. Coarsens only within batches; irreducible overflow
+ * fails before recording begins. NULL limits preserves the configured cost partition exactly. */
+de_result de__rg_partition_recording(de_rg *g, u32 target, const u32 limits[DE_QUEUE_COUNT_],
+                                     const u32 reserved[DE_QUEUE_COUNT_]);
 /** The breadcrumb id of step `step` in timing slot `slot`: graph tag << 24 | slot << 22 | step. */
 u32 de__rg_breadcrumb_id(const de_rg *g, u32 slot, u32 step);
 /** Waits for the graph's submitted work, then frees the execute state (timelines, heaps,

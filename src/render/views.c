@@ -864,6 +864,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->ok = res == DE_OK;
     }
     de__csm_complete(r->csm, vf.view, g, shadow_attempted, res == DE_OK);
+    de__shadow_atlas_complete(r->shadow_atlas, vf.view, g, shadow_attempted, res == DE_OK);
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
     de__gtao_complete(r->gtao, vf.view, g, shadow_attempted, res == DE_OK);
     de__irradiance_view_complete(r, vf.view, res == DE_OK);
@@ -1019,6 +1020,29 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
         if (vs->rs[i].live && vs->rs[i].copy.capture)
             vs->rs[i].active = true;
     sort_views(vs);
+
+    /* Light-space maps are shared by caster mask. Register all receivers before any graph so
+     * capture faces cannot multiply the global update budget or change group quality mid-frame. */
+    const de__rw_view *ranking_camera = NULL;
+    for (u32 k = 0; k < vs->order_count; ++k) {
+        const view_rs *s = &vs->rs[vs->order[k]];
+        if (!s->copy.capture && world && s->camera < world->view_count) {
+            ranking_camera = &world->views[s->camera];
+            break;
+        }
+    }
+    if (!ranking_camera && vs->order_count)
+        ranking_camera = &vs->rs[vs->order[0]].copy.capture_camera;
+    de__shadow_atlas_frame_begin(r->shadow_atlas, frame_index, ranking_camera);
+    for (u32 k = 0; k < vs->order_count; ++k) {
+        const view_rs *s = &vs->rs[vs->order[k]];
+        const de_render_settings settings = effective_settings(r, &s->copy, &r->frame);
+        const de_result registration =
+            de__shadow_atlas_frame_view(r->shadow_atlas, make_handle(vs->order[k], s->gen),
+                                        s->copy.layer_mask, settings.shadows);
+        if (registration != DE_OK)
+            DE_ERROR(r->log, "shadow atlas receiver registration: %s", de_result_str(registration));
+    }
 
     r->stats.gpu_ms = 0.0f;
     r->stats.cpu_record_ms = 0.0f;

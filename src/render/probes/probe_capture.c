@@ -59,6 +59,7 @@ de_vec3 de__probe_parallax(const DeReflectionProbe *p, de_vec3 x, de_vec3 d) {
 }
 
 #include "render/renderer_internal.h"
+#include "render/shadows/shadows_internal.h"
 #include "render/lighting/lighting.h"
 #include <stdio.h>
 typedef struct probe_filter_params {
@@ -232,6 +233,10 @@ de_result de__probe_capture_complete(de__probe_capture *c, de__probe_store *s, d
             if (!de__view_info_get(c->renderer, c->views[f], &info) ||
                 info.executed != c->expected_executed[f] + 1)
                 return DE_FAIL(DE_ERR_INTERNAL, "probe capture: face view failed");
+            /* A successful cold atlas graph can deliberately use an unshadowed fallback.
+             * Keep the existing capture queue pending rather than baking that fallback. */
+            if (!de__shadow_atlas_capture_ready(c->renderer->shadow_atlas, c->views[f]))
+                return DE_FAIL(DE_ERR_BUSY, "probe capture: local shadow atlas warming");
         }
     de_gpu_device *dev = c->renderer->dev;
     de_gpu_cmd *cmd = de_gpu_cmd_begin(dev, DE_QUEUE_GRAPHICS, "probe.capture_prefilter");

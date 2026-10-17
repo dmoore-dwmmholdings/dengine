@@ -338,6 +338,10 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
             de_rg_read(p, reads[i], DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(lc->shadow_records))
         de_rg_read(p, lc->shadow_records, DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->atlas_records))
+        de_rg_read(p, lc->atlas_records, DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->atlas_texture))
+        de_rg_read(p, lc->atlas_texture, DE_ACCESS_SHADER_READ);
     for (u32 i = 0; i < lc->shadow_texture_count; ++i)
         de_rg_read(p, lc->shadow_textures[i], DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(lc->gi_records))

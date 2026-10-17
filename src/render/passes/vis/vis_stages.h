@@ -535,7 +535,8 @@ typedef struct de__vis_context {
      * run) ---- */
     /** The thin G-buffer at width x height, indexed DE__GB0 .. DE__GB_LIGHTING (gbuffer.h):
      * GB0..GB2, motion vectors and the HDR lighting target (emissive). Left in
-     * DE_ACCESS_SHADER_WRITE; readers declare their access (STORAGE | SAMPLED | COPY_SRC). */
+     * DE_ACCESS_SHADER_WRITE; readers declare their access (STORAGE | SAMPLED | COPY_SRC).
+     * Motion omits SAMPLED when concrete settings disable all current AO/SSR/SSGI readers. */
     de_rg_resource gbuffer[5];
     /** Tests (de__vis_resolve_set_debug): RGBA32F world position (xyz, 1) and UV0 / UV1 per
      * pixel of a resolved surface. Invalid otherwise. */

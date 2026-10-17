@@ -52,3 +52,5 @@ de_engine_shader(gtao_filter ao/gtao_filter.slang)
 
 de_engine_shader(scene_color_pyramid forward/scene_color_pyramid.slang)
 de_engine_shader(ss_refraction forward/ss_refraction.slang)
+
+de_engine_shader(shadow_atlas shadows/atlas_sample.slang)

@@ -203,6 +203,7 @@ typedef struct de__lighting_context {
     de_rg_resource gi_records, gi_textures[16], gi_buffers[8];
     u32 gi_texture_count, gi_buffer_count;
     de_rg_resource shadow_records, shadow_textures[8];
+    de_rg_resource atlas_records, atlas_texture;
     u32 shadow_texture_count;
 } de__lighting_context;
 
