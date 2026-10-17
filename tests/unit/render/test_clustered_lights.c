@@ -1038,6 +1038,8 @@ static u32 struct_words(const char *text, const char *name) {
         const u32 n = br != NULL && semi != NULL && br < semi ? (u32)strtoul(br + 1, NULL, 10) : 1u;
         if (strncmp(s, "float4 ", 7) == 0)
             words += 4u * n;
+        else if (strncmp(s, "uint3 ", 6) == 0)
+            words += 3u * n;
         else if (strncmp(s, "uint ", 5) == 0 || strncmp(s, "float ", 6) == 0)
             words += n;
         else if (strncmp(s, "LightingInputs ", 15) == 0 || strncmp(s, "DeClusterLists ", 15) == 0)
@@ -1088,7 +1090,7 @@ TEST(clustered_lights, layout_match) {
     EXPECT_EQ(struct_words(texts[0], "DeLightingView") * 4u, (u32)sizeof(de__lighting_view));
     EXPECT_EQ(struct_words(texts[0], "DeClusterLists") * 4u, 32u);
     EXPECT_EQ(struct_words(texts[1], "DeClusterLight") * 4u, (u32)sizeof(de__cluster_light));
-    EXPECT_EQ(struct_words(texts[2], "CullParams") * 4u, 48u);
+    EXPECT_EQ(struct_words(texts[2], "CullParams") * 4u, 64u);      /* clusters.c cl_cull_params */
     EXPECT_EQ(struct_words(texts[4], "LightingParams") * 4u, 128u); /* DENG-429 */
     EXPECT_EQ(struct_words(texts[5], "LightingInputs") * 4u, (u32)sizeof(de__lighting_inputs_gpu));
     EXPECT_EQ(struct_words(texts[6], "ClusterBuildParams") * 4u, 32u);

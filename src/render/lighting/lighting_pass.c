@@ -96,6 +96,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_INPUT_SHADOW_METADATA", DE__INPUT_SHADOW_METADATA},
     {"DE_INPUT_AO_GTAO", DE__INPUT_AO_GTAO},
     {"DE_INPUT_ATLAS_METADATA", DE__INPUT_ATLAS_METADATA},
+    {"DE_INPUT_CONTACT_METADATA", DE__INPUT_CONTACT_METADATA},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
