@@ -544,7 +544,9 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .shadow_local = (p->input_flags & DE__INPUT_ATLAS_METADATA)
                             ? buf_index(p, pass, p->inputs[2])
                             : tex_index(p, pass, p->inputs[2], false),
-        .contact_shadows = tex_index(p, pass, p->inputs[3], false),
+        .contact_shadows = (p->input_flags & DE__INPUT_CONTACT_METADATA)
+                               ? buf_index(p, pass, p->inputs[3])
+                               : tex_index(p, pass, p->inputs[3], false),
         .indirect_diffuse = tex_index(p, pass, p->inputs[4], false),
         .indirect_specular = tex_index(p, pass, p->inputs[5], false),
         .reserved0 = p->input_flags,
@@ -707,6 +709,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     fill_view(lt, vc, &in, split, sss, lc);
     lc->shadow_records = in.shadow_records;
     lc->atlas_records = in.atlas_records;
+    lc->contact_records = in.contact_records;
     lc->atlas_texture = in.atlas_texture;
     lc->shadow_texture_count = in.shadow_texture_count;
     memcpy(lc->shadow_textures, in.shadow_textures, sizeof lc->shadow_textures);
@@ -826,7 +829,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             in.ao,
             DE_HANDLE_VALID(in.shadow_records) ? in.shadow_records : in.shadow_directional,
             DE_HANDLE_VALID(in.atlas_records) ? in.atlas_records : in.shadow_local,
-            in.contact_shadows,
+            DE_HANDLE_VALID(in.contact_records) ? in.contact_records : in.contact_shadows,
             in.indirect_diffuse,
             in.indirect_specular,
             in.probe_records,
@@ -841,7 +844,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
                         (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u) |
                         (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u) |
                         (in.ao_gtao ? DE__INPUT_AO_GTAO : 0u) |
-                        (DE_HANDLE_VALID(in.atlas_records) ? DE__INPUT_ATLAS_METADATA : 0u);
+                        (DE_HANDLE_VALID(in.atlas_records) ? DE__INPUT_ATLAS_METADATA : 0u) |
+                        (DE_HANDLE_VALID(in.contact_records) ? DE__INPUT_CONTACT_METADATA : 0u);
         lp_pass *pd = pass_data(vc, &b);
         if (pd == NULL)
             return DE_OK;
@@ -882,6 +886,10 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.shadow_texture_count; ++i)
             de_rg_read(p, in.shadow_textures[i], DE_ACCESS_SHADER_READ);
+        if (DE_HANDLE_VALID(in.contact_records)) {
+            de_rg_read(p, in.contact_shadows, DE_ACCESS_SHADER_READ);
+            de_rg_read(p, in.contact_local, DE_ACCESS_SHADER_READ);
+        }
         if (DE_HANDLE_VALID(in.atlas_texture))
             de_rg_read(p, in.atlas_texture, DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.gi_texture_count; ++i) {

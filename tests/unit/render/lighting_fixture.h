@@ -11,6 +11,7 @@
 
 #include "render/passes/sss/sss.h"
 #include "render/shadows/shadows_internal.h"
+#include "render/shadows/contact_internal.h"
 #include "render/passes/forward/forward.h"
 #define WAIT_NS             (10ull * 1000000000ull)
 #define FIRST_FRAME_WAIT_NS (120ull * 1000000000ull) /* lavapipe JIT (DENG-428) */
@@ -391,6 +392,9 @@ typedef struct lx {
      * passes at sss_quality, and keeps the frame's context in sss_frame. */
     de__csm *csm;
     de__shadow_atlas *atlas; /* DENG-336: optional production local-shadow owner. */
+    de__contact *contact;    /* DENG-337: NULL keeps all earlier fixture work unchanged. */
+    const de__contact_config *contact_config;
+    u64 contact_directional;
     de__forward *forward;
     de_quality shadow_quality;
     de__sss *sss;
@@ -465,6 +469,8 @@ static inline void free_result(lx_result *r) {
 static inline void lx_teardown(lx *f) {
     de__forward_destroy(f->forward);
     f->forward = NULL;
+    de__contact_destroy(f->contact);
+    f->contact = NULL;
     de__csm_destroy(f->csm);
     f->csm = NULL;
     de__shadow_atlas_destroy(f->atlas);
@@ -760,7 +766,7 @@ static inline bool lx_frame(lx *f) {
     if (de__vis_frame_build(f->vis, f->g, &d, &vc) != DE_OK || vc == NULL)
         return false;
     EXPECT_TRUE(de__vis_frame_context(f->vis, d.view, f->g, n) == vc);
-    if (f->csm || f->atlas) {
+    if (f->csm || f->atlas || f->contact) {
         de__rw_view cam = {.offset = f->eye,
                            .camera = {.near_z = .1f,
                                       .projection = f->ortho_height > 0 ? DE_PROJ_ORTHOGRAPHIC
@@ -786,6 +792,17 @@ static inline bool lx_frame(lx *f) {
             return false;
         }
         de__shadow_atlas_publish(f->atlas, d.view, f->g, n, de__lighting_view_inputs(f->lt, 0));
+        u64 contact_directional = f->contact_directional;
+        de__csm_info selected_csm;
+        if (f->csm && de__csm_get(f->csm, d.view, &selected_csm) && selected_csm.lights)
+            contact_directional = (u64)selected_csm.data[1].identity[0] |
+                                  ((u64)selected_csm.data[1].identity[1] << 32);
+        if (f->contact &&
+            de__contact_build(f->contact, &vf, vc, f->contact_config, contact_directional,
+                              de__lighting_view_inputs(f->lt, 0)) != DE_OK) {
+            de__contact_complete(f->contact, d.view, f->g, false);
+            return false;
+        }
     }
     de__lighting_context *lc = NULL;
     if (f->sss != NULL) /* DENG-306: SUBSURFACE pixels split their diffuse off for the SSS pass */
@@ -887,6 +904,7 @@ static inline bool lx_frame(lx *f) {
                                                         .frame_value = n + 1});
     de__csm_complete(f->csm, d.view, f->g, csm_attempted, r == DE_OK);
     de__shadow_atlas_complete(f->atlas, d.view, f->g, csm_attempted, r == DE_OK);
+    de__contact_complete(f->contact, d.view, f->g, csm_attempted);
     if (r != DE_OK) {
         fprintf(stderr, "frame %llu: %s\n", (unsigned long long)n,
                 de_error_last() ? de_error_last()->message : "?");

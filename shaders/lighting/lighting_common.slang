@@ -170,7 +170,9 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
         float vis = (lv.inputs.reserved0 & DE_INPUT_SHADOW_METADATA) != 0u ?
             csm_shadow(lv.inputs.shadow_directional, p, s.normal, asuint(l.bound.xy)) :
             de_input_shadow_directional(lv.inputs, px, i);
-        if (i == 0u)
+        if ((lv.inputs.reserved0 & DE_INPUT_CONTACT_METADATA) != 0u)
+            vis *= de_input_contact_directional(lv.inputs, px, asuint(l.bound.xy));
+        else if (i == 0u)
             vis *= de_input_contact_shadow(lv.inputs, px);
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);
     }
@@ -186,6 +188,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
         float vis = (lv.inputs.reserved0 & DE_INPUT_ATLAS_METADATA) != 0u ?
             atlas_shadow(lv.inputs.shadow_local, (asuint(l.axis.w) >> 8u) & 255u, p, s.normal) :
             de_input_shadow_local(lv.inputs, px, index);
+        vis *= de_input_contact_local(lv.inputs, px, (asuint(l.axis.w) >> 16u) & 7u);
         if (kind == DE_LIGHT_KIND_RECT || kind == DE_LIGHT_KIND_DISK)
         {
             float3 d, sp;

@@ -1,4 +1,5 @@
 #include "render/shadows/shadows_internal.h"
+#include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
@@ -58,6 +59,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__contact_destroy(r->contact);
     de__csm_destroy(r->csm);
     de__shadow_atlas_destroy(r->shadow_atlas);
     de__gtao_destroy(r->gtao);
@@ -255,6 +257,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res != DE_OK)
         goto fail;
     res = de__shadow_atlas_create(r, &r->shadow_atlas);
+    if (res != DE_OK)
+        goto fail;
+    res = de__contact_create(r, &r->contact);
     if (res != DE_OK)
         goto fail;
     res = de__gtao_create(r, &r->gtao);

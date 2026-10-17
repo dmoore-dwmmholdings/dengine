@@ -972,3 +972,22 @@ if(TARGET test_render_shadow_atlas)
         endif()
     endif()
 endif()
+
+# DENG-337: physical PCSS and opaque direct-light contact acceptance.
+de_add_test(NAME render_pcss_contact
+    SOURCES test_pcss_contact.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_tp_stb de_golden_flip
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_pcss_contact)
+    target_compile_definitions(test_render_pcss_contact PRIVATE
+        "DE_PCSS_GAP_REFERENCE=\"${DE_ROOT_DIR}/tests/golden/refs/metal/base/contact_gap.png\"")
+    target_include_directories(test_render_pcss_contact PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_pcss_contact PRIVATE version)
+        de_d3d12_agility_deploy(test_render_pcss_contact)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_pcss_contact)
+        endif()
+    endif()
+endif()

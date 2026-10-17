@@ -396,3 +396,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE shadows/atlas_alloc.c shadows/shadow_atlas.c)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE shadows/contact_shadows.c shadows/contact_internal.h)
+endif()

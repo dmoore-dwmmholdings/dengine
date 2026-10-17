@@ -2,15 +2,8 @@
 // depth-array layer. Atlas clients provide a clamp rectangle of safe texel centres.
 module shadow_filter;
 import bindless;
-public struct ShadowMapRef
-{
-    public uint texture;
-    public uint layer;
-    public uint taps;
-    public uint resolution;
-    public float4 uv_clamp;
-};
-public float shadow_filter(ShadowMapRef map, float3 uvz, float filter_radius_uv)
+__exported import pcss;
+public float shadow_pcf(ShadowMapRef map, float3 uvz, float filter_radius_uv)
 {
     if (map.texture == 0u || map.resolution == 0u) return 1.0;
     uint taps = clamp(map.taps, 1u, 32u);
@@ -27,4 +20,13 @@ public float shadow_filter(ShadowMapRef map, float3 uvz, float filter_radius_uv)
         lit += uvz.z >= depth ? 1.0 : 0.0; // reverse-Z: receiver nearer than stored caster
     }
     return lit / float(taps);
+}
+
+public float shadow_filter(ShadowMapRef map, float3 uvz, float filter_radius_uv)
+{
+    // Do not perturb the original PCF arithmetic, taps, order or rotation on either fallback.
+    if (!(map.depth_projection.w > 0.0) || map.filter_state.y <= 1u ||
+        map.filter_state.x == 0u)
+        return shadow_pcf(map, uvz, filter_radius_uv);
+    return de_shadow_pcss(map, uvz);
 }

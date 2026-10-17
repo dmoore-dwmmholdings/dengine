@@ -350,3 +350,18 @@ de_result de__shadow_copy_layer(de__shadow_views *s, de_rg *g, de_rg_resource de
     de_rg_export(g, mirror, DE_ACCESS_SHADER_READ);
     return g->oom ? DE_ERR_OUT_OF_MEMORY : g->error_count ? DE_ERR_INVALID_ARGUMENT : DE_OK;
 }
+
+/* Both map owners may be constructed independently by internal tests. Registry ownership stays
+ * in core; a second owner reuses the same user-configured handle without resetting its value. */
+de_cvar de__shadow_pcss_register(void) {
+    de_cvar cv = de_cvar_find("r.pcss_max_radius_texels");
+    if (!DE_HANDLE_VALID(cv))
+        cv = de_cvar_register(&(de_cvar_desc){
+            .name = "r.pcss_max_radius_texels",
+            .type = DE_CVAR_FLOAT,
+            .default_number = 32,
+            .min = 0,
+            .max = 256,
+            .help = "Maximum PCSS blocker-search and filter radius in full-map texels"});
+    return cv;
+}

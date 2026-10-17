@@ -41,7 +41,7 @@ struct de__shadow_atlas {
     de__shadow_views *pool;
     de__engine_shader_code clear_code;
     de_gpu_pipeline clear_pipeline;
-    de_cvar cv_size, cv_max, cv_updates;
+    de_cvar cv_size, cv_max, cv_updates, cv_pcss;
     u64 context_frame;
     u32 next_context;
     atlas_view views[DE__VIEW_MAX];
@@ -98,6 +98,7 @@ de_result de__shadow_atlas_create_ex(de_gpu_device *dev, const de_allocator *all
         DE_FREE(alloc, s, sizeof *s);
         return result;
     }
+    s->cv_pcss = de__shadow_pcss_register();
     s->cv_size = de_cvar_register(
         &(de_cvar_desc){.name = "r.shadow_atlas_size",
                         .type = DE_CVAR_INT,
@@ -617,7 +618,13 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
                 .resolution = size,
                 .uv_clamp = {((f32)tile.x + 2.5f) / size, ((f32)tile.y + 2.5f) / size,
                              ((f32)(tile.x + tile.size) - 2.5f) / size,
-                             ((f32)(tile.y + tile.size) - 2.5f) / size}};
+                             ((f32)(tile.y + tile.size) - 2.5f) / size},
+                .depth_projection = {near_z, range, tangent, l->source_radius},
+                .uv_projection = {entry->tile[2] / (2.f * tangent),
+                                  entry->tile[3] / (2.f * tangent), (f32)de_cvar_float(s->cv_pcss),
+                                  0.f},
+                .filter_state = {2u, (u32)vf->settings->shadows, (u32)vf->frame_index,
+                                 taps < 16u ? 16u : taps}};
         }
     }
     v->lights = count;
@@ -747,8 +754,13 @@ de_result de__shadow_atlas_build(de__shadow_atlas *s, const de__view_frame *vf,
                : vf->settings->shadows == DE_QUALITY_MEDIUM ? 8
                : vf->settings->shadows == DE_QUALITY_HIGH   ? 16
                                                             : 32;
-    for (u32 i = 1; i < DE__ATLAS_RECORDS; ++i)
+    for (u32 i = 1; i < DE__ATLAS_RECORDS; ++i) {
         receiver->data[i].map.taps = taps;
+        receiver->data[i].map.filter_state[1] = (u32)vf->settings->shadows;
+        receiver->data[i].map.filter_state[2] = (u32)vf->frame_index;
+        receiver->data[i].map.filter_state[3] = taps < 16u ? 16u : taps;
+        receiver->data[i].map.uv_projection[2] = (f32)de_cvar_float(s->cv_pcss);
+    }
     memcpy(receiver->mapped[ring], receiver->data, sizeof receiver->data);
     if (!cache->lights) {
         receiver->active = false;

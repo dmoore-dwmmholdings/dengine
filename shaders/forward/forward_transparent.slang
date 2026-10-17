@@ -179,6 +179,12 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
 {
     DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.view_slot];
     DeLightingView lv = de_robuffer<DeLightingView>(pc.view)[pc.entry];
+    // New contact masks describe the opaque G-buffer surface, not this forward receiver.
+    // Keep the legacy generic outgoing input contract separate.
+    if ((lv.inputs.reserved0 & DE_INPUT_CONTACT_METADATA) != 0u) {
+        lv.inputs.contact_shadows = 0u;
+        lv.inputs.reserved0 &= ~DE_INPUT_CONTACT_METADATA;
+    }
     // SSR is weighted for this pixel's opaque G-buffer surface, not the transparent material.
     if ((lv.inputs.reserved0 & DE_INPUT_SPECULAR_OPAQUE) != 0u)
         lv.inputs.indirect_specular = 0u;
