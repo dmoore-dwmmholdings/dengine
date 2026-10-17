@@ -205,7 +205,7 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
             .buffer = v->rays, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_SHADER_READ};
         de_gpu_cmd_barriers(cmd, &b, 1);
         de__rt_trace(p->s->renderer, cmd, &p->context, v->rays, v->hits,
-                     pc.width * pc.height * pc.spp, DE__RT_CAST_SHADOWS);
+                     pc.width * pc.height * pc.spp, DE__RT_CAST_SHADOWS | DE__RT_ACCEPT_FIRST_HIT);
         b.buffer = v->hits;
         b.after = DE_ACCESS_SHADER_READ;
         de_gpu_cmd_barriers(cmd, &b, 1);
