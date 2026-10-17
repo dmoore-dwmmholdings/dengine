@@ -574,8 +574,9 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
     u32 candidates = (u32)de_cvar_int(s->candidates);
     if (!candidates)
         candidates = 32;
-    const u32 mode =
-        (unbiased ? 1 : 0) | (initial ? 2 : 0) | (s->debug.reference ? 4 : 0) | (candidates << 8);
+    const u32 mode = (unbiased ? 1 : 0) | (initial ? 2 : 0) | (s->debug.reference ? 4 : 0) |
+                     (candidates << 8) | ((u32)vc->settings->shadows << 3) |
+                     (vc->settings->rt_shadows ? 64u : 0u) | ((u32)vc->settings->tier << 16);
     bool history = v->completed && v->view.id == vc->view.id && v->epoch == s->epoch &&
                    v->last_frame + 1 == vc->frame_index && v->mode == mode && !vc->view_new;
     de_vec3 delta = de_v3_sub(v->camera, vc->camera_position);
