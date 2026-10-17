@@ -701,6 +701,9 @@ typedef struct de_render_stats {
     /* Local shadows: summed over active caster-mask groups of this renderer frame. */
     u32 shadow_atlas_occupied_texels; /**< allocated tile texels, including guards */
     u32 shadow_atlas_tiles_rendered;  /**< tile renders in successfully submitted view graphs */
+    /** S16: native BLAS plus decoded positions/metadata, charged to GPU mesh residency. */
+    u64 rt_blas_bytes;
+    u32 rt_meshes, rt_blas_count, rt_compacted_blas;
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 

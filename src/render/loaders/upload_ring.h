@@ -175,6 +175,7 @@ struct de_render_uploader {
      * referenced material in the frame after a change (render/materials/material_instances.h).
      * Any thread. */
     de_atomic_u64 material_epoch;
+    struct de_render_mesh *published_meshes; /* protected by lock; publish/unload hooks */
 };
 
 /** DENG-302: a material or texture changed (de_render_uploader.material_epoch). Any thread. */

@@ -26,6 +26,7 @@
 #include "render/materials/material_models.h"
 #include "render/views_internal.h"
 #include "render/scene/gpu_scene.h"
+#include "render/rt/rt_internal.h"
 #include "render/world/render_world.h"
 
 #include "gpu/gpu_backend.h" /* de__gpu_get_texture: the target's size and format */
@@ -67,6 +68,7 @@ static void renderer_free(de_renderer *r) {
     de__irradiance_destroy(r->irradiance);
     de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
+    de__rt_scene_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
@@ -313,6 +315,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res == DE_OK)
         res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN + 1, "gpu_scene.view",
                                       gpu_scene_view_stage, r);
+    if (res == DE_OK)
+        res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, INT32_MIN, "RT.BuildTLAS",
+                                      de__rt_view_stage, r);
     if (res != DE_OK) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: GPU scene");
         goto fail;
@@ -395,6 +400,9 @@ void de__renderer_kick_prepare(de_renderer *r) {
     de__irradiance_prepare(r, de__render_world_last(r));
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
     r->material_instances_live = de__material_instances_live(r->material_instances); /* DENG-302 */
+    const de_result rt_result = de__rt_prepare(r);
+    if (rt_result != DE_OK)
+        DE_ERROR(r->log, "RT scene prepare: %s", de_result_str(rt_result));
     /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */
     de__lighting_prepare_environment(de__views_lighting(r), r->assets, de__render_world_last(r));
     if (gr != DE_OK)

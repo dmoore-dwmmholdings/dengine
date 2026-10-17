@@ -608,3 +608,19 @@ void de_asset_flush_unused(de_asset_system *s) {
             break;
     }
 }
+
+void de__budget_resize_mesh(de_asset_system *s, de_asset_id id, const void *object, u64 bytes) {
+    if (!s || !s->budget || !id.hash)
+        return;
+    u32 handle = de__slot_find(s, id);
+    de__slot *sl = de__slot_get(s, handle);
+    if (!sl || sl->state != DE_LOAD_READY || de__slot_object(sl) != object)
+        return;
+    de__budget_slot *rec = rec_get(s, s->budget, handle, false);
+    if (!rec || !rec->accounted || rec->category != DE_ASSET_CAT_GPU_MESH)
+        return;
+    s->budget->bytes[DE_ASSET_CAT_GPU_MESH] -= rec->bytes;
+    rec->bytes = bytes;
+    sl->bytes = bytes;
+    s->budget->bytes[DE_ASSET_CAT_GPU_MESH] += bytes;
+}
