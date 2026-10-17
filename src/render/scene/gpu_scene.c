@@ -529,8 +529,8 @@ void de__gpu_scene_pack_mesh_record(const de_render_mesh *m, de__gs_mesh *o) {
 }
 
 static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
-    const de_render_mesh *m = gs->assets.mesh != NULL && DE_HANDLE_VALID(h)
-        ? gs->assets.mesh(gs->assets.user, h) : NULL;
+    const de_render_mesh *m =
+        gs->assets.mesh != NULL && DE_HANDLE_VALID(h) ? gs->assets.mesh(gs->assets.user, h) : NULL;
     de__gpu_scene_pack_mesh_record(m, o);
 }
 

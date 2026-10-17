@@ -49,13 +49,20 @@ typedef struct de__rt_scene {
     u32 blas_count, compacted_count;
 } de__rt_scene;
 /* Stable batch query ABI; ray origin/direction are render-origin-relative. */
-typedef struct de__rt_ray { f32 origin[4], direction[4]; } de__rt_ray;
-typedef struct de__rt_hit { f32 t; u32 instance, primitive; f32 u, v; u32 lod, reserved0, reserved1; } de__rt_hit;
+typedef struct de__rt_ray {
+    f32 origin[4], direction[4];
+} de__rt_ray;
+typedef struct de__rt_hit {
+    f32 t;
+    u32 instance, primitive;
+    f32 u, v;
+    u32 lod, reserved0, reserved1;
+} de__rt_hit;
 #define DE__RT_CAST_SHADOWS 1u
 /** Normal production batch path for45–50: buffers use sizeof(ray)/sizeof(hit) strides.
  * Caller declares graph read(context->dependency), ray SHADER_READ and hit SHADER_WRITE. */
-void de__rt_trace(de_renderer *,de_gpu_cmd *,const de__rt_context *,de_gpu_buffer rays,
-                   de_gpu_buffer hits,u32 count,u32 flags);
+void de__rt_trace(de_renderer *, de_gpu_cmd *, const de__rt_context *, de_gpu_buffer rays,
+                  de_gpu_buffer hits, u32 count, u32 flags);
 /** Main-thread mesh snapshot/build/compaction lifecycle; renderer thread is idle at the kick. */
 de_result de__rt_prepare(de_renderer *);
 void de__rt_scene_destroy(de_renderer *);

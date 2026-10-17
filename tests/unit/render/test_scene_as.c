@@ -50,6 +50,8 @@
 #include "render/loaders/upload_ring.h"
 
 typedef struct rt_fixture {
+    de_tracking_allocator track, dev_track;
+    de_allocator alloc, dev_alloc;
     de_gpu_device *d;
     de_renderer *r;
     de_type_registry *types;
@@ -64,252 +66,395 @@ typedef struct rt_fixture {
     de_render_submesh submesh;
     u32 flags, stages;
 } rt_fixture;
-static u32 texture_index(void *user,de_texture t) {
-    rt_fixture *f=user;
-    return t.id?de_gpu_texture_bindless(f->d,f->texture,0,false):0;
+static u32 texture_index(void *user, de_texture t) {
+    rt_fixture *f = user;
+    return t.id ? de_gpu_texture_bindless(f->d, f->texture, 0, false) : 0;
 }
-static void trace_execute(de_gpu_cmd *cmd,const de_rg_pass *pass,void *user) {
-    (void)pass;rt_fixture *f=user;
-    de__rt_context *c=&f->r->rt_scene->views[(f->view.id&255u)-1u].context;
-    de__rt_trace(f->r,cmd,c,f->rays,f->hits,2,f->flags);
-    de_gpu_barrier b={.buffer=f->hits,.before=DE_ACCESS_SHADER_WRITE,.after=DE_ACCESS_COPY_SRC};
-    de_gpu_cmd_barriers(cmd,&b,1);
-    de_gpu_cmd_copy_buffer(cmd,f->readback,0,f->hits,0,2*sizeof(de__rt_hit));
+static void trace_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    (void)pass;
+    rt_fixture *f = user;
+    de__rt_context *c = &f->r->rt_scene->views[(f->view.id & 255u) - 1u].context;
+    de__rt_trace(f->r, cmd, c, f->rays, f->hits, 2, f->flags);
+    de_gpu_barrier b = {
+        .buffer = f->hits, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->readback, 0, f->hits, 0, 2 * sizeof(de__rt_hit));
 }
-static void trace_stage(de__view_frame *vf,void *user) {
-    rt_fixture *f=user;if(vf->view.id!=f->view.id)return;
-    de__rt_context *c=de__rt_context_get(f->r,vf->view,vf->graph,vf->frame_index);
-    ASSERT_TRUE(c!=NULL);++f->stages;
-    de_rg_pass *p=de_rg_add_pass(vf->graph,"RT acceptance trace",DE_QUEUE_GRAPHICS,trace_execute,f);
-    de_rg_read(p,c->dependency,DE_ACCESS_SHADER_READ);
-    de_rg_read(p,de_rg_import_buffer(vf->graph,f->rays,DE_ACCESS_SHADER_READ),DE_ACCESS_SHADER_READ);
-    de_rg_write(p,de_rg_import_buffer(vf->graph,f->hits,DE_ACCESS_COPY_SRC),DE_ACCESS_SHADER_WRITE);
-    de_rg_write(p,de_rg_import_buffer(vf->graph,f->readback,DE_ACCESS_COPY_DST),DE_ACCESS_COPY_DST);
+static void trace_stage(de__view_frame *vf, void *user) {
+    rt_fixture *f = user;
+    if (vf->view.id != f->view.id)
+        return;
+    de__rt_context *c = de__rt_context_get(f->r, vf->view, vf->graph, vf->frame_index);
+    ASSERT_TRUE(c != NULL);
+    ++f->stages;
+    de_rg_pass *p =
+        de_rg_add_pass(vf->graph, "RT acceptance trace", DE_QUEUE_GRAPHICS, trace_execute, f);
+    de_rg_read(p, c->dependency, DE_ACCESS_SHADER_READ);
+    de_rg_read(p, de_rg_import_buffer(vf->graph, f->rays, DE_ACCESS_SHADER_READ),
+               DE_ACCESS_SHADER_READ);
+    de_rg_write(p, de_rg_import_buffer(vf->graph, f->hits, DE_ACCESS_COPY_SRC),
+                DE_ACCESS_SHADER_WRITE);
+    de_rg_write(p, de_rg_import_buffer(vf->graph, f->readback, DE_ACCESS_COPY_DST),
+                DE_ACCESS_COPY_DST);
     de_rg_pass_side_effect(p);
 }
 static void rt_fixture_setup(rt_fixture *f) {
-#if defined(__APPLE__)
-    setenv("MTL_DEBUG_LAYER","1",1);
+#if !DE_HAS_GPU_METAL
+    SKIP("native Metal scene AS acceptance requires the Metal backend");
 #endif
-    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend=DE_GPU_METAL,
-        .debug_layer=true,.pipeline_cache_dir=""},&f->d),DE_OK);
+    f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_RENDER);
+    f->dev_alloc = de_tracking_allocator_init(&f->dev_track, NULL, DE_MEM_RENDER);
+#if defined(__APPLE__)
+    setenv("MTL_DEBUG_LAYER", "1", 1);
+#endif
+    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
+                                                         .debug_layer = true,
+                                                         .allocator = &f->dev_alloc,
+                                                         .pipeline_cache_dir = ""},
+                                   &f->d),
+              DE_OK);
     ASSERT_TRUE(de_gpu_get_caps(f->d)->ray_query);
-    printf("scene AS acceptance: %s\n",de_gpu_get_caps(f->d)->device_name);
-    ASSERT_EQ(de_type_registry_create(NULL,&f->types),DE_OK);
-    ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device=f->d,.types=f->types},&f->r),DE_OK);
-    de_render_settings settings={.tier=DE_TIER_RT,.render_scale=1};
-    de_renderer_set_settings(f->r,&settings);
+    printf("scene AS acceptance: %s\n", de_gpu_get_caps(f->d)->device_name);
+    ASSERT_EQ(de_type_registry_create(NULL, &f->types), DE_OK);
+    ASSERT_EQ(
+        de_renderer_create(
+            &(de_renderer_desc){.device = f->d, .types = f->types, .allocator = &f->alloc}, &f->r),
+        DE_OK);
+    de_render_settings settings = {.tier = DE_TIER_RT, .render_scale = 1};
+    de_renderer_set_settings(f->r, &settings);
     de__gpu_scene_destroy(f->r->gpu_scene);
-    de__gpu_scene_desc desc={.device=f->d,.views_in_view_graphs=true,
-        .resolver={.user=f,.mesh=fake_mesh,.material=fake_material,.texture_bindless=texture_index}};
-    desc.initial_capacity[DE__GS_INSTANCES]=32;desc.initial_capacity[DE__GS_VIEWS]=32;
-    ASSERT_EQ(de__gpu_scene_create(&desc,&f->r->gpu_scene),DE_OK);
-    memset(g_mesh,0,sizeof g_mesh);g_mesh_count=1;
-    memset(g_mat,0,sizeof g_mat);g_mat_count=0;
-    mesh_plane(&g_mesh[0],f->d,1,1,2);
-    de_render_mesh *m=&g_mesh[0].rm;
-    u32 ix[2*PATCH_TRIS*3];u32 n=0;
-    for(u32 y=0;y+1<PATCH;++y)for(u32 x=0;x+1<PATCH;++x) {
-        u32 a=y*PATCH+x,b=a+1,c=b+PATCH,d=a+PATCH;
-        ix[n++]=a;ix[n++]=b;ix[n++]=c;ix[n++]=a;ix[n++]=c;ix[n++]=d;
-    }
-    memcpy(ix+n,ix,n*4);
-    f->indices=de_gpu_buffer_create(f->d,&(de_gpu_buffer_desc){.size=sizeof ix,
-        .usage=DE_USAGE_STORAGE|DE_USAGE_ACCEL_INPUT,.memory=DE_MEM_UPLOAD});
-    memcpy(de_gpu_buffer_map(f->d,f->indices),ix,sizeof ix);
-    m->buffers[DE_RENDER_MESH_INDICES]=f->indices;
-    m->bindless[DE_RENDER_MESH_INDICES]=de_gpu_buffer_bindless(f->d,f->indices);
-    m->index_count=n*2;m->lod_count=2;m->lods[0].index_count=n;
-    m->lods[1]=m->lods[0];m->lods[1].index_first=n;m->lods[1].error=1000;
-    f->ranges[0]=(de_cooked_mesh_range){.index_count=n};
-    f->ranges[1]=(de_cooked_mesh_range){.index_first=n,.index_count=n};
-    m->lod_submeshes=f->ranges;m->submeshes=&f->submesh;
-    material_add(1,0.5f,0,0.5f);
-    g_mat[0].standard.alpha_mode=DE_COOKED_ALPHA_MASK;
-    g_mat[0].alpha_mode=DE_COOKED_ALPHA_MASK;
-    g_mat[0].standard.alpha_cutoff=0.5f;
-    g_mat[0].standard.base_color_tex=(de_texture){1};
-    g_mat[0].textures[0]=(de_texture){1};
-    f->texture=de_gpu_texture_create(f->d,&(de_gpu_texture_desc){.width=2,.height=1,
-        .depth_or_layers=1,.mip_count=1,.format=DE_FMT_RGBA8_UNORM,
-        .usage=DE_USAGE_SAMPLED|DE_USAGE_COPY_DST});
-    de_gpu_buffer tex=de_gpu_buffer_create(f->d,&(de_gpu_buffer_desc){.size=256,
-        .usage=DE_USAGE_COPY_SRC,.memory=DE_MEM_UPLOAD});
-    u8 *pixels=de_gpu_buffer_map(f->d,tex);memset(pixels,255,256);pixels[3]=0;
-    de_gpu_cmd *cmd=de_gpu_cmd_begin(f->d,DE_QUEUE_GRAPHICS,"alpha fixture upload");
-    de_gpu_barrier b={.texture=f->texture,.after=DE_ACCESS_COPY_DST};de_gpu_cmd_barriers(cmd,&b,1);
-    de_gpu_cmd_copy_buffer_to_texture(cmd,f->texture,0,0,tex,0,256);
-    b.before=DE_ACCESS_COPY_DST;b.after=DE_ACCESS_SHADER_READ;de_gpu_cmd_barriers(cmd,&b,1);
-    ASSERT_EQ(de_gpu_queue_submit(f->d,DE_QUEUE_GRAPHICS,&(de_gpu_submit){.cmds=&cmd,.cmd_count=1}),DE_OK);
-    de_gpu_buffer_destroy(f->d,tex);
-    world_init(&f->w,32);world_set(&f->w,0,1,at(3,0,0),1);
-    f->w.f.instances.flags[0]|=DE__RW_INST_VISIBLE_IN_RT|DE__RW_INST_CAST_SHADOWS;
-    f->w.f.instances.layer_mask[0]=1u<<24;
-    world_begin(&f->w);ASSERT_EQ(de__gpu_scene_update(f->r->gpu_scene,&f->w.f),DE_OK);
-    ASSERT_EQ(de__rt_prepare(f->r),DE_OK);ASSERT_TRUE(f->r->rt_scene!=NULL);
-    ASSERT_EQ(de__rt_mesh_publish(f->r->rt_scene,m),DE_OK);
-    f->target=de_gpu_texture_create(f->d,&(de_gpu_texture_desc){.width=64,.height=64,
-        .depth_or_layers=1,.mip_count=1,.format=DE_FMT_RGBA8_UNORM,
-        .usage=DE_USAGE_RENDER_TARGET|DE_USAGE_SAMPLED});
-    f->view=de_view_create(f->r,&(de_view_desc){.target=f->target,.viewport={0,0,1,1},.name="RT fixture"});
-    ASSERT_TRUE(f->view.id!=0);de_view_set_layer_mask(f->r,f->view,1u<<24);
-    de__rw_view camera={.camera={.fov_y=0.9f,.near_z=0.1f},.offset={3,0,4},
-        .rotation={0,0,0,1}};
-    camera.transform=at(3,0,4);de__view_capture_camera(f->r,f->view,&camera);
-    const de__rt_ray rays[2]={{{2.5f,0,2,0.001f},{0,0,-1,20}},{{3.5f,0,2,0.001f},{0,0,-1,20}}};
-    f->rays=de_gpu_buffer_create(f->d,&(de_gpu_buffer_desc){.size=sizeof rays,
-        .usage=DE_USAGE_STORAGE,.memory=DE_MEM_UPLOAD});
-    memcpy(de_gpu_buffer_map(f->d,f->rays),rays,sizeof rays);
-    f->hits=de_gpu_buffer_create(f->d,&(de_gpu_buffer_desc){.size=2*sizeof(de__rt_hit),
-        .usage=DE_USAGE_STORAGE|DE_USAGE_COPY_SRC});
-    f->readback=de_gpu_buffer_create(f->d,&(de_gpu_buffer_desc){.size=2*sizeof(de__rt_hit),
-        .usage=DE_USAGE_COPY_DST,.memory=DE_MEM_READBACK});
-    ASSERT_EQ(de__view_register_stage(f->r,DE__VIEW_SLOT_LIGHTING,INT32_MIN+1,
-        "RT acceptance",trace_stage,f),DE_OK);
+    de__gpu_scene_desc desc = {.device = f->d,
+                               .allocator = &f->alloc,
+                               .views_in_view_graphs = true,
+                               .resolver = {.user = f,
+                                            .mesh = fake_mesh,
+                                            .material = fake_material,
+                                            .texture_bindless = texture_index}};
+    desc.initial_capacity[DE__GS_INSTANCES] = 32;
+    desc.initial_capacity[DE__GS_VIEWS] = 32;
+    ASSERT_EQ(de__gpu_scene_create(&desc, &f->r->gpu_scene), DE_OK);
+    memset(g_mesh, 0, sizeof g_mesh);
+    g_mesh_count = 1;
+    memset(g_mat, 0, sizeof g_mat);
+    g_mat_count = 0;
+    mesh_plane(&g_mesh[0], f->d, 1, 1, 2);
+    de_render_mesh *m = &g_mesh[0].rm;
+    u32 ix[2 * PATCH_TRIS * 3];
+    u32 n = 0;
+    for (u32 y = 0; y + 1 < PATCH; ++y)
+        for (u32 x = 0; x + 1 < PATCH; ++x) {
+            u32 a = y * PATCH + x, b = a + 1, c = b + PATCH, d = a + PATCH;
+            ix[n++] = a;
+            ix[n++] = b;
+            ix[n++] = c;
+            ix[n++] = a;
+            ix[n++] = c;
+            ix[n++] = d;
+        }
+    memcpy(ix + n, ix, n * 4);
+    f->indices = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = sizeof ix,
+                                    .usage = DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT,
+                                    .memory = DE_MEM_UPLOAD});
+    memcpy(de_gpu_buffer_map(f->d, f->indices), ix, sizeof ix);
+    m->buffers[DE_RENDER_MESH_INDICES] = f->indices;
+    m->bindless[DE_RENDER_MESH_INDICES] = de_gpu_buffer_bindless(f->d, f->indices);
+    m->index_count = n * 2;
+    m->lod_count = 2;
+    m->lods[0].index_count = n;
+    m->lods[1] = m->lods[0];
+    m->lods[1].index_first = n;
+    m->lods[1].error = 1000;
+    f->ranges[0] = (de_cooked_mesh_range){.index_count = n};
+    f->ranges[1] = (de_cooked_mesh_range){.index_first = n, .index_count = n};
+    m->lod_submeshes = f->ranges;
+    m->submeshes = &f->submesh;
+    material_add(1, 0.5f, 0, 0.5f);
+    g_mat[0].standard.alpha_mode = DE_COOKED_ALPHA_MASK;
+    g_mat[0].alpha_mode = DE_COOKED_ALPHA_MASK;
+    g_mat[0].standard.alpha_cutoff = 0.5f;
+    g_mat[0].standard.base_color_tex = (de_texture){1};
+    g_mat[0].textures[0] = (de_texture){1};
+    f->texture = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 2,
+                                     .height = 1,
+                                     .depth_or_layers = 1,
+                                     .mip_count = 1,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_DST});
+    de_gpu_buffer tex = de_gpu_buffer_create(
+        f->d,
+        &(de_gpu_buffer_desc){.size = 256, .usage = DE_USAGE_COPY_SRC, .memory = DE_MEM_UPLOAD});
+    u8 *pixels = de_gpu_buffer_map(f->d, tex);
+    memset(pixels, 255, 256);
+    pixels[3] = 0;
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "alpha fixture upload");
+    de_gpu_barrier b = {.texture = f->texture, .after = DE_ACCESS_COPY_DST};
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_buffer_to_texture(cmd, f->texture, 0, 0, tex, 0, 256);
+    b.before = DE_ACCESS_COPY_DST;
+    b.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_buffer_destroy(f->d, tex);
+    world_init(&f->w, 32);
+    world_set(&f->w, 0, 1, at(3, 0, 0), 1);
+    f->w.f.instances.flags[0] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+    f->w.f.instances.layer_mask[0] = 1u << 24;
+    world_begin(&f->w);
+    ASSERT_EQ(de__gpu_scene_update(f->r->gpu_scene, &f->w.f), DE_OK);
+    ASSERT_EQ(de__rt_prepare(f->r), DE_OK);
+    ASSERT_TRUE(f->r->rt_scene != NULL);
+    ASSERT_EQ(de__rt_mesh_publish(f->r->rt_scene, m), DE_OK);
+    f->target = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 64,
+                                     .height = 64,
+                                     .depth_or_layers = 1,
+                                     .mip_count = 1,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED});
+    f->view = de_view_create(
+        f->r, &(de_view_desc){.target = f->target, .viewport = {0, 0, 1, 1}, .name = "RT fixture"});
+    ASSERT_TRUE(f->view.id != 0);
+    de_view_set_layer_mask(f->r, f->view, 1u << 24);
+    de__rw_view camera = {
+        .camera = {.fov_y = 0.9f, .near_z = 0.1f}, .offset = {3, 0, 4}, .rotation = {0, 0, 0, 1}};
+    camera.transform = at(3, 0, 4);
+    de__view_capture_camera(f->r, f->view, &camera);
+    const de__rt_ray rays[2] = {{{2.5f, 0, 2, 0.001f}, {0, 0, -1, 20}},
+                                {{3.5f, 0, 2, 0.001f}, {0, 0, -1, 20}}};
+    f->rays = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = sizeof rays,
+                                                               .usage = DE_USAGE_STORAGE,
+                                                               .memory = DE_MEM_UPLOAD});
+    memcpy(de_gpu_buffer_map(f->d, f->rays), rays, sizeof rays);
+    f->hits = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 2 * sizeof(de__rt_hit),
+                                    .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    f->readback = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = 2 * sizeof(de__rt_hit),
+                                                                   .usage = DE_USAGE_COPY_DST,
+                                                                   .memory = DE_MEM_READBACK});
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_LIGHTING, INT32_MIN + 1, "RT acceptance",
+                                      trace_stage, f),
+              DE_OK);
 }
 static de__rt_hit *frame_rt(rt_fixture *f) {
-    f->w.touch_all=true;world_begin(&f->w);
-    ASSERT_EQ(de__gpu_scene_update(f->r->gpu_scene,&f->w.f),DE_OK);
+    f->w.touch_all = true;
+    world_begin(&f->w);
+    ASSERT_EQ(de__gpu_scene_update(f->r->gpu_scene, &f->w.f), DE_OK);
     /* Same prepared/current snapshot ordering as render_thread.c, on this test thread. */
-    f->handoff.last=&f->w.f;f->handoff.current=&f->w.f;f->r->render_world=&f->handoff;
+    f->handoff.last = &f->w.f;
+    f->handoff.current = &f->w.f;
+    f->r->render_world = &f->handoff;
     de__renderer_kick_prepare(f->r);
-    ASSERT_EQ(de_renderer_render_frame(f->r),DE_OK);de_gpu_wait_idle(f->d);
-    f->handoff.current=NULL;
-    ASSERT_TRUE(f->stages!=0);ASSERT_FALSE(de_gpu_device_is_lost(f->d));
-    return de_gpu_buffer_map(f->d,f->readback);
+    ASSERT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    de_gpu_wait_idle(f->d);
+    f->handoff.current = NULL;
+    ASSERT_TRUE(f->stages != 0);
+    ASSERT_FALSE(de_gpu_device_is_lost(f->d));
+    return de_gpu_buffer_map(f->d, f->readback);
 }
 static void rt_fixture_teardown(rt_fixture *f) {
-    if(!f->d)return;
+    if (!f->d)
+        return;
     de_gpu_wait_idle(f->d);
-    f->r->render_world=NULL;
-    de_asset_system_destroy(f->assets);f->r->assets=NULL;
-    de_renderer_destroy(f->r);de_task_system_destroy(f->tasks);
-    mesh_free(&g_mesh[0],f->d);
-    de_gpu_buffer_destroy(f->d,f->indices);de_gpu_buffer_destroy(f->d,f->rays);
-    de_gpu_buffer_destroy(f->d,f->hits);de_gpu_buffer_destroy(f->d,f->readback);
-    de_gpu_texture_destroy(f->d,f->target);de_gpu_texture_destroy(f->d,f->texture);
-    de_gpu_wait_idle(f->d);de_gpu_device_destroy(f->d);
-    de_type_registry_destroy(f->types);world_free(&f->w);
+    f->r->render_world = NULL;
+    de_asset_system_destroy(f->assets);
+    f->r->assets = NULL;
+    de_renderer_destroy(f->r);
+    de_task_system_destroy(f->tasks);
+    mesh_free(&g_mesh[0], f->d);
+    de_gpu_buffer_destroy(f->d, f->indices);
+    de_gpu_buffer_destroy(f->d, f->rays);
+    de_gpu_buffer_destroy(f->d, f->hits);
+    de_gpu_buffer_destroy(f->d, f->readback);
+    de_gpu_texture_destroy(f->d, f->target);
+    de_gpu_texture_destroy(f->d, f->texture);
+    de_gpu_wait_idle(f->d);
+    de_gpu_device_destroy(f->d);
+    de_type_registry_destroy(f->types);
+    world_free(&f->w);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->dev_track).blocks_live, 0u);
 }
-TEST_F(scene_as,alpha_mask,rt_fixture) {
-    de__rt_hit *hit=frame_rt(f);
-    printf("alpha hits %g %g instances %u %u\n",hit[0].t,hit[1].t,hit[0].instance,hit[1].instance);
-    EXPECT_TRUE(hit[0].t<0);EXPECT_FLOAT_EQ(hit[1].t,2,0.001);
-    EXPECT_EQ(hit[1].instance,0u);
-    g_mat[0].standard.base_color.w=0.25f;
-    EXPECT_TRUE(frame_rt(f)[1].t<0);
-    g_mat[0].standard.alpha_cutoff=0.1f;
-    EXPECT_FLOAT_EQ(frame_rt(f)[1].t,2,0.001);
-    g_mat[0].alpha_mode=DE_COOKED_ALPHA_OPAQUE;
-    EXPECT_FLOAT_EQ(frame_rt(f)[0].t,2,0.001);
+TEST_F(scene_as, alpha_mask, rt_fixture) {
+    de__rt_hit *hit = frame_rt(f);
+    printf("alpha hits %g %g instances %u %u\n", hit[0].t, hit[1].t, hit[0].instance,
+           hit[1].instance);
+    EXPECT_TRUE(hit[0].t < 0);
+    EXPECT_FLOAT_EQ(hit[1].t, 2, 0.001);
+    EXPECT_EQ(hit[1].instance, 0u);
+    g_mat[0].standard.base_color.w = 0.25f;
+    EXPECT_TRUE(frame_rt(f)[1].t < 0);
+    g_mat[0].standard.alpha_cutoff = 0.1f;
+    EXPECT_FLOAT_EQ(frame_rt(f)[1].t, 2, 0.001);
+    g_mat[0].alpha_mode = DE_COOKED_ALPHA_OPAQUE;
+    EXPECT_FLOAT_EQ(frame_rt(f)[0].t, 2, 0.001);
 }
 
-TEST_F(scene_as,tlas_filter,rt_fixture) {
-    EXPECT_FLOAT_EQ(frame_rt(f)[1].t,2,0.001);
-    f->w.f.instances.flags[0]&=~DE__RW_INST_VISIBLE_IN_RT;
-    EXPECT_TRUE(frame_rt(f)[1].t<0);
-    f->w.f.instances.flags[0]|=DE__RW_INST_VISIBLE_IN_RT;
-    de_view_set_layer_mask(f->r,f->view,2);
-    EXPECT_TRUE(frame_rt(f)[1].t<0);
-    de_view_set_layer_mask(f->r,f->view,1u<<24);
-    f->w.f.instances.flags[0]&=~DE__RW_INST_CAST_SHADOWS;f->flags=DE__RT_CAST_SHADOWS;
-    EXPECT_TRUE(frame_rt(f)[1].t<0);
-    f->flags=0;EXPECT_FLOAT_EQ(frame_rt(f)[1].t,2,0.001);
+TEST_F(scene_as, tlas_filter, rt_fixture) {
+    EXPECT_FLOAT_EQ(frame_rt(f)[1].t, 2, 0.001);
+    f->w.f.instances.flags[0] &= ~DE__RW_INST_VISIBLE_IN_RT;
+    EXPECT_TRUE(frame_rt(f)[1].t < 0);
+    f->w.f.instances.flags[0] |= DE__RW_INST_VISIBLE_IN_RT;
+    de_view_set_layer_mask(f->r, f->view, 2);
+    EXPECT_TRUE(frame_rt(f)[1].t < 0);
+    de_view_set_layer_mask(f->r, f->view, 1u << 24);
+    f->w.f.instances.flags[0] &= ~DE__RW_INST_CAST_SHADOWS;
+    f->flags = DE__RT_CAST_SHADOWS;
+    EXPECT_TRUE(frame_rt(f)[1].t < 0);
+    f->flags = 0;
+    EXPECT_FLOAT_EQ(frame_rt(f)[1].t, 2, 0.001);
     /* Stable GPU-scene custom index, including holes in its slots. */
-    world_set(&f->w,3,1,at(3,0,0),1);f->w.f.instances.entity[0]=0;
-    f->w.f.instances.flags[3]|=DE__RW_INST_VISIBLE_IN_RT;
-    f->w.f.instances.layer_mask[3]=1u<<24;
-    f->w.f.removed_instances[0]=0;f->w.f.removed_instance_count=1;
-    EXPECT_EQ(frame_rt(f)[1].instance,3u);
+    world_set(&f->w, 3, 1, at(3, 0, 0), 1);
+    f->w.f.instances.entity[0] = 0;
+    f->w.f.instances.flags[3] |= DE__RW_INST_VISIBLE_IN_RT;
+    f->w.f.instances.layer_mask[3] = 1u << 24;
+    f->w.f.removed_instances[0] = 0;
+    f->w.f.removed_instance_count = 1;
+    EXPECT_EQ(frame_rt(f)[1].instance, 3u);
 }
-TEST_F(scene_as,blas_per_lod,rt_fixture) {
-    de__rt_scene *scene=f->r->rt_scene;
-    EXPECT_EQ(scene->mesh_count,1u);EXPECT_EQ(scene->blas_count,2u);
-    EXPECT_TRUE(scene->meshes[0].blas[0].id!=scene->meshes[0].blas[1].id);
-    const u64 before=scene->bytes;
-    EXPECT_EQ(frame_rt(f)[1].lod,0u);
-    (void)frame_rt(f);(void)frame_rt(f);
-    EXPECT_EQ(scene->compacted_count,2u);EXPECT_TRUE(scene->bytes<=before);
+TEST_F(scene_as, blas_per_lod, rt_fixture) {
+    de__rt_scene *scene = f->r->rt_scene;
+    EXPECT_EQ(scene->mesh_count, 1u);
+    EXPECT_EQ(scene->blas_count, 2u);
+    EXPECT_TRUE(scene->meshes[0].blas[0].id != scene->meshes[0].blas[1].id);
+    const u64 before = scene->bytes;
+    EXPECT_EQ(frame_rt(f)[1].lod, 0u);
+    (void)frame_rt(f);
+    (void)frame_rt(f);
+    EXPECT_EQ(scene->compacted_count, 2u);
+    EXPECT_TRUE(scene->bytes <= before);
     /* Resident-LOD clamp: the raster metric asks for LOD0; only LOD1 is resident. */
-    de_gpu_accel saved=scene->meshes[0].blas[0];scene->meshes[0].blas[0].id=0;
-    EXPECT_EQ(frame_rt(f)[1].lod,1u);scene->meshes[0].blas[0]=saved;
-    fmesh second={0};mesh_plane(&second,f->d,1,1,2);
-    de_render_mesh *m=&second.rm;
-    m->buffers[DE_RENDER_MESH_INDICES]=f->indices;
-    m->bindless[DE_RENDER_MESH_INDICES]=de_gpu_buffer_bindless(f->d,f->indices);
-    m->index_count=g_mesh[0].rm.index_count;m->lod_count=2;
-    memcpy(m->lods,g_mesh[0].rm.lods,sizeof m->lods);
-    m->lod_submeshes=f->ranges;m->submeshes=&f->submesh;
-    ASSERT_EQ(de__rt_mesh_publish(scene,m),DE_OK);EXPECT_EQ(scene->blas_count,4u);
-    de__rt_mesh_evict(scene,m);EXPECT_EQ(scene->blas_count,2u);
-    mesh_free(&second,f->d);
+    de_gpu_accel saved = scene->meshes[0].blas[0];
+    scene->meshes[0].blas[0].id = 0;
+    EXPECT_EQ(frame_rt(f)[1].lod, 1u);
+    scene->meshes[0].blas[0] = saved;
+    fmesh second = {0};
+    mesh_plane(&second, f->d, 1, 1, 2);
+    de_render_mesh *m = &second.rm;
+    m->buffers[DE_RENDER_MESH_INDICES] = f->indices;
+    m->bindless[DE_RENDER_MESH_INDICES] = de_gpu_buffer_bindless(f->d, f->indices);
+    m->index_count = g_mesh[0].rm.index_count;
+    m->lod_count = 2;
+    memcpy(m->lods, g_mesh[0].rm.lods, sizeof m->lods);
+    m->lod_submeshes = f->ranges;
+    m->submeshes = &f->submesh;
+    ASSERT_EQ(de__rt_mesh_publish(scene, m), DE_OK);
+    EXPECT_EQ(scene->blas_count, 4u);
+    de__rt_mesh_evict(scene, m);
+    EXPECT_EQ(scene->blas_count, 2u);
+    mesh_free(&second, f->d);
 }
-TEST_F(scene_as,base_tier_noop,rt_fixture) {
-    de__view_unregister_stage(f->r,trace_stage,f);
-    de_render_settings settings={.tier=DE_TIER_BASE,.render_scale=1};
-    de_renderer_set_settings(f->r,&settings);
+TEST_F(scene_as, base_tier_noop, rt_fixture) {
+    de__view_unregister_stage(f->r, trace_stage, f);
+    de_render_settings settings = {.tier = DE_TIER_BASE, .render_scale = 1};
+    de_renderer_set_settings(f->r, &settings);
     de__renderer_kick_prepare(f->r);
-    ASSERT_TRUE(f->r->rt_scene==NULL);
-    EXPECT_EQ(de__gpu_live_count(f->d,DE__GPU_ACCEL),0u);
-    EXPECT_EQ(de_renderer_stats(f->r)->rt_blas_bytes,0u);
-    ASSERT_EQ(de_renderer_render_frame(f->r),DE_OK);
-    EXPECT_EQ(de__gpu_live_count(f->d,DE__GPU_ACCEL),0u);
+    ASSERT_TRUE(f->r->rt_scene == NULL);
+    EXPECT_EQ(de__gpu_live_count(f->d, DE__GPU_ACCEL), 0u);
+    EXPECT_EQ(de_renderer_stats(f->r)->rt_blas_bytes, 0u);
+    ASSERT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    EXPECT_EQ(de__gpu_live_count(f->d, DE__GPU_ACCEL), 0u);
 }
 /* Actual asset ready/retire/reload hooks, quantized position decode and GPU mesh budget. */
 static void pump_asset(rt_fixture *f) {
     de_render_uploader_flush(f->r->uploader);
     de_render_uploader_acquire_submit(f->r->uploader);
-    de_asset_system_update(f->assets,NULL);
-    ASSERT_EQ(de__rt_prepare(f->r),DE_OK);
+    de_asset_system_update(f->assets, NULL);
+    ASSERT_EQ(de__rt_prepare(f->r), DE_OK);
 }
-TEST_F(scene_as,reload,rt_fixture) {
+TEST_F(scene_as, reload, rt_fixture) {
     de_fp_env_init_thread();
-    ASSERT_EQ(de_fs_mount("scene_as",DE_SCENE_AS_TMP,DE_MOUNT_WRITABLE,0),DE_OK);
-    ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count=2},&f->tasks),DE_OK);
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks=f->tasks,.io_threads=1,
-        .cache_dir="scene_as:/cache",.hot_reload=true,.reload_retire_frames=2},&f->assets),DE_OK);
-    de__asset_reload_set_watching(f->assets,false);
-    ASSERT_EQ(de__render_register_asset_types_ex(f->assets,&(de__render_assets_desc){
-        .device=f->d,.ring_bytes=1u<<20,.no_import=true},&f->r->uploader),DE_OK);
-    de__render_uploader_set_frame_fence(f->r->uploader,f->r->frame_fence);
-    f->r->assets=f->assets;
-    lt_blob blob=lt_dmsh(8,0,1);
-    ASSERT_EQ(de_file_write_all_atomic("scene_as:/m.dmsh",blob.data,blob.size),DE_OK);
-    const char manifest[]="[assets]\n\"rt/mesh\" = { type=\"mesh\", source=\"m.dmsh\" }\n";
-    ASSERT_EQ(de_file_write_all_atomic("scene_as:/assets.toml",manifest,sizeof manifest-1),DE_OK);
-    ASSERT_EQ(de_asset_manifest_load(f->assets,"scene_as:/assets.toml"),DE_OK);
-    const de_asset_id id=de_asset_id_from("rt/mesh");
-    const de_mesh handle=de_asset_mesh(f->assets,id);
-    de_load_handle request=de_asset_load(f->assets,id,0);
-    u64 start=de_time_now_ns();
-    while(de_asset_status(f->assets,request,NULL)!=DE_LOAD_READY && de_time_now_ns()-start<LT_WAIT_NS) {
-        pump_asset(f);(void)de__asset_wake_block(f->assets,2000000);
+    ASSERT_EQ(de_fs_mount("scene_as", DE_SCENE_AS_TMP, DE_MOUNT_WRITABLE, 0), DE_OK);
+    ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &f->tasks), DE_OK);
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks = f->tasks,
+                                                             .allocator = &f->alloc,
+                                                             .io_threads = 1,
+                                                             .cache_dir = "scene_as:/cache",
+                                                             .hot_reload = true,
+                                                             .reload_retire_frames = 2},
+                                     &f->assets),
+              DE_OK);
+    de__asset_reload_set_watching(f->assets, false);
+    ASSERT_EQ(de__render_register_asset_types_ex(f->assets,
+                                                 &(de__render_assets_desc){.device = f->d,
+                                                                           .allocator = &f->alloc,
+                                                                           .ring_bytes = 1u << 20,
+                                                                           .no_import = true},
+                                                 &f->r->uploader),
+              DE_OK);
+    de__render_uploader_set_frame_fence(f->r->uploader, f->r->frame_fence);
+    f->r->assets = f->assets;
+    pump_asset(f);
+    de_gpu_wait_idle(f->d);
+    u32 before_live[DE__GPU_KIND_COUNT];
+    for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k)
+        before_live[k] = de__gpu_live_count(f->d, (de__gpu_kind)k);
+    lt_blob blob = lt_dmsh(8, 0, 1);
+    ASSERT_EQ(de_file_write_all_atomic("scene_as:/m.dmsh", blob.data, blob.size), DE_OK);
+    const char manifest[] = "[assets]\n\"rt/mesh\" = { type=\"mesh\", source=\"m.dmsh\" }\n";
+    ASSERT_EQ(de_file_write_all_atomic("scene_as:/assets.toml", manifest, sizeof manifest - 1),
+              DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->assets, "scene_as:/assets.toml"), DE_OK);
+    const de_asset_id id = de_asset_id_from("rt/mesh");
+    const de_mesh handle = de_asset_mesh(f->assets, id);
+    de_load_handle request = de_asset_load(f->assets, id, 0);
+    u64 start = de_time_now_ns();
+    while (de_asset_status(f->assets, request, NULL) != DE_LOAD_READY &&
+           de_time_now_ns() - start < LT_WAIT_NS) {
+        pump_asset(f);
+        (void)de__asset_wake_block(f->assets, 2000000);
     }
-    ASSERT_EQ(de_asset_status(f->assets,request,NULL),DE_LOAD_READY);
-    pump_asset(f);ASSERT_EQ(f->r->rt_scene->mesh_count,1u);
-    const de_render_mesh *old=de_render_mesh_get(f->assets,handle);ASSERT_TRUE(old!=NULL);
-    EXPECT_TRUE(old->published_);EXPECT_EQ(f->r->rt_scene->meshes[0].source,old);
-    u64 base=old->gpu_bytes;
-    EXPECT_TRUE(de_asset_get_stats(f->assets).bytes_resident[1]>base);
-    de_gpu_wait_idle(f->d);pump_asset(f);de_gpu_wait_idle(f->d);pump_asset(f);
-    EXPECT_EQ(f->r->rt_scene->compacted_count,1u);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1],base+f->r->rt_scene->bytes);
+    ASSERT_EQ(de_asset_status(f->assets, request, NULL), DE_LOAD_READY);
+    pump_asset(f);
+    ASSERT_EQ(f->r->rt_scene->mesh_count, 1u);
+    const de_render_mesh *old = de_render_mesh_get(f->assets, handle);
+    ASSERT_TRUE(old != NULL);
+    EXPECT_TRUE(old->published_);
+    EXPECT_EQ(f->r->rt_scene->meshes[0].source, old);
+    u64 base = old->gpu_bytes;
+    EXPECT_TRUE(de_asset_get_stats(f->assets).bytes_resident[1] > base);
+    de_gpu_wait_idle(f->d);
+    pump_asset(f);
+    de_gpu_wait_idle(f->d);
+    pump_asset(f);
+    EXPECT_EQ(f->r->rt_scene->compacted_count, 1u);
+    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1], base + f->r->rt_scene->bytes);
     /* Replace the cooked mesh, keeping its public handle; retired old BLAS remains fence-safe. */
-    lt_blob replacement=lt_dmsh(12,0,2);
-    ASSERT_EQ(de_file_write_all_atomic("scene_as:/m.dmsh",replacement.data,replacement.size),DE_OK);
-    de__asset_reload_on_change(f->assets,"scene_as:/m.dmsh",DE_WATCH_MODIFIED,false);
-    start=de_time_now_ns();
-    while(de_render_mesh_get(f->assets,handle)==old && de_time_now_ns()-start<LT_WAIT_NS) {
-        pump_asset(f);(void)de__asset_wake_block(f->assets,2000000);
+    lt_blob replacement = lt_dmsh(12, 0, 2);
+    ASSERT_EQ(de_file_write_all_atomic("scene_as:/m.dmsh", replacement.data, replacement.size),
+              DE_OK);
+    de__asset_reload_on_change(f->assets, "scene_as:/m.dmsh", DE_WATCH_MODIFIED, false);
+    start = de_time_now_ns();
+    while (de_render_mesh_get(f->assets, handle) == old && de_time_now_ns() - start < LT_WAIT_NS) {
+        pump_asset(f);
+        (void)de__asset_wake_block(f->assets, 2000000);
     }
-    ASSERT_TRUE(de_render_mesh_get(f->assets,handle)!=old);
-    for(u32 i=0;i<5;++i){pump_asset(f);de_gpu_wait_idle(f->d);}
-    ASSERT_EQ(f->r->rt_scene->mesh_count,1u);
-    const de_render_mesh *current=de_render_mesh_get(f->assets,handle);
-    EXPECT_EQ(f->r->rt_scene->meshes[0].source,current);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1],current->gpu_bytes+f->r->rt_scene->bytes);
-    de_asset_release(f->assets,request);de_asset_flush_unused(f->assets);
-    pump_asset(f);EXPECT_EQ(f->r->rt_scene->mesh_count,0u);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1],0u);
-    lt_free(&blob);lt_free(&replacement);
+    ASSERT_TRUE(de_render_mesh_get(f->assets, handle) != old);
+    for (u32 i = 0; i < 5; ++i) {
+        pump_asset(f);
+        de_gpu_wait_idle(f->d);
+    }
+    ASSERT_EQ(f->r->rt_scene->mesh_count, 1u);
+    const de_render_mesh *current = de_render_mesh_get(f->assets, handle);
+    EXPECT_EQ(f->r->rt_scene->meshes[0].source, current);
+    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1],
+              current->gpu_bytes + f->r->rt_scene->bytes);
+    de_asset_release(f->assets, request);
+    de_asset_flush_unused(f->assets);
+    pump_asset(f);
+    EXPECT_EQ(f->r->rt_scene->mesh_count, 0u);
+    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1], 0u);
+    de_gpu_wait_idle(f->d);
+    for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k)
+        EXPECT_EQ(de__gpu_live_count(f->d, (de__gpu_kind)k), before_live[k]);
+    const de_tracking_stats warm = de_tracking_allocator_stats(&f->track);
+    for (u32 i = 0; i < 8; ++i)
+        ASSERT_EQ(de__rt_prepare(f->r), DE_OK);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->track).alloc_count, warm.alloc_count);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->track).realloc_count, warm.realloc_count);
+    lt_free(&blob);
+    lt_free(&replacement);
 }

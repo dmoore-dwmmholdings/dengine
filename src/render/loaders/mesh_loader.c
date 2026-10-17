@@ -220,8 +220,10 @@ void de__mesh_unload(void *object, void *user) {
         return;
     de_mutex_lock(&u->lock);
     de_render_mesh **at = &u->published_meshes;
-    while (*at && *at != m) at = &(*at)->published_next_;
-    if (*at) *at = m->published_next_;
+    while (*at && *at != m)
+        at = &(*at)->published_next_;
+    if (*at)
+        *at = m->published_next_;
     m->published_ = false;
     de_mutex_unlock(&u->lock);
     /* Now: no more copies into it. Later (frame fence, DENG-422): the buffers and the record. */
