@@ -37,36 +37,7 @@ struct InstanceCullParams
     uint phase;           // 1 or 2 (phase 2 also reads the HZB and rewrites the visibility flags)
 };
 
-/// The largest axis scale of a 3x4 transform (rows): the longest column of its linear part.
-float max_axis_scale(float4 rows[3])
-{
-    float sx = rows[0].x * rows[0].x + rows[1].x * rows[1].x + rows[2].x * rows[2].x;
-    float sy = rows[0].y * rows[0].y + rows[1].y * rows[1].y + rows[2].y * rows[2].y;
-    float sz = rows[0].z * rows[0].z + rows[1].z * rows[1].z + rows[2].z * rows[2].z;
-    return sqrt(max(sx, max(sy, sz)));
-}
-
-/// The LOD of `m` for an instance with bounding sphere (c, r) and axis scale `scale`.
-uint select_lod(DeGpuMesh m, float scale, float3 c, float r, DeVisCullView v)
-{
-    float dist = 1.0;
-    if (v.lod.y == 0.0)
-    {
-        float3 d = c - v.camera.xyz;
-        dist = max(sqrt(d.x * d.x + d.y * d.y + d.z * d.z) - r, v.camera.w);
-    }
-    int count = int(min(m.lod_count, DE_GPU_MESH_LODS));
-    int lod = 0;
-    for (int l = count - 1; l > 0; --l)
-    {
-        if (m.lods[l].error * scale * v.lod.x <= dist)
-        {
-            lod = l;
-            break;
-        }
-    }
-    return uint(clamp(lod + int(v.lod.z), 0, count - 1));
-}
+import lod_common;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]

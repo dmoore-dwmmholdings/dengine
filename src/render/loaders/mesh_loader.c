@@ -74,6 +74,7 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
         return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "no memory for the mesh");
     memset(m, 0, block);
     m->block_size_ = block;
+    m->asset_id_ = de_asset_load_ctx_id(ctx);
     de_render_submesh *sm = (de_render_submesh *)((u8 *)m + head);
     de_cooked_mesh_range *lr = (de_cooked_mesh_range *)((u8 *)m + head + subs);
     m->submeshes = sm;
@@ -217,6 +218,12 @@ void de__mesh_unload(void *object, void *user) {
     de_render_mesh *m = (de_render_mesh *)object;
     if (m == NULL)
         return;
+    de_mutex_lock(&u->lock);
+    de_render_mesh **at = &u->published_meshes;
+    while (*at && *at != m) at = &(*at)->published_next_;
+    if (*at) *at = m->published_next_;
+    m->published_ = false;
+    de_mutex_unlock(&u->lock);
     /* Now: no more copies into it. Later (frame fence, DENG-422): the buffers and the record. */
     de__upload_release(u, m->upload_);
     m->upload_ = NULL;
@@ -224,5 +231,17 @@ void de__mesh_unload(void *object, void *user) {
 }
 
 de_result de__mesh_ready(void *object, void *user) {
-    return de__upload_poll((de_render_uploader *)user, ((de_render_mesh *)object)->upload_);
+    de_render_uploader *u = user;
+    de_render_mesh *m = object;
+    de_result result = de__upload_poll(u, m->upload_);
+    if (result == DE_OK) {
+        de_mutex_lock(&u->lock);
+        if (!m->published_) {
+            m->published_next_ = u->published_meshes;
+            u->published_meshes = m;
+            m->published_ = true;
+        }
+        de_mutex_unlock(&u->lock);
+    }
+    return result;
 }

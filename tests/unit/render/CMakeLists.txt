@@ -991,3 +991,13 @@ if(TARGET test_render_pcss_contact)
         endif()
     endif()
 endif()
+
+# DENG-44: production renderer scene AS and shared alpha opacity.
+de_add_test(NAME render_scene_as SOURCES test_scene_as.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 180)
+if(TARGET test_render_scene_as)
+    target_include_directories(test_render_scene_as PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/scene_as_tmp")
+    target_compile_definitions(test_render_scene_as PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/scene_as_tmp\"")
+endif()

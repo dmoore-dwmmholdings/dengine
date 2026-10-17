@@ -58,3 +58,9 @@ de_engine_shader(shadow_atlas shadows/atlas_sample.slang)
 de_engine_shader(contact_shadows shadows/contact_shadows.slang)
 
 de_engine_shader(pcss_query shadows/pcss_query.slang)
+
+# DENG-44: quantized position decode and GPU scene -> TLAS public instance records.
+de_engine_shader(rt_scene_instances rt/scene_instances.slang)
+# Vulkan/DXR use the same opacity helper in RayQuery candidate loops. Metal's explicit IFT
+# batch adapter is embedded by render/CMakeLists from the generated shared opacity MSL.
+de_engine_shader(rt_trace rt/trace.slang)

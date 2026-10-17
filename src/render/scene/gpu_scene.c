@@ -485,10 +485,8 @@ static void pack_light(const de__gpu_scene *gs, u32 s, de__gs_light *o) {
     o->entity_hi = (u32)(f->lights.entity[s] >> 32);
 }
 
-static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
+void de__gpu_scene_pack_mesh_record(const de_render_mesh *m, de__gs_mesh *o) {
     memset(o, 0, sizeof *o);
-    const de_render_mesh *m =
-        gs->assets.mesh != NULL && DE_HANDLE_VALID(h) ? gs->assets.mesh(gs->assets.user, h) : NULL;
     if (m == NULL)
         return; /* not loaded: no READY flag */
     o->vertices = m->bindless[DE_RENDER_MESH_VERTICES];
@@ -528,6 +526,12 @@ static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
         d->vertex_count = src->vertex_count;
         d->error = src->error;
     }
+}
+
+static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
+    const de_render_mesh *m = gs->assets.mesh != NULL && DE_HANDLE_VALID(h)
+        ? gs->assets.mesh(gs->assets.user, h) : NULL;
+    de__gpu_scene_pack_mesh_record(m, o);
 }
 
 /* The material's parameter block (DENG-302: render/materials/material_instances.h). */

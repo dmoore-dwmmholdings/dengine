@@ -244,6 +244,9 @@ typedef struct de_render_mesh {
     struct de__upload *upload_;
     size_t block_size_;
     de__render_retire retire_; /**< internal: the retire list (DENG-422) */
+    de_asset_id asset_id_;
+    struct de_render_mesh *published_next_;
+    bool published_;
 } de_render_mesh;
 
 /** A loaded `material` (DMAT): the CPU parameters. The GPU scene packs them into the material's

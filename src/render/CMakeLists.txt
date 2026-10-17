@@ -400,3 +400,23 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE shadows/contact_shadows.c shadows/contact_internal.h)
 endif()
+
+# DENG-44: renderer-owned RT acceleration structures and common query infrastructure.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/scene_as.c rt/rt_frame.c rt/rt_internal.h)
+endif()
+if(TARGET de_render AND APPLE AND DE_GPU_METAL)
+    set(_de_rt_library "${CMAKE_CURRENT_BINARY_DIR}/rt_trace.metallib")
+    set(_de_rt_embed "${CMAKE_CURRENT_BINARY_DIR}/rt_trace_metal.c")
+    add_custom_command(OUTPUT "${_de_rt_library}"
+        COMMAND xcrun metal -std=metal3.1
+            "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/rt-metal-cache"
+            "${DE_ROOT_DIR}/shaders/rt/trace_metal.metal" -o "${_de_rt_library}"
+        DEPENDS "${DE_ROOT_DIR}/shaders/rt/trace_metal.metal"
+            "${DE_ROOT_DIR}/shaders/rt/rt_opacity_metal.generated" VERBATIM)
+    add_custom_command(OUTPUT "${_de_rt_embed}"
+        COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${_de_rt_library}" "-DOUT=${_de_rt_embed}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/rt/embed_metal.cmake"
+        DEPENDS "${_de_rt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/rt/embed_metal.cmake" VERBATIM)
+    target_sources(de_render PRIVATE "${_de_rt_embed}")
+endif()
