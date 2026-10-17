@@ -12,6 +12,7 @@
 module lighting_inputs;
 
 import bindless;
+import "../shadows/contact_common";
 public static const uint DE_INPUT_DIFFUSE_OPAQUE = 2u;
 public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
@@ -19,6 +20,7 @@ public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-
 public static const uint DE_INPUT_SHADOW_METADATA = 4;
 public static const uint DE_INPUT_AO_GTAO = 8u;
 public static const uint DE_INPUT_ATLAS_METADATA = 16u;
+public static const uint DE_INPUT_CONTACT_METADATA = 32u;
 
 public struct LightingInputs
 {
@@ -104,4 +106,21 @@ public float3 de_input_indirect_diffuse(LightingInputs i, uint2 p)
 public float3 de_input_indirect_specular(LightingInputs i, uint2 p)
 {
     return de_input_load(i.indirect_specular, p, float4(0.0, 0.0, 0.0, 0.0)).rgb;
+}
+
+/// Opaque contact metadata follows stable entity identity, never directional atomic list order.
+public float de_input_contact_directional(LightingInputs i, uint2 p, uint2 identity)
+{
+    if ((i.reserved0 & DE_INPUT_CONTACT_METADATA) == 0u || i.contact_shadows == 0u) return 1.0;
+    uint4 header = de_bytes(i.contact_shadows).load4(0u);
+    if (header.w == 0u || any(de_contact_record(i.contact_shadows, 0u).entity != identity)) return 1.0;
+    return de_input_load(header.x, p, float4(1.0)).r;
+}
+public float de_input_contact_local(LightingInputs i, uint2 p, uint slot)
+{
+    if ((i.reserved0 & DE_INPUT_CONTACT_METADATA) == 0u || i.contact_shadows == 0u || slot == 0u) return 1.0;
+    uint4 header = de_bytes(i.contact_shadows).load4(0u);
+    if (slot > min(header.z, 4u)) return 1.0;
+    float4 mask = de_input_load(header.y, p, float4(1.0));
+    return slot == 1u ? mask.x : slot == 2u ? mask.y : slot == 3u ? mask.z : mask.w;
 }

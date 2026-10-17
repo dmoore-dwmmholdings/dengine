@@ -1,6 +1,8 @@
 #ifndef DE_RENDER_SHADOWS_INTERNAL_H
 #define DE_RENDER_SHADOWS_INTERNAL_H
 #include "render/passes/vis/vis_stages.h"
+#include <dengine/de_debug.h>
+#include <stddef.h>
 DE_EXTERN_C_BEGIN
 
 /* Implicit complete quadtree: one byte per node, allocated once; no allocation during use.
@@ -64,14 +66,21 @@ de_result de__csm_fit(const de__csm_camera *camera, de_vec3 light_direction, u32
 typedef struct de__shadow_map_ref {
     u32 texture, layer, taps, resolution;
     f32 uv_clamp[4];
+    /* Light-space endpoints; angular source radius for ortho, metres for perspective. */
+    f32 depth_projection[4]; /* near, far, tan-half-FOV, source radius */
+    f32 uv_projection[4];    /* UV/world (ortho) or UV*depth/world (perspective), max texels, pad */
+    u32 filter_state[4];     /* projection: 1 ortho / 2 perspective, quality, frame, blocker taps */
 } de__shadow_map_ref;
+de_cvar de__shadow_pcss_register(void);
 typedef struct de__csm_gpu {
     f32 matrix[4][4], sphere[4], light[4], params[4];
     u32 identity[4];
     de__shadow_map_ref map;
 } de__csm_gpu;
-DE_STATIC_ASSERT(sizeof(de__csm_gpu) == 160, "CsmCascade is 160 bytes");
-DE_STATIC_ASSERT(sizeof(de__shadow_map_ref) == 32, "ShadowMapRef is 32 bytes");
+DE_STATIC_ASSERT(sizeof(de__csm_gpu) == 208, "CsmCascade is 208 bytes");
+DE_STATIC_ASSERT(sizeof(de__shadow_map_ref) == 80, "ShadowMapRef is 80 bytes");
+DE_STATIC_ASSERT(offsetof(de__shadow_map_ref, depth_projection) == 32, "PCF prefix is unchanged");
+DE_STATIC_ASSERT(offsetof(de__csm_gpu, map) == 128, "CSM map offset is unchanged");
 typedef struct de__csm de__csm;
 de_result de__csm_create_ex(de_gpu_device *dev, const de_allocator *alloc, de__csm **out);
 de_result de__csm_create(de_renderer *r, de__csm **out);
@@ -97,7 +106,8 @@ typedef struct de__atlas_gpu {
     u32 identity[4];
     de__shadow_map_ref map;
 } de__atlas_gpu;
-DE_STATIC_ASSERT(sizeof(de__atlas_gpu) == 160, "AtlasShadow is 160 bytes");
+DE_STATIC_ASSERT(sizeof(de__atlas_gpu) == 208, "AtlasShadow is 208 bytes");
+DE_STATIC_ASSERT(offsetof(de__atlas_gpu, map) == 128, "Atlas map offset is unchanged");
 typedef struct de__shadow_atlas de__shadow_atlas;
 f32 de__atlas_light_range(const DeLight *light, f32 cutoff);
 de_result de__shadow_atlas_create_ex(de_gpu_device *dev, const de_allocator *alloc,

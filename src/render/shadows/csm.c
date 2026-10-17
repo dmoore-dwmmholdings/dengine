@@ -125,7 +125,7 @@ struct de__csm {
     const de_allocator *alloc;
     de__shadow_views *pool;
     csm_view views[DE__VIEW_MAX], capture_maps;
-    de_cvar cv_lights, cv_distance, cv_far_interval;
+    de_cvar cv_lights, cv_distance, cv_far_interval, cv_pcss;
 };
 static void csm_release(de__csm *s, csm_view *v) {
     if (!v->borrowed) {
@@ -171,6 +171,7 @@ de_result de__csm_create_ex(de_gpu_device *dev, const de_allocator *alloc, de__c
         DE_FREE(alloc, s, sizeof *s);
         return result;
     }
+    s->cv_pcss = de__shadow_pcss_register();
     s->cv_lights =
         de_cvar_register(&(de_cvar_desc){.name = "r.csm_lights",
                                          .type = DE_CVAR_INT,
@@ -438,7 +439,14 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
                 .taps = taps,
                 .resolution = resolution,
                 .uv_clamp = {.5f / resolution, .5f / resolution, 1.f - .5f / resolution,
-                             1.f - .5f / resolution}};
+                             1.f - .5f / resolution},
+                .depth_projection = {0.f, cam.distance + 2.f * v->fit[layer].radius, 0.f,
+                                     world->light[index].source_radius},
+                .uv_projection = {1.f / (2.f * v->fit[layer].radius),
+                                  1.f / (2.f * v->fit[layer].radius),
+                                  (f32)de_cvar_float(s->cv_pcss), 0.f},
+                .filter_state = {1u, (u32)vf->settings->shadows, (u32)vf->frame_index,
+                                 taps < 16u ? 16u : taps}};
         }
         v->entities[l] = world->entity[index];
     }

@@ -23,11 +23,12 @@
 
 DE_EXTERN_C_BEGIN
 
-#define DE__INPUT_SPECULAR_OPAQUE 1u
-#define DE__INPUT_DIFFUSE_OPAQUE  2u
-#define DE__INPUT_SHADOW_METADATA 4u
-#define DE__INPUT_AO_GTAO         8u
-#define DE__INPUT_ATLAS_METADATA  16u
+#define DE__INPUT_SPECULAR_OPAQUE  1u
+#define DE__INPUT_DIFFUSE_OPAQUE   2u
+#define DE__INPUT_SHADOW_METADATA  4u
+#define DE__INPUT_AO_GTAO          8u
+#define DE__INPUT_ATLAS_METADATA   16u
+#define DE__INPUT_CONTACT_METADATA 32u
 
 /** The resources one view's lighting reads this frame (invalid = none). */
 typedef struct de__lighting_inputs {
@@ -59,6 +60,8 @@ typedef struct de__lighting_inputs {
     bool ao_gtao; /**< Raw opaque-surface visibility: min with material AO, RGB multi-bounce. */
     de_rg_resource ao_bent; /**< Optional world-oct RG8; reserved for explicit AO consumers. */
     de_rg_resource atlas_records, atlas_texture; /**< Immutable local-light atlas records/mirror. */
+    de_rg_resource contact_records,
+        contact_local; /**< Opaque contact identity buffer + local mask. */
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
