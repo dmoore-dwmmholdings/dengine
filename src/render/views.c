@@ -1,3 +1,4 @@
+#include "render/rt/restir_di.h"
 #include "render/shadows/shadows_internal.h"
 #include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
@@ -868,6 +869,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     de__shadow_atlas_complete(r->shadow_atlas, vf.view, g, shadow_attempted, res == DE_OK);
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
     de__contact_complete(r->contact, vf.view, g, shadow_attempted);
+    de__restir_di_complete(r->restir_di, vf.view, g, frame_index, res == DE_OK);
     de__gtao_complete(r->gtao, vf.view, g, shadow_attempted, res == DE_OK);
     de__irradiance_view_complete(r, vf.view, res == DE_OK);
     de__ssgi_view_complete(r->ssgi, vf.view, frame_index, res == DE_OK);

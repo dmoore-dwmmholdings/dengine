@@ -1,3 +1,4 @@
+#include "render/rt/restir_di.h"
 /* DENG-45: clustered analytic-light visibility through the production scene query path. */
 #include "render/rt/rt_shadows.h"
 #include "render/graph/rg_internal.h"
@@ -226,6 +227,7 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
     de__rt_shadows *s = user;
     if (!s || !vc->settings)
         return DE_OK;
+    DE_TRY(de__restir_di_build(s->renderer->restir_di, g, vc, lc, inputs));
     const de_render_settings *settings = vc->settings;
     if (settings->tier != DE_TIER_RT || !settings->rt_shadows ||
         settings->shadows == DE_QUALITY_OFF)
@@ -269,7 +271,8 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
                                    .slots = slots,
                                    .scale = scale,
                                    .spp = spp,
-                                   .frame = (u32)vc->frame_index},
+                                   .frame = (u32)vc->frame_index,
+                                   .axis = inputs->restir_diffuse.id ? 1u : 0u},
                         .reads = {vc->depth, vc->gbuffer[DE__GB1], lc->lights, lc->dir_lights,
                                   lc->grid_buf, lc->list, lc->counters, vc->scene_views}};
     for (u32 i = 0; i < slots; ++i) {

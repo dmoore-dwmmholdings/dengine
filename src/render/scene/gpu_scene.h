@@ -608,6 +608,9 @@ bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh, con
  * past its count). */
 const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot);
 
+/** Stable fingerprint of actual source records; excludes views/frame counters and previous
+ * transforms. */
+u64 de__gpu_scene_source_signature(const de__gpu_scene *);
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_SCENE_GPU_SCENE_H */

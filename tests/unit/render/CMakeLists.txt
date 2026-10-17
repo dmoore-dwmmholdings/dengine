@@ -1025,3 +1025,20 @@ if(TARGET test_render_rt_shadows)
         endif()
     endif()
 endif()
+
+# DENG-46: actual source aliasing, reservoir reuse and many-light renderer acceptance.
+de_add_test(NAME render_restir_di SOURCES test_restir_di.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_restir_di)
+    target_include_directories(test_render_restir_di PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/restir_di_tmp")
+    target_compile_definitions(test_render_restir_di PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/restir_di_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_restir_di PRIVATE version)
+        de_d3d12_agility_deploy(test_render_restir_di)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_restir_di)
+        endif()
+    endif()
+endif()

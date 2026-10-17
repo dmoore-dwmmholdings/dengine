@@ -196,6 +196,7 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
     }
     // DENG-45 RT screen masks belong to the opaque receiver; keep raster for forward.
     lv.inputs.rt_shadow_visibility=0u;lv.inputs.rt_shadow_keys=0u;
+    lv.inputs.restir_diffuse=0u;lv.inputs.restir_specular=0u;
     uint2 px = uint2(i.pos.xy);
     DeGpuMaterial m = de_resolve_material_of(i.material, sc);
     VertexAttribs v;

@@ -16,7 +16,7 @@ import "../shadows/contact_common";
 public static const uint DE_INPUT_DIFFUSE_OPAQUE = 2u;
 public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
-/// The inputs of one view and frame (96 bytes; DeLightingView.inputs).
+/// The inputs of one view and frame (112 bytes; DeLightingView.inputs).
 public static const uint DE_INPUT_SHADOW_METADATA = 4;
 public static const uint DE_INPUT_AO_GTAO = 8u;
 public static const uint DE_INPUT_ATLAS_METADATA = 16u;
@@ -45,6 +45,10 @@ public struct LightingInputs
     public uint rt_reserved0;
     public uint rt_reserved1;
     public uint rt_reserved2;
+    public uint restir_diffuse;
+    public uint restir_specular;
+    public uint restir_distance;
+    public uint restir_reserved;
 };
 
 /// Texel `p` of input texture `index`, or `fallback` without one.

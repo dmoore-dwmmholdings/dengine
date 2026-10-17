@@ -923,115 +923,36 @@ sampler de_sampler_0(uint idx_9, KernelContext_0 thread* kernelContext_16)
     return (&kernelContext_16->de_heap_0->samplers_0)->data_2[idx_9];
 }
 
-bool de_rt_opacity_0(const DeRtContext_0 thread* q_1, uint instance_2, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_17)
+bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_3, const DeGpuMaterial_0 thread* m_2, uint sampler_1, KernelContext_0 thread* kernelContext_17)
 {
 
-    DeResolvePoint_0 _S93 = de_rt_point_0(q_1, instance_2, primitive_2, bary_4, kernelContext_17);
-
-    if(!_S93.valid_0)
-    {
-
-        return false;
-    }
-
-    if(((_S93.inst_0.flags_2) & 4U) == 0U)
-    {
-
-        return false;
-    }
-
-    uint _S94 = q_1->layers_0;
-
-    bool _S95;
-    if((q_1->layers_0) != 0U)
-    {
-
-        _S95 = ((_S93.inst_0.layer_mask_0) & _S94) == 0U;
-
-    }
-    else
-    {
-
-        _S95 = false;
-
-    }
-
-    if(_S95)
-    {
-
-        return false;
-    }
-
-    if(((q_1->flags_4) & 1U) != 0U)
-    {
-
-        _S95 = ((_S93.inst_0.flags_2) & 2U) == 0U;
-
-    }
-    else
-    {
-
-        _S95 = false;
-
-    }
-
-    if(_S95)
-    {
-
-        return false;
-    }
-
-    thread DeROBuffer_0 _S96 = de_robuffer_4(q_1->scene_0);
-
-    DeSceneConstants_0 _S97 = DeROBuffer_operatorx5Bx5D_get_4(&_S96, q_1->view_1, kernelContext_17);
-
-    thread DeResolvePoint_0 _S98 = _S93;
-
-    uint _S99 = de_resolve_material_0(&_S98);
-
-    if(_S99 >= (_S97.material_count_0))
+    if((m_2->alpha_mode_0) != 1U)
     {
 
         return true;
     }
 
-    thread DeROBuffer_0 _S100 = de_robuffer_0(_S97.materials_1);
+    float a_1 = m_2->base_color_0.w;
 
-    DeGpuMaterial_0 _S101 = DeROBuffer_operatorx5Bx5D_get_0(&_S100, _S99, kernelContext_17);
-
-    if((_S101.alpha_mode_0) != 1U)
-    {
-
-        return true;
-    }
-
-    float a_1 = _S101.base_color_0.w;
-
-    thread DeGpuMaterial_0 _S102 = _S101;
-
-    uint _S103 = de_material_texture_0(&_S102, 0U);
+    uint _S93 = de_material_texture_0(m_2, 0U);
 
     float a_2;
 
-    if(_S103 != 0U)
+    if(_S93 != 0U)
     {
 
-        thread DeGpuMaterial_0 _S104 = _S101;
-
-        uint _S105 = de_material_texcoord_0(&_S104, 0U);
-
-        thread DeResolvePoint_0 _S106 = _S93;
+        uint _S94 = de_material_texcoord_0(m_2, 0U);
         thread float2 dx_1;
 
         thread float2 dy_1;
 
-        float2 _S107 = de_resolve_uv_0(&_S106, _S105, &dx_1, &dy_1, kernelContext_17);
+        float2 _S95 = de_resolve_uv_0(r_3, _S94, &dx_1, &dy_1, kernelContext_17);
 
-        texture2d<float, access::sample> _S108 = de_tex2d_0(_S103, kernelContext_17);
+        texture2d<float, access::sample> _S96 = de_tex2d_0(_S93, kernelContext_17);
 
-        sampler _S109 = de_sampler_0(q_1->sampler_0, kernelContext_17);
+        sampler _S97 = de_sampler_0(sampler_1, kernelContext_17);
 
-        a_2 = a_1 * ((_S108).sample((_S109), (_S107), level((0.0f)))).w;
+        a_2 = a_1 * ((_S96).sample((_S97), (_S95), level((0.0f)))).w;
 
     }
     else
@@ -1041,19 +962,104 @@ bool de_rt_opacity_0(const DeRtContext_0 thread* q_1, uint instance_2, uint prim
 
     }
 
-    return a_2 >= (_S101.pbr_0.w);
+    return a_2 >= (m_2->pbr_0.w);
 }
 
-uint device* DeRWBytes_words_0(const DeRWBytes_0 thread* this_10, KernelContext_0 thread* kernelContext_18)
+bool de_rt_opacity_0(const DeRtContext_0 thread* q_1, uint instance_2, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_18)
 {
 
-    return (uint device*)kernelContext_18->de_heap_0->buffers_0[this_10->index_1];
+    DeResolvePoint_0 _S98 = de_rt_point_0(q_1, instance_2, primitive_2, bary_4, kernelContext_18);
+
+    if(!_S98.valid_0)
+    {
+
+        return false;
+    }
+
+    if(((_S98.inst_0.flags_2) & 4U) == 0U)
+    {
+
+        return false;
+    }
+
+    uint _S99 = q_1->layers_0;
+
+    bool _S100;
+    if((q_1->layers_0) != 0U)
+    {
+
+        _S100 = ((_S98.inst_0.layer_mask_0) & _S99) == 0U;
+
+    }
+    else
+    {
+
+        _S100 = false;
+
+    }
+
+    if(_S100)
+    {
+
+        return false;
+    }
+
+    if(((q_1->flags_4) & 1U) != 0U)
+    {
+
+        _S100 = ((_S98.inst_0.flags_2) & 2U) == 0U;
+
+    }
+    else
+    {
+
+        _S100 = false;
+
+    }
+
+    if(_S100)
+    {
+
+        return false;
+    }
+
+    thread DeROBuffer_0 _S101 = de_robuffer_4(q_1->scene_0);
+
+    DeSceneConstants_0 _S102 = DeROBuffer_operatorx5Bx5D_get_4(&_S101, q_1->view_1, kernelContext_18);
+
+    thread DeResolvePoint_0 _S103 = _S98;
+
+    uint _S104 = de_resolve_material_0(&_S103);
+
+    if(_S104 >= (_S102.material_count_0))
+    {
+
+        return true;
+    }
+
+    thread DeROBuffer_0 _S105 = de_robuffer_0(_S102.materials_1);
+
+    DeGpuMaterial_0 _S106 = DeROBuffer_operatorx5Bx5D_get_0(&_S105, _S104, kernelContext_18);
+
+    thread DeResolvePoint_0 _S107 = _S98;
+
+    thread DeGpuMaterial_0 _S108 = _S106;
+
+    bool _S109 = de_rt_material_opacity_0(&_S107, &_S108, q_1->sampler_0, kernelContext_18);
+
+    return _S109;
 }
 
-void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_0, KernelContext_0 thread* kernelContext_19)
+uint device* DeRWBytes_words_0(const DeRWBytes_0 thread* this_10, KernelContext_0 thread* kernelContext_19)
 {
 
-    uint device* _S110 = DeRWBytes_words_0(this_11, kernelContext_19);
+    return (uint device*)kernelContext_19->de_heap_0->buffers_0[this_10->index_1];
+}
+
+void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_0, KernelContext_0 thread* kernelContext_20)
+{
+
+    uint device* _S110 = DeRWBytes_words_0(this_11, kernelContext_20);
 
     *(_S110 + (offset_3 >> 2U)) = v_0;
 
@@ -1063,21 +1069,21 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_
 [[kernel]] void cs_opacity_export(DeBindlessHeap_default_0 constant* de_heap_1 [[buffer(0)]], EntryPointParams_0 constant* entryPointParams_1 [[buffer(1)]])
 {
 
-    thread KernelContext_0 kernelContext_20;
+    thread KernelContext_0 kernelContext_21;
 
-    (&kernelContext_20)->de_heap_0 = de_heap_1;
+    (&kernelContext_21)->de_heap_0 = de_heap_1;
 
-    (&kernelContext_20)->entryPointParams_0 = entryPointParams_1;
+    (&kernelContext_21)->entryPointParams_0 = entryPointParams_1;
 
     thread DeROBuffer_0 _S111 = de_robuffer_5(entryPointParams_1->p_0.context_0);
 
-    DeRtContext_0 _S112 = DeROBuffer_operatorx5Bx5D_get_5(&_S111, 0U, &kernelContext_20);
+    DeRtContext_0 _S112 = DeROBuffer_operatorx5Bx5D_get_5(&_S111, 0U, &kernelContext_21);
 
     DeRWBytes_0 _S113 = de_rwbytes_0(entryPointParams_1->p_0.output_0);
 
     thread DeRtContext_0 _S114 = _S112;
 
-    bool _S115 = de_rt_opacity_0(&_S114, entryPointParams_1->p_0.instance_0, entryPointParams_1->p_0.primitive_0, entryPointParams_1->p_0.bary_0, &kernelContext_20);
+    bool _S115 = de_rt_opacity_0(&_S114, entryPointParams_1->p_0.instance_0, entryPointParams_1->p_0.primitive_0, entryPointParams_1->p_0.bary_0, &kernelContext_21);
 
     uint _S116;
 
@@ -1096,7 +1102,7 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_
 
     thread DeRWBytes_0 _S117 = _S113;
 
-    DeRWBytes_store_0(&_S117, 0U, _S116, &kernelContext_20);
+    DeRWBytes_store_0(&_S117, 0U, _S116, &kernelContext_21);
     return;
 }
 

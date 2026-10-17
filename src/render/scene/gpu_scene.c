@@ -1880,3 +1880,41 @@ const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 
     const de__gpu_table *tb = &gs->tables[t];
     return slot < tb->count ? tb->shadow + (size_t)slot * tb->stride : NULL;
 }
+
+/* ReSTIR's alias distribution changes with sources, never with camera/frame-only constants. */
+static u64 source_hash(u64 h, const void *data, size_t size) {
+    const u8 *bytes = data;
+    for (size_t i = 0; i < size; ++i) {
+        h ^= bytes[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+u64 de__gpu_scene_source_signature(const de__gpu_scene *gs) {
+    if (!gs)
+        return 0;
+    u64 h = 1469598103934665603ull;
+    const de__gpu_table *instances = &gs->tables[DE__GS_INSTANCES],
+                        *lights = &gs->tables[DE__GS_LIGHTS];
+    h = source_hash(h, &instances->count, sizeof instances->count);
+    h = source_hash(h, &lights->count, sizeof lights->count);
+    for (u32 i = 0; i < instances->count; ++i) {
+        de__gs_instance item;
+        pack_instance(gs, i, &item);
+        memset(item.prev_transform, 0, sizeof item.prev_transform);
+        h = source_hash(h, &item, sizeof item);
+    }
+    for (u32 i = 0; i < lights->count; ++i) {
+        de__gs_light item;
+        pack_light(gs, i, &item);
+        h = source_hash(h, &item, sizeof item);
+    }
+    const de__gs_table_id tables[] = {DE__GS_MESHES, DE__GS_MATERIALS};
+    for (u32 i = 0; i < 2; ++i) {
+        const de__gpu_table *t = &gs->tables[tables[i]];
+        h = source_hash(h, &t->count, sizeof t->count);
+        if (t->count)
+            h = source_hash(h, t->shadow, (size_t)t->count * t->stride);
+    }
+    return h;
+}

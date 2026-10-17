@@ -177,6 +177,12 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
         vis=de_input_rt_shadow(lv.inputs,px,0x80000000u|i,vis);
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);
     }
+    // ReSTIR replaces only the local direct loop; directional visibility remains DENG-45.
+    if(lv.inputs.restir_diffuse!=0u) {
+        r.diffuse+=de_input_load(lv.inputs.restir_diffuse,px,float4(0)).rgb;
+        r.specular+=de_input_load(lv.inputs.restir_specular,px,float4(0)).rgb;
+        return r;
+    }
     uint2 cell = de_robuffer<uint2>(cl.grid)[cluster];
     float3 f0 = lerp(float3(0.04, 0.04, 0.04) * s.specular, s.base_color, s.metallic);
     float f90 = lerp(s.specular, 1.0, s.metallic);

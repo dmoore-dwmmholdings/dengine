@@ -94,7 +94,7 @@ typedef struct de__ibl_gpu {
 } de__ibl_gpu;
 DE_STATIC_ASSERT(sizeof(de__ibl_gpu) == 192, "DeIbl is 192 bytes");
 
-/** DeLightingView (432 bytes): one view's lighting constants for one frame. */
+/** DeLightingView (448 bytes): one view's lighting constants for one frame. */
 typedef struct de__lighting_view {
     u32 tiles_x, tiles_y, slices, tile_px;
     u32 cluster_count, max_per_cluster, list_capacity, local_capacity;
@@ -107,7 +107,7 @@ typedef struct de__lighting_view {
     de__lighting_inputs_gpu inputs;
     de__ibl_gpu ibl; /**< DENG-304 */
 } de__lighting_view;
-DE_STATIC_ASSERT(sizeof(de__lighting_view) == 432, "DeLightingView is 432 bytes");
+DE_STATIC_ASSERT(sizeof(de__lighting_view) == 448, "DeLightingView is 448 bytes");
 
 /* =================================================================================================
  * The arithmetic (light_data.c; lights.slang and the cluster grid in C)
@@ -207,6 +207,7 @@ typedef struct de__lighting_context {
     de_rg_resource contact_records;
     u32 shadow_texture_count;
     de_rg_resource rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys;
+    de_rg_resource restir_diffuse, restir_specular, restir_distance;
 } de__lighting_context;
 
 /**
