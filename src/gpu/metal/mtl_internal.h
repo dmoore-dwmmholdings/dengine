@@ -332,7 +332,7 @@ typedef struct mtl_cmd {
      * first resolve, reused by its later recordings; released by cmd_fini). */
     void *resolve_event;    /* id<MTLSharedEvent>, retained */
     void *resolve_listener; /* MTLSharedEventListener, retained */
-    void *accel_keep; /* retained per-recording AS dependency snapshots */
+    void *accel_keep; /* retained NSMutableSet of every AS/dependency this recording names */
     u64 resolve_value;      /* the last value used on resolve_event */
 } mtl_cmd;
 

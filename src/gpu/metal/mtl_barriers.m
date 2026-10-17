@@ -27,6 +27,7 @@
 #import <Metal/Metal.h>
 
 #include "gpu/metal/mtl_internal.h"
+#include "gpu/metal/mtl_accel_internal.h"
 
 #include <string.h>
 
@@ -148,8 +149,10 @@ void de__mtl_encoder_started(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind 
     }
     mc->enc_fence = f;
     mc->update_stages = all;
-    if (kind == DE__MTL_ENC_RENDER || kind == DE__MTL_ENC_COMPUTE)
+    if (kind == DE__MTL_ENC_RENDER || kind == DE__MTL_ENC_COMPUTE) {
         de__mtl_residency_encoder(c->device, encoder, kind);
+        de__mtl_accel_residency(c, encoder, kind);
+    }
     mc->encoder = (void *)CFBridgingRetain(enc);
     mc->kind = (u32)kind;
     mc->render_ended = false;

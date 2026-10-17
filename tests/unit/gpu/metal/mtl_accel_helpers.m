@@ -73,3 +73,10 @@ bool de_test_mtl_accel_generate(de_gpu_cmd *c, void *value, de_gpu_buffer output
         return true;
     }
 }
+
+/* Ownership assertion independent of command duration: retired native AS must already be
+ * retained when an encoder declares residency, before the public record can be collected. */
+bool de_test_mtl_accel_recording_keeps(de_gpu_cmd *c, void *object) {
+    mtl_cmd *mc = de__gpu_cmd_payload(c);
+    return [(__bridge NSSet *)mc->accel_keep containsObject:(__bridge id)object];
+}

@@ -21,7 +21,7 @@ void de__mtl_accel_tlas(de_gpu_cmd *, de__gpu_accel *, de__gpu_buffer *, u32, bo
 void de__mtl_accel_emit(de_gpu_cmd *, de__gpu_accel *);
 bool de__mtl_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
 void de__mtl_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
-void de__mtl_accel_residency(de_gpu_device *, void *, de__mtl_encoder_kind);
+void de__mtl_accel_residency(de_gpu_cmd *, void *, de__mtl_encoder_kind);
 void de__mtl_accel_shutdown(de_gpu_device *);
 /* Private shader ABI: optional de_metal_intersection export, kernel IFT buffer2,
  * callback argument heap buffer0. Called by normal compute pipeline creation. */

@@ -5,6 +5,7 @@
 #include "metal/mtl_test_helpers.h"
 #include "pipeline_shaders.h"
 #include <string.h>
+bool de_test_mtl_accel_recording_keeps(de_gpu_cmd *, void *);
 void *de_test_mtl_accel_helper(de_gpu_device *d);
 void de_test_mtl_accel_release(de_gpu_device *d, void *helper);
 bool de_test_mtl_accel_trace(de_gpu_cmd *, void *, u32, de_gpu_buffer, de_gpu_buffer);
@@ -247,4 +248,19 @@ TEST_F(accel_metal, forced_use_heap, forced_fixture) {
     de_gpu_cmd *c=de_gpu_cmd_begin(f->d,DE_QUEUE_COMPUTE,"useHeap retired BLAS residency");
     de_gpu_cmd_copy_buffer(c,f->calls,0,f->zeros,0,4);
     ASSERT_FLOAT_EQ(3.0f,finish_trace(f,c),0.001f);
+}
+
+TEST_F(accel_metal, retired_as_residency_before_submit, fixture) {
+    /* This BLAS was never built/referenced by a TLAS. Its retirement belongs to fence0, but
+     * the next encoder conservatively names it before collection. No idle wait may hide it. */
+    de__gpu_accel *a=de__gpu_get_accel(f->d,f->blas);
+    void *native=DE__GPU_PAYLOAD(mtl_accel,a)->object;
+    de_gpu_accel_destroy(f->d,f->blas);
+    f->blas.id=0;
+    de_gpu_cmd *c=de_gpu_cmd_begin(f->d,DE_QUEUE_COMPUTE,"retired AS residency before submit");
+    ASSERT_TRUE(de_test_mtl_accel_generate(c,f->helper,f->instances,&f->instance));
+    ASSERT_TRUE(de_test_mtl_accel_recording_keeps(c,native));
+    ASSERT_GT(de__gpu_collect(f->d),0u); /* deliberately retire public backend record before submit */
+    ASSERT_TRUE(de_test_mtl_accel_recording_keeps(c,native));
+    submit(f,c);
 }

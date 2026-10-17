@@ -73,11 +73,12 @@ static void release_recording(mtl_cmd *mc) {
                 resolve_store(mc, (id<MTLRenderCommandEncoder>)enc, false);
             [enc endEncoding];
         }
-        if (mc->accel_keep) {
-            [(__bridge NSMutableArray *)mc->accel_keep removeAllObjects];
-        }
         if (mc->cb)
             (void)CFBridgingRelease(mc->cb);
+        /* The old submission has completed, or this unsubmitted command buffer was just
+         * disposed above. Only now release native objects that its residency declarations name. */
+        if (mc->accel_keep)
+            [(__bridge NSMutableSet *)mc->accel_keep removeAllObjects];
     }
     mc->encoder = NULL;
     mc->cb = NULL;

@@ -203,8 +203,8 @@ void de__mtl_accel_tlas(de_gpu_cmd *c, de__gpu_accel *a, de__gpu_buffer *input, 
         if (!s || !translate(c, input, s, count)) return;
         mtl_accel *v = DE__GPU_PAYLOAD(mtl_accel, a);
         mtl_cmd *mc = de__gpu_cmd_payload(c);
-        if (!mc->accel_keep) mc->accel_keep = (void *)CFBridgingRetain([NSMutableArray new]);
-        NSMutableArray *keep = (__bridge NSMutableArray *)mc->accel_keep;
+        if (!mc->accel_keep) mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
+        NSMutableSet *keep = (__bridge NSMutableSet *)mc->accel_keep;
         NSMutableArray *refs = (__bridge NSMutableArray *)v->refs;
         mtl_device *m = de__mtl_dev(c->device);
         de_mutex_lock(&m->heap_lock);
@@ -264,12 +264,22 @@ void de__mtl_accel_compact(de_gpu_cmd *c, de__gpu_accel *src, de__gpu_accel *dst
         dst->built = true;
     }
 }
-void de__mtl_accel_residency(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind) {
-    mtl_device *m = de__mtl_dev(d);
+void de__mtl_accel_residency(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind kind) {
+    mtl_device *m = de__mtl_dev(c->device);
+    mtl_cmd *mc = de__gpu_cmd_payload(c);
     de_mutex_lock(&m->heap_lock);
     for (mtl_accel *a = m->accels; a; a = a->next) {
         NSArray *resources = (__bridge NSArray *)a->refs;
         id<MTLResource> obj = (__bridge id<MTLAccelerationStructure>)a->object;
+        /* A retired record can still be on this list, with a retire fence older than this
+         * recording. Every object named by useResource needs its own command ownership;
+         * front-end deferred destruction alone cannot protect that newer use. Retain while
+         * holding the list lock, before another thread can unlink/release the native object. */
+        if (!mc->accel_keep)
+            mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
+        NSMutableSet *keep = (__bridge NSMutableSet *)mc->accel_keep;
+        [keep addObject:obj];
+        if (resources) [keep addObjectsFromArray:resources];
         if (kind == DE__MTL_ENC_COMPUTE) {
             id<MTLComputeCommandEncoder> e = (__bridge id<MTLComputeCommandEncoder>)encoder;
             [e useResource:obj usage:MTLResourceUsageRead];
