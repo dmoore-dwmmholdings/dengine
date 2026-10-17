@@ -177,6 +177,46 @@ TEST_F(vk, clear_readback, cmd_fx) {
 
 /* ---------- BC7 copy round trip ---------- */
 
+/* Different VkBuffers can share a retired heap range. A host fence wait alone must not
+ * leave synchronization validation seeing the previous alias's transfer write unbarriered. */
+TEST_F(vk, readback_allocation_reuse, cmd_fx) {
+    enum { BYTES = 4096, REPEATS = 8 };
+    de_gpu_buffer upload = de_gpu_buffer_create(
+        f->d,
+        &(de_gpu_buffer_desc){.size = BYTES, .memory = DE_MEM_UPLOAD, .usage = DE_USAGE_COPY_SRC});
+    de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
+    ASSERT_TRUE(upload.id && fence.id);
+    u8 *source = de_gpu_buffer_map(f->d, upload);
+    ASSERT_TRUE(source != NULL);
+    uintptr_t addresses[REPEATS];
+    bool reused = false;
+    for (u32 pass = 0; pass < REPEATS; ++pass) {
+        de__gpu_collect(f->d);
+        de_gpu_buffer readback = de_gpu_buffer_create(
+            f->d, &(de_gpu_buffer_desc){
+                      .size = BYTES, .memory = DE_MEM_READBACK, .usage = DE_USAGE_COPY_DST});
+        ASSERT_TRUE(readback.id);
+        for (u32 i = 0; i < BYTES; ++i)
+            source[i] = (u8)(i * 7u + pass * 31u);
+        de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "readback allocation reuse");
+        ASSERT_TRUE(cmd != NULL);
+        de_gpu_barrier barrier = buf_barrier(readback, DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+        de_gpu_cmd_copy_buffer(cmd, readback, 0, upload, 0, BYTES);
+        submit_wait(f->d, DE_QUEUE_GRAPHICS, cmd, fence, pass + 1u);
+        const void *mapped = de_gpu_buffer_map(f->d, readback);
+        ASSERT_TRUE(mapped != NULL);
+        EXPECT_MEMEQ(mapped, source, BYTES);
+        addresses[pass] = (uintptr_t)mapped;
+        for (u32 prior = 0; prior < pass; ++prior)
+            reused |= addresses[pass] == addresses[prior];
+        de_gpu_buffer_destroy(f->d, readback);
+    }
+    EXPECT_TRUE(reused);
+    de_gpu_buffer_destroy(f->d, upload);
+    de_gpu_fence_destroy(f->d, fence);
+}
+
 TEST_F(vk, copy_bc7_mips, cmd_fx) {
     enum { SIZE = 64, MIPS = 4, PITCH = 256 };
     de_gpu_texture tex = de_gpu_texture_create(

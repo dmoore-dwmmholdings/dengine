@@ -261,6 +261,7 @@ de_result de__vk_buffer_create_placed(de_gpu_device *d, de__gpu_buffer *b,
 }
 
 void de__vk_buffer_destroy(de_gpu_device *d, de__gpu_buffer *b) {
+    de__vk_bindless_clear_buffer(d, b);
     release_buffer(d, b);
 }
 
