@@ -22,8 +22,7 @@ typedef struct de__gpu_accel_scratch {
     struct de__gpu_accel_scratch *next;
     de__gpu_buffer *scratch, *instances, *addresses;
 } de__gpu_accel_scratch;
-de__gpu_buffer *de__gpu_accel_buffer(de_gpu_device *d, u64 bytes, u32 usage,
-                                     de_gpu_memory memory);
+de__gpu_buffer *de__gpu_accel_buffer(de_gpu_device *d, u64 bytes, u32 usage, de_gpu_memory memory);
 void de__gpu_accel_buffer_free(de_gpu_device *d, de__gpu_buffer *b);
 de__gpu_accel_scratch *de__gpu_accel_scratch_get(de_gpu_cmd *c, u64 bytes, u32 instances);
 bool de__gpu_accel_translate_gpu(de_gpu_cmd *, de__gpu_buffer *, de__gpu_accel_scratch *, u32);

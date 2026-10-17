@@ -105,7 +105,7 @@ typedef struct de__gpu_accel {
     de_gpu_accel_desc desc;
     de_gpu_blas_geometry *geometries;
     de_gpu_accel_sizes sizes;
-    bool built;
+    bool built; /**< Backend sets true only after successfully recording build/copy. */
     u32 built_count;
     struct de_gpu_cmd *emit_cmd;
     u64 emit_serial, emit_value;

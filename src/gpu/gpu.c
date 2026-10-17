@@ -1384,7 +1384,7 @@ void de_gpu_cmd_dispatch_indirect(de_gpu_cmd *c, de_gpu_buffer args, u64 offset)
 /* Ray tracing (S16): refused in every build, nothing is recorded. */
 static void rt_unsupported(de_gpu_cmd *c, const char *f) {
     if (c)
-        de__gpu_fail(c->device, DE_ERR_UNSUPPORTED, "%s: ray tracing is not available before S16",
+        de__gpu_fail(c->device, DE_ERR_UNSUPPORTED, "%s: ray tracing pipelines are not available before S17",
                      f);
 }
 

@@ -17,8 +17,9 @@ struct Params { uint input, output, addresses, count, address_count; };
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID, uniform Params p)
 {
-    uint i = tid.x;
-    if (i >= p.count) return;
+    // Grid-stride traversal keeps dispatch dimensions within the portable 65535-group bound.
+    uint stride = min((p.count + 63) / 64, 65535u) * 64;
+    for (uint i = tid.x; i < p.count; i += stride) {
 #if defined(DE_ACCEL_FIXED_BINDINGS)
     let src = source_buffer;
     let table = address_buffer;
@@ -47,4 +48,5 @@ void main(uint3 tid : SV_DispatchThreadID, uniform Params p)
     }
     dst.Store(i * 64 + 56, valid ? lo : 0);
     dst.Store(i * 64 + 60, valid ? hi : 0);
+    }
 }

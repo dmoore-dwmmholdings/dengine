@@ -27,8 +27,8 @@ de_result de__gpu_accel_validate(de_gpu_device *d, const de_gpu_accel_desc *x) {
             return invalid(d, "invalid float3 vertex range, usage or stale buffer");
         if (g->indices.id) {
             const u32 width = g->index_u16 ? 2u : 4u;
-            if (!b || !(b->usage & DE_USAGE_ACCEL_INPUT) || !g->index_count ||
-                g->index_count % 3 || g->index_offset % width || g->index_offset > b->size ||
+            if (!b || !(b->usage & DE_USAGE_ACCEL_INPUT) || !g->index_count || g->index_count % 3 ||
+                g->index_offset % width || g->index_offset > b->size ||
                 (u64)g->index_count * width > b->size - g->index_offset)
                 return invalid(d, "invalid triangle index range, usage or stale buffer");
         } else if (g->index_count || g->index_offset || g->vertex_count % 3)
@@ -41,6 +41,10 @@ de_gpu_accel_sizes de_gpu_accel_query_sizes(de_gpu_device *d, const de_gpu_accel
     de_gpu_accel_sizes s = {0};
     if (de__gpu_accel_validate(d, desc) != DE_OK)
         return s;
+    if (de__gpu_poll_lost(d, "de_gpu_accel_query_sizes")) {
+        de__gpu_lost_error("de_gpu_accel_query_sizes");
+        return s;
+    }
     if (!d->vt->accel_query_sizes) {
         de__gpu_fail(d, DE_ERR_UNSUPPORTED, "accel: backend has no acceleration structures");
         return s;
@@ -67,8 +71,11 @@ de_gpu_accel de__gpu_accel_create(de_gpu_device *d, const de_gpu_accel_desc *des
     a->desc = *desc;
     a->desc.name = a->name;
     if (desc->name) {
-        strncpy(a->name, desc->name, sizeof a->name - 1);
-        a->name[sizeof a->name - 1] = 0;
+        size_t len = strlen(desc->name);
+        if (len >= sizeof a->name)
+            len = sizeof a->name - 1;
+        memcpy(a->name, desc->name, len);
+        a->name[len] = 0;
     }
     if (desc->geometry_count) {
         size_t n = (size_t)desc->geometry_count * sizeof *a->geometries;
@@ -142,8 +149,8 @@ void de_gpu_cmd_build_tlas(de_gpu_cmd *c, de_gpu_accel h, de_gpu_buffer instance
     if (!a)
         return;
     de__gpu_buffer *b = de__gpu_get_buffer(c->device, instances);
-    if (!a->is_tlas || !b || !(b->usage & DE_USAGE_ACCEL_INPUT) ||
-        count > a->desc.max_instances || (u64)count * sizeof(de_gpu_tlas_instance) > b->size ||
+    if (!a->is_tlas || !b || !(b->usage & DE_USAGE_ACCEL_INPUT) || count > a->desc.max_instances ||
+        (u64)count * sizeof(de_gpu_tlas_instance) > b->size ||
         (update && (!a->built || !a->desc.allow_update || count != a->built_count))) {
         invalid(c->device, "invalid TLAS instance range or refit count/flags");
         return;
@@ -209,7 +216,10 @@ de_gpu_accel de_gpu_cmd_accel_compact(de_gpu_cmd *c, de_gpu_accel h) {
     if (result.id) {
         de__gpu_accel *dst = de__gpu_get_accel(c->device, result);
         c->device->vt->cmd_accel_compact(c, a, dst);
-        /* Backend publishes built only after recording the copy successfully. */
+        if (!dst->built) {
+            de_gpu_accel_destroy(c->device, result);
+            result.id = 0;
+        }
     }
     return result;
 }
@@ -218,8 +228,8 @@ void de__gpu_accel_translate(const de_gpu_tlas_instance *in, de__gpu_native_inst
                              const de__gpu_accel_address *table, u32 n) {
     memset(out, 0, sizeof *out);
     memcpy(out->transform, in->transform, sizeof out->transform);
-    out->custom_mask = in->custom_index | (in->mask << 24);
-    out->sbt_flags = in->sbt_offset | (in->flags << 24);
+    out->custom_mask = in->custom_index | ((u32)in->mask << 24);
+    out->sbt_flags = in->sbt_offset | ((u32)in->flags << 24);
     u32 index = de__gpu_handle_index(in->blas.id);
     if (index < n && table[index].handle == in->blas.id && table[index].address)
         out->address = table[index].address;
@@ -227,8 +237,7 @@ void de__gpu_accel_translate(const de_gpu_tlas_instance *in, de__gpu_native_inst
         out->custom_mask &= 0xffffffu;
 }
 
-de__gpu_buffer *de__gpu_accel_buffer(de_gpu_device *d, u64 bytes, u32 usage,
-                                     de_gpu_memory memory) {
+de__gpu_buffer *de__gpu_accel_buffer(de_gpu_device *d, u64 bytes, u32 usage, de_gpu_memory memory) {
     size_t n = DE__GPU_ALIGN16(sizeof(de__gpu_buffer)) + d->vt->payload_size[DE__GPU_BUFFER];
     de__gpu_buffer *b = DE_ALLOC(d->alloc, n, 16, DE_MEM_RENDER);
     if (!b)
@@ -237,7 +246,7 @@ de__gpu_buffer *de__gpu_accel_buffer(de_gpu_device *d, u64 bytes, u32 usage,
     b->size = bytes;
     b->usage = usage;
     b->memory = memory;
-    strcpy(b->name, "AS internal");
+    memcpy(b->name, "AS internal", sizeof "AS internal");
     de_gpu_buffer_desc desc = {0};
     desc.size = bytes;
     desc.usage = usage;
@@ -319,8 +328,9 @@ de__gpu_accel_scratch *de__gpu_accel_scratch_get(de_gpu_cmd *c, u64 bytes, u32 i
 void de__gpu_accel_cmd_fini(de_gpu_cmd *c) {
     if (c->accel_pipeline) {
         c->device->vt->pipeline_destroy(c->device, c->accel_pipeline);
-        DE_FREE(c->device->alloc, c->accel_pipeline, DE__GPU_ALIGN16(sizeof *c->accel_pipeline) +
-                c->device->vt->payload_size[DE__GPU_PIPELINE]);
+        DE_FREE(c->device->alloc, c->accel_pipeline,
+                DE__GPU_ALIGN16(sizeof *c->accel_pipeline) +
+                    c->device->vt->payload_size[DE__GPU_PIPELINE]);
     }
     de__gpu_accel_scratch *s = c->accel_scratch;
     while (s) {
@@ -333,11 +343,12 @@ void de__gpu_accel_cmd_fini(de_gpu_cmd *c) {
     }
 }
 
-bool de__gpu_accel_translate_gpu(de_gpu_cmd *c, de__gpu_buffer *input,
-                                 de__gpu_accel_scratch *s, u32 count) {
+bool de__gpu_accel_translate_gpu(de_gpu_cmd *c, de__gpu_buffer *input, de__gpu_accel_scratch *s,
+                                 u32 count) {
     if (!c->device->vt->cmd_accel_translate)
         return false;
-    bool ok = c->device->vt->cmd_accel_translate(c, input, s->instances, s->addresses, count,
+    bool ok = c->device->vt->cmd_accel_translate(
+        c, input, s->instances, s->addresses, count,
         de__gpu_pool_get_stats(&c->device->pools[DE__GPU_ACCEL]).used);
     /* Translation consumes compute state; subsequent user dispatches bind their pipeline again. */
     c->has_pipeline = false;
