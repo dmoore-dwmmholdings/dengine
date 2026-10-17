@@ -929,3 +929,29 @@ if(TARGET test_render_ss_refraction)
         endif()
     endif()
 endif()
+
+# DENG-431: shared-production layered IBL, independent numeric/physical references, real
+# probe/GI/SSR/AO bindings and inactive-feature identity. Per-backend actual GPU acceptance.
+de_add_test(NAME render_ibl_layers
+    SOURCES test_ibl_layers.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_ibl_layers)
+    target_include_directories(test_render_ibl_layers PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_render_ibl_layers PRIVATE
+        "DE_ILL_TEST_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_ILL_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_render_ibl_layers PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_render_ibl_layers PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_ibl_layers PRIVATE DE_ILL_TEST_COOK=1)
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_ibl_layers PRIVATE version)
+        de_d3d12_agility_deploy(test_render_ibl_layers)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_ibl_layers)
+        endif()
+    endif()
+endif()

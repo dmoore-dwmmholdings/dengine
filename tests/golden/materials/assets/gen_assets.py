@@ -572,6 +572,25 @@ def scene_furnace():
     return sc
 
 
+def scene_layers_furnace():
+    """DENG-431: coat1, sheen1, then both over white; unchanged 2 % furnace limit."""
+    sc = Scene("layer furnace")
+    camera(sc, (0.0, -6.0, 0.0), 0.0, 30.0, 0.0)
+    items = [
+        mat("furnace_coat", base_color=[1.0, 1.0, 1.0], roughness=0.6,
+            clearcoat=1.0, clearcoat_roughness=0.15),
+        mat("furnace_sheen", base_color=[1.0, 1.0, 1.0], roughness=0.6,
+            sheen_color=[1.0, 1.0, 1.0], sheen_roughness=0.07),
+        mat("furnace_stack", base_color=[1.0, 1.0, 1.0], roughness=0.6,
+            sheen_color=[1.0, 1.0, 1.0], sheen_roughness=0.07,
+            clearcoat=1.0, clearcoat_roughness=0.15),
+    ]
+    for k, material in enumerate(items):
+        sc.entity([xf(((k - 1) * 1.2, 0.0, 0.0)), mesh_renderer(SPHERE, material)])
+    environment(sc, "env/uniform", 1.0)
+    return sc
+
+
 def scene_khr():
     """Procedural stand-ins for five Khronos glTF sample models (LICENSES.md), lit by the sky and
     a sun: ClearCoatTest (coat x coat roughness over a base), SheenChair (a seat of two boxes in a
@@ -651,6 +670,7 @@ def main():
         "gallery_ibl": scene_gallery(rows, False),
         "gallery_lights": scene_gallery(rows, True),
         "furnace": scene_furnace(),
+        "layers_furnace": scene_layers_furnace(),
         "khr_samples": scene_khr(),
     }
     for name, kv in MATS.items():

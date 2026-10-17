@@ -61,6 +61,6 @@ public float3 ssr_response(SurfaceData surface, float3 v, uint lut) {
     DeIbl ibl = (DeIbl)0;
     ibl.ambient = float4(1, 1, 1, 0);
     float3 d, s;
-    de_ibl_evaluate(surface, v, ibl, lut, surface.ao, d, s);
-    return s; // same split-sum material response as probe/sky, applied once to the ratio
+    de_ibl_evaluate_base(surface, v, ibl, lut, surface.ao, d, s);
+    return s; // Base-only split-sum response; the producer reconstructs only the G-buffer.
 }
