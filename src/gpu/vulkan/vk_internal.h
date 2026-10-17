@@ -470,6 +470,7 @@ void de__vk_sampler_destroy(de_gpu_device *d, de__gpu_sampler *s);
 de_result de__vk_bindless_init(de_gpu_device *d);
 void de__vk_bindless_shutdown(de_gpu_device *d);
 void de__vk_bindless_write_buffer(de_gpu_device *d, u32 index, de__gpu_buffer *b);
+void de__vk_bindless_clear_buffer(de_gpu_device *d, const de__gpu_buffer *b);
 void de__vk_bindless_write_texture(de_gpu_device *d, u32 index, de__gpu_texture *t, u32 mip,
                                    bool storage);
 void de__vk_bindless_write_sampler(de_gpu_device *d, u32 index, de__gpu_sampler *s);

@@ -270,6 +270,10 @@ void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
     u32 i = 0;
     while (i < count) {
         u32 ni = 0, nb = 0;
+        VkMemoryBarrier2 alias = {0};
+        alias.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        alias.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        alias.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
         for (; i < count && ni < BATCH && nb < BATCH; ++i) {
             const de_gpu_barrier *x = &b[i];
             if (x->texture.id) {
@@ -293,6 +297,15 @@ void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
                 de__vk_translate_barrier(&vc->barrier_ctx, x, NULL,
                                          DE__GPU_PAYLOAD(de__vk_buffer, bb)->buffer, NULL,
                                          &bufs[nb++]);
+                /* NONE discards this buffer's contents, not earlier accesses to its heap.
+                 * Retired buffers can donate the same allocation to a new VkBuffer. A buffer
+                 * barrier only scopes accesses through the new handle; the memory dependency
+                 * must also cover the previous alias (including earlier readback copies).
+                 * Queue transfers still require the caller's semaphore dependency. */
+                if (x->before == DE_ACCESS_NONE && x->src_queue == x->dst_queue) {
+                    alias.dstStageMask |= bufs[nb - 1u].dstStageMask;
+                    alias.dstAccessMask |= bufs[nb - 1u].dstAccessMask;
+                }
             }
             else if (x->accel.id) {
                 de__gpu_accel *a = de__gpu_get_accel(d, x->accel);
@@ -309,6 +322,8 @@ void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
         VkDependencyInfo di;
         memset(&di, 0, sizeof di);
         di.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount = alias.dstStageMask ? 1u : 0u;
+        di.pMemoryBarriers = alias.dstStageMask ? &alias : NULL;
         di.imageMemoryBarrierCount = ni;
         di.pImageMemoryBarriers = imgs;
         di.bufferMemoryBarrierCount = nb;

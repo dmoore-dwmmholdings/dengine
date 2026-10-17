@@ -280,6 +280,14 @@ void de__vk_bindless_write_buffer(de_gpu_device *d, u32 index, de__gpu_buffer *b
     write_buffer(vk, index, DE__GPU_PAYLOAD(de__vk_buffer, b)->buffer, b->size);
 }
 
+/* As for textures below, retired buffer descriptors must not retain destroyed objects.
+ * GPU-assisted validation can revisit an index used by an earlier submission. */
+void de__vk_bindless_clear_buffer(de_gpu_device *d, const de__gpu_buffer *b) {
+    de__vk_device *vk = de__vk(d);
+    if (b->bindless && vk->set != VK_NULL_HANDLE && vk->null_buffer)
+        write_buffer(vk, b->bindless, vk->null_buffer, 256);
+}
+
 void de__vk_bindless_write_texture(de_gpu_device *d, u32 index, de__gpu_texture *t, u32 mip,
                                    bool storage) {
     de__vk_device *vk = de__vk(d);
