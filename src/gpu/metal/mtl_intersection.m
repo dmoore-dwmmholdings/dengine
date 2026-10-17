@@ -19,24 +19,3 @@ de_result de__mtl_intersection_table(de_gpu_device *d, void *pipeline, void *fun
         return DE_OK;
     }
 }
-de_result de__mtl_intersection_link(de_gpu_device *d, void *kernel, void *function,
-                                    void **pipeline, void **table) {
-    *pipeline = NULL;
-    *table = NULL;
-    @autoreleasepool {
-        MTLComputePipelineDescriptor *desc = [MTLComputePipelineDescriptor new];
-        desc.computeFunction = (__bridge id<MTLFunction>)kernel;
-        MTLLinkedFunctions *linked = [MTLLinkedFunctions new];
-        linked.functions = @[(__bridge id<MTLFunction>)function];
-        desc.linkedFunctions = linked;
-        NSError *err = nil;
-        id<MTLDevice> dev = (__bridge id<MTLDevice>)de__mtl_dev(d)->device;
-        id<MTLComputePipelineState> p = [dev newComputePipelineStateWithDescriptor:desc
-            options:MTLPipelineOptionNone reflection:nil error:&err];
-        if (!p) return de__gpu_fail(d, DE_ERR_UNSUPPORTED, "metal: intersection pipeline: %s",
-                                    err.localizedDescription.UTF8String);
-        DE_TRY(de__mtl_intersection_table(d, (__bridge void *)p, function, table));
-        *pipeline = (void *)CFBridgingRetain(p);
-        return DE_OK;
-    }
-}

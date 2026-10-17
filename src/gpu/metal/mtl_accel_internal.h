@@ -23,9 +23,7 @@ bool de__mtl_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
 void de__mtl_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
 void de__mtl_accel_residency(de_gpu_device *, void *, de__mtl_encoder_kind);
 void de__mtl_accel_shutdown(de_gpu_device *);
-/* Link a compute entry point with an intersection function, producing retained Metal objects.
- * Native functions stay opaque outside this private backend interface. */
+/* Private shader ABI: optional de_metal_intersection export, kernel IFT buffer2,
+ * callback argument heap buffer0. Called by normal compute pipeline creation. */
 de_result de__mtl_intersection_table(de_gpu_device *, void *pipeline, void *function, void **table);
-de_result de__mtl_intersection_link(de_gpu_device *, void *kernel, void *function,
-                                    void **pipeline, void **table);
 #endif

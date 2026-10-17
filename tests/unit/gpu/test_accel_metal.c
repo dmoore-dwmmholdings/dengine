@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <dengine/de_debug.h>
 #include "metal/mtl_test_helpers.h"
+#include "pipeline_shaders.h"
 #include <string.h>
 void *de_test_mtl_accel_helper(de_gpu_device *d);
 void de_test_mtl_accel_release(de_gpu_device *d, void *helper);
@@ -23,7 +24,8 @@ static void setup(fixture *f, bool opaque) {
     f->alloc=de_tracking_allocator_init(&f->tracker,NULL,DE_MEM_RENDER);
     de_result r=de_gpu_device_create(&(de_gpu_device_desc){.backend=DE_GPU_METAL,
         .allocator=&f->alloc,.debug_layer=true,.gpu_validation=true,.pipeline_cache_dir=""},&f->d);
-    if(r!=DE_OK) SKIP("Metal runtime unavailable");
+    if(r==DE_ERR_UNSUPPORTED) SKIP("Metal runtime unavailable");
+    ASSERT_EQ(DE_OK,r);
     if(!de_gpu_get_caps(f->d)->ray_query) SKIP("Metal ray-query API unavailable");
     printf("Metal AS: %s, raytracing=%d, ray_query=%d\n",de_gpu_get_caps(f->d)->device_name,
         de_gpu_get_caps(f->d)->raytracing,de_gpu_get_caps(f->d)->ray_query);
@@ -109,6 +111,7 @@ static f32 trace(fixture *f, bool build_blas,bool refit) {
 TEST_F(accel_metal, build_trace, fixture) {
     ASSERT_FLOAT_EQ(3.0f,trace(f,true,false),0.001f);
     ASSERT_EQ(0,((u32*)de_gpu_buffer_map(f->d,f->readback))[2]);
+    ASSERT_FLOAT_EQ(37.0f,((f32*)de_gpu_buffer_map(f->d,f->readback))[1],0.0f);
 }
 TEST_F(accel_metal, refit, fixture) {
     ASSERT_FLOAT_EQ(3.0f,trace(f,true,false),0.001f);
@@ -194,4 +197,54 @@ TEST_F(accel_metal, warmed_scratch_reuse, fixture) {
         de_gpu_wait_idle(f->d);
     }
     EXPECT_EQ(before,de_tracking_allocator_stats(&f->tracker).alloc_count);
+}
+
+TEST_F(accel_metal, slang_ray_query, fixture) {
+#if DE_PIPE_TEST_COOK
+    char why[512]={0};
+    ASSERT_TRUE(de_pipe_test_cook(DE__SHADER_TARGET_METALLIB,why,sizeof why));
+    de_pipe_test_shader sh;
+    ASSERT_TRUE(de_pipe_test_get(DE__SHADER_TARGET_METALLIB,"accel_query.slang","cs_main",&sh));
+    de_gpu_pipeline p=de_gpu_pipeline_create(f->d,&(de_gpu_pipeline_desc){.kind=DE_PIPE_COMPUTE,
+        .cs=sh.blob,.push_constant_bytes=8,.threadgroup_size={1,1,1}});
+    ASSERT_TRUE(p.id!=0);
+    /* Shared Slang test ray starts at x=0; keep a nonidentity z translation. */
+    f->instance=(de_gpu_tlas_instance){.transform={1,0,0,0,0,1,0,0,0,0,1,1},
+        .mask=255,.blas=f->blas};
+    de_gpu_cmd *c=de_gpu_cmd_begin(f->d,DE_QUEUE_COMPUTE,"Slang Metal RayQuery");
+    de_gpu_cmd_build_blas(c,f->blas,false);
+    ASSERT_TRUE(de_test_mtl_accel_generate(c,f->helper,f->instances,&f->instance));
+    de_gpu_cmd_build_tlas(c,f->tlas,f->instances,1,false);
+    de_gpu_cmd_set_pipeline(c,p);
+    const u32 pc[2]={de_gpu_accel_bindless(f->d,f->tlas),de_gpu_buffer_bindless(f->d,f->output)};
+    de_gpu_cmd_push_constants(c,pc,sizeof pc);
+    de_gpu_cmd_dispatch(c,1,1,1);
+    de_gpu_barrier b={.buffer=f->output,.before=DE_ACCESS_SHADER_WRITE,.after=DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(c,&b,1);
+    de_gpu_cmd_copy_buffer(c,f->readback,0,f->output,0,4);
+    submit(f,c);
+    ASSERT_FLOAT_EQ(3.0f,*(f32*)de_gpu_buffer_map(f->d,f->readback),0.001f);
+    de_gpu_pipeline_destroy(f->d,p);
+#else
+    SKIP("Slang shader importer not built");
+#endif
+}
+
+typedef fixture forced_fixture;
+static void forced_fixture_setup(forced_fixture *f) {
+    const char force[]="gpu.metal.force_use_heap = true\n";
+    ASSERT_EQ(DE_OK,de_cvar_load_from_memory(force,sizeof force-1));
+    setup(f,true);
+    de_cvar_set(de_cvar_find("gpu.metal.force_use_heap"),"0");
+    ASSERT_TRUE(de__mtl_residency_uses_heaps(f->d));
+}
+static void forced_fixture_teardown(forced_fixture *f) { fixture_teardown(f); }
+TEST_F(accel_metal, forced_use_heap, forced_fixture) {
+    ASSERT_FLOAT_EQ(3.0f,trace(f,true,false),0.001f);
+    de_gpu_accel_destroy(f->d,f->blas);
+    f->blas.id=0;
+    de_gpu_wait_idle(f->d);
+    de_gpu_cmd *c=de_gpu_cmd_begin(f->d,DE_QUEUE_COMPUTE,"useHeap retired BLAS residency");
+    de_gpu_cmd_copy_buffer(c,f->calls,0,f->zeros,0,4);
+    ASSERT_FLOAT_EQ(3.0f,finish_trace(f,c),0.001f);
 }

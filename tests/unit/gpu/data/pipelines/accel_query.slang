@@ -4,7 +4,6 @@ struct Params { uint tlas, output; };
 [numthreads(1, 1, 1)]
 void cs_main(uint3 id : SV_DispatchThreadID, uniform Params p)
 {
-#if !defined(DE_SHADER_TARGET_METAL)
     RayDesc ray;
     ray.Origin = float3(0, 0, 0);
     ray.Direction = float3(0, 0, 1);
@@ -15,5 +14,4 @@ void cs_main(uint3 id : SV_DispatchThreadID, uniform Params p)
     while (q.Proceed()) { }
     float t = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? q.CommittedRayT() : -1.0;
     de_rwbytes(p.output).store(0, asuint(t));
-#endif
 }
