@@ -357,7 +357,7 @@ TEST_F(gpu, unsupported_features, null_fx) {
     de_gpu_accel a = de_gpu_accel_create(f->d, &(de_gpu_accel_desc){.is_tlas = true});
     EXPECT_FALSE(DE_HANDLE_VALID(a));
     ASSERT_TRUE(de_error_last() != NULL);
-    EXPECT_EQ(de_error_last()->result, DE_ERR_UNSUPPORTED);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_gpu_accel_bindless(f->d, a), DE_GPU_BINDLESS_INVALID);
 
     de_gpu_swapchain sc =

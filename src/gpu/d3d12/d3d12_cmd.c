@@ -106,6 +106,8 @@ void de__d3d12_cmd_fini(de_gpu_device *d, de_gpu_cmd *c) {
     d3d12_cmd *dc = de__d3d12_cmd(c);
     if (dc->open && dc->list)
         ID3D12GraphicsCommandList_Close(dc->list);
+    if (dc->accel_root) ID3D12RootSignature_Release(dc->accel_root);
+    if (dc->accel_pipeline) ID3D12PipelineState_Release(dc->accel_pipeline);
     if (dc->rtv_heap)
         ID3D12DescriptorHeap_Release(dc->rtv_heap);
     if (dc->dsv_heap)

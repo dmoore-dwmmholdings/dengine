@@ -24,6 +24,7 @@
  * buffer when it is mapped, so the render graph's GPU timers can be tested without a GPU.
  */
 #include "gpu/gpu_backend.h"
+#include "gpu/gpu_accel_internal.h"
 
 #include <string.h>
 
@@ -98,7 +99,7 @@ static de_result null_device_create(de_gpu_device *d, const de_gpu_device_desc *
     caps->max_bindless_buffers = 1000000;
     caps->max_bindless_storage_textures = 1000000;
     caps->max_bindless_samplers = 2048;
-    caps->max_bindless_accels = 0;
+    caps->max_bindless_accels = 1024;
     caps->max_push_constant_bytes = DE_GPU_MAX_PUSH_CONSTANT_BYTES;
     caps->timestamp_frequency = 1000000000u;
     caps->mesh_max_output_vertices = 256;
@@ -326,6 +327,13 @@ static void null_cmd_resolve_queries(de_gpu_cmd *c, de__gpu_query_heap *h, u32 f
                                      de__gpu_buffer *dst, u64 dst_off);
 
 const de__gpu_backend_vtable de__gpu_null_vtable = {
+    .accel_create = de__null_accel_create,
+    .accel_query_sizes = de__null_accel_sizes,
+    .cmd_build_blas = de__null_accel_build_blas,
+    .cmd_build_tlas = de__null_accel_build_tlas,
+    .cmd_accel_emit = de__null_accel_emit,
+    .accel_compacted_size = de__null_accel_read,
+    .cmd_accel_compact = de__null_accel_compact,
     .name = "null",
     .device_payload_size = sizeof(null_device),
     .cmd_payload_size = 0,

@@ -102,6 +102,14 @@ typedef struct de__gpu_pipeline {
 typedef struct de__gpu_accel {
     bool is_tlas;
     u32 bindless;
+    de_gpu_accel_desc desc;
+    de_gpu_blas_geometry *geometries;
+    de_gpu_accel_sizes sizes;
+    bool built; /**< Backend sets true only after successfully recording build/copy. */
+    u32 built_count;
+    struct de_gpu_cmd *emit_cmd;
+    u64 emit_serial, emit_value;
+    de_gpu_queue emit_queue;
     char name[DE__GPU_NAME_MAX];
 } de__gpu_accel;
 
@@ -152,6 +160,9 @@ struct de_gpu_cmd {
     struct de_gpu_cmd *next;     /**< free / in-flight list */
     struct de_gpu_cmd *all_next; /**< every command list of the device */
     char name[DE__GPU_NAME_MAX];
+    u64 accel_serial;
+    struct de__gpu_accel_scratch *accel_scratch, *accel_cursor;
+    de__gpu_pipeline *accel_pipeline;
     bool has_index_buffer; /**< de_gpu_cmd_set_index_buffer was called (S10, DENG-323) */
     /* DENG-326 (query.c): the open debug markers, outermost first. Names are copied into
      * `marker_text` (cut to fit), so a marker never allocates; read them with
@@ -352,6 +363,14 @@ typedef struct de__gpu_backend_vtable {
      * DE_FAIL (there is no device to log to). NULL: the front-end reports the device that
      * adapter 0 creates as the only adapter. */
     de_result (*enumerate_adapters)(de_gpu_adapter_info *out, u32 cap, u32 *count);
+    bool (*cmd_accel_translate)(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *,
+                                 de__gpu_buffer *, u32, u32);
+    /* DENG-42: backend-neutral AS extensions. Scratch and native instances are command-owned. */
+    de_result (*accel_query_sizes)(de_gpu_device *, const de_gpu_accel_desc *, de_gpu_accel_sizes *);
+    u64 (*accel_address)(de_gpu_device *, de__gpu_accel *);
+    void (*cmd_accel_emit)(de_gpu_cmd *, de__gpu_accel *);
+    bool (*accel_compacted_size)(de_gpu_device *, de__gpu_accel *, u64 *);
+    void (*cmd_accel_compact)(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */

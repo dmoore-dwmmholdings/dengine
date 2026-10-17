@@ -620,12 +620,24 @@ static de_result d3d12_enumerate_adapters(de_gpu_adapter_info *out, u32 cap, u32
 }
 
 const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
+    .cmd_accel_translate = de__d3d12_accel_translate,
+    .accel_create = de__d3d12_accel_create,
+    .accel_destroy = de__d3d12_accel_destroy,
+    .accel_query_sizes = de__d3d12_accel_sizes,
+    .accel_address = de__d3d12_accel_address,
+    .cmd_build_blas = de__d3d12_accel_blas,
+    .cmd_build_tlas = de__d3d12_accel_tlas,
+    .cmd_accel_emit = de__d3d12_accel_emit,
+    .accel_compacted_size = de__d3d12_accel_read,
+    .cmd_accel_compact = de__d3d12_accel_compact,
+    .bindless_write_accel = de__d3d12_bindless_write_accel,
     .name = "d3d12",
     .device_payload_size = sizeof(d3d12_device),
     .cmd_payload_size = sizeof(d3d12_cmd),
     .payload_size =
         {
-            [DE__GPU_BUFFER] = sizeof(d3d12_buffer),
+            [DE__GPU_ACCEL] = sizeof(d3d12_accel),
+         [DE__GPU_BUFFER] = sizeof(d3d12_buffer),
             [DE__GPU_TEXTURE] = sizeof(d3d12_texture),
             [DE__GPU_FENCE] = sizeof(d3d12_fence),
             [DE__GPU_SWAPCHAIN] = sizeof(d3d12_swapchain),

@@ -80,6 +80,7 @@ ParameterBlock<DeBindlessHeap> de__heap;
 [[vk::binding(1, 0)]] __DynamicResource<__DynamicResourceKind.General> de__vk_storage_textures[];
 [[vk::binding(2, 0)]] __DynamicResource<__DynamicResourceKind.Sampler> de__vk_samplers[];
 [[vk::binding(3, 0)]] __DynamicResource<__DynamicResourceKind.General> de__vk_buffers[];
+[[vk::binding(4, 0)]] RaytracingAccelerationStructure de__vk_accels[];
 #else
 // D3D12: the read-only view (SRV) of the buffer at index i is at heap slot i + this offset
 // (DENG-410). It must equal DE__D3D12_BUFFER_SRV_OFFSET in src/gpu/d3d12/d3d12_internal.h, the
@@ -393,3 +394,15 @@ public DeRWBytes de_rwbytes(uint idx)
     b.index = idx;
     return b;
 }
+
+#if !defined(DE_SHADER_TARGET_METAL)
+/// A built TLAS at de_gpu_accel_bindless(). Ray queries need caps.ray_query.
+public RaytracingAccelerationStructure de_accel(uint idx)
+{
+#if defined(DE_SHADER_TARGET_SPIRV)
+    return de__vk_accels[NonUniformResourceIndex(idx)];
+#else
+    return RaytracingAccelerationStructure(ResourceDescriptorHeap[NonUniformResourceIndex(idx)]);
+#endif
+}
+#endif

@@ -233,7 +233,7 @@ void de__vk_fill_caps(const de__vk_device *vk, de_gpu_caps *caps) {
     caps->max_bindless_storage_textures = vk->table_size[DE__VK_BINDING_STORAGE_IMAGES];
     caps->max_bindless_samplers = vk->table_size[DE__VK_BINDING_SAMPLERS];
     caps->max_bindless_buffers = vk->table_size[DE__VK_BINDING_STORAGE_BUFFERS];
-    caps->max_bindless_accels = 0; /* the TLAS binding comes with ray tracing (S16) */
+    caps->max_bindless_accels = vk->on.accel ? vk->table_size[DE__VK_BINDING_ACCELS] : 0;
     u32 push = pr->limits.maxPushConstantsSize;
     caps->max_push_constant_bytes =
         push < DE_GPU_MAX_PUSH_CONSTANT_BYTES ? push : DE_GPU_MAX_PUSH_CONSTANT_BYTES;

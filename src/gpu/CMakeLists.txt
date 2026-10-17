@@ -8,6 +8,9 @@ de_add_module(
     SOURCES
         gpu_backend.h
         gpu.c
+        gpu_accel.c
+        gpu_accel_internal.h
+        null/null_accel.c
         handle_pool.h
         handle_pool.c
         validation.c

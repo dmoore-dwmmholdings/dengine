@@ -338,3 +338,31 @@ if(TARGET test_gpu_backends)
         endif()
     endif()
 endif()
+
+# DENG-42: neutral AS contract and deterministic null model.
+if(TARGET test_gpu)
+    target_sources(test_gpu PRIVATE test_accel.c)
+endif()
+
+# DENG-42: actual BLAS/TLAS RayQuery/refit/compaction and native instance translation.
+de_add_test(NAME gpu_accel_native
+    SOURCES test_accel_native.c data/pipelines/pipeline_shaders.c
+    LIBS ${_de_backends_libs}
+    LABELS unit gpu rt
+    TIMEOUT 180)
+if(TARGET test_gpu_accel_native)
+    target_include_directories(test_gpu_accel_native PRIVATE "${DE_ROOT_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines")
+    if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
+        target_link_libraries(test_gpu_accel_native PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+        target_include_directories(test_gpu_accel_native PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_gpu_accel_native PRIVATE DE_PIPE_TEST_COOK=1
+            "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pipelines\"")
+    endif()
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_gpu_accel_native)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_gpu_accel_native)
+        endif()
+    endif()
+endif()
