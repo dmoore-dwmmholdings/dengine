@@ -955,3 +955,20 @@ if(TARGET test_render_ibl_layers)
         endif()
     endif()
 endif()
+
+# DENG-336: fixed-pool atlas allocation and local-light shadow cache acceptance.
+de_add_test(NAME render_shadow_atlas
+    SOURCES test_shadow_atlas.c render_d3d12_test.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_shadow_atlas)
+    target_include_directories(test_render_shadow_atlas PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_shadow_atlas PRIVATE version)
+        de_d3d12_agility_deploy(test_render_shadow_atlas)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_shadow_atlas)
+        endif()
+    endif()
+endif()

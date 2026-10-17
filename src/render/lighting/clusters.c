@@ -44,6 +44,7 @@ typedef struct cl_pass {
     cl_cull_params pc;
     u32 groups;
     de_rg_resource bounds, lights, dir_lights, grid, list, counters, tile_counters;
+    de_rg_resource atlas_records;
     u32 width, height; /* cluster_build */
 } cl_pass;
 
@@ -59,6 +60,7 @@ static cl_cull_params cull_params(const cl_pass *p, const de_rg_pass *pass) {
     pc.grid = buf_index(p, pass, p->grid);
     pc.list = buf_index(p, pass, p->list);
     pc.counters = buf_index(p, pass, p->counters);
+    pc.reserved1 = buf_index(p, pass, p->atlas_records);
     return pc;
 }
 
@@ -183,6 +185,7 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     b_clear.counters = lc->counters;
     b_clear.tile_counters = lc->tile_counters;
     b_prep.kernel = &lt->light_prep;
+    b_prep.atlas_records = lc->atlas_records;
     b_prep.lights = lc->lights;
     b_prep.dir_lights = lc->dir_lights;
     b_prep.counters = lc->counters;
@@ -220,6 +223,8 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, vc->scene_instances, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(vc->scene_materials))
         de_rg_read(p, vc->scene_materials, DE_ACCESS_SHADER_READ);
+    if (DE_HANDLE_VALID(lc->atlas_records))
+        de_rg_read(p, lc->atlas_records, DE_ACCESS_SHADER_READ);
     de_rg_read(p, lc->counters, DE_ACCESS_SHADER_READ); /* atomics */
     de_rg_write(p, lc->counters, DE_ACCESS_SHADER_WRITE);
     de_rg_write(p, lc->lights, DE_ACCESS_SHADER_WRITE);

@@ -537,7 +537,9 @@ de_result de__vk_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         VkPipelineDepthStencilStateCreateInfo ds;
         memset(&ds, 0, sizeof ds);
         ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        ds.depthTestEnable = desc->depth_test ? VK_TRUE : VK_FALSE;
+        /* Vulkan disables depth writes too when testing is disabled. ALWAYS implements the
+         * existing write-without-test contract, including scissored shadow tile clears. */
+        ds.depthTestEnable = (desc->depth_test || desc->depth_write) ? VK_TRUE : VK_FALSE;
         ds.depthWriteEnable = desc->depth_write ? VK_TRUE : VK_FALSE;
         /* Reverse-Z (SPEC §5.4): near is 1, far is 0. depth_write without depth_test writes
          * every fragment (ALWAYS). */

@@ -392,3 +392,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE passes/forward/scene_color_pyramid.c passes/forward/scene_color_pyramid.h)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE shadows/atlas_alloc.c shadows/shadow_atlas.c)
+endif()

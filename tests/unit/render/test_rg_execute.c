@@ -372,6 +372,71 @@ TEST_F(rg_execute, parallel_deterministic_partition, xfx) {
     free(parallel);
 }
 
+/* The same production helper bounds record-all-before-submit on Metal. It may combine adjacent
+ * steps inside a batch, but must preserve all work and reserve native resolve/head capacity. */
+TEST_F(rg_execute, native_queue_bounded_partition, xfx) {
+    open_null(f, false);
+    frame_begin(f);
+    const de_rg_resource out = de_rg_import_texture(f->g, f->out, DE_ACCESS_NONE);
+    for (u32 i = 0; i < 200; ++i) {
+        de_rg_pass *p = de_rg_add_pass(f->g, "capacity work", DE_QUEUE_GRAPHICS, exec_mark, NULL);
+        de_rg_pass_side_effect(p);
+        de_rg_write(p, out, DE_ACCESS_SHADER_WRITE);
+    }
+    de_rg_export(f->g, out, DE_ACCESS_SHADER_READ);
+    ASSERT_EQ(de__rg_finalize(f->g), DE_OK);
+    ASSERT_EQ(de__rg_compile(f->g), DE_OK);
+    const de__rg_plan *plan = f->g->plan;
+    ASSERT_EQ(de__rg_partition_recording(f->g, 1, NULL, NULL), DE_OK);
+    u32 count = 0;
+    de__rg_exec_chunks(f->g, &count);
+    EXPECT_GT(count, 64u);
+    const u32 limits[DE_QUEUE_COUNT_] = {64, 64, 64}, reserved[DE_QUEUE_COUNT_] = {2, 1, 2};
+    ASSERT_EQ(de__rg_partition_recording(f->g, 1, limits, reserved), DE_OK);
+    const de__rg_chunk *chunks = de__rg_exec_chunks(f->g, &count);
+    ASSERT_LE(count, 64u);
+    de__rg_chunk snapshot[64];
+    memcpy(snapshot, chunks, count * sizeof *chunks);
+    u32 cursor = 0, per_queue[DE_QUEUE_COUNT_] = {0};
+    for (u32 bi = 0; bi < plan->batch_count; ++bi) {
+        const de__rg_batch *batch = &plan->batches[bi];
+        u32 covered = 0;
+        while (cursor < count && chunks[cursor].batch == bi) {
+            const de__rg_chunk *c = &chunks[cursor++];
+            EXPECT_EQ(c->queue, batch->queue);
+            EXPECT_EQ(c->first, batch->step_first + covered);
+            EXPECT_GT(c->count, 0u);
+            covered += c->count;
+            ++per_queue[c->queue];
+        }
+        EXPECT_EQ(covered, batch->step_count);
+    }
+    EXPECT_EQ(cursor, count);
+    for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+        EXPECT_TRUE(per_queue[q] + reserved[q] <= limits[q]);
+    ASSERT_EQ(de__rg_partition_recording(f->g, 1, limits, reserved), DE_OK);
+    u32 repeated = 0;
+    chunks = de__rg_exec_chunks(f->g, &repeated);
+    EXPECT_EQ(repeated, count);
+    EXPECT_EQ(memcmp(snapshot, chunks, count * sizeof *chunks), 0);
+    EXPECT_TRUE(f->g->plan == plan);
+    // Exact irreducible capacity leaves precisely one chunk per nonempty batch.
+    u32 exact[DE_QUEUE_COUNT_];
+    memcpy(exact, reserved, sizeof exact);
+    for (u32 bi = 0; bi < plan->batch_count; ++bi)
+        exact[plan->batches[bi].queue] += plan->batches[bi].step_count != 0;
+    ASSERT_EQ(de__rg_partition_recording(f->g, 1, exact, reserved), DE_OK);
+    chunks = de__rg_exec_chunks(f->g, &count);
+    for (u32 i = 0; i < count; ++i)
+        EXPECT_EQ(chunks[i].count, plan->batches[chunks[i].batch].step_count);
+    --exact[DE_QUEUE_GRAPHICS];
+    de__gpu_null_log_enable(f->dev, true);
+    EXPECT_EQ(de__rg_partition_recording(f->g, 1, exact, reserved), DE_ERR_UNSUPPORTED);
+    EXPECT_EQ(de__gpu_null_log_count(f->dev), 0);
+    de__gpu_null_log_enable(f->dev, false);
+    de_error_clear();
+}
+
 /* Every executed pass: one breadcrumb, then its marker, a begin timestamp, ..., an end timestamp
  * and the pop, in its list; the frame span and the resolves. */
 TEST_F(rg_execute, markers_timers_breadcrumbs, xfx) {

@@ -2,6 +2,21 @@
 #define DE_RENDER_SHADOWS_INTERNAL_H
 #include "render/passes/vis/vis_stages.h"
 DE_EXTERN_C_BEGIN
+
+/* Implicit complete quadtree: one byte per node, allocated once; no allocation during use.
+ * Tile size includes guards. A tile handle is valid until freed or the allocator is reset. */
+typedef struct de__atlas_alloc {
+    const de_allocator *allocator;
+    u8 *nodes;
+    u32 size, node_count, occupied;
+} de__atlas_alloc;
+typedef struct de__atlas_tile {
+    u32 node, x, y, size;
+} de__atlas_tile;
+de_result de__atlas_alloc_init(de__atlas_alloc *a, const de_allocator *allocator, u32 size);
+void de__atlas_alloc_destroy(de__atlas_alloc *a);
+bool de__atlas_alloc_take(de__atlas_alloc *a, u32 size, de__atlas_tile *out);
+bool de__atlas_alloc_free(de__atlas_alloc *a, de__atlas_tile tile);
 /** Internal contexts never consume de_view slots. The pool grows in 32-context blocks. */
 typedef struct de__shadow_views de__shadow_views;
 typedef struct de__shadow_view_desc {
@@ -72,5 +87,46 @@ typedef struct de__csm_info {
     bool ready;
 } de__csm_info;
 bool de__csm_get(const de__csm *s, de_view view, de__csm_info *out);
+
+#define DE__ATLAS_LIGHTS  32u
+#define DE__ATLAS_FACES   (DE__ATLAS_LIGHTS * 6u)
+#define DE__ATLAS_RECORDS (1u + DE__ATLAS_FACES)
+/* Perspective metadata also retains linear near/far and local source radius for future PCSS. */
+typedef struct de__atlas_gpu {
+    f32 matrix[4][4], position[4], projection[4], tile[4];
+    u32 identity[4];
+    de__shadow_map_ref map;
+} de__atlas_gpu;
+DE_STATIC_ASSERT(sizeof(de__atlas_gpu) == 160, "AtlasShadow is 160 bytes");
+typedef struct de__shadow_atlas de__shadow_atlas;
+f32 de__atlas_light_range(const DeLight *light, f32 cutoff);
+de_result de__shadow_atlas_create_ex(de_gpu_device *dev, const de_allocator *alloc,
+                                     de__shadow_atlas **out);
+de_result de__shadow_atlas_create(de_renderer *r, de__shadow_atlas **out);
+/* Register every active receiver before building views: one shared atlas per effective caster
+ * mask, stable primary-camera ranking, maximum group resolution and a global tile quota. */
+void de__shadow_atlas_frame_begin(de__shadow_atlas *s, u64 frame,
+                                  const struct de__rw_view *ranking_camera);
+de_result de__shadow_atlas_frame_view(de__shadow_atlas *s, de_view view, u32 layer_mask,
+                                      de_quality quality);
+bool de__shadow_atlas_capture_ready(const de__shadow_atlas *s, de_view view);
+void de__shadow_atlas_destroy(de__shadow_atlas *s);
+de_result de__shadow_atlas_build(de__shadow_atlas *s, const de__view_frame *vf,
+                                 const de__vis_context *vc);
+void de__shadow_atlas_complete(de__shadow_atlas *s, de_view view, const de_rg *graph,
+                               bool attempted, bool success);
+void de__shadow_atlas_publish(de__shadow_atlas *s, de_view view, de_rg *g, u64 frame,
+                              struct de__lighting_inputs *in);
+typedef struct de__atlas_info {
+    u32 size, lights, rendered, occupied, capacity;
+    bool ready;
+    de_gpu_texture depth, mirror;
+    de_gpu_buffer records; /**< Immutable upload entry used by this receiver's latest frame. */
+    de__atlas_gpu data[DE__ATLAS_RECORDS];
+} de__atlas_info;
+bool de__shadow_atlas_get(const de__shadow_atlas *s, de_view view, de__atlas_info *out);
+/* S19 may flag an existing cached light with animated casters without changing public DeLight.
+ * A flagged influence invalidates every receiver frame; false resumes ordinary change tracking. */
+bool de__shadow_atlas_dynamic(de__shadow_atlas *s, de_view view, u64 entity, bool dynamic);
 DE_EXTERN_C_END
 #endif

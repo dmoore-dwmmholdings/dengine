@@ -15,6 +15,7 @@ module lighting_common;
 import "../probes/reflection_probe_sample";
 import "../probes/irradiance_sample";
 import "../shadows/csm_sample";
+import "../shadows/atlas_sample";
 
 import bindless;
 __exported import "../lighting/lights";
@@ -182,7 +183,9 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
         uint index = de_robuffer<uint>(cl.list)[cell.x + k];
         DeClusterLight l = de_robuffer<DeClusterLight>(cl.lights)[index];
         uint kind = de_light_kind(l);
-        float vis = de_input_shadow_local(lv.inputs, px, index);
+        float vis = (lv.inputs.reserved0 & DE_INPUT_ATLAS_METADATA) != 0u ?
+            atlas_shadow(lv.inputs.shadow_local, (asuint(l.axis.w) >> 8u) & 255u, p, s.normal) :
+            de_input_shadow_local(lv.inputs, px, index);
         if (kind == DE_LIGHT_KIND_RECT || kind == DE_LIGHT_KIND_DISK)
         {
             float3 d, sp;

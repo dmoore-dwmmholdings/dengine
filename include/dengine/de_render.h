@@ -698,6 +698,9 @@ typedef struct de_render_stats {
                                the forward transparent pass's, DENG-305) */
     u32 material_uploads;   /**< material parameter blocks the last frame uploaded */
     u32 material_instances; /**< live runtime instances (de_material_create_instance) */
+    /* Local shadows: summed over active caster-mask groups of this renderer frame. */
+    u32 shadow_atlas_occupied_texels; /**< allocated tile texels, including guards */
+    u32 shadow_atlas_tiles_rendered;  /**< tile renders in successfully submitted view graphs */
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 

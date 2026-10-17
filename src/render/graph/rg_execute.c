@@ -104,7 +104,7 @@ static bool partition(de_rg *g, de__rg_exec *x, u32 target) {
     u32 n = 0;
     for (u32 bi = 0; bi < p->batch_count; ++bi) {
         const de__rg_batch *b = &p->batches[bi];
-        u32 acc = 0;
+        u64 acc = 0;
         for (u32 k = 0; k < b->step_count; ++k) {
             const u32 cost = step_cost(&p->steps[p->batch_steps[b->step_first + k]]);
             if (k == 0 || acc + cost > target) {
@@ -118,6 +118,49 @@ static bool partition(de_rg *g, de__rg_exec *x, u32 target) {
     }
     x->chunk_count = n;
     return true;
+}
+
+de_result de__rg_partition_recording(de_rg *g, u32 target, const u32 limits[DE_QUEUE_COUNT_],
+                                     const u32 reserved[DE_QUEUE_COUNT_]) {
+    if (!g || !g->plan || !target)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "render graph recording partition");
+    de__rg_exec *x = exec_get(g);
+    if (!x)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "render graph recording state");
+    if (limits) {
+        u32 batches[DE_QUEUE_COUNT_] = {0};
+        for (u32 i = 0; i < g->plan->batch_count; ++i)
+            if (g->plan->batches[i].step_count)
+                ++batches[g->plan->batches[i].queue];
+        for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
+            const u32 extra = reserved ? reserved[q] : 0u;
+            if ((u64)batches[q] + extra > limits[q])
+                return DE_FAIL(DE_ERR_UNSUPPORTED,
+                               "render graph \"%s\": %u irreducible %s recording batches plus %u "
+                               "reserved lists exceed native queue capacity %u",
+                               g->name, batches[q], de__rg_queue_name((de_gpu_queue)q), extra,
+                               limits[q]);
+        }
+    }
+    for (;;) {
+        if (!partition(g, x, target))
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "render graph recording partition storage");
+        if (!limits)
+            return DE_OK;
+        u32 lists[DE_QUEUE_COUNT_] = {0};
+        for (u32 i = 0; i < x->chunk_count; ++i)
+            ++lists[x->chunks[i].queue];
+        bool fits = true;
+        for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+            fits = fits && (u64)lists[q] + (reserved ? reserved[q] : 0u) <= limits[q];
+        if (fits)
+            return DE_OK;
+        /* Coarsen only inside batches: every step/barrier and all batch waits/signals retain
+         * their original order. At UINT32_MAX one chunk holds each nonempty batch. */
+        if (target == UINT32_MAX)
+            return DE_FAIL(DE_ERR_INTERNAL, "render graph recording capacity did not converge");
+        target = target > UINT32_MAX / 2u ? UINT32_MAX : target * 2u;
+    }
 }
 
 /* ---------- Command-list pool (DENG-415) ---------- */
@@ -254,9 +297,18 @@ de_result de__rg_execute(de_rg *g, const de__rg_execute_desc *desc) {
     de_result r = de__rg_timing_begin(g, x, dd.frame_index);
     if (r != DE_OK)
         return r;
-    if (!partition(g, x, record_cost_target(x)))
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY,
-                       "de__rg_execute: render graph \"%s\": no memory for the partition", g->name);
+    if (de_gpu_get_caps(x->device)->backend == DE_GPU_METAL) {
+        /* Metal's default native queues admit 64 uncompleted buffers. Record-all-before-submit
+         * must leave one slot for the backend's wait/signal-only head and include the resolve
+         * lists opened before submission. Reserved front-end handles do not consume slots. */
+        const u32 limits[DE_QUEUE_COUNT_] = {64, 64, 64};
+        u32 reserved[DE_QUEUE_COUNT_] = {1, 1, 1};
+        reserved[DE_QUEUE_GRAPHICS] += de__rg_timing_needs_resolve(x, DE__RG_HEAP_MAIN) ? 1u : 0u;
+        reserved[DE_QUEUE_COPY] += de__rg_timing_needs_resolve(x, DE__RG_HEAP_COPY) ? 1u : 0u;
+        DE_TRY(de__rg_partition_recording(g, record_cost_target(x), limits, reserved));
+    } else {
+        DE_TRY(de__rg_partition_recording(g, record_cost_target(x), NULL, NULL));
+    }
     const u32 nc = x->chunk_count;
     {
         u32 lists[DE_QUEUE_COUNT_] = {0};
