@@ -472,9 +472,9 @@ static void invalidation(lx *f, de_gpu_backend backend) {
                      .spot_outer = .5f,
                      .cast_shadows = true};
     for (u32 i = 0; i < 2; ++i) {
-        world_set(&f->w, i, mesh, at(i ? 4 : -4, 0, 0), materials[i]);
+        world_set(&f->w, i, mesh, at(i ? 4.f : -4.f, 0, 0), materials[i]);
         f->w.f.instances.flags[i] |= DE__RW_INST_CAST_SHADOWS;
-        world_light(&f->w, i, &light, at(i ? 4 : -4, 0, 4));
+        world_light(&f->w, i, &light, at(i ? 4.f : -4.f, 0, 4));
     }
     de__atlas_info info = atlas_begin(f, DE_QUALITY_LOW);
     const f32 *pixels = atlas_end_read(f, &info);
@@ -563,9 +563,9 @@ static void inactive_gap(lx *f, de_gpu_backend backend) {
                            .spot_outer = .5f,
                            .cast_shadows = true};
     for (u32 i = 0; i < 2; ++i) {
-        world_set(&f->w, i, mesh, at(i ? 4 : -4, 0, 0), mat);
+        world_set(&f->w, i, mesh, at(i ? 4.f : -4.f, 0, 0), mat);
         f->w.f.instances.flags[i] |= DE__RW_INST_CAST_SHADOWS;
-        world_light(&f->w, i, &light, at(i ? 4 : -4, 0, 4));
+        world_light(&f->w, i, &light, at(i ? 4.f : -4.f, 0, 4));
     }
     de__atlas_info info = atlas_begin(f, DE_QUALITY_LOW);
     const f32 *pixels = atlas_end_read(f, &info);
