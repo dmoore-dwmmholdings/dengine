@@ -168,7 +168,7 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
             l.direction = float4(normalize(-zc), max(g.params.w, 0.0));
             l.color = float4(g.color.rgb * g.color.w, -1.0);
             l.shape = float4(0.0, 0.0, 0.0, asfloat(DE_LIGHT_KIND_DIRECTIONAL));
-            l.axis = float4(0.0, 0.0, 0.0, 0.0);
+            l.axis = float4(0.0, 0.0, 0.0, asfloat((g.flags & DE_GPU_LIGHT_CAST_SHADOWS)!=0u?DE_CLUSTER_LIGHT_SHADOWS:0u));
             l.bound = float4(asfloat(g.entity_lo), asfloat(g.entity_hi), 0.0, 1e30);
             de_buffer<DeClusterLight>(pc.dir_lights)[i] = l;
             return;

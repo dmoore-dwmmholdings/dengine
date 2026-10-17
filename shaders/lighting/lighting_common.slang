@@ -42,7 +42,7 @@ public static const uint DE_LIGHTING_COUNTER_ENTRIES = 16;    // entries after t
 public static const uint DE_LIGHTING_COUNTER_DROPPED = 20;    // entries past the list capacity
 public static const uint DE_LIGHTING_COUNTER_BYTES = 32;
 
-/// One view's lighting constants (400 bytes; lighting.h de__lighting_view), uploaded per frame.
+/// One view's lighting constants (432 bytes; lighting.h de__lighting_view), uploaded per frame.
 public struct DeLightingView
 {
     public uint tiles_x;
@@ -174,6 +174,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
             vis *= de_input_contact_directional(lv.inputs, px, asuint(l.bound.xy));
         else if (i == 0u)
             vis *= de_input_contact_shadow(lv.inputs, px);
+        vis=de_input_rt_shadow(lv.inputs,px,0x80000000u|i,vis);
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);
     }
     uint2 cell = de_robuffer<uint2>(cl.grid)[cluster];
@@ -189,6 +190,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
             atlas_shadow(lv.inputs.shadow_local, (asuint(l.axis.w) >> 8u) & 255u, p, s.normal) :
             de_input_shadow_local(lv.inputs, px, index);
         vis *= de_input_contact_local(lv.inputs, px, (asuint(l.axis.w) >> 16u) & 7u);
+        vis=de_input_rt_shadow(lv.inputs,px,index+1u,vis);
         if (kind == DE_LIGHT_KIND_RECT || kind == DE_LIGHT_KIND_DISK)
         {
             float3 d, sp;

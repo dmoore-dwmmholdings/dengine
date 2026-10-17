@@ -1,3 +1,4 @@
+#include "render/rt/rt_shadows.h"
 #include "render/shadows/shadows_internal.h"
 #include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
@@ -60,6 +61,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__rt_shadows_destroy(r->rt_shadows);
     de__contact_destroy(r->contact);
     de__csm_destroy(r->csm);
     de__shadow_atlas_destroy(r->shadow_atlas);
@@ -301,6 +303,12 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
     }
 
+    res = de__rt_shadows_create(r, &r->rt_shadows);
+    if (res != DE_OK)
+        goto fail;
+    de__views_lighting(r)->direct_producer = de__rt_shadows_build;
+    de__views_lighting(r)->direct_producer_user = r->rt_shadows;
+
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
     res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
                                                      .allocator = a,
@@ -422,6 +430,7 @@ de_result de_renderer_render_frame(de_renderer *r) {
     if (r == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_renderer_render_frame: NULL renderer");
     const u64 n = r->frame_index;
+    r->stats.rays_traced = 0;
 
     /* 1. Wait for the frame that last used this slot, then reset its arena. */
     if (n >= r->frames_in_flight) {
