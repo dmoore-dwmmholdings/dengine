@@ -43,7 +43,8 @@ set(DE_GOLDEN_SCENE_SOURCES
     visbuffer/vis_golden.c
     visbuffer/vis_golden.h
     visbuffer/vis_scenes.c
-    materials/materials_scenes.c)
+    materials/materials_scenes.c
+    base_tier/base_tier_scenes.c)
 
 add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
                          ${DE_GOLDEN_SCENE_SOURCES})
@@ -130,3 +131,12 @@ foreach(_golden_backend IN ITEMS metal vulkan d3d12)
             ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=1")
     endforeach()
 endforeach()
+
+# DENG-343 production Base-tier scene sources and isolated cook cache.
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_BASE_TIER_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/base_tier/assets\""
+    "DE_GOLDEN_BASE_TIER_BAKES=\"${CMAKE_CURRENT_BINARY_DIR}/base_tier_bakes\""
+    "DE_GOLDEN_BASE_TIER_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/base_tier_cache\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_cache")
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_bakes")

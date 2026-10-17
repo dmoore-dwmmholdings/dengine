@@ -142,3 +142,129 @@ description = "coat1, sheen1 and combined white spheres: actual renderer energy 
 size = [256, 192]
 threshold_mean = 0.001
 threshold_p99 = 0.01
+
+[scene.shadows_csm_medium]
+description = "DENG-343 shadows_csm: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_csm_high]
+description = "DENG-343 shadows_csm: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_csm_off]
+description = "DENG-343 shadows_csm: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_local_medium]
+description = "DENG-343 shadows_local: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_local_high]
+description = "DENG-343 shadows_local: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_local_off]
+description = "DENG-343 shadows_local: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_pcss_contact_medium]
+description = "DENG-343 shadows_pcss_contact: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_pcss_contact_high]
+description = "DENG-343 shadows_pcss_contact: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.shadows_pcss_contact_off]
+description = "DENG-343 shadows_pcss_contact: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.ao_gtao_medium]
+description = "DENG-343 ao_gtao: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.ao_gtao_high]
+description = "DENG-343 ao_gtao: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.ao_gtao_off]
+description = "DENG-343 ao_gtao: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.reflections_ssr_probes_medium]
+description = "DENG-343 reflections_ssr_probes: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.reflections_ssr_probes_high]
+description = "DENG-343 reflections_ssr_probes: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.reflections_ssr_probes_off]
+description = "DENG-343 reflections_ssr_probes: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.gi_probes_ssgi_medium]
+description = "DENG-343 gi_probes_ssgi: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.gi_probes_ssgi_high]
+description = "DENG-343 gi_probes_ssgi: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.gi_probes_ssgi_off]
+description = "DENG-343 gi_probes_ssgi: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.refraction_ss_medium]
+description = "DENG-343 refraction_ss: medium production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.refraction_ss_high]
+description = "DENG-343 refraction_ss: high production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.refraction_ss_off]
+description = "DENG-343 refraction_ss: off production renderer"
+size = [384, 256]
+threshold_mean = 0.005
+threshold_p99 = 0.05

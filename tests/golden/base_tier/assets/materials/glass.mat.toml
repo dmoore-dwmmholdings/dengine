@@ -1,0 +1,9 @@
+# glass (DENG-307 materials gallery; written by gen_assets.py)
+attenuation_color = [0.4, 0.8, 0.95]
+attenuation_distance = 2.0
+base_color = [0.7, 0.92, 1.0]
+ior = 1.5
+metallic = 0.0
+roughness = 0.05
+thickness = 0.25
+transmission = 1.0
