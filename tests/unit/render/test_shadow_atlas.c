@@ -1004,7 +1004,19 @@ static void rotating_groups(lx *f, de_gpu_backend backend) {
             ASSERT_TRUE(de__shadow_atlas_get(f->atlas, vf.view, &info));
             rendered += info.rendered;
             EXPECT_EQ(info.rendered, i == 0 ? (frame % 2 == 0 ? 1 : 0) : (frame == 1 ? 1 : 0));
-            atlas_end_read_view(f, &info, vf.view, frame);
+            const f32 *pixels = atlas_end_read_view(f, &info, vf.view, frame);
+            if (i == 1 && frame == 0) {
+                /* Cold zero-quota storage is published for fallback reads, not a completed
+                 * shadow generation. Both complete images must already be defined zero. */
+                const u64 texels = (u64)info.size * info.size;
+                u64 nonzero = 0;
+                for (u64 p = 0; p < texels * 2u; ++p)
+                    if (pixels[p] != 0)
+                        ++nonzero;
+                EXPECT_EQ(nonzero, 0u);
+                EXPECT_EQ(memcmp(pixels, pixels + texels, (size_t)texels * sizeof *pixels), 0);
+                EXPECT_FALSE(de__shadow_atlas_capture_ready(f->atlas, vf.view));
+            }
             if (i == 0 && frame == 0)
                 ASSERT_TRUE(de__shadow_atlas_dynamic(f->atlas, vf.view, 5000, true));
             if (i == 1)

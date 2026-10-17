@@ -23,7 +23,7 @@ typedef struct atlas_view {
     de__atlas_gpu *mapped[DE__VIS_FRAME_RING];
     de__atlas_gpu data[DE__ATLAS_RECORDS];
     u64 ring_frame[DE__VIS_FRAME_RING], frame, last_used;
-    bool ring_live[DE__VIS_FRAME_RING], ready, active;
+    bool ring_live[DE__VIS_FRAME_RING], ready, active, initialized;
     u32 group;
     const de_rg *pending;
 } atlas_view;
@@ -253,6 +253,15 @@ typedef struct atlas_clear {
     de_gpu_pipeline pipeline;
     de__atlas_tile tile;
 } atlas_clear;
+/* First allocation (or an uncertain failed graph) has no confirmed cached pixels. Define the
+ * whole image before eager fallback sampling, including groups with no light-tile quota yet. */
+static void initialize_depth(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const atlas_clear *p = user;
+    const de_gpu_attachment attachment = {
+        .texture = de_rg_texture(pass, p->depth), .clear = true, .clear_depth = 0, .store = true};
+    de_gpu_cmd_begin_render(cmd, NULL, 0, &attachment);
+    de_gpu_cmd_end_render(cmd);
+}
 static void clear_tile(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const atlas_clear *p = user;
     const de_gpu_attachment attachment = {.texture = de_rg_texture(pass, p->depth), .store = true};
@@ -497,6 +506,15 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
     v->data[0].identity[0] = count;
     de_rg_resource depth = de_rg_import_texture(vf->graph, v->depth, v->depth_access),
                    mirror = de_rg_import_texture(vf->graph, v->mirror, v->mirror_access);
+    if (!v->initialized) {
+        atlas_clear *initialize = DE_ARENA_PUSH(vf->graph->arena, atlas_clear, 1);
+        if (!initialize)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "shadow atlas initialization");
+        *initialize = (atlas_clear){.depth = depth};
+        de_rg_pass *pass = de_rg_add_pass(vf->graph, "shadow.atlas_initialize", DE_QUEUE_GRAPHICS,
+                                          initialize_depth, initialize);
+        de_rg_write(pass, depth, DE_ACCESS_DEPTH_WRITE);
+    }
     de_mat4 views[DE__ATLAS_FACES], projs[DE__ATLAS_FACES];
     for (u32 i = 0; i < count; ++i) {
         atlas_light *cache = &v->light[i];
@@ -653,7 +671,7 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
         a->last_served = vf->frame_index + 1u;
         ++v->rendered;
     }
-    if (v->rendered)
+    if (v->rendered || !v->initialized)
         DE_TRY(de__shadow_copy_layer(s->pool, vf->graph, depth, 0, mirror, size, size));
     for (u32 i = 0; i < count; ++i)
         for (u32 f = 0; f < v->light[i].faces; ++f)
@@ -772,6 +790,7 @@ void de__shadow_atlas_complete(de__shadow_atlas *s, de_view view, const de_rg *g
             success ? cache->light[i].completed | cache->light[i].scheduled : 0;
         cache->light[i].scheduled = 0;
     }
+    cache->initialized = success;
     if (!success) {
         /* A failed build may have allocated new entries beyond the previous light count.
          * Discard the complete candidate allocator/cache rather than leak or publish a subset. */
