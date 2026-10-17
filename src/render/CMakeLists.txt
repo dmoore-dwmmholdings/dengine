@@ -420,3 +420,7 @@ if(TARGET de_render AND APPLE AND DE_GPU_METAL)
         DEPENDS "${_de_rt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/rt/embed_metal.cmake" VERBATIM)
     target_sources(de_render PRIVATE "${_de_rt_embed}")
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_shadows.c rt/rt_shadows.h)
+endif()

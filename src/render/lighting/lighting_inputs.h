@@ -62,10 +62,12 @@ typedef struct de__lighting_inputs {
     de_rg_resource atlas_records, atlas_texture; /**< Immutable local-light atlas records/mirror. */
     de_rg_resource contact_records,
         contact_local; /**< Opaque contact identity buffer + local mask. */
+    de_rg_resource rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys;
+    u32 rt_shadow_extent, rt_shadow_config;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
-/** lighting_inputs.slang LightingInputs (64 bytes): bindless indices, 0 = none. */
+/** lighting_inputs.slang LightingInputs (96 bytes): bindless indices, 0 = none. */
 typedef struct de__lighting_inputs_gpu {
     u32 ao, shadow_directional, shadow_local, contact_shadows;
     u32 indirect_diffuse, indirect_specular;
@@ -73,8 +75,10 @@ typedef struct de__lighting_inputs_gpu {
     u32 reserved1;
     u32 probe_records, probe_list, probe_entry, probe_sampler;
     f32 probe_view_z[4];
+    u32 rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys, rt_shadow_extent;
+    u32 rt_shadow_config, rt_reserved0, rt_reserved1, rt_reserved2;
 } de__lighting_inputs_gpu;
-DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 64, "LightingInputs is 64 bytes");
+DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 96, "LightingInputs is 96 bytes");
 
 /** The LTC tables (ltc_data.c; shaders/lighting/ltc.slang DE_LTC_SIZE). */
 #define DE__LTC_SIZE 64

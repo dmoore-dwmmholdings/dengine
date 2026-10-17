@@ -31,6 +31,7 @@ kernel void cs_trace(constant DeBindlessHeap_default_0 &heap [[buffer(0)]],
     r.min_distance=rays[i].origin.w;r.max_distance=rays[i].direction.w;
     intersector<triangle_data,instancing> query;
     query.assume_geometry_type(geometry_type::triangle);
+    query.accept_any_intersection((pc.flags&2u)!=0u);
     auto hit=query.intersect(r,heap.accels_0.data_3[payload.query.tlas_0],255,table,payload);
     RtHit out={};out.t=-1;out.instance=0xffffffffu;
     if(hit.type==intersection_type::triangle) {
