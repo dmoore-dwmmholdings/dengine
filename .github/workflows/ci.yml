@@ -62,7 +62,7 @@ jobs:
           echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
           echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
           # Ubuntu's kernel-specific perf entries may be symlinks to the shared tools package.
-          dpkg-query -L 'linux-tools-*' > build/cluster-fence-diagnostics/tool-package-files.txt
+          dpkg-query -W 'linux-tools-*' > build/cluster-fence-diagnostics/tool-package-versions.txt
           perf_bin=$(find -L /usr/lib/linux-tools -name perf -type f | sort -V | tail -n 1)
           test -n "${perf_bin}"
           perf_bin=$(readlink -f "${perf_bin}")

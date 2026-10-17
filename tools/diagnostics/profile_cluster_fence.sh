@@ -42,6 +42,10 @@ fi
         "${GITHUB_JOB:-<unset>}" "${RUNNER_NAME:-<unset>}"
 } > "${out}/metadata.txt" 2>&1
 
+# Validate this runner's permissions and all recording flags before any costly control/profile run.
+"${perf_bin}" record --clockid mono -g --call-graph dwarf,8192 -F 49 -e cpu-clock:u \
+    -o "${out}/preflight.data" -- true > "${out}/preflight.txt" 2>&1
+
 # Separate unchanged, untraced/unprofiled controls distinguish observer overhead. The two pairs
 # have different initially empty cache directories; each warm process reuses its own cold cache.
 status=0
@@ -61,10 +65,6 @@ for state in cold warm; do
     find "${MESA_SHADER_CACHE_DIR}" -type f -printf '%s %p\n' \
         > "${out}/control-${state}-cache-after.txt"
 done
-
-# Validate this runner's permissions and all recording flags before the profiled pair.
-"${perf_bin}" record --clockid mono -g --call-graph dwarf,8192 -F 49 -e cpu-clock:u \
-    -o "${out}/preflight.data" -- true > "${out}/preflight.txt" 2>&1
 
 export DE_VK_SYNC_DIAGNOSTICS=1
 export MESA_SHADER_CACHE_DIR="${out}/profile-cache"
