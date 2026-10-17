@@ -177,8 +177,12 @@ static id<MTLComputeCommandEncoder> compute_encoder(de_gpu_cmd *c) {
     if (e == nil || !ds->pipeline || ds->kind != DE_PIPE_COMPUTE)
         return nil;
     const u32 dirty = pending(mc, ds);
-    if (dirty & DE__MTL_DIRTY_PIPELINE)
+    if (dirty & DE__MTL_DIRTY_PIPELINE) {
         [e setComputePipelineState:(__bridge id<MTLComputePipelineState>)ds->pipeline];
+        if (ds->intersection_table)
+            [e setIntersectionFunctionTable:(__bridge id<MTLIntersectionFunctionTable>)
+                ds->intersection_table atBufferIndex:2];
+    }
     if ((dirty & DE__MTL_DIRTY_PUSH) && ds->push_bytes && (ds->push_stages & DE__MTL_PUSH_COMPUTE))
         [e setBytes:ds->push length:ds->push_bytes atIndex:1];
     return e;
@@ -191,6 +195,7 @@ void de__mtl_cmd_set_pipeline(de_gpu_cmd *c, de__gpu_pipeline *p) {
     const mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
     ds->pipeline = mp->state;
     ds->depth_state = mp->depth_state;
+    ds->intersection_table = mp->intersection_table;
     ds->kind = (u32)p->kind;
     ds->cull = mp->cull;
     ds->push_stages = mp->push_stages;

@@ -30,6 +30,7 @@
 #import <Metal/Metal.h>
 
 #include "gpu/metal/mtl_internal.h"
+#include "gpu/metal/mtl_accel_internal.h"
 
 #include <dengine/de_debug.h>
 
@@ -179,6 +180,7 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
             [(__bridge id<MTLComputeCommandEncoder>)encoder useResources:tex count:n usage:rw];
     }
     de_mutex_unlock(&m->heap_lock);
+    de__mtl_accel_residency(d, encoder, kind);
 }
 
 bool de__mtl_residency_sets_built(void) {

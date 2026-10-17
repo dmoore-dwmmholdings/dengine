@@ -53,3 +53,19 @@ if(TARGET test_gpu_metal)
             "DE_PIPE_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../data/pipelines\"")
     endif()
 endif()
+
+# DENG-43: actual native Metal AS acceptance, independent of Slang RT output (R2).
+if(TARGET test_gpu_metal)
+    target_sources(test_gpu_metal PRIVATE ../test_accel_metal.c mtl_accel_helpers.m)
+    set_source_files_properties(mtl_accel_helpers.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+if(TARGET test_gpu_metal)
+    set(_de_as_test_library "${CMAKE_CURRENT_BINARY_DIR}/accel_test.metallib")
+    add_custom_command(OUTPUT "${_de_as_test_library}"
+        COMMAND xcrun metal -std=metal3.1 "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/metal-cache" "${CMAKE_CURRENT_SOURCE_DIR}/accel_test.metal"
+            -o "${_de_as_test_library}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/accel_test.metal" VERBATIM)
+    target_sources(test_gpu_metal PRIVATE "${_de_as_test_library}")
+    target_compile_definitions(test_gpu_metal PRIVATE
+        "DE_MTL_ACCEL_TEST_LIBRARY=\"${_de_as_test_library}\"")
+endif()

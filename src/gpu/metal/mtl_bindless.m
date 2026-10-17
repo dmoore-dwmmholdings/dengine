@@ -28,7 +28,7 @@
 
 _Static_assert(sizeof(MTLResourceID) == DE__MTL_BINDLESS_ENTRY_BYTES,
                "MTLResourceID is one 8-byte table entry");
-_Static_assert(DE__MTL_BINDLESS_BYTES == 1196032u, "the DeBindlessHeap size of bindless.slang");
+_Static_assert(DE__MTL_BINDLESS_BYTES == 1720320u, "the DeBindlessHeap size of bindless.slang");
 
 static const u32 k_table_offset[4] = {
     [DE__GPU_BINDLESS_SAMPLED_TEXTURE] = DE__MTL_BINDLESS_OFFSET_TEXTURES,
@@ -220,6 +220,7 @@ de_result de__mtl_bindless_init(de_gpu_device *d) {
         table.label = @"de bindless heap";
         m->bindless = (void *)CFBridgingRetain(table);
         m->bindless_cpu = (u8 *)table.contents;
+        memset(m->bindless_cpu, 0, DE__MTL_BINDLESS_BYTES);
 
         /* The storage-texture list: one block, objects, then slots, then positions. */
         const size_t n = DE__MTL_BINDLESS_STORAGE_TEXTURES;

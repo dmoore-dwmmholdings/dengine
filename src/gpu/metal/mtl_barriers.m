@@ -107,6 +107,9 @@ static void wait_fence(id<MTLCommandEncoder> encoder, de__mtl_encoder_kind kind,
     case DE__MTL_ENC_COMPUTE:
         [(id<MTLComputeCommandEncoder>)encoder waitForFence:fence];
         break;
+    case DE__MTL_ENC_ACCEL:
+        [(id<MTLAccelerationStructureCommandEncoder>)encoder waitForFence:fence];
+        break;
     case DE__MTL_ENC_BLIT:
         [(id<MTLBlitCommandEncoder>)encoder waitForFence:fence];
         break;
@@ -170,6 +173,9 @@ void de__mtl_encoder_end(de_gpu_cmd *c) {
                 break;
             case DE__MTL_ENC_COMPUTE:
                 [(id<MTLComputeCommandEncoder>)enc updateFence:f];
+                break;
+            case DE__MTL_ENC_ACCEL:
+                [(id<MTLAccelerationStructureCommandEncoder>)enc updateFence:f];
                 break;
             case DE__MTL_ENC_BLIT:
                 [(id<MTLBlitCommandEncoder>)enc updateFence:f];
