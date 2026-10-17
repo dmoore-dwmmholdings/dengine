@@ -26,6 +26,7 @@
 
 #include "asset/manifest_internal.h"
 #include "asset/scene/scene_format.h"
+#include "cook/importers/texture/texture_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -266,4 +267,81 @@ static void expect_prefab(fz_import_kind kind, const char *file) {
 TEST(prefab, cooked_to_dscn) {
     expect_prefab(FZ_IMPORT_GLTF, "hierarchy.gltf");
     expect_prefab(FZ_IMPORT_FBX, "skinned.fbx");
+}
+
+/* DENG-435: PNG 3 permits consecutive empty IDAT chunks. Each fixture stores the same
+ * filter-0 RGBA scanline in a zlib stored block, with correct chunk CRCs. Splitting the
+ * stream inside its header also proves that IDAT boundaries do not delimit zlib data. */
+typedef struct png_cooked_output {
+    u8 bytes[4096];
+    u64 size;
+    u32 count;
+} png_cooked_output;
+
+static void png_output(const char *name, const char *type, const void *data, u64 size, void *user) {
+    (void)name;
+    if (strcmp(type, "texture") != 0)
+        return;
+    png_cooked_output *out = (png_cooked_output *)user;
+    ASSERT_TRUE(size <= sizeof out->bytes);
+    memcpy(out->bytes, data, (size_t)size);
+    out->size = size;
+    ++out->count;
+}
+
+static void png_empty_idat(u32 bits, fz_import_kind kind) {
+    static const char *variants[] = {"plain", "leading", "middle", "trailing", "all"};
+    png_cooked_output baseline = {0};
+    fz_mount();
+    for (u32 i = 0; i < 5u; ++i) {
+        char path[256];
+        snprintf(path, sizeof path, "fzimp:/regressions/%s/png_empty_idat_%u_%s.%s",
+                 fz_import_kind_name(kind), bits, variants[i],
+                 kind == FZ_IMPORT_IMAGE ? "png" : "gltf");
+        void *data = NULL;
+        u64 size = 0;
+        ASSERT_EQ(de_file_read_all(path, NULL, &data, &size), DE_OK);
+        if (kind == FZ_IMPORT_IMAGE) {
+            de_tex_image img;
+            ASSERT_EQ(de_tex_decode_stb(de_heap_allocator(), data, size, &img), DE_OK);
+            EXPECT_EQ(img.width, 1u);
+            EXPECT_EQ(img.height, 1u);
+            EXPECT_EQ(img.channels, 4u);
+            EXPECT_TRUE(img.rgba[0] == (bits == 8u ? 17.0f / 255.0f : 4660.0f / 65535.0f));
+            EXPECT_TRUE(img.rgba[1] == (bits == 8u ? 85.0f / 255.0f : 21845.0f / 65535.0f));
+            EXPECT_TRUE(img.rgba[2] == (bits == 8u ? 170.0f / 255.0f : 43690.0f / 65535.0f));
+            EXPECT_TRUE(img.rgba[3] == 1.0f);
+            de_tex_image_free(de_heap_allocator(), &img);
+        }
+        png_cooked_output output = {0};
+        char msg[512];
+        ASSERT_EQ(
+            fz_import_cook(kind, data, (size_t)size, NULL, 0, png_output, &output, msg, sizeof msg),
+            DE_OK);
+        DE_FREE(de_heap_allocator(), data, (size_t)size + 1u);
+        ASSERT_EQ(output.count, 1u);
+        ASSERT_GT(output.size, 0u);
+        if (i == 0u)
+            baseline = output;
+        else {
+            ASSERT_EQ(output.size, baseline.size);
+            EXPECT_EQ(memcmp(output.bytes, baseline.bytes, (size_t)output.size), 0);
+        }
+    }
+}
+
+TEST(png, empty_idat_rgba8) {
+    png_empty_idat(8, FZ_IMPORT_IMAGE);
+}
+
+TEST(png, empty_idat_rgba16) {
+    png_empty_idat(16, FZ_IMPORT_IMAGE);
+}
+
+TEST(png, empty_idat_gltf_rgba8) {
+    png_empty_idat(8, FZ_IMPORT_GLTF);
+}
+
+TEST(png, empty_idat_gltf_rgba16) {
+    png_empty_idat(16, FZ_IMPORT_GLTF);
 }

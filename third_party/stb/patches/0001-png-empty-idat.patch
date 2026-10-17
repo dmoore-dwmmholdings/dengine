@@ -1,0 +1,16 @@
+DENG-435: Preserve valid zero-length PNG IDAT chunks without forming a null
+idata pointer or passing it to memcpy. PNG 3 sections 11.2.3 and 12.8 allow
+empty IDAT fields. Existing header/palette checks and subsequent CRC read
+remain in place; chunks with data keep the upstream path unchanged.
+
+--- a/stb_image.h
++++ b/stb_image.h
+@@ -5179,6 +5179,8 @@
+                   s->img_n = pal_img_n;
+                return 1;
+             }
++            // Empty IDAT chunks contribute no bytes; idata may still be NULL.
++            if (c.length == 0) break;
+             if (c.length > (1u << 30)) return stbi__err("IDAT size limit", "IDAT section larger than 2^30 bytes");
+             if ((int)(ioff + c.length) < (int)ioff) return 0;
+             if (ioff + c.length > idata_limit) {
