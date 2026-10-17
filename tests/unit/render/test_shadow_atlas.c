@@ -846,7 +846,7 @@ static void point_cage(lx *f, de_gpu_backend backend) {
                 direction = de_v3_normalize(direction);
                 for (u32 distance = 0; distance < 3; ++distance) {
                     atlas_query *q = &queries[count++];
-                    const f32 d = distance == 0 ? 1 : distance == 1 ? 4 : 5;
+                    const f32 d = distance == 0 ? 1.f : distance == 1 ? 4.f : 5.f;
                     q->position[0] = direction.x * d;
                     q->position[1] = direction.y * d;
                     q->position[2] = direction.z * d;
