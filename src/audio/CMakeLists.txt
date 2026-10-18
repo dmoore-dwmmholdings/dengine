@@ -55,3 +55,11 @@ endif()
 if(TARGET de_audio)
     set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS de_audio_dsp)
 endif()
+
+# DENG-313: DSND sources, asynchronous compressed reads and background decoding.
+if(TARGET de_audio)
+    target_sources(de_audio PRIVATE source/source_pcm.c source/source_procedural.c
+        source/source_opus.c source/source_vorbis.c source/stream.c source/stream_internal.h)
+    target_link_libraries(de_audio PRIVATE de_tp_stb de_tp_opus)
+    set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS de_tp_stb de_tp_opus)
+endif()

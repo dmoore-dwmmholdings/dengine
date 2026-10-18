@@ -46,7 +46,8 @@ typedef struct de_audio_desc {
     de_audio_backend backend;
     u32 sample_rate;  /**< mixer rate in Hz; 0 = 48000; 8000 .. 192000 */
     u32 block_frames; /**< frames per mixer block; 0 = 256; 16 .. 4096 */
-    u32 max_voices;   /**< real voices mixed; full pools steal lowest priority then oldest. 0 = 128; max 4095 */
+    u32 max_voices;   /**< real voices mixed; full pools steal lowest priority then oldest. 0 = 128;
+                         max 4095 */
     bool hrtf;        /**< S26; ignored until then */
     u32 command_capacity; /**< commands in flight to the mixer; 0 = 4096; rounded up to a power of 2
                            */
@@ -138,13 +139,15 @@ typedef struct de_play_desc {
     u64 start_at_sample; /* 0 = immediately; sample-accurate scheduling */
 } de_play_desc;
 
+/** Register before asset loads; audio creation also registers when desc.assets is set. */
+DE_API de_result de_audio_register_sound_type(de_asset_system *assets);
 /**
  * Starts sound `desc->sound` and returns its voice at once; the mixer starts it at the start of
  * its next block, or on sample `desc->start_at_sample` exactly. Returns an invalid handle (error
  * context set) when the sound cannot be opened, no voice can be reserved, or the command queue is
  * full. Full pools steal the lowest priority (largest number), then oldest voice with a 5 ms
  * outgoing fade. Bus, volume, pitch, fade and looping are handled by the audio thread; spatial
- * parameters are retained for S26. Until DENG-313 asset sounds cannot be opened.
+ * parameters are retained for S26. Sound assets must be ready before playback.
  */
 DE_API de_voice de_audio_play(de_audio *a, const de_play_desc *desc);
 /** Starts a stop fade at the next block. At least 5 ms prevents discontinuities. A stale handle

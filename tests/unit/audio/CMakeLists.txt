@@ -42,3 +42,17 @@ if(TARGET de_audio)
     target_include_directories(test_audio_voices PRIVATE "${DE_ROOT_DIR}/src")
     target_include_directories(test_audio_buses PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-313: actual cooked asset/source and asynchronous compressed playback checks.
+if(TARGET de_audio AND DE_BUILD_TOOLS)
+    de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker)
+    de_add_test(NAME audio_streaming SOURCES test_streaming.c LIBS de_audio de_cooker TIMEOUT 120)
+    de_add_test(NAME audio_procedural SOURCES test_procedural.c LIBS de_audio)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/source-tmp")
+    foreach(_source_test test_audio_sources test_audio_streaming test_audio_procedural)
+        target_include_directories(${_source_test} PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(${_source_test} PRIVATE
+            "DE_AUDIO_SOURCE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
+            "DE_AUDIO_SOURCE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/source-tmp\"")
+    endforeach()
+endif()

@@ -117,6 +117,10 @@ void de__asset_events_detach(de_asset_system *s);
  * `prefab`. Main thread. */
 de_result de__register_builtin_types(de_asset_system *s);
 
+/* DENG-313: content-owned bridge keeps runtime modules independent of cooker headers.
+ * Returns false in builds without the cooker. */
+bool de__asset_builtin_importer(const char *name, de_asset_type_desc *out);
+
 DE_EXTERN_C_END
 
 #endif /* DE_ASSET_INTERNAL_H */
