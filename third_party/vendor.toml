@@ -94,7 +94,7 @@ sha256 = "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515"
 license = "MIT OR Unlicense"
 # stb_image_write.h: S10 (DENG-327, hello_triangle screenshots; DENG-329 golden images). Later:
 # stb_truetype.h (S28).
-files = ["stb_image.h", "stb_vorbis.c", "stb_image_write.h"]
+files = ["stb_image.h", "stb_vorbis.c", "stb_image_write.h", "stb_truetype.h"]
 # DENG-435: valid empty IDAT chunks must not form a null destination for a zero-byte read.
 patches = ["patches/0001-png-empty-idat.patch"]
 
@@ -434,3 +434,12 @@ url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/mic
 sha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
 strip = 0
 files = ["build/native/bin/x64/d3d10warp.dll"]
+
+[[lib]]
+name = "msdfgen"
+version = "1.13"
+url = "https://github.com/Chlumsky/msdfgen/archive/refs/tags/v1.13.tar.gz"
+sha256 = "93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167"
+license = "MIT"
+license_file = "LICENSE.txt"
+files = ["core/**", "msdfgen.h"]

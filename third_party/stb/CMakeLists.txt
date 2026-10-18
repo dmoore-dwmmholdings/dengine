@@ -29,3 +29,5 @@ de_add_test(NAME de_tp_smoke_stb
     SOURCES smoke/smoke_stb.c
     LIBS de_tp_stb
     LABELS unit third_party)
+
+target_sources(de_tp_stb PRIVATE de_tp_stb_truetype.c)

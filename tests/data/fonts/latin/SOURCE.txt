@@ -1,0 +1,4 @@
+Google Fonts repository commit 47d54ca1ebb14fd864695f1d39dc734f39017c33
+Source: ofl/notosans/NotoSans[wdth,wght].ttf
+License: OFL-1.1 (OFL.txt)
+Adobe Source Code Pro commit 803b7e23ec97ae58b6232ea76519a76d428ba268 OTF/SourceCodePro-Regular.otf; OFL-1.1 (SourceCodePro-OFL.txt)

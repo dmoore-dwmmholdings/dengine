@@ -197,3 +197,12 @@ target_link_libraries(de_cook_cmd PRIVATE "$<TARGET_NAME_IF_EXISTS:de_render>")
 target_sources(de_cooker PRIVATE
     importers/material/mat_toml_import.h
     importers/material/mat_toml_import.c)
+
+# DENG-255: font importer; engine-owned code remains C11.
+target_sources(de_cooker PRIVATE
+    "${DE_ROOT_DIR}/src/text/import/font_import.c"
+    "${DE_ROOT_DIR}/src/text/import/charsets.c"
+    "${DE_ROOT_DIR}/src/text/import/atlas_build.c"
+    "${DE_ROOT_DIR}/src/text/import/bmfont_import.c"
+    "${DE_ROOT_DIR}/src/text/import/pixel_font_import.c")
+target_link_libraries(de_cooker PRIVATE de_text_msdf de_tp_stb de_tp_tomlc17)

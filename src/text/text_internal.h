@@ -1,0 +1,9 @@
+#ifndef DE_TEXT_INTERNAL_H
+#define DE_TEXT_INTERNAL_H
+#include <dengine/de_text.h>
+#include <dengine/de_memory.h>
+struct de_text_system {
+    const de_allocator *alloc;
+    de_asset_system *assets;
+};
+#endif
