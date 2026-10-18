@@ -58,7 +58,7 @@ typedef struct de__rt_hit {
     f32 u, v;
     u32 lod, reserved0, reserved1;
 } de__rt_hit;
-#define DE__RT_CAST_SHADOWS 1u
+#define DE__RT_CAST_SHADOWS     1u
 #define DE__RT_ACCEPT_FIRST_HIT 2u
 /** Normal production batch path for45–50: buffers use sizeof(ray)/sizeof(hit) strides.
  * Caller declares graph read(context->dependency), ray SHADER_READ and hit SHADER_WRITE. */

@@ -48,8 +48,9 @@ static void table_sizes(de__vk_device *vk) {
         props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         props.pNext = &ap;
         vk->fn.vkGetPhysicalDeviceProperties2(vk->phys.handle, &props);
-        s[DE__VK_BINDING_ACCELS] = min3(4096, ap.maxDescriptorSetUpdateAfterBindAccelerationStructures,
-                                      ap.maxPerStageDescriptorUpdateAfterBindAccelerationStructures);
+        s[DE__VK_BINDING_ACCELS] =
+            min3(4096, ap.maxDescriptorSetUpdateAfterBindAccelerationStructures,
+                 ap.maxPerStageDescriptorUpdateAfterBindAccelerationStructures);
     }
     s[DE__VK_BINDING_SAMPLED_IMAGES] =
         min3(DE__VK_BINDLESS_TEXTURES, p->maxPerStageDescriptorUpdateAfterBindSampledImages,

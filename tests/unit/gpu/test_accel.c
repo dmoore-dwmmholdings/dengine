@@ -154,7 +154,8 @@ TEST_F(accel, compaction_fence, accel_fx) {
 }
 TEST(accel, instance_layout) {
     de__gpu_accel_address table[4] = {{0}};
-    de_gpu_tlas_instance input[3] = {{0}};
+    de_gpu_tlas_instance input[3];
+    memset(input, 0, sizeof input);
     de__gpu_native_instance output[3];
     table[1] = (de__gpu_accel_address){.handle = 0x100001, .address = 0x12345678abcdef00ull};
     table[2] = (de__gpu_accel_address){.handle = 0x200002, .address = 0xfedcba9876543200ull};

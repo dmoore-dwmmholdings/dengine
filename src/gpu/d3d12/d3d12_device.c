@@ -637,7 +637,7 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .payload_size =
         {
             [DE__GPU_ACCEL] = sizeof(d3d12_accel),
-         [DE__GPU_BUFFER] = sizeof(d3d12_buffer),
+            [DE__GPU_BUFFER] = sizeof(d3d12_buffer),
             [DE__GPU_TEXTURE] = sizeof(d3d12_texture),
             [DE__GPU_FENCE] = sizeof(d3d12_fence),
             [DE__GPU_SWAPCHAIN] = sizeof(d3d12_swapchain),

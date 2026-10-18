@@ -156,14 +156,14 @@
     X(vkQueuePresentKHR)                                                                           \
     X(vkCmdDrawMeshTasksEXT)                                                                       \
     X(vkCmdDrawMeshTasksIndirectEXT)                                                               \
-    X(vkCmdDrawMeshTasksIndirectCountEXT) \
-    X(vkCreateAccelerationStructureKHR) \
-    X(vkDestroyAccelerationStructureKHR) \
-    X(vkGetAccelerationStructureBuildSizesKHR) \
-    X(vkGetAccelerationStructureDeviceAddressKHR) \
-    X(vkCmdBuildAccelerationStructuresKHR) \
-    X(vkCmdWriteAccelerationStructuresPropertiesKHR) \
-    X(vkCmdCopyAccelerationStructureKHR) \
+    X(vkCmdDrawMeshTasksIndirectCountEXT)                                                          \
+    X(vkCreateAccelerationStructureKHR)                                                            \
+    X(vkDestroyAccelerationStructureKHR)                                                           \
+    X(vkGetAccelerationStructureBuildSizesKHR)                                                     \
+    X(vkGetAccelerationStructureDeviceAddressKHR)                                                  \
+    X(vkCmdBuildAccelerationStructuresKHR)                                                         \
+    X(vkCmdWriteAccelerationStructuresPropertiesKHR)                                               \
+    X(vkCmdCopyAccelerationStructureKHR)                                                           \
     X(vkGetQueryPoolResults)
 
 /** Every entry point the backend calls, resolved by vk_loader.c. */
@@ -809,6 +809,7 @@ void de__vk_accel_tlas(de_gpu_cmd *, de__gpu_accel *, de__gpu_buffer *, u32, boo
 void de__vk_accel_emit(de_gpu_cmd *, de__gpu_accel *);
 bool de__vk_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
 void de__vk_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
-bool de__vk_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32, u32);
+bool de__vk_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32,
+                            u32);
 void de__vk_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
 #endif

@@ -306,15 +306,15 @@ void de__vk_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
                     alias.dstStageMask |= bufs[nb - 1u].dstStageMask;
                     alias.dstAccessMask |= bufs[nb - 1u].dstAccessMask;
                 }
-            }
-            else if (x->accel.id) {
+            } else if (x->accel.id) {
                 de__gpu_accel *a = de__gpu_get_accel(d, x->accel);
                 if (!a)
                     continue;
                 de__vk_accel *va = DE__GPU_PAYLOAD(de__vk_accel, a);
                 /* The backing buffer owns the AS memory, including queue-family ownership. */
                 de__vk_translate_barrier(&vc->barrier_ctx, x, NULL,
-                    DE__GPU_PAYLOAD(de__vk_buffer, va->storage)->buffer, NULL, &bufs[nb++]);
+                                         DE__GPU_PAYLOAD(de__vk_buffer, va->storage)->buffer, NULL,
+                                         &bufs[nb++]);
             }
         }
         if (ni == 0 && nb == 0)

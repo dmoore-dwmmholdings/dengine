@@ -181,7 +181,8 @@ static id<MTLComputeCommandEncoder> compute_encoder(de_gpu_cmd *c) {
         [e setComputePipelineState:(__bridge id<MTLComputePipelineState>)ds->pipeline];
         if (ds->intersection_table)
             [e setIntersectionFunctionTable:(__bridge id<MTLIntersectionFunctionTable>)
-                ds->intersection_table atBufferIndex:2];
+                                                ds->intersection_table
+                              atBufferIndex:2];
     }
     if ((dirty & DE__MTL_DIRTY_PUSH) && ds->push_bytes && (ds->push_stages & DE__MTL_PUSH_COMPUTE))
         [e setBytes:ds->push length:ds->push_bytes atIndex:1];
