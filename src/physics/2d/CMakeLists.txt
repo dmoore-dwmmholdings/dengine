@@ -47,3 +47,13 @@ target_sources(de_physics PRIVATE
     sleep2d.c
     graph_color2d.c
     bullet2d.c)
+
+# DENG-258: 2D scene queries (rays, shape casts by GJK conservative advancement, overlaps,
+# closest points) and the 2D kinematic character controller.
+target_sources(de_physics PRIVATE
+    query2d_internal.h
+    query2d.c
+    raycast2d.c
+    shapecast2d.c
+    character2d_internal.h
+    character2d.c)

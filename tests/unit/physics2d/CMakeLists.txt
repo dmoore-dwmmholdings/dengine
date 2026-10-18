@@ -69,3 +69,26 @@ if(TARGET test_physics2d_solver_parallel)
     target_compile_definitions(test_physics2d_solver_parallel PRIVATE
         "DE_PHYSICS2D_SOLVER_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/solver2d_golden.txt\"")
 endif()
+
+# DENG-258: 2D scene queries (per-shape rays against analytic results, brute force, ordering,
+# one-sided chains, overlaps, closest points, casts, the 10,000-ray / 1,000-cast vector) and the
+# 2D character controller (slopes, steps, stairs, one-way and moving platforms, the
+# platformer_character2d course golden; the course is platformer_character2d_course.h, shared with
+# DENG-260). Regenerate a vector (never by hand) with DE_REGEN_GOLDEN=1 and
+# --filter=physics2d_query.golden_vector / physics2d_character.platformer_character2d_golden.
+de_add_test(NAME physics2d_query SOURCES test_query2d.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics2d_character SOURCES test_character2d.c LIBS de_physics TIMEOUT 120)
+foreach(_de_p2d_test test_physics2d_query test_physics2d_character)
+    if(TARGET ${_de_p2d_test})
+        target_include_directories(${_de_p2d_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_p2d_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+if(TARGET test_physics2d_query)
+    target_compile_definitions(test_physics2d_query PRIVATE
+        "DE_PHYSICS2D_QUERY_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/query2d_golden.txt\"")
+endif()
+if(TARGET test_physics2d_character)
+    target_compile_definitions(test_physics2d_character PRIVATE
+        "DE_PHYSICS2D_CHARACTER_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/platformer_character2d_golden.txt\"")
+endif()
