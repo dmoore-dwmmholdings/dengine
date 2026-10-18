@@ -139,5 +139,4 @@ static const char de__accel_instances_hlsl[] =
     "        i_0 = i_0 + _S1;\n"
     "    }\n"
     "    return;\n"
-    "}\n"
-;
+    "}\n";

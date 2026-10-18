@@ -126,7 +126,7 @@ struct de__restir_di {
 static bool enabled(de__restir_di *s, const de_render_settings *settings) {
     if (!s || settings->tier != DE_TIER_RT || !s->r->caps.ray_query)
         return false;
-    i32 override = de_cvar_int(s->enable);
+    i64 override = de_cvar_int(s->enable);
     return override >= 0 ? override != 0
                          : settings->rt_shadows && settings->shadows >= DE_QUALITY_HIGH;
 }
@@ -691,7 +691,7 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
     lc->restir_distance = r.distance;
     const u64 pixels = (u64)vc->width * vc->height;
     s->r->stats.rays_traced +=
-        pixels * (s->debug.reference ? s->count : 1 + (initial ? 1 : 0) + (unbiased ? 6 : 0));
+        pixels * (s->debug.reference ? s->count : 1u + (initial ? 1u : 0u) + (unbiased ? 6u : 0u));
     v->pending = g;
     v->pending_frame = vc->frame_index;
     v->pending_alias = s->needs_alias;

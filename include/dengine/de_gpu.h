@@ -381,8 +381,7 @@ DE_API u32 de_gpu_accel_bindless(de_gpu_device *d, de_gpu_accel tlas);
 typedef struct de_gpu_accel_sizes {
     u64 accel_bytes, build_scratch_bytes, update_scratch_bytes;
 } de_gpu_accel_sizes;
-DE_API de_gpu_accel_sizes de_gpu_accel_query_sizes(de_gpu_device *d,
-                                                  const de_gpu_accel_desc *desc);
+DE_API de_gpu_accel_sizes de_gpu_accel_query_sizes(de_gpu_device *d, const de_gpu_accel_desc *desc);
 /** Outside rendering, after a BLAS build with allow_compaction. */
 DE_API void de_gpu_cmd_accel_emit_compacted_size(de_gpu_cmd *c, de_gpu_accel blas);
 /** False until the emitting submission completed; never waits for the GPU. */

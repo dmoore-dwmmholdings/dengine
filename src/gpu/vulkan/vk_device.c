@@ -930,7 +930,7 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .payload_size =
         {
             [DE__GPU_ACCEL] = sizeof(de__vk_accel),
-         [DE__GPU_BUFFER] = sizeof(de__vk_buffer),
+            [DE__GPU_BUFFER] = sizeof(de__vk_buffer),
             [DE__GPU_TEXTURE] = sizeof(de__vk_texture),
             [DE__GPU_SAMPLER] = sizeof(de__vk_sampler),
             [DE__GPU_SWAPCHAIN] = sizeof(de__vk_swapchain),

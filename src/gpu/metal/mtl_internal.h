@@ -56,7 +56,8 @@
 #define DE__MTL_BINDLESS_OFFSET_BUFFERS                                                            \
     (DE__MTL_BINDLESS_OFFSET_SAMPLERS + DE__MTL_BINDLESS_SAMPLERS * DE__MTL_BINDLESS_ENTRY_BYTES)
 #define DE__MTL_BINDLESS_ACCELS 65536u
-#define DE__MTL_BINDLESS_OFFSET_ACCELS (DE__MTL_BINDLESS_OFFSET_BUFFERS + DE__MTL_BINDLESS_BUFFERS * 8u)
+#define DE__MTL_BINDLESS_OFFSET_ACCELS                                                             \
+    (DE__MTL_BINDLESS_OFFSET_BUFFERS + DE__MTL_BINDLESS_BUFFERS * 8u)
 #define DE__MTL_BINDLESS_BYTES                                                                     \
     (DE__MTL_BINDLESS_OFFSET_ACCELS + DE__MTL_BINDLESS_ACCELS * DE__MTL_BINDLESS_ENTRY_BYTES)
 
@@ -77,8 +78,8 @@ typedef struct mtl_heap {
 } mtl_heap;
 
 typedef struct mtl_device {
-    struct mtl_accel *accels; /* protected by heap_lock, includes deferred retirements */
-    void *accel_translate; /* retained compute pipeline */
+    struct mtl_accel *accels;        /* protected by heap_lock, includes deferred retirements */
+    void *accel_translate;           /* retained compute pipeline */
     void *device;                    /* id<MTLDevice> */
     void *queues[DE_QUEUE_COUNT_];   /* id<MTLCommandQueue>: graphics, compute, copy */
     void *timeline[DE_QUEUE_COUNT_]; /* id<MTLSharedEvent>: the front-end's internal values */
@@ -273,13 +274,13 @@ typedef enum de__mtl_encoder_kind {
 
 /* DENG-325 (mtl_draw.m, mtl_icb.m): the state a command list applies to each new encoder. */
 typedef struct mtl_draw_state {
-    void *pipeline;    /* bound id<MTL*PipelineState>, not retained (deferred destruction) */
+    void *pipeline;           /* bound id<MTL*PipelineState>, not retained (deferred destruction) */
     void *intersection_table; /* compute IFT, buffer2; callback heap at buffer0 */
-    void *depth_state; /* its id<MTLDepthStencilState>, not retained; NULL for compute */
-    u32 kind;          /* de_gpu_pipeline_kind of `pipeline` */
-    u32 cull;          /* MTLCullMode */
-    u32 push_stages;   /* DE__MTL_PUSH_* stages that get the push constants */
-    u32 push_bytes;    /* bytes setBytes passes at index 1 (0: none) */
+    void *depth_state;        /* its id<MTLDepthStencilState>, not retained; NULL for compute */
+    u32 kind;                 /* de_gpu_pipeline_kind of `pipeline` */
+    u32 cull;                 /* MTLCullMode */
+    u32 push_stages;          /* DE__MTL_PUSH_* stages that get the push constants */
+    u32 push_bytes;           /* bytes setBytes passes at index 1 (0: none) */
     u32 threadgroup[3], object_threadgroup[3];
     u32 applied;        /* `encoders` count of the encoder the state was applied to; 0 = none */
     u32 dirty;          /* DE__MTL_DIRTY_* not yet applied to that encoder */
@@ -332,7 +333,7 @@ typedef struct mtl_cmd {
      * first resolve, reused by its later recordings; released by cmd_fini). */
     void *resolve_event;    /* id<MTLSharedEvent>, retained */
     void *resolve_listener; /* MTLSharedEventListener, retained */
-    void *accel_keep; /* retained NSMutableSet of every AS/dependency this recording names */
+    void *accel_keep;       /* retained NSMutableSet of every AS/dependency this recording names */
     u64 resolve_value;      /* the last value used on resolve_event */
 } mtl_cmd;
 
@@ -464,13 +465,13 @@ bool de__mtl_residency_sets_built(void);
 #define DE__MTL_DIRTY_ALL      15u
 
 typedef struct mtl_pipeline {
-    void *state;       /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
+    void *state; /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
     void *intersection_table; /* compute IFT, buffer2; callback heap at buffer0 */
-    void *depth_state; /* id<MTLDepthStencilState>, retained; NULL for compute */
-    u32 cull;          /* MTLCullMode */
-    u32 push_stages;   /* DE__MTL_PUSH_* */
-    u32 push_bytes;    /* setBytes size: push_constant_bytes or the shaders' binding size */
-    bool archive_hit;  /* found in the binary archive (tests) */
+    void *depth_state;        /* id<MTLDepthStencilState>, retained; NULL for compute */
+    u32 cull;                 /* MTLCullMode */
+    u32 push_stages;          /* DE__MTL_PUSH_* */
+    u32 push_bytes;           /* setBytes size: push_constant_bytes or the shaders' binding size */
+    bool archive_hit;         /* found in the binary archive (tests) */
 } mtl_pipeline;
 
 /* ---------- mtl_pipeline.m ---------- */

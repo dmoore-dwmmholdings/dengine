@@ -7,7 +7,7 @@
 typedef struct mtl_accel {
     void *object;
     void *descriptor; /* retained native descriptor, reused across recordings */
-    void *refs; /* retained NSArray of every BLAS eligible in the build snapshot */
+    void *refs;       /* retained NSArray of every BLAS eligible in the build snapshot */
     struct mtl_accel *next;
     de__gpu_buffer *query;
 } mtl_accel;

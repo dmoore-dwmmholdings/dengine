@@ -797,7 +797,8 @@ void de__d3d12_accel_tlas(de_gpu_cmd *, de__gpu_accel *, de__gpu_buffer *, u32, 
 void de__d3d12_accel_emit(de_gpu_cmd *, de__gpu_accel *);
 bool de__d3d12_accel_read(de_gpu_device *, de__gpu_accel *, u64 *);
 void de__d3d12_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
-bool de__d3d12_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32, u32);
+bool de__d3d12_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *,
+                               u32, u32);
 void de__d3d12_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
 void de__d3d12_accel_dependency(de_gpu_cmd *);
 #endif /* _WIN32 */

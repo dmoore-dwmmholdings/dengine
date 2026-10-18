@@ -578,7 +578,7 @@ static de_result create_compute(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipel
     if ([library.functionNames containsObject:@"de_metal_intersection"]) {
         intersection = [library newFunctionWithName:@"de_metal_intersection"];
         MTLLinkedFunctions *linked = [MTLLinkedFunctions new];
-        linked.functions = @[intersection];
+        linked.functions = @[ intersection ];
         cd.linkedFunctions = linked;
     }
     cd.binaryArchives = (__bridge NSArray *)de__mtl_archive_list(d);
@@ -647,7 +647,7 @@ de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         }
         if (r != DE_OK) {
             release(&mp->intersection_table);
-        release(&mp->state);
+            release(&mp->state);
             release(&mp->depth_state);
         }
     }

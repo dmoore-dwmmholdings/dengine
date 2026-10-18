@@ -240,7 +240,7 @@ static void centered(app *a, const char *s, float y, float size, u32 color) {
     text(a, s, (320 - (float)strlen(s) * size * 6 + size) * .5f, y, size, color);
 }
 static void bird(app *a, float y) {
-    float wing = a->game.mode == PLAYING && a->game.velocity < 0 ? -2 : 3;
+    float wing = a->game.mode == PLAYING && a->game.velocity < 0 ? -2.f : 3.f;
     box(a, 77, y - 8, 23, 16, INK);
     box(a, 81, y - 11, 15, 22, INK);
     box(a, 79, y - 6, 20, 12, GOLD);
@@ -257,7 +257,7 @@ static void scene(app *a) {
     box(a, 0, 0, 320, 400, SKY);
     for (u32 i = 0; i < 5; ++i) {
         float x = fmodf(72 * i - g->time * 4 + 400, 400) - 40;
-        float y = 85 + (i % 3) * 56;
+        float y = 85.f + (float)(i % 3) * 56.f;
         box(a, x, y, 44, 6, CREAM);
         box(a, x + 8, y - 5, 24, 5, CREAM);
     }

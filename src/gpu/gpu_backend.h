@@ -363,10 +363,11 @@ typedef struct de__gpu_backend_vtable {
      * DE_FAIL (there is no device to log to). NULL: the front-end reports the device that
      * adapter 0 creates as the only adapter. */
     de_result (*enumerate_adapters)(de_gpu_adapter_info *out, u32 cap, u32 *count);
-    bool (*cmd_accel_translate)(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *,
-                                 de__gpu_buffer *, u32, u32);
+    bool (*cmd_accel_translate)(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *,
+                                u32, u32);
     /* DENG-42: backend-neutral AS extensions. Scratch and native instances are command-owned. */
-    de_result (*accel_query_sizes)(de_gpu_device *, const de_gpu_accel_desc *, de_gpu_accel_sizes *);
+    de_result (*accel_query_sizes)(de_gpu_device *, const de_gpu_accel_desc *,
+                                   de_gpu_accel_sizes *);
     u64 (*accel_address)(de_gpu_device *, de__gpu_accel *);
     void (*cmd_accel_emit)(de_gpu_cmd *, de__gpu_accel *);
     bool (*accel_compacted_size)(de_gpu_device *, de__gpu_accel *, u64 *);

@@ -1,6 +1,9 @@
 #ifndef DE_TEST_SCENE_AS_FIXTURE_H
 #define DE_TEST_SCENE_AS_FIXTURE_H
 /* DENG-44: production scene AS lifecycle and native alpha readback. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L /* setenv in loader_test_util.h; precedes all system headers. */
+#endif
 #include "de_test.h"
 
 #include <dengine/de_base.h>
