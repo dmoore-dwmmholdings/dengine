@@ -134,6 +134,18 @@ static void fill_irradiance(const de_query_chunk *c, void *user) {
     }
 }
 
+static void fill_fog(const de_query_chunk *c, void *user) {
+    de__render_world_frame *f = user;
+    const DeGlobalTransform *transforms = c->columns[0];
+    const DeFogVolume *volumes = c->columns[1];
+    for (u32 i = 0; i < c->count && f->fog_count < 32; ++i) {
+        de__fog_snapshot *out = &f->fog[f->fog_count++];
+        out->entity = c->entities[i].bits;
+        out->transform = de_transform_to_affine_relative(&transforms[i], f->origin);
+        out->volume = volumes[i];
+    }
+}
+
 static void sys_views(de_system_ctx *ctx) {
     de__render_world *rw = (de__render_world *)ctx->user;
     if (ctx->world != rw->world)
@@ -157,6 +169,10 @@ static void sys_views(de_system_ctx *ctx) {
     de_query_each(ctx->world, ctx->queries[2], fill_probes, f);
     f->irradiance_count = 0;
     de_query_each(ctx->world, ctx->queries[3], fill_irradiance, f);
+    f->fog_count = 0;
+    de_query_each(ctx->world, ctx->queries[4], fill_fog, f);
+    if (de_query_count(ctx->world, ctx->queries[4]) > 32)
+        DE_WARN(rw->log, "fog extraction: capacity 32 exceeded; extra regions omitted");
     u32 volumes_seen = de_query_count(ctx->world, ctx->queries[3]);
     if (volumes_seen > 8)
         DE_WARN(rw->log,
@@ -367,16 +383,19 @@ static bool add_systems(de__render_world *rw, de_world *w) {
                                           {rw->ids.reflection_probe, DE_READ}};
     const de_query_term gi_terms[2] = {{rw->builtins.global_transform, DE_READ},
                                        {rw->ids.irradiance_volume, DE_READ}};
-    const de_query_desc view_queries[4] = {{.terms = cam_terms, .term_count = 2},
+    const de_query_term fog_terms[2] = {{rw->builtins.global_transform, DE_READ},
+                                        {rw->ids.fog_volume, DE_READ}};
+    const de_query_desc view_queries[5] = {{.terms = cam_terms, .term_count = 2},
                                            {.terms = env_terms, .term_count = 1},
                                            {.terms = probe_terms, .term_count = 2},
-                                           {.terms = gi_terms, .term_count = 2}};
+                                           {.terms = gi_terms, .term_count = 2},
+                                           {.terms = fog_terms, .term_count = 2}};
     const de_system views = de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
                                                                .schedule = DE_SCHEDULE_EXTRACT,
                                                                .fn = sys_views,
                                                                .user = rw,
                                                                .queries = view_queries,
-                                                               .query_count = 4});
+                                                               .query_count = 5});
     if (!DE_HANDLE_VALID(views))
         return false;
     const de_system meshes =

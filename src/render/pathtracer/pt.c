@@ -20,8 +20,9 @@ typedef struct pt_params {
     u32 environment_revision, flags, reserved0, reserved1;
     f32 exposure;
     u32 light_count, unused0, unused1;
+    de__pt_media_params media;
 } pt_params;
-DE_STATIC_ASSERT(sizeof(pt_params) == 352, "PtParams shader layout");
+DE_STATIC_ASSERT(sizeof(pt_params) == 384, "PtParams shader layout");
 typedef struct pt_view {
     de_view handle;
     de_gpu_texture accumulation, output;
@@ -36,6 +37,7 @@ typedef struct pt_view {
 struct de__pt {
     de_renderer *r;
     de_gpu_pipeline pipeline, env;
+    de__pt_media *media;
     de_cvar max_samples, seed, strategy;
     bool warned;
     pt_view views[32];
@@ -68,6 +70,7 @@ void de__pt_destroy(de__pt *p) {
         return;
     for (u32 i = 0; i < 32; ++i)
         release(p, &p->views[i]);
+    de__pt_media_destroy(p->media);
     de_gpu_pipeline_destroy(p->r->dev, p->pipeline);
     de_gpu_pipeline_destroy(p->r->dev, p->env);
     DE_FREE(p->r->alloc, p, sizeof *p);
@@ -83,6 +86,7 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
     memset(p, 0, sizeof *p);
     p->r = r;
     *out = p;
+    DE_TRY(de__pt_media_create(r, &p->media));
     p->max_samples = de_cvar_register(&(de_cvar_desc){.name = "r.pt.max_samples",
                                                       .type = DE_CVAR_INT,
                                                       .default_number = 0,
@@ -206,6 +210,7 @@ typedef struct pt_pass {
     pt_view *v;
     u32 pc[2];
     bool env, trace;
+    de__pt_media_params media;
 } pt_pass;
 static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     (void)pass;
@@ -220,9 +225,11 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de_gpu_cmd_barriers(cmd, &b, 1);
     }
     if (x->trace) {
+        de__pt_media_begin(p->media, cmd, &x->media);
         de_gpu_cmd_set_pipeline(cmd, p->pipeline);
         de_gpu_cmd_push_constants(cmd, x->pc, sizeof x->pc);
         de_gpu_cmd_dispatch_rays(cmd, x->v->width, x->v->height, 1);
+        de__pt_media_end(p->media, cmd, &x->media);
     }
 }
 void de__pt_build(de__view_frame *f, void *user) {
@@ -239,8 +246,14 @@ void de__pt_build(de__view_frame *f, void *user) {
     }
     de__lighting_context lighting = {0};
     de__ibl_build(de__views_lighting(p->r), f->graph, &lighting);
+    de__pt_media_params media;
+    u64 media_signature = 0;
+    if (de__pt_media_frame(p->media, f, &media, &media_signature) != DE_OK) {
+        f->graph->oom = true;
+        return;
+    }
     const u64 signature = de__gpu_scene_source_signature(p->r->gpu_scene) ^
-                          de__material_instances_epoch(p->r->material_instances);
+                          de__material_instances_epoch(p->r->material_instances) ^ media_signature;
     u32 strategy = (u32)de_cvar_int(p->strategy), seed = (u32)de_cvar_int(p->seed);
     bool env = !v->cdf_valid || memcmp(&v->ibl, &lighting.view.ibl, sizeof v->ibl) != 0;
     if (v->strategy != strategy || v->seed != seed || !v->active ||
@@ -286,6 +299,7 @@ void de__pt_build(de__view_frame *f, void *user) {
             de__lighting_view_exposure(de__views_lighting(p->r), (f->view.id & 255u) - 1u, f->view,
                                        f->frame_index, f->camera->camera.exposure_ev100, NULL),
         .light_count = de__gpu_scene_table(p->r->gpu_scene, DE__GS_LIGHTS).count};
+    params.media = media;
     de_mat4 inverse = de_m4_inverse(&f->view_proj);
     for (u32 r = 0; r < 4; ++r)
         for (u32 c = 0; c < 4; ++c)
@@ -310,12 +324,15 @@ void de__pt_build(de__view_frame *f, void *user) {
                    .v = v,
                    .pc = {de_gpu_buffer_bindless(p->r->dev, v->params), ring},
                    .env = env,
-                   .trace = trace};
+                   .trace = trace,
+                   .media = media};
     de_rg_pass *pass = de_rg_add_pass(g, "PT.TraceAccumulate", DE_QUEUE_GRAPHICS, execute, x);
     if (!pass) {
         g->oom = true;
         return;
     }
+    if (media.features)
+        de__pt_media_graph(p->media, g, pass);
     de_rg_read(pass, rt->dependency, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, de_rg_import_buffer(g, rt->query, DE_ACCESS_SHADER_READ),
                DE_ACCESS_SHADER_READ);
