@@ -722,5 +722,10 @@ typedef struct DeIrradianceVolume {
     de_blob bake;
 } DeIrradianceVolume;
 
+/** Progressive unexposed samples accumulated for a live path-traced view; zero before rendering. */
+DE_API u32 de_renderer_path_samples(const de_renderer *r, de_view view);
+/** Request reset before this view's next path-traced frame. */
+DE_API void de_renderer_path_reset(de_renderer *r, de_view view);
+
 DE_EXTERN_C_END
 #endif
