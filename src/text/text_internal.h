@@ -8,5 +8,7 @@ struct de_text_system {
     struct de__text_runtime *runtime;
     struct de__shape_system *shape;
     struct de__glyph_cache *glyph_cache;
+    struct de__text_render *render;
+    de_str (*localize)(const de_text_system *, de_name);
 };
 #endif

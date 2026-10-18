@@ -1,0 +1,11 @@
+[project]
+asset_root = "../../data/fonts"
+version = 1
+[defaults.font]
+em_px = 48
+px_range = 6
+page_size = 1024
+charset = "ascii"
+[assets]
+"font/latin" = {type="font", source="latin/NotoSans.ttf"}
+"font/bitmap" = {type="font", source="latin/pixel.fnt", mode="bitmap"}

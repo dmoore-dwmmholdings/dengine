@@ -1,6 +1,7 @@
 #include "font_runtime_internal.h"
 #include "shape/shaper_internal.h"
 #include "glyph_cache_internal.h"
+#include "render/text_render_internal.h"
 #include <string.h>
 de_result de_text_create(const de_allocator *a, de_asset_system *assets, de_text_system **out) {
     if (!out)
@@ -37,6 +38,9 @@ de_result de_text_create(const de_allocator *a, de_asset_system *assets, de_text
 }
 void de_text_destroy(de_text_system *t) {
     if (t) {
+#if DE_HAS_RENDER
+        de_text__render_destroy(t);
+#endif
         de_text__glyph_cache_destroy(t);
         de_text__shape_destroy(t);
         de_text__runtime_destroy(t);

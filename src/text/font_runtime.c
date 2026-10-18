@@ -1,4 +1,5 @@
 #include "fallback_internal.h"
+#include "render/text_render_internal.h"
 #include "asset/slots_internal.h"
 #include <string.h>
 #include <math.h>
@@ -188,5 +189,9 @@ de_text_font *de_text__font_get(de_text_system *t, de_font font) {
 }
 /* These named integration points are filled by the runtime glyph and render owners. */
 void de_text__publish_pages(de_text_system *t) {
+#if DE_HAS_RENDER
+    de_text__render_begin(t);
+#else
     (void)t;
+#endif
 }
