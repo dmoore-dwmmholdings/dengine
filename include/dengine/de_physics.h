@@ -1101,8 +1101,10 @@ DE_API void de_physics2d_destroy(de_physics2d_world *p);
 /**
  * Advances the world by `dt` seconds (> 0, finite): one tick. Collision (DENG-253): broadphase,
  * narrowphase (on `tasks` when set; the result never depends on it) and persistent contact
- * manifolds. The first step creates the collision state (allocates); later steps allocate nothing.
- * An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
+ * manifolds. Dynamics (DENG-254): a sub-stepped soft-step solver (`substeps` per step) moves the
+ * dynamic and kinematic bodies, with islands, sleeping and bullets (see the 2D dynamics notes
+ * below). The first step creates the collision and solver state (allocates); later steps allocate
+ * nothing. An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
  */
 DE_API void de_physics2d_step(de_physics2d_world *p, f32 dt);
 /**
@@ -1284,6 +1286,35 @@ typedef struct DeCharacter2D {
     de_vec2 velocity;
     bool grounded;
 } DeCharacter2D;
+
+/* ---------- 2D dynamics (DENG-254) ----------
+ * The same solver design as 3D (SPEC §13.3): soft contacts with Coulomb friction (sqrt(mu_a mu_b))
+ * and restitution (max(e_a, e_b), above 1 m/s of approach), velocities of the center of mass,
+ * `gravity_scale` taken as given (0 in a zeroed desc means no gravity), damping v *= 1/(1 + h c)
+ * per substep. Kinematic bodies move by their velocity and are never pushed. A body with
+ * DE_BODY2D_FLAG_FIXED_ROTATION never turns.
+ *
+ * Sleeping: bodies touching each other through contacts or joints form islands (static and
+ * kinematic bodies never join one). An island falls asleep when every body has
+ * DE_BODY_FLAG_ALLOW_SLEEP and has moved slower than 0.05 m/s and 0.035 rad/s (cvars
+ * physics2d.sleep.linear_threshold, physics2d.sleep.angular_threshold) for 0.5 s
+ * (physics2d.sleep.time), and no moving kinematic body touches it. Sleeping bodies keep their
+ * pose, have zero velocity and cost no solver work. The whole island wakes at the next step when
+ * an awake body or a moving kinematic body starts touching it (or a joint links it), when the user
+ * gives one of its bodies a velocity or another transform (de_body2d_set_velocity,
+ * de_body2d_set_transform), when a body of the island or a body touching it is destroyed, or with
+ * de_body2d_wake.
+ *
+ * Bullets (DE_BODY2D_FLAG_BULLET): after the solver, an awake dynamic bullet is swept from its
+ * start to its end pose against static and kinematic bodies; when it would pass into one, it is
+ * moved back to the time of impact (5 mm from the surface) and keeps its velocity, so the next
+ * step's contact stops it. Bullets are not swept against dynamic bodies. */
+
+/** Wakes a sleeping 2D body and its whole island (they move again from the next step). No effect
+ *  on an awake body or a stale handle. */
+DE_API void de_body2d_wake(de_physics2d_world *p, de_body b);
+/** true when the 2D body is asleep and no wake is pending for it; false for a stale handle. */
+DE_API bool de_body2d_is_sleeping(const de_physics2d_world *p, de_body b);
 
 DE_API void de_physics2d_attach(de_physics2d_world *p, de_world *w);
 DE_API bool de_physics2d_raycast(const de_physics2d_world *p, de_vec2 origin, de_vec2 dir,

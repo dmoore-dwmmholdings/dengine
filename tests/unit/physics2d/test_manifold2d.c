@@ -10,6 +10,8 @@
  */
 #include "p2d_collide_test_util.h"
 
+#include "physics/2d/solver2d_internal.h"
+
 #include <dengine/de_platform.h>
 #include <dengine/de_task.h>
 
@@ -113,6 +115,10 @@ TEST(physics2d_manifold, box_resting_on_box_keeps_feature_ids) {
 
 TEST(physics2d_manifold, impulses_carry_by_feature_id) {
     de_physics2d_world *p = world_new(16, NULL, NULL);
+    /* DENG-254: without the contact class the solver writes no impulses, so this tests the
+     * manifold layer alone (as physics_manifold.carry_by_proximity does in 3D). */
+    ASSERT_EQ(de__solver2d_ensure(p, NULL), DE_OK);
+    de__solver2d_unregister_class(p, DE__CONSTRAINT2D_CLASS_CONTACT);
     const de_shape ground = tu_box(p, 4.0f, 0.5f, 0.0f);
     const de_shape box = tu_box(p, 0.5f, 0.5f, 0.0f);
     const de_body g = tu_body(p, DE_BODY_STATIC, ground, tu_xf(0, 0, 0), 0);
@@ -413,6 +419,13 @@ static void sweep_build(sweep *s, u32 movers, de_task_system *ts, const de_alloc
 }
 
 static void sweep_tick(sweep *s, u32 t) {
+    /* DENG-254: the movers are teleported every tick, so this scene tests the collision pipeline
+     * alone: without the contact class the solver leaves them (and the impulses) as they are.
+     * Done at the first tick, so a test may still create the contacts state with its own desc. */
+    if (de__solver2d_get(s->p) == NULL) {
+        ASSERT_EQ(de__solver2d_ensure(s->p, NULL), DE_OK);
+        de__solver2d_unregister_class(s->p, DE__CONSTRAINT2D_CLASS_CONTACT);
+    }
     for (u32 k = 0; k < s->mover_count; ++k) {
         de_transform2d xf;
         sweep_pose(s, k, t, &xf);

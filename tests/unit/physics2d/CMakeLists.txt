@@ -48,3 +48,24 @@ if(TARGET test_physics2d_manifold)
     target_compile_definitions(test_physics2d_manifold PRIVATE
         "DE_PHYSICS2D_PIPELINE_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/pipeline2d_golden.txt\"")
 endif()
+
+# DENG-254: the soft-step solver (integration, restitution, friction, fixed rotation, kinematic
+# bodies, stacks, bullets, the constraint interface), islands and sleeping, and the colored
+# parallel solver (coloring validity, worker counts none/1/4/8 and grains, no allocation in steady
+# state, the golden scenarios pyramid2d_20, bounce2d, sleep_wake2d and bullet2d). The parallel
+# suite starts task systems: label tsan. Regenerate the vector (never by hand) with
+#     DE_REGEN_GOLDEN=1 build/dev/tests/unit/physics2d/test_physics2d_solver_parallel --filter=physics2d_solver_parallel.golden_scenarios_no_tasks
+de_add_test(NAME physics2d_solver SOURCES test_solver2d.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics2d_islands SOURCES test_islands2d.c LIBS de_physics TIMEOUT 120)
+de_add_test(NAME physics2d_solver_parallel SOURCES test_solver2d_parallel.c LIBS de_physics
+            de_platform LABELS unit tsan TIMEOUT 300)
+foreach(_de_p2d_test test_physics2d_solver test_physics2d_islands test_physics2d_solver_parallel)
+    if(TARGET ${_de_p2d_test})
+        target_include_directories(${_de_p2d_test} PRIVATE "${DE_ROOT_DIR}/src")
+        target_compile_options(${_de_p2d_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+    endif()
+endforeach()
+if(TARGET test_physics2d_solver_parallel)
+    target_compile_definitions(test_physics2d_solver_parallel PRIVATE
+        "DE_PHYSICS2D_SOLVER_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/solver2d_golden.txt\"")
+endif()
