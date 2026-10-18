@@ -18,6 +18,7 @@ void cs_reproject(uint3 id:SV_DispatchThreadID,uniform DnPush pc){
         float3 delta=dn_position(p,q,previous_depth,true)-position;
         float scale=p.linear_depth!=0?max(abs(z),1e-3):max(length(position-p.camera.xyz),1e-3);
         bool valid=abs(dot(delta,surface.normal))<=p.depth_relative*scale && dot(old.normal,surface.normal)>=p.normal_cos && abs(old.roughness-surface.roughness)<=p.roughness_threshold && all(de_tex2d(p.previous_material).Load(int3(q,0)).xy==material);
+        if(p.key!=0)valid=valid&&all(de_tex2d(p.key).Load(int3(xy,0)).xy==de_tex2d(p.previous_key).Load(int3(q,0)).xy);
         if(!valid)continue;weight+=tap;color+=de_tex2d(p.previous).Load(int3(q,0))*tap;moments+=de_tex2d(p.previous_moments).Load(int3(q,0)).xy*tap;age+=de_tex2d(p.previous_length).Load(int3(q,0)).x*tap;
     }
     de_rwtex2d(p.output)[xy]=weight>0?color/weight:float4(0);de_rwtex2d(p.moments)[xy]=float4(weight>0?moments/weight:float2(0),0,0);

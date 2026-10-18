@@ -9,10 +9,13 @@ public struct DenoiseParams {
     public float alpha_min,depth_relative,normal_cos,normal_power,luminance_scale,hit_scale,roughness_threshold,unused;
     public float4 inverse[4],previous_inverse[4];
     public float4 camera,origin_delta;
+    public uint key,previous_key,out_key,zero_radius_passthrough;
+    public uint position,previous_position,out_position,tail_reserved;
 };
 public DenoiseParams dn_load(uint buffer,uint entry){return de_robuffer<DenoiseParams>(buffer)[entry];}
 public float2 denoise_previous_uv(float2 uv,float2 motion){return uv+float2(-.5,.5)*motion;}
 public float3 dn_position(DenoiseParams p,int2 xy,float depth,bool previous){
+    if(p.position!=0)return de_tex2d(previous?p.previous_position:p.position).Load(int3(xy,0)).xyz+(previous?p.origin_delta.xyz:float3(0));
     if(p.linear_depth!=0)return float3(float2(xy),depth);
     float2 uv=(float2(xy)+.5)/float2(p.width,p.height);float4 h=float4(uv*float2(2,-2)+float2(-1,1),depth,1);
     float4 world;if(previous)world=float4(dot(p.previous_inverse[0],h),dot(p.previous_inverse[1],h),dot(p.previous_inverse[2],h),dot(p.previous_inverse[3],h));

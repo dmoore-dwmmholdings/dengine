@@ -475,3 +475,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE denoise/denoise.c denoise/denoise_internal.h)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE denoise/denoise_shadow.c denoise/denoise_ao.c denoise/denoise_policy.h)
+endif()

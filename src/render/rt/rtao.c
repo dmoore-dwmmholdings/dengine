@@ -1,3 +1,4 @@
+#include "render/denoise/denoise_policy.h"
 /* DENG-47: raw geometric AO; lighting owns material/min/multibounce composition. */
 #include "render/rt/rtao.h"
 #include "render/graph/rg_internal.h"
@@ -26,8 +27,9 @@ typedef struct ao_view {
 } ao_view;
 struct de__rtao {
     de_renderer *r;
-    de_cvar radius;
-    de_gpu_pipeline generate, resolve, filter, pack;
+    de_cvar radius, reference;
+    de__signal_denoiser *denoiser;
+    de_gpu_pipeline generate, resolve, pack;
     ao_view views[32];
 };
 typedef struct ao_pass {
@@ -58,7 +60,7 @@ void de__rtao_destroy(de__rtao *s) {
         release(s, &s->views[i]);
     de_gpu_pipeline_destroy(s->r->dev, s->generate);
     de_gpu_pipeline_destroy(s->r->dev, s->resolve);
-    de_gpu_pipeline_destroy(s->r->dev, s->filter);
+    de__signal_denoiser_destroy(s->denoiser);
     de_gpu_pipeline_destroy(s->r->dev, s->pack);
     DE_FREE(s->r->alloc, s, sizeof *s);
 }
@@ -69,6 +71,12 @@ de_result de__rtao_create(de_renderer *r, de__rtao **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RTAO owner");
     memset(s, 0, sizeof *s);
     s->r = r;
+    DE_TRY(de__signal_denoiser_create(r, &s->denoiser));
+    s->reference = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reference_spp",
+                                                    .type = DE_CVAR_INT,
+                                                    .flags = DE_CVAR_DEV_ONLY,
+                                                    .min = 0,
+                                                    .max = 256});
     s->radius = de_cvar_register(&(de_cvar_desc){.name = "r.rt.ao.radius",
                                                  .type = DE_CVAR_FLOAT,
                                                  .default_number = 1.5,
@@ -79,18 +87,18 @@ de_result de__rtao_create(de_renderer *r, de__rtao **out) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "RTAO radius registration");
     }
     if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *entries[] = {"cs_generate", "cs_resolve", "cs_filter", "cs_pack"};
+        const char *entries[] = {"cs_generate", "cs_resolve", "cs_pack"};
         de__engine_shader_code code;
         char why[512] = {0};
         de_result result =
-            de__engine_shader_load(r->dev, r->alloc, "rtao", 0, entries, 4, &code, why, sizeof why);
+            de__engine_shader_load(r->dev, r->alloc, "rtao", 0, entries, 3, &code, why, sizeof why);
         if (result != DE_OK) {
             DE_WARN(r->log, "RTAO shaders unavailable; using GTAO: %s", why);
             de_error_clear();
             goto register_stage;
         }
-        de_gpu_pipeline *pipelines[] = {&s->generate, &s->resolve, &s->filter, &s->pack};
-        for (u32 i = 0; i < 4; ++i)
+        de_gpu_pipeline *pipelines[] = {&s->generate, &s->resolve, &s->pack};
+        for (u32 i = 0; i < 3; ++i)
             *pipelines[i] = de_gpu_pipeline_create(
                 r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
                                                 .cs = code.entries[i].blob,
@@ -98,8 +106,8 @@ de_result de__rtao_create(de_renderer *r, de__rtao **out) {
                                                 .threadgroup_size = {8, 8, 1},
                                                 .name = entries[i]});
         de__engine_shader_code_free(&code);
-        if (!s->generate.id || !s->resolve.id || !s->filter.id || !s->pack.id) {
-            for (u32 i = 0; i < 4; ++i) {
+        if (!s->generate.id || !s->resolve.id || !s->pack.id) {
+            for (u32 i = 0; i < 3; ++i) {
                 de_gpu_pipeline_destroy(r->dev, *pipelines[i]);
                 *pipelines[i] = (de_gpu_pipeline){0};
             }
@@ -196,23 +204,11 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         pc.source = de_gpu_texture_bindless(d, p->kind == 1 ? v->raw : v->spatial, 0, false);
         pc.output = de_gpu_texture_bindless(d, v->spatial, 0, true);
         pc.packed = de_gpu_buffer_bindless(d, v->packed);
-        de_gpu_cmd_set_pipeline(cmd, p->kind == 1 ? p->s->filter : p->s->pack);
+        de_gpu_cmd_set_pipeline(cmd, p->s->pack);
         de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, ((p->kind == 1 ? pc.tw : (pc.width + 3) / 4) + 7) / 8,
                             ((p->kind == 1 ? pc.th : pc.height) + 7) / 8, 1);
     }
-}
-/* DENG-69 replaces this temporary spatial filter, independently of ray generation/publication. */
-static de_result spatial(de_rg *g, ao_pass *p, de_rg_resource raw, de_rg_resource output) {
-    de_rg_pass *pass = de_rg_add_pass(g, "RT.AO.Spatial", DE_QUEUE_GRAPHICS, execute, p);
-    if (!pass)
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RTAO filter pass");
-    de_rg_read(pass, p->scene, DE_ACCESS_SHADER_READ);
-    de_rg_read(pass, p->depth, DE_ACCESS_SHADER_READ);
-    de_rg_read(pass, p->normal, DE_ACCESS_SHADER_READ);
-    de_rg_read(pass, raw, DE_ACCESS_SHADER_READ);
-    de_rg_write(pass, output, DE_ACCESS_SHADER_WRITE);
-    return DE_OK;
 }
 static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *vc) {
     u32 slot = (vf->view.id & 255u) - 1u;
@@ -229,7 +225,9 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
         return DE_OK;
     u32 scale = vf->settings->ao == DE_QUALITY_LOW ? 2 : 1, tw = (vf->width + scale - 1) / scale,
         th = (vf->height + scale - 1) / scale;
-    u32 spp = vf->settings->ao == DE_QUALITY_ULTRA ? 2 : 1;
+    u32 spp = s->reference.id && de_cvar_int(s->reference) > 0 ? (u32)de_cvar_int(s->reference)
+              : vf->settings->ao == DE_QUALITY_ULTRA           ? 2
+                                                               : 1;
     if (!reserve(s, v, vf->width, vf->height, tw, th, spp)) {
         release(s, v);
         DE_WARN(s->r->log, "RTAO capacity unavailable; using GTAO");
@@ -280,7 +278,8 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
     de_rg_write(pass, rays, DE_ACCESS_SHADER_WRITE);
     de_rg_write(pass, hits, DE_ACCESS_SHADER_WRITE);
     de_rg_write(pass, raw, DE_ACCESS_SHADER_WRITE);
-    DE_TRY(spatial(g, &p[1], raw, filtered));
+    DE_TRY(de__denoise_ao(s->denoiser, vf, vc, raw, filtered, tw, th, scale,
+                          s->reference.id && de_cvar_int(s->reference) > 0));
     pass = de_rg_add_pass(g, "RT.AO.Pack", DE_QUEUE_GRAPHICS, execute, &p[2]);
     if (!pass)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RTAO packing pass");

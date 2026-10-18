@@ -1,5 +1,6 @@
 import push_constants;
 import bindless;
+import "../denoise/ao_filter";
 import rt_types;
 import "../scene/scene_types";
 import "../visbuffer/gbuffer";
@@ -14,11 +15,7 @@ struct RtaoParams {
 };
 uint hash(uint x){x^=x>>16;x*=0x7feb352du;x^=x>>15;x*=0x846ca68bu;return x^(x>>16);}
 uint2 representative(RtaoParams p,uint2 q) {
-    uint2 best=min(q*p.scale,uint2(p.width-1,p.height-1));float z=de_tex2d(p.depth).Load(int3(best,0)).r;
-    for(uint y=0;y<p.scale;++y)for(uint x=0;x<p.scale;++x){
-        uint2 at=min(q*p.scale+uint2(x,y),uint2(p.width-1,p.height-1));
-        float next=de_tex2d(p.depth).Load(int3(at,0)).r;if(next>z){z=next;best=at;}
-    }return best;
+    return de_denoise_ao_representative(p.depth,q,p.scale,uint2(p.width,p.height));
 }
 float3 normal_at(RtaoParams p,uint2 q){return gb_decode(float4(0),de_tex2d(p.normal).Load(int3(q,0)),float4(0)).normal;}
 float3 position_at(RtaoParams p,uint2 q) {
@@ -30,6 +27,7 @@ float2 sample_hemisphere(uint pixel,uint frame,uint sample,uint spp) {
     // Progressive stratification over64 frames; pixel rotation prevents spatial correlation.
     uint phase=(frame&63u)*spp+sample;
     float2 shift=float2(hash(pixel),hash(pixel^0x68bc21ebu))*(1.0/4294967296.0);
+    if(spp>=256)return frac(float2((sample+.5)/spp,reversebits(sample)*(1.0/4294967296.0))+shift);
     return frac(float2((phase+.5)/(64.0*spp),reversebits(phase)*(1.0/4294967296.0))+shift);
 }
 [shader("compute")][numthreads(8,8,1)]

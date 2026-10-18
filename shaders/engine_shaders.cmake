@@ -94,3 +94,7 @@ de_engine_shader(denoise_reproject denoise/reproject.slang)
 de_engine_shader(denoise_temporal denoise/temporal.slang)
 de_engine_shader(denoise_variance denoise/variance.slang)
 de_engine_shader(denoise_atrous denoise/atrous.slang)
+
+# Shared-block shadow/AO policies (no temporal or wavelet kernel fork).
+de_engine_shader(denoise_shadow_prefilter denoise/shadow_prefilter.slang)
+de_engine_shader(denoise_shadow_publish denoise/shadow_temporal.slang)
