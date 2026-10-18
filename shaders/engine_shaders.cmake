@@ -88,3 +88,9 @@ if(NOT APPLE)
     de_engine_shader(pt_pipeline pathtracer/pt_raygen.slang)
 endif()
 de_engine_shader(pt_environment pathtracer/pt_env.slang)
+
+# S17 shared deterministic denoiser blocks.
+de_engine_shader(denoise_reproject denoise/reproject.slang)
+de_engine_shader(denoise_temporal denoise/temporal.slang)
+de_engine_shader(denoise_variance denoise/variance.slang)
+de_engine_shader(denoise_atrous denoise/atrous.slang)

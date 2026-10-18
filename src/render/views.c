@@ -1,3 +1,4 @@
+#include "render/denoise/denoise_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_gi_probes.h"
@@ -599,6 +600,7 @@ static void release_now(de_renderer *r, de_rg *g, de_gpu_texture out) {
 /* Retires the render side of a slot: its objects go once the frame fence passes every frame
  * submitted so far. */
 static void retire(de_renderer *r, de__views *vs, view_rs *s) {
+    de__denoise_forget(r->denoise, make_handle((u32)(s - vs->rs), s->gen));
     if (s->graph != NULL || DE_HANDLE_VALID(s->output)) {
         if (vs->retired_count == DE__VIEW_MAX * 2u) {
             /* Full (views destroyed faster than frames complete): wait for the GPU. */

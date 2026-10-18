@@ -1,3 +1,4 @@
+#include "render/denoise/denoise_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_shadows.h"
@@ -67,6 +68,8 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__denoise_destroy(r->denoise);
+    r->denoise = NULL;
     de__pt_destroy(r->pt);
     de__restir_di_destroy(r->restir_di);
     de__rt_shadows_destroy(r->rt_shadows);
@@ -357,6 +360,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: GPU scene");
         goto fail;
     }
+    res = de__denoise_create(r, &r->denoise);
+    if (res != DE_OK)
+        goto fail;
     res = de__pt_create(r, &r->pt);
     if (res != DE_OK)
         goto fail;
