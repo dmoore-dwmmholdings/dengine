@@ -1,0 +1,353 @@
+#include "scene_as_fixture.h"
+#include "render/pathtracer/pt_internal.h"
+
+typedef struct pt_fixture {
+    rt_fixture rt;
+    de__rw_view camera;
+    de_gpu_buffer rb, sphere_indices;
+    de_cooked_mesh_range sphere_range;
+    de_render_submesh sphere_submesh;
+    de__pt_info info;
+} pt_fixture;
+static void pt_fixture_setup(pt_fixture *f) {
+    rt_fixture *r = &f->rt;
+    rt_fixture_setup(r);
+    if (!de_gpu_get_caps(r->d)->rt_pipelines)
+        SKIP("native RT pipelines unavailable");
+    de__view_unregister_stage(r->r, trace_stage, r);
+    de__view_capture_camera(r->r, r->view, NULL);
+    f->camera = (de__rw_view){.entity = 999,
+                              .camera = {.projection = DE_PROJ_PERSPECTIVE,
+                                         .fov_y = .9f,
+                                         .near_z = .1f,
+                                         .view = r->view,
+                                         .exposure_ev100 = 0},
+                              .offset = {3, 0, 4},
+                              .rotation = {0, 0, 0, 1}};
+    f->camera.transform = at(3, 0, 4);
+    r->w.f.views = &f->camera;
+    r->w.f.view_count = 1;
+    g_mat[0].standard.alpha_mode = DE_COOKED_ALPHA_OPAQUE;
+    g_mat[0].alpha_mode = DE_COOKED_ALPHA_OPAQUE;
+    g_mat[0].standard.base_color_tex = (de_texture){0};
+    g_mat[0].textures[0] = (de_texture){0};
+    g_mat[0].standard.base_color = (de_vec4){2, 1, .5f, 1};
+    g_mat[0].standard.unlit = true;
+    g_mat[0].standard.emissive = (de_vec3){2, 1, .5f};
+    g_mat[0].standard.emissive_strength = 1;
+    de_render_settings settings = de_renderer_get_settings(r->r);
+    settings.path_tracer = true;
+    settings.path_max_bounces = 8;
+    settings.render_scale = 1;
+    de_renderer_set_settings(r->r, &settings);
+    f->rb = de_gpu_buffer_create(r->d, &(de_gpu_buffer_desc){.size = 64 * 64 * 16,
+                                                             .usage = DE_USAGE_COPY_DST,
+                                                             .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(f->rb.id);
+    (void)cvar_set("r.gpu_profile", "0");
+}
+static void pt_fixture_teardown(pt_fixture *f) {
+    if (f->rt.d) {
+        de_gpu_wait_idle(f->rt.d);
+        de_gpu_buffer_destroy(f->rt.d, f->rb);
+        if (f->sphere_indices.id) {
+            mesh_free(&g_mesh[1], f->rt.d);
+            de_gpu_buffer_destroy(f->rt.d, f->sphere_indices);
+        }
+    }
+    (void)cvar_set("r.ambient_fallback", "0");
+    (void)cvar_set("r.pt.seed", "0");
+    (void)cvar_set("r.pt.sampling_strategy", "0");
+    rt_fixture_teardown(&f->rt);
+}
+static void pt_frame(pt_fixture *f) {
+    rt_fixture *r = &f->rt;
+    world_begin(&r->w);
+    r->handoff.last = &r->w.f;
+    r->handoff.current = &r->w.f;
+    r->r->render_world = &r->handoff;
+    de__renderer_kick_prepare(r->r);
+    ASSERT_EQ(de_renderer_render_frame(r->r), DE_OK);
+    de_gpu_wait_idle(r->d);
+    r->handoff.current = NULL;
+    ASSERT_TRUE(de__pt_get(r->r, r->view, &f->info));
+    ASSERT_FALSE(de_gpu_device_is_lost(r->d));
+}
+static float *pt_read(pt_fixture *f) {
+    rt_fixture *r = &f->rt;
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "PT accumulation readback");
+    de_gpu_barrier b = {.texture = f->info.accumulation,
+                        .before = DE_ACCESS_SHADER_READ,
+                        .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, f->rb, 0, f->info.width * 16, f->info.accumulation, 0,
+                                      0);
+    b.before = DE_ACCESS_COPY_SRC;
+    b.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    ASSERT_EQ(de_gpu_queue_submit(r->d, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_wait_idle(r->d);
+    return de_gpu_buffer_map(r->d, f->rb);
+}
+
+TEST(pt_media, coefficients_and_phase) {
+    de_vec3 s, a, s2, a2;
+    de__pt_sss_coefficients((de_vec3){1, 2, 3}, (de_vec3){.2f, .5f, .8f}, &s, &a);
+    de__pt_sss_coefficients((de_vec3){2, 4, 6}, (de_vec3){.2f, .5f, .8f}, &s2, &a2);
+    EXPECT_TRUE(s.x > 0 && a.x > 0 && s.z > 0 && a.z > 0);
+    EXPECT_FLOAT_EQ(s2.x, s.x * .5f, 1e-6);
+    EXPECT_FLOAT_EQ(a2.z, a.z * .5f, 1e-6);
+    const double g[] = {-.8, 0, .5};
+    for (u32 k = 0; k < 3; ++k) {
+        double integral = 0;
+        const u32 n = 262144;
+        for (u32 i = 0; i < n; ++i)
+            integral += de__pt_hg((f32)(-1 + 2 * ((double)i + .5) / n), (f32)g[k]);
+        integral *= 4 * DE_PI / n;
+        printf("HG g=%g integral %.9g\n", g[k], integral);
+        EXPECT_FLOAT_EQ(integral, 1, 1e-4);
+    }
+}
+static double media_mean(pt_fixture *f, u32 channel) {
+    float *p = pt_read(f);
+    double sum = 0;
+    u32 n = 0;
+    for (u32 y = 24; y < 40; ++y)
+        for (u32 x = 24; x < 40; ++x) {
+            u32 i = (y * 64 + x) * 4;
+            EXPECT_FLOAT_EQ(p[i + 3], de_renderer_path_samples(f->rt.r, f->rt.view), 0);
+            sum += p[i + channel] / p[i + 3];
+            ++n;
+        }
+    return sum / n;
+}
+static void media_samples(pt_fixture *f, u32 n) {
+    for (u32 i = 0; i < n; ++i)
+        pt_frame(f);
+}
+/* Closed slab: the six independently wound faces belong to ONE BLAS/instance. */
+static void media_slab(pt_fixture *f, float thickness) {
+    rt_fixture *r = &f->rt;
+    fmesh *fm = &g_mesh[1];
+    mesh_plane(fm, r->d, 6, 1, 8);
+    g_mesh_count = 2;
+    de_render_mesh *m = &fm->rm;
+    u8 *v = de_gpu_buffer_map(r->d, fm->buf[0]);
+    u8 *records = de_gpu_buffer_map(r->d, fm->buf[1]);
+    u32 ix[6 * PATCH_TRIS * 3], n = 0;
+    const de_vec3 normals[6] = {{0, 0, 1},  {0, 0, -1}, {1, 0, 0},
+                                {-1, 0, 0}, {0, 1, 0},  {0, -1, 0}};
+    for (u32 face = 0; face < 6; ++face) {
+        de_vec3 normal = normals[face];
+        for (u32 y = 0; y < PATCH; ++y)
+            for (u32 x = 0; x < PATCH; ++x) {
+                float u = -4 + 8 * (float)x / (PATCH - 1), w = -4 + 8 * (float)y / (PATCH - 1);
+                de_vec3 pos;
+                if (face == 0)
+                    pos = (de_vec3){u, w, 0};
+                else if (face == 1)
+                    pos = (de_vec3){-u, w, -thickness};
+                else if (face == 2)
+                    pos = (de_vec3){4, u, -thickness * .5f + w * thickness / 8};
+                else if (face == 3)
+                    pos = (de_vec3){-4, -u, -thickness * .5f + w * thickness / 8};
+                else if (face == 4)
+                    pos = (de_vec3){u, 4, -thickness * .5f - w * thickness / 8};
+                else
+                    pos = (de_vec3){u, -4, -thickness * .5f + w * thickness / 8};
+                u32 index = face * PATCH_VERT + y * PATCH + x;
+                memcpy(v + index * 12, &pos, 12);
+                float d = fabsf(normal.x) + fabsf(normal.y) + fabsf(normal.z), ox = normal.x / d,
+                      oy = normal.y / d;
+                if (normal.z < 0) {
+                    float save = ox;
+                    ox = (1 - fabsf(oy)) * (save < 0 ? -1 : 1);
+                    oy = (1 - fabsf(save)) * (oy < 0 ? -1 : 1);
+                }
+                put_u32(v + m->stream_offset[DE_COOKED_STREAM_NORMAL] + index * 4,
+                        (u16)(i16)lrintf(ox * 32767) | ((u32)(u16)(i16)lrintf(oy * 32767) << 16));
+            }
+        for (u32 y = 0; y + 1 < PATCH; ++y)
+            for (u32 x = 0; x + 1 < PATCH; ++x) {
+                u32 a = face * PATCH_VERT + y * PATCH + x, b = a + 1, c = b + PATCH, d = a + PATCH;
+                ix[n++] = a;
+                ix[n++] = b;
+                ix[n++] = c;
+                ix[n++] = a;
+                ix[n++] = c;
+                ix[n++] = d;
+            }
+        put_f32(records + face * DE_COOKED_MESHLET_SIZE + 16, 0);
+        put_f32(records + face * DE_COOKED_MESHLET_SIZE + 20, 0);
+        put_f32(records + face * DE_COOKED_MESHLET_SIZE + 24, -thickness * .5f);
+        put_f32(records + face * DE_COOKED_MESHLET_SIZE + 28, 8);
+    }
+    f->sphere_indices = de_gpu_buffer_create(
+        r->d, &(de_gpu_buffer_desc){.size = sizeof ix,
+                                    .usage = DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT,
+                                    .memory = DE_MEM_UPLOAD});
+    memcpy(de_gpu_buffer_map(r->d, f->sphere_indices), ix, sizeof ix);
+    m->buffers[DE_RENDER_MESH_INDICES] = f->sphere_indices;
+    m->bindless[DE_RENDER_MESH_INDICES] = de_gpu_buffer_bindless(r->d, f->sphere_indices);
+    m->index_count = n;
+    m->lods[0].index_count = n;
+    f->sphere_range = (de_cooked_mesh_range){.index_count = n};
+    m->lod_submeshes = &f->sphere_range;
+    m->submeshes = &f->sphere_submesh;
+    m->bounds_min[0] = m->bounds_min[1] = -4;
+    m->bounds_max[0] = m->bounds_max[1] = 4;
+    m->bounds_min[2] = -thickness;
+    m->bounds_max[2] = 0;
+    m->sphere[3] = 8;
+    ASSERT_EQ(de__rt_mesh_publish(r->r->rt_scene, m), DE_OK);
+    world_set(&r->w, 0, 1, at(3, 0, -2), 1);
+    world_set(&r->w, 1, 2, at(3, 0, 0), 2);
+    for (u32 i = 0; i < 2; ++i) {
+        r->w.f.instances.flags[i] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+        r->w.f.instances.layer_mask[i] = 1u << 24;
+    }
+    material_add(1, .001f, 0, .5f);
+    g_mat[1].standard.ior = 1.000001f;
+    g_mat[1].standard.transmission = 1;
+    g_mat[1].standard.thickness = thickness;
+    g_mat[1].standard.attenuation_distance = 1;
+    g_mat[1].standard.attenuation_color = (de_vec3){.8f, .6f, .4f};
+    g_mat[1].standard.double_sided = true;
+    g_mat[0].standard.base_color = (de_vec4){1, 1, 1, 1};
+    r->w.touch_all = true;
+    f->camera.camera.fov_y = .05f;
+}
+/* Fixed before measurement: Beer error <1%; fog <3%; SSS small-radius <1%, larger
+ * radius adds >.01 backlit radiance, and white-environment outgoing energy <=1. */
+TEST_F(pt_media, glass_absorption, pt_fixture) {
+    const float thickness[] = {.2f, .5f, 1};
+    media_slab(f, thickness[0]);
+    for (u32 k = 0; k < 3; ++k) {
+        if (k) {
+            de__rt_mesh_evict(f->rt.r->rt_scene, &g_mesh[1].rm);
+            mesh_free(&g_mesh[1], f->rt.d);
+            de_gpu_buffer_destroy(f->rt.d, f->sphere_indices);
+            f->sphere_indices = (de_gpu_buffer){0};
+            --g_mat_count;
+            media_slab(f, thickness[k]);
+        }
+        media_samples(f, 128);
+        for (u32 c = 0; c < 3; ++c) {
+            double color = c == 0   ? .8
+                           : c == 1 ? .6
+                                    : .4,
+                   expected = pow(color, thickness[k]), actual = media_mean(f, c),
+                   error = fabs(actual - expected) / expected;
+            printf("Beer d=%g channel%u actual %.9g expected %.9g error %.6g%%\n", thickness[k], c,
+                   actual, expected, error * 100);
+            EXPECT_TRUE(error <= .01);
+        }
+    }
+}
+TEST_F(pt_media, fog_point_single_scatter, pt_fixture) {
+    rt_fixture *r = &f->rt;
+    g_mat[0].standard.base_color = (de_vec4){0, 0, 0, 1};
+    r->w.f.fog_count = 1;
+    r->w.f.fog[0] = (de__fog_snapshot){
+        .entity = 777,
+        .transform = at(3, 0, 2),
+        .volume = {
+            .extent = {20, 20, 2}, .density = .4f, .albedo = {.7f, .7f, .7f}, .anisotropy = .3f}};
+    world_light(
+        &r->w, 0,
+        &(DeLight){.kind = DE_LIGHT_POINT, .color = {1, 1, 1}, .intensity = 20, .range = 100},
+        at(4, 0, 2));
+    de_render_settings settings = de_renderer_get_settings(r->r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(r->r, &settings);
+    f->camera.camera.fov_y = .001f;
+    /* Camera z4 to box z3..1; point at (4,0,2), inside the wide x/y bounds.
+     * Independent midpoint integration includes extinction on BOTH camera/light paths. */
+    double reference = 0;
+    const u32 steps = 262144;
+    for (u32 i = 0; i < steps; ++i) {
+        double z = 3 - 2 * ((double)i + .5) / steps, dz = 2 - z, d = sqrt(1 + dz * dz),
+               cosine = -dz / d;
+        reference += exp(-.4 * (3 - z)) * .4 * .7 * de__pt_hg((float)cosine, .3f) *
+                     (20 / (4 * DE_PI)) / (d * d) * exp(-.4 * d);
+    }
+    reference *= 2.0 / steps;
+    media_samples(f, 2048);
+    double actual = media_mean(f, 0), error = fabs(actual - reference) / reference;
+    printf("Fog single scatter actual %.9g analytic %.9g relative %.6g%%\n", actual, reference,
+           error * 100);
+    EXPECT_TRUE(error <= .03);
+}
+TEST_F(pt_media, sss_radius_and_energy, pt_fixture) {
+    media_slab(f, .2f);
+    g_mat[1].standard.transmission = 0;
+    g_mat[1].standard.thickness = 0;
+    g_mat[1].standard.base_color = (de_vec4){.5f, .5f, .5f, 1};
+    g_mat[1].standard.subsurface = 0;
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
+    media_samples(f, 256);
+    double diffuse = media_mean(f, 0);
+    g_mat[1].standard.subsurface = 1;
+    g_mat[1].standard.subsurface_radius = (de_vec3){1e-8f, 1e-8f, 1e-8f};
+    f->rt.w.touch_all = true;
+    media_samples(f, 256);
+    double tiny = media_mean(f, 0);
+    printf("SSS radius->0 diffuse %.9g tiny %.9g\n", diffuse, tiny);
+    EXPECT_TRUE(fabs(tiny - diffuse) / fmax(diffuse, 1e-8) <= .01);
+    g_mat[1].standard.subsurface_radius = (de_vec3){.5f, .5f, .5f};
+    f->rt.w.touch_all = true;
+    media_samples(f, 512);
+    double energy = media_mean(f, 0);
+    printf("SSS white furnace outgoing %.9g\n", energy);
+    EXPECT_TRUE(energy <= 1);
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "0"));
+    de_renderer_path_reset(f->rt.r, f->rt.view);
+    media_samples(f, 512);
+    double backlit = media_mean(f, 0);
+    g_mat[1].standard.subsurface = 0;
+    f->rt.w.touch_all = true;
+    media_samples(f, 256);
+    double opaque = media_mean(f, 0);
+    printf("SSS backlit large %.9g opaque %.9g\n", backlit, opaque);
+    EXPECT_TRUE(backlit > opaque + .01);
+}
+
+TEST_F(pt_media, gpu_stack_overflow, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_device *d = f->rt.d;
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){
+               .kind = DE_PIPE_COMPUTE,
+               .cs = {de__pt_metal_library, de__pt_metal_library_bytes, "pt_media_stack_probe"},
+               .push_constant_bytes = 4,
+               .threadgroup_size = {1, 1, 1}});
+    ASSERT_TRUE(pipeline.id);
+    de_gpu_buffer output = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){.size = 8, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    de_gpu_cmd *cmd =
+        de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "Actual production medium stack safety");
+    de_gpu_barrier barrier = {.buffer = output, .after = DE_ACCESS_SHADER_WRITE};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_set_pipeline(cmd, pipeline);
+    u32 index = de_gpu_buffer_bindless(d, output);
+    de_gpu_cmd_push_constants(cmd, &index, 4);
+    de_gpu_cmd_dispatch(cmd, 1, 1, 1);
+    barrier.before = DE_ACCESS_SHADER_WRITE;
+    barrier.after = DE_ACCESS_COPY_SRC;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 8);
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    u32 *result = de_gpu_buffer_map(d, f->rb);
+    EXPECT_EQ(result[0], 4u);
+    EXPECT_EQ(result[1], 1u);
+    de_gpu_pipeline_destroy(d, pipeline);
+    de_gpu_buffer_destroy(d, output);
+#endif
+}

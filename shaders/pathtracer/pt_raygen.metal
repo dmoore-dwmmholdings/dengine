@@ -38,6 +38,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);if(id.x>=p.ptp_width||id.y>=p.ptp_height)return;
     uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
+    if(p.ptp_media.ptm_features==0) {
     for(uint bounce=0;bounce<p.ptp_max_bounces;++bounce) {
         auto h=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
         auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
@@ -52,6 +53,21 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
             if(pt_random_0(pixel^p.ptp_seed,p.ptp_sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
         previous=r.ptr_origin.xyz+r.ptr_direction.xyz*h.pth_t;r=step.pts_next;pdf=step.pts_pdf;
     }
+    } else {
+        auto path=pt_path_init_0(&p,pixel);
+        uint limit=p.ptp_max_bounces*(p.ptp_media.ptm_max_steps+5);
+        for(uint event=0;event<limit && path.ptpath_finished==0;++event) {
+            auto h=pt_intersect(heap,p,path.ptpath_ray,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+            auto step=pt_path_event_0(&p,&path,&h,pixel,&ctx);
+            float3 visibility=1;
+            if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0)) {
+                bool clear=pt_intersect(heap,p,step.pts_shadow,1,intersections,functions,sbt,(constant uchar *)&pc,ctx).pth_t<0;
+                visibility=clear?pt_path_shadow_0(&p,&path,&step.pts_shadow,&ctx):float3(0);
+            }
+            pt_path_finish_0(&p,&path,&step,visibility,pixel);
+        }
+        pt_path_diagnostics_0(&p,&path,&ctx);radiance=path.ptpath_radiance;
+    }
     radiance=select(float3(0),radiance,isfinite(radiance));
     auto accum=heap.storage[p.ptp_accumulation];float4 old=p.ptp_sample?accum.read(id.xy):float4(0);
     float4 sum=old+float4(radiance,1);accum.write(sum,id.xy);
@@ -63,4 +79,7 @@ kernel void pt_env_cdf(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc
     for(uint i=0;i<512;++i){float3 wi=pt_env_direction_0((float2(i%32,i/32)+.5f)/float2(32,16));
         float3 value=pt_environment_0(&p,wi,&ctx);float w=max(dot(value,float3(.2126,.7152,.0722)),0.f);cdf[i]=float2(0,w);total+=w;}
     float sum=0;for(uint i=0;i<512;++i){float pdf=total>0?cdf[i].y/total:1.f/512;sum+=pdf;cdf[i]=float2(i==511?1.f:sum,pdf);}
+}
+kernel void pt_media_stack_probe(constant DeRtHeap &heap [[buffer(0)]],constant uint &output [[buffer(1)]]) {
+    uint2 result=pt_stack_probe_0();device uint *dst=(device uint *)heap.buffers[output];dst[0]=result.x;dst[1]=result.y;
 }

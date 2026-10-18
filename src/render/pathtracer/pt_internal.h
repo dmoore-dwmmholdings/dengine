@@ -16,4 +16,16 @@ bool de__pt_get(const de_renderer *, de_view, de__pt_info *);
 /** Equal-area environment cell CDF; shared CPU oracle, capacity count+1 is not required. */
 void de__pt_env_cdf(const f32 *weights, u32 count, f32 *cdf, f32 *pdf);
 f32 de__pt_power(f32 a, f32 b);
+void de__pt_sss_coefficients(de_vec3 radius, de_vec3 albedo, de_vec3 *sigma_s, de_vec3 *sigma_a);
+f32 de__pt_hg(f32 cosine, f32 g);
+typedef struct de__pt_media de__pt_media;
+typedef struct de__pt_media_params {
+    u32 fog, count, features, max_steps, stats, stats_offset, unused0, unused1;
+} de__pt_media_params;
+de_result de__pt_media_create(de_renderer *, de__pt_media **);
+void de__pt_media_destroy(de__pt_media *);
+de_result de__pt_media_frame(de__pt_media *, de__view_frame *, de__pt_media_params *, u64 *);
+void de__pt_media_begin(de__pt_media *, de_gpu_cmd *, const de__pt_media_params *);
+void de__pt_media_end(de__pt_media *, de_gpu_cmd *, const de__pt_media_params *);
+void de__pt_media_graph(de__pt_media *, de_rg *, de_rg_pass *);
 #endif

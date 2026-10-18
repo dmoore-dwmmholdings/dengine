@@ -14,6 +14,7 @@ DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags) {
 void pt_raygen(uniform PtPush pc) {
     PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
     DeRtRay ray=pt_camera(p,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
+    if(p.media.features==0) {
     for(uint bounce=0;bounce<p.max_bounces;++bounce) {
         DeRtHit hit=pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
         radiance+=throughput*step.emitted;
@@ -24,6 +25,17 @@ void pt_raygen(uniform PtPush pc) {
         if(bounce>=3){float survival=clamp(max(throughput.x,max(throughput.y,throughput.z)),.05,.95);
             if(pt_random(pixel^p.seed,p.sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
         previous=ray.origin.xyz+ray.direction.xyz*hit.t;ray=step.next;pdf=step.pdf;
+    }
+    } else {
+        PtPath path=pt_path_init(p,pixel);uint limit=p.max_bounces*(p.media.max_steps+5);
+        for(uint event=0;event<limit&&path.finished==0;++event) {
+            DeRtHit hit=pt_intersect(p,path.ray,0);PtStep step=pt_path_event(p,path,hit,pixel);
+            float3 visibility=1;
+            if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0))
+                visibility=pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0?pt_path_shadow(p,path,step.shadow):float3(0);
+            pt_path_finish(p,path,step,visibility,pixel);
+        }
+        pt_path_diagnostics(p,path);radiance=path.radiance;
     }
     radiance=select(isfinite(radiance),radiance,float3(0));
     float4 old=p.sample>0?de_rwtex2d(p.accumulation)[id]:float4(0);

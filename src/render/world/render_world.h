@@ -157,6 +157,12 @@ enum {
  * One render-world buffer: everything one frame renders. Read-only for the renderer. Arrays are
  * owned by the buffer and stay valid until the buffer is refilled (see the header).
  */
+typedef struct de__fog_snapshot {
+    u64 entity;
+    de_affine transform;
+    DeFogVolume volume;
+} de__fog_snapshot;
+
 typedef struct de__render_world_frame {
     u64 frame;           /**< extract frame number, from 1 */
     de_dvec3 origin;     /**< the render origin (f64 world position) */
@@ -173,7 +179,9 @@ typedef struct de__render_world_frame {
     de__probe_snapshot probes[64];
     u32 irradiance_count;
     de__irradiance_snapshot irradiance[8];
-    u32 environment_count; /**< DeEnvironment entities seen (only the first is used) */
+    u32 fog_count;
+    de__fog_snapshot fog[32]; /* S17: bounded, allocation-free local participating regions. */
+    u32 environment_count;    /**< DeEnvironment entities seen (only the first is used) */
 
     /** Slots written this frame (new, changed, prev catch-up), ascending. After an origin change
      * every live slot changed too; only the slots changed for other reasons are listed. */

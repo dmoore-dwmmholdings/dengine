@@ -466,3 +466,8 @@ if(TARGET de_render AND APPLE AND DE_GPU_METAL)
         DEPENDS "${_de_pt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/embed_metal.cmake" VERBATIM)
     target_sources(de_render PRIVATE "${_de_pt_embed}")
 endif()
+
+# DENG-73: homogeneous participating media, RGB random walks and retained fog uploads.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt_media.c)
+endif()
