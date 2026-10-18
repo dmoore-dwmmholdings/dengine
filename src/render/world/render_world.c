@@ -9,6 +9,7 @@
 #include "render/world/render_world.h"
 
 #include "render/renderer_internal.h"
+#include "render/sprite/sprite_internal.h"
 
 #include <math.h>
 #include <string.h>
@@ -32,7 +33,8 @@ static u32 inst_arrays(de__rw_instances *x, rw_array *out) {
     out[5] = (rw_array){(void **)&x->bounds, sizeof(de_aabb), DE_ALIGNOF(de_aabb)};
     out[6] = (rw_array){(void **)&x->layer_mask, sizeof(u32), DE_ALIGNOF(u32)};
     out[7] = (rw_array){(void **)&x->flags, sizeof(u8), DE_ALIGNOF(u8)};
-    return 8;
+    out[8] = (rw_array){(void **)&x->sprite, sizeof(DeSprite), DE_ALIGNOF(DeSprite)};
+    return 9;
 }
 
 static u32 light_arrays(de__rw_lights *x, rw_array *out) {
@@ -405,6 +407,11 @@ static void slot_matrices(de__render_world *rw, de__rw_kind k, u32 s) {
     if (k == DE__RW_KIND_INSTANCE) {
         rw->inst.transform[s] = de_transform_to_affine_relative(&p->xform[s], rw->origin);
         rw->inst.prev_transform[s] = de_transform_to_affine_relative(&p->prev_xform[s], rw->origin);
+        if (rw->inst.flags[s] & DE__RW_INST_SPRITE) {
+            de_affine local = de__sprite_local_transform(&rw->inst.sprite[s], rw->r->plane_2d);
+            rw->inst.transform[s] = de_affine_mul(&rw->inst.transform[s], &local);
+            rw->inst.prev_transform[s] = de_affine_mul(&rw->inst.prev_transform[s], &local);
+        }
         de__rw_inst_update_bounds(rw, s);
     } else {
         rw->lights.transform[s] = de_transform_to_affine_relative(&p->xform[s], rw->origin);

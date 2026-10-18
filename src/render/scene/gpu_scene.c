@@ -3,6 +3,7 @@
  * plan and its render-graph passes. gpu_scene.h describes the design; gpu_table.c holds one table.
  */
 #include "render/scene/gpu_scene.h"
+#include "render/sprite/sprite_internal.h"
 
 #include <dengine/de_debug.h>
 
@@ -148,7 +149,8 @@ typedef struct gs_grow {
 
 /** Handle -> slot (open addressing, keys are handle ids, 0 = empty). Lookups only. */
 typedef struct gs_map {
-    u32 *keys, *vals;
+    u64 *keys;
+    u32 *vals;
     u32 cap, count;
 } gs_map;
 
@@ -164,6 +166,7 @@ struct de__gpu_scene {
     de_gpu_device *dev;
     const de_allocator *alloc;
     de_log_category log;
+    de_render_mesh sprite_quad;
     de__gpu_scene_assets assets;
     de_asset_system *asset_system;
 
@@ -178,8 +181,8 @@ struct de__gpu_scene {
     u32 *inst_mesh, *inst_mat;
     u32 inst_cap;
     /* Meshes and materials: handle per slot, references, handle -> slot. */
-    de_mesh *mesh_handle;
-    de_material *mat_handle;
+    u64 *mesh_handle;
+    u64 *mat_handle;
     u32 *mesh_refs, *mat_refs;
     u32 mesh_cap, mat_cap;
     gs_map mesh_map, mat_map;
@@ -314,12 +317,13 @@ static void mat4_rows(de__gs_float4 rows[4], const de_mat4 *m) {
 
 /* ---------- Handle maps ---------- */
 
-static u32 map_hash(u32 k) {
+static u32 map_hash(u64 key) {
+    u32 k = (u32)key ^ (u32)(key >> 32);
     k *= 0x9E3779B1u;
     return k ^ (k >> 15);
 }
 
-static u32 map_get(const gs_map *m, u32 key) {
+static u32 map_get(const gs_map *m, u64 key) {
     if (m->cap == 0)
         return DE__GS_NONE;
     const u32 mask = m->cap - 1u;
@@ -331,7 +335,7 @@ static u32 map_get(const gs_map *m, u32 key) {
     }
 }
 
-static void map_insert_raw(gs_map *m, u32 key, u32 val) {
+static void map_insert_raw(gs_map *m, u64 key, u32 val) {
     const u32 mask = m->cap - 1u;
     u32 i = map_hash(key) & mask;
     while (m->keys[i] != 0)
@@ -341,19 +345,19 @@ static void map_insert_raw(gs_map *m, u32 key, u32 val) {
     m->count++;
 }
 
-static bool map_put(const de_allocator *a, gs_map *m, u32 key, u32 val) {
+static bool map_put(const de_allocator *a, gs_map *m, u64 key, u32 val) {
     if ((m->count + 1u) * 2u > m->cap) {
         const u32 ncap = m->cap ? m->cap * 2u : 64u;
-        u32 *keys = (u32 *)DE_ALLOC(a, (size_t)ncap * sizeof(u32), 16, DE_MEM_RENDER);
+        u64 *keys = (u64 *)DE_ALLOC(a, (size_t)ncap * sizeof(u64), 16, DE_MEM_RENDER);
         u32 *vals = (u32 *)DE_ALLOC(a, (size_t)ncap * sizeof(u32), 16, DE_MEM_RENDER);
         if (keys == NULL || vals == NULL) {
             if (keys)
-                DE_FREE(a, keys, (size_t)ncap * sizeof(u32));
+                DE_FREE(a, keys, (size_t)ncap * sizeof(u64));
             if (vals)
                 DE_FREE(a, vals, (size_t)ncap * sizeof(u32));
             return false;
         }
-        memset(keys, 0, (size_t)ncap * sizeof(u32));
+        memset(keys, 0, (size_t)ncap * sizeof(u64));
         gs_map old = *m;
         m->keys = keys;
         m->vals = vals;
@@ -363,7 +367,7 @@ static bool map_put(const de_allocator *a, gs_map *m, u32 key, u32 val) {
             if (old.keys[i] != 0)
                 map_insert_raw(m, old.keys[i], old.vals[i]);
         if (old.cap) {
-            DE_FREE(a, old.keys, (size_t)old.cap * sizeof(u32));
+            DE_FREE(a, old.keys, (size_t)old.cap * sizeof(u64));
             DE_FREE(a, old.vals, (size_t)old.cap * sizeof(u32));
         }
     }
@@ -372,7 +376,7 @@ static bool map_put(const de_allocator *a, gs_map *m, u32 key, u32 val) {
 }
 
 /* Removes `key` (backward-shift deletion: no tombstones). */
-static void map_remove(gs_map *m, u32 key) {
+static void map_remove(gs_map *m, u64 key) {
     if (m->cap == 0)
         return;
     const u32 mask = m->cap - 1u;
@@ -401,7 +405,7 @@ static void map_remove(gs_map *m, u32 key) {
 
 static void map_free(const de_allocator *a, gs_map *m) {
     if (m->cap) {
-        DE_FREE(a, m->keys, (size_t)m->cap * sizeof(u32));
+        DE_FREE(a, m->keys, (size_t)m->cap * sizeof(u64));
         DE_FREE(a, m->vals, (size_t)m->cap * sizeof(u32));
     }
     memset(m, 0, sizeof *m);
@@ -528,14 +532,29 @@ void de__gpu_scene_pack_mesh_record(const de_render_mesh *m, de__gs_mesh *o) {
     }
 }
 
-static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
+static void pack_mesh(const de__gpu_scene *gs, u64 key, de__gs_mesh *o) {
+    de_mesh h = {(u32)key};
+    if (key >> 32) {
+        de__gpu_scene_pack_mesh_record(&gs->sprite_quad, o);
+        return;
+    }
     const de_render_mesh *m =
         gs->assets.mesh != NULL && DE_HANDLE_VALID(h) ? gs->assets.mesh(gs->assets.user, h) : NULL;
     de__gpu_scene_pack_mesh_record(m, o);
 }
 
 /* The material's parameter block (DENG-302: render/materials/material_instances.h). */
-static void pack_material(const de__gpu_scene *gs, de_material h, de__gs_material *o) {
+static void pack_material(const de__gpu_scene *gs, u64 key, de__gs_material *o) {
+    de_material h = {(u32)key};
+    if ((key >> 32) && gs->frame != NULL) {
+        u32 slot = (u32)key;
+        if (slot < gs->frame->instances.count && gs->frame->instances.sprite != NULL &&
+            (gs->frame->instances.flags[slot] & DE__RW_INST_SPRITE)) {
+            de__sprite_pack_material(&gs->frame->instances.sprite[slot], o,
+                                     gs->assets.texture_bindless, gs->assets.user);
+            return;
+        }
+    }
     const de_render_material *m = NULL;
     if (DE_HANDLE_VALID(h)) {
         if (gs->materials != NULL)
@@ -620,9 +639,8 @@ static de_result ensure_slot_arrays(de__gpu_scene *gs) {
     const de__gpu_table *mt = &gs->tables[DE__GS_MESHES];
     if (mt->capacity > gs->mesh_cap) {
         if (!grow_u32(gs->alloc, &gs->mesh_refs, gs->mesh_cap, mt->capacity, 0) ||
-            !grow_bytes(gs->alloc, (void **)&gs->mesh_handle,
-                        (size_t)gs->mesh_cap * sizeof(de_mesh),
-                        (size_t)mt->capacity * sizeof(de_mesh)))
+            !grow_bytes(gs->alloc, (void **)&gs->mesh_handle, (size_t)gs->mesh_cap * sizeof(u64),
+                        (size_t)mt->capacity * sizeof(u64)))
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: mesh slots");
         if (!grow_bytes(gs->alloc, (void **)&gs->mesh_changed,
                         (size_t)((gs->mesh_cap + 63u) / 64u) * sizeof(u64),
@@ -633,9 +651,8 @@ static de_result ensure_slot_arrays(de__gpu_scene *gs) {
     const de__gpu_table *at = &gs->tables[DE__GS_MATERIALS];
     if (at->capacity > gs->mat_cap) {
         if (!grow_u32(gs->alloc, &gs->mat_refs, gs->mat_cap, at->capacity, 0) ||
-            !grow_bytes(gs->alloc, (void **)&gs->mat_handle,
-                        (size_t)gs->mat_cap * sizeof(de_material),
-                        (size_t)at->capacity * sizeof(de_material)))
+            !grow_bytes(gs->alloc, (void **)&gs->mat_handle, (size_t)gs->mat_cap * sizeof(u64),
+                        (size_t)at->capacity * sizeof(u64)))
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "gpu scene: material slots");
         if (!grow_bytes(gs->alloc, (void **)&gs->mat_dirty,
                         (size_t)((gs->mat_cap + 63u) / 64u) * sizeof(u64),
@@ -659,7 +676,7 @@ static void perm_count_add(de__gpu_scene *gs, const de__gs_material *e, i32 delt
 }
 
 /* A reference on the slot of handle id `id` in table `t` (a new slot for a new handle). */
-static u32 ref_acquire(de__gpu_scene *gs, de__gs_table_id t, u32 id) {
+static u32 ref_acquire(de__gpu_scene *gs, de__gs_table_id t, u64 id) {
     gs_map *map = t == DE__GS_MESHES ? &gs->mesh_map : &gs->mat_map;
     u32 s = map_get(map, id);
     if (s != DE__GS_NONE) {
@@ -676,10 +693,10 @@ static u32 ref_acquire(de__gpu_scene *gs, de__gs_table_id t, u32 id) {
     }
     if (t == DE__GS_MESHES) {
         gs->mesh_refs[s] = 1;
-        gs->mesh_handle[s].id = id;
+        gs->mesh_handle[s] = id;
     } else {
         gs->mat_refs[s] = 1;
-        gs->mat_handle[s].id = id;
+        gs->mat_handle[s] = id;
         gs->mat_dirty[s / 64u] |= (u64)1 << (s % 64u); /* DENG-302: pack it */
     }
     de__gpu_table_mark(tb, s); /* a new slot holds whatever the buffer had: upload it */
@@ -695,11 +712,11 @@ static void ref_release(de__gpu_scene *gs, de__gs_table_id t, u32 s) {
         return;
     de__gpu_table *tb = &gs->tables[t];
     if (t == DE__GS_MESHES) {
-        map_remove(&gs->mesh_map, gs->mesh_handle[s].id);
-        gs->mesh_handle[s].id = 0;
+        map_remove(&gs->mesh_map, gs->mesh_handle[s]);
+        gs->mesh_handle[s] = 0;
     } else {
-        map_remove(&gs->mat_map, gs->mat_handle[s].id);
-        gs->mat_handle[s].id = 0;
+        map_remove(&gs->mat_map, gs->mat_handle[s]);
+        gs->mat_handle[s] = 0;
         gs->mat_dirty[s / 64u] &= ~((u64)1 << (s % 64u));
         perm_count_add(
             gs, (const de__gs_material *)(const void *)(tb->shadow + (size_t)s * tb->stride), -1);
@@ -713,21 +730,31 @@ static void ref_release(de__gpu_scene *gs, de__gs_table_id t, u32 s) {
 static void inst_resolve(de__gpu_scene *gs, u32 s) {
     const de__rw_instances *in = &gs->frame->instances;
     const bool live = s < in->count && in->entity[s] != 0;
+    const bool sprite = live && (in->flags[s] & DE__RW_INST_SPRITE) != 0;
+    if (sprite && !DE_HANDLE_VALID(gs->sprite_quad.buffers[0]))
+        (void)de__sprite_quad_create(gs->dev, &gs->sprite_quad);
     const u32 old_mesh = gs->inst_mesh[s];
     u32 *mats = &gs->inst_mat[(size_t)s * DE__GS_INSTANCE_MATERIALS];
     u32 old_mats[DE__GS_INSTANCE_MATERIALS];
     memcpy(old_mats, mats, sizeof old_mats);
-    gs->inst_mesh[s] = live && DE_HANDLE_VALID(in->mesh[s])
-                           ? ref_acquire(gs, DE__GS_MESHES, in->mesh[s].id)
+    gs->inst_mesh[s] = live && (sprite || DE_HANDLE_VALID(in->mesh[s]))
+                           ? ref_acquire(gs, DE__GS_MESHES, sprite ? (u64)1 << 32 : in->mesh[s].id)
                            : DE__GS_NONE;
     for (u32 k = 0; k < DE__GS_INSTANCE_MATERIALS; ++k) {
         de_material m = in->materials[(size_t)s * DE__RW_MATERIALS + k];
+        const u64 sprite_key = ((u64)1 << 32) | s;
         /* DENG-302 (DENG-231 note): an empty slot takes the mesh's default for that submesh. */
-        if (live && !DE_HANDLE_VALID(m) && DE_HANDLE_VALID(in->mesh[s]) &&
+        if (live && !sprite && !DE_HANDLE_VALID(m) && DE_HANDLE_VALID(in->mesh[s]) &&
             gs->assets.default_material != NULL)
             m = gs->assets.default_material(gs->assets.user, in->mesh[s], k);
-        mats[k] =
-            live && DE_HANDLE_VALID(m) ? ref_acquire(gs, DE__GS_MATERIALS, m.id) : DE__GS_NONE;
+        if (sprite && k == 0) {
+            const u32 old = map_get(&gs->mat_map, sprite_key);
+            if (old != DE__GS_NONE)
+                gs->mat_dirty[old / 64u] |= (u64)1 << (old % 64u);
+        }
+        mats[k] = live && (DE_HANDLE_VALID(m) || (sprite && k == 0))
+                      ? ref_acquire(gs, DE__GS_MATERIALS, sprite && k == 0 ? sprite_key : m.id)
+                      : DE__GS_NONE;
     }
     ref_release(gs, DE__GS_MESHES, old_mesh);
     for (u32 k = 0; k < DE__GS_INSTANCE_MATERIALS; ++k)
@@ -864,6 +891,9 @@ void de__gpu_scene_destroy(de__gpu_scene *gs) {
     for (u32 t = 0; t < DE__GS_TABLE_COUNT; ++t)
         de__gpu_table_fini(&gs->tables[t]);
     scratch_free(gs);
+    for (u32 i = 0; i < DE_RENDER_MESH_BUFFER_COUNT; ++i)
+        if (DE_HANDLE_VALID(gs->sprite_quad.buffers[i]))
+            de_gpu_buffer_destroy(gs->dev, gs->sprite_quad.buffers[i]);
     for (u32 i = 0; i < 2; ++i)
         if (DE_HANDLE_VALID(gs->scatter_pipe[i]))
             de_gpu_pipeline_destroy(gs->dev, gs->scatter_pipe[i]);
@@ -878,11 +908,11 @@ void de__gpu_scene_destroy(de__gpu_scene *gs) {
     if (gs->mesh_refs)
         DE_FREE(a, gs->mesh_refs, (size_t)gs->mesh_cap * sizeof(u32));
     if (gs->mesh_handle)
-        DE_FREE(a, gs->mesh_handle, (size_t)gs->mesh_cap * sizeof(de_mesh));
+        DE_FREE(a, gs->mesh_handle, (size_t)gs->mesh_cap * sizeof(u64));
     if (gs->mat_refs)
         DE_FREE(a, gs->mat_refs, (size_t)gs->mat_cap * sizeof(u32));
     if (gs->mat_handle)
-        DE_FREE(a, gs->mat_handle, (size_t)gs->mat_cap * sizeof(de_material));
+        DE_FREE(a, gs->mat_handle, (size_t)gs->mat_cap * sizeof(u64));
     if (gs->mat_dirty)
         DE_FREE(a, gs->mat_dirty, (size_t)((gs->mat_cap + 63u) / 64u) * sizeof(u64));
     if (gs->mesh_changed)

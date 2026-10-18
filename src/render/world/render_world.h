@@ -85,7 +85,8 @@ DE_EXTERN_C_BEGIN
 enum {
     DE__RW_INST_CAST_SHADOWS = 1u << 0,  /**< DeMeshRenderer.cast_shadows */
     DE__RW_INST_VISIBLE_IN_RT = 1u << 1, /**< DeMeshRenderer.visible_in_rt */
-    DE__RW_INST_HAS_BOUNDS = 1u << 2     /**< `bounds` holds the mesh's bounds (mesh loaded) */
+    DE__RW_INST_SPRITE = 1u << 3,
+    DE__RW_INST_HAS_BOUNDS = 1u << 2 /**< `bounds` holds the mesh's bounds (mesh loaded) */
 };
 
 /**
@@ -104,6 +105,7 @@ typedef struct de__rw_instances {
                                     loaded (no asset system, or not READY yet) */
     u32 *layer_mask;           /**< DeMeshRenderer.layer_mask */
     u8 *flags;                 /**< DE__RW_INST_* */
+    DeSprite *sprite;          /**< S19: component snapshot for sprite instances. */
 } de__rw_instances;
 
 /** Lights, SoA, as de__rw_instances. The light points along its transform; the direction
