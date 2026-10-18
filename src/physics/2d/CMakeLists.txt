@@ -57,3 +57,6 @@ target_sources(de_physics PRIVATE
     shapecast2d.c
     character2d_internal.h
     character2d.c)
+
+# DENG-256: scalar-row joints on the colored constraint interface.
+target_sources(de_physics PRIVATE joints2d/joint2d.c joints2d/joint2d_internal.h)

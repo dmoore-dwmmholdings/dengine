@@ -9,6 +9,7 @@
  * is appended after the bodies, so the body records hash as before.
  */
 #include "physics/2d/manifold2d.h"
+#include "physics/2d/joints2d/joint2d_internal.h"
 #include "physics/2d/p2d_internal.h"
 
 typedef struct ck_buf {
@@ -91,7 +92,7 @@ u64 de_physics2d_checksum(const de_physics2d_world *p) {
 
     /* DENG-253: contacts (nothing before the first step created them). */
     if (de__contacts2d_get(p) == NULL)
-        return h;
+        return de__joints2d_checksum(p, h);
     const de__manifold2d *m = NULL;
     const de__contact_end2d *e = NULL;
     u32 nm = 0, ne = 0;
@@ -135,5 +136,5 @@ u64 de_physics2d_checksum(const de_physics2d_world *p) {
         ck_u32(&c, e[i].flags);
         h = de_hash64(c.b, c.n, h);
     }
-    return h;
+    return de__joints2d_checksum(p, h);
 }
