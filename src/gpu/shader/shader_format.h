@@ -51,6 +51,10 @@ typedef enum de__shader_stage {
     DE__SHADER_STAGE_COMPUTE = 3,
     DE__SHADER_STAGE_MESH = 4,
     DE__SHADER_STAGE_AMPLIFICATION = 5, /**< task shader on Vulkan, object shader on Metal */
+    DE__SHADER_STAGE_RAYGEN = 6,
+    DE__SHADER_STAGE_MISS = 7,
+    DE__SHADER_STAGE_CLOSEST_HIT = 8,
+    DE__SHADER_STAGE_ANY_HIT = 9,
     DE__SHADER_STAGE_COUNT_
 } de__shader_stage;
 

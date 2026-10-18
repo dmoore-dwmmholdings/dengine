@@ -18,7 +18,8 @@ set(_de_mtl_objc_sources
     mtl_swapchain.m
     mtl_residency.m
     # DENG-325: pipelines, draws, indirect-count draws (ICBs), the binary archive
-    mtl_pipeline.m
+    mtl_rt_pipeline.m
+        mtl_pipeline.m
     mtl_draw.m
     mtl_icb.m
     mtl_binary_archive.m
@@ -52,3 +53,5 @@ add_custom_command(OUTPUT "${_de_mtl_accel_header}"
     VERBATIM)
 target_sources(de_gpu_metal PRIVATE "${_de_mtl_accel_header}")
 target_include_directories(de_gpu_metal PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+
+set_source_files_properties(mtl_rt_pipeline.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

@@ -482,6 +482,14 @@ SlangStage to_slang_stage(u32 stage) {
         return SLANG_STAGE_MESH;
     case DE__SHADER_STAGE_AMPLIFICATION:
         return SLANG_STAGE_AMPLIFICATION;
+    case DE__SHADER_STAGE_RAYGEN:
+        return SLANG_STAGE_RAY_GENERATION;
+    case DE__SHADER_STAGE_MISS:
+        return SLANG_STAGE_MISS;
+    case DE__SHADER_STAGE_CLOSEST_HIT:
+        return SLANG_STAGE_CLOSEST_HIT;
+    case DE__SHADER_STAGE_ANY_HIT:
+        return SLANG_STAGE_ANY_HIT;
     default:
         return SLANG_STAGE_NONE;
     }
@@ -499,6 +507,14 @@ u32 from_slang_stage(SlangStage stage) {
         return DE__SHADER_STAGE_MESH;
     case SLANG_STAGE_AMPLIFICATION:
         return DE__SHADER_STAGE_AMPLIFICATION;
+    case SLANG_STAGE_RAY_GENERATION:
+        return DE__SHADER_STAGE_RAYGEN;
+    case SLANG_STAGE_MISS:
+        return DE__SHADER_STAGE_MISS;
+    case SLANG_STAGE_CLOSEST_HIT:
+        return DE__SHADER_STAGE_CLOSEST_HIT;
+    case SLANG_STAGE_ANY_HIT:
+        return DE__SHADER_STAGE_ANY_HIT;
     default:
         return DE__SHADER_STAGE_NONE;
     }
@@ -609,7 +625,8 @@ de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
     if (d.target == DE__SLANG_SPIRV)
         td.profile = s.global->findProfile("spirv_1_6");
     else if (d.target == DE__SLANG_DXIL)
-        td.profile = s.global->findProfile("sm_6_6");
+        td.profile = s.global->findProfile(
+            "sm_6_6"); // RT stages emit DXIL libraries (lib_6_6), not compute entry blobs.
     td.lineDirectiveMode = SLANG_LINE_DIRECTIVE_MODE_NONE;
 
     const char *search[] = {k_module_dir};

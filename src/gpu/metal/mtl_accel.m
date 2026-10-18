@@ -89,8 +89,19 @@ de_result de__mtl_accel_create(de_gpu_device *d, de__gpu_accel *a, const de_gpu_
         }
         v->object = (void *)CFBridgingRetain(as);
         v->descriptor = (void *)CFBridgingRetain(descriptor(d, x));
-        if (x->is_tlas)
+        if (x->is_tlas) {
             v->refs = (void *)CFBridgingRetain([NSMutableArray new]);
+            id<MTLBuffer> snapshot = [(__bridge id<MTLDevice>)m->device
+                newBufferWithLength:(NSUInteger)x->max_instances * 72
+                            options:MTLResourceStorageModePrivate];
+            if (!snapshot) {
+                release(&v->object);
+                release(&v->descriptor);
+                release(&v->refs);
+                return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "Metal RT instance snapshot");
+            }
+            v->instance_snapshot = (void *)CFBridgingRetain(snapshot);
+        }
         de_mutex_lock(&m->heap_lock);
         v->next = m->accels;
         m->accels = v;
@@ -108,6 +119,7 @@ void de__mtl_accel_destroy(de_gpu_device *d, de__gpu_accel *a) {
             p = &(*p)->next;
         if (*p)
             *p = v->next;
+        release(&v->instance_snapshot);
         release(&v->refs);
         release(&v->descriptor);
         release(&v->object);
@@ -124,9 +136,14 @@ u64 de__mtl_accel_address(de_gpu_device *d, de__gpu_accel *a) {
     return value;
 }
 void de__mtl_bindless_write_accel(de_gpu_device *d, u32 index, de__gpu_accel *a) {
-    const u64 id = a ? de__mtl_accel_address(d, a) : 0;
-    memcpy(de__mtl_dev(d)->bindless_cpu + DE__MTL_BINDLESS_OFFSET_ACCELS + (size_t)index * 8, &id,
-           sizeof id);
+    const u64 resource_id = a ? de__mtl_accel_address(d, a) : 0;
+    memcpy(de__mtl_dev(d)->bindless_cpu + DE__MTL_BINDLESS_OFFSET_ACCELS + (size_t)index * 8,
+           &resource_id, sizeof resource_id);
+    mtl_accel *v = a ? DE__GPU_PAYLOAD(mtl_accel, a) : NULL;
+    u64 address =
+        v && v->instance_snapshot ? ((__bridge id<MTLBuffer>)v->instance_snapshot).gpuAddress : 0;
+    memcpy(de__mtl_dev(d)->bindless_cpu + DE__MTL_BINDLESS_OFFSET_RT_INSTANCES + (size_t)index * 8,
+           &address, 8);
 }
 /* All AS operations are ordered across encoders, including the translation dispatch. This
  * gives native builds the same internal ordering as Vulkan/DXR without relying on tracking. */
@@ -256,6 +273,14 @@ void de__mtl_accel_tlas(de_gpu_cmd *c, de__gpu_accel *a, de__gpu_buffer *input, 
             (__bridge MTLInstanceAccelerationStructureDescriptor *)v->descriptor;
         t.instanceCount = count;
         t.instanceDescriptorBuffer = buffer(s->instances);
+        dependency(c);
+        id<MTLBlitCommandEncoder> copy =
+            (__bridge id<MTLBlitCommandEncoder>)de__mtl_cmd_encoder(c, DE__MTL_ENC_BLIT);
+        [copy copyFromBuffer:buffer(s->instances)
+                 sourceOffset:0
+                     toBuffer:(__bridge id<MTLBuffer>)v->instance_snapshot
+            destinationOffset:0
+                         size:(NSUInteger)count * 72];
         id<MTLAccelerationStructureCommandEncoder> e = encoder(c);
         if (!e)
             return;
@@ -322,16 +347,25 @@ void de__mtl_accel_residency(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind 
             mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
         NSMutableSet *keep = (__bridge NSMutableSet *)mc->accel_keep;
         [keep addObject:obj];
+        id<MTLBuffer> snapshot = (__bridge id<MTLBuffer>)a->instance_snapshot;
+        if (snapshot)
+            [keep addObject:snapshot];
         if (resources)
             [keep addObjectsFromArray:resources];
         if (kind == DE__MTL_ENC_COMPUTE) {
             id<MTLComputeCommandEncoder> e = (__bridge id<MTLComputeCommandEncoder>)encoder;
             [e useResource:obj usage:MTLResourceUsageRead];
+            if (snapshot)
+                [e useResource:snapshot usage:MTLResourceUsageRead];
             for (id<MTLResource> b in resources)
                 [e useResource:b usage:MTLResourceUsageRead];
         } else if (kind == DE__MTL_ENC_RENDER) {
             id<MTLRenderCommandEncoder> e = (__bridge id<MTLRenderCommandEncoder>)encoder;
             [e useResource:obj usage:MTLResourceUsageRead stages:(MTLRenderStages)m->render_stages];
+            if (snapshot)
+                [e useResource:snapshot
+                         usage:MTLResourceUsageRead
+                        stages:(MTLRenderStages)m->render_stages];
             for (id<MTLResource> b in resources)
                 [e useResource:b
                          usage:MTLResourceUsageRead

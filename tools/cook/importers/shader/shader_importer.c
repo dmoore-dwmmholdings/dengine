@@ -68,11 +68,18 @@ static bool stage_from_name(const char *s, u32 *out) {
     static const struct {
         const char *name;
         u32 stage;
-    } k[] = {
-        {"vertex", DE__SHADER_STAGE_VERTEX},     {"pixel", DE__SHADER_STAGE_PIXEL},
-        {"fragment", DE__SHADER_STAGE_PIXEL},    {"compute", DE__SHADER_STAGE_COMPUTE},
-        {"mesh", DE__SHADER_STAGE_MESH},         {"amplification", DE__SHADER_STAGE_AMPLIFICATION},
-        {"task", DE__SHADER_STAGE_AMPLIFICATION}};
+    } k[] = {{"vertex", DE__SHADER_STAGE_VERTEX},
+             {"pixel", DE__SHADER_STAGE_PIXEL},
+             {"fragment", DE__SHADER_STAGE_PIXEL},
+             {"compute", DE__SHADER_STAGE_COMPUTE},
+             {"mesh", DE__SHADER_STAGE_MESH},
+             {"amplification", DE__SHADER_STAGE_AMPLIFICATION},
+             {"task", DE__SHADER_STAGE_AMPLIFICATION},
+             {"raygen", DE__SHADER_STAGE_RAYGEN},
+             {"raygeneration", DE__SHADER_STAGE_RAYGEN},
+             {"miss", DE__SHADER_STAGE_MISS},
+             {"closesthit", DE__SHADER_STAGE_CLOSEST_HIT},
+             {"anyhit", DE__SHADER_STAGE_ANY_HIT}};
     for (u32 i = 0; i < COUNT_OF(k); ++i) {
         if (strcmp(s, k[i].name) == 0) {
             *out = k[i].stage;

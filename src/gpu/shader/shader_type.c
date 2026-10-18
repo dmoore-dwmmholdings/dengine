@@ -429,6 +429,14 @@ static de_shader_stage public_stage(u32 stage) {
         return DE_SHADER_STAGE_MESH;
     case DE__SHADER_STAGE_AMPLIFICATION:
         return DE_SHADER_STAGE_AMPLIFICATION;
+    case DE__SHADER_STAGE_RAYGEN:
+        return DE_SHADER_STAGE_RAYGEN;
+    case DE__SHADER_STAGE_MISS:
+        return DE_SHADER_STAGE_MISS;
+    case DE__SHADER_STAGE_CLOSEST_HIT:
+        return DE_SHADER_STAGE_CLOSEST_HIT;
+    case DE__SHADER_STAGE_ANY_HIT:
+        return DE_SHADER_STAGE_ANY_HIT;
     default:
         return DE_SHADER_STAGE_NONE;
     }

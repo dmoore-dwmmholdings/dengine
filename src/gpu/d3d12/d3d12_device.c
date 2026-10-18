@@ -694,6 +694,7 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .cmd_draw_indexed = de__d3d12_cmd_draw_indexed,
     .cmd_set_index_buffer = de__d3d12_cmd_set_index_buffer,
     .cmd_scissor = de__d3d12_cmd_scissor,
+    .cmd_dispatch_rays = de__d3d12_cmd_dispatch_rays,
     .cmd_dispatch = de__d3d12_cmd_dispatch,
     .cmd_dispatch_indirect = de__d3d12_cmd_dispatch_indirect,
     .cmd_draw_indexed_indirect = de__d3d12_cmd_draw_indexed_indirect,

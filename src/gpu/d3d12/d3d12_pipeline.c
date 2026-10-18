@@ -1096,6 +1096,8 @@ enum { MAX_STAGES = 3 };
 
 de_result de__d3d12_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                                     const de_gpu_pipeline_desc *desc) {
+    if (desc->kind == DE_PIPE_RAYTRACING)
+        return de__d3d12_rt_pipeline_create(d, p, desc);
     static const char F[] = "de_gpu_pipeline_create";
     d3d12_device *dd = de__d3d12(d);
     d3d12_pipe_state *ps = dd->pipe;
@@ -1255,6 +1257,9 @@ de_result de__d3d12_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
 void de__d3d12_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p) {
     (void)d;
     d3d12_pipeline *dp = DE__GPU_PAYLOAD(d3d12_pipeline, p);
+    if (dp->rt_state)
+        ID3D12StateObject_Release(dp->rt_state);
+    dp->rt_state = NULL;
     if (dp->pso)
         ID3D12PipelineState_Release(dp->pso);
     dp->pso = NULL;

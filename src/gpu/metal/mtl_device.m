@@ -235,6 +235,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_viewport = de__mtl_draw_viewport,
     .cmd_draw_indexed_indirect = de__mtl_cmd_draw_indexed_indirect,
     .cmd_dispatch_mesh_indirect = de__mtl_cmd_dispatch_mesh_indirect,
+    .cmd_dispatch_rays = de__mtl_cmd_dispatch_rays,
     .cmd_dispatch = de__mtl_cmd_dispatch,
     .cmd_dispatch_indirect = de__mtl_cmd_dispatch_indirect,
     .cmd_copy_buffer = de__mtl_cmd_copy_buffer,

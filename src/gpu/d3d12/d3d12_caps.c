@@ -36,7 +36,13 @@ void de__d3d12_caps_evaluate(const de__d3d12_features *f, de_gpu_caps *caps) {
      * opacity micromaps. WARP implements DXR in software. */
     if (f->raytracing_tier >= DE__D3D12_RAYTRACING_TIER_1_0) {
         caps->raytracing = f->software ? DE_RT_API_ONLY : DE_RT_HARDWARE;
-        caps->rt_pipelines = true;
+        caps->rt_pipelines = f->shader_model >= DE__D3D12_SHADER_MODEL_6_6 &&
+                             f->resource_binding_tier >= DE__D3D12_BINDING_TIER_3;
+        if (caps->rt_pipelines) {
+            caps->max_rt_recursion = 31;
+            caps->max_rt_payload_bytes = 4096;
+            caps->max_rt_attribute_bytes = 32;
+        }
         caps->ray_query = f->raytracing_tier >= DE__D3D12_RAYTRACING_TIER_1_1;
         caps->opacity_micromaps = f->raytracing_tier >= DE__D3D12_RAYTRACING_TIER_1_2;
     }

@@ -35,7 +35,11 @@ typedef enum de_shader_stage {
     DE_SHADER_STAGE_PIXEL,
     DE_SHADER_STAGE_COMPUTE,
     DE_SHADER_STAGE_MESH,
-    DE_SHADER_STAGE_AMPLIFICATION /**< task shader on Vulkan, object shader on Metal */
+    DE_SHADER_STAGE_AMPLIFICATION, /**< task shader on Vulkan, object shader on Metal */
+    DE_SHADER_STAGE_RAYGEN,
+    DE_SHADER_STAGE_MISS,
+    DE_SHADER_STAGE_CLOSEST_HIT,
+    DE_SHADER_STAGE_ANY_HIT
 } de_shader_stage;
 
 /** What the cooker recorded about one compiled entry point. */

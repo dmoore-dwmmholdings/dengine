@@ -58,8 +58,9 @@
 #define DE__MTL_BINDLESS_ACCELS 65536u
 #define DE__MTL_BINDLESS_OFFSET_ACCELS                                                             \
     (DE__MTL_BINDLESS_OFFSET_BUFFERS + DE__MTL_BINDLESS_BUFFERS * 8u)
-#define DE__MTL_BINDLESS_BYTES                                                                     \
-    (DE__MTL_BINDLESS_OFFSET_ACCELS + DE__MTL_BINDLESS_ACCELS * DE__MTL_BINDLESS_ENTRY_BYTES)
+#define DE__MTL_BINDLESS_OFFSET_RT_INSTANCES                                                       \
+    (DE__MTL_BINDLESS_OFFSET_ACCELS + DE__MTL_BINDLESS_ACCELS * 8u)
+#define DE__MTL_BINDLESS_BYTES (DE__MTL_BINDLESS_OFFSET_RT_INSTANCES + DE__MTL_BINDLESS_ACCELS * 8u)
 
 /** Byte size of the zeroed buffer behind bindless buffer slot 0. */
 #define DE__MTL_NULL_BUFFER_BYTES 4096u
@@ -465,7 +466,8 @@ bool de__mtl_residency_sets_built(void);
 #define DE__MTL_DIRTY_ALL      15u
 
 typedef struct mtl_pipeline {
-    void *state; /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
+    void *visible_table; /* S17 visible miss/closest-hit functions */
+    void *state;         /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
     void *intersection_table; /* compute IFT, buffer2; callback heap at buffer0 */
     void *depth_state;        /* id<MTLDepthStencilState>, retained; NULL for compute */
     u32 cull;                 /* MTLCullMode */
@@ -637,5 +639,9 @@ void de__mtl_cmd_breadcrumb(de_gpu_cmd *c, de__gpu_buffer *ring, u64 offset, u32
  * one, so the device counts as lost. False without crash diagnostics. Apple GPUs discard
  * out-of-bounds accesses instead of faulting, so tests cannot make a real fault on demand. */
 bool de__mtl_errors_simulate(de_gpu_device *d, const char *list, const char *group);
+
+de_result de__mtl_rt_pipeline_create(de_gpu_device *, de__gpu_pipeline *,
+                                     const de_gpu_pipeline_desc *);
+void de__mtl_cmd_dispatch_rays(de_gpu_cmd *, u32, u32, u32);
 
 #endif

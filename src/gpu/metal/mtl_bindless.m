@@ -28,7 +28,8 @@
 
 _Static_assert(sizeof(MTLResourceID) == DE__MTL_BINDLESS_ENTRY_BYTES,
                "MTLResourceID is one 8-byte table entry");
-_Static_assert(DE__MTL_BINDLESS_BYTES == 1720320u, "the DeBindlessHeap size of bindless.slang");
+_Static_assert(DE__MTL_BINDLESS_OFFSET_RT_INSTANCES == 1720320u,
+               "the DeBindlessHeap size of bindless.slang");
 
 static const u32 k_table_offset[4] = {
     [DE__GPU_BINDLESS_SAMPLED_TEXTURE] = DE__MTL_BINDLESS_OFFSET_TEXTURES,

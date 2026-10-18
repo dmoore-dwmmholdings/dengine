@@ -26,6 +26,7 @@ de_add_module(
         d3d12_sync.c
         d3d12_swapchain.c
         d3d12_root_signature.c
+        d3d12_rt_pipeline.c
         d3d12_pipeline.c
         d3d12_pipeline_library.c
         d3d12_draw.c
