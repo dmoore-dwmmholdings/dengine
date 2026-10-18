@@ -22,14 +22,16 @@
 #define DE_AUDIO_SOURCE_H
 
 #include <dengine/de_base.h>
+#include "platform/de_atomic.h"
 
 typedef struct de__audio_source de__audio_source;
 
 /** Flags of de__audio_source.flags. */
 typedef enum de__audio_source_flags {
-    DE__SOURCE_SEEKABLE = 1u << 0,  /**< seek works (loops need it) */
-    DE__SOURCE_STREAMING = 1u << 1, /**< decodes ahead on another thread (DENG-313) */
-    DE__SOURCE_ENDLESS = 1u << 2,   /**< never ends by itself (procedural, test tones) */
+    DE__SOURCE_SEEKABLE = 1u << 0,   /**< seek works (loops need it) */
+    DE__SOURCE_STREAMING = 1u << 1,  /**< decodes ahead on another thread (DENG-313) */
+    DE__SOURCE_LOOP_AWARE = 1u << 3, /**< owns sample-accurate looping when enabled */
+    DE__SOURCE_ENDLESS = 1u << 2,    /**< never ends by itself (procedural, test tones) */
 } de__audio_source_flags;
 
 typedef struct de__audio_source_vtbl {
@@ -54,7 +56,8 @@ struct de__audio_source {
                        (the resampler comes with DENG-312) */
     u32 flags;    /**< de__audio_source_flags */
     u32 reserved_;
-    u64 length_frames; /**< total length, or 0 when unknown or endless */
+    de_atomic_u32 loop_enabled; /**< LOOP_AWARE sources; set before mixing */
+    u64 length_frames;          /**< total length, or 0 when unknown or endless */
 };
 
 #endif /* DE_AUDIO_SOURCE_H */

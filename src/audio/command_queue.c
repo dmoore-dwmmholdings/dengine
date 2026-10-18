@@ -68,6 +68,7 @@ void de__audio_slot_release(de_audio *a, u32 slot) {
 }
 
 u32 de__audio_collect(de_audio *a) {
+    de__stream_service(a);
     u32 n = de__voice_collect_tails(a);
     u32 slot;
     while (de_mpmc_try_pop(&a->retired, &slot)) {

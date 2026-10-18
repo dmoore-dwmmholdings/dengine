@@ -168,6 +168,8 @@ void de__voice_on_play_queued(de_audio *a, const de__audio_cmd *cmd) {
     v->volume = cmd->u.play.volume;
     v->pitch = cmd->u.play.pitch;
     v->loop = cmd->u.play.loop;
+    if (v->src->flags & DE__SOURCE_LOOP_AWARE)
+        de_atomic_store_u32(&v->src->loop_enabled, v->loop, DE_ATOMIC_RELEASE);
     v->priority = cmd->u.play.priority;
     v->frames_played = 0;
     v->start_sample = 0;

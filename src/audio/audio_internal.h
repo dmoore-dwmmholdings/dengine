@@ -234,6 +234,7 @@ struct de_audio {
     f32 *resample_buf, *bus_buf;
     de__audio_bus buses[64];
     de_atomic_u32 bus_count;
+    de_atomic_ptr stream_manager;
 
     /* Pending commands with a future sample, sorted by (at_sample, seq). Audio thread. */
     de__audio_cmd *pending;
@@ -419,4 +420,6 @@ u32 de__voice_collect_tails(de_audio *a);
 void de__voice_on_control(de_audio *a, const de__audio_cmd *cmd);
 void de__bus_on_control(de_audio *a, const de__audio_cmd *cmd);
 void de__bus_mix(de_audio *a, f32 *out, u32 frames);
+void de__stream_service(de_audio *a);
+void de__stream_shutdown(de_audio *a);
 #endif /* DE_AUDIO_INTERNAL_H */

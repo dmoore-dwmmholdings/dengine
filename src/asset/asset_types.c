@@ -20,6 +20,9 @@
 #include "platform/de_atomic.h"
 
 #include <string.h>
+#if DE_HAS_COOKER
+#include "cook/lib/de_cooker.h"
+#endif
 
 /* Type handles use the slot handle encoding with a fixed generation. */
 #define DE__ASSET_TYPE_GEN 1u
@@ -250,4 +253,15 @@ void de__asset_types_shutdown(de_asset_system *s) {
         DE_FREE(s->alloc, r->entries[i].block, r->entries[i].block_size);
     DE_FREE(s->alloc, r, sizeof *r);
     s->types = NULL;
+}
+
+/* Keep the tool dependency in the content layer. */
+bool de__asset_builtin_importer(const char *name, de_asset_type_desc *out) {
+#if DE_HAS_COOKER
+    return de_cooker_builtin_importer(name, out);
+#else
+    (void)name;
+    (void)out;
+    return false;
+#endif
 }
