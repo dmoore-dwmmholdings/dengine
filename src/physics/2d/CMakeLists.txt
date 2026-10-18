@@ -60,3 +60,7 @@ target_sources(de_physics PRIVATE
 
 # DENG-256: scalar-row joints on the colored constraint interface.
 target_sources(de_physics PRIVATE joints2d/joint2d.c joints2d/joint2d_internal.h)
+
+# DENG-260: reflected ECS integration and presentation-only plane mapping/interpolation.
+target_sources(de_physics PRIVATE ecs2d/plane_map.c ecs2d/plane_map.h
+    ecs2d/attach2d.c ecs2d/systems2d.c ecs2d/ecs2d_internal.h)
