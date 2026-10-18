@@ -443,3 +443,12 @@ sha256 = "93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167"
 license = "MIT"
 license_file = "LICENSE.txt"
 files = ["core/**", "msdfgen.h"]
+
+[[lib]]
+name="harfbuzz"
+version="14.3.1"
+url="https://github.com/harfbuzz/harfbuzz/releases/download/14.3.1/harfbuzz-14.3.1.tar.xz"
+sha256="9dae9538aae2ffdf70cec31f2c27bf68e2aaeeae3112688467697d5faf6194f7"
+license="MIT"
+license_file="COPYING"
+files=["src/**"]

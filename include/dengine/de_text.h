@@ -46,7 +46,15 @@ typedef struct de_text_style {
     f32 shadow_offset[2];
     de_vec4 shadow_color;
     const char *language; /* BCP-47; affects shaping and line breaking */
+    u32 disable_features; /**< Bitmask DE_TEXT_DISABLE_*, zero enables defaults. */
 } de_text_style;
+
+enum {
+    DE_TEXT_DISABLE_KERN = 1u,
+    DE_TEXT_DISABLE_LIGA = 2u,
+    DE_TEXT_DISABLE_CLIG = 4u,
+    DE_TEXT_DISABLE_CALT = 8u
+};
 
 typedef struct de_text_layout_desc {
     de_str utf8;

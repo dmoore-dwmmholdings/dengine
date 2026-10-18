@@ -9,3 +9,6 @@ target_sources(de_text PRIVATE font_runtime.c fallback.c glyph_lookup.c)
 target_link_libraries(de_text PRIVATE de_tp_stb)
 
 target_include_directories(de_text PRIVATE "${DE_ROOT_DIR}/tools")
+
+target_sources(de_text PRIVATE shape/itemize.c shape/shaper.c shape/shape_cache.c)
+target_link_libraries(de_text PRIVATE de_tp_harfbuzz de_tp_xxhash)

@@ -6,5 +6,6 @@ struct de_text_system {
     const de_allocator *alloc;
     de_asset_system *assets;
     struct de__text_runtime *runtime;
+    struct de__shape_system *shape;
 };
 #endif
