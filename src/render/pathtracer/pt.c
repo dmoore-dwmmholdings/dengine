@@ -21,11 +21,13 @@ typedef struct pt_params {
     f32 exposure;
     u32 light_count, unused0, unused1;
     de__pt_media_params media;
+    u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_pad[3];
 } pt_params;
-DE_STATIC_ASSERT(sizeof(pt_params) == 384, "PtParams shader layout");
+DE_STATIC_ASSERT(sizeof(pt_params) == 416, "PtParams shader layout");
 typedef struct pt_view {
     de_view handle;
     de_gpu_texture accumulation, output;
+    de_gpu_texture albedo, normal, depth, position, material;
     de_gpu_buffer params, cdf;
     u32 width, height, samples, reset_serial, seen_reset, strategy, seed;
     u64 signature, frame, pending_frame;
@@ -38,7 +40,8 @@ struct de__pt {
     de_renderer *r;
     de_gpu_pipeline pipeline, env;
     de__pt_media *media;
-    de_cvar max_samples, seed, strategy;
+    de_cvar max_samples, seed, strategy, final_denoise, golden;
+    de__pt_denoise *denoise;
     bool warned;
     pt_view views[32];
 };
@@ -61,6 +64,11 @@ void de__pt_env_cdf(const f32 *weights, u32 count, f32 *cdf, f32 *pdf) {
 static void release(de__pt *p, pt_view *v) {
     de_gpu_texture_destroy(p->r->dev, v->accumulation);
     de_gpu_texture_destroy(p->r->dev, v->output);
+    de_gpu_texture_destroy(p->r->dev, v->albedo);
+    de_gpu_texture_destroy(p->r->dev, v->normal);
+    de_gpu_texture_destroy(p->r->dev, v->depth);
+    de_gpu_texture_destroy(p->r->dev, v->position);
+    de_gpu_texture_destroy(p->r->dev, v->material);
     de_gpu_buffer_destroy(p->r->dev, v->params);
     de_gpu_buffer_destroy(p->r->dev, v->cdf);
     memset(v, 0, sizeof *v);
@@ -71,6 +79,7 @@ void de__pt_destroy(de__pt *p) {
     for (u32 i = 0; i < 32; ++i)
         release(p, &p->views[i]);
     de__pt_media_destroy(p->media);
+    de__pt_denoise_destroy(p->denoise);
     de_gpu_pipeline_destroy(p->r->dev, p->pipeline);
     de_gpu_pipeline_destroy(p->r->dev, p->env);
     DE_FREE(p->r->alloc, p, sizeof *p);
@@ -87,6 +96,11 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
     p->r = r;
     *out = p;
     DE_TRY(de__pt_media_create(r, &p->media));
+    DE_TRY(de__pt_denoise_create(r, &p->denoise));
+    p->final_denoise = de_cvar_register(
+        &(de_cvar_desc){.name = "r.pt.final_denoise", .type = DE_CVAR_BOOL, .default_number = 0});
+    p->golden = de_cvar_register(
+        &(de_cvar_desc){.name = "r.pt.golden", .type = DE_CVAR_BOOL, .default_number = 0});
     p->max_samples = de_cvar_register(&(de_cvar_desc){.name = "r.pt.max_samples",
                                                       .type = DE_CVAR_INT,
                                                       .default_number = 0,
@@ -192,6 +206,22 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                   .format = DE_FMT_RGBA16_FLOAT,
                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
                                   .name = "PT exposed HDR"});
+    de_gpu_texture *aovs[] = {&v->albedo, &v->normal, &v->depth, &v->position, &v->material};
+    const de_gpu_format formats[] = {DE_FMT_RGBA32_FLOAT, DE_FMT_RGBA32_FLOAT, DE_FMT_R32_FLOAT,
+                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT};
+    const char *names[] = {"PT first-hit albedo", "PT first-hit world normal",
+                           "PT first-hit distance", "PT first-hit position",
+                           "PT actual material identity"};
+    for (u32 i = 0; i < 5; ++i)
+        *aovs[i] = de_gpu_texture_create(
+            d,
+            &(de_gpu_texture_desc){.width = v->width,
+                                   .height = v->height,
+                                   .depth_or_layers = 1,
+                                   .mip_count = 1,
+                                   .format = formats[i],
+                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
+                                   .name = names[i]});
     v->params =
         de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = sizeof(pt_params) * PT_RING,
                                                       .stride = sizeof(pt_params),
@@ -203,7 +233,8 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                                       .stride = 8,
                                                       .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
                                                       .name = "PT environment CDF"});
-    return v->accumulation.id && v->output.id && v->params.id && v->cdf.id;
+    return v->accumulation.id && v->output.id && v->params.id && v->cdf.id && v->albedo.id &&
+           v->normal.id && v->depth.id && v->position.id && v->material.id;
 }
 typedef struct pt_pass {
     de__pt *p;
@@ -255,6 +286,11 @@ void de__pt_build(de__view_frame *f, void *user) {
     const u64 signature = de__gpu_scene_source_signature(p->r->gpu_scene) ^
                           de__material_instances_epoch(p->r->material_instances) ^ media_signature;
     u32 strategy = (u32)de_cvar_int(p->strategy), seed = (u32)de_cvar_int(p->seed);
+    bool golden = de_cvar_bool(p->golden);
+    if (golden) {
+        strategy = 0;
+        seed = 0;
+    }
     bool env = !v->cdf_valid || memcmp(&v->ibl, &lighting.view.ibl, sizeof v->ibl) != 0;
     if (v->strategy != strategy || v->seed != seed || !v->active ||
         v->seen_reset != v->reset_serial || v->signature != signature ||
@@ -300,6 +336,13 @@ void de__pt_build(de__view_frame *f, void *user) {
                                        f->frame_index, f->camera->camera.exposure_ev100, NULL),
         .light_count = de__gpu_scene_table(p->r->gpu_scene, DE__GS_LIGHTS).count};
     params.media = media;
+    params.aov_albedo = de_gpu_texture_bindless(p->r->dev, v->albedo, 0, true);
+    params.aov_normal = de_gpu_texture_bindless(p->r->dev, v->normal, 0, true);
+    params.aov_depth = de_gpu_texture_bindless(p->r->dev, v->depth, 0, true);
+    params.aov_position = de_gpu_texture_bindless(p->r->dev, v->position, 0, true);
+    params.aov_material = de_gpu_texture_bindless(p->r->dev, v->material, 0, true);
+    if (golden)
+        params.exposure = 1;
     de_mat4 inverse = de_m4_inverse(&f->view_proj);
     for (u32 r = 0; r < 4; ++r)
         for (u32 c = 0; c < 4; ++c)
@@ -353,7 +396,28 @@ void de__pt_build(de__view_frame *f, void *user) {
     de_rg_export(g, accumulation, DE_ACCESS_SHADER_READ);
     de_rg_export(g, output, DE_ACCESS_SHADER_READ);
     de_rg_export(g, cdf, DE_ACCESS_SHADER_READ);
+    de_gpu_texture aov_textures[] = {v->albedo, v->normal, v->depth, v->position, v->material};
+    for (u32 i = 0; i < 5; ++i) {
+        de_rg_resource a = de_rg_import_texture(g, aov_textures[i], DE_ACCESS_SHADER_READ);
+        de_rg_write(pass, a, DE_ACCESS_SHADER_WRITE);
+        de_rg_export(g, a, DE_ACCESS_SHADER_READ);
+    }
     f->color = output;
+    if (de_cvar_bool(p->final_denoise) && !golden) {
+        de__pt_info info = {.accumulation = v->accumulation,
+                            .output = v->output,
+                            .samples = v->samples + (trace ? 1u : 0u),
+                            .width = v->width,
+                            .height = v->height,
+                            .albedo = v->albedo,
+                            .normal = v->normal,
+                            .depth = v->depth,
+                            .position = v->position,
+                            .material = v->material};
+        de_rg_resource denoised = de__pt_denoise_build(p->denoise, f, &info, params.exposure);
+        if (denoised.id)
+            f->color = denoised;
+    }
     f->color_format = DE_FMT_RGBA16_FLOAT;
     v->pending = true;
     v->pending_frame = f->frame_index;
@@ -389,9 +453,27 @@ void de_renderer_path_reset(de_renderer *r, de_view view) {
 }
 bool de__pt_get(const de_renderer *r, de_view view, de__pt_info *out) {
     u32 slot = (view.id & 255u) - 1u;
-    if (!r || !r->pt || slot >= 32 || r->pt->views[slot].handle.id != view.id)
+    if (!r || !r->pt || slot >= 32 || !de__view_valid(r, view) ||
+        r->pt->views[slot].handle.id != view.id)
         return false;
     pt_view *v = &r->pt->views[slot];
-    *out = (de__pt_info){v->accumulation, v->output, v->samples, v->width, v->height};
+    *out = (de__pt_info){.accumulation = v->accumulation,
+                         .output = v->output,
+                         .samples = v->samples,
+                         .width = v->width,
+                         .height = v->height,
+                         .albedo = v->albedo,
+                         .normal = v->normal,
+                         .depth = v->depth,
+                         .position = v->position,
+                         .material = v->material};
     return true;
+}
+
+void de__pt_forget(de__pt *p, de_view view) {
+    u32 slot = (view.id & 255u) - 1u;
+    if (p && slot < 32 && p->views[slot].handle.id == view.id) {
+        release(p, &p->views[slot]);
+        de__pt_denoise_forget(p->denoise, view);
+    }
 }

@@ -11,6 +11,7 @@ void de__pt_complete(de__pt *, de_view, u64, bool);
 typedef struct de__pt_info {
     de_gpu_texture accumulation, output;
     u32 samples, width, height;
+    de_gpu_texture albedo, normal, depth, position, material;
 } de__pt_info;
 bool de__pt_get(const de_renderer *, de_view, de__pt_info *);
 /** Equal-area environment cell CDF; shared CPU oracle, capacity count+1 is not required. */
@@ -28,4 +29,11 @@ de_result de__pt_media_frame(de__pt_media *, de__view_frame *, de__pt_media_para
 void de__pt_media_begin(de__pt_media *, de_gpu_cmd *, const de__pt_media_params *);
 void de__pt_media_end(de__pt_media *, de_gpu_cmd *, const de__pt_media_params *);
 void de__pt_media_graph(de__pt_media *, de_rg *, de_rg_pass *);
+typedef struct de__pt_denoise de__pt_denoise;
+de_result de__pt_denoise_create(de_renderer *, de__pt_denoise **);
+void de__pt_denoise_destroy(de__pt_denoise *);
+void de__pt_denoise_forget(de__pt_denoise *, de_view);
+void de__pt_forget(de__pt *, de_view);
+de_rg_resource de__pt_denoise_build(de__pt_denoise *, de__view_frame *, const de__pt_info *,
+                                    f32 exposure);
 #endif

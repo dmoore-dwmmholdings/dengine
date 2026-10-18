@@ -18,11 +18,9 @@ void cs_prepare(uint3 id:SV_DispatchThreadID,uniform ReblurPush push){
 void cs_preblur(uint3 id:SV_DispatchThreadID,uniform ReblurPush push){
     ReblurParams p=de_robuffer<ReblurParams>(push.params)[push.entry];if(id.x>=p.width||id.y>=p.height)return;int2 xy=int2(id.xy);float4 center=de_tex2d(p.input).Load(int3(xy,0));float radius=de_tex2d(p.radius).Load(int3(xy,0)).x;
     if(radius<.5){de_rwtex2d(p.output)[id.xy]=center;return;}
-    const float2 disk[8]={float2(-.326,-.406),float2(-.840,-.074),float2(-.696,.457),float2(-.203,.621),float2(.962,-.195),float2(.473,-.480),float2(.519,.767),float2(.185,-.893)};
     float4 sum=center;float weight=1;float mean=0,second=0,count=0;
-    for(uint i=0;i<8;++i){int2 q=xy+int2(round(disk[i]*radius*2));if(!reblur_same(p,xy,q))continue;float4 c=de_tex2d(p.input).Load(int3(q,0));sum+=c;weight++;float l=reblur_luma(c.rgb);mean+=l;second+=l*l;count++;}
-    mean/=max(count,1);float sigma=sqrt(max(second/max(count,1)-mean*mean,0));float4 value=sum/weight;float l=reblur_luma(value.rgb),limit=mean+3*sigma;
-    if(count>2&&l>limit)value.rgb*=limit/max(l,1e-20);de_rwtex2d(p.output)[id.xy]=value;
+    for(uint i=0;i<8;++i){int2 q=xy+int2(round(reblur_poisson(i)*radius*2));if(!reblur_same(p,xy,q))continue;float4 c=de_tex2d(p.input).Load(int3(q,0));sum+=c;weight++;float l=reblur_luma(c.rgb);mean+=l;second+=l*l;count++;}
+    mean/=max(count,1);float4 value=sum/weight;value.rgb=reblur_firefly(value.rgb,mean,second,count);de_rwtex2d(p.output)[id.xy]=value;
 }
 // Bilateral mip pyramid reconstruction, only for histories shorter than four samples.
 [shader("compute")][numthreads(8,8,1)]

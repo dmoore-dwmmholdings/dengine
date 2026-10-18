@@ -268,3 +268,19 @@ description = "DENG-343 refraction_ss: off production renderer"
 size = [384, 256]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.pathtracer_cornell]
+description = "S17 fixed-seed 4096-spp Cornell path-tracing reference, denoise and auto exposure off"
+size = [64, 64]
+tiers = ["rt"]
+requires = ["ray_query"]
+threshold_mean = 0.02
+threshold_p99 = 0.10
+
+[scene.pathtracer_gallery_subset]
+description = "S17 original S14 furnace sphere materials subset, fixed-seed4096spp path tracer"
+size = [64, 64]
+tiers = ["rt"]
+requires = ["ray_query"]
+threshold_mean = 0.02
+threshold_p99 = 0.10

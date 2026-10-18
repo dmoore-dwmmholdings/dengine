@@ -10,11 +10,11 @@ void cs_reproject(uint3 id:SV_DispatchThreadID,uniform DnPush pc){
     float2 motion=de_tex2d(p.motion).Load(int3(xy,0)).xy;
     float2 at=denoise_previous_uv((float2(xy)+.5)/float2(p.width,p.height),motion)*float2(p.width,p.height)-.5;
     int2 base=int2(floor(at));float2 f=frac(at);float weight=0,age=0;float4 color=0;float2 moments=0;
-    DeGbSurface surface=dn_surface(p.normal,xy);float z=de_tex2d(p.depth).Load(int3(xy,0)).x;float3 position=dn_position(p,xy,z,false);
+    DeGbSurface surface=dn_surface(p,p.normal,xy);float z=de_tex2d(p.depth).Load(int3(xy,0)).x;float3 position=dn_position(p,xy,z,false);
     float2 material=de_tex2d(p.material).Load(int3(xy,0)).xy;
     if(p.reset==0)for(int y=0;y<2;++y)for(int x=0;x<2;++x){int2 q=base+int2(x,y);if(any(q<0)||q.x>=int(p.width)||q.y>=int(p.height))continue;
         float tap=(x!=0?f.x:1-f.x)*(y!=0?f.y:1-f.y);if(tap<=0)continue;
-        DeGbSurface old=dn_surface(p.previous_normal,q);float previous_depth=de_tex2d(p.previous_depth).Load(int3(q,0)).x;
+        DeGbSurface old=dn_surface(p,p.previous_normal,q);float previous_depth=de_tex2d(p.previous_depth).Load(int3(q,0)).x;
         float3 delta=dn_position(p,q,previous_depth,true)-position;
         float scale=p.linear_depth!=0?max(abs(z),1e-3):max(length(position-p.camera.xyz),1e-3);
         bool valid=abs(dot(delta,surface.normal))<=p.depth_relative*scale && dot(old.normal,surface.normal)>=p.normal_cos && abs(old.roughness-surface.roughness)<=p.roughness_threshold && all(de_tex2d(p.previous_material).Load(int3(q,0)).xy==material);

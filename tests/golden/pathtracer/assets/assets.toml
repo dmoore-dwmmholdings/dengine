@@ -1,0 +1,8 @@
+[project]
+asset_root="."
+[assets]
+"pt/cornell"={type="scene",source="cornell.scene.toml"}
+"pt/white"={type="material",source="materials/white.mat.toml"}
+"pt/red"={type="material",source="materials/red.mat.toml"}
+"pt/green"={type="material",source="materials/green.mat.toml"}
+"pt/emitter"={type="material",source="materials/emitter.mat.toml"}
