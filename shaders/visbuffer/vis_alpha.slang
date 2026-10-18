@@ -24,6 +24,7 @@
 // whatever mip is resident (texture streaming, S20): the test never waits. No alpha to coverage
 // (one sample per pixel).
 import push_constants;
+import "../sprite/sprite_vis";
 import "../scene/scene_types";
 import "../visbuffer/vis_types";
 import "../visbuffer/vis_decode";
@@ -53,6 +54,7 @@ bool alpha_test(DeSceneConstants sc, uint material, float2 uv, uint sampler)
         return true;
     DeGpuMaterial m = de_robuffer<DeGpuMaterial>(sc.materials)[material];
     float a = m.base_color.w;
+    uv = de_sprite_uv(m, uv);
     uint tex = de_material_texture(m, 0); // DE_VIS_ALPHA_TEX_BASE_COLOR
     if (tex != DE_BINDLESS_INVALID)
         a *= de_tex2d(tex).Sample(de_sampler(sampler), uv).a;

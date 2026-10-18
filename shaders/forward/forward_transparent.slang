@@ -38,6 +38,7 @@ import "../lighting/lighting_common";
 import "../materials/standard/standard";
 import "../materials/standard/volume";
 import "../materials/unlit/unlit";
+import "../sprite/sprite_vis";
 import "../forward/forward_routing";
 import ss_refraction;
 import scene_color_pyramid;
@@ -211,8 +212,10 @@ void fwd_resolve_surface(FwdVertex i,ForwardParams pc,DeSceneConstants sc,out De
     lod.feedback_capacity = 0u;
     lod.record = false;
     float4 white = float4(1.0, 1.0, 1.0, 1.0);
+    VertexAttribs alpha_v = v;
+    alpha_v.uv[0] = de_sprite_uv(m, v.uv[0]);
     alpha = saturate(m.base_color.w * i.color.w *
-                           de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod, white).w);
+                           de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, alpha_v, lod, white).w);
 }
 [shader("fragment")]
 float4 ps_capture_refraction(FwdVertex i,uniform ForwardParams pc):SV_Target {

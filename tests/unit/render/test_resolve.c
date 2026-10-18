@@ -44,6 +44,7 @@
 #include "render/passes/vis/vis_stages.h"
 #include "render/scene/gpu_scene.h"
 #include "render/world/render_world.h"
+#include "render/sprite/sprite_internal.h"
 
 #if DE_HAS_GPU_VULKAN
 #include "gpu/vulkan/vk_internal.h"
@@ -1783,6 +1784,63 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
 #endif
 }
 
+/* Actual sprite instance -> shared quad -> alpha vis -> model-2 resolve readbacks. */
+static void sprite_render(rsx *f, de_gpu_backend backend) {
+    rsx_open(f,backend);
+    DeSprite sprites[2] = {{.size={4,4},.pivot={.5f,.5f},.uv_rect={0,0,1,1},
+                          .color={.25f,.5f,.75f,1}}};
+    const u8 normal_r[1]={255},emission_r[1]={128};
+    sprites[0].normal_tex.id=rsx_texture(f,1,normal_r,128,128);
+    sprites[0].emissive_tex.id=rsx_texture(f,1,emission_r,64,32);
+    de__rw_instances *in=&f->w.f.instances;
+    in->sprite=sprites; in->count=1; in->entity[0]=1234;
+    in->mesh[0].id=DE__SPRITE_MESH_ID;
+    in->flags[0]=DE__RW_INST_SPRITE|DE__RW_INST_HAS_BOUNDS;
+    in->layer_mask[0]=1;
+    in->transform[0]=de__sprite_local_transform(&sprites[0],DE_PLANE_TOP_XY);
+    in->prev_transform[0]=in->transform[0];
+    in->bounds[0]=(de_aabb){{-2,-2,0},{2,2,0}};
+    f->w.touch_all=true;
+    ASSERT_TRUE(rsx_frame(f));
+    size_t center=(size_t)(f->height/2)*f->width+f->width/2;
+    ASSERT_NE(f->res.ids[center],DE__VIS_ID_EMPTY);
+    ASSERT_EQ((f->res.gb[2][center]>>8)&255u,DE__GS_MATERIAL_MODEL_SPRITE);
+    f32 normal[3],rough;
+    de__gb1_unpack(f->res.gb[1][center],normal,&rough);
+    EXPECT_TRUE(normal[0]>.99f);
+    EXPECT_FLOAT_EQ(rough,1,.002);
+    EXPECT_FLOAT_EQ(f->res.lighting[center*4],128.0/255.0,.002);
+    EXPECT_FLOAT_EQ(f->res.lighting[center*4+1],64.0/255.0,.002);
+    u32 vm=de__vis_id_meshlet(f->res.ids[center]);
+    ASSERT_EQ(f->res.inst[f->res.visible[vm].instance].entity_lo,1234u);
+    ASSERT_TRUE(cvar_set("r.raster_path","compute"));
+    ASSERT_TRUE(rsx_frame(f));
+    ASSERT_NE(f->res.ids[center],DE__VIS_ID_EMPTY);
+    /* Cutouts must disappear from visibility, classification and picking input. */
+    sprites[0].color.w=.25f; f->w.touch_all=true;
+    ASSERT_TRUE(rsx_frame(f));
+    ASSERT_EQ(f->res.ids[center],DE__VIS_ID_EMPTY);
+    in->sprite=NULL;
+    world_free(&f->w); world_init(&f->w,10000);
+    DeSprite *many=zalloc(10000*sizeof *many);
+    in=&f->w.f.instances; in->sprite=many; in->count=10000;
+    for(u32 i=0;i<10000;++i) {
+        many[i]=(DeSprite){.size={1,1},.pivot={.5f,.5f},.uv_rect={0,0,1,1},.color={1,1,1,1}};
+        in->entity[i]=i+1; in->mesh[i].id=DE__SPRITE_MESH_ID;
+        in->flags[i]=DE__RW_INST_SPRITE|DE__RW_INST_HAS_BOUNDS; in->layer_mask[i]=1;
+        in->transform[i]=de__sprite_local_transform(&many[i],DE_PLANE_TOP_XY);
+        in->transform[i].m[9]+=(f32)i*10;
+        in->prev_transform[i]=in->transform[i];
+        in->bounds[i]=de_aabb_transform((de_aabb){{0,0,0},{1,1,0}},&in->transform[i]);
+    }
+    f->w.touch_all=true;
+    for(u32 k=0;k<4;++k) ASSERT_TRUE(rsx_frame(f));
+    de__vis_stats stats=de__vis_view_stats(f->vis,0);
+    ASSERT_TRUE(stats.valid); ASSERT_EQ(stats.instances_tested,10000u);
+    ASSERT_LT(stats.instances_visible,10u); ASSERT_GT(stats.instances_visible,0u);
+    in->sprite=NULL; free(many);
+}
+
 #define GPU_TESTS(sfx, backend)                                                                    \
     TEST_F(resolve, positions_uvs_cpu_ref_##sfx, rsx) {                                            \
         positions_uvs(f, backend);                                                                 \
@@ -1809,6 +1867,7 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
         game_model_dispatch(f, backend);                                                           \
     }
 
+TEST_F(resolve, sprite_vis_normal_emissive_cutout_metal, rsx) { sprite_render(f,DE_GPU_METAL); }
 GPU_TESTS(metal, DE_GPU_METAL)
 GPU_TESTS(vulkan, DE_GPU_VULKAN)
 GPU_TESTS(d3d12, DE_GPU_D3D12)

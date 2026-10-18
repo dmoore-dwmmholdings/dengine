@@ -20,6 +20,7 @@
 
 #include "render/loaders/render_assets.h"
 #include "render/renderer_internal.h"
+#include "render/sprite/sprite_internal.h"
 
 #include <string.h>
 
@@ -332,6 +333,8 @@ static void run_category(de_system_ctx *ctx, de__rw_kind k) {
     de_query_each(ctx->world, ctx->queries[0], inst ? inst_all : light_all, &x);
     de_query_each(ctx->world, ctx->queries[1], inst ? inst_changed_renderer : light_changed, &x);
     de_query_each(ctx->world, ctx->queries[2], inst ? inst_changed_xform : light_changed_xform, &x);
+    if (inst)
+        de__sprite_extract(rw, ctx->world, ctx->queries[3]);
     if (x.failed > 0)
         DE_ERROR(rw->log, "render world: out of memory: %u %s not extracted in frame %llu",
                  x.failed, inst ? "mesh instances" : "lights", (unsigned long long)rw->frame);
@@ -359,20 +362,23 @@ static de_system add_category_system(de__render_world *rw, de_world *w, const ch
     const de_query_term terms[2] = {{global, DE_READ}, {comp, DE_READ}};
     const de_query_filter changed_comp = {comp, DE_CHANGED};
     const de_query_filter changed_global = {global, DE_CHANGED};
-    const de_query_desc queries[3] = {
+    const de_query_term sprite_terms[2] = {{global, DE_READ}, {rw->ids.sprite, DE_READ}};
+    const de_query_desc queries[4] = {
         {.terms = terms, .term_count = 2},
         {.terms = terms, .term_count = 2, .filters = &changed_comp, .filter_count = 1},
         {.terms = terms, .term_count = 2, .filters = &changed_global, .filter_count = 1},
+        {.terms = sprite_terms, .term_count = 2},
     };
     const char *const after[1] = {SYS_VIEWS};
-    return de_system_add(w, &(de_system_desc){.name = name,
-                                              .schedule = DE_SCHEDULE_EXTRACT,
-                                              .fn = fn,
-                                              .user = rw,
-                                              .queries = queries,
-                                              .query_count = 3,
-                                              .after = after,
-                                              .after_count = 1});
+    return de_system_add(
+        w, &(de_system_desc){.name = name,
+                             .schedule = DE_SCHEDULE_EXTRACT,
+                             .fn = fn,
+                             .user = rw,
+                             .queries = queries,
+                             .query_count = comp.id == rw->ids.mesh_renderer.id ? 4u : 3u,
+                             .after = after,
+                             .after_count = 1});
 }
 
 static bool add_systems(de__render_world *rw, de_world *w) {

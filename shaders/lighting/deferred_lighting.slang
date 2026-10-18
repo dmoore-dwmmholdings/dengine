@@ -33,6 +33,11 @@ import bindless;
 import push_constants;
 import "../lighting/lighting_common";
 import "../materials/standard/standard";
+import "../sprite/sprite_vis";
+float de_sprite_height(uint tex,float2 uv) {
+    uint w,h; de_tex2d(tex).GetDimensions(w,h);
+    return de_tex2d(tex).Load(int3(min(uint2(saturate(uv)*float2(w,h)),uint2(w-1,h-1)),0)).r;
+}
 import "../visbuffer/gbuffer";
 import "../visbuffer/resolve_common";
 import "../visbuffer/vis_decode";
@@ -180,6 +185,17 @@ public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, Ligh
         if (pixel_material(p, sc, pc, id, m))
         {
             M.layers_from_material(s, m);
+            if (m.model == DE_GPU_MATERIAL_MODEL_SPRITE && m.extra.w != 0.0) {
+                DeResolvePoint rp = de_resolve_point(id,p,float2(pc.width,pc.height),sc,
+                                                    pc.visible,pc.visible_count);
+                if (rp.valid) {
+                    float2 dx,dy;
+                    float2 uv = de_sprite_uv(m,de_resolve_uv(rp,0u,dx,dy));
+                    uint htex = de_material_texture(m,18u);
+                    if (htex != DE_BINDLESS_INVALID)
+                        pos += s.normal * de_sprite_height(htex,uv) * m.extra.w;
+                }
+            }
             if ((s.features & DE_MATERIAL_FEATURE_ANISOTROPY) != 0u)
                 pixel_tangent(s, id, p, sc, pc, m, v);
         }

@@ -493,3 +493,8 @@ endif()
 if(TARGET de_render)
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
 endif()
+
+# S19 sprites share ordinary instance slots and meshlet raster paths.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE sprite/sprite.c sprite/sprite_extract.c)
+endif()

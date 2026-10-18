@@ -31,6 +31,7 @@
 //                    inside a volume (wo.z < 0) only the dielectric interface remains
 //   5. subsurface    [DENG-306: insertion point SSS] the diffuse goes to the SSS target
 module standard;
+import "../../sprite/sprite_vis";
 
 import bindless;
 __exported import "../material_interface";
@@ -78,6 +79,13 @@ public struct StandardModelT<let FEATURES : uint> : IMaterialSplitModel
 
     public static SurfaceData resolve_gbuffer(Params m, VertexAttribs v, TextureLodInfo lod)
     {
+        if (m.model == DE_GPU_MATERIAL_MODEL_SPRITE) {
+            v.uv[0] = de_sprite_uv(m,v.uv[0]);
+            lod.dx[0] *= m.subsurface.zw;
+            lod.dy[0] *= m.subsurface.zw;
+            v.tangent.xyz *= m.subsurface.z < 0 ? -1.0 : 1.0;
+            v.tangent.w *= m.subsurface.z * m.subsurface.w < 0 ? -1.0 : 1.0;
+        }
         float3 n = v.normal;
         float4 tangent = v.tangent;
         // Double-sided materials face the viewer.

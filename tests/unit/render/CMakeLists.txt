@@ -149,7 +149,7 @@ endif()
 # same render world). test_render_world.h is their shared fixture (defined in test_extract.c), on
 # the null backend. The pipelined test is an S12 exit check under TSan (ci-linux-tsan).
 de_add_test(NAME render_world
-    SOURCES test_extract.c test_render_thread.c
+    SOURCES test_extract.c test_render_thread.c test_sprite.c
     LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
     LABELS unit render
     TIMEOUT 300)
