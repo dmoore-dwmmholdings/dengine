@@ -1,0 +1,3 @@
+# white (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.7, 0.7, 0.7]
+roughness = 0.65

@@ -47,6 +47,7 @@ typedef struct de__rt_scene {
     u32 metadata_capacity, metadata_index;
     de__rt_view views[32];
     u32 blas_count, compacted_count;
+    de_cvar golden_sample; /**< Dev/test stochastic epoch; never a submission/fence index. */
 } de__rt_scene;
 /* Stable batch query ABI; ray origin/direction are render-origin-relative. */
 typedef struct de__rt_ray {
@@ -74,4 +75,6 @@ de__rt_context *de__rt_context_get(de_renderer *, de_view, de_rg *, u64 frame);
 de_result de__rt_mesh_publish(de__rt_scene *, const de_render_mesh *);
 void de__rt_mesh_evict(de__rt_scene *, const de_render_mesh *);
 de_result de__rt_scene_create(de_renderer *, de__rt_scene **);
+/** Dev/test-only deterministic stochastic frame; normal rendering returns the real frame. */
+u64 de__rt_sample_frame(const de_renderer *, u64 frame);
 #endif

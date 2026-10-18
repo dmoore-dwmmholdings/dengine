@@ -284,3 +284,101 @@ tiers = ["rt"]
 requires = ["ray_query"]
 threshold_mean = 0.02
 threshold_p99 = 0.10
+
+[scene.rt_shadows_pole]
+description = "S17 production rt_shadows_pole: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_shadows_pole_base]
+description = "S17 production rt_shadows_pole_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_restir_many_lights]
+description = "S17 production rt_restir_many_lights: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_restir_many_lights_base]
+description = "S17 production rt_restir_many_lights_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_ao_corner]
+description = "S17 production rt_ao_corner: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_ao_corner_base]
+description = "S17 production rt_ao_corner_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_reflections_mirror_rough]
+description = "S17 production rt_reflections_mirror_rough: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_reflections_mirror_rough_base]
+description = "S17 production rt_reflections_mirror_rough_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_gi_cornell]
+description = "S17 production rt_gi_cornell: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_gi_cornell_base]
+description = "S17 production rt_gi_cornell_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_refraction_glass]
+description = "S17 production rt_refraction_glass: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_refraction_glass_base]
+description = "S17 production rt_refraction_glass_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_foliage_shadow]
+description = "S17 production rt_foliage_shadow: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["rt"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.rt_foliage_shadow_base]
+description = "S17 production rt_foliage_shadow_base: fixed32 asset-ready frames, seed0, time0"
+size = [128, 96]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05

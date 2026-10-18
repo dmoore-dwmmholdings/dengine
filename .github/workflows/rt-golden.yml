@@ -1,0 +1,30 @@
+name: S17 hardware RT goldens
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rt-golden:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: '["self-hosted", "Windows", "rt-nvidia"]', preset: windows-clang-cl-dev, backend: d3d12}
+          - {runner: '["self-hosted", "Windows", "rt-amd"]', preset: windows-clang-cl-dev, backend: d3d12}
+          - {runner: '["self-hosted", "Linux", "rt-radv"]', preset: linux-clang-dev, backend: vulkan}
+          - {runner: '["self-hosted", "macOS", "rt-m3-plus"]', preset: macos-dev, backend: metal}
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    env:
+      DE_RT_GOLDEN_SELF_HOSTED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }} --target de_golden
+      - run: ctest --preset ${{ matrix.preset }} --no-tests=error -R '^golden\.${{ matrix.backend }}\.rt_' --output-on-failure
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: rt-golden-${{ matrix.backend }}-${{ strategy.job-index }}
+          path: build/**/golden/

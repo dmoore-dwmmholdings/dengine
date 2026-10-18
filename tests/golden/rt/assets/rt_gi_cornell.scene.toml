@@ -1,0 +1,130 @@
+# rt_gi_cornell (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -8.0, 4.8]
+rotation = [0.5373, 0.0, 0.0, 0.843391]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.837758
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, -0.15]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [7.0, 7.0, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [-2.0, 0.0, 1.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.15, 4.0, 3.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/red"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [2.0, 0.0, 1.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.15, 4.0, 3.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/green"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [0.0, 2.0, 1.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 0.15, 3.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [0.0, 0.0, 3.2]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 4.0, 0.1]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000015"
+[entity.DeTransform]
+position = [0.0, 0.0, 3.1]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 0.1]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/emitter"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000016"
+[entity.DeTransform]
+position = [-0.7, 0.0, 0.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 1.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000017"
+[entity.DeTransform]
+position = [0.0, 0.0, 2.7]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.85, 0.7]
+intensity = 120.0
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000018"
+[entity.DeTransform]
+position = [0.0, 0.0, 1.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeIrradianceVolume]
+extent = [2.0, 2.0, 1.5]
+counts = [3, 3, 3]
+intensity = 1.0
+blend_distance = 0.1

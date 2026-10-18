@@ -1,0 +1,7 @@
+# leaf (DENG-307 materials gallery; written by gen_assets.py)
+alpha_cutoff = 0.5
+alpha_mode = "mask"
+base_color = [0.3, 0.8, 0.1]
+base_color_tex = "tex/leaf"
+double_sided = true
+roughness = 0.7

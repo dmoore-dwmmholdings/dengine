@@ -277,7 +277,7 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
                                    .slots = slots,
                                    .scale = scale,
                                    .spp = spp,
-                                   .frame = (u32)vc->frame_index,
+                                   .frame = (u32)de__rt_sample_frame(s->renderer, vc->frame_index),
                                    .axis = inputs->restir_diffuse.id ? 1u : 0u},
                         .reads = {vc->depth, vc->gbuffer[DE__GB1], lc->lights, lc->dir_lights,
                                   lc->grid_buf, lc->list, lc->counters, vc->scene_views}};

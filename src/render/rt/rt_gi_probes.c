@@ -510,7 +510,8 @@ static de_result build(void *user, de_rg *g, de__vis_context *vc, de__lighting_c
     inputs->gi_records = current_meta;
     inputs->gi_texture_count = 0;
     inputs->gi_buffer_count = 0;
-    u32 start = (u32)((vc->frame_index * (u64)budget) % total), end = start + budget, base = 0;
+    u32 start = (u32)((de__rt_sample_frame(s->r, vc->frame_index) * (u64)budget) % total),
+        end = start + budget, base = 0;
     de_vec3 camera = vc->camera_position;
     de_dvec3 absolute_camera = {s->origin.x + camera.x, s->origin.y + camera.y,
                                 s->origin.z + camera.z};
@@ -603,7 +604,7 @@ static de_result build(void *user, de_rg *g, de__vis_context *vc, de__lighting_c
                                 .probes = n,
                                 .budget = selected,
                                 .rays_per_probe = rays,
-                                .frame = (u32)vc->frame_index,
+                                .frame = (u32)de__rt_sample_frame(s->r, vc->frame_index),
                                 .irradiance_width = volume->layout.iw,
                                 .irradiance_height = volume->layout.ih,
                                 .moments_width = volume->layout.dw,
