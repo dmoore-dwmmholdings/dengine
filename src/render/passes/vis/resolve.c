@@ -385,12 +385,13 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
         !view_ensure(s, st, pv, vc->view_slot))
         return;
 
-    /* Only AO/SSR/SSGI currently sample motion. Do not publish an unused sampled descriptor
-     * for a storage-written image; NULL settings retain the legacy standalone resolve contract. */
+    /* AO/SSR/SSGI and RT reservoir reprojection sample motion. Do not publish an unused sampled
+     * descriptor for a storage-written image; NULL settings retain the legacy standalone resolve
+     * contract. */
     const de_render_settings *settings = vc->settings;
     const bool sampled_motion = !settings || settings->ao != DE_QUALITY_OFF ||
                                 settings->reflections != DE_QUALITY_OFF ||
-                                settings->gi != DE_QUALITY_OFF;
+                                settings->gi != DE_QUALITY_OFF || settings->tier == DE_TIER_RT;
     for (u32 t = 0; t < DE__GB_COUNT; ++t) {
         static const char *const k_names[DE__GB_COUNT] = {"vis.gb0", "vis.gb1", "vis.gb2",
                                                           "vis.motion", "vis.lighting"};

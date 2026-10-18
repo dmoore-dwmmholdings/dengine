@@ -1,3 +1,4 @@
+#include "render/rt/restir_di.h"
 #include "render/rt/rt_shadows.h"
 #include "render/shadows/shadows_internal.h"
 #include "render/shadows/contact_internal.h"
@@ -61,6 +62,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__restir_di_destroy(r->restir_di);
     de__rt_shadows_destroy(r->rt_shadows);
     de__contact_destroy(r->contact);
     de__csm_destroy(r->csm);
@@ -303,6 +305,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
     }
 
+    res = de__restir_di_create(r, &r->restir_di);
+    if (res != DE_OK)
+        goto fail;
     res = de__rt_shadows_create(r, &r->rt_shadows);
     if (res != DE_OK)
         goto fail;
@@ -411,6 +416,9 @@ void de__renderer_kick_prepare(de_renderer *r) {
     const de_result rt_result = de__rt_prepare(r);
     if (rt_result != DE_OK)
         DE_ERROR(r->log, "RT scene prepare: %s", de_result_str(rt_result));
+    const de_result di_result = de__restir_di_prepare(r);
+    if (di_result != DE_OK)
+        DE_ERROR(r->log, "DI source prepare: %s", de_result_str(di_result));
     /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */
     de__lighting_prepare_environment(de__views_lighting(r), r->assets, de__render_world_last(r));
     if (gr != DE_OK)

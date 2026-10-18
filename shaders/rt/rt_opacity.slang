@@ -41,13 +41,17 @@ public bool de_rt_opacity(DeRtContext q,uint instance,uint primitive,float2 bary
     uint material=de_resolve_material(r);
     if(material>=sc.material_count)return true;
     DeGpuMaterial m=de_robuffer<DeGpuMaterial>(sc.materials)[material];
+    return de_rt_material_opacity(r,m,q.sampler);
+}
+
+public bool de_rt_material_opacity(DeResolvePoint r,DeGpuMaterial m,uint sampler) {
     if(m.alpha_mode!=DE_GPU_MATERIAL_ALPHA_MASK)return true;
     float a=m.base_color.a;
     uint tex=de_material_texture(m,0);
     if(tex!=DE_BINDLESS_INVALID) {
         float2 dx,dy;
         float2 uv=de_resolve_uv(r,de_material_texcoord(m,0),dx,dy);
-        a*=de_tex2d(tex).SampleLevel(de_sampler(q.sampler),uv,0).a;
+        a*=de_tex2d(tex).SampleLevel(de_sampler(sampler),uv,0).a;
     }
     return a>=m.pbr.w;
 }

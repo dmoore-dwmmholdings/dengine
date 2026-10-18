@@ -64,6 +64,7 @@ typedef struct de__lighting_inputs {
         contact_local; /**< Opaque contact identity buffer + local mask. */
     de_rg_resource rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys;
     u32 rt_shadow_extent, rt_shadow_config;
+    de_rg_resource restir_diffuse, restir_specular, restir_distance;
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 
@@ -77,8 +78,9 @@ typedef struct de__lighting_inputs_gpu {
     f32 probe_view_z[4];
     u32 rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys, rt_shadow_extent;
     u32 rt_shadow_config, rt_reserved0, rt_reserved1, rt_reserved2;
+    u32 restir_diffuse, restir_specular, restir_distance, restir_reserved;
 } de__lighting_inputs_gpu;
-DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 96, "LightingInputs is 96 bytes");
+DE_STATIC_ASSERT(sizeof(de__lighting_inputs_gpu) == 112, "LightingInputs is 112 bytes");
 
 /** The LTC tables (ltc_data.c; shaders/lighting/ltc.slang DE_LTC_SIZE). */
 #define DE__LTC_SIZE 64

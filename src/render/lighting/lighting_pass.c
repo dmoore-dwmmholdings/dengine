@@ -482,7 +482,7 @@ typedef struct lp_pass {
     de_rg_resource depth, gb[3], lighting, diffuse, specular, lists, args, tile_counters;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     de_rg_resource ids, visible; /**< DENG-429: the vis IDs and the visible list */
-    de_rg_resource inputs[12];
+    de_rg_resource inputs[15];
     u32 rt_shadow_extent, rt_shadow_config;
     u32 probe_entry, probe_sampler;
     f32 probe_view_z[4];
@@ -539,6 +539,9 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
     /* The inputs' indices exist only now (transients): into this frame's constants entry, which
      * the GPU reads after the submission. */
     const de__lighting_inputs_gpu in = {
+        .restir_diffuse = tex_index(p, pass, p->inputs[12], false),
+        .restir_specular = tex_index(p, pass, p->inputs[13], false),
+        .restir_distance = tex_index(p, pass, p->inputs[14], false),
         .rt_shadow_visibility = tex_index(p, pass, p->inputs[9], false),
         .rt_shadow_distance = tex_index(p, pass, p->inputs[10], false),
         .rt_shadow_keys = buf_index(p, pass, p->inputs[11]),
@@ -837,7 +840,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.visible = vc->visible_meshlets;
         b.pc.ids_pitch = vc->vis_ids_pitch;
         b.pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
-        const de_rg_resource inputs[12] = {
+        const de_rg_resource inputs[15] = {
             in.ao,
             DE_HANDLE_VALID(in.shadow_records) ? in.shadow_records : in.shadow_directional,
             DE_HANDLE_VALID(in.atlas_records) ? in.atlas_records : in.shadow_local,
@@ -849,7 +852,10 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             in.gi_records,
             in.rt_shadow_visibility,
             in.rt_shadow_distance,
-            in.rt_shadow_keys};
+            in.rt_shadow_keys,
+            in.restir_diffuse,
+            in.restir_specular,
+            in.restir_distance};
         memcpy(b.inputs, inputs, sizeof inputs);
         b.rt_shadow_extent = in.rt_shadow_extent;
         b.rt_shadow_config = in.rt_shadow_config;
@@ -898,7 +904,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         de_rg_read(p, ltc2, DE_ACCESS_SHADER_READ);
         if (DE_HANDLE_VALID(lc->strip))
             de_rg_read(p, lc->strip, DE_ACCESS_SHADER_READ); /* DENG-304: the environment */
-        for (u32 i = 0; i < 12; ++i)
+        for (u32 i = 0; i < 15; ++i)
             if (DE_HANDLE_VALID(inputs[i]))
                 de_rg_read(p, inputs[i], DE_ACCESS_SHADER_READ);
         for (u32 i = 0; i < in.shadow_texture_count; ++i)

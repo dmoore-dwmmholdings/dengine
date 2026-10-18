@@ -37,7 +37,7 @@ void cs_generate(uint3 id:SV_DispatchThreadID,uniform Params pc) {
     float view_depth=-dot(sc.view[2],float4(world,1));
     uint cluster=de_cluster_index(lv,p,max(view_depth,lv.near));
     uint2 cell=de_robuffer<uint2>(pc.grid)[cluster];
-    for(uint j=0;j<cell.y && selected<=pc.slot;++j) {
+    for(uint j=0;j<cell.y && selected<=pc.slot && pc.axis==0;++j) {
         uint index=de_robuffer<uint>(pc.list)[cell.x+j];DeClusterLight l=de_robuffer<DeClusterLight>(pc.lights)[index];
         if((asuint(l.axis.w)&DE_CLUSTER_LIGHT_SHADOWS)!=0 && (asuint(l.axis.w)&DE_CLUSTER_LIGHT_PROXY)==0) {
             if(selected++==pc.slot){light=l;key=index+1;}

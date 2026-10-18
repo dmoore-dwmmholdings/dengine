@@ -424,3 +424,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE rt/rt_shadows.c rt/rt_shadows.h)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/restir_di.c rt/restir_di.h)
+endif()

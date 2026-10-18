@@ -152,7 +152,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
                                                                    float3 v, uint2 px,
                                                                    DeLightingView lv,
                                                                    DeClusterLists cl,
-                                                                   uint cluster, bool split)
+                                                                   uint cluster, bool split, bool local_lights = true)
 {
     DeDirect r;
     r.diffuse = float3(0.0, 0.0, 0.0);
@@ -181,7 +181,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
     float3 f0 = lerp(float3(0.04, 0.04, 0.04) * s.specular, s.base_color, s.metallic);
     float f90 = lerp(s.specular, 1.0, s.metallic);
     float3 albedo = s.base_color * (1.0 - s.metallic);
-    for (uint k = 0; k < cell.y; ++k)
+    for (uint k = 0; k < (local_lights ? cell.y : 0u); ++k)
     {
         uint index = de_robuffer<uint>(cl.list)[cell.x + k];
         DeClusterLight l = de_robuffer<DeClusterLight>(cl.lights)[index];

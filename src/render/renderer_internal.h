@@ -170,7 +170,8 @@ struct de_renderer {
     /* DENG-177: the GPU scene (scene/gpu_scene.h); made by de_renderer_create, driven by the
      * per-view frame (DENG-176). */
     struct de__gpu_scene *gpu_scene;
-    struct de__rt_scene *rt_scene;     /* DENG-44, only the RT tier owns native AS */
+    struct de__rt_scene *rt_scene; /* DENG-44, only the RT tier owns native AS */
+    struct de__restir_di *restir_di;
     struct de__rt_shadows *rt_shadows; /* DENG-45, prewarmed effect pipelines survive toggles */
 
     /* DENG-298: the material model registry (materials/material_models.h): the built-in ids and
