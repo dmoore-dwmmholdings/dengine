@@ -74,6 +74,9 @@ VkImageAspectFlags de__vk_format_aspect(de_gpu_format f) {
 void de__vk_buffer_info(const de__vk_device *vk, const de_gpu_buffer_desc *desc,
                         VkBufferCreateInfo *out) {
     VkBufferUsageFlags u = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (desc->usage & DE_USAGE_SHADER_BINDING_TABLE)
+        u |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     if (desc->usage & DE_USAGE_VERTEX)
         u |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     if (desc->usage & DE_USAGE_INDEX)

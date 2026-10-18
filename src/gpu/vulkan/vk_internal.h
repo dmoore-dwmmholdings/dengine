@@ -148,6 +148,9 @@
 
 /** Device-level, optional (extensions): NULL when absent or not enabled. */
 #define DE_VK_DEVICE_FUNCS_OPT(X)                                                                  \
+    X(vkCreateRayTracingPipelinesKHR)                                                              \
+    X(vkGetRayTracingShaderGroupHandlesKHR)                                                        \
+    X(vkCmdTraceRaysKHR)                                                                           \
     X(vkGetDeviceFaultInfoEXT)                                                                     \
     X(vkCreateSwapchainKHR)                                                                        \
     X(vkDestroySwapchainKHR)                                                                       \
@@ -812,4 +815,9 @@ void de__vk_accel_compact(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
 bool de__vk_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *, u32,
                             u32);
 void de__vk_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
+
+de_result de__vk_rt_pipeline_create(de_gpu_device *, de__gpu_pipeline *,
+                                    const de_gpu_pipeline_desc *);
+void de__vk_cmd_dispatch_rays(de_gpu_cmd *, u32, u32, u32);
+
 #endif

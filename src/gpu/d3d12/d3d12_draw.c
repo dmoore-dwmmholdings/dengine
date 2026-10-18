@@ -79,6 +79,10 @@ static d3d12_cmd *open_list(de_gpu_cmd *c) {
 }
 
 void de__d3d12_cmd_set_pipeline(de_gpu_cmd *c, de__gpu_pipeline *p) {
+    if (p->kind == DE_PIPE_RAYTRACING) {
+        de__d3d12_cmd_set_rt_pipeline(c, p);
+        return;
+    }
     d3d12_cmd *dc = open_list(c);
     const d3d12_pipeline *dp = DE__GPU_PAYLOAD(d3d12_pipeline, p);
     const d3d12_pipe_state *ps = de__d3d12(c->device)->pipe;
@@ -104,7 +108,7 @@ void de__d3d12_cmd_push_constants(de_gpu_cmd *c, const void *data, u32 bytes) {
     d3d12_cmd *dc = open_list(c);
     if (!dc)
         return;
-    if (dc->bound_kind == DE_PIPE_COMPUTE)
+    if (dc->bound_kind == DE_PIPE_COMPUTE || dc->bound_kind == DE_PIPE_RAYTRACING)
         ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(dc->list, 0, bytes / 4u, data, 0);
     else
         ID3D12GraphicsCommandList_SetGraphicsRoot32BitConstants(dc->list, 0, bytes / 4u, data, 0);

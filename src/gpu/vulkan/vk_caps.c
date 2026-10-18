@@ -210,6 +210,17 @@ void de__vk_fill_caps(const de__vk_device *vk, de_gpu_caps *caps) {
         caps->raytracing = DE_RT_NONE;
     caps->ray_query = vk->on.ray_query;
     caps->rt_pipelines = vk->on.rt_pipeline;
+    if (caps->rt_pipelines) {
+        VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt = {0};
+        rt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+        VkPhysicalDeviceProperties2 properties = {0};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties.pNext = &rt;
+        vk->fn.vkGetPhysicalDeviceProperties2(p->handle, &properties);
+        caps->max_rt_recursion = rt.maxRayRecursionDepth;
+        caps->max_rt_payload_bytes = 4096;
+        caps->max_rt_attribute_bytes = rt.maxRayHitAttributeSize;
+    }
     caps->opacity_micromaps = false;
     caps->mesh_shaders = vk->on.mesh_shader;
     if (vk->on.mesh_shader) {

@@ -88,6 +88,11 @@ typedef struct de__gpu_sampler {
     u32 bindless;
 } de__gpu_sampler;
 
+typedef struct de__gpu_sbt_layout {
+    u64 raygen_size, miss_offset, miss_size, hit_offset, hit_size, bytes;
+    u32 stride;
+} de__gpu_sbt_layout;
+
 typedef struct de__gpu_pipeline {
     de_gpu_pipeline_kind kind;
     u32 push_constant_bytes;
@@ -97,6 +102,9 @@ typedef struct de__gpu_pipeline {
     char name[DE__GPU_NAME_MAX];
     /** From the desc (S10, DENG-323): 0 when not given. */
     u32 threadgroup_size[3], object_threadgroup_size[3];
+    de_gpu_buffer rt_sbt;
+    de__gpu_sbt_layout rt_layout;
+    u32 rt_miss_count, rt_hit_count;
 } de__gpu_pipeline;
 
 typedef struct de__gpu_accel {
@@ -156,6 +164,7 @@ struct de_gpu_cmd {
     u32 marker_depth; /**< open marker_push scopes */
     de_gpu_pipeline_kind pipeline_kind;
     bool has_pipeline;
+    de__gpu_pipeline *bound_pipeline;
     u64 queue_value;             /**< internal timeline value of its submission */
     struct de_gpu_cmd *next;     /**< free / in-flight list */
     struct de_gpu_cmd *all_next; /**< every command list of the device */
@@ -673,5 +682,14 @@ de_result de__gpu_check_lost(de_gpu_device *d, de_result r, const char *where);
 /** DE_ERR_DEVICE_LOST with the error context "<where>: the GPU device is lost" (no log line: a
  * lost device fails every call). */
 de_result de__gpu_lost_error(const char *where);
+
+/* S17: pipeline-owned shader binding tables. */
+de_result de__gpu_sbt_layout_make(u32 handle_bytes, u32 handle_alignment, u32 base_alignment,
+                                  u32 misses, u32 hits, de__gpu_sbt_layout *out);
+void de__gpu_rt_desc_init(const de_gpu_pipeline_desc *, de_gpu_rt_desc *, de_gpu_rt_hit_group *);
+de_result de__gpu_rt_validate(de_gpu_device *, const de_gpu_pipeline_desc *);
+de_result de__gpu_rt_sbt_create(de_gpu_device *, de__gpu_pipeline *, const void *handles,
+                                u32 handle_bytes, u32 handle_alignment, u32 base_alignment,
+                                u32 misses, u32 hits);
 
 #endif

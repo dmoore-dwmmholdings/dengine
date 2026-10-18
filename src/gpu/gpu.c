@@ -208,6 +208,7 @@ static void reclaim(void *user, u32 kind, u32 index) {
         break;
     }
     case DE__GPU_PIPELINE:
+        de_gpu_buffer_destroy(d, ((de__gpu_pipeline *)rec)->rt_sbt);
         if (vt->pipeline_destroy)
             vt->pipeline_destroy(d, (de__gpu_pipeline *)rec);
         break;
@@ -830,6 +831,7 @@ de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_d
         p->object_threadgroup_size[i] = desc->object_threadgroup_size[i];
     }
     if (d->vt->pipeline_create(d, p, desc) != DE_OK) {
+        de_gpu_buffer_destroy(d, p->rt_sbt);
         undo_slot(d, DE__GPU_PIPELINE, id);
         return h;
     }
@@ -1274,13 +1276,15 @@ void de_gpu_cmd_set_pipeline(de_gpu_cmd *c, de_gpu_pipeline h) {
     static const char F[] = "de_gpu_cmd_set_pipeline";
     CMD_ENTER(F);
     CMD_RESOLVE(p, de__gpu_pipeline, DE__GPU_PIPELINE, h.id, F);
-    CHECK(!(p->kind == DE_PIPE_COMPUTE && c->in_render),
+    CHECK(!((p->kind == DE_PIPE_COMPUTE || p->kind == DE_PIPE_RAYTRACING) && c->in_render),
           "%s(\"%s\"): compute pipeline \"%s\" inside a render pass", F, c->name, p->name);
-    CHECK(p->kind == DE_PIPE_COMPUTE || c->queue == DE_QUEUE_GRAPHICS,
+    CHECK(p->kind == DE_PIPE_COMPUTE || p->kind == DE_PIPE_RAYTRACING ||
+              c->queue == DE_QUEUE_GRAPHICS,
           "%s(\"%s\"): raster pipeline \"%s\" on a non-graphics queue", F, c->name, p->name);
     CHECK(c->queue != DE_QUEUE_COPY, "%s(\"%s\"): pipelines cannot be used on the copy queue", F,
           c->name);
     c->has_pipeline = true;
+    c->bound_pipeline = p;
     c->pipeline_kind = p->kind;
     c->push_limit = p->push_constant_bytes;
     if (c->device->vt->cmd_set_pipeline)
@@ -1381,18 +1385,18 @@ void de_gpu_cmd_dispatch_indirect(de_gpu_cmd *c, de_gpu_buffer args, u64 offset)
         c->device->vt->cmd_dispatch_indirect(c, a, offset);
 }
 
-/* Ray tracing (S16): refused in every build, nothing is recorded. */
-static void rt_unsupported(de_gpu_cmd *c, const char *f) {
-    if (c)
-        de__gpu_fail(c->device, DE_ERR_UNSUPPORTED,
-                     "%s: ray tracing pipelines are not available before S17", f);
-}
-
+/* S17: the bound pipeline owns immutable shader records. */
 void de_gpu_cmd_dispatch_rays(de_gpu_cmd *c, u32 w, u32 h, u32 depth) {
-    (void)w;
-    (void)h;
-    (void)depth;
-    rt_unsupported(c, "de_gpu_cmd_dispatch_rays");
+    static const char F[] = "de_gpu_cmd_dispatch_rays";
+    CMD_ENTER(F);
+    CHECK(!c->in_render, "%s: dispatch inside rendering", F);
+    CHECK(c->has_pipeline && c->pipeline_kind == DE_PIPE_RAYTRACING,
+          "%s: no ray-tracing pipeline is bound", F);
+    CHECK(c->device->caps.rt_pipelines && c->device->vt->cmd_dispatch_rays,
+          "%s: RT pipelines unsupported", F);
+    if (!w || !h || !depth)
+        return;
+    c->device->vt->cmd_dispatch_rays(c, w, h, depth);
 }
 
 void de_gpu_cmd_copy_buffer(de_gpu_cmd *c, de_gpu_buffer dst, u64 dst_off, de_gpu_buffer src,

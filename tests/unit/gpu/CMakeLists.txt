@@ -366,3 +366,22 @@ if(TARGET test_gpu_accel_native)
         endif()
     endif()
 endif()
+
+# S17 RT pipeline/SBT contract and actual Metal function-table dispatch.
+de_add_test(NAME gpu_rt_pipeline SOURCES test_rt_pipeline.c LIBS ${_de_backends_libs}
+    LABELS unit gpu rt TIMEOUT 180)
+if(TARGET test_gpu_rt_pipeline)
+    target_include_directories(test_gpu_rt_pipeline PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_METAL)
+        set(_de_rt_test_library "${CMAKE_CURRENT_BINARY_DIR}/rt_pipeline.metallib")
+        add_custom_command(OUTPUT "${_de_rt_test_library}"
+            COMMAND xcrun metal -std=metal3.1 "-I${DE_ROOT_DIR}/shaders"
+                "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/rt-metal-cache" -c
+                "${CMAKE_CURRENT_SOURCE_DIR}/data/rt_pipeline.metal" -o "${_de_rt_test_library}.air"
+            COMMAND xcrun metallib "${_de_rt_test_library}.air" -o "${_de_rt_test_library}"
+            DEPENDS data/rt_pipeline.metal "${DE_ROOT_DIR}/shaders/common/rt_pipeline_metal.h" VERBATIM)
+        add_custom_target(de_rt_test_library DEPENDS "${_de_rt_test_library}")
+        add_dependencies(test_gpu_rt_pipeline de_rt_test_library)
+        target_compile_definitions(test_gpu_rt_pipeline PRIVATE "DE_RT_TEST_METALLIB=\"${_de_rt_test_library}\"")
+    endif()
+endif()

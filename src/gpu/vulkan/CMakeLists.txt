@@ -21,6 +21,7 @@ de_add_module(
         vk_barriers.c
         vk_sync.c
         vk_swapchain.c
+        vk_rt_pipeline.c
         vk_pipeline.c
         vk_pipeline_cache.c
         vk_draw.c

@@ -570,8 +570,8 @@ static de_result create_device(de_gpu_device *d, const queue_plan *qp) {
     if (en->ext.ray_query)
         add_name(&exts, VK_KHR_RAY_QUERY_EXTENSION_NAME);
     /* RT pipelines are enabled by S17, not by ray-query AS support. */
-    en->ext.rt_pipeline = false;
-    en->rt_pipeline.rayTracingPipeline = VK_FALSE;
+    if (en->ext.rt_pipeline)
+        add_name(&exts, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     de__vk_physical_chain_features(en);
     if (en->ext.device_fault)
         add_name(&exts, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -988,6 +988,7 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .cmd_draw_indexed = de__vk_cmd_draw_indexed,
     .cmd_set_index_buffer = de__vk_cmd_set_index_buffer,
     .cmd_scissor = de__vk_cmd_scissor,
+    .cmd_dispatch_rays = de__vk_cmd_dispatch_rays,
     .cmd_dispatch = de__vk_cmd_dispatch,
     .cmd_dispatch_indirect = de__vk_cmd_dispatch_indirect,
     .cmd_draw_indexed_indirect = de__vk_cmd_draw_indexed_indirect,

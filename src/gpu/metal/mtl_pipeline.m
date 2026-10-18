@@ -618,6 +618,8 @@ static de_result create_compute(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipel
 
 de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                                   const de_gpu_pipeline_desc *desc) {
+    if (desc->kind == DE_PIPE_RAYTRACING)
+        return de__mtl_rt_pipeline_create(d, p, desc);
     mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
     de_result r;
     @autoreleasepool {
@@ -646,6 +648,7 @@ de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
             mp->cull = (u32)cull_mode(desc->cull);
         }
         if (r != DE_OK) {
+            release(&mp->visible_table);
             release(&mp->intersection_table);
             release(&mp->state);
             release(&mp->depth_state);
@@ -658,6 +661,7 @@ void de__mtl_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p) {
     (void)d;
     mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
     @autoreleasepool {
+        release(&mp->visible_table);
         release(&mp->intersection_table);
         release(&mp->state);
         release(&mp->depth_state);

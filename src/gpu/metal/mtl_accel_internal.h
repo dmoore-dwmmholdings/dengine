@@ -6,8 +6,9 @@
  * then an eight-byte resource ID. Never use the Vulkan/DXR 64-byte record here. */
 typedef struct mtl_accel {
     void *object;
-    void *descriptor; /* retained native descriptor, reused across recordings */
-    void *refs;       /* retained NSArray of every BLAS eligible in the build snapshot */
+    void *instance_snapshot; /* S17 durable indirect records for hit-group selection */
+    void *descriptor;        /* retained native descriptor, reused across recordings */
+    void *refs;              /* retained NSArray of every BLAS eligible in the build snapshot */
     struct mtl_accel *next;
     de__gpu_buffer *query;
 } mtl_accel;
@@ -26,4 +27,5 @@ void de__mtl_accel_shutdown(de_gpu_device *);
 /* Private shader ABI: optional de_metal_intersection export, kernel IFT buffer2,
  * callback argument heap buffer0. Called by normal compute pipeline creation. */
 de_result de__mtl_intersection_table(de_gpu_device *, void *pipeline, void *function, void **table);
+de_result de__mtl_intersection_tables(de_gpu_device *, void *, void *const *, u32, void **);
 #endif

@@ -105,6 +105,7 @@ typedef struct de_gpu_caps {
     u32 mesh_max_output_primitives;    /**< per mesh-shader group; 0 without mesh shaders */
     bool base_tier_ok;                 /**< meets the SPEC §3.3 Base tier for its backend */
     char base_tier_reason[128];        /**< why not, when !base_tier_ok; "" otherwise */
+    u32 max_rt_recursion, max_rt_payload_bytes, max_rt_attribute_bytes;
 } de_gpu_caps;
 
 /** de_gpu_device_create() parameters. `(de_gpu_device_desc){0}` is valid. */
@@ -182,7 +183,8 @@ typedef enum de_gpu_usage {
     DE_USAGE_ACCEL_INPUT = 1u << 8,
     DE_USAGE_ACCEL_STORAGE = 1u << 9,
     DE_USAGE_COPY_SRC = 1u << 10,
-    DE_USAGE_COPY_DST = 1u << 11
+    DE_USAGE_COPY_DST = 1u << 11,
+    DE_USAGE_SHADER_BINDING_TABLE = 1u << 12
 } de_gpu_usage;
 
 typedef enum de_gpu_memory { DE_MEM_GPU_ONLY, DE_MEM_UPLOAD, DE_MEM_READBACK } de_gpu_memory;
@@ -296,10 +298,11 @@ typedef enum de_gpu_blend {
 /**
  * Pipeline. Required blobs by kind: GRAPHICS `vs` (`ps` optional), MESH `ms` (`as`, `ps`
  * optional; needs caps.mesh_shaders, else DE_ERR_UNSUPPORTED), COMPUTE `cs`. RAYTRACING is
- * DE_ERR_UNSUPPORTED until S16. Blobs of other stages must be empty. `push_constant_bytes` <=
- * DE_GPU_MAX_PUSH_CONSTANT_BYTES, a multiple of 4, and at least what the shaders use (their
- * reflection's push_constant_bytes). Color formats must be renderable color formats, one per
- * pixel-shader output; `depth_format` a depth format or UNKNOWN; depth test/write need one.
+ * supported when caps.rt_pipelines is true. Blobs of other stages must be empty.
+ * `push_constant_bytes` <= DE_GPU_MAX_PUSH_CONSTANT_BYTES, a multiple of 4, and at least what the
+ * shaders use (their reflection's push_constant_bytes). Color formats must be renderable color
+ * formats, one per pixel-shader output; `depth_format` a depth format or UNKNOWN; depth test/write
+ * need one.
  *
  * Fixed state, the same on every backend (S10, DENG-323):
  *   - Every pipeline uses the bindless tables (shaders/common/bindless.slang) and one
@@ -313,6 +316,8 @@ typedef enum de_gpu_blend {
  *   - Viewport and scissor are command state (de_gpu_cmd_viewport, de_gpu_cmd_scissor), set to
  *     the whole render area by de_gpu_cmd_begin_render. One sample per pixel.
  */
+typedef struct de_gpu_rt_desc de_gpu_rt_desc;
+
 typedef struct de_gpu_pipeline_desc {
     de_gpu_pipeline_kind kind;
     de_gpu_shader_blob vs, ps, as, ms, cs; /* by kind */
@@ -336,6 +341,8 @@ typedef struct de_gpu_pipeline_desc {
     /** Threadgroup size of `as` (amplification / task / object shader) of a MESH pipeline, from its
      * reflection. All 0 = not given (as above). */
     u32 object_threadgroup_size[3];
+    /** Multi-miss/material RT description. NULL uses the original single-stage shorthand. */
+    const de_gpu_rt_desc *rt;
 } de_gpu_pipeline_desc;
 
 DE_API de_gpu_pipeline de_gpu_pipeline_create(de_gpu_device *d, const de_gpu_pipeline_desc *desc);
@@ -388,6 +395,23 @@ DE_API void de_gpu_cmd_accel_emit_compacted_size(de_gpu_cmd *c, de_gpu_accel bla
 DE_API bool de_gpu_accel_compacted_size(de_gpu_device *d, de_gpu_accel blas, u64 *out_bytes);
 /** Requires a completed compacted-size query. Caller retains ownership of src. */
 DE_API de_gpu_accel de_gpu_cmd_accel_compact(de_gpu_cmd *c, de_gpu_accel src);
+
+/** Triangle hit groups; v1 uses bindless resources/push constants, no local root arguments. */
+typedef struct de_gpu_rt_hit_group {
+    de_gpu_shader_blob closest_hit, any_hit;
+} de_gpu_rt_hit_group;
+struct de_gpu_rt_desc {
+    de_gpu_shader_blob raygen;
+    const de_gpu_shader_blob *miss;
+    u32 miss_count;
+    const de_gpu_rt_hit_group *hit_groups;
+    u32 hit_group_count;
+    /** Zero recursion = 1; zero attributes = triangle barycentrics (8 bytes). */
+    u32 max_recursion, payload_bytes, attribute_bytes;
+};
+/** Hit record = instance sbt_offset + geometry index (record stride multiplier 1).
+ * Ray shaders select a miss index. Metal's native MSL ABI is in shaders/common/rt_pipeline_metal.h.
+ */
 
 /* ---------- Queries ---------- */
 typedef enum de_gpu_query_type { DE_QUERY_TIMESTAMP } de_gpu_query_type;

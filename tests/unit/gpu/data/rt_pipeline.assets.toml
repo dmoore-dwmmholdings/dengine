@@ -1,0 +1,4 @@
+[assets]
+"rt/pipeline" = { type = "shader", source = "rt_pipeline.slang", targets = ["spirv", "dxil"], entry_points = ["raygen:raygen", "miss:miss", "closest:closesthit", "any:anyhit"] }
+[bundles.rt]
+assets = ["rt/*"]
