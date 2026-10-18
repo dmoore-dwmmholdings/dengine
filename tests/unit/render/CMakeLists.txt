@@ -1119,6 +1119,7 @@ if(TARGET test_render_s16_rt_integration)
     target_compile_definitions(test_render_s16_rt_integration PRIVATE
         "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/s16_integration_tmp\"")
     if(WIN32)
+        target_compile_definitions(test_render_s16_rt_integration PRIVATE _CRT_SECURE_NO_WARNINGS)
         target_link_libraries(test_render_s16_rt_integration PRIVATE version)
         de_d3d12_agility_deploy(test_render_s16_rt_integration)
         if(DE_D3D12_WARP_DLL)
