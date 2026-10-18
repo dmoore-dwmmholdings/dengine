@@ -25,6 +25,7 @@
  */
 #include "render/passes/forward/forward.h"
 #include "render/passes/forward/scene_color_pyramid.h"
+#include "render/rt/rt_refraction.h"
 
 #include "render/graph/rg_internal.h"
 #include "render/lighting/lighting.h"
@@ -44,6 +45,7 @@ struct de__forward {
     de_cvar cv_refraction;
     char why[256];
     de_gpu_pipeline pipeline; /**< vs_forward + ps_forward */
+    de_gpu_pipeline capture;
     u32 push_bytes;
     de_gpu_sampler sampler; /**< the material sampler (as the resolve's) */
     u32 sampler_bindless;
@@ -56,6 +58,7 @@ typedef struct fw_pass {
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     const de__forward_draw *draws;
     u32 draw_count;
+    de__rt_refraction_frame *rt;
 } fw_pass;
 
 /* =================================================================================================
@@ -101,9 +104,10 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
                       : DE_FAIL_WRAP(DE_ERR_INTERNAL, "forward: the material sampler");
     if (r == DE_OK) {
         fw->sampler_bindless = de_gpu_sampler_bindless(fw->dev, fw->sampler);
-        static const char *const k_entries[2] = {"vs_forward", "ps_forward"};
+        static const char *const k_entries[3] = {"vs_forward", "ps_forward",
+                                                 "ps_capture_refraction"};
         de__engine_shader_code code;
-        r = de__vis_shader_load(vis, "forward_transparent", k_entries, 2, &code);
+        r = de__vis_shader_load(vis, "forward_transparent", k_entries, 3, &code);
         if (r == DE_OK) {
             u32 reflected = code.entries[0].push_constant_bytes;
             if (code.entries[1].push_constant_bytes > reflected)
@@ -122,7 +126,23 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
                                                  .depth_write = false,
                                                  .push_constant_bytes = fw->push_bytes,
                                                  .name = "forward transparent"});
+            if (vis->renderer && vis->renderer->caps.ray_query)
+                fw->capture = de_gpu_pipeline_create(
+                    fw->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                                     .vs = code.entries[0].blob,
+                                                     .ps = code.entries[2].blob,
+                                                     .color_formats = {DE_FMT_RGBA16_FLOAT},
+                                                     .color_count = 1,
+                                                     .blend = {DE_BLEND_PREMUL},
+                                                     .depth_format = DE_FMT_D32_FLOAT,
+                                                     .cull = DE_CULL_NONE,
+                                                     .depth_test = true,
+                                                     .depth_write = false,
+                                                     .push_constant_bytes = fw->push_bytes,
+                                                     .name = "RT refraction surface capture"});
             de__engine_shader_code_free(&code);
+            if (r == DE_OK && vis->renderer && vis->renderer->caps.ray_query && !fw->capture.id)
+                r = DE_FAIL(DE_ERR_INTERNAL, "forward: RT capture pipeline");
             if (!DE_HANDLE_VALID(fw->pipeline)) {
                 const de_error *e = de_error_last();
                 r = DE_FAIL_WRAP(e != NULL && e->result != DE_OK ? e->result : DE_ERR_INTERNAL,
@@ -151,6 +171,7 @@ void de__forward_destroy(de__forward *fw) {
     if (fw == NULL)
         return;
     de__scene_color_destroy(fw->pyramid);
+    de_gpu_pipeline_destroy(fw->dev, fw->capture);
     if (DE_HANDLE_VALID(fw->pipeline))
         de_gpu_pipeline_destroy(fw->dev, fw->pipeline);
     if (DE_HANDLE_VALID(fw->sampler))
@@ -200,8 +221,10 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
                   : 0u;
     const de_gpu_attachment color = {.texture = de_rg_texture(pass, p->target), .store = true};
     const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
-    de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
-    de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
+    if (!p->rt) {
+        de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+        de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
+    }
     u8 push[128];
     memset(push, 0, sizeof push);
     for (u32 i = 0; i < p->draw_count; ++i) {
@@ -209,11 +232,26 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         pc.instance = d->instance;
         pc.meshlet_first = d->meshlet_first;
         pc.side = d->side;
+        if (p->rt) {
+            de__rt_refraction_clear(cmd, p->rt, &pc);
+            de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+            de_gpu_cmd_set_pipeline(cmd, p->fw->capture);
+            memcpy(push, &pc, sizeof pc);
+            de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
+            de_gpu_cmd_draw(cmd, DE__FWD_VERTICES, d->meshlet_count, 0, 0);
+            de_gpu_cmd_end_render(cmd);
+            de__rt_refraction_trace(cmd, p->rt, &pc);
+            de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
+            de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
+        }
         memcpy(push, &pc, sizeof pc);
         de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
         de_gpu_cmd_draw(cmd, DE__FWD_VERTICES, d->meshlet_count, 0, 0);
+        if (p->rt)
+            de_gpu_cmd_end_render(cmd);
     }
-    de_gpu_cmd_end_render(cmd);
+    if (!p->rt)
+        de_gpu_cmd_end_render(cmd);
 }
 
 de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
@@ -221,6 +259,8 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                             de__forward_context **out) {
     if (out != NULL)
         *out = NULL;
+    if (fw && vc && fw->vis->renderer)
+        de__rt_refraction_reset(fw->vis->renderer->rt_refraction, vc->view);
     if (fw == NULL || g == NULL || vc == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__forward_build: NULL argument");
     if (!fw->enabled || lc == NULL || !lc->lit || world == NULL || !DE_HANDLE_VALID(lc->target) ||
@@ -318,9 +358,12 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
         pd->pc.scene_color_levels = context.layout.count;
     }
 
+    if (fw->capture.id && fw->vis->renderer && transmissive && pd->pc.refraction)
+        pd->rt = de__rt_refraction_prepare(fw->vis->renderer->rt_refraction, g, vc, lc);
     de_rg_pass *p = de_rg_add_pass(g, "forward.transparent", DE_QUEUE_GRAPHICS, draw_execute, pd);
     if (!p)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: draw pass");
+    de__rt_refraction_declare(pd->rt, p);
     de_rg_read(p, lc->target, DE_ACCESS_RENDER_TARGET);
     de_rg_write(p, lc->target, DE_ACCESS_RENDER_TARGET);
     /* The pipeline writes no depth, but the attachment is bound in its write layout. */
