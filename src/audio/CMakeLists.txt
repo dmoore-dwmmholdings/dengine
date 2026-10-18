@@ -74,3 +74,15 @@ if(TARGET de_audio AND APPLE)
     set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS "-framework AudioToolbox"
         "-framework CoreAudio" "-framework CoreFoundation")
 endif()
+
+# DENG-309: format/conversion helpers are portable so negotiation can run on every host.
+if(TARGET de_audio)
+    target_sources(de_audio PRIVATE backend/wasapi_format.c backend/wasapi_format.h)
+endif()
+if(TARGET de_audio AND WIN32)
+    target_sources(de_audio PRIVATE backend/wasapi.c backend/wasapi_notify.c
+        backend/wasapi_internal.h)
+    target_compile_definitions(de_audio PRIVATE DE_AUDIO_HAS_WASAPI=1)
+    target_link_libraries(de_audio PRIVATE ole32 avrt uuid)
+    set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS ole32 avrt uuid)
+endif()

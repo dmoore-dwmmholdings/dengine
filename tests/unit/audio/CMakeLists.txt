@@ -72,3 +72,12 @@ if(TARGET test_audio_coreaudio)
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
         "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake")
 endif()
+
+# DENG-309: portable format tests everywhere; real endpoint cases skip outside Windows.
+if(TARGET de_audio)
+    de_add_test(NAME audio_wasapi SOURCES test_backend_wasapi.c LIBS de_audio TIMEOUT 20)
+    target_include_directories(test_audio_wasapi PRIVATE "${DE_ROOT_DIR}/src")
+    if(WIN32)
+        target_compile_definitions(test_audio_wasapi PRIVATE DE_AUDIO_HAS_WASAPI=1)
+    endif()
+endif()
