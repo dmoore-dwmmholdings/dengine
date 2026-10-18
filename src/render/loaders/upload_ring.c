@@ -227,7 +227,7 @@ de_result de__uploader_init(de_render_uploader *u, u64 ring_bytes, u64 frame_cap
     if (u->records == NULL || u->releases == NULL)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "render assets: no memory for the upload queue");
     u->ring = de_gpu_buffer_create(u->dev, &(de_gpu_buffer_desc){.size = u->ring_size,
-                                                                 .usage = DE_USAGE_COPY_SRC,
+                                                                 .usage = DE_USAGE_COPY_SRC | DE_USAGE_STORAGE,
                                                                  .memory = DE_MEM_UPLOAD,
                                                                  .name = "asset upload ring"});
     if (!DE_HANDLE_VALID(u->ring)) {

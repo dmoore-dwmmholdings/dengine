@@ -4,6 +4,7 @@
 #include "de_base.h"
 #include "de_math.h"
 #include "de_asset.h"
+#include "de_render.h"
 DE_EXTERN_C_BEGIN
 
 typedef struct de_text_system de_text_system;
@@ -80,6 +81,35 @@ typedef struct de_glyph_quad {
     de_vec4 color;
 } de_glyph_quad;
 DE_API u32 de_text_layout_quads(const de_text_layout *l, de_glyph_quad *out, u32 max);
+
+/** Rendering is optional. A NULL renderer detaches and keeps CPU text usable. */
+DE_API de_result de_text_attach(de_text_system *t, de_renderer *renderer, de_world *world);
+typedef struct de_text_draw_opts {
+    de_font font;
+    de_vec4 clip_px; /**< x,y,width,height; zero width/height means the whole view. */
+    f32 outline_width;
+    de_vec4 outline_color;
+    de_vec2 shadow_offset;
+    de_vec4 shadow_color;
+    bool pixel_snap;
+} de_text_draw_opts;
+/** Quad pos is x,y,width,height; uv is min-x,min-y,max-x,max-y. Submission order is stable. */
+DE_API de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *quads,
+                              u32 count, de_vec2 origin_px, const de_text_draw_opts *options);
+DE_API de_gpu_texture de_text_page_texture(de_text_system *t, de_font font, u32 page);
+typedef struct DeWorldText {
+    de_name loc_id;
+    char literal[128];
+    de_text_style style;
+    f32 size_m;
+    de_text_align align;
+    bool billboard, lit, depth_test;
+} DeWorldText;
+typedef struct de_text_render_stats {
+    u64 uploaded_bytes;
+    u32 uploads, draw_calls, glyphs;
+} de_text_render_stats;
+DE_API de_text_render_stats de_text_get_render_stats(const de_text_system *t);
 
 typedef struct de_text_stats {
     u32 runtime_pending, runtime_generated, runtime_pages, cap_warnings, background_jobs;

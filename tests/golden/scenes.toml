@@ -382,3 +382,31 @@ size = [128, 96]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.text_msdf_scales]
+description = "MSDF Sdf at 8,16,64,512 px"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
+
+[scene.text_outline_shadow]
+description = "MTSDF outline and alpha-distance soft shadow"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
+
+[scene.text_bitmap_pixel]
+description = "Nearest bitmap font at integer 1x and 3x"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.0
+threshold_p99 = 0.0
+
+[scene.text_world_text]
+description = "Billboard world text at camera distances 2m and 50m, lit forward variant"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02

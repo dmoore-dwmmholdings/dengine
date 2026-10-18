@@ -106,3 +106,8 @@ de_engine_shader(pt_final_denoise pathtracer/pt_final_denoise.slang)
 
 de_engine_shader(skin skin/skin.slang)
 de_engine_shader(pixel_upscale pixel/pixel_upscale.slang)
+
+# DENG-262: text shaders shared by retained UI.
+de_engine_shader(text_msdf text/msdf.slang)
+de_engine_shader(text_bitmap text/bitmap.slang)
+de_engine_shader(text_upload text/atlas_upload.slang)
