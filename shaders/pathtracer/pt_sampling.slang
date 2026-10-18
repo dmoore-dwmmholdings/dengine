@@ -4,7 +4,7 @@ public float pt_power(float a,float b) { return a*a/max(a*a+b*b,1e-30); }
 // Owen-style nested integer scramble of the base-2 digital net, independently per dimension.
 public uint pt_reverse(uint x) { return reversebits(x); }
 public float pt_random(uint pixel,uint sample,uint dimension) {
-    uint x=pt_reverse(sample); uint seed=de_rt_hash(pixel^de_rt_hash(dimension+0x9e3779b9u));
+    uint x=sample; uint seed=de_rt_hash(pixel^de_rt_hash(dimension+0x9e3779b9u));
     x^=x*0x3d20adeau;x+=seed;x*=((seed>>16)|1u);x^=x*0x05526c56u;x^=x*0x53a22864u;
     return min(float(pt_reverse(x))*(1.0/4294967296.0),0.99999994);
 }

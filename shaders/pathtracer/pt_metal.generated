@@ -4546,17 +4546,10 @@ PtParams_0 pt_load_0(uint buffer_0, uint entry_1, KernelContext_0 thread* kernel
 }
 
 
-uint pt_reverse_0(uint x_5)
+uint de_rt_hash_0(uint x_5)
 {
 
-    return reverse_bits(x_5);
-}
-
-
-uint de_rt_hash_0(uint x_6)
-{
-
-    uint _S373 = (x_6 ^ (x_6 >> 16U)) * 2146121005U;
+    uint _S373 = (x_5 ^ (x_5 >> 16U)) * 2146121005U;
 
     uint _S374 = (_S373 ^ (_S373 >> 15U)) * 2221713035U;
 
@@ -4564,16 +4557,21 @@ uint de_rt_hash_0(uint x_6)
 }
 
 
+uint pt_reverse_0(uint x_6)
+{
+
+    return reverse_bits(x_6);
+}
+
+
 float pt_random_0(uint pixel_1, uint sample_1, uint dimension_0)
 {
 
-    uint x_7 = pt_reverse_0(sample_1);
-
     uint seed_1 = de_rt_hash_0(pixel_1 ^ (de_rt_hash_0(dimension_0 + 2654435769U)));
-    uint x_8 = ((x_7 ^ (x_7 * 1025551850U)) + seed_1) * ((seed_1 >> 16U) | 1U);
+    uint x_7 = ((sample_1 ^ (sample_1 * 1025551850U)) + seed_1) * ((seed_1 >> 16U) | 1U);
 
-    uint x_9 = x_8 ^ (x_8 * 89287766U);
-    return min(float(pt_reverse_0(x_9 ^ (x_9 * 1403136100U))) * 2.32830643653869629e-10f, 0.99999994039535522f);
+    uint x_8 = x_7 ^ (x_7 * 89287766U);
+    return min(float(pt_reverse_0(x_8 ^ (x_8 * 1403136100U))) * 2.32830643653869629e-10f, 0.99999994039535522f);
 }
 
 
@@ -4615,8 +4613,8 @@ uint de_light_kind_0(const DeClusterLight_0 thread* l_13)
 
 float de_light_window_0(float d_5, float r_18)
 {
-    float x_10 = d_5 / r_18;
-    float w_5 = saturate(1.0f - x_10 * x_10 * x_10 * x_10);
+    float x_9 = d_5 / r_18;
+    float w_5 = saturate(1.0f - x_9 * x_9 * x_9 * x_9);
     return w_5 * w_5;
 }
 
@@ -4738,13 +4736,13 @@ float4 pt_area_hit_0(const PtParams_0 thread* p_6, const DeRtRay_0 thread* ray_0
             continue;
         }
 
-        float3 x_11 = normalize(_S382.light_0.axis_0.xyz);
+        float3 x_10 = normalize(_S382.light_0.axis_0.xyz);
         float3 delta_0 = _S388 + _S386 * float3(t_11)  - _S387;
         float _S390 = _S382.light_0.shape_0.y;
 
         float _S391 = _S382.light_0.shape_0.z;
 
-        float2 uv_1 = float2(dot(delta_0, x_11) / max(_S390, 1.00000001335143196e-10f), dot(delta_0, normalize(cross(normal_2, x_11))) / max(_S391, 1.00000001335143196e-10f));
+        float2 uv_1 = float2(dot(delta_0, x_10) / max(_S390, 1.00000001335143196e-10f), dot(delta_0, normalize(cross(normal_2, x_10))) / max(_S391, 1.00000001335143196e-10f));
         bool _S392 = _S384 == 3U;
 
         bool inside_0;
@@ -5596,9 +5594,9 @@ float vis_snorm16_0(uint q_2)
 }
 
 
-float3 vis_oct_decode_0(float x_12, float y_0)
+float3 vis_oct_decode_0(float x_11, float y_0)
 {
-    float z_1 = 1.0f - abs(x_12) - abs(y_0);
+    float z_1 = 1.0f - abs(x_11) - abs(y_0);
 
     float t_12;
     if(z_1 < 0.0f)
@@ -5615,7 +5613,7 @@ float3 vis_oct_decode_0(float x_12, float y_0)
     }
 
     float _S489;
-    if(x_12 >= 0.0f)
+    if(x_11 >= 0.0f)
     {
 
         _S489 = - t_12;
@@ -5628,7 +5626,7 @@ float3 vis_oct_decode_0(float x_12, float y_0)
 
     }
 
-    float _S490 = x_12 + _S489;
+    float _S490 = x_11 + _S489;
     if(y_0 >= 0.0f)
     {
 
@@ -6350,9 +6348,9 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_13, f
         center_0 = normalize(l_14->position_1.xyz - p_13);
 
     }
-    float3 x_13 = de_rt_tangent_0(center_0);
+    float3 x_12 = de_rt_tangent_0(center_0);
 
-    float3 y_1 = cross(center_0, x_13);
+    float3 y_1 = cross(center_0, x_12);
 
     float3 wi_28;
 
@@ -6362,7 +6360,7 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_13, f
 
         float z_3 = 1.0f - u_10.x * (1.0f - cos(clamp(l_14->direction_0.w, 0.0f, 1.54999995231628418f)));
 
-        wi_28 = normalize(center_0 * float3(z_3)  + (x_13 * float3(cos(phi_4))  + y_1 * float3(sin(phi_4)) ) * float3(sqrt(max(0.0f, 1.0f - z_3 * z_3))) );
+        wi_28 = normalize(center_0 * float3(z_3)  + (x_12 * float3(cos(phi_4))  + y_1 * float3(sin(phi_4)) ) * float3(sqrt(max(0.0f, 1.0f - z_3 * z_3))) );
 
         distance_0 = 1.0e+06f;
 
@@ -6391,9 +6389,9 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_13, f
         if(_S597)
         {
 
-            float3 x_14 = normalize(l_14->axis_0.xyz);
+            float3 x_13 = normalize(l_14->axis_0.xyz);
 
-            float3 y_2 = normalize(cross(l_14->direction_0.xyz, x_14));
+            float3 y_2 = normalize(cross(l_14->direction_0.xyz, x_13));
 
             float2 xy_0;
             if(_S596)
@@ -6409,7 +6407,7 @@ DeRtRay_0 de_rt_shadow_ray_0(const DeClusterLight_0 thread* l_14, float3 p_13, f
 
             }
 
-            wi_28 = target_0 + (x_14 * float3((xy_0.x * l_14->shape_0.y))  + y_2 * float3((xy_0.y * l_14->shape_0.z)) );
+            wi_28 = target_0 + (x_13 * float3((xy_0.x * l_14->shape_0.y))  + y_2 * float3((xy_0.y * l_14->shape_0.z)) );
 
         }
         else

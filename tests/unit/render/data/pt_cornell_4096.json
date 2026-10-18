@@ -10,6 +10,8 @@
   "scene": "test_pathtracer.c cornell(); fixed full 16x16 image",
   "generation": "DE_PT_RECORD_REFERENCE=1 ctest --preset dev -R ^render_pathtracer.pathtracer.cornell_reference$ -V --output-on-failure --no-tests=error",
   "comparison": "1024 spp seed1; fixed Reinhard then sRGB display transform; FLIP mean <=0.02",
-  "sha256": "a9422514c1672095d45d0271c2504576f008096559f8fbfed401c8250539aca1",
-  "provenance_log": "/tmp/deng72-cornell-record.log"
+  "sha256": "76b129752e95c52d3ad3bb0d47451fcdf5b6cc7256c3db3095e854a5e6365f71",
+  "provenance_log": "/tmp/deng72-cornell-record-fixed.log",
+  "sampling_correction": "/tmp/deng72-sampling-correction.json",
+  "historical_reference": "/tmp/deng72-cornell-old-frozen-sampling.f32"
 }
