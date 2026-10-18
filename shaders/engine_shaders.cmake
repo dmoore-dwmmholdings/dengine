@@ -76,3 +76,7 @@ de_engine_shader(restir_di_shade rt/restir_di_shade.slang)
 de_engine_shader(rtao rt/rtao.slang)
 
 de_engine_shader(rt_reflections rt/rt_reflections.slang)
+
+de_engine_shader(ddgi_trace rt/ddgi_trace.slang)
+de_engine_shader(ddgi_update rt/ddgi_update.slang)
+de_engine_shader(ddgi_relocate rt/ddgi_relocate.slang)

@@ -1,5 +1,6 @@
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_reflections.h"
+#include "render/probes/irradiance_internal.h"
 /* DENG-45: clustered analytic-light visibility through the production scene query path. */
 #include "render/rt/rt_shadows.h"
 #include "render/graph/rg_internal.h"
@@ -228,6 +229,7 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
     de__rt_shadows *s = user;
     if (!s || !vc->settings)
         return DE_OK;
+    DE_TRY(de__irradiance_update_source(s->renderer, g, vc, lc, inputs));
     DE_TRY(de__rt_reflections_build(s->renderer->rt_reflections, g, vc, lc, inputs));
     DE_TRY(de__restir_di_build(s->renderer->restir_di, g, vc, lc, inputs));
     const de_render_settings *settings = vc->settings;

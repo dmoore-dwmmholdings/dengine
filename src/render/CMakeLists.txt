@@ -437,3 +437,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE rt/rt_reflections.c rt/rt_reflections.h)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_gi_probes.c rt/rt_gi_probes.h)
+endif()

@@ -10,6 +10,7 @@ __exported import "../lighting/lighting_common";
 import "../shadows/atlas_sample";
 import "../lighting/ltc";
 import "../probes/reflection_probe_sample";
+import "../probes/irradiance_sample";
 __exported import "../brdf/ggx";
 __exported import "../brdf/sampling";
 public struct DeRtSurface {public SurfaceData material;public float3 position;public bool valid;};
@@ -49,13 +50,19 @@ public float3 de_rt_environment(DeLightingView lv,DeClusterLists cl,float3 posit
     float4 local=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,lv.inputs.probe_sampler,cluster,position,direction,0);
     return lerp(de_ibl_radiance(lv.ibl,direction,0),local.rgb,saturate(local.a));
 }
-public float3 de_rt_hit_radiance<M:IMaterialSplitModel>(DeRtSurface hit,float3 eye,DeLightingView lv,DeClusterLists cl,uint cluster,bool local_lights=true) {
+public float3 de_rt_hit_radiance<M:IMaterialSplitModel>(DeRtSurface hit,float3 eye,DeLightingView lv,DeClusterLists cl,uint cluster,bool local_lights=true,uint previous_irradiance=0) {
     SurfaceData s=hit.material;if((s.features&DE_MATERIAL_FEATURE_UNLIT)!=0)return s.emissive;
     float3 reflection=reflect(-eye,s.normal);
     float4 base=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,lv.inputs.probe_sampler,cluster,hit.position,de_ibl_dominant_dir(s.normal,reflection,s.roughness),s.roughness);
     float4 coat=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,lv.inputs.probe_sampler,cluster,hit.position,de_ibl_coat_direction(s,eye),s.clearcoat_roughness);
     float4 sheen=de_probe_radiance(lv.inputs.probe_records,lv.inputs.probe_list,lv.inputs.probe_entry,lv.inputs.probe_sampler,cluster,hit.position,de_ibl_sheen_direction(s,eye),s.sheen_roughness);
     float3 diffuse,specular;de_ibl_evaluate(s,eye,lv.ibl,lv.brdf_lut,s.ao,diffuse,specular,base,coat,sheen);
+    if(previous_irradiance!=0) {
+        float4 previous=gi_irradiance(previous_irradiance,hit.position,s.normal,eye);
+        DeIbl unit=(DeIbl)0;unit.ambient=float4(1);float3 response,unused;
+        de_ibl_evaluate(s,eye,unit,lv.brdf_lut,s.ao,response,unused);
+        diffuse=diffuse*(1-saturate(previous.a))+response*previous.rgb*(1.0/3.141592653589793);
+    }
     return s.emissive+(local_lights?de_rt_local_direct<M>(s,hit.position,eye,lv,cl):float3(0))+diffuse+specular;
 }
 

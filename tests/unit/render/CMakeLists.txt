@@ -1076,3 +1076,20 @@ if(TARGET test_render_rt_reflections)
         endif()
     endif()
 endif()
+
+# DENG-49 live DDGI source.
+de_add_test(NAME render_rt_gi_probes SOURCES test_rt_gi_probes.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_gi_probes)
+    target_include_directories(test_render_rt_gi_probes PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_gi_probes_tmp")
+    target_compile_definitions(test_render_rt_gi_probes PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_gi_probes_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rt_gi_probes PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_gi_probes)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_gi_probes)
+        endif()
+    endif()
+endif()
