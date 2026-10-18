@@ -197,3 +197,5 @@ target_link_libraries(de_cook_cmd PRIVATE "$<TARGET_NAME_IF_EXISTS:de_render>")
 target_sources(de_cooker PRIVATE
     importers/material/mat_toml_import.h
     importers/material/mat_toml_import.c)
+
+target_sources(de_cooker PRIVATE importers/sprite_proxy.c)

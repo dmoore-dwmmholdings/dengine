@@ -17,7 +17,7 @@ public DeRtHit de_rt_query(DeRtContext q,DeRtRay r) {
     RayDesc ray;ray.Origin=r.origin.xyz;ray.Direction=r.direction.xyz;
     ray.TMin=r.origin.w;ray.TMax=r.direction.w;
     RayQuery<RAY_FLAG_NONE> query;
-    query.TraceRayInline(de_accel(q.tlas),(q.flags&DE_RT_ACCEPT_FIRST_HIT)!=0?RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH:RAY_FLAG_NONE,255,ray);
+    query.TraceRayInline(de_accel(q.tlas),(q.flags&DE_RT_ACCEPT_FIRST_HIT)!=0?RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH:RAY_FLAG_NONE,(q.flags&DE_RT_EXCLUDE_SPRITES)!=0?127:255,ray);
     while(query.Proceed()) {
         if(query.CandidateType()==CANDIDATE_NON_OPAQUE_TRIANGLE &&
            de_rt_opacity(q,query.CandidateInstanceID(),query.CandidatePrimitiveIndex(),

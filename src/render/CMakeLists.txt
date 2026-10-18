@@ -506,3 +506,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE skin/skinning.c)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/sprite_as.c)
+endif()

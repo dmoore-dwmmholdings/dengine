@@ -26,10 +26,11 @@ void cs_instances(uint3 id:SV_DispatchThreadID, uniform Params p) {
     uint need=DE_GPU_INSTANCE_LIVE|DE_GPU_INSTANCE_VISIBLE_IN_RT;
     bool valid=(inst.flags&need)==need && inst.mesh!=DE_GPU_NONE &&
         (v.layer_mask==0 || (inst.layer_mask&v.layer_mask)!=0);
-    uint handle=0,lod=0;
+    uint handle=0,lod=0,kind=0;
     if(valid) {
         DeGpuMesh mesh=de_robuffer<DeGpuMesh>(p.meshes)[inst.mesh];
         RtMesh rt=de_robuffer<RtMesh>(p.metadata)[inst.mesh];
+        kind=rt.blas[1];
         valid=(mesh.flags&DE_GPU_MESH_READY)!=0 && mesh.lod_count!=0;
         if(valid) {
             lod=select_lod(mesh,max_axis_scale(inst.transform),inst.sphere.xyz,inst.sphere.w,v);
@@ -40,12 +41,21 @@ void cs_instances(uint3 id:SV_DispatchThreadID, uniform Params p) {
     }
     de_rwbytes(p.lods).store(i*4,lod);
     DeRWBytes dst=de_rwbytes(p.output); uint at=i*60;
+    if((inst.flags&DE_GPU_INSTANCE_SPRITE)!=0) {
+        float thickness=max(0.0,asfloat(inst.reserved0));
+        if(thickness>0)for(uint row=0;row<3;++row)inst.transform[row].z*=thickness;
+        if(kind==2u)for(uint row=0;row<3;++row) {
+            if((inst.reserved1&1u)!=0) {inst.transform[row].w+=inst.transform[row].x;inst.transform[row].x=-inst.transform[row].x;}
+            if((inst.reserved1&2u)!=0) {inst.transform[row].w+=inst.transform[row].y;inst.transform[row].y=-inst.transform[row].y;}
+        }
+    }
     dst.store4(at,asuint(inst.transform[0]));
     dst.store4(at+16,asuint(inst.transform[1]));
     dst.store4(at+32,asuint(inst.transform[2]));
     // Hardware mask has eight bits; authored 32-bit layers remain in the GPU scene and are
     // tested again by shared candidate filtering (including cast_shadows for shadow effects).
     uint layers=(inst.layer_mask|(inst.layer_mask>>8)|(inst.layer_mask>>16)|(inst.layer_mask>>24))&255u;
+    layers=(inst.flags&DE_GPU_INSTANCE_SPRITE)!=0?128u:127u;
     dst.store(at+48,(i&0xffffffu)|((valid && handle!=0 ? layers:0u)<<24));
     dst.store(at+52,0); dst.store(at+56,handle);
 }

@@ -81,6 +81,7 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_INSTANCE_VISIBLE_IN_RT", DE__GS_INSTANCE_VISIBLE_IN_RT},
     {"DE_GPU_INSTANCE_HAS_BOUNDS", DE__GS_INSTANCE_HAS_BOUNDS},
     {"DE_GPU_INSTANCE_SKINNED", DE__GS_INSTANCE_SKINNED},
+    {"DE_GPU_INSTANCE_SPRITE", DE__GS_INSTANCE_SPRITE},
     {"DE_GPU_MESH_READY", DE__GS_MESH_READY},
     {"DE_GPU_MESH_MESHLETS", DE__GS_MESH_MESHLETS},
     {"DE_GPU_MATERIAL_MODEL_STANDARD", DE__GS_MATERIAL_MODEL_STANDARD},
@@ -473,6 +474,11 @@ static void pack_instance(const de__gpu_scene *gs, u32 s, de__gs_instance *o) {
         o->reserved1 = de_gpu_buffer_bindless(gs->dev, skin->output[skin->current ^ 1u]);
         o->reserved2 = skin->source->vertex_count;
     }
+    if (in->flags[s] & DE__RW_INST_SPRITE) {
+        flags |= DE__GS_INSTANCE_SPRITE;
+        memcpy(&o->reserved0, &in->sprite[s].thickness, sizeof(u32));
+        o->reserved1 = (in->sprite[s].flip_x ? 1u : 0u) | (in->sprite[s].flip_y ? 2u : 0u);
+    }
     o->flags = flags;
     o->layer_mask = in->layer_mask[s];
     o->mesh = gs->inst_mesh[s];
@@ -758,7 +764,7 @@ static void inst_resolve(de__gpu_scene *gs, u32 s) {
     gs->inst_mesh[s] = live && (sprite || DE_HANDLE_VALID(in->mesh[s]))
                            ? ref_acquire(gs, DE__GS_MESHES,
                                          skinned  ? ((u64)2 << 32) | s
-                                         : sprite ? (u64)1 << 32
+                                         : sprite ? ((u64)1 << 32) | s
                                                   : in->mesh[s].id)
                            : DE__GS_NONE;
     for (u32 k = 0; k < DE__GS_INSTANCE_MATERIALS; ++k) {
@@ -1979,4 +1985,23 @@ u64 de__gpu_scene_source_signature(const de__gpu_scene *gs) {
             h = source_hash(h, t->shadow, (size_t)t->count * t->stride);
     }
     return h;
+}
+
+const de__render_world_frame *de__gpu_scene_world(const de__gpu_scene *gs) {
+    return gs ? gs->frame : NULL;
+}
+const de_render_texture *de__gpu_scene_texture_record(const de__gpu_scene *gs, de_texture texture) {
+    if (!gs)
+        return NULL;
+    if (gs->assets.texture_record)
+        return gs->assets.texture_record(gs->assets.user, texture);
+    return gs->asset_system ? de_render_texture_get(gs->asset_system, texture) : NULL;
+}
+
+bool de__gpu_scene_sprite_slot(const de__gpu_scene *gs, u32 mesh_slot, u32 *out) {
+    if (!gs || !out || mesh_slot >= gs->tables[DE__GS_MESHES].count ||
+        (gs->mesh_handle[mesh_slot] >> 32) != 1u)
+        return false;
+    *out = (u32)gs->mesh_handle[mesh_slot];
+    return true;
 }

@@ -48,6 +48,7 @@
 #include "render/formats/de_cooked_material.h"
 #include "render/formats/de_cooked_mesh.h"
 #include "render/formats/de_cooked_texture.h"
+#include "render/formats/de_cooked_sprite_proxy.h"
 
 DE_EXTERN_C_BEGIN
 
@@ -197,6 +198,7 @@ typedef struct de_render_texture {
     u32 flags; /**< DE_COOKED_TEXTURE_SRGB, _CUBE, _PIXEL_ART, _HAS_ALPHA */
     u32 usage; /**< de_cooked_texture_usage */
     u64 gpu_bytes;
+    const de_cooked_sprite_proxy *sprite_proxy; /**< optional cooked silhouette extrusion */
     bool has_env;
     de_render_env env; /**< valid when has_env */
     struct de__upload *upload_;

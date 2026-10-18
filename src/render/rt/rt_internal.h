@@ -61,6 +61,7 @@ typedef struct de__rt_hit {
 } de__rt_hit;
 #define DE__RT_CAST_SHADOWS     1u
 #define DE__RT_ACCEPT_FIRST_HIT 2u
+#define DE__RT_EXCLUDE_SPRITES  4u
 /** Normal production batch path for45–50: buffers use sizeof(ray)/sizeof(hit) strides.
  * Caller declares graph read(context->dependency), ray SHADER_READ and hit SHADER_WRITE. */
 void de__rt_trace(de_renderer *, de_gpu_cmd *, const de__rt_context *, de_gpu_buffer rays,

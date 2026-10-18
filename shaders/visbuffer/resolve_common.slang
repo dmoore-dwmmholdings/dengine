@@ -153,6 +153,12 @@ public float3 de_resolve_world_pos(DeResolvePoint r)
 /// UV set `set` (0 or 1) at the point, and its one-pixel differences in x and y.
 public float2 de_resolve_uv(DeResolvePoint r, uint set, out float2 dx, out float2 dy)
 {
+    if((r.inst.flags&DE_GPU_INSTANCE_SPRITE)!=0) {
+        float3 a=r.object_pos[0],b=r.object_pos[1],c=r.object_pos[2];
+        float2 u=float2(a.x,1-a.y),v=float2(b.x,1-b.y),w=float2(c.x,1-c.y);
+        dx=de_resolve_lerp2(r.bary_dx,u,v,w);dy=de_resolve_lerp2(r.bary_dy,u,v,w);
+        return de_resolve_lerp2(r.bary,u,v,w);
+    }
     float2 t[3];
     for (uint k = 0; k < 3u; ++k)
         t[k] = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex[k]) : de_vis_mesh_uv1(r.mesh, r.vertex[k]);
