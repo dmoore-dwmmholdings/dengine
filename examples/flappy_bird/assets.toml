@@ -1,0 +1,4 @@
+[assets]
+"shaders/sky_hop" = { type = "shader", source = "shaders/sky_hop.slang" }
+[bundles.hello]
+assets = ["shaders/*"]
