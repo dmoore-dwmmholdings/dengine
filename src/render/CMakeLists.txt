@@ -498,3 +498,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE sprite/sprite.c sprite/sprite_extract.c)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE sprite/sprite_sort.c)
+endif()

@@ -1220,3 +1220,8 @@ if(TARGET test_render_pt_reference)
         endif()
     endif()
 endif()
+
+de_add_test(NAME sprite_sort SOURCES test_sprite_sort.c LIBS de_render de_core de_platform LABELS unit render)
+if(TARGET test_sprite_sort)
+    target_include_directories(test_sprite_sort PRIVATE "${DE_ROOT_DIR}/src")
+endif()
