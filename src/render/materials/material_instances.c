@@ -48,6 +48,7 @@ static const de__material_layout_const k_consts[] = {
     {"DE_GPU_MATERIAL_ALPHA_BLEND", DE_COOKED_ALPHA_BLEND},
     {"DE_GPU_MATERIAL_TEXTURES", DE__MATERIAL_TEXTURES},
     {"DE_GPU_MATERIAL_TEXTURE_UV1", DE__MATERIAL_TEXTURE_UV1},
+    {"DE_GPU_MATERIAL_TEXTURE_POINT", DE__MATERIAL_TEXTURE_POINT},
 };
 
 const de__material_layout_const *de__material_params_consts(u32 *count) {

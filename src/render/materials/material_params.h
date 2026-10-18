@@ -57,7 +57,8 @@ enum {
 /** Texture slots of a block (DE_GPU_MATERIAL_TEXTURES = DE_COOKED_TEX_COUNT). */
 #define DE__MATERIAL_TEXTURES 19u
 /** The bit of a texture word set when the slot samples UV1 (DE_GPU_MATERIAL_TEXTURE_UV1). */
-#define DE__MATERIAL_TEXTURE_UV1 0x80000000u
+#define DE__MATERIAL_TEXTURE_UV1   0x80000000u
+#define DE__MATERIAL_TEXTURE_POINT 0x40000000u
 /** The word of `textures` that holds the diffuse transmission colour (1 - colour, unorm 10:10:10).
  */
 #define DE__MATERIAL_DT_COLOR_WORD 19u
@@ -105,7 +106,7 @@ DE_STATIC_ASSERT(DE__MATERIAL_DT_COLOR_WORD < 20u &&
 
 /** The bindless index of texture slot `s` of `p` (0 = none). */
 static inline u32 de__material_params_texture(const de__material_params *p, u32 s) {
-    return p->textures[s / 4u].v[s % 4u] & ~DE__MATERIAL_TEXTURE_UV1;
+    return p->textures[s / 4u].v[s % 4u] & ~(DE__MATERIAL_TEXTURE_UV1 | DE__MATERIAL_TEXTURE_POINT);
 }
 /** The UV set (0 or 1) texture slot `s` of `p` samples. */
 static inline u32 de__material_params_texcoord(const de__material_params *p, u32 s) {

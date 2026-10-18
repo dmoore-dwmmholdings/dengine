@@ -106,3 +106,4 @@ de_engine_shader(pt_final_denoise pathtracer/pt_final_denoise.slang)
 
 de_engine_shader(skin skin/skin.slang)
 de_engine_shader(pixel_upscale pixel/pixel_upscale.slang)
+de_engine_shader(pixel_palette pixel/palette_dither.slang)

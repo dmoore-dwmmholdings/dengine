@@ -177,3 +177,32 @@ TEST_F(sprite_rt, atlas_region_opaque_proxy, sprite_rt_fixture) {
     ASSERT_TRUE(de__sprite_as_metadata(r->r, mesh, &metadata));
     ASSERT_EQ(metadata.blas[1], 2u);
 }
+
+TEST_F(sprite_rt, pixel_snap_tlas_matches_view_instances, sprite_rt_fixture) {
+    rt_fixture *r = &f->rt;
+    de_affine local = de__sprite_local_transform(&f->sprites[0], DE_PLANE_TOP_XY),
+              entity = at(3.37f, 0, 0);
+    r->w.f.instances.transform[0] = de_affine_mul(&entity, &local);
+    r->w.f.instances.prev_transform[0] = r->w.f.instances.transform[0];
+    de__rw_view camera = {
+        .camera = {.projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 16, .near_z = .1f},
+        .offset = {3, 0, 4},
+        .rotation = {0, 0, 0, 1},
+        .transform = at(3, 0, 4)};
+    de__view_capture_camera(r->r, r->view, &camera);
+    de__rt_ray *rays = de_gpu_buffer_map(r->d, r->rays);
+    rays[0] = (de__rt_ray){.origin = {3.1f, 0, 2, .001f}, .direction = {0, 0, -1, 20}};
+    rays[1] = (de__rt_ray){.origin = {4.1f, 0, 2, .001f}, .direction = {0, 0, -1, 20}};
+    de__rt_hit *hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t < 0 && hits[1].t > 0);
+    de_pixel_art_settings settings = {.internal_width = 16,
+                                      .internal_height = 16,
+                                      .integer_scale_only = true,
+                                      .snap_sprites = true};
+    de_view_set_pixel_art(r->r, r->view, &settings);
+    hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t > 0 && hits[1].t < 0);
+    de_view_set_pixel_art(r->r, r->view, NULL);
+    hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t < 0 && hits[1].t > 0);
+}

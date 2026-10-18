@@ -619,6 +619,10 @@ const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 
 /** Stable fingerprint of actual source records; excludes views/frame counters and previous
  * transforms. */
 u64 de__gpu_scene_source_signature(const de__gpu_scene *);
+/** Per-view pixel instance snapshot; NULL buffer restores the canonical frame table. */
+void de__gpu_scene_view_instances(de__gpu_scene *, de_gpu_buffer);
+void de__gpu_scene_pack_frame_instance(const de__gpu_scene *, const struct de__render_world_frame *,
+                                       u32, de__gs_instance *);
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_SCENE_GPU_SCENE_H */

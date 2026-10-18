@@ -443,6 +443,7 @@ void de__renderer_kick_prepare(de_renderer *r) {
     }
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
+    de__views_prepare_pixels(r);
     de__probes_prepare(r, de__render_world_last(r));
     de__rt_gi_prepare(r->rt_gi, de__render_world_last(r));
     de__irradiance_prepare(r, de__render_world_last(r));

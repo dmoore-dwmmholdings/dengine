@@ -274,6 +274,8 @@ struct de__forward *de__views_forward(const de_renderer *r);
 /** DENG-239: true when `v` is a live view of `r` (takes the views lock). Any thread. */
 bool de__view_valid(const de_renderer *r, de_view v);
 
+void de__views_prepare_pixels(de_renderer *r);
+
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_VIEWS_INTERNAL_H */

@@ -1249,3 +1249,10 @@ de_add_test(NAME render_pixel_art SOURCES test_pixel_art.c render_d3d12_test.c
 if(TARGET test_render_pixel_art)
     target_include_directories(test_render_pixel_art PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-199 OKLab LUT, Bayer thresholds and independent per-view sprite grids.
+de_add_test(NAME render_palette_dither SOURCES test_palette_dither.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_palette_dither)
+    target_include_directories(test_render_palette_dither PRIVATE "${DE_ROOT_DIR}/src")
+endif()
