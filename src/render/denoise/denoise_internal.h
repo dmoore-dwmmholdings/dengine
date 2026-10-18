@@ -34,6 +34,7 @@ typedef struct de_denoise_inputs {
     bool linear_depth;
     de_rg_resource validation_key; /**< Optional exact numeric low/high16 key words. */
     de_rg_resource position;       /**< Optional exact representative world-position guide. */
+    de_rg_resource temporal_alpha; /**< Optional per-pixel EMA minimum. */
 } de_denoise_inputs;
 typedef struct de_denoise_frame {
     de_rg *graph;
