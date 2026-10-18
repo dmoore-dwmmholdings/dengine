@@ -1496,5 +1496,31 @@ DE_API void de_character2d_destroy(de_physics2d_world *p, de_body character);
 DE_API de_result de_character2d_move(de_physics2d_world *p, de_body character, DeCharacter2D *io,
                                      f32 dt, de_transform2d *out);
 
+/** 2D joint kinds. Zero initialized descriptors create a revolute joint. */
+typedef enum de_joint2d_kind {
+    DE_JOINT2D_REVOLUTE, DE_JOINT2D_PRISMATIC, DE_JOINT2D_DISTANCE,
+    DE_JOINT2D_WELD, DE_JOINT2D_WHEEL, DE_JOINT2D_MOUSE
+} de_joint2d_kind;
+typedef struct de_joint2d_desc {
+    de_joint2d_kind kind;
+    de_body body_a, body_b; /**< Zero = world; at least one live body required. */
+    de_entity entity_a, entity_b; /**< Resolved by the ECS attachment when body is zero. */
+    de_vec2 local_anchor_a, local_anchor_b;
+    de_dpoint2d world_anchor_a, world_anchor_b;
+    de_vec2 axis; /**< Local to A; zero selects +X. */
+    f32 reference_angle;
+    bool enable_limit, enable_motor, collide_connected;
+    f32 lower, upper; /**< Angle, translation or distance range. */
+    f32 motor_speed, max_motor_force;
+    f32 hertz, damping_ratio; /**< Zero hertz = rigid; wheel/mouse default 5 Hz. */
+    f32 break_force; /**< Zero = unbreakable. */
+} de_joint2d_desc;
+/** Creates a stable generation checked joint; allocation only on first joint creation. */
+DE_API de_result de_joint2d_create(de_physics2d_world *p, const de_joint2d_desc *desc, de_joint *out);
+DE_API void de_joint2d_destroy(de_physics2d_world *p, de_joint joint);
+DE_API de_result de_joint2d_set_motor(de_physics2d_world *p, de_joint joint, f32 speed, f32 max_force);
+DE_API de_result de_joint2d_mouse_set_target(de_physics2d_world *p, de_joint joint, de_dpoint2d target);
+DE_API bool de_joint2d_is_broken(const de_physics2d_world *p, de_joint joint);
+
 DE_EXTERN_C_END
 #endif

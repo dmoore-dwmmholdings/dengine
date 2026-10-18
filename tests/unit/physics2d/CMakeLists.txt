@@ -92,3 +92,10 @@ if(TARGET test_physics2d_character)
     target_compile_definitions(test_physics2d_character PRIVATE
         "DE_PHYSICS2D_CHARACTER_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/vectors/platformer_character2d_golden.txt\"")
 endif()
+
+# DENG-256: six joint kinds, controls, stable handles and collision suppression.
+de_add_test(NAME physics2d_joints SOURCES test_joints2d.c LIBS de_physics TIMEOUT 120)
+if(TARGET test_physics2d_joints)
+    target_include_directories(test_physics2d_joints PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(test_physics2d_joints PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endif()

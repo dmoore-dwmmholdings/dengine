@@ -105,9 +105,11 @@ static inline bool de__p2d_types_collide(u8 type_a, u8 type_b) {
  * Both rules for live bodies a and b (a != b). DENG-256 adds its joint rule (collide_connected
  * false) here, as DENG-220 did in 3D.
  */
+bool de__joints2d_collide(const de_physics2d_world *p, u32 a, u32 b);
 static inline bool de__bp2d_should_collide(const de_physics2d_world *p, u32 a, u32 b) {
     return de__p2d_types_collide(p->bodies.type[a], p->bodies.type[b]) &&
-           de__p2d_filter_test(p->bodies.filter[a], p->bodies.filter[b]);
+           de__p2d_filter_test(p->bodies.filter[a], p->bodies.filter[b]) &&
+           de__joints2d_collide(p, a, b);
 }
 
 /* ---- Lifetime ------------------------------------------------------------------------- */
@@ -151,6 +153,8 @@ void de__bp2d_pairs(const de_physics2d_world *p, const de__bp2d_pair **pairs, u3
 /** Moves the proxies whose box left their fat box, without finding pairs (for callers that
  *  teleport bodies and query between steps). No-op before the broadphase exists. */
 void de__bp2d_sync(de_physics2d_world *p);
+/** Joint connectivity changed; query every proxy next update. */
+void de__bp2d_invalidate_pairs(de_physics2d_world *p);
 
 /** Counters; zeroes before the broadphase exists. */
 void de__bp2d_stats_get(const de_physics2d_world *p, de__bp2d_stats *out);

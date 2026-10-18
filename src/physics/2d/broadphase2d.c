@@ -650,3 +650,8 @@ f32 de__bp2d_raycast(const de_physics2d_world *p, const de__tree2d_ray *ray,
     }
     return r.max_fraction;
 }
+
+void de__bp2d_invalidate_pairs(de_physics2d_world *p) {
+    de__bp2d *bp=de__bp2d_get(p);
+    if(bp) bp->requery_all=true;
+}
