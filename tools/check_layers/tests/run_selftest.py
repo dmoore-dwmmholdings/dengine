@@ -23,6 +23,8 @@ FIXTURES = os.path.join(HERE, "fixtures")
 
 # name -> (expected exit status, substrings that must appear, substrings that must not appear)
 CASES = {
+    "restricted_lower": (0, [": OK"], ["error"]),
+    "restricted_upward": (2, ["allow edges are"], []),
     "ok": (0, ["21 module edges", ": OK"], ["error"]),
     "upward": (1, [
         "src/core/x.c:3: error: upward include: core (foundation) includes ecs (runtime) "

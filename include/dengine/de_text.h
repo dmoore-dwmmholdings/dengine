@@ -17,6 +17,16 @@ DE_API void de_text_destroy(de_text_system *t);
 DE_API void de_text_set_fallbacks(de_text_system *t, de_font primary, const de_font *fallbacks,
                                   u32 count);
 
+/** Call once per frame after asset updates and before submitting text worker jobs. */
+DE_API void de_text_update(de_text_system *t);
+typedef struct de_font_metrics {
+    f32 ascent, descent, line_gap;
+    u32 generation;
+} de_font_metrics;
+/** Pixel metrics at size_px. NOT_FOUND for stale or not-yet-ready fonts. */
+DE_API de_result de_text_font_metrics(de_text_system *t, de_font font, f32 size_px,
+                                      de_font_metrics *out);
+
 /* ---------- Shaping and layout ---------- */
 typedef enum de_text_align {
     DE_ALIGN_START,
