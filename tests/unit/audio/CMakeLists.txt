@@ -56,3 +56,19 @@ if(TARGET de_audio AND DE_BUILD_TOOLS)
             "DE_AUDIO_SOURCE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/source-tmp\"")
     endforeach()
 endif()
+
+# DENG-311: native HAL callbacks, output UID enumeration and control-thread recovery.
+if(TARGET de_audio AND APPLE)
+    de_add_test(NAME audio_coreaudio SOURCES test_backend_coreaudio.c LIBS de_audio TIMEOUT 20)
+    target_include_directories(test_audio_coreaudio PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_audio_coreaudio PRIVATE DE_AUDIO_HAS_COREAUDIO=1)
+endif()
+if(TARGET test_audio_coreaudio)
+    # Discovery happens after linking, so apply hardware serialization when CTest loads it.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake"
+        "if(TEST audio_coreaudio.default_device_one_second_440hz_full_mixer)\n"
+        "set_tests_properties(audio_coreaudio.default_device_one_second_440hz_full_mixer audio_coreaudio.uid_switch_and_listener_reopen_monotonic_within_500ms PROPERTIES RUN_SERIAL TRUE)\n"
+        "endif()\n")
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake")
+endif()

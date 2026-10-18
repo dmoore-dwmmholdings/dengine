@@ -63,3 +63,14 @@ if(TARGET de_audio)
     target_link_libraries(de_audio PRIVATE de_tp_stb de_tp_opus)
     set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS de_tp_stb de_tp_opus)
 endif()
+
+# DENG-311: native pure-C HAL output; platform frameworks stay private to the backend.
+if(TARGET de_audio AND APPLE)
+    target_sources(de_audio PRIVATE backend/coreaudio.c backend/coreaudio_devices.c
+        backend/coreaudio_internal.h)
+    target_compile_definitions(de_audio PRIVATE DE_AUDIO_HAS_COREAUDIO=1)
+    target_link_libraries(de_audio PRIVATE "-framework AudioToolbox" "-framework CoreAudio"
+        "-framework CoreFoundation")
+    set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS "-framework AudioToolbox"
+        "-framework CoreAudio" "-framework CoreFoundation")
+endif()
