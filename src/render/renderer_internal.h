@@ -154,6 +154,7 @@ struct de_renderer {
 
     /* DENG-176: the views and the per-view frame pipeline (views_internal.h). */
     struct de__views *views;
+    struct de__pt *pt; /* S17 progressive path tracing */
     struct de__probes *probes;
     struct de__ssr *ssr;
     struct de__irradiance *irradiance;

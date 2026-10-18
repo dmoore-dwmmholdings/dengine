@@ -38,4 +38,6 @@ typedef struct de__di_info {
     bool history;
 } de__di_info;
 bool de__restir_di_get(de__restir_di *, de_view, de__di_info *);
+de_result de__restir_di_sources(de__restir_di *, de__view_frame *, const de__rt_context *,
+                                de_gpu_buffer *, u32 *, de_rg_resource *);
 #endif

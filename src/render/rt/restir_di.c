@@ -122,6 +122,7 @@ struct de__restir_di {
     bool needs_alias;
     de__di_debug debug;
     di_view views[32];
+    di_view source_view; /* PT shares the exact source/alias kernels without DI reservoirs. */
 };
 static bool enabled(de__restir_di *s, const de_render_settings *settings) {
     if (!s || settings->tier != DE_TIER_RT || !s->r->caps.ray_query)
@@ -159,6 +160,7 @@ void de__restir_di_destroy(de__restir_di *s) {
         return;
     for (u32 i = 0; i < 32; ++i)
         release_view(s, &s->views[i]);
+    release_view(s, &s->source_view);
     for (u32 i = 0; i < K_COUNT; ++i)
         de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
     for (u32 i = 0; i < DI_RING; ++i)
@@ -329,7 +331,7 @@ de_result de__restir_di_prepare(de_renderer *r) {
     if (!s)
         return DE_OK;
     de_render_settings settings = de_renderer_get_settings(r);
-    if (!enabled(s, &settings)) {
+    if (settings.tier != DE_TIER_RT || !s->r->caps.ray_query) {
         for (u32 i = 0; i < 32; ++i)
             s->views[i].completed = false;
         return DE_OK;
@@ -455,6 +457,8 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
                         : x->kernel == K_SOURCES ? (s->count + 63) / 64
                                                  : (p.width + 7) / 8,
                         x->kernel <= K_ALIAS ? 1 : (p.height + 7) / 8, 1);
+    if (x->kernel == K_ALIAS)
+        s->needs_alias = false;
     if (x->trace) {
         barrier(cmd, v->rays, DE_ACCESS_SHADER_WRITE, DE_ACCESS_SHADER_READ);
         const u32 multiplier = x->kernel == K_SPATIAL_VIS ? 6 : 1;
@@ -736,4 +740,46 @@ bool de__restir_di_get(de__restir_di *s, de_view view, de__di_info *out) {
         return false;
     *out = s->views[slot].info;
     return true;
+}
+
+/* DENG-72: reuse the production analytic/emissive descriptors and GPU power alias builder.
+ * No G-buffer or reservoir is required. Graph ordering is shared across both consumers. */
+de_result de__restir_di_sources(de__restir_di *s, de__view_frame *vf, const de__rt_context *rt,
+                                de_gpu_buffer *buffer, u32 *count, de_rg_resource *dependency) {
+    *buffer = s->sources;
+    *count = s->count;
+    *dependency = (de_rg_resource){0};
+    if (!s->count)
+        return DE_OK;
+    de_rg *g = vf->graph;
+    *dependency = de_rg_import_buffer(g, s->sources, DE_ACCESS_SHADER_READ);
+    if (!s->needs_alias)
+        return DE_OK;
+    if (!s->source_view.params.id) {
+        s->source_view.params =
+            make_buffer(s, DI_RING * DI_STAGES * sizeof(di_params), sizeof(di_params),
+                        DE_MEM_UPLOAD, "PT shared source parameters");
+        if (!s->source_view.params.id)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "PT source parameters");
+    }
+    di_pass p = {
+        .s = s,
+        .view = &s->source_view,
+        .rt = *rt,
+        .resources = {.scene = de_rg_import_buffer(g, rt->scene, DE_ACCESS_SHADER_READ),
+                      .sources = *dependency,
+                      .work = de_rg_import_buffer(g, s->alias_work, DE_ACCESS_SHADER_READ),
+                      .descriptors = de_rg_import_buffer(
+                          g, s->descriptor_upload[s->descriptor_ring], DE_ACCESS_SHADER_READ)},
+        .params = {.scene = de_gpu_buffer_bindless(s->r->dev, rt->scene),
+                   .scene_slot = rt->scene_slot,
+                   .sources = de_gpu_buffer_bindless(s->r->dev, s->sources),
+                   .source_count = s->count,
+                   .descriptors =
+                       de_gpu_buffer_bindless(s->r->dev, s->descriptor_upload[s->descriptor_ring]),
+                   .alias_work = de_gpu_buffer_bindless(s->r->dev, s->alias_work)}};
+    u32 stage = 0;
+    DE_TRY(add_pass(&p, g, K_SOURCES, 0, false, &stage, "PT.SourcePower"));
+    DE_TRY(add_pass(&p, g, K_ALIAS, 0, false, &stage, "PT.SourceAlias"));
+    return DE_OK;
 }

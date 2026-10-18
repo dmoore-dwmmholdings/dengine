@@ -1,0 +1,46 @@
+// Native Vulkan/DXR pipeline entry points. Material estimators are shared with the Metal adapter.
+import push_constants;
+import pt_closest_hit;
+struct PtPush {uint params,entry;};
+struct PtPayload {DeRtHit hit;uint flags;};
+PtParams pt_parameters(PtPush pc) {return de_robuffer<PtParams>(pc.params)[pc.entry];}
+DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags) {
+    PtPayload payload=(PtPayload)0;payload.hit.t=-1;payload.hit.instance=0xffffffffu;payload.flags=flags;
+    if(!(r.direction.w>r.origin.w))return payload.hit;
+    RayDesc ray;ray.Origin=r.origin.xyz;ray.Direction=r.direction.xyz;ray.TMin=r.origin.w;ray.TMax=r.direction.w;
+    DeRtContext q=pt_query(p);TraceRay(de_accel(q.tlas),RAY_FLAG_NONE,255,0,1,0,ray,payload);return payload.hit;
+}
+[shader("raygeneration")]
+void pt_raygen(uniform PtPush pc) {
+    PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
+    DeRtRay ray=pt_camera(p,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
+    for(uint bounce=0;bounce<p.max_bounces;++bounce) {
+        DeRtHit hit=pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
+        radiance+=throughput*step.emitted;
+        bool visible=step.shadow.direction.w<=step.shadow.origin.w || !any(step.direct>0) || pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0;
+        if(visible)radiance+=throughput*step.direct;
+        if(step.stop!=0)break;
+        throughput*=step.weight;if(!all(isfinite(throughput))||!any(throughput>0))break;
+        if(bounce>=3){float survival=clamp(max(throughput.x,max(throughput.y,throughput.z)),.05,.95);
+            if(pt_random(pixel^p.seed,p.sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
+        previous=ray.origin.xyz+ray.direction.xyz*hit.t;ray=step.next;pdf=step.pdf;
+    }
+    radiance=select(isfinite(radiance),radiance,float3(0));
+    float4 old=p.sample>0?de_rwtex2d(p.accumulation)[id]:float4(0);
+    float4 sum=old+float4(radiance,1);de_rwtex2d(p.accumulation)[id]=sum;
+    de_rwtex2d(p.output)[id]=float4(sum.rgb/max(sum.a,1)*p.exposure,1);
+}
+[shader("miss")]
+void pt_miss(inout PtPayload payload) {payload.hit.t=-1;payload.hit.instance=0xffffffffu;}
+[shader("closesthit")]
+void pt_closest(inout PtPayload payload,BuiltInTriangleIntersectionAttributes attributes,uniform PtPush pc) {
+    PtParams p=pt_parameters(pc);DeRtContext q=pt_query(p);
+    payload.hit.t=RayTCurrent();payload.hit.instance=InstanceID();payload.hit.primitive=PrimitiveIndex();
+    payload.hit.u=attributes.barycentrics.x;payload.hit.v=attributes.barycentrics.y;
+    payload.hit.lod=de_bytes(q.lods).load(InstanceID()*4);
+}
+[shader("anyhit")]
+void pt_alpha(inout PtPayload payload,BuiltInTriangleIntersectionAttributes attributes,uniform PtPush pc) {
+    PtParams p=pt_parameters(pc);DeRtContext q=pt_query(p);q.flags=payload.flags;
+    if(!de_rt_opacity(q,InstanceID(),PrimitiveIndex(),attributes.barycentrics))IgnoreHit();
+}

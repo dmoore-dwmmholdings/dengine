@@ -1,0 +1,5 @@
+file(READ "${SOURCE}" hex HEX)
+string(LENGTH "${hex}" n)
+math(EXPR n "${n} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
+file(WRITE "${OUT}" "/* Generated native PT callable library. */\nconst unsigned char de__pt_metal_library[] = {${bytes}};\nconst unsigned long long de__pt_metal_library_bytes = ${n};\n")

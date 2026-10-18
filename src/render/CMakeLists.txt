@@ -445,3 +445,24 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE rt/rt_refraction.c rt/rt_refraction.h)
 endif()
+
+# DENG-72: progressive path tracer, explicit R2 native Metal traversal + shared Slang math.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt.c pathtracer/pt_internal.h)
+endif()
+if(TARGET de_render AND APPLE AND DE_GPU_METAL)
+    set(_de_pt_library "${CMAKE_CURRENT_BINARY_DIR}/pt.metallib")
+    set(_de_pt_embed "${CMAKE_CURRENT_BINARY_DIR}/pt_metal.c")
+    add_custom_command(OUTPUT "${_de_pt_library}"
+        COMMAND xcrun metal -std=metal3.1
+            "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/pt-metal-cache"
+            "${DE_ROOT_DIR}/shaders/pathtracer/pt_raygen.metal" -o "${_de_pt_library}"
+        DEPENDS "${DE_ROOT_DIR}/shaders/pathtracer/pt_raygen.metal"
+            "${DE_ROOT_DIR}/shaders/pathtracer/pt_metal.generated"
+            "${DE_ROOT_DIR}/shaders/common/rt_pipeline_metal.h" VERBATIM)
+    add_custom_command(OUTPUT "${_de_pt_embed}"
+        COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${_de_pt_library}" "-DOUT=${_de_pt_embed}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/embed_metal.cmake"
+        DEPENDS "${_de_pt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/embed_metal.cmake" VERBATIM)
+    target_sources(de_render PRIVATE "${_de_pt_embed}")
+endif()

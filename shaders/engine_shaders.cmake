@@ -82,3 +82,9 @@ de_engine_shader(ddgi_update rt/ddgi_update.slang)
 de_engine_shader(ddgi_relocate rt/ddgi_relocate.slang)
 
 de_engine_shader(rt_refraction rt/rt_refraction.slang)
+
+# Native RT stages use DXIL/SPIR-V. Metal uses its explicit R2 callable-table wrapper.
+if(NOT APPLE)
+    de_engine_shader(pt_pipeline pathtracer/pt_raygen.slang)
+endif()
+de_engine_shader(pt_environment pathtracer/pt_env.slang)

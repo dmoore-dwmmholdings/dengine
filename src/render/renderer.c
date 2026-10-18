@@ -1,3 +1,4 @@
+#include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_shadows.h"
 #include "render/shadows/shadows_internal.h"
@@ -66,6 +67,7 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__pt_destroy(r->pt);
     de__restir_di_destroy(r->restir_di);
     de__rt_shadows_destroy(r->rt_shadows);
     de__contact_destroy(r->contact);
@@ -355,6 +357,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: GPU scene");
         goto fail;
     }
+    res = de__pt_create(r, &r->pt);
+    if (res != DE_OK)
+        goto fail;
     DE_INFO(r->log, "renderer: %s (%s), tier %s, %u frames in flight%s", r->caps.device_name,
             de_gpu_backend_name(r->caps.backend), r->settings.tier == DE_TIER_RT ? "rt" : "base",
             r->frames_in_flight, DE_HANDLE_VALID(r->swapchain) ? "" : ", offscreen");

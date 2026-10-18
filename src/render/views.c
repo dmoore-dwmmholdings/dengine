@@ -1,3 +1,4 @@
+#include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_gi_probes.h"
 #include "render/shadows/shadows_internal.h"
@@ -814,15 +815,26 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.color = vf.output;
     vf.color_format = DE__VIEW_OUTPUT_FORMAT;
 
+    /* PT retains only canonical GPU scene/TLAS declarations; unused visibility work is culled. */
+    const bool path = de__pt_enabled(r, vf.settings) && !vf.probe_capture;
     /* The stages and hooks, in slot, order, phase and registration order. */
     vs->building = &vf;
     for (u32 i = 0; i < vs->list_count; ++i) {
         const seq_entry *e = &vs->list[i];
+        if (path && e->slot < DE__VIEW_SLOT_POST &&
+            (e->hook ||
+             (strcmp(e->name, "gpu_scene.view") != 0 && strcmp(e->name, "vis.frame") != 0 &&
+              strcmp(e->name, "RT.BuildTLAS") != 0)))
+            continue;
+        if (path && e->slot >= DE__VIEW_SLOT_POST && vf.color.id == vf.output.id)
+            de__pt_build(&vf, r->pt);
         if (e->hook)
             e->hook_fn(g, handle, e->user);
         else
             e->stage(&vf, e->user);
     }
+    if (path && vf.color.id == vf.output.id)
+        de__pt_build(&vf, r->pt);
     vs->building = NULL;
 
     if (vf.color.id != vf.output.id && DE_HANDLE_VALID(vf.color)) {
@@ -866,6 +878,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
             s->target_access = after;
         s->ok = res == DE_OK;
     }
+    de__pt_complete(r->pt, vf.view, frame_index, res == DE_OK);
     de__csm_complete(r->csm, vf.view, g, shadow_attempted, res == DE_OK);
     de__shadow_atlas_complete(r->shadow_atlas, vf.view, g, shadow_attempted, res == DE_OK);
     de__ssr_view_complete(r->ssr, vf.view, frame_index, res == DE_OK);
