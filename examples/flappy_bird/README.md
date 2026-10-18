@@ -13,7 +13,11 @@ examples/flappy_bird/run.sh
 ```
 
 The launcher finds the executable relative to itself; the asset root is compiled into the target,
-so it works from any current directory. Dev's existing source shader cooker is required. No new
+so it works from any current directory. On macOS, the normal launcher opens the native
+`build/dev/examples/flappy_bird/sky_hop.app` bundle through Launch Services (display name
+**Sky Hop**, bundle ID `com.dengine.skyhop`). You can also open that app directly in Finder.
+Command-line flags run its executable directly so smoke/check output and exit codes remain
+available. Other platforms retain the plain executable. Dev's existing source shader cooker is required. No new
 assets or dependencies are downloaded.
 
 - **Space / left click:** start, flap, or restart after a crash.
