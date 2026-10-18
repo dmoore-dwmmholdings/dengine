@@ -1242,3 +1242,10 @@ if(DE_BUILD_TOOLS)
         endif()
     endif()
 endif()
+
+# DENG-198 pixel layout, snapping, graph resolution and native upscale readback.
+de_add_test(NAME render_pixel_art SOURCES test_pixel_art.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pixel_art)
+    target_include_directories(test_render_pixel_art PRIVATE "${DE_ROOT_DIR}/src")
+endif()

@@ -510,3 +510,6 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE rt/sprite_as.c)
 endif()
+
+# DENG-198 pixel-art view upscale and camera grid math.
+target_sources(de_render PRIVATE pixel/pixel_art.c)
