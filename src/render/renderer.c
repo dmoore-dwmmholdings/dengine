@@ -4,6 +4,7 @@
 #include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
 #include "render/rt/rtao.h"
+#include "render/rt/rt_gi_probes.h"
 #include "render/rt/rt_reflections.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
@@ -73,6 +74,7 @@ static void renderer_free(de_renderer *r) {
     de__rtao_destroy(r->rtao);
     de__gtao_destroy(r->gtao);
     de__ssgi_destroy(r->ssgi);
+    de__rt_gi_destroy(r->rt_gi);
     de__irradiance_destroy(r->irradiance);
     de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
@@ -259,6 +261,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res != DE_OK)
         goto fail;
 
+    res = de__rt_gi_create(r, &r->rt_gi);
+    if (res != DE_OK)
+        goto fail;
     res = de__ssgi_create(r, &r->ssgi);
     if (res != DE_OK)
         goto fail;
@@ -420,6 +425,7 @@ void de__renderer_kick_prepare(de_renderer *r) {
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
     de__probes_prepare(r, de__render_world_last(r));
+    de__rt_gi_prepare(r->rt_gi, de__render_world_last(r));
     de__irradiance_prepare(r, de__render_world_last(r));
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
     r->material_instances_live = de__material_instances_live(r->material_instances); /* DENG-302 */

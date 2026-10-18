@@ -162,6 +162,7 @@ struct de_renderer {
     struct de__shadow_atlas *shadow_atlas;
     struct de__gtao *gtao;
     struct de__rtao *rtao;
+    struct de__rt_gi *rt_gi;
     struct de__rt_reflections *rt_reflections;
     struct de__contact *contact;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under

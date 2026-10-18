@@ -243,7 +243,24 @@ struct de__irradiance {
     u64 resource_drains;
     bool command_owner;
     de_dvec3 origin;
+    de__gi_update_source_fn update_source;
+    bool (*source_owns_frame)(void *, const de__render_world_frame *);
+    void *source_user;
 };
+void de__irradiance_set_update_source(struct de__irradiance *s, de__gi_update_source_fn update,
+                                      bool (*owns_frame)(void *, const de__render_world_frame *),
+                                      void *user) {
+    if (!s)
+        return;
+    s->update_source = update;
+    s->source_owns_frame = owns_frame;
+    s->source_user = user;
+}
+de_result de__irradiance_update_source(de_renderer *r, de_rg *g, de__vis_context *vc,
+                                       de__lighting_context *lc, de__lighting_inputs *inputs) {
+    struct de__irradiance *s = r->irradiance;
+    return s && s->update_source ? s->update_source(s->source_user, g, vc, lc, inputs) : DE_OK;
+}
 static de_result gi_bake_command(int argc, const char *const *argv, void *user);
 static void gi_stage(de__view_frame *vf, void *user);
 static void gi_barrier(de_gpu_cmd *cmd, de_gpu_texture texture, u32 before, u32 after);
@@ -759,6 +776,12 @@ void de__irradiance_prepare(de_renderer *r, const de__render_world_frame *world)
         }
         if (!rec->ready && s->active == DE__PROBE_NONE)
             s->active = s->order[n];
+    }
+    /* Keep static/baked ownership intact, but do not schedule six capture views when every
+     * gameplay view uses the live RT source. A Base/off view keeps ordinary capture behavior. */
+    if (s->source_owns_frame && s->source_owns_frame(s->source_user, world)) {
+        s->active = DE__PROBE_NONE;
+        return;
     }
     if (s->active == DE__PROBE_NONE)
         return;
