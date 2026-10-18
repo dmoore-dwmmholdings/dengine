@@ -1109,3 +1109,20 @@ if(TARGET test_render_rt_refraction)
         endif()
     endif()
 endif()
+
+# Original S16 combined production scene and all-active allocation exit proof.
+de_add_test(NAME render_s16_rt_integration SOURCES test_s16_rt_integration.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_s16_rt_integration)
+    target_include_directories(test_render_s16_rt_integration PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/s16_integration_tmp")
+    target_compile_definitions(test_render_s16_rt_integration PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/s16_integration_tmp\"")
+    if(WIN32)
+        target_link_libraries(test_render_s16_rt_integration PRIVATE version)
+        de_d3d12_agility_deploy(test_render_s16_rt_integration)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_s16_rt_integration)
+        endif()
+    endif()
+endif()
