@@ -383,7 +383,9 @@ class Table:
                 raise TableError(f"{where}: `from` matches no declared module")
             if te is None:
                 raise TableError(f"{where}: `to` matches no declared module")
-            if fe.band != te.band:
+            restricted_lower = (te.explicit_only and
+                                self.band_rank[te.band] < self.band_rank[fe.band])
+            if fe.band != te.band and not restricted_lower:
                 raise TableError(f"{where}: allow edges are for modules in the same band "
                                  f"({fe.band} vs {te.band}); lower bands are always allowed "
                                  "and higher bands never are")

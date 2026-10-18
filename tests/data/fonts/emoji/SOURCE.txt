@@ -1,0 +1,3 @@
+Google Fonts 47d54ca1ebb14fd864695f1d39dc734f39017c33 ofl/notoemoji/NotoEmoji[wght].ttf
+Subset with fontTools for runtime tests; OFL-1.1.
+Original sha256 de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551

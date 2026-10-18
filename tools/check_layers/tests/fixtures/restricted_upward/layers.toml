@@ -1,0 +1,15 @@
+bands=["low","high"]
+include_roots=["src"]
+[[module]]
+name="client"
+band="low"
+paths=["src/client"]
+[[module]]
+name="restricted"
+band="high"
+paths=["src/restricted"]
+explicit_only=true
+[[allow]]
+from="client"
+to="restricted"
+why="explicit lower restricted dependency"

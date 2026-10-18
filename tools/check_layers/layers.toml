@@ -352,3 +352,8 @@ why = "physics, audio and anim never include each other (DENG-2); put the code i
 # entries exempt one file each, with the reason. Remove an entry when its file no longer needs
 # engine internals (the check fails on an entry whose file is gone). None today: DENG-409 gave
 # hello_triangle's shader_glue.c a public API (de_shader.h) and removed it.
+
+[[allow]]
+from = "text"
+to = "cook"
+why = "Dev-only font registration takes the built-in font importer; Shipping retains only the DFNT loader (DENG-257)."
