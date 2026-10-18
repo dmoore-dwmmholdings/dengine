@@ -1168,3 +1168,20 @@ de_add_test(NAME render_denoise_framework SOURCES test_denoise_framework.c
 if(TARGET test_render_denoise_framework)
     target_include_directories(test_render_denoise_framework PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# S17 production shadow/AO policies and actual fixed-spp references.
+de_add_test(NAME render_denoise_shadow_ao SOURCES test_denoise_shadow_ao.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 180)
+if(TARGET test_render_denoise_shadow_ao)
+    target_include_directories(test_render_denoise_shadow_ao PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/denoise_shadow_ao_tmp")
+    target_compile_definitions(test_render_denoise_shadow_ao PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/denoise_shadow_ao_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_denoise_shadow_ao PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_denoise_shadow_ao PRIVATE version)
+        de_d3d12_agility_deploy(test_render_denoise_shadow_ao)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_denoise_shadow_ao)
+        endif()
+    endif()
+endif()

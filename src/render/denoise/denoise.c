@@ -16,15 +16,18 @@ typedef struct dn_params {
         roughness_threshold, unused;
     f32 inverse[4][4], previous_inverse[4][4];
     f32 camera[4], origin_delta[4];
+    u32 key, previous_key, out_key, zero_radius_passthrough;
+    u32 position, previous_position, out_position, tail_reserved;
 } dn_params;
-DE_STATIC_ASSERT(sizeof(dn_params) == 312, "DenoiseParams structured-buffer layout");
+DE_STATIC_ASSERT(sizeof(dn_params) == 344, "DenoiseParams structured-buffer layout");
 struct de_denoise_ctx {
     struct de_denoise_ctx *next;
     de__denoise *owner;
     de_view view;
     de_denoise_signal_desc desc;
     de_denoise_frame frame;
-    de_gpu_texture history[2], moments[2], length[2], depth[2], normal[2], material[2];
+    de_gpu_texture history[2], moments[2], length[2], depth[2], normal[2], material[2], key[2],
+        position[2];
     de_gpu_buffer params;
     u32 width, height, ping, passes;
     u64 last_frame, reset_version;
@@ -51,6 +54,7 @@ typedef struct dn_pass {
         previous_material;
     de_rg_resource output, moments, length, validity, variance, out_depth, out_normal, out_material;
     de_rg_resource scene, visible;
+    de_rg_resource key, previous_key, out_key, position, previous_position, out_position;
 } dn_pass;
 static void release(de_denoise_ctx *c) {
     de_gpu_device *d = c->owner->r->dev;
@@ -61,6 +65,8 @@ static void release(de_denoise_ctx *c) {
         de_gpu_texture_destroy(d, c->depth[i]);
         de_gpu_texture_destroy(d, c->normal[i]);
         de_gpu_texture_destroy(d, c->material[i]);
+        de_gpu_texture_destroy(d, c->key[i]);
+        de_gpu_texture_destroy(d, c->position[i]);
     }
     de_gpu_buffer_destroy(d, c->params);
 }
@@ -150,6 +156,8 @@ static de_result allocate(de_denoise_ctx *c, u32 w, u32 h) {
     memset(c->depth, 0, sizeof c->depth);
     memset(c->normal, 0, sizeof c->normal);
     memset(c->material, 0, sizeof c->material);
+    memset(c->key, 0, sizeof c->key);
+    memset(c->position, 0, sizeof c->position);
     c->params = (de_gpu_buffer){0};
     c->valid = false;
     c->width = w;
@@ -162,8 +170,11 @@ static de_result allocate(de_denoise_ctx *c, u32 w, u32 h) {
         c->normal[i] = texture(c->owner, w, h, DE_FMT_RGBA32_FLOAT, "Denoise previous encoded GB1");
         c->material[i] =
             texture(c->owner, w, h, DE_FMT_RG32_FLOAT, "Denoise previous material identity");
-        if (!c->history[i].id || !c->moments[i].id || !c->length[i].id || !c->depth[i].id ||
-            !c->normal[i].id || !c->material[i].id)
+        c->key[i] = texture(c->owner, w, h, DE_FMT_RG32_FLOAT, "Denoise previous validation key");
+        c->position[i] = texture(c->owner, w, h, DE_FMT_RGBA32_FLOAT,
+                                 "Denoise previous representative position");
+        if (!c->key[i].id || !c->position[i].id || !c->history[i].id || !c->moments[i].id ||
+            !c->length[i].id || !c->depth[i].id || !c->normal[i].id || !c->material[i].id)
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "denoiser histories");
     }
     c->params = de_gpu_buffer_create(
@@ -254,6 +265,10 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     READ(previous_depth);
     READ(previous_normal);
     READ(previous_material);
+    READ(key);
+    READ(previous_key);
+    READ(position);
+    READ(previous_position);
     WRITE(output);
     WRITE(moments);
     WRITE(length);
@@ -262,6 +277,8 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     WRITE(out_depth);
     WRITE(out_normal);
     WRITE(out_material);
+    WRITE(out_key);
+    WRITE(out_position);
     if (x->pipeline.id == x->owner->variance.id) {
         p.moments = tex(x, pass, x->moments, false);
         p.length = tex(x, pass, x->length, false);
@@ -303,6 +320,18 @@ static void declarations(de_rg_pass *pass, dn_pass *x) {
             else
                 de_rg_write(pass, writes[i], DE_ACCESS_SHADER_WRITE);
         }
+    if (x->key.id)
+        de_rg_read(pass, x->key, DE_ACCESS_SHADER_READ);
+    if (x->previous_key.id)
+        de_rg_read(pass, x->previous_key, DE_ACCESS_SHADER_READ);
+    if (x->position.id)
+        de_rg_read(pass, x->position, DE_ACCESS_SHADER_READ);
+    if (x->previous_position.id)
+        de_rg_read(pass, x->previous_position, DE_ACCESS_SHADER_READ);
+    if (x->out_key.id)
+        de_rg_write(pass, x->out_key, DE_ACCESS_SHADER_WRITE);
+    if (x->out_position.id)
+        de_rg_write(pass, x->out_position, DE_ACCESS_SHADER_WRITE);
     de_rg_pass_side_effect(pass);
 }
 static de_rg_resource transient(de_denoise_ctx *c, de_gpu_format format, const char *name) {
@@ -342,6 +371,9 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.clamp_mode = c->desc.clamp;
     x->pc.reset = c->reset;
     x->pc.linear_depth = c->frame.inputs.linear_depth;
+    x->pc.zero_radius_passthrough = c->desc.zero_radius_passthrough;
+    x->key = c->frame.inputs.validation_key;
+    x->position = c->frame.inputs.position;
     for (u32 r = 0; r < 4; ++r)
         for (u32 col = 0; col < 4; ++col) {
             x->pc.inverse[r][col] = c->frame.inputs.inverse_view_proj.m[col * 4 + r];
@@ -386,6 +418,10 @@ de_denoise_result denoise_add_reproject(de_denoise_ctx *c) {
     x->previous_depth = imported(c, c->depth[c->ping]);
     x->previous_normal = imported(c, c->normal[c->ping]);
     x->previous_material = imported(c, c->material[c->ping]);
+    if (c->frame.inputs.validation_key.id)
+        x->previous_key = imported(c, c->key[c->ping]);
+    if (c->frame.inputs.position.id)
+        x->previous_position = imported(c, c->position[c->ping]);
     x->output = r.color;
     x->moments = r.moments;
     x->length = r.history_length;
@@ -416,6 +452,10 @@ de_denoise_result denoise_add_temporal(de_denoise_ctx *c, de_denoise_result prev
     x->out_depth = imported(c, c->depth[next]);
     x->out_normal = imported(c, c->normal[next]);
     x->out_material = imported(c, c->material[next]);
+    if (c->frame.inputs.validation_key.id)
+        x->out_key = imported(c, c->key[next]);
+    if (c->frame.inputs.position.id)
+        x->out_position = imported(c, c->position[next]);
     finish(c, x);
     x = add(c, c->owner->variance, "Denoise.Variance");
     if (!x)
@@ -434,6 +474,10 @@ de_denoise_result denoise_add_temporal(de_denoise_ctx *c, de_denoise_result prev
         de_rg_read(ready, imported(c, c->depth[next]), DE_ACCESS_SHADER_READ);
         de_rg_read(ready, imported(c, c->normal[next]), DE_ACCESS_SHADER_READ);
         de_rg_read(ready, imported(c, c->material[next]), DE_ACCESS_SHADER_READ);
+        if (c->frame.inputs.validation_key.id)
+            de_rg_read(ready, imported(c, c->key[next]), DE_ACCESS_SHADER_READ);
+        if (c->frame.inputs.position.id)
+            de_rg_read(ready, imported(c, c->position[next]), DE_ACCESS_SHADER_READ);
         de_rg_pass_side_effect(ready);
     } else
         c->frame.graph->oom = true;

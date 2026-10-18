@@ -1,3 +1,4 @@
+#include "render/denoise/denoise_policy.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_reflections.h"
 #include "render/probes/irradiance_internal.h"
@@ -51,13 +52,15 @@ de__rt_ray de__rt_shadow_ray(const de__cluster_light *l, de_vec3 p, de_vec3 norm
 typedef struct shadow_view {
     de_view handle;
     de_gpu_buffer rays, hits, keys;
-    de_gpu_texture raw, distance, temp, visibility;
+    de_gpu_texture raw, distance, visibility;
     u32 width, height, slots, capacity;
     de__rt_shadows_info info;
 } shadow_view;
 struct de__rt_shadows {
     de_renderer *renderer;
-    de_gpu_pipeline generate, resolve, blur;
+    de_gpu_pipeline generate, resolve;
+    de__signal_denoiser *denoiser;
+    de_cvar reference;
     de_cvar max_lights;
     shadow_view views[32];
 };
@@ -86,7 +89,6 @@ static void release(de__rt_shadows *s, shadow_view *v) {
     de_gpu_buffer_destroy(d, v->keys);
     de_gpu_texture_destroy(d, v->raw);
     de_gpu_texture_destroy(d, v->distance);
-    de_gpu_texture_destroy(d, v->temp);
     de_gpu_texture_destroy(d, v->visibility);
     memset(v, 0, sizeof *v);
 }
@@ -97,7 +99,7 @@ void de__rt_shadows_destroy(de__rt_shadows *s) {
         release(s, &s->views[i]);
     de_gpu_pipeline_destroy(s->renderer->dev, s->generate);
     de_gpu_pipeline_destroy(s->renderer->dev, s->resolve);
-    de_gpu_pipeline_destroy(s->renderer->dev, s->blur);
+    de__signal_denoiser_destroy(s->denoiser);
     DE_FREE(s->renderer->alloc, s, sizeof *s);
 }
 de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
@@ -107,6 +109,12 @@ de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT shadows owner");
     memset(s, 0, sizeof *s);
     s->renderer = r;
+    DE_TRY(de__signal_denoiser_create(r, &s->denoiser));
+    s->reference = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reference_spp",
+                                                    .type = DE_CVAR_INT,
+                                                    .flags = DE_CVAR_DEV_ONLY,
+                                                    .min = 0,
+                                                    .max = 256});
     s->max_lights = de_cvar_register(&(de_cvar_desc){
         .name = "r.rt.shadows.max_lights",
         .help =
@@ -116,17 +124,17 @@ de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
         .min = 1,
         .max = 4});
     if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *names[] = {"cs_generate", "cs_resolve", "cs_blur"};
+        const char *names[] = {"cs_generate", "cs_resolve"};
         de__engine_shader_code code;
         char why[512] = {0};
-        de_result result = de__engine_shader_load(r->dev, r->alloc, "rt_shadows", 0, names, 3,
+        de_result result = de__engine_shader_load(r->dev, r->alloc, "rt_shadows", 0, names, 2,
                                                   &code, why, sizeof why);
         if (result != DE_OK) {
             de__rt_shadows_destroy(s);
             return DE_FAIL(result, "RT shadow shaders: %s", why);
         }
-        de_gpu_pipeline *p[] = {&s->generate, &s->resolve, &s->blur};
-        for (u32 i = 0; i < 3; ++i)
+        de_gpu_pipeline *p[] = {&s->generate, &s->resolve};
+        for (u32 i = 0; i < 2; ++i)
             *p[i] = de_gpu_pipeline_create(
                 r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
                                                 .cs = code.entries[i].blob,
@@ -134,7 +142,7 @@ de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
                                                 .threadgroup_size = {8, 8, 1},
                                                 .name = names[i]});
         de__engine_shader_code_free(&code);
-        if (!s->generate.id || !s->resolve.id || !s->blur.id) {
+        if (!s->generate.id || !s->resolve.id) {
             de__rt_shadows_destroy(s);
             return DE_FAIL(DE_ERR_UNSUPPORTED, "RT shadow pipelines");
         }
@@ -160,7 +168,6 @@ static bool reserve(de__rt_shadows *s, shadow_view *v, u32 width, u32 height, u3
                                     .name = "RT shadow visibility"};
         v->raw = de_gpu_texture_create(d, &desc);
         v->distance = de_gpu_texture_create(d, &desc);
-        v->temp = de_gpu_texture_create(d, &desc);
         v->visibility = de_gpu_texture_create(d, &desc);
         v->keys = de_gpu_buffer_create(
             d, &(de_gpu_buffer_desc){.size = (u64)width * height * slots * 4,
@@ -180,7 +187,7 @@ static bool reserve(de__rt_shadows *s, shadow_view *v, u32 width, u32 height, u3
                                                                 .name = "RT shadow hits"});
         v->capacity = (u32)count;
     }
-    return v->rays.id && v->hits.id && v->keys.id && v->raw.id && v->distance.id && v->temp.id &&
+    return v->rays.id && v->hits.id && v->keys.id && v->raw.id && v->distance.id &&
            v->visibility.id;
 }
 static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
@@ -215,13 +222,6 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de_gpu_cmd_set_pipeline(cmd, p->s->resolve);
         de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, (pc.width + 7) / 8, (pc.height + 7) / 8, 1);
-    } else {
-        pc.source = de_gpu_texture_bindless(d, p->kind == 1 ? v->raw : v->temp, 0, false);
-        pc.output = de_gpu_texture_bindless(d, p->kind == 1 ? v->temp : v->visibility, 0, true);
-        pc.axis = p->kind - 1;
-        de_gpu_cmd_set_pipeline(cmd, p->s->blur);
-        de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
-        de_gpu_cmd_dispatch(cmd, (pc.width + 7) / 8, (pc.height * pc.slots + 7) / 8, 1);
     }
 }
 de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__lighting_context *lc,
@@ -244,7 +244,10 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
         return DE_OK;
     shadow_view *v = &s->views[slot];
     const u32 scale = settings->shadows == DE_QUALITY_LOW ? 2 : 1,
-              spp = settings->shadows == DE_QUALITY_ULTRA ? 2 : 1;
+              spp = s->reference.id && de_cvar_int(s->reference) > 0
+                        ? (u32)de_cvar_int(s->reference)
+                    : settings->shadows == DE_QUALITY_ULTRA ? 2
+                                                            : 1;
     const u32 width = (vc->width + scale - 1) / scale, height = (vc->height + scale - 1) / scale;
     u32 slots = (u32)de_cvar_int(s->max_lights);
     if (slots < 1)
@@ -259,8 +262,7 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
     de_rg_resource keys = de_rg_import_buffer(g, v->keys, DE_ACCESS_SHADER_READ);
     de_rg_resource raw = de_rg_import_texture(g, v->raw, DE_ACCESS_SHADER_READ),
                    distance = de_rg_import_texture(g, v->distance, DE_ACCESS_SHADER_READ);
-    de_rg_resource temp = de_rg_import_texture(g, v->temp, DE_ACCESS_SHADER_READ),
-                   visibility = de_rg_import_texture(g, v->visibility, DE_ACCESS_SHADER_READ);
+    de_rg_resource visibility = de_rg_import_texture(g, v->visibility, DE_ACCESS_SHADER_READ);
     shadow_pass base = {.s = s,
                         .view = v,
                         .context = *rt,
@@ -298,25 +300,13 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
         de_rg_write(pass, raw, DE_ACCESS_SHADER_WRITE);
         de_rg_write(pass, distance, DE_ACCESS_SHADER_WRITE);
     }
-    for (u32 i = 1; i <= 2; ++i) {
-        shadow_pass *p = de_arena_push_zero(g->arena, sizeof *p, 16);
-        if (!p)
-            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT shadow blur");
-        *p = base;
-        p->kind = i;
-        de_rg_pass *pass = de_rg_add_pass(g, i == 1 ? "RT.Shadows.BlurX" : "RT.Shadows.BlurY",
-                                          DE_QUEUE_GRAPHICS, execute, p);
-        if (!pass)
-            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT shadow blur graph");
-        de_rg_read(pass, keys, DE_ACCESS_SHADER_READ);
-        de_rg_read(pass, i == 1 ? raw : temp, DE_ACCESS_SHADER_READ);
-        de_rg_write(pass, i == 1 ? temp : visibility, DE_ACCESS_SHADER_WRITE);
-    }
+    DE_TRY(de__denoise_shadow(s->denoiser, g, vc, lc, raw, distance, keys, visibility, width,
+                              height, slots, scale,
+                              s->reference.id && de_cvar_int(s->reference) > 0));
     de_rg_export(g, rays, DE_ACCESS_SHADER_READ);
     de_rg_export(g, hits, DE_ACCESS_SHADER_READ);
     de_rg_export(g, keys, DE_ACCESS_SHADER_READ);
     de_rg_export(g, raw, DE_ACCESS_SHADER_READ);
-    de_rg_export(g, temp, DE_ACCESS_SHADER_READ);
     de_rg_export(g, distance, DE_ACCESS_SHADER_READ);
     de_rg_export(g, visibility, DE_ACCESS_SHADER_READ);
     inputs->rt_shadow_visibility = visibility;

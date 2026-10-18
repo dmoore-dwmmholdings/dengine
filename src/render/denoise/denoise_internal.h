@@ -19,6 +19,7 @@ typedef struct de_denoise_signal_desc {
     u32 iterations;
     f32 depth_relative, normal_cos, normal_power, luminance_scale, hit_distance_scale;
     f32 roughness_threshold;
+    bool zero_radius_passthrough;
 } de_denoise_signal_desc;
 /** Canonical motion is current-minus-previous NDC; normal is canonical encoded GB1.
  * material is RG32_FLOAT actual identity (low/high 16-bit words), never GB2's model id. Use the
@@ -31,6 +32,8 @@ typedef struct de_denoise_inputs {
     de_mat4 inverse_view_proj, previous_inverse_view_proj;
     de_vec3 camera_position, previous_origin_delta;
     bool linear_depth;
+    de_rg_resource validation_key; /**< Optional exact numeric low/high16 key words. */
+    de_rg_resource position;       /**< Optional exact representative world-position guide. */
 } de_denoise_inputs;
 typedef struct de_denoise_frame {
     de_rg *graph;
