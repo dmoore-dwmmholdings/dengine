@@ -584,7 +584,11 @@ typedef struct de_pixel_art_settings {
     bool snap_camera, snap_sprites, smooth_subpixel_scroll;
     de_texture palette_lut; /* optional */
     f32 dither_strength;
+    de_vec4 letterbox_color; /**< clear outside the upscaled image; default opaque black */
 } de_pixel_art_settings;
+/** Enables pixel rendering with a copied configuration; NULL disables it. Zero dimensions
+ * select 480x270. Rendering ignores render_scale/dynamic resolution and temporal upscalers;
+ * output/UI remain at the view's viewport resolution. */
 DE_API void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_settings *s);
 DE_API void de_render_set_2d_plane(de_renderer *r, de_plane_2d plane);
 

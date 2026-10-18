@@ -73,6 +73,8 @@ static void fill_views(const de_query_chunk *c, void *user) {
         out->entity = c->entities[i].bits;
         out->camera = cam[i];
         out->offset = de_dv3_relative(g[i].position, origin);
+        out->position = g[i].position;
+        out->has_position = true;
         out->rotation = g[i].rotation;
         out->transform = de_transform_to_affine_relative(&g[i], origin);
         const bool primary = !DE_HANDLE_VALID(cam[i].view);

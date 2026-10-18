@@ -144,6 +144,9 @@ typedef struct de__view_frame {
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
     bool probe_capture; /**< Fixed radiance capture: no temporal effects or probes. */
+    const de_pixel_art_settings *pixel_art;
+    de_vec2 pixel_residual;
+    u32 output_width, output_height;
 } de__view_frame;
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */

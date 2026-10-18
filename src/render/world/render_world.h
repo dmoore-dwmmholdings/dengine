@@ -125,6 +125,8 @@ typedef struct de__rw_view {
     de_vec3 offset;      /**< camera position - render origin, f32 */
     de_quat rotation;    /**< world rotation */
     de_affine transform; /**< camera to render-origin space (offset in column 3) */
+    de_dvec3 position;   /**< original world position, before f32 render-origin subtraction */
+    bool has_position;
 } de__rw_view;
 
 typedef struct de__probe_snapshot {
