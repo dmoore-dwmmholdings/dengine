@@ -2004,8 +2004,11 @@ TEST(refraction, packed_layout_contract) {
     EXPECT_FALSE(p);
     EXPECT_EQ(sizeof(de__scene_color_params), 48u);
     EXPECT_EQ(sizeof(refraction_params), 64u);
-    EXPECT_EQ(sizeof(de__fwd_params), 96u);
-    EXPECT_EQ(sizeof(de__lighting_view), 400u);
-    EXPECT_EQ(sizeof(de__lighting_inputs_gpu), 64u);
+    EXPECT_EQ(sizeof(de__fwd_params), 112u);
+    EXPECT_EQ(offsetof(de__fwd_params, lights), 64u);
+    EXPECT_EQ(offsetof(de__fwd_params, rt_capture), 96u);
+    EXPECT_EQ(offsetof(de__fwd_params, rt_reserved), 108u);
+    EXPECT_EQ(sizeof(de__lighting_view), 448u);
+    EXPECT_EQ(sizeof(de__lighting_inputs_gpu), 112u);
     de_error_clear();
 }

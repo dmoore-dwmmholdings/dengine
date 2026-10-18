@@ -164,6 +164,7 @@ struct de_renderer {
     struct de__rtao *rtao;
     struct de__rt_gi *rt_gi;
     struct de__rt_reflections *rt_reflections;
+    struct de__rt_refraction *rt_refraction;
     struct de__contact *contact;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
