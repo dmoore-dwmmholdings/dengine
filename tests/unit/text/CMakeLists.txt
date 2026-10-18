@@ -1,0 +1,8 @@
+if(DE_BUILD_TOOLS)
+ de_add_test(NAME text_import SOURCES test_font_import.c test_bmfont.c test_pixel_font.c
+   LIBS de_cooker de_text de_platform de_tp_stb)
+ if(TARGET test_text_import)
+  target_include_directories(test_text_import PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+  target_compile_definitions(test_text_import PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+ endif()
+endif()
