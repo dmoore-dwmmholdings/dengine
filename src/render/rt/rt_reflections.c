@@ -257,7 +257,7 @@ de_result de__rt_reflections_build(de__rt_reflections *s, de_rg *g, de__vis_cont
                    .sampler = lc->sampler_bindless,
                    .width = vc->width,
                    .height = vc->height,
-                   .frame = (u32)vc->frame_index,
+                   .frame = (u32)de__rt_sample_frame(s->r, vc->frame_index),
                    .scale = vc->settings->reflections <= DE_QUALITY_MEDIUM ? 2 : 1,
                    .samples = s->reference ? s->reference : 1,
                    .rt_locals = vc->settings->reflections >= DE_QUALITY_HIGH ? 1 : 0,

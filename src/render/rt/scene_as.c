@@ -46,6 +46,13 @@ de_result de__rt_scene_create(de_renderer *r, de__rt_scene **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT scene owner");
     memset(s, 0, sizeof *s);
     s->renderer = r;
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+    s->golden_sample = de_cvar_register(&(de_cvar_desc){.name = "r.rt.golden_sample",
+                                                        .type = DE_CVAR_INT,
+                                                        .default_number = -1,
+                                                        .min = -1,
+                                                        .max = 2147483647});
+#endif
     s->fence = de_gpu_fence_create(r->dev, 0);
     const char *entries[] = {"cs_decode", "cs_instances"};
     de__engine_shader_code code;

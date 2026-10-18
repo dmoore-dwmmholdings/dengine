@@ -130,7 +130,7 @@ de__rt_refraction_frame *de__rt_refraction_prepare(de__rt_refraction *s, de_rg *
                                    .context = *context,
                                    .width = lc->width,
                                    .height = lc->height,
-                                   .frame = (u32)vc->frame_index,
+                                   .frame = (u32)de__rt_sample_frame(s->r, vc->frame_index),
                                    .events = vc->settings->reflections == DE_QUALITY_ULTRA ? 2 : 1,
                                    .local_bound = lc->view.light_slots + lc->view.proxy_capacity};
     if (f->local_bound > lc->local_capacity)

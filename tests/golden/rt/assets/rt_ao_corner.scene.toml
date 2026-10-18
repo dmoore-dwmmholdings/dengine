@@ -1,0 +1,76 @@
+# rt_ao_corner (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -8.0, 4.8]
+rotation = [0.5373, 0.0, 0.0, 0.843391]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.837758
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, -0.15]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [7.0, 7.0, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 0.3
+rotation = 0.0
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [-2.0, 0.5, 1.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.2, 5.0, 3.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/red"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [0.0, 2.0, 1.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 0.2, 3.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/green"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.4]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.8, 0.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true

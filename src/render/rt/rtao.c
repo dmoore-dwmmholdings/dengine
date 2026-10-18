@@ -259,7 +259,7 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
                             .th = th,
                             .scale = scale,
                             .spp = spp,
-                            .frame = (u32)vf->frame_index,
+                            .frame = (u32)de__rt_sample_frame(s->r, vf->frame_index),
                             .pitch = (vf->width + 255) & ~255u,
                             .distance_pitch = (vf->width * 2 + 255) & ~255u,
                             .radius = (f32)de_cvar_float(s->radius)}};

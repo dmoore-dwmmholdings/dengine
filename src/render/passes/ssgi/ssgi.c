@@ -1,3 +1,4 @@
+#include "render/rt/rt_internal.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/renderer_internal.h"
 #include "render/graph/rg_internal.h"
@@ -206,7 +207,7 @@ static void ssgi_stage(de__view_frame *vf, void *user) {
                .hzb_width = c->closest.width,
                .hzb_height = c->closest.height,
                .mips = c->closest.mips,
-               .frame = (u32)vf->frame_index,
+               .frame = (u32)de__rt_sample_frame(s->renderer, vf->frame_index),
                .history_valid = c->valid ? 1u : 0u,
                .lut = de__renderer_brdf_lut(s->renderer),
                .max_steps = (u32)de_cvar_int(s->max_steps),

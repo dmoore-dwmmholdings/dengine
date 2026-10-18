@@ -41,6 +41,7 @@
 #endif
 
 #include "golden.h"
+#include "../rt/rt_golden.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -88,6 +89,8 @@ typedef struct mg_opts {
     bool path_tracer;
     const char *extra_manifest;
     u32 samples;
+    u32 rt_effect;
+    bool base_fallback;
 } mg_opts;
 
 #if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
@@ -99,6 +102,8 @@ static const char *const k_models[MG_MODEL_COUNT] = {"mesh/sphere", "mesh/card",
 
 typedef struct mg {
     de_golden_ctx *ctx;
+    bool rt_golden;
+    void *rt_state;
     de_task_system *tasks;
     de_type_registry *types;
     de_world *world;
@@ -163,9 +168,11 @@ static bool mg_mount(de_golden_ctx *ctx) {
  * the frame is rendered and submitted at once). */
 static bool mg_frame(mg *m) {
     de_asset_system_update(m->assets, NULL);
-    de_result r = de_world_run_schedule(m->world, DE_SCHEDULE_POST_UPDATE, 1.0f / 60.0f, 0.0f);
+    de_result r = de_world_run_schedule(m->world, DE_SCHEDULE_POST_UPDATE,
+                                        m->rt_golden ? 0.0f : 1.0f / 60.0f, 0.0f);
     if (r == DE_OK)
-        r = de_world_run_schedule(m->world, DE_SCHEDULE_EXTRACT, 1.0f / 60.0f, 0.0f);
+        r = de_world_run_schedule(m->world, DE_SCHEDULE_EXTRACT, m->rt_golden ? 0.0f : 1.0f / 60.0f,
+                                  0.0f);
     if (r == DE_OK)
         r = de__render_extract_and_kick(m->r, m->world);
     if (r != DE_OK) {
@@ -304,6 +311,10 @@ static bool mg_wait(mg *m, de_load_handle h, const char *what, u64 t0) {
 }
 
 static void mg_close(mg *m) {
+    if (m->rt_state) {
+        de__golden_rt_finish(m->rt_state);
+        m->rt_state = NULL;
+    }
     if (m->r != NULL)
         de__render_world_wait_idle(m->r);
     if (m->refraction_changed)
@@ -403,6 +414,14 @@ static bool mg_pt_guides(mg *m) {
 }
 
 static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
+    if (o->rt_effect && !o->base_fallback &&
+        (getenv("DE_RT_GOLDEN_FORCE_UNSUPPORTED") ||
+         (getenv("CI") && (!getenv("DE_RT_GOLDEN_SELF_HOSTED") ||
+                           strcmp(getenv("DE_RT_GOLDEN_SELF_HOSTED"), "1") != 0)) ||
+         ctx->caps->raytracing != DE_RT_HARDWARE || !ctx->caps->ray_query)) {
+        de_golden_skip(ctx, "RT goldens require hardware RT and explicit self-hosted CI opt-in");
+        return;
+    }
     if (o->path_tracer && !ctx->caps->rt_pipelines) {
         de_golden_skip(ctx, "RT pipelines unavailable");
         return;
@@ -424,6 +443,7 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     mg m;
     memset(&m, 0, sizeof m);
     m.ctx = ctx;
+    m.rt_golden = o->rt_effect != 0;
     m.pitch = ctx->width * 4u;
     const size_t bytes = (size_t)m.pitch * ctx->height;
     m.now = (u8 *)calloc(bytes, 1);
@@ -552,12 +572,47 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         mg_close(&m);
         return;
     }
+    if (o->rt_effect) {
+        de_view_destroy(m.r, m.view);
+        m.view = de_view_create(
+            m.r, &(de_view_desc){.target = m.target, .name = "RT golden fresh history"});
+        if (!m.view.id) {
+            de_golden_fail(ctx, "fresh RT view");
+            mg_close(&m);
+            return;
+        }
+        m.rt_state = de__golden_rt_prepare(ctx, m.r, m.view, o->rt_effect, o->base_fallback);
+    }
     camera->view = m.view;
 
     /* Frames until the image settles: no pixel changes by more than one code value (light-list
      * order comes from atomics, so the last bit may flicker) for MG_SETTLED frames in a row. Before
      * DENG-430 textured surfaces flickered here under Metal shader validation. */
-    if (o->path_tracer) {
+    if (o->rt_effect) {
+        for (u32 sample = 0; sample < 32; ++sample) {
+            de__golden_rt_sample(sample);
+            if (!mg_frame(&m)) {
+                mg_close(&m);
+                return;
+            }
+        }
+        de_gpu_wait_idle(ctx->device);
+        if (!mg_read(&m)) {
+            mg_close(&m);
+            return;
+        }
+        u32 lit = 0, chromatic = 0;
+        for (size_t i = 0; i < bytes; i += 4) {
+            if (m.now[i] || m.now[i + 1] || m.now[i + 2])
+                ++lit;
+            if (m.now[i] != m.now[i + 1] || m.now[i + 1] != m.now[i + 2])
+                ++chromatic;
+        }
+        printf("  RT golden fixed32 dt0: lit=%u chromatic=%u pixels=%u\n", lit, chromatic,
+               ctx->width * ctx->height);
+        if (lit < ctx->width * ctx->height / 10)
+            de_golden_fail(ctx, "RT golden nonvacuity: fewer than 10%% lit pixels");
+    } else if (o->path_tracer) {
         for (u32 sample = 0; sample < o->samples; ++sample)
             if (!mg_frame(&m)) {
                 mg_close(&m);
@@ -661,4 +716,19 @@ void de__golden_pathtracer_assets(de_golden_ctx *ctx, bool cornell) {
     mg_cvar("r.pt.golden", "0");
     mg_cvar("r.pt.final_denoise", "0");
 #endif
+}
+
+void de__golden_rt_assets(de_golden_ctx *ctx, const char *scene, u32 effect, bool base) {
+    static bool mounted;
+    if (!mounted) {
+        if (de_fs_mount("rtgold", DE_GOLDEN_RT_ASSETS, 0, 0) != DE_OK) {
+            de_golden_fail(ctx, "RT asset mount");
+            return;
+        }
+        mounted = true;
+    }
+    mg_run(ctx, &(mg_opts){.scene = scene,
+                           .extra_manifest = "rtgold:/rt/assets/assets.toml",
+                           .rt_effect = effect,
+                           .base_fallback = base});
 }

@@ -1,3 +1,4 @@
+#include "render/rt/rt_internal.h"
 #include "render/passes/ao/gtao_internal.h"
 #include "render/renderer_internal.h"
 #include "render/rt/rtao.h"
@@ -229,7 +230,7 @@ de_result de__gtao_build(de__gtao *s, const de__view_frame *vf, const de__vis_co
                .th = th,
                .slices = slices,
                .steps = steps,
-               .frame = (u32)vf->frame_index,
+               .frame = (u32)de__rt_sample_frame(s->renderer, vf->frame_index),
                .pitch_ao = pitch_ao,
                .pitch_bent = pitch_bent,
                .bent_offset = (u32)bent_offset,

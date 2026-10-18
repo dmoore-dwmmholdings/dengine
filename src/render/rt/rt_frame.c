@@ -178,3 +178,17 @@ void de__rt_trace(de_renderer *r, de_gpu_cmd *cmd, const de__rt_context *context
     const u32 groups = (u32)(((u64)count + 63) / 64);
     de_gpu_cmd_dispatch(cmd, groups < 65535 ? groups : 65535, (groups + 65534) / 65535, 1);
 }
+
+u64 de__rt_sample_frame(const de_renderer *r, u64 frame) {
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+    de_cvar cv = r && r->rt_scene ? r->rt_scene->golden_sample : de_cvar_find("r.rt.golden_sample");
+    if (cv.id) {
+        i64 value = de_cvar_int(cv);
+        if (value >= 0)
+            return (u32)value;
+    }
+#else
+    (void)r;
+#endif
+    return frame;
+}
