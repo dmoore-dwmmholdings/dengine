@@ -33,6 +33,7 @@ public static const uint DE_GPU_INSTANCE_LIVE = 1;           // the slot holds a
 public static const uint DE_GPU_INSTANCE_CAST_SHADOWS = 2;   // DeMeshRenderer.cast_shadows
 public static const uint DE_GPU_INSTANCE_VISIBLE_IN_RT = 4;  // DeMeshRenderer.visible_in_rt
 public static const uint DE_GPU_INSTANCE_SKINNED = 16;
+public static const uint DE_GPU_INSTANCE_SPRITE = 32;
 public static const uint DE_GPU_INSTANCE_HAS_BOUNDS = 8;     // aabb_* and sphere are valid
 
 /// DeGpuMesh.flags

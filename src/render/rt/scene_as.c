@@ -1,6 +1,7 @@
 /* DENG-44: main-thread owner of published mesh BLAS and asynchronous compaction. */
 #include "render/rt/rt_internal.h"
 #include "render/skin/skin_internal.h"
+#include "render/rt/sprite_as.h"
 #include "render/loaders/upload_ring.h"
 #include "render/shaders/engine_shaders.h"
 #include "asset/budget_internal.h"
@@ -268,6 +269,7 @@ static de_result compact(de__rt_scene *s) {
 }
 void de__rt_scene_destroy(de_renderer *r) {
     de__skin_release_rt(r);
+    de__sprite_as_destroy(r);
     de__rt_scene *s = r ? r->rt_scene : NULL;
     if (!s)
         return;
@@ -330,6 +332,7 @@ de_result de__rt_prepare(de_renderer *r) {
     }
     DE_TRY(compact(s));
     DE_TRY(de__skin_rt_prepare(r));
+    DE_TRY(de__sprite_as_prepare(r));
     de__gpu_scene_table_info table = de__gpu_scene_table(r->gpu_scene, DE__GS_MESHES);
     u32 capacity = table.capacity ? table.capacity : 1;
     if (capacity > s->metadata_capacity) {
@@ -349,6 +352,8 @@ de_result de__rt_prepare(de_renderer *r) {
     for (u32 slot = 0; slot < table.count; ++slot) {
         const de__gs_mesh *mesh = de__gpu_scene_entry(r->gpu_scene, DE__GS_MESHES, slot);
         if (!mesh)
+            continue;
+        if (de__sprite_as_metadata(r, slot, &gpu[slot]))
             continue;
         if (de__skin_rt_metadata(r, mesh, &gpu[slot]))
             continue;

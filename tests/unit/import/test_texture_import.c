@@ -29,6 +29,7 @@
 #include "cook/lib/de_cooker.h"
 #include "cook/lib/decache.h"
 #include "render/formats/de_cooked_texture.h"
+#include "render/formats/de_cooked_sprite_proxy.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1231,4 +1232,35 @@ TEST_F(texture, de_cook_registers_texture, tex_fx) {
     }
     dpak_close(pk);
 #endif
+}
+
+TEST_F(texture, sprite_rt_proxy_cooked_trailer, tex_fx) {
+    make_cooker(f, NULL);
+    de_cook_result result;
+    const de__manifest_kv settings[] = {kv_bool("rt_proxy", true), kv_bool("pixel_art", true)};
+    ASSERT_EQ(cook(f, "cutout.png", settings, 2, &result), DE_OK);
+    de_cooked_texture_view texture;
+    ASSERT_TRUE(view_of(result.data, result.size, &texture));
+    de_cooked_sprite_proxy proxy;
+    ASSERT_TRUE(result.size >= DE_SPRITE_PROXY_BYTES);
+    ASSERT_TRUE(de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
+                                      DE_SPRITE_PROXY_BYTES, &proxy));
+    ASSERT_LE(proxy.index_count / 3, 64u);
+    ASSERT_GT(proxy.index_count, 0u);
+    de_cook_result_free(&result);
+}
+
+TEST_F(texture, sprite_rt_proxy_atlas_region, tex_fx) {
+    make_cooker(f, NULL);
+    de_cook_result result;
+    const de__manifest_kv settings[] = {kv_bool("rt_proxy", true), kv_bool("pixel_art", true),
+                                        kv_float("rt_proxy_u", .5), kv_float("rt_proxy_width", .5)};
+    ASSERT_EQ(cook(f, "cutout.png", settings, 4, &result), DE_OK);
+    de_cooked_sprite_proxy proxy;
+    ASSERT_TRUE(de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
+                                      DE_SPRITE_PROXY_BYTES, &proxy));
+    ASSERT_TRUE(proxy.region[0] == .5f);
+    ASSERT_TRUE(proxy.region[2] == .5f);
+    ASSERT_LE(proxy.index_count / 3, 64u);
+    de_cook_result_free(&result);
 }

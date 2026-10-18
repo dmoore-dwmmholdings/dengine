@@ -211,3 +211,4 @@ target_link_libraries(de_cooker PRIVATE de_text_msdf de_tp_stb de_tp_tomlc17)
 target_sources(de_cooker PRIVATE importers/sound/sound_import.c
     importers/sound/adpcm_encode.c importers/sound/opus_encode.c)
 target_link_libraries(de_cooker PRIVATE de_audio_dsp de_tp_dr_libs de_tp_opus de_tp_stb)
+target_sources(de_cooker PRIVATE importers/sprite_proxy.c)

@@ -9,6 +9,7 @@ public struct DeRtContext {
 };
 public static const uint DE_RT_CAST_SHADOWS = 1;
 public static const uint DE_RT_ACCEPT_FIRST_HIT = 2;
+public static const uint DE_RT_EXCLUDE_SPRITES = 4;
 public struct DeRtRay { public float4 origin; public float4 direction; }; // w = tmin/tmax
 public struct DeRtHit { public float t; public uint instance, primitive; public float u;
                        public float v; public uint lod, reserved0, reserved1; };
