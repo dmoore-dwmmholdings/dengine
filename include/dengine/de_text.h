@@ -81,6 +81,12 @@ typedef struct de_glyph_quad {
 } de_glyph_quad;
 DE_API u32 de_text_layout_quads(const de_text_layout *l, de_glyph_quad *out, u32 max);
 
+typedef struct de_text_stats {
+    u32 runtime_pending, runtime_generated, runtime_pages, cap_warnings, background_jobs;
+} de_text_stats;
+/** A snapshot of background glyph work and runtime atlas usage. */
+DE_API de_text_stats de_text_get_stats(const de_text_system *t);
+
 /* ---------- Localization ---------- */
 DE_API de_result de_loc_set_locale(de_text_system *t,
                                    const char *locale); /* also updates asset overrides */

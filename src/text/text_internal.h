@@ -7,5 +7,6 @@ struct de_text_system {
     de_asset_system *assets;
     struct de__text_runtime *runtime;
     struct de__shape_system *shape;
+    struct de__glyph_cache *glyph_cache;
 };
 #endif

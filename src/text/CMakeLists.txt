@@ -12,3 +12,9 @@ target_include_directories(de_text PRIVATE "${DE_ROOT_DIR}/tools")
 
 target_sources(de_text PRIVATE shape/itemize.c shape/shaper.c shape/shape_cache.c)
 target_link_libraries(de_text PRIVATE de_tp_harfbuzz de_tp_xxhash)
+
+target_sources(de_text PRIVATE glyph_cache.c atlas_packer.c)
+target_link_libraries(de_text PRIVATE de_text_msdf de_task)
+# The aggregate consumes module objects rather than de_text's link interface.
+set_property(TARGET de_text APPEND PROPERTY DE_MODULE_LIBS
+    de_tp_stb de_tp_harfbuzz de_tp_xxhash de_text_msdf)

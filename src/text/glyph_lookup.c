@@ -1,4 +1,5 @@
 #include "fallback_internal.h"
+#include "glyph_cache_internal.h"
 #include <string.h>
 bool de_text__glyph(de_text_system *t, de_font handle, u32 index, de_text_glyph_entry *out) {
     if (!out)
@@ -14,6 +15,10 @@ bool de_text__glyph(de_text_system *t, de_font handle, u32 index, de_text_glyph_
     if (!f) {
         de__text_unlock(r);
         return false;
+    }
+    if (de_text__runtime_glyph(t, handle, index, out)) {
+        de__text_unlock(r);
+        return true;
     }
     out->generation = f->generation;
     u32 lo = 0, hi = f->count;
