@@ -187,14 +187,6 @@ de_text_font *de_text__font_get(de_text_system *t, de_font font) {
     return de__slot_object(s);
 }
 /* These named integration points are filled by the runtime glyph and render owners. */
-void de_text__glyph_miss(de_text_system *t, de_font f, u32 glyph) {
-    (void)t;
-    (void)f;
-    (void)glyph;
-}
-void de_text__integrate_glyphs(de_text_system *t) {
-    (void)t;
-}
 void de_text__publish_pages(de_text_system *t) {
     (void)t;
 }

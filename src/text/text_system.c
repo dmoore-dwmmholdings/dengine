@@ -1,5 +1,6 @@
 #include "font_runtime_internal.h"
 #include "shape/shaper_internal.h"
+#include "glyph_cache_internal.h"
 #include <string.h>
 de_result de_text_create(const de_allocator *a, de_asset_system *assets, de_text_system **out) {
     if (!out)
@@ -24,11 +25,19 @@ de_result de_text_create(const de_allocator *a, de_asset_system *assets, de_text
         DE_FREE(a, t, sizeof *t);
         return r;
     }
+    r = de_text__glyph_cache_init(t);
+    if (r != DE_OK) {
+        de_text__shape_destroy(t);
+        de_text__runtime_destroy(t);
+        DE_FREE(a, t, sizeof *t);
+        return r;
+    }
     *out = t;
     return DE_OK;
 }
 void de_text_destroy(de_text_system *t) {
     if (t) {
+        de_text__glyph_cache_destroy(t);
         de_text__shape_destroy(t);
         de_text__runtime_destroy(t);
         DE_FREE(t->alloc, t, sizeof *t);
