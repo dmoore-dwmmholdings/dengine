@@ -483,3 +483,13 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE denoise/denoise_diffuse.c denoise/denoise_specular.c denoise/reblur_internal.h)
 endif()
+
+# S17 PT AOV presentation and explicit Dev/Debug export; no cooker runtime dependency.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt_denoise.c)
+    target_sources(de_render PRIVATE "$<$<CONFIG:Debug,Dev>:${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/pt_export.c>")
+    target_link_libraries(de_render PRIVATE "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()
+if(TARGET de_render)
+    set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()

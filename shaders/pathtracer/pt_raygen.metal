@@ -37,10 +37,12 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
                       device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);if(id.x>=p.ptp_width||id.y>=p.ptp_height)return;
     uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel);
+    auto first=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+    pt_store_aov_0(&p,&r,&first,pixel,&ctx);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
     if(p.ptp_media.ptm_features==0) {
     for(uint bounce=0;bounce<p.ptp_max_bounces;++bounce) {
-        auto h=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+        auto h=bounce==0?first:pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
         auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
         radiance+=throughput*step.pts_emitted;
         bool visible=true;
@@ -57,7 +59,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
         auto path=pt_path_init_0(&p,pixel);
         uint limit=p.ptp_max_bounces*(p.ptp_media.ptm_max_steps+5);
         for(uint event=0;event<limit && path.ptpath_finished==0;++event) {
-            auto h=pt_intersect(heap,p,path.ptpath_ray,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+            auto h=event==0?first:pt_intersect(heap,p,path.ptpath_ray,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
             auto step=pt_path_event_0(&p,&path,&h,pixel,&ctx);
             float3 visibility=1;
             if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0)) {

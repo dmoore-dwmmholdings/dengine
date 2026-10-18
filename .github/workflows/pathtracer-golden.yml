@@ -1,0 +1,46 @@
+name: Path tracer hardware references
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pathtracer-hardware-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vulkan
+            preset: linux-clang-dev
+            runner: '"Linux"'
+            executable: de-golden
+          - backend: d3d12
+            preset: windows-clang-cl-dev
+            runner: '"Windows"'
+            executable: de-golden.exe
+    runs-on: ${{ fromJSON(format('["self-hosted",{0},"rt"]', matrix.runner)) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Hosts supply their installed compiler, graphics SDK and actual RT hardware.
+      - name: Build the canonical golden harness
+        shell: bash
+        run: |
+          cmake --preset '${{ matrix.preset }}'
+          cmake --build --preset '${{ matrix.preset }}' --target de_golden
+      - name: Compare actual RT output against Metal baseline
+        shell: bash
+        run: >-
+          python3 tests/golden/pathtracer/compare.py
+          --exe 'build/${{ matrix.preset }}/tests/golden/${{ matrix.executable }}'
+          --backend '${{ matrix.backend }}'
+          --out 'build/${{ matrix.preset }}/pathtracer-cross'
+      - name: Preserve real images and provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pathtracer-${{ matrix.backend }}
+          path: build/${{ matrix.preset }}/pathtracer-cross/
+          if-no-files-found: warn

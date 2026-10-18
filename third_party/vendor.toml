@@ -259,9 +259,9 @@ patches = ["patches/0001-f64-to-i64-saturation.patch"]
 
 [[lib]]
 name = "tinyexr"
-# OpenEXR decoder of the texture importer (SPEC §11.6, §22), tools only: compiled into the cooker
-# library (tools/cook/importers/texture/, DENG-98), never into Release or Shipping. C++ behind the
-# importer's C interface (DENG-2 Q1). The 1.x line: 3.x is a rewrite (a C library with GPU, SIMD
+# OpenEXR texture importer (DENG-98) and uncompressed Dev/Debug PT export (DENG-74).
+# The renderer export and its dependency are excluded from Release/Shipping. C++ behind
+# the importer/exporter C interfaces (DENG-2 Q1). The 1.x line: 3.x is a rewrite (a C library with GPU, SIMD
 # and codec trees) that the importer does not need.
 version = "1.0.13"
 url = "https://github.com/syoyo/tinyexr/archive/refs/tags/v1.0.13.tar.gz"

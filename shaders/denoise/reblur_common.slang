@@ -1,4 +1,5 @@
 module reblur_common;
+__exported import reblur_weights;
 __exported import "../visbuffer/gbuffer";
 __exported import "../visbuffer/vis_decode";
 __exported import "../scene/scene_types";
@@ -21,13 +22,13 @@ public float2 reblur_virtual_uv(DeSceneConstants sc,float3 position,float3 norma
     return lerp(virtual_uv,surface_previous,saturate(roughness*roughness*4));
 }
 public DeRtSurface reblur_surface(ReblurParams p,uint2 xy){DeSceneConstants sc=de_robuffer<DeSceneConstants>(p.scene)[p.slot];uint id=de_bytes(p.ids).load(xy.y*p.ids_pitch+xy.x*4);DeResolvePoint point=de_resolve_point(id,xy,float2(p.width,p.height),sc,p.visible,p.visible_count);return de_rt_surface(point,sc,sc.camera_position.xyz,p.sampler,p.lut);}
-public float3 reblur_factor(SurfaceData surface,uint kind){return max(kind==0?surface.base_color:de_standard_fresnel(surface).f0,float3(.001));}
-public float reblur_luma(float3 c){return dot(c,float3(.2126,.7152,.0722));}
+public float3 reblur_factor(SurfaceData surface,uint kind){return reblur_floor_factor(kind==0?surface.base_color:de_standard_fresnel(surface).f0);}
+public float reblur_luma(float3 c){return reblur_luminance(c);}
 public bool reblur_same(ReblurParams p,int2 a,int2 b){
     if(any(b<0)||b.x>=int(p.width)||b.y>=int(p.height))return false;
     if(any(de_tex2d(p.material).Load(int3(a,0)).xy!=de_tex2d(p.material).Load(int3(b,0)).xy))return false;
     DeGbSurface sa=gb_decode(float4(0),de_tex2d(p.gb1).Load(int3(a,0)),float4(0)),sb=gb_decode(float4(0),de_tex2d(p.gb1).Load(int3(b,0)),float4(0));
-    if(dot(sa.normal,sb.normal)<.9||abs(sa.roughness-sb.roughness)>.15)return false;
+
     float3 pa=de_tex2d(p.position).Load(int3(a,0)).xyz,pb=de_tex2d(p.position).Load(int3(b,0)).xyz;
-    return abs(dot(pb-pa,sa.normal))<.02;
+    return reblur_geometry(sa.normal,sa.roughness,sb.normal,sb.roughness,pb-pa);
 }

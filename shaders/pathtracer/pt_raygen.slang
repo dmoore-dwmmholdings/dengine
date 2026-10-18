@@ -1,6 +1,6 @@
 // Native Vulkan/DXR pipeline entry points. Material estimators are shared with the Metal adapter.
 import push_constants;
-import pt_closest_hit;
+import pt_aov;
 struct PtPush {uint params,entry;};
 struct PtPayload {DeRtHit hit;uint flags;};
 PtParams pt_parameters(PtPush pc) {return de_robuffer<PtParams>(pc.params)[pc.entry];}
@@ -13,10 +13,10 @@ DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags) {
 [shader("raygeneration")]
 void pt_raygen(uniform PtPush pc) {
     PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
-    DeRtRay ray=pt_camera(p,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
+    DeRtRay ray=pt_camera(p,pixel);DeRtHit first=pt_intersect(p,ray,0);pt_store_aov(p,ray,first,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
     if(p.media.features==0) {
     for(uint bounce=0;bounce<p.max_bounces;++bounce) {
-        DeRtHit hit=pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
+        DeRtHit hit=bounce==0?first:pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
         radiance+=throughput*step.emitted;
         bool visible=step.shadow.direction.w<=step.shadow.origin.w || !any(step.direct>0) || pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0;
         if(visible)radiance+=throughput*step.direct;
@@ -29,7 +29,7 @@ void pt_raygen(uniform PtPush pc) {
     } else {
         PtPath path=pt_path_init(p,pixel);uint limit=p.max_bounces*(p.media.max_steps+5);
         for(uint event=0;event<limit&&path.finished==0;++event) {
-            DeRtHit hit=pt_intersect(p,path.ray,0);PtStep step=pt_path_event(p,path,hit,pixel);
+            DeRtHit hit=event==0?first:pt_intersect(p,path.ray,0);PtStep step=pt_path_event(p,path,hit,pixel);
             float3 visibility=1;
             if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0))
                 visibility=pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0?pt_path_shadow(p,path,step.shadow):float3(0);

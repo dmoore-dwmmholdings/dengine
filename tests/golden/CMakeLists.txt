@@ -140,3 +140,8 @@ target_compile_definitions(de_golden PRIVATE
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_cache")
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_bakes")
+
+# S17 reference scenes use the existing asset loader and original S14 gallery assets.
+target_sources(de_golden PRIVATE pathtracer/pathtracer_scenes.c)
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_PT_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/assets\"")

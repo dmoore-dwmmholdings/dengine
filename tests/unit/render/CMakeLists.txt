@@ -1202,3 +1202,21 @@ if(TARGET test_render_denoise_gi_spec)
         endif()
     endif()
 endif()
+
+# S17 actual first-hit AOVs, canonical importer roundtrip, final presentation quality.
+de_add_test(NAME render_pt_reference SOURCES test_pt_reference.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip "$<$<CONFIG:Debug,Dev>:de_cooker>"
+         "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>" LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pt_reference)
+    target_include_directories(test_render_pt_reference PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pt_reference_tmp")
+    target_compile_definitions(test_render_pt_reference PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/pt_reference_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_pt_reference PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_pt_reference PRIVATE version)
+        de_d3d12_agility_deploy(test_render_pt_reference)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_pt_reference)
+        endif()
+    endif()
+endif()

@@ -53,6 +53,7 @@
 #include <dengine/de_task.h>
 
 #include "render/components_internal.h"
+#include "render/pathtracer/pt_internal.h"
 #include "render/renderer_internal.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/views_internal.h"
@@ -84,6 +85,9 @@
 typedef struct mg_opts {
     const char *scene; /**< the scene asset */
     bool furnace;      /**< check the furnace in C */
+    bool path_tracer;
+    const char *extra_manifest;
+    u32 samples;
 } mg_opts;
 
 #if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
@@ -333,7 +337,76 @@ static void mg_close(mg *m) {
     mg_cvar("r.pipelined", "1");
 }
 
+/* PT references must exercise actual primary geometry/materials, not an empty environment. */
+static bool mg_pt_guides(mg *m) {
+    de__pt_info info;
+    if (!de__pt_get(m->r, m->view, &info))
+        return false;
+    u32 pitch = (m->ctx->width * 16 + 255u) & ~255u;
+    u64 bytes = (u64)pitch * m->ctx->height;
+    de_gpu_buffer rb =
+        de_gpu_buffer_create(m->ctx->device, &(de_gpu_buffer_desc){.size = bytes * 3,
+                                                                   .usage = DE_USAGE_COPY_DST,
+                                                                   .memory = DE_MEM_READBACK});
+    if (!rb.id)
+        return false;
+    de_gpu_cmd *cmd =
+        de_gpu_cmd_begin(m->ctx->device, DE_QUEUE_GRAPHICS, "PT golden actual AOV coverage");
+    de_gpu_texture guides[] = {info.depth, info.normal, info.material};
+    for (u32 i = 0; i < 3; ++i) {
+        de_gpu_barrier b = {
+            .texture = guides[i], .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(cmd, &b, 1);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, rb, i * bytes, pitch, guides[i], 0, 0);
+        b.before = DE_ACCESS_COPY_SRC;
+        b.after = DE_ACCESS_SHADER_READ;
+        de_gpu_cmd_barriers(cmd, &b, 1);
+    }
+    de_result result = de_gpu_queue_submit(m->ctx->device, DE_QUEUE_GRAPHICS,
+                                           &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1});
+    de_gpu_wait_idle(m->ctx->device);
+    const u8 *mapped = de_gpu_buffer_map(m->ctx->device, rb);
+    u32 hit = 0, ids[64] = {0}, count = 0;
+    float minimum[3] = {1, 1, 1}, maximum[3] = {-1, -1, -1};
+    if (result == DE_OK && mapped)
+        for (u32 y = 0; y < info.height; ++y)
+            for (u32 x = 0; x < info.width; ++x) {
+                const float *depth = (const float *)(mapped + (u64)y * pitch);
+                if (!(depth[x] > 0))
+                    continue;
+                ++hit;
+                const float *normal = (const float *)(mapped + bytes + (u64)y * pitch) + x * 4,
+                            *material =
+                                (const float *)(mapped + bytes * 2 + (u64)y * pitch) + x * 2;
+                u32 id = (u32)material[0] | ((u32)material[1] << 16);
+                bool seen = false;
+                for (u32 i = 0; i < count; ++i)
+                    seen |= ids[i] == id;
+                if (!seen && count < 64)
+                    ids[count++] = id;
+                for (u32 c = 0; c < 3; ++c) {
+                    minimum[c] = fminf(minimum[c], normal[c]);
+                    maximum[c] = fmaxf(maximum[c], normal[c]);
+                }
+            }
+    float span =
+        fmaxf(maximum[0] - minimum[0], fmaxf(maximum[1] - minimum[1], maximum[2] - minimum[2]));
+    printf(
+        "  PT actual first-hit guides: %u geometry pixels, %u distinct materials, normal span %g\n",
+        hit, count, span);
+    de_gpu_buffer_destroy(m->ctx->device, rb);
+    if (hit < info.width * info.height / 50 || count < 2 || span < .1f) {
+        de_golden_fail(m->ctx, "PT reference lacks meaningful primary geometry/material coverage");
+        return false;
+    }
+    return true;
+}
+
 static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
+    if (o->path_tracer && !ctx->caps->rt_pipelines) {
+        de_golden_skip(ctx, "RT pipelines unavailable");
+        return;
+    }
     if (!ctx->caps->base_tier_ok) {
         de_golden_skip(ctx, "below the Base tier (the renderer needs it): %s",
                        ctx->caps->base_tier_reason);
@@ -402,6 +475,15 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     rs.gi = DE_QUALITY_OFF;      /* S14 materials/IBL references; S15 validates GI independently. */
     rs.shadows = DE_QUALITY_OFF; /* Preserve S14 materials/IBL scope; CSM has S15 GPU references. */
     rs.ao = DE_QUALITY_OFF;      /* Preserve S14 scope; GTAO has independent S15 acceptance. */
+    if (o->path_tracer) {
+        rs.tier = DE_TIER_RT;
+        rs.path_tracer = true;
+        rs.path_max_bounces = 8;
+        mg_cvar("r.pt.golden", "1");
+        mg_cvar("r.pt.seed", "0");
+        mg_cvar("r.pt.final_denoise", "0");
+        mg_cvar("r.pt.max_samples", "0");
+    }
     de_renderer_set_settings(m.r, &rs);
 
     m.target = de_gpu_texture_create(
@@ -442,6 +524,11 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
             return;
         }
     }
+    if (o->extra_manifest && de_asset_manifest_load(m.assets, o->extra_manifest) != DE_OK) {
+        de_golden_fail(ctx, "PT manifest: %s", mg_err());
+        mg_close(&m);
+        return;
+    }
     const de_asset_id id = de_asset_id_from(o->scene);
     m.scene_load = de_asset_load(m.assets, id, 0);
     if (!mg_wait(&m, m.scene_load, o->scene, t0)) {
@@ -470,28 +557,50 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     /* Frames until the image settles: no pixel changes by more than one code value (light-list
      * order comes from atomics, so the last bit may flicker) for MG_SETTLED frames in a row. Before
      * DENG-430 textured surfaces flickered here under Metal shader validation. */
-    u32 settled = 0, k = 0, changed = 0;
-    for (; k < MG_MAX_FRAMES && settled < MG_SETTLED; ++k) {
-        if (!mg_frame(&m) || !mg_read(&m)) {
+    if (o->path_tracer) {
+        for (u32 sample = 0; sample < o->samples; ++sample)
+            if (!mg_frame(&m)) {
+                mg_close(&m);
+                return;
+            }
+        de_gpu_wait_idle(ctx->device);
+        if (de_renderer_path_samples(m.r, m.view) != o->samples) {
+            de_golden_fail(ctx, "PT sample progression: %u expected %u",
+                           de_renderer_path_samples(m.r, m.view), o->samples);
             mg_close(&m);
             return;
         }
-        changed = k > 0 ? mg_changed(&m) : ctx->width * ctx->height;
-        settled = k >= MG_MIN_FRAMES && changed == 0u ? settled + 1u : 0u;
-        u8 *t = m.prev;
+        if (!mg_read(&m) || !mg_pt_guides(&m)) {
+            mg_close(&m);
+            return;
+        }
+        printf("  PT golden %s: %u actual samples, fixed seed0, exposure1, final denoise OFF\n",
+               o->scene, o->samples);
+    } else {
+        u32 settled = 0, k = 0, changed = 0;
+        for (; k < MG_MAX_FRAMES && settled < MG_SETTLED; ++k) {
+            if (!mg_frame(&m) || !mg_read(&m)) {
+                mg_close(&m);
+                return;
+            }
+            changed = k > 0 ? mg_changed(&m) : ctx->width * ctx->height;
+            settled = k >= MG_MIN_FRAMES && changed == 0u ? settled + 1u : 0u;
+            u8 *t = m.prev;
+            m.prev = m.now;
+            m.now = t;
+        }
+        /* m.prev holds the last image. */
+        u8 *last = m.prev;
         m.prev = m.now;
-        m.now = t;
-    }
-    /* m.prev holds the last image. */
-    u8 *last = m.prev;
-    m.prev = m.now;
-    m.now = last;
-    printf("  %s settled after %u frames (%u pixels changed in the last one)\n", o->scene, k,
-           changed);
-    if (settled < MG_SETTLED) {
-        de_golden_fail(ctx, "%s: the image did not settle in %u frames", o->scene, MG_MAX_FRAMES);
-        mg_close(&m);
-        return;
+        m.now = last;
+        printf("  %s settled after %u frames (%u pixels changed in the last one)\n", o->scene, k,
+               changed);
+        if (settled < MG_SETTLED) {
+            de_golden_fail(ctx, "%s: the image did not settle in %u frames", o->scene,
+                           MG_MAX_FRAMES);
+            mg_close(&m);
+            return;
+        }
     }
     if (o->furnace)
         mg_check_furnace(&m);
@@ -534,4 +643,22 @@ DE_GOLDEN_SCENE(materials_khr_samples) {
 
 DE_GOLDEN_SCENE(materials_layers_furnace) {
     mg_run(ctx, &(mg_opts){.scene = "scenes/layers_furnace", .furnace = true});
+}
+
+/* Shared original S14 asset loader, selected from the S17 scene registration without copying
+ * assets. */
+void de__golden_pathtracer_assets(de_golden_ctx *ctx, bool cornell) {
+    if (cornell && de_fs_mount("ptref", DE_GOLDEN_PT_ASSETS, 0, 0) != DE_OK) {
+        de_golden_fail(ctx, "PT assets mount failed");
+        return;
+    }
+    mg_opts o = {.scene = cornell ? "pt/cornell" : "scenes/furnace",
+                 .path_tracer = true,
+                 .extra_manifest = cornell ? "ptref:/assets.toml" : NULL,
+                 .samples = 4096};
+    mg_run(ctx, &o);
+#if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
+    mg_cvar("r.pt.golden", "0");
+    mg_cvar("r.pt.final_denoise", "0");
+#endif
 }
