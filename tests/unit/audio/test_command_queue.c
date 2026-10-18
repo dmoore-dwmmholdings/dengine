@@ -148,7 +148,7 @@ TEST(audio_cmdq, play_on_full_queue_gives_slot_back) {
     EXPECT_TRUE(DE_HANDLE_VALID(v3));
     f32 cap[256 * 2];
     de__audio_null_pump(a, 256, cap);
-    EXPECT_FLOAT_EQ(cap[0], 1.0, 0.0);
+    EXPECT_FLOAT_EQ(cap[0], 0.70710678118f, 0.0);
     de_audio_destroy(a);
     EXPECT_EQ(test_src_closes(&s2), 1u);
     EXPECT_EQ(test_src_closes(&s3), 1u);

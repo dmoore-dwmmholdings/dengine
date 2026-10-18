@@ -12,7 +12,8 @@ struct de__resampler {
     u32 ramp;
     u64 received;
     bool finished;
-    f32 coeff[(PHASES + 1) * TAPS];
+    f32 *coeff;
+    bool owns_coeff;
     f32 samples[RING * 8];
 };
 static f64 i0(f64 x) {
@@ -40,6 +41,12 @@ de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de
     s->a = a;
     s->channels = channels;
     s->ratio = s->target = ratio;
+    s->coeff = DE_ALLOC(a, (PHASES + 1) * TAPS * sizeof(f32), 16, DE_MEM_AUDIO);
+    if (!s->coeff) {
+        DE_FREE(a, s, sizeof *s);
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "resample coefficient bank");
+    }
+    s->owns_coeff = true;
     f64 cutoff = 0.94 / (ratio > 1 ? ratio : 1), denom = i0(10);
     for (u32 p = 0; p <= PHASES; ++p) {
         f64 total = 0;
@@ -58,9 +65,38 @@ de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de
     *out = s;
     return DE_OK;
 }
+de_result de__resample_create_shared(const de_allocator *a, u32 channels, f64 ratio,
+                                     const de__resampler *bank, de__resampler **out) {
+    if (out)
+        *out = NULL;
+    if (!out || !bank || channels < 1 || channels > 8 || !valid_ratio(ratio))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid shared resampler");
+    if (!a)
+        a = de_heap_allocator();
+    de__resampler *s = DE_ALLOC(a, sizeof *s, DE_ALIGNOF(de__resampler), DE_MEM_AUDIO);
+    if (!s)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "shared resampler state");
+    memset(s, 0, sizeof *s);
+    s->a = a;
+    s->channels = channels;
+    s->ratio = s->target = ratio;
+    s->coeff = bank->coeff;
+    *out = s;
+    return DE_OK;
+}
+void de__resample_format(de__resampler *s, u32 channels, f64 ratio) {
+    if (!s || channels < 1 || channels > 8 || !valid_ratio(ratio))
+        return;
+    s->channels = channels;
+    s->target = ratio;
+    de__resample_reset(s);
+}
 void de__resample_destroy(de__resampler *s) {
-    if (s)
+    if (s) {
+        if (s->owns_coeff)
+            DE_FREE(s->a, s->coeff, (PHASES + 1) * TAPS * sizeof(f32));
         DE_FREE(s->a, s, sizeof *s);
+    }
 }
 void de__resample_reset(de__resampler *s) {
     if (!s)

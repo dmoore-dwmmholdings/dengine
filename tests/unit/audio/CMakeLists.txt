@@ -34,3 +34,11 @@ if(TARGET test_sound_import)
     target_compile_definitions(test_sound_import PRIVATE
         "DE_SOUND_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/sound-import-tmp\"")
 endif()
+
+# DENG-312: null-capture voice graph and bus/channel behavior.
+if(TARGET de_audio)
+    de_add_test(NAME audio_voices SOURCES test_voices.c LIBS de_audio TIMEOUT 120)
+    de_add_test(NAME audio_buses SOURCES test_buses.c LIBS de_audio)
+    target_include_directories(test_audio_voices PRIVATE "${DE_ROOT_DIR}/src")
+    target_include_directories(test_audio_buses PRIVATE "${DE_ROOT_DIR}/src")
+endif()
