@@ -25,6 +25,7 @@
 #endif
 
 #include "de_test.h"
+#include "de_alloc_guard.h"
 
 #include <dengine/de_base.h>
 #include <dengine/de_debug.h>
@@ -45,6 +46,7 @@
 #include "render/scene/gpu_scene.h"
 #include "render/world/render_world.h"
 #include "render/sprite/sprite_internal.h"
+#include "render/skin/skin_internal.h"
 
 #if DE_HAS_GPU_VULKAN
 #include "gpu/vulkan/vk_internal.h"
@@ -303,6 +305,8 @@ static void mesh_free(fmesh *fm, de_gpu_device *dev) {
     for (u32 i = 0; i < 4; ++i)
         if (dev != NULL && DE_HANDLE_VALID(fm->buf[i]))
             de_gpu_buffer_destroy(dev, fm->buf[i]);
+    if(dev && fm->rm.buffers[DE_RENDER_MESH_INDICES].id)
+        de_gpu_buffer_destroy(dev,fm->rm.buffers[DE_RENDER_MESH_INDICES]);
     free(fm->pos);
     free(fm->uv);
     memset(fm, 0, sizeof *fm);
@@ -425,6 +429,7 @@ typedef struct rs_result {
 } rs_result;
 
 typedef struct rsx {
+    de_renderer skin_renderer;
     de_tracking_allocator track;
     de_allocator alloc;
     de_arena *arena;
@@ -516,6 +521,8 @@ static void rsx_teardown(rsx *f) {
         de_gpu_wait_idle(f->dev);
     de__vis_shared_destroy(f->vis);
     de__material_models_destroy(f->models);
+    de__rt_scene_destroy(&f->skin_renderer);
+    de__skin_destroy(&f->skin_renderer);
     de__gpu_scene_destroy(f->gs);
     for (u32 i = 0; i < MAX_MESHES; ++i)
         mesh_free(&g_mesh[i], f->dev);
@@ -608,7 +615,10 @@ static void rsx_open(rsx *f, de_gpu_backend backend) {
               DE_OK);
     f->fence = de_gpu_fence_create(f->dev, 0);
     ASSERT_TRUE(DE_HANDLE_VALID(f->fence));
+    f->skin_renderer.dev=f->dev; f->skin_renderer.alloc=&f->alloc;
+    f->skin_renderer.caps=*caps; de_mutex_init(&f->skin_renderer.lock);
     de__gpu_scene_desc gd = {.device = f->dev,
+                             .renderer = &f->skin_renderer,
                              .allocator = &f->alloc,
                              .resolver = {.mesh = fake_mesh,
                                           .material = fake_material,
@@ -710,6 +720,7 @@ static u32 rsx_texture(rsx *f, u32 size, const u8 *mip_r, u8 g, u8 b) {
             }
     }
     const u64 n = f->frames++;
+    f->skin_renderer.frame_index=n;
     de__rg_reset(f->g);
     de_arena_reset(f->arena);
     ASSERT_EQ(de__rg_begin(f->g, f->arena), DE_OK);
@@ -795,6 +806,7 @@ static bool rsx_wait(rsx *f, u64 v, const char *what) {
 /* Builds, runs and waits for one frame; fills f->res. */
 static bool rsx_frame(rsx *f) {
     const u64 n = f->frames++;
+    f->skin_renderer.frame_index=n;
     world_begin(&f->w);
     de_mat4 view, proj;
     camera(f, &view, &proj);
@@ -1722,6 +1734,7 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
     rp->vertex_count = nverts;
     rp->pitch = (u32)align_up((u64)f->width * 8u, 256u);
     const u64 n = f->frames++;
+    f->skin_renderer.frame_index=n;
     de__rg_reset(f->g);
     de_arena_reset(f->arena);
     ASSERT_EQ(de__rg_begin(f->g, f->arena), DE_OK);
@@ -1782,6 +1795,159 @@ static void texture_lod(rsx *f, de_gpu_backend b) {
     (void)b;
     SKIP("this build has no shader importer (DE_BUILD_TOOLS off or no Slang)");
 #endif
+}
+
+static void skin_source(rsx *f,u32 mesh) {
+    fmesh *fm=&g_mesh[mesh-1];de_render_mesh *m=&fm->rm;
+    u64 old=m->buffer_bytes[DE_RENDER_MESH_VERTICES], bytes=old+(u64)m->vertex_count*12;
+    u8 *data=zalloc((size_t)bytes);
+    memcpy(data,de_gpu_buffer_map(f->dev,fm->buf[0]),(size_t)old);
+    m->stream_offset[6]=(u32)old;m->stream_format[6]=DE_COOKED_VF_U16X4;
+    m->stream_offset[7]=(u32)(old+(u64)m->vertex_count*8);m->stream_format[7]=DE_COOKED_VF_UNORM8X4;
+    for(u32 v=0;v<m->vertex_count;++v) {
+        u16 joints[4]={(u16)(fm->pos[v*3]>=0),0,0,0};
+        memcpy(data+old+(u64)v*8,joints,sizeof joints);
+        data[m->stream_offset[7]+v*4]=255;
+    }
+    de_gpu_buffer_destroy(f->dev,fm->buf[0]);
+    fm->buf[0]=upload_buf(f->dev,data,bytes,0,"skinned test streams");
+    m->buffers[0]=fm->buf[0];m->bindless[0]=de_gpu_buffer_bindless(f->dev,fm->buf[0]);
+    m->buffer_bytes[0]=bytes;free(data);
+    u32 *indices=zalloc((size_t)fm->meshlets*PATCH_TRIS*3*sizeof(u32));
+    for(u32 ml=0;ml<fm->meshlets;++ml)for(u32 t=0;t<PATCH_TRIS*3;++t)
+        indices[ml*PATCH_TRIS*3+t]=ml*PATCH_VERT+fm->tris[t];
+    m->index_count=fm->meshlets*PATCH_TRIS*3;m->lods[0].index_count=m->index_count;
+    m->buffers[DE_RENDER_MESH_INDICES]=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){
+        .size=(u64)m->index_count*4,.usage=DE_USAGE_STORAGE|DE_USAGE_ACCEL_INPUT,
+        .memory=DE_MEM_UPLOAD,.name="skin triangle indices"});
+    memcpy(de_gpu_buffer_map(f->dev,m->buffers[DE_RENDER_MESH_INDICES]),indices,(size_t)m->index_count*4);
+    m->bindless[DE_RENDER_MESH_INDICES]=de_gpu_buffer_bindless(f->dev,m->buffers[DE_RENDER_MESH_INDICES]);
+    free(indices);
+}
+static void skin_read_positions(rsx *f,de__skin_entry *e,f32 *current,f32 *previous) {
+    u64 bytes=(u64)e->source->vertex_count*12;
+    de_gpu_buffer rb=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){.size=bytes*2,
+        .usage=DE_USAGE_COPY_DST,.memory=DE_MEM_READBACK,.name="skin reference readback"});
+    de_gpu_cmd *cmd=de_gpu_cmd_begin(f->dev,DE_QUEUE_GRAPHICS,"skin readback");
+    for(u32 i=0;i<2;++i) {
+        de_gpu_buffer b=e->output[i?e->current^1u:e->current];
+        de_gpu_barrier barrier={.buffer=b,.before=DE_ACCESS_SHADER_READ|DE_ACCESS_ACCEL_READ,.after=DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(cmd,&barrier,1);
+        de_gpu_cmd_copy_buffer(cmd,rb,bytes*i,b,0,bytes);
+        barrier.before=DE_ACCESS_COPY_SRC;barrier.after=DE_ACCESS_SHADER_READ|DE_ACCESS_ACCEL_READ;
+        de_gpu_cmd_barriers(cmd,&barrier,1);
+    }
+    u64 value=++f->frames;
+    ASSERT_EQ(de_gpu_queue_submit(f->dev,DE_QUEUE_GRAPHICS,&(de_gpu_submit){.cmds=&cmd,.cmd_count=1,.signal=f->fence,.signal_value=value}),DE_OK);
+    ASSERT_TRUE(rsx_wait(f,value,"skin reference"));
+    u8 *map=de_gpu_buffer_map(f->dev,rb);memcpy(current,map,(size_t)bytes);memcpy(previous,map+bytes,(size_t)bytes);
+    de_gpu_buffer_destroy(f->dev,rb);
+}
+static f32 skin_shadow_ray(rsx *f) {
+    de_renderer *r=&f->skin_renderer;r->gpu_scene=f->gs;r->settings.tier=DE_TIER_RT;
+    ASSERT_EQ(de__rt_prepare(r),DE_OK);
+    de__skin_entry *e=de__skin_instance(r,0);ASSERT_TRUE(e!=NULL);
+    de_gpu_accel tlas=de_gpu_accel_create(f->dev,&(de_gpu_accel_desc){.is_tlas=true,.max_instances=1,.name="skin shadow TLAS"});
+    ASSERT_TRUE(tlas.id!=0);
+    de_gpu_tlas_instance instance={.transform={1,0,0,0,0,1,0,0,0,0,1,0},.mask=255,.blas=e->blas[e->current][0]};
+    de_gpu_buffer instances=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){.size=sizeof instance,
+        .usage=DE_USAGE_ACCEL_INPUT,.memory=DE_MEM_UPLOAD,.name="skin shadow instance"});
+    memcpy(de_gpu_buffer_map(f->dev,instances),&instance,sizeof instance);
+    u32 zero=0;de_gpu_buffer lods=upload_buf(f->dev,&zero,4,0,"skin selected LOD");
+    u32 query[8]={de__gpu_scene_table(f->gs,DE__GS_VIEWS).bindless,0,
+        de_gpu_buffer_bindless(f->dev,r->rt_scene->metadata[r->rt_scene->metadata_index]),
+        de_gpu_buffer_bindless(f->dev,lods),de_gpu_sampler_bindless(f->dev,r->rt_scene->sampler),0,DE__RT_CAST_SHADOWS,
+        de_gpu_accel_bindless(f->dev,tlas)};
+    de_gpu_buffer context=upload_buf(f->dev,query,sizeof query,32,"skin ray context");
+    const de__rt_ray ray={.origin={1.2f,0,2,.001f},.direction={0,0,-1,10}};
+    de_gpu_buffer rays=upload_buf(f->dev,&ray,sizeof ray,sizeof ray,"skin shadow ray");
+    de_gpu_buffer hits=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){.size=sizeof(de__rt_hit),
+        .usage=DE_USAGE_STORAGE|DE_USAGE_COPY_SRC,.stride=sizeof(de__rt_hit),.name="skin shadow hit"});
+    de_gpu_buffer rb=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){.size=sizeof(de__rt_hit),
+        .usage=DE_USAGE_COPY_DST,.memory=DE_MEM_READBACK,.name="skin shadow readback"});
+    de_gpu_cmd *cmd=de_gpu_cmd_begin(f->dev,DE_QUEUE_GRAPHICS,"skin shadow query");
+    de_gpu_cmd_build_tlas(cmd,tlas,instances,1,false);
+    de_gpu_barrier barrier={.accel=tlas,.before=DE_ACCESS_ACCEL_WRITE,.after=DE_ACCESS_ACCEL_READ};
+    de_gpu_cmd_barriers(cmd,&barrier,1);
+    de__rt_context ctx={.tlas=tlas,.query=context};
+    de__rt_trace(r,cmd,&ctx,rays,hits,1,DE__RT_CAST_SHADOWS);
+    barrier=(de_gpu_barrier){.buffer=hits,.before=DE_ACCESS_SHADER_WRITE,.after=DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd,&barrier,1);de_gpu_cmd_copy_buffer(cmd,rb,0,hits,0,sizeof(de__rt_hit));
+    u64 value=++f->frames;
+    ASSERT_EQ(de_gpu_queue_submit(f->dev,DE_QUEUE_GRAPHICS,&(de_gpu_submit){.cmds=&cmd,.cmd_count=1,.signal=f->fence,.signal_value=value}),DE_OK);
+    ASSERT_TRUE(rsx_wait(f,value,"skin shadow query"));
+    f32 distance=((de__rt_hit *)de_gpu_buffer_map(f->dev,rb))->t;
+    de_gpu_accel_destroy(f->dev,tlas);
+    const de_gpu_buffer buffers[]={instances,lods,context,rays,hits,rb};
+    for(u32 i=0;i<6;++i)de_gpu_buffer_destroy(f->dev,buffers[i]);
+    return distance;
+}
+static void skin_render(rsx *f,de_gpu_backend backend,bool allocation_check) {
+    rsx_open(f,backend);
+    u32 mesh=rsx_mesh_plane(f,1,1,2,1,false);skin_source(f,mesh);
+    u32 material=material_add((de_vec4){.5f,.5f,.5f,1});de_affine identity=de_affine_identity();
+    world_set(&f->w,0,mesh,identity,identity,material);
+    f->w.f.instances.flags[0]|=DE__RW_INST_CAST_SHADOWS|DE__RW_INST_VISIBLE_IN_RT;
+    ASSERT_TRUE(rsx_frame(f));
+    size_t pixels=(size_t)f->width*f->height;
+    u32 *static_ids=zalloc(pixels*sizeof(u32));memcpy(static_ids,f->res.ids,pixels*sizeof(u32));
+    de_affine joints[2]={identity,identity};
+    de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000},joints,2);
+    ASSERT_TRUE(rsx_frame(f));
+    ASSERT_EQ(memcmp(static_ids,f->res.ids,pixels*sizeof(u32)),0);free(static_ids);
+    de__skin_entry *e=de__skin_instance(&f->skin_renderer,0);ASSERT_TRUE(e!=NULL);
+    f32 *positions=zalloc((size_t)e->source->vertex_count*12),*previous=zalloc((size_t)e->source->vertex_count*12);
+    skin_read_positions(f,e,positions,previous);
+    for(u32 v=0;v<e->source->vertex_count*3;++v) {ASSERT_FLOAT_EQ(positions[v],g_mesh[mesh-1].pos[v],1e-5);ASSERT_FLOAT_EQ(previous[v],positions[v],1e-5);}
+    ASSERT_TRUE(skin_shadow_ray(f)<0);
+    joints[1]=de_affine_from_trs((de_vec3){0,0,0},de_quat_axis_angle((de_vec3){0,0,1},1.57079632679f),(de_vec3){1,1,1});
+    de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000},joints,2);
+    ASSERT_TRUE(rsx_frame(f));skin_read_positions(f,e,positions,previous);
+    for(u32 v=0;v<e->source->vertex_count;++v) {
+        const f32 *p=&g_mesh[mesh-1].pos[v*3];
+        ASSERT_FLOAT_EQ(positions[v*3],p[0]>=0?-p[1]:p[0],1e-5);
+        ASSERT_FLOAT_EQ(positions[v*3+1],p[0]>=0?p[0]:p[1],1e-5);
+    }
+    joints[1]=identity;joints[1].m[9]=.4f;
+    de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000},joints,2);
+    ASSERT_TRUE(rsx_frame(f));ASSERT_TRUE(rsx_frame(f)); /* settle rotation -> translation */
+    joints[1].m[9]=.6f;
+    de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000},joints,2);
+    ASSERT_TRUE(rsx_frame(f));
+    size_t sample=(size_t)(f->height/2)*f->width+f->width/2+30;
+    ASSERT_NE(f->res.ids[sample],DE__VIS_ID_EMPTY);
+    f32 expected=.2f*f->res.view.proj[0].v[0]/10.f;
+    ASSERT_FLOAT_EQ(f->res.motion[sample*2],expected,1.f/f->width);
+    ASSERT_TRUE(rsx_frame(f)); /* omitted palette keeps last one, zero motion */
+    ASSERT_FLOAT_EQ(f->res.motion[sample*2],0,1.f/f->width);
+    ASSERT_FLOAT_EQ(skin_shadow_ray(f),2,.001);
+    for(u32 frame=0;frame<100;++frame) {
+        ASSERT_TRUE(rsx_frame(f));
+        ASSERT_EQ(de__rt_prepare(&f->skin_renderer),DE_OK);
+    }
+    ASSERT_FLOAT_EQ(skin_shadow_ray(f),2,.001);
+    ASSERT_GT(e->refits,80u);ASSERT_GT(e->rebuilds,5u);
+    if(!allocation_check) {free(positions);free(previous);return;}
+    /* Warm all palette upload-ring slots for 100 instances, 60 joints each. */
+    world_free(&f->w);world_init(&f->w,100);
+    de_affine sixty[60];for(u32 j=0;j<60;++j)sixty[j]=identity;
+    for(u32 i=0;i<100;++i) {
+        world_set(&f->w,i,mesh,identity,identity,material);
+        de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000+i},sixty,60);
+    }
+    de__gpu_scene_assets assets={.mesh=fake_mesh};
+    for(u32 frame=0;frame<8;++frame) {
+        f->skin_renderer.frame_index=1000+frame;
+        ASSERT_EQ(de__skin_prepare(&f->skin_renderer,&f->w.f,&assets),DE_OK);
+        de_gpu_wait_idle(f->dev);
+    }
+    de_alloc_guard guard={0};de_alloc_guard_begin(&guard);
+    for(u32 i=0;i<100;++i)de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000+i},sixty,60);
+    f->skin_renderer.frame_index=1008;
+    de_result result=de__skin_prepare(&f->skin_renderer,&f->w.f,&assets);
+    de_gpu_wait_idle(f->dev);de_alloc_guard_end(&guard);
+    ASSERT_EQ(result,DE_OK);DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    free(positions);free(previous);
 }
 
 /* Actual sprite instance -> shared quad -> alpha vis -> model-2 resolve readbacks. */
@@ -1867,6 +2033,8 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
         game_model_dispatch(f, backend);                                                           \
     }
 
+TEST_F(resolve, skin_no_alloc_hundred_metal, rsx) {skin_render(f,DE_GPU_METAL,true);}
+TEST_F(resolve, skin_bind_reference_motion_metal, rsx) {skin_render(f,DE_GPU_METAL,false);}
 TEST_F(resolve, sprite_vis_normal_emissive_cutout_metal, rsx) { sprite_render(f,DE_GPU_METAL); }
 GPU_TESTS(metal, DE_GPU_METAL)
 GPU_TESTS(vulkan, DE_GPU_VULKAN)

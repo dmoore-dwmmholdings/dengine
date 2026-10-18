@@ -109,6 +109,7 @@ enum {
     DE__GS_INSTANCE_LIVE = 1u,
     DE__GS_INSTANCE_CAST_SHADOWS = 2u,
     DE__GS_INSTANCE_VISIBLE_IN_RT = 4u,
+    DE__GS_INSTANCE_SKINNED = 16u,
     DE__GS_INSTANCE_HAS_BOUNDS = 8u
 };
 /** DeGpuMesh.flags */
@@ -401,6 +402,7 @@ typedef struct de__gpu_scene_assets {
 
 /** de__gpu_scene_create settings. `(desc){0}` with a device is valid. */
 typedef struct de__gpu_scene_desc {
+    de_renderer *renderer; /**< optional skinning owner; NULL in standalone scenes */
     de_gpu_device *device;
     const de_allocator *allocator; /**< NULL = the heap */
     /** Records come from this asset system (de_render_mesh_get, ...), unless `resolver` is set.

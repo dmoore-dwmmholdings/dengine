@@ -1,4 +1,5 @@
 #include "render/denoise/denoise_internal.h"
+#include "render/skin/skin_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_shadows.h"
@@ -86,6 +87,7 @@ static void renderer_free(de_renderer *r) {
     de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
     de__rt_scene_destroy(r);
+    de__skin_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
@@ -341,6 +343,7 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
 
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
     res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
+                                                     .renderer = r,
                                                      .allocator = a,
                                                      .assets = r->assets,
                                                      .uploader = r->uploader,

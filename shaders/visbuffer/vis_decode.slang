@@ -232,6 +232,8 @@ public bool de_vis_mesh_has_stream(DeGpuMesh mesh, uint stream)
 /// The object-space normal of mesh vertex `vertex` (OCT16), (0, 0, 1) without normals.
 public float3 de_vis_mesh_normal(DeGpuMesh mesh, uint vertex)
 {
+    if (mesh.stream_format[0].y == DE_VIS_VF_F32X3)
+        return asfloat(de_bytes(mesh.vertices).load3(mesh.stream_offset[0].y+vertex*12u));
     if (mesh.stream_format[0].y != DE_VIS_VF_OCT16)
         return float3(0.0, 0.0, 1.0);
     uint q = de_bytes(mesh.vertices).load(mesh.stream_offset[0].y + vertex * 4u);
@@ -242,6 +244,8 @@ public float3 de_vis_mesh_normal(DeGpuMesh mesh, uint vertex)
 /// (de_cooked_mesh_tangent); (1, 0, 0, 1) without tangents.
 public float4 de_vis_mesh_tangent(DeGpuMesh mesh, uint vertex)
 {
+    if (mesh.stream_format[0].z == 3u)
+        return asfloat(de_bytes(mesh.vertices).load4(mesh.stream_offset[0].z+vertex*16u));
     if (mesh.stream_format[0].z != DE_VIS_VF_OCT16_SIGN)
         return float4(1.0, 0.0, 0.0, 1.0);
     uint q = de_bytes(mesh.vertices).load(mesh.stream_offset[0].z + vertex * 4u);

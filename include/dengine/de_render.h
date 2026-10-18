@@ -558,6 +558,11 @@ DE_API de_material de_material_create_instance(de_renderer *r, de_material base)
  * default material). Not for asset materials (release their load handles). */
 DE_API void de_material_destroy_instance(de_renderer *r, de_material m);
 
+/** Copies model-space pose x inverse-bind matrices. Omitted palettes retain their last pose.
+ * Zero joints selects the bind pose. Main-thread PostUpdate; storage grows only when needed. */
+DE_API void de_render_set_skin_palette(de_renderer *r, de_entity entity, const de_affine *joints,
+                                       u32 joint_count);
+
 /* ---------- 2D ---------- */
 typedef enum de_plane_2d { DE_PLANE_SIDE_XZ, DE_PLANE_TOP_XY } de_plane_2d;
 

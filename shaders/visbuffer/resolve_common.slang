@@ -212,7 +212,13 @@ public float2 de_resolve_motion(DeResolvePoint r, DeSceneConstants sc)
 {
     float3 p = de_resolve_object_pos(r);
     float4 now = de_vis_clip(sc.view_proj, de_vis_transform_point(r.inst.transform, p));
-    float4 then = de_vis_clip(sc.prev_view_proj, de_vis_transform_point(r.inst.prev_transform, p));
+    float3 previous=p;
+    if((r.inst.flags&DE_GPU_INSTANCE_SKINNED)!=0 && r.inst.reserved1!=0) {
+        DeBytes b=de_bytes(r.inst.reserved1);
+        previous=de_resolve_lerp3(r,asfloat(b.load3(r.vertex.x*12)),
+            asfloat(b.load3(r.vertex.y*12)),asfloat(b.load3(r.vertex.z*12)));
+    }
+    float4 then = de_vis_clip(sc.prev_view_proj, de_vis_transform_point(r.inst.prev_transform, previous));
     if (!(now.w > 0.0) || !(then.w > 0.0))
         return float2(0.0, 0.0);
     return now.xy / now.w - then.xy / then.w;
