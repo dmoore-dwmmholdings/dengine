@@ -125,7 +125,7 @@ public SurfaceData de_surface_specular_only(SurfaceData s)
 
 /// Adds the light reaching `s` from direction `wi` (world) with illuminance `e` (rgb lux). The
 /// split is the model's own (DENG-306: evaluate_split), exact for metals too.
-void add_light<M : IMaterialSplitModel>(inout DeDirect r, SurfaceData s, ShadingFrame f,
+public void add_light<M : IMaterialSplitModel>(inout DeDirect r, SurfaceData s, ShadingFrame f,
                                         float3 wo, float3 wi, float3 e, bool split)
 {
     float3 wil = f.to_local(wi);
@@ -299,7 +299,9 @@ void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLigh
         ssr.rgb *= material > 0 ? combined / material : 0;
     }
     bool opaque_specular = (lv.inputs.reserved0 & DE_INPUT_SPECULAR_OPAQUE) != 0u;
-    if (opaque_specular && film && ssr.a > 0) {
+    if ((lv.inputs.reserved0 & DE_INPUT_SPECULAR_LAYERS) != 0u) {
+        specular = lerp(specular, ssr.rgb, saturate(ssr.a));
+    } else if (opaque_specular && film && ssr.a > 0) {
         // The actual SSR producer has only quantized G-buffer parameters, including AO.
         // Opaque deferred surfaces retain these base values; layer material data adds the
         // film later. Reweight only the base response, never a summed coat/sheen result.

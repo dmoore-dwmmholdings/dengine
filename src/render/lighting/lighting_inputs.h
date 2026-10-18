@@ -29,6 +29,7 @@ DE_EXTERN_C_BEGIN
 #define DE__INPUT_AO_GTAO          8u
 #define DE__INPUT_ATLAS_METADATA   16u
 #define DE__INPUT_CONTACT_METADATA 32u
+#define DE__INPUT_SPECULAR_LAYERS  64u
 
 /** The resources one view's lighting reads this frame (invalid = none). */
 typedef struct de__lighting_inputs {
@@ -65,6 +66,7 @@ typedef struct de__lighting_inputs {
     de_rg_resource rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys;
     u32 rt_shadow_extent, rt_shadow_config;
     de_rg_resource restir_diffuse, restir_specular, restir_distance;
+    bool indirect_specular_layers; /**< Full material response, including Standard layers. */
     /* ---- append new inputs here (and in de__lighting_inputs_gpu, lighting_inputs.slang) ---- */
 } de__lighting_inputs;
 

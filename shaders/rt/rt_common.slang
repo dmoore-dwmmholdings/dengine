@@ -12,6 +12,8 @@ public float3 de_rt_offset(float3 p,float3 geometric_normal,float3 direction) {
 }
 public DeRtHit de_rt_query(DeRtContext q,DeRtRay r) {
     DeRtHit hit=(DeRtHit)0;hit.t=-1;hit.instance=0xffffffffu;
+    // Empty/inactive segments have the same canonical miss on every backend.
+    if(!(r.direction.w>r.origin.w)||!(r.direction.w>0)||!(dot(r.direction.xyz,r.direction.xyz)>0))return hit;
     RayDesc ray;ray.Origin=r.origin.xyz;ray.Direction=r.direction.xyz;
     ray.TMin=r.origin.w;ray.TMax=r.direction.w;
     RayQuery<RAY_FLAG_NONE> query;

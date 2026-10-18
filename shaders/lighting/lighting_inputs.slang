@@ -21,6 +21,7 @@ public static const uint DE_INPUT_SHADOW_METADATA = 4;
 public static const uint DE_INPUT_AO_GTAO = 8u;
 public static const uint DE_INPUT_ATLAS_METADATA = 16u;
 public static const uint DE_INPUT_CONTACT_METADATA = 32u;
+public static const uint DE_INPUT_SPECULAR_LAYERS = 64u;
 
 public struct LightingInputs
 {

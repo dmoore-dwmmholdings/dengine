@@ -97,6 +97,7 @@ static const de__lighting_const k_consts[] = {
     {"DE_INPUT_AO_GTAO", DE__INPUT_AO_GTAO},
     {"DE_INPUT_ATLAS_METADATA", DE__INPUT_ATLAS_METADATA},
     {"DE_INPUT_CONTACT_METADATA", DE__INPUT_CONTACT_METADATA},
+    {"DE_INPUT_SPECULAR_LAYERS", DE__INPUT_SPECULAR_LAYERS},
 };
 
 const de__lighting_const *de__lighting_layout_consts(u32 *count) {
@@ -745,8 +746,6 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
 
     lc->constants_bindless = vs->constants_bindless;
     lc->constants_entry = vs->entry;
-    if (lt->direct_producer)
-        DE_TRY(lt->direct_producer(lt->direct_producer_user, g, vc, lc, &in));
 
     lp_pass base = {
         .lt = lt,
@@ -771,6 +770,9 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     lc->constants_bindless = vs->constants_bindless;
     lc->constants_entry = vs->entry;
     lc->sampler_bindless = lt->sampler_bindless;
+    /* Secondary-hit producers also consume the canonical LTC resources. */
+    if (lt->direct_producer)
+        DE_TRY(lt->direct_producer(lt->direct_producer_user, g, vc, lc, &in));
 
     /* The split targets. DENG-306: subsurface scattering alone needs only the diffuse target, and
      * no clear (the SSS pass reads it at SUBSURFACE pixels only, which the deferred pass writes).
@@ -863,7 +865,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         b.probe_sampler = in.probe_sampler;
         memcpy(b.probe_view_z, in.probe_view_z, sizeof b.probe_view_z);
         b.inputs_dst = entry + offsetof(de__lighting_view, inputs);
-        b.input_flags = (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
+        b.input_flags = (in.indirect_specular_layers ? DE__INPUT_SPECULAR_LAYERS : 0u) |
+                        (in.indirect_specular_opaque ? DE__INPUT_SPECULAR_OPAQUE : 0u) |
                         (in.indirect_diffuse_opaque ? DE__INPUT_DIFFUSE_OPAQUE : 0u) |
                         (DE_HANDLE_VALID(in.shadow_records) ? DE__INPUT_SHADOW_METADATA : 0u) |
                         (in.ao_gtao ? DE__INPUT_AO_GTAO : 0u) |
