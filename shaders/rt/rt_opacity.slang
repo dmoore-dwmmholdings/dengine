@@ -70,7 +70,11 @@ public bool de_rt_material_opacity(DeResolvePoint r,DeGpuMaterial m,uint sampler
     if(tex!=DE_BINDLESS_INVALID) {
         float2 dx,dy;
         float2 uv=de_resolve_uv(r,de_material_texcoord(m,0),dx,dy);
-        a*=de_tex2d(tex).SampleLevel(de_sampler(sampler),uv,0).a;
+        if((m.textures[0].x&DE_GPU_MATERIAL_TEXTURE_POINT)!=0) {
+            uint w,h;de_tex2d(tex).GetDimensions(w,h);
+            int2 pixel=clamp(int2(floor(uv*float2(w,h))),int2(0),int2(w,h)-1);
+            a*=de_tex2d(tex).Load(int3(pixel,0)).a;
+        }else a*=de_tex2d(tex).SampleLevel(de_sampler(sampler),uv,0).a;
     }
     return a>=m.pbr.w;
 }

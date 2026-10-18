@@ -36,6 +36,7 @@ public static const uint DE_GPU_MATERIAL_ALPHA_BLEND = 2;
 /// 10:10:10 (r in bits 0-9), so a zeroed block has the KHR default, white.
 public static const uint DE_GPU_MATERIAL_TEXTURES = 19;
 public static const uint DE_GPU_MATERIAL_TEXTURE_UV1 = 0x80000000;
+public static const uint DE_GPU_MATERIAL_TEXTURE_POINT = 0x40000000;
 
 /// One material instance (256 bytes).
 public struct DeGpuMaterial
@@ -60,7 +61,7 @@ public struct DeGpuMaterial
 /// The bindless index of texture slot `s` (< DE_GPU_MATERIAL_TEXTURES) of `m`, 0 = none.
 public uint de_material_texture(DeGpuMaterial m, uint s)
 {
-    return m.textures[s >> 2][s & 3u] & ~DE_GPU_MATERIAL_TEXTURE_UV1;
+    return m.textures[s >> 2][s & 3u] & ~(DE_GPU_MATERIAL_TEXTURE_UV1|DE_GPU_MATERIAL_TEXTURE_POINT);
 }
 
 /// The UV set (0 or 1) texture slot `s` of `m` samples.

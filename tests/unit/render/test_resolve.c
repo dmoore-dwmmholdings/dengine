@@ -137,6 +137,7 @@ static fmesh g_mesh[MAX_MESHES];
 static u32 g_mesh_count;
 static de_render_material g_mat[MAX_MATS];
 static u32 g_mat_count;
+static de_render_texture g_texture_records[MAX_TEX+1];
 static u32 g_tex_bindless[MAX_TEX + 1]; /* by texture handle id (1-based) */
 
 static const de_render_mesh *fake_mesh(void *user, de_mesh m) {
@@ -146,6 +147,9 @@ static const de_render_mesh *fake_mesh(void *user, de_mesh m) {
 static const de_render_material *fake_material(void *user, de_material m) {
     (void)user;
     return m.id >= 1u && m.id <= g_mat_count ? &g_mat[m.id - 1u] : NULL;
+}
+static const de_render_texture *fake_texture_record(void *user,de_texture t) {
+    (void)user;return t.id>=1u && t.id<=MAX_TEX?&g_texture_records[t.id]:NULL;
 }
 static u32 fake_texture(void *user, de_texture t) {
     (void)user;
@@ -467,6 +471,7 @@ static void rsx_setup(rsx *f) {
     memset(g_mat, 0, sizeof g_mat);
     g_mat_count = 0;
     memset(g_tex_bindless, 0, sizeof g_tex_bindless);
+    memset(g_texture_records,0,sizeof g_texture_records);
     f->eye = (de_vec3){0.0f, 0.0f, 10.0f};
     f->target = (de_vec3){0.0f, 0.0f, 0.0f};
     f->fov = 0.9f;
@@ -622,7 +627,7 @@ static void rsx_open(rsx *f, de_gpu_backend backend) {
                              .allocator = &f->alloc,
                              .resolver = {.mesh = fake_mesh,
                                           .material = fake_material,
-                                          .texture_bindless = fake_texture},
+                                          .texture_bindless = fake_texture,.texture_record=fake_texture_record},
                              .staging_bytes = (u64)16 << 20};
     gd.initial_capacity[DE__GS_INSTANCES] = 32;
     ASSERT_EQ(de__gpu_scene_create(&gd, &f->gs), DE_OK);
@@ -2157,4 +2162,30 @@ TEST(resolve, layout_match) {
         free(text);
     }
     EXPECT_EQ(found, count);
+}
+
+TEST_F(resolve,pixel_texture_nearest_checker_metal,rsx) {
+ rsx_open(f,DE_GPU_METAL);const u8 mip[2]={0,0};u32 id=rsx_texture(f,2,mip,0,0);
+ g_texture_records[id].flags=DE_COOKED_TEXTURE_PIXEL_ART;
+ de_gpu_buffer upload=de_gpu_buffer_create(f->dev,&(de_gpu_buffer_desc){.size=512,.usage=DE_USAGE_COPY_SRC,.memory=DE_MEM_UPLOAD});
+ u8 *data=de_gpu_buffer_map(f->dev,upload);memset(data,0,512);
+ for(u32 y=0;y<2;++y)for(u32 x=0;x<2;++x){u8 *p=data+y*256+x*4;p[0]=p[1]=p[2]=((x+y)&1)?255:0;p[3]=255;}
+ de_gpu_cmd *cmd=de_gpu_cmd_begin(f->dev,DE_QUEUE_GRAPHICS,"nearest checker upload");
+ de_gpu_barrier b={.texture=f->tex[id],.before=DE_ACCESS_SHADER_READ,.after=DE_ACCESS_COPY_DST};de_gpu_cmd_barriers(cmd,&b,1);
+ de_gpu_cmd_copy_buffer_to_texture(cmd,f->tex[id],0,0,upload,0,256);b.before=DE_ACCESS_COPY_DST;b.after=DE_ACCESS_SHADER_READ;de_gpu_cmd_barriers(cmd,&b,1);
+ ASSERT_EQ(de_gpu_queue_submit(f->dev,DE_QUEUE_GRAPHICS,&(de_gpu_submit){.cmds=&cmd,.cmd_count=1}),DE_OK);de_gpu_buffer_destroy(f->dev,upload);
+ DeSprite sprite={.texture={id},.size={4,4},.pivot={.5f,.5f},.uv_rect={0,0,1,1},.color={1,1,1,1}};
+ de__rw_instances *in=&f->w.f.instances;in->sprite=&sprite;in->count=1;in->entity[0]=1234;
+ in->mesh[0].id=DE__SPRITE_MESH_ID;in->flags[0]=DE__RW_INST_SPRITE|DE__RW_INST_HAS_BOUNDS;
+ in->layer_mask[0]=1;in->transform[0]=de__sprite_local_transform(&sprite,DE_PLANE_TOP_XY);
+ in->prev_transform[0]=in->transform[0];in->bounds[0]=(de_aabb){{-2,-2,0},{2,2,0}};
+ f->w.touch_all=true;ASSERT_TRUE(rsx_frame(f));u32 covered=0,blurred=0;
+ for(size_t i=0;i<(size_t)f->width*f->height;++i)if(f->res.ids[i]!=DE__VIS_ID_EMPTY) {
+ ++covered;u32 red=f->res.gb[0][i]&255u;blurred+=red!=0 && red!=255;}
+ printf("Point pixel texture: %u covered pixels, %u blended colors\n",covered,blurred);
+ EXPECT_TRUE(covered>100);EXPECT_EQ(blurred,0u);
+ g_texture_records[id].flags=0;f->w.touch_all=true;ASSERT_TRUE(rsx_frame(f));blurred=0;
+ for(size_t i=0;i<(size_t)f->width*f->height;++i)if(f->res.ids[i]!=DE__VIS_ID_EMPTY) {
+ u32 red=f->res.gb[0][i]&255u;blurred+=red!=0 && red!=255;}
+ EXPECT_TRUE(blurred>100);in->sprite=NULL;
 }

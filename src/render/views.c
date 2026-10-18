@@ -923,6 +923,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     if (path && !path_started)
         de__pt_build(&vf, r->pt);
     vs->building = NULL;
+    de__gpu_scene_view_instances(r->gpu_scene, (de_gpu_buffer){0});
 
     if (vf.color.id != vf.output.id && DE_HANDLE_VALID(vf.color)) {
         const de__composite_item it = {.src = vf.color, .rect = {0.0f, 0.0f, (f32)s->w, (f32)s->h}};
@@ -1345,4 +1346,20 @@ void de__view_capture_camera(de_renderer *r, de_view view, const de__rw_view *ca
 u64 de__views_resource_drains(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs ? vs->resource_drains : 0;
+}
+
+/* Main-thread prepare with the render thread idle; never query assets from a view stage. */
+void de__views_prepare_pixels(de_renderer *r) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return;
+    de_texture palettes[DE__VIEW_MAX];
+    u32 count = 0;
+    de_mutex_lock(&vs->lock);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i)
+        if (vs->main[i].alive && vs->main[i].pixel_art && vs->main[i].pixel.palette_lut.id)
+            palettes[count++] = vs->main[i].pixel.palette_lut;
+    de_mutex_unlock(&vs->lock);
+    for (u32 i = 0; i < count; ++i)
+        de__pixel_prepare_palette(vs->pixel, palettes[i]);
 }

@@ -27,6 +27,8 @@ de_dvec3 de__pixel_snap(de_dvec3 position, de_plane_2d plane, f64 texel, de_vec2
     return position;
 }
 struct de__pixel {
+    de__pixel_snapshots *snapshots;
+    de__palette_runtime *palette;
     de_renderer *r;
     de__engine_shader_code code;
     de_gpu_sampler sampler;
@@ -121,14 +123,27 @@ de_result de__pixel_create(de_renderer *r, de__pixel **out) {
                                   .name = "pixel upscale"};
         p->pipeline = de_gpu_pipeline_create(r->dev, &d);
     }
+    de_result result = de__pixel_snapshots_create(r, &p->snapshots);
+    if (result != DE_OK)
+        return result;
+    result = de__palette_runtime_create(r, &p->palette);
+    if (result != DE_OK)
+        return result;
     return de__view_register_stage(r, DE__VIEW_SLOT_POST, INT32_MAX, "pixel.upscale", stage, p);
 }
 void de__pixel_destroy(de_renderer *r, de__pixel *p) {
     if (!p)
         return;
     de__view_unregister_stage(r, stage, p);
+    de__pixel_snapshots_destroy(r, p->snapshots);
+    de__palette_runtime_destroy(r, p->palette);
     de_gpu_pipeline_destroy(r->dev, p->pipeline);
     de_gpu_sampler_destroy(r->dev, p->sampler);
     de__engine_shader_code_free(&p->code);
     DE_FREE(r->alloc, p, sizeof *p);
+}
+
+void de__pixel_prepare_palette(de__pixel *p, de_texture texture) {
+    if (p)
+        de__palette_prepare(p->palette, texture);
 }

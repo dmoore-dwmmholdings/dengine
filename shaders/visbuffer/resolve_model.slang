@@ -123,6 +123,11 @@ public float4 de_resolve_sample(DeGpuMaterial m, uint s, VertexAttribs v, Textur
 {
     uint set;
     uint t = de_resolve_texture(m, s, set);
+    if(t!=DE_BINDLESS_INVALID && (m.textures[s>>2][s&3]&DE_GPU_MATERIAL_TEXTURE_POINT)!=0) {
+        uint w,h;de_tex2d(t).GetDimensions(w,h);
+        int2 pixel=clamp(int2(floor(v.uv[set]*float2(w,h))),int2(0),int2(w,h)-1);
+        return de_tex2d(t).Load(int3(pixel,0));
+    }
     return de_material_sample(lod, v, t, set, fallback);
 }
 

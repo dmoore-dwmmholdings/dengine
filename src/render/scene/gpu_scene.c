@@ -201,6 +201,7 @@ struct de__gpu_scene {
     u32 perm_count[DE__GS_MATERIAL_MODELS][DE__MATERIAL_PERMUTATIONS_MAX];
     /* Views. */
     gs_view *views;
+    de_gpu_buffer view_instances;
     u32 view_cap;
 
     /* Scatter. */
@@ -441,13 +442,13 @@ static de_material res_default_material(void *user, de_mesh mesh, u32 k) {
 
 /* ---------- Packing (one function per table: S14 edits pack_material and pack_light) ---------- */
 
-static void pack_instance(const de__gpu_scene *gs, u32 s, de__gs_instance *o) {
+void de__gpu_scene_pack_frame_instance(const de__gpu_scene *gs, const de__render_world_frame *f,
+                                       u32 s, de__gs_instance *o) {
     memset(o, 0, sizeof *o);
     o->mesh = DE__GS_NONE;
     for (u32 k = 0; k < 2; ++k)
         for (u32 c = 0; c < 4; ++c)
             o->materials[k].v[c] = DE__GS_NONE;
-    const de__render_world_frame *f = gs->frame;
     if (f == NULL || s >= f->instances.count || f->instances.entity[s] == 0)
         return; /* a free slot */
     const de__rw_instances *in = &f->instances;
@@ -488,6 +489,13 @@ static void pack_instance(const de__gpu_scene *gs, u32 s, de__gs_instance *o) {
     o->entity_hi = (u32)(in->entity[s] >> 32);
 }
 
+static void pack_instance(const de__gpu_scene *gs, u32 s, de__gs_instance *o) {
+    de__gpu_scene_pack_frame_instance(gs, gs->frame, s, o);
+}
+void de__gpu_scene_view_instances(de__gpu_scene *gs, de_gpu_buffer buffer) {
+    if (gs)
+        gs->view_instances = buffer;
+}
 static void pack_light(const de__gpu_scene *gs, u32 s, de__gs_light *o) {
     memset(o, 0, sizeof *o);
     const de__render_world_frame *f = gs->frame;
@@ -567,14 +575,23 @@ static void pack_mesh(const de__gpu_scene *gs, u64 key, de__gs_mesh *o) {
 }
 
 /* The material's parameter block (DENG-302: render/materials/material_instances.h). */
+static u32 material_texture(void *user, de_texture texture) {
+    const de__gpu_scene *gs = user;
+    u32 bindless =
+        gs->assets.texture_bindless ? gs->assets.texture_bindless(gs->assets.user, texture) : 0;
+    const de_render_texture *record = de__gpu_scene_texture_record(gs, texture);
+    if (bindless && record && (record->flags & DE_COOKED_TEXTURE_PIXEL_ART))
+        bindless |= DE__MATERIAL_TEXTURE_POINT;
+    return bindless;
+}
 static void pack_material(const de__gpu_scene *gs, u64 key, de__gs_material *o) {
     de_material h = {(u32)key};
     if ((key >> 32) && gs->frame != NULL) {
         u32 slot = (u32)key;
         if (slot < gs->frame->instances.count && gs->frame->instances.sprite != NULL &&
             (gs->frame->instances.flags[slot] & DE__RW_INST_SPRITE)) {
-            de__sprite_pack_material(&gs->frame->instances.sprite[slot], o,
-                                     gs->assets.texture_bindless, gs->assets.user);
+            de__sprite_pack_material(&gs->frame->instances.sprite[slot], o, material_texture,
+                                     (void *)gs);
             return;
         }
     }
@@ -585,7 +602,7 @@ static void pack_material(const de__gpu_scene *gs, u64 key, de__gs_material *o) 
         else if (gs->assets.material != NULL)
             m = gs->assets.material(gs->assets.user, h);
     }
-    de__material_pack(m, gs->material_models, gs->assets.texture_bindless, gs->assets.user, o);
+    de__material_pack(m, gs->material_models, material_texture, (void *)gs, o);
 }
 
 /* prev_view moved from its origin onto `origin` (the camera did not move; the numbers did). */
@@ -626,7 +643,8 @@ static void pack_view(const de__gpu_scene *gs, u32 slot, de__gs_view *o) {
        0.0f);
     const f32 w = (f32)v->cur.width, h = (f32)v->cur.height;
     f4(&o->viewport, w, h, w > 0.0f ? 1.0f / w : 0.0f, h > 0.0f ? 1.0f / h : 0.0f);
-    o->instances = gs->tables[DE__GS_INSTANCES].bindless;
+    o->instances = gs->view_instances.id ? de_gpu_buffer_bindless(gs->dev, gs->view_instances)
+                                         : gs->tables[DE__GS_INSTANCES].bindless;
     o->meshes = gs->tables[DE__GS_MESHES].bindless;
     o->materials = gs->tables[DE__GS_MATERIALS].bindless;
     o->lights = gs->tables[DE__GS_LIGHTS].bindless;
@@ -1821,7 +1839,9 @@ de_rg_resource de__gpu_scene_import(de__gpu_scene *gs, de_rg *g, de__gs_table_id
     if (gs == NULL || g == NULL || (u32)t >= DE__GS_TABLE_COUNT ||
         !DE_HANDLE_VALID(gs->tables[t].buffer))
         return (de_rg_resource){0};
-    const de_rg_resource r = de_rg_import_buffer(g, gs->tables[t].buffer, gs->tables[t].state);
+    const de_gpu_buffer buffer =
+        t == DE__GS_INSTANCES && gs->view_instances.id ? gs->view_instances : gs->tables[t].buffer;
+    const de_rg_resource r = de_rg_import_buffer(g, buffer, gs->tables[t].state);
     de_rg_set_name(g, r, k_table_names[t]);
     return r;
 }
@@ -1832,8 +1852,8 @@ de__gpu_scene_table_info de__gpu_scene_table(const de__gpu_scene *gs, de__gs_tab
     if (gs == NULL || (u32)t >= DE__GS_TABLE_COUNT)
         return i;
     const de__gpu_table *tb = &gs->tables[t];
-    i.buffer = tb->buffer;
-    i.bindless = tb->bindless;
+    i.buffer = t == DE__GS_INSTANCES && gs->view_instances.id ? gs->view_instances : tb->buffer;
+    i.bindless = i.buffer.id ? de_gpu_buffer_bindless(gs->dev, i.buffer) : tb->bindless;
     i.stride = tb->stride;
     i.count = tb->count;
     i.capacity = tb->capacity;
