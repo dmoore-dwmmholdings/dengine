@@ -1316,6 +1316,11 @@ DE_API void de_body2d_wake(de_physics2d_world *p, de_body b);
 /** true when the 2D body is asleep and no wake is pending for it; false for a stale handle. */
 DE_API bool de_body2d_is_sleeping(const de_physics2d_world *p, de_body b);
 
+/** Registers reflected 2D components, DePhysics2DWorld, physics2d.step (FixedUpdate)
+ * and physics2d.interpolate (PostUpdate, presentation only). Repeated attachment to the
+ * same world is idempotent. Stop ECS schedules before destroying the physics world.
+ * Side view maps (x,y) to (X,Z) with rotation about -Y; top-down maps to (X,Y), +Z.
+ * The depth coordinate is preserved. Entity-based joints resolve bodies by component owners. */
 DE_API void de_physics2d_attach(de_physics2d_world *p, de_world *w);
 DE_API bool de_physics2d_raycast(const de_physics2d_world *p, de_vec2 origin, de_vec2 dir,
                                  f32 max_dist, de_collision_filter filter, de_entity *hit_entity,

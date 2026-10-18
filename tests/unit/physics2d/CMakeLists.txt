@@ -99,3 +99,11 @@ if(TARGET test_physics2d_joints)
     target_include_directories(test_physics2d_joints PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_options(test_physics2d_joints PRIVATE ${DE_DETERMINISTIC_FLAGS})
 endif()
+
+# DENG-260: plane conventions, ECS lifecycle, events and presentation invariance.
+de_add_test(NAME physics2d_plane SOURCES test_plane_map.c LIBS de_physics)
+de_add_test(NAME physics2d_ecs SOURCES test_physics2d_ecs.c LIBS de_physics)
+foreach(_de_p2d_test test_physics2d_plane test_physics2d_ecs)
+    target_include_directories(${_de_p2d_test} PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_options(${_de_p2d_test} PRIVATE ${DE_DETERMINISTIC_FLAGS})
+endforeach()
