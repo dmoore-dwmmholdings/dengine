@@ -4,6 +4,7 @@
 #include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
 #include "render/rt/rtao.h"
+#include "render/rt/rt_reflections.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
 #include "render/probes/probes_internal.h"
@@ -68,6 +69,7 @@ static void renderer_free(de_renderer *r) {
     de__contact_destroy(r->contact);
     de__csm_destroy(r->csm);
     de__shadow_atlas_destroy(r->shadow_atlas);
+    de__rt_reflections_destroy(r->rt_reflections);
     de__rtao_destroy(r->rtao);
     de__gtao_destroy(r->gtao);
     de__ssgi_destroy(r->ssgi);
@@ -268,6 +270,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res != DE_OK)
         goto fail;
     res = de__contact_create(r, &r->contact);
+    if (res != DE_OK)
+        goto fail;
+    res = de__rt_reflections_create(r, &r->rt_reflections);
     if (res != DE_OK)
         goto fail;
     res = de__rtao_create(r, &r->rtao);

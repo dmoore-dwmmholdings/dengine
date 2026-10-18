@@ -1059,3 +1059,20 @@ if(TARGET test_render_rtao)
         endif()
     endif()
 endif()
+
+# DENG-48 native closest-hit material shading.
+de_add_test(NAME render_rt_reflections SOURCES test_rt_reflections.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_reflections)
+    target_include_directories(test_render_rt_reflections PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_reflections_tmp")
+    target_compile_definitions(test_render_rt_reflections PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_reflections_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rt_reflections PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_reflections)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_reflections)
+        endif()
+    endif()
+endif()

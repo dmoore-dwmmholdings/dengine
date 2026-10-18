@@ -25,6 +25,8 @@ kernel void cs_trace(constant DeBindlessHeap_default_0 &heap [[buffer(0)]],
     device const DeRtContext_0 *contexts=(device const DeRtContext_0 *)heap.buffers_0[pc.context];
     device const RtRay *rays=(device const RtRay *)heap.buffers_0[pc.rays];
     device RtHit *hits=(device RtHit *)heap.buffers_0[pc.hits];
+    RtHit out={};out.t=-1;out.instance=0xffffffffu;
+    if(!(rays[i].direction.w>rays[i].origin.w)||!(rays[i].direction.w>0)||!(dot(rays[i].direction.xyz,rays[i].direction.xyz)>0)){hits[i]=out;return;}
     RtPayload payload={contexts[0]};
     payload.query.flags_4=pc.flags;
     ray r;r.origin=rays[i].origin.xyz;r.direction=rays[i].direction.xyz;
@@ -33,7 +35,6 @@ kernel void cs_trace(constant DeBindlessHeap_default_0 &heap [[buffer(0)]],
     query.assume_geometry_type(geometry_type::triangle);
     query.accept_any_intersection((pc.flags&2u)!=0u);
     auto hit=query.intersect(r,heap.accels_0.data_3[payload.query.tlas_0],255,table,payload);
-    RtHit out={};out.t=-1;out.instance=0xffffffffu;
     if(hit.type==intersection_type::triangle) {
         out.t=hit.distance;out.instance=hit.user_instance_id;out.primitive=hit.primitive_id;
         out.u=hit.triangle_barycentric_coord.x;out.v=hit.triangle_barycentric_coord.y;
