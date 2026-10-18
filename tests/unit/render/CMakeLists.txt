@@ -1042,3 +1042,20 @@ if(TARGET test_render_restir_di)
         endif()
     endif()
 endif()
+
+# DENG-47: actual renderer RTAO and fallback acceptance.
+de_add_test(NAME render_rtao SOURCES test_rtao.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rtao)
+    target_include_directories(test_render_rtao PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rtao_tmp")
+    target_compile_definitions(test_render_rtao PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rtao_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rtao PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rtao)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rtao)
+        endif()
+    endif()
+endif()

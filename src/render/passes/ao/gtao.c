@@ -1,5 +1,6 @@
 #include "render/passes/ao/gtao_internal.h"
 #include "render/renderer_internal.h"
+#include "render/rt/rtao.h"
 #include "render/graph/rg_internal.h"
 #include "render/passes/vis/gbuffer.h"
 #include "platform/de_atomic.h"
@@ -311,6 +312,8 @@ de_result de__gtao_build(de__gtao *s, const de__view_frame *vf, const de__vis_co
 
 static void stage(de__view_frame *vf, void *user) {
     de__gtao *s = user;
+    if (de__rtao_published(s->renderer->rtao, vf->view, vf->graph, vf->frame_index))
+        return;
     if (!s->vis->enabled || !s->kernels[0].pipeline.id)
         return;
     const de__vis_context *vc = de__vis_frame_context(s->vis, vf->view, vf->graph, vf->frame_index);

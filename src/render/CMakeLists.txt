@@ -428,3 +428,8 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE rt/restir_di.c rt/restir_di.h)
 endif()
+
+# DENG-47: shared-opacity ray-traced ambient visibility.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rtao.c rt/rtao.h)
+endif()
