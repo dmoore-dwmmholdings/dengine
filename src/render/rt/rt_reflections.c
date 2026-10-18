@@ -1,3 +1,4 @@
+#include "render/denoise/reblur_internal.h"
 /* DENG-48: shared closest-hit shading through the production alpha-aware batch query. */
 #include "render/rt/rt_reflections.h"
 #include "render/graph/rg_internal.h"
@@ -27,6 +28,7 @@ typedef struct reflection_view {
     de__rt_reflections_info info;
 } reflection_view;
 struct de__rt_reflections {
+    de__radiance_denoiser *denoiser;
     de_renderer *r;
     de_gpu_pipeline kernels[5];
     de_cvar max_roughness;
@@ -53,6 +55,7 @@ static void release(de__rt_reflections *s, reflection_view *v) {
 void de__rt_reflections_destroy(de__rt_reflections *s) {
     if (!s)
         return;
+    de__radiance_denoiser_destroy(s->denoiser);
     for (u32 i = 0; i < 32; ++i)
         release(s, &s->views[i]);
     for (u32 i = 0; i < 5; ++i)
@@ -66,6 +69,11 @@ de_result de__rt_reflections_create(de_renderer *r, de__rt_reflections **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT reflections owner");
     memset(s, 0, sizeof *s);
     s->r = r;
+    de_result denoiser_result = de__radiance_denoiser_create(r, &s->denoiser);
+    if (denoiser_result != DE_OK) {
+        DE_FREE(r->alloc, s, sizeof *s);
+        return denoiser_result;
+    }
     s->max_roughness = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reflections.max_roughness",
                                                         .type = DE_CVAR_FLOAT,
                                                         .default_number = .6,
@@ -304,6 +312,9 @@ de_result de__rt_reflections_build(de__rt_reflections *s, de_rg *g, de__vis_cont
     de_rg_export(g, raw, DE_ACCESS_SHADER_READ);
     de_rg_export(g, output, DE_ACCESS_SHADER_READ);
     de_rg_export(g, distance, DE_ACCESS_SHADER_READ);
+    DE_TRY(de__denoise_specular(s->denoiser, g, vc, lc, output, distance, true, s->reference != 0,
+                                de_rg_import_buffer(g, v->rays, DE_ACCESS_SHADER_READ),
+                                p->params.scale));
     inputs->indirect_specular = output;
     inputs->indirect_specular_opaque = true;
     inputs->indirect_specular_layers = true;

@@ -18,8 +18,9 @@ typedef struct dn_params {
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
     u32 position, previous_position, out_position, tail_reserved;
+    u32 temporal_alpha, alpha_reserved[3];
 } dn_params;
-DE_STATIC_ASSERT(sizeof(dn_params) == 344, "DenoiseParams structured-buffer layout");
+DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
 struct de_denoise_ctx {
     struct de_denoise_ctx *next;
     de__denoise *owner;
@@ -55,6 +56,7 @@ typedef struct dn_pass {
     de_rg_resource output, moments, length, validity, variance, out_depth, out_normal, out_material;
     de_rg_resource scene, visible;
     de_rg_resource key, previous_key, out_key, position, previous_position, out_position;
+    de_rg_resource temporal_alpha;
 } dn_pass;
 static void release(de_denoise_ctx *c) {
     de_gpu_device *d = c->owner->r->dev;
@@ -269,6 +271,7 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     READ(previous_key);
     READ(position);
     READ(previous_position);
+    READ(temporal_alpha);
     WRITE(output);
     WRITE(moments);
     WRITE(length);
@@ -320,6 +323,8 @@ static void declarations(de_rg_pass *pass, dn_pass *x) {
             else
                 de_rg_write(pass, writes[i], DE_ACCESS_SHADER_WRITE);
         }
+    if (x->temporal_alpha.id)
+        de_rg_read(pass, x->temporal_alpha, DE_ACCESS_SHADER_READ);
     if (x->key.id)
         de_rg_read(pass, x->key, DE_ACCESS_SHADER_READ);
     if (x->previous_key.id)
@@ -374,6 +379,7 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.zero_radius_passthrough = c->desc.zero_radius_passthrough;
     x->key = c->frame.inputs.validation_key;
     x->position = c->frame.inputs.position;
+    x->temporal_alpha = c->frame.inputs.temporal_alpha;
     for (u32 r = 0; r < 4; ++r)
         for (u32 col = 0; col < 4; ++col) {
             x->pc.inverse[r][col] = c->frame.inputs.inverse_view_proj.m[col * 4 + r];

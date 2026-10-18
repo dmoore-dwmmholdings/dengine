@@ -11,6 +11,7 @@ public struct DenoiseParams {
     public float4 camera,origin_delta;
     public uint key,previous_key,out_key,zero_radius_passthrough;
     public uint position,previous_position,out_position,tail_reserved;
+    public uint temporal_alpha,alpha_r0,alpha_r1,alpha_r2;
 };
 public DenoiseParams dn_load(uint buffer,uint entry){return de_robuffer<DenoiseParams>(buffer)[entry];}
 public float2 denoise_previous_uv(float2 uv,float2 motion){return uv+float2(-.5,.5)*motion;}

@@ -1,3 +1,4 @@
+#include "render/denoise/reblur_internal.h"
 /* DENG-46: renderer-owned direct-light reservoirs and source distribution. */
 #include "render/rt/restir_di.h"
 #include "render/graph/rg_internal.h"
@@ -112,6 +113,7 @@ typedef struct di_view {
     de__di_info info;
 } di_view;
 struct de__restir_di {
+    de__radiance_denoiser *denoiser;
     de_renderer *r;
     de_gpu_pipeline kernels[K_COUNT];
     de_cvar enable, unbiased, initial_visibility, candidates;
@@ -158,6 +160,7 @@ static void release_view(de__restir_di *s, di_view *v) {
 void de__restir_di_destroy(de__restir_di *s) {
     if (!s)
         return;
+    de__radiance_denoiser_destroy(s->denoiser);
     for (u32 i = 0; i < 32; ++i)
         release_view(s, &s->views[i]);
     release_view(s, &s->source_view);
@@ -178,6 +181,11 @@ de_result de__restir_di_create(de_renderer *r, de__restir_di **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "DI owner");
     memset(s, 0, sizeof *s);
     s->r = r;
+    de_result denoiser_result = de__radiance_denoiser_create(r, &s->denoiser);
+    if (denoiser_result != DE_OK) {
+        DE_FREE(r->alloc, s, sizeof *s);
+        return denoiser_result;
+    }
     s->enable =
         de_cvar_register(&(de_cvar_desc){.name = "r.rt.restir_di",
                                          .help = "ReSTIR local direct light: -1 auto, 0 off, 1 on",
@@ -687,6 +695,9 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
     de_rg_export(g, r.diffuse, DE_ACCESS_SHADER_READ);
     de_rg_export(g, r.specular, DE_ACCESS_SHADER_READ);
     de_rg_export(g, r.distance, DE_ACCESS_SHADER_READ);
+    DE_TRY(de__denoise_diffuse(s->denoiser, g, vc, lc, r.diffuse, r.distance, s->debug.reference));
+    DE_TRY(de__denoise_specular(s->denoiser, g, vc, lc, r.specular, r.distance, false,
+                                s->debug.reference, (de_rg_resource){0}, 1));
     in->restir_diffuse = r.diffuse;
     in->restir_specular = r.specular;
     in->restir_distance = r.distance;

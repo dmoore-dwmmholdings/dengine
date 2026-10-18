@@ -98,3 +98,7 @@ de_engine_shader(denoise_atrous denoise/atrous.slang)
 # Shared-block shadow/AO policies (no temporal or wavelet kernel fork).
 de_engine_shader(denoise_shadow_prefilter denoise/shadow_prefilter.slang)
 de_engine_shader(denoise_shadow_publish denoise/shadow_temporal.slang)
+
+# S17 radiance policies; shared temporal and a-trous remain single implementations.
+de_engine_shader(denoise_reblur_diffuse denoise/reblur_diffuse.slang)
+de_engine_shader(denoise_reblur_specular denoise/reblur_specular.slang)
