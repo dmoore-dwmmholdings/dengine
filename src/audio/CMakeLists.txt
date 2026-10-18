@@ -37,3 +37,12 @@ de_add_module(
     DEPS platform asset ecs reflect
     OPTIONAL_OPTION DE_WITH_AUDIO
 )
+
+# DENG-314: DSP is usable by the cooker even with runtime audio disabled.
+add_library(de_audio_dsp STATIC dsp/resample.c dsp/resample.h)
+target_include_directories(de_audio_dsp PUBLIC "${DE_ROOT_DIR}/src")
+target_link_libraries(de_audio_dsp PUBLIC de_core PRIVATE de_build_flags)
+target_compile_options(de_audio_dsp PRIVATE ${DE_DETERMINISTIC_FLAGS})
+if(TARGET de_audio)
+    target_link_libraries(de_audio PRIVATE de_audio_dsp)
+endif()

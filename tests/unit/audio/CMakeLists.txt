@@ -19,3 +19,18 @@ if(TARGET de_audio)
         endif()
     endforeach()
 endif()
+
+# DENG-314: resampler works independently of the runtime audio switch.
+if(TARGET de_audio_dsp)
+    de_add_test(NAME audio_resample SOURCES test_resample.c LIBS de_audio_dsp)
+endif()
+if(DE_BUILD_TOOLS)
+    de_add_test(NAME sound_import SOURCES test_sound_import.c LIBS de_cooker de_audio_dsp)
+    target_include_directories(test_sound_import PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_sound_import PRIVATE "DE_SOUND_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+endif()
+if(TARGET test_sound_import)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sound-import-tmp")
+    target_compile_definitions(test_sound_import PRIVATE
+        "DE_SOUND_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/sound-import-tmp\"")
+endif()

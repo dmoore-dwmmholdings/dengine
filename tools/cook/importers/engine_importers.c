@@ -9,6 +9,7 @@
  */
 #include "cook/lib/de_cooker.h"
 #include "text/import/font_import.h"
+#include "cook/importers/sound/sound_import.h"
 
 #include "cook/importers/material/mat_toml_import.h"
 #include "cook/importers/model/model_import.h"
@@ -52,6 +53,7 @@ static const struct {
 } k_builtin[] = {
     {"texture", de_texture_import_type_desc},
     {"font", de_font_import_type_desc},
+    {"sound", de_sound_import_type_desc},
     {"model", model_desc},
     {"material", de_mat_toml_import_type_desc}, /* DENG-302: `.mat.toml` */
 #if DE_COOKER_HAS_SHADER_IMPORTER
