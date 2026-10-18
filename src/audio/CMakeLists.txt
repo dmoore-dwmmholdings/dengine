@@ -46,3 +46,12 @@ target_compile_options(de_audio_dsp PRIVATE ${DE_DETERMINISTIC_FLAGS})
 if(TARGET de_audio)
     target_link_libraries(de_audio PRIVATE de_audio_dsp)
 endif()
+
+# DENG-312: ramps, deterministic bus tree and channel matrices.
+if(TARGET de_audio)
+    target_sources(de_audio PRIVATE bus.c ramp.c channel_mix.c)
+endif()
+# Aggregate module-object consumers also need the non-module DSP library.
+if(TARGET de_audio)
+    set_property(TARGET de_audio APPEND PROPERTY DE_MODULE_LIBS de_audio_dsp)
+endif()

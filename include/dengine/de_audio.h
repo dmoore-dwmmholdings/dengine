@@ -46,7 +46,7 @@ typedef struct de_audio_desc {
     de_audio_backend backend;
     u32 sample_rate;  /**< mixer rate in Hz; 0 = 48000; 8000 .. 192000 */
     u32 block_frames; /**< frames per mixer block; 0 = 256; 16 .. 4096 */
-    u32 max_voices;   /**< real voices mixed; extra voices are virtualized. 0 = 128; at most 4095 */
+    u32 max_voices;   /**< real voices mixed; full pools steal lowest priority then oldest. 0 = 128; max 4095 */
     bool hrtf;        /**< S26; ignored until then */
     u32 command_capacity; /**< commands in flight to the mixer; 0 = 4096; rounded up to a power of 2
                            */
@@ -132,7 +132,7 @@ typedef struct de_play_desc {
     f32 volume, pitch; /* 0 → 1.0 */
     f32 fade_in;
     bool loop;
-    u8 priority; /* virtualization order; 0 = highest */
+    u8 priority; /* Lower number = higher priority; ties steal the oldest voice. */
     bool spatial;
     de_dvec3 position;
     u64 start_at_sample; /* 0 = immediately; sample-accurate scheduling */
@@ -141,13 +141,14 @@ typedef struct de_play_desc {
 /**
  * Starts sound `desc->sound` and returns its voice at once; the mixer starts it at the start of
  * its next block, or on sample `desc->start_at_sample` exactly. Returns an invalid handle (error
- * context set) when the sound cannot be opened, every voice slot is taken, or the command queue is
- * full. Until DENG-313 sounds cannot be opened (DE_ERR_UNSUPPORTED). S25 core: the voice plays to
- * the master at unity gain; bus, volume, pitch, fade_in and spatial come with DENG-312 and S26.
+ * context set) when the sound cannot be opened, no voice can be reserved, or the command queue is
+ * full. Full pools steal the lowest priority (largest number), then oldest voice with a 5 ms
+ * outgoing fade. Bus, volume, pitch, fade and looping are handled by the audio thread; spatial
+ * parameters are retained for S26. Until DENG-313 asset sounds cannot be opened.
  */
 DE_API de_voice de_audio_play(de_audio *a, const de_play_desc *desc);
-/** Stops `v` at the start of the next block. A stale handle is ignored. `fade_seconds` is ignored
- * until DENG-312 (fades). */
+/** Starts a stop fade at the next block. At least 5 ms prevents discontinuities. A stale handle
+ * is ignored; the voice becomes inactive at the end of the fade. */
 DE_API void de_audio_stop(de_audio *a, de_voice v, f32 fade_seconds);
 DE_API void de_audio_set_volume(de_audio *a, de_voice v, f32 linear, f32 fade_seconds);
 DE_API void de_audio_set_pitch(de_audio *a, de_voice v, f32 pitch);

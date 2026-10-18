@@ -38,6 +38,7 @@ static de_cvar buffer_blocks_cvar(void) {
 static void free_storage(de_audio *a) {
     de_allocator *al = &a->alloc;
     de__audio_ring_free(a);
+    de__voice_storage_free(a);
     if (a->voices != NULL)
         DE_FREE(al, a->voices, sizeof(de__voice) * a->voice_count);
     if (a->voice_gen != NULL)
@@ -71,6 +72,7 @@ static void close_all_sources(de_audio *a) {
         }
     }
     a->active_count = 0;
+    de__voice_close_tails(a);
     de__audio_cmd_discard_all(a); /* queued play commands own their sources */
 }
 
@@ -114,7 +116,7 @@ static de_result alloc_storage(de_audio *a) {
         DE_ASSERT(ok);
         (void)ok;
     }
-    return DE_OK;
+    return de__voice_storage_init(a);
 }
 
 de_result de__audio_create_ex(const de_audio_desc *desc, const de__audio_create_opts *opts,

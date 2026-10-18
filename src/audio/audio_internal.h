@@ -25,6 +25,7 @@
 
 #include "audio/backend.h"
 #include "audio/source.h"
+#include "audio/dsp/resample.h"
 #include "core/de_mpmc.h"
 #include "platform/de_atomic.h"
 
@@ -72,6 +73,12 @@ typedef enum de__audio_cmd_op {
     DE__ACMD_STOP, /* u.stop */
     DE__ACMD_FN,   /* u.fn: run a callback on the audio thread at the sample (tests, tools) */
     /* DENG-312 appends its ops (volume, pitch, bus, fades) here. */
+    DE__ACMD_VOLUME,
+    DE__ACMD_PITCH,
+    DE__ACMD_POSITION,
+    DE__ACMD_BUS_CREATE,
+    DE__ACMD_BUS_VOLUME,
+    DE__ACMD_BUS_MUTE,
     DE__ACMD_OP_COUNT_
 } de__audio_cmd_op;
 
@@ -90,10 +97,19 @@ typedef struct de__audio_cmd {
             u32 bus;
             f32 volume, pitch;
             u8 loop, priority;
+            f32 fade;
+            bool spatial;
+            de_dvec3 position;
         } play;
         struct {
             f32 fade;
         } stop;
+        struct {
+            f32 value, fade;
+            u32 parent;
+            de_dvec3 position;
+            de_vec3 velocity;
+        } param;
         struct {
             de__audio_cmd_fn fn;
             void *user;
@@ -112,6 +128,20 @@ typedef enum de__voice_state {
 
 /** Audio-thread state of one voice slot. `src` is handed to the control thread through
  * `retired` when the voice ends (the slot is not touched again until it is reallocated). */
+typedef struct de__audio_ramp {
+    f32 value, target, delta;
+    u32 remaining;
+} de__audio_ramp;
+typedef struct de__audio_bus {
+    u32 parent;
+    bool active, mute;
+    char name[64];
+    de__audio_ramp gain;
+} de__audio_bus;
+typedef struct de__voice_reservation {
+    de_atomic_u32 priority, busy;
+    de_atomic_u64 age;
+} de__voice_reservation;
 typedef struct de__voice {
     u32 state; /* de__voice_state */
     u32 gen;   /* generation of the handle this state belongs to */
@@ -123,7 +153,12 @@ typedef struct de__voice {
     u8 reserved_[2];
     u64 start_sample;  /* mixer sample of the first frame */
     u64 frames_played; /* frames read from the source, loops included */
-    /* DENG-312 appends bus, fade and ramp state here; S26 appends spatial / virtualization. */
+    /* DENG-312: audio-thread state only; caller reservations are separate atomics. */
+    de__audio_ramp gain;
+    de__resampler *resampler;
+    bool stopping, source_eof, resampling, spatial;
+    de_dvec3 position;
+    de_vec3 velocity;
 } de__voice;
 
 /* ---- Output ring (SPSC of whole blocks) ------------------------------------------------------ */
@@ -189,6 +224,16 @@ struct de_audio {
     de_atomic_u32 *voice_gen;
     u32 *active; /* PLAYING slots, audio thread */
     u32 active_count;
+
+    /* DENG-312: preallocated bus graph and stolen-voice tails. */
+    de__voice *tails;
+    de__voice_reservation *reservations;
+    de_mpmc retired_tails;
+    de_atomic_u64 play_sequence;
+    de__resampler *resample_bank;
+    f32 *resample_buf, *bus_buf;
+    de__audio_bus buses[64];
+    de_atomic_u32 bus_count;
 
     /* Pending commands with a future sample, sorted by (at_sample, seq). Audio thread. */
     de__audio_cmd *pending;
@@ -363,4 +408,15 @@ void de__rt_guard_set_fatal(bool fatal);
  * The signature is stable: DENG-313 keeps it. */
 de_result de__sound_source_open(de_audio *a, de_sound sound, de__audio_source **out);
 
+/* DENG-312 voice graph. */
+void de__audio_ramp_set(de__audio_ramp *r, f32 target, u32 samples);
+f32 de__audio_ramp_next(de__audio_ramp *r);
+void de__audio_channel_mix(f32 *out, u32 out_channels, const f32 *in, u32 in_channels, f32 gain);
+de_result de__voice_storage_init(de_audio *a);
+void de__voice_storage_free(de_audio *a);
+void de__voice_close_tails(de_audio *a);
+u32 de__voice_collect_tails(de_audio *a);
+void de__voice_on_control(de_audio *a, const de__audio_cmd *cmd);
+void de__bus_on_control(de_audio *a, const de__audio_cmd *cmd);
+void de__bus_mix(de_audio *a, f32 *out, u32 frames);
 #endif /* DE_AUDIO_INTERNAL_H */

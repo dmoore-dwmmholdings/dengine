@@ -42,7 +42,7 @@ TEST(audio_mixer, single_source_then_end) {
     EXPECT_EQ(de_audio_get_stats(a).voices_real, 1u);
     de__audio_null_pump(a, 512, cap + 512 * CH);
     for (u32 i = 0; i < 1024; ++i) {
-        const f32 want = i < 1000 ? 0.25f : 0.0f;
+        const f32 want = i < 1000 ? 0.25f * 0.70710678118f : 0.0f;
         if (cap[i * CH] != want || cap[i * CH + 1] != want) {
             EXPECT_EQ(i, (u32)UINT32_MAX);
             break;
@@ -67,8 +67,10 @@ TEST(audio_mixer, channel_mapping) {
     f32 cap[256 * CH];
     de__audio_null_pump(a, 256, cap);
     for (u32 i = 0; i < 256; ++i) {
-        EXPECT_FLOAT_EQ(cap[i * CH], 0.5 + 0.25 + 0.03125, 0.0);
-        EXPECT_FLOAT_EQ(cap[i * CH + 1], 0.5 + 0.5 + 0.0625, 0.0);
+        EXPECT_FLOAT_EQ(cap[i * CH], 0.5 * 0.70710678118 + 0.25 + 0.03125 + 0.09375 * 0.70710678118,
+                        1e-6);
+        EXPECT_FLOAT_EQ(cap[i * CH + 1], 0.5 * 0.70710678118 + 0.5 + 0.0625 + 0.125 * 0.70710678118,
+                        1e-6);
     }
     /* Invalid sources are refused and closed. */
     test_source bad;
@@ -87,8 +89,8 @@ TEST(audio_mixer, many_voices_sum) {
     }
     f32 cap[512 * CH];
     de__audio_null_pump(a, 512, cap);
-    EXPECT_FLOAT_EQ(cap[0], 0.5, 0.0);
-    EXPECT_FLOAT_EQ(cap[511 * CH + 1], 0.5, 0.0);
+    EXPECT_FLOAT_EQ(cap[0], 0.5 * 0.70710678118, 1e-6);
+    EXPECT_FLOAT_EQ(cap[511 * CH + 1], 0.5 * 0.70710678118, 1e-6);
     EXPECT_EQ(de_audio_get_stats(a).voices_real, 64u);
     de_audio_destroy(a);
     for (u32 i = 0; i < 64; ++i)
@@ -106,9 +108,9 @@ TEST(audio_mixer, slots_exhausted_and_reused) {
     }
     test_src_init(&s[4], TSRC_CONST, 0.1f, 0, 1);
     v[4] = test_play(a, &s[4], 0, false);
-    EXPECT_FALSE(DE_HANDLE_VALID(v[4]));
-    EXPECT_EQ(de_error_last()->result, DE_ERR_BUSY);
-    EXPECT_EQ(test_src_closes(&s[4]), 1u); /* refused sources are closed */
+    EXPECT_TRUE(DE_HANDLE_VALID(v[4])); /* S25 steals the oldest equal-priority voice. */
+    EXPECT_FALSE(de_audio_playing(a, v[0]));
+    EXPECT_EQ(test_src_closes(&s[4]), 0u);
 
     de_audio_stop(a, v[1], 0.0f);
     de__audio_null_pump(a, 256, NULL);
@@ -205,6 +207,7 @@ TEST(audio_mixer, create_out_of_memory_no_leak) {
     memset(&d, 0, sizeof d);
     d.allocator = &al;
     d.backend = DE_AUDIO_NULL;
+    d.max_voices = 8; /* Sweep every allocation kind, including both per-voice resamplers. */
     bool created = false;
     for (i64 n = 0; n < 64 && !created; ++n) {
         de_tracking_allocator_fail_after(&t, n);
