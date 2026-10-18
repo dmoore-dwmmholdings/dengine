@@ -1,0 +1,119 @@
+{
+  "tool": "upstream util/hb-shape.cc 14.3.1 linked to vendored core; optional platform shapers absent",
+  "cases": [
+    {
+      "case": "office",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/../latin/NotoSans.ttf",
+        "office",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Latn",
+        "--direction=ltr",
+        "--language=en",
+        "--output-format=json"
+      ],
+      "font": "../latin/NotoSans.ttf",
+      "text": "office"
+    },
+    {
+      "case": "kern",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/../latin/NotoSans.ttf",
+        "AV",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Latn",
+        "--direction=ltr",
+        "--language=en",
+        "--output-format=json"
+      ],
+      "font": "../latin/NotoSans.ttf",
+      "text": "AV"
+    },
+    {
+      "case": "arabic",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/arabic.ttf",
+        "\u0645\u0631\u062d\u0628\u0627",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Arab",
+        "--direction=rtl",
+        "--language=ar",
+        "--output-format=json"
+      ],
+      "font": "arabic.ttf",
+      "text": "\u0645\u0631\u062d\u0628\u0627"
+    },
+    {
+      "case": "hebrew",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/hebrew.ttf",
+        "\u05e9\u05dc\u05d5\u05dd",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Hebr",
+        "--direction=rtl",
+        "--language=he",
+        "--output-format=json"
+      ],
+      "font": "hebrew.ttf",
+      "text": "\u05e9\u05dc\u05d5\u05dd"
+    },
+    {
+      "case": "devanagari",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/devanagari.ttf",
+        "\u0915\u094d\u0937\u093f",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Deva",
+        "--direction=ltr",
+        "--language=hi",
+        "--output-format=json"
+      ],
+      "font": "devanagari.ttf",
+      "text": "\u0915\u094d\u0937\u093f"
+    },
+    {
+      "case": "thai",
+      "command": [
+        "/tmp/deng-hb-shape-14.3.1",
+        "tests/data/fonts/complex/thai.ttf",
+        "\u0e01\u0e33\u0e25\u0e31\u0e07",
+        "--shapers=ot",
+        "--no-glyph-names",
+        "--utf8-clusters",
+        "--cluster-level=1",
+        "--features=kern=1,liga=1,clig=1,calt=1",
+        "--script=Thai",
+        "--direction=ltr",
+        "--language=th",
+        "--output-format=json"
+      ],
+      "font": "thai.ttf",
+      "text": "\u0e01\u0e33\u0e25\u0e31\u0e07"
+    }
+  ]
+}

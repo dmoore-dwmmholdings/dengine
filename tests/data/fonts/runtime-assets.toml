@@ -10,3 +10,7 @@ charset = "ascii"
 "font/latin" = {type="font", source="latin/NotoSans.ttf"}
 "font/cjk" = {type="font", source="cjk/test.ttf", chars="漢世界"}
 "font/emoji" = {type="font", source="emoji/test.ttf", chars="😀"}
+"font/arabic" = {type="font", source="complex/arabic.ttf", chars="مرحبا"}
+"font/hebrew" = {type="font", source="complex/hebrew.ttf", chars="שלום"}
+"font/devanagari" = {type="font", source="complex/devanagari.ttf", chars="क्षि"}
+"font/thai" = {type="font", source="complex/thai.ttf", chars="กำลัง"}
