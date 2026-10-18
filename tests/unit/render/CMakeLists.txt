@@ -1161,3 +1161,10 @@ if(TARGET test_render_pt_media)
         endif()
     endif()
 endif()
+
+# Shared S17 deterministic graph denoiser blocks.
+de_add_test(NAME render_denoise_framework SOURCES test_denoise_framework.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 120)
+if(TARGET test_render_denoise_framework)
+    target_include_directories(test_render_denoise_framework PRIVATE "${DE_ROOT_DIR}/src")
+endif()

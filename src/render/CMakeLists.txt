@@ -471,3 +471,7 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE pathtracer/pt_media.c)
 endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE denoise/denoise.c denoise/denoise_internal.h)
+endif()
