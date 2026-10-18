@@ -206,3 +206,8 @@ target_sources(de_cooker PRIVATE
     "${DE_ROOT_DIR}/src/text/import/bmfont_import.c"
     "${DE_ROOT_DIR}/src/text/import/pixel_font_import.c")
 target_link_libraries(de_cooker PRIVATE de_text_msdf de_tp_stb de_tp_tomlc17)
+
+# DENG-314: portable sound cooking and deterministic fixed-point Opus encoding.
+target_sources(de_cooker PRIVATE importers/sound/sound_import.c
+    importers/sound/adpcm_encode.c importers/sound/opus_encode.c)
+target_link_libraries(de_cooker PRIVATE de_audio_dsp de_tp_dr_libs de_tp_opus de_tp_stb)

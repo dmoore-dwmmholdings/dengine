@@ -187,3 +187,5 @@ python3 tools/vendor/vendor.py verify               # all trees match their arch
 
 Then write `third_party/<name>/CMakeLists.txt` and a smoke test, and add a row to the table
 above.
+
+DENG-314 audio dependencies: `dr_libs` (dr_wav 0.14.6 / dr_flac 0.13.4, commit dfe8377; MIT OR Unlicense) and `opus` 1.6.1 (BSD-3-Clause). Pins and SHA-256 are in vendor.toml. Opus uses fixed-point encoding, no float API, intrinsics or runtime CPU dispatch. dr_libs is cooker-side; Opus is shared with runtime stream decoding.
