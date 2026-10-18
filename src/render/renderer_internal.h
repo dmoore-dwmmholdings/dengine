@@ -161,6 +161,7 @@ struct de_renderer {
     struct de__csm *csm;
     struct de__shadow_atlas *shadow_atlas;
     struct de__gtao *gtao;
+    struct de__rtao *rtao;
     struct de__contact *contact;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */

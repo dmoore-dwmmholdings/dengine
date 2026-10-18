@@ -71,3 +71,6 @@ de_engine_shader(restir_di_initial rt/restir_di_initial.slang)
 de_engine_shader(restir_di_temporal rt/restir_di_temporal.slang)
 de_engine_shader(restir_di_spatial rt/restir_di_spatial.slang)
 de_engine_shader(restir_di_shade rt/restir_di_shade.slang)
+
+# DENG-47: ray generation, temporary spatial filter and portable AO publication.
+de_engine_shader(rtao rt/rtao.slang)
