@@ -1,0 +1,12 @@
+[project]
+asset_root = "."
+version = 1
+[defaults.font]
+em_px = 8
+px_range = 1
+page_size = 256
+charset = "ascii"
+[assets]
+"font/latin" = {type="font", source="latin/NotoSans.ttf"}
+"font/cjk" = {type="font", source="cjk/test.ttf", chars="漢世界"}
+"font/emoji" = {type="font", source="emoji/test.ttf", chars="😀"}

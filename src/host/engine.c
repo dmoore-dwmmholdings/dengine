@@ -10,6 +10,7 @@
 #include "host/host_packs.h" /* DENG-213 */
 
 #include <dengine/de_debug.h>
+#include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
 
@@ -28,6 +29,10 @@ static void engine_teardown(de__engine *e) {
         de_input_detach(e->pub.input);
         de_input_destroy(e->pub.input);
         e->pub.input = NULL;
+    }
+    if (e->pub.text) {
+        de_text_destroy(e->pub.text);
+        e->pub.text = NULL;
     }
 #if DE_HAS_ASSETS
     /* DENG-143: before the world, which it detaches from (system, resource), and before the I/O
@@ -239,6 +244,12 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     r = de_input_attach(e->pub.input, e->pub.world);
     if (r != DE_OK)
         return engine_fail(e, r, "input attach");
+
+    /* DENG-257: text also supports headless localization/layout. The loader's allocator
+     * outlives text and remains valid until the asset system has unloaded fonts. */
+    r = de_text_create(a, e->pub.assets, &e->pub.text);
+    if (r != DE_OK)
+        return engine_fail(e, r, "text");
 
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
      * has none. The optional modules stay NULL. */

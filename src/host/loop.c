@@ -21,6 +21,7 @@
 #include "host/timing.h"
 
 #include <dengine/de_debug.h>
+#include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #if DE_HAS_RENDER
 #include "render/world/render_world.h" /* DENG-175: de__render_extract_and_kick */
@@ -321,6 +322,8 @@ de_result de__loop_run(de__host *h) {
             DE_PROFILE_ZONE_END(z_assets);
         }
 #endif
+        if (e->text)
+            de_text_update(e->text); /* DENG-257: publish font generations before workers. */
         r = loop_run_hooks(h, h->loop_hooks.frame_begin, &h->loop_hooks.frame_begin_count,
                            "frame-begin", frame);
         if (r != DE_OK)
