@@ -84,6 +84,7 @@ typedef struct de__transparent_item {
     u32 index;    /**< its place in the gather (the last tie-break) */
     u32 flags;    /**< DE__FWD_ITEM_* */
     u32 meshlet_first, meshlet_count; /**< LOD 0's meshlets */
+    i16 layer, order;                 /**< S19: authored sprite order; meshes use zero. */
 } de__transparent_item;
 
 /** The C mirror of forward_routing.slang de_material_forward: material entry `m` is READY and its
