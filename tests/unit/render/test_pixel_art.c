@@ -313,3 +313,18 @@ TEST_F(pixel, smooth_border_residual_readback, pixel_fixture) {
     ASSERT_EQ(old, 1u);
     ASSERT_EQ(after[3 * 4], 2u);
 }
+
+/* Retained source-review regression: fractional magnification must hold texel centers. */
+TEST_F(pixel, fractional_sharp_interior_readback, pixel_fixture) {
+    start_pixel(f, DE_GPU_METAL, 480, 270, 2560, 1440, false);
+    de_pixel_art_settings settings = {
+        .internal_width = 480, .internal_height = 270, .integer_scale_only = false};
+    de_view_set_pixel_art(f->r, f->view, &settings);
+    make_pattern(f);
+    pixel_frame(f);
+    const u8 *data = read_output(f);
+    /* (7.5,2.5)/5.333 = (1.40625,.46875): well inside white texel (1,0). */
+    u8 blue = data[((size_t)2 * f->ow + 7) * 4 + 2];
+    printf("Fractional sharp checker interior: blue=%u (expected255)\n", blue);
+    EXPECT_TRUE(blue >= 254);
+}
