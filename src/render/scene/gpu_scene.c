@@ -4,6 +4,7 @@
  */
 #include "render/scene/gpu_scene.h"
 #include "render/sprite/sprite_internal.h"
+#include "render/skin/skin_internal.h"
 
 #include <dengine/de_debug.h>
 
@@ -79,6 +80,7 @@ static const de__gs_layout_const k_consts[] = {
     {"DE_GPU_INSTANCE_CAST_SHADOWS", DE__GS_INSTANCE_CAST_SHADOWS},
     {"DE_GPU_INSTANCE_VISIBLE_IN_RT", DE__GS_INSTANCE_VISIBLE_IN_RT},
     {"DE_GPU_INSTANCE_HAS_BOUNDS", DE__GS_INSTANCE_HAS_BOUNDS},
+    {"DE_GPU_INSTANCE_SKINNED", DE__GS_INSTANCE_SKINNED},
     {"DE_GPU_MESH_READY", DE__GS_MESH_READY},
     {"DE_GPU_MESH_MESHLETS", DE__GS_MESH_MESHLETS},
     {"DE_GPU_MATERIAL_MODEL_STANDARD", DE__GS_MATERIAL_MODEL_STANDARD},
@@ -167,6 +169,7 @@ struct de__gpu_scene {
     const de_allocator *alloc;
     de_log_category log;
     de_render_mesh sprite_quad;
+    de_renderer *renderer;
     de__gpu_scene_assets assets;
     de_asset_system *asset_system;
 
@@ -464,6 +467,12 @@ static void pack_instance(const de__gpu_scene *gs, u32 s, de__gs_instance *o) {
         f4(&o->sphere, b->min.x + hx, b->min.y + hy, b->min.z + hz,
            sqrtf(hx * hx + hy * hy + hz * hz));
     }
+    de__skin_entry *skin = de__skin_instance(gs->renderer, s);
+    if (skin) {
+        flags |= DE__GS_INSTANCE_SKINNED;
+        o->reserved1 = de_gpu_buffer_bindless(gs->dev, skin->output[skin->current ^ 1u]);
+        o->reserved2 = skin->source->vertex_count;
+    }
     o->flags = flags;
     o->layer_mask = in->layer_mask[s];
     o->mesh = gs->inst_mesh[s];
@@ -534,6 +543,14 @@ void de__gpu_scene_pack_mesh_record(const de_render_mesh *m, de__gs_mesh *o) {
 
 static void pack_mesh(const de__gpu_scene *gs, u64 key, de__gs_mesh *o) {
     de_mesh h = {(u32)key};
+    if ((key >> 32) == 2u) {
+        de__skin_entry *skin = de__skin_instance(gs->renderer, (u32)key);
+        if (skin)
+            *o = skin->packed;
+        else
+            memset(o, 0, sizeof *o);
+        return;
+    }
     if (key >> 32) {
         de__gpu_scene_pack_mesh_record(&gs->sprite_quad, o);
         return;
@@ -731,6 +748,7 @@ static void inst_resolve(de__gpu_scene *gs, u32 s) {
     const de__rw_instances *in = &gs->frame->instances;
     const bool live = s < in->count && in->entity[s] != 0;
     const bool sprite = live && (in->flags[s] & DE__RW_INST_SPRITE) != 0;
+    const bool skinned = live && de__skin_instance(gs->renderer, s) != NULL;
     if (sprite && !DE_HANDLE_VALID(gs->sprite_quad.buffers[0]))
         (void)de__sprite_quad_create(gs->dev, &gs->sprite_quad);
     const u32 old_mesh = gs->inst_mesh[s];
@@ -738,7 +756,10 @@ static void inst_resolve(de__gpu_scene *gs, u32 s) {
     u32 old_mats[DE__GS_INSTANCE_MATERIALS];
     memcpy(old_mats, mats, sizeof old_mats);
     gs->inst_mesh[s] = live && (sprite || DE_HANDLE_VALID(in->mesh[s]))
-                           ? ref_acquire(gs, DE__GS_MESHES, sprite ? (u64)1 << 32 : in->mesh[s].id)
+                           ? ref_acquire(gs, DE__GS_MESHES,
+                                         skinned  ? ((u64)2 << 32) | s
+                                         : sprite ? (u64)1 << 32
+                                                  : in->mesh[s].id)
                            : DE__GS_NONE;
     for (u32 k = 0; k < DE__GS_INSTANCE_MATERIALS; ++k) {
         de_material m = in->materials[(size_t)s * DE__RW_MATERIALS + k];
@@ -993,6 +1014,7 @@ de_result de__gpu_scene_create(const de__gpu_scene_desc *d, de__gpu_scene **out)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "de__gpu_scene_create: no memory");
     memset(gs, 0, sizeof *gs);
     gs->dev = d->device;
+    gs->renderer = d->renderer;
     gs->alloc = a;
     gs->log = de_log_register_category("render", DE_LOG_INFO);
     gs->uploader = d->uploader;
@@ -1113,6 +1135,7 @@ de_result de__gpu_scene_update(de__gpu_scene *gs, const de__render_world_frame *
     gs->stats.frames++;
     gs->frame = f;
     gs->origin = f->origin;
+    DE_TRY(de__skin_prepare(gs->renderer, f, &gs->assets));
     /* The lists of a frame are complete only after the frame before: a first frame, or a skipped
      * one, resolves every slot. The same frame again (Extract did not run) changes nothing. */
     const bool repeat = gs->rw_frame != 0 && f->frame == gs->rw_frame;
@@ -1153,6 +1176,15 @@ de_result de__gpu_scene_update(de__gpu_scene *gs, const de__render_world_frame *
                 de__gpu_table_mark(lt, f->removed_lights[i]);
             for (u32 i = 0; i < f->dirty_light_count; ++i)
                 de__gpu_table_mark(lt, f->dirty_lights[i]);
+        }
+    }
+    if (gs->renderer && gs->renderer->skin) {
+        for (u32 i = 0; i < gs->renderer->skin->count; ++i) {
+            de__skin_entry *skin = &gs->renderer->skin->entries[i];
+            if (skin->active) {
+                inst_resolve(gs, skin->slot);
+                de__gpu_table_mark(it, skin->slot);
+            }
         }
     }
     refresh_small_tables(gs);
