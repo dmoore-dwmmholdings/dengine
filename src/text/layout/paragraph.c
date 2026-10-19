@@ -304,7 +304,10 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
                 u32 stop = end, last_break = line, last_cluster = line;
                 if (d->max_width > 0)
                     for (u32 i = line; i < end; ++i) {
-                        if (prefix[i + 1] - prefix[line] > d->max_width && last_cluster > line) {
+                        /* Trailing blanks are discarded by place_line. They must still
+                         * publish their break before the next visible glyph overflows. */
+                        if (cp[i] != ' ' && cp[i] != '\t' &&
+                            prefix[i + 1] - prefix[line] > d->max_width && last_cluster > line) {
                             stop = last_break > line ? last_break : last_cluster;
                             break;
                         }

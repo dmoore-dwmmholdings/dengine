@@ -65,9 +65,10 @@ All 91,707 official BidiCharacter cases, 10,274 LineBreak cases and 1,187 Graphe
 cases pass with zero skips. The line breaker uses the numeric tailoring specified
 by the official test file. Regenerate properties with
 `python3 tools/unicode/gen_linebreak.py`; output is byte reproducible from vendored
-Unicode inputs. Layout still has tracked defects: trailing-space
-wrapping/justification (DENG-499), the first cache lookup after lazy font-watch
-initialization (DENG-500). DENG-503 is fixed: paragraph splitting also honors UAX #9
+Unicode inputs. Line wrapping records breaks after discardable trailing blanks before
+testing the next visible glyph (DENG-499). Cache keys snapshot the fallback epoch after
+registering the primary/fallback fonts, so the first repeat is a cache hit (DENG-500).
+DENG-503 is fixed: paragraph splitting also honors UAX #9
 paragraph separators U+001C..U+001E, keeping shaping within the bidi level array.
 The original crash and separator/invalid-UTF8 regressions pass ASan/UBSan; a subsequent
 61-second coverage-guided campaign completed 66,715 cases without a finding.

@@ -72,6 +72,17 @@ static de__layout_key make_key(de_text_system *t, const de_text_layout_desc *d,
     if (d->style->language)
         memcpy(k.language, d->style->language, strlen(d->style->language));
     de__text_lock(t->runtime);
+    /* Register every possible shaping font before snapshotting the cache key.
+     * Lazy registration during shaping would invalidate the very first entry. */
+    de__text_watch_font(t, d->style->font);
+    for (u32 i = 0; i < t->runtime->chain_count; ++i) {
+        const de__text_chain *chain = &t->runtime->chains[i];
+        if (chain->primary.id == d->style->font.id) {
+            for (u32 j = 0; j < chain->count; ++j)
+                de__text_watch_font(t, chain->fonts[j]);
+            break;
+        }
+    }
     k.fallback_epoch = t->runtime->epoch;
     de__text_unlock(t->runtime);
     k.max_width = d->max_width;
