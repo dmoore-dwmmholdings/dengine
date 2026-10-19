@@ -470,6 +470,7 @@ bool de__mtl_residency_sets_built(void);
 
 typedef struct mtl_pipeline {
     void *visible_table; /* S17 visible miss/closest-hit functions */
+    void *any_table;     /* S17 per-geometry visible any-hit callbacks */
     void *state;         /* id<MTLRenderPipelineState> or id<MTLComputePipelineState>, retained */
     void *intersection_table; /* compute IFT, buffer2; callback heap at buffer0 */
     void *depth_state;        /* id<MTLDepthStencilState>, retained; NULL for compute */

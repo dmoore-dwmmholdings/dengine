@@ -42,6 +42,11 @@ de_result de__mtl_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         id<MTLFunction> accept = function(d, fallback);
         if (!accept)
             return DE_ERR_INVALID_ARGUMENT;
+        de_gpu_shader_blob router_blob = r.raygen;
+        router_blob.entry = "de_rt_any";
+        id<MTLFunction> router = function(d, router_blob);
+        if (!router)
+            return DE_ERR_INVALID_ARGUMENT;
         for (u32 i = 0; i < r.miss_count; ++i) {
             id<MTLFunction> f = function(d, r.miss[i]);
             if (!f)
@@ -66,11 +71,14 @@ de_result de__mtl_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                 [all addObject:f];
         if (!any.count)
             [all addObject:accept];
+        [all addObject:router];
         MTLLinkedFunctions *linked = [MTLLinkedFunctions new];
         linked.functions = all;
         MTLComputePipelineDescriptor *pd = [MTLComputePipelineDescriptor new];
         pd.computeFunction = raygen;
         pd.linkedFunctions = linked;
+        /* The intersection router makes one further indirect any-hit call. */
+        pd.maxCallStackDepth = 2;
         NSError *error = nil;
         id<MTLComputePipelineState> state = [(__bridge id<MTLDevice>)de__mtl_dev(d)->device
             newComputePipelineStateWithDescriptor:pd
@@ -91,20 +99,33 @@ de_result de__mtl_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                 return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT, "Metal visible handle");
             [vt setFunction:h atIndex:i];
         }
+        MTLVisibleFunctionTableDescriptor *ad = [MTLVisibleFunctionTableDescriptor new];
+        ad.functionCount = any.count ? any.count : 1;
+        id<MTLVisibleFunctionTable> av = [state newVisibleFunctionTableWithDescriptor:ad];
+        if (!av)
+            return de__gpu_fail(d, DE_ERR_UNSUPPORTED, "Metal any-hit visible function table");
+        for (NSUInteger i = 0; i < ad.functionCount; ++i) {
+            id<MTLFunctionHandle> handle =
+                [state functionHandleWithFunction:any.count ? any[i] : accept];
+            if (!handle)
+                return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT, "Metal any-hit handle");
+            [av setFunction:handle atIndex:i];
+        }
+        out->any_table = (void *)CFBridgingRetain(av);
         void **callbacks =
-            DE_ALLOC(d->alloc, (any.count ? any.count : 1) * sizeof *callbacks, 16, DE_MEM_RENDER);
+            DE_ALLOC(d->alloc, ad.functionCount * sizeof *callbacks, 16, DE_MEM_RENDER);
         if (!callbacks)
             return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "Metal RT callbacks");
-        for (NSUInteger i = 0; i < any.count; ++i)
-            callbacks[i] = (__bridge void *)any[i];
-        if (!any.count)
-            callbacks[0] = (__bridge void *)accept;
-        de_result result =
-            de__mtl_intersection_tables(d, (__bridge void *)state, callbacks,
-                                        (u32)(any.count ? any.count : 1), &out->intersection_table);
-        DE_FREE(d->alloc, callbacks, (any.count ? any.count : 1) * sizeof *callbacks);
+        for (NSUInteger i = 0; i < ad.functionCount; ++i)
+            callbacks[i] = (__bridge void *)router;
+        de_result result = de__mtl_intersection_tables(
+            d, (__bridge void *)state, callbacks, (u32)ad.functionCount, &out->intersection_table);
+        DE_FREE(d->alloc, callbacks, ad.functionCount * sizeof *callbacks);
         if (result != DE_OK)
             return result;
+        [(__bridge id<MTLIntersectionFunctionTable>)out->intersection_table
+            setVisibleFunctionTable:av
+                      atBufferIndex:1];
         const u32 n = 1 + r.miss_count + r.hit_group_count;
         u32 *handles = DE_ALLOC(d->alloc, (size_t)n * 16, 16, DE_MEM_RENDER);
         if (!handles) {
@@ -144,6 +165,8 @@ void de__mtl_cmd_dispatch_rays(de_gpu_cmd *c, u32 x, u32 y, u32 z) {
                           atBufferIndex:2];
         [e setVisibleFunctionTable:(__bridge id<MTLVisibleFunctionTable>)mp->visible_table
                      atBufferIndex:3];
+        [e useResource:(__bridge id<MTLVisibleFunctionTable>)mp->any_table
+                 usage:MTLResourceUsageRead];
         de__gpu_buffer *b = de__gpu_get_buffer(c->device, p->rt_sbt);
         [e setBuffer:(__bridge id<MTLBuffer>)DE__GPU_PAYLOAD(mtl_buffer, b)->buffer
               offset:0

@@ -12,9 +12,10 @@ inline PtParams_0 pt_load(constant DeRtHeap &heap,constant PtPush &pc,thread Ker
     p.words[0]=as_type<uint>(h.distance);p.words[1]=h.custom_index;p.words[2]=h.primitive;
     p.words[3]=as_type<uint>(h.barycentrics.x);p.words[4]=as_type<uint>(h.barycentrics.y);
 }
-[[intersection(triangle,triangle_data,instancing)]]
-bool pt_alpha(uint instance [[user_instance_id]],uint primitive [[primitive_id]],float2 bary [[barycentric_coord]],
-              ray_data DeRtPayload &payload [[payload]],constant DeRtHeap &heap [[buffer(0)]]) {
+[[visible]]
+bool pt_alpha(thread DeRtPayload &payload,thread const DeRtHit &hit,
+              constant DeRtHeap &heap,constant uchar *) {
+    uint instance=hit.custom_index,primitive=hit.primitive;float2 bary=hit.barycentrics;
     if(payload.words[12]!=0xffffffffu&&instance!=payload.words[12])return false;
     PtPush local={payload.words[13],payload.words[14]};
     KernelContext_0 ctx;ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;auto p=pt_load_0(local.params,local.entry,&ctx);auto q=pt_query_0(&p,&ctx);q.ptq_flags=payload.words[15];
