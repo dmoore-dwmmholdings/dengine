@@ -10,6 +10,8 @@
 #include "host/host_packs.h" /* DENG-213 */
 
 #include <dengine/de_debug.h>
+#include <dengine/de_anim.h>
+#include "anim/anim_host.h"
 #include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
@@ -29,6 +31,10 @@ static void engine_teardown(de__engine *e) {
         de_input_detach(e->pub.input);
         de_input_destroy(e->pub.input);
         e->pub.input = NULL;
+    }
+    if (e->pub.anim) {
+        de_anim_destroy(e->pub.anim);
+        e->pub.anim = NULL;
     }
     if (e->pub.text) {
         de_text_destroy(e->pub.text);
@@ -250,6 +256,14 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     r = de_text_create(a, e->pub.assets, &e->pub.text);
     if (r != DE_OK)
         return engine_fail(e, r, "text");
+
+    /* DENG-201: visual clip playback also runs without a renderer on headless hosts. */
+    r = de_anim_create(a, e->pub.assets, &e->pub.anim);
+    if (r != DE_OK)
+        return engine_fail(e, r, "animation");
+    de_anim_set_task_system(e->pub.anim, e->pub.tasks);
+    de__anim_bind_renderer(e->pub.anim, e->pub.renderer);
+    de_anim_attach(e->pub.anim, e->pub.world);
 
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
      * has none. The optional modules stay NULL. */

@@ -21,6 +21,8 @@
 #include "host/timing.h"
 
 #include <dengine/de_debug.h>
+#include <dengine/de_anim.h>
+#include "anim/anim_host.h"
 #include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #if DE_HAS_RENDER
@@ -339,6 +341,9 @@ de_result de__loop_run(de__host *h) {
         for (u32 i = 0; r == DE_OK && i < tf.steps; ++i)
             r = loop_schedule(w, DE_SCHEDULE_FIXED_UPDATE, tf.step_dt, 0.0f, frame);
 
+        /* DENG-201: games may create or replace the optional renderer after host startup. */
+        if (e->anim)
+            de__anim_bind_renderer(e->anim, e->renderer);
         /* 4. Update, PostUpdate (transform propagation runs in PostUpdate). */
         if (r == DE_OK)
             r = loop_schedule(w, DE_SCHEDULE_UPDATE, tf.frame_dt, tf.alpha, frame);

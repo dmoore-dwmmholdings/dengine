@@ -78,5 +78,15 @@ typedef struct de_anim_event {
     de_name name;
 } de_anim_event;
 
+/* S19 visual single-clip runtime bindings. NULL renderer supports headless playback. */
+typedef struct de_renderer de_renderer;
+typedef struct de_task_system de_task_system;
+DE_API void de_anim_set_renderer(de_anim_system *, de_renderer *);
+DE_API void de_anim_set_task_system(de_anim_system *, de_task_system *);
+DE_API de_component de_anim_component(const de_anim_system *);
+DE_API de_event_type de_anim_event_type(const de_anim_system *);
+DE_API de_skeleton de_anim_skeleton(de_anim_system *, de_asset_id);
+DE_API de_anim_clip de_anim_clip_asset(de_anim_system *, de_asset_id);
+
 DE_EXTERN_C_END
 #endif

@@ -512,7 +512,9 @@ if(TARGET de_render)
 endif()
 
 # DENG-198 pixel-art view upscale and camera grid math.
+if(TARGET de_render)
 target_sources(de_render PRIVATE pixel/pixel_art.c)
 target_sources(de_render PRIVATE pixel/palette_dither.c)
 target_sources(de_render PRIVATE pixel/pixel_snap.c)
 target_sources(de_render PRIVATE pixel/palette_runtime.c)
+endif()
