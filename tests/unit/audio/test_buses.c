@@ -51,3 +51,37 @@ TEST(audio_buses, ids_capacity_and_invalid_parent) {
     EXPECT_EQ(de_audio_bus_create(a, "overflow", (de_bus){0}).id, 0u);
     de_audio_destroy(a);
 }
+
+TEST(audio_buses, same_layout_preserves_isolated_channels_and_accumulates_gain) {
+    const f32 gains[] = {0, 0.5f, -1};
+    for (u32 channels = 1; channels <= 8; ++channels)
+        for (u32 active = 0; active < channels; ++active)
+            for (u32 g = 0; g < sizeof gains / sizeof gains[0]; ++g) {
+                f32 input[8] = {0}, output[8];
+                input[active] = 0.25f;
+                for (u32 i = 0; i < 8; ++i)
+                    output[i] = (f32)(i + 1) * 0.125f;
+                de__audio_channel_mix(output, channels, input, channels, gains[g]);
+                for (u32 i = 0; i < 8; ++i)
+                    EXPECT_FLOAT_EQ(output[i],
+                                    (f32)(i + 1) * 0.125f + (i == active ? input[i] * gains[g] : 0),
+                                    0);
+            }
+}
+
+TEST(audio_buses, stereo_voice_preserves_each_speaker) {
+    de_audio *a = test_audio_manual(4, 0);
+    test_source source;
+    test_src_init(&source, TSRC_CONST, 0.01f, 0, 2);
+    de_voice voice = test_play(a, &source, 0, false);
+    f32 output[256 * 2];
+    u64 hits = de__rt_guard_hits();
+    de__audio_null_pump(a, 256, output);
+    EXPECT_TRUE(de_audio_playing(a, voice));
+    EXPECT_EQ(de__rt_guard_hits(), hits);
+    for (u32 frame = 0; frame < 256; ++frame)
+        for (u32 c = 0; c < 2; ++c)
+            EXPECT_FLOAT_EQ(output[frame * 2 + c], 0.01f * (f32)(c + 1), 1e-7);
+    de_audio_destroy(a);
+    EXPECT_EQ(test_src_closes(&source), 1u);
+}

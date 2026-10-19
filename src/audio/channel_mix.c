@@ -3,6 +3,12 @@
  * center/surround use -3dB. Stereo upmix routes fronts, center=(L+R)/sqrt(2),
  * surrounds at -3dB. Mono is equal-power center for stereo, stereo->mono average. */
 void de__audio_channel_mix(f32 *out, u32 och, const f32 *in, u32 ich, f32 gain) {
+    /* Equal channel counts use the same canonical layout; preserve each speaker, including LFE. */
+    if (ich == och) {
+        for (u32 c = 0; c < och; ++c)
+            out[c] += in[c] * gain;
+        return;
+    }
     f32 l = in[0], r = ich > 1 ? in[1] : in[0];
     if (ich == 1) {
         l *= 0.70710678118f;
