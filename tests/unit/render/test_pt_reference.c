@@ -76,14 +76,13 @@ static void pt_frame(pt_fixture *f) {
     ASSERT_TRUE(de__pt_get(r->r, r->view, &f->info));
     ASSERT_FALSE(de_gpu_device_is_lost(r->d));
 }
-static float *pt_read(pt_fixture *f) {
+static float *pt_read_texture(pt_fixture *f, de_gpu_texture texture, u32 bytes_per_pixel) {
     rt_fixture *r = &f->rt;
     de_gpu_cmd *cmd = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "PT accumulation readback");
-    de_gpu_barrier b = {.texture = f->info.accumulation,
-                        .before = DE_ACCESS_SHADER_READ,
-                        .after = DE_ACCESS_COPY_SRC};
+    de_gpu_barrier b = {
+        .texture = texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
     de_gpu_cmd_barriers(cmd, &b, 1);
-    de_gpu_cmd_copy_texture_to_buffer(cmd, f->rb, 0, f->info.width * 16, f->info.accumulation, 0,
+    de_gpu_cmd_copy_texture_to_buffer(cmd, f->rb, 0, f->info.width * bytes_per_pixel, texture, 0,
                                       0);
     b.before = DE_ACCESS_COPY_SRC;
     b.after = DE_ACCESS_SHADER_READ;
@@ -94,6 +93,58 @@ static float *pt_read(pt_fixture *f) {
     de_gpu_wait_idle(r->d);
     return de_gpu_buffer_map(r->d, f->rb);
 }
+static float *pt_read(pt_fixture *f) {
+    return pt_read_texture(f, f->info.accumulation, 16);
+}
+
+TEST_F(pt_reference, progressive_sample_moments_match_observed_paths, pt_fixture) {
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.base_color = (de_vec4){.7f, .5f, .25f, 1};
+    f->rt.w.touch_all = true;
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
+    ASSERT_TRUE(cvar_set("r.pt.final_denoise", "0"));
+    const u32 center = 32u * 64u + 32u;
+    const f64 weights[3] = {.2126, .7152, .0722};
+    f32 previous[3] = {0}, factor[3] = {0};
+    f64 total = 0, squared = 0;
+    for (u32 sample = 0; sample < 16; ++sample) {
+        pt_frame(f);
+        ASSERT_EQ(f->info.samples, sample + 1u);
+        const f32 *beauty = pt_read(f) + center * 4u;
+        f32 sum[3] = {beauty[0], beauty[1], beauty[2]};
+        ASSERT_FLOAT_EQ(beauty[3], sample + 1u, 0);
+        if (sample == 0) {
+            const f32 *albedo = pt_read_texture(f, f->info.albedo, 16) + center * 4u;
+            for (u32 ch = 0; ch < 3; ++ch)
+                factor[ch] = fmaxf(albedo[ch], .001f);
+        }
+        f64 value = 0;
+        for (u32 ch = 0; ch < 3; ++ch) {
+            value += weights[ch] * ((f64)sum[ch] - previous[ch]) / factor[ch];
+            previous[ch] = sum[ch];
+        }
+        total += value;
+        squared += value * value;
+        const f32 *moments = pt_read_texture(f, f->info.moments, 8) + center * 2u;
+        const f64 n = sample + 1u;
+        const f64 expected_mean = total / n, expected_m2 = fmax(squared - total * total / n, 0);
+        EXPECT_FLOAT_EQ(moments[0], expected_mean, 2e-5 * fmax(1, fabs(expected_mean)));
+        EXPECT_FLOAT_EQ(moments[1], expected_m2, 2e-5 * fmax(1, expected_m2));
+    }
+    EXPECT_TRUE(squared - total * total / 16 > 1e-5);
+    de_renderer_path_reset(f->rt.r, f->rt.view);
+    pt_frame(f);
+    ASSERT_EQ(f->info.samples, 1u);
+    const f32 *beauty = pt_read(f) + center * 4u;
+    f64 first = 0;
+    for (u32 ch = 0; ch < 3; ++ch)
+        first += weights[ch] * beauty[ch] / factor[ch];
+    const f32 *moments = pt_read_texture(f, f->info.moments, 8) + center * 2u;
+    EXPECT_FLOAT_EQ(moments[0], first, 2e-5 * fmax(1, fabs(first)));
+    EXPECT_FLOAT_EQ(moments[1], 0, 0);
+}
+
 static void cornell(pt_fixture *f) {
     rt_fixture *r = &f->rt;
     g_mat_count = 0;

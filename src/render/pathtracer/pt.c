@@ -23,13 +23,13 @@ typedef struct pt_params {
     f32 exposure;
     u32 light_count, directional_alias, directional_offset;
     de__pt_media_params media;
-    u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_pad[3];
+    u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_moments, aov_pad[2];
 } pt_params;
 DE_STATIC_ASSERT(sizeof(pt_params) == 416, "PtParams shader layout");
 typedef struct pt_view {
     de_view handle;
     de_gpu_texture accumulation, output;
-    de_gpu_texture albedo, normal, depth, position, material;
+    de_gpu_texture albedo, normal, depth, position, material, moments;
     de_gpu_buffer params, cdf, directionals;
     u32 directional_capacity, directional_count, directional_offset;
     u32 width, height, samples, reset_serial, seen_reset, strategy, seed;
@@ -74,6 +74,7 @@ static void release(de__pt *p, pt_view *v) {
     de_gpu_texture_destroy(p->r->dev, v->depth);
     de_gpu_texture_destroy(p->r->dev, v->position);
     de_gpu_texture_destroy(p->r->dev, v->material);
+    de_gpu_texture_destroy(p->r->dev, v->moments);
     de_gpu_buffer_destroy(p->r->dev, v->params);
     de_gpu_buffer_destroy(p->r->dev, v->cdf);
     de_gpu_buffer_destroy(p->r->dev, v->directionals);
@@ -245,13 +246,14 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                   .format = DE_FMT_RGBA16_FLOAT,
                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
                                   .name = "PT exposed HDR"});
-    de_gpu_texture *aovs[] = {&v->albedo, &v->normal, &v->depth, &v->position, &v->material};
+    de_gpu_texture *aovs[] = {&v->albedo,   &v->normal,   &v->depth,
+                              &v->position, &v->material, &v->moments};
     const de_gpu_format formats[] = {DE_FMT_RGBA32_FLOAT, DE_FMT_RGBA32_FLOAT, DE_FMT_R32_FLOAT,
-                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT};
-    const char *names[] = {"PT first-hit albedo", "PT first-hit world normal",
-                           "PT first-hit distance", "PT first-hit position",
-                           "PT actual material identity"};
-    for (u32 i = 0; i < 5; ++i)
+                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT,   DE_FMT_RG32_FLOAT};
+    const char *names[] = {"PT first-hit albedo",         "PT first-hit world normal",
+                           "PT first-hit distance",       "PT first-hit position",
+                           "PT actual material identity", "PT demodulated luminance moments"};
+    for (u32 i = 0; i < 6; ++i)
         *aovs[i] = de_gpu_texture_create(
             d,
             &(de_gpu_texture_desc){.width = v->width,
@@ -273,7 +275,7 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                                       .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
                                                       .name = "PT environment CDF"});
     return v->accumulation.id && v->output.id && v->params.id && v->cdf.id && v->albedo.id &&
-           v->normal.id && v->depth.id && v->position.id && v->material.id;
+           v->normal.id && v->depth.id && v->position.id && v->material.id && v->moments.id;
 }
 typedef struct pt_pass {
     de__pt *p;
@@ -437,6 +439,7 @@ void de__pt_build(de__view_frame *f, void *user) {
     params.aov_depth = de_gpu_texture_bindless(p->r->dev, v->depth, 0, true);
     params.aov_position = de_gpu_texture_bindless(p->r->dev, v->position, 0, true);
     params.aov_material = de_gpu_texture_bindless(p->r->dev, v->material, 0, true);
+    params.aov_moments = de_gpu_texture_bindless(p->r->dev, v->moments, 0, true);
     if (golden)
         params.exposure = 1;
     de_mat4 inverse = de_m4_inverse(&f->view_proj);
@@ -497,9 +500,12 @@ void de__pt_build(de__view_frame *f, void *user) {
     de_rg_export(g, accumulation, DE_ACCESS_SHADER_READ);
     de_rg_export(g, output, DE_ACCESS_SHADER_READ);
     de_rg_export(g, cdf, DE_ACCESS_SHADER_READ);
-    de_gpu_texture aov_textures[] = {v->albedo, v->normal, v->depth, v->position, v->material};
-    for (u32 i = 0; i < 5; ++i) {
+    de_gpu_texture aov_textures[] = {v->albedo,   v->normal,   v->depth,
+                                     v->position, v->material, v->moments};
+    for (u32 i = 0; i < 6; ++i) {
         de_rg_resource a = de_rg_import_texture(g, aov_textures[i], DE_ACCESS_SHADER_READ);
+        if (i == 5 && v->samples)
+            de_rg_read(pass, a, DE_ACCESS_SHADER_READ);
         de_rg_write(pass, a, DE_ACCESS_SHADER_WRITE);
         de_rg_export(g, a, DE_ACCESS_SHADER_READ);
     }
@@ -515,6 +521,7 @@ void de__pt_build(de__view_frame *f, void *user) {
                             .depth = v->depth,
                             .position = v->position,
                             .material = v->material,
+                            .moments = v->moments,
                             .directional_alias = v->directionals,
                             .directional_count = v->directional_count,
                             .directional_offset = v->directional_offset};
@@ -571,6 +578,7 @@ bool de__pt_get(const de_renderer *r, de_view view, de__pt_info *out) {
                          .depth = v->depth,
                          .position = v->position,
                          .material = v->material,
+                         .moments = v->moments,
                          .directional_alias = v->directionals,
                          .directional_count = v->directional_count,
                          .directional_offset = v->directional_offset};

@@ -11,18 +11,34 @@ For an explicit cross-backend comparison against those Metal images, run `python
 Scene FLIP thresholds are fixed in `tests/golden/scenes.toml` (mean .02, p99 .10). Reference files remain unfiltered. The separate final-denoise 16/4096-spp numerical test retains its original .05 mean criterion; a red result is tracked separately and does not justify changing references or thresholds.
 
 
-Final-denoise follow-up (DENG-454): the preparation pass now estimates noise
-without an unconditional spatial box blur. The PT wavelet path propagates the
-variance of its weighted estimate between levels, using squared weights as in
-[SVGF, equation 3](https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf).
-Other signal policies retain their existing conservative variance behavior.
-A GPU oracle checks that a constant independent input variance of 2 becomes
-`2 * 4900 / 65536` after one separable B3 filter, while constant radiance stays
-unchanged; disabling propagation preserves the original variance resource.
+Final-denoise follow-up (DENG-454): the preparation pass estimates noise
+without an unconditional spatial box blur. Progressive path tracing now records
+per-pixel demodulated luminance mean and Welford M2 alongside the unmodified
+beauty accumulation. With N > 1, the initial variance of the sample mean is
+`M2 / (N * (N - 1))`; the single-sample case retains the spatial bootstrap.
+Reset discards the previous moments along with the beauty accumulation. Moments
+are collected even with final denoise off, so enabling it later uses all samples.
+This adds one RG32F texture (8 bytes per pixel) and a read/write per path sample.
 
-The fixed final-denoise comparison improves from FLIP 0.141325818 to
-0.0986457165, but still fails its original 0.05 limit. Its 16/4096 sample counts,
-scene and numerical oracle are unchanged. This measurement has Metal API
-validation enabled and shader instrumentation disabled; DENG-455 remains open.
-It is not a validation-enabled path-tracer golden pass. Further work is needed
-to distinguish Monte Carlo noise from real illumination gradients.
+The PT wavelet path propagates variance using squared weights as in
+[SVGF, equation 3](https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf).
+Its RGB range weights preserve color boundaries even at equal luminance.
+Other signal policies retain their existing range and variance behavior.
+The denoiser binds each guide with its actual read/write access instead of
+requesting an unused storage view before replacing it with a sampled view.
+
+GPU oracles compare progressive mean and M2 against independently reconstructed
+path samples at every prefix and after reset, preserve equal-luminance color
+edges with a legacy-filter negative control, and check that independent input
+variance 2 becomes `2 * 4900 / 65536` after one separable B3 filter while constant
+radiance stays unchanged. Disabling propagation preserves the original variance
+resource.
+
+The fixed final-denoise comparison improves from FLIP 0.141325818 originally,
+through 0.0986457165 after the first variance/preparation correction, to
+0.0761701224 with measured path variance and RGB range weights. It still fails
+the original 0.05 limit. Its 16/4096 sample counts, scene and numerical oracle
+are unchanged; the 4096-sample reference energy remains 106.239134.
+This measurement has Metal API validation enabled and shader instrumentation
+disabled; DENG-455 remains open. It is not a validation-enabled path-tracer
+golden pass. Further reconstruction work is needed to meet the quality gate.

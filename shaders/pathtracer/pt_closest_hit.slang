@@ -19,7 +19,7 @@ public struct PtParams {
     public uint environment_revision,flags,sampling_table,reserved1;
     public float exposure; public uint light_count,directional_alias,directional_offset;
     public PtMediaParams media;
-    public uint aov_albedo,aov_normal,aov_depth,aov_position,aov_material,aov_pad0,aov_pad1,aov_pad2;
+    public uint aov_albedo,aov_normal,aov_depth,aov_position,aov_material,aov_moments,aov_pad1,aov_pad2;
 };
 public PtParams pt_load(uint buffer,uint entry) {return de_robuffer<PtParams>(buffer)[entry];}
 public struct PtStep {

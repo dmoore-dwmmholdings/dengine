@@ -17,7 +17,7 @@ typedef struct dn_params {
     f32 inverse[4][4], previous_inverse[4][4];
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
-    u32 position, previous_position, out_position, tail_reserved;
+    u32 position, previous_position, out_position, rgb_range_weights;
     u32 temporal_alpha, normal_world, channels, out_variance;
 } dn_params;
 DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
@@ -276,22 +276,24 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     READ(previous_position);
     READ(temporal_alpha);
     WRITE(output);
-    WRITE(moments);
-    WRITE(length);
+    if (x->pipeline.id == x->owner->variance.id) {
+        READ(moments);
+        READ(length);
+    } else {
+        WRITE(moments);
+        WRITE(length);
+    }
     WRITE(validity);
-    WRITE(variance);
+    if (x->pipeline.id == x->owner->atrous.id)
+        READ(variance);
+    else
+        WRITE(variance);
     WRITE(out_depth);
     WRITE(out_normal);
     WRITE(out_material);
     WRITE(out_key);
     WRITE(out_position);
     WRITE(out_variance);
-    if (x->pipeline.id == x->owner->variance.id) {
-        p.moments = tex(x, pass, x->moments, false);
-        p.length = tex(x, pass, x->length, false);
-    }
-    if (x->pipeline.id == x->owner->atrous.id)
-        p.variance = tex(x, pass, x->variance, false);
 #undef READ
 #undef WRITE
     if (x->scene.id)
@@ -381,6 +383,7 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.roughness_threshold = c->desc.roughness_threshold;
     x->pc.clamp_mode = c->desc.clamp;
     x->pc.channels = c->desc.channels;
+    x->pc.rgb_range_weights = c->desc.rgb_range_weights;
     x->pc.reset = c->reset;
     x->pc.linear_depth = c->frame.inputs.linear_depth;
     x->pc.normal_world = c->frame.inputs.normal_is_world;

@@ -27,7 +27,7 @@ float3 pt_shadow_trace(PtParams p,PtMediumStack media,DeRtRay ray,uint casts) {
 [shader("raygeneration")]
 void pt_raygen(uniform PtPush pc) {
     PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
-    DeRtRay ray=pt_camera(p,pixel);DeRtHit first=pt_intersect(p,ray,0);pt_store_aov(p,ray,first,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
+    DeRtRay ray=pt_camera(p,pixel);DeRtHit first=pt_intersect(p,ray,0);float3 albedo=pt_store_aov(p,ray,first,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
     if(p.media.features==0) {
     for(uint bounce=0;bounce<p.max_bounces;++bounce) {
         DeRtHit hit=bounce==0?first:pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
@@ -55,6 +55,9 @@ void pt_raygen(uniform PtPush pc) {
     radiance=select(isfinite(radiance),radiance,float3(0));
     float4 old=p.sample>0?de_rwtex2d(p.accumulation)[id]:float4(0);
     float4 sum=old+float4(radiance,1);de_rwtex2d(p.accumulation)[id]=sum;
+    float2 previous_moments=p.sample>0?de_rwtex2d(p.aov_moments)[id].xy:float2(0);
+    float luminance=dot(radiance/albedo,float3(.2126,.7152,.0722));
+    de_rwtex2d(p.aov_moments)[id]=float4(pt_sample_moments(previous_moments,luminance,p.sample),0,0);
     de_rwtex2d(p.output)[id]=float4(sum.rgb/max(sum.a,1)*p.exposure,1);
 }
 [shader("miss")]

@@ -22,6 +22,8 @@ typedef struct de_denoise_signal_desc {
     bool zero_radius_passthrough;
     /** Filter independent-sample variance with squared spatial weights between wavelet levels. */
     bool propagate_variance;
+    /** Preserve chromatic edges even where luminance is equal. RGB signals only. */
+    bool rgb_range_weights;
 } de_denoise_signal_desc;
 /** Canonical motion is current-minus-previous NDC; normal is canonical encoded GB1.
  * material is RG32_FLOAT actual identity (low/high 16-bit words), never GB2's model id. Use the

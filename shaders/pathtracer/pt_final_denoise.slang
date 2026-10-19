@@ -1,7 +1,7 @@
 import bindless;
 import "../denoise/reblur_weights";
 import push_constants;
-struct PtFinalParams {uint width,height,accumulation,albedo,normal,depth,position,material;uint input,output,variance,reserved;float exposure;uint pad0,pad1,pad2;};
+struct PtFinalParams {uint width,height,accumulation,albedo,normal,depth,position,material;uint input,output,variance,moments;float exposure;uint pad0,pad1,pad2;};
 struct PtFinalPush {uint params,entry;};
 float3 pt_final_demod(PtFinalParams p,int2 xy){float4 sum=de_tex2d(p.accumulation).Load(int3(xy,0));return sum.rgb/max(sum.a,1)/reblur_floor_factor(de_tex2d(p.albedo).Load(int3(xy,0)).rgb);}
 [shader("compute")][numthreads(8,8,1)]
@@ -14,6 +14,8 @@ void cs_pt_final_prepare(uint3 id:SV_DispatchThreadID,uniform PtFinalPush pc){
         float4 n=de_tex2d(p.normal).Load(int3(q,0));if(!reblur_geometry(normal.xyz,normal.w,n.xyz,n.w,de_tex2d(p.position).Load(int3(q,0)).xyz-position))continue;
         float3 value=pt_final_demod(p,q);float l=reblur_luminance(value);mean+=l;second+=l*l;count++;}
     mean/=max(count,1);float variance=max(second/max(count,1)-mean*mean,1e-8);
+    float samples=de_tex2d(p.accumulation).Load(int3(xy,0)).a;
+    if(samples>1.0)variance=max(de_tex2d(p.moments).Load(int3(xy,0)).y/(samples*(samples-1.0)),1e-8);
     // Estimate noise here; leave spatial reconstruction to the variance-guided filter.
     de_rwtex2d(p.output)[xy]=float4(reblur_firefly(center,mean,second,count),1);de_rwtex2d(p.variance)[xy]=float4(variance,0,0,0);
 }

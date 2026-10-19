@@ -758,7 +758,7 @@ TEST_F(denoise_framework, changing_signal_channel_semantics_resets_history, dn_f
 
 TEST_F(denoise_framework, spatial_variance_uses_squared_weights, dn_fixture) {
     upload(f);
-    for (u32 propagate = 0; propagate < 2; ++propagate) {
+    for (u32 propagate = 0; propagate < 3; ++propagate) {
         begin(f);
         de_denoise_frame frame = {.graph = f->graph,
                                   .view = {1},
@@ -776,7 +776,8 @@ TEST_F(denoise_framework, spatial_variance_uses_squared_weights, dn_fixture) {
                                                           .channels = 3,
                                                           .iterations = 1,
                                                           .depth_relative = .02f,
-                                                          .propagate_variance = propagate != 0},
+                                                          .propagate_variance = propagate != 0,
+                                                          .rgb_range_weights = propagate == 2},
                                 &ctx),
                   DE_OK);
         /* A constant realization with known independent input variance 2. The depth texture
@@ -794,5 +795,56 @@ TEST_F(denoise_framework, spatial_variance_uses_squared_weights, dn_fixture) {
                 EXPECT_FLOAT_EQ(color(f)[(y * W + x) * 4], 1, 1e-6);
                 EXPECT_FLOAT_EQ(variance[y * W + x], expected, 1e-6);
             }
+    }
+}
+
+TEST_F(denoise_framework, equal_luminance_color_edges_survive_spatial_filtering, dn_fixture) {
+    const f32 green = .2126f / .7152f;
+    for (u32 y = 0; y < H; ++y)
+        for (u32 x = 0; x < W; ++x) {
+            const u32 i = y * W + x;
+            f->data[0][i * 4] = x < W / 2 ? 1.f : 0.f;
+            f->data[0][i * 4 + 1] = x < W / 2 ? 0.f : green;
+            f->data[0][i * 4 + 2] = 0;
+        }
+    upload(f);
+    for (u32 chroma = 0; chroma < 2; ++chroma) {
+        begin(f);
+        de_denoise_frame frame = {.graph = f->graph,
+                                  .view = {1},
+                                  .frame = f->frame,
+                                  .reset = true,
+                                  .inputs = {.width = W, .height = H, .linear_depth = true}};
+        frame.inputs.signal = de_rg_import_texture(f->graph, f->signal, DE_ACCESS_SHADER_READ);
+        frame.inputs.depth = de_rg_import_texture(f->graph, f->depth, DE_ACCESS_SHADER_READ);
+        frame.inputs.normal = de_rg_import_texture(f->graph, f->normal, DE_ACCESS_SHADER_READ);
+        frame.inputs.material = de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+        const de_rg_resource zero_variance =
+            de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
+        de_denoise_ctx *ctx = NULL;
+        ASSERT_EQ(denoise_begin(f->owner, &frame,
+                                &(de_denoise_signal_desc){.identity = 0x4348524f00ull + chroma,
+                                                          .format = DE_FMT_RGBA32_FLOAT,
+                                                          .channels = 3,
+                                                          .iterations = 1,
+                                                          .depth_relative = .02f,
+                                                          .propagate_variance = true,
+                                                          .rgb_range_weights = chroma == 1,
+                                                          .luminance_scale = 4.f},
+                                &ctx),
+                  DE_OK);
+        run(f, denoise_add_atrous(ctx, (de_denoise_result){.color = frame.inputs.signal,
+                                                           .variance = zero_variance}));
+        const f32 *left = color(f) + (16 * W + W / 2 - 1) * 4;
+        const f32 *right = left + 4;
+        if (chroma == 1) {
+            EXPECT_FLOAT_EQ(left[0], 1, 1e-6);
+            EXPECT_FLOAT_EQ(left[1], 0, 1e-6);
+            EXPECT_FLOAT_EQ(right[0], 0, 1e-6);
+            EXPECT_FLOAT_EQ(right[1], green, 1e-6);
+        } else {
+            EXPECT_TRUE(left[0] < .9f);
+            EXPECT_TRUE(right[0] > .1f);
+        }
     }
 }
