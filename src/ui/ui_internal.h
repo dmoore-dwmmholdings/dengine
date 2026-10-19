@@ -4,7 +4,6 @@
 #include <dengine/de_debug.h>
 #include <dengine/de_reflect.h>
 #include <dengine/de_memory.h>
-#include "text/text_internal.h"
 #define DE_UI_LAYOUT_SYSTEM  "ui.layout"
 #define DE_UI_STYLE_SYSTEM   "ui.style"
 #define DE_UI_EXTRACT_SYSTEM "ui.extract"
@@ -27,6 +26,7 @@ typedef struct de_ui_record {
     de_vec2 intrinsic;
     de_vec2 measured_available;
     u32 font_generation, component_mask;
+    u64 locale_generation;
     bool dirty, measure_dirty, alive;
 } de_ui_record;
 struct de_ui {
@@ -54,6 +54,7 @@ struct de_ui {
     de_ui_layout_stats stats;
     void *render;
     struct de_ui_style_system *style;
+    struct de_ui_widgets *widgets;
 };
 typedef struct de_ui_resource {
     de_ui *ui;

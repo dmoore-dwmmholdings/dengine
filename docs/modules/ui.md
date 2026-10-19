@@ -169,3 +169,47 @@ stylesheet transition regression DENG-511 remains separate; visible font
 ligature loss DENG-512 and plain-fill seams DENG-513 are retained in references.
 Metal shader-instrumented renderer setup has known timeout DENG-508; these
 native comparisons do not claim that instrumented suite passed.
+
+## Basic widget provider (DENG-318)
+
+Widgets remain plain reflected components on retained nodes: Text, Image, Button,
+Toggle, Slider and Progress. `ui.widgets` runs before styles/layout, installs basic
+widget tags and synchronizes button disabled state. Advanced tags (input and later
+values) remain owned by advanced widget registration even when they carry text or
+image content. `ui.pointer` runs in PreUpdate after the host updates input. Cursor
+logical points convert to physical pixels using the actual window's two sizes.
+`de_ui_pointer_consumed` tells gameplay when UI owns the hit/capture.
+
+The internal contract in `widgets/widgets_internal.h` is shared by later S29 work:
+
+- `de_ui__widget_table(ui)` returns the fixed per-UI entry table. Each type has
+  optional `submit`, `increment`, `decrement`, `cancel` functions taking `(ui, entity)`.
+  Basic widgets install button/toggle submit and slider increment/decrement. DENG-319
+  owns advanced entry registration. DENG-320 calls entries without linking widget
+  implementation symbols. The optional `scroll_into_view(ui, container, child)` is
+  initially NULL; DENG-319 installs it and callers check it before use.
+- `de_ui__hit_test(ui, root, root_local_pixels)` consumes the renderer's exact
+  retained order, inherited axis-aligned clips and popup layers in reverse order.
+  A zero root targets screen roots; a named root takes root-local physical pixels.
+  Text inside an actionable ancestor targets that ancestor. Hidden/disabled
+  ancestors reject their entire subtree.
+- `de_ui__pointer_route` exposes press/release/down routing for root-local sources
+  such as world-panel rays. Capture lasts until release; a click requires the same
+  enabled target on press and release. Slider capture clamps and snaps its value.
+- `de_ui__widget_event` sends the public `de_ui_event`. Buttons send CLICK with
+  their authored action, toggles send CHANGED with0/1, sliders with the actual value.
+  These are the same payloads used by later navigation and data binding.
+- The renderer's optional CPU node emitter is registered after render attach and
+  re-registered on reattach. Widget fills/knobs inherit the node's clip, opacity and
+  order and enter the immutable Extract packet before text. No GPU draw reads ECS.
+
+The default TOML sheet embeds at build time and loads at UI create. It uses the
+existing blue tokens,8px spacing and6px corners; no font asset/size is imposed.
+Later sheets override the defaults. Text resolves through public `de_loc`, and
+locale generation marks localized nodes dirty after ready tables publish.
+
+This is a coherent implementation provider; final DENG-318 native state-sheet
+verification and full acceptance handoff are still pending. Known strict regressions
+remain tracked as DENG-515 (first-repeat/full-tree layout cost), DENG-516 (explicit
+basic selector tag without its corresponding behavior component), and DENG-511
+(interrupted state transition from the preceding issue).
