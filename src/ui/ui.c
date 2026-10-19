@@ -136,6 +136,9 @@ static void changed(const de_query_chunk *chunk, void *user) {
 }
 static void detach(de_ui *ui) {
     if (ui->world) {
+#if defined(DE_UI_RETAINED_RENDER)
+        de_ui__render_shutdown(ui);
+#endif
         if (ui->layout_system.id)
             de_system_remove(ui->world, ui->layout_system);
         if (ui->all_nodes.id)
@@ -200,12 +203,23 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
     ui->width = 1920;
     ui->height = 1080;
     ui->viewport_dirty = true;
+#if defined(DE_UI_RETAINED_RENDER)
+    de_result render_result = de_ui__render_init(ui);
+    if (render_result != DE_OK) {
+        de_ui_destroy(ui);
+        return render_result;
+    }
+#endif
     *out = ui;
     return DE_OK;
 }
 void de_ui_destroy(de_ui *ui) {
     if (!ui)
         return;
+#if defined(DE_UI_RETAINED_RENDER)
+    if (!ui->world)
+        de_ui__render_shutdown(ui);
+#endif
     detach(ui);
     if (ui->scratch)
         de_arena_destroy(ui->scratch);
@@ -272,6 +286,15 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     }
     (void)de_ui__register_measure(ui, ui->ids.text, de_ui__measure_text);
     (void)de_ui__register_measure(ui, ui->ids.image, de_ui__measure_image);
+#if defined(DE_UI_RETAINED_RENDER)
+    de_result render_result = ui->render ? DE_OK : de_ui__render_init(ui);
+    if (render_result == DE_OK)
+        render_result = de_ui__render_attach(ui);
+    if (render_result != DE_OK) {
+        detach(ui);
+        return;
+    }
+#endif
     ui->viewport_dirty = true;
 }
 void de_ui_set_viewport(de_ui *ui, u32 width, u32 height, de_window_insets safe) {

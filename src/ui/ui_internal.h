@@ -52,6 +52,7 @@ struct de_ui {
     bool viewport_override, viewport_dirty;
     f32 scale;
     de_ui_layout_stats stats;
+    void *render;
 };
 typedef struct de_ui_resource {
     de_ui *ui;
@@ -62,4 +63,9 @@ de_str de_ui__text_content(de_ui *ui, const DeUiText *text);
 void de_ui__layout_system(de_system_ctx *ctx);
 u32 de_ui__find(const de_ui *ui, de_entity entity);
 void de_ui__dirty(de_ui *ui, u32 index);
+#if defined(DE_UI_RETAINED_RENDER)
+de_result de_ui__render_init(de_ui *ui);
+void de_ui__render_shutdown(de_ui *ui);
+de_result de_ui__render_attach(de_ui *ui);
+#endif
 #endif
