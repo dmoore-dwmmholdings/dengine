@@ -249,10 +249,10 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
     de_gpu_texture *aovs[] = {&v->albedo,   &v->normal,   &v->depth,
                               &v->position, &v->material, &v->moments};
     const de_gpu_format formats[] = {DE_FMT_RGBA32_FLOAT, DE_FMT_RGBA32_FLOAT, DE_FMT_R32_FLOAT,
-                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT,   DE_FMT_RG32_FLOAT};
+                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT,   DE_FMT_RGBA32_FLOAT};
     const char *names[] = {"PT first-hit albedo",         "PT first-hit world normal",
                            "PT first-hit distance",       "PT first-hit position",
-                           "PT actual material identity", "PT demodulated luminance moments"};
+                           "PT actual material identity", "PT raw radiance RGB M2"};
     for (u32 i = 0; i < 6; ++i)
         *aovs[i] = de_gpu_texture_create(
             d,

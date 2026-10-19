@@ -10,7 +10,7 @@ public struct DenoiseParams {
     public float4 inverse[4],previous_inverse[4];
     public float4 camera,origin_delta;
     public uint key,previous_key,out_key,zero_radius_passthrough;
-    public uint position,previous_position,out_position,rgb_range_weights;
+    public uint position,previous_position,out_position,rgb_variance;
     public uint temporal_alpha,normal_world,channels,out_variance;
 };
 public DenoiseParams dn_load(uint buffer,uint entry){return de_robuffer<DenoiseParams>(buffer)[entry];}

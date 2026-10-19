@@ -146,7 +146,8 @@ de_rg_resource de__pt_denoise_build(de__pt_denoise *s, de__view_frame *f, const 
         .moments = de_rg_import_texture(g, info->moments, DE_ACCESS_SHADER_READ),
         .output =
             temporary(g, info->width, info->height, DE_FMT_RGBA32_FLOAT, "PT final demodulated"),
-        .variance = temporary(g, info->width, info->height, DE_FMT_R32_FLOAT, "PT final variance")};
+        .variance =
+            temporary(g, info->width, info->height, DE_FMT_RGBA32_FLOAT, "PT final variance")};
     add(g, &x[0], "PT.FinalDenoise.Prepare");
     de_denoise_frame frame = {.graph = g,
                               .view = f->view,
@@ -166,7 +167,7 @@ de_rg_resource de__pt_denoise_build(de__pt_denoise *s, de__view_frame *f, const 
                                    .channels = 3,
                                    .iterations = 3,
                                    .propagate_variance = true,
-                                   .rgb_range_weights = true,
+                                   .rgb_variance = true,
                                    .depth_relative = .02f,
                                    .normal_power = 64,
                                    .luminance_scale = 4,

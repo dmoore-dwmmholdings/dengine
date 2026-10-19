@@ -12,40 +12,49 @@ Scene FLIP thresholds are fixed in `tests/golden/scenes.toml` (mean .02, p99 .10
 
 
 Final-denoise follow-up (DENG-454): the preparation pass estimates noise
-without an unconditional spatial box blur. Progressive path tracing now records
-per-pixel demodulated luminance mean and Welford M2 alongside the unmodified
-beauty accumulation. With N > 1, the initial variance of the sample mean is
-`M2 / (N * (N - 1))`; the single-sample case retains the spatial bootstrap.
-Reset discards the previous moments along with the beauty accumulation. Moments
-are collected even with final denoise off, so enabling it later uses all samples.
-This adds one RG32F texture (8 bytes per pixel) and a read/write per path sample.
+without an unconditional spatial box blur. Progressive path tracing records
+per-pixel Welford M2 independently for raw path radiance R/G/B. The existing
+beauty accumulation supplies the previous mean, without changing its samples.
+Preparation converts both the mean and variance using the same current albedo:
+`variance[c] = M2[c] / (N * (N - 1) * max(albedo[c], .001)^2)` for N > 1.
+This avoids assigning one luminance uncertainty to three different color channels
+or combining demodulated moments with a differently demodulated signal at edges.
+The single-sample case retains a per-channel spatial bootstrap.
 
-The PT wavelet path propagates variance using squared weights as in
-[SVGF, equation 3](https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf).
-Its RGB range weights preserve color boundaries even at equal luminance.
+Reset discards previous moments alongside beauty. Moments are collected even
+with final denoise off, so enabling it later uses all samples. The private moments
+texture is now RGBA32F (16 bytes per pixel, replacing the earlier 8-byte RG32F
+luminance texture), with RGB M2 and a reserved W channel. The PT variance scratch
+textures are also RGBA32F; other signals retain scalar variance textures.
+
+The PT wavelet path propagates each channel's variance with squared weights as
+in [SVGF, equation 3](https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf).
+Its range distance cancels expected noise energy and normalizes by per-channel
+uncertainty using [Rousselle et al. 2012, equation 4](https://www.cs.umd.edu/~zwicker/publications/AdaptiveRenderingNLM-SIGA12.pdf),
+with the paper's damping factor .45. This uses the per-pixel distance with the
+existing B3 wavelet support, not a new patch-filter pass. Known color edges at
+equal luminance remain intact, while noisy chromatic differences can be filtered.
 Other signal policies retain their existing range and variance behavior.
-Preparation preserves the measured sample mean instead of clipping valid bright
-lighting detail with a spatial firefly clamp while keeping the original moments.
-After the first sample it also avoids the spatial bootstrap neighbor reads.
-The denoiser binds each guide with its actual read/write access instead of
-requesting an unused storage view before replacing it with a sampled view.
 
-GPU oracles compare progressive mean and M2 against independently reconstructed
-path samples at every prefix and after reset, preserve equal-luminance color
-edges with a legacy-filter negative control, and check that independent input
-variance 2 becomes `2 * 4900 / 65536` after one separable B3 filter while constant
-radiance stays unchanged. Disabling propagation preserves the original variance
-resource. A separate preparation GPU oracle preserves a bright mean of
-`(10, 5, 2.5)` among darker neighbors and independently checks alternating
-variance-of-mean values of 1 and the `1e-8` floor. The previous clamp reduced
-that mean to approximately `(1, .5, .25)` without changing its variance.
+Preparation preserves the measured sample mean instead of clipping valid bright
+lighting detail while keeping unchanged moments. After the first sample it skips
+spatial bootstrap neighbor reads. The denoiser binds each guide with its actual
+read/write access rather than requesting an unused storage view first.
+
+GPU oracles compare all three progressive M2 values against independently
+reconstructed path samples at every prefix and after reset. A preparation oracle
+preserves a bright mean `(10, 5, 2.5)` among darker neighbors with unequal albedos
+`(.5, .25, .125)`, checking independent variance values `(1, 4, 9)` and the
+`1e-8` floor. Color-edge tests distinguish zero uncertainty (exact edge retention)
+from known RGB noise (analytic B3 weights `11/16` and `5/16` across a step).
+Constant independent input variance 2 still becomes `2 * 4900 / 65536` after one
+B3 filter; disabling propagation preserves the original variance resource.
 
 The fixed final-denoise comparison improves from FLIP 0.141325818 originally,
-through 0.0986457165 after the first variance/preparation correction, to
-0.0761701224 with measured path variance and RGB range weights, then
-0.0744708595 with the sample mean preserved. It still fails
-the original 0.05 limit. Its 16/4096 sample counts, scene and numerical oracle
-are unchanged; the 4096-sample reference energy remains 106.239134.
-This measurement has Metal API validation enabled and shader instrumentation
-disabled; DENG-455 remains open. It is not a validation-enabled path-tracer
-golden pass. Further reconstruction work is needed to meet the quality gate.
+through 0.0986457165 after the first variance/preparation correction,
+0.0761701224 with measured luminance variance, and 0.0744708595 with the sample
+mean preserved, to 0.0630165582 with per-channel raw moments and noise-corrected
+RGB distance. It still fails the original 0.05 limit. Its 16/4096 sample counts,
+scene and numerical oracle are unchanged; reference energy remains 106.239134.
+The full-PT measurement has Metal API validation on and shader instrumentation
+off. DENG-455 remains open; this is not a validation-enabled PT golden pass.

@@ -60,7 +60,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);if(id.x>=p.ptp_width||id.y>=p.ptp_height)return;
     uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel,&ctx);
     auto first=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
-    float3 albedo=pt_store_aov_0(&p,&r,&first,pixel,&ctx);
+    pt_store_aov_0(&p,&r,&first,pixel,&ctx);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
     if(p.ptp_media.ptm_features==0) {
     for(uint bounce=0;bounce<p.ptp_max_bounces;++bounce) {
@@ -95,9 +95,8 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
     auto accum=heap.storage[p.ptp_accumulation];float4 old=p.ptp_sample?accum.read(id.xy):float4(0);
     float4 sum=old+float4(radiance,1);accum.write(sum,id.xy);
     auto moments=heap.storage[p.ptp_aov_moments];
-    float2 previous_moments=p.ptp_sample?moments.read(id.xy).xy:float2(0);
-    float luminance=dot(radiance/albedo,float3(.2126f,.7152f,.0722f));
-    moments.write(float4(pt_sample_moments_0(previous_moments,luminance,p.ptp_sample),0,0),id.xy);
+    float3 previous_moments=p.ptp_sample?moments.read(id.xy).rgb:float3(0);
+    moments.write(float4(pt_sample_moments_0(previous_moments,old.rgb/max(old.a,1.f),radiance,p.ptp_sample),0),id.xy);
     heap.storage[p.ptp_output].write(float4(sum.rgb/max(sum.a,1.f)*p.ptp_exposure,1),id.xy);
 }
 kernel void pt_env_cdf(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]]) {

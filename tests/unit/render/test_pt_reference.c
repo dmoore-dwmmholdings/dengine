@@ -106,44 +106,33 @@ TEST_F(pt_reference, progressive_sample_moments_match_observed_paths, pt_fixture
     ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
     ASSERT_TRUE(cvar_set("r.pt.final_denoise", "0"));
     const u32 center = 32u * 64u + 32u;
-    const f64 weights[3] = {.2126, .7152, .0722};
-    f32 previous[3] = {0}, factor[3] = {0};
-    f64 total = 0, squared = 0;
+    f32 previous[3] = {0};
+    f64 total[3] = {0}, squared[3] = {0};
     for (u32 sample = 0; sample < 16; ++sample) {
         pt_frame(f);
         ASSERT_EQ(f->info.samples, sample + 1u);
         const f32 *beauty = pt_read(f) + center * 4u;
         f32 sum[3] = {beauty[0], beauty[1], beauty[2]};
         ASSERT_FLOAT_EQ(beauty[3], sample + 1u, 0);
-        if (sample == 0) {
-            const f32 *albedo = pt_read_texture(f, f->info.albedo, 16) + center * 4u;
-            for (u32 ch = 0; ch < 3; ++ch)
-                factor[ch] = fmaxf(albedo[ch], .001f);
-        }
-        f64 value = 0;
+        const f32 *moments = pt_read_texture(f, f->info.moments, 16) + center * 4u;
         for (u32 ch = 0; ch < 3; ++ch) {
-            value += weights[ch] * ((f64)sum[ch] - previous[ch]) / factor[ch];
+            f64 value = (f64)sum[ch] - previous[ch];
             previous[ch] = sum[ch];
+            total[ch] += value;
+            squared[ch] += value * value;
+            const f64 n = sample + 1u;
+            const f64 expected_m2 = fmax(squared[ch] - total[ch] * total[ch] / n, 0);
+            EXPECT_FLOAT_EQ(moments[ch], expected_m2, 2e-5 * fmax(1, expected_m2));
         }
-        total += value;
-        squared += value * value;
-        const f32 *moments = pt_read_texture(f, f->info.moments, 8) + center * 2u;
-        const f64 n = sample + 1u;
-        const f64 expected_mean = total / n, expected_m2 = fmax(squared - total * total / n, 0);
-        EXPECT_FLOAT_EQ(moments[0], expected_mean, 2e-5 * fmax(1, fabs(expected_mean)));
-        EXPECT_FLOAT_EQ(moments[1], expected_m2, 2e-5 * fmax(1, expected_m2));
     }
-    EXPECT_TRUE(squared - total * total / 16 > 1e-5);
+    for (u32 ch = 0; ch < 3; ++ch)
+        EXPECT_TRUE(squared[ch] - total[ch] * total[ch] / 16 > 1e-5);
     de_renderer_path_reset(f->rt.r, f->rt.view);
     pt_frame(f);
     ASSERT_EQ(f->info.samples, 1u);
-    const f32 *beauty = pt_read(f) + center * 4u;
-    f64 first = 0;
+    const f32 *moments = pt_read_texture(f, f->info.moments, 16) + center * 4u;
     for (u32 ch = 0; ch < 3; ++ch)
-        first += weights[ch] * beauty[ch] / factor[ch];
-    const f32 *moments = pt_read_texture(f, f->info.moments, 8) + center * 2u;
-    EXPECT_FLOAT_EQ(moments[0], first, 2e-5 * fmax(1, fabs(first)));
-    EXPECT_FLOAT_EQ(moments[1], 0, 0);
+        EXPECT_FLOAT_EQ(moments[ch], 0, 0);
 }
 
 TEST_F(pt_reference, final_prepare_preserves_sample_mean_and_measured_variance, pt_fixture) {
@@ -156,7 +145,7 @@ TEST_F(pt_reference, final_prepare_preserves_sample_mean_and_measured_variance, 
             d, &(de_gpu_texture_desc){.width = side,
                                       .height = side,
                                       .mip_count = 1,
-                                      .format = i == 5 ? DE_FMT_R32_FLOAT : DE_FMT_RGBA32_FLOAT,
+                                      .format = DE_FMT_RGBA32_FLOAT,
                                       .usage = DE_USAGE_SAMPLED | DE_USAGE_STORAGE |
                                                DE_USAGE_COPY_DST | DE_USAGE_COPY_SRC});
         ASSERT_TRUE(textures[i].id);
@@ -172,10 +161,10 @@ TEST_F(pt_reference, final_prepare_preserves_sample_mean_and_measured_variance, 
     for (u32 i = 0; i < pixels; ++i) {
         f32 mean = i == 32 * side + 32 ? 10.f : 1.f;
         const f32 values[4][4] = {
-            {16 * mean, 8 * mean, 4 * mean, 16},
-            {1, 1, 1, 1},
+            {8 * mean, 2 * mean, .5f * mean, 16},
+            {.5f, .25f, .125f, 1},
             {0, 0, 1, .5f},
-            {mean * (.2126f + .7152f / 2 + .0722f / 4), i % 2 ? 0.f : 240.f, 0, 0}};
+            {i % 2 ? 0.f : 60.f, i % 2 ? 0.f : 60.f, i % 2 ? 0.f : 33.75f, 0}};
         for (u32 t = 0; t < 4; ++t)
             memcpy(data + t * pixels * 4 + i * 4, values[t], 16);
     }
@@ -237,9 +226,10 @@ TEST_F(pt_reference, final_prepare_preserves_sample_mean_and_measured_variance, 
         EXPECT_FLOAT_EQ(color[i * 4 + 1], mean / 2, 1e-6);
         EXPECT_FLOAT_EQ(color[i * 4 + 2], mean / 4, 1e-6);
     }
-    const f32 *variance = pt_read_texture(f, textures[5], 4);
+    const f32 *variance = pt_read_texture(f, textures[5], 16);
     for (u32 i = 0; i < pixels; ++i)
-        EXPECT_FLOAT_EQ(variance[i], i % 2 ? 1e-8 : 1.f, 1e-7);
+        for (u32 ch = 0; ch < 3; ++ch)
+            EXPECT_FLOAT_EQ(variance[i * 4 + ch], i % 2 ? 1e-8 : (f32)((ch + 1) * (ch + 1)), 1e-7);
     de_gpu_pipeline_destroy(d, pipeline);
     de_gpu_buffer_destroy(d, params);
     de_gpu_buffer_destroy(d, upload);

@@ -15,7 +15,7 @@ typedef struct de__pt_info {
     de_gpu_texture accumulation, output;
     u32 samples, width, height;
     de_gpu_texture albedo, normal, depth, position, material;
-    de_gpu_texture moments; /**< Mean and Welford M2 of per-sample demodulated luminance. */
+    de_gpu_texture moments; /**< Welford M2 of raw path radiance, independently for R/G/B. */
     de_gpu_buffer directional_alias;
     u32 directional_count, directional_offset;
 } de__pt_info;

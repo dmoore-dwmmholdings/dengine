@@ -17,7 +17,7 @@ typedef struct dn_params {
     f32 inverse[4][4], previous_inverse[4][4];
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
-    u32 position, previous_position, out_position, rgb_range_weights;
+    u32 position, previous_position, out_position, rgb_variance;
     u32 temporal_alpha, normal_world, channels, out_variance;
 } dn_params;
 DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
@@ -383,7 +383,7 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.roughness_threshold = c->desc.roughness_threshold;
     x->pc.clamp_mode = c->desc.clamp;
     x->pc.channels = c->desc.channels;
-    x->pc.rgb_range_weights = c->desc.rgb_range_weights;
+    x->pc.rgb_variance = c->desc.rgb_variance;
     x->pc.reset = c->reset;
     x->pc.linear_depth = c->frame.inputs.linear_depth;
     x->pc.normal_world = c->frame.inputs.normal_is_world;
@@ -517,7 +517,9 @@ de_denoise_result denoise_add_atrous(de_denoise_ctx *c, de_denoise_result r) {
         x->output = transient(c, i + 1 == c->desc.iterations ? c->desc.format : DE_FMT_RGBA32_FLOAT,
                               "Denoise filtered signal");
         if (c->desc.propagate_variance) {
-            x->out_variance = transient(c, DE_FMT_R32_FLOAT, "Denoise filtered variance");
+            x->out_variance =
+                transient(c, c->desc.rgb_variance ? DE_FMT_RGBA32_FLOAT : DE_FMT_R32_FLOAT,
+                          "Denoise filtered variance");
             r.variance = x->out_variance;
         }
         r.color = x->output;

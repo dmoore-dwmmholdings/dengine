@@ -13,7 +13,7 @@ void cs_pt_export(uniform PtExport pc) {
     pt_shadow_hit(p,shadow,event.shadow,h,0);
     pt_path_finish(p,path,event,shadow.value,pc.pixel);
     pt_path_diagnostics(p,path);
-    float2 moments=pt_sample_moments(float2(0),path.radiance.x,p.sample);
+    float3 moments=pt_sample_moments(float3(0),float3(0),path.radiance,p.sample);
     uint2 safety=pt_stack_probe();
     bool alpha=de_rt_opacity(pt_query(p),h.instance,h.primitive,float2(0));
     de_rwbytes(pc.output).store(0,asuint(s.emitted.x+s.direct.x+s.weight.x+path.radiance.x)+(alpha?1:0)+safety.x+safety.y+asuint(moments.x));
