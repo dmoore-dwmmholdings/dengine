@@ -32,6 +32,7 @@ typedef struct gt_parser {
 } gt_parser;
 
 static const char *const k_window_modes[] = {"windowed", "borderless", "fullscreen"};
+static const char *const k_window_surfaces[] = {"auto", "none", "metal", "vulkan"};
 static const char *const k_timing_modes[] = {"fixed", "variable"};
 
 void de__game_config_defaults(de__game_config *out) {
@@ -43,6 +44,7 @@ void de__game_config_defaults(de__game_config *out) {
     out->window_height = DE__GAME_DEFAULT_HEIGHT;
     out->window_mode = DE_WINDOW_WINDOWED;
     out->window_high_dpi = true;
+    out->window_surface_auto = true;
     out->timing.mode = DE_TIMING_FIXED;
     out->timing.fixed_hz = DE_TIMING_DEFAULT_FIXED_HZ;
     out->timing.max_catchup_steps = DE_TIMING_DEFAULT_MAX_CATCHUP_STEPS;
@@ -233,6 +235,13 @@ static de_result gt_window(gt_parser *p, const toml_datum_t *t) {
                                     : (m == 1 ? DE_WINDOW_BORDERLESS : DE_WINDOW_WINDOWED);
         } else if (gt_key_is(t, i, "high_dpi")) {
             r = gt_bool(p, v, path, &c->window_high_dpi);
+        } else if (gt_key_is(t, i, "surface")) {
+            u32 surface = 0;
+            r = gt_enum(p, v, path, k_window_surfaces, 4, &surface);
+            c->window_surface_auto = surface == 0;
+            c->window_surface = surface == 2   ? DE_WINDOW_SURFACE_METAL
+                                : surface == 3 ? DE_WINDOW_SURFACE_VULKAN
+                                               : DE_WINDOW_SURFACE_NONE;
         } else {
             gt_unknown(p, v, path);
         }

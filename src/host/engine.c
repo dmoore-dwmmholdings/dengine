@@ -302,8 +302,8 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     de__anim_bind_renderer(e->pub.anim, e->pub.renderer);
     de_anim_attach(e->pub.anim, e->pub.world);
 
-    /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
-     * has none. The optional modules stay NULL. */
+    /* 8. Select the surface before window creation: game init can create its renderer on
+     * this same window. D3D12 and explicit "none" need no API-specific surface. */
     if (!e->headless) {
         de_window_desc wnd;
         memset(&wnd, 0, sizeof wnd);
@@ -314,6 +314,17 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
         wnd.display_index = -1;
         wnd.resizable = true;
         wnd.high_dpi = e->config.window_high_dpi;
+        wnd.surface = e->config.window_surface;
+        if (e->config.window_surface_auto) {
+            wnd.surface = DE_WINDOW_SURFACE_NONE;
+#if DE_HAS_RENDER
+            de_gpu_backend backend = de_gpu_platform_default_backend();
+            if (backend == DE_GPU_METAL)
+                wnd.surface = DE_WINDOW_SURFACE_METAL;
+            else if (backend == DE_GPU_VULKAN)
+                wnd.surface = DE_WINDOW_SURFACE_VULKAN;
+#endif
+        }
         r = de_window_create(&wnd, &e->pub.window);
         if (r != DE_OK)
             return engine_fail(e, r, "window");

@@ -8,6 +8,8 @@
 #include "host/engine_internal.h"
 
 #include <string.h>
+#include <dengine/de_gpu.h>
+#include <dengine/de_render.h>
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -54,3 +56,57 @@ TEST(engine_window, zero_desc_defaults) {
     ASSERT_EQ(r, DE_OK);
     de__engine_destroy(e);
 }
+#if DE_HAS_RENDER
+typedef struct native_host_window {
+    de_engine *engine;
+    de_gpu_device *device;
+    de_renderer *renderer;
+} native_host_window;
+static void native_host_window_setup(native_host_window *f) {
+    (void)f;
+}
+static void native_host_window_teardown(native_host_window *f) {
+    de_renderer_destroy(f->renderer);
+    de_gpu_device_destroy(f->device);
+    de__engine_destroy(f->engine);
+}
+static void host_renderer(native_host_window *f, bool vulkan) {
+    de__game_config config;
+    de__game_config_defaults(&config);
+    config.window_width = 128;
+    config.window_height = 64;
+    config.task_workers = 1;
+    if (vulkan) {
+        config.window_surface_auto = false;
+        config.window_surface = DE_WINDOW_SURFACE_VULKAN;
+    }
+    de_result result = de__engine_create(&(de__engine_desc){.config = &config}, &f->engine);
+    if (result == DE_ERR_UNSUPPORTED)
+        SKIP("requested native window surface unavailable");
+    ASSERT_EQ(result, DE_OK);
+    if (de_platform_headless())
+        SKIP("headless platform has no native surface");
+    result = de_gpu_device_create(
+        &(de_gpu_device_desc){.backend = vulkan ? DE_GPU_VULKAN : DE_GPU_DEFAULT,
+                              .pipeline_cache_dir = ""},
+        &f->device);
+    if (result == DE_ERR_UNSUPPORTED)
+        SKIP("requested GPU backend unavailable");
+    ASSERT_EQ(result, DE_OK);
+    ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device,
+                                                     .window = f->engine->window,
+                                                     .assets = f->engine->assets,
+                                                     .types = f->engine->types},
+                                 &f->renderer),
+              DE_OK);
+    EXPECT_TRUE(f->renderer != NULL);
+    if (de_gpu_get_caps(f->device)->backend == DE_GPU_METAL)
+        EXPECT_TRUE(de_window_native(f->engine->window).metal_layer != NULL);
+}
+TEST_F(engine_window, default_surface_allows_game_owned_renderer, native_host_window) {
+    host_renderer(f, false);
+}
+TEST_F(engine_window, explicit_vulkan_surface_allows_game_owned_renderer, native_host_window) {
+    host_renderer(f, true);
+}
+#endif

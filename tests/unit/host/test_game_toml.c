@@ -9,6 +9,7 @@
 #include <dengine/de_debug.h>
 
 #include <string.h>
+#include <stdio.h>
 
 #ifndef DE_HOST_TEST_DATA_DIR
 #error "DE_HOST_TEST_DATA_DIR must be defined by tests/unit/host/CMakeLists.txt"
@@ -105,6 +106,23 @@ TEST_F(game_toml, full, gt_fx) {
     EXPECT_EQ(c.window_mode, DE_WINDOW_FULLSCREEN);
     EXPECT_EQ(c.timing.mode, DE_TIMING_FIXED);
     EXPECT_FLOAT_EQ(c.timing.time_scale, 2.0, 0.0);
+}
+TEST_F(game_toml, window_surface_auto_and_explicit_backends, gt_fx) {
+    const char *names[] = {"auto", "none", "metal", "vulkan"};
+    const de_window_surface surfaces[] = {DE_WINDOW_SURFACE_NONE, DE_WINDOW_SURFACE_NONE,
+                                          DE_WINDOW_SURFACE_METAL, DE_WINDOW_SURFACE_VULKAN};
+    for (u32 i = 0; i < 4; ++i) {
+        char source[64];
+        snprintf(source, sizeof source, "[window]\nsurface='%s'\n", names[i]);
+        de__game_config config;
+        ASSERT_EQ(de__game_config_parse(source, strlen(source), "inline", &config), DE_OK);
+        EXPECT_EQ(config.window_surface_auto, i == 0);
+        EXPECT_EQ(config.window_surface, surfaces[i]);
+    }
+    de__game_config config;
+    const char *bad = "[window]\nsurface='opengl'";
+    EXPECT_EQ(de__game_config_parse(bad, strlen(bad), "inline", &config), DE_ERR_PARSE);
+    EXPECT_TRUE(strstr(de_error_last()->message, "window.surface") != NULL);
 }
 
 TEST_F(game_toml, defaults, gt_fx) {

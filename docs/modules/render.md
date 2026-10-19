@@ -39,6 +39,18 @@ publishes constants without dispatching nonexistent deferred tiles. Opaque
 screen-space RT production is skipped when no opaque G-buffer exists; forward
 surfaces retain their own direct clustered shading.
 
+## Host window surfaces
+
+The host creates its window before the game's `init` callback. `[window] surface`
+in `game.toml` defaults to `"auto"`: Metal on macOS, Vulkan on Linux, and no
+API-specific surface for D3D12 on Windows. A game selecting another backend must
+set `surface = "vulkan"`, `"metal"`, or `"none"` to match it. Headless hosts do
+not create a window. Game initialization can create a device and renderer on
+`engine->window` directly. Assign successful creations to `engine->gpu` and
+`engine->renderer` to transfer teardown to the host; it unloads assets before
+destroying the renderer, device, and window. Release game-owned load handles in
+game shutdown rather than destroying an assigned renderer while its assets live.
+
 ## Immutable view and pixel context
 
 `de_renderer_extract_view_info` is valid after `de.render.extract_views` during
