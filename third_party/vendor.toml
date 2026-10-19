@@ -508,3 +508,31 @@ exclude = [
     "src/mlp.c",
     "src/mlp_data.c",
 ]
+
+[[lib]]
+name = "sheenbidi"
+version = "2.7"
+url = "https://codeload.github.com/Tehreer/SheenBidi/tar.gz/refs/tags/v2.7"
+sha256 = "620f732141fd62354361f921a67ba932c44d94e73f127379a0c73ad40c7fa6e0"
+license = "Apache-2.0"
+files = ["Headers/**", "Source/**"]
+
+[[lib]]
+name = "unicode"
+version = "15.1.0-final-20230908"
+# The final15.1 tag keeps release data in dev/. Selected files are byte-identical
+# to Unicode.org/Public/zipped/15.1.0/UCD.zip; the source archive also contains LICENSEV3.
+url = "https://codeload.github.com/unicode-org/unicodetools/tar.gz/refs/tags/final-15.1-20230908"
+sha256 = "4a89c5e10d406a14608f65d98eb26c6353b7e9f8356c1fca1f469b87d87b9633"
+license = "Unicode-3.0"
+files = [
+ "unicodetools/data/ucd/dev/LineBreak.txt",
+ "unicodetools/data/ucd/dev/EastAsianWidth.txt",
+ "unicodetools/data/ucd/dev/UnicodeData.txt",
+ "unicodetools/data/ucd/dev/DerivedCoreProperties.txt",
+ "unicodetools/data/ucd/dev/BidiCharacterTest.txt",
+ "unicodetools/data/ucd/dev/auxiliary/LineBreakTest.txt",
+ "unicodetools/data/ucd/dev/auxiliary/GraphemeBreakProperty.txt",
+ "unicodetools/data/ucd/dev/auxiliary/GraphemeBreakTest.txt",
+ "unicodetools/data/ucd/dev/emoji/emoji-data.txt",
+]

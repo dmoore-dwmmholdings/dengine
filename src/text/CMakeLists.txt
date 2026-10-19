@@ -25,3 +25,8 @@ if(DE_HAS_RENDER)
  target_sources(de_text PRIVATE render/atlas_upload.c render/world_text.c)
  target_link_libraries(de_text PRIVATE de_render de_gpu de_ecs)
 endif()
+
+# DENG-261 Unicode15.1 bidi and generated line/grapheme properties.
+target_sources(de_text PRIVATE layout/bidi.c layout/linebreak.c layout/linebreak_tables.c layout/paragraph.c layout/layout_cache.c)
+target_link_libraries(de_text PRIVATE de_tp_sheenbidi)
+set_property(TARGET de_text APPEND PROPERTY DE_MODULE_LIBS de_tp_sheenbidi)

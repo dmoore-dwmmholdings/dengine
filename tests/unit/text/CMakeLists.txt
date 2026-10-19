@@ -27,3 +27,17 @@ if(DE_BUILD_TOOLS AND DE_HAS_RENDER)
   target_compile_definitions(test_text_render PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
  endif()
 endif()
+
+# DENG-261: full Unicode conformance has no GPU dependency.
+de_add_test(NAME text_layout SOURCES test_bidi.c test_linebreak.c LIBS de_text de_tp_sheenbidi de_tp_stb de_tp_harfbuzz)
+if(TARGET test_text_layout)
+ target_include_directories(test_text_layout PRIVATE "${DE_ROOT_DIR}/src")
+ target_compile_definitions(test_text_layout PRIVATE "DE_UNICODE_DATA=\"${DE_ROOT_DIR}/third_party/unicode/unicodetools/data/ucd/dev\"")
+endif()
+
+if(TARGET test_text_layout AND DE_BUILD_TOOLS)
+ target_sources(test_text_layout PRIVATE test_paragraph.c test_hit_test.c)
+ target_link_libraries(test_text_layout PRIVATE de_cooker de_platform)
+ target_include_directories(test_text_layout PRIVATE "${DE_ROOT_DIR}/tools")
+ target_compile_definitions(test_text_layout PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+endif()

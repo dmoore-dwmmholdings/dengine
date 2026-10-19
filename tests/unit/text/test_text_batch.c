@@ -127,6 +127,27 @@ TEST_F(text_batch, submission_clipping_and_upload_regions, text_render_fx) {
     EXPECT_EQ(stats.uploads, 1u);
     EXPECT_EQ(stats.uploaded_bytes, 4u);
 }
+TEST_F(text_batch, mixed_fonts_same_page_zero, text_render_fx) {
+    start_render(f, DE_GPU_NULL);
+    de_text_update(f->fonts.t);
+    de_glyph_quad glyphs[] = {quad(f, f->fonts.latin, 'A', 10, 10, 16),
+                              quad(f, f->bitmap, 'A', 40, 10, 8)};
+    glyphs[0].font = f->fonts.latin;
+    glyphs[1].font = f->bitmap;
+    ASSERT_EQ(glyphs[0].atlas_page, 0u);
+    ASSERT_EQ(glyphs[1].atlas_page, 0u);
+    de_text_draw_opts opts = {.font = f->fonts.latin};
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, glyphs, 2, (de_vec2){0}, &opts), DE_OK);
+    de__text_queue *queue = &f->fonts.t->render->queues[0];
+    EXPECT_EQ(queue->screen[0].font.id, f->fonts.latin.id);
+    EXPECT_EQ(queue->screen[1].font.id, f->bitmap.id);
+    render_frame(f);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).draw_calls, 1u);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).glyphs, 2u);
+    de_gpu_texture latin = de_text_page_texture(f->fonts.t, f->fonts.latin, 0);
+    de_gpu_texture bitmap = de_text_page_texture(f->fonts.t, f->bitmap, 0);
+    EXPECT_NE(latin.id, bitmap.id);
+}
 TEST_F(text_batch, ten_thousand_one_draw, text_render_fx) {
     start_render(f, DE_GPU_NULL);
     de_text_update(f->fonts.t);
