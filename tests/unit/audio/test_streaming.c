@@ -208,3 +208,68 @@ TEST(audio_streaming, opus_seek_boundaries_late_targets_and_stereo_match_linear)
     opus_seek_cases(1, false);
     opus_seek_cases(2, true);
 }
+
+static void finish_seek_after_read_snapshot(de__audio_source *source, void *user) {
+    ++*(u32 *)user;
+    de__stream_test_refill_now(source);
+}
+TEST(audio_streaming, seek_ack_between_cursor_and_generation_loads_discards_stale_samples) {
+    de__sound_asset *asset = source_cooked(true, 48000 * 3, false);
+    de__sound_decoder *reference = NULL;
+    ASSERT_EQ(de__decoder_create(de_heap_allocator(), asset, &reference), DE_OK);
+    f32 expected[320], actual[256];
+    de_audio *a = test_audio_manual(4, 0);
+    de__audio_source *source = NULL;
+    ASSERT_EQ(de__source_stream(a, asset, &source), DE_OK);
+    de__stream_test_starve(a, true);
+    ASSERT_EQ(source->vt->read(source, actual, 73, 1), 73u);
+    const u32 targets[] = {48137, 90123, 1137, 70001, 129137, 24001};
+    u32 calls = 0;
+    for (u32 k = 0; k < sizeof targets / sizeof targets[0]; ++k) {
+        ASSERT_TRUE(de__decoder_seek(reference, targets[k]));
+        ASSERT_EQ(de__decoder_read(reference, expected, 320), 320u);
+        /* Two pending requests: only the latest target may be published. */
+        ASSERT_TRUE(source->vt->seek(source, 0));
+        ASSERT_TRUE(source->vt->seek(source, targets[k]));
+        u64 hits = de__rt_guard_hits();
+        de__rt_guard_enter();
+        u32 got = source->vt->read(source, actual, 16, 1);
+        de__rt_guard_leave();
+        EXPECT_EQ(got, 16u);
+        EXPECT_EQ(de__rt_guard_hits(), hits);
+        for (u32 i = 0; i < 16; ++i)
+            EXPECT_FLOAT_EQ(actual[i], 0, 0);
+        de__stream_test_read_hook(source, finish_seek_after_read_snapshot, &calls);
+        /* Force worker ack publication precisely after the reader snapshots its cursors. */
+        ASSERT_EQ(source->vt->read(source, actual, 64, 1), 64u);
+        EXPECT_EQ(calls, k + 1);
+        de__stream_test_read_hook(source, NULL, NULL);
+        for (u32 i = 0; i < 64; ++i)
+            ASSERT_FLOAT_EQ(actual[i], expected[i], 0.002);
+        de__stream_test_refill_now(source);
+        hits = de__rt_guard_hits();
+        de__rt_guard_enter();
+        got = source->vt->read(source, actual, 256, 1);
+        de__rt_guard_leave();
+        EXPECT_EQ(got, 256u);
+        EXPECT_EQ(de__rt_guard_hits(), hits);
+        for (u32 i = 0; i < 256; ++i)
+            EXPECT_FLOAT_EQ(actual[i], expected[i + 64], 0.002);
+    }
+    ASSERT_TRUE(source->vt->seek(source, asset->view.frames));
+    de__stream_test_read_hook(source, finish_seek_after_read_snapshot, &calls);
+    EXPECT_EQ(source->vt->read(source, actual, 64, 1), 0u);
+    de__stream_test_read_hook(source, NULL, NULL);
+    ASSERT_TRUE(source->vt->seek(source, 0));
+    de__stream_test_refill_now(source);
+    ASSERT_EQ(source->vt->read(source, actual, 64, 1), 64u);
+    ASSERT_TRUE(de__decoder_seek(reference, 0));
+    ASSERT_EQ(de__decoder_read(reference, expected, 64), 64u);
+    for (u32 i = 0; i < 64; ++i)
+        EXPECT_FLOAT_EQ(actual[i], expected[i], 0.002);
+    source->vt->close(source);
+    de_audio_destroy(a);
+    de__decoder_destroy(reference);
+    de__sound_asset_release(asset);
+    de_io_shutdown();
+}
