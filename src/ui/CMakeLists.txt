@@ -30,3 +30,15 @@ endif()
 if(TARGET de_ui)
  target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c pixel/pixel_ui.c)
 endif()
+
+# DENG-320: replay-aware keyboard/gamepad focus navigation.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE input/focus.c input/spatial_nav.c input/ui_actions.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_NAVIGATION=1)
+endif()
+
+# DENG-321 reflection-driven retained HUD data binding.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE binding/binding.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_BINDING=1)
+endif()

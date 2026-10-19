@@ -227,3 +227,88 @@ ASan aggregate timing remains separately qualified (theme1ms budget under Dev).
 Public headers/layering and all21 unique UI C sources compile with render/GPU off.
 The actual Metal widget state sheet passes capture and strict comparison with FLIP0,
 and the native visual review is accepted. No global suite or CI repair loop was run.
+
+### Navigation (DENG-320)
+
+Add `DeUiFocusable` to each navigable node. `tab_index` sorts Tab/shoulder traversal, then
+hierarchy insertion order; negative values opt out of Tab but remain explicitly focusable.
+Directional links override geometric selection. Otherwise navigation compares rect edge gaps
+in the requested half-plane (primary gap + twice the perpendicular gap), with stable tree
+order for ties and no implicit spatial wrap. Hidden or disabled ancestors exclude descendants.
+A visible modal `DeUiPopup` traps navigation in its subtree; hiding/despawning it restores the
+previous live, eligible focus. Nested popup cancellation unwinds one scope at a time.
+
+`de_ui_set_focus` changes logical focus and emits FOCUS/BLUR. `DeUiInteractionState.focused`
+also remains logical, including in mouse mode, so text editors keep their active selection.
+`de_ui_focus_visible` separately reports keyboard/gamepad ring visibility. Mouse movement hides
+only the stylesheet's `:focus` selector; the next navigation/activation restores it. Default
+button/toggle/slider rings use a 2-pixel foreground border (3.27:1 against the primary blue,
+above 3:1 against the surface). Existing widget hover/pressed/disabled transitions remain.
+
+At attach, UI creates a rebindable normal action map named `ui` only when absent. A preloaded
+map is preserved. Its navigate/submit/cancel/tab_next/tab_prev/scroll actions bind arrows,
+Enter/Space/Escape/Tab/Shift+Tab and gamepad d-pad/left stick/south/east/shoulders/right stick;
+pointer_motion is an additional recordable mouse-delta action. `de_ui_set_input_mode` selects
+NONE, NON_MODAL (default passthrough) or MODAL (consumes bound input). Modal popups temporarily
+force consumption. UI pops only a context it pushed and restores preexisting map flags at
+detach. The input object must outlive UI; UI attaches it if the world has no input resource
+and detaches only that owned attachment.
+
+`ui.actions` reads public resolved actions in main-thread FixedUpdate after `input.fixed_tick`.
+`ui.focus` applies the staged samples in PostUpdate after widget reconciliation and before
+style/layout. This uses S21's actual tick replay view: a frame with zero fixed ticks retains
+pending input for the next tick; multiple fixed ticks do not duplicate a press. Repeat time
+is accumulated from fixed deltas (400 ms initial delay, then 80 ms), never the wall clock.
+The preallocated queue holds at least 256 ticks (or max_nodes when larger); drain PostUpdate
+between larger catch-up batches. Overflow reports an error rather than allocating.
+
+Activation and slider adjustments call the stable widget entry table. Its nullable
+scroll_into_view hook receives the nearest scroll/list ancestor on focus changes; advanced
+controls register their own actions and scrolling implementation. No scroll stub is linked.
+`test_menu_replay.c` is an executable sample menu using real button/toggle/slider components:
+a gamepad walks Play, Music, Volume and Quit, cancels a modal confirmation, then confirms exit.
+The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world with no devices,
+and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
+Later advanced-widget walkthrough extensions use the same table and recording schema.
+
+### Data binding (DENG-321)
+
+Attach `DeUiBinding` to a widget, with its source entity, a path such as
+`BindData.current` or `BindInventory.slots.2.count`, and a property. Dotted numeric
+indices adapt to the reflection API's bracket form (`slots[2].count`); all actual
+schema lookup, bounds, nested fields and flags use `de_reflect_resolve_path`.
+Properties are `value` (slider/progress), `on` (toggle), `text`, `visible`
+(NONE/FLEX), `disabled`, `opacity`, and `tint` (image tint, text color or panel fill).
+Scalar properties convert bool, signed/unsigned integers and f32/f64. Tint accepts
+vec4/color. Text copies inline strings into UI-owned storage, resolves names through
+`de_loc`, and formats numeric values with optional `format[32]`, for example
+`{value, number, integer} / 100`. Numeric inline formats reuse S28's message engine;
+no expression language or reflection parser is embedded in UI. Default integer
+text preserves the complete signed/unsigned64 range. S28's optional numeric format
+uses a floating argument for unsigned values above INT64_MAX, with f64 precision.
+
+Bindings default to ONE_WAY. TWO_WAY also reads normal widget CHANGED events in
+main-thread PostUpdate and writes the reflected source with `de_entity_get` and
+`de_entity_mark_changed`; READONLY fields are always protected. The next gameplay
+Update's changed query observes the write. Editor integration is generic: committed
+`DeUiTextInput.buffer/length` fields resolve through reflection, independently of
+password/preedit display text, and a nullable widget-table `refresh_text` callback
+updates display after an external buffer change. No advanced-widget code is linked
+from the binding module; the actual text-input integration case follows DENG-319.
+
+`ui.binding` runs after widget/navigation actions and before style/layout. Each
+binding caches its descriptor, resolved component/field/offset and a byte copy of
+the source leaf. Unchanged source bytes avoid mutable component access and layout
+invalidation. Locale publication refreshes localized/formatted text even if source
+bytes did not change. Any successful type registry publication invalidates both
+valid and errored caches, including moved offsets and metadata-only changes.
+Invalid paths/kinds/formats log once per binding/configuration/revision and disable
+that binding until a descriptor or registry change. A dead/missing source simply
+idles and preserves the last visible value. Text and byte spans live in a per-UI
+arena, reused when capacity suffices; they remain valid through detach and end at
+UI destruction. The warmed idle frame path performs no heap allocations.
+
+Focused binding tests cover all numeric kinds, extreme64-bit text, every property,
+nested/array paths, `42 / 100`, actual slider/toggle writeback plus changed queries,
+readonly fields, schema/metadata replacement, warning-once errors, source despawn,
+real cooked locale publication, and1000 idle bindings within0.2ms in Dev.

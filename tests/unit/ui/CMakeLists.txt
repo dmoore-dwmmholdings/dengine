@@ -36,3 +36,17 @@ if(TARGET de_ui)
   target_link_libraries(test_ui_world_pixel PRIVATE de_gpu_metal "-framework Metal" "-framework Foundation")
  endif()
 endif()
+
+# DENG-320 resolved actions, spatial graph and actual S21 .deir menu replay.
+if(TARGET de_ui)
+ de_add_test(NAME ui_focus SOURCES test_focus.c test_spatial_nav.c test_menu_replay.c LIBS de_ui de_input de_platform de_ecs de_reflect de_test_support LABELS ui)
+ target_include_directories(test_ui_focus PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tests/unit/input")
+ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/menu_replay")
+ target_compile_definitions(test_ui_focus PRIVATE "DE_UI_REPLAY_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/menu_replay\"")
+endif()
+
+# DENG-321 reflection paths, generic CHANGED writeback and idle HUD costs.
+if(TARGET de_ui)
+ de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ target_include_directories(test_ui_binding PRIVATE "${DE_ROOT_DIR}/src")
+endif()
