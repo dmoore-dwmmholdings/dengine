@@ -23,6 +23,7 @@ typedef struct pixel_fixture {
     de_gpu_texture target, pattern;
     de_gpu_buffer readback;
     bool native;
+    u8 *packed_readback;
     u32 iw, ih, ow, oh, internal_seen, ui_seen;
     de_vec2 residual;
     de_mat4 view_matrix;
@@ -31,6 +32,7 @@ static void pixel_fixture_setup(pixel_fixture *f) {
     (void)f;
 }
 static void pixel_fixture_teardown(pixel_fixture *f) {
+    free(f->packed_readback);
     if (f->d)
         de_gpu_wait_idle(f->d);
     if (f->r)
@@ -199,7 +201,7 @@ static void make_pattern(pixel_fixture *f) {
     de_gpu_buffer_destroy(f->d, upload);
 }
 static const u8 *read_output(pixel_fixture *f) {
-    u32 pitch = f->ow * 4;
+    u32 pitch = (f->ow * 4 + 255u) & ~255u;
     if (!f->readback.id)
         f->readback = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = (u64)pitch * f->oh,
                                                                        .usage = DE_USAGE_COPY_DST,
@@ -216,7 +218,16 @@ static const u8 *read_output(pixel_fixture *f) {
                                   &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
               DE_OK);
     de_gpu_wait_idle(f->d);
-    return de_gpu_buffer_map(f->d, f->readback);
+    const u8 *mapped = de_gpu_buffer_map(f->d, f->readback);
+    if (pitch == f->ow * 4)
+        return mapped;
+    if (!f->packed_readback)
+        f->packed_readback = malloc((size_t)f->ow * f->oh * 4);
+    ASSERT_TRUE(mapped != NULL && f->packed_readback != NULL);
+    for (u32 y = 0; y < f->oh; ++y)
+        memcpy(f->packed_readback + (size_t)y * f->ow * 4, mapped + (size_t)y * pitch,
+               (size_t)f->ow * 4);
+    return f->packed_readback;
 }
 
 #endif

@@ -21,8 +21,10 @@ float4 ps_main(PixelVertex v,uniform PixelData p):SV_Target {
  if(p.integer_only!=0)texel=floor(texel)+.5;
  else {
   // Sharp bilinear: hold each texel center, interpolate only over one output pixel at edges.
-  float2 center=floor(texel)+.5;
-  texel=center+clamp((frac(texel)-.5)*scale,-.5,.5);
+  float2 sharp_scale=max(scale,1.0);
+  float2 half_pixel=.5/sharp_scale;
+  float2 phase=frac(texel);
+  texel=floor(texel)+.5+(phase-clamp(phase,half_pixel,1-half_pixel))*sharp_scale;
  }
  return de_tex2d(p.src).SampleLevel(de_sampler(p.smp),texel/(float2(p.iw,p.ih)+2*p.border),0);
 }

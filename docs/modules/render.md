@@ -74,6 +74,11 @@ later upscale stage changes the current hook target to output resolution.
 `viewport_px` locates the view in its destination; `content_px` is local to the
 view output and uses the renderer's actual integer/fractional fit function.
 
+Fractional pixel magnification holds source texel centers across interior output
+pixels and blends over one output pixel at texel boundaries. Scales below one
+use linear sampling. Integer scaling retains nearest sampling; letterboxing and
+smooth scroll residuals use the same fitted content rectangle.
+
 `DE_HOOK_PIXEL_UI` runs on tonemapped internal pixels immediately before palette
 conversion and the existing upscale. This allows pixel UI to share scene scale,
 letterbox and palette. `DE_HOOK_UI` keeps its existing output-resolution stage.
