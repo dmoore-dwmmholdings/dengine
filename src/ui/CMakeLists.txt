@@ -25,3 +25,7 @@ if(TARGET de_ui)
  target_sources(de_ui PRIVATE "${_ui_default_style}" widgets/text.c widgets/image.c widgets/button.c widgets/toggle.c widgets/slider.c widgets/progress.c input/pointer.c)
  target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE widgets/advanced.c widgets/text_input.c widgets/dropdown.c widgets/scroll_view.c widgets/virtual_list.c widgets/tabs.c widgets/tooltip.c)
+endif()

@@ -57,6 +57,8 @@ struct de_ui {
     struct de_ui_widgets *widgets;
     struct de_ui_focus *focus;
     struct de_ui_binding_system *binding;
+    struct de_ui_advanced *advanced;
+    void (*content_geometry)(de_ui *, de_entity, de_vec4 *);
 };
 typedef struct de_ui_resource {
     de_ui *ui;

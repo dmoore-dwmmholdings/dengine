@@ -60,6 +60,8 @@ void de_ui__arrange(de_ui_layout *layout, u32 index, de_vec4 rect, bool force) {
     left += border;
     de_vec4 content = {rect.x + left, rect.y + top, fmaxf(0, rect.z - left - pr),
                        fmaxf(0, rect.w - top - pb)};
+    if (ui->content_geometry)
+        ui->content_geometry(ui, record->entity, &content);
     if (node->display == DE_UI_GRID)
         de_ui__grid(layout, index, content);
     else

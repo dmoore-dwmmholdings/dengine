@@ -73,6 +73,13 @@ DE_API void de_text_layout_free(de_text_layout *l);
 DE_API de_vec2 de_text_layout_size(const de_text_layout *l);
 DE_API u32 de_text_layout_hit_test(const de_text_layout *l, de_vec2 point);    /* byte offset */
 DE_API de_vec4 de_text_layout_caret(const de_text_layout *l, u32 byte_offset); /* x, y, w, h */
+/** UAX29 extended-grapheme UTF8 byte boundaries, including zero and end. Returns the
+ * required count, writes up to capacity offsets (NULL is valid only with zero capacity).
+ * Invalid UTF8 bytes use the layout decoder's one-byte U+FFFD replacement policy.
+ * Empty input returns one boundary. Up to255bytes uses stack scratch only; larger inputs
+ * allocate temporary heap scratch. Above INT32_MAX-1 bytes, invalid arguments or allocation
+ * failure return zero and set the error context; no offsets are written on failure. */
+DE_API u32 de_text_grapheme_offsets(de_str utf8, u32 *offsets, u32 capacity);
 
 typedef struct de_glyph_quad {
     de_vec4 pos;
