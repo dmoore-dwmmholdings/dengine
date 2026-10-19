@@ -147,6 +147,8 @@ struct de_renderer {
     f32 clear_color[4];
 
     de_render_stats stats;
+    de_forward_participant_desc forward_participants[16];
+    u32 forward_participant_count, forward_item_capacity;
 
     /* DENG-175: the render world, the Extract systems and the render thread (world/render_world.h);
      * NULL until de_renderer_attach. */

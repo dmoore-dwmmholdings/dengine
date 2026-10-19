@@ -139,6 +139,12 @@ static de__render_world_frame *repeat_frame(de__render_world *rw) {
             memcpy(f->views, last->views, sizeof(de__rw_view) * last->view_count);
         f->view_count = last->view_count;
         f->main_view = last->main_view;
+        f->frozen_view_count = last->frozen_view_count;
+        memcpy(f->frozen_views, last->frozen_views, sizeof f->frozen_views);
+        memcpy(f->frozen_settings, last->frozen_settings, sizeof f->frozen_settings);
+        memcpy(f->frozen_targets, last->frozen_targets, sizeof f->frozen_targets);
+        for (u32 i = 0; i < f->frozen_view_count; ++i)
+            f->frozen_views[i].extract_frame = f->frame;
         f->environment = last->environment;
         f->environment_count = last->environment_count;
     }

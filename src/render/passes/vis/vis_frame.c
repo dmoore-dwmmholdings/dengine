@@ -9,6 +9,7 @@
  * the GPU scene's "gpu_scene.view" (INT32_MIN + 1); de__views_destroy calls de__vis_frame_destroy.
  */
 #include "render/passes/vis/vis_stages.h"
+#include "render/passes/vis/gbuffer.h"
 
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
@@ -282,6 +283,14 @@ static void depth_clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *u
     de_gpu_cmd_end_render(cmd);
 }
 
+static void forward_clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const de_rg_resource *color = user;
+    de_gpu_attachment attachment = {
+        .texture = de_rg_texture(pass, *color), .clear = true, .store = true};
+    de_gpu_cmd_begin_render(cmd, &attachment, 1, NULL);
+    de_gpu_cmd_end_render(cmd);
+}
+
 /* DENG-233: the view's depth (cleared, or the test's), its HZB and its visibility flags. */
 static void prepare_occlusion(de__vis_shared *s, de_rg *g, const de__vis_frame_desc *d,
                               de__vis_context *vc) {
@@ -368,10 +377,12 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
         vc->lod_error_px = 1.0f;
     vc->lod_bias = (i32)de_cvar_int(s->cv_lod_bias);
 
+    const bool participants = s->renderer && s->renderer->forward_participant_count != 0;
     if (d->gpu_scene != NULL) {
         const de__gpu_scene_table_info ti = de__gpu_scene_table(d->gpu_scene, DE__GS_INSTANCES);
         vc->instance_count = ti.count;
         vc->scene_views_bindless = de__gpu_scene_table(d->gpu_scene, DE__GS_VIEWS).bindless;
+        vc->scene_views = de__gpu_scene_import(d->gpu_scene, g, DE__GS_VIEWS);
         if (vc->instance_count > 0) {
             vc->scene_instances = de__gpu_scene_import(d->gpu_scene, g, DE__GS_INSTANCES);
             vc->scene_meshes = de__gpu_scene_import(d->gpu_scene, g, DE__GS_MESHES);
@@ -383,7 +394,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     }
 
     /* DENG-233: the depth, the HZB and the visibility flags of a view that culls. */
-    if (vc->instance_count > 0)
+    if (vc->instance_count > 0 || participants)
         prepare_occlusion(s, g, d, vc);
 
     de__vis_cull_instances(g, vc, DE__VIS_PHASE_1);
@@ -398,6 +409,25 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     de__vis_pick(g, vc); /* DENG-239: reads this frame's vis IDs and visible list */
     de__vis_classify(g, vc);
     de__vis_resolve(g, vc);
+    if (participants && !vc->gbuffer[DE__GB_LIGHTING].id && vc->depth.id && vc->scene_views.id) {
+        vc->forward_only = true;
+        vc->gbuffer[DE__GB_LIGHTING] = de_rg_create_texture(
+            g, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
+                                      .width = vc->width,
+                                      .height = vc->height,
+                                      .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                               DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                      .name = "forward.empty_scene"});
+        de_rg_resource *color = de_arena_push(g->arena, sizeof *color, 8);
+        if (!color || !vc->gbuffer[DE__GB_LIGHTING].id)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward-only scene target");
+        *color = vc->gbuffer[DE__GB_LIGHTING];
+        de_rg_pass *p = de_rg_add_pass(g, "forward.empty_clear", DE_QUEUE_GRAPHICS,
+                                       forward_clear_execute, color);
+        if (!p)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward-only scene clear");
+        de_rg_write(p, *color, DE_ACCESS_RENDER_TARGET);
+    }
     /* DENG-303: later stages of this view graph (lighting) find the context. */
     s->frame_context[d->view_slot] = vc;
     s->frame_context_graph[d->view_slot] = g;

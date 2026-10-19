@@ -277,6 +277,7 @@ struct de__forward *de__views_forward(const de_renderer *r);
 bool de__view_valid(const de_renderer *r, de_view v);
 
 void de__views_prepare_pixels(de_renderer *r);
+void de__views_freeze(de_renderer *r, struct de__render_world_frame *world);
 
 DE_EXTERN_C_END
 

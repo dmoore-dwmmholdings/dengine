@@ -523,3 +523,9 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE ui_bridge.c)
 endif()
+
+# DENG-322 public immutable forward participants.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE passes/forward/forward_participants.c
+        passes/forward/forward_participants.h)
+endif()
