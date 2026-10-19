@@ -25,6 +25,7 @@ if(DE_BUILD_TOOLS AND DE_HAS_RENDER)
   target_include_directories(test_text_render PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
   target_link_libraries(test_text_render PRIVATE de_tp_stb)
   target_compile_definitions(test_text_render PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+  target_compile_definitions(test_text_render PRIVATE "DE_TEXT_RENDER_CAPTURE=\"${CMAKE_CURRENT_BINARY_DIR}/msdf-coverage.png\"")
  endif()
 endif()
 

@@ -130,3 +130,61 @@ TEST(font, cff_outlines_and_ranges) {
     EXPECT_GT(r.size, 1000u);
     de_cook_result_free(&r);
 }
+static void msdf_coverage(const char *name) {
+    de__manifest_kv settings[] = {
+        {.key = "charset", .value = {.type = DE__MANIFEST_STRING, .u.s = "ascii"}},
+        {.key = "em_px", .value = {.type = DE__MANIFEST_INT, .u.i = 48}}};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(font_cook(name, settings, 2, &cooked), DE_OK);
+    const u8 *p = cooked.data;
+    u32 ng = de__font_u32(p + 12), nc = de__font_u32(p + 16), ns = de__font_u32(p + 28),
+        pw = de__font_u32(p + 52), ph = de__font_u32(p + 56);
+    const u8 *source = p + 64 + (u64)ng * 48 + (u64)nc * 8;
+    stbtt_fontinfo font;
+    ASSERT_TRUE(stbtt_InitFont(&font, source, 0));
+    const char *characters = "BOag";
+    const u32 sizes[] = {16, 192};
+    for (u32 size_index = 0; size_index < 2; ++size_index)
+        for (u32 c = 0; characters[c]; ++c) {
+            u32 size = sizes[size_index], gid = (u32)stbtt_FindGlyphIndex(&font, characters[c]);
+            const u8 *glyph = NULL;
+            for (u32 i = 0; i < ng; ++i)
+                if (de__font_u32(p + 64 + i * 48) == gid)
+                    glyph = p + 64 + i * 48;
+            ASSERT_TRUE(glyph);
+            u32 page = de__font_u32(glyph + 4), x = de__font_u32(glyph + 8),
+                y = de__font_u32(glyph + 12), w = de__font_u32(glyph + 16),
+                h = de__font_u32(glyph + 20);
+            const u8 *atlas = source + ns + (u64)page * pw * ph * 4;
+            f32 scale = stbtt_ScaleForMappingEmToPixels(&font, (f32)size);
+            int rw, rh, rx, ry;
+            u8 *reference = stbtt_GetGlyphBitmap(&font, scale, scale, (int)gid, &rw, &rh, &rx, &ry);
+            ASSERT_TRUE(reference);
+            f32 left = getf(glyph + 24) * size, right = getf(glyph + 32) * size,
+                top = getf(glyph + 36) * size, bottom = getf(glyph + 28) * size;
+            u32 intersection = 0, combined = 0;
+            for (int yy = (int)floorf(-top); yy < (int)ceilf(-bottom); ++yy)
+                for (int xx = (int)floorf(left); xx < (int)ceilf(right); ++xx) {
+                    bool expected = xx >= rx && xx < rx + rw && yy >= ry && yy < ry + rh &&
+                                    reference[(yy - ry) * rw + xx - rx] >= 128;
+                    bool actual = sample(atlas, pw, x, y, w, h, (xx + .5f - left) / (right - left),
+                                         (yy + .5f + top) / (top - bottom)) >= 127.5f;
+                    intersection += expected && actual;
+                    combined += expected || actual;
+                }
+            ASSERT_GT(combined, 0u);
+            f32 iou = (f32)intersection / combined;
+            printf("%s %c at%upx coverage IoU %.5f\n", name, characters[c], size, (double)iou);
+            /* At16px, one aliased boundary pixel is a substantial fraction of a thin
+             * stroke. The large comparison enforces precise outline/counter agreement. */
+            EXPECT_TRUE(iou >= (size == 16 ? .75f : .97f));
+            stbtt_FreeBitmap(reference, NULL);
+        }
+    de_cook_result_free(&cooked);
+}
+TEST(font, cff_msdf_strokes_counters_and_background_at_small_and_large_sizes) {
+    msdf_coverage("SourceCodePro.otf");
+}
+TEST(font, truetype_msdf_strokes_counters_and_background_at_small_and_large_sizes) {
+    msdf_coverage("NotoSans.ttf");
+}

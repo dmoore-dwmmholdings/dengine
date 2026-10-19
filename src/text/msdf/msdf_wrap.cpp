@@ -32,6 +32,9 @@ extern "C" de_result de__msdf_generate(const de__msdf_vertex *v, u32 count, doub
         shape.normalize();
         if (!shape.validate())
             return DE_ERR_PARSE;
+        /* TrueType and CFF outlines may use opposite winding conventions. Normalize the
+         * filled side while preserving the opposite orientation of counters/holes. */
+        shape.orientContours();
         msdfgen::edgeColoringSimple(shape, 3.0, 0);
         msdfgen::BitmapSection<float, 4> bitmap(scratch, (int)w, (int)h, msdfgen::Y_UPWARD);
         msdfgen::generateMTSDF(bitmap, shape, msdfgen::Range(range / scale),

@@ -2,6 +2,7 @@
 #include "text/render/text_render_internal.h"
 #include "gpu/gpu_backend.h"
 #include "gpu/texture_lease_internal.h"
+#include <stb_image_write.h>
 #if DE_HAS_RENDER
 #include "render/world/render_world.h"
 #include "render/components_internal.h"
@@ -234,6 +235,105 @@ static u8 *readback(text_render_fx *f) {
     de_gpu_fence_destroy(f->d, fence);
     de_gpu_buffer_destroy(f->d, buffer);
     return out;
+}
+typedef struct coverage_clear {
+    de_rg_resource target;
+} coverage_clear;
+static void coverage_clear_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    coverage_clear *p = user;
+    de_gpu_attachment attachment = {.texture = de_rg_texture(pass, p->target),
+                                    .clear = true,
+                                    .store = true,
+                                    .clear_color = {.01f, .015f, .02f, 1}};
+    de_gpu_cmd_begin_render(cmd, &attachment, 1, NULL);
+    de_gpu_cmd_end_render(cmd);
+}
+static void coverage_clear_stage(de__view_frame *vf, void *user) {
+    (void)user;
+    coverage_clear *p = de_arena_push_zero(vf->graph->arena, sizeof *p, 16);
+    if (!p)
+        return;
+    p->target = vf->color;
+    de_rg_pass *pass = de_rg_add_pass(vf->graph, "coverage.background", DE_QUEUE_GRAPHICS,
+                                      coverage_clear_execute, p);
+    if (pass)
+        de_rg_write(pass, p->target, DE_ACCESS_RENDER_TARGET);
+}
+TEST_F(text_batch, metal_cff_and_truetype_msdf_coverage_small_and_large, text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_OUTPUT, DE__VIEW_ORDER_UI,
+                                      "coverage.background", coverage_clear_stage, NULL),
+              DE_OK);
+    const char *ids[] = {"font/cff-msdf", "font/tt-msdf"};
+    de_font fonts[2];
+    de_load_handle loads[2];
+    for (u32 i = 0; i < 2; ++i) {
+        de_asset_id id = de_asset_id_from(ids[i]);
+        fonts[i] = de_asset_font(f->fonts.assets, id);
+        loads[i] = de_asset_load(f->fonts.assets, id, 0);
+        ASSERT_EQ(de_asset_wait(f->fonts.assets, loads[i], TEXT_WAIT), (int)DE_LOAD_READY);
+    }
+    const char *letters = "BOag";
+    const u32 sizes[] = {24, 192};
+    de_glyph_quad quads[16];
+    de_text_update(f->fonts.t);
+    for (u32 font = 0; font < 2; ++font)
+        for (u32 size = 0; size < 2; ++size)
+            for (u32 c = 0; c < 4; ++c) {
+                de_glyph_quad q = quad(f, fonts[font], letters[c], 32 + c * (size ? 160.f : 96.f),
+                                       32 + font * 320.f + size * 80.f, (f32)sizes[size]);
+                q.font = fonts[font];
+                q.color = (de_vec4){0, 1, 0, 1};
+                quads[font * 8 + size * 4 + c] = q;
+            }
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, quads, 16, (de_vec2){0},
+                           &(de_text_draw_opts){.font = fonts[0]}),
+              DE_OK);
+    render_frame(f);
+    u8 *image = readback(f);
+    for (u32 i = 0; i < 16; ++i) {
+        u32 font_index = i / 8, size = sizes[(i / 4) % 2];
+        de_text_font *font = de_text__font_get(f->fonts.t, fonts[font_index]);
+        stbtt_fontinfo reference_font;
+        ASSERT_TRUE(stbtt_InitFont(&reference_font, font->source, 0));
+        int glyph = stbtt_FindGlyphIndex(&reference_font, letters[i % 4]);
+        de_text_glyph_entry entry;
+        ASSERT_TRUE(de_text__glyph(f->fonts.t, fonts[font_index], (u32)glyph, &entry));
+        de_vec4 rect = quads[i].pos;
+        f32 baseline_x = rect.x - entry.plane.x * size, baseline_y = rect.y + entry.plane.w * size,
+            scale = stbtt_ScaleForMappingEmToPixels(&reference_font, (f32)size);
+        int width, height, xoff, yoff;
+        u8 *reference = stbtt_GetGlyphBitmapSubpixel(
+            &reference_font, scale, scale, baseline_x - floorf(baseline_x),
+            baseline_y - floorf(baseline_y), glyph, &width, &height, &xoff, &yoff);
+        ASSERT_TRUE(reference);
+        int rx = (int)floorf(baseline_x) + xoff, ry = (int)floorf(baseline_y) + yoff;
+        u32 intersection = 0, combined = 0;
+        for (int y = (int)floorf(rect.y); y < (int)ceilf(rect.y + rect.w); ++y)
+            for (int x = (int)floorf(rect.x); x < (int)ceilf(rect.x + rect.z); ++x) {
+                const u8 *pixel = image + 4 * ((u32)y * 1280 + (u32)x);
+                bool expected = x >= rx && x < rx + width && y >= ry && y < ry + height &&
+                                reference[(y - ry) * width + x - rx] >= 128;
+                bool actual = pixel[1] >= 128 && pixel[0] < 32 && pixel[2] < 32;
+                intersection += expected && actual;
+                combined += expected || actual;
+            }
+        ASSERT_GT(combined, 0u);
+        f32 iou = (f32)intersection / combined;
+        printf("Metal %s %c at%upx coverage IoU %.5f\n", ids[font_index], letters[i % 4], size,
+               (double)iou);
+        EXPECT_TRUE(iou >= (size == 24 ? .80f : .95f));
+        stbtt_FreeBitmap(reference, NULL);
+    }
+    ASSERT_TRUE(stbi_write_png(DE_TEXT_RENDER_CAPTURE, 1280, 720, 4, image, 1280 * 4));
+    free(image);
+    de__view_unregister_stage(f->r, coverage_clear_stage, NULL);
+    for (u32 i = 0; i < 2; ++i)
+        de_asset_release(f->fonts.assets, loads[i]);
+#else
+    SKIP("Metal native host required");
+#endif
 }
 TEST_F(text_batch, metal_bitmap_pixel_exact_1x_3x, text_render_fx) {
 #if defined(__APPLE__)

@@ -80,6 +80,16 @@ Passing a null renderer detaches rendering; CPU fonts, shaping and layout remain
 available. Destroy or detach text before its renderer/world. Update text before
 submitting that frame's quads.
 
+For renderer-only upload warmup, finish those frames before attaching text. Attachment
+seeds text's frame queue from the renderer's current frame. Thereafter call
+`de_text_update` once before submissions for each rendered frame; extra renderer-only
+frames advance the renderer without advancing the text queue. Use the uploader's
+flush/acquire calls for upload progress that should not advance a render frame.
+
+MSDF import normalizes contour orientation for both TrueType and CFF outlines,
+including opposite-winding counters. Font importer version2 invalidates prior
+cooked atlases so CFF assets affected by inverted coverage are rebuilt.
+
 `de_text_draw` copies quads into the current frame list. `pos` is x,y,width,height
 in pixels; `uv` is minimum/maximum atlas UV. Each quad's nonzero font selects its
 fallback atlas; a zero font preserves `options.font`. Options also identify the
