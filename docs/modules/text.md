@@ -112,13 +112,13 @@ control each entity. World text uses this same paragraph layout and camera-relat
 double positions. Localization callbacks are reserved for DENG-264; a literal is
 used when no callback supplies a localization ID.
 
-GPU atlas generations remain allocated until detach (DENG-490). Text-only worlds
-without another drawable need a depth-context integration follow-up (DENG-492).
+Superseded atlas generations are collected; pending UI packets hold generation leases
+until retirement. World text reuses visibility depth when present. Text-only views create
+a cleared reverse-Z depth attachment, so no other drawable is required.
 Wide shadow offsets can sample neighboring glyphs beyond atlas padding (DENG-493).
 Metal native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
 `tests/golden/text`; other backend captures remain DENG-496. Render-disabled builds
-compile the CPU module independently; full macOS headless configuration has an
-unrelated Metal CMake issue (DENG-472).
+compile the CPU module independently.
 
 ## Inline formatting and binding cache prerequisites (DENG-321)
 

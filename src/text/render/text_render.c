@@ -240,6 +240,7 @@ typedef struct text_pass {
     de_gpu_pipeline pipeline;
     de__text_push pc;
     u32 count, width, height;
+    bool clear_depth;
     de_rg_resource lighting[7];
 } text_pass;
 static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
@@ -247,7 +248,10 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     de_gpu_attachment color = {.texture = de_rg_texture(pass, p->target), .store = true},
                       depth = {0};
     if (p->depth.id)
-        depth = (de_gpu_attachment){.texture = de_rg_texture(pass, p->depth), .store = true};
+        depth = (de_gpu_attachment){.texture = de_rg_texture(pass, p->depth),
+                                    .store = true,
+                                    .clear = p->clear_depth,
+                                    .clear_depth = 0};
     de_gpu_cmd_begin_render(cmd, &color, 1, p->depth.id ? &depth : NULL);
     de_gpu_cmd_set_pipeline(cmd, p->pipeline);
     de_gpu_cmd_viewport(cmd, 0, 0, (f32)p->width, (f32)p->height);
@@ -387,13 +391,31 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
                                     .world = world};
             if (world && vc)
                 p->depth = vc->depth;
+            if (world && !p->depth.id) {
+                /* Text does not enter the opaque scene, so a text-only view has no
+                 * visibility depth. Keep the world pipeline's reverse-Z contract valid. */
+                p->depth = de_rg_create_texture(
+                    vf->graph, &(de_gpu_texture_desc){.format = DE_FMT_D32_FLOAT,
+                                                      .width = width,
+                                                      .height = height,
+                                                      .usage = DE_USAGE_DEPTH | DE_USAGE_COPY_SRC,
+                                                      .name = "text.depth"});
+                p->clear_depth = true;
+                if (!p->depth.id) {
+                    de_mutex_unlock(&r->mutex);
+                    de__text_unlock(t->runtime);
+                    return;
+                }
+            }
             de_rg_pass *pass = de_rg_add_pass(vf->graph, world ? "text.world" : "text.screen",
                                               DE_QUEUE_GRAPHICS, execute, p);
             if (pass) {
                 de_rg_read(pass, p->data, DE_ACCESS_SHADER_READ);
                 de_rg_read(pass, p->target, DE_ACCESS_RENDER_TARGET);
                 de_rg_write(pass, p->target, DE_ACCESS_RENDER_TARGET);
-                if (p->depth.id)
+                if (p->clear_depth)
+                    de_rg_write(pass, p->depth, DE_ACCESS_DEPTH_WRITE);
+                else if (p->depth.id)
                     de_rg_read(pass, p->depth, DE_ACCESS_DEPTH_READ);
                 for (u32 i = 0; i < r->page_count; ++i)
                     if (r->pages[i].initialized) {

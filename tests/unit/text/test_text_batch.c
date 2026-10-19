@@ -21,6 +21,8 @@ typedef struct text_render_fx {
     de_atomic_u32 screen_errors;
     bool screen_sink;
     u32 basic_outputs;
+    de_gpu_buffer world_depth;
+    bool world_depth_found;
 } text_render_fx;
 static void screen_error_sink(const de_log_record *record, void *user) {
     text_render_fx *f = user;
@@ -53,6 +55,8 @@ static void text_render_fx_teardown(text_render_fx *f) {
         de_renderer_destroy(f->r);
     if (f->screen_target.id)
         de_gpu_texture_destroy(f->d, f->screen_target);
+    if (f->world_depth.id)
+        de_gpu_buffer_destroy(f->d, f->world_depth);
     if (f->w)
         de_world_destroy(f->w);
     if (f->types)
@@ -260,6 +264,93 @@ static u8 *readback(text_render_fx *f) {
     return readback_target(f, de__renderer_offscreen(f->r));
 }
 #if defined(__APPLE__)
+static void coverage_clear_stage(de__view_frame *vf, void *user);
+typedef struct world_depth_copy {
+    de_rg_resource depth, buffer;
+} world_depth_copy;
+static void world_depth_copy_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    world_depth_copy *copy = user;
+    de_gpu_cmd_copy_texture_to_buffer(cmd, de_rg_buffer(pass, copy->buffer), 0, 1280 * 4,
+                                      de_rg_texture(pass, copy->depth), 0, 0);
+}
+static void world_depth_copy_stage(de__view_frame *vf, void *user) {
+    text_render_fx *f = user;
+    for (u32 i = 0; i < vf->graph->resource_count; ++i) {
+        const de__rg_resource *resource = &vf->graph->resources[i];
+        if (strcmp(resource->name, "text.depth") != 0)
+            continue;
+        world_depth_copy *copy = de_arena_push_zero(vf->graph->arena, sizeof *copy, 16);
+        if (!copy)
+            return;
+        copy->depth = de__rg_resource_handle(vf->graph, i);
+        copy->buffer = de_rg_import_buffer(vf->graph, f->world_depth, DE_ACCESS_COPY_DST);
+        de_rg_pass *pass = de_rg_add_pass(vf->graph, "text.depth.readback", DE_QUEUE_GRAPHICS,
+                                          world_depth_copy_execute, copy);
+        if (pass) {
+            de_rg_read(pass, copy->depth, DE_ACCESS_COPY_SRC);
+            de_rg_write(pass, copy->buffer, DE_ACCESS_COPY_DST);
+            f->world_depth_found = true;
+        }
+        return;
+    }
+}
+#endif
+TEST_F(text_batch, metal_world_text_only_has_valid_cleared_depth_and_visible_glyphs,
+       text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    de_asset_id font_id = de_asset_id_from("font/tt-msdf");
+    f->scene_loads[0] = de_asset_load(f->fonts.assets, font_id, 0);
+    ASSERT_EQ(de_asset_wait(f->fonts.assets, f->scene_loads[0], TEXT_WAIT), (int)DE_LOAD_READY);
+    de_log_add_sink(screen_error_sink, f);
+    f->screen_sink = true;
+    f->world_depth = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = 1280 * 720 * 4,
+                                                                      .usage = DE_USAGE_COPY_DST,
+                                                                      .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(f->world_depth.id);
+    de_entity entity = de_entity_spawn(f->w);
+    de_builtin_component_ids bi = de_builtin_components(f->w);
+    DeTransform *transform = de_entity_add(f->w, entity, bi.transform);
+    *transform = de_transform_identity();
+    transform->position.x = -.5;
+    DeWorldText *text = de_entity_add(f->w, entity, de_component_find(f->w, "DeWorldText"));
+    ASSERT_TRUE(text);
+    *text = (DeWorldText){
+        .style = {.font = de_asset_font(f->fonts.assets, font_id), .color = {0, 1, 0, 1}},
+        .size_m = .5f,
+        .depth_test = true};
+    strcpy(text->literal, "BOag");
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_VISIBILITY, 0, "world.background",
+                                      coverage_clear_stage, NULL),
+              DE_OK);
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_TRANSPARENT, 101, "text.depth.readback",
+                                      world_depth_copy_stage, f),
+              DE_OK);
+    de_text_update(f->fonts.t);
+    render_frame(f);
+    EXPECT_TRUE(f->world_depth_found);
+    u8 *pixels = readback(f);
+    u32 green = 0;
+    for (u32 i = 0; i < 1280 * 720; ++i)
+        green += pixels[i * 4 + 1] > 128 && pixels[i * 4] < 16 && pixels[i * 4 + 2] < 16;
+    printf("text-only world green glyph pixels=%u\n", green);
+    EXPECT_GT(green, 500u);
+    ASSERT_TRUE(
+        stbi_write_png(DE_TEXT_RENDER_CAPTURE ".world.png", 1280, 720, 4, pixels, 1280 * 4));
+    free(pixels);
+    const f32 *depth = de_gpu_buffer_map(f->d, f->world_depth);
+    ASSERT_TRUE(depth);
+    for (u32 i = 0; i < 1280 * 720; ++i)
+        ASSERT_FLOAT_EQ(depth[i], 0, 0);
+    de_log_flush();
+    EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
+    de__view_unregister_stage(f->r, world_depth_copy_stage, f);
+    de__view_unregister_stage(f->r, coverage_clear_stage, NULL);
+#else
+    SKIP("Metal native host required");
+#endif
+}
+#if defined(__APPLE__)
 static de_load_state wait_screen_asset(text_render_fx *f, de_load_handle load) {
     u64 deadline = de_time_now_ns() + TEXT_WAIT;
     de_load_state state;
@@ -309,10 +400,25 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
     const DeRenderComponents *ids = de__render_components(f->w);
     de_builtin_component_ids bi = de_builtin_components(f->w);
     de_entity card = de_entity_spawn(f->w);
-    *(DeTransform *)de_entity_add(f->w, card, bi.transform) = de_transform_identity();
+    DeTransform *card_transform = de_entity_add(f->w, card, bi.transform);
+    *card_transform = de_transform_identity();
+    /* Model import converts the glTF card normal to -Y; face this camera on +Z. */
+    card_transform->rotation = (de_quat){-.70710678f, 0, 0, .70710678f};
     DeMeshRenderer *drawable = de_entity_add(f->w, card, ids->mesh_renderer);
     drawable->mesh = mesh;
     drawable->materials[0] = de_asset_material(f->fonts.assets, de_asset_id_from("mat/white"));
+    de_entity world_label = de_entity_spawn(f->w);
+    DeTransform *world_transform = de_entity_add(f->w, world_label, bi.transform);
+    *world_transform = de_transform_identity();
+    world_transform->position = (de_dvec3){-.15, -.1, -.25};
+    DeWorldText *world_text =
+        de_entity_add(f->w, world_label, de_component_find(f->w, "DeWorldText"));
+    *world_text = (DeWorldText){
+        .style = {.font = de_asset_font(f->fonts.assets, de_asset_id_from("ui/pixel_font")),
+                  .color = {0, 1, 0, 1}},
+        .size_m = .3f,
+        .depth_test = true};
+    strcpy(world_text->literal, "A");
     f->screen_target = de_gpu_texture_create(
         f->d, &(de_gpu_texture_desc){.width = 1280,
                                      .height = 720,
@@ -364,6 +470,13 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
                 printf("screen text medium=%u hdr=%u rtt=%u green=%u\n", medium, hdr, target,
                        green);
                 EXPECT_GT(green, 500u);
+                u32 occluded = 0;
+                for (u32 y = 100; y < 620; ++y)
+                    for (u32 x = 100; x < 1180; ++x) {
+                        const u8 *p = pixels + 4 * (y * 1280 + x);
+                        occluded += p[1] > 128 && p[0] < 16 && p[2] < 16;
+                    }
+                EXPECT_EQ(occluded, 0u);
                 if (!medium && !hdr && !target)
                     ASSERT_TRUE(stbi_write_png(DE_TEXT_RENDER_CAPTURE ".screen.png", 1280, 720, 4,
                                                pixels, 1280 * 4));
@@ -372,6 +485,22 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
             de_log_flush();
             EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
         }
+    /* Existing opaque depth must be reused, while the explicit overlay flag bypasses it. */
+    world_text = de_entity_get(f->w, world_label, de_component_find(f->w, "DeWorldText"));
+    world_text->depth_test = false;
+    de_text_update(f->fonts.t);
+    render_frame(f);
+    for (u32 target = 0; target < 2; ++target) {
+        u8 *pixels = readback_target(f, target ? f->screen_target : de__renderer_offscreen(f->r));
+        u32 overlay = 0;
+        for (u32 i = 0; i < 1280 * 720; ++i)
+            overlay += pixels[i * 4 + 1] > 128 && pixels[i * 4] < 16 && pixels[i * 4 + 2] < 16;
+        printf("world overlay rtt=%u green=%u\n", target, overlay);
+        EXPECT_GT(overlay, 100u);
+        free(pixels);
+    }
+    de_log_flush();
+    EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
     de__view_unregister_stage(f->r, observe_basic_output, f);
     de_view_destroy(f->r, rtt);
 #else
