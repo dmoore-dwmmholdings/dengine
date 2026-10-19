@@ -54,6 +54,54 @@ static bool error_has(const char *needle) {
     return e != NULL && strstr(e->message, needle) != NULL;
 }
 
+typedef struct immediate_add_observer {
+    de_entity entity;
+    de_component component;
+    u32 added, changed;
+} immediate_add_observer;
+static void immediate_add_once(de_system_ctx *ctx) {
+    immediate_add_observer *s = ctx->user;
+    if (!de_entity_has(ctx->world, s->entity, s->component))
+        ASSERT_TRUE(de_entity_add(ctx->world, s->entity, s->component));
+}
+static void observe_immediate_add(de_system_ctx *ctx) {
+    immediate_add_observer *s = ctx->user;
+    s->added = de_query_count(ctx->world, ctx->queries[0]);
+    s->changed = de_query_count(ctx->world, ctx->queries[1]);
+}
+TEST_F(system, immediate_add_visible_to_later_system_in_same_run_only, ecs_fx) {
+    immediate_add_observer state = {.component = f->pos};
+    state.entity = de_entity_spawn(f->w);
+    ASSERT_TRUE(state.entity.bits);
+    const char *before[] = {"observe_add"};
+    ASSERT_TRUE(de_system_add(f->w, &(de_system_desc){.name = "add_once",
+                                                      .schedule = DE_SCHEDULE_UPDATE,
+                                                      .fn = immediate_add_once,
+                                                      .user = &state,
+                                                      .flags = DE_SYSTEM_EXCLUSIVE,
+                                                      .before = before,
+                                                      .before_count = 1})
+                    .id);
+    de_query_term term = {f->pos, DE_READ};
+    de_query_filter added = {f->pos, DE_ADDED}, changed = {f->pos, DE_CHANGED};
+    de_query_desc queries[] = {
+        {.terms = &term, .term_count = 1, .filters = &added, .filter_count = 1},
+        {.terms = &term, .term_count = 1, .filters = &changed, .filter_count = 1}};
+    ASSERT_TRUE(de_system_add(f->w, &(de_system_desc){.name = "observe_add",
+                                                      .schedule = DE_SCHEDULE_UPDATE,
+                                                      .fn = observe_immediate_add,
+                                                      .user = &state,
+                                                      .queries = queries,
+                                                      .query_count = 2})
+                    .id);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_UPDATE, 0, 0), DE_OK);
+    EXPECT_EQ(state.added, 1u);
+    EXPECT_EQ(state.changed, 1u);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_UPDATE, 0, 0), DE_OK);
+    EXPECT_EQ(state.added, 0u);
+    EXPECT_EQ(state.changed, 0u);
+}
+
 /* ---- system.add_remove ---------------------------------------------------------------------- */
 
 TEST_F(system, add_remove, ecs_fx) {

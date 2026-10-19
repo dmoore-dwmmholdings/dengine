@@ -55,10 +55,28 @@ TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     style_step(f, 0);
     f64 ms = (de_time_now_ns() - start) / 1000000.;
     fprintf(stderr, "theme switch2000nodes %.3fms\n", ms);
-    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 2001u);
+    /* The neutral root has no matching rule and needs no style publication. */
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 2000u);
     EXPECT_TRUE(ms <= 1.0);
     style_step(f, 0);
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+}
+TEST_F(ui_style_resolve, new_style_component_does_not_relayout_unchanged_next_frame, ui_fx) {
+    de_entity root = ui_node(f, (de_entity){0}), button = style_button(f, root, NULL);
+    EXPECT_FALSE(de_entity_has(f->world, button, f->ui->ids.style));
+    style_step(f, 0);
+    EXPECT_TRUE(de_entity_has(f->world, button, f->ui->ids.style));
+    EXPECT_FALSE(de_entity_has(f->world, root, f->ui->ids.style));
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 2u);
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+    /* A previously neutral node still starts matching after an authored class edit. */
+    ASSERT_EQ(style_install(f->ui, "[style.\".late\"]\nborder_width=3"), DE_OK);
+    ui_node_edit(f, root)->style_class = de_name_from("late");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, root).border_width, 3, 0);
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
 }
 #if !defined(_WIN32)
 #include <stdlib.h>

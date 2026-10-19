@@ -108,6 +108,8 @@ TEST_F(ui_tree, text_measure_and_bounded_authored_string, ui_fx) {
     de_ui_set_viewport(f->ui, 100, 100, (de_window_insets){0});
     ui_node_edit(f, text)->shrink = 0;
     ui_frame(f);
+    /* Widget/style publication can move the entity between archetypes. */
+    label = de_entity_get(f->world, text, f->ui->ids.text);
     de_text_layout *layout;
     de_text_layout_desc desc = {
         .utf8 = de_ui__text_content(f->ui, label), .style = &label->style, .max_width = 100};

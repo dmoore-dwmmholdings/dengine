@@ -14,7 +14,7 @@ static void collect(const de_query_chunk *chunk, void *user) {
     for (u32 i = 0; i < chunk->count && state->entity_count < state->ui->capacity; ++i)
         state->entities[state->entity_count++] = chunk->entities[i];
 }
-static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity) {
+static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bool create) {
     u64 h = entity.bits;
     h ^= h >> 33;
     h *= 0xff51afd7ed558ccdULL;
@@ -25,6 +25,8 @@ static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity) {
         if (cache->entity.bits == entity.bits)
             return cache;
         if (!cache->entity.bits || !de_entity_alive(state->ui->world, cache->entity)) {
+            if (!create)
+                return NULL;
             memset(cache, 0, sizeof *cache);
             cache->entity = entity;
             return cache;
@@ -139,7 +141,23 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     if (de_ui_focused(ui).bits == entity.bits && !de_ui_focus_visible(ui))
         bits &= ~2u;
 #endif
-    de_ui_style_cache *cache = cached(state, entity);
+    de_name widget_name =
+        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
+    bool matching_rule = false;
+    for (u32 s = 0; s < state->sheet_count && !matching_rule; ++s)
+        for (u32 r = 0; r < state->sheets[s].sheet->rule_count; ++r) {
+            const de_ui_style_rule *rule = &state->sheets[s].sheet->rules[r];
+            if ((!rule->widget.hash || rule->widget.hash == widget_name.hash) &&
+                (!rule->class_name.hash ||
+                 rule->class_name.hash == current_node->style_class.hash) &&
+                (!rule->state || (bits & rule->state) == rule->state)) {
+                matching_rule = true;
+                break;
+            }
+        }
+    /* Untouched nodes with no matching rules need no authored/applied snapshot. Existing
+     * caches must still resolve when their last matching rule disappears. */
+    de_ui_style_cache *cache = cached(state, entity, matching_rule);
     if (!cache)
         return;
     if (cache->initialized && cache->class_name.hash == current_node->style_class.hash &&
@@ -171,8 +189,6 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     f32 duration = 0;
     de_ui_easing easing = DE_UI_EASE_LINEAR;
     i32 motion_specificity = -1;
-    de_name widget_name =
-        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
     for (u32 s = 0; s < state->sheet_count; ++s) {
         de_ui_style_sheet_slot *slot = &state->sheets[s];
         for (u32 r = 0; r < slot->sheet->rule_count; ++r) {
@@ -204,11 +220,14 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
             apply_value(ui, &de_ui__style_properties[p], &winning[p], &node, &style, &text);
     if (memcmp(&node, &before_node, sizeof node))
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
-    if (!current_style) {
+    /* Absent style already means these defaults. Avoid moving neutral panels to a new
+     * archetype just to publish an identical value (the common large-tree case). */
+    const DeUiStyle default_style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
+    if (!current_style && memcmp(&style, &default_style, sizeof style)) {
         DeUiStyle *dst = de_entity_add(ui->world, entity, ui->ids.style);
         if (dst)
             *dst = style;
-    } else if (memcmp(&style, &before_style, sizeof style))
+    } else if (current_style && memcmp(&style, &before_style, sizeof style))
         *(DeUiStyle *)de_entity_get(ui->world, entity, ui->ids.style) = style;
     if (current_text && memcmp(&text, &before_text, sizeof text)) {
         DeUiText *dst = de_entity_get(ui->world, entity, ui->ids.text);
