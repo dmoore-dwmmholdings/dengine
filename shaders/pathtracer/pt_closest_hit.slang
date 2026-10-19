@@ -33,6 +33,13 @@ public struct PtStep {
     public uint consume,lobe,casts_shadows;
 };
 public float3 pt_environment(PtParams p,float3 wi) { return de_ibl_radiance(p.ibl,wi,0); }
+// Empty proposal categories waste NEE samples and distort its balance against
+// the BSDF. Keep the same normalized probabilities in forward and reverse PDFs.
+public float3 pt_light_categories(PtParams p) {
+    bool environment=(p.ibl.flags&DE_IBL_ENVIRONMENT)!=0?p.ibl.sh[0].a>0:any(p.ibl.ambient.rgb>0);
+    float3 active=float3(environment?1:0,p.source_count>0?1:0,p.light_count>0?1:0);
+    return active/max(active.x+active.y+active.z,1.0);
+}
 public float pt_env_pdf(PtParams p,float3 wi) {
     float phi=atan2(wi.y,wi.x);if(phi<0)phi+=6.283185307179586;
     uint x=min(uint(phi*(32.0/6.283185307179586)),31u),y=min(uint((1-wi.z)*8),15u);
@@ -58,7 +65,7 @@ public float pt_emission_pdf(PtParams p,DeRtHit h,float3 previous,float3 positio
         if(mesh.lods[h.lod].index_first+h.primitive*3!=s.first)continue;
         float3 delta=position-previous;float d2=dot(delta,delta);
         float cosine=abs(dot(normalize(cross(s.p1.xyz-s.p0.xyz,s.p2.xyz-s.p0.xyz)),-normalize(delta)));
-        result+=s.pdf*d2/max(s.p0.w*cosine,1e-20)/3.0;
+        result+=s.pdf*d2/max(s.p0.w*cosine,1e-20)*pt_light_categories(p).y;
     }
     return result;
 }
@@ -79,7 +86,7 @@ public float4 pt_area_hit(PtParams p,DeRtRay ray,float geometry_t,out float ligh
         bool inside=kind==DE_LIGHT_KIND_RECT?all(abs(uv)<=1):dot(uv,uv)<=1;
         if(!inside)continue;nearest=t;emitted=light.color.rgb*de_light_window(t,light.position.w);
         float area=kind==DE_LIGHT_KIND_RECT?4*light.shape.y*light.shape.z:3.141592653589793*light.shape.y*light.shape.y;
-        light_pdf=source.pdf*t*t/(3*max(area*(-denom),1e-20));
+        light_pdf=source.pdf*t*t/max(area*(-denom),1e-20)*pt_light_categories(p).y;
     }
     return float4(emitted,light_pdf>0?nearest:-1);
 }
@@ -88,7 +95,8 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
     PtLightProposal o=(PtLightProposal)0;o.delta=1;DeRtContext query=pt_query(p);
     uint dimension=2+bounce*12;float3 u=pt_random3(p.sampling_table,pixel^p.seed,p.sample,dimension);
     float3 wi=0,incident=0;float density=0;bool casts=true;
-    uint choice=min(uint(u.z*3),2u);
+    float3 categories=pt_light_categories(p);
+    uint choice=u.z<categories.x?0u:u.z<categories.x+categories.y?1u:2u;
     if(choice==0) {o.delta=0;
         float a=u.x;uint lo=0,hi=511;
         while(lo<hi){uint mid=(lo+hi)/2;if(de_robuffer<float2>(p.env_cdf)[mid].x<a)lo=mid+1;else hi=mid;}
@@ -96,14 +104,14 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         float2 cell=de_robuffer<float2>(p.env_cdf)[lo];
         float v=saturate((a-prev)/max(cell.y,1e-20));
         wi=pt_env_direction((float2(lo%32,lo/32)+float2(v,u.y))/float2(32,16));
-        density=cell.y*512/(4*3.141592653589793)/3.0;incident=pt_environment(p,wi);
+        density=cell.y*512/(4*3.141592653589793)*categories.x;incident=pt_environment(p,wi);
 
         o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,1e6);
     } else if(choice==1 && p.source_count>0) {
         uint entry=min(uint(u.x*p.source_count),p.source_count-1);DiSource a=de_robuffer<DiSource>(p.sources)[entry];
         uint index=u.y<a.probability?entry:a.alias;DiSource source=de_robuffer<DiSource>(p.sources)[index];
         float2 uv=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+3),pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+4));
-        density=source.pdf/3.0;
+        density=source.pdf*categories.y;
         if(source.kind==0) {
             DeClusterLight light=source.light;o.shadow=de_rt_shadow_ray(light,position,normal,uv);wi=o.shadow.direction.xyz;
             uint kind=de_light_kind(light);casts=(asuint(light.axis.w)&DE_CLUSTER_LIGHT_SHADOWS)!=0;
@@ -127,9 +135,9 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         }
     } else if(choice==2 && p.light_count>0) {
         DeSceneConstants sc=de_robuffer<DeSceneConstants>(query.scene)[query.view];
-        // Remap the chosen third of the proposal variate before alias selection.
+        // Remap the selected category interval before alias selection.
         // Using separate correlated digital dimensions can bias the conditional choice.
-        float pick=frac(u.z*3)*p.light_count;
+        float pick=saturate((u.z-categories.x-categories.y)/categories.z)*p.light_count;
         uint entry=min(uint(pick),p.light_count-1);
         float4 a=de_robuffer<float4>(p.directional_alias)[p.directional_offset+entry];
         uint index=frac(pick)<a.x?entry:asuint(a.z);
@@ -137,7 +145,7 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         DeGpuLight l=de_robuffer<DeGpuLight>(sc.lights)[index];
         if(l.kind==DE_LIGHT_KIND_DIRECTIONAL && (l.flags&DE_GPU_LIGHT_LIVE)!=0) {
             wi=normalize(float3(l.transform[0].z,l.transform[1].z,l.transform[2].z));incident=l.color.rgb*l.color.w;
-            density=pdf/3.0;casts=(l.flags&DE_GPU_LIGHT_CAST_SHADOWS)!=0;
+            density=pdf*categories.z;casts=(l.flags&DE_GPU_LIGHT_CAST_SHADOWS)!=0;
             o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,1e6);
         }
     }
@@ -149,7 +157,7 @@ public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,
     uint strategy=p.flags&3u;
     float area_pdf;float4 area=pt_area_hit(p,ray,hit.t,area_pdf);
     if(area.w>=0) {o.emitted=area.rgb*(bounce==0||strategy==2?1:strategy==1?0:pt_power(last_pdf,area_pdf));return o;}
-    if(hit.t<0) {float w=bounce==0||strategy==2?1:strategy==1?0:pt_power(last_pdf,pt_env_pdf(p,ray.direction.xyz)/3.0);o.emitted=pt_environment(p,ray.direction.xyz)*w;return o;}
+    if(hit.t<0) {float w=bounce==0||strategy==2?1:strategy==1?0:pt_power(last_pdf,pt_env_pdf(p,ray.direction.xyz)*pt_light_categories(p).x);o.emitted=pt_environment(p,ray.direction.xyz)*w;return o;}
     DeRtContext query=pt_query(p);
     DeRtSurface surface=de_rt_hit_surface(query,hit,ray.origin.xyz,p.brdf_lut);
     if(!surface.valid)return o;
