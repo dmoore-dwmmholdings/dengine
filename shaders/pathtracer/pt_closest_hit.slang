@@ -6,6 +6,7 @@ __exported import pt_sampling;
 __exported import pt_volume;
 import "../visbuffer/vis_decode";
 import "../materials/standard/volume";
+import "../materials/standard/lobe_transmission";
 __exported import pt_sss;
 public struct PtMediaParams {public uint fog,count,features,max_steps,stats,stats_offset,unused0,unused1;};
 public struct PtParams {
@@ -225,7 +226,12 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
         DeRtContext q=pt_query(p);DeRtSurface surface=de_rt_hit_surface(q,hit,path.ray.origin.xyz,p.brdf_lut);
         SurfaceData exit=surface.material;float3 normal=pt_geometric_normal(q,hit);exit.normal=normal;exit.clearcoat_normal=normal;
         exit.features|=DE_MATERIAL_FEATURE_TRANSMISSION|DE_MATERIAL_FEATURE_VOLUME;exit.transmission=1;exit.thickness=1;exit.attenuation_color=float3(1);
-        ShadingFrame frame=de_surface_frame(exit);BsdfSample next=StandardModel.sample(exit,frame.to_local(-path.ray.direction.xyz),pt_random3(pixel^p.seed,p.sample,16384+path.event*3));
+        ShadingFrame frame=de_surface_frame(exit);BsdfSample next;
+        if(!de_transmission_refracts(exit)) {
+            // The index-matched interface is transparent, even from inside.
+            // The thin-wall BSDF path requires wo.z>0 and would terminate this walk.
+            next.wi=frame.to_local(path.ray.direction.xyz);next.weight=float3(1);next.pdf=1;next.lobe=DE_BSDF_LOBE_TRANSMISSION;
+        } else next=StandardModel.sample(exit,frame.to_local(-path.ray.direction.xyz),pt_random3(pixel^p.seed,p.sample,16384+path.event*3));
         if(!(next.pdf>0))return step;float3 wi=normalize(frame.to_world(next.wi));
         step.stop=0;step.weight=next.weight;step.pdf=next.pdf;step.consume=dot(wi,normal)>0?1u:0u;
         if(step.consume!=0)path.sss.active=0;

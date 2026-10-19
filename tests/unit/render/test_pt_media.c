@@ -317,6 +317,15 @@ TEST_F(pt_media, sss_radius_and_energy, pt_fixture) {
     double opaque = media_mean(f, 0);
     printf("SSS backlit large %.9g opaque %.9g\n", backlit, opaque);
     EXPECT_TRUE(backlit > opaque + .01);
+    /* An exactly index-matched exit must also transmit, with no singular
+     * interior microfacet evaluation or zero-density thin-wall rejection. */
+    g_mat[1].standard.subsurface = 1;
+    g_mat[1].standard.ior = 1.f;
+    f->rt.w.touch_all = true;
+    media_samples(f, 512);
+    double matched = media_mean(f, 0);
+    printf("SSS exactly matched IOR backlit %.9g\n", matched);
+    EXPECT_TRUE(isfinite(matched) && matched > opaque + .01 && matched <= 1);
 }
 
 #if DE_HAS_GPU_METAL
