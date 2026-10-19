@@ -6,6 +6,7 @@
 #include "de_ecs.h"
 #include "de_asset.h"
 #include "de_text.h"
+#include "de_platform.h"
 DE_EXTERN_C_BEGIN
 
 typedef struct de_ui de_ui;
@@ -19,6 +20,8 @@ typedef struct de_ui_desc {
     de_input *input;
     f32 reference_height; /* UI scale reference, e.g. 1080 */
     bool pixel_art;       /* integer scaling + bitmap fonts */
+    de_window window;     /**< Optional window for output size and safe insets. */
+    u32 max_nodes;        /**< Zero:65536 retained nodes. Capacity is allocated at create. */
 } de_ui_desc;
 
 DE_API de_result de_ui_create(const de_ui_desc *desc, de_ui **out);
@@ -46,7 +49,8 @@ typedef enum de_ui_align {
     DE_UI_ALIGN_END,
     DE_UI_ALIGN_STRETCH,
     DE_UI_ALIGN_SPACE_BETWEEN,
-    DE_UI_ALIGN_SPACE_AROUND
+    DE_UI_ALIGN_SPACE_AROUND,
+    DE_UI_ALIGN_AUTO /**< align_self only: inherit parent's align_items. */
 } de_ui_align;
 
 typedef struct DeUiNode {
@@ -62,6 +66,49 @@ typedef struct DeUiNode {
     de_vec4 computed_rect; /* output: x, y, w, h in screen pixels */
 } DeUiNode;
 
+/** Anchors are normalized parent-content coordinates; offsets are reference pixels. */
+typedef struct DeUiAnchor {
+    de_vec2 anchor_min, anchor_max;
+    de_vec2 offset_min, offset_max;
+} DeUiAnchor;
+typedef struct DeUiGrid {
+    de_ui_len columns[8];
+    u32 column_count;
+    de_ui_len rows[8];
+    u32 row_count;
+    f32 column_gap, row_gap;
+} DeUiGrid;
+typedef struct DeUiGridItem {
+    u8 column, row, column_span, row_span;
+} DeUiGridItem;
+typedef enum de_ui_popup_placement {
+    DE_UI_POPUP_BOTTOM,
+    DE_UI_POPUP_TOP,
+    DE_UI_POPUP_LEFT,
+    DE_UI_POPUP_RIGHT,
+    DE_UI_POPUP_OVERLAY
+} de_ui_popup_placement;
+typedef struct DeUiPopup {
+    de_entity anchor;
+    u8 placement;
+    bool modal;
+} DeUiPopup;
+typedef struct DeUiStyle {
+    de_vec4 background, border_color;
+    f32 border_width, corner_radius, opacity;
+    de_vec4 text_color;
+} DeUiStyle;
+typedef struct DeUiInteractionState {
+    bool hovered, pressed, focused, disabled;
+} DeUiInteractionState;
+/** Override physical output dimensions and safe insets (also usable without a window/GPU). */
+DE_API void de_ui_set_viewport(de_ui *ui, u32 width, u32 height, de_window_insets safe);
+typedef struct de_ui_layout_stats {
+    u32 nodes_laid_out, nodes_measured, dirty_nodes, total_nodes;
+    f32 scale;
+} de_ui_layout_stats;
+DE_API de_ui_layout_stats de_ui_get_layout_stats(const de_ui *ui);
+
 typedef struct DeUiImage {
     de_texture texture;
     de_vec4 uv_rect;
@@ -73,6 +120,7 @@ typedef struct DeUiText {
     de_str literal;
     de_text_style style;
     de_text_align align;
+    char text[512]; /**< Authored serialized text; literal is an optional runtime override. */
 } DeUiText;
 typedef struct DeUiButton {
     bool disabled;

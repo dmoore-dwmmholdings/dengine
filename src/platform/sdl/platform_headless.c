@@ -89,6 +89,11 @@ void de_window_size_pixels(de_window w, u32 *width, u32 *height) {
         *height = 0;
 }
 
+de_window_insets de_window_safe_area(de_window w) {
+    (void)w;
+    return (de_window_insets){0};
+}
+
 de_result de_window_set_mode(de_window w, de_window_mode mode) {
     (void)w;
     (void)mode;
