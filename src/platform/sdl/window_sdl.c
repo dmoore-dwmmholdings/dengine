@@ -200,6 +200,24 @@ void de_window_size_pixels(de_window w, u32 *width, u32 *height) {
         *height = ph > 0 ? (u32)ph : 0u;
 }
 
+de_window_insets de_window_safe_area(de_window w) {
+    de__platform_sdl_window *slot = de__slot(de__platform_sdl_get(), w);
+    if (!slot)
+        return (de_window_insets){0};
+    SDL_Rect safe;
+    int width = 0, height = 0, pixels_w = 0, pixels_h = 0;
+    if (!SDL_GetWindowSize(slot->sdl, &width, &height) || width <= 0 || height <= 0 ||
+        !SDL_GetWindowSizeInPixels(slot->sdl, &pixels_w, &pixels_h) ||
+        !SDL_GetWindowSafeArea(slot->sdl, &safe))
+        return (de_window_insets){0};
+    int right = width - safe.x - safe.w, bottom = height - safe.y - safe.h;
+    return (de_window_insets){
+        safe.x > 0 ? (u32)(((u64)safe.x * (u32)pixels_w + (u32)width / 2u) / (u32)width) : 0,
+        safe.y > 0 ? (u32)(((u64)safe.y * (u32)pixels_h + (u32)height / 2u) / (u32)height) : 0,
+        right > 0 ? (u32)(((u64)right * (u32)pixels_w + (u32)width / 2u) / (u32)width) : 0,
+        bottom > 0 ? (u32)(((u64)bottom * (u32)pixels_h + (u32)height / 2u) / (u32)height) : 0};
+}
+
 de_result de_window_set_mode(de_window w, de_window_mode mode) {
     de__platform_sdl_window *s = de__slot(de__platform_sdl_get(), w);
     if (!s)

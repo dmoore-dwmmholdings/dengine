@@ -176,6 +176,13 @@ DE_API void de_window_destroy(de_window w);
  * Either pointer may be NULL. */
 DE_API void de_window_size_pixels(de_window w, u32 *width, u32 *height);
 
+/** Physical pixel insets avoiding notches, rounded corners and system overlays. */
+typedef struct de_window_insets {
+    u32 left, top, right, bottom;
+} de_window_insets;
+/** Zero insets for a stale handle, headless platform, or an unrestricted window. */
+DE_API de_window_insets de_window_safe_area(de_window w);
+
 /**
  * Switches between windowed, borderless fullscreen and exclusive fullscreen. Exclusive
  * fullscreen uses the display mode closest to the window's logical size on the window's

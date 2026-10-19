@@ -121,6 +121,14 @@ DE_API de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **
  * system first (its unloads use the renderer's uploader), and the device after. NULL is
  * ignored. */
 DE_API void de_renderer_destroy(de_renderer *r);
+/** Main-thread output dimensions in physical pixels, before per-view render scaling.
+ * A renderer without a window reports its offscreen target size. NULL reports zero.
+ * Each output pointer may be NULL. */
+DE_API void de_renderer_output_size(de_renderer *r, u32 *width, u32 *height);
+/** Dimensions of a loaded texture, without exposing renderer asset records. False for
+ * NULL renderer, missing assets, stale/unloaded texture; outputs are then zero. Main thread.
+ * Each output pointer may be NULL. */
+DE_API bool de_render_texture_size(de_renderer *r, de_texture texture, u32 *width, u32 *height);
 /* Registers render components + the Extract system into the world. */
 /**
  * (DENG-175) Also adds the Extract systems (`de.render.extract_views`, `_meshes`, `_lights` in

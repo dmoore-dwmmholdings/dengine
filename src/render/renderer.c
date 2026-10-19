@@ -425,6 +425,32 @@ de_render_settings de_renderer_get_settings(const de_renderer *r) {
     return s;
 }
 
+void de_renderer_output_size(de_renderer *r, u32 *width, u32 *height) {
+    u32 w = 0, h = 0;
+    if (r != NULL) {
+        if (r->window.id)
+            de_window_size_pixels(r->window, &w, &h);
+        else {
+            w = DE__RENDER_OFFSCREEN_WIDTH;
+            h = DE__RENDER_OFFSCREEN_HEIGHT;
+        }
+    }
+    if (width)
+        *width = w;
+    if (height)
+        *height = h;
+}
+
+bool de_render_texture_size(de_renderer *r, de_texture texture, u32 *width, u32 *height) {
+    const de_render_texture *record =
+        r && r->assets ? de_render_texture_get(r->assets, texture) : NULL;
+    if (width)
+        *width = record ? record->width : 0;
+    if (height)
+        *height = record ? record->height : 0;
+    return record != NULL;
+}
+
 const de_render_stats *de_renderer_stats(const de_renderer *r) {
     return r != NULL ? &r->stats : NULL;
 }
