@@ -160,9 +160,12 @@ static bool reserve(de__rtao *s, ao_view *v, u32 width, u32 height, u32 tw, u32 
     if (count > v->capacity) {
         de_gpu_buffer_destroy(d, v->rays);
         de_gpu_buffer_destroy(d, v->hits);
-        de_gpu_buffer_desc bd = {
-            .size = count * 32, .stride = 32, .usage = DE_USAGE_STORAGE, .name = "RTAO rays"};
+        de_gpu_buffer_desc bd = {.size = count * 32,
+                                 .stride = 32,
+                                 .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                 .name = "RTAO rays"};
         v->rays = de_gpu_buffer_create(d, &bd);
+        bd.usage = DE_USAGE_STORAGE;
         bd.name = "RTAO hits";
         v->hits = de_gpu_buffer_create(d, &bd);
         v->capacity = (u32)count;
@@ -310,9 +313,18 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
     inputs->ao_gtao = true;
     inputs->ao_bent = (de_rg_resource){0};
     v->graph = g;
-    v->info =
-        (de__rtao_info){v->ao, v->distance, v->raw,          vf->width,          vf->height,  tw,
-                        th,    spp,         vf->frame_index, (u64)tw * th * spp, p->pc.radius};
+    v->info = (de__rtao_info){.ao = v->ao,
+                              .distance = v->distance,
+                              .raw = v->raw,
+                              .width = vf->width,
+                              .height = vf->height,
+                              .trace_width = tw,
+                              .trace_height = th,
+                              .spp = spp,
+                              .frame = vf->frame_index,
+                              .rays = (u64)tw * th * spp,
+                              .radius = p->pc.radius,
+                              .ray_buffer = v->rays};
     s->r->stats.rays_traced += (u64)tw * th * spp;
     return DE_OK;
 }
