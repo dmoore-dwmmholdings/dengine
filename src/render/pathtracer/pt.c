@@ -9,6 +9,7 @@
 #include "render/materials/material_instances.h"
 #include "render/world/render_world.h"
 #include <math.h>
+#include <float.h>
 #include <string.h>
 #define PT_RING 8u
 /* PtParams in pt_closest_hit.slang; float4 rows avoid target matrix packing differences. */
@@ -19,7 +20,7 @@ typedef struct pt_params {
     de__ibl_gpu ibl;
     u32 environment_revision, flags, reserved0, reserved1;
     f32 exposure;
-    u32 light_count, unused0, unused1;
+    u32 light_count, directional_alias, directional_offset;
     de__pt_media_params media;
     u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_pad[3];
 } pt_params;
@@ -28,7 +29,8 @@ typedef struct pt_view {
     de_view handle;
     de_gpu_texture accumulation, output;
     de_gpu_texture albedo, normal, depth, position, material;
-    de_gpu_buffer params, cdf;
+    de_gpu_buffer params, cdf, directionals;
+    u32 directional_capacity, directional_count, directional_offset;
     u32 width, height, samples, reset_serial, seen_reset, strategy, seed;
     u64 signature, frame, pending_frame;
     de_mat4 matrix, projection;
@@ -72,6 +74,7 @@ static void release(de__pt *p, pt_view *v) {
     de_gpu_texture_destroy(p->r->dev, v->material);
     de_gpu_buffer_destroy(p->r->dev, v->params);
     de_gpu_buffer_destroy(p->r->dev, v->cdf);
+    de_gpu_buffer_destroy(p->r->dev, v->directionals);
     memset(v, 0, sizeof *v);
 }
 void de__pt_destroy(de__pt *p) {
@@ -282,6 +285,59 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de__pt_media_end(p->media, cmd, &x->media);
     }
 }
+/* Prepared render-world lights -> frame-ring alias table; O(1) sampling per path vertex. */
+static de_result directional_alias(de__pt *p, pt_view *v, de__view_frame *f, u32 ring,
+                                   pt_params *params) {
+    v->directional_count = 0;
+    const de__render_world_frame *world = de__render_world_last(p->r);
+    if (!world)
+        return DE_OK;
+    const u32 count = world->lights.count;
+    if (!count)
+        return DE_OK;
+    f32 *power = de_arena_push(f->graph->arena, (size_t)count * sizeof *power, 16);
+    if (!power)
+        return DE_ERR_OUT_OF_MEMORY;
+    bool positive = false;
+    for (u32 i = 0; i < count; ++i) {
+        const DeLight *l = &world->lights.light[i];
+        f64 w = 0;
+        if (world->lights.entity[i] && l->kind == DE_LIGHT_DIRECTIONAL)
+            w = (.2126 * l->color.x + .7152 * l->color.y + .0722 * l->color.z) * l->intensity;
+        power[i] = isfinite(w) && w > 0 ? (f32)fmin(w, FLT_MAX) : 0;
+        positive |= power[i] > 0;
+    }
+    if (!positive)
+        return DE_OK;
+    if (count > v->directional_capacity) {
+        u32 capacity = count;
+        de_gpu_buffer buffer = de_gpu_buffer_create(
+            p->r->dev, &(de_gpu_buffer_desc){.size = (u64)PT_RING * capacity * sizeof(de__di_alias),
+                                             .stride = sizeof(de__di_alias),
+                                             .usage = DE_USAGE_STORAGE,
+                                             .memory = DE_MEM_UPLOAD,
+                                             .name = "PT directional power aliases"});
+        if (!buffer.id)
+            return DE_ERR_OUT_OF_MEMORY;
+        de_gpu_buffer_destroy(p->r->dev, v->directionals);
+        v->directionals = buffer;
+        v->directional_capacity = capacity;
+    }
+    u32 *scratch = de_arena_push(f->graph->arena, (size_t)count * 2 * sizeof *scratch, 16);
+    if (!scratch)
+        return DE_ERR_OUT_OF_MEMORY;
+    const u32 offset = ring * v->directional_capacity;
+    de__di_alias *aliases = de_gpu_buffer_map(p->r->dev, v->directionals);
+    if (!aliases)
+        return DE_ERR_OUT_OF_MEMORY;
+    DE_TRY(de__di_alias_build(power, count, aliases + offset, scratch));
+    v->directional_count = count;
+    v->directional_offset = offset;
+    params->light_count = count;
+    params->directional_alias = de_gpu_buffer_bindless(p->r->dev, v->directionals);
+    params->directional_offset = offset;
+    return DE_OK;
+}
 void de__pt_build(de__view_frame *f, void *user) {
     de__pt *p = user;
     pt_view *v = &p->views[(f->view.id & 255u) - 1u];
@@ -352,8 +408,11 @@ void de__pt_build(de__view_frame *f, void *user) {
         .ibl = lighting.view.ibl,
         .exposure =
             de__lighting_view_exposure(de__views_lighting(p->r), (f->view.id & 255u) - 1u, f->view,
-                                       f->frame_index, f->camera->camera.exposure_ev100, NULL),
-        .light_count = de__gpu_scene_table(p->r->gpu_scene, DE__GS_LIGHTS).count};
+                                       f->frame_index, f->camera->camera.exposure_ev100, NULL)};
+    if (directional_alias(p, v, f, ring, &params) != DE_OK) {
+        f->graph->oom = true;
+        return;
+    }
     params.media = media;
     params.aov_albedo = de_gpu_texture_bindless(p->r->dev, v->albedo, 0, true);
     params.aov_normal = de_gpu_texture_bindless(p->r->dev, v->normal, 0, true);
@@ -398,6 +457,9 @@ void de__pt_build(de__view_frame *f, void *user) {
     de_rg_read(pass, rt->dependency, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, de_rg_import_buffer(g, rt->query, DE_ACCESS_SHADER_READ),
                DE_ACCESS_SHADER_READ);
+    if (params.light_count)
+        de_rg_read(pass, de_rg_import_buffer(g, v->directionals, DE_ACCESS_SHADER_READ),
+                   DE_ACCESS_SHADER_READ);
     if (source_dependency.id)
         de_rg_read(pass, source_dependency, DE_ACCESS_SHADER_READ);
     if (lighting.strip.id)
@@ -432,7 +494,10 @@ void de__pt_build(de__view_frame *f, void *user) {
                             .normal = v->normal,
                             .depth = v->depth,
                             .position = v->position,
-                            .material = v->material};
+                            .material = v->material,
+                            .directional_alias = v->directionals,
+                            .directional_count = v->directional_count,
+                            .directional_offset = v->directional_offset};
         de_rg_resource denoised = de__pt_denoise_build(p->denoise, f, &info, params.exposure);
         if (denoised.id)
             f->color = denoised;
@@ -485,7 +550,10 @@ bool de__pt_get(const de_renderer *r, de_view view, de__pt_info *out) {
                          .normal = v->normal,
                          .depth = v->depth,
                          .position = v->position,
-                         .material = v->material};
+                         .material = v->material,
+                         .directional_alias = v->directionals,
+                         .directional_count = v->directional_count,
+                         .directional_offset = v->directional_offset};
     return true;
 }
 

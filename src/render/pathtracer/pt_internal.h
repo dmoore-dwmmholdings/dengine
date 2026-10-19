@@ -15,6 +15,8 @@ typedef struct de__pt_info {
     de_gpu_texture accumulation, output;
     u32 samples, width, height;
     de_gpu_texture albedo, normal, depth, position, material;
+    de_gpu_buffer directional_alias;
+    u32 directional_count, directional_offset;
 } de__pt_info;
 bool de__pt_get(const de_renderer *, de_view, de__pt_info *);
 /** Equal-area environment cell CDF; shared CPU oracle, capacity count+1 is not required. */

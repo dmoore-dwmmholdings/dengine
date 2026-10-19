@@ -127,6 +127,102 @@ static float *pt_read(pt_fixture *f) {
     de_gpu_wait_idle(r->d);
     return de_gpu_buffer_map(r->d, f->rb);
 }
+TEST_F(pathtracer, directional_power_split_preserves_samples, pt_fixture) {
+    rt_fixture *r = &f->rt;
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.emissive_strength = 0;
+    g_mat[0].standard.base_color = (de_vec4){.8f, .8f, .8f, 1};
+    r->w.touch_all = true;
+    de_render_settings settings = de_renderer_get_settings(r->r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(r->r, &settings);
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "0"));
+    ASSERT_TRUE(cvar_set("r.pt.sampling_strategy", "1"));
+    f64 grouped[64], maximum_error = 0, signal = 0;
+    for (u32 split = 0; split < 2; ++split) {
+        DeLight sun = {
+            .kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = split ? 1 : 100};
+        world_light(&r->w, 0, &sun, at(0, 0, 0));
+        sun.intensity = split ? 99 : 0;
+        world_light(&r->w, 1, &sun, at(0, 0, 0));
+        /* Keep an unrelated slot and a dead slot in the authored table. */
+        DeLight point = {
+            .kind = DE_LIGHT_POINT, .color = {1, 1, 1}, .intensity = 100, .range = .1f};
+        world_light(&r->w, 2, &point, at(100, 100, 100));
+        world_light(&r->w, 3, &sun, at(0, 0, 0));
+        r->w.f.lights.entity[3] = 0;
+        de_renderer_path_reset(r->r, r->view);
+        f64 previous = 0;
+        de_tracking_stats warm = {0}, device_warm = {0};
+        for (u32 i = 0; i < 64; ++i) {
+            pt_frame(f);
+            const float *pixels = pt_read(f);
+            ASSERT_EQ(f->info.directional_count, 4u);
+            const de__di_alias *alias = de_gpu_buffer_map(r->d, f->info.directional_alias);
+            ASSERT_TRUE(alias != NULL);
+            alias += f->info.directional_offset;
+            EXPECT_FLOAT_EQ(alias[0].pdf, split ? .01 : 1, 1e-7);
+            EXPECT_FLOAT_EQ(alias[1].pdf, split ? .99 : 0, 1e-7);
+            EXPECT_FLOAT_EQ(alias[2].pdf, 0, 0);
+            EXPECT_FLOAT_EQ(alias[3].pdf, 0, 0);
+            const f64 total = pixels[(32 * 64 + 32) * 4];
+            const f64 value = total - previous;
+            previous = total;
+            ASSERT_TRUE(isfinite(value));
+            if (i == 16) {
+                warm = de_tracking_allocator_stats(&r->track);
+                device_warm = de_tracking_allocator_stats(&r->dev_track);
+            }
+            if (!split) {
+                grouped[i] = value;
+                signal += value;
+            } else
+                maximum_error = fmax(maximum_error, fabs(value - grouped[i]));
+        }
+        EXPECT_EQ(de_tracking_allocator_stats(&r->track).alloc_count, warm.alloc_count);
+        EXPECT_EQ(de_tracking_allocator_stats(&r->track).realloc_count, warm.realloc_count);
+        EXPECT_EQ(de_tracking_allocator_stats(&r->dev_track).alloc_count, device_warm.alloc_count);
+        EXPECT_EQ(de_tracking_allocator_stats(&r->dev_track).realloc_count,
+                  device_warm.realloc_count);
+    }
+    r->w.f.lights.light[0].intensity = .7152f;
+    r->w.f.lights.light[1].intensity = .2126f;
+    r->w.f.lights.light[0].color = (de_vec3){1, 0, 0};
+    r->w.f.lights.light[1].color = (de_vec3){0, 1, 0};
+    r->w.touch_lights = true;
+    de_renderer_path_reset(r->r, r->view);
+    u32 red_count = 0, green_count = 0;
+    f64 previous_red = 0, previous_green = 0;
+    for (u32 sample = 0; sample < 256; ++sample) {
+        pt_frame(f);
+        const float *pixels = pt_read(f);
+        const f64 red = pixels[(32 * 64 + 32) * 4];
+        const f64 green = pixels[(32 * 64 + 32) * 4 + 1];
+        red_count += red - previous_red > 1e-5;
+        green_count += green - previous_green > 1e-5;
+        previous_red = red;
+        previous_green = green;
+    }
+    const de__di_alias *colored = de_gpu_buffer_map(r->d, f->info.directional_alias);
+    ASSERT_TRUE(colored != NULL);
+    colored += f->info.directional_offset;
+    EXPECT_FLOAT_EQ(colored[0].pdf, .5, 1e-7);
+    EXPECT_FLOAT_EQ(colored[1].pdf, .5, 1e-7);
+    printf("equal-power directional selections red%u green%u\n", red_count, green_count);
+    EXPECT_TRUE(red_count > 30 && green_count > 30);
+    EXPECT_TRUE(abs((int)red_count - (int)green_count) <= 2);
+    r->w.f.lights.light[0].intensity = 0;
+    r->w.f.lights.light[1].intensity = 0;
+    r->w.touch_lights = true;
+    de_renderer_path_reset(r->r, r->view);
+    pt_frame(f);
+    EXPECT_EQ(f->info.directional_count, 0u);
+    EXPECT_FLOAT_EQ(pt_read(f)[(32 * 64 + 32) * 4], 0, 1e-6);
+    printf("directional split signal %g max per-sample difference %g\n", signal, maximum_error);
+    EXPECT_TRUE(signal > 1);
+    EXPECT_TRUE(maximum_error <= .001);
+}
 TEST_F(pathtracer, progressive_hdr_and_reset, pt_fixture) {
     pt_frame(f);
     ASSERT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 1u);

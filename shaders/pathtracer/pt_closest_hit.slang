@@ -16,7 +16,7 @@ public struct PtParams {
     public float4 camera;
     public DeIbl ibl;
     public uint environment_revision,flags,reserved0,reserved1;
-    public float exposure; public uint light_count,unused0,unused1;
+    public float exposure; public uint light_count,directional_alias,directional_offset;
     public PtMediaParams media;
     public uint aov_albedo,aov_normal,aov_depth,aov_position,aov_material,aov_pad0,aov_pad1,aov_pad2;
 };
@@ -126,11 +126,17 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         }
     } else if(choice==2 && p.light_count>0) {
         DeSceneConstants sc=de_robuffer<DeSceneConstants>(query.scene)[query.view];
-        // One stable uniform proposal over authored slots; non-directional slots have zero response here.
-        uint index=min(uint(u.x*p.light_count),p.light_count-1);DeGpuLight l=de_robuffer<DeGpuLight>(sc.lights)[index];
+        // Remap the chosen third of the proposal variate before alias selection.
+        // Using separate correlated digital dimensions can bias the conditional choice.
+        float pick=frac(u.z*3)*p.light_count;
+        uint entry=min(uint(pick),p.light_count-1);
+        float4 a=de_robuffer<float4>(p.directional_alias)[p.directional_offset+entry];
+        uint index=frac(pick)<a.x?entry:asuint(a.z);
+        float pdf=de_robuffer<float4>(p.directional_alias)[p.directional_offset+index].y;
+        DeGpuLight l=de_robuffer<DeGpuLight>(sc.lights)[index];
         if(l.kind==DE_LIGHT_KIND_DIRECTIONAL && (l.flags&DE_GPU_LIGHT_LIVE)!=0) {
             wi=normalize(float3(l.transform[0].z,l.transform[1].z,l.transform[2].z));incident=l.color.rgb*l.color.w;
-            density=1.0/(3*p.light_count);casts=(l.flags&DE_GPU_LIGHT_CAST_SHADOWS)!=0;
+            density=pdf/3.0;casts=(l.flags&DE_GPU_LIGHT_CAST_SHADOWS)!=0;
             o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,1e6);
         }
     }
