@@ -211,10 +211,13 @@ typedef struct DeUiFocusable {
     de_entity up, down, left, right;
 } DeUiFocusable; /* null = spatial */
 /* Binds a widget property to a reflected field on another entity, e.g. "DeHealth.current". */
+typedef enum de_ui_binding_mode { DE_UI_BIND_ONE_WAY, DE_UI_BIND_TWO_WAY } de_ui_binding_mode;
 typedef struct DeUiBinding {
     de_entity source;
     char path[64];
     char property[32];
+    de_ui_binding_mode mode; /**< Zero: source to widget; TWO_WAY also accepts CHANGED. */
+    char format[32]; /**< Optional S28 inline message pattern, with argument `value`. */
 } DeUiBinding;
 /* Renders this UI subtree into the 3D world as a panel. */
 typedef struct DeUiWorldPanel {
