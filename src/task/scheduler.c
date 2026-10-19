@@ -672,6 +672,13 @@ de_result de_task_system_create(const de_task_system_desc *desc, de_task_system 
         if ((r = de_sem_init(&s->park, 0)) != DE_OK)
             goto fail;
         st.park_sems = i + 1;
+        /* A worker may not submit until well after application warm-up. Reserve
+         * its first record page now so nested work cannot trigger a first-use
+         * allocation merely because a different worker runs this frame. */
+        if (!de__slot_add_block(ts, s)) {
+            r = DE_ERR_OUT_OF_MEMORY;
+            goto fail;
+        }
     }
     for (u32 i = 0; i < DE__TASK_EXT_WAITERS; ++i) {
         if ((r = de_sem_init(&ts->ext_park[i], 0)) != DE_OK)

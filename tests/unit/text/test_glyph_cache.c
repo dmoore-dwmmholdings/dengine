@@ -186,8 +186,18 @@ typedef struct glyph_oom_context {
     u64 after_background, after_generated, after_pending;
     bool inline_pixels;
 } glyph_oom_context;
+static void hold_task_record(void *user) {
+    (void)user;
+}
+static void exhaust_initial_task_records(de_task_system *tasks) {
+    /* Creation now reserves 256 records per submitting slot. Keep those records
+     * queued on the main thread so this slot's next submit must allocate. */
+    for (u32 i = 0; i < 256; ++i)
+        de_task_submit(tasks, DE_TASK_POOL_MAIN_THREAD, hold_task_record, NULL, NULL);
+}
 static i32 external_glyph_oom(void *user) {
     glyph_oom_context *c = user;
+    exhaust_initial_task_records(c->fixture->t->glyph_cache->tasks);
     de_text__glyph_miss(c->fixture->t, c->fixture->cjk, c->glyph);
     return 0;
 }
@@ -205,7 +215,8 @@ static i32 glyph_oom_owner(void *user) {
     struct de__glyph_cache *cache = c->fixture->t->glyph_cache;
     de_task_system *original = cache->tasks;
     cache->tasks = tasks;
-    /* A fresh external slot has no records; only its allocator fails, not glyph memory. */
+    /* Exhaust the owner and external reserves; only the task allocator fails. */
+    exhaust_initial_task_records(tasks);
     de_tracking_allocator_fail_after(&tracking, 0);
     de_thread *external = NULL;
     i32 result = de_thread_create(external_glyph_oom, c, "glyph-external", DE_THREAD_NORMAL, 0,
@@ -222,6 +233,7 @@ static i32 glyph_oom_owner(void *user) {
     c->pending = before.runtime_pending;
     c->warnings = before.cap_warnings;
     c->failures = de_tracking_allocator_stats(&tracking).fail_count;
+    de_task_pump_main(tasks, 0);
     de_tracking_allocator_fail_after(&tracking, -1);
     for (u32 i = 0; i < 4 && de_text_get_stats(c->fixture->t).runtime_pending; ++i) {
         de_text_update(c->fixture->t);

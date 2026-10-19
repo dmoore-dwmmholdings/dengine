@@ -98,6 +98,8 @@ typedef struct de_task_system_desc {
  * Creates a task system and starts its threads. The calling thread becomes frame worker 0 (the
  * "main thread" of the system): only it may call de_task_pump_main() and
  * de_task_system_destroy(), and only it runs DE_TASK_POOL_MAIN_THREAD tasks.
+ * Reserves the first 256 task records for each submitting slot during creation;
+ * larger workloads can grow record pools and deques on demand.
  *
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT (`out` NULL); DE_ERR_BUSY (the calling thread is
  *         already the main thread or a worker of another live task system);
