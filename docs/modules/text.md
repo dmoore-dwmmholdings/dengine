@@ -32,8 +32,9 @@ Shaping validates UTF8 with U+FFFD replacement, itemizes font/script runs, and u
 HarfBuzz for glyph IDs, logical byte clusters, advances and offsets. Kerning,
 standard/contextual ligatures and contextual alternates can be disabled with
 `DE_TEXT_DISABLE_*`; language is BCP-47. Thread-local shaping buffers and striped
-bounded caches support worker callers. Combining-mark fallback itemization has a
-known source-review edge case (DENG-476).
+bounded caches support worker callers. Inherited combining marks stay with the
+preceding base font when it covers them, preserving a single shaping run. Marks
+that it cannot cover retain their resolved fallback font.
 
 An outline glyph absent from the cooked atlas queues one deduplicated background
 MTSDF job. `de_text_update` integrates completed jobs in deterministic order with

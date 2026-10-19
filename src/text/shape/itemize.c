@@ -70,8 +70,11 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
                     script == HB_SCRIPT_UNKNOWN;
         if (weak) {
             if (previous != HB_SCRIPT_UNKNOWN) {
+                bool inherited = script == HB_SCRIPT_INHERITED;
                 script = previous;
-                if (cp == 0x20 || cp == 0x09 || script == HB_SCRIPT_INHERITED)
+                /* Keep a covered mark in its base's shaping run; otherwise retain fallback. */
+                if (cp == 0x20 || cp == 0x09 ||
+                    (inherited && de_text__codepoint(de_text__font_get(t, previous_font), cp)))
                     font = previous_font;
             } else {
                 u32 look = at;

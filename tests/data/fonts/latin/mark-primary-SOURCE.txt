@@ -1,0 +1,5 @@
+Subset of the adjacent NotoSans.ttf under OFL.txt, retaining B and combining grave/acute.
+DENG-476 regression: the primary font covers inherited marks but lacks A; the full
+Noto Sans fallback covers A and both marks. This exercises real font fallback and shaping.
+Reproduce with fontTools.subset:
+python -m fontTools.subset NotoSans.ttf --unicodes=U+0042,U+0300-0301 --output-file=mark-primary.ttf --no-recalc-timestamp

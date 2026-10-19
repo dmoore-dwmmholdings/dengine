@@ -17,3 +17,5 @@ charset = "ascii"
 "font/devanagari" = {type="font", source="complex/devanagari.ttf", chars="क्षि"}
 "font/thai" = {type="font", source="complex/thai.ttf", chars="กำลัง"}
 "font/bitmap" = {type="font", source="latin/pixel.fnt", mode="bitmap"}
+
+"font/mark-primary" = {type="font", source="latin/mark-primary.ttf", chars="̀́"}
