@@ -337,7 +337,7 @@ static de__gi_gpu volume_gpu(const de__irradiance_snapshot *snapshot, const ddgi
     g.params[0] = snapshot->volume.intensity;
     g.params[1] = snapshot->volume.blend_distance;
     g.params[2] = v->layout.range;
-    g.params[3] = ready ? 1 : 0;
+    g.params[3] = ready ? 1.f : 0.f;
     return g;
 }
 static void barrier(de_gpu_cmd *cmd, de_gpu_buffer buffer, u32 before, u32 after) {
