@@ -41,13 +41,13 @@ typedef struct pt_view {
 } pt_view;
 struct de__pt {
     de_renderer *r;
-    de_gpu_pipeline pipeline, env;
+    de_gpu_pipeline pipeline, media_pipeline, env;
     de_gpu_buffer sampling_table;
     de__pt_media *media;
     de_cvar max_samples, seed, strategy, final_denoise, golden;
     de__pt_denoise *denoise;
-    bool pipelines_attempted;
-    de_result pipeline_result;
+    bool pipelines_attempted, media_pipeline_attempted;
+    de_result pipeline_result, media_pipeline_result;
     pt_view views[32];
 };
 f32 de__pt_power(f32 a, f32 b) {
@@ -88,6 +88,7 @@ void de__pt_destroy(de__pt *p) {
     de__pt_media_destroy(p->media);
     de__pt_denoise_destroy(p->denoise);
     de_gpu_pipeline_destroy(p->r->dev, p->pipeline);
+    de_gpu_pipeline_destroy(p->r->dev, p->media_pipeline);
     de_gpu_pipeline_destroy(p->r->dev, p->env);
     de_gpu_buffer_destroy(p->r->dev, p->sampling_table);
     DE_FREE(p->r->alloc, p, sizeof *p);
@@ -125,6 +126,26 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
                                                    .min = 0,
                                                    .max = 2});
     return DE_OK;
+}
+static de_gpu_pipeline rt_pipeline(de__pt *p, de_gpu_shader_blob ray, de_gpu_shader_blob miss,
+                                   de_gpu_shader_blob hit, de_gpu_shader_blob alpha,
+                                   const char *name) {
+    de_gpu_rt_hit_group group = {.closest_hit = hit, .any_hit = alpha};
+    de_gpu_rt_desc rt = {.raygen = ray,
+                         .miss = &miss,
+                         .miss_count = 1,
+                         .hit_groups = &group,
+                         .hit_group_count = 1,
+                         .max_recursion = 1,
+                         .payload_bytes = 64,
+                         .attribute_bytes = 8};
+    DE_INFO(p->r->log, "path tracer: compiling %s", name);
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        p->r->dev,
+        &(de_gpu_pipeline_desc){
+            .kind = DE_PIPE_RAYTRACING, .rt = &rt, .push_constant_bytes = 8, .name = name});
+    DE_INFO(p->r->log, "path tracer: %s %s", name, pipeline.id ? "ready" : "failed");
+    return pipeline;
 }
 static de_result pipelines(de__pt *p) {
     de_renderer *r = p->r;
@@ -167,20 +188,7 @@ static de_result pipelines(de__pt *p) {
         alpha = code.entries[3].blob;
         env = env_code.entries[0].blob;
     }
-    de_gpu_rt_hit_group group = {.closest_hit = hit, .any_hit = alpha};
-    de_gpu_rt_desc rt = {.raygen = ray,
-                         .miss = &miss,
-                         .miss_count = 1,
-                         .hit_groups = &group,
-                         .hit_group_count = 1,
-                         .max_recursion = 1,
-                         .payload_bytes = 64,
-                         .attribute_bytes = 8};
-    p->pipeline =
-        de_gpu_pipeline_create(r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_RAYTRACING,
-                                                               .rt = &rt,
-                                                               .push_constant_bytes = 8,
-                                                               .name = "PT iterative raygen"});
+    p->pipeline = rt_pipeline(p, ray, miss, hit, alpha, "PT iterative raygen");
     p->env = de_gpu_pipeline_create(r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
                                                                     .cs = env,
                                                                     .push_constant_bytes = 8,
@@ -221,6 +229,30 @@ de_result de__pt_prepare(de_renderer *r, const de_render_settings *settings) {
         }
     }
     return p->pipeline_result;
+}
+de_result de__pt_prepare_media(de_renderer *r) {
+#if DE_HAS_GPU_METAL
+    if (r->caps.backend == DE_GPU_METAL) {
+        de__pt *p = r->pt;
+        if (!p->media_pipeline_attempted) {
+            p->media_pipeline_attempted = true;
+            extern const unsigned char de__pt_metal_library[];
+            extern const unsigned long long de__pt_metal_library_bytes;
+            de_gpu_shader_blob ray = {de__pt_metal_library, de__pt_metal_library_bytes,
+                                      "pt_raygen_media"};
+            de_gpu_shader_blob miss = ray, hit = ray, alpha = ray;
+            miss.entry = "pt_miss";
+            hit.entry = "pt_closest";
+            alpha.entry = "pt_alpha";
+            p->media_pipeline = rt_pipeline(p, ray, miss, hit, alpha, "PT media raygen");
+            p->media_pipeline_result = p->media_pipeline.id ? DE_OK : DE_ERR_UNSUPPORTED;
+        }
+        return p->media_pipeline_result;
+    }
+#else
+    (void)r;
+#endif
+    return DE_OK;
 }
 static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
     if (v->handle.id == f->view.id && v->width == f->width && v->height == f->height)
@@ -283,6 +315,7 @@ typedef struct pt_pass {
     u32 pc[2];
     bool env, trace;
     de__pt_media_params media;
+    de_gpu_pipeline pipeline;
 } pt_pass;
 static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     (void)pass;
@@ -298,7 +331,7 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     }
     if (x->trace) {
         de__pt_media_begin(p->media, cmd, &x->media);
-        de_gpu_cmd_set_pipeline(cmd, p->pipeline);
+        de_gpu_cmd_set_pipeline(cmd, x->pipeline);
         de_gpu_cmd_push_constants(cmd, x->pc, sizeof x->pc);
         de_gpu_cmd_dispatch_rays(cmd, x->v->width, x->v->height, 1);
         de__pt_media_end(p->media, cmd, &x->media);
@@ -376,6 +409,14 @@ void de__pt_build(de__view_frame *f, void *user) {
     if (de__pt_media_frame(p->media, f, &media, &media_signature) != DE_OK) {
         f->graph->oom = true;
         return;
+    }
+    de_gpu_pipeline trace_pipeline = p->pipeline;
+    if (media.features && p->r->caps.backend == DE_GPU_METAL) {
+        if (de__pt_prepare_media(p->r) != DE_OK) {
+            f->graph->oom = true;
+            return;
+        }
+        trace_pipeline = p->media_pipeline;
     }
     const u64 signature = de__gpu_scene_source_signature(p->r->gpu_scene) ^
                           de__material_instances_epoch(p->r->material_instances) ^ media_signature;
@@ -467,7 +508,8 @@ void de__pt_build(de__view_frame *f, void *user) {
                    .pc = {de_gpu_buffer_bindless(p->r->dev, v->params), ring},
                    .env = env,
                    .trace = trace,
-                   .media = media};
+                   .media = media,
+                   .pipeline = trace_pipeline};
     de_rg_pass *pass = de_rg_add_pass(g, "PT.TraceAccumulate", DE_QUEUE_GRAPHICS, execute, x);
     if (!pass) {
         g->oom = true;

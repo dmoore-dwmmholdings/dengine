@@ -54,15 +54,16 @@ inline float3 pt_shadow_trace(constant DeRtHeap &heap,thread const PtParams_0 &p
     }
     return shadow.ptshadow_finished!=0?shadow.ptshadow_value:float3(0);
 }
-kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
-                      DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
-                      device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
+template<bool WithMedia>
+inline void pt_raygen_impl(constant DeRtHeap &heap,constant PtPush &pc,
+                      DeRtIntersectionTable intersections,DeRtVisibleTable functions,
+                      device const uint4 *sbt,uint3 id) {
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);if(id.x>=p.ptp_width||id.y>=p.ptp_height)return;
     uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel,&ctx);
     auto first=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
     pt_store_aov_0(&p,&r,&first,pixel,&ctx);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
-    if(p.ptp_media.ptm_features==0) {
+    if(!WithMedia) {
     for(uint bounce=0;bounce<p.ptp_max_bounces;++bounce) {
         auto h=bounce==0?first:pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
         auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
@@ -98,6 +99,16 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
     float3 previous_moments=p.ptp_sample?moments.read(id.xy).rgb:float3(0);
     moments.write(float4(pt_sample_moments_0(previous_moments,old.rgb/max(old.a,1.f),radiance,p.ptp_sample),0),id.xy);
     heap.storage[p.ptp_output].write(float4(sum.rgb/max(sum.a,1.f)*p.ptp_exposure,1),id.xy);
+}
+kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
+                      DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
+                      device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
+    pt_raygen_impl<false>(heap,pc,intersections,functions,sbt,id);
+}
+kernel void pt_raygen_media(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
+                      DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
+                      device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
+    pt_raygen_impl<true>(heap,pc,intersections,functions,sbt,id);
 }
 kernel void pt_env_cdf(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]]) {
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);device float2 *cdf=(device float2 *)heap.buffers[p.ptp_env_cdf];

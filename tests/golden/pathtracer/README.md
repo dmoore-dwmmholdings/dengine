@@ -11,6 +11,43 @@ For an explicit cross-backend comparison against those Metal images, run `python
 Scene FLIP thresholds are fixed in `tests/golden/scenes.toml` (mean .02, p99 .10). Reference files remain unfiltered. The separate final-denoise 16/4096-spp numerical test retains its original .05 mean criterion; a red result is tracked separately and does not justify changing references or thresholds.
 
 
+Native pipeline validation (DENG-455): the native Metal adapter has separate
+surface and media entry points backed by the same integrator implementation.
+The surface pipeline excludes the medium/SSS event loop. The media pipeline is
+created only when media are actually selected, then cached and reused across
+views and toggles. A failed media creation is cached independently and leaves
+the surface pipeline intact. Shared Slang material/transport estimators, shader validation and sampling are unchanged.
+
+The unchanged original Cornell control timed out at 300.04 seconds while creating
+the first instrumented RT pipeline, before any sample. A native stack sample
+locates the wait inside Metal/AGX linked-intersection shader compilation.
+With the entry-point split and normal inline traversal, the original strict
+4096-sample golden comparisons pass in 237.83 seconds (Cornell) and 72.32 seconds
+(gallery), both below the original 300-second per-test timeout. API and shader
+validation are enabled throughout. Independent ASan/UBSan strict runs pass in
+240.65 seconds and 73.63 seconds respectively, with PNG files byte-identical
+to the Dev captures and committed references. New regressions verify lazy media selection,
+reuse,
+accumulation resets on media toggles, and failure caching without losing the
+surface pipeline. Shared C owner code also compiles with Windows clang-cl.
+
+The two legacy Metal PNG references were captured before the corrected sampling,
+unlit-emission and receiver-origin transport fixes (`f5f55763`, `cbde1f11`). Their
+mean differences were .110726 (Cornell) and .036885 (gallery). Reviewed strict
+captures now replace those two PNGs. As a control, the pre-fix `442476c8` PT owner
+and native library, rebuilt into a standalone harness with API validation on
+and instrumentation off, produce PNG files byte-identical to both strict repaired
+captures. The pipeline repair itself therefore preserves these pixels. Scene,
+4096 samples, seed0, eight bounces, exposure1, denoise-off settings and the
+original .02/.10 image limits are preserved. The separate frozen unit-test
+`pt_cornell_4096.f32` oracle is unchanged; DENG-443 remains open.
+
+The Cornell capture contains 4096 geometry pixels, four material identities and
+normal span2. The gallery remains the original six white dielectric/metal furnace
+spheres in a uniform white environment: its near-white image has 1821 geometry
+pixels, six material identities and normal span1.98997. First-hit guide checks prove that the scenes are populated;
+independent Lambert/GGX furnace energy oracles are also retained.
+
 Final-denoise follow-up (DENG-454): the preparation pass estimates noise
 without an unconditional spatial box blur. Progressive path tracing records
 per-pixel Welford M2 independently for raw path radiance R/G/B. The existing
@@ -55,6 +92,6 @@ through 0.0986457165 after the first variance/preparation correction,
 0.0761701224 with measured luminance variance, and 0.0744708595 with the sample
 mean preserved, to 0.0630165582 with per-channel raw moments and noise-corrected
 RGB distance. It still fails the original 0.05 limit. Its 16/4096 sample counts,
-scene and numerical oracle are unchanged; reference energy remains 106.239134.
-The full-PT measurement has Metal API validation on and shader instrumentation
-off. DENG-455 remains open; this is not a validation-enabled PT golden pass.
+scene and numerical oracle are unchanged. Reference energy remains 106.239134.
+This unit comparison has Metal API validation on and shader instrumentation
+off. The strict full-PT golden verification above is separate.

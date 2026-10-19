@@ -755,3 +755,46 @@ TEST_F(pathtracer, lazy_pipeline_failure_cleans_partial_handles_and_is_cached, p
     EXPECT_EQ(de__pt_prepare(r, &selected), DE_OK);
     EXPECT_FALSE(de_gpu_device_is_lost(f->rt.d));
 }
+
+TEST_F(pathtracer, native_media_pipeline_is_lazy_and_reused, pt_fixture) {
+    if (de_gpu_get_caps(f->rt.d)->backend != DE_GPU_METAL)
+        SKIP("separate native Metal integrators only");
+    pt_frame(f);
+    u32 before = de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE);
+    pt_frame(f);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    ASSERT_TRUE(cvar_set("r.pt.fog.density", ".01"));
+    pt_frame(f);
+    EXPECT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 1u);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 1);
+    ASSERT_EQ(de__pt_prepare_media(f->rt.r), DE_OK);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 1);
+    ASSERT_TRUE(cvar_set("r.pt.fog.density", "0"));
+    pt_frame(f);
+    EXPECT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 1u);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 1);
+    ASSERT_TRUE(cvar_set("r.pt.fog.density", ".01"));
+    pt_frame(f);
+    EXPECT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 1u);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 1);
+    ASSERT_TRUE(cvar_set("r.pt.fog.density", "0"));
+}
+
+TEST_F(pathtracer, native_media_pipeline_failure_is_cached_without_losing_surface_pipeline,
+       pt_fixture) {
+    if (de_gpu_get_caps(f->rt.d)->backend != DE_GPU_METAL)
+        SKIP("separate native Metal integrators only");
+    pt_frame(f);
+    u32 before = de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE);
+    de_tracking_allocator_fail_after(&f->rt.dev_track, 0);
+    de_result result = de__pt_prepare_media(f->rt.r);
+    de_tracking_allocator_fail_after(&f->rt.dev_track, -1);
+    EXPECT_NE(result, DE_OK);
+    EXPECT_GT(de_tracking_allocator_stats(&f->rt.dev_track).fail_count, 0u);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    EXPECT_EQ(de__pt_prepare_media(f->rt.r), result);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    pt_frame(f);
+    EXPECT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 2u);
+    EXPECT_FALSE(de_gpu_device_is_lost(f->rt.d));
+}
