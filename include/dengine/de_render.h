@@ -38,6 +38,13 @@ typedef enum de_upscaler {
 } de_upscaler;
 typedef enum de_gi_mode { DE_GI_STATIC_PROBES, DE_GI_SCREEN_SPACE, DE_GI_RT } de_gi_mode;
 
+/** Linear-output UI calibration. Scene-linear1 denotes paper-white nits in HDR mode.
+ * Zero settings and SDR preserve a multiplier of1; this does not select a swapchain encoding. */
+typedef struct de_ui_output_calibration {
+    bool hdr;
+    f32 ui_white_nits, paper_white_nits;
+} de_ui_output_calibration;
+
 /**
  * What the renderer draws, and how well. de_renderer_set_settings clamps every field to the
  * device (see there); `(de_render_settings){0}` is valid (Base, every effect off, then clamped:
@@ -56,6 +63,7 @@ typedef struct de_render_settings {
     bool path_tracer;          /**< reference mode; requires the RT tier */
     u32 path_max_bounces;      /**< 1..64 */
     de_gi_mode gi_mode;        /**< Static volumes, screen-space plus volumes, or reserved RT. */
+    de_ui_output_calibration ui_output; /**< Copied with the frame settings. */
 } de_render_settings;
 
 /**
@@ -352,7 +360,8 @@ typedef enum de_rg_hook {
     DE_HOOK_AFTER_TRANSPARENT,
     DE_HOOK_BEFORE_TONEMAP,
     DE_HOOK_AFTER_TONEMAP,
-    DE_HOOK_UI
+    DE_HOOK_UI,
+    DE_HOOK_PIXEL_UI /**< Internal tonemapped pixels, before palette and upscale. */
 } de_rg_hook;
 typedef void (*de_rg_hook_fn)(de_rg *g, de_view v, void *user);
 /**
@@ -376,6 +385,47 @@ DE_API void de_render_add_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, 
 DE_API de_rg_resource de_view_color(de_renderer *r, de_view v);
 /** Inside a hook for `v`: the view's internal size in pixels; 0 x 0 anywhere else. */
 DE_API void de_view_size(de_renderer *r, de_view v, u32 *width, u32 *height);
+
+/* Public custom-pass support (DENG-317); no renderer-private headers required. */
+DE_API de_gpu_device *de_renderer_device(de_renderer *r);
+/** Main thread. Creates a caller-owned pipeline from engine-builtin shader code and state.
+ * The wrapper owns/frees temporary code. Only vs/ps are supplied; state.vs/ps are ignored. */
+DE_API de_result de_render_builtin_graphics_pipeline(de_renderer *r, const char *name,
+                                                     u32 permutation, const char *vs_entry,
+                                                     const char *ps_entry,
+                                                     const de_gpu_pipeline_desc *state,
+                                                     de_gpu_pipeline *out);
+/** Main thread. Removes matching callback/user and drains outstanding render/GPU work.
+ * Once returned the callback's user storage may be destroyed. Never call from a render hook. */
+DE_API de_result de_render_remove_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, void *user);
+typedef struct de_render_hook_info {
+    de_gpu_format color_format;
+    u32 width, height, ring_index, frames_in_flight;
+    u64 frame_index, extract_frame;
+    f32 ui_white_multiplier;
+} de_render_hook_info;
+/** Only inside a hook for this view. The renderer has waited for the fence of ring_index;
+ * render-thread upload buffers indexed by it may be rewritten until their next submission. */
+DE_API bool de_view_hook_info(de_renderer *r, de_view view, de_render_hook_info *out);
+/** Main thread. Both nits values must be finite and positive, including SDR configurations. */
+DE_API de_result de_renderer_set_ui_output(de_renderer *r, const de_ui_output_calibration *value);
+DE_API de_ui_output_calibration de_renderer_get_ui_output(de_renderer *r);
+
+/** Main-thread loaded texture query. Invalid/stale/unloaded handles return zero. */
+DE_API de_gpu_texture de_render_texture_gpu(de_renderer *r, de_texture texture);
+/** Allocation-free pins for typed asset handles belonging to this renderer's asset system.
+ * Pins retain the slot generation against normal eviction; balance every successful pin.
+ * Main thread. A pin is not a promise that hot reload preserves the old object. */
+DE_API bool de_render_pin_asset(de_renderer *r, u32 typed_handle);
+DE_API void de_render_unpin_asset(de_renderer *r, u32 typed_handle);
+/** Submitted frame-fence values are frame_index+1. Zero explicitly means no submission. */
+DE_API u64 de_renderer_completed_frame(de_renderer *r);
+DE_API de_result de_renderer_wait_frame(de_renderer *r, u64 fence_value);
+
+/** Main Extract only, after de.render.extract_views. Zero means no immutable frame is filling. */
+DE_API u64 de_renderer_extract_frame(de_renderer *r);
+/** Monotonic CPU-completed immutable Extract token. Zero means none; GPU lifetime is separate. */
+DE_API u64 de_renderer_completed_extract_frame(de_renderer *r);
 
 /* ---------- Tonemappers (pluggable) ---------- */
 typedef enum de_builtin_tonemapper {
@@ -599,6 +649,68 @@ typedef struct de_pixel_art_settings {
  * output/UI remain at the view's viewport resolution. */
 DE_API void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_settings *s);
 DE_API void de_render_set_2d_plane(de_renderer *r, de_plane_2d plane);
+
+/* DENG-322: immutable view data and forward-pass participants. */
+typedef struct de_view_frame_info {
+    de_view view;
+    u64 frame_index, extract_frame;
+    u32 ring_index, frames_in_flight, layer_mask;
+    de_dvec3 render_origin;
+    de_mat4 view_matrix, projection, view_projection;
+    u32 internal_width, internal_height, output_width, output_height;
+    de_vec4 viewport_px, content_px;
+    bool pixel_art;
+    de_pixel_art_settings pixel;
+    de_vec2 pixel_residual;
+} de_view_frame_info;
+/** Inside this view's render hook. Metadata is frozen with the immutable Extract frame. */
+DE_API bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_info *out);
+/** Main Extract after de.render.extract_views. Submission frame/ring are UINT64_MAX/UINT32_MAX
+ * until rendering. View configuration and pixel fit stay frozen for this exact Extract token. */
+DE_API bool de_renderer_extract_view_info(de_renderer *r, de_view view, de_view_frame_info *out);
+
+typedef struct de_forward_context de_forward_context;
+typedef struct de_forward_item {
+    de_vec3 center_relative; /**< Relative to the context's immutable render origin. */
+    u64 entity;
+    u32 item_index; /**< Caller-owned index into its immutable Extract packet. */
+    i16 layer, order;
+    bool always_on_top; /**< Final overlay group, after depth-sorted participants and meshes. */
+} de_forward_item;
+typedef u32 (*de_forward_gather_fn)(const de_forward_context *context, de_forward_item *out,
+                                    u32 capacity, void *user);
+typedef de_result (*de_forward_build_fn)(de_rg *graph, const de_forward_context *context,
+                                         const de_forward_item *item, void *user);
+typedef struct de_forward_participant_desc {
+    u32 max_items; /**< 1..65536; total registered capacity cannot exceed 65536. */
+    de_forward_gather_fn gather;
+    de_forward_build_fn build;
+    void *user;
+} de_forward_participant_desc;
+/** Main thread; bounded registry (16). Callbacks read immutable packets only, never ECS/assets.
+ * Gather returns a count <= capacity; a larger count refuses that participant's whole batch.
+ * Build inserts passes at the item's shared mesh-transparency position. Their data must remain
+ * valid through the renderer frame fence. Equal keys retain registration/item order. */
+DE_API de_result de_render_add_forward_participant(de_renderer *r,
+                                                   const de_forward_participant_desc *desc);
+/** Main thread. Removes the matching registration and drains CPU render and GPU work. */
+DE_API de_result de_render_remove_forward_participant(de_renderer *r, de_forward_gather_fn gather,
+                                                      void *user);
+DE_API bool de_render_forward_view_info(const de_forward_context *context, de_view_frame_info *out);
+DE_API de_rg_resource de_render_forward_color(const de_forward_context *context);
+DE_API de_rg_resource de_render_forward_depth(const de_forward_context *context);
+/** Declare on each participant pass. Includes the same lighting/shadow/IBL/GI dependencies as
+ * ordinary forward meshes, and read/write colour ordering. Depth is optional, never written. */
+DE_API void de_render_forward_declare(de_rg_pass *pass, const de_forward_context *context,
+                                      bool depth_test);
+typedef struct de_forward_shader_bindings {
+    u32 scene_views, scene_view_slot, lighting_constants, lighting_entry;
+    u32 lights, dir_lights, grid, list, counters, ltc1, ltc2, ltc_sampler;
+} de_forward_shader_bindings;
+/** Execute callback only, after declare. Bindings match lighting_common.slang's DeLightingView
+ * and DeClusterLists. The constants and resource lifetime belong to this immutable frame. */
+DE_API bool de_render_forward_bindings(const de_forward_context *context, const de_rg_pass *pass,
+                                       de_forward_shader_bindings *out);
 
 /* ---------- World systems (SPEC §12.13); configured through components ---------- */
 typedef struct DeSky {

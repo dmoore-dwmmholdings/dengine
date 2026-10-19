@@ -172,6 +172,10 @@ typedef struct de__render_world_frame {
     de_dvec3 origin;     /**< the render origin (f64 world position) */
     bool origin_changed; /**< rebased this frame (also the first frame): everything changed */
 
+    u32 frozen_view_count;
+    de_view_frame_info frozen_views[32];
+    de_render_settings frozen_settings[32];
+    de_gpu_texture frozen_targets[32];
     u32 view_count;
     u32 main_view; /**< index into views, DE__RW_NONE without a camera */
     de__rw_view *views;
@@ -244,6 +248,7 @@ typedef struct de__render_thread {
     de_atomic_u32 stop;        /**< 1: the thread exits at its next wake-up */
     de_atomic_u64 rendered;    /**< frames finished by the render thread */
     de_atomic_u32 last_result; /**< de_result of the last frame it rendered */
+    de_atomic_u64 completed_extract; /**< Last CPU-finished immutable frame, zero before first. */
 } de__render_thread;
 
 /* ---------- The render world of one renderer ---------- */

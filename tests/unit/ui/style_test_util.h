@@ -4,6 +4,22 @@
 #include "ui/style/stylesheet_internal.h"
 static inline de_result style_install(de_ui *ui, const char *source) {
     de_ui_style_system *state = ui->style;
+    /* Isolate cascade tests from the separately verified embedded widget theme. */
+    if (state->builtin_count) {
+        u32 builtin = state->builtin_count;
+        for (u32 i = 0; i < builtin; ++i) {
+            de_ui_style_sheet_slot *slot = &state->sheets[i];
+            if (slot->compiled)
+                DE_FREE(ui->alloc, slot->compiled,
+                        (u64)slot->sheet->rule_count * sizeof *slot->compiled);
+            de_ui__sheet_release(slot->sheet);
+        }
+        memmove(state->sheets, state->sheets + builtin,
+                (state->sheet_count - builtin) * sizeof state->sheets[0]);
+        state->sheet_count -= builtin;
+        state->builtin_count = 0;
+    }
+
     if (state->sheet_count >= DE_UI_STYLE_SHEETS)
         return DE_ERR_OUT_OF_MEMORY;
     de_ui_style_sheet_slot slot = {0};

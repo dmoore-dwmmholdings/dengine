@@ -23,6 +23,7 @@
 #include "render/sprite/sprite_internal.h"
 
 #include <string.h>
+#include "render/views_internal.h"
 
 #define SYS_VIEWS  "de.render.extract_views"
 #define SYS_MESHES "de.render.extract_meshes"
@@ -167,6 +168,7 @@ static void sys_views(de_system_ctx *ctx) {
     if (vc.dropped > 0)
         DE_ERROR(rw->log, "render world: %u cameras dropped in frame %llu", vc.dropped,
                  (unsigned long long)rw->frame);
+    de__views_freeze(rw->r, f);
     de_query_each(ctx->world, ctx->queries[1], fill_environment, f);
     f->probe_count = 0;
     de_query_each(ctx->world, ctx->queries[2], fill_probes, f);

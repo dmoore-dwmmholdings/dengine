@@ -114,3 +114,201 @@ Stylesheet verification: Dev CTest passes 22/23 cases, with DENG-511 retained as
 a failing regression. ASan/UBSan passes 21/23: the same regression plus the 1 ms
 theme benchmark (8.524 ms under instrumentation; Dev is 0.539 ms). Public C11/C++17
 headers, layering, and all 11 unique UI C sources compile with render/GPU disabled.
+
+## Retained rendering (DENG-317)
+
+PostUpdate `ui.draw_list`, after layout, builds per-root commands in stable
+(root order, popup layer, z order, tree order). Descendant opacity multiplies;
+`clip` intersects an axis-aligned scissor with its parent. Rounded clip masks
+remain unsupported. Commands include SDF rounded fill/border, tinted image,
+CPU-expanded 9-slice image, and cached MSDF/bitmap text quads. Resolved stylesheet
+background images/nine-slice values use the same image path. `text_common.slang`
+is shared with ordinary text rendering. Per-root metadata distinguishes screen
+and future world-panel routing without a renderer reading the UI hierarchy.
+
+`ui.extract` is the only handoff from simulation commands to immutable render
+packets. Four packets are keyed by the actual renderer Extract token, so a
+future published UI update cannot replace the world frame being rendered. Slot
+pins keep ordinary image/font generations alive after load release or entity
+despawn; retirement waits for the packet's actual submitted GPU fence. Frames
+that never invoke a UI hook retire against the CPU-completed Extract token.
+When no packet is free, the newest UI update is dropped rather than overwriting
+pending data. Existing same-slot hot reload can still retire a GPU generation
+from an unsent packet; that separate resource-lease defect is DENG-514.
+
+The public `DE_HOOK_UI` consumer uses one bindless pipeline and instanced quads
+batched by contiguous scissor runs, on the tonemapped full-resolution target.
+Each renderer upload-ring slot is written only after its reuse fence completes.
+UI code includes public renderer APIs only: device and builtin pipeline access,
+hook removal/drain, hook frame/format information, typed asset pins and texture
+lookup. UI must be destroyed before its text system, renderer and asset system.
+The internal widget emitter runs after node backgrounds/images and before text;
+it automatically preserves the node's opacity, clip and ordering context.
+
+Set `ui.render.max_quads` before UI creation to size CPU/GPU storage (default
+65536). Runtime lowering also truncates; increasing beyond allocated storage
+requires recreating the UI. Overflow logs once and records truncation.
+`de_ui_get_render_stats` exposes quads, draw calls, roots, truncation and build +
+Extract CPU time. Static warmed UI has no per-frame heap allocations; changed
+text/layout cache entries can allocate and are not included in that claim.
+
+`de_renderer_set_ui_output` validates finite positive UI-white and paper-white
+nits. SDR/zero settings preserve scale 1. HDR linear output multiplies UI RGB by
+UI-white/paper-white while preserving premultiplied alpha. Calibration is copied
+with renderer frame settings. Actual floating-target tests at 80/203/400 nits,
+including half-alpha composition, validate this linear brightness contract.
+This is **not** qualification of the absent S18 PQ/scRGB swapchain encoders,
+HDR metadata, or a physical display.
+
+Host evidence: 10/10 draw tests; five Metal goldens repeat with FLIP mean/p99/max
+zero at unchanged .001/.015 limits; the deliberate wrong-reference control
+fails. Actual Metal 2000-widget HUD: 2001 quads, one draw, 0.1141 ms build +
+Extract. Static CPU 2000-widget HUD: 1000 frames with zero allocations, mean
+0.0764 ms. M1-specific timing and Vulkan/D3D12 remain needs-hw-verify. Known
+stylesheet transition regression DENG-511 remains separate; visible font
+ligature loss DENG-512 and plain-fill seams DENG-513 are retained in references.
+Metal shader-instrumented renderer setup has known timeout DENG-508; these
+native comparisons do not claim that instrumented suite passed.
+
+## Basic widget provider (DENG-318)
+
+Widgets remain plain reflected components on retained nodes: Text, Image, Button,
+Toggle, Slider and Progress. `ui.widgets` runs before styles/layout, installs basic
+widget tags and synchronizes button disabled state. Advanced tags (input and later
+values) remain owned by advanced widget registration even when they carry text or
+image content. `ui.pointer` runs in PreUpdate after the host updates input. Cursor
+logical points convert to physical pixels using the actual window's two sizes.
+`de_ui_pointer_consumed` tells gameplay when UI owns the hit/capture.
+
+The internal contract in `widgets/widgets_internal.h` is shared by later S29 work:
+
+- `de_ui__widget_table(ui)` returns the fixed per-UI entry table. Each type has
+  optional `submit`, `increment`, `decrement`, `cancel` functions taking `(ui, entity)`.
+  Basic widgets install button/toggle submit and slider increment/decrement. DENG-319
+  owns advanced entry registration. DENG-320 calls entries without linking widget
+  implementation symbols. The optional `scroll_into_view(ui, container, child)` is
+  initially NULL; DENG-319 installs it and callers check it before use.
+- `de_ui__hit_test(ui, root, root_local_pixels)` consumes the renderer's exact
+  retained order, inherited axis-aligned clips and popup layers in reverse order.
+  A zero root targets screen roots; a named root takes root-local physical pixels.
+  Text inside an actionable ancestor targets that ancestor. Hidden/disabled
+  ancestors reject their entire subtree.
+- `de_ui__pointer_route` exposes press/release/down routing for root-local sources
+  such as world-panel rays. Capture lasts until release; a click requires the same
+  enabled target on press and release. Slider capture clamps and snaps its value.
+- `de_ui__widget_event` sends the public `de_ui_event`. Buttons send CLICK with
+  their authored action, toggles send CHANGED with0/1, sliders with the actual value.
+  These are the same payloads used by later navigation and data binding.
+- The renderer's optional CPU node emitter is registered after render attach and
+  re-registered on reattach. Widget fills/knobs inherit the node's clip, opacity and
+  order and enter the immutable Extract packet before text. No GPU draw reads ECS.
+
+The default TOML sheet embeds at build time and loads at UI create. It uses the
+existing blue tokens,8px spacing and6px corners; no font asset/size is imposed.
+Later sheets override the defaults. Text resolves through public `de_loc`, and
+locale generation marks localized nodes dirty after ready tables publish.
+
+This is a coherent implementation provider; final DENG-318 native state-sheet
+verification and full acceptance handoff are still pending. Known strict regressions
+remain tracked as DENG-515 (first-repeat/full-tree layout cost), DENG-516 (explicit
+basic selector tag without its corresponding behavior component), and DENG-511
+(interrupted state transition from the preceding issue).
+
+DENG-318 final verification: all8 new acceptance cases pass in Dev: synthetic
+capture/click actions; clips/z-order/popups/root-local hit; disabled state;37% slider
+snapping/clamping/change events; table callbacks; actual progress fills/reattach;
+500widgets×1000frames with zero steady-state heap allocations; and an asynchronous
+real locale READY switch that relayouts only the localized nodes and ancestors.
+The full Dev suite passes28/31, retaining DENG-511/515/516 as strict failures.
+Seven new cases pass the initial ASan/UBSan aggregate; the locale case passes its
+isolated rerun after correcting that new test's cleanup to match host text-before-
+assets shutdown. DENG-517 tracks the unchanged legacy fixture's inverse order.
+ASan aggregate timing remains separately qualified (theme1ms budget under Dev).
+Public headers/layering and all21 unique UI C sources compile with render/GPU off.
+The actual Metal widget state sheet passes capture and strict comparison with FLIP0,
+and the native visual review is accepted. No global suite or CI repair loop was run.
+
+### Navigation (DENG-320)
+
+Add `DeUiFocusable` to each navigable node. `tab_index` sorts Tab/shoulder traversal, then
+hierarchy insertion order; negative values opt out of Tab but remain explicitly focusable.
+Directional links override geometric selection. Otherwise navigation compares rect edge gaps
+in the requested half-plane (primary gap + twice the perpendicular gap), with stable tree
+order for ties and no implicit spatial wrap. Hidden or disabled ancestors exclude descendants.
+A visible modal `DeUiPopup` traps navigation in its subtree; hiding/despawning it restores the
+previous live, eligible focus. Nested popup cancellation unwinds one scope at a time.
+
+`de_ui_set_focus` changes logical focus and emits FOCUS/BLUR. `DeUiInteractionState.focused`
+also remains logical, including in mouse mode, so text editors keep their active selection.
+`de_ui_focus_visible` separately reports keyboard/gamepad ring visibility. Mouse movement hides
+only the stylesheet's `:focus` selector; the next navigation/activation restores it. Default
+button/toggle/slider rings use a 2-pixel foreground border (3.27:1 against the primary blue,
+above 3:1 against the surface). Existing widget hover/pressed/disabled transitions remain.
+
+At attach, UI creates a rebindable normal action map named `ui` only when absent. A preloaded
+map is preserved. Its navigate/submit/cancel/tab_next/tab_prev/scroll actions bind arrows,
+Enter/Space/Escape/Tab/Shift+Tab and gamepad d-pad/left stick/south/east/shoulders/right stick;
+pointer_motion is an additional recordable mouse-delta action. `de_ui_set_input_mode` selects
+NONE, NON_MODAL (default passthrough) or MODAL (consumes bound input). Modal popups temporarily
+force consumption. UI pops only a context it pushed and restores preexisting map flags at
+detach. The input object must outlive UI; UI attaches it if the world has no input resource
+and detaches only that owned attachment.
+
+`ui.actions` reads public resolved actions in main-thread FixedUpdate after `input.fixed_tick`.
+`ui.focus` applies the staged samples in PostUpdate after widget reconciliation and before
+style/layout. This uses S21's actual tick replay view: a frame with zero fixed ticks retains
+pending input for the next tick; multiple fixed ticks do not duplicate a press. Repeat time
+is accumulated from fixed deltas (400 ms initial delay, then 80 ms), never the wall clock.
+The preallocated queue holds at least 256 ticks (or max_nodes when larger); drain PostUpdate
+between larger catch-up batches. Overflow reports an error rather than allocating.
+
+Activation and slider adjustments call the stable widget entry table. Its nullable
+scroll_into_view hook receives the nearest scroll/list ancestor on focus changes; advanced
+controls register their own actions and scrolling implementation. No scroll stub is linked.
+`test_menu_replay.c` is an executable sample menu using real button/toggle/slider components:
+a gamepad walks Play, Music, Volume and Quit, cancels a modal confirmation, then confirms exit.
+The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world with no devices,
+and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
+Later advanced-widget walkthrough extensions use the same table and recording schema.
+
+### Data binding (DENG-321)
+
+Attach `DeUiBinding` to a widget, with its source entity, a path such as
+`BindData.current` or `BindInventory.slots.2.count`, and a property. Dotted numeric
+indices adapt to the reflection API's bracket form (`slots[2].count`); all actual
+schema lookup, bounds, nested fields and flags use `de_reflect_resolve_path`.
+Properties are `value` (slider/progress), `on` (toggle), `text`, `visible`
+(NONE/FLEX), `disabled`, `opacity`, and `tint` (image tint, text color or panel fill).
+Scalar properties convert bool, signed/unsigned integers and f32/f64. Tint accepts
+vec4/color. Text copies inline strings into UI-owned storage, resolves names through
+`de_loc`, and formats numeric values with optional `format[32]`, for example
+`{value, number, integer} / 100`. Numeric inline formats reuse S28's message engine;
+no expression language or reflection parser is embedded in UI. Default integer
+text preserves the complete signed/unsigned64 range. S28's optional numeric format
+uses a floating argument for unsigned values above INT64_MAX, with f64 precision.
+
+Bindings default to ONE_WAY. TWO_WAY also reads normal widget CHANGED events in
+main-thread PostUpdate and writes the reflected source with `de_entity_get` and
+`de_entity_mark_changed`; READONLY fields are always protected. The next gameplay
+Update's changed query observes the write. Editor integration is generic: committed
+`DeUiTextInput.buffer/length` fields resolve through reflection, independently of
+password/preedit display text, and a nullable widget-table `refresh_text` callback
+updates display after an external buffer change. No advanced-widget code is linked
+from the binding module; the actual text-input integration case follows DENG-319.
+
+`ui.binding` runs after widget/navigation actions and before style/layout. Each
+binding caches its descriptor, resolved component/field/offset and a byte copy of
+the source leaf. Unchanged source bytes avoid mutable component access and layout
+invalidation. Locale publication refreshes localized/formatted text even if source
+bytes did not change. Any successful type registry publication invalidates both
+valid and errored caches, including moved offsets and metadata-only changes.
+Invalid paths/kinds/formats log once per binding/configuration/revision and disable
+that binding until a descriptor or registry change. A dead/missing source simply
+idles and preserves the last visible value. Text and byte spans live in a per-UI
+arena, reused when capacity suffices; they remain valid through detach and end at
+UI destruction. The warmed idle frame path performs no heap allocations.
+
+Focused binding tests cover all numeric kinds, extreme64-bit text, every property,
+nested/array paths, `42 / 100`, actual slider/toggle writeback plus changed queries,
+readonly fields, schema/metadata replacement, warning-once errors, source despawn,
+real cooked locale publication, and1000 idle bindings within0.2ms in Dev.

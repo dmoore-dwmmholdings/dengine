@@ -112,3 +112,5 @@ de_engine_shader(text_msdf text/msdf.slang)
 de_engine_shader(text_bitmap text/bitmap.slang)
 de_engine_shader(text_upload text/atlas_upload.slang)
 de_engine_shader(pixel_palette pixel/palette_dither.slang)
+# DENG-317 bindless retained UI (rounded rect/image/MSDF and bitmap text).
+de_engine_shader(ui ui/ui.slang)

@@ -24,6 +24,7 @@
  * eight opaque-depth steps, and direction-correct raw probe/sky fallback beyond the viewport.
  */
 #include "render/passes/forward/forward.h"
+#include "render/passes/forward/forward_participants.h"
 #include "render/passes/forward/scene_color_pyramid.h"
 #include "render/rt/rt_refraction.h"
 
@@ -61,7 +62,7 @@ typedef struct fw_pass {
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     const de__forward_draw *draws;
     de_rg_resource indirect, indices;
-    u32 draw_count;
+    u32 draw_count, first_draw;
     de__rt_refraction_frame *rt;
 } fw_pass;
 
@@ -247,8 +248,9 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
             de_gpu_cmd_set_pipeline(cmd, p->fw->capture);
             memcpy(push, &pc, sizeof pc);
             de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
-            de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect), (u64)i * 20u,
-                                             (de_gpu_buffer){0}, 0, 1);
+            de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect),
+                                             (u64)(p->first_draw + i) * 20u, (de_gpu_buffer){0}, 0,
+                                             1);
             de_gpu_cmd_end_render(cmd);
             de__rt_refraction_trace(cmd, p->rt, &pc);
             de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
@@ -256,13 +258,41 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         }
         memcpy(push, &pc, sizeof pc);
         de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
-        de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect), (u64)i * 20u,
-                                         (de_gpu_buffer){0}, 0, 1);
+        de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect),
+                                         (u64)(p->first_draw + i) * 20u, (de_gpu_buffer){0}, 0, 1);
         if (p->rt)
             de_gpu_cmd_end_render(cmd);
     }
     if (!p->rt)
         de_gpu_cmd_end_render(cmd);
+}
+
+static de_result add_mesh_run(de_rg *g, de__vis_context *vc, de__lighting_context *lc,
+                              fw_pass *pd) {
+    de_rg_pass *p = de_rg_add_pass(g, "forward.transparent", DE_QUEUE_GRAPHICS, draw_execute, pd);
+    if (!p)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: draw pass");
+    de__rt_refraction_declare(pd->rt, p);
+    de_rg_read(p, pd->indirect, DE_ACCESS_INDIRECT);
+    de_rg_read(p, pd->indices, DE_ACCESS_SHADER_READ);
+    de_rg_read(p, lc->target, DE_ACCESS_RENDER_TARGET);
+    de_rg_write(p, lc->target, DE_ACCESS_RENDER_TARGET);
+    /* The pipeline writes no depth, but the attachment is bound in its write layout. */
+    de_rg_read(p, vc->depth, DE_ACCESS_DEPTH_READ);
+    de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_READ | DE_ACCESS_DEPTH_WRITE);
+    de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
+    const de_rg_resource tables[3] = {vc->scene_instances, vc->scene_meshes, vc->scene_materials};
+    for (u32 i = 0; i < 3; ++i)
+        if (DE_HANDLE_VALID(tables[i]))
+            de_rg_read(p, tables[i], DE_ACCESS_SHADER_READ);
+    de__forward_declare_lighting(p, lc);
+    if (DE_HANDLE_VALID(pd->scene_color)) {
+        de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
+        if (pd->scene_depth.id)
+            de_rg_read(p, pd->scene_depth, DE_ACCESS_SHADER_READ);
+    }
+
+    return DE_OK;
 }
 
 de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
@@ -287,7 +317,25 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                                      .view_matrix = vc->view_matrix};
     de__transparent_item *items = NULL;
     de__transparent_counts counts = {0};
-    const u32 n = de__transparent_gather(&tv, vc->arena, &items, &counts);
+    u32 n = de__transparent_gather(&tv, vc->arena, &items, &counts);
+    de_forward_context *participant_context =
+        de_arena_push_zero(vc->arena, sizeof *participant_context, 16);
+    if (!participant_context)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward participant context");
+    participant_context->renderer = fw->vis->renderer;
+    participant_context->vis = vc;
+    participant_context->lighting = lc;
+    if (!de_view_frame_info_get(fw->vis->renderer, vc->view, &participant_context->info))
+        participant_context->info = (de_view_frame_info){.view = vc->view,
+                                                         .frame_index = vc->frame_index,
+                                                         .extract_frame = world->frame,
+                                                         .render_origin = world->origin,
+                                                         .view_matrix = vc->view_matrix,
+                                                         .projection = vc->proj,
+                                                         .view_projection = vc->view_proj,
+                                                         .internal_width = vc->width,
+                                                         .internal_height = vc->height};
+    DE_TRY(de__forward_collect(participant_context, &items, &n));
     if (counts.allocation_failed)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: transparent gather");
     if (n == 0)
@@ -305,6 +353,11 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
     bool transmissive = false;
     for (u32 i = 0; i < n; ++i) {
         const de__transparent_item *it = &items[i];
+        if (it->participant) {
+            draws[nd++] = (de__forward_draw){.participant = it->participant,
+                                             .participant_item = it->participant_item};
+            continue;
+        }
         if (it->flags & DE__FWD_ITEM_DOUBLE_SIDED)
             draws[nd++] = (de__forward_draw){.instance = it->instance,
                                              .side = DE__FWD_SIDE_BACK,
@@ -414,53 +467,28 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
 
     if (fw->capture.id && fw->vis->renderer && transmissive && pd->pc.refraction)
         pd->rt = de__rt_refraction_prepare(fw->vis->renderer->rt_refraction, g, vc, lc);
-    de_rg_pass *p = de_rg_add_pass(g, "forward.transparent", DE_QUEUE_GRAPHICS, draw_execute, pd);
-    if (!p)
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: draw pass");
-    de__rt_refraction_declare(pd->rt, p);
-    de_rg_read(p, pd->indirect, DE_ACCESS_INDIRECT);
-    de_rg_read(p, pd->indices, DE_ACCESS_SHADER_READ);
-    de_rg_read(p, lc->target, DE_ACCESS_RENDER_TARGET);
-    de_rg_write(p, lc->target, DE_ACCESS_RENDER_TARGET);
-    /* The pipeline writes no depth, but the attachment is bound in its write layout. */
-    de_rg_read(p, vc->depth, DE_ACCESS_DEPTH_READ);
-    de_rg_write(p, vc->depth, DE_ACCESS_DEPTH_READ | DE_ACCESS_DEPTH_WRITE);
-    de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
-    const de_rg_resource tables[3] = {vc->scene_instances, vc->scene_meshes, vc->scene_materials};
-    for (u32 i = 0; i < 3; ++i)
-        if (DE_HANDLE_VALID(tables[i]))
-            de_rg_read(p, tables[i], DE_ACCESS_SHADER_READ);
-    const de_rg_resource reads[8] = {lc->lights,   lc->dir_lights, lc->grid_buf, lc->list,
-                                     lc->counters, lc->ltc1,       lc->ltc2,     lc->strip};
-    for (u32 i = 0; i < 8; ++i)
-        if (DE_HANDLE_VALID(reads[i]))
-            de_rg_read(p, reads[i], DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->shadow_records))
-        de_rg_read(p, lc->shadow_records, DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->atlas_records))
-        de_rg_read(p, lc->atlas_records, DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->atlas_texture))
-        de_rg_read(p, lc->atlas_texture, DE_ACCESS_SHADER_READ);
-    for (u32 i = 0; i < lc->shadow_texture_count; ++i)
-        de_rg_read(p, lc->shadow_textures[i], DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->gi_records))
-        de_rg_read(p, lc->gi_records, DE_ACCESS_SHADER_READ);
-    for (u32 i = 0; i < lc->gi_texture_count; ++i) {
-        de_rg_read(p, lc->gi_textures[i], DE_ACCESS_SHADER_READ);
-        de_rg_write(p, lc->gi_textures[i], DE_ACCESS_SHADER_WRITE);
-    }
-    for (u32 i = 0; i < lc->gi_buffer_count; ++i)
-        de_rg_read(p, lc->gi_buffers[i], DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->probe_records))
-        de_rg_read(p, lc->probe_records, DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(lc->probe_list))
-        de_rg_read(p, lc->probe_list, DE_ACCESS_SHADER_READ);
-    for (u32 i = 0; i < lc->probe_texture_count; ++i)
-        de_rg_read(p, lc->probe_textures[i], DE_ACCESS_SHADER_READ);
-    if (DE_HANDLE_VALID(pd->scene_color)) {
-        de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
-        if (pd->scene_depth.id)
-            de_rg_read(p, pd->scene_depth, DE_ACCESS_SHADER_READ);
+    /* Each mesh run and participant writes the same target. Render-graph hazards preserve
+     * the single shared order, including the existing per-mesh RT refraction capture path. */
+    for (u32 i = 0; i < nd;) {
+        if (draws[i].participant) {
+            const de_forward_participant_desc *d =
+                &participant_context->participants[draws[i].participant - 1];
+            DE_TRY(d->build(g, participant_context,
+                            &participant_context->items[draws[i].participant_item], d->user));
+            ++i;
+        } else {
+            u32 first = i;
+            while (i < nd && !draws[i].participant)
+                ++i;
+            fw_pass *run = de_arena_push(vc->arena, sizeof *run, 16);
+            if (!run)
+                return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward mesh run");
+            *run = *pd;
+            run->draws = draws + first;
+            run->draw_count = i - first;
+            run->first_draw = first;
+            DE_TRY(add_mesh_run(g, vc, lc, run));
+        }
     }
 
     if (g->oom || g->error_count)

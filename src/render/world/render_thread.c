@@ -29,6 +29,7 @@ de_result de__rt_init(de__render_world *rw) {
     de_atomic_init_ptr(&t->pending, NULL);
     de_atomic_init_u32(&t->stop, 0);
     de_atomic_init_u64(&t->rendered, 0);
+    de_atomic_init_u64(&t->completed_extract, 0);
     de_atomic_init_u32(&t->last_result, (u32)DE_OK);
     de_result res = de_sem_init(&t->kick, 0);
     if (res != DE_OK)
@@ -63,6 +64,7 @@ static de_result render_one(de__render_world *rw, de__render_world_frame *f) {
         DE_ERROR(rw->log, "renderer: frame %llu: %s", (unsigned long long)f->frame,
                  e != NULL ? e->message : "failed");
     }
+    de_atomic_store_u64(&rw->rt.completed_extract, f->frame, DE_ATOMIC_RELEASE);
     rw->current = NULL;
     de_atomic_store_u32(&f->state, DE__RW_FREE, DE_ATOMIC_RELEASE);
     return res;
@@ -137,6 +139,12 @@ static de__render_world_frame *repeat_frame(de__render_world *rw) {
             memcpy(f->views, last->views, sizeof(de__rw_view) * last->view_count);
         f->view_count = last->view_count;
         f->main_view = last->main_view;
+        f->frozen_view_count = last->frozen_view_count;
+        memcpy(f->frozen_views, last->frozen_views, sizeof f->frozen_views);
+        memcpy(f->frozen_settings, last->frozen_settings, sizeof f->frozen_settings);
+        memcpy(f->frozen_targets, last->frozen_targets, sizeof f->frozen_targets);
+        for (u32 i = 0; i < f->frozen_view_count; ++i)
+            f->frozen_views[i].extract_frame = f->frame;
         f->environment = last->environment;
         f->environment_count = last->environment_count;
     }

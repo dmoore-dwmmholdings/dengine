@@ -221,6 +221,7 @@ de__render_world_frame *de__rw_begin(de__render_world *rw) {
     f->origin = rw->origin;
     f->origin_changed = false;
     f->view_count = 0;
+    f->frozen_view_count = 0;
     f->main_view = DE__RW_NONE;
     memset(&f->environment, 0, sizeof f->environment);
     f->environment_count = 0;

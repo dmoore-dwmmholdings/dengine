@@ -111,7 +111,9 @@ bool de__render_settings_equal(const de_render_settings *a, const de_render_sett
            a->render_scale == b->render_scale &&
            a->dynamic_res_target_ms == b->dynamic_res_target_ms &&
            a->path_tracer == b->path_tracer && a->path_max_bounces == b->path_max_bounces &&
-           a->gi_mode == b->gi_mode;
+           a->gi_mode == b->gi_mode && a->ui_output.hdr == b->ui_output.hdr &&
+           a->ui_output.ui_white_nits == b->ui_output.ui_white_nits &&
+           a->ui_output.paper_white_nits == b->ui_output.paper_white_nits;
 }
 
 bool de__render_settings_match(const de_render_settings *s, de_quality *quality) {

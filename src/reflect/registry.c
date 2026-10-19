@@ -359,6 +359,7 @@ de_result de_type_register_ex(de_type_registry *r, const de_type_desc *desc, de_
         *out_id = make_id(e, (u32)index);
     if (out_layout_changed)
         *out_layout_changed = changed;
+    ++r->revision;
     return DE_OK;
 }
 
@@ -402,10 +403,15 @@ de_result de_enum_register(de_type_registry *r, const char *name, const de_enum_
     e->hash = e->registered_hash = new_hash;
     if (changed)
         de__reflect_rehash_all(r);
+    ++r->revision;
     return DE_OK;
 }
 
 /* ---- Queries --------------------------------------------------------------------------------- */
+
+u64 de_type_registry_revision(const de_type_registry *r) {
+    return r ? r->revision : 0;
+}
 
 de_type_id de_type_find(const de_type_registry *r, const char *name) {
     if (!r || !name)

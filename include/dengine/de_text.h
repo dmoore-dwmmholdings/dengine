@@ -98,6 +98,19 @@ typedef struct de_text_draw_opts {
 DE_API de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *quads,
                               u32 count, de_vec2 origin_px, const de_text_draw_opts *options);
 DE_API de_gpu_texture de_text_page_texture(de_text_system *t, de_font font, u32 page);
+/** Immutable page metadata copied during Extract; texture is optional without rendering. */
+typedef struct de_text_page_info {
+    de_gpu_texture texture;
+    u32 width, height, generation;
+    f32 distance_range;
+    bool bitmap, pixel;
+} de_text_page_info;
+DE_API de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page,
+                                       de_text_page_info *out);
+/** Allocation-free generation pins; balance successful pins before destroying the text system. */
+DE_API bool de_text_pin_font(de_text_system *t, de_font font);
+DE_API void de_text_unpin_font(de_text_system *t, de_font font);
+
 typedef struct DeWorldText {
     de_name loc_id;
     char literal[128];
@@ -134,6 +147,13 @@ typedef struct de_loc_arg {
 /* "{count} {count, plural, one{item} other{items}}" with CLDR plural rules. */
 DE_API u32 de_loc_format(const de_text_system *t, de_name id, const de_loc_arg *args, u32 arg_count,
                          char *out, u32 out_bytes);
+/** Format an inline UTF-8 pattern using the same allocation-free ICU subset as de_loc_format
+ * and the text system's current published locale (NULL text:en). The span need not end in NUL.
+ * Returns full needed bytes excluding NUL, truncating out at a UTF-8 boundary when necessary;
+ * out==NULL queries the needed size. Invalid arguments/pattern return0 and set the error context,
+ * clearing out when non-NULL with nonzero capacity, as de_loc_format does. */
+DE_API u32 de_loc_format_pattern(const de_text_system *t, de_str pattern, const de_loc_arg *args,
+                                 u32 arg_count, char *out, u32 out_bytes);
 DE_API void de_loc_pseudo(de_text_system *t, bool enabled); /* pseudo-localization, Dev */
 
 /** Main thread. Changes the project fallback locale (initially en); async switch on text update. */

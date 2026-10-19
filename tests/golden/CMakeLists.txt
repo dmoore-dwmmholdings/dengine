@@ -170,3 +170,18 @@ target_compile_definitions(de_golden PRIVATE "DE_GOLDEN_TEXT_ROOT=\"${DE_ROOT_DI
 
 # DENG-202 stable side-view pixel-art reference scenes.
 add_subdirectory(pixel2d)
+
+# DENG-317 real retained UI diagnostics; existing S10 capture/comparison stays unchanged.
+target_sources(de_golden PRIVATE ui/ui_scenes.c)
+target_compile_definitions(de_golden PRIVATE "DE_GOLDEN_UI_ROOT=\"${DE_ROOT_DIR}\"")
+if(TARGET de_ui)
+    target_link_libraries(de_golden PRIVATE de_ui)
+endif()
+
+# Isolated native cooker cache: the golden harness does not mount cache:/.
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_UI_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/ui_cache\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ui_cache")
+
+# DENG-318 actual embedded-default widget state sheet.
+target_sources(de_golden PRIVATE ui/widgets_basic/widgets_scene.c)

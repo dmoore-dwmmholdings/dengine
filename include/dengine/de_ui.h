@@ -174,6 +174,12 @@ typedef struct DeUiButton {
 typedef struct DeUiSlider {
     f32 value, min, max, step;
 } DeUiSlider;
+typedef struct DeUiProgress {
+    f32 value;
+    bool indeterminate;
+} DeUiProgress;
+/** True after routing a pointer over UI or while UI owns its capture; reset each PreUpdate. */
+DE_API bool de_ui_pointer_consumed(const de_ui *ui);
 typedef struct DeUiToggle {
     bool on;
 } DeUiToggle;
@@ -191,10 +197,13 @@ typedef struct DeUiFocusable {
     de_entity up, down, left, right;
 } DeUiFocusable; /* null = spatial */
 /* Binds a widget property to a reflected field on another entity, e.g. "DeHealth.current". */
+typedef enum de_ui_binding_mode { DE_UI_BIND_ONE_WAY, DE_UI_BIND_TWO_WAY } de_ui_binding_mode;
 typedef struct DeUiBinding {
     de_entity source;
     char path[64];
     char property[32];
+    de_ui_binding_mode mode; /**< Zero: source to widget; TWO_WAY also accepts CHANGED. */
+    char format[32]; /**< Optional S28 inline message pattern, with argument `value`. */
 } DeUiBinding;
 /* Renders this UI subtree into the 3D world as a panel. */
 typedef struct DeUiWorldPanel {
@@ -218,12 +227,30 @@ typedef struct de_ui_event {
     f32 value;
 } de_ui_event;
 
+/** UI action context policy. NONE releases the context; NON_MODAL passes bindings through;
+ * MODAL consumes bound inputs. A visible modal popup temporarily enforces MODAL. */
+typedef enum de_ui_input_mode {
+    DE_UI_INPUT_NONE, DE_UI_INPUT_NON_MODAL, DE_UI_INPUT_MODAL
+} de_ui_input_mode;
+/** Defaults to NON_MODAL. Changes take effect at the next input frame boundary. */
+DE_API void de_ui_set_input_mode(de_ui *ui, de_ui_input_mode mode);
+/** Logical focus survives mouse movement; this reports whether its ring is visible. */
+DE_API bool de_ui_focus_visible(const de_ui *ui);
+/** Null clears focus. Non-null must be enabled, visible, focusable and in the active scope.
+ * Main thread, outside parallel schedules. Focus/blur events are emitted on change. */
 DE_API void de_ui_set_focus(de_ui *ui, de_entity e);
 DE_API de_entity de_ui_focused(const de_ui *ui);
 /** Animate a reflected f32 field; accepts de_ui_easing values. Replacing the same field
  * begins from its current value. Invalid arguments set the error context. Main thread. */
 DE_API void de_ui_tween(de_ui *ui, de_entity e, const char *property, f32 to, f32 seconds,
                         u32 easing);
+
+/** Retained draw-list statistics from the last built/extracted/rendered frame. */
+typedef struct de_ui_render_stats {
+    u32 quads, draw_calls, roots, truncated;
+    f32 build_extract_ms;
+} de_ui_render_stats;
+DE_API de_ui_render_stats de_ui_get_render_stats(const de_ui *ui);
 
 /* ---------- Debug UI (Debug/Dev builds; backend per SPEC Q1) ---------- */
 DE_API bool de_dbg_begin(const char *window_title, bool *open);

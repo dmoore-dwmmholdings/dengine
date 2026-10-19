@@ -1,0 +1,83 @@
+# Native defaults: clear / compact / responsive. Existing S29 blue, 8px spacing,
+# 6px corners and quiet0.12s motion. Apps replace tokens with later sheets.
+# No font asset is imposed: authored text chooses its font and size.
+[vars]
+primary = "#3a7bff"
+foreground = "#e7edf6"
+surface = "#233044"
+border = "#52647e"
+[style.button]
+background = "$primary"
+text_color = "$foreground"
+border_color = "$border"
+border_width = 1
+radius = 6
+padding = [8, 16]
+transition = 0.12
+easing = "quad-out"
+[style."button:hover"]
+background = "#5a95ff"
+[style."button:pressed"]
+background = "#2d61cc"
+[style."button:disabled"]
+background = "#47546a"
+text_color = "#a9b3c2"
+opacity = 0.6
+[style.toggle]
+background = "$surface"
+text_color = "$primary"
+border_color = "$border"
+border_width = 1
+radius = 12
+min_width = 40
+min_height = 24
+transition = 0.12
+[style."toggle:hover"]
+border_color = "#7aa2ff"
+[style."toggle:pressed"]
+background = "#324864"
+[style."toggle:disabled"]
+opacity = 0.6
+[style.slider]
+background = "$surface"
+text_color = "$primary"
+border_color = "$border"
+border_width = 1
+radius = 6
+min_width = 120
+min_height = 20
+transition = 0.12
+[style."slider:hover"]
+text_color = "#7aa2ff"
+[style."slider:pressed"]
+text_color = "#5a95ff"
+[style."slider:disabled"]
+opacity = 0.6
+[style.progress]
+background = "$surface"
+text_color = "$primary"
+radius = 6
+min_width = 120
+min_height = 12
+[style.text]
+text_color = "$foreground"
+[style.image]
+radius = 0
+[style."progress:disabled"]
+opacity = 0.6
+[style."text:disabled"]
+opacity = 0.6
+[style."image:disabled"]
+opacity = 0.6
+
+[style."button:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."toggle:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."slider:focus"]
+border_color = "$foreground"
+border_width = 2
