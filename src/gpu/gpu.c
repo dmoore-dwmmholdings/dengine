@@ -254,6 +254,8 @@ static void destroy_object(de_gpu_device *d, de__gpu_kind kind, u32 id, const ch
         de__gpu_fail_handle(d, func, kind, id);
         return;
     }
+    if (kind == DE__GPU_TEXTURE && d->vt->texture_retire)
+        d->vt->texture_retire(d, de__gpu_pool_at(&d->pools[kind], index));
     u64 values[DE_QUEUE_COUNT_];
     submitted_values(d, values);
     if (de__gpu_deferred_push(&d->deferred, (u32)kind, index, values) != DE_OK) {

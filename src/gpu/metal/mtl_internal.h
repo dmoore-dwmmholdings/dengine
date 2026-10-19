@@ -207,6 +207,7 @@ de_result de__mtl_texture_create_placed(de_gpu_device *d, de__gpu_texture *t,
                                         const de_gpu_texture_desc *desc, de__gpu_heap *heap,
                                         u64 offset);
 void de__mtl_texture_destroy(de_gpu_device *d, de__gpu_texture *t);
+void de__mtl_texture_retire(de_gpu_device *d, de__gpu_texture *t);
 de_result de__mtl_sampler_create(de_gpu_device *d, de__gpu_sampler *s,
                                  const de_gpu_sampler_desc *desc);
 void de__mtl_sampler_destroy(de_gpu_device *d, de__gpu_sampler *s);
@@ -334,7 +335,7 @@ typedef struct mtl_cmd {
      * first resolve, reused by its later recordings; released by cmd_fini). */
     void *resolve_event;    /* id<MTLSharedEvent>, retained */
     void *resolve_listener; /* MTLSharedEventListener, retained */
-    void *accel_keep;       /* retained NSMutableSet of every AS/dependency this recording names */
+    void *accel_keep;       /* retained AS dependencies and storage objects named by residency */
     u64 resolve_value;      /* the last value used on resolve_event */
 } mtl_cmd;
 
@@ -433,8 +434,10 @@ de_result de__mtl_residency_init(de_gpu_device *d);
 void de__mtl_residency_shutdown(de_gpu_device *d);
 /** Brings the residency set up to date with the heap list (before each commit). */
 void de__mtl_residency_sync(de_gpu_device *d);
-/** Residency and the bindless table (buffer index 0) for a new render or compute encoder. */
-void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind);
+/** Residency and the bindless table (buffer index 0) for a new render or compute encoder.
+ * `c` owns native residency references; NULL is only for native buffers with retained references. */
+void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind,
+                               de_gpu_cmd *c);
 /** True when the device uses useHeaps: per encoder, false with a residency set (tests). */
 bool de__mtl_residency_uses_heaps(de_gpu_device *d);
 /** True when this build has the residency-set path (built with the macOS 15 SDK or later). */

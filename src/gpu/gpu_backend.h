@@ -217,6 +217,9 @@ typedef struct de__gpu_backend_vtable {
     de_result (*texture_create)(de_gpu_device *d, de__gpu_texture *t,
                                 const de_gpu_texture_desc *desc);
     void (*texture_destroy)(de_gpu_device *d, de__gpu_texture *t);
+    /* Logical retirement: stop naming this texture in future residency declarations.
+     * Descriptors and backend storage must survive until texture_destroy after queue fences. */
+    void (*texture_retire)(de_gpu_device *d, de__gpu_texture *t);
     de_result (*sampler_create)(de_gpu_device *d, de__gpu_sampler *s,
                                 const de_gpu_sampler_desc *desc);
     void (*sampler_destroy)(de_gpu_device *d, de__gpu_sampler *s);
