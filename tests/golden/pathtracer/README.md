@@ -24,6 +24,9 @@ The PT wavelet path propagates variance using squared weights as in
 [SVGF, equation 3](https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf).
 Its RGB range weights preserve color boundaries even at equal luminance.
 Other signal policies retain their existing range and variance behavior.
+Preparation preserves the measured sample mean instead of clipping valid bright
+lighting detail with a spatial firefly clamp while keeping the original moments.
+After the first sample it also avoids the spatial bootstrap neighbor reads.
 The denoiser binds each guide with its actual read/write access instead of
 requesting an unused storage view before replacing it with a sampled view.
 
@@ -32,11 +35,15 @@ path samples at every prefix and after reset, preserve equal-luminance color
 edges with a legacy-filter negative control, and check that independent input
 variance 2 becomes `2 * 4900 / 65536` after one separable B3 filter while constant
 radiance stays unchanged. Disabling propagation preserves the original variance
-resource.
+resource. A separate preparation GPU oracle preserves a bright mean of
+`(10, 5, 2.5)` among darker neighbors and independently checks alternating
+variance-of-mean values of 1 and the `1e-8` floor. The previous clamp reduced
+that mean to approximately `(1, .5, .25)` without changing its variance.
 
 The fixed final-denoise comparison improves from FLIP 0.141325818 originally,
 through 0.0986457165 after the first variance/preparation correction, to
-0.0761701224 with measured path variance and RGB range weights. It still fails
+0.0761701224 with measured path variance and RGB range weights, then
+0.0744708595 with the sample mean preserved. It still fails
 the original 0.05 limit. Its 16/4096 sample counts, scene and numerical oracle
 are unchanged; the 4096-sample reference energy remains 106.239134.
 This measurement has Metal API validation enabled and shader instrumentation
