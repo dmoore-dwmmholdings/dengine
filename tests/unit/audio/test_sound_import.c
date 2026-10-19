@@ -291,3 +291,71 @@ TEST(sound_import, ima_and_ms_adpcm_wav_sources) {
         free(data);
     }
 }
+
+TEST(sound_import, manifest_loop_setting_overrides_authored_wav_and_vorbis) {
+    de_tracking_allocator tracking;
+    de_allocator a = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de_cooker *c = NULL;
+    de_cooker_desc desc = {.allocator = &a, .verify_determinism = DE_COOK_VERIFY_ON};
+    ASSERT_EQ(de_cooker_create(&desc, &c), DE_OK);
+    de_asset_type_desc type = de_sound_import_type_desc();
+    ASSERT_EQ(de_cooker_register_type(c, &type), DE_OK);
+    ASSERT_EQ(de_fs_mount("looptest", DE_SOUND_TMP_DIR, DE_MOUNT_WRITABLE, 0), DE_OK);
+    for (u32 format = 0; format < 2; ++format) {
+        u64 size;
+        u8 *bytes;
+        const char *name;
+        if (format == 0) {
+            bytes = wave(48000, 100, 16, false, &size);
+            bytes = realloc(bytes, (size_t)size + 68);
+            ASSERT_TRUE(bytes != NULL);
+            memset(bytes + size, 0, 68);
+            de__snd_w32(bytes + 4, (u32)size + 68 - 8);
+            memcpy(bytes + size, "smpl", 4);
+            de__snd_w32(bytes + size + 4, 60);
+            de__snd_w32(bytes + size + 8 + 28, 1);
+            de__snd_w32(bytes + size + 8 + 44, 10);
+            de__snd_w32(bytes + size + 8 + 48, 89);
+            size += 68;
+            name = "loop.wav";
+        } else {
+            bytes = fixture("tone-loops.ogg", &size);
+            name = "loop.ogg";
+        }
+        char path[128];
+        snprintf(path, sizeof path, "looptest:/%s", name);
+        ASSERT_EQ(de_file_write_all_atomic(path, bytes, size), DE_OK);
+        free(bytes);
+        /* Check both resident output and native streaming codecs. */
+        for (u32 stream = 0; stream < 2; ++stream) {
+            de__manifest_kv settings[] = {
+                {"loop", {.type = DE__MANIFEST_BOOL, .u.b = false}},
+                {"stream", {.type = DE__MANIFEST_BOOL, .u.b = stream != 0}}};
+            de__manifest_asset asset = {.id = "loop",
+                                        .type = "sound",
+                                        .source = name,
+                                        .file = "looptest:/assets.toml",
+                                        .settings = settings,
+                                        .setting_count = 2};
+            de_cook_input input = {.asset = &asset, .asset_root = "looptest:/"};
+            for (u32 mode = 0; mode < 3; ++mode) {
+                /* Absent inherits; explicit false disables; explicit true enables. */
+                asset.settings = mode == 0 ? settings + 1 : settings;
+                asset.setting_count = mode == 0 ? 1 : 2;
+                settings[0].value.u.b = mode == 2;
+                de_cook_result result = {0};
+                ASSERT_EQ(de_cooker_cook(c, &input, &result), DE_OK);
+                de__sound_view view;
+                ASSERT_EQ(de__sound_parse(result.data, result.size, &view), DE_OK);
+                EXPECT_EQ((view.flags & DE__DSND_LOOP) != 0, mode != 1);
+                EXPECT_EQ(view.loop_start, 10u);
+                EXPECT_EQ(view.loop_end, 90u);
+                EXPECT_EQ((view.flags & DE__DSND_STREAM) != 0, stream != 0);
+                de_cook_result_free(&result);
+            }
+        }
+    }
+    de_cooker_destroy(c);
+    (void)de_fs_unmount("looptest", DE_SOUND_TMP_DIR);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+}

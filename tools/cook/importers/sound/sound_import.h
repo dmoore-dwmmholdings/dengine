@@ -3,7 +3,7 @@
 #include <dengine/de_asset.h>
 #include "audio/sound_format.h"
 typedef struct de__sound_settings {
-    bool stream, stream_set, mono, loop;
+    bool stream, stream_set, mono, loop, loop_set;
     u64 loop_start, loop_end;
     f64 stream_above_seconds;
     const char *compression, *codec;
