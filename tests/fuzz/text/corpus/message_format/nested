@@ -1,0 +1,1 @@
+{gender, select, she{{n, plural, one{one} other{many}}} other{Hello {name}}}

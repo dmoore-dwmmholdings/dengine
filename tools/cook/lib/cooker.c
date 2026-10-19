@@ -319,7 +319,7 @@ de_result de_cooker_cook(de_cooker *c, const de_cook_input *in, de_cook_result *
         return DE_OK;
     void *source = probe.source;
     u64 source_size = probe.source_size;
-    de_result r = source != NULL ? DE_OK : de_file_read_all(vpath, c->alloc, &source, &source_size);
+    de_result r = source != NULL ? DE_OK : de__cook_read_source(vpath, c->alloc, &source, &source_size);
     if (r != DE_OK) {
         const de_error *e = de_error_last();
         return DE_FAIL(r, "asset \"%s\": cannot read source \"%s\": %s", a->id, rel,

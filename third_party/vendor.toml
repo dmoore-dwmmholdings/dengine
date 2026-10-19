@@ -536,3 +536,38 @@ files = [
  "unicodetools/data/ucd/dev/auxiliary/GraphemeBreakTest.txt",
  "unicodetools/data/ucd/dev/emoji/emoji-data.txt",
 ]
+
+# DENG-264: pinned CLDR cardinal rules and selected locale number/Gregorian date data.
+[[lib]]
+name = "cldr"
+version = "48"
+url = "https://unicode.org/Public/cldr/48/cldr-common-48.zip"
+sha256 = "06c7c698d6fd8d67cefac15a0206b0109b00e0ef1636f86f84449fa959561f74"
+license = "Unicode-3.0"
+strip = 0
+files = ["common/supplemental/plurals.xml", "common/supplemental/numberingSystems.xml",
+    "common/main/root.xml",
+    "common/main/en.xml",
+    "common/main/de.xml",
+    "common/main/fr.xml",
+    "common/main/es.xml",
+    "common/main/it.xml",
+    "common/main/pt.xml",
+    "common/main/pt_PT.xml",
+    "common/main/nl.xml",
+    "common/main/sv.xml",
+    "common/main/pl.xml",
+    "common/main/cs.xml",
+    "common/main/ru.xml",
+    "common/main/uk.xml",
+    "common/main/tr.xml",
+    "common/main/ar.xml",
+    "common/main/he.xml",
+    "common/main/hi.xml",
+    "common/main/th.xml",
+    "common/main/ja.xml",
+    "common/main/ko.xml",
+    "common/main/zh.xml",
+    "common/main/zh_Hans.xml",
+    "common/main/zh_Hant.xml"
+]

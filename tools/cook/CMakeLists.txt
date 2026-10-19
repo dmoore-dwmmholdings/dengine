@@ -212,3 +212,7 @@ target_sources(de_cooker PRIVATE importers/sound/sound_import.c
     importers/sound/adpcm_encode.c importers/sound/opus_encode.c)
 target_link_libraries(de_cooker PRIVATE de_audio_dsp de_tp_dr_libs de_tp_opus de_tp_stb)
 target_sources(de_cooker PRIVATE importers/sprite_proxy.c)
+
+# DENG-264: string-table directory importer and shared deterministic message validation.
+target_sources(de_cooker PRIVATE "${DE_ROOT_DIR}/src/text/loc/string_table_import.c")
+target_link_libraries(de_cooker PRIVATE de_loc_common)

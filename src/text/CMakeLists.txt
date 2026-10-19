@@ -30,3 +30,13 @@ endif()
 target_sources(de_text PRIVATE layout/bidi.c layout/linebreak.c layout/linebreak_tables.c layout/paragraph.c layout/layout_cache.c)
 target_link_libraries(de_text PRIVATE de_tp_sheenbidi)
 set_property(TARGET de_text APPEND PROPERTY DE_MODULE_LIBS de_tp_sheenbidi)
+
+# DENG-264: allocation-free codec/formatting shared by runtime and cooker.
+add_library(de_loc_common STATIC loc/string_table_format.c loc/message_format.c
+    loc/plural_rules.c loc/plural_rules_gen.c loc/number_format.c loc/number_data_gen.c loc/pseudo_loc.c)
+target_include_directories(de_loc_common PUBLIC "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/include")
+target_link_libraries(de_loc_common PUBLIC de_core PRIVATE de_build_flags)
+set_target_properties(de_loc_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_sources(de_text PRIVATE loc/loc.c loc/loc_api.c loc/loc_internal.h)
+target_link_libraries(de_text PRIVATE de_loc_common)
+set_property(TARGET de_text APPEND PROPERTY DE_MODULE_LIBS de_loc_common)

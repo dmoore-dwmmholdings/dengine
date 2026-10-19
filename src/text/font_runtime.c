@@ -1,4 +1,5 @@
 #include "fallback_internal.h"
+#include "loc/loc_internal.h"
 #include "render/text_render_internal.h"
 #include "asset/slots_internal.h"
 #include <string.h>
@@ -162,6 +163,7 @@ void de_text__runtime_destroy(de_text_system *t) {
 void de_text_update(de_text_system *t) {
     if (!t || !t->runtime)
         return;
+    de__loc_update(t->loc);
     struct de__text_runtime *r = t->runtime;
     de__text_lock(r);
     for (u32 i = 0; i < r->watch_count; ++i) {

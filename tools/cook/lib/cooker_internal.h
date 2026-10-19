@@ -118,6 +118,9 @@ de_result de__cooker_run_import(de_asset_import_ctx *ctx);
  * (without the leading '/'; "" for the root itself). */
 bool de__cook_path_below(const char *root, const char *path, const char **rel);
 
+/* DENG-264: ordinary source bytes, or sorted nonrecursive directory snapshot. */
+de_result de__cook_read_source(const char *path, const de_allocator *a, void **out, u64 *size);
+
 DE_EXTERN_C_END
 
 #endif /* DE_COOKER_INTERNAL_H */
