@@ -371,3 +371,39 @@ TEST_F(ui_draw, image_pin_survives_load_release_and_despawn_until_packet_retirem
     ASSERT_EQ(de_fs_unmount("uidrawassets", DE_UI_DRAW_ASSET_ROOT), DE_OK);
 }
 #endif
+
+static void geometry_override(de_ui *ui, de_entity entity, de_vec2 *offset, f32 *width,
+                              void *user) {
+    (void)ui;
+    EXPECT_EQ(entity.bits, 123u);
+    EXPECT_FLOAT_EQ(*width, 80, 0);
+    ++*(u32 *)user;
+    *offset = (de_vec2){-17, 4};
+    *width = 0; /* A single line does not wrap to its visual clip. */
+}
+TEST_F(ui_draw, optional_text_geometry_preserves_defaults_and_clip, ui_fx) {
+    de_vec2 offset;
+    f32 width;
+    de_ui__text_geometry(f->ui, (de_entity){123}, 80, &offset, &width);
+    EXPECT_FLOAT_EQ(offset.x, 0, 0);
+    EXPECT_FLOAT_EQ(width, 80, 0);
+    u32 calls = 0;
+    de_ui__set_text_geometry(f->ui, geometry_override, &calls);
+    de_entity root = ui_node(f, (de_entity){0});
+    dimensions(f, root, 80, 20);
+    ui_node_edit(f, root)->clip = true;
+    style(f, root, (de_vec4){1, 1, 1, 1}, 1);
+    ui_frame(f);
+    de_vec4 clip = render(f)->build.commands[0].clip;
+    de_ui__text_geometry(f->ui, (de_entity){123}, 80, &offset, &width);
+    EXPECT_EQ(calls, 1u);
+    EXPECT_FLOAT_EQ(offset.x, -17, 0);
+    EXPECT_FLOAT_EQ(offset.y, 4, 0);
+    EXPECT_FLOAT_EQ(width, 0, 0);
+    EXPECT_TRUE(memcmp(&clip, &render(f)->build.commands[0].clip, sizeof clip) == 0);
+    de_ui__set_text_geometry(f->ui, NULL, NULL);
+    de_ui__text_geometry(f->ui, (de_entity){123}, 80, &offset, &width);
+    EXPECT_EQ(calls, 1u);
+    EXPECT_FLOAT_EQ(offset.x, 0, 0);
+    EXPECT_FLOAT_EQ(width, 80, 0);
+}

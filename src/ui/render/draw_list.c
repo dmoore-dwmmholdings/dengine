@@ -130,11 +130,33 @@ static void image(struct de_ui_render *r, const de_ui_draw_node *node, const DeU
         cmd->image = image->texture;
     }
 }
+void de_ui__set_text_geometry(de_ui *ui, de_ui_text_geometry_fn fn, void *user) {
+    if (!ui || !ui->render)
+        return;
+    struct de_ui_render *r = ui->render;
+    r->text_geometry = fn;
+    r->text_geometry_user = user;
+}
+void de_ui__text_geometry(de_ui *ui, de_entity entity, f32 default_width, de_vec2 *offset,
+                          f32 *wrap_width) {
+    *offset = (de_vec2){0};
+    *wrap_width = default_width;
+    struct de_ui_render *r = ui->render;
+    if (r && r->text_geometry)
+        r->text_geometry(ui, entity, offset, wrap_width, r->text_geometry_user);
+    if (!isfinite(offset->x) || !isfinite(offset->y))
+        *offset = (de_vec2){0};
+    if (!isfinite(*wrap_width) || *wrap_width < 0)
+        *wrap_width = default_width;
+}
 static void text(struct de_ui_render *r, const de_ui_draw_node *node, const DeUiText *text,
                  const DeUiStyle *resolved, de_vec4 rect, f32 opacity) {
     de_ui *ui = r->ui;
     if (!ui->desc.text || !text->style.font.id)
         return;
+    de_vec2 offset;
+    f32 wrap_width;
+    de_ui__text_geometry(ui, ui->records[node->index].entity, rect.z, &offset, &wrap_width);
     de_ui_text_cache *cache = &r->text_cache[node->index];
     de_str content = de_ui__text_content(ui, text);
     de_text_style style = text->style;
@@ -143,13 +165,14 @@ static void text(struct de_ui_render *r, const de_ui_draw_node *node, const DeUi
     de_font_metrics metrics = {0};
     (void)de_text_font_metrics(ui->desc.text, style.font, style.size_px, &metrics);
     u64 hash = XXH3_64bits(content.ptr, content.len) ^ XXH3_64bits(text, sizeof *text) ^
-               XXH3_64bits(&ui->scale, sizeof ui->scale) ^ XXH3_64bits(&rect.z, sizeof(f32));
+               XXH3_64bits(&ui->scale, sizeof ui->scale) ^
+               XXH3_64bits(&wrap_width, sizeof wrap_width);
     if (cache->entity.bits != ui->records[node->index].entity.bits || cache->hash != hash ||
         cache->generation != metrics.generation || !cache->layout) {
         de_text_layout *layout = NULL;
         de_text_layout_desc desc = {.utf8 = content,
                                     .style = &style,
-                                    .max_width = rect.z,
+                                    .max_width = wrap_width,
                                     .align = text->align,
                                     .direction = DE_DIR_AUTO,
                                     .pixel_snap = ui->desc.pixel_art};
@@ -166,7 +189,8 @@ static void text(struct de_ui_render *r, const de_ui_draw_node *node, const DeUi
             return;
         const de_glyph_quad *q = &r->glyphs[i];
         cmd->gpu = (de_ui_gpu_quad){
-            .rect = {rect.x + q->pos.x, rect.y + q->pos.y, q->pos.z, q->pos.w},
+            .rect = {rect.x + offset.x + q->pos.x, rect.y + offset.y + q->pos.y, q->pos.z,
+                     q->pos.w},
             .uv = q->uv,
             .color = tint_alpha(resolved ? resolved->text_color : q->color, opacity),
             .kind = DE_UI_QUAD_TEXT,
