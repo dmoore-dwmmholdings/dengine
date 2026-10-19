@@ -132,7 +132,10 @@ static void row(jx *x, joint2d *j, u32 k, de_vec2 n, bool angular, f32 error, f3
     if (hz > 0)
         soft = de__soft_make(hz, j->d.damping_ratio > 0 ? j->d.damping_ratio : 0.7f, x->ctx->h);
     f32 b = (bias || hz > 0) ? soft.bias_rate * error : 0;
-    b = clampf(b, -20, 20);
+    /* A physical spring's force follows displacement; the correction-velocity cap
+     * belongs only to rigid positional stabilization. */
+    if (!(hz > 0))
+        b = clampf(b, -20, 20);
     f32 imp = -soft.mass_scale * (speed - target + b) / mass - soft.impulse_scale * j->impulse[k];
     f32 next = clampf(j->impulse[k] + imp, lo, hi);
     imp = next - j->impulse[k];

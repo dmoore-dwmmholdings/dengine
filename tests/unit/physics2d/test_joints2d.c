@@ -208,6 +208,7 @@ TEST(physics2d_joints, wheel_frequency_within_five_percent) {
     EXPECT_TRUE(count >= 3);
     if (count >= 3) {
         f64 hz = (count - 1) / ((last - first) * (f64)SV_DT);
+        printf("wheel frequency %.6f Hz\n", hz);
         EXPECT_TRUE(fabs(hz / 3 - 1) < 0.05);
     }
     de_physics2d_destroy(p);
@@ -378,4 +379,51 @@ TEST(physics2d_joints, prismatic_stop_repairs_initial_violation_under_motor_load
         EXPECT_FLOAT_EQ(sv_xf_of(p, b).x, direction, 0.001);
         de_physics2d_destroy(p);
     }
+}
+
+static f64 measured_wheel_frequency(f32 hertz, f32 amplitude, u32 substeps) {
+    de_physics2d_desc wd = {
+        .max_bodies = 32, .plane = DE_PHYSICS2D_PLANE_TOP_DOWN, .substeps = substeps};
+    de_physics2d_world *p = NULL;
+    ASSERT_EQ(de_physics2d_create(&wd, &p), DE_OK);
+    de_body b = ball(p, 0, amplitude);
+    de_joint2d_desc d = {.kind = DE_JOINT2D_WHEEL,
+                         .body_b = b,
+                         .axis = {0, 1},
+                         .hertz = hertz,
+                         .damping_ratio = 0.01f};
+    (void)joint(p, &d);
+    f64 previous = amplitude, first = 0, last = 0;
+    u32 count = 0, frames = (u32)(360 / hertz);
+    for (u32 i = 1; i <= frames; ++i) {
+        ticks(p, 1);
+        f64 y = sv_xf_of(p, b).y;
+        if (previous > 0 && y <= 0) {
+            f64 crossing = (i - 1) + previous / (previous - y);
+            if (!count)
+                first = crossing;
+            last = crossing;
+            ++count;
+        }
+        previous = y;
+    }
+    EXPECT_TRUE(count >= 4);
+    f64 result = count > 1 ? (count - 1) / ((last - first) * (f64)SV_DT) : 0;
+    printf("spring %.1fHz amplitude%.2f substeps%u measured%.6fHz\n", hertz, amplitude, substeps,
+           result);
+    de_physics2d_destroy(p);
+    return result;
+}
+TEST(physics2d_joints, wheel_frequency_is_independent_of_amplitude_and_substeps) {
+    const f32 amplitudes[] = {0.01f, 0.5f, 2};
+    const f32 frequencies[] = {1, 3, 6};
+    const u32 substeps[] = {4, 8};
+    for (u32 a = 0; a < 3; ++a)
+        for (u32 f = 0; f < 3; ++f)
+            for (u32 n = 0; n < 2; ++n)
+                EXPECT_TRUE(
+                    fabs(measured_wheel_frequency(frequencies[f], amplitudes[a], substeps[n]) /
+                             frequencies[f] -
+                         1) < 0.05);
+    EXPECT_TRUE(fabs(measured_wheel_frequency(3, 0.5f, 1) / 3 - 1) < 0.05);
 }
