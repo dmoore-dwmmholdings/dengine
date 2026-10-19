@@ -278,7 +278,11 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
     de_rg_write(pass, rays, DE_ACCESS_SHADER_WRITE);
     de_rg_write(pass, hits, DE_ACCESS_SHADER_WRITE);
     de_rg_write(pass, raw, DE_ACCESS_SHADER_WRITE);
-    DE_TRY(de__denoise_ao(s->denoiser, vf, vc, raw, filtered, tw, th, scale,
+    /* Radius changes redefine geometric visibility. Invalidate only this view's
+     * AO history; keep the canonical context and other signal histories intact. */
+    de__vis_context ao_context = *vc;
+    ao_context.occlusion_reset |= v->info.radius != p->pc.radius;
+    DE_TRY(de__denoise_ao(s->denoiser, vf, &ao_context, raw, filtered, tw, th, scale,
                           s->reference.id && de_cvar_int(s->reference) > 0));
     pass = de_rg_add_pass(g, "RT.AO.Pack", DE_QUEUE_GRAPHICS, execute, &p[2]);
     if (!pass)
