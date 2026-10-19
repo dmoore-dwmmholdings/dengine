@@ -224,6 +224,17 @@ typedef struct de_ui_event {
     f32 value;
 } de_ui_event;
 
+/** UI action context policy. NONE releases the context; NON_MODAL passes bindings through;
+ * MODAL consumes bound inputs. A visible modal popup temporarily enforces MODAL. */
+typedef enum de_ui_input_mode {
+    DE_UI_INPUT_NONE, DE_UI_INPUT_NON_MODAL, DE_UI_INPUT_MODAL
+} de_ui_input_mode;
+/** Defaults to NON_MODAL. Changes take effect at the next input frame boundary. */
+DE_API void de_ui_set_input_mode(de_ui *ui, de_ui_input_mode mode);
+/** Logical focus survives mouse movement; this reports whether its ring is visible. */
+DE_API bool de_ui_focus_visible(const de_ui *ui);
+/** Null clears focus. Non-null must be enabled, visible, focusable and in the active scope.
+ * Main thread, outside parallel schedules. Focus/blur events are emitted on change. */
 DE_API void de_ui_set_focus(de_ui *ui, de_entity e);
 DE_API de_entity de_ui_focused(const de_ui *ui);
 /** Animate a reflected f32 field; accepts de_ui_easing values. Replacing the same field
