@@ -897,6 +897,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
                                       .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED,
                                       .name = "pixel.internal"});
     }
+    vf.initial_color = vf.color;
     vf.color_format = DE__VIEW_OUTPUT_FORMAT;
 
     /* PT retains only canonical GPU scene/TLAS declarations; unused visibility work is culled. */

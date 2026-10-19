@@ -167,3 +167,6 @@ endforeach()
 target_sources(de_golden PRIVATE text/text_scenes.c)
 target_link_libraries(de_golden PRIVATE de_text)
 target_compile_definitions(de_golden PRIVATE "DE_GOLDEN_TEXT_ROOT=\"${DE_ROOT_DIR}\"")
+
+# DENG-202 stable side-view pixel-art reference scenes.
+add_subdirectory(pixel2d)
