@@ -105,3 +105,17 @@ Metal native pixel readbacks and four FLIP scenes live under `tests/unit/text` a
 `tests/golden/text`; other backend captures remain DENG-496. Render-disabled builds
 compile the CPU module independently; full macOS headless configuration has an
 unrelated Metal CMake issue (DENG-472).
+
+## Inline formatting and binding cache prerequisites (DENG-321)
+
+`de_loc_format_pattern(text, pattern, args, count, out, capacity)` formats an inline UTF-8 span
+with the existing localization message engine and the current published locale. It allocates
+nothing, returns the full needed byte count, preserves UTF-8 boundaries on truncation, and
+reports invalid patterns through the same error context as `de_loc_format`. A NULL text system
+uses English. This is the formatting provider for authored UI binding patterns such as
+`{value, number, integer} / 100`; it does not add a string-table entry or duplicate the parser.
+
+Binding caches can also observe `de_type_registry_revision` from `de_reflect.h`: every successful
+struct/enum registration or replacement advances it, including metadata/hook-only changes;
+failed registrations and lookups leave it unchanged. Re-resolve both cached paths and previously
+invalid paths when it changes. Actual UI binding/widget implementation remains a separate task.
