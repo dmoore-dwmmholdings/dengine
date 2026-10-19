@@ -140,14 +140,25 @@
     "height": 96,
     "threshold_mean": 0.005,
     "threshold_p99": 0.05,
-    "file_sha256": "8f8efd2d5d70a2a997083b2946702c0ee47adf0d314b484af5d7034dd91b70d1",
-    "pixel_sha256": "56b2dd97476903e4eee2185a35fab0ed6d174e66f41fc99be29a7df56505e5b9",
-    "repeat_pixel_sha256": "56b2dd97476903e4eee2185a35fab0ed6d174e66f41fc99be29a7df56505e5b9",
+    "file_sha256": "dd1c5bb24ff30a32d8b358042110c81b6e277eb48f9697a955b8203355f6cf9f",
+    "pixel_sha256": "7bbbbad303944e41ed4688c6cefaf8d13bda669f75937b80ea17f8095f43462b",
+    "repeat_pixel_sha256": "7bbbbad303944e41ed4688c6cefaf8d13bda669f75937b80ea17f8095f43462b",
     "different_bytes": 0,
     "harness_capture_diagnostic_pass": true,
     "retained_failed_capture_not_reference": false,
     "fully_validated_contribution": true,
-    "provenance_log": "/tmp/deng75-proof/capture-rt_ao_corner.log"
+    "provenance_log": "/tmp/deng459-final-asan.log",
+    "previous_file_sha256": "8f8efd2d5d70a2a997083b2946702c0ee47adf0d314b484af5d7034dd91b70d1",
+    "previous_pixel_sha256": "56b2dd97476903e4eee2185a35fab0ed6d174e66f41fc99be29a7df56505e5b9",
+    "verification_issue": "DENG-459",
+    "reference_cause": "Capture-era RTAO+denoiser shaders reproduce old frozen reference byte-for-byte SHA8f8efd2d5d70a2a997083b2946702c0ee47adf0d314b484af5d7034dd91b70d1. Current corrected scalar semantics/filter/sampler validated against original independent CPU visibility and denoise oracles; no source/fixture/settings/sample/threshold change.",
+    "independent_validation": "Dev29/29RTAO+denoiseframework+shadowAO; five CPUcornerprobes maxrelativeerror.02482623<.03; denoised AO FLIP.0352821462passesoriginalgate.",
+    "sanitizer_result": "All7productionRTgoldenspassASanUBSan+strictMetal in31.46s total. Original300s/test limits preserved. SeparatePTshader-validationhang455notcovered.",
+    "affected_pixels": 2064,
+    "visibility_range": [
+      0.298039,
+      1
+    ]
   },
   {
     "scene": "rt_ao_corner_base",

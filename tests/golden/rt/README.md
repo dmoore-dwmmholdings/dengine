@@ -163,3 +163,29 @@ three independent captures with identical RGBA pixels; its previously missing re
 Base reference is installed. No scene settings, materials, geometry, light counts, seeds,
 warmup or thresholds changed. Clustered-light suites pass in Dev and ASan/UBSan (18 CPU/Metal
 checks each, 22 unavailable-backend skips each); strict Metal golden checks cover both DI tiers.
+
+## Sanitizer RT completion (DENG-459)
+
+All seven production RT goldens now pass under ASan/UBSan and strict Metal API/shader
+validation on Apple M5 Pro: shadows 5.51 s, DI 10.44 s, AO 2.47 s, reflections 3.14 s,
+GI/refraction/foliage also pass; total 31.46 s. Their original 300-second per-test timeouts
+are unchanged. This supersedes the intermediate AO failure recorded above and does not
+claim to resolve the separate full path-tracer shader-validation hang (DENG-455).
+
+The AO mismatch was caused by a frozen image captured before the existing scalar-channel,
+filter-footprint and progressive sampling fixes. As a controlled ablation, substituting only
+the capture-era RTAO and four denoiser shaders reproduced the original reference exactly,
+including file SHA-256 `8f8efd2d5d70a2a997083b2946702c0ee47adf0d314b484af5d7034dd91b70d1`.
+All temporary substitutions were restored before final verification. The current shader
+suite passes 29 original AO/denoiser checks, including five independent CPU visibility
+probes (worst relative error 0.02482623 against 0.03) and the original denoised AO reference
+criterion. Its published AO has 2,064 affected pixels and range [0.298039, 1].
+
+Two independent current RT captures have identical RGBA pixels. The corrected image was
+visually reviewed and installed as the RT AO reference; the Base AO reference remains
+unchanged and passes. No production code, fixture, seeds, 32-frame warmup, sample counts,
+comparison limits or timeouts were changed for this completion.
+
+The complete strict-Metal verifier also passes: 34 real captures, all 14 RT/Base repeat pairs
+byte-identical, all three actual-effect negative comparisons rejected, and all three restored
+outputs identical. The normal verifier changed no references or thresholds during this run.
