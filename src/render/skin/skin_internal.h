@@ -7,8 +7,7 @@
 
 typedef struct de__skin_entry {
     de_entity entity;
-    de_affine *joints;
-    u32 joint_count, joint_capacity;
+    u32 joint_count, palette_capacity[4];
     const de_render_mesh *source;
     de__gs_mesh packed;
     de_gpu_buffer output[2], palette[4], description[4], ranges;
@@ -18,15 +17,28 @@ typedef struct de__skin_entry {
     bool active, initialized;
     u64 refits, rebuilds;
 } de__skin_entry;
+typedef struct de__skin_input {
+    de_entity entity;
+    de_affine *joints;
+    u32 count, capacity;
+} de__skin_input;
 
 typedef struct de__skin {
     de_renderer *renderer;
     de__skin_entry *entries;
     u32 count, capacity;
+    /* Simulation staging: PostUpdate writes, Extract copies; render never reads these. */
+    de__skin_input *inputs;
+    u32 input_count, input_capacity;
     de_gpu_pipeline pipeline;
     de_cvar interval;
     u64 frame;
 } de__skin;
+de_result de__skin_init(de_renderer *r);
+de_result de__skin_extract(de_renderer *r, de__render_world_frame *frame);
+de_result de__skin_frame_copy(const de_allocator *alloc, de__render_world_frame *dst,
+                              const de__render_world_frame *src);
+void de__skin_frame_free(const de_allocator *alloc, de__render_world_frame *frame);
 
 de_result de__skin_prepare(de_renderer *r, const de__render_world_frame *frame,
                            const de__gpu_scene_assets *assets);

@@ -345,7 +345,8 @@ static void world_init(world *w, u32 cap) {
     w->f.origin = (de_dvec3){0.0, 0.0, 0.0};
 }
 
-static void world_free(world *w) {
+static void world_free(world *w, const de_allocator *alloc) {
+    de__skin_frame_free(alloc, &w->f);
     de__rw_instances *in = &w->f.instances;
     free(in->entity);
     free(in->mesh);
@@ -547,7 +548,7 @@ static void rsx_teardown(rsx *f) {
         de_gpu_device_destroy(f->dev);
     }
     free_result(&f->res);
-    world_free(&f->w);
+    world_free(&f->w, &f->alloc);
     if (f->arena)
         de_arena_destroy(f->arena);
     if (f->alloc.alloc)
@@ -815,6 +816,8 @@ static bool rsx_frame(rsx *f) {
     world_begin(&f->w);
     de_mat4 view, proj;
     camera(f, &view, &proj);
+    if (de__skin_extract(&f->skin_renderer, &f->w.f) != DE_OK)
+        return false;
     if (de__gpu_scene_update(f->gs, &f->w.f) != DE_OK)
         return false;
     if (de__gpu_scene_set_view(f->gs, 0,
@@ -1934,7 +1937,8 @@ static void skin_render(rsx *f,de_gpu_backend backend,bool allocation_check) {
     ASSERT_GT(e->refits,80u);ASSERT_GT(e->rebuilds,5u);
     if(!allocation_check) {free(positions);free(previous);return;}
     /* Warm all palette upload-ring slots for 100 instances, 60 joints each. */
-    world_free(&f->w);world_init(&f->w,100);
+    world_free(&f->w, &f->alloc);
+    world_init(&f->w, 100);
     de_affine sixty[60];for(u32 j=0;j<60;++j)sixty[j]=identity;
     for(u32 i=0;i<100;++i) {
         world_set(&f->w,i,mesh,identity,identity,material);
@@ -1943,12 +1947,14 @@ static void skin_render(rsx *f,de_gpu_backend backend,bool allocation_check) {
     de__gpu_scene_assets assets={.mesh=fake_mesh};
     for(u32 frame=0;frame<8;++frame) {
         f->skin_renderer.frame_index=1000+frame;
+        ASSERT_EQ(de__skin_extract(&f->skin_renderer, &f->w.f), DE_OK);
         ASSERT_EQ(de__skin_prepare(&f->skin_renderer,&f->w.f,&assets),DE_OK);
         de_gpu_wait_idle(f->dev);
     }
     de_alloc_guard guard={0};de_alloc_guard_begin(&guard);
     for(u32 i=0;i<100;++i)de_render_set_skin_palette(&f->skin_renderer,(de_entity){1000+i},sixty,60);
     f->skin_renderer.frame_index=1008;
+    ASSERT_EQ(de__skin_extract(&f->skin_renderer, &f->w.f), DE_OK);
     de_result result=de__skin_prepare(&f->skin_renderer,&f->w.f,&assets);
     de_gpu_wait_idle(f->dev);de_alloc_guard_end(&guard);
     ASSERT_EQ(result,DE_OK);DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
@@ -1992,7 +1998,8 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
     ASSERT_TRUE(rsx_frame(f));
     ASSERT_EQ(f->res.ids[center],DE__VIS_ID_EMPTY);
     in->sprite=NULL;
-    world_free(&f->w); world_init(&f->w,10000);
+    world_free(&f->w, &f->alloc);
+    world_init(&f->w, 10000);
     DeSprite *many=zalloc(10000*sizeof *many);
     in=&f->w.f.instances; in->sprite=many; in->count=10000;
     for(u32 i=0;i<10000;++i) {
@@ -2037,6 +2044,70 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
     TEST_F(resolve, game_model_dispatch_##sfx, rsx) {                                              \
         game_model_dispatch(f, backend);                                                           \
     }
+
+TEST_F(resolve, skin_frozen_pose_and_despawn_gpu_retirement_metal, rsx) {
+    rsx_open(f, DE_GPU_METAL);
+    u32 mesh = rsx_mesh_plane(f, 1, 1, 2, 1, false);
+    skin_source(f, mesh);
+    de_affine identity = de_affine_identity();
+    world_set(&f->w, 0, mesh, identity, identity, material_add((de_vec4){1, 1, 1, 1}));
+    de__gpu_scene_assets assets = {.mesh = fake_mesh};
+    u32 buffers = de__gpu_live_count(f->dev, DE__GPU_BUFFER);
+    u32 accels = de__gpu_live_count(f->dev, DE__GPU_ACCEL);
+    for (u32 cycle = 0; cycle < 32; ++cycle) {
+        de_affine pose[72];
+        for (u32 i = 0; i < 72; ++i)
+            pose[i] = identity;
+        pose[1].m[9] = .4f;
+        u32 joints = cycle == 31 ? 0u : 2u;
+        de_render_set_skin_palette(&f->skin_renderer, (de_entity){1000}, pose, joints);
+        ASSERT_EQ(de__skin_extract(&f->skin_renderer, &f->w.f), DE_OK);
+        if (cycle == 0) {
+            /* Simulate N+1 before consuming frozen N: both staged arrays must
+             * reallocate. */
+            pose[1].m[9] = .9f;
+            de_render_set_skin_palette(&f->skin_renderer, (de_entity){1000}, pose, 72);
+            for (u32 i = 1; i < 80; ++i)
+                de_render_set_skin_palette(&f->skin_renderer, (de_entity){1000 + i}, pose, 72);
+        }
+        f->skin_renderer.frame_index = 1000 + cycle * 2;
+        ASSERT_EQ(de__skin_prepare(&f->skin_renderer, &f->w.f, &assets), DE_OK);
+        de__skin_entry *e = de__skin_instance(&f->skin_renderer, 0);
+        ASSERT_TRUE(e && e->initialized);
+        EXPECT_EQ(e->joint_count, joints);
+        if (cycle == 0 || cycle == 31) {
+            u32 n = e->source->vertex_count;
+            f32 *current = zalloc((size_t)n * 12), *previous = zalloc((size_t)n * 12);
+            skin_read_positions(f, e, current, previous);
+            for (u32 v = 0; v < n; ++v) {
+                f32 x = g_mesh[mesh - 1].pos[v * 3];
+                EXPECT_FLOAT_EQ(current[v * 3], x + (joints && x >= 0 ? .4f : 0), .00001f);
+                EXPECT_FLOAT_EQ(previous[v * 3], current[v * 3], .00001f);
+            }
+            free(current);
+            free(previous);
+        }
+        if (f->skin_renderer.caps.ray_query) {
+            ASSERT_EQ(de__skin_rt_prepare(&f->skin_renderer), DE_OK);
+            EXPECT_GT(de__gpu_live_count(f->dev, DE__GPU_ACCEL), accels);
+        }
+        de_gpu_buffer old = e->output[e->current];
+        /* Retire immediately after submission, without a preceding GPU idle wait.
+         */
+        f->w.f.skin_count = f->w.f.skin_joint_count = 0;
+        ++f->skin_renderer.frame_index;
+        ASSERT_EQ(de__skin_prepare(&f->skin_renderer, &f->w.f, &assets), DE_OK);
+        EXPECT_TRUE(de__skin_instance(&f->skin_renderer, 0) == NULL);
+        EXPECT_TRUE(de__gpu_get_buffer(f->dev, old) == NULL);
+        EXPECT_EQ(f->skin_renderer.skin->entries[0].entity.bits, 0u);
+        EXPECT_LE(f->skin_renderer.skin->count, 1u);
+        de_gpu_wait_idle(f->dev);
+        EXPECT_EQ(de__gpu_live_count(f->dev, DE__GPU_BUFFER), buffers);
+        EXPECT_EQ(de__gpu_live_count(f->dev, DE__GPU_ACCEL), accels);
+    }
+    printf("Skin frozen-pose readback and32 submitted-resource retirement cycles "
+           "passed\n");
+}
 
 TEST_F(resolve, skin_no_alloc_hundred_metal, rsx) {skin_render(f,DE_GPU_METAL,true);}
 TEST_F(resolve, skin_bind_reference_motion_metal, rsx) {skin_render(f,DE_GPU_METAL,false);}

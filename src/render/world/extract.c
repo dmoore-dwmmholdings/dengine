@@ -17,6 +17,7 @@
  * hold.
  */
 #include "render/world/render_world.h"
+#include "render/skin/skin_internal.h"
 
 #include "render/loaders/render_assets.h"
 #include "render/renderer_internal.h"
@@ -344,9 +345,11 @@ static void run_category(de_system_ctx *ctx, de__rw_kind k) {
                  x.failed, inst ? "mesh instances" : "lights", (unsigned long long)rw->frame);
     if (de__rw_pool_end(rw, k, f, true) != DE_OK)
         DE_ERROR(rw->log, "render world: %s", de_error_last() ? de_error_last()->message : "?");
-    if (inst)
+    if (inst) {
+        if (de__skin_extract(rw->r, f) != DE_OK)
+            DE_ERROR(rw->log, "render world: skin snapshot allocation failed");
         rw->inst_frame = rw->frame;
-    else
+    } else
         rw->light_frame = rw->frame;
 }
 

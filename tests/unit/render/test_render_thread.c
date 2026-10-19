@@ -25,6 +25,7 @@
 
 #include "platform/de_atomic.h"
 #include "render/world/render_world.h"
+#include "render/skin/skin_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -151,6 +152,97 @@ static void run_ahead(rwt *f) {
 
 TEST_F(render_thread, pipelined_one_frame_ahead, rtt) {
     run_ahead(&f->fx);
+}
+
+typedef struct skin_handoff {
+    de_atomic_u32 entered, updated, bad;
+    u64 entity;
+} skin_handoff;
+static void skin_handoff_hook(de_renderer *r, const de__render_world_frame *fr, void *user) {
+    (void)r;
+    skin_handoff *s = user;
+    if (fr->frame != 1)
+        return;
+    bool good = fr->skin_count == 1 && fr->skin_joint_count == 2 &&
+                fr->skin_palettes[0].entity == s->entity && fr->skin_palettes[0].count == 2 &&
+                fr->skin_joints[1].m[9] == 3;
+    de_atomic_store_u32(&s->entered, 1, DE_ATOMIC_RELEASE);
+    u64 end = de_time_now_ns() + WAIT_TIMEOUT_NS;
+    while (!de_atomic_load_u32(&s->updated, DE_ATOMIC_ACQUIRE) && de_time_now_ns() < end)
+        de_sleep_ns(50000);
+    if (!good || !de_atomic_load_u32(&s->updated, DE_ATOMIC_ACQUIRE) || fr->skin_count != 1 ||
+        fr->skin_joint_count != 2 || fr->skin_joints[1].m[9] != 3)
+        de_atomic_store_u32(&s->bad, 1, DE_ATOMIC_RELAXED);
+}
+TEST_F(render_thread, skin_snapshot_survives_next_simulation_palette_and_owner_growth, rtt) {
+    rwt *x = &f->fx;
+    rwt_start(x, 2, true);
+    de_entity e = rwt_spawn_mesh(x, at(0, 0, 0), 1);
+    de_affine pose[72];
+    for (u32 i = 0; i < 72; ++i)
+        pose[i] = de_affine_identity();
+    pose[1].m[9] = 3;
+    de_render_set_skin_palette(x->r, e, pose, 2);
+    skin_handoff s = {.entity = e.bits};
+    de_atomic_init_u32(&s.entered, 0);
+    de_atomic_init_u32(&s.updated, 0);
+    de_atomic_init_u32(&s.bad, 0);
+    de__render_world_set_frame_hook(x->r, skin_handoff_hook, &s);
+    ASSERT_EQ(rwt_frame(x), DE_OK);
+    u64 end = de_time_now_ns() + WAIT_TIMEOUT_NS;
+    while (!de_atomic_load_u32(&s.entered, DE_ATOMIC_ACQUIRE) && de_time_now_ns() < end)
+        de_sleep_ns(50000);
+    EXPECT_EQ(de_atomic_load_u32(&s.entered, DE_ATOMIC_ACQUIRE), 1u);
+    /* Frame1 is deliberately held on the render thread while simulation2 reallocates both
+     * the pose and the staging owner. No Extract/wait is needed to change simulation data. */
+    pose[1].m[9] = 99;
+    de_render_set_skin_palette(x->r, e, pose, 72);
+    for (u32 i = 0; i < 80; ++i) {
+        de_entity other = rwt_spawn_mesh(x, at(i, 0, 0), 1);
+        de_render_set_skin_palette(x->r, other, pose, 72);
+    }
+    de_atomic_store_u32(&s.updated, 1, DE_ATOMIC_RELEASE);
+    de__render_world_wait_idle(x->r);
+    EXPECT_EQ(de_atomic_load_u32(&s.bad, DE_ATOMIC_RELAXED), 0u);
+    ASSERT_EQ(rwt_frame(x), DE_OK);
+    const de__render_world_frame *next = rwt_last(x);
+    EXPECT_EQ(next->skin_count, 81u);
+    EXPECT_EQ(next->skin_palettes[0].count, 72u);
+    EXPECT_FLOAT_EQ(next->skin_joints[1].m[9], 99, 0);
+    /* Without Extract, rendering repeats the frozen pose even if simulation stages a new one. */
+    pose[1].m[9] = 123;
+    de_render_set_skin_palette(x->r, e, pose, 72);
+    ASSERT_EQ(de__render_extract_and_kick(x->r, x->w), DE_OK);
+    next = rwt_last(x);
+    EXPECT_FLOAT_EQ(next->skin_joints[1].m[9], 99, 0);
+    de__render_world_set_frame_hook(x->r, NULL, NULL);
+}
+TEST_F(render_thread, despawned_skin_staging_and_render_slots_are_reused_by_generation, rtt) {
+    rwt *x = &f->fx;
+    rwt_start(x, 0, false);
+    de_affine pose[2] = {de_affine_identity(), de_affine_identity()};
+    u64 previous = 0;
+    for (u32 n = 0; n < 100; ++n) {
+        de_entity e = rwt_spawn_mesh(x, at(0, 0, 0), 1);
+        EXPECT_NE(e.bits, previous);
+        if (previous)
+            EXPECT_EQ(de_entity_index(e), de_entity_index((de_entity){previous}));
+        previous = e.bits;
+        de_render_set_skin_palette(x->r, e, pose, 2);
+        ASSERT_EQ(rwt_frame(x), DE_OK);
+        EXPECT_EQ(rwt_last(x)->skin_count, 1u);
+        EXPECT_LE(x->r->skin->input_count, 1u);
+        EXPECT_LE(x->r->skin->count, 1u);
+        de_entity_despawn(x->w, e);
+        ASSERT_EQ(rwt_frame(x), DE_OK);
+        EXPECT_EQ(rwt_last(x)->skin_count, 0u);
+        for (u32 i = 0; i < x->r->skin->input_count; ++i) {
+            EXPECT_EQ(x->r->skin->inputs[i].entity.bits, 0u);
+            EXPECT_TRUE(x->r->skin->inputs[i].joints == NULL);
+        }
+        for (u32 i = 0; i < x->r->skin->count; ++i)
+            EXPECT_EQ(x->r->skin->entries[i].entity.bits, 0u);
+    }
 }
 
 /* ---- unpipelined_equivalence ----------------------------------------------------------------- */

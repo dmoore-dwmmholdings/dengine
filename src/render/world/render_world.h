@@ -166,6 +166,10 @@ typedef struct de__fog_snapshot {
     de_affine transform;
     DeFogVolume volume;
 } de__fog_snapshot;
+typedef struct de__skin_palette_snapshot {
+    u64 entity;
+    u32 slot, offset, count;
+} de__skin_palette_snapshot;
 
 typedef struct de__render_world_frame {
     u64 frame;           /**< extract frame number, from 1 */
@@ -182,6 +186,10 @@ typedef struct de__render_world_frame {
 
     de__rw_instances instances;
     de__rw_lights lights;
+    /* Extract-owned pose data, immutable until this frame buffer is reused. */
+    de__skin_palette_snapshot *skin_palettes;
+    de_affine *skin_joints;
+    u32 skin_count, skin_joint_count, skin_capacity, skin_joint_capacity;
     de__rw_environment environment;
     u32 probe_count;
     de__probe_snapshot probes[64];

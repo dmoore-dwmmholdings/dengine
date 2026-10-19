@@ -18,6 +18,7 @@
  * safe, because Extract always waits for a frame in flight first.
  */
 #include "render/world/render_world.h"
+#include "render/skin/skin_internal.h"
 
 #include "render/renderer_internal.h"
 
@@ -147,6 +148,8 @@ static de__render_world_frame *repeat_frame(de__render_world *rw) {
             f->frozen_views[i].extract_frame = f->frame;
         f->environment = last->environment;
         f->environment_count = last->environment_count;
+        if (de__skin_frame_copy(rw->alloc, f, last) != DE_OK)
+            DE_ERROR(rw->log, "render world: repeated skin snapshot allocation failed");
     }
     static const de__rw_kind kinds[2] = {DE__RW_KIND_INSTANCE, DE__RW_KIND_LIGHT};
     for (u32 i = 0; i < 2; ++i) {
