@@ -2,13 +2,16 @@
 import push_constants;
 import pt_aov;
 struct PtPush {uint params,entry;};
-struct PtPayload {DeRtHit hit;uint flags;};
+struct PtPayload {DeRtHit hit;uint flags,owner;};
 PtParams pt_parameters(PtPush pc) {return de_robuffer<PtParams>(pc.params)[pc.entry];}
-DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags) {
-    PtPayload payload=(PtPayload)0;payload.hit.t=-1;payload.hit.instance=0xffffffffu;payload.flags=flags;
+DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags,uint owner=0xffffffffu) {
+    PtPayload payload=(PtPayload)0;payload.hit.t=-1;payload.hit.instance=0xffffffffu;payload.flags=flags;payload.owner=owner;
     if(!(r.direction.w>r.origin.w))return payload.hit;
     RayDesc ray;ray.Origin=r.origin.xyz;ray.Direction=r.direction.xyz;ray.TMin=r.origin.w;ray.TMax=r.direction.w;
-    DeRtContext q=pt_query(p);TraceRay(de_accel(q.tlas),RAY_FLAG_NONE,255,0,1,0,ray,payload);return payload.hit;
+    DeRtContext q=pt_query(p);TraceRay(de_accel(q.tlas),owner!=0xffffffffu?RAY_FLAG_FORCE_NON_OPAQUE:RAY_FLAG_NONE,255,0,1,0,ray,payload);return payload.hit;
+}
+DeRtHit pt_intersect_sss(PtParams p,DeRtRay ray,PtSssState state) {
+    return pt_intersect(p,ray,0,state.active!=0?state.instance:0xffffffffu);
 }
 [shader("raygeneration")]
 void pt_raygen(uniform PtPush pc) {
@@ -29,7 +32,7 @@ void pt_raygen(uniform PtPush pc) {
     } else {
         PtPath path=pt_path_init(p,pixel);uint limit=p.max_bounces*(p.media.max_steps+5);
         for(uint event=0;event<limit&&path.finished==0;++event) {
-            DeRtHit hit=event==0?first:pt_intersect(p,path.ray,0);PtStep step=pt_path_event(p,path,hit,pixel);
+            DeRtHit hit=event==0?first:pt_intersect_sss(p,path.ray,path.sss);PtStep step=pt_path_event(p,path,hit,pixel);
             float3 visibility=1;
             if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0))
                 visibility=pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0?pt_path_shadow(p,path,step.shadow):float3(0);
@@ -54,5 +57,6 @@ void pt_closest(inout PtPayload payload,BuiltInTriangleIntersectionAttributes at
 [shader("anyhit")]
 void pt_alpha(inout PtPayload payload,BuiltInTriangleIntersectionAttributes attributes,uniform PtPush pc) {
     PtParams p=pt_parameters(pc);DeRtContext q=pt_query(p);q.flags=payload.flags;
-    if(!de_rt_opacity(q,InstanceID(),PrimitiveIndex(),attributes.barycentrics))IgnoreHit();
+    if((payload.owner!=0xffffffffu&&InstanceID()!=payload.owner)||
+       !de_rt_opacity(q,InstanceID(),PrimitiveIndex(),attributes.barycentrics))IgnoreHit();
 }

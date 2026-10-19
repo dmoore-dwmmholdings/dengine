@@ -8,6 +8,8 @@ typedef struct pt_fixture {
     de_cooked_mesh_range sphere_range;
     de_render_submesh sphere_submesh;
     de__pt_info info;
+    de_gpu_pipeline owner_pipeline;
+    de_gpu_buffer owner_params, owner_output;
 } pt_fixture;
 static void pt_fixture_setup(pt_fixture *f) {
     rt_fixture *r = &f->rt;
@@ -50,6 +52,9 @@ static void pt_fixture_teardown(pt_fixture *f) {
     if (f->rt.d) {
         de_gpu_wait_idle(f->rt.d);
         de_gpu_buffer_destroy(f->rt.d, f->rb);
+        de_gpu_pipeline_destroy(f->rt.d, f->owner_pipeline);
+        de_gpu_buffer_destroy(f->rt.d, f->owner_params);
+        de_gpu_buffer_destroy(f->rt.d, f->owner_output);
         if (f->sphere_indices.id) {
             mesh_free(&g_mesh[1], f->rt.d);
             de_gpu_buffer_destroy(f->rt.d, f->sphere_indices);
@@ -312,6 +317,116 @@ TEST_F(pt_media, sss_radius_and_energy, pt_fixture) {
     double opaque = media_mean(f, 0);
     printf("SSS backlit large %.9g opaque %.9g\n", backlit, opaque);
     EXPECT_TRUE(backlit > opaque + .01);
+}
+
+#if DE_HAS_GPU_METAL
+static void owner_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    (void)pass;
+    pt_fixture *f = user;
+    u32 pc[] = {de_gpu_buffer_bindless(f->rt.d, f->owner_params), 0};
+    de_gpu_cmd_set_pipeline(cmd, f->owner_pipeline);
+    de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+    de_gpu_cmd_dispatch_rays(cmd, 5, 1, 1);
+    de_gpu_barrier barrier = {
+        .buffer = f->owner_output, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, f->owner_output, 0, 80);
+}
+static void owner_stage(de__view_frame *vf, void *user) {
+    pt_fixture *f = user;
+    rt_fixture *r = &f->rt;
+    if (vf->view.id != r->view.id)
+        return;
+    de__rt_context *context = de__rt_context_get(r->r, vf->view, vf->graph, vf->frame_index);
+    ASSERT_TRUE(context != NULL);
+    ++r->stages;
+    /* PtParams' query/output words; the probe uses no shading/material parameters. */
+    u32 *params = de_gpu_buffer_map(r->d, f->owner_params);
+    params[0] = de_gpu_buffer_bindless(r->d, context->query);
+    params[9] = de_gpu_buffer_bindless(r->d, f->owner_output);
+    de_rg_pass *p = de_rg_add_pass(vf->graph, "SSS owning-boundary acceptance", DE_QUEUE_GRAPHICS,
+                                   owner_execute, f);
+    ASSERT_TRUE(p != NULL);
+    de_rg_read(p, context->dependency, DE_ACCESS_SHADER_READ);
+    de_rg_read(p, de_rg_import_buffer(vf->graph, context->query, DE_ACCESS_SHADER_READ),
+               DE_ACCESS_SHADER_READ);
+    de_rg_read(p, de_rg_import_buffer(vf->graph, f->owner_params, DE_ACCESS_SHADER_READ),
+               DE_ACCESS_SHADER_READ);
+    de_rg_write(p, de_rg_import_buffer(vf->graph, f->owner_output, DE_ACCESS_COPY_SRC),
+                DE_ACCESS_SHADER_WRITE);
+    de_rg_write(p, de_rg_import_buffer(vf->graph, f->rb, DE_ACCESS_COPY_DST), DE_ACCESS_COPY_DST);
+    de_rg_pass_side_effect(p);
+}
+#endif
+TEST_F(pt_media, sss_walk_ignores_foreign_interior_surfaces, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    media_slab(f, .2f);
+    u32 foreign = material_add(.2f, .01f, 0, .5f);
+    g_mat[foreign - 1].standard.double_sided = true;
+    world_set(&f->rt.w, 2, 1, at(3, 0, -.1f), foreign);
+    f->rt.w.f.instances.flags[2] |= DE__RW_INST_VISIBLE_IN_RT;
+    f->rt.w.f.instances.layer_mask[2] = 1u << 24;
+    /* Coincident with the owning exit: rejecting the wrong instance must
+     * happen during traversal, without stepping past both surfaces. */
+    world_set(&f->rt.w, 3, 1, at(3, 0, -.2f), foreign);
+    f->rt.w.f.instances.flags[3] |= DE__RW_INST_VISIBLE_IN_RT;
+    f->rt.w.f.instances.layer_mask[3] = 1u << 24;
+    de_render_settings settings = de_renderer_get_settings(f->rt.r);
+    settings.path_tracer = false;
+    de_renderer_set_settings(f->rt.r, &settings);
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_shader_blob ray = {de__pt_metal_library, de__pt_metal_library_bytes,
+                              "pt_sss_owner_probe"};
+    de_gpu_shader_blob miss = ray;
+    miss.entry = "pt_miss";
+    de_gpu_rt_hit_group hit = {.closest_hit = ray, .any_hit = ray};
+    hit.closest_hit.entry = "pt_closest";
+    hit.any_hit.entry = "pt_alpha";
+    de_gpu_rt_desc rt = {.raygen = ray,
+                         .miss = &miss,
+                         .miss_count = 1,
+                         .hit_groups = &hit,
+                         .hit_group_count = 1,
+                         .max_recursion = 1,
+                         .payload_bytes = 64,
+                         .attribute_bytes = 8};
+    f->owner_pipeline = de_gpu_pipeline_create(
+        f->rt.d,
+        &(de_gpu_pipeline_desc){.kind = DE_PIPE_RAYTRACING, .rt = &rt, .push_constant_bytes = 8});
+    ASSERT_TRUE(f->owner_pipeline.id);
+    f->owner_params = de_gpu_buffer_create(
+        f->rt.d,
+        &(de_gpu_buffer_desc){.size = 416, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
+    f->owner_output = de_gpu_buffer_create(
+        f->rt.d, &(de_gpu_buffer_desc){.size = 80, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(f->owner_params.id && f->owner_output.id);
+    memset(de_gpu_buffer_map(f->rt.d, f->owner_params), 0, 416);
+    ASSERT_EQ(de__view_register_stage(f->rt.r, DE__VIEW_SLOT_LIGHTING, 1, "SSS owner acceptance",
+                                      owner_stage, f),
+              DE_OK);
+    typedef struct owner_hit {
+        f32 t;
+        u32 instance, primitive, lod;
+    } owner_hit;
+    (void)frame_rt(&f->rt);
+    const owner_hit *result = de_gpu_buffer_map(f->rt.d, f->rb);
+    /* Origin z=-.05: foreign plane z=-.1, owning exit z=-.2. Owner0's
+     * rear plane z=-2 is outside tmax1, so that owner must report a miss. */
+    printf("SSS boundaries: ordinary%u t%g owner1=%u t%g owner0=%u t%g owner2=%u t%g\n",
+           result[0].instance, result[0].t, result[1].instance, result[1].t, result[2].instance,
+           result[2].t, result[3].instance, result[3].t);
+    EXPECT_EQ(result[0].instance, 2u);
+    EXPECT_FLOAT_EQ(result[0].t, .05, 1e-6);
+    EXPECT_EQ(result[1].instance, 1u);
+    EXPECT_FLOAT_EQ(result[1].t, .15, 1e-6);
+    EXPECT_TRUE(result[2].t < 0);
+    EXPECT_EQ(result[3].instance, 2u);
+    EXPECT_FLOAT_EQ(result[3].t, .05, 1e-6);
+    EXPECT_EQ(result[4].instance, 3u);
+    EXPECT_FLOAT_EQ(result[4].t, .15, 1e-6);
+    de__view_unregister_stage(f->rt.r, owner_stage, f);
+#endif
 }
 
 TEST_F(pt_media, gpu_stack_overflow, pt_fixture) {

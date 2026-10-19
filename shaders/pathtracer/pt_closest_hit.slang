@@ -208,9 +208,11 @@ public PtStep pt_phase_step(PtParams p,PtPath path,float3 position,float g,uint 
 }
 public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel) {
     path.event++;float limit=hit.t>=0?hit.t:path.ray.direction.w;
-    float area_pdf;float4 area=pt_area_hit(p,path.ray,hit.t,area_pdf);if(area.w>=0)limit=min(limit,area.w);
+    // Analytic emitters are not boundaries of an internal subsurface walk.
+    if(path.sss.active==0){float area_pdf;float4 area=pt_area_hit(p,path.ray,hit.t,area_pdf);if(area.w>=0)limit=min(limit,area.w);}
     PtStep step=(PtStep)0;step.stop=1;
     if(path.sss.active!=0) {
+        if(hit.t>=0&&hit.instance!=path.sss.instance)return step;
         float2 u=float2(pt_random(pixel^p.seed,p.sample,8192+path.event*7),pt_random(pixel^p.seed,p.sample,8193+path.event*7));
         PtSssFlight flight=pt_sss_flight(path.sss,limit,u);path.throughput*=flight.weight;
         path.position=path.ray.origin.xyz+path.ray.direction.xyz*flight.distance;

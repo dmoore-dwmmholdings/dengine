@@ -34,7 +34,8 @@ bool de_rt_accept() {
 // Each SBT record is uint4. Record0 stores miss/hit counts and the hit section byte offset.
 inline void de_rt_trace(constant DeRtHeap &heap, uint tlas, ray r, uint mask, uint miss,
                         thread DeRtPayload &payload, DeRtIntersectionTable intersections,
-                        DeRtVisibleTable functions, device const uint4 *sbt, constant uchar *push) {
+                        DeRtVisibleTable functions, device const uint4 *sbt, constant uchar *push,
+                        bool force_non_opaque = false) {
     DeRtHit out = {};
     out.distance = -1;
     out.custom_index = 0xffffffffu;
@@ -43,6 +44,8 @@ inline void de_rt_trace(constant DeRtHeap &heap, uint tlas, ray r, uint mask, ui
     if (r.max_distance > r.min_distance && dot(r.direction, r.direction) > 0) {
         intersector<triangle_data, instancing> query;
         query.assume_geometry_type(geometry_type::triangle);
+        if (force_non_opaque)
+            query.force_opacity(forced_opacity::non_opaque);
         auto h = query.intersect(r, heap.accels[tlas], mask, intersections, payload);
         if (h.type == intersection_type::triangle) {
             out.distance = h.distance;

@@ -15,22 +15,29 @@ inline PtParams_0 pt_load(constant DeRtHeap &heap,constant PtPush &pc,thread Ker
 [[intersection(triangle,triangle_data,instancing)]]
 bool pt_alpha(uint instance [[user_instance_id]],uint primitive [[primitive_id]],float2 bary [[barycentric_coord]],
               ray_data DeRtPayload &payload [[payload]],constant DeRtHeap &heap [[buffer(0)]]) {
+    if(payload.words[12]!=0xffffffffu&&instance!=payload.words[12])return false;
     PtPush local={payload.words[13],payload.words[14]};
     KernelContext_0 ctx;ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;auto p=pt_load_0(local.params,local.entry,&ctx);auto q=pt_query_0(&p,&ctx);q.ptq_flags=payload.words[15];
     return de_rt_opacity_0(&q,instance,primitive,bary,&ctx);
 }
 inline DeRtHit_0 pt_intersect(constant DeRtHeap &heap,thread const PtParams_0 &p,DeRtRay_0 r,uint flags,
                              DeRtIntersectionTable intersections,DeRtVisibleTable functions,
-                             device const uint4 *sbt,constant uchar *push,thread KernelContext_0 &ctx) {
-    DeRtPayload payload={};payload.words[15]=flags;
+                             device const uint4 *sbt,constant uchar *push,thread KernelContext_0 &ctx,uint owner=0xffffffffu) {
+    DeRtPayload payload={};payload.words[15]=flags;payload.words[12]=owner;
     constant PtPush &pc=*(constant PtPush *)push;payload.words[13]=pc.params;payload.words[14]=pc.entry;
     ray native;native.origin=r.ptr_origin.xyz;native.direction=r.ptr_direction.xyz;
     native.min_distance=r.ptr_origin.w;native.max_distance=r.ptr_direction.w;
     auto query=pt_query_0(&p,&ctx);
-    de_rt_trace(heap,query.ptq_tlas,native,255,0,payload,intersections,functions,sbt,push);
+    de_rt_trace(heap,query.ptq_tlas,native,255,0,payload,intersections,functions,sbt,push,owner!=0xffffffffu);
     DeRtHit_0 h={};h.pth_t=as_type<float>(payload.words[0]);h.pth_instance=payload.words[1];h.pth_primitive=payload.words[2];
     h.pth_u=as_type<float>(payload.words[3]);h.pth_v=as_type<float>(payload.words[4]);
     if(h.pth_t>=0)h.pth_lod=((device const uint *)heap.buffers[query.ptq_lods])[h.pth_instance];return h;
+}
+inline DeRtHit_0 pt_intersect_sss(constant DeRtHeap &heap,thread const PtParams_0 &p,DeRtRay_0 ray,
+                                 PtSssState_0 state,DeRtIntersectionTable intersections,DeRtVisibleTable functions,
+                                 device const uint4 *sbt,constant uchar *push,thread KernelContext_0 &ctx) {
+    return pt_intersect(heap,p,ray,0,intersections,functions,sbt,push,ctx,
+                        state.ptsss_active!=0?state.ptsss_instance:0xffffffffu);
 }
 kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
                       DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
@@ -59,7 +66,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
         auto path=pt_path_init_0(&p,pixel);
         uint limit=p.ptp_max_bounces*(p.ptp_media.ptm_max_steps+5);
         for(uint event=0;event<limit && path.ptpath_finished==0;++event) {
-            auto h=event==0?first:pt_intersect(heap,p,path.ptpath_ray,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+            auto h=event==0?first:pt_intersect_sss(heap,p,path.ptpath_ray,path.ptpath_sss,intersections,functions,sbt,(constant uchar *)&pc,ctx);
             auto step=pt_path_event_0(&p,&path,&h,pixel,&ctx);
             float3 visibility=1;
             if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0)) {
@@ -84,4 +91,15 @@ kernel void pt_env_cdf(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc
 }
 kernel void pt_media_stack_probe(constant DeRtHeap &heap [[buffer(0)]],constant uint &output [[buffer(1)]]) {
     uint2 result=pt_stack_probe_0();device uint *dst=(device uint *)heap.buffers[output];dst[0]=result.x;dst[1]=result.y;
+}
+
+// Native traversal acceptance uses the same SSS intersection seam as raygen.
+kernel void pt_sss_owner_probe(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
+                              DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
+                              device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
+    KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);DeRtRay_0 r={};
+    r.ptr_origin=float4(3,0,-.05f,.00001f);r.ptr_direction=float4(0,0,-1,1);
+    PtSssState_0 state={};state.ptsss_active=id.x==0?0:1;state.ptsss_instance=id.x==2?0:(id.x==3?2:(id.x==4?3:1));
+    auto h=pt_intersect_sss(heap,p,r,state,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+    ((device uint4 *)heap.buffers[p.ptp_output])[id.x]=uint4(as_type<uint>(h.pth_t),h.pth_instance,h.pth_primitive,h.pth_lod);
 }
