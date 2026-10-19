@@ -114,3 +114,14 @@ text_color = "$foreground"
 border_color = "$border"
 border_width = 1
 radius = 4
+[style."button:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."toggle:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."slider:focus"]
+border_color = "$foreground"
+border_width = 2

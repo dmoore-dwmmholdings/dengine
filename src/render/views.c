@@ -486,6 +486,9 @@ static bool hook_position(de_rg_hook at, u32 *slot, i32 *order, u32 *phase) {
     case DE_HOOK_AFTER_TONEMAP:
         *slot = DE__VIEW_SLOT_POST, *order = DE__VIEW_ORDER_TONEMAP, *phase = 2;
         return true;
+    case DE_HOOK_PIXEL_UI:
+        *slot = DE__VIEW_SLOT_POST, *order = INT32_MAX - 1, *phase = 0;
+        return true;
     case DE_HOOK_UI:
         *slot = DE__VIEW_SLOT_OUTPUT, *order = DE__VIEW_ORDER_UI, *phase = 2;
         return true;
@@ -725,6 +728,157 @@ static void matrices(const de__rw_view *cam, const u32 vp[4], de__view_frame *vf
     vf->view_proj = de_m4_mul(&vf->proj, &vf->view_matrix);
 }
 
+/* One implementation supplies Extract layout and the matching render-frame matrices. */
+static void camera_metadata(de_renderer *r, const de__render_world_frame *world,
+                            const de__rw_view *camera, de__view_frame *vf) {
+    de__rw_view snapped = *camera;
+    if (vf->pixel_art && vf->pixel_art->snap_camera &&
+        snapped.camera.projection == DE_PROJ_ORTHOGRAPHIC) {
+        de_dvec3 position = snapped.has_position ? snapped.position
+                                                 : (de_dvec3){world->origin.x + snapped.offset.x,
+                                                              world->origin.y + snapped.offset.y,
+                                                              world->origin.z + snapped.offset.z};
+        f64 texel = (snapped.camera.ortho_height > 0 ? snapped.camera.ortho_height : 10) /
+                    vf->pixel_art->internal_height;
+        position = de__pixel_snap(position, r->plane_2d, texel, &vf->pixel_residual);
+        snapped.offset = de_dv3_relative(position, world->origin);
+        snapped.transform.m[9] = snapped.offset.x;
+        snapped.transform.m[10] = snapped.offset.y;
+        snapped.transform.m[11] = snapped.offset.z;
+    }
+    u32 vp[4] = {0, 0, vf->pixel_art ? vf->pixel_art->internal_width : vf->viewport_px[2],
+                 vf->pixel_art ? vf->pixel_art->internal_height : vf->viewport_px[3]};
+    matrices(&snapped, vp, vf);
+    if (vf->pixel_art && vf->pixel_art->smooth_subpixel_scroll) {
+        vf->proj.m[0] *= (f32)vf->pixel_art->internal_width / vf->width;
+        vf->proj.m[5] *= (f32)vf->pixel_art->internal_height / vf->height;
+        vf->view_proj = de_m4_mul(&vf->proj, &vf->view_matrix);
+    }
+}
+static de_view_frame_info metadata(const de__view_frame *vf) {
+    de_view_frame_info out = {.view = vf->view,
+                              .frame_index = vf->frame_index,
+                              .extract_frame = vf->world ? vf->world->frame : 0,
+                              .ring_index = (u32)(vf->frame_index % vf->renderer->frames_in_flight),
+                              .frames_in_flight = vf->renderer->frames_in_flight,
+                              .layer_mask = vf->layer_mask,
+                              .render_origin = vf->world ? vf->world->origin : (de_dvec3){0},
+                              .view_matrix = vf->view_matrix,
+                              .projection = vf->proj,
+                              .view_projection = vf->view_proj,
+                              .internal_width = vf->width,
+                              .internal_height = vf->height,
+                              .output_width = vf->output_width,
+                              .output_height = vf->output_height,
+                              .viewport_px = {(f32)vf->viewport_px[0], (f32)vf->viewport_px[1],
+                                              (f32)vf->viewport_px[2], (f32)vf->viewport_px[3]},
+                              .content_px = {0, 0, (f32)vf->output_width, (f32)vf->output_height},
+                              .pixel_residual = vf->pixel_residual};
+    if (vf->pixel_art) {
+        out.pixel_art = true;
+        out.pixel = *vf->pixel_art;
+        de__pixel_layout fit = de__pixel_layout_make(
+            out.pixel.internal_width, out.pixel.internal_height, out.output_width,
+            out.output_height, out.pixel.integer_scale_only);
+        out.content_px = (de_vec4){fit.x, fit.y, fit.width, fit.height};
+    }
+    return out;
+}
+void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
+    de__views *vs = views_of(r);
+    world->frozen_view_count = 0;
+    if (!vs)
+        return;
+    u32 output_w, output_h;
+    de_renderer_output_size(r, &output_w, &output_h);
+    de_render_settings settings;
+    de_mutex_lock(&r->lock);
+    settings = r->settings;
+    de_mutex_unlock(&r->lock);
+    de_mutex_lock(&vs->lock);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i) {
+        const view_main *m = &vs->main[i];
+        if (!m->alive || m->capture)
+            continue;
+        const de_view v = make_handle(i, m->gen);
+        const de__rw_view *cam = NULL;
+        for (u32 k = 0; k < world->view_count; ++k) {
+            de_view want = world->views[k].camera.view;
+            if ((want.id ? want.id : vs->main_view.id) == v.id) {
+                cam = &world->views[k];
+                break;
+            }
+        }
+        if (!cam)
+            continue;
+        u32 tw = output_w, th = output_h;
+        if (m->target.id) {
+            const de__gpu_texture *target = de__gpu_get_texture(r->dev, m->target);
+            if (!target)
+                continue;
+            tw = target->width;
+            th = target->height;
+        }
+        if (!tw || !th)
+            continue;
+        const de_render_settings eff = effective_settings(r, m, &settings);
+        de__view_frame vf = {.renderer = r, .world = world, .view = v, .layer_mask = m->layer_mask};
+        viewport_px(m->viewport, tw, th, vf.viewport_px);
+        vf.width = round_px(vf.viewport_px[2] * eff.render_scale, 1, 16384);
+        vf.height = round_px(vf.viewport_px[3] * eff.render_scale, 1, 16384);
+        vf.output_width = vf.width;
+        vf.output_height = vf.height;
+        if (m->pixel_art) {
+            vf.pixel_art = &m->pixel;
+            u32 border = m->pixel.smooth_subpixel_scroll ? 2 : 0;
+            vf.width = m->pixel.internal_width + border;
+            vf.height = m->pixel.internal_height + border;
+            vf.output_width = vf.viewport_px[2];
+            vf.output_height = vf.viewport_px[3];
+        }
+        camera_metadata(r, world, cam, &vf);
+        u32 at = world->frozen_view_count++;
+        world->frozen_views[at] = metadata(&vf);
+        world->frozen_views[at].frame_index = UINT64_MAX;
+        world->frozen_views[at].ring_index = UINT32_MAX;
+        world->frozen_settings[at] = eff;
+        world->frozen_targets[at] = m->target;
+    }
+    de_mutex_unlock(&vs->lock);
+}
+bool de_renderer_extract_view_info(de_renderer *r, de_view view, de_view_frame_info *out) {
+    if (out)
+        memset(out, 0, sizeof *out);
+    const de__render_world_frame *f = r && r->render_world ? r->render_world->filling : NULL;
+    if (!f || !out)
+        return false;
+    for (u32 i = 0; i < f->frozen_view_count; ++i)
+        if (f->frozen_views[i].view.id == view.id) {
+            *out = f->frozen_views[i];
+            return true;
+        }
+    return false;
+}
+bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_info *out) {
+    if (out)
+        memset(out, 0, sizeof *out);
+    const de__views *vs = views_of(r);
+    if (!vs || !vs->building || !out || vs->building->view.id != view.id)
+        return false;
+    const de__view_frame *vf = vs->building;
+    /* Internal dimensions stay fixed even after pixel.upscale changes vf.width/height. */
+    if (vf->world)
+        for (u32 i = 0; i < vf->world->frozen_view_count; ++i)
+            if (vf->world->frozen_views[i].view.id == view.id) {
+                *out = vf->world->frozen_views[i];
+                out->frame_index = vf->frame_index;
+                out->ring_index = (u32)(vf->frame_index % r->frames_in_flight);
+                return true;
+            }
+    *out = metadata(vf);
+    return true;
+}
+
 /* Logs a view failure once until the view works again. */
 static void view_failed(de_renderer *r, view_rs *s, const char *what) {
     if (!s->failed_logged) {
@@ -792,6 +946,20 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     const de_view handle = make_handle(slot, s->gen);
     s->ok = false;
 
+    const de_view_frame_info *frozen = NULL;
+    u32 frozen_index = 0;
+    for (u32 i = 0; world && i < world->frozen_view_count; ++i)
+        if (world->frozen_views[i].view.id == handle.id) {
+            frozen = &world->frozen_views[i];
+            frozen_index = i;
+            break;
+        }
+    if (frozen) {
+        s->copy.pixel_art = frozen->pixel_art;
+        s->copy.pixel = frozen->pixel;
+        s->copy.layer_mask = frozen->layer_mask;
+        s->copy.target = world->frozen_targets[frozen_index];
+    }
     /* Where it goes: its target, or the swapchain / offscreen target. */
     u32 tw = vs->out_w, th = vs->out_h;
     de_gpu_format tfmt = vs->out_format;
@@ -817,6 +985,15 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         u32 border = s->copy.pixel.smooth_subpixel_scroll ? 2 : 0;
         s->w = s->copy.pixel.internal_width + border;
         s->h = s->copy.pixel.internal_height + border;
+    }
+    if (frozen) {
+        s->eff = world->frozen_settings[frozen_index];
+        s->vp[0] = (u32)frozen->viewport_px.x;
+        s->vp[1] = (u32)frozen->viewport_px.y;
+        s->vp[2] = (u32)frozen->viewport_px.z;
+        s->vp[3] = (u32)frozen->viewport_px.w;
+        s->w = frozen->internal_width;
+        s->h = frozen->internal_height;
     }
     const bool full = s->vp[0] == 0 && s->vp[1] == 0 && s->vp[2] == tw && s->vp[3] == th;
     if (rtt && !de__composite_ready(vs->composite)) {
@@ -849,35 +1026,16 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.height = s->h;
     vf.output_width = s->out_w;
     vf.output_height = s->out_h;
-    de__rw_view snapped;
-    if (s->copy.pixel_art) {
+    if (s->copy.pixel_art)
         vf.pixel_art = &s->copy.pixel;
-        snapped = *vf.camera;
-        if (s->copy.pixel.snap_camera && snapped.camera.projection == DE_PROJ_ORTHOGRAPHIC) {
-            de_dvec3 position = snapped.has_position
-                                    ? snapped.position
-                                    : (de_dvec3){world->origin.x + snapped.offset.x,
-                                                 world->origin.y + snapped.offset.y,
-                                                 world->origin.z + snapped.offset.z};
-            f64 texel = (snapped.camera.ortho_height > 0 ? snapped.camera.ortho_height : 10) /
-                        s->copy.pixel.internal_height;
-            position = de__pixel_snap(position, r->plane_2d, texel, &vf.pixel_residual);
-            snapped.offset = de_dv3_relative(position, world->origin);
-            snapped.transform.m[9] = snapped.offset.x;
-            snapped.transform.m[10] = snapped.offset.y;
-            snapped.transform.m[11] = snapped.offset.z;
-        }
-        vf.camera = &snapped;
-    }
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
-    vf.layer_mask = s->copy.layer_mask; /* DENG-239 */
-    u32 projection_vp[4] = {0, 0, s->copy.pixel_art ? s->copy.pixel.internal_width : s->vp[2],
-                            s->copy.pixel_art ? s->copy.pixel.internal_height : s->vp[3]};
-    matrices(vf.camera, projection_vp, &vf);
-    if (s->copy.pixel_art && s->copy.pixel.smooth_subpixel_scroll) {
-        vf.proj.m[0] *= (f32)s->copy.pixel.internal_width / s->w;
-        vf.proj.m[5] *= (f32)s->copy.pixel.internal_height / s->h;
-        vf.view_proj = de_m4_mul(&vf.proj, &vf.view_matrix);
+    vf.layer_mask = s->copy.layer_mask;
+    camera_metadata(r, world, vf.camera, &vf);
+    if (frozen) {
+        vf.view_matrix = frozen->view_matrix;
+        vf.proj = frozen->projection;
+        vf.view_proj = frozen->view_projection;
+        vf.pixel_residual = frozen->pixel_residual;
     }
     vf.prev_view_proj = s->has_prev ? s->prev_view_proj : vf.view_proj;
     const u32 t_access = rtt ? target_access_before(vs, slot, pos) : DE_ACCESS_NONE;

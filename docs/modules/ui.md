@@ -227,3 +227,46 @@ ASan aggregate timing remains separately qualified (theme1ms budget under Dev).
 Public headers/layering and all21 unique UI C sources compile with render/GPU off.
 The actual Metal widget state sheet passes capture and strict comparison with FLIP0,
 and the native visual review is accepted. No global suite or CI repair loop was run.
+
+### Navigation (DENG-320)
+
+Add `DeUiFocusable` to each navigable node. `tab_index` sorts Tab/shoulder traversal, then
+hierarchy insertion order; negative values opt out of Tab but remain explicitly focusable.
+Directional links override geometric selection. Otherwise navigation compares rect edge gaps
+in the requested half-plane (primary gap + twice the perpendicular gap), with stable tree
+order for ties and no implicit spatial wrap. Hidden or disabled ancestors exclude descendants.
+A visible modal `DeUiPopup` traps navigation in its subtree; hiding/despawning it restores the
+previous live, eligible focus. Nested popup cancellation unwinds one scope at a time.
+
+`de_ui_set_focus` changes logical focus and emits FOCUS/BLUR. `DeUiInteractionState.focused`
+also remains logical, including in mouse mode, so text editors keep their active selection.
+`de_ui_focus_visible` separately reports keyboard/gamepad ring visibility. Mouse movement hides
+only the stylesheet's `:focus` selector; the next navigation/activation restores it. Default
+button/toggle/slider rings use a 2-pixel foreground border (3.27:1 against the primary blue,
+above 3:1 against the surface). Existing widget hover/pressed/disabled transitions remain.
+
+At attach, UI creates a rebindable normal action map named `ui` only when absent. A preloaded
+map is preserved. Its navigate/submit/cancel/tab_next/tab_prev/scroll actions bind arrows,
+Enter/Space/Escape/Tab/Shift+Tab and gamepad d-pad/left stick/south/east/shoulders/right stick;
+pointer_motion is an additional recordable mouse-delta action. `de_ui_set_input_mode` selects
+NONE, NON_MODAL (default passthrough) or MODAL (consumes bound input). Modal popups temporarily
+force consumption. UI pops only a context it pushed and restores preexisting map flags at
+detach. The input object must outlive UI; UI attaches it if the world has no input resource
+and detaches only that owned attachment.
+
+`ui.actions` reads public resolved actions in main-thread FixedUpdate after `input.fixed_tick`.
+`ui.focus` applies the staged samples in PostUpdate after widget reconciliation and before
+style/layout. This uses S21's actual tick replay view: a frame with zero fixed ticks retains
+pending input for the next tick; multiple fixed ticks do not duplicate a press. Repeat time
+is accumulated from fixed deltas (400 ms initial delay, then 80 ms), never the wall clock.
+The preallocated queue holds at least 256 ticks (or max_nodes when larger); drain PostUpdate
+between larger catch-up batches. Overflow reports an error rather than allocating.
+
+Activation and slider adjustments call the stable widget entry table. Its nullable
+scroll_into_view hook receives the nearest scroll/list ancestor on focus changes; advanced
+controls register their own actions and scrolling implementation. No scroll stub is linked.
+`test_menu_replay.c` is an executable sample menu using real button/toggle/slider components:
+a gamepad walks Play, Music, Volume and Quit, cancels a modal confirmation, then confirms exit.
+The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world with no devices,
+and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
+Later advanced-widget walkthrough extensions use the same table and recording schema.

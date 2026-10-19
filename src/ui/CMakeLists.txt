@@ -29,3 +29,9 @@ endif()
 if(TARGET de_ui)
  target_sources(de_ui PRIVATE widgets/advanced.c widgets/text_input.c widgets/dropdown.c widgets/scroll_view.c widgets/virtual_list.c widgets/tabs.c widgets/tooltip.c)
 endif()
+
+# DENG-320: replay-aware keyboard/gamepad focus navigation.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE input/focus.c input/spatial_nav.c input/ui_actions.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_NAVIGATION=1)
+endif()

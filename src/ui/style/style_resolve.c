@@ -133,6 +133,12 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     u32 type = widget ? (u32)widget->type : DE_UI_WIDGET_PANEL;
     const DeUiInteractionState *interaction = de_entity_get_const(ui->world, entity, ui->ids.state);
     u32 bits = state_bits(interaction);
+#if defined(DE_UI_NAVIGATION)
+    /* Logical focus remains available to editors while mouse mode suppresses only its ring.
+     * Keep explicitly authored focus states working when navigation owns no focused entity. */
+    if (de_ui_focused(ui).bits == entity.bits && !de_ui_focus_visible(ui))
+        bits &= ~2u;
+#endif
     de_ui_style_cache *cache = cached(state, entity);
     if (!cache)
         return;

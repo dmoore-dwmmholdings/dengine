@@ -172,6 +172,10 @@ typedef struct de__render_world_frame {
     de_dvec3 origin;     /**< the render origin (f64 world position) */
     bool origin_changed; /**< rebased this frame (also the first frame): everything changed */
 
+    u32 frozen_view_count;
+    de_view_frame_info frozen_views[32];
+    de_render_settings frozen_settings[32];
+    de_gpu_texture frozen_targets[32];
     u32 view_count;
     u32 main_view; /**< index into views, DE__RW_NONE without a camera */
     de__rw_view *views;

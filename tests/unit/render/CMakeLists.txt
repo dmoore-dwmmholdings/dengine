@@ -1256,3 +1256,15 @@ de_add_test(NAME render_palette_dither SOURCES test_palette_dither.c render_d3d1
 if(TARGET test_render_palette_dither)
     target_include_directories(test_render_palette_dither PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-322 bounded public forward-participant provider contract.
+if(DE_BUILD_TOOLS)
+    de_add_test(NAME render_forward_participants SOURCES test_forward_participants.c
+        LIBS ${_de_vis_libs} de_cooker LABELS unit gpu render TIMEOUT 300)
+    if(TARGET test_render_forward_participants)
+        target_include_directories(test_render_forward_participants PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_render_forward_participants PRIVATE
+            "DE_PARTICIPANT_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+    endif()
+endif()

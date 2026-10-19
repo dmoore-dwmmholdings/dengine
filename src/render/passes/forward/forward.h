@@ -83,6 +83,8 @@ typedef struct de__transparent_item {
     u64 entity;   /**< the first tie-break */
     u32 index;    /**< its place in the gather (the last tie-break) */
     u32 flags;    /**< DE__FWD_ITEM_* */
+    u32 participant, participant_item; /**< Zero participant means an ordinary mesh. */
+    bool always_on_top;
     u32 meshlet_first, meshlet_count; /**< LOD 0's meshlets */
     i16 layer, order;                 /**< S19: authored sprite order; meshes use zero. */
 } de__transparent_item;
@@ -136,6 +138,7 @@ typedef struct de__forward de__forward;
 /** One draw of the pass, in order. */
 typedef struct de__forward_draw {
     u32 instance, side, meshlet_first, meshlet_count;
+    u32 participant, participant_item;
 } de__forward_draw;
 
 /** What one view's pass did this frame (the graph's frame arena). */

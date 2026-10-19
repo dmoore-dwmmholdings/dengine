@@ -17,6 +17,8 @@
  * ============================================================================================== */
 
 bool de__transparent_before(const de__transparent_item *a, const de__transparent_item *b) {
+    if (a->always_on_top != b->always_on_top)
+        return !a->always_on_top;
     if (a->layer != b->layer)
         return a->layer < b->layer;
     if (a->order != b->order)
@@ -83,6 +85,15 @@ void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_it
         items[j] = saved;
         keys[j].index = j;
     }
+    /* Overlay participants form a final stable group without changing ordinary sprite keys. */
+    u32 dst = 0;
+    for (u32 i = 0; i < n; ++i)
+        if (!items[i].always_on_top)
+            scratch[dst++] = items[i];
+    for (u32 i = 0; i < n; ++i)
+        if (items[i].always_on_top)
+            scratch[dst++] = items[i];
+    memcpy(items, scratch, (size_t)n * sizeof *items);
 }
 
 /* =================================================================================================
