@@ -137,15 +137,18 @@ static void distributed_text_height(ui_fx *f, bool percent) {
     de_entity root = ui_node(f, (de_entity){0}), text = ui_node(f, root), other = ui_node(f, root);
     ui_node_edit(f, root)->align_items = DE_UI_ALIGN_START;
     DeUiNode *node = ui_node_edit(f, text);
-    node->width = (de_ui_len){percent ? DE_UI_PERCENT : DE_UI_PX, percent ? 50 : 300};
+    node->width = (de_ui_len){percent ? DE_UI_PERCENT : DE_UI_PX, percent ? 50.f : 300.f};
     for (u32 i = 0; i < 4; ++i)
         node->padding[i] = (de_ui_len){DE_UI_PX, 5};
-    ui_node_edit(f, other)->width = (de_ui_len){DE_UI_PX, percent ? 200 : 300};
+    ui_node_edit(f, other)->width = (de_ui_len){DE_UI_PX, percent ? 200.f : 300.f};
     DeUiText *label = de_entity_add(f->world, text, f->ui->ids.text);
     label->style.font = fonts.latin;
     label->style.size_px = 20;
-    strcpy(label->text, "The quick brown fox jumps over the lazy dog. The quick brown fox "
-                        "jumps over the lazy dog.");
+    memcpy(label->text,
+           "The quick brown fox jumps over the lazy dog. The quick brown fox "
+           "jumps over the lazy dog.",
+           sizeof("The quick brown fox jumps over the lazy dog. The quick brown fox "
+                  "jumps over the lazy dog."));
     ui_frame(f);
     label = de_entity_get(f->world, text, f->ui->ids.text);
     de_text_layout *layout = NULL;

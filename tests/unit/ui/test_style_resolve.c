@@ -1,3 +1,9 @@
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "style_test_util.h"
 TEST_F(ui_style_resolve, specificity_sheet_order_state_and_class_removal, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.1\n[style.\".danger\"]\nopacity=0."

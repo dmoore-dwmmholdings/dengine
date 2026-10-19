@@ -193,7 +193,7 @@ static void topology_shadow(sprite_rt_fixture *f, bool hole, bool fallback) {
                 : hole
                     ? x >= 1 && x < 7 && y >= 1 && y < 7 && !(x >= 3 && x < 5 && y >= 3 && y < 5)
                     : (x >= 1 && x < 3 && y >= 1 && y < 3) || (x >= 5 && x < 7 && y >= 4 && y < 7);
-            rgba[(y * 8 + x) * 4 + 3] = solid ? 1 : 0;
+            rgba[(y * 8 + x) * 4 + 3] = solid ? 1.f : 0.f;
         }
     if (fallback) {
         ASSERT_EQ(de_sprite_proxy_build(&r->alloc, rgba, 8, 8, .5f, &f->proxy), DE_ERR_UNSUPPORTED);
@@ -296,7 +296,7 @@ TEST(sprite_proxy, every_small_mask_keeps_all_opaque_and_transparent_pixel_cente
     for (u32 mask = 1; mask < 512; ++mask) {
         f32 rgba[3 * 3 * 4] = {0};
         for (u32 pixel = 0; pixel < 9; ++pixel)
-            rgba[pixel * 4 + 3] = (mask >> pixel) & 1;
+            rgba[pixel * 4 + 3] = (f32)((mask >> pixel) & 1u);
         de_cooked_sprite_proxy proxy;
         de_result result = de_sprite_proxy_build(de_heap_allocator(), rgba, 3, 3, .5f, &proxy);
         if (result == DE_ERR_UNSUPPORTED)

@@ -82,7 +82,7 @@ TEST_F(ui_world, popup_percent_and_oversize_clamps_are_independent_between_panel
         node->height = (de_ui_len){DE_UI_PERCENT, 125};
         de_entity_add(f->world, popup, f->ui->ids.popup);
         ui_frame(f);
-        expect_rect(ui_rect(f, popup), 0, 0, i ? 100 : 200, i ? 50 : 100);
+        expect_rect(ui_rect(f, popup), 0, 0, i ? 100.f : 200.f, i ? 50.f : 100.f);
     }
     EXPECT_FLOAT_EQ(f->ui->scale, 3, 0);
 }

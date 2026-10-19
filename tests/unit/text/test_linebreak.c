@@ -91,8 +91,8 @@ TEST(text_graphemes, public_byte_offsets_capacity_invalid_and_large_input) {
     EXPECT_EQ(de_text_grapheme_offsets(de_str_from_cstr(text), short_out, 2), 4u);
     EXPECT_EQ(short_out[1], 3u);
     EXPECT_EQ(de_text_grapheme_offsets((de_str){0}, NULL, 0), 1u);
-    const char invalid[] = {'a', (char)0xff, (char)0xc0, 'b'};
-    EXPECT_EQ(de_text_grapheme_offsets((de_str){invalid, 4}, offsets, 8), 5u);
+    const u8 invalid[] = {'a', 0xff, 0xc0, 'b'};
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){(const char *)invalid, 4}, offsets, 8), 5u);
     for (u32 i = 0; i < 5; ++i)
         EXPECT_EQ(offsets[i], i);
     char large[4096];

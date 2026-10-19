@@ -1,3 +1,9 @@
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "ui_test_util.h"
 #include "ui/widgets/widgets_internal.h"
 #include "ui/render/draw_list.h"

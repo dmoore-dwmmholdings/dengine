@@ -346,7 +346,7 @@ TEST_F(denoise_framework, temporal_converge, dn_fixture) {
     float sums[PIXELS] = {0};
     for (u32 frame = 0; frame < frames; ++frame) {
         for (u32 i = 0; i < PIXELS; ++i) {
-            float noise = ((double)hash32(i + frame * PIXELS) / 4294967296.0 - .5) * 2;
+            float noise = (float)(((double)hash32(i + frame * PIXELS) / 4294967296.0 - .5) * 2);
             sums[i] += 1 + noise;
             source_var += noise * noise;
             for (u32 c = 0; c < 3; ++c)
@@ -376,8 +376,9 @@ TEST_F(denoise_framework, atrous_edge, dn_fixture) {
     for (u32 y = 0; y < H; ++y)
         for (u32 x = 0; x < W; ++x) {
             u32 i = y * W + x;
-            float mean = x < 32 ? 1 : 3, noise = ((double)hash32(i) / 4294967296.0 - .5) * .8;
-            f->data[1][i] = x < 32 ? 2 : 3;
+            float mean = x < 32 ? 1.f : 3.f,
+                  noise = (float)(((double)hash32(i) / 4294967296.0 - .5) * .8);
+            f->data[1][i] = x < 32 ? 2.f : 3.f;
             for (u32 c = 0; c < 3; ++c)
                 f->data[0][i * 4 + c] = mean + noise;
             if (x > 4 && x < 26)
@@ -558,9 +559,9 @@ TEST_F(denoise_framework, variance_respects_material_and_light_identity_boundari
                 for (u32 c = 0; c < 3; ++c)
                     f->data[0][i * 4 + c] = value;
                 f->data[4][i * 2] = 11;
-                f->data[4][i * 2 + 1] = mode == 0 && x >= W / 2 ? 2 : 1;
-                f->data[5][i * 2] = mode == 1 && x >= W / 2 ? 31 : 17;
-                f->data[5][i * 2 + 1] = mode == 2 && x >= W / 2 ? 2 : 1;
+                f->data[4][i * 2 + 1] = mode == 0 && x >= W / 2 ? 2.f : 1.f;
+                f->data[5][i * 2] = mode == 1 && x >= W / 2 ? 31.f : 17.f;
+                f->data[5][i * 2 + 1] = mode == 2 && x >= W / 2 ? 2.f : 1.f;
             }
         upload(f);
         begin(f);
@@ -678,7 +679,7 @@ TEST_F(denoise_framework, scalar_pair_variance_and_weights_ignore_auxiliary_dist
         original[i] = color(f)[i * 4];
     memcpy(variance, (u8 *)color(f) + 49152, sizeof variance);
     for (u32 i = 0; i < PIXELS; ++i)
-        f->data[0][i * 4 + 1] = 1 + (i % W >= W / 2 ? 27 : 0);
+        f->data[0][i * 4 + 1] = 1.f + (i % W >= W / 2 ? 27.f : 0.f);
     upload(f);
     begin(f);
     run(f, build(f, (de_view){1}, 100, true, true, (de_rg_resource){0}));

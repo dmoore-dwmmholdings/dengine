@@ -260,10 +260,10 @@ static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
     de_gpu_buffer_destroy(f->d, buffer);
     return out;
 }
+#if defined(__APPLE__)
 static u8 *readback(text_render_fx *f) {
     return readback_target(f, de__renderer_offscreen(f->r));
 }
-#if defined(__APPLE__)
 static void coverage_clear_stage(de__view_frame *vf, void *user);
 typedef struct world_depth_copy {
     de_rg_resource depth, buffer;

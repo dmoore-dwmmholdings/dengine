@@ -308,9 +308,9 @@ TEST_F(pathtracer, directional_power_split_preserves_samples, pt_fixture) {
     f64 grouped[64], maximum_error = 0, signal = 0;
     for (u32 split = 0; split < 2; ++split) {
         DeLight sun = {
-            .kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = split ? 1 : 100};
+            .kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = split ? 1.f : 100.f};
         world_light(&r->w, 0, &sun, at(0, 0, 0));
-        sun.intensity = split ? 99 : 0;
+        sun.intensity = split ? 99.f : 0.f;
         world_light(&r->w, 1, &sun, at(0, 0, 0));
         /* Keep an unrelated slot and a dead slot in the authored table. */
         DeLight point = {

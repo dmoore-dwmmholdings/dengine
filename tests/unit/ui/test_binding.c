@@ -1,3 +1,9 @@
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "ui_test_util.h"
 #include "ui/binding/binding_internal.h"
 #include "ui/style/stylesheet_internal.h"
@@ -254,8 +260,8 @@ TEST_F(ui_binding, attaching_opacity_binding_cancels_an_active_stylesheet_tween,
     EXPECT_GT(de_ui_get_style_stats(ui).active_tweens, 0u);
     DeUiBinding *binding = de_entity_add(f->ui.world, e, ui->binding->component);
     binding->source = f->source;
-    strcpy(binding->path, "BindData.precise");
-    strcpy(binding->property, "opacity");
+    memcpy(binding->path, "BindData.precise", sizeof("BindData.precise"));
+    memcpy(binding->property, "opacity", sizeof("opacity"));
     for (u32 i = 0; i < 5; ++i) {
         ui_frame(&f->ui);
         const DeUiStyle *style = de_entity_get_const(f->ui.world, e, ui->ids.style);

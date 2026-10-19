@@ -94,8 +94,11 @@ TEST(ui_text_input, grapheme_selection_word_navigation_and_255_byte_cap) {
 }
 static char clip[256];
 static de_result clip_set(const char *s) {
-    strncpy(clip, s, 255);
-    clip[255] = 0;
+    size_t n = strlen(s);
+    if (n >= sizeof clip)
+        n = sizeof clip - 1;
+    memcpy(clip, s, n);
+    memset(clip + n, 0, sizeof clip - n);
     return DE_OK;
 }
 static size_t clip_get(char *out, size_t cap) {
@@ -309,7 +312,7 @@ TEST_F(ui_text_input, public_rtl_hit_test_mouse_drag_double_word_and_horizontal_
         after += de_mem_stats_for_tag(i).alloc_count;
     EXPECT_EQ(after, before);
     in = editing(f);
-    strcpy(in->buffer, "secret123");
+    memcpy(in->buffer, "secret123", sizeof("secret123"));
     in->length = in->caret = 9;
     in->password = true;
     for (u32 i = 0; i < 32; ++i)
@@ -387,14 +390,14 @@ TEST_F(ui_text_input, actual_committed_binding_refresh_writeback_preedit_and_rea
     de_entity source;
     ASSERT_EQ(de_entity_spawn_with(b->world, &component, 1, &source), DE_OK);
     editor_source *data = de_entity_get(b->world, source, component);
-    strcpy(data->text, "Captain");
-    strcpy(data->locked, "Locked");
+    memcpy(data->text, "Captain", sizeof("Captain"));
+    memcpy(data->locked, "Locked", sizeof("Locked"));
     de_component binding_id = de_component_find(b->world, "DeUiBinding");
     ASSERT_TRUE(binding_id.id);
     DeUiBinding *binding = de_entity_add(b->world, f->editor, binding_id);
     binding->source = source;
-    strcpy(binding->path, "EditorSource.text");
-    strcpy(binding->property, "text");
+    memcpy(binding->path, "EditorSource.text", sizeof("EditorSource.text"));
+    memcpy(binding->property, "text", sizeof("text"));
     binding->mode = DE_UI_BIND_TWO_WAY;
     ui_frame(b);
     EXPECT_TRUE(strcmp(editing(f)->buffer, "Captain") == 0);
@@ -402,7 +405,7 @@ TEST_F(ui_text_input, actual_committed_binding_refresh_writeback_preedit_and_rea
     EXPECT_EQ(display->literal.len, 7u);
     EXPECT_TRUE(memcmp(display->literal.ptr, "Captain", 7) == 0);
     data = de_entity_get(b->world, source, component);
-    strcpy(data->text, "Pilot");
+    memcpy(data->text, "Pilot", sizeof("Pilot"));
     ui_frame(b);
     EXPECT_TRUE(strcmp(editing(f)->buffer, "Pilot") == 0);
     display = de_entity_get_const(b->world, f->editor, b->ui->ids.text);
@@ -438,7 +441,7 @@ TEST_F(ui_text_input, actual_committed_binding_refresh_writeback_preedit_and_rea
     ASSERT_EQ(de_world_run_schedule(b->world, DE_SCHEDULE_UPDATE, .016f, 0), DE_OK);
     EXPECT_EQ(changes, 1u);
     binding = de_entity_get(b->world, f->editor, binding_id);
-    strcpy(binding->path, "EditorSource.locked");
+    memcpy(binding->path, "EditorSource.locked", sizeof("EditorSource.locked"));
     ui_frame(b);
     EXPECT_TRUE(strcmp(editing(f)->buffer, "Locked") == 0);
     editing(f)->caret = editing(f)->length;
@@ -459,7 +462,7 @@ TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extra
     text->style = (de_text_style){
         .font = fonts.latin, .size_px = 20, .line_height = 1, .color = {1, 1, 1, 1}};
     DeUiTextInput *in = editing(f);
-    strcpy(in->buffer, "secret123");
+    memcpy(in->buffer, "secret123", sizeof("secret123"));
     in->length = in->caret = 9;
     in->password = true;
     for (u32 i = 0; i < 32; ++i)

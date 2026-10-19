@@ -281,7 +281,7 @@ static void content(ui_scene *s, bool editing) {
         de_entity input = widget(s, "DeUiTextInput", 40, 184, 720, 56, 0);
         font(s, input, 28);
         DeUiTextInput *in = de_entity_get(s->world, input, component(s, "DeUiTextInput"));
-        strcpy(in->buffer, "Player ");
+        memcpy(in->buffer, "Player ", sizeof("Player "));
         in->length = in->caret = 7;
         de_world_run_schedule(s->world, DE_SCHEDULE_POST_UPDATE, .016f, 0);
         de_ui__input_submit(s->ui, input);
@@ -295,7 +295,7 @@ static void content(ui_scene *s, bool editing) {
         de_entity password = widget(s, "DeUiTextInput", 40, 332, 480, 56, 0);
         font(s, password, 28);
         in = de_entity_get(s->world, password, component(s, "DeUiTextInput"));
-        strcpy(in->buffer, "secret123");
+        memcpy(in->buffer, "secret123", sizeof("secret123"));
         in->length = in->caret = 9;
         in->password = true;
         label(s, s->root, 40, 444, 1160, 28, "Multiline input wraps within the clipped control",
@@ -303,7 +303,8 @@ static void content(ui_scene *s, bool editing) {
         de_entity multi = widget(s, "DeUiTextInput", 40, 484, 720, 132, 0);
         font(s, multi, 24);
         in = de_entity_get(s->world, multi, component(s, "DeUiTextInput"));
-        strcpy(in->buffer, "Build a real game.\nStart small, then add a second level.");
+        memcpy(in->buffer, "Build a real game.\nStart small, then add a second level.",
+               sizeof("Build a real game.\nStart small, then add a second level."));
         in->length = in->caret = (u32)strlen(in->buffer);
         in->multiline = true;
     } else {
@@ -327,12 +328,12 @@ static void content(ui_scene *s, bool editing) {
             de_entity page = node(s, tabs, 0, 0, 760, 90, (de_vec4){.05f, .08f, .12f, 1}, 0, 0);
             font(s, page, 20);
             DeUiText *t = de_entity_get(s->world, page, component(s, "DeUiText"));
-            strcpy(t->text, i ? "Audio" : "Video");
+            snprintf(t->text, sizeof t->text, "%s", i ? "Audio" : "Video");
         }
         de_entity help = widget(s, "DeUiButton", 920, 400, 240, 48, 1);
         font(s, help, 20);
         DeUiText *t = de_entity_get(s->world, help, component(s, "DeUiText"));
-        strcpy(t->text, "Hover for help");
+        memcpy(t->text, "Hover for help", sizeof("Hover for help"));
         DeUiTooltip *tip = add(s, help, "DeUiTooltip");
         tip->loc_id = de_name_from("help");
         tip->delay = .05f;

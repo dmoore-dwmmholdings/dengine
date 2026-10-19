@@ -137,13 +137,15 @@ TEST_F(scene_as, reload, rt_fixture) {
     EXPECT_TRUE(old->published_);
     EXPECT_EQ(f->r->rt_scene->meshes[0].source, old);
     u64 base = old->gpu_bytes;
-    EXPECT_TRUE(de_asset_get_stats(f->assets).bytes_resident[1] > base);
+    de_asset_stats resident_stats = de_asset_get_stats(f->assets);
+    EXPECT_TRUE(resident_stats.bytes_resident[1] > base);
     de_gpu_wait_idle(f->d);
     pump_asset(f);
     de_gpu_wait_idle(f->d);
     pump_asset(f);
     EXPECT_EQ(f->r->rt_scene->compacted_count, 1u);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1], base + f->r->rt_scene->bytes);
+    resident_stats = de_asset_get_stats(f->assets);
+    EXPECT_EQ(resident_stats.bytes_resident[1], base + f->r->rt_scene->bytes);
     /* Replace the cooked mesh, keeping its public handle; retired old BLAS remains fence-safe. */
     lt_blob replacement = lt_dmsh(12, 0, 2);
     ASSERT_EQ(de_file_write_all_atomic("scene_as:/m.dmsh", replacement.data, replacement.size),
@@ -162,13 +164,14 @@ TEST_F(scene_as, reload, rt_fixture) {
     ASSERT_EQ(f->r->rt_scene->mesh_count, 1u);
     const de_render_mesh *current = de_render_mesh_get(f->assets, handle);
     EXPECT_EQ(f->r->rt_scene->meshes[0].source, current);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1],
-              current->gpu_bytes + f->r->rt_scene->bytes);
+    resident_stats = de_asset_get_stats(f->assets);
+    EXPECT_EQ(resident_stats.bytes_resident[1], current->gpu_bytes + f->r->rt_scene->bytes);
     de_asset_release(f->assets, request);
     de_asset_flush_unused(f->assets);
     pump_asset(f);
     EXPECT_EQ(f->r->rt_scene->mesh_count, 0u);
-    EXPECT_EQ(de_asset_get_stats(f->assets).bytes_resident[1], 0u);
+    resident_stats = de_asset_get_stats(f->assets);
+    EXPECT_EQ(resident_stats.bytes_resident[1], 0u);
     de_gpu_wait_idle(f->d);
     for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k)
         EXPECT_EQ(de__gpu_live_count(f->d, (de__gpu_kind)k), before_live[k]);
