@@ -153,6 +153,18 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
     o.casts_shadows=casts?1u:0u;
     o.wi=wi;o.incident=incident;o.pdf=density;return o;
 }
+// Record the endpoint after the last permitted scattering event. It contributes
+// emission only: no additional light sample or BSDF bounce is evaluated here.
+public float3 pt_endpoint(PtParams p,DeRtRay ray,DeRtHit hit,float last_pdf,float3 previous) {
+    uint strategy=p.flags&3u;
+    if(strategy==1)return float3(0); // NEE already estimates this connection.
+    float area_pdf;float4 area=pt_area_hit(p,ray,hit.t,area_pdf);
+    if(area.w>=0)return area.rgb*(strategy==2?1:pt_power(last_pdf,area_pdf));
+    if(hit.t<0)return pt_environment(p,ray.direction.xyz)*(strategy==2?1:pt_power(last_pdf,pt_env_pdf(p,ray.direction.xyz)*pt_light_categories(p).x));
+    DeRtSurface surface=de_rt_hit_surface(pt_query(p),hit,ray.origin.xyz,p.brdf_lut);
+    float3 position=ray.origin.xyz+ray.direction.xyz*hit.t;
+    return surface.valid?surface.material.emissive*(strategy==2?1:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position))):float3(0);
+}
 public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,float last_pdf,float3 previous) {
     PtStep o=(PtStep)0;o.stop=1;o.consume=1;
     uint strategy=p.flags&3u;
@@ -199,6 +211,15 @@ public struct PtPath {
 };
 public PtPath pt_path_init(PtParams p,uint pixel) {
     PtPath path=(PtPath)0;path.ray=pt_camera(p,pixel);path.throughput=float3(1);path.previous=path.ray.origin.xyz;return path;
+}
+// At the depth limit only the ballistic endpoint can emit. Integrate its
+// attenuation directly; do not sample or record another medium/BSDF event.
+public float3 pt_path_endpoint(PtParams p,PtPath path,DeRtHit hit) {
+    if(path.sss.active!=0||(p.flags&3u)==1u)return float3(0);
+    float area_pdf;float4 area=pt_area_hit(p,path.ray,hit.t,area_pdf);
+    float distance=area.w>=0?area.w:(hit.t>=0?hit.t:path.ray.direction.w);
+    float3 attenuation=pt_medium_transmittance(path.media,distance)*pt_fog_transmittance(p.media.fog,p.media.count,path.ray.origin.xyz,path.ray.direction.xyz,distance);
+    return path.throughput*attenuation*pt_endpoint(p,path.ray,hit,path.pdf,path.previous);
 }
 public float3 pt_geometric_normal(DeRtContext q,DeRtHit hit) {
     DeResolvePoint point=de_rt_point(q,hit.instance,hit.primitive,float2(hit.u,hit.v));
@@ -336,7 +357,7 @@ public void pt_path_finish(PtParams p,inout PtPath path,PtStep step,float3 visib
     if(step.consume!=0&&path.bounce>=3){float survival=clamp(max(path.throughput.x,max(path.throughput.y,path.throughput.z)),.05,.95);
         if(pt_random(p.sampling_table,pixel^p.seed,p.sample,2+path.bounce*12+8)>=survival){path.finished=1;return;}path.throughput/=survival;}
     path.previous=path.position;path.ray=step.next;path.pdf=step.pdf;path.bounce+=step.consume;
-    if(path.bounce>=p.max_bounces)path.finished=1;
+    if(path.bounce>=p.max_bounces)path.finished=2; // Complete the final emission connection.
 }
 public void pt_path_diagnostics(PtParams p,PtPath path) {
     if(path.media.overflow!=0)de_rwbytes(p.media.stats).atomic_add(p.media.stats_offset,path.media.overflow);

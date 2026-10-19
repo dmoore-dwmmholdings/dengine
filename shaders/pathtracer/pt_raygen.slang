@@ -29,8 +29,10 @@ void pt_raygen(uniform PtPush pc) {
     PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
     DeRtRay ray=pt_camera(p,pixel);DeRtHit first=pt_intersect(p,ray,0);pt_store_aov(p,ray,first,pixel);float3 throughput=1,radiance=0,previous=ray.origin.xyz;float pdf=0;
     if(p.media.features==0) {
-    for(uint bounce=0;bounce<p.max_bounces;++bounce) {
-        DeRtHit hit=bounce==0?first:pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
+    for(uint bounce=0;bounce<=p.max_bounces;++bounce) {
+        DeRtHit hit=bounce==0?first:pt_intersect(p,ray,0);
+        if(bounce==p.max_bounces){radiance+=throughput*pt_endpoint(p,ray,hit,pdf,previous);break;}
+        PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
         radiance+=throughput*step.emitted;
         bool visible=step.casts_shadows==0 || step.shadow.direction.w<=step.shadow.origin.w || !any(step.direct>0) || pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0;
         if(visible)radiance+=throughput*step.direct;
@@ -49,6 +51,10 @@ void pt_raygen(uniform PtPush pc) {
                 visibility=pt_shadow_trace(p,step.shadow_media,step.shadow,step.casts_shadows);
             }
             pt_path_finish(p,path,step,visibility,pixel);
+        }
+        if(path.finished==2) {
+            DeRtHit hit=pt_intersect_sss(p,path.ray,path.sss);
+            path.radiance+=pt_path_endpoint(p,path,hit);
         }
         pt_path_diagnostics(p,path);radiance=path.radiance;
     }

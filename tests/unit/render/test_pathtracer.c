@@ -116,6 +116,7 @@ static void pt_fixture_teardown(pt_fixture *f) {
     }
     (void)cvar_set("r.ambient_fallback", "0");
     (void)cvar_set("r.pt.seed", "0");
+    (void)cvar_set("r.pt.fog.density", "0");
     (void)cvar_set("r.pt.sampling_strategy", "0");
     rt_fixture_teardown(&f->rt);
 }
@@ -665,6 +666,32 @@ TEST_F(pathtracer, cornell_reference, pt_fixture) {
            energy);
     EXPECT_TRUE(stats.mean <= .02);
 }
+TEST_F(pathtracer, terminal_bounce_records_continuation_emission, pt_fixture) {
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.specular = 0;
+    g_mat[0].standard.base_color = (de_vec4){1, 1, 1, 1};
+    f->rt.w.touch_all = true;
+    de_render_settings settings = de_renderer_get_settings(f->rt.r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(f->rt.r, &settings);
+    ASSERT_TRUE(cvar_set("r.pt.sampling_strategy", "2"));
+    for (u32 sample = 0; sample < 16; ++sample)
+        pt_frame(f);
+    const f32 *pixels = pt_read(f);
+    f64 mean = 0;
+    for (u32 y = 26; y < 38; ++y)
+        for (u32 x = 26; x < 38; ++x) {
+            u32 i = (y * 64 + x) * 4;
+            ASSERT_FLOAT_EQ(pixels[i + 3], 16, 0);
+            for (u32 c = 0; c < 3; ++c)
+                EXPECT_FLOAT_EQ(pixels[i + c] / 16, 1, 1e-3);
+            mean += pixels[i] / 16;
+        }
+    printf("Terminal depth1 BSDF-only white furnace mean%g (expected1)\n", mean / 144);
+}
+
 TEST_F(pathtracer, mis_variance, pt_fixture) {
     g_mat[0].standard.unlit = false;
     g_mat[0].standard.emissive = (de_vec3){0};

@@ -7,6 +7,13 @@ inline PtParams_0 pt_load(constant DeRtHeap &heap,constant PtPush &pc,thread Ker
     ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;
     return pt_load_0(pc.params,pc.entry,&ctx);
 }
+// Keep the emission-only material branch out of the inlined scattering CFG.
+// Instrumented Metal pipelines otherwise spend most of their test budget compiling it.
+[[clang::noinline]] float3 pt_endpoint_native(thread const PtParams_0 *p,
+                                            thread const DeRtRay_0 *ray,thread const DeRtHit_0 *hit,
+                                            float pdf,float3 previous,thread KernelContext_0 *ctx) {
+    return pt_endpoint_0(p,ray,hit,pdf,previous,ctx);
+}
 [[visible]] void pt_miss(thread DeRtPayload &p,thread const DeRtHit &,constant DeRtHeap &,constant uchar *) {p.words[0]=as_type<uint>(-1.f);p.words[1]=0xffffffffu;}
 [[visible]] void pt_closest(thread DeRtPayload &p,thread const DeRtHit &h,constant DeRtHeap &,constant uchar *) {
     p.words[0]=as_type<uint>(h.distance);p.words[1]=h.custom_index;p.words[2]=h.primitive;
@@ -64,8 +71,9 @@ inline void pt_raygen_impl(constant DeRtHeap &heap,constant PtPush &pc,
     pt_store_aov_0(&p,&r,&first,pixel,&ctx);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
     if(!WithMedia) {
-    for(uint bounce=0;bounce<p.ptp_max_bounces;++bounce) {
+    for(uint bounce=0;bounce<=p.ptp_max_bounces;++bounce) {
         auto h=bounce==0?first:pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+        if(bounce==p.ptp_max_bounces){radiance+=throughput*pt_endpoint_native(&p,&r,&h,pdf,previous,&ctx);break;}
         auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
         radiance+=throughput*step.pts_emitted;
         bool visible=true;
@@ -89,6 +97,10 @@ inline void pt_raygen_impl(constant DeRtHeap &heap,constant PtPush &pc,
                 visibility=pt_shadow_trace(heap,p,step.pts_shadow_media,step.pts_shadow,step.pts_casts_shadows,intersections,functions,sbt,(constant uchar *)&pc,ctx);
             }
             pt_path_finish_0(&p,&path,&step,visibility,pixel,&ctx);
+        }
+        if(path.ptpath_finished==2) {
+            auto h=pt_intersect_sss(heap,p,path.ptpath_ray,path.ptpath_sss,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+            path.ptpath_radiance+=pt_path_endpoint_0(&p,&path,&h,&ctx);
         }
         pt_path_diagnostics_0(&p,&path,&ctx);radiance=path.ptpath_radiance;
     }
