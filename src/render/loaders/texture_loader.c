@@ -68,7 +68,7 @@ de_result de__texture_load(de_asset_load_ctx *ctx) {
         return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "not a cooked texture: %s", why);
     }
 
-    de_cooked_sprite_proxy proxy;
+    de_cooked_sprite_proxy proxy = {0};
     bool has_proxy =
         size >= DE_SPRITE_PROXY_BYTES && memcmp(p + size - DE_SPRITE_PROXY_BYTES, "PXRT", 4) == 0;
     if (has_proxy &&
