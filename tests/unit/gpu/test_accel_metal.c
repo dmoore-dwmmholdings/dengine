@@ -147,6 +147,16 @@ TEST_F(accel_metal, build_trace, fixture) {
     ASSERT_EQ(0, ((u32 *)de_gpu_buffer_map(f->d, f->readback))[2]);
     ASSERT_FLOAT_EQ(37.0f, ((f32 *)de_gpu_buffer_map(f->d, f->readback))[1], 0.0f);
 }
+TEST_F(accel_metal, empty_tlas_build_refit_and_repopulation, fixture) {
+    ASSERT_FLOAT_EQ(3.0f, trace(f, true, false), 0.001f);
+    for (u32 pass = 0; pass < 2; ++pass) {
+        de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_COMPUTE, "empty TLAS");
+        ASSERT_TRUE(cmd);
+        de_gpu_cmd_build_tlas(cmd, f->tlas, f->instances, 0, pass == 1);
+        EXPECT_TRUE(finish_trace(f, cmd) < 0);
+    }
+    ASSERT_FLOAT_EQ(3.0f, trace(f, false, false), 0.001f);
+}
 TEST_F(accel_metal, refit, fixture) {
     ASSERT_FLOAT_EQ(3.0f, trace(f, true, false), 0.001f);
     f32 *v = de_gpu_buffer_map(f->d, f->vertices);

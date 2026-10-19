@@ -274,13 +274,17 @@ void de__mtl_accel_tlas(de_gpu_cmd *c, de__gpu_accel *a, de__gpu_buffer *input, 
         t.instanceCount = count;
         t.instanceDescriptorBuffer = buffer(s->instances);
         dependency(c);
-        id<MTLBlitCommandEncoder> copy =
-            (__bridge id<MTLBlitCommandEncoder>)de__mtl_cmd_encoder(c, DE__MTL_ENC_BLIT);
-        [copy copyFromBuffer:buffer(s->instances)
-                 sourceOffset:0
-                     toBuffer:(__bridge id<MTLBuffer>)v->instance_snapshot
-            destinationOffset:0
-                         size:(NSUInteger)count * 72];
+        /* Empty TLAS builds/refits are valid, but Metal rejects a zero-length blit.
+         * There are no instance records to snapshot in this case. */
+        if (count) {
+            id<MTLBlitCommandEncoder> copy =
+                (__bridge id<MTLBlitCommandEncoder>)de__mtl_cmd_encoder(c, DE__MTL_ENC_BLIT);
+            [copy copyFromBuffer:buffer(s->instances)
+                     sourceOffset:0
+                         toBuffer:(__bridge id<MTLBuffer>)v->instance_snapshot
+                destinationOffset:0
+                             size:(NSUInteger)count * 72];
+        }
         id<MTLAccelerationStructureCommandEncoder> e = encoder(c);
         if (!e)
             return;
