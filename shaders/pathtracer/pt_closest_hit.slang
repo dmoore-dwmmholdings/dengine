@@ -274,9 +274,10 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
     if((s.features&DE_MATERIAL_FEATURE_SUBSURFACE)!=0&&(step.lobe&DE_BSDF_LOBE_DIFFUSE)!=0) {
         DeResolvePoint point=de_rt_point(q,hit.instance,hit.primitive,float2(hit.u,hit.v));DeSceneConstants sc=de_robuffer<DeSceneConstants>(q.scene)[q.view];
         DeGpuMaterial raw=de_resolve_material_of(de_resolve_material(point),sc);float amount=saturate(raw.extra.z);float3 radius=max(raw.subsurface.rgb,float3(0));
-        if(max(radius.x,max(radius.y,radius.z))>1e-6&&pt_random(p.sampling_table,pixel^p.seed,p.sample,65536+path.event)<amount) {
+        uint3 dimensions=pt_sss_entry_dimensions(path.event);
+        if(max(radius.x,max(radius.y,radius.z))>1e-6&&pt_random(p.sampling_table,pixel^p.seed,p.sample,dimensions.x)<amount) {
             PtSssCoefficients c=pt_sss_coefficients(radius,s.base_color);path.sss.active=1;path.sss.instance=hit.instance;path.sss.steps=0;path.sss.sigma_s=c.sigma_s;path.sss.sigma_a=c.sigma_a;
-            ShadingFrame inward=de_frame_from_normal(-normal);float3 wi=inward.to_world(de_sample_cosine_hemisphere(float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,65537+path.event*2),pt_random(p.sampling_table,pixel^p.seed,p.sample,65538+path.event*2))));
+            ShadingFrame inward=de_frame_from_normal(-normal);float3 wi=inward.to_world(de_sample_cosine_hemisphere(float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,dimensions.y),pt_random(p.sampling_table,pixel^p.seed,p.sample,dimensions.z))));
             step.next.origin=float4(path.position-normal*.00001,.00001);step.next.direction=float4(wi,1e6);step.weight/=max(s.base_color,float3(1e-6));
         }
     }

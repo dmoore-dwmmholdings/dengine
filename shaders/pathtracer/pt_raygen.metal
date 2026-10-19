@@ -163,3 +163,15 @@ kernel void pt_emissive_origin_probe(constant DeRtHeap &heap [[buffer(0)]],const
     ((device float4 *)heap.buffers[pc.y])[2*id.x]=float4(light.ptlight_shadow.ptr_origin.xyz,light.ptlight_shadow.ptr_direction.w);
     ((device float4 *)heap.buffers[pc.y])[2*id.x+1]=float4(light.ptlight_wi,light.ptlight_pdf);
 }
+
+// Production subsurface entry coordinates must not reuse an earlier event's draws.
+kernel void pt_sss_sampling_probe(constant DeRtHeap &heap [[buffer(0)]],constant uint &output [[buffer(1)]],
+                                 uint3 id [[thread_position_in_grid]]) {
+    KernelContext_0 ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;
+    uint event=id.x<128?id.x+1:64u*(1024u+5u)-(id.x-128u);
+    uint3 dimensions=pt_sss_entry_dimensions_0(event);
+    uint3 later=pt_sss_entry_dimensions_0(2*event+1);
+    float direction=pt_random_0(0,17,id.x,dimensions.y,&ctx);
+    float branch=pt_random_0(0,17,id.x,later.x,&ctx);
+    ((device uint4 *)heap.buffers[output])[id.x]=uint4(dimensions,as_type<uint>(direction)==as_type<uint>(branch));
+}

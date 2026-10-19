@@ -593,3 +593,54 @@ TEST_F(pt_media, gpu_stack_overflow, pt_fixture) {
     de_gpu_buffer_destroy(d, output);
 #endif
 }
+
+TEST_F(pt_media, subsurface_entry_samples_do_not_repeat_prior_events, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_device *d = f->rt.d;
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){
+               .kind = DE_PIPE_COMPUTE,
+               .cs = {de__pt_metal_library, de__pt_metal_library_bytes, "pt_sss_sampling_probe"},
+               .push_constant_bytes = 4,
+               .threadgroup_size = {64, 1, 1}});
+    ASSERT_TRUE(pipeline.id);
+    de_gpu_buffer output = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){.size = 256 * 16, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(output.id);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "SSS random coordinate independence");
+    de_gpu_barrier barrier = {.buffer = output, .after = DE_ACCESS_SHADER_WRITE};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_set_pipeline(cmd, pipeline);
+    u32 index = de_gpu_buffer_bindless(d, output);
+    de_gpu_cmd_push_constants(cmd, &index, sizeof index);
+    de_gpu_cmd_dispatch(cmd, 4, 1, 1);
+    barrier.before = DE_ACCESS_SHADER_WRITE;
+    barrier.after = DE_ACCESS_COPY_SRC;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 256 * 16);
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    const u32 *result = de_gpu_buffer_map(d, f->rb);
+    u32 collisions = 0, identical = 0;
+    for (u32 event = 0; event < 256; ++event) {
+        identical += result[event * 4 + 3];
+        for (u32 coordinate = 0; coordinate < 3; ++coordinate) {
+            u32 i = event * 4 + coordinate;
+            for (u32 earlier = 0; earlier < i; ++earlier)
+                if (earlier % 4 != 3 && result[i] == result[earlier])
+                    ++collisions;
+        }
+    }
+    printf("SSS entry sampler: %u reused dimensions, %u identical earlier/later draws\n",
+           collisions, identical);
+    EXPECT_EQ(collisions, 0u);
+    /* Independent 24-bit samples may coincide, but systematic reuse must not. */
+    EXPECT_TRUE(identical < 4);
+    de_gpu_pipeline_destroy(d, pipeline);
+    de_gpu_buffer_destroy(d, output);
+#endif
+}

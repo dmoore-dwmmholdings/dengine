@@ -9586,6 +9586,14 @@ void pt_medium_boundary_0(PtMediumStack_0 thread* stack_6, const PtMedium_0 thre
 }
 
 
+uint3 pt_sss_entry_dimensions_0(uint event_1)
+{
+
+    uint base_6 = 1073741824U + event_1 * 3U;
+    return uint3(base_6, base_6 + 1U, base_6 + 2U);
+}
+
+
 float de_burley_scale_0(float albedo_3)
 {
     float a_17 = saturate(albedo_3);
@@ -10086,10 +10094,11 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_24, PtPath_0 thread* path_2,
         float amount_0 = saturate(_S1037.extra_0.z);
 
         float3 radius_1 = max(_S1037.subsurface_0.xyz, float3(int3(int(0)) ));
+        uint3 dimensions_0 = pt_sss_entry_dimensions_0(path_2->ptpath_event);
         if((max(radius_1.x, max(radius_1.y, radius_1.z))) > 9.99999997475242708e-07f)
         {
 
-            float _S1038 = pt_random_0(_S1009, _S1010, _S1011, 65536U + path_2->ptpath_event, kernelContext_86);
+            float _S1038 = pt_random_0(_S1009, _S1010, _S1011, dimensions_0.x, kernelContext_86);
 
             volume_2 = _S1038 < amount_0;
 
@@ -10117,9 +10126,9 @@ PtStep_0 pt_path_event_0(const PtParams_0 thread* p_24, PtPath_0 thread* path_2,
             (&path_2->ptpath_sss)->ptsss_sigma_a = c_15.sigma_a_1;
             ShadingFrame_0 inward_0 = de_frame_from_normal_0(- _S1024);
 
-            float _S1039 = pt_random_0(_S1009, _S1010, _S1011, 65537U + path_2->ptpath_event * 2U, kernelContext_86);
+            float _S1039 = pt_random_0(_S1009, _S1010, _S1011, dimensions_0.y, kernelContext_86);
 
-            float _S1040 = pt_random_0(_S1009, _S1010, _S1011, 65538U + path_2->ptpath_event * 2U, kernelContext_86);
+            float _S1040 = pt_random_0(_S1009, _S1010, _S1011, dimensions_0.z, kernelContext_86);
 
             float3 _S1041 = de_sample_cosine_hemisphere_0(float2(_S1039, _S1040));
 
@@ -10796,13 +10805,13 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_25, uint offset_6, uint v_
     thread DeRtHit_0 _S1118 = h_31;
 
     PtStep_0 _S1119 = pt_path_event_0(&_S1117, &path_5, &_S1118, entryPointParams_1->pc_0.pixel_0, &kernelContext_96);
-    thread PtStep_0 event_1 = _S1119;
+    thread PtStep_0 event_2 = _S1119;
 
     thread PtParams_0 _S1120 = _S1104;
 
     thread PtMediumStack_0 _S1121 = (&path_5)->ptpath_media;
 
-    thread DeRtRay_0 _S1122 = (&event_1)->pts_shadow;
+    thread DeRtRay_0 _S1122 = (&event_2)->pts_shadow;
 
     PtShadow_0 _S1123 = pt_shadow_start_0(&_S1120, &_S1121, &_S1122, &kernelContext_96);
     thread PtShadow_0 shadow_4 = _S1123;
@@ -10811,11 +10820,11 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_25, uint offset_6, uint v_
 
     thread DeRtHit_0 _S1125 = h_31;
 
-    pt_shadow_hit_0(&_S1124, &shadow_4, &(&event_1)->pts_shadow, &_S1125, 0U, &kernelContext_96);
+    pt_shadow_hit_0(&_S1124, &shadow_4, &(&event_2)->pts_shadow, &_S1125, 0U, &kernelContext_96);
 
     thread PtParams_0 _S1126 = _S1104;
 
-    thread PtStep_0 _S1127 = event_1;
+    thread PtStep_0 _S1127 = event_2;
 
     pt_path_finish_0(&_S1126, &path_5, &_S1127, (&shadow_4)->ptshadow_value, entryPointParams_1->pc_0.pixel_0, &kernelContext_96);
 
