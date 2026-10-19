@@ -43,7 +43,7 @@ void de_audio_bus_mute(de_audio *a, de_bus b, bool mute) {
     de__audio_cmd c = {0};
     c.op = DE__ACMD_BUS_MUTE;
     c.voice = id(b);
-    c.u.param.value = mute ? 1 : 0;
+    c.u.param.value = mute ? 1.f : 0.f;
     (void)de__audio_cmd_push(a, &c);
 }
 void de__bus_on_control(de_audio *a, const de__audio_cmd *c) {

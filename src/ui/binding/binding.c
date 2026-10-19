@@ -6,6 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/* C11 has memchr but does not require POSIX strnlen. Reflected strings may
+ * fill their whole field, so never scan beyond the declared capacity. */
+static size_t bounded_length(const char *text, size_t capacity) {
+    const char *end = memchr(text, 0, capacity);
+    return end ? (size_t)(end - text) : capacity;
+}
+
 static de_ui_binding_cache *cache(de_ui_binding_system *s, de_entity entity) {
     u64 h = entity.bits * 11400714819323198485ull;
     u32 mask = s->cache_capacity - 1;
@@ -280,7 +287,7 @@ static bool text_value(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
                        char *formatted, u32 cap, de_str *out) {
     de_ui *ui = s->ui;
     if (c->field.kind == DE_FK_STRING) {
-        *out = (de_str){source, strnlen(source, c->field.size)};
+        *out = (de_str){source, bounded_length(source, c->field.size)};
         return true;
     }
     if (c->field.kind == DE_FK_NAME) {
@@ -351,8 +358,9 @@ static void apply_text(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
         const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
         size_t length = value.len < c->editor_size - 1 ? value.len : c->editor_size - 1;
         /* Editor storage is the reflected committed buffer, never password/preedit display text. */
-        if (editor && (strnlen((const char *)editor + c->editor_offset, c->editor_size) != length ||
-                       memcmp(editor + c->editor_offset, value.ptr, length))) {
+        if (editor &&
+            (bounded_length((const char *)editor + c->editor_offset, c->editor_size) != length ||
+             memcmp(editor + c->editor_offset, value.ptr, length))) {
             u8 *edit = de_entity_get(s->ui->world, c->entity, c->editor);
             memcpy(edit + c->editor_offset, value.ptr, length);
             edit[c->editor_offset + length] = 0;
@@ -451,8 +459,9 @@ static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
             const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
             if (!editor)
                 return;
-            text = (de_str){(const char *)editor + c->editor_offset,
-                            strnlen((const char *)editor + c->editor_offset, c->editor_size)};
+            text =
+                (de_str){(const char *)editor + c->editor_offset,
+                         bounded_length((const char *)editor + c->editor_offset, c->editor_size)};
         } else {
             const DeUiText *target_text = de_entity_get_const(s->ui->world, c->entity, c->target);
             if (!target_text)
@@ -461,7 +470,7 @@ static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
         }
         if (c->field.kind == DE_FK_STRING) {
             size_t n = text.len < c->field.size - 1 ? text.len : c->field.size - 1;
-            if (strnlen((const char *)source + c->offset, c->field.size) == n &&
+            if (bounded_length((const char *)source + c->offset, c->field.size) == n &&
                 !memcmp(source + c->offset, text.ptr, n))
                 return;
             u8 *dest = de_entity_get(s->ui->world, c->descriptor.source, c->source);
