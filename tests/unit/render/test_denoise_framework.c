@@ -538,3 +538,34 @@ TEST_F(denoise_framework, variance_respects_material_and_light_identity_boundari
         EXPECT_FLOAT_EQ(color_delta, 0, 0);
     }
 }
+
+TEST_F(denoise_framework, luminance_clamp_recovers_black_and_near_black_history, dn_fixture) {
+    f->clamp = DE_DENOISE_CLAMP_LUMINANCE;
+    const f32 old_values[] = {0, 1e-30f};
+    const f32 lit[3] = {1, .25f, .5f};
+    for (u32 sample = 0; sample < 2; ++sample) {
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                f->data[0][i * 4 + c] = old_values[sample];
+        upload(f);
+        for (u32 frame = 0; frame < 16; ++frame) {
+            begin(f);
+            run(f, build(f, (de_view){1}, 91 + sample, frame == 0, false, (de_rg_resource){0}));
+        }
+        EXPECT_TRUE(age(f, 32, 16) > 0);
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                f->data[0][i * 4 + c] = lit[c];
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 91 + sample, false, false, (de_rg_resource){0}));
+        /* A uniform current neighborhood has a single allowed luminance. Recover
+         * from history with no usable chroma using the current chromatic signal. */
+        f32 maximum = 0;
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                maximum = fmaxf(maximum, fabsf(color(f)[i * 4 + c] - lit[c]));
+        printf("black-history sample%u maximum clamped signal error: %g\n", sample, maximum);
+        EXPECT_FLOAT_EQ(maximum, 0, 1e-6);
+    }
+}
