@@ -66,8 +66,10 @@ by the official test file. Regenerate properties with
 `python3 tools/unicode/gen_linebreak.py`; output is byte reproducible from vendored
 Unicode inputs. Layout still has tracked defects: trailing-space
 wrapping/justification (DENG-499), the first cache lookup after lazy font-watch
-initialization (DENG-500), and U+001E paragraph boundaries (DENG-503). The latter
-is an actual ASan fuzz finding; the required five-minute fuzz campaign aborted.
+initialization (DENG-500). DENG-503 is fixed: paragraph splitting also honors UAX #9
+paragraph separators U+001C..U+001E, keeping shaping within the bidi level array.
+The original crash and separator/invalid-UTF8 regressions pass ASan/UBSan; a subsequent
+61-second coverage-guided campaign completed 66,715 cases without a finding.
 
 ## Rendering
 

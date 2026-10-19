@@ -9,7 +9,10 @@ typedef struct work_char {
 } work_char;
 static bool hard_cp(u32 cp) {
     de__lb c = (de__lb)de__text_unicode(cp).lb;
-    return c == LB_BK || c == LB_CR || c == LB_LF || c == LB_NL;
+    /* UAX #9 also ends paragraphs at U+001C..U+001E. Never shape beyond
+     * the paragraph whose level array SheenBidi returned. */
+    return c == LB_BK || c == LB_CR || c == LB_LF || c == LB_NL ||
+           SBCodepointGetBidiType(cp) == SBBidiTypeB;
 }
 static u32 cp_index(const u32 *offsets, u32 count, u32 byte) {
     u32 lo = 0, hi = count;

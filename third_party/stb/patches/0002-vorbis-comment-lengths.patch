@@ -1,0 +1,109 @@
+DENG-480: Validate Vorbis header sizes and arena arithmetic, safely unwind incomplete
+comment lists, reject truncated size fields, and compare codebook powers without
+out-of-range floating-to-integer casts.
+
+--- a/stb_vorbis.c
++++ b/stb_vorbis.c
+@@ -949,11 +949,12 @@
+ 
+ static void *setup_malloc(vorb *f, int sz)
+ {
++   if (sz < 0 || sz > INT_MAX - 7) return NULL;
+    sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
+    f->setup_memory_required += sz;
+    if (f->alloc.alloc_buffer) {
+       void *p = (char *) f->alloc.alloc_buffer + f->setup_offset;
+-      if (f->setup_offset + sz > f->temp_offset) return NULL;
++      if (sz > f->temp_offset - f->setup_offset) return NULL;
+       f->setup_offset += sz;
+       return p;
+    }
+@@ -968,9 +969,10 @@
+ 
+ static void *setup_temp_malloc(vorb *f, int sz)
+ {
++   if (sz < 0 || sz > INT_MAX - 7) return NULL;
+    sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
+    if (f->alloc.alloc_buffer) {
+-      if (f->temp_offset - sz < f->setup_offset) return NULL;
++      if (sz > f->temp_offset - f->setup_offset) return NULL;
+       f->temp_offset -= sz;
+       return (char *) f->alloc.alloc_buffer + f->temp_offset;
+    }
+@@ -1240,12 +1242,15 @@
+ // (formula implied by specification)
+ static int lookup1_values(int entries, int dim)
+ {
+-   int r = (int) floor(exp((float) log((float) entries) / dim));
+-   if ((int) floor(pow((float) r+1, dim)) <= entries)   // (int) cast for MinGW warning;
+-      ++r;                                              // floor() to avoid _ftol() when non-CRT
++   int r;
++   if (entries <= 0 || dim <= 0) return -1;
++   r = (int) floor(exp((float) log((float) entries) / dim));
++   // A power can exceed INT_MAX; compare in floating point before narrowing.
++   if (floor(pow((float) r+1, dim)) <= entries)
++      ++r;
+    if (pow((float) r+1, dim) <= entries)
+       return -1;
+-   if ((int) floor(pow((float) r, dim)) > entries)
++   if (floor(pow((float) r, dim)) > entries)
+       return -1;
+    return r;
+ }
+@@ -1581,11 +1586,13 @@
+ 
+ static int get32_packet(vorb *f)
+ {
+-   uint32 x;
+-   x = get8_packet(f);
+-   x += get8_packet(f) << 8;
+-   x += get8_packet(f) << 16;
+-   x += (uint32) get8_packet(f) << 24;
++   uint32 x = 0;
++   int i;
++   for (i=0; i < 4; ++i) {
++      int byte = get8_packet(f);
++      if (byte < 0) return -1;
++      x |= (uint32) byte << (8*i);
++   }
+    return x;
+ }
+ 
+@@ -3650,6 +3657,7 @@
+    if (!vorbis_validate(header))                    return error(f, VORBIS_invalid_setup);
+    //file vendor
+    len = get32_packet(f);
++   if (len < 0 || len > INT_MAX - 8)                return error(f, VORBIS_invalid_setup);
+    f->vendor = (char*)setup_malloc(f, sizeof(char) * (len+1));
+    if (f->vendor == NULL)                           return error(f, VORBIS_outofmem);
+    for(i=0; i < len; ++i) {
+@@ -3658,15 +3666,20 @@
+    f->vendor[len] = (char)'\0';
+    //user comments
+    f->comment_list_length = get32_packet(f);
++   if (f->comment_list_length < 0 ||
++       f->comment_list_length > (INT_MAX - 7) / (int) sizeof(char*))
++                                                    return error(f, VORBIS_invalid_setup);
+    f->comment_list = NULL;
+    if (f->comment_list_length > 0)
+    {
+       f->comment_list = (char**) setup_malloc(f, sizeof(char*) * (f->comment_list_length));
+       if (f->comment_list == NULL)                  return error(f, VORBIS_outofmem);
++      memset(f->comment_list, 0, sizeof(char*) * f->comment_list_length);
+    }
+ 
+    for(i=0; i < f->comment_list_length; ++i) {
+       len = get32_packet(f);
++      if (len < 0 || len > INT_MAX - 8)             return error(f, VORBIS_invalid_setup);
+       f->comment_list[i] = (char*)setup_malloc(f, sizeof(char) * (len+1));
+       if (f->comment_list[i] == NULL)               return error(f, VORBIS_outofmem);
+ 
+@@ -4210,7 +4223,7 @@
+    int i,j;
+ 
+    setup_free(p, p->vendor);
+-   for (i=0; i < p->comment_list_length; ++i) {
++   for (i=0; p->comment_list && i < p->comment_list_length; ++i) {
+       setup_free(p, p->comment_list[i]);
+    }
+    setup_free(p, p->comment_list);

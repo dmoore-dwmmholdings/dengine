@@ -50,6 +50,28 @@ static void cook_twice(const void *bytes, u64 size, de__sound_settings *settings
     DE_FREE(a, one, (size_t)n);
     DE_FREE(a, two, (size_t)m);
 }
+TEST(sound_import, malformed_vorbis_comment_lengths_reject_without_writes) {
+    const char *paths[] = {DE_SOUND_REGRESSION_DIR "/vorbis-start-decoder-3323b755.ogg",
+                           DE_SOUND_REGRESSION_DIR "/vorbis-comment-cleanup-c9ffaa9a.ogg",
+                           DE_SOUND_REGRESSION_DIR "/vorbis-lookup-power-3dc71b61.ogg"};
+    for (u32 i = 0; i < 3; ++i) {
+        FILE *file = fopen(paths[i], "rb");
+        ASSERT_TRUE(file != NULL);
+        u8 bytes[16384];
+        size_t size = fread(bytes, 1, sizeof bytes, file);
+        int extra = fgetc(file);
+        fclose(file);
+        ASSERT_EQ(extra, EOF);
+        ASSERT_GT(size, 0u);
+        void *output = NULL;
+        u64 output_size = 0;
+        de__sound_settings settings = {0};
+        EXPECT_EQ(
+            de__sound_cook(de_heap_allocator(), bytes, size, &settings, &output, &output_size),
+            DE_ERR_INVALID_ARGUMENT);
+        EXPECT_TRUE(output == NULL);
+    }
+}
 TEST(sound_import, wav_formats_exact_float_pcm_and_repeat) {
     const u32 bits[] = {16, 24, 32};
     for (u32 k = 0; k < 3; ++k) {

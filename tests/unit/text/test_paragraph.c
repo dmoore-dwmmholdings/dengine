@@ -60,6 +60,31 @@ TEST_F(paragraph, hard_breaks_spacing_snap_and_invalid_utf8, runtime_fx) {
     EXPECT_GT(l->cluster_count, 2u);
     de_text_layout_free(l);
 }
+TEST_F(paragraph, bidi_record_separators_and_invalid_utf8_do_not_overrun_levels, runtime_fx) {
+    de_text_style style = {.font = f->latin, .size_px = 20, .color = {1, 1, 1, 1}};
+    for (u32 separator = 0x1c; separator <= 0x1e; ++separator) {
+        const char bytes[] = {'a', (char)separator, 'b', (char)separator, (char)0xff};
+        for (u32 direction = 0; direction < 3; ++direction) {
+            de_text_layout_desc desc = {.utf8 = {bytes, sizeof bytes},
+                                        .style = &style,
+                                        .direction = (de_text_dir)direction};
+            de_text_layout *l = NULL;
+            ASSERT_EQ(de_text_layout_build(f->t, &desc, NULL, &l), DE_OK);
+            EXPECT_EQ(l->line_count, 3u);
+            EXPECT_TRUE(isfinite(l->size.x));
+            EXPECT_TRUE(de_text_layout_hit_test(l, (de_vec2){100, 100}) <= sizeof bytes);
+            de_text_layout_free(l);
+        }
+    }
+    /* Exact text payload of the original libFuzzer crash. */
+    const char bytes[] = {0x1e, 'a', (char)0xff, 'a', (char)0xff};
+    de_text_layout_desc desc = {
+        .utf8 = {bytes, sizeof bytes}, .style = &style, .direction = DE_DIR_RTL};
+    de_text_layout *l = NULL;
+    ASSERT_EQ(de_text_layout_build(f->t, &desc, NULL, &l), DE_OK);
+    EXPECT_EQ(l->line_count, 2u);
+    de_text_layout_free(l);
+}
 TEST_F(paragraph, emergency_breaks_keep_grapheme_and_ligature_clusters, runtime_fx) {
     de_text_layout *l = layout_build(f,
                                      "a\xcc\x81"

@@ -307,13 +307,15 @@ The nullable `refresh_text` widget-table hook lets bindings refresh display afte
 buffer writes without depending on private advanced-control structures. Runtime components
 own no external heap pointers, and the fixed entity scratch buffer is allocated at UI creation.
 
-Known deferred finding DENG-521: first pre-layout virtual-list reconciliation observes zero
-UI scale and triggers a NaN-to-u32 conversion under UBSan. Its strict regression remains.
-The other advanced sanitizer cases pass. Both actual Metal advanced scenes pass strict FLIP
+DENG-521 is fixed: virtual-list pooling waits for a finite positive pixel scale and bounds
+the visible row count before converting to an integer. The existing first-frame and advanced
+gamepad replay regressions pass ASan/UBSan. Both actual Metal advanced scenes pass strict FLIP
 comparison with mean/p99/max0 and visual review. DENG-508 limits shader-validation startup;
-captures retain the debug layer with shader validation disabled. DENG-512 rejects runtime
-atlas page metadata (including cold password bullets), so its strict regression remains
-and the visual fixture explicitly cooks the real bullet glyph. Existing font seams remain513.
+captures retain the debug layer with shader validation disabled. DENG-512 is fixed: public
+atlas metadata includes runtime-generated pages as well as cooked pages, making cold password
+bullets and generated ligatures visible. The original page-metadata regression passes and the
+unchanged nine-slice scene renders its previously missing `fi` ligature. Existing font seams
+remain tracked by DENG-513.
 
 ### Data binding (DENG-321)
 
