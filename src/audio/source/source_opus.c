@@ -74,7 +74,11 @@ bool de__opus_seek(de__sound_decoder *d, u64 frame) {
         if (p < v->packet_count)
             packet = (u32)p;
     }
-    packet = packet > 4 ? packet - 4 : 0;
+    /* Four 20ms packets meet the minimum preroll, but tonal predictor state
+     * still differs measurably from linear decoding. Sixteen settle that state while
+     * keeping work bounded by 320ms plus the seek table's half-second spacing. */
+    enum { PREROLL_PACKETS = 16 };
+    packet = packet > PREROLL_PACKETS ? packet - PREROLL_PACKETS : 0;
     if ((u64)packet * 960 > frame + v->preskip)
         packet = 0;
     if (opus_multistream_decoder_ctl(d->codec, OPUS_RESET_STATE) != OPUS_OK)
