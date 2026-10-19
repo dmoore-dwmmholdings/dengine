@@ -134,6 +134,13 @@ typedef struct de_loc_arg {
 /* "{count} {count, plural, one{item} other{items}}" with CLDR plural rules. */
 DE_API u32 de_loc_format(const de_text_system *t, de_name id, const de_loc_arg *args, u32 arg_count,
                          char *out, u32 out_bytes);
+/** Format an inline UTF-8 pattern using the same allocation-free ICU subset as de_loc_format
+ * and the text system's current published locale (NULL text:en). The span need not end in NUL.
+ * Returns full needed bytes excluding NUL, truncating out at a UTF-8 boundary when necessary;
+ * out==NULL queries the needed size. Invalid arguments/pattern return0 and set the error context,
+ * clearing out when non-NULL with nonzero capacity, as de_loc_format does. */
+DE_API u32 de_loc_format_pattern(const de_text_system *t, de_str pattern, const de_loc_arg *args,
+                                 u32 arg_count, char *out, u32 out_bytes);
 DE_API void de_loc_pseudo(de_text_system *t, bool enabled); /* pseudo-localization, Dev */
 
 /** Main thread. Changes the project fallback locale (initially en); async switch on text update. */
