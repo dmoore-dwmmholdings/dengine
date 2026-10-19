@@ -13,6 +13,7 @@ typedef struct de_ui_widget_table {
     de_ui_scroll_into_view_fn scroll_into_view;
     de_ui_widget_action request_focus;
     de_entity (*focused)(const de_ui *ui);
+    de_ui_widget_action refresh_text; /**< Refresh display after a committed-buffer write. */
 } de_ui_widget_table;
 typedef struct de_ui_pointer_state {
     de_entity hovered, captured, root;
