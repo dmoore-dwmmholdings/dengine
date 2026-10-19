@@ -1,0 +1,7 @@
+[project]
+asset_root = "../../.."
+version = 1
+[assets]
+"mesh/card" = {type="model", source="tests/golden/base_tier/assets/meshes/card.gltf", generate_lods=false}
+"mat/white" = {type="material", source="tests/golden/base_tier/assets/materials/white.mat.toml"}
+"ui/pixel_font" = {type="font", source="tests/golden/ui/pixel_ui/diagnostic.fnt", mode="bitmap"}

@@ -10,9 +10,10 @@ typedef struct runtime_fx {
     de_font latin, cjk, emoji;
     de_load_handle loads[3];
 } runtime_fx;
-static inline void runtime_fx_setup(runtime_fx *f) {
+static inline void runtime_fx_setup_with_types(runtime_fx *f, de_type_registry *types) {
     ASSERT_EQ(de_fs_mount("fontall", DE_FONT_DATA "/..", DE_MOUNT_READ_ONLY, 0), DE_OK);
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.hot_reload = true}, &f->assets),
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.hot_reload = true, .types = types},
+                                     &f->assets),
               DE_OK);
     de__asset_reload_set_watching(f->assets, false);
     ASSERT_EQ(de_text_create(NULL, f->assets, &f->t), DE_OK);
@@ -28,6 +29,9 @@ static inline void runtime_fx_setup(runtime_fx *f) {
     de_font chain[] = {f->cjk, f->emoji};
     de_text_set_fallbacks(f->t, f->latin, chain, 2);
     de_text_update(f->t);
+}
+static inline void runtime_fx_setup(runtime_fx *f) {
+    runtime_fx_setup_with_types(f, NULL);
 }
 static inline void runtime_fx_teardown(runtime_fx *f) {
     /* Localization requests and glyph jobs still refer to the asset system. */

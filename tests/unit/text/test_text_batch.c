@@ -16,16 +16,33 @@ typedef struct text_render_fx {
     de_world *w;
     de_type_registry *types;
     de_font bitmap;
+    de_load_handle scene_loads[3];
+    de_gpu_texture screen_target;
+    de_atomic_u32 screen_errors;
+    bool screen_sink;
+    u32 basic_outputs;
 } text_render_fx;
+static void screen_error_sink(const de_log_record *record, void *user) {
+    text_render_fx *f = user;
+    if (record->level >= DE_LOG_ERROR)
+        de_atomic_fetch_add_u32(&f->screen_errors, 1, DE_ATOMIC_RELAXED);
+}
 static void text_render_fx_setup(text_render_fx *f) {
     (void)f;
 }
 static void text_render_fx_teardown(text_render_fx *f) {
+    if (f->screen_sink) {
+        de_log_flush();
+        de_log_remove_sink(screen_error_sink, f);
+    }
     if (f->fonts.t)
         de_text_attach(f->fonts.t, NULL, NULL);
     de_text_destroy(f->fonts.t);
     f->fonts.t = NULL;
     if (f->fonts.assets) {
+        for (u32 i = 0; i < 3; ++i)
+            if (f->scene_loads[i].id)
+                de_asset_release(f->fonts.assets, f->scene_loads[i]);
         for (u32 i = 0; i < 3; ++i)
             if (f->fonts.loads[i].id)
                 de_asset_release(f->fonts.assets, f->fonts.loads[i]);
@@ -34,6 +51,8 @@ static void text_render_fx_teardown(text_render_fx *f) {
     }
     if (f->r)
         de_renderer_destroy(f->r);
+    if (f->screen_target.id)
+        de_gpu_texture_destroy(f->d, f->screen_target);
     if (f->w)
         de_world_destroy(f->w);
     if (f->types)
@@ -41,16 +60,17 @@ static void text_render_fx_teardown(text_render_fx *f) {
     if (f->d)
         de_gpu_device_destroy(f->d);
     de_fs_unmount("fontall", DE_FONT_DATA "/..");
+    de_fs_unmount("textscene", DE_FONT_DATA "/../../../..");
 }
 static void start_render(text_render_fx *f, de_gpu_backend backend) {
-    runtime_fx_setup(&f->fonts);
+    ASSERT_EQ(de_type_registry_create(NULL, &f->types), DE_OK);
+    runtime_fx_setup_with_types(&f->fonts, f->types);
     de_result result = de_gpu_device_create(
         &(de_gpu_device_desc){
             .backend = backend, .debug_layer = backend != DE_GPU_NULL, .pipeline_cache_dir = ""},
         &f->d);
     if (result != DE_OK)
         SKIP("native device unavailable");
-    ASSERT_EQ(de_type_registry_create(NULL, &f->types), DE_OK);
     ASSERT_EQ(de_world_create(&(de_world_desc){.types = f->types}, &f->w), DE_OK);
     ASSERT_EQ(de_renderer_create(
                   &(de_renderer_desc){.device = f->d, .assets = f->fonts.assets, .types = f->types},
@@ -214,7 +234,7 @@ TEST_F(text_batch, ten_thousand_one_draw, text_render_fx) {
 #endif
     DE_FREE(de_heap_allocator(), quads, 10000 * sizeof *quads);
 }
-static u8 *readback(text_render_fx *f) {
+static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
     u32 w = 1280, h = 720, pitch = w * 4;
     de_gpu_wait_idle(f->d);
     de_gpu_buffer buffer =
@@ -224,7 +244,7 @@ static u8 *readback(text_render_fx *f) {
                                                          .name = "text readback"});
     ASSERT_TRUE(buffer.id);
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "text readback");
-    de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, pitch, de__renderer_offscreen(f->r), 0, 0);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, pitch, texture, 0, 0);
     de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
     de_gpu_submit submit = {.cmds = &cmd, .cmd_count = 1, .signal = fence, .signal_value = 1};
     ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &submit), DE_OK);
@@ -236,6 +256,129 @@ static u8 *readback(text_render_fx *f) {
     de_gpu_buffer_destroy(f->d, buffer);
     return out;
 }
+static u8 *readback(text_render_fx *f) {
+    return readback_target(f, de__renderer_offscreen(f->r));
+}
+#if defined(__APPLE__)
+static de_load_state wait_screen_asset(text_render_fx *f, de_load_handle load) {
+    u64 deadline = de_time_now_ns() + TEXT_WAIT;
+    de_load_state state;
+    do {
+        de_render_uploader_flush(f->r->uploader);
+        de_render_uploader_acquire_submit(f->r->uploader);
+        de_asset_system_update(f->fonts.assets, NULL);
+        state = de_asset_wait(f->fonts.assets, load, 1000000);
+    } while ((state == DE_LOAD_PENDING || state == DE_LOAD_LOADING) && de_time_now_ns() < deadline);
+    return state;
+}
+static void observe_basic_output(de__view_frame *vf, void *user) {
+    text_render_fx *f = user;
+    u32 index = de__rg_resource_index(vf->graph, vf->color);
+    if (index < vf->graph->resource_count) {
+        const de__rg_resource *resource = &vf->graph->resources[index];
+        if (strcmp(resource->name, "output.basic") == 0 &&
+            (resource->tex.usage & DE_USAGE_RENDER_TARGET) &&
+            resource->tex.format == DE_FMT_RGBA16_FLOAT)
+            ++f->basic_outputs;
+    }
+}
+#endif
+TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    de_log_add_sink(screen_error_sink, f);
+    f->screen_sink = true;
+    ASSERT_EQ(de_fs_mount("textscene", DE_FONT_DATA "/../../../..", DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(
+        de_asset_manifest_load(f->fonts.assets, "textscene:/tests/unit/text/screen-assets.toml"),
+        DE_OK);
+    const char *assets[] = {"mesh/card", "mat/white", "ui/pixel_font"};
+    for (u32 i = 0; i < 3; ++i) {
+        f->scene_loads[i] = de_asset_load(f->fonts.assets, de_asset_id_from(assets[i]), 0);
+        de_load_state state = wait_screen_asset(f, f->scene_loads[i]);
+        de_load_info info = {0};
+        de_asset_status(f->fonts.assets, f->scene_loads[i], &info);
+        printf("loading %s: %u %s\n", assets[i], state, info.first_error_msg);
+        ASSERT_EQ(state, DE_LOAD_READY);
+    }
+    de_asset_id mesh_id = de_asset_id_from("mesh/card#card");
+    de_mesh mesh = de_asset_mesh(f->fonts.assets, mesh_id);
+    de_load_handle mesh_load = de_asset_load(f->fonts.assets, mesh_id, 0);
+    ASSERT_EQ(wait_screen_asset(f, mesh_load), (int)DE_LOAD_READY);
+    de_asset_release(f->fonts.assets, mesh_load);
+    const DeRenderComponents *ids = de__render_components(f->w);
+    de_builtin_component_ids bi = de_builtin_components(f->w);
+    de_entity card = de_entity_spawn(f->w);
+    *(DeTransform *)de_entity_add(f->w, card, bi.transform) = de_transform_identity();
+    DeMeshRenderer *drawable = de_entity_add(f->w, card, ids->mesh_renderer);
+    drawable->mesh = mesh;
+    drawable->materials[0] = de_asset_material(f->fonts.assets, de_asset_id_from("mat/white"));
+    f->screen_target = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 1280,
+                                     .height = 720,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                              DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(f->screen_target.id);
+    de_view rtt =
+        de_view_create(f->r, &(de_view_desc){.target = f->screen_target, .name = "text.rtt"});
+    ASSERT_TRUE(rtt.id);
+    de_entity camera = de_entity_spawn(f->w);
+    DeTransform *transform = de_entity_add(f->w, camera, bi.transform);
+    *transform = de_transform_identity();
+    transform->position.z = 2;
+    DeCamera *rtt_camera = de_entity_add(f->w, camera, ids->camera);
+    *rtt_camera = (DeCamera){
+        .view = rtt, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_OUTPUT, -100, "text.observe_basic",
+                                      observe_basic_output, f),
+              DE_OK);
+    de_font font = de_asset_font(f->fonts.assets, de_asset_id_from("ui/pixel_font"));
+    for (u32 medium = 0; medium < 2; ++medium)
+        for (u32 hdr = 0; hdr < 2; ++hdr) {
+            de_render_settings settings = de_render_settings_preset(
+                DE_TIER_BASE, medium ? DE_QUALITY_MEDIUM : DE_QUALITY_LOW);
+            settings.render_scale = 1;
+            settings.ao = settings.reflections = settings.gi = settings.sss = settings.shadows = 0;
+            de_renderer_set_settings(f->r, &settings);
+            /* Offscreen exercises the HDR text multiplier without requiring an HDR display. */
+            f->r->hdr_output = hdr != 0;
+            de_text_update(f->fonts.t);
+            de_glyph_quad q = quad(f, font, 'A', 32, 32, 64);
+            q.color = (de_vec4){0, 1, 0, 1};
+            de_text_draw_opts options = {.font = font, .pixel_snap = true};
+            ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &q, 1, (de_vec2){0}, &options), DE_OK);
+            ASSERT_EQ(de_text_draw(f->fonts.t, rtt, &q, 1, (de_vec2){0}, &options), DE_OK);
+            u32 before = f->basic_outputs;
+            render_frame(f);
+            EXPECT_EQ(f->basic_outputs - before, 2u);
+            for (u32 target = 0; target < 2; ++target) {
+                u8 *pixels =
+                    readback_target(f, target ? f->screen_target : de__renderer_offscreen(f->r));
+                u32 green = 0;
+                for (u32 y = 32; y < 96; ++y)
+                    for (u32 x = 32; x < 96; ++x) {
+                        const u8 *p = pixels + 4 * (y * 1280 + x);
+                        green += p[1] > 128 && p[0] < 16 && p[2] < 16;
+                    }
+                printf("screen text medium=%u hdr=%u rtt=%u green=%u\n", medium, hdr, target,
+                       green);
+                EXPECT_GT(green, 500u);
+                if (!medium && !hdr && !target)
+                    ASSERT_TRUE(stbi_write_png(DE_TEXT_RENDER_CAPTURE ".screen.png", 1280, 720, 4,
+                                               pixels, 1280 * 4));
+                free(pixels);
+            }
+            de_log_flush();
+            EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
+        }
+    de__view_unregister_stage(f->r, observe_basic_output, f);
+    de_view_destroy(f->r, rtt);
+#else
+    SKIP("Metal native host required");
+#endif
+}
+#if defined(__APPLE__)
 typedef struct coverage_clear {
     de_rg_resource target;
 } coverage_clear;
@@ -259,6 +402,7 @@ static void coverage_clear_stage(de__view_frame *vf, void *user) {
     if (pass)
         de_rg_write(pass, p->target, DE_ACCESS_RENDER_TARGET);
 }
+#endif
 TEST_F(text_batch, metal_cff_and_truetype_msdf_coverage_small_and_large, text_render_fx) {
 #if defined(__APPLE__)
     start_render(f, DE_GPU_METAL);
