@@ -227,3 +227,58 @@ The options most often set on top of a preset:
 
 `cmake --build --preset <name> --target de_print_config` prints the resolved configuration of a
 build directory (from `build/<preset>/de_config_dump.txt`).
+
+## A game in a separate repository
+
+Pin the engine source as a submodule (for example `engine/`). There is currently no installed
+`find_package` SDK; source integration uses the engine's CMake helpers:
+
+```cmake
+cmake_minimum_required(VERSION 3.28)
+project(my_game LANGUAGES C CXX)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(DE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(DE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(DE_BUILD_TOOLS ON CACHE BOOL "" FORCE) # source asset cooking in Debug/Dev
+add_subdirectory(engine)
+de_add_game(NAME my_game SOURCES game.c GAME_TOML game.toml)
+```
+
+Configure with Ninja and `-DCMAKE_BUILD_TYPE=Dev`, then build `my_game` and `dengine_exe`.
+`game.c` exports `DE_GAME_EXPORT const de_game_api *de_game_get_api(void)` with
+`api_version = DE_GAME_API_VERSION`, `init`, `register_types`, `register_systems` and optional
+shutdown/reload callbacks. Public headers are under `<dengine/...>`; a game does not need `src/` includes.
+`de_add_game` copies `game.toml` beside the game binary. It does not copy the manifest or sources.
+Run the built host with `--game <path-to-game-library> --dev-dir <game-source-directory>` and load
+`dev:/assets.toml` explicitly in `init`. `run_my_game` also starts the host, but does not supply
+`--dev-dir`; stage your data next to the binary and use `game:/`, or mount its source directory.
+On macOS the library is normally `build/my_game/libmy_game.dylib`, and the host is
+`build/engine/src/host/dengine`. Windows static-engine builds and Shipping build a game executable
+instead of a dynamic game library. Shipping uses cooked `.dpak` files beside that executable;
+`--dev-dir` is ignored there.
+
+The host provides the window, tasks, ECS world/types, input, assets and text. For a rendered game,
+create a device with `de_gpu_device_create` and assign `e->gpu`; create a renderer with that device,
+`e->window`, `e->assets` and `e->types`, assign `e->renderer`, then call `de_renderer_attach`.
+These non-NULL assignments transfer final teardown ownership to the host. Assign immediately
+when creation succeeds so failed `init` also unwinds them. Optional UI follows the same rule
+(`de_ui_create`, assign `e->ui`, `de_ui_attach`). The host creates none of these optional objects
+automatically. If you destroy an assigned object yourself, obey its dependency requirements and
+set the corresponding field to NULL. In particular, assets must unload before their renderer.
+Do not destroy a renderer in ordinary game shutdown while `e->assets` still owns render assets.
+The host waits for the final render frame, calls game shutdown, then releases its modules and
+only afterward unloads the game library.
+
+Register render/game component types before loading scene assets. Use a manifest containing your
+models/materials/textures, font and scene; poll `de_asset_status` until READY, then instantiate
+with `de_asset_scene`/`de_model_prefab` and `de_prefab_instantiate` on the main thread outside a
+running ECS schedule. A 3D scene needs a transformed `DeCamera`, mesh renderers and lighting.
+`de_component_find(world, "DeCamera")` and the other public ECS calls avoid private render IDs.
+Add your movement/camera systems and read `de_key_down`/`de_key_pressed`, or load/push action maps
+on `e->input`; the host already pumps input and runs Update/FixedUpdate/Extract.
+For a text HUD, load a font, call `de_text_attach`, build a public `de_text_layout`, obtain its
+quads with `de_text_layout_quads`, and submit `de_text_draw` during a main-thread game system.
+Keep game state and load handles alive until shutdown, release game-owned loads/layouts there,
+and implement reload callbacks when enabling development hot reload. See the public-only
+`tests/unit/host/fixtures/owned_game.c` for module creation and host-owned cleanup.

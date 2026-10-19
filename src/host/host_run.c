@@ -23,6 +23,9 @@
 #include "host/host_crash.h" /* DENG-96 */
 
 #include <dengine/de_debug.h>
+#if DE_HAS_RENDER
+#include "render/world/render_world.h"
+#endif
 
 #include <string.h>
 
@@ -171,10 +174,11 @@ static de_result host_run_game(de__host *h) {
             r = DE_FAIL_WRAP(r, "game '%s': init failed", name);
         /* No shutdown: init did not succeed. */
         de__headless_end(h);
-        de__game_detach(h);
-        de__hot_reload_shutdown(h); /* DENG-93 */
+        /* Game-defined asset unload/component hooks still need the loaded game code. */
         de__engine_destroy(h->engine);
         h->engine = NULL;
+        de__game_detach(h);
+        de__hot_reload_shutdown(h); /* DENG-93 */
         return r;
     }
     if (api->register_types != NULL)
@@ -187,13 +191,19 @@ static de_result host_run_game(de__host *h) {
     /* The previous handlers again: a second signal during shutdown is not swallowed. */
     de__headless_end(h);
 
+#if DE_HAS_RENDER
+    /* The final Extract may still be rendering game hooks/state on another thread. */
+    if (e->renderer != NULL)
+        de__render_world_wait_idle(e->renderer);
+#endif
     /* A hot reload swapped the table behind h->api (DENG-93): `api` names the current game. */
     if (api->shutdown != NULL)
         api->shutdown(e);
-    de__game_detach(h);
-    de__hot_reload_shutdown(h);    /* DENG-93: after the copy is closed */
+    /* Keep the game library loaded through asset unloads and ECS component destruction. */
     de__engine_destroy(h->engine); /* sets no error: a loop failure stays de_error_last() */
     h->engine = NULL;
+    de__game_detach(h);
+    de__hot_reload_shutdown(h); /* DENG-93: after the copy is closed */
     return r;
 }
 

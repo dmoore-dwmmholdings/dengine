@@ -28,7 +28,17 @@ typedef struct de_nav de_nav;
 typedef struct de_net_session de_net_session;
 typedef struct de_steam de_steam;
 
-/* Everything the game can reach. Owned by the host; stable across hot reloads. */
+/** Everything the game can reach; stable across hot reloads. The host creates the core,
+ * window, input, assets and text. Games may create GPU, renderer and UI instances using the
+ * public APIs and assign these fields: each non-NULL field transfers final shutdown ownership
+ * to the host. The host finishes rendering, then destroys UI, input/text, assets/world, renderer,
+ * GPU and window in dependency order. It does not create these optional instances for games.
+ * A game that destroys an assigned instance itself must first respect its dependency/lifetime
+ * requirements and set the field to NULL immediately afterward; otherwise shutdown destroys
+ * it again. Do not destroy a renderer while the asset system still owns its render assets.
+ * Assign owned instances as soon as create succeeds, including during a failing init: the
+ * host unwinds assigned fields even when init fails (shutdown is not called in that case).
+ * Ownership of other optional module fields is unchanged. */
 typedef struct de_engine {
     const de_allocator *allocator;
     de_task_system *tasks;
