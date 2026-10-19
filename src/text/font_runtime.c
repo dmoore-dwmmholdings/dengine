@@ -206,7 +206,7 @@ de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page, de_te
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "text page info: invalid argument");
     de__text_lock(t->runtime);
     const de_text_font *f = de_text__font_get(t, font);
-    if (!f || page >= f->pages) {
+    if (!f || page >= de_text__page_count(t, font)) {
         de__text_unlock(t->runtime);
         return DE_FAIL(DE_ERR_NOT_FOUND, "text page not ready");
     }

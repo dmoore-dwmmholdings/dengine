@@ -15,7 +15,12 @@ void de_ui__list_prepare(de_ui *ui, de_entity e) {
     const DeUiScroll *v = de_entity_get_const(ui->world, e, a->scroll);
     f32 height = isfinite(list.item_height) && list.item_height > 0 ? list.item_height : 1;
     f32 pixels = height * ui->scale;
-    u32 visible = (u32)ceilf(fmaxf(0, n->computed_rect.w) / pixels);
+    /* Widgets reconcile before the first layout establishes scale and viewport.
+     * Defer pooling instead of converting 0/0 to an integer. */
+    if (!isfinite(pixels) || pixels <= 0)
+        return;
+    f64 rows = ceil((f64)fmaxf(0, n->computed_rect.w) / pixels);
+    u32 visible = rows < ui->capacity ? (u32)rows : ui->capacity;
     u32 needed = list.item_count < visible + 2 ? list.item_count : visible + 2;
     /* Capacity is bounded by the UI node budget, never by the data item count. */
     if (needed > ui->capacity)

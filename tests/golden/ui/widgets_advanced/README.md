@@ -15,11 +15,10 @@ checked readable hierarchy, alignment, selection/focus distinction, popup layeri
 meaningful data rows, clipping and interaction feedback. Both corrected native images
 were visually approved. Strict Metal comparison reports FLIP mean/p99/max0 for both.
 
-Known qualifications: DENG-512 rejects metadata for runtime atlas pages, so uncooked
-ligatures can disappear and cold password bullets need the explicit cooked glyph.
-The failing public page-metadata regression remains in test_text_input.c. DENG-513
-tracks existing thin MSDF seams. DENG-521 retains the first-layout virtual-list
-zero-scale UBSan failure. No unrelated renderer/text repair was included.
+DENG-512 and DENG-521 are fixed: runtime atlas pages expose public metadata, and list
+pooling waits for a valid first-layout scale. The retained page-metadata and first-frame
+virtual-list tests now pass with ASan/UBSan. The fixture still cooks a real bullet glyph
+for deterministic captures. DENG-513 tracks existing thin MSDF seams.
 
 Metal debug-layer capture/comparison passed with MTL_SHADER_VALIDATION=0. The original
 validation1 capture was stopped at five minutes in the sampled Apple RT pipeline
