@@ -47,6 +47,12 @@ typedef struct de_ui_draw_emitter {
     const de_ui_draw_node *node;
     f32 opacity;
 } de_ui_draw_emitter;
+typedef void (*de_ui_text_geometry_fn)(de_ui *ui, de_entity entity, de_vec2 *physical_offset,
+                                       f32 *wrap_width, void *user);
+/** Optional physical-pixel text origin/wrap override; NULL preserves ordinary labels. */
+void de_ui__set_text_geometry(de_ui *ui, de_ui_text_geometry_fn fn, void *user);
+void de_ui__text_geometry(de_ui *ui, de_entity entity, f32 default_width, de_vec2 *offset,
+                          f32 *wrap_width);
 typedef void (*de_ui_widget_draw_fn)(de_ui *ui, de_entity entity, de_vec4 physical_rect,
                                      de_ui_draw_emitter *emitter, void *user);
 /** Main thread, after render_attach; re-register on reattach. Geometry/insets are physical pixels.
@@ -70,6 +76,8 @@ struct de_ui_render {
     bool mutex_ready, overflow_logged, hook_registered;
     de_system build_system, extract_system;
     de_cvar max_quads;
+    de_ui_text_geometry_fn text_geometry;
+    void *text_geometry_user;
     de_ui_widget_draw_fn widget_draw;
     void *widget_user;
     de_ui_render_stats stats;
