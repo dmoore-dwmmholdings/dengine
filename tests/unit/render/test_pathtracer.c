@@ -243,7 +243,7 @@ TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
     de_gpu_buffer source = de_gpu_buffer_create(
         d, &(de_gpu_buffer_desc){.size = 192, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
     de_gpu_buffer output = de_gpu_buffer_create(
-        d, &(de_gpu_buffer_desc){.size = 256 * 32, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+        d, &(de_gpu_buffer_desc){.size = 512 * 32, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
     ASSERT_TRUE(table.id && query.id && source.id && output.id);
     memcpy(de_gpu_buffer_map(d, table), de__pt_sobol_directions, sizeof de__pt_sobol_directions);
     memset(de_gpu_buffer_map(d, query), 0, 32);
@@ -266,11 +266,11 @@ TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
     u32 pc[] = {de_gpu_buffer_bindless(d, table), de_gpu_buffer_bindless(d, output),
                 de_gpu_buffer_bindless(d, query), de_gpu_buffer_bindless(d, source)};
     de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
-    de_gpu_cmd_dispatch(cmd, 4, 1, 1);
+    de_gpu_cmd_dispatch(cmd, 8, 1, 1);
     de_gpu_barrier copy = {
         .buffer = output, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
     de_gpu_cmd_barriers(cmd, &copy, 1);
-    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 256 * 32);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 512 * 32);
     ASSERT_EQ(
         de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
         DE_OK);
@@ -288,6 +288,22 @@ TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
            self_hits);
     EXPECT_EQ(wrong_side, 0u);
     EXPECT_EQ(self_hits, 0u);
+    u32 false_emitter_hits = 0, lost_blockers = 0;
+    for (u32 i = 256; i < 512; ++i) {
+        const f32 *ray = rays + 8 * i;
+        ASSERT_TRUE(isfinite(ray[7]) && ray[7] > 0 && ray[6] < 0 && ray[3] > 0);
+        f32 emitter_t = (2.f - ray[2]) / ray[6];
+        false_emitter_hits += emitter_t >= .00001f && emitter_t < ray[3];
+        /* An independent plane halfway to the emitter must remain inside the segment. */
+        f32 blocker_t = (2.005f - ray[2]) / ray[6];
+        lost_blockers += !(blocker_t >= .00001f && blocker_t < ray[3]);
+        f32 x = ray[0] + ray[4] * emitter_t, y = ray[1] + ray[5] * emitter_t;
+        EXPECT_TRUE(x >= 101.f - 1e-4f && y >= -1.f - 1e-4f && x + y <= 102.f + 1e-4f);
+    }
+    printf("Grazing emissive segments: %u false emitter hits, %u lost blockers\n",
+           false_emitter_hits, lost_blockers);
+    EXPECT_EQ(false_emitter_hits, 0u);
+    EXPECT_EQ(lost_blockers, 0u);
     de_gpu_pipeline_destroy(d, pipeline);
     de_gpu_buffer buffers[] = {table, query, source, output};
     for (u32 i = 0; i < 4; ++i)

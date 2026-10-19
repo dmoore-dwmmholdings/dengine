@@ -95,3 +95,21 @@ RGB distance. It still fails the original 0.05 limit. Its 16/4096 sample counts,
 scene and numerical oracle are unchanged. Reference energy remains 106.239134.
 This unit comparison has Metal API validation on and shader instrumentation
 off. The strict full-PT golden verification above is separate.
+
+Emissive-triangle visibility follow-up (DENG-454): the shadow segment now aims
+from the offset receiver origin to the original sampled emitter point. Its BSDF
+direction and area PDF still use the unoffset shading point. Previously, keeping
+the old visibility direction and distance could include the sampled emitter at
+grazing angles. The production GPU proposal regression now checks 256 grazing
+segments against an independent emitter plane and a halfway blocker: false emitter
+hits fall from 256 to zero, with no lost blockers. Its original 256 receiver-normal
+checks also pass. Strict Metal validation passes in Dev and ASan/UBSan.
+
+This correction changes the Cornell golden image. The original strict 4096-sample
+run finishes in 256.42 seconds but fails the unchanged image comparison (mean
+0.027522 against 0.02; p99 0.079175 against 0.10). The gallery passes unchanged in
+75.28 seconds. The stored references are preserved pending review; this is an
+open image-comparison failure, not a passing golden result. Both numerical quality
+issues also remain open: frozen-reference FLIP 0.0800533 and final-denoise FLIP
+0.0634995892. Affected Dev and ASan/UBSan suites each pass 28 of 30 checks, with
+only those two numerical failures.

@@ -132,7 +132,12 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
             density*=distance*distance/max(source.p0.w*cosine,1e-20);
             DiParams dp=(DiParams)0;dp.scene=query.scene;dp.scene_slot=query.view;dp.layers=query.layers;dp.sampler=query.sampler;
             incident=di_emission(source,uv,dp);
-            o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,max(0.0,distance-.0002));
+            // Offset the visibility origin without moving the sampled endpoint. Keeping
+            // the old direction/distance can include the emitter at grazing angles.
+            float3 shadow_origin=de_rt_offset(position,normal,wi);
+            float3 shadow_delta=target-shadow_origin;float shadow_distance=length(shadow_delta);
+            o.shadow.origin=float4(shadow_origin,.00001);
+            o.shadow.direction=float4(shadow_delta/max(shadow_distance,1e-15),max(0.0,shadow_distance-.0002));
         }
     } else if(choice==2 && p.light_count>0) {
         DeSceneConstants sc=de_robuffer<DeSceneConstants>(query.scene)[query.view];

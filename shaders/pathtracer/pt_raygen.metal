@@ -169,11 +169,12 @@ kernel void pt_emissive_origin_probe(constant DeRtHeap &heap [[buffer(0)]],const
                                     uint3 id [[thread_position_in_grid]]) {
     KernelContext_0 ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;
     PtParams_0 p={};p.ptp_sampling_table=pc.x;p.ptp_query=pc.z;p.ptp_sources=pc.w;
-    p.ptp_source_count=1;p.ptp_sample=id.x;
-    float3 position=float3(as_type<float>(as_type<uint>(100.f)-2u),0,1);
-    auto light=pt_light_sample_0(&p,position,float3(1,0,0),0,0,&ctx);
+    p.ptp_source_count=1;p.ptp_sample=id.x%256;
+    float3 position=id.x<256?float3(as_type<float>(as_type<uint>(100.f)-2u),0,1):float3(100,0,2.01);
+    float3 normal=id.x<256?float3(1,0,0):float3(0,0,-1);
+    auto light=pt_light_sample_0(&p,position,normal,0,0,&ctx);
     ((device float4 *)heap.buffers[pc.y])[2*id.x]=float4(light.ptlight_shadow.ptr_origin.xyz,light.ptlight_shadow.ptr_direction.w);
-    ((device float4 *)heap.buffers[pc.y])[2*id.x+1]=float4(light.ptlight_wi,light.ptlight_pdf);
+    ((device float4 *)heap.buffers[pc.y])[2*id.x+1]=float4(light.ptlight_shadow.ptr_direction.xyz,light.ptlight_pdf);
 }
 
 // Production subsurface entry coordinates must not reuse an earlier event's draws.

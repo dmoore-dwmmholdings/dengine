@@ -8156,7 +8156,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_20, float3 positi
                 float3 _S843 = _S830.p1_0.xyz;
 
                 float3 _S844 = _S830.p2_0.xyz;
-                float3 delta_4 = _S842 * float3((1.0f - a_15))  + _S843 * float3((a_15 * (1.0f - _S832)))  + _S844 * float3((a_15 * _S832))  - position_7;
+
+                float3 target_1 = _S842 * float3((1.0f - a_15))  + _S843 * float3((a_15 * (1.0f - _S832)))  + _S844 * float3((a_15 * _S832)) ;
+                float3 delta_4 = target_1 - position_7;
 
                 float distance_4 = length(delta_4);
 
@@ -8319,9 +8321,14 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_20, float3 positi
 
                 float3 _S847 = di_emission_0(&_S845, uv_7, &_S846, kernelContext_81);
 
-                (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_7, normal_5, wi_33), 0.00000999999974738f);
 
-                (&(&o_7)->ptlight_shadow)->ptr_direction = float4(wi_33, max(0.0f, distance_4 - 0.00019999999494758f));
+
+                float3 shadow_origin_0 = de_rt_offset_0(position_7, normal_5, wi_33);
+                float3 shadow_delta_0 = target_1 - shadow_origin_0;
+
+                float shadow_distance_0 = length(shadow_delta_0);
+                (&(&o_7)->ptlight_shadow)->ptr_origin = float4(shadow_origin_0, 0.00000999999974738f);
+                (&(&o_7)->ptlight_shadow)->ptr_direction = float4(shadow_delta_0 / float3(max(shadow_distance_0, 1.00000000362749373e-15f)) , max(0.0f, shadow_distance_0 - 0.00019999999494758f));
 
                 casts_0 = true;
 
