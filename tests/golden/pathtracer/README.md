@@ -109,9 +109,9 @@ This correction changes the Cornell golden image. The original strict 4096-sampl
 run finishes in 256.42 seconds but fails the unchanged image comparison (mean
 0.027522 against 0.02; p99 0.079175 against 0.10). The gallery passes unchanged in
 75.28 seconds. The stored references are preserved pending review; this is an
-open image-comparison failure, not a passing golden result. Both numerical quality
-issues also remain open: frozen-reference FLIP 0.0800533 and final-denoise FLIP
-0.0634995892. Affected Dev and ASan/UBSan suites each pass 28 of 30 checks, with
+open image-comparison failure, not a passing golden result. At that checkpoint both numerical quality
+issues remained open: frozen-reference FLIP 0.0800533 and final-denoise FLIP
+0.0634995892. Those Dev and ASan/UBSan suites each passed 28 of 30 checks, with
 only those two numerical failures.
 
 No-media timing capture (DENG-450):
@@ -132,3 +132,28 @@ ID and elapsed milliseconds. The unit test checks attribution and sample counts,
 not a timing threshold. This corrects the collection method; it does not establish
 the original before/after S17 symmetric ±5% cost criterion or resolve the observed
 run-to-run variability. DENG-450 remains open.
+
+Emitter-sidedness correction (DENG-443, DENG-454): PT hit emission now respects the
+material's double-sided flag and geometric face orientation, including mirrored
+instance transforms. The check is local to PT and does not use the shading normal,
+so a normal map cannot make an emitting back face visible. Triangle-light normals
+use the same transform orientation. One-sided triangle, rectangle and disk
+proposals return zero PDF behind their emitting face; reverse triangle PDFs use
+the same support. The shared RT hit structure and other consumers are unchanged.
+
+The production-renderer regression checks Standard green emission and Unlit red
+base color, one-sided backs, two-sided backs, front faces and mirrored front/back
+instances in both BSDF-only and MIS modes. It verifies all 16 progressive prefixes:
+back-face magnitudes stay below 1e-6 and front/two-sided controls remain positive. Separate GPU proposal checks retain front support, reject
+one-sided backs, preserve two-sided support, and retain the receiver/endpoint
+geometry checks.
+
+The original final-denoise 16/4096-spp comparison now passes at FLIP 0.0423503626
+against the unchanged 0.05 limit, with reference energy 104.190551. Dev and
+ASan/UBSan agree exactly and each pass 31 of 32 affected checks. The only remaining
+numerical failure is the frozen-reference comparison (FLIP 0.0869373 against
+0.02). No published reference, scene, sample count or quality limit was changed.
+Strict Metal API and shader validation also pass the 20 renderer controls and
+the proposal/segment regression (the latter under ASan/UBSan).
+The legacy Cornell PNG review remains separate; the original 4096-sample strict
+golden comparison has not been rerun on this correction.

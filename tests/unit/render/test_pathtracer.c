@@ -292,7 +292,9 @@ TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
     u32 false_emitter_hits = 0, lost_blockers = 0;
     for (u32 i = 256; i < 512; ++i) {
         const f32 *ray = rays + 8 * i;
-        ASSERT_TRUE(isfinite(ray[7]) && ray[7] > 0 && ray[6] < 0 && ray[3] > 0);
+        ASSERT_TRUE(isfinite(ray[7]) && ray[6] < 0 && ray[3] > 0);
+        /* This geometric segment approaches the one-sided emitter from its back. */
+        EXPECT_FLOAT_EQ(ray[7], 0, 0);
         f32 emitter_t = (2.f - ray[2]) / ray[6];
         false_emitter_hits += emitter_t >= .00001f && emitter_t < ray[3];
         /* An independent plane halfway to the emitter must remain inside the segment. */
@@ -305,6 +307,45 @@ TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
            false_emitter_hits, lost_blockers);
     EXPECT_EQ(false_emitter_hits, 0u);
     EXPECT_EQ(lost_blockers, 0u);
+    /* Preserve two-sided triangle support, and reject back-side rect/disk proposals. */
+    for (u32 variant = 0; variant < 3; ++variant) {
+        if (variant == 0) {
+            ((f32 *)words)[19] = 1;
+        } else {
+            words[0] = 0;
+            de__cluster_light light = {.position = {102, 0, 2, 100},
+                                       .direction = {0, 0, -1, 0},
+                                       .color = {1, 1, 1, 0},
+                                       .shape = {0, 1, 1, 0},
+                                       .axis = {1, 0, 0, 0}};
+            u32 kind = variant == 1 ? DE_LIGHT_RECT : DE_LIGHT_DISK;
+            memcpy(&light.shape[3], &kind, sizeof kind);
+            memcpy(words + 20, &light, sizeof light);
+        }
+        cmd = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "Emitter proposal sidedness");
+        for (u32 i = 0; i < 3; ++i)
+            barriers[i].before = DE_ACCESS_SHADER_READ;
+        barriers[3].before = DE_ACCESS_COPY_SRC;
+        de_gpu_cmd_barriers(cmd, barriers, 4);
+        de_gpu_cmd_set_pipeline(cmd, pipeline);
+        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+        de_gpu_cmd_dispatch(cmd, 8, 1, 1);
+        de_gpu_cmd_barriers(cmd, &copy, 1);
+        de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 512 * 32);
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS,
+                                      &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+                  DE_OK);
+        de_gpu_wait_idle(d);
+        rays = de_gpu_buffer_map(d, f->rb);
+        for (u32 i = 0; i < 512; ++i) {
+            f32 pdf = rays[i * 8 + 7];
+            ASSERT_TRUE(isfinite(pdf));
+            if (i < 256 || variant == 0)
+                EXPECT_TRUE(pdf > 0);
+            else
+                EXPECT_FLOAT_EQ(pdf, 0, 0);
+        }
+    }
     de_gpu_pipeline_destroy(d, pipeline);
     de_gpu_buffer buffers[] = {table, query, source, output};
     for (u32 i = 0; i < 4; ++i)
@@ -755,6 +796,73 @@ TEST_F(pathtracer, cornell_reference, pt_fixture) {
            energy);
     EXPECT_TRUE(stats.mean <= .02);
 }
+TEST_F(pathtracer, emitter_sidedness_matches_hit_emission_and_nee, pt_fixture) {
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.specular = 0;
+    g_mat[0].standard.base_color = (de_vec4){1, 1, 1, 1};
+    u32 materials[5];
+    for (u32 i = 0; i < 5; ++i)
+        materials[i] = material_add(0, .5f, 0, 0);
+    f->camera.transform = at(3, 0, 1);
+    f->camera.offset = (de_vec3){3, 0, 1};
+    de_render_settings settings = de_renderer_get_settings(f->rt.r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(f->rt.r, &settings);
+    /* The overhead emitter starts facing away from the white receiver. Its back
+     * must be dark unless double-sided; rotating it gives a front-facing control. */
+    for (u32 model = 0; model < 2; ++model)
+        for (u32 variant = 0; variant < 5; ++variant) {
+            u32 material = materials[variant];
+            g_mat[material - 1].standard.base_color = (de_vec4){1, 0, 0, 1};
+            g_mat[material - 1].standard.emissive = (de_vec3){0, 1, 0};
+            g_mat[material - 1].standard.unlit = model == 1;
+            g_mat[material - 1].standard.double_sided = variant == 1;
+            de_affine transform = at(3, 0, 2);
+            if (variant == 2) {
+                transform.m[4] = -1;
+                transform.m[8] = -1;
+            }
+            if (variant >= 3) {
+                transform.m[0] = -1;
+                if (variant == 4) {
+                    transform.m[4] = -1;
+                    transform.m[8] = -1;
+                }
+            }
+            world_set(&f->rt.w, 1, 1, transform, material);
+            f->rt.w.f.instances.flags[1] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+            f->rt.w.f.instances.layer_mask[1] = 1u << 24;
+            f->rt.w.f.instances.count = 2;
+            f->rt.w.touch_all = true;
+            for (u32 mode = 0; mode < 2; ++mode) {
+                ASSERT_TRUE(cvar_set("r.pt.sampling_strategy", mode == 0 ? "2" : "0"));
+                de_renderer_path_reset(f->rt.r, f->rt.view);
+                f64 signal = 0, maximum = 0;
+                for (u32 sample = 0; sample < 16; ++sample) {
+                    pt_frame(f);
+                    ASSERT_EQ(f->info.samples, sample + 1u);
+                    const f32 *pixels = pt_read(f);
+                    for (u32 y = 26; y < 38; ++y)
+                        for (u32 x = 26; x < 38; ++x)
+                            for (u32 channel = 0; channel < 3; ++channel) {
+                                f32 value = pixels[(y * 64 + x) * 4 + channel];
+                                ASSERT_TRUE(isfinite(value));
+                                signal += value;
+                                maximum = fmax(maximum, fabs(value));
+                            }
+                }
+                printf("Emitter model%u side%u mode%u: prefix signal%g maximum%g\n", model, variant,
+                       mode, signal, maximum);
+                if (variant == 0 || variant == 3)
+                    EXPECT_TRUE(maximum < 1e-6);
+                else
+                    EXPECT_TRUE(signal > 1);
+            }
+        }
+    (void)cvar_set("r.pt.sampling_strategy", "0");
+}
+
 TEST_F(pathtracer, terminal_bounce_records_continuation_emission, pt_fixture) {
     ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
     g_mat[0].standard.unlit = false;

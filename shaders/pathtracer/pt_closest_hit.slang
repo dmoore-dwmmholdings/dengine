@@ -55,6 +55,28 @@ public DeRtRay pt_camera(PtParams p,uint pixel) {
     DeRtRay r;r.origin=float4(p.camera.xyz,.00001);r.direction=float4(normalize(position-p.camera.xyz),1e6);return r;
 }
 public DeRtContext pt_query(PtParams p) { return de_robuffer<DeRtContext>(p.query)[0]; }
+// Match the material resolver's geometric orientation, including mirrored instances.
+public bool pt_hit_emits(PtParams p,DeRtRay ray,DeRtHit hit) {
+    DeRtContext q=pt_query(p);DeResolvePoint point=de_rt_point(q,hit.instance,hit.primitive,float2(hit.u,hit.v));
+    if(!point.valid)return false;
+    DeSceneConstants sc=de_robuffer<DeSceneConstants>(q.scene)[q.view];
+    DeGpuMaterial material=de_resolve_material_of(de_resolve_material(point),sc);
+    if((material.flags&DE_GPU_MATERIAL_DOUBLE_SIDED)!=0)return true;
+    float3 a=de_vis_transform_point(point.inst.transform,point.object_pos[0]);
+    float3 b=de_vis_transform_point(point.inst.transform,point.object_pos[1]);
+    float3 c=de_vis_transform_point(point.inst.transform,point.object_pos[2]);
+    float orientation=de_vis_transform_det(point.inst.transform)<0?-1:1;
+    return dot(cross(b-a,c-a),-ray.direction.xyz)*orientation>0;
+}
+public float3 pt_source_normal(PtParams p,DiSource source) {
+    float3 normal=cross(source.p1.xyz-source.p0.xyz,source.p2.xyz-source.p0.xyz);
+    if(source.material!=DI_NONE) {
+        DeRtContext q=pt_query(p);DeSceneConstants sc=de_robuffer<DeSceneConstants>(q.scene)[q.view];
+        DeGpuInstance instance=de_robuffer<DeGpuInstance>(sc.instances)[source.index];
+        if(de_vis_transform_det(instance.transform)<0)normal=-normal;
+    }
+    return normalize(normal);
+}
 public float pt_emission_pdf(PtParams p,DeRtHit h,float3 previous,float3 position) {
     float result=0;
     for(uint i=0;i<p.source_count;++i) {
@@ -65,7 +87,10 @@ public float pt_emission_pdf(PtParams p,DeRtHit h,float3 previous,float3 positio
         DeGpuMesh mesh=de_robuffer<DeGpuMesh>(sc.meshes)[inst.mesh];
         if(mesh.lods[h.lod].index_first+h.primitive*3!=s.first)continue;
         float3 delta=position-previous;float d2=dot(delta,delta);
-        float cosine=abs(dot(normalize(cross(s.p1.xyz-s.p0.xyz,s.p2.xyz-s.p0.xyz)),-normalize(delta)));
+        float cosine=dot(pt_source_normal(p,s),-normalize(delta));
+        cosine=s.radiance.w>0?abs(cosine):max(cosine,0.0);
+        // The reverse proposal must have the same sidedness support as NEE.
+        if(!(cosine>0))continue;
         result+=s.pdf*d2/max(s.p0.w*cosine,1e-20)*pt_light_categories(p).y;
     }
     return result;
@@ -119,7 +144,8 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
             if(kind==DE_LIGHT_KIND_RECT||kind==DE_LIGHT_KIND_DISK) {o.delta=0;
                 float area=kind==DE_LIGHT_KIND_RECT?4*light.shape.y*light.shape.z:3.141592653589793*light.shape.y*light.shape.y;
                 float cosine=max(0.0,dot(light.direction.xyz,-wi));
-                density*=o.shadow.direction.w*o.shadow.direction.w/max(area*cosine,1e-20);
+                // A one-sided emitter has no proposal behind its emitting face.
+                density=cosine>0?density*o.shadow.direction.w*o.shadow.direction.w/max(area*cosine,1e-20):0;
                 incident=light.color.xyz*de_light_window(o.shadow.direction.w,light.position.w);
 
             } else incident=de_light_punctual(light,position).illuminance;
@@ -127,9 +153,9 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
             float a=sqrt(uv.x);float3 b=float3(1-a,a*(1-uv.y),a*uv.y);
             float3 target=source.p0.xyz*b.x+source.p1.xyz*b.y+source.p2.xyz*b.z;
             float3 delta=target-position;float distance=length(delta);wi=delta/max(distance,1e-15);
-            float3 emitter_normal=normalize(cross(source.p1.xyz-source.p0.xyz,source.p2.xyz-source.p0.xyz));
+            float3 emitter_normal=pt_source_normal(p,source);
             float cosine=source.radiance.w>0?abs(dot(emitter_normal,-wi)):max(0.0,dot(emitter_normal,-wi));
-            density*=distance*distance/max(source.p0.w*cosine,1e-20);
+            density=cosine>0?density*distance*distance/max(source.p0.w*cosine,1e-20):0;
             DiParams dp=(DiParams)0;dp.scene=query.scene;dp.scene_slot=query.view;dp.layers=query.layers;dp.sampler=query.sampler;
             incident=di_emission(source,uv,dp);
             // Offset the visibility origin without moving the sampled endpoint. Keeping
@@ -168,7 +194,7 @@ public float3 pt_endpoint(PtParams p,DeRtRay ray,DeRtHit hit,float last_pdf,floa
     if(hit.t<0)return pt_environment(p,ray.direction.xyz)*(strategy==2?1:pt_power(last_pdf,pt_env_pdf(p,ray.direction.xyz)*pt_light_categories(p).x));
     DeRtSurface surface=de_rt_hit_surface(pt_query(p),hit,ray.origin.xyz,p.brdf_lut);
     float3 position=ray.origin.xyz+ray.direction.xyz*hit.t;
-    return surface.valid?surface.material.emissive*(strategy==2?1:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position))):float3(0);
+    return surface.valid&&any(surface.material.emissive!=0)&&pt_hit_emits(p,ray,hit)?surface.material.emissive*(strategy==2?1:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position))):float3(0);
 }
 public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,float last_pdf,float3 previous) {
     PtStep o=(PtStep)0;o.stop=1;o.consume=1;
@@ -182,7 +208,7 @@ public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,
     SurfaceData s=surface.material;
     if((p.media.features&2u)!=0 && (s.features&DE_MATERIAL_FEATURE_VOLUME)!=0)s.attenuation_color=float3(1);
     float3 position=ray.origin.xyz+ray.direction.xyz*hit.t;
-    o.emitted=s.emissive*(bounce==0||strategy==2?1:strategy==1?0:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position)));
+    o.emitted=(any(s.emissive!=0)&&pt_hit_emits(p,ray,hit)?s.emissive:float3(0))*(bounce==0||strategy==2?1:strategy==1?0:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position)));
     if((s.features&DE_MATERIAL_FEATURE_UNLIT)!=0)return o;
     ShadingFrame frame=de_surface_frame(s);float3 wo=frame.to_local(-ray.direction.xyz);
     uint dimension=2+bounce*12;
