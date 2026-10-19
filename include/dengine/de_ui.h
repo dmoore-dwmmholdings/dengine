@@ -178,6 +178,13 @@ DE_API de_entity de_ui_focused(const de_ui *ui);
 DE_API void de_ui_tween(de_ui *ui, de_entity e, const char *property, f32 to, f32 seconds,
                         u32 easing);
 
+/** Retained draw-list statistics from the last built/extracted/rendered frame. */
+typedef struct de_ui_render_stats {
+    u32 quads, draw_calls, roots, truncated;
+    f32 build_extract_ms;
+} de_ui_render_stats;
+DE_API de_ui_render_stats de_ui_get_render_stats(const de_ui *ui);
+
 /* ---------- Debug UI (Debug/Dev builds; backend per SPEC Q1) ---------- */
 DE_API bool de_dbg_begin(const char *window_title, bool *open);
 DE_API void de_dbg_end(void);

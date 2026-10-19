@@ -14,3 +14,9 @@ endif()
 if(TARGET test_ui_layout AND DE_BUILD_TOOLS AND DE_HAS_RENDER)
  target_compile_definitions(test_ui_layout PRIVATE "DE_UI_ASSET_ROOT=\"${DE_ROOT_DIR}\"")
 endif()
+
+# DENG-317 real retained commands, ownership and allocation/performance checks.
+if(TARGET de_ui)
+ de_add_test(NAME ui_draw SOURCES test_draw_list.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ target_include_directories(test_ui_draw PRIVATE "${DE_ROOT_DIR}/src")
+endif()

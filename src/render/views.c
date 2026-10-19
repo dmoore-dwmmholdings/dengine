@@ -1364,3 +1364,53 @@ void de__views_prepare_pixels(de_renderer *r) {
     for (u32 i = 0; i < count; ++i)
         de__pixel_prepare_palette(vs->pixel, palettes[i]);
 }
+
+/* DENG-317 removable custom UI consumers and their fence-safe frame contract. */
+de_result de_render_remove_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, void *user) {
+    de__views *vs = views_of(r);
+    u32 slot, phase;
+    i32 order;
+    if (!vs || !fn || !hook_position(at, &slot, &order, &phase))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_render_remove_hook: invalid argument");
+    de__render_world_wait_idle(r);
+    de_mutex_lock(&vs->lock);
+    bool removed = false;
+    for (u32 i = 0; i < vs->hook_count;) {
+        seq_entry *e = &vs->hooks[i];
+        if (e->hook_fn == fn && e->user == user && e->slot == slot && e->order == order &&
+            e->phase == phase) {
+            memmove(e, e + 1, (vs->hook_count - i - 1) * sizeof *e);
+            --vs->hook_count;
+            removed = true;
+        } else
+            ++i;
+    }
+    if (removed)
+        ++vs->version;
+    de_mutex_unlock(&vs->lock);
+    if (!removed)
+        return DE_FAIL(DE_ERR_NOT_FOUND, "de_render_remove_hook: callback not found");
+    de_gpu_wait_idle(r->dev);
+    return DE_OK;
+}
+bool de_view_hook_info(de_renderer *r, de_view view, de_render_hook_info *out) {
+    if (out)
+        memset(out, 0, sizeof *out);
+    de__views *vs = views_of(r);
+    if (!out || !vs || !vs->building || vs->building->view.id != view.id)
+        return false;
+    const de__view_frame *f = vs->building;
+    de_ui_output_calibration c = f->settings->ui_output;
+    f32 multiplier = 1;
+    if (c.hdr && c.ui_white_nits > 0 && c.paper_white_nits > 0)
+        multiplier = c.ui_white_nits / c.paper_white_nits;
+    *out = (de_render_hook_info){.color_format = f->color_format,
+                                 .width = f->width,
+                                 .height = f->height,
+                                 .ring_index = (u32)(f->frame_index % r->frames_in_flight),
+                                 .frames_in_flight = r->frames_in_flight,
+                                 .frame_index = f->frame_index,
+                                 .extract_frame = f->world ? f->world->frame : 0,
+                                 .ui_white_multiplier = multiplier};
+    return true;
+}

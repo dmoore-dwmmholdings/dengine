@@ -9,3 +9,9 @@ if(TARGET de_ui)
   target_link_libraries(de_ui PRIVATE de_render)
  endif()
 endif()
+
+# DENG-317 retained draw generation remains usable without a GPU/renderer.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE render/draw_list.c render/ui_extract.c render/ui_pass.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_RETAINED_RENDER=1)
+endif()

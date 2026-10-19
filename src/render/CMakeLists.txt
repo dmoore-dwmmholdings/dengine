@@ -518,3 +518,8 @@ target_sources(de_render PRIVATE pixel/palette_dither.c)
 target_sources(de_render PRIVATE pixel/pixel_snap.c)
 target_sources(de_render PRIVATE pixel/palette_runtime.c)
 endif()
+
+# DENG-317 public custom-pass bridge.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE ui_bridge.c)
+endif()
