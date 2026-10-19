@@ -29,6 +29,63 @@ TEST_F(ui_world, per_root_panel_pixels_preserve_screen_root, ui_fx) {
     expect_rect(ui_rect(f, root), 0, 0, 300, 100);
     expect_rect(ui_rect(f, screen), 0, 0, 400, 100);
 }
+TEST_F(ui_world, popups_use_panel_extent_scale_and_ignore_screen_safe_insets, ui_fx) {
+    de_ui_set_viewport(f->ui, 400, 200,
+                       (de_window_insets){.left = 10, .top = 20, .right = 30, .bottom = 40});
+    de_entity roots[] = {panel_root(f), ui_node(f, DE_ENTITY_NULL)};
+    de_entity popups[2], children[2];
+    for (u32 i = 0; i < 2; ++i) {
+        de_entity anchor = ui_node(f, roots[i]);
+        *(DeUiAnchor *)de_entity_add(f->world, anchor, f->ui->ids.anchor) =
+            (DeUiAnchor){.offset_min = {180, 80}, .offset_max = {190, 90}};
+        /* A nested popup still belongs to the containing root's coordinate space. */
+        de_entity container = ui_node(f, roots[i]);
+        popups[i] = ui_node(f, container);
+        DeUiNode *node = ui_node_edit(f, popups[i]);
+        node->width = (de_ui_len){DE_UI_PX, 60};
+        node->height = (de_ui_len){DE_UI_PX, 40};
+        node->safe_area = true;
+        *(DeUiPopup *)de_entity_add(f->world, popups[i], f->ui->ids.popup) =
+            (DeUiPopup){.anchor = anchor, .placement = DE_UI_POPUP_BOTTOM};
+        children[i] = ui_node(f, popups[i]);
+        node = ui_node_edit(f, children[i]);
+        node->width = (de_ui_len){DE_UI_PX, 10};
+        node->height = (de_ui_len){DE_UI_PX, 5};
+    }
+    ui_frame(f);
+    expect_rect(ui_rect(f, popups[0]), 140, 60, 60, 40);
+    expect_rect(ui_rect(f, children[0]), 140, 60, 10, 5);
+    expect_rect(ui_rect(f, popups[1]), 250, 80, 120, 80);
+    expect_rect(ui_rect(f, children[1]), 250, 80, 20, 10);
+    EXPECT_FLOAT_EQ(f->ui->scale, 2, 0);
+    /* Resize only the panel. Screen placement and scale must remain unchanged. */
+    DeUiWorldPanel *panel =
+        de_entity_get(f->world, roots[0], de_component_find(f->world, "DeUiWorldPanel"));
+    panel->size_m = (de_vec2){1, .5f};
+    ui_frame(f);
+    expect_rect(ui_rect(f, popups[0]), 40, 10, 60, 40);
+    expect_rect(ui_rect(f, children[0]), 40, 10, 10, 5);
+    expect_rect(ui_rect(f, popups[1]), 250, 80, 120, 80);
+    EXPECT_FLOAT_EQ(f->ui->scale, 2, 0);
+}
+TEST_F(ui_world, popup_percent_and_oversize_clamps_are_independent_between_panels, ui_fx) {
+    de_ui_set_viewport(f->ui, 800, 300, (de_window_insets){.left = 25, .top = 15});
+    de_entity first = panel_root(f), second = panel_root(f);
+    DeUiWorldPanel *panel =
+        de_entity_get(f->world, second, de_component_find(f->world, "DeUiWorldPanel"));
+    panel->size_m = (de_vec2){1, .5f};
+    de_entity roots[] = {first, second};
+    for (u32 i = 0; i < 2; ++i) {
+        de_entity popup = ui_node(f, roots[i]);
+        DeUiNode *node = ui_node_edit(f, popup);
+        node->width = (de_ui_len){DE_UI_PERCENT, 150};
+        node->height = (de_ui_len){DE_UI_PERCENT, 125};
+        de_entity_add(f->world, popup, f->ui->ids.popup);
+        ui_frame(f);
+        expect_rect(ui_rect(f, popup), 0, 0, i ? 100 : 200, i ? 50 : 100);
+    }
+    EXPECT_FLOAT_EQ(f->ui->scale, 3, 0);
+}
 TEST_F(ui_world, analytic_projected_button_center_hits_at_hundred_km, ui_fx) {
     de_entity root = panel_root(f), button = ui_node(f, root);
     de_entity_add(f->world, button, f->ui->widgets->button);

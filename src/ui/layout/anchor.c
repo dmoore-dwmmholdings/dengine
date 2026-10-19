@@ -1,4 +1,5 @@
 #include "layout_internal.h"
+#include "ui/world/world_internal.h"
 #include <math.h>
 bool de_ui__absolute(de_ui_layout *layout, u32 index, de_vec4 parent, de_vec4 *rect) {
     de_ui *ui = layout->ui;
@@ -17,9 +18,6 @@ bool de_ui__absolute(de_ui_layout *layout, u32 index, de_vec4 parent, de_vec4 *r
 }
 void de_ui__popups(de_ui_layout *layout) {
     de_ui *ui = layout->ui;
-    de_vec4 safe = {(f32)ui->safe.left, (f32)ui->safe.top,
-                    fmaxf(0, (f32)ui->width - ui->safe.left - ui->safe.right),
-                    fmaxf(0, (f32)ui->height - ui->safe.top - ui->safe.bottom)};
     for (u32 i = 0; i < ui->record_count; ++i) {
         de_ui_record *r = &ui->records[i];
         if (!r->alive)
@@ -27,6 +25,21 @@ void de_ui__popups(de_ui_layout *layout) {
         const DeUiPopup *popup = de_entity_get_const(ui->world, r->entity, ui->ids.popup);
         if (!popup)
             continue;
+        u32 root = i;
+        for (u32 depth = 0; depth < ui->record_count; ++depth) {
+            u32 parent = de_ui__find(ui, ui->records[root].parent);
+            if (parent == DE_UI_NONE_INDEX)
+                break;
+            root = parent;
+        }
+        de_vec4 safe = {(f32)ui->safe.left, (f32)ui->safe.top,
+                        fmaxf(0, (f32)ui->width - ui->safe.left - ui->safe.right),
+                        fmaxf(0, (f32)ui->height - ui->safe.top - ui->safe.bottom)};
+        f32 previous_scale = ui->scale;
+        bool previous_world_root = layout->world_root;
+        layout->world_root = de_ui__world_root_extent(ui, ui->records[root].entity, &safe);
+        if (layout->world_root)
+            ui->scale = 1;
         u32 anchor = de_ui__find(ui, popup->anchor);
         de_vec4 a = anchor == DE_UI_NONE_INDEX ? (de_vec4){safe.x, safe.y, 0, 0}
                                                : ui->records[anchor].node.computed_rect;
@@ -47,5 +60,7 @@ void de_ui__popups(de_ui_layout *layout) {
         rect.x = fmaxf(safe.x, fminf(rect.x, safe.x + safe.z - rect.z));
         rect.y = fmaxf(safe.y, fminf(rect.y, safe.y + safe.w - rect.w));
         de_ui__arrange(layout, i, rect, false);
+        ui->scale = previous_scale;
+        layout->world_root = previous_world_root;
     }
 }
