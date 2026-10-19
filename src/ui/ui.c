@@ -5,6 +5,9 @@
 #if defined(DE_UI_NAVIGATION)
 #include "input/focus_internal.h"
 #endif
+#if defined(DE_UI_BINDING)
+#include "binding/binding_internal.h"
+#endif
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
@@ -147,6 +150,9 @@ static void changed(const de_query_chunk *chunk, void *user) {
 }
 static void detach(de_ui *ui) {
     if (ui->world) {
+#if defined(DE_UI_BINDING)
+        de_ui__binding_detach(ui);
+#endif
 #if defined(DE_UI_NAVIGATION)
         de_ui__focus_detach(ui);
 #endif
@@ -243,6 +249,13 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
         return focus_result;
     }
 #endif
+#if defined(DE_UI_BINDING)
+    de_result binding_result = de_ui__binding_init(ui);
+    if (binding_result != DE_OK) {
+        de_ui_destroy(ui);
+        return binding_result;
+    }
+#endif
     *out = ui;
     return DE_OK;
 }
@@ -252,6 +265,9 @@ void de_ui_destroy(de_ui *ui) {
 #if defined(DE_UI_RETAINED_RENDER)
     if (!ui->world)
         de_ui__render_shutdown(ui);
+#endif
+#if defined(DE_UI_BINDING)
+    de_ui__binding_shutdown(ui);
 #endif
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_shutdown(ui);
@@ -337,6 +353,9 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     de_ui__widgets_attach(ui);
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_attach(ui);
+#endif
+#if defined(DE_UI_BINDING)
+    de_ui__binding_attach(ui);
 #endif
     ui->viewport_dirty = true;
 }
