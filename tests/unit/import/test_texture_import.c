@@ -1249,6 +1249,33 @@ TEST_F(texture, sprite_rt_proxy_cooked_trailer, tex_fx) {
     ASSERT_GT(proxy.index_count, 0u);
     de_cook_result_free(&result);
 }
+TEST_F(texture, sprite_proxy_topology_or_alpha_fallback_cooks_deterministically, tex_fx) {
+    make_cooker(f, NULL);
+    const char *files[] = {"proxy_donut.png", "proxy_islands.png", "proxy_budget.png"};
+    const de__manifest_kv settings[] = {kv_bool("rt_proxy", true), kv_bool("pixel_art", true)};
+    for (u32 i = 0; i < 3; ++i) {
+        de_cook_result result = {0}, repeated = {0};
+        ASSERT_EQ(cook(f, files[i], settings, 2, &result), DE_OK);
+        ASSERT_EQ(cook(f, files[i], settings, 2, &repeated), DE_OK);
+        EXPECT_EQ(result.size, repeated.size);
+        EXPECT_MEMEQ(result.data, repeated.data, (size_t)result.size);
+        de_cooked_texture_view texture;
+        ASSERT_TRUE(view_of(result.data, result.size, &texture));
+        bool has_proxy =
+            result.size >= DE_SPRITE_PROXY_BYTES &&
+            memcmp((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES, "PXRT", 4) == 0;
+        EXPECT_EQ(has_proxy, i < 2);
+        if (has_proxy) {
+            de_cooked_sprite_proxy proxy;
+            ASSERT_TRUE(
+                de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
+                                      DE_SPRITE_PROXY_BYTES, &proxy));
+            EXPECT_LE(proxy.index_count / 3, 64u);
+        }
+        de_cook_result_free(&result);
+        de_cook_result_free(&repeated);
+    }
+}
 
 TEST_F(texture, sprite_rt_proxy_atlas_region, tex_fx) {
     make_cooker(f, NULL);

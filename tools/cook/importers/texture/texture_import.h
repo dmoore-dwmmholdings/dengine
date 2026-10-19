@@ -45,6 +45,9 @@
  *   - `rdo_quality` (float 0 to DE_TEXTURE_RDO_QUALITY_MAX, default 0 = off): the lambda of the
  *     rate-distortion pass of BC1/BC3/BC4/BC5/BC7, which makes blocks compress better in the pack
  *     at some loss of quality (BC6H ignores it).
+ *   - `rt_proxy` (bool, default false): cook an opaque silhouette extrusion for sprite RT.
+ *     Holes/components are preserved within 32 vertices and 64 triangles. Unsupported topology
+ *     logs a warning and omits the proxy; runtime sprites retain alpha-tested geometry.
  *
  * Environment settings (`usage = "environment"` only; DENG-100, env_internal.h):
  *   - `env_size` (integer, default 256): cube face size, a power of two from 4 to 4096.
@@ -71,8 +74,9 @@
 DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused.
- * 3: HDR environments (DENG-100). 4: BC compression (DENG-99). */
-#define DE_TEXTURE_IMPORTER_VERSION 4u
+ * 3: HDR environments (DENG-100). 4: BC compression (DENG-99).
+ * 5: topology-preserving sprite proxies and alpha-tested fallback (DENG-488). */
+#define DE_TEXTURE_IMPORTER_VERSION 5u
 
 /** The largest `rdo_quality` (lambda of the rate-distortion pass). */
 #define DE_TEXTURE_RDO_QUALITY_MAX 100.0

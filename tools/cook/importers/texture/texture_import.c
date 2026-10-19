@@ -330,6 +330,14 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
             a, crop, w, h, (f32)de_asset_import_setting_float(ctx, "rt_proxy_cutoff", .5), &proxy);
         DE_FREE(a, crop, crop_bytes);
         memcpy(proxy.region, region, sizeof region);
+        if (r == DE_ERR_UNSUPPORTED) {
+            DE_WARN(texture_log(),
+                    "texture \"%s\": sprite proxy exceeds topology/geometry budget; "
+                    "using alpha-tested sprite geometry",
+                    de_cooker_import_id_str(ctx));
+            de_error_clear();
+            return write_dtex(ctx, a, &t);
+        }
         if (r != DE_OK) {
             de_tex_dtex_free(a, &t);
             return r;
