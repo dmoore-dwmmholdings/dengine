@@ -2,6 +2,7 @@
 #include "layout/layout_internal.h"
 #include "style/stylesheet_internal.h"
 #include "widgets/widgets_internal.h"
+#include "widgets/advanced_internal.h"
 #include "world/world_internal.h"
 #if defined(DE_UI_NAVIGATION)
 #include "input/focus_internal.h"
@@ -157,6 +158,7 @@ static void detach(de_ui *ui) {
 #if defined(DE_UI_NAVIGATION)
         de_ui__focus_detach(ui);
 #endif
+        de_ui__advanced_detach(ui);
         de_ui__widgets_detach(ui);
         de_ui__style_detach(ui);
 #if defined(DE_UI_RETAINED_RENDER)
@@ -243,6 +245,8 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
         de_ui_destroy(ui);
         return widgets_result;
     }
+    de_result advanced_result = de_ui__advanced_init(ui);
+    if (advanced_result != DE_OK) { de_ui_destroy(ui); return advanced_result; }
 #if defined(DE_UI_NAVIGATION)
     de_result focus_result = de_ui__focus_init(ui);
     if (focus_result != DE_OK) {
@@ -273,6 +277,7 @@ void de_ui_destroy(de_ui *ui) {
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_shutdown(ui);
 #endif
+    de_ui__advanced_shutdown(ui);
     de_ui__widgets_shutdown(ui);
     de_ui__style_shutdown(ui);
     detach(ui);
@@ -352,6 +357,7 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     }
 #endif
     de_ui__widgets_attach(ui);
+    de_ui__advanced_attach(ui);
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_attach(ui);
 #endif

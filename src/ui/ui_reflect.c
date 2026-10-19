@@ -173,7 +173,7 @@ static const de_field_info text_fields[] = {
     F(DeUiText, text, DE_FK_STRING, AUTH, 0, 0, NULL,
       "Authored NUL-terminated label;runtime literal override is not serialized", NULL, 0)};
 static const de_field_info event_fields[] = {
-    F(de_ui_event, kind, DE_FK_ENUM, AUTH, 0, 5, NULL, "UI event kind", "de_ui_event_kind", 0),
+    F(de_ui_event, kind, DE_FK_ENUM, AUTH, 0, 6, NULL, "UI event kind", "de_ui_event_kind", 0),
     F(de_ui_event, target, DE_FK_ENTITY, AUTH, 0, 0, NULL, "Target UI entity", NULL, 0),
     F(de_ui_event, action, DE_FK_NAME, AUTH, 0, 0, NULL, "Named game action", NULL, 0),
     F(de_ui_event, value, DE_FK_F32, AUTH, 0, 0, NULL, "Changed numeric value", NULL, 0)};
@@ -211,14 +211,14 @@ de_result de_ui__reflect(de_ui *ui, de_world *world) {
                                                 {"JUSTIFY", DE_ALIGN_JUSTIFY}};
     static const de_enum_value events[] = {
         {"CLICK", DE_UI_EV_CLICK}, {"CHANGED", DE_UI_EV_CHANGED}, {"SUBMIT", DE_UI_EV_SUBMIT},
-        {"FOCUS", DE_UI_EV_FOCUS}, {"BLUR", DE_UI_EV_BLUR},       {"HOVER", DE_UI_EV_HOVER}};
+        {"FOCUS", DE_UI_EV_FOCUS}, {"BLUR", DE_UI_EV_BLUR},       {"HOVER", DE_UI_EV_HOVER}, {"BIND_ITEM", DE_UI_EV_BIND_ITEM}};
     DE_TRY(enumeration(r, "de_ui_unit", units, 4));
     DE_TRY(enumeration(r, "de_ui_display", displays, 3));
     DE_TRY(enumeration(r, "de_ui_dir", dirs, 4));
     DE_TRY(enumeration(r, "de_ui_align", aligns, 7));
     DE_TRY(enumeration(r, "de_ui_popup_placement", placements, 5));
     DE_TRY(enumeration(r, "de_text_align", text_aligns, 4));
-    DE_TRY(enumeration(r, "de_ui_event_kind", events, 6));
+    DE_TRY(enumeration(r, "de_ui_event_kind", events, 7));
     de_type_id id;
     de_type_desc length = DESC(de_ui_len, len_fields, NULL),
                  style = DESC(de_text_style, text_style_fields, NULL);

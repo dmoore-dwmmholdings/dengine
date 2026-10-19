@@ -70,6 +70,50 @@ opacity = 0.6
 [style."image:disabled"]
 opacity = 0.6
 
+# Advanced controls share the established surface, border, accent and timing tokens.
+[style.input]
+background = "$surface"
+text_color = "$foreground"
+border_color = "$border"
+border_width = 1
+radius = 6
+min_height = 32
+transition = 0.12
+[style."input:hover"]
+border_color = "#7aa2ff"
+[style."input:focus"]
+border_color = "$primary"
+border_width = 2
+[style."input:disabled"]
+opacity = 0.6
+[style.dropdown]
+background = "$surface"
+text_color = "$foreground"
+border_color = "$border"
+border_width = 1
+radius = 6
+min_height = 32
+[style."dropdown:hover"]
+border_color = "#7aa2ff"
+[style."dropdown:pressed"]
+background = "#324864"
+[style."dropdown:focus"]
+border_color = "$primary"
+border_width = 2
+[style."dropdown:disabled"]
+opacity = 0.6
+[style.scroll]
+background = "$surface"
+[style.list]
+background = "$surface"
+[style.tabs]
+background = "$surface"
+[style.tooltip]
+background = "#101827"
+text_color = "$foreground"
+border_color = "$border"
+border_width = 1
+radius = 4
 [style."button:focus"]
 border_color = "$foreground"
 border_width = 2
@@ -81,3 +125,21 @@ border_width = 2
 [style."slider:focus"]
 border_color = "$foreground"
 border_width = 2
+[style."button.ui_option"]
+background = "$surface"
+radius = 0
+padding = [4, 8]
+[style."button.ui_option_selected"]
+background = "$primary"
+radius = 0
+padding = [4, 8]
+[style."button.ui_option:hover"]
+background = "#324864"
+[style."button.ui_tab"]
+background = "$surface"
+radius = 0
+padding = [4, 8]
+[style."button.ui_tab_active"]
+background = "$primary"
+radius = 0
+padding = [4, 8]

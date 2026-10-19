@@ -77,3 +77,31 @@ TEST(linebreak, cjk_and_emergency_cluster_boundaries) {
     EXPECT_EQ(gb[3], 1u);
     EXPECT_EQ(gb[4], 0u);
 }
+TEST(text_graphemes, public_byte_offsets_capacity_invalid_and_large_input) {
+    const char *text = "a\xcc\x81"
+                       "👩‍👩‍👧‍👦"
+                       "b";
+    u32 offsets[8] = {0};
+    EXPECT_EQ(de_text_grapheme_offsets(de_str_from_cstr(text), offsets, 8), 4u);
+    EXPECT_EQ(offsets[0], 0u);
+    EXPECT_EQ(offsets[1], 3u);
+    EXPECT_EQ(offsets[2], 28u);
+    EXPECT_EQ(offsets[3], 29u);
+    u32 short_out[2] = {99, 99};
+    EXPECT_EQ(de_text_grapheme_offsets(de_str_from_cstr(text), short_out, 2), 4u);
+    EXPECT_EQ(short_out[1], 3u);
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){0}, NULL, 0), 1u);
+    const char invalid[] = {'a', (char)0xff, (char)0xc0, 'b'};
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){invalid, 4}, offsets, 8), 5u);
+    for (u32 i = 0; i < 5; ++i)
+        EXPECT_EQ(offsets[i], i);
+    char large[4096];
+    memset(large, 'a', sizeof large);
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){large, sizeof large}, NULL, 0), 4097u);
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){text, (u64)INT32_MAX}, NULL, 0), 0u);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_UNSUPPORTED);
+    u64 before = de_mem_stats_for_tag(DE_MEM_UI).alloc_count;
+    for (u32 i = 0; i < 100; ++i)
+        (void)de_text_grapheme_offsets(de_str_from_cstr(text), offsets, 8);
+    EXPECT_EQ(de_mem_stats_for_tag(DE_MEM_UI).alloc_count, before);
+}

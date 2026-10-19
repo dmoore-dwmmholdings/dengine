@@ -194,6 +194,22 @@ typedef struct DeUiScroll {
     de_vec2 offset;
     bool horizontal, vertical;
 } DeUiScroll;
+/** Options are localization IDs; selection is clamped to the live option count. */
+typedef struct DeUiDropdown {
+    u32 selected, option_count;
+    de_name options[32];
+} DeUiDropdown;
+typedef struct DeUiList {
+    u32 item_count;
+    f32 item_height;
+    de_prefab item_template;
+} DeUiList;
+typedef struct DeUiTabs { u32 active; } DeUiTabs;
+typedef struct DeUiTooltip { de_name loc_id; f32 delay; } DeUiTooltip;
+/** Scroll offsets are physical pixels. Values are clamped to current content bounds. */
+DE_API void de_ui_scroll_offset(de_ui *ui, de_entity container, de_vec2 offset);
+/** Reveal a child within its scroll container, clamping the resulting offset. */
+DE_API void de_ui_scroll_to(de_ui *ui, de_entity container, de_entity child);
 typedef struct DeUiFocusable {
     i32 tab_index;
     de_entity up, down, left, right;
@@ -220,7 +236,8 @@ typedef enum de_ui_event_kind {
     DE_UI_EV_SUBMIT,
     DE_UI_EV_FOCUS,
     DE_UI_EV_BLUR,
-    DE_UI_EV_HOVER
+    DE_UI_EV_HOVER,
+    DE_UI_EV_BIND_ITEM /**< target is pooled row, value is the newly visible item index. */
 } de_ui_event_kind;
 typedef struct de_ui_event {
     de_ui_event_kind kind;
