@@ -1,0 +1,8 @@
+[game]
+name = "Public Owned Game"
+[tasks]
+workers = 1
+[assets]
+hot_reload = false
+[cvars]
+"r.pipelined" = true

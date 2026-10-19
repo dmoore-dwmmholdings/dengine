@@ -59,3 +59,10 @@ if(DE_GAME_DYLIB)
     endforeach()
     set(DE_HOST_RELOAD_GAMES "${_de_reload_targets}" PARENT_SCOPE)
 endif()
+
+# DENG-510: compile the same public-only callbacks through the external-game entry point.
+de_add_game(NAME test_owned_game_module SOURCES owned_game.c GAME_TOML ../data/owned_game.toml)
+
+get_target_property(_owned_game_dir test_owned_game_module DE_GAME_DIR)
+configure_file(../data/owned_assets.toml "${_owned_game_dir}/owned_assets.toml" COPYONLY)
+configure_file(../data/owned_probe.bin "${_owned_game_dir}/owned_probe.bin" COPYONLY)

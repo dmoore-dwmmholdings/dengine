@@ -15,16 +15,34 @@
 #include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
+#if DE_HAS_RENDER
+#include <dengine/de_render.h>
+#include "render/world/render_world.h"
+#endif
+#if DE_HAS_GPU
+#include <dengine/de_gpu.h>
+#endif
+#if DE_HAS_UI
+#include <dengine/de_ui.h>
+#endif
 
 #include <string.h>
 
-/* Destroys what `e` holds, in the reverse order of de__engine_create; NULL members are skipped,
- * so it also unwinds a partial create. Frees `e`. */
+/* Release owned modules in dependency order, including game-created GPU/renderer/UI.
+ * NULL members are skipped, so this also unwinds partial engine or game initialisation. */
 static void engine_teardown(de__engine *e) {
-    if (DE_HANDLE_VALID(e->pub.window)) {
-        de_window_destroy(e->pub.window);
-        e->pub.window = (de_window){0};
+#if DE_HAS_RENDER
+    /* Finish the last pipelined frame before releasing its UI/text/assets. Destroying the
+     * render-world bridge stops its thread; the renderer/uploader itself must outlive assets. */
+    if (e->pub.renderer != NULL)
+        de__render_world_destroy(e->pub.renderer);
+#endif
+#if DE_HAS_UI
+    if (e->pub.ui != NULL) {
+        de_ui_destroy(e->pub.ui);
+        e->pub.ui = NULL;
     }
+#endif
     /* DENG-84: input, created after the world: detached from the world (its two systems and its
      * resource) before the world goes away. */
     if (e->pub.input != NULL) {
@@ -47,15 +65,34 @@ static void engine_teardown(de__engine *e) {
         de_asset_system_destroy(e->pub.assets);
         e->pub.assets = NULL;
     }
+#endif
+    /* Game component destructors may still release their own GPU resources. */
+    if (e->pub.world != NULL) {
+        de_world_destroy(e->pub.world);
+        e->pub.world = NULL;
+    }
+#if DE_HAS_RENDER
+    if (e->pub.renderer != NULL) {
+        de_renderer_destroy(e->pub.renderer);
+        e->pub.renderer = NULL;
+    }
+#endif
+#if DE_HAS_GPU
+    if (e->pub.gpu != NULL) {
+        de_gpu_device_destroy(e->pub.gpu);
+        e->pub.gpu = NULL;
+    }
+#endif
+    if (DE_HANDLE_VALID(e->pub.window)) {
+        de_window_destroy(e->pub.window);
+        e->pub.window = (de_window){0};
+    }
+#if DE_HAS_ASSETS
     if (e->owns_io) {
         de_io_shutdown();
         e->owns_io = false;
     }
 #endif
-    if (e->pub.world != NULL) {
-        de_world_destroy(e->pub.world);
-        e->pub.world = NULL;
-    }
     if (e->pub.types != NULL) {
         de_type_registry_destroy(e->pub.types);
         e->pub.types = NULL;

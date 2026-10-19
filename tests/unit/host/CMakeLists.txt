@@ -241,3 +241,32 @@ endif()
             LABELS "unit;alloc-guard;host" TIMEOUT 300)
     endif()
 endif()
+
+# DENG-510: public-only callbacks transfer modules to the host, including partial init unwind.
+de_add_test(NAME owned_game SOURCES test_owned_game.c fixtures/owned_game.c
+    LABELS unit host gpu TIMEOUT 180)
+if(TARGET test_owned_game)
+    target_compile_definitions(test_owned_game PRIVATE
+        DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_owned_game_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_owned_game_tmp")
+endif()
+
+if(TARGET test_owned_game)
+    if(DE_GAME_DYLIB AND NOT DE_BUILD_SHARED)
+        target_link_libraries(test_owned_game PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,dengine>")
+        set_target_properties(test_owned_game PROPERTIES ENABLE_EXPORTS ON)
+        if(APPLE)
+            target_link_options(test_owned_game PRIVATE "LINKER:-export_dynamic")
+        endif()
+    else()
+        target_link_libraries(test_owned_game PRIVATE dengine)
+    endif()
+    if(DE_GAME_DYLIB)
+        get_target_property(_owned_dir test_owned_game_module DE_GAME_DIR)
+        target_compile_definitions(test_owned_game PRIVATE
+            DE_HOST_OWNED_MODULE="$<TARGET_FILE:test_owned_game_module>"
+            DE_HOST_OWNED_MODULE_DIR="${_owned_dir}")
+        add_dependencies(test_owned_game test_owned_game_module)
+    endif()
+endif()
