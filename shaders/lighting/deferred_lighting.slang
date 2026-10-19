@@ -34,6 +34,24 @@ import push_constants;
 import "../lighting/lighting_common";
 import "../materials/standard/standard";
 import "../sprite/sprite_vis";
+// In an orthographic camera, the combined inverse VP subtracts far-scale floats to
+// recover a nearby surface. Undo projection first, then the rigid camera transform,
+// so a 100 km far plane cannot push the receiver behind its own shadow caster.
+float3 lighting_position(DeSceneConstants sc, float2 ndc, float depth, bool ortho)
+{
+    if (ortho)
+    {
+        float3 v = float3((ndc.x - sc.proj[0].w) / sc.proj[0].x,
+                          (ndc.y - sc.proj[1].w) / sc.proj[1].y,
+                          (depth - sc.proj[2].w) / sc.proj[2].z);
+        v -= float3(sc.view[0].w, sc.view[1].w, sc.view[2].w);
+        return sc.view[0].xyz * v.x + sc.view[1].xyz * v.y + sc.view[2].xyz * v.z;
+    }
+    float4 c = float4(ndc, depth, 1.0);
+    float4 w = float4(dot(sc.inv_view_proj[0], c), dot(sc.inv_view_proj[1], c),
+                      dot(sc.inv_view_proj[2], c), dot(sc.inv_view_proj[3], c));
+    return w.xyz / w.w;
+}
 float de_sprite_height(uint tex,float2 uv) {
     uint w,h; de_tex2d(tex).GetDimensions(w,h);
     return de_tex2d(tex).Load(int3(min(uint2(saturate(uv)*float2(w,h)),uint2(w-1,h-1)),0)).r;
@@ -169,10 +187,7 @@ public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, Ligh
             continue;
         float2 ndc = float2((float(p.x) + 0.5) * inv_size.x * 2.0 - 1.0,
                             1.0 - (float(p.y) + 0.5) * inv_size.y * 2.0);
-        float4 c = float4(ndc, z, 1.0);
-        float4 w = float4(dot(sc.inv_view_proj[0], c), dot(sc.inv_view_proj[1], c),
-                          dot(sc.inv_view_proj[2], c), dot(sc.inv_view_proj[3], c));
-        float3 pos = w.xyz / w.w;
+        float3 pos = lighting_position(sc, ndc, z, ortho);
         float3 v = ortho ? forward_eye : normalize(sc.camera_position.xyz - pos);
         float view_depth = -dot(sc.view[2], float4(pos, 1.0));
         uint cluster = de_cluster_index(lv, p, view_depth);
@@ -267,10 +282,8 @@ void cs_cluster_heatmap(uint3 id : SV_DispatchThreadID, uniform LightingParams p
     {
         float2 ndc = float2((float(id.x) + 0.5) / float(pc.width) * 2.0 - 1.0,
                             1.0 - (float(id.y) + 0.5) / float(pc.height) * 2.0);
-        float4 c = float4(ndc, z, 1.0);
-        float4 w = float4(dot(sc.inv_view_proj[0], c), dot(sc.inv_view_proj[1], c),
-                          dot(sc.inv_view_proj[2], c), dot(sc.inv_view_proj[3], c));
-        view_depth = -dot(sc.view[2], float4(w.xyz / w.w, 1.0));
+        float3 pos = lighting_position(sc, ndc, z, (lv.flags & DE_LIGHTING_ORTHO) != 0u);
+        view_depth = -dot(sc.view[2], float4(pos, 1.0));
     }
     uint cluster = de_cluster_index(lv, id.xy, view_depth);
     uint n = de_robuffer<uint2>(pc.cl.grid)[cluster].y;

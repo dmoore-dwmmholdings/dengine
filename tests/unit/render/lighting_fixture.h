@@ -408,6 +408,7 @@ typedef struct lx {
     de_vec3 eye, target;
     f32 fov;
     f32 ortho_height;
+    de_mat4 camera_view; /* Optional exact view matrix for camera reconstruction regressions. */
     u32 width, height;
     lx_result res;
 } lx;
@@ -688,7 +689,9 @@ static inline void rb_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *use
 }
 
 static inline void camera(const lx *f, de_mat4 *view, de_mat4 *proj) {
-    *view = de_m4_look_at(f->eye, f->target, (de_vec3){0.0f, 1.0f, 0.0f});
+    *view = f->camera_view.m[15] != 0.f
+                ? f->camera_view
+                : de_m4_look_at(f->eye, f->target, (de_vec3){0.0f, 1.0f, 0.0f});
     if (f->ortho_height > 0) {
         f32 h = .5f * f->ortho_height, w = h * (f32)f->width / (f32)f->height;
         *proj = de_m4_ortho_rz(-w, w, -h, h, .1f, 100000);
