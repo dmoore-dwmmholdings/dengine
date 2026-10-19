@@ -371,6 +371,7 @@ jobs:
           cat "build/${PRESET}/de_config_dump.txt"
 
       - name: Build
+        id: capture_build
         shell: bash
         env:
           TARGETS: de_golden
@@ -386,10 +387,21 @@ jobs:
           exe="build/${PRESET}/tests/golden/de-golden"
           [ -f "${exe}.exe" ] && exe="${exe}.exe"
           python3 tests/golden/base_tier/capture.py --exe "${exe}" --backend "${BACKEND}" --out "build/${PRESET}/base-tier-capture"
+      # DENG-466: finish the original crash matrix even if a capture comparison fails.
+      # CTest retains the original 300-second limits and image thresholds for every case.
+      - name: Qualify original WARP renderer crashes
+        if: ${{ !cancelled() && matrix.backend == 'd3d12' && steps.capture_build.outcome == 'success' }}
+        shell: bash
+        run: |
+          ctest --test-dir "build/${PRESET}" --output-on-failure --no-tests=error \
+            -R '^golden\.d3d12\.(views_split_screen|materials_(gallery_ibl|gallery_lights|furnace|khr_samples|layers_furnace)|shadows_(csm|local|pcss_contact)_(medium|high|off)|ao_gtao_(medium|high|off)|reflections_ssr_probes_(medium|high|off)|gi_probes_ssgi_(medium|high|off)|refraction_ss_(medium|high|off)|rt_(shadows_pole|restir_many_lights|ao_corner|reflections_mirror_rough|gi_cornell|refraction_glass|foliage_shadow)_base)$'
       - name: Preserve captures, repeats and raw logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: base-tier-${{ matrix.backend }}
-          path: build/${{ matrix.preset }}/base-tier-capture/
+          path: |
+            build/${{ matrix.preset }}/base-tier-capture/
+            build/${{ matrix.preset }}/golden/
+            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
           if-no-files-found: warn
