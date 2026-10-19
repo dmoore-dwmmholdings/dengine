@@ -186,7 +186,7 @@ TEST(cook_check, extra_types) {
     }
 
     /* Every name of the built-in table is accepted. */
-    EXPECT_EQ(de_cook_known_type_count, 14u);
+    EXPECT_EQ(de_cook_known_type_count, 15u);
     for (u32 i = 0; i < de_cook_known_type_count; ++i)
         EXPECT_TRUE(de_cook_known_types[i] != NULL && de_cook_known_types[i][0] != '\0');
 }

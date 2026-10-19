@@ -217,15 +217,14 @@ TEST(cook_cli, validation_abort) {
     EXPECT_TRUE(strstr(g_cct.err.p, "1 of 2 assets failed to cook; no pack written") != NULL);
     EXPECT_FALSE(de_path_exists("cct:/abort/out/game.dpak"));
 
-    /* An engine type without an importer in this build (sound: S25; texture has one since
-     * DENG-98). */
+    /* Video remains a known engine type without a built-in importer. */
     static const char tex[] = "[project]\nasset_root = \"assets\"\n[assets]\n"
-                              "\"t\" = { type = \"sound\", source = \"ok.txt\" }\n";
+                              "\"t\" = { type = \"video\", source = \"ok.txt\" }\n";
     cct_put("abort/proj/tex.toml", tex, sizeof tex - 1);
     cct_path(mpath, sizeof mpath, "abort/proj/tex.toml");
     const char *tex_args[] = {mpath, "--platform", "linux", "--out", out, "--no-cache", NULL};
     ASSERT_EQ(cct_cook(tex_args), DE_COOK_EXIT_ERRORS);
-    EXPECT_TRUE(strstr(g_cct.err.p, "no importer for type \"sound\"") != NULL);
+    EXPECT_TRUE(strstr(g_cct.err.p, "no importer for type \"video\"") != NULL);
     EXPECT_FALSE(de_path_exists("cct:/abort/out/game.dpak"));
 
     /* Without the hooks, the project's own type is unknown to the check: exit 1. */

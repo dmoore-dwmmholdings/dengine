@@ -36,8 +36,8 @@ static int cook_no_hooks(const char *const *args, const de_cook_hooks *hooks) {
 /* ---- cook_builtin.table ---------------------------------------------------------------------- */
 
 TEST(cook_builtin, table) {
-    static const char *const names[] = {"texture", "model", "shader"};
-    for (u32 i = 0; i < 3; ++i) {
+    static const char *const names[] = {"texture", "model", "shader", "sound"};
+    for (u32 i = 0; i < (u32)(sizeof names / sizeof names[0]); ++i) {
         de_asset_type_desc d;
         ASSERT_TRUE(de_cooker_builtin_importer(names[i], &d));
         EXPECT_STREQ(d.name, names[i]);
@@ -54,7 +54,7 @@ TEST(cook_builtin, table) {
     EXPECT_STREQ(d.extensions[0], ".slang");
     /* Engine types without a built-in importer (yet), other names, NULL. */
     d.name = "x";
-    EXPECT_FALSE(de_cooker_builtin_importer("sound", &d));
+    EXPECT_FALSE(de_cooker_builtin_importer("video", &d));
     EXPECT_TRUE(d.name == NULL && d.import == NULL); /* zeroed */
     EXPECT_FALSE(de_cooker_builtin_importer("blob", &d));
     EXPECT_FALSE(de_cooker_builtin_importer("Shader", &d));
