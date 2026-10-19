@@ -133,3 +133,241 @@ TEST_F(ui_draw, two_thousand_widgets_static_zero_alloc_build_extract, ui_fx) {
     EXPECT_EQ(de_ui_get_render_stats(f->ui).quads, 2000u);
     EXPECT_TRUE(total / 1000 <= .5);
 }
+#if DE_HAS_RENDER
+#include "render/renderer_internal.h"
+#include "render/world/render_world.h"
+static void draw_renderer(ui_fx *f, de_gpu_backend backend) {
+    de_fp_env_init_thread();
+    de_ui_destroy(f->ui);
+    f->ui = NULL;
+    ASSERT_EQ(de_gpu_device_create(
+                  &(de_gpu_device_desc){.backend = backend, .pipeline_cache_dir = ""}, &f->device),
+              DE_OK);
+    ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device,
+                                                     .assets = f->assets,
+                                                     .types = f->types,
+                                                     .frames_in_flight = 2},
+                                 &f->renderer),
+              DE_OK);
+    de_renderer_attach(f->renderer, f->world);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "0"), DE_OK);
+    ASSERT_EQ(
+        de_ui_create(
+            &(de_ui_desc){.renderer = f->renderer, .reference_height = 512, .max_nodes = 6000},
+            &f->ui),
+        DE_OK);
+    de_ui_set_viewport(f->ui, 512, 512, (de_window_insets){0});
+    de_ui_attach(f->ui, f->world);
+}
+static void draw_kick(ui_fx *f) {
+    ui_frame(f);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+}
+TEST_F(ui_draw, no_camera_twelve_frames_retire_unsubmitted_packets, ui_fx) {
+    draw_renderer(f, DE_GPU_NULL);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){1, 1, 1, 1}, 1);
+    for (u32 i = 0; i < 12; ++i) {
+        draw_kick(f);
+        struct de_ui_render *r = render(f);
+        EXPECT_EQ(r->snapshots[r->published].generation, (u64)i + 1);
+        EXPECT_EQ(r->snapshots[r->published].last_gpu_fence, 0u);
+        EXPECT_EQ(de_renderer_completed_extract_frame(f->renderer), (u64)i + 1);
+        EXPECT_EQ(de_ui_get_render_stats(f->ui).truncated, 0u);
+    }
+}
+#if DE_HAS_GPU_METAL
+static de_gpu_texture floating_view(ui_fx *f, de_gpu_buffer *readback, de_view *view) {
+    de_gpu_texture target = de_gpu_texture_create(
+        f->device, &(de_gpu_texture_desc){.width = 512,
+                                          .height = 512,
+                                          .format = DE_FMT_RGBA32_FLOAT,
+                                          .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                                   DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(target.id);
+    *readback = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 512u * 512u * 16u,
+                                                                      .usage = DE_USAGE_COPY_DST,
+                                                                      .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(readback->id);
+    *view = de_view_create(
+        f->renderer, &(de_view_desc){.target = target, .name = "UI linear nits qualification"});
+    ASSERT_TRUE(view->id);
+    de_builtin_component_ids bi = de_builtin_components(f->world);
+    de_component camera = de_component_find(f->world, "DeCamera");
+    de_component components[] = {bi.transform, camera};
+    de_entity e;
+    ASSERT_EQ(de_entity_spawn_with(f->world, components, 2, &e), DE_OK);
+    *(DeTransform *)de_entity_get(f->world, e, bi.transform) = de_transform_identity();
+    *(DeCamera *)de_entity_get(f->world, e, camera) = (DeCamera){
+        .view = *view, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    return target;
+}
+static de_vec4 read_float_pixel(ui_fx *f, de_gpu_texture target, de_gpu_buffer buffer, u32 x,
+                                u32 y) {
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "UI float readback");
+    ASSERT_TRUE(cmd);
+    de_gpu_barrier b = {
+        .texture = target, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, 512 * 16, target, 0, 0);
+    b.before = DE_ACCESS_COPY_SRC;
+    b.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &b, 1);
+    ASSERT_EQ(de_gpu_queue_submit(f->device, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_wait_idle(f->device);
+    const de_vec4 *p = de_gpu_buffer_map(f->device, buffer);
+    ASSERT_TRUE(p);
+    return p[y * 512 + x];
+}
+TEST_F(ui_draw, metal_linear_ui_nits_alpha_and_two_thousand_widget_batch, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity root = ui_node(f, (de_entity){0});
+    DeUiStyle *s = style(f, root, (de_vec4){0, 0, 0, 0}, 1);
+    draw_kick(f);
+    de_vec4 background = read_float_pixel(f, target, readback, 256, 256);
+    const f32 nits[] = {80, 203, 400};
+    for (u32 i = 0; i < 3; ++i) {
+        ASSERT_EQ(
+            de_renderer_set_ui_output(f->renderer, &(de_ui_output_calibration){true, nits[i], 203}),
+            DE_OK);
+        s = de_entity_get(f->world, root, f->ui->ids.style);
+        s->background = (de_vec4){1, 1, 1, 1};
+        draw_kick(f);
+        de_vec4 p = read_float_pixel(f, target, readback, 256, 256);
+        EXPECT_FLOAT_EQ(p.x * 203, nits[i], .5f);
+        EXPECT_FLOAT_EQ(p.y, p.x, .002f);
+        EXPECT_FLOAT_EQ(p.z, p.x, .002f);
+        s = de_entity_get(f->world, root, f->ui->ids.style);
+        s->background.w = .5f;
+        draw_kick(f);
+        de_vec4 alpha = read_float_pixel(f, target, readback, 256, 256);
+        EXPECT_FLOAT_EQ(alpha.x, .5f * nits[i] / 203 + .5f * background.x, .003f);
+        printf("UIlinearwhite %.0fnits: opaque%g halfalpha%g (paperwhite203); not PQ/scRGB display "
+               "qualification\n",
+               (double)nits[i], (double)p.x, (double)alpha.x);
+    }
+    ASSERT_EQ(de_renderer_set_ui_output(f->renderer,
+                                        &(de_ui_output_calibration){.hdr = false,
+                                                                    .ui_white_nits = 203,
+                                                                    .paper_white_nits = 203}),
+              DE_OK);
+    DeUiGrid *grid = de_entity_add(f->world, root, f->ui->ids.grid);
+    grid->column_count = 1;
+    grid->columns[0] = (de_ui_len){DE_UI_FR, 1};
+    ui_node_edit(f, root)->display =
+        DE_UI_GRID; /* Visible fixed-position children use explicit anchors. */
+    for (u32 i = 0; i < 2000; ++i) {
+        de_entity e = ui_node(f, root);
+        DeUiAnchor *a = de_entity_add(f->world, e, f->ui->ids.anchor);
+        f32 x = (f32)(i % 50) * 8, y = (f32)(i / 50) * 8;
+        *a = (DeUiAnchor){.offset_min = {x, y}, .offset_max = {x + 8, y + 8}};
+        style(f, e, (de_vec4){.2f, .4f, .8f, 1}, 1);
+    }
+    draw_kick(f);
+    de_gpu_wait_idle(f->device);
+    de_ui_render_stats stats = de_ui_get_render_stats(f->ui);
+    printf("actualMetal2000-widget HUD: quads%u draws%u build+Extract%.4fms\n", stats.quads,
+           stats.draw_calls, (double)stats.build_extract_ms);
+    EXPECT_EQ(stats.quads, 2001u);
+    EXPECT_TRUE(stats.draw_calls > 0 && stats.draw_calls <= 4);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+}
+TEST_F(ui_draw, metal_exact_extract_token_ignores_future_published_packet, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){1, 0, 0, 1}, 1);
+    ui_frame(f);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    struct de_ui_render *r = render(f);
+    u32 old = r->published;
+    u64 token = r->snapshots[old].generation;
+    style(f, root, (de_vec4){0, 1, 0, 1}, 1);
+    ui_frame(f);
+    /* Interleave a deliberately future published UI packet before actual worldN renders.
+     * A latest-published implementation would draw green; the immutable world token selects red. */
+    u32 future = (old + 1) % DE_UI_RENDER_SNAPSHOTS;
+    de_ui_draw_list *p = &r->snapshots[future];
+    memcpy(p->commands, r->build.commands, (size_t)r->build.count * sizeof *p->commands);
+    memcpy(p->roots, r->build.roots, (size_t)r->build.root_count * sizeof *p->roots);
+    p->count = r->build.count;
+    p->root_count = r->build.root_count;
+    p->generation = token + 1;
+    p->valid = true;
+    r->published = future;
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+    de_vec4 color = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(color.x, 1, .001f);
+    EXPECT_FLOAT_EQ(color.y, 0, .001f);
+    EXPECT_EQ(r->snapshots[old].last_gpu_fence, 1u);
+    EXPECT_EQ(p->last_gpu_fence, 0u);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+}
+#endif
+#endif
+#if DE_HAS_RENDER && defined(DE_UI_DRAW_ASSET_ROOT)
+#include "asset/slots_internal.h"
+TEST_F(ui_draw, image_pin_survives_load_release_and_despawn_until_packet_retirement, ui_fx) {
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.types = f->types}, &f->assets),
+              DE_OK);
+    draw_renderer(f, DE_GPU_NULL);
+    ASSERT_EQ(de_fs_mount("uidrawassets", DE_UI_DRAW_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->assets, "uidrawassets:/tests/unit/ui/assets.toml"), DE_OK);
+    de_asset_id id = de_asset_id_from("ui/checker");
+    de_texture texture = de_asset_texture(f->assets, id);
+    f->load = de_asset_load(f->assets, id, 0);
+    u64 until = de_time_now_ns() + 30000000000ULL;
+    while (de_asset_status(f->assets, f->load, NULL) != DE_LOAD_READY && de_time_now_ns() < until) {
+        de_asset_system_update(f->assets, NULL);
+        de__renderer_kick_prepare(f->renderer);
+        de_sleep_ns(1000000);
+    }
+    ASSERT_EQ(de_asset_status(f->assets, f->load, NULL), DE_LOAD_READY);
+    de_entity root = ui_node(f, (de_entity){0});
+    DeUiImage *image = de_entity_add(f->world, root, f->ui->ids.image);
+    *image = (DeUiImage){.texture = texture, .uv_rect = {0, 0, 1, 1}, .tint = {1, 1, 1, 1}};
+    de_component camera = de_component_find(f->world, "DeCamera");
+    de_builtin_component_ids bi = de_builtin_components(f->world);
+    de_component components[] = {camera, bi.transform};
+    de_entity e;
+    ASSERT_EQ(de_entity_spawn_with(f->world, components, 2, &e), DE_OK);
+    *(DeTransform *)de_entity_get(f->world, e, bi.transform) = de_transform_identity();
+    *(DeCamera *)de_entity_get(f->world, e, camera) =
+        (DeCamera){.projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    draw_kick(f);
+    struct de_ui_render *r = render(f);
+    u32 packet = r->published;
+    ASSERT_TRUE(r->snapshots[packet].commands[0].pins & 1u);
+    ASSERT_TRUE(r->snapshots[packet].last_gpu_fence > 0);
+    de_asset_release(f->assets, f->load);
+    f->load = (de_load_handle){0};
+    de_asset_flush_unused(f->assets);
+    EXPECT_TRUE(de_render_texture_gpu(f->renderer, texture).id);
+    de_entity_despawn_recursive(f->world, root);
+    /* The authored entity is gone, but the submitted packet still owns its generation. */
+    u32 handles = 0;
+    de__slot_refs(de__slot_get(f->assets, texture.id), &handles, NULL);
+    EXPECT_TRUE(handles > 0);
+    de_asset_flush_unused(f->assets);
+    EXPECT_TRUE(de_render_texture_gpu(f->renderer, texture).id);
+    for (u32 i = 0; i < 6; ++i) {
+        draw_kick(f);
+        de_gpu_wait_idle(f->device);
+    }
+    de__slot_refs(de__slot_get(f->assets, texture.id), &handles, NULL);
+    EXPECT_EQ(handles, 0u);
+    de_asset_flush_unused(f->assets);
+    EXPECT_EQ(de_render_texture_gpu(f->renderer, texture).id, 0u);
+    ASSERT_EQ(de_fs_unmount("uidrawassets", DE_UI_DRAW_ASSET_ROOT), DE_OK);
+}
+#endif

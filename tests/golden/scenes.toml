@@ -452,3 +452,38 @@ size = [1920, 1080]
 tiers = ["base"]
 threshold_mean = 0.001
 threshold_p99 = 0.015
+
+[scene.ui_rect_border]
+description = "Actual retained rounded rectangles and borders at 1x/2x UI scale"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_nine_slice]
+description = "Cooked nine-slice panel at three sizes with fixed 8-pixel corner marks"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_clip_nested]
+description = "Retained child geometry clipped by intersected nested parent scissors"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_z_popup]
+description = "Retained z order and popup subtree above higher-z siblings"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_text_labels]
+description = "Real cooked NotoSans MSDF retained labels at16/24/40/64pixels"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
