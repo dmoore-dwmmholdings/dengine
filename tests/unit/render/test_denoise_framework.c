@@ -3,6 +3,7 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_debug.h>
 #include "render/denoise/denoise_internal.h"
+#include "render/pathtracer/pt_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
 #include "render/passes/vis/gbuffer.h"
@@ -233,6 +234,65 @@ TEST(denoise_framework, motion_convention) {
     previous = de__denoise_previous_uv((de_vec2){.5f, .5f}, (de_vec2){-.25f, .5f});
     EXPECT_FLOAT_EQ(previous.x, .625, 0);
     EXPECT_FLOAT_EQ(previous.y, .75, 0);
+}
+TEST(denoise_framework, owner_creation_allocation_failures) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    for (i64 budget = 0; budget <= 1; ++budget) {
+        de__denoise *owner = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__denoise_create(&renderer, &owner);
+        de_tracking_allocator_fail_after(&tracking, -1);
+        EXPECT_EQ(result, budget ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        EXPECT_EQ(owner != NULL, budget != 0);
+        de__denoise_destroy(owner);
+        de_tracking_stats stats = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(stats.blocks_live, 0u);
+        EXPECT_EQ(stats.bytes_live, 0u);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 1u);
+}
+TEST(denoise_framework, final_owner_creation_allocation_failures) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    for (i64 budget = 0; budget <= 1; ++budget) {
+        de__pt_denoise *owner = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__pt_denoise_create(&renderer, &owner);
+        de_tracking_allocator_fail_after(&tracking, -1);
+        EXPECT_EQ(result, budget ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        EXPECT_EQ(owner != NULL, budget != 0);
+        de__pt_denoise_destroy(owner);
+        de_tracking_stats stats = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(stats.blocks_live, 0u);
+        EXPECT_EQ(stats.bytes_live, 0u);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 1u);
+}
+TEST(denoise_framework, parent_owner_failure_releases_partial_denoiser_initialization) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    /* Renderer creation retains the partial PT owner for renderer_free().
+     * Fail the parent, media and final-denoiser allocations in turn, then
+     * exercise the same destruction path with memory still unavailable. */
+    for (i64 budget = 0; budget <= 3; ++budget) {
+        renderer.pt = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__pt_create(&renderer, &renderer.pt);
+        EXPECT_EQ(result, budget == 3 ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        de_tracking_stats partial = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(partial.blocks_live, (u64)budget);
+        de__pt_destroy(renderer.pt);
+        renderer.pt = NULL;
+        de_tracking_stats after = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(after.blocks_live, 0u);
+        EXPECT_EQ(after.bytes_live, 0u);
+        de_tracking_allocator_fail_after(&tracking, -1);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 3u);
 }
 TEST_F(denoise_framework, reproject_validation, dn_fixture) {
     upload(f);
