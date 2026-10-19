@@ -51,6 +51,17 @@ de_rg_resource de_render_forward_color(const de_forward_context *c) {
 de_rg_resource de_render_forward_depth(const de_forward_context *c) {
     return c ? c->vis->depth : (de_rg_resource){0};
 }
+void *de_render_forward_alloc(const de_forward_context *c, size_t bytes, size_t alignment) {
+    if (!c || !bytes || !alignment || alignment > 4096 || (alignment & (alignment - 1)) ||
+        bytes > SIZE_MAX - (alignment - 1)) {
+        (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid forward frame allocation");
+        return NULL;
+    }
+    void *data = de_arena_push(c->vis->arena, bytes, alignment);
+    if (!data)
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward frame arena exhausted");
+    return data;
+}
 void de__forward_declare_lighting(de_rg_pass *p, const de__lighting_context *lc) {
     const de_rg_resource reads[] = {
         lc->lights,        lc->dir_lights,    lc->grid_buf,   lc->list,           lc->counters,

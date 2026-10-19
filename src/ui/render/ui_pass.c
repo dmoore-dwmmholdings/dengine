@@ -48,6 +48,12 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 }
 void de_ui__render_hook(de_rg *graph, de_view view, void *user) {
     struct de_ui_render *r = user;
+    if (r->ui->desc.view.id && r->ui->desc.view.id != view.id)
+        return;
+    if (r->ui->desc.pixel_art && !r->ui->desc.view.id &&
+        view.id != de_renderer_main_view(r->ui->desc.renderer).id)
+        return;
+
     de_render_hook_info info;
     if (!de_view_hook_info(r->ui->desc.renderer, view, &info) ||
         info.ring_index >= DE_UI_RENDER_GPU_SLOTS || !info.width || !info.height ||
@@ -74,6 +80,11 @@ void de_ui__render_hook(de_rg *graph, de_view view, void *user) {
         de_mutex_unlock(&r->mutex);
         return;
     }
+    f32 border = 0;
+    de_view_frame_info pixel_info;
+    if (r->ui->desc.pixel_art && de_view_frame_info_get(r->ui->desc.renderer, view, &pixel_info) &&
+        pixel_info.pixel.smooth_subpixel_scroll)
+        border = 1;
     u32 count = 0;
     for (u32 i = 0; i < packet->count; ++i) {
         const de_ui_draw_cmd *c = &packet->commands[i];
@@ -81,15 +92,23 @@ void de_ui__render_hook(de_rg *graph, de_view view, void *user) {
             (c->gpu.kind != DE_UI_QUAD_RECT && c->gpu.texture == UINT32_MAX))
             continue;
         /* Identical packet data is written only once per frame, even with several view hooks. */
-        if (r->upload_frame[info.ring_index] != info.frame_index)
+        if (r->upload_frame[info.ring_index] != info.frame_index) {
             mapped[count] = c->gpu;
-        if (!p->count || memcmp(&p->runs[p->count - 1].clip, &c->clip, sizeof c->clip) != 0)
-            p->runs[p->count++] = (ui_run){count, 0, c->clip};
+            mapped[count].rect.x += border;
+            mapped[count].rect.y += border;
+        }
+        de_vec4 clip = c->clip;
+        clip.x += border;
+        clip.y += border;
+        if (!p->count || memcmp(&p->runs[p->count - 1].clip, &clip, sizeof clip) != 0)
+            p->runs[p->count++] = (ui_run){count, 0, clip};
         ++p->runs[p->count - 1].count;
         ++count;
     }
-    if (r->upload_frame[info.ring_index] != info.frame_index)
+    if (r->stats_frame != info.frame_index) {
         r->stats.draw_calls = 0;
+        r->stats_frame = info.frame_index;
+    }
     r->upload_frame[info.ring_index] = info.frame_index;
     r->stats.draw_calls += p->count;
     de_mutex_unlock(&r->mutex);
@@ -148,7 +167,8 @@ de_result de_ui__pass_init(struct de_ui_render *r) {
     if (!r->linear.id || !r->nearest.id)
         return DE_ERR_OUT_OF_MEMORY;
     de_error_clear();
-    de_render_add_hook(r->ui->desc.renderer, DE_HOOK_UI, de_ui__render_hook, r);
+    de_render_add_hook(r->ui->desc.renderer, r->ui->desc.pixel_art ? DE_HOOK_PIXEL_UI : DE_HOOK_UI,
+                       de_ui__render_hook, r);
     if (de_error_last() && de_error_last()->result != DE_OK)
         return de_error_last()->result;
     r->hook_registered = true;
@@ -156,7 +176,9 @@ de_result de_ui__pass_init(struct de_ui_render *r) {
 }
 void de_ui__pass_destroy(struct de_ui_render *r) {
     if (r->hook_registered) {
-        (void)de_render_remove_hook(r->ui->desc.renderer, DE_HOOK_UI, de_ui__render_hook, r);
+        (void)de_render_remove_hook(r->ui->desc.renderer,
+                                    r->ui->desc.pixel_art ? DE_HOOK_PIXEL_UI : DE_HOOK_UI,
+                                    de_ui__render_hook, r);
         r->hook_registered = false;
     }
     if (r->device) {

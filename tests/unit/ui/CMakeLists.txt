@@ -26,3 +26,13 @@ endif()
 if(TARGET test_ui_draw AND DE_BUILD_TOOLS AND DE_HAS_RENDER)
  target_compile_definitions(test_ui_draw PRIVATE "DE_UI_DRAW_ASSET_ROOT=\"${DE_ROOT_DIR}\"")
 endif()
+
+# DENG-322 real world-root layout/ray routing and integer internal UI geometry.
+if(TARGET de_ui)
+ de_add_test(NAME ui_world_pixel SOURCES test_world_panel.c test_pixel_ui.c
+  LIBS de_ui de_platform de_ecs de_reflect LABELS ui)
+ target_include_directories(test_ui_world_pixel PRIVATE "${DE_ROOT_DIR}/src")
+ if(TARGET de_gpu_metal)
+  target_link_libraries(test_ui_world_pixel PRIVATE de_gpu_metal "-framework Metal" "-framework Foundation")
+ endif()
+endif()

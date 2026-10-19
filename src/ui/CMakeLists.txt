@@ -25,3 +25,8 @@ if(TARGET de_ui)
  target_sources(de_ui PRIVATE "${_ui_default_style}" widgets/text.c widgets/image.c widgets/button.c widgets/toggle.c widgets/slider.c widgets/progress.c input/pointer.c)
  target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+# DENG-322 world panels and internal-grid pixel UI.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c pixel/pixel_ui.c)
+endif()
