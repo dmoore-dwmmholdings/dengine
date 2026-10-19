@@ -599,6 +599,137 @@ TEST_F(text_batch, metal_msdf_effects_ignore_neighboring_atlas_glyphs, text_rend
     SKIP("Metal native host required");
 #endif
 }
+TEST_F(text_batch, metal_plain_label_coverage_and_atlas_isolation, text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    de_asset_id id = de_asset_id_from("font/tt-msdf");
+    f->scene_loads[0] = de_asset_load(f->fonts.assets, id, 0);
+    ASSERT_EQ(de_asset_wait(f->fonts.assets, f->scene_loads[0], TEXT_WAIT), (int)DE_LOAD_READY);
+    de_font handle = de_asset_font(f->fonts.assets, id);
+    de_text_font *font = de_text__font_get(f->fonts.t, handle);
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_OUTPUT, 0, "plain.background",
+                                      coverage_clear_stage, NULL),
+              DE_OK);
+    const char *samples[] = {"Level complete / 64 px", "3 px border"};
+    const u32 sizes[] = {64, 18}, characters[] = {'c', '3'};
+    for (u32 sample = 0; sample < 2; ++sample) {
+        de_text_style style = {
+            .font = handle, .size_px = (f32)sizes[sample], .color = {0, 1, 0, 1}};
+        de_text_layout *layout = NULL;
+        ASSERT_EQ(
+            de_text_layout_build(
+                f->fonts.t,
+                &(de_text_layout_desc){.utf8 = de_str_from_cstr(samples[sample]), .style = &style},
+                NULL, &layout),
+            DE_OK);
+        de_glyph_quad quads[64], selected = {0};
+        u32 count = de_text_layout_quads(layout, quads, 64);
+        de_text_glyph_entry glyph;
+        ASSERT_TRUE(de_text__glyph(f->fonts.t, handle, de_text__codepoint(font, characters[sample]),
+                                   &glyph));
+        for (u32 i = 0; i < count; ++i)
+            if (memcmp(&quads[i].uv, &glyph.uv, sizeof glyph.uv) == 0)
+                selected = quads[i];
+        ASSERT_TRUE(selected.pos.z > 0);
+        const de_vec2 origin = {96.125f, 160.125f};
+        const de_text_draw_opts options = {.font = handle}; /* Plain fill: all effects zero. */
+        de_text_update(f->fonts.t);
+        ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, quads, count, origin, &options), DE_OK);
+        render_frame(f);
+        u8 *full = readback(f);
+        ASSERT_TRUE(stbi_write_png(sample ? DE_TEXT_RENDER_CAPTURE ".plain-small.png"
+                                          : DE_TEXT_RENDER_CAPTURE ".plain-large.png",
+                                   1280, 720, 4, full, 1280 * 4));
+        free(full);
+        u64 bytes = (u64)font->width * font->height * 4;
+        u8 *saved = malloc((size_t)bytes), *reference = NULL;
+        ASSERT_TRUE(saved);
+        memcpy(saved, font->pixels[glyph.page], (size_t)bytes);
+        for (u32 poison = 0; poison < 2; ++poison) {
+            u8 *atlas = font->pixels[glyph.page];
+            for (u32 y = 0; y < font->height; ++y)
+                for (u32 x = 0; x < font->width; ++x)
+                    if (x < glyph.x || x >= glyph.x + glyph.w || y < glyph.y ||
+                        y >= glyph.y + glyph.h)
+                        memset(atlas + 4 * ((u64)y * font->width + x), poison ? 255 : 0, 4);
+            de_text__font_dirty(font,
+                                (de_text_dirty_rect){glyph.page, 0, 0, font->width, font->height});
+            de_text_update(f->fonts.t);
+            ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &selected, 1, origin, &options),
+                      DE_OK);
+            render_frame(f);
+            u8 *pixels = readback(f);
+            if (!poison) {
+                reference = pixels;
+                continue;
+            }
+            u32 changed = 0;
+            for (u32 i = 0; i < 1280 * 720; ++i)
+                changed += memcmp(reference + i * 4, pixels + i * 4, 4) != 0;
+            printf("plain %c at%upx neighboring-atlas changed pixels=%u\n", characters[sample],
+                   sizes[sample], changed);
+            EXPECT_EQ(changed, 0u);
+            /* Independent outline coverage catches clipped strokes as well as stray seams. */
+            stbtt_fontinfo face;
+            ASSERT_TRUE(stbtt_InitFont(&face, font->source, 0));
+            f32 baseline_x = selected.pos.x + origin.x - glyph.plane.x * sizes[sample],
+                baseline_y = selected.pos.y + origin.y + glyph.plane.w * sizes[sample],
+                scale = stbtt_ScaleForMappingEmToPixels(&face, (f32)sizes[sample]);
+            int w, h, xoff, yoff;
+            u8 *bitmap = stbtt_GetGlyphBitmapSubpixel(
+                &face, scale, scale, baseline_x - floorf(baseline_x),
+                baseline_y - floorf(baseline_y), (int)de_text__codepoint(font, characters[sample]),
+                &w, &h, &xoff, &yoff);
+            ASSERT_TRUE(bitmap);
+            int rx = (int)floorf(baseline_x) + xoff, ry = (int)floorf(baseline_y) + yoff;
+            u32 intersection = 0, combined = 0;
+            int expected_bounds[] = {1280, 720, 0, 0}, actual_bounds[] = {1280, 720, 0, 0};
+            for (int y = (int)floorf(selected.pos.y + origin.y);
+                 y < (int)ceilf(selected.pos.y + origin.y + selected.pos.w); ++y)
+                for (int x = (int)floorf(selected.pos.x + origin.x);
+                     x < (int)ceilf(selected.pos.x + origin.x + selected.pos.z); ++x) {
+                    bool expected = x >= rx && x < rx + w && y >= ry && y < ry + h &&
+                                    bitmap[(y - ry) * w + x - rx] >= 128;
+                    const u8 *p = pixels + 4 * ((u32)y * 1280 + (u32)x);
+                    bool actual = p[1] >= 128 && p[0] < 32 && p[2] < 32;
+                    for (u32 which = 0; which < 2; ++which) {
+                        if (!(which ? actual : expected))
+                            continue;
+                        int *bounds = which ? actual_bounds : expected_bounds;
+                        if (x < bounds[0])
+                            bounds[0] = x;
+                        if (y < bounds[1])
+                            bounds[1] = y;
+                        if (x > bounds[2])
+                            bounds[2] = x;
+                        if (y > bounds[3])
+                            bounds[3] = y;
+                    }
+                    intersection += expected && actual;
+                    combined += expected || actual;
+                }
+            ASSERT_GT(combined, 0u);
+            f32 iou = (f32)intersection / combined;
+            printf("plain %c at%upx coverage IoU %.5f\n", characters[sample], sizes[sample],
+                   (double)iou);
+            EXPECT_TRUE(iou >= (sample ? .8f : .95f));
+            for (u32 edge = 0; edge < 4; ++edge)
+                EXPECT_TRUE(abs(actual_bounds[edge] - expected_bounds[edge]) <= 1);
+            stbtt_FreeBitmap(bitmap, NULL);
+            free(reference);
+            free(pixels);
+        }
+        memcpy(font->pixels[glyph.page], saved, (size_t)bytes);
+        de_text__font_dirty(font,
+                            (de_text_dirty_rect){glyph.page, 0, 0, font->width, font->height});
+        free(saved);
+        de_text_layout_free(layout);
+    }
+    de__view_unregister_stage(f->r, coverage_clear_stage, NULL);
+#else
+    SKIP("Metal native host required");
+#endif
+}
 TEST_F(text_batch, metal_cff_and_truetype_msdf_coverage_small_and_large, text_render_fx) {
 #if defined(__APPLE__)
     start_render(f, DE_GPU_METAL);
