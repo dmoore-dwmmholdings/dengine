@@ -569,6 +569,8 @@ static void deferred_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user
         .probe_view_z = {p->probe_view_z[0], p->probe_view_z[1], p->probe_view_z[2],
                          p->probe_view_z[3]}};
     memcpy(p->inputs_dst, &in, sizeof in);
+    if (!p->args.id)
+        return; /* Forward-only scene: publish real shared lighting inputs, no deferred tiles. */
     const de_gpu_buffer args = de_rg_buffer(pass, p->args);
     de_gpu_cmd_set_pipeline(cmd, p->lt->deferred.pipeline);
     for (u32 m = 0; m < DE__GS_MATERIAL_MODELS; ++m) {
@@ -702,7 +704,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     de__lighting_inputs in = vs->inputs;
     memset(&vs->inputs, 0, sizeof vs->inputs); /* producers set them again each frame */
     if (!DE_HANDLE_VALID(vc->gbuffer[DE__GB_LIGHTING]) || !DE_HANDLE_VALID(vc->depth) ||
-        !DE_HANDLE_VALID(vc->classify_tiles) || !DE_HANDLE_VALID(vc->classify_args) ||
+        (!vc->forward_only &&
+         (!DE_HANDLE_VALID(vc->classify_tiles) || !DE_HANDLE_VALID(vc->classify_args))) ||
         !DE_HANDLE_VALID(vc->scene_views) || vc->width == 0 || vc->height == 0)
         return DE_OK; /* no G-buffer this frame */
     if (!view_ensure(lt, vs, slot))
@@ -771,7 +774,7 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     lc->constants_entry = vs->entry;
     lc->sampler_bindless = lt->sampler_bindless;
     /* Secondary-hit producers also consume the canonical LTC resources. */
-    if (lt->direct_producer)
+    if (lt->direct_producer && !vc->forward_only)
         DE_TRY(lt->direct_producer(lt->direct_producer_user, g, vc, lc, &in));
 
     /* The split targets. DENG-306: subsurface scattering alone needs only the diffuse target, and
@@ -879,7 +882,8 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
             de_rg_add_pass(g, "lighting.deferred", DE_QUEUE_GRAPHICS, deferred_execute, pd);
         de_rg_read(p, vc->depth, DE_ACCESS_SHADER_READ);
         for (u32 t = 0; t < 3; ++t)
-            de_rg_read(p, b.gb[t], DE_ACCESS_SHADER_READ);
+            if (b.gb[t].id)
+                de_rg_read(p, b.gb[t], DE_ACCESS_SHADER_READ);
         de_rg_read(p, b.lighting, DE_ACCESS_SHADER_READ);
         de_rg_write(p, b.lighting, DE_ACCESS_SHADER_WRITE);
         if (split) {
@@ -890,8 +894,10 @@ de_result de__lighting_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
         } else if (DE_HANDLE_VALID(lc->diffuse)) {
             de_rg_write(p, lc->diffuse, DE_ACCESS_SHADER_WRITE); /* DENG-306: SSS pixels only */
         }
-        de_rg_read(p, vc->classify_tiles, DE_ACCESS_SHADER_READ);
-        de_rg_read(p, vc->classify_args, DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
+        if (vc->classify_tiles.id)
+            de_rg_read(p, vc->classify_tiles, DE_ACCESS_SHADER_READ);
+        if (vc->classify_args.id)
+            de_rg_read(p, vc->classify_args, DE_ACCESS_INDIRECT | DE_ACCESS_SHADER_READ);
         de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
         const de_rg_resource material_reads[5] = {b.ids, b.visible, vc->scene_instances,
                                                   vc->scene_meshes, vc->scene_materials};

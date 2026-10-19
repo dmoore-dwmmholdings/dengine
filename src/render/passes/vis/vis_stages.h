@@ -399,6 +399,7 @@ typedef struct de__vis_stats {
 
 /** One view's frame of the visibility buffer: what the stages read and publish. */
 typedef struct de__vis_context {
+    bool forward_only; /**< Real empty-scene depth/lighting context for external participants. */
     de__vis_shared *shared;
     de_rg *graph;
     de_arena *arena; /**< the graph's frame arena (pass data) */

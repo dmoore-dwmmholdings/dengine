@@ -360,7 +360,8 @@ typedef enum de_rg_hook {
     DE_HOOK_AFTER_TRANSPARENT,
     DE_HOOK_BEFORE_TONEMAP,
     DE_HOOK_AFTER_TONEMAP,
-    DE_HOOK_UI
+    DE_HOOK_UI,
+    DE_HOOK_PIXEL_UI /**< Internal tonemapped pixels, before palette and upscale. */
 } de_rg_hook;
 typedef void (*de_rg_hook_fn)(de_rg *g, de_view v, void *user);
 /**
@@ -648,6 +649,68 @@ typedef struct de_pixel_art_settings {
  * output/UI remain at the view's viewport resolution. */
 DE_API void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_settings *s);
 DE_API void de_render_set_2d_plane(de_renderer *r, de_plane_2d plane);
+
+/* DENG-322: immutable view data and forward-pass participants. */
+typedef struct de_view_frame_info {
+    de_view view;
+    u64 frame_index, extract_frame;
+    u32 ring_index, frames_in_flight, layer_mask;
+    de_dvec3 render_origin;
+    de_mat4 view_matrix, projection, view_projection;
+    u32 internal_width, internal_height, output_width, output_height;
+    de_vec4 viewport_px, content_px;
+    bool pixel_art;
+    de_pixel_art_settings pixel;
+    de_vec2 pixel_residual;
+} de_view_frame_info;
+/** Inside this view's render hook. Metadata is frozen with the immutable Extract frame. */
+DE_API bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_info *out);
+/** Main Extract after de.render.extract_views. Submission frame/ring are UINT64_MAX/UINT32_MAX
+ * until rendering. View configuration and pixel fit stay frozen for this exact Extract token. */
+DE_API bool de_renderer_extract_view_info(de_renderer *r, de_view view, de_view_frame_info *out);
+
+typedef struct de_forward_context de_forward_context;
+typedef struct de_forward_item {
+    de_vec3 center_relative; /**< Relative to the context's immutable render origin. */
+    u64 entity;
+    u32 item_index; /**< Caller-owned index into its immutable Extract packet. */
+    i16 layer, order;
+    bool always_on_top; /**< Final overlay group, after depth-sorted participants and meshes. */
+} de_forward_item;
+typedef u32 (*de_forward_gather_fn)(const de_forward_context *context, de_forward_item *out,
+                                    u32 capacity, void *user);
+typedef de_result (*de_forward_build_fn)(de_rg *graph, const de_forward_context *context,
+                                         const de_forward_item *item, void *user);
+typedef struct de_forward_participant_desc {
+    u32 max_items; /**< 1..65536; total registered capacity cannot exceed 65536. */
+    de_forward_gather_fn gather;
+    de_forward_build_fn build;
+    void *user;
+} de_forward_participant_desc;
+/** Main thread; bounded registry (16). Callbacks read immutable packets only, never ECS/assets.
+ * Gather returns a count <= capacity; a larger count refuses that participant's whole batch.
+ * Build inserts passes at the item's shared mesh-transparency position. Their data must remain
+ * valid through the renderer frame fence. Equal keys retain registration/item order. */
+DE_API de_result de_render_add_forward_participant(de_renderer *r,
+                                                   const de_forward_participant_desc *desc);
+/** Main thread. Removes the matching registration and drains CPU render and GPU work. */
+DE_API de_result de_render_remove_forward_participant(de_renderer *r, de_forward_gather_fn gather,
+                                                      void *user);
+DE_API bool de_render_forward_view_info(const de_forward_context *context, de_view_frame_info *out);
+DE_API de_rg_resource de_render_forward_color(const de_forward_context *context);
+DE_API de_rg_resource de_render_forward_depth(const de_forward_context *context);
+/** Declare on each participant pass. Includes the same lighting/shadow/IBL/GI dependencies as
+ * ordinary forward meshes, and read/write colour ordering. Depth is optional, never written. */
+DE_API void de_render_forward_declare(de_rg_pass *pass, const de_forward_context *context,
+                                      bool depth_test);
+typedef struct de_forward_shader_bindings {
+    u32 scene_views, scene_view_slot, lighting_constants, lighting_entry;
+    u32 lights, dir_lights, grid, list, counters, ltc1, ltc2, ltc_sampler;
+} de_forward_shader_bindings;
+/** Execute callback only, after declare. Bindings match lighting_common.slang's DeLightingView
+ * and DeClusterLists. The constants and resource lifetime belong to this immutable frame. */
+DE_API bool de_render_forward_bindings(const de_forward_context *context, const de_rg_pass *pass,
+                                       de_forward_shader_bindings *out);
 
 /* ---------- World systems (SPEC §12.13); configured through components ---------- */
 typedef struct DeSky {
