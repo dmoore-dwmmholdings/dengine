@@ -197,6 +197,8 @@ void de_ui__input_cancel(de_ui *ui, de_entity e) {
 void de_ui__input_geometry(de_ui *ui, de_entity e, de_vec2 *offset, f32 *width, void *user) {
     (void)user;
     de_ui_advanced *a = ui->advanced;
+    if (!a || !de_entity_alive(ui->world, e))
+        return;
     const DeUiTextInput *in = de_entity_get_const(ui->world, e, a->input);
     const de_ui_editor *s = de_entity_get_const(ui->world, e, a->editor);
     if (!in || !s)

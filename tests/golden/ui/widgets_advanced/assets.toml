@@ -2,7 +2,7 @@
 asset_root = "../../../.."
 version = 1
 [assets]
-"ui/font" = {type="font",source="tests/data/fonts/latin/NotoSans.ttf",mode="msdf",charset="ascii",em_px=48,px_range=6,page_size=1024}
+"ui/font" = {type="font",source="tests/data/fonts/latin/NotoSans.ttf",mode="msdf",charset="ascii",chars="•",em_px=48,px_range=6,page_size=1024}
 "ui/panel" = {type="texture",source="tests/golden/ui/panel.png",compression="none",mips=false,srgb=true}
 "ui/cjk" = {type="font",source="tests/data/fonts/cjk/test.ttf",mode="msdf",chars="世界",em_px=48,px_range=6,page_size=256}
 "strings/main" = {type="string_table",source="tests/golden/ui/widgets_advanced/strings/main"}

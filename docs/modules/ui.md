@@ -309,7 +309,11 @@ own no external heap pointers, and the fixed entity scratch buffer is allocated 
 
 Known deferred finding DENG-521: first pre-layout virtual-list reconciliation observes zero
 UI scale and triggers a NaN-to-u32 conversion under UBSan. Its strict regression remains.
-The other advanced sanitizer cases pass; final native capture results are recorded with the issue.
+The other advanced sanitizer cases pass. Both actual Metal advanced scenes pass strict FLIP
+comparison with mean/p99/max0 and visual review. DENG-508 limits shader-validation startup;
+captures retain the debug layer with shader validation disabled. DENG-512 rejects runtime
+atlas page metadata (including cold password bullets), so its strict regression remains
+and the visual fixture explicitly cooks the real bullet glyph. Existing font seams remain513.
 
 ### Data binding (DENG-321)
 

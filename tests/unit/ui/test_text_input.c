@@ -10,7 +10,7 @@ static void edit_fx_setup(edit_fx *f) {
     ui_fx_setup(&f->base);
     f->input = input_test_create(NULL);
     ASSERT_TRUE(f->input);
-    de_ui_attach(f->base.ui,NULL);
+    de_ui_attach(f->base.ui, NULL);
     f->base.ui->desc.input = f->input;
     de_ui_attach(f->base.ui, f->base.world);
     de_entity root = ui_node(&f->base, (de_entity){0});
@@ -164,8 +164,10 @@ TEST_F(ui_text_input, keyboard_editor_context_blocks_navigation_submit_and_cance
     ASSERT_TRUE(b->ui->advanced->edit_map.id);
     input_test_key(f->input, DE_KEY_LEFT, true);
     edit_frame(f);
-    de_action_map ui_map=de_action_map_find(f->input,"ui");ASSERT_TRUE(ui_map.id);
-    EXPECT_FLOAT_EQ(de_action_value2(f->input,de_action_find(f->input,ui_map,"navigate")).x,0,0);
+    de_action_map ui_map = de_action_map_find(f->input, "ui");
+    ASSERT_TRUE(ui_map.id);
+    EXPECT_FLOAT_EQ(de_action_value2(f->input, de_action_find(f->input, ui_map, "navigate")).x, 0,
+                    0);
     EXPECT_EQ(editing(f)->caret, 3u);
     EXPECT_EQ(de_ui_focused(b->ui).bits, f->editor.bits);
     input_test_key(f->input, DE_KEY_LEFT, false);
@@ -306,12 +308,24 @@ TEST_F(ui_text_input, public_rtl_hit_test_mouse_drag_double_word_and_horizontal_
     for (u32 i = 0; i < DE_MEM_TAG_BUILTIN_COUNT_; ++i)
         after += de_mem_stats_for_tag(i).alloc_count;
     EXPECT_EQ(after, before);
-    in=editing(f);strcpy(in->buffer,"secret123");in->length=in->caret=9;in->password=true;
-    for(u32 i=0;i<32;++i)edit_frame(f);
-    state=de_entity_get(b->world,f->editor,b->ui->advanced->editor);
-    de_text_style password_style=((const DeUiText*)de_entity_get_const(b->world,f->editor,b->ui->ids.text))->style;
-    de_text_layout *password_layout=NULL;ASSERT_EQ(de_text_layout_build(fonts.t,&(de_text_layout_desc){.utf8={state->display,strlen(state->display)},.style=&password_style},NULL,&password_layout),DE_OK);
-    de_glyph_quad password_quads[16];EXPECT_EQ(de_text_layout_quads(password_layout,password_quads,16),9u);
+    in = editing(f);
+    strcpy(in->buffer, "secret123");
+    in->length = in->caret = 9;
+    in->password = true;
+    for (u32 i = 0; i < 32; ++i)
+        edit_frame(f);
+    state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
+    de_text_style password_style =
+        ((const DeUiText *)de_entity_get_const(b->world, f->editor, b->ui->ids.text))->style;
+    de_text_layout *password_layout = NULL;
+    ASSERT_EQ(de_text_layout_build(
+                  fonts.t,
+                  &(de_text_layout_desc){.utf8 = {state->display, strlen(state->display)},
+                                         .style = &password_style},
+                  NULL, &password_layout),
+              DE_OK);
+    de_glyph_quad password_quads[16];
+    EXPECT_EQ(de_text_layout_quads(password_layout, password_quads, 16), 9u);
     de_text_layout_free(password_layout);
     b->ui->desc.text = NULL;
     de_ui_attach(b->ui, NULL);
@@ -342,3 +356,132 @@ TEST_F(ui_text_input, escape_editor_does_not_close_parent_modal, edit_fx) {
     EXPECT_EQ(b->ui->advanced->active_input.bits, 0u);
     EXPECT_TRUE(ui_node_edit(b, modal)->display != DE_UI_NONE);
 }
+typedef struct editor_source {
+    char text[256], locked[256];
+} editor_source;
+static void editor_count_chunk(const de_query_chunk *chunk, void *user) {
+    *(u32 *)user += chunk->count;
+}
+static void editor_observe(de_system_ctx *ctx) {
+    u32 *count = ctx->user;
+    *count = 0;
+    de_query_each(ctx->world, ctx->queries[0], editor_count_chunk, count);
+}
+TEST_F(ui_text_input, actual_committed_binding_refresh_writeback_preedit_and_readonly, edit_fx) {
+    ui_fx *b = &f->base;
+    static const de_field_info fields[] = {
+        DE_FIELD(editor_source, text, DE_FK_STRING, DE_FIELD_DEFAULT),
+        DE_FIELD(editor_source, locked, DE_FK_STRING, DE_FIELD_DEFAULT | DE_FIELD_READONLY)};
+    de_type_id type;
+    ASSERT_EQ(de_type_register_ex(b->types,
+                                  &(de_type_desc){.name = "EditorSource",
+                                                  .size = sizeof(editor_source),
+                                                  .align = _Alignof(editor_source),
+                                                  .version = 1,
+                                                  .is_pod = true,
+                                                  .fields = fields,
+                                                  .field_count = 2},
+                                  &type, NULL),
+              DE_OK);
+    de_component component = de_component_register(b->world, type, DE_COMP_SNAPSHOT);
+    de_entity source;
+    ASSERT_EQ(de_entity_spawn_with(b->world, &component, 1, &source), DE_OK);
+    editor_source *data = de_entity_get(b->world, source, component);
+    strcpy(data->text, "Captain");
+    strcpy(data->locked, "Locked");
+    de_component binding_id = de_component_find(b->world, "DeUiBinding");
+    ASSERT_TRUE(binding_id.id);
+    DeUiBinding *binding = de_entity_add(b->world, f->editor, binding_id);
+    binding->source = source;
+    strcpy(binding->path, "EditorSource.text");
+    strcpy(binding->property, "text");
+    binding->mode = DE_UI_BIND_TWO_WAY;
+    ui_frame(b);
+    EXPECT_TRUE(strcmp(editing(f)->buffer, "Captain") == 0);
+    const DeUiText *display = de_entity_get_const(b->world, f->editor, b->ui->ids.text);
+    EXPECT_EQ(display->literal.len, 7u);
+    EXPECT_TRUE(memcmp(display->literal.ptr, "Captain", 7) == 0);
+    data = de_entity_get(b->world, source, component);
+    strcpy(data->text, "Pilot");
+    ui_frame(b);
+    EXPECT_TRUE(strcmp(editing(f)->buffer, "Pilot") == 0);
+    display = de_entity_get_const(b->world, f->editor, b->ui->ids.text);
+    EXPECT_EQ(display->literal.len, 5u);
+    u32 changes = 0;
+    de_query_term term = {component, DE_READ};
+    de_query_filter filter = {component, DE_CHANGED};
+    de_query_desc query = {.terms = &term, .term_count = 1, .filters = &filter, .filter_count = 1};
+    ASSERT_TRUE(de_system_add(b->world, &(de_system_desc){.name = "editor.source.observe",
+                                                          .schedule = DE_SCHEDULE_UPDATE,
+                                                          .fn = editor_observe,
+                                                          .user = &changes,
+                                                          .queries = &query,
+                                                          .query_count = 1})
+                    .id);
+    ASSERT_EQ(de_world_run_schedule(b->world, DE_SCHEDULE_UPDATE, .016f, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(b->world, DE_SCHEDULE_UPDATE, .016f, 0), DE_OK);
+    EXPECT_EQ(changes, 0u);
+    editing(f)->caret = editing(f)->length;
+    de_ui_editor *state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
+    state->anchor = editing(f)->caret;
+    input_test_text_edit(f->input, "にほん", 2, 1);
+    edit_frame(f);
+    const editor_source *read = de_entity_get_const(b->world, source, component);
+    EXPECT_TRUE(strcmp(read->text, "Pilot") == 0);
+    ASSERT_EQ(de_world_run_schedule(b->world, DE_SCHEDULE_UPDATE, .016f, 0), DE_OK);
+    EXPECT_EQ(changes, 0u);
+    input_test_text_edit(f->input, "", 0, 0);
+    input_test_text(f->input, "!");
+    edit_frame(f);
+    read = de_entity_get_const(b->world, source, component);
+    EXPECT_TRUE(strcmp(read->text, "Pilot!") == 0);
+    ASSERT_EQ(de_world_run_schedule(b->world, DE_SCHEDULE_UPDATE, .016f, 0), DE_OK);
+    EXPECT_EQ(changes, 1u);
+    binding = de_entity_get(b->world, f->editor, binding_id);
+    strcpy(binding->path, "EditorSource.locked");
+    ui_frame(b);
+    EXPECT_TRUE(strcmp(editing(f)->buffer, "Locked") == 0);
+    editing(f)->caret = editing(f)->length;
+    state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
+    state->anchor = editing(f)->caret;
+    input_test_text(f->input, "?");
+    edit_frame(f);
+    read = de_entity_get_const(b->world, source, component);
+    EXPECT_TRUE(strcmp(read->locked, "Locked") == 0);
+}
+#if defined(DE_UI_TEST_FONTS)
+TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extract, edit_fx) {
+    runtime_fx fonts = {0};
+    runtime_fx_setup(&fonts);
+    ui_fx *b = &f->base;
+    b->ui->desc.text = fonts.t;
+    DeUiText *text = de_entity_get(b->world, f->editor, b->ui->ids.text);
+    text->style = (de_text_style){
+        .font = fonts.latin, .size_px = 20, .line_height = 1, .color = {1, 1, 1, 1}};
+    DeUiTextInput *in = editing(f);
+    strcpy(in->buffer, "secret123");
+    in->length = in->caret = 9;
+    in->password = true;
+    for (u32 i = 0; i < 32; ++i)
+        edit_frame(f);
+    const de_ui_editor *state = de_entity_get_const(b->world, f->editor, b->ui->advanced->editor);
+    de_text_style style = text->style;
+    de_text_layout *layout = NULL;
+    ASSERT_EQ(
+        de_text_layout_build(fonts.t,
+                             &(de_text_layout_desc){
+                                 .utf8 = {state->display, strlen(state->display)}, .style = &style},
+                             NULL, &layout),
+        DE_OK);
+    de_glyph_quad quads[16];
+    EXPECT_EQ(de_text_layout_quads(layout, quads, 16), 9u);
+    de_text_page_info info = {0};
+    EXPECT_EQ(de_text_get_page_info(fonts.t, quads[0].font, quads[0].atlas_page, &info), DE_OK);
+    de_text_layout_free(layout);
+    b->ui->desc.text = NULL;
+    de_ui_attach(b->ui, NULL);
+    de_text_destroy(fonts.t);
+    fonts.t = NULL;
+    runtime_fx_teardown(&fonts);
+}
+#endif
