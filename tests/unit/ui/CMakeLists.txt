@@ -26,3 +26,9 @@ endif()
 if(TARGET test_ui_draw AND DE_BUILD_TOOLS AND DE_HAS_RENDER)
  target_compile_definitions(test_ui_draw PRIVATE "DE_UI_DRAW_ASSET_ROOT=\"${DE_ROOT_DIR}\"")
 endif()
+
+# DENG-321 reflection paths, generic CHANGED writeback and idle HUD costs.
+if(TARGET de_ui)
+ de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ target_include_directories(test_ui_binding PRIVATE "${DE_ROOT_DIR}/src")
+endif()

@@ -25,3 +25,9 @@ if(TARGET de_ui)
  target_sources(de_ui PRIVATE "${_ui_default_style}" widgets/text.c widgets/image.c widgets/button.c widgets/toggle.c widgets/slider.c widgets/progress.c input/pointer.c)
  target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+# DENG-321 reflection-driven retained HUD data binding.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE binding/binding.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_BINDING=1)
+endif()
