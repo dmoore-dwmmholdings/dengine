@@ -27,9 +27,10 @@ typedef struct dn_fixture {
     de__denoise *owner;
     de_arena *arena;
     de_rg *graph;
-    de_gpu_texture signal, depth, normal, motion, material;
+    de_gpu_texture signal, depth, normal, motion, material, key;
     de_gpu_buffer upload, readback;
-    float data[5][PIXELS * 4];
+    float data[6][PIXELS * 4];
+    bool use_key;
     de_denoise_result result;
     de_rg_resource identity;
     u64 frame;
@@ -68,14 +69,15 @@ static void dn_fixture_setup(dn_fixture *f) {
     f->normal = make_texture(f, DE_FMT_RGBA32_FLOAT);
     f->motion = make_texture(f, DE_FMT_RG32_FLOAT);
     f->material = make_texture(f, DE_FMT_RG32_FLOAT);
-    f->upload = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 5 * PIXELS * 16,
+    f->key = make_texture(f, DE_FMT_RG32_FLOAT);
+    f->upload = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 6 * PIXELS * 16,
                                                                       .usage = DE_USAGE_COPY_SRC,
                                                                       .memory = DE_MEM_UPLOAD});
     f->readback = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 131072,
                                                                         .usage = DE_USAGE_COPY_DST,
                                                                         .memory = DE_MEM_READBACK});
     ASSERT_TRUE(f->signal.id && f->depth.id && f->normal.id && f->motion.id && f->material.id &&
-                f->upload.id && f->readback.id);
+                f->key.id && f->upload.id && f->readback.id);
     f->width = W;
     f->height = H;
     const f32 n[3] = {0, 0, 1};
@@ -106,18 +108,20 @@ static void dn_fixture_teardown(dn_fixture *f) {
         de_gpu_texture_destroy(f->device, f->normal);
         de_gpu_texture_destroy(f->device, f->motion);
         de_gpu_texture_destroy(f->device, f->material);
+        de_gpu_texture_destroy(f->device, f->key);
         de_gpu_buffer_destroy(f->device, f->upload);
         de_gpu_buffer_destroy(f->device, f->readback);
         de_gpu_device_destroy(f->device);
     }
 }
 static void upload(dn_fixture *f) {
-    const de_gpu_texture textures[] = {f->signal, f->depth, f->normal, f->motion, f->material};
-    const u32 channels[] = {4, 1, 4, 2, 2};
+    const de_gpu_texture textures[] = {f->signal, f->depth,    f->normal,
+                                       f->motion, f->material, f->key};
+    const u32 channels[] = {4, 1, 4, 2, 2, 2};
     u8 *mapped = de_gpu_buffer_map(f->device, f->upload);
     de_gpu_cmd *cmd =
         de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "Canonical encoded denoiser input upload");
-    for (u32 i = 0; i < 5; ++i) {
+    for (u32 i = 0; i < 6; ++i) {
         u64 offset = (u64)i * PIXELS * 16;
         memcpy(mapped + offset, f->data[i], PIXELS * channels[i] * 4);
         de_gpu_barrier b = {
@@ -154,6 +158,8 @@ static de_denoise_result build(dn_fixture *f, de_view view, u64 signal, bool res
     frame.inputs.motion = de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
     frame.inputs.material =
         identity.id ? identity : de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+    if (f->use_key)
+        frame.inputs.validation_key = de_rg_import_texture(f->graph, f->key, DE_ACCESS_SHADER_READ);
     de_denoise_ctx *ctx = NULL;
     ASSERT_EQ(denoise_begin(f->owner, &frame,
                             &(de_denoise_signal_desc){.identity = signal,
@@ -475,4 +481,60 @@ TEST_F(denoise_framework, clamp_and_determinism, dn_fixture) {
     begin(f);
     run(f, build(f, (de_view){1}, 3, true, true, (de_rg_resource){0}));
     EXPECT_EQ(memcmp(baseline, color(f), sizeof baseline), 0);
+}
+
+TEST_F(denoise_framework, variance_respects_material_and_light_identity_boundaries, dn_fixture) {
+    for (u32 mode = 0; mode < 3; ++mode) {
+        f->use_key = mode != 0;
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = 0; x < W; ++x) {
+                u32 i = y * W + x;
+                f32 value = (x < W / 2 ? 1.f : 3.f) + (hash32(i) % 101) / 250.f;
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][i * 4 + c] = value;
+                f->data[4][i * 2] = 11;
+                f->data[4][i * 2 + 1] = mode == 0 && x >= W / 2 ? 2 : 1;
+                f->data[5][i * 2] = mode == 1 && x >= W / 2 ? 31 : 17;
+                f->data[5][i * 2 + 1] = mode == 2 && x >= W / 2 ? 2 : 1;
+            }
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, true, true, (de_rg_resource){0}));
+        f32 baseline_variance[PIXELS], baseline_color[PIXELS];
+        memcpy(baseline_variance, (u8 *)color(f) + 49152, sizeof baseline_variance);
+        for (u32 i = 0; i < PIXELS; ++i)
+            baseline_color[i] = color(f)[i * 4];
+        /* Independent sample variance on the left boundary has no samples from
+         * the other identity, despite matching geometric depth and normals. */
+        f64 sum = 0, squared = 0;
+        u32 count = 0;
+        for (u32 y = 14; y <= 18; ++y)
+            for (u32 x = 29; x < 32; ++x) {
+                f64 value = f->data[0][(y * W + x) * 4];
+                sum += value;
+                squared += value * value;
+                ++count;
+            }
+        f64 expected = squared / count - (sum / count) * (sum / count);
+        EXPECT_FLOAT_EQ(baseline_variance[16 * W + 31], expected, 2e-5);
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = W / 2; x < W; ++x)
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][(y * W + x) * 4 + c] += 27;
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, true, true, (de_rg_resource){0}));
+        f32 *variance = (f32 *)((u8 *)color(f) + 49152);
+        f32 variance_delta = 0, color_delta = 0;
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = 0; x < W / 2; ++x) {
+                u32 i = y * W + x;
+                variance_delta = fmaxf(variance_delta, fabsf(variance[i] - baseline_variance[i]));
+                color_delta = fmaxf(color_delta, fabsf(color(f)[i * 4] - baseline_color[i]));
+            }
+        printf("identity boundary mode%u: variance delta%g filtered delta%g\n", mode,
+               variance_delta, color_delta);
+        EXPECT_FLOAT_EQ(variance_delta, 0, 0);
+        EXPECT_FLOAT_EQ(color_delta, 0, 0);
+    }
 }
