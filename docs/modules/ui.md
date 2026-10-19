@@ -271,6 +271,50 @@ The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world wi
 and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
 Later advanced-widget walkthrough extensions use the same table and recording schema.
 
+### Advanced controls (DENG-319)
+
+`DeUiTextInput` owns at most255 UTF-8 bytes plus its terminator. The runtime derives
+length from the bounded buffer, snaps caret/selection to the public S28 extended-grapheme
+boundaries, and keeps preedit in a separate display component. A committed input event emits
+CHANGED; preedit never changes the authored buffer. `DeUiText.literal` is the display view
+and may contain password bullets or composition, so bindings must read the reflected
+`DeUiTextInput.buffer` rather than the display. Clipboard copying is disabled for passwords.
+Public layout hit-test/caret APIs supply bidi-aware mouse positioning and caret geometry;
+single-line controls scroll their physical text origin while preserving the inherited clip.
+The public grapheme wrapper uses stack scratch through255bytes, temporary heap for larger
+inputs, returns required boundary count, and documents invalid UTF-8/capacity/error behavior.
+
+The keyboard-only blocking `ui.text_edit` action context is created once at attach. It
+consumes editor navigation/Enter/Space/Escape while leaving gamepad bindings available.
+Push/pop follow the existing S21 next-frame context semantics. Escape suspends editing even
+when a modal restores the same logical focus; explicit activation resumes it. IME candidate
+areas use the public input-to-platform bridge in logical window points. Headless platforms
+retain editing state while the OS keyboard/candidate APIs report their normal unsupported result.
+
+Dropdown options are localization IDs. A real modal popup flips upward when needed; outside
+click/cancel closes it and selection emits one CHANGED. Scroll controls clip children, clamp
+physical offsets, integrate decaying wheel momentum, draw draggable bars, and expose
+`de_ui_scroll_offset` and child-based `de_ui_scroll_to`, plus the navigation scroll-into-view hook. A list materializes at most
+ceil(viewport/item-height)+2 rows, independently of100000-item data size. Configured prefabs
+are instantiated through the real asset API. Rows rotate their index mapping and emit
+BIND_ITEM only when their represented index changes; applications populate those row entities.
+Tabs create header buttons and hide inactive child pages. Tooltips wait for hover/logical
+focus, anchor near the pointer or target, clamp via popup safe-area layout, and hide on press/leave.
+
+`ui.edit` runs in PreUpdate after pointer routing. `ui.advanced` reconciles structures and
+refreshes borrowed display views in PostUpdate before basic widgets, focus, style and layout.
+The nullable `refresh_text` widget-table hook lets bindings refresh display after committed
+buffer writes without depending on private advanced-control structures. Runtime components
+own no external heap pointers, and the fixed entity scratch buffer is allocated at UI creation.
+
+Known deferred finding DENG-521: first pre-layout virtual-list reconciliation observes zero
+UI scale and triggers a NaN-to-u32 conversion under UBSan. Its strict regression remains.
+The other advanced sanitizer cases pass. Both actual Metal advanced scenes pass strict FLIP
+comparison with mean/p99/max0 and visual review. DENG-508 limits shader-validation startup;
+captures retain the debug layer with shader validation disabled. DENG-512 rejects runtime
+atlas page metadata (including cold password bullets), so its strict regression remains
+and the visual fixture explicitly cooks the real bullet glyph. Existing font seams remain513.
+
 ### Data binding (DENG-321)
 
 Attach `DeUiBinding` to a widget, with its source entity, a path such as
@@ -312,3 +356,69 @@ Focused binding tests cover all numeric kinds, extreme64-bit text, every propert
 nested/array paths, `42 / 100`, actual slider/toggle writeback plus changed queries,
 readonly fields, schema/metadata replacement, warning-once errors, source despawn,
 real cooked locale publication, and1000 idle bindings within0.2ms in Dev.
+
+### World panels and pixel UI (DENG-322)
+
+Attach `DeUiWorldPanel` and a normal `DeTransform` to a UI root. `size_m` defines
+its physical XY plane and `pixels_per_meter` defines its independent layout
+extent. A 2×1 metre panel at100 pixels/metre lays out as200×100 pixels, without
+changing screen roots or other panels. Panel-local origin is its upper-left;
+the transform positions its centre. `lit` selects the renderer's existing
+clustered direct/indirect lighting and `depth_test` selects reverse-Z scene
+occlusion. With depth disabled, the panel joins the final overlay group.
+
+World panels emit direct rounded/image/text quads, using the same MSDF and bitmap
+sampling as screen UI. They participate in the renderer's ordinary transparent
+sort, including interleaving with translucent meshes. Sorting is per root, so
+intersecting surfaces retain the renderer's object-sort limitation. Geometry and
+asset references come from the immutable Extract packet; render callbacks read
+neither ECS nor asset state. Double-precision panel positions are reduced by the
+matching camera origin before conversion to GPU floats.
+
+Pointer routing unprojects the selected view's physical pointer position, tests
+each transformed panel plane, and passes panel-local pixels to the normal widget
+hit test. Existing screen widgets take precedence; a captured world widget keeps
+its panel routing while dragged. Focus and activation use the existing widget
+and navigation paths. Set `de_ui_desc.view` to select a view; zero uses the main
+view for world pointer projection.
+
+For pixel UI, set `de_ui_desc.pixel_art` and enable integer pixel rendering on
+the selected view. Layout uses the view's internal pixel grid and an integer
+`ui.scale`; rectangle, clip and glyph edges snap to that grid. Bitmap font pages
+use nearest sampling; MSDF fonts are not emitted in this mode. The pixel hook
+composites after internal tonemapping and before palette conversion/upscale, so
+UI shares scene palette, scale and letterboxing. Pointer mapping uses the actual
+fitted content rectangle. A resize/settings mismatch between PostUpdate and
+Extract safely skips that packet until layout catches up. Ordinary screen UI
+with no explicit view retains its existing output-resolution behavior.
+
+Focused CPU tests cover per-root extent isolation, rotated/scaled ray-plane
+mapping, a projected button at100 km, immutable panel poses, integer snapping,
+letterbox routing and advisory-resize rejection. A Metal readback of the actual
+world UI consumer returns RGB0/212/0 at the panel centre; translating both camera
+and panel by100 km changes zero image codes beyond one step. The static2000-node
+HUD test measures1000 complete UI frames plus Extract with zero heap allocations:
+0.321ms mean in Dev on the tested Apple M5 Pro host; this is not an M1 hardware
+qualification. World-root popup clamping still uses screen bounds (DENG-523);
+advanced world popups remain a deferred limitation.
+
+The seven Metal/Base world/pixel references use the original mean0.001/p990.015
+limits. Pixel output additionally checks exact equality within every4×4 block;
+the100km MSDF image matches the origin image with mean/p99/max zero after
+camera translation is cancelled before local glyph geometry is projected.
+Five older screen-UI references currently fail identically on the pre-322
+baseline because of a text-style tint difference; their references are preserved.
+The existing eleven draw regressions pass, including real native brightness,
+Extract-token selection and image-pin retirement. Headless syntax and public
+header/layering checks pass. Vulkan/D3D12 native captures remain hardware checks.
+
+S29 exit verification now also runs a110-tick real gamepad-only advanced menu in
+`test_menu_replay.c`, preserving the original40-tick basic menu. The game authors
+public components/tab order and populates real virtual rows through BIND_ITEM;
+all activation uses actual resolved S21 actions and the production widget table.
+It visits13 main/generated controls and all6 pooled list buttons, activates the
+editor, selects a real dropdown option, exercises tabs and both generated headers,
+reveals a fully visible offscreen focused button through scrolling, then cancels
+and confirms exit. The saved `menu_replay/advanced_menu.deir` replays in a fresh
+UI/world/input with no device or event injection; per-tick focus, event/value hash,
+action checksum, editor/buffer hash, selection, tab and scroll state agree.

@@ -1,0 +1,5 @@
+[strings]
+easy = "Easy"
+normal = "Normal"
+hard = "Hard"
+help = "A tooltip stays within the safe area."

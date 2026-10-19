@@ -5,7 +5,7 @@
 TEST_F(ui_widgets, basic_entry_table_submit_toggle_slider_and_null_scroll, ui_fx) {
     de_ui_widget_table *table = de_ui__widget_table(f->ui);
     ASSERT_TRUE(table);
-    EXPECT_TRUE(table->scroll_into_view == NULL);
+    EXPECT_TRUE(table->scroll_into_view != NULL);
     de_entity e = ui_node(f, (de_entity){0});
     DeUiButton *button = de_entity_add(f->world, e, f->ui->widgets->button);
     button->on_click = de_name_from("play");

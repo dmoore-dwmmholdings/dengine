@@ -275,3 +275,48 @@ void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
         breaks[i] = (u8)allow;
     }
 }
+
+u32 de_text_grapheme_offsets(de_str text, u32 *out, u32 capacity) {
+    if ((!text.ptr && text.len) || (!out && capacity)) {
+        DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid grapheme boundary arguments");
+        return 0;
+    }
+    if (text.len > (u64)INT32_MAX - 1) {
+        DE_FAIL(DE_ERR_UNSUPPORTED, "grapheme input exceeds signed segmenter range");
+        return 0;
+    }
+    u32 stack_cp[256], stack_offsets[257];
+    u8 stack_breaks[257];
+    u32 *cp = stack_cp, *offsets = stack_offsets;
+    u8 *breaks = stack_breaks;
+    const de_allocator *allocator = de_heap_allocator();
+    u64 bytes = (text.len + 1) * 9;
+    void *scratch = NULL;
+    if (text.len > 255) {
+        scratch = DE_ALLOC(allocator, bytes, _Alignof(u32), DE_MEM_UI);
+        if (!scratch) {
+            DE_FAIL(DE_ERR_OUT_OF_MEMORY, "grapheme scratch allocation failed");
+            return 0;
+        }
+        cp = scratch;
+        offsets = cp + text.len + 1;
+        breaks = (u8 *)(offsets + text.len + 1);
+    }
+    u32 at = 0, count = 0;
+    while (at < text.len) {
+        offsets[count] = at;
+        cp[count++] = de__text_utf8(text.ptr, (u32)text.len, &at);
+    }
+    offsets[count] = (u32)text.len;
+    de__text_graphemes(cp, count, breaks);
+    u32 required = 0;
+    for (u32 i = 0; i <= count; ++i)
+        if (breaks[i]) {
+            if (required < capacity)
+                out[required] = offsets[i];
+            ++required;
+        }
+    if (scratch)
+        DE_FREE(allocator, scratch, bytes);
+    return required;
+}

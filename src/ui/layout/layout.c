@@ -31,7 +31,7 @@ void de_ui__arrange(de_ui_layout *layout, u32 index, de_vec4 rect, bool force) {
         hide(layout, index);
         return;
     }
-    if (node->safe_area) {
+    if (node->safe_area && !layout->world_root) {
         f32 x = fmaxf(rect.x, (f32)ui->safe.left), y = fmaxf(rect.y, (f32)ui->safe.top),
             right = fminf(rect.x + rect.z, (f32)ui->width - ui->safe.right),
             bottom = fminf(rect.y + rect.w, (f32)ui->height - ui->safe.bottom);
@@ -60,6 +60,8 @@ void de_ui__arrange(de_ui_layout *layout, u32 index, de_vec4 rect, bool force) {
     left += border;
     de_vec4 content = {rect.x + left, rect.y + top, fmaxf(0, rect.z - left - pr),
                        fmaxf(0, rect.w - top - pb)};
+    if (ui->content_geometry)
+        ui->content_geometry(ui, record->entity, &content);
     if (node->display == DE_UI_GRID)
         de_ui__grid(layout, index, content);
     else

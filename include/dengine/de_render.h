@@ -668,6 +668,9 @@ DE_API bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_i
 /** Main Extract after de.render.extract_views. Submission frame/ring are UINT64_MAX/UINT32_MAX
  * until rendering. View configuration and pixel fit stay frozen for this exact Extract token. */
 DE_API bool de_renderer_extract_view_info(de_renderer *r, de_view view, de_view_frame_info *out);
+/** Main-thread advisory layout query of current locked configuration; zero selects main view.
+ * No submission or camera matrices are promised. Extract metadata remains authoritative. */
+DE_API bool de_view_layout_info(de_renderer *r, de_view view, de_view_frame_info *out);
 
 typedef struct de_forward_context de_forward_context;
 typedef struct de_forward_item {
@@ -699,6 +702,10 @@ DE_API de_result de_render_remove_forward_participant(de_renderer *r, de_forward
 DE_API bool de_render_forward_view_info(const de_forward_context *context, de_view_frame_info *out);
 DE_API de_rg_resource de_render_forward_color(const de_forward_context *context);
 DE_API de_rg_resource de_render_forward_depth(const de_forward_context *context);
+/** Build callback only. Fence-owned frame storage (no heap); alignment must be a power of two
+ * <=4096. Zero/overflow/invalid alignment or exhausted arena returns NULL with error context. */
+DE_API void *de_render_forward_alloc(const de_forward_context *context, size_t bytes,
+                                     size_t alignment);
 /** Declare on each participant pass. Includes the same lighting/shadow/IBL/GI dependencies as
  * ordinary forward meshes, and read/write colour ordering. Depth is optional, never written. */
 DE_API void de_render_forward_declare(de_rg_pass *pass, const de_forward_context *context,

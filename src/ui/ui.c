@@ -2,6 +2,8 @@
 #include "layout/layout_internal.h"
 #include "style/stylesheet_internal.h"
 #include "widgets/widgets_internal.h"
+#include "widgets/advanced_internal.h"
+#include "world/world_internal.h"
 #if defined(DE_UI_NAVIGATION)
 #include "input/focus_internal.h"
 #endif
@@ -156,6 +158,7 @@ static void detach(de_ui *ui) {
 #if defined(DE_UI_NAVIGATION)
         de_ui__focus_detach(ui);
 #endif
+        de_ui__advanced_detach(ui);
         de_ui__widgets_detach(ui);
         de_ui__style_detach(ui);
 #if defined(DE_UI_RETAINED_RENDER)
@@ -242,6 +245,8 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
         de_ui_destroy(ui);
         return widgets_result;
     }
+    de_result advanced_result = de_ui__advanced_init(ui);
+    if (advanced_result != DE_OK) { de_ui_destroy(ui); return advanced_result; }
 #if defined(DE_UI_NAVIGATION)
     de_result focus_result = de_ui__focus_init(ui);
     if (focus_result != DE_OK) {
@@ -272,6 +277,7 @@ void de_ui_destroy(de_ui *ui) {
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_shutdown(ui);
 #endif
+    de_ui__advanced_shutdown(ui);
     de_ui__widgets_shutdown(ui);
     de_ui__style_shutdown(ui);
     detach(ui);
@@ -351,6 +357,7 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     }
 #endif
     de_ui__widgets_attach(ui);
+    de_ui__advanced_attach(ui);
 #if defined(DE_UI_NAVIGATION)
     de_ui__focus_attach(ui);
 #endif
@@ -376,7 +383,7 @@ void de_ui__layout_system(de_system_ctx *ctx) {
     de_ui *ui = ctx->user;
     ++ui->frame;
     memset(&ui->stats, 0, sizeof ui->stats);
-    if (!ui->viewport_override) {
+    if (!ui->viewport_override && !ui->desc.pixel_art && !ui->desc.view.id) {
         de_window window = ui->desc.window;
         if (window.id) {
             u32 width = 0, height = 0;
@@ -399,7 +406,10 @@ void de_ui__layout_system(de_system_ctx *ctx) {
         }
 #endif
     }
-    f32 scale = (f32)ui->height / ui->desc.reference_height * (f32)de_cvar_float(ui->scale_cvar);
+    (void)de_ui__pixel_prepare(ui);
+    f32 scale = ui->desc.pixel_art ? fmaxf(1, roundf((f32)de_cvar_float(ui->scale_cvar)))
+                                   : (f32)ui->height / ui->desc.reference_height *
+                                         (f32)de_cvar_float(ui->scale_cvar);
     if (!isfinite(scale) || scale <= 0)
         scale = 1;
     if (scale != ui->scale)
@@ -444,7 +454,7 @@ void de_ui__layout_system(de_system_ctx *ctx) {
         de_arena_reset(ui->scratch);
         arena = ui->scratch;
     }
-    de_ui_layout layout = {ui, de_arena_allocator(arena)};
+    de_ui_layout layout = {.ui = ui, .allocator = de_arena_allocator(arena)};
     for (u32 i = 0; i < ui->record_count; ++i)
         if (ui->records[i].alive && ui->records[i].dirty)
             ++ui->stats.dirty_nodes;
@@ -455,9 +465,16 @@ void de_ui__layout_system(de_system_ctx *ctx) {
         if (de_ui__find(ui, r->parent) == DE_UI_NONE_INDEX &&
             !de_entity_has(ui->world, r->entity, ui->ids.popup)) {
             de_vec4 rect = {0, 0, (f32)ui->width, (f32)ui->height}, absolute;
-            if (de_ui__absolute(&layout, i, rect, &absolute))
+            f32 previous_scale = ui->scale;
+            bool world_root = de_ui__world_root_extent(ui, r->entity, &rect);
+            layout.world_root = world_root;
+            if (world_root)
+                ui->scale = 1;
+            if (!world_root && de_ui__absolute(&layout, i, rect, &absolute))
                 rect = absolute;
             de_ui__arrange(&layout, i, rect, ui->viewport_dirty);
+            ui->scale = previous_scale;
+            layout.world_root = false;
         }
     }
     de_ui__popups(&layout);

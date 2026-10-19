@@ -267,6 +267,15 @@ de_result de_text_input_start(de_input *in, const de_platform_text_area *area) {
     return DE_OK;
 }
 
+de_result de_text_input_area(de_input *in, const de_platform_text_area *area) {
+    if (!in || !area)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "IME area requires input and area");
+    de_window window = input_window(in);
+    if (!window.id)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "IME area has no input window");
+    return de_platform_text_input_area(window, area);
+}
+
 void de_text_input_stop(de_input *in) {
     if (in == NULL)
         return;

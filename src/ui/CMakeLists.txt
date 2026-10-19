@@ -26,6 +26,15 @@ if(TARGET de_ui)
  target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE widgets/advanced.c widgets/text_input.c widgets/dropdown.c widgets/scroll_view.c widgets/virtual_list.c widgets/tabs.c widgets/tooltip.c)
+endif()
+
+# DENG-322 world panels and internal-grid pixel UI.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c pixel/pixel_ui.c)
+endif()
+
 # DENG-320: replay-aware keyboard/gamepad focus navigation.
 if(TARGET de_ui)
  target_sources(de_ui PRIVATE input/focus.c input/spatial_nav.c input/ui_actions.c)

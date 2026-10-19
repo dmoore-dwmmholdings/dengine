@@ -76,3 +76,14 @@ depth-tested output matches the wall-only reference. Header C11/C++17 checks pas
 Vulkan and D3D12 execution remain hardware qualifications. This provider
 checkpoint does not complete DENG-322's UI consumer, pointer or world/pixel UI
 goldens.
+
+`de_view_layout_info` is an advisory main-thread query for PostUpdate layout;
+view zero selects the renderer's main view. It uses the same fitted content
+rectangle calculation as rendering. A consumer must reconcile this advisory grid
+with its exact Extract metadata before publishing geometry. It must skip a
+mismatched packet rather than combine next-frame layout with an older camera.
+
+`de_render_forward_alloc` provides bounded, aligned temporary storage from the
+current renderer frame arena. Zero bytes, non-power-of-two alignment, alignment
+above 4096, overflow and exhaustion return NULL. The context and allocations
+last through that submission's fence; callbacks must not retain them beyond it.

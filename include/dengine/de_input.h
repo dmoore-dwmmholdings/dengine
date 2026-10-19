@@ -528,6 +528,8 @@ typedef struct de_text_input_state {
  *         DE_ERR_UNSUPPORTED when headless).
  */
 DE_API de_result de_text_input_start(de_input *in, const de_platform_text_area *area);
+/** Move an active IME candidate area without restarting composition. Logical window points. */
+DE_API de_result de_text_input_area(de_input *in, const de_platform_text_area *area);
 /** Stops text input and clears the composition. */
 DE_API void de_text_input_stop(de_input *in);
 /** This frame's text and the current composition. Committed text is collected also when text
