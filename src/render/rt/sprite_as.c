@@ -6,7 +6,7 @@ typedef struct sprite_geometry {
     de_gpu_buffer positions, indices, ranges;
     de_gpu_accel blas;
     u32 vertex_count, index_count;
-    const de_render_texture *texture;
+    de_gpu_texture texture;
     bool seen;
 } sprite_geometry;
 typedef struct de__sprite_as {
@@ -117,7 +117,9 @@ de_result de__sprite_as_prepare(de_renderer *r) {
         if (!proxy_region(sprite, texture))
             continue;
         u32 index = 0;
-        while (index < s->count && s->proxies[index].texture != texture)
+        /* CPU asset records may be freed and recycled while RT is disabled. The RHI
+         * handle carries the loaded texture generation and does not retain that address. */
+        while (index < s->count && s->proxies[index].texture.id != texture->texture.id)
             ++index;
         if (index == s->count) {
             if (s->count == s->capacity) {
@@ -137,7 +139,7 @@ de_result de__sprite_as_prepare(de_renderer *r) {
             const de_cooked_sprite_proxy *proxy = texture->sprite_proxy;
             DE_TRY(build_geometry(r, &s->proxies[index], &proxy->positions[0][0],
                                   proxy->vertex_count, proxy->indices, proxy->index_count, true));
-            s->proxies[index].texture = texture;
+            s->proxies[index].texture = texture->texture;
             ++s->count;
         }
         s->proxies[index].seen = true;
@@ -168,7 +170,7 @@ bool de__sprite_as_metadata(de_renderer *r, u32 mesh_slot, de__rt_mesh_gpu *out)
     const de_render_texture *texture = de__gpu_scene_texture_record(r->gpu_scene, sprite->texture);
     if (sprite->thickness > 0 && proxy_region(sprite, texture))
         for (u32 i = 0; i < s->count; ++i)
-            if (s->proxies[i].texture == texture) {
+            if (s->proxies[i].texture.id == texture->texture.id) {
                 geometry = &s->proxies[i];
                 kind = 2;
                 break;

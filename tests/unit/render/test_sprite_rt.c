@@ -136,6 +136,32 @@ TEST_F(sprite_rt, cooked_proxy_shadow_and_flip, sprite_rt_fixture) {
     ASSERT_TRUE(hits[0].t > 0);
     ASSERT_TRUE(hits[1].t < 0);
 }
+TEST_F(sprite_rt, recycled_texture_record_rebuilds_proxy_geometry, sprite_rt_fixture) {
+    rt_fixture *r = &f->rt;
+    const f32 first[8] = {1, 1, 1, 0, 1, 1, 1, 1};
+    const f32 second[8] = {1, 1, 1, 1, 1, 1, 1, 0};
+    ASSERT_EQ(de_sprite_proxy_build(&r->alloc, first, 2, 1, .5f, &f->proxy), DE_OK);
+    f->texture_record.sprite_proxy = &f->proxy;
+    f->sprites[0].thickness = .1f;
+    de__rt_hit *hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t < 0 && hits[1].t > 0);
+    /* Model unload/reload between RT preparations: both CPU record and proxy storage
+     * are deliberately reused while the replacement has a new RHI generation. */
+    de_gpu_texture old = r->texture;
+    de_gpu_wait_idle(r->d);
+    de_gpu_texture_destroy(r->d, old);
+    r->texture = de_gpu_texture_create(r->d, &(de_gpu_texture_desc){.width = 2,
+                                                                    .height = 1,
+                                                                    .format = DE_FMT_RGBA8_UNORM,
+                                                                    .usage = DE_USAGE_SAMPLED});
+    ASSERT_TRUE(r->texture.id);
+    ASSERT_NE(r->texture.id, old.id);
+    f->texture_record.texture = r->texture;
+    ASSERT_EQ(de_sprite_proxy_build(&r->alloc, second, 2, 1, .5f, &f->proxy), DE_OK);
+    hits = frame_rt(r);
+    EXPECT_TRUE(hits[0].t > 0);
+    EXPECT_TRUE(hits[1].t < 0);
+}
 TEST(sprite_proxy, marching_squares_deterministic_format) {
     f32 rgba[8 * 8 * 4] = {0};
     for (u32 y = 1; y < 7; ++y)
