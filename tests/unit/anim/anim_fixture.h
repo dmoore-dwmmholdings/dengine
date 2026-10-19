@@ -48,7 +48,7 @@ static anim_blob skeleton_blob(u32 joints) {
         char name[24];
         snprintf(name, sizeof name, "joint%u", j);
         de_cooked_put_u64(p + names + j * 8, de_hash64_str(name));
-        de_cooked_put_f32(p + rest + j * 40 + 4, j ? 1 : 0);
+        de_cooked_put_f32(p + rest + j * 40 + 4, j ? 1.f : 0.f);
         de_cooked_put_f32(p + rest + j * 40 + 24, 1);
         for (u32 c = 0; c < 3; ++c)
             de_cooked_put_f32(p + rest + j * 40 + 28 + c * 4, 1);

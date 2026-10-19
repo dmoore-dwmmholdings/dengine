@@ -120,7 +120,9 @@ jobs:
 
       - name: Build
         shell: bash
-        run: cmake --build --preset "${PRESET}"
+        # All presets use Ninja. Report independent compile errors together so portability
+        # fixes do not require a separate CI round trip for each failing translation unit.
+        run: cmake --build --preset "${PRESET}" -- -k 0
 
       - name: Test
         shell: bash
