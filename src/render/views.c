@@ -846,6 +846,60 @@ void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
     }
     de_mutex_unlock(&vs->lock);
 }
+bool de_view_layout_info(de_renderer *r, de_view view, de_view_frame_info *out) {
+    if (out)
+        memset(out, 0, sizeof *out);
+    de__views *vs = views_of(r);
+    if (!vs || !out)
+        return false;
+    u32 width, height;
+    de_renderer_output_size(r, &width, &height);
+    de_render_settings settings;
+    de_mutex_lock(&r->lock);
+    settings = r->settings;
+    de_mutex_unlock(&r->lock);
+    de_mutex_lock(&vs->lock);
+    if (!view.id)
+        view = vs->main_view;
+    view_main *m = main_of(vs, view);
+    if (!m) {
+        de_mutex_unlock(&vs->lock);
+        return false;
+    }
+    if (m->target.id) {
+        const de__gpu_texture *t = de__gpu_get_texture(r->dev, m->target);
+        if (!t) {
+            de_mutex_unlock(&vs->lock);
+            return false;
+        }
+        width = t->width;
+        height = t->height;
+    }
+    if (!width || !height) {
+        de_mutex_unlock(&vs->lock);
+        return false;
+    }
+    de__view_frame vf = {.renderer = r, .view = view, .layer_mask = m->layer_mask};
+    viewport_px(m->viewport, width, height, vf.viewport_px);
+    settings = effective_settings(r, m, &settings);
+    vf.width = round_px(vf.viewport_px[2] * settings.render_scale, 1, 16384);
+    vf.height = round_px(vf.viewport_px[3] * settings.render_scale, 1, 16384);
+    vf.output_width = vf.width;
+    vf.output_height = vf.height;
+    if (m->pixel_art) {
+        vf.pixel_art = &m->pixel;
+        u32 border = m->pixel.smooth_subpixel_scroll ? 2 : 0;
+        vf.width = m->pixel.internal_width + border;
+        vf.height = m->pixel.internal_height + border;
+        vf.output_width = vf.viewport_px[2];
+        vf.output_height = vf.viewport_px[3];
+    }
+    *out = metadata(&vf);
+    out->frame_index = UINT64_MAX;
+    out->ring_index = UINT32_MAX;
+    de_mutex_unlock(&vs->lock);
+    return true;
+}
 bool de_renderer_extract_view_info(de_renderer *r, de_view view, de_view_frame_info *out) {
     if (out)
         memset(out, 0, sizeof *out);

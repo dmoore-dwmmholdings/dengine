@@ -1,0 +1,6 @@
+[project]
+asset_root = "../../../.."
+version = 1
+[assets]
+"ui/world_font" = {type="font", source="tests/data/fonts/latin/NotoSans.ttf", mode="msdf", charset="ascii", em_px=48, px_range=6, page_size=1024}
+"ui/pixel_font" = {type="font", source="tests/golden/ui/pixel_ui/diagnostic.fnt", mode="bitmap"}

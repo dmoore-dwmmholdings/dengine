@@ -494,3 +494,52 @@ size = [1280,720]
 tiers = ["base"]
 threshold_mean = 0.001
 threshold_p99 = 0.015
+
+[scene.ui_world_1m]
+description = "Physical1.6m UI panel with real MSDF at1m"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_world_20m]
+description = "Same physical MSDF panel at20m with telephoto framing"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_world_occluded]
+description = "Actual opaque wall occludes depth-tested world UI"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_world_overlay]
+description = "Same actual wall with depth-disabled UI overlay"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_world_lit]
+description = "World UI under a real colored clustered point light"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_world_origin_100km]
+description = "Camera-relative MSDF panel shifted100km from origin"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_pixel_four]
+description = "Real bitmap UI at480x270 with exact4x integer upscale"
+size = [1920,1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015

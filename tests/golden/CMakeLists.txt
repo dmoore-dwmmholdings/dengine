@@ -185,3 +185,6 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ui_cache")
 
 # DENG-318 actual embedded-default widget state sheet.
 target_sources(de_golden PRIVATE ui/widgets_basic/widgets_scene.c)
+
+# DENG-322 real world geometry/MSDF and internal-grid bitmap UI captures.
+target_sources(de_golden PRIVATE ui/world_panel/world_scenes.c ui/pixel_ui/pixel_scene.c)

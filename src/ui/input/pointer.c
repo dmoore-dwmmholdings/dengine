@@ -1,6 +1,7 @@
 #include "ui/widgets/widgets_internal.h"
 #include "ui/style/stylesheet_internal.h"
 #include "ui/render/draw_list.h"
+#include "ui/world/world_internal.h"
 #include <math.h>
 static bool contains(de_vec4 r, de_vec2 p) {
     return r.z > 0 && r.w > 0 && p.x >= r.x && p.y >= r.y && p.x < r.x + r.z && p.y < r.y + r.w;
@@ -140,6 +141,11 @@ void de_ui__pointer_system(de_system_ctx *ctx) {
             point.y *= (f32)pixel_h / logical_h;
         }
     }
+    if (de_ui__world_pointer(ui, point, de_mouse_pressed(ui->desc.input, DE_MOUSE_LEFT),
+                             de_mouse_released(ui->desc.input, DE_MOUSE_LEFT),
+                             de_mouse_down(ui->desc.input, DE_MOUSE_LEFT)))
+        return;
+    point = de_ui__screen_pointer(ui, point);
     de_ui__pointer_route(ui, (de_entity){0}, point, de_mouse_pressed(ui->desc.input, DE_MOUSE_LEFT),
                          de_mouse_released(ui->desc.input, DE_MOUSE_LEFT),
                          de_mouse_down(ui->desc.input, DE_MOUSE_LEFT));

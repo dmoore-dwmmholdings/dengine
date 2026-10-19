@@ -1,4 +1,5 @@
 #include "draw_list.h"
+#include "ui/world/world_internal.h"
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
@@ -224,9 +225,12 @@ void de_ui__build_draw_list(de_system_ctx *ctx) {
         for (;;) {
             de_ui_record *v = &ui->records[index];
             u32 parent = index == root ? DE_UI_NONE_INDEX : de_ui__find(ui, v->parent);
-            de_ui_inherited inherited = parent == DE_UI_NONE_INDEX
-                                            ? (de_ui_inherited){full_clip(ui), 1, 0}
-                                            : r->inherited[parent];
+            de_ui_inherited inherited =
+                parent == DE_UI_NONE_INDEX
+                    ? (de_ui_inherited){r->build.roots[ordinal].world ? record->node.computed_rect
+                                                                      : full_clip(ui),
+                                        1, 0}
+                    : r->inherited[parent];
             const DeUiStyle *style = de_entity_get_const(ui->world, v->entity, ui->ids.style);
             if (style)
                 inherited.opacity *= fmaxf(0, fminf(1, style->opacity));
@@ -253,10 +257,12 @@ void de_ui__build_draw_list(de_system_ctx *ctx) {
         }
     }
     sort_nodes(r);
+    f32 screen_scale = ui->scale;
     for (u32 i = 0; i < r->node_count; ++i) {
         const de_ui_draw_node *node = &r->nodes[i];
         const de_ui_record *record = &ui->records[node->index];
         de_ui_root_list *root = &r->build.roots[node->root];
+        ui->scale = root->world ? 1 : screen_scale;
         if (!root->count)
             root->first = r->build.count;
         de_vec4 rect = record->node.computed_rect;
@@ -290,6 +296,13 @@ void de_ui__build_draw_list(de_system_ctx *ctx) {
         const DeUiText *label = de_entity_get_const(ui->world, record->entity, ui->ids.text);
         if (label)
             text(r, node, label, style, rect, opacity);
+    }
+    ui->scale = screen_scale;
+    if (ui->desc.pixel_art) {
+        for (u32 i = 0; i < r->build.count; ++i) {
+            de_ui__pixel_snap_rect(&r->build.commands[i].gpu.rect);
+            de_ui__pixel_snap_rect(&r->build.commands[i].clip);
+        }
     }
     ++r->build.generation;
     r->stats.quads = r->build.count;

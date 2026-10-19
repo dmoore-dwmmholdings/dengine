@@ -18,14 +18,17 @@ typedef struct de_ui_draw_cmd {
 typedef struct de_ui_root_list {
     de_entity entity;
     u32 first, count;
-    bool world;
+    bool world, transform_valid;
+    DeUiWorldPanel panel;
+    DeGlobalTransform transform;
 } de_ui_root_list;
 typedef struct de_ui_draw_list {
     de_ui_draw_cmd *commands;
     de_ui_root_list *roots;
     u32 count, root_count;
     u64 generation, last_gpu_fence;
-    bool valid;
+    bool valid, camera_valid;
+    de_view_frame_info camera;
 } de_ui_draw_list;
 typedef struct de_ui_draw_node {
     u32 index, root, popup, tree;
@@ -80,6 +83,10 @@ struct de_ui_render {
     void *text_geometry_user;
     de_ui_widget_draw_fn widget_draw;
     void *widget_user;
+    struct de_ui_world_state *world;
+    de_view_frame_info pixel_layout;
+    bool pixel_layout_valid;
+    u64 stats_frame;
     de_ui_render_stats stats;
     de_log_category log;
 #if DE_HAS_RENDER

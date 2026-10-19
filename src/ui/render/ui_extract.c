@@ -1,4 +1,5 @@
 #include "draw_list.h"
+#include "ui/world/world_internal.h"
 #include <string.h>
 void de_ui__packet_unpin(struct de_ui_render *r, de_ui_draw_list *packet) {
     for (u32 i = 0; i < packet->count; ++i) {
@@ -18,7 +19,7 @@ void de_ui__packet_unpin(struct de_ui_render *r, de_ui_draw_list *packet) {
 void de_ui__extract_draw_list(de_system_ctx *ctx) {
     de_ui *ui = ctx->user;
     struct de_ui_render *r = ui->render;
-    if (!r)
+    if (!r || !de_ui__pixel_extract(ui))
         return;
     u64 gpu_done = UINT64_MAX, cpu_done = UINT64_MAX, token = r->build.generation;
 #if DE_HAS_RENDER
@@ -85,13 +86,16 @@ void de_ui__extract_draw_list(de_system_ctx *ctx) {
                     c->gpu.texture =
                         info.texture.id ? de_gpu_texture_bindless(r->device, info.texture, 0, false)
                                         : UINT32_MAX;
-                    c->gpu.sampler =
-                        de_gpu_sampler_bindless(r->device, info.pixel ? r->nearest : r->linear);
+                    c->gpu.sampler = de_gpu_sampler_bindless(
+                        r->device, (info.pixel || ui->desc.pixel_art) ? r->nearest : r->linear);
+                    if (ui->desc.pixel_art && !info.bitmap)
+                        c->gpu.texture = UINT32_MAX;
                 }
 #endif
             }
         }
     }
+    de_ui__world_extract(r, packet);
     r->published = selected;
     r->stats.build_extract_ms += (f32)(de_time_now_ns() - start) / 1e6f;
     de_mutex_unlock(&r->mutex);
@@ -118,6 +122,7 @@ de_result de_ui__render_init(de_ui *ui) {
     r->ui = ui;
     ui->render = r;
     r->published = UINT32_MAX;
+    r->stats_frame = UINT64_MAX;
     r->log = de_log_register_category("ui", DE_LOG_INFO);
     r->max_quads = de_cvar_register(
         &(de_cvar_desc){.name = "ui.render.max_quads",
@@ -148,7 +153,8 @@ de_result de_ui__render_init(de_ui *ui) {
     for (u32 i = 0; i < DE_UI_RENDER_SNAPSHOTS; ++i)
         if (!list_alloc(r, &r->snapshots[i]))
             return DE_ERR_OUT_OF_MEMORY;
-    return de_ui__pass_init(r);
+    DE_TRY(de_ui__pass_init(r));
+    return de_ui__world_init(r);
 }
 de_result de_ui__render_attach(de_ui *ui) {
     struct de_ui_render *r = ui->render;
@@ -156,6 +162,7 @@ de_result de_ui__render_attach(de_ui *ui) {
         return DE_ERR_INVALID_ARGUMENT;
     if (r->build_system.id)
         return DE_OK;
+    DE_TRY(de_ui__world_attach(r));
     const char *after_layout[] = {DE_UI_LAYOUT_SYSTEM};
     r->build_system = de_system_add(
         ui->world, &(de_system_desc){.name = "ui.draw_list",
@@ -188,6 +195,7 @@ void de_ui__render_shutdown(de_ui *ui) {
         if (r->extract_system.id)
             de_system_remove(ui->world, r->extract_system);
     }
+    de_ui__world_destroy(r);
     de_ui__pass_destroy(r); /* Drains the hook before packet references or state are freed. */
     for (u32 i = 0; i < DE_UI_RENDER_SNAPSHOTS; ++i) {
         de_ui__packet_unpin(r, &r->snapshots[i]);

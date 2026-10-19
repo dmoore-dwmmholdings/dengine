@@ -491,6 +491,14 @@ TEST_F(forward_participants, gathered_overflow_and_nonfinite_refused, pixel_fixt
     ASSERT_EQ(de_arena_create(&(de_arena_desc){.name = "participant bounds"}, &arena), DE_OK);
     de__vis_context vc = {.arena = arena};
     de_forward_context c = {.renderer = f->r, .vis = &vc};
+    EXPECT_TRUE(de_render_forward_alloc(NULL, 64, 16) == NULL);
+    EXPECT_TRUE(de_render_forward_alloc(&c, 0, 16) == NULL);
+    EXPECT_TRUE(de_render_forward_alloc(&c, 64, 3) == NULL);
+    EXPECT_TRUE(de_render_forward_alloc(&c, SIZE_MAX, 16) == NULL);
+    void *storage = de_render_forward_alloc(&c, 64, 64);
+    ASSERT_TRUE(storage != NULL);
+    EXPECT_EQ((uintptr_t)storage % 64, 0u);
+    memset(storage, 0, 64);
     de_forward_participant_desc desc = {
         .max_items = 1, .gather = invalid_gather, .build = empty_build};
     ASSERT_EQ(de_render_add_forward_participant(f->r, &desc), DE_OK);
