@@ -21,8 +21,8 @@
 //   cs_light_fill   64 threads, one per cluster: the same tests again, writing the light indices
 //                   at the cluster's offset (in local-list order)
 //
-// The local list's order comes from atomics, so it differs between runs; each cluster's set does
-// not, and shading does not depend on the order beyond float summation.
+// Atomic compaction may reorder local lights. Given the same local set, fill selects and orders
+// complete records consistently, including when a cluster exceeds its bounded list budget.
 import bindless;
 import push_constants;
 import "../shadows/atlas_sample";
@@ -312,6 +312,59 @@ void cs_light_scan(uint3 tid : SV_GroupThreadID, uniform CullParams pc)
         de_rwbytes(pc.counters).store(DE_LIGHTING_COUNTER_ENTRIES, g_scan[t]);
 }
 
+// Distribute a capped set spatially rather than always favoring one coordinate half-space.
+// This is a stable selection key, not an importance estimate.
+uint light_position_key(float3 position)
+{
+    uint3 p = asuint(position);
+    uint h = ((2166136261u ^ p.x) * 16777619u ^ p.y) * 16777619u;
+    h = (h ^ p.z) * 16777619u;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    return h ^ (h >> 16);
+}
+
+// A total order independent of compacted indices. Resolve spatial-key ties by the complete
+// shading/culling payload, including signed zero. Equal records are interchangeable.
+bool light_less(CullParams pc, uint a, uint b)
+{
+    DeClusterLight x = de_robuffer<DeClusterLight>(pc.lights)[a];
+    DeClusterLight y = de_robuffer<DeClusterLight>(pc.lights)[b];
+    uint xkey = light_position_key(x.position.xyz), ykey = light_position_key(y.position.xyz);
+    if (xkey != ykey)
+        return xkey < ykey;
+    uint4 xx[6] = {asuint(x.position), asuint(x.direction), asuint(x.color),
+                   asuint(x.shape), asuint(x.axis), asuint(x.bound)};
+    uint4 yy[6] = {asuint(y.position), asuint(y.direction), asuint(y.color),
+                   asuint(y.shape), asuint(y.axis), asuint(y.bound)};
+    for (uint field = 0; field < 6; ++field)
+        for (uint lane = 0; lane < 4; ++lane)
+            if (xx[field][lane] != yy[field][lane])
+                return xx[field][lane] < yy[field][lane];
+    return false;
+}
+
+// Each cluster owns a disjoint list range. Use that range as a bounded max heap, without
+// another allocation or an O(lights * cap) insertion sort.
+void light_heap_down(CullParams pc, uint base, uint count, uint at, uint value)
+{
+    while (at * 2 + 1 < count) {
+        uint child = at * 2 + 1;
+        if (child + 1 < count &&
+            light_less(pc, de_buffer<uint>(pc.list)[base + child],
+                           de_buffer<uint>(pc.list)[base + child + 1]))
+            ++child;
+        uint next = de_buffer<uint>(pc.list)[base + child];
+        if (!light_less(pc, value, next))
+            break;
+        de_buffer<uint>(pc.list)[base + at] = next;
+        at = child;
+    }
+    de_buffer<uint>(pc.list)[base + at] = value;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
@@ -327,9 +380,31 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
     cluster_bounds(pc, c, lo, hi);
     uint n = min(de_bytes(pc.counters).load(DE_LIGHTING_COUNTER_LOCAL), lv.local_capacity);
     uint k = 0;
-    for (uint i = 0; i < n && k < cell.y; ++i)
-        if (de_light_touches(de_robuffer<DeClusterLight>(pc.lights)[i], lo, hi))
-            de_buffer<uint>(pc.list)[cell.x + k++] = i;
+    for (uint i = 0; i < n; ++i) {
+        if (!de_light_touches(de_robuffer<DeClusterLight>(pc.lights)[i], lo, hi))
+            continue;
+        if (k < cell.y) {
+            uint at = k++;
+            while (at > 0) {
+                uint parent = (at - 1) / 2;
+                uint next = de_buffer<uint>(pc.list)[cell.x + parent];
+                if (!light_less(pc, next, i))
+                    break;
+                de_buffer<uint>(pc.list)[cell.x + at] = next;
+                at = parent;
+            }
+            de_buffer<uint>(pc.list)[cell.x + at] = i;
+        } else if (light_less(pc, i, de_buffer<uint>(pc.list)[cell.x])) {
+            light_heap_down(pc, cell.x, k, 0, i);
+        }
+    }
+    // Heap sort produces the same summation order even when the cluster is not capped.
+    for (uint end = k; end > 1; --end) {
+        uint largest = de_buffer<uint>(pc.list)[cell.x];
+        uint value = de_buffer<uint>(pc.list)[cell.x + end - 1];
+        de_buffer<uint>(pc.list)[cell.x + end - 1] = largest;
+        light_heap_down(pc, cell.x, end - 1, 0, value);
+    }
 }
 
 // DENG-340: immutable probe records begin with world position/radius. Froxel bounds use the

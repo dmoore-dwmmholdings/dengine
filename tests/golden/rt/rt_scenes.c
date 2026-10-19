@@ -55,9 +55,11 @@ static void proof_stage(de__view_frame *vf, void *user) {
         p->gi_pass |= strncmp(n, "RT.GI.", 6) == 0;
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:
-        case DE__GOLDEN_RT_DI:
         case DE__GOLDEN_RT_FOLIAGE:
             p->fallback |= strstr(n, "shadow.") != NULL;
+            break;
+        case DE__GOLDEN_RT_DI:
+            p->fallback |= strcmp(n, "lighting.deferred") == 0;
             break;
         case DE__GOLDEN_RT_AO:
             p->fallback |= strstr(n, "gtao.") != NULL;
@@ -198,6 +200,12 @@ void de__golden_rt_finish(void *state) {
     } else if (p->base) {
         active = p->passes == 0;
         identity = p->fallback;
+        if (p->effect == DE__GOLDEN_RT_DI) {
+            de__di_info i = {0};
+            active &= !de__restir_di_get(r->restir_di, p->view, &i);
+            identity &= p->uploaded && p->uploaded->light_slots >= 512 &&
+                        p->inputs.restir_diffuse == 0 && p->inputs.restir_specular == 0;
+        }
     } else
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:

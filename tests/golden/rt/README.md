@@ -139,3 +139,27 @@ foliage (3.05 s) pass. AO completes in 2.42 s but fails its unchanged image comp
 mean FLIP 0.027015 and p99 0.235291. That failure and the existing reference are preserved
 for source-versus-reference investigation; this is not an all-green sanitizer result.
 The separate full path-tracer shader-validation hang is not covered by these scene tests.
+
+## Many-light Base stability (DENG-464)
+
+The cluster fill previously retained the first `max_per_cluster` entries from an atomically
+compacted light list. Both the capped light set and floating-point summation order therefore
+depended on scheduling. A controlled GPU regression permutes the same 24 physical lights
+three ways and checks caps 1, 4, and 24: the original shader changes selected records and actual
+HDR pixels; the corrected shader produces identical HDR data for every permutation.
+
+Cluster fill now uses its existing output range as a bounded max heap. A stable spatial hash
+avoids systematically selecting one coordinate half-space, and complete record bits resolve
+key ties. The retained set is sorted before shading, including uncapped clusters. This is a
+stable bounded selection policy, not an importance estimate. Complexity is O(N log K), with
+no additional buffers, allocations, or public ABI changes; existing caps and overflow counters
+are preserved. Two initial fresh captures happened to agree before the source fix, so the
+controlled regression, rather than those captures, establishes the order-dependent defect.
+
+Base DI verification now requires the actual deferred-lighting fallback, at least 512 uploaded
+light slots, an inactive DI owner and absent DI input textures. A shadow-atlas draw is not a
+requirement when the atlas admits none of the local lights. The corrected original scene has
+three independent captures with identical RGBA pixels; its previously missing reviewed Metal
+Base reference is installed. No scene settings, materials, geometry, light counts, seeds,
+warmup or thresholds changed. Clustered-light suites pass in Dev and ASan/UBSan (18 CPU/Metal
+checks each, 22 unavailable-backend skips each); strict Metal golden checks cover both DI tiers.

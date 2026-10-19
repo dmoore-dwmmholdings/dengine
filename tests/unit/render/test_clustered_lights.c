@@ -773,7 +773,62 @@ static void overflow(lx *f, de_gpu_backend b) {
     EXPECT_GT(st.tiles[DE__GS_MATERIAL_MODEL_STANDARD], 0u);
 }
 
+/* The same physical light set arrives in different slot orders. Capped clusters must keep
+ * the same records and shade in the same order, including cap 1 and the uncapped boundary. */
+static void capped_selection_stable(lx *f, de_gpu_backend b) {
+    lx_open(f, b);
+    lx_floor(f, material_add(0.8f, 0.5f, 0.0f, 0.5f));
+    const u32 caps[] = {1, 4, 24};
+    for (u32 limit = 0; limit < 3; ++limit) {
+        char value[16];
+        snprintf(value, sizeof value, "%u", caps[limit]);
+        ASSERT_TRUE(cvar_set("r.cluster_max_lights", value));
+        u64 first_hash = 0;
+        for (u32 permutation = 0; permutation < 3; ++permutation) {
+            for (u32 i = 0; i < 24; ++i) {
+                u32 rank = permutation == 0 ? 23 - i : permutation == 1 ? i : (i + 11) % 24;
+                world_light(&f->w, i,
+                            &(DeLight){.kind = DE_LIGHT_POINT,
+                                       .color = {1, 1, 1},
+                                       .intensity = 50.f * (f32)(rank + 1),
+                                       .range = 5.f},
+                            at(0, 0, 2));
+            }
+            lx_run(f);
+            const lx_result *r = &f->res;
+            u32 populated = 0, wrong = 0;
+            for (u32 c = 0; c < r->lc.grid.count; ++c) {
+                u32 count = r->grid[2 * c + 1], offset = r->grid[2 * c];
+                if (!count)
+                    continue;
+                ++populated;
+                EXPECT_EQ(count, caps[limit]);
+                for (u32 k = 0; k < count; ++k) {
+                    f32 got = r->lights[r->list[offset + k]].color[0];
+                    f32 want = de__light_point_candela(50.f * (f32)(k + 1));
+                    wrong += fabsf(got - want) > 1e-4f;
+                }
+            }
+            EXPECT_GT(populated, 10u);
+            EXPECT_EQ(wrong, 0u);
+            u64 hash = 14695981039346656037ull;
+            const u8 *pixels = (const u8 *)r->lighting;
+            for (size_t i = 0; i < (size_t)r->width * r->height * 4 * sizeof(f32); ++i)
+                hash = (hash ^ pixels[i]) * 1099511628211ull;
+            if (permutation == 0)
+                first_hash = hash;
+            else
+                EXPECT_EQ(hash, first_hash);
+            printf("cap %u permutation %u: %u clusters, %u wrong records, HDR %llx\n", caps[limit],
+                   permutation, populated, wrong, (unsigned long long)hash);
+        }
+    }
+}
+
 #define GPU_TESTS(sfx, backend)                                                                    \
+    TEST_F(clustered_lights, capped_selection_stable_##sfx, lx) {                                  \
+        capped_selection_stable(f, backend);                                                       \
+    }                                                                                              \
     TEST_F(clustered_lights, clusters_assignment_cpu_ref_##sfx, lx) {                              \
         assignment(f, backend);                                                                    \
     }                                                                                              \
