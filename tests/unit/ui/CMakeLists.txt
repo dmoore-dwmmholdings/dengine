@@ -1,5 +1,5 @@
 if(TARGET de_ui)
- de_add_test(NAME ui_layout SOURCES test_flex.c test_grid.c test_anchor_popup.c test_ui_scale.c test_layout_tree.c LIBS de_ui de_platform de_ecs de_reflect)
+ de_add_test(NAME ui_layout SOURCES test_flex.c test_grid.c test_anchor_popup.c test_ui_scale.c test_layout_tree.c test_stylesheet.c test_style_resolve.c test_tween.c LIBS de_ui de_platform de_ecs de_reflect de_tp_tomlc17)
  if(TARGET test_ui_layout)
   target_include_directories(test_ui_layout PRIVATE "${DE_ROOT_DIR}/src")
  endif()

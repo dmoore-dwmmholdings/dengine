@@ -139,6 +139,10 @@ static const de_field_info popup_fields[] = {
     F(DeUiPopup, modal, DE_FK_BOOL, AUTH, 0, 0, NULL,
       "Modal overlay;focus trapping is S29 focus behavior", NULL, 0)};
 static const de_field_info style_fields[] = {
+    F(DeUiStyle, background_image, DE_FK_ASSET, AUTH | DE_FIELD_ASSET_REF, 0, 0, NULL,
+      "Background image", "texture", 0),
+    F(DeUiStyle, nine_slice, DE_FK_FIXED_ARRAY, AUTH, 0, 100000, "px",
+      "Source border pixels left top right bottom", "f32", 4),
     F(DeUiStyle, background, DE_FK_COLOR, READONLY, 0, 1, NULL, "Resolved background", NULL, 0),
     F(DeUiStyle, border_color, DE_FK_COLOR, READONLY, 0, 1, NULL, "Resolved border", NULL, 0),
     F(DeUiStyle, border_width, DE_FK_F32, READONLY, 0, 64, "px", "Resolved border width", NULL, 0),
