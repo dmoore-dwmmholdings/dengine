@@ -113,3 +113,22 @@ open image-comparison failure, not a passing golden result. Both numerical quali
 issues also remain open: frozen-reference FLIP 0.0800533 and final-denoise FLIP
 0.0634995892. Affected Dev and ASan/UBSan suites each pass 28 of 30 checks, with
 only those two numerical failures.
+
+No-media timing capture (DENG-450):
+`pathtracer.no_media_gpu_timings_label_completed_samples` provides the fixed
+Cornell16x16, eight-bounce, 24-warm/96-capture measurement fixture in the repository.
+After each GPU wait it explicitly collects the graph's completed query results,
+then checks the published frame ID against the rendered frame. Reading ordinary
+renderer stats immediately after rendering instead measures the preceding frame,
+including the final warm-up sample and omitting sample120. The regression catches
+all96 shifted labels before collection is added. The corrected collector measures
+samples25 through120, with96 distinct frame IDs,120 actual accumulated samples
+and no extra render frames. Dev and ASan/UBSan each verify these invariants.
+
+For comparable diagnostic runs, launch from `build/dev/tests/unit/render` with
+`MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=0 ./test_render_pathtracer --filter=pathtracer.no_media_gpu_timings_label_completed_samples`.
+Each `PT_GPU_FRAME` line includes the sample number, rendered frame ID, timed frame
+ID and elapsed milliseconds. The unit test checks attribution and sample counts,
+not a timing threshold. This corrects the collection method; it does not establish
+the original before/after S17 symmetric ±5% cost criterion or resolve the observed
+run-to-run variability. DENG-450 remains open.

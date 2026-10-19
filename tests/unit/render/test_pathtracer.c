@@ -1,5 +1,6 @@
 #include "scene_as_fixture.h"
 #include "render/pathtracer/pt_internal.h"
+#include "render/graph/rg_internal.h"
 #include "render/pathtracer/pt_sobol_table.h"
 #include "render/rt/restir_di.h"
 #include "render/probes/probes_internal.h"
@@ -629,6 +630,78 @@ static void cornell(pt_fixture *f) {
     f->camera.camera.view = r->view;
     de_view_set_layer_mask(r->r, r->view, 1u << 24);
 }
+typedef struct pt_timing_capture {
+    de_view view;
+    de_rg *graph;
+    u64 rendered_frame;
+} pt_timing_capture;
+
+static void pt_timing_stage(de__view_frame *frame, void *user) {
+    pt_timing_capture *capture = user;
+    if (frame->view.id == capture->view.id) {
+        capture->graph = frame->graph;
+        capture->rendered_frame = frame->frame_index;
+    }
+}
+
+/* DENG-450: capture completed samples25..120, excluding all24 warm-up samples.
+ * Timings are diagnostic output, never a machine-load-dependent unit-test limit. */
+TEST_F(pathtracer, no_media_gpu_timings_label_completed_samples, pt_fixture) {
+    if (de_gpu_get_caps(f->rt.d)->timestamp_frequency == 0)
+        SKIP("GPU timestamps unavailable");
+    cornell(f);
+    for (u32 i = 0; i < g_mat_count; ++i) {
+        ASSERT_FLOAT_EQ(g_mat[i].standard.transmission, 0, 0);
+        ASSERT_FLOAT_EQ(g_mat[i].standard.subsurface, 0, 0);
+    }
+    ASSERT_EQ(de_renderer_get_settings(f->rt.r).path_max_bounces, 8u);
+    pt_timing_capture capture = {.view = f->rt.view};
+    ASSERT_EQ(de__view_register_stage(f->rt.r, DE__VIEW_SLOT_POST, INT32_MIN,
+                                      "PT timing frame identity", pt_timing_stage, &capture),
+              DE_OK);
+    pt_frame(f);
+    de_cvar timers = de_cvar_find("r.rg_gpu_timers");
+    ASSERT_TRUE(DE_HANDLE_VALID(timers));
+    bool was_enabled = de_cvar_bool(timers);
+    ASSERT_EQ(de_cvar_set(timers, "1"), DE_OK);
+    for (u32 sample = 1; sample < 24; ++sample)
+        pt_frame(f);
+    ASSERT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 24u);
+    ASSERT_EQ(f->info.width, 16u);
+    ASSERT_EQ(f->info.height, 16u);
+    u64 first_frame = capture.rendered_frame + 1u;
+    u32 captured = 0;
+    for (u32 sample = 25; sample <= 120; ++sample) {
+        pt_frame(f); /* Includes a GPU wait: this frame's resolves are already complete. */
+        ASSERT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), sample);
+        /* Normal stats publish at the next frame start. Collect the already-completed
+         * resolves here so the last warm-up frame is excluded and sample120 is included. */
+        de__rg_timing_collect(capture.graph, capture.graph->exec, false);
+        const de__rg_timings *t = de__rg_timings_get(capture.graph);
+        ASSERT_TRUE(t->valid);
+        EXPECT_EQ(capture.rendered_frame, first_frame + sample - 25u);
+        EXPECT_EQ(t->frame_index, capture.rendered_frame);
+        u32 found = 0;
+        for (u32 pass = 0; pass < t->pass_count; ++pass) {
+            if (strcmp(t->pass_names[pass], "PT.TraceAccumulate") != 0)
+                continue;
+            EXPECT_TRUE(isfinite(t->pass_gpu_ms[pass]) && t->pass_gpu_ms[pass] > 0);
+            printf("PT_GPU_FRAME sample=%u rendered=%llu timed=%llu ms=%.9g\n", sample,
+                   (unsigned long long)capture.rendered_frame, (unsigned long long)t->frame_index,
+                   (double)t->pass_gpu_ms[pass]);
+            ++found;
+        }
+        EXPECT_EQ(found, 1u);
+        captured += found;
+    }
+    EXPECT_EQ(captured, 96u);
+    EXPECT_FLOAT_EQ(pt_read(f)[(8 * 16 + 8) * 4 + 3], 120, 0);
+    EXPECT_EQ(de_renderer_path_samples(f->rt.r, f->rt.view), 120u);
+    printf("PT_GPU_CAPTURE warm=24 captured=%u actual_samples=120 extra_frames=0\n", captured);
+    de__view_unregister_stage(f->rt.r, pt_timing_stage, &capture);
+    EXPECT_EQ(de_cvar_set(timers, was_enabled ? "1" : "0"), DE_OK);
+}
+
 static u8 pt_display(f32 value) {
     value = fmaxf(value, 0);
     value = value / (1 + value);
