@@ -3,13 +3,18 @@
 #include "ui_default_style.h"
 #include <math.h>
 #include <string.h>
+/* Private ownership record: an authored selector must survive content/behavior changes. */
+typedef struct de_ui_auto_widget {
+    de_ui_widget_type type;
+} de_ui_auto_widget;
 static void slider_construct(void *ptr) {
     memset(ptr, 0, sizeof(DeUiSlider));
     ((DeUiSlider *)ptr)->max = 1;
     ((DeUiSlider *)ptr)->step = .1f;
 }
 static de_component component(de_ui *ui, const char *name, u32 size, u32 align,
-                              const de_field_info *fields, u32 count, void (*construct)(void *)) {
+                              const de_field_info *fields, u32 count, void (*construct)(void *),
+                              bool authored) {
     de_type_registry *types = de_world_types(ui->world);
     de_type_id type = de_type_find(types, name);
     if (!type.id && de_type_register_ex(types,
@@ -23,7 +28,8 @@ static de_component component(de_ui *ui, const char *name, u32 size, u32 align,
                                                         .hooks = {.construct = construct}},
                                         &type, NULL) != DE_OK)
         return (de_component){0};
-    return de_component_register(ui->world, type, DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT);
+    return de_component_register(ui->world, type,
+                                 authored ? DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT : 0);
 }
 #define F(T, field, kind, lo, hi, units, tip)                                                      \
     DE_FIELD_EX(T, field, kind, DE_FIELD_DEFAULT, {lo, hi, units, tip, NULL, 0})
@@ -43,15 +49,19 @@ static de_result reflect_widgets(de_ui *ui) {
         F(DeUiProgress, value, DE_FK_F32, 0, 1, NULL, "Determinate fraction"),
         F(DeUiProgress, indeterminate, DE_FK_BOOL, 0, 1, NULL, "Animate without a known fraction")};
     de_ui_widgets *w = ui->widgets;
-    w->button =
-        component(ui, "DeUiButton", sizeof(DeUiButton), _Alignof(DeUiButton), buttons, 2, NULL);
-    w->toggle =
-        component(ui, "DeUiToggle", sizeof(DeUiToggle), _Alignof(DeUiToggle), toggles, 1, NULL);
+    w->button = component(ui, "DeUiButton", sizeof(DeUiButton), _Alignof(DeUiButton), buttons, 2,
+                          NULL, true);
+    w->toggle = component(ui, "DeUiToggle", sizeof(DeUiToggle), _Alignof(DeUiToggle), toggles, 1,
+                          NULL, true);
     w->slider = component(ui, "DeUiSlider", sizeof(DeUiSlider), _Alignof(DeUiSlider), sliders, 4,
-                          slider_construct);
+                          slider_construct, true);
     w->progress = component(ui, "DeUiProgress", sizeof(DeUiProgress), _Alignof(DeUiProgress),
-                            progress, 2, NULL);
-    return w->button.id && w->toggle.id && w->slider.id && w->progress.id ? DE_OK : DE_ERR_INTERNAL;
+                            progress, 2, NULL, true);
+    w->auto_widget = component(ui, "de_ui_auto_widget", sizeof(de_ui_auto_widget),
+                               _Alignof(de_ui_auto_widget), NULL, 0, NULL, false);
+    return w->button.id && w->toggle.id && w->slider.id && w->progress.id && w->auto_widget.id
+               ? DE_OK
+               : DE_ERR_INTERNAL;
 }
 #undef F
 bool de_ui__widget_enabled(de_ui *ui, de_entity entity) {
@@ -76,6 +86,36 @@ static void collect(const de_query_chunk *chunk, void *user) {
     de_ui_widgets *w = user;
     for (u32 i = 0; i < chunk->count && w->entity_count < w->ui->capacity; ++i)
         w->entities[w->entity_count++] = chunk->entities[i];
+}
+static void widget_tag(de_ui *ui, de_entity e, de_ui_widget_type type, bool found) {
+    de_component owner = ui->widgets->auto_widget, widget = ui->style->widget;
+    const DeUiWidgetType *old = de_entity_get_const(ui->world, e, widget);
+    const de_ui_auto_widget *automatic = de_entity_get_const(ui->world, e, owner);
+    if (old && (!automatic || old->type != automatic->type)) {
+        /* A pre-existing or explicitly retagged selector belongs to the author. */
+        if (automatic)
+            de_entity_remove(ui->world, e, owner);
+        return;
+    }
+    if (!found) {
+        if (automatic) {
+            de_entity_remove(ui->world, e, widget);
+            de_entity_remove(ui->world, e, owner);
+        }
+        return;
+    }
+    if (old && old->type == type)
+        return;
+    /* Add ownership first: structural changes may invalidate component pointers. */
+    de_ui_auto_widget *tag_owner = de_entity_add(ui->world, e, owner);
+    if (!tag_owner)
+        return;
+    DeUiWidgetType *tag = de_entity_add(ui->world, e, widget);
+    if (tag) {
+        tag->type = type;
+        tag_owner = de_entity_get(ui->world, e, owner);
+        tag_owner->type = type;
+    }
 }
 static void widget_update(de_system_ctx *ctx) {
     de_ui_widgets *w = ctx->user;
@@ -102,19 +142,8 @@ static void widget_update(de_system_ctx *ctx) {
             type = DE_UI_WIDGET_IMAGE;
         else
             found = false;
-        if (!found)
-            continue;
-        const DeUiWidgetType *old = de_entity_get_const(ui->world, e, ui->style->widget);
-        /* Advanced controls may carry text/image content without surrendering their role. */
-        if (old && (u32)old->type >= DE_UI_WIDGET_INPUT)
-            continue;
-        if (!old || old->type != type) {
-            DeUiWidgetType *tag = old ? de_entity_get(ui->world, e, ui->style->widget)
-                                      : de_entity_add(ui->world, e, ui->style->widget);
-            if (tag)
-                tag->type = type;
-        }
-        if (type == DE_UI_WIDGET_BUTTON) {
+        widget_tag(ui, e, type, found);
+        if (found && type == DE_UI_WIDGET_BUTTON) {
             const DeUiButton *button = de_entity_get_const(ui->world, e, w->button);
             const DeUiInteractionState *old_state =
                 de_entity_get_const(ui->world, e, ui->ids.state);

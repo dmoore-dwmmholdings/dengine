@@ -22,7 +22,7 @@ typedef struct de_ui_pointer_state {
 } de_ui_pointer_state;
 typedef struct de_ui_widgets {
     de_ui *ui;
-    de_component button, toggle, slider, progress, focusable;
+    de_component button, toggle, slider, progress, focusable, auto_widget;
     de_ui_widget_table table;
     de_ui_pointer_state pointer;
     de_entity *entities;

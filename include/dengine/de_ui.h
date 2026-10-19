@@ -56,7 +56,8 @@ typedef enum de_ui_align {
     DE_UI_ALIGN_AUTO /**< align_self only: inherit parent's align_items. */
 } de_ui_align;
 
-/** Widget tags drive stylesheet type selectors; widgets set the corresponding tag. */
+/** Widget tags drive stylesheet type selectors. Widgets infer tags when none is authored;
+ * an explicitly supplied selector takes precedence over content and behavior components. */
 typedef enum de_ui_widget_type {
     DE_UI_WIDGET_PANEL,
     DE_UI_WIDGET_BUTTON,
