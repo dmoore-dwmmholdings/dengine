@@ -70,6 +70,11 @@ static const de_audio_backend k_default_order[] = {
 
 /* ---- Streams --------------------------------------------------------------------------------- */
 
+static void backend_underrun(void *user) {
+    de_audio *a = user;
+    de_atomic_fetch_add_u32(&a->underruns, 1, DE_ATOMIC_RELAXED);
+}
+
 static de__audio_stream_desc stream_desc(de_audio *a) {
     de__audio_stream_desc d;
     memset(&d, 0, sizeof d);
@@ -78,6 +83,7 @@ static de__audio_stream_desc stream_desc(de_audio *a) {
     d.block_frames = a->block_frames;
     d.render = de__audio_ring_read;
     d.user = a;
+    d.underrun = backend_underrun;
     return d;
 }
 
@@ -201,6 +207,8 @@ static i32 ctl_main(void *user) {
         if (de_atomic_load_u32(&d->quit, DE_ATOMIC_ACQUIRE) != 0)
             break;
         de__audio_collect(a);
+        if (d->vt->poll_devices)
+            d->vt->poll_devices(d->backend);
         u32 ev = de_atomic_exchange_u32(&d->events, 0, DE_ATOMIC_ACQ_REL);
         if (ev != 0)
             handle_events(a, ev);

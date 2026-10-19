@@ -249,7 +249,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
+            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers \
+            libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
           ls /usr/share/vulkan/icd.d
           # lvp_icd.json (Mesa 25) or lvp_icd.<arch>.json (older Mesa).
           icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
@@ -347,7 +348,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
+            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers \
+            libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
           ls /usr/share/vulkan/icd.d
           # lvp_icd.json (Mesa 25) or lvp_icd.<arch>.json (older Mesa).
           icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
