@@ -196,6 +196,8 @@ static void readback(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de_gpu_cmd_barriers(cmd, &b, 1);
     }
     for (u32 i = 0; i < 4; ++i) {
+        if (!resources[i].id)
+            continue;
         de_gpu_texture t = de_rg_texture(pass, resources[i]);
         de_gpu_cmd_copy_texture_to_buffer(cmd, f->readback, offsets[i], pitches[i], t, 0, 0);
         de_gpu_barrier b = {
@@ -210,8 +212,10 @@ static void run(dn_fixture *f, de_denoise_result result) {
     if (f->identity.id)
         de_rg_read(p, f->identity, DE_ACCESS_COPY_SRC);
     de_rg_read(p, result.color, DE_ACCESS_COPY_SRC);
-    de_rg_read(p, result.history_length, DE_ACCESS_COPY_SRC);
-    de_rg_read(p, result.validity, DE_ACCESS_COPY_SRC);
+    if (result.history_length.id)
+        de_rg_read(p, result.history_length, DE_ACCESS_COPY_SRC);
+    if (result.validity.id)
+        de_rg_read(p, result.validity, DE_ACCESS_COPY_SRC);
     de_rg_read(p, result.variance, DE_ACCESS_COPY_SRC);
     de_rg_write(p, de_rg_import_buffer(f->graph, f->readback, DE_ACCESS_COPY_DST),
                 DE_ACCESS_COPY_DST);
@@ -750,4 +754,45 @@ TEST_F(denoise_framework, changing_signal_channel_semantics_resets_history, dn_f
     begin(f);
     run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
     EXPECT_FLOAT_EQ(age(f, 32, 16), 0, 0);
+}
+
+TEST_F(denoise_framework, spatial_variance_uses_squared_weights, dn_fixture) {
+    upload(f);
+    for (u32 propagate = 0; propagate < 2; ++propagate) {
+        begin(f);
+        de_denoise_frame frame = {.graph = f->graph,
+                                  .view = {1},
+                                  .frame = f->frame,
+                                  .reset = true,
+                                  .inputs = {.width = W, .height = H, .linear_depth = true}};
+        frame.inputs.signal = de_rg_import_texture(f->graph, f->signal, DE_ACCESS_SHADER_READ);
+        frame.inputs.depth = de_rg_import_texture(f->graph, f->depth, DE_ACCESS_SHADER_READ);
+        frame.inputs.normal = de_rg_import_texture(f->graph, f->normal, DE_ACCESS_SHADER_READ);
+        frame.inputs.material = de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+        de_denoise_ctx *ctx = NULL;
+        ASSERT_EQ(denoise_begin(f->owner, &frame,
+                                &(de_denoise_signal_desc){.identity = 0x5356474600ull + propagate,
+                                                          .format = DE_FMT_RGBA32_FLOAT,
+                                                          .channels = 3,
+                                                          .iterations = 1,
+                                                          .depth_relative = .02f,
+                                                          .propagate_variance = propagate != 0},
+                                &ctx),
+                  DE_OK);
+        /* A constant realization with known independent input variance 2. The depth texture
+         * supplies the same constant to the independent variance input, without a new fixture. */
+        de_denoise_result input = {.color = frame.inputs.signal, .variance = frame.inputs.depth};
+        de_denoise_result filtered = denoise_add_atrous(ctx, input);
+        EXPECT_EQ(filtered.variance.id == input.variance.id, propagate == 0);
+        run(f, filtered);
+        /* Analytic separable B3 kernel: sum(k)=16, sum(k^2)=70, hence variance factor
+         * (70/256)^2. This is the variance-of-weighted-mean oracle (SVGF Eq. 3). */
+        const f64 expected = propagate ? 2.0 * 4900.0 / 65536.0 : 2.0;
+        const f32 *variance = (const f32 *)((const u8 *)color(f) + 49152);
+        for (u32 y = 4; y < H - 4; ++y)
+            for (u32 x = 4; x < W - 4; ++x) {
+                EXPECT_FLOAT_EQ(color(f)[(y * W + x) * 4], 1, 1e-6);
+                EXPECT_FLOAT_EQ(variance[y * W + x], expected, 1e-6);
+            }
+    }
 }

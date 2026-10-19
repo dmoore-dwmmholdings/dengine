@@ -218,3 +218,12 @@ nonempty D3D12 text goldens and four Vulkan text goldens; their only failures we
 missing references. The reviewed backend-specific text captures are now checked in.
 The artifact `renderer-regressions-d3d12` retains all 38 PNGs and the exact CTest
 results; the Vulkan artifact retains its four actual text captures.
+
+
+[Follow-up run 39266711317](https://github.com/dmoore-dwmmholdings/dengine/actions/runs/39266711317)
+passes all eight text comparisons against the committed Vulkan and D3D12
+references. Each resulting PNG is byte-identical to its independently captured
+reference. The added orthographic receiver regression also passes on WARP.
+Its lavapipe execution fails its first-frame 120-second fence wait, then reaches
+the unchanged 300-second CTest timeout during teardown. That Vulkan receiver
+check remains a verification gap; the overall Vulkan job is not green.

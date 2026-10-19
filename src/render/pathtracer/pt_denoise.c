@@ -162,6 +162,7 @@ de_rg_resource de__pt_denoise_build(de__pt_denoise *s, de__view_frame *f, const 
                                    .format = DE_FMT_RGBA32_FLOAT,
                                    .channels = 3,
                                    .iterations = 3,
+                                   .propagate_variance = true,
                                    .depth_relative = .02f,
                                    .normal_power = 64,
                                    .luminance_scale = 4,

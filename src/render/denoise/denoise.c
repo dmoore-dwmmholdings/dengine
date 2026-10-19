@@ -18,7 +18,7 @@ typedef struct dn_params {
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
     u32 position, previous_position, out_position, tail_reserved;
-    u32 temporal_alpha, normal_world, channels, alpha_reserved;
+    u32 temporal_alpha, normal_world, channels, out_variance;
 } dn_params;
 DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
 DE_STATIC_ASSERT(offsetof(dn_params, channels) == 352, "DenoiseParams channel semantics offset");
@@ -57,7 +57,7 @@ typedef struct dn_pass {
     de_rg_resource output, moments, length, validity, variance, out_depth, out_normal, out_material;
     de_rg_resource scene, visible;
     de_rg_resource key, previous_key, out_key, position, previous_position, out_position;
-    de_rg_resource temporal_alpha;
+    de_rg_resource temporal_alpha, out_variance;
 } dn_pass;
 static void release(de_denoise_ctx *c) {
     de_gpu_device *d = c->owner->r->dev;
@@ -285,6 +285,7 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     WRITE(out_material);
     WRITE(out_key);
     WRITE(out_position);
+    WRITE(out_variance);
     if (x->pipeline.id == x->owner->variance.id) {
         p.moments = tex(x, pass, x->moments, false);
         p.length = tex(x, pass, x->length, false);
@@ -326,6 +327,8 @@ static void declarations(de_rg_pass *pass, dn_pass *x) {
             else
                 de_rg_write(pass, writes[i], DE_ACCESS_SHADER_WRITE);
         }
+    if (x->out_variance.id)
+        de_rg_write(pass, x->out_variance, DE_ACCESS_SHADER_WRITE);
     if (x->temporal_alpha.id)
         de_rg_read(pass, x->temporal_alpha, DE_ACCESS_SHADER_READ);
     if (x->key.id)
@@ -510,6 +513,10 @@ de_denoise_result denoise_add_atrous(de_denoise_ctx *c, de_denoise_result r) {
         x->variance = r.variance;
         x->output = transient(c, i + 1 == c->desc.iterations ? c->desc.format : DE_FMT_RGBA32_FLOAT,
                               "Denoise filtered signal");
+        if (c->desc.propagate_variance) {
+            x->out_variance = transient(c, DE_FMT_R32_FLOAT, "Denoise filtered variance");
+            r.variance = x->out_variance;
+        }
         r.color = x->output;
         finish(c, x);
     }
