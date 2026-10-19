@@ -59,6 +59,9 @@ typedef struct world_push {
     de_forward_shader_bindings bindings;
     u32 data, first, roots, root;
 } world_push;
+_Static_assert(sizeof(world_gpu_quad) == 160, "world quad shader stride");
+_Static_assert(sizeof(world_gpu_root) == 64, "world root shader stride");
+_Static_assert(sizeof(world_push) == 64, "world shader push ABI");
 struct de_ui_world_state {
     struct de_ui_render *render;
     de_view_frame_info camera;
@@ -156,7 +159,7 @@ static u32 world_gather(const de_forward_context *context, de_forward_item *out,
         r->stats_frame = info.frame_index;
     }
     de_ui_draw_list *packet = (de_ui_draw_list *)de_ui__packet_for_frame(r, info.extract_frame);
-    if (!packet || !world_upload(s, packet, &info)) {
+    if (!packet) {
         de_mutex_unlock(&r->mutex);
         return 0;
     }
@@ -175,6 +178,8 @@ static u32 world_gather(const de_forward_context *context, de_forward_item *out,
             .item_index = i,
             .always_on_top = !root->panel.depth_test};
     }
+    if (count && !world_upload(s, packet, &info))
+        count = 0;
     if (count)
         packet->last_gpu_fence = info.frame_index + 1;
     de_mutex_unlock(&r->mutex);

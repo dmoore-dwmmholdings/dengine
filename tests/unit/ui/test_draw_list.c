@@ -121,15 +121,19 @@ TEST_F(ui_draw, two_thousand_widgets_static_zero_alloc_build_extract, ui_fx) {
     de_alloc_guard guard = {0};
     de_alloc_guard_begin(&guard);
     f64 total = 0;
+    const u64 frame_start = de_time_now_ns();
     for (u32 i = 0; i < 1000; ++i) {
         ui_frame(f);
         ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
         total += de_ui_get_render_stats(f->ui).build_extract_ms;
     }
+    const f64 whole_frame_mean_ms = (f64)(de_time_now_ns() - frame_start) / 1e9;
     de_alloc_guard_end(&guard);
     DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
     printf("2000-widget build+Extract mean %.4fms, quads%u\n", total / 1000,
            de_ui_get_render_stats(f->ui).quads);
+    printf("2000-widget whole UI frame+Extract mean %.4fms (1000 frames)\n", whole_frame_mean_ms);
+    EXPECT_TRUE(whole_frame_mean_ms <= 2.5);
     EXPECT_EQ(de_ui_get_render_stats(f->ui).quads, 2000u);
     EXPECT_TRUE(total / 1000 <= .5);
 }

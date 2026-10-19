@@ -18,8 +18,13 @@ WorldVertex vs_world(uint vertex:SV_VertexID,uint instance:SV_InstanceID,uniform
  float2 pixel=q.quad.rect.xy+c*q.quad.rect.zw;
  float4 local=float4(pixel.x/root.panel.z-root.panel.x*.5,root.panel.y*.5-pixel.y/root.panel.z,0,1);
  WorldVertex v;v.world=float3(dot(root.rows[0],local),dot(root.rows[1],local),dot(root.rows[2],local));
- DeSceneConstants sc=de_robuffer<DeSceneConstants>(p.scene)[p.slot];float4 world=float4(v.world,1);
- v.position=float4(dot(sc.view_proj[0],world),dot(sc.view_proj[1],world),dot(sc.view_proj[2],world),dot(sc.view_proj[3],world));
+ DeSceneConstants sc=de_robuffer<DeSceneConstants>(p.scene)[p.slot];
+ // Cancel the camera translation before adding subpixel glyph geometry. Combining
+ // large origin-relative coordinates in view_proj loses MSDF edge precision.
+ float3 relative=float3(root.rows[0].w,root.rows[1].w,root.rows[2].w)-sc.camera_position.xyz;
+ relative+=float3(dot(root.rows[0].xyz,local.xyz),dot(root.rows[1].xyz,local.xyz),dot(root.rows[2].xyz,local.xyz));
+ float4 view=float4(dot(sc.view[0].xyz,relative),dot(sc.view[1].xyz,relative),dot(sc.view[2].xyz,relative),1);
+ v.position=float4(dot(sc.proj[0],view),dot(sc.proj[1],view),dot(sc.proj[2],view),dot(sc.proj[3],view));
  v.uv=lerp(q.quad.uv.xy,q.quad.uv.zw,c);v.local=c*q.quad.rect.zw;v.panel=pixel;v.index=index;return v;
 }
 [shader("fragment")]

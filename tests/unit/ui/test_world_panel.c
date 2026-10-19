@@ -2,6 +2,7 @@
 #include "ui/world/world_internal.h"
 #include "ui/render/draw_list.h"
 #include "ui/widgets/widgets_internal.h"
+#include <stdio.h>
 static de_entity panel_root(ui_fx *f) {
     de_entity root = ui_node(f, (de_entity){0});
     de_component panel = de_component_find(f->world, "DeUiWorldPanel");
@@ -102,3 +103,97 @@ TEST_F(ui_world, extract_pose_snapshot_survives_next_simulation, ui_fx) {
     EXPECT_FLOAT_EQ(r->snapshots[first].roots[0].transform.position.x, 100000, 0);
     EXPECT_FLOAT_EQ(r->snapshots[r->published].roots[0].transform.position.x, 100002, 0);
 }
+#if DE_HAS_GPU_METAL
+#include "render/world/render_world.h"
+#include <stdlib.h>
+static const u8 *world_native_capture(ui_fx *f, de_gpu_texture target, de_gpu_buffer buffer) {
+    ui_frame(f);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+    de_gpu_wait_idle(f->device);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "world UI native readback");
+    de_gpu_barrier barrier = {
+        .texture = target, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, 512 * 4, target, 0, 0);
+    barrier.before = DE_ACCESS_COPY_SRC;
+    barrier.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    ASSERT_EQ(de_gpu_queue_submit(f->device, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_wait_idle(f->device);
+    return de_gpu_buffer_map(f->device, buffer);
+}
+TEST_F(ui_world, native_actual_panel_consumer_and_large_origin_readback, ui_fx) {
+    de_ui_destroy(f->ui);
+    f->ui = NULL;
+    if (de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
+                                                   .debug_layer = true,
+                                                   .pipeline_cache_dir = ""},
+                             &f->device) != DE_OK)
+        SKIP("Metal device unavailable");
+    ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device, .types = f->types},
+                                 &f->renderer),
+              DE_OK);
+    de_renderer_attach(f->renderer, f->world);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "0"), DE_OK);
+    de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+    settings.ao = settings.gi = settings.reflections = settings.shadows = DE_QUALITY_OFF;
+    de_renderer_set_settings(f->renderer, &settings);
+    de_gpu_texture target = de_gpu_texture_create(
+        f->device, &(de_gpu_texture_desc){.width = 512,
+                                          .height = 512,
+                                          .format = DE_FMT_RGBA8_UNORM,
+                                          .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                                   DE_USAGE_COPY_SRC});
+    de_view view =
+        de_view_create(f->renderer, &(de_view_desc){.target = target, .name = "world-ui-unit"});
+    ASSERT_EQ(de_ui_create(&(de_ui_desc){.renderer = f->renderer,
+                                         .view = view,
+                                         .reference_height = 512,
+                                         .max_nodes = 32},
+                           &f->ui),
+              DE_OK);
+    de_ui_attach(f->ui, f->world);
+    de_entity root = panel_root(f);
+    DeUiStyle *style = de_entity_add(f->world, root, f->ui->ids.style);
+    *style = (DeUiStyle){.background = {0, 1, 0, 1}, .opacity = 1};
+    DeTransform transform = de_transform_identity();
+    transform.position.z = -3;
+    *(DeTransform *)de_entity_add(f->world, root, f->ui->hierarchy.transform) = transform;
+    de_entity camera = de_entity_spawn(f->world);
+    *(DeTransform *)de_entity_add(f->world, camera, f->ui->hierarchy.transform) =
+        de_transform_identity();
+    de_component camera_type = de_component_find(f->world, "DeCamera");
+    *(DeCamera *)de_entity_add(f->world, camera, camera_type) = (DeCamera){
+        .view = view, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    de_gpu_buffer buffer =
+        de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 512 * 512 * 4,
+                                                              .usage = DE_USAGE_COPY_DST,
+                                                              .memory = DE_MEM_READBACK});
+    (void)world_native_capture(f, target, buffer);
+    const u8 *pixels = world_native_capture(f, target, buffer);
+    const u8 *center = pixels + ((size_t)256 * 512 + 256) * 4;
+    printf("World UI native center RGB %u %u %u\n", center[0], center[1], center[2]);
+    ASSERT_TRUE(center[1] > 100 && center[0] < 20 && center[2] < 20);
+    ASSERT_TRUE(de_ui_get_render_stats(f->ui).draw_calls > 0);
+    u8 *original = malloc(512 * 512 * 4);
+    ASSERT_TRUE(original);
+    memcpy(original, pixels, 512 * 512 * 4);
+    DeTransform *pose = de_entity_get(f->world, root, f->ui->hierarchy.transform);
+    pose->position.x = pose->position.y = 100000;
+    pose = de_entity_get(f->world, camera, f->ui->hierarchy.transform);
+    pose->position.x = pose->position.y = 100000;
+    pixels = world_native_capture(f, target, buffer);
+    u32 changed = 0;
+    for (u32 i = 0; i < 512 * 512 * 4; ++i)
+        changed += abs((int)pixels[i] - (int)original[i]) > 1;
+    printf("World UI100km differing codes>1: %u\n", changed);
+    EXPECT_EQ(changed, 0u);
+    free(original);
+    de_gpu_buffer_destroy(f->device, buffer);
+    de_gpu_texture_destroy(f->device, target);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "1"), DE_OK);
+}
+#endif

@@ -47,3 +47,57 @@ TEST(ui_pixel, expansion_edges_snap_consistently) {
     EXPECT_FLOAT_EQ(rect.z, 11, 0);
     EXPECT_FLOAT_EQ(rect.w, 5, 0);
 }
+#if DE_HAS_RENDER
+#include "render/world/render_world.h"
+TEST_F(ui_pixel, advisory_resize_mismatch_skips_packet_until_matching_extract, ui_fx) {
+    de_ui_destroy(f->ui);
+    f->ui = NULL;
+    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_NULL}, &f->device),
+              DE_OK);
+    ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device, .types = f->types},
+                                 &f->renderer),
+              DE_OK);
+    de_renderer_attach(f->renderer, f->world);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "0"), DE_OK);
+    de_view view = de_renderer_main_view(f->renderer);
+    de_pixel_art_settings settings = {
+        .internal_width = 480, .internal_height = 270, .integer_scale_only = true};
+    de_view_set_pixel_art(f->renderer, view, &settings);
+    ASSERT_EQ(de_ui_create(
+                  &(de_ui_desc){
+                      .renderer = f->renderer, .view = view, .pixel_art = true, .max_nodes = 32},
+                  &f->ui),
+              DE_OK);
+    de_ui_attach(f->ui, f->world);
+    de_entity root = ui_node(f, (de_entity){0});
+    DeUiStyle *style = de_entity_add(f->world, root, f->ui->ids.style);
+    *style = (DeUiStyle){.background = {1, 1, 1, 1}, .opacity = 1};
+    de_component camera_type = de_component_find(f->world, "DeCamera");
+    de_entity camera = de_entity_spawn(f->world);
+    *(DeTransform *)de_entity_add(f->world, camera, f->ui->hierarchy.transform) =
+        de_transform_identity();
+    *(DeCamera *)de_entity_add(f->world, camera, camera_type) = (DeCamera){
+        .view = view, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 270, .near_z = .1f};
+    ui_frame(f);
+    EXPECT_EQ(f->ui->width, 480u);
+    EXPECT_EQ(f->ui->height, 270u);
+    settings.internal_width = 320;
+    settings.internal_height = 180;
+    de_view_set_pixel_art(f->renderer, view, &settings);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    struct de_ui_render *r = f->ui->render;
+    EXPECT_EQ(r->published, UINT32_MAX); /* Never submit old-grid quads with new-grid view data. */
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+    de_gpu_wait_idle(f->device);
+    ui_frame(f);
+    EXPECT_EQ(f->ui->width, 320u);
+    EXPECT_EQ(f->ui->height, 180u);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    ASSERT_TRUE(r->published != UINT32_MAX);
+    EXPECT_EQ(r->snapshots[r->published].camera.pixel.internal_width, 320u);
+    EXPECT_TRUE(r->snapshots[r->published].camera_valid);
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+    de_gpu_wait_idle(f->device);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "1"), DE_OK);
+}
+#endif
