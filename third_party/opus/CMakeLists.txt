@@ -32,6 +32,10 @@ target_compile_definitions(de_tp_opus PRIVATE
     DISABLE_FLOAT_API
     USE_ALLOCA
     ENABLE_HARDENING)
+if(UNIX)
+    # Strict C11 libc headers do not implicitly declare alloca (DENG-501).
+    target_compile_definitions(de_tp_opus PRIVATE HAVE_ALLOCA_H=1)
+endif()
 # Vendored code: no engine warning flags, and its own warnings are off (CONVENTIONS §6). No FP
 # contraction, like the engine's deterministic code (little float is left in a fixed-point build).
 target_compile_options(de_tp_opus PRIVATE

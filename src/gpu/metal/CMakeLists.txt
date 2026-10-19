@@ -43,6 +43,10 @@ de_add_module(
 )
 set_source_files_properties(${_de_mtl_objc_sources} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 
+if(NOT TARGET de_gpu_metal)
+    return()
+endif()
+
 # DENG-43: reproducible native translation source (bootstrap, independent of the cooker).
 set(_de_mtl_accel_source "${DE_ROOT_DIR}/shaders/rhi/accel_instances_metal.metal")
 set(_de_mtl_accel_header "${CMAKE_CURRENT_BINARY_DIR}/mtl_accel_shader.h")
