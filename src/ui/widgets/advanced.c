@@ -42,7 +42,7 @@ static void reflect(de_ui *ui) {
                                          F(DeUiList, item_height, DE_FK_F32),
                                          F(DeUiList, item_template, DE_FK_ASSET)};
     static const de_field_info tabs[] = {F(DeUiTabs, active, DE_FK_U32)};
-    static const de_field_info tip[] = {F(DeUiTooltip, text, DE_FK_NAME),
+    static const de_field_info tip[] = {F(DeUiTooltip, loc_id, DE_FK_NAME),
                                         F(DeUiTooltip, delay, DE_FK_F32)};
     static const de_field_info focus[] = {
         F(DeUiFocusable, tab_index, DE_FK_I32), F(DeUiFocusable, up, DE_FK_ENTITY),

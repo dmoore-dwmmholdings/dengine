@@ -25,14 +25,14 @@ TEST_F(ui_virtual_list, hundred_thousand_items_bounded_pool_and_exact_appearance
         if (event->kind == DE_UI_EV_BIND_ITEM)
             ++binds;
     EXPECT_EQ(binds, 0u);
-    de_ui_scroll_to(f->ui, e, (de_vec2){0, 40});
+    de_ui_scroll_offset(f->ui, e, (de_vec2){0, 40});
     ui_frame(f);
     binds = 0;
     while ((event = de_event_next(f->world, &reader)))
         if (event->kind == DE_UI_EV_BIND_ITEM)
             ++binds;
     EXPECT_EQ(binds, 1u);
-    de_ui_scroll_to(f->ui, e, (de_vec2){0, 1000000});
+    de_ui_scroll_offset(f->ui, e, (de_vec2){0, 1000000});
     ui_frame(f);
     binds = 0;
     while ((event = de_event_next(f->world, &reader)))
@@ -49,4 +49,9 @@ TEST_F(ui_virtual_list, hundred_thousand_items_bounded_pool_and_exact_appearance
     for (u32 i = 0; i < DE_MEM_TAG_BUILTIN_COUNT_; ++i)
         after += de_mem_stats_for_tag(i).alloc_count;
     EXPECT_EQ(after, before);
+    DeUiList *list = de_entity_get(f->world, e, f->ui->advanced->list);
+    list->item_height = 40;
+    ui_frame(f);
+    ui_frame(f);
+    EXPECT_EQ(de_entity_children_count(f->world, e), 5u);
 }

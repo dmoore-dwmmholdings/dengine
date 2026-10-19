@@ -334,11 +334,11 @@ static void content(ui_scene *s, bool editing) {
         DeUiText *t = de_entity_get(s->world, help, component(s, "DeUiText"));
         strcpy(t->text, "Hover for help");
         DeUiTooltip *tip = add(s, help, "DeUiTooltip");
-        tip->text = de_name_from("help");
+        tip->loc_id = de_name_from("help");
         tip->delay = .05f;
         for (u32 i = 0; i < 4; ++i)
             de_world_run_schedule(s->world, DE_SCHEDULE_POST_UPDATE, .016f, 0);
-        de_ui_scroll_to(s->ui, list, (de_vec2){0, 3600});
+        de_ui_scroll_offset(s->ui, list, (de_vec2){0, 3600});
         de_ui__dropdown_submit(s->ui, drop);
     }
 }

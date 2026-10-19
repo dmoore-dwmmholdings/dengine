@@ -294,7 +294,7 @@ retain editing state while the OS keyboard/candidate APIs report their normal un
 Dropdown options are localization IDs. A real modal popup flips upward when needed; outside
 click/cancel closes it and selection emits one CHANGED. Scroll controls clip children, clamp
 physical offsets, integrate decaying wheel momentum, draw draggable bars, and expose
-`de_ui_scroll_to` plus the navigation scroll-into-view hook. A list materializes at most
+`de_ui_scroll_offset` and child-based `de_ui_scroll_to`, plus the navigation scroll-into-view hook. A list materializes at most
 ceil(viewport/item-height)+2 rows, independently of100000-item data size. Configured prefabs
 are instantiated through the real asset API. Rows rotate their index mapping and emit
 BIND_ITEM only when their represented index changes; applications populate those row entities.

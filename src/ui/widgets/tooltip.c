@@ -46,7 +46,7 @@ void de_ui__tooltip_prepare(de_ui *ui, de_entity e, f32 dt) {
     n->safe_area = true;
     DeUiText *label = de_entity_add(ui->world, popup, ui->ids.text);
     *label = text;
-    label->loc_id = value.text;
+    label->loc_id = value.loc_id;
     label->literal = (de_str){0};
     label->text[0] = 0;
     DeUiPopup *place = de_entity_add(ui->world, popup, ui->ids.popup);

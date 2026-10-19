@@ -20,7 +20,7 @@ static de_vec2 limit(de_ui *ui, de_entity e) {
             ? fmaxf(0, s->extent.y - n->computed_rect.w + (v->horizontal ? 10 * ui->scale : 0))
             : 0};
 }
-void de_ui_scroll_to(de_ui *ui, de_entity e, de_vec2 offset) {
+void de_ui_scroll_offset(de_ui *ui, de_entity e, de_vec2 offset) {
     if (!ui || !ui->world || !ui->advanced)
         return;
     const DeUiScroll *old = de_entity_get_const(ui->world, e, ui->advanced->scroll);
@@ -84,7 +84,7 @@ void de_ui__scroll_prepare(de_ui *ui, de_entity e, f32 dt) {
         s->velocity.x *= decay;
         s->velocity.y *= decay;
     }
-    de_ui_scroll_to(ui, e, offset);
+    de_ui_scroll_offset(ui, e, offset);
 }
 static de_vec4 bar(de_ui *ui, de_entity e, bool vertical) {
     const DeUiNode *n = de_entity_get_const(ui->world, e, ui->ids.node);
@@ -147,7 +147,7 @@ void de_ui__scroll_frame(de_ui *ui, de_entity e, f32 dt) {
     }
     if (!de_mouse_down(in, DE_MOUSE_LEFT))
         s->dragging = 0;
-    de_ui_scroll_to(ui, e, offset);
+    de_ui_scroll_offset(ui, e, offset);
     (void)dt;
 }
 void de_ui__scroll_draw(de_ui *ui, de_entity e, de_vec4 r, de_ui_draw_emitter *em) {
@@ -182,5 +182,11 @@ void de_ui__scroll_into_view(de_ui *ui, de_entity container, de_entity child) {
         p.y += n->computed_rect.y - c->computed_rect.y;
     else if (n->computed_rect.y + n->computed_rect.w > bottom)
         p.y += n->computed_rect.y + n->computed_rect.w - bottom;
-    de_ui_scroll_to(ui, container, p);
+    de_ui_scroll_offset(ui, container, p);
+}
+
+void de_ui_scroll_to(de_ui *ui, de_entity container, de_entity child) {
+    if (!ui || !ui->world || !ui->advanced)
+        return;
+    de_ui__scroll_into_view(ui, container, child);
 }

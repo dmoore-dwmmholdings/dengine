@@ -32,12 +32,12 @@ static void scroll_fx_teardown(scroll_fx *f) {
 }
 TEST_F(ui_scroll, clipping_clamp_and_scroll_into_view, scroll_fx) {
     ui_fx *b = &f->base;
-    de_ui_scroll_to(b->ui, f->scroll, (de_vec2){0, 9999});
+    de_ui_scroll_offset(b->ui, f->scroll, (de_vec2){0, 9999});
     ui_frame(b);
     const DeUiScroll *v = de_entity_get_const(b->world, f->scroll, b->ui->advanced->scroll);
     EXPECT_FLOAT_EQ(v->offset.y, 320, .01f);
     expect_rect(ui_rect(b, f->child), 0, -320, 120, 400);
-    de_ui_scroll_to(b->ui, f->scroll, (de_vec2){0, -10});
+    de_ui_scroll_offset(b->ui, f->scroll, (de_vec2){0, -10});
     ui_frame(b);
     v = de_entity_get_const(b->world, f->scroll, b->ui->advanced->scroll);
     EXPECT_FLOAT_EQ(v->offset.y, 0, 0);
@@ -46,7 +46,7 @@ TEST_F(ui_scroll, clipping_clamp_and_scroll_into_view, scroll_fx) {
     anchor->offset_min = (de_vec2){0, 300};
     anchor->offset_max = (de_vec2){50, 320};
     ui_frame(b);
-    de_ui__scroll_into_view(b->ui, f->scroll, target);
+    de_ui_scroll_to(b->ui, f->scroll, target);
     ui_frame(b);
     v = de_entity_get_const(b->world, f->scroll, b->ui->advanced->scroll);
     EXPECT_FLOAT_EQ(v->offset.y, 240, .01f);
@@ -64,7 +64,7 @@ TEST_F(ui_scroll, injected_wheel_and_thumb_drag_with_momentum, scroll_fx) {
     ui_frame(b);
     v = de_entity_get_const(b->world, f->scroll, b->ui->advanced->scroll);
     EXPECT_TRUE(v->offset.y > first);
-    de_ui_scroll_to(b->ui, f->scroll, (de_vec2){0, 0});
+    de_ui_scroll_offset(b->ui, f->scroll, (de_vec2){0, 0});
     de_ui_scroll_state *state = de_entity_get(b->world, f->scroll, b->ui->advanced->scroll_state);
     state->velocity = (de_vec2){0};
     ui_frame(b);

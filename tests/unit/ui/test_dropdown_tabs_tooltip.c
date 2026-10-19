@@ -72,7 +72,7 @@ TEST_F(ui_advanced, tooltip_delay_focus_safe_bounds_and_press_hide, ui_fx) {
     anchor->offset_max = (de_vec2){390, 90};
     DeUiTooltip *t = de_entity_add(f->world, e, f->ui->advanced->tooltip);
     t->delay = .2f;
-    t->text = de_name_from("tip");
+    t->loc_id = de_name_from("tip");
     DeUiInteractionState *interaction = de_entity_add(f->world, e, f->ui->ids.state);
     interaction->focused = true;
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, .1f, 0), DE_OK);
@@ -95,7 +95,7 @@ TEST_F(ui_advanced, tooltip_delay_focus_safe_bounds_and_press_hide, ui_fx) {
 TEST_F(ui_advanced, actual_escape_and_outside_click_close_dropdown_without_selection, ui_fx) {
     de_input *input = input_test_create(NULL);
     ASSERT_TRUE(input);
-    de_ui_attach(f->ui,NULL);
+    de_ui_attach(f->ui, NULL);
     f->ui->desc.input = input;
     de_ui_attach(f->ui, f->world);
     de_entity root = ui_node(f, (de_entity){0}), e = ui_node(f, root);

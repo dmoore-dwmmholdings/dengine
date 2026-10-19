@@ -203,9 +203,11 @@ typedef struct DeUiList {
     de_prefab item_template;
 } DeUiList;
 typedef struct DeUiTabs { u32 active; } DeUiTabs;
-typedef struct DeUiTooltip { de_name text; f32 delay; } DeUiTooltip;
+typedef struct DeUiTooltip { de_name loc_id; f32 delay; } DeUiTooltip;
 /** Scroll offsets are physical pixels. Values are clamped to current content bounds. */
-DE_API void de_ui_scroll_to(de_ui *ui, de_entity container, de_vec2 offset);
+DE_API void de_ui_scroll_offset(de_ui *ui, de_entity container, de_vec2 offset);
+/** Reveal a child within its scroll container, clamping the resulting offset. */
+DE_API void de_ui_scroll_to(de_ui *ui, de_entity container, de_entity child);
 typedef struct DeUiFocusable {
     i32 tab_index;
     de_entity up, down, left, right;
