@@ -18,10 +18,11 @@ typedef struct de_ui_desc {
     de_renderer *renderer;
     de_text_system *text;
     de_input *input;
-    f32 reference_height; /* UI scale reference, e.g. 1080 */
-    bool pixel_art;       /* integer scaling + bitmap fonts */
-    de_window window;     /**< Optional window for output size and safe insets. */
-    u32 max_nodes;        /**< Zero:65536 retained nodes. Capacity is allocated at create. */
+    f32 reference_height;    /* UI scale reference, e.g. 1080 */
+    bool pixel_art;          /* integer scaling + bitmap fonts */
+    de_window window;        /**< Optional window for output size and safe insets. */
+    u32 max_nodes;           /**< Zero:65536 retained nodes. Capacity is allocated at create. */
+    de_asset_system *assets; /**< Optional stylesheet and font/texture asset source. */
 } de_ui_desc;
 
 DE_API de_result de_ui_create(const de_ui_desc *desc, de_ui **out);
@@ -52,6 +53,48 @@ typedef enum de_ui_align {
     DE_UI_ALIGN_SPACE_AROUND,
     DE_UI_ALIGN_AUTO /**< align_self only: inherit parent's align_items. */
 } de_ui_align;
+
+/** Widget tags drive stylesheet type selectors; widgets set the corresponding tag. */
+typedef enum de_ui_widget_type {
+    DE_UI_WIDGET_PANEL,
+    DE_UI_WIDGET_BUTTON,
+    DE_UI_WIDGET_TOGGLE,
+    DE_UI_WIDGET_SLIDER,
+    DE_UI_WIDGET_TEXT,
+    DE_UI_WIDGET_IMAGE,
+    DE_UI_WIDGET_PROGRESS,
+    DE_UI_WIDGET_INPUT,
+    DE_UI_WIDGET_SCROLL,
+    DE_UI_WIDGET_DROPDOWN,
+    DE_UI_WIDGET_TOOLTIP,
+    DE_UI_WIDGET_LIST,
+    DE_UI_WIDGET_TABS,
+    DE_UI_WIDGET_TREE,
+    DE_UI_WIDGET_CANVAS
+} de_ui_widget_type;
+typedef struct DeUiWidgetType {
+    de_ui_widget_type type;
+} DeUiWidgetType;
+typedef enum de_ui_easing {
+    DE_UI_EASE_LINEAR,
+    DE_UI_EASE_QUAD_IN,
+    DE_UI_EASE_QUAD_OUT,
+    DE_UI_EASE_QUAD_IN_OUT,
+    DE_UI_EASE_CUBIC_IN,
+    DE_UI_EASE_CUBIC_OUT,
+    DE_UI_EASE_CUBIC_IN_OUT,
+    DE_UI_EASE_BACK_OUT,
+    DE_UI_EASE_ELASTIC_OUT
+} de_ui_easing;
+/** Handle for a registered ui_style asset. It can be passed to de_ui_load_stylesheet.
+ * Loading/refcounting remains the caller's responsibility, as with ordinary blob assets. */
+DE_API de_blob de_ui_stylesheet(de_ui *ui, de_asset_id id);
+/** Switch variable overlays; NULL or empty selects the base variables. */
+DE_API de_result de_ui_set_theme(de_ui *ui, const char *name);
+typedef struct de_ui_style_stats {
+    u32 entities_restyled, active_tweens;
+} de_ui_style_stats;
+DE_API de_ui_style_stats de_ui_get_style_stats(const de_ui *ui);
 
 typedef struct DeUiNode {
     de_ui_display display;
@@ -97,6 +140,8 @@ typedef struct DeUiStyle {
     de_vec4 background, border_color;
     f32 border_width, corner_radius, opacity;
     de_vec4 text_color;
+    de_texture background_image;
+    de_vec4 nine_slice; /**< Left,top,right,bottom source pixel borders; zero = plain image. */
 } DeUiStyle;
 typedef struct DeUiInteractionState {
     bool hovered, pressed, focused, disabled;
@@ -175,6 +220,8 @@ typedef struct de_ui_event {
 
 DE_API void de_ui_set_focus(de_ui *ui, de_entity e);
 DE_API de_entity de_ui_focused(const de_ui *ui);
+/** Animate a reflected f32 field; accepts de_ui_easing values. Replacing the same field
+ * begins from its current value. Invalid arguments set the error context. Main thread. */
 DE_API void de_ui_tween(de_ui *ui, de_entity e, const char *property, f32 to, f32 seconds,
                         u32 easing);
 
