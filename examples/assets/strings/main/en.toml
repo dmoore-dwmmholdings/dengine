@@ -1,0 +1,4 @@
+[strings]
+"menu.play" = "Play"
+"menu.quit" = "Quit"
+"coins" = "{count, plural, one{# coin} other{# coins}}"

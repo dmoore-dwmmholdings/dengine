@@ -798,5 +798,8 @@ DE_API de_asset_stats de_asset_get_stats(const de_asset_system *s);
 DE_API de_result de_asset_last_error(de_asset_system *s, de_asset_id id, char *msg, u32 cap);
 /* ---------- End of hot reload (DENG-214) ---------- */
 
+/** DENG-264: a cooked per-locale string_table (including parent#locale sub-assets). */
+DE_API de_string_table de_asset_string_table(de_asset_system *s, de_asset_id id);
+
 DE_EXTERN_C_END
 #endif

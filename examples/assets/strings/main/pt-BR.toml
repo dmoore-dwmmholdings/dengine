@@ -1,0 +1,3 @@
+[strings]
+"menu.play" = "Jogar"
+"coins" = "{count, plural, one{# moeda} other{# moedas}}"

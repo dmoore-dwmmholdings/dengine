@@ -1,4 +1,5 @@
 #include "font_runtime_internal.h"
+#include "loc/loc_internal.h"
 #include "shape/shaper_internal.h"
 #include "glyph_cache_internal.h"
 #include "layout/layout_internal.h"
@@ -43,11 +44,22 @@ de_result de_text_create(const de_allocator *a, de_asset_system *assets, de_text
         DE_FREE(a, t, sizeof *t);
         return r;
     }
+    r = de__loc_create(a, assets, &t->loc);
+    if (r != DE_OK) {
+        de__text_layout_destroy(t);
+        de_text__glyph_cache_destroy(t);
+        de_text__shape_destroy(t);
+        de_text__runtime_destroy(t);
+        DE_FREE(a, t, sizeof *t);
+        return r;
+    }
+    t->localize = de_loc;
     *out = t;
     return DE_OK;
 }
 void de_text_destroy(de_text_system *t) {
     if (t) {
+        de__loc_destroy(t->loc);
 #if DE_HAS_RENDER
         de_text__render_destroy(t);
 #endif

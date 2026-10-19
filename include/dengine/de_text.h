@@ -136,5 +136,10 @@ DE_API u32 de_loc_format(const de_text_system *t, de_name id, const de_loc_arg *
                          char *out, u32 out_bytes);
 DE_API void de_loc_pseudo(de_text_system *t, bool enabled); /* pseudo-localization, Dev */
 
+/** Main thread. Changes the project fallback locale (initially en); async switch on text update. */
+DE_API de_result de_loc_set_default_locale(de_text_system *t, const char *locale);
+/** Increments once when a ready locale/pseudo table set is published. */
+DE_API u64 de_loc_generation(const de_text_system *t);
+
 DE_EXTERN_C_END
 #endif
