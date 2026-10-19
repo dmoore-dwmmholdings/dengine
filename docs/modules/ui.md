@@ -411,3 +411,14 @@ baseline because of a text-style tint difference; their references are preserved
 The existing eleven draw regressions pass, including real native brightness,
 Extract-token selection and image-pin retirement. Headless syntax and public
 header/layering checks pass. Vulkan/D3D12 native captures remain hardware checks.
+
+S29 exit verification now also runs a110-tick real gamepad-only advanced menu in
+`test_menu_replay.c`, preserving the original40-tick basic menu. The game authors
+public components/tab order and populates real virtual rows through BIND_ITEM;
+all activation uses actual resolved S21 actions and the production widget table.
+It visits13 main/generated controls and all6 pooled list buttons, activates the
+editor, selects a real dropdown option, exercises tabs and both generated headers,
+reveals a fully visible offscreen focused button through scrolling, then cancels
+and confirms exit. The saved `menu_replay/advanced_menu.deir` replays in a fresh
+UI/world/input with no device or event injection; per-tick focus, event/value hash,
+action checksum, editor/buffer hash, selection, tab and scroll state agree.
