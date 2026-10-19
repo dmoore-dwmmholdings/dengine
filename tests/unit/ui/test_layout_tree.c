@@ -129,6 +129,62 @@ TEST_F(ui_tree, text_measure_and_bounded_authored_string, ui_fx) {
     SKIP("font cooker disabled");
 #endif
 }
+#if defined(DE_UI_TEST_FONTS)
+static void distributed_text_height(ui_fx *f, bool percent) {
+    runtime_fx fonts = {0};
+    runtime_fx_setup(&fonts);
+    f->ui->desc.text = fonts.t;
+    de_entity root = ui_node(f, (de_entity){0}), text = ui_node(f, root), other = ui_node(f, root);
+    ui_node_edit(f, root)->align_items = DE_UI_ALIGN_START;
+    DeUiNode *node = ui_node_edit(f, text);
+    node->width = (de_ui_len){percent ? DE_UI_PERCENT : DE_UI_PX, percent ? 50 : 300};
+    for (u32 i = 0; i < 4; ++i)
+        node->padding[i] = (de_ui_len){DE_UI_PX, 5};
+    ui_node_edit(f, other)->width = (de_ui_len){DE_UI_PX, percent ? 200 : 300};
+    DeUiText *label = de_entity_add(f->world, text, f->ui->ids.text);
+    label->style.font = fonts.latin;
+    label->style.size_px = 20;
+    strcpy(label->text, "The quick brown fox jumps over the lazy dog. The quick brown fox "
+                        "jumps over the lazy dog.");
+    ui_frame(f);
+    label = de_entity_get(f->world, text, f->ui->ids.text);
+    de_text_layout *layout = NULL;
+    de_text_layout_desc desc = {
+        .utf8 = de_ui__text_content(f->ui, label), .style = &label->style, .max_width = 190};
+    ASSERT_EQ(de_text_layout_build(fonts.t, &desc, NULL, &layout), DE_OK);
+    f32 height = roundf(de_text_layout_size(layout).y + 10);
+    de_text_layout_free(layout);
+    EXPECT_FLOAT_EQ(ui_rect(f, text).z, 200, .5f);
+    EXPECT_FLOAT_EQ(ui_rect(f, text).w, height, .5f);
+    ui_frame(f);
+    EXPECT_FLOAT_EQ(ui_rect(f, text).w, height, .5f);
+    de_ui_set_viewport(f->ui, 600, 100, (de_window_insets){0});
+    ui_frame(f);
+    label = de_entity_get(f->world, text, f->ui->ids.text);
+    desc = (de_text_layout_desc){
+        .utf8 = de_ui__text_content(f->ui, label), .style = &label->style, .max_width = 290};
+    ASSERT_EQ(de_text_layout_build(fonts.t, &desc, NULL, &layout), DE_OK);
+    EXPECT_FLOAT_EQ(ui_rect(f, text).z, 300, .5f);
+    EXPECT_FLOAT_EQ(ui_rect(f, text).w, roundf(de_text_layout_size(layout).y + 10), .5f);
+    de_text_layout_free(layout);
+    f->ui->desc.text = NULL;
+    runtime_fx_teardown(&fonts);
+}
+#endif
+TEST_F(ui_tree, percent_basis_text_wraps_at_distributed_width, ui_fx) {
+#if defined(DE_UI_TEST_FONTS)
+    distributed_text_height(f, true);
+#else
+    SKIP("font cooker disabled");
+#endif
+}
+TEST_F(ui_tree, shrunk_fixed_basis_text_wraps_at_distributed_width, ui_fx) {
+#if defined(DE_UI_TEST_FONTS)
+    distributed_text_height(f, false);
+#else
+    SKIP("font cooker disabled");
+#endif
+}
 #if defined(DE_UI_ASSET_ROOT) && DE_HAS_RENDER
 #include "render/renderer_internal.h"
 #include "render/loaders/render_assets.h"

@@ -53,13 +53,18 @@ de_vec2 de_ui__measure_image(de_ui *ui, de_entity entity, de_vec2 available) {
     return (de_vec2){0};
 }
 de_vec2 de_ui__measure(de_ui_layout *layout, u32 index, de_vec2 available) {
+    return de_ui__measure_assigned(layout, index, available, (de_vec2){0}, 0);
+}
+de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 available,
+                                de_vec2 assigned, u32 axes) {
     de_ui *ui = layout->ui;
     de_ui_record *record = &ui->records[index];
     const DeUiNode *node = &record->node;
     if (node->display == DE_UI_NONE)
         return (de_vec2){0};
     if (!record->measure_dirty && record->measured_available.x == available.x &&
-        record->measured_available.y == available.y)
+        record->measured_available.y == available.y && record->measured_axes == axes &&
+        record->measured_assigned.x == assigned.x && record->measured_assigned.y == assigned.y)
         return record->intrinsic;
     ++ui->stats.nodes_measured;
     f32 top = de_ui__length(node->padding[0], available.y, ui->scale, 0),
@@ -76,6 +81,10 @@ de_vec2 de_ui__measure(de_ui_layout *layout, u32 index, de_vec2 available) {
         height = de_ui__length(node->height, available.y, ui->scale, available.y);
     width = clamp_axis(width, node->min_width, node->max_width, available.x, ui->scale);
     height = clamp_axis(height, node->min_height, node->max_height, available.y, ui->scale);
+    if (axes & 1u)
+        width = assigned.x;
+    if (axes & 2u)
+        height = assigned.y;
     de_vec2 content = {fmaxf(0, width - left - right), fmaxf(0, height - top - bottom)},
             intrinsic = {0};
     for (u32 i = 0; i < ui->measure_count; ++i)
@@ -124,8 +133,14 @@ de_vec2 de_ui__measure(de_ui_layout *layout, u32 index, de_vec2 available) {
                              node->min_width, node->max_width, available.x, ui->scale);
     intrinsic.y = clamp_axis(de_ui__length(node->height, available.y, ui->scale, intrinsic.y),
                              node->min_height, node->max_height, available.y, ui->scale);
+    if (axes & 1u)
+        intrinsic.x = assigned.x;
+    if (axes & 2u)
+        intrinsic.y = assigned.y;
     record->intrinsic = intrinsic;
     record->measured_available = available;
+    record->measured_assigned = assigned;
+    record->measured_axes = axes;
     record->measure_dirty = false;
     return intrinsic;
 }

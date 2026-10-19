@@ -25,6 +25,8 @@ typedef struct de_ui_record {
     DeUiNode node;
     de_vec2 intrinsic;
     de_vec2 measured_available;
+    de_vec2 measured_assigned;
+    u32 measured_axes;
     u32 font_generation, component_mask;
     u64 locale_generation;
     bool dirty, measure_dirty, alive;
@@ -59,7 +61,6 @@ struct de_ui {
     struct de_ui_binding_system *binding;
     struct de_ui_advanced *advanced;
     void (*content_geometry)(de_ui *, de_entity, de_vec4 *);
-
 };
 typedef struct de_ui_resource {
     de_ui *ui;
