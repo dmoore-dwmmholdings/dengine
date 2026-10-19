@@ -58,3 +58,28 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+# FindPkgConfig invokes a host program whose search paths do not follow CMake's
+# root-path rules. Restrict its metadata to the target sysroot as well.
+set(_de_pkgconfig_dirs
+    "${_de_sysroot}/usr/lib/${_de_triple}/pkgconfig"
+    "${_de_sysroot}/usr/lib/pkgconfig"
+    "${_de_sysroot}/usr/lib64/pkgconfig"
+    "${_de_sysroot}/usr/share/pkgconfig"
+    "${_de_sysroot}/lib/${_de_triple}/pkgconfig"
+    "${_de_sysroot}/lib/pkgconfig"
+    "${_de_sysroot}/lib64/pkgconfig"
+    "${_de_sysroot}/usr/local/lib/${_de_triple}/pkgconfig"
+    "${_de_sysroot}/usr/local/lib/pkgconfig"
+    "${_de_sysroot}/usr/local/lib64/pkgconfig"
+    "${_de_sysroot}/usr/local/share/pkgconfig")
+if(CMAKE_HOST_WIN32)
+    list(JOIN _de_pkgconfig_dirs ";" _de_pkgconfig_path)
+else()
+    list(JOIN _de_pkgconfig_dirs ":" _de_pkgconfig_path)
+endif()
+set(ENV{PKG_CONFIG_SYSROOT_DIR} "${_de_sysroot}")
+set(ENV{PKG_CONFIG_LIBDIR} "${_de_pkgconfig_path}")
+set(ENV{PKG_CONFIG_PATH} "")
+# FindPkgConfig otherwise appends unrooted host CMAKE_PREFIX_PATH directories.
+set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH FALSE)
