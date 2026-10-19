@@ -258,7 +258,9 @@ static void count_changed(const de_query_chunk *chunk, void *user) {
 static void changed(de_system_ctx *ctx) {
     bind_fx *f = ctx->user;
     f->changed = 0;
+    u32 count = de_query_count(ctx->world, ctx->queries[0]);
     de_query_each(ctx->world, ctx->queries[0], count_changed, f);
+    EXPECT_EQ(count, f->changed);
 }
 TEST_F(ui_binding, actual_slider_toggle_changed_writeback_and_readonly_marks_next_update, bind_fx) {
     de_ui *ui = f->ui.ui;

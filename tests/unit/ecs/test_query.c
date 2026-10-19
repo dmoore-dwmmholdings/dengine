@@ -831,8 +831,8 @@ TEST_F(query, change_filter_runs, ecs_fx) {
     EXPECT_TRUE(g_runs.ok);
     EXPECT_EQ(g_runs.rows, expected);
     EXPECT_GT(g_runs.slices, 50u); /* runs, not whole chunks */
-    /* de_query_count does not apply change filters. */
-    EXPECT_EQ(de_query_count(f->w, q), 37u + 120u + 5u + 64u + 200u);
+    /* Counting honors the same row predicate as serial and parallel iteration. */
+    EXPECT_EQ(de_query_count(f->w, q), expected);
 
     /* par_each delivers the same rows. */
     for (u32 grain = 1; grain < 40; grain += 13) {

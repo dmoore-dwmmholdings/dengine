@@ -54,6 +54,7 @@ typedef struct sim_system {
     de_query q;
     bool ran;
     u32 this_run; /* tick of the last run */
+    u32 counted_before;
 } sim_system;
 
 static sim_system sys_make(de_world *w, const de_query_term *t, u32 nt, const de_query_filter *fl,
@@ -76,6 +77,7 @@ static void sys_run_with(de_world *w, sim_system *s, de_chunk_fn fn, void *user,
     ASSERT_TRUE(iq != NULL);
     const u32 last_run = s->ran ? iq->this_run_tick : this_run - ECS_MAX_CHANGE_AGE;
     ecs_query_set_change_window(w, s->q, last_run, this_run);
+    s->counted_before = de_query_count(w, s->q);
     if (par)
         de_query_par_each(w, s->q, grain, fn, user);
     else
@@ -89,6 +91,7 @@ static u32 sys_run(de_world *w, sim_system *s, seen_set *out) {
     out->n = 0;
     out->overflow = false;
     sys_run_with(w, s, seen_fn, out, 0, false);
+    EXPECT_EQ(s->counted_before, out->n);
     EXPECT_FALSE(out->overflow);
     return out->n;
 }
@@ -112,6 +115,26 @@ static de_entity spawn(ecs_fx *f, const de_component *c, u32 n) {
 }
 
 static seen_set g_seen;
+
+TEST_F(change, count_does_not_mark_write_terms, ecs_fx) {
+    ecs_debug_set_tick(f->w, 1);
+    de_entity e = spawn(f, &f->pos, 1);
+    ecs_debug_set_tick(f->w, 3);
+    const de_query_term term = {f->pos, DE_WRITE};
+    const de_query_filter filter = {f->pos, DE_CHANGED};
+    const de_query_desc desc = {&term, 1, &filter, 1};
+    de_query q = de_query_create(f->w, &desc);
+    ASSERT_TRUE(q.id);
+    ecs_query_set_change_window(f->w, q, 0, 1);
+    EXPECT_EQ(de_query_count(f->w, q), 1u);
+    u32 added, changed;
+    row_ticks(f->w, e, f->pos, &added, &changed);
+    EXPECT_EQ(changed, 1u);
+    EXPECT_EQ(de_query_count(f->w, q), 1u);
+    ecs_query_set_change_window(f->w, q, 1, 3);
+    EXPECT_EQ(de_query_count(f->w, q), 0u);
+    de_query_destroy(f->w, q);
+}
 
 /* ---- change.added_once ------------------------------------------------------------------------
  */
