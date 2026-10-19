@@ -1,0 +1,15 @@
+target_sources(de_golden PRIVATE pixel2d_scenes.c)
+target_compile_definitions(de_golden PRIVATE
+    "DE_PIXEL2D_ASSETS=\"${DE_ROOT_DIR}/examples/scenes/pixel2d\""
+    "DE_PIXEL2D_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/cache\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cache")
+foreach(_backend IN ITEMS metal vulkan d3d12)
+    foreach(_case IN ITEMS base_int4x rt_int4x sharp_bilinear subtexel_scroll palette_dither translucent_sort)
+        if(TEST golden.${_backend}.pixel2d_${_case})
+            set_tests_properties(golden.${_backend}.pixel2d_${_case} PROPERTIES LABELS "golden;pixel2d;gpu")
+            if(NOT _backend STREQUAL "metal")
+                set_property(TEST golden.${_backend}.pixel2d_${_case} APPEND PROPERTY LABELS "needs-hw-verify")
+            endif()
+        endif()
+    endforeach()
+endforeach()

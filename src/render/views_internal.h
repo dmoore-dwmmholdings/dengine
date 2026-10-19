@@ -140,6 +140,8 @@ typedef struct de__view_frame {
      * `color` into `output` when they differ.
      */
     de_rg_resource color;
+    de_rg_resource
+        initial_color; /**< Original internal/output target before debug/post replacements. */
     de_gpu_format color_format;
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;

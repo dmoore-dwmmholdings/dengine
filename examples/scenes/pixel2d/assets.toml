@@ -1,0 +1,19 @@
+[project]
+asset_root = "."
+
+[assets]
+"tex/character" = {type="texture", source="textures/character.png", pixel_art=true, compression="none"}
+"tex/character_emissive" = {type="texture", source="textures/character_emissive.png", pixel_art=true, compression="none"}
+"tex/character_normal" = {type="texture", source="textures/character_normal.png", pixel_art=true, compression="none", usage="normal"}
+"tex/foliage" = {type="texture", source="textures/foliage.png", pixel_art=true, compression="none"}
+"tex/glass" = {type="texture", source="textures/glass.png", pixel_art=true, compression="none"}
+"tex/palette" = {type="texture", source="textures/palette.png", pixel_art=true, compression="none"}
+"tex/ruins" = {type="texture", source="textures/ruins.png", pixel_art=true, compression="none"}
+"tex/sky" = {type="texture", source="textures/sky.png", pixel_art=true, compression="none"}
+"tex/smoke" = {type="texture", source="textures/smoke.png", pixel_art=true, compression="none"}
+"tex/stone" = {type="texture", source="textures/stone.png", pixel_art=true, compression="none"}
+"tex/torch" = {type="texture", source="textures/torch.png", pixel_art=true, compression="none"}
+"scene/pixel2d" = {type="scene",source="pixel2d.scene.toml"}
+
+[bundles.pixel2d]
+assets = ["tex/*", "scene/*"]
