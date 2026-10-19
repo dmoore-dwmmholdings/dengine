@@ -244,11 +244,20 @@ static u32 read_voice(de_audio *a, de__voice *v, f32 *out, u32 frames) {
     de__audio_source *s = v->src;
     u32 channels = s->channels;
     if (!v->resampling) {
-        u32 n = s->vt->read(s, out, frames, channels);
-        if (n > frames)
-            n = frames;
-        if (n < frames && v->loop && s->vt->seek && s->vt->seek(s, 0))
-            n += s->vt->read(s, out + (size_t)n * channels, frames - n, channels);
+        u32 n = 0;
+        bool restarted = false;
+        while (n < frames) {
+            u32 got = s->vt->read(s, out + (size_t)n * channels, frames - n, channels);
+            if (got > frames - n)
+                got = frames - n;
+            n += got;
+            if (got)
+                restarted = false;
+            /* At most one unsuccessful read after a seek: empty sources cannot spin. */
+            if (n == frames || !v->loop || restarted || !s->vt->seek || !s->vt->seek(s, 0))
+                break;
+            restarted = true;
+        }
         v->frames_played += n;
         return n;
     }

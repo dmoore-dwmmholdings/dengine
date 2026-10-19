@@ -260,7 +260,8 @@ TEST(audio_sched, play_sound_needs_sources) {
     de_voice v = de_audio_play(a, &d);
     EXPECT_FALSE(DE_HANDLE_VALID(v));
     ASSERT_TRUE(de_error_last() != NULL);
-    EXPECT_EQ(de_error_last()->result, DE_ERR_UNSUPPORTED);
+    /* Source support exists; this manual mixer has no asset system to resolve the handle. */
+    EXPECT_EQ(de_error_last()->result, DE_ERR_INVALID_ARGUMENT);
     EXPECT_FALSE(DE_HANDLE_VALID(de_audio_play(a, NULL)));
     EXPECT_FALSE(de_audio_playing(a, v));
     de_audio_destroy(a);
