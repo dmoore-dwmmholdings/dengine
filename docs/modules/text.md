@@ -11,8 +11,10 @@ Font assets accept TrueType/OpenType outlines, BMFont v3 text or binary files wi
 PNG pages, and PNG pixel fonts with a TOML mapping sidecar. Outline fonts cook to
 DFNT v1 with a deterministic MTSDF atlas; bitmap fonts preserve source pixels and
 metrics. Manifest settings include `em_px`, `px_range`, `page_size`, `charset`,
-`chars` and codepoint `ranges`. Ranges currently use strings such as
-`ranges = ["0x100-0x24f"]`; numeric nested arrays are tracked by DENG-468. The
+`chars` and codepoint `ranges`. Ranges accept inclusive integer pairs such as
+`ranges = [[256, 591], [0x400, 0x4ff]]` or the existing string syntax
+`ranges = ["0x100-0x24f"]`. Pairs require two ordered integers in `0..0x10ffff`;
+surrogate codepoints are excluded. The
 pixel sidecar accepts explicit numeric `cell = [8,8]` and per-character advances.
 
 The importer validates font/BMFont inputs, character ranges and page bounds.

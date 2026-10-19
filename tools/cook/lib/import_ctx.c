@@ -281,6 +281,12 @@ static const de__manifest_kv *ctx_setting(const de_asset_import_ctx *ctx, const 
     return NULL;
 }
 
+const de_asset_setting_value *de_asset_import_setting_value(const de_asset_import_ctx *ctx,
+                                                            const char *key) {
+    const de__manifest_kv *kv = ctx_setting(ctx, key);
+    return kv ? &kv->value : NULL;
+}
+
 bool de_asset_import_setting_has(const de_asset_import_ctx *ctx, const char *key) {
     return ctx_setting(ctx, key) != NULL;
 }

@@ -280,19 +280,24 @@ de_result de__pipeline_upload_stage(de_asset_system *s, de_asset_load_ctx *ctx) 
  */
 
 /* Bytes the settings copy needs: the kv array, the string-array item pointers, the characters. */
-static void settings_size(const de__manifest_asset *a, size_t *ptrs, size_t *chars) {
-    *ptrs = 0;
-    *chars = 0;
+static void value_size(const de__manifest_value *value, size_t *ptrs, size_t *chars,
+                       size_t *nodes) {
+    if (value->type == DE__MANIFEST_STRING)
+        *chars += strlen(value->u.s) + 1u;
+    else if (value->type == DE__MANIFEST_STRING_ARRAY) {
+        *ptrs += value->u.arr.count;
+        for (u32 i = 0; i < value->u.arr.count; ++i)
+            *chars += strlen(value->u.arr.items[i]) + 1u;
+    } else if (value->type == DE__MANIFEST_ARRAY) {
+        *nodes += value->u.values.count;
+        for (u32 i = 0; i < value->u.values.count; ++i)
+            value_size(&value->u.values.items[i], ptrs, chars, nodes);
+    }
+}
+static void settings_size(const de__manifest_asset *a, size_t *ptrs, size_t *chars, size_t *nodes) {
     for (u32 i = 0; i < a->setting_count; ++i) {
-        const de__manifest_kv *kv = &a->settings[i];
-        *chars += strlen(kv->key) + 1u;
-        if (kv->value.type == DE__MANIFEST_STRING) {
-            *chars += strlen(kv->value.u.s) + 1u;
-        } else if (kv->value.type == DE__MANIFEST_STRING_ARRAY) {
-            *ptrs += kv->value.u.arr.count;
-            for (u32 k = 0; k < kv->value.u.arr.count; ++k)
-                *chars += strlen(kv->value.u.arr.items[k]) + 1u;
-        }
+        *chars += strlen(a->settings[i].key) + 1u;
+        value_size(&a->settings[i].value, ptrs, chars, nodes);
     }
 }
 
@@ -304,16 +309,38 @@ static char *copy_str(char **at, const char *src) {
     return dst;
 }
 
+static void copy_value(de__manifest_value *dst, const de__manifest_value *src, const char ***ptrs,
+                       de__manifest_value **nodes, char **chars) {
+    *dst = *src;
+    if (src->type == DE__MANIFEST_STRING)
+        dst->u.s = copy_str(chars, src->u.s);
+    else if (src->type == DE__MANIFEST_STRING_ARRAY) {
+        const char **items = *ptrs;
+        *ptrs += src->u.arr.count;
+        dst->u.arr.items = items;
+        for (u32 i = 0; i < src->u.arr.count; ++i)
+            items[i] = copy_str(chars, src->u.arr.items[i]);
+    } else if (src->type == DE__MANIFEST_ARRAY) {
+        de__manifest_value *items = *nodes;
+        *nodes += src->u.values.count;
+        dst->u.values.items = items;
+        for (u32 i = 0; i < src->u.values.count; ++i)
+            copy_value(&items[i], &src->u.values.items[i], ptrs, nodes, chars);
+    }
+}
+
 /* A new job for `slot`: one block with the asset path, the source path and the settings. */
 static de__pjob *job_new(de__pipeline *pl, u32 slot, const de__slot *sl,
                          const de__manifest_asset *a, const de_asset_type_desc *type,
                          const char *vpath, de__load_priority priority) {
-    size_t ptrs = 0, chars = 0;
-    settings_size(a, &ptrs, &chars);
+    size_t ptrs = 0, chars = 0, nodes = 0;
+    settings_size(a, &ptrs, &chars, &nodes);
     size_t off_kv = align_up(sizeof(de__pjob), DE_ALIGNOF(de__manifest_kv));
     size_t off_ptrs =
         align_up(off_kv + sizeof(de__manifest_kv) * a->setting_count, DE_ALIGNOF(const char *));
-    size_t off_chars = off_ptrs + sizeof(const char *) * ptrs;
+    size_t off_nodes =
+        align_up(off_ptrs + sizeof(const char *) * ptrs, DE_ALIGNOF(de__manifest_value));
+    size_t off_chars = off_nodes + sizeof(de__manifest_value) * nodes;
     size_t size = off_chars + chars + strlen(a->id) + 1u + strlen(vpath) + 1u;
     u8 *block = (u8 *)DE_ALLOC(pl->alloc, size, DE_ALIGNOF(de__pjob), DE_MEM_ASSET);
     if (block == NULL)
@@ -333,20 +360,14 @@ static de__pjob *job_new(de__pipeline *pl, u32 slot, const de__slot *sl,
 
     de__manifest_kv *kvs = (de__manifest_kv *)(block + off_kv);
     const char **items = (const char **)(block + off_ptrs);
+    de__manifest_value *values = (de__manifest_value *)(block + off_nodes);
     char *at = (char *)(block + off_chars);
     for (u32 i = 0; i < a->setting_count; ++i) {
         const de__manifest_kv *src = &a->settings[i];
         de__manifest_kv *dst = &kvs[i];
         *dst = *src;
         dst->key = copy_str(&at, src->key);
-        if (src->value.type == DE__MANIFEST_STRING) {
-            dst->value.u.s = copy_str(&at, src->value.u.s);
-        } else if (src->value.type == DE__MANIFEST_STRING_ARRAY) {
-            for (u32 k = 0; k < src->value.u.arr.count; ++k)
-                items[k] = copy_str(&at, src->value.u.arr.items[k]);
-            dst->value.u.arr.items = items;
-            items += src->value.u.arr.count;
-        }
+        copy_value(&dst->value, &src->value, &items, &values, &at);
     }
     job->settings = a->setting_count != 0 ? kvs : NULL;
     job->setting_count = a->setting_count;

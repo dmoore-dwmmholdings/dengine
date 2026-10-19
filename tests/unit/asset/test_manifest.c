@@ -133,13 +133,13 @@ TEST(manifest, example_parses) {
     EXPECT_TRUE(m->has_version);
     EXPECT_EQ(m->version, 1);
 
-    /* 18 assets in the example, 2 in characters.toml, 2 in audio.toml; file order. */
-    ASSERT_EQ(m->asset_count, 22u);
+    /* 19 assets in the example, 2 in characters.toml, 2 in audio.toml; file order. */
+    ASSERT_EQ(m->asset_count, 23u);
     EXPECT_STREQ(m->assets[0].id, "env/castle");
     EXPECT_STREQ(m->assets[17].id, "ui/logo");
-    EXPECT_STREQ(m->assets[18].id, "player/model");
-    EXPECT_STREQ(m->assets[18].file, "aex:/characters.toml");
-    EXPECT_STREQ(m->assets[21].id, "music/credits");
+    EXPECT_STREQ(m->assets[19].id, "player/model");
+    EXPECT_STREQ(m->assets[19].file, "aex:/characters.toml");
+    EXPECT_STREQ(m->assets[22].id, "music/credits");
     const de__manifest_asset *castle = de__manifest_find_asset(m, "env/castle");
     ASSERT_TRUE(castle != NULL);
     EXPECT_STREQ(castle->type, "model");
@@ -292,13 +292,20 @@ TEST(manifest, settings_types) {
     EXPECT_FLOAT_EQ(setting(a, "f")->value.u.f, 2.5, 0.0);
     EXPECT_EQ(setting(a, "b")->value.type, DE__MANIFEST_BOOL);
 
-    /* Tables, non-string arrays and dates are not settings: one error each, asset dropped. */
-    EXPECT_EQ(m->error_count, 3u);
+    /* Tables and dates are rejected; numeric arrays retain their typed values. */
+    EXPECT_EQ(m->error_count, 2u);
     EXPECT_TRUE(find_issue(m, DE_ASSET_ISSUE_ERROR, "assets.bad.nested") != NULL);
-    EXPECT_TRUE(find_issue(m, DE_ASSET_ISSUE_ERROR, "assets.bad2.nums") != NULL);
+    const de__manifest_asset *numeric = de__manifest_find_asset(m, "bad2");
+    ASSERT_TRUE(numeric != NULL);
+    const de__manifest_value *nums = &setting(numeric, "nums")->value;
+    ASSERT_EQ(nums->type, DE__MANIFEST_ARRAY);
+    ASSERT_EQ(nums->u.values.count, 2u);
+    EXPECT_EQ(nums->u.values.items[0].type, DE__MANIFEST_INT);
+    EXPECT_EQ(nums->u.values.items[0].u.i, 1);
+    EXPECT_EQ(nums->u.values.items[1].u.i, 2);
     EXPECT_TRUE(find_issue(m, DE_ASSET_ISSUE_ERROR, "assets.bad3.when") != NULL);
     EXPECT_TRUE(de__manifest_find_asset(m, "bad") == NULL);
-    EXPECT_EQ(m->asset_count, 1u);
+    EXPECT_EQ(m->asset_count, 2u);
     de__manifest_destroy(m);
 }
 
@@ -760,7 +767,7 @@ TEST(manifest, oom_sweep) {
             if (m->error_count != 0)
                 dump_issues(m);
             EXPECT_EQ(m->error_count, 0u);
-            EXPECT_EQ(m->asset_count, 22u);
+            EXPECT_EQ(m->asset_count, 23u);
             de__manifest_destroy(m);
             done = true;
         } else {
@@ -895,4 +902,59 @@ TEST(asset_system, set_locale) {
                   &(de_asset_system_desc){.locale = "x-0123456789-0123456789-0123456789-0123"}, &s),
               DE_ERR_INVALID_ARGUMENT);
     EXPECT_TRUE(s == NULL);
+}
+
+TEST(manifest, nested_array_depth_limit) {
+    /* Include string-array leaves in the limit, and reject tables inside arrays. */
+    for (u32 depth = 16; depth <= 17; ++depth) {
+        char text[256] = "[assets.a]\ntype='t'\nsource='s'\nx=";
+        size_t at = strlen(text);
+        for (u32 i = 0; i < depth; ++i)
+            text[at++] = '[';
+        memcpy(text + at, "'leaf'", 6);
+        at += 6;
+        for (u32 i = 0; i < depth; ++i)
+            text[at++] = ']';
+        text[at++] = '\n';
+        text[at] = 0;
+        mem_file file = {"mem:/assets.toml", text};
+        de__manifest *m = parse_mem(&file, 1, file.path, NULL);
+        EXPECT_EQ(m->error_count, depth == 16 ? 0u : 1u);
+        EXPECT_EQ(m->asset_count, depth == 16 ? 1u : 0u);
+        de__manifest_destroy(m);
+    }
+    mem_file file = {"mem:/assets.toml", "[assets.a]\ntype='t'\nsource='s'\nx=[[{k=1}]]\n"};
+    de__manifest *m = parse_mem(&file, 1, file.path, NULL);
+    EXPECT_EQ(m->error_count, 1u);
+    EXPECT_EQ(m->asset_count, 0u);
+    de__manifest_destroy(m);
+}
+
+TEST(manifest, nested_settings_oom_sweep) {
+    mem_file file = {
+        "mem:/assets.toml",
+        "[assets.a]\ntype='t'\nsource='s'\nx=[[256,591],'owned',['a','b'],true,2.5]\n"};
+    de_tracking_allocator track;
+    de_allocator a = de_tracking_allocator_init(&track, NULL, DE_MEM_ASSET);
+    bool done = false;
+    g_files = &file;
+    g_file_count = 1;
+    for (i64 n = 0; n < 10000 && !done; ++n) {
+        de_tracking_allocator_fail_after(&track, n);
+        de__manifest *m = NULL;
+        de_result r = de__manifest_parse(
+            &(de__manifest_parse_desc){.path = file.path, .allocator = &a, .read = mem_read}, &m);
+        if (r == DE_OK) {
+            ASSERT_TRUE(m != NULL);
+            EXPECT_EQ(m->error_count, 0u);
+            EXPECT_EQ(m->asset_count, 1u);
+            de__manifest_destroy(m);
+            done = true;
+        } else {
+            EXPECT_EQ(r, DE_ERR_OUT_OF_MEMORY);
+            EXPECT_TRUE(m == NULL);
+        }
+        EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
+    }
+    EXPECT_TRUE(done);
 }

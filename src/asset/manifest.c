@@ -384,7 +384,8 @@ static bool mf_string_array(mf_parser *p, const toml_datum_t *d, const char *con
 
 /* Converts a settings value. `*ok_out` false (and an error issue) for a type settings cannot
  * hold. Returns false only on OOM. */
-static bool mf_value(mf_parser *p, const toml_datum_t *d, de__manifest_value *out, bool *ok_out) {
+static bool mf_value_at(mf_parser *p, const toml_datum_t *d, de__manifest_value *out, bool *ok_out,
+                        u32 depth) {
     *ok_out = true;
     memset(out, 0, sizeof *out);
     switch (d->type) {
@@ -404,16 +405,44 @@ static bool mf_value(mf_parser *p, const toml_datum_t *d, de__manifest_value *ou
         out->type = DE__MANIFEST_STRING;
         out->u.s = mf_strndup(p, d->u.str.ptr, (size_t)d->u.str.len);
         return out->u.s != NULL;
-    case TOML_ARRAY:
-        out->type = DE__MANIFEST_STRING_ARRAY;
-        return mf_string_array(p, d, &out->u.arr.items, &out->u.arr.count, ok_out);
+    case TOML_ARRAY: {
+        if (depth >= 16) {
+            *ok_out = false;
+            return MF_ERROR(p, mf_line(d), "settings array nesting exceeds 16 levels");
+        }
+        bool strings = true;
+        u32 count = (u32)d->u.arr.size;
+        for (u32 i = 0; i < count; ++i)
+            strings &= d->u.arr.elem[i].type == TOML_STRING;
+        if (strings) {
+            out->type = DE__MANIFEST_STRING_ARRAY;
+            return mf_string_array(p, d, &out->u.arr.items, &out->u.arr.count, ok_out);
+        }
+        out->type = DE__MANIFEST_ARRAY;
+        de__manifest_value *values =
+            DE_ALLOC(&p->aa, sizeof *values * count, DE_ALIGNOF(de__manifest_value), DE_MEM_ASSET);
+        if (!values)
+            return false;
+        out->u.values.items = values;
+        out->u.values.count = count;
+        for (u32 i = 0; i < count; ++i) {
+            bool valid;
+            if (!mf_value_at(p, &d->u.arr.elem[i], &values[i], &valid, depth + 1))
+                return false;
+            *ok_out &= valid;
+        }
+        return true;
+    }
     default:
         *ok_out = false;
         return MF_ERROR(p, mf_line(d),
-                        "settings hold booleans, integers, floats, strings and arrays of "
-                        "strings; found %s",
+                        "settings hold booleans, integers, floats, strings and arrays; found %s",
                         mf_type_name(d->type));
     }
+}
+
+static bool mf_value(mf_parser *p, const toml_datum_t *d, de__manifest_value *out, bool *ok_out) {
+    return mf_value_at(p, d, out, ok_out, 0);
 }
 
 static bool mf_is_variants(const toml_datum_t *tab, int32_t i) {

@@ -36,27 +36,14 @@ DE_EXTERN_C_BEGIN
 typedef de_asset_manifest_issue de__manifest_issue;
 
 /** The type of a settings value. TOML types are kept, so S08 can hash settings exactly. */
-typedef enum de__manifest_value_type {
-    DE__MANIFEST_BOOL,
-    DE__MANIFEST_INT,
-    DE__MANIFEST_FLOAT,
-    DE__MANIFEST_STRING,
-    DE__MANIFEST_STRING_ARRAY
-} de__manifest_value_type;
-
-typedef struct de__manifest_value {
-    de__manifest_value_type type;
-    union {
-        bool b;
-        i64 i;
-        f64 f;
-        const char *s;
-        struct {
-            const char *const *items;
-            u32 count;
-        } arr;
-    } u;
-} de__manifest_value;
+typedef de_asset_setting_type de__manifest_value_type;
+typedef de_asset_setting_value de__manifest_value;
+#define DE__MANIFEST_BOOL         DE_ASSET_SETTING_BOOL
+#define DE__MANIFEST_INT          DE_ASSET_SETTING_INT
+#define DE__MANIFEST_FLOAT        DE_ASSET_SETTING_FLOAT
+#define DE__MANIFEST_STRING       DE_ASSET_SETTING_STRING
+#define DE__MANIFEST_STRING_ARRAY DE_ASSET_SETTING_STRING_ARRAY
+#define DE__MANIFEST_ARRAY        DE_ASSET_SETTING_ARRAY
 
 /** One importer setting. */
 typedef struct de__manifest_kv {

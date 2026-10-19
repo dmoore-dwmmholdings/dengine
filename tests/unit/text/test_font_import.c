@@ -1,4 +1,63 @@
 #include "font_test_util.h"
+static de_result range_manifest_read(void *user, const char *path, const de_allocator *a,
+                                     void **data, u64 *size) {
+    (void)path;
+    const char *text = user;
+    *size = strlen(text);
+    *data = DE_ALLOC(a, *size + 1, 1, DE_MEM_ASSET);
+    if (!*data)
+        return DE_ERR_OUT_OF_MEMORY;
+    memcpy(*data, text, *size + 1);
+    return DE_OK;
+}
+TEST(font, numeric_nested_ranges_match_legacy_string_ranges) {
+    const char *source =
+        "[assets]\nfont={type='font',source='NotoSans.ttf',ranges=[[65,67],[0x100,0x102]]}\n";
+    de__manifest *manifest = NULL;
+    ASSERT_EQ(de__manifest_parse(&(de__manifest_parse_desc){.path = "ranges:/assets.toml",
+                                                            .read = range_manifest_read,
+                                                            .read_user = (void *)source},
+                                 &manifest),
+              DE_OK);
+    ASSERT_EQ(manifest->error_count, 0u);
+    const de__manifest_asset *asset = de__manifest_find_asset(manifest, "font");
+    ASSERT_TRUE(asset);
+    de_cook_result numeric = {0}, legacy = {0};
+    ASSERT_EQ(font_cook("NotoSans.ttf", asset->settings, asset->setting_count, &numeric), DE_OK);
+    const char *items[] = {"65-67", "0x100-0x102"};
+    de__manifest_kv settings = {.key = "ranges",
+                                .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {items, 2}}};
+    ASSERT_EQ(font_cook("NotoSans.ttf", &settings, 1, &legacy), DE_OK);
+    EXPECT_EQ(numeric.size, legacy.size);
+    EXPECT_MEMEQ(numeric.data, legacy.data, (size_t)numeric.size);
+    de_cook_result_free(&numeric);
+    de_cook_result_free(&legacy);
+    de__manifest_destroy(manifest);
+}
+TEST(font, numeric_ranges_reject_invalid_pairs) {
+    const char *invalid[] = {"[[67,65]]",     "[[-1,65]]", "[[65,1114112]]",
+                             "[[65.0,67]]",   "[[65]]",    "[65,67]",
+                             "[['65','67']]", "42",        "[[65,67],'68-69']"};
+    for (u32 i = 0; i < (sizeof invalid / sizeof invalid[0]); ++i) {
+        char text[256];
+        snprintf(text, sizeof text,
+                 "[assets.font]\ntype='font'\nsource='NotoSans.ttf'\nranges=%s\n", invalid[i]);
+        de__manifest *m = NULL;
+        ASSERT_EQ(de__manifest_parse(&(de__manifest_parse_desc){.path = "ranges:/assets.toml",
+                                                                .read = range_manifest_read,
+                                                                .read_user = text},
+                                     &m),
+                  DE_OK);
+        ASSERT_EQ(m->error_count, 0u);
+        const de__manifest_asset *a = de__manifest_find_asset(m, "font");
+        ASSERT_TRUE(a);
+        de_cook_result r = {0};
+        EXPECT_EQ(font_cook("NotoSans.ttf", a->settings, a->setting_count, &r),
+                  DE_ERR_INVALID_ARGUMENT);
+        de_cook_result_free(&r);
+        de__manifest_destroy(m);
+    }
+}
 #include <stb_truetype.h>
 #include <math.h>
 static f32 getf(const u8 *p) {
