@@ -74,3 +74,26 @@ the unchanged nonvacuity requirement and changed 13,506 decoded final-image byte
 that this scene consumes the lighting signal. The production shader was restored before
 final verification. No scene materials, sample counts, warmup or comparison limits changed.
 Other first-capture qualifications above remain open.
+
+## Probe GI contribution verification (DENG-463)
+
+The original GI fixture had two independent coverage defects: its box inherited metallic 1
+and therefore had no diffuse response, and its camera-following High-quality probe cascades
+ended before that receiver. The existing box now uses an explicit metallic-0 material, and
+the authored volume's Y extent is 4 instead of 2 so its outer cascade covers the box from the
+original camera. Mesh geometry, camera, light, render settings, probe counts, seed epochs,
+32-frame warmup and FLIP thresholds are unchanged. Only this scene's RT and Base references
+were recaptured and visually reviewed.
+
+The producer proof requires a live cascade containing a point on the receiver, and verifies
+that lighting consumes its exact metadata buffer and record, irradiance/distance textures,
+and classification buffer. The covered cascade has 2,300 nonzero atlas pixels and RGB sum
+3,425.18; inspecting an unrelated nonzero atlas is insufficient. The original Y extent fails
+this coverage assertion even with a diffuse receiver.
+
+RT and Base now differ in 313 decoded RGBA bytes; independent captures of each are identical.
+Disabling the actual GI production setting changes 471 bytes and fails both original limits:
+mean FLIP 0.009310 and p99 0.347733. Restoring GI reproduces the accepted image exactly. The
+verifier now requires this GI negative comparison and restoration as well as the existing
+shadow control. Strict Metal validation and ASan/UBSan pass for the RT fixture. This resolves
+the historical GI contribution qualification above; other open qualifications still apply.

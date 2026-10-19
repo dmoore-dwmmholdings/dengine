@@ -24,7 +24,7 @@ typedef struct rt_proof {
     de_renderer *r;
     de_view view;
     u32 effect, frames, passes;
-    bool base, negative, fallback, shadow_pass;
+    bool base, negative, fallback, shadow_pass, gi_pass;
     de__lighting_inputs_gpu inputs;
     const de__lighting_view *uploaded;
 } rt_proof;
@@ -47,10 +47,12 @@ static void proof_stage(de__view_frame *vf, void *user) {
     p->passes = 0;
     p->fallback = false;
     p->shadow_pass = false;
+    p->gi_pass = false;
     for (u32 i = 0; i < vf->graph->pass_count; ++i) {
         const char *n = vf->graph->passes[i]->name;
         p->passes += strncmp(n, "RT.", 3) == 0;
         p->shadow_pass |= strcmp(n, "RT.Shadows") == 0;
+        p->gi_pass |= strncmp(n, "RT.GI.", 6) == 0;
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:
         case DE__GOLDEN_RT_DI:
@@ -133,6 +135,11 @@ void *de__golden_rt_prepare(de_golden_ctx *ctx, de_renderer *r, de_view view, u3
         s.rt_shadows = false;
         p->negative = true;
     }
+    if (negative && strcmp(negative, "gi") == 0 && effect == DE__GOLDEN_RT_GI) {
+        s.gi = DE_QUALITY_OFF;
+        s.rt_gi = false;
+        p->negative = true;
+    }
     de_renderer_set_settings(r, &s);
     if (de__view_register_stage(r, DE__VIEW_SLOT_TRANSPARENT, 99, "RT golden producer consumption",
                                 proof_stage, p) != DE_OK)
@@ -173,8 +180,10 @@ void de__golden_rt_finish(void *state) {
     u32 width = 0, height = 0, bpp = 0;
     u64 rays = 0;
     if (p->base || p->negative) {
-        active = p->negative ? !p->shadow_pass : p->passes == 0;
-        identity = p->negative || p->fallback;
+        active = p->negative ? (p->effect == DE__GOLDEN_RT_GI ? !p->gi_pass : !p->shadow_pass)
+                             : p->passes == 0;
+        identity =
+            p->negative ? (p->effect != DE__GOLDEN_RT_GI || p->inputs.reserved1 == 0) : p->fallback;
     } else
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:
@@ -231,13 +240,38 @@ void de__golden_rt_finish(void *state) {
         }
         case DE__GOLDEN_RT_GI: {
             de__rt_gi_info i = {0};
-            active = de__rt_gi_get(r->rt_gi, p->view, 0, &i) && i.probes_updated > 0;
+            // This fixture's diffuse box must be inside a live camera-following cascade.
+            // A nonzero atlas outside the visible scene does not establish contribution.
+            const f32 receiver[3] = {-.7f, -.4f, .6f};
+            u32 volume = 0;
+            for (; de__rt_gi_get(r->rt_gi, p->view, volume, &i); ++volume) {
+                bool contains = i.gpu.params[3] > 0 && i.gpu.params[0] > 0;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const f32 *row = i.gpu.local[axis];
+                    f32 local =
+                        row[0] * receiver[0] + row[1] * receiver[1] + row[2] * receiver[2] + row[3];
+                    contains &= fabsf(local) < i.gpu.extent[axis];
+                }
+                if (contains && i.probes_updated > 0) {
+                    active = true;
+                    break;
+                }
+            }
             texture = i.irradiance;
             width = i.layout.iw;
             height = i.layout.ih;
             bpp = 4;
             rays = i.rays_traced;
-            identity = p->inputs.reserved1 != 0;
+            const de__gi_gpu *records = i.metadata.id ? de_gpu_buffer_map(d, i.metadata) : NULL;
+            identity = active && records &&
+                       p->inputs.reserved1 == de_gpu_buffer_bindless(d, i.metadata) &&
+                       records[0].counts[0] == i.volumes &&
+                       memcmp(&records[volume + 1], &i.gpu, sizeof i.gpu) == 0 &&
+                       i.gpu.textures[0] == de_gpu_texture_bindless(d, i.irradiance, 0, true) &&
+                       i.gpu.textures[1] == de_gpu_texture_bindless(d, i.distance, 0, true) &&
+                       i.gpu.textures[2] == de_gpu_buffer_bindless(d, i.classification);
+            printf("  RT GI receiver covered=%u volume=%u records=%u\n", active, volume,
+                   p->inputs.reserved1);
             break;
         }
         case DE__GOLDEN_RT_REFRACTION: {

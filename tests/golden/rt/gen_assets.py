@@ -13,6 +13,7 @@ MATS = {
  'white': dict(base_color=[.7,.7,.7],roughness=.65),
  'red': dict(base_color=[.7,.035,.025],roughness=.7),
  'green': dict(base_color=[.025,.65,.06],roughness=.7),
+ 'gi_receiver': dict(base_color=[.7,.7,.7],metallic=0.,roughness=.65),
  'mirror': dict(base_color=[.95,.8,.5],metallic=1.,roughness=0.),
  'rough': dict(base_color=[.95,.8,.5],metallic=1.,roughness=.3),
  'gold': dict(base_color=[2.,1.,.15],unlit=True),
@@ -43,7 +44,9 @@ for i in range(512):
 scenes[s.title]=s
 s=common('rt_ao_corner');mesh(s,(-2.,.5,1.5),(.2,5.,3.),'red');mesh(s,(0.,2.,1.5),(4.,.2,3.),'green');mesh(s,(0.,0.,.4),(.8,.8,.8),'white');scenes[s.title]=s
 s=common('rt_reflections_mirror_rough');sun(s);mesh(s,(-1.6,0.,.08),(2.8,3.5,.12),'mirror');mesh(s,(1.6,0.,.08),(2.8,3.5,.12),'rough');mesh(s,(0.,1.,2.5),(2.,.3,1.3),'gold');mesh(s,(1.3,.2,.8),(1.2,1.2,1.2),'rough','sphere');scenes[s.title]=s
-s=common('rt_gi_cornell',False);mesh(s,(-2.,0.,1.6),(.15,4.,3.2),'red');mesh(s,(2.,0.,1.6),(.15,4.,3.2),'green');mesh(s,(0.,2.,1.6),(4.,.15,3.2),'white');mesh(s,(0.,0.,3.2),(4.,4.,.1),'white');mesh(s,(0.,0.,3.1),(.8,.8,.1),'emitter');mesh(s,(-.7,0.,.5),(.8,.8,1.),'white');light(s,'DE_LIGHT_POINT',(0.,0.,2.7),120.,(1.,.85,.7));s.entity([g.xf((0.,0.,1.5)),('DeIrradianceVolume',[('extent',[2.,2.,1.5]),('counts',[3,3,3]),('intensity',1.),('blend_distance',.1)])]);scenes[s.title]=s
+# DENG-463: one explicit dielectric receiver and enough Y extent for the camera-following
+# High-quality cascades to reach it from the original camera at Y=-8. Other fixtures stay intact.
+s=common('rt_gi_cornell',False);mesh(s,(-2.,0.,1.6),(.15,4.,3.2),'red');mesh(s,(2.,0.,1.6),(.15,4.,3.2),'green');mesh(s,(0.,2.,1.6),(4.,.15,3.2),'white');mesh(s,(0.,0.,3.2),(4.,4.,.1),'white');mesh(s,(0.,0.,3.1),(.8,.8,.1),'emitter');mesh(s,(-.7,0.,.5),(.8,.8,1.),'gi_receiver');light(s,'DE_LIGHT_POINT',(0.,0.,2.7),120.,(1.,.85,.7));s.entity([g.xf((0.,0.,1.5)),('DeIrradianceVolume',[('extent',[2.,4.,1.5]),('counts',[3,3,3]),('intensity',1.),('blend_distance',.1)])]);scenes[s.title]=s
 s=common('rt_refraction_glass');sun(s);mesh(s,(0.,0.,1.),(2.,2.,2.),'glass','sphere');mesh(s,(0.,2.,1.4),(4.,.2,2.8),'checker');mesh(s,(1.,1.3,.8),(.8,.6,1.6),'gold');scenes[s.title]=s
 s=common('rt_foliage_shadow');sun(s)
 for i in range(4):mesh(s,((i-1.5)*.8,.3,1.+.1*i),(1.2,1.2,1.2),'leaf','card',g.quat_axis((1.,0.,0.),-.3))

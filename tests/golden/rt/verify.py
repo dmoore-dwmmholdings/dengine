@@ -22,12 +22,12 @@ out=Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True)
 results=[]
 def run(name,folder,update=False,negative=False):
  env=dict(os.environ)
- if negative:env['DE_RT_GOLDEN_DISABLE_EFFECT']='shadows'
+ if negative:env['DE_RT_GOLDEN_DISABLE_EFFECT']=negative
  cmd=[a.exe,'--backend',a.backend,'--scene',name,'--out',str(out/folder),'--refs',a.refs]
  if update:cmd+=['--update-refs']
  result=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
  (out/f'{folder}-{name}.log').write_text(result.stdout)
- row=dict(scene=name,phase=folder,command=cmd,returncode=result.returncode,negative=negative,comparison_failure=result.returncode==1 and bool(re.search(r'FAIL\s+.*: mean ',result.stdout)))
+ row=dict(scene=name,phase=folder,command=cmd,returncode=result.returncode,negative=bool(negative),comparison_failure=result.returncode==1 and bool(re.search(r'FAIL\s+.*: mean ',result.stdout)))
  results.append(row)
  print(f'{folder} {name}: {result.returncode}',flush=True)
  return row
@@ -44,14 +44,15 @@ for name in NAMES:
    l=Image.open(lhs).convert('RGBA').tobytes();r=Image.open(rhs).convert('RGBA').tobytes()
    row.update(pixel_sha256=hashlib.sha256(l).hexdigest(),repeat_sha256=hashlib.sha256(r).hexdigest(),different_bytes=sum(x!=y for x,y in zip(l,r)),identical=l==r)
   else:row['identical']=False
-run('rt_shadows_pole','negative',negative=True)
-restored=run('rt_shadows_pole','restored')
-first=out/('capture' if a.capture else 'normal')/a.backend/'rt/rt_shadows_pole.png'
-last=out/'restored'/a.backend/'rt/rt_shadows_pole.png'
-restored['restoration_identical']=first.exists() and last.exists() and Image.open(first).convert('RGBA').tobytes()==Image.open(last).convert('RGBA').tobytes()
+for scene,effect in [('rt_shadows_pole','shadows'),('rt_gi_cornell','gi')]:
+ run(scene,'negative',negative=effect)
+ restored=run(scene,'restored')
+ first=out/('capture' if a.capture else 'normal')/a.backend/'rt'/(scene+'.png')
+ last=out/'restored'/a.backend/'rt'/(scene+'.png')
+ restored['restoration_identical']=first.exists() and last.exists() and Image.open(first).convert('RGBA').tobytes()==Image.open(last).convert('RGBA').tobytes()
 (out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
 failed=any(x['returncode'] not in (0,77) for x in results if x['phase']!='negative')
 failed|=any(not x['identical'] for x in results if x['phase']=='repeat')
-failed|=not next(x for x in results if x['phase']=='negative')['comparison_failure']
-failed|=not restored['restoration_identical']
+failed|=any(not x['comparison_failure'] for x in results if x['phase']=='negative')
+failed|=any(not x['restoration_identical'] for x in results if x['phase']=='restored')
 raise SystemExit(1 if failed else 0)
