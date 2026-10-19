@@ -339,7 +339,7 @@ done:
     return result;
 }
 u32 de__sound_importer_version(void) {
-    return 3; /* Rebuild resampled audio with the corrected rational phase clock. */
+    return 4; /* Rebuild resampled audio with rate-dependent low-pass kernels. */
 }
 de_result de__sound_import(de_asset_import_ctx *ctx) {
     de__sound_settings s = {0};

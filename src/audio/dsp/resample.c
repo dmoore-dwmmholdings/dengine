@@ -5,6 +5,10 @@
 #define TAPS   (HALF * 2)
 #define PHASES 1024
 #define RING   8192
+typedef struct de__resample_filter {
+    f32 window[(PHASES + 1) * TAPS];
+    f32 sinc[HALF * PHASES + 1];
+} de__resample_filter;
 struct de__resampler {
     const de_allocator *a;
     u32 channels;
@@ -16,8 +20,8 @@ struct de__resampler {
     u64 clock_numerator, clock_denominator, clock_remainder;
     u64 received;
     bool finished;
-    f32 *coeff;
-    bool owns_coeff;
+    de__resample_filter *filter;
+    bool owns_filter;
     f32 samples[RING * 8];
 };
 static f64 i0(f64 x) {
@@ -107,26 +111,25 @@ de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de
     s->channels = channels;
     s->ratio = s->target = ratio;
     clock_reset(s);
-    s->coeff = DE_ALLOC(a, (PHASES + 1) * TAPS * sizeof(f32), 16, DE_MEM_AUDIO);
-    if (!s->coeff) {
+    s->filter = DE_ALLOC(a, sizeof *s->filter, 16, DE_MEM_AUDIO);
+    if (!s->filter) {
         DE_FREE(a, s, sizeof *s);
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "resample coefficient bank");
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "resample filter tables");
     }
-    s->owns_coeff = true;
-    f64 cutoff = 0.94 / (ratio > 1 ? ratio : 1), denom = i0(10);
+    s->owns_filter = true;
+    f64 denom = i0(10);
     for (u32 p = 0; p <= PHASES; ++p) {
-        f64 total = 0;
         f64 frac = (f64)p / PHASES;
         for (i32 t = 0; t < TAPS; ++t) {
             f64 x = (f64)(t - HALF + 1) - frac, z = x / HALF;
-            f64 window = i0(10 * de_dsqrt64(z * z < 1 ? 1 - z * z : 0)) / denom;
-            f64 sinc = x == 0 ? cutoff
-                              : de_dsin64(3.141592653589793 * cutoff * x) / (3.141592653589793 * x);
-            s->coeff[p * TAPS + (u32)t] = (f32)(window * sinc);
-            total += window * sinc;
+            s->filter->window[p * TAPS + (u32)t] =
+                (f32)(i0(10 * de_dsqrt64(z * z < 1 ? 1 - z * z : 0)) / denom);
         }
-        for (u32 t = 0; t < TAPS; ++t)
-            s->coeff[p * TAPS + t] = (f32)(s->coeff[p * TAPS + t] / total);
+    }
+    s->filter->sinc[0] = 1;
+    for (u32 i = 1; i <= HALF * PHASES; ++i) {
+        f64 x = 3.141592653589793 * i / PHASES;
+        s->filter->sinc[i] = (f32)(de_dsin64(x) / x);
     }
     *out = s;
     return DE_OK;
@@ -147,7 +150,7 @@ de_result de__resample_create_shared(const de_allocator *a, u32 channels, f64 ra
     s->channels = channels;
     s->ratio = s->target = ratio;
     clock_reset(s);
-    s->coeff = bank->coeff;
+    s->filter = bank->filter;
     *out = s;
     return DE_OK;
 }
@@ -160,8 +163,8 @@ void de__resample_format(de__resampler *s, u32 channels, f64 ratio) {
 }
 void de__resample_destroy(de__resampler *s) {
     if (s) {
-        if (s->owns_coeff)
-            DE_FREE(s->a, s->coeff, (PHASES + 1) * TAPS * sizeof(f32));
+        if (s->owns_filter)
+            DE_FREE(s->a, s->filter, sizeof *s->filter);
         DE_FREE(s->a, s, sizeof *s);
     }
 }
@@ -216,16 +219,30 @@ u32 de__resample_read(de__resampler *s, f32 *out, u32 frames) {
         if (phase >= PHASES)
             phase = PHASES - 1;
         f64 blend = coordinate - phase;
+        /* Evaluate the current rate's low-pass kernel from immutable tables. Computing
+         * it once per frame also shares the weights across interleaved channels. */
+        f64 cutoff = 0.94 / (s->ratio > 1 ? s->ratio : 1);
+        f64 fraction = s->position - (f64)center, total = 0;
+        f64 weights[TAPS];
+        for (i32 t = 0; t < TAPS; ++t) {
+            f64 x = (f64)(t - HALF + 1) - fraction;
+            f64 coordinate_sinc = (x < 0 ? -x : x) * cutoff * PHASES;
+            u32 at = (u32)coordinate_sinc;
+            f64 mix = coordinate_sinc - at;
+            f64 sinc = s->filter->sinc[at] * (1 - mix) + s->filter->sinc[at + 1] * mix;
+            f64 window = s->filter->window[phase * TAPS + (u32)t] * (1 - blend) +
+                         s->filter->window[(phase + 1) * TAPS + (u32)t] * blend;
+            weights[t] = window * sinc * cutoff;
+            total += weights[t];
+        }
         for (u32 c = 0; c < s->channels; ++c) {
             f64 sample = 0;
             for (i32 t = 0; t < TAPS; ++t) {
                 i64 i = center + t - HALF + 1;
                 if (i >= 0 && (u64)i < s->received)
-                    sample += (f64)s->samples[((u64)i % RING) * s->channels + c] *
-                              (s->coeff[phase * TAPS + (u32)t] * (1 - blend) +
-                               s->coeff[(phase + 1) * TAPS + (u32)t] * blend);
+                    sample += (f64)s->samples[((u64)i % RING) * s->channels + c] * weights[t];
             }
-            out[n * s->channels + c] = (f32)sample;
+            out[n * s->channels + c] = (f32)(sample / total);
         }
         ++n;
         clock_advance(s);

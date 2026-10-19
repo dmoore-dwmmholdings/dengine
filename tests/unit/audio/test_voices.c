@@ -205,3 +205,42 @@ TEST(audio_voices, allocation_and_lock_free_256_voices) {
     de_audio_destroy(a);
     EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
 }
+
+TEST(audio_voices, pitch_changes_reject_aliases_and_restore_passband_without_allocations) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de_audio_desc desc = {.backend = DE_AUDIO_NULL, .allocator = &alloc, .max_voices = 4};
+    de_audio *a = NULL;
+    de__audio_create_opts opts = {true};
+    ASSERT_EQ(de__audio_create_ex(&desc, &opts, &a), DE_OK);
+    sine_source source = {0};
+    source.base.vt = &sine_vt;
+    source.base.channels = 1;
+    source.base.rate = 48000;
+    source.frequency = 18000;
+    de_play_desc play = {.pitch = 1.01f};
+    de_voice voice = de__voice_play_source(a, &source.base, &play);
+    ASSERT_TRUE(voice.id != 0);
+    f32 output[2048 * 2];
+    f64 rms[3];
+    de_tracking_stats before = de_tracking_allocator_stats(&tracking);
+    u64 hits = de__rt_guard_hits();
+    for (u32 stage = 0; stage < 3; ++stage) {
+        if (stage)
+            de_audio_set_pitch(a, voice, stage == 1 ? 2 : 1.01f);
+        de__audio_null_pump(a, 2048, output);
+        f64 sum = 0;
+        for (u32 frame = 512; frame < 2048; ++frame)
+            sum += (f64)output[frame * 2] * output[frame * 2];
+        rms[stage] = sqrt(sum / 1536);
+        EXPECT_TRUE(de_audio_playing(a, voice));
+    }
+    EXPECT_TRUE(rms[0] > 0.4);
+    EXPECT_TRUE(rms[1] / rms[0] < 0.0001);
+    EXPECT_TRUE(fabs(20 * log10(rms[2] / rms[0])) < 0.1);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).alloc_count, before.alloc_count);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).realloc_count, before.realloc_count);
+    EXPECT_EQ(de__rt_guard_hits(), hits);
+    de_audio_destroy(a);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+}
