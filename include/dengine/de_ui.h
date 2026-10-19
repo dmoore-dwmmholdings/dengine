@@ -222,6 +222,8 @@ typedef struct DeUiFocusable {
 } DeUiFocusable; /* null = spatial */
 /* Binds a widget property to a reflected field on another entity, e.g. "DeHealth.current". */
 typedef enum de_ui_binding_mode { DE_UI_BIND_ONE_WAY, DE_UI_BIND_TWO_WAY } de_ui_binding_mode;
+/** Active tint/opacity bindings take precedence over stylesheet state/theme values.
+ * Text tint controls the resolved text color; unchanged sources do not trigger writes. */
 typedef struct DeUiBinding {
     de_entity source;
     char path[64];

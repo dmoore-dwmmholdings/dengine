@@ -61,6 +61,7 @@ typedef struct de_ui_style_cache {
     de_name class_name;
     u32 widget, state;
     u64 revision;
+    u64 binding_revision;
     bool initialized;
     DeUiNode authored_node, applied_node;
     DeUiStyle authored_style, applied_style;

@@ -1,4 +1,7 @@
 #include "stylesheet_internal.h"
+#if defined(DE_UI_BINDING)
+#include "ui/binding/binding_internal.h"
+#endif
 #include <math.h>
 #include <string.h>
 static const char *const widget_names[] = {"panel",   "button",   "toggle", "slider", "text",
@@ -176,8 +179,13 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     de_ui_style_cache *cache = cached(state, entity, matching_rule);
     if (!cache)
         return;
+    u64 binding_revision = 0;
+#if defined(DE_UI_BINDING)
+    binding_revision = de_ui__binding_style(ui, entity, NULL);
+#endif
     if (cache->initialized && cache->class_name.hash == current_node->style_class.hash &&
-        cache->widget == type && cache->state == bits && cache->revision == state->revision)
+        cache->widget == type && cache->state == bits && cache->revision == state->revision &&
+        cache->binding_revision == binding_revision)
         return;
     /* A restyle replaces prior automatic motion, including properties that no longer have
      * a winning rule or now have zero duration. Explicit API tweens keep their ownership. */
@@ -240,6 +248,9 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     for (u32 p = 0; p < de_ui__style_property_count; ++p)
         if (best[p] >= 0)
             apply_value(ui, &de_ui__style_properties[p], &winning[p], &node, &style, &text);
+#if defined(DE_UI_BINDING)
+    (void)de_ui__binding_style(ui, entity, &style);
+#endif
     if (memcmp(&node, &before_node, sizeof node))
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
     /* Absent style already means these defaults. Avoid moving neutral panels to a new
@@ -267,6 +278,7 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     cache->widget = type;
     cache->state = bits;
     cache->revision = state->revision;
+    cache->binding_revision = binding_revision;
     cache->applied_node = node;
     cache->applied_style = style;
     cache->applied_text = text;

@@ -1,5 +1,6 @@
 #include "ui_test_util.h"
 #include "ui/binding/binding_internal.h"
+#include "ui/style/stylesheet_internal.h"
 #include "de_alloc_guard.h"
 #include <float.h>
 #include <limits.h>
@@ -172,6 +173,59 @@ static de_entity bound(bind_fx *f, const char *field, const char *property, de_u
 static const DeUiText *label(bind_fx *f, de_entity e) {
     return de_entity_get_const(f->ui.world, e, f->ui.ui->ids.text);
 }
+TEST_F(ui_binding, visual_bindings_override_default_state_and_theme_without_idle_writes, bind_fx) {
+    de_ui *ui = f->ui.ui;
+    ASSERT_GT(ui->style->builtin_count, 0u);
+    const char *sheet = "[vars]\naccent='#ff0000'\n[theme.dark.vars]\naccent='#00ff00'\n"
+                        "[style.text]\ntext_color='$accent'\n"
+                        "[style.\"text:hover\"]\ntext_color='#ffff00'\n"
+                        "[style.button]\nopacity=0.25\n"
+                        "[style.\"button:hover\"]\nopacity=0.1";
+    ASSERT_EQ(de_ui__load_stylesheet_source(ui, sheet, strlen(sheet), false), DE_OK);
+    de_entity text = bound(f, "tint", "tint", DE_UI_BIND_ONE_WAY, ui->ids.text);
+    de_entity button = bound(f, "precise", "opacity", DE_UI_BIND_ONE_WAY, ui->widgets->button);
+    for (u32 step = 0; step < 4; ++step) {
+        if (step == 1) {
+            ((DeUiInteractionState *)de_entity_add(f->ui.world, text, ui->ids.state))->hovered =
+                true;
+            ((DeUiInteractionState *)de_entity_add(f->ui.world, button, ui->ids.state))->hovered =
+                true;
+        } else if (step == 2)
+            ASSERT_EQ(de_ui_set_theme(ui, "dark"), DE_OK);
+        else if (step == 3) {
+            bind_data *data = de_entity_get(f->ui.world, f->source, f->data);
+            data->precise = .375;
+            data->tint = (de_vec4){.7f, .6f, .5f, 1};
+        }
+        ui_frame(&f->ui);
+        const bind_data *data = de_entity_get_const(f->ui.world, f->source, f->data);
+        const DeUiStyle *text_style = de_entity_get_const(f->ui.world, text, ui->ids.style);
+        const DeUiStyle *button_style = de_entity_get_const(f->ui.world, button, ui->ids.style);
+        ASSERT_TRUE(text_style && button_style);
+        EXPECT_TRUE(memcmp(&text_style->text_color, &data->tint, sizeof data->tint) == 0);
+        EXPECT_FLOAT_EQ(button_style->opacity, data->precise, .00001f);
+    }
+    /* Let unrelated default background/border transitions settle before the idle guard. */
+    for (u32 i = 0; i < 12; ++i)
+        ui_frame(&f->ui);
+    u64 before = 0, after = 0;
+    for (u32 tag = 0; tag < DE_MEM_TAG_BUILTIN_COUNT_; ++tag)
+        before += de_mem_stats_for_tag(tag).alloc_count;
+    for (u32 i = 0; i < 10; ++i) {
+        ui_frame(&f->ui);
+        EXPECT_EQ(ui->binding->writes, 0u);
+        EXPECT_EQ(de_ui_get_layout_stats(ui).nodes_laid_out, 0u);
+        EXPECT_EQ(de_ui_get_style_stats(ui).entities_restyled, 0u);
+    }
+    for (u32 tag = 0; tag < DE_MEM_TAG_BUILTIN_COUNT_; ++tag)
+        after += de_mem_stats_for_tag(tag).alloc_count;
+    EXPECT_EQ(after, before);
+    de_entity_remove(f->ui.world, button, ui->binding->component);
+    for (u32 i = 0; i < 12; ++i)
+        ui_frame(&f->ui);
+    const DeUiStyle *released = de_entity_get_const(f->ui.world, button, ui->ids.style);
+    EXPECT_FLOAT_EQ(released->opacity, .1f, .00001f);
+}
 TEST_F(ui_binding, progress_updates_same_frame_and_unchanged_source_does_not_relayout, bind_fx) {
     de_entity e = bound(f, "current", "value", DE_UI_BIND_ONE_WAY, f->ui.ui->widgets->progress);
     for (u32 i = 0; i < 4; ++i)
@@ -186,6 +240,27 @@ TEST_F(ui_binding, progress_updates_same_frame_and_unchanged_source_does_not_rel
     progress = de_entity_get_const(f->ui.world, e, f->ui.ui->widgets->progress);
     EXPECT_FLOAT_EQ(progress->value, .8, .00001);
     EXPECT_EQ(f->ui.ui->binding->writes, 1u);
+}
+TEST_F(ui_binding, attaching_opacity_binding_cancels_an_active_stylesheet_tween, bind_fx) {
+    de_ui *ui = f->ui.ui;
+    const char *sheet = "[style.button]\nopacity=1\ntransition=1\n"
+                        "[style.\"button:hover\"]\nopacity=0";
+    ASSERT_EQ(de_ui__load_stylesheet_source(ui, sheet, strlen(sheet), false), DE_OK);
+    de_entity e = ui_node(&f->ui, DE_ENTITY_NULL);
+    de_entity_add(f->ui.world, e, ui->widgets->button);
+    ui_frame(&f->ui);
+    ((DeUiInteractionState *)de_entity_get(f->ui.world, e, ui->ids.state))->hovered = true;
+    ui_frame(&f->ui);
+    EXPECT_GT(de_ui_get_style_stats(ui).active_tweens, 0u);
+    DeUiBinding *binding = de_entity_add(f->ui.world, e, ui->binding->component);
+    binding->source = f->source;
+    strcpy(binding->path, "BindData.precise");
+    strcpy(binding->property, "opacity");
+    for (u32 i = 0; i < 5; ++i) {
+        ui_frame(&f->ui);
+        const DeUiStyle *style = de_entity_get_const(f->ui.world, e, ui->ids.style);
+        EXPECT_FLOAT_EQ(style->opacity, .625f, .00001f);
+    }
 }
 TEST_F(ui_binding, nested_and_both_array_path_spellings_format_numeric_text, bind_fx) {
     de_entity a =

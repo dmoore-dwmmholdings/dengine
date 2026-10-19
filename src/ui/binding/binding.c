@@ -153,6 +153,7 @@ static void resolve(de_ui_binding_system *s, de_ui_binding_cache *c, const DeUiB
     c->descriptor = *binding;
     c->revision = revision;
     c->sampled = false;
+    c->style_revision = 0;
     c->warned = false;
     c->valid = false;
     c->editor = (de_component){0};
@@ -247,8 +248,8 @@ static void resolve(de_ui_binding_system *s, de_ui_binding_cache *c, const DeUiB
         compatible =
             (info->kind == DE_FK_VEC4 || info->kind == DE_FK_COLOR) &&
             (target(s, c, "DeUiImage", offsetof(DeUiImage, tint), sizeof(de_vec4)) ||
-             target(s, c, "DeUiText", offsetof(DeUiText, style) + offsetof(de_text_style, color),
-                    sizeof(de_vec4)) ||
+             (de_entity_has(ui->world, c->entity, ui->ids.text) &&
+              target(s, c, "DeUiStyle", offsetof(DeUiStyle, text_color), sizeof(de_vec4))) ||
              target(s, c, "DeUiStyle", offsetof(DeUiStyle, background), sizeof(de_vec4)));
     }
     if (!compatible) {
@@ -392,6 +393,8 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
     }
     if (c->property == DE_UI_BIND_TINT) {
         put(s, c->entity, c->target, c->target_offset, source, sizeof(de_vec4));
+        if (c->target.id == s->ui->ids.style.id)
+            c->style_revision = ++s->style_revision;
         return;
     }
     long double value;
@@ -412,7 +415,25 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
     } else {
         f32 scalar = (f32)fmaxl(-FLT_MAX, fminl(FLT_MAX, value));
         put(s, c->entity, c->target, c->target_offset, &scalar, sizeof scalar);
+        if (c->property == DE_UI_BIND_OPACITY)
+            c->style_revision = ++s->style_revision;
     }
+}
+u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style) {
+    de_ui_binding_system *s = ui->binding;
+    if (!s || !s->component.id || !de_entity_has(ui->world, entity, s->component))
+        return 0;
+    de_ui_binding_cache *c = cache(s, entity);
+    if (!c || !c->valid || !c->sampled || c->target.id != ui->ids.style.id)
+        return 0;
+    if (style && c->property == DE_UI_BIND_TINT)
+        memcpy((u8 *)style + c->target_offset, c->previous, sizeof(de_vec4));
+    else if (style && c->property == DE_UI_BIND_OPACITY) {
+        long double value;
+        if (number(&c->field, c->previous, &value) && isfinite(value))
+            style->opacity = (f32)fmaxl(-FLT_MAX, fminl(FLT_MAX, value));
+    }
+    return c->style_revision;
 }
 static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
     if (event->kind != DE_UI_EV_CHANGED)

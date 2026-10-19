@@ -47,6 +47,6 @@ endif()
 
 # DENG-321 reflection paths, generic CHANGED writeback and idle HUD costs.
 if(TARGET de_ui)
- de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support de_tp_tomlc17 LABELS ui)
  target_include_directories(test_ui_binding PRIVATE "${DE_ROOT_DIR}/src")
 endif()
