@@ -13,6 +13,17 @@ DeRtHit pt_intersect(PtParams p,DeRtRay r,uint flags,uint owner=0xffffffffu) {
 DeRtHit pt_intersect_sss(PtParams p,DeRtRay ray,PtSssState state) {
     return pt_intersect(p,ray,0,state.active!=0?state.instance:0xffffffffu);
 }
+float3 pt_shadow_trace(PtParams p,PtMediumStack media,DeRtRay ray,uint casts) {
+    PtShadow shadow=pt_shadow_start(p,media,ray);
+    if((p.media.features&2u)==0) {
+        if(casts!=0&&pt_intersect(p,ray,DE_RT_CAST_SHADOWS).t>=0)return float3(0);
+        return shadow.value;
+    }
+    for(uint boundary=0;boundary<64&&shadow.finished==0;++boundary) {
+        DeRtHit hit=pt_intersect(p,ray,0);pt_shadow_hit(p,shadow,ray,hit,casts);
+    }
+    return shadow.finished!=0?shadow.value:float3(0);
+}
 [shader("raygeneration")]
 void pt_raygen(uniform PtPush pc) {
     PtParams p=pt_parameters(pc);uint2 id=DispatchRaysIndex().xy;uint pixel=id.y*p.width+id.x;
@@ -35,8 +46,7 @@ void pt_raygen(uniform PtPush pc) {
             DeRtHit hit=event==0?first:pt_intersect_sss(p,path.ray,path.sss);PtStep step=pt_path_event(p,path,hit,pixel);
             float3 visibility=1;
             if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0)) {
-                visibility=pt_path_shadow(p,path,step.shadow);
-                if(step.casts_shadows!=0&&pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t>=0)visibility=float3(0);
+                visibility=pt_shadow_trace(p,step.shadow_media,step.shadow,step.casts_shadows);
             }
             pt_path_finish(p,path,step,visibility,pixel);
         }

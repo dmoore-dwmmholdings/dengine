@@ -9,7 +9,9 @@ void cs_pt_export(uniform PtExport pc) {
     PtStep s=pt_step(p,r,h,pc.pixel,pc.entry,1,r.origin.xyz);
     PtPath path=pt_path_init(p,pc.pixel);
     PtStep event=pt_path_event(p,path,h,pc.pixel);
-    pt_path_finish(p,path,event,pt_path_shadow(p,path,event.shadow),pc.pixel);
+    PtShadow shadow=pt_shadow_start(p,path.media,event.shadow);
+    pt_shadow_hit(p,shadow,event.shadow,h,0);
+    pt_path_finish(p,path,event,shadow.value,pc.pixel);
     pt_path_diagnostics(p,path);
     uint2 safety=pt_stack_probe();
     bool alpha=de_rt_opacity(pt_query(p),h.instance,h.primitive,float2(0));

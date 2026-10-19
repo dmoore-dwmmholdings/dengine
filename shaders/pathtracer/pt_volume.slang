@@ -15,6 +15,14 @@ public void pt_medium_exit(inout PtMediumStack stack,uint instance) {
         for(uint j=i+1;j<stack.depth;++j)stack.entries[j-1]=stack.entries[j];stack.depth--;return;
     }
 }
+public bool pt_medium_contains(PtMediumStack stack,uint instance) {
+    for(uint i=0;i<stack.depth;++i)if(stack.entries[i].instance==instance)return true;
+    return false;
+}
+public void pt_medium_boundary(inout PtMediumStack stack,PtMedium medium,bool entering) {
+    if(!entering)pt_medium_exit(stack,medium.instance);
+    else if(!pt_medium_contains(stack,medium.instance))pt_medium_enter(stack,medium);
+}
 public float3 pt_medium_transmittance(PtMediumStack stack,float distance) {
     if(stack.depth==0)return float3(1);PtMedium m=stack.entries[stack.depth-1];
     return volume_transmittance(m.color,m.distance,distance);

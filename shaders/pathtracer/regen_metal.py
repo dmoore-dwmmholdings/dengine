@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='de-pt-') as t:
  # Stabilize only the generated adapter field names, never material math. Slang's numeric
  # disambiguators otherwise change when an unrelated local variable is added.
  mapping={}
- for struct,prefix in [('PtParams_0','ptp_'),('PtStep_0','pts_'),('DeRtRay_0','ptr_'),('DeRtHit_0','pth_'),('DeRtContext_0','ptq_'),('PtMediaParams_0','ptm_'),('PtPath_0','ptpath_'),('PtSssState_0','ptsss_')]:
+ for struct,prefix in [('PtParams_0','ptp_'),('PtStep_0','pts_'),('DeRtRay_0','ptr_'),('DeRtHit_0','pth_'),('DeRtContext_0','ptq_'),('PtMediaParams_0','ptm_'),('PtPath_0','ptpath_'),('PtSssState_0','ptsss_'),('PtShadow_0','ptshadow_')]:
   body=re.search(r'struct '+struct+r'\s*\{([^}]+)\}',s).group(1)
   for name in re.findall(r'\b(\w+)\s*;',body):
    mapping[name]=prefix+re.sub(r'_\d+$','',name)

@@ -39,6 +39,20 @@ inline DeRtHit_0 pt_intersect_sss(constant DeRtHeap &heap,thread const PtParams_
     return pt_intersect(heap,p,ray,0,intersections,functions,sbt,push,ctx,
                         state.ptsss_active!=0?state.ptsss_instance:0xffffffffu);
 }
+inline float3 pt_shadow_trace(constant DeRtHeap &heap,thread const PtParams_0 &p,PtMediumStack_0 media,DeRtRay_0 ray,uint casts,
+                             DeRtIntersectionTable intersections,DeRtVisibleTable functions,
+                             device const uint4 *sbt,constant uchar *push,thread KernelContext_0 &ctx) {
+    auto shadow=pt_shadow_start_0(&p,&media,&ray,&ctx);
+    if((p.ptp_media.ptm_features&2u)==0) {
+        if(casts!=0&&pt_intersect(heap,p,ray,1,intersections,functions,sbt,push,ctx).pth_t>=0)return float3(0);
+        return shadow.ptshadow_value;
+    }
+    for(uint boundary=0;boundary<64&&shadow.ptshadow_finished==0;++boundary) {
+        auto h=pt_intersect(heap,p,ray,0,intersections,functions,sbt,push,ctx);
+        pt_shadow_hit_0(&p,&shadow,&ray,&h,casts,&ctx);
+    }
+    return shadow.ptshadow_finished!=0?shadow.ptshadow_value:float3(0);
+}
 kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
                       DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
                       device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
@@ -70,8 +84,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
             auto step=pt_path_event_0(&p,&path,&h,pixel,&ctx);
             float3 visibility=1;
             if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0)) {
-                visibility=pt_path_shadow_0(&p,&path,&step.pts_shadow,&ctx);
-                if(step.pts_casts_shadows!=0&&pt_intersect(heap,p,step.pts_shadow,1,intersections,functions,sbt,(constant uchar *)&pc,ctx).pth_t>=0)visibility=float3(0);
+                visibility=pt_shadow_trace(heap,p,step.pts_shadow_media,step.pts_shadow,step.pts_casts_shadows,intersections,functions,sbt,(constant uchar *)&pc,ctx);
             }
             pt_path_finish_0(&p,&path,&step,visibility,pixel,&ctx);
         }
@@ -110,4 +123,16 @@ kernel void pt_sampling_probe(constant DeRtHeap &heap [[buffer(0)]],constant uin
     KernelContext_0 ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;
     float3 u=pt_random3_0(pc.x,0,id.x,pc.z,&ctx);
     ((device float4 *)heap.buffers[pc.y])[pc.w*256+id.x]=float4(u,0);
+}
+
+// Native acceptance exercises the production shadow-transmittance seam.
+kernel void pt_shadow_boundary_probe(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc [[buffer(1)]],
+                              DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
+                              device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
+    KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);DeRtRay_0 ray={};PtPath_0 path={};
+    ray.ptr_origin=float4(id.x==5?20:3,0,(id.x==1||id.x==2||id.x==4)?-.05f:.1f,.00001f);
+    ray.ptr_direction=float4(0,0,id.x==4?1:-1,id.x==3?.2f:1.f);
+    if(id.x==1||id.x==4){PtMedium_0 m={1,float3(.8f,.6f,.4f),1};pt_medium_enter_0(&path.ptpath_media,&m);}
+    float3 visibility=pt_shadow_trace(heap,p,path.ptpath_media,ray,id.x==6?1:0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
+    ((device float4 *)heap.buffers[p.ptp_output])[id.x]=float4(visibility,1);
 }

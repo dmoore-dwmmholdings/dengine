@@ -10,6 +10,7 @@ typedef struct pt_fixture {
     de__pt_info info;
     de_gpu_pipeline owner_pipeline;
     de_gpu_buffer owner_params, owner_output;
+    u32 probe_count;
 } pt_fixture;
 static void pt_fixture_setup(pt_fixture *f) {
     rt_fixture *r = &f->rt;
@@ -355,11 +356,12 @@ static void owner_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     u32 pc[] = {de_gpu_buffer_bindless(f->rt.d, f->owner_params), 0};
     de_gpu_cmd_set_pipeline(cmd, f->owner_pipeline);
     de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
-    de_gpu_cmd_dispatch_rays(cmd, 5, 1, 1);
+    de_gpu_cmd_dispatch_rays(cmd, f->probe_count ? f->probe_count : 5, 1, 1);
     de_gpu_barrier barrier = {
         .buffer = f->owner_output, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
     de_gpu_cmd_barriers(cmd, &barrier, 1);
-    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, f->owner_output, 0, 80);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, f->owner_output, 0,
+                           (f->probe_count ? f->probe_count : 5) * 16);
 }
 static void owner_stage(de__view_frame *vf, void *user) {
     pt_fixture *f = user;
@@ -373,6 +375,8 @@ static void owner_stage(de__view_frame *vf, void *user) {
     u32 *params = de_gpu_buffer_map(r->d, f->owner_params);
     params[0] = de_gpu_buffer_bindless(r->d, context->query);
     params[9] = de_gpu_buffer_bindless(r->d, f->owner_output);
+    if (f->probe_count == 8)
+        params[90] = 2; /* PtMediaParams.features: closed-volume absorption. */
     de_rg_pass *p = de_rg_add_pass(vf->graph, "SSS owning-boundary acceptance", DE_QUEUE_GRAPHICS,
                                    owner_execute, f);
     ASSERT_TRUE(p != NULL);
@@ -454,6 +458,100 @@ TEST_F(pt_media, sss_walk_ignores_foreign_interior_surfaces, pt_fixture) {
     EXPECT_FLOAT_EQ(result[3].t, .05, 1e-6);
     EXPECT_EQ(result[4].instance, 3u);
     EXPECT_FLOAT_EQ(result[4].t, .15, 1e-6);
+    de__view_unregister_stage(f->rt.r, owner_stage, f);
+#endif
+}
+
+TEST_F(pt_media, shadow_absorption_tracks_closed_volume_boundaries, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    media_slab(f, .2f);
+    de_render_settings settings = de_renderer_get_settings(f->rt.r);
+    settings.path_tracer = false;
+    de_renderer_set_settings(f->rt.r, &settings);
+    f->probe_count = 8;
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_shader_blob ray = {de__pt_metal_library, de__pt_metal_library_bytes,
+                              "pt_shadow_boundary_probe"};
+    de_gpu_shader_blob miss = ray;
+    miss.entry = "pt_miss";
+    de_gpu_rt_hit_group hit = {.closest_hit = ray, .any_hit = ray};
+    hit.closest_hit.entry = "pt_closest";
+    hit.any_hit.entry = "pt_alpha";
+    de_gpu_rt_desc rt = {.raygen = ray,
+                         .miss = &miss,
+                         .miss_count = 1,
+                         .hit_groups = &hit,
+                         .hit_group_count = 1,
+                         .max_recursion = 1,
+                         .payload_bytes = 64,
+                         .attribute_bytes = 8};
+    f->owner_pipeline = de_gpu_pipeline_create(
+        f->rt.d,
+        &(de_gpu_pipeline_desc){.kind = DE_PIPE_RAYTRACING, .rt = &rt, .push_constant_bytes = 8});
+    ASSERT_TRUE(f->owner_pipeline.id);
+    f->owner_params = de_gpu_buffer_create(
+        f->rt.d,
+        &(de_gpu_buffer_desc){.size = 416, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
+    f->owner_output = de_gpu_buffer_create(
+        f->rt.d, &(de_gpu_buffer_desc){.size = 128, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(f->owner_params.id && f->owner_output.id);
+    memset(de_gpu_buffer_map(f->rt.d, f->owner_params), 0, 416);
+    ASSERT_EQ(de__view_register_stage(f->rt.r, DE__VIEW_SLOT_LIGHTING, 1,
+                                      "Shadow boundary acceptance", owner_stage, f),
+              DE_OK);
+
+    (void)frame_rt(&f->rt);
+    const f32 *values = de_gpu_buffer_map(f->rt.d, f->rb);
+    const f32 color[] = {.8f, .6f, .4f};
+    const f32 distance[] = {.2f, .15f, .15f, .1f, .05f, 0, 0, .2f};
+    for (u32 ray = 0; ray < 8; ++ray)
+        for (u32 c = 0; c < 3; ++c) {
+            f32 expected = ray == 6 ? 0 : powf(color[c], distance[ray]);
+            printf("shadow ray%u channel%u actual%g expected%g\n", ray, c, values[ray * 4 + c],
+                   expected);
+            EXPECT_FLOAT_EQ(values[ray * 4 + c], expected, 2e-5);
+        }
+    /* Reuse one closed BLAS for a nested volume, then a partially overlapping
+     * one. Exiting a non-top owner must leave the inner medium active. */
+    u32 inner = material_add(1, .001f, 0, .5f);
+    g_mat[inner - 1].standard = g_mat[1].standard;
+    g_mat[inner - 1].standard.attenuation_color = (de_vec3){.5f, .7f, .9f};
+    const f32 inner_color[] = {.5f, .7f, .9f};
+    for (u32 overlap = 0; overlap < 2; ++overlap) {
+        de_affine x = at(3, 0, overlap ? -.1f : -.05f);
+        x.m[8] = overlap ? 1 : .5f;
+        world_set(&f->rt.w, 2, 2, x, inner);
+        f->rt.w.f.instances.flags[2] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+        f->rt.w.f.instances.layer_mask[2] = 1u << 24;
+        (void)frame_rt(&f->rt);
+        for (u32 c = 0; c < 3; ++c) {
+            f32 expected = powf(color[c], .1f) * powf(inner_color[c], overlap ? .2f : .1f);
+            printf("shadow overlap%u channel%u actual%g expected%g\n", overlap, c, values[c],
+                   expected);
+            EXPECT_FLOAT_EQ(values[c], expected, 2e-5);
+            EXPECT_FLOAT_EQ(values[7 * 4 + c], expected, 2e-5);
+            /* No initial stack: discover the enclosing owner after crossing
+             * its inner volume, without charging inner lengths twice. */
+            f32 inside = powf(color[c], .05f) * powf(inner_color[c], overlap ? .2f : .1f);
+            EXPECT_FLOAT_EQ(values[2 * 4 + c], inside, 2e-5);
+        }
+    }
+    /* Skipping non-casting glass still finds an opaque caster behind it. */
+    world_set(&f->rt.w, 0, 1, at(3, 0, -.5f), 1);
+    f->rt.w.f.instances.flags[0] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+    f->rt.w.f.instances.layer_mask[0] = 1u << 24;
+    for (u32 i = 1; i <= 2; ++i)
+        f->rt.w.f.instances.flags[i] &= ~DE__RW_INST_CAST_SHADOWS;
+    (void)frame_rt(&f->rt);
+    for (u32 c = 0; c < 3; ++c)
+        EXPECT_FLOAT_EQ(values[6 * 4 + c], 0, 0);
+    f->rt.w.f.instances.flags[0] &= ~DE__RW_INST_CAST_SHADOWS;
+    (void)frame_rt(&f->rt);
+    for (u32 c = 0; c < 3; ++c) {
+        f32 expected = powf(color[c], .1f) * powf(inner_color[c], .2f);
+        EXPECT_FLOAT_EQ(values[6 * 4 + c], expected, 2e-5);
+    }
     de__view_unregister_stage(f->rt.r, owner_stage, f);
 #endif
 }

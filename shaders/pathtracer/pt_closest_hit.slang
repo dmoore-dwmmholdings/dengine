@@ -31,6 +31,7 @@ public struct PtStep {
     public float pdf;
     public uint stop;
     public uint consume,lobe,casts_shadows;
+    public PtMediumStack shadow_media;
 };
 public float3 pt_environment(PtParams p,float3 wi) { return de_ibl_radiance(p.ibl,wi,0); }
 // Empty proposal categories waste NEE samples and distort its balance against
@@ -206,7 +207,7 @@ public float3 pt_geometric_normal(DeRtContext q,DeRtHit hit) {
     float3 c=de_vis_transform_point(point.inst.transform,point.object_pos[2]);return normalize(cross(b-a,c-a));
 }
 public PtStep pt_phase_step(PtParams p,PtPath path,float3 position,float g,uint pixel) {
-    PtStep out=(PtStep)0;out.consume=1;out.weight=float3(1);
+    PtStep out=(PtStep)0;out.consume=1;out.weight=float3(1);out.shadow_media=path.media;
     PtLightProposal light=pt_light_sample(p,position,-path.ray.direction.xyz,pixel,path.bounce+path.event*17);
     float phase=pt_hg(dot(path.ray.direction.xyz,light.wi),g);uint strategy=p.flags&3;
     float mis=light.delta!=0?1:pt_power(light.pdf,phase);
@@ -250,10 +251,19 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
     path.position=path.ray.origin.xyz+path.ray.direction.xyz*fog.distance;
     if(fog.scattered!=0){path.throughput*=fog.albedo;return pt_phase_step(p,path,path.position,fog.g,pixel);}
     step=pt_step(p,path.ray,hit,pixel,path.bounce,path.pdf,path.previous);
-    if(hit.t<0||step.stop!=0)return step;
+    step.shadow_media=path.media;
+    if(hit.t<0)return step;
     DeRtContext q=pt_query(p);DeRtSurface surface=de_rt_hit_surface(q,hit,path.ray.origin.xyz,p.brdf_lut);SurfaceData s=surface.material;
     float3 normal=pt_geometric_normal(q,hit);
-    if((s.features&DE_MATERIAL_FEATURE_VOLUME)!=0&&s.thickness>0) {
+    bool volume=(s.features&DE_MATERIAL_FEATURE_VOLUME)!=0&&s.thickness>0;
+    if(volume) {
+        // NEE starts on the light-facing side, independently of the sampled
+        // BSDF continuation (which may update path.media to the other side).
+        PtMedium m;m.instance=hit.instance;m.color=s.attenuation_color;m.distance=s.attenuation_distance;
+        pt_medium_boundary(step.shadow_media,m,dot(step.shadow.direction.xyz,normal)<0);
+    }
+    if(step.stop!=0)return step;
+    if(volume) {
         if(path.media.depth==0&&dot(path.ray.direction.xyz,normal)>0)
             path.throughput*=volume_transmittance(s.attenuation_color,s.attenuation_distance,hit.t); // camera began inside
         if((step.lobe&DE_BSDF_LOBE_TRANSMISSION)!=0&&dot(path.ray.direction.xyz,normal)*dot(step.next.direction.xyz,normal)>0) {
@@ -272,8 +282,50 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
     }
     return step;
 }
-public float3 pt_path_shadow(PtParams p,PtPath path,DeRtRay ray) {
-    return pt_medium_transmittance(path.media,ray.direction.w)*pt_fog_transmittance(p.media.fog,p.media.count,ray.origin.xyz,ray.direction.xyz,ray.direction.w);
+// Shared shadow-segment state. Native wrappers only supply nearest intersections.
+public struct PtShadow {public PtMediumStack media;public float3 value;public float cursor,unowned;public uint finished;};
+public PtShadow pt_shadow_start(PtParams p,PtMediumStack media,DeRtRay ray) {
+    PtShadow shadow=(PtShadow)0;shadow.media=media;
+    shadow.value=pt_fog_transmittance(p.media.fog,p.media.count,ray.origin.xyz,ray.direction.xyz,ray.direction.w);
+    return shadow;
+}
+public void pt_shadow_hit(PtParams p,inout PtShadow shadow,inout DeRtRay ray,DeRtHit hit,uint casts) {
+    if(hit.t<0) {
+        shadow.value*=pt_medium_transmittance(shadow.media,max(0.0,ray.direction.w-shadow.cursor));
+        shadow.finished=1;return;
+    }
+    DeRtContext q=pt_query(p);DeResolvePoint point=de_rt_point(q,hit.instance,hit.primitive,float2(hit.u,hit.v));
+    // Keep authored hard-shadow policy, including opaque blockers behind
+    // non-casting volumes. A blocked segment needs no material resolution.
+    if(!point.valid||(casts!=0&&(point.inst.flags&DE_GPU_INSTANCE_CAST_SHADOWS)!=0)) {
+        shadow.value=0;shadow.finished=1;return;
+    }
+    DeRtSurface surface=de_rt_hit_surface(q,hit,ray.origin.xyz,p.brdf_lut);
+    if(!surface.valid){shadow.value=0;shadow.finished=1;return;}
+    SurfaceData s=surface.material;
+    bool volume=(s.features&DE_MATERIAL_FEATURE_VOLUME)!=0&&s.thickness>0;
+    bool entering=volume&&dot(ray.direction.xyz,pt_geometric_normal(q,hit))<0;
+    PtMedium m;m.instance=hit.instance;m.color=s.attenuation_color;m.distance=s.attenuation_distance;
+    float distance=max(0.0,hit.t-shadow.cursor);
+    shadow.value*=pt_medium_transmittance(shadow.media,distance);
+    if(shadow.media.depth==0)shadow.unowned+=distance;
+    // An untracked exit proves that the origin was inside this closed owner.
+    // Assign earlier unowned intervals now, excluding lengths already spent in
+    // tracked inner media. This also handles an inner entry before that exit.
+    if(volume&&!entering&&!pt_medium_contains(shadow.media,hit.instance)) {
+        shadow.value*=volume_transmittance(m.color,m.distance,shadow.unowned);
+        shadow.unowned=0;
+    }
+    // Disabled hard shadows must not erase material absorption.
+    if(volume)pt_medium_boundary(shadow.media,m,entering);
+    shadow.cursor=hit.t;
+    // Advance the traversal lower bound by one representable distance, keeping
+    // the original origin/endpoint and accounting the complete physical segment.
+    ray.origin.w=asfloat(asuint(hit.t)+1u);
+    if(!(ray.origin.w<ray.direction.w)) {
+        shadow.value*=pt_medium_transmittance(shadow.media,max(0.0,ray.direction.w-shadow.cursor));
+        shadow.finished=1;
+    }
 }
 public void pt_path_finish(PtParams p,inout PtPath path,PtStep step,float3 visibility,uint pixel) {
     path.radiance+=path.throughput*(step.emitted+step.direct*visibility);
