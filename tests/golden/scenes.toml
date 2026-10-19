@@ -487,3 +487,10 @@ size = [1280,720]
 tiers = ["base"]
 threshold_mean = 0.001
 threshold_p99 = 0.015
+
+[scene.ui_widgets_basic]
+description = "Actual embedded-default widgets: normal, hover, pressed, disabled states"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015

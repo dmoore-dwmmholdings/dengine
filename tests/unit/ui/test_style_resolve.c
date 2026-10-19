@@ -21,10 +21,10 @@ TEST_F(ui_style_resolve, specificity_sheet_order_state_and_class_removal, ui_fx)
     EXPECT_FLOAT_EQ(style_get(f, b).opacity, .1f, .00001f);
 }
 TEST_F(ui_style_resolve, focus_pressed_disabled_and_preserve_unset_fields, ui_fx) {
-    ASSERT_EQ(
-        style_install(f->ui, "[style.\"button:focus\"]\nopacity=0.2\n[style.\"button:pressed\"]"
-                             "\nopacity=0.4\n[style.\"button:disabled\"]\nopacity=0.6"),
-        DE_OK);
+    ASSERT_EQ(style_install(f->ui,
+                            "[style.\"button:focus\"]\nopacity=0.2\n[style.\"button:pressed\"]"
+                            "\nopacity=0.4\n[style.\"button:disabled\"]\nopacity=0.6"),
+              DE_OK);
     de_entity e = style_button(f, (de_entity){0}, NULL);
     DeUiStyle *own = de_entity_add(f->world, e, f->ui->ids.style);
     own->corner_radius = 7;
@@ -94,7 +94,7 @@ TEST_F(ui_style_resolve, registered_asset_blob_and_real_hot_reload_keep_old_on_e
     ASSERT_EQ(de_ui_load_stylesheet(f->ui, sheet), DE_OK);
     ASSERT_EQ(de_ui_load_stylesheet(f->ui, blobhandle), DE_OK);
     de_entity e = style_button(f, (de_entity){0}, "danger");
-    style_step(f, 0);
+    style_step(f, 1.f / 60.f);
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .2f, .00001f);
     EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 9, 0);
     // The asset system creates source watches on the update following publication.
@@ -105,8 +105,8 @@ TEST_F(ui_style_resolve, registered_asset_blob_and_real_hot_reload_keep_old_on_e
     u64 end = de_time_now_ns() + 5000000000ULL;
     do {
         de_asset_system_update(f->assets, f->world);
-        style_step(f, 0);
-        if (style_get(f, e).opacity > .7f)
+        style_step(f, 1.f / 60.f);
+        if (fabsf(style_get(f, e).opacity - .8f) < .00001f)
             break;
         de_sleep_ns(1000000);
     } while (de_time_now_ns() < end);
@@ -118,7 +118,7 @@ TEST_F(ui_style_resolve, registered_asset_blob_and_real_hot_reload_keep_old_on_e
     de_result reload_error = DE_OK;
     do {
         de_asset_system_update(f->assets, f->world);
-        style_step(f, 0);
+        style_step(f, 1.f / 60.f);
         reload_error = de_asset_last_error(f->assets, ids[0], error, sizeof error);
         if (reload_error != DE_OK)
             break;

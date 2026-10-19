@@ -182,3 +182,6 @@ endif()
 target_compile_definitions(de_golden PRIVATE
     "DE_GOLDEN_UI_CACHE=\"${CMAKE_CURRENT_BINARY_DIR}/ui_cache\"")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ui_cache")
+
+# DENG-318 actual embedded-default widget state sheet.
+target_sources(de_golden PRIVATE ui/widgets_basic/widgets_scene.c)

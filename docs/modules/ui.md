@@ -213,3 +213,17 @@ verification and full acceptance handoff are still pending. Known strict regress
 remain tracked as DENG-515 (first-repeat/full-tree layout cost), DENG-516 (explicit
 basic selector tag without its corresponding behavior component), and DENG-511
 (interrupted state transition from the preceding issue).
+
+DENG-318 final verification: all8 new acceptance cases pass in Dev: synthetic
+capture/click actions; clips/z-order/popups/root-local hit; disabled state;37% slider
+snapping/clamping/change events; table callbacks; actual progress fills/reattach;
+500widgets×1000frames with zero steady-state heap allocations; and an asynchronous
+real locale READY switch that relayouts only the localized nodes and ancestors.
+The full Dev suite passes28/31, retaining DENG-511/515/516 as strict failures.
+Seven new cases pass the initial ASan/UBSan aggregate; the locale case passes its
+isolated rerun after correcting that new test's cleanup to match host text-before-
+assets shutdown. DENG-517 tracks the unchanged legacy fixture's inverse order.
+ASan aggregate timing remains separately qualified (theme1ms budget under Dev).
+Public headers/layering and all21 unique UI C sources compile with render/GPU off.
+The actual Metal widget state sheet passes capture and strict comparison with FLIP0,
+and the native visual review is accepted. No global suite or CI repair loop was run.
