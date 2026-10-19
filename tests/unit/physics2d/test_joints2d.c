@@ -225,6 +225,7 @@ TEST(physics2d_joints, no_allocation_in_steady_state) {
     ticks(p, 1);
     de_tracking_stats before = de_tracking_allocator_stats(&tracking);
     ticks(p, 120);
+    (void)de_physics2d_checksum(p);
     de_tracking_stats after = de_tracking_allocator_stats(&tracking);
     EXPECT_EQ(before.alloc_count, after.alloc_count);
     EXPECT_EQ(before.realloc_count, after.realloc_count);
@@ -246,4 +247,85 @@ TEST(physics2d_joints, mouse_force_is_bounded) {
     f32 mass = p->bodies.mass[tu_index(b)];
     EXPECT_TRUE(de_dsqrt(de__v2_dot(v, v)) * mass <= 0.01f * SV_DT * 1.001f);
     de_physics2d_destroy(p);
+}
+
+TEST(physics2d_joints, checksum_changes_with_motor_and_mouse_target_before_stepping) {
+    de_physics2d_world *p = world();
+    de_body b = ball(p, 0, 0);
+    de_joint2d_desc d = {.body_b = b};
+    de_joint j = joint(p, &d);
+    u64 before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 2, 10), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 3, 10), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 3, 11), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    de_joint2d_destroy(p, j);
+    d.kind = DE_JOINT2D_MOUSE;
+    j = joint(p, &d);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_mouse_set_target(p, j, (de_dpoint2d){1, 2}), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_mouse_set_target(p, j, (de_dpoint2d){1 + 1e-12, 2}), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    de_physics2d_destroy(p);
+}
+static u64 description_checksum(de_joint2d_desc d) {
+    de_physics2d_world *p = world();
+    d.body_b = ball(p, 0, 0);
+    (void)joint(p, &d);
+    u64 checksum = de_physics2d_checksum(p);
+    de_physics2d_destroy(p);
+    return checksum;
+}
+TEST(physics2d_joints, checksum_covers_future_behavior_and_ignores_padding) {
+    de_joint2d_desc d = {.axis = {0.6f, 0.8f},
+                         .lower = -2,
+                         .upper = 2,
+                         .hertz = 3,
+                         .damping_ratio = 0.5f,
+                         .world_anchor_a = {1, 2},
+                         .world_anchor_b = {3, 4}};
+    u64 base = description_checksum(d);
+#define DIFFERENT(field, value)                                                                    \
+    do {                                                                                           \
+        de_joint2d_desc variant = d;                                                               \
+        variant.field = (value);                                                                   \
+        EXPECT_NE(description_checksum(variant), base);                                            \
+    } while (0)
+    DIFFERENT(local_anchor_a.x, 0.25f);
+    DIFFERENT(local_anchor_a.y, 0.25f);
+    DIFFERENT(local_anchor_b.x, 0.25f);
+    DIFFERENT(local_anchor_b.y, 0.25f);
+    DIFFERENT(world_anchor_a.x, 1 + 1e-12);
+    DIFFERENT(world_anchor_a.y, 2 + 1e-12);
+    DIFFERENT(world_anchor_b.x, 3 + 1e-12);
+    DIFFERENT(world_anchor_b.y, 4 + 1e-12);
+    DIFFERENT(axis.x, 0.25f);
+    DIFFERENT(axis.y, 0.25f);
+    DIFFERENT(reference_angle, 0.25f);
+    DIFFERENT(enable_limit, true);
+    DIFFERENT(enable_motor, true);
+    DIFFERENT(collide_connected, true);
+    DIFFERENT(lower, -1);
+    DIFFERENT(upper, 3);
+    DIFFERENT(motor_speed, 1);
+    DIFFERENT(max_motor_force, 1);
+    DIFFERENT(hertz, 4);
+    DIFFERENT(damping_ratio, 0.6f);
+    DIFFERENT(break_force, 1);
+#undef DIFFERENT
+    de_joint2d_desc padded = d;
+    for (size_t i = offsetof(de_joint2d_desc, collide_connected) + sizeof(bool);
+         i < offsetof(de_joint2d_desc, lower); ++i)
+        ((u8 *)&padded)[i] = 0xa5;
+    EXPECT_EQ(description_checksum(padded), base);
+    d.axis = (de_vec2){0, 0};
+    base = description_checksum(d);
+    d.axis = (de_vec2){2, 0};
+    EXPECT_EQ(description_checksum(d), base);
 }
