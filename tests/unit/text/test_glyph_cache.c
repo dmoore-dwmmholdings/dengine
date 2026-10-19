@@ -73,6 +73,56 @@ TEST_F(glyph_cache, cook_runtime_byte_equal, runtime_fx) {
         ASSERT_MEMEQ(font->pixels[old->page] + 4 * ((u64)(old->y + y) * font->width + old->x),
                      page + 4 * ((u64)(now.y + y) * font->width + now.x), now.w * 4);
 }
+TEST_F(glyph_cache, saturated_dirty_list_preserves_first_runtime_page_update, runtime_fx) {
+    de_text_font *font = de_text__font_get(f->t, f->cjk);
+    u32 glyph;
+    ASSERT_EQ(unbaked(f, &glyph, 1), 1u);
+    /* Simulate deferred uploads filling the list on already existing baked pages. */
+    font->dirty_count = (u32)(sizeof font->dirty / sizeof *font->dirty);
+    for (u32 i = 0; i < font->dirty_count; ++i)
+        font->dirty[i] = (de_text_dirty_rect){i % font->pages, 0, 0, 1, 1};
+    de_text__glyph_miss(f->t, f->cjk, glyph);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    de_text_glyph_entry entry;
+    ASSERT_TRUE(de_text__glyph(f->t, f->cjk, glyph, &entry));
+    ASSERT_FALSE(entry.missing);
+    ASSERT_GE(entry.page, font->pages);
+    EXPECT_LE(font->dirty_count, (u32)(sizeof font->dirty / sizeof *font->dirty));
+    for (u32 page = 0; page <= entry.page; ++page) {
+        bool covered = false;
+        for (u32 i = 0; i < font->dirty_count; ++i) {
+            const de_text_dirty_rect *r = &font->dirty[i];
+            if (r->page != page)
+                continue;
+            if (page < font->pages)
+                covered |= r->x == 0 && r->y == 0 && r->w >= 1 && r->h >= 1;
+            else
+                covered |= r->x <= entry.x && r->y <= entry.y && r->x + r->w >= entry.x + entry.w &&
+                           r->y + r->h >= entry.y + entry.h;
+        }
+        EXPECT_TRUE(covered);
+    }
+}
+TEST(glyph_cache, all_baked_and_runtime_pages_remain_dirty_at_capacity) {
+    de_text_font font = {.width = 128, .height = 64};
+    for (u32 page = 0; page < DE_FONT_PAGES_MAX; ++page)
+        de_text__font_dirty(&font, (de_text_dirty_rect){page, 1, 2, 3, 4});
+    /* Repeated writes after saturation must retain coverage of every other page. */
+    for (u32 repeat = 0; repeat < 2; ++repeat)
+        for (u32 page = 0; page < DE_FONT_PAGES_MAX; ++page)
+            de_text__font_dirty(&font, (de_text_dirty_rect){page, 20, 30, 5, 6});
+    ASSERT_EQ(font.dirty_count, (u32)DE_FONT_PAGES_MAX);
+    for (u32 page = 0; page < DE_FONT_PAGES_MAX; ++page) {
+        bool covered = false;
+        for (u32 i = 0; i < font.dirty_count; ++i) {
+            const de_text_dirty_rect *r = &font.dirty[i];
+            covered |= r->page == page && r->x == 0 && r->y == 0 && r->w == font.width &&
+                       r->h == font.height;
+        }
+        EXPECT_TRUE(covered);
+    }
+}
 TEST_F(glyph_cache, page_cap_warns_once, runtime_fx) {
     ASSERT_EQ(de_cvar_set(f->t->glyph_cache->pages_max, "0"), DE_OK);
     u32 ids[2];

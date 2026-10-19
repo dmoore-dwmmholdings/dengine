@@ -4,6 +4,11 @@
 #include "font_format.h"
 #include <stb_truetype.h>
 #include "platform/de_atomic.h"
+enum {
+    DE_FONT_BAKED_PAGES_MAX = 256,
+    DE_FONT_RUNTIME_PAGES_MAX = 8,
+    DE_FONT_PAGES_MAX = DE_FONT_BAKED_PAGES_MAX + DE_FONT_RUNTIME_PAGES_MAX
+};
 typedef struct de_text_dirty_rect {
     u32 page, x, y, w, h;
 } de_text_dirty_rect;
@@ -27,9 +32,10 @@ typedef struct de_text_font {
     de__font_kern *kerns;
     u8 **pixels;
     stbtt_fontinfo face;
-    de_text_dirty_rect dirty[256];
+    de_text_dirty_rect dirty[DE_FONT_PAGES_MAX];
     u32 dirty_count;
 } de_text_font;
+void de_text__font_dirty(de_text_font *f, de_text_dirty_rect rect);
 de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size,
                                de_text_font **out);
 void de_text__font_free(de_text_font *f);

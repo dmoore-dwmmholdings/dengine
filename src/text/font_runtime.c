@@ -8,6 +8,24 @@
 #include "cook/lib/de_cooker.h"
 #endif
 static de_atomic_u64 font_identity;
+void de_text__font_dirty(de_text_font *f, de_text_dirty_rect rect) {
+    DE_ASSERT(rect.page < DE_FONT_PAGES_MAX);
+    if (f->dirty_count < DE_FONT_PAGES_MAX) {
+        f->dirty[f->dirty_count++] = rect;
+        return;
+    }
+    /* Deferred uploads may fill the rectangle list before another page changes.
+     * Collapse to full pages, including the new page, without losing old updates.
+     * Capacity covers every baked and runtime page even when all are distinct. */
+    bool pages[DE_FONT_PAGES_MAX] = {0};
+    pages[rect.page] = true;
+    for (u32 i = 0; i < f->dirty_count; ++i)
+        pages[f->dirty[i].page] = true;
+    f->dirty_count = 0;
+    for (u32 page = 0; page < DE_FONT_PAGES_MAX; ++page)
+        if (pages[page])
+            f->dirty[f->dirty_count++] = (de_text_dirty_rect){page, 0, 0, f->width, f->height};
+}
 static f32 rf(const u8 *p) {
     u32 u = de__font_u32(p);
     f32 f;
@@ -31,7 +49,7 @@ de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size
         ns = de__font_u32(p + 28), w = de__font_u32(p + 52), h = de__font_u32(p + 56),
         ch = de__font_u32(p + 60);
     if (version != 1 || mode > 2 || !ng || ng > 65536 || nc > 0x110000 || nk > 1000000 || !np ||
-        np > 256 || !w || !h || w > 16384 || h > 16384 || (ch != 1 && ch != 4))
+        np > DE_FONT_BAKED_PAGES_MAX || !w || !h || w > 16384 || h > 16384 || (ch != 1 && ch != 4))
         return DE_FAIL(DE_ERR_PARSE, "font counts/version");
     u64 pixels = (u64)np * w * h * ch,
         need = 64 + (u64)ng * 48 + (u64)nc * 8 + (u64)nk * 12 + ns + pixels;

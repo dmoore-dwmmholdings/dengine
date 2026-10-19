@@ -139,9 +139,9 @@ de_result de_text__glyph_cache_init(de_text_system *t) {
                                                     .max = 8192});
     c->pages_max = de_cvar_register(&(de_cvar_desc){.name = "t.runtime_pages_max",
                                                     .type = DE_CVAR_INT,
-                                                    .default_number = 8,
+                                                    .default_number = DE_FONT_RUNTIME_PAGES_MAX,
                                                     .min = 0,
-                                                    .max = 8});
+                                                    .max = DE_FONT_RUNTIME_PAGES_MAX});
     if (t->assets)
         c->tasks = t->assets->tasks;
     if (t->assets && !c->tasks) {
@@ -329,17 +329,7 @@ void de_text__integrate_glyphs(de_text_system *t) {
                 for (u32 y = 0; y < g->h; ++y)
                     memcpy(f->pixels[page] + 4 * ((u64)(g->y + y) * f->width + g->x),
                            j->pixels + 4 * (u64)y * g->w, 4 * g->w);
-                de_text_dirty_rect rect = {g->page, g->x, g->y, g->w, g->h};
-                if (live->dirty_count < 256)
-                    live->dirty[live->dirty_count++] = rect;
-                else {
-                    for (u32 k = 0; k < live->dirty_count; ++k)
-                        if (live->dirty[k].page == rect.page) {
-                            live->dirty[k] =
-                                (de_text_dirty_rect){rect.page, 0, 0, live->width, live->height};
-                            break;
-                        }
-                }
+                de_text__font_dirty(live, (de_text_dirty_rect){g->page, g->x, g->y, g->w, g->h});
             }
             j->status = GLYPH_INTEGRATED;
             ++live->generation;
