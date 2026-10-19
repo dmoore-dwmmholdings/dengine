@@ -155,5 +155,16 @@ numerical failure is the frozen-reference comparison (FLIP 0.0869373 against
 0.02). No published reference, scene, sample count or quality limit was changed.
 Strict Metal API and shader validation also pass the 20 renderer controls and
 the proposal/segment regression (the latter under ASan/UBSan).
-The legacy Cornell PNG review remains separate; the original 4096-sample strict
-golden comparison has not been rerun on this correction.
+The original strict 4096-sample Metal golden comparisons were rerun after this
+correction, retaining both 300-second limits and existing references. Cornell
+completes in 123.44 seconds but still fails (mean 0.027528 against 0.02, p99
+0.079175 against 0.10). Gallery passes in 74.85 seconds with zero FLIP error.
+The current Cornell capture differs from the earlier proposed replacement in
+just one green byte by one level; neither replacement has been applied.
+
+A separate temporary harness records the corrected Cornell 4096-spp seed-0
+numeric reference outside the repository, then runs the unchanged 1024-spp seed-1
+comparison against it: FLIP 0.00934483 passes the original 0.02 limit. This
+qualifies a possible numeric reference replacement, not the existing frozen
+oracle: that original comparison still fails at 0.0869373. The stored F32 and
+PNG references remain unchanged pending their separate review decisions.
