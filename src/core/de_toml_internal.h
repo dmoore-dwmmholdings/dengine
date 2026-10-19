@@ -25,6 +25,10 @@
  */
 toml_result_t de__toml_parse(const de_allocator *a, const char *src, int len);
 
+/** Opt-in per-parse duplicate assignment handler; ordinary parsing stays strict. */
+toml_result_t de__toml_parse_with_duplicates(const de_allocator *a, const char *src, int len,
+                                             toml_duplicate_fn handler, void *user);
+
 /** Releases a de__toml_parse() result. Each block goes back to the allocator it came from. */
 void de__toml_free(toml_result_t res);
 

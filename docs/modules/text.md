@@ -139,3 +139,9 @@ Binding caches can also observe `de_type_registry_revision` from `de_reflect.h`:
 struct/enum registration or replacement advances it, including metadata/hook-only changes;
 failed registrations and lookups leave it unchanged. Re-resolve both cached paths and previously
 invalid paths when it changes. Actual UI binding/widget implementation remains a separate task.
+
+Locale TOML files use the first string assigned to a key in `[strings]`. Later
+string assignments to that key emit a `text.loc` warning with the filename,
+duplicate line and original value line. The cooker still rejects malformed
+TOML, non-string values, repeated table headers and inline-table duplicates;
+ordinary TOML callers retain strict duplicate rejection.

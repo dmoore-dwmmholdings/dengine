@@ -2,6 +2,7 @@
 #include "de_alloc_guard.h"
 #include "cook/lib/cooker_internal.h"
 #include "cook/lib/decache.h"
+#include "core/de_toml_internal.h"
 TEST(loc_tables, deterministic_directory_cook_and_locale_subassets) {
     loc_fixture f;
     loc_setup(&f, "deterministic");
@@ -182,6 +183,21 @@ TEST(loc_tables, directory_cache_tracks_add_remove_and_content_while_file_source
     de_cooker_destroy(c);
     loc_destroy(&f);
 }
+typedef struct locale_warnings {
+    u32 count;
+    char message[512];
+} locale_warnings;
+static void capture_locale_warning(const de_log_record *record, void *user) {
+    locale_warnings *warnings = user;
+    if (record->level != DE_LOG_WARN)
+        return;
+    char message[512];
+    snprintf(message, sizeof message, "%.*s", (int)record->message.len, record->message.ptr);
+    if (strstr(message, "duplicate string key")) {
+        ++warnings->count;
+        memcpy(warnings->message, message, strlen(message) + 1);
+    }
+}
 TEST(loc_tables, cook_errors_include_source_line_and_duplicates_are_reported) {
     loc_fixture f;
     loc_setup(&f, "errors");
@@ -194,9 +210,74 @@ TEST(loc_tables, cook_errors_include_source_line_and_duplicates_are_reported) {
     de_cook_result r = {0};
     EXPECT_EQ(de_cooker_cook(c, &in, &r), DE_ERR_PARSE);
     EXPECT_TRUE(strstr(de_error_last()->message, "en.toml:2") != NULL);
-    loc_file(&f, "en", "[strings]\n\"a\"=\"A\"\n\"a\"=\"B\"\n");
-    EXPECT_EQ(de_cooker_cook(c, &in, &r), DE_ERR_PARSE);
-    EXPECT_TRUE(strstr(de_error_last()->message, "en.toml") != NULL);
+    const char *duplicate = "[strings]\n\"a\"=\"A\"\n\"a\"=\"B\"\n";
+    /* The shared parser still rejects the exact same document. */
+    toml_result_t strict = de__toml_parse(NULL, duplicate, (int)strlen(duplicate));
+    EXPECT_FALSE(strict.ok);
+    de__toml_free(strict);
+    locale_warnings warnings = {0};
+    de_log_desc log = {.no_console_sink = true};
+    ASSERT_EQ(de_log_init(&log), DE_OK);
+    de_log_add_sink(capture_locale_warning, &warnings);
+    loc_file(&f, "en", duplicate);
+    ASSERT_EQ(de_cooker_cook(c, &in, &r), DE_OK);
+    const de_cook_subasset *en = de_cook_result_subasset(&r, "en");
+    ASSERT_TRUE(en != NULL);
+    de__loc_table table;
+    ASSERT_EQ(de__loc_table_parse(en->data, en->size, &table), DE_OK);
+    EXPECT_STREQ(de__loc_table_lookup(&table, de_name_from("a")).ptr, "A");
+    de_cook_result_free(&r);
+    de_log_flush();
+    EXPECT_EQ(warnings.count, 1u);
+    EXPECT_TRUE(strstr(warnings.message, "en.toml:3") != NULL);
+    EXPECT_TRUE(strstr(warnings.message, "key 'a'") != NULL);
+    EXPECT_TRUE(strstr(warnings.message, "first value from line 2") != NULL);
+    de_log_remove_sink(capture_locale_warning, &warnings);
+    de_log_shutdown();
+    de_cooker_destroy(c);
+    loc_destroy(&f);
+}
+
+TEST(loc_tables, duplicate_policy_handles_escaped_multiline_keys_and_keeps_other_errors) {
+    loc_fixture f;
+    loc_setup(&f, "duplicate_policy");
+    de_cooker *c = NULL;
+    ASSERT_EQ(de_cooker_create(NULL, &c), DE_OK);
+    de_asset_type_desc type = de_string_table_import_type_desc();
+    ASSERT_EQ(de_cooker_register_type(c, &type), DE_OK);
+    loc_file(&f, "en",
+             "[strings]\n\"caf\\u00e9\"=\"\"\"First\nline\"\"\"\n"
+             "'café'='Second'\n\"café\"='Third'\n'next'='After duplicates'\n");
+    de_cook_result first = loc_cook(&f, c), second = loc_cook(&f, c);
+    const de_cook_subasset *en = de_cook_result_subasset(&first, "en");
+    ASSERT_TRUE(en != NULL);
+    de__loc_table table;
+    ASSERT_EQ(de__loc_table_parse(en->data, en->size, &table), DE_OK);
+    EXPECT_EQ(table.count, 2u);
+    EXPECT_STREQ(de__loc_table_lookup(&table, de_name_from("café")).ptr, "First\nline");
+    EXPECT_STREQ(de__loc_table_lookup(&table, de_name_from("next")).ptr, "After duplicates");
+    const de_cook_subasset *again = de_cook_result_subasset(&second, "en");
+    ASSERT_TRUE(again != NULL);
+    EXPECT_EQ(en->size, again->size);
+    EXPECT_MEMEQ(en->data, again->data, (size_t)en->size);
+    de_cook_result_free(&first);
+    de_cook_result_free(&second);
+    const char *invalid[] = {
+        "[strings]\na='A'\na=7\n",
+        "[strings]\na=7\na='A'\n",
+        "[strings]\na='A'\na=\"unterminated\n",
+        "[strings]\na='A'\n[other]\nx='X'\nx='Y'\n",
+        "[strings]\na='A'\n[strings]\nb='B'\n",
+        "strings={a='A',a='B'}\n",
+    };
+    de_cook_input in = {&f.assets->manifest->assets[0], f.root, NULL};
+    for (u32 i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        loc_file(&f, "en", invalid[i]);
+        de_cook_result r = {0};
+        EXPECT_EQ(de_cooker_cook(c, &in, &r), DE_ERR_PARSE);
+        EXPECT_TRUE(strstr(de_error_last()->message, "en.toml") != NULL);
+        de_cook_result_free(&r);
+    }
     de_cooker_destroy(c);
     loc_destroy(&f);
 }
