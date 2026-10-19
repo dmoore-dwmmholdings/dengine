@@ -1,5 +1,6 @@
 /* Progressive per-view path tracing. The graph owns submission, pipelines own immutable SBTs. */
 #include "render/pathtracer/pt_internal.h"
+#include "render/pathtracer/pt_sobol_table.h"
 #include "render/rt/rt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/graph/rg_internal.h"
@@ -18,7 +19,7 @@ typedef struct pt_params {
     u32 accumulation, output, brdf_lut, seed;
     f32 inv_view_proj[4][4], camera[4];
     de__ibl_gpu ibl;
-    u32 environment_revision, flags, reserved0, reserved1;
+    u32 environment_revision, flags, sampling_table, reserved1;
     f32 exposure;
     u32 light_count, directional_alias, directional_offset;
     de__pt_media_params media;
@@ -41,6 +42,7 @@ typedef struct pt_view {
 struct de__pt {
     de_renderer *r;
     de_gpu_pipeline pipeline, env;
+    de_gpu_buffer sampling_table;
     de__pt_media *media;
     de_cvar max_samples, seed, strategy, final_denoise, golden;
     de__pt_denoise *denoise;
@@ -86,6 +88,7 @@ void de__pt_destroy(de__pt *p) {
     de__pt_denoise_destroy(p->denoise);
     de_gpu_pipeline_destroy(p->r->dev, p->pipeline);
     de_gpu_pipeline_destroy(p->r->dev, p->env);
+    de_gpu_buffer_destroy(p->r->dev, p->sampling_table);
     DE_FREE(p->r->alloc, p, sizeof *p);
 }
 bool de__pt_enabled(const de_renderer *r, const de_render_settings *s) {
@@ -186,6 +189,18 @@ static de_result pipelines(de__pt *p) {
     de__engine_shader_code_free(&env_code);
     if (!p->pipeline.id || !p->env.id)
         return DE_FAIL(DE_ERR_UNSUPPORTED, "PT pipelines");
+    p->sampling_table =
+        de_gpu_buffer_create(r->dev, &(de_gpu_buffer_desc){.size = sizeof de__pt_sobol_directions,
+                                                           .stride = sizeof(u32),
+                                                           .usage = DE_USAGE_STORAGE,
+                                                           .memory = DE_MEM_UPLOAD,
+                                                           .name = "PT Sobol direction matrices"});
+    if (!p->sampling_table.id)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "PT sampling matrices");
+    void *mapped = de_gpu_buffer_map(r->dev, p->sampling_table);
+    if (!mapped)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "PT sampling upload");
+    memcpy(mapped, de__pt_sobol_directions, sizeof de__pt_sobol_directions);
     return DE_OK;
 }
 de_result de__pt_prepare(de_renderer *r, const de_render_settings *settings) {
@@ -200,6 +215,8 @@ de_result de__pt_prepare(de_renderer *r, const de_render_settings *settings) {
             de_gpu_pipeline_destroy(r->dev, p->pipeline);
             de_gpu_pipeline_destroy(r->dev, p->env);
             p->pipeline = p->env = (de_gpu_pipeline){0};
+            de_gpu_buffer_destroy(r->dev, p->sampling_table);
+            p->sampling_table = (de_gpu_buffer){0};
         }
     }
     return p->pipeline_result;
@@ -405,6 +422,7 @@ void de__pt_build(de__view_frame *f, void *user) {
         .brdf_lut = de__renderer_brdf_lut(p->r),
         .seed = seed,
         .flags = strategy,
+        .sampling_table = de_gpu_buffer_bindless(p->r->dev, p->sampling_table),
         .ibl = lighting.view.ibl,
         .exposure =
             de__lighting_view_exposure(de__views_lighting(p->r), (f->view.id & 255u) - 1u, f->view,
@@ -452,6 +470,8 @@ void de__pt_build(de__view_frame *f, void *user) {
         g->oom = true;
         return;
     }
+    de_rg_read(pass, de_rg_import_buffer(g, p->sampling_table, DE_ACCESS_SHADER_READ),
+               DE_ACCESS_SHADER_READ);
     if (media.features)
         de__pt_media_graph(p->media, g, pass);
     de_rg_read(pass, rt->dependency, DE_ACCESS_SHADER_READ);

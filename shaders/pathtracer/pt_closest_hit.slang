@@ -16,7 +16,7 @@ public struct PtParams {
     public float4 inv_view_proj[4];
     public float4 camera;
     public DeIbl ibl;
-    public uint environment_revision,flags,reserved0,reserved1;
+    public uint environment_revision,flags,sampling_table,reserved1;
     public float exposure; public uint light_count,directional_alias,directional_offset;
     public PtMediaParams media;
     public uint aov_albedo,aov_normal,aov_depth,aov_position,aov_material,aov_pad0,aov_pad1,aov_pad2;
@@ -30,7 +30,7 @@ public struct PtStep {
     public float3 weight;
     public float pdf;
     public uint stop;
-    public uint consume,lobe;
+    public uint consume,lobe,casts_shadows;
 };
 public float3 pt_environment(PtParams p,float3 wi) { return de_ibl_radiance(p.ibl,wi,0); }
 public float pt_env_pdf(PtParams p,float3 wi) {
@@ -40,7 +40,7 @@ public float pt_env_pdf(PtParams p,float3 wi) {
 }
 public DeRtRay pt_camera(PtParams p,uint pixel) {
     uint2 xy=uint2(pixel%p.width,pixel/p.width);
-    float2 jitter=float2(pt_random(pixel^p.seed,p.sample,0),pt_random(pixel^p.seed,p.sample,1));
+    float2 jitter=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,0),pt_random(p.sampling_table,pixel^p.seed,p.sample,1));
     float4 c=float4((float2(xy)+jitter)/float2(p.width,p.height)*float2(2,-2)+float2(-1,1),1,1);
     float4 v=float4(dot(p.inv_view_proj[0],c),dot(p.inv_view_proj[1],c),dot(p.inv_view_proj[2],c),dot(p.inv_view_proj[3],c));
     float3 position=v.xyz/v.w;
@@ -83,10 +83,10 @@ public float4 pt_area_hit(PtParams p,DeRtRay ray,float geometry_t,out float ligh
     }
     return float4(emitted,light_pdf>0?nearest:-1);
 }
-public struct PtLightProposal {public float3 wi,incident;public float pdf;public uint delta;public DeRtRay shadow;};
+public struct PtLightProposal {public float3 wi,incident;public float pdf;public uint delta,casts_shadows;public DeRtRay shadow;};
 public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,uint pixel,uint bounce) {
     PtLightProposal o=(PtLightProposal)0;o.delta=1;DeRtContext query=pt_query(p);
-    uint dimension=2+bounce*12;float3 u=pt_random3(pixel^p.seed,p.sample,dimension);
+    uint dimension=2+bounce*12;float3 u=pt_random3(p.sampling_table,pixel^p.seed,p.sample,dimension);
     float3 wi=0,incident=0;float density=0;bool casts=true;
     uint choice=min(uint(u.z*3),2u);
     if(choice==0) {o.delta=0;
@@ -102,7 +102,7 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
     } else if(choice==1 && p.source_count>0) {
         uint entry=min(uint(u.x*p.source_count),p.source_count-1);DiSource a=de_robuffer<DiSource>(p.sources)[entry];
         uint index=u.y<a.probability?entry:a.alias;DiSource source=de_robuffer<DiSource>(p.sources)[index];
-        float2 uv=float2(pt_random(pixel^p.seed,p.sample,dimension+3),pt_random(pixel^p.seed,p.sample,dimension+4));
+        float2 uv=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+3),pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+4));
         density=source.pdf/3.0;
         if(source.kind==0) {
             DeClusterLight light=source.light;o.shadow=de_rt_shadow_ray(light,position,normal,uv);wi=o.shadow.direction.xyz;
@@ -141,7 +141,7 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
             o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,1e6);
         }
     }
-    if(!casts)o.shadow.direction.w=0;
+    o.casts_shadows=casts?1u:0u;
     o.wi=wi;o.incident=incident;o.pdf=density;return o;
 }
 public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,float last_pdf,float3 previous) {
@@ -160,7 +160,7 @@ public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,
     if((s.features&DE_MATERIAL_FEATURE_UNLIT)!=0)return o;
     ShadingFrame frame=de_surface_frame(s);float3 wo=frame.to_local(-ray.direction.xyz);
     uint dimension=2+bounce*12;
-    PtLightProposal light=pt_light_sample(p,position,s.normal,pixel,bounce);o.shadow=light.shadow;
+    PtLightProposal light=pt_light_sample(p,position,s.normal,pixel,bounce);o.shadow=light.shadow;o.casts_shadows=light.casts_shadows;
     float3 wi=light.wi;float mis=light.delta!=0?1:pt_power(light.pdf,StandardModel.pdf(s,wo,frame.to_local(wi)));
     if(light.pdf>0 && strategy!=2) {
         float3 d;float3 value=StandardModel.evaluate_split(s,wo,frame.to_local(wi),d);
@@ -171,7 +171,7 @@ public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,
         }
         o.direct=value*light.incident*((strategy==1?1:mis)/light.pdf);
     }
-    BsdfSample next=StandardModel.sample(s,wo,pt_random3(pixel^p.seed,p.sample,dimension+5));
+    BsdfSample next=StandardModel.sample(s,wo,pt_random3(p.sampling_table,pixel^p.seed,p.sample,dimension+5));
     if(!(next.pdf>0)||!all(isfinite(next.weight)))return o;
     o.pdf=next.pdf;o.weight=next.weight;o.lobe=next.lobe;wi=normalize(frame.to_world(next.wi));
     o.next.origin=float4(de_rt_offset(position,s.normal,wi),.00001);o.next.direction=float4(wi,1e6);o.stop=0;
@@ -203,7 +203,7 @@ public PtStep pt_phase_step(PtParams p,PtPath path,float3 position,float g,uint 
     float phase=pt_hg(dot(path.ray.direction.xyz,light.wi),g);uint strategy=p.flags&3;
     float mis=light.delta!=0?1:pt_power(light.pdf,phase);
     if(light.pdf>0&&strategy!=2)out.direct=light.incident*phase*((strategy==1?1:mis)/light.pdf);
-    out.shadow=light.shadow;float2 u=float2(pt_random(pixel^p.seed,p.sample,4096+path.event*5),pt_random(pixel^p.seed,p.sample,4097+path.event*5));
+    out.shadow=light.shadow;out.casts_shadows=light.casts_shadows;float2 u=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,4096+path.event*5),pt_random(p.sampling_table,pixel^p.seed,p.sample,4097+path.event*5));
     float3 direction=pt_hg_sample(path.ray.direction.xyz,g,u);out.pdf=pt_hg(dot(path.ray.direction.xyz,direction),g);
     out.next.origin=float4(position+direction*.00001,.00001);out.next.direction=float4(direction,1e6);return out;
 }
@@ -214,7 +214,7 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
     PtStep step=(PtStep)0;step.stop=1;
     if(path.sss.active!=0) {
         if(hit.t>=0&&hit.instance!=path.sss.instance)return step;
-        float2 u=float2(pt_random(pixel^p.seed,p.sample,8192+path.event*7),pt_random(pixel^p.seed,p.sample,8193+path.event*7));
+        float2 u=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,8192+path.event*7),pt_random(p.sampling_table,pixel^p.seed,p.sample,8193+path.event*7));
         PtSssFlight flight=pt_sss_flight(path.sss,limit,u);path.throughput*=flight.weight;
         path.position=path.ray.origin.xyz+path.ray.direction.xyz*flight.distance;
         if(flight.scattered!=0){
@@ -231,13 +231,13 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
             // The index-matched interface is transparent, even from inside.
             // The thin-wall BSDF path requires wo.z>0 and would terminate this walk.
             next.wi=frame.to_local(path.ray.direction.xyz);next.weight=float3(1);next.pdf=1;next.lobe=DE_BSDF_LOBE_TRANSMISSION;
-        } else next=StandardModel.sample(exit,frame.to_local(-path.ray.direction.xyz),pt_random3(pixel^p.seed,p.sample,16384+path.event*3));
+        } else next=StandardModel.sample(exit,frame.to_local(-path.ray.direction.xyz),pt_random3(p.sampling_table,pixel^p.seed,p.sample,16384+path.event*3));
         if(!(next.pdf>0))return step;float3 wi=normalize(frame.to_world(next.wi));
         step.stop=0;step.weight=next.weight;step.pdf=next.pdf;step.consume=dot(wi,normal)>0?1u:0u;
         if(step.consume!=0)path.sss.active=0;
         step.next.origin=float4(de_rt_offset(path.position,normal,wi),.00001);step.next.direction=float4(wi,1e6);return step;
     }
-    PtFogEvent fog=pt_fog_event(p.media.fog,p.media.count,path.ray.origin.xyz,path.ray.direction.xyz,limit,pixel^p.seed,p.sample,32768+path.event*37);
+    PtFogEvent fog=pt_fog_event(p.sampling_table,p.media.fog,p.media.count,path.ray.origin.xyz,path.ray.direction.xyz,limit,pixel^p.seed,p.sample,32768+path.event*37);
     path.throughput*=pt_medium_transmittance(path.media,fog.distance);
     path.position=path.ray.origin.xyz+path.ray.direction.xyz*fog.distance;
     if(fog.scattered!=0){path.throughput*=fog.albedo;return pt_phase_step(p,path,path.position,fog.g,pixel);}
@@ -256,9 +256,9 @@ public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel)
     if((s.features&DE_MATERIAL_FEATURE_SUBSURFACE)!=0&&(step.lobe&DE_BSDF_LOBE_DIFFUSE)!=0) {
         DeResolvePoint point=de_rt_point(q,hit.instance,hit.primitive,float2(hit.u,hit.v));DeSceneConstants sc=de_robuffer<DeSceneConstants>(q.scene)[q.view];
         DeGpuMaterial raw=de_resolve_material_of(de_resolve_material(point),sc);float amount=saturate(raw.extra.z);float3 radius=max(raw.subsurface.rgb,float3(0));
-        if(max(radius.x,max(radius.y,radius.z))>1e-6&&pt_random(pixel^p.seed,p.sample,65536+path.event)<amount) {
+        if(max(radius.x,max(radius.y,radius.z))>1e-6&&pt_random(p.sampling_table,pixel^p.seed,p.sample,65536+path.event)<amount) {
             PtSssCoefficients c=pt_sss_coefficients(radius,s.base_color);path.sss.active=1;path.sss.instance=hit.instance;path.sss.steps=0;path.sss.sigma_s=c.sigma_s;path.sss.sigma_a=c.sigma_a;
-            ShadingFrame inward=de_frame_from_normal(-normal);float3 wi=inward.to_world(de_sample_cosine_hemisphere(float2(pt_random(pixel^p.seed,p.sample,65537+path.event*2),pt_random(pixel^p.seed,p.sample,65538+path.event*2))));
+            ShadingFrame inward=de_frame_from_normal(-normal);float3 wi=inward.to_world(de_sample_cosine_hemisphere(float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,65537+path.event*2),pt_random(p.sampling_table,pixel^p.seed,p.sample,65538+path.event*2))));
             step.next.origin=float4(path.position-normal*.00001,.00001);step.next.direction=float4(wi,1e6);step.weight/=max(s.base_color,float3(1e-6));
         }
     }
@@ -273,7 +273,7 @@ public void pt_path_finish(PtParams p,inout PtPath path,PtStep step,float3 visib
     path.throughput*=step.weight;
     if(!all(isfinite(path.throughput))||!any(path.throughput>0)){path.finished=1;return;}
     if(step.consume!=0&&path.bounce>=3){float survival=clamp(max(path.throughput.x,max(path.throughput.y,path.throughput.z)),.05,.95);
-        if(pt_random(pixel^p.seed,p.sample,2+path.bounce*12+8)>=survival){path.finished=1;return;}path.throughput/=survival;}
+        if(pt_random(p.sampling_table,pixel^p.seed,p.sample,2+path.bounce*12+8)>=survival){path.finished=1;return;}path.throughput/=survival;}
     path.previous=path.position;path.ray=step.next;path.pdf=step.pdf;path.bounce+=step.consume;
     if(path.bounce>=p.max_bounces)path.finished=1;
 }

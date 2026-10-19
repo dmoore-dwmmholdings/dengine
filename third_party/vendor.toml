@@ -580,3 +580,15 @@ files = ["common/supplemental/plurals.xml", "common/supplemental/numberingSystem
     "common/main/zh_Hans.xml",
     "common/main/zh_Hant.xml"
 ]
+
+# Joe-Kuo mathematical direction data only; no SciPy library or Python runtime.
+[[lib]]
+name = "sobol"
+version = "2020-12-21-b342fde2462c"
+url = "https://api.github.com/repos/scipy/scipy/tarball/b342fde2462c9edbffda34502c719a424b4783cb"
+sha256 = "280dc309384e066cebd4dea8221b74630d840014ce5822f05243de93e62c412c"
+license = "BSD-3-Clause"
+license_file = "LICENSE.txt"
+files = ["scipy/stats/_sobol_direction_numbers.npz"]
+local = ["JOE_KUO_LICENSE"]
+notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matrix; no runtime dependency."

@@ -279,11 +279,31 @@ TEST_F(pt_media, fog_point_single_scatter, pt_fixture) {
                      (20 / (4 * DE_PI)) / (d * d) * exp(-.4 * d);
     }
     reference *= 2.0 / steps;
-    media_samples(f, 2048);
+    media_samples(f, 32);
+    double prefix = media_mean(f, 0);
+    media_samples(f, 2016);
     double actual = media_mean(f, 0), error = fabs(actual - reference) / reference;
     printf("Fog single scatter actual %.9g analytic %.9g relative %.6g%%\n", actual, reference,
            error * 100);
     EXPECT_TRUE(error <= .03);
+    r->w.f.lights.light[0].cast_shadows = true;
+    r->w.touch_lights = true;
+    de_renderer_path_reset(r->r, r->view);
+    media_samples(f, 32);
+    double shadowed = media_mean(f, 0);
+    printf("Fog shadow-flag prefix %.9g vs %.9g\n", shadowed, prefix);
+    EXPECT_FLOAT_EQ(shadowed, prefix, 1e-6);
+    r->w.f.lights.light[0].cast_shadows = false;
+    r->w.touch_lights = true;
+    /* KHR unlit uses base colour; its ignored standard emissive field must
+     * not create an area emitter or change this black receiver's transport. */
+    g_mat[0].standard.emissive = (de_vec3){200, 100, 50};
+    r->w.touch_all = true;
+    de_renderer_path_reset(r->r, r->view);
+    media_samples(f, 32);
+    double ignored = media_mean(f, 0);
+    printf("Fog ignored-emission prefix %.9g vs %.9g\n", ignored, prefix);
+    EXPECT_FLOAT_EQ(ignored, prefix, 1e-6);
 }
 TEST_F(pt_media, sss_radius_and_energy, pt_fixture) {
     media_slab(f, .2f);

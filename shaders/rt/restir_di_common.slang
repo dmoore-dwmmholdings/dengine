@@ -100,13 +100,21 @@ public float3 di_emission(DiSource source,float2 uv,DiParams p) {
     float a=sqrt(uv.x);float3 bary=float3(1-a,a*(1-uv.y),a*uv.y);
     DeResolvePoint point=(DeResolvePoint)0;point.inst=inst;point.mesh=mesh;point.vertex=v;point.bary=bary;
     if(!de_rt_material_opacity(point,m,p.sampler))return float3(0);
-    uint tex=de_material_texture(m,4); // cooked EMISSIVE slot
+    bool unlit=(m.model&(DE_GPU_MATERIAL_MODELS-1u))==DE_GPU_MATERIAL_MODEL_UNLIT;
+    if(unlit)le*=de_resolve_color(point).rgb;
+    uint slot=unlit?0u:4u; // Unlit base colour or standard emissive texture.
+    uint tex=de_material_texture(m,slot);
     if(tex!=0) {
-        uint set=de_material_texcoord(m,4);
+        uint set=de_material_texcoord(m,slot);
         float2 t0=set==0?de_vis_mesh_uv0(mesh,v.x):de_vis_mesh_uv1(mesh,v.x);
         float2 t1=set==0?de_vis_mesh_uv0(mesh,v.y):de_vis_mesh_uv1(mesh,v.y);
         float2 t2=set==0?de_vis_mesh_uv0(mesh,v.z):de_vis_mesh_uv1(mesh,v.z);
-        le*=de_tex2d(tex).SampleLevel(de_sampler(p.sampler),bary.x*t0+bary.y*t1+bary.z*t2,0).rgb;
+        float2 at=bary.x*t0+bary.y*t1+bary.z*t2;
+        if((m.textures[slot>>2][slot&3]&DE_GPU_MATERIAL_TEXTURE_POINT)!=0) {
+            uint w,h;de_tex2d(tex).GetDimensions(w,h);
+            int2 pixel=clamp(int2(floor(at*float2(w,h))),int2(0),int2(w,h)-1);
+            le*=de_tex2d(tex).Load(int3(pixel,0)).rgb;
+        } else le*=de_tex2d(tex).SampleLevel(de_sampler(p.sampler),at,0).rgb;
     }
     return le;
 }

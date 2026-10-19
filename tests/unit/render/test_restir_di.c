@@ -299,6 +299,33 @@ TEST_F(restir_di, emissive_triangles, di_fixture) {
     shadow_frame(&f->shadow);
     EXPECT_FALSE(de__restir_di_get(r->r->restir_di, r->view, &f->info));
 }
+TEST_F(restir_di, unlit_emitters_use_base_color_without_standard_emission, di_fixture) {
+    rt_fixture *r = &f->shadow.rt;
+    set_lights(f, 0);
+    g_mat[1].standard.unlit = true;
+    g_mat[1].standard.base_color = (de_vec4){.2f, .4f, .8f, 1};
+    g_mat[1].standard.emissive = (de_vec3){100, 200, 300};
+    g_mat[1].standard.emissive_strength = 0;
+    g_mat[1].standard.double_sided = true;
+    di_frame(f);
+    ASSERT_EQ(f->info.source_count, PATCH_TRIS);
+    ASSERT_EQ(f->info.emissive_count, PATCH_TRIS);
+    const u8 *bytes = de_gpu_buffer_map(r->d, f->readback);
+    f64 area = 0, power = 0;
+    for (u32 i = 0; i < f->info.source_count; ++i) {
+        const f32 *source = (const f32 *)(bytes + PIXELS * 64 + i * 192);
+        EXPECT_FLOAT_EQ(source[16], .2, 1e-7);
+        EXPECT_FLOAT_EQ(source[17], .4, 1e-7);
+        EXPECT_FLOAT_EQ(source[18], .8, 1e-7);
+        area += source[7];
+        power += source[44];
+    }
+    EXPECT_FLOAT_EQ(power, area * DE_PI * (.2126 * .2 + .7152 * .4 + .0722 * .8) * 2, .001);
+    f64 energy = 0;
+    for (u32 i = 0; i < PIXELS * 3; ++i)
+        energy += f->current[i];
+    EXPECT_TRUE(energy > 0);
+}
 TEST_F(restir_di, alpha_visibility, di_fixture) {
     rt_fixture *r = &f->shadow.rt;
     set_lights(f, 1);

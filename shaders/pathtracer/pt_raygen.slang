@@ -21,12 +21,12 @@ void pt_raygen(uniform PtPush pc) {
     for(uint bounce=0;bounce<p.max_bounces;++bounce) {
         DeRtHit hit=bounce==0?first:pt_intersect(p,ray,0);PtStep step=pt_step(p,ray,hit,pixel,bounce,pdf,previous);
         radiance+=throughput*step.emitted;
-        bool visible=step.shadow.direction.w<=step.shadow.origin.w || !any(step.direct>0) || pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0;
+        bool visible=step.casts_shadows==0 || step.shadow.direction.w<=step.shadow.origin.w || !any(step.direct>0) || pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0;
         if(visible)radiance+=throughput*step.direct;
         if(step.stop!=0)break;
         throughput*=step.weight;if(!all(isfinite(throughput))||!any(throughput>0))break;
         if(bounce>=3){float survival=clamp(max(throughput.x,max(throughput.y,throughput.z)),.05,.95);
-            if(pt_random(pixel^p.seed,p.sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
+            if(pt_random(p.sampling_table,pixel^p.seed,p.sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
         previous=ray.origin.xyz+ray.direction.xyz*hit.t;ray=step.next;pdf=step.pdf;
     }
     } else {
@@ -34,8 +34,10 @@ void pt_raygen(uniform PtPush pc) {
         for(uint event=0;event<limit&&path.finished==0;++event) {
             DeRtHit hit=event==0?first:pt_intersect_sss(p,path.ray,path.sss);PtStep step=pt_path_event(p,path,hit,pixel);
             float3 visibility=1;
-            if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0))
-                visibility=pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t<0?pt_path_shadow(p,path,step.shadow):float3(0);
+            if(step.shadow.direction.w>step.shadow.origin.w&&any(step.direct>0)) {
+                visibility=pt_path_shadow(p,path,step.shadow);
+                if(step.casts_shadows!=0&&pt_intersect(p,step.shadow,DE_RT_CAST_SHADOWS).t>=0)visibility=float3(0);
+            }
             pt_path_finish(p,path,step,visibility,pixel);
         }
         pt_path_diagnostics(p,path);radiance=path.radiance;

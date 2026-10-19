@@ -43,7 +43,7 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
                       DeRtIntersectionTable intersections [[buffer(2)]],DeRtVisibleTable functions [[buffer(3)]],
                       device const uint4 *sbt [[buffer(4)]],uint3 id [[thread_position_in_grid]]) {
     KernelContext_0 ctx;auto p=pt_load(heap,pc,ctx);if(id.x>=p.ptp_width||id.y>=p.ptp_height)return;
-    uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel);
+    uint pixel=id.y*p.ptp_width+id.x;auto r=pt_camera_0(&p,pixel,&ctx);
     auto first=pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
     pt_store_aov_0(&p,&r,&first,pixel,&ctx);
     float3 throughput=1,radiance=0,previous=r.ptr_origin.xyz;float pdf=0;
@@ -53,27 +53,27 @@ kernel void pt_raygen(constant DeRtHeap &heap [[buffer(0)]],constant PtPush &pc 
         auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
         radiance+=throughput*step.pts_emitted;
         bool visible=true;
-        if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0))
+        if(step.pts_casts_shadows!=0 && step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0))
             visible=pt_intersect(heap,p,step.pts_shadow,1,intersections,functions,sbt,(constant uchar *)&pc,ctx).pth_t<0;
         if(visible)radiance+=throughput*step.pts_direct;
         if(step.pts_stop)break;
         throughput*=step.pts_weight;if(!all(isfinite(throughput))||!any(throughput>0))break;
         if(bounce>=3) {float survival=clamp(max(throughput.x,max(throughput.y,throughput.z)),.05f,.95f);
-            if(pt_random_0(pixel^p.ptp_seed,p.ptp_sample,2+bounce*12+8)>=survival)break;throughput/=survival;}
+            if(pt_random_0(p.ptp_sampling_table,pixel^p.ptp_seed,p.ptp_sample,2+bounce*12+8,&ctx)>=survival)break;throughput/=survival;}
         previous=r.ptr_origin.xyz+r.ptr_direction.xyz*h.pth_t;r=step.pts_next;pdf=step.pts_pdf;
     }
     } else {
-        auto path=pt_path_init_0(&p,pixel);
+        auto path=pt_path_init_0(&p,pixel,&ctx);
         uint limit=p.ptp_max_bounces*(p.ptp_media.ptm_max_steps+5);
         for(uint event=0;event<limit && path.ptpath_finished==0;++event) {
             auto h=event==0?first:pt_intersect_sss(heap,p,path.ptpath_ray,path.ptpath_sss,intersections,functions,sbt,(constant uchar *)&pc,ctx);
             auto step=pt_path_event_0(&p,&path,&h,pixel,&ctx);
             float3 visibility=1;
             if(step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0)) {
-                bool clear=pt_intersect(heap,p,step.pts_shadow,1,intersections,functions,sbt,(constant uchar *)&pc,ctx).pth_t<0;
-                visibility=clear?pt_path_shadow_0(&p,&path,&step.pts_shadow,&ctx):float3(0);
+                visibility=pt_path_shadow_0(&p,&path,&step.pts_shadow,&ctx);
+                if(step.pts_casts_shadows!=0&&pt_intersect(heap,p,step.pts_shadow,1,intersections,functions,sbt,(constant uchar *)&pc,ctx).pth_t>=0)visibility=float3(0);
             }
-            pt_path_finish_0(&p,&path,&step,visibility,pixel);
+            pt_path_finish_0(&p,&path,&step,visibility,pixel,&ctx);
         }
         pt_path_diagnostics_0(&p,&path,&ctx);radiance=path.ptpath_radiance;
     }
@@ -102,4 +102,12 @@ kernel void pt_sss_owner_probe(constant DeRtHeap &heap [[buffer(0)]],constant Pt
     PtSssState_0 state={};state.ptsss_active=id.x==0?0:1;state.ptsss_instance=id.x==2?0:(id.x==3?2:(id.x==4?3:1));
     auto h=pt_intersect_sss(heap,p,r,state,intersections,functions,sbt,(constant uchar *)&pc,ctx);
     ((device uint4 *)heap.buffers[p.ptp_output])[id.x]=uint4(as_type<uint>(h.pth_t),h.pth_instance,h.pth_primitive,h.pth_lod);
+}
+
+// Focused sampler acceptance without compiling the full ray-generation pipeline.
+kernel void pt_sampling_probe(constant DeRtHeap &heap [[buffer(0)]],constant uint4 &pc [[buffer(1)]],
+                              uint3 id [[thread_position_in_grid]]) {
+    KernelContext_0 ctx={};ctx.de_heap_0=(constant DeBindlessHeap_default_0 *)&heap;
+    float3 u=pt_random3_0(pc.x,0,id.x,pc.z,&ctx);
+    ((device float4 *)heap.buffers[pc.y])[pc.w*256+id.x]=float4(u,0);
 }

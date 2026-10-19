@@ -1,5 +1,6 @@
 #include "scene_as_fixture.h"
 #include "render/pathtracer/pt_internal.h"
+#include "render/pathtracer/pt_sobol_table.h"
 #include "render/rt/restir_di.h"
 #include "render/probes/probes_internal.h"
 #include "flip.h"
@@ -21,6 +22,28 @@ TEST(pathtracer, alias_table) {
     for (u32 i = 0; i < 4; ++i)
         EXPECT_FLOAT_EQ(frequencies[i], alias[i].pdf, 1e-7);
     EXPECT_FLOAT_EQ(de__pt_power(2, 3), 4.0 / 13, 1e-7);
+}
+TEST(pathtracer, sobol_table_matches_published_gray_order_points) {
+    /* Joe-Kuo's published first ten three-dimensional points, in Gray order.
+     * The renderer uses binary order, with the same power-of-two prefix sets. */
+    const f32 expected[10][3] = {{0, 0, 0},
+                                 {.5f, .5f, .5f},
+                                 {.75f, .25f, .25f},
+                                 {.25f, .75f, .75f},
+                                 {.375f, .375f, .625f},
+                                 {.875f, .875f, .125f},
+                                 {.625f, .125f, .875f},
+                                 {.125f, .625f, .375f},
+                                 {.1875f, .3125f, .9375f},
+                                 {.6875f, .8125f, .4375f}};
+    for (u32 i = 0; i < 10; ++i)
+        for (u32 dimension = 0; dimension < 3; ++dimension) {
+            u32 value = 0, gray = i ^ (i >> 1);
+            for (u32 bit = 0; gray; gray >>= 1, ++bit)
+                if (gray & 1u)
+                    value ^= de__pt_sobol_directions[dimension * 32 + bit];
+            EXPECT_FLOAT_EQ((f64)value / 4294967296.0, expected[i][dimension], 0);
+        }
 }
 TEST(pathtracer, env_cdf) {
     f32 weights[] = {0, 1, 3, 0}, cdf[4], pdf[4];
@@ -126,6 +149,77 @@ static float *pt_read(pt_fixture *f) {
               DE_OK);
     de_gpu_wait_idle(r->d);
     return de_gpu_buffer_map(r->d, f->rb);
+}
+TEST_F(pathtracer, sample_dimensions_cover_two_dimensional_cells, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_device *d = f->rt.d;
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){
+               .kind = DE_PIPE_COMPUTE,
+               .cs = {de__pt_metal_library, de__pt_metal_library_bytes, "pt_sampling_probe"},
+               .push_constant_bytes = 16,
+               .threadgroup_size = {64, 1, 1}});
+    ASSERT_TRUE(pipeline.id);
+    de_gpu_buffer table =
+        de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = sizeof de__pt_sobol_directions,
+                                                      .usage = DE_USAGE_STORAGE,
+                                                      .memory = DE_MEM_UPLOAD});
+    de_gpu_buffer output = de_gpu_buffer_create(
+        d,
+        &(de_gpu_buffer_desc){.size = 3 * 256 * 16, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(table.id && output.id);
+    memcpy(de_gpu_buffer_map(d, table), de__pt_sobol_directions, sizeof de__pt_sobol_directions);
+    de_gpu_cmd *cmd =
+        de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "PT multidimensional sampling acceptance");
+    de_gpu_barrier barriers[] = {{.buffer = table, .after = DE_ACCESS_SHADER_READ},
+                                 {.buffer = output, .after = DE_ACCESS_SHADER_WRITE}};
+    de_gpu_cmd_barriers(cmd, barriers, 2);
+    de_gpu_cmd_set_pipeline(cmd, pipeline);
+    const u32 starts[] = {0, 1022, 1024};
+    for (u32 block = 0; block < 3; ++block) {
+        const u32 pc[] = {de_gpu_buffer_bindless(d, table), de_gpu_buffer_bindless(d, output),
+                          starts[block], block};
+        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+        de_gpu_cmd_dispatch(cmd, 4, 1, 1);
+    }
+    de_gpu_barrier copy = {
+        .buffer = output, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &copy, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 3 * 256 * 16);
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    const float *values = de_gpu_buffer_map(d, f->rb);
+    u32 cells[256] = {0}, marginal[256] = {0};
+    for (u32 i = 0; i < 256; ++i) {
+        for (u32 c = 0; c < 3; ++c)
+            ASSERT_TRUE(values[4 * i + c] >= 0 && values[4 * i + c] < 1);
+        u32 x = (u32)(values[4 * i] * 16), y = (u32)(values[4 * i + 1] * 16);
+        ++cells[y * 16 + x];
+        ++marginal[(u32)(values[4 * i + 2] * 256)];
+    }
+    for (u32 i = 0; i < 256; ++i) {
+        EXPECT_EQ(cells[i], 1u);
+        EXPECT_EQ(marginal[i], 1u);
+    }
+    for (u32 block = 1; block < 3; ++block)
+        for (u32 c = 0; c < 3; ++c) {
+            u32 coarse[16] = {0};
+            for (u32 i = 0; i < 256; ++i) {
+                float u = values[(block * 256 + i) * 4 + c];
+                ASSERT_TRUE(isfinite(u) && u >= 0 && u < 1);
+                ++coarse[(u32)(u * 16)];
+            }
+            for (u32 i = 0; i < 16; ++i)
+                EXPECT_TRUE(coarse[i] > 0);
+        }
+    de_gpu_pipeline_destroy(d, pipeline);
+    de_gpu_buffer_destroy(d, output);
+    de_gpu_buffer_destroy(d, table);
+#endif
 }
 TEST_F(pathtracer, directional_power_split_preserves_samples, pt_fixture) {
     rt_fixture *r = &f->rt;

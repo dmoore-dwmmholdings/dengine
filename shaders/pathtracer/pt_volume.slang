@@ -47,11 +47,11 @@ public float pt_fog_transmittance(uint buffer,uint count,float3 origin,float3 di
     return exp(-optical);
 }
 public struct PtFogEvent {public float distance;public float3 albedo;public float g;public uint scattered;};
-public PtFogEvent pt_fog_event(uint buffer,uint count,float3 origin,float3 direction,float limit,uint pixel,uint sample,uint dimension) {
+public PtFogEvent pt_fog_event(uint sampling_table,uint buffer,uint count,float3 origin,float3 direction,float limit,uint pixel,uint sample,uint dimension) {
     PtFogEvent e=(PtFogEvent)0;e.distance=limit;
     // Independent exponential races exactly sample the sum of overlapping homogeneous regions.
     for(uint i=0;i<count;++i){PtFog fog=de_robuffer<PtFog>(buffer)[i];float density=max(fog.extent_density.w,0.0);if(!(density>0))continue;
-        float2 interval=pt_fog_interval(fog,origin,direction,limit);float u=pt_random(pixel,sample,dimension+i);
+        float2 interval=pt_fog_interval(fog,origin,direction,limit);float u=pt_random(sampling_table,pixel,sample,dimension+i);
         float d=interval.x-log(max(1-u,1e-20))/density;
         if(d<interval.y&&d<e.distance){e.distance=d;e.albedo=saturate(fog.albedo_g.rgb);e.g=fog.albedo_g.w;e.scattered=1;}}
     return e;
