@@ -10,6 +10,10 @@ struct de__resampler {
     u32 channels;
     f64 position, ratio, target, delta;
     u32 ramp;
+    /* Exact steady-rate phase relative to the last ratio change/ramp end. */
+    f64 clock_origin;
+    u64 clock_whole;
+    u64 clock_numerator, clock_denominator, clock_remainder;
     u64 received;
     bool finished;
     f32 *coeff;
@@ -27,6 +31,67 @@ static f64 i0(f64 x) {
 static bool valid_ratio(f64 r) {
     return r >= 0.125 && r <= 8;
 }
+/* Recover a sample-rate fraction that round-trips to the API's double ratio. If no
+ * convergent fits u32 exactly, retain its binary fraction rather than rounding a rate
+ * close to (but distinct from) an integer. The valid ratio range keeps both within u64. */
+static void clock_reset(de__resampler *s) {
+    u64 bits;
+    memcpy(&bits, &s->ratio, sizeof bits);
+    s->clock_numerator = (bits & ((1ull << 52) - 1)) | (1ull << 52);
+    s->clock_denominator = 1ull << (1023 + 52 - ((bits >> 52) & 0x7ff));
+    u64 p0 = 0, p1 = 1, q0 = 1, q1 = 0;
+    f64 x = s->ratio;
+    for (u32 i = 0; i < 64; ++i) {
+        if (x > UINT32_MAX)
+            break;
+        u64 a = (u64)x, p = a * p1 + p0, q = a * q1 + q0;
+        if (p > UINT32_MAX || q > UINT32_MAX)
+            break;
+        p0 = p1;
+        p1 = p;
+        q0 = q1;
+        q1 = q;
+        if ((f64)p / (f64)q == s->ratio) {
+            s->clock_numerator = p;
+            s->clock_denominator = q;
+            break;
+        }
+        if (x == (f64)a)
+            break;
+        x = 1 / (x - (f64)a);
+    }
+    s->clock_whole = 0;
+    s->clock_remainder = 0;
+    s->clock_origin = s->position;
+}
+static void clock_advance(de__resampler *s) {
+    if (s->ramp) {
+        s->position += s->ratio;
+        s->ratio += s->delta;
+        if (--s->ramp == 0) {
+            s->ratio = s->target;
+            clock_reset(s);
+        }
+    } else {
+        u64 phase = (u64)s->clock_remainder + s->clock_numerator;
+        s->clock_whole += phase / s->clock_denominator;
+        s->clock_remainder = phase % s->clock_denominator;
+        s->position =
+            s->clock_origin + (f64)s->clock_whole + (f64)s->clock_remainder / s->clock_denominator;
+    }
+}
+static bool clock_before_end(const de__resampler *s) {
+    if (s->ramp)
+        return s->position < (f64)s->received;
+    u64 origin = (u64)s->clock_origin;
+    if (origin >= s->received || s->clock_whole >= s->received - origin)
+        return false;
+    u64 left = s->received - origin - s->clock_whole;
+    f64 fraction = s->clock_origin - (f64)origin;
+    /* Do not round whole+phase to the EOF integer before deciding whether to emit. */
+    return left > 1 || fraction == 0 ||
+           (f64)s->clock_remainder / s->clock_denominator < 1 - fraction;
+}
 de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de__resampler **out) {
     if (out)
         *out = NULL;
@@ -41,6 +106,7 @@ de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de
     s->a = a;
     s->channels = channels;
     s->ratio = s->target = ratio;
+    clock_reset(s);
     s->coeff = DE_ALLOC(a, (PHASES + 1) * TAPS * sizeof(f32), 16, DE_MEM_AUDIO);
     if (!s->coeff) {
         DE_FREE(a, s, sizeof *s);
@@ -80,6 +146,7 @@ de_result de__resample_create_shared(const de_allocator *a, u32 channels, f64 ra
     s->a = a;
     s->channels = channels;
     s->ratio = s->target = ratio;
+    clock_reset(s);
     s->coeff = bank->coeff;
     *out = s;
     return DE_OK;
@@ -106,6 +173,7 @@ void de__resample_reset(de__resampler *s) {
     s->finished = false;
     s->ramp = 0;
     s->ratio = s->target;
+    clock_reset(s);
     memset(s->samples, 0, sizeof s->samples);
 }
 void de__resample_ratio(de__resampler *s, f64 ratio, u32 ramp) {
@@ -114,8 +182,10 @@ void de__resample_ratio(de__resampler *s, f64 ratio, u32 ramp) {
     s->target = ratio;
     s->ramp = ramp;
     s->delta = ramp ? (ratio - s->ratio) / ramp : 0;
-    if (!ramp)
+    if (!ramp) {
         s->ratio = ratio;
+        clock_reset(s);
+    }
 }
 u32 de__resample_push(de__resampler *s, const f32 *in, u32 frames) {
     if (!s || !in || s->finished)
@@ -137,7 +207,7 @@ u32 de__resample_read(de__resampler *s, f32 *out, u32 frames) {
     if (!s || !out)
         return 0;
     u32 n = 0;
-    while (n < frames && s->position < (f64)s->received) {
+    while (n < frames && clock_before_end(s)) {
         i64 center = (i64)s->position;
         if (!s->finished && (u64)center + HALF >= s->received)
             break;
@@ -158,12 +228,7 @@ u32 de__resample_read(de__resampler *s, f32 *out, u32 frames) {
             out[n * s->channels + c] = (f32)sample;
         }
         ++n;
-        s->position += s->ratio;
-        if (s->ramp) {
-            s->ratio += s->delta;
-            if (--s->ramp == 0)
-                s->ratio = s->target;
-        }
+        clock_advance(s);
     }
     return n;
 }
