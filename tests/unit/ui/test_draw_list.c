@@ -347,7 +347,7 @@ TEST_F(ui_draw, metal_unsent_image_packet_keeps_same_slot_reload_generation_aliv
     de_gpu_texture target = floating_view(f, &readback, &view);
     de_entity e = ui_node(f, (de_entity){0});
     *(DeUiImage *)de_entity_add(f->world, e, f->ui->ids.image) =
-        (DeUiImage){.texture = image, .uv_rect = {0, 0, 1, 1}, .tint = {1, 1, 1, 1}};
+        (DeUiImage){.texture = image, .uv_rect = {0, 0, 1, 1}, .tint = {1, 0, 0, 1}};
     de_gpu_texture old = de_render_texture_gpu(f->renderer, image);
     ui_frame(f);
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
@@ -380,7 +380,7 @@ TEST_F(ui_draw, metal_unsent_image_packet_keeps_same_slot_reload_generation_aliv
     const de_vec4 *pixels = de_gpu_buffer_map(f->device, readback);
     u32 visible = 0;
     for (u32 i = 0; i < 512 * 512; ++i)
-        visible += pixels[i].x > .2f || pixels[i].y > .2f || pixels[i].z > .2f;
+        visible += pixels[i].x > .2f && pixels[i].y < .05f && pixels[i].z < .05f;
     EXPECT_GT(visible, 100u);
     printf("Unsent hot-reload packet rendered%u pixels from its leased generation\n", visible);
     de_ui__packet_unpin(r, packet);
