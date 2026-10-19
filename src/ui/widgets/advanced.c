@@ -18,7 +18,7 @@ de_component de_ui__advanced_component(de_ui *ui, const char *name, u32 size, u3
     return de_component_register(ui->world, id,
                                  authored ? DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT : 0);
 }
-#define F(T, m, k) DE_FIELD_EX(T, m, k, DE_FIELD_DEFAULT, {0})
+#define F(T, m, k) DE_FIELD(T, m, k, DE_FIELD_DEFAULT)
 #define A(T, m, k, n)                                                                              \
     DE_FIELD_EX(T, m, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT, {0, 0, NULL, NULL, k, n})
 #define REG(field, T, fields, auth)                                                                \

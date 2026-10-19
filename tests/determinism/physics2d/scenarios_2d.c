@@ -1,4 +1,7 @@
 /* DENG-260: ECS-driven checksum scenarios on the shared per-tick file harness. */
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* portable getenv/sscanf in trusted test inputs */
+#endif
 #include "de_det_harness.h"
 #include "ecs2d_test_util.h"
 #include "platformer_character2d_course.h"

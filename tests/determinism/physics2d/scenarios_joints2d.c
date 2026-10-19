@@ -1,5 +1,8 @@
 /* DENG-256: world-level bridge and wheel-car scenarios. Uses the existing checksum
  * harness file format and comparator; per-tick state includes 2D bodies, contacts and joints. */
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* portable getenv/sscanf in trusted test inputs */
+#endif
 #include "de_det_harness.h"
 #include "de_test.h"
 #include <dengine/de_physics.h>
