@@ -200,6 +200,17 @@ void de_window_size_pixels(de_window w, u32 *width, u32 *height) {
         *height = ph > 0 ? (u32)ph : 0u;
 }
 
+void de_window_size_points(de_window w, u32 *width, u32 *height) {
+    int pw = 0, ph = 0;
+    de__platform_sdl_window *s = de__slot(de__platform_sdl_get(), w);
+    if (s && !SDL_GetWindowSize(s->sdl, &pw, &ph))
+        pw = ph = 0;
+    if (width)
+        *width = pw > 0 ? (u32)pw : 0u;
+    if (height)
+        *height = ph > 0 ? (u32)ph : 0u;
+}
+
 de_window_insets de_window_safe_area(de_window w) {
     de__platform_sdl_window *slot = de__slot(de__platform_sdl_get(), w);
     if (!slot)
