@@ -47,7 +47,7 @@ TEST(audio_coreaudio, callback_is_interleaved_allocation_and_lock_free) {
     de_audio *a = test_audio_manual(2, 0); /* installs actual RT allocation and lock hooks */
     de__coreaudio_stream s = {0};
     u32 rendered = 0;
-    s.desc = (de__audio_stream_desc){48000, 2, 256, fill, &rendered};
+    s.desc = (de__audio_stream_desc){48000, 2, 256, fill, &rendered, NULL};
     de_atomic_init_u64(&s.callbacks, 0);
     de_atomic_init_u64(&s.frames, 0);
     f32 out[512];

@@ -511,4 +511,5 @@ static de_result start(de__audio_stream *base) {
                : DE_FAIL(DE_ERR_IO, "WASAPI start failed (%08lx)", (unsigned long)s->result);
 }
 const de__audio_backend_vtbl de__audio_backend_wasapi = {
-    "wasapi", DE_AUDIO_WASAPI, create, destroy, enumerate, open_stream, start, stop, close_stream};
+    "wasapi",    DE_AUDIO_WASAPI, create, destroy,      enumerate,
+    open_stream, start,           stop,   close_stream, NULL};

@@ -69,6 +69,7 @@ typedef struct de__audio_stream_desc {
     u32 block_frames;
     de__audio_render_fn render;
     void *user;
+    void (*underrun)(void *user); /**< optional atomic accounting for a backend XRUN */
 } de__audio_stream_desc;
 
 /** An open output stream. Backends put this first in their own stream struct. */
@@ -93,6 +94,7 @@ typedef struct de__audio_backend_vtbl {
     /** Returns when no render call runs any more (see the file comment). */
     void (*stop)(de__audio_stream *s);
     void (*close)(de__audio_stream *s);
+    void (*poll_devices)(void *backend); /**< optional control-thread poll, never RT */
 } de__audio_backend_vtbl;
 
 extern const de__audio_backend_vtbl de__audio_backend_null;

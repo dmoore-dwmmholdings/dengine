@@ -221,4 +221,4 @@ static de_result start(de__audio_stream *base) {
 }
 const de__audio_backend_vtbl de__audio_backend_coreaudio = {
     "coreaudio", DE_AUDIO_COREAUDIO, create, destroy, de__ca_enumerate, open_stream, start,
-    stop,        close_stream};
+    stop,        close_stream,       NULL};
