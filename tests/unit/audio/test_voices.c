@@ -84,7 +84,7 @@ TEST(audio_voices, pitch_fft_and_44100_rate_conversion) {
         source.base.rate = test ? 44100 : 48000;
         source.frequency = 1000;
         de_play_desc d = {0};
-        d.pitch = test ? 1 : 2;
+        d.pitch = test ? 1.f : 2.f;
         ASSERT_TRUE(de__voice_play_source(a, &source.base, &d).id != 0);
         de__audio_null_pump(a, 4608, capture);
         u32 bin = peak(capture, test ? 80 : 165, 12);
