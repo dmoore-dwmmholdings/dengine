@@ -44,7 +44,7 @@ for name in NAMES:
    l=Image.open(lhs).convert('RGBA').tobytes();r=Image.open(rhs).convert('RGBA').tobytes()
    row.update(pixel_sha256=hashlib.sha256(l).hexdigest(),repeat_sha256=hashlib.sha256(r).hexdigest(),different_bytes=sum(x!=y for x,y in zip(l,r)),identical=l==r)
   else:row['identical']=False
-for scene,effect in [('rt_shadows_pole','shadows'),('rt_gi_cornell','gi')]:
+for scene,effect in [('rt_shadows_pole','shadows'),('rt_gi_cornell','gi'),('rt_refraction_glass','refraction')]:
  run(scene,'negative',negative=effect)
  restored=run(scene,'restored')
  first=out/('capture' if a.capture else 'normal')/a.backend/'rt'/(scene+'.png')

@@ -97,3 +97,21 @@ mean FLIP 0.009310 and p99 0.347733. Restoring GI reproduces the accepted image 
 verifier now requires this GI negative comparison and restoration as well as the existing
 shadow control. Strict Metal validation and ASan/UBSan pass for the RT fixture. This resolves
 the historical GI contribution qualification above; other open qualifications still apply.
+
+## Glass refraction contribution verification (DENG-462)
+
+The glass fixture omitted `metallic`, whose material-format default is 1. Both capture and
+forward shading correctly scale dielectric transmission by `(1 - metallic)`, so its original
+transmission was zero despite the authored transmission factor of 1. The glass material now
+explicitly sets metallic 0. All other material values, geometry, camera, lighting, render
+settings, seed epochs, 32-frame warmup and comparison thresholds remain unchanged.
+
+The original fixture fails RGB nonvacuity. The corrected two-event RT producer has 466 affected
+pixels and RGB sum 401.921. Independent RT captures are identical, and RT and Base now differ
+in 1,392 decoded RGBA bytes. Disabling only the actual `rt_refraction` setting retains ordinary
+screen-space fallback, reproduces Base output exactly, and fails both original limits:
+mean FLIP 0.020695 and p99 0.545914. Restoring RT reproduces the accepted capture exactly.
+The verifier now requires this additional negative comparison and restoration. The missing
+Metal RT reference and the Base reference were captured from the corrected fixture and
+visually reviewed; the initial failed RT capture remains archived. Strict Metal validation
+and ASan/UBSan pass. This resolves the historical glass qualification above.

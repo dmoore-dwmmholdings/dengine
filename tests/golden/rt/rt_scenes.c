@@ -140,6 +140,10 @@ void *de__golden_rt_prepare(de_golden_ctx *ctx, de_renderer *r, de_view view, u3
         s.rt_gi = false;
         p->negative = true;
     }
+    if (negative && strcmp(negative, "refraction") == 0 && effect == DE__GOLDEN_RT_REFRACTION) {
+        s.rt_refraction = false;
+        p->negative = true;
+    }
     de_renderer_set_settings(r, &s);
     if (de__view_register_stage(r, DE__VIEW_SLOT_TRANSPARENT, 99, "RT golden producer consumption",
                                 proof_stage, p) != DE_OK)
@@ -179,11 +183,21 @@ void de__golden_rt_finish(void *state) {
     de_gpu_buffer buffer = {0};
     u32 width = 0, height = 0, bpp = 0;
     u64 rays = 0;
-    if (p->base || p->negative) {
-        active = p->negative ? (p->effect == DE__GOLDEN_RT_GI ? !p->gi_pass : !p->shadow_pass)
-                             : p->passes == 0;
-        identity =
-            p->negative ? (p->effect != DE__GOLDEN_RT_GI || p->inputs.reserved1 == 0) : p->fallback;
+    if (p->negative) {
+        if (p->effect == DE__GOLDEN_RT_GI) {
+            active = !p->gi_pass;
+            identity = p->inputs.reserved1 == 0;
+        } else if (p->effect == DE__GOLDEN_RT_REFRACTION) {
+            de__rt_refraction_info i = {0};
+            active = !de__rt_refraction_get(r->rt_refraction, p->view, &i);
+            identity = p->fallback;
+        } else {
+            active = !p->shadow_pass;
+            identity = true;
+        }
+    } else if (p->base) {
+        active = p->passes == 0;
+        identity = p->fallback;
     } else
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:

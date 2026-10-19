@@ -18,7 +18,7 @@ MATS = {
  'rough': dict(base_color=[.95,.8,.5],metallic=1.,roughness=.3),
  'gold': dict(base_color=[2.,1.,.15],unlit=True),
  'checker': dict(base_color=[.8,.8,.8],base_color_tex='tex/checker',unlit=True),
- 'glass': dict(base_color=[1.,1.,1.],roughness=.03,transmission=1.,ior=1.5,thickness=.3,attenuation_color=[.65,.85,.7],attenuation_distance=1.),
+ 'glass': dict(base_color=[1.,1.,1.],metallic=0.,roughness=.03,transmission=1.,ior=1.5,thickness=.3,attenuation_color=[.65,.85,.7],attenuation_distance=1.),
  'leaf': dict(base_color=[.3,.8,.1],base_color_tex='tex/leaf',alpha_mode='mask',alpha_cutoff=.5,double_sided=True,roughness=.7),
  'emitter':dict(base_color=[.7,.7,.7],emissive=[8.,6.,3.],emissive_strength=1.,roughness=.7),
 }
