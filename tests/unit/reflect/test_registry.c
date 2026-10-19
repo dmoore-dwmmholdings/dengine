@@ -907,3 +907,88 @@ TEST_F(reg, cxx_macros, reg_fx) {
     EXPECT_EQ(d->field_count, 2u);
     EXPECT_STREQ(d->fields[1].attrs.units, "hp");
 }
+
+/* DENG-321 prerequisite: valid and errored path caches observe every successful publication. */
+TEST_F(reg, revision_tracks_publications_without_changing_schema_identity, reg_fx) {
+    EXPECT_EQ(de_type_registry_revision(NULL), 0u);
+    EXPECT_EQ(de_type_registry_revision(f->r), 0u);
+    de_field_info field = {"current", 0, sizeof(f32), DE_FK_F32, DE_FIELD_DEFAULT, {0}};
+    de_type_desc type = {.name = "BoundHealth",
+                         .size = 8,
+                         .align = 4,
+                         .version = 1,
+                         .fields = &field,
+                         .field_count = 1,
+                         .is_pod = true};
+    de_type_id id;
+    bool layout = false;
+    ASSERT_EQ(de_type_register_ex(f->r, &type, &id, &layout), DE_OK);
+    EXPECT_EQ(de_type_registry_revision(f->r), 1u);
+    u64 hash = de_type_schema_hash(f->r, id);
+    EXPECT_EQ(de_type_find(f->r, "BoundHealth").id, id.id);
+    EXPECT_EQ(de_type_registry_revision(f->r), 1u); /* Lookups are read-only. */
+    field.attrs.tooltip = "changed metadata";
+    ASSERT_EQ(de_type_register_ex(f->r, &type, &id, &layout), DE_OK);
+    EXPECT_FALSE(layout);
+    EXPECT_EQ(de_type_schema_hash(f->r, id), hash);
+    EXPECT_EQ(de_type_registry_revision(f->r), 2u);
+    const de_field_info *resolved;
+    u32 offset = 99;
+    ASSERT_EQ(de_reflect_resolve_path(f->r, id, "current", &resolved, &offset), DE_OK);
+    EXPECT_EQ(offset, 0u);
+    field.offset = 4;
+    type.version = 2;
+    ASSERT_EQ(de_type_register_ex(f->r, &type, &id, &layout), DE_OK);
+    EXPECT_TRUE(layout);
+    EXPECT_EQ(de_type_registry_revision(f->r), 3u);
+    ASSERT_EQ(de_reflect_resolve_path(f->r, id, "current", &resolved, &offset), DE_OK);
+    EXPECT_EQ(offset, 4u); /* A binding can re-resolve its moved field. */
+    type.size = 1;
+    EXPECT_EQ(de_type_register_ex(f->r, &type, NULL, NULL), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_type_registry_revision(f->r), 3u);
+    const de_enum_value values[] = {{"A", 1}, {"B", 2}};
+    ASSERT_EQ(de_enum_register(f->r, "BoundMode", values, 2, false), DE_OK);
+    EXPECT_EQ(de_type_registry_revision(f->r), 4u);
+    ASSERT_EQ(de_enum_register(f->r, "BoundMode", values, 2, false), DE_OK);
+    EXPECT_EQ(de_type_registry_revision(f->r), 5u);
+    EXPECT_EQ(de_enum_register(f->r, "BoundMode", values, 0, false), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_enum_register(f->r, "BoundHealth", values, 2, false), DE_ERR_ALREADY_EXISTS);
+    EXPECT_EQ(de_type_registry_revision(f->r), 5u);
+}
+TEST(reg, revision_does_not_publish_failed_allocations) {
+    test_counting_alloc c;
+    test_counting_init(&c);
+    de_type_registry *r = NULL;
+    ASSERT_EQ(de_type_registry_create(&c.iface, &r), DE_OK);
+    de_field_info field = {"value", 0, sizeof(u32), DE_FK_U32, DE_FIELD_DEFAULT, {0}};
+    de_type_desc type = {.name = "BoundOOM",
+                         .size = 4,
+                         .align = 4,
+                         .version = 1,
+                         .fields = &field,
+                         .field_count = 1,
+                         .is_pod = true};
+    c.fail_after = 0;
+    EXPECT_EQ(de_type_register_ex(r, &type, NULL, NULL), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(de_type_registry_revision(r), 0u);
+    const de_enum_value values[] = {{"Only", 1}};
+    EXPECT_EQ(de_enum_register(r, "BoundOOMEnum", values, 1, false), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(de_type_registry_revision(r), 0u);
+    c.fail_after = -1;
+    de_type_id id;
+    ASSERT_EQ(de_type_register_ex(r, &type, &id, NULL), DE_OK);
+    const de_type_desc *previous = de_type_get(r, id);
+    u64 hash = de_type_schema_hash(r, id);
+    char large_tooltip[20000];
+    memset(large_tooltip, 'x', sizeof large_tooltip - 1);
+    large_tooltip[sizeof large_tooltip - 1] = 0;
+    field.attrs.tooltip = large_tooltip;
+    c.fail_after = 0;
+    EXPECT_EQ(de_type_register_ex(r, &type, NULL, NULL), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(de_type_registry_revision(r), 1u);
+    EXPECT_TRUE(de_type_get(r, id) == previous);
+    EXPECT_EQ(de_type_schema_hash(r, id), hash);
+    de_type_registry_destroy(r);
+    EXPECT_EQ(c.live_blocks, 0u);
+    EXPECT_EQ(c.size_errors, 0u);
+}

@@ -175,6 +175,8 @@ DE_API void de_window_destroy(de_window w);
 /** Size of the drawable area in pixels (what a swapchain needs). 0 x 0 for a stale handle.
  * Either pointer may be NULL. */
 DE_API void de_window_size_pixels(de_window w, u32 *width, u32 *height);
+/** Logical window size in points, matching input cursor coordinates. Zero for stale/headless. */
+DE_API void de_window_size_points(de_window w, u32 *width, u32 *height);
 
 /** Physical pixel insets avoiding notches, rounded corners and system overlays. */
 typedef struct de_window_insets {

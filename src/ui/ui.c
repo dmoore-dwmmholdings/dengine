@@ -1,6 +1,10 @@
 #include "ui_internal.h"
 #include "layout/layout_internal.h"
 #include "style/stylesheet_internal.h"
+#include "widgets/widgets_internal.h"
+#if defined(DE_UI_NAVIGATION)
+#include "input/focus_internal.h"
+#endif
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
@@ -68,8 +72,8 @@ de_result de_ui__register_measure(de_ui *ui, de_component component, de_ui_measu
     return DE_OK;
 }
 de_str de_ui__text_content(de_ui *ui, const DeUiText *text) {
-    if (text->loc_id.hash && ui->desc.text && ui->desc.text->localize) {
-        de_str translated = ui->desc.text->localize(ui->desc.text, text->loc_id);
+    if (text->loc_id.hash && ui->desc.text) {
+        de_str translated = de_loc(ui->desc.text, text->loc_id);
         if (translated.ptr)
             return translated;
     }
@@ -115,6 +119,12 @@ static void gather(const de_query_chunk *chunk, void *user) {
         record->first_child = record->next_sibling = DE_UI_NONE_INDEX;
         const DeUiText *text = de_entity_get_const(ui->world, entity, ui->ids.text);
         if (text) {
+            u64 locale_generation =
+                text->loc_id.hash && ui->desc.text ? de_loc_generation(ui->desc.text) : 0;
+            if (locale_generation != record->locale_generation) {
+                record->locale_generation = locale_generation;
+                record->dirty = record->measure_dirty = true;
+            }
             de_str str = de_ui__text_content(ui, text);
             u64 hash = XXH3_64bits(str.ptr, str.len);
             de_font_metrics metrics = {0};
@@ -137,6 +147,10 @@ static void changed(const de_query_chunk *chunk, void *user) {
 }
 static void detach(de_ui *ui) {
     if (ui->world) {
+#if defined(DE_UI_NAVIGATION)
+        de_ui__focus_detach(ui);
+#endif
+        de_ui__widgets_detach(ui);
         de_ui__style_detach(ui);
 #if defined(DE_UI_RETAINED_RENDER)
         de_ui__render_shutdown(ui);
@@ -217,6 +231,18 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
         return render_result;
     }
 #endif
+    de_result widgets_result = de_ui__widgets_init(ui);
+    if (widgets_result != DE_OK) {
+        de_ui_destroy(ui);
+        return widgets_result;
+    }
+#if defined(DE_UI_NAVIGATION)
+    de_result focus_result = de_ui__focus_init(ui);
+    if (focus_result != DE_OK) {
+        de_ui_destroy(ui);
+        return focus_result;
+    }
+#endif
     *out = ui;
     return DE_OK;
 }
@@ -227,6 +253,10 @@ void de_ui_destroy(de_ui *ui) {
     if (!ui->world)
         de_ui__render_shutdown(ui);
 #endif
+#if defined(DE_UI_NAVIGATION)
+    de_ui__focus_shutdown(ui);
+#endif
+    de_ui__widgets_shutdown(ui);
     de_ui__style_shutdown(ui);
     detach(ui);
     if (ui->scratch)
@@ -303,6 +333,10 @@ void de_ui_attach(de_ui *ui, de_world *world) {
         detach(ui);
         return;
     }
+#endif
+    de_ui__widgets_attach(ui);
+#if defined(DE_UI_NAVIGATION)
+    de_ui__focus_attach(ui);
 #endif
     ui->viewport_dirty = true;
 }

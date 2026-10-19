@@ -78,6 +78,7 @@ typedef struct de_ui_style_system {
     de_ui *ui;
     de_ui_style_sheet_slot sheets[DE_UI_STYLE_SHEETS];
     u32 sheet_count;
+    u32 builtin_count;
     de_ui_style_cache *cache;
     de_entity *entities;
     u32 entity_count;
@@ -94,6 +95,7 @@ extern const u32 de_ui__style_property_count;
 de_result de_ui__sheet_parse(const de_allocator *alloc, const char *bytes, u64 length,
                              de_ui_sheet_document **out);
 void de_ui__sheet_release(de_ui_sheet_document *sheet);
+de_result de_ui__load_stylesheet_source(de_ui *ui, const char *bytes, u64 length, bool builtin);
 de_result de_ui__style_init(de_ui *ui);
 void de_ui__style_shutdown(de_ui *ui);
 void de_ui__style_attach(de_ui *ui);

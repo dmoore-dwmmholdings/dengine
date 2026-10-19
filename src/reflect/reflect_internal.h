@@ -64,6 +64,7 @@ struct de_type_registry {
     de_array entries;   /* de__type_entry, dense, never shrinks */
     de_hashmap by_name; /* key: u64 name hash, value: u32 entry index */
     de__reg_block *blocks;
+    u64 revision; /* Successful publications, including metadata/hook-only replacements. */
 };
 
 /* ---- registry.c ---------------------------------------------------------------------------- */

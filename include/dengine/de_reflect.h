@@ -184,6 +184,13 @@ DE_API de_result de_type_register_ex(de_type_registry *r, const de_type_desc *de
 DE_API de_result de_enum_register(de_type_registry *r, const char *name,
                                   const de_enum_value *values, u32 count, bool is_flags);
 
+/** Monotonic publication revision: starts at0 and increments once per successful struct or
+ * enum registration/replacement, including unchanged schemas with new metadata/hooks.
+ * Failed registration and lookups do not change it. Caches should re-resolve after a change,
+ * including previously invalid paths. No allocation; NULL returns0. Registration is exclusive
+ * (as for the other registry operations); query while no thread is registering. */
+DE_API u64 de_type_registry_revision(const de_type_registry *r);
+
 /** The struct type or enum called `name`, or an invalid id. Sets no error. */
 DE_API de_type_id de_type_find(const de_type_registry *r, const char *name);
 /** The current description of a struct type, or NULL (invalid or stale id, or an enum). */

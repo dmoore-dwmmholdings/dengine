@@ -77,3 +77,58 @@ TEST(loc_message, invalid_patterns_and_depth_are_rejected) {
     }
     EXPECT_EQ(de__loc_validate(deep, at, NULL), DE_ERR_PARSE);
 }
+
+/* DENG-321 prerequisite: callers can format authored patterns without inventing a table ID. */
+#include "text/text_internal.h"
+#include "de_alloc_guard.h"
+TEST(loc_message, public_inline_pattern_uses_published_locale_and_no_heap) {
+    de_text_system text = {0};
+    ASSERT_EQ(de__loc_create(NULL, NULL, &text.loc), DE_OK);
+    de_loc_arg value = {"value", DE_LOC_ARG_INT, NULL, 42, 0};
+    char out[128];
+    EXPECT_EQ(de_loc_format_pattern(&text, de_str_from_cstr("{value, number, integer} / 100"),
+                                    &value, 1, out, sizeof out),
+              8u);
+    EXPECT_STREQ(out, "42 / 100");
+    ASSERT_EQ(de_loc_set_locale(&text, "ru"), DE_OK);
+    de__loc_update(text.loc);
+    value.i = 22;
+    de_str pattern = de_str_from_cstr("{value, plural, one{one} few{few} many{many} other{other}}");
+    EXPECT_EQ(de_loc_format_pattern(&text, pattern, &value, 1, out, sizeof out), 3u);
+    EXPECT_STREQ(out, "few");
+    de_alloc_guard guard = {0};
+    guard.this_thread_only = true;
+    de_alloc_guard_begin(&guard);
+    for (u32 i = 0; i < 1000; ++i)
+        (void)de_loc_format_pattern(&text, pattern, &value, 1, out, sizeof out);
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    ASSERT_EQ(de_loc_set_locale(&text, "ja"), DE_OK);
+    de__loc_update(text.loc);
+    de_loc_format_pattern(&text, pattern, &value, 1, out, sizeof out);
+    EXPECT_STREQ(out, "other");
+    de__loc_destroy(text.loc);
+}
+TEST(loc_message, public_inline_pattern_preserves_spans_truncation_and_errors) {
+    const char span[] = {'{', 'n', '}', 'x'};
+    de_loc_arg value = {"n", DE_LOC_ARG_INT, NULL, 42, 0};
+    char out[16];
+    EXPECT_EQ(de_loc_format_pattern(NULL, (de_str){span, 3}, &value, 1, out, sizeof out), 2u);
+    EXPECT_STREQ(out, "42");
+    de_str utf8 = de_str_from_cstr("é漢字");
+    EXPECT_EQ(de_loc_format_pattern(NULL, utf8, NULL, 0, out, 6), 8u);
+    EXPECT_STREQ(out, "é漢");
+    EXPECT_EQ(de_loc_format_pattern(NULL, utf8, NULL, 0, NULL, 0), 8u);
+    de_error_clear();
+    EXPECT_EQ(de_loc_format_pattern(NULL, de_str_from_cstr("{n, plural, one{x}}"), &value, 1, out,
+                                    sizeof out),
+              0u);
+    EXPECT_STREQ(out, "");
+    ASSERT_TRUE(de_error_last() != NULL);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_PARSE);
+    de_error_clear();
+    EXPECT_EQ(de_loc_format_pattern(NULL, (de_str){NULL, 3}, NULL, 0, out, sizeof out), 0u);
+    EXPECT_STREQ(out, "");
+    ASSERT_TRUE(de_error_last() != NULL);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_INVALID_ARGUMENT);
+}
