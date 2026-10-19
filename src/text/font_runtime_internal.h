@@ -19,6 +19,9 @@ typedef struct de_text_glyph_entry {
     bool missing;
     u32 generation;
 } de_text_glyph_entry;
+typedef struct de__font_source de__font_source;
+void de__font_source_ref(de__font_source *source);
+void de__font_source_unref(void *source);
 typedef struct de_text_font {
     u64 identity; /* Unique decoded generation, independent of allocator address reuse. */
     const de_allocator *alloc;
@@ -27,6 +30,7 @@ typedef struct de_text_font {
     f32 em, range, ascent, descent, gap;
     u32 source_size;
     u8 *source;
+    de__font_source *source_owner;
     de__font_glyph *glyphs;
     de__font_cmap *cmap;
     de__font_kern *kerns;
