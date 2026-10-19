@@ -1,5 +1,6 @@
 #include "ui_internal.h"
 #include "layout/layout_internal.h"
+#include "style/stylesheet_internal.h"
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
@@ -136,6 +137,7 @@ static void changed(const de_query_chunk *chunk, void *user) {
 }
 static void detach(de_ui *ui) {
     if (ui->world) {
+        de_ui__style_detach(ui);
 #if defined(DE_UI_RETAINED_RENDER)
         de_ui__render_shutdown(ui);
 #endif
@@ -203,6 +205,11 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
     ui->width = 1920;
     ui->height = 1080;
     ui->viewport_dirty = true;
+    de_result style_result = de_ui__style_init(ui);
+    if (style_result != DE_OK) {
+        de_ui_destroy(ui);
+        return style_result;
+    }
 #if defined(DE_UI_RETAINED_RENDER)
     de_result render_result = de_ui__render_init(ui);
     if (render_result != DE_OK) {
@@ -220,6 +227,7 @@ void de_ui_destroy(de_ui *ui) {
     if (!ui->world)
         de_ui__render_shutdown(ui);
 #endif
+    de_ui__style_shutdown(ui);
     detach(ui);
     if (ui->scratch)
         de_arena_destroy(ui->scratch);
@@ -286,6 +294,7 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     }
     (void)de_ui__register_measure(ui, ui->ids.text, de_ui__measure_text);
     (void)de_ui__register_measure(ui, ui->ids.image, de_ui__measure_image);
+    de_ui__style_attach(ui);
 #if defined(DE_UI_RETAINED_RENDER)
     de_result render_result = ui->render ? DE_OK : de_ui__render_init(ui);
     if (render_result == DE_OK)

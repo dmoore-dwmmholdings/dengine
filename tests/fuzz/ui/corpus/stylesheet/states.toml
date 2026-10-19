@@ -1,0 +1,13 @@
+[vars]
+primary = "#3a7bff"
+[theme.dark.vars]
+primary = "#7aa2ff"
+[style.button]
+background = "$primary"
+radius = 6
+padding = [8, 16]
+transition = 0.12
+[style."button:hover"]
+background = "#5a95ff"
+[style.".danger"]
+text_color = "#ff4040"

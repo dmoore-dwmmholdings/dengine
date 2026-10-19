@@ -53,6 +53,7 @@ struct de_ui {
     f32 scale;
     de_ui_layout_stats stats;
     void *render;
+    struct de_ui_style_system *style;
 };
 typedef struct de_ui_resource {
     de_ui *ui;

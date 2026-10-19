@@ -1,0 +1,5 @@
+[project]
+asset_root = "."
+version = 1
+[assets]
+"probe" = {type="host_owned_probe", source="owned_probe.bin"}
