@@ -44,7 +44,7 @@ static void cook_twice(const void *bytes, u64 size, de__sound_settings *settings
     ASSERT_EQ(de__sound_cook(a, bytes, size, settings, &two, &m), DE_OK);
     EXPECT_EQ(n, m);
     EXPECT_MEMEQ(one, two, (size_t)n);
-    de__sound_view view;
+    de__sound_view view = {0};
     ASSERT_EQ(de__sound_parse(one, n, &view), DE_OK);
     EXPECT_EQ(view.codec, codec);
     DE_FREE(a, one, (size_t)n);
@@ -83,7 +83,7 @@ TEST(sound_import, wav_formats_exact_float_pcm_and_repeat) {
         void *out = NULL;
         u64 n = 0;
         ASSERT_EQ(de__sound_cook(NULL, w, size, &s, &out, &n), DE_OK);
-        de__sound_view v;
+        de__sound_view v = {0};
         ASSERT_EQ(de__sound_parse(out, n, &v), DE_OK);
         for (u32 i = 0; i < 4096; ++i) {
             u32 got = de__snd_u32(v.data + i * 4);
@@ -116,7 +116,7 @@ TEST(sound_import, adpcm_repeat_and_decode_error) {
     void *out = NULL;
     u64 n = 0;
     ASSERT_EQ(de__sound_cook(NULL, w, size, &s, &out, &n), DE_OK);
-    de__sound_view v;
+    de__sound_view v = {0};
     ASSERT_EQ(de__sound_parse(out, n, &v), DE_OK);
     f64 error = 0;
     for (u32 block = 0; block < 4; ++block) {
@@ -191,7 +191,7 @@ TEST(sound_import, resampled_opus_and_loop_settings) {
     void *out = NULL;
     u64 n = 0;
     ASSERT_EQ(de__sound_cook(NULL, w, size, &s, &out, &n), DE_OK);
-    de__sound_view v;
+    de__sound_view v = {0};
     ASSERT_EQ(de__sound_parse(out, n, &v), DE_OK);
     EXPECT_EQ(v.rate, 48000u);
     EXPECT_EQ(v.frames, 48000u);
@@ -236,7 +236,7 @@ TEST(sound_import, wav_smpl_loop_metadata) {
     void *out = NULL;
     u64 n = 0;
     ASSERT_EQ(de__sound_cook(NULL, all, total, &s, &out, &n), DE_OK);
-    de__sound_view v;
+    de__sound_view v = {0};
     ASSERT_EQ(de__sound_parse(out, n, &v), DE_OK);
     EXPECT_TRUE((v.flags & DE__DSND_LOOP) != 0);
     EXPECT_EQ(v.loop_start, 10u);
@@ -273,7 +273,7 @@ TEST(sound_import, cooker_registry_end_to_end_and_allocator_cleanup) {
     input.asset_root = "soundtest:/";
     de_cook_result result = {0};
     ASSERT_EQ(de_cooker_cook(c, &input, &result), DE_OK);
-    de__sound_view view;
+    de__sound_view view = {0};
     ASSERT_EQ(de__sound_parse(result.data, result.size, &view), DE_OK);
     EXPECT_EQ(view.frames, 1024u);
     de_cook_result_free(&result);
@@ -345,7 +345,7 @@ TEST(sound_import, manifest_loop_setting_overrides_authored_wav_and_vorbis) {
                 settings[0].value.u.b = mode == 2;
                 de_cook_result result = {0};
                 ASSERT_EQ(de_cooker_cook(c, &input, &result), DE_OK);
-                de__sound_view view;
+                de__sound_view view = {0};
                 ASSERT_EQ(de__sound_parse(result.data, result.size, &view), DE_OK);
                 EXPECT_EQ((view.flags & DE__DSND_LOOP) != 0, mode != 1);
                 EXPECT_EQ(view.loop_start, 10u);
