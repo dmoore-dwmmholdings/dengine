@@ -62,7 +62,7 @@ static bool number(const de_field_info *f, const void *ptr, long double *out) {
     case kind_: {                                                                                  \
         type_ n;                                                                                   \
         memcpy(&n, ptr, sizeof n);                                                                 \
-        *out = n;                                                                                  \
+        *out = (long double)n;                                                                     \
         return true;                                                                               \
     }
     switch (f->kind) {
