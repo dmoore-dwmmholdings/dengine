@@ -369,7 +369,8 @@ TEST_F(gpu, unsupported_features, null_fx) {
     de_gpu_cmd *c = de_gpu_cmd_begin(f->d, DE_QUEUE_COMPUTE, "rt");
     ASSERT_TRUE(c != NULL);
     de_gpu_cmd_dispatch_rays(c, 1, 1, 1);
-    EXPECT_EQ(de_error_last()->result, DE_ERR_UNSUPPORTED);
+    EXPECT_EQ(de_error_last()->result, DE_ERR_INVALID_ARGUMENT);
+    EXPECT_TRUE(strstr(errmsg(), "no ray-tracing pipeline is bound") != NULL);
     de_gpu_submit s = {.cmds = &c, .cmd_count = 1};
     EXPECT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_COMPUTE, &s), DE_OK);
 
