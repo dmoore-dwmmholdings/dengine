@@ -42,6 +42,19 @@ typedef struct de_ui_text_cache {
     u64 hash;
     u32 generation;
 } de_ui_text_cache;
+typedef struct de_ui_draw_emitter {
+    struct de_ui_render *owner;
+    const de_ui_draw_node *node;
+    f32 opacity;
+} de_ui_draw_emitter;
+typedef void (*de_ui_widget_draw_fn)(de_ui *ui, de_entity entity, de_vec4 physical_rect,
+                                     de_ui_draw_emitter *emitter, void *user);
+/** Main thread, after render_attach; re-register on reattach. Geometry/insets are physical pixels.
+ */
+void de_ui__set_widget_draw(de_ui *ui, de_ui_widget_draw_fn fn, void *user);
+void de_ui__emit_rect(de_ui_draw_emitter *emitter, de_vec4 rect, de_vec4 fill, de_vec4 border,
+                      f32 border_width, f32 radius);
+
 #define DE_UI_RENDER_SNAPSHOTS 4u
 #define DE_UI_RENDER_GPU_SLOTS 4u
 struct de_ui_render {
@@ -57,6 +70,8 @@ struct de_ui_render {
     bool mutex_ready, overflow_logged, hook_registered;
     de_system build_system, extract_system;
     de_cvar max_quads;
+    de_ui_widget_draw_fn widget_draw;
+    void *widget_user;
     de_ui_render_stats stats;
     de_log_category log;
 #if DE_HAS_RENDER

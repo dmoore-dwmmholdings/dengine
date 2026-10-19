@@ -87,6 +87,26 @@ static de_vec4 tint_alpha(de_vec4 color, f32 opacity) {
     color.w *= opacity;
     return color;
 }
+void de_ui__set_widget_draw(de_ui *ui, de_ui_widget_draw_fn fn, void *user) {
+    if (!ui || !ui->render)
+        return;
+    struct de_ui_render *r = ui->render;
+    r->widget_draw = fn;
+    r->widget_user = user;
+}
+void de_ui__emit_rect(de_ui_draw_emitter *emitter, de_vec4 rect, de_vec4 fill, de_vec4 border,
+                      f32 border_width, f32 radius) {
+    if (!emitter || !(rect.z > 0) || !(rect.w > 0))
+        return;
+    de_ui_draw_cmd *cmd = push(emitter->owner, emitter->node);
+    if (!cmd)
+        return;
+    cmd->gpu = (de_ui_gpu_quad){.rect = rect,
+                                .color = tint_alpha(fill, emitter->opacity),
+                                .border = tint_alpha(border, emitter->opacity),
+                                .params = {radius, border_width, 0, 0},
+                                .kind = DE_UI_QUAD_RECT};
+}
 static void image(struct de_ui_render *r, const de_ui_draw_node *node, const DeUiImage *image,
                   de_vec4 rect, f32 opacity) {
     de_ui_gpu_quad quads[9];
@@ -229,9 +249,20 @@ void de_ui__build_draw_list(de_system_ctx *ctx) {
                                                        style->border_width * ui->scale, 0, 0},
                                             .kind = DE_UI_QUAD_RECT};
         }
+        if (style && style->background_image.id) {
+            DeUiImage background = {.texture = style->background_image,
+                                    .uv_rect = {0, 0, 1, 1},
+                                    .nine_slice = style->nine_slice,
+                                    .tint = {1, 1, 1, 1}};
+            image(r, node, &background, rect, opacity);
+        }
         const DeUiImage *im = de_entity_get_const(ui->world, record->entity, ui->ids.image);
         if (im)
             image(r, node, im, rect, opacity);
+        if (r->widget_draw) {
+            de_ui_draw_emitter emitter = {r, node, opacity};
+            r->widget_draw(ui, record->entity, rect, &emitter, r->widget_user);
+        }
         const DeUiText *label = de_entity_get_const(ui->world, record->entity, ui->ids.text);
         if (label)
             text(r, node, label, style, rect, opacity);
