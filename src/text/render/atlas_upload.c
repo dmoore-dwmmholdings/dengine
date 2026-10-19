@@ -14,12 +14,28 @@ static void upload_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) 
     de_gpu_cmd_push_constants(cmd, p->pc, sizeof p->pc);
     de_gpu_cmd_dispatch(cmd, (p->pc[6] + 7) / 8, (p->pc[7] + 7) / 8, 1);
 }
+void de__text_atlas_collect(struct de__text_render *r) {
+    for (u32 i = 0; i < r->page_count;) {
+        de__text_page *p = &r->pages[i];
+        const de_text_font *font = de_text__font_get(r->text, p->font);
+        if (font && font->identity == p->identity) {
+            ++i;
+            continue;
+        }
+        /* Unsent UI packets hold texture-generation leases; submitted work is retired by
+         * the RHI queue fences. Neither needs this obsolete CPU atlas cache entry. */
+        de_gpu_texture_destroy(r->device, p->texture);
+        *p = r->pages[--r->page_count];
+        memset(&r->pages[r->page_count], 0, sizeof *p);
+    }
+}
 de__text_page *de__text_page_ensure(struct de__text_render *r, de_font handle, u32 page) {
+    de__text_atlas_collect(r);
     de_text_font *f = de_text__font_get(r->text, handle);
     if (!f || page >= de_text__page_count(r->text, handle))
         return NULL;
     for (u32 i = 0; i < r->page_count; ++i)
-        if (r->pages[i].font.id == handle.id && r->pages[i].identity == f &&
+        if (r->pages[i].font.id == handle.id && r->pages[i].identity == f->identity &&
             r->pages[i].page == page)
             return &r->pages[i];
     if (r->page_count == DE_TEXT_PAGE_CAP)
@@ -38,7 +54,7 @@ de__text_page *de__text_page_ensure(struct de__text_render *r, de_font handle, u
         return NULL;
     de__text_page *p = &r->pages[r->page_count++];
     *p = (de__text_page){.font = handle,
-                         .identity = f,
+                         .identity = f->identity,
                          .page = page,
                          .texture = texture,
                          .sampled = de_gpu_texture_bindless(r->device, texture, 0, false),
@@ -109,7 +125,7 @@ void de__text_atlas_sync(struct de__text_render *r,
     for (u32 i = 0; i < r->page_count; ++i) {
         de__text_page *page = &r->pages[i];
         de_text_font *f = de_text__font_get(r->text, page->font);
-        if (!f || f != page->identity)
+        if (!f || f->identity != page->identity)
             continue;
         const u8 *pixels = de_text__page_data(r->text, page->font, page->page);
         if (!pixels)

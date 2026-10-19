@@ -1,5 +1,7 @@
 #include "runtime_test_util.h"
 #include "text/render/text_render_internal.h"
+#include "gpu/gpu_backend.h"
+#include "gpu/texture_lease_internal.h"
 #if DE_HAS_RENDER
 #include "render/world/render_world.h"
 #include "render/components_internal.h"
@@ -20,6 +22,8 @@ static void text_render_fx_setup(text_render_fx *f) {
 static void text_render_fx_teardown(text_render_fx *f) {
     if (f->fonts.t)
         de_text_attach(f->fonts.t, NULL, NULL);
+    de_text_destroy(f->fonts.t);
+    f->fonts.t = NULL;
     if (f->fonts.assets) {
         for (u32 i = 0; i < 3; ++i)
             if (f->fonts.loads[i].id)
@@ -27,8 +31,6 @@ static void text_render_fx_teardown(text_render_fx *f) {
         de_asset_system_destroy(f->fonts.assets);
         f->fonts.assets = NULL;
     }
-    de_text_destroy(f->fonts.t);
-    f->fonts.t = NULL;
     if (f->r)
         de_renderer_destroy(f->r);
     if (f->w)
@@ -85,6 +87,43 @@ static void render_frame(text_render_fx *f) {
     ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, 1.f / 60, 0), DE_OK);
     ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
     de__render_world_wait_idle(f->r);
+}
+TEST_F(text_batch, reloaded_atlas_reuses_generation_slots_and_preserves_pending_packet_lease,
+       text_render_fx) {
+#if DE__ASSET_RELOAD_ENABLED
+    start_render(f, DE_GPU_NULL);
+    de_gpu_texture old = de_text_page_texture(f->fonts.t, f->fonts.latin, 0);
+    ASSERT_TRUE(old.id);
+    u32 textures = de__gpu_live_count(f->d, DE__GPU_TEXTURE);
+    for (u32 n = 0; n < 32; ++n) {
+        ASSERT_TRUE(de__gpu_texture_pin(f->d, old));
+        u64 identity = de_text__font_get(f->fonts.t, f->fonts.latin)->identity;
+        de__asset_reload_on_change(f->fonts.assets, "fontall:/latin/NotoSans.ttf",
+                                   DE_WATCH_MODIFIED, false);
+        u64 end = de_time_now_ns() + TEXT_WAIT;
+        while (de_text__font_get(f->fonts.t, f->fonts.latin)->identity == identity &&
+               de_time_now_ns() < end) {
+            de_asset_system_update(f->fonts.assets, NULL);
+            de_text_update(f->fonts.t);
+            de_sleep_ns(1000000);
+        }
+        ASSERT_NE(de_text__font_get(f->fonts.t, f->fonts.latin)->identity, identity);
+        de_text_update(f->fonts.t);
+        de_gpu_texture next = de_text_page_texture(f->fonts.t, f->fonts.latin, 0);
+        ASSERT_TRUE(next.id);
+        EXPECT_NE(next.id, old.id);
+        EXPECT_EQ(f->fonts.t->render->page_count, 1u);
+        de_gpu_wait_idle(f->d);
+        EXPECT_TRUE(de__gpu_get_texture(f->d, old) != NULL);
+        de__gpu_texture_unpin(f->d, old);
+        EXPECT_TRUE(de__gpu_get_texture(f->d, old) == NULL);
+        de_gpu_wait_idle(f->d);
+        EXPECT_EQ(de__gpu_live_count(f->d, DE__GPU_TEXTURE), textures);
+        old = next;
+    }
+#else
+    SKIP("hot reload is a Debug/Dev feature");
+#endif
 }
 static de_glyph_quad quad(text_render_fx *f, de_font font, u32 cp, f32 x, f32 y, f32 size) {
     de_text_font *raw = de_text__font_get(f->fonts.t, font);

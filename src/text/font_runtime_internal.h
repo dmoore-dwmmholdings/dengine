@@ -15,6 +15,7 @@ typedef struct de_text_glyph_entry {
     u32 generation;
 } de_text_glyph_entry;
 typedef struct de_text_font {
+    u64 identity; /* Unique decoded generation, independent of allocator address reuse. */
     const de_allocator *alloc;
     u64 block_bytes;
     u32 mode, generation, count, cmap_count, kern_count, pages, width, height, channels;

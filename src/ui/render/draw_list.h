@@ -13,6 +13,7 @@ typedef struct de_ui_draw_cmd {
     de_vec4 clip;
     de_texture image;
     de_font font;
+    de_gpu_texture texture_lease;
     u32 page, root, pins;
 } de_ui_draw_cmd;
 typedef struct de_ui_root_list {

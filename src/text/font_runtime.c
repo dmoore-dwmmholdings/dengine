@@ -7,6 +7,7 @@
 #if DE_HAS_COOKER
 #include "cook/lib/de_cooker.h"
 #endif
+static de_atomic_u64 font_identity;
 static f32 rf(const u8 *p) {
     u32 u = de__font_u32(p);
     f32 f;
@@ -45,6 +46,7 @@ de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size
     if (!f)
         return DE_ERR_OUT_OF_MEMORY;
     memset(f, 0, sizeof *f);
+    f->identity = de_atomic_fetch_add_u64(&font_identity, 1, DE_ATOMIC_RELAXED) + 1;
     f->alloc = a;
     f->block_bytes = total;
     f->mode = mode;

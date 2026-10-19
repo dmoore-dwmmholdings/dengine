@@ -159,7 +159,9 @@ void de_text__render_begin(de_text_system *t) {
     struct de__text_render *r = t->render;
     if (!r)
         return;
+    de__text_lock(t->runtime);
     de_mutex_lock(&r->mutex);
+    de__text_atlas_collect(r);
     r->current_frame = r->next_frame++;
     de__text_queue *q = &r->queues[r->current_frame % 3];
     q->frame = r->current_frame;
@@ -167,6 +169,7 @@ void de_text__render_begin(de_text_system *t) {
     q->screen_count = q->world_count = 0;
     r->stats = (de_text_render_stats){0};
     de_mutex_unlock(&r->mutex);
+    de__text_unlock(t->runtime);
 }
 de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *quads, u32 count,
                        de_vec2 origin, const de_text_draw_opts *options) {

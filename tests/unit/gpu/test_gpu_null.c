@@ -5,6 +5,7 @@
 #include <dengine/de_gpu.h>
 
 #include "gpu/gpu_backend.h"
+#include "gpu/texture_lease_internal.h"
 
 #include <string.h>
 
@@ -35,6 +36,75 @@ static void null_fx_teardown(null_fx *f) {
 static de_gpu_buffer make_buffer(de_gpu_device *d, de_gpu_memory mem) {
     de_gpu_buffer_desc bd = {.size = 64, .usage = DE_USAGE_STORAGE, .memory = mem, .name = "b"};
     return de_gpu_buffer_create(d, &bd);
+}
+
+TEST_F(gpu, texture_generation_leases_survive_owner_destroy_until_last_packet_release, null_fx) {
+    de_gpu_texture t = de_gpu_texture_create(
+        f->d,
+        &(de_gpu_texture_desc){
+            .width = 4, .height = 4, .format = DE_FMT_RGBA8_UNORM, .usage = DE_USAGE_SAMPLED});
+    ASSERT_TRUE(t.id);
+    u32 descriptor = de_gpu_texture_bindless(f->d, t, 0, false);
+    ASSERT_TRUE(de__gpu_texture_pin(f->d, t));
+    ASSERT_TRUE(de__gpu_texture_pin(f->d, t));
+    de_gpu_texture_destroy(f->d, t);
+    EXPECT_FALSE(de__gpu_texture_pin(f->d, t)); /* No new owner after destruction starts. */
+    de_gpu_wait_idle(f->d);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, t) != NULL);
+    EXPECT_EQ(de_gpu_texture_bindless(f->d, t, 0, false), descriptor);
+    de__gpu_texture_unpin(f->d, t);
+    de_gpu_wait_idle(f->d);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, t) != NULL);
+    de__gpu_texture_unpin(f->d, t);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, t) == NULL);
+    de_gpu_wait_idle(f->d);
+    EXPECT_EQ(de__gpu_live_count(f->d, DE__GPU_TEXTURE), 0u);
+    EXPECT_EQ(de__gpu_deferred_count(f->d), 0u);
+}
+
+typedef struct lease_thread {
+    de_gpu_device *device;
+    de_gpu_texture texture;
+    de_atomic_u32 ready, release;
+    bool pinned;
+} lease_thread;
+static i32 release_packet_texture(void *user) {
+    lease_thread *s = user;
+    s->pinned = de__gpu_texture_pin(s->device, s->texture);
+    de_atomic_store_u32(&s->ready, 1, DE_ATOMIC_RELEASE);
+    u64 end = de_time_now_ns() + 2000000000ULL;
+    while (!de_atomic_load_u32(&s->release, DE_ATOMIC_ACQUIRE) && de_time_now_ns() < end)
+        de_sleep_ns(50000);
+    if (s->pinned)
+        de__gpu_texture_unpin(s->device, s->texture);
+    return 0;
+}
+TEST_F(gpu, texture_packet_leases_release_concurrently_with_owner_destruction, null_fx) {
+    lease_thread s = {.device = f->d};
+    s.texture = de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.width = 4,
+                                                                   .height = 4,
+                                                                   .format = DE_FMT_RGBA8_UNORM,
+                                                                   .usage = DE_USAGE_SAMPLED});
+    ASSERT_TRUE(de__gpu_texture_pin(f->d, s.texture));
+    de_atomic_init_u32(&s.ready, 0);
+    de_atomic_init_u32(&s.release, 0);
+    de_thread *thread = NULL;
+    ASSERT_EQ(
+        de_thread_create(release_packet_texture, &s, "packet lease", DE_THREAD_NORMAL, 0, &thread),
+        DE_OK);
+    u64 end = de_time_now_ns() + 2000000000ULL;
+    while (!de_atomic_load_u32(&s.ready, DE_ATOMIC_ACQUIRE) && de_time_now_ns() < end)
+        de_sleep_ns(50000);
+    EXPECT_EQ(de_atomic_load_u32(&s.ready, DE_ATOMIC_ACQUIRE), 1u);
+    de_gpu_texture_destroy(f->d, s.texture);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, s.texture) != NULL);
+    de_atomic_store_u32(&s.release, 1, DE_ATOMIC_RELEASE);
+    de__gpu_texture_unpin(f->d, s.texture);
+    de_thread_join(thread);
+    EXPECT_TRUE(s.pinned);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, s.texture) == NULL);
+    de_gpu_wait_idle(f->d);
+    EXPECT_EQ(de__gpu_live_count(f->d, DE__GPU_TEXTURE), 0u);
 }
 
 /* Submits an empty command list on `q`; returns the queue's new internal timeline value. */

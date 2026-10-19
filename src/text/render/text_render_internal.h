@@ -34,7 +34,7 @@ typedef struct de__text_queue {
 } de__text_queue;
 typedef struct de__text_page {
     de_font font;
-    const de_text_font *identity;
+    u64 identity;
     u32 page;
     de_gpu_texture texture;
     u32 sampled, storage;
@@ -75,6 +75,7 @@ struct de__text_render {
 void de_text__render_destroy(de_text_system *t);
 void de_text__render_begin(de_text_system *t);
 de__text_page *de__text_page_ensure(struct de__text_render *r, de_font font, u32 page);
+void de__text_atlas_collect(struct de__text_render *r);
 void de__text_atlas_sync(struct de__text_render *r, de__view_frame *vf);
 de_result de__text_world_attach(struct de__text_render *r, de_world *w);
 void de__text_world_detach(struct de__text_render *r);
