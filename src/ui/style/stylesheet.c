@@ -332,3 +332,30 @@ de_result de_ui__style_asset_register(de_asset_system *assets) {
         return DE_OK;
     return de_error_last()->result == DE_ERR_ALREADY_EXISTS ? DE_OK : de_error_last()->result;
 }
+
+de_result de_ui__load_stylesheet_source(de_ui *ui, const char *bytes, u64 length, bool builtin) {
+    if (!ui || !ui->style)
+        return DE_ERR_INVALID_ARGUMENT;
+    de_ui_style_system *state = ui->style;
+    if (state->sheet_count >= DE_UI_STYLE_SHEETS)
+        return DE_ERR_OUT_OF_MEMORY;
+    de_ui_style_sheet_slot slot = {0};
+    DE_TRY(de_ui__sheet_parse(ui->alloc, bytes, length, &slot.sheet));
+    if (slot.sheet->rule_count)
+        slot.compiled = DE_ALLOC(ui->alloc, (u64)slot.sheet->rule_count * sizeof *slot.compiled,
+                                 _Alignof(de_ui_compiled_rule), DE_MEM_UI);
+    if (slot.sheet->rule_count && !slot.compiled) {
+        slot_clear(state, &slot);
+        return DE_ERR_OUT_OF_MEMORY;
+    }
+    de_result result = de_ui__compile_sheet(state, &slot);
+    if (result != DE_OK) {
+        slot_clear(state, &slot);
+        return result;
+    }
+    state->sheets[state->sheet_count++] = slot;
+    if (builtin)
+        ++state->builtin_count;
+    ++state->revision;
+    return DE_OK;
+}

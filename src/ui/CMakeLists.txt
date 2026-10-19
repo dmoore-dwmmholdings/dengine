@@ -15,3 +15,13 @@ if(TARGET de_ui)
  target_sources(de_ui PRIVATE render/draw_list.c render/ui_extract.c render/ui_pass.c)
  target_compile_definitions(de_ui PRIVATE DE_UI_RETAINED_RENDER=1)
 endif()
+
+# DENG-318: embed the real TOML sheet, keeping source edits tracked by the build.
+if(TARGET de_ui)
+ set(_ui_default_style "${CMAKE_CURRENT_BINARY_DIR}/ui_default_style.h")
+ add_custom_command(OUTPUT "${_ui_default_style}"
+  COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/widgets/default_style.toml" "-DOUTPUT=${_ui_default_style}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_style.cmake"
+  DEPENDS widgets/default_style.toml cmake/embed_style.cmake VERBATIM)
+ target_sources(de_ui PRIVATE "${_ui_default_style}" widgets/text.c widgets/image.c widgets/button.c widgets/toggle.c widgets/slider.c widgets/progress.c input/pointer.c)
+ target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+endif()

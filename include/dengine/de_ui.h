@@ -174,6 +174,12 @@ typedef struct DeUiButton {
 typedef struct DeUiSlider {
     f32 value, min, max, step;
 } DeUiSlider;
+typedef struct DeUiProgress {
+    f32 value;
+    bool indeterminate;
+} DeUiProgress;
+/** True after routing a pointer over UI or while UI owns its capture; reset each PreUpdate. */
+DE_API bool de_ui_pointer_consumed(const de_ui *ui);
 typedef struct DeUiToggle {
     bool on;
 } DeUiToggle;
