@@ -79,6 +79,7 @@ typedef struct de_glyph_quad {
     de_vec4 uv;
     u32 atlas_page;
     de_vec4 color;
+    de_font font; /**< Per-glyph fallback font; zero uses draw options.font. */
 } de_glyph_quad;
 DE_API u32 de_text_layout_quads(const de_text_layout *l, de_glyph_quad *out, u32 max);
 

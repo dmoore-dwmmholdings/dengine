@@ -186,7 +186,7 @@ de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *qua
     for (u32 i = 0; i < count; ++i) {
         de__text_item *item = &q->screen[q->screen_count++];
         memset(item, 0, sizeof *item);
-        item->font = options->font;
+        item->font = quads[i].font.id ? quads[i].font : options->font;
         item->page = quads[i].atlas_page;
         item->view = view;
         item->gpu.rect = quads[i].pos;

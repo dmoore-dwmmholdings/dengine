@@ -9,6 +9,7 @@ struct de_text_system {
     struct de__shape_system *shape;
     struct de__glyph_cache *glyph_cache;
     struct de__text_render *render;
+    struct de__layout_cache *layout;
     de_str (*localize)(const de_text_system *, de_name);
 };
 #endif
