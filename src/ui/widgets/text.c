@@ -84,6 +84,20 @@ de_ui_widget_table *de_ui__widget_table(de_ui *ui) {
 }
 static void collect(const de_query_chunk *chunk, void *user) {
     de_ui_widgets *w = user;
+    if (!chunk->count)
+        return;
+    /* A whole archetype slice can be skipped when it has no widget/content.
+     * Keep automatic tags so removing the last authored component clears them. */
+    const de_component relevant[] = {w->button,       w->toggle,        w->slider,     w->progress,
+                                     w->ui->ids.text, w->ui->ids.image, w->auto_widget};
+    bool found = false;
+    for (u32 i = 0; i < sizeof relevant / sizeof relevant[0]; ++i)
+        if (relevant[i].id && de_entity_has(w->ui->world, chunk->entities[0], relevant[i])) {
+            found = true;
+            break;
+        }
+    if (!found)
+        return;
     for (u32 i = 0; i < chunk->count && w->entity_count < w->ui->capacity; ++i)
         w->entities[w->entity_count++] = chunk->entities[i];
 }

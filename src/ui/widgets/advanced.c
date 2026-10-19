@@ -96,6 +96,20 @@ de_entity de_ui__advanced_node(de_ui *ui, de_entity parent, f32 w, f32 h) {
 }
 static void collect(const de_query_chunk *c, void *user) {
     de_ui_advanced *a = user;
+    if (!c->count)
+        return;
+    /* Query slices share one archetype. Plain layout nodes need no widget
+     * reconciliation; retain runtime owners for refresh and detach cleanup. */
+    const de_component relevant[] = {a->input,   a->dropdown, a->scroll, a->list,         a->tabs,
+                                     a->tooltip, a->editor,   a->popup,  a->tooltip_state};
+    bool found = false;
+    for (u32 i = 0; i < sizeof relevant / sizeof relevant[0]; ++i)
+        if (relevant[i].id && de_entity_has(a->ui->world, c->entities[0], relevant[i])) {
+            found = true;
+            break;
+        }
+    if (!found)
+        return;
     for (u32 i = 0; i < c->count && a->count < a->ui->capacity; ++i)
         a->entities[a->count++] = c->entities[i];
 }
