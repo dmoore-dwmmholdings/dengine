@@ -7,6 +7,11 @@
 #include <string.h>
 #define MISSING_SLOTS 1024u
 #define LOCALE_CHAIN  20u
+/* MSVC diagnoses standard C99 flexible array members as C4200. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(push)
+#pragma warning(disable : 4200)
+#endif
 typedef struct loaded_table {
     const de_allocator *alloc;
     de_atomic_u32 refs;
@@ -32,6 +37,9 @@ typedef struct loc_set {
     bool pseudo;
     loc_entry entries[];
 } loc_set;
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(pop)
+#endif
 typedef struct missing_string {
     de_atomic_u64 hash;
     de_atomic_u32 ready;
