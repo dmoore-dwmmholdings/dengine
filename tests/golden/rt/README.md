@@ -58,3 +58,19 @@ or for non-identical restoration. No thresholds, warmup, geometry, sample settin
 were retuned after measurement. These observations are queued as deferred bug reports;
 source-versus-fixture causes are not established. Vulkan/DXR references are intentionally
 absent pending actual hardware captures.
+
+## Many-light DI verification (DENG-461)
+
+The many-light materials omit `metallic`, whose material-format default is 1. Their diffuse
+lobe is therefore zero; the original producer check incorrectly measured only that lobe.
+The check now reads and combines both published DI RGB textures, excluding alpha. With the
+original scene, settings and thresholds, 4,502 pixels carry DI energy (RGB sum 3,690.11).
+Two independent captures have identical decoded RGBA bytes. Strict Metal API and shader
+validation passes. The reviewed Metal image is now installed as the previously missing
+reference; the original failed capture remains archived.
+
+A temporary GPU producer control wrote zero RGB and alpha 1 to both DI textures. It failed
+the unchanged nonvacuity requirement and changed 13,506 decoded final-image bytes, confirming
+that this scene consumes the lighting signal. The production shader was restored before
+final verification. No scene materials, sample counts, warmup or comparison limits changed.
+Other first-capture qualifications above remain open.

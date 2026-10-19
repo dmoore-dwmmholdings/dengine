@@ -168,6 +168,7 @@ void de__golden_rt_finish(void *state) {
         p->inputs = p->uploaded->inputs;
     bool active = false, identity = false;
     de_gpu_texture texture = {0};
+    de_gpu_texture specular = {0};
     de_gpu_buffer buffer = {0};
     u32 width = 0, height = 0, bpp = 0;
     u64 rays = 0;
@@ -216,6 +217,9 @@ void de__golden_rt_finish(void *state) {
             de__di_info i = {0};
             active = de__restir_di_get(r->restir_di, p->view, &i) && i.source_count >= 512;
             texture = i.diffuse;
+            // The fixture's metallic materials have no diffuse lobe. DI publishes both
+            // lobes; measure their combined RGB so a valid specular contribution counts.
+            specular = i.specular;
             width = i.width;
             height = i.height;
             bpp = 16;
@@ -258,7 +262,7 @@ void de__golden_rt_finish(void *state) {
         u32 pitch = (width * bpp + 255u) & ~255u;
         u64 size = buffer.id ? (u64)width * height * bpp : (u64)pitch * height;
         de_gpu_buffer rb = de_gpu_buffer_create(
-            d, &(de_gpu_buffer_desc){.size = size,
+            d, &(de_gpu_buffer_desc){.size = size * (specular.id ? 2 : 1),
                                      .usage = DE_USAGE_COPY_DST,
                                      .memory = DE_MEM_READBACK,
                                      .name = "RT golden actual producer readback"});
@@ -272,6 +276,15 @@ void de__golden_rt_finish(void *state) {
             de_gpu_cmd_copy_buffer(cmd, rb, 0, buffer, 0, size);
         else
             de_gpu_cmd_copy_texture_to_buffer(cmd, rb, 0, pitch, texture, 0, 0);
+        if (specular.id) {
+            de_gpu_barrier sb = {
+                .texture = specular, .before = before, .after = DE_ACCESS_COPY_SRC};
+            de_gpu_cmd_barriers(cmd, &sb, 1);
+            de_gpu_cmd_copy_texture_to_buffer(cmd, rb, size, pitch, specular, 0, 0);
+            sb.before = DE_ACCESS_COPY_SRC;
+            sb.after = before;
+            de_gpu_cmd_barriers(cmd, &sb, 1);
+        }
         b.before = DE_ACCESS_COPY_SRC;
         b.after = before;
         de_gpu_cmd_barriers(cmd, &b, 1);
@@ -301,6 +314,10 @@ void de__golden_rt_finish(void *state) {
                 } else {
                     const f32 *f = (const f32 *)q;
                     v = f[0] + f[1] + f[2];
+                    if (specular.id) {
+                        const f32 *s = (const f32 *)(q + size);
+                        v += s[0] + s[1] + s[2];
+                    }
                 }
                 if (isfinite(v)) {
                     ++finite;
