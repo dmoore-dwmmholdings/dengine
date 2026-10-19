@@ -356,3 +356,58 @@ Focused binding tests cover all numeric kinds, extreme64-bit text, every propert
 nested/array paths, `42 / 100`, actual slider/toggle writeback plus changed queries,
 readonly fields, schema/metadata replacement, warning-once errors, source despawn,
 real cooked locale publication, and1000 idle bindings within0.2ms in Dev.
+
+### World panels and pixel UI (DENG-322)
+
+Attach `DeUiWorldPanel` and a normal `DeTransform` to a UI root. `size_m` defines
+its physical XY plane and `pixels_per_meter` defines its independent layout
+extent. A 2×1 metre panel at100 pixels/metre lays out as200×100 pixels, without
+changing screen roots or other panels. Panel-local origin is its upper-left;
+the transform positions its centre. `lit` selects the renderer's existing
+clustered direct/indirect lighting and `depth_test` selects reverse-Z scene
+occlusion. With depth disabled, the panel joins the final overlay group.
+
+World panels emit direct rounded/image/text quads, using the same MSDF and bitmap
+sampling as screen UI. They participate in the renderer's ordinary transparent
+sort, including interleaving with translucent meshes. Sorting is per root, so
+intersecting surfaces retain the renderer's object-sort limitation. Geometry and
+asset references come from the immutable Extract packet; render callbacks read
+neither ECS nor asset state. Double-precision panel positions are reduced by the
+matching camera origin before conversion to GPU floats.
+
+Pointer routing unprojects the selected view's physical pointer position, tests
+each transformed panel plane, and passes panel-local pixels to the normal widget
+hit test. Existing screen widgets take precedence; a captured world widget keeps
+its panel routing while dragged. Focus and activation use the existing widget
+and navigation paths. Set `de_ui_desc.view` to select a view; zero uses the main
+view for world pointer projection.
+
+For pixel UI, set `de_ui_desc.pixel_art` and enable integer pixel rendering on
+the selected view. Layout uses the view's internal pixel grid and an integer
+`ui.scale`; rectangle, clip and glyph edges snap to that grid. Bitmap font pages
+use nearest sampling; MSDF fonts are not emitted in this mode. The pixel hook
+composites after internal tonemapping and before palette conversion/upscale, so
+UI shares scene palette, scale and letterboxing. Pointer mapping uses the actual
+fitted content rectangle. A resize/settings mismatch between PostUpdate and
+Extract safely skips that packet until layout catches up. Ordinary screen UI
+with no explicit view retains its existing output-resolution behavior.
+
+Focused CPU tests cover per-root extent isolation, rotated/scaled ray-plane
+mapping, a projected button at100 km, immutable panel poses, integer snapping,
+letterbox routing and advisory-resize rejection. A Metal readback of the actual
+world UI consumer returns RGB0/212/0 at the panel centre; translating both camera
+and panel by100 km changes zero image codes beyond one step. The static2000-node
+HUD test measures1000 complete UI frames plus Extract with zero heap allocations:
+0.321ms mean in Dev on the tested Apple M5 Pro host; this is not an M1 hardware
+qualification. World-root popup clamping still uses screen bounds (DENG-523);
+advanced world popups remain a deferred limitation.
+
+The seven Metal/Base world/pixel references use the original mean0.001/p990.015
+limits. Pixel output additionally checks exact equality within every4×4 block;
+the100km MSDF image matches the origin image with mean/p99/max zero after
+camera translation is cancelled before local glyph geometry is projected.
+Five older screen-UI references currently fail identically on the pre-322
+baseline because of a text-style tint difference; their references are preserved.
+The existing eleven draw regressions pass, including real native brightness,
+Extract-token selection and image-pin retirement. Headless syntax and public
+header/layering checks pass. Vulkan/D3D12 native captures remain hardware checks.

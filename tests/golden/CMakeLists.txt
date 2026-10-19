@@ -188,3 +188,5 @@ target_sources(de_golden PRIVATE ui/widgets_basic/widgets_scene.c)
 
 # DENG-319 actual retained advanced controls and injected IME.
 target_sources(de_golden PRIVATE ui/widgets_advanced/widgets_scene.c)
+# DENG-322 real world geometry/MSDF and internal-grid bitmap UI captures.
+target_sources(de_golden PRIVATE ui/world_panel/world_scenes.c ui/pixel_ui/pixel_scene.c)

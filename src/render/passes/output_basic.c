@@ -108,7 +108,8 @@ de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *ar
         g, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
                                   .width = width,
                                   .height = height,
-                                  .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
+                                  .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC |
+                                           DE_USAGE_RENDER_TARGET,
                                   .name = "output.basic"});
     ob_pass *p = (ob_pass *)de_arena_push(arena, sizeof *p, 16);
     if (!DE_HANDLE_VALID(dst) || p == NULL) {

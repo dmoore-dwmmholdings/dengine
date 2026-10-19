@@ -4,6 +4,7 @@
 typedef struct de_ui_layout {
     de_ui *ui;
     de_allocator allocator;
+    bool world_root;
 } de_ui_layout;
 f32 de_ui__length(de_ui_len length, f32 available, f32 scale, f32 automatic);
 de_vec2 de_ui__measure(de_ui_layout *layout, u32 index, de_vec2 available);

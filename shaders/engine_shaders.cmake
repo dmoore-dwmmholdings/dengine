@@ -114,3 +114,6 @@ de_engine_shader(text_upload text/atlas_upload.slang)
 de_engine_shader(pixel_palette pixel/palette_dither.slang)
 # DENG-317 bindless retained UI (rounded rect/image/MSDF and bitmap text).
 de_engine_shader(ui ui/ui.slang)
+
+# DENG-322 world-space retained UI reuses the screen UI and shared lighting modules.
+de_engine_shader(ui_world ui/ui_world.slang)
