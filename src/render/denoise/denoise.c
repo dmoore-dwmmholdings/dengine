@@ -18,9 +18,10 @@ typedef struct dn_params {
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
     u32 position, previous_position, out_position, tail_reserved;
-    u32 temporal_alpha, normal_world, alpha_reserved[2];
+    u32 temporal_alpha, normal_world, channels, alpha_reserved;
 } dn_params;
 DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
+DE_STATIC_ASSERT(offsetof(dn_params, channels) == 352, "DenoiseParams channel semantics offset");
 struct de_denoise_ctx {
     struct de_denoise_ctx *next;
     de__denoise *owner;
@@ -76,7 +77,8 @@ void de__denoise_forget(de__denoise *s, de_view view) {
     if (!s)
         return;
     /* Graph pointers may be recycled when any view is retired. */
-    memset(s->material_graph, 0, sizeof s->material_graph);
+    for (u32 i = 0; i < 32; ++i)
+        s->material_graph[i] = NULL;
     u32 slot = (view.id & 255u) - 1;
     if (slot >= 32)
         return;
@@ -216,6 +218,7 @@ de_result denoise_begin(de__denoise *s, const de_denoise_frame *f,
         c->next = s->views[slot];
         s->views[slot] = c;
     }
+    bool channel_change = c->valid && c->desc.channels != desc->channels;
     c->desc = *desc;
     if (!c->desc.format)
         c->desc.format = DE_FMT_RGBA16_FLOAT;
@@ -233,7 +236,7 @@ de_result denoise_begin(de__denoise *s, const de_denoise_frame *f,
                          : c->desc.iterations > 5 ? 5
                                                   : c->desc.iterations;
     DE_TRY(allocate(c, f->inputs.width, f->inputs.height));
-    c->reset = f->reset || !c->valid || f->frame != c->last_frame + 1 ||
+    c->reset = f->reset || channel_change || !c->valid || f->frame != c->last_frame + 1 ||
                c->reset_version != (u64)de_cvar_int(s->reset);
     c->reset_version = (u64)de_cvar_int(s->reset);
     c->frame = *f;
@@ -374,6 +377,7 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.hit_scale = c->desc.hit_distance_scale;
     x->pc.roughness_threshold = c->desc.roughness_threshold;
     x->pc.clamp_mode = c->desc.clamp;
+    x->pc.channels = c->desc.channels;
     x->pc.reset = c->reset;
     x->pc.linear_depth = c->frame.inputs.linear_depth;
     x->pc.normal_world = c->frame.inputs.normal_is_world;

@@ -11,7 +11,7 @@ public struct DenoiseParams {
     public float4 camera,origin_delta;
     public uint key,previous_key,out_key,zero_radius_passthrough;
     public uint position,previous_position,out_position,tail_reserved;
-    public uint temporal_alpha,normal_world,alpha_r1,alpha_r2;
+    public uint temporal_alpha,normal_world,channels,alpha_reserved;
 };
 public DenoiseParams dn_load(uint buffer,uint entry){return de_robuffer<DenoiseParams>(buffer)[entry];}
 public float2 denoise_previous_uv(float2 uv,float2 motion){return uv+float2(-.5,.5)*motion;}
@@ -25,5 +25,8 @@ public float3 dn_position(DenoiseParams p,int2 xy,float depth,bool previous){
 }
 public DeGbSurface dn_surface(DenoiseParams p,uint normal,int2 xy){float4 v=de_tex2d(normal).Load(int3(xy,0));if(p.normal_world!=0){DeGbSurface s=(DeGbSurface)0;s.normal=dot(v.xyz,v.xyz)>1e-12?normalize(v.xyz):float3(0,0,1);s.roughness=v.w;return s;}return gb_decode(float4(0),v,float4(0));}
 public float dn_luma(float3 c){return dot(c,float3(.2126,.7152,.0722));}
+// Visibility and distance are independent scalars, not red/green radiance.
+public bool dn_scalar_signal(DenoiseParams p){return p.channels==1||p.channels==2;}
+public float dn_signal_luma(DenoiseParams p,float3 c){return dn_scalar_signal(p)?c.x:dn_luma(c);}
 public float3 dn_ycocg(float3 c){return float3(dot(c,float3(.25,.5,.25)),.5*(c.r-c.b),-.25*c.r+.5*c.g-.25*c.b);}
 public float3 dn_rgb(float3 c){return float3(c.x+c.y-c.z,c.x+c.z,c.x-c.y-c.z);}

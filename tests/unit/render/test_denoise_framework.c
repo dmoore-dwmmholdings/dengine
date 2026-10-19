@@ -30,11 +30,11 @@ typedef struct dn_fixture {
     de_gpu_texture signal, depth, normal, motion, material, key;
     de_gpu_buffer upload, readback;
     float data[6][PIXELS * 4];
-    bool use_key;
+    bool use_key, use_hit;
     de_denoise_result result;
     de_rg_resource identity;
     u64 frame;
-    u32 width, height;
+    u32 width, height, channels, iterations;
     de_denoise_clamp clamp;
 } dn_fixture;
 static de_gpu_texture make_texture(dn_fixture *f, de_gpu_format format) {
@@ -78,6 +78,8 @@ static void dn_fixture_setup(dn_fixture *f) {
                                                                         .memory = DE_MEM_READBACK});
     ASSERT_TRUE(f->signal.id && f->depth.id && f->normal.id && f->motion.id && f->material.id &&
                 f->key.id && f->upload.id && f->readback.id);
+    f->channels = 3;
+    f->iterations = 3;
     f->width = W;
     f->height = H;
     const f32 n[3] = {0, 0, 1};
@@ -158,15 +160,18 @@ static de_denoise_result build(dn_fixture *f, de_view view, u64 signal, bool res
     frame.inputs.motion = de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
     frame.inputs.material =
         identity.id ? identity : de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+    if (f->use_hit)
+        frame.inputs.hit_distance = frame.inputs.depth;
     if (f->use_key)
         frame.inputs.validation_key = de_rg_import_texture(f->graph, f->key, DE_ACCESS_SHADER_READ);
     de_denoise_ctx *ctx = NULL;
     ASSERT_EQ(denoise_begin(f->owner, &frame,
                             &(de_denoise_signal_desc){.identity = signal,
                                                       .format = DE_FMT_RGBA32_FLOAT,
-                                                      .channels = 3,
+                                                      .channels = f->channels,
                                                       .clamp = f->clamp,
-                                                      .iterations = 3,
+                                                      .iterations = f->iterations,
+                                                      .hit_distance_scale = f->use_hit ? 1.f : 0.f,
                                                       .luminance_scale = 100},
                             &ctx),
               DE_OK);
@@ -568,4 +573,120 @@ TEST_F(denoise_framework, luminance_clamp_recovers_black_and_near_black_history,
         printf("black-history sample%u maximum clamped signal error: %g\n", sample, maximum);
         EXPECT_FLOAT_EQ(maximum, 0, 1e-6);
     }
+}
+
+TEST_F(denoise_framework, scalar_pair_clamp_does_not_rescale_visibility_with_distance, dn_fixture) {
+    f->channels = 2;
+    f->clamp = DE_DENOISE_CLAMP_LUMINANCE;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .25f;
+        f->data[0][i * 4 + 1] = 8;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    for (u32 frame = 0; frame < 16; ++frame) {
+        begin(f);
+        run(f, build(f, (de_view){1}, 99, frame == 0, false, (de_rg_resource){0}));
+    }
+    for (u32 i = 0; i < PIXELS; ++i)
+        f->data[0][i * 4 + 1] = .1f;
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 99, false, false, (de_rg_resource){0}));
+    f32 visibility_error = 0, distance_error = 0;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        visibility_error = fmaxf(visibility_error, fabsf(color(f)[i * 4] - .25f));
+        distance_error = fmaxf(distance_error, fabsf(color(f)[i * 4 + 1] - .1f));
+    }
+    printf("scalar pair clamp: visibility error%g distance error%g\n", visibility_error,
+           distance_error);
+    EXPECT_FLOAT_EQ(visibility_error, 0, 1e-6);
+    EXPECT_FLOAT_EQ(distance_error, 0, 1e-6);
+}
+TEST_F(denoise_framework, scalar_pair_variance_and_weights_ignore_auxiliary_distance, dn_fixture) {
+    f->channels = 2;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .4f + (hash32(i) % 101) / 500.f;
+        f->data[0][i * 4 + 1] = 1;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 100, true, true, (de_rg_resource){0}));
+    f32 original[PIXELS], variance[PIXELS];
+    for (u32 i = 0; i < PIXELS; ++i)
+        original[i] = color(f)[i * 4];
+    memcpy(variance, (u8 *)color(f) + 49152, sizeof variance);
+    for (u32 i = 0; i < PIXELS; ++i)
+        f->data[0][i * 4 + 1] = 1 + (i % W >= W / 2 ? 27 : 0);
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 100, true, true, (de_rg_resource){0}));
+    f32 color_delta = 0, variance_delta = 0;
+    const f32 *current_variance = (const f32 *)((u8 *)color(f) + 49152);
+    for (u32 i = 0; i < PIXELS; ++i) {
+        color_delta = fmaxf(color_delta, fabsf(original[i] - color(f)[i * 4]));
+        variance_delta = fmaxf(variance_delta, fabsf(variance[i] - current_variance[i]));
+    }
+    printf("scalar pair auxiliary change: visibility delta%g variance delta%g\n", color_delta,
+           variance_delta);
+    EXPECT_FLOAT_EQ(color_delta, 0, 0);
+    EXPECT_FLOAT_EQ(variance_delta, 0, 0);
+}
+
+static void scalar_pair_bounded_support(dn_fixture *f, u32 iterations) {
+    f->channels = 2;
+    f->iterations = iterations;
+    f->use_hit = true; /* Flat depth2 doubles as a constant two-pixel support guide. */
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .4f + (hash32(i) % 101) / 500.f;
+        f->data[0][i * 4 + 1] = 1;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 101, true, true, (de_rg_resource){0}));
+    f32 baseline[H];
+    for (u32 y = 0; y < H; ++y)
+        baseline[y] = color(f)[(y * W + 31) * 4];
+    /* Column34 is three pixels from the measured column31, outside both the
+     * declared two-pixel support and its local variance neighborhood. */
+    for (u32 y = 0; y < H; ++y)
+        for (u32 x = 34; x < W; ++x)
+            f->data[0][(y * W + x) * 4] += .3f;
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 101, true, true, (de_rg_resource){0}));
+    f32 maximum = 0;
+    for (u32 y = 0; y < H; ++y)
+        maximum = fmaxf(maximum, fabsf(color(f)[(y * W + 31) * 4] - baseline[y]));
+    printf("two-pixel AO support, %u iterations: outside-neighbor influence%g\n", iterations,
+           maximum);
+    EXPECT_FLOAT_EQ(maximum, 0, 0);
+}
+
+TEST_F(denoise_framework, scalar_pair_spatial_guide_bounds_sample_support, dn_fixture) {
+    scalar_pair_bounded_support(f, 1);
+    scalar_pair_bounded_support(f, 3);
+    scalar_pair_bounded_support(f, 5);
+}
+
+TEST_F(denoise_framework, changing_signal_channel_semantics_resets_history, dn_fixture) {
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 1, 0);
+    f->channels = 2;
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 0, 0);
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 1, 0);
+    f->channels = 3;
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 0, 0);
 }

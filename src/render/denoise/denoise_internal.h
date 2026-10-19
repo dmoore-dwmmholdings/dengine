@@ -13,7 +13,7 @@ typedef enum de_denoise_clamp {
 typedef struct de_denoise_signal_desc {
     u64 identity;
     de_gpu_format format;
-    u32 channels;
+    u32 channels; /**< 1/2: independent scalar signals; R drives variance/weights. 3/4: RGB. */
     f32 alpha_min;
     de_denoise_clamp clamp;
     u32 iterations;

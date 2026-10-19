@@ -11,7 +11,7 @@ void cs_variance(uint3 id:SV_DispatchThreadID,uniform DnPush pc){
             if(any(de_tex2d(p.material).Load(int3(q,0)).xy!=de_tex2d(p.material).Load(int3(xy,0)).xy))continue;
             if(p.key!=0&&any(de_tex2d(p.key).Load(int3(q,0)).xy!=de_tex2d(p.key).Load(int3(xy,0)).xy))continue;
             if(abs(other-z)>p.depth_relative*max(abs(z),1e-3)||dot(normal,dn_surface(p,p.normal,q).normal)<p.normal_cos)continue;
-            float l=dn_luma(de_tex2d(p.input).Load(int3(q,0)).rgb);sum+=float2(l,l*l);count++;}
+            float l=dn_signal_luma(p,de_tex2d(p.input).Load(int3(q,0)).rgb);sum+=float2(l,l*l);count++;}
         m=sum/max(count,1);}
     de_rwtex2d(p.variance)[xy]=float4(max(m.y-m.x*m.x,0),0,0,0);
 }
