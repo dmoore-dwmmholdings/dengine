@@ -34,3 +34,9 @@ if(TARGET de_ui)
  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/menu_replay")
  target_compile_definitions(test_ui_focus PRIVATE "DE_UI_REPLAY_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/menu_replay\"")
 endif()
+
+# DENG-321 reflection paths, generic CHANGED writeback and idle HUD costs.
+if(TARGET de_ui)
+ de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ target_include_directories(test_ui_binding PRIVATE "${DE_ROOT_DIR}/src")
+endif()

@@ -270,3 +270,45 @@ a gamepad walks Play, Music, Volume and Quit, cancels a modal confirmation, then
 The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world with no devices,
 and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
 Later advanced-widget walkthrough extensions use the same table and recording schema.
+
+### Data binding (DENG-321)
+
+Attach `DeUiBinding` to a widget, with its source entity, a path such as
+`BindData.current` or `BindInventory.slots.2.count`, and a property. Dotted numeric
+indices adapt to the reflection API's bracket form (`slots[2].count`); all actual
+schema lookup, bounds, nested fields and flags use `de_reflect_resolve_path`.
+Properties are `value` (slider/progress), `on` (toggle), `text`, `visible`
+(NONE/FLEX), `disabled`, `opacity`, and `tint` (image tint, text color or panel fill).
+Scalar properties convert bool, signed/unsigned integers and f32/f64. Tint accepts
+vec4/color. Text copies inline strings into UI-owned storage, resolves names through
+`de_loc`, and formats numeric values with optional `format[32]`, for example
+`{value, number, integer} / 100`. Numeric inline formats reuse S28's message engine;
+no expression language or reflection parser is embedded in UI. Default integer
+text preserves the complete signed/unsigned64 range. S28's optional numeric format
+uses a floating argument for unsigned values above INT64_MAX, with f64 precision.
+
+Bindings default to ONE_WAY. TWO_WAY also reads normal widget CHANGED events in
+main-thread PostUpdate and writes the reflected source with `de_entity_get` and
+`de_entity_mark_changed`; READONLY fields are always protected. The next gameplay
+Update's changed query observes the write. Editor integration is generic: committed
+`DeUiTextInput.buffer/length` fields resolve through reflection, independently of
+password/preedit display text, and a nullable widget-table `refresh_text` callback
+updates display after an external buffer change. No advanced-widget code is linked
+from the binding module; the actual text-input integration case follows DENG-319.
+
+`ui.binding` runs after widget/navigation actions and before style/layout. Each
+binding caches its descriptor, resolved component/field/offset and a byte copy of
+the source leaf. Unchanged source bytes avoid mutable component access and layout
+invalidation. Locale publication refreshes localized/formatted text even if source
+bytes did not change. Any successful type registry publication invalidates both
+valid and errored caches, including moved offsets and metadata-only changes.
+Invalid paths/kinds/formats log once per binding/configuration/revision and disable
+that binding until a descriptor or registry change. A dead/missing source simply
+idles and preserves the last visible value. Text and byte spans live in a per-UI
+arena, reused when capacity suffices; they remain valid through detach and end at
+UI destruction. The warmed idle frame path performs no heap allocations.
+
+Focused binding tests cover all numeric kinds, extreme64-bit text, every property,
+nested/array paths, `42 / 100`, actual slider/toggle writeback plus changed queries,
+readonly fields, schema/metadata replacement, warning-once errors, source despawn,
+real cooked locale publication, and1000 idle bindings within0.2ms in Dev.
