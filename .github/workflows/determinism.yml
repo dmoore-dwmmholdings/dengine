@@ -103,7 +103,8 @@ jobs:
 
       - name: Build the scenarios
         shell: bash
-        run: cmake --build --preset "${PRESET}" --target de_determinism_tests
+        # Ninja reports every independent compiler failure in one run, with a failing exit.
+        run: cmake --build --preset "${PRESET}" --target de_determinism_tests -- -k 0
 
       - name: ctest -L determinism
         shell: bash
