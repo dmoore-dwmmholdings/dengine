@@ -34,6 +34,22 @@ static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bo
     }
     return NULL;
 }
+void de_ui__style_tween_sample(de_ui_style_system *state, de_entity entity, de_component component,
+                               u32 offset, f32 value) {
+    de_ui_style_cache *cache = cached(state, entity, false);
+    if (!cache)
+        return;
+    u8 *dst = NULL;
+    if (component.id == state->ui->ids.style.id && offset + sizeof value <= sizeof(DeUiStyle))
+        dst = (u8 *)&cache->applied_style + offset;
+    else if (component.id == state->ui->ids.node.id && offset + sizeof value <= sizeof(DeUiNode))
+        dst = (u8 *)&cache->applied_node + offset;
+    else if (component.id == state->ui->ids.text.id && offset >= offsetof(DeUiText, style) &&
+             offset + sizeof value <= offsetof(DeUiText, style) + sizeof(de_text_style))
+        dst = (u8 *)&cache->applied_text + offset - offsetof(DeUiText, style);
+    if (dst)
+        memcpy(dst, &value, sizeof value);
+}
 static u32 property_size(const de_ui_style_property *p) {
     return p->kind == DE_UI_PROP_COLOR || p->kind == DE_UI_PROP_VEC4 ? sizeof(de_vec4)
            : p->kind == DE_UI_PROP_LENGTH                            ? sizeof(de_ui_len)
@@ -123,7 +139,7 @@ static void transition(de_ui_style_system *state, de_entity entity, const de_ui_
             continue;
         u8 *dst = de_entity_get(ui->world, entity, component);
         memcpy(dst + base + sub, &a, sizeof a);
-        (void)de_ui__tween_field(state, entity, component, base + sub, b, seconds, easing);
+        (void)de_ui__tween_field(state, entity, component, base + sub, b, seconds, easing, true);
     }
 }
 static void resolve(de_ui_style_system *state, de_entity entity) {
@@ -163,6 +179,12 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     if (cache->initialized && cache->class_name.hash == current_node->style_class.hash &&
         cache->widget == type && cache->state == bits && cache->revision == state->revision)
         return;
+    /* A restyle replaces prior automatic motion, including properties that no longer have
+     * a winning rule or now have zero duration. Explicit API tweens keep their ownership. */
+    for (u32 t = 0; state->active_tweens && t < DE_UI_STYLE_TWEENS; ++t)
+        if (state->tweens[t].active && state->tweens[t].stylesheet &&
+            state->tweens[t].entity.bits == entity.bits)
+            state->tweens[t].active = false;
     ++state->entities_restyled;
     DeUiNode node = *current_node;
     DeUiStyle style = {.opacity = 1, .text_color = {1, 1, 1, 1}};

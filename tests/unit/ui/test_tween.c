@@ -57,4 +57,41 @@ TEST_F(ui_tween, interrupted_state_transition_restores_authored_unset_property, 
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
     style_step(f, .06f);
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, 1, .00001f);
+    for (u32 i = 0; i < 3; ++i) {
+        ((DeUiInteractionState *)de_entity_get(f->world, e, f->ui->ids.state))->hovered = true;
+        style_step(f, .06f);
+        EXPECT_FLOAT_EQ(style_get(f, e).opacity, .5f, .00001f);
+        ((DeUiInteractionState *)de_entity_get(f->world, e, f->ui->ids.state))->hovered = false;
+        style_step(f, .06f);
+        EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
+        style_step(f, .06f);
+        EXPECT_FLOAT_EQ(style_get(f, e).opacity, 1, .00001f);
+    }
+}
+TEST_F(ui_tween, restyle_cancels_motion_for_equal_target_and_zero_duration, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.5\ntransition=0.12\n"
+                                   "[style.\"button:hover\"]\nopacity=0"),
+              DE_OK);
+    de_entity e = style_button(f, (de_entity){0}, NULL);
+    style_step(f, 0);
+    ((DeUiInteractionState *)de_entity_add(f->world, e, f->ui->ids.state))->hovered = true;
+    style_step(f, .06f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .25f, .00001f);
+    ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.25\ntransition=0.12"), DE_OK);
+    ((DeUiInteractionState *)de_entity_get(f->world, e, f->ui->ids.state))->hovered = false;
+    style_step(f, .06f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .25f, .00001f);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).active_tweens, 0u);
+    style_step(f, .12f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .25f, .00001f);
+    ((DeUiInteractionState *)de_entity_get(f->world, e, f->ui->ids.state))->hovered = true;
+    style_step(f, .06f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .125f, .00001f);
+    ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.75\ntransition=0"), DE_OK);
+    ((DeUiInteractionState *)de_entity_get(f->world, e, f->ui->ids.state))->hovered = false;
+    style_step(f, .06f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).active_tweens, 0u);
+    style_step(f, .12f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
 }
