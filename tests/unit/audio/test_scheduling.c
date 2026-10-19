@@ -33,8 +33,8 @@ static void expect_clicks(const f32 *cap, u32 frames, const u64 *at, u32 n, f32 
         for (u32 k = 0; k < n; ++k)
             want = want || at[k] == i;
         if (want) {
-            EXPECT_FLOAT_EQ(cap[i * CH], v, 0.0);
-            EXPECT_FLOAT_EQ(cap[i * CH + 1], v, 0.0);
+            EXPECT_FLOAT_EQ(cap[i * CH], v * 0.70710678118f, 0.0);
+            EXPECT_FLOAT_EQ(cap[i * CH + 1], v * 0.70710678118f, 0.0);
             ++seen;
         } else if (cap[i * CH] != 0.0f || cap[i * CH + 1] != 0.0f) {
             EXPECT_EQ(i, (u32)UINT32_MAX); /* reports the unexpected frame */
@@ -102,11 +102,11 @@ TEST(audio_sched, start_stop_sample_exact) {
     for (u32 i = 0; i < frames; ++i) {
         f32 want = 0.0f;
         if (i >= 1000 && i < 1777)
-            want += 0.25f;
+            want += 0.25f * 0.70710678118f;
         if (i == 300)
-            want += 0.5f;
+            want += 0.5f * 0.70710678118f;
         if (i >= 2000 && i < 2048)
-            want += 0.125f;
+            want += 0.125f * 0.70710678118f;
         if (cap[i * CH] != want || cap[i * CH + 1] != want) {
             EXPECT_EQ(i, (u32)UINT32_MAX);
             break;
@@ -198,7 +198,7 @@ TEST(audio_sched, late_and_immediate_commands) {
     de__audio_null_pump(a, 2048, cap);
     /* Frames 812..1023 were rendered before the play: silence; the voice starts at 1024. */
     for (u32 i = 0; i < 2048; ++i) {
-        const f32 want = clock0 + i >= 1024 ? 1.0f : 0.0f;
+        const f32 want = clock0 + i >= 1024 ? 0.70710678118f : 0.0f;
         if (cap[i * CH] != want) {
             EXPECT_EQ(i, (u32)UINT32_MAX);
             break;
@@ -238,7 +238,7 @@ TEST(audio_sched, loop_restarts_on_the_next_sample) {
     f32 *cap = capture_alloc(1000);
     de__audio_null_pump(a, 1000, cap);
     for (u32 i = 0; i < 1000; ++i) {
-        const f32 want = i < 50 ? 0.0f : (f32)((i - 50) % 100 + 1);
+        const f32 want = i < 50 ? 0.0f : (f32)((i - 50) % 100 + 1) * 0.70710678118f;
         if (cap[i * CH] != want) {
             EXPECT_EQ(i, (u32)UINT32_MAX);
             break;

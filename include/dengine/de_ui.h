@@ -6,6 +6,7 @@
 #include "de_ecs.h"
 #include "de_asset.h"
 #include "de_text.h"
+#include "de_platform.h"
 DE_EXTERN_C_BEGIN
 
 typedef struct de_ui de_ui;
@@ -17,8 +18,11 @@ typedef struct de_ui_desc {
     de_renderer *renderer;
     de_text_system *text;
     de_input *input;
-    f32 reference_height; /* UI scale reference, e.g. 1080 */
-    bool pixel_art;       /* integer scaling + bitmap fonts */
+    f32 reference_height;    /* UI scale reference, e.g. 1080 */
+    bool pixel_art;          /* integer scaling + bitmap fonts */
+    de_window window;        /**< Optional window for output size and safe insets. */
+    u32 max_nodes;           /**< Zero:65536 retained nodes. Capacity is allocated at create. */
+    de_asset_system *assets; /**< Optional stylesheet and font/texture asset source. */
 } de_ui_desc;
 
 DE_API de_result de_ui_create(const de_ui_desc *desc, de_ui **out);
@@ -46,8 +50,51 @@ typedef enum de_ui_align {
     DE_UI_ALIGN_END,
     DE_UI_ALIGN_STRETCH,
     DE_UI_ALIGN_SPACE_BETWEEN,
-    DE_UI_ALIGN_SPACE_AROUND
+    DE_UI_ALIGN_SPACE_AROUND,
+    DE_UI_ALIGN_AUTO /**< align_self only: inherit parent's align_items. */
 } de_ui_align;
+
+/** Widget tags drive stylesheet type selectors; widgets set the corresponding tag. */
+typedef enum de_ui_widget_type {
+    DE_UI_WIDGET_PANEL,
+    DE_UI_WIDGET_BUTTON,
+    DE_UI_WIDGET_TOGGLE,
+    DE_UI_WIDGET_SLIDER,
+    DE_UI_WIDGET_TEXT,
+    DE_UI_WIDGET_IMAGE,
+    DE_UI_WIDGET_PROGRESS,
+    DE_UI_WIDGET_INPUT,
+    DE_UI_WIDGET_SCROLL,
+    DE_UI_WIDGET_DROPDOWN,
+    DE_UI_WIDGET_TOOLTIP,
+    DE_UI_WIDGET_LIST,
+    DE_UI_WIDGET_TABS,
+    DE_UI_WIDGET_TREE,
+    DE_UI_WIDGET_CANVAS
+} de_ui_widget_type;
+typedef struct DeUiWidgetType {
+    de_ui_widget_type type;
+} DeUiWidgetType;
+typedef enum de_ui_easing {
+    DE_UI_EASE_LINEAR,
+    DE_UI_EASE_QUAD_IN,
+    DE_UI_EASE_QUAD_OUT,
+    DE_UI_EASE_QUAD_IN_OUT,
+    DE_UI_EASE_CUBIC_IN,
+    DE_UI_EASE_CUBIC_OUT,
+    DE_UI_EASE_CUBIC_IN_OUT,
+    DE_UI_EASE_BACK_OUT,
+    DE_UI_EASE_ELASTIC_OUT
+} de_ui_easing;
+/** Handle for a registered ui_style asset. It can be passed to de_ui_load_stylesheet.
+ * Loading/refcounting remains the caller's responsibility, as with ordinary blob assets. */
+DE_API de_blob de_ui_stylesheet(de_ui *ui, de_asset_id id);
+/** Switch variable overlays; NULL or empty selects the base variables. */
+DE_API de_result de_ui_set_theme(de_ui *ui, const char *name);
+typedef struct de_ui_style_stats {
+    u32 entities_restyled, active_tweens;
+} de_ui_style_stats;
+DE_API de_ui_style_stats de_ui_get_style_stats(const de_ui *ui);
 
 typedef struct DeUiNode {
     de_ui_display display;
@@ -62,6 +109,51 @@ typedef struct DeUiNode {
     de_vec4 computed_rect; /* output: x, y, w, h in screen pixels */
 } DeUiNode;
 
+/** Anchors are normalized parent-content coordinates; offsets are reference pixels. */
+typedef struct DeUiAnchor {
+    de_vec2 anchor_min, anchor_max;
+    de_vec2 offset_min, offset_max;
+} DeUiAnchor;
+typedef struct DeUiGrid {
+    de_ui_len columns[8];
+    u32 column_count;
+    de_ui_len rows[8];
+    u32 row_count;
+    f32 column_gap, row_gap;
+} DeUiGrid;
+typedef struct DeUiGridItem {
+    u8 column, row, column_span, row_span;
+} DeUiGridItem;
+typedef enum de_ui_popup_placement {
+    DE_UI_POPUP_BOTTOM,
+    DE_UI_POPUP_TOP,
+    DE_UI_POPUP_LEFT,
+    DE_UI_POPUP_RIGHT,
+    DE_UI_POPUP_OVERLAY
+} de_ui_popup_placement;
+typedef struct DeUiPopup {
+    de_entity anchor;
+    u8 placement;
+    bool modal;
+} DeUiPopup;
+typedef struct DeUiStyle {
+    de_vec4 background, border_color;
+    f32 border_width, corner_radius, opacity;
+    de_vec4 text_color;
+    de_texture background_image;
+    de_vec4 nine_slice; /**< Left,top,right,bottom source pixel borders; zero = plain image. */
+} DeUiStyle;
+typedef struct DeUiInteractionState {
+    bool hovered, pressed, focused, disabled;
+} DeUiInteractionState;
+/** Override physical output dimensions and safe insets (also usable without a window/GPU). */
+DE_API void de_ui_set_viewport(de_ui *ui, u32 width, u32 height, de_window_insets safe);
+typedef struct de_ui_layout_stats {
+    u32 nodes_laid_out, nodes_measured, dirty_nodes, total_nodes;
+    f32 scale;
+} de_ui_layout_stats;
+DE_API de_ui_layout_stats de_ui_get_layout_stats(const de_ui *ui);
+
 typedef struct DeUiImage {
     de_texture texture;
     de_vec4 uv_rect;
@@ -73,6 +165,7 @@ typedef struct DeUiText {
     de_str literal;
     de_text_style style;
     de_text_align align;
+    char text[512]; /**< Authored serialized text; literal is an optional runtime override. */
 } DeUiText;
 typedef struct DeUiButton {
     bool disabled;
@@ -127,6 +220,8 @@ typedef struct de_ui_event {
 
 DE_API void de_ui_set_focus(de_ui *ui, de_entity e);
 DE_API de_entity de_ui_focused(const de_ui *ui);
+/** Animate a reflected f32 field; accepts de_ui_easing values. Replacing the same field
+ * begins from its current value. Invalid arguments set the error context. Main thread. */
 DE_API void de_ui_tween(de_ui *ui, de_entity e, const char *property, f32 to, f32 seconds,
                         u32 easing);
 

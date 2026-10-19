@@ -140,10 +140,15 @@ typedef struct de__view_frame {
      * `color` into `output` when they differ.
      */
     de_rg_resource color;
+    de_rg_resource
+        initial_color; /**< Original internal/output target before debug/post replacements. */
     de_gpu_format color_format;
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
     bool probe_capture; /**< Fixed radiance capture: no temporal effects or probes. */
+    const de_pixel_art_settings *pixel_art;
+    de_vec2 pixel_residual;
+    u32 output_width, output_height;
 } de__view_frame;
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */
@@ -270,6 +275,8 @@ struct de__lighting *de__views_lighting(const de_renderer *r);
 struct de__forward *de__views_forward(const de_renderer *r);
 /** DENG-239: true when `v` is a live view of `r` (takes the views lock). Any thread. */
 bool de__view_valid(const de_renderer *r, de_view v);
+
+void de__views_prepare_pixels(de_renderer *r);
 
 DE_EXTERN_C_END
 

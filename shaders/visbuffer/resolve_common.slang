@@ -153,6 +153,12 @@ public float3 de_resolve_world_pos(DeResolvePoint r)
 /// UV set `set` (0 or 1) at the point, and its one-pixel differences in x and y.
 public float2 de_resolve_uv(DeResolvePoint r, uint set, out float2 dx, out float2 dy)
 {
+    if((r.inst.flags&DE_GPU_INSTANCE_SPRITE)!=0) {
+        float3 a=r.object_pos[0],b=r.object_pos[1],c=r.object_pos[2];
+        float2 u=float2(a.x,1-a.y),v=float2(b.x,1-b.y),w=float2(c.x,1-c.y);
+        dx=de_resolve_lerp2(r.bary_dx,u,v,w);dy=de_resolve_lerp2(r.bary_dy,u,v,w);
+        return de_resolve_lerp2(r.bary,u,v,w);
+    }
     float2 t[3];
     for (uint k = 0; k < 3u; ++k)
         t[k] = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex[k]) : de_vis_mesh_uv1(r.mesh, r.vertex[k]);
@@ -212,7 +218,13 @@ public float2 de_resolve_motion(DeResolvePoint r, DeSceneConstants sc)
 {
     float3 p = de_resolve_object_pos(r);
     float4 now = de_vis_clip(sc.view_proj, de_vis_transform_point(r.inst.transform, p));
-    float4 then = de_vis_clip(sc.prev_view_proj, de_vis_transform_point(r.inst.prev_transform, p));
+    float3 previous=p;
+    if((r.inst.flags&DE_GPU_INSTANCE_SKINNED)!=0 && r.inst.reserved1!=0) {
+        DeBytes b=de_bytes(r.inst.reserved1);
+        previous=de_resolve_lerp3(r,asfloat(b.load3(r.vertex.x*12)),
+            asfloat(b.load3(r.vertex.y*12)),asfloat(b.load3(r.vertex.z*12)));
+    }
+    float4 then = de_vis_clip(sc.prev_view_proj, de_vis_transform_point(r.inst.prev_transform, previous));
     if (!(now.w > 0.0) || !(then.w > 0.0))
         return float2(0.0, 0.0);
     return now.xy / now.w - then.xy / then.w;

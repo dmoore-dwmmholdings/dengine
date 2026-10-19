@@ -493,3 +493,28 @@ endif()
 if(TARGET de_render)
     set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
 endif()
+
+# S19 sprites share ordinary instance slots and meshlet raster paths.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE sprite/sprite.c sprite/sprite_extract.c)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE sprite/sprite_sort.c)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE skin/skinning.c)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/sprite_as.c)
+endif()
+
+# DENG-198 pixel-art view upscale and camera grid math.
+if(TARGET de_render)
+target_sources(de_render PRIVATE pixel/pixel_art.c)
+target_sources(de_render PRIVATE pixel/palette_dither.c)
+target_sources(de_render PRIVATE pixel/pixel_snap.c)
+target_sources(de_render PRIVATE pixel/palette_runtime.c)
+endif()

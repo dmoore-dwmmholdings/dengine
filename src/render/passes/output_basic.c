@@ -132,7 +132,7 @@ de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *ar
 /* The view stage. */
 static void output_stage(de__view_frame *vf, void *user) {
     de__output_basic *ob = (de__output_basic *)user;
-    if (!de__output_basic_enabled(ob) || vf->color.id != vf->output.id)
+    if (!de__output_basic_enabled(ob) || vf->color.id != vf->initial_color.id)
         return; /* off, or a debug view replaced the colour */
     const de__lighting_context *lc =
         de__lighting_frame_context(ob->lighting, vf->view, vf->graph, vf->frame_index);

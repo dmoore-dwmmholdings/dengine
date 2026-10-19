@@ -109,6 +109,8 @@ enum {
     DE__GS_INSTANCE_LIVE = 1u,
     DE__GS_INSTANCE_CAST_SHADOWS = 2u,
     DE__GS_INSTANCE_VISIBLE_IN_RT = 4u,
+    DE__GS_INSTANCE_SKINNED = 16u,
+    DE__GS_INSTANCE_SPRITE = 32u,
     DE__GS_INSTANCE_HAS_BOUNDS = 8u
 };
 /** DeGpuMesh.flags */
@@ -392,6 +394,7 @@ typedef struct de__gpu_scene_assets {
     const struct de_render_material *(*material)(void *user, de_material m);
     /** The sampled bindless index of `t`, or DE_GPU_BINDLESS_INVALID while it is not loaded. */
     u32 (*texture_bindless)(void *user, de_texture t);
+    const struct de_render_texture *(*texture_record)(void *user, de_texture t);
     void *user;
     /** DENG-302, optional: the default material of submesh `submesh` of READY mesh `mesh` (an
      * instance's empty material slot takes it); invalid for none. NULL: empty slots stay empty
@@ -401,6 +404,7 @@ typedef struct de__gpu_scene_assets {
 
 /** de__gpu_scene_create settings. `(desc){0}` with a device is valid. */
 typedef struct de__gpu_scene_desc {
+    de_renderer *renderer; /**< optional skinning owner; NULL in standalone scenes */
     de_gpu_device *device;
     const de_allocator *allocator; /**< NULL = the heap */
     /** Records come from this asset system (de_render_mesh_get, ...), unless `resolver` is set.
@@ -511,6 +515,10 @@ void de__gpu_scene_destroy(de__gpu_scene *gs);
  * @return DE_OK; DE_ERR_OUT_OF_MEMORY (a table could not grow: the changes it missed stay marked).
  */
 de_result de__gpu_scene_update(de__gpu_scene *gs, const struct de__render_world_frame *f);
+bool de__gpu_scene_sprite_slot(const de__gpu_scene *gs, u32 mesh_slot, u32 *out_instance);
+const struct de__render_world_frame *de__gpu_scene_world(const de__gpu_scene *gs);
+const struct de_render_texture *de__gpu_scene_texture_record(const de__gpu_scene *gs,
+                                                             de_texture texture);
 /**
  * Sets the scene constants of view slot `slot` for this frame (call it every frame for every view
  * that renders, after update()). The previous view-projection is the one set in the frame before
@@ -611,6 +619,10 @@ const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 
 /** Stable fingerprint of actual source records; excludes views/frame counters and previous
  * transforms. */
 u64 de__gpu_scene_source_signature(const de__gpu_scene *);
+/** Per-view pixel instance snapshot; NULL buffer restores the canonical frame table. */
+void de__gpu_scene_view_instances(de__gpu_scene *, de_gpu_buffer);
+void de__gpu_scene_pack_frame_instance(const de__gpu_scene *, const struct de__render_world_frame *,
+                                       u32, de__gs_instance *);
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_SCENE_GPU_SCENE_H */

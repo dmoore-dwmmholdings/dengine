@@ -187,8 +187,7 @@ static void null_close(de__audio_stream *base) {
 
 const de__audio_backend_vtbl de__audio_backend_null = {
     "null",    DE_AUDIO_NULL, null_create, null_destroy, null_enumerate,
-    null_open, null_start,    null_stop,   null_close,
-};
+    null_open, null_start,    null_stop,   null_close,   NULL};
 
 /* ---- Manual pump ----------------------------------------------------------------------------- */
 

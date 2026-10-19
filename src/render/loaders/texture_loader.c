@@ -68,12 +68,24 @@ de_result de__texture_load(de_asset_load_ctx *ctx) {
         return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "not a cooked texture: %s", why);
     }
 
-    de_render_texture *t = (de_render_texture *)DE_ALLOC(
-        u->alloc, sizeof *t, DE_ALIGNOF(de_render_texture), DE_MEM_RENDER);
-    if (t == NULL)
-        return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "no memory for the texture");
-    memset(t, 0, sizeof *t);
-    t->block_size_ = sizeof *t;
+    de_cooked_sprite_proxy proxy;
+    bool has_proxy =
+        size >= DE_SPRITE_PROXY_BYTES && memcmp(p + size - DE_SPRITE_PROXY_BYTES, "PXRT", 4) == 0;
+    if (has_proxy &&
+        !de_sprite_proxy_parse(p + size - DE_SPRITE_PROXY_BYTES, DE_SPRITE_PROXY_BYTES, &proxy))
+        return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "invalid sprite proxy trailer");
+    size_t record_size = sizeof(de_render_texture) + (has_proxy ? sizeof proxy : 0);
+    de_render_texture *t =
+        DE_ALLOC(u->alloc, record_size, DE_ALIGNOF(de_render_texture), DE_MEM_RENDER);
+    if (!t)
+        return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "no memory for texture");
+    memset(t, 0, record_size);
+    t->block_size_ = record_size;
+    if (has_proxy) {
+        de_cooked_sprite_proxy *stored = (de_cooked_sprite_proxy *)(void *)(t + 1);
+        *stored = proxy;
+        t->sprite_proxy = stored;
+    }
     t->dim = tv.dim;
     t->format = tv.format;
     t->width = tv.width;

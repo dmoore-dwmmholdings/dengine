@@ -132,3 +132,8 @@ de_prefab de_model_prefab(de_asset_system *s, de_model m) {
     }
     return (de_prefab){0};
 }
+
+/* DENG-264 */
+de_string_table de_asset_string_table(de_asset_system *s, de_asset_id id) {
+    return (de_string_table){de__asset_handle_of(s, id, "string_table")};
+}

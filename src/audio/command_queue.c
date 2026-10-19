@@ -68,7 +68,8 @@ void de__audio_slot_release(de_audio *a, u32 slot) {
 }
 
 u32 de__audio_collect(de_audio *a) {
-    u32 n = 0;
+    de__stream_service(a);
+    u32 n = de__voice_collect_tails(a);
     u32 slot;
     while (de_mpmc_try_pop(&a->retired, &slot)) {
         /* The audio thread retired the slot (generation already bumped) and no longer touches
@@ -160,6 +161,16 @@ void de__audio_cmd_apply(de_audio *a, const de__audio_cmd *cmd, u64 sample) {
         break;
     case DE__ACMD_FN:
         cmd->u.fn.fn(a, cmd->u.fn.user, cmd->u.fn.arg, sample);
+        break;
+    case DE__ACMD_VOLUME:
+    case DE__ACMD_PITCH:
+    case DE__ACMD_POSITION:
+        de__voice_on_control(a, cmd);
+        break;
+    case DE__ACMD_BUS_CREATE:
+    case DE__ACMD_BUS_VOLUME:
+    case DE__ACMD_BUS_MUTE:
+        de__bus_on_control(a, cmd);
         break;
     default:
         break;

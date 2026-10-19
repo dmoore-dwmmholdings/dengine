@@ -1,0 +1,8 @@
+info face="Test" size=8
+common lineHeight=8 base=7 scaleW=16 scaleH=8 pages=1
+page id=0 file="pixel.png"
+chars count=2
+char id=66 x=8 y=0 width=8 height=8 xoffset=0 yoffset=0 xadvance=7 page=0 chnl=15
+char id=65 x=0 y=0 width=8 height=8 xoffset=0 yoffset=0 xadvance=8 page=0 chnl=15
+kernings count=1
+kerning first=65 second=66 amount=-1

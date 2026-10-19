@@ -33,6 +33,7 @@
 #include "render/passes/sss/sss.h"
 #include "render/renderer_internal.h"
 #include "render/world/render_world.h"
+#include "render/pixel/pixel_internal.h"
 
 #include "gpu/gpu_backend.h" /* de__gpu_get_texture: size, format and usage of a target */
 
@@ -49,7 +50,8 @@ typedef struct view_main {
     de_gpu_texture target;
     f32 viewport[4];
     i32 order;
-    bool pixel_art; /**< stored; S19 renders it */
+    bool pixel_art;
+    de_pixel_art_settings pixel;
     char name[DE__VIEW_NAME_MAX];
     bool capture;
     de__rw_view capture_camera;
@@ -125,6 +127,7 @@ typedef struct de__views {
     de_view last_order[DE__VIEW_MAX];
     u32 last_order_count;
     de__composite *composite;
+    de__pixel *pixel;
     u32 out_w, out_h;
     de_gpu_format out_format;
     /* The view whose graph is being built (de_view_color, de_view_size). */
@@ -193,6 +196,11 @@ static de_render_settings effective_settings(const de_renderer *r, const view_ma
     de_render_settings s = m->has_settings ? m->settings : *renderer;
     if (m->render_scale > 0.0f)
         s.render_scale = m->render_scale;
+    if (m->pixel_art) {
+        s.render_scale = 1;
+        s.dynamic_res_target_ms = 0;
+        s.upscaler = DE_UPSCALE_NONE;
+    }
     if (renderer->tier == DE_TIER_BASE)
         s.tier = DE_TIER_BASE;
     de__render_settings_clamp(&r->caps, &r->report, &s);
@@ -297,6 +305,12 @@ static de_view create_locked(de__views *vs, const de_view_desc *desc, const f32 
         memcpy(m->viewport, vp, sizeof m->viewport);
         m->order = desc->order;
         m->pixel_art = desc->pixel_art;
+        m->pixel = (de_pixel_art_settings){.internal_width = 480,
+                                           .internal_height = 270,
+                                           .integer_scale_only = true,
+                                           .snap_camera = true,
+                                           .smooth_subpixel_scroll = true,
+                                           .letterbox_color = {0, 0, 0, 1}};
         if (desc->name != NULL && desc->name[0] != '\0')
             snprintf(m->name, sizeof m->name, "%s", desc->name);
         else
@@ -393,6 +407,29 @@ void de_view_set_render_scale(de_renderer *r, de_view v, f32 scale) {
     view_main *m = main_of(vs, v);
     if (m != NULL)
         m->render_scale = scale > 0.0f ? scale : 0.0f; /* NaN and <= 0: the settings' */
+    de_mutex_unlock(&vs->lock);
+}
+
+void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_settings *settings) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return;
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m) {
+        m->pixel_art = settings != NULL;
+        if (settings) {
+            m->pixel = *settings;
+            if (!m->pixel.internal_width)
+                m->pixel.internal_width = 480;
+            if (!m->pixel.internal_height)
+                m->pixel.internal_height = 270;
+            if (m->pixel.internal_width > 16382)
+                m->pixel.internal_width = 16382;
+            if (m->pixel.internal_height > 16382)
+                m->pixel.internal_height = 16382;
+        }
+    }
     de_mutex_unlock(&vs->lock);
 }
 
@@ -709,7 +746,9 @@ static bool ensure_objects(de_renderer *r, view_rs *s) {
             return false;
         }
     }
-    if (DE_HANDLE_VALID(s->output) && s->out_w == s->w && s->out_h == s->h)
+    u32 output_w = s->copy.pixel_art ? s->vp[2] : s->w,
+        output_h = s->copy.pixel_art ? s->vp[3] : s->h;
+    if (DE_HANDLE_VALID(s->output) && s->out_w == output_w && s->out_h == output_h)
         return true;
     if (DE_HANDLE_VALID(s->output))
         de_gpu_texture_destroy(r->dev, s->output); /* deferred until the GPU is done with it */
@@ -717,14 +756,14 @@ static bool ensure_objects(de_renderer *r, view_rs *s) {
     snprintf(name, sizeof name, "view:%s output", s->copy.name);
     s->output = de_gpu_texture_create(
         r->dev, &(de_gpu_texture_desc){.format = DE__VIEW_OUTPUT_FORMAT,
-                                       .width = s->w,
-                                       .height = s->h,
+                                       .width = output_w,
+                                       .height = output_h,
                                        .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
                                                 DE_USAGE_COPY_SRC,
                                        .name = name});
     s->out_access = DE_ACCESS_NONE;
-    s->out_w = s->w;
-    s->out_h = s->h;
+    s->out_w = output_w;
+    s->out_h = output_h;
     if (!DE_HANDLE_VALID(s->output)) {
         s->out_w = s->out_h = 0;
         view_failed(r, s, "output texture");
@@ -774,6 +813,11 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     viewport_px(s->copy.viewport, tw, th, s->vp);
     s->w = round_px((f32)s->vp[2] * s->eff.render_scale, 1u, 16384u);
     s->h = round_px((f32)s->vp[3] * s->eff.render_scale, 1u, 16384u);
+    if (s->copy.pixel_art) {
+        u32 border = s->copy.pixel.smooth_subpixel_scroll ? 2 : 0;
+        s->w = s->copy.pixel.internal_width + border;
+        s->h = s->copy.pixel.internal_height + border;
+    }
     const bool full = s->vp[0] == 0 && s->vp[1] == 0 && s->vp[2] == tw && s->vp[3] == th;
     if (rtt && !de__composite_ready(vs->composite)) {
         if (!s->failed_logged)
@@ -803,9 +847,38 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.frame_index = frame_index;
     vf.width = s->w;
     vf.height = s->h;
+    vf.output_width = s->out_w;
+    vf.output_height = s->out_h;
+    de__rw_view snapped;
+    if (s->copy.pixel_art) {
+        vf.pixel_art = &s->copy.pixel;
+        snapped = *vf.camera;
+        if (s->copy.pixel.snap_camera && snapped.camera.projection == DE_PROJ_ORTHOGRAPHIC) {
+            de_dvec3 position = snapped.has_position
+                                    ? snapped.position
+                                    : (de_dvec3){world->origin.x + snapped.offset.x,
+                                                 world->origin.y + snapped.offset.y,
+                                                 world->origin.z + snapped.offset.z};
+            f64 texel = (snapped.camera.ortho_height > 0 ? snapped.camera.ortho_height : 10) /
+                        s->copy.pixel.internal_height;
+            position = de__pixel_snap(position, r->plane_2d, texel, &vf.pixel_residual);
+            snapped.offset = de_dv3_relative(position, world->origin);
+            snapped.transform.m[9] = snapped.offset.x;
+            snapped.transform.m[10] = snapped.offset.y;
+            snapped.transform.m[11] = snapped.offset.z;
+        }
+        vf.camera = &snapped;
+    }
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
     vf.layer_mask = s->copy.layer_mask; /* DENG-239 */
-    matrices(vf.camera, s->vp, &vf);
+    u32 projection_vp[4] = {0, 0, s->copy.pixel_art ? s->copy.pixel.internal_width : s->vp[2],
+                            s->copy.pixel_art ? s->copy.pixel.internal_height : s->vp[3]};
+    matrices(vf.camera, projection_vp, &vf);
+    if (s->copy.pixel_art && s->copy.pixel.smooth_subpixel_scroll) {
+        vf.proj.m[0] *= (f32)s->copy.pixel.internal_width / s->w;
+        vf.proj.m[5] *= (f32)s->copy.pixel.internal_height / s->h;
+        vf.view_proj = de_m4_mul(&vf.proj, &vf.view_matrix);
+    }
     vf.prev_view_proj = s->has_prev ? s->prev_view_proj : vf.view_proj;
     const u32 t_access = rtt ? target_access_before(vs, slot, pos) : DE_ACCESS_NONE;
     de_rg_resource target_res = {0};
@@ -816,10 +889,20 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.output = de_rg_import_texture(g, s->output, s->out_access);
     de_rg_set_name(g, vf.output, "view.output");
     vf.color = vf.output;
+    if (s->copy.pixel_art) {
+        vf.color = de_rg_create_texture(
+            g, &(de_gpu_texture_desc){.width = s->w,
+                                      .height = s->h,
+                                      .format = DE__VIEW_OUTPUT_FORMAT,
+                                      .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED,
+                                      .name = "pixel.internal"});
+    }
+    vf.initial_color = vf.color;
     vf.color_format = DE__VIEW_OUTPUT_FORMAT;
 
     /* PT retains only canonical GPU scene/TLAS declarations; unused visibility work is culled. */
     const bool path = de__pt_enabled(r, vf.settings) && !vf.probe_capture;
+    bool path_started = false;
     /* The stages and hooks, in slot, order, phase and registration order. */
     vs->building = &vf;
     for (u32 i = 0; i < vs->list_count; ++i) {
@@ -829,16 +912,19 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
              (strcmp(e->name, "gpu_scene.view") != 0 && strcmp(e->name, "vis.frame") != 0 &&
               strcmp(e->name, "RT.BuildTLAS") != 0)))
             continue;
-        if (path && e->slot >= DE__VIEW_SLOT_POST && vf.color.id == vf.output.id)
+        if (path && e->slot >= DE__VIEW_SLOT_POST && !path_started) {
             de__pt_build(&vf, r->pt);
+            path_started = true;
+        }
         if (e->hook)
             e->hook_fn(g, handle, e->user);
         else
             e->stage(&vf, e->user);
     }
-    if (path && vf.color.id == vf.output.id)
+    if (path && !path_started)
         de__pt_build(&vf, r->pt);
     vs->building = NULL;
+    de__gpu_scene_view_instances(r->gpu_scene, (de_gpu_buffer){0});
 
     if (vf.color.id != vf.output.id && DE_HANDLE_VALID(vf.color)) {
         const de__composite_item it = {.src = vf.color, .rect = {0.0f, 0.0f, (f32)s->w, (f32)s->h}};
@@ -1124,6 +1210,9 @@ de_result de__views_create(de_renderer *r) {
     de_result res = de__composite_create(r, &vs->composite);
     if (res != DE_OK)
         return res;
+    res = de__pixel_create(r, &vs->pixel);
+    if (res != DE_OK)
+        return res;
     vs->main_view = de_view_create(r, &(de_view_desc){.name = "main"});
     if (!DE_HANDLE_VALID(vs->main_view))
         return DE_FAIL_WRAP(DE_ERR_INTERNAL, "views: the main view");
@@ -1165,6 +1254,7 @@ void de__views_destroy(de_renderer *r) {
         release_now(r, vs->rs[i].graph, vs->rs[i].output);
     for (u32 i = 0; i < vs->retired_count; ++i)
         release_now(r, vs->retired[i].graph, vs->retired[i].output);
+    de__pixel_destroy(r, vs->pixel);
     de__composite_destroy(r, vs->composite);
     if (vs->stat_cap > 0) {
         DE_FREE(r->alloc, (void *)vs->stat_names, sizeof(char *) * vs->stat_cap);
@@ -1257,4 +1347,20 @@ void de__view_capture_camera(de_renderer *r, de_view view, const de__rw_view *ca
 u64 de__views_resource_drains(const de_renderer *r) {
     const de__views *vs = views_of(r);
     return vs ? vs->resource_drains : 0;
+}
+
+/* Main-thread prepare with the render thread idle; never query assets from a view stage. */
+void de__views_prepare_pixels(de_renderer *r) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return;
+    de_texture palettes[DE__VIEW_MAX];
+    u32 count = 0;
+    de_mutex_lock(&vs->lock);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i)
+        if (vs->main[i].alive && vs->main[i].pixel_art && vs->main[i].pixel.palette_lut.id)
+            palettes[count++] = vs->main[i].pixel.palette_lut;
+    de_mutex_unlock(&vs->lock);
+    for (u32 i = 0; i < count; ++i)
+        de__pixel_prepare_palette(vs->pixel, palettes[i]);
 }

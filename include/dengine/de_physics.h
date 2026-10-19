@@ -1101,8 +1101,10 @@ DE_API void de_physics2d_destroy(de_physics2d_world *p);
 /**
  * Advances the world by `dt` seconds (> 0, finite): one tick. Collision (DENG-253): broadphase,
  * narrowphase (on `tasks` when set; the result never depends on it) and persistent contact
- * manifolds. The first step creates the collision state (allocates); later steps allocate nothing.
- * An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
+ * manifolds. Dynamics (DENG-254): a sub-stepped soft-step solver (`substeps` per step) moves the
+ * dynamic and kinematic bodies, with islands, sleeping and bullets (see the 2D dynamics notes
+ * below). The first step creates the collision and solver state (allocates); later steps allocate
+ * nothing. An invalid `dt` sets DE_ERR_INVALID_ARGUMENT and does nothing.
  */
 DE_API void de_physics2d_step(de_physics2d_world *p, f32 dt);
 /**
@@ -1285,10 +1287,245 @@ typedef struct DeCharacter2D {
     bool grounded;
 } DeCharacter2D;
 
+/* ---------- 2D dynamics (DENG-254) ----------
+ * The same solver design as 3D (SPEC §13.3): soft contacts with Coulomb friction (sqrt(mu_a mu_b))
+ * and restitution (max(e_a, e_b), above 1 m/s of approach), velocities of the center of mass,
+ * `gravity_scale` taken as given (0 in a zeroed desc means no gravity), damping v *= 1/(1 + h c)
+ * per substep. Kinematic bodies move by their velocity and are never pushed. A body with
+ * DE_BODY2D_FLAG_FIXED_ROTATION never turns.
+ *
+ * Sleeping: bodies touching each other through contacts or joints form islands (static and
+ * kinematic bodies never join one). An island falls asleep when every body has
+ * DE_BODY_FLAG_ALLOW_SLEEP and has moved slower than 0.05 m/s and 0.035 rad/s (cvars
+ * physics2d.sleep.linear_threshold, physics2d.sleep.angular_threshold) for 0.5 s
+ * (physics2d.sleep.time), and no moving kinematic body touches it. Sleeping bodies keep their
+ * pose, have zero velocity and cost no solver work. The whole island wakes at the next step when
+ * an awake body or a moving kinematic body starts touching it (or a joint links it), when the user
+ * gives one of its bodies a velocity or another transform (de_body2d_set_velocity,
+ * de_body2d_set_transform), when a body of the island or a body touching it is destroyed, or with
+ * de_body2d_wake.
+ *
+ * Bullets (DE_BODY2D_FLAG_BULLET): after the solver, an awake dynamic bullet is swept from its
+ * start to its end pose against static and kinematic bodies; when it would pass into one, it is
+ * moved back to the time of impact (5 mm from the surface) and keeps its velocity, so the next
+ * step's contact stops it. Bullets are not swept against dynamic bodies. */
+
+/** Wakes a sleeping 2D body and its whole island (they move again from the next step). No effect
+ *  on an awake body or a stale handle. */
+DE_API void de_body2d_wake(de_physics2d_world *p, de_body b);
+/** true when the 2D body is asleep and no wake is pending for it; false for a stale handle. */
+DE_API bool de_body2d_is_sleeping(const de_physics2d_world *p, de_body b);
+
+/** Registers reflected 2D components, DePhysics2DWorld, physics2d.step (FixedUpdate)
+ * and physics2d.interpolate (PostUpdate, presentation only). Repeated attachment to the
+ * same world is idempotent. Stop ECS schedules before destroying the physics world.
+ * Side view maps (x,y) to (X,Z) with rotation about -Y; top-down maps to (X,Y), +Z.
+ * The depth coordinate is preserved. Entity-based joints resolve bodies by component owners. */
 DE_API void de_physics2d_attach(de_physics2d_world *p, de_world *w);
 DE_API bool de_physics2d_raycast(const de_physics2d_world *p, de_vec2 origin, de_vec2 dir,
                                  f32 max_dist, de_collision_filter filter, de_entity *hit_entity,
                                  de_vec2 *point, de_vec2 *normal);
+
+/* ---------- 2D scene queries (DENG-258) ----------
+ * Rays, shape casts, overlaps and closest points against the bodies of a 2D world (SPEC §13.3),
+ * the 2D mirror of the 3D queries (DENG-137): the same filter rule, ordering and determinism.
+ *
+ * - Filter: de_physics_query_filter (NULL = defaults; an all-zero `filter` means the body default
+ *   {DE_COLLISION_FILTER_DEFAULT_LAYER, DE_COLLISION_FILTER_DEFAULT_MASK, 0}). A body is a
+ *   candidate when it is alive, has a shape, is not `ignore_body` and passes the collision rule
+ *   with the query's filter as the other side. Triggers only with
+ *   DE_PHYSICS_QUERY_INCLUDE_TRIGGERS. Static bodies are found too.
+ * - Rays and casts: `dir` need not be unit length; `max_dist` > 0; `fraction` in [0, 1] of
+ *   max_dist; `normal` unit, facing the ray (against the cast's motion). A ray that starts inside
+ *   a solid (circle, capsule, box, polygon) hits at fraction 0 with normal -dir and point =
+ *   origin; a cast that starts overlapping a body hits it at fraction 0 the same way (point =
+ *   the start position).
+ * - One-sided chains: a ray hits a chain segment only from its front (the right side, see
+ *   de_shape2d_chain_create). A cast is stopped by a chain segment only when it moves against
+ *   the segment's normal and starts in front of it (reaching at most 5 mm behind its line, or
+ *   with its core clear of the segment on the front side, as a capsule resting on a stair edge),
+ *   so a shape passes up through a chain whose normal faces up and lands on it (one-way
+ *   platforms).
+ *   Segment shapes are two-sided. Overlaps and closest points treat chains as two-sided lines.
+ * - Ordering: the closest hit wins, ties to the lower body index, then the lower chain segment;
+ *   raycast_all keeps one hit per body (its nearest) sorted by fraction, then body index; overlap
+ *   results are in ascending body index. A full output array keeps the first entries of that
+ *   order. `sub_shape` is the chain segment index, DE_SUB_SHAPE_NONE for the other kinds.
+ * - Large worlds: origins and hit points are f64 (de_dpoint2d); shapes are tested in their own
+ *   frame or a frame at the query, offset in f64, so a query 100 km out behaves like one at the
+ *   origin.
+ * - Determinism (SPEC §5.7): de_dmath only, fixed iteration caps, results independent of the
+ *   broadphase tree. Queries never allocate.
+ * - Threading: queries only read; any number may run at once, but not during de_physics2d_step
+ *   or another write. Once the broadphase exists (the first step) queries walk its trees, so a
+ *   body moved by de_body2d_set_transform is found at its new place after the next step (or
+ *   character move); before the first step they test every body.
+ */
+
+/** An f64 point of the 2D plane (query origins and hit points; large worlds). */
+typedef struct de_dpoint2d {
+    f64 x, y;
+} de_dpoint2d;
+
+/** One 2D hit (see de_ray_hit). `fraction` is the distance along the ray or cast, or the
+ *  closest-point distance, divided by max_dist. `entity` is the body's owner. */
+typedef struct de_ray_hit2d {
+    de_entity entity;
+    de_body body;
+    de_dpoint2d point;
+    de_vec2 normal;
+    f32 fraction;
+    u32 sub_shape;
+} de_ray_hit2d;
+
+/**
+ * Closest hit of the segment origin .. origin + normalize(dir) * max_dist. Writes *hit and returns
+ * true on a hit; false (and *hit unchanged) on a miss or invalid arguments (NULL world or hit,
+ * non-finite input, zero dir, max_dist <= 0). de_physics2d_raycast above is the short form (f32
+ * origin; any output may be NULL).
+ */
+DE_API bool de_physics2d_raycast_ex(const de_physics2d_world *p, de_dpoint2d origin, de_vec2 dir,
+                                    f32 max_dist, const de_physics_query_filter *filter,
+                                    de_ray_hit2d *hit);
+/** Every body the segment hits, one hit per body (its nearest), sorted by fraction then body
+ *  index. Writes at most `max_hits` (the first of that order) and returns how many. */
+DE_API u32 de_physics2d_raycast_all(const de_physics2d_world *p, de_dpoint2d origin, de_vec2 dir,
+                                    f32 max_dist, const de_physics_query_filter *filter,
+                                    de_ray_hit2d *hits, u32 max_hits);
+/**
+ * Sweeps convex `shape` (circle, capsule, box, polygon or segment; not a chain) from `from`
+ * along normalize(dir) * max_dist without rotating, and reports the first body it touches:
+ * fraction = time of impact (conservative advancement on 2D GJK, to about 1e-5 m, never past the
+ * contact), point on the body's surface, normal facing the cast. The shape need not belong to a
+ * body.
+ */
+DE_API bool de_physics2d_shape_cast(const de_physics2d_world *p, de_shape shape,
+                                    const de_transform2d *from, de_vec2 dir, f32 max_dist,
+                                    const de_physics_query_filter *filter, de_ray_hit2d *hit);
+/**
+ * Bodies whose shape overlaps (or touches) convex `shape` placed at `at`. Writes body handles to
+ * `bodies` and owner entities to `entities` (either may be NULL), at most `max` of each, in
+ * ascending body index (the lowest indices when there are more). Returns how many it wrote.
+ */
+DE_API u32 de_physics2d_overlap(const de_physics2d_world *p, de_shape shape,
+                                const de_transform2d *at, const de_physics_query_filter *filter,
+                                de_body *bodies, de_entity *entities, u32 max);
+/** Bodies whose shape (not only its box) overlaps or touches the box `box` (plane coordinates);
+ *  output as de_physics2d_overlap. An empty or non-finite box finds nothing. */
+DE_API u32 de_physics2d_overlap_aabb(const de_physics2d_world *p, de_aabb2d box,
+                                     const de_physics_query_filter *filter, de_body *bodies,
+                                     de_entity *entities, u32 max);
+/**
+ * The point of any body's shape (solids: inside counts) closest to `point`, within `max_dist`
+ * (>= 0). On a hit: `point` = that closest point, `fraction` = distance / max_dist (0 when
+ * max_dist is 0), `normal` = unit direction from the closest point toward `point` (zero when
+ * `point` is inside a solid; a segment's own normal when `point` lies on it). Ties: lower body
+ * index, then lower chain segment.
+ */
+DE_API bool de_physics2d_closest_point(const de_physics2d_world *p, de_dpoint2d point, f32 max_dist,
+                                       const de_physics_query_filter *filter, de_ray_hit2d *hit);
+
+/* ---------- 2D character controller (DENG-258) ----------
+ * A kinematic character controller in the plane (SPEC §13.3, §13.1), the 2D mirror of the 3D
+ * capsule controller (DENG-221). Each character is a kinematic body with fixed rotation and an
+ * upright capsule or box (the "proxy"); the controller uses only the 2D queries, the 2D
+ * narrowphase and the body API.
+ *
+ * - de_character2d_move() runs once per tick, before de_physics2d_step(). It depenetrates the
+ *   proxy from static and kinematic bodies, applies the intent, collides and slides (shape casts,
+ *   at most 4), climbs steps, snaps to the ground and follows moving platforms, then sets the
+ *   proxy's velocity so that the next step's kinematic integration (DENG-254) carries it to the
+ *   returned pose. Without a step in between (tests, tools), set the proxy to that pose with
+ *   de_body2d_set_transform.
+ * - Size: DeCharacter2D.size is (width, height) of the proxy, read at create only. Capsule:
+ *   radius width / 2, total height `height` (>= width). Box: width x height. Position = the
+ *   proxy's center. The proxy never rotates.
+ * - Up is plane +y. With gravity.y < 0 (side view) the controller walks: `desired_velocity.x` is
+ *   the walking speed (applied as given; the game owns acceleration and air control), a positive
+ *   `desired_velocity.y` jumps when grounded, and while airborne the vertical speed integrates
+ *   gravity.y. With gravity.y >= 0 (top-down, zero gravity) it moves freely: both components are
+ *   applied, there is no ground (grounded stays false), and no steps or snapping.
+ * - Outputs: `velocity` (the character's own displacement over dt, without depenetration and
+ *   platform carry; its y is the vertical speed carried into the next airborne tick) and
+ *   `grounded` (also an input: snapping and steps run only when grounded the tick before).
+ * - Slopes: a surface is walkable when normal.y >= cos(max_slope_rad); an edge under the lower
+ *   half counts when the face just inside it is walkable (stair noses). Steeper surfaces are
+ *   walls for walking and the character slides down them while falling.
+ * - Steps up to `step_height` (up, forward, down onto a supported surface); a skin of
+ *   DE_CHARACTER2D_SKIN_WIDTH is kept to every surface.
+ * - One-way platforms: chains facing up (see the 2D queries): jumps pass up through them, falls
+ *   land on them.
+ * - Moving platforms: standing on a kinematic or dynamic body carries the character with that
+ *   body's velocity and rotation over the step.
+ * - Dynamic bodies block the character (it can stand on them) but are not pushed by it in 2D v1;
+ *   the solver pushes them out of the proxy.
+ * - A DeCharacter2D field that is 0 takes its DE_CHARACTER2D_DEFAULT_* value.
+ * - Determinism (SPEC §5.7): de_dmath only, fixed caps, query results in (fraction, body index)
+ *   order. No allocation per move.
+ */
+
+#define DE_CHARACTER2D_DEFAULT_WIDTH         0.6f
+#define DE_CHARACTER2D_DEFAULT_HEIGHT        1.8f
+#define DE_CHARACTER2D_DEFAULT_STEP_HEIGHT   0.3f
+#define DE_CHARACTER2D_DEFAULT_MAX_SLOPE_RAD 0.785398163f /* 45 degrees */
+/** The gap the 2D controller keeps to surfaces (m). */
+#define DE_CHARACTER2D_SKIN_WIDTH 0.01f
+
+/** The shape of a 2D character's proxy. */
+typedef enum de_character2d_proxy {
+    DE_CHARACTER2D_PROXY_CAPSULE = 0,
+    DE_CHARACTER2D_PROXY_BOX = 1
+} de_character2d_proxy;
+
+/**
+ * Creates a character: a capsule or box shape sized from `c->size` and a kinematic body with
+ * fixed rotation centered at `at`, owned by `owner` (DE_ENTITY_NULL for none), with the default
+ * collision filter. Create-time call: may allocate (the shape, the broadphase, and the controller
+ * state on a world's first character). On failure returns an invalid handle and sets the error
+ * context: DE_ERR_INVALID_ARGUMENT (NULL or non-finite input, negative parameters, a capsule
+ * whose height is below its width, max_slope_rad >= pi/2, an unknown proxy kind) or
+ * DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_body de_character2d_create(de_physics2d_world *p, const DeCharacter2D *c, de_dpoint2d at,
+                                     de_character2d_proxy proxy, de_entity owner);
+/** Destroys a character's proxy body and its shape. Stale handles and other bodies are ignored. */
+DE_API void de_character2d_destroy(de_physics2d_world *p, de_body character);
+/**
+ * Moves a character for one tick of `dt` seconds (see the block comment): reads `io`'s parameters
+ * and desired_velocity, writes its outputs, sets the proxy's velocity for the next
+ * de_physics2d_step() and writes the pose the proxy will have after it to `out` (may be NULL).
+ * Allocates nothing.
+ * @return DE_OK, or DE_ERR_INVALID_ARGUMENT (NULL world or io, not a character, dt not > 0 and
+ *         finite, non-finite or negative parameters); nothing changes then.
+ */
+DE_API de_result de_character2d_move(de_physics2d_world *p, de_body character, DeCharacter2D *io,
+                                     f32 dt, de_transform2d *out);
+
+/** 2D joint kinds. Zero initialized descriptors create a revolute joint. */
+typedef enum de_joint2d_kind {
+    DE_JOINT2D_REVOLUTE, DE_JOINT2D_PRISMATIC, DE_JOINT2D_DISTANCE,
+    DE_JOINT2D_WELD, DE_JOINT2D_WHEEL, DE_JOINT2D_MOUSE
+} de_joint2d_kind;
+typedef struct de_joint2d_desc {
+    de_joint2d_kind kind;
+    de_body body_a, body_b; /**< Zero = world; at least one live body required. */
+    de_entity entity_a, entity_b; /**< Resolved by the ECS attachment when body is zero. */
+    de_vec2 local_anchor_a, local_anchor_b;
+    de_dpoint2d world_anchor_a, world_anchor_b;
+    de_vec2 axis; /**< Local to A; zero selects +X. */
+    f32 reference_angle;
+    bool enable_limit, enable_motor, collide_connected;
+    f32 lower, upper; /**< Angle, translation or distance range. */
+    f32 motor_speed, max_motor_force;
+    f32 hertz, damping_ratio; /**< Zero hertz = rigid; wheel/mouse default 5 Hz. */
+    f32 break_force; /**< Zero = unbreakable. */
+} de_joint2d_desc;
+/** Creates a stable generation checked joint; allocation only on first joint creation. */
+DE_API de_result de_joint2d_create(de_physics2d_world *p, const de_joint2d_desc *desc, de_joint *out);
+DE_API void de_joint2d_destroy(de_physics2d_world *p, de_joint joint);
+DE_API de_result de_joint2d_set_motor(de_physics2d_world *p, de_joint joint, f32 speed, f32 max_force);
+DE_API de_result de_joint2d_mouse_set_target(de_physics2d_world *p, de_joint joint, de_dpoint2d target);
+DE_API bool de_joint2d_is_broken(const de_physics2d_world *p, de_joint joint);
 
 DE_EXTERN_C_END
 #endif

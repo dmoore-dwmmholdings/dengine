@@ -439,21 +439,21 @@ uint device* DeBytes_words_0(const DeBytes_0 thread* this_6, KernelContext_0 thr
     return (uint device*)kernelContext_6->de_heap_0->buffers_0[this_6->index_2];
 }
 
-uint DeBytes_load_0(const DeBytes_0 thread* this_7, uint offset_0, KernelContext_0 thread* kernelContext_7)
+uint3 DeBytes_load3_0(const DeBytes_0 thread* this_7, uint offset_0, KernelContext_0 thread* kernelContext_7)
 {
 
     uint device* _S21 = DeBytes_words_0(this_7, kernelContext_7);
 
-    return *(_S21 + (offset_0 >> 2U));
+    uint o_0 = offset_0 >> 2U;
+    return uint3(*(_S21 + o_0), *(_S21 + (o_0 + 1U)), *(_S21 + (o_0 + 2U)));
 }
 
-uint3 DeBytes_load3_0(const DeBytes_0 thread* this_8, uint offset_1, KernelContext_0 thread* kernelContext_8)
+uint DeBytes_load_0(const DeBytes_0 thread* this_8, uint offset_1, KernelContext_0 thread* kernelContext_8)
 {
 
     uint device* _S22 = DeBytes_words_0(this_8, kernelContext_8);
 
-    uint o_0 = offset_1 >> 2U;
-    return uint3(*(_S22 + o_0), *(_S22 + (o_0 + 1U)), *(_S22 + (o_0 + 2U)));
+    return *(_S22 + (offset_1 >> 2U));
 }
 
 uint2 DeBytes_load2_0(const DeBytes_0 thread* this_9, uint offset_2, KernelContext_0 thread* kernelContext_9)
@@ -610,43 +610,143 @@ DeResolvePoint_0 de_rt_point_0(const DeRtContext_0 thread* q_0, uint instance_1,
         return r_0;
     }
 
-    uint _S50 = instance_1 * 4U;
+    if((((&(&r_0)->inst_0)->flags_2) & 32U) != 0U)
+    {
 
-    thread DeBytes_0 _S51 = de_bytes_0(q_0->lods_1);
+        thread DeROBuffer_0 _S50 = de_robuffer_1(q_0->metadata_0);
 
-    uint _S52 = DeBytes_load_0(&_S51, _S50, kernelContext_11);
+        DeRtMesh_0 _S51 = DeROBuffer_operatorx5Bx5D_get_1(&_S50, (&(&r_0)->inst_0)->mesh_0, kernelContext_11);
 
-    uint _S53 = min(_S52, min((&(&r_0)->mesh_2)->lod_count_0, 8U) - 1U);
-    uint first_0 = (&(&(&r_0)->mesh_2)->lods_0[_S53])->index_first_1 + primitive_1 * 3U;
-    if(primitive_1 >= ((&(&(&r_0)->mesh_2)->lods_0[_S53])->index_count_0 / 3U))
+        if(primitive_1 >= (_S51.index_first_0[int(3)]))
+        {
+
+            return r_0;
+        }
+
+        uint _S52 = primitive_1 * 12U;
+
+        thread DeBytes_0 _S53 = de_bytes_0(_S51.index_first_0[int(2)]);
+
+        uint3 _S54 = DeBytes_load3_0(&_S53, _S52, kernelContext_11);
+        DeBytes_0 positions_0 = de_bytes_0(_S51.index_first_0[int(1)]);
+        uint _S55 = _S54.x * 12U;
+
+        thread DeBytes_0 _S56 = positions_0;
+
+        uint3 _S57 = DeBytes_load3_0(&_S56, _S55, kernelContext_11);
+
+        thread float3 a_0 = (as_type<float3>((_S57)));
+
+        uint _S58 = _S54.y * 12U;
+
+        thread DeBytes_0 _S59 = positions_0;
+
+        uint3 _S60 = DeBytes_load3_0(&_S59, _S58, kernelContext_11);
+
+        thread float3 b_8 = (as_type<float3>((_S60)));
+
+        uint _S61 = _S54.z * 12U;
+
+        thread DeBytes_0 _S62 = positions_0;
+
+        uint3 _S63 = DeBytes_load3_0(&_S62, _S61, kernelContext_11);
+
+        thread float3 c_0 = (as_type<float3>((_S63)));
+        float _S64 = max(0.0f, (as_type<float>(((&(&r_0)->inst_0)->reserved0_0))));
+        a_0.z = a_0.z * _S64;
+
+        b_8.z = b_8.z * _S64;
+
+        c_0.z = c_0.z * _S64;
+        if((_S51.blas_0[int(1)]) == 2U)
+        {
+
+            if((((&(&r_0)->inst_0)->reserved1_0) & 1U) != 0U)
+            {
+
+                a_0.x = 1.0f - a_0.x;
+
+                b_8.x = 1.0f - b_8.x;
+
+                c_0.x = 1.0f - c_0.x;
+
+            }
+            if((((&(&r_0)->inst_0)->reserved1_0) & 2U) != 0U)
+            {
+
+                a_0.y = 1.0f - a_0.y;
+
+                b_8.y = 1.0f - b_8.y;
+
+                c_0.y = 1.0f - c_0.y;
+
+            }
+
+        }
+
+        (&r_0)->object_pos_0[int(0)] = a_0;
+
+        (&r_0)->object_pos_0[int(1)] = b_8;
+
+        (&r_0)->object_pos_0[int(2)] = c_0;
+
+        (&r_0)->vertex_1 = uint3(0U, 1U, 2U);
+        float _S65 = bary_2.x;
+
+        float _S66 = bary_2.y;
+
+        (&r_0)->bary_1 = float3(1.0f - _S65 - _S66, _S65, _S66);
+
+        float3 _S67 = float3(int3(int(0)) );
+
+        (&r_0)->bary_dx_0 = _S67;
+
+        (&r_0)->bary_dy_0 = _S67;
+        (&r_0)->triangle_0 = primitive_1;
+
+        (&r_0)->entry_0 = instance_1;
+
+        (&r_0)->valid_0 = true;
+
+        return r_0;
+    }
+    uint _S68 = instance_1 * 4U;
+
+    thread DeBytes_0 _S69 = de_bytes_0(q_0->lods_1);
+
+    uint _S70 = DeBytes_load_0(&_S69, _S68, kernelContext_11);
+
+    uint _S71 = min(_S70, min((&(&r_0)->mesh_2)->lod_count_0, 8U) - 1U);
+    uint first_0 = (&(&(&r_0)->mesh_2)->lods_0[_S71])->index_first_1 + primitive_1 * 3U;
+    if(primitive_1 >= ((&(&(&r_0)->mesh_2)->lods_0[_S71])->index_count_0 / 3U))
     {
 
         return r_0;
     }
 
-    uint _S54 = first_0 * 4U;
+    uint _S72 = first_0 * 4U;
 
-    thread DeBytes_0 _S55 = de_bytes_0((&(&r_0)->mesh_2)->indices_0);
+    thread DeBytes_0 _S73 = de_bytes_0((&(&r_0)->mesh_2)->indices_0);
 
-    uint3 _S56 = DeBytes_load3_0(&_S55, _S54, kernelContext_11);
+    uint3 _S74 = DeBytes_load3_0(&_S73, _S72, kernelContext_11);
 
-    (&r_0)->vertex_1 = _S56;
-    if(any(_S56 >= (uint3((&(&r_0)->mesh_2)->vertex_count_1) )))
+    (&r_0)->vertex_1 = _S74;
+    if(any(_S74 >= (uint3((&(&r_0)->mesh_2)->vertex_count_1) )))
     {
 
         return r_0;
     }
 
-    thread DeROBuffer_0 _S57 = de_robuffer_1(q_0->metadata_0);
+    thread DeROBuffer_0 _S75 = de_robuffer_1(q_0->metadata_0);
 
-    DeRtMesh_0 _S58 = DeROBuffer_operatorx5Bx5D_get_1(&_S57, (&(&r_0)->inst_0)->mesh_0, kernelContext_11);
+    DeRtMesh_0 _S76 = DeROBuffer_operatorx5Bx5D_get_1(&_S75, (&(&r_0)->inst_0)->mesh_0, kernelContext_11);
 
     uint sub_0 = 0U;
 
     for(;;)
     {
 
-        if(sub_0 < (_S58.submeshes_0))
+        if(sub_0 < (_S76.submeshes_0))
         {
         }
         else
@@ -655,17 +755,17 @@ DeResolvePoint_0 de_rt_point_0(const DeRtContext_0 thread* q_0, uint instance_1,
             break;
         }
 
-        uint _S59 = (_S53 * _S58.submeshes_0 + sub_0) * 8U;
+        uint _S77 = (_S71 * _S76.submeshes_0 + sub_0) * 8U;
 
-        thread DeBytes_0 _S60 = de_bytes_0(_S58.ranges_0);
+        thread DeBytes_0 _S78 = de_bytes_0(_S76.ranges_0);
 
-        uint2 _S61 = DeBytes_load2_0(&_S60, _S59, kernelContext_11);
-        uint _S62 = _S61.x;
+        uint2 _S79 = DeBytes_load2_0(&_S78, _S77, kernelContext_11);
+        uint _S80 = _S79.x;
 
-        if(first_0 >= _S62)
+        if(first_0 >= _S80)
         {
 
-            _S47 = (first_0 - _S62) < (_S61.y);
+            _S47 = (first_0 - _S80) < (_S79.y);
 
         }
         else
@@ -687,37 +787,37 @@ DeResolvePoint_0 de_rt_point_0(const DeRtContext_0 thread* q_0, uint instance_1,
 
     }
 
-    uint _S63 = (&r_0)->vertex_1.x;
+    uint _S81 = (&r_0)->vertex_1.x;
 
-    thread DeGpuMesh_0 _S64 = (&r_0)->mesh_2;
+    thread DeGpuMesh_0 _S82 = (&r_0)->mesh_2;
 
-    float3 _S65 = de_vis_mesh_position_0(&_S64, _S63, kernelContext_11);
+    float3 _S83 = de_vis_mesh_position_0(&_S82, _S81, kernelContext_11);
 
-    (&r_0)->object_pos_0[int(0)] = _S65;
-    uint _S66 = (&r_0)->vertex_1.y;
+    (&r_0)->object_pos_0[int(0)] = _S83;
+    uint _S84 = (&r_0)->vertex_1.y;
 
-    thread DeGpuMesh_0 _S67 = (&r_0)->mesh_2;
+    thread DeGpuMesh_0 _S85 = (&r_0)->mesh_2;
 
-    float3 _S68 = de_vis_mesh_position_0(&_S67, _S66, kernelContext_11);
+    float3 _S86 = de_vis_mesh_position_0(&_S85, _S84, kernelContext_11);
 
-    (&r_0)->object_pos_0[int(1)] = _S68;
-    uint _S69 = (&r_0)->vertex_1.z;
+    (&r_0)->object_pos_0[int(1)] = _S86;
+    uint _S87 = (&r_0)->vertex_1.z;
 
-    thread DeGpuMesh_0 _S70 = (&r_0)->mesh_2;
+    thread DeGpuMesh_0 _S88 = (&r_0)->mesh_2;
 
-    float3 _S71 = de_vis_mesh_position_0(&_S70, _S69, kernelContext_11);
+    float3 _S89 = de_vis_mesh_position_0(&_S88, _S87, kernelContext_11);
 
-    (&r_0)->object_pos_0[int(2)] = _S71;
-    float _S72 = bary_2.x;
+    (&r_0)->object_pos_0[int(2)] = _S89;
+    float _S90 = bary_2.x;
 
-    float _S73 = bary_2.y;
+    float _S91 = bary_2.y;
 
-    (&r_0)->bary_1 = float3(1.0f - _S72 - _S73, _S72, _S73);
-    float3 _S74 = float3(int3(int(0)) );
+    (&r_0)->bary_1 = float3(1.0f - _S90 - _S91, _S90, _S91);
+    float3 _S92 = float3(int3(int(0)) );
 
-    (&r_0)->bary_dx_0 = _S74;
+    (&r_0)->bary_dx_0 = _S92;
 
-    (&r_0)->bary_dy_0 = _S74;
+    (&r_0)->bary_dy_0 = _S92;
     (&r_0)->triangle_0 = primitive_1;
 
     (&r_0)->entry_0 = instance_1;
@@ -735,15 +835,15 @@ uint de_vis_instance_material_0(const DeGpuInstance_0 thread* inst_1, uint subme
         return 4294967295U;
     }
 
-    uint4 _S75 = inst_1->materials_0[submesh_1 >> 2U];
+    uint4 _S93 = inst_1->materials_0[submesh_1 >> 2U];
 
     uint k_0 = submesh_1 & 3U;
 
-    uint _S76;
+    uint _S94;
     if(k_0 == 0U)
     {
 
-        _S76 = _S75.x;
+        _S94 = _S93.x;
 
     }
     else
@@ -752,7 +852,7 @@ uint de_vis_instance_material_0(const DeGpuInstance_0 thread* inst_1, uint subme
         if(k_0 == 1U)
         {
 
-            _S76 = _S75.y;
+            _S94 = _S93.y;
 
         }
         else
@@ -761,13 +861,13 @@ uint de_vis_instance_material_0(const DeGpuInstance_0 thread* inst_1, uint subme
             if(k_0 == 2U)
             {
 
-                _S76 = _S75.z;
+                _S94 = _S93.z;
 
             }
             else
             {
 
-                _S76 = _S75.w;
+                _S94 = _S93.w;
 
             }
 
@@ -775,28 +875,133 @@ uint de_vis_instance_material_0(const DeGpuInstance_0 thread* inst_1, uint subme
 
     }
 
-    return _S76;
+    return _S94;
 }
 
 uint de_resolve_material_0(const DeResolvePoint_0 thread* r_1)
 {
 
-    uint _S77 = de_vis_instance_material_0(&r_1->inst_0, (&r_1->meshlet_0)->submesh_0);
+    uint _S95 = de_vis_instance_material_0(&r_1->inst_0, (&r_1->meshlet_0)->submesh_0);
 
-    return _S77;
+    return _S95;
 }
 
-uint de_material_texture_0(const DeGpuMaterial_0 thread* m_0, uint s_1)
+float3 de_resolve_lerp3_0(const DeResolvePoint_0 thread* r_2, float3 a_1, float3 b_9, float3 c_1)
 {
-    return (m_0->textures_0[s_1 >> 2U][s_1 & 3U]) & 2147483647U;
+    return a_1 * float3(r_2->bary_1.x)  + b_9 * float3(r_2->bary_1.y)  + c_1 * float3(r_2->bary_1.z) ;
 }
 
-uint de_material_texcoord_0(const DeGpuMaterial_0 thread* m_1, uint s_2)
+float3 de_resolve_object_pos_0(const DeResolvePoint_0 thread* r_3)
 {
-    return (m_1->textures_0[s_2 >> 2U][s_2 & 3U]) >> 31U;
+
+    float3 _S96 = de_resolve_lerp3_0(r_3, r_3->object_pos_0[int(0)], r_3->object_pos_0[int(1)], r_3->object_pos_0[int(2)]);
+
+    return _S96;
 }
 
-float2 de_vis_mesh_uv0_0(const DeGpuMesh_0 thread* mesh_3, uint vertex_2, KernelContext_0 thread* kernelContext_12)
+texture2d<float, access::sample> de_tex2d_0(uint idx_8, KernelContext_0 thread* kernelContext_12)
+{
+
+    return (&kernelContext_12->de_heap_0->textures_1)->data_0[idx_8];
+}
+
+float2 de_sprite_uv_0(const DeGpuMaterial_0 thread* m_0, float2 uv_0)
+{
+
+    float2 _S97;
+
+    if((m_0->model_0) == 2U)
+    {
+
+        _S97 = m_0->subsurface_0.xy + uv_0 * m_0->subsurface_0.zw;
+
+    }
+    else
+    {
+
+        _S97 = uv_0;
+
+    }
+
+    return _S97;
+}
+
+sampler de_sampler_0(uint idx_9, KernelContext_0 thread* kernelContext_13)
+{
+
+    return (&kernelContext_13->de_heap_0->samplers_0)->data_2[idx_9];
+}
+
+bool de_sprite_opacity_0(const DeGpuMaterial_0 thread* material_0, float2 plane_uv_0, uint sampler_1, KernelContext_0 thread* kernelContext_14)
+{
+    float alpha_0 = material_0->base_color_0.w;
+    uint _S98 = material_0->textures_0[int(0)].x;
+
+    uint texture_0 = _S98 & 1073741823U;
+
+    float alpha_1;
+    if(texture_0 != 0U)
+    {
+
+        texture2d<float, access::sample> _S99 = de_tex2d_0(texture_0, kernelContext_14);
+        thread uint width_0;
+
+        thread uint height_0;
+
+        (*((&width_0)) = (_S99).get_width(0)),(*((&height_0)) = (_S99).get_height(0));
+        float2 half_texel_0 = float2(0.5f)  / float2(float(width_0), float(height_0));
+        float2 a_2 = material_0->subsurface_0.xy;
+
+        float2 b_10 = a_2 + material_0->subsurface_0.zw;
+        float2 lo_0 = min(a_2, b_10) + half_texel_0;
+
+        float2 hi_0 = max(a_2, b_10) - half_texel_0;
+
+        float2 _S100 = de_sprite_uv_0(material_0, plane_uv_0);
+        float2 uv_1 = clamp(_S100, min(lo_0, hi_0), max(lo_0, hi_0));
+        if((_S98 & 1073741824U) != 0U)
+        {
+            int3 _S101 = int3(clamp(int2(floor(uv_1 * float2(float(width_0), float(height_0)))), int2(int(0)) , int2(int(width_0), int(height_0)) - int2(int(1)) ), int(0));
+
+            alpha_1 = alpha_0 * ((_S99).read(vec<uint,2>(((_S101)).xy), uint(((_S101)).z))).w;
+
+        }
+        else
+        {
+
+            sampler _S102 = de_sampler_0(sampler_1, kernelContext_14);
+
+            alpha_1 = alpha_0 * ((_S99).sample((_S102), (uv_1), level((0.0f)))).w;
+
+        }
+
+    }
+    else
+    {
+
+        alpha_1 = alpha_0;
+
+    }
+
+    return alpha_1 >= (material_0->pbr_0.w);
+}
+
+uint de_material_texture_0(const DeGpuMaterial_0 thread* m_1, uint s_1)
+{
+    return (m_1->textures_0[s_1 >> 2U][s_1 & 3U]) & 1073741823U;
+}
+
+uint de_material_texcoord_0(const DeGpuMaterial_0 thread* m_2, uint s_2)
+{
+    return (m_2->textures_0[s_2 >> 2U][s_2 & 3U]) >> 31U;
+}
+
+float2 de_resolve_lerp2_0(float3 bary_3, float2 a_3, float2 b_11, float2 c_2)
+{
+    return a_3 * float2(bary_3.x)  + b_11 * float2(bary_3.y)  + c_2 * float2(bary_3.z) ;
+}
+
+float2 de_vis_mesh_uv0_0(const DeGpuMesh_0 thread* mesh_3, uint vertex_2, KernelContext_0 thread* kernelContext_15)
 {
     uint format_0 = mesh_3->stream_format_0[int(0)].w;
     uint base_1 = mesh_3->stream_offset_0[int(0)].w;
@@ -804,13 +1009,13 @@ float2 de_vis_mesh_uv0_0(const DeGpuMesh_0 thread* mesh_3, uint vertex_2, Kernel
     if(format_0 == 1U)
     {
 
-        uint _S78 = base_1 + vertex_2 * 8U;
+        uint _S103 = base_1 + vertex_2 * 8U;
 
-        thread DeBytes_0 _S79 = s_3;
+        thread DeBytes_0 _S104 = s_3;
 
-        uint2 _S80 = DeBytes_load2_0(&_S79, _S78, kernelContext_12);
+        uint2 _S105 = DeBytes_load2_0(&_S104, _S103, kernelContext_15);
 
-        return (as_type<float2>((_S80)));
+        return (as_type<float2>((_S105)));
     }
 
     if(format_0 != 8U)
@@ -819,16 +1024,16 @@ float2 de_vis_mesh_uv0_0(const DeGpuMesh_0 thread* mesh_3, uint vertex_2, Kernel
         return float2(0.0f, 0.0f);
     }
 
-    uint _S81 = base_1 + vertex_2 * 4U;
+    uint _S106 = base_1 + vertex_2 * 4U;
 
-    thread DeBytes_0 _S82 = s_3;
+    thread DeBytes_0 _S107 = s_3;
 
-    uint _S83 = DeBytes_load_0(&_S82, _S81, kernelContext_12);
+    uint _S108 = DeBytes_load_0(&_S107, _S106, kernelContext_15);
 
-    return mesh_3->uv_transform_0[int(0)].xy + float2(float(_S83 & 65535U), float(_S83 >> 16U)) * mesh_3->uv_transform_0[int(0)].zw;
+    return mesh_3->uv_transform_0[int(0)].xy + float2(float(_S108 & 65535U), float(_S108 >> 16U)) * mesh_3->uv_transform_0[int(0)].zw;
 }
 
-float2 de_vis_mesh_uv1_0(const DeGpuMesh_0 thread* mesh_4, uint vertex_3, KernelContext_0 thread* kernelContext_13)
+float2 de_vis_mesh_uv1_0(const DeGpuMesh_0 thread* mesh_4, uint vertex_3, KernelContext_0 thread* kernelContext_16)
 {
     uint format_1 = mesh_4->stream_format_0[int(1)].x;
     uint base_2 = mesh_4->stream_offset_0[int(1)].x;
@@ -836,13 +1041,13 @@ float2 de_vis_mesh_uv1_0(const DeGpuMesh_0 thread* mesh_4, uint vertex_3, Kernel
     if(format_1 == 1U)
     {
 
-        uint _S84 = base_2 + vertex_3 * 8U;
+        uint _S109 = base_2 + vertex_3 * 8U;
 
-        thread DeBytes_0 _S85 = s_4;
+        thread DeBytes_0 _S110 = s_4;
 
-        uint2 _S86 = DeBytes_load2_0(&_S85, _S84, kernelContext_13);
+        uint2 _S111 = DeBytes_load2_0(&_S110, _S109, kernelContext_16);
 
-        return (as_type<float2>((_S86)));
+        return (as_type<float2>((_S111)));
     }
 
     if(format_1 != 8U)
@@ -851,22 +1056,29 @@ float2 de_vis_mesh_uv1_0(const DeGpuMesh_0 thread* mesh_4, uint vertex_3, Kernel
         return float2(0.0f, 0.0f);
     }
 
-    uint _S87 = base_2 + vertex_3 * 4U;
+    uint _S112 = base_2 + vertex_3 * 4U;
 
-    thread DeBytes_0 _S88 = s_4;
+    thread DeBytes_0 _S113 = s_4;
 
-    uint _S89 = DeBytes_load_0(&_S88, _S87, kernelContext_13);
+    uint _S114 = DeBytes_load_0(&_S113, _S112, kernelContext_16);
 
-    return mesh_4->uv_transform_0[int(1)].xy + float2(float(_S89 & 65535U), float(_S89 >> 16U)) * mesh_4->uv_transform_0[int(1)].zw;
+    return mesh_4->uv_transform_0[int(1)].xy + float2(float(_S114 & 65535U), float(_S114 >> 16U)) * mesh_4->uv_transform_0[int(1)].zw;
 }
 
-float2 de_resolve_lerp2_0(float3 bary_3, float2 a_0, float2 b_8, float2 c_0)
+float2 de_resolve_uv_0(const DeResolvePoint_0 thread* r_4, uint set_0, float2 thread* dx_0, float2 thread* dy_0, KernelContext_0 thread* kernelContext_17)
 {
-    return a_0 * float2(bary_3.x)  + b_8 * float2(bary_3.y)  + c_0 * float2(bary_3.z) ;
-}
+    if((((&r_4->inst_0)->flags_2) & 32U) != 0U)
+    {
+        float2 u_0 = float2(r_4->object_pos_0[int(0)].x, 1.0f - r_4->object_pos_0[int(0)].y);
 
-float2 de_resolve_uv_0(const DeResolvePoint_0 thread* r_2, uint set_0, float2 thread* dx_0, float2 thread* dy_0, KernelContext_0 thread* kernelContext_14)
-{
+        float2 v_0 = float2(r_4->object_pos_0[int(1)].x, 1.0f - r_4->object_pos_0[int(1)].y);
+
+        float2 w_0 = float2(r_4->object_pos_0[int(2)].x, 1.0f - r_4->object_pos_0[int(2)].y);
+        *dx_0 = de_resolve_lerp2_0(r_4->bary_dx_0, u_0, v_0, w_0);
+
+        *dy_0 = de_resolve_lerp2_0(r_4->bary_dy_0, u_0, v_0, w_0);
+        return de_resolve_lerp2_0(r_4->bary_1, u_0, v_0, w_0);
+    }
     thread array<float2, int(3)> t_0;
 
     uint k_1 = 0U;
@@ -882,186 +1094,224 @@ float2 de_resolve_uv_0(const DeResolvePoint_0 thread* r_2, uint set_0, float2 th
             break;
         }
 
-        float2 _S90;
+        float2 _S115;
         if(set_0 == 0U)
         {
 
-            float2 _S91 = de_vis_mesh_uv0_0(&r_2->mesh_2, r_2->vertex_1[k_1], kernelContext_14);
+            float2 _S116 = de_vis_mesh_uv0_0(&r_4->mesh_2, r_4->vertex_1[k_1], kernelContext_17);
 
-            _S90 = _S91;
+            _S115 = _S116;
 
         }
         else
         {
 
-            float2 _S92 = de_vis_mesh_uv1_0(&r_2->mesh_2, r_2->vertex_1[k_1], kernelContext_14);
+            float2 _S117 = de_vis_mesh_uv1_0(&r_4->mesh_2, r_4->vertex_1[k_1], kernelContext_17);
 
-            _S90 = _S92;
+            _S115 = _S117;
 
         }
 
-        t_0[k_1] = _S90;
+        t_0[k_1] = _S115;
 
         k_1 = k_1 + 1U;
 
     }
 
-    *dx_0 = de_resolve_lerp2_0(r_2->bary_dx_0, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
-    *dy_0 = de_resolve_lerp2_0(r_2->bary_dy_0, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
-    return de_resolve_lerp2_0(r_2->bary_1, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
+    *dx_0 = de_resolve_lerp2_0(r_4->bary_dx_0, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
+    *dy_0 = de_resolve_lerp2_0(r_4->bary_dy_0, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
+    return de_resolve_lerp2_0(r_4->bary_1, t_0[int(0)], t_0[int(1)], t_0[int(2)]);
 }
 
-texture2d<float, access::sample> de_tex2d_0(uint idx_8, KernelContext_0 thread* kernelContext_15)
+bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_5, const DeGpuMaterial_0 thread* m_3, uint sampler_2, KernelContext_0 thread* kernelContext_18)
 {
 
-    return (&kernelContext_15->de_heap_0->textures_1)->data_0[idx_8];
-}
+    if((m_3->model_0) == 2U)
+    {
 
-sampler de_sampler_0(uint idx_9, KernelContext_0 thread* kernelContext_16)
-{
+        float3 _S118 = de_resolve_object_pos_0(r_5);
 
-    return (&kernelContext_16->de_heap_0->samplers_0)->data_2[idx_9];
-}
+        bool _S119 = de_sprite_opacity_0(m_3, float2(_S118.x, 1.0f - _S118.y), sampler_2, kernelContext_18);
 
-bool de_rt_material_opacity_0(const DeResolvePoint_0 thread* r_3, const DeGpuMaterial_0 thread* m_2, uint sampler_1, KernelContext_0 thread* kernelContext_17)
-{
+        return _S119;
+    }
 
-    if((m_2->alpha_mode_0) != 1U)
+    if((m_3->alpha_mode_0) != 1U)
     {
 
         return true;
     }
 
-    float a_1 = m_2->base_color_0.w;
+    float a_4 = m_3->base_color_0.w;
 
-    uint _S93 = de_material_texture_0(m_2, 0U);
+    uint _S120 = de_material_texture_0(m_3, 0U);
 
-    float a_2;
+    float a_5;
 
-    if(_S93 != 0U)
+    if(_S120 != 0U)
     {
 
-        uint _S94 = de_material_texcoord_0(m_2, 0U);
+        uint _S121 = de_material_texcoord_0(m_3, 0U);
         thread float2 dx_1;
 
         thread float2 dy_1;
 
-        float2 _S95 = de_resolve_uv_0(r_3, _S94, &dx_1, &dy_1, kernelContext_17);
+        float2 _S122 = de_resolve_uv_0(r_5, _S121, &dx_1, &dy_1, kernelContext_18);
 
-        texture2d<float, access::sample> _S96 = de_tex2d_0(_S93, kernelContext_17);
+        if(((m_3->textures_0[int(0)].x) & 1073741824U) != 0U)
+        {
 
-        sampler _S97 = de_sampler_0(sampler_1, kernelContext_17);
+            texture2d<float, access::sample> _S123 = de_tex2d_0(_S120, kernelContext_18);
+            thread uint w_1;
 
-        a_2 = a_1 * ((_S96).sample((_S97), (_S95), level((0.0f)))).w;
+            thread uint h_0;
+
+            (*((&w_1)) = (_S123).get_width(0)),(*((&h_0)) = (_S123).get_height(0));
+
+            int3 _S124 = int3(clamp(int2(floor(_S122 * float2(float(w_1), float(h_0)))), int2(int(0)) , int2(int(w_1), int(h_0)) - int2(int(1)) ), int(0));
+
+            a_5 = a_4 * ((_S123).read(vec<uint,2>(((_S124)).xy), uint(((_S124)).z))).w;
+
+        }
+        else
+        {
+
+            texture2d<float, access::sample> _S125 = de_tex2d_0(_S120, kernelContext_18);
+
+            sampler _S126 = de_sampler_0(sampler_2, kernelContext_18);
+
+            a_5 = a_4 * ((_S125).sample((_S126), (_S122), level((0.0f)))).w;
+
+        }
 
     }
     else
     {
 
-        a_2 = a_1;
+        a_5 = a_4;
 
     }
 
-    return a_2 >= (m_2->pbr_0.w);
+    return a_5 >= (m_3->pbr_0.w);
 }
 
-bool de_rt_opacity_0(const DeRtContext_0 thread* q_1, uint instance_2, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_18)
+bool de_rt_opacity_0(const DeRtContext_0 thread* q_1, uint instance_2, uint primitive_2, float2 bary_4, KernelContext_0 thread* kernelContext_19)
 {
 
-    DeResolvePoint_0 _S98 = de_rt_point_0(q_1, instance_2, primitive_2, bary_4, kernelContext_18);
+    DeResolvePoint_0 _S127 = de_rt_point_0(q_1, instance_2, primitive_2, bary_4, kernelContext_19);
 
-    if(!_S98.valid_0)
+    if(!_S127.valid_0)
     {
 
         return false;
     }
 
-    if(((_S98.inst_0.flags_2) & 4U) == 0U)
+    if(((_S127.inst_0.flags_2) & 4U) == 0U)
     {
 
         return false;
     }
 
-    uint _S99 = q_1->layers_0;
+    uint _S128 = q_1->flags_4;
 
-    bool _S100;
+    bool _S129;
+    if(((q_1->flags_4) & 4U) != 0U)
+    {
+
+        _S129 = ((_S127.inst_0.flags_2) & 32U) != 0U;
+
+    }
+    else
+    {
+
+        _S129 = false;
+
+    }
+
+    if(_S129)
+    {
+
+        return false;
+    }
+
+    uint _S130 = q_1->layers_0;
     if((q_1->layers_0) != 0U)
     {
 
-        _S100 = ((_S98.inst_0.layer_mask_0) & _S99) == 0U;
+        _S129 = ((_S127.inst_0.layer_mask_0) & _S130) == 0U;
 
     }
     else
     {
 
-        _S100 = false;
+        _S129 = false;
 
     }
 
-    if(_S100)
+    if(_S129)
     {
 
         return false;
     }
 
-    if(((q_1->flags_4) & 1U) != 0U)
+    if((_S128 & 1U) != 0U)
     {
 
-        _S100 = ((_S98.inst_0.flags_2) & 2U) == 0U;
+        _S129 = ((_S127.inst_0.flags_2) & 2U) == 0U;
 
     }
     else
     {
 
-        _S100 = false;
+        _S129 = false;
 
     }
 
-    if(_S100)
+    if(_S129)
     {
 
         return false;
     }
 
-    thread DeROBuffer_0 _S101 = de_robuffer_4(q_1->scene_0);
+    thread DeROBuffer_0 _S131 = de_robuffer_4(q_1->scene_0);
 
-    DeSceneConstants_0 _S102 = DeROBuffer_operatorx5Bx5D_get_4(&_S101, q_1->view_1, kernelContext_18);
+    DeSceneConstants_0 _S132 = DeROBuffer_operatorx5Bx5D_get_4(&_S131, q_1->view_1, kernelContext_19);
 
-    thread DeResolvePoint_0 _S103 = _S98;
+    thread DeResolvePoint_0 _S133 = _S127;
 
-    uint _S104 = de_resolve_material_0(&_S103);
+    uint _S134 = de_resolve_material_0(&_S133);
 
-    if(_S104 >= (_S102.material_count_0))
+    if(_S134 >= (_S132.material_count_0))
     {
 
         return true;
     }
 
-    thread DeROBuffer_0 _S105 = de_robuffer_0(_S102.materials_1);
+    thread DeROBuffer_0 _S135 = de_robuffer_0(_S132.materials_1);
 
-    DeGpuMaterial_0 _S106 = DeROBuffer_operatorx5Bx5D_get_0(&_S105, _S104, kernelContext_18);
+    DeGpuMaterial_0 _S136 = DeROBuffer_operatorx5Bx5D_get_0(&_S135, _S134, kernelContext_19);
 
-    thread DeResolvePoint_0 _S107 = _S98;
+    thread DeResolvePoint_0 _S137 = _S127;
 
-    thread DeGpuMaterial_0 _S108 = _S106;
+    thread DeGpuMaterial_0 _S138 = _S136;
 
-    bool _S109 = de_rt_material_opacity_0(&_S107, &_S108, q_1->sampler_0, kernelContext_18);
+    bool _S139 = de_rt_material_opacity_0(&_S137, &_S138, q_1->sampler_0, kernelContext_19);
 
-    return _S109;
+    return _S139;
 }
 
-uint device* DeRWBytes_words_0(const DeRWBytes_0 thread* this_10, KernelContext_0 thread* kernelContext_19)
+uint device* DeRWBytes_words_0(const DeRWBytes_0 thread* this_10, KernelContext_0 thread* kernelContext_20)
 {
 
-    return (uint device*)kernelContext_19->de_heap_0->buffers_0[this_10->index_1];
+    return (uint device*)kernelContext_20->de_heap_0->buffers_0[this_10->index_1];
 }
 
-void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_0, KernelContext_0 thread* kernelContext_20)
+void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_1, KernelContext_0 thread* kernelContext_21)
 {
 
-    uint device* _S110 = DeRWBytes_words_0(this_11, kernelContext_20);
+    uint device* _S140 = DeRWBytes_words_0(this_11, kernelContext_21);
 
-    *(_S110 + (offset_3 >> 2U)) = v_0;
+    *(_S140 + (offset_3 >> 2U)) = v_1;
 
     return;
 }
@@ -1069,40 +1319,40 @@ void DeRWBytes_store_0(const DeRWBytes_0 thread* this_11, uint offset_3, uint v_
 [[kernel]] void cs_opacity_export(DeBindlessHeap_default_0 constant* de_heap_1 [[buffer(0)]], EntryPointParams_0 constant* entryPointParams_1 [[buffer(1)]])
 {
 
-    thread KernelContext_0 kernelContext_21;
+    thread KernelContext_0 kernelContext_22;
 
-    (&kernelContext_21)->de_heap_0 = de_heap_1;
+    (&kernelContext_22)->de_heap_0 = de_heap_1;
 
-    (&kernelContext_21)->entryPointParams_0 = entryPointParams_1;
+    (&kernelContext_22)->entryPointParams_0 = entryPointParams_1;
 
-    thread DeROBuffer_0 _S111 = de_robuffer_5(entryPointParams_1->p_0.context_0);
+    thread DeROBuffer_0 _S141 = de_robuffer_5(entryPointParams_1->p_0.context_0);
 
-    DeRtContext_0 _S112 = DeROBuffer_operatorx5Bx5D_get_5(&_S111, 0U, &kernelContext_21);
+    DeRtContext_0 _S142 = DeROBuffer_operatorx5Bx5D_get_5(&_S141, 0U, &kernelContext_22);
 
-    DeRWBytes_0 _S113 = de_rwbytes_0(entryPointParams_1->p_0.output_0);
+    DeRWBytes_0 _S143 = de_rwbytes_0(entryPointParams_1->p_0.output_0);
 
-    thread DeRtContext_0 _S114 = _S112;
+    thread DeRtContext_0 _S144 = _S142;
 
-    bool _S115 = de_rt_opacity_0(&_S114, entryPointParams_1->p_0.instance_0, entryPointParams_1->p_0.primitive_0, entryPointParams_1->p_0.bary_0, &kernelContext_21);
+    bool _S145 = de_rt_opacity_0(&_S144, entryPointParams_1->p_0.instance_0, entryPointParams_1->p_0.primitive_0, entryPointParams_1->p_0.bary_0, &kernelContext_22);
 
-    uint _S116;
+    uint _S146;
 
-    if(_S115)
+    if(_S145)
     {
 
-        _S116 = 1U;
+        _S146 = 1U;
 
     }
     else
     {
 
-        _S116 = 0U;
+        _S146 = 0U;
 
     }
 
-    thread DeRWBytes_0 _S117 = _S113;
+    thread DeRWBytes_0 _S147 = _S143;
 
-    DeRWBytes_store_0(&_S117, 0U, _S116, &kernelContext_21);
+    DeRWBytes_store_0(&_S147, 0U, _S146, &kernelContext_22);
     return;
 }
 

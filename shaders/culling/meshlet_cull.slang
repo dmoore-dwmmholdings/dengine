@@ -243,13 +243,15 @@ bool small_meshlet_culled(DeVisCullView v, float3 c, float r, float width, float
 /// Every test of one meshlet of `inst`.
 bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, MeshletCullParams pc)
 {
+    bool skinned=(inst.flags&DE_GPU_INSTANCE_SKINNED)!=0;
     float3 c = float3(dot(inst.transform[0], float4(m.sphere.xyz, 1.0)),
                       dot(inst.transform[1], float4(m.sphere.xyz, 1.0)),
                       dot(inst.transform[2], float4(m.sphere.xyz, 1.0)));
     float r = m.sphere.w * meshlet_axis_scale(inst.transform);
+    if(skinned) {c=inst.sphere.xyz;r=inst.sphere.w;}
     if ((v.flags & DE_VIS_CULL_FRUSTUM) != 0 && !de_cull_sphere(v, c, r))
         return false;
-    if ((pc.flags & DE_VIS_MESHLET_CONE) != 0 && cone_allowed(inst, m.submesh, pc) &&
+    if (!skinned && (pc.flags & DE_VIS_MESHLET_CONE) != 0 && cone_allowed(inst, m.submesh, pc) &&
         cone_culled(inst.transform, m, v))
         return false;
     if ((pc.flags & DE_VIS_MESHLET_SMALL) != 0 &&

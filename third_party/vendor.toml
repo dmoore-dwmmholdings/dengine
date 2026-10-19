@@ -94,7 +94,7 @@ sha256 = "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515"
 license = "MIT OR Unlicense"
 # stb_image_write.h: S10 (DENG-327, hello_triangle screenshots; DENG-329 golden images). Later:
 # stb_truetype.h (S28).
-files = ["stb_image.h", "stb_vorbis.c", "stb_image_write.h"]
+files = ["stb_image.h", "stb_vorbis.c", "stb_image_write.h", "stb_truetype.h"]
 # DENG-435: valid empty IDAT chunks must not form a null destination for a zero-byte read.
 patches = ["patches/0001-png-empty-idat.patch"]
 
@@ -434,3 +434,140 @@ url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/mic
 sha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
 strip = 0
 files = ["build/native/bin/x64/d3d10warp.dll"]
+
+[[lib]]
+name = "msdfgen"
+version = "1.13"
+url = "https://github.com/Chlumsky/msdfgen/archive/refs/tags/v1.13.tar.gz"
+sha256 = "93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167"
+license = "MIT"
+license_file = "LICENSE.txt"
+files = ["core/**", "msdfgen.h"]
+
+[[lib]]
+name="harfbuzz"
+version="14.3.1"
+url="https://github.com/harfbuzz/harfbuzz/releases/download/14.3.1/harfbuzz-14.3.1.tar.xz"
+sha256="9dae9538aae2ffdf70cec31f2c27bf68e2aaeeae3112688467697d5faf6194f7"
+license="MIT"
+license_file="COPYING"
+files=["src/**"]
+
+[[lib]]
+name = "dr_libs"
+# WAV and FLAC decoders of the sound importer (SPEC §11.6, §22: dr_wav, dr_flac), tools only:
+# compiled into the cooker library (tools/cook/importers/sound/, DENG-314), never into Release or
+# Shipping. Upstream has no tags for the repository: pinned to a master commit (2026-08-31),
+# dr_wav 0.14.6 and dr_flac 0.13.4. One entry for the repository; later users take more headers
+# here (dr_mp3.h is not used).
+version = "2026-08-31-dfe8377"
+url = "https://github.com/mackron/dr_libs/archive/dfe8377631000664666519fdb83da193fd8037f4.tar.gz"
+sha256 = "4654acb029f4f2a43ac2edb60c4cb09f40615b4b5bee9709954f910cb979e5fd"
+# LICENSE offers the Unlicense (public domain, alternative 1) or MIT No Attribution (MIT-0,
+# alternative 2), the same choice as stb.
+license = "MIT OR Unlicense"
+files = ["dr_wav.h", "dr_flac.h"]
+
+[[lib]]
+name = "opus"
+# Opus codec (SPEC §22 libopus, DENG-2 Q11): the sound importer encodes long sounds to Opus
+# streams (tools/cook/importers/sound/opus_encode.c, DENG-314) and the runtime decodes them
+# (DENG-313). Release tarball. Built by the engine's own CMakeLists.txt (not upstream's) as a
+# fixed-point codec without the float API, intrinsics, run-time CPU detection or the DNN features
+# (deep PLC, DRED, OSCE), so encoding is integer-only and gives the same bytes on every host.
+version = "1.6.1"
+url = "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz"
+sha256 = "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+license = "BSD-3-Clause"
+license_file = "COPYING"
+# The C sources of the CELT, SILK (fixed point) and Opus layers and the public headers. Not taken:
+# the float SILK encoder (silk/float), the per-architecture trees (x86, arm, mips), dnn/, tests,
+# docs and the build systems.
+files = [
+    "include/*.h",
+    "celt/*.c",
+    "celt/*.h",
+    "silk/*.c",
+    "silk/*.h",
+    "silk/fixed/*.c",
+    "silk/fixed/*.h",
+    "src/*.c",
+    "src/*.h",
+]
+# Demos and comparison tools; mini_kfft.c (QEXT only); the float-only tonality analysis
+# (analysis.c, mlp.c, mlp_data.c), which DISABLE_FLOAT_API leaves out. Their headers stay:
+# opus_encoder.c includes analysis.h in every configuration.
+exclude = [
+    "celt/opus_custom_demo.c",
+    "celt/mini_kfft.c",
+    "src/opus_demo.c",
+    "src/opus_compare.c",
+    "src/qext_compare.c",
+    "src/repacketizer_demo.c",
+    "src/analysis.c",
+    "src/mlp.c",
+    "src/mlp_data.c",
+]
+
+[[lib]]
+name = "sheenbidi"
+version = "2.7"
+url = "https://codeload.github.com/Tehreer/SheenBidi/tar.gz/refs/tags/v2.7"
+sha256 = "620f732141fd62354361f921a67ba932c44d94e73f127379a0c73ad40c7fa6e0"
+license = "Apache-2.0"
+files = ["Headers/**", "Source/**"]
+
+[[lib]]
+name = "unicode"
+version = "15.1.0-final-20230908"
+# The final15.1 tag keeps release data in dev/. Selected files are byte-identical
+# to Unicode.org/Public/zipped/15.1.0/UCD.zip; the source archive also contains LICENSEV3.
+url = "https://codeload.github.com/unicode-org/unicodetools/tar.gz/refs/tags/final-15.1-20230908"
+sha256 = "4a89c5e10d406a14608f65d98eb26c6353b7e9f8356c1fca1f469b87d87b9633"
+license = "Unicode-3.0"
+files = [
+ "unicodetools/data/ucd/dev/LineBreak.txt",
+ "unicodetools/data/ucd/dev/EastAsianWidth.txt",
+ "unicodetools/data/ucd/dev/UnicodeData.txt",
+ "unicodetools/data/ucd/dev/DerivedCoreProperties.txt",
+ "unicodetools/data/ucd/dev/BidiCharacterTest.txt",
+ "unicodetools/data/ucd/dev/auxiliary/LineBreakTest.txt",
+ "unicodetools/data/ucd/dev/auxiliary/GraphemeBreakProperty.txt",
+ "unicodetools/data/ucd/dev/auxiliary/GraphemeBreakTest.txt",
+ "unicodetools/data/ucd/dev/emoji/emoji-data.txt",
+]
+
+# DENG-264: pinned CLDR cardinal rules and selected locale number/Gregorian date data.
+[[lib]]
+name = "cldr"
+version = "48"
+url = "https://unicode.org/Public/cldr/48/cldr-common-48.zip"
+sha256 = "06c7c698d6fd8d67cefac15a0206b0109b00e0ef1636f86f84449fa959561f74"
+license = "Unicode-3.0"
+strip = 0
+files = ["common/supplemental/plurals.xml", "common/supplemental/numberingSystems.xml",
+    "common/main/root.xml",
+    "common/main/en.xml",
+    "common/main/de.xml",
+    "common/main/fr.xml",
+    "common/main/es.xml",
+    "common/main/it.xml",
+    "common/main/pt.xml",
+    "common/main/pt_PT.xml",
+    "common/main/nl.xml",
+    "common/main/sv.xml",
+    "common/main/pl.xml",
+    "common/main/cs.xml",
+    "common/main/ru.xml",
+    "common/main/uk.xml",
+    "common/main/tr.xml",
+    "common/main/ar.xml",
+    "common/main/he.xml",
+    "common/main/hi.xml",
+    "common/main/th.xml",
+    "common/main/ja.xml",
+    "common/main/ko.xml",
+    "common/main/zh.xml",
+    "common/main/zh_Hans.xml",
+    "common/main/zh_Hant.xml"
+]

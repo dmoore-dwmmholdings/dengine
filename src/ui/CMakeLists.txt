@@ -1,9 +1,11 @@
-# src/ui: module `ui` (target de_ui), layer gameplay.
-# Stub source only, until the sprint that owns this module adds real code.
-de_add_module(
-    NAME ui
-    LAYER gameplay
-    SOURCES ui_stub.c
-    DEPS render text input
-    OPTIONAL_OPTION DE_WITH_UI
-)
+# Retained CPU layout remains usable in headless configurations.
+de_add_module(NAME ui LAYER gameplay
+ SOURCES ui.c ui_reflect.c layout/layout.c layout/flex.c layout/grid.c layout/anchor.c layout/measure.c style/stylesheet.c style/style_resolve.c style/tween.c style/theme.c
+ DEPS text input OPTIONAL_OPTION DE_WITH_UI)
+if(TARGET de_ui)
+ target_link_libraries(de_ui PRIVATE de_tp_xxhash de_tp_tomlc17)
+ set_property(TARGET de_ui APPEND PROPERTY DE_MODULE_LIBS de_tp_xxhash de_tp_tomlc17)
+ if(DE_HAS_RENDER)
+  target_link_libraries(de_ui PRIVATE de_render)
+ endif()
+endif()

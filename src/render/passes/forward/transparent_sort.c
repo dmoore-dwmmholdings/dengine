@@ -6,6 +6,8 @@
 #include "render/passes/forward/forward.h"
 
 #include "render/world/render_world.h"
+#include "render/sprite/sprite_sort.h"
+#include "core/de_sort.h"
 
 #include <math.h>
 #include <string.h>
@@ -15,42 +17,72 @@
  * ============================================================================================== */
 
 bool de__transparent_before(const de__transparent_item *a, const de__transparent_item *b) {
+    if (a->layer != b->layer)
+        return a->layer < b->layer;
+    if (a->order != b->order)
+        return a->order < b->order;
     /* NaN: the farthest (drawn first), so it never breaks the order of the others. */
     const f32 da = isnan(a->depth) ? INFINITY : a->depth;
     const f32 db = isnan(b->depth) ? INFINITY : b->depth;
     if (da != db)
         return da > db;
+    if ((u32)a->entity != (u32)b->entity)
+        return (u32)a->entity < (u32)b->entity;
     if (a->entity != b->entity)
         return a->entity < b->entity;
     return a->index < b->index;
 }
 
+typedef struct radix_scratch {
+    void *memory;
+    size_t bytes;
+} radix_scratch;
+static void *sort_alloc(void *user, size_t size, size_t align, u32 tag) {
+    (void)align;
+    (void)tag;
+    radix_scratch *s = user;
+    return size <= s->bytes ? s->memory : NULL;
+}
+static void sort_free(void *user, void *ptr, size_t size) {
+    (void)user;
+    (void)ptr;
+    (void)size;
+}
+
 void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_item *scratch) {
-    if (items == NULL || scratch == NULL || n < 2u)
+    if (items == NULL || scratch == NULL || n < 2)
         return;
-    /* Bottom-up merge sort, ping-ponging between the two arrays (stable: ties keep their order,
-     * and the keys are a total order anyway). */
-    de__transparent_item *src = items, *dst = scratch;
-    for (u32 width = 1; width < n; width *= 2u) {
-        for (u32 lo = 0; lo < n; lo += 2u * width) {
-            const u32 mid = lo + width < n ? lo + width : n;
-            const u32 hi = lo + 2u * width < n ? lo + 2u * width : n;
-            u32 i = lo, j = mid, k = lo;
-            while (i < mid && j < hi)
-                dst[k++] = de__transparent_before(&src[j], &src[i]) ? src[j++] : src[i++];
-            while (i < mid)
-                dst[k++] = src[i++];
-            while (j < hi)
-                dst[k++] = src[j++];
-        }
-        de__transparent_item *t = src;
-        src = dst;
-        dst = t;
-        if (width > n / 2u)
-            break; /* this pass merged everything (and the next doubling could overflow) */
+    DE_STATIC_ASSERT(sizeof(de__transparent_item) >= 2 * sizeof(de_sort_key64),
+                     "radix scratch fits");
+    de_sort_key64 *keys = (de_sort_key64 *)(void *)scratch;
+    radix_scratch tmp = {keys + n, (size_t)n * sizeof *keys};
+    de_allocator allocator = {.user = &tmp, .alloc = sort_alloc, .free = sort_free};
+    /* Stable entity-index tie order is independent of extraction/archetype order. */
+    for (u32 i = 0; i < n; ++i)
+        keys[i] = (de_sort_key64){(u32)items[i].entity, i};
+    if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
+        return;
+    for (u32 i = 0; i < n; ++i) {
+        const de__transparent_item *item = &items[keys[i].index];
+        keys[i].key = de__sprite_sort_key(item->layer, item->order, item->depth);
     }
-    if (src != items)
-        memcpy(items, src, (size_t)n * sizeof *items);
+    if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
+        return;
+    /* Apply destination->source permutation in place. No frame heap or third item array. */
+    for (u32 i = 0; i < n; ++i) {
+        if (keys[i].index == i)
+            continue;
+        de__transparent_item saved = items[i];
+        u32 j = i;
+        while (keys[j].index != i) {
+            u32 from = (u32)keys[j].index;
+            items[j] = items[from];
+            keys[j].index = j;
+            j = from;
+        }
+        items[j] = saved;
+        keys[j].index = j;
+    }
 }
 
 /* =================================================================================================
@@ -153,6 +185,8 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
         const de_vec3 vp = de_m4_mul_point(&v->view_matrix, centre);
         items[n] = (de__transparent_item){
             .depth = -vp.z,
+            .layer = (in->flags[s] & DE__RW_INST_SPRITE) ? in->sprite[s].layer : 0,
+            .order = (in->flags[s] & DE__RW_INST_SPRITE) ? in->sprite[s].order : 0,
             .instance = s,
             .entity = in->entity[s],
             .index = n,

@@ -149,7 +149,7 @@ endif()
 # same render world). test_render_world.h is their shared fixture (defined in test_extract.c), on
 # the null backend. The pipelined test is an S12 exit check under TSan (ci-linux-tsan).
 de_add_test(NAME render_world
-    SOURCES test_extract.c test_render_thread.c
+    SOURCES test_extract.c test_render_thread.c test_sprite.c
     LIBS de_render de_asset de_gpu de_ecs de_reflect de_task de_platform de_test_support
     LABELS unit render
     TIMEOUT 300)
@@ -1219,4 +1219,40 @@ if(TARGET test_render_pt_reference)
             de_d3d12_warp_deploy(test_render_pt_reference)
         endif()
     endif()
+endif()
+
+de_add_test(NAME sprite_sort SOURCES test_sprite_sort.c LIBS de_render de_core de_platform LABELS unit render)
+if(TARGET test_sprite_sort)
+    target_include_directories(test_sprite_sort PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+if(DE_BUILD_TOOLS)
+    de_add_test(NAME render_sprite_rt SOURCES test_sprite_rt.c render_d3d12_test.c
+        LIBS ${_de_vis_libs} de_cooker LABELS unit gpu render TIMEOUT 300)
+    if(TARGET test_render_sprite_rt)
+        target_include_directories(test_render_sprite_rt PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sprite_rt_tmp")
+        target_compile_definitions(test_render_sprite_rt PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/sprite_rt_tmp\"")
+        if(DE_HAS_GPU_D3D12)
+            target_link_libraries(test_render_sprite_rt PRIVATE version)
+            de_d3d12_agility_deploy(test_render_sprite_rt)
+            if(DE_D3D12_WARP_DLL)
+                de_d3d12_warp_deploy(test_render_sprite_rt)
+            endif()
+        endif()
+    endif()
+endif()
+
+# DENG-198 pixel layout, snapping, graph resolution and native upscale readback.
+de_add_test(NAME render_pixel_art SOURCES test_pixel_art.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pixel_art)
+    target_include_directories(test_render_pixel_art PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-199 OKLab LUT, Bayer thresholds and independent per-view sprite grids.
+de_add_test(NAME render_palette_dither SOURCES test_palette_dither.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_palette_dither)
+    target_include_directories(test_render_palette_dither PRIVATE "${DE_ROOT_DIR}/src")
 endif()

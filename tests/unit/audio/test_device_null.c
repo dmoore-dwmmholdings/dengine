@@ -50,7 +50,7 @@ TEST(audio_device, manual_mode_deterministic) {
     render_scene(c1, frames);
     render_scene(c2, frames);
     EXPECT_MEMEQ(c1, c2, (size_t)frames * 2 * sizeof(f32));
-    EXPECT_FLOAT_EQ(c1[2 * 10], 0.001, 1e-9);
+    EXPECT_FLOAT_EQ(c1[2 * 10], 0.001 * 0.70710678118, 1e-9);
     EXPECT_FLOAT_EQ(c1[2 * 1234 + 1], 0.4, 1e-6);
     free(c1);
     free(c2);

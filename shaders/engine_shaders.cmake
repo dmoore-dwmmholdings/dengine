@@ -103,3 +103,12 @@ de_engine_shader(denoise_shadow_publish denoise/shadow_temporal.slang)
 de_engine_shader(denoise_reblur_diffuse denoise/reblur_diffuse.slang)
 de_engine_shader(denoise_reblur_specular denoise/reblur_specular.slang)
 de_engine_shader(pt_final_denoise pathtracer/pt_final_denoise.slang)
+
+de_engine_shader(skin skin/skin.slang)
+de_engine_shader(pixel_upscale pixel/pixel_upscale.slang)
+
+# DENG-262: text shaders shared by retained UI.
+de_engine_shader(text_msdf text/msdf.slang)
+de_engine_shader(text_bitmap text/bitmap.slang)
+de_engine_shader(text_upload text/atlas_upload.slang)
+de_engine_shader(pixel_palette pixel/palette_dither.slang)

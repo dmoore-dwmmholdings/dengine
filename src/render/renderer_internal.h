@@ -193,6 +193,9 @@ struct de_renderer {
      * and the runtime instances the GPU scene packs into parameter blocks; made before the GPU
      * scene. */
     struct de__material_instances *material_instances;
+    struct de__skin *skin;
+    struct de__sprite_as *sprite_as;
+    de_plane_2d plane_2d;
     u32 material_instances_live; /**< live runtime instances at the last kick (stats) */
 };
 

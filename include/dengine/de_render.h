@@ -121,6 +121,14 @@ DE_API de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **
  * system first (its unloads use the renderer's uploader), and the device after. NULL is
  * ignored. */
 DE_API void de_renderer_destroy(de_renderer *r);
+/** Main-thread output dimensions in physical pixels, before per-view render scaling.
+ * A renderer without a window reports its offscreen target size. NULL reports zero.
+ * Each output pointer may be NULL. */
+DE_API void de_renderer_output_size(de_renderer *r, u32 *width, u32 *height);
+/** Dimensions of a loaded texture, without exposing renderer asset records. False for
+ * NULL renderer, missing assets, stale/unloaded texture; outputs are then zero. Main thread.
+ * Each output pointer may be NULL. */
+DE_API bool de_render_texture_size(de_renderer *r, de_texture texture, u32 *width, u32 *height);
 /* Registers render components + the Extract system into the world. */
 /**
  * (DENG-175) Also adds the Extract systems (`de.render.extract_views`, `_meshes`, `_lights` in
@@ -558,6 +566,11 @@ DE_API de_material de_material_create_instance(de_renderer *r, de_material base)
  * default material). Not for asset materials (release their load handles). */
 DE_API void de_material_destroy_instance(de_renderer *r, de_material m);
 
+/** Copies model-space pose x inverse-bind matrices. Omitted palettes retain their last pose.
+ * Zero joints selects the bind pose. Main-thread PostUpdate; storage grows only when needed. */
+DE_API void de_render_set_skin_palette(de_renderer *r, de_entity entity, const de_affine *joints,
+                                       u32 joint_count);
+
 /* ---------- 2D ---------- */
 typedef enum de_plane_2d { DE_PLANE_SIDE_XZ, DE_PLANE_TOP_XY } de_plane_2d;
 
@@ -579,7 +592,11 @@ typedef struct de_pixel_art_settings {
     bool snap_camera, snap_sprites, smooth_subpixel_scroll;
     de_texture palette_lut; /* optional */
     f32 dither_strength;
+    de_vec4 letterbox_color; /**< clear outside the upscaled image; default opaque black */
 } de_pixel_art_settings;
+/** Enables pixel rendering with a copied configuration; NULL disables it. Zero dimensions
+ * select 480x270. Rendering ignores render_scale/dynamic resolution and temporal upscalers;
+ * output/UI remain at the view's viewport resolution. */
 DE_API void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_settings *s);
 DE_API void de_render_set_2d_plane(de_renderer *r, de_plane_2d plane);
 

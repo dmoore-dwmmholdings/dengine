@@ -1,0 +1,5 @@
+[project]
+asset_root = "../../data/fonts/latin"
+version = 1
+[assets]
+"ui/checker" = {type="texture", source="pixel.png", srgb=false, compress="none", mipmaps=false}

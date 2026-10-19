@@ -21,6 +21,9 @@
 #include "host/timing.h"
 
 #include <dengine/de_debug.h>
+#include <dengine/de_anim.h>
+#include "anim/anim_host.h"
+#include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #if DE_HAS_RENDER
 #include "render/world/render_world.h" /* DENG-175: de__render_extract_and_kick */
@@ -321,6 +324,8 @@ de_result de__loop_run(de__host *h) {
             DE_PROFILE_ZONE_END(z_assets);
         }
 #endif
+        if (e->text)
+            de_text_update(e->text); /* DENG-257: publish font generations before workers. */
         r = loop_run_hooks(h, h->loop_hooks.frame_begin, &h->loop_hooks.frame_begin_count,
                            "frame-begin", frame);
         if (r != DE_OK)
@@ -336,6 +341,9 @@ de_result de__loop_run(de__host *h) {
         for (u32 i = 0; r == DE_OK && i < tf.steps; ++i)
             r = loop_schedule(w, DE_SCHEDULE_FIXED_UPDATE, tf.step_dt, 0.0f, frame);
 
+        /* DENG-201: games may create or replace the optional renderer after host startup. */
+        if (e->anim)
+            de__anim_bind_renderer(e->anim, e->renderer);
         /* 4. Update, PostUpdate (transform propagation runs in PostUpdate). */
         if (r == DE_OK)
             r = loop_schedule(w, DE_SCHEDULE_UPDATE, tf.frame_dt, tf.alpha, frame);

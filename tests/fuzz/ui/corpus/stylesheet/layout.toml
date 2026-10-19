@@ -1,0 +1,9 @@
+[style.panel]
+width = "50%"
+height = "auto"
+padding = [1, 2, 3, 4]
+border_width = 2
+opacity = 0.4
+easing = "elastic-out"
+transition = 0.2
+nine_slice = [8, 8, 8, 8]

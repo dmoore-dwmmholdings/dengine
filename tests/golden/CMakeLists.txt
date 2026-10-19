@@ -162,3 +162,11 @@ foreach(_golden_backend IN ITEMS metal vulkan d3d12)
         endif()
     endforeach()
 endforeach()
+
+# DENG-262 text scenes use production cooking, atlas upload and screen/world stages.
+target_sources(de_golden PRIVATE text/text_scenes.c)
+target_link_libraries(de_golden PRIVATE de_text)
+target_compile_definitions(de_golden PRIVATE "DE_GOLDEN_TEXT_ROOT=\"${DE_ROOT_DIR}\"")
+
+# DENG-202 stable side-view pixel-art reference scenes.
+add_subdirectory(pixel2d)

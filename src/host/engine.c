@@ -10,24 +10,53 @@
 #include "host/host_packs.h" /* DENG-213 */
 
 #include <dengine/de_debug.h>
+#include <dengine/de_anim.h>
+#include "anim/anim_host.h"
+#include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
+#if DE_HAS_RENDER
+#include <dengine/de_render.h>
+#include "render/world/render_world.h"
+#endif
+#if DE_HAS_GPU
+#include <dengine/de_gpu.h>
+#endif
+#if DE_HAS_UI
+#include <dengine/de_ui.h>
+#endif
 
 #include <string.h>
 
-/* Destroys what `e` holds, in the reverse order of de__engine_create; NULL members are skipped,
- * so it also unwinds a partial create. Frees `e`. */
+/* Release owned modules in dependency order, including game-created GPU/renderer/UI.
+ * NULL members are skipped, so this also unwinds partial engine or game initialisation. */
 static void engine_teardown(de__engine *e) {
-    if (DE_HANDLE_VALID(e->pub.window)) {
-        de_window_destroy(e->pub.window);
-        e->pub.window = (de_window){0};
+#if DE_HAS_RENDER
+    /* Finish the last pipelined frame before releasing its UI/text/assets. Destroying the
+     * render-world bridge stops its thread; the renderer/uploader itself must outlive assets. */
+    if (e->pub.renderer != NULL)
+        de__render_world_destroy(e->pub.renderer);
+#endif
+#if DE_HAS_UI
+    if (e->pub.ui != NULL) {
+        de_ui_destroy(e->pub.ui);
+        e->pub.ui = NULL;
     }
+#endif
     /* DENG-84: input, created after the world: detached from the world (its two systems and its
      * resource) before the world goes away. */
     if (e->pub.input != NULL) {
         de_input_detach(e->pub.input);
         de_input_destroy(e->pub.input);
         e->pub.input = NULL;
+    }
+    if (e->pub.anim) {
+        de_anim_destroy(e->pub.anim);
+        e->pub.anim = NULL;
+    }
+    if (e->pub.text) {
+        de_text_destroy(e->pub.text);
+        e->pub.text = NULL;
     }
 #if DE_HAS_ASSETS
     /* DENG-143: before the world, which it detaches from (system, resource), and before the I/O
@@ -36,15 +65,34 @@ static void engine_teardown(de__engine *e) {
         de_asset_system_destroy(e->pub.assets);
         e->pub.assets = NULL;
     }
+#endif
+    /* Game component destructors may still release their own GPU resources. */
+    if (e->pub.world != NULL) {
+        de_world_destroy(e->pub.world);
+        e->pub.world = NULL;
+    }
+#if DE_HAS_RENDER
+    if (e->pub.renderer != NULL) {
+        de_renderer_destroy(e->pub.renderer);
+        e->pub.renderer = NULL;
+    }
+#endif
+#if DE_HAS_GPU
+    if (e->pub.gpu != NULL) {
+        de_gpu_device_destroy(e->pub.gpu);
+        e->pub.gpu = NULL;
+    }
+#endif
+    if (DE_HANDLE_VALID(e->pub.window)) {
+        de_window_destroy(e->pub.window);
+        e->pub.window = (de_window){0};
+    }
+#if DE_HAS_ASSETS
     if (e->owns_io) {
         de_io_shutdown();
         e->owns_io = false;
     }
 #endif
-    if (e->pub.world != NULL) {
-        de_world_destroy(e->pub.world);
-        e->pub.world = NULL;
-    }
     if (e->pub.types != NULL) {
         de_type_registry_destroy(e->pub.types);
         e->pub.types = NULL;
@@ -239,6 +287,20 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     r = de_input_attach(e->pub.input, e->pub.world);
     if (r != DE_OK)
         return engine_fail(e, r, "input attach");
+
+    /* DENG-257: text also supports headless localization/layout. The loader's allocator
+     * outlives text and remains valid until the asset system has unloaded fonts. */
+    r = de_text_create(a, e->pub.assets, &e->pub.text);
+    if (r != DE_OK)
+        return engine_fail(e, r, "text");
+
+    /* DENG-201: visual clip playback also runs without a renderer on headless hosts. */
+    r = de_anim_create(a, e->pub.assets, &e->pub.anim);
+    if (r != DE_OK)
+        return engine_fail(e, r, "animation");
+    de_anim_set_task_system(e->pub.anim, e->pub.tasks);
+    de__anim_bind_renderer(e->pub.anim, e->pub.renderer);
+    de_anim_attach(e->pub.anim, e->pub.world);
 
     /* 8. Window, unless headless. The renderer (S12) picks the surface; until then the window
      * has none. The optional modules stay NULL. */

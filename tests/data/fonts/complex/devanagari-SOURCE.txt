@@ -1,0 +1,3 @@
+google/fonts 47d54ca1ebb14fd864695f1d39dc734f39017c33 ofl/notosansdevanagari/NotoSansDevanagari[wdth,wght].ttf
+Original sha256 14ec4af41f27482216d1c2229f417ff9b1425e1babb014e57d1d40d03229853e
+Subset retains GSUB/GPOS closure, OFL-1.1.

@@ -38,6 +38,8 @@ static de_cvar buffer_blocks_cvar(void) {
 static void free_storage(de_audio *a) {
     de_allocator *al = &a->alloc;
     de__audio_ring_free(a);
+    de__stream_shutdown(a);
+    de__voice_storage_free(a);
     if (a->voices != NULL)
         DE_FREE(al, a->voices, sizeof(de__voice) * a->voice_count);
     if (a->voice_gen != NULL)
@@ -71,6 +73,7 @@ static void close_all_sources(de_audio *a) {
         }
     }
     a->active_count = 0;
+    de__voice_close_tails(a);
     de__audio_cmd_discard_all(a); /* queued play commands own their sources */
 }
 
@@ -114,7 +117,7 @@ static de_result alloc_storage(de_audio *a) {
         DE_ASSERT(ok);
         (void)ok;
     }
-    return DE_OK;
+    return de__voice_storage_init(a);
 }
 
 de_result de__audio_create_ex(const de_audio_desc *desc, const de__audio_create_opts *opts,
@@ -166,6 +169,7 @@ de_result de__audio_create_ex(const de_audio_desc *desc, const de__audio_create_
     a->voice_count = voices;
     a->command_capacity = next_pow2(commands);
     a->manual = manual;
+    de_atomic_init_ptr(&a->stream_manager, NULL);
     de_atomic_init_u32(&a->mixer_waiting, 0);
     de_atomic_init_u32(&a->mixer_quit, 0);
     de_atomic_init_u32(&a->test_stall, 0);
@@ -178,7 +182,9 @@ de_result de__audio_create_ex(const de_audio_desc *desc, const de__audio_create_
     de_atomic_init_u32(&a->dsp_load_bits, 0);
 
     bool sem_ok = false, guard = false, device = false;
-    de_result r = alloc_storage(a);
+    de_result r = a->assets ? de_audio_register_sound_type(a->assets) : DE_OK;
+    if (r == DE_OK)
+        r = alloc_storage(a);
     if (r == DE_OK)
         r = de__audio_ring_init(a, (u32)blocks);
     if (r == DE_OK) {

@@ -705,3 +705,63 @@ TEST_F(rt_reflections, material_ao_and_rtao_once_only_composition, reflection_fi
     EXPECT_TRUE(affected > 10);
     EXPECT_TRUE(error / energy < .01);
 }
+
+/* DENG-197: production reflection hit shading resolves the sprite model and texture. */
+#include "render/sprite/sprite_internal.h"
+TEST_F(rt_reflections, textured_sprite_hit, reflection_fixture) {
+    rt_fixture *r = &f->shadow.rt;
+    DeSprite sprites[32] = {0};
+    sprites[1] = (DeSprite){.texture = {1},
+                            .emissive_tex = {1},
+                            .uv_rect = {0, 0, 1, 1},
+                            .size = {2, 2},
+                            .pivot = {.5f, .5f},
+                            .color = {1, 1, 1, 1},
+                            .cast_shadows = true};
+    r->w.f.instances.sprite = sprites;
+    for (u32 i = 2; i <= 6; ++i)
+        r->w.f.instances.entity[i] = 0;
+    de_affine local = de__sprite_local_transform(&sprites[1], DE_PLANE_SIDE_XZ),
+              entity = at(3, 1, 1);
+    r->w.f.instances.transform[1] = de_affine_mul(&entity, &local);
+    r->w.f.instances.prev_transform[1] = r->w.f.instances.transform[1];
+    r->w.f.instances.mesh[1] = (de_mesh){0};
+    r->w.f.instances.flags[1] = DE__RW_INST_SPRITE | DE__RW_INST_HAS_BOUNDS |
+                                DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+    r->w.f.instances.bounds[1] = (de_aabb){{2, .99f, 0}, {4, 1.01f, 2}};
+    de_gpu_buffer upload = de_gpu_buffer_create(
+        r->d,
+        &(de_gpu_buffer_desc){.size = 256, .usage = DE_USAGE_COPY_SRC, .memory = DE_MEM_UPLOAD});
+    u8 *texels = de_gpu_buffer_map(r->d, upload);
+    memset(texels, 0, 256);
+    texels[4] = 204;
+    texels[5] = 51;
+    texels[6] = 26;
+    texels[7] = 255;
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "Sprite reflection texture");
+    de_gpu_barrier barrier = {
+        .texture = r->texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_DST};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_buffer_to_texture(cmd, r->texture, 0, 0, upload, 0, 256);
+    barrier.before = DE_ACCESS_COPY_DST;
+    barrier.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    ASSERT_EQ(de_gpu_queue_submit(r->d, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_buffer_destroy(r->d, upload);
+    reflection_frame(f);
+    const u8 *data = de_gpu_buffer_map(r->d, f->rb);
+    const de__rt_hit *hits = (const de__rt_hit *)(data + SW * SH * 40);
+    u32 colored = 0, hits_sprite = 0;
+    for (u32 i = 0; i < SW * SH; ++i)
+        if (hits[i].t >= 0 && hits[i].instance == 1) {
+            ++hits_sprite;
+            const f32 *p = f->pixels + i * 4;
+            colored += p[0] > .1f && p[0] > p[1] * 2 && p[0] > p[2] * 2;
+        }
+    printf("Textured sprite reflection: %u hits, %u texture-colored pixels\n", hits_sprite,
+           colored);
+    EXPECT_TRUE(hits_sprite > 10);
+    EXPECT_TRUE(colored > 10);
+}

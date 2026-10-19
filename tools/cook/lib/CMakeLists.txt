@@ -43,3 +43,6 @@ target_link_libraries(de_cooker PRIVATE de_tp_zstd)
 # DENG-101: de_cooker_import_cook_subasset (de_cooker.h): a sub-asset cooked by the importer
 # registered for its type (the model importer's textures and prefab).
 target_sources(de_cooker PRIVATE import_subcook.c)
+
+# DENG-264: canonical directory-source snapshots for locale table cooking.
+target_sources(de_cooker PRIVATE directory_source.c)

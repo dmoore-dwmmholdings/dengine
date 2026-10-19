@@ -12,5 +12,13 @@ de_add_module(
         formats/de_cooked_clip.h
         formats/clip_decode.c
     DEPS ecs asset
-    DETERMINISTIC
+    OPTIONAL_DEPS render
 )
+
+# DENG-201 visual playback; the cooked reference decoder retains its arithmetic contract.
+target_sources(de_anim PRIVATE anim.c anim_assets.c clip_sample.c pose.c anim_internal.h)
+if(MSVC)
+    set_source_files_properties(formats/clip_decode.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
+else()
+    set_source_files_properties(formats/clip_decode.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()

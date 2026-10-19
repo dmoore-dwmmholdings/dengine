@@ -1,4 +1,5 @@
 #include "render/denoise/denoise_internal.h"
+#include "render/skin/skin_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/rt/rt_shadows.h"
@@ -86,6 +87,7 @@ static void renderer_free(de_renderer *r) {
     de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
     de__rt_scene_destroy(r);
+    de__skin_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
@@ -341,6 +343,7 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
 
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
     res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
+                                                     .renderer = r,
                                                      .allocator = a,
                                                      .assets = r->assets,
                                                      .uploader = r->uploader,
@@ -422,6 +425,32 @@ de_render_settings de_renderer_get_settings(const de_renderer *r) {
     return s;
 }
 
+void de_renderer_output_size(de_renderer *r, u32 *width, u32 *height) {
+    u32 w = 0, h = 0;
+    if (r != NULL) {
+        if (r->window.id)
+            de_window_size_pixels(r->window, &w, &h);
+        else {
+            w = DE__RENDER_OFFSCREEN_WIDTH;
+            h = DE__RENDER_OFFSCREEN_HEIGHT;
+        }
+    }
+    if (width)
+        *width = w;
+    if (height)
+        *height = h;
+}
+
+bool de_render_texture_size(de_renderer *r, de_texture texture, u32 *width, u32 *height) {
+    const de_render_texture *record =
+        r && r->assets ? de_render_texture_get(r->assets, texture) : NULL;
+    if (width)
+        *width = record ? record->width : 0;
+    if (height)
+        *height = record ? record->height : 0;
+    return record != NULL;
+}
+
 const de_render_stats *de_renderer_stats(const de_renderer *r) {
     return r != NULL ? &r->stats : NULL;
 }
@@ -440,6 +469,7 @@ void de__renderer_kick_prepare(de_renderer *r) {
     }
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
+    de__views_prepare_pixels(r);
     de__probes_prepare(r, de__render_world_last(r));
     de__rt_gi_prepare(r->rt_gi, de__render_world_last(r));
     de__irradiance_prepare(r, de__render_world_last(r));

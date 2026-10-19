@@ -29,6 +29,7 @@
 #endif
 
 #include "cook/lib/decache.h"
+#include "cook/lib/cooker_internal.h"
 
 #include <dengine/de_base.h>
 #include <dengine/de_memory.h>
@@ -226,7 +227,7 @@ de_result de__decache_file_hash(de__decache *d, const char *vpath, u8 hash[16], 
 
     void *bytes = NULL;
     u64 n = 0;
-    de_result r = de_file_read_all(vpath, d->alloc, &bytes, &n);
+    de_result r = de__cook_read_source(vpath, d->alloc, &bytes, &n);
     if (r == DE_ERR_NOT_FOUND) {
         de_error_clear();
         de_mutex_lock(&d->lock);

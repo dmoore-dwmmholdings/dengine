@@ -34,3 +34,33 @@ target_sources(de_physics PRIVATE
     collide_chain2d.c
     manifold2d.h
     manifold2d.c)
+
+# DENG-254: the soft-step solver (contacts, integration, f64 positions), the constraint interface
+# of the 2D joints (constraint2d.h), islands, sleeping, deterministic graph coloring with colored
+# parallel batches, and bullets (time of impact against static and kinematic bodies).
+target_sources(de_physics PRIVATE
+    constraint2d.h
+    solver2d_internal.h
+    solver2d.c
+    contact_solver2d.c
+    islands2d.c
+    sleep2d.c
+    graph_color2d.c
+    bullet2d.c)
+
+# DENG-258: 2D scene queries (rays, shape casts by GJK conservative advancement, overlaps,
+# closest points) and the 2D kinematic character controller.
+target_sources(de_physics PRIVATE
+    query2d_internal.h
+    query2d.c
+    raycast2d.c
+    shapecast2d.c
+    character2d_internal.h
+    character2d.c)
+
+# DENG-256: scalar-row joints on the colored constraint interface.
+target_sources(de_physics PRIVATE joints2d/joint2d.c joints2d/joint2d_internal.h)
+
+# DENG-260: reflected ECS integration and presentation-only plane mapping/interpolation.
+target_sources(de_physics PRIVATE ecs2d/plane_map.c ecs2d/plane_map.h
+    ecs2d/attach2d.c ecs2d/systems2d.c ecs2d/ecs2d_internal.h)

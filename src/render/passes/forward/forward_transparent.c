@@ -49,6 +49,9 @@ struct de__forward {
     u32 push_bytes;
     de_gpu_sampler sampler; /**< the material sampler (as the resolve's) */
     u32 sampler_bindless;
+    de_gpu_buffer indices;
+    de_gpu_buffer indirect[DE__VIEW_MAX][DE__VIS_FRAME_RING];
+    u32 indirect_capacity[DE__VIEW_MAX][DE__VIS_FRAME_RING];
 };
 
 typedef struct fw_pass {
@@ -57,6 +60,7 @@ typedef struct fw_pass {
     de_rg_resource target, depth, scene_color, scene_depth, views;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
     const de__forward_draw *draws;
+    de_rg_resource indirect, indices;
     u32 draw_count;
     de__rt_refraction_frame *rt;
 } fw_pass;
@@ -171,6 +175,10 @@ void de__forward_destroy(de__forward *fw) {
     if (fw == NULL)
         return;
     de__scene_color_destroy(fw->pyramid);
+    de_gpu_buffer_destroy(fw->dev, fw->indices);
+    for (u32 v = 0; v < DE__VIEW_MAX; ++v)
+        for (u32 f = 0; f < DE__VIS_FRAME_RING; ++f)
+            de_gpu_buffer_destroy(fw->dev, fw->indirect[v][f]);
     de_gpu_pipeline_destroy(fw->dev, fw->capture);
     if (DE_HANDLE_VALID(fw->pipeline))
         de_gpu_pipeline_destroy(fw->dev, fw->pipeline);
@@ -225,6 +233,7 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
         de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
     }
+    de_gpu_cmd_set_index_buffer(cmd, de_rg_buffer(pass, p->indices), 0, false);
     u8 push[128];
     memset(push, 0, sizeof push);
     for (u32 i = 0; i < p->draw_count; ++i) {
@@ -238,7 +247,8 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
             de_gpu_cmd_set_pipeline(cmd, p->fw->capture);
             memcpy(push, &pc, sizeof pc);
             de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
-            de_gpu_cmd_draw(cmd, DE__FWD_VERTICES, d->meshlet_count, 0, 0);
+            de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect), (u64)i * 20u,
+                                             (de_gpu_buffer){0}, 0, 1);
             de_gpu_cmd_end_render(cmd);
             de__rt_refraction_trace(cmd, p->rt, &pc);
             de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
@@ -246,7 +256,8 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         }
         memcpy(push, &pc, sizeof pc);
         de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
-        de_gpu_cmd_draw(cmd, DE__FWD_VERTICES, d->meshlet_count, 0, 0);
+        de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect), (u64)i * 20u,
+                                         (de_gpu_buffer){0}, 0, 1);
         if (p->rt)
             de_gpu_cmd_end_render(cmd);
     }
@@ -328,6 +339,49 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                     .draws = draws,
                     .draw_count = nd};
 
+    /* Sorted indirect arguments persist in a per-view frame ring; capacity changes are
+     * the only allocation points. A shared identity index buffer preserves SV_VertexID. */
+    if (!fw->indices.id) {
+        fw->indices = de_gpu_buffer_create(
+            fw->dev, &(de_gpu_buffer_desc){.size = DE__FWD_VERTICES * sizeof(u32),
+                                           .usage = DE_USAGE_INDEX,
+                                           .memory = DE_MEM_UPLOAD,
+                                           .name = "forward identity indices"});
+        u32 *indices = de_gpu_buffer_map(fw->dev, fw->indices);
+        if (!indices)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward identity indices");
+        for (u32 i = 0; i < DE__FWD_VERTICES; ++i)
+            indices[i] = i;
+    }
+    u32 slot = vc->view_slot, ring = (u32)(vc->frame_index % DE__VIS_FRAME_RING);
+    if (slot >= DE__VIEW_MAX)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "forward view slot");
+    if (fw->indirect_capacity[slot][ring] < nd) {
+        u32 capacity = 64;
+        while (capacity < nd)
+            capacity *= 2;
+        de_gpu_buffer args = de_gpu_buffer_create(
+            fw->dev, &(de_gpu_buffer_desc){.size = (u64)capacity * 20,
+                                           .usage = DE_USAGE_INDIRECT,
+                                           .memory = DE_MEM_UPLOAD,
+                                           .name = "forward sorted indirect draws"});
+        if (!args.id)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward indirect arguments");
+        de_gpu_buffer_destroy(fw->dev, fw->indirect[slot][ring]);
+        fw->indirect[slot][ring] = args;
+        fw->indirect_capacity[slot][ring] = capacity;
+    }
+    u32 *arguments = de_gpu_buffer_map(fw->dev, fw->indirect[slot][ring]);
+    if (!arguments)
+        return DE_FAIL(DE_ERR_INTERNAL, "forward indirect map");
+    for (u32 i = 0; i < nd; ++i) {
+        arguments[i * 5] = DE__FWD_VERTICES;
+        arguments[i * 5 + 1] = draws[i].meshlet_count;
+        arguments[i * 5 + 2] = arguments[i * 5 + 3] = arguments[i * 5 + 4] = 0;
+    }
+    pd->indirect = de_rg_import_buffer(g, fw->indirect[slot][ring], DE_ACCESS_INDIRECT);
+    pd->indices = de_rg_import_buffer(g, fw->indices, DE_ACCESS_SHADER_READ);
+
     /* The scene colour behind the transmissive surfaces (the lighting target as lighting left
      * it), copied only when one is listed. */
     if (transmissive && !pd->pc.refraction) {
@@ -364,6 +418,8 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
     if (!p)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "forward: draw pass");
     de__rt_refraction_declare(pd->rt, p);
+    de_rg_read(p, pd->indirect, DE_ACCESS_INDIRECT);
+    de_rg_read(p, pd->indices, DE_ACCESS_SHADER_READ);
     de_rg_read(p, lc->target, DE_ACCESS_RENDER_TARGET);
     de_rg_write(p, lc->target, DE_ACCESS_RENDER_TARGET);
     /* The pipeline writes no depth, but the attachment is bound in its write layout. */

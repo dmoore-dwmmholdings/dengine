@@ -197,3 +197,22 @@ target_link_libraries(de_cook_cmd PRIVATE "$<TARGET_NAME_IF_EXISTS:de_render>")
 target_sources(de_cooker PRIVATE
     importers/material/mat_toml_import.h
     importers/material/mat_toml_import.c)
+
+# DENG-255: font importer; engine-owned code remains C11.
+target_sources(de_cooker PRIVATE
+    "${DE_ROOT_DIR}/src/text/import/font_import.c"
+    "${DE_ROOT_DIR}/src/text/import/charsets.c"
+    "${DE_ROOT_DIR}/src/text/import/atlas_build.c"
+    "${DE_ROOT_DIR}/src/text/import/bmfont_import.c"
+    "${DE_ROOT_DIR}/src/text/import/pixel_font_import.c")
+target_link_libraries(de_cooker PRIVATE de_text_msdf de_tp_stb de_tp_tomlc17)
+
+# DENG-314: portable sound cooking and deterministic fixed-point Opus encoding.
+target_sources(de_cooker PRIVATE importers/sound/sound_import.c
+    importers/sound/adpcm_encode.c importers/sound/opus_encode.c)
+target_link_libraries(de_cooker PRIVATE de_audio_dsp de_tp_dr_libs de_tp_opus de_tp_stb)
+target_sources(de_cooker PRIVATE importers/sprite_proxy.c)
+
+# DENG-264: string-table directory importer and shared deterministic message validation.
+target_sources(de_cooker PRIVATE "${DE_ROOT_DIR}/src/text/loc/string_table_import.c")
+target_link_libraries(de_cooker PRIVATE de_loc_common)

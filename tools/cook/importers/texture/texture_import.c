@@ -15,6 +15,7 @@
 #include "texture_bc.h"
 #include "texture_import.h"
 #include "texture_internal.h"
+#include "cook/importers/sprite_proxy.h"
 #include "env_internal.h"
 
 #include <dengine/de_asset.h>
@@ -293,6 +294,59 @@ static de_result cook_image(de_asset_import_ctx *ctx, const de_allocator *a, de_
     de_tex_chain_free(a, &chain);
     if (r != DE_OK)
         return r;
+    if (de_asset_import_setting_bool(ctx, "rt_proxy", false)) {
+        de_cooked_sprite_proxy proxy;
+        if (img->layers != 1 || img->cube) {
+            de_tex_dtex_free(a, &t);
+            return de_asset_import_fail(ctx, DE_ERR_UNSUPPORTED, "rt_proxy requires one 2D mask");
+        }
+        /* One authored atlas region per cooked texture; all other regions use alpha boxes. */
+        const char *keys[4] = {"rt_proxy_u", "rt_proxy_v", "rt_proxy_width", "rt_proxy_height"};
+        f32 region[4];
+        for (u32 i = 0; i < 4; ++i)
+            region[i] = (f32)de_asset_import_setting_float(ctx, keys[i], i < 2 ? 0 : 1);
+        if (!isfinite(region[0]) || !isfinite(region[1]) || !isfinite(region[2]) ||
+            !isfinite(region[3]) || region[0] < 0 || region[1] < 0 || region[2] <= 0 ||
+            region[3] <= 0 || region[0] + region[2] > 1 || region[1] + region[3] > 1) {
+            de_tex_dtex_free(a, &t);
+            return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT, "invalid rt_proxy UV region");
+        }
+        u32 x = (u32)lroundf(region[0] * img->width), y = (u32)lroundf(region[1] * img->height);
+        u32 w = (u32)lroundf(region[2] * img->width), h = (u32)lroundf(region[3] * img->height);
+        if (!w || !h || x + w > img->width || y + h > img->height) {
+            de_tex_dtex_free(a, &t);
+            return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT, "empty rt_proxy region");
+        }
+        size_t crop_bytes = (size_t)w * h * 4 * sizeof(f32);
+        f32 *crop = DE_ALLOC(a, crop_bytes, 16, DE_MEM_ASSET);
+        if (!crop) {
+            de_tex_dtex_free(a, &t);
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "sprite proxy crop");
+        }
+        for (u32 row = 0; row < h; ++row)
+            memcpy(crop + (size_t)row * w * 4, img->rgba + ((size_t)(y + row) * img->width + x) * 4,
+                   (size_t)w * 4 * sizeof(f32));
+        r = de_sprite_proxy_build(
+            a, crop, w, h, (f32)de_asset_import_setting_float(ctx, "rt_proxy_cutoff", .5), &proxy);
+        DE_FREE(a, crop, crop_bytes);
+        memcpy(proxy.region, region, sizeof region);
+        if (r != DE_OK) {
+            de_tex_dtex_free(a, &t);
+            return r;
+        }
+        u64 bytes = t.size + DE_SPRITE_PROXY_BYTES;
+        u8 *next = DE_ALLOC(a, (size_t)bytes, 16, DE_MEM_ASSET);
+        if (!next) {
+            de_tex_dtex_free(a, &t);
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "sprite proxy output");
+        }
+        memcpy(next, t.data, (size_t)t.size);
+        de_sprite_proxy_write(next + t.size, &proxy);
+        DE_FREE(a, t.data, (size_t)t.size);
+        t.data = next;
+        t.size = bytes;
+        de_cooked_put_u64(next + 48, bytes);
+    }
     return write_dtex(ctx, a, &t);
 }
 

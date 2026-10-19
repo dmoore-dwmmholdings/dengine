@@ -382,3 +382,73 @@ size = [128, 96]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.text_msdf_scales]
+description = "MSDF Sdf at 8,16,64,512 px"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
+
+[scene.text_outline_shadow]
+description = "MTSDF outline and alpha-distance soft shadow"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
+
+[scene.text_bitmap_pixel]
+description = "Nearest bitmap font at integer 1x and 3x"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.0
+threshold_p99 = 0.0
+
+[scene.text_world_text]
+description = "Billboard world text at camera distances 2m and 50m, lit forward variant"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
+
+[scene.pixel2d_base_int4x]
+description = "S19 actual bundle-loaded dusk ruin: base_int4x"
+size = [1920, 1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.pixel2d_rt_int4x]
+description = "S19 actual bundle-loaded dusk ruin: rt_int4x"
+size = [1920, 1080]
+tiers = ["rt"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.pixel2d_sharp_bilinear]
+description = "S19 actual bundle-loaded dusk ruin: sharp_bilinear"
+size = [2560, 1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.pixel2d_subtexel_scroll]
+description = "S19 actual bundle-loaded dusk ruin: subtexel_scroll"
+size = [1920, 1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.pixel2d_palette_dither]
+description = "S19 actual bundle-loaded dusk ruin: palette_dither"
+size = [1920, 1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.pixel2d_translucent_sort]
+description = "S19 actual bundle-loaded dusk ruin: translucent_sort"
+size = [1920, 1080]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
