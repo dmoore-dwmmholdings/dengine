@@ -122,9 +122,10 @@ a cleared reverse-Z depth attachment, so no other drawable is required.
 Fill and effect samples stay inside each glyph's atlas rectangle, including its padding.
 Shadow coordinates outside that allocation contribute no coverage. Effect extent still
 depends on the glyph quad and available padding.
-Metal native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
-`tests/golden/text`; other backend captures remain DENG-496. Render-disabled builds
-compile the CPU module independently.
+Native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
+`tests/golden/text`. Backend references were captured and visually reviewed on actual
+Metal, Vulkan lavapipe and D3D12 WARP runners (DENG-496); world text is nonempty on
+all three. Render-disabled builds compile the CPU module independently.
 
 ## Inline formatting and binding cache prerequisites (DENG-321)
 

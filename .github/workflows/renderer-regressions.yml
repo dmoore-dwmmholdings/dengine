@@ -2,7 +2,16 @@ name: Renderer bug regressions
 
 on:
   workflow_call:
+    inputs:
+      warp_crashes:
+        type: boolean
+        default: true
   workflow_dispatch:
+    inputs:
+      warp_crashes:
+        description: "Include the original 34 WARP crash cases"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -17,14 +26,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug, backend: d3d12, expected: 38}
-          - {os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug, backend: vulkan, expected: 4}
+          - {os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug, backend: d3d12}
+          - {os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug, backend: vulkan}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
       PRESET: ${{ matrix.preset }}
       BACKEND: ${{ matrix.backend }}
-      EXPECTED: ${{ matrix.expected }}
+      EXPECTED: ${{ matrix.backend == 'd3d12' && inputs.warp_crashes && 38 || 4 }}
+      WARP_CRASHES: ${{ inputs.warp_crashes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-dengine
@@ -42,19 +52,28 @@ jobs:
           test -n "${icd}"
           echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
           echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
-      - name: Build golden harness only
+      - name: Build focused regression targets
+        id: regression_build
         shell: bash
         run: |
           cmake --preset "${PRESET}"
-          cmake --build --preset "${PRESET}" --target de_golden
+          cmake --build --preset "${PRESET}" --target de_golden test_render_csm
+      - name: Check orthographic shadow receiver precision
+        if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
+        shell: bash
+        run: |
+          ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
+            --output-junit orthographic-receiver.xml \
+            -R "^render_csm\.csm\.orthographic_self_shadow_${BACKEND}$"
       - name: Run original crash cases and text references
+        if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
         id: goldens
         shell: bash
         run: |
-          if [ "${BACKEND}" = d3d12 ]; then
+          if [ "${BACKEND}" = d3d12 ] && [ "${WARP_CRASHES}" = true ]; then
             pattern='^golden\.d3d12\.(views_split_screen|materials_(gallery_ibl|gallery_lights|furnace|khr_samples|layers_furnace)|shadows_(csm|local|pcss_contact)_(medium|high|off)|ao_gtao_(medium|high|off)|reflections_ssr_probes_(medium|high|off)|gi_probes_ssgi_(medium|high|off)|refraction_ss_(medium|high|off)|rt_(shadows_pole|restir_many_lights|ao_corner|reflections_mirror_rough|gi_cornell|refraction_glass|foliage_shadow)_base|text_(msdf_scales|outline_shadow|bitmap_pixel|world_text))$'
           else
-            pattern='^golden\.vulkan\.text_(msdf_scales|outline_shadow|bitmap_pixel|world_text)$'
+            pattern="^golden\.${BACKEND}\.text_(msdf_scales|outline_shadow|bitmap_pixel|world_text)$"
           fi
           # Keep each scene's existing settings, comparison thresholds and 300-second limit.
           ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
@@ -67,6 +86,9 @@ jobs:
           from pathlib import Path
           import xml.etree.ElementTree as ET
           root = Path("build") / os.environ["PRESET"]
+          receivers = ET.parse(root / "orthographic-receiver.xml").findall(".//testcase")
+          assert len(receivers) == 1, len(receivers)
+          assert all(receivers[0].find(tag) is None for tag in ("skipped", "failure", "error")), receivers[0].attrib
           cases = ET.parse(root / "renderer-regressions.xml").findall(".//testcase")
           assert len(cases) == int(os.environ["EXPECTED"]), len(cases)
           for case in cases:
@@ -82,5 +104,6 @@ jobs:
           path: |
             build/${{ matrix.preset }}/golden/
             build/${{ matrix.preset }}/renderer-regressions.xml
+            build/${{ matrix.preset }}/orthographic-receiver.xml
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
           if-no-files-found: warn

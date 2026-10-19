@@ -190,3 +190,31 @@ Linux and Windows jobs then require one real render (`de-golden ... --scene rhi_
 
 The Windows build jobs of the matrix also run `golden.d3d12.*` on WARP, because every Windows job
 that builds tests deploys the vendored WARP.
+
+
+### WARP startup crash qualification (DENG-466)
+
+[Renderer regression run 39263154514](https://github.com/dmoore-dwmmholdings/dengine/actions/runs/39263154514)
+executed all 34 scenes that previously crashed in run 39167131353. All produced
+actual Base PNGs on Microsoft Basic Render Driver/WARP, with zero exceptions and
+zero skips. This qualifies the current renderer after path-tracer pipelines were
+deferred until a view selects tracing; the original crash logs ended during eager
+PT pipeline initialization. It does not identify a specific driver instruction as
+the cause of the old exception.
+
+Of those 34 cases, 23 pass their original comparisons. All seven `rt_*_base` cases
+render successfully but lack D3D12 references. Four older comparisons still fail:
+
+| Scene | Mean FLIP | p99 | Original mean / p99 limits |
+|---|---:|---:|---:|
+| materials_gallery_lights | 0.063403 | 0.515477 | 0.007 / 0.035 |
+| shadows_local_medium | 0.135714 | 0.931030 | 0.005 / 0.050 |
+| shadows_local_high | 0.137119 | 0.932034 | 0.005 / 0.050 |
+| shadows_local_off | 0.167135 | 0.869065 | 0.005 / 0.050 |
+
+Those image failures remain visible, with their references and thresholds intact.
+They are separate from the resolved startup crashes. The same run captured four
+nonempty D3D12 text goldens and four Vulkan text goldens; their only failures were
+missing references. The reviewed backend-specific text captures are now checked in.
+The artifact `renderer-regressions-d3d12` retains all 38 PNGs and the exact CTest
+results; the Vulkan artifact retains its four actual text captures.
