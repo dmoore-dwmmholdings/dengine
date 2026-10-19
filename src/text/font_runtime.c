@@ -197,3 +197,33 @@ void de_text__publish_pages(de_text_system *t) {
     (void)t;
 #endif
 }
+
+/* DENG-317 metadata and allocation-free packet ownership; no layout/font behavior changes. */
+de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page, de_text_page_info *out) {
+    if (out)
+        memset(out, 0, sizeof *out);
+    if (!t || !out)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "text page info: invalid argument");
+    de__text_lock(t->runtime);
+    const de_text_font *f = de_text__font_get(t, font);
+    if (!f || page >= f->pages) {
+        de__text_unlock(t->runtime);
+        return DE_FAIL(DE_ERR_NOT_FOUND, "text page not ready");
+    }
+    *out = (de_text_page_info){.width = f->width,
+                               .height = f->height,
+                               .generation = f->generation,
+                               .distance_range = f->range,
+                               .bitmap = f->mode != DE_FONT_MSDF,
+                               .pixel = f->mode == DE_FONT_PIXEL};
+    de__text_unlock(t->runtime);
+    out->texture = de_text_page_texture(t, font, page);
+    return DE_OK;
+}
+bool de_text_pin_font(de_text_system *t, de_font font) {
+    return t && de_text__font_get(t, font) && de__slot_ref_handle(t->assets, font.id);
+}
+void de_text_unpin_font(de_text_system *t, de_font font) {
+    if (t && t->assets && font.id)
+        (void)de__slot_unref_handle(t->assets, font.id);
+}

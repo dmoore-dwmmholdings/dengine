@@ -98,6 +98,19 @@ typedef struct de_text_draw_opts {
 DE_API de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *quads,
                               u32 count, de_vec2 origin_px, const de_text_draw_opts *options);
 DE_API de_gpu_texture de_text_page_texture(de_text_system *t, de_font font, u32 page);
+/** Immutable page metadata copied during Extract; texture is optional without rendering. */
+typedef struct de_text_page_info {
+    de_gpu_texture texture;
+    u32 width, height, generation;
+    f32 distance_range;
+    bool bitmap, pixel;
+} de_text_page_info;
+DE_API de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page,
+                                       de_text_page_info *out);
+/** Allocation-free generation pins; balance successful pins before destroying the text system. */
+DE_API bool de_text_pin_font(de_text_system *t, de_font font);
+DE_API void de_text_unpin_font(de_text_system *t, de_font font);
+
 typedef struct DeWorldText {
     de_name loc_id;
     char literal[128];

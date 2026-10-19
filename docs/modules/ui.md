@@ -114,3 +114,58 @@ Stylesheet verification: Dev CTest passes 22/23 cases, with DENG-511 retained as
 a failing regression. ASan/UBSan passes 21/23: the same regression plus the 1 ms
 theme benchmark (8.524 ms under instrumentation; Dev is 0.539 ms). Public C11/C++17
 headers, layering, and all 11 unique UI C sources compile with render/GPU disabled.
+
+## Retained rendering (DENG-317)
+
+PostUpdate `ui.draw_list`, after layout, builds per-root commands in stable
+(root order, popup layer, z order, tree order). Descendant opacity multiplies;
+`clip` intersects an axis-aligned scissor with its parent. Rounded clip masks
+remain unsupported. Commands include SDF rounded fill/border, tinted image,
+CPU-expanded 9-slice image, and cached MSDF/bitmap text quads. Resolved stylesheet
+background images/nine-slice values use the same image path. `text_common.slang`
+is shared with ordinary text rendering. Per-root metadata distinguishes screen
+and future world-panel routing without a renderer reading the UI hierarchy.
+
+`ui.extract` is the only handoff from simulation commands to immutable render
+packets. Four packets are keyed by the actual renderer Extract token, so a
+future published UI update cannot replace the world frame being rendered. Slot
+pins keep ordinary image/font generations alive after load release or entity
+despawn; retirement waits for the packet's actual submitted GPU fence. Frames
+that never invoke a UI hook retire against the CPU-completed Extract token.
+When no packet is free, the newest UI update is dropped rather than overwriting
+pending data. Existing same-slot hot reload can still retire a GPU generation
+from an unsent packet; that separate resource-lease defect is DENG-514.
+
+The public `DE_HOOK_UI` consumer uses one bindless pipeline and instanced quads
+batched by contiguous scissor runs, on the tonemapped full-resolution target.
+Each renderer upload-ring slot is written only after its reuse fence completes.
+UI code includes public renderer APIs only: device and builtin pipeline access,
+hook removal/drain, hook frame/format information, typed asset pins and texture
+lookup. UI must be destroyed before its text system, renderer and asset system.
+The internal widget emitter runs after node backgrounds/images and before text;
+it automatically preserves the node's opacity, clip and ordering context.
+
+Set `ui.render.max_quads` before UI creation to size CPU/GPU storage (default
+65536). Runtime lowering also truncates; increasing beyond allocated storage
+requires recreating the UI. Overflow logs once and records truncation.
+`de_ui_get_render_stats` exposes quads, draw calls, roots, truncation and build +
+Extract CPU time. Static warmed UI has no per-frame heap allocations; changed
+text/layout cache entries can allocate and are not included in that claim.
+
+`de_renderer_set_ui_output` validates finite positive UI-white and paper-white
+nits. SDR/zero settings preserve scale 1. HDR linear output multiplies UI RGB by
+UI-white/paper-white while preserving premultiplied alpha. Calibration is copied
+with renderer frame settings. Actual floating-target tests at 80/203/400 nits,
+including half-alpha composition, validate this linear brightness contract.
+This is **not** qualification of the absent S18 PQ/scRGB swapchain encoders,
+HDR metadata, or a physical display.
+
+Host evidence: 10/10 draw tests; five Metal goldens repeat with FLIP mean/p99/max
+zero at unchanged .001/.015 limits; the deliberate wrong-reference control
+fails. Actual Metal 2000-widget HUD: 2001 quads, one draw, 0.1141 ms build +
+Extract. Static CPU 2000-widget HUD: 1000 frames with zero allocations, mean
+0.0764 ms. M1-specific timing and Vulkan/D3D12 remain needs-hw-verify. Known
+stylesheet transition regression DENG-511 remains separate; visible font
+ligature loss DENG-512 and plain-fill seams DENG-513 are retained in references.
+Metal shader-instrumented renderer setup has known timeout DENG-508; these
+native comparisons do not claim that instrumented suite passed.

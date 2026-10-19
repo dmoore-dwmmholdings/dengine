@@ -38,6 +38,13 @@ typedef enum de_upscaler {
 } de_upscaler;
 typedef enum de_gi_mode { DE_GI_STATIC_PROBES, DE_GI_SCREEN_SPACE, DE_GI_RT } de_gi_mode;
 
+/** Linear-output UI calibration. Scene-linear1 denotes paper-white nits in HDR mode.
+ * Zero settings and SDR preserve a multiplier of1; this does not select a swapchain encoding. */
+typedef struct de_ui_output_calibration {
+    bool hdr;
+    f32 ui_white_nits, paper_white_nits;
+} de_ui_output_calibration;
+
 /**
  * What the renderer draws, and how well. de_renderer_set_settings clamps every field to the
  * device (see there); `(de_render_settings){0}` is valid (Base, every effect off, then clamped:
@@ -56,6 +63,7 @@ typedef struct de_render_settings {
     bool path_tracer;          /**< reference mode; requires the RT tier */
     u32 path_max_bounces;      /**< 1..64 */
     de_gi_mode gi_mode;        /**< Static volumes, screen-space plus volumes, or reserved RT. */
+    de_ui_output_calibration ui_output; /**< Copied with the frame settings. */
 } de_render_settings;
 
 /**
@@ -376,6 +384,47 @@ DE_API void de_render_add_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, 
 DE_API de_rg_resource de_view_color(de_renderer *r, de_view v);
 /** Inside a hook for `v`: the view's internal size in pixels; 0 x 0 anywhere else. */
 DE_API void de_view_size(de_renderer *r, de_view v, u32 *width, u32 *height);
+
+/* Public custom-pass support (DENG-317); no renderer-private headers required. */
+DE_API de_gpu_device *de_renderer_device(de_renderer *r);
+/** Main thread. Creates a caller-owned pipeline from engine-builtin shader code and state.
+ * The wrapper owns/frees temporary code. Only vs/ps are supplied; state.vs/ps are ignored. */
+DE_API de_result de_render_builtin_graphics_pipeline(de_renderer *r, const char *name,
+                                                     u32 permutation, const char *vs_entry,
+                                                     const char *ps_entry,
+                                                     const de_gpu_pipeline_desc *state,
+                                                     de_gpu_pipeline *out);
+/** Main thread. Removes matching callback/user and drains outstanding render/GPU work.
+ * Once returned the callback's user storage may be destroyed. Never call from a render hook. */
+DE_API de_result de_render_remove_hook(de_renderer *r, de_rg_hook at, de_rg_hook_fn fn, void *user);
+typedef struct de_render_hook_info {
+    de_gpu_format color_format;
+    u32 width, height, ring_index, frames_in_flight;
+    u64 frame_index, extract_frame;
+    f32 ui_white_multiplier;
+} de_render_hook_info;
+/** Only inside a hook for this view. The renderer has waited for the fence of ring_index;
+ * render-thread upload buffers indexed by it may be rewritten until their next submission. */
+DE_API bool de_view_hook_info(de_renderer *r, de_view view, de_render_hook_info *out);
+/** Main thread. Both nits values must be finite and positive, including SDR configurations. */
+DE_API de_result de_renderer_set_ui_output(de_renderer *r, const de_ui_output_calibration *value);
+DE_API de_ui_output_calibration de_renderer_get_ui_output(de_renderer *r);
+
+/** Main-thread loaded texture query. Invalid/stale/unloaded handles return zero. */
+DE_API de_gpu_texture de_render_texture_gpu(de_renderer *r, de_texture texture);
+/** Allocation-free pins for typed asset handles belonging to this renderer's asset system.
+ * Pins retain the slot generation against normal eviction; balance every successful pin.
+ * Main thread. A pin is not a promise that hot reload preserves the old object. */
+DE_API bool de_render_pin_asset(de_renderer *r, u32 typed_handle);
+DE_API void de_render_unpin_asset(de_renderer *r, u32 typed_handle);
+/** Submitted frame-fence values are frame_index+1. Zero explicitly means no submission. */
+DE_API u64 de_renderer_completed_frame(de_renderer *r);
+DE_API de_result de_renderer_wait_frame(de_renderer *r, u64 fence_value);
+
+/** Main Extract only, after de.render.extract_views. Zero means no immutable frame is filling. */
+DE_API u64 de_renderer_extract_frame(de_renderer *r);
+/** Monotonic CPU-completed immutable Extract token. Zero means none; GPU lifetime is separate. */
+DE_API u64 de_renderer_completed_extract_frame(de_renderer *r);
 
 /* ---------- Tonemappers (pluggable) ---------- */
 typedef enum de_builtin_tonemapper {

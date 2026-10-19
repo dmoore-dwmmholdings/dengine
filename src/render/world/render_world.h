@@ -244,6 +244,7 @@ typedef struct de__render_thread {
     de_atomic_u32 stop;        /**< 1: the thread exits at its next wake-up */
     de_atomic_u64 rendered;    /**< frames finished by the render thread */
     de_atomic_u32 last_result; /**< de_result of the last frame it rendered */
+    de_atomic_u64 completed_extract; /**< Last CPU-finished immutable frame, zero before first. */
 } de__render_thread;
 
 /* ---------- The render world of one renderer ---------- */

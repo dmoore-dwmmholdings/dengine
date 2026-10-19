@@ -29,6 +29,7 @@ de_result de__rt_init(de__render_world *rw) {
     de_atomic_init_ptr(&t->pending, NULL);
     de_atomic_init_u32(&t->stop, 0);
     de_atomic_init_u64(&t->rendered, 0);
+    de_atomic_init_u64(&t->completed_extract, 0);
     de_atomic_init_u32(&t->last_result, (u32)DE_OK);
     de_result res = de_sem_init(&t->kick, 0);
     if (res != DE_OK)
@@ -63,6 +64,7 @@ static de_result render_one(de__render_world *rw, de__render_world_frame *f) {
         DE_ERROR(rw->log, "renderer: frame %llu: %s", (unsigned long long)f->frame,
                  e != NULL ? e->message : "failed");
     }
+    de_atomic_store_u64(&rw->rt.completed_extract, f->frame, DE_ATOMIC_RELEASE);
     rw->current = NULL;
     de_atomic_store_u32(&f->state, DE__RW_FREE, DE_ATOMIC_RELEASE);
     return res;
