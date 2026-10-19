@@ -235,3 +235,149 @@ TEST_F(palette, ten_thousand_snap_cpu_cost, pixel_fixture) {
            "graph)\n",
            (double)(de_time_now_ns() - start) / 5e6);
 }
+
+typedef struct motion_snap_observer {
+    de_view view;
+    de_dvec3 current, previous;
+    bool snapshot;
+    u32 calls;
+    de_dvec3 origin;
+} motion_snap_observer;
+static void observe_motion_snap(de__view_frame *vf, void *user) {
+    motion_snap_observer *o = user;
+    if (vf->view.id != o->view.id)
+        return;
+    o->origin = vf->world->origin;
+    de__gpu_scene_table_info table = de__gpu_scene_table(vf->renderer->gpu_scene, DE__GS_INSTANCES);
+    const de__gs_instance *instances =
+        o->snapshot ? de_gpu_buffer_map(vf->renderer->dev, table.buffer) : NULL;
+    if (o->snapshot)
+        ASSERT_TRUE(instances != NULL);
+    for (u32 i = 0; i < vf->world->instances.count; ++i) {
+        if (!(vf->world->instances.flags[i] & DE__RW_INST_SPRITE))
+            continue;
+        de__gs_instance original;
+        de__gpu_scene_pack_frame_instance(vf->renderer->gpu_scene, vf->world, i, &original);
+        const de__gs_instance *item = o->snapshot ? &instances[i] : &original;
+        const DeSprite *sprite = &vf->world->instances.sprite[i];
+        const f64 origin[] = {vf->world->origin.x, vf->world->origin.y, vf->world->origin.z};
+        const f64 current[] = {o->current.x, o->current.y, o->current.z};
+        const f64 previous[] = {o->previous.x, o->previous.y, o->previous.z};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            f64 a = origin[axis] + item->transform[axis].v[3] +
+                    item->transform[axis].v[0] * sprite->pivot.x +
+                    item->transform[axis].v[1] * sprite->pivot.y;
+            f64 b = origin[axis] + item->prev_transform[axis].v[3] +
+                    item->prev_transform[axis].v[0] * sprite->pivot.x +
+                    item->prev_transform[axis].v[1] * sprite->pivot.y;
+            EXPECT_TRUE(fabs(a - current[axis]) < 0.002);
+            EXPECT_TRUE(fabs(b - previous[axis]) < 0.002);
+        }
+        ++o->calls;
+        return;
+    }
+    ASSERT_TRUE(false);
+}
+
+TEST_F(palette, previous_sprite_pose_uses_prior_camera_grid_and_snap_toggle, pixel_fixture) {
+    start_pixel(f, DE_GPU_NULL, 16, 16, 64, 64, false);
+    de__view_unregister_stage(f->r, observe_internal, f);
+    de__view_unregister_stage(f->r, observe_ui, f);
+    de__view_unregister_stage(f->r, pattern_stage, f);
+    const de_builtin_component_ids bi = de_builtin_components(f->world);
+    const DeRenderComponents *ids = de__render_components(f->world);
+    de_view second = de_view_create(
+        f->r, &(de_view_desc){.target = f->target, .order = 1, .name = "history-second"});
+    de_pixel_art_settings other = {
+        .internal_width = 32, .internal_height = 32, .snap_sprites = true};
+    de_view_set_pixel_art(f->r, second, &other);
+    de_entity camera2;
+    de_component components[] = {bi.transform, ids->camera};
+    ASSERT_EQ(de_entity_spawn_with(f->world, components, 2, &camera2), DE_OK);
+    DeTransform camera_transform = de_transform_identity();
+    camera_transform.position.x = 1.2;
+    *(DeTransform *)de_entity_get(f->world, camera2, bi.transform) = camera_transform;
+    *(DeCamera *)de_entity_get(f->world, camera2, ids->camera) = (DeCamera){
+        .view = second, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 16, .near_z = .1f};
+    motion_snap_observer o[2] = {{.view = f->view}, {.view = second, .snapshot = true}};
+    for (u32 i = 0; i < 2; ++i)
+        ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, INT32_MAX - 3,
+                                          "test.snap.motion", observe_motion_snap, &o[i]),
+                  DE_OK);
+    const struct {
+        f64 sprite, camera;
+        f32 height, scale;
+        u32 resolution;
+        bool snap;
+        f64 current, previous, current2, previous2;
+    } cases[] = {{10.6, 0, 16, 1, 16, true, 11, 11, 10.7, 10.7},
+                 {10.37, 0, 16, 1, 16, true, 10, 11, 10.2, 10.7},
+                 {10.37, .3, 8, 2, 16, true, 10.3, 10, 10.2, 10.2},
+                 {10.63, .6, 8, 2, 32, true, 10.6, 10.3, 10.7, 10.2},
+                 {10.87, .6, 8, 2, 32, false, 10.87, 10.6, 10.7, 10.7},
+                 {11.12, .6, 8, 2, 32, false, 11.12, 10.87, 11.2, 10.7},
+                 {11.37, 0, 16, 2, 16, true, 11, 11.12, 11.2, 11.2}};
+    bool previous_snap = true;
+    for (u32 i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        if (i == 3)
+            de_render_set_2d_plane(f->r, DE_PLANE_TOP_XY);
+        DeTransform *sprite = de_entity_get(f->world, f->sprite, bi.transform);
+        sprite->position.x = cases[i].sprite;
+        sprite->position.y = .37;
+        sprite->scale.x = cases[i].scale;
+        ((DeTransform *)de_entity_get(f->world, f->camera, bi.transform))->position.x =
+            cases[i].camera;
+        ((DeCamera *)de_entity_get(f->world, f->camera, ids->camera))->ortho_height =
+            cases[i].height;
+        de_pixel_art_settings grid = {.internal_width = cases[i].resolution,
+                                      .internal_height = cases[i].resolution,
+                                      .snap_sprites = true};
+        de_view_set_pixel_art(f->r, f->view, cases[i].snap ? &grid : NULL);
+        o[0].current = (de_dvec3){cases[i].current,
+                                  i < 3    ? .37
+                                  : i == 3 ? .25
+                                  : i < 6  ? .37
+                                           : 0,
+                                  -5};
+        o[0].previous = (de_dvec3){cases[i].previous, i < 4 ? .37 : i == 4 ? .25 : .37, -5};
+        o[0].snapshot = cases[i].snap || previous_snap;
+        o[1].current = (de_dvec3){cases[i].current2, i < 3 ? .37 : .5, -5};
+        o[1].previous = (de_dvec3){cases[i].previous2, i < 4 ? .37 : .5, -5};
+        pixel_frame(f);
+        previous_snap = cases[i].snap;
+    }
+    EXPECT_EQ(o[0].calls, 7u);
+    EXPECT_EQ(o[1].calls, 7u);
+    EXPECT_TRUE(fabs(((DeTransform *)de_entity_get(f->world, f->sprite, bi.transform))->position.x -
+                     11.37) < 1e-12);
+}
+TEST_F(palette, previous_sprite_grid_survives_large_world_origin_rebase, pixel_fixture) {
+    start_pixel(f, DE_GPU_NULL, 16, 16, 64, 64, false);
+    de__view_unregister_stage(f->r, observe_internal, f);
+    de__view_unregister_stage(f->r, observe_ui, f);
+    de__view_unregister_stage(f->r, pattern_stage, f);
+    const de_builtin_component_ids bi = de_builtin_components(f->world);
+    const DeRenderComponents *ids = de__render_components(f->world);
+    const f64 position = 1000000010.37, first_camera = 1000000000.3, next_camera = 1000002000.6;
+    ((DeTransform *)de_entity_get(f->world, f->sprite, bi.transform))->position.x = position;
+    ((DeTransform *)de_entity_get(f->world, f->camera, bi.transform))->position.x = first_camera;
+    ((DeCamera *)de_entity_get(f->world, f->camera, ids->camera))->ortho_height = 11.2f;
+    de_pixel_art_settings grid = {
+        .internal_width = 16, .internal_height = 16, .snap_sprites = true};
+    de_view_set_pixel_art(f->r, f->view, &grid);
+    f64 texel = (f64)11.2f / 16;
+    f64 first = first_camera + round((position - first_camera) / texel) * texel;
+    f64 z = round(-5 / texel) * texel;
+    motion_snap_observer o = {
+        .view = f->view, .current = {first, 0, z}, .previous = {first, 0, z}, .snapshot = true};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, INT32_MAX - 3, "test.snap.rebase",
+                                      observe_motion_snap, &o),
+              DE_OK);
+    pixel_frame(f);
+    de_dvec3 original = o.origin;
+    ((DeTransform *)de_entity_get(f->world, f->camera, bi.transform))->position.x = next_camera;
+    o.current.x = next_camera + round((position - next_camera) / texel) * texel;
+    pixel_frame(f);
+    EXPECT_TRUE(fabs(o.origin.x - original.x) > 500);
+    EXPECT_EQ(o.calls, 2u);
+}

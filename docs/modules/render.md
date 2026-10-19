@@ -53,6 +53,11 @@ game shutdown rather than destroying an assigned renderer while its assets live.
 
 ## Immutable view and pixel context
 
+Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.
+Current and previous pivots snap independently; grid history uses absolute coordinates
+across render-origin rebases. Disabling sprite snapping preserves the previously snapped
+pose for that transition frame, while bounds and TLAS continue to follow only the current pose.
+
 `de_renderer_extract_view_info` is valid after `de.render.extract_views` during
 Extract. Camera matrices, double-precision render origin, layer mask, effective
 settings, viewport dimensions, pixel settings and fitted content rectangle are
