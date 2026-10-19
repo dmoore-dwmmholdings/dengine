@@ -448,3 +448,48 @@ TEST_F(pathtracer, mis_variance, pt_fixture) {
     EXPECT_TRUE(variance[0] < variance[1]);
     EXPECT_TRUE(variance[0] < variance[2]);
 }
+
+TEST_F(pathtracer, pipelines_are_lazy_selected_once_and_reused, pt_fixture) {
+    de_renderer *r = f->rt.r;
+    de_render_settings selected = de_renderer_get_settings(r);
+    ASSERT_TRUE(selected.path_tracer && selected.tier == DE_TIER_RT);
+    EXPECT_FALSE(de__pt_enabled(r, &selected));
+    u32 before = de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE);
+    de_render_settings inactive = selected;
+    inactive.tier = DE_TIER_BASE;
+    ASSERT_EQ(de__pt_prepare(r, &inactive), DE_OK);
+    EXPECT_FALSE(de__pt_enabled(r, &inactive));
+    inactive = selected;
+    inactive.path_tracer = false;
+    ASSERT_EQ(de__pt_prepare(r, &inactive), DE_OK);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    ASSERT_EQ(de__pt_prepare(r, &selected), DE_OK);
+    EXPECT_TRUE(de__pt_enabled(r, &selected));
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 2);
+    ASSERT_EQ(de__pt_prepare(r, &selected), DE_OK);
+    ASSERT_EQ(de__pt_prepare(r, &inactive), DE_OK);
+    EXPECT_FALSE(de__pt_enabled(r, &inactive));
+    ASSERT_EQ(de__pt_prepare(r, &selected), DE_OK);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before + 2);
+    pt_frame(f);
+    EXPECT_EQ(de_renderer_path_samples(r, f->rt.view), 1u);
+}
+
+TEST_F(pathtracer, lazy_pipeline_failure_cleans_partial_handles_and_is_cached, pt_fixture) {
+    de_renderer *r = f->rt.r;
+    de_render_settings selected = de_renderer_get_settings(r);
+    u32 before = de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE);
+    de_tracking_allocator_fail_after(&f->rt.dev_track, 0);
+    de_result result = de__pt_prepare(r, &selected);
+    de_tracking_allocator_fail_after(&f->rt.dev_track, -1);
+    EXPECT_NE(result, DE_OK);
+    EXPECT_GT(de_tracking_allocator_stats(&f->rt.dev_track).fail_count, 0u);
+    EXPECT_FALSE(de__pt_enabled(r, &selected));
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    /* Restored memory does not repeat an expensive failed compiler attempt. */
+    EXPECT_EQ(de__pt_prepare(r, &selected), result);
+    EXPECT_EQ(de__gpu_live_count(f->rt.d, DE__GPU_PIPELINE), before);
+    selected.path_tracer = false;
+    EXPECT_EQ(de__pt_prepare(r, &selected), DE_OK);
+    EXPECT_FALSE(de_gpu_device_is_lost(f->rt.d));
+}

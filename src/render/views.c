@@ -1058,6 +1058,10 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->failed_logged = true;
         return;
     }
+    if (!s->copy.capture && de__pt_prepare(r, &s->eff) != DE_OK) {
+        view_failed(r, s, "path tracer pipelines");
+        return;
+    }
     if (!ensure_objects(r, s))
         return;
 

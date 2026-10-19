@@ -42,7 +42,8 @@ struct de__pt {
     de__pt_media *media;
     de_cvar max_samples, seed, strategy, final_denoise, golden;
     de__pt_denoise *denoise;
-    bool warned;
+    bool pipelines_attempted;
+    de_result pipeline_result;
     pt_view views[32];
 };
 f32 de__pt_power(f32 a, f32 b) {
@@ -86,7 +87,7 @@ void de__pt_destroy(de__pt *p) {
 }
 bool de__pt_enabled(const de_renderer *r, const de_render_settings *s) {
     return r && r->pt && s->path_tracer && s->tier == DE_TIER_RT && r->caps.rt_pipelines &&
-           r->pt->pipeline.id;
+           r->pt->pipeline.id && r->pt->env.id;
 }
 de_result de__pt_create(de_renderer *r, de__pt **out) {
     de__pt *p = DE_ALLOC(r->alloc, sizeof *p, 16, DE_MEM_RENDER);
@@ -116,8 +117,10 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
                                                    .default_number = 0,
                                                    .min = 0,
                                                    .max = 2});
-    if (!r->caps.rt_pipelines)
-        return DE_OK;
+    return DE_OK;
+}
+static de_result pipelines(de__pt *p) {
+    de_renderer *r = p->r;
     de_gpu_shader_blob ray = {0}, miss = {0}, hit = {0}, alpha = {0}, env = {0};
 #if DE_HAS_GPU_METAL
     extern const unsigned char de__pt_metal_library[];
@@ -181,6 +184,22 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
     if (!p->pipeline.id || !p->env.id)
         return DE_FAIL(DE_ERR_UNSUPPORTED, "PT pipelines");
     return DE_OK;
+}
+de_result de__pt_prepare(de_renderer *r, const de_render_settings *settings) {
+    if (!r || !r->pt || !settings->path_tracer || settings->tier != DE_TIER_RT ||
+        !r->caps.rt_pipelines)
+        return DE_OK;
+    de__pt *p = r->pt;
+    if (!p->pipelines_attempted) {
+        p->pipelines_attempted = true;
+        p->pipeline_result = pipelines(p);
+        if (p->pipeline_result != DE_OK) {
+            de_gpu_pipeline_destroy(r->dev, p->pipeline);
+            de_gpu_pipeline_destroy(r->dev, p->env);
+            p->pipeline = p->env = (de_gpu_pipeline){0};
+        }
+    }
+    return p->pipeline_result;
 }
 static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
     if (v->handle.id == f->view.id && v->width == f->width && v->height == f->height)

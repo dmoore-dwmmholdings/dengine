@@ -99,6 +99,12 @@ Vulkan and D3D12 execution remain hardware qualifications. This provider
 checkpoint does not complete DENG-322's UI consumer, pointer or world/pixel UI
 goldens.
 
+Path-tracer pipelines are initialized on the render thread when a non-capture
+view first selects RT path tracing. Base and raster views do not compile these
+unused shaders during renderer creation. Pipelines are reused across views and
+setting changes; a failed initialization releases partial handles and is retained
+so later frames do not repeatedly invoke the compiler.
+
 `de_view_layout_info` is an advisory main-thread query for PostUpdate layout;
 view zero selects the renderer's main view. It uses the same fitted content
 rectangle calculation as rendering. A consumer must reconcile this advisory grid

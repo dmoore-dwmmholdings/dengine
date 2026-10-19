@@ -5,6 +5,9 @@
 typedef struct de__pt de__pt;
 de_result de__pt_create(de_renderer *, de__pt **);
 void de__pt_destroy(de__pt *);
+/** Render thread: initialize immutable pipelines only for a selected RT path-traced view.
+ * A failed attempt is retained and reported; unrelated views never compile PT shaders. */
+de_result de__pt_prepare(de_renderer *, const de_render_settings *);
 bool de__pt_enabled(const de_renderer *, const de_render_settings *);
 void de__pt_build(de__view_frame *, void *);
 void de__pt_complete(de__pt *, de_view, u64, bool);
