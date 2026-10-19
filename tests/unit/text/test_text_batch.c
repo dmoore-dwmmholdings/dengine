@@ -532,6 +532,73 @@ static void coverage_clear_stage(de__view_frame *vf, void *user) {
         de_rg_write(pass, p->target, DE_ACCESS_RENDER_TARGET);
 }
 #endif
+TEST_F(text_batch, metal_msdf_effects_ignore_neighboring_atlas_glyphs, text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    de_asset_id id = de_asset_id_from("font/tt-msdf");
+    f->scene_loads[0] = de_asset_load(f->fonts.assets, id, 0);
+    ASSERT_EQ(de_asset_wait(f->fonts.assets, f->scene_loads[0], TEXT_WAIT), (int)DE_LOAD_READY);
+    de_font handle = de_asset_font(f->fonts.assets, id);
+    de_text_font *font = de_text__font_get(f->fonts.t, handle);
+    de_text_glyph_entry glyph;
+    ASSERT_TRUE(de_text__glyph(f->fonts.t, handle, de_text__codepoint(font, 'A'), &glyph));
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_OUTPUT, 0, "effects.background",
+                                      coverage_clear_stage, NULL),
+              DE_OK);
+    de_glyph_quad q = quad(f, handle, 'A', 96, 96, 84);
+    de_text_draw_opts options = {.font = handle,
+                                 .outline_width = 2,
+                                 .outline_color = {0, 0, 1, 1},
+                                 .shadow_offset = {7, 9},
+                                 .shadow_color = {1, 0, 0, 1}};
+    /* Preserve the real-font native image before constructing adversarial neighbors. */
+    de_text_update(f->fonts.t);
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &q, 1, (de_vec2){0}, &options), DE_OK);
+    render_frame(f);
+    u8 *original = readback(f);
+    ASSERT_TRUE(stbi_write_png(DE_TEXT_RENDER_CAPTURE ".effects-original.png", 1280, 720, 4,
+                               original, 1280 * 4));
+    free(original);
+    for (u32 direction = 0; direction < 2; ++direction) {
+        options.shadow_offset = direction ? (de_vec2){-7, -9} : (de_vec2){7, 9};
+        u8 *reference = NULL;
+        for (u32 poison = 0; poison < 2; ++poison) {
+            /* Keep every texel of this glyph, including MSDF padding, identical. Only
+             * neighboring allocations change. The resulting image must be invariant. */
+            u8 *atlas = font->pixels[glyph.page];
+            for (u32 y = 0; y < font->height; ++y)
+                for (u32 x = 0; x < font->width; ++x)
+                    if (x < glyph.x || x >= glyph.x + glyph.w || y < glyph.y ||
+                        y >= glyph.y + glyph.h)
+                        memset(atlas + 4 * ((u64)y * font->width + x), poison ? 255 : 0, 4);
+            de_text__font_dirty(font,
+                                (de_text_dirty_rect){glyph.page, 0, 0, font->width, font->height});
+            de_text_update(f->fonts.t);
+            ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &q, 1, (de_vec2){0}, &options), DE_OK);
+            render_frame(f);
+            u8 *pixels = readback(f);
+            if (!poison) {
+                reference = pixels;
+                continue;
+            }
+            u32 changed = 0;
+            for (u32 i = 0; i < 1280 * 720; ++i)
+                changed += memcmp(reference + i * 4, pixels + i * 4, 4) != 0;
+            printf("MSDF shadow direction=%u changed neighboring-atlas pixels=%u\n", direction,
+                   changed);
+            if (!direction)
+                ASSERT_TRUE(stbi_write_png(DE_TEXT_RENDER_CAPTURE ".effects-poison.png", 1280, 720,
+                                           4, pixels, 1280 * 4));
+            free(reference);
+            free(pixels);
+            EXPECT_EQ(changed, 0u);
+        }
+    }
+    de__view_unregister_stage(f->r, coverage_clear_stage, NULL);
+#else
+    SKIP("Metal native host required");
+#endif
+}
 TEST_F(text_batch, metal_cff_and_truetype_msdf_coverage_small_and_large, text_render_fx) {
 #if defined(__APPLE__)
     start_render(f, DE_GPU_METAL);

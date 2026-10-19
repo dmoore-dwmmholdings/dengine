@@ -12,6 +12,6 @@ public float4 de_ui_sample(UiQuad q,float2 uv,float2 local){
   float inside=de_ui_distance_rect(local-half_size,max(half_size-border,0),max(radius-border,0));float fill=border>0?saturate(.5-inside/aa):coverage;
   float4 a=float4(q.color.rgb*q.color.a,q.color.a)*fill;float4 b=float4(q.border.rgb*q.border.a,q.border.a)*max(coverage-fill,0);color=a+b;
  }else if(q.kind==1){float4 sample=de_tex2d(q.texture).Sample(de_sampler(q.sampler),uv);float alpha=sample.a*q.color.a;color=float4(sample.rgb*q.color.rgb*alpha,alpha);}
- else color=de_text_color(q.texture,q.sampler,uv,q.color,q.outline,q.shadow,q.params.z,q.params.w,q.shadow_offset.xy,q.flags&1);
+ else color=de_text_color(q.texture,q.sampler,uv,q.uv,q.color,q.outline,q.shadow,q.params.z,q.params.w,q.shadow_offset.xy,q.flags&1);
  return color;
 }

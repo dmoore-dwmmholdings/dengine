@@ -115,7 +115,9 @@ used when no callback supplies a localization ID.
 Superseded atlas generations are collected; pending UI packets hold generation leases
 until retirement. World text reuses visibility depth when present. Text-only views create
 a cleared reverse-Z depth attachment, so no other drawable is required.
-Wide shadow offsets can sample neighboring glyphs beyond atlas padding (DENG-493).
+Fill and effect samples stay inside each glyph's atlas rectangle, including its padding.
+Shadow coordinates outside that allocation contribute no coverage. Effect extent still
+depends on the glyph quad and available padding.
 Metal native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
 `tests/golden/text`; other backend captures remain DENG-496. Render-disabled builds
 compile the CPU module independently.
