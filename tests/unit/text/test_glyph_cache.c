@@ -178,3 +178,84 @@ TEST_F(glyph_cache, bitmap_does_not_enqueue, runtime_fx) {
     EXPECT_EQ(de_text_get_stats(f->t).runtime_pending, 0u);
     de_asset_release(f->assets, h);
 }
+
+typedef struct glyph_oom_context {
+    runtime_fx *fixture;
+    u32 glyph;
+    u64 before_background, before_generated, pending, warnings, failures, bytes_live;
+    u64 after_background, after_generated, after_pending;
+    bool inline_pixels;
+} glyph_oom_context;
+static i32 external_glyph_oom(void *user) {
+    glyph_oom_context *c = user;
+    de_text__glyph_miss(c->fixture->t, c->fixture->cjk, c->glyph);
+    return 0;
+}
+static i32 glyph_oom_owner(void *user) {
+    glyph_oom_context *c = user;
+    de_fp_env_init_thread();
+    de_tracking_allocator tracking;
+    de_allocator a = de_tracking_allocator_init(&tracking, NULL, DE_MEM_GENERAL);
+    de_task_system *tasks = NULL;
+    de_result r = de_task_system_create(
+        &(de_task_system_desc){.allocator = &a, .worker_count = 1, .background_worker_count = 1},
+        &tasks);
+    if (r != DE_OK)
+        return 1;
+    struct de__glyph_cache *cache = c->fixture->t->glyph_cache;
+    de_task_system *original = cache->tasks;
+    cache->tasks = tasks;
+    /* A fresh external slot has no records; only its allocator fails, not glyph memory. */
+    de_tracking_allocator_fail_after(&tracking, 0);
+    de_thread *external = NULL;
+    i32 result = de_thread_create(external_glyph_oom, c, "glyph-external", DE_THREAD_NORMAL, 0,
+                                  &external) == DE_OK
+                     ? de_thread_join(external)
+                     : 2;
+    c->inline_pixels = cache->jobs[0].pixels != NULL;
+    /* Repeated frame-owner retries must also defer while record allocation still fails. */
+    de_text_update(c->fixture->t);
+    de_text_update(c->fixture->t);
+    de_text_stats before = de_text_get_stats(c->fixture->t);
+    c->before_background = before.background_jobs;
+    c->before_generated = before.runtime_generated;
+    c->pending = before.runtime_pending;
+    c->warnings = before.cap_warnings;
+    c->failures = de_tracking_allocator_stats(&tracking).fail_count;
+    de_tracking_allocator_fail_after(&tracking, -1);
+    for (u32 i = 0; i < 4 && de_text_get_stats(c->fixture->t).runtime_pending; ++i) {
+        de_text_update(c->fixture->t);
+        de_text__glyph_jobs_wait(c->fixture->t);
+    }
+    de_text_update(c->fixture->t);
+    de_text_stats after = de_text_get_stats(c->fixture->t);
+    c->after_background = after.background_jobs;
+    c->after_generated = after.runtime_generated;
+    c->after_pending = after.runtime_pending;
+    cache->tasks = original;
+    de_task_system_destroy(tasks);
+    c->bytes_live = de_tracking_allocator_stats(&tracking).bytes_live;
+    return result;
+}
+TEST_F(glyph_cache, task_record_oom_on_external_thread_defers_msdf_and_recovers, runtime_fx) {
+    glyph_oom_context context = {.fixture = f};
+    ASSERT_EQ(unbaked(f, &context.glyph, 1), 1u);
+    de_thread *owner = NULL;
+    ASSERT_EQ(
+        de_thread_create(glyph_oom_owner, &context, "glyph-owner", DE_THREAD_NORMAL, 0, &owner),
+        DE_OK);
+    EXPECT_EQ(de_thread_join(owner), 0);
+    EXPECT_FALSE(context.inline_pixels);
+    EXPECT_EQ(context.before_background, 0u);
+    EXPECT_EQ(context.before_generated, 0u);
+    EXPECT_EQ(context.pending, 1u);
+    EXPECT_EQ(context.warnings, 0u);
+    EXPECT_TRUE(context.failures >= 3);
+    EXPECT_EQ(context.after_background, 1u);
+    EXPECT_EQ(context.after_generated, 1u);
+    EXPECT_EQ(context.after_pending, 0u);
+    EXPECT_EQ(context.bytes_live, 0u);
+    de_text_glyph_entry entry;
+    EXPECT_TRUE(de_text__glyph(f->t, f->cjk, context.glyph, &entry));
+    EXPECT_FALSE(entry.missing);
+}

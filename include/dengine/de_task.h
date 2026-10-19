@@ -115,6 +115,10 @@ DE_API u32 de_task_worker_count(const de_task_system *ts);
 /** The calling thread's frame worker index (0 = main thread), or DE_TASK_WORKER_NONE on any
  * other thread (background workers included). */
 DE_API u32 de_task_worker_index(void);
+/** True only on a background worker belonging to `ts`; false for frame/external
+ * threads, workers of another system and NULL. Unlike de_task_worker_index(), this tests pool
+ * identity. */
+DE_API bool de_task_is_background_worker(const de_task_system *ts);
 
 /* One-shot tasks. The counter is decremented as each task finishes. */
 

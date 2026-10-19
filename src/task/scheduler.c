@@ -35,6 +35,11 @@ u32 de_task_worker_index(void) {
     return (s != NULL && s->kind == DE__SLOT_FRAME) ? s->index : DE_TASK_WORKER_NONE;
 }
 
+bool de_task_is_background_worker(const de_task_system *ts) {
+    const de__task_slot *s = de__task_current_slot(ts);
+    return s != NULL && s->kind == DE__SLOT_BACKGROUND;
+}
+
 u32 de_task_worker_count(const de_task_system *ts) {
     return ts != NULL ? ts->frame_count : 0;
 }

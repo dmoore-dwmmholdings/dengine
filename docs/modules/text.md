@@ -40,8 +40,9 @@ An outline glyph absent from the cooked atlas queues one deduplicated background
 MTSDF job. `de_text_update` integrates completed jobs in deterministic order with
 per-frame and page limits, increments font generations, and publishes dirty rects.
 Missing glyphs keep their advances while their quads are omitted. Bitmap fonts
-never generate runtime outline glyphs. Exceptional task OOM execution and dirty-list
-overflow cases remain DENG-483/484.
+never generate runtime outline glyphs. Task-record OOM on external or frame callers
+keeps the glyph pending for a later background-worker retry. Dirty upload rectangles
+coalesce by page when their bounded list fills.
 
 ## Paragraph layout
 

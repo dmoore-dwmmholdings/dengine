@@ -640,3 +640,40 @@ TEST(sched, shutdown_with_pending) {
     EXPECT_EQ(de_atomic_load_u32(&s.main_elsewhere, DE_ATOMIC_RELAXED), 0u);
     EXPECT_EQ(de_task_worker_index(), DE_TASK_WORKER_NONE);
 }
+
+typedef struct bg_identity_context {
+    de_task_system *tasks;
+    bool background, external;
+} bg_identity_context;
+static void check_background_identity(void *user) {
+    bg_identity_context *c = user;
+    c->background = de_task_is_background_worker(c->tasks) && !de_task_is_background_worker(NULL) &&
+                    de_task_worker_index() == DE_TASK_WORKER_NONE;
+}
+static i32 check_external_identity(void *user) {
+    bg_identity_context *c = user;
+    c->external = !de_task_is_background_worker(c->tasks) && !de_task_is_background_worker(NULL) &&
+                  de_task_worker_index() == DE_TASK_WORKER_NONE;
+    return 0;
+}
+TEST(sched, background_identity_distinguishes_external_and_frame_threads) {
+    de_fp_env_init_thread();
+    bg_identity_context c = {0};
+    ASSERT_EQ(
+        de_task_system_create(
+            &(de_task_system_desc){.worker_count = 1, .background_worker_count = 1}, &c.tasks),
+        DE_OK);
+    EXPECT_FALSE(de_task_is_background_worker(c.tasks));
+    EXPECT_FALSE(de_task_is_background_worker(NULL));
+    de_thread *external = NULL;
+    ASSERT_EQ(de_thread_create(check_external_identity, &c, "identity-ext", DE_THREAD_NORMAL, 0,
+                               &external),
+              DE_OK);
+    EXPECT_EQ(de_thread_join(external), 0);
+    de_task_counter done = {0};
+    de_task_submit(c.tasks, DE_TASK_POOL_BACKGROUND, check_background_identity, &c, &done);
+    de_task_wait(c.tasks, &done);
+    EXPECT_TRUE(c.background);
+    EXPECT_TRUE(c.external);
+    de_task_system_destroy(c.tasks);
+}
