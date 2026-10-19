@@ -204,8 +204,13 @@ typedef struct DeUiList {
     f32 item_height;
     de_prefab item_template;
 } DeUiList;
-typedef struct DeUiTabs { u32 active; } DeUiTabs;
-typedef struct DeUiTooltip { de_name loc_id; f32 delay; } DeUiTooltip;
+typedef struct DeUiTabs {
+    u32 active;
+} DeUiTabs;
+typedef struct DeUiTooltip {
+    de_name loc_id;
+    f32 delay;
+} DeUiTooltip;
 /** Scroll offsets are physical pixels. Values are clamped to current content bounds. */
 DE_API void de_ui_scroll_offset(de_ui *ui, de_entity container, de_vec2 offset);
 /** Reveal a child within its scroll container, clamping the resulting offset. */
@@ -221,7 +226,7 @@ typedef struct DeUiBinding {
     char path[64];
     char property[32];
     de_ui_binding_mode mode; /**< Zero: source to widget; TWO_WAY also accepts CHANGED. */
-    char format[32]; /**< Optional S28 inline message pattern, with argument `value`. */
+    char format[32];         /**< Optional S28 inline message pattern, with argument `value`. */
 } DeUiBinding;
 /* Renders this UI subtree into the 3D world as a panel. */
 typedef struct DeUiWorldPanel {
@@ -249,7 +254,9 @@ typedef struct de_ui_event {
 /** UI action context policy. NONE releases the context; NON_MODAL passes bindings through;
  * MODAL consumes bound inputs. A visible modal popup temporarily enforces MODAL. */
 typedef enum de_ui_input_mode {
-    DE_UI_INPUT_NONE, DE_UI_INPUT_NON_MODAL, DE_UI_INPUT_MODAL
+    DE_UI_INPUT_NONE,
+    DE_UI_INPUT_NON_MODAL,
+    DE_UI_INPUT_MODAL
 } de_ui_input_mode;
 /** Defaults to NON_MODAL. Changes take effect at the next input frame boundary. */
 DE_API void de_ui_set_input_mode(de_ui *ui, de_ui_input_mode mode);

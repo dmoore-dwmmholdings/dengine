@@ -319,6 +319,9 @@ remain tracked by DENG-513.
 
 ### Data binding (DENG-321)
 
+Binding initialization safely unwinds after any state/cache/entity allocation failure;
+detaching a partially initialized binding system is safe (DENG-519).
+
 Attach `DeUiBinding` to a widget, with its source entity, a path such as
 `BindData.current` or `BindInventory.slots.2.count`, and a property. Dotted numeric
 indices adapt to the reflection API's bracket form (`slots[2].count`); all actual

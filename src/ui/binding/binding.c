@@ -59,14 +59,19 @@ static bool number(const de_field_info *f, const void *ptr, long double *out) {
         return true;                                                                               \
     }
     switch (f->kind) {
-        READ(DE_FK_BOOL, bool)
-        READ(DE_FK_I8, i8)
-        READ(DE_FK_I16, i16)
-        READ(DE_FK_I32, i32)
-        READ(DE_FK_I64, i64)
-        READ(DE_FK_U8, u8)
-        READ(DE_FK_U16, u16) READ(DE_FK_U32, u32) READ(DE_FK_U64, u64) READ(DE_FK_F32, f32)
-            READ(DE_FK_F64, f64) default : return false;
+        READ(DE_FK_BOOL, bool);
+        READ(DE_FK_I8, i8);
+        READ(DE_FK_I16, i16);
+        READ(DE_FK_I32, i32);
+        READ(DE_FK_I64, i64);
+        READ(DE_FK_U8, u8);
+        READ(DE_FK_U16, u16);
+        READ(DE_FK_U32, u32);
+        READ(DE_FK_U64, u64);
+        READ(DE_FK_F32, f32);
+        READ(DE_FK_F64, f64);
+    default:
+        return false;
     }
 #undef READ
 }
@@ -87,15 +92,18 @@ static bool write_number(const de_field_info *f, long double x, u8 *out) {
         memcpy(out, &n, sizeof n);
         return true;
     }
-        WRITE(DE_FK_I8, i8, INT8_MIN, INT8_MAX)
-        WRITE(DE_FK_I16, i16, INT16_MIN, INT16_MAX)
-        WRITE(DE_FK_I32, i32, INT32_MIN, INT32_MAX)
-        WRITE(DE_FK_I64, i64, INT64_MIN, INT64_MAX)
-        WRITE(DE_FK_U8, u8, 0, UINT8_MAX)
-        WRITE(DE_FK_U16, u16, 0, UINT16_MAX)
-        WRITE(DE_FK_U32, u32, 0, UINT32_MAX) WRITE(DE_FK_U64, u64, 0, UINT64_MAX)
-            WRITE(DE_FK_F32, f32, -FLT_MAX, FLT_MAX)
-                WRITE(DE_FK_F64, f64, -DBL_MAX, DBL_MAX) default : return false;
+        WRITE(DE_FK_I8, i8, INT8_MIN, INT8_MAX);
+        WRITE(DE_FK_I16, i16, INT16_MIN, INT16_MAX);
+        WRITE(DE_FK_I32, i32, INT32_MIN, INT32_MAX);
+        WRITE(DE_FK_I64, i64, INT64_MIN, INT64_MAX);
+        WRITE(DE_FK_U8, u8, 0, UINT8_MAX);
+        WRITE(DE_FK_U16, u16, 0, UINT16_MAX);
+        WRITE(DE_FK_U32, u32, 0, UINT32_MAX);
+        WRITE(DE_FK_U64, u64, 0, UINT64_MAX);
+        WRITE(DE_FK_F32, f32, -FLT_MAX, FLT_MAX);
+        WRITE(DE_FK_F64, f64, -DBL_MAX, DBL_MAX);
+    default:
+        return false;
     }
 #undef WRITE
 }
@@ -520,11 +528,13 @@ de_result de_ui__binding_init(de_ui *ui) {
     s->log = de_log_register_category("ui.binding", DE_LOG_WARN);
     s->cache = DE_ALLOC(ui->alloc, (u64)s->cache_capacity * sizeof *s->cache,
                         _Alignof(de_ui_binding_cache), DE_MEM_UI);
-    s->entities =
-        DE_ALLOC(ui->alloc, (u64)s->capacity * sizeof *s->entities, _Alignof(de_entity), DE_MEM_UI);
-    if (!s->cache || !s->entities)
+    if (!s->cache)
         return DE_ERR_OUT_OF_MEMORY;
     memset(s->cache, 0, (u64)s->cache_capacity * sizeof *s->cache);
+    s->entities =
+        DE_ALLOC(ui->alloc, (u64)s->capacity * sizeof *s->entities, _Alignof(de_entity), DE_MEM_UI);
+    if (!s->entities)
+        return DE_ERR_OUT_OF_MEMORY;
     return de_arena_create(
         &(de_arena_desc){.reserve_bytes = 256ull << 20, .tag = DE_MEM_UI, .name = "ui.binding"},
         &s->arena);
@@ -538,7 +548,7 @@ void de_ui__binding_detach(de_ui *ui) {
     s->system = (de_system){0};
     s->count = 0;
     /* Keep text spans alive until UI destruction: existing DeUiText views may outlive detach. */
-    for (u32 i = 0; i < s->cache_capacity; ++i) {
+    for (u32 i = 0; s->cache && i < s->cache_capacity; ++i) {
         s->cache[i].entity = DE_ENTITY_NULL;
         s->cache[i].valid = false;
     }

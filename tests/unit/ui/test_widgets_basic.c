@@ -169,9 +169,7 @@ TEST_F(ui_widgets, real_locale_ready_switch_updates_labels_and_only_localized_me
     EXPECT_FALSE(f->ui->records[de_ui__find(f->ui, labels[2])].dirty);
     de_ui_attach(f->ui, NULL);
     f->ui->desc.text = NULL;
-    /* Active locale requests release through assets, matching host shutdown order. */
-    de_text_destroy(fonts.t);
-    fonts.t = NULL;
+    /* Exercise the shared fixture with active localization requests. */
     runtime_fx_teardown(&fonts);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/en.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/pt.toml"), DE_OK);

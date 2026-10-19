@@ -5,6 +5,45 @@
 #include <limits.h>
 #include <stdio.h>
 
+typedef struct binding_alloc_failure {
+    u32 calls, fail_at, live;
+} binding_alloc_failure;
+static void *binding_failure_alloc(void *user, size_t size, size_t align, u32 tag) {
+    binding_alloc_failure *s = user;
+    if (s->calls++ == s->fail_at) {
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "injected binding allocation failure");
+        return NULL;
+    }
+    void *p = DE_ALLOC(de_heap_allocator(), size, align, tag);
+    if (p) {
+        ++s->live;
+        memset(p, 0xa5, size);
+    }
+    return p;
+}
+static void binding_failure_free(void *user, void *ptr, size_t size) {
+    binding_alloc_failure *s = user;
+    if (ptr) {
+        EXPECT_GT(s->live, 0u);
+        --s->live;
+        DE_FREE(de_heap_allocator(), ptr, size);
+    }
+}
+TEST(ui_binding, partial_initialization_allocation_failures_unwind) {
+    for (u32 at = 0; at < 4; ++at) {
+        binding_alloc_failure state = {.fail_at = at};
+        de_allocator allocator = {
+            .alloc = binding_failure_alloc, .free = binding_failure_free, .user = &state};
+        de_ui ui = {.alloc = &allocator, .capacity = 8, .hash_capacity = 16};
+        EXPECT_EQ(de_ui__binding_init(&ui), at < 3 ? DE_ERR_OUT_OF_MEMORY : DE_OK);
+        de_ui__binding_shutdown(&ui);
+        EXPECT_TRUE(ui.binding == NULL);
+        EXPECT_EQ(state.live, 0u);
+        /* Cleanup is idempotent after each failed or successful initialization. */
+        de_ui__binding_shutdown(&ui);
+    }
+}
+
 typedef struct bind_item {
     i32 count;
 } bind_item;

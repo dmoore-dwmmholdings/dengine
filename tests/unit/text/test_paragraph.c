@@ -210,3 +210,23 @@ TEST_F(paragraph, concurrent_worker_layouts, runtime_fx) {
     for (u32 i = 0; i < 4; ++i)
         EXPECT_EQ(de_thread_join(threads[i]), 0);
 }
+
+TEST_F(paragraph, caller_arena_can_be_destroyed_after_layout_release, runtime_fx) {
+    de_arena *arena = NULL;
+    ASSERT_EQ(de_arena_create(&(de_arena_desc){.reserve_bytes = 1u << 20}, &arena), DE_OK);
+    de_allocator allocator = de_arena_allocator(arena);
+    de_text_style style = {.font = f->latin, .size_px = 20, .color = {1, 1, 1, 1}};
+    de_text_layout_desc desc = {.utf8 = DE_STR("Caller-owned layout storage"), .style = &style};
+    de_text_layout *layout = NULL;
+    ASSERT_EQ(de_text_layout_build(f->t, &desc, &allocator, &layout), DE_OK);
+    EXPECT_TRUE(de_text_layout_size(layout).x > 0);
+    de_text_layout_free(layout);
+    de_arena_reset(arena);
+    de_arena_destroy(arena);
+    /* Neither eviction nor text-system destruction may retain the caller's arena. */
+    de__text_layout_destroy(f->t);
+    ASSERT_EQ(de__text_layout_init(f->t), DE_OK);
+    ASSERT_EQ(de_text_layout_build(f->t, &desc, NULL, &layout), DE_OK);
+    EXPECT_TRUE(de_text_layout_size(layout).x > 0);
+    de_text_layout_free(layout);
+}

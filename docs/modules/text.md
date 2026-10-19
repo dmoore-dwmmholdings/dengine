@@ -57,8 +57,9 @@ a cluster; visual hit testing chooses the nearest cluster edge.
 A striped bounded cache keys all description/style inputs and fallback configuration.
 When atlas generations change, a new immutable result rebuilds quads from retained
 positions; older results remain valid and runtime arrivals do not reflow the text.
-Use a persistent allocator for layouts: cached allocations currently retain the
-caller allocator after releasing the caller's reference (DENG-502).
+Default-heap layouts use the shared cache. Explicit custom allocators, including arenas,
+produce uncached layouts: release those layouts before resetting/destroying their storage.
+The cache never retains caller-owned arena allocations after release (DENG-502).
 
 All 91,707 official BidiCharacter cases, 10,274 LineBreak cases and 1,187 GraphemeBreak
 cases pass with zero skips. The line breaker uses the numeric tailoring specified

@@ -94,6 +94,10 @@ de_result de_text_layout_build(de_text_system *t, const de_text_layout_desc *d,
     if (!a)
         a = de_heap_allocator();
     de__layout_key key = make_key(t, d, a);
+    /* Only the engine heap has a lifetime the shared cache can rely on.
+     * In particular, an arena may be reset immediately after layout_free. */
+    if (a != de_heap_allocator())
+        return de__text_paragraph(t, d, &key, out);
     u64 hash = XXH3_64bits_withSeed(d->utf8.ptr, d->utf8.len, XXH3_64bits(&key, sizeof key));
     cache_stripe *s = &t->layout->stripes[hash % STRIPES];
     de_mutex_lock(&s->mutex);

@@ -67,6 +67,8 @@ typedef struct de_text_layout_desc {
 } de_text_layout_desc;
 
 /* Bidi (UAX #9), shaping, line breaking (UAX #14), fallback resolution. Result is cached. */
+/** NULL/default-heap allocations use the shared cache. Other allocators remain
+ * caller-owned and uncached; release layouts before resetting their storage. */
 DE_API de_result de_text_layout_build(de_text_system *t, const de_text_layout_desc *desc,
                                       const de_allocator *a, de_text_layout **out);
 DE_API void de_text_layout_free(de_text_layout *l);

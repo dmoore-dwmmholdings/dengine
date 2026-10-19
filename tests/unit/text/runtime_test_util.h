@@ -30,13 +30,16 @@ static inline void runtime_fx_setup(runtime_fx *f) {
     de_text_update(f->t);
 }
 static inline void runtime_fx_teardown(runtime_fx *f) {
+    /* Localization requests and glyph jobs still refer to the asset system. */
+    de_text_destroy(f->t);
+    f->t = NULL;
     if (f->assets) {
         for (u32 i = 0; i < 3; ++i)
             if (f->loads[i].id)
                 de_asset_release(f->assets, f->loads[i]);
         de_asset_system_destroy(f->assets);
+        f->assets = NULL;
     }
-    de_text_destroy(f->t);
     de_fs_unmount("fontall", DE_FONT_DATA "/..");
 }
 #endif
