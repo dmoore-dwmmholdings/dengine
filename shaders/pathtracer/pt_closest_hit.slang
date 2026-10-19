@@ -127,8 +127,8 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
             float a=sqrt(uv.x);float3 b=float3(1-a,a*(1-uv.y),a*uv.y);
             float3 target=source.p0.xyz*b.x+source.p1.xyz*b.y+source.p2.xyz*b.z;
             float3 delta=target-position;float distance=length(delta);wi=delta/max(distance,1e-15);
-            float3 normal=normalize(cross(source.p1.xyz-source.p0.xyz,source.p2.xyz-source.p0.xyz));
-            float cosine=source.radiance.w>0?abs(dot(normal,-wi)):max(0.0,dot(normal,-wi));
+            float3 emitter_normal=normalize(cross(source.p1.xyz-source.p0.xyz,source.p2.xyz-source.p0.xyz));
+            float cosine=source.radiance.w>0?abs(dot(emitter_normal,-wi)):max(0.0,dot(emitter_normal,-wi));
             density*=distance*distance/max(source.p0.w*cosine,1e-20);
             DiParams dp=(DiParams)0;dp.scene=query.scene;dp.scene_slot=query.view;dp.layers=query.layers;dp.sampler=query.sampler;
             incident=di_emission(source,uv,dp);

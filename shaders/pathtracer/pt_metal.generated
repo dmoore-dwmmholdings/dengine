@@ -7750,12 +7750,12 @@ float3 di_emission_0(const DiSource_0 thread* source_0, float2 uv_6, const DiPar
 
 struct PtLightProposal_0
 {
-    float3 wi_29;
-    float3 incident_0;
-    float pdf_2;
-    uint delta_3;
-    uint casts_shadows_0;
-    DeRtRay_0 shadow_0;
+    float3 ptlight_wi;
+    float3 ptlight_incident;
+    float ptlight_pdf;
+    uint ptlight_delta;
+    uint ptlight_casts_shadows;
+    DeRtRay_0 ptlight_shadow;
 };
 
 
@@ -7770,19 +7770,19 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
 
     thread PtLightProposal_0 o_7;
 
-    (&o_7)->wi_29 = _S789;
+    (&o_7)->ptlight_wi = _S789;
 
-    (&o_7)->incident_0 = _S789;
+    (&o_7)->ptlight_incident = _S789;
 
-    (&o_7)->pdf_2 = 0.0f;
+    (&o_7)->ptlight_pdf = 0.0f;
 
-    (&o_7)->delta_3 = 0U;
+    (&o_7)->ptlight_delta = 0U;
 
-    (&o_7)->casts_shadows_0 = 0U;
+    (&o_7)->ptlight_casts_shadows = 0U;
 
-    (&o_7)->shadow_0 = _S791;
+    (&o_7)->ptlight_shadow = _S791;
 
-    (&o_7)->delta_3 = 1U;
+    (&o_7)->ptlight_delta = 1U;
 
     DeRtContext_0 _S792 = pt_query_0(p_19, kernelContext_80);
     uint dimension_3 = 2U + bounce_0 * 12U;
@@ -7840,7 +7840,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
     if(choice_0 == 0U)
     {
 
-        (&o_7)->delta_3 = 0U;
+        (&o_7)->ptlight_delta = 0U;
         float a_14 = _S796.x;
 
         lo_1 = 0U;
@@ -7907,9 +7907,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
 
         float3 _S810 = pt_environment_0(p_19, wi_31, kernelContext_80);
 
-        (&(&o_7)->shadow_0)->ptr_origin = float4(de_rt_offset_0(position_6, normal_5, wi_31), 0.00000999999974738f);
+        (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_6, normal_5, wi_31), 0.00000999999974738f);
 
-        (&(&o_7)->shadow_0)->ptr_direction = float4(wi_31, 1.0e+06f);
+        (&(&o_7)->ptlight_shadow)->ptr_direction = float4(wi_31, 1.0e+06f);
 
         casts_0 = true;
 
@@ -7974,9 +7974,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
                 thread DeClusterLight_0 _S819 = _S816.light_0;
 
                 DeRtRay_0 _S820 = de_rt_shadow_ray_0(&_S819, position_6, normal_5, uv_7);
-                (&o_7)->shadow_0 = _S820;
+                (&o_7)->ptlight_shadow = _S820;
 
-                float3 wi_32 = (&(&o_7)->shadow_0)->ptr_direction.xyz;
+                float3 wi_32 = (&(&o_7)->ptlight_shadow)->ptr_direction.xyz;
 
                 thread DeClusterLight_0 _S821 = _S816.light_0;
 
@@ -8000,7 +8000,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
                 if(casts_0)
                 {
 
-                    (&o_7)->delta_3 = 0U;
+                    (&o_7)->ptlight_delta = 0U;
                     if(_S824)
                     {
 
@@ -8016,9 +8016,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
 
                     }
 
-                    float density_2 = density_1 * ((&(&o_7)->shadow_0)->ptr_direction.w * (&(&o_7)->shadow_0)->ptr_direction.w / max(density_0 * max(0.0f, dot(_S816.light_0.direction_0.xyz, - wi_32)), 9.99999968265522539e-21f));
+                    float density_2 = density_1 * ((&(&o_7)->ptlight_shadow)->ptr_direction.w * (&(&o_7)->ptlight_shadow)->ptr_direction.w / max(density_0 * max(0.0f, dot(_S816.light_0.direction_0.xyz, - wi_32)), 9.99999968265522539e-21f));
 
-                    incident_1 = _S816.light_0.color_2.xyz * float3(de_light_window_0((&(&o_7)->shadow_0)->ptr_direction.w, _S816.light_0.position_0.w)) ;
+                    incident_1 = _S816.light_0.color_2.xyz * float3(de_light_window_0((&(&o_7)->ptlight_shadow)->ptr_direction.w, _S816.light_0.position_0.w)) ;
 
                     density_0 = density_2;
 
@@ -8044,7 +8044,7 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
             else
             {
 
-                (&o_7)->delta_3 = 0U;
+                (&o_7)->ptlight_delta = 0U;
                 float a_15 = sqrt(_S817);
                 float3 _S828 = _S816.p0_0.xyz;
 
@@ -8056,17 +8056,17 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
                 float distance_4 = length(delta_4);
 
                 float3 wi_33 = delta_4 / float3(max(distance_4, 1.00000000362749373e-15f)) ;
-                float3 normal_6 = normalize(cross(_S829 - _S828, _S830 - _S828));
+                float3 emitter_normal_0 = normalize(cross(_S829 - _S828, _S830 - _S828));
                 if((_S816.radiance_0.w) > 0.0f)
                 {
 
-                    density_0 = abs(dot(normal_6, - wi_33));
+                    density_0 = abs(dot(emitter_normal_0, - wi_33));
 
                 }
                 else
                 {
 
-                    density_0 = max(0.0f, dot(normal_6, - wi_33));
+                    density_0 = max(0.0f, dot(emitter_normal_0, - wi_33));
 
                 }
                 float density_3 = density_1 * (distance_4 * distance_4 / max(_S816.p0_0.w * density_0, 9.99999968265522539e-21f));
@@ -8214,9 +8214,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
 
                 float3 _S833 = di_emission_0(&_S831, uv_7, &_S832, kernelContext_80);
 
-                (&(&o_7)->shadow_0)->ptr_origin = float4(de_rt_offset_0(position_6, normal_6, wi_33), 0.00000999999974738f);
+                (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_6, normal_5, wi_33), 0.00000999999974738f);
 
-                (&(&o_7)->shadow_0)->ptr_direction = float4(wi_33, max(0.0f, distance_4 - 0.00019999999494758f));
+                (&(&o_7)->ptlight_shadow)->ptr_direction = float4(wi_33, max(0.0f, distance_4 - 0.00019999999494758f));
 
                 casts_0 = true;
 
@@ -8313,9 +8313,9 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
                     float _S849 = pdf_3 * _S836;
 
                     bool _S850 = ((_S847.flags_1) & 2U) != 0U;
-                    (&(&o_7)->shadow_0)->ptr_origin = float4(de_rt_offset_0(position_6, normal_5, wi_34), 0.00000999999974738f);
+                    (&(&o_7)->ptlight_shadow)->ptr_origin = float4(de_rt_offset_0(position_6, normal_5, wi_34), 0.00000999999974738f);
 
-                    (&(&o_7)->shadow_0)->ptr_direction = float4(wi_34, 1.0e+06f);
+                    (&(&o_7)->ptlight_shadow)->ptr_direction = float4(wi_34, 1.0e+06f);
 
                     casts_0 = _S850;
 
@@ -8370,12 +8370,12 @@ PtLightProposal_0 pt_light_sample_0(const PtParams_0 thread* p_19, float3 positi
 
     }
 
-    (&o_7)->casts_shadows_0 = choice_0;
-    (&o_7)->wi_29 = wi_30;
+    (&o_7)->ptlight_casts_shadows = choice_0;
+    (&o_7)->ptlight_wi = wi_30;
 
-    (&o_7)->incident_0 = incident_1;
+    (&o_7)->ptlight_incident = incident_1;
 
-    (&o_7)->pdf_2 = density_0;
+    (&o_7)->ptlight_pdf = density_0;
 
     return o_7;
 }
@@ -8660,10 +8660,10 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_20, const DeRtRay_0 thread* ray_3,
     uint dimension_4 = 2U + bounce_1 * 12U;
 
     PtLightProposal_0 _S877 = pt_light_sample_0(p_20, position_7, (&s_43)->normal_0, pixel_7, bounce_1, kernelContext_81);
-    (&o_8)->pts_shadow = _S877.shadow_0;
+    (&o_8)->pts_shadow = _S877.ptlight_shadow;
 
-    (&o_8)->pts_casts_shadows = _S877.casts_shadows_0;
-    if((_S877.delta_3) != 0U)
+    (&o_8)->pts_casts_shadows = _S877.ptlight_casts_shadows;
+    if((_S877.ptlight_delta) != 0U)
     {
 
         w_10 = 1.0f;
@@ -8674,16 +8674,16 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_20, const DeRtRay_0 thread* ray_3,
 
         thread ShadingFrame_0 _S878 = _S873;
 
-        float3 _S879 = ShadingFrame_to_local_0(&_S878, _S877.wi_29);
+        float3 _S879 = ShadingFrame_to_local_0(&_S878, _S877.ptlight_wi);
 
         thread SurfaceData_0 _S880 = s_43;
 
         float _S881 = StandardModelT_pdf_0(&_S880, _S876, _S879, kernelContext_81);
 
-        w_10 = pt_power_0(_S877.pdf_2, _S881);
+        w_10 = pt_power_0(_S877.ptlight_pdf, _S881);
 
     }
-    if((_S877.pdf_2) > 0.0f)
+    if((_S877.ptlight_pdf) > 0.0f)
     {
 
         _S859 = strategy_0 != 2U;
@@ -8701,7 +8701,7 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_20, const DeRtRay_0 thread* ray_3,
 
         thread ShadingFrame_0 _S882 = _S873;
 
-        float3 _S883 = ShadingFrame_to_local_0(&_S882, _S877.wi_29);
+        float3 _S883 = ShadingFrame_to_local_0(&_S882, _S877.ptlight_wi);
 
         thread SurfaceData_0 _S884 = s_43;
         thread float3 d_11;
@@ -8751,7 +8751,7 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_20, const DeRtRay_0 thread* ray_3,
 
         }
 
-        float3 _S895 = value_2 * _S877.incident_0;
+        float3 _S895 = value_2 * _S877.ptlight_incident;
 
         if(strategy_0 == 1U)
         {
@@ -8760,7 +8760,7 @@ PtStep_0 pt_step_0(const PtParams_0 thread* p_20, const DeRtRay_0 thread* ray_3,
 
         }
 
-        (&o_8)->pts_direct = _S895 * float3((w_10 / _S877.pdf_2)) ;
+        (&o_8)->pts_direct = _S895 * float3((w_10 / _S877.ptlight_pdf)) ;
 
     }
 
@@ -9068,12 +9068,12 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_22, const PtPath_0 thread* p
     uint _S926 = path_1->ptpath_event;
 
     PtLightProposal_0 _S927 = pt_light_sample_0(p_22, position_9, - _S925, pixel_9, path_1->ptpath_bounce + path_1->ptpath_event * 17U, kernelContext_83);
-    float phase_1 = pt_hg_0(dot(_S925, _S927.wi_29), g_3);
+    float phase_1 = pt_hg_0(dot(_S925, _S927.ptlight_wi), g_3);
 
     uint strategy_1 = (p_22->ptp_flags) & 3U;
 
     float mis_0;
-    if((_S927.delta_3) != 0U)
+    if((_S927.ptlight_delta) != 0U)
     {
 
         mis_0 = 1.0f;
@@ -9082,12 +9082,12 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_22, const PtPath_0 thread* p
     else
     {
 
-        mis_0 = pt_power_0(_S927.pdf_2, phase_1);
+        mis_0 = pt_power_0(_S927.ptlight_pdf, phase_1);
 
     }
 
     bool _S928;
-    if((_S927.pdf_2) > 0.0f)
+    if((_S927.ptlight_pdf) > 0.0f)
     {
 
         _S928 = strategy_1 != 2U;
@@ -9103,7 +9103,7 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_22, const PtPath_0 thread* p
     if(_S928)
     {
 
-        float3 _S929 = _S927.incident_0 * float3(phase_1) ;
+        float3 _S929 = _S927.ptlight_incident * float3(phase_1) ;
 
         if(strategy_1 == 1U)
         {
@@ -9112,12 +9112,12 @@ PtStep_0 pt_phase_step_0(const PtParams_0 thread* p_22, const PtPath_0 thread* p
 
         }
 
-        (&out_0)->pts_direct = _S929 * float3((mis_0 / _S927.pdf_2)) ;
+        (&out_0)->pts_direct = _S929 * float3((mis_0 / _S927.ptlight_pdf)) ;
 
     }
-    (&out_0)->pts_shadow = _S927.shadow_0;
+    (&out_0)->pts_shadow = _S927.ptlight_shadow;
 
-    (&out_0)->pts_casts_shadows = _S927.casts_shadows_0;
+    (&out_0)->pts_casts_shadows = _S927.ptlight_casts_shadows;
 
     uint _S930 = p_22->ptp_sampling_table;
 

@@ -221,6 +221,78 @@ TEST_F(pathtracer, sample_dimensions_cover_two_dimensional_cells, pt_fixture) {
     de_gpu_buffer_destroy(d, table);
 #endif
 }
+TEST_F(pathtracer, emissive_shadow_origin_uses_receiver_normal, pt_fixture) {
+#if DE_HAS_GPU_METAL
+    extern const unsigned char de__pt_metal_library[];
+    extern const unsigned long long de__pt_metal_library_bytes;
+    de_gpu_device *d = f->rt.d;
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){
+               .kind = DE_PIPE_COMPUTE,
+               .cs = {de__pt_metal_library, de__pt_metal_library_bytes, "pt_emissive_origin_probe"},
+               .push_constant_bytes = 16,
+               .threadgroup_size = {64, 1, 1}});
+    ASSERT_TRUE(pipeline.id);
+    de_gpu_buffer table =
+        de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = sizeof de__pt_sobol_directions,
+                                                      .usage = DE_USAGE_STORAGE,
+                                                      .memory = DE_MEM_UPLOAD});
+    de_gpu_buffer query = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){.size = 32, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
+    de_gpu_buffer source = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){.size = 192, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
+    de_gpu_buffer output = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){.size = 256 * 32, .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(table.id && query.id && source.id && output.id);
+    memcpy(de_gpu_buffer_map(d, table), de__pt_sobol_directions, sizeof de__pt_sobol_directions);
+    memset(de_gpu_buffer_map(d, query), 0, 32);
+    u32 *words = de_gpu_buffer_map(d, source);
+    memset(words, 0, 192);
+    words[0] = 1; /* DiSource: triangle, with constant emission (no material lookup). */
+    words[3] = UINT32_MAX;
+    f32 *v = (f32 *)words;
+    const f32 points[] = {101, -1, 2, 2, 101, 1, 2, 0, 103, -1, 2, 0, 1, 1, 1, 0};
+    memcpy(v + 4, points, sizeof points);
+    v[44] = 2.f * (f32)DE_PI;
+    v[45] = v[46] = 1; /* selection PDF and alias probability. */
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "Emissive receiver-normal acceptance");
+    de_gpu_barrier barriers[] = {{.buffer = table, .after = DE_ACCESS_SHADER_READ},
+                                 {.buffer = query, .after = DE_ACCESS_SHADER_READ},
+                                 {.buffer = source, .after = DE_ACCESS_SHADER_READ},
+                                 {.buffer = output, .after = DE_ACCESS_SHADER_WRITE}};
+    de_gpu_cmd_barriers(cmd, barriers, 4);
+    de_gpu_cmd_set_pipeline(cmd, pipeline);
+    u32 pc[] = {de_gpu_buffer_bindless(d, table), de_gpu_buffer_bindless(d, output),
+                de_gpu_buffer_bindless(d, query), de_gpu_buffer_bindless(d, source)};
+    de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+    de_gpu_cmd_dispatch(cmd, 4, 1, 1);
+    de_gpu_barrier copy = {
+        .buffer = output, .before = DE_ACCESS_SHADER_WRITE, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &copy, 1);
+    de_gpu_cmd_copy_buffer(cmd, f->rb, 0, output, 0, 256 * 32);
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    const f32 *rays = de_gpu_buffer_map(d, f->rb);
+    u32 wrong_side = 0, self_hits = 0;
+    for (u32 i = 0; i < 256; ++i) {
+        const f32 *r = rays + 8 * i;
+        ASSERT_TRUE(isfinite(r[7]) && r[7] > 0 && r[4] > 0 && r[3] > 0);
+        wrong_side += r[0] <= 100;
+        f32 t = (100 - r[0]) / r[4];
+        self_hits += t >= .00001f && t < r[3];
+    }
+    printf("Emissive proposals: %u wrong-side origins, %u false receiver hits\n", wrong_side,
+           self_hits);
+    EXPECT_EQ(wrong_side, 0u);
+    EXPECT_EQ(self_hits, 0u);
+    de_gpu_pipeline_destroy(d, pipeline);
+    de_gpu_buffer buffers[] = {table, query, source, output};
+    for (u32 i = 0; i < 4; ++i)
+        de_gpu_buffer_destroy(d, buffers[i]);
+#endif
+}
 TEST_F(pathtracer, directional_power_split_preserves_samples, pt_fixture) {
     rt_fixture *r = &f->rt;
     g_mat[0].standard.unlit = false;
