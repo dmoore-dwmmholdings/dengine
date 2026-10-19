@@ -9,6 +9,7 @@ asset_root="../.."
 "rtmat/red"={type="material",source="rt/assets/materials/red.mat.toml"}
 "rtmat/green"={type="material",source="rt/assets/materials/green.mat.toml"}
 "rtmat/gi_receiver"={type="material",source="rt/assets/materials/gi_receiver.mat.toml"}
+"rtmat/shadow_receiver"={type="material",source="rt/assets/materials/shadow_receiver.mat.toml"}
 "rtmat/mirror"={type="material",source="rt/assets/materials/mirror.mat.toml"}
 "rtmat/rough"={type="material",source="rt/assets/materials/rough.mat.toml"}
 "rtmat/gold"={type="material",source="rt/assets/materials/gold.mat.toml"}

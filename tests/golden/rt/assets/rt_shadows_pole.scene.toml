@@ -20,7 +20,7 @@ rotation = [0.0, 0.0, 0.0, 1.0]
 scale = [7.0, 7.0, 0.3]
 [entity.DeMeshRenderer]
 mesh = "mesh/box#box"
-materials = ["rtmat/white"]
+materials = ["rtmat/shadow_receiver"]
 layer_mask = 1
 cast_shadows = true
 visible_in_rt = true
@@ -55,7 +55,7 @@ id = "0x0000000000000013"
 [entity.DeTransform]
 position = [0.0, 0.0, 1.0]
 rotation = [0.0, 0.0, 0.0, 1.0]
-scale = [0.18, 0.18, 2.0]
+scale = [1.0, 1.0, 2.0]
 [entity.DeMeshRenderer]
 mesh = "mesh/box#box"
 materials = ["rtmat/red"]

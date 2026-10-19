@@ -115,3 +115,27 @@ The verifier now requires this additional negative comparison and restoration. T
 Metal RT reference and the Base reference were captured from the corrected fixture and
 visually reviewed; the initial failed RT capture remains archived. Strict Metal validation
 and ASan/UBSan pass. This resolves the historical glass qualification above.
+
+## Shadow negative-control coverage (DENG-465)
+
+The original shadow fixture combined a metallic-default floor with an 18 cm square caster.
+Correcting only the floor still let shadow removal pass (mean FLIP 0.001250, p99 0.012747):
+the caster's shadow had too little screen area for the original global image tolerances.
+The fixture now uses an explicit metallic-0 floor and a 1 m square caster at the original
+position and height. Camera, sun, sample epochs, 32-frame warmup and thresholds are unchanged.
+Only this scene's RT/Base references were recaptured and reviewed.
+
+Disabling actual shadows removes `RT.Shadows` and now fails both original limits, with mean
+FLIP 0.005593 and p99 0.147135. Restoring shadows reproduces the accepted image exactly.
+The active producer has 75 affected visibility pixels and range [0,1]. Strict Metal and
+ASan/UBSan RT verification pass. This resolves the historical shadow negative-control failure.
+
+## Sanitizer RT run (DENG-459, still open)
+
+All seven production RT goldens completed under ASan/UBSan and strict Metal API/shader
+validation in 23.03 seconds total, within their unchanged 300-second per-test limits.
+Shadows (4.10 s), DI (3.25 s), reflections (3.16 s), GI (3.99 s), refraction (3.00 s), and
+foliage (3.05 s) pass. AO completes in 2.42 s but fails its unchanged image comparison:
+mean FLIP 0.027015 and p99 0.235291. That failure and the existing reference are preserved
+for source-versus-reference investigation; this is not an all-green sanitizer result.
+The separate full path-tracer shader-validation hang is not covered by these scene tests.

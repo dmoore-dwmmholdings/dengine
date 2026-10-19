@@ -14,6 +14,7 @@ MATS = {
  'red': dict(base_color=[.7,.035,.025],roughness=.7),
  'green': dict(base_color=[.025,.65,.06],roughness=.7),
  'gi_receiver': dict(base_color=[.7,.7,.7],metallic=0.,roughness=.65),
+ 'shadow_receiver': dict(base_color=[.7,.7,.7],metallic=0.,roughness=.65),
  'mirror': dict(base_color=[.95,.8,.5],metallic=1.,roughness=0.),
  'rough': dict(base_color=[.95,.8,.5],metallic=1.,roughness=.3),
  'gold': dict(base_color=[2.,1.,.15],unlit=True),
@@ -28,15 +29,16 @@ def mesh(s,pos,scale,mat,model='box',rotation=(0.,0.,0.,1.)):
  s.entity([g.xf(pos,rotation,scale),('DeMeshRenderer',[('mesh',f'mesh/{model}#{model}'),('materials',['rtmat/'+mat]),('layer_mask',1),('cast_shadows',True),('visible_in_rt',True)])])
 def light(s,kind,pos,intensity,color=(1.,1.,1.),rot=(0.,0.,0.,1.),radius=.06):
  s.entity([g.xf(pos,rot),('DeLight',[('kind',kind),('color',list(color)),('intensity',float(intensity)),('range',15.),('source_radius',radius),('cast_shadows',True)])])
-def common(name,env=True):
+def common(name,env=True,floor='white'):
  s=g.Scene(name)
  g.camera(s,(0.,-8.,4.8),25.,48.,0.)
- mesh(s,(0.,0.,-.15),(7.,7.,.3),'white')
+ mesh(s,(0.,0.,-.15),(7.,7.,.3),floor)
  if env:g.environment(s,'env/sky',.3)
  return s
 def sun(s): light(s,'DE_LIGHT_DIRECTIONAL',(0.,0.,6.),4.,rot=g.quat_mul(g.quat_axis((0.,0.,1.),-.5),g.quat_axis((1.,0.,0.),.55)),radius=.045)
 scenes={}
-s=common('rt_shadows_pole');sun(s);mesh(s,(0.,0.,1.),(.18,.18,2.),'red');scenes[s.title]=s
+# DENG-465: the original 18 cm caster covered too few pixels for the fixed global FLIP gates.
+s=common('rt_shadows_pole',floor='shadow_receiver');sun(s);mesh(s,(0.,0.,1.),(1.,1.,2.),'red');scenes[s.title]=s
 s=common('rt_restir_many_lights');mesh(s,(-2.,1.,1.),(.7,.7,2.),'red');mesh(s,(1.,1.,.6),(1.2,1.2,1.2),'green')
 for i in range(512):
  x=(i%16-7.5)*.35;y=((i//16)%16-7.5)*.35;z=1.+(i//256)*1.5
