@@ -329,3 +329,53 @@ TEST(physics2d_joints, checksum_covers_future_behavior_and_ignores_padding) {
     d.axis = (de_vec2){2, 0};
     EXPECT_EQ(description_checksum(d), base);
 }
+
+TEST(physics2d_joints, prismatic_stops_hold_under_sustained_motor_each_tick) {
+    const f32 forces[] = {10, 1000};
+    const u32 substeps[] = {1, 4, 8};
+    for (u32 step = 0; step < 3; ++step)
+        for (u32 f = 0; f < 2; ++f)
+            for (i32 direction = -1; direction <= 1; direction += 2) {
+                de_physics2d_desc wd = {.max_bodies = 32,
+                                        .plane = DE_PHYSICS2D_PLANE_TOP_DOWN,
+                                        .substeps = substeps[step]};
+                de_physics2d_world *p = NULL;
+                ASSERT_EQ(de_physics2d_create(&wd, &p), DE_OK);
+                de_body b = ball(p, 0, 0);
+                de_joint2d_desc d = {.kind = DE_JOINT2D_PRISMATIC,
+                                     .body_b = b,
+                                     .enable_motor = true,
+                                     .motor_speed = 3 * (f32)direction,
+                                     .max_motor_force = forces[f],
+                                     .enable_limit = true,
+                                     .lower = -1,
+                                     .upper = 1};
+                (void)joint(p, &d);
+                for (u32 tick = 0; tick < 180; ++tick) {
+                    ticks(p, 1);
+                    de_transform2d t = sv_xf_of(p, b);
+                    EXPECT_TRUE(t.x >= -1.001 && t.x <= 1.001);
+                    EXPECT_FLOAT_EQ(t.y, 0, 0.001);
+                }
+                EXPECT_FLOAT_EQ(sv_xf_of(p, b).x, direction, 0.001);
+                de_physics2d_destroy(p);
+            }
+}
+TEST(physics2d_joints, prismatic_stop_repairs_initial_violation_under_motor_load) {
+    for (i32 direction = -1; direction <= 1; direction += 2) {
+        de_physics2d_world *p = world();
+        de_body b = ball(p, 1.01f * (f32)direction, 0);
+        de_joint2d_desc d = {.kind = DE_JOINT2D_PRISMATIC,
+                             .body_b = b,
+                             .enable_motor = true,
+                             .motor_speed = 3 * (f32)direction,
+                             .max_motor_force = 1000,
+                             .enable_limit = true,
+                             .lower = -1,
+                             .upper = 1};
+        (void)joint(p, &d);
+        ticks(p, 60);
+        EXPECT_FLOAT_EQ(sv_xf_of(p, b).x, direction, 0.001);
+        de_physics2d_destroy(p);
+    }
+}

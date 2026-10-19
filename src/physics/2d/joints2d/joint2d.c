@@ -157,12 +157,15 @@ static void limits(jx *x, joint2d *j, de_vec2 n, bool angular, f32 value, bool b
         row(x, j, 3, n, angular, value - j->d.lower, 0, -1e30f, 1e30f, bias, j->d.hertz);
         return;
     }
-    /* Speculative limit velocity prevents crossing a stop during the substep. */
+    /* Stops are rigid unilateral rows. A soft impulse scale lets a sustained motor
+     * balance its drive against penetration instead of stopping at the bound. */
     f32 lower = value - j->d.lower, upper = j->d.upper - value;
-    row(x, j, 3, n, angular, lower < 0 ? lower : 0, lower > 0 ? -lower * x->ctx->inv_h : 0, 0,
-        1e30f, bias, 0);
-    row(x, j, 4, n, angular, upper < 0 ? -upper : 0, upper > 0 ? upper * x->ctx->inv_h : 0, -1e30f,
-        0, bias, 0);
+    f32 lower_speed = lower > 0 ? -lower * x->ctx->inv_h
+                                : (bias ? clampf(-0.2f * lower * x->ctx->inv_h, 0, 20) : 0);
+    f32 upper_speed = upper > 0 ? upper * x->ctx->inv_h
+                                : (bias ? clampf(0.2f * upper * x->ctx->inv_h, -20, 0) : 0);
+    row(x, j, 3, n, angular, 0, lower_speed, 0, 1e30f, false, 0);
+    row(x, j, 4, n, angular, 0, upper_speed, -1e30f, 0, false, 0);
 }
 static void motor(jx *x, joint2d *j, de_vec2 n, bool angular) {
     if (!j->d.enable_motor)
