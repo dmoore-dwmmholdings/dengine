@@ -2,6 +2,7 @@
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_debug.h>
+#include "gpu/gpu_backend.h"
 #include "render/denoise/denoise_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/graph/rg_internal.h"
@@ -49,9 +50,8 @@ static de_gpu_texture make_texture(dn_fixture *f, de_gpu_format format) {
                                .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_DST | DE_USAGE_COPY_SRC});
 }
 static void dn_fixture_setup(dn_fixture *f) {
-#if !DE_HAS_GPU_METAL
-    SKIP("native Metal denoiser acceptance requires Metal");
-#endif
+    if (!de__gpu_find_backend(DE_GPU_METAL))
+        SKIP("native Metal denoiser acceptance requires Metal");
     f->alloc = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_RENDER);
     f->device_alloc = de_tracking_allocator_init(&f->device_tracking, NULL, DE_MEM_RENDER);
     ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,

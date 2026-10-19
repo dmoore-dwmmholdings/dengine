@@ -238,6 +238,7 @@ TEST_F(text_batch, ten_thousand_one_draw, text_render_fx) {
 #endif
     DE_FREE(de_heap_allocator(), quads, 10000 * sizeof *quads);
 }
+#if defined(__APPLE__)
 static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
     u32 w = 1280, h = 720, pitch = w * 4;
     de_gpu_wait_idle(f->d);
@@ -260,7 +261,6 @@ static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
     de_gpu_buffer_destroy(f->d, buffer);
     return out;
 }
-#if defined(__APPLE__)
 static u8 *readback(text_render_fx *f) {
     return readback_target(f, de__renderer_offscreen(f->r));
 }

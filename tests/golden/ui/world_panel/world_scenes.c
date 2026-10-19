@@ -1,5 +1,6 @@
 #include "world_fixture.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <stb_image_write.h>
 static void world_scene(de_golden_ctx *ctx, u32 variant) {
 #if DE_HAS_UI && DE_HAS_RENDER && defined(DE_GOLDEN_COOK)
@@ -76,10 +77,19 @@ static void world_scene(de_golden_ctx *ctx, u32 variant) {
                 result = pump(&s);
             if (result == DE_OK)
                 result = capture(&s, fixed_fov);
+#if defined(_WIN32)
+            char *far_capture = NULL;
+            size_t far_capture_bytes = 0;
+            (void)_dupenv_s(&far_capture, &far_capture_bytes, "DE_UI_FAR_CAPTURE");
+#else
             const char *far_capture = getenv("DE_UI_FAR_CAPTURE");
+#endif
             if (result == DE_OK && far_capture && far_capture[0])
                 (void)stbi_write_png(far_capture, (int)s.width, (int)s.height, 4, fixed_fov,
                                      (int)s.width * 4);
+#if defined(_WIN32)
+            free(far_capture);
+#endif
             ((DeUiNode *)de_entity_get(s.world, s.root, component(&s, "DeUiNode")))->display =
                 DE_UI_NONE;
             for (u32 i = 0; i < 2 && result == DE_OK; ++i)
