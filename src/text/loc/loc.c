@@ -189,7 +189,7 @@ static de_result request(de__loc *loc) {
     }
     char locales[LOCALE_CHAIN][36] = {{0}};
     u32 languages = chain(loc, locales);
-    u64 entries = (u64)tables * (languages + 1);
+    u64 entries = (u64)tables * ((u64)languages + 1);
     if (entries > UINT32_MAX || entries > (SIZE_MAX - sizeof(loc_set)) / sizeof(loc_entry)) {
         if (parents)
             DE_FREE(loc->alloc, parents, (size_t)tables * sizeof *parents);
