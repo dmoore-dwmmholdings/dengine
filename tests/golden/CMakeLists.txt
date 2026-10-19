@@ -185,3 +185,6 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ui_cache")
 
 # DENG-318 actual embedded-default widget state sheet.
 target_sources(de_golden PRIVATE ui/widgets_basic/widgets_scene.c)
+
+# DENG-319 actual retained advanced controls and injected IME.
+target_sources(de_golden PRIVATE ui/widgets_advanced/widgets_scene.c)

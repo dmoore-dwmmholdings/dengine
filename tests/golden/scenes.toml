@@ -494,3 +494,17 @@ size = [1280,720]
 tiers = ["base"]
 threshold_mean = 0.001
 threshold_p99 = 0.015
+
+[scene.ui_widgets_advanced_text]
+description = "Actual IME preedit, text selection, password and multiline editing"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015
+
+[scene.ui_widgets_advanced_controls]
+description = "Actual dropdown, virtual scrolling, tabs and tooltip"
+size = [1280,720]
+tiers = ["base"]
+threshold_mean = 0.001
+threshold_p99 = 0.015

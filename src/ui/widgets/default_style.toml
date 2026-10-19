@@ -125,3 +125,21 @@ border_width = 2
 [style."slider:focus"]
 border_color = "$foreground"
 border_width = 2
+[style."button.ui_option"]
+background = "$surface"
+radius = 0
+padding = [4, 8]
+[style."button.ui_option_selected"]
+background = "$primary"
+radius = 0
+padding = [4, 8]
+[style."button.ui_option:hover"]
+background = "#324864"
+[style."button.ui_tab"]
+background = "$surface"
+radius = 0
+padding = [4, 8]
+[style."button.ui_tab_active"]
+background = "$primary"
+radius = 0
+padding = [4, 8]

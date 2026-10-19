@@ -270,3 +270,43 @@ a gamepad walks Play, Music, Volume and Quit, cancels a modal confirmation, then
 The test saves `menu_replay/sample_menu.deir`, creates a fresh input/UI/world with no devices,
 and checks every replay tick's focus, event trace, resolved-action checksum and widget values.
 Later advanced-widget walkthrough extensions use the same table and recording schema.
+
+### Advanced controls (DENG-319)
+
+`DeUiTextInput` owns at most255 UTF-8 bytes plus its terminator. The runtime derives
+length from the bounded buffer, snaps caret/selection to the public S28 extended-grapheme
+boundaries, and keeps preedit in a separate display component. A committed input event emits
+CHANGED; preedit never changes the authored buffer. `DeUiText.literal` is the display view
+and may contain password bullets or composition, so bindings must read the reflected
+`DeUiTextInput.buffer` rather than the display. Clipboard copying is disabled for passwords.
+Public layout hit-test/caret APIs supply bidi-aware mouse positioning and caret geometry;
+single-line controls scroll their physical text origin while preserving the inherited clip.
+The public grapheme wrapper uses stack scratch through255bytes, temporary heap for larger
+inputs, returns required boundary count, and documents invalid UTF-8/capacity/error behavior.
+
+The keyboard-only blocking `ui.text_edit` action context is created once at attach. It
+consumes editor navigation/Enter/Space/Escape while leaving gamepad bindings available.
+Push/pop follow the existing S21 next-frame context semantics. Escape suspends editing even
+when a modal restores the same logical focus; explicit activation resumes it. IME candidate
+areas use the public input-to-platform bridge in logical window points. Headless platforms
+retain editing state while the OS keyboard/candidate APIs report their normal unsupported result.
+
+Dropdown options are localization IDs. A real modal popup flips upward when needed; outside
+click/cancel closes it and selection emits one CHANGED. Scroll controls clip children, clamp
+physical offsets, integrate decaying wheel momentum, draw draggable bars, and expose
+`de_ui_scroll_to` plus the navigation scroll-into-view hook. A list materializes at most
+ceil(viewport/item-height)+2 rows, independently of100000-item data size. Configured prefabs
+are instantiated through the real asset API. Rows rotate their index mapping and emit
+BIND_ITEM only when their represented index changes; applications populate those row entities.
+Tabs create header buttons and hide inactive child pages. Tooltips wait for hover/logical
+focus, anchor near the pointer or target, clamp via popup safe-area layout, and hide on press/leave.
+
+`ui.edit` runs in PreUpdate after pointer routing. `ui.advanced` reconciles structures and
+refreshes borrowed display views in PostUpdate before basic widgets, focus, style and layout.
+The nullable `refresh_text` widget-table hook lets bindings refresh display after committed
+buffer writes without depending on private advanced-control structures. Runtime components
+own no external heap pointers, and the fixed entity scratch buffer is allocated at UI creation.
+
+Known deferred finding DENG-521: first pre-layout virtual-list reconciliation observes zero
+UI scale and triggers a NaN-to-u32 conversion under UBSan. Its strict regression remains.
+The other advanced sanitizer cases pass; final native capture results are recorded with the issue.
