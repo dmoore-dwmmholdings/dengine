@@ -412,6 +412,11 @@ TEST_F(vk, bindless_indices, vk_fx) {
     /* After the GPU is done, a new object that gets the same index gets its own descriptor. */
     de_gpu_buffer_destroy(f->d, b);
     de_gpu_wait_idle(f->d);
+    /* Retirement must clear the old object before the index is handed to a new buffer. */
+    u64 dummy_buffer = 0;
+    ASSERT_TRUE(de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_BUFFER, 0, &dummy_buffer));
+    ASSERT_TRUE(de__gpu_vk_bindless_written(f->d, DE__GPU_BINDLESS_BUFFER, bi, &h));
+    EXPECT_EQ(h, dummy_buffer);
     de_gpu_buffer b2 = de_gpu_buffer_create(f->d, &bd);
     ASSERT_TRUE(DE_HANDLE_VALID(b2));
     EXPECT_EQ(de_gpu_buffer_bindless(f->d, b2), bi); /* LIFO reuse */

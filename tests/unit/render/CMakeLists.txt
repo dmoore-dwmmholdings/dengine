@@ -991,3 +991,232 @@ if(TARGET test_render_pcss_contact)
         endif()
     endif()
 endif()
+
+# DENG-44: production renderer scene AS and shared alpha opacity.
+de_add_test(NAME render_scene_as SOURCES test_scene_as.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 180)
+if(TARGET test_render_scene_as)
+    target_include_directories(test_render_scene_as PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/scene_as_tmp")
+    target_compile_definitions(test_render_scene_as PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/scene_as_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_scene_as PRIVATE version)
+        de_d3d12_agility_deploy(test_render_scene_as)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_scene_as)
+        endif()
+    endif()
+endif()
+
+# DENG-45: production analytic RT shadows, physical sampling and native readback.
+de_add_test(NAME render_rt_shadows SOURCES test_rt_shadows.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_shadows)
+    target_include_directories(test_render_rt_shadows PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_shadows_tmp")
+    target_compile_definitions(test_render_rt_shadows PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_shadows_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rt_shadows PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_shadows)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_shadows)
+        endif()
+    endif()
+endif()
+
+# DENG-46: actual source aliasing, reservoir reuse and many-light renderer acceptance.
+de_add_test(NAME render_restir_di SOURCES test_restir_di.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_restir_di)
+    target_include_directories(test_render_restir_di PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/restir_di_tmp")
+    target_compile_definitions(test_render_restir_di PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/restir_di_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_restir_di PRIVATE version)
+        de_d3d12_agility_deploy(test_render_restir_di)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_restir_di)
+        endif()
+    endif()
+endif()
+
+# DENG-47: actual renderer RTAO and fallback acceptance.
+de_add_test(NAME render_rtao SOURCES test_rtao.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rtao)
+    target_include_directories(test_render_rtao PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rtao_tmp")
+    target_compile_definitions(test_render_rtao PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rtao_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rtao PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rtao)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rtao)
+        endif()
+    endif()
+endif()
+
+# DENG-48 native closest-hit material shading.
+de_add_test(NAME render_rt_reflections SOURCES test_rt_reflections.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_reflections)
+    target_include_directories(test_render_rt_reflections PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_reflections_tmp")
+    target_compile_definitions(test_render_rt_reflections PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_reflections_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rt_reflections PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_reflections)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_reflections)
+        endif()
+    endif()
+endif()
+
+# DENG-49 live DDGI source.
+de_add_test(NAME render_rt_gi_probes SOURCES test_rt_gi_probes.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_gi_probes)
+    target_include_directories(test_render_rt_gi_probes PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_gi_probes_tmp")
+    target_compile_definitions(test_render_rt_gi_probes PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_gi_probes_tmp\"")
+    if(DE_HAS_GPU_D3D12)
+        target_link_libraries(test_render_rt_gi_probes PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_gi_probes)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_gi_probes)
+        endif()
+    endif()
+endif()
+
+# DENG-50: actual sorted-forward capture and alpha-aware native batch refraction.
+de_add_test(NAME render_rt_refraction SOURCES test_rt_refraction.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_refraction)
+    target_include_directories(test_render_rt_refraction PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rt_refraction_tmp")
+    target_compile_definitions(test_render_rt_refraction PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/rt_refraction_tmp\"")
+    if(WIN32)
+        target_link_libraries(test_render_rt_refraction PRIVATE version)
+        de_d3d12_agility_deploy(test_render_rt_refraction)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_refraction)
+        endif()
+    endif()
+endif()
+
+# Original S16 combined production scene and all-active allocation exit proof.
+de_add_test(NAME render_s16_rt_integration SOURCES test_s16_rt_integration.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_s16_rt_integration)
+    target_include_directories(test_render_s16_rt_integration PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/s16_integration_tmp")
+    target_compile_definitions(test_render_s16_rt_integration PRIVATE
+        "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/s16_integration_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_s16_rt_integration PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_s16_rt_integration PRIVATE version)
+        de_d3d12_agility_deploy(test_render_s16_rt_integration)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_s16_rt_integration)
+        endif()
+    endif()
+endif()
+
+# S17 progressive path tracer using the real renderer/scene and RT pipelines.
+de_add_test(NAME render_pathtracer SOURCES test_pathtracer.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pathtracer)
+    target_include_directories(test_render_pathtracer PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pathtracer_tmp")
+    target_compile_definitions(test_render_pathtracer PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/pathtracer_tmp\"" "DE_PT_REFERENCE=\"${CMAKE_CURRENT_SOURCE_DIR}/data/pt_cornell_4096.f32\"")
+    if(WIN32)
+        target_compile_definitions(test_render_pathtracer PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_pathtracer PRIVATE version)
+        de_d3d12_agility_deploy(test_render_pathtracer)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_pathtracer)
+        endif()
+    endif()
+endif()
+
+# S17 participating media and random-walk SSS, real native integrator readback.
+de_add_test(NAME render_pt_media SOURCES test_pt_media.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pt_media)
+    target_include_directories(test_render_pt_media PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pt_media_tmp")
+    target_compile_definitions(test_render_pt_media PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/pt_media_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_pt_media PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_pt_media PRIVATE version)
+        de_d3d12_agility_deploy(test_render_pt_media)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_pt_media)
+        endif()
+    endif()
+endif()
+
+# Shared S17 deterministic graph denoiser blocks.
+de_add_test(NAME render_denoise_framework SOURCES test_denoise_framework.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 120)
+if(TARGET test_render_denoise_framework)
+    target_include_directories(test_render_denoise_framework PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# S17 production shadow/AO policies and actual fixed-spp references.
+de_add_test(NAME render_denoise_shadow_ao SOURCES test_denoise_shadow_ao.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 180)
+if(TARGET test_render_denoise_shadow_ao)
+    target_include_directories(test_render_denoise_shadow_ao PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/denoise_shadow_ao_tmp")
+    target_compile_definitions(test_render_denoise_shadow_ao PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/denoise_shadow_ao_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_denoise_shadow_ao PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_denoise_shadow_ao PRIVATE version)
+        de_d3d12_agility_deploy(test_render_denoise_shadow_ao)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_denoise_shadow_ao)
+        endif()
+    endif()
+endif()
+
+# S17 production diffuse/specular policies, independent fixed-spp references.
+de_add_test(NAME render_denoise_gi_spec SOURCES test_denoise_gi_spec.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip LABELS unit gpu render TIMEOUT 180)
+if(TARGET test_render_denoise_gi_spec)
+    target_include_directories(test_render_denoise_gi_spec PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/denoise_gi_spec_tmp")
+    target_compile_definitions(test_render_denoise_gi_spec PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/denoise_gi_spec_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_denoise_gi_spec PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_denoise_gi_spec PRIVATE version)
+        de_d3d12_agility_deploy(test_render_denoise_gi_spec)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_denoise_gi_spec)
+        endif()
+    endif()
+endif()
+
+# S17 actual first-hit AOVs, canonical importer roundtrip, final presentation quality.
+de_add_test(NAME render_pt_reference SOURCES test_pt_reference.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} de_golden_flip "$<$<CONFIG:Debug,Dev>:de_cooker>"
+         "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>" LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_pt_reference)
+    target_include_directories(test_render_pt_reference PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pt_reference_tmp")
+    target_compile_definitions(test_render_pt_reference PRIVATE "DE_SCENE_AS_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/pt_reference_tmp\"")
+    if(WIN32)
+        target_compile_definitions(test_render_pt_reference PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(test_render_pt_reference PRIVATE version)
+        de_d3d12_agility_deploy(test_render_pt_reference)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_pt_reference)
+        endif()
+    endif()
+endif()

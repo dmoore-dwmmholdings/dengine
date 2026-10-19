@@ -1,0 +1,5 @@
+file(READ "${SOURCE}" hex HEX)
+string(LENGTH "${hex}" n)
+math(EXPR n "${n} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
+file(WRITE "${OUT}" "/* Generated native RT query library. */\nconst unsigned char de__rt_metal_library[] = {${bytes}};\nconst unsigned long long de__rt_metal_library_bytes = ${n};\n")

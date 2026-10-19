@@ -42,7 +42,7 @@ public static const uint DE_LIGHTING_COUNTER_ENTRIES = 16;    // entries after t
 public static const uint DE_LIGHTING_COUNTER_DROPPED = 20;    // entries past the list capacity
 public static const uint DE_LIGHTING_COUNTER_BYTES = 32;
 
-/// One view's lighting constants (400 bytes; lighting.h de__lighting_view), uploaded per frame.
+/// One view's lighting constants (432 bytes; lighting.h de__lighting_view), uploaded per frame.
 public struct DeLightingView
 {
     public uint tiles_x;
@@ -125,7 +125,7 @@ public SurfaceData de_surface_specular_only(SurfaceData s)
 
 /// Adds the light reaching `s` from direction `wi` (world) with illuminance `e` (rgb lux). The
 /// split is the model's own (DENG-306: evaluate_split), exact for metals too.
-void add_light<M : IMaterialSplitModel>(inout DeDirect r, SurfaceData s, ShadingFrame f,
+public void add_light<M : IMaterialSplitModel>(inout DeDirect r, SurfaceData s, ShadingFrame f,
                                         float3 wo, float3 wi, float3 e, bool split)
 {
     float3 wil = f.to_local(wi);
@@ -152,7 +152,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
                                                                    float3 v, uint2 px,
                                                                    DeLightingView lv,
                                                                    DeClusterLists cl,
-                                                                   uint cluster, bool split)
+                                                                   uint cluster, bool split, bool local_lights = true)
 {
     DeDirect r;
     r.diffuse = float3(0.0, 0.0, 0.0);
@@ -174,13 +174,14 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
             vis *= de_input_contact_directional(lv.inputs, px, asuint(l.bound.xy));
         else if (i == 0u)
             vis *= de_input_contact_shadow(lv.inputs, px);
+        vis=de_input_rt_shadow(lv.inputs,px,0x80000000u|i,vis);
         add_light<M>(r, s, f, wo, h.wi, h.illuminance * vis, split);
     }
     uint2 cell = de_robuffer<uint2>(cl.grid)[cluster];
     float3 f0 = lerp(float3(0.04, 0.04, 0.04) * s.specular, s.base_color, s.metallic);
     float f90 = lerp(s.specular, 1.0, s.metallic);
     float3 albedo = s.base_color * (1.0 - s.metallic);
-    for (uint k = 0; k < cell.y; ++k)
+    for (uint k = 0; k < (local_lights ? cell.y : 0u); ++k)
     {
         uint index = de_robuffer<uint>(cl.list)[cell.x + k];
         DeClusterLight l = de_robuffer<DeClusterLight>(cl.lights)[index];
@@ -189,6 +190,7 @@ public DeDirect evaluate_direct_clustered<M : IMaterialSplitModel>(SurfaceData s
             atlas_shadow(lv.inputs.shadow_local, (asuint(l.axis.w) >> 8u) & 255u, p, s.normal) :
             de_input_shadow_local(lv.inputs, px, index);
         vis *= de_input_contact_local(lv.inputs, px, (asuint(l.axis.w) >> 16u) & 7u);
+        vis=de_input_rt_shadow(lv.inputs,px,index+1u,vis);
         if (kind == DE_LIGHT_KIND_RECT || kind == DE_LIGHT_KIND_DISK)
         {
             float3 d, sp;
@@ -297,7 +299,9 @@ void evaluate_indirect_split(SurfaceData s, float3 p, float3 v, uint2 px, DeLigh
         ssr.rgb *= material > 0 ? combined / material : 0;
     }
     bool opaque_specular = (lv.inputs.reserved0 & DE_INPUT_SPECULAR_OPAQUE) != 0u;
-    if (opaque_specular && film && ssr.a > 0) {
+    if ((lv.inputs.reserved0 & DE_INPUT_SPECULAR_LAYERS) != 0u) {
+        specular = lerp(specular, ssr.rgb, saturate(ssr.a));
+    } else if (opaque_specular && film && ssr.a > 0) {
         // The actual SSR producer has only quantized G-buffer parameters, including AO.
         // Opaque deferred surfaces retain these base values; layer material data adds the
         // film later. Reweight only the base response, never a summed coat/sheen result.

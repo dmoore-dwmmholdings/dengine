@@ -1,0 +1,89 @@
+[[entity]]
+id="0x1"
+[entity.DeTransform]
+position=[0.0,-6.0,2.0]
+rotation=[0.707106781,0.0,0.0,0.707106781]
+scale=[1.0,1.0,1.0]
+[entity.DeCamera]
+projection="DE_PROJ_PERSPECTIVE"
+fov_y=0.65
+near_z=0.1
+exposure_ev100=0.0
+
+[[entity]]
+id="0x10"
+[entity.DeTransform]
+position=[0.0, 0.0, 0.0]
+rotation=[-0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+scale=[4.0, 4.0, 4.0]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/white"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true
+
+[[entity]]
+id="0x11"
+[entity.DeTransform]
+position=[0.0, 0.0, 4.0]
+rotation=[0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+scale=[4.0, 4.0, 4.0]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/white"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true
+
+[[entity]]
+id="0x12"
+[entity.DeTransform]
+position=[0.0, 2.0, 2.0]
+rotation=[0.0, 0.0, 0.0, 1.0000000000000002]
+scale=[4.0, 4.0, 4.0]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/white"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true
+
+[[entity]]
+id="0x13"
+[entity.DeTransform]
+position=[-2.0, 0.0, 2.0]
+rotation=[-0.5000000000000001, 0.5000000000000001, 0.5000000000000001, 0.5000000000000001]
+scale=[4.0, 4.0, 4.0]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/red"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true
+
+[[entity]]
+id="0x14"
+[entity.DeTransform]
+position=[2.0, 0.0, 2.0]
+rotation=[-0.5000000000000001, -0.5000000000000001, -0.5000000000000001, 0.5000000000000001]
+scale=[4.0, 4.0, 4.0]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/green"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true
+
+[[entity]]
+id="0x15"
+[entity.DeTransform]
+position=[0.0, 0.0, 3.98]
+rotation=[0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+scale=[0.7, 0.7, 0.7]
+[entity.DeMeshRenderer]
+mesh="mesh/card#card"
+materials=["pt/emitter"]
+layer_mask=1
+cast_shadows=true
+visible_in_rt=true

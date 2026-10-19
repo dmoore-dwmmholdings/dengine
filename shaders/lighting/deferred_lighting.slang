@@ -187,7 +187,14 @@ public void de_lighting_tiles<M : IMaterialSplitModel>(uint3 group, uint t, Ligh
         // pass blurs it; without the SSS pass it is lit like any other pixel.
         bool sss = sss_on && (g.flags & DE_GB_FLAG_SUBSURFACE) != 0u;
         bool split = sss || split_all;
-        DeDirect d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split);
+        DeDirect d;
+        if (lv.inputs.restir_diffuse != 0u) {
+            d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split, false);
+            d.diffuse += de_input_load(lv.inputs.restir_diffuse, p, float4(0)).rgb;
+            d.specular += de_input_load(lv.inputs.restir_specular, p, float4(0)).rgb;
+        } else {
+            d = evaluate_direct_clustered<M>(s, pos, v, p, lv, pc.cl, cluster, split);
+        }
         float3 ind_d, ind_s;
         evaluate_indirect_split(s, pos, v, p, lv, ind_d, ind_s); // DENG-304: IBL
         float e = lv.pre_exposure;

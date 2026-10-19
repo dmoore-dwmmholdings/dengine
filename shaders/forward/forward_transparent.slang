@@ -1,3 +1,5 @@
+import "../materials/standard/lobe_transmission";
+import "../materials/standard/standard_base";
 // shaders/forward/forward_transparent.slang: the forward transparent pass (SPEC §12.5 step 6;
 // DENG-305). Engine shader `forward_transparent`; src/render/passes/forward/forward_transparent.c
 // makes one DE_PIPE_GRAPHICS pipeline of vs_forward and ps_forward (pre-warmed at renderer
@@ -39,6 +41,8 @@ import "../materials/unlit/unlit";
 import "../forward/forward_routing";
 import ss_refraction;
 import scene_color_pyramid;
+import "../rt/rt_refraction_types";
+import "../rt/light_sampling";
 
 /// ForwardParams.side
 public static const uint DE_FWD_SIDE_FRONT = 0;
@@ -48,7 +52,7 @@ public static const uint DE_FWD_VERTICES = 372;
 /// Bytes per pixel of the scene-colour copy (RGBA16F).
 public static const uint DE_FWD_SCENE_COLOR_BPP = 8;
 
-/// Push constants of the vertex / pixel pair (96 bytes; forward.h de__fwd_params).
+/// Push constants of the vertex / pixel pair (112 bytes; forward.h de__fwd_params).
 public struct ForwardParams
 {
     public uint view;          // DeLightingView ring (de_robuffer)
@@ -68,6 +72,10 @@ public struct ForwardParams
     public uint scene_color_levels;
     public uint refraction;
     public DeClusterLists cl;
+    public uint rt_capture;
+    public uint rt_result;
+    public uint rt_path;
+    public uint rt_reserved;
 };
 
 public struct FwdVertex
@@ -174,6 +182,54 @@ FwdVertex vs_forward(uint vid : SV_VertexID, uint iid : SV_InstanceID, uniform F
     return o;
 }
 
+void fwd_resolve_surface(FwdVertex i,ForwardParams pc,DeSceneConstants sc,out DeGpuMaterial m,out VertexAttribs v,out TextureLodInfo lod,out float curvature,out float alpha) {
+    m = de_resolve_material_of(i.material, sc);
+    v.position = i.world;
+    float nl = dot(i.normal, i.normal);
+    v.normal = nl > 0.0 ? i.normal * rsqrt(nl) : i.geometric;
+    float tl = dot(i.tangent.xyz, i.tangent.xyz);
+    v.tangent = float4(tl > 0.0 ? i.tangent.xyz * rsqrt(tl) : float3(1.0, 0.0, 0.0),
+                       i.tangent.w < 0.0 ? -1.0 : 1.0);
+    v.geometric_normal = i.geometric;
+    float3 base_normal = v.normal;
+    curvature = refraction_curvature(ddx(i.world), ddy(i.world),
+                                           ddx(base_normal), ddy(base_normal));
+    float3 to_eye = fwd_ortho(sc) ? sc.view[2].xyz : sc.camera_position.xyz - i.world;
+    float el = dot(to_eye, to_eye);
+    v.view = el > 0.0 ? to_eye * rsqrt(el) : v.normal;
+    v.color = i.color;
+    v.uv[0] = i.uv0;
+    v.uv[1] = i.uv1;
+    v.has_tangent = i.has_tangent != 0u;
+    v.object_scale = i.object_scale;
+    lod.dx[0] = ddx(i.uv0);
+    lod.dy[0] = ddy(i.uv0);
+    lod.dx[1] = ddx(i.uv1);
+    lod.dy[1] = ddy(i.uv1);
+    lod.sampler = pc.sampler;
+    lod.feedback = 0u;
+    lod.feedback_capacity = 0u;
+    lod.record = false;
+    float4 white = float4(1.0, 1.0, 1.0, 1.0);
+    alpha = saturate(m.base_color.w * i.color.w *
+                           de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod, white).w);
+}
+[shader("fragment")]
+float4 ps_capture_refraction(FwdVertex i,uniform ForwardParams pc):SV_Target {
+    DeSceneConstants sc=de_robuffer<DeSceneConstants>(pc.scene)[pc.view_slot];
+    DeGpuMaterial m;VertexAttribs v;TextureLodInfo lod;float curvature,alpha;
+    fwd_resolve_surface(i,pc,sc,m,v,lod,curvature,alpha);
+    SurfaceData s=StandardModel.resolve_gbuffer(StandardModel.load_params(m),v,lod);
+    float t=(s.features&DE_MATERIAL_FEATURE_TRANSMISSION)!=0?saturate(s.transmission)*(1-saturate(s.metallic)):0;
+    if(t>0&&alpha>0&&pc.rt_capture!=0) {
+        if(s.thickness>0&&dot(v.normal,v.view)<0){m.flags&=~DE_GPU_MATERIAL_DOUBLE_SIDED;s=StandardModel.resolve_gbuffer(StandardModel.load_params(m),v,lod);}
+        DeRefractionCapture c=(DeRefractionCapture)0;c.position_thickness=float4(i.world,s.thickness);c.view_ior=float4(v.view,s.ior);c.normal_roughness=float4(s.normal,s.roughness);c.geometry_curvature=float4(v.normal,curvature);
+        de_buffer<DeRefractionCapture>(pc.rt_capture)[uint(i.pos.y)*pc.width+uint(i.pos.x)]=c;
+    }
+    // Premultiplied zero keeps the actual lighting target unchanged during capture.
+    return float4(0);
+}
+
 [shader("fragment")]
 float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
 {
@@ -194,39 +250,13 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         lv.inputs.ao = 0u;
         lv.inputs.reserved0 &= ~DE_INPUT_AO_GTAO;
     }
+    // DENG-45 RT screen masks belong to the opaque receiver; keep raster for forward.
+    lv.inputs.rt_shadow_visibility=0u;lv.inputs.rt_shadow_keys=0u;
+    lv.inputs.restir_diffuse=0u;lv.inputs.restir_specular=0u;
     uint2 px = uint2(i.pos.xy);
-    DeGpuMaterial m = de_resolve_material_of(i.material, sc);
-    VertexAttribs v;
-    v.position = i.world;
-    float nl = dot(i.normal, i.normal);
-    v.normal = nl > 0.0 ? i.normal * rsqrt(nl) : i.geometric;
-    float tl = dot(i.tangent.xyz, i.tangent.xyz);
-    v.tangent = float4(tl > 0.0 ? i.tangent.xyz * rsqrt(tl) : float3(1.0, 0.0, 0.0),
-                       i.tangent.w < 0.0 ? -1.0 : 1.0);
-    v.geometric_normal = i.geometric;
-    float3 base_normal = v.normal;
-    float curvature = refraction_curvature(ddx(i.world), ddy(i.world),
-                                           ddx(base_normal), ddy(base_normal));
-    float3 to_eye = fwd_ortho(sc) ? sc.view[2].xyz : sc.camera_position.xyz - i.world;
-    float el = dot(to_eye, to_eye);
-    v.view = el > 0.0 ? to_eye * rsqrt(el) : v.normal;
-    v.color = i.color;
-    v.uv[0] = i.uv0;
-    v.uv[1] = i.uv1;
-    v.has_tangent = i.has_tangent != 0u;
-    v.object_scale = i.object_scale;
-    TextureLodInfo lod;
-    lod.dx[0] = ddx(i.uv0);
-    lod.dy[0] = ddy(i.uv0);
-    lod.dx[1] = ddx(i.uv1);
-    lod.dy[1] = ddy(i.uv1);
-    lod.sampler = pc.sampler;
-    lod.feedback = 0u;
-    lod.feedback_capacity = 0u;
-    lod.record = false;
-    float4 white = float4(1.0, 1.0, 1.0, 1.0);
-    float alpha = saturate(m.base_color.w * i.color.w *
-                           de_resolve_sample(m, DE_RESOLVE_TEX_BASE_COLOR, v, lod, white).w);
+    DeGpuMaterial m;VertexAttribs v;TextureLodInfo lod;float curvature,alpha;
+    fwd_resolve_surface(i,pc,sc,m,v,lod,curvature,alpha);
+    float3 base_normal=v.normal;
     float e = lv.pre_exposure;
     if ((m.model & (DE_GPU_MATERIAL_MODELS - 1u)) == DE_GPU_MATERIAL_MODEL_UNLIT)
     {
@@ -280,7 +310,13 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         scene.levels = pc.scene_color_levels;
         scene.reserved0 = 0;
         scene.reserved1 = 0;
-        RefractionResult ray = ss_refract(scene, sc, lv, cluster, px, i.world, v.view, s.normal,
+        RefractionResult ray;
+        bool rt=pc.rt_result!=0&&de_robuffer<float4>(pc.rt_result)[px.y*pc.width+px.x].w>0;
+        if(rt) {
+            float4 path=de_robuffer<float4>(pc.rt_path)[px.y*pc.width+px.x];
+            ray=(RefractionResult)0;ray.radiance=de_robuffer<float4>(pc.rt_result)[px.y*pc.width+px.x].rgb;
+            ray.distance=path.x;ray.tir=path.y!=0;ray.confidence=1;
+        } else ray=ss_refract(scene, sc, lv, cluster, px, i.world, v.view, s.normal,
                                           base_normal, curvature, s.thickness, s.ior, s.roughness);
         if (ray.tir) {
             // All energy in the transmitting dielectric lobe is reflected at TIR. Raw incident
@@ -300,6 +336,13 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
             float3 through =
                 t * s.base_color * (float3(1) - saturate(f)) *
                 volume_transmittance(s.attenuation_color, s.attenuation_distance, ray.distance);
+            if(rt&&s.roughness>=.05&&dot(v.view,s.normal)>0) {
+                ShadingFrame frame=de_frame_from_normal(s.normal);float3 wo=frame.to_local(v.view);
+                float3 wi=frame.to_local(de_robuffer<DeRefractionCapture>(pc.rt_capture)[px.y*pc.width+px.x].sampled.xyz);
+                TransmissionLobes transmission=de_transmission_lobes(s,de_standard_base_t<DE_STANDARD_FEATURES_ALL>(s,wo,true),wo,true,false);
+                float pdf=de_transmission_specular_pdf(transmission,wo,wi);
+                through=(pdf>0?StandardModel.evaluate(s,wo,wi)/pdf:float3(0))*volume_transmittance(s.attenuation_color,s.attenuation_distance,ray.distance);
+            }
             rgb += ray.radiance * through;
         }
     }

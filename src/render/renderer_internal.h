@@ -154,6 +154,8 @@ struct de_renderer {
 
     /* DENG-176: the views and the per-view frame pipeline (views_internal.h). */
     struct de__views *views;
+    struct de__denoise *denoise; /* S17 shared per-view signal histories */
+    struct de__pt *pt;           /* S17 progressive path tracing */
     struct de__probes *probes;
     struct de__ssr *ssr;
     struct de__irradiance *irradiance;
@@ -161,6 +163,10 @@ struct de_renderer {
     struct de__csm *csm;
     struct de__shadow_atlas *shadow_atlas;
     struct de__gtao *gtao;
+    struct de__rtao *rtao;
+    struct de__rt_gi *rt_gi;
+    struct de__rt_reflections *rt_reflections;
+    struct de__rt_refraction *rt_refraction;
     struct de__contact *contact;
     /** The window's drawable size, sampled on the main thread (de__renderer_kick_prepare; under
      * `lock`), and the size the swapchain was last made or resized for (render thread). */
@@ -170,6 +176,9 @@ struct de_renderer {
     /* DENG-177: the GPU scene (scene/gpu_scene.h); made by de_renderer_create, driven by the
      * per-view frame (DENG-176). */
     struct de__gpu_scene *gpu_scene;
+    struct de__rt_scene *rt_scene; /* DENG-44, only the RT tier owns native AS */
+    struct de__restir_di *restir_di;
+    struct de__rt_shadows *rt_shadows; /* DENG-45, prewarmed effect pipelines survive toggles */
 
     /* DENG-298: the material model registry (materials/material_models.h): the built-in ids and
      * de_material_model_register's game models; made before the views (the vis resolve reads

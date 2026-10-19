@@ -1,0 +1,7231 @@
+# rt_restir_many_lights (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -8.0, 4.8]
+rotation = [0.5373, 0.0, 0.0, 0.843391]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.837758
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, -0.15]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [7.0, 7.0, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 0.3
+rotation = 0.0
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [-2.0, 1.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.7, 0.7, 2.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/red"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [1.0, 1.0, 0.6]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.2, 1.2, 1.2]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/green"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [-2.625, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000015"
+[entity.DeTransform]
+position = [-2.275, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000016"
+[entity.DeTransform]
+position = [-1.925, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000017"
+[entity.DeTransform]
+position = [-1.575, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000018"
+[entity.DeTransform]
+position = [-1.225, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000019"
+[entity.DeTransform]
+position = [-0.875, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001a"
+[entity.DeTransform]
+position = [-0.525, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001b"
+[entity.DeTransform]
+position = [-0.175, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001c"
+[entity.DeTransform]
+position = [0.175, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001d"
+[entity.DeTransform]
+position = [0.525, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001e"
+[entity.DeTransform]
+position = [0.875, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000001f"
+[entity.DeTransform]
+position = [1.225, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000020"
+[entity.DeTransform]
+position = [1.575, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000021"
+[entity.DeTransform]
+position = [1.925, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000022"
+[entity.DeTransform]
+position = [2.275, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000023"
+[entity.DeTransform]
+position = [2.625, -2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000024"
+[entity.DeTransform]
+position = [-2.625, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000025"
+[entity.DeTransform]
+position = [-2.275, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000026"
+[entity.DeTransform]
+position = [-1.925, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000027"
+[entity.DeTransform]
+position = [-1.575, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000028"
+[entity.DeTransform]
+position = [-1.225, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000029"
+[entity.DeTransform]
+position = [-0.875, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002a"
+[entity.DeTransform]
+position = [-0.525, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002b"
+[entity.DeTransform]
+position = [-0.175, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002c"
+[entity.DeTransform]
+position = [0.175, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002d"
+[entity.DeTransform]
+position = [0.525, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002e"
+[entity.DeTransform]
+position = [0.875, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000002f"
+[entity.DeTransform]
+position = [1.225, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000030"
+[entity.DeTransform]
+position = [1.575, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000031"
+[entity.DeTransform]
+position = [1.925, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000032"
+[entity.DeTransform]
+position = [2.275, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000033"
+[entity.DeTransform]
+position = [2.625, -2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000034"
+[entity.DeTransform]
+position = [-2.625, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000035"
+[entity.DeTransform]
+position = [-2.275, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000036"
+[entity.DeTransform]
+position = [-1.925, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000037"
+[entity.DeTransform]
+position = [-1.575, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000038"
+[entity.DeTransform]
+position = [-1.225, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000039"
+[entity.DeTransform]
+position = [-0.875, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003a"
+[entity.DeTransform]
+position = [-0.525, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003b"
+[entity.DeTransform]
+position = [-0.175, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003c"
+[entity.DeTransform]
+position = [0.175, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003d"
+[entity.DeTransform]
+position = [0.525, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003e"
+[entity.DeTransform]
+position = [0.875, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000003f"
+[entity.DeTransform]
+position = [1.225, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000040"
+[entity.DeTransform]
+position = [1.575, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000041"
+[entity.DeTransform]
+position = [1.925, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000042"
+[entity.DeTransform]
+position = [2.275, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000043"
+[entity.DeTransform]
+position = [2.625, -1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000044"
+[entity.DeTransform]
+position = [-2.625, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000045"
+[entity.DeTransform]
+position = [-2.275, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000046"
+[entity.DeTransform]
+position = [-1.925, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000047"
+[entity.DeTransform]
+position = [-1.575, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000048"
+[entity.DeTransform]
+position = [-1.225, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000049"
+[entity.DeTransform]
+position = [-0.875, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004a"
+[entity.DeTransform]
+position = [-0.525, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004b"
+[entity.DeTransform]
+position = [-0.175, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004c"
+[entity.DeTransform]
+position = [0.175, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004d"
+[entity.DeTransform]
+position = [0.525, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004e"
+[entity.DeTransform]
+position = [0.875, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000004f"
+[entity.DeTransform]
+position = [1.225, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000050"
+[entity.DeTransform]
+position = [1.575, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000051"
+[entity.DeTransform]
+position = [1.925, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000052"
+[entity.DeTransform]
+position = [2.275, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000053"
+[entity.DeTransform]
+position = [2.625, -1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000054"
+[entity.DeTransform]
+position = [-2.625, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000055"
+[entity.DeTransform]
+position = [-2.275, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000056"
+[entity.DeTransform]
+position = [-1.925, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000057"
+[entity.DeTransform]
+position = [-1.575, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000058"
+[entity.DeTransform]
+position = [-1.225, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000059"
+[entity.DeTransform]
+position = [-0.875, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005a"
+[entity.DeTransform]
+position = [-0.525, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005b"
+[entity.DeTransform]
+position = [-0.175, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005c"
+[entity.DeTransform]
+position = [0.175, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005d"
+[entity.DeTransform]
+position = [0.525, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005e"
+[entity.DeTransform]
+position = [0.875, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000005f"
+[entity.DeTransform]
+position = [1.225, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000060"
+[entity.DeTransform]
+position = [1.575, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000061"
+[entity.DeTransform]
+position = [1.925, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000062"
+[entity.DeTransform]
+position = [2.275, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000063"
+[entity.DeTransform]
+position = [2.625, -1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000064"
+[entity.DeTransform]
+position = [-2.625, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000065"
+[entity.DeTransform]
+position = [-2.275, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000066"
+[entity.DeTransform]
+position = [-1.925, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000067"
+[entity.DeTransform]
+position = [-1.575, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000068"
+[entity.DeTransform]
+position = [-1.225, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000069"
+[entity.DeTransform]
+position = [-0.875, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006a"
+[entity.DeTransform]
+position = [-0.525, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006b"
+[entity.DeTransform]
+position = [-0.175, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006c"
+[entity.DeTransform]
+position = [0.175, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006d"
+[entity.DeTransform]
+position = [0.525, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006e"
+[entity.DeTransform]
+position = [0.875, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000006f"
+[entity.DeTransform]
+position = [1.225, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000070"
+[entity.DeTransform]
+position = [1.575, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000071"
+[entity.DeTransform]
+position = [1.925, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000072"
+[entity.DeTransform]
+position = [2.275, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000073"
+[entity.DeTransform]
+position = [2.625, -0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000074"
+[entity.DeTransform]
+position = [-2.625, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000075"
+[entity.DeTransform]
+position = [-2.275, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000076"
+[entity.DeTransform]
+position = [-1.925, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000077"
+[entity.DeTransform]
+position = [-1.575, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000078"
+[entity.DeTransform]
+position = [-1.225, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000079"
+[entity.DeTransform]
+position = [-0.875, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007a"
+[entity.DeTransform]
+position = [-0.525, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007b"
+[entity.DeTransform]
+position = [-0.175, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007c"
+[entity.DeTransform]
+position = [0.175, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007d"
+[entity.DeTransform]
+position = [0.525, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007e"
+[entity.DeTransform]
+position = [0.875, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000007f"
+[entity.DeTransform]
+position = [1.225, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000080"
+[entity.DeTransform]
+position = [1.575, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000081"
+[entity.DeTransform]
+position = [1.925, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000082"
+[entity.DeTransform]
+position = [2.275, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000083"
+[entity.DeTransform]
+position = [2.625, -0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000084"
+[entity.DeTransform]
+position = [-2.625, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000085"
+[entity.DeTransform]
+position = [-2.275, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000086"
+[entity.DeTransform]
+position = [-1.925, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000087"
+[entity.DeTransform]
+position = [-1.575, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000088"
+[entity.DeTransform]
+position = [-1.225, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000089"
+[entity.DeTransform]
+position = [-0.875, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008a"
+[entity.DeTransform]
+position = [-0.525, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008b"
+[entity.DeTransform]
+position = [-0.175, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008c"
+[entity.DeTransform]
+position = [0.175, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008d"
+[entity.DeTransform]
+position = [0.525, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008e"
+[entity.DeTransform]
+position = [0.875, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000008f"
+[entity.DeTransform]
+position = [1.225, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000090"
+[entity.DeTransform]
+position = [1.575, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000091"
+[entity.DeTransform]
+position = [1.925, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000092"
+[entity.DeTransform]
+position = [2.275, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000093"
+[entity.DeTransform]
+position = [2.625, -0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000094"
+[entity.DeTransform]
+position = [-2.625, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000095"
+[entity.DeTransform]
+position = [-2.275, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000096"
+[entity.DeTransform]
+position = [-1.925, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000097"
+[entity.DeTransform]
+position = [-1.575, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000098"
+[entity.DeTransform]
+position = [-1.225, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000099"
+[entity.DeTransform]
+position = [-0.875, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009a"
+[entity.DeTransform]
+position = [-0.525, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009b"
+[entity.DeTransform]
+position = [-0.175, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009c"
+[entity.DeTransform]
+position = [0.175, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009d"
+[entity.DeTransform]
+position = [0.525, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009e"
+[entity.DeTransform]
+position = [0.875, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000009f"
+[entity.DeTransform]
+position = [1.225, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a0"
+[entity.DeTransform]
+position = [1.575, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a1"
+[entity.DeTransform]
+position = [1.925, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a2"
+[entity.DeTransform]
+position = [2.275, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a3"
+[entity.DeTransform]
+position = [2.625, 0.175, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a4"
+[entity.DeTransform]
+position = [-2.625, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a5"
+[entity.DeTransform]
+position = [-2.275, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a6"
+[entity.DeTransform]
+position = [-1.925, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a7"
+[entity.DeTransform]
+position = [-1.575, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a8"
+[entity.DeTransform]
+position = [-1.225, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000a9"
+[entity.DeTransform]
+position = [-0.875, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000aa"
+[entity.DeTransform]
+position = [-0.525, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ab"
+[entity.DeTransform]
+position = [-0.175, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ac"
+[entity.DeTransform]
+position = [0.175, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ad"
+[entity.DeTransform]
+position = [0.525, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ae"
+[entity.DeTransform]
+position = [0.875, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000af"
+[entity.DeTransform]
+position = [1.225, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b0"
+[entity.DeTransform]
+position = [1.575, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b1"
+[entity.DeTransform]
+position = [1.925, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b2"
+[entity.DeTransform]
+position = [2.275, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b3"
+[entity.DeTransform]
+position = [2.625, 0.525, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b4"
+[entity.DeTransform]
+position = [-2.625, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b5"
+[entity.DeTransform]
+position = [-2.275, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b6"
+[entity.DeTransform]
+position = [-1.925, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b7"
+[entity.DeTransform]
+position = [-1.575, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b8"
+[entity.DeTransform]
+position = [-1.225, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000b9"
+[entity.DeTransform]
+position = [-0.875, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ba"
+[entity.DeTransform]
+position = [-0.525, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000bb"
+[entity.DeTransform]
+position = [-0.175, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000bc"
+[entity.DeTransform]
+position = [0.175, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000bd"
+[entity.DeTransform]
+position = [0.525, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000be"
+[entity.DeTransform]
+position = [0.875, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000bf"
+[entity.DeTransform]
+position = [1.225, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c0"
+[entity.DeTransform]
+position = [1.575, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c1"
+[entity.DeTransform]
+position = [1.925, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c2"
+[entity.DeTransform]
+position = [2.275, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c3"
+[entity.DeTransform]
+position = [2.625, 0.875, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c4"
+[entity.DeTransform]
+position = [-2.625, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c5"
+[entity.DeTransform]
+position = [-2.275, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c6"
+[entity.DeTransform]
+position = [-1.925, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c7"
+[entity.DeTransform]
+position = [-1.575, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c8"
+[entity.DeTransform]
+position = [-1.225, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000c9"
+[entity.DeTransform]
+position = [-0.875, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ca"
+[entity.DeTransform]
+position = [-0.525, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000cb"
+[entity.DeTransform]
+position = [-0.175, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000cc"
+[entity.DeTransform]
+position = [0.175, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000cd"
+[entity.DeTransform]
+position = [0.525, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ce"
+[entity.DeTransform]
+position = [0.875, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000cf"
+[entity.DeTransform]
+position = [1.225, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d0"
+[entity.DeTransform]
+position = [1.575, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d1"
+[entity.DeTransform]
+position = [1.925, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d2"
+[entity.DeTransform]
+position = [2.275, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d3"
+[entity.DeTransform]
+position = [2.625, 1.225, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d4"
+[entity.DeTransform]
+position = [-2.625, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d5"
+[entity.DeTransform]
+position = [-2.275, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d6"
+[entity.DeTransform]
+position = [-1.925, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d7"
+[entity.DeTransform]
+position = [-1.575, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d8"
+[entity.DeTransform]
+position = [-1.225, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000d9"
+[entity.DeTransform]
+position = [-0.875, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000da"
+[entity.DeTransform]
+position = [-0.525, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000db"
+[entity.DeTransform]
+position = [-0.175, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000dc"
+[entity.DeTransform]
+position = [0.175, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000dd"
+[entity.DeTransform]
+position = [0.525, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000de"
+[entity.DeTransform]
+position = [0.875, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000df"
+[entity.DeTransform]
+position = [1.225, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e0"
+[entity.DeTransform]
+position = [1.575, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e1"
+[entity.DeTransform]
+position = [1.925, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e2"
+[entity.DeTransform]
+position = [2.275, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e3"
+[entity.DeTransform]
+position = [2.625, 1.575, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e4"
+[entity.DeTransform]
+position = [-2.625, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e5"
+[entity.DeTransform]
+position = [-2.275, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e6"
+[entity.DeTransform]
+position = [-1.925, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e7"
+[entity.DeTransform]
+position = [-1.575, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e8"
+[entity.DeTransform]
+position = [-1.225, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000e9"
+[entity.DeTransform]
+position = [-0.875, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ea"
+[entity.DeTransform]
+position = [-0.525, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000eb"
+[entity.DeTransform]
+position = [-0.175, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ec"
+[entity.DeTransform]
+position = [0.175, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ed"
+[entity.DeTransform]
+position = [0.525, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ee"
+[entity.DeTransform]
+position = [0.875, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ef"
+[entity.DeTransform]
+position = [1.225, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f0"
+[entity.DeTransform]
+position = [1.575, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f1"
+[entity.DeTransform]
+position = [1.925, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f2"
+[entity.DeTransform]
+position = [2.275, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f3"
+[entity.DeTransform]
+position = [2.625, 1.925, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f4"
+[entity.DeTransform]
+position = [-2.625, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f5"
+[entity.DeTransform]
+position = [-2.275, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f6"
+[entity.DeTransform]
+position = [-1.925, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f7"
+[entity.DeTransform]
+position = [-1.575, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f8"
+[entity.DeTransform]
+position = [-1.225, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000f9"
+[entity.DeTransform]
+position = [-0.875, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000fa"
+[entity.DeTransform]
+position = [-0.525, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000fb"
+[entity.DeTransform]
+position = [-0.175, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000fc"
+[entity.DeTransform]
+position = [0.175, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000fd"
+[entity.DeTransform]
+position = [0.525, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000fe"
+[entity.DeTransform]
+position = [0.875, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000000ff"
+[entity.DeTransform]
+position = [1.225, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000100"
+[entity.DeTransform]
+position = [1.575, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000101"
+[entity.DeTransform]
+position = [1.925, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000102"
+[entity.DeTransform]
+position = [2.275, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000103"
+[entity.DeTransform]
+position = [2.625, 2.275, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000104"
+[entity.DeTransform]
+position = [-2.625, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000105"
+[entity.DeTransform]
+position = [-2.275, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000106"
+[entity.DeTransform]
+position = [-1.925, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000107"
+[entity.DeTransform]
+position = [-1.575, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000108"
+[entity.DeTransform]
+position = [-1.225, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000109"
+[entity.DeTransform]
+position = [-0.875, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010a"
+[entity.DeTransform]
+position = [-0.525, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010b"
+[entity.DeTransform]
+position = [-0.175, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010c"
+[entity.DeTransform]
+position = [0.175, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010d"
+[entity.DeTransform]
+position = [0.525, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010e"
+[entity.DeTransform]
+position = [0.875, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000010f"
+[entity.DeTransform]
+position = [1.225, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000110"
+[entity.DeTransform]
+position = [1.575, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000111"
+[entity.DeTransform]
+position = [1.925, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000112"
+[entity.DeTransform]
+position = [2.275, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000113"
+[entity.DeTransform]
+position = [2.625, 2.625, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000114"
+[entity.DeTransform]
+position = [-2.625, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000115"
+[entity.DeTransform]
+position = [-2.275, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000116"
+[entity.DeTransform]
+position = [-1.925, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000117"
+[entity.DeTransform]
+position = [-1.575, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000118"
+[entity.DeTransform]
+position = [-1.225, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000119"
+[entity.DeTransform]
+position = [-0.875, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011a"
+[entity.DeTransform]
+position = [-0.525, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011b"
+[entity.DeTransform]
+position = [-0.175, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011c"
+[entity.DeTransform]
+position = [0.175, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011d"
+[entity.DeTransform]
+position = [0.525, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011e"
+[entity.DeTransform]
+position = [0.875, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000011f"
+[entity.DeTransform]
+position = [1.225, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000120"
+[entity.DeTransform]
+position = [1.575, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000121"
+[entity.DeTransform]
+position = [1.925, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000122"
+[entity.DeTransform]
+position = [2.275, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000123"
+[entity.DeTransform]
+position = [2.625, -2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000124"
+[entity.DeTransform]
+position = [-2.625, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000125"
+[entity.DeTransform]
+position = [-2.275, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000126"
+[entity.DeTransform]
+position = [-1.925, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000127"
+[entity.DeTransform]
+position = [-1.575, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000128"
+[entity.DeTransform]
+position = [-1.225, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000129"
+[entity.DeTransform]
+position = [-0.875, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012a"
+[entity.DeTransform]
+position = [-0.525, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012b"
+[entity.DeTransform]
+position = [-0.175, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012c"
+[entity.DeTransform]
+position = [0.175, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012d"
+[entity.DeTransform]
+position = [0.525, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012e"
+[entity.DeTransform]
+position = [0.875, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000012f"
+[entity.DeTransform]
+position = [1.225, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000130"
+[entity.DeTransform]
+position = [1.575, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000131"
+[entity.DeTransform]
+position = [1.925, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000132"
+[entity.DeTransform]
+position = [2.275, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000133"
+[entity.DeTransform]
+position = [2.625, -2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000134"
+[entity.DeTransform]
+position = [-2.625, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000135"
+[entity.DeTransform]
+position = [-2.275, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000136"
+[entity.DeTransform]
+position = [-1.925, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000137"
+[entity.DeTransform]
+position = [-1.575, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000138"
+[entity.DeTransform]
+position = [-1.225, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000139"
+[entity.DeTransform]
+position = [-0.875, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013a"
+[entity.DeTransform]
+position = [-0.525, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013b"
+[entity.DeTransform]
+position = [-0.175, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013c"
+[entity.DeTransform]
+position = [0.175, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013d"
+[entity.DeTransform]
+position = [0.525, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013e"
+[entity.DeTransform]
+position = [0.875, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000013f"
+[entity.DeTransform]
+position = [1.225, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000140"
+[entity.DeTransform]
+position = [1.575, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000141"
+[entity.DeTransform]
+position = [1.925, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000142"
+[entity.DeTransform]
+position = [2.275, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000143"
+[entity.DeTransform]
+position = [2.625, -1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000144"
+[entity.DeTransform]
+position = [-2.625, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000145"
+[entity.DeTransform]
+position = [-2.275, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000146"
+[entity.DeTransform]
+position = [-1.925, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000147"
+[entity.DeTransform]
+position = [-1.575, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000148"
+[entity.DeTransform]
+position = [-1.225, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000149"
+[entity.DeTransform]
+position = [-0.875, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014a"
+[entity.DeTransform]
+position = [-0.525, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014b"
+[entity.DeTransform]
+position = [-0.175, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014c"
+[entity.DeTransform]
+position = [0.175, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014d"
+[entity.DeTransform]
+position = [0.525, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014e"
+[entity.DeTransform]
+position = [0.875, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000014f"
+[entity.DeTransform]
+position = [1.225, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000150"
+[entity.DeTransform]
+position = [1.575, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000151"
+[entity.DeTransform]
+position = [1.925, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000152"
+[entity.DeTransform]
+position = [2.275, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000153"
+[entity.DeTransform]
+position = [2.625, -1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000154"
+[entity.DeTransform]
+position = [-2.625, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000155"
+[entity.DeTransform]
+position = [-2.275, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000156"
+[entity.DeTransform]
+position = [-1.925, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000157"
+[entity.DeTransform]
+position = [-1.575, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000158"
+[entity.DeTransform]
+position = [-1.225, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000159"
+[entity.DeTransform]
+position = [-0.875, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015a"
+[entity.DeTransform]
+position = [-0.525, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015b"
+[entity.DeTransform]
+position = [-0.175, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015c"
+[entity.DeTransform]
+position = [0.175, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015d"
+[entity.DeTransform]
+position = [0.525, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015e"
+[entity.DeTransform]
+position = [0.875, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000015f"
+[entity.DeTransform]
+position = [1.225, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000160"
+[entity.DeTransform]
+position = [1.575, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000161"
+[entity.DeTransform]
+position = [1.925, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000162"
+[entity.DeTransform]
+position = [2.275, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000163"
+[entity.DeTransform]
+position = [2.625, -1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000164"
+[entity.DeTransform]
+position = [-2.625, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000165"
+[entity.DeTransform]
+position = [-2.275, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000166"
+[entity.DeTransform]
+position = [-1.925, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000167"
+[entity.DeTransform]
+position = [-1.575, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000168"
+[entity.DeTransform]
+position = [-1.225, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000169"
+[entity.DeTransform]
+position = [-0.875, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016a"
+[entity.DeTransform]
+position = [-0.525, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016b"
+[entity.DeTransform]
+position = [-0.175, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016c"
+[entity.DeTransform]
+position = [0.175, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016d"
+[entity.DeTransform]
+position = [0.525, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016e"
+[entity.DeTransform]
+position = [0.875, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000016f"
+[entity.DeTransform]
+position = [1.225, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000170"
+[entity.DeTransform]
+position = [1.575, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000171"
+[entity.DeTransform]
+position = [1.925, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000172"
+[entity.DeTransform]
+position = [2.275, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000173"
+[entity.DeTransform]
+position = [2.625, -0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000174"
+[entity.DeTransform]
+position = [-2.625, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000175"
+[entity.DeTransform]
+position = [-2.275, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000176"
+[entity.DeTransform]
+position = [-1.925, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000177"
+[entity.DeTransform]
+position = [-1.575, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000178"
+[entity.DeTransform]
+position = [-1.225, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000179"
+[entity.DeTransform]
+position = [-0.875, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017a"
+[entity.DeTransform]
+position = [-0.525, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017b"
+[entity.DeTransform]
+position = [-0.175, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017c"
+[entity.DeTransform]
+position = [0.175, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017d"
+[entity.DeTransform]
+position = [0.525, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017e"
+[entity.DeTransform]
+position = [0.875, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000017f"
+[entity.DeTransform]
+position = [1.225, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000180"
+[entity.DeTransform]
+position = [1.575, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000181"
+[entity.DeTransform]
+position = [1.925, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000182"
+[entity.DeTransform]
+position = [2.275, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000183"
+[entity.DeTransform]
+position = [2.625, -0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000184"
+[entity.DeTransform]
+position = [-2.625, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000185"
+[entity.DeTransform]
+position = [-2.275, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000186"
+[entity.DeTransform]
+position = [-1.925, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000187"
+[entity.DeTransform]
+position = [-1.575, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000188"
+[entity.DeTransform]
+position = [-1.225, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000189"
+[entity.DeTransform]
+position = [-0.875, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018a"
+[entity.DeTransform]
+position = [-0.525, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018b"
+[entity.DeTransform]
+position = [-0.175, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018c"
+[entity.DeTransform]
+position = [0.175, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018d"
+[entity.DeTransform]
+position = [0.525, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018e"
+[entity.DeTransform]
+position = [0.875, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000018f"
+[entity.DeTransform]
+position = [1.225, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000190"
+[entity.DeTransform]
+position = [1.575, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000191"
+[entity.DeTransform]
+position = [1.925, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000192"
+[entity.DeTransform]
+position = [2.275, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000193"
+[entity.DeTransform]
+position = [2.625, -0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000194"
+[entity.DeTransform]
+position = [-2.625, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000195"
+[entity.DeTransform]
+position = [-2.275, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000196"
+[entity.DeTransform]
+position = [-1.925, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000197"
+[entity.DeTransform]
+position = [-1.575, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000198"
+[entity.DeTransform]
+position = [-1.225, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000199"
+[entity.DeTransform]
+position = [-0.875, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019a"
+[entity.DeTransform]
+position = [-0.525, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019b"
+[entity.DeTransform]
+position = [-0.175, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019c"
+[entity.DeTransform]
+position = [0.175, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019d"
+[entity.DeTransform]
+position = [0.525, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019e"
+[entity.DeTransform]
+position = [0.875, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000019f"
+[entity.DeTransform]
+position = [1.225, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a0"
+[entity.DeTransform]
+position = [1.575, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a1"
+[entity.DeTransform]
+position = [1.925, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a2"
+[entity.DeTransform]
+position = [2.275, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a3"
+[entity.DeTransform]
+position = [2.625, 0.175, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a4"
+[entity.DeTransform]
+position = [-2.625, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a5"
+[entity.DeTransform]
+position = [-2.275, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a6"
+[entity.DeTransform]
+position = [-1.925, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a7"
+[entity.DeTransform]
+position = [-1.575, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a8"
+[entity.DeTransform]
+position = [-1.225, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001a9"
+[entity.DeTransform]
+position = [-0.875, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001aa"
+[entity.DeTransform]
+position = [-0.525, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ab"
+[entity.DeTransform]
+position = [-0.175, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ac"
+[entity.DeTransform]
+position = [0.175, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ad"
+[entity.DeTransform]
+position = [0.525, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ae"
+[entity.DeTransform]
+position = [0.875, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001af"
+[entity.DeTransform]
+position = [1.225, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b0"
+[entity.DeTransform]
+position = [1.575, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b1"
+[entity.DeTransform]
+position = [1.925, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b2"
+[entity.DeTransform]
+position = [2.275, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b3"
+[entity.DeTransform]
+position = [2.625, 0.525, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b4"
+[entity.DeTransform]
+position = [-2.625, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b5"
+[entity.DeTransform]
+position = [-2.275, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b6"
+[entity.DeTransform]
+position = [-1.925, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b7"
+[entity.DeTransform]
+position = [-1.575, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b8"
+[entity.DeTransform]
+position = [-1.225, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001b9"
+[entity.DeTransform]
+position = [-0.875, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ba"
+[entity.DeTransform]
+position = [-0.525, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001bb"
+[entity.DeTransform]
+position = [-0.175, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001bc"
+[entity.DeTransform]
+position = [0.175, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001bd"
+[entity.DeTransform]
+position = [0.525, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001be"
+[entity.DeTransform]
+position = [0.875, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001bf"
+[entity.DeTransform]
+position = [1.225, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c0"
+[entity.DeTransform]
+position = [1.575, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c1"
+[entity.DeTransform]
+position = [1.925, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c2"
+[entity.DeTransform]
+position = [2.275, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c3"
+[entity.DeTransform]
+position = [2.625, 0.875, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c4"
+[entity.DeTransform]
+position = [-2.625, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c5"
+[entity.DeTransform]
+position = [-2.275, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c6"
+[entity.DeTransform]
+position = [-1.925, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c7"
+[entity.DeTransform]
+position = [-1.575, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c8"
+[entity.DeTransform]
+position = [-1.225, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001c9"
+[entity.DeTransform]
+position = [-0.875, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ca"
+[entity.DeTransform]
+position = [-0.525, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001cb"
+[entity.DeTransform]
+position = [-0.175, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001cc"
+[entity.DeTransform]
+position = [0.175, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001cd"
+[entity.DeTransform]
+position = [0.525, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ce"
+[entity.DeTransform]
+position = [0.875, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001cf"
+[entity.DeTransform]
+position = [1.225, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d0"
+[entity.DeTransform]
+position = [1.575, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d1"
+[entity.DeTransform]
+position = [1.925, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d2"
+[entity.DeTransform]
+position = [2.275, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d3"
+[entity.DeTransform]
+position = [2.625, 1.225, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d4"
+[entity.DeTransform]
+position = [-2.625, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d5"
+[entity.DeTransform]
+position = [-2.275, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d6"
+[entity.DeTransform]
+position = [-1.925, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d7"
+[entity.DeTransform]
+position = [-1.575, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d8"
+[entity.DeTransform]
+position = [-1.225, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001d9"
+[entity.DeTransform]
+position = [-0.875, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001da"
+[entity.DeTransform]
+position = [-0.525, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001db"
+[entity.DeTransform]
+position = [-0.175, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001dc"
+[entity.DeTransform]
+position = [0.175, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001dd"
+[entity.DeTransform]
+position = [0.525, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001de"
+[entity.DeTransform]
+position = [0.875, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001df"
+[entity.DeTransform]
+position = [1.225, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e0"
+[entity.DeTransform]
+position = [1.575, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e1"
+[entity.DeTransform]
+position = [1.925, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e2"
+[entity.DeTransform]
+position = [2.275, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e3"
+[entity.DeTransform]
+position = [2.625, 1.575, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e4"
+[entity.DeTransform]
+position = [-2.625, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e5"
+[entity.DeTransform]
+position = [-2.275, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e6"
+[entity.DeTransform]
+position = [-1.925, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e7"
+[entity.DeTransform]
+position = [-1.575, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e8"
+[entity.DeTransform]
+position = [-1.225, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001e9"
+[entity.DeTransform]
+position = [-0.875, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ea"
+[entity.DeTransform]
+position = [-0.525, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001eb"
+[entity.DeTransform]
+position = [-0.175, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ec"
+[entity.DeTransform]
+position = [0.175, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ed"
+[entity.DeTransform]
+position = [0.525, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ee"
+[entity.DeTransform]
+position = [0.875, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ef"
+[entity.DeTransform]
+position = [1.225, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f0"
+[entity.DeTransform]
+position = [1.575, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f1"
+[entity.DeTransform]
+position = [1.925, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f2"
+[entity.DeTransform]
+position = [2.275, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f3"
+[entity.DeTransform]
+position = [2.625, 1.925, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f4"
+[entity.DeTransform]
+position = [-2.625, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f5"
+[entity.DeTransform]
+position = [-2.275, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f6"
+[entity.DeTransform]
+position = [-1.925, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f7"
+[entity.DeTransform]
+position = [-1.575, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f8"
+[entity.DeTransform]
+position = [-1.225, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001f9"
+[entity.DeTransform]
+position = [-0.875, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001fa"
+[entity.DeTransform]
+position = [-0.525, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001fb"
+[entity.DeTransform]
+position = [-0.175, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001fc"
+[entity.DeTransform]
+position = [0.175, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001fd"
+[entity.DeTransform]
+position = [0.525, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001fe"
+[entity.DeTransform]
+position = [0.875, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x00000000000001ff"
+[entity.DeTransform]
+position = [1.225, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000200"
+[entity.DeTransform]
+position = [1.575, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000201"
+[entity.DeTransform]
+position = [1.925, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000202"
+[entity.DeTransform]
+position = [2.275, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000203"
+[entity.DeTransform]
+position = [2.625, 2.275, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000204"
+[entity.DeTransform]
+position = [-2.625, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000205"
+[entity.DeTransform]
+position = [-2.275, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000206"
+[entity.DeTransform]
+position = [-1.925, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000207"
+[entity.DeTransform]
+position = [-1.575, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000208"
+[entity.DeTransform]
+position = [-1.225, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000209"
+[entity.DeTransform]
+position = [-0.875, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020a"
+[entity.DeTransform]
+position = [-0.525, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020b"
+[entity.DeTransform]
+position = [-0.175, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020c"
+[entity.DeTransform]
+position = [0.175, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020d"
+[entity.DeTransform]
+position = [0.525, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020e"
+[entity.DeTransform]
+position = [0.875, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x000000000000020f"
+[entity.DeTransform]
+position = [1.225, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000210"
+[entity.DeTransform]
+position = [1.575, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000211"
+[entity.DeTransform]
+position = [1.925, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [1.0, 0.4, 0.7]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000212"
+[entity.DeTransform]
+position = [2.275, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.4, 0.7, 1.0]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000213"
+[entity.DeTransform]
+position = [2.625, 2.625, 2.5]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_POINT"
+color = [0.7, 1.0, 0.4]
+intensity = 0.8
+range = 15.0
+source_radius = 0.06
+cast_shadows = true

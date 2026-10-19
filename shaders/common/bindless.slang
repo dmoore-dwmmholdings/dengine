@@ -69,6 +69,7 @@ struct DeBindlessHeap
     RWTexture2D<float4> storage_textures[DE_METAL_BINDLESS_STORAGE_TEXTURES];
     SamplerState samplers[DE_METAL_BINDLESS_SAMPLERS];
     uint64_t buffers[DE_METAL_BINDLESS_BUFFERS];
+    RaytracingAccelerationStructure accels[65536];
 };
 // Declared first among the global parameters, so it gets buffer index 0. The importer adds this
 // module to every program, so the index never moves.
@@ -80,6 +81,7 @@ ParameterBlock<DeBindlessHeap> de__heap;
 [[vk::binding(1, 0)]] __DynamicResource<__DynamicResourceKind.General> de__vk_storage_textures[];
 [[vk::binding(2, 0)]] __DynamicResource<__DynamicResourceKind.Sampler> de__vk_samplers[];
 [[vk::binding(3, 0)]] __DynamicResource<__DynamicResourceKind.General> de__vk_buffers[];
+[[vk::binding(4, 0)]] RaytracingAccelerationStructure de__vk_accels[];
 #else
 // D3D12: the read-only view (SRV) of the buffer at index i is at heap slot i + this offset
 // (DENG-410). It must equal DE__D3D12_BUFFER_SRV_OFFSET in src/gpu/d3d12/d3d12_internal.h, the
@@ -392,4 +394,16 @@ public DeRWBytes de_rwbytes(uint idx)
     DeRWBytes b;
     b.index = idx;
     return b;
+}
+
+/// A built TLAS at de_gpu_accel_bindless(). Ray queries need caps.ray_query.
+public RaytracingAccelerationStructure de_accel(uint idx)
+{
+#if defined(DE_SHADER_TARGET_SPIRV)
+    return de__vk_accels[NonUniformResourceIndex(idx)];
+#elif defined(DE_SHADER_TARGET_METAL)
+    return de__heap.accels[idx];
+#else
+    return RaytracingAccelerationStructure(ResourceDescriptorHeap[NonUniformResourceIndex(idx)]);
+#endif
 }

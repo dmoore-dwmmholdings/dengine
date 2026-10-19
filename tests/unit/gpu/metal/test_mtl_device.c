@@ -56,7 +56,8 @@ TEST_F(gpu_metal, device_caps, mtl_fx) {
         !i->raytracing ? DE_RT_NONE : (i->apple9 ? DE_RT_HARDWARE : DE_RT_API_ONLY);
     EXPECT_EQ(c->raytracing, rt);
     EXPECT_EQ(c->ray_query, i->raytracing);
-    EXPECT_FALSE(c->rt_pipelines);
+    EXPECT_EQ(c->rt_pipelines, i->raytracing);
+    EXPECT_EQ(c->max_rt_recursion, i->raytracing ? 1u : 0u);
 
     EXPECT_EQ(c->mesh_shaders, i->metal3);
     EXPECT_EQ(c->mesh_max_output_vertices, i->metal3 ? 256u : 0u);
@@ -75,7 +76,7 @@ TEST_F(gpu_metal, device_caps, mtl_fx) {
     EXPECT_EQ(c->max_bindless_storage_textures, 16384u);
     EXPECT_EQ(c->max_bindless_buffers, 65536u);
     EXPECT_EQ(c->max_bindless_samplers, i->max_samplers < 2048u ? (u32)i->max_samplers : 2048u);
-    EXPECT_EQ(c->max_bindless_accels, 0u);
+    EXPECT_EQ(c->max_bindless_accels, i->raytracing ? 65536u : 0u);
     EXPECT_EQ(c->max_push_constant_bytes, DE_GPU_MAX_PUSH_CONSTANT_BYTES);
     EXPECT_GT(c->timestamp_frequency, 0u);
 

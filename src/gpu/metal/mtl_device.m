@@ -15,6 +15,7 @@
 #import <Metal/Metal.h>
 
 #include "gpu/metal/mtl_internal.h"
+#include "gpu/metal/mtl_accel_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +33,7 @@ static void device_release(de_gpu_device *d) {
     mtl_device *m = de__mtl_dev(d);
     @autoreleasepool {
         de__mtl_sync_drain(d);
+        de__mtl_accel_shutdown(d);
         de__mtl_pipeline_shutdown(d); /* DENG-325 */
         de__mtl_archive_close(d);
         de__mtl_residency_shutdown(d);
@@ -205,6 +207,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
             [DE__GPU_SWAPCHAIN] = sizeof(mtl_swapchain),
             [DE__GPU_FENCE] = sizeof(mtl_fence),
             [DE__GPU_PIPELINE] = sizeof(mtl_pipeline),
+            [DE__GPU_ACCEL] = sizeof(mtl_accel),
             [DE__GPU_QUERY_HEAP] = sizeof(mtl_query_heap), /* DENG-326 */
         },
     .device_create = mtl_device_create,
@@ -232,6 +235,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_viewport = de__mtl_draw_viewport,
     .cmd_draw_indexed_indirect = de__mtl_cmd_draw_indexed_indirect,
     .cmd_dispatch_mesh_indirect = de__mtl_cmd_dispatch_mesh_indirect,
+    .cmd_dispatch_rays = de__mtl_cmd_dispatch_rays,
     .cmd_dispatch = de__mtl_cmd_dispatch,
     .cmd_dispatch_indirect = de__mtl_cmd_dispatch_indirect,
     .cmd_copy_buffer = de__mtl_cmd_copy_buffer,
@@ -275,7 +279,17 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .cmd_breadcrumb = de__mtl_cmd_breadcrumb,
     .device_lost = de__mtl_device_lost,
     .device_lost_report = de__mtl_device_lost_report,
-    .enumerate_adapters = mtl_enumerate_adapters, /* DENG-410 */
+    .enumerate_adapters = mtl_enumerate_adapters,
+    .accel_query_sizes = de__mtl_accel_sizes,
+    .accel_create = de__mtl_accel_create,
+    .accel_destroy = de__mtl_accel_destroy,
+    .accel_address = de__mtl_accel_address,
+    .bindless_write_accel = de__mtl_bindless_write_accel,
+    .cmd_build_blas = de__mtl_accel_blas,
+    .cmd_build_tlas = de__mtl_accel_tlas,
+    .cmd_accel_emit = de__mtl_accel_emit,
+    .accel_compacted_size = de__mtl_accel_read,
+    .cmd_accel_compact = de__mtl_accel_compact, /* DENG-410 */
 };
 
 /* ---------- Accessors ---------- */

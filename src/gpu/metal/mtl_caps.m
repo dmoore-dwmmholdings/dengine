@@ -49,9 +49,12 @@ void de__mtl_caps_fill(void *device, de_gpu_caps *caps) {
         } else {
             caps->raytracing = DE_RT_NONE;
         }
-        /* Metal has no ray-tracing pipeline with a shader binding table, nor opacity
-         * micromaps; the S16 path tracer maps onto compute + intersection functions. */
-        caps->rt_pipelines = false;
+        /* S17 maps ray pipelines onto compute plus native visible/intersection tables.
+         * The engine still has no opacity-micromap implementation. */
+        caps->rt_pipelines = dev.supportsRaytracing && dev.supportsFunctionPointers;
+        caps->max_rt_recursion = caps->rt_pipelines ? 1 : 0;
+        caps->max_rt_payload_bytes = caps->rt_pipelines ? 64 : 0;
+        caps->max_rt_attribute_bytes = caps->rt_pipelines ? 8 : 0;
         caps->opacity_micromaps = false;
 
         caps->mesh_shaders = metal3; /* object + mesh stages: Metal 3 on Apple7+ */
@@ -72,7 +75,7 @@ void de__mtl_caps_fill(void *device, de_gpu_caps *caps) {
         u64 samplers = dev.maxArgumentBufferSamplerCount;
         caps->max_bindless_samplers =
             samplers < DE__MTL_BINDLESS_SAMPLERS ? (u32)samplers : DE__MTL_BINDLESS_SAMPLERS;
-        caps->max_bindless_accels = 0;                                  /* S16 */
+        caps->max_bindless_accels = dev.supportsRaytracing ? DE__MTL_BINDLESS_ACCELS : 0; /* S16 */
         caps->max_push_constant_bytes = DE_GPU_MAX_PUSH_CONSTANT_BYTES; /* setBytes, index 1 */
 
         /* GPU timestamps (counter samples, sampleTimestamps:gpuTimestamp:) count nanoseconds,

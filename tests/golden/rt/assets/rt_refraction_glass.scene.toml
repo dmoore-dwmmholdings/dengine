@@ -1,0 +1,90 @@
+# rt_refraction_glass (DENG-307; written by gen_assets.py)
+
+[[entity]]
+id = "0x0000000000000001"
+[entity.DeTransform]
+position = [0.0, -8.0, 4.8]
+rotation = [0.5373, 0.0, 0.0, 0.843391]
+scale = [1.0, 1.0, 1.0]
+[entity.DeCamera]
+projection = "DE_PROJ_PERSPECTIVE"
+fov_y = 0.837758
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0x0000000000000010"
+[entity.DeTransform]
+position = [0.0, 0.0, -0.15]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [7.0, 7.0, 0.3]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/white"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000011"
+[entity.DeTransform]
+position = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+[entity.DeEnvironment]
+hdri = "env/sky"
+intensity = 0.3
+rotation = 0.0
+
+[[entity]]
+id = "0x0000000000000012"
+[entity.DeTransform]
+position = [0.0, 0.0, 6.0]
+rotation = [0.263105, -0.067182, -0.238108, 0.932506]
+scale = [1.0, 1.0, 1.0]
+[entity.DeLight]
+kind = "DE_LIGHT_DIRECTIONAL"
+color = [1.0, 1.0, 1.0]
+intensity = 4.0
+range = 15.0
+source_radius = 0.045
+cast_shadows = true
+
+[[entity]]
+id = "0x0000000000000013"
+[entity.DeTransform]
+position = [0.0, 0.0, 1.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [2.0, 2.0, 2.0]
+[entity.DeMeshRenderer]
+mesh = "mesh/sphere#sphere"
+materials = ["rtmat/glass"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000014"
+[entity.DeTransform]
+position = [0.0, 2.0, 1.4]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [4.0, 0.2, 2.8]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/checker"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true
+
+[[entity]]
+id = "0x0000000000000015"
+[entity.DeTransform]
+position = [1.0, 1.3, 0.8]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [0.8, 0.6, 1.6]
+[entity.DeMeshRenderer]
+mesh = "mesh/box#box"
+materials = ["rtmat/gold"]
+layer_mask = 1
+cast_shadows = true
+visible_in_rt = true

@@ -17,8 +17,11 @@
  *
  * Settings (the manifest asset and `[defaults.shader]`; all are in the settings hash):
  *   - `entry_points` (string array): `"name"` or `"name:stage"`, stage one of vertex, pixel
- *     (or fragment), compute, mesh, amplification (or task). A name without a stage needs a
- *     [shader("...")] attribute. Default: every [shader("...")] entry point, in source order.
+ *     (or fragment), compute, mesh, amplification (or task), raygen (or raygeneration),
+ *     miss, closesthit or anyhit. RT stages produce SPIR-V RT modules / SM6.6 DXIL libraries;
+ *     Metal RT pipelines use the explicit native ABI in shaders/common/rt_pipeline_metal.h. A name
+ * without a stage needs a [shader("...")] attribute. Default: every [shader("...")] entry point, in
+ * source order.
  *   - `permutations` (string array): each a list of defines `"A=1;B"` (B means B=1); the index
  *     in this list is the permutation index at run time. Default: one permutation, no defines.
  *   - `targets` (string array): any of "spirv", "dxil", "metallib". Default by cook platform:

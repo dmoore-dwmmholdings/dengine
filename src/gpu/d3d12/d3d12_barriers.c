@@ -713,8 +713,10 @@ static void record_enhanced(de_gpu_cmd *c, d3d12_cmd *dc, const de_gpu_barrier *
             bb->pResource = DE__GPU_PAYLOAD(d3d12_buffer, rec)->res;
             bb->Offset = 0;
             bb->Size = UINT64_MAX; /* the whole buffer */
+        } else if (x->accel.id) {
+            flush_enhanced(dc, &e);
+            de__d3d12_accel_dependency(c);
         }
-        /* Acceleration structures: none exist before S16 (accel_create is refused). */
     }
     flush_enhanced(dc, &e);
 }
@@ -748,6 +750,9 @@ static void record_legacy(de_gpu_cmd *c, d3d12_cmd *dc, const de_gpu_barrier *b,
             de__gpu_buffer *rec = de__gpu_get_buffer(d, x->buffer);
             if (rec && !host_visible(rec))
                 legacy_buffer(c, dc, &l, x, rec);
+        } else if (x->accel.id) {
+            flush_legacy(dc, &l);
+            de__d3d12_accel_dependency(c);
         }
     }
     flush_legacy(dc, &l);

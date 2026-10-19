@@ -409,6 +409,8 @@ enum { MAX_STAGES = 3 };
 
 de_result de__vk_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                                  const de_gpu_pipeline_desc *desc) {
+    if (desc->kind == DE_PIPE_RAYTRACING)
+        return de__vk_rt_pipeline_create(d, p, desc);
     static const char F[] = "de_gpu_pipeline_create";
     de__vk_device *vk = de__vk(d);
     de__vk_pipeline *vp = DE__GPU_PAYLOAD(de__vk_pipeline, p);

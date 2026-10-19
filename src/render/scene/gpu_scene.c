@@ -485,10 +485,8 @@ static void pack_light(const de__gpu_scene *gs, u32 s, de__gs_light *o) {
     o->entity_hi = (u32)(f->lights.entity[s] >> 32);
 }
 
-static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
+void de__gpu_scene_pack_mesh_record(const de_render_mesh *m, de__gs_mesh *o) {
     memset(o, 0, sizeof *o);
-    const de_render_mesh *m =
-        gs->assets.mesh != NULL && DE_HANDLE_VALID(h) ? gs->assets.mesh(gs->assets.user, h) : NULL;
     if (m == NULL)
         return; /* not loaded: no READY flag */
     o->vertices = m->bindless[DE_RENDER_MESH_VERTICES];
@@ -528,6 +526,12 @@ static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
         d->vertex_count = src->vertex_count;
         d->error = src->error;
     }
+}
+
+static void pack_mesh(const de__gpu_scene *gs, de_mesh h, de__gs_mesh *o) {
+    const de_render_mesh *m =
+        gs->assets.mesh != NULL && DE_HANDLE_VALID(h) ? gs->assets.mesh(gs->assets.user, h) : NULL;
+    de__gpu_scene_pack_mesh_record(m, o);
 }
 
 /* The material's parameter block (DENG-302: render/materials/material_instances.h). */
@@ -1875,4 +1879,42 @@ const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 
         return NULL;
     const de__gpu_table *tb = &gs->tables[t];
     return slot < tb->count ? tb->shadow + (size_t)slot * tb->stride : NULL;
+}
+
+/* ReSTIR's alias distribution changes with sources, never with camera/frame-only constants. */
+static u64 source_hash(u64 h, const void *data, size_t size) {
+    const u8 *bytes = data;
+    for (size_t i = 0; i < size; ++i) {
+        h ^= bytes[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+u64 de__gpu_scene_source_signature(const de__gpu_scene *gs) {
+    if (!gs)
+        return 0;
+    u64 h = 1469598103934665603ull;
+    const de__gpu_table *instances = &gs->tables[DE__GS_INSTANCES],
+                        *lights = &gs->tables[DE__GS_LIGHTS];
+    h = source_hash(h, &instances->count, sizeof instances->count);
+    h = source_hash(h, &lights->count, sizeof lights->count);
+    for (u32 i = 0; i < instances->count; ++i) {
+        de__gs_instance item;
+        pack_instance(gs, i, &item);
+        memset(item.prev_transform, 0, sizeof item.prev_transform);
+        h = source_hash(h, &item, sizeof item);
+    }
+    for (u32 i = 0; i < lights->count; ++i) {
+        de__gs_light item;
+        pack_light(gs, i, &item);
+        h = source_hash(h, &item, sizeof item);
+    }
+    const de__gs_table_id tables[] = {DE__GS_MESHES, DE__GS_MATERIALS};
+    for (u32 i = 0; i < 2; ++i) {
+        const de__gpu_table *t = &gs->tables[tables[i]];
+        h = source_hash(h, &t->count, sizeof t->count);
+        if (t->count)
+            h = source_hash(h, t->shadow, (size_t)t->count * t->stride);
+    }
+    return h;
 }

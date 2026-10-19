@@ -114,6 +114,9 @@ void de__budget_on_publish(de_asset_system *s, u32 slot, u64 bytes);
 
 /** typed_access.c: the slot was used now (its LRU frame becomes the current one). */
 void de__budget_touch(de_asset_system *s, u32 slot);
+/** Main thread: adjust a READY mesh's dynamic BLAS/decoded-position charge. Identity checked
+ * against the current object, so a hot-reload cannot charge its replacement for old work. */
+void de__budget_resize_mesh(de_asset_system *, de_asset_id, const void *object, u64 bytes);
 
 /**
  * load.c (de_asset_load_bundle, after the request was created): pins the members of every

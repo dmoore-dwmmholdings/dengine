@@ -12,6 +12,7 @@ de_add_module(
         vk_internal.h
         vk_loader.c
         vk_device.c
+        vk_accel.c
         vk_caps.c
         vk_memory.c
         vk_resources.c
@@ -20,6 +21,7 @@ de_add_module(
         vk_barriers.c
         vk_sync.c
         vk_swapchain.c
+        vk_rt_pipeline.c
         vk_pipeline.c
         vk_pipeline_cache.c
         vk_draw.c

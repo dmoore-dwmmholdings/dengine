@@ -1,0 +1,5 @@
+# emitter (DENG-307 materials gallery; written by gen_assets.py)
+base_color = [0.7, 0.7, 0.7]
+emissive = [8.0, 6.0, 3.0]
+emissive_strength = 1.0
+roughness = 0.7

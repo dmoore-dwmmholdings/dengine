@@ -400,3 +400,96 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE shadows/contact_shadows.c shadows/contact_internal.h)
 endif()
+
+# DENG-44: renderer-owned RT acceleration structures and common query infrastructure.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/scene_as.c rt/rt_frame.c rt/rt_internal.h)
+endif()
+if(TARGET de_render AND APPLE AND DE_GPU_METAL)
+    set(_de_rt_library "${CMAKE_CURRENT_BINARY_DIR}/rt_trace.metallib")
+    set(_de_rt_embed "${CMAKE_CURRENT_BINARY_DIR}/rt_trace_metal.c")
+    add_custom_command(OUTPUT "${_de_rt_library}"
+        COMMAND xcrun metal -std=metal3.1
+            "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/rt-metal-cache"
+            "${DE_ROOT_DIR}/shaders/rt/trace_metal.metal" -o "${_de_rt_library}"
+        DEPENDS "${DE_ROOT_DIR}/shaders/rt/trace_metal.metal"
+            "${DE_ROOT_DIR}/shaders/rt/rt_opacity_metal.generated" VERBATIM)
+    add_custom_command(OUTPUT "${_de_rt_embed}"
+        COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${_de_rt_library}" "-DOUT=${_de_rt_embed}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/rt/embed_metal.cmake"
+        DEPENDS "${_de_rt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/rt/embed_metal.cmake" VERBATIM)
+    target_sources(de_render PRIVATE "${_de_rt_embed}")
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_shadows.c rt/rt_shadows.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/restir_di.c rt/restir_di.h)
+endif()
+
+# DENG-47: shared-opacity ray-traced ambient visibility.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rtao.c rt/rtao.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_reflections.c rt/rt_reflections.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_gi_probes.c rt/rt_gi_probes.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE rt/rt_refraction.c rt/rt_refraction.h)
+endif()
+
+# DENG-72: progressive path tracer, explicit R2 native Metal traversal + shared Slang math.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt.c pathtracer/pt_internal.h)
+endif()
+if(TARGET de_render AND APPLE AND DE_GPU_METAL)
+    set(_de_pt_library "${CMAKE_CURRENT_BINARY_DIR}/pt.metallib")
+    set(_de_pt_embed "${CMAKE_CURRENT_BINARY_DIR}/pt_metal.c")
+    add_custom_command(OUTPUT "${_de_pt_library}"
+        COMMAND xcrun metal -std=metal3.1
+            "-fmodules-cache-path=${CMAKE_CURRENT_BINARY_DIR}/pt-metal-cache"
+            "${DE_ROOT_DIR}/shaders/pathtracer/pt_raygen.metal" -o "${_de_pt_library}"
+        DEPENDS "${DE_ROOT_DIR}/shaders/pathtracer/pt_raygen.metal"
+            "${DE_ROOT_DIR}/shaders/pathtracer/pt_metal.generated"
+            "${DE_ROOT_DIR}/shaders/common/rt_pipeline_metal.h" VERBATIM)
+    add_custom_command(OUTPUT "${_de_pt_embed}"
+        COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${_de_pt_library}" "-DOUT=${_de_pt_embed}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/embed_metal.cmake"
+        DEPENDS "${_de_pt_library}" "${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/embed_metal.cmake" VERBATIM)
+    target_sources(de_render PRIVATE "${_de_pt_embed}")
+endif()
+
+# DENG-73: homogeneous participating media, RGB random walks and retained fog uploads.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt_media.c)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE denoise/denoise.c denoise/denoise_internal.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE denoise/denoise_shadow.c denoise/denoise_ao.c denoise/denoise_policy.h)
+endif()
+
+if(TARGET de_render)
+    target_sources(de_render PRIVATE denoise/denoise_diffuse.c denoise/denoise_specular.c denoise/reblur_internal.h)
+endif()
+
+# S17 PT AOV presentation and explicit Dev/Debug export; no cooker runtime dependency.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE pathtracer/pt_denoise.c)
+    target_sources(de_render PRIVATE "$<$<CONFIG:Debug,Dev>:${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/pt_export.c>")
+    target_link_libraries(de_render PRIVATE "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()
+if(TARGET de_render)
+    set_property(TARGET de_render APPEND PROPERTY DE_MODULE_LIBS "$<$<CONFIG:Debug,Dev>:de_tp_tinyexr>")
+endif()

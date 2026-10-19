@@ -1,0 +1,17 @@
+{
+  "description": "DENG-72 production PT Cornell reference",
+  "format": "little-endian RGB float32, row-major, linear unexposed radiance",
+  "width": 16,
+  "height": 16,
+  "samples_per_pixel": 4096,
+  "seed": 0,
+  "max_bounces": 8,
+  "device": "Apple M5 Pro, native Metal RT pipeline",
+  "scene": "test_pathtracer.c cornell(); fixed full 16x16 image",
+  "generation": "DE_PT_RECORD_REFERENCE=1 ctest --preset dev -R ^render_pathtracer.pathtracer.cornell_reference$ -V --output-on-failure --no-tests=error",
+  "comparison": "1024 spp seed1; fixed Reinhard then sRGB display transform; FLIP mean <=0.02",
+  "sha256": "76b129752e95c52d3ad3bb0d47451fcdf5b6cc7256c3db3095e854a5e6365f71",
+  "provenance_log": "/tmp/deng72-cornell-record-fixed.log",
+  "sampling_correction": "/tmp/deng72-sampling-correction.json",
+  "historical_reference": "/tmp/deng72-cornell-old-frozen-sampling.f32"
+}

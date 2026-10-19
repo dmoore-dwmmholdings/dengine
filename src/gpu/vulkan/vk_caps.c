@@ -210,6 +210,17 @@ void de__vk_fill_caps(const de__vk_device *vk, de_gpu_caps *caps) {
         caps->raytracing = DE_RT_NONE;
     caps->ray_query = vk->on.ray_query;
     caps->rt_pipelines = vk->on.rt_pipeline;
+    if (caps->rt_pipelines) {
+        VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt = {0};
+        rt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+        VkPhysicalDeviceProperties2 properties = {0};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties.pNext = &rt;
+        vk->fn.vkGetPhysicalDeviceProperties2(p->handle, &properties);
+        caps->max_rt_recursion = rt.maxRayRecursionDepth;
+        caps->max_rt_payload_bytes = 4096;
+        caps->max_rt_attribute_bytes = rt.maxRayHitAttributeSize;
+    }
     caps->opacity_micromaps = false;
     caps->mesh_shaders = vk->on.mesh_shader;
     if (vk->on.mesh_shader) {
@@ -233,7 +244,7 @@ void de__vk_fill_caps(const de__vk_device *vk, de_gpu_caps *caps) {
     caps->max_bindless_storage_textures = vk->table_size[DE__VK_BINDING_STORAGE_IMAGES];
     caps->max_bindless_samplers = vk->table_size[DE__VK_BINDING_SAMPLERS];
     caps->max_bindless_buffers = vk->table_size[DE__VK_BINDING_STORAGE_BUFFERS];
-    caps->max_bindless_accels = 0; /* the TLAS binding comes with ray tracing (S16) */
+    caps->max_bindless_accels = vk->on.accel ? vk->table_size[DE__VK_BINDING_ACCELS] : 0;
     u32 push = pr->limits.maxPushConstantsSize;
     caps->max_push_constant_bytes =
         push < DE_GPU_MAX_PUSH_CONSTANT_BYTES ? push : DE_GPU_MAX_PUSH_CONSTANT_BYTES;

@@ -1,0 +1,4 @@
+base_color = [0.08, 0.75, 0.08]
+metallic=0.0
+roughness=0.65
+double_sided=true

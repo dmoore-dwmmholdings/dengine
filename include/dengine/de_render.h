@@ -701,6 +701,9 @@ typedef struct de_render_stats {
     /* Local shadows: summed over active caster-mask groups of this renderer frame. */
     u32 shadow_atlas_occupied_texels; /**< allocated tile texels, including guards */
     u32 shadow_atlas_tiles_rendered;  /**< tile renders in successfully submitted view graphs */
+    /** S16: native BLAS plus decoded positions/metadata, charged to GPU mesh residency. */
+    u64 rt_blas_bytes;
+    u32 rt_meshes, rt_blas_count, rt_compacted_blas;
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 
@@ -718,6 +721,20 @@ typedef struct DeIrradianceVolume {
     u32 bounces;
     de_blob bake;
 } DeIrradianceVolume;
+
+/** Progressive unexposed samples accumulated for a live path-traced view; zero before rendering. */
+DE_API u32 de_renderer_path_samples(const de_renderer *r, de_view view);
+/** Request reset before this view's next path-traced frame. */
+DE_API void de_renderer_path_reset(de_renderer *r, de_view view);
+
+#if (defined(DE_DEBUG) || defined(DE_DEV)) && !defined(DE_SHIPPING)
+/** Write normalized, unexposed linear RGBA32F beauty and optional named first-hit AOV channels.
+ * Single-part EXR, root RGBA; alpha is 1 for sampled pixels (sample count is a named channel).
+ * Explicit export synchronizes a GPU readback and allocates staging memory. Virtual writable
+ * mounts and their access rules are honored; no samples or a stale view returns an error. */
+DE_API de_result de_renderer_export_exr(de_renderer *r, de_view view, const char *vpath,
+                                        bool include_aovs);
+#endif
 
 DE_EXTERN_C_END
 #endif

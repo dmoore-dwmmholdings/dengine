@@ -16,11 +16,12 @@ import "../shadows/contact_common";
 public static const uint DE_INPUT_DIFFUSE_OPAQUE = 2u;
 public static const uint DE_INPUT_SPECULAR_OPAQUE = 1u; // reserved0 flag, DENG-339
 
-/// The inputs of one view and frame (64 bytes; DeLightingView.inputs).
+/// The inputs of one view and frame (112 bytes; DeLightingView.inputs).
 public static const uint DE_INPUT_SHADOW_METADATA = 4;
 public static const uint DE_INPUT_AO_GTAO = 8u;
 public static const uint DE_INPUT_ATLAS_METADATA = 16u;
 public static const uint DE_INPUT_CONTACT_METADATA = 32u;
+public static const uint DE_INPUT_SPECULAR_LAYERS = 64u;
 
 public struct LightingInputs
 {
@@ -37,6 +38,18 @@ public struct LightingInputs
     public uint probe_entry;
     public uint probe_sampler;
     public float4 probe_view_z;
+    public uint rt_shadow_visibility;
+    public uint rt_shadow_distance;
+    public uint rt_shadow_keys;
+    public uint rt_shadow_extent;
+    public uint rt_shadow_config;
+    public uint rt_reserved0;
+    public uint rt_reserved1;
+    public uint rt_reserved2;
+    public uint restir_diffuse;
+    public uint restir_specular;
+    public uint restir_distance;
+    public uint restir_reserved;
 };
 
 /// Texel `p` of input texture `index`, or `fallback` without one.
@@ -123,4 +136,16 @@ public float de_input_contact_local(LightingInputs i, uint2 p, uint slot)
     if (slot > min(header.z, 4u)) return 1.0;
     float4 mask = de_input_load(header.y, p, float4(1.0));
     return slot == 1u ? mask.x : slot == 2u ? mask.y : slot == 3u ? mask.z : mask.w;
+}
+
+/// Exact clustered light key; absent/budgeted-out samples keep the complete raster fallback.
+public float de_input_rt_shadow(LightingInputs i,uint2 pixel,uint key,float fallback) {
+    if(i.rt_shadow_visibility==0 || i.rt_shadow_keys==0)return fallback;
+    uint2 size=uint2(i.rt_shadow_extent&65535u,i.rt_shadow_extent>>16);
+    uint slots=i.rt_shadow_config&255u,scale=(i.rt_shadow_config>>8)&255u;
+    uint2 p=min(pixel/max(scale,1u),size-1);uint at=p.y*size.x+p.x;
+    for(uint slot=0;slot<slots;++slot)
+        if(de_bytes(i.rt_shadow_keys).load((slot*size.x*size.y+at)*4)==key)
+            return de_tex2d(i.rt_shadow_visibility).Load(int3(p.x,p.y+slot*size.y,0)).r;
+    return fallback;
 }

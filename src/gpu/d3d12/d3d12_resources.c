@@ -35,6 +35,7 @@ static const DXGI_FORMAT k_formats[DE_FMT_COUNT_] = {
     [DE_FMT_RG32_UINT] = DXGI_FORMAT_R32G32_UINT,
     [DE_FMT_R32_FLOAT] = DXGI_FORMAT_R32_FLOAT,
     [DE_FMT_RG32_FLOAT] = DXGI_FORMAT_R32G32_FLOAT,
+    [DE_FMT_RGB32_FLOAT] = DXGI_FORMAT_R32G32B32_FLOAT,
     [DE_FMT_RGBA32_FLOAT] = DXGI_FORMAT_R32G32B32A32_FLOAT,
     [DE_FMT_R11G11B10_FLOAT] = DXGI_FORMAT_R11G11B10_FLOAT,
     [DE_FMT_RGB10A2_UNORM] = DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -88,7 +89,9 @@ static de_result place_buffer(de_gpu_device *d, de__gpu_buffer *b, const de_gpu_
     const D3D12_RESOURCE_STATES state =
         desc->memory == DE_MEM_UPLOAD     ? D3D12_RESOURCE_STATE_GENERIC_READ
         : desc->memory == DE_MEM_READBACK ? D3D12_RESOURCE_STATE_COPY_DEST
-                                          : D3D12_RESOURCE_STATE_COMMON;
+        : (desc->usage & DE_USAGE_ACCEL_STORAGE)
+            ? D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE
+            : D3D12_RESOURCE_STATE_COMMON;
     HRESULT hr = ID3D12Device_CreatePlacedResource(dd->dev, heap, offset, &rd, state, NULL,
                                                    &IID_ID3D12Resource, (void **)&db->res);
     if (FAILED(hr))

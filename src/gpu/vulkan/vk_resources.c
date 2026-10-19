@@ -38,6 +38,7 @@ static const VkFormat k_formats[DE_FMT_COUNT_] = {
     [DE_FMT_RG32_UINT] = VK_FORMAT_R32G32_UINT,
     [DE_FMT_R32_FLOAT] = VK_FORMAT_R32_SFLOAT,
     [DE_FMT_RG32_FLOAT] = VK_FORMAT_R32G32_SFLOAT,
+    [DE_FMT_RGB32_FLOAT] = VK_FORMAT_R32G32B32_SFLOAT,
     [DE_FMT_RGBA32_FLOAT] = VK_FORMAT_R32G32B32A32_SFLOAT,
     /* Same bit layout as DXGI R11G11B10_FLOAT / R10G10B10A2_UNORM: red in the low bits. */
     [DE_FMT_R11G11B10_FLOAT] = VK_FORMAT_B10G11R11_UFLOAT_PACK32,
@@ -68,11 +69,14 @@ VkImageAspectFlags de__vk_format_aspect(de_gpu_format f) {
 /* ---------- Create infos ---------- */
 
 #define BINDLESS_BUFFER_USAGE                                                                      \
-    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE)
+    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT)
 
 void de__vk_buffer_info(const de__vk_device *vk, const de_gpu_buffer_desc *desc,
                         VkBufferCreateInfo *out) {
     VkBufferUsageFlags u = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (desc->usage & DE_USAGE_SHADER_BINDING_TABLE)
+        u |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     if (desc->usage & DE_USAGE_VERTEX)
         u |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     if (desc->usage & DE_USAGE_INDEX)
@@ -260,6 +264,7 @@ de_result de__vk_buffer_create_placed(de_gpu_device *d, de__gpu_buffer *b,
 }
 
 void de__vk_buffer_destroy(de_gpu_device *d, de__gpu_buffer *b) {
+    de__vk_bindless_clear_buffer(d, b);
     release_buffer(d, b);
 }
 

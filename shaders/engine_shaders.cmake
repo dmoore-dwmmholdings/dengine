@@ -58,3 +58,48 @@ de_engine_shader(shadow_atlas shadows/atlas_sample.slang)
 de_engine_shader(contact_shadows shadows/contact_shadows.slang)
 
 de_engine_shader(pcss_query shadows/pcss_query.slang)
+
+# DENG-44: quantized position decode and GPU scene -> TLAS public instance records.
+de_engine_shader(rt_scene_instances rt/scene_instances.slang)
+# Vulkan/DXR use the same opacity helper in RayQuery candidate loops. Metal's explicit IFT
+# batch adapter is embedded by render/CMakeLists from the generated shared opacity MSL.
+de_engine_shader(rt_trace rt/trace.slang)
+
+de_engine_shader(rt_shadows rt/rt_shadows.slang)
+
+de_engine_shader(restir_di_initial rt/restir_di_initial.slang)
+de_engine_shader(restir_di_temporal rt/restir_di_temporal.slang)
+de_engine_shader(restir_di_spatial rt/restir_di_spatial.slang)
+de_engine_shader(restir_di_shade rt/restir_di_shade.slang)
+
+# DENG-47: ray generation, temporary spatial filter and portable AO publication.
+de_engine_shader(rtao rt/rtao.slang)
+
+de_engine_shader(rt_reflections rt/rt_reflections.slang)
+
+de_engine_shader(ddgi_trace rt/ddgi_trace.slang)
+de_engine_shader(ddgi_update rt/ddgi_update.slang)
+de_engine_shader(ddgi_relocate rt/ddgi_relocate.slang)
+
+de_engine_shader(rt_refraction rt/rt_refraction.slang)
+
+# Native RT stages use DXIL/SPIR-V. Metal uses its explicit R2 callable-table wrapper.
+if(NOT APPLE)
+    de_engine_shader(pt_pipeline pathtracer/pt_raygen.slang)
+endif()
+de_engine_shader(pt_environment pathtracer/pt_env.slang)
+
+# S17 shared deterministic denoiser blocks.
+de_engine_shader(denoise_reproject denoise/reproject.slang)
+de_engine_shader(denoise_temporal denoise/temporal.slang)
+de_engine_shader(denoise_variance denoise/variance.slang)
+de_engine_shader(denoise_atrous denoise/atrous.slang)
+
+# Shared-block shadow/AO policies (no temporal or wavelet kernel fork).
+de_engine_shader(denoise_shadow_prefilter denoise/shadow_prefilter.slang)
+de_engine_shader(denoise_shadow_publish denoise/shadow_temporal.slang)
+
+# S17 radiance policies; shared temporal and a-trous remain single implementations.
+de_engine_shader(denoise_reblur_diffuse denoise/reblur_diffuse.slang)
+de_engine_shader(denoise_reblur_specular denoise/reblur_specular.slang)
+de_engine_shader(pt_final_denoise pathtracer/pt_final_denoise.slang)

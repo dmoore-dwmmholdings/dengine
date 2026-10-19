@@ -75,6 +75,10 @@ static void release_recording(mtl_cmd *mc) {
         }
         if (mc->cb)
             (void)CFBridgingRelease(mc->cb);
+        /* The old submission has completed, or this unsubmitted command buffer was just
+         * disposed above. Only now release native objects that its residency declarations name. */
+        if (mc->accel_keep)
+            [(__bridge NSMutableSet *)mc->accel_keep removeAllObjects];
     }
     mc->encoder = NULL;
     mc->cb = NULL;
@@ -92,6 +96,9 @@ void de__mtl_cmd_fini(de_gpu_device *d, de_gpu_cmd *c) {
         }
     }
     mc->fences = NULL;
+    if (mc->accel_keep)
+        (void)CFBridgingRelease(mc->accel_keep);
+    mc->accel_keep = NULL;
 }
 
 de_result de__mtl_cmd_begin(de_gpu_cmd *c, const char *name) {
@@ -126,7 +133,7 @@ de_result de__mtl_cmd_begin(de_gpu_cmd *c, const char *name) {
 
 void *de__mtl_cmd_encoder(de_gpu_cmd *c, de__mtl_encoder_kind kind) {
     mtl_cmd *mc = payload(c);
-    if (kind != DE__MTL_ENC_BLIT && kind != DE__MTL_ENC_COMPUTE)
+    if (kind != DE__MTL_ENC_BLIT && kind != DE__MTL_ENC_COMPUTE && kind != DE__MTL_ENC_ACCEL)
         return NULL;
     if (mc->encoder && mc->kind == (u32)kind)
         return mc->encoder;
@@ -136,14 +143,18 @@ void *de__mtl_cmd_encoder(de_gpu_cmd *c, de__mtl_encoder_kind kind) {
     @autoreleasepool {
         id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)mc->cb;
         id<MTLCommandEncoder> enc =
-            kind == DE__MTL_ENC_BLIT
+            kind == DE__MTL_ENC_ACCEL
+                ? (id<MTLCommandEncoder>)[cb accelerationStructureCommandEncoder]
+            : kind == DE__MTL_ENC_BLIT
                 ? (id<MTLCommandEncoder>)[cb blitCommandEncoder]
                 /* Concurrent: dispatches are ordered by barriers only, as everywhere else. */
                 : (id<MTLCommandEncoder>)[cb
                       computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
         if (enc == nil) {
             de__gpu_fail(c->device, DE_ERR_DEVICE_LOST, "metal: \"%s\": no %s encoder", c->name,
-                         kind == DE__MTL_ENC_BLIT ? "blit" : "compute");
+                         kind == DE__MTL_ENC_ACCEL  ? "acceleration"
+                         : kind == DE__MTL_ENC_BLIT ? "blit"
+                                                    : "compute");
             return NULL;
         }
         if (c->name[0])

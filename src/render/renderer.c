@@ -1,6 +1,14 @@
+#include "render/denoise/denoise_internal.h"
+#include "render/pathtracer/pt_internal.h"
+#include "render/rt/restir_di.h"
+#include "render/rt/rt_shadows.h"
 #include "render/shadows/shadows_internal.h"
 #include "render/shadows/contact_internal.h"
 #include "render/passes/ao/gtao_internal.h"
+#include "render/rt/rtao.h"
+#include "render/rt/rt_gi_probes.h"
+#include "render/rt/rt_reflections.h"
+#include "render/rt/rt_refraction.h"
 #include "render/passes/ssgi/ssgi_internal.h"
 #include "render/probes/irradiance_internal.h"
 #include "render/probes/probes_internal.h"
@@ -26,6 +34,7 @@
 #include "render/materials/material_models.h"
 #include "render/views_internal.h"
 #include "render/scene/gpu_scene.h"
+#include "render/rt/rt_internal.h"
 #include "render/world/render_world.h"
 
 #include "gpu/gpu_backend.h" /* de__gpu_get_texture: the target's size and format */
@@ -59,14 +68,24 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
 /* Releases what `r` holds; NULL members are skipped, so it also unwinds a partial create. The
  * GPU must be idle (or never used). */
 static void renderer_free(de_renderer *r) {
+    de__denoise_destroy(r->denoise);
+    r->denoise = NULL;
+    de__pt_destroy(r->pt);
+    de__restir_di_destroy(r->restir_di);
+    de__rt_shadows_destroy(r->rt_shadows);
     de__contact_destroy(r->contact);
     de__csm_destroy(r->csm);
     de__shadow_atlas_destroy(r->shadow_atlas);
+    de__rt_reflections_destroy(r->rt_reflections);
+    de__rt_refraction_destroy(r->rt_refraction);
+    de__rtao_destroy(r->rtao);
     de__gtao_destroy(r->gtao);
     de__ssgi_destroy(r->ssgi);
+    de__rt_gi_destroy(r->rt_gi);
     de__irradiance_destroy(r->irradiance);
     de__ssr_destroy(r->ssr);
     de__probes_destroy(r, r->probes);
+    de__rt_scene_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
@@ -249,6 +268,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res != DE_OK)
         goto fail;
 
+    res = de__rt_gi_create(r, &r->rt_gi);
+    if (res != DE_OK)
+        goto fail;
     res = de__ssgi_create(r, &r->ssgi);
     if (res != DE_OK)
         goto fail;
@@ -260,6 +282,15 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res != DE_OK)
         goto fail;
     res = de__contact_create(r, &r->contact);
+    if (res != DE_OK)
+        goto fail;
+    res = de__rt_reflections_create(r, &r->rt_reflections);
+    if (res != DE_OK)
+        goto fail;
+    res = de__rt_refraction_create(r, &r->rt_refraction);
+    if (res != DE_OK)
+        goto fail;
+    res = de__rtao_create(r, &r->rtao);
     if (res != DE_OK)
         goto fail;
     res = de__gtao_create(r, &r->gtao);
@@ -299,6 +330,15 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         goto fail;
     }
 
+    res = de__restir_di_create(r, &r->restir_di);
+    if (res != DE_OK)
+        goto fail;
+    res = de__rt_shadows_create(r, &r->rt_shadows);
+    if (res != DE_OK)
+        goto fail;
+    de__views_lighting(r)->direct_producer = de__rt_shadows_build;
+    de__views_lighting(r)->direct_producer_user = r->rt_shadows;
+
     /* ---- DENG-177: the GPU scene, staging in the uploader's ring, and its view stage ---- */
     res = de__gpu_scene_create(&(de__gpu_scene_desc){.device = r->dev,
                                                      .allocator = a,
@@ -313,10 +353,19 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (res == DE_OK)
         res = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, INT32_MIN + 1, "gpu_scene.view",
                                       gpu_scene_view_stage, r);
+    if (res == DE_OK)
+        res = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, INT32_MIN, "RT.BuildTLAS",
+                                      de__rt_view_stage, r);
     if (res != DE_OK) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: GPU scene");
         goto fail;
     }
+    res = de__denoise_create(r, &r->denoise);
+    if (res != DE_OK)
+        goto fail;
+    res = de__pt_create(r, &r->pt);
+    if (res != DE_OK)
+        goto fail;
     DE_INFO(r->log, "renderer: %s (%s), tier %s, %u frames in flight%s", r->caps.device_name,
             de_gpu_backend_name(r->caps.backend), r->settings.tier == DE_TIER_RT ? "rt" : "base",
             r->frames_in_flight, DE_HANDLE_VALID(r->swapchain) ? "" : ", offscreen");
@@ -392,9 +441,16 @@ void de__renderer_kick_prepare(de_renderer *r) {
     /* DENG-422: the GPU scene reads asset records here, on the main thread between asset updates,
      * never on the render thread. The buffer is the one this kick hands over (or the last one). */
     de__probes_prepare(r, de__render_world_last(r));
+    de__rt_gi_prepare(r->rt_gi, de__render_world_last(r));
     de__irradiance_prepare(r, de__render_world_last(r));
     const de_result gr = de__gpu_scene_prepare(r->gpu_scene, de__render_world_last(r));
     r->material_instances_live = de__material_instances_live(r->material_instances); /* DENG-302 */
+    const de_result rt_result = de__rt_prepare(r);
+    if (rt_result != DE_OK)
+        DE_ERROR(r->log, "RT scene prepare: %s", de_result_str(rt_result));
+    const de_result di_result = de__restir_di_prepare(r);
+    if (di_result != DE_OK)
+        DE_ERROR(r->log, "DI source prepare: %s", de_result_str(di_result));
     /* DENG-304: the environment lighting uses this frame (its HDRI's record is read here only). */
     de__lighting_prepare_environment(de__views_lighting(r), r->assets, de__render_world_last(r));
     if (gr != DE_OK)
@@ -414,6 +470,7 @@ de_result de_renderer_render_frame(de_renderer *r) {
     if (r == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_renderer_render_frame: NULL renderer");
     const u64 n = r->frame_index;
+    r->stats.rays_traced = 0;
 
     /* 1. Wait for the frame that last used this slot, then reset its arena. */
     if (n >= r->frames_in_flight) {

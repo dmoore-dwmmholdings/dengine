@@ -54,7 +54,7 @@ enum { DE__FWD_SIDE_FRONT = 0u, DE__FWD_SIDE_BACK = 1u };
 /** Bytes per pixel of the scene-colour copy (the RGBA16F lighting target's texels). */
 #define DE__FWD_SCENE_COLOR_BPP 8u
 
-/** forward_transparent.slang ForwardParams (96 bytes). */
+/** forward_transparent.slang ForwardParams (112 bytes). */
 typedef struct de__fwd_params {
     u32 view, entry, scene, view_slot;
     u32 instance, meshlet_first, side, sampler;
@@ -62,8 +62,9 @@ typedef struct de__fwd_params {
     u32 scene_depth, scene_depth_pitch, scene_color_levels, refraction;
     /* DeClusterLists */
     u32 lights, dir_lights, grid, list, counters, ltc1, ltc2, ltc_sampler;
+    u32 rt_capture, rt_result, rt_path, rt_reserved;
 } de__fwd_params;
-DE_STATIC_ASSERT(sizeof(de__fwd_params) == 96, "ForwardParams is 96 bytes");
+DE_STATIC_ASSERT(sizeof(de__fwd_params) == 112, "ForwardParams is 112 bytes");
 
 /* =================================================================================================
  * The list (transparent_sort.c)

@@ -88,6 +88,11 @@ typedef struct de__gpu_sampler {
     u32 bindless;
 } de__gpu_sampler;
 
+typedef struct de__gpu_sbt_layout {
+    u64 raygen_size, miss_offset, miss_size, hit_offset, hit_size, bytes;
+    u32 stride;
+} de__gpu_sbt_layout;
+
 typedef struct de__gpu_pipeline {
     de_gpu_pipeline_kind kind;
     u32 push_constant_bytes;
@@ -97,11 +102,22 @@ typedef struct de__gpu_pipeline {
     char name[DE__GPU_NAME_MAX];
     /** From the desc (S10, DENG-323): 0 when not given. */
     u32 threadgroup_size[3], object_threadgroup_size[3];
+    de_gpu_buffer rt_sbt;
+    de__gpu_sbt_layout rt_layout;
+    u32 rt_miss_count, rt_hit_count;
 } de__gpu_pipeline;
 
 typedef struct de__gpu_accel {
     bool is_tlas;
     u32 bindless;
+    de_gpu_accel_desc desc;
+    de_gpu_blas_geometry *geometries;
+    de_gpu_accel_sizes sizes;
+    bool built; /**< Backend sets true only after successfully recording build/copy. */
+    u32 built_count;
+    struct de_gpu_cmd *emit_cmd;
+    u64 emit_serial, emit_value;
+    de_gpu_queue emit_queue;
     char name[DE__GPU_NAME_MAX];
 } de__gpu_accel;
 
@@ -148,10 +164,14 @@ struct de_gpu_cmd {
     u32 marker_depth; /**< open marker_push scopes */
     de_gpu_pipeline_kind pipeline_kind;
     bool has_pipeline;
+    de__gpu_pipeline *bound_pipeline;
     u64 queue_value;             /**< internal timeline value of its submission */
     struct de_gpu_cmd *next;     /**< free / in-flight list */
     struct de_gpu_cmd *all_next; /**< every command list of the device */
     char name[DE__GPU_NAME_MAX];
+    u64 accel_serial;
+    struct de__gpu_accel_scratch *accel_scratch, *accel_cursor;
+    de__gpu_pipeline *accel_pipeline;
     bool has_index_buffer; /**< de_gpu_cmd_set_index_buffer was called (S10, DENG-323) */
     /* DENG-326 (query.c): the open debug markers, outermost first. Names are copied into
      * `marker_text` (cut to fit), so a marker never allocates; read them with
@@ -352,6 +372,15 @@ typedef struct de__gpu_backend_vtable {
      * DE_FAIL (there is no device to log to). NULL: the front-end reports the device that
      * adapter 0 creates as the only adapter. */
     de_result (*enumerate_adapters)(de_gpu_adapter_info *out, u32 cap, u32 *count);
+    bool (*cmd_accel_translate)(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *, de__gpu_buffer *,
+                                u32, u32);
+    /* DENG-42: backend-neutral AS extensions. Scratch and native instances are command-owned. */
+    de_result (*accel_query_sizes)(de_gpu_device *, const de_gpu_accel_desc *,
+                                   de_gpu_accel_sizes *);
+    u64 (*accel_address)(de_gpu_device *, de__gpu_accel *);
+    void (*cmd_accel_emit)(de_gpu_cmd *, de__gpu_accel *);
+    bool (*accel_compacted_size)(de_gpu_device *, de__gpu_accel *, u64 *);
+    void (*cmd_accel_compact)(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -653,5 +682,14 @@ de_result de__gpu_check_lost(de_gpu_device *d, de_result r, const char *where);
 /** DE_ERR_DEVICE_LOST with the error context "<where>: the GPU device is lost" (no log line: a
  * lost device fails every call). */
 de_result de__gpu_lost_error(const char *where);
+
+/* S17: pipeline-owned shader binding tables. */
+de_result de__gpu_sbt_layout_make(u32 handle_bytes, u32 handle_alignment, u32 base_alignment,
+                                  u32 misses, u32 hits, de__gpu_sbt_layout *out);
+void de__gpu_rt_desc_init(const de_gpu_pipeline_desc *, de_gpu_rt_desc *, de_gpu_rt_hit_group *);
+de_result de__gpu_rt_validate(de_gpu_device *, const de_gpu_pipeline_desc *);
+de_result de__gpu_rt_sbt_create(de_gpu_device *, de__gpu_pipeline *, const void *handles,
+                                u32 handle_bytes, u32 handle_alignment, u32 base_alignment,
+                                u32 misses, u32 hits);
 
 #endif

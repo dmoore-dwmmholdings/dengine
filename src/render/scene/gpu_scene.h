@@ -570,6 +570,8 @@ de__gpu_scene_table_info de__gpu_scene_table(const de__gpu_scene *gs, de__gs_tab
 const de__gpu_scene_stats *de__gpu_scene_stats_get(const de__gpu_scene *gs);
 /** Copies the counters into the GPU-scene fields of `s` (de_render_stats). */
 void de__gpu_scene_fill_stats(const de__gpu_scene *gs, de_render_stats *s);
+/** Shared immutable mesh packing, including the vertex decode metadata. */
+void de__gpu_scene_pack_mesh_record(const struct de_render_mesh *, de__gs_mesh *);
 /** The mesh slot of `m` (DE__GS_NONE when no instance uses it). */
 u32 de__gpu_scene_mesh_slot(const de__gpu_scene *gs, de_mesh m);
 /** The material slot of `m` (DE__GS_NONE when no instance uses it). */
@@ -606,6 +608,9 @@ bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh, con
  * past its count). */
 const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot);
 
+/** Stable fingerprint of actual source records; excludes views/frame counters and previous
+ * transforms. */
+u64 de__gpu_scene_source_signature(const de__gpu_scene *);
 DE_EXTERN_C_END
 
 #endif /* DE_RENDER_SCENE_GPU_SCENE_H */

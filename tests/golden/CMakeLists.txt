@@ -122,8 +122,12 @@ foreach(_golden_backend IN ITEMS metal vulkan d3d12)
     foreach(_golden_line IN LISTS _golden_tables)
         string(REGEX REPLACE "^\\[scene\\.([a-z0-9_]+)\\].*" "\\1" _golden_scene "${_golden_line}")
         set(_golden_test golden.${_golden_backend}.${_golden_scene})
+        set(_golden_scene_args ${_golden_args})
+        if(_golden_scene MATCHES "^rt_")
+            list(REMOVE_ITEM _golden_scene_args --warp) # actual hardware for S17 RT/Base variants
+        endif()
         add_test(NAME ${_golden_test}
-            COMMAND de_golden ${_golden_args} --scene ${_golden_scene} --out "${_golden_out}")
+            COMMAND de_golden ${_golden_scene_args} --scene ${_golden_scene} --out "${_golden_out}")
         set_tests_properties(${_golden_test} PROPERTIES
             LABELS "golden;gpu"
             TIMEOUT 300 # cooks its shaders (Slang) first
@@ -140,3 +144,21 @@ target_compile_definitions(de_golden PRIVATE
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_cache")
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/base_tier_bakes")
+
+# S17 reference scenes use the existing asset loader and original S14 gallery assets.
+target_sources(de_golden PRIVATE pathtracer/pathtracer_scenes.c)
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_PT_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/pathtracer/assets\"")
+
+# S17 actual RT-effect and Base-fallback goldens share the original production asset loader.
+target_sources(de_golden PRIVATE rt/rt_scenes.c)
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_RT_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+foreach(_golden_backend IN ITEMS metal vulkan d3d12)
+    foreach(_effect IN ITEMS shadows_pole restir_many_lights ao_corner reflections_mirror_rough gi_cornell refraction_glass foliage_shadow)
+        if(TEST golden.${_golden_backend}.rt_${_effect})
+            set_tests_properties(golden.${_golden_backend}.rt_${_effect} PROPERTIES LABELS "golden;rt;needs-hw;gpu")
+            set_tests_properties(golden.${_golden_backend}.rt_${_effect}_base PROPERTIES LABELS "golden;base;gpu")
+        endif()
+    endforeach()
+endforeach()

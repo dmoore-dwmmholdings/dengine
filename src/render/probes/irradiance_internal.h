@@ -54,5 +54,17 @@ typedef struct de__irradiance_info {
 } de__irradiance_info;
 bool de__irradiance_get(const de_renderer *r, u64 entity, de__irradiance_info *out);
 de_result de__irradiance_readback(de_renderer *r, u64 entity, void *payload, u64 bytes);
+/* DENG-49: optional production data source. Static resources/sampling remain owned here.
+ * A successful callback may replace only this view's GI inputs; fallback leaves them intact. */
+struct de__lighting_context;
+struct de__lighting_inputs;
+typedef de_result (*de__gi_update_source_fn)(void *, de_rg *, de__vis_context *,
+                                             struct de__lighting_context *,
+                                             struct de__lighting_inputs *);
+void de__irradiance_set_update_source(struct de__irradiance *, de__gi_update_source_fn,
+                                      bool (*owns_frame)(void *, const de__render_world_frame *),
+                                      void *);
+de_result de__irradiance_update_source(de_renderer *, de_rg *, de__vis_context *,
+                                       struct de__lighting_context *, struct de__lighting_inputs *);
 DE_EXTERN_C_END
 #endif

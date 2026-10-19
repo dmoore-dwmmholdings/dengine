@@ -17,6 +17,7 @@ de_add_module(
         d3d12_agility_exports.h
         d3d12_caps.c
         d3d12_device.c
+        d3d12_accel.c
         d3d12_memory.c
         d3d12_resources.c
         d3d12_bindless.c
@@ -25,6 +26,7 @@ de_add_module(
         d3d12_sync.c
         d3d12_swapchain.c
         d3d12_root_signature.c
+        d3d12_rt_pipeline.c
         d3d12_pipeline.c
         d3d12_pipeline_library.c
         d3d12_draw.c

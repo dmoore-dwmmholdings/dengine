@@ -503,6 +503,7 @@ static void wanted_features(const de__vk_physical *s, de__vk_physical *e) {
     W(mesh, meshShader)
     W(mesh, taskShader)
     W(accel, accelerationStructure)
+    W(accel, descriptorBindingAccelerationStructureUpdateAfterBind)
     W(ray_query, rayQuery)
     W(rt_pipeline, rayTracingPipeline)
     W(fault, deviceFault)
@@ -516,6 +517,8 @@ static void wanted_features(const de__vk_physical *s, de__vk_physical *e) {
         e->ray_query.rayQuery = VK_FALSE;
         e->rt_pipeline.rayTracingPipeline = VK_FALSE;
     }
+    if (!e->accel.descriptorBindingAccelerationStructureUpdateAfterBind)
+        e->accel.accelerationStructure = VK_FALSE;
     if (!e->accel.accelerationStructure) {
         e->ray_query.rayQuery = VK_FALSE;
         e->rt_pipeline.rayTracingPipeline = VK_FALSE;
@@ -566,8 +569,10 @@ static de_result create_device(de_gpu_device *d, const queue_plan *qp) {
     }
     if (en->ext.ray_query)
         add_name(&exts, VK_KHR_RAY_QUERY_EXTENSION_NAME);
+    /* RT pipelines are enabled by S17, not by ray-query AS support. */
     if (en->ext.rt_pipeline)
         add_name(&exts, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+    de__vk_physical_chain_features(en);
     if (en->ext.device_fault)
         add_name(&exts, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 
@@ -908,11 +913,23 @@ done:
 /* ---------- The vtable ---------- */
 
 const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
+    .cmd_accel_translate = de__vk_accel_translate,
+    .accel_create = de__vk_accel_create,
+    .accel_destroy = de__vk_accel_destroy,
+    .accel_query_sizes = de__vk_accel_sizes,
+    .accel_address = de__vk_accel_address,
+    .cmd_build_blas = de__vk_accel_blas,
+    .cmd_build_tlas = de__vk_accel_tlas,
+    .cmd_accel_emit = de__vk_accel_emit,
+    .accel_compacted_size = de__vk_accel_read,
+    .cmd_accel_compact = de__vk_accel_compact,
+    .bindless_write_accel = de__vk_bindless_write_accel,
     .name = "vulkan",
     .device_payload_size = sizeof(de__vk_device),
     .cmd_payload_size = sizeof(de__vk_cmd),
     .payload_size =
         {
+            [DE__GPU_ACCEL] = sizeof(de__vk_accel),
             [DE__GPU_BUFFER] = sizeof(de__vk_buffer),
             [DE__GPU_TEXTURE] = sizeof(de__vk_texture),
             [DE__GPU_SAMPLER] = sizeof(de__vk_sampler),
@@ -971,6 +988,7 @@ const de__gpu_backend_vtable de__gpu_vulkan_vtable = {
     .cmd_draw_indexed = de__vk_cmd_draw_indexed,
     .cmd_set_index_buffer = de__vk_cmd_set_index_buffer,
     .cmd_scissor = de__vk_cmd_scissor,
+    .cmd_dispatch_rays = de__vk_cmd_dispatch_rays,
     .cmd_dispatch = de__vk_cmd_dispatch,
     .cmd_dispatch_indirect = de__vk_cmd_dispatch_indirect,
     .cmd_draw_indexed_indirect = de__vk_cmd_draw_indexed_indirect,

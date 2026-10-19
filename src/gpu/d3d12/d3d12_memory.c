@@ -102,7 +102,7 @@ void de__d3d12_heap_destroy(de_gpu_device *d, de__gpu_heap *h) {
 /* ---------- Resource descs and requirements ---------- */
 
 #define BINDLESS_BUFFER_USAGE                                                                      \
-    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE)
+    (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT)
 
 void de__d3d12_buffer_resource_desc(const de_gpu_buffer_desc *desc, D3D12_RESOURCE_DESC *out) {
     memset(out, 0, sizeof *out);

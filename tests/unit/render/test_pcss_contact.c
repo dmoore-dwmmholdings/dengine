@@ -94,8 +94,11 @@ static de_gpu_texture depth_fixture(lx *f, u32 size, u32 pattern, f32 depth) {
     de_gpu_buffer_destroy(f->dev, upload);
     return texture;
 }
-static void query(lx *f, const void *maps, u32 bytes, u32 stride, const pcss_query *queries,
-                  u32 count, f32 *result) {
+static uintptr_t query(lx *f, const void *maps, u32 bytes, u32 stride, const pcss_query *queries,
+                       u32 count, f32 *result) {
+    /* Reclaim completed queries before allocating again: exercise actual allocation and
+     * descriptor reuse, rather than letting deferred destruction keep every query distinct. */
+    de__gpu_collect(f->dev);
     const char *entry = "cs_pcss_query";
     de__engine_shader_code code;
     char why[768];
@@ -145,13 +148,17 @@ static void query(lx *f, const void *maps, u32 bytes, u32 stride, const pcss_que
               DE_OK);
     ASSERT_TRUE(lx_wait(f, signal, "PCSS production query"));
     f->warm = true;
-    memcpy(result, de_gpu_buffer_map(f->dev, rb), (size_t)count * 32u);
+    void *mapped = de_gpu_buffer_map(f->dev, rb);
+    ASSERT_TRUE(mapped != NULL);
+    const uintptr_t readback_address = (uintptr_t)mapped;
+    memcpy(result, mapped, (size_t)count * 32u);
     de__vis_kernel_destroy(f->vis, &kernel);
     de__engine_shader_code_free(&code);
     de_gpu_buffer_destroy(f->dev, mb);
     de_gpu_buffer_destroy(f->dev, qb);
     de_gpu_buffer_destroy(f->dev, ob);
     de_gpu_buffer_destroy(f->dev, rb);
+    return readback_address;
 }
 static f32 reverse_depth(bool perspective, f32 distance) {
     return perspective ? .1f * (20.f - distance) / (distance * 19.9f) : 1.f - distance / 20.f;
@@ -323,9 +330,17 @@ static void deterministic(lx *f, de_gpu_backend backend) {
         q[i].uvz_radius[1] = .2f + .1f * (f32)(i / 32u);
         q[i].uvz_radius[2] = reverse_depth(true, 5.f);
     }
-    query(f, &m, sizeof m, sizeof m, q, 128u, a);
-    query(f, &m, sizeof m, sizeof m, q, 128u, b);
-    EXPECT_EQ(memcmp(a, b, sizeof a), 0);
+    uintptr_t addresses[8];
+    addresses[0] = query(f, &m, sizeof m, sizeof m, q, 128u, a);
+    bool reused = false;
+    for (u32 repeat = 1; repeat < 8u; ++repeat) {
+        addresses[repeat] = query(f, &m, sizeof m, sizeof m, q, 128u, b);
+        EXPECT_EQ(memcmp(a, b, sizeof a), 0);
+        for (u32 prior = 0; prior < repeat; ++prior)
+            reused |= addresses[repeat] == addresses[prior];
+    }
+    if (backend == DE_GPU_VULKAN)
+        EXPECT_TRUE(reused); /* the persistently mapped Vulkan heap range was reused */
     ++m.filter_state[2];
     query(f, &m, sizeof m, sizeof m, q, 128u, b);
     u32 changed = 0;

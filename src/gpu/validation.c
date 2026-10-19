@@ -37,6 +37,7 @@ static const fmt_info k_formats[DE_FMT_COUNT_] = {
     [DE_FMT_RG32_UINT] = {"DE_FMT_RG32_UINT", false, false, false, 8},
     [DE_FMT_R32_FLOAT] = {"DE_FMT_R32_FLOAT", false, false, false, 4},
     [DE_FMT_RG32_FLOAT] = {"DE_FMT_RG32_FLOAT", false, false, false, 8},
+    [DE_FMT_RGB32_FLOAT] = {"DE_FMT_RGB32_FLOAT", false, false, false, 12},
     [DE_FMT_RGBA32_FLOAT] = {"DE_FMT_RGBA32_FLOAT", false, false, false, 16},
     [DE_FMT_R11G11B10_FLOAT] = {"DE_FMT_R11G11B10_FLOAT", false, false, false, 4},
     [DE_FMT_RGB10A2_UNORM] = {"DE_FMT_RGB10A2_UNORM", false, false, false, 4},
@@ -126,11 +127,11 @@ static const char *nm(const char *name) {
 
 /* ---------- Buffers ---------- */
 
-#define USAGE_ALL          ((1u << 12) - 1u)
+#define USAGE_ALL          ((1u << 13) - 1u)
 #define USAGE_TEXTURE_ONLY (DE_USAGE_SAMPLED | DE_USAGE_RENDER_TARGET | DE_USAGE_DEPTH)
 #define USAGE_BUFFER_ONLY                                                                          \
     (DE_USAGE_VERTEX | DE_USAGE_INDEX | DE_USAGE_CONSTANT | DE_USAGE_INDIRECT |                    \
-     DE_USAGE_ACCEL_INPUT | DE_USAGE_ACCEL_STORAGE)
+     DE_USAGE_ACCEL_INPUT | DE_USAGE_ACCEL_STORAGE | DE_USAGE_SHADER_BINDING_TABLE)
 
 de_result de__gpu_validate_buffer_desc(de_gpu_device *d, const de_gpu_buffer_desc *desc) {
     static const char F[] = "de_gpu_buffer_create";
@@ -389,8 +390,7 @@ de_result de__gpu_validate_pipeline_desc(de_gpu_device *d, const de_gpu_pipeline
                                 n);
         break;
     case DE_PIPE_RAYTRACING:
-        return de__gpu_fail(d, DE_ERR_UNSUPPORTED,
-                            "%s(\"%s\"): ray-tracing pipelines are not available before S16", F, n);
+        return de__gpu_rt_validate(d, desc);
     default:
         return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
                             "%s(\"%s\"): kind %d is not a de_gpu_pipeline_kind value", F, n,
@@ -531,6 +531,8 @@ static de_result validate_pipeline_stages(de_gpu_device *d, const de_gpu_pipelin
         {&desc->closest_hit, "closest_hit", 1u << DE_PIPE_RAYTRACING},
         {&desc->any_hit, "any_hit", 1u << DE_PIPE_RAYTRACING},
     };
+    if (desc->rt && desc->kind != DE_PIPE_RAYTRACING)
+        return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT, "RT description on a non-RT pipeline");
     static const char *const kind_names[] = {"graphics", "mesh", "compute", "ray-tracing"};
     if ((u32)desc->kind > DE_PIPE_RAYTRACING)
         return DE_OK;
@@ -554,7 +556,8 @@ static de_result validate_pipeline_stages(de_gpu_device *d, const de_gpu_pipelin
     const u32 *tg = desc->threadgroup_size, *otg = desc->object_threadgroup_size;
     const bool tg_any = tg[0] || tg[1] || tg[2], tg_all = tg[0] && tg[1] && tg[2];
     const bool otg_any = otg[0] || otg[1] || otg[2], otg_all = otg[0] && otg[1] && otg[2];
-    if (tg_any && (!tg_all || (desc->kind != DE_PIPE_COMPUTE && desc->kind != DE_PIPE_MESH)))
+    if (tg_any && (!tg_all || (desc->kind != DE_PIPE_COMPUTE && desc->kind != DE_PIPE_MESH &&
+                               desc->kind != DE_PIPE_RAYTRACING)))
         return de__gpu_fail(d, DE_ERR_INVALID_ARGUMENT,
                             "%s(\"%s\"): threadgroup_size (%u, %u, %u) must be all 0 or all > 0, "
                             "and only for compute and mesh pipelines",

@@ -1,13 +1,13 @@
 # third_party/tinyexr: tinyexr (BSD-3-Clause), pinned in third_party/vendor.toml. The OpenEXR
-# decoder of the texture importer (tools/cook/importers/texture/, DENG-98). Tools only: only the
-# cooker library links it, and Release and Shipping never link the cooker.
+# decoder of the texture importer (DENG-98), plus uncompressed Dev/Debug renderer export
+# (DENG-74). Renderer Release and Shipping do not link this export dependency.
 #
 # de_tp_tinyexr: de_tp_tinyexr.cc is the one implementation TU (TINYEXR_IMPLEMENTATION, C++). The
 # declaration part of <tinyexr.h> is C (`extern "C"` under C++), so the importer calls it from C
 # (DENG-2 Q1: C++ behind a C interface). Configuration of the implementation:
 #   TINYEXR_USE_MINIZ=0, TINYEXR_USE_STB_ZLIB=1  inflate (ZIP, ZIPS) through stb_image's zlib
-#                              decoder (de_tp_stb), so miniz is not vendored. Writing EXR files is
-#                              not supported: the compressor is a stub that fails (see the TU).
+#                              decoder (de_tp_stb), so miniz is not vendored. Uncompressed EXR writing works;
+#                              ZIP compression remains a stub that fails (see the TU).
 #   TINYEXR_USE_THREAD=0, TINYEXR_USE_OPENMP=0  one thread per decode (the cooker runs imports in
 #                              parallel itself, and output must not depend on thread counts).
 add_library(de_tp_tinyexr STATIC de_tp_tinyexr.cc)
