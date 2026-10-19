@@ -409,6 +409,17 @@ static double colored_edge(const f32 *image) {
 }
 TEST_F(denoise_gi_spec, strafing_mirror_virtual_motion, reflection_fixture) {
     g_mat[0].standard.roughness = 0;
+    // The fixed middle-row ray reaches the mirror near Y=1.2. The original cube at Y=0
+    // ends before that point, so it cannot supply the reflected edge this test measures.
+    // Put the same cube beyond that intersection; keep the probe, cameras and limits fixed.
+    rt_fixture *r = &f->shadow.rt;
+    for (u32 face = 0; face < 6; ++face) {
+        de_affine xf = r->w.f.instances.transform[face + 1];
+        xf.m[10] += 3;
+        world_set(&r->w, face + 1, 2, xf, face + 2);
+        r->w.f.instances.flags[face + 1] |= DE__RW_INST_VISIBLE_IN_RT | DE__RW_INST_CAST_SHADOWS;
+        r->w.f.instances.layer_mask[face + 1] = 1u << 24;
+    }
     camera_set(f, (de_vec3){3.3f, -6, 3}, (de_vec3){3.3f, 0, .5f});
     de__rt_reflections_reference(f->shadow.rt.r->rt_reflections, 512);
     reflection_frame(f);
@@ -418,6 +429,7 @@ TEST_F(denoise_gi_spec, strafing_mirror_virtual_motion, reflection_fixture) {
     de__rt_reflections_reference(f->shadow.rt.r->rt_reflections, 0);
     for (u32 frame = 0; frame < 24; ++frame)
         reflection_frame(f);
+    assert_reflected_coverage(f);
     double old = colored_edge(f->pixels);
     camera_set(f, (de_vec3){3.3f, -6, 3}, (de_vec3){3.3f, 0, .5f});
     reflection_frame(f);

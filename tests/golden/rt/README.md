@@ -189,3 +189,22 @@ comparison limits or timeouts were changed for this completion.
 The complete strict-Metal verifier also passes: 34 real captures, all 14 RT/Base repeat pairs
 byte-identical, all three actual-effect negative comparisons rejected, and all three restored
 outputs identical. The normal verifier changed no references or thresholds during this run.
+
+## Related reflection acceptance (DENG-452, DENG-453)
+
+The moving-mirror test's fixed middle-row ray intersects the mirror near Y=1.2, beyond the
+original colored cube at Y=0. Its reflected-edge strength was exactly zero. Moving that same
+cube 3 m along Y puts it beyond the intersection, where the reflected ray can hit it. The fixed
+probe, both camera poses, 0.3 m strafe, 512-sample reference, 24-frame history, two-frame motion
+window and two-pixel limit are unchanged. The test additionally requires real reflected-hit
+coverage. It now measures 158 colored closest-hit pixels, edge strength about 1.8, old edge
+32.0003392, reference edge 30 and frame-two edge 29.9626856: displacement error 0.0373144 pixels.
+
+The original reflection/material-AO/RTAO composition check passes on the current renderer
+without any fixture, assertion or threshold changes: 42 affected reflected pixels (>10),
+material-AO normalized L1 0.004348528 (<0.005), and once-only HDR composition L1 0.0022220508
+(<0.01). This validates the existing repairs rather than claiming a new composition algorithm.
+The six GI/specular denoiser cases plus composition pass in Dev and ASan/UBSan with Metal
+shader validation enabled (7/7 each). A broader Dev reflection run passes 16/17; the separate
+rough-sphere accumulated-vs-1024-sample normalized pixel L1 remains 0.062116629 against its
+unchanged 0.03 limit. That failing acceptance is preserved for further investigation.
