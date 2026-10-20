@@ -103,6 +103,20 @@ static inline void trace_stage(de__view_frame *vf, void *user) {
                 DE_ACCESS_COPY_DST);
     de_rg_pass_side_effect(p);
 }
+/* Keep unsupported runtime/caps distinct from allocation or initialization defects. */
+static inline void rt_fixture_require_device(rt_fixture *f, de_result result) {
+    if (result == DE_ERR_UNSUPPORTED)
+        SKIP("Metal scene AS runtime unavailable");
+    ASSERT_EQ(result, DE_OK);
+    ASSERT_TRUE(f->d != NULL);
+    const de_gpu_caps *caps = de_gpu_get_caps(f->d);
+    de_gpu_tier_report tier;
+    de_gpu_evaluate_tier(caps, &tier);
+    if (!tier.base_ok)
+        SKIP("Metal scene AS acceptance requires Base-tier device capabilities");
+    if (!caps->ray_query)
+        SKIP("Metal scene AS ray-query API unavailable");
+}
 static inline void rt_fixture_setup(rt_fixture *f) {
     if (!de__gpu_find_backend(DE_GPU_METAL))
         SKIP("native Metal scene AS acceptance requires the Metal backend");
@@ -111,13 +125,12 @@ static inline void rt_fixture_setup(rt_fixture *f) {
 #if defined(__APPLE__)
     setenv("MTL_DEBUG_LAYER", "1", 1);
 #endif
-    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
-                                                         .debug_layer = true,
-                                                         .allocator = &f->dev_alloc,
-                                                         .pipeline_cache_dir = ""},
-                                   &f->d),
-              DE_OK);
-    ASSERT_TRUE(de_gpu_get_caps(f->d)->ray_query);
+    de_result created = de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
+                                                                   .debug_layer = true,
+                                                                   .allocator = &f->dev_alloc,
+                                                                   .pipeline_cache_dir = ""},
+                                             &f->d);
+    rt_fixture_require_device(f, created);
     printf("scene AS acceptance: %s\n", de_gpu_get_caps(f->d)->device_name);
     ASSERT_EQ(de_type_registry_create(NULL, &f->types), DE_OK);
     ASSERT_EQ(
@@ -260,27 +273,41 @@ static inline de__rt_hit *frame_rt(rt_fixture *f) {
     return de_gpu_buffer_map(f->d, f->readback);
 }
 static inline void rt_fixture_teardown(rt_fixture *f) {
-    if (!f->d)
-        return;
-    de_gpu_wait_idle(f->d);
-    f->r->render_world = NULL;
-    de_asset_system_destroy(f->assets);
-    f->r->assets = NULL;
-    de_renderer_destroy(f->r);
-    de_task_system_destroy(f->tasks);
-    mesh_free(&g_mesh[0], f->d);
-    de_gpu_buffer_destroy(f->d, f->indices);
-    de_gpu_buffer_destroy(f->d, f->rays);
-    de_gpu_buffer_destroy(f->d, f->hits);
-    de_gpu_buffer_destroy(f->d, f->readback);
-    de_gpu_texture_destroy(f->d, f->target);
-    de_gpu_texture_destroy(f->d, f->texture);
-    de_gpu_wait_idle(f->d);
-    de_gpu_device_destroy(f->d);
-    de_type_registry_destroy(f->types);
+    if (f->d)
+        de_gpu_wait_idle(f->d);
+    if (f->r)
+        f->r->render_world = NULL;
+    if (f->assets)
+        de_asset_system_destroy(f->assets);
+    f->assets = NULL;
+    if (f->r) {
+        f->r->assets = NULL;
+        de_renderer_destroy(f->r);
+        f->r = NULL;
+    }
+    if (f->tasks)
+        de_task_system_destroy(f->tasks);
+    f->tasks = NULL;
+    if (f->d) {
+        mesh_free(&g_mesh[0], f->d);
+        de_gpu_buffer_destroy(f->d, f->indices);
+        de_gpu_buffer_destroy(f->d, f->rays);
+        de_gpu_buffer_destroy(f->d, f->hits);
+        de_gpu_buffer_destroy(f->d, f->readback);
+        de_gpu_texture_destroy(f->d, f->target);
+        de_gpu_texture_destroy(f->d, f->texture);
+        de_gpu_wait_idle(f->d);
+        de_gpu_device_destroy(f->d);
+        f->d = NULL;
+    }
+    if (f->types)
+        de_type_registry_destroy(f->types);
+    f->types = NULL;
     world_free(&f->w);
-    EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0u);
-    EXPECT_EQ(de_tracking_allocator_stats(&f->dev_track).blocks_live, 0u);
+    if (f->alloc.alloc)
+        EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0u);
+    if (f->dev_alloc.alloc)
+        EXPECT_EQ(de_tracking_allocator_stats(&f->dev_track).blocks_live, 0u);
 }
 
 #endif

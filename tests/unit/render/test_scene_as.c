@@ -183,3 +183,72 @@ TEST_F(scene_as, reload, rt_fixture) {
     lt_free(&blob);
     lt_free(&replacement);
 }
+
+TEST(scene_as_fixture, device_only_partial_teardown) {
+    rt_fixture partial = {0};
+    partial.alloc = de_tracking_allocator_init(&partial.track, NULL, DE_MEM_RENDER);
+    partial.dev_alloc = de_tracking_allocator_init(&partial.dev_track, NULL, DE_MEM_RENDER);
+    ASSERT_EQ(de_gpu_device_create(
+                  &(de_gpu_device_desc){.backend = DE_GPU_NULL, .allocator = &partial.dev_alloc},
+                  &partial.d),
+              DE_OK);
+    ASSERT_TRUE(partial.r == NULL);
+    rt_fixture_teardown(&partial);
+    EXPECT_EQ(de_tracking_allocator_stats(&partial.dev_track).blocks_live, 0u);
+}
+
+static void fixture_unavailable(void *arg) {
+    rt_fixture_require_device(arg, DE_ERR_UNSUPPORTED);
+}
+static void fixture_failed(void *arg) {
+    rt_fixture_require_device(arg, DE_ERR_OUT_OF_MEMORY);
+}
+static void fixture_caps_unavailable(void *arg) {
+    rt_fixture *f = arg;
+    f->dev_alloc = de_tracking_allocator_init(&f->dev_track, NULL, DE_MEM_RENDER);
+    ASSERT_EQ(de_gpu_device_create(
+                  &(de_gpu_device_desc){.backend = DE_GPU_NULL, .allocator = &f->dev_alloc}, &f->d),
+              DE_OK);
+    rt_fixture_require_device(f, DE_OK);
+}
+static void fixture_forbidden_body(void *arg) {
+    (void)arg;
+    FAIL("unsupported fixture executed its body");
+}
+static void fixture_cleanup(void *arg) {
+    rt_fixture_teardown(arg);
+}
+static void fixture_unavailable_run(void) {
+    rt_fixture f = {0};
+    de__test_run_fixture(&f, fixture_unavailable, fixture_forbidden_body, fixture_cleanup);
+}
+static void fixture_failed_run(void) {
+    rt_fixture f = {0};
+    de__test_run_fixture(&f, fixture_failed, fixture_forbidden_body, fixture_cleanup);
+}
+static void fixture_caps_run(void) {
+    rt_fixture f = {0};
+    de__test_run_fixture(&f, fixture_caps_unavailable, fixture_forbidden_body, fixture_cleanup);
+    EXPECT_EQ(de_tracking_allocator_stats(&f.dev_track).blocks_live, 0u);
+}
+TEST(scene_as_fixture, unsupported_skips_but_initialization_failure_still_fails) {
+    de_test_result result;
+    de_test_case child = {"fixture_child", "unavailable", __FILE__, __LINE__,
+                          fixture_unavailable_run};
+    EXPECT_EQ(de_test_run_case(&child, &result, 1), DE_TEST_SKIPPED);
+    child.run = fixture_failed_run;
+    EXPECT_EQ(de_test_run_case(&child, &result, 1), DE_TEST_FAILED);
+    child.run = fixture_caps_run;
+    EXPECT_EQ(de_test_run_case(&child, &result, 1), DE_TEST_SKIPPED);
+}
+TEST(scene_as_fixture, early_cpu_owners_cleanup_without_a_device) {
+    rt_fixture f = {0};
+    f.alloc = de_tracking_allocator_init(&f.track, NULL, DE_MEM_RENDER);
+    ASSERT_EQ(de_type_registry_create(&f.alloc, &f.types), DE_OK);
+    world_init(&f.w, 4);
+    rt_fixture_teardown(&f);
+    EXPECT_TRUE(f.types == NULL);
+    EXPECT_EQ(de_tracking_allocator_stats(&f.track).blocks_live, 0u);
+    /* Both never-started and already-cleaned fixtures must remain safe. */
+    rt_fixture_teardown(&f);
+}
