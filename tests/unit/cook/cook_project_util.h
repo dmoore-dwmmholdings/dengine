@@ -21,6 +21,7 @@
 #include <dengine/de_reflect.h>
 
 #include "cook_cmd.h"
+#define DE_COOK_TEST_IMPORTERS 1 /* This test executable links tool importers in every config. */
 #include "cook_project_types.h"
 #include "de_test.h"
 

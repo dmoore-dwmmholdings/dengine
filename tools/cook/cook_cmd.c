@@ -61,7 +61,6 @@
 #define CC_PACK_NAME_MAX 64u
 #define CC_MSG_MAX       1024u
 
-#if DE_HAS_COOKER
 /* Map the manifest's bundle priority to the pack's. A switch, not a _Static_assert on the
  * enum values: MSVC reports C5287 (mixed enum types) even through int casts. */
 static u32 cc_pack_priority(de__manifest_priority p) {
@@ -79,7 +78,6 @@ static u32 cc_pack_priority(de__manifest_priority p) {
     }
     return DPAK_PRIORITY_NORMAL;
 }
-#endif
 
 /* ---- Output ------------------------------------------------------------------------------- */
 
@@ -92,7 +90,6 @@ static void cc_puts(const de_cook_io *io, de_cook_stream s, const char *text) {
     cc_write(io, s, text, strlen(text));
 }
 
-#if DE_HAS_COOKER
 static void cc_printf(const de_cook_io *io, de_cook_stream s, const char *fmt, ...)
     DE_PRINTF_FMT(3, 4);
 static void cc_printf(const de_cook_io *io, de_cook_stream s, const char *fmt, ...) {
@@ -105,7 +102,6 @@ static void cc_printf(const de_cook_io *io, de_cook_stream s, const char *fmt, .
         return;
     cc_write(io, s, buf, (size_t)n < sizeof buf ? (size_t)n : sizeof buf - 1);
 }
-#endif
 
 void de_cook_cook_usage(const de_cook_io *io, de_cook_stream s) {
     cc_puts(
@@ -358,7 +354,6 @@ static int cc_parse_args(int argc, const char *const *argv, cc_options *o, const
     return -1; /* go on */
 }
 
-#if DE_HAS_COOKER
 /* ---- A growable text buffer (the captured --check output) ---------------------------------- */
 
 typedef struct cc_text {
@@ -395,8 +390,6 @@ static void cc_capture_write(void *user, de_cook_stream stream, const char *text
     cc_capture *c = (cc_capture *)user;
     cc_text_add(stream == DE_COOK_STDERR ? &c->err : &c->out, text, len);
 }
-
-#endif /* DE_HAS_COOKER */
 
 /* ---- State of one run --------------------------------------------------------------------- */
 
@@ -486,8 +479,6 @@ static void cc_cleanup(cc_run *run) {
         de__game_module_unload(&run->game);
     }
 }
-
-#if DE_HAS_COOKER /* the cook path; Release and Shipping trees only refuse (cc_cook) */
 
 static bool cc_is_sep(char c) {
 #ifdef _WIN32
@@ -740,7 +731,19 @@ static int cc_setup_runtime(cc_run *run) {
     for (u32 i = 0; i < count; ++i) {
         const de_asset_type_desc *td =
             de__asset_type_get(run->assets, de__asset_type_find(run->assets, names[i]));
-        if (td == NULL || de_cooker_register_type(run->cooker, td) != DE_OK)
+        if (td == NULL)
+            return cc_io_error(io, "the cooker refused the asset type", names[i]);
+        de_asset_type_desc tool_type = *td;
+        de_asset_type_desc builtin;
+        if (tool_type.import == NULL && tool_type.user == run->assets &&
+            (strcmp(names[i], "scene") == 0 || strcmp(names[i], "prefab") == 0) &&
+            de_cooker_builtin_importer(names[i], &builtin)) {
+            /* Keep the runtime descriptor's user context: scene/prefab import
+             * needs the asset system's reflected component registry in tools. */
+            tool_type.import = builtin.import;
+            tool_type.importer_version = builtin.importer_version;
+        }
+        if (de_cooker_register_type(run->cooker, &tool_type) != DE_OK)
             return cc_io_error(io, "the cooker refused the asset type", names[i]);
     }
     /* DENG-98, DENG-409: the cooker library's built-in importers (texture, model, shader) for
@@ -1143,17 +1146,9 @@ static int cc_write_pack(cc_run *run, cc_totals *t) {
     return rc;
 }
 
-#endif /* DE_HAS_COOKER */
-
 /* ---- The command -------------------------------------------------------------------------- */
 
 static int cc_cook(cc_run *run) {
-#if !DE_HAS_COOKER
-    return cc_io_error(run->io,
-                       "this de-cook was built without the runtime importers (a Release or "
-                       "Shipping tree); build de-cook from a Debug or Dev tree",
-                       NULL);
-#else
     u64 t0 = de_time_now_ns();
     de_error_clear();
     int rc = cc_split_manifest(run);
@@ -1203,7 +1198,6 @@ static int cc_cook(cc_run *run) {
         cc_printf(io, DE_COOK_STDOUT, "%02x", (unsigned)t.build_id[i]);
     cc_printf(io, DE_COOK_STDOUT, "\n  time: %llu ms\n", (unsigned long long)ms);
     return DE_COOK_EXIT_OK;
-#endif
 }
 
 int de_cook_cook_run(int argc, const char *const *argv, const de_cook_io *io,

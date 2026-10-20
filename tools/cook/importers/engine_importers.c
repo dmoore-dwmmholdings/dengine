@@ -14,6 +14,7 @@
 
 #include "cook/importers/material/mat_toml_import.h"
 #include "cook/importers/model/model_import.h"
+#include "cook/importers/scene/scene_import.h"
 #include "cook/importers/texture/texture_import.h"
 #if DE_COOKER_HAS_SHADER_IMPORTER /* tools/cook/importers/shader/CMakeLists.txt */
 #include "cook/importers/shader/shader_importer.h"
@@ -52,6 +53,8 @@ static const struct {
     const char *name;
     de_asset_type_desc (*desc)(void);
 } k_builtin[] = {
+    {"scene", de_scene_import_type_desc},
+    {"prefab", de_prefab_import_type_desc},
     {"texture", de_texture_import_type_desc},
     {"font", de_font_import_type_desc},
     {"string_table", de_string_table_import_type_desc},

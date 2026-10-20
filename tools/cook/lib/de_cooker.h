@@ -57,7 +57,10 @@ bool de_cooker_is_engine_type(const char *name);
 /**
  * The importer the cooker library has built in for engine type `name` (DENG-409;
  * tools/cook/importers/engine_importers.c): `texture` (DENG-98), `model` (DENG-101) and `shader`
- * (DENG-289). On true `*out` holds an importer-only type desc: `name`, `extensions`,
+ * (DENG-289), plus `scene` and `prefab`. Scene/prefab callers must set `out->user` to an asset
+ * system whose desc.types points to their component registry before registering the descriptor.
+ * These tool importers exist in all build types; runtime cooking remains Debug/Dev only.
+ * On true `*out` holds an importer-only type desc: `name`, `extensions`,
  * `extension_count`, `importer_version` and `import`; no loader, `user` NULL. The pointers in it
  * are static. False for any other name, and for NULL arguments. Any thread.
  *
