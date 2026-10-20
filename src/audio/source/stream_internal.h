@@ -28,6 +28,7 @@ void de__stream_test_read_hook(de__audio_source *s, void (*hook)(de__audio_sourc
                                void *user);
 void de__stream_test_refill_now(de__audio_source *s);
 /* Testable real async reader, decoder state is worker-owned. */
+#define DE__SOUND_MAX_PACKET_FRAMES 8192u
 typedef struct de__sound_decoder {
     const de_allocator *alloc;
     de__sound_asset *asset;
@@ -46,7 +47,7 @@ typedef struct de__sound_decoder {
     u32 packet;
     u64 frame;
     u32 skip;
-    f32 pcm[8192 * 8];
+    f32 pcm[DE__SOUND_MAX_PACKET_FRAMES * 8];
     u32 pcm_count, pcm_at;
 } de__sound_decoder;
 de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes);

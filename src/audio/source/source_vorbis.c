@@ -72,7 +72,7 @@ static bool next(de__sound_decoder *d) {
             return false;
         d->used += (u32)used;
         if (count > 0) {
-            if (count > 8192 || got_channels != (int)channels)
+            if (count > (int)DE__SOUND_MAX_PACKET_FRAMES || got_channels != (int)channels)
                 return false;
             d->pcm_at = 0;
             d->pcm_count = (u32)count;
@@ -108,10 +108,15 @@ bool de__vorbis_seek(de__sound_decoder *d, u64 frame) {
     const de__sound_view *v = &d->asset->view;
     if (frame > v->frames)
         return false;
+    /* Push decoding consumes the resynchronization page, then one packet to
+     * rebuild overlap. A page ending just before the requested frame can thus
+     * produce its first PCM after the target and force a full header restart.
+     * Keep one maximum decoded block of preroll when choosing the seek page. */
+    u64 seek_frame = frame > DE__SOUND_MAX_PACKET_FRAMES ? frame - DE__SOUND_MAX_PACKET_FRAMES : 0;
     u64 offset = 0;
     for (u32 i = 0; i < v->seek_count; ++i) {
         u64 f = de__snd_u64(v->seeks + (u64)i * 16), at = de__snd_u64(v->seeks + (u64)i * 16 + 8);
-        if (f > frame)
+        if (f > seek_frame)
             break;
         if (at < v->data_size)
             offset = at;

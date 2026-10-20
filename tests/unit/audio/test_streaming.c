@@ -262,6 +262,53 @@ TEST(audio_streaming, decoder_seek_uses_tables_and_matches_linear_reference) {
     }
 }
 
+TEST(audio_streaming, vorbis_repeated_and_late_seeks_match_linear_reference) {
+    de__sound_asset *asset = source_cooked(false, 48000 * 60, false);
+    de_tracking_allocator tracking;
+    de_allocator allocator = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de__sound_decoder *d = NULL;
+    ASSERT_EQ(de__decoder_create(&allocator, asset, &d), DE_OK);
+    const u32 channels = asset->view.channels;
+    const u64 frames = asset->view.frames;
+    size_t bytes = (size_t)frames * channels * sizeof(f32);
+    f32 *reference = DE_ALLOC(&allocator, bytes, 16, DE_MEM_AUDIO);
+    ASSERT_TRUE(reference != NULL);
+    for (u64 at = 0; at < frames;) {
+        u32 n = frames - at < 1024 ? (u32)(frames - at) : 1024;
+        ASSERT_EQ(de__decoder_read(d, reference + (size_t)at * channels, n), n);
+        at += n;
+    }
+    const u64 targets[] = {48000,   96000,   48000, 48001,        0,          1,     240128,
+                           1440128, 2400128, 48000, frames - 257, frames - 1, frames};
+    f32 actual[256 * 8];
+    de_tracking_stats before = de_tracking_allocator_stats(&tracking);
+    for (u32 repeat = 0; repeat < 2; ++repeat) {
+        for (u32 k = 0; k < sizeof targets / sizeof targets[0]; ++k) {
+            u64 target = targets[k], reads = d->io_requests;
+            u64 started = de_time_now_ns();
+            ASSERT_TRUE(de__decoder_seek(d, target));
+            u32 expected = frames - target < 256 ? (u32)(frames - target) : 256;
+            ASSERT_EQ(de__decoder_read(d, actual, 256), expected);
+            /* This fixture fits each seek/preroll range in one compressed read.
+             * A second read exposes failed resync followed by a header restart. */
+            EXPECT_LE(d->io_requests - reads, 1u);
+            fprintf(stderr, "Vorbis seek %llu: %.3fms, %llu reads\n", (unsigned long long)target,
+                    (de_time_now_ns() - started) / 1000000.,
+                    (unsigned long long)(d->io_requests - reads));
+            for (u32 j = 0; j < expected * channels; ++j)
+                EXPECT_FLOAT_EQ(actual[j], reference[(size_t)target * channels + j], 1e-5);
+        }
+    }
+    EXPECT_FALSE(de__decoder_seek(d, frames + 1));
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).alloc_count, before.alloc_count);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).realloc_count, before.realloc_count);
+    DE_FREE(&allocator, reference, bytes);
+    de__decoder_destroy(d);
+    de__sound_asset_release(asset);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    de_io_shutdown();
+}
+
 TEST(audio_streaming, opus_sixty_seconds_realtime) {
     playback(true, false, true);
 }
