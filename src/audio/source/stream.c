@@ -20,6 +20,7 @@ de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes)
     d->request.flags = DE_IO_CALLBACK_ON_IO_THREAD;
     de_atomic_store_u32(&d->io_done, 0, DE_ATOMIC_RELAXED);
     DE_TRY(de_io_submit(&d->request));
+    ++d->io_requests;
     while (!de_atomic_load_u32(&d->io_done, DE_ATOMIC_ACQUIRE))
         de_sleep_ns(100000);
     if (d->io_result != DE_OK || d->io_bytes != bytes)

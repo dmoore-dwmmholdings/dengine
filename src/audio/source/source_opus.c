@@ -22,13 +22,28 @@ static bool next(de__sound_decoder *d) {
     while (d->packet < v->packet_count) {
         u32 at = de__snd_u32(v->packets + (u64)d->packet * 4),
             end = de__snd_u32(v->packets + ((u64)d->packet + 1) * 4);
-        if (end <= at || end - at > 1024 * 1024)
+        if (end <= at || end > v->data_size || end - at > 1024 * 1024)
             return false;
-        if (de__decoder_io(d, de__snd_u64(v->bytes + 48) + at, d->input, end - at) != DE_OK)
-            return false;
+        /* Opus keeps a compressed byte window: file_offset is its data-relative
+         * start, filled its length. Coalesce packets instead of waiting for one
+         * async completion per 20ms packet. The immutable window also survives
+         * seeks; predictor state and preroll still reset independently below. */
+        if (at < d->file_offset || end > d->file_offset + d->filled) {
+            u32 bytes = end - at;
+            if (bytes < 65536)
+                bytes = 65536;
+            if (bytes > v->data_size - at)
+                bytes = (u32)(v->data_size - at);
+            d->filled = 0;
+            if (de__decoder_io(d, de__snd_u64(v->bytes + 48) + at, d->input, bytes) != DE_OK)
+                return false;
+            d->file_offset = at;
+            d->filled = bytes;
+        }
+        const u8 *packet = d->input + (at - d->file_offset);
         i16 samples[5760 * 8];
         int count =
-            opus_multistream_decode(d->codec, d->input, (opus_int32)(end - at), samples, 5760, 0);
+            opus_multistream_decode(d->codec, packet, (opus_int32)(end - at), samples, 5760, 0);
         ++d->packet;
         if (count <= 0 || count > 8192)
             return false;

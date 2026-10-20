@@ -209,6 +209,49 @@ TEST(audio_streaming, opus_seek_boundaries_late_targets_and_stereo_match_linear)
     opus_seek_cases(2, true);
 }
 
+TEST(audio_streaming, opus_read_ahead_reduces_io_and_preserves_packet_and_seek_output) {
+    const u32 frames = 48000 * 24;
+    de__sound_asset *asset = source_cooked(true, frames, false);
+    /* Exercise multiple read-ahead boundaries, including a partial final buffer. */
+    ASSERT_TRUE(asset->view.data_size > 2 * 65536);
+    de__sound_decoder *cached = NULL, *uncached = NULL;
+    ASSERT_EQ(de__decoder_create(de_heap_allocator(), asset, &cached), DE_OK);
+    ASSERT_EQ(de__decoder_create(de_heap_allocator(), asset, &uncached), DE_OK);
+    f32 actual[256 * 8], expected[256 * 8];
+    for (u32 at = 0; at < frames;) {
+        u32 n = frames - at;
+        if (n > 256)
+            n = 256;
+        /* Less than one packet per call: invalidate before each packet decode on
+         * the reference, while leaving its predictor and buffered PCM intact. */
+        uncached->filled = 0;
+        ASSERT_EQ(de__decoder_read(uncached, expected, n), n);
+        ASSERT_EQ(de__decoder_read(cached, actual, n), n);
+        ASSERT_EQ(memcmp(actual, expected, (size_t)n * asset->view.channels * sizeof(f32)), 0);
+        at += n;
+    }
+    printf("Opus compressed bytes %llu: cached reads %llu, uncached reads %llu\n",
+           (unsigned long long)asset->view.data_size, (unsigned long long)cached->io_requests,
+           (unsigned long long)uncached->io_requests);
+    EXPECT_TRUE(uncached->io_requests >= asset->view.packet_count - 1);
+    EXPECT_TRUE(cached->io_requests * 8 < uncached->io_requests);
+    EXPECT_EQ(de__decoder_read(cached, actual, 256), 0u);
+    EXPECT_EQ(de__decoder_read(uncached, expected, 256), 0u);
+    const u32 targets[] = {frames - 2048, 0, 48001, frames / 2, 1, frames - 1, frames};
+    for (u32 k = 0; k < sizeof targets / sizeof targets[0]; ++k) {
+        ASSERT_TRUE(de__decoder_seek(cached, targets[k]));
+        ASSERT_TRUE(de__decoder_seek(uncached, targets[k]));
+        uncached->filled = 0;
+        u32 n = de__decoder_read(uncached, expected, 256);
+        ASSERT_EQ(de__decoder_read(cached, actual, 256), n);
+        EXPECT_EQ(memcmp(actual, expected, (size_t)n * asset->view.channels * sizeof(f32)), 0);
+    }
+    de__decoder_destroy(uncached);
+    de__decoder_destroy(cached);
+    de__sound_asset_release(asset);
+    de_io_shutdown();
+}
+
 static void finish_seek_after_read_snapshot(de__audio_source *source, void *user) {
     ++*(u32 *)user;
     de__stream_test_refill_now(source);
