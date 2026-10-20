@@ -185,7 +185,7 @@ TEST(loc_tables, directory_cache_tracks_add_remove_and_content_while_file_source
 }
 typedef struct locale_warnings {
     u32 count;
-    char message[512];
+    char messages[2][512];
 } locale_warnings;
 static void capture_locale_warning(const de_log_record *record, void *user) {
     locale_warnings *warnings = user;
@@ -194,15 +194,17 @@ static void capture_locale_warning(const de_log_record *record, void *user) {
     char message[512];
     snprintf(message, sizeof message, "%.*s", (int)record->message.len, record->message.ptr);
     if (strstr(message, "duplicate string key")) {
+        if (warnings->count < 2)
+            memcpy(warnings->messages[warnings->count], message, strlen(message) + 1);
         ++warnings->count;
-        memcpy(warnings->message, message, strlen(message) + 1);
     }
 }
-TEST(loc_tables, cook_errors_include_source_line_and_duplicates_are_reported) {
+static void duplicate_warning_contract(de_cook_verify verify, u32 expected_warnings) {
     loc_fixture f;
     loc_setup(&f, "errors");
     de_cooker *c = NULL;
-    ASSERT_EQ(de_cooker_create(NULL, &c), DE_OK);
+    ASSERT_EQ(de_cooker_create(&(de_cooker_desc){.verify_determinism = verify}, &c), DE_OK);
+    ASSERT_EQ(de_cooker_verifies(c), verify == DE_COOK_VERIFY_ON);
     de_asset_type_desc type = de_string_table_import_type_desc();
     ASSERT_EQ(de_cooker_register_type(c, &type), DE_OK);
     loc_file(&f, "en", "[strings]\n\"broken\"=\"{n, plural, one{x}}\"\n");
@@ -228,14 +230,23 @@ TEST(loc_tables, cook_errors_include_source_line_and_duplicates_are_reported) {
     EXPECT_STREQ(de__loc_table_lookup(&table, de_name_from("a")).ptr, "A");
     de_cook_result_free(&r);
     de_log_flush();
-    EXPECT_EQ(warnings.count, 1u);
-    EXPECT_TRUE(strstr(warnings.message, "en.toml:3") != NULL);
-    EXPECT_TRUE(strstr(warnings.message, "key 'a'") != NULL);
-    EXPECT_TRUE(strstr(warnings.message, "first value from line 2") != NULL);
+    EXPECT_EQ(warnings.count, expected_warnings);
+    for (u32 i = 0; i < warnings.count && i < 2; ++i) {
+        EXPECT_TRUE(strstr(warnings.messages[i], "en.toml:3") != NULL);
+        EXPECT_TRUE(strstr(warnings.messages[i], "key 'a'") != NULL);
+        EXPECT_TRUE(strstr(warnings.messages[i], "first value from line 2") != NULL);
+    }
     de_log_remove_sink(capture_locale_warning, &warnings);
     de_log_shutdown();
     de_cooker_destroy(c);
     loc_destroy(&f);
+}
+
+TEST(loc_tables, cook_errors_include_source_line_and_duplicates_are_reported) {
+    /* Verification deliberately invokes the importer twice, including its diagnostics.
+     * Exercise both contracts regardless of the build's default verification mode. */
+    duplicate_warning_contract(DE_COOK_VERIFY_OFF, 1);
+    duplicate_warning_contract(DE_COOK_VERIFY_ON, 2);
 }
 
 TEST(loc_tables, duplicate_policy_handles_escaped_multiline_keys_and_keeps_other_errors) {
