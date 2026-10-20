@@ -435,7 +435,8 @@ void de__mtl_residency_shutdown(de_gpu_device *d);
 /** Brings the residency set up to date with the heap list (before each commit). */
 void de__mtl_residency_sync(de_gpu_device *d);
 /** Residency and the bindless table (buffer index 0) for a new render or compute encoder.
- * `c` owns native residency references; NULL is only for native buffers with retained references. */
+ * `c` owns native residency references; NULL is only for native buffers with retained references.
+ */
 void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind,
                                de_gpu_cmd *c);
 /** True when the device uses useHeaps: per encoder, false with a residency set (tests). */
