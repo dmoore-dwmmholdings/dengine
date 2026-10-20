@@ -1,4 +1,152 @@
 #include "source_test_util.h"
+#include <time.h>
+
+typedef struct stream_contention_fx {
+    de_task_system *tasks;
+    de_asset_system *assets;
+    de_audio *audio;
+    de_sem started, release;
+    bool started_ready, release_ready;
+    de_task_counter blockers;
+} stream_contention_fx;
+static void stream_contention_fx_setup(stream_contention_fx *f) {
+    de_fp_env_init_thread();
+    ASSERT_EQ(de_sem_init(&f->started, 0), DE_OK);
+    f->started_ready = true;
+    ASSERT_EQ(de_sem_init(&f->release, 0), DE_OK);
+    f->release_ready = true;
+    ASSERT_EQ(
+        de_task_system_create(
+            &(de_task_system_desc){.worker_count = 1, .background_worker_count = 2}, &f->tasks),
+        DE_OK);
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks = f->tasks}, &f->assets),
+              DE_OK);
+    de__audio_create_opts opts = {true};
+    ASSERT_EQ(de__audio_create_ex(
+                  &(de_audio_desc){.backend = DE_AUDIO_NULL, .max_voices = 4, .assets = f->assets},
+                  &opts, &f->audio),
+              DE_OK);
+}
+static void stream_contention_fx_teardown(stream_contention_fx *f) {
+    if (f->release_ready)
+        de_sem_post(&f->release, 2);
+    if (f->tasks)
+        de_task_wait(f->tasks, &f->blockers);
+    de_audio_destroy(f->audio);
+    de_asset_system_destroy(f->assets);
+    if (f->tasks)
+        de_task_system_destroy(f->tasks);
+    if (f->release_ready)
+        de_sem_destroy(&f->release);
+    if (f->started_ready)
+        de_sem_destroy(&f->started);
+    de_io_shutdown();
+}
+static void block_unrelated_background_task(void *user) {
+    stream_contention_fx *f = user;
+    de_sem_post(&f->started, 1);
+    de_sem_wait(&f->release);
+}
+TEST_F(audio_streaming, unrelated_background_work_cannot_hold_up_audio_refills,
+       stream_contention_fx) {
+    de__sound_asset *asset = source_cooked(true, 48000 * 2, false);
+    de__audio_source *source = NULL;
+    ASSERT_EQ(de__source_stream(f->audio, asset, &source), DE_OK);
+    de__sound_asset_release(asset);
+    de_voice voice = de__voice_play_source(f->audio, source, &(de_play_desc){0});
+    ASSERT_TRUE(voice.id != 0);
+    for (u32 i = 0; i < 2; ++i)
+        de_task_submit(f->tasks, DE_TASK_POOL_BACKGROUND, block_unrelated_background_task, f,
+                       &f->blockers);
+    for (u32 i = 0; i < 2; ++i)
+        de_sem_wait(&f->started);
+    u64 start = de_time_now_ns(), guard = de__rt_guard_hits();
+    for (u32 done = 0; done < 48000 * 2;) {
+        u32 n = 48000 * 2 - done;
+        if (n > 256)
+            n = 256;
+        de__audio_null_pump(f->audio, n, NULL);
+        done += n;
+        de_sleep_until_ns(start + (u64)done * 1000000000ull / (48000 * 8));
+    }
+    de__audio_null_pump(f->audio, 256, NULL);
+    EXPECT_EQ(de_audio_get_stats(f->audio).underruns, 0u);
+    EXPECT_EQ(de__rt_guard_hits(), guard);
+    EXPECT_FALSE(de_audio_playing(f->audio, voice));
+}
+
+TEST(audio_streaming, decoder_io_recovers_after_short_read_and_rejected_submit) {
+    de__sound_asset *asset = source_cooked(true, 48000 * 2, false);
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de__sound_decoder *decoder = NULL;
+    ASSERT_EQ(de__decoder_create(&alloc, asset, &decoder), DE_OK);
+    u8 actual[16];
+    /* A submitted short read completes asynchronously; a rejected submission
+     * has no callback. Neither may leave a stale completion for the next read. */
+    EXPECT_EQ(de__decoder_io(decoder, asset->view.size, actual, 1), DE_ERR_IO);
+    u64 submitted = decoder->io_requests;
+    de_file *file = decoder->file;
+    decoder->file = NULL;
+    EXPECT_EQ(de__decoder_io(decoder, 0, actual, sizeof actual), DE_ERR_INVALID_ARGUMENT);
+    decoder->file = file;
+    EXPECT_EQ(decoder->io_requests, submitted);
+    de_tracking_stats before = de_tracking_allocator_stats(&tracking);
+#if !defined(_WIN32) /* The Windows CRT clock measures elapsed time instead of CPU time. */
+    clock_t cpu = clock();
+#endif
+    u64 start = de_time_now_ns();
+    for (u32 i = 0; i < 4096; ++i) {
+        u32 offset = i % 32;
+        memset(actual, 0xff, sizeof actual);
+        ASSERT_EQ(de__decoder_io(decoder, offset, actual, sizeof actual), DE_OK);
+        ASSERT_MEMEQ(actual, asset->view.bytes + offset, sizeof actual);
+    }
+    printf("4096 async decoder reads: wall %.3fms", (double)(de_time_now_ns() - start) / 1e6);
+#if !defined(_WIN32)
+    printf(", process CPU %.3fms", (double)(clock() - cpu) * 1000 / CLOCKS_PER_SEC);
+#endif
+    printf("\n");
+    EXPECT_EQ(decoder->io_requests, submitted + 4096);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).alloc_count, before.alloc_count);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).realloc_count, before.realloc_count);
+    de__decoder_destroy(decoder);
+    de__sound_asset_release(asset);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    de_io_shutdown();
+}
+
+TEST(audio_streaming, closing_multiple_sources_drains_queued_refills_and_seeks) {
+    de__sound_asset *asset = source_cooked(true, 48000 * 2, false);
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de_audio *audio = NULL;
+    de__audio_create_opts opts = {true};
+    ASSERT_EQ(de__audio_create_ex(
+                  &(de_audio_desc){.allocator = &alloc, .backend = DE_AUDIO_NULL, .max_voices = 4},
+                  &opts, &audio),
+              DE_OK);
+    f32 pcm[16000];
+    for (u32 pass = 0; pass < 4; ++pass) {
+        de__audio_source *sources[8];
+        for (u32 i = 0; i < 8; ++i) {
+            ASSERT_EQ(de__source_stream(audio, asset, &sources[i]), DE_OK);
+            ASSERT_EQ(sources[i]->vt->read(sources[i], pcm, 16000, 1), 16000u);
+        }
+        de__stream_service(audio);
+        for (u32 i = 0; i < 8; ++i) {
+            u32 index = (i * 5) % 8;
+            ASSERT_TRUE(sources[index]->vt->seek(sources[index], 48137));
+            sources[index]->vt->close(sources[index]);
+        }
+    }
+    de_audio_destroy(audio);
+    de__sound_asset_release(asset);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+    de_io_shutdown();
+}
+
 static void playback(bool opus, bool loop, bool realtime) {
     de__sound_asset *asset = source_cooked(opus, 48000 * 60, loop);
     EXPECT_TRUE(asset->resident == NULL);

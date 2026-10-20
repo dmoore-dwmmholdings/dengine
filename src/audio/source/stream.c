@@ -7,7 +7,7 @@ static void io_complete(de_io_request *request, de_result result, u64 bytes) {
     de__sound_decoder *d = request->user;
     d->io_result = result;
     d->io_bytes = bytes;
-    de_atomic_store_u32(&d->io_done, 1, DE_ATOMIC_RELEASE);
+    de_sem_post(&d->io_complete, 1);
 }
 de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes) {
     memset(&d->request, 0, sizeof d->request);
@@ -18,11 +18,12 @@ de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes)
     d->request.user = d;
     d->request.on_complete = io_complete;
     d->request.flags = DE_IO_CALLBACK_ON_IO_THREAD;
-    de_atomic_store_u32(&d->io_done, 0, DE_ATOMIC_RELAXED);
     DE_TRY(de_io_submit(&d->request));
     ++d->io_requests;
-    while (!de_atomic_load_u32(&d->io_done, DE_ATOMIC_ACQUIRE))
-        de_sleep_ns(100000);
+    /* Decoder work runs off the mixer thread. Park until the actual completion
+     * instead of polling de_sleep_ns: sub-millisecond sleeps busy-spin. A counted
+     * semaphore also retains a completion that arrives before this wait. */
+    de_sem_wait(&d->io_complete);
     if (d->io_result != DE_OK || d->io_bytes != bytes)
         return DE_FAIL(DE_ERR_IO, "short compressed sound read");
     return DE_OK;
@@ -40,7 +41,12 @@ de_result de__decoder_create(const de_allocator *a, de__sound_asset *asset,
     d->alloc = a;
     d->asset = asset;
     de__sound_asset_ref(asset);
-    de_atomic_init_u32(&d->io_done, 0);
+    r = de_sem_init(&d->io_complete, 0);
+    if (r != DE_OK) {
+        de__decoder_destroy(d);
+        return r;
+    }
+    d->io_complete_initialized = true;
     d->input = DE_ALLOC(a, INPUT_BYTES, 16, DE_MEM_AUDIO);
     if (!d->input) {
         de__decoder_destroy(d);
@@ -63,6 +69,8 @@ void de__decoder_destroy(de__sound_decoder *d) {
         stb_vorbis_close(d->codec);
     if (d->file)
         de_file_close(d->file);
+    if (d->io_complete_initialized)
+        de_sem_destroy(&d->io_complete);
     if (d->input)
         DE_FREE(d->alloc, d->input, INPUT_BYTES);
     if (d->scratch)
@@ -81,29 +89,72 @@ bool de__decoder_seek(de__sound_decoder *d, u64 frame) {
 typedef struct stream_source stream_source;
 typedef struct stream_manager {
     de_audio *audio;
-    de_task_system *tasks;
-    bool owns_tasks;
     de_mutex lock;
-    stream_source *head;
+    de_cond idle;
+    de_sem work;
+    de_thread *workers[2];
+    bool stopping; /* Protected by lock. */
+    stream_source *head, *queued_head, *queued_tail;
     de_atomic_u32 starve;
 } stream_manager;
 struct stream_source {
     de__audio_source base;
     de_audio *audio;
     stream_manager *manager;
-    stream_source *next;
+    stream_source *next, *queued_next;
+    bool active; /* Queued/running, protected by the manager lock. */
     de__sound_decoder *decoder;
     f32 *ring;
     u32 capacity;
     de_atomic_u64 read_pos, write_pos, seek_target, seek_read_pos;
     u32 read_seek_ack; /* Reader-owned generation of the last cursor flush. */
-    de_atomic_u32 need, running, closing, eof, seek_request, seek_ack;
-    de_task_counter jobs;
+    de_atomic_u32 need, closing, eof, seek_request, seek_ack;
     void (*test_read_hook)(de__audio_source *, void *);
     void *test_read_user;
 };
 static stream_manager *manager(de_audio *a) {
     return de_atomic_load_ptr(&a->stream_manager, DE_ATOMIC_ACQUIRE);
+}
+static void refill(void *user);
+static i32 stream_worker(void *user) {
+    stream_manager *m = user;
+    de_fp_env_init_thread();
+    for (;;) {
+        de_sem_wait(&m->work);
+        de_mutex_lock(&m->lock);
+        stream_source *s = m->queued_head;
+        if (s) {
+            m->queued_head = s->queued_next;
+            if (!m->queued_head)
+                m->queued_tail = NULL;
+            s->queued_next = NULL;
+        }
+        bool stop = m->stopping;
+        de_mutex_unlock(&m->lock);
+        if (!s) {
+            if (stop)
+                return 0;
+            continue;
+        }
+        refill(s);
+        de_mutex_lock(&m->lock);
+        s->active = false;
+        de_cond_broadcast(&m->idle);
+        de_mutex_unlock(&m->lock);
+    }
+}
+static void manager_destroy(stream_manager *m) {
+    de_mutex_lock(&m->lock);
+    m->stopping = true;
+    de_mutex_unlock(&m->lock);
+    de_sem_post(&m->work, 2);
+    for (u32 i = 0; i < 2; ++i)
+        if (m->workers[i])
+            de_thread_join(m->workers[i]);
+    de_sem_destroy(&m->work);
+    de_cond_destroy(&m->idle);
+    de_mutex_destroy(&m->lock);
+    DE_FREE(&m->audio->alloc, m, sizeof *m);
 }
 static de_result ensure_manager(de_audio *a, stream_manager **out) {
     *out = manager(a);
@@ -115,28 +166,29 @@ static de_result ensure_manager(de_audio *a, stream_manager **out) {
     memset(m, 0, sizeof *m);
     m->audio = a;
     de_mutex_init(&m->lock);
+    de_cond_init(&m->idle);
     de_atomic_init_u32(&m->starve, 0);
-    m->tasks = a->assets ? a->assets->tasks : NULL;
-    if (!m->tasks) {
-        de_task_system_desc d = {0};
-        d.worker_count = 1;
-        d.background_worker_count = 2;
-        d.allocator = &a->alloc;
-        de_result r = de_task_system_create(&d, &m->tasks);
+    de_result r = de_sem_init(&m->work, 0);
+    if (r != DE_OK) {
+        de_cond_destroy(&m->idle);
+        de_mutex_destroy(&m->lock);
+        DE_FREE(&a->alloc, m, sizeof *m);
+        return r;
+    }
+    /* Refill deadlines must not depend on unrelated long jobs or the general
+     * background pool's below-normal priority/boost budget. */
+    for (u32 i = 0; i < 2; ++i) {
+        r = de_thread_create(stream_worker, m, "de-audio-stream", DE_THREAD_NORMAL, 0,
+                             &m->workers[i]);
         if (r != DE_OK) {
-            de_mutex_destroy(&m->lock);
-            DE_FREE(&a->alloc, m, sizeof *m);
+            manager_destroy(m);
             return r;
         }
-        m->owns_tasks = true;
     }
     void *expected = NULL;
     if (!de_atomic_cas_ptr(&a->stream_manager, &expected, m, DE_ATOMIC_ACQ_REL,
                            DE_ATOMIC_ACQUIRE)) {
-        if (m->owns_tasks)
-            de_task_system_destroy(m->tasks);
-        de_mutex_destroy(&m->lock);
-        DE_FREE(&a->alloc, m, sizeof *m);
+        manager_destroy(m);
         m = expected;
     }
     *out = m;
@@ -147,12 +199,12 @@ static void refill(void *user) {
     u32 request = de_atomic_load_u32(&s->seek_request, DE_ATOMIC_ACQUIRE);
     if (de_atomic_load_u32(&s->closing, DE_ATOMIC_ACQUIRE) ||
         de_atomic_load_u32(&s->manager->starve, DE_ATOMIC_ACQUIRE))
-        goto done;
+        return;
     if (request != de_atomic_load_u32(&s->seek_ack, DE_ATOMIC_ACQUIRE)) {
         u64 frame = de_atomic_load_u64(&s->seek_target, DE_ATOMIC_ACQUIRE);
         if (!de__decoder_seek(s->decoder, frame)) {
             de_atomic_store_u32(&s->eof, 1, DE_ATOMIC_RELEASE);
-            goto done;
+            return;
         }
         u64 write = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE);
         /* Publish a boundary; only the reader may advance its SPSC read cursor. */
@@ -197,8 +249,6 @@ static void refill(void *user) {
                    pcm + (size_t)f * v->channels, v->channels * 4);
         de_atomic_store_u64(&s->write_pos, write + got, DE_ATOMIC_RELEASE);
     }
-done:
-    de_atomic_store_u32(&s->running, 0, DE_ATOMIC_RELEASE);
 }
 void de__stream_service(de_audio *a) {
     stream_manager *m = manager(a);
@@ -208,10 +258,15 @@ void de__stream_service(de_audio *a) {
     for (stream_source *s = m->head; s; s = s->next) {
         if (!de_atomic_load_u32(&s->need, DE_ATOMIC_ACQUIRE))
             continue;
-        u32 expected = 0;
-        if (de_atomic_cas_u32(&s->running, &expected, 1, DE_ATOMIC_ACQ_REL, DE_ATOMIC_ACQUIRE)) {
+        if (!s->active) {
+            s->active = true;
             de_atomic_store_u32(&s->need, 0, DE_ATOMIC_RELEASE);
-            de_task_submit(m->tasks, DE_TASK_POOL_BACKGROUND, refill, s, &s->jobs);
+            if (m->queued_tail)
+                m->queued_tail->queued_next = s;
+            else
+                m->queued_head = s;
+            m->queued_tail = s;
+            de_sem_post(&m->work, 1);
         }
     }
     de_mutex_unlock(&m->lock);
@@ -274,8 +329,9 @@ static void stream_close(de__audio_source *base) {
     if (*link)
         *link = s->next;
     de_atomic_store_u32(&s->closing, 1, DE_ATOMIC_RELEASE);
+    while (s->active)
+        de_cond_wait(&m->idle, &m->lock);
     de_mutex_unlock(&m->lock);
-    de_task_wait(m->tasks, &s->jobs);
     de__decoder_destroy(s->decoder);
     DE_FREE(&s->audio->alloc, s->ring, (size_t)s->capacity * base->channels * 4);
     DE_FREE(&s->audio->alloc, s, sizeof *s);
@@ -294,7 +350,6 @@ de_result de__source_stream(de_audio *a, de__sound_asset *asset, de__audio_sourc
     de_atomic_init_u64(&s->seek_target, 0);
     de_atomic_init_u64(&s->seek_read_pos, 0);
     de_atomic_init_u32(&s->need, 0);
-    de_atomic_init_u32(&s->running, 0);
     de_atomic_init_u32(&s->closing, 0);
     de_atomic_init_u32(&s->eof, 0);
     de_atomic_init_u32(&s->seek_request, 0);
@@ -317,9 +372,8 @@ de_result de__source_stream(de_audio *a, de__sound_asset *asset, de__audio_sourc
         DE_FREE(&a->alloc, s, sizeof *s);
         return r;
     }
-    de_atomic_store_u32(&s->running, 1, DE_ATOMIC_RELAXED);
-    de_task_submit(m->tasks, DE_TASK_POOL_BACKGROUND, refill, s, &s->jobs);
-    de_task_wait(m->tasks, &s->jobs);
+    /* Initial prefill is already a blocking control-side operation. */
+    refill(s);
     de_mutex_lock(&m->lock);
     s->next = m->head;
     m->head = s;
@@ -331,10 +385,7 @@ void de__stream_shutdown(de_audio *a) {
     stream_manager *m = de_atomic_exchange_ptr(&a->stream_manager, NULL, DE_ATOMIC_ACQ_REL);
     if (!m)
         return;
-    if (m->owns_tasks)
-        de_task_system_destroy(m->tasks);
-    de_mutex_destroy(&m->lock);
-    DE_FREE(&a->alloc, m, sizeof *m);
+    manager_destroy(m);
 }
 void de__stream_test_starve(de_audio *a, bool starve) {
     stream_manager *m = manager(a);
@@ -352,7 +403,8 @@ void de__stream_test_refill_now(de__audio_source *base) {
     stream_source *s = (stream_source *)base;
     stream_manager *m = s->manager;
     de_mutex_lock(&m->lock);
-    de_task_wait(m->tasks, &s->jobs);
+    while (s->active)
+        de_cond_wait(&m->idle, &m->lock);
     u32 starved = de_atomic_exchange_u32(&m->starve, 0, DE_ATOMIC_ACQ_REL);
     refill(s);
     de_atomic_store_u32(&m->starve, starved, DE_ATOMIC_RELEASE);

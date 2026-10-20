@@ -33,7 +33,8 @@ typedef struct de__sound_decoder {
     de__sound_asset *asset;
     de_file *file;
     de_io_request request;
-    de_atomic_u32 io_done;
+    de_sem io_complete;
+    bool io_complete_initialized;
     de_result io_result;
     u64 io_bytes;
     u64 io_requests; /* Worker-owned count of successfully submitted compressed reads. */
