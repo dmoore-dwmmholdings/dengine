@@ -2,6 +2,9 @@
 #define DE_UI_TEST_UTIL_H
 #include "de_test.h"
 #include "ui/ui_internal.h"
+#if defined(DE_UI_TEST_FONTS)
+#include "../text/packed_test_util.h"
+#endif
 #include <math.h>
 #include <string.h>
 typedef struct ui_fx {
@@ -12,6 +15,7 @@ typedef struct ui_fx {
     de_renderer *renderer;
     de_asset_system *assets;
     de_load_handle load;
+    char asset_pack[256];
 } ui_fx;
 static inline void ui_fx_setup(ui_fx *f) {
     ASSERT_EQ(de_type_registry_create(NULL, &f->types), DE_OK);
@@ -34,6 +38,9 @@ static inline void ui_fx_teardown(ui_fx *f) {
         de_renderer_destroy(f->renderer);
     if (f->device)
         de_gpu_device_destroy(f->device);
+#endif
+#if defined(DE_UI_TEST_FONTS)
+    text_fixture_pack_cleanup(f->asset_pack);
 #endif
 #if defined(DE_UI_ASSET_ROOT)
     (void)de_fs_unmount("uiassets", DE_UI_ASSET_ROOT);

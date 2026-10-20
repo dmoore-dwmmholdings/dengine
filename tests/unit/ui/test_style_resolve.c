@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "style_test_util.h"
+#include "asset/hot_reload_internal.h"
 TEST_F(ui_style_resolve, specificity_sheet_order_state_and_class_removal, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.1\n[style.\".danger\"]\nopacity=0."
                                    "2\n[style.\"button.danger:hover\"]\nopacity=0.9"),
@@ -126,6 +127,7 @@ TEST_F(ui_style_resolve, registered_asset_blob_and_real_hot_reload_keep_old_on_e
     de_sleep_ns(200000000);
     const char *updated = "[style.button]\nopacity=0.8\n";
     ASSERT_EQ(de_file_write_all_atomic("uistyle:/style.toml", updated, strlen(updated)), DE_OK);
+#if DE__ASSET_RELOAD_ENABLED
     u64 end = de_time_now_ns() + 5000000000ULL;
     do {
         de_asset_system_update(f->assets, f->world);
@@ -151,6 +153,30 @@ TEST_F(ui_style_resolve, registered_asset_blob_and_real_hot_reload_keep_old_on_e
     EXPECT_EQ(reload_error, DE_ERR_PARSE);
     EXPECT_TRUE(strstr(error, "line") != NULL);
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, .00001f);
+#else
+    /* Cooked runtime configurations intentionally ignore source changes. Drive
+     * notifications explicitly so the no-reload assertion needs no watch delay. */
+    de__asset_reload_on_change(f->assets, "uistyle:/style.toml", DE_WATCH_MODIFIED, false);
+    for (u32 i = 0; i < 8; ++i) {
+        de_asset_system_update(f->assets, f->world);
+        style_step(f, 1.f / 60.f);
+    }
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .2f, .00001f);
+    const char *broken = "[style.button]\nopacity='broken'\n";
+    ASSERT_EQ(de_file_write_all_atomic("uistyle:/style.toml", broken, strlen(broken)), DE_OK);
+    de__asset_reload_on_change(f->assets, "uistyle:/style.toml", DE_WATCH_MODIFIED, false);
+    for (u32 i = 0; i < 8; ++i) {
+        de_asset_system_update(f->assets, f->world);
+        style_step(f, 1.f / 60.f);
+    }
+    char error[256] = {0};
+    EXPECT_EQ(de_asset_last_error(f->assets, ids[0], error, sizeof error), DE_OK);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .2f, .00001f);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 9, 0);
+    de__asset_reload_stats stats;
+    de__asset_reload_get_stats(f->assets, &stats);
+    EXPECT_EQ(stats.started, 0u);
+#endif
     de_ui_destroy(f->ui);
     f->ui = NULL;
     de_asset_release(f->assets, f->load);

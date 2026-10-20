@@ -196,7 +196,11 @@ TEST_F(ui_tree, actual_image_intrinsic_texture_uv_size, ui_fx) {
 #if defined(DE_UI_ASSET_ROOT) && DE_HAS_RENDER
     ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_NULL}, &f->device),
               DE_OK);
-    ASSERT_EQ(de_asset_system_create(NULL, &f->assets), DE_OK);
+    de_asset_system_desc desc = {0};
+#if !DE_HAS_COOKER
+    desc.mode = DE_ASSET_MODE_PACKED;
+#endif
+    ASSERT_EQ(de_asset_system_create(&desc, &f->assets), DE_OK);
     ASSERT_EQ(de_renderer_create(
                   &(de_renderer_desc){.device = f->device, .assets = f->assets, .types = f->types},
                   &f->renderer),
@@ -204,6 +208,9 @@ TEST_F(ui_tree, actual_image_intrinsic_texture_uv_size, ui_fx) {
     f->ui->desc.renderer = f->renderer;
     ASSERT_EQ(de_fs_mount("uiassets", DE_UI_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
     ASSERT_EQ(de_asset_manifest_load(f->assets, "uiassets:/tests/unit/ui/assets.toml"), DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->assets, "uiassets:/tests/data/fonts/latin/", f->asset_pack);
+#endif
     de_asset_id id = de_asset_id_from("ui/checker");
     de_texture texture = de_asset_texture(f->assets, id);
     f->load = de_asset_load(f->assets, id, 0);
