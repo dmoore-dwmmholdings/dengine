@@ -36,6 +36,7 @@ typedef struct de__sound_decoder {
     de_atomic_u32 io_done;
     de_result io_result;
     u64 io_bytes;
+    u64 io_requests; /* Worker-owned count of successfully submitted compressed reads. */
     u8 *input, *scratch;
     u32 scratch_bytes;
     u32 used, filled;

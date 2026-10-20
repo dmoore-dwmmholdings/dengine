@@ -56,6 +56,11 @@ if(TARGET de_audio AND DE_BUILD_TOOLS)
             "DE_AUDIO_SOURCE_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\""
             "DE_AUDIO_SOURCE_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/source-tmp\"")
     endforeach()
+    if(WIN32)
+        # Controlled fixture paths use standard C file I/O, as the render artifact tests do.
+        target_compile_definitions(test_audio_sources PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(test_audio_streaming PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
 endif()
 
 # DENG-311: native HAL callbacks, output UID enumeration and control-thread recovery.

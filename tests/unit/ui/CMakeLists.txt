@@ -53,4 +53,7 @@ endif()
 
 if(TARGET test_ui_focus)
  target_sources(test_ui_focus PRIVATE test_terminal.c "${DE_ROOT_DIR}/examples/terminal_demo/session.c")
+ if(WIN32)
+  target_compile_definitions(test_ui_focus PRIVATE _CRT_SECURE_NO_WARNINGS)
+ endif()
 endif()
