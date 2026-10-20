@@ -6,6 +6,7 @@
 #include "text/text_internal.h"
 #include "asset/asset_internal.h"
 #include "cook/lib/de_cooker.h"
+#include "packed_test_util.h"
 #include <stdio.h>
 #include <string.h>
 typedef struct loc_fixture {
@@ -13,6 +14,7 @@ typedef struct loc_fixture {
     de_asset_system *assets;
     de_task_system *tasks;
     de__loc *loc;
+    char pack[256];
 } loc_fixture;
 static inline void loc_write(const char *path, const char *text) {
     ASSERT_EQ(de_file_write_all_atomic(path, text, strlen(text)), DE_OK);
@@ -46,6 +48,9 @@ static inline void loc_setup(loc_fixture *f, const char *name) {
     td.background_worker_count = 1;
     ASSERT_EQ(de_task_system_create(&td, &f->tasks), DE_OK);
     de_asset_system_desc d = {0};
+#if !DE_HAS_COOKER
+    d.mode = DE_ASSET_MODE_PACKED;
+#endif
     d.tasks = f->tasks;
     char cache[512];
     snprintf(cache, sizeof cache, "%s/cache", f->root);
@@ -53,6 +58,9 @@ static inline void loc_setup(loc_fixture *f, const char *name) {
     ASSERT_EQ(de_asset_system_create(&d, &f->assets), DE_OK);
     ASSERT_EQ(de__loc_create(NULL, f->assets, &f->loc), DE_OK);
     ASSERT_EQ(de_asset_manifest_load(f->assets, path), DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->assets, f->root, f->pack);
+#endif
 }
 static inline bool loc_ready(loc_fixture *f, u64 generation) {
     u64 end = de_time_now_ns() + 10000000000ull;
@@ -67,6 +75,7 @@ static inline void loc_destroy(loc_fixture *f) {
     de__loc_destroy(f->loc);
     de_asset_system_destroy(f->assets);
     de_task_system_destroy(f->tasks);
+    text_fixture_pack_cleanup(f->pack);
     de_io_shutdown();
 }
 static inline de_cook_result loc_cook(loc_fixture *f, de_cooker *c) {

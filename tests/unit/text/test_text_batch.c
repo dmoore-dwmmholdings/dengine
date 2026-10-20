@@ -17,6 +17,7 @@ typedef struct text_render_fx {
     de_type_registry *types;
     de_font bitmap;
     de_load_handle scene_loads[3];
+    char scene_pack[256];
     de_gpu_texture screen_target;
     de_atomic_u32 screen_errors;
     bool screen_sink;
@@ -51,6 +52,8 @@ static void text_render_fx_teardown(text_render_fx *f) {
         de_asset_system_destroy(f->fonts.assets);
         f->fonts.assets = NULL;
     }
+    text_fixture_pack_cleanup(f->fonts.pack);
+    text_fixture_pack_cleanup(f->scene_pack);
     if (f->r)
         de_renderer_destroy(f->r);
     if (f->screen_target.id)
@@ -383,6 +386,9 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
     ASSERT_EQ(
         de_asset_manifest_load(f->fonts.assets, "textscene:/tests/unit/text/screen-assets.toml"),
         DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->fonts.assets, "textscene:/", f->scene_pack);
+#endif
     const char *assets[] = {"mesh/card", "mat/white", "ui/pixel_font"};
     for (u32 i = 0; i < 3; ++i) {
         f->scene_loads[i] = de_asset_load(f->fonts.assets, de_asset_id_from(assets[i]), 0);
