@@ -328,6 +328,7 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     /* ---- DENG-302: material instances (asset records and runtime instances) ---- */
     res =
         de__material_instances_create(&(de__material_instances_desc){.allocator = a,
+                                                                     .device = r->dev,
                                                                      .assets = r->assets,
                                                                      .uploader = r->uploader,
                                                                      .models = r->material_models},

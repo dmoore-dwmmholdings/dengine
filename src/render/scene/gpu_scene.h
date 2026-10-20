@@ -386,6 +386,13 @@ u64 de__gpu_table_bytes(const de__gpu_table *t);
 
 typedef struct de__gpu_scene de__gpu_scene;
 
+/** Immutable between main-thread kicks; GPU material inputs and their receiver layers. */
+typedef struct de__material_sample {
+    de_gpu_texture texture;
+    u32 layer_mask;
+} de__material_sample;
+const de__material_sample *de__gpu_scene_material_samples(const de__gpu_scene *gs, u32 *count);
+
 /** Where the scene finds the runtime records of meshes, materials and textures. */
 typedef struct de__gpu_scene_assets {
     /** The READY record of `m`, or NULL (not loaded, or invalid). */

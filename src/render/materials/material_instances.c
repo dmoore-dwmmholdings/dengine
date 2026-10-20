@@ -6,6 +6,9 @@
 #include "render/materials/material_instances.h"
 
 #include "platform/de_atomic.h"
+#include "gpu/gpu_backend.h"
+#include "gpu/texture_lease_internal.h"
+#include "render/world/render_world.h"
 #include "render/formats/de_cooked_material.h"
 #include "render/loaders/render_assets.h"
 #include "render/loaders/upload_ring.h"
@@ -209,7 +212,9 @@ void de__material_pack(const de_render_material *m, const de__material_models *m
        s->anisotropy_rotation);
     for (u32 t = 0; t < DE__MATERIAL_TEXTURES; ++t) {
         u32 b = 0u;
-        if (DE_HANDLE_VALID(m->textures[t]) && texture != NULL) {
+        if (m->gpu_textures[t].id) {
+            b = m->gpu_bindless[t];
+        } else if (DE_HANDLE_VALID(m->textures[t]) && texture != NULL) {
             b = texture(texture_user, m->textures[t]);
             if (b == DE_GPU_BINDLESS_INVALID || (b & DE__MATERIAL_TEXTURE_UV1) != 0u)
                 b = 0u; /* not loaded: the shader's fallback */
@@ -234,6 +239,8 @@ typedef struct mi_entry {
 
 struct de__material_instances {
     const de_allocator *alloc;
+    de_gpu_device *device;
+    u32 gpu_bindings;
     de_asset_system *assets;
     de_render_uploader *uploader;
     const de__material_models *models;
@@ -256,6 +263,7 @@ de_result de__material_instances_create(const de__material_instances_desc *d,
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "material instances: no memory");
     memset(mi, 0, sizeof *mi);
     mi->alloc = a;
+    mi->device = d->device;
     mi->assets = d->assets;
     mi->uploader = d->uploader;
     mi->models = d->models;
@@ -264,9 +272,27 @@ de_result de__material_instances_create(const de__material_instances_desc *d,
     return DE_OK;
 }
 
+static void release_gpu_textures(de__material_instances *mi, de_render_material *rec) {
+    for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
+        if (rec->gpu_textures[t].id) {
+            de__gpu_texture_unpin(mi->device, rec->gpu_textures[t]);
+            rec->gpu_textures[t] = (de_gpu_texture){0};
+            rec->gpu_bindless[t] = 0;
+            --mi->gpu_bindings;
+        }
+    }
+}
+
+u32 de__material_instances_gpu_bindings(const de__material_instances *mi) {
+    return mi ? mi->gpu_bindings : 0;
+}
+
 void de__material_instances_destroy(de__material_instances *mi) {
     if (mi == NULL)
         return;
+    for (u32 i = 0; i < mi->count; ++i)
+        if (mi->entries[i].live)
+            release_gpu_textures(mi, &mi->entries[i].rec);
     if (mi->entries != NULL)
         DE_FREE(mi->alloc, mi->entries, (size_t)mi->cap * sizeof(mi_entry));
     DE_FREE(mi->alloc, mi, sizeof *mi);
@@ -347,7 +373,22 @@ de_material de__material_instances_create_instance(de__material_instances *mi, d
         mi->entries[index].gen = 1u;
     }
     mi_entry *e = &mi->entries[index];
+    /* Retain after pool growth, before publishing this entry. On failure return
+     * the reserved slot without touching the live base or transferring ownership. */
+    for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
+        if (copy.gpu_textures[t].id && !de__gpu_texture_pin(mi->device, copy.gpu_textures[t])) {
+            for (u32 j = 0; j < t; ++j)
+                if (copy.gpu_textures[j].id)
+                    de__gpu_texture_unpin(mi->device, copy.gpu_textures[j]);
+            e->free_next = mi->free_head;
+            mi->free_head = index + 1u;
+            (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "material clone: GPU texture owner retired");
+            return none;
+        }
+    }
     e->rec = copy;
+    for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t)
+        mi->gpu_bindings += copy.gpu_textures[t].id != 0;
     memset(&e->rec.retire_, 0, sizeof e->rec.retire_);
     e->live = true;
     e->free_next = 0;
@@ -361,6 +402,7 @@ de_result de__material_instances_destroy_instance(de__material_instances *mi, de
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "de_material_destroy_instance: 0x%08x is not a live runtime instance", m.id);
     const u32 index = (u32)(e - mi->entries);
+    release_gpu_textures(mi, &e->rec);
     e->live = false;
     e->gen = e->gen >= DE__MATERIAL_INSTANCE_GEN_MAX ? 1u : e->gen + 1u;
     e->free_next = mi->free_head;
@@ -441,6 +483,56 @@ de_result de_material_set_params(de_renderer *r, de_material m,
     return DE_OK;
 }
 
+de_result de_material_set_gpu_texture(de_renderer *r, de_material m, de_material_texture_slot slot,
+                                      de_gpu_texture texture) {
+    static const u32 slots[] = {DE_COOKED_TEX_BASE_COLOR, DE_COOKED_TEX_METAL_ROUGH,
+                                DE_COOKED_TEX_NORMAL,     DE_COOKED_TEX_OCCLUSION,
+                                DE_COOKED_TEX_EMISSIVE,   DE_COOKED_TEX_CLEARCOAT_NORMAL};
+    if (!r || !de__material_is_instance(m) || (u32)slot >= sizeof slots / sizeof slots[0])
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GPU material texture: invalid instance or slot");
+    de_render_material *rec = de__material_instances_get(r->material_instances, m);
+    if (!rec)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GPU material texture: stale instance");
+    const u32 index = slots[slot];
+    de_gpu_texture old = rec->gpu_textures[index];
+    if (old.id == texture.id)
+        return DE_OK;
+    u32 sampled = 0;
+    if (texture.id) {
+        if (!de__gpu_texture_pin(r->dev, texture))
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GPU material texture: stale/retired texture");
+        const de__gpu_texture *info = de__gpu_get_texture(r->dev, texture);
+        if (info->dim != DE_TEX_2D || info->depth_or_layers != 1 || info->sample_count != 1 ||
+            !(info->usage & DE_USAGE_SAMPLED) || de__gpu_format_is_depth(info->format) ||
+            info->format == DE_FMT_R32_UINT || info->format == DE_FMT_RG32_UINT || info->external ||
+            info->transient) {
+            de__gpu_texture_unpin(r->dev, texture);
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                           "GPU material texture: sampled 2D colour required");
+        }
+        sampled = de_gpu_texture_bindless(r->dev, texture, 0, false);
+        if (sampled == DE_GPU_BINDLESS_INVALID || (sampled & DE__MATERIAL_TEXTURE_UV1)) {
+            de__gpu_texture_unpin(r->dev, texture);
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "GPU material texture: no sampled descriptor");
+        }
+    }
+    if (old.id) {
+        /* A queued CPU frame can still name the old descriptor before a GPU
+         * submission exists. Quiesce both before releasing the persistent lease. */
+        de__render_world_wait_idle(r);
+        de_gpu_wait_idle(r->dev);
+    }
+    rec->gpu_textures[index] = texture;
+    rec->gpu_bindless[index] = sampled;
+    r->material_instances->gpu_bindings += texture.id != 0;
+    if (old.id) {
+        --r->material_instances->gpu_bindings;
+        de__gpu_texture_unpin(r->dev, old);
+    }
+    de__gpu_scene_material_changed(r->gpu_scene, m);
+    return DE_OK;
+}
+
 de_result de_material_get_params(de_renderer *r, de_material m, de_standard_material *out) {
     if (out == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_material_get_params: NULL out");
@@ -465,6 +557,16 @@ de_material de_material_create_instance(de_renderer *r, de_material base) {
 void de_material_destroy_instance(de_renderer *r, de_material m) {
     if (r == NULL || !DE_HANDLE_VALID(m))
         return;
+    de_render_material *rec = de__material_instances_get(r->material_instances, m);
+    if (rec && de__material_is_instance(m)) {
+        for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
+            if (rec->gpu_textures[t].id) {
+                de__render_world_wait_idle(r);
+                de_gpu_wait_idle(r->dev);
+                break;
+            }
+        }
+    }
     /* Its block loses READY at the next kick (the slot stays while instances name it). */
     if (de__material_instances_destroy_instance(r->material_instances, m) == DE_OK)
         de__gpu_scene_material_changed(r->gpu_scene, m);

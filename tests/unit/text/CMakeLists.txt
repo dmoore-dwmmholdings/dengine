@@ -70,3 +70,8 @@ if(DE_BUILD_TOOLS)
   endif()
  endforeach()
 endif()
+
+# DENG-533: compile the game-facing monitor sample against public headers only.
+if(TARGET test_text_render)
+ target_sources(test_text_render PRIVATE "${DE_ROOT_DIR}/examples/render_target_monitor/monitor.c")
+endif()

@@ -3,6 +3,7 @@
 #include "gpu/gpu_backend.h"
 #include "gpu/texture_lease_internal.h"
 #include <stb_image_write.h>
+#include "../../../examples/render_target_monitor/monitor.h"
 #if DE_HAS_RENDER
 #include "render/world/render_world.h"
 #include "render/components_internal.h"
@@ -11,9 +12,14 @@
 #define TEXT_WAIT (30ULL * 1000000000)
 typedef struct text_render_fx {
     runtime_fx fonts;
+    monitor_example monitor;
+    bool monitor_hook;
+    f32 monitor_color[4];
+    de_rg_resource monitor_pass_color;
     de_gpu_device *d;
     de_renderer *r;
     de_world *w;
+    de_entity main_camera;
     de_type_registry *types;
     de_font bitmap;
     de_load_handle scene_loads[3];
@@ -30,10 +36,18 @@ static void screen_error_sink(const de_log_record *record, void *user) {
     if (record->level >= DE_LOG_ERROR)
         de_atomic_fetch_add_u32(&f->screen_errors, 1, DE_ATOMIC_RELAXED);
 }
+#if defined(__APPLE__)
+static void monitor_feed_hook(de_rg *graph, de_view view, void *user);
+#endif
 static void text_render_fx_setup(text_render_fx *f) {
     (void)f;
 }
 static void text_render_fx_teardown(text_render_fx *f) {
+#if defined(__APPLE__)
+    if (f->monitor_hook && f->r)
+        (void)de_render_remove_hook(f->r, DE_HOOK_UI, monitor_feed_hook, f);
+#endif
+    monitor_example_close(&f->monitor);
     if (f->screen_sink) {
         de_log_flush();
         de_log_remove_sink(screen_error_sink, f);
@@ -100,6 +114,7 @@ static void start_render(text_render_fx *f, de_gpu_backend backend) {
     de_component cs[] = {bi.transform, ids->camera};
     de_entity entity;
     ASSERT_EQ(de_entity_spawn_with(f->w, cs, 2, &entity), DE_OK);
+    f->main_camera = entity;
     DeTransform *transform = de_entity_get(f->w, entity, bi.transform);
     *transform = de_transform_identity();
     transform->position = (de_dvec3){0, 0, 2};
@@ -242,8 +257,8 @@ TEST_F(text_batch, ten_thousand_one_draw, text_render_fx) {
     DE_FREE(de_heap_allocator(), quads, 10000 * sizeof *quads);
 }
 #if defined(__APPLE__)
-static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
-    u32 w = 1280, h = 720, pitch = w * 4;
+static u8 *readback_size(text_render_fx *f, de_gpu_texture texture, u32 w, u32 h) {
+    u32 pitch = w * 4;
     de_gpu_wait_idle(f->d);
     de_gpu_buffer buffer =
         de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = (u64)pitch * h,
@@ -252,7 +267,18 @@ static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
                                                          .name = "text readback"});
     ASSERT_TRUE(buffer.id);
     de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "text readback");
+    const bool sampled = texture.id != de__renderer_offscreen(f->r).id;
+    if (sampled) {
+        de_gpu_barrier barrier = {
+            .texture = texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+    }
     de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, pitch, texture, 0, 0);
+    if (sampled) {
+        de_gpu_barrier barrier = {
+            .texture = texture, .before = DE_ACCESS_COPY_SRC, .after = DE_ACCESS_SHADER_READ};
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+    }
     de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
     de_gpu_submit submit = {.cmds = &cmd, .cmd_count = 1, .signal = fence, .signal_value = 1};
     ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &submit), DE_OK);
@@ -263,6 +289,9 @@ static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
     de_gpu_fence_destroy(f->d, fence);
     de_gpu_buffer_destroy(f->d, buffer);
     return out;
+}
+static u8 *readback_target(text_render_fx *f, de_gpu_texture texture) {
+    return readback_size(f, texture, 1280, 720);
 }
 static u8 *readback(text_render_fx *f) {
     return readback_target(f, de__renderer_offscreen(f->r));
@@ -854,4 +883,131 @@ TEST_F(text_batch, metal_bitmap_pixel_exact_1x_3x, text_render_fx) {
     SKIP("Metal native host required");
 #endif
 }
+#if defined(__APPLE__)
+static void monitor_feed_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    text_render_fx *f = user;
+    de_gpu_attachment attachment = {
+        .texture = de_rg_texture(pass, f->monitor_pass_color), .clear = true, .store = true};
+    memcpy(attachment.clear_color, f->monitor_color, sizeof f->monitor_color);
+    de_gpu_cmd_begin_render(cmd, &attachment, 1, NULL);
+    de_gpu_cmd_end_render(cmd);
+}
+static void monitor_feed_hook(de_rg *graph, de_view view, void *user) {
+    text_render_fx *f = user;
+    if (view.id != f->monitor.producer.id)
+        return;
+    f->monitor_pass_color = de_view_color(f->r, view);
+    de_rg_pass *pass =
+        de_rg_add_pass(graph, "monitor.test.feed", DE_QUEUE_GRAPHICS, monitor_feed_execute, f);
+    de_rg_write(pass, f->monitor_pass_color, DE_ACCESS_RENDER_TARGET);
+}
+#endif
+TEST_F(text_batch, metal_public_material_monitor_feed_and_resize, text_render_fx) {
+#if defined(__APPLE__)
+    start_render(f, DE_GPU_METAL);
+    de_log_add_sink(screen_error_sink, f);
+    f->screen_sink = true;
+    ASSERT_EQ(de_fs_mount("textscene", DE_FONT_DATA "/../../../..", DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(
+        de_asset_manifest_load(f->fonts.assets, "textscene:/tests/unit/text/screen-assets.toml"),
+        DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->fonts.assets, "textscene:/", f->scene_pack);
+#endif
+    const char *names[] = {"mesh/card", "mat/white", "mesh/card#card"};
+    for (u32 i = 0; i < 3; ++i) {
+        f->scene_loads[i] = de_asset_load(f->fonts.assets, de_asset_id_from(names[i]), 0);
+        ASSERT_EQ(wait_screen_asset(f, f->scene_loads[i]), DE_LOAD_READY);
+    }
+    DeCamera *main_camera =
+        de_entity_get(f->w, f->main_camera, de_component_find(f->w, "DeCamera"));
+    main_camera->exposure_ev100 = 0;
+    ASSERT_EQ(monitor_example_open(&f->monitor, f->r, f->w,
+                                   de_asset_mesh(f->fonts.assets, de_asset_id_from(names[2])),
+                                   de_asset_material(f->fonts.assets, de_asset_id_from(names[1])),
+                                   64, 32),
+              DE_OK);
+    de_render_add_hook(f->r, DE_HOOK_UI, monitor_feed_hook, f);
+    f->monitor_hook = true;
+    for (u32 frame = 0; frame < 4; ++frame) {
+        if (frame == 2) {
+            de_gpu_texture old = f->monitor.target;
+            ASSERT_EQ(monitor_example_resize(&f->monitor, 128, 64), DE_OK);
+            EXPECT_TRUE(de__gpu_get_texture(f->d, old) == NULL);
+            EXPECT_EQ(monitor_example_resize(&f->monitor, 0, 64), DE_ERR_INVALID_ARGUMENT);
+        }
+        if (frame == 3) {
+            /* The same GPU feed reaches Standard's emissive slot too. */
+            de_standard_material params;
+            ASSERT_EQ(de_material_get_params(f->r, f->monitor.material, &params), DE_OK);
+            params.unlit = false;
+            params.base_color = (de_vec4){0, 0, 0, 1};
+            params.emissive = (de_vec3){1, 1, 1};
+            params.emissive_strength = 1;
+            ASSERT_EQ(de_material_set_params(f->r, f->monitor.material, &params), DE_OK);
+            ASSERT_EQ(de_material_set_gpu_texture(f->r, f->monitor.material,
+                                                  DE_MATERIAL_TEXTURE_EMISSIVE, f->monitor.target),
+                      DE_OK);
+        }
+        bool green = (frame & 1u) != 0;
+        f->monitor_color[0] = green ? .01f : .8f;
+        f->monitor_color[1] = green ? .8f : .01f;
+        f->monitor_color[2] = .01f;
+        f->monitor_color[3] = 1;
+        render_frame(f);
+        u8 *feed_pixels =
+            readback_size(f, f->monitor.target, frame < 2 ? 64 : 128, frame < 2 ? 32 : 64);
+        EXPECT_GT(feed_pixels[green ? 1 : 0], 180u);
+        EXPECT_LT(feed_pixels[green ? 0 : 1], 10u);
+        free(feed_pixels);
+        u8 *pixels = readback(f);
+        u32 matching = 0;
+        for (u32 y = 330; y < 390; ++y)
+            for (u32 x = 610; x < 670; ++x) {
+                const u8 *p = pixels + (y * 1280 + x) * 4;
+                matching += p[green ? 1 : 0] > 60 && p[green ? 1 : 0] > 2 * p[green ? 0 : 1];
+            }
+        printf("monitor frame%u model%u matching centre pixels%u centreRGB%u,%u,%u\n", frame,
+               frame == 3, matching, pixels[(360 * 1280 + 640) * 4],
+               pixels[(360 * 1280 + 640) * 4 + 1], pixels[(360 * 1280 + 640) * 4 + 2]);
+        char capture[sizeof DE_TEXT_RENDER_CAPTURE + 32];
+        snprintf(capture, sizeof capture, DE_TEXT_RENDER_CAPTURE ".monitor-%u.png", frame);
+        ASSERT_TRUE(stbi_write_png(capture, 1280, 720, 4, pixels, 1280 * 4));
+        EXPECT_GT(matching, 3000u);
+        free(pixels);
+    }
+    de_log_flush();
+    EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
+    de_log_remove_sink(screen_error_sink, f);
+    f->screen_sink = false;
+    de__view_info before_main, before_producer, after;
+    ASSERT_TRUE(de__view_info_get(f->r, de_renderer_main_view(f->r), &before_main));
+    ASSERT_TRUE(de__view_info_get(f->r, f->monitor.producer, &before_producer));
+    /* A producer that sees its own screen must not submit a feedback graph. */
+    de_view_set_layer_mask(f->r, f->monitor.producer, 2u);
+    render_frame(f);
+    ASSERT_TRUE(de__view_info_get(f->r, f->monitor.producer, &after));
+    EXPECT_EQ(after.executed, before_producer.executed);
+    ASSERT_TRUE(de__view_info_get(f->r, de_renderer_main_view(f->r), &after));
+    EXPECT_EQ(after.executed, before_main.executed);
+    /* A late producer cannot serve a same-frame material consumer. */
+    de_view_destroy(f->r, f->monitor.producer);
+    f->monitor.producer = de_view_create(
+        f->r, &(de_view_desc){.target = f->monitor.target, .order = 10, .name = "monitor.late"});
+    ASSERT_TRUE(f->monitor.producer.id);
+    de_view_set_layer_mask(f->r, f->monitor.producer, 1u);
+    DeCamera *camera = de_entity_get(f->w, f->monitor.camera, de_component_find(f->w, "DeCamera"));
+    camera->view = f->monitor.producer;
+    render_frame(f);
+    ASSERT_TRUE(de__view_info_get(f->r, de_renderer_main_view(f->r), &after));
+    EXPECT_EQ(after.executed, before_main.executed);
+    ASSERT_EQ(monitor_example_resize(&f->monitor, 128, 64), DE_OK);
+    render_frame(f);
+    ASSERT_TRUE(de__view_info_get(f->r, de_renderer_main_view(f->r), &after));
+    EXPECT_EQ(after.executed, before_main.executed + 1u);
+#else
+    SKIP("Metal native host required");
+#endif
+}
+
 #endif

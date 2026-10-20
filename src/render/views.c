@@ -26,6 +26,7 @@
 #include "render/views_internal.h"
 
 #include "render/graph/rg_internal.h"
+#include "render/scene/gpu_scene.h"
 #include "render/lighting/lighting.h"
 #include "render/probes/probes_internal.h"
 #include "render/passes/ssr/ssr_internal.h"
@@ -993,6 +994,34 @@ static u32 target_access_before(const de__views *vs, u32 slot, u32 pos) {
     return s->target_access;
 }
 
+/* Explicitly declare bindless GPU material inputs. The main kick snapshots the
+ * handles/layers: the render thread never reads mutable material records. */
+static de_result material_sample_reads(de_renderer *r, de__views *vs, de_rg *g, u32 pos,
+                                       u32 receiver_mask) {
+    u32 count = 0;
+    const de__material_sample *samples = de__gpu_scene_material_samples(r->gpu_scene, &count);
+    for (u32 i = 0; i < count; ++i) {
+        if (receiver_mask && !(samples[i].layer_mask & receiver_mask))
+            continue;
+        for (u32 k = 0; k < vs->order_count; ++k) {
+            const view_rs *producer = &vs->rs[vs->order[k]];
+            if (producer->copy.target.id != samples[i].texture.id)
+                continue;
+            if (k >= pos || !producer->ok)
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                               "GPU material texture feedback, unordered or failed producer view");
+        }
+        de_rg_resource input = de_rg_import_texture(g, samples[i].texture, DE_ACCESS_SHADER_READ);
+        /* Any graphics/compute shader can evaluate the common material block,
+         * including RT, shadows, transparency and custom material models. */
+        for (u32 p = 0; p < g->pass_count; ++p)
+            if (g->passes[p]->queue != DE_QUEUE_COPY)
+                de_rg_read(g->passes[p], input, DE_ACCESS_SHADER_READ);
+        de_rg_export(g, input, DE_ACCESS_SHADER_READ);
+    }
+    return DE_OK;
+}
+
 /* Builds, compiles and executes the graph of the view at position `pos` of the order. */
 static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
                         const de__render_world_frame *world, u32 pos, u64 frame_index) {
@@ -1170,7 +1199,9 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     de_rg_export(g, vf.output, DE_ACCESS_SHADER_READ);
 
     bool shadow_attempted = false;
-    de_result res = de__rg_finalize(g);
+    de_result res = material_sample_reads(r, vs, g, pos, vf.layer_mask);
+    if (res == DE_OK)
+        res = de__rg_finalize(g);
     if (res == DE_OK)
         res = de__rg_compile(g);
     if (res == DE_OK) {

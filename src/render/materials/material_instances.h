@@ -54,6 +54,7 @@ typedef struct de__material_instances de__material_instances;
 /** de__material_instances_create settings. */
 typedef struct de__material_instances_desc {
     const de_allocator *allocator;            /**< NULL = the heap */
+    de_gpu_device *device;                    /**< GPU texture leases (nullable for CPU tests) */
     struct de_asset_system *assets;           /**< asset materials (NULL: instances only) */
     struct de_render_uploader *uploader;      /**< its material epoch (NULL: none) */
     const struct de__material_models *models; /**< model names of DMAT model hashes (nullable) */
@@ -85,6 +86,9 @@ de_material de__material_instances_create_instance(de__material_instances *mi, d
 de_result de__material_instances_destroy_instance(de__material_instances *mi, de_material m);
 /** Live runtime instances. */
 u32 de__material_instances_live(const de__material_instances *mi);
+
+/** Number of live retained GPU bindings (main thread only). */
+u32 de__material_instances_gpu_bindings(const de__material_instances *mi);
 
 /** The change epoch: the uploader's (publishes, reloads, unloads) plus the pool's own (game model
  * registrations). Any thread. */

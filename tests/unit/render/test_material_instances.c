@@ -34,6 +34,7 @@
 #endif
 #define _CRT_SECURE_NO_WARNINGS /* layout_match reads material_params.slang with fopen */
 
+#include "de_alloc_guard.h"
 #include "de_test.h"
 
 #include <dengine/de_asset.h>
@@ -808,4 +809,138 @@ TEST_F(materials, material_mesh_default_slot, mfx) {
     de__material_params b;
     ASSERT_TRUE(block_of(f, f->mats[0], &b));
     EXPECT_EQ(b.flags & DE__MATERIAL_FLAG_READY, (u32)DE__MATERIAL_FLAG_READY);
+}
+
+/* DENG-533: borrowed GPU generations remain valid through instance use, cloning,
+ * transactional replacement, caller retirement, and renderer teardown. */
+TEST_F(materials, gpu_texture_override_ownership_clone_resize_and_stale_handles, mfx) {
+    start(f, "gpu_bindings", (start_opts){.materials = 1, .no_entities = true});
+    de_material instance = de_material_create_instance(f->r, f->mats[0]);
+    ASSERT_TRUE(instance.id);
+    de_gpu_texture old = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 32,
+                                     .height = 16,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_RENDER_TARGET});
+    ASSERT_TRUE(old.id);
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, old),
+              DE_OK);
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_EMISSIVE, old),
+              DE_OK);
+    EXPECT_EQ(de__material_instances_gpu_bindings(f->r->material_instances), 2u);
+    ASSERT_TRUE(spawn(f, instance, 0).bits);
+    frame(f);
+    de__material_params block;
+    ASSERT_TRUE(block_of(f, instance, &block));
+    u32 sampled = de_gpu_texture_bindless(f->d, old, 0, false);
+    EXPECT_EQ(de__material_params_texture(&block, DE_COOKED_TEX_BASE_COLOR), sampled);
+    EXPECT_EQ(de__material_params_texture(&block, DE_COOKED_TEX_EMISSIVE), sampled);
+    u32 count;
+    const de__material_sample *samples = de__gpu_scene_material_samples(f->r->gpu_scene, &count);
+    ASSERT_EQ(count, 1u);
+    EXPECT_EQ(samples[0].texture.id, old.id);
+    EXPECT_EQ(samples[0].layer_mask, 1u);
+    /* Every immutable world buffer needs its first populated allocation. */
+    for (u32 i = 0; i < DE__RW_MAX_FRAMES; ++i)
+        frame(f);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    for (u32 i = 0; i < 16; ++i)
+        frame(f);
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    de_material clone = de_material_create_instance(f->r, instance);
+    ASSERT_TRUE(clone.id);
+    EXPECT_EQ(de__material_instances_gpu_bindings(f->r->material_instances), 4u);
+    de_gpu_texture_destroy(f->d, old);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, old) != NULL);
+    /* Pending caller destruction prevents acquiring a new lease, not use of an
+     * existing binding. A failed clone must not consume a slot or release the base. */
+    u32 live = de__material_instances_live(f->r->material_instances);
+    EXPECT_EQ(de_material_create_instance(f->r, instance).id, 0u);
+    EXPECT_EQ(de__material_instances_live(f->r->material_instances), live);
+    de_gpu_texture resized = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 64,
+                                     .height = 32,
+                                     .format = DE_FMT_RGBA16_FLOAT,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_RENDER_TARGET});
+    ASSERT_TRUE(resized.id);
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, resized),
+              DE_OK);
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_EMISSIVE, resized),
+              DE_OK);
+    de_material_destroy_instance(f->r, clone);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, old) == NULL);
+    EXPECT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_NORMAL, old),
+              DE_ERR_INVALID_ARGUMENT);
+    de_standard_material params;
+    ASSERT_EQ(de_material_get_params(f->r, instance, &params), DE_OK);
+    params.roughness = .75f;
+    ASSERT_EQ(de_material_set_params(f->r, instance, &params), DE_OK);
+    frame(f);
+    ASSERT_TRUE(block_of(f, instance, &block));
+    EXPECT_EQ(de__material_params_texture(&block, DE_COOKED_TEX_BASE_COLOR),
+              de_gpu_texture_bindless(f->d, resized, 0, false));
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_EMISSIVE,
+                                          (de_gpu_texture){0}),
+              DE_OK);
+    EXPECT_EQ(de__material_instances_gpu_bindings(f->r->material_instances), 1u);
+    de_gpu_texture_destroy(f->d, resized);
+    de_material_destroy_instance(f->r, instance);
+    EXPECT_TRUE(de__gpu_get_texture(f->d, resized) == NULL);
+    EXPECT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR,
+                                          (de_gpu_texture){0}),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__material_instances_gpu_bindings(f->r->material_instances), 0u);
+}
+
+TEST_F(materials, gpu_texture_override_rejects_invalid_input_without_replacing_binding, mfx) {
+    start(f, "gpu_binding_errors", (start_opts){.materials = 1, .no_entities = true});
+    de_material instance = de_material_create_instance(f->r, f->mats[0]);
+    de_gpu_texture valid = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 16,
+                                     .height = 8,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_RENDER_TARGET});
+    ASSERT_TRUE(valid.id);
+    ASSERT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, valid),
+              DE_OK);
+    de_gpu_texture not_sampled =
+        de_gpu_texture_create(f->d, &(de_gpu_texture_desc){.width = 16,
+                                                           .height = 8,
+                                                           .format = DE_FMT_RGBA8_UNORM,
+                                                           .usage = DE_USAGE_RENDER_TARGET});
+    ASSERT_TRUE(not_sampled.id);
+    EXPECT_EQ(de_material_set_gpu_texture(NULL, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, valid),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_material_set_gpu_texture(f->r, f->mats[0], DE_MATERIAL_TEXTURE_BASE_COLOR, valid),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_material_set_gpu_texture(f->r, instance, (de_material_texture_slot)99, valid),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(
+        de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, not_sampled),
+        DE_ERR_INVALID_ARGUMENT);
+    de_render_material *rec = de__material_instances_get(f->r->material_instances, instance);
+    EXPECT_EQ(rec->gpu_textures[DE_COOKED_TEX_BASE_COLOR].id, valid.id);
+    EXPECT_EQ(de__gpu_get_texture(f->d, not_sampled)->leases, 0u);
+    de_gpu_texture integer = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 16,
+                                     .height = 8,
+                                     .format = DE_FMT_R32_UINT,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_RENDER_TARGET});
+    ASSERT_TRUE(integer.id);
+    EXPECT_EQ(de_material_set_gpu_texture(f->r, instance, DE_MATERIAL_TEXTURE_BASE_COLOR, integer),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__gpu_get_texture(f->d, integer)->leases, 0u);
+    de_gpu_texture_destroy(f->d, integer);
+    de_gpu_texture_destroy(f->d, not_sampled);
+    de_gpu_texture_destroy(f->d, valid);
+    /* Match uploader ownership: assets unload before their renderer is freed. */
+    de__render_world_wait_idle(f->r);
+    de_asset_system_destroy(f->s);
+    f->s = NULL;
+    /* Renderer teardown releases the binding after its scene and frames drain. */
+    de_renderer_destroy(f->r);
+    f->r = NULL;
+    EXPECT_TRUE(de__gpu_get_texture(f->d, valid) == NULL);
 }

@@ -263,6 +263,9 @@ typedef struct de_render_material {
     /** Per slot (de_cooked_tex_slot): the texture, its asset ID and texcoord set; invalid / {0}
      * for a slot without one. */
     de_texture textures[DE_COOKED_TEX_COUNT];
+    /* Runtime instances only: renderer-owned leases, never serialized/cooked. */
+    de_gpu_texture gpu_textures[DE_COOKED_TEX_COUNT];
+    u32 gpu_bindless[DE_COOKED_TEX_COUNT];
     de_asset_id texture_ids[DE_COOKED_TEX_COUNT];
     u8 texcoord[DE_COOKED_TEX_COUNT];
     de__render_retire retire_; /**< internal: the retire list (DENG-422) */
