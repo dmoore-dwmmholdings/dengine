@@ -6,7 +6,10 @@ if(TARGET de_ui)
 endif()
 
 if(TARGET test_ui_layout AND DE_BUILD_TOOLS)
- target_link_libraries(test_ui_layout PRIVATE de_cooker de_tp_stb de_tp_harfbuzz)
+ target_link_libraries(test_ui_layout PRIVATE de_cooker de_pack_lib de_tp_stb de_tp_harfbuzz)
+ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp")
+ target_compile_definitions(test_ui_layout PRIVATE
+  "DE_TEXT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp\"")
  target_include_directories(test_ui_layout PRIVATE "${DE_ROOT_DIR}/tools")
  target_compile_definitions(test_ui_layout PRIVATE DE_UI_TEST_FONTS=1 "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
 endif()

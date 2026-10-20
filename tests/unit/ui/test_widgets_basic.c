@@ -189,6 +189,10 @@ TEST_F(ui_widgets, real_locale_ready_switch_updates_labels_and_only_localized_me
     ASSERT_EQ(de_file_write_all_atomic("uilocale:/assets.toml", manifest, strlen(manifest)), DE_OK);
     u64 initial = de_loc_generation(fonts.t);
     ASSERT_EQ(de_asset_manifest_load(fonts.assets, "uilocale:/assets.toml"), DE_OK);
+    char locale_pack[256] = {0};
+#if !DE_HAS_COOKER
+    text_fixture_pack(fonts.assets, "uilocale:/", locale_pack);
+#endif
     locale_wait_public(&fonts, initial + 1);
     f->ui->desc.text = fonts.t;
     de_entity root = ui_node(f, (de_entity){0});
@@ -228,6 +232,7 @@ TEST_F(ui_widgets, real_locale_ready_switch_updates_labels_and_only_localized_me
     f->ui->desc.text = NULL;
     /* Exercise the shared fixture with active localization requests. */
     runtime_fx_teardown(&fonts);
+    text_fixture_pack_cleanup(locale_pack);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/en.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/pt.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main"), DE_OK);
