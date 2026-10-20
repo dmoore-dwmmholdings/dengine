@@ -802,11 +802,10 @@ bool de__d3d12_accel_translate(de_gpu_cmd *, de__gpu_buffer *, de__gpu_buffer *,
                                u32, u32);
 void de__d3d12_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
 void de__d3d12_accel_dependency(de_gpu_cmd *);
-#endif /* _WIN32 */
-
 de_result de__d3d12_rt_pipeline_create(de_gpu_device *, de__gpu_pipeline *,
                                        const de_gpu_pipeline_desc *);
 void de__d3d12_cmd_set_rt_pipeline(de_gpu_cmd *, de__gpu_pipeline *);
 void de__d3d12_cmd_dispatch_rays(de_gpu_cmd *, u32, u32, u32);
+#endif /* _WIN32 */
 
 #endif

@@ -278,7 +278,14 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
         u32 end = start;
         while (end < count && !hard_cp(cp[end]))
             ++end;
+        u32 first_cluster = l->cluster_count;
         if (end == start) {
+            /* Blank lines and trailing newlines need a caret/hit-test target too. */
+            u32 next = end < count ? end + 1 : end;
+            if (end < count && cp[end] == '\r' && next < count && cp[next] == '\n')
+                ++next;
+            l->clusters[l->cluster_count++] = (de__layout_cluster){
+                .start = offsets[start], .end = offsets[next], .line = l->line_count};
             ++l->line_count;
         } else {
             de__bidi bidi;
@@ -304,7 +311,10 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
                 u32 stop = end, last_break = line, last_cluster = line;
                 if (d->max_width > 0)
                     for (u32 i = line; i < end; ++i) {
-                        if (prefix[i + 1] - prefix[line] > d->max_width && last_cluster > line) {
+                        /* Trailing blanks are discarded by place_line. They must still
+                         * publish their break before the next visible glyph overflows. */
+                        if (cp[i] != ' ' && cp[i] != '\t' &&
+                            prefix[i + 1] - prefix[line] > d->max_width && last_cluster > line) {
                             stop = last_break > line ? last_break : last_cluster;
                             break;
                         }
@@ -326,6 +336,22 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
                 line = stop;
             }
             de__text_bidi_free(&bidi);
+            if (end < count) {
+                const de__layout_cluster *last = NULL;
+                for (u32 i = first_cluster; i < l->cluster_count; ++i)
+                    if (l->clusters[i].line == l->line_count - 1 &&
+                        (!last || l->clusters[i].end > last->end))
+                        last = &l->clusters[i];
+                u32 next = end + 1;
+                if (cp[end] == '\r' && next < count && cp[next] == '\n')
+                    ++next;
+                l->clusters[l->cluster_count++] =
+                    (de__layout_cluster){.start = offsets[end],
+                                         .end = offsets[next],
+                                         .line = l->line_count - 1,
+                                         .x0 = last ? (last->rtl ? last->x0 : last->x1) : 0,
+                                         .x1 = last ? (last->rtl ? last->x0 : last->x1) : 0};
+            }
         }
         if (end == count)
             break;

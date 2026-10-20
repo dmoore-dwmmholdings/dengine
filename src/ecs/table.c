@@ -5,6 +5,7 @@
  * chunk 0 rows 0..n, chunk 1 rows 0..n, ... in that order (the SPEC §5.7 rule 5 order). Chunks
  * come from the world's de_pool; an emptied last chunk goes back to it at once. */
 #include "ecs_internal.h"
+#include "system_internal.h"
 
 de_result ecs_table_push_row(de_world *w, ecs_archetype *a, de_entity e, u32 *out_chunk,
                              u32 *out_row) {
@@ -124,6 +125,9 @@ de_result ecs_entity_move(de_world *w, de_entity e, ecs_archetype *dst) {
 
 void ecs_row_init_ticks(de_world *w, ecs_archetype *a, u32 chunk, u32 row, u32 column) {
     const ecs_chunk *ch = ecs_table_chunk(a, chunk);
-    ecs_chunk_added(a, ch, column)[row] = w->change_tick;
-    ecs_chunk_changed(a, ch, column)[row] = w->change_tick;
+    /* Immediate adds in exclusive systems use their run tick, just like mutable gets.
+     * Deferred adds at the sync point still use the world tick and are seen next run. */
+    const u32 tick = ecs_system_stamp_tick(w);
+    ecs_chunk_added(a, ch, column)[row] = tick;
+    ecs_chunk_changed(a, ch, column)[row] = tick;
 }

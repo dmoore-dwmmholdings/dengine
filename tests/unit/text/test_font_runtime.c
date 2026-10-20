@@ -1,4 +1,5 @@
 #include "runtime_test_util.h"
+#include <hb-ot.h>
 TEST_F(font_runtime, loader_metrics_and_dirty, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->latin);
     ASSERT_TRUE(font != NULL);
@@ -115,4 +116,53 @@ TEST_F(font_runtime, real_reload_pipeline, runtime_fx) {
     EXPECT_GT(now->generation, generation);
     ASSERT_TRUE(de_text__resolve(f->t, f->latin, 'A', &out, &gid));
     EXPECT_EQ(gid, de_text__codepoint(now, 'A'));
+}
+
+TEST(font_runtime, immutable_source_lease_and_decode_allocation_failures) {
+    const char *ranges[] = {"65-65"};
+    de__manifest_kv settings = {.key = "ranges",
+                                .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {ranges, 1}}};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(font_cook("NotoSans.ttf", &settings, 1, &cooked), DE_OK);
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_UI);
+    for (i64 budget = 0; budget < 2; ++budget) {
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_text_font *font = NULL;
+        EXPECT_EQ(de_text__font_decode(&alloc, cooked.data, cooked.size, &font),
+                  DE_ERR_OUT_OF_MEMORY);
+        EXPECT_TRUE(font == NULL);
+        EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+        EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    }
+    de_tracking_allocator_fail_after(&tracking, -1);
+    de_text_font *font = NULL;
+    ASSERT_EQ(de_text__font_decode(&alloc, cooked.data, cooked.size, &font), DE_OK);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 2u);
+    de__font_source_ref(font->source_owner);
+    hb_blob_t *blob =
+        hb_blob_create((const char *)font->source, font->source_size, HB_MEMORY_MODE_READONLY,
+                       font->source_owner, de__font_source_unref);
+    unsigned bytes = 0;
+    EXPECT_TRUE(hb_blob_get_data(blob, &bytes) == (const char *)font->source);
+    EXPECT_EQ(bytes, font->source_size);
+    de_text__font_free(font);
+    /* The atlas/decoded generation is gone; the immutable source alone lives
+     * until the final HarfBuzz reference is released. */
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 1u);
+    hb_face_t *face = hb_face_create(blob, 0);
+    hb_font_t *shaping = hb_font_create(face);
+    hb_ot_font_set_funcs(shaping);
+    hb_buffer_t *buffer = hb_buffer_create();
+    hb_buffer_add_utf8(buffer, "office", 6, 0, 6);
+    hb_buffer_guess_segment_properties(buffer);
+    hb_shape(shaping, buffer, NULL, 0);
+    EXPECT_EQ(hb_buffer_get_length(buffer), 4u);
+    hb_buffer_destroy(buffer);
+    hb_font_destroy(shaping);
+    hb_face_destroy(face);
+    hb_blob_destroy(blob);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    de_cook_result_free(&cooked);
 }

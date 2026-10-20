@@ -80,7 +80,7 @@ static void stage(de__view_frame *vf, void *user) {
                            .ih = vf->pixel_art->internal_height,
                            .rect = {layout.x, layout.y, layout.width, layout.height},
                            .residual = {vf->pixel_residual.x, -vf->pixel_residual.y},
-                           .border = vf->pixel_art->smooth_subpixel_scroll ? 1 : 0,
+                           .border = vf->pixel_art->smooth_subpixel_scroll ? 1.f : 0.f,
                            .integer_only = vf->pixel_art->integer_scale_only};
     memcpy(p->push.clear, &vf->pixel_art->letterbox_color, sizeof p->push.clear);
     if (!vf->pixel_art->smooth_subpixel_scroll)

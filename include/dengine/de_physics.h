@@ -1110,7 +1110,8 @@ DE_API void de_physics2d_step(de_physics2d_world *p, f32 dt);
 /**
  * XXH3-64 of the simulation state: the tick, gravity, substeps, plane, every live body in
  * ascending index order, then (after the first step) the contact manifolds in key order and the
- * contacts that ended in the last step, field by field (never raw struct bytes). Equal states give
+ * contacts that ended in the last step, then live joints (resolved body links, normalized
+ * settings and persistent impulses), field by field (never raw struct bytes). Equal states give
  * equal values on every platform. 0 for NULL.
  */
 DE_API u64 de_physics2d_checksum(const de_physics2d_world *p);

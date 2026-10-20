@@ -196,3 +196,16 @@ TEST(settings_hash, encoding) {
     put32(empty + 8, 0);
     EXPECT_EQ(de_cook_settings_hash(NULL, 0), de_hash64(empty, sizeof empty, 0));
 }
+
+TEST(settings_hash, nested_arrays_preserve_types_shape_and_order) {
+    u64 h = hash_of("[assets.a]\ntype='t'\nsource='s'\nranges=[[256,591],[65,67]]\n", "a");
+    EXPECT_EQ(
+        h, hash_of("[assets.a]\ntype='t'\nsource='s'\nranges = [ [0x100,0x24f], [65,67] ]\n", "a"));
+    const char *different[] = {"[[256,592],[65,67]]", "[[65,67],[256,591]]", "[256,591,65,67]",
+                               "[[256.0,591],[65,67]]", "['256-591','65-67']"};
+    for (u32 i = 0; i < (sizeof different / sizeof different[0]); ++i) {
+        char text[256];
+        snprintf(text, sizeof text, "[assets.a]\ntype='t'\nsource='s'\nranges=%s\n", different[i]);
+        EXPECT_NE(h, hash_of(text, "a"));
+    }
+}

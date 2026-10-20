@@ -244,3 +244,20 @@ TEST(manifest_diff, reverse_index) {
     de__rindex_free(&ix);
     EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
 }
+
+TEST(manifest_diff, nested_numeric_range_change) {
+    de_tracking_allocator track;
+    de_allocator a = de_tracking_allocator_init(&track, NULL, DE_MEM_ASSET);
+    md_parsed old = {0}, new = {0};
+    md_parse(&old, &a, "[assets.a]\ntype='font'\nsource='font.ttf'\nranges=[[256,591]]\n");
+    md_parse(&new, &a, "[assets.a]\ntype='font'\nsource='font.ttf'\nranges=[[256,592]]\n");
+    de__manifest_change *changes = NULL;
+    u32 count = 0;
+    ASSERT_EQ(de__manifest_diff(&old.d, &new.d, &a, &changes, &count), DE_OK);
+    ASSERT_EQ(count, 1u);
+    EXPECT_EQ(changes[0].what, (u32)DE__MANIFEST_CHANGED_SETTINGS);
+    DE_FREE(&a, changes, sizeof *changes * count);
+    md_free(&old);
+    md_free(&new);
+    EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
+}

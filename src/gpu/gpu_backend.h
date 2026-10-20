@@ -72,6 +72,8 @@ typedef struct de__gpu_buffer {
 } de__gpu_buffer;
 
 typedef struct de__gpu_texture {
+    u32 leases; /* texture_lease_lock; CPU packets not yet represented by queue fences */
+    bool destroy_requested;
     de_gpu_texture_dim dim;
     de_gpu_format format;
     u32 width, height, depth_or_layers, mip_count, sample_count, usage; /**< defaults applied */
@@ -215,6 +217,9 @@ typedef struct de__gpu_backend_vtable {
     de_result (*texture_create)(de_gpu_device *d, de__gpu_texture *t,
                                 const de_gpu_texture_desc *desc);
     void (*texture_destroy)(de_gpu_device *d, de__gpu_texture *t);
+    /* Logical retirement: stop naming this texture in future residency declarations.
+     * Descriptors and backend storage must survive until texture_destroy after queue fences. */
+    void (*texture_retire)(de_gpu_device *d, de__gpu_texture *t);
     de_result (*sampler_create)(de_gpu_device *d, de__gpu_sampler *s,
                                 const de_gpu_sampler_desc *desc);
     void (*sampler_destroy)(de_gpu_device *d, de__gpu_sampler *s);
@@ -547,6 +552,7 @@ struct de_gpu_device {
     de_mutex submit_lock[DE_QUEUE_COUNT_];
     de_atomic_u64 submitted[DE_QUEUE_COUNT_]; /**< internal timeline value of the last submit */
     de_mutex cmd_lock;
+    de_mutex texture_lease_lock;
     de_gpu_cmd *cmd_free[DE_QUEUE_COUNT_];
     de_gpu_cmd *cmd_inflight_head[DE_QUEUE_COUNT_], *cmd_inflight_tail[DE_QUEUE_COUNT_];
     de_gpu_cmd *cmd_all;

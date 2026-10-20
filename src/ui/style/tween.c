@@ -30,7 +30,8 @@ f32 de_ui__ease(de_ui_easing easing, f32 t) {
     }
 }
 de_result de_ui__tween_field(de_ui_style_system *state, de_entity entity, de_component component,
-                             u32 offset, f32 value, f32 seconds, de_ui_easing easing) {
+                             u32 offset, f32 value, f32 seconds, de_ui_easing easing,
+                             bool stylesheet) {
     if (!state || !isfinite(value) || !isfinite(seconds) || seconds < 0 ||
         (u32)easing > DE_UI_EASE_ELASTIC_OUT)
         return DE_ERR_INVALID_ARGUMENT;
@@ -60,7 +61,8 @@ de_result de_ui__tween_field(de_ui_style_system *state, de_entity entity, de_com
                                 .to = value,
                                 .duration = seconds,
                                 .easing = easing,
-                                .active = seconds > 0};
+                                .active = seconds > 0,
+                                .stylesheet = stylesheet};
     if (seconds == 0) {
         u8 *dst = de_entity_get(state->ui->world, entity, component);
         memcpy(dst + offset, &value, sizeof value);
@@ -83,6 +85,9 @@ void de_ui__tweens_tick(de_ui_style_system *state, f32 dt) {
         f32 value = t->from + (t->to - t->from) * de_ui__ease(t->easing, t->elapsed / t->duration);
         u8 *dst = de_entity_get(state->ui->world, t->entity, t->component);
         memcpy(dst + t->offset, &value, sizeof value);
+        /* Intermediate automatic values are applied output, never new authored defaults. */
+        if (t->stylesheet)
+            de_ui__style_tween_sample(state, t->entity, t->component, t->offset, value);
         if (t->elapsed >= t->duration)
             t->active = false;
         else
@@ -118,7 +123,7 @@ de_result de_ui__tween_path(de_ui *ui, de_entity entity, const char *property, f
         return result;
     if (!field || field->kind != DE_FK_F32)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "UI tween target must be f32");
-    return de_ui__tween_field(ui->style, entity, component, offset, to, seconds, easing);
+    return de_ui__tween_field(ui->style, entity, component, offset, to, seconds, easing, false);
 }
 
 void de_ui_tween(de_ui *ui, de_entity entity, const char *property, f32 to, f32 seconds,

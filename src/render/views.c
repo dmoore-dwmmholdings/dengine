@@ -75,6 +75,7 @@ typedef struct view_rs {
     u64 executed;
     bool has_prev;
     de_mat4 prev_view_proj;
+    de__pixel_snap_grid prev_pixel_grid;
     bool failed_logged; /**< the last failure was logged; reset by a frame that works */
     /* This frame: */
     bool active;
@@ -1057,6 +1058,10 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->failed_logged = true;
         return;
     }
+    if (!s->copy.capture && de__pt_prepare(r, &s->eff) != DE_OK) {
+        view_failed(r, s, "path tracer pipelines");
+        return;
+    }
     if (!ensure_objects(r, s))
         return;
 
@@ -1092,6 +1097,16 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         vf.pixel_residual = frozen->pixel_residual;
     }
     vf.prev_view_proj = s->has_prev ? s->prev_view_proj : vf.view_proj;
+    if (vf.pixel_art && vf.pixel_art->snap_sprites) {
+        vf.pixel_grid = (de__pixel_snap_grid){
+            .camera = {world->origin.x + vf.camera->offset.x, world->origin.y + vf.camera->offset.y,
+                       world->origin.z + vf.camera->offset.z},
+            .texel = (vf.camera->camera.ortho_height > 0 ? vf.camera->camera.ortho_height : 10) /
+                     vf.pixel_art->internal_height,
+            .plane = r->plane_2d,
+            .enabled = true};
+    }
+    vf.prev_pixel_grid = s->has_prev ? s->prev_pixel_grid : vf.pixel_grid;
     const u32 t_access = rtt ? target_access_before(vs, slot, pos) : DE_ACCESS_NONE;
     de_rg_resource target_res = {0};
     if (rtt) {
@@ -1197,6 +1212,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     s->failed_logged = false;
     ++s->executed;
     s->prev_view_proj = vf.view_proj;
+    s->prev_pixel_grid = vf.pixel_grid;
     s->has_prev = true;
 }
 

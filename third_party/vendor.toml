@@ -83,7 +83,8 @@ sha256 = "48876f14bd7a123f95f16074dd0d5681f75c397c1bce61f1a52f42201f90eacc"
 license = "MIT"
 files = ["src/tomlc17.c", "src/tomlc17.h"]
 # UBSan fix in page_create() (null-pointer member access); see the patch header. DENG-356.
-patches = ["patches/0001-page-create-offsetof.patch"]
+# Per-parse opt-in duplicate assignment policy for localization (DENG-509).
+patches = ["patches/0001-page-create-offsetof.patch", "patches/0002-per-parse-duplicate-policy.patch"]
 
 [[lib]]
 name = "stb"
@@ -97,7 +98,12 @@ license = "MIT OR Unlicense"
 files = ["stb_image.h", "stb_vorbis.c", "stb_image_write.h", "stb_truetype.h"]
 # DENG-435: valid empty IDAT chunks must not form a null destination for a zero-byte read.
 # DENG-480: reject overflowing Vorbis comment lengths and arena allocations.
-patches = ["patches/0001-png-empty-idat.patch", "patches/0002-vorbis-comment-lengths.patch"]
+# DENG-494: reconstruct Vorbis seek CRC/sample positions with unsigned high-byte shifts.
+patches = [
+    "patches/0001-png-empty-idat.patch",
+    "patches/0002-vorbis-comment-lengths.patch",
+    "patches/0003-vorbis-seek-u32.patch",
+]
 
 [[lib]]
 name = "sdl3"
@@ -574,3 +580,15 @@ files = ["common/supplemental/plurals.xml", "common/supplemental/numberingSystem
     "common/main/zh_Hans.xml",
     "common/main/zh_Hant.xml"
 ]
+
+# Joe-Kuo mathematical direction data only; no SciPy library or Python runtime.
+[[lib]]
+name = "sobol"
+version = "2020-12-21-b342fde2462c"
+url = "https://api.github.com/repos/scipy/scipy/tarball/b342fde2462c9edbffda34502c719a424b4783cb"
+sha256 = "280dc309384e066cebd4dea8221b74630d840014ce5822f05243de93e62c412c"
+license = "BSD-3-Clause"
+license_file = "LICENSE.txt"
+files = ["scipy/stats/_sobol_direction_numbers.npz"]
+local = ["JOE_KUO_LICENSE"]
+notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matrix; no runtime dependency."

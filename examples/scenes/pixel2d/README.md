@@ -45,9 +45,9 @@ is 0.001 and p99 is 0.015. CTests have `golden;pixel2d;gpu` labels.
 
 Metal references live in `tests/golden/refs/metal/{base,rt}` and were captured on
 Apple M5 Pro. Vulkan and D3D12 are **needs-hw-verify**; no references from those
-backends are invented. RT additionally requires hardware ray query. Base shadow
-softness/banding and RT numerical defects inherited from prior rendering work
-remain visible rather than being hidden by scene-specific shaders.
+backends are invented. RT additionally requires hardware ray query. The Base horizontal-striping defect is fixed by the shared orthographic lighting
+reconstruction (DENG-506). The separate RT image-comparison discrepancy remains
+described below.
 
 Negative controls (run without `--update-refs`) select intentionally changed
 inputs, never a committed broken renderer:
@@ -62,11 +62,23 @@ layer/order values, equivalent to reversing the dominant sort-key fields.
 Spatial edge/coverage checks also reject blank or flat-color captures before
 reference comparison.
 
-Verification on the reference host: all six native captures were visually
-reviewed. Negative snapping changed FLIP mean to 0.006452 / p99 0.152312;
-reversed sort inputs changed mean to 0.002191 / p99 0.100163, both failing the
-original thresholds. The validation-enabled CTest Base case timed out during
-pipeline setup at 300.03 seconds (DENG-508); the remaining instrumented batch was
-cancelled. Its checked-in environment is preserved. This is a separate result
-from direct native image comparisons, not an instrumented-suite pass. Base
-horizontal striping is tracked by DENG-506.
+Verification on the reference host: the five Base captures were visually reviewed
+and refreshed after DENG-506. With a 100 km orthographic far plane, reconstructing
+nearby receivers through the combined inverse view-projection lost enough precision
+to place them behind their own shadow maps. Lighting now undoes projection before
+the rigid camera transform. Shadow biases, quality settings, scene inputs and FLIP
+thresholds are unchanged.
+
+The rotated-camera GPU regression changes 36,864 falsely shadowed receivers to
+zero for both PCF and PCSS, and an added blocker must still cast a real shadow.
+The shadow suite passes 13 native tests in Dev and ASan/UBSan; 20 unavailable-backend
+cases skip on the Metal host. All five Base goldens pass with API and shader
+validation enabled, with byte-identical independent captures. The Base 4× golden
+also passes under ASan/UBSan with both validation layers enabled. The original
+300-second CTest limits remain in place.
+
+The snapping negative control fails at FLIP mean 0.015315 / p99 0.469646;
+reversed sorting fails at mean 0.002215 / p99 0.100163, against the original
+thresholds. The separate RT golden still fails at mean 0.009874 / p99 0.356973;
+its RGBA output is identical before and after this reconstruction fix, and its
+reference is unchanged.

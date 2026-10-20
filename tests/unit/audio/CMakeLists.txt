@@ -66,10 +66,19 @@ if(TARGET de_audio AND APPLE)
 endif()
 if(TARGET test_audio_coreaudio)
     # Discovery happens after linking, so apply hardware serialization when CTest loads it.
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake"
-        "if(TEST audio_coreaudio.default_device_one_second_440hz_full_mixer)\n"
-        "set_tests_properties(audio_coreaudio.default_device_one_second_440hz_full_mixer audio_coreaudio.uid_switch_and_listener_reopen_monotonic_within_500ms PROPERTIES RUN_SERIAL TRUE)\n"
-        "endif()\n")
+    # CTest's include interpreter does not expose registered tests to if(TEST).
+    # Read the discovery file, as the task timing tests do, before setting properties.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_audio_adds
+         REGEX "^add_test\\(\\[==\\[audio_coreaudio\\.(default_device_one_second_440hz_full_mixer|uid_switch_and_listener_reopen_monotonic_within_500ms)")
+    foreach(_de_line IN LISTS _de_audio_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
         "${CMAKE_CURRENT_BINARY_DIR}/coreaudio_properties.cmake")
 endif()

@@ -32,35 +32,37 @@ static u64 mix_u64(u64 h, u64 v) {
     return mix(h, &v, sizeof v);
 }
 
+static u64 value_hash(u64 h, const de__manifest_value *value) {
+    h = mix_u64(h, (u64)value->type);
+    switch (value->type) {
+    case DE__MANIFEST_BOOL:
+        return mix_u64(h, value->u.b ? 1u : 0u);
+    case DE__MANIFEST_INT:
+        return mix_u64(h, (u64)value->u.i);
+    case DE__MANIFEST_FLOAT: {
+        u64 bits;
+        memcpy(&bits, &value->u.f, sizeof bits);
+        return mix_u64(h, bits);
+    }
+    case DE__MANIFEST_STRING:
+        return mix_str(h, value->u.s);
+    case DE__MANIFEST_STRING_ARRAY:
+        h = mix_u64(h, value->u.arr.count);
+        for (u32 i = 0; i < value->u.arr.count; ++i)
+            h = mix_str(h, value->u.arr.items[i]);
+        return h;
+    case DE__MANIFEST_ARRAY:
+        h = mix_u64(h, value->u.values.count);
+        for (u32 i = 0; i < value->u.values.count; ++i)
+            h = value_hash(h, &value->u.values.items[i]);
+        return h;
+    }
+    return h;
+}
 static u64 settings_hash(const de__manifest_asset *a) {
     u64 h = mix_u64(0x5e771265ull, a->setting_count);
-    for (u32 i = 0; i < a->setting_count; ++i) {
-        const de__manifest_kv *kv = &a->settings[i];
-        h = mix_str(h, kv->key);
-        h = mix_u64(h, (u64)kv->value.type);
-        switch (kv->value.type) {
-        case DE__MANIFEST_BOOL:
-            h = mix_u64(h, kv->value.u.b ? 1u : 0u);
-            break;
-        case DE__MANIFEST_INT:
-            h = mix_u64(h, (u64)kv->value.u.i);
-            break;
-        case DE__MANIFEST_FLOAT: {
-            u64 bits;
-            memcpy(&bits, &kv->value.u.f, sizeof bits); /* -0.0 and 0.0 differ, as in the cooker */
-            h = mix_u64(h, bits);
-            break;
-        }
-        case DE__MANIFEST_STRING:
-            h = mix_str(h, kv->value.u.s);
-            break;
-        case DE__MANIFEST_STRING_ARRAY:
-            h = mix_u64(h, kv->value.u.arr.count);
-            for (u32 k = 0; k < kv->value.u.arr.count; ++k)
-                h = mix_str(h, kv->value.u.arr.items[k]);
-            break;
-        }
-    }
+    for (u32 i = 0; i < a->setting_count; ++i)
+        h = value_hash(mix_str(h, a->settings[i].key), &a->settings[i].value);
     return h;
 }
 

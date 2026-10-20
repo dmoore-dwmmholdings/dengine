@@ -11,11 +11,29 @@ struct de__pixel_snapshots {
         u32 capacity;
     } views[DE__VIEW_MAX][DE__RENDER_MAX_FRAMES_IN_FLIGHT];
 };
+static de_vec3 snap_delta(const de_affine *m, const DeSprite *sprite, de_dvec3 origin,
+                          const de__pixel_snap_grid *grid) {
+    if (!grid->enabled)
+        return (de_vec3){0};
+    de_dvec3 relative = {origin.x + m->m[9] + m->m[0] * sprite->pivot.x +
+                             m->m[3] * sprite->pivot.y - grid->camera.x,
+                         origin.y + m->m[10] + m->m[1] * sprite->pivot.x +
+                             m->m[4] * sprite->pivot.y - grid->camera.y,
+                         origin.z + m->m[11] + m->m[2] * sprite->pivot.x +
+                             m->m[5] * sprite->pivot.y - grid->camera.z};
+    de_vec2 ignored;
+    de_dvec3 snapped = de__pixel_snap(relative, grid->plane, grid->texel, &ignored);
+    return (de_vec3){(f32)(snapped.x - relative.x), (f32)(snapped.y - relative.y),
+                     (f32)(snapped.z - relative.z)};
+}
 static void snap_stage(de__view_frame *vf, void *user) {
     de__pixel_snapshots *owner = user;
     de_renderer *r = owner->r;
     de__gpu_scene_view_instances(r->gpu_scene, (de_gpu_buffer){0});
-    if (!vf->pixel_art || !vf->pixel_art->snap_sprites || !vf->world || !vf->camera)
+    bool current_snap = vf->pixel_grid.enabled;
+    /* Record actual application, including allocation failure, for the next frame. */
+    vf->pixel_grid.enabled = false;
+    if ((!current_snap && !vf->prev_pixel_grid.enabled) || !vf->world)
         return;
     u32 slot = (vf->view.id & 255u) - 1u, ring = (u32)(vf->frame_index % r->frames_in_flight);
     if (slot >= DE__VIEW_MAX)
@@ -40,35 +58,29 @@ static void snap_stage(de__view_frame *vf, void *user) {
     }
     de_gpu_buffer buffer = owner->views[slot][ring].buffer;
     de__gs_instance *instances = de_gpu_buffer_map(r->dev, buffer);
-    f64 texel = (vf->camera->camera.ortho_height > 0 ? vf->camera->camera.ortho_height : 10) /
-                vf->pixel_art->internal_height;
+    if (!instances)
+        return;
+    de__pixel_snap_grid current = vf->pixel_grid;
+    current.enabled = current_snap;
     const de__rw_instances *src = &vf->world->instances;
-    de_dvec3 camera = {vf->world->origin.x + vf->camera->offset.x,
-                       vf->world->origin.y + vf->camera->offset.y,
-                       vf->world->origin.z + vf->camera->offset.z};
     for (u32 i = 0; i < count; ++i) {
         de__gpu_scene_pack_frame_instance(r->gpu_scene, vf->world, i, &instances[i]);
         if (!src->entity[i] || !(src->flags[i] & DE__RW_INST_SPRITE))
             continue;
         const DeSprite *sprite = &src->sprite[i];
-        const de_affine *m = &src->transform[i];
-        de_dvec3 position = {
-            vf->world->origin.x + m->m[9] + m->m[0] * sprite->pivot.x + m->m[3] * sprite->pivot.y,
-            vf->world->origin.y + m->m[10] + m->m[1] * sprite->pivot.x + m->m[4] * sprite->pivot.y,
-            vf->world->origin.z + m->m[11] + m->m[2] * sprite->pivot.x + m->m[5] * sprite->pivot.y};
-        de_dvec3 relative = {position.x - camera.x, position.y - camera.y, position.z - camera.z};
-        de_vec2 ignored;
-        de_dvec3 snapped = de__pixel_snap(relative, r->plane_2d, texel, &ignored);
-        f32 delta[3] = {(f32)(snapped.x - relative.x), (f32)(snapped.y - relative.y),
-                        (f32)(snapped.z - relative.z)};
+        de_vec3 a = snap_delta(&src->transform[i], sprite, vf->world->origin, &current);
+        de_vec3 b =
+            snap_delta(&src->prev_transform[i], sprite, vf->world->origin, &vf->prev_pixel_grid);
+        f32 delta[3] = {a.x, a.y, a.z}, previous_delta[3] = {b.x, b.y, b.z};
         for (u32 axis = 0; axis < 3; ++axis) {
             instances[i].transform[axis].v[3] += delta[axis];
-            instances[i].prev_transform[axis].v[3] += delta[axis];
+            instances[i].prev_transform[axis].v[3] += previous_delta[axis];
             instances[i].aabb_min.v[axis] += delta[axis];
             instances[i].aabb_max.v[axis] += delta[axis];
             instances[i].sphere.v[axis] += delta[axis];
         }
     }
+    vf->pixel_grid.enabled = current_snap;
     de__gpu_scene_view_instances(r->gpu_scene, buffer);
 }
 de_result de__pixel_snapshots_create(de_renderer *r, de__pixel_snapshots **out) {

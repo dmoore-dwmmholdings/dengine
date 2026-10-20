@@ -1,9 +1,55 @@
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "ui_test_util.h"
 #include "ui/binding/binding_internal.h"
+#include "ui/style/stylesheet_internal.h"
 #include "de_alloc_guard.h"
 #include <float.h>
 #include <limits.h>
 #include <stdio.h>
+
+typedef struct binding_alloc_failure {
+    u32 calls, fail_at, live;
+} binding_alloc_failure;
+static void *binding_failure_alloc(void *user, size_t size, size_t align, u32 tag) {
+    binding_alloc_failure *s = user;
+    if (s->calls++ == s->fail_at) {
+        (void)DE_FAIL(DE_ERR_OUT_OF_MEMORY, "injected binding allocation failure");
+        return NULL;
+    }
+    void *p = DE_ALLOC(de_heap_allocator(), size, align, tag);
+    if (p) {
+        ++s->live;
+        memset(p, 0xa5, size);
+    }
+    return p;
+}
+static void binding_failure_free(void *user, void *ptr, size_t size) {
+    binding_alloc_failure *s = user;
+    if (ptr) {
+        EXPECT_GT(s->live, 0u);
+        --s->live;
+        DE_FREE(de_heap_allocator(), ptr, size);
+    }
+}
+TEST(ui_binding, partial_initialization_allocation_failures_unwind) {
+    for (u32 at = 0; at < 4; ++at) {
+        binding_alloc_failure state = {.fail_at = at};
+        de_allocator allocator = {
+            .alloc = binding_failure_alloc, .free = binding_failure_free, .user = &state};
+        de_ui ui = {.alloc = &allocator, .capacity = 8, .hash_capacity = 16};
+        EXPECT_EQ(de_ui__binding_init(&ui), at < 3 ? DE_ERR_OUT_OF_MEMORY : DE_OK);
+        de_ui__binding_shutdown(&ui);
+        EXPECT_TRUE(ui.binding == NULL);
+        EXPECT_EQ(state.live, 0u);
+        /* Cleanup is idempotent after each failed or successful initialization. */
+        de_ui__binding_shutdown(&ui);
+    }
+}
 
 typedef struct bind_item {
     i32 count;
@@ -133,6 +179,59 @@ static de_entity bound(bind_fx *f, const char *field, const char *property, de_u
 static const DeUiText *label(bind_fx *f, de_entity e) {
     return de_entity_get_const(f->ui.world, e, f->ui.ui->ids.text);
 }
+TEST_F(ui_binding, visual_bindings_override_default_state_and_theme_without_idle_writes, bind_fx) {
+    de_ui *ui = f->ui.ui;
+    ASSERT_GT(ui->style->builtin_count, 0u);
+    const char *sheet = "[vars]\naccent='#ff0000'\n[theme.dark.vars]\naccent='#00ff00'\n"
+                        "[style.text]\ntext_color='$accent'\n"
+                        "[style.\"text:hover\"]\ntext_color='#ffff00'\n"
+                        "[style.button]\nopacity=0.25\n"
+                        "[style.\"button:hover\"]\nopacity=0.1";
+    ASSERT_EQ(de_ui__load_stylesheet_source(ui, sheet, strlen(sheet), false), DE_OK);
+    de_entity text = bound(f, "tint", "tint", DE_UI_BIND_ONE_WAY, ui->ids.text);
+    de_entity button = bound(f, "precise", "opacity", DE_UI_BIND_ONE_WAY, ui->widgets->button);
+    for (u32 step = 0; step < 4; ++step) {
+        if (step == 1) {
+            ((DeUiInteractionState *)de_entity_add(f->ui.world, text, ui->ids.state))->hovered =
+                true;
+            ((DeUiInteractionState *)de_entity_add(f->ui.world, button, ui->ids.state))->hovered =
+                true;
+        } else if (step == 2)
+            ASSERT_EQ(de_ui_set_theme(ui, "dark"), DE_OK);
+        else if (step == 3) {
+            bind_data *data = de_entity_get(f->ui.world, f->source, f->data);
+            data->precise = .375;
+            data->tint = (de_vec4){.7f, .6f, .5f, 1};
+        }
+        ui_frame(&f->ui);
+        const bind_data *data = de_entity_get_const(f->ui.world, f->source, f->data);
+        const DeUiStyle *text_style = de_entity_get_const(f->ui.world, text, ui->ids.style);
+        const DeUiStyle *button_style = de_entity_get_const(f->ui.world, button, ui->ids.style);
+        ASSERT_TRUE(text_style && button_style);
+        EXPECT_TRUE(memcmp(&text_style->text_color, &data->tint, sizeof data->tint) == 0);
+        EXPECT_FLOAT_EQ(button_style->opacity, data->precise, .00001f);
+    }
+    /* Let unrelated default background/border transitions settle before the idle guard. */
+    for (u32 i = 0; i < 12; ++i)
+        ui_frame(&f->ui);
+    u64 before = 0, after = 0;
+    for (u32 tag = 0; tag < DE_MEM_TAG_BUILTIN_COUNT_; ++tag)
+        before += de_mem_stats_for_tag(tag).alloc_count;
+    for (u32 i = 0; i < 10; ++i) {
+        ui_frame(&f->ui);
+        EXPECT_EQ(ui->binding->writes, 0u);
+        EXPECT_EQ(de_ui_get_layout_stats(ui).nodes_laid_out, 0u);
+        EXPECT_EQ(de_ui_get_style_stats(ui).entities_restyled, 0u);
+    }
+    for (u32 tag = 0; tag < DE_MEM_TAG_BUILTIN_COUNT_; ++tag)
+        after += de_mem_stats_for_tag(tag).alloc_count;
+    EXPECT_EQ(after, before);
+    de_entity_remove(f->ui.world, button, ui->binding->component);
+    for (u32 i = 0; i < 12; ++i)
+        ui_frame(&f->ui);
+    const DeUiStyle *released = de_entity_get_const(f->ui.world, button, ui->ids.style);
+    EXPECT_FLOAT_EQ(released->opacity, .1f, .00001f);
+}
 TEST_F(ui_binding, progress_updates_same_frame_and_unchanged_source_does_not_relayout, bind_fx) {
     de_entity e = bound(f, "current", "value", DE_UI_BIND_ONE_WAY, f->ui.ui->widgets->progress);
     for (u32 i = 0; i < 4; ++i)
@@ -147,6 +246,27 @@ TEST_F(ui_binding, progress_updates_same_frame_and_unchanged_source_does_not_rel
     progress = de_entity_get_const(f->ui.world, e, f->ui.ui->widgets->progress);
     EXPECT_FLOAT_EQ(progress->value, .8, .00001);
     EXPECT_EQ(f->ui.ui->binding->writes, 1u);
+}
+TEST_F(ui_binding, attaching_opacity_binding_cancels_an_active_stylesheet_tween, bind_fx) {
+    de_ui *ui = f->ui.ui;
+    const char *sheet = "[style.button]\nopacity=1\ntransition=1\n"
+                        "[style.\"button:hover\"]\nopacity=0";
+    ASSERT_EQ(de_ui__load_stylesheet_source(ui, sheet, strlen(sheet), false), DE_OK);
+    de_entity e = ui_node(&f->ui, DE_ENTITY_NULL);
+    de_entity_add(f->ui.world, e, ui->widgets->button);
+    ui_frame(&f->ui);
+    ((DeUiInteractionState *)de_entity_get(f->ui.world, e, ui->ids.state))->hovered = true;
+    ui_frame(&f->ui);
+    EXPECT_GT(de_ui_get_style_stats(ui).active_tweens, 0u);
+    DeUiBinding *binding = de_entity_add(f->ui.world, e, ui->binding->component);
+    binding->source = f->source;
+    memcpy(binding->path, "BindData.precise", sizeof("BindData.precise"));
+    memcpy(binding->property, "opacity", sizeof("opacity"));
+    for (u32 i = 0; i < 5; ++i) {
+        ui_frame(&f->ui);
+        const DeUiStyle *style = de_entity_get_const(f->ui.world, e, ui->ids.style);
+        EXPECT_FLOAT_EQ(style->opacity, .625f, .00001f);
+    }
 }
 TEST_F(ui_binding, nested_and_both_array_path_spellings_format_numeric_text, bind_fx) {
     de_entity a =
@@ -219,7 +339,9 @@ static void count_changed(const de_query_chunk *chunk, void *user) {
 static void changed(de_system_ctx *ctx) {
     bind_fx *f = ctx->user;
     f->changed = 0;
+    u32 count = de_query_count(ctx->world, ctx->queries[0]);
     de_query_each(ctx->world, ctx->queries[0], count_changed, f);
+    EXPECT_EQ(count, f->changed);
 }
 TEST_F(ui_binding, actual_slider_toggle_changed_writeback_and_readonly_marks_next_update, bind_fx) {
     de_ui *ui = f->ui.ui;

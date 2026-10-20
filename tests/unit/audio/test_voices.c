@@ -84,7 +84,7 @@ TEST(audio_voices, pitch_fft_and_44100_rate_conversion) {
         source.base.rate = test ? 44100 : 48000;
         source.frequency = 1000;
         de_play_desc d = {0};
-        d.pitch = test ? 1 : 2;
+        d.pitch = test ? 1.f : 2.f;
         ASSERT_TRUE(de__voice_play_source(a, &source.base, &d).id != 0);
         de__audio_null_pump(a, 4608, capture);
         u32 bin = peak(capture, test ? 80 : 165, 12);
@@ -132,15 +132,53 @@ TEST(audio_voices, volume_and_spatial_parameters_are_queued) {
     de_audio_destroy(a);
 }
 TEST(audio_voices, tiny_loop_keeps_playing) {
-    de_audio *a = test_audio_manual(4, 0);
-    test_source source;
-    test_src_init(&source, TSRC_CONST, 1, 16, 1);
-    de_voice voice = test_play(a, &source, 0, true);
-    f32 out[512];
-    de__audio_null_pump(a, 256, out);
-    EXPECT_TRUE(de_audio_playing(a, voice));
-    EXPECT_FLOAT_EQ(out[510], G, 1e-6); /* DENG-485 */
-    de_audio_destroy(a);
+    const u32 lengths[] = {1, 7, 16, 257};
+    for (u32 k = 0; k < sizeof lengths / sizeof lengths[0]; ++k) {
+        de_audio *a = test_audio_manual(4, 0);
+        test_source source;
+        test_src_init(&source, TSRC_RAMP, 0.001f, lengths[k], 1);
+        de_voice voice = test_play(a, &source, 0, true);
+        f32 out[1536];
+        u64 hits = de__rt_guard_hits();
+        de__audio_null_pump(a, 768, out);
+        EXPECT_TRUE(de_audio_playing(a, voice));
+        EXPECT_EQ(de__rt_guard_hits(), hits);
+        for (u32 i = 0; i < 768; ++i)
+            EXPECT_FLOAT_EQ(out[i * 2], G * (f32)(i % lengths[k] + 1) * 0.001f, 1e-6);
+        de_audio_destroy(a);
+        EXPECT_EQ(test_src_closes(&source), 1u);
+    }
+}
+static u32 empty_loop_read(de__audio_source *s, f32 *out, u32 frames, u32 channels) {
+    (void)s;
+    (void)out;
+    (void)frames;
+    (void)channels;
+    return 0;
+}
+static bool failed_loop_seek(de__audio_source *s, u64 frame) {
+    (void)s;
+    (void)frame;
+    return false;
+}
+TEST(audio_voices, looping_eof_without_progress_retires) {
+    const de__audio_source_vtbl variants[] = {{empty_loop_read, test_src_seek, test_src_close},
+                                              {test_src_read, failed_loop_seek, test_src_close},
+                                              {test_src_read, NULL, test_src_close}};
+    for (u32 i = 0; i < sizeof variants / sizeof variants[0]; ++i) {
+        de_audio *a = test_audio_manual(4, 0);
+        test_source source;
+        test_src_init(&source, TSRC_CONST, 1, 1, 1);
+        source.base.vt = &variants[i];
+        de_voice voice = test_play(a, &source, 0, true);
+        f32 out[512];
+        de__audio_null_pump(a, 256, out);
+        EXPECT_FALSE(de_audio_playing(a, voice));
+        for (u32 frame = i == 0 ? 0 : 1; frame < 256; ++frame)
+            EXPECT_FLOAT_EQ(out[frame * 2], 0, 0);
+        de_audio_destroy(a);
+        EXPECT_EQ(test_src_closes(&source), 1u);
+    }
 }
 TEST(audio_voices, allocation_and_lock_free_256_voices) {
     de_tracking_allocator track;
@@ -166,4 +204,43 @@ TEST(audio_voices, allocation_and_lock_free_256_voices) {
     EXPECT_EQ(de__rt_guard_hits(), hits);
     de_audio_destroy(a);
     EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
+}
+
+TEST(audio_voices, pitch_changes_reject_aliases_and_restore_passband_without_allocations) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_AUDIO);
+    de_audio_desc desc = {.backend = DE_AUDIO_NULL, .allocator = &alloc, .max_voices = 4};
+    de_audio *a = NULL;
+    de__audio_create_opts opts = {true};
+    ASSERT_EQ(de__audio_create_ex(&desc, &opts, &a), DE_OK);
+    sine_source source = {0};
+    source.base.vt = &sine_vt;
+    source.base.channels = 1;
+    source.base.rate = 48000;
+    source.frequency = 18000;
+    de_play_desc play = {.pitch = 1.01f};
+    de_voice voice = de__voice_play_source(a, &source.base, &play);
+    ASSERT_TRUE(voice.id != 0);
+    f32 output[2048 * 2];
+    f64 rms[3];
+    de_tracking_stats before = de_tracking_allocator_stats(&tracking);
+    u64 hits = de__rt_guard_hits();
+    for (u32 stage = 0; stage < 3; ++stage) {
+        if (stage)
+            de_audio_set_pitch(a, voice, stage == 1 ? 2 : 1.01f);
+        de__audio_null_pump(a, 2048, output);
+        f64 sum = 0;
+        for (u32 frame = 512; frame < 2048; ++frame)
+            sum += (f64)output[frame * 2] * output[frame * 2];
+        rms[stage] = sqrt(sum / 1536);
+        EXPECT_TRUE(de_audio_playing(a, voice));
+    }
+    EXPECT_TRUE(rms[0] > 0.4);
+    EXPECT_TRUE(rms[1] / rms[0] < 0.0001);
+    EXPECT_TRUE(fabs(20 * log10(rms[2] / rms[0])) < 0.1);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).alloc_count, before.alloc_count);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).realloc_count, before.realloc_count);
+    EXPECT_EQ(de__rt_guard_hits(), hits);
+    de_audio_destroy(a);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
 }

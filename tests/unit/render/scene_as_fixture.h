@@ -104,9 +104,8 @@ static inline void trace_stage(de__view_frame *vf, void *user) {
     de_rg_pass_side_effect(p);
 }
 static inline void rt_fixture_setup(rt_fixture *f) {
-#if !DE_HAS_GPU_METAL
-    SKIP("native Metal scene AS acceptance requires the Metal backend");
-#endif
+    if (!de__gpu_find_backend(DE_GPU_METAL))
+        SKIP("native Metal scene AS acceptance requires the Metal backend");
     f->alloc = de_tracking_allocator_init(&f->track, NULL, DE_MEM_RENDER);
     f->dev_alloc = de_tracking_allocator_init(&f->dev_track, NULL, DE_MEM_RENDER);
 #if defined(__APPLE__)

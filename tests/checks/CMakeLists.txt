@@ -15,6 +15,14 @@
 find_program(DE_OBJDUMP NAMES llvm-objdump objdump
     DOC "Disassembler for deterministic_asm_check (llvm-objdump or objdump)")
 
+add_test(NAME linux_pkgconfig_isolation
+    COMMAND "${CMAKE_COMMAND}"
+        "-DDE_TOOLCHAIN=${DE_ROOT_DIR}/cmake/toolchains/linux-sysroot.cmake"
+        "-DDE_TEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/pkgconfig-isolation"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_linux_pkgconfig.cmake")
+set_tests_properties(linux_pkgconfig_isolation PROPERTIES LABELS check
+    SKIP_REGULAR_EXPRESSION "linux_pkgconfig_isolation: SKIPPED" TIMEOUT 30)
+
 set(_de_det_list "${CMAKE_CURRENT_BINARY_DIR}/deterministic_objects_$<CONFIG>.txt")
 
 function(de__write_deterministic_objects out)

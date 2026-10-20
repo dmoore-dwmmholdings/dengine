@@ -27,15 +27,25 @@
 #define DE__ESH_MAX_PERMUTATIONS 32u
 
 /* Test hooks (main thread, before the loads they affect). */
+#if DE_HAS_COOKER
 static bool g_no_source_cook;
 static const char *g_cache_override;
+#endif
 
 void de__engine_shaders_set_source_cook(bool on) {
+#if DE_HAS_COOKER
     g_no_source_cook = !on;
+#else
+    (void)on;
+#endif
 }
 
 void de__engine_shaders_set_cache_dir(const char *native_dir) {
+#if DE_HAS_COOKER
     g_cache_override = native_dir;
+#else
+    (void)native_dir;
+#endif
 }
 
 const de__engine_shader_info *de__engine_shader_find(const char *name) {

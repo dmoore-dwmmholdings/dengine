@@ -114,6 +114,14 @@ typedef enum de__view_slot {
 /**
  * What a stage gets while one view's graph is built. Read-only except `color`.
  */
+/** Sprite snapping grid of one successfully rendered view frame. Absolute camera
+ * coordinates keep prior grids valid when the render origin is rebased. */
+typedef struct de__pixel_snap_grid {
+    de_dvec3 camera;
+    f64 texel;
+    de_plane_2d plane;
+    bool enabled;
+} de__pixel_snap_grid;
 typedef struct de__view_frame {
     de_renderer *renderer;
     de_view view;
@@ -148,6 +156,7 @@ typedef struct de__view_frame {
     bool probe_capture; /**< Fixed radiance capture: no temporal effects or probes. */
     const de_pixel_art_settings *pixel_art;
     de_vec2 pixel_residual;
+    de__pixel_snap_grid pixel_grid, prev_pixel_grid;
     u32 output_width, output_height;
 } de__view_frame;
 

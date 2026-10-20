@@ -1,9 +1,14 @@
 #include "draw_list.h"
+#include "gpu/texture_lease_internal.h"
 #include "ui/world/world_internal.h"
 #include <string.h>
 void de_ui__packet_unpin(struct de_ui_render *r, de_ui_draw_list *packet) {
     for (u32 i = 0; i < packet->count; ++i) {
         de_ui_draw_cmd *c = &packet->commands[i];
+#if DE_HAS_RENDER
+        de__gpu_texture_unpin(r->device, c->texture_lease);
+#endif
+        c->texture_lease = (de_gpu_texture){0};
 #if DE_HAS_RENDER
         if (c->pins & 1u)
             de_render_unpin_asset(r->ui->desc.renderer, c->image.id);
@@ -69,6 +74,10 @@ void de_ui__extract_draw_list(de_system_ctx *ctx) {
         if (c->image.id && de_render_pin_asset(ui->desc.renderer, c->image.id)) {
             c->pins |= 1u;
             de_gpu_texture texture = de_render_texture_gpu(ui->desc.renderer, c->image);
+            if (de__gpu_texture_pin(r->device, texture))
+                c->texture_lease = texture;
+            else
+                texture = (de_gpu_texture){0};
             c->gpu.texture =
                 texture.id ? de_gpu_texture_bindless(r->device, texture, 0, false) : UINT32_MAX;
             c->gpu.sampler =
@@ -83,6 +92,10 @@ void de_ui__extract_draw_list(de_system_ctx *ctx) {
                 c->gpu.flags = info.bitmap ? 1u : 0;
 #if DE_HAS_RENDER
                 if (r->device) {
+                    if (de__gpu_texture_pin(r->device, info.texture))
+                        c->texture_lease = info.texture;
+                    else
+                        info.texture = (de_gpu_texture){0};
                     c->gpu.texture =
                         info.texture.id ? de_gpu_texture_bindless(r->device, info.texture, 0, false)
                                         : UINT32_MAX;

@@ -6,6 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/* C11 has memchr but does not require POSIX strnlen. Reflected strings may
+ * fill their whole field, so never scan beyond the declared capacity. */
+static size_t bounded_length(const char *text, size_t capacity) {
+    const char *end = memchr(text, 0, capacity);
+    return end ? (size_t)(end - text) : capacity;
+}
+
 static de_ui_binding_cache *cache(de_ui_binding_system *s, de_entity entity) {
     u64 h = entity.bits * 11400714819323198485ull;
     u32 mask = s->cache_capacity - 1;
@@ -55,18 +62,23 @@ static bool number(const de_field_info *f, const void *ptr, long double *out) {
     case kind_: {                                                                                  \
         type_ n;                                                                                   \
         memcpy(&n, ptr, sizeof n);                                                                 \
-        *out = n;                                                                                  \
+        *out = (long double)n;                                                                     \
         return true;                                                                               \
     }
     switch (f->kind) {
-        READ(DE_FK_BOOL, bool)
-        READ(DE_FK_I8, i8)
-        READ(DE_FK_I16, i16)
-        READ(DE_FK_I32, i32)
-        READ(DE_FK_I64, i64)
-        READ(DE_FK_U8, u8)
-        READ(DE_FK_U16, u16) READ(DE_FK_U32, u32) READ(DE_FK_U64, u64) READ(DE_FK_F32, f32)
-            READ(DE_FK_F64, f64) default : return false;
+        READ(DE_FK_BOOL, bool);
+        READ(DE_FK_I8, i8);
+        READ(DE_FK_I16, i16);
+        READ(DE_FK_I32, i32);
+        READ(DE_FK_I64, i64);
+        READ(DE_FK_U8, u8);
+        READ(DE_FK_U16, u16);
+        READ(DE_FK_U32, u32);
+        READ(DE_FK_U64, u64);
+        READ(DE_FK_F32, f32);
+        READ(DE_FK_F64, f64);
+    default:
+        return false;
     }
 #undef READ
 }
@@ -87,15 +99,18 @@ static bool write_number(const de_field_info *f, long double x, u8 *out) {
         memcpy(out, &n, sizeof n);
         return true;
     }
-        WRITE(DE_FK_I8, i8, INT8_MIN, INT8_MAX)
-        WRITE(DE_FK_I16, i16, INT16_MIN, INT16_MAX)
-        WRITE(DE_FK_I32, i32, INT32_MIN, INT32_MAX)
-        WRITE(DE_FK_I64, i64, INT64_MIN, INT64_MAX)
-        WRITE(DE_FK_U8, u8, 0, UINT8_MAX)
-        WRITE(DE_FK_U16, u16, 0, UINT16_MAX)
-        WRITE(DE_FK_U32, u32, 0, UINT32_MAX) WRITE(DE_FK_U64, u64, 0, UINT64_MAX)
-            WRITE(DE_FK_F32, f32, -FLT_MAX, FLT_MAX)
-                WRITE(DE_FK_F64, f64, -DBL_MAX, DBL_MAX) default : return false;
+        WRITE(DE_FK_I8, i8, INT8_MIN, INT8_MAX);
+        WRITE(DE_FK_I16, i16, INT16_MIN, INT16_MAX);
+        WRITE(DE_FK_I32, i32, INT32_MIN, INT32_MAX);
+        WRITE(DE_FK_I64, i64, INT64_MIN, INT64_MAX);
+        WRITE(DE_FK_U8, u8, 0, UINT8_MAX);
+        WRITE(DE_FK_U16, u16, 0, UINT16_MAX);
+        WRITE(DE_FK_U32, u32, 0, UINT32_MAX);
+        WRITE(DE_FK_U64, u64, 0, UINT64_MAX);
+        WRITE(DE_FK_F32, f32, -FLT_MAX, FLT_MAX);
+        WRITE(DE_FK_F64, f64, -DBL_MAX, DBL_MAX);
+    default:
+        return false;
     }
 #undef WRITE
 }
@@ -145,6 +160,7 @@ static void resolve(de_ui_binding_system *s, de_ui_binding_cache *c, const DeUiB
     c->descriptor = *binding;
     c->revision = revision;
     c->sampled = false;
+    c->style_revision = 0;
     c->warned = false;
     c->valid = false;
     c->editor = (de_component){0};
@@ -239,8 +255,8 @@ static void resolve(de_ui_binding_system *s, de_ui_binding_cache *c, const DeUiB
         compatible =
             (info->kind == DE_FK_VEC4 || info->kind == DE_FK_COLOR) &&
             (target(s, c, "DeUiImage", offsetof(DeUiImage, tint), sizeof(de_vec4)) ||
-             target(s, c, "DeUiText", offsetof(DeUiText, style) + offsetof(de_text_style, color),
-                    sizeof(de_vec4)) ||
+             (de_entity_has(ui->world, c->entity, ui->ids.text) &&
+              target(s, c, "DeUiStyle", offsetof(DeUiStyle, text_color), sizeof(de_vec4))) ||
              target(s, c, "DeUiStyle", offsetof(DeUiStyle, background), sizeof(de_vec4)));
     }
     if (!compatible) {
@@ -271,7 +287,7 @@ static bool text_value(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
                        char *formatted, u32 cap, de_str *out) {
     de_ui *ui = s->ui;
     if (c->field.kind == DE_FK_STRING) {
-        *out = (de_str){source, strnlen(source, c->field.size)};
+        *out = (de_str){source, bounded_length(source, c->field.size)};
         return true;
     }
     if (c->field.kind == DE_FK_NAME) {
@@ -339,20 +355,13 @@ static void apply_text(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
         return;
     }
     if (c->editor.id) {
-        const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
-        size_t length = value.len < c->editor_size - 1 ? value.len : c->editor_size - 1;
-        /* Editor storage is the reflected committed buffer, never password/preedit display text. */
-        if (editor && (strnlen((const char *)editor + c->editor_offset, c->editor_size) != length ||
-                       memcmp(editor + c->editor_offset, value.ptr, length))) {
-            u8 *edit = de_entity_get(s->ui->world, c->entity, c->editor);
-            memcpy(edit + c->editor_offset, value.ptr, length);
-            edit[c->editor_offset + length] = 0;
-            u32 n = (u32)length;
-            memcpy(edit + c->editor_length, &n, sizeof n);
-            ++s->writes;
-            de_ui_widget_table *table = de_ui__widget_table(s->ui);
-            if (table && table->refresh_text)
-                table->refresh_text(s->ui, c->entity);
+        de_str committed = de_ui_text_input_get(s->ui, c->entity);
+        if (committed.len != value.len ||
+            (value.len && memcmp(committed.ptr, value.ptr, value.len))) {
+            if (de_ui_text_input_set(s->ui, c->entity, value) == DE_OK)
+                ++s->writes;
+            else
+                fail(s, c, "document allocation failed");
         }
         return;
     }
@@ -384,6 +393,8 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
     }
     if (c->property == DE_UI_BIND_TINT) {
         put(s, c->entity, c->target, c->target_offset, source, sizeof(de_vec4));
+        if (c->target.id == s->ui->ids.style.id)
+            c->style_revision = ++s->style_revision;
         return;
     }
     long double value;
@@ -404,7 +415,25 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
     } else {
         f32 scalar = (f32)fmaxl(-FLT_MAX, fminl(FLT_MAX, value));
         put(s, c->entity, c->target, c->target_offset, &scalar, sizeof scalar);
+        if (c->property == DE_UI_BIND_OPACITY)
+            c->style_revision = ++s->style_revision;
     }
+}
+u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style) {
+    de_ui_binding_system *s = ui->binding;
+    if (!s || !s->component.id || !de_entity_has(ui->world, entity, s->component))
+        return 0;
+    de_ui_binding_cache *c = cache(s, entity);
+    if (!c || !c->valid || !c->sampled || c->target.id != ui->ids.style.id)
+        return 0;
+    if (style && c->property == DE_UI_BIND_TINT)
+        memcpy((u8 *)style + c->target_offset, c->previous, sizeof(de_vec4));
+    else if (style && c->property == DE_UI_BIND_OPACITY) {
+        long double value;
+        if (number(&c->field, c->previous, &value) && isfinite(value))
+            style->opacity = (f32)fmaxl(-FLT_MAX, fminl(FLT_MAX, value));
+    }
+    return c->style_revision;
 }
 static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
     if (event->kind != DE_UI_EV_CHANGED)
@@ -419,11 +448,9 @@ static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
     if (c->property == DE_UI_BIND_TEXT) {
         de_str text = {0};
         if (c->editor.id) {
-            const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
-            if (!editor)
+            text = de_ui_text_input_get(s->ui, c->entity);
+            if (!text.ptr)
                 return;
-            text = (de_str){(const char *)editor + c->editor_offset,
-                            strnlen((const char *)editor + c->editor_offset, c->editor_size)};
         } else {
             const DeUiText *target_text = de_entity_get_const(s->ui->world, c->entity, c->target);
             if (!target_text)
@@ -432,7 +459,7 @@ static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
         }
         if (c->field.kind == DE_FK_STRING) {
             size_t n = text.len < c->field.size - 1 ? text.len : c->field.size - 1;
-            if (strnlen((const char *)source + c->offset, c->field.size) == n &&
+            if (bounded_length((const char *)source + c->offset, c->field.size) == n &&
                 !memcmp(source + c->offset, text.ptr, n))
                 return;
             u8 *dest = de_entity_get(s->ui->world, c->descriptor.source, c->source);
@@ -520,11 +547,13 @@ de_result de_ui__binding_init(de_ui *ui) {
     s->log = de_log_register_category("ui.binding", DE_LOG_WARN);
     s->cache = DE_ALLOC(ui->alloc, (u64)s->cache_capacity * sizeof *s->cache,
                         _Alignof(de_ui_binding_cache), DE_MEM_UI);
-    s->entities =
-        DE_ALLOC(ui->alloc, (u64)s->capacity * sizeof *s->entities, _Alignof(de_entity), DE_MEM_UI);
-    if (!s->cache || !s->entities)
+    if (!s->cache)
         return DE_ERR_OUT_OF_MEMORY;
     memset(s->cache, 0, (u64)s->cache_capacity * sizeof *s->cache);
+    s->entities =
+        DE_ALLOC(ui->alloc, (u64)s->capacity * sizeof *s->entities, _Alignof(de_entity), DE_MEM_UI);
+    if (!s->entities)
+        return DE_ERR_OUT_OF_MEMORY;
     return de_arena_create(
         &(de_arena_desc){.reserve_bytes = 256ull << 20, .tag = DE_MEM_UI, .name = "ui.binding"},
         &s->arena);
@@ -538,7 +567,7 @@ void de_ui__binding_detach(de_ui *ui) {
     s->system = (de_system){0};
     s->count = 0;
     /* Keep text spans alive until UI destruction: existing DeUiText views may outlive detach. */
-    for (u32 i = 0; i < s->cache_capacity; ++i) {
+    for (u32 i = 0; s->cache && i < s->cache_capacity; ++i) {
         s->cache[i].entity = DE_ENTITY_NULL;
         s->cache[i].valid = false;
     }

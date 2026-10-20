@@ -223,7 +223,8 @@ de_result de__sound_cook(const de_allocator *a, const void *source, u64 size,
                       : (!strcmp(compression, "adpcm") ? DE__DSND_ADPCM : DE__DSND_PCM_F32);
     u64 loop_start = settings->loop_start ? settings->loop_start : d.loop_start;
     u64 loop_end = settings->loop_end ? settings->loop_end : d.loop_end;
-    bool looping = settings->loop || loop_end > loop_start;
+    /* Explicit false overrides authored loop metadata without discarding its points. */
+    bool looping = settings->loop_set ? settings->loop : (settings->loop || loop_end > loop_start);
     if (looping && !loop_end)
         loop_end = frames;
     if (looping && (loop_start >= loop_end || loop_end > frames)) {
@@ -338,13 +339,14 @@ done:
     return result;
 }
 u32 de__sound_importer_version(void) {
-    return 1;
+    return 4; /* Rebuild resampled audio with rate-dependent low-pass kernels. */
 }
 de_result de__sound_import(de_asset_import_ctx *ctx) {
     de__sound_settings s = {0};
     s.stream_set = de_asset_import_setting_has(ctx, "stream");
     s.stream = de_asset_import_setting_bool(ctx, "stream", false);
     s.mono = de_asset_import_setting_bool(ctx, "mono", false);
+    s.loop_set = de_asset_import_setting_has(ctx, "loop");
     s.loop = de_asset_import_setting_bool(ctx, "loop", false);
     i64 start = de_asset_import_setting_int(ctx, "loop_start", 0),
         end = de_asset_import_setting_int(ctx, "loop_end", 0),

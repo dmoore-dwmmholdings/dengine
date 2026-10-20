@@ -1409,3 +1409,71 @@ static void runtime_shadows(lx *f, de_gpu_backend backend) {
 RUNTIME_TEST(metal, DE_GPU_METAL)
 RUNTIME_TEST(vulkan, DE_GPU_VULKAN)
 RUNTIME_TEST(d3d12, DE_GPU_D3D12)
+
+/* DENG-506: a distant orthographic far plane must not put a receiver behind its own map. */
+static void orthographic_self_shadow_test(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    f->width = 480;
+    f->height = 270;
+    f->ortho_height = 8.4375f;
+    f->eye = (de_vec3){0, -12, 4.21875f};
+    f->target = (de_vec3){0, 0, 4.21875f};
+    const de_quat rotation = {.x = .7071067812f, .w = .7071067812f};
+    de_mat4 camera_world = de_m4_trs(f->eye, rotation, (de_vec3){1, 1, 1});
+    f->camera_view = de_m4_inverse_affine(&camera_world);
+    const de_affine plane = de_affine_from_trs((de_vec3){0}, rotation, (de_vec3){1, 1, 1});
+    ASSERT_EQ(de__csm_create_ex(f->dev, &f->alloc, &f->csm), DE_OK);
+    const u32 mat = material_add(.5f, .8f, 0, .5f);
+    const u32 receiver = lx_mesh_plane(f, 1, 1, 30);
+    world_set(&f->w, 0, receiver, plane, mat);
+    f->w.f.instances.flags[0] |= DE__RW_INST_CAST_SHADOWS;
+    DeLight sun = {
+        .kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = 10, .cast_shadows = true};
+    world_light(&f->w, 0, &sun, trs((de_vec3){0}, (de_vec3){1, 0, 0}, 1.04719755f, 1));
+    const u32 pixels = f->width * f->height;
+    f32 *reference = zalloc((size_t)pixels * 16);
+    f->shadow_quality = DE_QUALITY_OFF;
+    ASSERT_TRUE(lx_frame(f));
+    memcpy(reference, f->res.lighting, (size_t)pixels * 16);
+    f->shadow_quality = DE_QUALITY_HIGH;
+    for (u32 filter = 0; filter < 2; ++filter) {
+        sun.source_radius = filter ? .02f : 0.f;
+        world_light(&f->w, 0, &sun, trs((de_vec3){0}, (de_vec3){1, 0, 0}, 1.04719755f, 1));
+        ASSERT_TRUE(lx_frame(f));
+        u32 checked = 0, self_shadowed = 0;
+        for (u32 i = 0; i < pixels; ++i) {
+            const f32 *p = f->res.pos + i * 4;
+            if (p[3] < .5f || fabsf(p[0]) > 3.f || fabsf(p[2] - 4.21875f) > 3.f)
+                continue;
+            ++checked;
+            self_shadowed += f->res.lighting[i * 4] < reference[i * 4] * .999f;
+        }
+        printf("orthographic %s self-shadow: %u/%u incorrectly dark receivers\n",
+               filter ? "PCSS" : "PCF", self_shadowed, checked);
+        EXPECT_GT(checked, 10000u);
+        EXPECT_EQ(self_shadowed, 0u);
+    }
+    const u32 caster = lx_mesh_plane(f, 1, 1, 1);
+    de_affine blocker = plane;
+    blocker.m[10] = -1;
+    blocker.m[11] = 4.21875f;
+    world_set(&f->w, 1, caster, blocker, mat);
+    f->w.f.instances.flags[1] |= DE__RW_INST_CAST_SHADOWS;
+    ASSERT_TRUE(lx_frame(f));
+    u32 occluded = 0;
+    for (u32 i = 0; i < pixels; ++i) {
+        const f32 *p = f->res.pos + i * 4;
+        if (p[3] > .5f && fabsf(p[1]) < .001f)
+            occluded += f->res.lighting[i * 4] < reference[i * 4] * .1f;
+    }
+    EXPECT_GT(occluded, 100u);
+    EXPECT_EQ(validation_errors(f->dev), 0);
+    free(reference);
+}
+#define ORTHOGRAPHIC_SELF_TEST(tag, backend)                                                       \
+    TEST_F(csm, orthographic_self_shadow_##tag, lx) {                                              \
+        orthographic_self_shadow_test(f, backend);                                                 \
+    }
+ORTHOGRAPHIC_SELF_TEST(metal, DE_GPU_METAL)
+ORTHOGRAPHIC_SELF_TEST(vulkan, DE_GPU_VULKAN)
+ORTHOGRAPHIC_SELF_TEST(d3d12, DE_GPU_D3D12)

@@ -54,46 +54,80 @@ static void sort_free(void *user, void *ptr, size_t size) {
 void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_item *scratch) {
     if (items == NULL || scratch == NULL || n < 2)
         return;
-    DE_STATIC_ASSERT(sizeof(de__transparent_item) >= 2 * sizeof(de_sort_key64),
+    DE_STATIC_ASSERT(sizeof(de__transparent_item) >= 2 * sizeof(de_sort_key64) + sizeof(u32),
                      "radix scratch fits");
-    de_sort_key64 *keys = (de_sort_key64 *)(void *)scratch;
-    radix_scratch tmp = {keys + n, (size_t)n * sizeof *keys};
+    /* Preserve payloads once; sort compact metadata in the output array. */
+    memcpy(scratch, items, (size_t)n * sizeof *items);
+    de_sort_key64 *keys = (de_sort_key64 *)(void *)items;
+    de_sort_key32 *entity_keys = (de_sort_key32 *)(void *)items;
+    radix_scratch tmp = {entity_keys + n, (size_t)n * sizeof *entity_keys};
     de_allocator allocator = {.user = &tmp, .alloc = sort_alloc, .free = sort_free};
+    bool has_overlay = false, has_scene = false, index_ordered = true, same_generation = true;
     /* Stable entity-index tie order is independent of extraction/archetype order. */
-    for (u32 i = 0; i < n; ++i)
-        keys[i] = (de_sort_key64){(u32)items[i].entity, i};
-    if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
-        return;
     for (u32 i = 0; i < n; ++i) {
-        const de__transparent_item *item = &items[keys[i].index];
-        keys[i].key = de__sprite_sort_key(item->layer, item->order, item->depth);
+        entity_keys[i] = (de_sort_key32){(u32)scratch[i].entity, i};
+        has_overlay |= scratch[i].always_on_top;
+        has_scene |= !scratch[i].always_on_top;
+        index_ordered &= !i || scratch[i - 1].index <= scratch[i].index;
+        same_generation &= (scratch[i].entity >> 32) == (scratch[0].entity >> 32);
     }
-    if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
-        return;
-    /* Apply destination->source permutation in place. No frame heap or third item array. */
-    for (u32 i = 0; i < n; ++i) {
-        if (keys[i].index == i)
-            continue;
-        de__transparent_item saved = items[i];
-        u32 j = i;
-        while (keys[j].index != i) {
-            u32 from = (u32)keys[j].index;
-            items[j] = items[from];
-            keys[j].index = j;
-            j = from;
+    /* Gather indices normally arrive in order. Only sort them when the caller
+     * supplied a different order, so equal entity/depth ties still match before(). */
+    if (!index_ordered) {
+        for (u32 i = 0; i < n; ++i)
+            entity_keys[i].key = scratch[i].index;
+        if (de_radix_sort_u32(entity_keys, n, &allocator) != DE_OK)
+            return;
+        for (u32 i = 0; i < n; ++i)
+            entity_keys[i].key = (u32)scratch[entity_keys[i].index].entity;
+    }
+    if (same_generation) {
+        if (de_radix_sort_u32(entity_keys, n, &allocator) != DE_OK)
+            return;
+        /* Expand backwards without overwriting unread entity indices. */
+        for (u32 i = n; i-- > 0;) {
+            u32 index = entity_keys[i].index;
+            const de__transparent_item *item = &scratch[index];
+            keys[i] =
+                (de_sort_key64){de__sprite_sort_key(item->layer, item->order, item->depth), index};
         }
-        items[j] = saved;
-        keys[j].index = j;
+    } else {
+        for (u32 i = n; i-- > 0;) {
+            u32 index = entity_keys[i].index;
+            u64 entity = scratch[index].entity;
+            /* Comparator orders entity index first, generation second. */
+            keys[i] = (de_sort_key64){(entity << 32) | (entity >> 32), index};
+        }
+        tmp = (radix_scratch){keys + n, (size_t)n * sizeof *keys};
+        if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
+            return;
+        for (u32 i = 0; i < n; ++i) {
+            const de__transparent_item *item = &scratch[keys[i].index];
+            keys[i].key = de__sprite_sort_key(item->layer, item->order, item->depth);
+        }
     }
-    /* Overlay participants form a final stable group without changing ordinary sprite keys. */
+    tmp = (radix_scratch){keys + n, (size_t)n * sizeof *keys};
+    if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
+        return;
+    /* Put the permutation after both key arrays. Forward payload writes cannot
+     * reach an unread index: the last n u32s end at the last output item. */
+    u32 *indices = (u32 *)(void *)((u8 *)items + (size_t)n * sizeof *items) - n;
     u32 dst = 0;
-    for (u32 i = 0; i < n; ++i)
-        if (!items[i].always_on_top)
-            scratch[dst++] = items[i];
-    for (u32 i = 0; i < n; ++i)
-        if (items[i].always_on_top)
-            scratch[dst++] = items[i];
-    memcpy(items, scratch, (size_t)n * sizeof *items);
+    if (has_overlay && has_scene) {
+        for (u32 i = 0; i < n; ++i)
+            if (!scratch[keys[i].index].always_on_top)
+                indices[dst++] = (u32)keys[i].index;
+        for (u32 i = 0; i < n; ++i)
+            if (scratch[keys[i].index].always_on_top)
+                indices[dst++] = (u32)keys[i].index;
+    } else {
+        for (u32 i = 0; i < n; ++i)
+            indices[i] = (u32)keys[i].index;
+    }
+    for (u32 i = 0; i < n; ++i) {
+        u32 source = indices[i];
+        items[i] = scratch[source];
+    }
 }
 
 /* =================================================================================================

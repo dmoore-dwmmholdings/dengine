@@ -130,6 +130,22 @@ struct toml_result_t {
  */
 TOML_EXTERN toml_result_t toml_parse(const char *src, int len);
 
+/* Engine extension: a per-parse duplicate policy. Returning true keeps the first
+ * value and discards the replacement. NULL/rejection retains strict TOML rules.
+ * Only ordinary key/value assignments consult this handler, never table headers
+ * or inline-table entries. All pointers are borrowed during the callback. */
+typedef struct toml_duplicate_t {
+  const toml_datum_t *root, *table;
+  const char *key;
+  int keylen, lineno;
+  const toml_datum_t *previous, *replacement;
+} toml_duplicate_t;
+typedef bool (*toml_duplicate_fn)(const toml_duplicate_t *, void *);
+TOML_EXTERN toml_result_t toml_parse_with_duplicates(
+    const char *src, int len, const char *name,
+    toml_duplicate_fn handler, void *user);
+
+
 /**
  * @brief Parse a TOML document, tagging every datum with a source name.
  *

@@ -318,9 +318,13 @@ static u32 describe(de__restir_di *s, const de__render_world_frame *world, di_de
         for (u32 sub = 0; sub < source->submesh_count && sub < 8; ++sub) {
             const de__gs_material *material =
                 de__gpu_scene_entry(s->r->gpu_scene, DE__GS_MATERIALS, materials[sub]);
-            if (!material || !(material->emissive.v[3] > 0) ||
-                !(material->emissive.v[0] > 0 || material->emissive.v[1] > 0 ||
-                  material->emissive.v[2] > 0))
+            if (!material)
+                continue;
+            bool unlit =
+                (material->model & (DE__GS_MATERIAL_MODELS - 1u)) == DE__GS_MATERIAL_MODEL_UNLIT;
+            const f32 *radiance = unlit ? material->base_color.v : material->emissive.v;
+            if ((!unlit && !(material->emissive.v[3] > 0)) ||
+                !(radiance[0] > 0 || radiance[1] > 0 || radiance[2] > 0))
                 continue;
             const de_cooked_mesh_range *range = &source->lod_submeshes[sub];
             for (u32 triangle = 0; triangle < range->index_count / 3; ++triangle) {

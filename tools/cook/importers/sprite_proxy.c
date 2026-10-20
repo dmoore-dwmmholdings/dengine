@@ -11,6 +11,66 @@ static bool opaque(const f32 *rgba, u32 w, u32 h, i32 x, i32 y, f32 cutoff) {
     return x >= 0 && y >= 0 && (u32)x < w && (u32)y < h &&
            rgba[((size_t)(h - 1 - (u32)y) * w + (u32)x) * 4 + 3] >= cutoff;
 }
+/* Exact union of vertically merged opaque runs. Multiple closed boxes preserve holes
+ * and components without bridging contours. Internal faces stay inside the solid union.
+ * If this representation exceeds either cooked limit, use alpha-tested geometry. */
+static de_result topology_proxy(const f32 *rgba, u32 w, u32 h, f32 cutoff,
+                                de_cooked_sprite_proxy *out) {
+    typedef struct rectangle {
+        u32 x0, x1, y0, y1;
+    } rectangle;
+    rectangle rectangles[DE_SPRITE_PROXY_MAX_INDICES / 36];
+    u32 count = 0;
+    for (u32 y = 0; y < h; ++y)
+        for (u32 x = 0; x < w;) {
+            if (!opaque(rgba, w, h, (i32)x, (i32)y, cutoff)) {
+                ++x;
+                continue;
+            }
+            u32 x0 = x++;
+            while (x < w && opaque(rgba, w, h, (i32)x, (i32)y, cutoff))
+                ++x;
+            u32 i = 0;
+            while (i < count &&
+                   !(rectangles[i].x0 == x0 && rectangles[i].x1 == x && rectangles[i].y1 == y))
+                ++i;
+            if (i == count) {
+                if (count == sizeof rectangles / sizeof *rectangles)
+                    goto unsupported;
+                rectangles[count++] = (rectangle){x0, x, y, y};
+            }
+            rectangles[i].y1 = y + 1;
+        }
+    out->vertex_count = out->index_count = 0;
+    for (u32 i = 0; i < count; ++i) {
+        const rectangle *r = &rectangles[i];
+        const u32 xs[] = {r->x0, r->x1, r->x1, r->x0}, ys[] = {r->y0, r->y0, r->y1, r->y1};
+        u32 vertices[8];
+        for (u32 side = 0; side < 2; ++side)
+            for (u32 corner = 0; corner < 4; ++corner) {
+                f32 position[] = {(f32)xs[corner] / w, (f32)ys[corner] / h, side ? .5f : -.5f};
+                u32 v = 0;
+                while (v < out->vertex_count &&
+                       memcmp(out->positions[v], position, sizeof position))
+                    ++v;
+                if (v == out->vertex_count) {
+                    if (v == DE_SPRITE_PROXY_MAX_VERTICES)
+                        goto unsupported;
+                    memcpy(out->positions[out->vertex_count++], position, sizeof position);
+                }
+                vertices[side * 4 + corner] = v;
+            }
+        static const u32 triangles[36] = {0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4,
+                                          1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7};
+        for (u32 j = 0; j < 36; ++j)
+            out->indices[out->index_count++] = vertices[triangles[j]];
+    }
+    return DE_OK;
+unsupported:
+    memset(out, 0, sizeof *out);
+    out->region[2] = out->region[3] = 1;
+    return DE_FAIL(DE_ERR_UNSUPPORTED, "sprite proxy topology exceeds the cooked geometry budget");
+}
 de_result de_sprite_proxy_build(const de_allocator *a, const f32 *rgba, u32 w, u32 h, f32 cutoff,
                                 de_cooked_sprite_proxy *out) {
     if (!a || !rgba || !out || !w || !h || w > 16384 || h > 16384)
@@ -41,7 +101,8 @@ de_result de_sprite_proxy_build(const de_allocator *a, const f32 *rgba, u32 w, u
                     edges[(size_t)(y + 1) * (w + 1) + x] |= 8;
             }
     const i32 dx[4] = {1, 0, -1, 0}, dy[4] = {0, 1, 0, -1};
-    u32 count = 0;
+    u32 count = 0, contours = 0;
+    bool complex = false;
     i64 best_area = 0;
     for (size_t start = 0; start < grid; ++start)
         while (edges[start]) {
@@ -54,6 +115,7 @@ de_result de_sprite_proxy_build(const de_allocator *a, const f32 *rgba, u32 w, u
                     goto done;
                 }
                 points[n++] = current;
+                complex |= (edges[at] & (edges[at] - 1)) != 0;
                 u32 direction = 0;
                 while (direction < 4 && !(edges[at] & (1u << direction)))
                     ++direction;
@@ -68,12 +130,18 @@ de_result de_sprite_proxy_build(const de_allocator *a, const f32 *rgba, u32 w, u
             for (u32 i = 0; i < n; ++i)
                 area += (i64)points[i].x * points[(i + 1) % n].y -
                         (i64)points[(i + 1) % n].x * points[i].y;
+            if (n >= 3)
+                ++contours;
             if (area > best_area) {
                 best_area = area;
                 count = n;
                 memcpy(best, points, (size_t)n * sizeof *best);
             }
         }
+    if (complex || contours > 1) {
+        result = topology_proxy(rgba, w, h, cutoff, out);
+        goto done;
+    }
     if (count < 3) {
         result = DE_FAIL(DE_ERR_INVALID_ARGUMENT, "sprite proxy has no opaque silhouette");
         goto done;

@@ -6,7 +6,7 @@
 #include <string.h>
 typedef struct pt_final_params {
     u32 width, height, accumulation, albedo, normal, depth, position, material, input, output,
-        variance, reserved;
+        variance, moments;
     f32 exposure;
     u32 pad[3];
 } pt_final_params;
@@ -22,7 +22,8 @@ typedef struct pt_final_pass {
     de_gpu_buffer params;
     u32 entry;
     pt_final_params pc;
-    de_rg_resource accumulation, albedo, normal, depth, position, material, input, output, variance;
+    de_rg_resource accumulation, albedo, normal, depth, position, material, input, output, variance,
+        moments;
 } pt_final_pass;
 de_result de__pt_denoise_create(de_renderer *r, de__pt_denoise **out) {
     de__pt_denoise *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
@@ -74,6 +75,7 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     R(depth);
     R(position);
     R(material);
+    R(moments);
     R(input);
 #undef R
     p.output = de_gpu_texture_bindless(x->s->r->dev, de_rg_texture(pass, x->output), 0, true);
@@ -89,8 +91,8 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 static void add(de_rg *g, pt_final_pass *x, const char *name) {
     de_rg_pass *pass = de_rg_add_pass(g, name, DE_QUEUE_GRAPHICS, execute, x);
     de_rg_resource reads[] = {x->accumulation, x->albedo,   x->normal, x->depth,
-                              x->position,     x->material, x->input};
-    for (u32 i = 0; i < 7; ++i)
+                              x->position,     x->material, x->input,  x->moments};
+    for (u32 i = 0; i < sizeof reads / sizeof reads[0]; ++i)
         if (reads[i].id)
             de_rg_read(pass, reads[i], DE_ACCESS_SHADER_READ);
     de_rg_write(pass, x->output, DE_ACCESS_SHADER_WRITE);
@@ -141,9 +143,11 @@ de_rg_resource de__pt_denoise_build(de__pt_denoise *s, de__view_frame *f, const 
         .depth = de_rg_import_texture(g, info->depth, DE_ACCESS_SHADER_READ),
         .position = de_rg_import_texture(g, info->position, DE_ACCESS_SHADER_READ),
         .material = de_rg_import_texture(g, info->material, DE_ACCESS_SHADER_READ),
+        .moments = de_rg_import_texture(g, info->moments, DE_ACCESS_SHADER_READ),
         .output =
             temporary(g, info->width, info->height, DE_FMT_RGBA32_FLOAT, "PT final demodulated"),
-        .variance = temporary(g, info->width, info->height, DE_FMT_R32_FLOAT, "PT final variance")};
+        .variance =
+            temporary(g, info->width, info->height, DE_FMT_RGBA32_FLOAT, "PT final variance")};
     add(g, &x[0], "PT.FinalDenoise.Prepare");
     de_denoise_frame frame = {.graph = g,
                               .view = f->view,
@@ -162,6 +166,8 @@ de_rg_resource de__pt_denoise_build(de__pt_denoise *s, de__view_frame *f, const 
                                    .format = DE_FMT_RGBA32_FLOAT,
                                    .channels = 3,
                                    .iterations = 3,
+                                   .propagate_variance = true,
+                                   .rgb_variance = true,
                                    .depth_relative = .02f,
                                    .normal_power = 64,
                                    .luminance_scale = 4,

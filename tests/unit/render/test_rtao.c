@@ -2,6 +2,7 @@
 #define SH 32u
 #include "rt_shadow_fixture.h"
 #include "render/rt/rtao.h"
+#include "render/passes/vis/gbuffer.h"
 
 typedef struct rtao_fixture {
     shadow_fixture shadow;
@@ -9,12 +10,15 @@ typedef struct rtao_fixture {
     de__rtao_info info;
     f64 accumulated[SW * SH], raw_sum[SW * SH];
     const de__lighting_view *lighting;
-    bool rt_pass, gtao_pass, ao_input;
+    bool rt_pass, gtao_pass, ao_input, canonical_reset, capture_rays;
 } rtao_fixture;
 static void graph_stage(de__view_frame *vf, void *user) {
     rtao_fixture *f = user;
     if (vf->view.id != f->shadow.rt.view.id)
         return;
+    const de__vis_context *vc =
+        de__vis_frame_context(de__views_vis(vf->renderer), vf->view, vf->graph, vf->frame_index);
+    f->canonical_reset = vc && (vc->view_new || vc->occlusion_reset);
     f->rt_pass = false;
     f->gtao_pass = false;
     for (u32 i = 0; i < vf->graph->pass_count; ++i) {
@@ -44,7 +48,7 @@ static void rtao_fixture_setup(rtao_fixture *f) {
         r->w.f.instances.layer_mask[i] = 1u << 24;
     }
     ASSERT_TRUE(cvar_set("r.rt.ao.radius", "1.5"));
-    f->rb = de_gpu_buffer_create(r->d, &(de_gpu_buffer_desc){.size = 65536,
+    f->rb = de_gpu_buffer_create(r->d, &(de_gpu_buffer_desc){.size = 196608,
                                                              .usage = DE_USAGE_COPY_DST,
                                                              .memory = DE_MEM_READBACK});
     ASSERT_TRUE(f->rb.id != 0);
@@ -58,6 +62,8 @@ static void rtao_fixture_teardown(rtao_fixture *f) {
         de_gpu_buffer_destroy(f->shadow.rt.d, f->rb);
     }
     (void)cvar_set("r.rt.ao.radius", "1.5");
+    (void)cvar_set("r.rt.golden_sample", "-1");
+    (void)cvar_set("r.denoise.reset", "0");
     shadow_fixture_teardown(&f->shadow);
 }
 static const u8 *ao_frame(rtao_fixture *f) {
@@ -84,6 +90,22 @@ static const u8 *ao_frame(rtao_fixture *f) {
         de_gpu_queue_submit(r->d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
         DE_OK);
     de_gpu_wait_idle(r->d);
+    if (f->capture_rays) {
+        c = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "RTAO ray sampling readback");
+        de_gpu_barrier ray = {.buffer = f->info.ray_buffer,
+                              .before = DE_ACCESS_SHADER_READ,
+                              .after = DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(c, &ray, 1);
+        de_gpu_cmd_copy_buffer(c, f->rb, 49152, f->info.ray_buffer, 0,
+                               f->info.rays * sizeof(de__rt_ray));
+        ray.before = DE_ACCESS_COPY_SRC;
+        ray.after = DE_ACCESS_SHADER_READ;
+        de_gpu_cmd_barriers(c, &ray, 1);
+        ASSERT_EQ(de_gpu_queue_submit(r->d, DE_QUEUE_GRAPHICS,
+                                      &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
+                  DE_OK);
+        de_gpu_wait_idle(r->d);
+    }
     return de_gpu_buffer_map(r->d, f->rb);
 }
 static f64 cpu_visibility(f64 x, f64 y, f64 radius) {
@@ -152,6 +174,55 @@ TEST_F(rtao, reference_corner, rtao_fixture) {
     EXPECT_EQ(f->info.rays, (u64)SW * SH);
     EXPECT_EQ(de_renderer_stats(f->shadow.rt.r)->rays_traced, f->info.rays);
     EXPECT_EQ(f->info.spp, 1u);
+}
+/* Check the actual production rays, independent of visibility or the denoiser.
+ * Every power-of-two prefix must cover each base-2 elementary rectangle once. */
+TEST_F(rtao, hemisphere_prefixes_are_stratified, rtao_fixture) {
+    f->capture_rays = true;
+    const f32 axis[3] = {0, 0, 1};
+    f32 n[3], roughness;
+    de__gb1_unpack(de__gb1_pack(axis, .5f), n, &roughness);
+    const f64 tangent_length = sqrt((f64)n[2] * n[2] + (f64)n[0] * n[0]);
+    const f64 tx = n[2] / tangent_length, tz = -n[0] / tangent_length;
+    const f64 bx = n[1] * tz, by = n[2] * tx - n[0] * tz, bz = -n[1] * tx;
+    for (u32 spp = 1; spp <= 2; ++spp) {
+        de_render_settings settings = de_renderer_get_settings(f->shadow.rt.r);
+        settings.ao = spp == 1 ? DE_QUALITY_HIGH : DE_QUALITY_ULTRA;
+        de_renderer_set_settings(f->shadow.rt.r, &settings);
+        f64 samples[16][64][2] = {0};
+        for (u32 frame = 0; frame < 32; ++frame) {
+            char epoch[16];
+            snprintf(epoch, sizeof epoch, "%u", frame);
+            ASSERT_TRUE(cvar_set("r.rt.golden_sample", epoch));
+            const de__rt_ray *rays = (const void *)(ao_frame(f) + 49152);
+            ASSERT_EQ(f->info.spp, spp);
+            for (u32 pixel = 0; pixel < 16; ++pixel)
+                for (u32 k = 0; k < spp; ++k) {
+                    const f32 *d = rays[(10 * SW + 24 + pixel) * spp + k].direction;
+                    const f64 x = tx * d[0] + tz * d[2];
+                    const f64 y = bx * d[0] + by * d[1] + bz * d[2];
+                    f64 angle = atan2(y, x) / (2 * 3.14159265358979323846);
+                    if (angle < 0)
+                        angle += 1;
+                    samples[pixel][frame * spp + k][0] = x * x + y * y;
+                    samples[pixel][frame * spp + k][1] = angle;
+                }
+        }
+        for (u32 pixel = 0; pixel < 16; ++pixel)
+            for (u32 count = 2; count <= 32 * spp; count *= 2)
+                for (u32 radial = 1; radial <= count; radial *= 2) {
+                    const u32 angular = count / radial;
+                    u32 occupied[64] = {0};
+                    for (u32 i = 0; i < count; ++i) {
+                        u32 x = (u32)(samples[pixel][i][0] * radial);
+                        u32 y = (u32)(samples[pixel][i][1] * angular);
+                        ASSERT_TRUE(x < radial && y < angular);
+                        ++occupied[y * radial + x];
+                    }
+                    for (u32 cell = 0; cell < count; ++cell)
+                        EXPECT_EQ(occupied[cell], 1u);
+                }
+    }
 }
 TEST_F(rtao, radius_quality_and_fallback, rtao_fixture) {
     ASSERT_TRUE(cvar_set("r.rt.ao.radius", ".1"));
@@ -310,4 +381,54 @@ TEST_F(rtao, alpha_without_shadow_flag, rtao_fixture) {
     g_mat[1].standard.base_color.w = 0;
     const u8 *ao = ao_frame(f);
     EXPECT_EQ(ao[25 * 256 + 18], 255u);
+}
+
+TEST_F(rtao, radius_changes_match_fresh_history_without_resetting_view_guides, rtao_fixture) {
+    ASSERT_TRUE(cvar_set("r.rt.golden_sample", "0"));
+    ASSERT_TRUE(cvar_set("r.rt.ao.radius", "2"));
+    for (u32 i = 0; i < 16; ++i)
+        ao_frame(f);
+    /* An unchanged radius must retain temporal history when the ray sample changes. */
+    ASSERT_TRUE(cvar_set("r.rt.golden_sample", "7"));
+    const u8 *bytes = ao_frame(f);
+    u8 retained[SW * SH], changed[SW * SH];
+    u16 changed_distance[SW * SH];
+    for (u32 y = 0; y < SH; ++y)
+        memcpy(retained + y * SW, bytes + y * 256, SW);
+    ASSERT_TRUE(cvar_set("r.denoise.reset", "1"));
+    bytes = ao_frame(f);
+    u32 retained_difference = 0;
+    for (u32 y = 0; y < SH; ++y)
+        for (u32 x = 0; x < SW; ++x)
+            retained_difference += retained[y * SW + x] != bytes[y * 256 + x];
+    printf("unchanged-radius temporal output differs from fresh history at %u pixels\n",
+           retained_difference);
+    EXPECT_GT(retained_difference, 0u);
+    const char *radii[] = {".1", "2", ".2", "1.5", "100", ".01"};
+    for (u32 i = 0; i < sizeof radii / sizeof radii[0]; ++i) {
+        ASSERT_TRUE(cvar_set("r.rt.ao.radius", radii[i]));
+        bytes = ao_frame(f);
+        EXPECT_FALSE(f->canonical_reset);
+        for (u32 y = 0; y < SH; ++y) {
+            memcpy(changed + y * SW, bytes + y * 256, SW);
+            memcpy(changed_distance + y * SW, bytes + 16384 + y * 256, SW * sizeof(u16));
+        }
+        /* Explicit shared-denoiser reset is an independent fresh-history oracle.
+         * Both frames trace identical rays against identical geometry. */
+        char reset[16];
+        snprintf(reset, sizeof reset, "%u", i + 2);
+        ASSERT_TRUE(cvar_set("r.denoise.reset", reset));
+        bytes = ao_frame(f);
+        u32 differences = 0;
+        for (u32 y = 0; y < SH; ++y)
+            for (u32 x = 0; x < SW; ++x) {
+                u16 distance;
+                memcpy(&distance, bytes + 16384 + y * 256 + x * sizeof distance, sizeof distance);
+                differences += changed[y * SW + x] != bytes[y * 256 + x];
+                differences += changed_distance[y * SW + x] != distance;
+            }
+        printf("radius %s immediate/fresh visibility+distance differences: %u\n", radii[i],
+               differences);
+        EXPECT_EQ(differences, 0u);
+    }
 }

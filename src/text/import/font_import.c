@@ -93,6 +93,28 @@ de_result de_font_import(de_asset_import_ctx *c) {
             if (cp < 0xd800 || cp > 0xdfff)
                 bits[cp >> 3] |= (u8)(1u << (cp & 7));
     }
+    const de_asset_setting_value *numeric = de_asset_import_setting_value(c, "ranges");
+    if (numeric && numeric->type == DE_ASSET_SETTING_ARRAY) {
+        for (u32 i = 0; i < numeric->u.values.count; ++i) {
+            const de_asset_setting_value *pair = &numeric->u.values.items[i];
+            if (pair->type != DE_ASSET_SETTING_ARRAY || pair->u.values.count != 2 ||
+                pair->u.values.items[0].type != DE_ASSET_SETTING_INT ||
+                pair->u.values.items[1].type != DE_ASSET_SETTING_INT)
+                return de_asset_import_fail(c, DE_ERR_INVALID_ARGUMENT,
+                                            "font ranges[%u] must contain two integer codepoints",
+                                            i);
+            i64 lo = pair->u.values.items[0].u.i, hi = pair->u.values.items[1].u.i;
+            if (lo < 0 || lo > hi || hi > 0x10ffff)
+                return de_asset_import_fail(c, DE_ERR_INVALID_ARGUMENT,
+                                            "invalid font codepoint range at ranges[%u]", i);
+            for (u32 cp = (u32)lo; cp <= (u32)hi; ++cp)
+                if (cp < 0xd800 || cp > 0xdfff)
+                    bits[cp >> 3] |= (u8)(1u << (cp & 7));
+        }
+    } else if (numeric && numeric->type != DE_ASSET_SETTING_STRING_ARRAY)
+        return de_asset_import_fail(
+            c, DE_ERR_INVALID_ARGUMENT,
+            "font ranges must be an array of string ranges or integer pairs");
     const char *chars = de_asset_import_setting_string(c, "chars", "");
     while (*chars) {
         u32 cp = utf8(&chars);
@@ -196,6 +218,6 @@ de_asset_type_desc de_font_import_type_desc(void) {
     return (de_asset_type_desc){.name = "font",
                                 .extensions = exts,
                                 .extension_count = 4,
-                                .importer_version = 1,
+                                .importer_version = 2,
                                 .import = de_font_import};
 }

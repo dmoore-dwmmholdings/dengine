@@ -1,0 +1,18 @@
+if(NOT TARGET de_ui OR NOT TARGET de_render OR NOT TARGET de_cooker)
+ return()
+endif()
+de_add_game(NAME terminal_demo SOURCES main.c session.c)
+target_link_libraries(terminal_demo PRIVATE de_build_flags)
+target_compile_definitions(terminal_demo PRIVATE "DE_TERMINAL_ROOT=\"${DE_ROOT_DIR}\"")
+if(TARGET terminal_demo_static)
+ target_link_libraries(terminal_demo_static PRIVATE de_build_flags)
+ target_compile_definitions(terminal_demo_static PRIVATE "DE_TERMINAL_ROOT=\"${DE_ROOT_DIR}\"")
+endif()
+if(APPLE)
+ add_executable(terminal_demo_app MACOSX_BUNDLE main.c session.c launcher.c)
+ target_link_libraries(terminal_demo_app PRIVATE dengine de_build_flags)
+ target_compile_definitions(terminal_demo_app PRIVATE "DE_TERMINAL_ROOT=\"${DE_ROOT_DIR}\"")
+ set_target_properties(terminal_demo_app PROPERTIES
+  MACOSX_BUNDLE_BUNDLE_NAME "Terminal Demo"
+  MACOSX_BUNDLE_GUI_IDENTIFIER "org.dengine.terminal-demo")
+endif()

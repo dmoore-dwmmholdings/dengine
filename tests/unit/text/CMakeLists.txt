@@ -25,6 +25,7 @@ if(DE_BUILD_TOOLS AND DE_HAS_RENDER)
   target_include_directories(test_text_render PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
   target_link_libraries(test_text_render PRIVATE de_tp_stb)
   target_compile_definitions(test_text_render PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+  target_compile_definitions(test_text_render PRIVATE "DE_TEXT_RENDER_CAPTURE=\"${CMAKE_CURRENT_BINARY_DIR}/msdf-coverage.png\"")
  endif()
 endif()
 
@@ -47,7 +48,7 @@ if(DE_BUILD_TOOLS)
     de_add_test(NAME text_loc SOURCES test_string_table.c test_message_format.c test_plurals.c
         test_number_format.c test_pseudo_loc.c
         "${DE_ROOT_DIR}/src/text/loc/loc.c" "${DE_ROOT_DIR}/src/text/loc/loc_api.c"
-        LIBS de_loc_common de_asset de_cooker de_platform de_test_support TIMEOUT 30)
+        LIBS de_loc_common de_asset de_cooker de_platform de_test_support de_tp_tomlc17 TIMEOUT 30)
     target_include_directories(test_text_loc PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loc-tmp")
     target_compile_definitions(test_text_loc PRIVATE "DE_LOC_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/loc-tmp\"")

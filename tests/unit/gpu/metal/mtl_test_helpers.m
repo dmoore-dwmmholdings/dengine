@@ -210,7 +210,7 @@ int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[6], de_gpu_buff
          * them. This command buffer bypasses de_gpu_queue_submit, which brings the residency set
          * up to date with the heaps created since the last submit, so sync it here. */
         de__mtl_residency_sync(d);
-        de__mtl_residency_encoder(d, (__bridge void *)enc, DE__MTL_ENC_COMPUTE);
+        de__mtl_residency_encoder(d, (__bridge void *)enc, DE__MTL_ENC_COMPUTE, NULL);
         [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
         [enc endEncoding];
         if (!run_and_wait(cb, err, cap))

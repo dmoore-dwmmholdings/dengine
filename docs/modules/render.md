@@ -39,7 +39,24 @@ publishes constants without dispatching nonexistent deferred tiles. Opaque
 screen-space RT production is skipped when no opaque G-buffer exists; forward
 surfaces retain their own direct clustered shading.
 
+## Host window surfaces
+
+The host creates its window before the game's `init` callback. `[window] surface`
+in `game.toml` defaults to `"auto"`: Metal on macOS, Vulkan on Linux, and no
+API-specific surface for D3D12 on Windows. A game selecting another backend must
+set `surface = "vulkan"`, `"metal"`, or `"none"` to match it. Headless hosts do
+not create a window. Game initialization can create a device and renderer on
+`engine->window` directly. Assign successful creations to `engine->gpu` and
+`engine->renderer` to transfer teardown to the host; it unloads assets before
+destroying the renderer, device, and window. Release game-owned load handles in
+game shutdown rather than destroying an assigned renderer while its assets live.
+
 ## Immutable view and pixel context
+
+Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.
+Current and previous pivots snap independently; grid history uses absolute coordinates
+across render-origin rebases. Disabling sprite snapping preserves the previously snapped
+pose for that transition frame, while bounds and TLAS continue to follow only the current pose.
 
 `de_renderer_extract_view_info` is valid after `de.render.extract_views` during
 Extract. Camera matrices, double-precision render origin, layer mask, effective
@@ -56,6 +73,11 @@ scroll residual. Metadata's internal dimensions remain internal even when a
 later upscale stage changes the current hook target to output resolution.
 `viewport_px` locates the view in its destination; `content_px` is local to the
 view output and uses the renderer's actual integer/fractional fit function.
+
+Fractional pixel magnification holds source texel centers across interior output
+pixels and blends over one output pixel at texel boundaries. Scales below one
+use linear sampling. Integer scaling retains nearest sampling; letterboxing and
+smooth scroll residuals use the same fitted content rectangle.
 
 `DE_HOOK_PIXEL_UI` runs on tonemapped internal pixels immediately before palette
 conversion and the existing upscale. This allows pixel UI to share scene scale,
@@ -76,6 +98,12 @@ depth-tested output matches the wall-only reference. Header C11/C++17 checks pas
 Vulkan and D3D12 execution remain hardware qualifications. This provider
 checkpoint does not complete DENG-322's UI consumer, pointer or world/pixel UI
 goldens.
+
+Path-tracer pipelines are initialized on the render thread when a non-capture
+view first selects RT path tracing. Base and raster views do not compile these
+unused shaders during renderer creation. Pipelines are reused across views and
+setting changes; a failed initialization releases partial handles and is retained
+so later frames do not repeatedly invoke the compiler.
 
 `de_view_layout_info` is an advisory main-thread query for PostUpdate layout;
 view zero selects the renderer's main view. It uses the same fitted content

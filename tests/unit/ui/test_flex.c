@@ -3,7 +3,7 @@ TEST_F(ui_flex, grow_justify_stretch_reverse, ui_fx) {
     de_entity root = ui_node(f, (de_entity){0}), children[3];
     for (u32 i = 0; i < 3; ++i) {
         children[i] = ui_node(f, root);
-        ui_node_edit(f, children[i])->grow = i == 1 ? 2 : 1;
+        ui_node_edit(f, children[i])->grow = i == 1 ? 2.f : 1.f;
     }
     ui_frame(f);
     expect_rect(ui_rect(f, children[0]), 0, 0, 100, 100);

@@ -208,6 +208,7 @@ TEST(physics2d_joints, wheel_frequency_within_five_percent) {
     EXPECT_TRUE(count >= 3);
     if (count >= 3) {
         f64 hz = (count - 1) / ((last - first) * (f64)SV_DT);
+        printf("wheel frequency %.6f Hz\n", hz);
         EXPECT_TRUE(fabs(hz / 3 - 1) < 0.05);
     }
     de_physics2d_destroy(p);
@@ -225,6 +226,7 @@ TEST(physics2d_joints, no_allocation_in_steady_state) {
     ticks(p, 1);
     de_tracking_stats before = de_tracking_allocator_stats(&tracking);
     ticks(p, 120);
+    (void)de_physics2d_checksum(p);
     de_tracking_stats after = de_tracking_allocator_stats(&tracking);
     EXPECT_EQ(before.alloc_count, after.alloc_count);
     EXPECT_EQ(before.realloc_count, after.realloc_count);
@@ -246,4 +248,182 @@ TEST(physics2d_joints, mouse_force_is_bounded) {
     f32 mass = p->bodies.mass[tu_index(b)];
     EXPECT_TRUE(de_dsqrt(de__v2_dot(v, v)) * mass <= 0.01f * SV_DT * 1.001f);
     de_physics2d_destroy(p);
+}
+
+TEST(physics2d_joints, checksum_changes_with_motor_and_mouse_target_before_stepping) {
+    de_physics2d_world *p = world();
+    de_body b = ball(p, 0, 0);
+    de_joint2d_desc d = {.body_b = b};
+    de_joint j = joint(p, &d);
+    u64 before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 2, 10), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 3, 10), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_set_motor(p, j, 3, 11), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    de_joint2d_destroy(p, j);
+    d.kind = DE_JOINT2D_MOUSE;
+    j = joint(p, &d);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_mouse_set_target(p, j, (de_dpoint2d){1, 2}), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    before = de_physics2d_checksum(p);
+    ASSERT_EQ(de_joint2d_mouse_set_target(p, j, (de_dpoint2d){1 + 1e-12, 2}), DE_OK);
+    EXPECT_NE(de_physics2d_checksum(p), before);
+    de_physics2d_destroy(p);
+}
+static u64 description_checksum(de_joint2d_desc d) {
+    de_physics2d_world *p = world();
+    d.body_b = ball(p, 0, 0);
+    (void)joint(p, &d);
+    u64 checksum = de_physics2d_checksum(p);
+    de_physics2d_destroy(p);
+    return checksum;
+}
+TEST(physics2d_joints, checksum_covers_future_behavior_and_ignores_padding) {
+    de_joint2d_desc d = {.axis = {0.6f, 0.8f},
+                         .lower = -2,
+                         .upper = 2,
+                         .hertz = 3,
+                         .damping_ratio = 0.5f,
+                         .world_anchor_a = {1, 2},
+                         .world_anchor_b = {3, 4}};
+    u64 base = description_checksum(d);
+#define DIFFERENT(field, value)                                                                    \
+    do {                                                                                           \
+        de_joint2d_desc variant = d;                                                               \
+        variant.field = (value);                                                                   \
+        EXPECT_NE(description_checksum(variant), base);                                            \
+    } while (0)
+    DIFFERENT(local_anchor_a.x, 0.25f);
+    DIFFERENT(local_anchor_a.y, 0.25f);
+    DIFFERENT(local_anchor_b.x, 0.25f);
+    DIFFERENT(local_anchor_b.y, 0.25f);
+    DIFFERENT(world_anchor_a.x, 1 + 1e-12);
+    DIFFERENT(world_anchor_a.y, 2 + 1e-12);
+    DIFFERENT(world_anchor_b.x, 3 + 1e-12);
+    DIFFERENT(world_anchor_b.y, 4 + 1e-12);
+    DIFFERENT(axis.x, 0.25f);
+    DIFFERENT(axis.y, 0.25f);
+    DIFFERENT(reference_angle, 0.25f);
+    DIFFERENT(enable_limit, true);
+    DIFFERENT(enable_motor, true);
+    DIFFERENT(collide_connected, true);
+    DIFFERENT(lower, -1);
+    DIFFERENT(upper, 3);
+    DIFFERENT(motor_speed, 1);
+    DIFFERENT(max_motor_force, 1);
+    DIFFERENT(hertz, 4);
+    DIFFERENT(damping_ratio, 0.6f);
+    DIFFERENT(break_force, 1);
+#undef DIFFERENT
+    de_joint2d_desc padded = d;
+    for (size_t i = offsetof(de_joint2d_desc, collide_connected) + sizeof(bool);
+         i < offsetof(de_joint2d_desc, lower); ++i)
+        ((u8 *)&padded)[i] = 0xa5;
+    EXPECT_EQ(description_checksum(padded), base);
+    d.axis = (de_vec2){0, 0};
+    base = description_checksum(d);
+    d.axis = (de_vec2){2, 0};
+    EXPECT_EQ(description_checksum(d), base);
+}
+
+TEST(physics2d_joints, prismatic_stops_hold_under_sustained_motor_each_tick) {
+    const f32 forces[] = {10, 1000};
+    const u32 substeps[] = {1, 4, 8};
+    for (u32 step = 0; step < 3; ++step)
+        for (u32 f = 0; f < 2; ++f)
+            for (i32 direction = -1; direction <= 1; direction += 2) {
+                de_physics2d_desc wd = {.max_bodies = 32,
+                                        .plane = DE_PHYSICS2D_PLANE_TOP_DOWN,
+                                        .substeps = substeps[step]};
+                de_physics2d_world *p = NULL;
+                ASSERT_EQ(de_physics2d_create(&wd, &p), DE_OK);
+                de_body b = ball(p, 0, 0);
+                de_joint2d_desc d = {.kind = DE_JOINT2D_PRISMATIC,
+                                     .body_b = b,
+                                     .enable_motor = true,
+                                     .motor_speed = 3 * (f32)direction,
+                                     .max_motor_force = forces[f],
+                                     .enable_limit = true,
+                                     .lower = -1,
+                                     .upper = 1};
+                (void)joint(p, &d);
+                for (u32 tick = 0; tick < 180; ++tick) {
+                    ticks(p, 1);
+                    de_transform2d t = sv_xf_of(p, b);
+                    EXPECT_TRUE(t.x >= -1.001 && t.x <= 1.001);
+                    EXPECT_FLOAT_EQ(t.y, 0, 0.001);
+                }
+                EXPECT_FLOAT_EQ(sv_xf_of(p, b).x, direction, 0.001);
+                de_physics2d_destroy(p);
+            }
+}
+TEST(physics2d_joints, prismatic_stop_repairs_initial_violation_under_motor_load) {
+    for (i32 direction = -1; direction <= 1; direction += 2) {
+        de_physics2d_world *p = world();
+        de_body b = ball(p, 1.01f * (f32)direction, 0);
+        de_joint2d_desc d = {.kind = DE_JOINT2D_PRISMATIC,
+                             .body_b = b,
+                             .enable_motor = true,
+                             .motor_speed = 3 * (f32)direction,
+                             .max_motor_force = 1000,
+                             .enable_limit = true,
+                             .lower = -1,
+                             .upper = 1};
+        (void)joint(p, &d);
+        ticks(p, 60);
+        EXPECT_FLOAT_EQ(sv_xf_of(p, b).x, direction, 0.001);
+        de_physics2d_destroy(p);
+    }
+}
+
+static f64 measured_wheel_frequency(f32 hertz, f32 amplitude, u32 substeps) {
+    de_physics2d_desc wd = {
+        .max_bodies = 32, .plane = DE_PHYSICS2D_PLANE_TOP_DOWN, .substeps = substeps};
+    de_physics2d_world *p = NULL;
+    ASSERT_EQ(de_physics2d_create(&wd, &p), DE_OK);
+    de_body b = ball(p, 0, amplitude);
+    de_joint2d_desc d = {.kind = DE_JOINT2D_WHEEL,
+                         .body_b = b,
+                         .axis = {0, 1},
+                         .hertz = hertz,
+                         .damping_ratio = 0.01f};
+    (void)joint(p, &d);
+    f64 previous = amplitude, first = 0, last = 0;
+    u32 count = 0, frames = (u32)(360 / hertz);
+    for (u32 i = 1; i <= frames; ++i) {
+        ticks(p, 1);
+        f64 y = sv_xf_of(p, b).y;
+        if (previous > 0 && y <= 0) {
+            f64 crossing = (i - 1) + previous / (previous - y);
+            if (!count)
+                first = crossing;
+            last = crossing;
+            ++count;
+        }
+        previous = y;
+    }
+    EXPECT_TRUE(count >= 4);
+    f64 result = count > 1 ? (count - 1) / ((last - first) * (f64)SV_DT) : 0;
+    printf("spring %.1fHz amplitude%.2f substeps%u measured%.6fHz\n", hertz, amplitude, substeps,
+           result);
+    de_physics2d_destroy(p);
+    return result;
+}
+TEST(physics2d_joints, wheel_frequency_is_independent_of_amplitude_and_substeps) {
+    const f32 amplitudes[] = {0.01f, 0.5f, 2};
+    const f32 frequencies[] = {1, 3, 6};
+    const u32 substeps[] = {4, 8};
+    for (u32 a = 0; a < 3; ++a)
+        for (u32 f = 0; f < 3; ++f)
+            for (u32 n = 0; n < 2; ++n)
+                EXPECT_TRUE(
+                    fabs(measured_wheel_frequency(frequencies[f], amplitudes[a], substeps[n]) /
+                             frequencies[f] -
+                         1) < 0.05);
+    EXPECT_TRUE(fabs(measured_wheel_frequency(3, 0.5f, 1) / 3 - 1) < 0.05);
 }

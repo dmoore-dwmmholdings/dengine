@@ -56,7 +56,8 @@ typedef enum de_ui_align {
     DE_UI_ALIGN_AUTO /**< align_self only: inherit parent's align_items. */
 } de_ui_align;
 
-/** Widget tags drive stylesheet type selectors; widgets set the corresponding tag. */
+/** Widget tags drive stylesheet type selectors. Widgets infer tags when none is authored;
+ * an explicitly supplied selector takes precedence over content and behavior components. */
 typedef enum de_ui_widget_type {
     DE_UI_WIDGET_PANEL,
     DE_UI_WIDGET_BUTTON,
@@ -186,10 +187,39 @@ typedef struct DeUiToggle {
     bool on;
 } DeUiToggle;
 typedef struct DeUiTextInput {
-    char buffer[256];
+    char buffer[256]; /**< Legacy inline input. After growth use text_input_get/set. */
     u32 length, caret;
     bool password, multiline;
 } DeUiTextInput;
+/** Semantic committed editor operations for game journals/replay. Selection offsets are
+ * UTF-8 bytes and snap to grapheme boundaries. REPLACE replaces the current selection. */
+typedef enum de_ui_text_edit_kind {
+    DE_UI_TEXT_SELECT,
+    DE_UI_TEXT_REPLACE,
+    DE_UI_TEXT_UNDO,
+    DE_UI_TEXT_REDO
+} de_ui_text_edit_kind;
+typedef struct de_ui_text_edit {
+    de_ui_text_edit_kind kind;
+    de_str text;
+    u32 caret, anchor;
+} de_ui_text_edit;
+/** Observer runs synchronously after successful edits/selection changes. Copy text before
+ * returning; do not reenter UI editing here. Programmatic set() is not an edit command.
+ * IME preedit is transient and not recorded; committed text is recorded. */
+typedef void (*de_ui_text_edit_observer)(de_entity entity, const de_ui_text_edit *edit, void *user);
+DE_API void de_ui_set_text_edit_observer(de_ui *ui, de_ui_text_edit_observer observer, void *user);
+DE_API bool de_ui_text_input_apply(de_ui *ui, de_entity entity, const de_ui_text_edit *edit);
+/** Set a committed UTF-8 document (no embedded NUL), copying into UI-owned storage.
+ * Clears undo history; does not emit CHANGED. Existing inline inputs remain supported.
+ * Runtime documents are not ECS snapshots/serialized data: save via get/set explicitly.
+ * On allocation failure the previous document is preserved. */
+DE_API de_result de_ui_text_input_set(de_ui *ui, de_entity entity, de_str text);
+/** Borrowed committed document, valid until the next edit/set/removal/detach. */
+DE_API de_str de_ui_text_input_get(const de_ui *ui, de_entity entity);
+/** Undo/redo a committed edit, restoring selection and emitting CHANGED. */
+DE_API bool de_ui_text_input_undo(de_ui *ui, de_entity entity);
+DE_API bool de_ui_text_input_redo(de_ui *ui, de_entity entity);
 typedef struct DeUiScroll {
     de_vec2 offset;
     bool horizontal, vertical;
@@ -204,8 +234,13 @@ typedef struct DeUiList {
     f32 item_height;
     de_prefab item_template;
 } DeUiList;
-typedef struct DeUiTabs { u32 active; } DeUiTabs;
-typedef struct DeUiTooltip { de_name loc_id; f32 delay; } DeUiTooltip;
+typedef struct DeUiTabs {
+    u32 active;
+} DeUiTabs;
+typedef struct DeUiTooltip {
+    de_name loc_id;
+    f32 delay;
+} DeUiTooltip;
 /** Scroll offsets are physical pixels. Values are clamped to current content bounds. */
 DE_API void de_ui_scroll_offset(de_ui *ui, de_entity container, de_vec2 offset);
 /** Reveal a child within its scroll container, clamping the resulting offset. */
@@ -216,12 +251,14 @@ typedef struct DeUiFocusable {
 } DeUiFocusable; /* null = spatial */
 /* Binds a widget property to a reflected field on another entity, e.g. "DeHealth.current". */
 typedef enum de_ui_binding_mode { DE_UI_BIND_ONE_WAY, DE_UI_BIND_TWO_WAY } de_ui_binding_mode;
+/** Active tint/opacity bindings take precedence over stylesheet state/theme values.
+ * Text tint controls the resolved text color; unchanged sources do not trigger writes. */
 typedef struct DeUiBinding {
     de_entity source;
     char path[64];
     char property[32];
     de_ui_binding_mode mode; /**< Zero: source to widget; TWO_WAY also accepts CHANGED. */
-    char format[32]; /**< Optional S28 inline message pattern, with argument `value`. */
+    char format[32];         /**< Optional S28 inline message pattern, with argument `value`. */
 } DeUiBinding;
 /* Renders this UI subtree into the 3D world as a panel. */
 typedef struct DeUiWorldPanel {
@@ -249,7 +286,9 @@ typedef struct de_ui_event {
 /** UI action context policy. NONE releases the context; NON_MODAL passes bindings through;
  * MODAL consumes bound inputs. A visible modal popup temporarily enforces MODAL. */
 typedef enum de_ui_input_mode {
-    DE_UI_INPUT_NONE, DE_UI_INPUT_NON_MODAL, DE_UI_INPUT_MODAL
+    DE_UI_INPUT_NONE,
+    DE_UI_INPUT_NON_MODAL,
+    DE_UI_INPUT_MODAL
 } de_ui_input_mode;
 /** Defaults to NON_MODAL. Changes take effect at the next input frame boundary. */
 DE_API void de_ui_set_input_mode(de_ui *ui, de_ui_input_mode mode);

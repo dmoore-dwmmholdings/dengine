@@ -11,8 +11,10 @@ Font assets accept TrueType/OpenType outlines, BMFont v3 text or binary files wi
 PNG pages, and PNG pixel fonts with a TOML mapping sidecar. Outline fonts cook to
 DFNT v1 with a deterministic MTSDF atlas; bitmap fonts preserve source pixels and
 metrics. Manifest settings include `em_px`, `px_range`, `page_size`, `charset`,
-`chars` and codepoint `ranges`. Ranges currently use strings such as
-`ranges = ["0x100-0x24f"]`; numeric nested arrays are tracked by DENG-468. The
+`chars` and codepoint `ranges`. Ranges accept inclusive integer pairs such as
+`ranges = [[256, 591], [0x400, 0x4ff]]` or the existing string syntax
+`ranges = ["0x100-0x24f"]`. Pairs require two ordered integers in `0..0x10ffff`;
+surrogate codepoints are excluded. The
 pixel sidecar accepts explicit numeric `cell = [8,8]` and per-character advances.
 
 The importer validates font/BMFont inputs, character ranges and page bounds.
@@ -30,15 +32,17 @@ Shaping validates UTF8 with U+FFFD replacement, itemizes font/script runs, and u
 HarfBuzz for glyph IDs, logical byte clusters, advances and offsets. Kerning,
 standard/contextual ligatures and contextual alternates can be disabled with
 `DE_TEXT_DISABLE_*`; language is BCP-47. Thread-local shaping buffers and striped
-bounded caches support worker callers. Combining-mark fallback itemization has a
-known source-review edge case (DENG-476).
+bounded caches support worker callers. Inherited combining marks stay with the
+preceding base font when it covers them, preserving a single shaping run. Marks
+that it cannot cover retain their resolved fallback font.
 
 An outline glyph absent from the cooked atlas queues one deduplicated background
 MTSDF job. `de_text_update` integrates completed jobs in deterministic order with
 per-frame and page limits, increments font generations, and publishes dirty rects.
 Missing glyphs keep their advances while their quads are omitted. Bitmap fonts
-never generate runtime outline glyphs. Exceptional task OOM execution and dirty-list
-overflow cases remain DENG-483/484.
+never generate runtime outline glyphs. Task-record OOM on external or frame callers
+keeps the glyph pending for a later background-worker retry. Dirty upload rectangles
+coalesce by page when their bounded list fills.
 
 ## Paragraph layout
 
@@ -57,16 +61,18 @@ a cluster; visual hit testing chooses the nearest cluster edge.
 A striped bounded cache keys all description/style inputs and fallback configuration.
 When atlas generations change, a new immutable result rebuilds quads from retained
 positions; older results remain valid and runtime arrivals do not reflow the text.
-Use a persistent allocator for layouts: cached allocations currently retain the
-caller allocator after releasing the caller's reference (DENG-502).
+Default-heap layouts use the shared cache. Explicit custom allocators, including arenas,
+produce uncached layouts: release those layouts before resetting/destroying their storage.
+The cache never retains caller-owned arena allocations after release (DENG-502).
 
 All 91,707 official BidiCharacter cases, 10,274 LineBreak cases and 1,187 GraphemeBreak
 cases pass with zero skips. The line breaker uses the numeric tailoring specified
 by the official test file. Regenerate properties with
 `python3 tools/unicode/gen_linebreak.py`; output is byte reproducible from vendored
-Unicode inputs. Layout still has tracked defects: trailing-space
-wrapping/justification (DENG-499), the first cache lookup after lazy font-watch
-initialization (DENG-500). DENG-503 is fixed: paragraph splitting also honors UAX #9
+Unicode inputs. Line wrapping records breaks after discardable trailing blanks before
+testing the next visible glyph (DENG-499). Cache keys snapshot the fallback epoch after
+registering the primary/fallback fonts, so the first repeat is a cache hit (DENG-500).
+DENG-503 is fixed: paragraph splitting also honors UAX #9
 paragraph separators U+001C..U+001E, keeping shaping within the bidi level array.
 The original crash and separator/invalid-UTF8 regressions pass ASan/UBSan; a subsequent
 61-second coverage-guided campaign completed 66,715 cases without a finding.
@@ -77,6 +83,16 @@ Call `de_text_attach(text, renderer, world)` after creating the renderer and wor
 Passing a null renderer detaches rendering; CPU fonts, shaping and layout remain
 available. Destroy or detach text before its renderer/world. Update text before
 submitting that frame's quads.
+
+For renderer-only upload warmup, finish those frames before attaching text. Attachment
+seeds text's frame queue from the renderer's current frame. Thereafter call
+`de_text_update` once before submissions for each rendered frame; extra renderer-only
+frames advance the renderer without advancing the text queue. Use the uploader's
+flush/acquire calls for upload progress that should not advance a render frame.
+
+MSDF import normalizes contour orientation for both TrueType and CFF outlines,
+including opposite-winding counters. Font importer version2 invalidates prior
+cooked atlases so CFF assets affected by inverted coverage are rebuilt.
 
 `de_text_draw` copies quads into the current frame list. `pos` is x,y,width,height
 in pixels; `uv` is minimum/maximum atlas UV. Each quad's nonzero font selects its
@@ -100,13 +116,16 @@ control each entity. World text uses this same paragraph layout and camera-relat
 double positions. Localization callbacks are reserved for DENG-264; a literal is
 used when no callback supplies a localization ID.
 
-GPU atlas generations remain allocated until detach (DENG-490). Text-only worlds
-without another drawable need a depth-context integration follow-up (DENG-492).
-Wide shadow offsets can sample neighboring glyphs beyond atlas padding (DENG-493).
-Metal native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
-`tests/golden/text`; other backend captures remain DENG-496. Render-disabled builds
-compile the CPU module independently; full macOS headless configuration has an
-unrelated Metal CMake issue (DENG-472).
+Superseded atlas generations are collected; pending UI packets hold generation leases
+until retirement. World text reuses visibility depth when present. Text-only views create
+a cleared reverse-Z depth attachment, so no other drawable is required.
+Fill and effect samples stay inside each glyph's atlas rectangle, including its padding.
+Shadow coordinates outside that allocation contribute no coverage. Effect extent still
+depends on the glyph quad and available padding.
+Native pixel readbacks and four FLIP scenes live under `tests/unit/text` and
+`tests/golden/text`. Backend references were captured and visually reviewed on actual
+Metal, Vulkan lavapipe and D3D12 WARP runners (DENG-496); world text is nonempty on
+all three. Render-disabled builds compile the CPU module independently.
 
 ## Inline formatting and binding cache prerequisites (DENG-321)
 
@@ -121,3 +140,9 @@ Binding caches can also observe `de_type_registry_revision` from `de_reflect.h`:
 struct/enum registration or replacement advances it, including metadata/hook-only changes;
 failed registrations and lookups leave it unchanged. Re-resolve both cached paths and previously
 invalid paths when it changes. Actual UI binding/widget implementation remains a separate task.
+
+Locale TOML files use the first string assigned to a key in `[strings]`. Later
+string assignments to that key emit a `text.loc` warning with the filename,
+duplicate line and original value line. The cooker still rejects malformed
+TOML, non-string values, repeated table headers and inline-table duplicates;
+ordinary TOML callers retain strict duplicate rejection.

@@ -252,7 +252,7 @@ static void content(ui_scene *s) {
     for (u32 row = 0; row < 5; ++row)
         label(s, s->root, 40, ys[row] + 6, 150, 32, rows[row], 20);
     for (u32 state = 0; state < 4; ++state) {
-        f32 x = 208 + state * 256;
+        f32 x = (f32)(208 + state * 256);
         label(s, s->root, x, 120, 224, 28, states[state], 20);
         de_entity button = widget(s, "DeUiButton", x, 160, 224, 52, state);
         label(s, button, 16, 12, 192, 28, "Play game", 20);

@@ -6,7 +6,8 @@
  * one record per live body in ascending index order, then (DENG-253, once the contacts state
  * exists) the manifolds in key order and the end records of the last step. Each record is hashed
  * with the running value as the seed. Floats are hashed by their bit patterns. The contact part
- * is appended after the bodies, so the body records hash as before.
+ * is appended after the bodies, so the body records hash as before. Joint records follow
+ * contacts and include the normalized descriptor and persistent impulses (DENG-471).
  */
 #include "physics/2d/manifold2d.h"
 #include "physics/2d/joints2d/joint2d_internal.h"

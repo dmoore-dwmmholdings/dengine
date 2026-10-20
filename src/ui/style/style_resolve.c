@@ -1,4 +1,7 @@
 #include "stylesheet_internal.h"
+#if defined(DE_UI_BINDING)
+#include "ui/binding/binding_internal.h"
+#endif
 #include <math.h>
 #include <string.h>
 static const char *const widget_names[] = {"panel",   "button",   "toggle", "slider", "text",
@@ -14,7 +17,7 @@ static void collect(const de_query_chunk *chunk, void *user) {
     for (u32 i = 0; i < chunk->count && state->entity_count < state->ui->capacity; ++i)
         state->entities[state->entity_count++] = chunk->entities[i];
 }
-static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity) {
+static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bool create) {
     u64 h = entity.bits;
     h ^= h >> 33;
     h *= 0xff51afd7ed558ccdULL;
@@ -25,12 +28,30 @@ static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity) {
         if (cache->entity.bits == entity.bits)
             return cache;
         if (!cache->entity.bits || !de_entity_alive(state->ui->world, cache->entity)) {
+            if (!create)
+                return NULL;
             memset(cache, 0, sizeof *cache);
             cache->entity = entity;
             return cache;
         }
     }
     return NULL;
+}
+void de_ui__style_tween_sample(de_ui_style_system *state, de_entity entity, de_component component,
+                               u32 offset, f32 value) {
+    de_ui_style_cache *cache = cached(state, entity, false);
+    if (!cache)
+        return;
+    u8 *dst = NULL;
+    if (component.id == state->ui->ids.style.id && offset + sizeof value <= sizeof(DeUiStyle))
+        dst = (u8 *)&cache->applied_style + offset;
+    else if (component.id == state->ui->ids.node.id && offset + sizeof value <= sizeof(DeUiNode))
+        dst = (u8 *)&cache->applied_node + offset;
+    else if (component.id == state->ui->ids.text.id && offset >= offsetof(DeUiText, style) &&
+             offset + sizeof value <= offsetof(DeUiText, style) + sizeof(de_text_style))
+        dst = (u8 *)&cache->applied_text + offset - offsetof(DeUiText, style);
+    if (dst)
+        memcpy(dst, &value, sizeof value);
 }
 static u32 property_size(const de_ui_style_property *p) {
     return p->kind == DE_UI_PROP_COLOR || p->kind == DE_UI_PROP_VEC4 ? sizeof(de_vec4)
@@ -121,7 +142,7 @@ static void transition(de_ui_style_system *state, de_entity entity, const de_ui_
             continue;
         u8 *dst = de_entity_get(ui->world, entity, component);
         memcpy(dst + base + sub, &a, sizeof a);
-        (void)de_ui__tween_field(state, entity, component, base + sub, b, seconds, easing);
+        (void)de_ui__tween_field(state, entity, component, base + sub, b, seconds, easing, true);
     }
 }
 static void resolve(de_ui_style_system *state, de_entity entity) {
@@ -139,12 +160,39 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     if (de_ui_focused(ui).bits == entity.bits && !de_ui_focus_visible(ui))
         bits &= ~2u;
 #endif
-    de_ui_style_cache *cache = cached(state, entity);
+    de_name widget_name =
+        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
+    bool matching_rule = false;
+    for (u32 s = 0; s < state->sheet_count && !matching_rule; ++s)
+        for (u32 r = 0; r < state->sheets[s].sheet->rule_count; ++r) {
+            const de_ui_style_rule *rule = &state->sheets[s].sheet->rules[r];
+            if ((!rule->widget.hash || rule->widget.hash == widget_name.hash) &&
+                (!rule->class_name.hash ||
+                 rule->class_name.hash == current_node->style_class.hash) &&
+                (!rule->state || (bits & rule->state) == rule->state)) {
+                matching_rule = true;
+                break;
+            }
+        }
+    /* Untouched nodes with no matching rules need no authored/applied snapshot. Existing
+     * caches must still resolve when their last matching rule disappears. */
+    de_ui_style_cache *cache = cached(state, entity, matching_rule);
     if (!cache)
         return;
+    u64 binding_revision = 0;
+#if defined(DE_UI_BINDING)
+    binding_revision = de_ui__binding_style(ui, entity, NULL);
+#endif
     if (cache->initialized && cache->class_name.hash == current_node->style_class.hash &&
-        cache->widget == type && cache->state == bits && cache->revision == state->revision)
+        cache->widget == type && cache->state == bits && cache->revision == state->revision &&
+        cache->binding_revision == binding_revision)
         return;
+    /* A restyle replaces prior automatic motion, including properties that no longer have
+     * a winning rule or now have zero duration. Explicit API tweens keep their ownership. */
+    for (u32 t = 0; state->active_tweens && t < DE_UI_STYLE_TWEENS; ++t)
+        if (state->tweens[t].active && state->tweens[t].stylesheet &&
+            state->tweens[t].entity.bits == entity.bits)
+            state->tweens[t].active = false;
     ++state->entities_restyled;
     DeUiNode node = *current_node;
     DeUiStyle style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
@@ -171,8 +219,6 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     f32 duration = 0;
     de_ui_easing easing = DE_UI_EASE_LINEAR;
     i32 motion_specificity = -1;
-    de_name widget_name =
-        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
     for (u32 s = 0; s < state->sheet_count; ++s) {
         de_ui_style_sheet_slot *slot = &state->sheets[s];
         for (u32 r = 0; r < slot->sheet->rule_count; ++r) {
@@ -202,13 +248,19 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     for (u32 p = 0; p < de_ui__style_property_count; ++p)
         if (best[p] >= 0)
             apply_value(ui, &de_ui__style_properties[p], &winning[p], &node, &style, &text);
+#if defined(DE_UI_BINDING)
+    (void)de_ui__binding_style(ui, entity, &style);
+#endif
     if (memcmp(&node, &before_node, sizeof node))
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
-    if (!current_style) {
+    /* Absent style already means these defaults. Avoid moving neutral panels to a new
+     * archetype just to publish an identical value (the common large-tree case). */
+    const DeUiStyle default_style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
+    if (!current_style && memcmp(&style, &default_style, sizeof style)) {
         DeUiStyle *dst = de_entity_add(ui->world, entity, ui->ids.style);
         if (dst)
             *dst = style;
-    } else if (memcmp(&style, &before_style, sizeof style))
+    } else if (current_style && memcmp(&style, &before_style, sizeof style))
         *(DeUiStyle *)de_entity_get(ui->world, entity, ui->ids.style) = style;
     if (current_text && memcmp(&text, &before_text, sizeof text)) {
         DeUiText *dst = de_entity_get(ui->world, entity, ui->ids.text);
@@ -226,6 +278,7 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     cache->widget = type;
     cache->state = bits;
     cache->revision = state->revision;
+    cache->binding_revision = binding_revision;
     cache->applied_node = node;
     cache->applied_style = style;
     cache->applied_text = text;

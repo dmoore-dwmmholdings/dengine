@@ -4,12 +4,24 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+/* Locale strings use first-wins duplicates; all other TOML remains strict. */
+static bool locale_duplicate(const toml_duplicate_t *d, void *user) {
+    toml_datum_t strings = toml_get(*d->root, "strings");
+    if (strings.type != TOML_TABLE || strings.u.tab.value != d->table->u.tab.value ||
+        d->previous->type != TOML_STRING || d->replacement->type != TOML_STRING)
+        return false;
+    de_log_category log = de_log_register_category("text.loc", DE_LOG_INFO);
+    DE_WARN(log, "%s:%d: duplicate string key '%.*s'; keeping first value from line %d",
+            (const char *)user, d->lineno, d->keylen, d->key, d->previous->lineno);
+    return true;
+}
 static de_result import_locale(de_asset_import_ctx *ctx, const char *file, const void *source,
                                u64 size, void **out, u64 *bytes) {
     if (size > INT_MAX)
         return de_asset_import_fail(ctx, DE_ERR_PARSE, "%s: locale source too large", file);
     const de_allocator *a = de_asset_import_allocator(ctx);
-    toml_result_t parsed = de__toml_parse(a, source, (int)size);
+    toml_result_t parsed =
+        de__toml_parse_with_duplicates(a, source, (int)size, locale_duplicate, (void *)file);
     if (!parsed.ok) {
         de_result r = de_asset_import_fail(ctx, DE_ERR_PARSE, "%s: %s", file, parsed.errmsg);
         de__toml_free(parsed);
@@ -155,7 +167,7 @@ static de_result import_table(de_asset_import_ctx *ctx) {
 de_asset_type_desc de_string_table_import_type_desc(void) {
     de_asset_type_desc d = {0};
     d.name = "string_table";
-    d.importer_version = 1;
+    d.importer_version = 2;
     d.import = import_table;
     return d;
 }

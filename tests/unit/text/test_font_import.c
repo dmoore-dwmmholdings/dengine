@@ -1,4 +1,63 @@
 #include "font_test_util.h"
+static de_result range_manifest_read(void *user, const char *path, const de_allocator *a,
+                                     void **data, u64 *size) {
+    (void)path;
+    const char *text = user;
+    *size = strlen(text);
+    *data = DE_ALLOC(a, *size + 1, 1, DE_MEM_ASSET);
+    if (!*data)
+        return DE_ERR_OUT_OF_MEMORY;
+    memcpy(*data, text, *size + 1);
+    return DE_OK;
+}
+TEST(font, numeric_nested_ranges_match_legacy_string_ranges) {
+    const char *source =
+        "[assets]\nfont={type='font',source='NotoSans.ttf',ranges=[[65,67],[0x100,0x102]]}\n";
+    de__manifest *manifest = NULL;
+    ASSERT_EQ(de__manifest_parse(&(de__manifest_parse_desc){.path = "ranges:/assets.toml",
+                                                            .read = range_manifest_read,
+                                                            .read_user = (void *)source},
+                                 &manifest),
+              DE_OK);
+    ASSERT_EQ(manifest->error_count, 0u);
+    const de__manifest_asset *asset = de__manifest_find_asset(manifest, "font");
+    ASSERT_TRUE(asset);
+    de_cook_result numeric = {0}, legacy = {0};
+    ASSERT_EQ(font_cook("NotoSans.ttf", asset->settings, asset->setting_count, &numeric), DE_OK);
+    const char *items[] = {"65-67", "0x100-0x102"};
+    de__manifest_kv settings = {.key = "ranges",
+                                .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {items, 2}}};
+    ASSERT_EQ(font_cook("NotoSans.ttf", &settings, 1, &legacy), DE_OK);
+    EXPECT_EQ(numeric.size, legacy.size);
+    EXPECT_MEMEQ(numeric.data, legacy.data, (size_t)numeric.size);
+    de_cook_result_free(&numeric);
+    de_cook_result_free(&legacy);
+    de__manifest_destroy(manifest);
+}
+TEST(font, numeric_ranges_reject_invalid_pairs) {
+    const char *invalid[] = {"[[67,65]]",     "[[-1,65]]", "[[65,1114112]]",
+                             "[[65.0,67]]",   "[[65]]",    "[65,67]",
+                             "[['65','67']]", "42",        "[[65,67],'68-69']"};
+    for (u32 i = 0; i < (sizeof invalid / sizeof invalid[0]); ++i) {
+        char text[256];
+        snprintf(text, sizeof text,
+                 "[assets.font]\ntype='font'\nsource='NotoSans.ttf'\nranges=%s\n", invalid[i]);
+        de__manifest *m = NULL;
+        ASSERT_EQ(de__manifest_parse(&(de__manifest_parse_desc){.path = "ranges:/assets.toml",
+                                                                .read = range_manifest_read,
+                                                                .read_user = text},
+                                     &m),
+                  DE_OK);
+        ASSERT_EQ(m->error_count, 0u);
+        const de__manifest_asset *a = de__manifest_find_asset(m, "font");
+        ASSERT_TRUE(a);
+        de_cook_result r = {0};
+        EXPECT_EQ(font_cook("NotoSans.ttf", a->settings, a->setting_count, &r),
+                  DE_ERR_INVALID_ARGUMENT);
+        de_cook_result_free(&r);
+        de__manifest_destroy(m);
+    }
+}
 #include <stb_truetype.h>
 #include <math.h>
 static f32 getf(const u8 *p) {
@@ -129,4 +188,62 @@ TEST(font, cff_outlines_and_ranges) {
     ASSERT_EQ(font_cook("SourceCodePro.otf", s, 2, &r), DE_OK);
     EXPECT_GT(r.size, 1000u);
     de_cook_result_free(&r);
+}
+static void msdf_coverage(const char *name) {
+    de__manifest_kv settings[] = {
+        {.key = "charset", .value = {.type = DE__MANIFEST_STRING, .u.s = "ascii"}},
+        {.key = "em_px", .value = {.type = DE__MANIFEST_INT, .u.i = 48}}};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(font_cook(name, settings, 2, &cooked), DE_OK);
+    const u8 *p = cooked.data;
+    u32 ng = de__font_u32(p + 12), nc = de__font_u32(p + 16), ns = de__font_u32(p + 28),
+        pw = de__font_u32(p + 52), ph = de__font_u32(p + 56);
+    const u8 *source = p + 64 + (u64)ng * 48 + (u64)nc * 8;
+    stbtt_fontinfo font;
+    ASSERT_TRUE(stbtt_InitFont(&font, source, 0));
+    const char *characters = "BOag";
+    const u32 sizes[] = {16, 192};
+    for (u32 size_index = 0; size_index < 2; ++size_index)
+        for (u32 c = 0; characters[c]; ++c) {
+            u32 size = sizes[size_index], gid = (u32)stbtt_FindGlyphIndex(&font, characters[c]);
+            const u8 *glyph = NULL;
+            for (u32 i = 0; i < ng; ++i)
+                if (de__font_u32(p + 64 + i * 48) == gid)
+                    glyph = p + 64 + i * 48;
+            ASSERT_TRUE(glyph);
+            u32 page = de__font_u32(glyph + 4), x = de__font_u32(glyph + 8),
+                y = de__font_u32(glyph + 12), w = de__font_u32(glyph + 16),
+                h = de__font_u32(glyph + 20);
+            const u8 *atlas = source + ns + (u64)page * pw * ph * 4;
+            f32 scale = stbtt_ScaleForMappingEmToPixels(&font, (f32)size);
+            int rw, rh, rx, ry;
+            u8 *reference = stbtt_GetGlyphBitmap(&font, scale, scale, (int)gid, &rw, &rh, &rx, &ry);
+            ASSERT_TRUE(reference);
+            f32 left = getf(glyph + 24) * size, right = getf(glyph + 32) * size,
+                top = getf(glyph + 36) * size, bottom = getf(glyph + 28) * size;
+            u32 intersection = 0, combined = 0;
+            for (int yy = (int)floorf(-top); yy < (int)ceilf(-bottom); ++yy)
+                for (int xx = (int)floorf(left); xx < (int)ceilf(right); ++xx) {
+                    bool expected = xx >= rx && xx < rx + rw && yy >= ry && yy < ry + rh &&
+                                    reference[(yy - ry) * rw + xx - rx] >= 128;
+                    bool actual = sample(atlas, pw, x, y, w, h, (xx + .5f - left) / (right - left),
+                                         (yy + .5f + top) / (top - bottom)) >= 127.5f;
+                    intersection += expected && actual;
+                    combined += expected || actual;
+                }
+            ASSERT_GT(combined, 0u);
+            f32 iou = (f32)intersection / combined;
+            printf("%s %c at%upx coverage IoU %.5f\n", name, characters[c], size, (double)iou);
+            /* At16px, one aliased boundary pixel is a substantial fraction of a thin
+             * stroke. The large comparison enforces precise outline/counter agreement. */
+            EXPECT_TRUE(iou >= (size == 16 ? .75f : .97f));
+            stbtt_FreeBitmap(reference, NULL);
+        }
+    de_cook_result_free(&cooked);
+}
+TEST(font, cff_msdf_strokes_counters_and_background_at_small_and_large_sizes) {
+    msdf_coverage("SourceCodePro.otf");
+}
+TEST(font, truetype_msdf_strokes_counters_and_background_at_small_and_large_sizes) {
+    msdf_coverage("NotoSans.ttf");
 }

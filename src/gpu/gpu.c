@@ -3,6 +3,7 @@
  * backend contract and de_gpu.h for the API.
  */
 #include "gpu/gpu_backend.h"
+#include "gpu/texture_lease_internal.h"
 #include "gpu/gpu_accel_internal.h"
 #include "gpu/breadcrumbs_internal.h" /* DENG-328 */
 
@@ -253,6 +254,8 @@ static void destroy_object(de_gpu_device *d, de__gpu_kind kind, u32 id, const ch
         de__gpu_fail_handle(d, func, kind, id);
         return;
     }
+    if (kind == DE__GPU_TEXTURE && d->vt->texture_retire)
+        d->vt->texture_retire(d, de__gpu_pool_at(&d->pools[kind], index));
     u64 values[DE_QUEUE_COUNT_];
     submitted_values(d, values);
     if (de__gpu_deferred_push(&d->deferred, (u32)kind, index, values) != DE_OK) {
@@ -339,6 +342,7 @@ static void device_free(de_gpu_device *d, int stage) {
     for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
         de_mutex_destroy(&d->submit_lock[q]);
     de_mutex_destroy(&d->cmd_lock);
+    de_mutex_destroy(&d->texture_lease_lock);
     const de_allocator *a = d->alloc;
     DE_FREE(a, d, d->bytes);
 }
@@ -388,6 +392,7 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
         de_atomic_init_u64(&d->submitted[q], 0);
     }
     de_mutex_init(&d->cmd_lock);
+    de_mutex_init(&d->texture_lease_lock);
     de__gpu_deferred_init(&d->deferred, a);
     de_atomic_init_u32(&d->lost, 0); /* DENG-328 */
 
@@ -704,7 +709,35 @@ de_gpu_texture de__gpu_texture_wrap(de_gpu_device *d, const de_gpu_texture_desc 
 }
 
 void de_gpu_texture_destroy(de_gpu_device *d, de_gpu_texture t) {
-    destroy_object(d, DE__GPU_TEXTURE, t.id, "de_gpu_texture_destroy");
+    if (!d || !t.id)
+        return;
+    de_mutex_lock(&d->texture_lease_lock);
+    de__gpu_texture *record = de__gpu_get_texture(d, t);
+    if (record && record->leases)
+        record->destroy_requested = true;
+    else
+        destroy_object(d, DE__GPU_TEXTURE, t.id, "de_gpu_texture_destroy");
+    de_mutex_unlock(&d->texture_lease_lock);
+}
+bool de__gpu_texture_pin(de_gpu_device *d, de_gpu_texture t) {
+    if (!d || !t.id)
+        return false;
+    de_mutex_lock(&d->texture_lease_lock);
+    de__gpu_texture *record = de__gpu_get_texture(d, t);
+    bool ok = record && !record->destroy_requested && record->leases != UINT32_MAX;
+    if (ok)
+        ++record->leases;
+    de_mutex_unlock(&d->texture_lease_lock);
+    return ok;
+}
+void de__gpu_texture_unpin(de_gpu_device *d, de_gpu_texture t) {
+    if (!d || !t.id)
+        return;
+    de_mutex_lock(&d->texture_lease_lock);
+    de__gpu_texture *record = de__gpu_get_texture(d, t);
+    if (record && record->leases && --record->leases == 0 && record->destroy_requested)
+        destroy_object(d, DE__GPU_TEXTURE, t.id, "texture lease release");
+    de_mutex_unlock(&d->texture_lease_lock);
 }
 
 u32 de_gpu_texture_bindless(de_gpu_device *d, de_gpu_texture h, u32 mip, bool storage) {

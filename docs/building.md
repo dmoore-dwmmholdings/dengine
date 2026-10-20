@@ -189,6 +189,13 @@ this section.
 
 ### Linux from a sysroot
 
+The toolchain restricts pkg-config searches to the sysroot and clears host
+`PKG_CONFIG_PATH` entries and pkg-config's automatic host `CMAKE_PREFIX_PATH` lookup.
+Target `.pc` files belong under the sysroot's normal
+`usr/lib/<triple>/pkgconfig`, `usr/lib/pkgconfig`, `usr/lib64/pkgconfig`, or
+`usr/share/pkgconfig` directories (the corresponding `lib` and `usr/local` directories
+are included too).
+
 `cmake/toolchains/linux-sysroot.cmake` cross-compiles to Linux x86-64 with `clang
 --target=x86_64-linux-gnu` and `lld`, against a Linux sysroot (SPEC §3.2: Windows host to
 Linux). The sysroot must have glibc 2.31 or newer and the development packages the build needs

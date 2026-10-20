@@ -13,13 +13,17 @@ typedef enum de_denoise_clamp {
 typedef struct de_denoise_signal_desc {
     u64 identity;
     de_gpu_format format;
-    u32 channels;
+    u32 channels; /**< 1/2: independent scalar signals; R drives variance/weights. 3/4: RGB. */
     f32 alpha_min;
     de_denoise_clamp clamp;
     u32 iterations;
     f32 depth_relative, normal_cos, normal_power, luminance_scale, hit_distance_scale;
     f32 roughness_threshold;
     bool zero_radius_passthrough;
+    /** Filter independent-sample variance with squared spatial weights between wavelet levels. */
+    bool propagate_variance;
+    /** Use per-channel RGB variance and noise-corrected range weights. RGB signals only. */
+    bool rgb_variance;
 } de_denoise_signal_desc;
 /** Canonical motion is current-minus-previous NDC; normal is canonical encoded GB1.
  * material is RG32_FLOAT actual identity (low/high 16-bit words), never GB2's model id. Use the

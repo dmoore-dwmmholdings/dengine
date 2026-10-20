@@ -13,7 +13,9 @@
  * Records. A task record is taken from the submitting thread's slot and goes back to that slot
  * when the task has run: onto its local free list when the same thread ran it, otherwise onto
  * its `remote_free` stack (lock-free push by any thread; the owner takes the whole stack with
- * one exchange, so there is no ABA). After warm-up no submit allocates.
+ * one exchange, so there is no ABA). Creation reserves one block for every slot,
+ * including workers that do not submit during application warm-up. Larger workloads
+ * grow their pools on demand; after warming those high-water marks, submits allocate nothing.
  *
  * Counters. de_task_counter's opaque bytes hold de__task_counter: one u64 with the pending
  * count in the low 32 bits and, in the high 32 bits, the waiter id of a thread parked on it

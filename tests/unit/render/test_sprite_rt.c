@@ -136,6 +136,32 @@ TEST_F(sprite_rt, cooked_proxy_shadow_and_flip, sprite_rt_fixture) {
     ASSERT_TRUE(hits[0].t > 0);
     ASSERT_TRUE(hits[1].t < 0);
 }
+TEST_F(sprite_rt, recycled_texture_record_rebuilds_proxy_geometry, sprite_rt_fixture) {
+    rt_fixture *r = &f->rt;
+    const f32 first[8] = {1, 1, 1, 0, 1, 1, 1, 1};
+    const f32 second[8] = {1, 1, 1, 1, 1, 1, 1, 0};
+    ASSERT_EQ(de_sprite_proxy_build(&r->alloc, first, 2, 1, .5f, &f->proxy), DE_OK);
+    f->texture_record.sprite_proxy = &f->proxy;
+    f->sprites[0].thickness = .1f;
+    de__rt_hit *hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t < 0 && hits[1].t > 0);
+    /* Model unload/reload between RT preparations: both CPU record and proxy storage
+     * are deliberately reused while the replacement has a new RHI generation. */
+    de_gpu_texture old = r->texture;
+    de_gpu_wait_idle(r->d);
+    de_gpu_texture_destroy(r->d, old);
+    r->texture = de_gpu_texture_create(r->d, &(de_gpu_texture_desc){.width = 2,
+                                                                    .height = 1,
+                                                                    .format = DE_FMT_RGBA8_UNORM,
+                                                                    .usage = DE_USAGE_SAMPLED});
+    ASSERT_TRUE(r->texture.id);
+    ASSERT_NE(r->texture.id, old.id);
+    f->texture_record.texture = r->texture;
+    ASSERT_EQ(de_sprite_proxy_build(&r->alloc, second, 2, 1, .5f, &f->proxy), DE_OK);
+    hits = frame_rt(r);
+    EXPECT_TRUE(hits[0].t > 0);
+    EXPECT_TRUE(hits[1].t < 0);
+}
 TEST(sprite_proxy, marching_squares_deterministic_format) {
     f32 rgba[8 * 8 * 4] = {0};
     for (u32 y = 1; y < 7; ++y)
@@ -156,6 +182,151 @@ TEST(sprite_proxy, marching_squares_deterministic_format) {
     bytes[402] = 255;
     bytes[403] = 255;
     ASSERT_FALSE(de_sprite_proxy_parse(bytes, sizeof bytes, &decoded));
+}
+static void topology_shadow(sprite_rt_fixture *f, bool hole, bool fallback) {
+    rt_fixture *r = &f->rt;
+    f32 rgba[8 * 8 * 4] = {0};
+    for (u32 y = 0; y < 8; ++y)
+        for (u32 x = 0; x < 8; ++x) {
+            bool solid =
+                fallback ? x % 2 == 0 && y % 2 == 0
+                : hole
+                    ? x >= 1 && x < 7 && y >= 1 && y < 7 && !(x >= 3 && x < 5 && y >= 3 && y < 5)
+                    : (x >= 1 && x < 3 && y >= 1 && y < 3) || (x >= 5 && x < 7 && y >= 4 && y < 7);
+            rgba[(y * 8 + x) * 4 + 3] = solid ? 1.f : 0.f;
+        }
+    if (fallback) {
+        ASSERT_EQ(de_sprite_proxy_build(&r->alloc, rgba, 8, 8, .5f, &f->proxy), DE_ERR_UNSUPPORTED);
+    } else {
+        ASSERT_EQ(de_sprite_proxy_build(&r->alloc, rgba, 8, 8, .5f, &f->proxy), DE_OK);
+        ASSERT_LE(f->proxy.index_count / 3, 64u);
+        ASSERT_LE(f->proxy.vertex_count, DE_SPRITE_PROXY_MAX_VERTICES);
+        de_cooked_sprite_proxy repeated;
+        ASSERT_EQ(de_sprite_proxy_build(&r->alloc, rgba, 8, 8, .5f, &repeated), DE_OK);
+        EXPECT_MEMEQ(&repeated, &f->proxy, sizeof repeated);
+    }
+    de_gpu_wait_idle(r->d);
+    de_gpu_texture_destroy(r->d, r->texture);
+    r->texture = de_gpu_texture_create(
+        r->d, &(de_gpu_texture_desc){.width = 8,
+                                     .height = 8,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_DST});
+    ASSERT_TRUE(r->texture.id);
+    de_gpu_buffer upload = de_gpu_buffer_create(
+        r->d, &(de_gpu_buffer_desc){
+                  .size = 8 * 256, .usage = DE_USAGE_COPY_SRC, .memory = DE_MEM_UPLOAD});
+    ASSERT_TRUE(upload.id);
+    u8 *pixels = de_gpu_buffer_map(r->d, upload);
+    memset(pixels, 255, 8 * 256);
+    for (u32 y = 0; y < 8; ++y)
+        for (u32 x = 0; x < 8; ++x)
+            pixels[y * 256 + x * 4 + 3] = rgba[(y * 8 + x) * 4 + 3] >= .5f ? 255 : 0;
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "topology mask upload");
+    de_gpu_barrier barrier = {.texture = r->texture, .after = DE_ACCESS_COPY_DST};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_buffer_to_texture(cmd, r->texture, 0, 0, upload, 0, 256);
+    barrier.before = DE_ACCESS_COPY_DST;
+    barrier.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    ASSERT_EQ(de_gpu_queue_submit(r->d, DE_QUEUE_GRAPHICS,
+                                  &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+              DE_OK);
+    de_gpu_buffer_destroy(r->d, upload);
+    f->texture_record.texture = r->texture;
+    f->texture_record.width = f->texture_record.height = 8;
+    f->texture_record.sprite_proxy = fallback ? NULL : &f->proxy;
+    f->sprites[0].thickness = .2f;
+    for (u32 flip = 0; flip < 3; ++flip) {
+        f->sprites[0].flip_x = flip == 1;
+        f->sprites[0].flip_y = flip == 2;
+        u32 intersection = 0, united = 0;
+        for (u32 y = 0; y < 8; ++y)
+            for (u32 x = 0; x < 8; x += 2) {
+                de__rt_ray *rays = de_gpu_buffer_map(r->d, r->rays);
+                for (u32 j = 0; j < 2; ++j)
+                    rays[j] = (de__rt_ray){
+                        .origin = {2 + (x + j + .5f) / 4, -1 + (y + .5f) / 4, 2, .001f},
+                        .direction = {0, 0, -1, 20}};
+                de__rt_hit *hits = frame_rt(r);
+                for (u32 j = 0; j < 2; ++j) {
+                    u32 source_x = flip == 1 ? 7 - x - j : x + j, source_y = flip == 2 ? y : 7 - y;
+                    bool expected = rgba[(source_y * 8 + source_x) * 4 + 3] >= .5f,
+                         actual = hits[j].t >= 0;
+                    intersection += expected && actual;
+                    united += expected || actual;
+                }
+            }
+        f64 iou = united ? (f64)intersection / united : 0;
+        printf("%s opaque proxy flip=%u silhouette IoU %.6f\n",
+               fallback ? "alpha fallback"
+               : hole   ? "donut"
+                        : "islands",
+               flip, iou);
+        EXPECT_TRUE(iou >= .95);
+    }
+    if (hole) {
+        f->sprites[0].flip_x = f->sprites[0].flip_y = false;
+        de__rt_ray *rays = de_gpu_buffer_map(r->d, r->rays);
+        rays[0] = rays[1] = (de__rt_ray){.origin = {3, 0, 0, .001f}, .direction = {1, 0, 0, 20}};
+        de__rt_hit *hits = frame_rt(r);
+        EXPECT_FLOAT_EQ(hits[0].t, .25, .001);
+        EXPECT_FLOAT_EQ(hits[1].t, .25, .001);
+    }
+}
+TEST_F(sprite_rt, donut_proxy_preserves_hole_and_inner_walls, sprite_rt_fixture) {
+    topology_shadow(f, true, false);
+}
+TEST_F(sprite_rt, disconnected_proxy_preserves_both_islands, sprite_rt_fixture) {
+    topology_shadow(f, false, false);
+}
+TEST_F(sprite_rt, over_budget_topology_uses_alpha_tested_box, sprite_rt_fixture) {
+    topology_shadow(f, false, true);
+}
+TEST(sprite_proxy, excessive_topology_requires_alpha_fallback) {
+    f32 rgba[8 * 8 * 4] = {0};
+    for (u32 y = 0; y < 8; y += 2)
+        for (u32 x = 0; x < 8; x += 2)
+            rgba[(y * 8 + x) * 4 + 3] = 1;
+    de_cooked_sprite_proxy proxy;
+    EXPECT_EQ(de_sprite_proxy_build(de_heap_allocator(), rgba, 8, 8, .5f, &proxy),
+              DE_ERR_UNSUPPORTED);
+}
+TEST(sprite_proxy, every_small_mask_keeps_all_opaque_and_transparent_pixel_centers) {
+    for (u32 mask = 1; mask < 512; ++mask) {
+        f32 rgba[3 * 3 * 4] = {0};
+        for (u32 pixel = 0; pixel < 9; ++pixel)
+            rgba[pixel * 4 + 3] = (f32)((mask >> pixel) & 1u);
+        de_cooked_sprite_proxy proxy;
+        de_result result = de_sprite_proxy_build(de_heap_allocator(), rgba, 3, 3, .5f, &proxy);
+        if (result == DE_ERR_UNSUPPORTED)
+            continue;
+        ASSERT_EQ(result, DE_OK);
+        ASSERT_LE(proxy.vertex_count, DE_SPRITE_PROXY_MAX_VERTICES);
+        ASSERT_LE(proxy.index_count, DE_SPRITE_PROXY_MAX_INDICES);
+        for (u32 y = 0; y < 3; ++y)
+            for (u32 x = 0; x < 3; ++x) {
+                f32 px = (x + .5f) / 3, py = (y + .5f) / 3;
+                bool covered = false;
+                for (u32 i = 0; i < proxy.index_count; i += 3) {
+                    const f32 *a = proxy.positions[proxy.indices[i]],
+                              *b = proxy.positions[proxy.indices[i + 1]],
+                              *c = proxy.positions[proxy.indices[i + 2]];
+                    if (a[2] != -.5f || b[2] != -.5f || c[2] != -.5f)
+                        continue;
+                    f32 ab = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0]),
+                        bc = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0]),
+                        ca = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0]);
+                    covered |= (ab >= -1e-6f && bc >= -1e-6f && ca >= -1e-6f) ||
+                               (ab <= 1e-6f && bc <= 1e-6f && ca <= 1e-6f);
+                }
+                bool expected = ((mask >> ((2 - y) * 3 + x)) & 1) != 0;
+                if (covered != expected)
+                    printf("mask=%u x=%u y=%u vertices=%u indices=%u\n", mask, x, y,
+                           proxy.vertex_count, proxy.index_count);
+                ASSERT_EQ(covered, expected);
+            }
+    }
 }
 
 TEST_F(sprite_rt, atlas_region_opaque_proxy, sprite_rt_fixture) {

@@ -749,6 +749,7 @@ All vendored and pinned in `third_party/`, each with its license file. ✔ = pla
 | Library | Use | Language | License | |
 |---|---|---|---|---|
 | SDL3 | platform layer | C | zlib | ✔ |
+| Joe-Kuo Sobol direction data (SciPy snapshot) | path-tracer sample matrices; data only | — | BSD-3-Clause | ✔ |
 | Slang | shader compiler (tools, dev hot reload) | C++ (C API) | Apache-2.0 w/ LLVM exception | ✔ |
 | D3D12 Agility SDK, DXC runtime libs | D3D12 | — | Microsoft redistributable | ✔ |
 | Vulkan headers, VMA (optional) | Vulkan | C / C++ | Apache-2.0 / MIT | ✔ |

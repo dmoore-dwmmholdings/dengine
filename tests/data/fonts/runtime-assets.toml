@@ -8,6 +8,8 @@ page_size = 256
 charset = "ascii"
 [assets]
 "font/latin" = {type="font", source="latin/NotoSans.ttf"}
+"font/tt-msdf" = {type="font", source="latin/NotoSans.ttf", mode="msdf", em_px=48, px_range=6}
+"font/cff-msdf" = {type="font", source="latin/SourceCodePro.otf", mode="msdf", em_px=48, px_range=6}
 "font/cjk" = {type="font", source="cjk/test.ttf", chars="漢世界"}
 "font/emoji" = {type="font", source="emoji/test.ttf", chars="😀"}
 "font/arabic" = {type="font", source="complex/arabic.ttf", chars="مرحبا"}
@@ -15,3 +17,5 @@ charset = "ascii"
 "font/devanagari" = {type="font", source="complex/devanagari.ttf", chars="क्षि"}
 "font/thai" = {type="font", source="complex/thai.ttf", chars="กำลัง"}
 "font/bitmap" = {type="font", source="latin/pixel.fnt", mode="bitmap"}
+
+"font/mark-primary" = {type="font", source="latin/mark-primary.ttf", chars="̀́"}

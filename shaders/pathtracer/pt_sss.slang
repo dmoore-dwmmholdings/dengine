@@ -2,6 +2,13 @@
 module pt_sss;
 import "../sss/burley_profile";
 import pt_volume;
+// One entry decision and two inward-direction coordinates per path event.
+// Reserve a high dimension range, separate from camera, light, fog and flight draws.
+// At most 64*(1024+5) events use fewer than 200k dimensions in this range.
+public uint3 pt_sss_entry_dimensions(uint event) {
+    uint base=0x40000000u+event*3u;
+    return uint3(base,base+1u,base+2u);
+}
 public struct PtSssCoefficients {public float3 sigma_s,sigma_a;};
 public PtSssCoefficients pt_sss_coefficients(float3 radius,float3 albedo) {
     albedo=clamp(albedo,float3(0),float3(.999999));

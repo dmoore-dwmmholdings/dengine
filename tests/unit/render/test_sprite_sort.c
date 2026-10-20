@@ -1,4 +1,7 @@
 #include "de_test.h"
+#include "de_alloc_guard.h"
+#include <math.h>
+#include <string.h>
 #include "render/sprite/sprite_sort.h"
 #include "render/passes/forward/forward.h"
 #include <dengine/de_platform.h>
@@ -57,4 +60,73 @@ TEST(sprite_sort, bench_fifty_thousand) {
     free(items);
     free(scratch);
     EXPECT_TRUE(ms < 1.0);
+}
+
+static int reference_order(const void *pa, const void *pb) {
+    const de__transparent_item *a = pa, *b = pb;
+    if (de__transparent_before(a, b))
+        return -1;
+    if (de__transparent_before(b, a))
+        return 1;
+    /* Unique original positions make qsort an independent stable reference. */
+    return a->instance < b->instance ? -1 : a->instance > b->instance;
+}
+static u32 sort_random(u32 *state) {
+    *state = *state * 1664525u + 1013904223u;
+    return *state;
+}
+TEST(sprite_sort, full_comparator_payload_stability_and_scratch_bounds) {
+    const u32 sizes[] = {0, 1, 2, 31, 32, 33, 128, 4097, 50000};
+    const f32 depths[] = {NAN, INFINITY, -INFINITY, -0.f, 0.f, 1.f, -1.f, 1e30f};
+    u32 random = 473;
+    for (u32 size = 0; size < sizeof sizes / sizeof sizes[0]; ++size)
+        for (u32 mode = 0; mode < 4; ++mode) {
+            u32 n = sizes[size];
+            de__transparent_item *storage = calloc(n + 2, sizeof *storage);
+            de__transparent_item *temporary = calloc(n + 2, sizeof *temporary);
+            de__transparent_item *expected = calloc(n ? n : 1, sizeof *expected);
+            ASSERT_TRUE(storage && temporary && expected);
+            memset(storage, 0xa5, sizeof *storage);
+            memset(storage + n + 1, 0x5a, sizeof *storage);
+            memset(temporary, 0xa5, sizeof *temporary);
+            memset(temporary + n + 1, 0x5a, sizeof *temporary);
+            de__transparent_item *items = storage + 1, *scratch = temporary + 1;
+            for (u32 i = 0; i < n; ++i) {
+                u32 value = sort_random(&random);
+                items[i] = (de__transparent_item){
+                    .depth = depths[(value >> 16) % 8],
+                    .instance = i,
+                    .entity = ((u64)(mode == 3 ? 7 : (value >> 8) % 4) << 32) | (value % 16),
+                    .index = mode == 3 ? i : (value >> 20) % 8,
+                    .flags = value,
+                    .participant = i % 3,
+                    .participant_item = i * 17,
+                    .always_on_top = mode == 1 || (mode == 2 && (i & 1)),
+                    .meshlet_first = i * 7,
+                    .meshlet_count = i + 1,
+                    .layer = (i16)(value >> 8),
+                    .order = (i16)(value >> 24),
+                };
+                /* Dense equal primary keys exercise generation/index ties. */
+                if (i & 1)
+                    items[i].layer = items[i].order = 0;
+            }
+            memcpy(expected, items, (size_t)n * sizeof *items);
+            qsort(expected, n, sizeof *expected, reference_order);
+            de_alloc_guard guard = {0};
+            de_alloc_guard_begin(&guard);
+            de__transparent_sort(items, n, scratch);
+            de_alloc_guard_end(&guard);
+            DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+            EXPECT_MEMEQ(items, expected, (size_t)n * sizeof *items);
+            for (u32 byte = 0; byte < sizeof *storage; ++byte) {
+                EXPECT_EQ(((u8 *)storage)[byte], 0xa5u);
+                EXPECT_EQ(((u8 *)(storage + n + 1))[byte], 0x5au);
+                EXPECT_EQ(((u8 *)temporary)[byte], 0xa5u);
+                EXPECT_EQ(((u8 *)(temporary + n + 1))[byte], 0x5au);
+            }
+            free(storage);
+            free(temporary);
+            free(expected);
+        }
 }

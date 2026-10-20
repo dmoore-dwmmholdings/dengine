@@ -1,5 +1,6 @@
 /* Progressive per-view path tracing. The graph owns submission, pipelines own immutable SBTs. */
 #include "render/pathtracer/pt_internal.h"
+#include "render/pathtracer/pt_sobol_table.h"
 #include "render/rt/rt_internal.h"
 #include "render/rt/restir_di.h"
 #include "render/graph/rg_internal.h"
@@ -9,6 +10,7 @@
 #include "render/materials/material_instances.h"
 #include "render/world/render_world.h"
 #include <math.h>
+#include <float.h>
 #include <string.h>
 #define PT_RING 8u
 /* PtParams in pt_closest_hit.slang; float4 rows avoid target matrix packing differences. */
@@ -17,18 +19,19 @@ typedef struct pt_params {
     u32 accumulation, output, brdf_lut, seed;
     f32 inv_view_proj[4][4], camera[4];
     de__ibl_gpu ibl;
-    u32 environment_revision, flags, reserved0, reserved1;
+    u32 environment_revision, flags, sampling_table, reserved1;
     f32 exposure;
-    u32 light_count, unused0, unused1;
+    u32 light_count, directional_alias, directional_offset;
     de__pt_media_params media;
-    u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_pad[3];
+    u32 aov_albedo, aov_normal, aov_depth, aov_position, aov_material, aov_moments, aov_pad[2];
 } pt_params;
 DE_STATIC_ASSERT(sizeof(pt_params) == 416, "PtParams shader layout");
 typedef struct pt_view {
     de_view handle;
     de_gpu_texture accumulation, output;
-    de_gpu_texture albedo, normal, depth, position, material;
-    de_gpu_buffer params, cdf;
+    de_gpu_texture albedo, normal, depth, position, material, moments;
+    de_gpu_buffer params, cdf, directionals;
+    u32 directional_capacity, directional_count, directional_offset;
     u32 width, height, samples, reset_serial, seen_reset, strategy, seed;
     u64 signature, frame, pending_frame;
     de_mat4 matrix, projection;
@@ -38,11 +41,13 @@ typedef struct pt_view {
 } pt_view;
 struct de__pt {
     de_renderer *r;
-    de_gpu_pipeline pipeline, env;
+    de_gpu_pipeline pipeline, media_pipeline, env;
+    de_gpu_buffer sampling_table;
     de__pt_media *media;
     de_cvar max_samples, seed, strategy, final_denoise, golden;
     de__pt_denoise *denoise;
-    bool warned;
+    bool pipelines_attempted, media_pipeline_attempted;
+    de_result pipeline_result, media_pipeline_result;
     pt_view views[32];
 };
 f32 de__pt_power(f32 a, f32 b) {
@@ -69,8 +74,10 @@ static void release(de__pt *p, pt_view *v) {
     de_gpu_texture_destroy(p->r->dev, v->depth);
     de_gpu_texture_destroy(p->r->dev, v->position);
     de_gpu_texture_destroy(p->r->dev, v->material);
+    de_gpu_texture_destroy(p->r->dev, v->moments);
     de_gpu_buffer_destroy(p->r->dev, v->params);
     de_gpu_buffer_destroy(p->r->dev, v->cdf);
+    de_gpu_buffer_destroy(p->r->dev, v->directionals);
     memset(v, 0, sizeof *v);
 }
 void de__pt_destroy(de__pt *p) {
@@ -81,12 +88,14 @@ void de__pt_destroy(de__pt *p) {
     de__pt_media_destroy(p->media);
     de__pt_denoise_destroy(p->denoise);
     de_gpu_pipeline_destroy(p->r->dev, p->pipeline);
+    de_gpu_pipeline_destroy(p->r->dev, p->media_pipeline);
     de_gpu_pipeline_destroy(p->r->dev, p->env);
+    de_gpu_buffer_destroy(p->r->dev, p->sampling_table);
     DE_FREE(p->r->alloc, p, sizeof *p);
 }
 bool de__pt_enabled(const de_renderer *r, const de_render_settings *s) {
     return r && r->pt && s->path_tracer && s->tier == DE_TIER_RT && r->caps.rt_pipelines &&
-           r->pt->pipeline.id;
+           r->pt->pipeline.id && r->pt->env.id;
 }
 de_result de__pt_create(de_renderer *r, de__pt **out) {
     de__pt *p = DE_ALLOC(r->alloc, sizeof *p, 16, DE_MEM_RENDER);
@@ -116,8 +125,30 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
                                                    .default_number = 0,
                                                    .min = 0,
                                                    .max = 2});
-    if (!r->caps.rt_pipelines)
-        return DE_OK;
+    return DE_OK;
+}
+static de_gpu_pipeline rt_pipeline(de__pt *p, de_gpu_shader_blob ray, de_gpu_shader_blob miss,
+                                   de_gpu_shader_blob hit, de_gpu_shader_blob alpha,
+                                   const char *name) {
+    de_gpu_rt_hit_group group = {.closest_hit = hit, .any_hit = alpha};
+    de_gpu_rt_desc rt = {.raygen = ray,
+                         .miss = &miss,
+                         .miss_count = 1,
+                         .hit_groups = &group,
+                         .hit_group_count = 1,
+                         .max_recursion = 1,
+                         .payload_bytes = 64,
+                         .attribute_bytes = 8};
+    DE_INFO(p->r->log, "path tracer: compiling %s", name);
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        p->r->dev,
+        &(de_gpu_pipeline_desc){
+            .kind = DE_PIPE_RAYTRACING, .rt = &rt, .push_constant_bytes = 8, .name = name});
+    DE_INFO(p->r->log, "path tracer: %s %s", name, pipeline.id ? "ready" : "failed");
+    return pipeline;
+}
+static de_result pipelines(de__pt *p) {
+    de_renderer *r = p->r;
     de_gpu_shader_blob ray = {0}, miss = {0}, hit = {0}, alpha = {0}, env = {0};
 #if DE_HAS_GPU_METAL
     extern const unsigned char de__pt_metal_library[];
@@ -157,20 +188,7 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
         alpha = code.entries[3].blob;
         env = env_code.entries[0].blob;
     }
-    de_gpu_rt_hit_group group = {.closest_hit = hit, .any_hit = alpha};
-    de_gpu_rt_desc rt = {.raygen = ray,
-                         .miss = &miss,
-                         .miss_count = 1,
-                         .hit_groups = &group,
-                         .hit_group_count = 1,
-                         .max_recursion = 1,
-                         .payload_bytes = 64,
-                         .attribute_bytes = 8};
-    p->pipeline =
-        de_gpu_pipeline_create(r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_RAYTRACING,
-                                                               .rt = &rt,
-                                                               .push_constant_bytes = 8,
-                                                               .name = "PT iterative raygen"});
+    p->pipeline = rt_pipeline(p, ray, miss, hit, alpha, "PT iterative raygen");
     p->env = de_gpu_pipeline_create(r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
                                                                     .cs = env,
                                                                     .push_constant_bytes = 8,
@@ -180,6 +198,60 @@ de_result de__pt_create(de_renderer *r, de__pt **out) {
     de__engine_shader_code_free(&env_code);
     if (!p->pipeline.id || !p->env.id)
         return DE_FAIL(DE_ERR_UNSUPPORTED, "PT pipelines");
+    p->sampling_table =
+        de_gpu_buffer_create(r->dev, &(de_gpu_buffer_desc){.size = sizeof de__pt_sobol_directions,
+                                                           .stride = sizeof(u32),
+                                                           .usage = DE_USAGE_STORAGE,
+                                                           .memory = DE_MEM_UPLOAD,
+                                                           .name = "PT Sobol direction matrices"});
+    if (!p->sampling_table.id)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "PT sampling matrices");
+    void *mapped = de_gpu_buffer_map(r->dev, p->sampling_table);
+    if (!mapped)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "PT sampling upload");
+    memcpy(mapped, de__pt_sobol_directions, sizeof de__pt_sobol_directions);
+    return DE_OK;
+}
+de_result de__pt_prepare(de_renderer *r, const de_render_settings *settings) {
+    if (!r || !r->pt || !settings->path_tracer || settings->tier != DE_TIER_RT ||
+        !r->caps.rt_pipelines)
+        return DE_OK;
+    de__pt *p = r->pt;
+    if (!p->pipelines_attempted) {
+        p->pipelines_attempted = true;
+        p->pipeline_result = pipelines(p);
+        if (p->pipeline_result != DE_OK) {
+            de_gpu_pipeline_destroy(r->dev, p->pipeline);
+            de_gpu_pipeline_destroy(r->dev, p->env);
+            p->pipeline = p->env = (de_gpu_pipeline){0};
+            de_gpu_buffer_destroy(r->dev, p->sampling_table);
+            p->sampling_table = (de_gpu_buffer){0};
+        }
+    }
+    return p->pipeline_result;
+}
+de_result de__pt_prepare_media(de_renderer *r) {
+#if DE_HAS_GPU_METAL
+    if (r->caps.backend == DE_GPU_METAL) {
+        de__pt *p = r->pt;
+        if (!p->media_pipeline_attempted) {
+            p->media_pipeline_attempted = true;
+            extern const unsigned char de__pt_metal_library[];
+            extern const unsigned long long de__pt_metal_library_bytes;
+            de_gpu_shader_blob ray = {de__pt_metal_library, de__pt_metal_library_bytes,
+                                      "pt_raygen_media"};
+            de_gpu_shader_blob miss = ray, hit = ray, alpha = ray;
+            miss.entry = "pt_miss";
+            hit.entry = "pt_closest";
+            alpha.entry = "pt_alpha";
+            p->media_pipeline = rt_pipeline(p, ray, miss, hit, alpha, "PT media raygen");
+            p->media_pipeline_result = p->media_pipeline.id ? DE_OK : DE_ERR_UNSUPPORTED;
+        }
+        return p->media_pipeline_result;
+    }
+#else
+    (void)r;
+#endif
     return DE_OK;
 }
 static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
@@ -206,13 +278,14 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                   .format = DE_FMT_RGBA16_FLOAT,
                                   .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC,
                                   .name = "PT exposed HDR"});
-    de_gpu_texture *aovs[] = {&v->albedo, &v->normal, &v->depth, &v->position, &v->material};
+    de_gpu_texture *aovs[] = {&v->albedo,   &v->normal,   &v->depth,
+                              &v->position, &v->material, &v->moments};
     const de_gpu_format formats[] = {DE_FMT_RGBA32_FLOAT, DE_FMT_RGBA32_FLOAT, DE_FMT_R32_FLOAT,
-                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT};
-    const char *names[] = {"PT first-hit albedo", "PT first-hit world normal",
-                           "PT first-hit distance", "PT first-hit position",
-                           "PT actual material identity"};
-    for (u32 i = 0; i < 5; ++i)
+                                     DE_FMT_RGBA32_FLOAT, DE_FMT_RG32_FLOAT,   DE_FMT_RGBA32_FLOAT};
+    const char *names[] = {"PT first-hit albedo",         "PT first-hit world normal",
+                           "PT first-hit distance",       "PT first-hit position",
+                           "PT actual material identity", "PT raw radiance RGB M2"};
+    for (u32 i = 0; i < 6; ++i)
         *aovs[i] = de_gpu_texture_create(
             d,
             &(de_gpu_texture_desc){.width = v->width,
@@ -234,7 +307,7 @@ static bool capacity(de__pt *p, pt_view *v, de__view_frame *f) {
                                                       .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
                                                       .name = "PT environment CDF"});
     return v->accumulation.id && v->output.id && v->params.id && v->cdf.id && v->albedo.id &&
-           v->normal.id && v->depth.id && v->position.id && v->material.id;
+           v->normal.id && v->depth.id && v->position.id && v->material.id && v->moments.id;
 }
 typedef struct pt_pass {
     de__pt *p;
@@ -242,6 +315,7 @@ typedef struct pt_pass {
     u32 pc[2];
     bool env, trace;
     de__pt_media_params media;
+    de_gpu_pipeline pipeline;
 } pt_pass;
 static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     (void)pass;
@@ -257,11 +331,64 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     }
     if (x->trace) {
         de__pt_media_begin(p->media, cmd, &x->media);
-        de_gpu_cmd_set_pipeline(cmd, p->pipeline);
+        de_gpu_cmd_set_pipeline(cmd, x->pipeline);
         de_gpu_cmd_push_constants(cmd, x->pc, sizeof x->pc);
         de_gpu_cmd_dispatch_rays(cmd, x->v->width, x->v->height, 1);
         de__pt_media_end(p->media, cmd, &x->media);
     }
+}
+/* Prepared render-world lights -> frame-ring alias table; O(1) sampling per path vertex. */
+static de_result directional_alias(de__pt *p, pt_view *v, de__view_frame *f, u32 ring,
+                                   pt_params *params) {
+    v->directional_count = 0;
+    const de__render_world_frame *world = de__render_world_last(p->r);
+    if (!world)
+        return DE_OK;
+    const u32 count = world->lights.count;
+    if (!count)
+        return DE_OK;
+    f32 *power = de_arena_push(f->graph->arena, (size_t)count * sizeof *power, 16);
+    if (!power)
+        return DE_ERR_OUT_OF_MEMORY;
+    bool positive = false;
+    for (u32 i = 0; i < count; ++i) {
+        const DeLight *l = &world->lights.light[i];
+        f64 w = 0;
+        if (world->lights.entity[i] && l->kind == DE_LIGHT_DIRECTIONAL)
+            w = (.2126 * l->color.x + .7152 * l->color.y + .0722 * l->color.z) * l->intensity;
+        power[i] = isfinite(w) && w > 0 ? (f32)fmin(w, FLT_MAX) : 0;
+        positive |= power[i] > 0;
+    }
+    if (!positive)
+        return DE_OK;
+    if (count > v->directional_capacity) {
+        u32 capacity = count;
+        de_gpu_buffer buffer = de_gpu_buffer_create(
+            p->r->dev, &(de_gpu_buffer_desc){.size = (u64)PT_RING * capacity * sizeof(de__di_alias),
+                                             .stride = sizeof(de__di_alias),
+                                             .usage = DE_USAGE_STORAGE,
+                                             .memory = DE_MEM_UPLOAD,
+                                             .name = "PT directional power aliases"});
+        if (!buffer.id)
+            return DE_ERR_OUT_OF_MEMORY;
+        de_gpu_buffer_destroy(p->r->dev, v->directionals);
+        v->directionals = buffer;
+        v->directional_capacity = capacity;
+    }
+    u32 *scratch = de_arena_push(f->graph->arena, (size_t)count * 2 * sizeof *scratch, 16);
+    if (!scratch)
+        return DE_ERR_OUT_OF_MEMORY;
+    const u32 offset = ring * v->directional_capacity;
+    de__di_alias *aliases = de_gpu_buffer_map(p->r->dev, v->directionals);
+    if (!aliases)
+        return DE_ERR_OUT_OF_MEMORY;
+    DE_TRY(de__di_alias_build(power, count, aliases + offset, scratch));
+    v->directional_count = count;
+    v->directional_offset = offset;
+    params->light_count = count;
+    params->directional_alias = de_gpu_buffer_bindless(p->r->dev, v->directionals);
+    params->directional_offset = offset;
+    return DE_OK;
 }
 void de__pt_build(de__view_frame *f, void *user) {
     de__pt *p = user;
@@ -282,6 +409,14 @@ void de__pt_build(de__view_frame *f, void *user) {
     if (de__pt_media_frame(p->media, f, &media, &media_signature) != DE_OK) {
         f->graph->oom = true;
         return;
+    }
+    de_gpu_pipeline trace_pipeline = p->pipeline;
+    if (media.features && p->r->caps.backend == DE_GPU_METAL) {
+        if (de__pt_prepare_media(p->r) != DE_OK) {
+            f->graph->oom = true;
+            return;
+        }
+        trace_pipeline = p->media_pipeline;
     }
     const u64 signature = de__gpu_scene_source_signature(p->r->gpu_scene) ^
                           de__material_instances_epoch(p->r->material_instances) ^ media_signature;
@@ -330,17 +465,22 @@ void de__pt_build(de__view_frame *f, void *user) {
         .brdf_lut = de__renderer_brdf_lut(p->r),
         .seed = seed,
         .flags = strategy,
+        .sampling_table = de_gpu_buffer_bindless(p->r->dev, p->sampling_table),
         .ibl = lighting.view.ibl,
         .exposure =
             de__lighting_view_exposure(de__views_lighting(p->r), (f->view.id & 255u) - 1u, f->view,
-                                       f->frame_index, f->camera->camera.exposure_ev100, NULL),
-        .light_count = de__gpu_scene_table(p->r->gpu_scene, DE__GS_LIGHTS).count};
+                                       f->frame_index, f->camera->camera.exposure_ev100, NULL)};
+    if (directional_alias(p, v, f, ring, &params) != DE_OK) {
+        f->graph->oom = true;
+        return;
+    }
     params.media = media;
     params.aov_albedo = de_gpu_texture_bindless(p->r->dev, v->albedo, 0, true);
     params.aov_normal = de_gpu_texture_bindless(p->r->dev, v->normal, 0, true);
     params.aov_depth = de_gpu_texture_bindless(p->r->dev, v->depth, 0, true);
     params.aov_position = de_gpu_texture_bindless(p->r->dev, v->position, 0, true);
     params.aov_material = de_gpu_texture_bindless(p->r->dev, v->material, 0, true);
+    params.aov_moments = de_gpu_texture_bindless(p->r->dev, v->moments, 0, true);
     if (golden)
         params.exposure = 1;
     de_mat4 inverse = de_m4_inverse(&f->view_proj);
@@ -368,17 +508,23 @@ void de__pt_build(de__view_frame *f, void *user) {
                    .pc = {de_gpu_buffer_bindless(p->r->dev, v->params), ring},
                    .env = env,
                    .trace = trace,
-                   .media = media};
+                   .media = media,
+                   .pipeline = trace_pipeline};
     de_rg_pass *pass = de_rg_add_pass(g, "PT.TraceAccumulate", DE_QUEUE_GRAPHICS, execute, x);
     if (!pass) {
         g->oom = true;
         return;
     }
+    de_rg_read(pass, de_rg_import_buffer(g, p->sampling_table, DE_ACCESS_SHADER_READ),
+               DE_ACCESS_SHADER_READ);
     if (media.features)
         de__pt_media_graph(p->media, g, pass);
     de_rg_read(pass, rt->dependency, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, de_rg_import_buffer(g, rt->query, DE_ACCESS_SHADER_READ),
                DE_ACCESS_SHADER_READ);
+    if (params.light_count)
+        de_rg_read(pass, de_rg_import_buffer(g, v->directionals, DE_ACCESS_SHADER_READ),
+                   DE_ACCESS_SHADER_READ);
     if (source_dependency.id)
         de_rg_read(pass, source_dependency, DE_ACCESS_SHADER_READ);
     if (lighting.strip.id)
@@ -396,9 +542,12 @@ void de__pt_build(de__view_frame *f, void *user) {
     de_rg_export(g, accumulation, DE_ACCESS_SHADER_READ);
     de_rg_export(g, output, DE_ACCESS_SHADER_READ);
     de_rg_export(g, cdf, DE_ACCESS_SHADER_READ);
-    de_gpu_texture aov_textures[] = {v->albedo, v->normal, v->depth, v->position, v->material};
-    for (u32 i = 0; i < 5; ++i) {
+    de_gpu_texture aov_textures[] = {v->albedo,   v->normal,   v->depth,
+                                     v->position, v->material, v->moments};
+    for (u32 i = 0; i < 6; ++i) {
         de_rg_resource a = de_rg_import_texture(g, aov_textures[i], DE_ACCESS_SHADER_READ);
+        if (i == 5 && v->samples)
+            de_rg_read(pass, a, DE_ACCESS_SHADER_READ);
         de_rg_write(pass, a, DE_ACCESS_SHADER_WRITE);
         de_rg_export(g, a, DE_ACCESS_SHADER_READ);
     }
@@ -413,7 +562,11 @@ void de__pt_build(de__view_frame *f, void *user) {
                             .normal = v->normal,
                             .depth = v->depth,
                             .position = v->position,
-                            .material = v->material};
+                            .material = v->material,
+                            .moments = v->moments,
+                            .directional_alias = v->directionals,
+                            .directional_count = v->directional_count,
+                            .directional_offset = v->directional_offset};
         de_rg_resource denoised = de__pt_denoise_build(p->denoise, f, &info, params.exposure);
         if (denoised.id)
             f->color = denoised;
@@ -466,7 +619,11 @@ bool de__pt_get(const de_renderer *r, de_view view, de__pt_info *out) {
                          .normal = v->normal,
                          .depth = v->depth,
                          .position = v->position,
-                         .material = v->material};
+                         .material = v->material,
+                         .moments = v->moments,
+                         .directional_alias = v->directionals,
+                         .directional_count = v->directional_count,
+                         .directional_offset = v->directional_offset};
     return true;
 }
 

@@ -18,7 +18,7 @@ de_component de_ui__advanced_component(de_ui *ui, const char *name, u32 size, u3
     return de_component_register(ui->world, id,
                                  authored ? DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT : 0);
 }
-#define F(T, m, k) DE_FIELD_EX(T, m, k, DE_FIELD_DEFAULT, {0})
+#define F(T, m, k) DE_FIELD(T, m, k, DE_FIELD_DEFAULT)
 #define A(T, m, k, n)                                                                              \
     DE_FIELD_EX(T, m, DE_FK_FIXED_ARRAY, DE_FIELD_DEFAULT, {0, 0, NULL, NULL, k, n})
 #define REG(field, T, fields, auth)                                                                \
@@ -96,6 +96,20 @@ de_entity de_ui__advanced_node(de_ui *ui, de_entity parent, f32 w, f32 h) {
 }
 static void collect(const de_query_chunk *c, void *user) {
     de_ui_advanced *a = user;
+    if (!c->count)
+        return;
+    /* Query slices share one archetype. Plain layout nodes need no widget
+     * reconciliation; retain runtime owners for refresh and detach cleanup. */
+    const de_component relevant[] = {a->input,   a->dropdown, a->scroll, a->list,         a->tabs,
+                                     a->tooltip, a->editor,   a->popup,  a->tooltip_state};
+    bool found = false;
+    for (u32 i = 0; i < sizeof relevant / sizeof relevant[0]; ++i)
+        if (relevant[i].id && de_entity_has(a->ui->world, c->entities[0], relevant[i])) {
+            found = true;
+            break;
+        }
+    if (!found)
+        return;
     for (u32 i = 0; i < c->count && a->count < a->ui->capacity; ++i)
         a->entities[a->count++] = c->entities[i];
 }
@@ -103,6 +117,7 @@ static void prepare(de_system_ctx *ctx) {
     de_ui_advanced *a = ctx->user;
     de_ui *ui = a->ui;
     a->count = 0;
+    de_ui__documents_collect(ui, false);
     f32 dt = isfinite(ctx->dt) && ctx->dt > 0 ? ctx->dt : 0;
     a->time += dt;
     de_query_each(ui->world, ctx->queries[0], collect, a);
@@ -200,6 +215,7 @@ void de_ui__advanced_detach(de_ui *ui) {
                 }
             }
         }
+        de_ui__documents_collect(ui, true);
         if (a->prepare.id)
             de_system_remove(ui->world, a->prepare);
         if (a->input_system.id)

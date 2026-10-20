@@ -119,6 +119,12 @@ static const de__manifest_kv *ctx_setting(const de_asset_load_ctx *ctx, const ch
     return de__manifest_find_setting(ctx->settings, ctx->setting_count, key);
 }
 
+const de_asset_setting_value *de_asset_load_ctx_settings_value(const de_asset_load_ctx *ctx,
+                                                               const char *key) {
+    const de__manifest_kv *kv = ctx_setting(ctx, key);
+    return kv ? &kv->value : NULL;
+}
+
 bool de_asset_load_ctx_settings_has(const de_asset_load_ctx *ctx, const char *key) {
     return ctx_setting(ctx, key) != NULL;
 }

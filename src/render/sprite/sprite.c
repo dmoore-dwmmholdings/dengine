@@ -87,7 +87,7 @@ void de__sprite_pack_material(const DeSprite *s, de__gs_material *o,
     o->features = DE__MATERIAL_FEATURE_DOUBLE_SIDED |
                   (s->translucent ? DE__MATERIAL_FEATURE_FORWARD : DE__MATERIAL_FEATURE_ALPHA_MASK);
     memcpy(o->base_color.v, &s->color, sizeof s->color);
-    o->pbr.v[0] = DE_HANDLE_VALID(s->rough_metal_tex) ? 1 : 0;
+    o->pbr.v[0] = DE_HANDLE_VALID(s->rough_metal_tex) ? 1.f : 0.f;
     o->pbr.v[1] = 1;
     o->pbr.v[2] = 1;
     o->pbr.v[3] = .5f;

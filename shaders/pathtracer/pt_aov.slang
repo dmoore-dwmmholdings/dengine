@@ -11,3 +11,10 @@ public void pt_store_aov(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel) {
     }
     de_rwtex2d(p.aov_albedo)[xy]=albedo;de_rwtex2d(p.aov_normal)[xy]=normal;de_rwtex2d(p.aov_depth)[xy]=float4(depth,0,0,0);de_rwtex2d(p.aov_position)[xy]=position;de_rwtex2d(p.aov_material)[xy]=float4(material&65535u,material>>16,0,0);
 }
+
+// Raw radiance M2 uses the existing beauty mean. Demodulate mean and variance together later.
+public float3 pt_sample_moments(float3 previous,float3 previous_mean,float3 value,uint sample) {
+    float3 delta=value-previous_mean;
+    float3 mean=previous_mean+delta/float(sample+1u);
+    return max(previous+delta*(value-mean),float3(0));
+}

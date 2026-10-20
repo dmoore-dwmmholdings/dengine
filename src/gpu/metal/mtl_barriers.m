@@ -150,7 +150,7 @@ void de__mtl_encoder_started(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind 
     mc->enc_fence = f;
     mc->update_stages = all;
     if (kind == DE__MTL_ENC_RENDER || kind == DE__MTL_ENC_COMPUTE) {
-        de__mtl_residency_encoder(c->device, encoder, kind);
+        de__mtl_residency_encoder(c->device, encoder, kind, c);
         de__mtl_accel_residency(c, encoder, kind);
     }
     mc->encoder = (void *)CFBridgingRetain(enc);

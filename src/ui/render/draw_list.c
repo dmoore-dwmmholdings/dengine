@@ -28,7 +28,7 @@ u32 de_ui__nine_slice(de_vec4 r, de_vec4 uv, de_vec4 in, u32 width, u32 height, 
         sy = fminf(scale, r.w / fmaxf(top + bottom, 1e-6f));
     f32 x[] = {r.x, r.x + left * sx, r.x + r.z - right * sx, r.x + r.z};
     f32 y[] = {r.y, r.y + top * sy, r.y + r.w - bottom * sy, r.y + r.w};
-    f32 signx = uv.z >= uv.x ? 1 : -1, signy = uv.w >= uv.y ? 1 : -1;
+    f32 signx = uv.z >= uv.x ? 1.f : -1.f, signy = uv.w >= uv.y ? 1.f : -1.f;
     f32 u[] = {uv.x, uv.x + signx * left / width, uv.z - signx * right / width, uv.z};
     f32 v[] = {uv.y, uv.y + signy * top / height, uv.w - signy * bottom / height, uv.w};
     u32 count = 0;

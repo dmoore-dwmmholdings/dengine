@@ -40,7 +40,7 @@ void cs_sources(uint3 id:SV_DispatchThreadID,uniform DiPush pc) {
         float3 c=de_vis_transform_point(inst.transform,de_vis_mesh_position(mesh,vertices.z));
         float area=.5*length(cross(b-a,c-a));
         s.p0=float4(a,area);s.p1=float4(b,0);s.p2=float4(c,0);
-        s.radiance=float4(m.emissive.xyz*m.emissive.w,(m.flags&DE_GPU_MATERIAL_DOUBLE_SIDED)!=0?1:0);
+        s.radiance=float4((m.model&(DE_GPU_MATERIAL_MODELS-1u))==DE_GPU_MATERIAL_MODEL_UNLIT?m.base_color.rgb:m.emissive.xyz*m.emissive.w,(m.flags&DE_GPU_MATERIAL_DOUBLE_SIDED)!=0?1:0);
         // Texture modulation is sampled at the actual point. Factor power keeps its full support.
         s.power=area*3.14159265359*di_luminance(s.radiance.xyz)*(s.radiance.w>0?2:1);
     }

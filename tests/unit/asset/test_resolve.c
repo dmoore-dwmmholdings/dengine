@@ -577,9 +577,9 @@ TEST(resolve, oom_sweep) {
     de__manifest *m = parse_example(NULL);
     de_tracking_allocator t;
     const de_allocator a = de_tracking_allocator_init(&t, NULL, DE_MEM_ASSET);
-    static const char *const known[] = {"model",      "texture", "material", "shader",
-                                        "aseprite",   "tilemap", "font",     "strings",
-                                        "stylesheet", "sound",   "video",    "scene"};
+    static const char *const known[] = {
+        "model",   "texture",    "material", "shader", "aseprite", "tilemap",     "font",
+        "strings", "stylesheet", "sound",    "video",  "scene",    "string_table"};
     bool done = false;
     i64 n = 0;
     for (; n < 10000 && !done; ++n) {
@@ -592,7 +592,7 @@ TEST(resolve, oom_sweep) {
             ASSERT_TRUE(r == NULL);
         } else {
             de__validate_desc vd = {.known_types = known,
-                                    .known_type_count = 12,
+                                    .known_type_count = (u32)(sizeof known / sizeof known[0]),
                                     .skip_sources = false,
                                     .source_dir = "rdata:/"};
             res = de__manifest_validate(r, &vd);

@@ -52,8 +52,8 @@ TEST_F(paragraph, hard_breaks_spacing_snap_and_invalid_utf8, runtime_fx) {
         EXPECT_FLOAT_EQ(p.w, roundf(p.w), 0);
     }
     de_text_layout_free(l);
-    const char bad[] = {'a', (char)0xff, (char)0xc0, (char)0x80, 'b'};
-    d.utf8 = (de_str){bad, sizeof bad};
+    const u8 bad[] = {'a', 0xff, 0xc0, 0x80, 'b'};
+    d.utf8 = (de_str){(const char *)bad, sizeof bad};
     d.pixel_snap = false;
     ASSERT_EQ(de_text_layout_build(f->t, &d, NULL, &l), DE_OK);
     EXPECT_TRUE(l->size.x > 0);
@@ -63,9 +63,9 @@ TEST_F(paragraph, hard_breaks_spacing_snap_and_invalid_utf8, runtime_fx) {
 TEST_F(paragraph, bidi_record_separators_and_invalid_utf8_do_not_overrun_levels, runtime_fx) {
     de_text_style style = {.font = f->latin, .size_px = 20, .color = {1, 1, 1, 1}};
     for (u32 separator = 0x1c; separator <= 0x1e; ++separator) {
-        const char bytes[] = {'a', (char)separator, 'b', (char)separator, (char)0xff};
+        const u8 bytes[] = {'a', (u8)separator, 'b', (u8)separator, 0xff};
         for (u32 direction = 0; direction < 3; ++direction) {
-            de_text_layout_desc desc = {.utf8 = {bytes, sizeof bytes},
+            de_text_layout_desc desc = {.utf8 = {(const char *)bytes, sizeof bytes},
                                         .style = &style,
                                         .direction = (de_text_dir)direction};
             de_text_layout *l = NULL;
@@ -77,9 +77,9 @@ TEST_F(paragraph, bidi_record_separators_and_invalid_utf8_do_not_overrun_levels,
         }
     }
     /* Exact text payload of the original libFuzzer crash. */
-    const char bytes[] = {0x1e, 'a', (char)0xff, 'a', (char)0xff};
+    const u8 bytes[] = {0x1e, 'a', 0xff, 'a', 0xff};
     de_text_layout_desc desc = {
-        .utf8 = {bytes, sizeof bytes}, .style = &style, .direction = DE_DIR_RTL};
+        .utf8 = {(const char *)bytes, sizeof bytes}, .style = &style, .direction = DE_DIR_RTL};
     de_text_layout *l = NULL;
     ASSERT_EQ(de_text_layout_build(f->t, &desc, NULL, &l), DE_OK);
     EXPECT_EQ(l->line_count, 2u);
@@ -209,4 +209,24 @@ TEST_F(paragraph, concurrent_worker_layouts, runtime_fx) {
             DE_OK);
     for (u32 i = 0; i < 4; ++i)
         EXPECT_EQ(de_thread_join(threads[i]), 0);
+}
+
+TEST_F(paragraph, caller_arena_can_be_destroyed_after_layout_release, runtime_fx) {
+    de_arena *arena = NULL;
+    ASSERT_EQ(de_arena_create(&(de_arena_desc){.reserve_bytes = 1u << 20}, &arena), DE_OK);
+    de_allocator allocator = de_arena_allocator(arena);
+    de_text_style style = {.font = f->latin, .size_px = 20, .color = {1, 1, 1, 1}};
+    de_text_layout_desc desc = {.utf8 = DE_STR("Caller-owned layout storage"), .style = &style};
+    de_text_layout *layout = NULL;
+    ASSERT_EQ(de_text_layout_build(f->t, &desc, &allocator, &layout), DE_OK);
+    EXPECT_TRUE(de_text_layout_size(layout).x > 0);
+    de_text_layout_free(layout);
+    de_arena_reset(arena);
+    de_arena_destroy(arena);
+    /* Neither eviction nor text-system destruction may retain the caller's arena. */
+    de__text_layout_destroy(f->t);
+    ASSERT_EQ(de__text_layout_init(f->t), DE_OK);
+    ASSERT_EQ(de_text_layout_build(f->t, &desc, NULL, &layout), DE_OK);
+    EXPECT_TRUE(de_text_layout_size(layout).x > 0);
+    de_text_layout_free(layout);
 }

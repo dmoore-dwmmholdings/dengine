@@ -24,6 +24,7 @@ enum {
     TAG_FLOAT = 3,
     TAG_STRING = 4,
     TAG_STRING_ARRAY = 5,
+    TAG_ARRAY = 6,
     SETTINGS_HASH_VERSION = 1
 };
 
@@ -80,6 +81,12 @@ static void put_value(XXH3_state_t *st, const de__manifest_value *v) {
         put_u32(st, v->u.arr.count);
         for (u32 i = 0; i < v->u.arr.count; ++i)
             put_str(st, v->u.arr.items[i]);
+        break;
+    case DE__MANIFEST_ARRAY:
+        put_u8(st, TAG_ARRAY);
+        put_u32(st, v->u.values.count);
+        for (u32 i = 0; i < v->u.values.count; ++i)
+            put_value(st, &v->u.values.items[i]);
         break;
     default:
         /* Not a manifest type: hash the raw tag so it still changes the hash. */

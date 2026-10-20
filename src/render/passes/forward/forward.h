@@ -100,7 +100,8 @@ static inline bool de__forward_material(const de__gs_material *m) {
 /** True when `a` draws before `b`: farther first, then the smaller entity, then the smaller index
  * (a total order on distinct indices). NaN depths count as the farthest. */
 bool de__transparent_before(const de__transparent_item *a, const de__transparent_item *b);
-/** Sorts `items[0 .. n)` with de__transparent_before (a stable merge sort; `scratch` holds n). */
+/** Stable radix sort matching de__transparent_before; disjoint `scratch` holds n items.
+ * Uses only the supplied arrays, with no frame heap allocation. */
 void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_item *scratch);
 
 /** What de__transparent_gather reads. */

@@ -1,4 +1,5 @@
 #include "layout_test_util.h"
+#include <stdio.h>
 TEST_F(layout_hit, mixed_direction_centers_and_caret_edges, runtime_fx) {
     de_asset_id id = de_asset_id_from("font/hebrew");
     de_font hebrew = de_asset_font(f->assets, id);
@@ -43,4 +44,22 @@ TEST_F(layout_hit, mixed_direction_centers_and_caret_edges, runtime_fx) {
     EXPECT_FLOAT_EQ(right, 100, .001f);
     de_text_layout_free(l);
     de_asset_release(f->assets, load);
+}
+
+TEST_F(layout_hit, newline_empty_and_trailing_lines_have_caret_targets, runtime_fx) {
+    const char *separators[] = {"\n", "\r\n", "\xe2\x80\xa8"};
+    for (u32 i = 0; i < 3; ++i) {
+        char text[32];
+        snprintf(text, sizeof text, "abc%s%sx%s", separators[i], separators[i], separators[i]);
+        u32 width = (u32)strlen(separators[i]);
+        de_text_layout *l = layout_build(f, text, 0, DE_ALIGN_START, DE_DIR_LTR, false);
+        ASSERT_EQ(l->line_count, 4u);
+        de_vec4 empty = de_text_layout_caret(l, 3 + width);
+        EXPECT_FLOAT_EQ(empty.y, l->line_height, .001f);
+        EXPECT_EQ(de_text_layout_hit_test(l, (de_vec2){1000, 1.5f * l->line_height}), 3 + width);
+        de_vec4 trailing = de_text_layout_caret(l, (u32)strlen(text));
+        EXPECT_FLOAT_EQ(trailing.y, 3 * l->line_height, .001f);
+        EXPECT_EQ(de_text_layout_hit_test(l, (de_vec2){0, 3.5f * l->line_height}), strlen(text));
+        de_text_layout_free(l);
+    }
 }

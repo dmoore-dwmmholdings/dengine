@@ -10,6 +10,7 @@
 
 #include "gpu/metal/mtl_internal.h"
 #include "mtl_test_helpers.h"
+#include "gpu/texture_lease_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -210,6 +211,73 @@ static bool storage_listed(de_gpu_device *d, void *obj) {
         if (objs[i] == obj)
             return true;
     return false;
+}
+static void retired_storage_body(de_gpu_device *d) {
+    for (u32 leased = 0; leased < 2; ++leased) {
+        de_gpu_texture texture = de_gpu_texture_create(
+            d, &(de_gpu_texture_desc){.width = 8,
+                                      .height = 8,
+                                      .mip_count = 2,
+                                      .format = DE_FMT_RGBA8_UNORM,
+                                      .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED});
+        ASSERT_TRUE(texture.id);
+        void *view = de__mtl_texture_object(d, texture, 1);
+        ASSERT_TRUE(storage_listed(d, view));
+        u32 index = de_gpu_texture_bindless(d, texture, 1, true);
+        u64 descriptor = table_entry(d, DE__MTL_BINDLESS_OFFSET_STORAGE_TEXTURES, index);
+        if (leased)
+            ASSERT_TRUE(de__gpu_texture_pin(d, texture));
+        de_gpu_texture_destroy(d, texture);
+        if (leased) {
+            EXPECT_TRUE(storage_listed(d, view));
+            de__gpu_texture_unpin(d, texture);
+        }
+        EXPECT_FALSE(storage_listed(d, view));
+        /* Previously submitted work can still read the original descriptor until reclaim. */
+        EXPECT_EQ(table_entry(d, DE__MTL_BINDLESS_OFFSET_STORAGE_TEXTURES, index), descriptor);
+        de_gpu_wait_idle(d);
+        EXPECT_EQ(table_entry(d, DE__MTL_BINDLESS_OFFSET_STORAGE_TEXTURES, index),
+                  table_entry(d, DE__MTL_BINDLESS_OFFSET_STORAGE_TEXTURES, 0));
+    }
+}
+static void recorded_storage_body(de_gpu_device *d) {
+    de_gpu_texture texture = de_gpu_texture_create(
+        d, &(de_gpu_texture_desc){.width = 8,
+                                  .height = 8,
+                                  .mip_count = 2,
+                                  .format = DE_FMT_RGBA8_UNORM,
+                                  .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED});
+    ASSERT_TRUE(texture.id);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(d, DE_QUEUE_COMPUTE, "retired residency");
+    ASSERT_TRUE(cmd);
+    ASSERT_TRUE(de__mtl_cmd_encoder(cmd, DE__MTL_ENC_COMPUTE));
+    /* The encoder declares this storage view even though its shader will not use it. */
+    de_gpu_texture_destroy(d, texture);
+    de_gpu_wait_idle(d);
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_COMPUTE, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    ASSERT_FALSE(de_gpu_device_is_lost(d));
+}
+
+TEST_F(gpu_metal, retired_storage_excluded_from_future_encoders_without_clearing_descriptors,
+       mtl_fx) {
+    retired_storage_body(f->d);
+}
+TEST_F(gpu_metal, recorded_storage_residency_survives_retirement_before_submit, mtl_fx) {
+    recorded_storage_body(f->d);
+}
+TEST(gpu_metal, retired_storage_residency_forced_use_heap) {
+    static const char force[] = "gpu.metal.force_use_heap = true\n";
+    ASSERT_EQ(de_cvar_load_from_memory(force, sizeof force - 1), DE_OK);
+    mtl_fx fixture = {0};
+    mtl_fx_setup(&fixture);
+    de_cvar_set(de_cvar_find("gpu.metal.force_use_heap"), "0");
+    EXPECT_TRUE(de__mtl_residency_uses_heaps(fixture.d));
+    retired_storage_body(fixture.d);
+    recorded_storage_body(fixture.d);
+    mtl_fx_teardown(&fixture);
 }
 
 TEST_F(gpu_metal, bindless_entries, mtl_fx) {

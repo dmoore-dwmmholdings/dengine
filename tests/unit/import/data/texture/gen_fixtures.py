@@ -19,6 +19,7 @@ Files:
   checker.png       2x2 RGB checker of 0 and 255
   normal.png        32x32 RGB normal map of a bump (tangent space, [0,1] encoded)
   cutout.png        64x64 RGBA: alpha is a disc with soft edges (alpha-test coverage)
+  proxy_*.png      8x8 RGBA: donut, disconnected islands, and over-budget isolated pixels
   photo.jpg         16x16 RGB JPEG (quality 95)
   half_rgb.exr      8x8 half RGB, no compression
   float_rgba.exr    8x8 float RGBA, ZIP compression (zlib, 16-line blocks)
@@ -109,6 +110,24 @@ def pngs():
             r += bytes([255, 255, 255, round(a * 255)])
         rows.append(bytes(r))
     write_png("cutout.png", 64, 64, 6, 8, rows)
+    proxy_topology()
+
+
+def proxy_topology():
+    for kind in ("donut", "islands", "budget"):
+        rows = []
+        for y in range(8):
+            row = bytearray()
+            for x in range(8):
+                if kind == "donut":
+                    solid = 1 <= x < 7 and 1 <= y < 7 and not (3 <= x < 5 and 3 <= y < 5)
+                elif kind == "islands":
+                    solid = (1 <= x < 3 and 1 <= y < 3) or (5 <= x < 7 and 4 <= y < 7)
+                else:
+                    solid = x % 2 == 0 and y % 2 == 0
+                row += bytes([255, 255, 255, 255 if solid else 0])
+            rows.append(bytes(row))
+        write_png("proxy_" + kind + ".png", 8, 8, 6, 8, rows)
 
 
 def jpeg():

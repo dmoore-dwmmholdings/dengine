@@ -98,7 +98,7 @@ rotation = [0.0, 0.0, 0.0, 1.0]
 scale = [0.8, 0.8, 1.0]
 [entity.DeMeshRenderer]
 mesh = "mesh/box#box"
-materials = ["rtmat/white"]
+materials = ["rtmat/gi_receiver"]
 layer_mask = 1
 cast_shadows = true
 visible_in_rt = true
@@ -124,7 +124,7 @@ position = [0.0, 0.0, 1.5]
 rotation = [0.0, 0.0, 0.0, 1.0]
 scale = [1.0, 1.0, 1.0]
 [entity.DeIrradianceVolume]
-extent = [2.0, 2.0, 1.5]
+extent = [2.0, 4.0, 1.5]
 counts = [3, 3, 3]
 intensity = 1.0
 blend_distance = 0.1

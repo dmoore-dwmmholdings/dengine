@@ -1,7 +1,64 @@
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "ui_test_util.h"
 #include "ui/widgets/widgets_internal.h"
 #include "ui/render/draw_list.h"
 #include "ui/style/stylesheet_internal.h"
+TEST_F(ui_widgets, authored_selector_survives_content_and_behavior_composition, ui_fx) {
+    de_entity e = ui_node(f, (de_entity){0});
+    ((DeUiWidgetType *)de_entity_add(f->world, e, f->ui->style->widget))->type =
+        DE_UI_WIDGET_BUTTON;
+    de_entity_add(f->world, e, f->ui->ids.text);
+    de_entity_add(f->world, e, f->ui->ids.image);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_BUTTON);
+    de_entity_add(f->world, e, f->ui->widgets->slider);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_BUTTON);
+    EXPECT_FALSE(de_entity_has(f->world, e, f->ui->widgets->auto_widget));
+}
+TEST_F(ui_widgets, inferred_selector_retags_and_author_can_take_ownership, ui_fx) {
+    de_entity e = ui_node(f, (de_entity){0});
+    de_entity_add(f->world, e, f->ui->ids.text);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_TEXT);
+    de_entity_add(f->world, e, f->ui->widgets->button);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_BUTTON);
+    de_entity_remove(f->world, e, f->ui->widgets->button);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_TEXT);
+    de_entity_remove(f->world, e, f->ui->ids.text);
+    ui_frame(f);
+    EXPECT_FALSE(de_entity_has(f->world, e, f->ui->style->widget));
+    de_entity_add(f->world, e, f->ui->ids.image);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_IMAGE);
+    ((DeUiWidgetType *)de_entity_get(f->world, e, f->ui->style->widget))->type = DE_UI_WIDGET_PANEL;
+    ui_frame(f);
+    EXPECT_FALSE(de_entity_has(f->world, e, f->ui->widgets->auto_widget));
+    de_entity_add(f->world, e, f->ui->ids.text);
+    ui_frame(f);
+    EXPECT_EQ(
+        ((const DeUiWidgetType *)de_entity_get_const(f->world, e, f->ui->style->widget))->type,
+        DE_UI_WIDGET_PANEL);
+}
 TEST_F(ui_widgets, basic_entry_table_submit_toggle_slider_and_null_scroll, ui_fx) {
     de_ui_widget_table *table = de_ui__widget_table(f->ui);
     ASSERT_TRUE(table);
@@ -169,9 +226,7 @@ TEST_F(ui_widgets, real_locale_ready_switch_updates_labels_and_only_localized_me
     EXPECT_FALSE(f->ui->records[de_ui__find(f->ui, labels[2])].dirty);
     de_ui_attach(f->ui, NULL);
     f->ui->desc.text = NULL;
-    /* Active locale requests release through assets, matching host shutdown order. */
-    de_text_destroy(fonts.t);
-    fonts.t = NULL;
+    /* Exercise the shared fixture with active localization requests. */
     runtime_fx_teardown(&fonts);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/en.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("uilocale:/strings/main/pt.toml"), DE_OK);

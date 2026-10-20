@@ -511,11 +511,43 @@ DE_API de_asset_id de_asset_load_ctx_id(const de_asset_load_ctx *ctx);
 /** The type's `user` pointer (de_asset_type_desc.user). */
 DE_API void *de_asset_load_ctx_user(const de_asset_load_ctx *ctx);
 
+/** Immutable settings views, borrowed for the current load/import callback. Arrays may
+ * contain scalars or nested arrays (up to 16 levels). Empty/all-string arrays retain the
+ * STRING_ARRAY representation for compatibility with the existing string-array getters. */
+typedef enum de_asset_setting_type {
+    DE_ASSET_SETTING_BOOL,
+    DE_ASSET_SETTING_INT,
+    DE_ASSET_SETTING_FLOAT,
+    DE_ASSET_SETTING_STRING,
+    DE_ASSET_SETTING_STRING_ARRAY,
+    DE_ASSET_SETTING_ARRAY
+} de_asset_setting_type;
+typedef struct de_asset_setting_value {
+    de_asset_setting_type type;
+    union {
+        bool b;
+        i64 i;
+        f64 f;
+        const char *s;
+        struct {
+            const char *const *items;
+            u32 count;
+        } arr;
+        struct {
+            const struct de_asset_setting_value *items;
+            u32 count;
+        } values;
+    } u;
+} de_asset_setting_value;
+
 /**
  * The asset's settings from the manifest (`[defaults.<type>]` overlaid by the asset's own keys).
  * Each getter returns `fallback` when the key is missing or has another type; the float getter
- * also accepts an integer. Strings stay valid during the load.
+ * also accepts an integer. Strings stay valid during the load. The value getter returns
+ * NULL when missing (or ctx/key is NULL), and otherwise exposes the typed tree.
  */
+DE_API const de_asset_setting_value *de_asset_load_ctx_settings_value(const de_asset_load_ctx *ctx,
+                                                                      const char *key);
 DE_API bool de_asset_load_ctx_settings_has(const de_asset_load_ctx *ctx, const char *key);
 DE_API bool de_asset_load_ctx_settings_bool(const de_asset_load_ctx *ctx, const char *key,
                                             bool fallback);
@@ -598,6 +630,8 @@ DE_API void *de_asset_import_user(const de_asset_import_ctx *ctx);
  * has another type; the float getter also accepts an integer. Every setting is part of the
  * settings hash, whether the importer reads it or not.
  */
+DE_API const de_asset_setting_value *de_asset_import_setting_value(const de_asset_import_ctx *ctx,
+                                                                   const char *key);
 DE_API bool de_asset_import_setting_has(const de_asset_import_ctx *ctx, const char *key);
 DE_API bool de_asset_import_setting_bool(const de_asset_import_ctx *ctx, const char *key,
                                          bool fallback);

@@ -312,6 +312,14 @@ void de__mtl_bindless_clear(de_gpu_device *d, de__gpu_bindless_space space, u32 
     if (space == DE__GPU_BINDLESS_STORAGE_TEXTURE && m->storage_objs)
         storage_list_remove(m, index);
 }
+void de__mtl_texture_retire(de_gpu_device *d, de__gpu_texture *t) {
+    /* Future encoders must not acquire unretained references to an object whose retirement
+     * fences were already captured. Prior submissions retain the original descriptors. */
+    mtl_device *m = de__mtl_dev(d);
+    for (u32 mip = 0; mip < DE_GPU_MAX_MIPS; ++mip)
+        if (t->storage[mip])
+            storage_list_remove(m, t->storage[mip]);
+}
 
 void *de__mtl_bindless_buffer(de_gpu_device *d, const u8 **cpu) {
     if (!de__mtl_device_object(d)) {

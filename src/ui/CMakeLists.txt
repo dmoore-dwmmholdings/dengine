@@ -27,7 +27,7 @@ if(TARGET de_ui)
 endif()
 
 if(TARGET de_ui)
- target_sources(de_ui PRIVATE widgets/advanced.c widgets/text_input.c widgets/dropdown.c widgets/scroll_view.c widgets/virtual_list.c widgets/tabs.c widgets/tooltip.c)
+ target_sources(de_ui PRIVATE widgets/advanced.c widgets/text_input.c widgets/text_document.c widgets/dropdown.c widgets/scroll_view.c widgets/virtual_list.c widgets/tabs.c widgets/tooltip.c)
 endif()
 
 # DENG-322 world panels and internal-grid pixel UI.

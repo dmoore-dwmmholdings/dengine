@@ -177,6 +177,11 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     r->frame = r->settings;
 
     de_result res = DE_OK;
+    res = de__skin_init(r); /* Publish the disjoint staging/render owner before any handoff. */
+    if (res != DE_OK) {
+        renderer_free(r);
+        return res;
+    }
     /* Per-frame storage: a timeline fence (frame N signals N + 1) and one arena per frame in
      * flight. */
     r->frame_fence = de_gpu_fence_create(r->dev, 0);

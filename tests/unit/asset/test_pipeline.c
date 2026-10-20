@@ -73,7 +73,7 @@ typedef struct pt_obj {
     bool flag;
     char name[16];
     u32 tag_count;
-    u32 pad_;
+    bool nested_ok;
 } pt_obj;
 
 static const u8 *pt_bytes(const pt_obj *o) {
@@ -126,6 +126,22 @@ static de_result pt_load(de_asset_load_ctx *ctx) {
     o->flag = de_asset_load_ctx_settings_bool(ctx, "flag", false);
     snprintf(o->name, sizeof o->name, "%s", de_asset_load_ctx_settings_string(ctx, "name", "-"));
     o->tag_count = de_asset_load_ctx_settings_string_array(ctx, "tags", NULL);
+    const de_asset_setting_value *v = de_asset_load_ctx_settings_value(ctx, "nested");
+    if (v && v->type == DE_ASSET_SETTING_ARRAY && v->u.values.count == 3) {
+        const de_asset_setting_value *pair = &v->u.values.items[0];
+        const de_asset_setting_value *text = &v->u.values.items[1];
+        const de_asset_setting_value *tags = &v->u.values.items[2];
+        o->nested_ok = pair->type == DE_ASSET_SETTING_ARRAY && pair->u.values.count == 2 &&
+                       pair->u.values.items[0].type == DE_ASSET_SETTING_INT &&
+                       pair->u.values.items[0].u.i == 256 &&
+                       pair->u.values.items[1].type == DE_ASSET_SETTING_INT &&
+                       pair->u.values.items[1].u.i == 591 &&
+                       text->type == DE_ASSET_SETTING_STRING && strcmp(text->u.s, "owned") == 0 &&
+                       tags->type == DE_ASSET_SETTING_STRING_ARRAY && tags->u.arr.count == 2 &&
+                       strcmp(tags->u.arr.items[0], "a") == 0 &&
+                       strcmp(tags->u.arr.items[1], "b") == 0 &&
+                       de_asset_load_ctx_settings_value(ctx, "missing") == NULL;
+    }
     if (n != 0)
         memcpy(o + 1, p, (size_t)n);
     de_asset_load_ctx_set_object(ctx, o, sizeof(pt_obj) + n);
@@ -1302,4 +1318,23 @@ TEST_F(pipeline, cook_ready_uncapped, pipe_fx) {
         (void)de_file_delete(path);
     }
 #endif
+}
+
+TEST_F(pipeline, nested_settings_survive_manifest_replacement, pipe_fx) {
+    put_text("nested.bin", "nested");
+    install_manifest(f->s, "[assets.a]\ntype='pt'\nsource='nested.bin'\n"
+                           "nested=[[256,591],'owned',['a','b']]\n");
+    de_atomic_store_u64(&f->c.gate_id, id_of("a").hash, DE_ATOMIC_RELEASE);
+    de_atomic_store_u32(&f->c.gate_closed, 1, DE_ATOMIC_RELEASE);
+    de_load_handle h = de_asset_load(f->s, id_of("a"), 0);
+    wait_flag(f, &f->c.gate_reached);
+    /* Destroy the original arena before the worker reads its settings. */
+    install_manifest(
+        f->s, "[assets.a]\ntype='pt'\nsource='nested.bin'\nnested=[[1,2],'replacement',['z']]\n");
+    de_atomic_store_u32(&f->c.gate_closed, 0, DE_ATOMIC_RELEASE);
+    EXPECT_EQ((int)de_asset_wait(f->s, h, WAIT_NS), (int)DE_LOAD_READY);
+    const pt_obj *o = obj_of(f, "a");
+    ASSERT_TRUE(o != NULL);
+    EXPECT_TRUE(o->nested_ok);
+    de_asset_release(f->s, h);
 }

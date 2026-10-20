@@ -912,7 +912,8 @@ TEST_F(reg, cxx_macros, reg_fx) {
 TEST_F(reg, revision_tracks_publications_without_changing_schema_identity, reg_fx) {
     EXPECT_EQ(de_type_registry_revision(NULL), 0u);
     EXPECT_EQ(de_type_registry_revision(f->r), 0u);
-    de_field_info field = {"current", 0, sizeof(f32), DE_FK_F32, DE_FIELD_DEFAULT, {0}};
+    de_field_info field = {
+        .name = "current", .size = sizeof(f32), .kind = DE_FK_F32, .flags = DE_FIELD_DEFAULT};
     de_type_desc type = {.name = "BoundHealth",
                          .size = 8,
                          .align = 4,
@@ -960,7 +961,8 @@ TEST(reg, revision_does_not_publish_failed_allocations) {
     test_counting_init(&c);
     de_type_registry *r = NULL;
     ASSERT_EQ(de_type_registry_create(&c.iface, &r), DE_OK);
-    de_field_info field = {"value", 0, sizeof(u32), DE_FK_U32, DE_FIELD_DEFAULT, {0}};
+    de_field_info field = {
+        .name = "value", .size = sizeof(u32), .kind = DE_FK_U32, .flags = DE_FIELD_DEFAULT};
     de_type_desc type = {.name = "BoundOOM",
                          .size = 4,
                          .align = 4,

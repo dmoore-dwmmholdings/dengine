@@ -132,7 +132,10 @@ static void row(jx *x, joint2d *j, u32 k, de_vec2 n, bool angular, f32 error, f3
     if (hz > 0)
         soft = de__soft_make(hz, j->d.damping_ratio > 0 ? j->d.damping_ratio : 0.7f, x->ctx->h);
     f32 b = (bias || hz > 0) ? soft.bias_rate * error : 0;
-    b = clampf(b, -20, 20);
+    /* A physical spring's force follows displacement; the correction-velocity cap
+     * belongs only to rigid positional stabilization. */
+    if (!(hz > 0))
+        b = clampf(b, -20, 20);
     f32 imp = -soft.mass_scale * (speed - target + b) / mass - soft.impulse_scale * j->impulse[k];
     f32 next = clampf(j->impulse[k] + imp, lo, hi);
     imp = next - j->impulse[k];
@@ -157,12 +160,15 @@ static void limits(jx *x, joint2d *j, de_vec2 n, bool angular, f32 value, bool b
         row(x, j, 3, n, angular, value - j->d.lower, 0, -1e30f, 1e30f, bias, j->d.hertz);
         return;
     }
-    /* Speculative limit velocity prevents crossing a stop during the substep. */
+    /* Stops are rigid unilateral rows. A soft impulse scale lets a sustained motor
+     * balance its drive against penetration instead of stopping at the bound. */
     f32 lower = value - j->d.lower, upper = j->d.upper - value;
-    row(x, j, 3, n, angular, lower < 0 ? lower : 0, lower > 0 ? -lower * x->ctx->inv_h : 0, 0,
-        1e30f, bias, 0);
-    row(x, j, 4, n, angular, upper < 0 ? -upper : 0, upper > 0 ? upper * x->ctx->inv_h : 0, -1e30f,
-        0, bias, 0);
+    f32 lower_speed = lower > 0 ? -lower * x->ctx->inv_h
+                                : (bias ? clampf(-0.2f * lower * x->ctx->inv_h, 0, 20) : 0);
+    f32 upper_speed = upper > 0 ? upper * x->ctx->inv_h
+                                : (bias ? clampf(0.2f * upper * x->ctx->inv_h, -20, 0) : 0);
+    row(x, j, 3, n, angular, 0, lower_speed, 0, 1e30f, false, 0);
+    row(x, j, 4, n, angular, 0, upper_speed, -1e30f, 0, false, 0);
 }
 static void motor(jx *x, joint2d *j, de_vec2 n, bool angular) {
     if (!j->d.enable_motor)
@@ -387,6 +393,30 @@ bool de__joints2d_collide(const de_physics2d_world *p, u32 a, u32 b) {
     }
     return true;
 }
+typedef struct joint_checksum_bytes {
+    u8 bytes[256];
+    u32 count;
+} joint_checksum_bytes;
+static void jck_u32(joint_checksum_bytes *b, u32 value) {
+    DE_ASSERT(b->count + 4 <= sizeof b->bytes);
+    for (u32 i = 0; i < 4; ++i)
+        b->bytes[b->count++] = (u8)(value >> (8 * i));
+}
+static void jck_f32(joint_checksum_bytes *b, f32 value) {
+    u32 bits;
+    memcpy(&bits, &value, sizeof bits);
+    jck_u32(b, bits);
+}
+static void jck_f64(joint_checksum_bytes *b, f64 value) {
+    u64 bits;
+    memcpy(&bits, &value, sizeof bits);
+    jck_u32(b, (u32)bits);
+    jck_u32(b, (u32)(bits >> 32));
+}
+static void jck_v2(joint_checksum_bytes *b, de_vec2 value) {
+    jck_f32(b, value.x);
+    jck_f32(b, value.y);
+}
 u64 de__joints2d_checksum(const de_physics2d_world *p, u64 h) {
     joints2d *s = state(p);
     if (!s)
@@ -396,14 +426,36 @@ u64 de__joints2d_checksum(const de_physics2d_world *p, u64 h) {
         const joint2d *j = &s->items[i];
         if (!j->alive)
             continue;
-        u32 words[16] = {i, j->generation, j->a, j->b, (u32)j->d.kind, (u32)j->broken};
+        joint_checksum_bytes bytes = {.count = 0};
+        jck_u32(&bytes, i);
+        jck_u32(&bytes, j->generation);
+        jck_u32(&bytes, j->a);
+        jck_u32(&bytes, j->b);
+        jck_u32(&bytes, (u32)j->d.kind);
+        jck_u32(&bytes, j->broken ? 1u : 0u);
         for (u32 k = 0; k < 8; ++k)
-            memcpy(&words[6 + k], &j->impulse[k], 4);
-        u8 bytes[64];
-        for (u32 k = 0; k < 16; ++k)
-            for (u32 b = 0; b < 4; ++b)
-                bytes[k * 4 + b] = (u8)(words[k] >> (8 * b));
-        h = de_hash64(bytes, sizeof bytes, h);
+            jck_f32(&bytes, j->impulse[k]);
+        /* Body/entity selectors are resolved at creation; the authoritative indices
+         * above identify the bodies. Prepared rows/peak force are recomputed each tick. */
+        jck_v2(&bytes, j->d.local_anchor_a);
+        jck_v2(&bytes, j->d.local_anchor_b);
+        jck_f64(&bytes, j->d.world_anchor_a.x);
+        jck_f64(&bytes, j->d.world_anchor_a.y);
+        jck_f64(&bytes, j->d.world_anchor_b.x);
+        jck_f64(&bytes, j->d.world_anchor_b.y);
+        jck_v2(&bytes, j->d.axis);
+        jck_f32(&bytes, j->d.reference_angle);
+        jck_u32(&bytes, j->d.enable_limit ? 1u : 0u);
+        jck_u32(&bytes, j->d.enable_motor ? 1u : 0u);
+        jck_u32(&bytes, j->d.collide_connected ? 1u : 0u);
+        jck_f32(&bytes, j->d.lower);
+        jck_f32(&bytes, j->d.upper);
+        jck_f32(&bytes, j->d.motor_speed);
+        jck_f32(&bytes, j->d.max_motor_force);
+        jck_f32(&bytes, j->d.hertz);
+        jck_f32(&bytes, j->d.damping_ratio);
+        jck_f32(&bytes, j->d.break_force);
+        h = de_hash64(bytes.bytes, bytes.count, h);
     }
     return h;
 }

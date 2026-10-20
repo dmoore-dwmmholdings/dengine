@@ -14,8 +14,9 @@
  *     system are stamped with the counter, so they are newer than every run handed out so far
  *     and every system sees them on its next run.
  *   - Row ticks: every data column row holds `added` and `changed`. Adding a component (spawn,
- *     spawn_with, add, a deferred add) sets both to the current change tick
- *     (ecs_row_init_ticks, table.c). Moves between archetypes keep them.
+ *     spawn_with, add, a deferred add) sets both to the executing system's run tick, or the
+ *     world change tick outside a system (including deferred adds at the sync point).
+ *     Moves between archetypes keep them (ecs_row_init_ticks, table.c).
  *   - Marking changed: de_entity_mark_changed, a mutable de_entity_get and an add of a
  *     component the entity already has (immediate or deferred: the value is replaced) set
  *     `changed` to the current change tick. A query iteration marks every yielded row of each

@@ -113,13 +113,15 @@ static void glyph_job(void *user) {
     j->worker = de_task_worker_index();
 #if defined(__APPLE__)
     (void)pthread_getname_np(pthread_self(), j->thread_name, sizeof j->thread_name);
-#endif /* A task-record OOM may run inline. Never perform MSDF on                                  \
-                                           frame workers. */
-    de_result result = j->worker == DE_TASK_WORKER_NONE ? generate(j) : DE_ERR_BUSY;
+#endif
+    /* Task-record OOM can execute inline on any caller. A missing frame index does
+     * not establish background membership: external application threads have it too. */
+    bool background = de_task_is_background_worker(c->tasks);
+    de_result result = background ? generate(j) : DE_ERR_BUSY;
     de_mutex_lock(&c->mutex);
     j->result = result;
     j->status = GLYPH_COMPLETE;
-    if (j->worker == DE_TASK_WORKER_NONE)
+    if (background)
         ++c->stats.background_jobs;
     de_mutex_unlock(&c->mutex);
 }
@@ -139,9 +141,9 @@ de_result de_text__glyph_cache_init(de_text_system *t) {
                                                     .max = 8192});
     c->pages_max = de_cvar_register(&(de_cvar_desc){.name = "t.runtime_pages_max",
                                                     .type = DE_CVAR_INT,
-                                                    .default_number = 8,
+                                                    .default_number = DE_FONT_RUNTIME_PAGES_MAX,
                                                     .min = 0,
-                                                    .max = 8});
+                                                    .max = DE_FONT_RUNTIME_PAGES_MAX});
     if (t->assets)
         c->tasks = t->assets->tasks;
     if (t->assets && !c->tasks) {
@@ -315,12 +317,18 @@ void de_text__integrate_glyphs(de_text_system *t) {
             ready[n++] = &c->jobs[i];
     qsort(ready, n, sizeof *ready, compare_jobs);
     u32 limit = (u32)de_cvar_int(c->per_frame), integrated = 0;
+    de__glyph_job *retry = NULL;
     for (u32 i = 0; i < n && integrated < limit; ++i) {
         de__glyph_job *j = ready[i];
         if (j->status == GLYPH_QUEUED)
             break;
         de__glyph_font *f = &c->fonts[j->font];
         de_text_font *live = de_text__font_get(t, f->handle);
+        if (j->result == DE_ERR_BUSY && live == f->identity) {
+            j->status = GLYPH_QUEUED;
+            retry = j;
+            break; /* Preserve integration order and pending count until a worker runs it. */
+        }
         bool success = j->result == DE_OK && live == f->identity && place(c, f, &j->entry);
         if (success) {
             de__font_glyph *g = &j->entry;
@@ -329,17 +337,7 @@ void de_text__integrate_glyphs(de_text_system *t) {
                 for (u32 y = 0; y < g->h; ++y)
                     memcpy(f->pixels[page] + 4 * ((u64)(g->y + y) * f->width + g->x),
                            j->pixels + 4 * (u64)y * g->w, 4 * g->w);
-                de_text_dirty_rect rect = {g->page, g->x, g->y, g->w, g->h};
-                if (live->dirty_count < 256)
-                    live->dirty[live->dirty_count++] = rect;
-                else {
-                    for (u32 k = 0; k < live->dirty_count; ++k)
-                        if (live->dirty[k].page == rect.page) {
-                            live->dirty[k] =
-                                (de_text_dirty_rect){rect.page, 0, 0, live->width, live->height};
-                            break;
-                        }
-                }
+                de_text__font_dirty(live, (de_text_dirty_rect){g->page, g->x, g->y, g->w, g->h});
             }
             j->status = GLYPH_INTEGRATED;
             ++live->generation;
@@ -363,6 +361,9 @@ void de_text__integrate_glyphs(de_text_system *t) {
     }
     de_mutex_unlock(&c->mutex);
     de__text_unlock(t->runtime);
+    /* Submit unlocked: another task-record failure may call glyph_job inline again. */
+    if (retry)
+        de_task_submit(c->tasks, DE_TASK_POOL_BACKGROUND, glyph_job, retry, &c->counter);
 }
 de_text_stats de_text_get_stats(const de_text_system *t) {
     de_text_stats stats = {0};

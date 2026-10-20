@@ -385,6 +385,8 @@ struct parser_t {
   toml_datum_t *curtab; // current table
   pool_t *pool;         // memory pool for strings
   const char *srcname;  // source name copied into the pool, or NULL
+  toml_duplicate_fn duplicate_handler;
+  void *duplicate_user;
   ebuf_t ebuf;          // buffer to store last error message
 };
 
@@ -1073,8 +1075,15 @@ toml_result_t toml_parse(const char *src, int len) {
 }
 
 toml_result_t toml_parse_named(const char *src, int len, const char *name) {
+  return toml_parse_with_duplicates(src, len, name, NULL, NULL);
+}
+
+toml_result_t toml_parse_with_duplicates(const char *src, int len, const char *name,
+                                         toml_duplicate_fn handler, void *user) {
   toml_result_t result = {0};
   parser_t parser = {0};
+  parser.duplicate_handler = handler;
+  parser.duplicate_user = user;
   parser_t *pp = &parser;
 
   // Check that src is not NULL.
@@ -1816,6 +1825,19 @@ static int parse_keyvalue_expr(parser_t *pp, token_t tok) {
   if (parse_val(pp, tok, &newval)) {
     datum_free(&newval);
     return -1;
+  }
+
+  // The caller may explicitly accept a duplicate assignment. Keep the first
+  // value, after fully parsing the replacement so malformed TOML still fails.
+  span_t key = keypart.span[keypart.nspan - 1];
+  int existing = pp->duplicate_handler ? tab_find(tab, key) : -1;
+  if (existing >= 0 && pp->duplicate_handler) {
+    toml_duplicate_t duplicate = {&pp->toptab, tab, key.ptr, key.len, keylineno,
+                                 &tab->u.tab.value[existing], &newval};
+    if (pp->duplicate_handler(&duplicate, pp->duplicate_user)) {
+      datum_free(&newval);
+      return 0;
+    }
   }
 
   // Add a new key/value for tab.

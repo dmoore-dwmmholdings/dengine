@@ -22,6 +22,11 @@ de_result de__source_stream(de_audio *a, de__sound_asset *asset, de__audio_sourc
 void de__stream_service(de_audio *a);
 void de__stream_shutdown(de_audio *a);
 void de__stream_test_starve(de_audio *a, bool starve);
+/* Deterministic interleaving seams. Set only while the reader is quiescent.
+ * refill_now blocks and is exclusively a test-control operation, never an RT callback. */
+void de__stream_test_read_hook(de__audio_source *s, void (*hook)(de__audio_source *, void *),
+                               void *user);
+void de__stream_test_refill_now(de__audio_source *s);
 /* Testable real async reader, decoder state is worker-owned. */
 typedef struct de__sound_decoder {
     const de_allocator *alloc;

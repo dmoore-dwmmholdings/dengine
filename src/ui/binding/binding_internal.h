@@ -13,7 +13,7 @@ typedef enum de_ui_binding_property {
 typedef struct de_ui_binding_cache {
     de_entity entity;
     DeUiBinding descriptor;
-    u64 revision, locale_generation;
+    u64 revision, locale_generation, style_revision;
     de_component source, target, editor;
     de_field_info field;
     u32 offset, target_offset, target_size, editor_offset, editor_size, editor_length;
@@ -35,9 +35,12 @@ typedef struct de_ui_binding_system {
     u32 count, capacity, cache_capacity, warnings, writes, resolved;
     de_log_category log;
     f64 update_ms;
+    u64 style_revision;
 } de_ui_binding_system;
 de_result de_ui__binding_init(de_ui *ui);
 void de_ui__binding_attach(de_ui *ui);
 void de_ui__binding_detach(de_ui *ui);
 void de_ui__binding_shutdown(de_ui *ui);
+/* Active visual bindings override the cascade; NULL output only queries ownership revision. */
+u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style);
 #endif

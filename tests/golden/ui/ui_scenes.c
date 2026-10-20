@@ -343,7 +343,7 @@ static void scene(de_golden_ctx *ctx, u32 kind) {
     } else {
         for (u32 pass = 0; pass < (kind == 0 ? 2u : 1u); ++pass) {
             ui_scene s = {0};
-            f32 scale = pass == 0 ? 1 : 2;
+            f32 scale = pass == 0 ? 1.f : 2.f;
             de_result result = setup(&s, ctx, scale);
             if (result == DE_OK) {
                 content(&s, kind, scale);

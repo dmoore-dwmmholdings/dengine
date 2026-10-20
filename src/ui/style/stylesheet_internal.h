@@ -61,6 +61,7 @@ typedef struct de_ui_style_cache {
     de_name class_name;
     u32 widget, state;
     u64 revision;
+    u64 binding_revision;
     bool initialized;
     DeUiNode authored_node, applied_node;
     DeUiStyle authored_style, applied_style;
@@ -72,7 +73,7 @@ typedef struct de_ui_property_tween {
     u32 offset;
     f32 from, to, elapsed, duration;
     de_ui_easing easing;
-    bool active;
+    bool active, stylesheet;
 } de_ui_property_tween;
 typedef struct de_ui_style_system {
     de_ui *ui;
@@ -113,5 +114,8 @@ de_result de_ui__tween_path(de_ui *ui, de_entity entity, const char *property, f
 f32 de_ui__ease(de_ui_easing easing, f32 progress);
 void de_ui__tweens_tick(de_ui_style_system *state, f32 dt);
 de_result de_ui__tween_field(de_ui_style_system *state, de_entity entity, de_component component,
-                             u32 offset, f32 value, f32 seconds, de_ui_easing easing);
+                             u32 offset, f32 value, f32 seconds, de_ui_easing easing,
+                             bool stylesheet);
+void de_ui__style_tween_sample(de_ui_style_system *state, de_entity entity, de_component component,
+                               u32 offset, f32 value);
 #endif

@@ -3,6 +3,7 @@
 #include "render/rt/restir_di.h"
 #include "render/probes/probes_internal.h"
 #include "flip.h"
+#include "render/shaders/engine_shaders.h"
 
 typedef struct pt_fixture {
     rt_fixture rt;
@@ -76,14 +77,13 @@ static void pt_frame(pt_fixture *f) {
     ASSERT_TRUE(de__pt_get(r->r, r->view, &f->info));
     ASSERT_FALSE(de_gpu_device_is_lost(r->d));
 }
-static float *pt_read(pt_fixture *f) {
+static float *pt_read_texture(pt_fixture *f, de_gpu_texture texture, u32 bytes_per_pixel) {
     rt_fixture *r = &f->rt;
     de_gpu_cmd *cmd = de_gpu_cmd_begin(r->d, DE_QUEUE_GRAPHICS, "PT accumulation readback");
-    de_gpu_barrier b = {.texture = f->info.accumulation,
-                        .before = DE_ACCESS_SHADER_READ,
-                        .after = DE_ACCESS_COPY_SRC};
+    de_gpu_barrier b = {
+        .texture = texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
     de_gpu_cmd_barriers(cmd, &b, 1);
-    de_gpu_cmd_copy_texture_to_buffer(cmd, f->rb, 0, f->info.width * 16, f->info.accumulation, 0,
+    de_gpu_cmd_copy_texture_to_buffer(cmd, f->rb, 0, f->info.width * bytes_per_pixel, texture, 0,
                                       0);
     b.before = DE_ACCESS_COPY_SRC;
     b.after = DE_ACCESS_SHADER_READ;
@@ -94,6 +94,149 @@ static float *pt_read(pt_fixture *f) {
     de_gpu_wait_idle(r->d);
     return de_gpu_buffer_map(r->d, f->rb);
 }
+static float *pt_read(pt_fixture *f) {
+    return pt_read_texture(f, f->info.accumulation, 16);
+}
+
+TEST_F(pt_reference, progressive_sample_moments_match_observed_paths, pt_fixture) {
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.base_color = (de_vec4){.7f, .5f, .25f, 1};
+    f->rt.w.touch_all = true;
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "1"));
+    ASSERT_TRUE(cvar_set("r.pt.final_denoise", "0"));
+    const u32 center = 32u * 64u + 32u;
+    f32 previous[3] = {0};
+    f64 total[3] = {0}, squared[3] = {0};
+    for (u32 sample = 0; sample < 16; ++sample) {
+        pt_frame(f);
+        ASSERT_EQ(f->info.samples, sample + 1u);
+        const f32 *beauty = pt_read(f) + center * 4u;
+        f32 sum[3] = {beauty[0], beauty[1], beauty[2]};
+        ASSERT_FLOAT_EQ(beauty[3], sample + 1u, 0);
+        const f32 *moments = pt_read_texture(f, f->info.moments, 16) + center * 4u;
+        for (u32 ch = 0; ch < 3; ++ch) {
+            f64 value = (f64)sum[ch] - previous[ch];
+            previous[ch] = sum[ch];
+            total[ch] += value;
+            squared[ch] += value * value;
+            const f64 n = sample + 1u;
+            const f64 expected_m2 = fmax(squared[ch] - total[ch] * total[ch] / n, 0);
+            EXPECT_FLOAT_EQ(moments[ch], expected_m2, 2e-5 * fmax(1, expected_m2));
+        }
+    }
+    for (u32 ch = 0; ch < 3; ++ch)
+        EXPECT_TRUE(squared[ch] - total[ch] * total[ch] / 16 > 1e-5);
+    de_renderer_path_reset(f->rt.r, f->rt.view);
+    pt_frame(f);
+    ASSERT_EQ(f->info.samples, 1u);
+    const f32 *moments = pt_read_texture(f, f->info.moments, 16) + center * 4u;
+    for (u32 ch = 0; ch < 3; ++ch)
+        EXPECT_FLOAT_EQ(moments[ch], 0, 0);
+}
+
+TEST_F(pt_reference, final_prepare_preserves_sample_mean_and_measured_variance, pt_fixture) {
+    de_gpu_device *d = f->rt.d;
+    const u32 side = 64, pixels = side * side;
+    f->info.width = side;
+    de_gpu_texture textures[6] = {0};
+    for (u32 i = 0; i < 6; ++i) {
+        textures[i] = de_gpu_texture_create(
+            d, &(de_gpu_texture_desc){.width = side,
+                                      .height = side,
+                                      .mip_count = 1,
+                                      .format = DE_FMT_RGBA32_FLOAT,
+                                      .usage = DE_USAGE_SAMPLED | DE_USAGE_STORAGE |
+                                               DE_USAGE_COPY_DST | DE_USAGE_COPY_SRC});
+        ASSERT_TRUE(textures[i].id);
+    }
+    de_gpu_buffer upload = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = 4 * pixels * 16,
+                                                                         .usage = DE_USAGE_COPY_SRC,
+                                                                         .memory = DE_MEM_UPLOAD});
+    de_gpu_buffer params = de_gpu_buffer_create(
+        d, &(de_gpu_buffer_desc){
+               .size = 64, .stride = 64, .usage = DE_USAGE_STORAGE, .memory = DE_MEM_UPLOAD});
+    ASSERT_TRUE(upload.id && params.id);
+    f32 *data = de_gpu_buffer_map(d, upload);
+    for (u32 i = 0; i < pixels; ++i) {
+        f32 mean = i == 32 * side + 32 ? 10.f : 1.f;
+        const f32 values[4][4] = {
+            {8 * mean, 2 * mean, .5f * mean, 16},
+            {.5f, .25f, .125f, 1},
+            {0, 0, 1, .5f},
+            {i % 2 ? 0.f : 60.f, i % 2 ? 0.f : 60.f, i % 2 ? 0.f : 33.75f, 0}};
+        for (u32 t = 0; t < 4; ++t)
+            memcpy(data + t * pixels * 4 + i * 4, values[t], 16);
+    }
+    const char *entries[] = {"cs_pt_final_prepare"};
+    de__engine_shader_code code = {0};
+    char why[256];
+    ASSERT_EQ(de__engine_shader_load(d, f->rt.r->alloc, "pt_final_denoise", 0, entries, 1, &code,
+                                     why, sizeof why),
+              DE_OK);
+    de_gpu_pipeline pipeline = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                   .cs = code.entries[0].blob,
+                                   .push_constant_bytes = 8,
+                                   .threadgroup_size = {8, 8, 1},
+                                   .name = "PT sample mean preparation oracle"});
+    de__engine_shader_code_free(&code);
+    ASSERT_TRUE(pipeline.id);
+    /* Private 64-byte PtFinalParams ABI, indexed independently from production C setup. */
+    u32 pc[16] = {side, side};
+    pc[2] = de_gpu_texture_bindless(d, textures[0], 0, false);
+    pc[3] = pc[6] = pc[7] = de_gpu_texture_bindless(d, textures[1], 0, false);
+    pc[4] = de_gpu_texture_bindless(d, textures[2], 0, false);
+    pc[9] = de_gpu_texture_bindless(d, textures[4], 0, true);
+    pc[10] = de_gpu_texture_bindless(d, textures[5], 0, true);
+    pc[11] = de_gpu_texture_bindless(d, textures[3], 0, false);
+    memcpy(de_gpu_buffer_map(d, params), pc, sizeof pc);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "PT sample mean preparation oracle");
+    for (u32 i = 0; i < 6; ++i) {
+        de_gpu_barrier b = {.texture = textures[i],
+                            .before = DE_ACCESS_NONE,
+                            .after = i < 4 ? DE_ACCESS_COPY_DST : DE_ACCESS_SHADER_WRITE};
+        de_gpu_cmd_barriers(cmd, &b, 1);
+        if (i < 4) {
+            de_gpu_cmd_copy_buffer_to_texture(cmd, textures[i], 0, 0, upload, (u64)i * pixels * 16,
+                                              side * 16);
+            b.before = DE_ACCESS_COPY_DST;
+            b.after = DE_ACCESS_SHADER_READ;
+            de_gpu_cmd_barriers(cmd, &b, 1);
+        }
+    }
+    u32 push[2] = {de_gpu_buffer_bindless(d, params), 0};
+    de_gpu_cmd_set_pipeline(cmd, pipeline);
+    de_gpu_cmd_push_constants(cmd, push, sizeof push);
+    de_gpu_cmd_dispatch(cmd, side / 8, side / 8, 1);
+    for (u32 i = 4; i < 6; ++i) {
+        de_gpu_barrier b = {.texture = textures[i],
+                            .before = DE_ACCESS_SHADER_WRITE,
+                            .after = DE_ACCESS_SHADER_READ};
+        de_gpu_cmd_barriers(cmd, &b, 1);
+    }
+    ASSERT_EQ(
+        de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+        DE_OK);
+    de_gpu_wait_idle(d);
+    const f32 *color = pt_read_texture(f, textures[4], 16);
+    for (u32 i = 0; i < pixels; ++i) {
+        f32 mean = i == 32 * side + 32 ? 10.f : 1.f;
+        EXPECT_FLOAT_EQ(color[i * 4], mean, 1e-6);
+        EXPECT_FLOAT_EQ(color[i * 4 + 1], mean / 2, 1e-6);
+        EXPECT_FLOAT_EQ(color[i * 4 + 2], mean / 4, 1e-6);
+    }
+    const f32 *variance = pt_read_texture(f, textures[5], 16);
+    for (u32 i = 0; i < pixels; ++i)
+        for (u32 ch = 0; ch < 3; ++ch)
+            EXPECT_FLOAT_EQ(variance[i * 4 + ch], i % 2 ? 1e-8 : (f32)((ch + 1) * (ch + 1)), 1e-7);
+    de_gpu_pipeline_destroy(d, pipeline);
+    de_gpu_buffer_destroy(d, params);
+    de_gpu_buffer_destroy(d, upload);
+    for (u32 i = 0; i < 6; ++i)
+        de_gpu_texture_destroy(d, textures[i]);
+}
+
 static void cornell(pt_fixture *f) {
     rt_fixture *r = &f->rt;
     g_mat_count = 0;

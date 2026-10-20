@@ -14,8 +14,8 @@ typedef struct de__glyph_font {
     u8 *source;
     u32 source_size, base_pages, width, height;
     f32 em, range;
-    u8 *pixels[8];
-    de_atlas_packer *packers[8];
+    u8 *pixels[DE_FONT_RUNTIME_PAGES_MAX];
+    de_atlas_packer *packers[DE_FONT_RUNTIME_PAGES_MAX];
     u32 pages;
     bool warned;
 } de__glyph_font;

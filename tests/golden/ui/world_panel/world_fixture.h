@@ -164,7 +164,7 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, bool pixel) {
                                       .pixel_art = pixel,
                                       .text = s->text,
                                       .assets = s->assets,
-                                      .reference_height = pixel ? 270 : 720,
+                                      .reference_height = pixel ? 270.f : 720.f,
                                       .max_nodes = 256},
                         &s->ui));
     de_ui_set_viewport(s->ui, s->width, s->height, (de_window_insets){0});
@@ -182,7 +182,7 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, bool pixel) {
                    .fov_y = 1.2f,
                    .near_z = .01f,
                    .exposure_ev100 = 0};
-    s->root = node(s, (de_entity){0}, 0, 0, pixel ? 480 : 640, pixel ? 270 : 360,
+    s->root = node(s, (de_entity){0}, 0, 0, pixel ? 480.f : 640.f, pixel ? 270.f : 360.f,
                    pixel ? background : surface, 0, 0);
     return s->error;
 }

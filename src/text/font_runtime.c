@@ -7,6 +7,41 @@
 #if DE_HAS_COOKER
 #include "cook/lib/de_cooker.h"
 #endif
+static de_atomic_u64 font_identity;
+/* Immutable font bytes are shared with HarfBuzz independently of atlas/runtime
+ * storage, so shaping can outlive an asset generation without copying its source. */
+struct de__font_source {
+    de_atomic_u32 refs;
+    const de_allocator *alloc;
+    u64 bytes;
+};
+void de__font_source_ref(de__font_source *source) {
+    if (source)
+        de_atomic_fetch_add_u32(&source->refs, 1, DE_ATOMIC_RELAXED);
+}
+void de__font_source_unref(void *ptr) {
+    de__font_source *source = ptr;
+    if (source && de_atomic_fetch_sub_u32(&source->refs, 1, DE_ATOMIC_ACQ_REL) == 1)
+        DE_FREE(source->alloc, source, source->bytes);
+}
+void de_text__font_dirty(de_text_font *f, de_text_dirty_rect rect) {
+    DE_ASSERT(rect.page < DE_FONT_PAGES_MAX);
+    if (f->dirty_count < DE_FONT_PAGES_MAX) {
+        f->dirty[f->dirty_count++] = rect;
+        return;
+    }
+    /* Deferred uploads may fill the rectangle list before another page changes.
+     * Collapse to full pages, including the new page, without losing old updates.
+     * Capacity covers every baked and runtime page even when all are distinct. */
+    bool pages[DE_FONT_PAGES_MAX] = {0};
+    pages[rect.page] = true;
+    for (u32 i = 0; i < f->dirty_count; ++i)
+        pages[f->dirty[i].page] = true;
+    f->dirty_count = 0;
+    for (u32 page = 0; page < DE_FONT_PAGES_MAX; ++page)
+        if (pages[page])
+            f->dirty[f->dirty_count++] = (de_text_dirty_rect){page, 0, 0, f->width, f->height};
+}
 static f32 rf(const u8 *p) {
     u32 u = de__font_u32(p);
     f32 f;
@@ -14,8 +49,10 @@ static f32 rf(const u8 *p) {
     return f;
 }
 void de_text__font_free(de_text_font *f) {
-    if (f)
+    if (f) {
+        de__font_source_unref(f->source_owner);
         DE_FREE(f->alloc, f, f->block_bytes);
+    }
 }
 de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size,
                                de_text_font **out) {
@@ -30,7 +67,7 @@ de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size
         ns = de__font_u32(p + 28), w = de__font_u32(p + 52), h = de__font_u32(p + 56),
         ch = de__font_u32(p + 60);
     if (version != 1 || mode > 2 || !ng || ng > 65536 || nc > 0x110000 || nk > 1000000 || !np ||
-        np > 256 || !w || !h || w > 16384 || h > 16384 || (ch != 1 && ch != 4))
+        np > DE_FONT_BAKED_PAGES_MAX || !w || !h || w > 16384 || h > 16384 || (ch != 1 && ch != 4))
         return DE_FAIL(DE_ERR_PARSE, "font counts/version");
     u64 pixels = (u64)np * w * h * ch,
         need = 64 + (u64)ng * 48 + (u64)nc * 8 + (u64)nk * 12 + ns + pixels;
@@ -39,12 +76,13 @@ de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size
     if (!a)
         a = de_heap_allocator();
     u64 extra = (u64)ng * sizeof(de__font_glyph) + (u64)nc * sizeof(de__font_cmap) +
-                (u64)nk * sizeof(de__font_kern) + (u64)np * sizeof(u8 *) + ns + pixels + 64;
+                (u64)nk * sizeof(de__font_kern) + (u64)np * sizeof(u8 *) + pixels + 64;
     u64 total = sizeof(de_text_font) + extra;
     de_text_font *f = DE_ALLOC(a, total, _Alignof(de_text_font), DE_MEM_UI);
     if (!f)
         return DE_ERR_OUT_OF_MEMORY;
     memset(f, 0, sizeof *f);
+    f->identity = de_atomic_fetch_add_u64(&font_identity, 1, DE_ATOMIC_RELAXED) + 1;
     f->alloc = a;
     f->block_bytes = total;
     f->mode = mode;
@@ -97,9 +135,19 @@ de_result de_text__font_decode(const de_allocator *a, const void *data, u64 size
         if (!isfinite(f->kerns[i].amount))
             goto bad;
     }
-    f->source = mem;
-    memcpy(mem, p, ns);
-    mem += ns;
+    if (ns) {
+        u64 bytes = sizeof(de__font_source) + (u64)ns;
+        f->source_owner = DE_ALLOC(a, bytes, _Alignof(de__font_source), DE_MEM_UI);
+        if (!f->source_owner) {
+            de_text__font_free(f);
+            return DE_ERR_OUT_OF_MEMORY;
+        }
+        de_atomic_store_u32(&f->source_owner->refs, 1, DE_ATOMIC_RELAXED);
+        f->source_owner->alloc = a;
+        f->source_owner->bytes = bytes;
+        f->source = (u8 *)(f->source_owner + 1);
+        memcpy(f->source, p, ns);
+    }
     p += ns;
     if (mode == DE_FONT_MSDF) {
         if (ns < 12 || !stbtt_InitFont(&f->face, f->source, 0))
@@ -125,7 +173,8 @@ static de_result font_load(de_asset_load_ctx *c) {
     const void *p = de_asset_load_ctx_data(c, &n);
     de_text_font *f = NULL;
     DE_TRY(de_text__font_decode(a, p, n, &f));
-    de_asset_load_ctx_set_object(c, f, f->block_bytes);
+    de_asset_load_ctx_set_object(c, f,
+                                 f->block_bytes + (f->source_owner ? f->source_owner->bytes : 0));
     return DE_OK;
 }
 static void font_unload(void *object, void *user) {

@@ -217,6 +217,7 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .buffer_destroy = de__mtl_buffer_destroy,
     .texture_create = de__mtl_texture_create,
     .texture_destroy = de__mtl_texture_destroy,
+    .texture_retire = de__mtl_texture_retire,
     .sampler_create = de__mtl_sampler_create,
     .sampler_destroy = de__mtl_sampler_destroy,
     .bindless_write_buffer = de__mtl_bindless_write_buffer,

@@ -24,11 +24,16 @@ float3 position_at(RtaoParams p,uint2 q) {
     float4 world=float4(dot(sc.inv_view_proj[0],clip),dot(sc.inv_view_proj[1],clip),dot(sc.inv_view_proj[2],clip),dot(sc.inv_view_proj[3],clip));return world.xyz/world.w;
 }
 float2 sample_hemisphere(uint pixel,uint frame,uint sample,uint spp) {
-    // Progressive stratification over64 frames; pixel rotation prevents spatial correlation.
+    // A two-dimensional Sobol net keeps power-of-two prefixes stratified.
+    // A linear Hammersley radial sweep biases short temporal histories.
     uint phase=(frame&63u)*spp+sample;
     float2 shift=float2(hash(pixel),hash(pixel^0x68bc21ebu))*(1.0/4294967296.0);
     if(spp>=256)return frac(float2((sample+.5)/spp,reversebits(sample)*(1.0/4294967296.0))+shift);
-    return frac(float2((phase+.5)/(64.0*spp),reversebits(phase)*(1.0/4294967296.0))+shift);
+    uint gray=phase^(phase>>1);
+    uint angle=0,direction=0x80000000u;
+    for(uint index=gray;index!=0;index>>=1){if((index&1u)!=0)angle^=direction;direction^=direction>>1;}
+    uint2 bits=uint2(reversebits(gray),angle)^uint2(hash(pixel),hash(pixel^0x68bc21ebu));
+    return min(float2(bits)*(1.0/4294967296.0),float2(0.99999994));
 }
 [shader("compute")][numthreads(8,8,1)]
 void cs_generate(uint3 id:SV_DispatchThreadID,uniform RtaoParams p) {

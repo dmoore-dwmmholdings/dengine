@@ -10,6 +10,7 @@ typedef struct de__rtao_info {
     u32 width, height, trace_width, trace_height, spp;
     u64 frame, rays;
     f32 radius;
+    de_gpu_buffer ray_buffer;
 } de__rtao_info;
 bool de__rtao_get(const de__rtao *, de_view, de__rtao_info *);
 #endif

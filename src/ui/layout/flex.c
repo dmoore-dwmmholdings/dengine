@@ -123,9 +123,13 @@ void de_ui__flex(de_ui_layout *layout, u32 index, de_vec4 content) {
         DeUiNode *child = &ui->records[item->index].node;
         /* Re-measure text at its distributed width so AUTO height follows wrapping. */
         f32 cross_space = fmaxf(0, cross_extent - item->cross_before - item->cross_after);
-        de_vec2 available =
+        de_vec2 assigned =
             row ? (de_vec2){item->main, cross_space} : (de_vec2){cross_space, item->main};
-        de_vec2 measured = de_ui__measure(layout, item->index, available);
+        u32 axes = row ? 1u : 2u;
+        if (item->align == DE_UI_ALIGN_STRETCH && item->cross_auto)
+            axes |= row ? 2u : 1u;
+        de_vec2 measured = de_ui__measure_assigned(layout, item->index,
+                                                   (de_vec2){content.z, content.w}, assigned, axes);
         item->cross = row ? measured.y : measured.x;
         if (item->align == DE_UI_ALIGN_STRETCH && item->cross_auto)
             item->cross = cross_space;

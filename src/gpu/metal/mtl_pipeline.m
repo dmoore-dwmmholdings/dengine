@@ -649,6 +649,7 @@ de_result de__mtl_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         }
         if (r != DE_OK) {
             release(&mp->visible_table);
+            release(&mp->any_table);
             release(&mp->intersection_table);
             release(&mp->state);
             release(&mp->depth_state);
@@ -662,6 +663,7 @@ void de__mtl_pipeline_destroy(de_gpu_device *d, de__gpu_pipeline *p) {
     mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
     @autoreleasepool {
         release(&mp->visible_table);
+        release(&mp->any_table);
         release(&mp->intersection_table);
         release(&mp->state);
         release(&mp->depth_state);

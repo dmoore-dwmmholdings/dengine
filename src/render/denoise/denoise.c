@@ -17,10 +17,11 @@ typedef struct dn_params {
     f32 inverse[4][4], previous_inverse[4][4];
     f32 camera[4], origin_delta[4];
     u32 key, previous_key, out_key, zero_radius_passthrough;
-    u32 position, previous_position, out_position, tail_reserved;
-    u32 temporal_alpha, normal_world, alpha_reserved[2];
+    u32 position, previous_position, out_position, rgb_variance;
+    u32 temporal_alpha, normal_world, channels, out_variance;
 } dn_params;
 DE_STATIC_ASSERT(sizeof(dn_params) == 360, "DenoiseParams structured-buffer layout");
+DE_STATIC_ASSERT(offsetof(dn_params, channels) == 352, "DenoiseParams channel semantics offset");
 struct de_denoise_ctx {
     struct de_denoise_ctx *next;
     de__denoise *owner;
@@ -56,7 +57,7 @@ typedef struct dn_pass {
     de_rg_resource output, moments, length, validity, variance, out_depth, out_normal, out_material;
     de_rg_resource scene, visible;
     de_rg_resource key, previous_key, out_key, position, previous_position, out_position;
-    de_rg_resource temporal_alpha;
+    de_rg_resource temporal_alpha, out_variance;
 } dn_pass;
 static void release(de_denoise_ctx *c) {
     de_gpu_device *d = c->owner->r->dev;
@@ -76,7 +77,8 @@ void de__denoise_forget(de__denoise *s, de_view view) {
     if (!s)
         return;
     /* Graph pointers may be recycled when any view is retired. */
-    memset(s->material_graph, 0, sizeof s->material_graph);
+    for (u32 i = 0; i < 32; ++i)
+        s->material_graph[i] = NULL;
     u32 slot = (view.id & 255u) - 1;
     if (slot >= 32)
         return;
@@ -216,6 +218,7 @@ de_result denoise_begin(de__denoise *s, const de_denoise_frame *f,
         c->next = s->views[slot];
         s->views[slot] = c;
     }
+    bool channel_change = c->valid && c->desc.channels != desc->channels;
     c->desc = *desc;
     if (!c->desc.format)
         c->desc.format = DE_FMT_RGBA16_FLOAT;
@@ -233,7 +236,7 @@ de_result denoise_begin(de__denoise *s, const de_denoise_frame *f,
                          : c->desc.iterations > 5 ? 5
                                                   : c->desc.iterations;
     DE_TRY(allocate(c, f->inputs.width, f->inputs.height));
-    c->reset = f->reset || !c->valid || f->frame != c->last_frame + 1 ||
+    c->reset = f->reset || channel_change || !c->valid || f->frame != c->last_frame + 1 ||
                c->reset_version != (u64)de_cvar_int(s->reset);
     c->reset_version = (u64)de_cvar_int(s->reset);
     c->frame = *f;
@@ -273,21 +276,24 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     READ(previous_position);
     READ(temporal_alpha);
     WRITE(output);
-    WRITE(moments);
-    WRITE(length);
+    if (x->pipeline.id == x->owner->variance.id) {
+        READ(moments);
+        READ(length);
+    } else {
+        WRITE(moments);
+        WRITE(length);
+    }
     WRITE(validity);
-    WRITE(variance);
+    if (x->pipeline.id == x->owner->atrous.id)
+        READ(variance);
+    else
+        WRITE(variance);
     WRITE(out_depth);
     WRITE(out_normal);
     WRITE(out_material);
     WRITE(out_key);
     WRITE(out_position);
-    if (x->pipeline.id == x->owner->variance.id) {
-        p.moments = tex(x, pass, x->moments, false);
-        p.length = tex(x, pass, x->length, false);
-    }
-    if (x->pipeline.id == x->owner->atrous.id)
-        p.variance = tex(x, pass, x->variance, false);
+    WRITE(out_variance);
 #undef READ
 #undef WRITE
     if (x->scene.id)
@@ -323,6 +329,8 @@ static void declarations(de_rg_pass *pass, dn_pass *x) {
             else
                 de_rg_write(pass, writes[i], DE_ACCESS_SHADER_WRITE);
         }
+    if (x->out_variance.id)
+        de_rg_write(pass, x->out_variance, DE_ACCESS_SHADER_WRITE);
     if (x->temporal_alpha.id)
         de_rg_read(pass, x->temporal_alpha, DE_ACCESS_SHADER_READ);
     if (x->key.id)
@@ -374,6 +382,8 @@ static dn_pass *add(de_denoise_ctx *c, de_gpu_pipeline pipeline, const char *nam
     x->pc.hit_scale = c->desc.hit_distance_scale;
     x->pc.roughness_threshold = c->desc.roughness_threshold;
     x->pc.clamp_mode = c->desc.clamp;
+    x->pc.channels = c->desc.channels;
+    x->pc.rgb_variance = c->desc.rgb_variance;
     x->pc.reset = c->reset;
     x->pc.linear_depth = c->frame.inputs.linear_depth;
     x->pc.normal_world = c->frame.inputs.normal_is_world;
@@ -506,6 +516,12 @@ de_denoise_result denoise_add_atrous(de_denoise_ctx *c, de_denoise_result r) {
         x->variance = r.variance;
         x->output = transient(c, i + 1 == c->desc.iterations ? c->desc.format : DE_FMT_RGBA32_FLOAT,
                               "Denoise filtered signal");
+        if (c->desc.propagate_variance) {
+            x->out_variance =
+                transient(c, c->desc.rgb_variance ? DE_FMT_RGBA32_FLOAT : DE_FMT_R32_FLOAT,
+                          "Denoise filtered variance");
+            r.variance = x->out_variance;
+        }
         r.color = x->output;
         finish(c, x);
     }

@@ -125,7 +125,8 @@ void de__mtl_residency_sync(de_gpu_device *d) {
 #endif
 }
 
-void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind) {
+void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_kind kind,
+                               de_gpu_cmd *c) {
     mtl_device *m = de__mtl_dev(d);
     id<MTLBuffer> table = (__bridge id<MTLBuffer>)m->bindless;
     const bool mesh = (m->render_stages & DE__MTL_STAGE_MESH) != 0;
@@ -161,6 +162,10 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
     const u32 extra = m->use_heaps ? 1u : 0u;
     const u32 total = m->storage_count + extra;
     const MTLResourceUsage rw = MTLResourceUsageRead | MTLResourceUsageWrite;
+    mtl_cmd *mc = c ? de__gpu_cmd_payload(c) : NULL;
+    if (mc && total && !mc->accel_keep)
+        mc->accel_keep = (void *)CFBridgingRetain([NSMutableSet new]);
+    NSMutableSet *keep = (__bridge NSMutableSet *)(mc ? mc->accel_keep : NULL);
     for (u32 first = 0; first < total; first += HEAP_CHUNK) {
         __unsafe_unretained id<MTLResource> tex[HEAP_CHUNK];
         u32 n = 0;
@@ -168,6 +173,9 @@ void de__mtl_residency_encoder(de_gpu_device *d, void *encoder, de__mtl_encoder_
             const u32 i = first + n;
             tex[n] = i < extra ? (__bridge id<MTLTexture>)m->null_storage_texture
                                : (__bridge id<MTLTexture>)m->storage_objs[i - extra];
+            /* A declaration can precede logical retirement while this list is still
+             * unsubmitted. Keep its native object through the recording/submission. */
+            [keep addObject:tex[n]];
         }
         if (kind == DE__MTL_ENC_RENDER)
             [(__bridge id<MTLRenderCommandEncoder>)encoder

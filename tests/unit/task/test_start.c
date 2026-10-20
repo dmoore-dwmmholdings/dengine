@@ -110,3 +110,81 @@ TEST(start, create_under_load_then_no_heap) {
         de_thread_join(threads[i]);
     EXPECT_EQ(failures, 0u);
 }
+
+/* A warm-up on the main submitter cannot initialize every worker's record pool:
+ * scheduling decides who first submits nested work. Force every frame worker to
+ * enter together before it submits its first parallel loop. */
+typedef struct late_submit {
+    de_task_system *ts;
+    de_atomic_u32 entered, seen, indices, timed_out;
+} late_submit;
+static void late_submit_range(u32 begin, u32 end, void *user) {
+    late_submit *s = user;
+    de_atomic_fetch_add_u32(&s->indices, end - begin, DE_ATOMIC_RELAXED);
+}
+static void late_submit_node(void *user) {
+    late_submit *s = user;
+    de_atomic_fetch_or_u32(&s->seen, 1u << de_task_worker_index(), DE_ATOMIC_RELAXED);
+    de_atomic_fetch_add_u32(&s->entered, 1, DE_ATOMIC_RELEASE);
+    u64 deadline = de_time_now_ns() + 5000000000ull;
+    while (de_atomic_load_u32(&s->entered, DE_ATOMIC_ACQUIRE) != 4) {
+        if (de_time_now_ns() >= deadline) {
+            de_atomic_store_u32(&s->timed_out, 1, DE_ATOMIC_RELAXED);
+            return;
+        }
+        de_cpu_pause();
+    }
+    de_task_parallel_for(s->ts, 32, 4, late_submit_range, s);
+}
+TEST(start, late_nested_submit_on_every_worker_allocates_nothing) {
+    de_fp_env_init_thread();
+    de_task_system *ts = NULL;
+    ASSERT_EQ(de_task_system_create(
+                  &(de_task_system_desc){.worker_count = 3, .background_worker_count = 1}, &ts),
+              DE_OK);
+    /* Only the main submitter is warmed; worker execution itself does not need a record. */
+    for (u32 i = 0; i < 8; ++i) {
+        de_task_counter done = {0};
+        de_task_submit(ts, DE_TASK_POOL_FRAME, bg_noop, NULL, &done);
+        de_task_wait(ts, &done);
+    }
+    late_submit state = {.ts = ts};
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    de_task_counter done = {0};
+    for (u32 i = 0; i < 4; ++i)
+        de_task_submit(ts, DE_TASK_POOL_FRAME, late_submit_node, &state, &done);
+    de_task_wait(ts, &done);
+    de_alloc_guard_end(&guard);
+    EXPECT_EQ(de_atomic_load_u32(&state.seen, DE_ATOMIC_RELAXED), 15u);
+    EXPECT_EQ(de_atomic_load_u32(&state.timed_out, DE_ATOMIC_RELAXED), 0u);
+    EXPECT_EQ(de_atomic_load_u32(&state.indices, DE_ATOMIC_RELAXED), 128u);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    de_task_system_destroy(ts);
+}
+
+TEST(start, initial_record_reservation_failure_releases_partial_system) {
+    de_fp_env_init_thread();
+    /* System + slot array, then six initial pages (four frame, one background,
+     * one external). Fail each allocation before any worker is started. */
+    for (i64 budget = 0; budget < 8; ++budget) {
+        de_tracking_allocator tracking;
+        de_allocator allocator = de_tracking_allocator_init(&tracking, NULL, DE_MEM_GENERAL);
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_task_system *ts = NULL;
+        EXPECT_EQ(de_task_system_create(&(de_task_system_desc){.allocator = &allocator,
+                                                               .worker_count = 3,
+                                                               .background_worker_count = 1},
+                                        &ts),
+                  DE_ERR_OUT_OF_MEMORY);
+        EXPECT_TRUE(ts == NULL);
+        EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+        EXPECT_EQ(de_tracking_allocator_stats(&tracking).bytes_live, 0u);
+    }
+    /* Failure must leave the creating thread available for a later system. */
+    de_task_system *ts = NULL;
+    ASSERT_EQ(de_task_system_create(
+                  &(de_task_system_desc){.worker_count = 1, .background_worker_count = 1}, &ts),
+              DE_OK);
+    de_task_system_destroy(ts);
+}

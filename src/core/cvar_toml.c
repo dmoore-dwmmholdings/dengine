@@ -96,10 +96,16 @@ static void toml_hooks_install(void) {
 /* ---- Shared entry point (de_toml_internal.h) --------------------------------------------- */
 
 toml_result_t de__toml_parse(const de_allocator *a, const char *src, int len) {
+    return de__toml_parse_with_duplicates(a, src, len, NULL, NULL);
+}
+
+toml_result_t de__toml_parse_with_duplicates(const de_allocator *a, const char *src, int len,
+                                             toml_duplicate_fn handler, void *user) {
     toml_hooks_install();
     const de_allocator *prev = t_toml_alloc;
     t_toml_alloc = a != NULL ? a : de_heap_allocator();
-    toml_result_t res = toml_parse(src != NULL ? src : "", src != NULL ? len : 0);
+    toml_result_t res = toml_parse_with_duplicates(src != NULL ? src : "", src != NULL ? len : 0,
+                                                   NULL, handler, user);
     t_toml_alloc = prev;
     return res;
 }

@@ -2,7 +2,9 @@
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_debug.h>
+#include "gpu/gpu_backend.h"
 #include "render/denoise/denoise_internal.h"
+#include "render/pathtracer/pt_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
 #include "render/passes/vis/gbuffer.h"
@@ -27,13 +29,14 @@ typedef struct dn_fixture {
     de__denoise *owner;
     de_arena *arena;
     de_rg *graph;
-    de_gpu_texture signal, depth, normal, motion, material;
+    de_gpu_texture signal, depth, normal, motion, material, key;
     de_gpu_buffer upload, readback;
-    float data[5][PIXELS * 4];
+    float data[6][PIXELS * 4];
+    bool use_key, use_hit, rgb_variance_readback;
     de_denoise_result result;
     de_rg_resource identity;
     u64 frame;
-    u32 width, height;
+    u32 width, height, channels, iterations;
     de_denoise_clamp clamp;
 } dn_fixture;
 static de_gpu_texture make_texture(dn_fixture *f, de_gpu_format format) {
@@ -47,9 +50,8 @@ static de_gpu_texture make_texture(dn_fixture *f, de_gpu_format format) {
                                .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_DST | DE_USAGE_COPY_SRC});
 }
 static void dn_fixture_setup(dn_fixture *f) {
-#if !DE_HAS_GPU_METAL
-    SKIP("native Metal denoiser acceptance requires Metal");
-#endif
+    if (!de__gpu_find_backend(DE_GPU_METAL))
+        SKIP("native Metal denoiser acceptance requires Metal");
     f->alloc = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_RENDER);
     f->device_alloc = de_tracking_allocator_init(&f->device_tracking, NULL, DE_MEM_RENDER);
     ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
@@ -68,14 +70,17 @@ static void dn_fixture_setup(dn_fixture *f) {
     f->normal = make_texture(f, DE_FMT_RGBA32_FLOAT);
     f->motion = make_texture(f, DE_FMT_RG32_FLOAT);
     f->material = make_texture(f, DE_FMT_RG32_FLOAT);
-    f->upload = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 5 * PIXELS * 16,
+    f->key = make_texture(f, DE_FMT_RG32_FLOAT);
+    f->upload = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 6 * PIXELS * 16,
                                                                       .usage = DE_USAGE_COPY_SRC,
                                                                       .memory = DE_MEM_UPLOAD});
     f->readback = de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 131072,
                                                                         .usage = DE_USAGE_COPY_DST,
                                                                         .memory = DE_MEM_READBACK});
     ASSERT_TRUE(f->signal.id && f->depth.id && f->normal.id && f->motion.id && f->material.id &&
-                f->upload.id && f->readback.id);
+                f->key.id && f->upload.id && f->readback.id);
+    f->channels = 3;
+    f->iterations = 3;
     f->width = W;
     f->height = H;
     const f32 n[3] = {0, 0, 1};
@@ -106,18 +111,20 @@ static void dn_fixture_teardown(dn_fixture *f) {
         de_gpu_texture_destroy(f->device, f->normal);
         de_gpu_texture_destroy(f->device, f->motion);
         de_gpu_texture_destroy(f->device, f->material);
+        de_gpu_texture_destroy(f->device, f->key);
         de_gpu_buffer_destroy(f->device, f->upload);
         de_gpu_buffer_destroy(f->device, f->readback);
         de_gpu_device_destroy(f->device);
     }
 }
 static void upload(dn_fixture *f) {
-    const de_gpu_texture textures[] = {f->signal, f->depth, f->normal, f->motion, f->material};
-    const u32 channels[] = {4, 1, 4, 2, 2};
+    const de_gpu_texture textures[] = {f->signal, f->depth,    f->normal,
+                                       f->motion, f->material, f->key};
+    const u32 channels[] = {4, 1, 4, 2, 2, 2};
     u8 *mapped = de_gpu_buffer_map(f->device, f->upload);
     de_gpu_cmd *cmd =
         de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "Canonical encoded denoiser input upload");
-    for (u32 i = 0; i < 5; ++i) {
+    for (u32 i = 0; i < 6; ++i) {
         u64 offset = (u64)i * PIXELS * 16;
         memcpy(mapped + offset, f->data[i], PIXELS * channels[i] * 4);
         de_gpu_barrier b = {
@@ -154,13 +161,18 @@ static de_denoise_result build(dn_fixture *f, de_view view, u64 signal, bool res
     frame.inputs.motion = de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
     frame.inputs.material =
         identity.id ? identity : de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+    if (f->use_hit)
+        frame.inputs.hit_distance = frame.inputs.depth;
+    if (f->use_key)
+        frame.inputs.validation_key = de_rg_import_texture(f->graph, f->key, DE_ACCESS_SHADER_READ);
     de_denoise_ctx *ctx = NULL;
     ASSERT_EQ(denoise_begin(f->owner, &frame,
                             &(de_denoise_signal_desc){.identity = signal,
                                                       .format = DE_FMT_RGBA32_FLOAT,
-                                                      .channels = 3,
+                                                      .channels = f->channels,
                                                       .clamp = f->clamp,
-                                                      .iterations = 3,
+                                                      .iterations = f->iterations,
+                                                      .hit_distance_scale = f->use_hit ? 1.f : 0.f,
                                                       .luminance_scale = 100},
                             &ctx),
               DE_OK);
@@ -175,7 +187,8 @@ static void readback(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     dn_fixture *f = user;
     const de_rg_resource resources[] = {f->result.color, f->result.history_length,
                                         f->result.validity, f->result.variance};
-    const u32 offsets[] = {0, 32768, 40960, 49152}, pitches[] = {W * 16, W * 4, 256, W * 4};
+    const u32 offsets[] = {0, 32768, 40960, f->rgb_variance_readback ? 98304 : 49152},
+              pitches[] = {W * 16, W * 4, 256, f->rgb_variance_readback ? W * 16 : W * 4};
     if (f->identity.id) {
         de_gpu_texture t = de_rg_texture(pass, f->identity);
         de_gpu_cmd_copy_texture_to_buffer(cmd, f->readback, 65536, W * 8, t, 0, 0);
@@ -184,6 +197,8 @@ static void readback(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         de_gpu_cmd_barriers(cmd, &b, 1);
     }
     for (u32 i = 0; i < 4; ++i) {
+        if (!resources[i].id)
+            continue;
         de_gpu_texture t = de_rg_texture(pass, resources[i]);
         de_gpu_cmd_copy_texture_to_buffer(cmd, f->readback, offsets[i], pitches[i], t, 0, 0);
         de_gpu_barrier b = {
@@ -198,8 +213,10 @@ static void run(dn_fixture *f, de_denoise_result result) {
     if (f->identity.id)
         de_rg_read(p, f->identity, DE_ACCESS_COPY_SRC);
     de_rg_read(p, result.color, DE_ACCESS_COPY_SRC);
-    de_rg_read(p, result.history_length, DE_ACCESS_COPY_SRC);
-    de_rg_read(p, result.validity, DE_ACCESS_COPY_SRC);
+    if (result.history_length.id)
+        de_rg_read(p, result.history_length, DE_ACCESS_COPY_SRC);
+    if (result.validity.id)
+        de_rg_read(p, result.validity, DE_ACCESS_COPY_SRC);
     de_rg_read(p, result.variance, DE_ACCESS_COPY_SRC);
     de_rg_write(p, de_rg_import_buffer(f->graph, f->readback, DE_ACCESS_COPY_DST),
                 DE_ACCESS_COPY_DST);
@@ -222,6 +239,65 @@ TEST(denoise_framework, motion_convention) {
     previous = de__denoise_previous_uv((de_vec2){.5f, .5f}, (de_vec2){-.25f, .5f});
     EXPECT_FLOAT_EQ(previous.x, .625, 0);
     EXPECT_FLOAT_EQ(previous.y, .75, 0);
+}
+TEST(denoise_framework, owner_creation_allocation_failures) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    for (i64 budget = 0; budget <= 1; ++budget) {
+        de__denoise *owner = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__denoise_create(&renderer, &owner);
+        de_tracking_allocator_fail_after(&tracking, -1);
+        EXPECT_EQ(result, budget ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        EXPECT_EQ(owner != NULL, budget != 0);
+        de__denoise_destroy(owner);
+        de_tracking_stats stats = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(stats.blocks_live, 0u);
+        EXPECT_EQ(stats.bytes_live, 0u);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 1u);
+}
+TEST(denoise_framework, final_owner_creation_allocation_failures) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    for (i64 budget = 0; budget <= 1; ++budget) {
+        de__pt_denoise *owner = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__pt_denoise_create(&renderer, &owner);
+        de_tracking_allocator_fail_after(&tracking, -1);
+        EXPECT_EQ(result, budget ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        EXPECT_EQ(owner != NULL, budget != 0);
+        de__pt_denoise_destroy(owner);
+        de_tracking_stats stats = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(stats.blocks_live, 0u);
+        EXPECT_EQ(stats.bytes_live, 0u);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 1u);
+}
+TEST(denoise_framework, parent_owner_failure_releases_partial_denoiser_initialization) {
+    de_tracking_allocator tracking;
+    de_allocator alloc = de_tracking_allocator_init(&tracking, NULL, DE_MEM_RENDER);
+    de_renderer renderer = {.alloc = &alloc};
+    /* Renderer creation retains the partial PT owner for renderer_free().
+     * Fail the parent, media and final-denoiser allocations in turn, then
+     * exercise the same destruction path with memory still unavailable. */
+    for (i64 budget = 0; budget <= 3; ++budget) {
+        renderer.pt = NULL;
+        de_tracking_allocator_fail_after(&tracking, budget);
+        de_result result = de__pt_create(&renderer, &renderer.pt);
+        EXPECT_EQ(result, budget == 3 ? DE_OK : DE_ERR_OUT_OF_MEMORY);
+        de_tracking_stats partial = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(partial.blocks_live, (u64)budget);
+        de__pt_destroy(renderer.pt);
+        renderer.pt = NULL;
+        de_tracking_stats after = de_tracking_allocator_stats(&tracking);
+        EXPECT_EQ(after.blocks_live, 0u);
+        EXPECT_EQ(after.bytes_live, 0u);
+        de_tracking_allocator_fail_after(&tracking, -1);
+    }
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).fail_count, 3u);
 }
 TEST_F(denoise_framework, reproject_validation, dn_fixture) {
     upload(f);
@@ -275,7 +351,7 @@ TEST_F(denoise_framework, temporal_converge, dn_fixture) {
     float sums[PIXELS] = {0};
     for (u32 frame = 0; frame < frames; ++frame) {
         for (u32 i = 0; i < PIXELS; ++i) {
-            float noise = ((double)hash32(i + frame * PIXELS) / 4294967296.0 - .5) * 2;
+            float noise = (float)(((double)hash32(i + frame * PIXELS) / 4294967296.0 - .5) * 2);
             sums[i] += 1 + noise;
             source_var += noise * noise;
             for (u32 c = 0; c < 3; ++c)
@@ -305,8 +381,9 @@ TEST_F(denoise_framework, atrous_edge, dn_fixture) {
     for (u32 y = 0; y < H; ++y)
         for (u32 x = 0; x < W; ++x) {
             u32 i = y * W + x;
-            float mean = x < 32 ? 1 : 3, noise = ((double)hash32(i) / 4294967296.0 - .5) * .8;
-            f->data[1][i] = x < 32 ? 2 : 3;
+            float mean = x < 32 ? 1.f : 3.f,
+                  noise = (float)(((double)hash32(i) / 4294967296.0 - .5) * .8);
+            f->data[1][i] = x < 32 ? 2.f : 3.f;
             for (u32 c = 0; c < 3; ++c)
                 f->data[0][i * 4 + c] = mean + noise;
             if (x > 4 && x < 26)
@@ -475,4 +552,313 @@ TEST_F(denoise_framework, clamp_and_determinism, dn_fixture) {
     begin(f);
     run(f, build(f, (de_view){1}, 3, true, true, (de_rg_resource){0}));
     EXPECT_EQ(memcmp(baseline, color(f), sizeof baseline), 0);
+}
+
+TEST_F(denoise_framework, variance_respects_material_and_light_identity_boundaries, dn_fixture) {
+    for (u32 mode = 0; mode < 3; ++mode) {
+        f->use_key = mode != 0;
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = 0; x < W; ++x) {
+                u32 i = y * W + x;
+                f32 value = (x < W / 2 ? 1.f : 3.f) + (hash32(i) % 101) / 250.f;
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][i * 4 + c] = value;
+                f->data[4][i * 2] = 11;
+                f->data[4][i * 2 + 1] = mode == 0 && x >= W / 2 ? 2.f : 1.f;
+                f->data[5][i * 2] = mode == 1 && x >= W / 2 ? 31.f : 17.f;
+                f->data[5][i * 2 + 1] = mode == 2 && x >= W / 2 ? 2.f : 1.f;
+            }
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, true, true, (de_rg_resource){0}));
+        f32 baseline_variance[PIXELS], baseline_color[PIXELS];
+        memcpy(baseline_variance, (u8 *)color(f) + 49152, sizeof baseline_variance);
+        for (u32 i = 0; i < PIXELS; ++i)
+            baseline_color[i] = color(f)[i * 4];
+        /* Independent sample variance on the left boundary has no samples from
+         * the other identity, despite matching geometric depth and normals. */
+        f64 sum = 0, squared = 0;
+        u32 count = 0;
+        for (u32 y = 14; y <= 18; ++y)
+            for (u32 x = 29; x < 32; ++x) {
+                f64 value = f->data[0][(y * W + x) * 4];
+                sum += value;
+                squared += value * value;
+                ++count;
+            }
+        f64 expected = squared / count - (sum / count) * (sum / count);
+        EXPECT_FLOAT_EQ(baseline_variance[16 * W + 31], expected, 2e-5);
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = W / 2; x < W; ++x)
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][(y * W + x) * 4 + c] += 27;
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, true, true, (de_rg_resource){0}));
+        f32 *variance = (f32 *)((u8 *)color(f) + 49152);
+        f32 variance_delta = 0, color_delta = 0;
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = 0; x < W / 2; ++x) {
+                u32 i = y * W + x;
+                variance_delta = fmaxf(variance_delta, fabsf(variance[i] - baseline_variance[i]));
+                color_delta = fmaxf(color_delta, fabsf(color(f)[i * 4] - baseline_color[i]));
+            }
+        printf("identity boundary mode%u: variance delta%g filtered delta%g\n", mode,
+               variance_delta, color_delta);
+        EXPECT_FLOAT_EQ(variance_delta, 0, 0);
+        EXPECT_FLOAT_EQ(color_delta, 0, 0);
+    }
+}
+
+TEST_F(denoise_framework, luminance_clamp_recovers_black_and_near_black_history, dn_fixture) {
+    f->clamp = DE_DENOISE_CLAMP_LUMINANCE;
+    const f32 old_values[] = {0, 1e-30f};
+    const f32 lit[3] = {1, .25f, .5f};
+    for (u32 sample = 0; sample < 2; ++sample) {
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                f->data[0][i * 4 + c] = old_values[sample];
+        upload(f);
+        for (u32 frame = 0; frame < 16; ++frame) {
+            begin(f);
+            run(f, build(f, (de_view){1}, 91 + sample, frame == 0, false, (de_rg_resource){0}));
+        }
+        EXPECT_TRUE(age(f, 32, 16) > 0);
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                f->data[0][i * 4 + c] = lit[c];
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 91 + sample, false, false, (de_rg_resource){0}));
+        /* A uniform current neighborhood has a single allowed luminance. Recover
+         * from history with no usable chroma using the current chromatic signal. */
+        f32 maximum = 0;
+        for (u32 i = 0; i < PIXELS; ++i)
+            for (u32 c = 0; c < 3; ++c)
+                maximum = fmaxf(maximum, fabsf(color(f)[i * 4 + c] - lit[c]));
+        printf("black-history sample%u maximum clamped signal error: %g\n", sample, maximum);
+        EXPECT_FLOAT_EQ(maximum, 0, 1e-6);
+    }
+}
+
+TEST_F(denoise_framework, scalar_pair_clamp_does_not_rescale_visibility_with_distance, dn_fixture) {
+    f->channels = 2;
+    f->clamp = DE_DENOISE_CLAMP_LUMINANCE;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .25f;
+        f->data[0][i * 4 + 1] = 8;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    for (u32 frame = 0; frame < 16; ++frame) {
+        begin(f);
+        run(f, build(f, (de_view){1}, 99, frame == 0, false, (de_rg_resource){0}));
+    }
+    for (u32 i = 0; i < PIXELS; ++i)
+        f->data[0][i * 4 + 1] = .1f;
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 99, false, false, (de_rg_resource){0}));
+    f32 visibility_error = 0, distance_error = 0;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        visibility_error = fmaxf(visibility_error, fabsf(color(f)[i * 4] - .25f));
+        distance_error = fmaxf(distance_error, fabsf(color(f)[i * 4 + 1] - .1f));
+    }
+    printf("scalar pair clamp: visibility error%g distance error%g\n", visibility_error,
+           distance_error);
+    EXPECT_FLOAT_EQ(visibility_error, 0, 1e-6);
+    EXPECT_FLOAT_EQ(distance_error, 0, 1e-6);
+}
+TEST_F(denoise_framework, scalar_pair_variance_and_weights_ignore_auxiliary_distance, dn_fixture) {
+    f->channels = 2;
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .4f + (hash32(i) % 101) / 500.f;
+        f->data[0][i * 4 + 1] = 1;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 100, true, true, (de_rg_resource){0}));
+    f32 original[PIXELS], variance[PIXELS];
+    for (u32 i = 0; i < PIXELS; ++i)
+        original[i] = color(f)[i * 4];
+    memcpy(variance, (u8 *)color(f) + 49152, sizeof variance);
+    for (u32 i = 0; i < PIXELS; ++i)
+        f->data[0][i * 4 + 1] = 1.f + (i % W >= W / 2 ? 27.f : 0.f);
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 100, true, true, (de_rg_resource){0}));
+    f32 color_delta = 0, variance_delta = 0;
+    const f32 *current_variance = (const f32 *)((u8 *)color(f) + 49152);
+    for (u32 i = 0; i < PIXELS; ++i) {
+        color_delta = fmaxf(color_delta, fabsf(original[i] - color(f)[i * 4]));
+        variance_delta = fmaxf(variance_delta, fabsf(variance[i] - current_variance[i]));
+    }
+    printf("scalar pair auxiliary change: visibility delta%g variance delta%g\n", color_delta,
+           variance_delta);
+    EXPECT_FLOAT_EQ(color_delta, 0, 0);
+    EXPECT_FLOAT_EQ(variance_delta, 0, 0);
+}
+
+static void scalar_pair_bounded_support(dn_fixture *f, u32 iterations) {
+    f->channels = 2;
+    f->iterations = iterations;
+    f->use_hit = true; /* Flat depth2 doubles as a constant two-pixel support guide. */
+    for (u32 i = 0; i < PIXELS; ++i) {
+        f->data[0][i * 4] = .4f + (hash32(i) % 101) / 500.f;
+        f->data[0][i * 4 + 1] = 1;
+        f->data[0][i * 4 + 2] = 0;
+    }
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 101, true, true, (de_rg_resource){0}));
+    f32 baseline[H];
+    for (u32 y = 0; y < H; ++y)
+        baseline[y] = color(f)[(y * W + 31) * 4];
+    /* Column34 is three pixels from the measured column31, outside both the
+     * declared two-pixel support and its local variance neighborhood. */
+    for (u32 y = 0; y < H; ++y)
+        for (u32 x = 34; x < W; ++x)
+            f->data[0][(y * W + x) * 4] += .3f;
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 101, true, true, (de_rg_resource){0}));
+    f32 maximum = 0;
+    for (u32 y = 0; y < H; ++y)
+        maximum = fmaxf(maximum, fabsf(color(f)[(y * W + 31) * 4] - baseline[y]));
+    printf("two-pixel AO support, %u iterations: outside-neighbor influence%g\n", iterations,
+           maximum);
+    EXPECT_FLOAT_EQ(maximum, 0, 0);
+}
+
+TEST_F(denoise_framework, scalar_pair_spatial_guide_bounds_sample_support, dn_fixture) {
+    scalar_pair_bounded_support(f, 1);
+    scalar_pair_bounded_support(f, 3);
+    scalar_pair_bounded_support(f, 5);
+}
+
+TEST_F(denoise_framework, changing_signal_channel_semantics_resets_history, dn_fixture) {
+    upload(f);
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 1, 0);
+    f->channels = 2;
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 0, 0);
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 1, 0);
+    f->channels = 3;
+    begin(f);
+    run(f, build(f, (de_view){1}, 102, false, false, (de_rg_resource){0}));
+    EXPECT_FLOAT_EQ(age(f, 32, 16), 0, 0);
+}
+
+TEST_F(denoise_framework, spatial_variance_uses_squared_weights, dn_fixture) {
+    upload(f);
+    for (u32 propagate = 0; propagate < 3; ++propagate) {
+        f->rgb_variance_readback = propagate == 2;
+        begin(f);
+        de_denoise_frame frame = {.graph = f->graph,
+                                  .view = {1},
+                                  .frame = f->frame,
+                                  .reset = true,
+                                  .inputs = {.width = W, .height = H, .linear_depth = true}};
+        frame.inputs.signal = de_rg_import_texture(f->graph, f->signal, DE_ACCESS_SHADER_READ);
+        frame.inputs.depth = de_rg_import_texture(f->graph, f->depth, DE_ACCESS_SHADER_READ);
+        frame.inputs.normal = de_rg_import_texture(f->graph, f->normal, DE_ACCESS_SHADER_READ);
+        frame.inputs.material = de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+        de_denoise_ctx *ctx = NULL;
+        ASSERT_EQ(denoise_begin(f->owner, &frame,
+                                &(de_denoise_signal_desc){.identity = 0x5356474600ull + propagate,
+                                                          .format = DE_FMT_RGBA32_FLOAT,
+                                                          .channels = 3,
+                                                          .iterations = 1,
+                                                          .depth_relative = .02f,
+                                                          .propagate_variance = propagate != 0,
+                                                          .rgb_variance = propagate == 2},
+                                &ctx),
+                  DE_OK);
+        /* A constant realization with known independent input variance 2. The depth texture
+         * supplies the same constant to the independent variance input, without a new fixture. */
+        de_denoise_result input = {.color = frame.inputs.signal, .variance = frame.inputs.depth};
+        de_denoise_result filtered = denoise_add_atrous(ctx, input);
+        EXPECT_EQ(filtered.variance.id == input.variance.id, propagate == 0);
+        run(f, filtered);
+        /* Analytic separable B3 kernel: sum(k)=16, sum(k^2)=70, hence variance factor
+         * (70/256)^2. This is the variance-of-weighted-mean oracle (SVGF Eq. 3). */
+        const f64 expected = propagate ? 2.0 * 4900.0 / 65536.0 : 2.0;
+        const f32 *variance =
+            (const f32 *)((const u8 *)color(f) + (propagate == 2 ? 98304 : 49152));
+        for (u32 y = 4; y < H - 4; ++y)
+            for (u32 x = 4; x < W - 4; ++x) {
+                EXPECT_FLOAT_EQ(color(f)[(y * W + x) * 4], 1, 1e-6);
+                EXPECT_FLOAT_EQ(variance[(y * W + x) * (propagate == 2 ? 4 : 1)], expected, 1e-6);
+            }
+    }
+}
+
+TEST_F(denoise_framework, equal_luminance_color_edges_survive_spatial_filtering, dn_fixture) {
+    const f32 green = .2126f / .7152f;
+    for (u32 y = 0; y < H; ++y)
+        for (u32 x = 0; x < W; ++x) {
+            const u32 i = y * W + x;
+            f->data[0][i * 4] = x < W / 2 ? 1.f : 0.f;
+            f->data[0][i * 4 + 1] = x < W / 2 ? 0.f : green;
+            f->data[0][i * 4 + 2] = 0;
+        }
+    upload(f);
+    for (u32 chroma = 0; chroma < 3; ++chroma) {
+        f->rgb_variance_readback = chroma != 0;
+        for (u32 i = 0; i < PIXELS; ++i)
+            f->data[3][i * 2] = f->data[3][i * 2 + 1] = chroma == 2 ? 10.f : 0.f;
+        upload(f);
+        begin(f);
+        de_denoise_frame frame = {.graph = f->graph,
+                                  .view = {1},
+                                  .frame = f->frame,
+                                  .reset = true,
+                                  .inputs = {.width = W, .height = H, .linear_depth = true}};
+        frame.inputs.signal = de_rg_import_texture(f->graph, f->signal, DE_ACCESS_SHADER_READ);
+        frame.inputs.depth = de_rg_import_texture(f->graph, f->depth, DE_ACCESS_SHADER_READ);
+        frame.inputs.normal = de_rg_import_texture(f->graph, f->normal, DE_ACCESS_SHADER_READ);
+        frame.inputs.material = de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
+        const de_rg_resource zero_variance =
+            de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
+        de_denoise_ctx *ctx = NULL;
+        ASSERT_EQ(denoise_begin(f->owner, &frame,
+                                &(de_denoise_signal_desc){.identity = 0x4348524f00ull + chroma,
+                                                          .format = DE_FMT_RGBA32_FLOAT,
+                                                          .channels = 3,
+                                                          .iterations = 1,
+                                                          .depth_relative = .02f,
+                                                          .propagate_variance = true,
+                                                          .rgb_variance = chroma != 0,
+                                                          .luminance_scale = 4.f},
+                                &ctx),
+                  DE_OK);
+        run(f, denoise_add_atrous(ctx, (de_denoise_result){.color = frame.inputs.signal,
+                                                           .variance = zero_variance}));
+        const f32 *left = color(f) + (16 * W + W / 2 - 1) * 4;
+        const f32 *right = left + 4;
+        if (chroma == 1) {
+            EXPECT_FLOAT_EQ(left[0], 1, 1e-6);
+            EXPECT_FLOAT_EQ(left[1], 0, 1e-6);
+            EXPECT_FLOAT_EQ(right[0], 0, 1e-6);
+            EXPECT_FLOAT_EQ(right[1], green, 1e-6);
+        } else if (chroma == 2) {
+            /* Equal-luma colors may be noise rather than an edge. With known large RGB
+             * uncertainty, noise cancellation gives the analytic B3 weights across the step. */
+            EXPECT_FLOAT_EQ(left[0], 11.f / 16, 1e-6);
+            EXPECT_FLOAT_EQ(right[0], 5.f / 16, 1e-6);
+            EXPECT_FLOAT_EQ(left[1], green * 5.f / 16, 1e-6);
+            EXPECT_FLOAT_EQ(right[1], green * 11.f / 16, 1e-6);
+        } else {
+            EXPECT_TRUE(left[0] < .9f);
+            EXPECT_TRUE(right[0] > .1f);
+        }
+    }
 }

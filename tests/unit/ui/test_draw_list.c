@@ -1,5 +1,9 @@
 #include "ui_test_util.h"
 #include "ui/render/draw_list.h"
+#include "ui/binding/binding_internal.h"
+#include "asset/hot_reload_internal.h"
+#include "gpu/gpu_backend.h"
+#include "render/loaders/render_assets.h"
 #include "de_alloc_guard.h"
 #include <stdio.h>
 static DeUiStyle *style(ui_fx *f, de_entity entity, de_vec4 color, f32 opacity) {
@@ -317,6 +321,160 @@ TEST_F(ui_draw, metal_exact_extract_token_ignores_future_published_packet, ui_fx
     de_gpu_buffer_destroy(f->device, readback);
     de_gpu_texture_destroy(f->device, target);
 }
+#if defined(DE_UI_DRAW_ASSET_ROOT)
+TEST_F(ui_draw, metal_unsent_image_packet_keeps_same_slot_reload_generation_alive, ui_fx) {
+#if DE__ASSET_RELOAD_ENABLED
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.types = f->types, .hot_reload = true},
+                                     &f->assets),
+              DE_OK);
+    de__asset_reload_set_watching(f->assets, false);
+    draw_renderer(f, DE_GPU_METAL);
+    ASSERT_EQ(de_fs_mount("uireload", DE_UI_DRAW_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->assets, "uireload:/tests/unit/ui/assets.toml"), DE_OK);
+    de_asset_id id = de_asset_id_from("ui/checker");
+    de_texture image = de_asset_texture(f->assets, id);
+    f->load = de_asset_load(f->assets, id, 0);
+    u64 end = de_time_now_ns() + 30000000000ULL;
+    while (de_asset_status(f->assets, f->load, NULL) != DE_LOAD_READY && de_time_now_ns() < end) {
+        de_asset_system_update(f->assets, NULL);
+        de_render_uploader_flush(f->renderer->uploader);
+        de_render_uploader_acquire_submit(f->renderer->uploader);
+        de_sleep_ns(1000000);
+    }
+    ASSERT_EQ(de_asset_status(f->assets, f->load, NULL), DE_LOAD_READY);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity e = ui_node(f, (de_entity){0});
+    *(DeUiImage *)de_entity_add(f->world, e, f->ui->ids.image) =
+        (DeUiImage){.texture = image, .uv_rect = {0, 0, 1, 1}, .tint = {1, 0, 0, 1}};
+    de_gpu_texture old = de_render_texture_gpu(f->renderer, image);
+    ui_frame(f);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 0, 0), DE_OK);
+    struct de_ui_render *r = render(f);
+    de_ui_draw_list *packet = &r->snapshots[r->published];
+    ASSERT_EQ(packet->count, 1u);
+    EXPECT_EQ(packet->last_gpu_fence, 0u);
+    EXPECT_EQ(packet->commands[0].texture_lease.id, old.id);
+    u32 descriptor = packet->commands[0].gpu.texture;
+    de__asset_reload_on_change(f->assets, "uireload:/tests/data/fonts/latin/pixel.png",
+                               DE_WATCH_MODIFIED, false);
+    end = de_time_now_ns() + 30000000000ULL;
+    while (de_render_texture_gpu(f->renderer, image).id == old.id && de_time_now_ns() < end) {
+        de_asset_system_update(f->assets, NULL);
+        de_render_uploader_flush(f->renderer->uploader);
+        de_render_uploader_acquire_submit(f->renderer->uploader);
+        de_sleep_ns(1000000);
+    }
+    ASSERT_NE(de_render_texture_gpu(f->renderer, image).id, old.id);
+    for (u32 i = 0; i < 8; ++i) {
+        de_asset_system_update(f->assets, NULL);
+        de_render_uploader_flush(f->renderer->uploader);
+    }
+    de_gpu_wait_idle(f->device);
+    ASSERT_TRUE(de__gpu_get_texture(f->device, old) != NULL);
+    EXPECT_TRUE(de__gpu_get_texture(f->device, old)->destroy_requested);
+    EXPECT_EQ(de_gpu_texture_bindless(f->device, old, 0, false), descriptor);
+    ASSERT_EQ(de__render_extract_and_kick(f->renderer, f->world), DE_OK);
+    (void)read_float_pixel(f, target, readback, 0, 0);
+    const de_vec4 *pixels = de_gpu_buffer_map(f->device, readback);
+    u32 visible = 0;
+    for (u32 i = 0; i < 512 * 512; ++i)
+        visible += pixels[i].x > .2f && pixels[i].y < .05f && pixels[i].z < .05f;
+    EXPECT_GT(visible, 100u);
+    printf("Unsent hot-reload packet rendered%u pixels from its leased generation\n", visible);
+    de_ui__packet_unpin(r, packet);
+    EXPECT_TRUE(de__gpu_get_texture(f->device, old) == NULL);
+    de_gpu_wait_idle(f->device);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+    ASSERT_EQ(de_fs_unmount("uireload", DE_UI_DRAW_ASSET_ROOT), DE_OK);
+#else
+    SKIP("hot reload is a Debug/Dev feature");
+#endif
+}
+TEST_F(ui_draw, metal_bound_text_tint_changes_actual_glyph_pixels_with_default_sheet, ui_fx) {
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.types = f->types}, &f->assets),
+              DE_OK);
+    de_text_system *text = NULL;
+    ASSERT_EQ(de_text_create(NULL, f->assets, &text), DE_OK);
+    draw_renderer(f, DE_GPU_METAL);
+    ASSERT_EQ(de_text_attach(text, f->renderer, f->world), DE_OK);
+    f->ui->desc.text = text;
+    ASSERT_EQ(de_fs_mount("uitint", DE_UI_DRAW_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->assets, "uitint:/tests/golden/ui/assets.toml"), DE_OK);
+    de_asset_id id = de_asset_id_from("ui/font");
+    de_font font = de_asset_font(f->assets, id);
+    f->load = de_asset_load(f->assets, id, 0);
+    u64 deadline = de_time_now_ns() + 30000000000ULL;
+    while (de_asset_status(f->assets, f->load, NULL) != DE_LOAD_READY &&
+           de_time_now_ns() < deadline) {
+        de_asset_system_update(f->assets, NULL);
+        de_text_update(text);
+        de__renderer_kick_prepare(f->renderer);
+        de_sleep_ns(1000000);
+    }
+    ASSERT_EQ(de_asset_status(f->assets, f->load, NULL), DE_LOAD_READY);
+    typedef struct UiTintSource {
+        de_vec4 color;
+    } UiTintSource;
+    const de_field_info field = DE_FIELD(UiTintSource, color, DE_FK_COLOR, DE_FIELD_DEFAULT);
+    de_type_id type;
+    ASSERT_EQ(de_type_register_ex(f->types,
+                                  &(de_type_desc){.name = "UiTintSource",
+                                                  .size = sizeof(UiTintSource),
+                                                  .align = _Alignof(UiTintSource),
+                                                  .version = 1,
+                                                  .is_pod = true,
+                                                  .fields = &field,
+                                                  .field_count = 1},
+                                  &type, NULL),
+              DE_OK);
+    de_component source_component = de_component_register(f->world, type, 0);
+    de_entity source = de_entity_spawn(f->world);
+    ASSERT_TRUE(de_entity_add(f->world, source, source_component));
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity e = ui_node(f, (de_entity){0});
+    DeUiText *label = de_entity_add(f->world, e, f->ui->ids.text);
+    label->style = (de_text_style){.font = font, .size_px = 64, .color = {1, 1, 1, 1}};
+    strcpy(label->text, "MMMM");
+    DeUiBinding *binding = de_entity_add(f->world, e, f->ui->binding->component);
+    binding->source = source;
+    strcpy(binding->path, "UiTintSource.color");
+    strcpy(binding->property, "tint");
+    for (u32 phase = 0; phase < 2; ++phase) {
+        ((UiTintSource *)de_entity_get(f->world, source, source_component))->color =
+            phase ? (de_vec4){0, 1, 0, 1} : (de_vec4){1, 0, 0, 1};
+        for (u32 frame = 0; frame < 3; ++frame) {
+            de_asset_system_update(f->assets, NULL);
+            de_text_update(text);
+            draw_kick(f);
+        }
+        (void)read_float_pixel(f, target, readback, 0, 0);
+        const de_vec4 *pixels = de_gpu_buffer_map(f->device, readback);
+        ASSERT_TRUE(pixels);
+        u32 red = 0, green = 0;
+        for (u32 y = 0; y < 128; ++y)
+            for (u32 x = 0; x < 256; ++x) {
+                de_vec4 p = pixels[y * 512 + x];
+                red += p.x > .2f && p.y < .05f && p.z < .05f;
+                green += p.y > .2f && p.x < .05f && p.z < .05f;
+            }
+        printf("Metal bound text phase%u: red%u green%u glyph pixels\n", phase, red, green);
+        EXPECT_GT(phase ? green : red, 100u);
+        EXPECT_EQ(phase ? red : green, 0u);
+        EXPECT_GT(de_ui_get_render_stats(f->ui).draw_calls, 0u);
+    }
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+    de_ui_destroy(f->ui);
+    f->ui = NULL;
+    de_text_destroy(text);
+    ASSERT_EQ(de_fs_unmount("uitint", DE_UI_DRAW_ASSET_ROOT), DE_OK);
+}
+#endif
 #endif
 #endif
 #if DE_HAS_RENDER && defined(DE_UI_DRAW_ASSET_ROOT)

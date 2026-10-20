@@ -54,7 +54,7 @@ static float compare_flip(const float *reference, const float *actual) {
     ASSERT_TRUE(de_flip_ldr(&ref, &image, 0, errors));
     de_flip_stats stats;
     ASSERT_TRUE(de_flip_stats_compute(errors, SW * SH, &stats));
-    float result = stats.mean;
+    float result = (float)stats.mean;
     free(a);
     free(b);
     free(errors);

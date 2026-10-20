@@ -140,7 +140,7 @@ static bool world_upload(struct de_ui_world_state *s, const de_ui_draw_list *pac
                                       {m.m[1], m.m[4], m.m[7], m.m[10]},
                                       {m.m[2], m.m[5], m.m[8], m.m[11]}},
                              .panel = {root->panel.size_m.x, root->panel.size_m.y,
-                                       root->panel.pixels_per_meter, root->panel.lit ? 1 : 0}};
+                                       root->panel.pixels_per_meter, root->panel.lit ? 1.f : 0.f}};
     }
     s->uploaded[ring] = info->frame_index;
     return true;

@@ -11,5 +11,8 @@ if(TARGET de_ui)
   LIBS de_ui de_tp_tomlc17 CORPUS corpus/stylesheet)
  if(TARGET fuzz_ui_stylesheet)
   target_include_directories(fuzz_ui_stylesheet PRIVATE "${DE_ROOT_DIR}/src")
+  # Keep fuzz coverage instrumentation and the normal vendored warning policy.
+  set_source_files_properties("${DE_ROOT_DIR}/third_party/tomlc17/src/tomlc17.c" PROPERTIES
+   COMPILE_OPTIONS "$<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w,-w>")
  endif()
 endif()

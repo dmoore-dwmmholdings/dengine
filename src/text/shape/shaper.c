@@ -49,8 +49,10 @@ static hb_font_t *font_for(de_text_system *t, de_font handle, u32 *upem) {
     }
     de__hb_font *slot = &s->fonts[i];
     if (!slot->font || slot->generation != f->generation || slot->identity != f) {
-        hb_blob_t *blob = hb_blob_create((const char *)f->source, f->source_size,
-                                         HB_MEMORY_MODE_DUPLICATE, NULL, NULL);
+        de__font_source_ref(f->source_owner);
+        hb_blob_t *blob =
+            hb_blob_create((const char *)f->source, f->source_size, HB_MEMORY_MODE_READONLY,
+                           f->source_owner, de__font_source_unref);
         hb_face_t *face = hb_face_create(blob, 0);
         hb_blob_destroy(blob);
         hb_font_t *font = hb_font_create(face);

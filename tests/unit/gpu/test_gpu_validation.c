@@ -193,7 +193,7 @@ TEST_F(gpu_validation, sampler_pipeline_query_descs, val_fx) {
         {{.kind = DE_PIPE_COMPUTE}, DE_ERR_INVALID_ARGUMENT, "needs a cs blob"},
         {{.kind = DE_PIPE_GRAPHICS}, DE_ERR_INVALID_ARGUMENT, "needs a vs blob"},
         {{.kind = DE_PIPE_MESH}, DE_ERR_INVALID_ARGUMENT, "needs an ms blob"},
-        {{.kind = DE_PIPE_RAYTRACING, .raygen = k_blob}, DE_ERR_UNSUPPORTED, "S16"},
+        {{.kind = DE_PIPE_RAYTRACING, .raygen = k_blob}, DE_ERR_UNSUPPORTED, "caps.rt_pipelines"},
         {{.kind = DE_PIPE_COMPUTE, .cs = k_blob, .push_constant_bytes = 6},
          DE_ERR_INVALID_ARGUMENT,
          "not a multiple of 4"},

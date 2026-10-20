@@ -1,11 +1,14 @@
 #ifndef DE_AUDIO_RESAMPLE_H
 #define DE_AUDIO_RESAMPLE_H
 #include <dengine/de_memory.h>
-/* Polyphase Kaiser-windowed sinc. Preallocated input ring and coefficient bank; control
- * functions and processing allocate nothing. Ratios are input frames per output frame. */
+/* Kaiser-windowed sinc with immutable window/sinc lookup tables. The current ratio
+ * sets the cutoff for every output frame, including during ramps. Preallocated input
+ * ring and shared filter tables; control functions and processing allocate nothing. Ratios are
+ * input frames per output frame. Steady-rate clocks retain integer quotient/remainder phase so
+ * streamed EOF counts match sample-rate conversion regardless of input/output chunk sizes. */
 typedef struct de__resampler de__resampler;
 de_result de__resample_create(const de_allocator *a, u32 channels, f64 ratio, de__resampler **out);
-/** Borrow an immutable coefficient bank; bank must outlive the returned stream. */
+/** Borrow immutable, rate-independent filter tables; bank must outlive the returned stream. */
 de_result de__resample_create_shared(const de_allocator *a, u32 channels, f64 ratio,
                                      const de__resampler *bank, de__resampler **out);
 /** Reset an existing stream to a new interleaved format without allocating. */

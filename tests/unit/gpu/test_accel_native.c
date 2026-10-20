@@ -221,7 +221,7 @@ TEST_F(accel_native, test_accel_instance_layout_gpu, native_fx) {
         f->d,
         &(de_gpu_buffer_desc){.size = 192, .usage = DE_USAGE_COPY_DST, .memory = DE_MEM_READBACK});
     ASSERT_TRUE(in.id && table.id && out.id && read.id);
-    de_gpu_tlas_instance records[3] = {{0}};
+    de_gpu_tlas_instance records[3] = {0};
     de__gpu_accel_address addresses[4] = {{0}};
     addresses[1] = (de__gpu_accel_address){.handle = 0x100001, .address = 0x12345678abcdef00ull};
     addresses[2] = (de__gpu_accel_address){.handle = 0x200002, .address = 0xfedcba9876543200ull};

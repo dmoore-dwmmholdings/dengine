@@ -84,7 +84,7 @@ TEST_F(cooker, registry, cook_fx) {
 
     u32 n = 0;
     const char *const *engine = de_cooker_engine_type_names(&n);
-    EXPECT_EQ(n, 14u);
+    EXPECT_EQ(n, 15u);
     EXPECT_STREQ(engine[0], "texture");
     EXPECT_TRUE(de_cooker_is_engine_type("prefab"));
     EXPECT_FALSE(de_cooker_is_engine_type("upper"));

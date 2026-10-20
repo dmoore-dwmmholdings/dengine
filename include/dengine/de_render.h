@@ -617,7 +617,9 @@ DE_API de_material de_material_create_instance(de_renderer *r, de_material base)
 DE_API void de_material_destroy_instance(de_renderer *r, de_material m);
 
 /** Copies model-space pose x inverse-bind matrices. Omitted palettes retain their last pose.
- * Zero joints selects the bind pose. Main-thread PostUpdate; storage grows only when needed. */
+ * Zero joints selects the bind pose. Main-thread PostUpdate; Extract copies an immutable pose
+ * for its frame, so later simulation updates cannot affect an already extracted frame.
+ * Storage grows only when needed; despawned entities release their staged palettes. */
 DE_API void de_render_set_skin_palette(de_renderer *r, de_entity entity, const de_affine *joints,
                                        u32 joint_count);
 

@@ -36,7 +36,7 @@ void de_ui__dropdown_submit(de_ui *ui, de_entity e) {
     DeUiPopup *placement = de_entity_add(ui->world, popup, ui->ids.popup);
     placement->anchor = e;
     placement->modal = true;
-    f32 bottom = ui->height - ui->safe.bottom;
+    f32 bottom = (f32)ui->height - ui->safe.bottom;
     placement->placement =
         n && n->computed_rect.y + n->computed_rect.w + 32 * ui->scale * drop.option_count > bottom
             ? DE_UI_POPUP_TOP

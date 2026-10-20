@@ -24,7 +24,7 @@ typedef struct rt_proof {
     de_renderer *r;
     de_view view;
     u32 effect, frames, passes;
-    bool base, negative, fallback, shadow_pass;
+    bool base, negative, fallback, shadow_pass, gi_pass;
     de__lighting_inputs_gpu inputs;
     const de__lighting_view *uploaded;
 } rt_proof;
@@ -47,15 +47,19 @@ static void proof_stage(de__view_frame *vf, void *user) {
     p->passes = 0;
     p->fallback = false;
     p->shadow_pass = false;
+    p->gi_pass = false;
     for (u32 i = 0; i < vf->graph->pass_count; ++i) {
         const char *n = vf->graph->passes[i]->name;
         p->passes += strncmp(n, "RT.", 3) == 0;
         p->shadow_pass |= strcmp(n, "RT.Shadows") == 0;
+        p->gi_pass |= strncmp(n, "RT.GI.", 6) == 0;
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:
-        case DE__GOLDEN_RT_DI:
         case DE__GOLDEN_RT_FOLIAGE:
             p->fallback |= strstr(n, "shadow.") != NULL;
+            break;
+        case DE__GOLDEN_RT_DI:
+            p->fallback |= strcmp(n, "lighting.deferred") == 0;
             break;
         case DE__GOLDEN_RT_AO:
             p->fallback |= strstr(n, "gtao.") != NULL;
@@ -133,6 +137,15 @@ void *de__golden_rt_prepare(de_golden_ctx *ctx, de_renderer *r, de_view view, u3
         s.rt_shadows = false;
         p->negative = true;
     }
+    if (negative && strcmp(negative, "gi") == 0 && effect == DE__GOLDEN_RT_GI) {
+        s.gi = DE_QUALITY_OFF;
+        s.rt_gi = false;
+        p->negative = true;
+    }
+    if (negative && strcmp(negative, "refraction") == 0 && effect == DE__GOLDEN_RT_REFRACTION) {
+        s.rt_refraction = false;
+        p->negative = true;
+    }
     de_renderer_set_settings(r, &s);
     if (de__view_register_stage(r, DE__VIEW_SLOT_TRANSPARENT, 99, "RT golden producer consumption",
                                 proof_stage, p) != DE_OK)
@@ -168,12 +181,31 @@ void de__golden_rt_finish(void *state) {
         p->inputs = p->uploaded->inputs;
     bool active = false, identity = false;
     de_gpu_texture texture = {0};
+    de_gpu_texture specular = {0};
     de_gpu_buffer buffer = {0};
     u32 width = 0, height = 0, bpp = 0;
     u64 rays = 0;
-    if (p->base || p->negative) {
-        active = p->negative ? !p->shadow_pass : p->passes == 0;
-        identity = p->negative || p->fallback;
+    if (p->negative) {
+        if (p->effect == DE__GOLDEN_RT_GI) {
+            active = !p->gi_pass;
+            identity = p->inputs.reserved1 == 0;
+        } else if (p->effect == DE__GOLDEN_RT_REFRACTION) {
+            de__rt_refraction_info i = {0};
+            active = !de__rt_refraction_get(r->rt_refraction, p->view, &i);
+            identity = p->fallback;
+        } else {
+            active = !p->shadow_pass;
+            identity = true;
+        }
+    } else if (p->base) {
+        active = p->passes == 0;
+        identity = p->fallback;
+        if (p->effect == DE__GOLDEN_RT_DI) {
+            de__di_info i = {0};
+            active &= !de__restir_di_get(r->restir_di, p->view, &i);
+            identity &= p->uploaded && p->uploaded->light_slots >= 512 &&
+                        p->inputs.restir_diffuse == 0 && p->inputs.restir_specular == 0;
+        }
     } else
         switch (p->effect) {
         case DE__GOLDEN_RT_SHADOWS:
@@ -216,6 +248,9 @@ void de__golden_rt_finish(void *state) {
             de__di_info i = {0};
             active = de__restir_di_get(r->restir_di, p->view, &i) && i.source_count >= 512;
             texture = i.diffuse;
+            // The fixture's metallic materials have no diffuse lobe. DI publishes both
+            // lobes; measure their combined RGB so a valid specular contribution counts.
+            specular = i.specular;
             width = i.width;
             height = i.height;
             bpp = 16;
@@ -227,13 +262,38 @@ void de__golden_rt_finish(void *state) {
         }
         case DE__GOLDEN_RT_GI: {
             de__rt_gi_info i = {0};
-            active = de__rt_gi_get(r->rt_gi, p->view, 0, &i) && i.probes_updated > 0;
+            // This fixture's diffuse box must be inside a live camera-following cascade.
+            // A nonzero atlas outside the visible scene does not establish contribution.
+            const f32 receiver[3] = {-.7f, -.4f, .6f};
+            u32 volume = 0;
+            for (; de__rt_gi_get(r->rt_gi, p->view, volume, &i); ++volume) {
+                bool contains = i.gpu.params[3] > 0 && i.gpu.params[0] > 0;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const f32 *row = i.gpu.local[axis];
+                    f32 local =
+                        row[0] * receiver[0] + row[1] * receiver[1] + row[2] * receiver[2] + row[3];
+                    contains &= fabsf(local) < i.gpu.extent[axis];
+                }
+                if (contains && i.probes_updated > 0) {
+                    active = true;
+                    break;
+                }
+            }
             texture = i.irradiance;
             width = i.layout.iw;
             height = i.layout.ih;
             bpp = 4;
             rays = i.rays_traced;
-            identity = p->inputs.reserved1 != 0;
+            const de__gi_gpu *records = i.metadata.id ? de_gpu_buffer_map(d, i.metadata) : NULL;
+            identity = active && records &&
+                       p->inputs.reserved1 == de_gpu_buffer_bindless(d, i.metadata) &&
+                       records[0].counts[0] == i.volumes &&
+                       memcmp(&records[volume + 1], &i.gpu, sizeof i.gpu) == 0 &&
+                       i.gpu.textures[0] == de_gpu_texture_bindless(d, i.irradiance, 0, true) &&
+                       i.gpu.textures[1] == de_gpu_texture_bindless(d, i.distance, 0, true) &&
+                       i.gpu.textures[2] == de_gpu_buffer_bindless(d, i.classification);
+            printf("  RT GI receiver covered=%u volume=%u records=%u\n", active, volume,
+                   p->inputs.reserved1);
             break;
         }
         case DE__GOLDEN_RT_REFRACTION: {
@@ -258,7 +318,7 @@ void de__golden_rt_finish(void *state) {
         u32 pitch = (width * bpp + 255u) & ~255u;
         u64 size = buffer.id ? (u64)width * height * bpp : (u64)pitch * height;
         de_gpu_buffer rb = de_gpu_buffer_create(
-            d, &(de_gpu_buffer_desc){.size = size,
+            d, &(de_gpu_buffer_desc){.size = size * (specular.id ? 2 : 1),
                                      .usage = DE_USAGE_COPY_DST,
                                      .memory = DE_MEM_READBACK,
                                      .name = "RT golden actual producer readback"});
@@ -272,6 +332,15 @@ void de__golden_rt_finish(void *state) {
             de_gpu_cmd_copy_buffer(cmd, rb, 0, buffer, 0, size);
         else
             de_gpu_cmd_copy_texture_to_buffer(cmd, rb, 0, pitch, texture, 0, 0);
+        if (specular.id) {
+            de_gpu_barrier sb = {
+                .texture = specular, .before = before, .after = DE_ACCESS_COPY_SRC};
+            de_gpu_cmd_barriers(cmd, &sb, 1);
+            de_gpu_cmd_copy_texture_to_buffer(cmd, rb, size, pitch, specular, 0, 0);
+            sb.before = DE_ACCESS_COPY_SRC;
+            sb.after = before;
+            de_gpu_cmd_barriers(cmd, &sb, 1);
+        }
         b.before = DE_ACCESS_COPY_SRC;
         b.after = before;
         de_gpu_cmd_barriers(cmd, &b, 1);
@@ -301,6 +370,10 @@ void de__golden_rt_finish(void *state) {
                 } else {
                     const f32 *f = (const f32 *)q;
                     v = f[0] + f[1] + f[2];
+                    if (specular.id) {
+                        const f32 *s = (const f32 *)(q + size);
+                        v += s[0] + s[1] + s[2];
+                    }
                 }
                 if (isfinite(v)) {
                     ++finite;

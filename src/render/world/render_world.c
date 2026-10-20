@@ -7,6 +7,7 @@
  * moved and the old blocks freed. A failed growth leaves everything as it was.
  */
 #include "render/world/render_world.h"
+#include "render/skin/skin_internal.h"
 
 #include "render/renderer_internal.h"
 #include "render/sprite/sprite_internal.h"
@@ -174,6 +175,7 @@ de_result de__rw_init(de__render_world *rw, de_renderer *r, u32 frames_in_flight
 }
 
 static void frame_free(de__render_world *rw, de__render_world_frame *f) {
+    de__skin_frame_free(rw->alloc, f);
     rw_array arr[RW_MAX_ARRAYS];
     u32 n = inst_arrays(&f->instances, arr);
     arr[n++] = (rw_array){(void **)&f->dirty_instances, sizeof(u32), DE_ALIGNOF(u32)};
@@ -222,6 +224,7 @@ de__render_world_frame *de__rw_begin(de__render_world *rw) {
     f->origin_changed = false;
     f->view_count = 0;
     f->frozen_view_count = 0;
+    f->skin_count = f->skin_joint_count = 0;
     f->main_view = DE__RW_NONE;
     memset(&f->environment, 0, sizeof f->environment);
     f->environment_count = 0;

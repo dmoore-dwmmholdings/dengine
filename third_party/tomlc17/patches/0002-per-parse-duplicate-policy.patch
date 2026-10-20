@@ -1,0 +1,85 @@
+tomlc17: allow opt-in per-parse duplicate assignment handling
+
+DENG-509 needs warning-only duplicate localization strings without changing strict
+ordinary TOML parsing or process-global options. A callback can retain the first
+assignment after the replacement is fully parsed. Table headers and inline table
+entries stay strict. Allocator and callback context are isolated per parse.
+
+Engine-local extension; remove if an upstream per-parse policy supersedes it.
+
+diff --git a/src/tomlc17.c b/src/tomlc17.c
+index 46cde4d..a5c728f 100644
+--- a/src/tomlc17.c
++++ b/src/tomlc17.c
+@@ -385,6 +385,8 @@ struct parser_t {
+   toml_datum_t *curtab; // current table
+   pool_t *pool;         // memory pool for strings
+   const char *srcname;  // source name copied into the pool, or NULL
++  toml_duplicate_fn duplicate_handler;
++  void *duplicate_user;
+   ebuf_t ebuf;          // buffer to store last error message
+ };
+ 
+@@ -1073,8 +1075,15 @@ toml_result_t toml_parse(const char *src, int len) {
+ }
+ 
+ toml_result_t toml_parse_named(const char *src, int len, const char *name) {
++  return toml_parse_with_duplicates(src, len, name, NULL, NULL);
++}
++
++toml_result_t toml_parse_with_duplicates(const char *src, int len, const char *name,
++                                         toml_duplicate_fn handler, void *user) {
+   toml_result_t result = {0};
+   parser_t parser = {0};
++  parser.duplicate_handler = handler;
++  parser.duplicate_user = user;
+   parser_t *pp = &parser;
+ 
+   // Check that src is not NULL.
+@@ -1818,6 +1827,19 @@ static int parse_keyvalue_expr(parser_t *pp, token_t tok) {
+     return -1;
+   }
+ 
++  // The caller may explicitly accept a duplicate assignment. Keep the first
++  // value, after fully parsing the replacement so malformed TOML still fails.
++  span_t key = keypart.span[keypart.nspan - 1];
++  int existing = pp->duplicate_handler ? tab_find(tab, key) : -1;
++  if (existing >= 0 && pp->duplicate_handler) {
++    toml_duplicate_t duplicate = {&pp->toptab, tab, key.ptr, key.len, keylineno,
++                                 &tab->u.tab.value[existing], &newval};
++    if (pp->duplicate_handler(&duplicate, pp->duplicate_user)) {
++      datum_free(&newval);
++      return 0;
++    }
++  }
++
+   // Add a new key/value for tab.
+   if (tab_add(tab, keypart.span[keypart.nspan - 1], newval, &reason)) {
+     datum_free(&newval);
+diff --git a/src/tomlc17.h b/src/tomlc17.h
+index 3c367be..1394a28 100644
+--- a/src/tomlc17.h
++++ b/src/tomlc17.h
+@@ -130,6 +130,22 @@ struct toml_result_t {
+  */
+ TOML_EXTERN toml_result_t toml_parse(const char *src, int len);
+ 
++/* Engine extension: a per-parse duplicate policy. Returning true keeps the first
++ * value and discards the replacement. NULL/rejection retains strict TOML rules.
++ * Only ordinary key/value assignments consult this handler, never table headers
++ * or inline-table entries. All pointers are borrowed during the callback. */
++typedef struct toml_duplicate_t {
++  const toml_datum_t *root, *table;
++  const char *key;
++  int keylen, lineno;
++  const toml_datum_t *previous, *replacement;
++} toml_duplicate_t;
++typedef bool (*toml_duplicate_fn)(const toml_duplicate_t *, void *);
++TOML_EXTERN toml_result_t toml_parse_with_duplicates(
++    const char *src, int len, const char *name,
++    toml_duplicate_fn handler, void *user);
++
++
+ /**
+  * @brief Parse a TOML document, tagging every datum with a source name.
+  *

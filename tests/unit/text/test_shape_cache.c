@@ -88,3 +88,18 @@ TEST_F(shape_cache, concurrent_workers, runtime_fx) {
     for (u32 i = 0; i < 4; ++i)
         EXPECT_EQ(de_thread_join(threads[i]), 0);
 }
+
+TEST_F(shape_cache, immutable_source_is_shared_without_copying, runtime_fx) {
+    de_text_style style = {.font = f->latin, .size_px = 48};
+    de_shaped_run run;
+    ASSERT_EQ(de_text__shape(f->t, DE_STR("office"), &style, DE_DIR_LTR, NULL, &run), DE_OK);
+    de_text__shape_free(&run);
+    ASSERT_EQ(f->t->shape->font_count, 1u);
+    hb_font_t *font = f->t->shape->fonts[0].font;
+    hb_blob_t *blob = hb_face_reference_blob(hb_font_get_face(font));
+    unsigned size = 0;
+    de_text_font *decoded = de_text__font_get(f->t, f->latin);
+    EXPECT_TRUE(hb_blob_get_data(blob, &size) == (const char *)decoded->source);
+    EXPECT_EQ(size, decoded->source_size);
+    hb_blob_destroy(blob);
+}

@@ -167,8 +167,19 @@ u32 de_query_count(de_world *w, de_query qh) {
     ecs_archetype *a = NULL;
     const u32 *cols = NULL;
     u32 n = 0;
-    while (ecs_query_iter_next(w, q, &it, &a, &cols))
-        n += a->count;
+    while (ecs_query_iter_next(w, q, &it, &a, &cols)) {
+        if (!q->change_count) {
+            n += a->count;
+            continue;
+        }
+        /* Counting must use the row predicate without exposing writable slices:
+         * de_query_each would also mark DE_WRITE terms as changed. */
+        for (u32 chunk = 0; chunk < a->chunks.count; ++chunk) {
+            const ecs_chunk *ch = ecs_table_chunk(a, chunk);
+            for (u32 row = 0; row < ch->count; ++row)
+                n += q->change_filter(q, a, ch, cols + q->term_count, row) ? 1u : 0u;
+        }
+    }
     return n;
 }
 

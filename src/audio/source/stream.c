@@ -94,9 +94,12 @@ struct stream_source {
     de__sound_decoder *decoder;
     f32 *ring;
     u32 capacity;
-    de_atomic_u64 read_pos, write_pos, seek_target;
+    de_atomic_u64 read_pos, write_pos, seek_target, seek_read_pos;
+    u32 read_seek_ack; /* Reader-owned generation of the last cursor flush. */
     de_atomic_u32 need, running, closing, eof, seek_request, seek_ack;
     de_task_counter jobs;
+    void (*test_read_hook)(de__audio_source *, void *);
+    void *test_read_user;
 };
 static stream_manager *manager(de_audio *a) {
     return de_atomic_load_ptr(&a->stream_manager, DE_ATOMIC_ACQUIRE);
@@ -151,7 +154,8 @@ static void refill(void *user) {
             goto done;
         }
         u64 write = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE);
-        de_atomic_store_u64(&s->read_pos, write, DE_ATOMIC_RELEASE);
+        /* Publish a boundary; only the reader may advance its SPSC read cursor. */
+        de_atomic_store_u64(&s->seek_read_pos, write, DE_ATOMIC_RELAXED);
         de_atomic_store_u32(&s->eof, 0, DE_ATOMIC_RELEASE);
         de_atomic_store_u32(&s->seek_ack, request, DE_ATOMIC_RELEASE);
     }
@@ -215,8 +219,19 @@ static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channel
     stream_source *s = (stream_source *)base;
     u64 read = de_atomic_load_u64(&s->read_pos, DE_ATOMIC_RELAXED),
         write = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE);
-    bool seeking = de_atomic_load_u32(&s->seek_request, DE_ATOMIC_ACQUIRE) !=
-                   de_atomic_load_u32(&s->seek_ack, DE_ATOMIC_ACQUIRE);
+    if (s->test_read_hook)
+        s->test_read_hook(base, s->test_read_user);
+    u32 request = de_atomic_load_u32(&s->seek_request, DE_ATOMIC_ACQUIRE);
+    u32 ack = de_atomic_load_u32(&s->seek_ack, DE_ATOMIC_ACQUIRE);
+    bool seeking = request != ack;
+    if (!seeking && s->read_seek_ack != ack) {
+        /* Ack can arrive after the initial snapshots: discard them before reading.
+         * Its acquire also publishes the worker's seek boundary. */
+        read = de_atomic_load_u64(&s->seek_read_pos, DE_ATOMIC_RELAXED);
+        de_atomic_store_u64(&s->read_pos, read, DE_ATOMIC_RELEASE);
+        s->read_seek_ack = ack;
+        write = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE);
+    }
     u32 available = seeking ? 0 : (u32)(write - read);
     u32 n = frames < available ? frames : available;
     for (u32 f = 0; f < n; ++f)
@@ -276,6 +291,7 @@ de_result de__source_stream(de_audio *a, de__sound_asset *asset, de__audio_sourc
     de_atomic_init_u64(&s->read_pos, 0);
     de_atomic_init_u64(&s->write_pos, 0);
     de_atomic_init_u64(&s->seek_target, 0);
+    de_atomic_init_u64(&s->seek_read_pos, 0);
     de_atomic_init_u32(&s->need, 0);
     de_atomic_init_u32(&s->running, 0);
     de_atomic_init_u32(&s->closing, 0);
@@ -323,4 +339,21 @@ void de__stream_test_starve(de_audio *a, bool starve) {
     stream_manager *m = manager(a);
     if (m)
         de_atomic_store_u32(&m->starve, starve, DE_ATOMIC_RELEASE);
+}
+
+void de__stream_test_read_hook(de__audio_source *base, void (*hook)(de__audio_source *, void *),
+                               void *user) {
+    stream_source *s = (stream_source *)base;
+    s->test_read_hook = hook;
+    s->test_read_user = user;
+}
+void de__stream_test_refill_now(de__audio_source *base) {
+    stream_source *s = (stream_source *)base;
+    stream_manager *m = s->manager;
+    de_mutex_lock(&m->lock);
+    de_task_wait(m->tasks, &s->jobs);
+    u32 starved = de_atomic_exchange_u32(&m->starve, 0, DE_ATOMIC_ACQ_REL);
+    refill(s);
+    de_atomic_store_u32(&m->starve, starved, DE_ATOMIC_RELEASE);
+    de_mutex_unlock(&m->lock);
 }

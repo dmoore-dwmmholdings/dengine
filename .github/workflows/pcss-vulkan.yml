@@ -1,7 +1,17 @@
 name: PCSS Vulkan acceptance
+run-name: ${{ inputs.renderer_regressions && 'Renderer bug regressions' || 'PCSS Vulkan acceptance' }}
 
 on:
   workflow_dispatch:
+    inputs:
+      renderer_regressions:
+        description: "Run focused WARP crash and text-reference checks instead of PCSS"
+        type: boolean
+        default: false
+      warp_crashes:
+        description: "Include the original 34 WARP crash cases in renderer checks"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -11,7 +21,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  renderer-regressions:
+    if: ${{ inputs.renderer_regressions }}
+    uses: ./.github/workflows/renderer-regressions.yml
+    with:
+      warp_crashes: ${{ inputs.warp_crashes }}
   pcss:
+    if: ${{ !inputs.renderer_regressions }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:

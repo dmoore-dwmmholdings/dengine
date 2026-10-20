@@ -22,6 +22,7 @@ DE_EXTERN_C_BEGIN
  *     [game]    name = "My Game"            library = "libmygame.dylib"
  *     [window]  title = "My Game"  width = 1280  height = 720
  *               mode = "windowed" | "borderless" | "fullscreen"   high_dpi = true
+ *               surface = "auto" | "none" | "metal" | "vulkan"
  *     [timing]  mode = "fixed" | "variable"  fixed_hz = 60  max_catchup_steps = 4
  *               time_scale = 1.0  frame_cap_hz = 0
  *     [tasks]   workers = 0                  (frame workers besides the main thread; 0 = auto)
@@ -68,6 +69,8 @@ typedef struct de__game_config {
     u32 window_width, window_height;       /**< [window] width, height; 1280 x 720 */
     de_window_mode window_mode;            /**< [window] mode; DE_WINDOW_WINDOWED */
     bool window_high_dpi;                  /**< [window] high_dpi; true */
+    de_window_surface window_surface;      /**< [window] surface when explicitly selected */
+    bool window_surface_auto;              /**< Default: match the platform GPU backend */
     de_timing timing;                      /**< [timing]; the DE_TIMING_DEFAULT_* values, fixed */
     u32 task_workers;                      /**< [tasks] workers; 0 = de_task_system_desc default */
     u32 frame_arena_mib;                   /**< [memory] frame_arena_mib; 64 (read by DENG-91) */
