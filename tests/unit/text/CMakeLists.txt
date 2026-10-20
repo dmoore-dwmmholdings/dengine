@@ -34,6 +34,9 @@ de_add_test(NAME text_layout SOURCES test_bidi.c test_linebreak.c LIBS de_text d
 if(TARGET test_text_layout)
  target_include_directories(test_text_layout PRIVATE "${DE_ROOT_DIR}/src")
  target_compile_definitions(test_text_layout PRIVATE "DE_UNICODE_DATA=\"${DE_ROOT_DIR}/third_party/unicode/unicodetools/data/ucd/dev\"")
+ if(WIN32)
+  target_compile_definitions(test_text_layout PRIVATE _CRT_SECURE_NO_WARNINGS)
+ endif()
 endif()
 
 if(TARGET test_text_layout AND DE_BUILD_TOOLS)

@@ -1266,5 +1266,8 @@ if(DE_BUILD_TOOLS)
             "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
         target_compile_definitions(test_render_forward_participants PRIVATE
             "DE_PARTICIPANT_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+        if(WIN32)
+            target_compile_definitions(test_render_forward_participants PRIVATE _CRT_SECURE_NO_WARNINGS)
+        endif()
     endif()
 endif()
