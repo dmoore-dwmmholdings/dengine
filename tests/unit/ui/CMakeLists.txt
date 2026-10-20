@@ -50,3 +50,7 @@ if(TARGET de_ui)
  de_add_test(NAME ui_binding SOURCES test_binding.c LIBS de_ui de_platform de_ecs de_reflect de_test_support de_tp_tomlc17 LABELS ui)
  target_include_directories(test_ui_binding PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+if(TARGET test_ui_focus)
+ target_sources(test_ui_focus PRIVATE test_terminal.c "${DE_ROOT_DIR}/examples/terminal_demo/session.c")
+endif()

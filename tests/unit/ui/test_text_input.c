@@ -488,3 +488,199 @@ TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extra
     runtime_fx_teardown(&fonts);
 }
 #endif
+
+TEST_F(ui_text_input, script_document_growth_unicode_history_and_cleanup, edit_fx) {
+    char script[65537];
+    for (u32 i = 0; i < 65536; ++i)
+        script[i] = i % 64 == 63 ? '\n' : 'x';
+    script[65536] = 0;
+    ASSERT_EQ(de_ui_text_input_set(f->base.ui, f->editor, (de_str){script, 65536}), DE_OK);
+    DeUiTextInput *in = editing(f);
+    in->multiline = true;
+    in->caret = 65536;
+    de_ui_editor *s = de_entity_get(f->base.world, f->editor, f->base.ui->advanced->editor);
+    s->anchor = in->caret;
+    input_test_text(f->input, "a\xcc\x81👨‍👩‍👧‍👦");
+    edit_frame(f);
+    de_str document = de_ui_text_input_get(f->base.ui, f->editor);
+    ASSERT_EQ(document.len, 65564u);
+    EXPECT_TRUE(memcmp(document.ptr, script, 65536) == 0);
+    input_test_key(f->input, DE_KEY_BACKSPACE, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->length, 65539u); /* Entire ZWJ family deleted. */
+    input_test_key(f->input, DE_KEY_BACKSPACE, false);
+    edit_frame(f);
+    ASSERT_TRUE(de_ui_text_input_undo(f->base.ui, f->editor));
+    EXPECT_EQ(editing(f)->length, 65564u);
+    ASSERT_TRUE(de_ui_text_input_undo(f->base.ui, f->editor));
+    EXPECT_EQ(editing(f)->length, 65536u);
+    EXPECT_EQ(editing(f)->caret, 65536u);
+    ASSERT_TRUE(de_ui_text_input_redo(f->base.ui, f->editor));
+    EXPECT_EQ(editing(f)->length, 65564u);
+    input_test_text(f->input, "!");
+    edit_frame(f);
+    EXPECT_FALSE(de_ui_text_input_redo(f->base.ui, f->editor));
+    document = de_ui_text_input_get(f->base.ui, f->editor);
+    EXPECT_EQ(document.ptr[document.len - 1], '!');
+    /* Replacing from an overlapping borrowed slice is supported, and clears history. */
+    ASSERT_EQ(de_ui_text_input_set(f->base.ui, f->editor, (de_str){document.ptr + 65000, 100}),
+              DE_OK);
+    EXPECT_EQ(de_ui_text_input_get(f->base.ui, f->editor).len, 100u);
+    EXPECT_FALSE(de_ui_text_input_undo(f->base.ui, f->editor));
+    de_entity_remove(f->base.world, f->editor, f->base.ui->advanced->input);
+    ui_frame(&f->base);
+    EXPECT_TRUE(f->base.ui->advanced->documents == NULL);
+}
+
+#if defined(DE_UI_TEST_FONTS)
+TEST_F(ui_text_input, vertical_caret_retains_column_selection_and_scrolls_multiline, edit_fx) {
+    runtime_fx fonts = {0};
+    runtime_fx_setup(&fonts);
+    ui_fx *b = &f->base;
+    b->ui->desc.text = fonts.t;
+    DeUiText *text = de_entity_get(b->world, f->editor, b->ui->ids.text);
+    text->style = (de_text_style){
+        .font = fonts.latin, .size_px = 20, .line_height = 1, .color = {1, 1, 1, 1}};
+    const char *document = "abcdef\nx\nabcdef\nlast";
+    ASSERT_EQ(de_ui_text_input_set(b->ui, f->editor, (de_str){document, strlen(document)}), DE_OK);
+    editing(f)->multiline = true;
+    editing(f)->caret = 5;
+    de_ui_editor *state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
+    state->anchor = 5;
+    input_test_key(f->input, DE_KEY_DOWN, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->caret, 8u);
+    input_test_key(f->input, DE_KEY_DOWN, false);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_LSHIFT, true);
+    input_test_key(f->input, DE_KEY_DOWN, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->caret, 14u);
+    state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
+    EXPECT_EQ(state->anchor, 8u);
+    EXPECT_TRUE(state->scroll_y > 0);
+    input_test_key(f->input, DE_KEY_DOWN, false);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_LSHIFT, false);
+    input_test_key(f->input, DE_KEY_UP, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->caret, 8u);
+    input_test_key(f->input, DE_KEY_UP, false);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_UP, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->caret, 5u);
+    input_test_key(f->input, DE_KEY_UP, false);
+    edit_frame(f);
+    b->ui->desc.text = NULL;
+    de_ui_attach(b->ui, NULL);
+    de_text_destroy(fonts.t);
+    fonts.t = NULL;
+    runtime_fx_teardown(&fonts);
+}
+#endif
+
+typedef struct edit_journal {
+    de_ui_text_edit edits[128];
+    char payload[128][128];
+    u32 count;
+} edit_journal;
+static void record_edit(de_entity entity, const de_ui_text_edit *edit, void *user) {
+    (void)entity;
+    edit_journal *j = user;
+    ASSERT_TRUE(j->count < 128);
+    ASSERT_TRUE(edit->text.len < 128);
+    u32 i = j->count++;
+    j->edits[i] = *edit;
+    if (edit->text.len)
+        memcpy(j->payload[i], edit->text.ptr, edit->text.len);
+    j->edits[i].text.ptr = j->payload[i];
+}
+TEST(ui_text_input, committed_edit_journal_replays_in_fresh_world_without_raw_input) {
+    edit_fx live = {0};
+    edit_fx_setup(&live);
+    edit_journal journal = {0};
+    de_ui_set_text_edit_observer(live.base.ui, record_edit, &journal);
+    input_test_text(live.input, "abc\n日本");
+    edit_frame(&live);
+    input_test_key(live.input, DE_KEY_LEFT, true);
+    edit_frame(&live);
+    input_test_key(live.input, DE_KEY_LEFT, false);
+    edit_frame(&live);
+    input_test_text(live.input, "!");
+    edit_frame(&live);
+    input_test_key(live.input, DE_KEY_LCTRL, true);
+    input_test_key(live.input, DE_KEY_Z, true);
+    edit_frame(&live);
+    input_test_key(live.input, DE_KEY_Z, false);
+    edit_frame(&live);
+    input_test_key(live.input, DE_KEY_LSHIFT, true);
+    input_test_key(live.input, DE_KEY_Z, true);
+    edit_frame(&live);
+    de_str expected = de_ui_text_input_get(live.base.ui, live.editor);
+    char result[128];
+    memcpy(result, expected.ptr, expected.len + 1);
+    u32 caret = editing(&live)->caret;
+    const de_ui_editor *s =
+        de_entity_get_const(live.base.world, live.editor, live.base.ui->advanced->editor);
+    u32 anchor = s->anchor;
+    EXPECT_TRUE(journal.count > 4);
+    edit_fx_teardown(&live);
+    edit_fx replay = {0};
+    edit_fx_setup(&replay);
+    for (u32 i = 0; i < journal.count; ++i)
+        ASSERT_TRUE(de_ui_text_input_apply(replay.base.ui, replay.editor, &journal.edits[i]));
+    de_str actual = de_ui_text_input_get(replay.base.ui, replay.editor);
+    EXPECT_TRUE(strcmp(actual.ptr, result) == 0);
+    EXPECT_EQ(editing(&replay)->caret, caret);
+    s = de_entity_get_const(replay.base.world, replay.editor, replay.base.ui->advanced->editor);
+    EXPECT_EQ(s->anchor, anchor);
+    /* Replayed commands build actual undo history, rather than just installing snapshots. */
+    ASSERT_TRUE(de_ui_text_input_undo(replay.base.ui, replay.editor));
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(replay.base.ui, replay.editor).ptr, "abc\n日本") == 0);
+    edit_fx_teardown(&replay);
+}
+
+static char document_clipboard[8193];
+static size_t document_clip_get(char *out, size_t cap) {
+    size_t n = strlen(document_clipboard);
+    if (out && cap) {
+        size_t copy = n < cap - 1 ? n : cap - 1;
+        memcpy(out, document_clipboard, copy);
+        out[copy] = 0;
+    }
+    return n;
+}
+static de_result document_clip_set(const char *text) {
+    size_t n = strlen(text);
+    if (n >= sizeof document_clipboard)
+        return DE_ERR_INVALID_ARGUMENT;
+    memmove(document_clipboard, text, n + 1);
+    return DE_OK;
+}
+TEST_F(ui_text_input, document_clipboard_paste_cut_and_undo_preserve_all_bytes, edit_fx) {
+    memset(document_clipboard, 's', 8192);
+    document_clipboard[8192] = 0;
+    f->base.ui->advanced->clipboard_get = document_clip_get;
+    f->base.ui->advanced->clipboard_set = document_clip_set;
+    input_test_key(f->input, DE_KEY_LCTRL, true);
+    input_test_key(f->input, DE_KEY_V, true);
+    edit_frame(f);
+    ASSERT_EQ(editing(f)->length, 8192u);
+    EXPECT_TRUE(memcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, document_clipboard, 8192) ==
+                0);
+    input_test_key(f->input, DE_KEY_V, false);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_A, true);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_A, false);
+    edit_frame(f);
+    input_test_key(f->input, DE_KEY_X, true);
+    edit_frame(f);
+    EXPECT_EQ(editing(f)->length, 0u);
+    EXPECT_EQ(strlen(document_clipboard), 8192u);
+    ASSERT_TRUE(de_ui_text_input_undo(f->base.ui, f->editor));
+    EXPECT_EQ(editing(f)->length, 8192u);
+    EXPECT_TRUE(memcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, document_clipboard, 8192) ==
+                0);
+}

@@ -188,6 +188,8 @@ u32 de_text_layout_hit_test(const de_text_layout *l, de_vec2 p) {
     }
     if (!best)
         return l->byte_count;
+    if (best->x0 == best->x1)
+        return best->start;
     f32 mid = (best->x0 + best->x1) * .5f;
     if (fabsf(p.x - mid) < .0001f)
         return best->start;
@@ -201,9 +203,9 @@ de_vec4 de_text_layout_caret(const de_text_layout *l, u32 offset) {
     const de__layout_cluster *last = NULL;
     for (u32 i = 0; i < l->cluster_count; ++i) {
         const de__layout_cluster *c = &l->clusters[i];
-        if (c->start <= offset && offset < c->end)
+        if (c->start <= offset && (offset < c->end || (c->start == c->end && offset == c->start)))
             return (de_vec4){c->rtl ? c->x1 : c->x0, c->line * l->line_height, 1, l->line_height};
-        if (!last || c->end > last->end)
+        if (c->end <= offset && (!last || c->end > last->end))
             last = c;
     }
     if (last)

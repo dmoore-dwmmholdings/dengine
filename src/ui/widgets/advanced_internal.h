@@ -4,10 +4,13 @@
 #include "ui/render/draw_list.h"
 #include <string.h>
 /* Runtime components contain no owning pointers: archetype moves/copies are safe. */
+typedef struct de_ui_edit_storage de_ui_edit_storage;
 typedef struct de_ui_editor {
     u32 anchor, displayed_caret, preedit_start, preedit_end;
     char display[2048];
-    f32 scroll_x, blink, last_click;
+    de_ui_edit_storage *storage; /* Borrowed; advanced owns storage, keyed by full entity ID. */
+    f32 scroll_x, scroll_y, preferred_x, blink, last_click;
+    bool preferred_valid;
     bool dragging, initialized, suspended;
 } de_ui_editor;
 typedef struct de_ui_scroll_state {
@@ -41,6 +44,9 @@ typedef struct de_ui_advanced {
     de_component input, editor, dropdown, popup, scroll, scroll_state, list, list_state;
     de_component tabs, tab_state, tooltip, tooltip_state, item, header;
     de_entity active_input;
+    de_ui_edit_storage *documents;
+    de_ui_text_edit_observer edit_observer;
+    void *edit_observer_user;
     de_action_map edit_map;
     bool edit_pushed;
     de_entity *entities;
@@ -60,6 +66,17 @@ void de_ui__advanced_detach(de_ui *ui);
 de_component de_ui__advanced_component(de_ui *ui, const char *name, u32 size, u32 align,
                                        const de_field_info *fields, u32 count, bool authored);
 void de_ui__advanced_tag(de_ui *ui, de_entity e, de_ui_widget_type type);
+void de_ui__input_notify(de_ui *ui, de_entity e, de_ui_text_edit edit);
+const char *de_ui__input_data(const DeUiTextInput *in, const de_ui_editor *state);
+const char *de_ui__input_display(const de_ui_editor *state);
+u32 de_ui__input_boundaries(const DeUiTextInput *in, de_ui_editor *state, u32 small[257],
+                            const u32 **out);
+bool de_ui__input_reserve(de_ui_editor *state, u32 bytes);
+void de_ui__input_changed(de_ui_editor *state);
+bool de_ui__input_history(DeUiTextInput *in, de_ui_editor *state, u32 lo, u32 hi, de_str text);
+void de_ui__documents_collect(de_ui *ui, bool all);
+void de_ui__document_prepare(de_ui *ui, de_entity e);
+char *de_ui__input_display_reserve(de_ui_editor *state, u32 bytes);
 void de_ui__input_refresh(de_ui *ui, de_entity e);
 void de_ui__input_prepare(de_ui *ui, de_entity e);
 void de_ui__input_frame(de_ui *ui, de_entity e, f32 dt);

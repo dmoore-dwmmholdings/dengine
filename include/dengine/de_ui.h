@@ -187,10 +187,39 @@ typedef struct DeUiToggle {
     bool on;
 } DeUiToggle;
 typedef struct DeUiTextInput {
-    char buffer[256];
+    char buffer[256]; /**< Legacy inline input. After growth use text_input_get/set. */
     u32 length, caret;
     bool password, multiline;
 } DeUiTextInput;
+/** Semantic committed editor operations for game journals/replay. Selection offsets are
+ * UTF-8 bytes and snap to grapheme boundaries. REPLACE replaces the current selection. */
+typedef enum de_ui_text_edit_kind {
+    DE_UI_TEXT_SELECT,
+    DE_UI_TEXT_REPLACE,
+    DE_UI_TEXT_UNDO,
+    DE_UI_TEXT_REDO
+} de_ui_text_edit_kind;
+typedef struct de_ui_text_edit {
+    de_ui_text_edit_kind kind;
+    de_str text;
+    u32 caret, anchor;
+} de_ui_text_edit;
+/** Observer runs synchronously after successful edits/selection changes. Copy text before
+ * returning; do not reenter UI editing here. Programmatic set() is not an edit command.
+ * IME preedit is transient and not recorded; committed text is recorded. */
+typedef void (*de_ui_text_edit_observer)(de_entity entity, const de_ui_text_edit *edit, void *user);
+DE_API void de_ui_set_text_edit_observer(de_ui *ui, de_ui_text_edit_observer observer, void *user);
+DE_API bool de_ui_text_input_apply(de_ui *ui, de_entity entity, const de_ui_text_edit *edit);
+/** Set a committed UTF-8 document (no embedded NUL), copying into UI-owned storage.
+ * Clears undo history; does not emit CHANGED. Existing inline inputs remain supported.
+ * Runtime documents are not ECS snapshots/serialized data: save via get/set explicitly.
+ * On allocation failure the previous document is preserved. */
+DE_API de_result de_ui_text_input_set(de_ui *ui, de_entity entity, de_str text);
+/** Borrowed committed document, valid until the next edit/set/removal/detach. */
+DE_API de_str de_ui_text_input_get(const de_ui *ui, de_entity entity);
+/** Undo/redo a committed edit, restoring selection and emitting CHANGED. */
+DE_API bool de_ui_text_input_undo(de_ui *ui, de_entity entity);
+DE_API bool de_ui_text_input_redo(de_ui *ui, de_entity entity);
 typedef struct DeUiScroll {
     de_vec2 offset;
     bool horizontal, vertical;

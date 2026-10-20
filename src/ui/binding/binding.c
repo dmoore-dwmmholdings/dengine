@@ -355,21 +355,13 @@ static void apply_text(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
         return;
     }
     if (c->editor.id) {
-        const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
-        size_t length = value.len < c->editor_size - 1 ? value.len : c->editor_size - 1;
-        /* Editor storage is the reflected committed buffer, never password/preedit display text. */
-        if (editor &&
-            (bounded_length((const char *)editor + c->editor_offset, c->editor_size) != length ||
-             memcmp(editor + c->editor_offset, value.ptr, length))) {
-            u8 *edit = de_entity_get(s->ui->world, c->entity, c->editor);
-            memcpy(edit + c->editor_offset, value.ptr, length);
-            edit[c->editor_offset + length] = 0;
-            u32 n = (u32)length;
-            memcpy(edit + c->editor_length, &n, sizeof n);
-            ++s->writes;
-            de_ui_widget_table *table = de_ui__widget_table(s->ui);
-            if (table && table->refresh_text)
-                table->refresh_text(s->ui, c->entity);
+        de_str committed = de_ui_text_input_get(s->ui, c->entity);
+        if (committed.len != value.len ||
+            (value.len && memcmp(committed.ptr, value.ptr, value.len))) {
+            if (de_ui_text_input_set(s->ui, c->entity, value) == DE_OK)
+                ++s->writes;
+            else
+                fail(s, c, "document allocation failed");
         }
         return;
     }
@@ -456,12 +448,9 @@ static void writeback(de_ui_binding_system *s, const de_ui_event *event) {
     if (c->property == DE_UI_BIND_TEXT) {
         de_str text = {0};
         if (c->editor.id) {
-            const u8 *editor = de_entity_get_const(s->ui->world, c->entity, c->editor);
-            if (!editor)
+            text = de_ui_text_input_get(s->ui, c->entity);
+            if (!text.ptr)
                 return;
-            text =
-                (de_str){(const char *)editor + c->editor_offset,
-                         bounded_length((const char *)editor + c->editor_offset, c->editor_size)};
         } else {
             const DeUiText *target_text = de_entity_get_const(s->ui->world, c->entity, c->target);
             if (!target_text)

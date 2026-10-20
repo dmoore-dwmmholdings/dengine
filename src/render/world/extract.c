@@ -403,12 +403,15 @@ static bool add_systems(de__render_world *rw, de_world *w) {
                                            {.terms = probe_terms, .term_count = 2},
                                            {.terms = gi_terms, .term_count = 2},
                                            {.terms = fog_terms, .term_count = 2}};
-    const de_system views = de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
-                                                               .schedule = DE_SCHEDULE_EXTRACT,
-                                                               .fn = sys_views,
-                                                               .user = rw,
-                                                               .queries = view_queries,
-                                                               .query_count = 5});
+    const de_system views =
+        de_system_add(w, &(de_system_desc){.name = SYS_VIEWS,
+                                           .schedule = DE_SCHEDULE_EXTRACT,
+                                           .fn = sys_views,
+                                           /* Freezing view sizes queries the native window. */
+                                           .flags = DE_SYSTEM_MAIN_THREAD,
+                                           .user = rw,
+                                           .queries = view_queries,
+                                           .query_count = 5});
     if (!DE_HANDLE_VALID(views))
         return false;
     const de_system meshes =

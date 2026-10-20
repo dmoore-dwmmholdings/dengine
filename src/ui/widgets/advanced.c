@@ -117,6 +117,7 @@ static void prepare(de_system_ctx *ctx) {
     de_ui_advanced *a = ctx->user;
     de_ui *ui = a->ui;
     a->count = 0;
+    de_ui__documents_collect(ui, false);
     f32 dt = isfinite(ctx->dt) && ctx->dt > 0 ? ctx->dt : 0;
     a->time += dt;
     de_query_each(ui->world, ctx->queries[0], collect, a);
@@ -214,6 +215,7 @@ void de_ui__advanced_detach(de_ui *ui) {
                 }
             }
         }
+        de_ui__documents_collect(ui, true);
         if (a->prepare.id)
             de_system_remove(ui->world, a->prepare);
         if (a->input_system.id)

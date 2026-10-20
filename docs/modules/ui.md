@@ -404,8 +404,9 @@ world UI consumer returns RGB0/212/0 at the panel centre; translating both camer
 and panel by100 km changes zero image codes beyond one step. The static2000-node
 HUD test measures1000 complete UI frames plus Extract with zero heap allocations:
 0.321ms mean in Dev on the tested Apple M5 Pro host; this is not an M1 hardware
-qualification. World-root popup clamping still uses screen bounds (DENG-523);
-advanced world popups remain a deferred limitation.
+qualification. DENG-523 now constrains world-root popups to their panel-local
+extent at scale 1, independently of screen DPI and safe insets. The terminal demo
+checks autocomplete/menu placement at the CRT edge and after panel resizing.
 
 The seven Metal/Base world/pixel references use the original mean0.001/p990.015
 limits. Pixel output additionally checks exact equality within every4×4 block;
@@ -427,3 +428,46 @@ reveals a fully visible offscreen focused button through scrolling, then cancels
 and confirms exit. The saved `menu_replay/advanced_menu.deir` replays in a fresh
 UI/world/input with no device or event injection; per-tick focus, event/value hash,
 action checksum, editor/buffer hash, selection, tab and scroll state agree.
+
+
+### Script documents and terminal integration
+
+`DeUiTextInput.buffer` remains the legacy 255-byte inline field. Real widgets promote
+into UI-owned growable storage when editing exceeds it; use
+`de_ui_text_input_set(ui, entity, text)` to load a document and
+`de_ui_text_input_get(ui, entity)` to read the full committed UTF-8 document.
+`length` and `caret` remain byte offsets; do not read/write `buffer` after promotion.
+Set copies the source, clears history, resets selection/scroll, and preserves the
+previous document on allocation failure. Documents have no fixed widget byte cap
+(the text segmenter requires length below INT32_MAX); memory remains the limit.
+Runtime document/history data is not an ECS snapshot or serialized component: a
+save system must explicitly persist the committed text and restore it with set.
+Memory is reclaimed when the component/entity disappears (at the next UI frame)
+or immediately when UI detaches/destroys. Borrowed get/display pointers expire on
+edit, set, removal or detach.
+
+Each input retains 128 committed edit transactions with deleted/inserted bytes
+and original selection. Ctrl/Cmd+Z undoes; Ctrl/Cmd+Shift+Z or Ctrl+Y redoes. A new
+edit discards the redo branch. Unicode grapheme boundaries apply to selection,
+movement and deletion. Multiline Up/Down uses shaped visual lines and keeps the
+preferred horizontal position across short lines; Shift extends selection.
+Home/End moves within the logical line; Ctrl/Cmd+Home/End moves to document ends.
+The editor scrolls vertically to keep the caret visible. Clipboard operations use
+full document-sized buffers. IME preedit is displayed separately from committed
+text, including for document-backed and password inputs.
+
+`de_ui_text_input_apply` exposes SELECT/REPLACE/UNDO/REDO commands. An optional
+`de_ui_set_text_edit_observer` receives successful commands synchronously; copy
+borrowed payloads before returning and do not reenter editing from the callback.
+This supports deterministic game journals without recording OS devices. Transient
+IME preedit is not recorded. The existing `.deir` format still records resolved
+fixed-tick game actions, not text or raw mouse selections; the terminal example
+uses an explicit companion `.tuij` journal for committed edits and mode changes.
+
+See `examples/terminal_demo/README.md` for the runnable world-panel example and
+its walking/editing focus and capture handoff, paused aircraft marker, CRT-bounded
+completion menu, and save/replay controls. Pausing the aircraft does not pause UI
+PreUpdate/PostUpdate; integration coverage also omits FixedUpdate while editing.
+The example demonstrates editor integration, not a scripting-language runtime or
+the game's full aircraft simulation. A new candidate pin does not change the
+game project's accepted submodule revision automatically.
