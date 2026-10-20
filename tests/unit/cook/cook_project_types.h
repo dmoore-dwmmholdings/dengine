@@ -7,7 +7,7 @@
  * so both cook the project into the same bytes.
  *
  * No test framework here: the game library includes it too. The importer exists only where the
- * cooker is linked (DE_HAS_COOKER: Debug and Dev).
+ * cooker is linked (Debug/Dev runtime or an explicitly tool-linked test).
  *
  * `cooktext` imports text upper-cased, declares the sub-asset `lower` (type `cooktext`, the text
  * lower-cased) and, with the setting `dep = "<asset id>"`, a dependency. `fail = true` makes the
@@ -38,7 +38,7 @@ static const de_field_info k_cookspin_fields[] = {
                 {0, 0, 0, 0, "blob", 0}),
 };
 
-#if DE_HAS_COOKER
+#if DE_HAS_COOKER || defined(DE_COOK_TEST_IMPORTERS)
 static inline de_result cct_cooktext_import(de_asset_import_ctx *ctx) {
     if (de_asset_import_setting_bool(ctx, "fail", false))
         return de_asset_import_fail(ctx, DE_ERR_PARSE, "cooktext: asked to fail");
@@ -95,7 +95,7 @@ static inline de_result cct_register_types(void *user, de_asset_system *s,
     memset(&d, 0, sizeof d);
     d.name = "cooktext";
     d.importer_version = 1;
-#if DE_HAS_COOKER
+#if DE_HAS_COOKER || defined(DE_COOK_TEST_IMPORTERS)
     d.import = cct_cooktext_import;
 #endif
     d.load = cct_cooktext_load;
