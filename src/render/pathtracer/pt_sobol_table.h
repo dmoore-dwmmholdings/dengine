@@ -67,7 +67,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DE_RENDER_PT_SOBOL_TABLE_H
 #include <dengine/de_base.h>
 #define DE__PT_SOBOL_DIMENSIONS 1024u
-#define DE__PT_SOBOL_BITS 32u
+#define DE__PT_SOBOL_BITS       32u
 // clang-format off
 static const u32 de__pt_sobol_directions[1024 * 32] = {
     0x80000000u, 0x40000000u, 0x20000000u, 0x10000000u, 0x08000000u, 0x04000000u, 0x02000000u, 0x01000000u,

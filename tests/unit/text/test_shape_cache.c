@@ -82,9 +82,9 @@ TEST_F(shape_cache, concurrent_workers, runtime_fx) {
     concurrent_shape c = {f->t, f->latin};
     de_thread *threads[4];
     for (u32 i = 0; i < 4; ++i)
-        ASSERT_EQ(de_thread_create(shape_thread, &c, "shape test", DE_THREAD_NORMAL, 0,
-                                   &threads[i]),
-                  DE_OK);
+        ASSERT_EQ(
+            de_thread_create(shape_thread, &c, "shape test", DE_THREAD_NORMAL, 0, &threads[i]),
+            DE_OK);
     for (u32 i = 0; i < 4; ++i)
         EXPECT_EQ(de_thread_join(threads[i]), 0);
 }
