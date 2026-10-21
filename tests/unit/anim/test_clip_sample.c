@@ -79,6 +79,71 @@ TEST_F(anim, hierarchy_and_double_world_bone, anim_fixture) {
             EXPECT_TRUE(fabsf(entry->palette[j].m[k] - identity.m[k]) < 1e-3f);
         }
 }
+typedef struct stage_probe {
+    anim_fixture *fixture;
+    de_entity entity;
+    u32 count;
+    de_result mutation_result;
+    de__anim_stage order[DE_ANIM_STAGE_COUNT];
+} stage_probe;
+typedef struct stage_probe_hook {
+    stage_probe *probe;
+    de__anim_stage stage;
+} stage_probe_hook;
+static void probe_stage(de_anim_system *s, void *user) {
+    stage_probe_hook *hook = user;
+    stage_probe *p = hook->probe;
+    ASSERT_TRUE(p->count < DE_ANIM_STAGE_COUNT);
+    p->order[p->count++] = hook->stage;
+    ASSERT_EQ(s->job_count, 1u);
+    de__anim_entry *e = &s->entries[s->jobs[0]];
+    ASSERT_TRUE(e->ready);
+    if (hook->stage == DE_ANIM_STAGE_SAMPLE) {
+        /* Actual clip sampling has already run, not merely a stage notification. */
+        EXPECT_TRUE(fabsf(e->local[0].t[0] - .5f) < 1e-5f);
+        p->mutation_result = de_anim__register_stage(s, DE_ANIM_STAGE_BLEND, probe_stage, user);
+    } else if (hook->stage == DE_ANIM_STAGE_BLEND) {
+        e->local[0].t[0] += 1;
+    } else if (hook->stage == DE_ANIM_STAGE_ROOT_MOTION) {
+        DeTransform *t = de_entity_get(p->fixture->world, p->entity, s->builtins.transform);
+        t->position.x = 1000000000.25;
+    } else if (hook->stage == DE_ANIM_STAGE_IK) {
+        e->local[0].t[1] = 2;
+    } else {
+        EXPECT_TRUE(e->finalized);
+        EXPECT_TRUE(fabsf(e->model[0].m[9] - 1.5f) < 1e-5f);
+        EXPECT_TRUE(fabsf(e->model[0].m[10] - 2) < 1e-5f);
+    }
+}
+TEST_F(anim, postupdate_pipeline_precedes_transform_and_finalizes_output, anim_fixture) {
+    load_assets(f, 2);
+    de_entity entity = spawn_animator(f);
+    stage_probe probe = {.fixture = f, .entity = entity};
+    stage_probe_hook hooks[DE_ANIM_STAGE_COUNT];
+    for (u32 i = 0; i < DE_ANIM_STAGE_COUNT; ++i) {
+        hooks[i] = (stage_probe_hook){&probe, (de__anim_stage)i};
+        ASSERT_EQ(de_anim__register_stage(f->anim, (de__anim_stage)i, probe_stage, &hooks[i]),
+                  DE_OK);
+    }
+    EXPECT_EQ(de_anim__register_stage(f->anim, DE_ANIM_STAGE_SAMPLE, probe_stage, &hooks[0]),
+              DE_ERR_ALREADY_EXISTS);
+    EXPECT_EQ(de_anim__register_stage(f->anim, DE_ANIM_STAGE_COUNT, probe_stage, &hooks[0]),
+              DE_ERR_INVALID_ARGUMENT);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_UPDATE, .25f, 0), DE_OK);
+    EXPECT_EQ(probe.count, 0u);
+    const DeAnimator *a = de_entity_get_const(f->world, entity, de_anim_component(f->anim));
+    EXPECT_TRUE(a->time == 0.f);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, .25f, 0), DE_OK);
+    EXPECT_EQ(probe.count, (u32)DE_ANIM_STAGE_COUNT);
+    for (u32 i = 0; i < probe.count; ++i)
+        EXPECT_EQ(probe.order[i], (de__anim_stage)i);
+    EXPECT_EQ(probe.mutation_result, DE_ERR_INVALID_ARGUMENT);
+    /* Newly added global transforms become visible at the PostUpdate sync point. */
+    de_transform bone;
+    ASSERT_TRUE(de_anim_bone_transform(f->world, entity, de_name_from("joint0"), &bone));
+    EXPECT_TRUE(fabs(bone.position.x - 1000000001.75) < 1e-6);
+    EXPECT_TRUE(fabs(bone.position.y - 2) < 1e-5);
+}
 TEST_F(anim, no_alloc_thousand_sixty_bones, anim_fixture) {
     load_assets(f, 60);
     for (u32 i = 0; i < 1000; ++i)
@@ -87,13 +152,15 @@ TEST_F(anim, no_alloc_thousand_sixty_bones, anim_fixture) {
         anim_frame(f, 1.f / 60);
     de_alloc_guard guard = {0};
     de_alloc_guard_begin(&guard);
+    const u32 frames = 1000;
     u64 start = de_time_now_ns();
-    for (u32 i = 0; i < 10; ++i)
+    for (u32 i = 0; i < frames; ++i)
         anim_frame(f, 1.f / 60);
     u64 elapsed = de_time_now_ns() - start;
     de_alloc_guard_end(&guard);
     printf("1000x60 task sampled/finalized mean %.4fms, allocation offences %llu\n",
-           (double)elapsed / 1e7, (unsigned long long)de_alloc_guard_offences(&guard));
+           (double)elapsed / ((double)frames * 1e6),
+           (unsigned long long)de_alloc_guard_offences(&guard));
     DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
 }
 

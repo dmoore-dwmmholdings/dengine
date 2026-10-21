@@ -147,6 +147,8 @@ static void sample(de_system_ctx *ctx) {
         de_task_parallel_for(s->tasks, s->job_count, 32, sample_range, s);
     else
         sample_range(0, s->job_count, s);
+    for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage < DE_ANIM_STAGE_FINALIZE; ++stage)
+        de__anim_run_stage(s, stage);
 }
 static void finalize(de_system_ctx *ctx) {
     de_anim_system *s = ctx->user;
@@ -166,6 +168,7 @@ static void finalize(de_system_ctx *ctx) {
             e->ended = false;
         }
     }
+    de__anim_run_stage(s, DE_ANIM_STAGE_FINALIZE);
 }
 static void construct(void *object) {
     DeAnimator *a = object;
@@ -259,17 +262,20 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
     s->world = world;
     const de_query_term term = {s->component, DE_WRITE};
     const de_query_desc query = {.terms = &term, .term_count = 1};
+    const char *before[] = {DE_TRANSFORM_PROPAGATE_SYSTEM};
     s->sample =
-        de_system_add(world, &(de_system_desc){.name = "Anim.Sample",
-                                               .schedule = DE_SCHEDULE_UPDATE,
+        de_system_add(world, &(de_system_desc){.name = "anim.evaluate",
+                                               .schedule = DE_SCHEDULE_POST_UPDATE,
                                                .fn = sample,
                                                .user = s,
                                                .flags = DE_SYSTEM_MAIN_THREAD | DE_SYSTEM_EXCLUSIVE,
+                                               .before = before,
+                                               .before_count = 1,
                                                .queries = &query,
                                                .query_count = 1});
     const char *after[] = {DE_TRANSFORM_PROPAGATE_SYSTEM};
     s->finalize =
-        de_system_add(world, &(de_system_desc){.name = "Anim.Finalize",
+        de_system_add(world, &(de_system_desc){.name = "anim.finalize",
                                                .schedule = DE_SCHEDULE_POST_UPDATE,
                                                .fn = finalize,
                                                .user = s,

@@ -14,7 +14,10 @@ DE_HANDLE(de_anim_graph); /* asset: blend trees + state machines, authored as da
 DE_API de_result de_anim_create(const de_allocator *a, de_asset_system *assets,
                                 de_anim_system **out);
 DE_API void de_anim_destroy(de_anim_system *s);
-/* Registers components and systems: sample → blend → IK → pose → GPU skinning upload. */
+/** Registers variable-time evaluation in PostUpdate before transform propagation,
+ * then model-pose finalization and skinning upload after propagation. The internal
+ * pipeline reserves ordered sample, blend, root-motion, IK and finalize stages.
+ * Deterministic FixedUpdate evaluation is not implemented yet. */
 DE_API void de_anim_attach(de_anim_system *s, de_world *w);
 
 /* ---------- Parameters (drive transitions and blend weights) ---------- */

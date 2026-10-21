@@ -28,6 +28,24 @@ typedef struct de__anim_entry {
     u64 *names;
     bool ready, ended, finalized;
 } de__anim_entry;
+typedef enum de__anim_stage {
+    DE_ANIM_STAGE_SAMPLE,
+    DE_ANIM_STAGE_BLEND,
+    DE_ANIM_STAGE_ROOT_MOTION,
+    DE_ANIM_STAGE_IK,
+    DE_ANIM_STAGE_FINALIZE,
+    DE_ANIM_STAGE_COUNT
+} de__anim_stage;
+/* Stage callbacks run on the main thread between the built-in passes. They may
+ * dispatch/join their own jobs over ready entries, but must not change world
+ * structure (the gathered component pointers stay borrowed until finalize).
+ * Register on the main thread between schedules; user storage outlives s. */
+typedef void (*de__anim_stage_fn)(de_anim_system *s, void *user);
+typedef struct de__anim_stage_hook {
+    de__anim_stage_fn fn;
+    void *user;
+} de__anim_stage_hook;
+#define DE__ANIM_STAGE_HOOK_CAPACITY 8u
 struct de_anim_system {
     const de_allocator *alloc;
     de_asset_system *assets;
@@ -46,7 +64,12 @@ struct de_anim_system {
     u32 job_capacity, job_count;
     u64 epoch;
     f32 dt;
+    de__anim_stage_hook stages[DE_ANIM_STAGE_COUNT][DE__ANIM_STAGE_HOOK_CAPACITY];
+    u32 stage_counts[DE_ANIM_STAGE_COUNT];
+    bool dispatching_stages;
 };
+de_result de_anim__register_stage(de_anim_system *, de__anim_stage, de__anim_stage_fn, void *);
+void de__anim_run_stage(de_anim_system *, de__anim_stage);
 bool de__anim_sample(const de_cooked_clip_view *, const de_cooked_skeleton_view *, f32,
                      de_cooked_joint_pose *);
 f32 de__anim_time(f32 time, f32 duration, f32 speed, f32 dt, bool loop, bool *ended);
