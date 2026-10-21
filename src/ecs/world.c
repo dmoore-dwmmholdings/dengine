@@ -162,3 +162,6 @@ u64 de_world_tick(const de_world *w) {
 de_type_registry *de_world_types(const de_world *w) {
     return w ? w->types : NULL;
 }
+de_task_system *de_world_task_system(const de_world *w) {
+    return w ? w->tasks : NULL;
+}

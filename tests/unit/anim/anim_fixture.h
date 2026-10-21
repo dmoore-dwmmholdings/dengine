@@ -149,7 +149,7 @@ typedef struct anim_fixture {
     de_gpu_buffer readback;
 #endif
 } anim_fixture;
-static void anim_fixture_setup(anim_fixture *f) {
+static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
     static bool mounted;
     if (!mounted) {
         /* CTest runs separate cases concurrently; their clips have different joint counts. */
@@ -183,6 +183,7 @@ static void anim_fixture_setup(anim_fixture *f) {
                                                              .tasks = f->tasks,
                                                              .types = f->types,
                                                              .io_threads = 1,
+                                                             .hot_reload = hot_reload,
                                                              .cache_dir = "animtest:/cache"},
                                      &f->assets),
               DE_OK);
@@ -190,6 +191,9 @@ static void anim_fixture_setup(anim_fixture *f) {
     de_anim_set_task_system(f->anim, f->tasks);
     de_anim_attach(f->anim, f->world);
     ASSERT_TRUE(de_anim_component(f->anim).id);
+}
+static void anim_fixture_setup(anim_fixture *f) {
+    anim_fixture_setup_options(f, false);
 }
 static void anim_fixture_teardown(anim_fixture *f) {
     if (f->anim)

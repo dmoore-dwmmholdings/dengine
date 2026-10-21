@@ -14,7 +14,16 @@ DE_HANDLE(de_anim_graph); /* asset: blend trees + state machines, authored as da
 DE_API de_result de_anim_create(const de_allocator *a, de_asset_system *assets,
                                 de_anim_system **out);
 DE_API void de_anim_destroy(de_anim_system *s);
-/* Registers components and systems: sample → blend → IK → pose → GPU skinning upload. */
+/** Registers variable-time evaluation in PostUpdate before transform propagation,
+ * then model-pose finalization and skinning upload after propagation. The internal
+ * pipeline reserves ordered sample, blend, root-motion, IK and finalize stages.
+ * Deterministic FixedUpdate evaluation is not implemented yet.
+ *
+ * Main thread, between schedules. One animation system may own a world; attaching
+ * the same system to that world again is a no-op. On failure an initially
+ * unattached system stays unattached, de_anim_component() is invalid and the error
+ * context describes the failure. Retry is allowed; engine type/component/event
+ * definitions may remain registered, but no partial systems or resource remain. */
 DE_API void de_anim_attach(de_anim_system *s, de_world *w);
 
 /* ---------- Parameters (drive transitions and blend weights) ---------- */
