@@ -38,6 +38,11 @@ jobs:
       - name: Configure
         run: cmake --preset "${PRESET}"
 
+      # Compile preparation uses the same owning-target list as the assembly
+      # check. Its 120-second instruction-verification bound remains unchanged.
+      - name: Build deterministic objects
+        run: cmake --build --preset "${PRESET}" --target de_deterministic_objects
+
       # header_check (C11 + C++17 compile of every public header), layering_check
       # (tools/check_layers/check_layers.py), layering_selftest, vendor_selftest and
       # deterministic_asm_check (builds the deterministic targets, then disassembles them).
