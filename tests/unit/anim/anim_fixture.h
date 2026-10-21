@@ -203,7 +203,7 @@ static void anim_fixture_teardown(anim_fixture *f) {
     free(f->clip_blob.data);
     EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).bytes_live, 0u);
 }
-static void load_assets(anim_fixture *f, u32 joints) {
+static inline void load_assets(anim_fixture *f, u32 joints) {
     f->skel_blob = skeleton_blob(joints);
     f->clip_blob = clip_blob(joints);
     ASSERT_EQ(
@@ -226,7 +226,7 @@ static void load_assets(anim_fixture *f, u32 joints) {
     f->clip = de_anim_clip_asset(f->anim, de_asset_id_from("test/clip"));
     ASSERT_TRUE(f->skeleton.id && f->clip.id);
 }
-static de_entity spawn_animator(anim_fixture *f) {
+static inline de_entity spawn_animator(anim_fixture *f) {
     de_component components[] = {de_anim_component(f->anim),
                                  de_builtin_components(f->world).transform};
     de_entity entity;
@@ -238,7 +238,7 @@ static de_entity spawn_animator(anim_fixture *f) {
         de_transform_identity();
     return entity;
 }
-static void anim_frame(anim_fixture *f, f32 dt) {
+static inline void anim_frame(anim_fixture *f, f32 dt) {
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_UPDATE, dt, 0), DE_OK);
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, dt, 0), DE_OK);
 }

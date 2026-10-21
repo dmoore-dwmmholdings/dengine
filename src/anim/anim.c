@@ -255,6 +255,7 @@ de_result de_anim_create(const de_allocator *allocator, de_asset_system *assets,
 void de_anim_destroy(de_anim_system *s) {
     if (!s)
         return;
+    de__sprite_shutdown(s);
     if (s->world) {
         de_system_remove(s->world, s->sample);
         de_system_remove(s->world, s->finalize);
@@ -346,9 +347,12 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
                                                .after_count = 1});
     if (!s->finalize.id)
         goto failed;
+    if (de__anim_features_init(s, world) != DE_OK)
+        goto failed;
     s->world = world;
     return;
 failed:
+    de__sprite_shutdown(s);
     if (s->sample.id)
         de_system_remove(world, s->sample);
     if (s->finalize.id)
