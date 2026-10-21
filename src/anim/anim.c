@@ -6,9 +6,15 @@
 typedef struct DeAnimSystemRef {
     de_anim_system *system;
 } DeAnimSystemRef;
+_Static_assert((size_t)DE_COOKED_SKEL_MAX_JOINTS *
+                           (sizeof(de_quat) + 2 * sizeof(de_vec3) + 2 * sizeof(de_affine) +
+                            sizeof(u64) + 3 * sizeof(u32)) +
+                       64 <=
+                   ((size_t)16 << (DE__ANIM_POSE_POOL_CLASSES - 1)),
+               "pose pools must cover every validated cooked skeleton/clip layout");
 static void release_entry(de_anim_system *s, de__anim_entry *entry) {
     if (entry->block)
-        DE_FREE(s->alloc, entry->block, entry->bytes);
+        de_pool_free(entry->pose_pool, entry->block);
     if (s->assets) {
         if (entry->skeleton_ref.id)
             de_asset_release(s->assets, entry->skeleton_ref);
@@ -54,12 +60,33 @@ static void retain(de_anim_system *s, u32 handle, de_load_handle *out) {
     const de__slot *slot = s->assets ? de__slot_get(s->assets, handle) : NULL;
     *out = slot ? de_asset_load(s->assets, slot->id, DE_LOAD_NO_EVENTS) : (de_load_handle){0};
 }
+static de_pool *pose_pool(de_anim_system *s, size_t bytes) {
+    size_t size = 16;
+    u32 bucket = 0;
+    while (size < bytes && bucket + 1 < DE__ANIM_POSE_POOL_CLASSES) {
+        size *= 2;
+        ++bucket;
+    }
+    if (size < bytes)
+        return NULL;
+    if (!s->pose_pools[bucket] && de_pool_create(&(de_pool_desc){.block_size = size,
+                                                                 .block_align = 16,
+                                                                 .backing = s->alloc,
+                                                                 .tag = DE_MEM_GENERAL},
+                                                 &s->pose_pools[bucket]) != DE_OK)
+        return NULL;
+    return s->pose_pools[bucket];
+}
 static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skeleton_view *skel,
                     u32 tracks) {
     if (e->block && e->joints == skel->joint_count && e->mesh_joints == skel->mesh_joint_count &&
         e->cursor.capacity == tracks)
         return true;
-    size_t local = (size_t)skel->joint_count * sizeof(de_cooked_joint_pose);
+    size_t rotations = (size_t)skel->joint_count * sizeof(de_quat);
+    size_t vectors = (size_t)skel->joint_count * sizeof(de_vec3);
+    size_t translations_offset = (rotations + 15) & ~(size_t)15;
+    size_t scales_offset = (translations_offset + vectors + 15) & ~(size_t)15;
+    size_t local = scales_offset + vectors;
     size_t models = (size_t)skel->joint_count * sizeof(de_affine);
     size_t palette = (size_t)skel->mesh_joint_count * sizeof(de_affine);
     size_t names = (size_t)skel->joint_count * sizeof(u64);
@@ -67,18 +94,24 @@ static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skelet
     size_t names_offset = (palette_offset + palette + 7) & ~(size_t)7;
     size_t cursor_offset = names_offset + names,
            total = cursor_offset + (size_t)tracks * sizeof(u32);
-    void *block = DE_ALLOC(s->alloc, total ? total : 16, 16, DE_MEM_GENERAL);
+    de_pool *pool = pose_pool(s, total);
+    void *block = pool ? de_pool_alloc(pool) : NULL;
     if (!block)
         return false;
     if (e->block)
-        DE_FREE(s->alloc, e->block, e->bytes);
+        de_pool_free(e->pose_pool, e->block);
     memset(block, 0, total);
     e->block = block;
+    e->pose_pool = pool;
     e->bytes = total ? total : 16;
     e->joints = skel->joint_count;
     e->mesh_joints = skel->mesh_joint_count;
     e->finalized = false;
-    e->local = block;
+    e->local = (de__anim_local_pose){.count = skel->joint_count,
+                                     .rotations = block,
+                                     .translations = (de_vec3 *)((u8 *)block + translations_offset),
+                                     .scales = (de_vec3 *)((u8 *)block + scales_offset),
+                                     .root_rotation = {0, 0, 0, 1}};
     e->model = (de_affine *)((u8 *)block + model_offset);
     e->palette = (de_affine *)((u8 *)block + palette_offset);
     e->names = (u64 *)((u8 *)block + names_offset);
@@ -140,7 +173,7 @@ static void sample_range(u32 begin, u32 end, void *user) {
                 e->ended = true;
             }
         }
-        if (!de__anim_sample_cached(&e->clip, &e->skeleton, a->time, e->local, &e->cursor))
+        if (!de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor))
             e->ready = false;
     }
 }
@@ -166,7 +199,7 @@ static void finalize(de_system_ctx *ctx) {
         de__anim_entry *e = &s->entries[s->jobs[i]];
         if (!e->ready || !de_entity_alive(s->world, e->entity))
             continue;
-        de__anim_pose(&e->skeleton, e->local, e->model, e->palette);
+        de__anim_pose(&e->skeleton, &e->local, e->model, e->palette);
         e->finalized = true;
 #if DE_HAS_RENDER
         if (s->renderer)
@@ -218,6 +251,8 @@ void de_anim_destroy(de_anim_system *s) {
     }
     for (u32 i = 0; i < s->capacity; ++i)
         release_entry(s, &s->entries[i]);
+    for (u32 i = 0; i < DE__ANIM_POSE_POOL_CLASSES; ++i)
+        de_pool_destroy(s->pose_pools[i]);
     if (s->entries)
         DE_FREE(s->alloc, s->entries, (size_t)s->capacity * sizeof *s->entries);
     if (s->jobs)

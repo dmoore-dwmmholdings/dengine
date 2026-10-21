@@ -100,17 +100,20 @@ static void probe_stage(de_anim_system *s, void *user) {
     ASSERT_TRUE(e->ready);
     if (hook->stage == DE_ANIM_STAGE_SAMPLE) {
         /* Actual clip sampling has already run, not merely a stage notification. */
-        EXPECT_TRUE(fabsf(e->local[0].t[0] - .5f) < 1e-5f);
+        EXPECT_TRUE(fabsf(e->local.translations[0].x - .5f) < 1e-5f);
+        EXPECT_TRUE(e->local.root_translation.x == 0 && e->local.root_rotation.w == 1);
         p->mutation_result = de_anim__register_stage(s, DE_ANIM_STAGE_BLEND, probe_stage, user);
     } else if (hook->stage == DE_ANIM_STAGE_BLEND) {
-        e->local[0].t[0] += 1;
+        e->local.translations[0].x += 1;
+        e->local.root_translation.x = .125f;
     } else if (hook->stage == DE_ANIM_STAGE_ROOT_MOTION) {
         DeTransform *t = de_entity_get(p->fixture->world, p->entity, s->builtins.transform);
         t->position.x = 1000000000.25;
     } else if (hook->stage == DE_ANIM_STAGE_IK) {
-        e->local[0].t[1] = 2;
+        e->local.translations[0].y = 2;
     } else {
         EXPECT_TRUE(e->finalized);
+        EXPECT_TRUE(e->local.root_translation.x == .125f);
         EXPECT_TRUE(fabsf(e->model[0].m[9] - 1.5f) < 1e-5f);
         EXPECT_TRUE(fabsf(e->model[0].m[10] - 2) < 1e-5f);
     }

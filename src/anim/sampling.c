@@ -62,9 +62,12 @@ static void sample_track(const de_cooked_clip_view *clip, const de_cooked_clip_t
             out[c] = a[c] + (b[c] - a[c]) * alpha;
 }
 
-bool de__anim_sample_cached(const de_cooked_clip_view *clip, const de_cooked_skeleton_view *skel,
-                            f32 time, de_cooked_joint_pose *out, de__anim_clip_cursor *cursor) {
-    if (!clip || !skel || !out || !cursor || clip->joint_count != skel->joint_count ||
+static bool sample_into(const de_cooked_clip_view *clip, const de_cooked_skeleton_view *skel,
+                        f32 time, de_cooked_joint_pose *out, de__anim_local_pose *pose,
+                        de__anim_clip_cursor *cursor) {
+    if (!clip || !skel || (!out && !pose) || !cursor || clip->joint_count != skel->joint_count ||
+        (pose && (pose->count != skel->joint_count ||
+                  (pose->count && (!pose->rotations || !pose->translations || !pose->scales)))) ||
         cursor->capacity < clip->track_count || (clip->track_count && !cursor->keys))
         return false;
     if (!(time > 0))
@@ -72,16 +75,44 @@ bool de__anim_sample_cached(const de_cooked_clip_view *clip, const de_cooked_ske
     if (time > clip->duration)
         time = clip->duration;
     bool forward = cursor->valid && cursor->clip_base == clip->base && time >= cursor->time;
-    for (u32 j = 0; j < skel->joint_count; ++j)
-        out[j] = de_cooked_skeleton_rest(skel, j);
+    if (pose) {
+        pose->root_translation = (de_vec3){0};
+        pose->root_rotation = (de_quat){0, 0, 0, 1};
+    }
+    for (u32 j = 0; j < skel->joint_count; ++j) {
+        de_cooked_joint_pose rest = de_cooked_skeleton_rest(skel, j);
+        if (pose)
+            de__anim_pose_set_joint(pose, j, rest);
+        else
+            out[j] = rest;
+    }
     for (u32 i = 0; i < clip->track_count; ++i) {
         de_cooked_clip_track track = de_cooked_clip_get_track(clip, i);
         f32 value[4] = {0};
         sample_track(clip, &track, time, forward, &cursor->keys[i], cursor, value);
-        de_cooked_clip_apply(&track, value, &out[track.joint]);
+        if (!pose)
+            de_cooked_clip_apply(&track, value, &out[track.joint]);
+        else if (track.channel == DE_COOKED_CLIP_CH_ROTATION)
+            pose->rotations[track.joint] = (de_quat){value[0], value[1], value[2], value[3]};
+        else if (track.channel == DE_COOKED_CLIP_CH_TRANSLATION)
+            pose->translations[track.joint] = (de_vec3){value[0], value[1], value[2]};
+        else
+            pose->scales[track.joint] = track.components == 1
+                                            ? (de_vec3){value[0], value[0], value[0]}
+                                            : (de_vec3){value[0], value[1], value[2]};
     }
     cursor->clip_base = clip->base;
     cursor->time = time;
     cursor->valid = true;
     return true;
+}
+
+bool de__anim_sample_cached(const de_cooked_clip_view *clip, const de_cooked_skeleton_view *skel,
+                            f32 time, de_cooked_joint_pose *out, de__anim_clip_cursor *cursor) {
+    return sample_into(clip, skel, time, out, NULL, cursor);
+}
+bool de__anim_sample_pose_cached(const de_cooked_clip_view *clip,
+                                 const de_cooked_skeleton_view *skel, f32 time,
+                                 de__anim_local_pose *pose, de__anim_clip_cursor *cursor) {
+    return sample_into(clip, skel, time, NULL, pose, cursor);
 }
