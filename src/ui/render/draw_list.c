@@ -51,6 +51,13 @@ static bool less(const de_ui_draw_node *a, const de_ui_draw_node *b) {
     return a->tree < b->tree;
 }
 static void sort_nodes(struct de_ui_render *r) {
+    /* Tree traversal already orders uniform HUDs. Check every frame so z/popup
+     * changes still take the full sort path without retaining stale order. */
+    u32 ordered = 1;
+    while (ordered < r->node_count && !less(&r->nodes[ordered], &r->nodes[ordered - 1]))
+        ++ordered;
+    if (ordered >= r->node_count)
+        return;
     for (u32 width = 1; width < r->node_count; width *= 2) {
         for (u32 first = 0; first < r->node_count; first += width * 2) {
             u32 mid = first + width < r->node_count ? first + width : r->node_count;
