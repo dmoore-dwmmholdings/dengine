@@ -68,6 +68,7 @@ struct de_anim_system {
     bool renderer_explicit;
     de_world *world;
     de_component component;
+    de_component ik_component, sprite_component;
     de_builtin_component_ids builtins;
     de_resource_id resource;
     de_event_type events;
@@ -95,5 +96,6 @@ f32 de__anim_time(f32 time, f32 duration, f32 speed, f32 dt, bool loop, bool *en
 void de__anim_pose(const de_cooked_skeleton_view *, const de__anim_local_pose *, de_affine *,
                    de_affine *);
 de_result de__anim_register_assets(de_anim_system *s);
+de_result de__anim_register_components(de_anim_system *s, de_world *w);
 const de__anim_asset *de__anim_asset_get(de_anim_system *, u32, const char *);
 #endif

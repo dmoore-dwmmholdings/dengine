@@ -213,13 +213,6 @@ static void finalize(de_system_ctx *ctx) {
     }
     de__anim_run_stage(s, DE_ANIM_STAGE_FINALIZE);
 }
-static void construct(void *object) {
-    DeAnimator *a = object;
-    memset(a, 0, sizeof *a);
-    a->speed = 1;
-    a->playing = true;
-    a->loop = true;
-}
 de_result de_anim_create(const de_allocator *allocator, de_asset_system *assets,
                          de_anim_system **out) {
     if (!out)
@@ -261,6 +254,11 @@ void de_anim_destroy(de_anim_system *s) {
 }
 static de_type_id register_type(de_type_registry *types, de_type_desc desc) {
     de_type_id id = de_type_find(types, desc.name);
+    const de_type_desc *existing = de_type_get(types, id);
+    if (id.id && (!existing || existing->size != desc.size || existing->align != desc.align)) {
+        (void)DE_FAIL(DE_ERR_ALREADY_EXISTS, "animation type conflict: %s", desc.name);
+        return (de_type_id){0};
+    }
     if (!id.id)
         id = de_type_register(types, &desc);
     return id;
@@ -273,38 +271,36 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
         return;
     }
     de_type_registry *types = de_world_types(world);
-    static const de_field_info fields[] = {
-        DE_FIELD(DeAnimator, skeleton, DE_FK_U32, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, graph, DE_FK_U32, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, clip, DE_FK_U32, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, speed, DE_FK_F32, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, time, DE_FK_F32, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, playing, DE_FK_BOOL, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, loop, DE_FK_BOOL, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, root_motion, DE_FK_BOOL, DE_FIELD_DEFAULT),
-        DE_FIELD(DeAnimator, deterministic, DE_FK_BOOL, DE_FIELD_DEFAULT)};
-    de_type_desc desc = DE_TYPE_DESC(DeAnimator, 1, fields);
-    desc.hooks.construct = construct;
-    de_type_id id = register_type(types, desc);
-    if (!id.id)
+    de_type_id ref_type = de_type_find(types, "DeAnimSystemRef");
+    if (ref_type.id && de_resource_find(world, ref_type).id) {
+        (void)DE_FAIL(DE_ERR_ALREADY_EXISTS, "world already has an animation system");
         return;
-    s->component = de_component_register(world, id, 0);
-    if (!s->component.id)
+    }
+    if (de__anim_register_components(s, world) != DE_OK)
         return;
     s->builtins = de_builtin_components(world);
+    if (!s->builtins.transform.id || !s->builtins.global_transform.id)
+        goto failed;
     de_type_id resource = register_type(types, (de_type_desc){.name = "DeAnimSystemRef",
                                                               .size = sizeof(DeAnimSystemRef),
                                                               .align = DE_ALIGNOF(DeAnimSystemRef),
                                                               .version = 1,
                                                               .is_pod = true});
+    if (!resource.id)
+        goto failed;
     s->resource = de_resource_insert(world, resource, &(DeAnimSystemRef){s});
+    if (!s->resource.id)
+        goto failed;
     de_type_id event = register_type(types, (de_type_desc){.name = "de_anim_event",
                                                            .size = sizeof(de_anim_event),
                                                            .align = DE_ALIGNOF(de_anim_event),
                                                            .version = 1,
                                                            .is_pod = true});
+    if (!event.id)
+        goto failed;
     s->events = de_event_register(world, event);
-    s->world = world;
+    if (!s->events.id)
+        goto failed;
     const de_query_term term = {s->component, DE_WRITE};
     const de_query_desc query = {.terms = &term, .term_count = 1};
     const char *before[] = {DE_TRANSFORM_PROPAGATE_SYSTEM};
@@ -318,6 +314,8 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
                                                .before_count = 1,
                                                .queries = &query,
                                                .query_count = 1});
+    if (!s->sample.id)
+        goto failed;
     const char *after[] = {DE_TRANSFORM_PROPAGATE_SYSTEM};
     s->finalize =
         de_system_add(world, &(de_system_desc){.name = "anim.finalize",
@@ -327,6 +325,21 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
                                                .flags = DE_SYSTEM_MAIN_THREAD | DE_SYSTEM_EXCLUSIVE,
                                                .after = after,
                                                .after_count = 1});
+    if (!s->finalize.id)
+        goto failed;
+    s->world = world;
+    return;
+failed:
+    if (s->sample.id)
+        de_system_remove(world, s->sample);
+    if (s->finalize.id)
+        de_system_remove(world, s->finalize);
+    if (s->resource.id)
+        de_resource_remove(world, s->resource);
+    s->sample = s->finalize = (de_system){0};
+    s->resource = (de_resource_id){0};
+    s->events = (de_event_type){0};
+    s->component = s->ik_component = s->sprite_component = (de_component){0};
 }
 void de_anim_set_renderer(de_anim_system *s, de_renderer *r) {
     if (s) {
