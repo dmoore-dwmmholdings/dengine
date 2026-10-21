@@ -1,6 +1,47 @@
 #include "source_test_util.h"
 #include "cook/lib/de_cooker.h"
 #include "asset/manifest_internal.h"
+#if !DE_HAS_COOKER
+#include "asset/asset_internal.h"
+#include "dpak_writer.h"
+#if defined(_WIN32)
+#include <process.h>
+#define sound_manifest_pid _getpid
+#else
+#include <unistd.h>
+#define sound_manifest_pid getpid
+#endif
+/* Test tools prepare DSND entries; the tested runtime still has no cooker. */
+static void sound_manifest_pack(de_asset_system *assets, char path[256]) {
+    de_cooker *cooker = NULL;
+    ASSERT_EQ(de_cooker_create(NULL, &cooker), DE_OK);
+    de_asset_type_desc type = de_sound_import_type_desc();
+    ASSERT_EQ(de_cooker_register_type(cooker, &type), DE_OK);
+    dpak_writer *writer = NULL;
+    ASSERT_EQ(dpak_writer_create(&(dpak_writer_desc){.include_names = true}, &writer), DE_OK);
+    ASSERT_EQ(assets->manifest->asset_count, 2u);
+    for (u32 i = 0; i < assets->manifest->asset_count; ++i) {
+        const de__manifest_asset *asset = &assets->manifest->assets[i];
+        ASSERT_TRUE(strcmp(asset->type, "sound") == 0);
+        de_cook_result cooked = {0};
+        ASSERT_EQ(de_cooker_cook(cooker, &(de_cook_input){.asset = asset, .asset_root = "astest:/"},
+                                 &cooked),
+                  DE_OK);
+        ASSERT_EQ(cooked.dependency_count, 0u);
+        ASSERT_EQ(cooked.subasset_count, 0u);
+        ASSERT_EQ(dpak_writer_add(writer, de_asset_id_from(asset->id).hash, asset->type,
+                                  cooked.data, cooked.size, NULL, 0, asset->id),
+                  DE_OK);
+        de_cook_result_free(&cooked);
+    }
+    snprintf(path, 256, "astest:/manifest-%lu-%llu.dpak", (unsigned long)sound_manifest_pid(),
+             (unsigned long long)de_time_now_ns());
+    ASSERT_EQ(dpak_writer_finish(writer, path), DE_OK);
+    dpak_writer_destroy(writer);
+    de_cooker_destroy(cooker);
+    ASSERT_EQ(de_asset_pack_mount(assets, path, 0), DE_OK);
+}
+#endif
 TEST(audio_sources, pcm_formats_and_eight_channels_exact) {
     de_audio *a = test_audio_manual(4, 0);
     for (u32 codec = 1; codec <= 2; ++codec)
@@ -98,10 +139,17 @@ TEST(audio_sources, manifest_sound_cooks_loads_and_plays) {
               DE_OK);
     de_asset_system_desc desc = {0};
     desc.cache_dir = "astest:/cache";
+#if !DE_HAS_COOKER
+    desc.mode = DE_ASSET_MODE_PACKED;
+#endif
     de_asset_system *assets = NULL;
     ASSERT_EQ(de_asset_system_create(&desc, &assets), DE_OK);
     ASSERT_EQ(de_audio_register_sound_type(assets), DE_OK);
     ASSERT_EQ(de_asset_manifest_load(assets, "astest:/assets.toml"), DE_OK);
+#if !DE_HAS_COOKER
+    char pack[256] = {0};
+    sound_manifest_pack(assets, pack);
+#endif
     de_load_handle load = de_asset_load(assets, de_asset_id_from("sfx/click"), 0);
     ASSERT_EQ(de_asset_wait(assets, load, 5000000000ull), DE_LOAD_READY);
     de_load_handle music = de_asset_load(assets, de_asset_id_from("music/title"), 0);
@@ -137,5 +185,8 @@ TEST(audio_sources, manifest_sound_cooks_loads_and_plays) {
     de_asset_release(assets, music);
     de_asset_release(assets, load);
     de_asset_system_destroy(assets);
+#if !DE_HAS_COOKER
+    ASSERT_EQ(de_file_delete(pack), DE_OK);
+#endif
     de_io_shutdown();
 }

@@ -46,7 +46,7 @@ endif()
 
 # DENG-313: actual cooked asset/source and asynchronous compressed playback checks.
 if(TARGET de_audio AND DE_BUILD_TOOLS)
-    de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker)
+    de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker de_pack_lib)
     de_add_test(NAME audio_streaming SOURCES test_streaming.c LIBS de_audio de_cooker TIMEOUT 120)
     de_add_test(NAME audio_procedural SOURCES test_procedural.c LIBS de_audio)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/source-tmp")
