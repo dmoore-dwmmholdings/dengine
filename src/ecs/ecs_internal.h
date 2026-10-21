@@ -120,6 +120,7 @@ typedef struct ecs_archetype {
     u32 rows_per_chunk;  /**< >= 1 */
     u32 chunk_used;      /**< bytes of a full chunk that the layout uses (<= chunk_bytes) */
     u64 set_hash;        /**< de_hash64 of `components` */
+    u64 component_bits;  /**< conservative membership filter; collisions use exact lookup */
     size_t alloc_size;   /**< bytes of the block holding this struct and its arrays */
     /* -- DENG-344: table -- */
     u32 count;                  /**< rows in the table */
@@ -291,7 +292,7 @@ de_result ecs_archetype_get_or_create(de_world *w, const u32 *ids, u32 count, ec
 /** The archetype with exactly the sorted, unique set `ids[0..count)`, or NULL. Lookup only. */
 ecs_archetype *ecs_archetype_find(const de_world *w, const u32 *sorted_ids, u32 count);
 
-/** Position of component `component` in `a->components`, or ECS_INVALID_INDEX. Binary search. */
+/** Position in `a->components`, or ECS_INVALID_INDEX. Definite misses skip binary search. */
 u32 ecs_archetype_find_component(const ecs_archetype *a, u32 component);
 
 /** Column index of component `component` in `a`, or ECS_INVALID_INDEX (absent, or a tag). */
