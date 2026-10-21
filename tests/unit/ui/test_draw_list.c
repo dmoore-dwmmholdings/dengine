@@ -394,8 +394,11 @@ TEST_F(ui_draw, metal_unsent_image_packet_keeps_same_slot_reload_generation_aliv
 #endif
 }
 TEST_F(ui_draw, metal_bound_text_tint_changes_actual_glyph_pixels_with_default_sheet, ui_fx) {
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.types = f->types}, &f->assets),
-              DE_OK);
+    de_asset_system_desc assets = {.types = f->types};
+#if !DE_HAS_COOKER
+    assets.mode = DE_ASSET_MODE_PACKED;
+#endif
+    ASSERT_EQ(de_asset_system_create(&assets, &f->assets), DE_OK);
     de_text_system *text = NULL;
     ASSERT_EQ(de_text_create(NULL, f->assets, &text), DE_OK);
     draw_renderer(f, DE_GPU_METAL);
@@ -403,6 +406,9 @@ TEST_F(ui_draw, metal_bound_text_tint_changes_actual_glyph_pixels_with_default_s
     f->ui->desc.text = text;
     ASSERT_EQ(de_fs_mount("uitint", DE_UI_DRAW_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
     ASSERT_EQ(de_asset_manifest_load(f->assets, "uitint:/tests/golden/ui/assets.toml"), DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->assets, "uitint:/", f->asset_pack);
+#endif
     de_asset_id id = de_asset_id_from("ui/font");
     de_font font = de_asset_font(f->assets, id);
     f->load = de_asset_load(f->assets, id, 0);
@@ -480,11 +486,17 @@ TEST_F(ui_draw, metal_bound_text_tint_changes_actual_glyph_pixels_with_default_s
 #if DE_HAS_RENDER && defined(DE_UI_DRAW_ASSET_ROOT)
 #include "asset/slots_internal.h"
 TEST_F(ui_draw, image_pin_survives_load_release_and_despawn_until_packet_retirement, ui_fx) {
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.types = f->types}, &f->assets),
-              DE_OK);
+    de_asset_system_desc assets = {.types = f->types};
+#if !DE_HAS_COOKER
+    assets.mode = DE_ASSET_MODE_PACKED;
+#endif
+    ASSERT_EQ(de_asset_system_create(&assets, &f->assets), DE_OK);
     draw_renderer(f, DE_GPU_NULL);
     ASSERT_EQ(de_fs_mount("uidrawassets", DE_UI_DRAW_ASSET_ROOT, DE_MOUNT_READ_ONLY, 0), DE_OK);
     ASSERT_EQ(de_asset_manifest_load(f->assets, "uidrawassets:/tests/unit/ui/assets.toml"), DE_OK);
+#if !DE_HAS_COOKER
+    text_fixture_pack(f->assets, "uidrawassets:/tests/data/fonts/latin/", f->asset_pack);
+#endif
     de_asset_id id = de_asset_id_from("ui/checker");
     de_texture texture = de_asset_texture(f->assets, id);
     f->load = de_asset_load(f->assets, id, 0);

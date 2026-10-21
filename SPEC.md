@@ -26,7 +26,7 @@ DEngine is an open-source, C11 game engine for desktop platforms. It renders 2D 
 - Mobile, web, and console targets. The RHI must not block a later console backend, but no work is planned.
 - Hardware older than the baseline in §3.3.
 - A visual scripting system.
-- The editor. It is fully specified in §20 and **deferred** until all runtime systems are built and tested.
+- The editor. It is the separate DEngine IDE (Disegno spec **DIDE**, §20) and is **deferred** until all runtime systems are built and tested.
 
 ---
 
@@ -130,7 +130,7 @@ dengine/
   tools/
     cook/                  de-cook (asset cooker CLI + library)
     pack/                  de-pack
-    editor/                deferred (§20)
+    editor/                placeholder; the IDE lives in its own repo (§20)
   third_party/             vendored, pinned, one LICENSE per directory
   tests/{unit,golden,determinism,fuzz}/
   examples/
@@ -144,7 +144,7 @@ dengine/
 ### 4.1 Layers
 
 ```
- Game (DLL or static)                Editor (deferred, separate executable)
+ Game (DLL or static)                Editor service → DIDE (deferred, separate process)
  ─────────────────────────────────────────────────────────────────────────
  App host: main loop, game API, hot reload, cvars, services
  ─────────────────────────────────────────────────────────────────────────
@@ -621,7 +621,7 @@ The game picks one per session. All use the fixed simulation tick.
 ## 17. UI and text
 
 ### 17.1 Debug UI
-- Immediate mode. Used for stats, ECS inspector, console, cvars, asset browser, profiler shortcuts, and later the editor.
+- Immediate mode. Used for stats, ECS inspector, console, cvars, asset browser and profiler shortcuts. The editor does not use it (§20).
 - Candidate: Dear ImGui via the cimgui C API, compiled only in Debug/Dev builds (open question Q1). Rendered through the engine's 2D path.
 
 ### 17.2 In-game UI
@@ -692,7 +692,7 @@ Fixed camera paths in benchmark scenes on the self-hosted GPU runners; frame-tim
 
 ## 20. Editor (deferred)
 
-**Build only after every runtime system in this spec is implemented and tested.** The editor is a layer on top of the public engine API; it adds no special paths to the runtime.
+**Build only after every runtime system in this spec is implemented and tested.** The editor is the DEngine IDE, specified in Disegno spec **DIDE**. It is a Tauri + Monaco desktop app (macOS and Windows) in its own repo that combines the code IDE and the scene/content editors. It replaces the earlier `dengine-editor` plan. It uses only the public engine API; it adds no special paths to the runtime.
 
 ### 20.1 Runtime requirements now (so the editor needs no engine changes later)
 - Complete reflection for every component, asset type, and setting (§9).
@@ -700,11 +700,15 @@ Fixed camera paths in benchmark scenes on the self-hosted GPU runners; frame-tim
 - Multiple views and render-to-texture viewports (§12.4).
 - Picking: read back the visibility buffer (instance, triangle) under the cursor.
 - Asset hot reload and in-process cooking (§11.9).
-- Debug UI layer (§17.1) capable of docking and multiple windows.
 - Command buffer for structural changes (§7.1) usable as the basis for undo/redo.
 
-### 20.2 Planned features
-Scene editing with gizmos, hierarchy and inspector, asset browser and importer settings, material editor with live preview (path-traced preview option), prefab editing, terrain sculpt/paint, foliage paint, particle editor (node graph), animation state-machine editor, tilemap viewer, play-in-editor using the game DLL with hot reload, undo/redo, multi-viewport, project settings. Separate executable `dengine-editor`.
+### 20.2 Engine side
+- The engine runs in its own process; a crash or debugger break never takes the IDE down.
+- **Editor service** (Dev builds only): serves reflection, entity/component state, picking and asset status, and applies edit commands through the command buffer, over versioned local IPC (named pipe on Windows, Unix socket on macOS).
+- **Shared-texture viewports:** each editor view renders into a GPU texture shared with the IDE process (IOSurface on Metal, DXGI shared NT handle on D3D12). The IDE presents it in a native view and forwards input over IPC.
+
+### 20.3 Features
+Planned in DIDE, in three phases: code IDE; engine integration (viewport, play-in-editor, scene view, inspector, undo/redo); content editors (asset browser, material, prefab, terrain, foliage, particle and animation editors, tilemap viewer, project settings).
 
 ---
 
@@ -738,7 +742,7 @@ Optional module. Uses the Steamworks flat C API (`steam_api_flat.h`). The SDK is
 - **IK:** two-bone, FABRIK/CCD chains, look-at, foot placement using physics raycasts. Runs after blending, before skinning.
 - **2D:** sprite-sheet animation from Aseprite tags (§21.4) or atlas frame lists; ping-pong, loop, events.
 - **Determinism:** animators flagged deterministic sample in `FixedUpdate` with `de_dmath` (needed when animation drives gameplay, e.g. hitboxes in rollback games).
-- **Authoring:** animation graphs are data assets (TOML) until the editor's graph editor exists (§20.2).
+- **Authoring:** animation graphs are data assets (TOML) until the editor's graph editor exists (§20.3).
 
 ---
 

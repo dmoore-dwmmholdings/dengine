@@ -46,7 +46,7 @@ endif()
 
 # DENG-313: actual cooked asset/source and asynchronous compressed playback checks.
 if(TARGET de_audio AND DE_BUILD_TOOLS)
-    de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker)
+    de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker de_pack_lib)
     de_add_test(NAME audio_streaming SOURCES test_streaming.c LIBS de_audio de_cooker TIMEOUT 120)
     # Independent pull-decoder oracle for the production push-decoder seek path.
     target_link_libraries(test_audio_streaming PRIVATE de_tp_stb)

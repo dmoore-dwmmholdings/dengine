@@ -14,7 +14,9 @@
 #include <string.h>
 
 static bool de__headless_up;
+#if defined(DE_DEBUG) || defined(DE_DEV)
 static u32 de__headless_main;
+#endif
 static de_atomic_u32 de__headless_quit = DE_ATOMIC_INIT(0);
 
 typedef void (*de__sig_fn)(int);
@@ -32,7 +34,9 @@ de_result de_platform_init(const de_platform_desc *desc) {
     if (de__headless_up)
         return DE_FAIL(DE_ERR_BUSY, "platform: already initialised");
     de__headless_up = true;
+#if defined(DE_DEBUG) || defined(DE_DEV)
     de__headless_main = de_thread_current_id();
+#endif
     de_atomic_store_u32(&de__headless_quit, 0, DE_ATOMIC_RELAXED);
     de__prev_int = signal(SIGINT, de__on_signal);
     de__prev_term = signal(SIGTERM, de__on_signal);

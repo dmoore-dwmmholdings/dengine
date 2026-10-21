@@ -6,8 +6,8 @@
  * caches go to a scratch directory of the build tree (DE_COOK_CLI_TMP_DIR), one subdirectory per
  * test, since CTest runs the tests of one executable as parallel processes.
  *
- * Every test needs the runtime importers (DE_HAS_COOKER: Debug and Dev); elsewhere they skip,
- * except `cook_cli.usage` and `cook_cli.no_cooker` which check the refusal itself.
+ * Tool importers are available in every build type; all cases exercise the real
+ * cooker even when the runtime has no in-process cooking support.
  */
 #include "cook_project_util.h"
 
@@ -18,9 +18,6 @@
 #include "cook/lib/de_cooker.h"
 #include "host/host_packs.h"
 
-#define NO_COOKER_MSG "this build has no runtime importers (DE_HAS_COOKER: Debug and Dev)"
-
-#if DE_HAS_COOKER
 /* The asset IDs of the full project: 7 assets and 2 sub-assets. */
 static const char *const k_project_ids[] = {
     "data/hello",    "data/big",      "levels/demo",         "props/barrel",        "props/crate",
@@ -33,16 +30,12 @@ static u8 *read_pack(const char *sub, const char *name, size_t *size) {
     snprintf(rel, sizeof rel, "%s/%s.dpak", sub, name);
     return cct_read(cct_path(path, sizeof path, rel), size);
 }
-#endif
 
 /* ---- test_cook_cli_identical_runs ------------------------------------------------------------ */
 
 /* A cold cache, a warm cache, --jobs 1 with another cold cache, and no cache at all: four
  * byte-identical packs. The pack holds every asset and sub-asset and no host path. */
 TEST(cook_cli, identical_runs) {
-#if !DE_HAS_COOKER
-    SKIP(NO_COOKER_MSG);
-#else
     cct_fresh("identical");
     ASSERT_EQ(cct_cook_project("identical", "cold", "linux", NULL), DE_COOK_EXIT_OK);
     EXPECT_TRUE(strstr(g_cct.out.p, "assets cooked: 7 (+2 sub-assets), bundles: 2") != NULL);
@@ -164,7 +157,6 @@ TEST(cook_cli, identical_runs) {
     free(p1);
     free(p2);
     free(p3);
-#endif
 }
 
 /* ---- test_cook_cli_validation_abort ---------------------------------------------------------- */
@@ -173,9 +165,6 @@ TEST(cook_cli, identical_runs) {
  * write no pack. A failing import also exits 1 and names the asset; so does a type without an
  * importer. */
 TEST(cook_cli, validation_abort) {
-#if !DE_HAS_COOKER
-    SKIP(NO_COOKER_MSG);
-#else
     cct_fresh("abort");
     char out[DE_FS_PATH_MAX];
     cct_path(out, sizeof out, "abort/out");
@@ -233,7 +222,6 @@ TEST(cook_cli, validation_abort) {
         CCT_PROJECT "/assets.toml", "--platform", "linux", "--out", out, "--no-cache", NULL};
     ASSERT_EQ(de_cook_cook_main(cct_argc(proj_args), proj_args, &io), DE_COOK_EXIT_ERRORS);
     EXPECT_TRUE(strstr(g_cct.out.p, "unknown asset type \"cooktext\"") != NULL);
-#endif
 }
 
 /* ---- test_cook_cli_strip_names --------------------------------------------------------------- */
@@ -241,9 +229,6 @@ TEST(cook_cli, validation_abort) {
 /* --strip-names leaves every asset path out (bundle names stay); IDs, types and data are the
  * same as in the named pack. --build-id is stored as given. */
 TEST(cook_cli, strip_names) {
-#if !DE_HAS_COOKER
-    SKIP(NO_COOKER_MSG);
-#else
     cct_fresh("strip");
     ASSERT_EQ(cct_cook_project("strip", "named", "linux", NULL), DE_COOK_EXIT_OK);
     ASSERT_EQ(cct_cook_project("strip", "stripped", "linux",
@@ -290,7 +275,6 @@ TEST(cook_cli, strip_names) {
     dpak_close(rs);
     free(pn);
     free(ps);
-#endif
 }
 
 /* ---- Arguments ------------------------------------------------------------------------------- */
@@ -322,14 +306,8 @@ TEST(cook_cli, usage) {
     EXPECT_EQ(cct_cook(help), DE_COOK_EXIT_OK);
     EXPECT_TRUE(strstr(g_cct.out.p, "--strip-names") != NULL);
     const char *missing[] = {"no/such/assets.toml", "--platform", "linux", "--out", out, NULL};
-#if DE_HAS_COOKER
     EXPECT_EQ(cct_cook(missing), DE_COOK_EXIT_USAGE);
     EXPECT_TRUE(strstr(g_cct.err.p, "cannot") != NULL);
-#else
-    /* Without the runtime importers `cook` refuses to run at all. */
-    EXPECT_EQ(cct_cook(missing), DE_COOK_EXIT_USAGE);
-    EXPECT_TRUE(strstr(g_cct.err.p, "Debug or Dev") != NULL);
-#endif
 }
 
 /* ---- The packed host: game:/ packs ------------------------------------------------------------
@@ -339,9 +317,6 @@ TEST(cook_cli, usage) {
  * in name order: assets load from the packs with no manifest, and a later name overrides an
  * earlier one. */
 TEST(cook_cli, host_mounts_packs) {
-#if !DE_HAS_COOKER
-    SKIP(NO_COOKER_MSG);
-#else
     cct_fresh("host");
     const char *host = de_cook_platform_name(de_cook_platform_host());
     ASSERT_EQ(cct_cook_project("host", "game", host, NULL), DE_COOK_EXIT_OK);
@@ -404,5 +379,4 @@ TEST(cook_cli, host_mounts_packs) {
     de_asset_system_destroy(s);
     de_type_registry_destroy(types);
     de_task_system_destroy(ts);
-#endif
 }

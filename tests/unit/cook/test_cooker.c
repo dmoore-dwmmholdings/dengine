@@ -87,6 +87,16 @@ TEST_F(cooker, registry, cook_fx) {
     EXPECT_EQ(n, 15u);
     EXPECT_STREQ(engine[0], "texture");
     EXPECT_TRUE(de_cooker_is_engine_type("prefab"));
+    /* Tool availability is independent of the runtime DE_HAS_COOKER switch. */
+    const char *scene_types[] = {"scene", "prefab"};
+    for (u32 i = 0; i < 2; ++i) {
+        de_asset_type_desc builtin;
+        ASSERT_TRUE(de_cooker_builtin_importer(scene_types[i], &builtin));
+        EXPECT_STREQ(builtin.name, scene_types[i]);
+        EXPECT_TRUE(builtin.import != NULL);
+        EXPECT_TRUE(builtin.load == NULL);
+        EXPECT_TRUE(builtin.user == NULL);
+    }
     EXPECT_FALSE(de_cooker_is_engine_type("upper"));
 
     EXPECT_EQ((int)de_cooker_platform(f->c), (int)de_cook_platform_host());

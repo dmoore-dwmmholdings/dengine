@@ -495,10 +495,18 @@ TEST_F(ui_binding, real_localized_name_refreshes_on_ready_locale_with_unchanged_
     ASSERT_EQ(de_file_write_all_atomic("bindlocale:/strings/main/pt.toml", pt, strlen(pt)), DE_OK);
     de_asset_system *assets = NULL;
     de_text_system *text = NULL;
-    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){0}, &assets), DE_OK);
+    de_asset_system_desc asset_desc = {0};
+#if !DE_HAS_COOKER && defined(DE_UI_TEST_PACKED_ASSETS)
+    asset_desc.mode = DE_ASSET_MODE_PACKED;
+#endif
+    ASSERT_EQ(de_asset_system_create(&asset_desc, &assets), DE_OK);
     ASSERT_EQ(de_text_create(NULL, assets, &text), DE_OK);
     u64 generation = de_loc_generation(text);
     ASSERT_EQ(de_asset_manifest_load(assets, "bindlocale:/assets.toml"), DE_OK);
+#if !DE_HAS_COOKER && defined(DE_UI_TEST_PACKED_ASSETS)
+    char pack[256] = {0};
+    text_fixture_pack(assets, "bindlocale:/", pack);
+#endif
     binding_locale_wait(assets, text, generation + 1);
     f->ui.ui->desc.text = text;
     de_entity e = bound(f, "label", "text", DE_UI_BIND_ONE_WAY, f->ui.ui->ids.text);
@@ -513,6 +521,9 @@ TEST_F(ui_binding, real_localized_name_refreshes_on_ready_locale_with_unchanged_
     f->ui.ui->desc.text = NULL;
     de_text_destroy(text);
     de_asset_system_destroy(assets);
+#if !DE_HAS_COOKER && defined(DE_UI_TEST_PACKED_ASSETS)
+    text_fixture_pack_cleanup(pack);
+#endif
     ASSERT_EQ(de_file_delete("bindlocale:/strings/main/en.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("bindlocale:/strings/main/pt.toml"), DE_OK);
     ASSERT_EQ(de_file_delete("bindlocale:/strings/main"), DE_OK);

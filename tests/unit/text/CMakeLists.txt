@@ -6,6 +6,7 @@ if(DE_BUILD_TOOLS)
   target_compile_definitions(test_text_import PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
  endif()
 endif()
+
 if(TARGET test_text_import)
  target_sources(test_text_import PRIVATE test_font_runtime.c test_fallback.c)
 endif()
@@ -55,4 +56,22 @@ if(DE_BUILD_TOOLS)
     target_include_directories(test_text_loc PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/loc-tmp")
     target_compile_definitions(test_text_loc PRIVATE "DE_LOC_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/loc-tmp\"")
+endif()
+
+# Runtime fixtures prepare real cooked packs when the runtime has no cooker.
+# The tool libraries belong to the tests only, never to de_text/de_asset.
+if(DE_BUILD_TOOLS)
+ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/packed-tmp")
+ foreach(_text_fixture test_text_import test_text_layout test_text_render test_text_loc)
+  if(TARGET ${_text_fixture})
+   target_link_libraries(${_text_fixture} PRIVATE de_pack_lib)
+   target_compile_definitions(${_text_fixture} PRIVATE
+    "DE_TEXT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/packed-tmp\"")
+  endif()
+ endforeach()
+endif()
+
+# DENG-533: compile the game-facing monitor sample against public headers only.
+if(TARGET test_text_render)
+ target_sources(test_text_render PRIVATE "${DE_ROOT_DIR}/examples/render_target_monitor/monitor.c")
 endif()

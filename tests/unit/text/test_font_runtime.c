@@ -105,6 +105,19 @@ TEST_F(font_runtime, real_reload_pipeline, runtime_fx) {
     de_text_font *old = de_text__font_get(f->t, f->latin);
     u32 generation = old->generation;
     de__asset_reload_on_change(f->assets, "fontall:/latin/NotoSans.ttf", DE_WATCH_MODIFIED, false);
+#if !defined(DE_DEBUG) && !defined(DE_DEV)
+    /* Shipping/Release intentionally have no watcher/reload machinery. Exercise
+     * the notification as a no-op and retain the live packed generation. */
+    for (u32 i = 0; i < 8; ++i) {
+        de_asset_system_update(f->assets, NULL);
+        de_text_update(f->t);
+    }
+    EXPECT_TRUE(de_text__font_get(f->t, f->latin) == old);
+    EXPECT_EQ(old->generation, generation);
+    de__asset_reload_stats stats;
+    de__asset_reload_get_stats(f->assets, &stats);
+    EXPECT_EQ(stats.started, 0u);
+#else
     u64 deadline = de_time_now_ns() + 5ULL * 1000000000;
     while (de_text__font_get(f->t, f->latin) == old && de_time_now_ns() < deadline) {
         de_asset_system_update(f->assets, NULL);
@@ -116,6 +129,7 @@ TEST_F(font_runtime, real_reload_pipeline, runtime_fx) {
     EXPECT_GT(now->generation, generation);
     ASSERT_TRUE(de_text__resolve(f->t, f->latin, 'A', &out, &gid));
     EXPECT_EQ(gid, de_text__codepoint(now, 'A'));
+#endif
 }
 
 TEST(font_runtime, immutable_source_lease_and_decode_allocation_failures) {

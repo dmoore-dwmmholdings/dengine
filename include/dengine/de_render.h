@@ -585,14 +585,15 @@ typedef struct de_standard_material {
  * per-entity tweaks. Changing parameters never creates or rebuilds a pipeline: the renderer
  * uploads the changed blocks at the next frame, and a change of the features a material uses
  * (clearcoat 0 -> 0.5) selects another of the shader permutations compiled when the renderer was
- * made (de_render_stats.permutations_per_model, material_permutation_switches). All four are
+ * made (de_render_stats.permutations_per_model, material_permutation_switches). These are
  * main-thread calls, between frames; the change shows from the next frame on.
  */
 
 /**
  * Sets every parameter of material `m` (READY asset or runtime instance) to `*params`, textures
  * included: the six texture fields replace those slots (zero clears one; the caller keeps those
- * textures loaded); slots de_standard_material has no field for keep their textures. `unlit`
+ * textures loaded); slots de_standard_material has no field for keep their textures.
+ * Explicit de_material_set_gpu_texture overrides persist until separately cleared. `unlit`
  * switches a built-in material between the Standard and Unlit models. A hot reload of an asset
  * replaces what this set with the cooked values.
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `r` or `params`, an invalid or stale `m`, an
@@ -600,6 +601,36 @@ typedef struct de_standard_material {
  */
 DE_API de_result de_material_set_params(de_renderer *r, de_material m,
                                         const de_standard_material *params);
+/** GPU texture override slots for a runtime Standard/Unlit material instance. */
+typedef enum de_material_texture_slot {
+    DE_MATERIAL_TEXTURE_BASE_COLOR,
+    DE_MATERIAL_TEXTURE_METAL_ROUGH,
+    DE_MATERIAL_TEXTURE_NORMAL,
+    DE_MATERIAL_TEXTURE_OCCLUSION,
+    DE_MATERIAL_TEXTURE_EMISSIVE,
+    DE_MATERIAL_TEXTURE_CLEARCOAT_NORMAL
+} de_material_texture_slot;
+/** Main thread, between frames; never from a render hook. Overrides one asset texture
+ * slot of a live runtime material instance. A zero texture removes the override and restores
+ * the asset slot. de_material_set_params does not remove GPU overrides.
+ *
+ * The texture must belong to this renderer's device: an ordinary, single-sampled, sampled
+ * 2D colour texture (no integer format, array, depth, swapchain or transient texture). The instance
+ * retains its GPU generation/descriptor; the caller retains ownership and must eventually call
+ * de_gpu_texture_destroy. Replacing/clearing a binding or destroying its instance drains
+ * outstanding render/GPU work before releasing the old generation. Clones retain bindings.
+ *
+ * A producer view targeting this texture must precede every consuming view by view order.
+ * Exclude monitor geometry from its producer using camera/view layer masks: sampling a
+ * current target or a target produced later in the frame rejects that consumer view.
+ * Textures without an active producer view must already be in DE_ACCESS_SHADER_READ.
+ * Resize by creating a new texture, retargeting the producer view, replacing this binding,
+ * then destroying the old caller-owned texture. Failed binding leaves the old slot intact.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT for invalid/stale/non-instance material, slot,
+ * texture or unsupported texture shape/usage. No ownership transfers on failure.
+ */
+DE_API de_result de_material_set_gpu_texture(de_renderer *r, de_material instance,
+                                             de_material_texture_slot slot, de_gpu_texture texture);
 /** The parameters of material `m` into `*out` (as de_material_set_params takes them).
  * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_BUSY (not loaded). */
 DE_API de_result de_material_get_params(de_renderer *r, de_material m, de_standard_material *out);
@@ -607,7 +638,8 @@ DE_API de_result de_material_get_params(de_renderer *r, de_material m, de_standa
  * A runtime instance of READY material `base`: a copy of its parameters, textures and model that
  * de_material_set_params changes without touching `base`. Use it like any material
  * (DeMeshRenderer.materials). It does not keep `base` or its textures loaded. At most 16384
- * instances are alive at once.
+ * instances are alive at once. GPU overrides retain their own leases; cloning fails if an
+ * override's owner already requested destruction (existing bindings remain usable).
  * @return the instance; invalid on failure, with the reason in the error context (NULL `r`, an
  *         invalid `base`, DE_ERR_BUSY for a `base` not loaded yet, DE_ERR_OUT_OF_MEMORY).
  */

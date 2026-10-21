@@ -63,6 +63,10 @@ target_sources(de_cooker PRIVATE
 # of the prefab TOML, includes the core TOML header).
 target_link_libraries(de_cooker PRIVATE de_tp_cgltf de_tp_mikktspace de_reflect de_tp_tomlc17)
 
+# Scene import is also needed by Release/Shipping tools for model prefab subassets.
+# Release/Shipping runtime registration retains no importer/cooker dependency.
+target_sources(de_cooker PRIVATE importers/scene/scene_import.c)
+
 # DENG-289: the shader importer (importers/shader/): `.slang` to SPIR-V, DXIL and metallib with
 # reflection, through the prebuilt Slang (third_party/slang/, opened at run time). Since DENG-409
 # its sources are part of de_cooker (like the other importers), so the built-in importer table
