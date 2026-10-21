@@ -8,6 +8,7 @@ typedef struct stream_contention_fx {
     de_sem started, release;
     bool started_ready, release_ready;
     de_task_counter blockers;
+    de__audio_control_hook control_hook;
 } stream_contention_fx;
 static void stream_contention_fx_setup(stream_contention_fx *f) {
     de_fp_env_init_thread();
@@ -28,6 +29,7 @@ static void stream_contention_fx_setup(stream_contention_fx *f) {
               DE_OK);
 }
 static void stream_contention_fx_teardown(stream_contention_fx *f) {
+    de__audio_device_test_control_hook(f->audio, NULL);
     if (f->release_ready)
         de_sem_post(&f->release, 2);
     if (f->tasks)
@@ -47,6 +49,31 @@ static void block_unrelated_background_task(void *user) {
     de_sem_post(&f->started, 1);
     de_sem_wait(&f->release);
 }
+TEST_F(audio_streaming, paused_device_control_does_not_delay_stream_refills, stream_contention_fx) {
+    de__sound_asset *asset = source_cooked(true, 48000 * 2, false);
+    de__audio_source *source = NULL;
+    ASSERT_EQ(de__source_stream(f->audio, asset, &source), DE_OK);
+    de__sound_asset_release(asset);
+    f->control_hook = (de__audio_control_hook){block_unrelated_background_task, f};
+    de__audio_device_test_control_hook(f->audio, &f->control_hook);
+    de_sem_wait(&f->started); /* Control is now blocked outside the audio/worker locks. */
+    de_voice voice = de__voice_play_source(f->audio, source, &(de_play_desc){0});
+    ASSERT_TRUE(voice.id);
+    u64 start = de_time_now_ns(), guard = de__rt_guard_hits();
+    for (u32 done = 0; done < 48000 * 2;) {
+        u32 n = 48000 * 2 - done;
+        if (n > 256)
+            n = 256;
+        de__audio_null_pump(f->audio, n, NULL);
+        done += n;
+        de_sleep_until_ns(start + (u64)done * 1000000000ull / (48000 * 8));
+    }
+    de__audio_null_pump(f->audio, 256, NULL);
+    EXPECT_EQ(de_audio_get_stats(f->audio).underruns, 0u);
+    EXPECT_EQ(de__rt_guard_hits(), guard);
+    EXPECT_FALSE(de_audio_playing(f->audio, voice));
+}
+
 TEST_F(audio_streaming, unrelated_background_work_cannot_hold_up_audio_refills,
        stream_contention_fx) {
     de__sound_asset *asset = source_cooked(true, 48000 * 2, false);

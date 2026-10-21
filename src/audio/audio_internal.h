@@ -177,7 +177,16 @@ typedef struct de__audio_ring {
 
 /* ---- Device manager (device.c) --------------------------------------------------------------- */
 
+/* Test-only control-thread barrier. Publish an immutable record and keep it alive
+ * until the audio system is destroyed (a cleared hook may already be running). */
+typedef struct de__audio_control_hook {
+    void (*fn)(void *);
+    void *user;
+} de__audio_control_hook;
+void de__audio_device_test_control_hook(de_audio *a, de__audio_control_hook *hook);
+
 typedef struct de__audio_devmgr {
+    de_atomic_ptr test_control_hook;
     const de__audio_backend_vtbl *vt; /* the backend in use */
     void *backend;
     const de__audio_backend_vtbl *fallback_vt; /* null, when `vt` is an OS backend */
@@ -277,8 +286,8 @@ struct de_audio {
 
 /** Test-only create options. */
 typedef struct de__audio_create_opts {
-    /** DE_AUDIO_NULL only: no mixer thread and no device thread; the output is produced and
-     * consumed inside de__audio_null_pump, on the caller's thread. Deterministic. */
+    /** DE_AUDIO_NULL only: no mixer/output threads; output is produced and consumed inside
+     * de__audio_null_pump on the caller's thread. Device control still runs separately. */
     bool null_manual;
 } de__audio_create_opts;
 

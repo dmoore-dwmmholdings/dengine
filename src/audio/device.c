@@ -206,6 +206,9 @@ static i32 ctl_main(void *user) {
         de_sem_wait_timeout(&d->wake, DE__CTL_SAFETY_WAIT_NS);
         if (de_atomic_load_u32(&d->quit, DE_ATOMIC_ACQUIRE) != 0)
             break;
+        de__audio_control_hook *hook = de_atomic_load_ptr(&d->test_control_hook, DE_ATOMIC_ACQUIRE);
+        if (hook)
+            hook->fn(hook->user);
         de__audio_collect(a);
         if (d->vt->poll_devices)
             d->vt->poll_devices(d->backend);
@@ -220,6 +223,13 @@ void de__audio_device_notify(void *user, u32 events) {
     de_audio *a = (de_audio *)user;
     de_atomic_fetch_or_u32(&a->dev.events, events, DE_ATOMIC_RELEASE);
     de_sem_post(&a->dev.wake, 1);
+}
+
+void de__audio_device_test_control_hook(de_audio *a, de__audio_control_hook *hook) {
+    if (!a)
+        return;
+    de_atomic_store_ptr(&a->dev.test_control_hook, hook, DE_ATOMIC_RELEASE);
+    de__audio_device_wake(a);
 }
 
 void de__audio_device_wake(de_audio *a) {
@@ -240,6 +250,7 @@ de_result de__audio_device_init(de_audio *a, de_audio_backend kind) {
         de_mutex_destroy(&d->lock);
         return r;
     }
+    de_atomic_init_ptr(&d->test_control_hook, NULL);
     de_atomic_init_u32(&d->events, 0);
     de_atomic_init_u32(&d->quit, 0);
     de_atomic_init_u32(&d->opens, 0);

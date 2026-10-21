@@ -121,6 +121,9 @@ static i32 stream_worker(void *user) {
     de_fp_env_init_thread();
     for (;;) {
         de_sem_wait(&m->work);
+        /* A low-watermark wake goes straight here. Device enumeration/recovery
+         * on the control thread must not stand between the mixer and a refill. */
+        de__stream_service(m->audio);
         de_mutex_lock(&m->lock);
         stream_source *s = m->queued_head;
         if (s) {
@@ -139,8 +142,14 @@ static i32 stream_worker(void *user) {
         refill(s);
         de_mutex_lock(&m->lock);
         s->active = false;
+        /* A second worker may have consumed a wake while this source was
+         * active. Hand that coalesced request back after publishing idle. */
+        bool again = de_atomic_load_u32(&s->need, DE_ATOMIC_ACQUIRE) != 0 &&
+                     !de_atomic_load_u32(&s->closing, DE_ATOMIC_ACQUIRE);
         de_cond_broadcast(&m->idle);
         de_mutex_unlock(&m->lock);
+        if (again)
+            de_sem_post(&m->work, 1);
     }
 }
 static void manager_destroy(stream_manager *m) {
@@ -271,6 +280,10 @@ void de__stream_service(de_audio *a) {
     }
     de_mutex_unlock(&m->lock);
 }
+static void request_refill(stream_source *s) {
+    if (de_atomic_exchange_u32(&s->need, 1, DE_ATOMIC_ACQ_REL) == 0)
+        de_sem_post(&s->manager->work, 1);
+}
 static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channels) {
     stream_source *s = (stream_source *)base;
     u64 read = de_atomic_load_u64(&s->read_pos, DE_ATOMIC_RELAXED),
@@ -295,10 +308,8 @@ static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channel
                channels * 4);
     if (n)
         de_atomic_store_u64(&s->read_pos, read + n, DE_ATOMIC_RELEASE);
-    if (available - n < s->capacity / 2) {
-        de_atomic_store_u32(&s->need, 1, DE_ATOMIC_RELEASE);
-        de__audio_device_wake(s->audio);
-    }
+    if (available - n < s->capacity / 2)
+        request_refill(s);
     if (n < frames) {
         bool loop = de_atomic_load_u32(&base->loop_enabled, DE_ATOMIC_ACQUIRE) != 0;
         if (!seeking && !loop && de_atomic_load_u32(&s->eof, DE_ATOMIC_ACQUIRE))
@@ -315,8 +326,7 @@ static bool stream_seek(de__audio_source *base, u64 frame) {
         return false;
     de_atomic_store_u64(&s->seek_target, frame, DE_ATOMIC_RELEASE);
     de_atomic_fetch_add_u32(&s->seek_request, 1, DE_ATOMIC_ACQ_REL);
-    de_atomic_store_u32(&s->need, 1, DE_ATOMIC_RELEASE);
-    de__audio_device_wake(s->audio);
+    request_refill(s);
     return true;
 }
 static void stream_close(de__audio_source *base) {
