@@ -25,6 +25,7 @@ typedef struct scenario_state {
     de_anim_clip clips[3];
     f32 weights[ACTORS];
     u64 seed;
+    u32 perturb_tick;
 } scenario_state;
 
 static void blend(de_anim_system *anim, void *user) {
@@ -51,11 +52,18 @@ static void blend(de_anim_system *anim, void *user) {
         ASSERT_TRUE(de__anim_sample_pose_cached(&asset->clip, &e->skeleton, e->animator->time,
                                                 &other, &cursor));
         ASSERT_TRUE(de__anim_pose_blend(&e->local, &e->local, &other, state->weights[actor], true));
+        if (actor == 3 && de_world_tick(anim->world) == state->perturb_tick) {
+            u32 bits;
+            memcpy(&bits, &e->local.translations[0].x, sizeof bits);
+            bits ^= 1u;
+            memcpy(&e->local.translations[0].x, &bits, sizeof bits);
+        }
     }
 }
 static de_result setup(de_world *world, u64 seed, void *user) {
     scenario_state *s = user;
     s->seed = seed;
+    s->perturb_tick = UINT32_MAX;
     static bool mounted;
     if (!mounted) {
         char path[sizeof(DE_ANIM_DET_ASSETS) + 64];
@@ -217,17 +225,17 @@ TEST(anim_determinism, rollback_and_cadence) {
 TEST(anim_determinism, detects_pose_bit_change) {
     de_det_session session = {0};
     ASSERT_EQ(de_det_session_begin(&session, &scenario, SEED, 1), DE_OK);
-    u64 checksum;
-    step(&session, &checksum);
+    u64 expected[TICKS], actual[TICKS];
+    for (u32 tick = 0; tick < TICKS; ++tick)
+        step(&session, &expected[tick]);
+    de_det_session_end(&session);
+    ASSERT_EQ(de_det_session_begin(&session, &scenario, SEED, 1), DE_OK);
     scenario_state *s = session.state;
-    de__anim_entry *e = &s->anim->entries[de_entity_index(s->actors[3])];
-    u64 before = de_anim_checksum(session.world);
-    u32 bits;
-    memcpy(&bits, &e->local.translations[0].x, sizeof bits);
-    bits ^= 1u;
-    memcpy(&e->local.translations[0].x, &bits, sizeof bits);
-    e->clock = de_entity_get(session.world, e->entity, s->anim->clock_component);
-    e->clock->pose_hash = de__anim_pose_checksum(&e->local);
-    EXPECT_TRUE(before != de_anim_checksum(session.world));
+    s->perturb_tick = 400;
+    /* Normal finalization must capture the changed sampled pose. Never patch
+     * the stored hash here: that would bypass the integration being verified. */
+    for (u32 tick = 0; tick < TICKS; ++tick)
+        step(&session, &actual[tick]);
+    EXPECT_EQ(de_det_report("one-bit sampled pose perturbation", expected, actual, TICKS), 400u);
     de_det_session_end(&session);
 }
