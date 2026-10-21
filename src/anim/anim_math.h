@@ -4,7 +4,8 @@
 
 /* Fast arithmetic stays in its own visual TU. Deterministic callers of these
  * inline recipes must compile with FP contraction disabled and initialize the
- * thread FP environment. This is not the FixedUpdate/checksum runtime (DENG-192). */
+ * thread FP environment. The fixed runtime always selects the deterministic
+ * branch; visual adapters remain separate from its call graph. */
 de_vec3 de__anim_fast_lerp(de_vec3, de_vec3, f32);
 de_quat de__anim_fast_normalize(de_quat);
 de_quat de__anim_fast_nlerp(de_quat, de_quat, f32);

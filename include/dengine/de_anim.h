@@ -17,7 +17,9 @@ DE_API void de_anim_destroy(de_anim_system *s);
 /** Registers variable-time evaluation in PostUpdate before transform propagation,
  * then model-pose finalization and skinning upload after propagation. The internal
  * pipeline reserves ordered sample, blend, root-motion, IK and finalize stages.
- * Deterministic FixedUpdate evaluation is not implemented yet.
+ * Deterministic animators evaluate on fixed simulation ticks, including model
+ * poses for gameplay queries; PostUpdate publishes their last fixed palettes.
+ * Deterministic mode excludes IK in v1.
  *
  * Main thread, between schedules. One animation system may own a world; attaching
  * the same system to that world again is a no-op. On failure an initially
@@ -94,6 +96,12 @@ DE_API void de_anim_set_renderer(de_anim_system *, de_renderer *);
 DE_API void de_anim_set_task_system(de_anim_system *, de_task_system *);
 DE_API de_component de_anim_component(const de_anim_system *);
 DE_API de_event_type de_anim_event_type(const de_anim_system *);
+/** XXH3 checksum of deterministic actors, ordered by entity index: integer tick,
+ * state identity (reserved for state machines), and local pose bit patterns.
+ * Main thread between schedules. Scratch grows on demand. Snapshot restore
+ * restores this checksum immediately; cached bone queries resume after the next
+ * fixed evaluation if the restored pose differs from the cached pose. */
+DE_API u64 de_anim_checksum(de_world *);
 DE_API de_skeleton de_anim_skeleton(de_anim_system *, de_asset_id);
 DE_API de_anim_clip de_anim_clip_asset(de_anim_system *, de_asset_id);
 

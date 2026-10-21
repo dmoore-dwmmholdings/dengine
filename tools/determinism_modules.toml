@@ -31,10 +31,6 @@ name = "physics"
 dir = "src/physics"
 
 [[module]]
-name = "anim"
-dir = "src/anim"
-
-[[module]]
 name = "input"
 dir = "src/input"
 
@@ -85,3 +81,50 @@ module = "core"
 allow = ["math-include", "fast-api"]
 allow_calls = ["sqrt"]
 why = "large-world transforms; sqrt is correctly rounded; fast de_m4 only for render-side affines"
+
+# Animation has separate visual adapters. These shared/fixed sources form the
+# fixed call graph; check_anim_determinism.py also scans every private header.
+
+[[source]]
+path = "src/anim/anim.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_system.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_assets.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_reflect.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_stub.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/sampling.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/formats/clip_decode.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_clock.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_deterministic.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_checksum.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/pose_deterministic.c"
+module = "anim"
