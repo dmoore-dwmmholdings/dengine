@@ -194,6 +194,9 @@ struct de__gpu_scene {
      * pack at the next update; `mesh_changed` (a bit per mesh slot) the meshes whose entry changed
      * in this update (their instances re-resolve their default materials). */
     struct de__material_instances *materials;
+    de__material_sample *material_samples;
+    gs_map material_sample_map;
+    u32 material_sample_count, material_sample_cap;
     const struct de__material_models *material_models;
     u64 *mat_dirty;
     u64 *mesh_changed;
@@ -923,6 +926,10 @@ void de__gpu_scene_destroy(de__gpu_scene *gs) {
     if (gs == NULL)
         return;
     const de_allocator *a = gs->alloc;
+    map_free(a, &gs->material_sample_map);
+    if (gs->material_samples)
+        DE_FREE(a, gs->material_samples,
+                (size_t)gs->material_sample_cap * sizeof *gs->material_samples);
     if (gs->staged)
         de__uploader_stage_close(gs->uploader, gs->stage.record, (de_gpu_fence){0}, 0);
     if (gs->view_staged)
@@ -1152,6 +1159,56 @@ static de_result ensure_inst_arrays(de__gpu_scene *gs) {
     return DE_OK;
 }
 
+static de_result snapshot_material_samples(de__gpu_scene *gs, const de__rw_instances *in) {
+    gs->material_sample_count = 0;
+    if (!de__material_instances_gpu_bindings(gs->materials))
+        return DE_OK;
+    if (gs->material_sample_map.cap)
+        memset(gs->material_sample_map.keys, 0, (size_t)gs->material_sample_map.cap * sizeof(u64));
+    gs->material_sample_map.count = 0;
+    for (u32 i = 0; i < in->count; ++i) {
+        if (!in->entity[i])
+            continue;
+        for (u32 m = 0; m < DE__RW_MATERIALS; ++m) {
+            de_material handle = in->materials[(size_t)i * DE__RW_MATERIALS + m];
+            if (!de__material_is_instance(handle))
+                continue;
+            const de_render_material *rec = de__material_instances_get(gs->materials, handle);
+            if (!rec)
+                continue;
+            for (u32 t = 0; t < DE_COOKED_TEX_COUNT; ++t) {
+                de_gpu_texture texture = rec->gpu_textures[t];
+                if (!texture.id)
+                    continue;
+                u32 j = map_get(&gs->material_sample_map, texture.id);
+                if (j == DE__GS_NONE) {
+                    j = gs->material_sample_count;
+                    if (j == gs->material_sample_cap) {
+                        u32 cap = gs->material_sample_cap ? gs->material_sample_cap * 2 : 8;
+                        if (!grow_bytes(gs->alloc, (void **)&gs->material_samples,
+                                        (size_t)gs->material_sample_cap *
+                                            sizeof *gs->material_samples,
+                                        (size_t)cap * sizeof *gs->material_samples))
+                            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "GPU material sample snapshot");
+                        gs->material_sample_cap = cap;
+                    }
+                    if (!map_put(gs->alloc, &gs->material_sample_map, texture.id, j))
+                        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "GPU material sample map");
+                    gs->material_samples[j] = (de__material_sample){.texture = texture};
+                    ++gs->material_sample_count;
+                }
+                gs->material_samples[j].layer_mask |= in->layer_mask[i];
+            }
+        }
+    }
+    return DE_OK;
+}
+
+const de__material_sample *de__gpu_scene_material_samples(const de__gpu_scene *gs, u32 *count) {
+    *count = gs ? gs->material_sample_count : 0;
+    return gs ? gs->material_samples : NULL;
+}
+
 de_result de__gpu_scene_update(de__gpu_scene *gs, const de__render_world_frame *f) {
     if (gs == NULL || f == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__gpu_scene_update: NULL argument");
@@ -1212,7 +1269,7 @@ de_result de__gpu_scene_update(de__gpu_scene *gs, const de__render_world_frame *
         }
     }
     refresh_small_tables(gs);
-    return DE_OK;
+    return snapshot_material_samples(gs, &f->instances);
 }
 
 /* ---------- Views ---------- */
@@ -1733,6 +1790,7 @@ de_result de__gpu_scene_prepare(de__gpu_scene *gs, const de__render_world_frame 
     if (gs == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__gpu_scene_prepare: NULL scene");
     if (f == NULL) {
+        gs->material_sample_count = 0;
         gs->frame = NULL;
         gs->frame_no++; /* views still rotate their previous matrices */
         return DE_OK;
