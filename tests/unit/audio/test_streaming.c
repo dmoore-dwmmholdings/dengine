@@ -1,6 +1,97 @@
 #include "source_test_util.h"
 #include <time.h>
 
+static void enable_stream_trace(de_audio *a) {
+    const char *setting = getenv("DE_AUDIO_STREAM_TRACE");
+    if (setting && strcmp(setting, "1") == 0)
+        ASSERT_TRUE(de__stream_test_trace_enable(a));
+}
+static int trace_order(const void *a, const void *b) {
+    const de__stream_trace_event *x = a, *y = b;
+    if (x->time_ns != y->time_ns)
+        return x->time_ns < y->time_ns ? -1 : 1;
+    return x->kind < y->kind ? -1 : x->kind > y->kind;
+}
+static void report_stream_trace(de_audio *a) {
+    bool full = false;
+    u32 count = de__stream_test_trace_count(a, &full);
+    if (!count)
+        return;
+    de__stream_trace_event *events = calloc(count, sizeof *events);
+    ASSERT_TRUE(events);
+    u32 ready = 0;
+    for (u32 i = 0; i < count; ++i)
+        if (de__stream_test_trace_read(a, i, &events[ready]))
+            ++ready;
+    qsort(events, ready, sizeof *events, trace_order);
+    u64 demand = 0, queued = 0, start = 0, io_start = 0, write_start = 0;
+    u64 wake_max = 0, queue_max = 0, refill_max = 0, io_max = 0, other_max = 0;
+    u32 refills = 0, empty_refills = 0, underruns = 0, first_underrun = ready;
+    u32 source = ready ? events[0].source : 0;
+    bool mixed = false;
+    for (u32 i = 0; i < ready; ++i) {
+        const de__stream_trace_event *e = &events[i];
+        mixed |= e->source != source; /* These acceptance fixtures each own one stream. */
+        switch (e->kind) {
+        case DE__STREAM_DEMAND:
+            if (!demand)
+                demand = e->time_ns;
+            break;
+        case DE__STREAM_QUEUED:
+            queued = e->time_ns;
+            if (demand && queued >= demand && queued - demand > wake_max)
+                wake_max = queued - demand;
+            demand = 0;
+            break;
+        case DE__STREAM_START:
+            start = e->time_ns;
+            io_start = e->io_ns;
+            write_start = e->write_pos;
+            if (queued && start >= queued && start - queued > queue_max)
+                queue_max = start - queued;
+            queued = 0;
+            break;
+        case DE__STREAM_FINISH:
+            if (start && e->time_ns >= start && e->io_ns >= io_start) {
+                u64 wall = e->time_ns - start, io = e->io_ns - io_start;
+                if (wall > refill_max)
+                    refill_max = wall;
+                if (io > io_max)
+                    io_max = io;
+                if (wall >= io && wall - io > other_max)
+                    other_max = wall - io;
+                ++refills;
+                empty_refills += e->write_pos == write_start;
+            }
+            start = 0;
+            break;
+        case DE__STREAM_UNDERRUN:
+            if (!underruns)
+                first_underrun = i;
+            ++underruns;
+            break;
+        default:
+            break;
+        }
+    }
+    printf("stream trace: %u/%u events%s%s, %u refills (%u zero-output)/%u underruns, "
+           "max demand-to-queue %.3fms queue-to-start %.3fms refill %.3fms "
+           "async-io %.3fms non-io-wall %.3fms (independent maxima)\n",
+           ready, count, full ? " CAPACITY_LIMIT" : "", mixed ? " MIXED_SOURCES" : "", refills,
+           empty_refills, underruns, (double)wake_max / 1e6, (double)queue_max / 1e6,
+           (double)refill_max / 1e6, (double)io_max / 1e6, (double)other_max / 1e6);
+    if (underruns)
+        for (u32 i = first_underrun > 8 ? first_underrun - 8 : 0;
+             i < ready && i <= first_underrun + 8; ++i) {
+            const de__stream_trace_event *e = &events[i];
+            printf("  trace %u kind%u t%llu r%llu w%llu frame%llu io%llu reads%llu\n", e->source,
+                   e->kind, (unsigned long long)e->time_ns, (unsigned long long)e->read_pos,
+                   (unsigned long long)e->write_pos, (unsigned long long)e->decoder_frame,
+                   (unsigned long long)e->io_ns, (unsigned long long)e->io_requests);
+        }
+    free(events);
+}
+
 typedef struct stream_contention_fx {
     de_task_system *tasks;
     de_asset_system *assets;
@@ -54,6 +145,7 @@ TEST_F(audio_streaming, paused_device_control_does_not_delay_stream_refills, str
     de__audio_source *source = NULL;
     ASSERT_EQ(de__source_stream(f->audio, asset, &source), DE_OK);
     de__sound_asset_release(asset);
+    enable_stream_trace(f->audio);
     f->control_hook = (de__audio_control_hook){block_unrelated_background_task, f};
     de__audio_device_test_control_hook(f->audio, &f->control_hook);
     de_sem_wait(&f->started); /* Control is now blocked outside the audio/worker locks. */
@@ -72,6 +164,7 @@ TEST_F(audio_streaming, paused_device_control_does_not_delay_stream_refills, str
     EXPECT_EQ(de_audio_get_stats(f->audio).underruns, 0u);
     EXPECT_EQ(de__rt_guard_hits(), guard);
     EXPECT_FALSE(de_audio_playing(f->audio, voice));
+    report_stream_trace(f->audio);
 }
 
 TEST_F(audio_streaming, unrelated_background_work_cannot_hold_up_audio_refills,
@@ -80,6 +173,7 @@ TEST_F(audio_streaming, unrelated_background_work_cannot_hold_up_audio_refills,
     de__audio_source *source = NULL;
     ASSERT_EQ(de__source_stream(f->audio, asset, &source), DE_OK);
     de__sound_asset_release(asset);
+    enable_stream_trace(f->audio);
     de_voice voice = de__voice_play_source(f->audio, source, &(de_play_desc){0});
     ASSERT_TRUE(voice.id != 0);
     for (u32 i = 0; i < 2; ++i)
@@ -100,6 +194,7 @@ TEST_F(audio_streaming, unrelated_background_work_cannot_hold_up_audio_refills,
     EXPECT_EQ(de_audio_get_stats(f->audio).underruns, 0u);
     EXPECT_EQ(de__rt_guard_hits(), guard);
     EXPECT_FALSE(de_audio_playing(f->audio, voice));
+    report_stream_trace(f->audio);
 }
 
 TEST(audio_streaming, decoder_io_recovers_after_short_read_and_rejected_submit) {
@@ -198,6 +293,7 @@ static void playback(bool opus, bool loop, bool realtime) {
     }
     u32 source_channels = asset->view.channels;
     de__sound_asset_release(asset);
+    enable_stream_trace(a);
     de_play_desc desc = {0};
     desc.loop = loop;
     de_voice v = de__voice_play_source(a, source, &desc);
@@ -235,6 +331,7 @@ static void playback(bool opus, bool loop, bool realtime) {
         de__audio_null_pump(a, 256, NULL);
         EXPECT_FALSE(de_audio_playing(a, v));
     }
+    report_stream_trace(a);
     de_audio_destroy(a);
     de_io_shutdown();
 }

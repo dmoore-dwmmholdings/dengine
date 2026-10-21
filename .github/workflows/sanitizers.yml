@@ -126,6 +126,8 @@ jobs:
 
       - name: Test
         shell: bash
+        env:
+          DE_AUDIO_STREAM_TRACE: "1"
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
       - name: Upload test logs

@@ -130,6 +130,8 @@ jobs:
         # writes a minidump into DE_TEST_DUMP_DIR (uploaded below with the test logs).
         env:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
+          # DENG-546: bounded refill traces accompany existing failed acceptance output.
+          DE_AUDIO_STREAM_TRACE: "1"
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
       - name: Upload test logs

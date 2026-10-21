@@ -18,12 +18,15 @@ de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes)
     d->request.user = d;
     d->request.on_complete = io_complete;
     d->request.flags = DE_IO_CALLBACK_ON_IO_THREAD;
+    u64 started = d->measure_io ? de_time_now_ns() : 0;
     DE_TRY(de_io_submit(&d->request));
     ++d->io_requests;
     /* Decoder work runs off the mixer thread. Park until the actual completion
      * instead of polling de_sleep_ns: sub-millisecond sleeps busy-spin. A counted
      * semaphore also retains a completion that arrives before this wait. */
     de_sem_wait(&d->io_complete);
+    if (d->measure_io)
+        d->io_ns += de_time_now_ns() - started;
     if (d->io_result != DE_OK || d->io_bytes != bytes)
         return DE_FAIL(DE_ERR_IO, "short compressed sound read");
     return DE_OK;
@@ -87,6 +90,15 @@ bool de__decoder_seek(de__sound_decoder *d, u64 frame) {
                                                  : de__vorbis_seek(d, frame);
 }
 typedef struct stream_source stream_source;
+#define STREAM_TRACE_CAPACITY 4096u
+typedef struct stream_trace_slot {
+    de__stream_trace_event event;
+    de_atomic_u32 ready;
+} stream_trace_slot;
+typedef struct stream_trace {
+    de_atomic_u32 count;
+    stream_trace_slot slots[STREAM_TRACE_CAPACITY];
+} stream_trace;
 typedef struct stream_manager {
     de_audio *audio;
     de_mutex lock;
@@ -96,6 +108,8 @@ typedef struct stream_manager {
     bool stopping; /* Protected by lock. */
     stream_source *head, *queued_head, *queued_tail;
     de_atomic_u32 starve;
+    de_atomic_ptr trace;
+    u32 next_source; /* Protected by lock. */
 } stream_manager;
 struct stream_source {
     de__audio_source base;
@@ -111,9 +125,28 @@ struct stream_source {
     de_atomic_u32 need, closing, eof, seek_request, seek_ack;
     void (*test_read_hook)(de__audio_source *, void *);
     void *test_read_user;
+    u32 trace_id;
 };
 static stream_manager *manager(de_audio *a) {
     return de_atomic_load_ptr(&a->stream_manager, DE_ATOMIC_ACQUIRE);
+}
+static void trace_event(stream_source *s, stream_trace *t, u32 kind, u64 time_ns, bool decoder) {
+    if (!t || de_atomic_load_u32(&t->count, DE_ATOMIC_RELAXED) >= STREAM_TRACE_CAPACITY)
+        return;
+    u32 i = de_atomic_fetch_add_u32(&t->count, 1, DE_ATOMIC_RELAXED);
+    if (i >= STREAM_TRACE_CAPACITY)
+        return;
+    stream_trace_slot *slot = &t->slots[i];
+    slot->event =
+        (de__stream_trace_event){.time_ns = time_ns,
+                                 .source = s->trace_id,
+                                 .kind = kind,
+                                 .read_pos = de_atomic_load_u64(&s->read_pos, DE_ATOMIC_ACQUIRE),
+                                 .write_pos = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE),
+                                 .decoder_frame = decoder ? s->decoder->frame : 0,
+                                 .io_ns = decoder ? s->decoder->io_ns : 0,
+                                 .io_requests = decoder ? s->decoder->io_requests : 0};
+    de_atomic_store_u32(&slot->ready, 1, DE_ATOMIC_RELEASE);
 }
 static void refill(void *user);
 static i32 stream_worker(void *user) {
@@ -139,7 +172,14 @@ static i32 stream_worker(void *user) {
                 return 0;
             continue;
         }
+        stream_trace *trace = de_atomic_load_ptr(&m->trace, DE_ATOMIC_ACQUIRE);
+        if (trace) {
+            s->decoder->measure_io = true;
+            trace_event(s, trace, DE__STREAM_START, de_time_now_ns(), true);
+        }
         refill(s);
+        if (trace)
+            trace_event(s, trace, DE__STREAM_FINISH, de_time_now_ns(), true);
         de_mutex_lock(&m->lock);
         s->active = false;
         /* A second worker may have consumed a wake while this source was
@@ -163,6 +203,9 @@ static void manager_destroy(stream_manager *m) {
     de_sem_destroy(&m->work);
     de_cond_destroy(&m->idle);
     de_mutex_destroy(&m->lock);
+    stream_trace *trace = de_atomic_load_ptr(&m->trace, DE_ATOMIC_RELAXED);
+    if (trace)
+        DE_FREE(&m->audio->alloc, trace, sizeof *trace);
     DE_FREE(&m->audio->alloc, m, sizeof *m);
 }
 static de_result ensure_manager(de_audio *a, stream_manager **out) {
@@ -177,6 +220,7 @@ static de_result ensure_manager(de_audio *a, stream_manager **out) {
     de_mutex_init(&m->lock);
     de_cond_init(&m->idle);
     de_atomic_init_u32(&m->starve, 0);
+    de_atomic_init_ptr(&m->trace, NULL);
     de_result r = de_sem_init(&m->work, 0);
     if (r != DE_OK) {
         de_cond_destroy(&m->idle);
@@ -275,14 +319,21 @@ void de__stream_service(de_audio *a) {
             else
                 m->queued_head = s;
             m->queued_tail = s;
+            stream_trace *trace = de_atomic_load_ptr(&m->trace, DE_ATOMIC_ACQUIRE);
+            if (trace)
+                trace_event(s, trace, DE__STREAM_QUEUED, de_time_now_ns(), false);
             de_sem_post(&m->work, 1);
         }
     }
     de_mutex_unlock(&m->lock);
 }
 static void request_refill(stream_source *s) {
-    if (de_atomic_exchange_u32(&s->need, 1, DE_ATOMIC_ACQ_REL) == 0)
+    stream_trace *trace = de_atomic_load_ptr(&s->manager->trace, DE_ATOMIC_ACQUIRE);
+    u64 now = trace ? de_time_now_ns() : 0;
+    if (de_atomic_exchange_u32(&s->need, 1, DE_ATOMIC_ACQ_REL) == 0) {
+        trace_event(s, trace, DE__STREAM_DEMAND, now, false);
         de_sem_post(&s->manager->work, 1);
+    }
 }
 static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channels) {
     stream_source *s = (stream_source *)base;
@@ -316,6 +367,9 @@ static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channel
             return n;
         memset(out + (size_t)n * channels, 0, (size_t)(frames - n) * channels * 4);
         de_atomic_fetch_add_u32(&s->audio->underruns, 1, DE_ATOMIC_RELAXED);
+        stream_trace *trace = de_atomic_load_ptr(&s->manager->trace, DE_ATOMIC_ACQUIRE);
+        if (trace)
+            trace_event(s, trace, DE__STREAM_UNDERRUN, de_time_now_ns(), false);
         return frames;
     }
     return n;
@@ -385,6 +439,7 @@ de_result de__source_stream(de_audio *a, de__sound_asset *asset, de__audio_sourc
     /* Initial prefill is already a blocking control-side operation. */
     refill(s);
     de_mutex_lock(&m->lock);
+    s->trace_id = ++m->next_source;
     s->next = m->head;
     m->head = s;
     de_mutex_unlock(&m->lock);
@@ -419,4 +474,38 @@ void de__stream_test_refill_now(de__audio_source *base) {
     refill(s);
     de_atomic_store_u32(&m->starve, starved, DE_ATOMIC_RELEASE);
     de_mutex_unlock(&m->lock);
+}
+bool de__stream_test_trace_enable(de_audio *a) {
+    stream_manager *m = manager(a);
+    if (!m)
+        return false;
+    if (de_atomic_load_ptr(&m->trace, DE_ATOMIC_ACQUIRE))
+        return true;
+    stream_trace *trace =
+        DE_ALLOC(&a->alloc, sizeof *trace, DE_ALIGNOF(stream_trace), DE_MEM_AUDIO);
+    if (!trace)
+        return false;
+    memset(trace, 0, sizeof *trace);
+    de_atomic_init_u32(&trace->count, 0);
+    for (u32 i = 0; i < STREAM_TRACE_CAPACITY; ++i)
+        de_atomic_init_u32(&trace->slots[i].ready, 0);
+    de_atomic_store_ptr(&m->trace, trace, DE_ATOMIC_RELEASE);
+    return true;
+}
+u32 de__stream_test_trace_count(de_audio *a, bool *full) {
+    stream_manager *m = manager(a);
+    stream_trace *trace = m ? de_atomic_load_ptr(&m->trace, DE_ATOMIC_ACQUIRE) : NULL;
+    u32 count = trace ? de_atomic_load_u32(&trace->count, DE_ATOMIC_ACQUIRE) : 0;
+    if (full)
+        *full = count >= STREAM_TRACE_CAPACITY;
+    return count < STREAM_TRACE_CAPACITY ? count : STREAM_TRACE_CAPACITY;
+}
+bool de__stream_test_trace_read(de_audio *a, u32 index, de__stream_trace_event *out) {
+    stream_manager *m = manager(a);
+    stream_trace *trace = m ? de_atomic_load_ptr(&m->trace, DE_ATOMIC_ACQUIRE) : NULL;
+    if (!trace || !out || index >= STREAM_TRACE_CAPACITY ||
+        !de_atomic_load_u32(&trace->slots[index].ready, DE_ATOMIC_ACQUIRE))
+        return false;
+    *out = trace->slots[index].event;
+    return true;
 }
