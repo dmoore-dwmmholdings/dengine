@@ -1,4 +1,5 @@
 #include "source_test_util.h"
+#include <de_stb_vorbis.h>
 #include <time.h>
 
 static void enable_stream_trace(de_audio *a) {
@@ -409,6 +410,62 @@ TEST(audio_streaming, decoder_seek_uses_tables_and_matches_linear_reference) {
     }
 }
 
+TEST(audio_streaming, vorbis_partial_packet_seek_matches_pull_decoder) {
+    de__sound_asset *asset = source_cooked(false, 48000 * 60, false);
+    FILE *file = fopen(DE_AUDIO_SOURCE_DATA_DIR "/music-60s.ogg", "rb");
+    ASSERT_TRUE(file != NULL);
+    ASSERT_EQ(fseek(file, 0, SEEK_END), 0);
+    long size = ftell(file);
+    ASSERT_TRUE(size > 0);
+    rewind(file);
+    u8 *encoded = malloc((size_t)size);
+    ASSERT_TRUE(encoded != NULL);
+    ASSERT_EQ(fread(encoded, 1, (size_t)size, file), (size_t)size);
+    fclose(file);
+    int error = 0;
+    stb_vorbis *pull = stb_vorbis_open_memory(encoded, (int)size, &error, NULL);
+    ASSERT_TRUE(pull != NULL);
+    u32 channels = asset->view.channels;
+    u32 frames = (u32)asset->view.frames;
+    f32 *expected = malloc((size_t)frames * channels * sizeof(f32));
+    ASSERT_TRUE(expected != NULL);
+    /* Independent pull decoder reads the original Ogg rather than our push
+     * decoder or seek implementation. The stereo fixture has identity mapping. */
+    ASSERT_EQ(channels, 2u);
+    for (u32 at = 0; at < frames;) {
+        u32 n = frames - at < 4096 ? frames - at : 4096;
+        int got = stb_vorbis_get_samples_float_interleaved(
+            pull, (int)channels, expected + (size_t)at * channels, (int)(n * channels));
+        ASSERT_TRUE(got > 0);
+        at += (u32)got;
+    }
+    stb_vorbis_close(pull);
+    free(encoded);
+    de__sound_decoder *push = NULL;
+    ASSERT_EQ(de__decoder_create(de_heap_allocator(), asset, &push), DE_OK);
+    const u32 targets[] = {0,     1,     127,   128,    129,     1023,          1024,       1025,
+                           48000, 48001, 96000, 240128, 1440128, frames - 1025, frames - 1, frames};
+    const u32 reads[] = {1, 127, 257, 1024};
+    f32 actual[1024 * 8];
+    for (u32 i = 0; i < sizeof targets / sizeof targets[0]; ++i) {
+        /* Alternate backwards and forwards, including an exactly empty tail. */
+        u32 target = targets[i % 2 ? sizeof targets / sizeof targets[0] - 1 - i / 2 : i / 2];
+        ASSERT_TRUE(de__decoder_seek(push, target));
+        for (u32 k = 0; k < sizeof reads / sizeof reads[0]; ++k) {
+            u32 n = reads[k];
+            if (n > frames - target)
+                n = frames - target;
+            ASSERT_EQ(de__decoder_read(push, actual, reads[k]), n);
+            for (u32 j = 0; j < n * channels; ++j)
+                EXPECT_FLOAT_EQ(actual[j], expected[(size_t)target * channels + j], 1e-5);
+            target += n;
+        }
+    }
+    de__decoder_destroy(push);
+    de__sound_asset_release(asset);
+    free(expected);
+    de_io_shutdown();
+}
 TEST(audio_streaming, vorbis_repeated_and_late_seeks_match_linear_reference) {
     de__sound_asset *asset = source_cooked(false, 48000 * 60, false);
     de_tracking_allocator tracking;

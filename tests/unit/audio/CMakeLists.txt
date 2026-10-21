@@ -48,6 +48,8 @@ endif()
 if(TARGET de_audio AND DE_BUILD_TOOLS)
     de_add_test(NAME audio_sources SOURCES test_sources.c LIBS de_audio de_cooker)
     de_add_test(NAME audio_streaming SOURCES test_streaming.c LIBS de_audio de_cooker TIMEOUT 120)
+    # Independent pull-decoder oracle for the production push-decoder seek path.
+    target_link_libraries(test_audio_streaming PRIVATE de_tp_stb)
     de_add_test(NAME audio_procedural SOURCES test_procedural.c LIBS de_audio)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/source-tmp")
     foreach(_source_test test_audio_sources test_audio_streaming test_audio_procedural)
