@@ -110,18 +110,23 @@ TEST_F(anim, three_bone_rotated_chain_has_analytic_model_palette_and_world_socke
     de_entity entity = spawn_animator(f);
     DeAnimator *a = de_entity_get(f->world, entity, de_anim_component(f->anim));
     a->playing = false;
-    DeTransform *transform = de_entity_get(f->world, entity, f->anim->builtins.transform);
-    transform->position.x = 1000000000.25;
     ASSERT_EQ(de_anim__register_stage(f->anim, DE_ANIM_STAGE_BLEND, three_bone_pose, NULL), DE_OK);
-    anim_frame(f, 0);
-    const de__anim_entry *entry = &f->anim->entries[de_entity_index(entity)];
-    EXPECT_TRUE(fabsf(entry->model[1].m[9]) < 1e-6f);
-    EXPECT_TRUE(fabsf(entry->model[2].m[9] + 2) < 1e-6f);
-    EXPECT_TRUE(fabsf(entry->model[2].m[10] - 2) < 1e-6f);
-    EXPECT_TRUE(fabsf(entry->palette[2].m[9]) < 1e-6f);
-    EXPECT_TRUE(fabsf(entry->palette[2].m[10] - 2) < 1e-6f);
-    de_transform socket;
-    ASSERT_TRUE(de_anim_bone_transform(f->world, entity, de_name_from("joint2"), &socket));
-    EXPECT_TRUE(fabs(socket.position.x - 999999998.25) < 1e-6);
-    EXPECT_TRUE(fabs(socket.position.y - 2) < 1e-6);
+    /* Retain the large-distance case and the exact S27 acceptance anchor. */
+    const de_dvec3 origins[] = {{1000000000.25, 0, 0}, {100000, 100000, 0}};
+    for (u32 i = 0; i < sizeof origins / sizeof origins[0]; ++i) {
+        DeTransform *transform = de_entity_get(f->world, entity, f->anim->builtins.transform);
+        transform->position = origins[i];
+        anim_frame(f, 0);
+        const de__anim_entry *entry = &f->anim->entries[de_entity_index(entity)];
+        EXPECT_TRUE(fabsf(entry->model[1].m[9]) < 1e-6f);
+        EXPECT_TRUE(fabsf(entry->model[2].m[9] + 2) < 1e-6f);
+        EXPECT_TRUE(fabsf(entry->model[2].m[10] - 2) < 1e-6f);
+        EXPECT_TRUE(fabsf(entry->palette[2].m[9]) < 1e-6f);
+        EXPECT_TRUE(fabsf(entry->palette[2].m[10] - 2) < 1e-6f);
+        de_transform socket;
+        ASSERT_TRUE(de_anim_bone_transform(f->world, entity, de_name_from("joint2"), &socket));
+        EXPECT_TRUE(fabs(socket.position.x - (origins[i].x - 2)) < 1e-6);
+        EXPECT_TRUE(fabs(socket.position.y - (origins[i].y + 2)) < 1e-6);
+        EXPECT_TRUE(fabs(socket.position.z - origins[i].z) < 1e-6);
+    }
 }

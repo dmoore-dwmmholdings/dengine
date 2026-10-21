@@ -212,14 +212,28 @@ static void sample(de_system_ctx *ctx) {
     for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage < DE_ANIM_STAGE_FINALIZE; ++stage)
         de__anim_run_stage(s, stage);
 }
-static void finalize(de_system_ctx *ctx) {
-    de_anim_system *s = ctx->user;
-    for (u32 i = 0; i < s->job_count; ++i) {
+static void finalize_range(u32 begin, u32 end, void *user) {
+    de_anim_system *s = user;
+    for (u32 i = begin; i < end; ++i) {
         de__anim_entry *e = &s->entries[s->jobs[i]];
         if (!e->ready || !de_entity_alive(s->world, e->entity))
             continue;
         de__anim_pose(&e->skeleton, &e->local, e->model, e->palette);
         e->finalized = true;
+    }
+}
+static void finalize(de_system_ctx *ctx) {
+    de_anim_system *s = ctx->user;
+    /* Pose arithmetic writes disjoint entry-owned buffers. Keep publication,
+     * events and stage callbacks on the main thread in the gathered order. */
+    if (s->tasks)
+        de_task_parallel_for(s->tasks, s->job_count, 32, finalize_range, s);
+    else
+        finalize_range(0, s->job_count, s);
+    for (u32 i = 0; i < s->job_count; ++i) {
+        de__anim_entry *e = &s->entries[s->jobs[i]];
+        if (!e->ready || !de_entity_alive(s->world, e->entity))
+            continue;
 #if DE_HAS_RENDER
         if (s->renderer)
             de_render_set_skin_palette(s->renderer, e->entity, e->palette, e->mesh_joints);
