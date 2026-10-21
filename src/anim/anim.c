@@ -54,15 +54,19 @@ static void retain(de_anim_system *s, u32 handle, de_load_handle *out) {
     const de__slot *slot = s->assets ? de__slot_get(s->assets, handle) : NULL;
     *out = slot ? de_asset_load(s->assets, slot->id, DE_LOAD_NO_EVENTS) : (de_load_handle){0};
 }
-static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skeleton_view *skel) {
-    if (e->block && e->joints == skel->joint_count && e->mesh_joints == skel->mesh_joint_count)
+static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skeleton_view *skel,
+                    u32 tracks) {
+    if (e->block && e->joints == skel->joint_count && e->mesh_joints == skel->mesh_joint_count &&
+        e->cursor.capacity == tracks)
         return true;
     size_t local = (size_t)skel->joint_count * sizeof(de_cooked_joint_pose);
     size_t models = (size_t)skel->joint_count * sizeof(de_affine);
     size_t palette = (size_t)skel->mesh_joint_count * sizeof(de_affine);
     size_t names = (size_t)skel->joint_count * sizeof(u64);
     size_t model_offset = (local + 15) & ~(size_t)15, palette_offset = model_offset + models;
-    size_t names_offset = (palette_offset + palette + 7) & ~(size_t)7, total = names_offset + names;
+    size_t names_offset = (palette_offset + palette + 7) & ~(size_t)7;
+    size_t cursor_offset = names_offset + names,
+           total = cursor_offset + (size_t)tracks * sizeof(u32);
     void *block = DE_ALLOC(s->alloc, total ? total : 16, 16, DE_MEM_GENERAL);
     if (!block)
         return false;
@@ -78,6 +82,8 @@ static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skelet
     e->model = (de_affine *)((u8 *)block + model_offset);
     e->palette = (de_affine *)((u8 *)block + palette_offset);
     e->names = (u64 *)((u8 *)block + names_offset);
+    e->cursor =
+        (de__anim_clip_cursor){.keys = (u32 *)((u8 *)block + cursor_offset), .capacity = tracks};
     return true;
 }
 static void gather(const de_query_chunk *chunk, void *user) {
@@ -107,8 +113,12 @@ static void gather(const de_query_chunk *chunk, void *user) {
         const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
         const de__anim_asset *clip = de__anim_asset_get(s, a->clip.id, "anim_clip");
         if (!skel || !clip || skel->skeleton.joint_count != clip->clip.joint_count ||
-            !buffers(s, e, &skel->skeleton))
+            !buffers(s, e, &skel->skeleton, clip->clip.track_count))
             continue;
+        const de__slot *slot = de__slot_get(s->assets, a->clip.id);
+        if (slot->version != e->clip_version)
+            e->cursor.valid = false;
+        e->clip_version = slot->version;
         e->skeleton = skel->skeleton;
         e->clip = clip->clip;
         e->ready = true;
@@ -130,7 +140,7 @@ static void sample_range(u32 begin, u32 end, void *user) {
                 e->ended = true;
             }
         }
-        if (!de__anim_sample(&e->clip, &e->skeleton, a->time, e->local))
+        if (!de__anim_sample_cached(&e->clip, &e->skeleton, a->time, e->local, &e->cursor))
             e->ready = false;
     }
 }

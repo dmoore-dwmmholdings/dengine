@@ -12,6 +12,14 @@ typedef struct de__anim_asset {
     de_cooked_skeleton_view skeleton;
     de_cooked_clip_view clip;
 } de__anim_asset;
+typedef struct de__anim_clip_cursor {
+    u32 *keys;
+    u32 capacity;
+    const u8 *clip_base;
+    f32 time;
+    bool valid;
+    u64 binary_searches, forward_steps;
+} de__anim_clip_cursor;
 typedef struct de__anim_entry {
     de_entity entity;
     u64 seen;
@@ -19,6 +27,8 @@ typedef struct de__anim_entry {
     de_load_handle skeleton_ref, clip_ref;
     de_cooked_skeleton_view skeleton;
     de_cooked_clip_view clip;
+    u32 clip_version;
+    de__anim_clip_cursor cursor;
     DeAnimator *animator;
     void *block;
     size_t bytes;
@@ -72,6 +82,8 @@ de_result de_anim__register_stage(de_anim_system *, de__anim_stage, de__anim_sta
 void de__anim_run_stage(de_anim_system *, de__anim_stage);
 bool de__anim_sample(const de_cooked_clip_view *, const de_cooked_skeleton_view *, f32,
                      de_cooked_joint_pose *);
+bool de__anim_sample_cached(const de_cooked_clip_view *, const de_cooked_skeleton_view *, f32,
+                            de_cooked_joint_pose *, de__anim_clip_cursor *);
 f32 de__anim_time(f32 time, f32 duration, f32 speed, f32 dt, bool loop, bool *ended);
 void de__anim_pose(const de_cooked_skeleton_view *, const de_cooked_joint_pose *, de_affine *,
                    de_affine *);

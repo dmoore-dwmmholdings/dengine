@@ -16,9 +16,9 @@ de_add_module(
 )
 
 # DENG-201 visual playback; the cooked reference decoder retains its arithmetic contract.
-target_sources(de_anim PRIVATE anim.c anim_system.c anim_assets.c clip_sample.c pose.c anim_internal.h)
+target_sources(de_anim PRIVATE anim.c anim_system.c anim_assets.c clip_sample.c sampling.c pose.c anim_internal.h)
 if(MSVC)
-    set_source_files_properties(formats/clip_decode.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
+    set_source_files_properties(formats/clip_decode.c sampling.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
 else()
-    set_source_files_properties(formats/clip_decode.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+    set_source_files_properties(formats/clip_decode.c sampling.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()

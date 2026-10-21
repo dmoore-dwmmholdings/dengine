@@ -1,4 +1,4 @@
-de_add_test(NAME anim SOURCES test_clip_sample.c
+de_add_test(NAME anim SOURCES test_clip_sample.c test_sampling.c
     LIBS de_anim de_asset de_ecs de_reflect de_task de_platform de_test_support LABELS unit anim TIMEOUT 120)
 if(TARGET test_anim)
     target_include_directories(test_anim PRIVATE "${DE_ROOT_DIR}/src")
