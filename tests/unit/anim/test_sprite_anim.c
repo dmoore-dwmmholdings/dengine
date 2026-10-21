@@ -45,30 +45,14 @@ static void sprite_fx_teardown(sprite_fx *f) {
     if (f->path[0])
         EXPECT_EQ(de_file_delete(f->path), DE_OK);
 }
-static void sprite_load(sprite_fx *f, u32 ms, bool markers) {
-    char source[2048];
-    int n = snprintf(source, sizeof source,
-                     "atlas='sprite/atlas'\ndefault_ms=%u\n"
-                     "grid={columns=4,rows=1,frame_size=[16,16]}\n"
-                     "[[tags]]\nname='run'\nfrom=1\nto=3\n"
-                     "[[tags]]\nname='reverse'\nfrom=0\nto=3\ndirection='reverse'\n"
-                     "[[tags]]\nname='bounce'\nfrom=0\nto=3\ndirection='pingpong'\n",
-                     ms);
-    ASSERT_TRUE(n > 0);
-    if (markers)
-        for (u32 i = 0; i < 4; ++i) {
-            int k = snprintf(source + n, sizeof source - (size_t)n,
-                             "[[events]]\nframe=%u\nname='f%u'\n", i, i);
-            ASSERT_TRUE(k > 0);
-            n += k;
-        }
+static void sprite_load_text(sprite_fx *f, const char *source, u64 size) {
     de_cooker *cooker = NULL;
     ASSERT_EQ(de_cooker_create(&(de_cooker_desc){.allocator = &f->base.allocator}, &cooker), DE_OK);
     de__cooker_type type = {.name = "sprite_clip", .import = de_sprite_clip_import};
     de_asset_import_ctx ctx;
     de__import_ctx_init(&ctx, cooker, &type);
     ctx.source = source;
-    ctx.source_size = (u64)n;
+    ctx.source_size = size;
     ctx.source_rel = "sprite.toml";
     ctx.id_str = "sprite/clip";
     ctx.id = de_asset_id_from(ctx.id_str);
@@ -106,6 +90,25 @@ static void sprite_load(sprite_fx *f, u32 ms, bool markers) {
     }
     ASSERT_EQ(state, DE_LOAD_READY);
 }
+static void sprite_load(sprite_fx *f, u32 ms, bool markers) {
+    char source[2048];
+    int n = snprintf(source, sizeof source,
+                     "atlas='sprite/atlas'\ndefault_ms=%u\n"
+                     "grid={columns=4,rows=1,frame_size=[16,16]}\n"
+                     "[[tags]]\nname='run'\nfrom=1\nto=3\n"
+                     "[[tags]]\nname='reverse'\nfrom=0\nto=3\ndirection='reverse'\n"
+                     "[[tags]]\nname='bounce'\nfrom=0\nto=3\ndirection='pingpong'\n",
+                     ms);
+    ASSERT_TRUE(n > 0);
+    if (markers)
+        for (u32 i = 0; i < 4; ++i) {
+            int k = snprintf(source + n, sizeof source - (size_t)n,
+                             "[[events]]\nframe=%u\nname='f%u'\n", i, i);
+            ASSERT_TRUE(k > 0);
+            n += k;
+        }
+    sprite_load_text(f, source, (u64)n);
+}
 static de_entity sprite_spawn(sprite_fx *f, const char *tag, bool loop) {
     de_entity e;
     de_component c[] = {f->base.anim->sprite_component, f->sprite};
@@ -124,6 +127,78 @@ static u32 sprite_index(sprite_fx *f, de_entity e) {
     const DeSprite *s = de_entity_get_const(f->base.world, e, f->sprite);
     EXPECT_TRUE(s->texture.id != 0);
     return (u32)(s->uv_rect.x * 4 + .5f);
+}
+/* Independent expanded millisecond oracle; no cooked prefix tables or runtime helpers. */
+TEST_F(sprite_anim, unequal_durations_match_millisecond_oracle_in_both_directions, sprite_fx) {
+    const char *source = "atlas='sprite/atlas'\natlas_size=[64,16]\n"
+                         "frames=[{rect=[0,0,16,16],ms=7},{rect=[16,0,16,16],ms=13},"
+                         "{rect=[32,0,16,16],ms=29},{rect=[48,0,16,16],ms=41}]\n"
+                         "[[tags]]\nname='forward'\nfrom=0\nto=3\n"
+                         "[[tags]]\nname='reverse'\nfrom=0\nto=3\ndirection='reverse'\n"
+                         "[[tags]]\nname='bounce'\nfrom=0\nto=3\ndirection='pingpong'\n"
+                         "[[events]]\nframe=0\nname='f0'\n"
+                         "[[events]]\nframe=1\nname='f1'\n"
+                         "[[events]]\nframe=2\nname='f2'\n"
+                         "[[events]]\nframe=3\nname='f3'\n";
+    sprite_load_text(f, source, strlen(source));
+    const u32 paths[3][6] = {{0, 1, 2, 3}, {3, 2, 1, 0}, {0, 1, 2, 3, 2, 1}};
+    const char *tags[] = {"forward", "reverse", "bounce"};
+    const u32 duration[] = {7, 13, 29, 41};
+    const f32 dts[] = {.001f, .007f, .013f, .029f, .041f, .125f};
+    de_name names[] = {de_name_from("f0"), de_name_from("f1"), de_name_from("f2"),
+                       de_name_from("f3")};
+    de_event_reader reader =
+        de_event_reader_create(f->base.world, de_anim_event_type(f->base.anim));
+    for (u32 direction = 0; direction < 3; ++direction) {
+        u32 frame_at[132], boundary[132] = {0}, period = 0;
+        for (u32 i = 0; i < (direction == 2 ? 6u : 4u); ++i) {
+            boundary[period] = 1;
+            for (u32 ms = 0; ms < duration[paths[direction][i]]; ++ms)
+                frame_at[period++] = paths[direction][i];
+        }
+        for (u32 backwards = 0; backwards < 2; ++backwards) {
+            de_entity e = sprite_spawn(f, tags[direction], true);
+            DeSpriteAnimator *a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+            a->speed = backwards ? -3.25f : 3.25f;
+            sprite_frame(f, 0);
+            const de_anim_event *event = de_event_next(f->base.world, &reader);
+            ASSERT_TRUE(event);
+            EXPECT_EQ(event->name.hash, names[frame_at[0]].hash);
+            EXPECT_FALSE(de_event_next(f->base.world, &reader));
+            f64 total = 0;
+            i64 previous = 0;
+            for (u32 tick = 0; tick < 120; ++tick) {
+                f32 dt = dts[tick % 6];
+                total += (f64)dt * (backwards ? -3.25 : 3.25) * 1000;
+                i64 now = (i64)total;
+                sprite_frame(f, dt);
+                i64 phase = now % period;
+                if (phase < 0)
+                    phase += period;
+                EXPECT_EQ(sprite_index(f, e), frame_at[phase]);
+                i64 step = backwards ? -1 : 1;
+                for (i64 ms = previous; ms != now;) {
+                    i64 before = ms % period;
+                    if (before < 0)
+                        before += period;
+                    ms += step;
+                    i64 after = ms % period;
+                    if (after < 0)
+                        after += period;
+                    if ((backwards && boundary[before]) || (!backwards && boundary[after])) {
+                        event = de_event_next(f->base.world, &reader);
+                        ASSERT_TRUE(event);
+                        EXPECT_EQ(event->entity.bits, e.bits);
+                        EXPECT_EQ(event->name.hash, names[frame_at[after]].hash);
+                    }
+                }
+                EXPECT_FALSE(de_event_next(f->base.world, &reader));
+                previous = now;
+            }
+            de_entity_despawn(f->base.world, e);
+            sprite_frame(f, 0);
+        }
+    }
 }
 TEST_F(sprite_anim, forward_reverse_pingpong_tag_restart_and_pause, sprite_fx) {
     sprite_load(f, 100, false);
@@ -239,7 +314,55 @@ TEST_F(sprite_anim, sprite_changed_query_only_observes_actual_frame_changes, spr
     EXPECT_EQ(o.rows, 1u);
     sprite_frame(f, .01f);
     EXPECT_EQ(o.rows, 0u);
+    /* Crossing a full cycle still emits markers, but unchanged final UVs need no write. */
+    sprite_frame(f, .4f);
+    EXPECT_EQ(o.rows, 0u);
     de_system_remove(f->base.world, observer);
+}
+TEST_F(sprite_anim, paused_seek_invalid_tag_recovery_and_single_frame_clamp, sprite_fx) {
+    const char *source = "atlas='sprite/atlas'\n"
+                         "grid={columns=4,rows=1,frame_size=[16,16]}\n"
+                         "[[tags]]\nname='still'\nfrom=2\nto=2\ndirection='pingpong'\n"
+                         "[[events]]\nframe=2\nname='still'\n";
+    sprite_load_text(f, source, strlen(source));
+    de_entity e = sprite_spawn(f, NULL, true);
+    DeSpriteAnimator *a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+    a->playing = false;
+    a->time = .25f;
+    sprite_frame(f, 1);
+    EXPECT_EQ(sprite_index(f, e), 2u);
+    a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+    EXPECT_FLOAT_EQ(a->time, .25f, 1e-6f);
+    a->tag = de_name_from("missing");
+    sprite_frame(f, 1);
+    EXPECT_EQ(sprite_index(f, e), 2u);
+    a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+    a->tag = de_name_from("still");
+    a->playing = true;
+    a->loop = false;
+    de_event_reader reader =
+        de_event_reader_create(f->base.world, de_anim_event_type(f->base.anim));
+    sprite_frame(f, 0);
+    EXPECT_EQ(sprite_index(f, e), 2u);
+    const de_anim_event *event = de_event_next(f->base.world, &reader);
+    ASSERT_TRUE(event);
+    EXPECT_EQ(event->kind, DE_ANIM_EV_MARKER);
+    EXPECT_EQ(event->name.hash, de_name_from("still").hash);
+    EXPECT_FALSE(de_event_next(f->base.world, &reader));
+    sprite_frame(f, .2f);
+    event = de_event_next(f->base.world, &reader);
+    ASSERT_TRUE(event);
+    EXPECT_EQ(event->kind, DE_ANIM_EV_CLIP_END);
+    EXPECT_FALSE(de_event_next(f->base.world, &reader));
+    a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+    EXPECT_FALSE(a->playing);
+    EXPECT_EQ(sprite_index(f, e), 2u);
+    /* Attempting to resume an already-ended clip holds without a second end event. */
+    a->playing = true;
+    sprite_frame(f, .2f);
+    EXPECT_FALSE(de_event_next(f->base.world, &reader));
+    a = de_entity_get(f->base.world, e, f->base.anim->sprite_component);
+    EXPECT_FALSE(a->playing);
 }
 TEST(sprite_anim, serial_and_parallel_frames_and_ordered_markers_match) {
     u64 traces[2][60] = {{0}};
