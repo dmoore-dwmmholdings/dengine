@@ -160,21 +160,36 @@ static void gather(const de_query_chunk *chunk, void *user) {
         s->jobs[s->job_count++] = index;
     }
 }
+static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
+    if (a->playing) {
+        bool ended;
+        a->time = de__anim_time(a->time, e->clip.duration, a->speed, s->dt, a->loop, &ended);
+        if (ended) {
+            a->playing = false;
+            e->ended = true;
+        }
+    }
+    if (!de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor))
+        e->ready = false;
+}
 static void sample_range(u32 begin, u32 end, void *user) {
     de_anim_system *s = user;
     for (u32 i = begin; i < end; ++i) {
         de__anim_entry *e = &s->entries[s->jobs[i]];
-        DeAnimator *a = e->animator;
-        if (a->playing) {
-            bool ended;
-            a->time = de__anim_time(a->time, e->clip.duration, a->speed, s->dt, a->loop, &ended);
-            if (ended) {
-                a->playing = false;
-                e->ended = true;
-            }
-        }
-        if (!de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor))
-            e->ready = false;
+        sample_entry(s, e, e->animator);
+    }
+}
+static void sample_chunk(const de_query_chunk *chunk, void *user) {
+    de_anim_system *s = user;
+    DeAnimator *animators = chunk->columns[0];
+    for (u32 row = 0; row < chunk->count; ++row) {
+        de_entity entity = chunk->entities[row];
+        u32 index = de_entity_index(entity);
+        if (index >= s->capacity)
+            continue;
+        de__anim_entry *e = &s->entries[index];
+        if (e->ready && e->seen == s->epoch && e->entity.bits == entity.bits)
+            sample_entry(s, e, &animators[row]);
     }
 }
 static void sample(de_system_ctx *ctx) {
@@ -186,7 +201,11 @@ static void sample(de_system_ctx *ctx) {
     for (u32 i = 0; i < s->capacity; ++i)
         if (s->entries[i].entity.bits && s->entries[i].seen != s->epoch)
             release_entry(s, &s->entries[i]);
-    if (s->tasks)
+    if (s->tasks && s->tasks == de_world_task_system(ctx->world))
+        de_query_par_each(ctx->world, ctx->queries[0], 32, sample_chunk, s);
+    else if (s->tasks)
+        /* Retain S19's explicit separate task-system binding when it differs
+         * from the world's scheduler; normal host wiring uses par_each above. */
         de_task_parallel_for(s->tasks, s->job_count, 32, sample_range, s);
     else
         sample_range(0, s->job_count, s);

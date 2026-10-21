@@ -219,23 +219,47 @@ TEST_F(anim, playback_uses_cursor_and_resets_after_clip_replacement, anim_fixtur
 
 TEST_F(anim, parallel_and_serial_sampling_match_all_pose_bytes, anim_fixture) {
     load_assets(f, 60);
-    de_entity entities[1000];
+    EXPECT_TRUE(de_world_task_system(f->world) == f->tasks);
+    EXPECT_FALSE(de_world_task_system(NULL));
+    /* A serial world with an explicit animation pool exercises the S19 binding
+     * fallback without violating one-task-system-per-creating-thread ownership. */
+    anim_fixture separate = {.allocator = f->allocator,
+                             .tasks = f->tasks,
+                             .types = f->types,
+                             .assets = f->assets,
+                             .skeleton = f->skeleton,
+                             .clip = f->clip};
+    ASSERT_EQ(de_world_create(&(de_world_desc){.allocator = &f->allocator, .types = f->types},
+                              &separate.world),
+              DE_OK);
+    ASSERT_EQ(de_anim_create(&f->allocator, f->assets, &separate.anim), DE_OK);
+    de_anim_set_task_system(separate.anim, f->tasks);
+    de_anim_attach(separate.anim, separate.world);
+    ASSERT_TRUE(de_anim_component(separate.anim).id);
+    EXPECT_FALSE(de_world_task_system(separate.world));
+    de_entity entities[2][1000];
     const size_t local_bytes = 60 * sizeof(de_cooked_joint_pose);
     const size_t affine_bytes = 60 * sizeof(de_affine), stride = local_bytes + 2 * affine_bytes;
     u8 *reference = malloc(1000 * stride);
     ASSERT_TRUE(reference);
-    for (u32 i = 0; i < 1000; ++i)
-        entities[i] = spawn_animator(f);
-    for (u32 pass = 0; pass < 2; ++pass) {
-        de_anim_set_task_system(f->anim, pass == 0 ? f->tasks : NULL);
+    for (u32 i = 0; i < 1000; ++i) {
+        entities[0][i] = spawn_animator(f);
+        entities[1][i] = spawn_animator(&separate);
+    }
+    for (u32 pass = 0; pass < 3; ++pass) {
+        anim_fixture *active = pass == 2 ? &separate : f;
+        u32 world_index = pass == 2 ? 1 : 0;
+        de_anim_set_task_system(active->anim, pass == 1 ? NULL : f->tasks);
         for (u32 i = 0; i < 1000; ++i) {
-            DeAnimator *a = de_entity_get(f->world, entities[i], de_anim_component(f->anim));
+            DeAnimator *a = de_entity_get(active->world, entities[world_index][i],
+                                          de_anim_component(active->anim));
             a->time = (f32)(i % 97) / 97;
             a->speed = i & 1 ? -2.3f : 3.1f;
         }
-        anim_frame(f, .17f);
+        anim_frame(active, .17f);
         for (u32 i = 0; i < 1000; ++i) {
-            const de__anim_entry *e = &f->anim->entries[de_entity_index(entities[i])];
+            const de__anim_entry *e =
+                &active->anim->entries[de_entity_index(entities[world_index][i])];
             ASSERT_TRUE(e->ready && e->finalized);
             u8 *p = reference + (size_t)i * stride;
             if (pass == 0) {
@@ -253,6 +277,9 @@ TEST_F(anim, parallel_and_serial_sampling_match_all_pose_bytes, anim_fixture) {
         }
     }
     free(reference);
+    de_anim_set_task_system(f->anim, f->tasks);
+    de_anim_destroy(separate.anim);
+    de_world_destroy(separate.world);
 }
 
 #if DE__ASSET_RELOAD_ENABLED

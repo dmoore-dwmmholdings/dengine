@@ -1,4 +1,5 @@
 #include "anim_internal.h"
+#include "anim/anim_math.h"
 
 static f32 key_time(const de_cooked_clip_view *clip, const de_cooked_clip_track *track, u32 key) {
     return de_cooked_clip_time(clip, de_canim_get_u16(track->times + 2u * key));
@@ -55,11 +56,16 @@ static void sample_track(const de_cooked_clip_view *clip, const de_cooked_clip_t
     }
     de_cooked_clip_key_value(track, hi, b);
     f32 alpha = (time - t_lo) / (key_time(clip, track, hi) - t_lo);
-    if (track->channel == DE_COOKED_CLIP_CH_ROTATION)
-        de_cooked_clip_nlerp(a, b, alpha, out);
-    else
+    if (track->channel == DE_COOKED_CLIP_CH_ROTATION) {
+        de_quat q = de__anim_nlerp((de_quat){a[0], a[1], a[2], a[3]},
+                                   (de_quat){b[0], b[1], b[2], b[3]}, alpha, true);
+        out[0] = q.x;
+        out[1] = q.y;
+        out[2] = q.z;
+        out[3] = q.w;
+    } else
         for (u32 c = 0; c < track->components; ++c)
-            out[c] = a[c] + (b[c] - a[c]) * alpha;
+            out[c] = de__anim_lerp_scalar(a[c], b[c], alpha);
 }
 
 static bool sample_into(const de_cooked_clip_view *clip, const de_cooked_skeleton_view *skel,
