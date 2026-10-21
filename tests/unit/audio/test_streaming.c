@@ -26,6 +26,9 @@ static void report_stream_trace(de_audio *a) {
     qsort(events, ready, sizeof *events, trace_order);
     u64 demand = 0, queued = 0, start = 0, io_start = 0, write_start = 0;
     u64 wake_max = 0, queue_max = 0, refill_max = 0, io_max = 0, other_max = 0;
+    u64 cpu_start = 0, slow_cpu = 0, slow_io = 0, cpu_max = 0, off_cpu_max = 0;
+    bool cpu_start_valid = false, slow_cpu_valid = false;
+    u32 cpu_pairs = 0;
     u32 refills = 0, empty_refills = 0, underruns = 0, first_underrun = ready;
     u32 source = ready ? events[0].source : 0;
     bool mixed = false;
@@ -47,6 +50,8 @@ static void report_stream_trace(de_audio *a) {
             start = e->time_ns;
             io_start = e->io_ns;
             write_start = e->write_pos;
+            cpu_start = e->cpu_ns;
+            cpu_start_valid = e->cpu_valid != 0;
             if (queued && start >= queued && start - queued > queue_max)
                 queue_max = start - queued;
             queued = 0;
@@ -54,8 +59,21 @@ static void report_stream_trace(de_audio *a) {
         case DE__STREAM_FINISH:
             if (start && e->time_ns >= start && e->io_ns >= io_start) {
                 u64 wall = e->time_ns - start, io = e->io_ns - io_start;
-                if (wall > refill_max)
+                bool cpu_valid = cpu_start_valid && e->cpu_valid && e->cpu_ns >= cpu_start;
+                u64 cpu = cpu_valid ? e->cpu_ns - cpu_start : 0;
+                if (cpu_valid) {
+                    ++cpu_pairs;
+                    if (cpu > cpu_max)
+                        cpu_max = cpu;
+                    if (wall > cpu && wall - cpu > off_cpu_max)
+                        off_cpu_max = wall - cpu;
+                }
+                if (wall > refill_max) {
                     refill_max = wall;
+                    slow_cpu = cpu;
+                    slow_io = io;
+                    slow_cpu_valid = cpu_valid;
+                }
                 if (io > io_max)
                     io_max = io;
                 if (wall >= io && wall - io > other_max)
@@ -80,6 +98,11 @@ static void report_stream_trace(de_audio *a) {
            ready, count, full ? " CAPACITY_LIMIT" : "", mixed ? " MIXED_SOURCES" : "", refills,
            empty_refills, underruns, (double)wake_max / 1e6, (double)queue_max / 1e6,
            (double)refill_max / 1e6, (double)io_max / 1e6, (double)other_max / 1e6);
+    printf("stream CPU: %u/%u valid refill pairs; max CPU %.3fms wall-minus-CPU %.3fms; "
+           "slowest refill wall %.3fms CPU %.3fms%s async-io %.3fms (same refill)\n",
+           cpu_pairs, refills, (double)cpu_max / 1e6, (double)off_cpu_max / 1e6,
+           (double)refill_max / 1e6, (double)slow_cpu / 1e6, slow_cpu_valid ? "" : " UNAVAILABLE",
+           (double)slow_io / 1e6);
     if (underruns)
         for (u32 i = first_underrun > 8 ? first_underrun - 8 : 0;
              i < ready && i <= first_underrun + 8; ++i) {

@@ -8,6 +8,7 @@
 #include "de_test.h"
 
 #include <dengine/de_platform.h>
+#include "platform/de_atomic.h"
 
 #include <stdio.h>
 #include <time.h>
@@ -33,6 +34,60 @@ TEST(time, monotonic) {
     EXPECT_EQ(backwards, 0u);
     EXPECT_GT(prev, first); /* a million calls take longer than one tick */
     EXPECT_GT(first, 0u);
+}
+
+TEST(time, thread_cpu_counter_progresses_without_going_backwards) {
+    EXPECT_EQ(de_time_thread_cpu_ns(NULL), DE_ERR_INVALID_ARGUMENT);
+    u64 first = 0, previous = 0;
+    ASSERT_EQ(de_time_thread_cpu_ns(&first), DE_OK);
+    previous = first;
+    u32 backwards = 0, errors = 0;
+    for (u32 i = 0; i < 1000000; ++i) {
+        u64 now = 0;
+        if (de_time_thread_cpu_ns(&now) != DE_OK)
+            ++errors;
+        if (now < previous)
+            ++backwards;
+        previous = now;
+    }
+    EXPECT_EQ(errors, 0u);
+    EXPECT_EQ(backwards, 0u);
+    EXPECT_GT(previous, first);
+}
+
+typedef struct cpu_wait_probe {
+    de_sem start, done;
+} cpu_wait_probe;
+static i32 burn_other_thread(void *user) {
+    cpu_wait_probe *probe = user;
+    de_sem_wait(&probe->start);
+    u64 until = de_time_now_ns() + 100000000;
+    while (de_time_now_ns() < until)
+        de_cpu_pause();
+    de_sem_post(&probe->done, 1);
+    return 0;
+}
+TEST(time, thread_cpu_excludes_wait_and_other_threads_work) {
+    cpu_wait_probe probe;
+    ASSERT_EQ(de_sem_init(&probe.start, 0), DE_OK);
+    ASSERT_EQ(de_sem_init(&probe.done, 0), DE_OK);
+    de_thread *thread = NULL;
+    ASSERT_EQ(de_thread_create(burn_other_thread, &probe, "cpu-clock-probe", DE_THREAD_NORMAL, 0,
+                               &thread),
+              DE_OK);
+    u64 before = 0, after = 0;
+    ASSERT_EQ(de_time_thread_cpu_ns(&before), DE_OK);
+    u64 start = de_time_now_ns();
+    de_sem_post(&probe.start, 1);
+    de_sem_wait(&probe.done);
+    u64 wall = de_time_now_ns() - start;
+    ASSERT_EQ(de_time_thread_cpu_ns(&after), DE_OK);
+    de_thread_join(thread);
+    de_sem_destroy(&probe.start);
+    de_sem_destroy(&probe.done);
+    EXPECT_GE(after, before);
+    /* Reject both a wall clock and a process-wide CPU clock as the implementation. */
+    EXPECT_LT(after - before, wall / 2);
 }
 
 /* Wall clock independent of the code under test: C11 timespec_get. */

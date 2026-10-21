@@ -37,8 +37,8 @@ typedef enum de__stream_trace_kind {
     DE__STREAM_UNDERRUN
 } de__stream_trace_kind;
 typedef struct de__stream_trace_event {
-    u64 time_ns, read_pos, write_pos, decoder_frame, io_ns, io_requests;
-    u32 source, kind;
+    u64 time_ns, read_pos, write_pos, decoder_frame, io_ns, io_requests, cpu_ns;
+    u32 source, kind, cpu_valid;
 } de__stream_trace_event;
 bool de__stream_test_trace_enable(de_audio *a);
 u32 de__stream_test_trace_count(de_audio *a, bool *full);

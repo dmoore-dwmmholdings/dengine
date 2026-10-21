@@ -138,10 +138,15 @@ static void trace_event(stream_source *s, stream_trace *t, u32 kind, u64 time_ns
     if (i >= STREAM_TRACE_CAPACITY)
         return;
     stream_trace_slot *slot = &t->slots[i];
+    /* Only START/FINISH on a refill worker sample CPU time. Never query it on the mixer. */
+    u64 cpu_ns = 0;
+    bool cpu_valid = decoder && de_time_thread_cpu_ns(&cpu_ns) == DE_OK;
     slot->event =
         (de__stream_trace_event){.time_ns = time_ns,
                                  .source = s->trace_id,
                                  .kind = kind,
+                                 .cpu_ns = cpu_ns,
+                                 .cpu_valid = cpu_valid,
                                  .read_pos = de_atomic_load_u64(&s->read_pos, DE_ATOMIC_ACQUIRE),
                                  .write_pos = de_atomic_load_u64(&s->write_pos, DE_ATOMIC_ACQUIRE),
                                  .decoder_frame = decoder ? s->decoder->frame : 0,

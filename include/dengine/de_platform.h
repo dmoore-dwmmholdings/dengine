@@ -809,6 +809,11 @@ DE_API de_result de_platform_file_dialog(const de_file_dialog_desc *desc, de_fil
  */
 DE_API u64 de_time_now_ns(void);
 
+/** Calling thread's accumulated user + kernel CPU time in nanoseconds, excluding waits.
+ * Resolution depends on the OS; short intervals may be zero. Diagnostic use only, not a
+ * real-time callback or wall-clock deadline. Writes zero on failure; NULL is invalid. */
+DE_API de_result de_time_thread_cpu_ns(u64 *out);
+
 /* ---------- Sleep and frame pacing (S03, DENG-249) ----------
  * Implementation: src/platform/sleep_pacing.c. */
 
