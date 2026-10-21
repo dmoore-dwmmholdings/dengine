@@ -60,3 +60,16 @@ if(TARGET test_ui_focus)
   target_compile_definitions(test_ui_focus PRIVATE _CRT_SECURE_NO_WARNINGS)
  endif()
 endif()
+
+# Cook fixture packs in test executables; runtime libraries stay cooker-free.
+if(DE_BUILD_TOOLS)
+ foreach(target test_ui_draw test_ui_binding)
+  if(TARGET ${target})
+   target_link_libraries(${target} PRIVATE de_cooker de_pack_lib)
+   target_include_directories(${target} PRIVATE "${DE_ROOT_DIR}/tools")
+   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${target}-packed")
+   target_compile_definitions(${target} PRIVATE DE_UI_TEST_PACKED_ASSETS=1
+    "DE_TEXT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/${target}-packed\"")
+  endif()
+ endforeach()
+endif()
