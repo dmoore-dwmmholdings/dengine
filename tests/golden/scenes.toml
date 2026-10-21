@@ -25,6 +25,24 @@ format = "rgba16f"
 threshold_mean = 0.005
 threshold_p99 = 0.02
 
+# DENG-180: fixed S19 cooked clip poses, through the actual player and GPU skinning.
+# Metal is the native S19 qualification; other backend references remain unqualified.
+[scene.anim_cesium_pose_pair]
+description = "Cooked CesiumMan at 0 and 0.4 seconds through animation, extraction and GPU skinning"
+size = [512, 256]
+backends = ["metal"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
+[scene.anim_cesium_frozen_selftest]
+description = "Frozen second pose must differ from the legacy-player pose-pair reference"
+reference = "anim_cesium_pose_pair"
+expect_fail = true
+size = [512, 256]
+backends = ["metal"]
+threshold_mean = 0.005
+threshold_p99 = 0.05
+
 [scene.rhi_triangle]
 description = "four triangles: interpolated colors, reverse-Z depth test, back-face culling"
 threshold_mean = 0.005
