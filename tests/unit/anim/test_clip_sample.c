@@ -165,6 +165,11 @@ TEST_F(anim, no_alloc_thousand_sixty_bones, anim_fixture) {
            (double)elapsed / ((double)frames * 1e6),
            (unsigned long long)de_alloc_guard_offences(&guard));
     DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    /* Only the hardware-checked M1 job qualifies the original S27 budget.
+     * Compare integer elapsed time, not the rounded diagnostic above. */
+    const char *qualify_m1 = getenv("DE_ANIM_M1_ACCEPTANCE");
+    if (qualify_m1 && strcmp(qualify_m1, "1") == 0)
+        EXPECT_LE(elapsed, (u64)frames * UINT64_C(2000000));
 }
 
 #if DE_ANIM_HAS_COOKER && DE_HAS_RENDER && DE_HAS_GPU_METAL
