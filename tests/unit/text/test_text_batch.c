@@ -90,8 +90,13 @@ static void start_render(text_render_fx *f, de_gpu_backend backend) {
         &(de_gpu_device_desc){
             .backend = backend, .debug_layer = backend != DE_GPU_NULL, .pipeline_cache_dir = ""},
         &f->d);
-    if (result != DE_OK)
+    if (result == DE_ERR_UNSUPPORTED)
         SKIP("native device unavailable");
+    ASSERT_EQ(result, DE_OK);
+    de_gpu_tier_report tier;
+    de_gpu_evaluate_tier(de_gpu_get_caps(f->d), &tier);
+    if (!tier.base_ok)
+        SKIP("native GPU is below the renderer Base tier");
     ASSERT_EQ(de_world_create(&(de_world_desc){.types = f->types}, &f->w), DE_OK);
     ASSERT_EQ(de_renderer_create(
                   &(de_renderer_desc){.device = f->d, .assets = f->fonts.assets, .types = f->types},
