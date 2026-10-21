@@ -9,6 +9,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#if defined(_WIN32)
+#include <direct.h>
+#include <process.h>
+#define anim_test_pid _getpid
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define anim_test_pid getpid
+#endif
 #if DE_ANIM_HAS_COOKER
 #include "cook/importers/model/anim_cook.h"
 #endif
@@ -142,7 +152,18 @@ typedef struct anim_fixture {
 static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
     static bool mounted;
     if (!mounted) {
-        ASSERT_EQ(de_fs_mount("animtest", DE_ANIM_TEST_TMP, DE_MOUNT_WRITABLE, 0), DE_OK);
+        /* CTest runs separate cases concurrently; their clips have different joint counts. */
+        char native[sizeof(DE_ANIM_TEST_TMP) + 64];
+        int n = snprintf(native, sizeof native, "%s/process-%lu", DE_ANIM_TEST_TMP,
+                         (unsigned long)anim_test_pid());
+        ASSERT_TRUE(n > 0 && (size_t)n < sizeof native);
+#if defined(_WIN32)
+        int created = _mkdir(native);
+#else
+        int created = mkdir(native, 0700);
+#endif
+        ASSERT_TRUE(created == 0 || errno == EEXIST);
+        ASSERT_EQ(de_fs_mount("animtest", native, DE_MOUNT_WRITABLE, 0), DE_OK);
         mounted = true;
     }
     f->allocator = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_GENERAL);
