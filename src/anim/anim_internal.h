@@ -50,7 +50,7 @@ typedef struct de__anim_entry {
     bool ready, ended, finalized;
     de__anim_clock pending_clock;
     de__anim_clock *clock;
-    u64 fixed_pose_hash;
+    u64 fixed_pose_hash, pose_restore_count;
     f32 visual_time;
     u64 visual_fixed_ticks, visual_fixed_hash;
     bool clock_missing, clock_known, visual_output, visual_playing;
@@ -66,6 +66,8 @@ typedef enum de__anim_stage {
 /* Stage callbacks run on the main thread between the built-in passes. They may
  * dispatch/join their own jobs over ready entries, but must not change world
  * structure (the gathered component pointers stay borrowed until finalize).
+ * Iterate s->jobs[0..job_count): ready entries outside that list can hold cached
+ * poses for the other timing mode and must not be changed by this pass.
  * Register on the main thread between schedules; user storage outlives s. */
 typedef void (*de__anim_stage_fn)(de_anim_system *s, void *user);
 typedef struct de__anim_stage_hook {
@@ -92,7 +94,7 @@ struct de_anim_system {
     u32 capacity;
     u32 *jobs;
     u32 job_capacity, job_count;
-    u64 epoch;
+    u64 epoch, restore_count;
     f32 dt;
     de_pool *pose_pools[DE__ANIM_POSE_POOL_CLASSES];
     de__anim_stage_hook stages[DE_ANIM_STAGE_COUNT][DE__ANIM_STAGE_HOOK_CAPACITY];

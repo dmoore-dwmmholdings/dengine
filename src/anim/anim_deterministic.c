@@ -1,4 +1,5 @@
 #include "anim_internal.h"
+#include "ecs/ecs_internal.h"
 #include <dengine/de_reflect.h>
 #include <string.h>
 
@@ -39,11 +40,15 @@ static void finalize_range(u32 begin, u32 end, void *user) {
             continue;
         de__anim_pose_deterministic(&e->skeleton, &e->local, e->model, e->palette);
         e->fixed_pose_hash = e->clock->pose_hash = de__anim_pose_checksum(&e->local);
+        e->pose_restore_count = s->restore_count;
         e->clock_known = e->finalized = true;
     }
 }
 static void evaluate(de_system_ctx *ctx) {
     de_anim_system *s = ctx->user;
+    ecs_snapshot_stats stats;
+    ecs_snapshot_stats_get(ctx->world, &stats);
+    s->restore_count = stats.restores;
     de__anim_prepare(ctx, true);
     /* The world's range scheduler carries the deterministic FP environment to
      * workers. The fixed grain is part of the simulation contract. */
@@ -73,6 +78,17 @@ static void evaluate(de_system_ctx *ctx) {
 bool de__anim_fixed_pose_valid(const de_anim_system *s, const de__anim_entry *e) {
     const de__anim_clock *clock = de_entity_get_const(s->world, e->entity, s->clock_component);
     const DeAnimator *a = de_entity_get_const(s->world, e->entity, s->component);
+    if (!clock) {
+        /* A following gameplay system can read the first fixed pose before the
+         * deferred clock add is applied. Never reuse that pending state across
+         * a restore of a snapshot taken before the clock existed, even when
+         * authored time and the cached output happen to match. */
+        ecs_snapshot_stats stats;
+        ecs_snapshot_stats_get(s->world, &stats);
+        if (!e->clock_missing || stats.restores != e->pose_restore_count)
+            return false;
+        clock = &e->pending_clock;
+    }
     return a && clock && clock->initialized && e->clock_known &&
            clock->pose_hash == e->fixed_pose_hash && a->time == clock->output_time &&
            a->skeleton.id == e->skeleton_handle && a->clip.id == e->clip_handle;

@@ -92,6 +92,45 @@ TEST(anim_fixed, binary_clock_wrap_matches_independent_libm_oracle) {
 static void fixed_tick(anim_fixture *f, f32 dt) {
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_FIXED_UPDATE, dt, 0), DE_OK);
 }
+typedef struct fixed_bone_probe {
+    de_entity entity;
+    bool available;
+} fixed_bone_probe;
+static void read_fixed_bone(de_system_ctx *ctx) {
+    fixed_bone_probe *probe = ctx->user;
+    de_transform bone;
+    probe->available =
+        de_anim_bone_transform(ctx->world, probe->entity, de_name_from("joint0"), &bone);
+}
+TEST_F(anim_fixed, first_tick_gameplay_bone_query_and_preclock_restore, anim_fixture) {
+    load_assets(f, 3);
+    de_entity entity = spawn_animator(f);
+    DeAnimator *a = de_entity_get(f->world, entity, f->anim->component);
+    a->deterministic = true;
+    a->playing = false; /* Restored authored time equals the pending clock's output. */
+    de_world_snapshot before = {0};
+    ASSERT_EQ(de_world_snapshot_take(f->world, &f->allocator, &before), DE_OK);
+    fixed_bone_probe probe = {.entity = entity};
+    const char *after[] = {"anim.evaluate_fixed"};
+    ASSERT_TRUE(de_system_add(f->world, &(de_system_desc){.name = "test.fixed_bone_consumer",
+                                                          .schedule = DE_SCHEDULE_FIXED_UPDATE,
+                                                          .flags = DE_SYSTEM_MAIN_THREAD |
+                                                                   DE_SYSTEM_EXCLUSIVE,
+                                                          .fn = read_fixed_bone,
+                                                          .user = &probe,
+                                                          .after = after,
+                                                          .after_count = 1})
+                    .id);
+    fixed_tick(f, .125f);
+    EXPECT_TRUE(probe.available); /* Must work before the first deferred clock add is applied. */
+    ASSERT_EQ(de_world_snapshot_restore(f->world, &before), DE_OK);
+    de_transform bone;
+    EXPECT_FALSE(de_anim_bone_transform(f->world, entity, de_name_from("joint0"), &bone));
+    probe.available = false;
+    fixed_tick(f, .125f);
+    EXPECT_TRUE(probe.available);
+    de_world_snapshot_free(&f->allocator, &before);
+}
 TEST_F(anim_fixed, fixed_only_mixed_cadence_mode_handoff_and_snapshot_replay, anim_fixture) {
     load_assets(f, 3);
     de_entity entity = spawn_animator(f);
