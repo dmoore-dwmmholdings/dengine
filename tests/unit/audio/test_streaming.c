@@ -635,3 +635,134 @@ TEST(audio_streaming, seek_ack_between_cursor_and_generation_loads_discards_stal
     de__sound_asset_release(asset);
     de_io_shutdown();
 }
+
+#include "audio/source/stream_ring.h"
+TEST(audio_streaming, pcm_ring_wrap_channels_and_wide_cursors_match_scalar_oracle) {
+    const u32 capacities[] = {1, 7, 31, 24000};
+    const u32 channels[] = {1, 2, 6, 8};
+    const size_t samples = 24000 * 8 + 16, bytes = samples * sizeof(f32);
+    f32 *ring = malloc(bytes), *expected = malloc(bytes), *pcm = malloc(bytes),
+        *out = malloc(bytes);
+    ASSERT_TRUE(ring && expected && pcm && out);
+    for (size_t i = 0; i < samples; ++i)
+        pcm[i] = (f32)((i32)(i % 65536) - 32768) / 32768.f;
+    u32 cases = 0;
+    for (u32 c = 0; c < sizeof capacities / sizeof capacities[0]; ++c)
+        for (u32 ch = 0; ch < sizeof channels / sizeof channels[0]; ++ch) {
+            u32 cap = capacities[c], nc = channels[ch];
+            const u64 positions[] = {0, cap - 1, cap, cap + 1, (1ull << 40) + cap - 3};
+            const u32 lengths[] = {0, 1, cap / 2, cap - 1, cap};
+            for (u32 p = 0; p < sizeof positions / sizeof positions[0]; ++p)
+                for (u32 n = 0; n < sizeof lengths / sizeof lengths[0]; ++n) {
+                    memset(ring, 0x5a, bytes);
+                    memset(expected, 0x5a, bytes);
+                    memset(out, 0x5a, bytes);
+                    for (u32 f = 0; f < lengths[n]; ++f)
+                        for (u32 k = 0; k < nc; ++k)
+                            expected[((positions[p] + f) % cap) * nc + k] = pcm[(size_t)f * nc + k];
+                    de__stream_ring_write(ring, cap, nc, positions[p], pcm, lengths[n]);
+                    ASSERT_EQ(memcmp(ring, expected, bytes), 0);
+                    de__stream_ring_read(out, ring, cap, nc, positions[p], lengths[n]);
+                    memset(expected, 0x5a, bytes);
+                    memcpy(expected, pcm, (size_t)lengths[n] * nc * sizeof(f32));
+                    ASSERT_EQ(memcmp(out, expected, bytes), 0);
+                    ++cases;
+                }
+        }
+    /* Diagnostic only: the actual ring helpers, with output consumed every iteration.
+     * No machine-dependent time threshold or playback acceptance changes. */
+    const u32 iterations = 4000, frames = 512, nc = 6, cap = 24000;
+    u64 checksum = 0, start = de_time_now_ns();
+    for (u32 i = 0; i < iterations; ++i) {
+        u64 at = (1ull << 40) + (u64)i * frames;
+        de__stream_ring_write(ring, cap, nc, at, pcm, frames);
+        de__stream_ring_read(out, ring, cap, nc, at, frames);
+        checksum += de_hash64(out, (size_t)frames * nc * sizeof(f32), 0) ^ i;
+    }
+    u64 elapsed = de_time_now_ns() - start, reference = 0;
+    for (u32 i = 0; i < iterations; ++i)
+        reference += de_hash64(pcm, (size_t)frames * nc * sizeof(f32), 0) ^ i;
+    EXPECT_EQ(checksum, reference);
+    printf("PCM ring %u scalar-oracle cases, %u x %u six-channel roundtrips %.3fms\n", cases,
+           iterations, frames, (double)elapsed / 1e6);
+    free(out);
+    free(pcm);
+    free(expected);
+    free(ring);
+}
+
+static void stream_pcm_wrap_case(de__sound_asset *asset) {
+    de__sound_decoder *reference = NULL;
+    ASSERT_EQ(de__decoder_create(de_heap_allocator(), asset, &reference), DE_OK);
+    de_audio *audio = test_audio_manual(4, 0);
+    de__audio_source *source = NULL;
+    ASSERT_EQ(de__source_stream(audio, asset, &source), DE_OK);
+    de__stream_test_starve(audio, true);
+    u32 channels = asset->view.channels, frames = asset->view.rate * 2;
+    ASSERT_TRUE(asset->view.frames >= frames);
+    f32 *buffers = malloc((size_t)8192 * channels * 2 * sizeof(f32));
+    ASSERT_TRUE(buffers);
+    f32 *actual = buffers, *expected = buffers + (size_t)8192 * channels;
+    const u32 chunks[] = {1, 7, 1023, 4093, 997, 8191};
+    u32 calls = 0;
+    for (u32 at = 0; at < frames;) {
+        u32 n = chunks[calls++ % (sizeof chunks / sizeof chunks[0])];
+        if (n > frames - at)
+            n = frames - at;
+        de__stream_test_refill_now(source);
+        ASSERT_EQ(de__decoder_read(reference, expected, n), n);
+        u64 hits = de__rt_guard_hits();
+        de__rt_guard_enter();
+        u32 got = source->vt->read(source, actual, n, channels);
+        de__rt_guard_leave();
+        ASSERT_EQ(got, n);
+        EXPECT_EQ(de__rt_guard_hits(), hits);
+        ASSERT_EQ(memcmp(actual, expected, (size_t)n * channels * sizeof(f32)), 0);
+        at += n;
+    }
+    EXPECT_EQ(de_audio_get_stats(audio).underruns, 0u);
+    printf("Stream PCM codec%u channels%u: %u frames/%u irregular reads byte-exact\n",
+           asset->view.codec, channels, frames, calls);
+    const u32 targets[] = {24001, 73137, 0};
+    u32 acknowledgements = 0;
+    for (u32 i = 0; i < sizeof targets / sizeof targets[0]; ++i) {
+        ASSERT_TRUE(de__decoder_seek(reference, targets[i]));
+        ASSERT_EQ(de__decoder_read(reference, expected, 257), 257u);
+        ASSERT_TRUE(source->vt->seek(source, targets[i]));
+        /* Publish the seek between reader snapshots, as in the existing ack regression. */
+        de__stream_test_read_hook(source, finish_seek_after_read_snapshot, &acknowledgements);
+        ASSERT_EQ(source->vt->read(source, actual, 257, channels), 257u);
+        de__stream_test_read_hook(source, NULL, NULL);
+        ASSERT_EQ(memcmp(actual, expected, (size_t)257 * channels * sizeof(f32)), 0);
+    }
+    EXPECT_EQ(acknowledgements, 3u);
+    printf("Stream PCM codec%u channels%u: three seek acknowledgements byte-exact\n",
+           asset->view.codec, channels);
+    source->vt->close(source);
+    de_audio_destroy(audio);
+    free(buffers);
+    de__decoder_destroy(reference);
+    de__sound_asset_release(asset);
+    de_io_shutdown();
+}
+TEST(audio_streaming, decoded_stream_ring_wrap_matches_independent_decoder) {
+    stream_pcm_wrap_case(source_cooked(true, 48000 * 2, false));
+    stream_pcm_wrap_case(source_cooked(false, 0, false));
+    source_mount();
+    u64 bytes = 0;
+    u8 *wave = source_wave(48000 * 2 * 2, 48000, &bytes);
+    wave[22] = 2;
+    wave[32] = 4;
+    de__snd_w32(wave + 28, 48000 * 4);
+    de__sound_settings settings = {.stream = true, .stream_set = true, .codec = "opus"};
+    void *cooked = NULL;
+    u64 cooked_size = 0;
+    ASSERT_EQ(de__sound_cook(NULL, wave, bytes, &settings, &cooked, &cooked_size), DE_OK);
+    free(wave);
+    de__sound_asset *asset = NULL;
+    ASSERT_EQ(
+        de__sound_asset_create(de_heap_allocator(), cooked, cooked_size, "astest:/cache", &asset),
+        DE_OK);
+    DE_FREE(de_heap_allocator(), cooked, (size_t)cooked_size);
+    stream_pcm_wrap_case(asset);
+}

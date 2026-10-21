@@ -1,4 +1,5 @@
 #include "audio/source/stream_internal.h"
+#include "audio/source/stream_ring.h"
 #include "asset/asset_internal.h"
 #include <de_stb_vorbis.h>
 #include <string.h>
@@ -297,9 +298,7 @@ static void refill(void *user) {
         }
         if (request != de_atomic_load_u32(&s->seek_request, DE_ATOMIC_ACQUIRE))
             break;
-        for (u32 f = 0; f < got; ++f)
-            memcpy(s->ring + ((write + f) % s->capacity) * v->channels,
-                   pcm + (size_t)f * v->channels, v->channels * 4);
+        de__stream_ring_write(s->ring, s->capacity, v->channels, write, pcm, got);
         de_atomic_store_u64(&s->write_pos, write + got, DE_ATOMIC_RELEASE);
     }
 }
@@ -354,9 +353,7 @@ static u32 stream_read(de__audio_source *base, f32 *out, u32 frames, u32 channel
     }
     u32 available = seeking ? 0 : (u32)(write - read);
     u32 n = frames < available ? frames : available;
-    for (u32 f = 0; f < n; ++f)
-        memcpy(out + (size_t)f * channels, s->ring + ((read + f) % s->capacity) * channels,
-               channels * 4);
+    de__stream_ring_read(out, s->ring, s->capacity, channels, read, n);
     if (n)
         de_atomic_store_u64(&s->read_pos, read + n, DE_ATOMIC_RELEASE);
     if (available - n < s->capacity / 2)
