@@ -179,7 +179,12 @@ TEST_F(anim, version_one_raw_handles_remain_readable, anim_fixture) {
         de_mem_writer_init_fixed(&mw, data, sizeof data);
         de_writer wr = de_writer_from_mem(&mw);
         de_ser_options options = {.format = format == 0 ? DE_SER_TEXT : DE_SER_BINARY};
-        ASSERT_EQ(de_serialize_object(old, old_id, &input, &options, &wr), DE_OK);
+        /* Migration needs stored field metadata; Shipping's default binary is compact. */
+        if (format) {
+            de_ser_binary_options binary = {.schema = DE_SER_BINARY_SELF_DESCRIBING};
+            ASSERT_EQ(de_serialize_binary(old, old_id, &input, &options, &binary, &wr), DE_OK);
+        } else
+            ASSERT_EQ(de_serialize_object(old, old_id, &input, &options, &wr), DE_OK);
         de_type_id id = de_type_find(f->types, "DeAnimator");
         DeAnimator output;
         ASSERT_EQ(de_type_construct(f->types, id, &output), DE_OK);
@@ -195,6 +200,16 @@ TEST_F(anim, version_one_raw_handles_remain_readable, anim_fixture) {
         EXPECT_EQ(output.loop, input.loop);
         EXPECT_EQ(output.root_motion, input.root_motion);
         EXPECT_EQ(output.deterministic, input.deterministic);
+        if (format) {
+            /* Cooked compact records intentionally reject a changed schema. */
+            de_mem_writer_reset(&mw);
+            de_ser_binary_options compact = {.schema = DE_SER_BINARY_COMPACT};
+            ASSERT_EQ(de_serialize_binary(old, old_id, &input, &options, &compact, &wr), DE_OK);
+            de_mem_reader_init(&mr, data, mw.size);
+            rd = de_reader_from_mem(&mr);
+            EXPECT_EQ(de_deserialize_object(f->types, id, &output, &options, &rd),
+                      DE_ERR_VERSION_MISMATCH);
+        }
     }
     de_type_registry_destroy(old);
 }
