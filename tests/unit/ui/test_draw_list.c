@@ -43,6 +43,37 @@ TEST_F(ui_draw, command_generation_opacity_sort_popup, ui_fx) {
     EXPECT_FLOAT_EQ(r->build.commands[2].gpu.color.w, .25f, 0);
     EXPECT_FLOAT_EQ(r->build.commands[3].gpu.color.z, 1, 0); /* popup wins despite low z */
 }
+TEST_F(ui_draw, ordered_roots_recheck_z_and_popup_changes_each_frame, ui_fx) {
+    de_entity root = ui_node(f, (de_entity){0}), other = ui_node(f, (de_entity){0});
+    de_entity nodes[] = {ui_node(f, root), ui_node(f, root), ui_node(f, other), ui_node(f, other)};
+    for (u32 i = 0; i < 4; ++i) {
+        dimensions(f, nodes[i], 20, 20);
+        style(f, nodes[i], (de_vec4){(f32)(i + 1) / 4, 0, 0, 1}, 1);
+    }
+    const u32 expected[][4] = {{0, 1, 2, 3}, {1, 0, 2, 3}, {0, 1, 2, 3}, {1, 0, 2, 3},
+                               {0, 1, 2, 3}, {0, 1, 3, 2}, {0, 1, 2, 3}};
+    for (u32 frame = 0; frame < 7; ++frame) {
+        if (frame == 1)
+            ui_node_edit(f, nodes[0])->z_order = 2;
+        if (frame == 2)
+            ui_node_edit(f, nodes[0])->z_order = 0;
+        if (frame == 3) {
+            DeUiPopup *p = de_entity_add(f->world, nodes[0], f->ui->ids.popup);
+            *p = (DeUiPopup){.anchor = nodes[1], .placement = DE_UI_POPUP_OVERLAY};
+        }
+        if (frame == 4)
+            de_entity_remove(f->world, nodes[0], f->ui->ids.popup);
+        if (frame == 5)
+            ui_node_edit(f, nodes[3])->z_order = -1;
+        if (frame == 6)
+            ui_node_edit(f, nodes[3])->z_order = 0;
+        ui_frame(f);
+        struct de_ui_render *r = render(f);
+        ASSERT_EQ(r->build.count, 4u);
+        for (u32 i = 0; i < 4; ++i)
+            EXPECT_FLOAT_EQ(r->build.commands[i].gpu.color.x, (f32)(expected[frame][i] + 1) / 4, 0);
+    }
+}
 TEST(ui_draw, nine_slice_three_sizes_and_small_destination) {
     de_ui_gpu_quad quads[9];
     for (u32 width = 100; width <= 300; width += 100) {
