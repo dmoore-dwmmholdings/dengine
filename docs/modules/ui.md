@@ -273,12 +273,14 @@ Later advanced-widget walkthrough extensions use the same table and recording sc
 
 ### Advanced controls (DENG-319)
 
-`DeUiTextInput` owns at most255 UTF-8 bytes plus its terminator. The runtime derives
-length from the bounded buffer, snaps caret/selection to the public S28 extended-grapheme
-boundaries, and keeps preedit in a separate display component. A committed input event emits
-CHANGED; preedit never changes the authored buffer. `DeUiText.literal` is the display view
-and may contain password bullets or composition, so bindings must read the reflected
-`DeUiTextInput.buffer` rather than the display. Clipboard copying is disabled for passwords.
+`DeUiTextInput.buffer` stores up to 255 UTF-8 bytes inline; longer documents use
+UI-owned growable storage (see Script documents and terminal integration below).
+Read committed text through `de_ui_text_input_get`, including from bindings, and
+load documents through `de_ui_text_input_set`. The runtime snaps caret/selection
+to the public S28 extended-grapheme boundaries and keeps preedit in a separate
+display component. A committed input event emits CHANGED; preedit never changes
+the committed document. `DeUiText.literal` is the display view and may contain
+password bullets or composition. Clipboard copying is disabled for passwords.
 Public layout hit-test/caret APIs supply bidi-aware mouse positioning and caret geometry;
 single-line controls scroll their physical text origin while preserving the inherited clip.
 The public grapheme wrapper uses stack scratch through255bytes, temporary heap for larger

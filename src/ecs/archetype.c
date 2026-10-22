@@ -36,6 +36,8 @@ static u64 chunk_layout(const de_world *w, ecs_archetype *a, u32 rows, bool writ
 }
 
 u32 ecs_archetype_find_component(const ecs_archetype *a, u32 component) {
+    if (!(a->component_bits & (UINT64_C(1) << (component & 63u))))
+        return ECS_INVALID_INDEX;
     u32 lo = 0, hi = a->component_count;
     while (lo < hi) {
         const u32 mid = lo + (hi - lo) / 2u;
@@ -99,6 +101,7 @@ static de_result archetype_create(de_world *w, const u32 *ids, u32 count, u64 ha
     for (u32 i = 0; i < count; ++i) {
         const ecs_component_info *info = ecs_component_get(w, ids[i]);
         a->components[i] = ids[i];
+        a->component_bits |= UINT64_C(1) << (ids[i] & 63u);
         if (info->size > 0) {
             a->columns[col].component = ids[i];
             a->columns[col].size = info->size;

@@ -222,6 +222,16 @@ TEST_F(ui_text_input, keyboard_editor_context_blocks_navigation_submit_and_cance
 }
 #if defined(DE_UI_TEST_FONTS)
 #include "../text/runtime_test_util.h"
+#include "text/glyph_cache_internal.h"
+typedef struct editor_glyph_gate {
+    de_sem started, release;
+    de_task_counter counter;
+} editor_glyph_gate;
+static void editor_glyph_hold(void *user) {
+    editor_glyph_gate *gate = user;
+    de_sem_post(&gate->started, 1);
+    de_sem_wait(&gate->release);
+}
 TEST_F(ui_text_input, public_rtl_hit_test_mouse_drag_double_word_and_horizontal_scroll, edit_fx) {
     runtime_fx fonts = {0};
     runtime_fx_setup(&fonts);
@@ -317,6 +327,9 @@ TEST_F(ui_text_input, public_rtl_hit_test_mouse_drag_double_word_and_horizontal_
     in->password = true;
     for (u32 i = 0; i < 32; ++i)
         edit_frame(f);
+    /* Frame count is not completion: the bullet may need a background atlas job. */
+    de_text__glyph_jobs_wait(fonts.t);
+    de_text_update(fonts.t);
     state = de_entity_get(b->world, f->editor, b->ui->advanced->editor);
     de_text_style password_style =
         ((const DeUiText *)de_entity_get_const(b->world, f->editor, b->ui->ids.text))->style;
@@ -456,6 +469,12 @@ TEST_F(ui_text_input, actual_committed_binding_refresh_writeback_preedit_and_rea
 TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extract, edit_fx) {
     runtime_fx fonts = {0};
     runtime_fx_setup(&fonts);
+    editor_glyph_gate gate = {0};
+    ASSERT_EQ(de_sem_init(&gate.started, 0), DE_OK);
+    ASSERT_EQ(de_sem_init(&gate.release, 0), DE_OK);
+    de_task_submit(fonts.t->glyph_cache->tasks, DE_TASK_POOL_BACKGROUND, editor_glyph_hold, &gate,
+                   &gate.counter);
+    de_sem_wait(&gate.started);
     ui_fx *b = &f->base;
     b->ui->desc.text = fonts.t;
     DeUiText *text = de_entity_get(b->world, f->editor, b->ui->ids.text);
@@ -467,6 +486,15 @@ TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extra
     in->password = true;
     for (u32 i = 0; i < 32; ++i)
         edit_frame(f);
+    /* All UI frames finish while the sole glyph worker is held. */
+    u64 pending = de_text_get_stats(fonts.t).runtime_pending;
+    de_sem_post(&gate.release, 1);
+    de_task_wait(fonts.t->glyph_cache->tasks, &gate.counter);
+    de_sem_destroy(&gate.started);
+    de_sem_destroy(&gate.release);
+    EXPECT_GT(pending, 0u);
+    de_text__glyph_jobs_wait(fonts.t);
+    de_text_update(fonts.t);
     const de_ui_editor *state = de_entity_get_const(b->world, f->editor, b->ui->advanced->editor);
     de_text_style style = text->style;
     de_text_layout *layout = NULL;
@@ -476,8 +504,8 @@ TEST_F(ui_text_input, runtime_password_page_metadata_required_for_retained_extra
                                  .utf8 = {state->display, strlen(state->display)}, .style = &style},
                              NULL, &layout),
         DE_OK);
-    de_glyph_quad quads[16];
-    EXPECT_EQ(de_text_layout_quads(layout, quads, 16), 9u);
+    de_glyph_quad quads[16] = {0};
+    ASSERT_EQ(de_text_layout_quads(layout, quads, 16), 9u);
     de_text_page_info info = {0};
     EXPECT_EQ(de_text_get_page_info(fonts.t, quads[0].font, quads[0].atlas_page, &info), DE_OK);
     de_text_layout_free(layout);

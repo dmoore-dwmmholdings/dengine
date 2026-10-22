@@ -2,7 +2,7 @@
 #define DE_UI_TEST_UTIL_H
 #include "de_test.h"
 #include "ui/ui_internal.h"
-#if defined(DE_UI_TEST_FONTS)
+#if defined(DE_UI_TEST_FONTS) || defined(DE_UI_TEST_PACKED_ASSETS)
 #include "../text/packed_test_util.h"
 #endif
 #include <math.h>
@@ -39,7 +39,7 @@ static inline void ui_fx_teardown(ui_fx *f) {
     if (f->device)
         de_gpu_device_destroy(f->device);
 #endif
-#if defined(DE_UI_TEST_FONTS)
+#if defined(DE_UI_TEST_FONTS) || defined(DE_UI_TEST_PACKED_ASSETS)
     text_fixture_pack_cleanup(f->asset_pack);
 #endif
 #if defined(DE_UI_ASSET_ROOT)

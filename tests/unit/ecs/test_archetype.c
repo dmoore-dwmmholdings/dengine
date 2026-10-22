@@ -2,6 +2,7 @@
 #include "ecs_test_util.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* Every row of every table points back at itself through its entity's record, and the rows add
@@ -32,6 +33,73 @@ static void check_records(de_world *w, u32 alive) {
 }
 
 /* ---- archetype.set_canonical ----------------------------------------------------------------- */
+
+TEST_F(archetype, optional_components_collide_move_and_restore_without_false_matches, ecs_fx) {
+    static const de_field_info fields[] = {DE_FIELD(TPos, v, DE_FK_VEC3, DE_FIELD_DEFAULT)};
+    de_component components[132];
+    bool present[132] = {false}, saved[132] = {false};
+    for (u32 i = 0; i < 132; ++i) {
+        char name[32];
+        snprintf(name, sizeof name, "OptionalComponent%u", i);
+        de_type_desc desc = DE_TYPE_DESC(TPos, 1, fields);
+        desc.name = name;
+        de_type_id type = de_type_register(f->types, &desc);
+        ASSERT_TRUE(type.id != 0);
+        components[i] =
+            de_component_register(f->w, type, DE_COMP_SNAPSHOT | (i % 2 ? DE_COMP_TAG : 0));
+        ASSERT_TRUE(components[i].id != 0);
+    }
+    de_entity entity = de_entity_spawn(f->w);
+    de_world_snapshot snap = {0};
+    u64 checksum = 0;
+    for (u32 phase = 0; phase < 6; ++phase) {
+        if (phase == 1)
+            for (u32 i = 0; i < 64; ++i)
+                if ((components[i].id & 63u) == 63u || (components[i].id & 63u) == 0) {
+                    ASSERT_TRUE(de_entity_add(f->w, entity, components[i]) != NULL);
+                    present[i] = true;
+                }
+        if (phase == 1 || phase == 2 || phase == 4) {
+            u32 first = phase == 1 ? 0 : phase == 2 ? 64 : 128;
+            for (u32 i = first; i < first + 2; ++i) {
+                ASSERT_TRUE(de_entity_add(f->w, entity, components[i]) != NULL);
+                present[i] = true;
+            }
+        }
+        if (phase == 3 || phase == 4) {
+            u32 first = phase == 3 ? 0 : 64;
+            for (u32 i = first; i < first + 2; ++i) {
+                de_entity_remove(f->w, entity, components[i]);
+                present[i] = false;
+            }
+        }
+        if (phase == 2) {
+            memcpy(saved, present, sizeof saved);
+            checksum = de_world_checksum(f->w, DE_COMP_SNAPSHOT);
+            ASSERT_EQ(de_world_snapshot_take(f->w, NULL, &snap), DE_OK);
+        }
+        if (phase == 5) {
+            ASSERT_EQ(de_world_snapshot_restore(f->w, &snap), DE_OK);
+            memcpy(present, saved, sizeof present);
+            EXPECT_EQ(de_world_checksum(f->w, DE_COMP_SNAPSHOT), checksum);
+        }
+        de_tracking_stats before = de_tracking_allocator_stats(&f->track);
+        for (u32 i = 0; i < 132; ++i) {
+            EXPECT_EQ(de_entity_has(f->w, entity, components[i]), present[i]);
+            EXPECT_EQ(de_entity_get_const(f->w, entity, components[i]) != NULL, present[i]);
+        }
+        EXPECT_EQ(de_tracking_allocator_stats(&f->track).alloc_count, before.alloc_count);
+    }
+    de_world_snapshot_free(NULL, &snap);
+    de_entity_despawn(f->w, entity);
+    de_entity replacement = de_entity_spawn(f->w);
+    ASSERT_TRUE(entity.bits != replacement.bits);
+    for (u32 i = 0; i < 132; ++i) {
+        EXPECT_FALSE(de_entity_has(f->w, entity, components[i]));
+        EXPECT_TRUE(de_entity_get_const(f->w, entity, components[i]) == NULL);
+        EXPECT_FALSE(de_entity_has(f->w, replacement, components[i]));
+    }
+}
 
 TEST_F(archetype, set_canonical, ecs_fx) {
     EXPECT_EQ(ecs_archetype_count(f->w), 1u);

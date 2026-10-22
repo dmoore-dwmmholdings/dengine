@@ -191,6 +191,8 @@ this section.
 
 The toolchain restricts pkg-config searches to the sysroot and clears host
 `PKG_CONFIG_PATH` entries and pkg-config's automatic host `CMAKE_PREFIX_PATH` lookup.
+On Windows it also disables automatic package-prefix rewriting: Linux `.pc` files
+keep their declared prefixes before pkg-config applies the target sysroot.
 Target `.pc` files belong under the sysroot's normal
 `usr/lib/<triple>/pkgconfig`, `usr/lib/pkgconfig`, `usr/lib64/pkgconfig`, or
 `usr/share/pkgconfig` directories (the corresponding `lib` and `usr/local` directories

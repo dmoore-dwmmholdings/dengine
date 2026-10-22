@@ -9,6 +9,11 @@ if(DE_BUILD_TOOLS)
  if(TARGET fuzz_text_layout)
   target_include_directories(fuzz_text_layout PRIVATE "${DE_ROOT_DIR}/src")
   target_compile_definitions(fuzz_text_layout PRIVATE "DE_LAYOUT_FONT_ROOT=\"${DE_ROOT_DIR}/tests/data/fonts\"")
+  target_link_libraries(fuzz_text_layout PRIVATE de_pack_lib)
+  target_include_directories(fuzz_text_layout PRIVATE "${DE_ROOT_DIR}/tools")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/layout-packed-tmp")
+  target_compile_definitions(fuzz_text_layout PRIVATE
+   "DE_LAYOUT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/layout-packed-tmp\"")
  endif()
 endif()
 
