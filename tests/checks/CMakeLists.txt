@@ -56,6 +56,13 @@ function(de__write_deterministic_objects out)
             "source ${t} ${rel} $<JOIN:$<FILTER:$<TARGET_OBJECTS:${t}>,INCLUDE,${re}>,|>\n")
     endforeach()
     list(REMOVE_DUPLICATES build_targets)
+    # CI can prepare the exact owning targets before the bounded disassembly
+    # test. Keep the test's own build step for configure-only local invocations.
+    add_custom_target(de_deterministic_objects)
+    if(build_targets)
+        add_dependencies(de_deterministic_objects ${build_targets})
+    endif()
+    set_target_properties(de_deterministic_objects PROPERTIES FOLDER "dengine/tests")
     list(JOIN build_targets " " build_targets)
     file(GENERATE OUTPUT "${out}" CONTENT "build ${build_targets}\n${lines}")
 endfunction()
