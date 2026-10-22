@@ -1241,7 +1241,7 @@ TEST_F(texture, sprite_rt_proxy_cooked_trailer, tex_fx) {
     ASSERT_EQ(cook(f, "cutout.png", settings, 2, &result), DE_OK);
     de_cooked_texture_view texture;
     ASSERT_TRUE(view_of(result.data, result.size, &texture));
-    de_cooked_sprite_proxy proxy;
+    de_cooked_sprite_proxy proxy = {0};
     ASSERT_TRUE(result.size >= DE_SPRITE_PROXY_BYTES);
     ASSERT_TRUE(de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
                                       DE_SPRITE_PROXY_BYTES, &proxy));
@@ -1266,7 +1266,7 @@ TEST_F(texture, sprite_proxy_topology_or_alpha_fallback_cooks_deterministically,
             memcmp((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES, "PXRT", 4) == 0;
         EXPECT_EQ(has_proxy, i < 2);
         if (has_proxy) {
-            de_cooked_sprite_proxy proxy;
+            de_cooked_sprite_proxy proxy = {0};
             ASSERT_TRUE(
                 de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
                                       DE_SPRITE_PROXY_BYTES, &proxy));
@@ -1283,7 +1283,7 @@ TEST_F(texture, sprite_rt_proxy_atlas_region, tex_fx) {
     const de__manifest_kv settings[] = {kv_bool("rt_proxy", true), kv_bool("pixel_art", true),
                                         kv_float("rt_proxy_u", .5), kv_float("rt_proxy_width", .5)};
     ASSERT_EQ(cook(f, "cutout.png", settings, 4, &result), DE_OK);
-    de_cooked_sprite_proxy proxy;
+    de_cooked_sprite_proxy proxy = {0};
     ASSERT_TRUE(de_sprite_proxy_parse((const u8 *)result.data + result.size - DE_SPRITE_PROXY_BYTES,
                                       DE_SPRITE_PROXY_BYTES, &proxy));
     ASSERT_TRUE(proxy.region[0] == .5f);
