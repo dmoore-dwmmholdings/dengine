@@ -75,7 +75,7 @@ TEST_F(glyph_cache, cook_runtime_byte_equal, runtime_fx) {
 }
 TEST_F(glyph_cache, saturated_dirty_list_preserves_first_runtime_page_update, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);
-    u32 glyph;
+    u32 glyph = 0;
     ASSERT_EQ(unbaked(f, &glyph, 1), 1u);
     /* Simulate deferred uploads filling the list on already existing baked pages. */
     font->dirty_count = (u32)(sizeof font->dirty / sizeof *font->dirty);
