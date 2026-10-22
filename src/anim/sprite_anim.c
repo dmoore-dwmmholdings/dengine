@@ -9,7 +9,7 @@ typedef struct sprite_entry {
     i64 delta;
     f64 fraction;
     f32 published;
-    bool ping, reverse, input_ping, ready, initial, apply, end_event, ended;
+    bool ping, reverse, input_ping, ready, initial, apply, end_event, ended, was_playing;
     DeSpriteAnimator input;
     const de__anim_asset *asset;
     de_texture texture;
@@ -145,6 +145,7 @@ static void gather(const de_query_chunk *c, void *user) {
         }
         e->seen = r->epoch;
         e->input = *a;
+        e->was_playing = a->playing;
         e->delta = 0;
         e->end_event = false;
         e->apply = false;
@@ -232,6 +233,23 @@ static void compute(const de_query_chunk *c, void *user) {
         u32 offset;
         e->output_frame = locate(e, e->phase, &offset);
         e->apply = e->initial || e->frame != e->output_frame;
+        /* Ranges own disjoint entities, and the exclusive system prevents any
+         * other component access. Mutable gets stamp only actual output writes;
+         * events still flush in entity order after all ranges join. */
+        if (e->apply) {
+            de__sprite_frame f = de__sprite_frame_at(&e->asset->sprite, e->output_frame);
+            DeSprite *sprite = de_entity_get(r->world, e->entity, r->sprite);
+            sprite->texture = e->texture;
+            sprite->uv_rect = (de_vec4){f.rect[0], f.rect[1], f.rect[2], f.rect[3]};
+            sprite->pivot = (de_vec2){f.pivot[0], f.pivot[1]};
+            e->frame = e->output_frame;
+        }
+        e->published = (f32)((f64)e->phase / 1000);
+        if (e->input.time != e->published || e->was_playing != e->input.playing) {
+            DeSpriteAnimator *a = de_entity_get(r->world, e->entity, r->owner->sprite_component);
+            a->time = e->published;
+            a->playing = e->input.playing;
+        }
     }
 }
 static void marker(struct de__sprite_runtime *r, sprite_entry *e, u32 frame) {
@@ -299,7 +317,7 @@ static void update(de_system_ctx *ctx) {
         de_query_par_each(ctx->world, ctx->queries[0], 32, compute, r);
     else
         de_query_each(ctx->world, ctx->queries[0], compute, r);
-    /* Workers produce private state. Only this ordered pass writes components/events. */
+    /* Component writes are disjoint. Events alone need canonical publication. */
     for (u32 i = 0; i < r->capacity; ++i) {
         sprite_entry *e = &r->entries[i];
         if (e->entity.bits && e->seen != r->epoch) {
@@ -309,25 +327,9 @@ static void update(de_system_ctx *ctx) {
         if (!e->ready || e->seen != r->epoch)
             continue;
         events(r, e);
-        if (e->apply) {
-            de__sprite_frame f = de__sprite_frame_at(&e->asset->sprite, e->output_frame);
-            DeSprite *sprite = de_entity_get(ctx->world, e->entity, r->sprite);
-            sprite->texture = e->texture;
-            sprite->uv_rect = (de_vec4){f.rect[0], f.rect[1], f.rect[2], f.rect[3]};
-            sprite->pivot = (de_vec2){f.pivot[0], f.pivot[1]};
-            e->frame = e->output_frame;
-        }
         if (e->end_event) {
             de_anim_event event = {DE_ANIM_EV_CLIP_END, e->entity, {0}};
             de_event_send(ctx->world, r->owner->events, &event);
-        }
-        e->published = (f32)((f64)e->phase / 1000);
-        const DeSpriteAnimator *current =
-            de_entity_get_const(ctx->world, e->entity, r->owner->sprite_component);
-        if (current->time != e->published || current->playing != e->input.playing) {
-            DeSpriteAnimator *a = de_entity_get(ctx->world, e->entity, r->owner->sprite_component);
-            a->time = e->published;
-            a->playing = e->input.playing;
         }
         e->initial = false;
     }
