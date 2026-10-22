@@ -81,5 +81,12 @@ endif()
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "${_de_sysroot}")
 set(ENV{PKG_CONFIG_LIBDIR} "${_de_pkgconfig_path}")
 set(ENV{PKG_CONFIG_PATH} "")
+if(CMAKE_HOST_WIN32)
+    # Native Windows pkg-config/pkgconf otherwise rewrites prefix=/usr from
+    # the .pc location, corrupting Linux multiarch paths before sysrooting.
+    # Keep Linux package prefixes intact; FindPkgConfig forwards these options.
+    list(APPEND PKG_CONFIG_ARGN --dont-define-prefix)
+    list(REMOVE_DUPLICATES PKG_CONFIG_ARGN)
+endif()
 # FindPkgConfig otherwise appends unrooted host CMAKE_PREFIX_PATH directories.
 set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH FALSE)
