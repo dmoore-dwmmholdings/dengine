@@ -501,7 +501,7 @@ RAW_TESTS(metal, DE_GPU_METAL)
 RAW_TESTS(vulkan, DE_GPU_VULKAN)
 RAW_TESTS(d3d12, DE_GPU_D3D12)
 
-static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
+static void temporal_disocclusion(lx *f, de_gpu_backend backend, bool edge) {
     lx_open(f, backend);
     const u32 w = 33, h = 19, tw = 17, th = 10, pitch = 256, fpitch = 512;
     u8 depth[256 * 19] = {0}, normal[256 * 19] = {0}, motion[256 * 19] = {0};
@@ -523,7 +523,11 @@ static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
     for (u32 y = 0; y < th; ++y)
         for (u32 x = 0; x < tw; ++x) {
             float current[4] = {.4f, .5f, .5f, x == tw - 1 ? .001f : .00101f};
-            float old[4] = {.41f, .5f, .5f, 7};
+            float old[4] = {edge ? .05f : .41f, .5f, .5f, 7};
+            if (edge && (y & 1u) == 0) {
+                current[0] = 0;
+                current[3] = .002f; /* An unrelated foreground row must not widen the clamp. */
+            }
             float s[4] = {x % 3 == 0 ? .0009f : (x == tw - 1 ? .001f : .00101f), 0, 0, 1};
             if (x % 3 == 1) {
                 s[1] = 1;
@@ -609,12 +613,13 @@ static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
     const u8 *result = de_gpu_buffer_map(f->dev, rb);
     ASSERT_TRUE(result);
     u32 accepted = 0, rejected = 0;
+    float edge_error = 0;
     for (u32 y = 0; y < th; ++y)
         for (u32 x = 0; x < tw; ++x) {
             u32 full_x = x == tw - 1 ? w - 1 : x * 2 + 1;
             double motion_ndc = half_to_f32(0x2bc2u);
             double prev_x = (double)full_x + .5 - motion_ndc * .5 * w;
-            bool valid = prev_x >= 0;
+            bool valid = prev_x >= 0 && (!edge || (y & 1u) != 0);
             u32 old_x = valid ? (u32)prev_x / 2 : 0;
             valid = valid && old_x % 3 == 2;
             /* Last partial pixel has a different real depth from its previous representative. */
@@ -622,7 +627,12 @@ static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
                 valid = false;
             const float *value = (const float *)(result + y * fpitch + x * 16);
             EXPECT_FLOAT_EQ(value[3], valid ? 8 : 1, 1e-6);
-            EXPECT_FLOAT_EQ(value[0], valid ? .40875 : .4, 2e-6);
+            if (!edge)
+                EXPECT_FLOAT_EQ(value[0], valid ? .40875 : .4, 2e-6);
+            else if ((y & 1u) != 0) {
+                edge_error = fmaxf(edge_error, fabsf(value[0] - .4f));
+                EXPECT_TRUE(fabsf(value[0] - .4f) <= .02001f);
+            }
             EXPECT_TRUE(isfinite(value[1]) && isfinite(value[2]));
             if (valid)
                 ++accepted;
@@ -631,6 +641,9 @@ static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
         }
     EXPECT_GT(accepted, 0u);
     EXPECT_GT(rejected, 0u);
+    if (edge)
+        printf("moving foreground clamp: max absolute visibility error %.8f (limit .02001)\n",
+               edge_error);
     printf("far100m temporal: %u motion-reprojected accepted, %u metre/normal/partial-footprint "
            "rejected\n",
            accepted, rejected);
@@ -643,11 +656,19 @@ static void temporal_disocclusion(lx *f, de_gpu_backend backend) {
 }
 #define TEMPORAL_TEST(tag, backend)                                                                \
     TEST_F(gtao, temporal_disocclusion_##tag, lx) {                                                \
-        temporal_disocclusion(f, backend);                                                         \
+        temporal_disocclusion(f, backend, false);                                                  \
     }
 TEMPORAL_TEST(metal, DE_GPU_METAL)
 TEMPORAL_TEST(vulkan, DE_GPU_VULKAN)
 TEMPORAL_TEST(d3d12, DE_GPU_D3D12)
+
+#define EDGE_CLAMP_TEST(tag, backend)                                                              \
+    TEST_F(gtao, temporal_foreground_clamp_##tag, lx) {                                            \
+        temporal_disocclusion(f, backend, true);                                                   \
+    }
+EDGE_CLAMP_TEST(metal, DE_GPU_METAL)
+EDGE_CLAMP_TEST(vulkan, DE_GPU_VULKAN)
+EDGE_CLAMP_TEST(d3d12, DE_GPU_D3D12)
 
 static const de__gpu_backend_vtable *ao_original_vt;
 static bool ao_fail_texture, ao_fail_submit;

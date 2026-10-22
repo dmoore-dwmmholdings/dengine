@@ -507,11 +507,15 @@ de_result de_renderer_render_frame(de_renderer *r) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_renderer_render_frame: NULL renderer");
     const u64 n = r->frame_index;
     r->stats.rays_traced = 0;
+    r->stats.frame_wait_ms = 0;
+    r->stats.frame_acquire_ms = r->stats.frame_present_ms = 0;
 
     /* 1. Wait for the frame that last used this slot, then reset its arena. */
     if (n >= r->frames_in_flight) {
+        const u64 wait_begin = de_time_now_ns();
         const de_result w = de_gpu_fence_wait(r->dev, r->frame_fence, n + 1u - r->frames_in_flight,
                                               DE__RENDER_FENCE_TIMEOUT_NS);
+        r->stats.frame_wait_ms = (f32)((de_time_now_ns() - wait_begin) * 1e-6);
         if (w != DE_OK)
             return DE_FAIL_WRAP(w, "de_renderer_render_frame: waiting for frame %llu",
                                 (unsigned long long)(n - r->frames_in_flight));
@@ -546,7 +550,9 @@ de_result de_renderer_render_frame(de_renderer *r) {
             r->swapchain_w = ww;
             r->swapchain_h = wh;
         }
+        const u64 acquire_begin = de_time_now_ns();
         const de_result a = de_gpu_swapchain_acquire(r->dev, r->swapchain, &target);
+        r->stats.frame_acquire_ms = (f32)((de_time_now_ns() - acquire_begin) * 1e-6);
         if (a == DE_ERR_BUSY)
             return DE_OK; /* no image (minimised, resizing): nothing to draw */
         if (a != DE_OK)
@@ -571,7 +577,9 @@ de_result de_renderer_render_frame(de_renderer *r) {
     de__material_fill_stats(r, &r->stats); /* DENG-302 */
     r->frame_index = n + 1u;
     if (DE_HANDLE_VALID(r->swapchain)) {
+        const u64 present_begin = de_time_now_ns();
         const de_result p = de_gpu_swapchain_present(r->dev, r->swapchain);
+        r->stats.frame_present_ms = (f32)((de_time_now_ns() - present_begin) * 1e-6);
         if (p != DE_OK && p != DE_ERR_BUSY)
             return DE_FAIL_WRAP(p, "de_renderer_render_frame: present");
     }

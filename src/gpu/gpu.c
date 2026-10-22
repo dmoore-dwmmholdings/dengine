@@ -1086,6 +1086,10 @@ de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s, de_gpu_
         return DE_ERR_INVALID_ARGUMENT;
     if (de__gpu_is_lost(d)) /* DENG-328 */
         return de__gpu_lost_error(F);
+    /* Reclaim completed frame resources before acquiring more, including during
+     * resize/presentation backpressure. This polls completion only: in-flight resources
+     * remain fenced and no queue is drained. */
+    de__gpu_collect(d);
     return d->vt->swapchain_acquire
                ? de__gpu_check_lost(d, d->vt->swapchain_acquire(d, sc, image), F)
                : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);

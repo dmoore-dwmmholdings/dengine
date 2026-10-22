@@ -25,6 +25,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CATransaction.h>
 
 #include "gpu/metal/mtl_internal.h"
 
@@ -170,7 +171,13 @@ de_result de__mtl_swapchain_resize(de_gpu_device *d, de__gpu_swapchain *s, u32 w
     ms->height = h;
     if (w && h) {
         @autoreleasepool {
+            /* Resize runs on the render thread, which need not have a run loop to
+             * commit Core Animation's implicit transaction before nextDrawable. */
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
             layer_of(ms).drawableSize = CGSizeMake(w, h);
+            [CATransaction commit];
+            [CATransaction flush];
         }
     }
     return DE_OK;

@@ -6,6 +6,7 @@
 #include "gpu/gpu_backend.h"
 #include "render/renderer_internal.h"
 #include "render/passes/ssr/ssr_internal.h"
+#include "render/passes/ao/gtao_internal.h"
 #include "render/probes/probes_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/formats/de_cooked_mesh.h"
@@ -27,6 +28,13 @@
 #include "gpu/d3d12/d3d12_internal.h"
 #endif
 #include "lighting_fixture.h"
+static de__gpu_backend_vtable counted_wait_vt;
+static const de__gpu_backend_vtable *original_wait_vt;
+static u32 counted_wait_calls;
+static void count_wait_idle(de_gpu_device *device) {
+    ++counted_wait_calls;
+    original_wait_vt->wait_idle(device);
+}
 typedef struct sfx {
     de_tracking_allocator tracking;
     de_allocator alloc;
@@ -61,6 +69,8 @@ static void sfx_setup(sfx *f) {
     f->alloc = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_RENDER);
 }
 static void sfx_teardown(sfx *f) {
+    if (f->dev && f->dev->vt == &counted_wait_vt)
+        f->dev->vt = original_wait_vt;
     if (f->dev)
         de_gpu_wait_idle(f->dev);
     de__vis_kernel_destroy(f->r ? de__views_vis(f->r) : NULL, &f->kernel);
@@ -1073,6 +1083,13 @@ static void resize_generation(sfx *f, de_gpu_backend backend) {
     view_frame(f);
     EXPECT_TRUE(current_info(f).history_valid);
     u64 before_transitions = de__views_resource_drains(f->r);
+    if (backend == DE_GPU_METAL) {
+        original_wait_vt = f->dev->vt;
+        counted_wait_vt = *original_wait_vt;
+        counted_wait_vt.wait_idle = count_wait_idle;
+        counted_wait_calls = 0;
+        f->dev->vt = &counted_wait_vt;
+    }
     for (u32 cycle = 0; cycle < 3; ++cycle) {
         f->settings.render_scale = 97.0f / 128.0f;
         de_view_set_settings(f->r, f->view, &f->settings);
@@ -1087,8 +1104,14 @@ static void resize_generation(sfx *f, de_gpu_backend backend) {
         view_frame(f);
         EXPECT_TRUE(current_info(f).history_valid);
     }
-    if (backend == DE_GPU_METAL)
-        EXPECT_TRUE(de__views_resource_drains(f->r) > before_transitions);
+    if (backend == DE_GPU_METAL) {
+        f->dev->vt = original_wait_vt;
+        /* view_frame explicitly waits once. No global drain may be added by resize. */
+        EXPECT_EQ(counted_wait_calls, 12u);
+        printf("resize: %u explicit waits across 12 frames, zero extra retirement drains\n",
+               counted_wait_calls);
+        EXPECT_EQ(de__views_resource_drains(f->r), before_transitions);
+    }
     // Warm both persistent-history access variants and their graph placements after resize.
     view_frame(f);
     view_frame(f);
@@ -1187,3 +1210,171 @@ static void pipeline_history(sfx *f, de_gpu_backend backend) {
 SSR_LIFECYCLE_TESTS(metal, DE_GPU_METAL)
 SSR_LIFECYCLE_TESTS(vulkan, DE_GPU_VULKAN)
 SSR_LIFECYCLE_TESTS(d3d12, DE_GPU_D3D12)
+
+static void history_footprint(sfx *f, de_gpu_backend backend) {
+    open_gpu(f, backend);
+    f->width = f->height = 4;
+    const char *entry = "cs_ssr_history_queries";
+    const u32 group[] = {8, 8, 1};
+    de__engine_shader_code code;
+    de__vis_shared *vis = de__views_vis(f->r);
+    ASSERT_EQ(de__vis_shader_load(vis, "ssr_resolve", &entry, 1, &code), DE_OK);
+    ASSERT_EQ(de__vis_kernel_create(vis, &code, 0, entry, group, 16, &f->kernel), DE_OK);
+    de__engine_shader_code_free(&code);
+    de_gpu_buffer upload = de_gpu_buffer_create(
+        f->dev,
+        &(de_gpu_buffer_desc){.size = 2048, .memory = DE_MEM_UPLOAD, .usage = DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(upload.id);
+    f->buffers[f->buffer_count++] = upload;
+    de_gpu_texture images[3];
+    for (u32 i = 0; i < 3; ++i) {
+        images[i] = de_gpu_texture_create(
+            f->dev, &(de_gpu_texture_desc){.width = 4,
+                                           .height = 4,
+                                           .format = DE_FMT_RGBA32_FLOAT,
+                                           .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_DST |
+                                                    DE_USAGE_COPY_SRC});
+        ASSERT_TRUE(images[i].id);
+        f->textures[f->texture_count++] = images[i];
+    }
+    for (u32 test = 0; test < 9; ++test) {
+        u8 *data = de_gpu_buffer_map(f->dev, upload);
+        memset(data, 0, 2048);
+        for (u32 y = 0; y < 4; ++y)
+            for (u32 x = 0; x < 4; ++x) {
+                float *color = (float *)(data + y * 256 + x * 16);
+                float *surface = (float *)(data + 1024 + y * 256 + x * 16);
+                bool poison = y < 2 && test != 0 && test != 7;
+                color[0] = color[1] = color[2] = poison ? 100 : 1;
+                color[3] = 1;
+                surface[0] = test >= 6 ? .001f : .5f;
+                surface[3] = 1;
+                if ((test == 1 && poison) || test == 3)
+                    surface[0] = .25f;
+                if (test == 2 && poison) {
+                    surface[1] = 1;
+                    surface[3] = 0;
+                }
+                if (test == 5 && poison)
+                    color[0] = NAN;
+                if ((test == 6 && poison) || test == 8)
+                    surface[0] = .00101f; /* A ~1m separation at 100m passes a raw depth epsilon. */
+            }
+        de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "ssr.history.footprint");
+        ASSERT_TRUE(cmd);
+        for (u32 i = 0; i < 2; ++i) {
+            de_gpu_barrier b = {.texture = images[i], .after = DE_ACCESS_COPY_DST};
+            de_gpu_cmd_barriers(cmd, &b, 1);
+            de_gpu_cmd_copy_buffer_to_texture(cmd, images[i], 0, 0, upload, i * 1024, 256);
+            b.before = DE_ACCESS_COPY_DST;
+            b.after = DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE;
+            de_gpu_cmd_barriers(cmd, &b, 1);
+        }
+        de_gpu_barrier b = {.texture = images[2], .after = DE_ACCESS_SHADER_WRITE};
+        de_gpu_cmd_barriers(cmd, &b, 1);
+        u32 pc[4] = {de_gpu_texture_bindless(f->dev, images[0], 0, true),
+                     de_gpu_texture_bindless(f->dev, images[1], 0, true),
+                     de_gpu_texture_bindless(f->dev, images[2], 0, true),
+                     test == 4 ? 0 : (test >= 6 ? 3 : 1)};
+        de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
+        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+        de_gpu_cmd_dispatch(cmd, 1, 1, 1);
+        ASSERT_EQ(de_gpu_queue_submit(f->dev, DE_QUEUE_GRAPHICS,
+                                      &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+                  DE_OK);
+        de_gpu_wait_idle(f->dev);
+        float result[4 * 4 * 4];
+        read_texture(f, images[2], DE_ACCESS_SHADER_WRITE, 16, result);
+        for (u32 i = 0; i < 16; ++i) {
+            EXPECT_FLOAT_EQ(result[i * 4], test == 3 || test == 4 || test == 8 ? 0 : 1, 1e-6);
+            EXPECT_TRUE(isfinite(result[i * 4]));
+            const f32 expected_coverage =
+                test == 3 || test == 4 || test == 8
+                    ? 0
+                    : (test == 1 || test == 2 || test == 5 || test == 6 ? .5f : 1);
+            EXPECT_FLOAT_EQ(result[i * 4 + 3], expected_coverage, 1e-6);
+        }
+    }
+}
+#define HISTORY_FOOTPRINT_TEST(tag, backend)                                                       \
+    TEST_F(ssr, history_footprint_##tag, sfx) {                                                    \
+        history_footprint(f, backend);                                                             \
+    }
+HISTORY_FOOTPRINT_TEST(metal, DE_GPU_METAL)
+HISTORY_FOOTPRINT_TEST(vulkan, DE_GPU_VULKAN)
+HISTORY_FOOTPRINT_TEST(d3d12, DE_GPU_D3D12)
+
+static void simultaneous_history(sfx *f, de_gpu_backend backend) {
+    mirror_scene(f, backend, .25f, 10);
+    f->settings.ao = DE_QUALITY_LOW;
+    f->settings.reflections = DE_QUALITY_LOW;
+    de_view_set_settings(f->r, f->view, &f->settings);
+    de_gpu_texture target = de_gpu_texture_create(
+        f->dev, &(de_gpu_texture_desc){.width = 128,
+                                       .height = 128,
+                                       .format = DE_FMT_RGBA8_UNORM,
+                                       .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED});
+    ASSERT_TRUE(target.id);
+    f->textures[f->texture_count++] = target;
+    de_view second =
+        de_view_create(f->r, &(de_view_desc){.target = target, .name = "ssr.independent"});
+    ASSERT_TRUE(second.id);
+    de_view_set_settings(f->r, second, &f->settings);
+    de__rw_view cameras[2] = {f->camera, f->camera};
+    cameras[1].entity = 101;
+    cameras[1].camera.view = second;
+    cameras[1].camera.exposure_ev100 += 4;
+    f->scene.f.views = cameras;
+    f->scene.f.view_count = 2;
+    for (u32 frame = 0; frame < 10; ++frame) {
+        if (frame == 2) {
+            cameras[0].camera.projection = DE_PROJ_ORTHOGRAPHIC;
+            cameras[0].camera.ortho_height = 8;
+        }
+        if (frame == 4)
+            cameras[0].camera.projection = DE_PROJ_PERSPECTIVE;
+        if (frame == 6) {
+            de_render_settings scaled = f->settings;
+            scaled.render_scale = .75f;
+            de_view_set_settings(f->r, second, &scaled);
+        }
+        if (frame == 8) {
+            camera_at(f, (de_vec3){0, 20, 3}, (de_vec3){0, 0, .8f});
+            cameras[0] = f->camera;
+        }
+        view_frame(f);
+        de__ssr_info first, other;
+        ASSERT_TRUE(de__ssr_view_info(f->r->ssr, f->view, &first));
+        ASSERT_TRUE(de__ssr_view_info(f->r->ssr, second, &other));
+        EXPECT_EQ(first.history_valid, frame != 0 && frame != 2 && frame != 4 && frame != 8);
+        EXPECT_EQ(other.history_valid, frame != 0 && frame != 6);
+        de__gtao_info ao_first, ao_other;
+        ASSERT_TRUE(de__gtao_get(f->r->gtao, f->view, &ao_first));
+        ASSERT_TRUE(de__gtao_get(f->r->gtao, second, &ao_other));
+        EXPECT_EQ(ao_first.history_valid, frame != 0 && frame != 2 && frame != 4 && frame != 8);
+        EXPECT_EQ(ao_other.history_valid, frame != 0 && frame != 6);
+        EXPECT_NE(ao_first.history.id, ao_other.history.id);
+        EXPECT_NE(first.temporal.id, other.temporal.id);
+        EXPECT_NE(first.moments.id, other.moments.id);
+        EXPECT_FLOAT_EQ(first.current_exposure / other.current_exposure, 16, .001f);
+    }
+    for (u32 frame = 0; frame < 4; ++frame)
+        view_frame(f);
+    const u64 warmed_bytes = de_tracking_allocator_stats(&f->tracking).bytes_live;
+    for (u32 frame = 0; frame < 32; ++frame) {
+        view_frame(f);
+        EXPECT_TRUE(de_tracking_allocator_stats(&f->tracking).bytes_live <= warmed_bytes);
+    }
+    printf("two-view warmed allocation high-water: %llu bytes across 32 frames\n",
+           (unsigned long long)warmed_bytes);
+    // Avoid retaining a pointer to this stack fixture during teardown.
+    f->scene.f.views = &f->camera;
+    f->scene.f.view_count = 1;
+}
+#define SIMULTANEOUS_HISTORY_TEST(tag, backend)                                                    \
+    TEST_F(ssr, simultaneous_projection_cut_resize_##tag, sfx) {                                   \
+        simultaneous_history(f, backend);                                                          \
+    }
+SIMULTANEOUS_HISTORY_TEST(metal, DE_GPU_METAL)
+SIMULTANEOUS_HISTORY_TEST(vulkan, DE_GPU_VULKAN)
+SIMULTANEOUS_HISTORY_TEST(d3d12, DE_GPU_D3D12)

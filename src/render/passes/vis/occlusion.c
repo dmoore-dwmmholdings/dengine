@@ -49,6 +49,7 @@ typedef struct occ_view {
     bool has_camera;
     de_dvec3 camera; /**< world position */
     de_vec3 forward; /**< world direction */
+    de_mat4 projection;
 } occ_view;
 
 typedef struct occ_state {
@@ -127,6 +128,10 @@ static bool camera_cut(de__vis_shared *s, occ_view *v, const de__vis_context *vc
     const de_vec3 fwd = forward_of(&vc->view_matrix);
     bool cut = !v->has_camera;
     if (v->has_camera) {
+        /* Reprojection/depth history cannot cross projection modes, FOV, aspect or
+         * clip-plane changes, even when the camera did not move. Keep this per view. */
+        if (memcmp(v->projection.m, vc->proj.m, sizeof v->projection.m) != 0)
+            cut = true;
         const f64 dx = cam.x - v->camera.x, dy = cam.y - v->camera.y, dz = cam.z - v->camera.z;
         const f64 limit =
             DE_HANDLE_VALID(s->cv_occlusion_cut_m) ? de_cvar_float(s->cv_occlusion_cut_m) : 10.0;
@@ -138,6 +143,7 @@ static bool camera_cut(de__vis_shared *s, occ_view *v, const de__vis_context *vc
     v->has_camera = true;
     v->camera = cam;
     v->forward = fwd;
+    v->projection = vc->proj;
     return cut;
 }
 

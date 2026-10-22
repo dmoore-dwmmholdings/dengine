@@ -1327,7 +1327,7 @@ static void resize_generation(gifx *f, de_gpu_backend backend) {
         EXPECT_TRUE(ssgi_info(f).history_valid);
     }
     if (backend == DE_GPU_METAL)
-        EXPECT_TRUE(de__views_resource_drains(f->r) > before_transitions);
+        EXPECT_EQ(de__views_resource_drains(f->r), before_transitions);
     // Warm both persistent-history access variants and their graph placements after resize.
     room_frame(f);
     room_frame(f);
