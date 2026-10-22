@@ -58,6 +58,46 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  windows-pkgconfig:
+    name: Windows sysroot metadata isolation
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: CMake and Ninja
+        run: python -m pip install --disable-pip-version-check --no-input cmake==3.31.6 ninja==1.13.2
+      - name: Extract pinned native pkgconf
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'pkgconf-x64-3.0.5.msi'
+          $toolDir = Join-Path $env:RUNNER_TEMP 'pkgconf-native'
+          Invoke-WebRequest 'https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.5/pkgconf-x64-3.0.5.msi' -OutFile $archive
+          $expected = 'fecc7faa6079eafca617bd5058190676163212fc5793259024dab6b67a4ca35d'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Native pkgconf archive checksum mismatch'
+          }
+          $process = Start-Process msiexec.exe -ArgumentList @('/a', "`"$archive`"", '/qn', "TARGETDIR=`"$toolDir`"") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "pkgconf extraction failed: $($process.ExitCode)" }
+          $exe = Get-ChildItem $toolDir -Recurse -Filter pkgconf.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Native pkgconf executable missing' }
+          $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+          & $exe.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw 'Native pkgconf cannot execute' }
+      - name: Require real metadata isolation
+        shell: pwsh
+        run: |
+          $probeDir = Join-Path $env:RUNNER_TEMP 'pkgconfig-isolation'
+          $output = & cmake "-DDE_TOOLCHAIN=$env:GITHUB_WORKSPACE/cmake/toolchains/linux-sysroot.cmake" "-DDE_TEST_DIR=$probeDir" -P tests/checks/check_linux_pkgconfig.cmake 2>&1
+          $result = $LASTEXITCODE
+          $output | Write-Output
+          if ($result -ne 0) { throw "Metadata probe failed: $result" }
+          if (-not (($output -join "`n").Contains('linux_pkgconfig_isolation: target found, host excluded'))) {
+            throw 'Metadata assertions did not execute (a missing-tool skip is not sufficient)'
+          }
+
   vendor:
     name: vendor.py verify
     runs-on: ubuntu-24.04
