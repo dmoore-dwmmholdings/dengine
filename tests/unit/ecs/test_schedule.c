@@ -587,6 +587,40 @@ static void add_vel_fn(de_system_ctx *ctx) {
     de_query_par_each(ctx->world, ctx->queries[0], 3, add_vel_chunk, s);
 }
 
+static void add_vel_without_range_scratch(de_system_ctx *ctx) {
+    ecs_query *q = ecs_query_get(ctx->world, ctx->queries[0]);
+    ASSERT_EQ(q->range_commands.capacity, 0u);
+    const de_allocator *saved = q->range_commands.a;
+    q->range_commands.a = de_allocator_null();
+    add_vel_fn(ctx);
+    q->range_commands.a = saved;
+    EXPECT_EQ(q->range_commands.capacity, 0u);
+}
+
+TEST_F(sched, range_scratch_oom_preserves_commands, ecs_fx) {
+    de_task_system *ts = make_ts(4);
+    rebuild_world(f, ts, 0);
+    sync_ctx s = {.pos = f->pos, .vel = f->vel};
+    de_entity entities[8];
+    for (u32 i = 0; i < 8; ++i) {
+        entities[i] = de_entity_spawn(f->w);
+        ASSERT_TRUE(de_entity_add(f->w, entities[i], f->pos) != NULL);
+    }
+    const de_query_term term = {f->pos, DE_READ};
+    const de_query_desc query = {.terms = &term, .term_count = 1};
+    ASSERT_TRUE(DE_HANDLE_VALID(add_system(f->w, "scratch-oom", DE_SCHEDULE_UPDATE,
+                                           add_vel_without_range_scratch, &s, &query, 1)));
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_UPDATE, 0, 0), DE_OK);
+    EXPECT_EQ(s.ranges, 3u);
+    for (u32 i = 0; i < 8; ++i) {
+        const TVel *v = de_entity_get_const(f->w, entities[i], f->vel);
+        ASSERT_TRUE(v != NULL);
+        EXPECT_FLOAT_EQ(v->v.y, (f32)(i / 3u), 0.0);
+    }
+    ecs_fx_destroy_world(f);
+    de_task_system_destroy(ts);
+}
+
 TEST_F(sched, commands_sync_point, ecs_fx) {
     de_task_system *ts = make_ts(parallel_workers());
     rebuild_world(f, ts, 0);
