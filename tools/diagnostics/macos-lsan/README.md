@@ -145,13 +145,15 @@ cmake -S . -B build/fuzz-joined -G Ninja -DCMAKE_BUILD_TYPE=Dev \
     '-DCMAKE_C_FLAGS=-resource-dir=/tmp/fuzzer-joined/clang-resource -fsanitize=fuzzer-no-link' \
     '-DCMAKE_CXX_FLAGS=-resource-dir=/tmp/fuzzer-joined/clang-resource -fsanitize=fuzzer-no-link' \
     -DDE_SANITIZE=address,undefined -DDE_FUZZ_LIBFUZZER=ON
-cmake --build build/fuzz-joined --target fuzz_sprite_clip
-mkdir -p /tmp/sprite-fuzz-corpus
+cmake --build build/fuzz-joined --target fuzz_text_layout
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_OPTIONS= UBSAN_OPTIONS=halt_on_error=1 \
-    build/fuzz-joined/tests/fuzz/anim/fuzz_sprite_clip \
-    -max_total_time=60 -timeout=10 -malloc_limit_mb=256 \
-    /tmp/sprite-fuzz-corpus tests/fuzz/anim/corpus/sprite_clip
+    ctest --test-dir build/fuzz-joined --no-tests=error -V -R '^fuzz\.text_layout$'
 ```
+
+The existing main-branch text-layout target replays all six corpus files (eight
+libFuzzer executions) and exits cleanly with leak detection enabled. The recorded
+60-second sprite workload below uses PR #17's combined candidate `87a32f5f`;
+that additional target is not part of main until the sprite feature merges.
 
 Actual combined engine source `87a32f5f` completed 3,399,418 sprite importer/loader
 inputs in 61 seconds and exited 0 with the patched runtime. The importer and fuzz
