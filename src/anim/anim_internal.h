@@ -34,6 +34,8 @@ typedef struct de__anim_clock {
 } de__anim_clock;
 typedef struct de__anim_entry {
     de_entity entity;
+    struct de__anim_graph_runtime *graph_runtime;
+    u32 graph_handle, graph_samples;
     u64 seen;
     u32 skeleton_handle, clip_handle;
     de_load_handle skeleton_ref, clip_ref;
@@ -135,6 +137,12 @@ f32 de__anim_time(f32 time, f32 duration, f32 speed, f32 dt, bool loop, bool *en
 void de__anim_pose(const de_cooked_skeleton_view *, const de__anim_local_pose *, de_affine *,
                    de_affine *);
 de_result de__anim_register_assets(de_anim_system *s);
+de_pool *de__anim_pose_pool(de_anim_system *, size_t bytes);
+bool de__anim_graph_prepare(de_anim_system *, de__anim_entry *);
+bool de__anim_graph_evaluate(de_anim_system *, de__anim_entry *);
+void de__anim_graph_runtime_release(de_anim_system *, de__anim_entry *);
+void de__anim_graph_blend(de_anim_system *);
+void de__anim_graph_params_install(de_system_ctx *);
 de_result de_anim__graph_init(de_anim_system *, de_world *);
 void de__anim_graphs_shutdown(de_anim_system *s);
 de_result de__anim_register_components(de_anim_system *s, de_world *w);

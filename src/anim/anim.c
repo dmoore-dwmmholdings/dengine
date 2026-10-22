@@ -12,6 +12,7 @@ _Static_assert((size_t)DE_COOKED_SKEL_MAX_JOINTS *
                    ((size_t)16 << (DE__ANIM_POSE_POOL_CLASSES - 1)),
                "pose pools must cover every validated cooked skeleton/clip layout");
 static void release_entry(de_anim_system *s, de__anim_entry *entry) {
+    de__anim_graph_runtime_release(s, entry);
     if (entry->block)
         de_pool_free(entry->pose_pool, entry->block);
     if (s->assets) {
@@ -62,7 +63,7 @@ static void retain(de_anim_system *s, u32 handle, de_load_handle *out) {
     const de__slot *slot = s->assets ? de__slot_get(s->assets, handle) : NULL;
     *out = slot ? de_asset_load(s->assets, slot->id, DE_LOAD_NO_EVENTS) : (de_load_handle){0};
 }
-static de_pool *pose_pool(de_anim_system *s, size_t bytes) {
+de_pool *de__anim_pose_pool(de_anim_system *s, size_t bytes) {
     size_t size = 16;
     u32 bucket = 0;
     while (size < bytes && bucket + 1 < DE__ANIM_POSE_POOL_CLASSES) {
@@ -96,7 +97,7 @@ static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skelet
     size_t names_offset = (palette_offset + palette + 7) & ~(size_t)7;
     size_t cursor_offset = names_offset + names,
            total = cursor_offset + (size_t)tracks * sizeof(u32);
-    de_pool *pool = pose_pool(s, total);
+    de_pool *pool = de__anim_pose_pool(s, total);
     void *block = pool ? de_pool_alloc(pool) : NULL;
     if (!block)
         return false;
@@ -133,7 +134,7 @@ static void gather(const de_query_chunk *chunk, void *user) {
         de__anim_entry *e = &s->entries[index];
         DeAnimator *a = &animators[i];
         if (e->entity.bits != entity.bits || e->skeleton_handle != a->skeleton.id ||
-            e->clip_handle != a->clip.id) {
+            e->clip_handle != a->clip.id || e->graph_handle != a->graph.id) {
             /* Asset-cache replacement must not discard a same-actor timing
              * handoff. Otherwise a clip switch after a visual frame rebases
              * the fixed clock from that visual frame's advanced time. */
@@ -152,6 +153,7 @@ static void gather(const de_query_chunk *chunk, void *user) {
             e->entity = entity;
             e->skeleton_handle = a->skeleton.id;
             e->clip_handle = a->clip.id;
+            e->graph_handle = a->graph.id;
             retain(s, a->skeleton.id, &e->skeleton_ref);
             retain(s, a->clip.id, &e->clip_ref);
         }
@@ -171,8 +173,19 @@ static void gather(const de_query_chunk *chunk, void *user) {
             continue;
         e->ready = false;
         e->finalized = false;
-        if (a->graph.id)
+        e->graph_samples = 0;
+        if (a->graph.id) {
+            const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
+            /* Fixed graph clock/snapshot integration is a separate remaining DENG-182 step. */
+            if (!s->fixed_evaluation && skel && buffers(s, e, &skel->skeleton, 0)) {
+                e->skeleton = skel->skeleton;
+                e->ready = de__anim_graph_prepare(s, e);
+                if (e->ready)
+                    for (u32 j = 0; j < e->joints; ++j)
+                        e->names[j] = de_cooked_skeleton_name_hash(&e->skeleton, j);
+            }
             continue;
+        }
         const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
         const de__anim_asset *clip = de__anim_asset_get(s, a->clip.id, "anim_clip");
         if (!skel || !clip || skel->skeleton.joint_count != clip->clip.joint_count ||
@@ -190,7 +203,20 @@ static void gather(const de_query_chunk *chunk, void *user) {
             e->names[j] = de_cooked_skeleton_name_hash(&e->skeleton, j);
     }
 }
+static void record_visual_output(de__anim_entry *e, const DeAnimator *a) {
+    e->visual_output = true;
+    e->visual_time = a->time;
+    e->visual_playing = a->playing;
+    e->visual_fixed_ticks = e->clock->ticks;
+    e->visual_fixed_hash = e->clock->pose_hash;
+    e->clock_known = false;
+}
 static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
+    if (a->graph.id) {
+        e->ready = de__anim_graph_evaluate(s, e);
+        record_visual_output(e, a);
+        return;
+    }
     if (a->playing) {
         bool ended;
         a->time = de__anim_time(a->time, e->clip.duration, a->speed, s->dt, a->loop, &ended);
@@ -201,12 +227,7 @@ static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
     }
     if (!de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor))
         e->ready = false;
-    e->visual_output = true;
-    e->visual_time = a->time;
-    e->visual_playing = a->playing;
-    e->visual_fixed_ticks = e->clock->ticks;
-    e->visual_fixed_hash = e->clock->pose_hash;
-    e->clock_known = false;
+    record_visual_output(e, a);
 }
 static void sample_range(u32 begin, u32 end, void *user) {
     de_anim_system *s = user;
@@ -258,8 +279,11 @@ static void sample(de_system_ctx *ctx) {
         de_task_parallel_for(s->tasks, s->job_count, 32, sample_range, s);
     else
         sample_range(0, s->job_count, s);
-    for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage < DE_ANIM_STAGE_FINALIZE; ++stage)
+    for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage < DE_ANIM_STAGE_FINALIZE; ++stage) {
+        if (stage == DE_ANIM_STAGE_BLEND)
+            de__anim_graph_blend(s);
         de__anim_run_stage(s, stage);
+    }
 }
 static void finalize_range(u32 begin, u32 end, void *user) {
     de_anim_system *s = user;
@@ -295,6 +319,8 @@ static void finalize(de_system_ctx *ctx) {
         }
     }
     de__anim_run_stage(s, DE_ANIM_STAGE_FINALIZE);
+    /* Defer default-component installation until every borrowed animator has been used. */
+    de__anim_graph_params_install(ctx);
 }
 de_result de_anim_create(const de_allocator *allocator, de_asset_system *assets,
                          de_anim_system **out) {

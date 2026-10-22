@@ -28,3 +28,6 @@ target_sources(de_anim PRIVATE anim_params.c)
 de_mark_deterministic_sources(anim.c anim_system.c anim_assets.c anim_reflect.c anim_stub.c
     sampling.c formats/clip_decode.c anim_clock.c anim_deterministic.c anim_checksum.c
     pose_deterministic.c blend.c blend_tree.c graph_eval.c anim_params.c)
+
+target_sources(de_anim PRIVATE graph_runtime.c)
+de_mark_deterministic_sources(graph_runtime.c)

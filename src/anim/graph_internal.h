@@ -22,6 +22,7 @@ typedef struct DeAnimParams {
     u32 bools, triggers;
     bool warned_unknown;
 } DeAnimParams;
+void de__anim_params_defaults(DeAnimParams *, const de__anim_graph *);
 de_result de_anim__graph_init(de_anim_system *, de_world *);
 de__anim_graph *de__anim_graph_get(const de_anim_system *, de_anim_graph);
 void de__anim_graphs_shutdown(de_anim_system *);

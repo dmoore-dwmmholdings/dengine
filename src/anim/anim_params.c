@@ -32,6 +32,22 @@ static DeAnimParams *edit(de_world *w, de_entity e, de_name name, de_anim_param_
     }
     return p;
 }
+void de__anim_params_defaults(DeAnimParams *p, const de__anim_graph *g) {
+    memset(p, 0, sizeof *p);
+    if (!g)
+        return;
+    p->graph = g->handle.id;
+    p->count = g->desc.param_count;
+    for (u32 i = 0; i < p->count; ++i) {
+        const de_anim_param_desc *d = &g->params[i];
+        p->names[i] = d->name;
+        p->kinds[i] = (u32)d->kind;
+        if (d->kind == DE_ANIM_PARAM_FLOAT)
+            p->values[i] = d->float_default;
+        else if (d->kind == DE_ANIM_PARAM_BOOL && d->bool_default)
+            p->bools |= 1u << i;
+    }
+}
 de_result de_anim_graph_bind(de_world *w, de_entity e, de_anim_graph graph) {
     de_anim_system *s = de__anim_for_world(w);
     de__anim_graph *g = de__anim_graph_get(s, graph);
@@ -43,22 +59,8 @@ de_result de_anim_graph_bind(de_world *w, de_entity e, de_anim_graph graph) {
         p = de_entity_add(w, e, s->params_component);
     if (graph.id && !p)
         return DE_ERR_OUT_OF_MEMORY;
-    if (p && p->graph != graph.id) {
-        memset(p, 0, sizeof *p);
-        p->graph = graph.id;
-        if (g) {
-            p->count = g->desc.param_count;
-            for (u32 i = 0; i < p->count; ++i) {
-                const de_anim_param_desc *d = &g->params[i];
-                p->names[i] = d->name;
-                p->kinds[i] = (u32)d->kind;
-                if (d->kind == DE_ANIM_PARAM_FLOAT)
-                    p->values[i] = d->float_default;
-                else if (d->kind == DE_ANIM_PARAM_BOOL && d->bool_default)
-                    p->bools |= 1u << i;
-            }
-        }
-    }
+    if (p && p->graph != graph.id)
+        de__anim_params_defaults(p, g);
     /* Adding storage can move the animator to another archetype. */
     DeAnimator *a = de_entity_get(w, e, s->component);
     a->graph = graph;

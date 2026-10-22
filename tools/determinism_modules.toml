@@ -143,3 +143,7 @@ module = "anim"
 [[source]]
 path = "src/anim/anim_params.c"
 module = "anim"
+
+[[source]]
+path = "src/anim/graph_runtime.c"
+module = "anim"

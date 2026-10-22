@@ -254,6 +254,11 @@ void de_anim_graph_destroy(de_anim_system *s, de_anim_graph handle) {
         link = &(*link)->next;
     if (*link) {
         de__anim_graph *g = *link;
+        for (u32 i = 0; i < s->capacity; ++i)
+            if (s->entries[i].graph_handle == handle.id) {
+                de__anim_graph_runtime_release(s, &s->entries[i]);
+                s->entries[i].ready = s->entries[i].finalized = false;
+            }
         *link = g->next;
         release_graph(s, g);
     }
