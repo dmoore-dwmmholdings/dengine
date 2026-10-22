@@ -35,6 +35,7 @@ permissions:
 
 jobs:
   plan:
+    if: github.ref != 'refs/heads/diagnostics/DENG-546-gcc-refill-profile'
     name: plan (${{ inputs.tier || 'auto' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -140,6 +141,107 @@ jobs:
             build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ matrix.preset }}/de_config_dump.txt
           if-no-files-found: ignore
+          retention-days: 7
+
+  audio-gcc-profile:
+    name: DENG-546 GCC TSan CPU profile (diagnostic)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostics/DENG-546-gcc-refill-profile'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TSAN_OPTIONS: halt_on_error=1
+      DE_AUDIO_STREAM_TRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-dengine
+        with:
+          compiler: gcc
+          cache-key: ci-linux-gcc-tsan
+          cache-save: "false"
+          sanitizers: "true"
+      - name: Prepare existing sanitizer environment and CPU sampling
+        shell: bash
+        run: |
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          sudo apt-get update -q
+          sudo apt-get install -y -q linux-tools-generic
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          tools = sorted(Path("/usr/lib/linux-tools").glob("*/perf"))
+          if not tools:
+              raise SystemExit("No perf executable installed; no profile is inferred")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"PERF_TOOL={tools[-1]}\n")
+          PY
+      - name: Configure and verify exact failing production source and instrumentation
+        shell: bash
+        run: |
+          git fetch --depth=1 origin 16f8dea1b5c557e8989efe90a267badcf67c139a
+          git diff --exit-code 16f8dea1 -- src include tests third_party cmake CMakePresets.json
+          cmake --preset ci-linux-gcc-tsan
+          {
+            git rev-parse HEAD
+            gcc --version
+            uname -a
+            "${PERF_TOOL}" --version
+            cat build/ci-linux-gcc-tsan/de_config_dump.txt
+          } > audio-gcc-profile-metadata.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          rows = json.loads(Path("build/ci-linux-gcc-tsan/compile_commands.json").read_text())
+          names = ("/source_opus.c", "/source_vorbis.c", "/source/stream.c")
+          selected = [row for row in rows if row["file"].endswith(names)]
+          assert len(selected) == 3, selected
+          for row in selected:
+              assert "-fsanitize=thread" in row["command"], row
+              assert "-fno-omit-frame-pointer" in row["command"], row
+          Path("audio-gcc-profile-compile.json").write_text(json.dumps(selected, indent=2))
+          PY
+      - name: Build original streaming test
+        shell: bash
+        run: cmake --build --preset ci-linux-gcc-tsan --target test_audio_streaming
+      - name: Sample CPU during all original streaming cases
+        id: profile
+        shell: bash
+        run: |
+          # Frame-pointer call chains contain addresses, not raw stack memory.
+          # Profiling overhead makes this diagnostic, never release qualification.
+          ctest_path="$(command -v ctest)"
+          sudo "${PERF_TOOL}" record --quiet -F 199 -e cpu-clock:u --call-graph fp \
+            -o "${RUNNER_TEMP}/audio-gcc-tsan.perf" -- \
+            env TSAN_OPTIONS=halt_on_error=1 DE_AUDIO_STREAM_TRACE=1 \
+            "${ctest_path}" --test-dir build/ci-linux-gcc-tsan --parallel 4 \
+            --no-tests=error -V -R '^audio_streaming\.' \
+            --output-junit "${GITHUB_WORKSPACE}/audio-gcc-profile.xml" \
+            2>&1 | tee audio-gcc-profile-test.log
+      - name: Render CPU profile
+        if: ${{ !cancelled() && (steps.profile.outcome == 'success' || steps.profile.outcome == 'failure') }}
+        shell: bash
+        run: |
+          sudo "${PERF_TOOL}" report -i "${RUNNER_TEMP}/audio-gcc-tsan.perf" --stdio \
+            --no-children --sort comm,dso,symbol --percent-limit 0.25 \
+            -g graph,0.5,caller | tee audio-gcc-profile-report.txt >/dev/null
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("audio-gcc-profile.xml").getroot().iter("testcase"))
+          assert len(cases) == 19, len(cases)
+          assert all(c.find("skipped") is None for c in cases)
+          print("All 19 original cases executed; diagnostic failures remain failures")
+          PY
+      - name: Upload diagnostic evidence (no raw stack or perf dump)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audio-gcc-tsan-cpu-profile
+          path: |
+            audio-gcc-profile-metadata.txt
+            audio-gcc-profile-compile.json
+            audio-gcc-profile-test.log
+            audio-gcc-profile-report.txt
+            audio-gcc-profile.xml
+          if-no-files-found: warn
           retention-days: 7
 
   # DENG-216: libFuzzer smoke run, full tier only. Linux Clang Debug with ASan+UBSan (the
