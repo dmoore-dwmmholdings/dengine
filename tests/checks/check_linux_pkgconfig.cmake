@@ -17,8 +17,27 @@ foreach(_name IN LISTS _pkgconfig_names)
     endif()
     execute_process(COMMAND "${_candidate}" --version
         RESULT_VARIABLE _version_result OUTPUT_VARIABLE _version ERROR_VARIABLE _version_error)
+    set(_launcher "${_candidate}")
+    set(_launcher_args "")
+    if(CMAKE_HOST_WIN32 AND NOT _version_result STREQUAL "0")
+        # Strawberry can ship only a Perl script, without an executable/batch
+        # launcher. Invoke its declared interpreter explicitly; FindPkgConfig's
+        # standard PKG_CONFIG_ARGN carries the same script into the child probe.
+        file(STRINGS "${_candidate}" _first_line LIMIT_COUNT 1)
+        if(_first_line MATCHES "^#!.*[Pp][Ee][Rr][Ll]")
+            unset(_perl)
+            find_program(_perl NAMES perl.exe perl NO_CACHE)
+            if(_perl)
+                execute_process(COMMAND "${_perl}" "${_candidate}" --version
+                    RESULT_VARIABLE _version_result OUTPUT_VARIABLE _version ERROR_VARIABLE _version_error)
+                set(_launcher "${_perl}")
+                set(_launcher_args "${_candidate}")
+            endif()
+        endif()
+    endif()
     if(_version_result STREQUAL "0")
-        set(_pkgconfig "${_candidate}")
+        set(_pkgconfig "${_launcher}")
+        set(_pkgconfig_argn "${_launcher_args}")
         break()
     endif()
     message(STATUS "linux_pkgconfig_isolation: unusable launcher ${_candidate}: ${_version_result}")
@@ -28,7 +47,7 @@ if(NOT _pkgconfig)
     return()
 endif()
 string(STRIP "${_version}" _version)
-message(STATUS "linux_pkgconfig_isolation: using ${_pkgconfig} (${_version})")
+message(STATUS "linux_pkgconfig_isolation: using ${_pkgconfig} ${_pkgconfig_argn} (${_version})")
 file(REMOVE_RECURSE "${DE_TEST_DIR}")
 set(_root "${DE_TEST_DIR}/sysroot")
 set(_host "${DE_TEST_DIR}/host-pkgconfig")
@@ -73,6 +92,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -G Ninja
     "-DCMAKE_TOOLCHAIN_FILE=${DE_TOOLCHAIN}" "-DDE_LINUX_SYSROOT=${_root}"
     "-DCMAKE_PREFIX_PATH=${DE_TEST_DIR}/host-prefix"
     "-DPKG_CONFIG_EXECUTABLE=${_pkgconfig}"
+    "-DPKG_CONFIG_ARGN=${_pkgconfig_argn}"
     RESULT_VARIABLE _result OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
 if(NOT _result EQUAL 0)
     message(FATAL_ERROR "pkg-config isolation failed:\n${_out}\n${_err}")
