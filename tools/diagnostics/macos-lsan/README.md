@@ -93,3 +93,42 @@ Run each comparison in a fresh process. Comparing one and 32 lifecycles can
 distinguish repeated stream allocation growth from initialization reports, but
 neither result clears the engine's sanitizer gate. These controls do not verify
 native event delivery, hot-reload behavior, or all engine-owned lifetimes.
+# libFuzzer RSS-thread lifetime candidate (DENG-559)
+
+The installed LLVM 23.1.3 runtime's empty input callback reproduces a 56-byte,
+two-allocation LeakSanitizer exit report without engine code. Its RSS watchdog
+detaches an infinite thread; disassembly and symbolized stacks identify libc++
+thread state. Explicit linkage to the matching bundled libc++ still reports the
+same leak, so library pairing alone does not fix this host's result.
+
+`build_fuzzer_runtime.py` creates a private arm64 archive from the installed
+runtime, replacing only `FuzzerDriver.cpp.o` rebuilt from upstream LLVM commit
+`0d261d1ca552c95a8f007e061c787ac7132fbcbc` (23.1.3). It verifies downloaded Git
+blob hashes, records archive/compiler/patch provenance and never changes the
+installed compiler. `fuzzer-rss-lifetime.patch` retains the one-second RSS check
+and original out-of-memory callback, but wakes and joins the watchdog during
+normal process exit, before leak checking. It adds no suppressions or sanitizer
+settings. This is an experimental toolchain patch, not an upstream-supported
+runtime release or a clean engine fuzz acceptance claim.
+
+```sh
+python3 tools/diagnostics/macos-lsan/build_fuzzer_runtime.py --out /tmp/fuzzer-joined
+```
+
+Compile the no-engine `fuzzer_control.c` with Homebrew Clang and the private
+archive, using `-fsanitize=fuzzer-no-link,address` and `-lc++`. MODE=0 is empty;
+MODE=1 intentionally leaks 1 KiB; MODE=2 sleeps while the RSS watchdog runs.
+Run all with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`, no LSAN suppressions,
+and `-runs=0`. Only the MODE=2 negative control adds `-rss_limit_mb=1` to prove
+the watchdog still rejects excess resident memory. On the observed host, the
+patched empty control exits 0; the real-leak control exits 1 with LeakSanitizer;
+the watchdog control exits 71 with the actual RSS out-of-memory diagnostic.
+The original installed runtime's empty control still exits 1 with the 56-byte
+report. No production fuzz target or default configuration is switched here.
+
+The remaining qualification is integration with the actual engine targets and
+their original 60-second sanitizer fuzz workload, preserving default RSS limits,
+input coverage, leak detection and error handling. DENG-559 remains open until
+the runtime remedy and those original gates are verified and reviewed.
+
+Upstream: https://github.com/llvm/llvm-project/blob/0d261d1ca552c95a8f007e061c787ac7132fbcbc/compiler-rt/lib/fuzzer/FuzzerDriver.cpp

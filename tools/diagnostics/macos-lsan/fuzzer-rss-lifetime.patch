@@ -1,0 +1,52 @@
+--- a/FuzzerDriver.cpp
++++ b/FuzzerDriver.cpp
+@@ -22,6 +22,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <chrono>
++#include <condition_variable>
+ #include <cstdlib>
+ #include <cstring>
+ #include <fstream>
+@@ -311,20 +312,34 @@
+ // Fuchsia needs to do some book checking before starting the RssThread,
+ // so it has its own implementation.
+ #if !LIBFUZZER_FUCHSIA
++static std::mutex RssMutex;
++static std::condition_variable RssWake;
++static bool RssStopped = false;
++static std::thread RssWorker;
++static void StopRssThread() {
++  {
++    std::lock_guard<std::mutex> Lock(RssMutex);
++    RssStopped = true;
++  }
++  RssWake.notify_one();
++  if (RssWorker.joinable())
++    RssWorker.join();
++}
+ static void RssThread(Fuzzer *F, size_t RssLimitMb) {
+-  while (true) {
+-    SleepSeconds(1);
++  std::unique_lock<std::mutex> Lock(RssMutex);
++  while (!RssWake.wait_for(Lock, std::chrono::seconds(1), [] { return RssStopped; })) {
++    Lock.unlock();
+     size_t Peak = GetPeakRSSMb();
+     if (Peak > RssLimitMb)
+       F->RssLimitCallback();
+-  }
+-}
+-
++    Lock.lock();
++  }
++}
+ void StartRssThread(Fuzzer *F, size_t RssLimitMb) {
+   if (!RssLimitMb)
+     return;
+-  std::thread T(RssThread, F, RssLimitMb);
+-  T.detach();
++  RssWorker = std::thread(RssThread, F, RssLimitMb);
++  std::atexit(StopRssThread);
+ }
+ #endif
+ 

@@ -265,8 +265,10 @@ job fuzzes for real (SPEC §19.1, DENG-216):
   directory (`tests/fuzz/asset/`) and deletes it after the input; the environment variable
   `DE_FUZZ_DPAK_FILE_DIR` names another directory. Its seeds are `corpus/dpak_reader/`.
 
-  On macOS, LeakSanitizer reports libFuzzer's own `StartRssThread` allocation at exit. Suppress it
-  with `LSAN_OPTIONS=suppressions=<file>` and the line `leak:fuzzer::StartRssThread` in the file.
+  On macOS, the LLVM 23.1.3 RSS thread can retain libc++ thread state at exit
+  (DENG-559). Keep leak detection and the default RSS limit enabled; a suppressed
+  report does not qualify a clean fuzz run. The isolated runtime lifetime experiment
+  and its positive/negative controls are in `tools/diagnostics/macos-lsan/README.md`.
 
 ### `checks.yml`: repository checks
 
