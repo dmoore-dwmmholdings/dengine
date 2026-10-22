@@ -3,6 +3,8 @@
 #include "cook/importers/sprite_clip/sprite_clip_import.h"
 #include "dpak_writer.h"
 #include "de_alloc_guard.h"
+#include <stdlib.h>
+#include <string.h>
 #if defined(_WIN32)
 #include <process.h>
 #define sprite_pid _getpid
@@ -425,6 +427,20 @@ TEST_F(sprite_anim, ten_thousand_sprites_have_zero_warmed_frame_allocations, spr
     EXPECT_EQ(sprite_index(f, last), 1u);
     fprintf(stderr, "10000 sprites, whole Update + First: %.3f ms/frame; M1 gate requires M1\n",
             (f64)elapsed / 100000000.0);
+    /* Keep the original workload and compare unrounded elapsed nanoseconds.
+     * The qualifying workflow independently verifies native M1 hardware. */
+#if defined(_WIN32)
+    char *qualify_m1 = NULL;
+    size_t qualify_bytes = 0;
+    ASSERT_EQ(_dupenv_s(&qualify_m1, &qualify_bytes, "DE_SPRITE_M1_ACCEPTANCE"), 0);
+#else
+    const char *qualify_m1 = getenv("DE_SPRITE_M1_ACCEPTANCE");
+#endif
+    if (qualify_m1 && strcmp(qualify_m1, "1") == 0)
+        EXPECT_LE(elapsed, UINT64_C(100) * UINT64_C(500000));
+#if defined(_WIN32)
+    free(qualify_m1);
+#endif
 }
 TEST_F(sprite_anim, removed_and_recycled_entities_release_state_and_restart, sprite_fx) {
     sprite_load(f, 100, false);
