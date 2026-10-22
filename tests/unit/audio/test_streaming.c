@@ -28,6 +28,7 @@ static void report_stream_trace(de_audio *a) {
     u64 demand = 0, queued = 0, start = 0, io_start = 0, write_start = 0;
     u64 wake_max = 0, queue_max = 0, refill_max = 0, io_max = 0, other_max = 0;
     u64 cpu_start = 0, slow_cpu = 0, slow_io = 0, cpu_max = 0, off_cpu_max = 0;
+    u64 published = 0, slow_frames = 0;
     bool cpu_start_valid = false, slow_cpu_valid = false;
     u32 cpu_pairs = 0;
     u32 refills = 0, empty_refills = 0, underruns = 0, first_underrun = ready;
@@ -60,6 +61,8 @@ static void report_stream_trace(de_audio *a) {
         case DE__STREAM_FINISH:
             if (start && e->time_ns >= start && e->io_ns >= io_start) {
                 u64 wall = e->time_ns - start, io = e->io_ns - io_start;
+                u64 frames = e->write_pos - write_start;
+                published += frames;
                 bool cpu_valid = cpu_start_valid && e->cpu_valid && e->cpu_ns >= cpu_start;
                 u64 cpu = cpu_valid ? e->cpu_ns - cpu_start : 0;
                 if (cpu_valid) {
@@ -74,6 +77,7 @@ static void report_stream_trace(de_audio *a) {
                     slow_cpu = cpu;
                     slow_io = io;
                     slow_cpu_valid = cpu_valid;
+                    slow_frames = frames;
                 }
                 if (io > io_max)
                     io_max = io;
@@ -100,10 +104,13 @@ static void report_stream_trace(de_audio *a) {
            empty_refills, underruns, (double)wake_max / 1e6, (double)queue_max / 1e6,
            (double)refill_max / 1e6, (double)io_max / 1e6, (double)other_max / 1e6);
     printf("stream CPU: %u/%u valid refill pairs; max CPU %.3fms wall-minus-CPU %.3fms; "
-           "slowest refill wall %.3fms CPU %.3fms%s async-io %.3fms (same refill)\n",
+           "slowest refill wall %.3fms CPU %.3fms%s async-io %.3fms, %llu PCM frames "
+           "(%.3fms CPU/1000 frames; same refill); %llu frames across completed refills\n",
            cpu_pairs, refills, (double)cpu_max / 1e6, (double)off_cpu_max / 1e6,
            (double)refill_max / 1e6, (double)slow_cpu / 1e6, slow_cpu_valid ? "" : " UNAVAILABLE",
-           (double)slow_io / 1e6);
+           (double)slow_io / 1e6, (unsigned long long)slow_frames,
+           slow_cpu_valid && slow_frames ? (double)slow_cpu / (double)slow_frames / 1000.0 : 0.0,
+           (unsigned long long)published);
     if (underruns)
         for (u32 i = first_underrun > 8 ? first_underrun - 8 : 0;
              i < ready && i <= first_underrun + 8; ++i) {

@@ -79,9 +79,17 @@ static bool next(de__sound_decoder *d, u32 discard) {
             d->frame += d->pcm_at;
             /* Seeking still decodes every overlap packet, but discarded PCM
              * need not be interleaved or copied through a temporary buffer. */
-            for (u32 f = d->pcm_at; f < d->pcm_count; ++f)
-                for (u32 c = 0; c < channels; ++c)
-                    d->pcm[f * channels + c] = output[map[channels][c]][f];
+            if (channels == 2) {
+                const f32 *left = output[0], *right = output[1];
+                for (u32 f = d->pcm_at; f < d->pcm_count; ++f) {
+                    d->pcm[f * 2] = left[f];
+                    d->pcm[f * 2 + 1] = right[f];
+                }
+            } else {
+                for (u32 f = d->pcm_at; f < d->pcm_count; ++f)
+                    for (u32 c = 0; c < channels; ++c)
+                        d->pcm[f * channels + c] = output[map[channels][c]][f];
+            }
             return true;
         }
         if (!used && !more(d))
