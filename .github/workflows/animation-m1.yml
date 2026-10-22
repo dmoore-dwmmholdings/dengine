@@ -55,6 +55,7 @@ jobs:
           cmake --preset macos-dev
           cat build/macos-dev/de_config_dump.txt
       - name: Build animation test
+        id: build
         shell: bash
         run: cmake --build --preset macos-dev --target test_anim
       - name: Run original workload and require two millisecond mean
@@ -73,6 +74,26 @@ jobs:
           if len(cases) != 1 or any(c.find(tag) is not None for c in cases
                                     for tag in ("skipped", "failure", "error")):
               raise SystemExit("M1 acceptance requires one actual passing benchmark case")
+      - name: Run original sprite workload and require half millisecond mean
+        # Keep both original results even if the skeletal assertion failed.
+        # A successful build implies the earlier native-M1 check also passed.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        env:
+          DE_SPRITE_M1_ACCEPTANCE: "1"
+        run: |
+          ctest --test-dir build/macos-dev --no-tests=error -V \
+            --output-junit "${GITHUB_WORKSPACE}/build/macos-dev/sprite-m1.xml" \
+            -R '^anim\.sprite_anim\.ten_thousand_sprites_have_zero_warmed_frame_allocations$'
+      - name: Require actual sprite execution
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: python
+        run: |
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("build/macos-dev/sprite-m1.xml").getroot().iter("testcase"))
+          if len(cases) != 1 or any(c.find(tag) is not None for c in cases
+                                    for tag in ("skipped", "failure", "error")):
+              raise SystemExit("Sprite M1 acceptance requires one actual passing benchmark case")
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -81,6 +102,7 @@ jobs:
           path: |
             animation-m1-hardware.json
             build/macos-dev/animation-m1.xml
+            build/macos-dev/sprite-m1.xml
             build/macos-dev/de_config_dump.txt
             build/macos-dev/Testing/Temporary/
           if-no-files-found: warn

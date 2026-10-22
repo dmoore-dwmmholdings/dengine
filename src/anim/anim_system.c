@@ -1,5 +1,9 @@
 #include "anim_internal.h"
 
+de_result de__anim_features_init(de_anim_system *s, de_world *w) {
+    return de_anim__sprite_init(s, w);
+}
+
 de_result de_anim__register_stage(de_anim_system *s, de__anim_stage stage, de__anim_stage_fn fn,
                                   void *user) {
     if (!s || (u32)stage >= DE_ANIM_STAGE_COUNT || !fn || s->dispatching_stages)

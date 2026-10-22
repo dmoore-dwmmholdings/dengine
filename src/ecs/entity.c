@@ -96,35 +96,34 @@ bool de_entity_alive(const de_world *w, de_entity e) {
 }
 
 /* The data of component `c` of `e`, the tag placeholder for a tag, or NULL. */
-static void *entity_component(const de_world *w, de_entity e, de_component c) {
+static void *entity_component(const de_world *w, de_entity e, de_component c, bool mark) {
     if (w == NULL)
         return NULL;
     ECS_ASSERT_NOT_PENDING(e); /* DENG-349: pending ids are for commands only */
     const ecs_record *rec = ecs_entity_record(w, e);
     if (rec == NULL)
         return NULL;
-    const ecs_archetype *a = ecs_archetype_at(w, rec->archetype);
+    ecs_archetype *a = ecs_archetype_at(w, rec->archetype);
     const u32 i = ecs_archetype_find_component(a, c.id);
     if (i == ECS_INVALID_INDEX)
         return NULL;
     const u32 col = a->column_of[i];
     if (col == ECS_INVALID_INDEX)
         return (void *)w->tag_placeholder; /* const only in the const-world caller */
+    if (mark)
+        ecs_mark_changed_row(a, rec->chunk, rec->row, col, ecs_system_stamp_tick(w));
     return ecs_row_column(a, rec->chunk, rec->row, col);
 }
 
 void *de_entity_get(de_world *w, de_entity e, de_component c) {
     ECS_CHECK_COMPONENT(w, c.id, true); /* DENG-350: declared as a write by the running system */
     /* DENG-347: a mutable get marks the row changed (current change tick; tags have no ticks). */
-    void *data = entity_component(w, e, c);
-    if (data != NULL)
-        ecs_entity_mark_changed(w, e, c.id);
-    return data;
+    return entity_component(w, e, c, true);
 }
 
 const void *de_entity_get_const(const de_world *w, de_entity e, de_component c) {
     ECS_CHECK_COMPONENT(w, c.id, false); /* DENG-350: declared by the running system */
-    return entity_component(w, e, c);
+    return entity_component(w, e, c, false);
 }
 
 bool de_entity_has(const de_world *w, de_entity e, de_component c) {

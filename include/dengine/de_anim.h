@@ -104,6 +104,13 @@ DE_API de_event_type de_anim_event_type(const de_anim_system *);
 DE_API u64 de_anim_checksum(de_world *);
 DE_API de_skeleton de_anim_skeleton(de_anim_system *, de_asset_id);
 DE_API de_anim_clip de_anim_clip_asset(de_anim_system *, de_asset_id);
+typedef enum de_anim_clip_kind {
+    DE_ANIM_CLIP_NONE,
+    DE_ANIM_CLIP_SKELETAL,
+    DE_ANIM_CLIP_SPRITE
+} de_anim_clip_kind;
+/** Clip asset kind (also available before loading); NONE for an invalid/wrong-type handle. */
+DE_API de_anim_clip_kind de_anim_clip_kind_get(de_anim_system *, de_anim_clip);
 
 DE_EXTERN_C_END
 #endif

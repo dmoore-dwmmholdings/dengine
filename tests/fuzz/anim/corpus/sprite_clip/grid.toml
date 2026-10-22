@@ -1,0 +1,10 @@
+atlas="texture/hero"
+grid={columns=8,rows=4,count=30,frame_size=[16,32]}
+[[tags]]
+name="run"
+from=8
+to=15
+direction="pingpong"
+[[events]]
+frame=8
+name="step"
