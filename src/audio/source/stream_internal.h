@@ -27,16 +27,36 @@ void de__stream_test_starve(de_audio *a, bool starve);
 void de__stream_test_read_hook(de__audio_source *s, void (*hook)(de__audio_source *, void *),
                                void *user);
 void de__stream_test_refill_now(de__audio_source *s);
+/* Optional bounded timing capture, enabled on the control thread before playback.
+ * Events are immutable once published; capture storage lives until audio destroy. */
+typedef enum de__stream_trace_kind {
+    DE__STREAM_DEMAND = 1,
+    DE__STREAM_QUEUED,
+    DE__STREAM_START,
+    DE__STREAM_FINISH,
+    DE__STREAM_UNDERRUN
+} de__stream_trace_kind;
+typedef struct de__stream_trace_event {
+    u64 time_ns, read_pos, write_pos, decoder_frame, io_ns, io_requests, cpu_ns;
+    u32 source, kind, cpu_valid;
+} de__stream_trace_event;
+bool de__stream_test_trace_enable(de_audio *a);
+u32 de__stream_test_trace_count(de_audio *a, bool *full);
+bool de__stream_test_trace_read(de_audio *a, u32 index, de__stream_trace_event *out);
 /* Testable real async reader, decoder state is worker-owned. */
+#define DE__SOUND_MAX_PACKET_FRAMES 8192u
 typedef struct de__sound_decoder {
     const de_allocator *alloc;
     de__sound_asset *asset;
     de_file *file;
     de_io_request request;
-    de_atomic_u32 io_done;
+    de_sem io_complete;
+    bool io_complete_initialized;
     de_result io_result;
     u64 io_bytes;
     u64 io_requests; /* Worker-owned count of successfully submitted compressed reads. */
+    bool measure_io; /* Private opt-in diagnostic; worker-owned. */
+    u64 io_ns;       /* Submit-to-completion wall time, not device-only I/O time. */
     u8 *input, *scratch;
     u32 scratch_bytes;
     u32 used, filled;
@@ -45,7 +65,7 @@ typedef struct de__sound_decoder {
     u32 packet;
     u64 frame;
     u32 skip;
-    f32 pcm[8192 * 8];
+    f32 pcm[DE__SOUND_MAX_PACKET_FRAMES * 8];
     u32 pcm_count, pcm_at;
 } de__sound_decoder;
 de_result de__decoder_io(de__sound_decoder *d, u64 offset, void *out, u32 bytes);
