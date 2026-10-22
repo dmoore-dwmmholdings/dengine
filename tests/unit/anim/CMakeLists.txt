@@ -1,6 +1,8 @@
 de_add_test(NAME anim SOURCES test_clip_sample.c test_sampling.c test_animator.c test_pose.c test_anim_dmath.c test_blend.c test_blend_tree.c
     LIBS de_anim de_asset de_ecs de_reflect de_task de_platform de_test_support LABELS unit anim TIMEOUT 120)
 if(TARGET test_anim)
+    target_sources(test_anim PRIVATE test_graph_builder.c)
+    target_sources(test_anim PRIVATE test_anim_params.c)
     target_include_directories(test_anim PRIVATE "${DE_ROOT_DIR}/src")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/anim_tmp")
     target_compile_definitions(test_anim PRIVATE "DE_ANIM_TEST_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/anim_tmp\"")

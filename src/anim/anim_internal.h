@@ -81,13 +81,14 @@ typedef struct de__anim_stage_hook {
 /* 16-byte through16MiB blocks cover the maximum validated cooked joint/track counts. */
 #define DE__ANIM_POSE_POOL_CLASSES 21u
 struct de_anim_system {
+    struct de__anim_graph *graphs;
     const de_allocator *alloc;
     de_asset_system *assets;
     de_task_system *tasks;
     de_renderer *renderer;
     bool renderer_explicit;
     de_world *world;
-    de_component component, clock_component;
+    de_component component, clock_component, params_component;
     de_component ik_component, sprite_component;
     de_builtin_component_ids builtins;
     de_resource_id resource;
@@ -134,6 +135,8 @@ f32 de__anim_time(f32 time, f32 duration, f32 speed, f32 dt, bool loop, bool *en
 void de__anim_pose(const de_cooked_skeleton_view *, const de__anim_local_pose *, de_affine *,
                    de_affine *);
 de_result de__anim_register_assets(de_anim_system *s);
+de_result de_anim__graph_init(de_anim_system *, de_world *);
+void de__anim_graphs_shutdown(de_anim_system *s);
 de_result de__anim_register_components(de_anim_system *s, de_world *w);
 const de__anim_asset *de__anim_asset_get(de_anim_system *, u32, const char *);
 #endif

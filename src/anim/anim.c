@@ -332,6 +332,7 @@ void de_anim_destroy(de_anim_system *s) {
     }
     for (u32 i = 0; i < s->capacity; ++i)
         release_entry(s, &s->entries[i]);
+    de__anim_graphs_shutdown(s);
     for (u32 i = 0; i < DE__ANIM_POSE_POOL_CLASSES; ++i)
         de_pool_destroy(s->pose_pools[i]);
     if (s->entries)
@@ -441,6 +442,7 @@ failed:
     s->resource = (de_resource_id){0};
     s->events = (de_event_type){0};
     s->component = s->clock_component = s->ik_component = s->sprite_component = (de_component){0};
+    s->params_component = (de_component){0};
 }
 void de_anim_set_renderer(de_anim_system *s, de_renderer *r) {
     if (s) {

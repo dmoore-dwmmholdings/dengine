@@ -22,7 +22,9 @@ target_sources(de_anim PRIVATE sprite_clip.c sprite_anim.c)
 target_sources(de_anim PRIVATE anim_clock.c anim_deterministic.c anim_checksum.c pose_deterministic.c)
 target_sources(de_anim PRIVATE blend.c blend.h)
 target_sources(de_anim PRIVATE blend_tree.c blend_tree.h)
+target_sources(de_anim PRIVATE graph_eval.c graph_internal.h)
+target_sources(de_anim PRIVATE anim_params.c)
 # Shared inline math consumers and the complete fixed evaluation call graph.
 de_mark_deterministic_sources(anim.c anim_system.c anim_assets.c anim_reflect.c anim_stub.c
     sampling.c formats/clip_decode.c anim_clock.c anim_deterministic.c anim_checksum.c
-    pose_deterministic.c blend.c blend_tree.c)
+    pose_deterministic.c blend.c blend_tree.c graph_eval.c anim_params.c)
