@@ -49,6 +49,7 @@ typedef struct de_ui_compiled_rule {
     u32 mask;
     f32 transition;
     de_ui_easing easing;
+    bool has_transition, has_easing;
 } de_ui_compiled_rule;
 typedef struct de_ui_style_sheet_slot {
     de_blob handle;
@@ -59,7 +60,7 @@ typedef struct de_ui_style_sheet_slot {
 typedef struct de_ui_style_cache {
     de_entity entity;
     de_name class_name;
-    u32 widget, state;
+    u32 widget, state, applied_mask;
     u64 revision;
     u64 binding_revision;
     bool initialized;

@@ -95,3 +95,20 @@ TEST_F(ui_tween, restyle_cancels_motion_for_equal_target_and_zero_duration, ui_f
     style_step(f, .12f);
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
 }
+
+TEST_F(ui_tween, easing_only_rule_inherits_duration_but_explicit_zero_cancels, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=1\ntransition=1\n"
+                                   "[style.\"button:hover\"]\nopacity=0\n"
+                                   "[style.\".ease\"]\neasing='quad-in'\n"
+                                   "[style.\".instant\"]\ntransition=0"),
+              DE_OK);
+    de_entity e = style_button(f, (de_entity){0}, "ease");
+    style_step(f, 0);
+    ((DeUiInteractionState *)de_entity_add(f->world, e, f->ui->ids.state))->hovered = true;
+    style_step(f, .5f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .75f, .00001f);
+    ui_node_edit(f, e)->style_class = de_name_from("instant");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, 0, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).active_tweens, 0u);
+}

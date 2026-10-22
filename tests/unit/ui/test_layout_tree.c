@@ -1,4 +1,5 @@
 #include "ui_test_util.h"
+#include <stdio.h>
 #if defined(DE_UI_TEST_FONTS)
 #include "../text/runtime_test_util.h"
 #endif

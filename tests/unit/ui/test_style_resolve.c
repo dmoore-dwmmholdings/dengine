@@ -49,6 +49,31 @@ TEST_F(ui_style_resolve, focus_pressed_disabled_and_preserve_unset_fields, ui_fx
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .6f, 0);
     EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 7, 0);
 }
+TEST_F(ui_style_resolve, changing_property_masks_preserves_latest_authored_values, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.\".opacity\"]\nopacity=0.2\n"
+                                   "[style.\".radius\"]\nradius=20"),
+              DE_OK);
+    de_entity e = style_button(f, (de_entity){0}, "opacity");
+    DeUiStyle *own = de_entity_add(f->world, e, f->ui->ids.style);
+    own->opacity = 1;
+    own->corner_radius = 3;
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .2f, 0);
+    own = de_entity_get(f->world, e, f->ui->ids.style);
+    own->opacity = .8f;     /* Authored edit to a previously controlled property. */
+    own->corner_radius = 7; /* Authored edit before this property enters the cascade. */
+    ui_node_edit(f, e)->padding[0] = (de_ui_len){DE_UI_PX, 11};
+    ui_node_edit(f, e)->style_class = de_name_from("radius");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 20, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->padding[0].value, 11, 0);
+    ui_node_edit(f, e)->style_class = (de_name){0};
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 7, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->padding[0].value, 11, 0);
+}
 TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),

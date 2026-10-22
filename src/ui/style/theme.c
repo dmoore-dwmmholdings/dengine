@@ -188,11 +188,13 @@ de_result de_ui__compile_sheet(de_ui_style_system *state, de_ui_style_sheet_slot
             rule->mask |= 1u << p;
         }
         toml_datum_t transition = toml_get(props, "transition");
-        if (transition.type != TOML_UNKNOWN &&
+        rule->has_transition = transition.type != TOML_UNKNOWN;
+        if (rule->has_transition &&
             (!number(transition, &rule->transition) || rule->transition < 0))
             return bad(transition, "transition must be nonnegative seconds");
         toml_datum_t easing = toml_get(props, "easing");
-        if (easing.type != TOML_UNKNOWN)
+        rule->has_easing = easing.type != TOML_UNKNOWN;
+        if (rule->has_easing)
             DE_TRY(easing_value(easing, &rule->easing));
     }
     return DE_OK;

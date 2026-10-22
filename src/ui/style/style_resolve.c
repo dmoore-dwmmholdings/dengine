@@ -67,8 +67,10 @@ static u8 *target(const de_ui_style_property *p, DeUiNode *node, DeUiStyle *styl
            p->offset;
 }
 static void restore_authored(de_ui_style_cache *cache, DeUiNode *node, DeUiStyle *style,
-                             de_text_style *text) {
+                             de_text_style *text, u32 mask) {
     for (u32 p = 0; p < de_ui__style_property_count; ++p) {
+        if (!((cache->applied_mask | mask) & (1u << p)))
+            continue;
         const de_ui_style_property *property = &de_ui__style_properties[p];
         u32 bytes = property_size(property);
         u8 *current = target(property, node, style, text),
@@ -76,7 +78,7 @@ static void restore_authored(de_ui_style_cache *cache, DeUiNode *node, DeUiStyle
                           &cache->authored_text),
            *applied =
                target(property, &cache->applied_node, &cache->applied_style, &cache->applied_text);
-        if (memcmp(current, applied, bytes))
+        if (!(cache->applied_mask & (1u << p)) || memcmp(current, applied, bytes))
             memcpy(base, current, bytes);
         memcpy(current, base, bytes);
     }
@@ -210,12 +212,12 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
         cache->authored_node = node;
         cache->authored_style = style;
         cache->authored_text = text;
-    } else
-        restore_authored(cache, &node, &style, &text);
+    }
     i32 best[24];
     for (u32 i = 0; i < DE_UI_STYLE_COUNT(best); ++i)
         best[i] = -1;
     de_ui_style_value winning[24];
+    u32 mask = 0;
     f32 duration = 0;
     de_ui_easing easing = DE_UI_EASE_LINEAR;
     i32 motion_specificity = -1;
@@ -230,21 +232,27 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
             de_ui_compiled_rule *compiled = &slot->compiled[r];
             for (u32 p = 0; p < de_ui__style_property_count; ++p)
                 if ((compiled->mask & (1u << p)) && (i32)rule->specificity >= best[p]) {
+                    mask |= 1u << p;
                     best[p] = (i32)rule->specificity;
                     winning[p] = compiled->values[p];
                 }
-            toml_datum_t transition_value = toml_get(rule->properties, "transition"),
-                         easing_value = toml_get(rule->properties, "easing");
-            if ((transition_value.type != TOML_UNKNOWN || easing_value.type != TOML_UNKNOWN) &&
+            if ((compiled->has_transition || compiled->has_easing) &&
                 (i32)rule->specificity >= motion_specificity) {
                 motion_specificity = (i32)rule->specificity;
-                if (transition_value.type != TOML_UNKNOWN)
+                if (compiled->has_transition)
                     duration = compiled->transition;
-                if (easing_value.type != TOML_UNKNOWN)
+                if (compiled->has_easing)
                     easing = compiled->easing;
             }
         }
     }
+    /* Bindings can override style fields outside the stylesheet mask. Preserve their
+     * authored baseline, including the frame where a binding is removed. */
+    if (binding_revision)
+        mask = (1u << de_ui__style_property_count) - 1;
+    if (cache->initialized)
+        restore_authored(cache, &node, &style, &text, mask);
+    cache->applied_mask = mask;
     for (u32 p = 0; p < de_ui__style_property_count; ++p)
         if (best[p] >= 0)
             apply_value(ui, &de_ui__style_properties[p], &winning[p], &node, &style, &text);
