@@ -14,9 +14,13 @@ TEST_F(anim, sample_keys_interpolation, anim_fixture) {
         EXPECT_TRUE(fabsf(pose[0].t[0] - time * 2) < 1e-4f);
         EXPECT_TRUE(fabsf(pose[0].s[0] - (1 + time)) < 1e-4f);
         de_cooked_clip_track rotation = de_cooked_clip_get_track(&clip, 1);
-        f32 a[4], b[4], reference[4];
+        f32 a[4] = {NAN, NAN, NAN, NAN}, b[4] = {NAN, NAN, NAN, NAN}, reference[4];
         de_cooked_clip_key_value(&rotation, 0, a);
         de_cooked_clip_key_value(&rotation, 1, b);
+        for (u32 c = 0; c < 4; ++c) {
+            ASSERT_TRUE(isfinite(a[c]));
+            ASSERT_TRUE(isfinite(b[c]));
+        }
         de_cooked_clip_nlerp(a, b, time, reference);
         f64 dot = 0, length_a = 0, length_b = 0;
         for (u32 c = 0; c < 4; ++c) {
