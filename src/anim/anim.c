@@ -134,7 +134,21 @@ static void gather(const de_query_chunk *chunk, void *user) {
         DeAnimator *a = &animators[i];
         if (e->entity.bits != entity.bits || e->skeleton_handle != a->skeleton.id ||
             e->clip_handle != a->clip.id) {
+            /* Asset-cache replacement must not discard a same-actor timing
+             * handoff. Otherwise a clip switch after a visual frame rebases
+             * the fixed clock from that visual frame's advanced time. */
+            bool handoff = e->entity.bits == entity.bits && e->visual_output;
+            f32 visual_time = e->visual_time;
+            bool visual_playing = e->visual_playing;
+            u64 visual_ticks = e->visual_fixed_ticks, visual_hash = e->visual_fixed_hash;
             release_entry(s, e);
+            if (handoff) {
+                e->visual_output = true;
+                e->visual_time = visual_time;
+                e->visual_playing = visual_playing;
+                e->visual_fixed_ticks = visual_ticks;
+                e->visual_fixed_hash = visual_hash;
+            }
             e->entity = entity;
             e->skeleton_handle = a->skeleton.id;
             e->clip_handle = a->clip.id;

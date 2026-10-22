@@ -19,5 +19,6 @@ de_det_add_tests(TARGET test_anim_determinism TESTS
     determinism_anim.workers_1=anim_determinism.workers_1
     determinism_anim.workers_4=anim_determinism.workers_4
     determinism_anim.workers_8=anim_determinism.workers_8
+    determinism_anim.timing_mode_toggle=anim_determinism.timing_mode_toggle
     determinism_anim.rollback_and_cadence=anim_determinism.rollback_and_cadence
     determinism_anim.detects_pose_bit_change=anim_determinism.detects_pose_bit_change)

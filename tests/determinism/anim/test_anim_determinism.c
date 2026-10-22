@@ -199,6 +199,35 @@ TEST(anim_determinism, workers_4) {
 TEST(anim_determinism, workers_8) {
     verify(8);
 }
+TEST(anim_determinism, timing_mode_toggle) {
+    de_det_session session = {0};
+    ASSERT_EQ(de_det_session_begin(&session, &scenario, SEED, 4), DE_OK);
+    scenario_state *s = session.state;
+    u64 actual[TICKS], golden[TICKS];
+    for (u32 tick = 0; tick < TICKS; ++tick) {
+        if (tick) {
+            for (u32 i = 0; i < ACTORS; ++i) {
+                DeAnimator *a =
+                    de_entity_get(session.world, s->actors[i], de_anim_component(s->anim));
+                a->deterministic = false;
+            }
+            ASSERT_EQ(de_world_run_schedule(session.world, DE_SCHEDULE_POST_UPDATE, .017f, 0),
+                      DE_OK);
+            for (u32 i = 0; i < ACTORS; ++i) {
+                DeAnimator *a =
+                    de_entity_get(session.world, s->actors[i], de_anim_component(s->anim));
+                a->deterministic = true;
+            }
+        }
+        step(&session, &actual[tick]);
+    }
+    de_det_session_end(&session);
+    u32 count;
+    ASSERT_EQ(de_det_read_checksums(DE_ANIM_DET_GOLDEN, golden, TICKS, &count), DE_OK);
+    ASSERT_EQ(count, TICKS);
+    EXPECT_EQ(de_det_report("timing-mode handoff vs original vector", golden, actual, TICKS),
+              DE_DET_NO_DIVERGENCE);
+}
 TEST(anim_determinism, rollback_and_cadence) {
     de_det_session session = {0};
     ASSERT_EQ(de_det_session_begin(&session, &scenario, SEED, 4), DE_OK);
