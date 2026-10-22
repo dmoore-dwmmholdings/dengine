@@ -161,7 +161,10 @@ static void gather(const de_query_chunk *chunk, void *user) {
         if (clocks)
             e->clock = &clocks[i];
         else {
-            memset(&e->pending_clock, 0, sizeof e->pending_clock);
+            /* Only a fixed evaluation consumes/installs pending clock state.
+             * Visual-only actors need no per-frame clock clear. */
+            if (s->fixed_evaluation && a->deterministic)
+                memset(&e->pending_clock, 0, sizeof e->pending_clock);
             e->clock = &e->pending_clock;
         }
         if (a->deterministic != s->fixed_evaluation)
@@ -185,7 +188,6 @@ static void gather(const de_query_chunk *chunk, void *user) {
         e->ready = true;
         for (u32 j = 0; j < e->joints; ++j)
             e->names[j] = de_cooked_skeleton_name_hash(&e->skeleton, j);
-        s->jobs[s->job_count++] = index;
     }
 }
 static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
@@ -234,15 +236,16 @@ void de__anim_prepare(de_system_ctx *ctx, bool fixed) {
     s->dt = ctx->dt;
     s->job_count = 0;
     de_query_each(ctx->world, ctx->queries[0], gather, s);
-    for (u32 i = 0; i < s->capacity; ++i)
-        if (s->entries[i].entity.bits && s->entries[i].seen != s->epoch)
-            release_entry(s, &s->entries[i]);
     /* Canonical publication and callback order, independent of archetype layout. */
-    s->job_count = 0;
-    for (u32 i = 0; i < s->capacity; ++i)
-        if (s->entries[i].seen == s->epoch && s->entries[i].ready &&
-            s->entries[i].animator->deterministic == fixed)
+    for (u32 i = 0; i < s->capacity; ++i) {
+        de__anim_entry *e = &s->entries[i];
+        if (e->entity.bits && e->seen != s->epoch) {
+            release_entry(s, e);
+            continue;
+        }
+        if (e->seen == s->epoch && e->ready && e->animator->deterministic == fixed)
             s->jobs[s->job_count++] = i;
+    }
 }
 static void sample(de_system_ctx *ctx) {
     de_anim_system *s = ctx->user;
