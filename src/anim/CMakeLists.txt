@@ -19,8 +19,8 @@ de_add_module(
 target_sources(de_anim PRIVATE anim.c anim_system.c anim_assets.c anim_reflect.c anim_math.h anim_math_fast.c clip_sample.c sampling.c pose.c pose.h anim_internal.h)
 target_sources(de_anim PRIVATE sprite_clip_format.h)
 target_sources(de_anim PRIVATE sprite_clip.c sprite_anim.c)
-if(MSVC)
-    set_source_files_properties(formats/clip_decode.c sampling.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
-else()
-    set_source_files_properties(formats/clip_decode.c sampling.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
-endif()
+target_sources(de_anim PRIVATE anim_clock.c anim_deterministic.c anim_checksum.c pose_deterministic.c)
+# Shared inline math consumers and the complete fixed evaluation call graph.
+de_mark_deterministic_sources(anim.c anim_system.c anim_assets.c anim_reflect.c anim_stub.c
+    sampling.c formats/clip_decode.c anim_clock.c anim_deterministic.c anim_checksum.c
+    pose_deterministic.c)

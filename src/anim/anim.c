@@ -2,7 +2,6 @@
 #include "asset/slots_internal.h"
 #include <dengine/de_reflect.h>
 #include <string.h>
-#include <math.h>
 typedef struct DeAnimSystemRef {
     de_anim_system *system;
 } DeAnimSystemRef;
@@ -54,6 +53,9 @@ static bool reserve(de_anim_system *s, u32 index) {
     s->entries = entries;
     s->jobs = jobs;
     s->capacity = s->job_capacity = capacity;
+    for (u32 i = 0; i < capacity; ++i)
+        if (entries[i].clock_missing)
+            entries[i].clock = &entries[i].pending_clock;
     return true;
 }
 static void retain(de_anim_system *s, u32 handle, de_load_handle *out) {
@@ -122,6 +124,7 @@ static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skelet
 static void gather(const de_query_chunk *chunk, void *user) {
     de_anim_system *s = user;
     DeAnimator *animators = chunk->columns[0];
+    de__anim_clock *clocks = chunk->columns[1];
     for (u32 i = 0; i < chunk->count; ++i) {
         de_entity entity = chunk->entities[i];
         u32 index = de_entity_index(entity);
@@ -131,7 +134,21 @@ static void gather(const de_query_chunk *chunk, void *user) {
         DeAnimator *a = &animators[i];
         if (e->entity.bits != entity.bits || e->skeleton_handle != a->skeleton.id ||
             e->clip_handle != a->clip.id) {
+            /* Asset-cache replacement must not discard a same-actor timing
+             * handoff. Otherwise a clip switch after a visual frame rebases
+             * the fixed clock from that visual frame's advanced time. */
+            bool handoff = e->entity.bits == entity.bits && e->visual_output;
+            f32 visual_time = e->visual_time;
+            bool visual_playing = e->visual_playing;
+            u64 visual_ticks = e->visual_fixed_ticks, visual_hash = e->visual_fixed_hash;
             release_entry(s, e);
+            if (handoff) {
+                e->visual_output = true;
+                e->visual_time = visual_time;
+                e->visual_playing = visual_playing;
+                e->visual_fixed_ticks = visual_ticks;
+                e->visual_fixed_hash = visual_hash;
+            }
             e->entity = entity;
             e->skeleton_handle = a->skeleton.id;
             e->clip_handle = a->clip.id;
@@ -139,9 +156,22 @@ static void gather(const de_query_chunk *chunk, void *user) {
             retain(s, a->clip.id, &e->clip_ref);
         }
         e->seen = s->epoch;
-        e->ready = false;
         e->animator = a;
-        if (a->graph.id || a->deterministic)
+        e->clock_missing = clocks == NULL;
+        if (clocks)
+            e->clock = &clocks[i];
+        else {
+            /* Only a fixed evaluation consumes/installs pending clock state.
+             * Visual-only actors need no per-frame clock clear. */
+            if (s->fixed_evaluation && a->deterministic)
+                memset(&e->pending_clock, 0, sizeof e->pending_clock);
+            e->clock = &e->pending_clock;
+        }
+        if (a->deterministic != s->fixed_evaluation)
+            continue;
+        e->ready = false;
+        e->finalized = false;
+        if (a->graph.id)
             continue;
         const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
         const de__anim_asset *clip = de__anim_asset_get(s, a->clip.id, "anim_clip");
@@ -152,12 +182,12 @@ static void gather(const de_query_chunk *chunk, void *user) {
         if (slot->version != e->clip_version)
             e->cursor.valid = false;
         e->clip_version = slot->version;
+        e->clip_key = slot->id.hash;
         e->skeleton = skel->skeleton;
         e->clip = clip->clip;
         e->ready = true;
         for (u32 j = 0; j < e->joints; ++j)
             e->names[j] = de_cooked_skeleton_name_hash(&e->skeleton, j);
-        s->jobs[s->job_count++] = index;
     }
 }
 static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
@@ -171,6 +201,12 @@ static void sample_entry(de_anim_system *s, de__anim_entry *e, DeAnimator *a) {
     }
     if (!de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor))
         e->ready = false;
+    e->visual_output = true;
+    e->visual_time = a->time;
+    e->visual_playing = a->playing;
+    e->visual_fixed_ticks = e->clock->ticks;
+    e->visual_fixed_hash = e->clock->pose_hash;
+    e->clock_known = false;
 }
 static void sample_range(u32 begin, u32 end, void *user) {
     de_anim_system *s = user;
@@ -188,19 +224,32 @@ static void sample_chunk(const de_query_chunk *chunk, void *user) {
         if (index >= s->capacity)
             continue;
         de__anim_entry *e = &s->entries[index];
-        if (e->ready && e->seen == s->epoch && e->entity.bits == entity.bits)
+        if (!animators[row].deterministic && e->ready && e->seen == s->epoch &&
+            e->entity.bits == entity.bits)
             sample_entry(s, e, &animators[row]);
     }
 }
-static void sample(de_system_ctx *ctx) {
+void de__anim_prepare(de_system_ctx *ctx, bool fixed) {
     de_anim_system *s = ctx->user;
+    s->fixed_evaluation = fixed;
     s->epoch++;
     s->dt = ctx->dt;
     s->job_count = 0;
     de_query_each(ctx->world, ctx->queries[0], gather, s);
-    for (u32 i = 0; i < s->capacity; ++i)
-        if (s->entries[i].entity.bits && s->entries[i].seen != s->epoch)
-            release_entry(s, &s->entries[i]);
+    /* Canonical publication and callback order, independent of archetype layout. */
+    for (u32 i = 0; i < s->capacity; ++i) {
+        de__anim_entry *e = &s->entries[i];
+        if (e->entity.bits && e->seen != s->epoch) {
+            release_entry(s, e);
+            continue;
+        }
+        if (e->seen == s->epoch && e->ready && e->animator->deterministic == fixed)
+            s->jobs[s->job_count++] = i;
+    }
+}
+static void sample(de_system_ctx *ctx) {
+    de_anim_system *s = ctx->user;
+    de__anim_prepare(ctx, false);
     if (s->tasks && s->tasks == de_world_task_system(ctx->world))
         de_query_par_each(ctx->world, ctx->queries[0], 32, sample_chunk, s);
     else if (s->tasks)
@@ -230,9 +279,10 @@ static void finalize(de_system_ctx *ctx) {
         de_task_parallel_for(s->tasks, s->job_count, 32, finalize_range, s);
     else
         finalize_range(0, s->job_count, s);
-    for (u32 i = 0; i < s->job_count; ++i) {
-        de__anim_entry *e = &s->entries[s->jobs[i]];
-        if (!e->ready || !de_entity_alive(s->world, e->entity))
+    for (u32 i = 0; i < s->capacity; ++i) {
+        de__anim_entry *e = &s->entries[i];
+        if (!e->ready || !de_entity_alive(s->world, e->entity) ||
+            (e->animator->deterministic && !de__anim_fixed_pose_valid(s, e)))
             continue;
 #if DE_HAS_RENDER
         if (s->renderer)
@@ -273,6 +323,10 @@ void de_anim_destroy(de_anim_system *s) {
     if (s->world) {
         de_system_remove(s->world, s->sample);
         de_system_remove(s->world, s->finalize);
+        if (s->fixed.id)
+            de_system_remove(s->world, s->fixed);
+        if (s->checksum_query.id)
+            de_query_destroy(s->world, s->checksum_query);
         if (s->resource.id)
             de_resource_remove(s->world, s->resource);
     }
@@ -284,6 +338,8 @@ void de_anim_destroy(de_anim_system *s) {
         DE_FREE(s->alloc, s->entries, (size_t)s->capacity * sizeof *s->entries);
     if (s->jobs)
         DE_FREE(s->alloc, s->jobs, (size_t)s->job_capacity * sizeof *s->jobs);
+    if (s->checksum_rows)
+        DE_FREE(s->alloc, s->checksum_rows, (size_t)s->checksum_capacity * 4 * sizeof(u64));
     DE_FREE(s->alloc, s, sizeof *s);
 }
 static de_type_id register_type(de_type_registry *types, de_type_desc desc) {
@@ -335,8 +391,11 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
     s->events = de_event_register(world, event);
     if (!s->events.id)
         goto failed;
-    const de_query_term term = {s->component, DE_WRITE};
-    const de_query_desc query = {.terms = &term, .term_count = 1};
+    if (de__anim_deterministic_init(s, world) != DE_OK)
+        goto failed;
+    const de_query_term terms[] = {{s->component, DE_WRITE},
+                                   {s->clock_component, DE_OPTIONAL_WRITE}};
+    const de_query_desc query = {.terms = terms, .term_count = 2};
     const char *before[] = {DE_TRANSFORM_PROPAGATE_SYSTEM};
     s->sample =
         de_system_add(world, &(de_system_desc){.name = "anim.evaluate",
@@ -371,12 +430,17 @@ failed:
         de_system_remove(world, s->sample);
     if (s->finalize.id)
         de_system_remove(world, s->finalize);
+    if (s->fixed.id)
+        de_system_remove(world, s->fixed);
+    if (s->checksum_query.id)
+        de_query_destroy(world, s->checksum_query);
     if (s->resource.id)
         de_resource_remove(world, s->resource);
-    s->sample = s->finalize = (de_system){0};
+    s->sample = s->finalize = s->fixed = (de_system){0};
+    s->checksum_query = (de_query){0};
     s->resource = (de_resource_id){0};
     s->events = (de_event_type){0};
-    s->component = s->ik_component = s->sprite_component = (de_component){0};
+    s->component = s->clock_component = s->ik_component = s->sprite_component = (de_component){0};
 }
 void de_anim_set_renderer(de_anim_system *s, de_renderer *r) {
     if (s) {
@@ -398,21 +462,29 @@ de_component de_anim_component(const de_anim_system *s) {
 de_event_type de_anim_event_type(const de_anim_system *s) {
     return s ? s->events : (de_event_type){0};
 }
+de_anim_system *de__anim_for_world(de_world *world) {
+    if (!world)
+        return NULL;
+    de_type_id type = de_type_find(de_world_types(world), "DeAnimSystemRef");
+    if (!type.id)
+        return NULL;
+    const DeAnimSystemRef *ref = de_resource_get(world, de_resource_find(world, type));
+    return ref ? ref->system : NULL;
+}
 bool de_anim_bone_transform(de_world *world, de_entity entity, de_name bone, de_transform *out) {
     if (!world || !out || !de_entity_alive(world, entity))
         return false;
-    de_type_id type = de_type_find(de_world_types(world), "DeAnimSystemRef");
-    if (!type.id)
+    de_anim_system *s = de__anim_for_world(world);
+    if (!s)
         return false;
-    const DeAnimSystemRef *ref = de_resource_get(world, de_resource_find(world, type));
-    if (!ref || !ref->system)
-        return false;
-    de_anim_system *s = ref->system;
     u32 index = de_entity_index(entity);
     if (index >= s->capacity)
         return false;
     const de__anim_entry *e = &s->entries[index];
     if (e->entity.bits != entity.bits || !e->ready || !e->finalized)
+        return false;
+    const DeAnimator *a = de_entity_get_const(world, entity, s->component);
+    if (!a || (a->deterministic && !de__anim_fixed_pose_valid(s, e)))
         return false;
     for (u32 j = 0; j < e->joints; ++j)
         if (e->names[j] == bone.hash) {
