@@ -21,15 +21,32 @@ def run(*args):
     subprocess.run([str(x) for x in args], check=True)
 
 
-def verify_controls(compiler, archive, out):
+def create_resource_directory(resource, archive, out):
+    """Keep Clang's normal runtime selection, replacing only libFuzzer."""
+    private = out / "clang-resource"
+    private.mkdir()
+    resource = resource.resolve()
+    for entry in resource.iterdir():
+        if entry.name != "lib":
+            (private / entry.name).symlink_to(entry.resolve(), target_is_directory=entry.is_dir())
+    runtime_dir = private / "lib/darwin"
+    runtime_dir.mkdir(parents=True)
+    for entry in (resource / "lib/darwin").iterdir():
+        target = archive if entry.name == "libclang_rt.fuzzer_osx.a" else entry.resolve()
+        (runtime_dir / entry.name).symlink_to(target, target_is_directory=entry.is_dir())
+    return private
+
+
+def verify_controls(compiler, resource, out):
     control = Path(__file__).with_name("fuzzer_control.c").resolve()
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1:halt_on_error=1",
                UBSAN_OPTIONS="halt_on_error=1", LSAN_OPTIONS="")
     results = {}
     for name, mode, expected in (("empty", 0, 0), ("leak", 1, 1), ("rss", 2, 71)):
         exe = out / f"control-{name}"
-        run(compiler.with_name("clang"), "-g", "-fsanitize=fuzzer-no-link,address",
-            f"-DMODE={mode}", control, archive, "-lc++", "-o", exe)
+        run(compiler.with_name("clang"), "-g", "-std=c11", "-Wall", "-Wextra", "-Wpedantic",
+            "-Werror", f"-resource-dir={resource}",
+            "-fsanitize=fuzzer,address", f"-DMODE={mode}", control, "-o", exe)
         args = [str(exe), "-runs=0"]
         if mode == 2:
             args.append("-rss_limit_mb=1")
@@ -89,14 +106,19 @@ def main():
     run(compiler, "-std=c++17", "-O2", "-g", "-fno-exceptions", "-fno-rtti",
         "-fno-omit-frame-pointer", "-c", source / "FuzzerDriver.cpp", "-o", obj)
     run(args.llvm_prefix / "bin/llvm-ar", "r", archive, obj)
+    private = create_resource_directory(resource, archive, out)
     metadata = {"upstream_commit": COMMIT, "compiler": version,
                 "original_archive": str(installed),
                 "original_sha256": hashlib.sha256(installed.read_bytes()).hexdigest(),
                 "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(),
-                "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+                "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "resource_directory": str(private),
+                "original_resource_directory": str(resource.resolve()),
+                "host": platform.platform(), "architecture": platform.machine()}
     (out / "provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    verify_controls(compiler, archive, out)
+    verify_controls(compiler, private, out)
     print(archive)
+    print(f"Clang flag: -resource-dir={private}")
 
 
 if __name__ == "__main__":
