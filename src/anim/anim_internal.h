@@ -21,6 +21,14 @@ typedef struct de__anim_clip_cursor {
     bool valid;
     u64 binary_searches, forward_steps;
 } de__anim_clip_cursor;
+/* POD ECS snapshot state; no borrowed pointers or process-local asset handles. */
+typedef struct de__anim_clock {
+    u64 ticks, segment_ticks, clip_key, pose_hash;
+    f64 phase, exact_time;
+    f32 dt, speed, duration, output_time;
+    u32 state_id; /* DENG-184 supplies state identity when state machines land. */
+    bool initialized, playing;
+} de__anim_clock;
 typedef struct de__anim_entry {
     de_entity entity;
     u64 seen;
@@ -29,6 +37,7 @@ typedef struct de__anim_entry {
     de_cooked_skeleton_view skeleton;
     de_cooked_clip_view clip;
     u32 clip_version;
+    u64 clip_key;
     de__anim_clip_cursor cursor;
     DeAnimator *animator;
     void *block;
@@ -39,6 +48,12 @@ typedef struct de__anim_entry {
     de_affine *model, *palette;
     u64 *names;
     bool ready, ended, finalized;
+    de__anim_clock pending_clock;
+    de__anim_clock *clock;
+    u64 fixed_pose_hash, pose_restore_count;
+    f32 visual_time;
+    u64 visual_fixed_ticks, visual_fixed_hash;
+    bool clock_missing, clock_known, visual_output, visual_playing;
 } de__anim_entry;
 typedef enum de__anim_stage {
     DE_ANIM_STAGE_SAMPLE,
@@ -51,6 +66,8 @@ typedef enum de__anim_stage {
 /* Stage callbacks run on the main thread between the built-in passes. They may
  * dispatch/join their own jobs over ready entries, but must not change world
  * structure (the gathered component pointers stay borrowed until finalize).
+ * Iterate s->jobs[0..job_count): ready entries outside that list can hold cached
+ * poses for the other timing mode and must not be changed by this pass.
  * Register on the main thread between schedules; user storage outlives s. */
 typedef void (*de__anim_stage_fn)(de_anim_system *s, void *user);
 typedef struct de__anim_stage_hook {
@@ -67,23 +84,36 @@ struct de_anim_system {
     de_renderer *renderer;
     bool renderer_explicit;
     de_world *world;
-    de_component component;
+    de_component component, clock_component;
     de_component ik_component, sprite_component;
     de_builtin_component_ids builtins;
     de_resource_id resource;
     de_event_type events;
-    de_system sample, finalize;
+    de_system sample, finalize, fixed;
     de__anim_entry *entries;
     u32 capacity;
     u32 *jobs;
     u32 job_capacity, job_count;
-    u64 epoch;
+    u64 epoch, restore_count;
     f32 dt;
     de_pool *pose_pools[DE__ANIM_POSE_POOL_CLASSES];
     de__anim_stage_hook stages[DE_ANIM_STAGE_COUNT][DE__ANIM_STAGE_HOOK_CAPACITY];
     u32 stage_counts[DE_ANIM_STAGE_COUNT];
     bool dispatching_stages;
+    bool fixed_evaluation;
+    de_query checksum_query;
+    u64 *checksum_rows;
+    u32 checksum_capacity;
 };
+void de__anim_prepare(de_system_ctx *, bool fixed);
+de_anim_system *de__anim_for_world(de_world *);
+de_result de__anim_deterministic_init(de_anim_system *, de_world *);
+void de__anim_clock_step(de__anim_clock *, DeAnimator *, f32 dt, f32 duration, u64 clip_key,
+                         bool seek, bool *ended);
+void de__anim_pose_deterministic(const de_cooked_skeleton_view *, const de__anim_local_pose *,
+                                 de_affine *, de_affine *);
+u64 de__anim_pose_checksum(const de__anim_local_pose *);
+bool de__anim_fixed_pose_valid(const de_anim_system *, const de__anim_entry *);
 de_result de_anim__register_stage(de_anim_system *, de__anim_stage, de__anim_stage_fn, void *);
 void de__anim_run_stage(de_anim_system *, de__anim_stage);
 bool de__anim_sample(const de_cooked_clip_view *, const de_cooked_skeleton_view *, f32,

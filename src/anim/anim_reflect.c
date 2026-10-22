@@ -105,13 +105,14 @@ de_result de__anim_register_components(de_anim_system *s, de_world *w) {
         DE_FIELD_EX(DeAnimator, root_motion, DE_FK_BOOL, AUTH,
                     {0, 0, 0, "Root-motion application requires DENG-186", 0, 0}),
         DE_FIELD_EX(DeAnimator, deterministic, DE_FK_BOOL, AUTH,
-                    {0, 0, 0, "FixedUpdate evaluation requires DENG-192", 0, 0})};
+                    {0, 0, 0, "Evaluate on fixed simulation ticks", 0, 0})};
     de_type_desc animator = DE_TYPE_DESC(DeAnimator, 2, animator_fields);
     animator.hooks.construct = construct_animator;
     animator.hooks.migrate = migrate_animator;
     de_type_id id;
     DE_TRY(type(r, animator, &id));
-    de_component animator_component = de_component_register(w, id, DE_COMP_SERIALIZE);
+    de_component animator_component =
+        de_component_register(w, id, DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT);
     if (!animator_component.id)
         return DE_ERR_INTERNAL;
 
