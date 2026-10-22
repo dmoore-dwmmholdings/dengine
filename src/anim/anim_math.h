@@ -64,6 +64,33 @@ static inline de_quat de__anim_slerp(de_quat a, de_quat b, f32 t, bool determini
 static inline bool de__anim_pose_valid(const de__anim_local_pose *p) {
     return p && (!p->count || (p->rotations && p->translations && p->scales));
 }
+static inline de_quat de__anim_quat_product(de_quat a, de_quat b) {
+    return (de_quat){a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                     a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                     a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                     a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+static inline de_vec3 de__anim_difference(de_vec3 value, de_vec3 reference) {
+    return (de_vec3){value.x - reference.x, value.y - reference.y, value.z - reference.z};
+}
+static inline de_vec3 de__anim_add_delta(de_vec3 base, de_vec3 delta, f32 weight) {
+    if (weight == 0)
+        return base;
+    return (de_vec3){base.x + delta.x * weight, base.y + delta.y * weight,
+                     base.z + delta.z * weight};
+}
+static inline de_quat de__anim_rotation_delta(de_quat value, de_quat reference,
+                                              bool deterministic) {
+    de_quat inverse = {-reference.x, -reference.y, -reference.z, reference.w};
+    return de__anim_normalize(de__anim_quat_product(inverse, value), deterministic);
+}
+static inline de_quat de__anim_add_rotation(de_quat base, de_quat delta, f32 weight,
+                                            bool deterministic) {
+    if (weight == 0)
+        return base;
+    de_quat scaled = de__anim_slerp((de_quat){0, 0, 0, 1}, delta, weight, deterministic);
+    return de__anim_normalize(de__anim_quat_product(base, scaled), deterministic);
+}
 /* Exact in-place aliasing with either input is supported; partial overlapping
  * channel arrays are not. Invalid shapes/weights write nothing. Endpoints copy
  * exactly; interior weights interpolate root delta as one additional bone. */

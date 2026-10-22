@@ -18,7 +18,8 @@ de_add_module(
 # DENG-201 visual playback; the cooked reference decoder retains its arithmetic contract.
 target_sources(de_anim PRIVATE anim.c anim_system.c anim_assets.c anim_reflect.c anim_math.h anim_math_fast.c clip_sample.c sampling.c pose.c pose.h anim_internal.h)
 target_sources(de_anim PRIVATE anim_clock.c anim_deterministic.c anim_checksum.c pose_deterministic.c)
+target_sources(de_anim PRIVATE blend.c blend.h)
 # Shared inline math consumers and the complete fixed evaluation call graph.
 de_mark_deterministic_sources(anim.c anim_system.c anim_assets.c anim_reflect.c anim_stub.c
     sampling.c formats/clip_decode.c anim_clock.c anim_deterministic.c anim_checksum.c
-    pose_deterministic.c)
+    pose_deterministic.c blend.c)

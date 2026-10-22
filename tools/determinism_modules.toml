@@ -128,3 +128,6 @@ module = "anim"
 [[source]]
 path = "src/anim/pose_deterministic.c"
 module = "anim"
+[[source]]
+path = "src/anim/blend.c"
+module = "anim"
