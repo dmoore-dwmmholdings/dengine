@@ -11,3 +11,12 @@ if(TARGET fuzz_cooked_anim)
     target_include_directories(fuzz_cooked_anim PRIVATE
         "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tests/fuzz/import")
 endif()
+
+# DENG-190: source importer and cooked sprite-frame clip parser.
+if(DE_BUILD_TOOLS)
+    de_add_fuzz_target(NAME sprite_clip SOURCES fuzz_sprite_clip.c
+        LIBS de_cooker de_platform CORPUS corpus/sprite_clip)
+    if(TARGET fuzz_sprite_clip)
+        target_include_directories(fuzz_sprite_clip PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    endif()
+endif()

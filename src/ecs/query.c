@@ -45,6 +45,7 @@ static de_result registry_get(de_world *w, ecs_query_registry **out) {
 
 static void query_free(de_world *w, ecs_query *q) {
     de_array_free(&q->entries);
+    de_array_free(&q->range_commands);
     DE_FREE(w->a, q, q->alloc_size);
 }
 
@@ -206,6 +207,7 @@ static ecs_query *query_build(de_world *w, const de_query_desc *d, u32 change_co
     q->change_filter = ecs_change_filter_default;
     de_array_init(&q->entries, w->a, q->entry_stride * (u32)sizeof(u32), (u32)sizeof(u32),
                   DE_MEM_ECS);
+    DE_ARRAY_INIT_TAG(&q->range_commands, de_commands *, w->a, DE_MEM_ECS);
     return q;
 }
 

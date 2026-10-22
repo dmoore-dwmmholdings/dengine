@@ -74,11 +74,12 @@ struct ecs_query {
     u32 *excluded;       /**< sorted unique: WITHOUT */
     u32 *change_filters; /**< indices into `filters` of the ADDED / CHANGED filters, in order */
     u32 change_count;
-    u32 col_count;    /**< term_count + change_count */
-    u32 entry_stride; /**< 2 + col_count */
-    u32 scanned;      /**< world archetypes tested so far (creation order) */
-    de_array entries; /**< entry_stride u32 per matched archetype */
-    u64 match_tests;  /**< archetype match tests run by the cache (create + listener) */
+    u32 col_count;           /**< term_count + change_count */
+    u32 entry_stride;        /**< 2 + col_count */
+    u32 scanned;             /**< world archetypes tested so far (creation order) */
+    de_array entries;        /**< entry_stride u32 per matched archetype */
+    de_array range_commands; /**< reusable de_commands* preparation scratch for par_each */
+    u64 match_tests;         /**< archetype match tests run by the cache (create + listener) */
     /* DENG-347: change window and row predicate. */
     u32 last_run_tick;
     u32 this_run_tick;

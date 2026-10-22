@@ -6,12 +6,15 @@
 #include "anim/formats/de_cooked_clip.h"
 #include "anim/formats/de_cooked_skeleton.h"
 #include "anim/pose.h"
+#include "anim/sprite_clip_format.h"
 typedef struct de__anim_asset {
     de_allocator allocator;
     size_t bytes;
     u32 kind;
     de_cooked_skeleton_view skeleton;
     de_cooked_clip_view clip;
+    de__sprite_clip_view sprite;
+    u64 *sprite_prefix;
 } de__anim_asset;
 typedef struct de__anim_clip_cursor {
     u32 *keys;
@@ -100,11 +103,16 @@ struct de_anim_system {
     de__anim_stage_hook stages[DE_ANIM_STAGE_COUNT][DE__ANIM_STAGE_HOOK_CAPACITY];
     u32 stage_counts[DE_ANIM_STAGE_COUNT];
     bool dispatching_stages;
+    struct de__sprite_runtime *sprites;
     bool fixed_evaluation;
     de_query checksum_query;
     u64 *checksum_rows;
     u32 checksum_capacity;
 };
+de_result de__sprite_register_asset(de_anim_system *);
+de_result de_anim__sprite_init(de_anim_system *, de_world *);
+de_result de__anim_features_init(de_anim_system *, de_world *);
+void de__sprite_shutdown(de_anim_system *);
 void de__anim_prepare(de_system_ctx *, bool fixed);
 de_anim_system *de__anim_for_world(de_world *);
 de_result de__anim_deterministic_init(de_anim_system *, de_world *);

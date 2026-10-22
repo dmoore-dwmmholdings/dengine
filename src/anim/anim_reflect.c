@@ -147,7 +147,7 @@ de_result de__anim_register_components(de_anim_system *s, de_world *w) {
 
     static const de_field_info sprite_fields[] = {
         DE_FIELD_EX(DeSpriteAnimator, clip, DE_FK_ASSET, REF,
-                    {0, 0, 0, "Sprite frame-list clip", "anim_clip", 0}),
+                    {0, 0, 0, "Sprite frame-list clip", "sprite_clip", 0}),
         DE_FIELD_EX(DeSpriteAnimator, tag, DE_FK_NAME, AUTH,
                     {0, 0, 0, "Aseprite tag; zero selects the complete clip", 0, 0}),
         DE_FIELD_EX(DeSpriteAnimator, speed, DE_FK_F32, AUTH,

@@ -33,6 +33,7 @@ typedef struct query_run {
      * slices get as de_query_chunk.commands (per range in par_each). */
     const ecs_system *sys;
     de_commands *commands;
+    de_commands **range_commands;
 } query_run;
 
 bool ecs_change_filter_default(const ecs_query *q, const ecs_archetype *a, const ecs_chunk *ch,
@@ -241,7 +242,8 @@ static void par_range_fn(u32 begin, u32 end, void *user) {
      * range + 1), and runs in the system's scope on whichever thread takes it (stamp tick,
      * access and determinism checks). */
     query_run rr = *r;
-    rr.commands = ecs_system_range_commands(r->sys, begin / r->grain);
+    rr.commands = r->range_commands ? r->range_commands[begin / r->grain]
+                                    : ecs_system_range_commands(r->sys, begin / r->grain);
     ecs_system_scope scope;
     ecs_system_scope_enter(r->sys, &scope);
     run_range(&rr, begin, end);
@@ -278,6 +280,18 @@ void de_query_par_each(de_world *w, de_query qh, u32 grain_rows, de_chunk_fn fn,
         total += a->count;
     if (total == 0)
         return;
+
+    if (r.sys != NULL) {
+        const u32 ranges = (total - 1u) / r.grain + 1u;
+        if (de_array_reserve(&q->range_commands, ranges) == DE_OK) {
+            r.range_commands = q->range_commands.data;
+            /* Preserve every range's original key and callback buffer, but do
+             * not make workers contend on the world's command registry lock.
+             * Failed scratch growth retains the original acquisition path. */
+            for (u32 i = 0; i < ranges; ++i)
+                r.range_commands[i] = ecs_system_range_commands(r.sys, i);
+        }
+    }
 
     if (w->tasks != NULL) {
         /* An explicit grain, never 0: grain 0 depends on the machine's worker count. */
