@@ -1,11 +1,9 @@
 #include "anim_internal.h"
-void de__anim_pose(const de_cooked_skeleton_view *skeleton, const de_cooked_joint_pose *local,
+void de__anim_pose(const de_cooked_skeleton_view *skeleton, const de__anim_local_pose *local,
                    de_affine *model, de_affine *palette) {
     for (u32 j = 0; j < skeleton->joint_count; ++j) {
-        const de_cooked_joint_pose *p = &local[j];
-        de_affine matrix = de_affine_from_trs((de_vec3){p->t[0], p->t[1], p->t[2]},
-                                              (de_quat){p->r[0], p->r[1], p->r[2], p->r[3]},
-                                              (de_vec3){p->s[0], p->s[1], p->s[2]});
+        de_affine matrix =
+            de_affine_from_trs(local->translations[j], local->rotations[j], local->scales[j]);
         u16 parent = de_cooked_skeleton_parent(skeleton, j);
         model[j] =
             parent == DE_COOKED_SKEL_NO_PARENT ? matrix : de_affine_mul(&model[parent], &matrix);
