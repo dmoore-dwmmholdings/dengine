@@ -1245,7 +1245,7 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
                 float *color = (float *)(data + y * 256 + x * 16);
                 float *surface = (float *)(data + 1024 + y * 256 + x * 16);
                 bool poison = y < 2 && test != 0 && test != 7;
-                color[0] = color[1] = color[2] = poison ? 100 : 1;
+                color[0] = color[1] = color[2] = poison ? 100.0f : 1.0f;
                 color[3] = 1;
                 surface[0] = test >= 6 ? .001f : .5f;
                 surface[3] = 1;
