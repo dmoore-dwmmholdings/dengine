@@ -55,6 +55,7 @@ jobs:
           cmake --preset macos-dev
           cat build/macos-dev/de_config_dump.txt
       - name: Build animation test
+        id: build
         shell: bash
         run: cmake --build --preset macos-dev --target test_anim
       - name: Run original workload and require two millisecond mean
@@ -74,6 +75,9 @@ jobs:
                                     for tag in ("skipped", "failure", "error")):
               raise SystemExit("M1 acceptance requires one actual passing benchmark case")
       - name: Run original sprite workload and require half millisecond mean
+        # Keep both original results even if the skeletal assertion failed.
+        # A successful build implies the earlier native-M1 check also passed.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
         env:
           DE_SPRITE_M1_ACCEPTANCE: "1"
@@ -82,6 +86,7 @@ jobs:
             --output-junit "${GITHUB_WORKSPACE}/build/macos-dev/sprite-m1.xml" \
             -R '^anim\.sprite_anim\.ten_thousand_sprites_have_zero_warmed_frame_allocations$'
       - name: Require actual sprite execution
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: python
         run: |
           import xml.etree.ElementTree as ET
