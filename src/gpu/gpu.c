@@ -1423,10 +1423,16 @@ void de_gpu_cmd_dispatch_rays(de_gpu_cmd *c, u32 w, u32 h, u32 depth) {
     static const char F[] = "de_gpu_cmd_dispatch_rays";
     CMD_ENTER(F);
     CHECK(!c->in_render, "%s: dispatch inside rendering", F);
-    CHECK(c->has_pipeline && c->pipeline_kind == DE_PIPE_RAYTRACING,
-          "%s: no ray-tracing pipeline is bound", F);
-    CHECK(c->device->caps.rt_pipelines && c->device->vt->cmd_dispatch_rays,
-          "%s: RT pipelines unsupported", F);
+    /* Optional backend entries must stay guarded in Release/Shipping too.
+     * Preserve the existing diagnostics without enabling all recording checks. */
+    if (!c->has_pipeline || c->pipeline_kind != DE_PIPE_RAYTRACING) {
+        de__gpu_fail(c->device, DE_ERR_INVALID_ARGUMENT, "%s: no ray-tracing pipeline is bound", F);
+        return;
+    }
+    if (!c->device->caps.rt_pipelines || !c->device->vt->cmd_dispatch_rays) {
+        de__gpu_fail(c->device, DE_ERR_INVALID_ARGUMENT, "%s: RT pipelines unsupported", F);
+        return;
+    }
     if (!w || !h || !depth)
         return;
     c->device->vt->cmd_dispatch_rays(c, w, h, depth);

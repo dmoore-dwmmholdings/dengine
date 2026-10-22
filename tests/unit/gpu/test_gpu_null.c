@@ -451,6 +451,56 @@ TEST_F(gpu, unsupported_features, null_fx) {
     de_gpu_query_heap_destroy(f->d, q);
 }
 
+static u32 ray_calls, ray_width, ray_height, ray_depth;
+static void test_ray_dispatch(de_gpu_cmd *c, u32 width, u32 height, u32 depth) {
+    (void)c;
+    ++ray_calls;
+    ray_width = width;
+    ray_height = height;
+    ray_depth = depth;
+}
+TEST_F(gpu, optional_ray_dispatch_guards_caps_callback_and_zero_extent_in_all_builds, null_fx) {
+    de_gpu_cmd *c = de_gpu_cmd_begin(f->d, DE_QUEUE_COMPUTE, "optional rays");
+    ASSERT_TRUE(c != NULL);
+    const de__gpu_backend_vtable *original = f->d->vt;
+    de__gpu_backend_vtable fake = *original;
+    bool original_caps = f->d->caps.rt_pipelines;
+    c->has_pipeline = true;
+    c->pipeline_kind = DE_PIPE_RAYTRACING;
+    fake.cmd_dispatch_rays = test_ray_dispatch;
+    f->d->vt = &fake;
+    ray_calls = 0;
+    de_error_clear();
+    de_gpu_cmd_dispatch_rays(c, 7, 2, 3); /* Callback exists but capability is false. */
+    bool rejected_caps = de_error_last() && de_error_last()->result == DE_ERR_INVALID_ARGUMENT &&
+                         strstr(errmsg(), "RT pipelines unsupported") != NULL;
+    u32 after_caps = ray_calls;
+    f->d->caps.rt_pipelines = true;
+    fake.cmd_dispatch_rays = NULL;
+    de_error_clear();
+    de_gpu_cmd_dispatch_rays(c, 7, 2, 3); /* Capability exists but callback is absent. */
+    bool rejected_callback = de_error_last() &&
+                             de_error_last()->result == DE_ERR_INVALID_ARGUMENT &&
+                             strstr(errmsg(), "RT pipelines unsupported") != NULL;
+    fake.cmd_dispatch_rays = test_ray_dispatch;
+    de_error_clear();
+    de_gpu_cmd_dispatch_rays(c, 7, 2, 3);
+    de_gpu_cmd_dispatch_rays(c, 0, 2, 3);
+    de_gpu_cmd_dispatch_rays(c, 7, 0, 3);
+    de_gpu_cmd_dispatch_rays(c, 7, 2, 0);
+    /* Restore the real table before assertions/fixture teardown. */
+    f->d->vt = original;
+    f->d->caps.rt_pipelines = original_caps;
+    EXPECT_TRUE(rejected_caps && rejected_callback);
+    EXPECT_EQ(after_caps, 0u);
+    EXPECT_EQ(ray_calls, 1u);
+    EXPECT_TRUE(ray_width == 7 && ray_height == 2 && ray_depth == 3);
+    EXPECT_TRUE(de_error_last() == NULL);
+    EXPECT_EQ(
+        de_gpu_queue_submit(f->d, DE_QUEUE_COMPUTE, &(de_gpu_submit){.cmds = &c, .cmd_count = 1}),
+        DE_OK);
+}
+
 TEST(gpu, device_destroy_releases_leaked_objects) {
     de_tracking_allocator tracker;
     de_allocator alloc = de_tracking_allocator_init(&tracker, NULL, DE_MEM_RENDER);
