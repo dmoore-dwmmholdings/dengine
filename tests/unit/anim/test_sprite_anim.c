@@ -378,7 +378,7 @@ TEST(sprite_anim, serial_and_parallel_frames_and_ordered_markers_match) {
             entities[i] = sprite_spawn(&f, i % 2 ? "bounce" : "reverse", true);
             DeSpriteAnimator *a =
                 de_entity_get(f.base.world, entities[i], f.base.anim->sprite_component);
-            a->speed = i % 3 ? 10 : -10;
+            a->speed = i % 3 ? 10.0f : -10.0f;
         }
         de_event_reader reader =
             de_event_reader_create(f.base.world, de_anim_event_type(f.base.anim));
