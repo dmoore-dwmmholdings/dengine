@@ -91,6 +91,38 @@ static inline de_quat de__anim_add_rotation(de_quat base, de_quat delta, f32 wei
     de_quat scaled = de__anim_slerp((de_quat){0, 0, 0, 1}, delta, weight, deterministic);
     return de__anim_normalize(de__anim_quat_product(base, scaled), deterministic);
 }
+/* Blend-space predicates use strict double arithmetic on the original f32
+ * coordinates. Their products fit f64 across the entire finite f32 range;
+ * keeping coordinates unshifted also preserves tiny points next to large ones. */
+static inline bool de__anim_finite(f32 value) {
+    union {
+        f32 f;
+        u32 u;
+    } bits = {.f = value};
+    return (bits.u & 0x7f800000u) != 0x7f800000u;
+}
+static inline f64 de__anim_orient2d(de_vec2 a, de_vec2 b, de_vec2 c) {
+    return ((f64)b.x - a.x) * ((f64)c.y - a.y) - ((f64)b.y - a.y) * ((f64)c.x - a.x);
+}
+/* Positive for d inside the circle of the CCW triangle abc. */
+static inline f64 de__anim_incircle(de_vec2 a, de_vec2 b, de_vec2 c, de_vec2 d) {
+    f64 ax = (f64)a.x - d.x, ay = (f64)a.y - d.y;
+    f64 bx = (f64)b.x - d.x, by = (f64)b.y - d.y;
+    f64 cx = (f64)c.x - d.x, cy = (f64)c.y - d.y;
+    return (ax * ax + ay * ay) * (bx * cy - by * cx) - (bx * bx + by * by) * (ax * cy - ay * cx) +
+           (cx * cx + cy * cy) * (ax * by - ay * bx);
+}
+static inline f64 de__anim_segment_projection(de_vec2 a, de_vec2 b, de_vec2 p,
+                                              f64 *distance_squared) {
+    f64 x = (f64)b.x - a.x, y = (f64)b.y - a.y;
+    f64 px = (f64)p.x - a.x, py = (f64)p.y - a.y;
+    f64 t = (px * x + py * y) / (x * x + y * y);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    px -= t * x;
+    py -= t * y;
+    *distance_squared = px * px + py * py;
+    return t;
+}
 /* Exact in-place aliasing with either input is supported; partial overlapping
  * channel arrays are not. Invalid shapes/weights write nothing. Endpoints copy
  * exactly; interior weights interpolate root delta as one additional bone. */

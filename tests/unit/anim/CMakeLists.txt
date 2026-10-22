@@ -1,4 +1,4 @@
-de_add_test(NAME anim SOURCES test_clip_sample.c test_sampling.c test_animator.c test_pose.c test_anim_dmath.c test_blend.c
+de_add_test(NAME anim SOURCES test_clip_sample.c test_sampling.c test_animator.c test_pose.c test_anim_dmath.c test_blend.c test_blend_tree.c
     LIBS de_anim de_asset de_ecs de_reflect de_task de_platform de_test_support LABELS unit anim TIMEOUT 120)
 if(TARGET test_anim)
     target_include_directories(test_anim PRIVATE "${DE_ROOT_DIR}/src")
@@ -26,7 +26,7 @@ if(TARGET test_anim AND DE_HAS_GPU_METAL)
     target_link_libraries(test_anim PRIVATE de_gpu_metal "-framework Metal" "-framework Foundation")
 endif()
 if(MSVC)
-    set_source_files_properties(test_pose.c test_anim_dmath.c test_blend.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
+    set_source_files_properties(test_pose.c test_anim_dmath.c test_blend.c test_blend_tree.c PROPERTIES COMPILE_OPTIONS "/fp:strict")
 else()
-    set_source_files_properties(test_pose.c test_anim_dmath.c test_blend.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+    set_source_files_properties(test_pose.c test_anim_dmath.c test_blend.c test_blend_tree.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()

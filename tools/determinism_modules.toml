@@ -131,3 +131,7 @@ module = "anim"
 [[source]]
 path = "src/anim/blend.c"
 module = "anim"
+
+[[source]]
+path = "src/anim/blend_tree.c"
+module = "anim"
