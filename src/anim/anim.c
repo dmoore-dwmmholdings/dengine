@@ -176,8 +176,7 @@ static void gather(const de_query_chunk *chunk, void *user) {
         e->graph_samples = 0;
         if (a->graph.id) {
             const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
-            /* Fixed graph clock/snapshot integration is a separate remaining DENG-182 step. */
-            if (!s->fixed_evaluation && skel && buffers(s, e, &skel->skeleton, 0)) {
+            if (skel && buffers(s, e, &skel->skeleton, 0)) {
                 e->skeleton = skel->skeleton;
                 e->ready = de__anim_graph_prepare(s, e);
                 if (e->ready)

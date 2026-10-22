@@ -200,6 +200,8 @@ DE_API de_component de_anim_component(const de_anim_system *);
 DE_API de_event_type de_anim_event_type(const de_anim_system *);
 /** XXH3 checksum of deterministic actors, ordered by entity index: integer tick,
  * state identity (reserved for state machines), and local pose bit patterns.
+ * Graph actors also hash logical definitions, exact clocks and typed parameters;
+ * their transient programmatic handle IDs are excluded from this checksum.
  * Main thread between schedules. Scratch grows on demand. Snapshot restore
  * restores this checksum immediately; cached bone queries resume after the next
  * fixed evaluation if the restored pose differs from the cached pose. */

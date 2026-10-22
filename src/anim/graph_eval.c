@@ -32,6 +32,89 @@ static i32 param_index(const de_anim_graph_desc *d, de_name name, de_anim_param_
 i32 de__anim_graph_param(const de__anim_graph *g, de_name name, de_anim_param_kind kind) {
     return g ? param_index(&g->desc, name, kind) : -1;
 }
+/* Hash values, never pointers/padding or process-local asset-slot/graph handles. */
+static void hash_word(u64 *hash, u64 value) {
+    *hash = de_hash64(&value, sizeof value, *hash);
+}
+static void hash_float(u64 *hash, f32 value) {
+    u32 bits;
+    memcpy(&bits, &value, sizeof bits);
+    hash_word(hash, bits);
+}
+static void hash_clip(const de_anim_system *s, u64 *hash, de_anim_clip clip) {
+    const de__slot *slot = s->assets ? de__slot_get(s->assets, clip.id) : NULL;
+    hash_word(hash, slot ? slot->id.hash : 0);
+}
+static u64 definition_hash(const de_anim_system *s, const de__anim_graph *g) {
+    u64 hash = UINT64_C(0x314850415247); /* GRAPH1 */
+    hash_word(&hash, g->desc.param_count);
+    hash_word(&hash, g->desc.node_count);
+    hash_word(&hash, g->desc.output_node);
+    hash_word(&hash, g->desc.layer_count);
+    for (u32 i = 0; i < g->desc.param_count; ++i) {
+        const de_anim_param_desc *p = &g->params[i];
+        hash_word(&hash, p->name.hash);
+        hash_word(&hash, p->kind);
+        if (p->kind == DE_ANIM_PARAM_FLOAT)
+            hash_float(&hash, p->float_default);
+        else
+            hash_word(&hash, p->bool_default);
+    }
+    for (u32 i = 0; i < g->desc.node_count; ++i) {
+        const de_anim_node_desc *n = &g->nodes[i];
+        hash_word(&hash, n->kind);
+        switch (n->kind) {
+        case DE_ANIM_NODE_CLIP:
+            hash_clip(s, &hash, n->data.clip.clip);
+            hash_float(&hash, n->data.clip.speed);
+            hash_word(&hash, n->data.clip.loop);
+            hash_word(&hash, n->data.clip.sync_group.hash);
+            break;
+        case DE_ANIM_NODE_BLEND1D:
+        case DE_ANIM_NODE_BLEND2D:
+            hash_word(&hash, n->data.blend.x_param.hash);
+            hash_word(&hash, n->data.blend.y_param.hash);
+            hash_word(&hash, n->data.blend.point_count);
+            for (u32 j = 0; j < n->data.blend.point_count; ++j) {
+                const de_anim_blend_point_desc *p = &n->data.blend.points[j];
+                hash_float(&hash, p->position.x);
+                hash_float(&hash, p->position.y);
+                hash_word(&hash, p->node);
+            }
+            break;
+        case DE_ANIM_NODE_ADDITIVE:
+            hash_word(&hash, n->data.additive.base);
+            hash_word(&hash, n->data.additive.input);
+            hash_word(&hash, n->data.additive.weight_param.hash);
+            hash_float(&hash, n->data.additive.weight);
+            hash_clip(s, &hash, n->data.additive.reference);
+            break;
+        case DE_ANIM_NODE_LAYER:
+            hash_word(&hash, n->data.layer.base);
+            hash_word(&hash, n->data.layer.first_layer);
+            hash_word(&hash, n->data.layer.layer_count);
+            break;
+        default:
+            break;
+        }
+    }
+    for (u32 i = 0; i < g->desc.layer_count; ++i) {
+        const de_anim_layer_desc *l = &g->layers[i];
+        hash_word(&hash, l->node);
+        hash_word(&hash, l->mode);
+        hash_float(&hash, l->weight);
+        hash_float(&hash, l->root_weight);
+        hash_word(&hash, l->weight_param.hash);
+        hash_clip(s, &hash, l->reference);
+        hash_word(&hash, l->mask_count);
+        for (u32 j = 0; j < l->mask_count; ++j) {
+            hash_word(&hash, l->mask[j].bone.hash);
+            hash_float(&hash, l->mask[j].weight);
+            hash_word(&hash, l->mask[j].include_children);
+        }
+    }
+    return hash;
+}
 static bool weight_valid(const de_anim_graph_desc *d, de_name name, f32 weight) {
     return weight >= 0 && weight <= 1 &&
            (!name.hash || param_index(d, name, DE_ANIM_PARAM_FLOAT) >= 0);
@@ -233,6 +316,7 @@ de_result de_anim_graph_create(de_anim_system *s, const de_anim_graph_desc *d, d
             goto failed;
         }
     }
+    g->definition_hash = definition_hash(s, g);
     g->handle.id = graph_id();
     if (!g->handle.id) {
         result = DE_ERR_OUT_OF_MEMORY;

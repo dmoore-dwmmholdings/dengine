@@ -121,6 +121,8 @@ de_anim_system *de__anim_for_world(de_world *);
 de_result de__anim_deterministic_init(de_anim_system *, de_world *);
 void de__anim_clock_step(de__anim_clock *, DeAnimator *, f32 dt, f32 duration, u64 clip_key,
                          bool seek, bool *ended);
+f64 de__anim_wrap_time(f64 value, f64 period);
+void de__anim_graph_clock_step(de__anim_clock *, DeAnimator *, f32 dt, u64 key, bool seek);
 void de__anim_pose_deterministic(const de_cooked_skeleton_view *, const de__anim_local_pose *,
                                  de_affine *, de_affine *);
 u64 de__anim_pose_checksum(const de__anim_local_pose *);

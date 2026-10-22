@@ -6,6 +6,7 @@ typedef struct de__anim_graph {
     struct de__anim_graph *next;
     de_anim_graph handle;
     size_t bytes;
+    u64 definition_hash;
     de_anim_graph_desc desc;
     de_anim_param_desc *params;
     de_anim_node_desc *nodes;

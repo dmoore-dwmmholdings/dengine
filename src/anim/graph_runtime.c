@@ -32,7 +32,7 @@ typedef struct de__anim_graph_runtime {
     graph_layer *layers;
     graph_pose scratch;
     DeAnimParams params;
-    bool params_missing;
+    bool params_missing, deterministic;
 } de__anim_graph_runtime;
 
 static void free_pose(graph_pose *p) {
@@ -184,6 +184,8 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
         destroy_runtime(s, r);
         r = e->graph_runtime = next;
     }
+    e->clip_key = g->definition_hash;
+    r->deterministic = s->fixed_evaluation;
     DeAnimParams *params = de_entity_get(s->world, e->entity, s->params_component);
     if (params && params->graph != g->handle.id)
         de__anim_params_defaults(params, g);
@@ -254,9 +256,9 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
         }
     }
     DeAnimator *a = e->animator;
-    if (!de__anim_finite(a->time))
+    if (!s->fixed_evaluation && !de__anim_finite(a->time))
         a->time = 0;
-    if (a->playing && de__anim_finite(a->speed) && de__anim_finite(s->dt)) {
+    if (!s->fixed_evaluation && a->playing && de__anim_finite(a->speed) && de__anim_finite(s->dt)) {
         f32 next = a->time + a->speed * s->dt;
         if (de__anim_finite(next))
             a->time = next;
@@ -266,9 +268,22 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
         const de_anim_node_desc *d = &g->nodes[i];
         if (d->kind != DE_ANIM_NODE_CLIP || !(n->demand > 1e-4f))
             continue;
-        bool ended;
-        f32 t = de__anim_time(0, n->clip.duration, d->data.clip.speed, a->time, d->data.clip.loop,
+        f32 t;
+        if (s->fixed_evaluation) {
+            f64 time = e->clock->exact_time * (f64)d->data.clip.speed;
+            f64 duration = n->clip.duration;
+            if (!(duration > 0))
+                time = 0;
+            else if (d->data.clip.loop)
+                time = de__anim_wrap_time(time, duration);
+            else
+                time = time < 0 ? 0 : time > duration ? duration : time;
+            t = (f32)time;
+        } else {
+            bool ended;
+            t = de__anim_time(0, n->clip.duration, d->data.clip.speed, a->time, d->data.clip.loop,
                               &ended);
+        }
         n->valid = de__anim_sample_pose_cached(&n->clip, &e->skeleton, t, &n->output.pose,
                                                &n->output.cursor);
         ++e->graph_samples;
@@ -278,7 +293,7 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
     return true;
 }
 static de_quat mix_rotation(const de__anim_local_pose *const *poses, const f32 *weights, u32 count,
-                            u32 joint, bool root) {
+                            u32 joint, bool root, bool deterministic) {
     de_quat first = root ? poses[0]->root_rotation : poses[0]->rotations[joint];
     de_quat sum = {0};
     for (u32 i = 0; i < count; ++i) {
@@ -290,7 +305,7 @@ static de_quat mix_rotation(const de__anim_local_pose *const *poses, const f32 *
         sum.z += q.z * w;
         sum.w += q.w * w;
     }
-    return de__anim_normalize(sum, false);
+    return de__anim_normalize(sum, deterministic);
 }
 static bool compose(de__anim_graph_runtime *r, graph_node *n) {
     const de__anim_local_pose *poses[3];
@@ -322,13 +337,13 @@ static bool compose(de__anim_graph_runtime *r, graph_node *n) {
         }
         out->translations[j] = translation;
         out->scales[j] = scale;
-        out->rotations[j] = mix_rotation(poses, weights, count, j, false);
+        out->rotations[j] = mix_rotation(poses, weights, count, j, false, r->deterministic);
     }
     out->root_translation = (de_vec3){0};
     for (u32 i = 0; i < count; ++i)
         out->root_translation =
             de__anim_add_delta(out->root_translation, poses[i]->root_translation, weights[i]);
-    out->root_rotation = mix_rotation(poses, weights, count, 0, true);
+    out->root_rotation = mix_rotation(poses, weights, count, 0, true, r->deterministic);
     return true;
 }
 static void blend_range(u32 begin, u32 end, void *user) {
@@ -356,9 +371,9 @@ static void blend_range(u32 begin, u32 end, void *user) {
                 if (input->valid && n->weight > 0)
                     n->valid =
                         de__anim_pose_delta(&r->scratch.pose, &input->output.pose,
-                                            &n->reference.pose, false) &&
+                                            &n->reference.pose, r->deterministic) &&
                         de__anim_pose_layer(&n->output.pose, &n->output.pose, &r->scratch.pose,
-                                            n->weight, NULL, 1, true, false);
+                                            n->weight, NULL, 1, true, r->deterministic);
             } else if (d->kind == DE_ANIM_NODE_LAYER) {
                 graph_node *base = &r->nodes[d->data.layer.base];
                 n->valid = base->valid;
@@ -375,13 +390,13 @@ static void blend_range(u32 begin, u32 end, void *user) {
                     bool additive = g->layers[l].mode == DE_ANIM_LAYER_ADDITIVE;
                     if (additive) {
                         n->valid = de__anim_pose_delta(&r->scratch.pose, pose,
-                                                       &layer->reference.pose, false);
+                                                       &layer->reference.pose, r->deterministic);
                         pose = &r->scratch.pose;
                     }
-                    n->valid =
-                        n->valid &&
-                        de__anim_pose_layer(&n->output.pose, &n->output.pose, pose, layer->weight,
-                                            layer->mask, g->layers[l].root_weight, additive, false);
+                    n->valid = n->valid && de__anim_pose_layer(&n->output.pose, &n->output.pose,
+                                                               pose, layer->weight, layer->mask,
+                                                               g->layers[l].root_weight, additive,
+                                                               r->deterministic);
                 }
             }
         }
@@ -392,7 +407,7 @@ static void blend_range(u32 begin, u32 end, void *user) {
     }
 }
 void de__anim_graph_blend(de_anim_system *s) {
-    if (s->tasks)
+    if (s->tasks && (!s->fixed_evaluation || s->tasks == de_world_task_system(s->world)))
         de_task_parallel_for(s->tasks, s->job_count, 32, blend_range, s);
     else
         blend_range(0, s->job_count, s);
