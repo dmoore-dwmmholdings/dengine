@@ -265,14 +265,16 @@ job fuzzes for real (SPEC §19.1, DENG-216):
   directory (`tests/fuzz/asset/`) and deletes it after the input; the environment variable
   `DE_FUZZ_DPAK_FILE_DIR` names another directory. Its seeds are `corpus/dpak_reader/`.
 
-  On macOS, LeakSanitizer reports libFuzzer's own `StartRssThread` allocation at exit. Suppress it
-  with `LSAN_OPTIONS=suppressions=<file>` and the line `leak:fuzzer::StartRssThread` in the file.
+  On macOS, the LLVM 23.1.3 RSS thread can retain libc++ thread state at exit
+  (DENG-559). Keep leak detection and the default RSS limit enabled; a suppressed
+  report does not qualify a clean fuzz run. The isolated runtime lifetime experiment
+  and its positive/negative controls are in `tools/diagnostics/macos-lsan/README.md`.
 
 ### `checks.yml`: repository checks
 
 | Job | What it runs | Local equivalent |
 |---|---|---|
-| header + layering checks | Configures `linux-clang-dev` and runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check` (which builds the deterministic targets itself), `check_determinism_src` and its self test, `check_det_registered` and its self test. It uploads the module graph `layers.dot` as an artifact. | `ctest --preset dev -L check` |
+| header + layering checks | Configures `linux-clang-dev`, builds `de_deterministic_objects` (the exact owning targets from the generated assembly-check list), then runs `ctest -L check`: `header_check`, `layering_check`, `layering_selftest`, `vendor_selftest`, `vendor_prebuilt_selftest`, `deterministic_asm_check`, `check_determinism_src` and its self test, `check_det_registered` and its self test. The assembly check retains its own build step and 120-second timeout; CI prepares cold dependencies before verification. The job uploads the module graph `layers.dot` as an artifact. | `cmake --build --preset dev --target de_deterministic_objects`, then `ctest --preset dev -L check` |
 | vendor.py verify | `python tools/vendor/vendor.py verify --all-hosts`: every vendored tree, and the archive of every host of a prebuilt entry (DENG-390). The archives are cached in `~/.cache/dengine-vendor` (key `vendor-all-<hash of third_party/vendor.toml>`), so a warm run downloads nothing. | `python3 tools/vendor/vendor.py verify --all-hosts` |
 | clang-format (changed files) | `clang-format --dry-run --Werror` on the C, C++ and Objective-C files that the change adds or modifies, outside `third_party/`. | See below. |
 

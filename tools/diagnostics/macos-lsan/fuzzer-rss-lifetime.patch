@@ -1,0 +1,36 @@
+--- a/FuzzerDriver.cpp
++++ b/FuzzerDriver.cpp
+@@ -24,0 +25 @@
++#include <condition_variable>
+@@ -313,0 +315,13 @@
++static std::mutex RssMutex;
++static std::condition_variable RssWake;
++static bool RssStopped = false;
++static std::thread RssWorker;
++static void StopRssThread() {
++  {
++    std::lock_guard<std::mutex> Lock(RssMutex);
++    RssStopped = true;
++  }
++  RssWake.notify_one();
++  if (RssWorker.joinable())
++    RssWorker.join();
++}
+@@ -315,2 +329,3 @@
+-  while (true) {
+-    SleepSeconds(1);
++  std::unique_lock<std::mutex> Lock(RssMutex);
++  while (!RssWake.wait_for(Lock, std::chrono::seconds(1), [] { return RssStopped; })) {
++    Lock.unlock();
+@@ -320,3 +335,3 @@
+-  }
+-}
+-
++    Lock.lock();
++  }
++}
+@@ -326,2 +341,2 @@
+-  std::thread T(RssThread, F, RssLimitMb);
+-  T.detach();
++  RssWorker = std::thread(RssThread, F, RssLimitMb);
++  std::atexit(StopRssThread);

@@ -97,6 +97,9 @@ DE_API u64 de_world_tick(const de_world *w);
  * Modules use it to register the struct types of the resources and events they insert (DENG-308).
  */
 DE_API de_type_registry *de_world_types(const de_world *w);
+/** Borrowed task system from de_world_desc.tasks; NULL for a serial or NULL world.
+ * The binding is immutable for the world's lifetime. */
+DE_API de_task_system *de_world_task_system(const de_world *w);
 
 /* ---------- Components ---------- */
 typedef enum de_component_flags {

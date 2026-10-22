@@ -44,6 +44,7 @@ set(DE_GOLDEN_SCENE_SOURCES
     visbuffer/vis_golden.h
     visbuffer/vis_scenes.c
     materials/materials_scenes.c
+    anim/anim_scenes.c
     base_tier/base_tier_scenes.c)
 
 add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
@@ -67,6 +68,11 @@ endif()
 # DENG-176: renderer scenes (render/views/) run the renderer, its ECS world and Extract, and include
 # renderer internals (src/ is on the include path).
 target_link_libraries(de_golden PRIVATE de_render de_ecs de_reflect de_task de_asset)
+target_link_libraries(de_golden PRIVATE de_anim)
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_ANIM_SOURCE=\"${DE_ROOT_DIR}/tests/unit/import/data/anim\""
+    "DE_GOLDEN_ANIM_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/anim_tmp\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/anim_tmp")
 # DENG-240: the vis-buffer scenes (visbuffer/) drive the S13 vis frame directly and cook their
 # procedural meshes through the model importer (cook/importers/model/, part of de_cooker; with
 # DE_GOLDEN_COOK only, else they skip).
