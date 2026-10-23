@@ -1,4 +1,5 @@
 #include "stylesheet_internal.h"
+#include "core/de_bitset.h"
 #if defined(DE_UI_BINDING)
 #include "ui/binding/binding_internal.h"
 #endif
@@ -68,9 +69,8 @@ static u8 *target(const de_ui_style_property *p, DeUiNode *node, DeUiStyle *styl
 }
 static void restore_authored(de_ui_style_cache *cache, DeUiNode *node, DeUiStyle *style,
                              de_text_style *text, u32 mask) {
-    for (u32 p = 0; p < de_ui__style_property_count; ++p) {
-        if (!((cache->applied_mask | mask) & (1u << p)))
-            continue;
+    for (u32 pending = cache->applied_mask | mask; pending; pending &= pending - 1u) {
+        const u32 p = de__bitset_ctz64(pending);
         const de_ui_style_property *property = &de_ui__style_properties[p];
         u32 bytes = property_size(property);
         u8 *current = target(property, node, style, text),
@@ -147,6 +147,54 @@ static void transition(de_ui_style_system *state, de_entity entity, const de_ui_
         (void)de_ui__tween_field(state, entity, component, base + sub, b, seconds, easing, true);
     }
 }
+/* A single bounded memo benefits contiguous widget batches without introducing per-frame
+ * allocations or sharing authored values, bindings, component handles or tween ownership. */
+static const de_ui_style_cascade *cascade_for(de_ui_style_system *state, u32 type,
+                                              de_name widget_name, de_name class_name, u32 bits) {
+    de_ui_style_cascade *result = &state->last_cascade;
+    if (result->revision == state->revision && result->widget == type &&
+        result->class_name.hash == class_name.hash && result->state == bits)
+        return result;
+    memset(result, 0, sizeof *result);
+    result->revision = state->revision;
+    result->widget = type;
+    result->class_name = class_name;
+    result->state = bits;
+    result->easing = DE_UI_EASE_LINEAR;
+    i32 best[24];
+    for (u32 i = 0; i < DE_UI_STYLE_COUNT(best); ++i)
+        best[i] = -1;
+    i32 motion_specificity = -1;
+    for (u32 s = 0; s < state->sheet_count; ++s) {
+        de_ui_style_sheet_slot *slot = &state->sheets[s];
+        for (u32 r = 0; r < slot->sheet->rule_count; ++r) {
+            de_ui_style_rule *rule = &slot->sheet->rules[r];
+            if ((rule->widget.hash && rule->widget.hash != widget_name.hash) ||
+                (rule->class_name.hash && rule->class_name.hash != class_name.hash) ||
+                (rule->state && (bits & rule->state) != rule->state))
+                continue;
+            result->matches = true;
+            de_ui_compiled_rule *compiled = &slot->compiled[r];
+            for (u32 pending = compiled->mask; pending; pending &= pending - 1u) {
+                const u32 p = de__bitset_ctz64(pending);
+                if ((i32)rule->specificity >= best[p]) {
+                    result->mask |= 1u << p;
+                    best[p] = (i32)rule->specificity;
+                    result->winning[p] = compiled->values[p];
+                }
+            }
+            if ((compiled->has_transition || compiled->has_easing) &&
+                (i32)rule->specificity >= motion_specificity) {
+                motion_specificity = (i32)rule->specificity;
+                if (compiled->has_transition)
+                    result->duration = compiled->transition;
+                if (compiled->has_easing)
+                    result->easing = compiled->easing;
+            }
+        }
+    }
+    return result;
+}
 static void resolve(de_ui_style_system *state, de_entity entity) {
     de_ui *ui = state->ui;
     const DeUiNode *current_node = de_entity_get_const(ui->world, entity, ui->ids.node);
@@ -164,21 +212,11 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
 #endif
     de_name widget_name =
         de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
-    bool matching_rule = false;
-    for (u32 s = 0; s < state->sheet_count && !matching_rule; ++s)
-        for (u32 r = 0; r < state->sheets[s].sheet->rule_count; ++r) {
-            const de_ui_style_rule *rule = &state->sheets[s].sheet->rules[r];
-            if ((!rule->widget.hash || rule->widget.hash == widget_name.hash) &&
-                (!rule->class_name.hash ||
-                 rule->class_name.hash == current_node->style_class.hash) &&
-                (!rule->state || (bits & rule->state) == rule->state)) {
-                matching_rule = true;
-                break;
-            }
-        }
+    const de_ui_style_cascade *cascade =
+        cascade_for(state, type, widget_name, current_node->style_class, bits);
     /* Untouched nodes with no matching rules need no authored/applied snapshot. Existing
      * caches must still resolve when their last matching rule disappears. */
-    de_ui_style_cache *cache = cached(state, entity, matching_rule);
+    de_ui_style_cache *cache = cached(state, entity, cascade->matches);
     if (!cache)
         return;
     u64 binding_revision = 0;
@@ -213,39 +251,7 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
         cache->authored_style = style;
         cache->authored_text = text;
     }
-    i32 best[24];
-    for (u32 i = 0; i < DE_UI_STYLE_COUNT(best); ++i)
-        best[i] = -1;
-    de_ui_style_value winning[24];
-    u32 mask = 0;
-    f32 duration = 0;
-    de_ui_easing easing = DE_UI_EASE_LINEAR;
-    i32 motion_specificity = -1;
-    for (u32 s = 0; s < state->sheet_count; ++s) {
-        de_ui_style_sheet_slot *slot = &state->sheets[s];
-        for (u32 r = 0; r < slot->sheet->rule_count; ++r) {
-            de_ui_style_rule *rule = &slot->sheet->rules[r];
-            if ((rule->widget.hash && rule->widget.hash != widget_name.hash) ||
-                (rule->class_name.hash && rule->class_name.hash != node.style_class.hash) ||
-                (rule->state && (bits & rule->state) != rule->state))
-                continue;
-            de_ui_compiled_rule *compiled = &slot->compiled[r];
-            for (u32 p = 0; p < de_ui__style_property_count; ++p)
-                if ((compiled->mask & (1u << p)) && (i32)rule->specificity >= best[p]) {
-                    mask |= 1u << p;
-                    best[p] = (i32)rule->specificity;
-                    winning[p] = compiled->values[p];
-                }
-            if ((compiled->has_transition || compiled->has_easing) &&
-                (i32)rule->specificity >= motion_specificity) {
-                motion_specificity = (i32)rule->specificity;
-                if (compiled->has_transition)
-                    duration = compiled->transition;
-                if (compiled->has_easing)
-                    easing = compiled->easing;
-            }
-        }
-    }
+    u32 mask = cascade->mask;
     /* Bindings can override style fields outside the stylesheet mask. Preserve their
      * authored baseline, including the frame where a binding is removed. */
     if (binding_revision)
@@ -253,9 +259,10 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     if (cache->initialized)
         restore_authored(cache, &node, &style, &text, mask);
     cache->applied_mask = mask;
-    for (u32 p = 0; p < de_ui__style_property_count; ++p)
-        if (best[p] >= 0)
-            apply_value(ui, &de_ui__style_properties[p], &winning[p], &node, &style, &text);
+    for (u32 pending = cascade->mask; pending; pending &= pending - 1u) {
+        const u32 p = de__bitset_ctz64(pending);
+        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], &node, &style, &text);
+    }
 #if defined(DE_UI_BINDING)
     (void)de_ui__binding_style(ui, entity, &style);
 #endif
@@ -274,12 +281,12 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
         DeUiText *dst = de_entity_get(ui->world, entity, ui->ids.text);
         dst->style = text;
     }
-    if (cache->initialized && duration > 0)
+    if (cache->initialized && cascade->duration > 0)
         for (u32 p = 0; p < de_ui__style_property_count; ++p) {
             const de_ui_style_property *property = &de_ui__style_properties[p];
             transition(state, entity, property,
                        target(property, &before_node, &before_style, &before_text),
-                       target(property, &node, &style, &text), duration, easing);
+                       target(property, &node, &style, &text), cascade->duration, cascade->easing);
         }
     cache->initialized = true;
     cache->class_name = node.style_class;
@@ -287,9 +294,15 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     cache->state = bits;
     cache->revision = state->revision;
     cache->binding_revision = binding_revision;
-    cache->applied_node = node;
-    cache->applied_style = style;
-    cache->applied_text = text;
+    /* Only controlled fields participate in the next authored-vs-applied comparison.
+     * Newly controlled fields capture their current authored value in restore_authored(),
+     * so copying unrelated node/layout/text bytes here just dirties the large cache. */
+    for (u32 pending = mask; pending; pending &= pending - 1u) {
+        const u32 p = de__bitset_ctz64(pending);
+        const de_ui_style_property *property = &de_ui__style_properties[p];
+        memcpy(target(property, &cache->applied_node, &cache->applied_style, &cache->applied_text),
+               target(property, &node, &style, &text), property_size(property));
+    }
 }
 void de_ui__style_tick(de_system_ctx *ctx) {
     de_ui_style_system *state = ctx->user;

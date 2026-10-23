@@ -76,6 +76,16 @@ typedef struct de_ui_property_tween {
     de_ui_easing easing;
     bool active, stylesheet;
 } de_ui_property_tween;
+/* Rule winners depend on selectors and sheet revision, never on entity-authored values. */
+typedef struct de_ui_style_cascade {
+    u64 revision;
+    de_name class_name;
+    u32 widget, state, mask;
+    bool matches;
+    de_ui_style_value winning[24];
+    f32 duration;
+    de_ui_easing easing;
+} de_ui_style_cascade;
 typedef struct de_ui_style_system {
     de_ui *ui;
     de_ui_style_sheet_slot sheets[DE_UI_STYLE_SHEETS];
@@ -91,6 +101,7 @@ typedef struct de_ui_style_system {
     de_query nodes;
     de_system system;
     u32 entities_restyled, active_tweens;
+    de_ui_style_cascade last_cascade;
 } de_ui_style_system;
 extern const de_ui_style_property de_ui__style_properties[];
 extern const u32 de_ui__style_property_count;

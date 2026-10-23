@@ -74,6 +74,47 @@ TEST_F(ui_style_resolve, changing_property_masks_preserves_latest_authored_value
     EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 7, 0);
     EXPECT_FLOAT_EQ(ui_node_edit(f, e)->padding[0].value, 11, 0);
 }
+TEST_F(ui_style_resolve, shared_cascade_keeps_entity_values_and_selector_revision_isolation,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n"
+                                   "[style.\".shared\"]\nopacity=0.4\nbackground='$primary'\n"
+                                   "[style.\"button.shared\"]\nopacity=0.2\n"
+                                   "[style.\"button.shared:hover\"]\nopacity=0.7\n"),
+              DE_OK);
+    enum { N = 64 };
+    de_entity entities[N];
+    for (u32 i = 0; i < N; ++i) {
+        entities[i] = style_button(f, (de_entity){0}, "shared");
+        DeUiStyle *own = de_entity_add(f->world, entities[i], f->ui->ids.style);
+        own->opacity = .8f;
+        own->corner_radius = (f32)i;
+        if (i % 4 == 0) {
+            DeUiWidgetType *widget = de_entity_get(f->world, entities[i], f->ui->style->widget);
+            widget->type = DE_UI_WIDGET_TEXT;
+        } else if (i % 4 == 1) {
+            DeUiInteractionState *interaction =
+                de_entity_add(f->world, entities[i], f->ui->ids.state);
+            interaction->hovered = true;
+        }
+    }
+    for (u32 phase = 0; phase < 3; ++phase) {
+        if (phase == 1)
+            ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+        if (phase == 2)
+            for (u32 i = 0; i < N; i += 2)
+                ui_node_edit(f, entities[i])->style_class = (de_name){0};
+        style_step(f, 0);
+        for (u32 i = 0; i < N; ++i) {
+            DeUiStyle value = style_get(f, entities[i]);
+            bool removed = phase == 2 && !(i & 1);
+            f32 opacity = removed ? .8f : i % 4 == 0 ? .4f : i % 4 == 1 ? .7f : .2f;
+            EXPECT_FLOAT_EQ(value.opacity, opacity, .00001f);
+            EXPECT_FLOAT_EQ(value.corner_radius, (f32)i, 0);
+            if (!removed)
+                EXPECT_FLOAT_EQ(value.background.x, phase ? 1.f : 0.f, 0);
+        }
+    }
+}
 TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),
