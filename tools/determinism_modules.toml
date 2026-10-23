@@ -147,3 +147,7 @@ module = "anim"
 [[source]]
 path = "src/anim/graph_runtime.c"
 module = "anim"
+
+[[source]]
+path = "src/anim/sync_groups.c"
+module = "anim"

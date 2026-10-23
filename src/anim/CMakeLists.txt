@@ -31,3 +31,7 @@ de_mark_deterministic_sources(anim.c anim_system.c anim_assets.c anim_reflect.c 
 
 target_sources(de_anim PRIVATE graph_runtime.c)
 de_mark_deterministic_sources(graph_runtime.c)
+
+# DENG-182: normalized sync clocks share the fixed evaluation arithmetic contract.
+target_sources(de_anim PRIVATE sync_groups.c sync_groups.h)
+de_mark_deterministic_sources(sync_groups.c)
