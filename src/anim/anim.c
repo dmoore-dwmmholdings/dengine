@@ -1,4 +1,5 @@
 #include "anim_internal.h"
+#include "anim/graph_internal.h"
 #include "asset/slots_internal.h"
 #include <dengine/de_reflect.h>
 #include <string.h>
@@ -122,6 +123,20 @@ static bool buffers(de_anim_system *s, de__anim_entry *e, const de_cooked_skelet
         (de__anim_clip_cursor){.keys = (u32 *)((u8 *)block + cursor_offset), .capacity = tracks};
     return true;
 }
+/* Collect identities only; structural sync preparation may move archetype rows. */
+static void sync_collect(const de_query_chunk *chunk, void *user) {
+    de_anim_system *s = user;
+    const DeAnimator *actors = chunk->columns[0];
+    for (u32 i = 0; i < chunk->count; ++i) {
+        if (actors[i].deterministic != s->fixed_evaluation)
+            continue;
+        u32 index = de_entity_index(chunk->entities[i]);
+        if (!reserve(s, index))
+            continue;
+        s->entries[index].sync_prepare_entity = chunk->entities[i];
+        s->jobs[s->job_count++] = index;
+    }
+}
 static void gather(const de_query_chunk *chunk, void *user) {
     de_anim_system *s = user;
     DeAnimator *animators = chunk->columns[0];
@@ -133,6 +148,7 @@ static void gather(const de_query_chunk *chunk, void *user) {
             continue;
         de__anim_entry *e = &s->entries[index];
         DeAnimator *a = &animators[i];
+        bool sync_failed = e->sync_prepare_failed;
         if (e->entity.bits != entity.bits || e->skeleton_handle != a->skeleton.id ||
             e->clip_handle != a->clip.id || e->graph_handle != a->graph.id) {
             /* Asset-cache replacement must not discard a same-actor timing
@@ -174,6 +190,8 @@ static void gather(const de_query_chunk *chunk, void *user) {
         e->ready = false;
         e->finalized = false;
         e->graph_samples = 0;
+        if (sync_failed)
+            continue;
         if (a->graph.id) {
             const de__anim_asset *skel = de__anim_asset_get(s, a->skeleton.id, "skeleton");
             if (skel && buffers(s, e, &skel->skeleton, 0)) {
@@ -255,6 +273,14 @@ void de__anim_prepare(de_system_ctx *ctx, bool fixed) {
     s->epoch++;
     s->dt = ctx->dt;
     s->job_count = 0;
+    if (s->sync_possible) {
+        de_query_each(ctx->world, ctx->queries[0], sync_collect, s);
+        for (u32 i = 0; i < s->job_count; ++i) {
+            de__anim_entry *e = &s->entries[s->jobs[i]];
+            e->sync_prepare_failed = !de__anim_graph_sync_prepare(s, e->sync_prepare_entity);
+        }
+        s->job_count = 0;
+    }
     de_query_each(ctx->world, ctx->queries[0], gather, s);
     /* Canonical publication and callback order, independent of archetype layout. */
     for (u32 i = 0; i < s->capacity; ++i) {
@@ -449,6 +475,7 @@ void de_anim_attach(de_anim_system *s, de_world *world) {
     if (de__anim_features_init(s, world) != DE_OK)
         goto failed;
     s->world = world;
+    s->sync_possible |= de_component_find(world, "DeAnimSyncBinding").id != 0;
     return;
 failed:
     de__sprite_shutdown(s);

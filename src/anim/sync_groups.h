@@ -16,6 +16,13 @@ typedef struct de__anim_sync_clock {
     u32 leader;
     bool initialized;
 } de__anim_sync_clock;
+/* Two banks of group clocks: fixed followed by visual. Reflected component size
+ * is offsetof(clocks) + 2 * group_count * sizeof(clock), not a maximum array. */
+typedef struct de__anim_sync_state {
+    u64 definition;
+    bool fixed_valid, visual_valid;
+    de__anim_sync_clock clocks[];
+} de__anim_sync_state;
 /* Highest demand above 1e-4 leads; exact ties choose the lowest graph node.
  * A leader change preserves phase and uses the new rate for this interval.
  * No active leader freezes phase while consuming elapsed time. Reset/first use

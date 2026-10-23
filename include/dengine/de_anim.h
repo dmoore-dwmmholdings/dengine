@@ -78,7 +78,7 @@ typedef struct de_anim_node_desc {
             de_anim_clip clip;
             f32 speed; /* finite; set 1 for normal playback */
             bool loop;
-            de_name sync_group;
+            de_name sync_group; /* optional normalized phase group within this actor */
         } clip;
         struct {
             de_name x_param, y_param;

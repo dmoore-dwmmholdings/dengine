@@ -251,12 +251,17 @@ de_result de_anim_graph_create(de_anim_system *s, const de_anim_graph_desc *d, d
                                DE_ALIGNOF(de_anim_blend_point_desc));
     size_t masks_at = section(&bytes, (size_t)masks * sizeof(de_anim_bone_mask_desc),
                               DE_ALIGNOF(de_anim_bone_mask_desc));
+    size_t groups_at =
+        section(&bytes, (size_t)d->node_count * sizeof(de_name), DE_ALIGNOF(de_name));
+    size_t group_indices_at = section(&bytes, (size_t)d->node_count * sizeof(u32), DE_ALIGNOF(u32));
     de__anim_graph *g = DE_ALLOC(s->alloc, bytes, 16, DE_MEM_GENERAL);
     if (!g)
         return DE_ERR_OUT_OF_MEMORY;
     memset(g, 0, bytes);
     u8 *base = (u8 *)g;
     g->bytes = bytes;
+    g->sync_groups = (de_name *)(base + groups_at);
+    g->node_sync_groups = (u32 *)(base + group_indices_at);
     g->params = (de_anim_param_desc *)(base + params_at);
     g->nodes = (de_anim_node_desc *)(base + nodes_at);
     g->layers = (de_anim_layer_desc *)(base + layers_at);
@@ -316,12 +321,25 @@ de_result de_anim_graph_create(de_anim_system *s, const de_anim_graph_desc *d, d
             goto failed;
         }
     }
+    for (u32 i = 0; i < d->node_count; ++i) {
+        g->node_sync_groups[i] = UINT32_MAX;
+        const de_anim_node_desc *n = &g->nodes[i];
+        if (n->kind != DE_ANIM_NODE_CLIP || !n->data.clip.sync_group.hash)
+            continue;
+        u32 group = 0;
+        while (group < g->sync_count && g->sync_groups[group].hash != n->data.clip.sync_group.hash)
+            ++group;
+        if (group == g->sync_count)
+            g->sync_groups[g->sync_count++] = n->data.clip.sync_group;
+        g->node_sync_groups[i] = group;
+    }
     g->definition_hash = definition_hash(s, g);
     g->handle.id = graph_id();
     if (!g->handle.id) {
         result = DE_ERR_OUT_OF_MEMORY;
         goto failed;
     }
+    s->sync_possible |= g->sync_count != 0;
     g->next = s->graphs;
     s->graphs = g;
     *out = g->handle;

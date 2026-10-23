@@ -59,6 +59,9 @@ typedef struct de__anim_entry {
     f32 visual_time;
     u64 visual_fixed_ticks, visual_fixed_hash;
     bool clock_missing, clock_known, visual_output, visual_playing;
+    de_entity sync_prepare_entity;
+    bool sync_prepare_failed, graph_sync_seek;
+    f32 graph_sync_input_time;
 } de__anim_entry;
 typedef enum de__anim_stage {
     DE_ANIM_STAGE_SAMPLE,
@@ -108,6 +111,8 @@ struct de_anim_system {
     bool dispatching_stages;
     struct de__sprite_runtime *sprites;
     bool fixed_evaluation;
+    bool sync_possible;
+    de_component sync_binding;
     de_query checksum_query;
     u64 *checksum_rows;
     u32 checksum_capacity;

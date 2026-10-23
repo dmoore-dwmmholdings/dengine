@@ -61,7 +61,7 @@ static u64 graph_state(const de_anim_system *s, de_entity entity, const DeAnimat
                 graph_float(&hash, p->values[i]);
         }
     }
-    return hash;
+    return de__anim_graph_sync_hash(s, entity, g, hash);
 }
 typedef struct checksum_sink {
     de_anim_system *system;

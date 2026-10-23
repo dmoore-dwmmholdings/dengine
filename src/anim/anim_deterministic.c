@@ -28,6 +28,8 @@ static void evaluate_chunk(const de_query_chunk *chunk, void *user) {
         }
         e->visual_output = false;
         if (a->graph.id) {
+            e->graph_sync_input_time = a->time;
+            e->graph_sync_seek = clock->initialized && seek;
             de__anim_graph_clock_step(clock, a, s->dt, e->clip_key, seek);
             e->ended = false;
             e->ready = de__anim_graph_evaluate(s, e);

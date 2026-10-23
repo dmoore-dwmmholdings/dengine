@@ -14,6 +14,10 @@ typedef struct de__anim_graph {
     de__anim_blend_space **spaces;
     de_load_handle *references;
     u32 reference_count;
+    de_name *sync_groups;
+    u32 *node_sync_groups;
+    u32 sync_count;
+    de_component sync_component;
 } de__anim_graph;
 typedef struct DeAnimParams {
     u32 graph, count;
@@ -27,5 +31,7 @@ void de__anim_params_defaults(DeAnimParams *, const de__anim_graph *);
 de_result de_anim__graph_init(de_anim_system *, de_world *);
 de__anim_graph *de__anim_graph_get(const de_anim_system *, de_anim_graph);
 void de__anim_graphs_shutdown(de_anim_system *);
+bool de__anim_graph_sync_prepare(de_anim_system *, de_entity);
+u64 de__anim_graph_sync_hash(const de_anim_system *, de_entity, const de__anim_graph *, u64);
 i32 de__anim_graph_param(const de__anim_graph *, de_name, de_anim_param_kind);
 #endif

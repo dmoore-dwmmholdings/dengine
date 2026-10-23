@@ -1,6 +1,7 @@
 #include "anim/graph_internal.h"
 #include "anim/anim_math.h"
 #include "anim/blend.h"
+#include "anim/sync_groups.h"
 #include "asset/slots_internal.h"
 #include <string.h>
 
@@ -33,6 +34,9 @@ typedef struct de__anim_graph_runtime {
     graph_pose scratch;
     DeAnimParams params;
     bool params_missing, deterministic;
+    de__anim_sync_state *sync;
+    de__anim_sync_leaf *leaves;
+    u32 leaf_count;
 } de__anim_graph_runtime;
 
 static void free_pose(graph_pose *p) {
@@ -145,7 +149,8 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
     de__anim_graph_runtime *r = e->graph_runtime;
     if (!r || r->handle != g->handle.id || r->fingerprint != fingerprint) {
         size_t bytes = sizeof *r + (size_t)g->desc.node_count * sizeof(graph_node) +
-                       (size_t)g->desc.layer_count * sizeof(graph_layer);
+                       (size_t)g->desc.layer_count * sizeof(graph_layer) +
+                       (size_t)g->desc.node_count * sizeof(de__anim_sync_leaf);
         de__anim_graph_runtime *next = DE_ALLOC(s->alloc, bytes, 16, DE_MEM_GENERAL);
         if (!next)
             return false;
@@ -158,12 +163,16 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
         next->layer_count = g->desc.layer_count;
         next->nodes = (graph_node *)(next + 1);
         next->layers = (graph_layer *)(next->nodes + next->node_count);
+        next->leaves = (de__anim_sync_leaf *)(next->layers + next->layer_count);
         bool ok = make_pose(s, e->joints, 0, &next->scratch);
         for (u32 i = 0; ok && i < next->node_count; ++i) {
             const de_anim_node_desc *n = &g->nodes[i];
             graph_node *node = &next->nodes[i];
-            if (n->kind == DE_ANIM_NODE_CLIP)
+            if (n->kind == DE_ANIM_NODE_CLIP) {
                 ok = clip_view(s, n->data.clip.clip, e->joints, &node->clip, &fingerprint);
+                next->leaves[next->leaf_count++] = (de__anim_sync_leaf){
+                    n->data.clip.sync_group, i, 0, node->clip.duration, n->data.clip.speed};
+            }
             ok = ok && make_pose(s, e->joints, node->clip.track_count, &node->output);
             if (ok && n->kind == DE_ANIM_NODE_ADDITIVE)
                 ok = reference_pose(
@@ -186,6 +195,11 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
     }
     e->clip_key = g->definition_hash;
     r->deterministic = s->fixed_evaluation;
+    r->sync = g->sync_count && g->sync_component.id
+                  ? de_entity_get(s->world, e->entity, g->sync_component)
+                  : NULL;
+    if (g->sync_count && !r->sync)
+        return false;
     DeAnimParams *params = de_entity_get(s->world, e->entity, s->params_component);
     if (params && params->graph != g->handle.id)
         de__anim_params_defaults(params, g);
@@ -256,6 +270,7 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
         }
     }
     DeAnimator *a = e->animator;
+    f32 input_time = a->time;
     if (!s->fixed_evaluation && !de__anim_finite(a->time))
         a->time = 0;
     if (!s->fixed_evaluation && a->playing && de__anim_finite(a->speed) && de__anim_finite(s->dt)) {
@@ -263,13 +278,54 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
         if (de__anim_finite(next))
             a->time = next;
     }
+    de__anim_sync_clock *group_clocks = NULL;
+    if (r->sync) {
+        de__anim_sync_state *state = r->sync;
+        de__anim_sync_clock *fixed = state->clocks, *visual = fixed + g->sync_count;
+        bool reset = s->fixed_evaluation ? e->graph_sync_seek : false;
+        if (s->fixed_evaluation) {
+            if (!state->fixed_valid && state->visual_valid) {
+                reset |= e->graph_sync_input_time != (f32)visual[0].time;
+                memcpy(fixed, visual, (size_t)g->sync_count * sizeof *fixed);
+            }
+            group_clocks = fixed;
+        } else {
+            if (!state->visual_valid && state->fixed_valid)
+                memcpy(visual, fixed, (size_t)g->sync_count * sizeof *visual);
+            reset =
+                (state->visual_valid || state->fixed_valid) && input_time != (f32)visual[0].time;
+            group_clocks = visual;
+        }
+        for (u32 i = 0; i < r->leaf_count; ++i)
+            r->leaves[i].demand = r->nodes[r->leaves[i].node].demand;
+        f64 now = s->fixed_evaluation ? e->clock->exact_time : (f64)a->time;
+        for (u32 group = 0; group < g->sync_count; ++group)
+            if (!de__anim_sync_step(&group_clocks[group], g->sync_groups[group], r->leaves,
+                                    r->leaf_count, now, reset))
+                return false;
+        if (s->fixed_evaluation) {
+            state->fixed_valid = true;
+            /* Canonicalize derived visual history after every fixed tick: visual
+             * frames cannot contaminate subsequent simulation/world checksums. */
+            memcpy(visual, fixed, (size_t)g->sync_count * sizeof *visual);
+            state->visual_valid = false;
+        } else
+            state->visual_valid = true;
+    }
     for (u32 i = 0; i < r->node_count; ++i) {
         graph_node *n = &r->nodes[i];
         const de_anim_node_desc *d = &g->nodes[i];
         if (d->kind != DE_ANIM_NODE_CLIP || !(n->demand > 1e-4f))
             continue;
         f32 t;
-        if (s->fixed_evaluation) {
+        u32 group = g->node_sync_groups[i];
+        if (group != DE__ANIM_SYNC_NONE && group_clocks) {
+            t = 0;
+            if (n->clip.duration > 0 &&
+                !de__anim_sync_sample_time(&group_clocks[group], n->clip.duration,
+                                           d->data.clip.loop, &t))
+                return false;
+        } else if (s->fixed_evaluation) {
             f64 time = e->clock->exact_time * (f64)d->data.clip.speed;
             f64 duration = n->clip.duration;
             if (!(duration > 0))
