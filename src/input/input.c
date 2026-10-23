@@ -290,9 +290,12 @@ static void apply_relative(de_input *in) {
 void de_mouse_set_relative(de_input *in, bool relative) {
     if (!in)
         return;
+    /* Reasserting a desired state must not turn a platform refusal into a per-frame retry.
+     * A real intent change (notably Escape) still bypasses the previous request's backoff. */
+    if (in->relative != relative)
+        in->relative_retry_ns = 0;
     in->relative = relative;
     in->relative_dirty = true;
-    in->relative_retry_ns = 0;
     apply_relative(in);
 }
 bool de_mouse_relative(const de_input *in) {
@@ -316,9 +319,10 @@ de_result de_input_set_window(de_input *in, de_window window) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_input_set_window: input is required");
     if (in->text_active && in->window.id != window.id)
         de_text_input_stop(in);
+    if (in->window.id != window.id)
+        in->relative_retry_ns = 0;
     in->window = window;
     in->relative_dirty = true;
-    in->relative_retry_ns = 0;
     apply_relative(in);
     return DE_OK;
 }
