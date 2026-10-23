@@ -737,3 +737,167 @@ TEST(input_state, attach_registers_resource_and_systems) {
     de_input_destroy(in);
     de_type_registry_destroy(types);
 }
+
+/* DENG-606: the request and backend acknowledgement are deliberately separate. */
+typedef struct capture_mock {
+    de_window focus;
+    bool configured[4];
+    u32 count, refusals;
+    u32 windows[32];
+    bool modes[32];
+    u64 now;
+} capture_mock;
+static de_result mock_capture_set(void *user, de_window window, bool on) {
+    capture_mock *m = user;
+    if (m->count < 32) {
+        m->windows[m->count] = window.id;
+        m->modes[m->count] = on;
+    }
+    ++m->count;
+    if (m->refusals) {
+        --m->refusals;
+        return DE_ERR_IO;
+    }
+    if (window.id >= 4)
+        return DE_ERR_INVALID_ARGUMENT;
+    m->configured[window.id] = on;
+    return DE_OK;
+}
+static bool mock_capture_configured(void *user, de_window window) {
+    capture_mock *m = user;
+    return window.id < 4 && m->configured[window.id];
+}
+static de_window mock_capture_focus(void *user) {
+    return ((capture_mock *)user)->focus;
+}
+static u64 mock_capture_now(void *user) {
+    return ((capture_mock *)user)->now;
+}
+static de_input *mock_capture_input(capture_mock *m) {
+    de_input *in = input_test_create(NULL);
+    if (in)
+        in->capture_sink = (de__input_capture_sink){mock_capture_set, mock_capture_configured,
+                                                    mock_capture_focus, mock_capture_now, m};
+    return in;
+}
+TEST(input_state, capture_waits_for_native_focus_without_first_event) {
+    capture_mock m = {0};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    de_mouse_set_relative(in, true);
+    EXPECT_EQ(m.count, 0u);
+    EXPECT_TRUE(de_mouse_capture_get(in).pending);
+    m.focus.id = 1;
+    input_test_frame(in);
+    EXPECT_EQ(m.count, 1u);
+    EXPECT_TRUE(m.configured[1]);
+    EXPECT_FALSE(de_mouse_capture_get(in).pending);
+    EXPECT_TRUE(de_mouse_capture_get(in).focused);
+    de_input_destroy(in);
+    EXPECT_FALSE(m.configured[1]);
+}
+TEST(input_state, capture_refusal_survives_and_retries_with_backoff) {
+    capture_mock m = {.focus = {1}, .refusals = 1};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    de_mouse_set_relative(in, true);
+    de_mouse_capture_status status = de_mouse_capture_get(in);
+    EXPECT_TRUE(status.requested);
+    EXPECT_TRUE(status.pending);
+    EXPECT_FALSE(status.configured);
+    EXPECT_EQ(status.last_result, DE_ERR_IO);
+    EXPECT_EQ(status.attempts, 1u);
+    for (u32 i = 0; i < 30; ++i)
+        input_test_frame(in);
+    EXPECT_EQ(m.count, 1u);
+    m.now = 250000000;
+    input_test_frame(in);
+    status = de_mouse_capture_get(in);
+    EXPECT_EQ(status.last_result, DE_OK);
+    EXPECT_FALSE(status.pending);
+    EXPECT_TRUE(status.configured);
+    EXPECT_EQ(m.count, 2u);
+    de_input_destroy(in);
+}
+TEST(input_state, capture_focus_loss_same_window_return_and_escape) {
+    capture_mock m = {.focus = {1}};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    de_mouse_set_relative(in, true);
+    de_app_event e = {.kind = DE_EV_WINDOW_FOCUS, .window = {1}, .a = 0};
+    m.focus.id = 0;
+    de_input_app_event(in, &e);
+    input_test_frame(in);
+    EXPECT_FALSE(m.configured[1]);
+    EXPECT_TRUE(de_mouse_relative(in));
+    u32 calls = m.count;
+    for (u32 i = 0; i < 30; ++i)
+        input_test_frame(in);
+    EXPECT_EQ(m.count, calls);
+    m.focus.id = 1;
+    e.a = 1;
+    de_input_app_event(in, &e);
+    input_test_frame(in);
+    EXPECT_TRUE(m.configured[1]);
+    de_mouse_set_relative(in, false);
+    e.a = 0;
+    m.focus.id = 0;
+    de_input_app_event(in, &e);
+    input_test_frame(in);
+    m.focus.id = 1;
+    e.a = 1;
+    de_input_app_event(in, &e);
+    input_test_frame(in);
+    EXPECT_FALSE(m.configured[1]);
+    EXPECT_FALSE(de_mouse_relative(in));
+    de_input_destroy(in);
+}
+TEST(input_state, capture_rebind_releases_old_before_new_and_stale_window) {
+    capture_mock m = {.focus = {1}};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    de_mouse_set_relative(in, true);
+    m.focus.id = 2;
+    ASSERT_EQ(de_input_set_window(in, (de_window){2}), DE_OK);
+    ASSERT_EQ(m.count, 3u);
+    EXPECT_EQ(m.windows[1], 1u);
+    EXPECT_FALSE(m.modes[1]);
+    EXPECT_EQ(m.windows[2], 2u);
+    EXPECT_TRUE(m.modes[2]);
+    /* Destroyed windows have no configured capture; don't retry releasing a stale handle. */
+    m.configured[2] = false;
+    m.focus.id = 3;
+    ASSERT_EQ(de_input_set_window(in, (de_window){3}), DE_OK);
+    EXPECT_TRUE(m.configured[3]);
+    EXPECT_FALSE(de_mouse_capture_get(in).pending);
+    de_input_destroy(in);
+}
+TEST(input_state, capture_escape_cancels_refusal_and_never_recaptures) {
+    capture_mock m = {.focus = {1}, .refusals = 1};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    de_mouse_set_relative(in, true);
+    de_mouse_set_relative(in, false);
+    m.now = 1000000000;
+    for (u32 i = 0; i < 30; ++i)
+        input_test_frame(in);
+    EXPECT_EQ(m.count, 1u);
+    EXPECT_FALSE(m.configured[1]);
+    EXPECT_FALSE(de_mouse_capture_get(in).pending);
+    de_input_destroy(in);
+}
+TEST(input_state, capture_ignores_unrelated_focus_loss_for_explicit_window) {
+    capture_mock m = {.focus = {1}};
+    de_input *in = mock_capture_input(&m);
+    ASSERT_TRUE(in);
+    ASSERT_EQ(de_input_set_window(in, (de_window){1}), DE_OK);
+    de_mouse_set_relative(in, true);
+    input_test_key(in, DE_KEY_W, true);
+    input_test_frame(in);
+    de_app_event e = {.kind = DE_EV_WINDOW_FOCUS, .window = {2}, .a = 0};
+    de_input_app_event(in, &e);
+    input_test_frame(in);
+    EXPECT_TRUE(de_key_down(in, DE_KEY_W));
+    EXPECT_TRUE(m.configured[1]);
+    de_input_destroy(in);
+}

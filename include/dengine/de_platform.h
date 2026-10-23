@@ -704,6 +704,9 @@ DE_API de_result de_platform_mouse_relative(de_window w, bool on);
 /** True when relative mouse mode is on for `w`. */
 DE_API bool de_platform_mouse_relative_get(de_window w);
 
+/** Current native keyboard-focus window, or zero when none/headless. Main thread only. */
+DE_API de_window de_platform_keyboard_focus(void);
+
 /** Moves the cursor to (`x`, `y`) in window `w`, in logical points. Generates a
  * DE_RAW_MOUSE_MOVE. DE_ERR_INVALID_ARGUMENT for a stale window, DE_ERR_UNSUPPORTED headless. */
 DE_API de_result de_platform_mouse_warp(de_window w, f32 x, f32 y);

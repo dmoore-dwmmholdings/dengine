@@ -105,3 +105,12 @@ if(TARGET de_input)
             DE_GLYPH_DOC="${DE_ROOT_DIR}/docs/input/glyph-ids.md")
     endif()
 endif()
+
+# DENG-606: real native focus/handoff coverage; no synthetic motion is hardware proof.
+if(TARGET de_input AND TARGET de_tp_sdl3)
+    de_add_test(NAME input_capture_window SOURCES test_capture_window.c
+        LIBS de_input de_test_support de_tp_sdl3 LABELS unit window)
+    if(TARGET test_input_capture_window)
+        target_include_directories(test_input_capture_window PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
