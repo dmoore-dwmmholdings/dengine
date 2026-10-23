@@ -84,15 +84,25 @@ TEST_F(cooker, registry, cook_fx) {
 
     u32 n = 0;
     const char *const *engine = de_cooker_engine_type_names(&n);
-    EXPECT_EQ(n, 15u);
-    EXPECT_STREQ(engine[0], "texture");
-    EXPECT_TRUE(de_cooker_is_engine_type("prefab"));
+    /* Independent contract: preserve registration order and the DENG-190 sprite type. */
+    const char *const expected[] = {"texture", "model",      "material",     "shader",
+                                    "sound",   "font",       "aseprite",     "tilemap",
+                                    "strings", "stylesheet", "video",        "scene",
+                                    "prefab",  "blob",       "string_table", "sprite_clip"};
+    ASSERT_EQ(n, (u32)(sizeof expected / sizeof expected[0]));
+    for (u32 i = 0; i < n; ++i) {
+        EXPECT_STREQ(engine[i], expected[i]);
+        EXPECT_TRUE(de_cooker_is_engine_type(expected[i]));
+        for (u32 j = 0; j < i; ++j)
+            EXPECT_TRUE(strcmp(engine[i], engine[j]) != 0);
+    }
+    EXPECT_FALSE(de_cooker_is_engine_type("Sprite_clip"));
     /* Tool availability is independent of the runtime DE_HAS_COOKER switch. */
-    const char *scene_types[] = {"scene", "prefab"};
-    for (u32 i = 0; i < 2; ++i) {
+    const char *tool_types[] = {"scene", "prefab", "sprite_clip"};
+    for (u32 i = 0; i < sizeof tool_types / sizeof tool_types[0]; ++i) {
         de_asset_type_desc builtin;
-        ASSERT_TRUE(de_cooker_builtin_importer(scene_types[i], &builtin));
-        EXPECT_STREQ(builtin.name, scene_types[i]);
+        ASSERT_TRUE(de_cooker_builtin_importer(tool_types[i], &builtin));
+        EXPECT_STREQ(builtin.name, tool_types[i]);
         EXPECT_TRUE(builtin.import != NULL);
         EXPECT_TRUE(builtin.load == NULL);
         EXPECT_TRUE(builtin.user == NULL);
