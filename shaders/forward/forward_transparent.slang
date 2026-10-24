@@ -233,13 +233,8 @@ float4 ps_capture_refraction(FwdVertex i,uniform ForwardParams pc):SV_Target {
     return float4(0);
 }
 
-// Feedback is disabled for this entry and it never writes depth. Reject opaque-hidden
-// fragments before material/lighting work, even when imported helpers contain UAV writes.
-#if defined(DE_SHADER_TARGET_METAL)
-[earlydepthstencil]
-#endif
-[shader("fragment")]
-float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
+[ForceInline]
+float4 shade_forward<let FEATURES : uint>(FwdVertex i, uniform ForwardParams pc)
 {
     DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.view_slot];
     DeLightingView lv = de_robuffer<DeLightingView>(pc.view)[pc.entry];
@@ -271,7 +266,7 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         SurfaceData u = UnlitModel.resolve_gbuffer(UnlitModel.load_params(m), v, lod);
         return float4(u.emissive * e * alpha, alpha);
     }
-    SurfaceData s = StandardModel.resolve_gbuffer(StandardModel.load_params(m), v, lod);
+    SurfaceData s = StandardModelT<FEATURES>.resolve_gbuffer(StandardModelT<FEATURES>.load_params(m), v, lod);
     float t = (s.features & DE_MATERIAL_FEATURE_TRANSMISSION) != 0u
                   ? saturate(s.transmission) * (1.0 - saturate(s.metallic))
                   : 0.0;
@@ -280,7 +275,7 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
     if (pc.refraction != 0 && t > 0 && s.thickness > 0 && dot(base_normal, v.view) < 0)
     {
         m.flags &= ~DE_GPU_MATERIAL_DOUBLE_SIDED;
-        s = StandardModel.resolve_gbuffer(StandardModel.load_params(m), v, lod);
+        s = StandardModelT<FEATURES>.resolve_gbuffer(StandardModelT<FEATURES>.load_params(m), v, lod);
     }
     s.brdf_lut = lv.brdf_lut;
     bool identity = pc.refraction != 0 && t > 0 && abs(s.ior - 1) < 1e-3;
@@ -290,7 +285,7 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         s.specular = 0;
     float view_depth = -dot(sc.view[2], float4(i.world, 1.0));
     uint cluster = de_cluster_index(lv, px, view_depth);
-    DeDirect d = evaluate_direct_clustered<StandardModel>(s, i.world, v.view, px, lv, pc.cl,
+    DeDirect d = evaluate_direct_clustered<StandardModelT<FEATURES>>(s, i.world, v.view, px, lv, pc.cl,
                                                           cluster, pc.refraction != 0 && t > 0);
     float3 ind_d, ind_s;
     evaluate_indirect_split(s, i.world, v.view, px, lv, ind_d, ind_s);
@@ -347,7 +342,7 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
             if(rt&&s.roughness>=.05&&dot(v.view,s.normal)>0) {
                 ShadingFrame frame=de_frame_from_normal(s.normal);float3 wo=frame.to_local(v.view);
                 float3 wi=frame.to_local(de_robuffer<DeRefractionCapture>(pc.rt_capture)[px.y*pc.width+px.x].sampled.xyz);
-                TransmissionLobes transmission=de_transmission_lobes(s,de_standard_base_t<DE_STANDARD_FEATURES_ALL>(s,wo,true),wo,true,false);
+                TransmissionLobes transmission=de_transmission_lobes(s,de_standard_base_t<FEATURES>(s,wo,true),wo,true,false);
                 float pdf=de_transmission_specular_pdf(transmission,wo,wi);
                 through=(pdf>0?StandardModel.evaluate(s,wo,wi)/pdf:float3(0))*volume_transmittance(s.attenuation_color,s.attenuation_distance,ray.distance);
             }
@@ -355,4 +350,22 @@ float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
         }
     }
     return float4(rgb * alpha, alpha);
+}
+
+// Neither display entry writes depth or feedback. Keep opaque-hidden rejection early.
+#if defined(DE_SHADER_TARGET_METAL)
+[earlydepthstencil]
+#endif
+[shader("fragment")]
+float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
+{
+    return shade_forward<DE_STANDARD_FEATURES_ALL>(i, pc);
+}
+#if defined(DE_SHADER_TARGET_METAL)
+[earlydepthstencil]
+#endif
+[shader("fragment")]
+float4 ps_forward_base(FwdVertex i, uniform ForwardParams pc) : SV_Target
+{
+    return shade_forward<0>(i, pc);
 }

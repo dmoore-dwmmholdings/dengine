@@ -73,7 +73,8 @@ DE_STATIC_ASSERT(sizeof(de__fwd_params) == 112, "ForwardParams is 112 bytes");
 /** de__transparent_item.flags */
 enum {
     DE__FWD_ITEM_DOUBLE_SIDED = 1u, /**< a forward material of it draws both faces: two draws */
-    DE__FWD_ITEM_TRANSMISSIVE = 2u  /**< a forward material of it transmits: the scene colour */
+    DE__FWD_ITEM_TRANSMISSIVE = 2u, /**< a forward material of it transmits: the scene colour */
+    DE__FWD_ITEM_BASE_STANDARD = 4u /**< every forward submesh needs only base lobes */
 };
 
 /** One instance of a view's transparent list. */
@@ -95,6 +96,16 @@ typedef struct de__transparent_item {
 static inline bool de__forward_material(const de__gs_material *m) {
     return (m->flags & DE__GS_MATERIAL_READY) != 0u &&
            (m->features & DE__MATERIAL_FEATURE_FORWARD) != 0u;
+}
+
+/** Conservative base specialization: unknown models/features retain the full shader. */
+static inline bool de__forward_base_material(const de__gs_material *m) {
+    const u32 allowed = DE__MATERIAL_FEATURE_FORWARD | DE__MATERIAL_FEATURE_DOUBLE_SIDED |
+                        DE__MATERIAL_FEATURE_UNLIT | DE__MATERIAL_FEATURE_ALPHA_MASK;
+    return de__forward_material(m) &&
+           (m->model == DE__GS_MATERIAL_MODEL_STANDARD || m->model == DE__GS_MATERIAL_MODEL_UNLIT ||
+            m->model == DE__GS_MATERIAL_MODEL_SPRITE) &&
+           (m->features & ~allowed) == 0u;
 }
 
 /** True when `a` draws before `b`: farther first, then the smaller entity, then the smaller index
@@ -140,6 +151,7 @@ typedef struct de__forward de__forward;
 typedef struct de__forward_draw {
     u32 instance, side, meshlet_first, meshlet_count;
     u32 participant, participant_item;
+    bool base_standard;
 } de__forward_draw;
 
 /** What one view's pass did this frame (the graph's frame arena). */
