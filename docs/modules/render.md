@@ -108,6 +108,27 @@ acquired image may legitimately have no new native call. Timing overlap alone
 does not establish which thread blocked the host, and a valid report does not
 mean the performance acceptance passed. Keep raw traces with the report.
 
+For Metal presentation backpressure, also set `DE_GPU_PRESENT_TRACE=1` and capture
+stderr alongside the game log. Other values disable it. Each presented drawable
+emits enqueue, command-buffer scheduled/completed and drawable-presented records.
+Records share layer identity, drawable ID and enqueue timestamp, so reused IDs or
+out-of-order callback logging do not mix presentations. Handlers capture only
+immutable scalar values; they do not retain engine/device/logger pointers or the
+drawable. Disabled runs install no handlers and take no presentation trace clocks.
+This does not add waits or change present mode, drawable count or resource retirement.
+
+Run
+`python3 tools/diagnostics/presentation_trace_report.py --host /absolute/host.csv --log /absolute/game.log --out /absolute/presentation.json`
+to retain the acquire report and associate slow native acquisitions with nearby
+presentation observations, including loading acquisitions outside host CSV frames.
+Callback latency is measured from CPU enqueue to CPU handler observation; it is
+neither GPU execution time nor proof that an image was visible on screen. The
+report preserves noncompleted command-buffer statuses and rejects missing,
+duplicate or malformed event records with exit status 2. Missing callbacks during
+shutdown indicate incomplete evidence, not proof of a resource leak. Run an
+uninstrumented control: callback registration and stderr writes can perturb rare
+stalls. A complete report does not establish that stalls are fixed.
+
 ## Stationary reflection confidence
 
 SSR accumulates stationary reflected contribution and confidence together, then
