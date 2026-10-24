@@ -365,6 +365,44 @@ typedef struct resize_worker_case {
     sc_fx *f;
     u32 rendered;
 } resize_worker_case;
+
+typedef struct first_acquire_case {
+    sc_fx *f;
+    u32 width, height;
+    u64 elapsed_ns;
+} first_acquire_case;
+static i32 first_acquire_without_runloop(void *user) {
+    first_acquire_case *c = user;
+    de_gpu_texture image;
+    const u64 begin = de_time_now_ns();
+    de_result r = de_gpu_swapchain_acquire(c->f->d, c->f->sc, &image);
+    c->elapsed_ns = de_time_now_ns() - begin;
+    if (r != DE_OK)
+        return (i32)r;
+    const de__gpu_texture *texture = de__gpu_get_texture(c->f->d, image);
+    if (!texture)
+        return -1;
+    c->width = texture->width;
+    c->height = texture->height;
+    return (i32)de_gpu_swapchain_present(c->f->d, c->f->sc);
+}
+TEST_F(mtl, swapchain_first_acquire_render_thread_without_runloop, sc_fx) {
+    f->sc = de_gpu_swapchain_create(f->d, &(de_gpu_swapchain_desc){.window = f->window});
+    ASSERT_TRUE(f->sc.id);
+    u32 width, height;
+    de_window_size_pixels(f->window, &width, &height);
+    first_acquire_case c = {.f = f};
+    de_thread *thread;
+    ASSERT_EQ(de_thread_create(first_acquire_without_runloop, &c, "first-acquire", DE_THREAD_NORMAL,
+                               0, &thread),
+              DE_OK);
+    EXPECT_EQ(de_thread_join(thread), 0);
+    EXPECT_EQ(c.width, width);
+    EXPECT_EQ(c.height, height);
+    printf("first acquire without main-thread event pumping: %.3f ms\n",
+           (double)c.elapsed_ns * 1e-6);
+}
+
 static i32 resize_without_runloop(void *user) {
     resize_worker_case *c = user;
     sc_fx *f = c->f;

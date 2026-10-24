@@ -51,6 +51,28 @@ not create a window. Game initialization can create a device and renderer on
 destroying the renderer, device, and window. Release game-owned load handles in
 game shutdown rather than destroying an assigned renderer while its assets live.
 
+## Native acquire diagnostics
+
+Set `DE_GPU_ACQUIRE_TRACE=1` before launching a game to log CPU wall-time phases
+of valid swapchain acquisitions. Other values, including `0`, disable it. The
+GPU log category must allow Info messages. Disabled runs take no additional
+clock samples, deferred-count queries, or diagnostic log writes.
+
+`acquire_trace` records a monotonic `start_ns`, validation, completed-resource
+collection and backend durations (`validate_ns`, `collect_ns`, `backend_ns`),
+pending/reclaimed resource counts, and the returned result. The Metal backend
+also emits `drawable_trace` around its exact `nextDrawable` call, including layer
+identity, pixel dimensions and whether a drawable was returned. Backend time can
+include wrapping and cleanup beyond the native call; none of these durations is
+GPU execution time. This instrumentation adds no waits or resource-lifetime changes.
+
+Combine the logs with `DE_HOST_FRAME_TRACE=/absolute/host.csv` to distinguish a
+render handoff wait from event/input, asset publication and simulation work.
+Frame statistics may describe earlier rendered frames; correlate monotonic
+timestamps rather than treating delayed acquire counters as native-call timing.
+Keep cold frames and failures, use one game instance, and retain an uninstrumented
+control because diagnostic logging can perturb timings.
+
 ## Immutable view and pixel context
 
 Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.
