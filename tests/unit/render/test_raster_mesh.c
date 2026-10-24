@@ -1319,6 +1319,17 @@ GPU_TESTS(metal, DE_GPU_METAL)
 GPU_TESTS(vulkan, DE_GPU_VULKAN)
 GPU_TESTS(d3d12, DE_GPU_D3D12)
 
+/* DENG-615: full type reflection can omit the production mesh's bindings only when
+ * Metal shader instrumentation is active. Keep the ordinary noninstrumented case too. */
+TEST_F(raster_mesh, ids_match_cpu_ref_metal_shader_validation, rmx) {
+#if defined(__APPLE__)
+    if (getenv("CI"))
+        SKIP("native Metal shader-validation repro; hosted CI GPU instrumentation is unsafe");
+    ASSERT_EQ(setenv("MTL_SHADER_VALIDATION", "1", 1), 0);
+#endif
+    ids_match_cpu_ref(f, DE_GPU_METAL);
+}
+
 /* ================================================================================================
  * CPU tests
  * ============================================================================================== */
