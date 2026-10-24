@@ -185,10 +185,17 @@ TEST(cook_check, extra_types) {
         EXPECT_STREQ(g_cap.out, "de-cook --check: 0 errors, 0 warnings, 0 notes\n");
     }
 
-    /* Every name of the built-in table is accepted. */
-    EXPECT_EQ(de_cook_known_type_count, 15u);
-    for (u32 i = 0; i < de_cook_known_type_count; ++i)
-        EXPECT_TRUE(de_cook_known_types[i] != NULL && de_cook_known_types[i][0] != '\0');
+    /* Independent list: catch missing, duplicate or reordered built-ins as well as drift. */
+    const char *const expected[] = {"texture", "model",      "material",     "shader",
+                                    "sound",   "font",       "aseprite",     "tilemap",
+                                    "strings", "stylesheet", "video",        "scene",
+                                    "prefab",  "blob",       "string_table", "sprite_clip"};
+    ASSERT_EQ(de_cook_known_type_count, (u32)(sizeof expected / sizeof expected[0]));
+    for (u32 i = 0; i < de_cook_known_type_count; ++i) {
+        EXPECT_STREQ(de_cook_known_types[i], expected[i]);
+        for (u32 j = 0; j < i; ++j)
+            EXPECT_TRUE(strcmp(de_cook_known_types[i], de_cook_known_types[j]) != 0);
+    }
 }
 
 /* --quiet keeps the error lines only; --no-sources drops the source check. */
