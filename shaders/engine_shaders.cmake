@@ -26,7 +26,9 @@ de_engine_shader(vis_raster_draw    visbuffer/vis_vs_ps.slang)
 de_engine_shader(vis_alpha          visbuffer/vis_alpha.slang)
 de_engine_shader(vis_classify       visbuffer/classify.slang)
 de_engine_shader(vis_pick           visbuffer/pick.slang)
-de_engine_shader(vis_resolve        visbuffer/resolve_standard.slang)
+# Inline the reconstruction only for this hot compute resolve, not shared RT shading helpers.
+de_engine_shader(vis_resolve        visbuffer/resolve_standard.slang
+                 PERMUTATIONS "DE_VIS_RESOLVE_INLINE=1")
 de_engine_shader(brdf_lut_gen       brdf/lut_gen.slang)
 de_engine_shader(lighting_clusters  lighting/cluster_build.slang)
 de_engine_shader(lighting_cull      lighting/light_cull.slang)
