@@ -15,7 +15,21 @@ typedef struct de__anim_asset {
     de_cooked_clip_view clip;
     de__sprite_clip_view sprite;
     u64 *sprite_prefix;
+    struct de__anim_prepared_clip *prepared;
 } de__anim_asset;
+/* Immutable asset-owned sampling cache. Oversized clips retain compressed sampling. */
+typedef struct de__anim_prepared_track {
+    de_cooked_clip_track track;
+    const f32 *values;
+} de__anim_prepared_track;
+typedef struct de__anim_prepared_clip {
+    size_t bytes;
+    const u8 *base;
+    u32 track_count;
+    de__anim_prepared_track tracks[];
+} de__anim_prepared_clip;
+bool de__anim_prepare_clip(const de_allocator *, const de_cooked_clip_view *,
+                           de__anim_prepared_clip **);
 typedef struct de__anim_clip_cursor {
     u32 *keys;
     u32 capacity;
@@ -24,6 +38,9 @@ typedef struct de__anim_clip_cursor {
     bool valid;
     u64 binary_searches, forward_steps;
 } de__anim_clip_cursor;
+bool de__anim_sample_prepared(const de_cooked_clip_view *, const de__anim_prepared_clip *,
+                              const de_cooked_skeleton_view *, f32, de__anim_local_pose *,
+                              de__anim_clip_cursor *);
 /* POD ECS snapshot state; no borrowed pointers or process-local asset handles. */
 typedef struct de__anim_clock {
     u64 ticks, segment_ticks, clip_key, pose_hash;

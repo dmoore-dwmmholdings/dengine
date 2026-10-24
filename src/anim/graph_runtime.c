@@ -26,6 +26,7 @@ typedef struct graph_node {
     graph_pose output;
     const de__anim_reference_cache *reference;
     de_cooked_clip_view clip;
+    const de__anim_prepared_clip *prepared;
     de__anim_marker_map *markers;
     u32 *marker_storage;
     u32 marker_words;
@@ -412,6 +413,9 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
             graph_node *node = &next->nodes[i];
             if (n->kind == DE_ANIM_NODE_CLIP) {
                 ok = clip_view(s, n->data.clip.clip, e->joints, &node->clip, &fingerprint);
+                if (ok)
+                    node->prepared =
+                        de__anim_asset_get(s, n->data.clip.clip.id, "anim_clip")->prepared;
                 node->markers = &next->marker_maps[next->leaf_count];
                 next->leaves[next->leaf_count++] = (de__anim_sync_leaf){
                     n->data.clip.sync_group, i, 0, node->clip.duration, n->data.clip.speed};
@@ -592,8 +596,8 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
             t = de__anim_time(0, n->clip.duration, d->data.clip.speed, a->time, d->data.clip.loop,
                               &ended);
         }
-        n->valid = de__anim_sample_pose_cached(&n->clip, &e->skeleton, t, &n->output.pose,
-                                               &n->output.cursor);
+        n->valid = de__anim_sample_prepared(&n->clip, n->prepared, &e->skeleton, t, &n->output.pose,
+                                            &n->output.cursor);
         ++e->graph_samples;
         if (!n->valid)
             return false;

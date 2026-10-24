@@ -487,6 +487,10 @@ TEST(anim_graph_runtime, shared_reference_rebuilds_from_published_clip_data_and_
     EXPECT_EQ(initial.builds, 1u);
     const de__slot *slot = de__slot_get(f.assets, f.clip.id);
     u32 version = slot->version;
+    const de__anim_asset *original = de__anim_asset_get(f.anim, f.clip.id, "anim_clip");
+    ASSERT_TRUE(original && original->prepared);
+    f32 original_key = original->prepared->tracks[0].values[0];
+    EXPECT_EQ(slot->bytes, original->bytes + original->prepared->bytes);
     anim_blob replacement = clip_blob(3);
     de_cooked_put_f32(replacement.data + de_canim_get_u32(replacement.data + 44), 1);
     ASSERT_EQ(de_file_write_all_atomic("animtest:/clip.dclp", replacement.data, replacement.bytes),
@@ -499,6 +503,10 @@ TEST(anim_graph_runtime, shared_reference_rebuilds_from_published_clip_data_and_
         de_sleep_ns(1000000);
     }
     ASSERT_TRUE(slot->version != version);
+    const de__anim_asset *published = de__anim_asset_get(f.anim, f.clip.id, "anim_clip");
+    ASSERT_TRUE(published && published->prepared);
+    EXPECT_FLOAT_EQ(published->prepared->tracks[0].values[0], original_key + 1, 0);
+    EXPECT_EQ(slot->bytes, published->bytes + published->prepared->bytes);
     anim_frame(&f, 0);
     EXPECT_FLOAT_EQ(actor_entry(&f, entity)->local.translations[0].x, before + 1, 2e-6f);
     de__anim_reference_stats stats = de__anim_graph_reference_stats(f.anim);
