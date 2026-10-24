@@ -1078,8 +1078,16 @@ static de__gpu_swapchain *swapchain(de_gpu_device *d, de_gpu_swapchain h, const 
 
 de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s, de_gpu_texture *image) {
     static const char F[] = "de_gpu_swapchain_acquire";
+#if defined(_WIN32)
+    char trace_env[2] = {0};
+    size_t trace_size = 0;
+    const bool trace =
+        getenv_s(&trace_size, trace_env, sizeof trace_env, "DE_GPU_ACQUIRE_TRACE") == 0 &&
+        trace_size == 2 && trace_env[0] == '1';
+#else
     const char *trace_env = getenv("DE_GPU_ACQUIRE_TRACE");
     const bool trace = trace_env && strcmp(trace_env, "1") == 0;
+#endif
     const u64 begin = trace ? de_time_now_ns() : 0;
     if (image)
         image->id = 0;
