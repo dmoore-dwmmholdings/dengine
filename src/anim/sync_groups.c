@@ -8,20 +8,23 @@ static bool finite64(f64 value) {
     return (bits & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
 }
 static de_cooked_clip_marker ring_marker(const de__anim_marker_ring *ring, u32 i) {
+    u32 index = (ring->start + i) % ring->count;
     de_cooked_clip_marker marker =
-        de_cooked_clip_get_marker(ring->clip, (ring->start + i) % ring->count);
+        de_cooked_clip_get_marker(ring->clip, ring->indices ? ring->indices[index] : index);
     if (marker.time == ring->clip->duration)
         marker.time = 0;
     return marker;
 }
-static bool marker_ring(const de_cooked_clip_view *clip, de__anim_marker_ring *out) {
-    if (!clip || !clip->markers || clip->marker_count < 2 ||
+static bool marker_ring(const de_cooked_clip_view *clip, const u32 *indices, u32 count,
+                        de__anim_marker_ring *out) {
+    if (!clip || !clip->markers || !count || count > clip->marker_count ||
         clip->marker_count > DE_COOKED_CLIP_MAX_MARKERS || !de__anim_finite(clip->duration) ||
         !(clip->duration > 0))
         return false;
-    de__anim_marker_ring ring = {.clip = clip, .count = clip->marker_count};
-    de_cooked_clip_marker first = de_cooked_clip_get_marker(clip, 0);
-    de_cooked_clip_marker last = de_cooked_clip_get_marker(clip, ring.count - 1);
+    de__anim_marker_ring ring = {.clip = clip, .indices = indices, .count = count};
+    de_cooked_clip_marker first = de_cooked_clip_get_marker(clip, indices ? indices[0] : 0);
+    de_cooked_clip_marker last =
+        de_cooked_clip_get_marker(clip, indices ? indices[count - 1] : count - 1);
     if (last.time == clip->duration) {
         if (first.time == 0) {
             if (first.name.hash != last.name.hash)
@@ -30,7 +33,7 @@ static bool marker_ring(const de_cooked_clip_view *clip, de__anim_marker_ring *o
         } else
             ring.start = ring.count - 1;
     }
-    if (ring.count < 2)
+    if (!ring.count)
         return false;
     f32 previous = -1;
     for (u32 i = 0; i < ring.count; ++i) {
@@ -80,12 +83,15 @@ static bool marker_ring(const de_cooked_clip_view *clip, de__anim_marker_ring *o
     *out = ring;
     return true;
 }
-bool de__anim_marker_map_init(de__anim_marker_map *out, const de_cooked_clip_view *reference,
-                              const de_cooked_clip_view *clip) {
+static bool marker_map_filtered(de__anim_marker_map *out, const de_cooked_clip_view *reference,
+                                const u32 *reference_indices, u32 reference_count,
+                                const de_cooked_clip_view *clip, const u32 *clip_indices,
+                                u32 clip_count) {
     if (!out)
         return false;
     memset(out, 0, sizeof *out);
-    if (!marker_ring(reference, &out->reference) || !marker_ring(clip, &out->clip) ||
+    if (!marker_ring(reference, reference_indices, reference_count, &out->reference) ||
+        !marker_ring(clip, clip_indices, clip_count, &out->clip) ||
         out->reference.period != out->clip.period)
         return false;
     u32 n = out->reference.period;
@@ -98,6 +104,88 @@ bool de__anim_marker_map_init(de__anim_marker_map *out, const de_cooked_clip_vie
     out->valid = true;
     return true;
 }
+bool de__anim_marker_map_init(de__anim_marker_map *out, const de_cooked_clip_view *reference,
+                              const de_cooked_clip_view *clip) {
+    return marker_map_filtered(out, reference, NULL, reference ? reference->marker_count : 0, clip,
+                               NULL, clip ? clip->marker_count : 0);
+}
+static u64 marker_name(const de_cooked_clip_view *clip, u32 index) {
+    return de_cooked_clip_get_marker(clip, index).name.hash;
+}
+static bool index_less(const de_cooked_clip_view *clip, u32 a, u32 b) {
+    u64 x = marker_name(clip, a), y = marker_name(clip, b);
+    return x < y || (x == y && a < b);
+}
+static void index_sift(const de_cooked_clip_view *clip, u32 *indices, u32 root, u32 count) {
+    while (root < count / 2) {
+        u32 child = root * 2 + 1;
+        if (child + 1 < count && index_less(clip, indices[child], indices[child + 1]))
+            ++child;
+        if (!index_less(clip, indices[root], indices[child]))
+            return;
+        u32 swap = indices[root];
+        indices[root] = indices[child];
+        indices[child] = swap;
+        root = child;
+    }
+}
+static void index_sort(const de_cooked_clip_view *clip, u32 *indices) {
+    u32 count = clip->marker_count;
+    for (u32 i = 0; i < count; ++i)
+        indices[i] = i;
+    for (u32 i = count / 2; i > 0; --i)
+        index_sift(clip, indices, i - 1, count);
+    for (u32 i = count; i > 1; --i) {
+        u32 swap = indices[0];
+        indices[0] = indices[i - 1];
+        indices[i - 1] = swap;
+        index_sift(clip, indices, 0, i - 1);
+    }
+}
+bool de__anim_marker_map_init_shared(de__anim_marker_map *out, const de_cooked_clip_view *reference,
+                                     const de_cooked_clip_view *clip, u32 *scratch, u32 words) {
+    if (!out)
+        return false;
+    if (de__anim_marker_map_init(out, reference, clip))
+        return true;
+    if (!reference || !clip || !reference->markers || !clip->markers || !reference->marker_count ||
+        !clip->marker_count || reference->marker_count > DE_COOKED_CLIP_MAX_MARKERS ||
+        clip->marker_count > DE_COOKED_CLIP_MAX_MARKERS || !scratch ||
+        words < 2u * (reference->marker_count + clip->marker_count))
+        return false;
+    u32 nr = reference->marker_count, nc = clip->marker_count;
+    u32 *selected_r = scratch, *selected_c = selected_r + nr;
+    u32 *sorted_r = selected_c + nc, *sorted_c = sorted_r + nr;
+    memset(selected_r, 0, (size_t)(nr + nc) * sizeof(u32));
+    index_sort(reference, sorted_r);
+    index_sort(clip, sorted_c);
+    u32 a = 0, b = 0;
+    while (a < nr && b < nc) {
+        u64 x = marker_name(reference, sorted_r[a]), y = marker_name(clip, sorted_c[b]);
+        if (x < y)
+            ++a;
+        else if (x > y)
+            ++b;
+        else {
+            do {
+                selected_r[sorted_r[a++]] = 1;
+            } while (a < nr && marker_name(reference, sorted_r[a]) == x);
+            do {
+                selected_c[sorted_c[b++]] = 1;
+            } while (b < nc && marker_name(clip, sorted_c[b]) == x);
+        }
+    }
+    u32 reference_count = 0, clip_count = 0;
+    for (u32 i = 0; i < nr; ++i)
+        if (selected_r[i])
+            selected_r[reference_count++] = i;
+    for (u32 i = 0; i < nc; ++i)
+        if (selected_c[i])
+            selected_c[clip_count++] = i;
+    return marker_map_filtered(out, reference, selected_r, reference_count, clip, selected_c,
+                               clip_count);
+}
+
 static f64 marker_time(const de__anim_marker_ring *ring, u32 i) {
     return (f64)ring_marker(ring, i).time / (f64)ring->clip->duration;
 }

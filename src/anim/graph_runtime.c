@@ -27,6 +27,8 @@ typedef struct graph_node {
     const de__anim_reference_cache *reference;
     de_cooked_clip_view clip;
     de__anim_marker_map *markers;
+    u32 *marker_storage;
+    u32 marker_words;
     de__anim_blend_weights blend;
     f32 demand, weight;
     bool valid;
@@ -123,6 +125,9 @@ static void destroy_runtime(de_anim_system *s, de__anim_graph_runtime *r) {
         return;
     for (u32 i = 0; i < r->node_count; ++i) {
         free_pose(&r->nodes[i].output);
+        if (r->nodes[i].marker_storage)
+            DE_FREE(s->alloc, r->nodes[i].marker_storage,
+                    (size_t)r->nodes[i].marker_words * sizeof(u32));
         release_reference(s, r->nodes[i].reference);
     }
     for (u32 i = 0; i < r->layer_count; ++i) {
@@ -292,6 +297,67 @@ static bool make_mask(de_anim_system *s, de__anim_entry *e, const de_anim_layer_
     DE_FREE(s->alloc, rules, (size_t)d->mask_count * sizeof *rules);
     return ok;
 }
+/* All intersection/sort storage is prepared before worker dispatch and remains
+ * borrowed by this actor's read-only interval maps until transactional release. */
+static bool bind_marker_map(de_anim_system *s, const de_cooked_clip_view *reference,
+                            graph_node *node) {
+    if (de__anim_marker_map_init(node->markers, reference, &node->clip) ||
+        reference == &node->clip || !reference->marker_count || !node->clip.marker_count ||
+        !(reference->duration > 0) || !(node->clip.duration > 0))
+        return true;
+    u32 words = 2u * (reference->marker_count + node->clip.marker_count);
+    if (node->marker_words < words) {
+        void *storage =
+            DE_REALLOC(s->alloc, node->marker_storage, (size_t)node->marker_words * sizeof(u32),
+                       (size_t)words * sizeof(u32), _Alignof(u32), DE_MEM_GENERAL);
+        if (!storage)
+            return false;
+        node->marker_storage = storage;
+        node->marker_words = words;
+    }
+    (void)de__anim_marker_map_init_shared(node->markers, reference, &node->clip,
+                                          node->marker_storage, node->marker_words);
+    return true;
+}
+static bool bind_group_markers(de_anim_system *s, const de__anim_graph *g,
+                               de__anim_graph_runtime *r, u32 group) {
+    const de_cooked_clip_view *reference = NULL;
+    u32 best = 0;
+    u64 best_richness = 0;
+    /* Maximal compatible coverage, then common-cycle richness, then lowest
+     * node index. An orphan event must not block later shared foot tracks. */
+    for (u32 candidate = 0; candidate < r->leaf_count; ++candidate) {
+        const de__anim_sync_leaf *leaf = &r->leaves[candidate];
+        if (leaf->group.hash != g->sync_groups[group].hash)
+            continue;
+        const de_cooked_clip_view *clip = &r->nodes[leaf->node].clip;
+        if (!clip->marker_count || !(clip->duration > 0))
+            continue;
+        u32 support = 1; /* The reference always samples its own normalized time. */
+        u64 richness = 0;
+        for (u32 i = 0; i < r->leaf_count; ++i) {
+            if (i == candidate || r->leaves[i].group.hash != leaf->group.hash)
+                continue;
+            graph_node *node = &r->nodes[r->leaves[i].node];
+            if (!bind_marker_map(s, clip, node))
+                return false;
+            support += node->markers->valid;
+            if (node->markers->valid)
+                richness += node->markers->reference.period;
+        }
+        if (support > best || (support == best && richness > best_richness)) {
+            reference = clip;
+            best = support;
+            best_richness = richness;
+        }
+    }
+    if (reference)
+        for (u32 i = 0; i < r->leaf_count; ++i)
+            if (r->leaves[i].group.hash == g->sync_groups[group].hash &&
+                !bind_marker_map(s, reference, &r->nodes[r->leaves[i].node]))
+                return false;
+    return true;
+}
 bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
     de__anim_graph *g = de__anim_graph_get(s, e->animator->graph);
     if (!g)
@@ -367,20 +433,11 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
             destroy_runtime(s, next);
             return false;
         }
-        for (u32 group = 0; group < g->sync_count; ++group) {
-            const de_cooked_clip_view *reference = NULL;
-            for (u32 i = 0; i < next->leaf_count; ++i) {
-                de__anim_sync_leaf *leaf = &next->leaves[i];
-                if (leaf->group.hash != g->sync_groups[group].hash)
-                    continue;
-                const de_cooked_clip_view *clip = &next->nodes[leaf->node].clip;
-                de__anim_marker_map candidate;
-                if (!reference && de__anim_marker_map_init(&candidate, clip, clip))
-                    reference = clip;
-                if (reference)
-                    (void)de__anim_marker_map_init(&next->marker_maps[i], reference, clip);
+        for (u32 group = 0; group < g->sync_count; ++group)
+            if (!bind_group_markers(s, g, next, group)) {
+                destroy_runtime(s, next);
+                return false;
             }
-        }
         if (!commit_reference_owners(s, g, next)) {
             destroy_runtime(s, next);
             return false;

@@ -15,6 +15,7 @@ typedef struct de__anim_sync_leaf {
  * earliest canonical rotation. */
 typedef struct de__anim_marker_ring {
     const de_cooked_clip_view *clip;
+    const u32 *indices; /* optional filtered indices into checked clip metadata */
     u32 count, start, pivot, period;
 } de__anim_marker_ring;
 typedef struct de__anim_marker_map {
@@ -24,6 +25,11 @@ typedef struct de__anim_marker_map {
 } de__anim_marker_map;
 bool de__anim_marker_map_init(de__anim_marker_map *, const de_cooked_clip_view *reference,
                               const de_cooked_clip_view *clip);
+/* Intersect marker names without changing either clip. Caller retains scratch
+ * of 2*(reference.marker_count+clip.marker_count) u32 words for map lifetime.
+ * Sorting is cold O(n log n); sampling keeps indexed O(log n) interval lookup. */
+bool de__anim_marker_map_init_shared(de__anim_marker_map *, const de_cooked_clip_view *reference,
+                                     const de_cooked_clip_view *clip, u32 *scratch, u32 words);
 /* Plain value state: callers must snapshot this alongside their graph clock.
  * Phase is unbounded cycles. Sampling applies each leaf's loop/clamp policy. */
 typedef struct de__anim_sync_clock {

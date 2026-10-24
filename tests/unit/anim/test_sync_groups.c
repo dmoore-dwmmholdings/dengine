@@ -5,6 +5,7 @@
 #include <dengine/de_math.h>
 #include <string.h>
 #include <float.h>
+#include <stdio.h>
 static de__anim_sync_leaf leaf(u32 node, f32 demand, f32 duration, f32 speed) {
     return (de__anim_sync_leaf){de_name_from("feet"), node, demand, duration, speed};
 }
@@ -147,6 +148,19 @@ static de_cooked_clip_view marker_view(u8 *bytes, const char *const *names, cons
         de_cooked_put_u64(bytes + i * 16, de_name_from(names[i]).hash);
         de_cooked_put_f32(bytes + i * 16 + 8, times[i]);
     }
+    /* Canonical checked-format order, including coincident event labels. */
+    for (u32 i = 1; i < count; ++i) {
+        u8 record[16];
+        memcpy(record, bytes + i * 16, 16);
+        u32 j = i;
+        while (j && (de_canim_get_f32(bytes + (j - 1) * 16 + 8) > de_canim_get_f32(record + 8) ||
+                     (de_canim_get_f32(bytes + (j - 1) * 16 + 8) == de_canim_get_f32(record + 8) &&
+                      de_canim_get_u64(bytes + (j - 1) * 16) > de_canim_get_u64(record)))) {
+            memcpy(bytes + j * 16, bytes + (j - 1) * 16, 16);
+            --j;
+        }
+        memcpy(bytes + j * 16, record, 16);
+    }
     return (de_cooked_clip_view){.duration = duration, .markers = bytes, .marker_count = count};
 }
 TEST(anim_sync, marker_intervals_preserve_phase_across_shifted_leaders_and_reverse_wrap) {
@@ -277,4 +291,88 @@ TEST(anim_sync, different_numbers_of_repeated_foot_cycles_align_and_advance_loca
     clock.phase = 20;
     ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, false, &time));
     EXPECT_FLOAT_EQ(time, .5f, 0);
+}
+
+TEST(anim_sync, common_labels_ignore_extra_and_coincident_unshared_events) {
+    u8 a[64], b[64], original[64];
+    bool l_first = de_name_from("L").hash < de_name_from("shoot").hash;
+    const char *an[] = {l_first ? "L" : "shoot", l_first ? "shoot" : "L", "R", "L"};
+    const char *bn[] = {"L", "R", "breath", "L"};
+    const f32 at[] = {0, 0, .5f, 1}, bt[] = {0, .15f, .4f, .6f};
+    de_cooked_clip_view reference = marker_view(a, an, at, 4, 1),
+                        other = marker_view(b, bn, bt, 4, .6f);
+    memcpy(original, a, sizeof a);
+    de__anim_marker_map map;
+    EXPECT_FALSE(de__anim_marker_map_init(&map, &reference, &other));
+    u32 storage[16];
+    EXPECT_FALSE(de__anim_marker_map_init_shared(&map, &reference, &other, storage, 15));
+    ASSERT_TRUE(de__anim_marker_map_init_shared(&map, &reference, &other, storage, 16));
+    EXPECT_EQ(map.reference.count, 2u);
+    EXPECT_EQ(map.clip.count, 2u);
+    EXPECT_MEMEQ(original, a, sizeof a);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    for (i32 i = -64; i <= 64; ++i) {
+        f64 phase = (f64)i / 32, fraction = phase;
+        while (fraction < 0)
+            fraction += 1;
+        while (fraction >= 1)
+            fraction -= 1;
+        f64 expected = fraction < .5 ? fraction * 2 * (f64).15f
+                                     : (f64).15f + (fraction - .5) * 2 * ((f64).6f - (f64).15f);
+        de__anim_sync_clock clock = {.initialized = true, .phase = phase};
+        f32 time;
+        ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .6f, true, &time));
+        EXPECT_FLOAT_EQ(time, expected, 1e-7);
+    }
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    for (u32 extras = 1; extras <= 16; ++extras) {
+        u8 many_a[32 * 16], many_b[32 * 16];
+        u32 scratch[128];
+        const char *names_a[32] = {"L", "R", "L"}, *names_b[32] = {"L", "R", "L"};
+        f32 times_a[32] = {0, .5f, 1}, times_b[32] = {0, .15f, .6f};
+        char labels_a[16][16], labels_b[16][16];
+        for (u32 i = 0; i < extras; ++i) {
+            snprintf(labels_a[i], sizeof labels_a[i], "walk-%u", i);
+            snprintf(labels_b[i], sizeof labels_b[i], "run-%u", i);
+            names_a[i + 3] = labels_a[i];
+            names_b[i + 3] = labels_b[i];
+            times_a[i + 3] = (f32)(i + 1) / (f32)(extras + 1);
+            times_b[i + 3] = times_a[i + 3] * .6f;
+        }
+        reference = marker_view(many_a, names_a, times_a, extras + 3, 1);
+        other = marker_view(many_b, names_b, times_b, extras + 3, .6f);
+        ASSERT_TRUE(de__anim_marker_map_init_shared(&map, &reference, &other, scratch, 128));
+        for (u32 i = 0; i <= 32; ++i) {
+            f64 phase = (f64)i / 32;
+            de__anim_sync_clock clock = {.initialized = true, .phase = phase};
+            f32 time;
+            ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .6f, true, &time));
+            f64 expected = phase < .5   ? phase * 2 * (f64).15f
+                           : phase == 1 ? 0
+                                        : (f64).15f + (phase - .5) * 2 * ((f64).6f - (f64).15f);
+            EXPECT_FLOAT_EQ(time, expected, 1e-7);
+        }
+    }
+}
+TEST(anim_sync, one_shared_marker_aligns_cycle_and_disjoint_labels_fall_back) {
+    u8 a[48], b[32];
+    const char *an[] = {"L", "R", "L"}, *bn[] = {"L", "other"};
+    const f32 at[] = {0, .5f, 1}, bt[] = {.1f, .3f};
+    de_cooked_clip_view reference = marker_view(a, an, at, 3, 1),
+                        other = marker_view(b, bn, bt, 2, .6f);
+    u32 storage[10];
+    de__anim_marker_map map;
+    ASSERT_TRUE(de__anim_marker_map_init_shared(&map, &reference, &other, storage, 10));
+    EXPECT_EQ(map.reference.count, 1u);
+    EXPECT_EQ(map.clip.count, 1u);
+    de__anim_sync_clock clock = {.initialized = true, .phase = .5};
+    f32 time;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .6f, true, &time));
+    EXPECT_FLOAT_EQ(time, .4f, 1e-7);
+    de_cooked_put_u64(b, de_name_from("unrelated").hash);
+    EXPECT_FALSE(de__anim_marker_map_init_shared(&map, &reference, &other, storage, 10));
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .6f, true, &time));
+    EXPECT_FLOAT_EQ(time, .3f, 1e-7);
 }

@@ -2,6 +2,7 @@
 #include "anim/graph_internal.h"
 #include "anim/sync_groups.h"
 #include "de_alloc_guard.h"
+#include "asset/slots_internal.h"
 static de_anim_graph sync_graph(anim_fixture *f, u32 groups, de_anim_clip second) {
     de_anim_param_desc param = {.name = de_name_from("blend"), .float_default = .5f};
     de_anim_node_desc nodes[3] = {
@@ -355,32 +356,45 @@ TEST(anim_graph_sync, conflicting_sync_component_layout_is_rejected_before_sampl
     }
 }
 
-static void write_marked_clip(const char *path, f32 duration, f32 right) {
+static void write_marked_clip(const char *path, f32 duration, f32 right, const char *extra) {
     anim_blob blob = clip_blob(2);
-    u32 offset = blob.bytes;
-    blob.bytes += 3 * DE_COOKED_CLIP_MARKER_SIZE;
+    u32 offset = blob.bytes, count = extra ? 4 : 3;
+    blob.bytes += count * DE_COOKED_CLIP_MARKER_SIZE;
     u8 *bytes = realloc(blob.data, blob.bytes);
     ASSERT_TRUE(bytes);
-    blob.data = bytes;
     memset(bytes + offset, 0, blob.bytes - offset);
     de_cooked_put_u32(bytes + 4, DE_COOKED_CLIP_VERSION_MARKERS);
     de_cooked_put_f32(bytes + 32, duration);
     de_cooked_put_f32(bytes + 132, duration);
     de_cooked_put_u32(bytes + 52, blob.bytes);
     de_cooked_put_u32(bytes + 64, offset);
-    de_cooked_put_u32(bytes + 68, 3);
-    const f32 times[] = {0, right, duration};
-    for (u32 i = 0; i < 3; ++i) {
-        de_cooked_put_u64(bytes + offset + i * 16, de_name_from(i == 1 ? "R" : "L").hash);
-        de_cooked_put_f32(bytes + offset + i * 16 + 8, times[i]);
+    de_cooked_put_u32(bytes + 68, count);
+    de_cooked_clip_marker records[4] = {{de_name_from("L"), 0},
+                                        {de_name_from("R"), right},
+                                        {de_name_from("L"), duration},
+                                        {de_name_from(extra ? extra : "unused"), 0}};
+    for (u32 i = 1; i < count; ++i) {
+        de_cooked_clip_marker marker = records[i];
+        u32 j = i;
+        while (j && (records[j - 1].time > marker.time ||
+                     (records[j - 1].time == marker.time &&
+                      records[j - 1].name.hash > marker.name.hash))) {
+            records[j] = records[j - 1];
+            --j;
+        }
+        records[j] = marker;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        de_cooked_put_u64(bytes + offset + i * 16, records[i].name.hash);
+        de_cooked_put_f32(bytes + offset + i * 16 + 8, records[i].time);
     }
     ASSERT_EQ(de_file_write_all_atomic(path, bytes, blob.bytes), DE_OK);
     free(bytes);
 }
-static de_anim_graph marked_graph(anim_fixture *f) {
+static de_anim_graph marked_graph_variant(anim_fixture *f, bool mixed) {
     load_assets(f, 2);
-    write_marked_clip("animtest:/marked-walk.dclp", 1, .5f);
-    write_marked_clip("animtest:/marked-run.dclp", .6f, .15f);
+    write_marked_clip("animtest:/marked-walk.dclp", 1, .5f, mixed ? "walk-extra" : NULL);
+    write_marked_clip("animtest:/marked-run.dclp", .6f, .15f, mixed ? "run-extra" : NULL);
     const char *manifest =
         "[assets.\"test/skeleton\"]\ntype='skeleton'\nsource='skeleton.dskl'\n"
         "[assets.\"test/clip\"]\ntype='anim_clip'\nsource='clip.dclp'\n"
@@ -399,6 +413,9 @@ static de_anim_graph marked_graph(anim_fixture *f) {
     de_asset_release(f->assets, a);
     de_asset_release(f->assets, b);
     return graph;
+}
+static de_anim_graph marked_graph(anim_fixture *f) {
+    return marked_graph_variant(f, false);
 }
 TEST_F(anim_graph_sync, actual_marker_poses_align_different_foot_times_and_keep_leader_phase,
        anim_fixture) {
@@ -424,10 +441,10 @@ TEST_F(anim_graph_sync, actual_marker_poses_align_different_foot_times_and_keep_
 TEST(anim_graph_sync, marked_snapshot_and_parallel_replay_preserve_full_phase_without_allocations) {
     const u32 workers[] = {0, 3, 7};
     u64 reference[16] = {0};
-    for (u32 mode = 0; mode < 3; ++mode) {
+    for (u32 mode = 0; mode < 6; ++mode) {
         anim_fixture f = {0};
-        anim_fixture_setup_workers(&f, false, workers[mode]);
-        de_anim_graph graph = marked_graph(&f);
+        anim_fixture_setup_workers(&f, false, workers[mode % 3]);
+        de_anim_graph graph = marked_graph_variant(&f, mode >= 3);
         de_entity actors[96];
         for (u32 i = 0; i < 96; ++i) {
             actors[i] = sync_actor(&f, graph, true, (f32)(i % 7) / 16);
@@ -481,4 +498,96 @@ TEST(anim_graph_sync, marked_snapshot_and_parallel_replay_preserve_full_phase_wi
         de_world_snapshot_free(&f.allocator, &snapshot);
         anim_fixture_teardown(&f);
     }
+}
+
+TEST(anim_graph_sync, reference_selection_skips_orphan_and_prefers_richer_shared_foot_cycle) {
+    for (u32 partial = 0; partial < 2; ++partial) {
+        anim_fixture f = {0};
+        anim_fixture_setup(&f);
+        de_anim_graph old = marked_graph_variant(&f, true);
+        anim_blob blob = clip_blob(2);
+        u32 offset = blob.bytes;
+        blob.bytes += 16;
+        u8 *bytes = realloc(blob.data, blob.bytes);
+        ASSERT_TRUE(bytes);
+        memset(bytes + offset, 0, 16);
+        de_cooked_put_u32(bytes + 4, DE_COOKED_CLIP_VERSION_MARKERS);
+        de_cooked_put_u32(bytes + 52, blob.bytes);
+        de_cooked_put_u32(bytes + 64, offset);
+        de_cooked_put_u32(bytes + 68, 1);
+        de_cooked_put_u64(bytes + offset, de_name_from(partial ? "L" : "solo").hash);
+        de_cooked_put_f32(bytes + offset + 8, .25f);
+        ASSERT_EQ(de_file_write_all_atomic("animtest:/orphan.dclp", bytes, blob.bytes), DE_OK);
+        free(bytes);
+        const char *manifest =
+            "[assets.\"test/skeleton\"]\ntype='skeleton'\nsource='skeleton.dskl'\n"
+            "[assets.\"test/clip\"]\ntype='anim_clip'\nsource='clip.dclp'\n"
+            "[assets.\"test/marked-walk\"]\ntype='anim_clip'\nsource='marked-walk.dclp'\n"
+            "[assets.\"test/marked-run\"]\ntype='anim_clip'\nsource='marked-run.dclp'\n"
+            "[assets.\"test/orphan\"]\ntype='anim_clip'\nsource='orphan.dclp'\n";
+        ASSERT_EQ(de_file_write_all_atomic("animtest:/assets.toml", manifest, strlen(manifest)),
+                  DE_OK);
+        ASSERT_EQ(de_asset_manifest_load(f.assets, "animtest:/assets.toml"), DE_OK);
+        de_load_handle load = de_asset_load(f.assets, de_asset_id_from("test/orphan"), 0);
+        ASSERT_EQ(de_asset_wait(f.assets, load, 10000000000ull), DE_LOAD_READY);
+        de_anim_clip clips[] = {de_anim_clip_asset(f.anim, de_asset_id_from("test/orphan")), f.clip,
+                                de_anim_clip_asset(f.anim, de_asset_id_from("test/marked-run"))};
+        de_name group = de_name_from("feet");
+        de_anim_node_desc nodes[4] = {0};
+        for (u32 i = 0; i < 3; ++i)
+            nodes[i] = (de_anim_node_desc){
+                .kind = DE_ANIM_NODE_CLIP,
+                .data.clip = {.clip = clips[i], .speed = 1, .loop = true, .sync_group = group}};
+        de_anim_param_desc params[] = {{.name = de_name_from("x"), .float_default = .5f},
+                                       {.name = de_name_from("y"), .float_default = .5f}};
+        de_anim_blend_point_desc points[] = {{{0, 0}, 0}, {{1, 0}, 1}, {{0, 1}, 2}};
+        nodes[3] = (de_anim_node_desc){.kind = DE_ANIM_NODE_BLEND2D,
+                                       .data.blend = {.x_param = params[0].name,
+                                                      .y_param = params[1].name,
+                                                      .points = points,
+                                                      .point_count = 3}};
+        de_anim_graph graph = {0};
+        ASSERT_EQ(de_anim_graph_create(f.anim,
+                                       &(de_anim_graph_desc){.params = params,
+                                                             .param_count = 2,
+                                                             .nodes = nodes,
+                                                             .node_count = 4,
+                                                             .output_node = 3},
+                                       &graph),
+                  DE_OK);
+        de_asset_release(f.assets, load);
+        de_anim_graph_destroy(f.anim, old);
+        de_entity entity = sync_actor(&f, graph, false, .5f);
+        anim_frame(&f, 0);
+        EXPECT_FLOAT_EQ(bone_x(&f, entity), .75f, 3e-6f);
+        EXPECT_FLOAT_EQ(sync_state(&f, entity, graph)->clocks[1].phase, .5, 0);
+        EXPECT_EQ(f.anim->entries[de_entity_index(entity)].graph_samples, 2u);
+        anim_fixture_teardown(&f);
+    }
+}
+TEST_F(anim_graph_sync, common_marker_storage_failure_preserves_previous_runtime_and_recovers,
+       anim_fixture) {
+    de_anim_graph graph = marked_graph_variant(f, true);
+    de_entity entity = sync_actor(f, graph, false, .5f);
+    anim_frame(f, 0);
+    de__anim_entry *entry = &f->anim->entries[de_entity_index(entity)];
+    struct de__anim_graph_runtime *old = entry->graph_runtime;
+    ++de__slot_get(f->assets, f->clip.id)->version;
+    bool completed = false;
+    for (i64 failure = 0; failure < 64; ++failure) {
+        de_tracking_allocator_fail_after(&f->tracking, failure);
+        bool ok = de__anim_graph_prepare(f->anim, entry);
+        de_tracking_allocator_fail_after(&f->tracking, -1);
+        de_error_clear();
+        if (ok) {
+            completed = true;
+            EXPECT_GE(failure, 2);
+            break;
+        }
+        EXPECT_TRUE(entry->graph_runtime == old);
+        EXPECT_FLOAT_EQ(bone_x(f, entity), .75f, 3e-6f);
+    }
+    EXPECT_TRUE(completed);
+    anim_frame(f, 0);
+    EXPECT_FLOAT_EQ(bone_x(f, entity), .75f, 3e-6f);
 }
