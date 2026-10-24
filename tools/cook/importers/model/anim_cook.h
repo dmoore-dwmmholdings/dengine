@@ -25,12 +25,19 @@
 
 DE_EXTERN_C_BEGIN
 
-/** The animation settings of one import. */
+/** Marker metadata supplied to the clip writer; manifest wiring is separate. */
+typedef struct de_model_anim_marker {
+    de_name name;
+    f32 time; /**< seconds in this clip, finite in [0, duration] */
+} de_model_anim_marker;
+/** The animation settings of one import. Defaults contain no markers. */
 typedef struct de_model_anim_settings {
     f32 sample_rate; /**< Hz, > 0 */
     f32 error;       /**< metres, > 0 */
     f32 error_angle; /**< radians, > 0 */
     bool joint_names;
+    const de_model_anim_marker *markers; /**< optional caller-owned array, copied/sorted by cook */
+    u32 marker_count;
 } de_model_anim_settings;
 
 #define DE_MODEL_ANIM_DEFAULT_RATE        30.0

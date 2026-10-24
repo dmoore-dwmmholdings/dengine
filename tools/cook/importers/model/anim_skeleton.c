@@ -37,6 +37,7 @@
 #define DEG_TO_RAD 0.017453292519943295
 
 void de_model_anim_settings_default(de_model_anim_settings *s) {
+    memset(s, 0, sizeof *s);
     s->sample_rate = (f32)DE_MODEL_ANIM_DEFAULT_RATE;
     s->error = (f32)DE_MODEL_ANIM_DEFAULT_ERROR;
     s->error_angle = (f32)(DE_MODEL_ANIM_DEFAULT_ERROR_ANGLE * DEG_TO_RAD);
@@ -44,6 +45,7 @@ void de_model_anim_settings_default(de_model_anim_settings *s) {
 }
 
 de_result de_model_anim_settings_read(de_asset_import_ctx *ctx, de_model_anim_settings *out) {
+    de_model_anim_settings_default(out);
     f64 rate = de_asset_import_setting_float(ctx, "anim_sample_rate", DE_MODEL_ANIM_DEFAULT_RATE);
     f64 err = de_asset_import_setting_float(ctx, "anim_error", DE_MODEL_ANIM_DEFAULT_ERROR);
     f64 ang =

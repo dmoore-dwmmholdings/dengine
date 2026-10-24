@@ -1217,3 +1217,205 @@ TEST_F(clip, long_smooth_clip, anim_fx) {
     long_clip(f, LONG_CLIP_SECONDS, 150.0, &st);
     EXPECT_LE(st.iterations, 3u);
 }
+
+TEST_F(clip, marker_free_legacy_bytes, anim_fx) {
+    const char *sources[] = {"CesiumMan.glb", "RiggedFigure.glb"};
+    /* Captured on unchanged 09a9af7c before adding marker production code. */
+    const u64 sizes[] = {10448, 1788};
+    const u64 hashes[] = {484626455826339716ull, 686865184032056729ull};
+    for (u32 i = 0; i < 2; ++i) {
+        de_cook_result result;
+        ASSERT_EQ(cook(f, "marker-free-baseline", sources[i], NULL, 0, &result), DE_OK);
+        const de_cook_subasset *clip = sub(&result, "anim:0");
+        ASSERT_TRUE(clip);
+        EXPECT_EQ(clip->size, sizes[i]);
+        EXPECT_EQ(de_hash64(clip->data, (size_t)clip->size, 0), hashes[i]);
+        de_cooked_clip_view view;
+        ASSERT_TRUE(de_cooked_clip_parse(clip->data, clip->size, &view, NULL));
+        EXPECT_EQ(de_canim_get_u32((const u8 *)clip->data + 4), 1u);
+        EXPECT_EQ(view.marker_count, 0u);
+        EXPECT_TRUE(view.markers == NULL);
+        de_cook_result_free(&result);
+    }
+}
+
+static void marker_source(anim_fx *f, de_model_skeleton *skel) {
+    synth_chain(&f->ir, 2, 1);
+    de_model_anim_channel *channel =
+        synth_channel(&f->ir, 1, DE_MODEL_ANIM_TRANSLATION, DE_MODEL_INTERP_LINEAR, 2);
+    channel->times[0] = 0;
+    channel->times[1] = 1;
+    channel->values[3] = 2;
+    ASSERT_EQ(de_model_skeleton_build(&f->ir, 0, skel), DE_OK);
+}
+static void marker_cook(anim_fx *f, const de_model_skeleton *skel,
+                        const de_model_anim_marker *markers, u32 count, de_model_buf *out) {
+    de_model_anim_settings settings;
+    de_model_anim_settings_default(&settings);
+    settings.markers = markers;
+    settings.marker_count = count;
+    de_model_buf_init(out, &f->ir);
+    ASSERT_EQ(de_model_clip_write(out, &f->ir, &f->ir.anims[0], skel, 42, &settings, NULL), DE_OK);
+}
+TEST_F(clip, marker_format_roundtrip_canonical_order_and_unchanged_pose_payload, anim_fx) {
+    de_model_skeleton skel;
+    marker_source(f, &skel);
+    de_model_anim_marker markers[] = {{de_name_from("R"), .75f},
+                                      {de_name_from("L"), .5f},
+                                      {de_name_from("L"), -0.f},
+                                      {de_name_from("R"), .25f},
+                                      {de_name_from("L"), 1}};
+    de_model_anim_marker original[5];
+    memcpy(original, markers, sizeof markers);
+    de_model_buf plain, marked, reordered, empty;
+    marker_cook(f, &skel, NULL, 0, &plain);
+    marker_cook(f, &skel, markers, 5, &marked);
+    EXPECT_MEMEQ(original, markers, sizeof markers);
+    for (u32 i = 0; i < 5; ++i)
+        markers[i] = original[4 - i];
+    marker_cook(f, &skel, markers, 5, &reordered);
+    EXPECT_EQ(marked.size, reordered.size);
+    EXPECT_MEMEQ(marked.data, reordered.data, (size_t)marked.size);
+    marker_cook(f, &skel, markers, 0, &empty);
+    EXPECT_EQ(plain.size, empty.size);
+    EXPECT_MEMEQ(plain.data, empty.data, (size_t)plain.size);
+    EXPECT_EQ(marked.size, plain.size + 5 * DE_COOKED_CLIP_MARKER_SIZE);
+    EXPECT_MEMEQ(plain.data + 80, marked.data + 80, (size_t)plain.size - 80);
+    de_cooked_clip_view view, legacy;
+    ASSERT_TRUE(de_cooked_clip_parse(marked.data, marked.size, &view, NULL));
+    ASSERT_TRUE(de_cooked_clip_parse(plain.data, plain.size, &legacy, NULL));
+    EXPECT_EQ(de_canim_get_u32(marked.data + 4), 2u);
+    EXPECT_EQ(view.marker_count, 5u);
+    EXPECT_EQ(view.data_size, legacy.data_size);
+    for (u32 i = 0; i < 5; ++i) {
+        de_cooked_clip_marker marker = de_cooked_clip_get_marker(&view, i);
+        EXPECT_FLOAT_EQ(marker.time, (f32)i * .25f, 0);
+        EXPECT_EQ(marker.name.hash, de_name_from(i % 2 ? "R" : "L").hash);
+    }
+    EXPECT_EQ(de_canim_get_u32(view.markers + 8), 0u); /* negative zero canonicalized */
+    for (u32 i = 0; i < view.track_count; ++i) {
+        de_cooked_clip_track a = de_cooked_clip_get_track(&legacy, i);
+        de_cooked_clip_track b = de_cooked_clip_get_track(&view, i);
+        for (u32 step = 0; step <= 64; ++step) {
+            f32 va[4] = {0}, vb[4] = {0};
+            de_cooked_clip_track_sample(&legacy, &a, (f32)step / 64, va);
+            de_cooked_clip_track_sample(&view, &b, (f32)step / 64, vb);
+            EXPECT_MEMEQ(va, vb, sizeof va);
+        }
+    }
+}
+TEST_F(clip, marker_authoring_rejects_invalid_array_time_name_and_duplicates, anim_fx) {
+    de_model_skeleton skel;
+    marker_source(f, &skel);
+    de_model_anim_settings settings;
+    de_model_anim_settings_default(&settings);
+    de_model_anim_marker markers[] = {{de_name_from("L"), 0}, {de_name_from("R"), .5f}};
+    settings.markers = markers;
+    settings.marker_count = 2;
+    de_model_buf buffer;
+    de_model_buf_init(&buffer, &f->ir);
+    const f32 bad_times[] = {-1, 1.01f, NAN, INFINITY, -INFINITY};
+    for (u32 i = 0; i < 5; ++i) {
+        markers[0].time = bad_times[i];
+        EXPECT_EQ(de_model_clip_write(&buffer, &f->ir, &f->ir.anims[0], &skel, 42, &settings, NULL),
+                  DE_ERR_INVALID_ARGUMENT);
+        EXPECT_EQ(buffer.size, 0u);
+    }
+    markers[0] = markers[1];
+    EXPECT_EQ(de_model_clip_write(&buffer, &f->ir, &f->ir.anims[0], &skel, 42, &settings, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    markers[0].name.hash = 0;
+    EXPECT_EQ(de_model_clip_write(&buffer, &f->ir, &f->ir.anims[0], &skel, 42, &settings, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    settings.markers = NULL;
+    EXPECT_EQ(de_model_clip_write(&buffer, &f->ir, &f->ir.anims[0], &skel, 42, &settings, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    settings.marker_count = DE_COOKED_CLIP_MAX_MARKERS + 1;
+    EXPECT_EQ(de_model_clip_write(&buffer, &f->ir, &f->ir.anims[0], &skel, 42, &settings, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(buffer.size, 0u);
+}
+TEST_F(clip, marker_parser_rejects_truncation_overlap_order_and_corrupt_records, anim_fx) {
+    de_model_skeleton skel;
+    marker_source(f, &skel);
+    de_model_anim_marker markers[] = {{de_name_from("L"), 0}, {de_name_from("R"), .5f}};
+    de_model_buf buffer;
+    marker_cook(f, &skel, markers, 2, &buffer);
+    de_cooked_clip_view view;
+    for (u64 n = 0; n < buffer.size; ++n)
+        EXPECT_FALSE(de_cooked_clip_parse(buffer.data, n, &view, NULL));
+    u32 offset = de_canim_get_u32(buffer.data + 64);
+    const u32 fields[] = {4,          64,         64,          64,         68,
+                          68,         72,         offset,      offset + 4, offset + 8,
+                          offset + 8, offset + 8, offset + 12, offset + 24};
+    const u32 values[] = {3, 80, offset + 1, UINT32_MAX, 0,          UINT32_MAX, 1,
+                          0, 0,  0x7FC00000, 0x7F800000, 0xBF800000, 1,          0x40000000};
+    for (u32 i = 0; i < sizeof fields / sizeof fields[0]; ++i) {
+        u32 old = de_canim_get_u32(buffer.data + fields[i]);
+        /* A zero low hash word alone need not invalidate a hash; clear the high word too. */
+        u32 high = de_canim_get_u32(buffer.data + offset + 4);
+        if (i == 7 || i == 8) {
+            de_model_buf_patch_u32(&buffer, offset, 0);
+            de_model_buf_patch_u32(&buffer, offset + 4, 0);
+        } else
+            de_model_buf_patch_u32(&buffer, fields[i], values[i]);
+        EXPECT_FALSE(de_cooked_clip_parse(buffer.data, buffer.size, &view, NULL));
+        EXPECT_TRUE(view.base == NULL);
+        EXPECT_EQ(view.marker_count, 0u);
+        if (i == 7 || i == 8) {
+            de_model_buf_patch_u32(&buffer, offset, (u32)markers[0].name.hash);
+            de_model_buf_patch_u32(&buffer, offset + 4, high);
+        } else
+            de_model_buf_patch_u32(&buffer, fields[i], old);
+        ASSERT_TRUE(de_cooked_clip_parse(buffer.data, buffer.size, &view, NULL));
+    }
+    /* Two names may share a time, but must be ordered by unsigned hash. */
+    de_model_buf_patch_u32(&buffer, offset + 24, 0);
+    u64 first =
+        markers[0].name.hash < markers[1].name.hash ? markers[0].name.hash : markers[1].name.hash;
+    u64 second =
+        markers[0].name.hash > markers[1].name.hash ? markers[0].name.hash : markers[1].name.hash;
+    for (u32 i = 0; i < 2; ++i) {
+        u64 name = i ? second : first;
+        de_model_buf_patch_u32(&buffer, offset + i * 16, (u32)name);
+        de_model_buf_patch_u32(&buffer, offset + i * 16 + 4, (u32)(name >> 32));
+    }
+    ASSERT_TRUE(de_cooked_clip_parse(buffer.data, buffer.size, &view, NULL));
+    de_model_buf_patch_u32(&buffer, offset + 16, (u32)first);
+    de_model_buf_patch_u32(&buffer, offset + 20, (u32)(first >> 32));
+    EXPECT_FALSE(de_cooked_clip_parse(buffer.data, buffer.size, &view, NULL));
+}
+
+TEST(clip, marker_cook_allocation_failures_drain_owned_ir_blocks) {
+    bool completed = false;
+    for (i64 boundary = 0; boundary < 256; ++boundary) {
+        anim_fx f = {0};
+        anim_fx_setup(&f);
+        de_model_skeleton skel;
+        marker_source(&f, &skel);
+        de_model_anim_marker markers[] = {{de_name_from("L"), .5f}, {de_name_from("R"), .25f}};
+        de_model_anim_settings settings;
+        de_model_anim_settings_default(&settings);
+        settings.markers = markers;
+        settings.marker_count = 2;
+        de_model_buf buffer;
+        de_model_buf_init(&buffer, &f.ir);
+        de_tracking_allocator_fail_after(&f.track, boundary);
+        de_result result =
+            de_model_clip_write(&buffer, &f.ir, &f.ir.anims[0], &skel, 42, &settings, NULL);
+        de_tracking_allocator_fail_after(&f.track, -1);
+        if (result == DE_OK) {
+            de_cooked_clip_view view;
+            ASSERT_TRUE(de_cooked_clip_parse(buffer.data, buffer.size, &view, NULL));
+            EXPECT_EQ(view.marker_count, 2u);
+            EXPECT_GT(boundary, 0);
+            completed = true;
+        } else
+            EXPECT_EQ(result, DE_ERR_OUT_OF_MEMORY);
+        de_error_clear();
+        anim_fx_teardown(&f);
+        if (completed)
+            break;
+    }
+    EXPECT_TRUE(completed);
+}
