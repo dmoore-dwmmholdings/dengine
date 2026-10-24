@@ -316,15 +316,12 @@ typedef id (^make_fn)(MTLPipelineOption opts, MTLAutoreleasedRenderPipelineRefle
 
 /* Makes a pipeline state through `make`, from the archive when it has it (`descriptor` names the
  * archive in binaryArchives); a miss compiles the pipeline into the archive first. */
-static id make_state(de_gpu_device *d, id descriptor, bool archive_ok, make_fn make,
-                     MTLAutoreleasedRenderPipelineReflection *rr,
-                     MTLAutoreleasedComputePipelineReflection *cr, NSError **err, bool *hit) {
+static id make_state_options(de_gpu_device *d, id descriptor, bool archive_ok,
+                             MTLPipelineOption opts, make_fn make,
+                             MTLAutoreleasedRenderPipelineReflection *rr,
+                             MTLAutoreleasedComputePipelineReflection *cr, NSError **err,
+                             bool *hit) {
     const u64 t0 = de_time_now_ns();
-    /* MTLPipelineOptionBindingInfo (1 << 0): spelled as the value, because the macOS 14 SDK (CI's
-     * Xcode 15.4) only has its deprecated name, MTLPipelineOptionArgumentInfo. */
-    /* push_scan reads bufferStructType to validate member coverage. BindingInfo alone can
-     * return no reflection for an atlas-style kernel on native Metal, dropping its push binding. */
-    const MTLPipelineOption opts = (MTLPipelineOption)((1u << 0) | MTLPipelineOptionBufferTypeInfo);
     const MTLPipelineOption from_archive = opts | MTLPipelineOptionFailOnBinaryArchiveMiss;
     const bool archived = archive_ok && de__mtl_archive_list(d) != NULL;
     id state = nil;
@@ -346,6 +343,40 @@ static id make_state(de_gpu_device *d, id descriptor, bool archive_ok, make_fn m
     de_mutex_lock(&m->archive_lock);
     m->pipeline_ns += de_time_now_ns() - t0;
     de_mutex_unlock(&m->archive_lock);
+    return state;
+}
+
+/* BindingInfo and BufferTypeInfo expose different native-driver failures under shader
+ * instrumentation: full type reflection can omit a mesh stage, whereas binding-only reflection
+ * can omit an atlas-style compute block. Start with bindings, upgrading only a missing push
+ * binding. Both attempts retain the archive path and validate actual reflected stages/sizes;
+ * do not guess a stage mask or silently disable the mesh path. */
+static id make_state(de_gpu_device *d, const de__gpu_pipeline *p, id descriptor, bool archive_ok,
+                     make_fn make, MTLAutoreleasedRenderPipelineReflection *rr,
+                     MTLAutoreleasedComputePipelineReflection *cr, NSError **err, bool *hit) {
+    /* BindingInfo's value: the macOS 14 SDK only spells it ArgumentInfo (deprecated). */
+    const MTLPipelineOption bindings = (MTLPipelineOption)(1u << 0);
+    id state = make_state_options(d, descriptor, archive_ok, bindings, make, rr, cr, err, hit);
+    if (state == nil || p->push_constant_bytes == 0)
+        return state;
+    push_info pi = {0};
+    if (rr && *rr) {
+        push_scan(&pi, (*rr).vertexBindings, DE__MTL_PUSH_VERTEX, "vs");
+        push_scan(&pi, (*rr).fragmentBindings, DE__MTL_PUSH_FRAGMENT, "ps");
+        push_scan(&pi, (*rr).objectBindings, DE__MTL_PUSH_OBJECT, "as");
+        push_scan(&pi, (*rr).meshBindings, DE__MTL_PUSH_MESH, "ms");
+    }
+    if (cr && *cr)
+        push_scan(&pi, (*cr).bindings, DE__MTL_PUSH_COMPUTE, "cs");
+    if (pi.stages == 0) {
+        if (rr)
+            *rr = nil;
+        if (cr)
+            *cr = nil;
+        state =
+            make_state_options(d, descriptor, archive_ok,
+                               bindings | MTLPipelineOptionBufferTypeInfo, make, rr, cr, err, hit);
+    }
     return state;
 }
 
@@ -459,7 +490,7 @@ static de_result create_graphics(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipe
     NSError *err = nil;
     bool hit = false;
     id<MTLRenderPipelineState> st = make_state(
-        d, rd, true,
+        d, p, rd, true,
         ^id(MTLPipelineOption o, MTLAutoreleasedRenderPipelineReflection *rr,
             MTLAutoreleasedComputePipelineReflection *cr, NSError **e) {
           (void)cr;
@@ -526,7 +557,7 @@ static de_result create_mesh(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipeline
         NSError *err = nil;
         bool hit = false;
         id<MTLRenderPipelineState> st = make_state(
-            d, rd, archive_ok,
+            d, p, rd, archive_ok,
             ^id(MTLPipelineOption o, MTLAutoreleasedRenderPipelineReflection *rr,
                 MTLAutoreleasedComputePipelineReflection *cr, NSError **e) {
               (void)cr;
@@ -589,7 +620,7 @@ static de_result create_compute(de_gpu_device *d, de__gpu_pipeline *p, mtl_pipel
     NSError *err = nil;
     bool hit = false;
     id<MTLComputePipelineState> st = make_state(
-        d, cd, true,
+        d, p, cd, true,
         ^id(MTLPipelineOption o, MTLAutoreleasedRenderPipelineReflection *rr,
             MTLAutoreleasedComputePipelineReflection *cr, NSError **e) {
           (void)rr;
