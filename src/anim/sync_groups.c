@@ -341,8 +341,7 @@ static de_component state_component(de_world *world, u32 count, bool create) {
     de_type_registry *types = de_world_types(world);
     if (component.id) {
         const de_type_desc *existing = de_type_get(types, de_type_find(types, name));
-        u32 bytes =
-            (u32)(offsetof(de__anim_sync_state, clocks) + 2u * count * sizeof(de__anim_sync_clock));
+        u32 bytes = (u32)(sizeof(de__anim_sync_state) + 2u * count * sizeof(de__anim_sync_clock));
         if (!existing || existing->size != bytes ||
             existing->align != DE_ALIGNOF(de__anim_sync_state) || existing->version != 1) {
             (void)DE_FAIL(DE_ERR_ALREADY_EXISTS, "animation sync state reflection conflict");
@@ -368,18 +367,18 @@ static de_component state_component(de_world *world, u32 count, bool create) {
         DE_FIELD(de__anim_sync_state, visual_valid, DE_FK_BOOL, flags),
         {.name = "clocks",
          .kind = DE_FK_FIXED_ARRAY,
-         .offset = offsetof(de__anim_sync_state, clocks),
+         .offset = sizeof(de__anim_sync_state),
          .size = 2u * count * sizeof(de__anim_sync_clock),
          .flags = flags,
          .attrs = {.nested_type = "de__anim_sync_clock", .array_count = 2u * count}}};
-    de_type_desc desc = {.name = name,
-                         .size = (u32)(offsetof(de__anim_sync_state, clocks) +
-                                       2u * count * sizeof(de__anim_sync_clock)),
-                         .align = DE_ALIGNOF(de__anim_sync_state),
-                         .version = 1,
-                         .fields = fields,
-                         .field_count = 4,
-                         .is_pod = true};
+    de_type_desc desc = {
+        .name = name,
+        .size = (u32)(sizeof(de__anim_sync_state) + 2u * count * sizeof(de__anim_sync_clock)),
+        .align = DE_ALIGNOF(de__anim_sync_state),
+        .version = 1,
+        .fields = fields,
+        .field_count = 4,
+        .is_pod = true};
     de_type_id type = sync_type(types, &desc);
     return type.id ? de_component_register(world, type, DE_COMP_SNAPSHOT) : (de_component){0};
 }
@@ -451,8 +450,7 @@ bool de__anim_graph_sync_prepare(de_anim_system *s, de_entity entity) {
     dst->count = count;
     de__anim_sync_state *state = de_entity_get(s->world, entity, next);
     if (state->definition != g->definition_hash) {
-        memset(state, 0,
-               offsetof(de__anim_sync_state, clocks) + 2u * count * sizeof(de__anim_sync_clock));
+        memset(state, 0, sizeof(de__anim_sync_state) + 2u * count * sizeof(de__anim_sync_clock));
         state->definition = g->definition_hash;
     }
     g->sync_component = next;
@@ -472,7 +470,7 @@ u64 de__anim_graph_sync_hash(const de_anim_system *s, de_entity entity, const de
     hash = de_hash64(&state->fixed_valid, sizeof state->fixed_valid, hash);
     hash = de_hash64(&state->visual_valid, sizeof state->visual_valid, hash);
     for (u32 i = 0; i < 2u * g->sync_count; ++i) {
-        const de__anim_sync_clock *c = &state->clocks[i];
+        const de__anim_sync_clock *c = &de__anim_sync_clocks_const(state)[i];
         hash = de_hash64(&c->group.hash, sizeof c->group.hash, hash);
         hash = de_hash64(&c->time, sizeof c->time, hash);
         hash = de_hash64(&c->phase, sizeof c->phase, hash);

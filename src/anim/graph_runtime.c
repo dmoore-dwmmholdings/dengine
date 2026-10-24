@@ -537,7 +537,7 @@ bool de__anim_graph_evaluate(de_anim_system *s, de__anim_entry *e) {
     de__anim_sync_clock *group_clocks = NULL;
     if (r->sync) {
         de__anim_sync_state *state = r->sync;
-        de__anim_sync_clock *fixed = state->clocks, *visual = fixed + g->sync_count;
+        de__anim_sync_clock *fixed = de__anim_sync_clocks(state), *visual = fixed + g->sync_count;
         bool reset = s->fixed_evaluation ? e->graph_sync_seek : false;
         if (s->fixed_evaluation) {
             if (!state->fixed_valid && state->visual_valid) {
@@ -610,7 +610,7 @@ static de_quat mix_rotation(const de__anim_local_pose *const *poses, const f32 *
     de_quat sum = {0};
     for (u32 i = 0; i < count; ++i) {
         de_quat q = root ? poses[i]->root_rotation : poses[i]->rotations[joint];
-        f32 sign = first.x * q.x + first.y * q.y + first.z * q.z + first.w * q.w < 0 ? -1 : 1;
+        f32 sign = first.x * q.x + first.y * q.y + first.z * q.z + first.w * q.w < 0 ? -1.f : 1.f;
         f32 w = weights[i] * sign;
         sum.x += q.x * w;
         sum.y += q.y * w;

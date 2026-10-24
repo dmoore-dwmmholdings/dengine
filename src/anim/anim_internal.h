@@ -19,14 +19,14 @@ typedef struct de__anim_asset {
 } de__anim_asset;
 /* Immutable asset-owned sampling cache. Oversized clips retain compressed sampling. */
 typedef struct de__anim_prepared_track {
-    de_cooked_clip_track track;
-    const f32 *values;
+    u32 joint, channel, components, key_count;
+    const f32 *times, *values;
 } de__anim_prepared_track;
 typedef struct de__anim_prepared_clip {
     size_t bytes;
     const u8 *base;
     u32 track_count;
-    de__anim_prepared_track tracks[];
+    const de__anim_prepared_track *tracks;
 } de__anim_prepared_clip;
 bool de__anim_prepare_clip(const de_allocator *, const de_cooked_clip_view *,
                            de__anim_prepared_clip **);

@@ -39,12 +39,23 @@ typedef struct de__anim_sync_clock {
     bool initialized;
 } de__anim_sync_clock;
 /* Two banks of group clocks: fixed followed by visual. Reflected component size
- * is offsetof(clocks) + 2 * group_count * sizeof(clock), not a maximum array. */
+ * is sizeof(header) + 2 * group_count * sizeof(clock), not a maximum array.
+ * Explicit trailing storage avoids MSVC C4200 without changing snapshot layout. */
 typedef struct de__anim_sync_state {
     u64 definition;
     bool fixed_valid, visual_valid;
-    de__anim_sync_clock clocks[];
 } de__anim_sync_state;
+DE_STATIC_ASSERT(sizeof(de__anim_sync_state) % DE_ALIGNOF(de__anim_sync_clock) == 0,
+                 "sync state header must align trailing clock banks");
+DE_STATIC_ASSERT(DE_ALIGNOF(de__anim_sync_state) >= DE_ALIGNOF(de__anim_sync_clock),
+                 "sync state allocation must align trailing clock banks");
+static inline de__anim_sync_clock *de__anim_sync_clocks(de__anim_sync_state *state) {
+    return (de__anim_sync_clock *)(state + 1);
+}
+static inline const de__anim_sync_clock *
+de__anim_sync_clocks_const(const de__anim_sync_state *state) {
+    return (const de__anim_sync_clock *)(state + 1);
+}
 /* Highest demand above 1e-4 leads; exact ties choose the lowest graph node.
  * A leader change preserves phase and uses the new rate for this interval.
  * No active leader freezes phase while consuming elapsed time. Reset/first use

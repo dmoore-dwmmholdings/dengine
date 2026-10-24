@@ -461,3 +461,50 @@ TEST_F(anim, prepared_asset_residency_counts_shared_cache_once, anim_fixture) {
     EXPECT_TRUE(de__anim_asset_get(f->anim, f->clip.id, "anim_clip")->prepared == cache);
     EXPECT_EQ(slot->bytes, asset->bytes + cache->bytes);
 }
+
+TEST_F(anim, prepared_sampling_rejects_invalid_shapes_without_partial_output, anim_fixture) {
+    load_assets(f, 3);
+    const de__anim_asset *asset = de__anim_asset_get(f->anim, f->clip.id, "anim_clip");
+    const de__anim_asset *skeleton = de__anim_asset_get(f->anim, f->skeleton.id, "skeleton");
+    ASSERT_TRUE(asset && asset->prepared && skeleton);
+    de_quat rotations[3];
+    de_vec3 translations[3], scales[3];
+    memset(rotations, 0xa5, sizeof rotations);
+    memset(translations, 0xa5, sizeof translations);
+    memset(scales, 0xa5, sizeof scales);
+    u8 expected_rotations[sizeof rotations], expected_translations[sizeof translations],
+        expected_scales[sizeof scales];
+    memcpy(expected_rotations, rotations, sizeof rotations);
+    memcpy(expected_translations, translations, sizeof translations);
+    memcpy(expected_scales, scales, sizeof scales);
+    u32 keys[3] = {2, 3, 4};
+    de__anim_clip_cursor cursor = {.keys = keys, .capacity = 3};
+    de__anim_local_pose pose = {
+        .count = 3, .rotations = rotations, .translations = translations, .scales = scales};
+    de__anim_local_pose bad = pose;
+    bad.count = 2;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &bad, &cursor));
+    bad = pose;
+    bad.scales = NULL;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &bad, &cursor));
+    cursor.capacity = 2;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &pose, &cursor));
+    cursor.capacity = 3;
+    cursor.keys = NULL;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &pose, &cursor));
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          NULL, &cursor));
+    EXPECT_FALSE(
+        de__anim_sample_prepared(NULL, asset->prepared, &skeleton->skeleton, .3f, &pose, &cursor));
+    EXPECT_TRUE(memcmp(rotations, expected_rotations, sizeof rotations) == 0);
+    EXPECT_TRUE(memcmp(translations, expected_translations, sizeof translations) == 0);
+    EXPECT_TRUE(memcmp(scales, expected_scales, sizeof scales) == 0);
+    EXPECT_TRUE(keys[0] == 2 && keys[1] == 3 && keys[2] == 4);
+    EXPECT_FALSE(cursor.valid);
+    EXPECT_EQ(cursor.binary_searches, 0u);
+    EXPECT_EQ(cursor.forward_steps, 0u);
+}

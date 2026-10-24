@@ -61,11 +61,11 @@ TEST_F(anim_graph_sync, visual_leaf_sampling_and_continuous_leader_changes, anim
     anim_frame(f, 0);
     EXPECT_FLOAT_EQ(bone_x(f, entity), .5f, 1e-6f);
     de__anim_sync_state *state = sync_state(f, entity, graph);
-    EXPECT_EQ(state->clocks[1].leader, 0u);
+    EXPECT_EQ(de__anim_sync_clocks(state)[1].leader, 0u);
     de_anim_set_float(f->world, entity, de_name_from("blend"), .75f);
     anim_frame(f, 0);
     EXPECT_FLOAT_EQ(bone_x(f, entity), .5f, 1e-6f);
-    EXPECT_EQ(sync_state(f, entity, graph)->clocks[1].leader, 1u);
+    EXPECT_EQ(de__anim_sync_clocks(sync_state(f, entity, graph))[1].leader, 1u);
     DeAnimator *a = de_entity_get(f->world, entity, f->anim->component);
     a->playing = true;
     anim_frame(f, .125f);
@@ -178,7 +178,7 @@ TEST_F(anim_graph_sync,
     }
     u64 hash = de_anim_checksum(f->world);
     de__anim_sync_state *state = sync_state(f, entity, graph);
-    state->clocks[0].phase += .125;
+    de__anim_sync_clocks(state)[0].phase += .125;
     EXPECT_NE(de_anim_checksum(f->world), hash);
     de_world_snapshot_free(&f->allocator, &snapshot);
 }
@@ -424,10 +424,10 @@ TEST_F(anim_graph_sync, actual_marker_poses_align_different_foot_times_and_keep_
     anim_frame(f, 0);
     /* At walk's R=.5, run must sample its R=.15, not normalized time .3. */
     EXPECT_FLOAT_EQ(bone_x(f, entity), .75f, 2e-6f);
-    f64 phase = sync_state(f, entity, graph)->clocks[1].phase;
+    f64 phase = de__anim_sync_clocks(sync_state(f, entity, graph))[1].phase;
     de_anim_set_float(f->world, entity, de_name_from("blend"), 1);
     anim_frame(f, 0);
-    EXPECT_FLOAT_EQ(sync_state(f, entity, graph)->clocks[1].phase, phase, 0);
+    EXPECT_FLOAT_EQ(de__anim_sync_clocks(sync_state(f, entity, graph))[1].phase, phase, 0);
     EXPECT_FLOAT_EQ(bone_x(f, entity), .5f, 2e-6f);
     DeAnimator *actor = de_entity_get(f->world, entity, f->anim->component);
     actor->playing = true;
@@ -560,7 +560,7 @@ TEST(anim_graph_sync, reference_selection_skips_orphan_and_prefers_richer_shared
         de_entity entity = sync_actor(&f, graph, false, .5f);
         anim_frame(&f, 0);
         EXPECT_FLOAT_EQ(bone_x(&f, entity), .75f, 3e-6f);
-        EXPECT_FLOAT_EQ(sync_state(&f, entity, graph)->clocks[1].phase, .5, 0);
+        EXPECT_FLOAT_EQ(de__anim_sync_clocks(sync_state(&f, entity, graph))[1].phase, .5, 0);
         EXPECT_EQ(f.anim->entries[de_entity_index(entity)].graph_samples, 2u);
         anim_fixture_teardown(&f);
     }
