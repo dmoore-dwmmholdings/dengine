@@ -51,10 +51,10 @@ DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
 #define DE_MODEL_IMPORTER_VERSION                                                                  \
-    6u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104); 4: faster clip key           \
+    7u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104); 4: faster clip key           \
           reduction and check passes (DENG-399); 5: the prefab keeps DeMeshRenderer where the      \
           render components are registered (DENG-178), so older cached prefabs are not reused;     \
-          6: materials are DMAT v2 (DENG-302) */
+          6: materials are DMAT v2 (DENG-302); 7: optional named clip markers (DENG-182) */
 
 /** Default of the `max_decoded_mib` setting (DENG-106) and its largest value (1 TiB). */
 #define DE_MODEL_MAX_DECODED_MIB_DEFAULT 1024

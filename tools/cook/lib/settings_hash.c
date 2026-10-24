@@ -25,6 +25,7 @@ enum {
     TAG_STRING = 4,
     TAG_STRING_ARRAY = 5,
     TAG_ARRAY = 6,
+    TAG_TABLE = 7,
     SETTINGS_HASH_VERSION = 1
 };
 
@@ -88,6 +89,30 @@ static void put_value(XXH3_state_t *st, const de__manifest_value *v) {
         for (u32 i = 0; i < v->u.values.count; ++i)
             put_value(st, &v->u.values.items[i]);
         break;
+    case DE__MANIFEST_TABLE: {
+        put_u8(st, TAG_TABLE);
+        put_u32(st, v->u.table.count);
+        /* External callers may supply unsorted views. Select (key,index) order
+         * without mutating borrowed storage or allocating hash scratch. */
+        u32 last = UINT32_MAX;
+        for (u32 done = 0; done < v->u.table.count; ++done) {
+            u32 pick = UINT32_MAX;
+            for (u32 i = 0; i < v->u.table.count; ++i) {
+                int after =
+                    last == UINT32_MAX ? 1 : strcmp(v->u.table.keys[i], v->u.table.keys[last]);
+                if (last != UINT32_MAX && (after < 0 || (after == 0 && i <= last)))
+                    continue;
+                int order =
+                    pick == UINT32_MAX ? -1 : strcmp(v->u.table.keys[i], v->u.table.keys[pick]);
+                if (pick == UINT32_MAX || order < 0 || (order == 0 && i < pick))
+                    pick = i;
+            }
+            put_str(st, v->u.table.keys[pick]);
+            put_value(st, &v->u.table.items[pick]);
+            last = pick;
+        }
+        break;
+    }
     default:
         /* Not a manifest type: hash the raw tag so it still changes the hash. */
         put_u8(st, (u8)(0x80u | ((u32)v->type & 0x7Fu)));

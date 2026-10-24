@@ -56,6 +56,12 @@ static u64 value_hash(u64 h, const de__manifest_value *value) {
         for (u32 i = 0; i < value->u.values.count; ++i)
             h = value_hash(h, &value->u.values.items[i]);
         return h;
+    case DE__MANIFEST_TABLE:
+        /* Parsed table keys have canonical bytewise order. */
+        h = mix_u64(h, value->u.table.count);
+        for (u32 i = 0; i < value->u.table.count; ++i)
+            h = value_hash(mix_str(h, value->u.table.keys[i]), &value->u.table.items[i]);
+        return h;
     }
     return h;
 }

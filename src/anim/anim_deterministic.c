@@ -26,10 +26,18 @@ static void evaluate_chunk(const de_query_chunk *chunk, void *user) {
             if (e->visual_playing == a->playing)
                 a->playing = clock->playing;
         }
-        de__anim_clock_step(clock, a, s->dt, e->clip.duration, e->clip_key, seek, &e->ended);
         e->visual_output = false;
-        e->ready =
-            de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor);
+        if (a->graph.id) {
+            e->graph_sync_input_time = a->time;
+            e->graph_sync_seek = clock->initialized && seek;
+            de__anim_graph_clock_step(clock, a, s->dt, e->clip_key, seek);
+            e->ended = false;
+            e->ready = de__anim_graph_evaluate(s, e);
+        } else {
+            de__anim_clock_step(clock, a, s->dt, e->clip.duration, e->clip_key, seek, &e->ended);
+            e->ready =
+                de__anim_sample_pose_cached(&e->clip, &e->skeleton, a->time, &e->local, &e->cursor);
+        }
     }
 }
 static void finalize_range(u32 begin, u32 end, void *user) {
@@ -53,8 +61,11 @@ static void evaluate(de_system_ctx *ctx) {
     /* The world's range scheduler carries the deterministic FP environment to
      * workers. The fixed grain is part of the simulation contract. */
     de_query_par_each(ctx->world, ctx->queries[0], 32, evaluate_chunk, s);
-    for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage <= DE_ANIM_STAGE_ROOT_MOTION; ++stage)
+    for (de__anim_stage stage = DE_ANIM_STAGE_SAMPLE; stage <= DE_ANIM_STAGE_ROOT_MOTION; ++stage) {
+        if (stage == DE_ANIM_STAGE_BLEND)
+            de__anim_graph_blend(s);
         de__anim_run_stage(s, stage);
+    }
     if (s->tasks && s->tasks == de_world_task_system(ctx->world))
         de_task_parallel_for(s->tasks, s->job_count, 32, finalize_range, s);
     else
@@ -73,6 +84,7 @@ static void evaluate(de_system_ctx *ctx) {
         }
     }
     de__anim_run_stage(s, DE_ANIM_STAGE_FINALIZE);
+    de__anim_graph_params_install(ctx);
 }
 
 bool de__anim_fixed_pose_valid(const de_anim_system *s, const de__anim_entry *e) {
@@ -91,7 +103,8 @@ bool de__anim_fixed_pose_valid(const de_anim_system *s, const de__anim_entry *e)
     }
     return a && clock && clock->initialized && e->clock_known &&
            clock->pose_hash == e->fixed_pose_hash && a->time == clock->output_time &&
-           a->skeleton.id == e->skeleton_handle && a->clip.id == e->clip_handle;
+           a->skeleton.id == e->skeleton_handle && a->clip.id == e->clip_handle &&
+           a->graph.id == e->graph_handle;
 }
 
 de_result de__anim_deterministic_init(de_anim_system *s, de_world *w) {

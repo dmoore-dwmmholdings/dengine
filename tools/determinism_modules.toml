@@ -128,3 +128,26 @@ module = "anim"
 [[source]]
 path = "src/anim/pose_deterministic.c"
 module = "anim"
+[[source]]
+path = "src/anim/blend.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/blend_tree.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/graph_eval.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/anim_params.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/graph_runtime.c"
+module = "anim"
+
+[[source]]
+path = "src/anim/sync_groups.c"
+module = "anim"

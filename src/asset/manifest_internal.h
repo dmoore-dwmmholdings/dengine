@@ -44,6 +44,7 @@ typedef de_asset_setting_value de__manifest_value;
 #define DE__MANIFEST_STRING       DE_ASSET_SETTING_STRING
 #define DE__MANIFEST_STRING_ARRAY DE_ASSET_SETTING_STRING_ARRAY
 #define DE__MANIFEST_ARRAY        DE_ASSET_SETTING_ARRAY
+#define DE__MANIFEST_TABLE        DE_ASSET_SETTING_TABLE
 
 /** One importer setting. */
 typedef struct de__manifest_kv {

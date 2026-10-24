@@ -322,3 +322,189 @@ TEST_F(anim, published_clip_reload_invalidates_key_intervals, anim_reload_fixtur
     free(dense.data);
 }
 #endif
+
+/* Compare against the independent compressed reference, including exact cursor
+ * accounting. One-joint clips cover complete tracks; three joints retain rest. */
+TEST_F(anim, prepared_keys_match_compressed_samples_and_cursor, anim_fixture) {
+    for (u32 variant = 0; variant < 6; ++variant) {
+        u32 joints = variant & 1 ? 3 : 1;
+        anim_blob skeleton = skeleton_blob(joints);
+        anim_blob blob = variant < 2 ? clip_blob(joints) : dense_clip_blob(joints);
+        de_cooked_skeleton_view skel;
+        de_cooked_clip_view clip;
+        ASSERT_TRUE(de_cooked_skeleton_parse(skeleton.data, skeleton.bytes, &skel, NULL));
+        ASSERT_TRUE(de_cooked_clip_parse(blob.data, blob.bytes, &clip, NULL));
+        if (variant == 4) {
+            /* Constant T/R/S, including rotation, preserve authored key bits. */
+            for (u32 i = 0; i < clip.track_count; ++i) {
+                de_cooked_clip_track track = de_cooked_clip_get_track(&clip, i);
+                u8 *record = blob.data + 80 + i * 16;
+                record[3] = DE_COOKED_CLIP_ENC_CONST;
+                de_cooked_put_u32(record + 8, 1);
+                de_cooked_put_u32(record + 12, (u32)(track.values - clip.data));
+            }
+            ASSERT_TRUE(de_cooked_clip_parse(blob.data, blob.bytes, &clip, NULL));
+        } else if (variant == 5) {
+            /* Nonuniform scale covers all three output components. */
+            u32 old_bytes = blob.bytes;
+            blob.bytes += 8;
+            blob.data = realloc(blob.data, blob.bytes);
+            ASSERT_TRUE(blob.data);
+            de_cooked_put_u32(blob.data + 48, (u32)clip.data_size + 8);
+            de_cooked_put_u32(blob.data + 52, blob.bytes);
+            blob.data[80 + 32 + 4] = 3;
+            blob.data[80 + 32 + 5] = 0;
+            de_cooked_put_f32(blob.data + old_bytes, 2);
+            de_cooked_put_f32(blob.data + old_bytes + 4, 3);
+            ASSERT_TRUE(de_cooked_clip_parse(blob.data, blob.bytes, &clip, NULL));
+        }
+        de__anim_prepared_clip *prepared = NULL;
+        ASSERT_TRUE(de__anim_prepare_clip(&f->allocator, &clip, &prepared));
+        ASSERT_TRUE(prepared);
+        EXPECT_TRUE(prepared->base == clip.base);
+        u32 keys[3] = {0}, reference_keys[3] = {0};
+        de__anim_clip_cursor cursor = {.keys = keys, .capacity = 3};
+        de__anim_clip_cursor reference_cursor = {.keys = reference_keys, .capacity = 3};
+        de_quat rotations[3];
+        de_vec3 translations[3], scales[3];
+        de__anim_local_pose pose = {.count = joints,
+                                    .rotations = rotations,
+                                    .translations = translations,
+                                    .scales = scales};
+        de_cooked_joint_pose reference[3];
+        const f32 seeks[] = {.8f, .2f, .95f, .95f, .001f, 1, 0, -1, NAN, INFINITY};
+        de_alloc_guard guard = {0};
+        de_alloc_guard_begin(&guard);
+        for (u32 i = 0; i < 4107; ++i) {
+            f32 time = i <= 4096 ? (f32)i / 4096 : seeks[i - 4097];
+            memset(rotations, 0xa5, sizeof rotations);
+            memset(translations, 0xa5, sizeof translations);
+            memset(scales, 0xa5, sizeof scales);
+            ASSERT_TRUE(de__anim_sample_prepared(&clip, prepared, &skel, time, &pose, &cursor));
+            ASSERT_TRUE(de__anim_sample_cached(&clip, &skel, time, reference, &reference_cursor));
+            EXPECT_TRUE(pose_matches_reference(&pose, reference));
+            ASSERT_TRUE(de__anim_clip_sample(&clip, &skel, time, reference));
+            EXPECT_TRUE(pose_matches_reference(&pose, reference));
+            EXPECT_TRUE(memcmp(keys, reference_keys, sizeof keys) == 0);
+            EXPECT_EQ(cursor.binary_searches, reference_cursor.binary_searches);
+            EXPECT_EQ(cursor.forward_steps, reference_cursor.forward_steps);
+            EXPECT_TRUE(cursor.clip_base == reference_cursor.clip_base);
+            EXPECT_TRUE(cursor.time == reference_cursor.time && cursor.valid);
+            EXPECT_TRUE(pose.root_translation.x == 0 && pose.root_translation.y == 0 &&
+                        pose.root_translation.z == 0 && pose.root_rotation.x == 0 &&
+                        pose.root_rotation.y == 0 && pose.root_rotation.z == 0 &&
+                        pose.root_rotation.w == 1);
+        }
+        /* NULL cache exercises the production oversize fallback; foreign cache is rejected. */
+        ASSERT_TRUE(de__anim_sample_prepared(&clip, NULL, &skel, .3f, &pose, &cursor));
+        ASSERT_TRUE(de__anim_clip_sample(&clip, &skel, .3f, reference));
+        EXPECT_TRUE(pose_matches_reference(&pose, reference));
+        de_cooked_clip_view foreign = clip;
+        foreign.base = NULL;
+        EXPECT_FALSE(de__anim_sample_prepared(&foreign, prepared, &skel, .3f, &pose, &cursor));
+        de_alloc_guard_end(&guard);
+        DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+        DE_FREE(&f->allocator, prepared, prepared->bytes);
+        free(blob.data);
+        free(skeleton.data);
+    }
+}
+
+TEST_F(anim, prepared_cache_failure_and_large_shared_ranges_are_bounded, anim_fixture) {
+    anim_blob seed = dense_clip_blob(62000);
+    de_cooked_clip_view clip;
+    ASSERT_TRUE(de_cooked_clip_parse(seed.data, seed.bytes, &clip, NULL));
+    de__anim_prepared_clip *prepared = NULL;
+    u64 before = de_tracking_allocator_stats(&f->tracking).bytes_live;
+    de_tracking_allocator_fail_after(&f->tracking, 0);
+    EXPECT_FALSE(de__anim_prepare_clip(&f->allocator, &clip, &prepared));
+    de_tracking_allocator_fail_after(&f->tracking, -1);
+    EXPECT_FALSE(prepared);
+    EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).bytes_live, before);
+    /* Valid tracks may alias a raw key range: small source, >64MiB expansion. */
+    const u32 tracks = 62000, times = 80 + tracks * 16;
+    u32 data = aligned(times + clip.time_count * 4), size = data + (u32)clip.data_size;
+    anim_blob large = {calloc(1, size), size};
+    ASSERT_TRUE(large.data);
+    memcpy(large.data, seed.data, 80);
+    de_cooked_put_u32(large.data + 16, tracks);
+    de_cooked_put_u32(large.data + 40, times);
+    de_cooked_put_u32(large.data + 44, data);
+    de_cooked_put_u32(large.data + 52, size);
+    for (u32 i = 0; i < tracks; ++i) {
+        memcpy(large.data + 80 + i * 16, seed.data + 80, 16);
+        put_u16(large.data + 80 + i * 16, (u16)i);
+    }
+    memcpy(large.data + times, clip.times, clip.time_count * 4);
+    memcpy(large.data + data, clip.data, (size_t)clip.data_size);
+    ASSERT_TRUE(de_cooked_clip_parse(large.data, large.bytes, &clip, NULL));
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    EXPECT_TRUE(de__anim_prepare_clip(&f->allocator, &clip, &prepared));
+    EXPECT_FALSE(prepared);
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    free(large.data);
+    free(seed.data);
+}
+
+TEST_F(anim, prepared_asset_residency_counts_shared_cache_once, anim_fixture) {
+    load_assets(f, 3);
+    const de__anim_asset *asset = de__anim_asset_get(f->anim, f->clip.id, "anim_clip");
+    ASSERT_TRUE(asset && asset->prepared);
+    const de__slot *slot = de__slot_get(f->assets, f->clip.id);
+    EXPECT_EQ(slot->bytes, asset->bytes + asset->prepared->bytes);
+    const de__anim_prepared_clip *cache = asset->prepared;
+    for (u32 i = 0; i < 32; ++i)
+        spawn_animator(f);
+    anim_frame(f, .1f);
+    EXPECT_TRUE(de__anim_asset_get(f->anim, f->clip.id, "anim_clip")->prepared == cache);
+    EXPECT_EQ(slot->bytes, asset->bytes + cache->bytes);
+}
+
+TEST_F(anim, prepared_sampling_rejects_invalid_shapes_without_partial_output, anim_fixture) {
+    load_assets(f, 3);
+    const de__anim_asset *asset = de__anim_asset_get(f->anim, f->clip.id, "anim_clip");
+    const de__anim_asset *skeleton = de__anim_asset_get(f->anim, f->skeleton.id, "skeleton");
+    ASSERT_TRUE(asset && asset->prepared && skeleton);
+    de_quat rotations[3];
+    de_vec3 translations[3], scales[3];
+    memset(rotations, 0xa5, sizeof rotations);
+    memset(translations, 0xa5, sizeof translations);
+    memset(scales, 0xa5, sizeof scales);
+    u8 expected_rotations[sizeof rotations], expected_translations[sizeof translations],
+        expected_scales[sizeof scales];
+    memcpy(expected_rotations, rotations, sizeof rotations);
+    memcpy(expected_translations, translations, sizeof translations);
+    memcpy(expected_scales, scales, sizeof scales);
+    u32 keys[3] = {2, 3, 4};
+    de__anim_clip_cursor cursor = {.keys = keys, .capacity = 3};
+    de__anim_local_pose pose = {
+        .count = 3, .rotations = rotations, .translations = translations, .scales = scales};
+    de__anim_local_pose bad = pose;
+    bad.count = 2;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &bad, &cursor));
+    bad = pose;
+    bad.scales = NULL;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &bad, &cursor));
+    cursor.capacity = 2;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &pose, &cursor));
+    cursor.capacity = 3;
+    cursor.keys = NULL;
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          &pose, &cursor));
+    EXPECT_FALSE(de__anim_sample_prepared(&asset->clip, asset->prepared, &skeleton->skeleton, .3f,
+                                          NULL, &cursor));
+    EXPECT_FALSE(
+        de__anim_sample_prepared(NULL, asset->prepared, &skeleton->skeleton, .3f, &pose, &cursor));
+    EXPECT_TRUE(memcmp(rotations, expected_rotations, sizeof rotations) == 0);
+    EXPECT_TRUE(memcmp(translations, expected_translations, sizeof translations) == 0);
+    EXPECT_TRUE(memcmp(scales, expected_scales, sizeof scales) == 0);
+    EXPECT_TRUE(keys[0] == 2 && keys[1] == 3 && keys[2] == 4);
+    EXPECT_FALSE(cursor.valid);
+    EXPECT_EQ(cursor.binary_searches, 0u);
+    EXPECT_EQ(cursor.forward_steps, 0u);
+}

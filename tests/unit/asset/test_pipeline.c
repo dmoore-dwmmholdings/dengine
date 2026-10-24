@@ -73,7 +73,7 @@ typedef struct pt_obj {
     bool flag;
     char name[16];
     u32 tag_count;
-    bool nested_ok;
+    bool nested_ok, table_ok;
 } pt_obj;
 
 static const u8 *pt_bytes(const pt_obj *o) {
@@ -142,6 +142,19 @@ static de_result pt_load(de_asset_load_ctx *ctx) {
                        strcmp(tags->u.arr.items[1], "b") == 0 &&
                        de_asset_load_ctx_settings_value(ctx, "missing") == NULL;
     }
+    const de_asset_setting_value *table = de_asset_load_ctx_settings_value(ctx, "table");
+    o->table_ok = table && table->type == DE_ASSET_SETTING_TABLE && table->u.table.count == 3 &&
+                  strcmp(table->u.table.keys[0], "a") == 0 &&
+                  table->u.table.items[0].type == DE_ASSET_SETTING_STRING &&
+                  strcmp(table->u.table.items[0].u.s, "owned") == 0 &&
+                  strcmp(table->u.table.keys[1], "n") == 0 &&
+                  table->u.table.items[1].type == DE_ASSET_SETTING_TABLE &&
+                  strcmp(table->u.table.items[1].u.table.keys[0], "text") == 0 &&
+                  table->u.table.items[1].u.table.items[0].type == DE_ASSET_SETTING_STRING_ARRAY &&
+                  strcmp(table->u.table.items[1].u.table.items[0].u.arr.items[1], "b") == 0 &&
+                  strcmp(table->u.table.keys[2], "z") == 0 &&
+                  table->u.table.items[2].type == DE_ASSET_SETTING_ARRAY &&
+                  table->u.table.items[2].u.values.items[0].u.i == 256;
     if (n != 0)
         memcpy(o + 1, p, (size_t)n);
     de_asset_load_ctx_set_object(ctx, o, sizeof(pt_obj) + n);
@@ -1323,7 +1336,8 @@ TEST_F(pipeline, cook_ready_uncapped, pipe_fx) {
 TEST_F(pipeline, nested_settings_survive_manifest_replacement, pipe_fx) {
     put_text("nested.bin", "nested");
     install_manifest(f->s, "[assets.a]\ntype='pt'\nsource='nested.bin'\n"
-                           "nested=[[256,591],'owned',['a','b']]\n");
+                           "nested=[[256,591],'owned',['a','b']]\n"
+                           "table={z=[256,591],a='owned',n={text=['a','b']}}\n");
     de_atomic_store_u64(&f->c.gate_id, id_of("a").hash, DE_ATOMIC_RELEASE);
     de_atomic_store_u32(&f->c.gate_closed, 1, DE_ATOMIC_RELEASE);
     de_load_handle h = de_asset_load(f->s, id_of("a"), 0);
@@ -1336,5 +1350,6 @@ TEST_F(pipeline, nested_settings_survive_manifest_replacement, pipe_fx) {
     const pt_obj *o = obj_of(f, "a");
     ASSERT_TRUE(o != NULL);
     EXPECT_TRUE(o->nested_ok);
+    EXPECT_TRUE(o->table_ok);
     de_asset_release(f->s, h);
 }

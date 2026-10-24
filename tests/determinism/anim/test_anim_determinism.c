@@ -14,14 +14,16 @@
 #endif
 #include <errno.h>
 
-#define TICKS  1000u
-#define ACTORS 20u
-#define SEED   UINT64_C(0xd1925eed)
+#define TICKS        1000u
+#define ACTORS       20u
+#define GRAPH_ACTORS 96u
+#define SEED         UINT64_C(0xd1925eed)
 typedef struct scenario_state {
     de_asset_system *assets;
     de_anim_system *anim;
     de_load_handle loads[4];
-    de_entity actors[ACTORS];
+    de_entity actors[GRAPH_ACTORS];
+    de_anim_graph graph;
     de_anim_clip clips[3];
     f32 weights[ACTORS];
     u64 seed;
@@ -60,7 +62,7 @@ static void blend(de_anim_system *anim, void *user) {
         }
     }
 }
-static de_result setup(de_world *world, u64 seed, void *user) {
+static de_result setup_common(de_world *world, u64 seed, void *user, bool graph) {
     scenario_state *s = user;
     s->seed = seed;
     s->perturb_tick = UINT32_MAX;
@@ -99,6 +101,66 @@ static de_result setup(de_world *world, u64 seed, void *user) {
          * key-time and smallest-three rotations exercise the production decoder. */
         de_cooked_put_f32(clip.data + 28, 1.f + (f32)i * .5f);
         de_cooked_put_f32(clip.data + 136 + 12, 2.f + (f32)i);
+        if (graph) {
+            /* Animate every joint so masked layers and complete prepared tracks
+             * affect real output, instead of blending identical rest channels. */
+            anim_blob full = {calloc(1, clip.bytes + 96), clip.bytes + 96};
+            if (!full.data) {
+                free(clip.data);
+                return DE_ERR_OUT_OF_MEMORY;
+            }
+            memcpy(full.data, clip.data, 80);
+            for (u32 j = 0; j < 3; ++j)
+                for (u32 c = 0; c < 3; ++c) {
+                    u8 *record = full.data + 80 + (j * 3 + c) * 16;
+                    memcpy(record, clip.data + 80 + c * 16, 16);
+                    put_u16(record, (u16)j);
+                }
+            memcpy(full.data + 224, clip.data + 128, clip.bytes - 128);
+            de_cooked_put_u32(full.data + 16, 9);
+            de_cooked_put_u32(full.data + 40, 224);
+            de_cooked_put_u32(full.data + 44, 232);
+            de_cooked_put_u32(full.data + 52, full.bytes);
+            free(clip.data);
+            clip = full;
+            f32 duration = 1.f + (f32)i * .25f;
+            u32 offset = clip.bytes;
+            clip.bytes += 4 * DE_COOKED_CLIP_MARKER_SIZE;
+            u8 *expanded = realloc(clip.data, clip.bytes);
+            if (!expanded) {
+                free(clip.data);
+                return DE_ERR_OUT_OF_MEMORY;
+            }
+            clip.data = expanded;
+            memset(clip.data + offset, 0, clip.bytes - offset);
+            de_cooked_put_u32(clip.data + 4, DE_COOKED_CLIP_VERSION_MARKERS);
+            de_cooked_put_f32(clip.data + 32, duration);
+            de_cooked_put_f32(clip.data + de_canim_get_u32(clip.data + 40) + 4, duration);
+            de_cooked_put_u32(clip.data + 52, clip.bytes);
+            de_cooked_put_u32(clip.data + 64, offset);
+            de_cooked_put_u32(clip.data + 68, 4);
+            const char *extras[] = {"walk-extra", "run-extra", "nod-extra"};
+            de_cooked_clip_marker markers[] = {
+                {de_name_from("L"), 0},
+                {de_name_from("R"), duration * (.25f + (f32)i * .125f)},
+                {de_name_from("L"), duration},
+                {de_name_from(extras[i]), duration * .125f}};
+            for (u32 a = 1; a < 4; ++a) {
+                de_cooked_clip_marker m = markers[a];
+                u32 b = a;
+                while (b &&
+                       (markers[b - 1].time > m.time || (markers[b - 1].time == m.time &&
+                                                         markers[b - 1].name.hash > m.name.hash))) {
+                    markers[b] = markers[b - 1];
+                    --b;
+                }
+                markers[b] = m;
+            }
+            for (u32 m = 0; m < 4; ++m) {
+                de_cooked_put_u64(clip.data + offset + m * 16, markers[m].name.hash);
+                de_cooked_put_f32(clip.data + offset + m * 16 + 8, markers[m].time);
+            }
+        }
         char path[64];
         snprintf(path, sizeof path, "animdet:/clip%u.dclp", i);
         result = de_file_write_all_atomic(path, clip.data, clip.bytes);
@@ -120,7 +182,7 @@ static de_result setup(de_world *world, u64 seed, void *user) {
     for (u32 i = 0; i < 3; ++i)
         s->clips[i] = de_anim_clip_asset(s->anim, de_asset_id_from(names[i + 1]));
     de_skeleton skel = de_anim_skeleton(s->anim, de_asset_id_from(names[0]));
-    for (u32 i = 0; i < ACTORS; ++i) {
+    for (u32 i = 0; i < (graph ? GRAPH_ACTORS : ACTORS); ++i) {
         de_component component = de_anim_component(s->anim);
         DE_TRY(de_entity_spawn_with(world, &component, 1, &s->actors[i]));
         DeAnimator *a = de_entity_get(world, s->actors[i], component);
@@ -129,7 +191,10 @@ static de_result setup(de_world *world, u64 seed, void *user) {
         a->deterministic = true;
         a->time = (f32)i * .03125f;
     }
-    return de_anim__register_stage(s->anim, DE_ANIM_STAGE_BLEND, blend, s);
+    return graph ? DE_OK : de_anim__register_stage(s->anim, DE_ANIM_STAGE_BLEND, blend, s);
+}
+static de_result setup(de_world *world, u64 seed, void *user) {
+    return setup_common(world, seed, user, false);
 }
 static void script(de_world *world, u64 tick, void *user) {
     scenario_state *s = user;
@@ -266,5 +331,191 @@ TEST(anim_determinism, detects_pose_bit_change) {
     for (u32 tick = 0; tick < TICKS; ++tick)
         step(&session, &actual[tick]);
     EXPECT_EQ(de_det_report("one-bit sampled pose perturbation", expected, actual, TICKS), 400u);
+    de_det_session_end(&session);
+}
+
+/* Full programmatic graph, distinct from the unchanged foundation vector. */
+static void graph_probe(de_anim_system *anim, void *user) {
+    scenario_state *s = user;
+    ASSERT_EQ(anim->job_count, GRAPH_ACTORS);
+    for (u32 i = 0; i < anim->job_count; ++i) {
+        de__anim_entry *e = &anim->entries[anim->jobs[i]];
+        ASSERT_TRUE(e->ready && e->graph_samples > 0);
+        if (e->entity.bits == s->actors[3].bits && de_world_tick(anim->world) == s->perturb_tick) {
+            u32 bits;
+            memcpy(&bits, &e->local.translations[0].x, sizeof bits);
+            bits ^= 1u;
+            memcpy(&e->local.translations[0].x, &bits, sizeof bits);
+        }
+    }
+}
+static de_result setup_graph(de_world *world, u64 seed, void *user) {
+    DE_TRY(setup_common(world, seed, user, true));
+    scenario_state *s = user;
+    de_anim_param_desc params[] = {{.name = de_name_from("x")},
+                                   {.name = de_name_from("y")},
+                                   {.name = de_name_from("mix")},
+                                   {.name = de_name_from("add")},
+                                   {.name = de_name_from("armed"), .kind = DE_ANIM_PARAM_BOOL},
+                                   {.name = de_name_from("fire"), .kind = DE_ANIM_PARAM_TRIGGER}};
+    de_anim_node_desc nodes[7] = {0};
+    for (u32 i = 0; i < 3; ++i)
+        nodes[i] = (de_anim_node_desc){.kind = DE_ANIM_NODE_CLIP,
+                                       .data.clip = {.clip = s->clips[i],
+                                                     .speed = 1.f + (f32)i * .25f,
+                                                     .loop = true,
+                                                     .sync_group = de_name_from("locomotion")}};
+    de_anim_blend_point_desc line[] = {{{0, 0}, 0}, {{1, 0}, 1}};
+    de_anim_blend_point_desc triangle[] = {{{0, 0}, 0}, {{1, 0}, 1}, {{0, 1}, 2}};
+    nodes[3] = (de_anim_node_desc){
+        .kind = DE_ANIM_NODE_BLEND1D,
+        .data.blend = {.x_param = params[2].name, .points = line, .point_count = 2}};
+    nodes[4] = (de_anim_node_desc){.kind = DE_ANIM_NODE_BLEND2D,
+                                   .data.blend = {.x_param = params[0].name,
+                                                  .y_param = params[1].name,
+                                                  .points = triangle,
+                                                  .point_count = 3}};
+    nodes[5] = (de_anim_node_desc){
+        .kind = DE_ANIM_NODE_ADDITIVE,
+        .data.additive = {.base = 4, .input = 2, .weight_param = params[3].name}};
+    de_anim_bone_mask_desc mask = {de_name_from("joint1"), 1, true};
+    de_anim_layer_desc layers[] = {
+        {.node = 3, .weight = .375f, .root_weight = .5f, .mask = &mask, .mask_count = 1},
+        {.node = 2, .mode = DE_ANIM_LAYER_ADDITIVE, .weight = .125f, .root_weight = 1}};
+    nodes[6] = (de_anim_node_desc){.kind = DE_ANIM_NODE_LAYER,
+                                   .data.layer = {.base = 5, .layer_count = 2}};
+    DE_TRY(de_anim_graph_create(s->anim,
+                                &(de_anim_graph_desc){.params = params,
+                                                      .param_count = 6,
+                                                      .nodes = nodes,
+                                                      .node_count = 7,
+                                                      .output_node = 6,
+                                                      .layers = layers,
+                                                      .layer_count = 2},
+                                &s->graph));
+    for (u32 i = 0; i < GRAPH_ACTORS; ++i)
+        DE_TRY(de_anim_graph_bind(world, s->actors[i], s->graph));
+    return de_anim__register_stage(s->anim, DE_ANIM_STAGE_BLEND, graph_probe, s);
+}
+static void graph_script(de_world *world, u64 tick, void *user) {
+    scenario_state *s = user;
+    de_rng rng = de_rng_seed(s->seed, tick);
+    for (u32 i = 0; i < GRAPH_ACTORS; ++i) {
+        de_entity e = s->actors[i];
+        de_anim_set_float(world, e, de_name_from("x"), de_rng_f32(&rng) * 1.5f - .25f);
+        de_anim_set_float(world, e, de_name_from("y"), de_rng_f32(&rng) * 1.5f - .25f);
+        de_anim_set_float(world, e, de_name_from("mix"), de_rng_f32(&rng));
+        de_anim_set_float(world, e, de_name_from("add"), tick % 17 ? de_rng_f32(&rng) : 0);
+        de_anim_set_bool(world, e, de_name_from("armed"), (tick + i) % 3 != 0);
+        if ((tick + i) % 13 == 0)
+            de_anim_trigger(world, e, de_name_from("fire"));
+        DeAnimator *a = de_entity_get(world, e, de_anim_component(s->anim));
+        a->speed = (de_rng_f32(&rng) - .5f) * 6;
+        a->playing = (tick + i) % 23 != 0;
+        if ((tick + i) % 37 == 0)
+            a->time = (f32)((tick + i) % 31) * .03125f;
+    }
+}
+static const de_det_scenario graph_scenario = {.name = "anim_graph",
+                                               .setup = setup_graph,
+                                               .tick = graph_script,
+                                               .teardown = teardown,
+                                               .ticks = TICKS,
+                                               .state_size = sizeof(scenario_state)};
+static void graph_visual_frames(de_det_session *session, u32 tick) {
+    scenario_state *s = session->state;
+    for (u32 frame = 0; frame < tick % 4; ++frame) {
+        for (u32 i = 0; i < GRAPH_ACTORS; ++i) {
+            DeAnimator *a = de_entity_get(session->world, s->actors[i], de_anim_component(s->anim));
+            a->deterministic = false;
+        }
+        ASSERT_EQ(de_world_run_schedule(session->world, DE_SCHEDULE_UPDATE, .017f, 0), DE_OK);
+        ASSERT_EQ(de_world_run_schedule(session->world, DE_SCHEDULE_POST_UPDATE, .017f, 0), DE_OK);
+        for (u32 i = 0; i < GRAPH_ACTORS; ++i) {
+            DeAnimator *a = de_entity_get(session->world, s->actors[i], de_anim_component(s->anim));
+            a->deterministic = true;
+        }
+    }
+}
+static void graph_step(de_det_session *session, u64 *checksum) {
+    /* Programmatic graph handles are process-local. The public animation hash
+     * covers logical definitions, poses, parameters, clocks and sync banks.
+     * Full ECS snapshot hashes are compared separately within rollback sessions. */
+    ASSERT_EQ(de_det_session_step(session, NULL), DE_OK);
+    *checksum = de_anim_checksum(session->world);
+}
+static void verify_graph(u32 workers, bool visual) {
+    de_det_session session = {0};
+    ASSERT_EQ(de_det_session_begin(&session, &graph_scenario, SEED, workers), DE_OK);
+    u64 actual[TICKS], golden[TICKS];
+    for (u32 i = 0; i < TICKS; ++i) {
+        if (visual && i)
+            graph_visual_frames(&session, i);
+        graph_step(&session, &actual[i]);
+    }
+    de_det_session_end(&session);
+#if defined(DE_DEBUG) || defined(DE_DEV)
+    const char *update = getenv("DE_DET_UPDATE_GRAPH_GOLDEN");
+    if (update && !strcmp(update, "1") && workers == 1 && !visual)
+        ASSERT_EQ(de_det_write_checksums(DE_ANIM_GRAPH_GOLDEN, "anim_graph", SEED, actual, TICKS),
+                  DE_OK);
+#endif
+    u32 count = 0;
+    ASSERT_EQ(de_det_read_checksums(DE_ANIM_GRAPH_GOLDEN, golden, TICKS, &count), DE_OK);
+    ASSERT_EQ(count, TICKS);
+    EXPECT_EQ(de_det_report("graph vs arm64 vector", golden, actual, TICKS), DE_DET_NO_DIVERGENCE);
+    if (workers == 1 && !visual)
+        ASSERT_EQ(de_det_write_checksums(DE_DET_OUT_DIR "/anim_graph.checksums", "anim_graph", SEED,
+                                         actual, TICKS),
+                  DE_OK);
+}
+TEST(anim_graph_determinism, workers_1) {
+    verify_graph(1, false);
+}
+TEST(anim_graph_determinism, workers_4) {
+    verify_graph(4, false);
+}
+TEST(anim_graph_determinism, workers_8) {
+    verify_graph(8, false);
+}
+TEST(anim_graph_determinism, visual_cadence) {
+    verify_graph(4, true);
+}
+TEST(anim_graph_determinism, rollback_and_cadence) {
+    de_det_session session = {0};
+    ASSERT_EQ(de_det_session_begin(&session, &graph_scenario, SEED, 4), DE_OK);
+    u64 unused, expected[200], expected_world[200];
+    for (u32 i = 0; i < 400; ++i)
+        graph_step(&session, &unused);
+    de_world_snapshot snapshot = {0};
+    ASSERT_EQ(de_world_snapshot_take(session.world, NULL, &snapshot), DE_OK);
+    for (u32 i = 0; i < 200; ++i) {
+        graph_step(&session, &expected[i]);
+        expected_world[i] = de_world_checksum(session.world, DE_COMP_SNAPSHOT);
+    }
+    ASSERT_EQ(de_world_snapshot_restore(session.world, &snapshot), DE_OK);
+    for (u32 i = 0; i < 200; ++i) {
+        graph_visual_frames(&session, i);
+        u64 actual;
+        graph_step(&session, &actual);
+        EXPECT_EQ(actual, expected[i]);
+        EXPECT_EQ(de_world_checksum(session.world, DE_COMP_SNAPSHOT), expected_world[i]);
+    }
+    de_world_snapshot_free(NULL, &snapshot);
+    de_det_session_end(&session);
+}
+TEST(anim_graph_determinism, detects_pose_bit_change) {
+    de_det_session session = {0};
+    ASSERT_EQ(de_det_session_begin(&session, &graph_scenario, SEED, 1), DE_OK);
+    u64 expected[TICKS], actual[TICKS];
+    for (u32 tick = 0; tick < TICKS; ++tick)
+        graph_step(&session, &expected[tick]);
+    de_det_session_end(&session);
+    ASSERT_EQ(de_det_session_begin(&session, &graph_scenario, SEED, 1), DE_OK);
+    scenario_state *s = session.state;
+    s->perturb_tick = 400;
+    for (u32 tick = 0; tick < TICKS; ++tick)
+        graph_step(&session, &actual[tick]);
+    EXPECT_EQ(de_det_report("graph sampled pose bit perturbation", expected, actual, TICKS), 400u);
     de_det_session_end(&session);
 }

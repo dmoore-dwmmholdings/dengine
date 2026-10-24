@@ -512,15 +512,17 @@ DE_API de_asset_id de_asset_load_ctx_id(const de_asset_load_ctx *ctx);
 DE_API void *de_asset_load_ctx_user(const de_asset_load_ctx *ctx);
 
 /** Immutable settings views, borrowed for the current load/import callback. Arrays may
- * contain scalars or nested arrays (up to 16 levels). Empty/all-string arrays retain the
- * STRING_ARRAY representation for compatibility with the existing string-array getters. */
+ * contain scalars, tables or nested arrays (up to 16 container levels). Empty/all-string arrays
+ * retain the STRING_ARRAY representation for compatibility with the existing string-array getters.
+ */
 typedef enum de_asset_setting_type {
     DE_ASSET_SETTING_BOOL,
     DE_ASSET_SETTING_INT,
     DE_ASSET_SETTING_FLOAT,
     DE_ASSET_SETTING_STRING,
     DE_ASSET_SETTING_STRING_ARRAY,
-    DE_ASSET_SETTING_ARRAY
+    DE_ASSET_SETTING_ARRAY,
+    DE_ASSET_SETTING_TABLE
 } de_asset_setting_type;
 typedef struct de_asset_setting_value {
     de_asset_setting_type type;
@@ -537,6 +539,11 @@ typedef struct de_asset_setting_value {
             const struct de_asset_setting_value *items;
             u32 count;
         } values;
+        struct {
+            const char *const *keys; /**< bytewise sorted in parsed manifests */
+            const struct de_asset_setting_value *items;
+            u32 count;
+        } table;
     } u;
 } de_asset_setting_value;
 

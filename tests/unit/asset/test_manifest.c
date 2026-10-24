@@ -292,9 +292,15 @@ TEST(manifest, settings_types) {
     EXPECT_FLOAT_EQ(setting(a, "f")->value.u.f, 2.5, 0.0);
     EXPECT_EQ(setting(a, "b")->value.type, DE__MANIFEST_BOOL);
 
-    /* Tables and dates are rejected; numeric arrays retain their typed values. */
-    EXPECT_EQ(m->error_count, 2u);
-    EXPECT_TRUE(find_issue(m, DE_ASSET_ISSUE_ERROR, "assets.bad.nested") != NULL);
+    /* Tables preserve typed children; dates remain unsupported. */
+    EXPECT_EQ(m->error_count, 1u);
+    const de__manifest_asset *table_asset = de__manifest_find_asset(m, "bad");
+    ASSERT_TRUE(table_asset);
+    const de__manifest_value *table = &setting(table_asset, "nested")->value;
+    ASSERT_EQ(table->type, DE__MANIFEST_TABLE);
+    ASSERT_EQ(table->u.table.count, 1u);
+    EXPECT_STREQ(table->u.table.keys[0], "k");
+    EXPECT_EQ(table->u.table.items[0].u.i, 1);
     const de__manifest_asset *numeric = de__manifest_find_asset(m, "bad2");
     ASSERT_TRUE(numeric != NULL);
     const de__manifest_value *nums = &setting(numeric, "nums")->value;
@@ -304,8 +310,7 @@ TEST(manifest, settings_types) {
     EXPECT_EQ(nums->u.values.items[0].u.i, 1);
     EXPECT_EQ(nums->u.values.items[1].u.i, 2);
     EXPECT_TRUE(find_issue(m, DE_ASSET_ISSUE_ERROR, "assets.bad3.when") != NULL);
-    EXPECT_TRUE(de__manifest_find_asset(m, "bad") == NULL);
-    EXPECT_EQ(m->asset_count, 2u);
+    EXPECT_EQ(m->asset_count, 3u);
     de__manifest_destroy(m);
 }
 
@@ -905,7 +910,7 @@ TEST(asset_system, set_locale) {
 }
 
 TEST(manifest, nested_array_depth_limit) {
-    /* Include string-array leaves in the limit, and reject tables inside arrays. */
+    /* Include string-array leaves in the shared container limit. */
     for (u32 depth = 16; depth <= 17; ++depth) {
         char text[256] = "[assets.a]\ntype='t'\nsource='s'\nx=";
         size_t at = strlen(text);
@@ -925,15 +930,14 @@ TEST(manifest, nested_array_depth_limit) {
     }
     mem_file file = {"mem:/assets.toml", "[assets.a]\ntype='t'\nsource='s'\nx=[[{k=1}]]\n"};
     de__manifest *m = parse_mem(&file, 1, file.path, NULL);
-    EXPECT_EQ(m->error_count, 1u);
-    EXPECT_EQ(m->asset_count, 0u);
+    EXPECT_EQ(m->error_count, 0u);
+    EXPECT_EQ(m->asset_count, 1u);
     de__manifest_destroy(m);
 }
 
 TEST(manifest, nested_settings_oom_sweep) {
-    mem_file file = {
-        "mem:/assets.toml",
-        "[assets.a]\ntype='t'\nsource='s'\nx=[[256,591],'owned',['a','b'],true,2.5]\n"};
+    mem_file file = {"mem:/assets.toml", "[assets.a]\ntype='t'\nsource='s'\nx={z=[[256,591],'owned'"
+                                         ",['a','b'],true,2.5],a={key='value'}}\n"};
     de_tracking_allocator track;
     de_allocator a = de_tracking_allocator_init(&track, NULL, DE_MEM_ASSET);
     bool done = false;
@@ -957,4 +961,25 @@ TEST(manifest, nested_settings_oom_sweep) {
         EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
     }
     EXPECT_TRUE(done);
+}
+
+TEST(manifest, table_container_depth_limit) {
+    for (u32 depth = 16; depth <= 17; ++depth) {
+        char text[256] = "[assets.a]\ntype='t'\nsource='s'\nx=";
+        size_t at = strlen(text);
+        for (u32 i = 0; i < depth; ++i) {
+            memcpy(text + at, "{k=", 3);
+            at += 3;
+        }
+        text[at++] = '1';
+        for (u32 i = 0; i < depth; ++i)
+            text[at++] = '}';
+        text[at++] = '\n';
+        text[at] = 0;
+        mem_file file = {"mem:/assets.toml", text};
+        de__manifest *m = parse_mem(&file, 1, file.path, NULL);
+        EXPECT_EQ(m->error_count, depth == 16 ? 0u : 1u);
+        EXPECT_EQ(m->asset_count, depth == 16 ? 1u : 0u);
+        de__manifest_destroy(m);
+    }
 }

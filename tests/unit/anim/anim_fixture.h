@@ -42,7 +42,7 @@ typedef struct anim_fixture {
     de_gpu_buffer readback;
 #endif
 } anim_fixture;
-static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
+static void anim_fixture_setup_workers(anim_fixture *f, bool hot_reload, u32 workers) {
     static bool mounted;
     if (!mounted) {
         /* CTest runs separate cases concurrently; their clips have different joint counts. */
@@ -61,11 +61,12 @@ static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
     }
     f->allocator = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_GENERAL);
     de_fp_env_init_thread();
-    ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.allocator = &f->allocator,
-                                                           .worker_count = 3,
-                                                           .background_worker_count = 1},
-                                    &f->tasks),
-              DE_OK);
+    if (workers)
+        ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.allocator = &f->allocator,
+                                                               .worker_count = workers,
+                                                               .background_worker_count = 1},
+                                        &f->tasks),
+                  DE_OK);
     ASSERT_EQ(de_type_registry_create(&f->allocator, &f->types), DE_OK);
     ASSERT_EQ(
         de_world_create(
@@ -84,6 +85,9 @@ static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
     de_anim_set_task_system(f->anim, f->tasks);
     de_anim_attach(f->anim, f->world);
     ASSERT_TRUE(de_anim_component(f->anim).id);
+}
+static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
+    anim_fixture_setup_workers(f, hot_reload, 3);
 }
 static void anim_fixture_setup(anim_fixture *f) {
     anim_fixture_setup_options(f, false);
