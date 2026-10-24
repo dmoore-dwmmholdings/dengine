@@ -80,6 +80,12 @@ public struct ResolveParams
 
 /// The material of slot `slot`, or the engine's default (white, dielectric, roughness 0.5) for the
 /// default slot, a slot past the table or a material not loaded yet.
+// Keep the large reconstruction records in the caller on Metal. Slang otherwise emits
+// by-value helper boundaries and thread-local copies; inlining before MSL emission lets the
+// native compiler eliminate those copies. Other targets and the reconstruction math are unchanged.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public DeGpuMaterial de_resolve_material_of(uint slot, DeSceneConstants sc)
 {
     bool found = sc.materials != DE_BINDLESS_INVALID && slot != DE_GPU_NONE &&
@@ -111,6 +117,9 @@ public DeGpuMaterial de_resolve_material_of(uint slot, DeSceneConstants sc)
 }
 
 /// The bindless index of texture slot `s` of `m` (0 = none) and the UV set it samples.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public uint de_resolve_texture(DeGpuMaterial m, uint s, out uint set)
 {
     set = de_material_texcoord(m, s);
@@ -118,6 +127,9 @@ public uint de_resolve_texture(DeGpuMaterial m, uint s, out uint set)
 }
 
 /// Samples texture slot `s` of `m` at the point; `fallback` without a texture.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float4 de_resolve_sample(DeGpuMaterial m, uint s, VertexAttribs v, TextureLodInfo lod,
                                 float4 fallback)
 {
@@ -132,6 +144,9 @@ public float4 de_resolve_sample(DeGpuMaterial m, uint s, VertexAttribs v, Textur
 }
 
 /// The vertex data of resolve point `r` seen from `eye`.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, out TextureLodInfo lod)
 {
     VertexAttribs v;
@@ -153,6 +168,9 @@ public VertexAttribs de_resolve_attribs(DeResolvePoint r, float3 eye, out Textur
 }
 
 /// One dispatch of the tiles of model pc.model through model M (thread `t` of the group).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolveParams pc)
 {
     uint index = de_vis_group_index(group);

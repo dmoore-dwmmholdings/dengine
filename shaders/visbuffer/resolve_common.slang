@@ -38,6 +38,12 @@ public struct DeResolvePoint
 };
 
 /// The render-origin-space point of NDC (x, y, z) under the inverse view-projection rows.
+// Keep the large reconstruction records in the caller on Metal. Slang otherwise emits
+// by-value helper boundaries and thread-local copies; inlining before MSL emission lets the
+// native compiler eliminate those copies. Other targets and the reconstruction math are unchanged.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 float3 unproject(float4 inv_vp[4], float3 ndc)
 {
     float4 h = float4(ndc, 1.0);
@@ -47,6 +53,9 @@ float3 unproject(float4 inv_vp[4], float3 ndc)
 
 /// Barycentrics (of v1, v2; v0 = 1 - both) where the line o + t d meets the triangle's plane
 /// (Moller-Trumbore without the bounds tests); false when the line is parallel to the plane.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 bool ray_bary(float3 o, float3 d, float3 v0, float3 v1, float3 v2, out float3 bary)
 {
     float3 e1 = v1 - v0, e2 = v2 - v0;
@@ -65,6 +74,9 @@ bool ray_bary(float3 o, float3 d, float3 v0, float3 v1, float3 v2, out float3 ba
 }
 
 /// The camera ray (origin, direction) through NDC point `ndc` (reverse-Z: z = 1 the near plane).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 void camera_ray(float4 inv_vp[4], float2 ndc, out float3 o, out float3 d)
 {
     float3 a = unproject(inv_vp, float3(ndc, 1.0));
@@ -75,6 +87,9 @@ void camera_ray(float4 inv_vp[4], float2 ndc, out float3 o, out float3 d)
 
 /// The surface point of the pixel at `pixel` (target size `size`) whose vis ID is `id` (not
 /// DE_VIS_ID_EMPTY), with visible-list `visible` (`visible_count` entries) and the scene of `sc`.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public DeResolvePoint de_resolve_point(uint id, uint2 pixel, float2 size, DeSceneConstants sc,
                                        uint visible, uint visible_count)
 {
@@ -131,26 +146,41 @@ public DeResolvePoint de_resolve_point(uint id, uint2 pixel, float2 size, DeScen
 }
 
 /// Interpolations with the point's barycentrics (and their one-pixel differences).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float3 de_resolve_lerp3(DeResolvePoint r, float3 a, float3 b, float3 c)
 {
     return a * r.bary.x + b * r.bary.y + c * r.bary.z;
 }
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float2 de_resolve_lerp2(float3 bary, float2 a, float2 b, float2 c)
 {
     return a * bary.x + b * bary.y + c * bary.z;
 }
 
 /// The point in object space and in render-origin (world) space.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float3 de_resolve_object_pos(DeResolvePoint r)
 {
     return de_resolve_lerp3(r, r.object_pos[0], r.object_pos[1], r.object_pos[2]);
 }
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float3 de_resolve_world_pos(DeResolvePoint r)
 {
     return de_vis_transform_point(r.inst.transform, de_resolve_object_pos(r));
 }
 
 /// UV set `set` (0 or 1) at the point, and its one-pixel differences in x and y.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float2 de_resolve_uv(DeResolvePoint r, uint set, out float2 dx, out float2 dy)
 {
     if((r.inst.flags&DE_GPU_INSTANCE_SPRITE)!=0) {
@@ -170,6 +200,9 @@ public float2 de_resolve_uv(DeResolvePoint r, uint set, out float2 dx, out float
 /// Object normal `n` through a 3x4 transform's linear part M: the cofactor matrix of M (rows
 /// cross(r1, r2), cross(r2, r0), cross(r0, r1)) times n, the inverse transpose up to the
 /// determinant's scale, so non-uniform scale keeps it perpendicular.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 float3 normal_to_world(float4 rows[3], float3 n)
 {
     float3 r0 = rows[0].xyz, r1 = rows[1].xyz, r2 = rows[2].xyz;
@@ -179,6 +212,9 @@ float3 normal_to_world(float4 rows[3], float3 n)
 
 /// The interpolated world-space shading normal and tangent (xyz; w the bitangent sign, with the
 /// transform's mirroring), and the geometric normal of the triangle (world space, unit).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float3 de_resolve_normal(DeResolvePoint r, out float4 tangent, out float3 geometric)
 {
     float3 n = de_resolve_lerp3(r, de_vis_mesh_normal(r.mesh, r.vertex.x),
@@ -202,6 +238,9 @@ public float3 de_resolve_normal(DeResolvePoint r, out float4 tangent, out float3
 }
 
 /// Vertex colour 0 at the point (white without colours).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float4 de_resolve_color(DeResolvePoint r)
 {
     float4 c0 = de_vis_mesh_color0(r.mesh, r.vertex.x);
@@ -214,6 +253,9 @@ public float4 de_resolve_color(DeResolvePoint r)
 /// instance's previous transform under the previous view-projection; DeSceneConstants keeps it
 /// rebased onto this frame's origin). A new instance has its previous transform equal to its
 /// current one (the render world), so only camera motion moves it.
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public float2 de_resolve_motion(DeResolvePoint r, DeSceneConstants sc)
 {
     float3 p = de_resolve_object_pos(r);
@@ -231,6 +273,9 @@ public float2 de_resolve_motion(DeResolvePoint r, DeSceneConstants sc)
 }
 
 /// The material slot of the point's submesh (DE_GPU_NONE: the mesh's default).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public uint de_resolve_material(DeResolvePoint r)
 {
     return de_vis_instance_material(r.inst, r.meshlet.submesh);
@@ -238,6 +283,9 @@ public uint de_resolve_material(DeResolvePoint r)
 
 /// The material model of the point (the classification rule, classify.slang's entry_model: the
 /// model of a READY material of the table, else Standard).
+#if defined(DE_SHADER_TARGET_METAL) && defined(DE_VIS_RESOLVE_INLINE)
+[ForceInline]
+#endif
 public uint de_resolve_model(DeResolvePoint r, DeSceneConstants sc)
 {
     uint slot = de_resolve_material(r);
