@@ -1,6 +1,7 @@
 /* DENG-319: actual default-styled controls and states through the retained renderer.
  * Test-only host kick/readback follows the S10/S29 golden convention. */
 #include "golden.h"
+#include "cooked_assets.h"
 #include <dengine/dengine.h>
 #include "ui/widgets/advanced_internal.h"
 #include "../../../unit/input/input_test_util.h"
@@ -22,6 +23,7 @@ typedef struct ui_scene {
     de_type_registry *types;
     de_world *world;
     de_asset_system *assets;
+    char asset_pack[256];
     de_renderer *renderer;
     de_text_system *text;
     de_ui *ui;
@@ -110,7 +112,8 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, f32 scale) {
     DE_TRY(de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &s->tasks));
     DE_TRY(de_type_registry_create(NULL, &s->types));
     DE_TRY(de_world_create(&(de_world_desc){.types = s->types, .tasks = s->tasks}, &s->world));
-    DE_TRY(de_asset_system_create(&(de_asset_system_desc){.tasks = s->tasks,
+    DE_TRY(de_asset_system_create(&(de_asset_system_desc){.mode = DE_GOLDEN_ASSET_MODE,
+                                                          .tasks = s->tasks,
                                                           .types = s->types,
                                                           .cache_dir = "uicache:/decache"},
                                   &s->assets));
@@ -128,6 +131,7 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, f32 scale) {
     DE_TRY(de_text_attach(s->text, s->renderer, s->world));
     DE_TRY(de_asset_manifest_load(s->assets,
                                   "uigolden:/tests/golden/ui/widgets_advanced/assets.toml"));
+    DE_TRY(de_golden_pack_assets(s->assets, "uigolden:/", s->asset_pack));
     const char *ids[] = {"ui/font", "ui/panel", "ui/cjk"};
     for (u32 i = 0; i < 3; ++i) {
         de_asset_id id = de_asset_id_from(ids[i]);
@@ -192,6 +196,9 @@ static void cleanup(ui_scene *s) {
     de_renderer_destroy(s->renderer);
     de_type_registry_destroy(s->types);
     de_task_system_destroy(s->tasks);
+    de_result packed_cleanup = de_golden_pack_cleanup(s->asset_pack);
+    if (packed_cleanup != DE_OK)
+        de_golden_fail(s->ctx, "golden pack cleanup: %s", de_result_str(packed_cleanup));
     de_fs_unmount("uicache", DE_GOLDEN_UI_CACHE);
     de_fs_unmount("uigolden", DE_GOLDEN_UI_ROOT);
 }
