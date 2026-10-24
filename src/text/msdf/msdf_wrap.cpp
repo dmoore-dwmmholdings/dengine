@@ -32,13 +32,14 @@ extern "C" de_result de__msdf_generate(const de__msdf_vertex *v, u32 count, doub
         shape.normalize();
         if (!shape.validate())
             return DE_ERR_PARSE;
-        /* TrueType and CFF outlines may use opposite winding conventions. Normalize the
-         * filled side while preserving the opposite orientation of counters/holes. */
-        shape.orientContours();
+        /* Preserve the font's nonzero fill, including overlapping stroke contours. */
         msdfgen::edgeColoringSimple(shape, 3.0, 0);
         msdfgen::BitmapSection<float, 4> bitmap(scratch, (int)w, (int)h, msdfgen::Y_UPWARD);
         msdfgen::generateMTSDF(bitmap, shape, msdfgen::Range(range / scale),
                                msdfgen::Vector2(scale), msdfgen::Vector2(ox, oy));
+        msdfgen::distanceSignCorrection(
+            bitmap, shape, msdfgen::Projection(msdfgen::Vector2(scale), msdfgen::Vector2(ox, oy)),
+            .5f, msdfgen::FILL_NONZERO);
         for (u32 y = 0; y < h; ++y)
             for (u32 x = 0; x < w; ++x)
                 for (u32 k = 0; k < 4; ++k) {

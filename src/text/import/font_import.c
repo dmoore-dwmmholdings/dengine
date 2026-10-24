@@ -218,6 +218,6 @@ de_asset_type_desc de_font_import_type_desc(void) {
     return (de_asset_type_desc){.name = "font",
                                 .extensions = exts,
                                 .extension_count = 4,
-                                .importer_version = 2,
+                                .importer_version = 3,
                                 .import = de_font_import};
 }
