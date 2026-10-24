@@ -9,7 +9,7 @@ static de_anim_graph sync_graph(anim_fixture *f, u32 groups, de_anim_clip second
         {.kind = DE_ANIM_NODE_CLIP, .data.clip = {.clip = f->clip, .speed = 1, .loop = true}},
         {.kind = DE_ANIM_NODE_CLIP,
          .data.clip = {
-             .clip = second.id ? second : f->clip, .speed = second.id ? 1 : 2, .loop = true}}};
+             .clip = second.id ? second : f->clip, .speed = second.id ? 1.f : 2.f, .loop = true}}};
     if (groups) {
         nodes[0].data.clip.sync_group = de_name_from("feet");
         nodes[1].data.clip.sync_group = de_name_from(groups == 2 ? "hands" : "feet");
@@ -52,7 +52,7 @@ static void sync_tick(anim_fixture *f, f32 dt) {
 static f32 bone_x(anim_fixture *f, de_entity entity) {
     de_transform bone;
     ASSERT_TRUE(de_anim_bone_transform(f->world, entity, de_name_from("joint0"), &bone));
-    return bone.position.x;
+    return (f32)bone.position.x;
 }
 TEST_F(anim_graph_sync, visual_leaf_sampling_and_continuous_leader_changes, anim_fixture) {
     load_assets(f, 2);
@@ -468,7 +468,7 @@ TEST(anim_graph_sync, marked_snapshot_and_parallel_replay_preserve_full_phase_wi
                 for (u32 i = 0; i < 96; ++i) {
                     sync_inputs(&f, actors[i], tick + i);
                     DeAnimator *actor = de_entity_get(f.world, actors[i], f.anim->component);
-                    actor->speed = tick % 5 == 0 ? -1 : 1;
+                    actor->speed = tick % 5 == 0 ? -1.f : 1.f;
                     if (replay)
                         actor->deterministic = false;
                 }

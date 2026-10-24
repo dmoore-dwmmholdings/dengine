@@ -24,7 +24,7 @@ static void fixed_desc(anim_fixture *f, fixed_graph_desc *d) {
         d->nodes[i] =
             (de_anim_node_desc){.kind = DE_ANIM_NODE_CLIP,
                                 .data.clip = {.clip = f->clip, .speed = speeds[i], .loop = true}};
-        d->points[i] = (de_anim_blend_point_desc){{i == 1 ? 1 : 0, i == 2 ? 1 : 0}, i};
+        d->points[i] = (de_anim_blend_point_desc){{i == 1 ? 1.f : 0.f, i == 2 ? 1.f : 0.f}, i};
     }
     d->nodes[3] = (de_anim_node_desc){.kind = DE_ANIM_NODE_BLEND2D,
                                       .data.blend = {.x_param = d->params[0].name,

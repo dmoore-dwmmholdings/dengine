@@ -35,7 +35,7 @@ static anim_blob benchmark_clip(u32 variant) {
         }
         u8 *values = blob.data + data + joint * 68;
         de_cooked_put_f32(values, (f32)variant * .01f);
-        de_cooked_put_f32(values + 4, joint ? 1 : 0);
+        de_cooked_put_f32(values + 4, joint ? 1.f : 0.f);
         de_cooked_put_f32(values + 12, 1 + (f32)variant * .05f);
         de_cooked_put_f32(values + 16, .15f);
         de_cooked_put_f32(values + 20, .25f);

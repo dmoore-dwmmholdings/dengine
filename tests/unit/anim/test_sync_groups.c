@@ -198,7 +198,7 @@ TEST(anim_sync, marker_intervals_preserve_phase_across_shifted_leaders_and_rever
     de_alloc_guard guard = {0};
     de_alloc_guard_begin(&guard);
     for (u32 i = 0; i < 512; ++i) {
-        leaves[1].speed = i % 2 ? -1 : 1;
+        leaves[1].speed = i % 2 ? -1.f : 1.f;
         ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, (f64)i / 64,
                                               false));
         ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
