@@ -457,6 +457,12 @@ Home/End moves within the logical line; Ctrl/Cmd+Home/End moves to document ends
 The editor scrolls vertically to keep the caret visible. Clipboard operations use
 full document-sized buffers. IME preedit is displayed separately from committed
 text, including for document-backed and password inputs.
+The preedit caret follows the input system's composition cursor in code points,
+converted to a UTF-8 display byte offset (including positions within combining
+sequences). Unknown/negative positions use the preedit start; positions beyond
+the composition clamp to its end. The IME selection length does not advance this
+cursor. Drawing, scrolling and the platform candidate area use the same display
+caret; committed selection and undo history remain independent of preedit.
 
 `de_ui_text_input_apply` exposes SELECT/REPLACE/UNDO/REDO commands. An optional
 `de_ui_set_text_edit_observer` receives successful commands synchronously; copy

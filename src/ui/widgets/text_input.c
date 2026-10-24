@@ -18,6 +18,19 @@ static u32 bounded(const char *s, u32 cap) {
         ++n;
     return n;
 }
+static u32 composition_offset(const char *text, u32 bytes, i32 cursor) {
+    u32 at = 0;
+    /* Input reports code points, while text layouts consume UTF-8 byte offsets.
+     * Unknown cursors stay at the preedit start; oversized cursors clamp to its end.
+     * Do not snap to graphemes: an IME may place its cursor within a combining sequence. */
+    while (cursor > 0 && at < bytes) {
+        ++at;
+        while (at < bytes && ((u8)text[at] & 0xc0) == 0x80)
+            ++at;
+        --cursor;
+    }
+    return at;
+}
 static u32 snap(const DeUiTextInput *in, de_ui_editor *state, u32 byte) {
     u32 small[257];
     const u32 *b;
@@ -202,6 +215,8 @@ void de_ui__input_refresh(de_ui *ui, de_entity e) {
             s->preedit_start = used;
             if (typed.composition) {
                 u32 count = bounded(typed.composition, 1023);
+                s->displayed_caret +=
+                    composition_offset(typed.composition, count, typed.composition_cursor);
                 memcpy(display + used, typed.composition, count);
                 used += count;
             }

@@ -58,6 +58,92 @@ TEST_F(ui_text_input, injected_japanese_preedit_then_commit_no_buffer_mutation, 
     state = de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
     EXPECT_EQ(state->preedit_start, state->preedit_end);
 }
+TEST_F(ui_text_input, preedit_cursor_maps_codepoints_without_changing_selection_or_history,
+       edit_fx) {
+    const char *committed = "left右";
+    ASSERT_EQ(de_ui_text_input_set(f->base.ui, f->editor, (de_str){committed, strlen(committed)}),
+              DE_OK);
+    ASSERT_TRUE(de_ui_text_input_apply(
+        f->base.ui, f->editor,
+        &(de_ui_text_edit){.kind = DE_UI_TEXT_SELECT, .caret = 4, .anchor = 7}));
+    /* The accent is a separate code point; the emoji occupies four UTF-8 bytes.
+     * A nonzero IME selection length must not move the cursor to its far end. */
+    const char *preedit = "世e\xcc\x81🌍界";
+    const struct {
+        i32 cursor, selection;
+        u32 byte;
+    } cases[] = {{0, 0, 0},
+                 {1, 2, 3},
+                 {2, 1, 4},
+                 {3, 0, 6},
+                 {4, 1, 10},
+                 {5, 0, 13},
+                 {INT32_MAX, INT32_MAX, 13},
+                 {-1, -1, 0},
+                 {INT32_MIN, 0, 0}};
+    for (u32 i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        input_test_text_edit(f->input, preedit, cases[i].cursor, cases[i].selection);
+        edit_frame(f);
+        const de_ui_editor *s =
+            de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
+        EXPECT_EQ(s->preedit_start, 4u);
+        EXPECT_EQ(s->preedit_end, 17u);
+        EXPECT_EQ(s->displayed_caret, 4u + cases[i].byte);
+        EXPECT_EQ(editing(f)->caret, 4u);
+        EXPECT_EQ(s->anchor, 7u);
+        EXPECT_TRUE(strcmp(de_ui__input_data(editing(f), s), committed) == 0);
+        EXPECT_TRUE(strcmp(de_ui__input_display(s), "left世e\xcc\x81🌍界右") == 0);
+        EXPECT_FALSE(de_ui_text_input_undo(f->base.ui, f->editor));
+    }
+    input_test_text_edit(f->input, "", INT32_MAX, -1);
+    edit_frame(f);
+    const de_ui_editor *s =
+        de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
+    EXPECT_EQ(s->displayed_caret, 4u);
+    EXPECT_EQ(s->preedit_start, s->preedit_end);
+    /* Committing replaces the original selection, with one ordinary undo step. */
+    input_test_text(f->input, "界");
+    edit_frame(f);
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, "left界") == 0);
+    ASSERT_TRUE(de_ui_text_input_undo(f->base.ui, f->editor));
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, committed) == 0);
+    s = de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
+    EXPECT_EQ(editing(f)->caret, 4u);
+    EXPECT_EQ(s->anchor, 7u);
+    ASSERT_TRUE(de_ui_text_input_redo(f->base.ui, f->editor));
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, "left界") == 0);
+}
+TEST_F(ui_text_input, document_password_preedit_cursor_uses_display_bytes_and_focus_cancel,
+       edit_fx) {
+    char document[601];
+    for (u32 i = 0; i < 100; ++i)
+        memcpy(document + 4 * i, "🌍", 4);
+    memset(document + 400, 'x', 200);
+    document[600] = 0;
+    ASSERT_EQ(de_ui_text_input_set(f->base.ui, f->editor, (de_str){document, 600}), DE_OK);
+    ASSERT_TRUE(de_ui_text_input_apply(
+        f->base.ui, f->editor,
+        &(de_ui_text_edit){.kind = DE_UI_TEXT_SELECT, .caret = 600, .anchor = 600}));
+    editing(f)->password = true;
+    input_test_text_edit(f->input, "e\xcc\x81🌍", 3, 0);
+    edit_frame(f);
+    const de_ui_editor *s =
+        de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
+    EXPECT_EQ(s->preedit_start, 900u);
+    EXPECT_EQ(s->preedit_end, 907u);
+    EXPECT_EQ(s->displayed_caret, 907u);
+    EXPECT_TRUE(memcmp(de_ui__input_display(s), "\xe2\x80\xa2", 3) == 0);
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, document) == 0);
+    input_test_key(f->input, DE_KEY_ESCAPE, true);
+    edit_frame(f);
+    EXPECT_EQ(f->base.ui->advanced->active_input.bits, 0u);
+    de_ui__input_refresh(f->base.ui, f->editor);
+    s = de_entity_get_const(f->base.world, f->editor, f->base.ui->advanced->editor);
+    EXPECT_EQ(s->displayed_caret, 900u);
+    EXPECT_EQ(s->preedit_start, s->preedit_end);
+    EXPECT_TRUE(strcmp(de_ui_text_input_get(f->base.ui, f->editor).ptr, document) == 0);
+    EXPECT_FALSE(de_ui_text_input_undo(f->base.ui, f->editor));
+}
 TEST(ui_text_input, grapheme_selection_word_navigation_and_255_byte_cap) {
     DeUiTextInput in = {0};
     de_ui_editor state = {0};
