@@ -119,6 +119,7 @@ jobs:
           cat "build/${PRESET}/de_config_dump.txt"
 
       - name: Build
+        id: build
         shell: bash
         # All presets use Ninja. Report independent compile errors together so portability
         # fixes do not require a separate CI round trip for each failing translation unit.
@@ -132,6 +133,13 @@ jobs:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
+      - name: D3D12 compute-first UI initialization (Release)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.preset == 'windows-clang-cl-release' }}
+        shell: bash
+        run: |
+          cmake --build --preset "${PRESET}" --target de_golden
+          python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}"
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -142,6 +150,8 @@ jobs:
             build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ matrix.preset }}/de_config_dump.txt
             build/${{ matrix.preset }}/test-dumps/
+            build/${{ matrix.preset }}/d3d12-init-*
+            build/${{ matrix.preset }}/golden-init-*/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -272,6 +282,7 @@ jobs:
           cat "build/${PRESET}/de_config_dump.txt"
 
       - name: Build
+        id: golden_build
         shell: bash
         env:
           TARGETS: ${{ matrix.targets }}
@@ -291,6 +302,11 @@ jobs:
         env:
           TESTS: ${{ matrix.verbose_tests }}
         run: ctest --preset "${PRESET}" -V -R "${TESTS}"
+
+      - name: D3D12 compute-first UI initialization (Debug)
+        if: ${{ !cancelled() && steps.golden_build.outcome == 'success' && matrix.backend == 'd3d12' }}
+        shell: bash
+        run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}"
 
       # A backend that skips every scene would leave the step above green; the Linux and Windows
       # jobs exist to run their backend, so one scene must render there (exit 77 fails this step).
@@ -313,6 +329,8 @@ jobs:
           path: |
             build/${{ matrix.preset }}/golden/
             build/${{ matrix.preset }}/Testing/Temporary/
+            build/${{ matrix.preset }}/d3d12-init-*
+            build/${{ matrix.preset }}/golden-init-*/
           if-no-files-found: ignore
           retention-days: 14
 

@@ -242,6 +242,11 @@ typedef enum de__d3d12_legacy_op {
 de__d3d12_legacy_op de__d3d12_translate_legacy(de_gpu_queue cmd_queue, const de_gpu_barrier *b,
                                                bool texture, u32 current, u32 *before, u32 *after);
 
+/** First-use metadata initialization access; NONE when unnecessary or contents must be kept.
+ * Direct-list RT discards require RENDER_TARGET; compute-list discards require UAV access. */
+u32 de__d3d12_legacy_init_access(de_gpu_queue cmd_queue, const de_gpu_barrier *b,
+                                 const de__d3d12_texture_shape *tex);
+
 /** D3D12 subresource index: mip + layer * mips + plane * mips * layers. */
 u32 de__d3d12_subresource(u32 mip, u32 layer, u32 plane, u32 mips, u32 layers);
 
