@@ -327,3 +327,192 @@ TEST_F(anim_graph_runtime, visual_graph_handoff_does_not_advance_existing_fixed_
     a = de_entity_get(f->world, entity, de_anim_component(f->anim));
     EXPECT_FLOAT_EQ(a->time, .25f, 0); /* Two fixed ticks; intervening graph frame is visual. */
 }
+
+static de_anim_graph reference_graph(anim_fixture *f) {
+    de_anim_node_desc nodes[4];
+    clips(f, nodes, 2);
+    nodes[2] = (de_anim_node_desc){.kind = DE_ANIM_NODE_ADDITIVE,
+                                   .data.additive = {.base = 0, .input = 1, .weight = .5f}};
+    de_anim_layer_desc layer = {
+        .node = 1, .mode = DE_ANIM_LAYER_ADDITIVE, .weight = .25f, .reference = f->clip};
+    nodes[3] = (de_anim_node_desc){.kind = DE_ANIM_NODE_LAYER,
+                                   .data.layer = {.base = 2, .layer_count = 1}};
+    return build_graph(f, nodes, 4, NULL, 0, &layer, 1);
+}
+TEST_F(anim_graph_runtime, immutable_references_are_shared_across_actors_layers_and_graphs,
+       anim_fixture) {
+    load_assets(f, 3);
+    de_anim_graph graphs[] = {reference_graph(f), reference_graph(f)};
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).builds, 0u);
+    de_entity entities[96];
+    u64 poses[96];
+    for (u32 i = 0; i < 96; ++i) {
+        entities[i] = spawn_animator(f);
+        bind_at(f, entities[i], graphs[i % 2], .125f + (f32)(i % 4) * .03125f);
+    }
+    anim_frame(f, 0);
+    anim_frame(f, 0);
+    de__anim_reference_stats stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 192u);
+    EXPECT_EQ(stats.builds, 1u);
+    EXPECT_EQ(stats.owners, 2u);
+    for (u32 i = 0; i < 96; ++i)
+        poses[i] = de__anim_pose_checksum(&actor_entry(f, entities[i])->local);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    for (u32 frame = 0; frame < 20; ++frame) {
+        de_anim_set_task_system(f->anim, frame % 2 ? NULL : f->tasks);
+        anim_frame(f, 0);
+        for (u32 i = 0; i < 96; ++i)
+            EXPECT_EQ(de__anim_pose_checksum(&actor_entry(f, entities[i])->local), poses[i]);
+    }
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).builds, 1u);
+    de_anim_graph_destroy(f->anim, graphs[0]);
+    stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 96u);
+    EXPECT_EQ(stats.owners, 1u);
+    de_anim_graph_destroy(f->anim, graphs[1]);
+    stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 0u);
+    EXPECT_EQ(stats.users, 0u);
+}
+TEST_F(anim_graph_runtime, shared_reference_revision_rebind_is_transactional_and_evicts_history,
+       anim_fixture) {
+    load_assets(f, 3);
+    de_anim_graph graph = reference_graph(f);
+    de_entity first = spawn_animator(f), second = spawn_animator(f);
+    bind_at(f, first, graph, .25f);
+    bind_at(f, second, graph, .25f);
+    anim_frame(f, 0);
+    de__anim_entry *entry = actor_entry(f, first);
+    struct de__anim_graph_runtime *old = entry->graph_runtime;
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).users, 4u);
+    ++de__slot_get(f->assets, f->clip.id)->version;
+    bool completed = false;
+    for (i64 failure = 0; failure < 64; ++failure) {
+        de_tracking_allocator_fail_after(&f->tracking, failure);
+        bool ok = de__anim_graph_prepare(f->anim, entry);
+        de_tracking_allocator_fail_after(&f->tracking, -1);
+        de_error_clear();
+        de__anim_reference_stats stats = de__anim_graph_reference_stats(f->anim);
+        if (ok) {
+            completed = true;
+            EXPECT_TRUE(entry->graph_runtime != old);
+            EXPECT_EQ(stats.entries, 2u);
+            EXPECT_EQ(stats.users, 4u);
+            break;
+        }
+        EXPECT_TRUE(entry->graph_runtime == old);
+        EXPECT_EQ(stats.entries, 1u);
+        EXPECT_EQ(stats.users, 4u);
+    }
+    EXPECT_TRUE(completed);
+    ASSERT_TRUE(de__anim_graph_prepare(f->anim, actor_entry(f, second)));
+    de__anim_reference_stats stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 4u);
+    u64 builds = stats.builds;
+    ++de__slot_get(f->assets, f->skeleton.id)->version;
+    ASSERT_TRUE(de__anim_graph_prepare(f->anim, entry));
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).entries, 2u);
+    ASSERT_TRUE(de__anim_graph_prepare(f->anim, actor_entry(f, second)));
+    stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 4u);
+    EXPECT_EQ(stats.builds, builds + 1);
+    /* Repeated new revisions never leave zero-user historical entries behind. */
+    for (u32 revision = 0; revision < 16; ++revision) {
+        ++de__slot_get(f->assets, f->clip.id)->version;
+        ASSERT_TRUE(de__anim_graph_prepare(f->anim, entry));
+        ASSERT_TRUE(de__anim_graph_prepare(f->anim, actor_entry(f, second)));
+        stats = de__anim_graph_reference_stats(f->anim);
+        EXPECT_EQ(stats.entries, 1u);
+        EXPECT_EQ(stats.users, 4u);
+    }
+    de_entity_despawn(f->world, first);
+    de_entity_despawn(f->world, second);
+    anim_frame(f, 0);
+    stats = de__anim_graph_reference_stats(f->anim);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 0u);
+    EXPECT_EQ(stats.owners, 1u);
+    de_anim_graph_destroy(f->anim, graph);
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).entries, 0u);
+}
+
+TEST_F(anim_graph_runtime, graph_reference_binding_survives_actor_churn_without_resampling,
+       anim_fixture) {
+    load_assets(f, 3);
+    de_anim_graph graph = reference_graph(f);
+    for (u32 cycle = 0; cycle < 32; ++cycle) {
+        de_entity entity = spawn_animator(f);
+        bind_at(f, entity, graph, .25f);
+        anim_frame(f, 0);
+        de__anim_reference_stats stats = de__anim_graph_reference_stats(f->anim);
+        EXPECT_EQ(stats.entries, 1u);
+        EXPECT_EQ(stats.users, 2u);
+        EXPECT_EQ(stats.owners, 1u);
+        EXPECT_EQ(stats.builds, 1u);
+        de_entity_despawn(f->world, entity);
+        anim_frame(f, 0);
+        stats = de__anim_graph_reference_stats(f->anim);
+        EXPECT_EQ(stats.entries, 1u);
+        EXPECT_EQ(stats.users, 0u);
+        EXPECT_EQ(stats.owners, 1u);
+        EXPECT_EQ(stats.builds, 1u);
+    }
+    de_anim_graph_destroy(f->anim, graph);
+    EXPECT_EQ(de__anim_graph_reference_stats(f->anim).entries, 0u);
+}
+
+#include "asset/hot_reload_internal.h"
+#if DE__ASSET_RELOAD_ENABLED
+TEST(anim_graph_runtime, shared_reference_rebuilds_from_published_clip_data_and_retires_old_pose) {
+    anim_fixture f = {0};
+    anim_fixture_setup_options(&f, true);
+    /* Exercise real file loading/publication without nondeterministic OS notifications. */
+    de__asset_reload_set_watching(f.assets, false);
+    load_assets(&f, 3);
+    de_anim_graph graph = reference_graph(&f);
+    de_entity entity = spawn_animator(&f);
+    bind_at(&f, entity, graph, .25f);
+    anim_frame(&f, 0);
+    f32 before = actor_entry(&f, entity)->local.translations[0].x;
+    de__anim_reference_stats initial = de__anim_graph_reference_stats(f.anim);
+    EXPECT_EQ(initial.entries, 1u);
+    EXPECT_EQ(initial.builds, 1u);
+    const de__slot *slot = de__slot_get(f.assets, f.clip.id);
+    u32 version = slot->version;
+    anim_blob replacement = clip_blob(3);
+    de_cooked_put_f32(replacement.data + de_canim_get_u32(replacement.data + 44), 1);
+    ASSERT_EQ(de_file_write_all_atomic("animtest:/clip.dclp", replacement.data, replacement.bytes),
+              DE_OK);
+    free(replacement.data);
+    de__asset_reload_on_change(f.assets, "animtest:/clip.dclp", DE_WATCH_MODIFIED, false);
+    u64 deadline = de_time_now_ns() + 5000000000ull;
+    while (slot->version == version && de_time_now_ns() < deadline) {
+        de_asset_system_update(f.assets, NULL);
+        de_sleep_ns(1000000);
+    }
+    ASSERT_TRUE(slot->version != version);
+    anim_frame(&f, 0);
+    EXPECT_FLOAT_EQ(actor_entry(&f, entity)->local.translations[0].x, before + 1, 2e-6f);
+    de__anim_reference_stats stats = de__anim_graph_reference_stats(f.anim);
+    EXPECT_EQ(stats.builds, initial.builds + 1);
+    EXPECT_EQ(stats.entries, 1u);
+    EXPECT_EQ(stats.users, 2u);
+    EXPECT_EQ(stats.owners, 1u);
+    for (u32 i = 0; i < 8; ++i)
+        de_asset_system_update(f.assets, NULL);
+    anim_frame(&f, 0);
+    EXPECT_FLOAT_EQ(actor_entry(&f, entity)->local.translations[0].x, before + 1, 2e-6f);
+    de__asset_reload_stats reload;
+    de__asset_reload_get_stats(f.assets, &reload);
+    EXPECT_EQ(reload.watches, 0u);
+    anim_fixture_teardown(&f);
+}
+#endif

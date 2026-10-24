@@ -18,6 +18,7 @@ typedef struct de__anim_graph {
     u32 *node_sync_groups;
     u32 sync_count;
     de_component sync_component;
+    struct de__anim_reference_owner *reference_owners;
 } de__anim_graph;
 typedef struct DeAnimParams {
     u32 graph, count;
@@ -34,4 +35,9 @@ void de__anim_graphs_shutdown(de_anim_system *);
 bool de__anim_graph_sync_prepare(de_anim_system *, de_entity);
 u64 de__anim_graph_sync_hash(const de_anim_system *, de_entity, const de__anim_graph *, u64);
 i32 de__anim_graph_param(const de__anim_graph *, de_name, de_anim_param_kind);
+typedef struct de__anim_reference_stats {
+    u64 entries, users, owners, builds;
+} de__anim_reference_stats;
+de__anim_reference_stats de__anim_graph_reference_stats(const de_anim_system *);
+void de__anim_graph_reference_owners_release(de_anim_system *, de__anim_graph *);
 #endif

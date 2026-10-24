@@ -87,6 +87,8 @@ typedef struct de__anim_stage_hook {
 #define DE__ANIM_POSE_POOL_CLASSES 21u
 struct de_anim_system {
     struct de__anim_graph *graphs;
+    struct de__anim_reference_cache *reference_cache;
+    u64 reference_builds;
     const de_allocator *alloc;
     de_asset_system *assets;
     de_task_system *tasks;

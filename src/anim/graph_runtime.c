@@ -11,8 +11,20 @@ typedef struct graph_pose {
     de_pool *pool;
     void *block;
 } graph_pose;
+/* Main-thread-owned reference counts; workers only read the frozen pose. Keys
+ * include both asset revisions and bases, so a replacement cannot alias a cache. */
+typedef struct de__anim_reference_cache {
+    struct de__anim_reference_cache *next;
+    u64 key[6], users, owners;
+    graph_pose reference;
+} de__anim_reference_cache;
+typedef struct de__anim_reference_owner {
+    struct de__anim_reference_owner *next;
+    de__anim_reference_cache *reference;
+} de__anim_reference_owner;
 typedef struct graph_node {
-    graph_pose output, reference;
+    graph_pose output;
+    const de__anim_reference_cache *reference;
     de_cooked_clip_view clip;
     de__anim_marker_map *markers;
     de__anim_blend_weights blend;
@@ -20,7 +32,7 @@ typedef struct graph_node {
     bool valid;
 } graph_node;
 typedef struct graph_layer {
-    graph_pose reference;
+    const de__anim_reference_cache *reference;
     f32 *mask;
     de_pool *mask_pool;
     f32 weight;
@@ -62,15 +74,59 @@ static bool make_pose(de_anim_system *s, u32 joints, u32 tracks, graph_pose *p) 
         (de__anim_clip_cursor){.keys = (u32 *)((u8 *)p->block + cursor), .capacity = tracks};
     return true;
 }
+static void evict_reference(de_anim_system *s, const de__anim_reference_cache *reference) {
+    de__anim_reference_cache **link = &s->reference_cache;
+    while (*link && *link != reference)
+        link = &(*link)->next;
+    if (!*link)
+        return;
+    de__anim_reference_cache *entry = *link;
+    if (entry->users || entry->owners)
+        return;
+    *link = entry->next;
+    free_pose(&entry->reference);
+    DE_FREE(s->alloc, entry, sizeof *entry);
+}
+static void release_reference(de_anim_system *s, const de__anim_reference_cache *reference) {
+    if (!reference)
+        return;
+    for (de__anim_reference_cache *entry = s->reference_cache; entry; entry = entry->next)
+        if (entry == reference) {
+            --entry->users;
+            evict_reference(s, entry);
+            return;
+        }
+}
+void de__anim_graph_reference_owners_release(de_anim_system *s, de__anim_graph *g) {
+    while (g->reference_owners) {
+        de__anim_reference_owner *owner = g->reference_owners;
+        g->reference_owners = owner->next;
+        --owner->reference->owners;
+        evict_reference(s, owner->reference);
+        DE_FREE(s->alloc, owner, sizeof *owner);
+    }
+}
+de__anim_reference_stats de__anim_graph_reference_stats(const de_anim_system *s) {
+    de__anim_reference_stats stats = {0};
+    if (!s)
+        return stats;
+    stats.builds = s->reference_builds;
+    for (const de__anim_reference_cache *entry = s->reference_cache; entry; entry = entry->next) {
+        ++stats.entries;
+        stats.users += entry->users;
+        stats.owners += entry->owners;
+    }
+    return stats;
+}
 static void destroy_runtime(de_anim_system *s, de__anim_graph_runtime *r) {
     if (!r)
         return;
     for (u32 i = 0; i < r->node_count; ++i) {
         free_pose(&r->nodes[i].output);
-        free_pose(&r->nodes[i].reference);
+        release_reference(s, r->nodes[i].reference);
     }
     for (u32 i = 0; i < r->layer_count; ++i) {
-        free_pose(&r->layers[i].reference);
+        release_reference(s, r->layers[i].reference);
         if (r->layers[i].mask)
             de_pool_free(r->layers[i].mask_pool, r->layers[i].mask);
     }
@@ -96,12 +152,128 @@ static de_anim_clip additive_reference(const de__anim_graph *g, u32 input, de_an
     return reference.id ? reference : g->nodes[input].data.clip.clip;
 }
 static bool reference_pose(de_anim_system *s, de__anim_entry *e, de_anim_clip clip,
-                           graph_pose *out) {
+                           const de__anim_reference_cache **out) {
     de_cooked_clip_view view;
     u64 ignored = 0;
-    return clip_view(s, clip, e->joints, &view, &ignored) &&
-           make_pose(s, e->joints, view.track_count, out) &&
-           de__anim_sample_pose_cached(&view, &e->skeleton, 0, &out->pose, &out->cursor);
+    const de__slot *skeleton = de__slot_get(s->assets, e->skeleton_handle);
+    const de__slot *source = de__slot_get(s->assets, clip.id);
+    if (!skeleton || !source || !clip_view(s, clip, e->joints, &view, &ignored))
+        return false;
+    const u64 key[] = {
+        e->skeleton_handle, skeleton->version,        (u64)(uintptr_t)e->skeleton.base, clip.id,
+        source->version,    (u64)(uintptr_t)view.base};
+    for (de__anim_reference_cache *entry = s->reference_cache; entry; entry = entry->next)
+        if (!memcmp(entry->key, key, sizeof key)) {
+            if (entry->users == UINT64_MAX)
+                return false;
+            ++entry->users;
+            *out = entry;
+            return true;
+        }
+    de__anim_reference_cache *entry =
+        DE_ALLOC(s->alloc, sizeof *entry, _Alignof(de__anim_reference_cache), DE_MEM_GENERAL);
+    if (!entry)
+        return false;
+    memset(entry, 0, sizeof *entry);
+    if (!make_pose(s, e->joints, view.track_count, &entry->reference) ||
+        !de__anim_sample_pose_cached(&view, &e->skeleton, 0, &entry->reference.pose,
+                                     &entry->reference.cursor)) {
+        free_pose(&entry->reference);
+        DE_FREE(s->alloc, entry, sizeof *entry);
+        return false;
+    }
+    memcpy(entry->key, key, sizeof key);
+    entry->users = 1;
+    entry->next = s->reference_cache;
+    s->reference_cache = entry;
+    ++s->reference_builds;
+    *out = entry;
+    return true;
+}
+static const de__anim_reference_cache *runtime_reference(const de__anim_graph_runtime *r, u32 i) {
+    return i < r->node_count ? r->nodes[i].reference : r->layers[i - r->node_count].reference;
+}
+static de__anim_reference_owner *find_owner(de__anim_reference_owner *owners,
+                                            const de__anim_reference_cache *reference) {
+    for (; owners; owners = owners->next)
+        if (owners->reference->key[0] == reference->key[0] &&
+            owners->reference->key[3] == reference->key[3])
+            return owners;
+    return NULL;
+}
+static de__anim_reference_cache *mutable_reference(de_anim_system *s,
+                                                   const de__anim_reference_cache *reference) {
+    for (de__anim_reference_cache *entry = s->reference_cache; entry; entry = entry->next)
+        if (entry == reference)
+            return entry;
+    return NULL;
+}
+/* Stage all new owner links before changing a graph. A failed actor build cannot
+ * replace its graph's reference bindings or discard a previous runtime's pins. */
+static bool commit_reference_owners(de_anim_system *s, de__anim_graph *g,
+                                    const de__anim_graph_runtime *r) {
+    de__anim_reference_owner *pending = NULL;
+    u32 count = r->node_count + r->layer_count;
+    for (u32 i = 0; i < count; ++i) {
+        const de__anim_reference_cache *reference = runtime_reference(r, i);
+        if (!reference || find_owner(g->reference_owners, reference) ||
+            find_owner(pending, reference))
+            continue;
+        de__anim_reference_cache *entry = mutable_reference(s, reference);
+        if (!entry)
+            goto failed;
+        de__anim_reference_owner *owner =
+            DE_ALLOC(s->alloc, sizeof *owner, _Alignof(de__anim_reference_owner), DE_MEM_GENERAL);
+        if (!owner)
+            goto failed;
+        *owner = (de__anim_reference_owner){.next = pending, .reference = entry};
+        pending = owner;
+    }
+    while (pending) {
+        de__anim_reference_owner *owner = pending;
+        pending = owner->next;
+        ++owner->reference->owners;
+        owner->next = g->reference_owners;
+        g->reference_owners = owner;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        const de__anim_reference_cache *reference = runtime_reference(r, i);
+        if (!reference)
+            continue;
+        de__anim_reference_owner *owner = find_owner(g->reference_owners, reference);
+        if (owner->reference != reference) {
+            de__anim_reference_cache *old = owner->reference;
+            owner->reference = mutable_reference(s, reference);
+            ++owner->reference->owners;
+            --old->owners;
+            evict_reference(s, old);
+        }
+    }
+    /* Discard bindings that cannot be reused after unload/revision changes.
+     * Existing actor readers keep their own pins until a successful rebind. */
+    de__anim_reference_owner **link = &g->reference_owners;
+    while (*link) {
+        de__anim_reference_owner *owner = *link;
+        de__anim_reference_cache *entry = owner->reference;
+        const de__slot *skel = de__slot_get(s->assets, (u32)entry->key[0]);
+        const de__slot *clip = de__slot_get(s->assets, (u32)entry->key[3]);
+        if (!skel || !clip || skel->state != DE_LOAD_READY || clip->state != DE_LOAD_READY ||
+            skel->version != entry->key[1] || clip->version != entry->key[4]) {
+            *link = owner->next;
+            --entry->owners;
+            evict_reference(s, entry);
+            DE_FREE(s->alloc, owner, sizeof *owner);
+        } else
+            link = &owner->next;
+    }
+    return true;
+failed:
+    while (pending) {
+        de__anim_reference_owner *owner = pending;
+        pending = owner->next;
+        DE_FREE(s->alloc, owner, sizeof *owner);
+    }
+    return false;
 }
 static bool make_mask(de_anim_system *s, de__anim_entry *e, const de_anim_layer_desc *d,
                       graph_layer *out) {
@@ -121,7 +293,7 @@ static bool make_mask(de_anim_system *s, de__anim_entry *e, const de_anim_layer_
     return ok;
 }
 bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
-    const de__anim_graph *g = de__anim_graph_get(s, e->animator->graph);
+    de__anim_graph *g = de__anim_graph_get(s, e->animator->graph);
     if (!g)
         return false;
     const de__slot *skeleton_slot = de__slot_get(s->assets, e->skeleton_handle);
@@ -208,6 +380,10 @@ bool de__anim_graph_prepare(de_anim_system *s, de__anim_entry *e) {
                 if (reference)
                     (void)de__anim_marker_map_init(&next->marker_maps[i], reference, clip);
             }
+        }
+        if (!commit_reference_owners(s, g, next)) {
+            destroy_runtime(s, next);
+            return false;
         }
         destroy_runtime(s, r);
         r = e->graph_runtime = next;
@@ -446,7 +622,7 @@ static void blend_range(u32 begin, u32 end, void *user) {
                 if (input->valid && n->weight > 0)
                     n->valid =
                         de__anim_pose_delta(&r->scratch.pose, &input->output.pose,
-                                            &n->reference.pose, r->deterministic) &&
+                                            &n->reference->reference.pose, r->deterministic) &&
                         de__anim_pose_layer(&n->output.pose, &n->output.pose, &r->scratch.pose,
                                             n->weight, NULL, 1, true, r->deterministic);
             } else if (d->kind == DE_ANIM_NODE_LAYER) {
@@ -465,7 +641,8 @@ static void blend_range(u32 begin, u32 end, void *user) {
                     bool additive = g->layers[l].mode == DE_ANIM_LAYER_ADDITIVE;
                     if (additive) {
                         n->valid = de__anim_pose_delta(&r->scratch.pose, pose,
-                                                       &layer->reference.pose, r->deterministic);
+                                                       &layer->reference->reference.pose,
+                                                       r->deterministic);
                         pose = &r->scratch.pose;
                     }
                     n->valid = n->valid && de__anim_pose_layer(&n->output.pose, &n->output.pose,

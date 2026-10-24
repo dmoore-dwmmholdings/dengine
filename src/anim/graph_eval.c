@@ -221,6 +221,7 @@ static bool retain_clip(de_anim_system *s, de__anim_graph *g, de_anim_clip clip)
     return true;
 }
 static void release_graph(de_anim_system *s, de__anim_graph *g) {
+    de__anim_graph_reference_owners_release(s, g);
     for (u32 i = 0; i < g->desc.node_count; ++i)
         de__anim_blend_space_destroy(g->spaces[i]);
     for (u32 i = 0; i < g->reference_count; ++i)
