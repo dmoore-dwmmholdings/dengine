@@ -47,7 +47,7 @@ set(DE_GOLDEN_SCENE_SOURCES
     anim/anim_scenes.c
     base_tier/base_tier_scenes.c)
 
-add_executable(de_golden harness/main.c harness/golden.c harness/golden.h
+add_executable(de_golden harness/main.c harness/golden.c harness/golden.h harness/cooked_assets.c
                          ${DE_GOLDEN_SCENE_SOURCES})
 set_target_properties(de_golden PROPERTIES OUTPUT_NAME de-golden FOLDER "dengine/tests")
 target_include_directories(de_golden PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/harness"
@@ -61,10 +61,21 @@ target_compile_definitions(de_golden PRIVATE
 # Shaders are cooked in-process by the S09 importer, as in the S10 pipeline tests: it needs the
 # tools and Slang (tests/ is added before tools/, so test for the option and the Slang target).
 if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
-    target_link_libraries(de_golden PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset)
+    target_link_libraries(de_golden PRIVATE de_gpu_shader de_cook_shader de_cooker de_asset de_pack_lib)
     target_include_directories(de_golden PRIVATE "${DE_ROOT_DIR}/tools")
     target_compile_definitions(de_golden PRIVATE DE_GOLDEN_COOK=1)
+    de_add_test(NAME golden_assets
+        SOURCES harness/test_cooked_assets.c harness/cooked_assets.c
+        LIBS de_asset de_text de_cooker de_pack_lib
+        LABELS golden)
+    target_include_directories(test_golden_assets PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_golden_assets PRIVATE DE_GOLDEN_COOK=1
+        "DE_GOLDEN_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/packed_assets\""
+        "DE_GOLDEN_TEST_ROOT=\"${DE_ROOT_DIR}\"")
 endif()
+target_compile_definitions(de_golden PRIVATE
+    "DE_GOLDEN_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/packed_assets\"")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/packed_assets")
 # DENG-176: renderer scenes (render/views/) run the renderer, its ECS world and Extract, and include
 # renderer internals (src/ is on the include path).
 target_link_libraries(de_golden PRIVATE de_render de_ecs de_reflect de_task de_asset)

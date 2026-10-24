@@ -1,5 +1,6 @@
 /* DENG-262: real renderer, font cooker and atlas uploader, fixed deterministic scenes. */
 #include "golden.h"
+#include "cooked_assets.h"
 #include <dengine/de_text.h>
 #include <dengine/de_task.h>
 #include <dengine/de_platform.h>
@@ -10,6 +11,7 @@
 
 typedef struct text_scene {
     de_asset_system *assets;
+    char asset_pack[256];
     de_task_system *tasks;
     de_text_system *text;
     de_type_registry *types;
@@ -22,9 +24,11 @@ static de_result setup(text_scene *s, de_golden_ctx *ctx) {
     de_fp_env_init_thread();
     DE_TRY(de_fs_mount("textgolden", DE_GOLDEN_TEXT_ROOT, DE_MOUNT_READ_ONLY, 0));
     DE_TRY(de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &s->tasks));
-    DE_TRY(de_asset_system_create(&(de_asset_system_desc){.tasks = s->tasks}, &s->assets));
+    DE_TRY(de_asset_system_create(
+        &(de_asset_system_desc){.mode = DE_GOLDEN_ASSET_MODE, .tasks = s->tasks}, &s->assets));
     DE_TRY(de_text_create(NULL, s->assets, &s->text));
     DE_TRY(de_asset_manifest_load(s->assets, "textgolden:/tests/golden/text/assets.toml"));
+    DE_TRY(de_golden_pack_assets(s->assets, "textgolden:/tests/data/fonts", s->asset_pack));
     const char *names[] = {"font/latin", "font/bitmap"};
     de_font *fonts[] = {&s->font, &s->bitmap};
     for (u32 i = 0; i < 2; ++i) {
@@ -59,7 +63,7 @@ static de_result setup(text_scene *s, de_golden_ctx *ctx) {
     DE_TRY(de_text_attach(s->text, s->renderer, s->world));
     return DE_OK;
 }
-static void cleanup(text_scene *s) {
+static void cleanup(text_scene *s, de_golden_ctx *ctx) {
     de_text_attach(s->text, NULL, NULL);
     if (s->assets) {
         for (u32 i = 0; i < 2; ++i)
@@ -76,6 +80,9 @@ static void cleanup(text_scene *s) {
         de_type_registry_destroy(s->types);
     if (s->tasks)
         de_task_system_destroy(s->tasks);
+    de_result packed_cleanup = de_golden_pack_cleanup(s->asset_pack);
+    if (packed_cleanup != DE_OK)
+        de_golden_fail(ctx, "golden pack cleanup: %s", de_result_str(packed_cleanup));
     de_fs_unmount("textgolden", DE_GOLDEN_TEXT_ROOT);
 }
 static de_result string_draw(text_scene *s, const char *string, f32 size, f32 x, f32 y, bool bitmap,
@@ -130,7 +137,7 @@ static void scene(de_golden_ctx *ctx, u32 kind) {
     de_result result = setup(&s, ctx);
     if (result != DE_OK) {
         de_golden_fail(ctx, "text scene setup: %d", result);
-        cleanup(&s);
+        cleanup(&s, ctx);
         return;
     }
     if (kind == 2) {
@@ -232,7 +239,7 @@ static void scene(de_golden_ctx *ctx, u32 kind) {
         de_golden_fail(ctx, "text readback: %d", result);
     de_gpu_fence_destroy(ctx->device, fence);
     de_gpu_buffer_destroy(ctx->device, rb);
-    cleanup(&s);
+    cleanup(&s, ctx);
 }
 DE_GOLDEN_SCENE(text_msdf_scales) {
     scene(ctx, 0);
