@@ -209,3 +209,25 @@ TEST(settings_hash, nested_arrays_preserve_types_shape_and_order) {
         EXPECT_NE(h, hash_of(text, "a"));
     }
 }
+
+TEST(settings_hash, tables_canonicalize_keys_preserve_types_and_nested_values) {
+    u64 original = hash_of(
+        "[assets.a]\ntype='t'\nsource='s'\nmarkers={R=[0.25],L=[0,0.5],meta={z=true,a='owned'}}\n",
+        "a");
+    EXPECT_EQ(original, hash_of("[assets.a]\ntype='t'\nsource='s'\nmarkers={meta={a='owned',z=true}"
+                                ",L=[0,0.5],R=[0.25]}\n",
+                                "a"));
+    EXPECT_NE(original, hash_of("[assets.a]\ntype='t'\nsource='s'\nmarkers={R=[0.25],L=[0.0,0.5],"
+                                "meta={z=true,a='owned'}}\n",
+                                "a"));
+    const char *keys[] = {"z", "a"}, *reversed[] = {"a", "z"};
+    de_asset_setting_value values[] = {{.type = DE_ASSET_SETTING_INT, .u.i = 1},
+                                       {.type = DE_ASSET_SETTING_BOOL, .u.b = true}};
+    de_asset_setting_value reverse_values[] = {values[1], values[0]};
+    de__manifest_kv first = {
+        .key = "table", .value = {.type = DE_ASSET_SETTING_TABLE, .u.table = {keys, values, 2}}};
+    de__manifest_kv second = {
+        .key = "table",
+        .value = {.type = DE_ASSET_SETTING_TABLE, .u.table = {reversed, reverse_values, 2}}};
+    EXPECT_EQ(de_cook_settings_hash(&first, 1), de_cook_settings_hash(&second, 1));
+}

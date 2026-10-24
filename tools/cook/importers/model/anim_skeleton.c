@@ -27,6 +27,7 @@
 #include <dengine/de_math.h>
 
 #include "anim/formats/de_cooked_skeleton.h"
+#include "anim/formats/de_cooked_clip.h"
 #include "cook/lib/de_cooker.h"
 
 #include <stdio.h>
@@ -412,6 +413,51 @@ static de_asset_id sub_asset_id(de_model_ir *ir, const char *model_id, const cha
     return de_asset_id_from(full);
 }
 
+static de_result read_markers(de_asset_import_ctx *ctx, de_model_ir *ir,
+                              de_model_anim_settings *s) {
+    const de_asset_setting_value *table = de_asset_import_setting_value(ctx, "markers");
+    if (!table)
+        return DE_OK;
+    if (table->type != DE_ASSET_SETTING_TABLE)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "markers must be a table of numeric time arrays");
+    u64 count = 0;
+    for (u32 i = 0; i < table->u.table.count; ++i) {
+        const de_asset_setting_value *array = &table->u.table.items[i];
+        if (!table->u.table.keys[i][0] ||
+            (array->type != DE_ASSET_SETTING_ARRAY &&
+             !(array->type == DE_ASSET_SETTING_STRING_ARRAY && !array->u.arr.count)))
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "marker names require numeric time arrays");
+        if (array->type == DE_ASSET_SETTING_ARRAY)
+            count += array->u.values.count;
+        if (count > DE_COOKED_CLIP_MAX_MARKERS)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "too many animation markers");
+    }
+    if (!count)
+        return DE_OK;
+    de_model_anim_marker *markers = de_model_ir_array(ir, count, sizeof *markers);
+    if (!markers)
+        return DE_ERR_OUT_OF_MEMORY;
+    u32 at = 0;
+    for (u32 i = 0; i < table->u.table.count; ++i) {
+        const de_asset_setting_value *array = &table->u.table.items[i];
+        if (array->type != DE_ASSET_SETTING_ARRAY)
+            continue;
+        for (u32 j = 0; j < array->u.values.count; ++j) {
+            const de_asset_setting_value *value = &array->u.values.items[j];
+            if (value->type != DE_ASSET_SETTING_INT && value->type != DE_ASSET_SETTING_FLOAT)
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "marker time must be a number");
+            f64 time = value->type == DE_ASSET_SETTING_INT ? (f64)value->u.i : value->u.f;
+            if (!(time >= 0 && time <= 3.4028234663852886e38))
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                               "marker time must be finite and nonnegative");
+            markers[at++] = (de_model_anim_marker){de_name_from(table->u.table.keys[i]), (f32)time};
+        }
+    }
+    s->markers = markers;
+    s->marker_count = at;
+    return DE_OK;
+}
+
 de_result de_model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, de_model_ir *ir,
                                             const de_model_names *names, de_asset_id *skeleton_ids,
                                             u32 *skeleton_count, de_asset_id *clip_ids,
@@ -420,6 +466,7 @@ de_result de_model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, de_model_i
     *clip_count = 0;
     de_model_anim_settings s;
     DE_TRY(de_model_anim_settings_read(ctx, &s));
+    DE_TRY(read_markers(ctx, ir, &s));
     if (ir->skin_count == 0) {
         if (ir->anim_count != 0)
             de_model_ir_warn(ir,

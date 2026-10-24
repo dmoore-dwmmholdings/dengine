@@ -1419,3 +1419,75 @@ TEST(clip, marker_cook_allocation_failures_drain_owned_ir_blocks) {
     }
     EXPECT_TRUE(completed);
 }
+
+static de_result marker_manifest_read(void *user, const char *path, const de_allocator *allocator,
+                                      void **data, u64 *size) {
+    (void)path;
+    const char *text = user;
+    size_t bytes = strlen(text);
+    *data = DE_ALLOC(allocator, bytes + 1, 1, DE_MEM_ASSET);
+    if (!*data)
+        return DE_ERR_OUT_OF_MEMORY;
+    memcpy(*data, text, bytes + 1);
+    *size = bytes;
+    return DE_OK;
+}
+static de_result cook_marker_manifest(anim_fx *f, const char *value, de_cook_result *out) {
+    char text[1024];
+    snprintf(text, sizeof text,
+             "[assets.character]\ntype='model'\nsource='CesiumMan.glb'\nmarkers=%s\n", value);
+    de__manifest *manifest = NULL;
+    ASSERT_EQ(de__manifest_parse(&(de__manifest_parse_desc){.path = "animdata:/assets.toml",
+                                                            .allocator = &f->alloc,
+                                                            .read = marker_manifest_read,
+                                                            .read_user = text},
+                                 &manifest),
+              DE_OK);
+    ASSERT_EQ(manifest->error_count, 0u);
+    const de__manifest_asset *asset = de__manifest_find_asset(manifest, "character");
+    ASSERT_TRUE(asset);
+    de_result result = cook(f, "marker-free-baseline", "CesiumMan.glb", asset->settings,
+                            asset->setting_count, out);
+    de__manifest_destroy(manifest);
+    return result;
+}
+TEST_F(clip, manifest_named_markers_cook_and_hash_canonically, anim_fx) {
+    de_cook_result a, b, plain;
+    ASSERT_EQ(cook_marker_manifest(f, "{L=[0,0.5],R=[0.25,0.75]}", &a), DE_OK);
+    ASSERT_EQ(cook_marker_manifest(f, "{R=[0.25,0.75],L=[0,0.5]}", &b), DE_OK);
+    EXPECT_EQ(a.settings_hash, b.settings_hash);
+    const de_cook_subasset *ca = sub(&a, "anim:0"), *cb = sub(&b, "anim:0");
+    ASSERT_TRUE(ca && cb);
+    EXPECT_EQ(ca->size, cb->size);
+    EXPECT_MEMEQ(ca->data, cb->data, (size_t)ca->size);
+    de_cooked_clip_view view;
+    ASSERT_TRUE(de_cooked_clip_parse(ca->data, ca->size, &view, NULL));
+    EXPECT_EQ(view.marker_count, 4u);
+    for (u32 i = 0; i < 4; ++i) {
+        de_cooked_clip_marker marker = de_cooked_clip_get_marker(&view, i);
+        EXPECT_FLOAT_EQ(marker.time, (f32)i * .25f, 0);
+        EXPECT_EQ(marker.name.hash, de_name_from(i % 2 ? "R" : "L").hash);
+    }
+    de_cook_result_free(&a);
+    de_cook_result_free(&b);
+    ASSERT_EQ(cook(f, "marker-free-baseline", "CesiumMan.glb", NULL, 0, &plain), DE_OK);
+    ASSERT_EQ(cook_marker_manifest(f, "{L=[]}", &a), DE_OK);
+    ca = sub(&a, "anim:0");
+    cb = sub(&plain, "anim:0");
+    ASSERT_TRUE(ca && cb);
+    EXPECT_EQ(ca->size, cb->size);
+    EXPECT_MEMEQ(ca->data, cb->data, (size_t)ca->size);
+    EXPECT_NE(a.settings_hash, plain.settings_hash);
+    de_cook_result_free(&a);
+    de_cook_result_free(&plain);
+}
+TEST_F(clip, manifest_markers_reject_bad_types_times_and_duplicate_occurrences, anim_fx) {
+    const char *bad[] = {"[0,0.5]",   "{L=0}",     "{L=['zero']}", "{L=[true]}",
+                         "{L=[-1]}",  "{L=[inf]}", "{L=[nan]}",    "{L=[9999]}",
+                         "{L=[0,0]}", "{L=[[0]]}", "{''=[0]}"};
+    for (u32 i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+        de_cook_result result;
+        EXPECT_EQ(cook_marker_manifest(f, bad[i], &result), DE_ERR_INVALID_ARGUMENT);
+        de_error_clear();
+    }
+}

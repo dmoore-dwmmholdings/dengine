@@ -261,3 +261,27 @@ TEST(manifest_diff, nested_numeric_range_change) {
     md_free(&new);
     EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
 }
+
+TEST(manifest_diff, nested_tables_track_values_and_ignore_key_order) {
+    de_tracking_allocator track;
+    de_allocator allocator = de_tracking_allocator_init(&track, NULL, DE_MEM_ASSET);
+    md_parsed a = {0}, b = {0}, c = {0};
+    md_parse(&a, &allocator, "[assets.a]\ntype='t'\nsource='s'\nmarkers={R=[0.25],L=[0,0.5]}\n");
+    md_parse(&b, &allocator, "[assets.a]\ntype='t'\nsource='s'\nmarkers={L=[0,0.5],R=[0.25]}\n");
+    md_parse(&c, &allocator, "[assets.a]\ntype='t'\nsource='s'\nmarkers={L=[0,0.6],R=[0.25]}\n");
+    de__manifest_change *changes = NULL;
+    u32 count = 0;
+    ASSERT_EQ(de__manifest_diff(&a.d, &b.d, &allocator, &changes, &count), DE_OK);
+    EXPECT_EQ(count, 0u);
+    if (changes)
+        DE_FREE(&allocator, changes, count * sizeof *changes);
+    changes = NULL;
+    ASSERT_EQ(de__manifest_diff(&a.d, &c.d, &allocator, &changes, &count), DE_OK);
+    EXPECT_EQ(count, 1u);
+    if (changes)
+        DE_FREE(&allocator, changes, count * sizeof *changes);
+    md_free(&a);
+    md_free(&b);
+    md_free(&c);
+    EXPECT_EQ(de_tracking_allocator_stats(&track).bytes_live, 0u);
+}

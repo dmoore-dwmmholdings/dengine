@@ -433,10 +433,50 @@ static bool mf_value_at(mf_parser *p, const toml_datum_t *d, de__manifest_value 
         }
         return true;
     }
+    case TOML_TABLE: {
+        if (depth >= 16) {
+            *ok_out = false;
+            return MF_ERROR(p, mf_line(d), "settings container nesting exceeds 16 levels");
+        }
+        u32 count = (u32)d->u.tab.size;
+        out->type = DE__MANIFEST_TABLE;
+        out->u.table.count = count;
+        if (!count)
+            return true;
+        const char **keys =
+            DE_ALLOC(&p->aa, sizeof *keys * count, DE_ALIGNOF(const char *), DE_MEM_ASSET);
+        de__manifest_value *values =
+            DE_ALLOC(&p->aa, sizeof *values * count, DE_ALIGNOF(de__manifest_value), DE_MEM_ASSET);
+        if (!keys || !values)
+            return false;
+        out->u.table.keys = keys;
+        out->u.table.items = values;
+        for (u32 i = 0; i < count; ++i) {
+            keys[i] = mf_strndup(p, d->u.tab.key[i], (size_t)d->u.tab.len[i]);
+            if (!keys[i])
+                return false;
+            bool valid;
+            if (!mf_value_at(p, &d->u.tab.value[i], &values[i], &valid, depth + 1))
+                return false;
+            *ok_out &= valid;
+        }
+        for (u32 i = 1; i < count; ++i) {
+            const char *key = keys[i];
+            de__manifest_value value = values[i];
+            u32 j = i;
+            while (j && strcmp(keys[j - 1], key) > 0) {
+                keys[j] = keys[j - 1];
+                values[j] = values[j - 1];
+                --j;
+            }
+            keys[j] = key;
+            values[j] = value;
+        }
+        return true;
+    }
     default:
         *ok_out = false;
-        return MF_ERROR(p, mf_line(d),
-                        "settings hold booleans, integers, floats, strings and arrays; found %s",
+        return MF_ERROR(p, mf_line(d), "settings hold scalars, arrays and tables; found %s",
                         mf_type_name(d->type));
     }
 }
