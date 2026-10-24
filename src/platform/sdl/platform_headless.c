@@ -178,3 +178,7 @@ u32 de_platform_pump(de_app_event *events, u32 max_events) {
     events[0].kind = DE_EV_QUIT;
     return 1;
 }
+
+de_window de_platform_keyboard_focus(void) {
+    return (de_window){0};
+}

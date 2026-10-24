@@ -31,6 +31,7 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static const char *const k_schedule_names[DE_SCHEDULE_COUNT_] = {
@@ -283,12 +284,26 @@ de_result de__loop_run(de__host *h) {
     loop_drop_warn dw;
     memset(&dw, 0, sizeof dw);
 
+    /* Opt-in diagnostic only. Use absolute monotonic timestamps to correlate OS/Metal traces.
+     * Disabled runs do no I/O or additional clock sampling. Buffered writes are not GPU cost. */
+    const char *trace_path = getenv("DE_HOST_FRAME_TRACE");
+    FILE *phase_trace = trace_path && *trace_path ? fopen(trace_path, "w") : NULL;
+    char phase_buffer[65536];
+    if (phase_trace) {
+        setvbuf(phase_trace, phase_buffer, _IOFBF, sizeof phase_buffer);
+        fputs("frame,start_ns,end_ns,real_dt_ns,pump_ns,assets_ns,text_ns,simulation_ns,extract_"
+              "kick_ns,last_ns,pace_ns\n",
+              phase_trace);
+    }
     r = loop_schedule(w, DE_SCHEDULE_STARTUP, 0.0f, 0.0f, 0);
 
     u64 last_ns = loop_now(h);
     bool first = true;
     while (r == DE_OK && !de_engine_quit_requested(e) &&
            (max_frames == 0 || h->loop_frames < max_frames)) {
+        u64 phase[9] = {0};
+        if (phase_trace)
+            phase[0] = de_time_now_ns();
         /* 0. Frame start. */
         de_frame_pacer_begin(&pacer);
         const u64 now_ns = loop_now(h);
@@ -315,6 +330,8 @@ de_result de__loop_run(de__host *h) {
             loop_input_update(h);
             DE_PROFILE_ZONE_END(z_pump);
         }
+        if (phase_trace)
+            phase[1] = de_time_now_ns();
 #if DE_HAS_ASSETS
         /* DENG-143: finished loads are published and their events queued before First, so this
          * frame's systems see the new load states; de.asset_events sends the events in First. */
@@ -324,8 +341,12 @@ de_result de__loop_run(de__host *h) {
             DE_PROFILE_ZONE_END(z_assets);
         }
 #endif
+        if (phase_trace)
+            phase[2] = de_time_now_ns();
         if (e->text)
             de_text_update(e->text); /* DENG-257: publish font generations before workers. */
+        if (phase_trace)
+            phase[3] = de_time_now_ns();
         r = loop_run_hooks(h, h->loop_hooks.frame_begin, &h->loop_hooks.frame_begin_count,
                            "frame-begin", frame);
         if (r != DE_OK)
@@ -350,12 +371,16 @@ de_result de__loop_run(de__host *h) {
         if (r == DE_OK)
             r = loop_schedule(w, DE_SCHEDULE_POST_UPDATE, tf.frame_dt, tf.alpha, frame);
 
+        if (phase_trace)
+            phase[4] = de_time_now_ns();
         /* 5. Extract into the render world, then start the render thread. */
         if (r == DE_OK)
             r = loop_schedule(w, DE_SCHEDULE_EXTRACT, tf.frame_dt, tf.alpha, frame);
         if (r == DE_OK)
             loop_render_kick(h);
 
+        if (phase_trace)
+            phase[5] = de_time_now_ns();
         /* 6. Last, frame-end hooks, frame arena swap, pacing. */
         if (r == DE_OK)
             r = loop_schedule(w, DE_SCHEDULE_LAST, tf.frame_dt, tf.alpha, frame);
@@ -387,16 +412,34 @@ de_result de__loop_run(de__host *h) {
         ++h->loop_frames;
 
         DE_PROFILE_FRAME(NULL);
-        /* No wait after the last frame: shutdown need not sit out the rest of a capped frame. */
-        if (de_engine_quit_requested(e) || (max_frames != 0 && h->loop_frames >= max_frames))
-            break;
-        {
+        if (phase_trace)
+            phase[6] = de_time_now_ns();
+        const bool last_frame =
+            de_engine_quit_requested(e) || (max_frames != 0 && h->loop_frames >= max_frames);
+        if (!last_frame) {
             DE_PROFILE_ZONE_BEGIN(z_pace, "FramePacing");
             de_frame_pacer_wait(&pacer);
             DE_PROFILE_ZONE_END(z_pace);
         }
+        if (phase_trace) {
+            phase[7] = de_time_now_ns();
+            fprintf(phase_trace, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                    (unsigned long long)(frame - 1), (unsigned long long)phase[0],
+                    (unsigned long long)phase[7], (unsigned long long)real_dt,
+                    (unsigned long long)(phase[1] - phase[0]),
+                    (unsigned long long)(phase[2] - phase[1]),
+                    (unsigned long long)(phase[3] - phase[2]),
+                    (unsigned long long)(phase[4] - phase[3]),
+                    (unsigned long long)(phase[5] - phase[4]),
+                    (unsigned long long)(phase[6] - phase[5]),
+                    (unsigned long long)(phase[7] - phase[6]));
+        }
+        if (last_frame)
+            break;
     }
 
+    if (phase_trace)
+        fclose(phase_trace);
     if (own_arenas)
         de_frame_arenas_shutdown();
     h->loop_fixed_steps = ts.steps_total; /* DENG-95: the host's exit summary */

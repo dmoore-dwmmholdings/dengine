@@ -42,6 +42,11 @@ DE_STATIC_ASSERT(DE_PLATFORM_PAD_GENERIC == 0 && DE_PLATFORM_PAD_XBOX == 1 &&
 DE_STATIC_ASSERT(DE_INPUT_MAX_PADS < (1u << DE__INPUT_PAD_SLOT_BITS),
                  "slot index + 1 must fit the handle's slot bits");
 
+static de_result capture_set(void *user, de_window w, bool on);
+static bool capture_configured(void *user, de_window w);
+static de_window capture_focus(void *user);
+static u64 capture_now(void *user);
+
 /* ---------- Lifetime ---------- */
 
 de_result de_input_create(const de_input_desc *desc, de_input **out) {
@@ -62,6 +67,8 @@ de_result de_input_create(const de_input_desc *desc, de_input **out) {
     in->mem_tag = tag;
     in->log = de_log_register_category("input", DE_LOG_INFO);
     in->window = d.window;
+    in->capture_sink =
+        (de__input_capture_sink){capture_set, capture_configured, capture_focus, capture_now, NULL};
     in->pad_sensors_off = d.pad_sensors_off;
     in->comp_cursor = -1;
     in->comp_length = -1;
@@ -88,6 +95,7 @@ de_result de_input_create(const de_input_desc *desc, de_input **out) {
 void de_input_destroy(de_input *in) {
     if (in == NULL)
         return;
+    de_mouse_set_relative(in, false);
     de__haptics_shutdown(in);
     de__gyro_shutdown(in);
     de__actions_shutdown(in);
@@ -216,43 +224,122 @@ void de_input_detach(de_input *in) {
 
 /* ---------- Window, focus, relative mode, text input ---------- */
 
+static de_result capture_set(void *user, de_window w, bool on) {
+    (void)user;
+    return de_platform_mouse_relative(w, on);
+}
+static bool capture_configured(void *user, de_window w) {
+    (void)user;
+    return de_platform_mouse_relative_get(w);
+}
+static de_window capture_focus(void *user) {
+    (void)user;
+    return de_platform_keyboard_focus();
+}
+static u64 capture_now(void *user) {
+    (void)user;
+    return de_time_now_ns();
+}
 static de_window input_window(const de_input *in) {
-    return DE_HANDLE_VALID(in->window) ? in->window : in->focus_window;
+    if (DE_HANDLE_VALID(in->window))
+        return in->window;
+    de_window native = in->capture_sink.focus(in->capture_sink.user);
+    return native.id ? native : in->focus_window;
 }
-
-static void apply_relative(de_input *in) {
-    const de_window w = input_window(in);
-    if (!DE_HANDLE_VALID(w))
-        return; /* applied once a window is known */
-    /* Headless or refused: keep the requested mode (the state still follows it). */
-    if (de_platform_mouse_relative(w, in->relative) != DE_OK)
+static bool capture_apply(de_input *in, de_window w, bool on) {
+    ++in->relative_attempts;
+    de_result result = in->capture_sink.set(in->capture_sink.user, w, on);
+    if (result != DE_OK) {
+        if (in->relative_result != result)
+            DE_WARN(in->log, "relative mouse apply refused (%d); request retained", (int)result);
+        in->relative_result = result;
+        in->relative_retry_ns = in->capture_sink.now(in->capture_sink.user) + 250000000ull;
+        /* Preserve the failure in the public status. Do not leave an asynchronous error chain. */
         de_error_clear();
-    in->relative_dirty = false;
+        return false;
+    }
+    in->relative_result = DE_OK;
+    in->relative_retry_ns = 0;
+    return true;
 }
-
-void de_mouse_set_relative(de_input *in, bool relative) {
-    if (in == NULL)
+static void apply_relative(de_input *in) {
+    if (in->relative_retry_ns > in->capture_sink.now(in->capture_sink.user))
         return;
+    de_window w = input_window(in);
+    if (in->relative_window.id && in->relative_window.id != w.id) {
+        if (in->capture_sink.configured(in->capture_sink.user, in->relative_window) &&
+            !capture_apply(in, in->relative_window, false))
+            return;
+        in->relative_window = (de_window){0};
+    }
+    if (!w.id) {
+        if (!in->relative)
+            in->relative_dirty = false;
+        return;
+    }
+    de_window focused = in->capture_sink.focus(in->capture_sink.user);
+    bool on = in->relative && focused.id == w.id;
+    bool configured = in->capture_sink.configured(in->capture_sink.user, w);
+    if (configured != on || (on && in->relative_window.id != w.id)) {
+        if (!capture_apply(in, w, on))
+            return;
+    }
+    in->relative_window = on ? w : (de_window){0};
+    in->relative_dirty = in->relative && !on;
+}
+void de_mouse_set_relative(de_input *in, bool relative) {
+    if (!in)
+        return;
+    /* Reasserting a desired state must not turn a platform refusal into a per-frame retry.
+     * A real intent change (notably Escape) still bypasses the previous request's backoff. */
+    if (in->relative != relative)
+        in->relative_retry_ns = 0;
     in->relative = relative;
     in->relative_dirty = true;
     apply_relative(in);
 }
-
 bool de_mouse_relative(const de_input *in) {
-    return in != NULL && in->relative;
+    return in && in->relative;
 }
-
+de_mouse_capture_status de_mouse_capture_get(const de_input *in) {
+    if (!in)
+        return (de_mouse_capture_status){0};
+    de_window w = input_window(in);
+    return (de_mouse_capture_status){
+        .window = w,
+        .requested = in->relative,
+        .configured = w.id && in->capture_sink.configured(in->capture_sink.user, w),
+        .focused = w.id && in->capture_sink.focus(in->capture_sink.user).id == w.id,
+        .pending = in->relative_dirty,
+        .last_result = in->relative_result,
+        .attempts = in->relative_attempts};
+}
+de_result de_input_set_window(de_input *in, de_window window) {
+    if (!in)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_input_set_window: input is required");
+    if (in->text_active && in->window.id != window.id)
+        de_text_input_stop(in);
+    if (in->window.id != window.id)
+        in->relative_retry_ns = 0;
+    in->window = window;
+    in->relative_dirty = true;
+    apply_relative(in);
+    return DE_OK;
+}
 void de_input_app_event(de_input *in, const de_app_event *ev) {
-    if (in == NULL || ev == NULL || ev->kind != DE_EV_WINDOW_FOCUS)
+    if (!in || !ev || ev->kind != DE_EV_WINDOW_FOCUS)
         return;
-    if (ev->a != 0) {
-        if (DE_HANDLE_VALID(ev->window) && ev->window.id != in->focus_window.id) {
-            in->focus_window = ev->window;
-            if (in->relative && !DE_HANDLE_VALID(in->window))
-                in->relative_dirty = true;
+    if (ev->a) {
+        in->focus_window = ev->window;
+        if (!in->window.id || in->window.id == ev->window.id) {
+            in->relative_dirty = true;
+            in->relative_retry_ns = 0;
         }
-    } else {
+    } else if (in->window.id ? in->window.id == ev->window.id
+                             : (!in->focus_window.id || in->focus_window.id == ev->window.id)) {
         in->focus_lost_pending = true;
+        in->relative_dirty = true;
+        in->relative_retry_ns = 0;
     }
 }
 
