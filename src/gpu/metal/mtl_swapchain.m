@@ -30,6 +30,7 @@
 #include "gpu/metal/mtl_internal.h"
 
 #include <dengine/de_platform.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -166,6 +167,47 @@ de_result de__mtl_swapchain_present(de_gpu_device *d, de__gpu_swapchain *s) {
             r = de__gpu_fail(d, DE_ERR_DEVICE_LOST, "%s: metal: no command buffer", F);
         } else {
             cb.label = @"de present";
+            const char *trace_env = getenv("DE_GPU_PRESENT_TRACE");
+            if (trace_env && strcmp(trace_env, "1") == 0) {
+                /* A handler may outlive this swapchain/device. Capture values only;
+                 * never capture ms, d, a logger, the layer or the drawable itself.
+                 * One stdio call per record keeps callback lines together. */
+                const u64 queued = de_time_now_ns();
+                const u64 ident = [(__bridge id<CAMetalDrawable>)ms->drawable drawableID];
+                const u64 layer_id = (u64)(uintptr_t)ms->layer;
+                CAMetalLayer *layer = layer_of(ms);
+                fprintf(stderr,
+                        "present_enqueue layer=%llu id=%llu queued_ns=%llu transaction=%u "
+                        "sync=%u count=%lu\n",
+                        (unsigned long long)layer_id, (unsigned long long)ident,
+                        (unsigned long long)queued, layer.presentsWithTransaction,
+                        layer.displaySyncEnabled, (unsigned long)layer.maximumDrawableCount);
+                [cb addScheduledHandler:^(id<MTLCommandBuffer> buffer) {
+                  (void)buffer;
+                  fprintf(stderr,
+                          "present_scheduled layer=%llu id=%llu queued_ns=%llu end_ns=%llu\n",
+                          (unsigned long long)layer_id, (unsigned long long)ident,
+                          (unsigned long long)queued, (unsigned long long)de_time_now_ns());
+                }];
+                [cb addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+                  fprintf(stderr,
+                          "present_completed layer=%llu id=%llu queued_ns=%llu end_ns=%llu "
+                          "status=%lu gpu_ms=%.6f\n",
+                          (unsigned long long)layer_id, (unsigned long long)ident,
+                          (unsigned long long)queued, (unsigned long long)de_time_now_ns(),
+                          (unsigned long)buffer.status,
+                          (buffer.GPUEndTime - buffer.GPUStartTime) * 1000.0);
+                }];
+                [(__bridge id<CAMetalDrawable>)ms->drawable
+                    addPresentedHandler:^(id<MTLDrawable> drawable) {
+                      fprintf(stderr,
+                              "drawable_presented layer=%llu id=%llu queued_ns=%llu end_ns=%llu "
+                              "actual_time=%.9f\n",
+                              (unsigned long long)layer_id, (unsigned long long)ident,
+                              (unsigned long long)queued, (unsigned long long)de_time_now_ns(),
+                              drawable.presentedTime);
+                    }];
+            }
             [cb presentDrawable:(__bridge id<CAMetalDrawable>)ms->drawable];
             [cb commit];
         }
