@@ -1044,6 +1044,57 @@ static void back_to_front(lx *f, de_gpu_backend b) {
     EXPECT_EQ(bad, 0u);
 }
 
+/* An opaque quad rejects a farther transparent quad while a nearer one still blends.
+ * Exercise both forward material routes; early depth must retain the same HDR result. */
+static void opaque_occlusion(lx *f, de_gpu_backend b) {
+    lx_open(f, b);
+    lx_floor(f, mat_unlit(0.1f, 0.1f, 0.1f, 1.0f, 0));
+    const u32 mesh = lx_mesh_plane(f, 1, 1, 2.0f);
+    world_set(&f->w, 1, mesh, at(0, 0, 3), mat_unlit(0.3f, 0.3f, 0.3f, 1.0f, 0));
+    world_set(&f->w, 3, mesh, at(0, 0, 4),
+              mat_unlit(0.0f, 1.0f, 0.0f, 0.5f, DE_COOKED_ALPHA_BLEND));
+    const u32 hidden[] = {mat_unlit(8.0f, 0.0f, 0.0f, 0.75f, DE_COOKED_ALPHA_BLEND),
+                          mat_standard(0.8f, 0.75f, DE_COOKED_ALPHA_BLEND, false)};
+    for (u32 model = 0; model < 2; ++model) {
+        world_set(&f->w, 2, mesh, at(0, 0, 2), hidden[model]);
+        lx_run(f);
+        const fx_result *r = &f->res;
+        ASSERT_TRUE(r->forward);
+        ASSERT_EQ(r->count, 2u); /* Both forward draws exist; depth rejects only hidden pixels. */
+        u32 checked = 0, occluded = 0, foreground = 0, bad = 0;
+        for (u32 y = 0; y < f->height; ++y)
+            for (u32 x = 0; x < f->width; ++x) {
+                const i32 floor = covers(f, x, y, 0, 0, 0, 6.0f, 0.03f);
+                const i32 opaque = covers(f, x, y, 0, 0, 3, 1.0f, 0.03f);
+                const i32 behind = covers(f, x, y, 0, 0, 2, 1.0f, 0.03f);
+                const i32 front = covers(f, x, y, 0, 0, 4, 1.0f, 0.03f);
+                if (floor < 0 || opaque < 0 || behind < 0 || front < 0)
+                    continue;
+                const f32 under = (opaque == 1 ? 0.3f : floor == 1 ? 0.1f : 0.0f) * r->pre_exposure;
+                f32 want[3] = {under, under, under};
+                if (front == 1) {
+                    for (u32 ch = 0; ch < 3; ++ch)
+                        want[ch] = want[ch] * 0.5f + (ch == 1 ? 0.5f * r->pre_exposure : 0);
+                    foreground++;
+                }
+                occluded += behind == 1 && opaque == 1;
+                checked++;
+                const f32 *got = px_of(r->lighting, f, x, y);
+                for (u32 ch = 0; ch < 3; ++ch)
+                    if (!close_to(got[ch], want[ch], 0.01f, 2e-3f * r->pre_exposure)) {
+                        bad++;
+                        break;
+                    }
+            }
+        printf("occlusion model %u: checked %u hidden %u foreground %u bad %u\n", model, checked,
+               occluded, foreground, bad);
+        EXPECT_GT(checked, 10000u);
+        EXPECT_GT(occluded, 200u);
+        EXPECT_GT(foreground, 500u);
+        EXPECT_EQ(bad, 0u);
+    }
+}
+
 /* The Standard layers the deferred comparisons cover (DENG-429). */
 typedef enum fx_layer {
     FX_LAYER_NONE,
@@ -1265,6 +1316,9 @@ static void scene_color(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(forward, forward_sort_back_to_front_golden_##sfx, lx) {                                 \
         back_to_front(f, backend);                                                                 \
+    }                                                                                              \
+    TEST_F(forward, forward_opaque_occlusion_preserves_near_blend_##sfx, lx) {                     \
+        opaque_occlusion(f, backend);                                                              \
     }                                                                                              \
     TEST_F(forward, forward_lighting_matches_deferred_##sfx, lx) {                                 \
         matches_deferred(f, backend);                                                              \
