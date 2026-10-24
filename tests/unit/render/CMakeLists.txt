@@ -89,6 +89,11 @@ if(TARGET test_renderer)
         "DE_RR_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_renderer_tmp\"")
     target_link_libraries(test_renderer PRIVATE
         "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+    # DENG-613: real cooked upload fixtures; pack writer stays in the test executable only.
+    if(DE_BUILD_TOOLS)
+        target_link_libraries(test_renderer PRIVATE de_pack_lib)
+        target_compile_definitions(test_renderer PRIVATE DE_RENDER_PUMP_PACK_TEST=1)
+    endif()
 endif()
 
 # DENG-178: the render components (src/render/components.c), executable test_render_components;

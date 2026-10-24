@@ -129,6 +129,13 @@ DE_API de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **
  * system first (its unloads use the renderer's uploader), and the device after. NULL is
  * ignored. */
 DE_API void de_renderer_destroy(de_renderer *r);
+/** Advances queued GPU asset uploads without rendering or acquiring/presenting an image.
+ * Main thread, outside Extract/render callbacks. Waits for prior CPU render recording, then
+ * submits pending copies and their graphics-queue acquires. Does not advance the render frame
+ * or temporal history. Call de_asset_wait/de_asset_system_update separately to publish completed
+ * loads; continue checking the load's status. Hosts remain responsible for event pumping and
+ * any loading-screen frames. NULL or a renderer without assets is harmless. */
+DE_API void de_renderer_pump_uploads(de_renderer *r);
 /** Main-thread output dimensions in physical pixels, before per-view render scaling.
  * A renderer without a window reports its offscreen target size. NULL reports zero.
  * Each output pointer may be NULL. */
