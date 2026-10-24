@@ -30,6 +30,8 @@
 #include "gpu/metal/mtl_internal.h"
 
 #include <dengine/de_platform.h>
+#include <stdlib.h>
+#include <string.h>
 
 static mtl_swapchain *payload(de__gpu_swapchain *s) {
     return DE__GPU_PAYLOAD(mtl_swapchain, s);
@@ -118,7 +120,15 @@ de_result de__mtl_swapchain_acquire(de_gpu_device *d, de__gpu_swapchain *s, de_g
     if (ms->width == 0 || ms->height == 0)
         return DE_FAIL(DE_ERR_BUSY, "%s: the drawable has no area (minimised); resize it", F);
     @autoreleasepool {
+        const char *trace_env = getenv("DE_GPU_ACQUIRE_TRACE");
+        const bool trace = trace_env && strcmp(trace_env, "1") == 0;
+        const u64 begin = trace ? de_time_now_ns() : 0;
         id<CAMetalDrawable> dr = [layer_of(ms) nextDrawable];
+        if (trace)
+            DE_INFO(d->log,
+                    "drawable_trace start_ns=%llu duration_ns=%llu layer=%p size=%ux%u found=%u",
+                    (unsigned long long)begin, (unsigned long long)(de_time_now_ns() - begin),
+                    ms->layer, ms->width, ms->height, dr != nil);
         if (dr == nil)
             return DE_FAIL(DE_ERR_TIMEOUT, "%s: metal: no drawable became free within a second", F);
         id<MTLTexture> tex = dr.texture;

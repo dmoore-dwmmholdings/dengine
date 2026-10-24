@@ -7,6 +7,7 @@
 #include "gpu/gpu_accel_internal.h"
 #include "gpu/breadcrumbs_internal.h" /* DENG-328 */
 
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- Backend table ---------- */
@@ -1077,6 +1078,9 @@ static de__gpu_swapchain *swapchain(de_gpu_device *d, de_gpu_swapchain h, const 
 
 de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s, de_gpu_texture *image) {
     static const char F[] = "de_gpu_swapchain_acquire";
+    const char *trace_env = getenv("DE_GPU_ACQUIRE_TRACE");
+    const bool trace = trace_env && strcmp(trace_env, "1") == 0;
+    const u64 begin = trace ? de_time_now_ns() : 0;
     if (image)
         image->id = 0;
     if (!image)
@@ -1089,10 +1093,21 @@ de_result de_gpu_swapchain_acquire(de_gpu_device *d, de_gpu_swapchain s, de_gpu_
     /* Reclaim completed frame resources before acquiring more, including during
      * resize/presentation backpressure. This polls completion only: in-flight resources
      * remain fenced and no queue is drained. */
-    de__gpu_collect(d);
-    return d->vt->swapchain_acquire
-               ? de__gpu_check_lost(d, d->vt->swapchain_acquire(d, sc, image), F)
-               : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
+    const u64 validated = trace ? de_time_now_ns() : 0;
+    const u32 pending = trace ? de__gpu_deferred_count(d) : 0;
+    const u32 reclaimed = de__gpu_collect(d);
+    const u64 collected = trace ? de_time_now_ns() : 0;
+    de_result result = d->vt->swapchain_acquire
+                           ? de__gpu_check_lost(d, d->vt->swapchain_acquire(d, sc, image), F)
+                           : de__gpu_fail(d, DE_ERR_UNSUPPORTED, "%s: unsupported", F);
+    if (trace)
+        DE_INFO(d->log,
+                "acquire_trace start_ns=%llu collect_ns=%llu backend_ns=%llu pending=%u "
+                "reclaimed=%u result=%d validate_ns=%llu",
+                (unsigned long long)begin, (unsigned long long)(collected - validated),
+                (unsigned long long)(de_time_now_ns() - collected), pending, reclaimed, (int)result,
+                (unsigned long long)(validated - begin));
+    return result;
 }
 
 de_result de_gpu_swapchain_present(de_gpu_device *d, de_gpu_swapchain s) {
