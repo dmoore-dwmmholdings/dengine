@@ -233,6 +233,11 @@ float4 ps_capture_refraction(FwdVertex i,uniform ForwardParams pc):SV_Target {
     return float4(0);
 }
 
+// Feedback is disabled for this entry and it never writes depth. Reject opaque-hidden
+// fragments before material/lighting work, even when imported helpers contain UAV writes.
+#if defined(DE_SHADER_TARGET_METAL)
+[earlydepthstencil]
+#endif
 [shader("fragment")]
 float4 ps_forward(FwdVertex i, uniform ForwardParams pc) : SV_Target
 {
