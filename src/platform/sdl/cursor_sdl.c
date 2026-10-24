@@ -104,3 +104,9 @@ de_result de_platform_mouse_warp(de_window w, f32 x, f32 y) {
     SDL_WarpMouseInWindow(win, x, y);
     return DE_OK;
 }
+
+de_window de_platform_keyboard_focus(void) {
+    de__platform_sdl_state *st = de__platform_sdl_get();
+    SDL_Window *window = st && !st->headless ? SDL_GetKeyboardFocus() : NULL;
+    return window ? de__platform_sdl_window_from_id(st, SDL_GetWindowID(window)) : (de_window){0};
+}

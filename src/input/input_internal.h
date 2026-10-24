@@ -58,6 +58,15 @@ typedef struct de__input_pad {
     bool has_accel;
 } de__input_pad;
 
+/* Device sink for capture state-machine tests; native defaults are installed at creation. */
+typedef struct de__input_capture_sink {
+    de_result (*set)(void *user, de_window window, bool on);
+    bool (*configured)(void *user, de_window window);
+    de_window (*focus)(void *user);
+    u64 (*now)(void *user);
+    void *user;
+} de__input_capture_sink;
+
 struct de_input {
     de_allocator alloc;
     u32 mem_tag;
@@ -80,6 +89,11 @@ struct de_input {
     de_vec2 mouse_pos, mouse_delta, mouse_wheel;
     bool relative;       /**< requested relative mode */
     bool relative_dirty; /**< not yet applied to a window */
+    de_window relative_window;
+    de_result relative_result;
+    u32 relative_attempts;
+    u64 relative_retry_ns;
+    de__input_capture_sink capture_sink;
 
     /* Gamepads. pad_order[0 .. pad_count) are slot indices in connection order. */
     de__input_pad pads[DE_INPUT_MAX_PADS];

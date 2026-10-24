@@ -444,10 +444,27 @@ DE_API de_vec2 de_mouse_delta(const de_input *in);
 /** Wheel motion this frame, in notches: +y away from the user, +x right. */
 DE_API de_vec2 de_mouse_wheel(const de_input *in);
 /** Relative mouse mode (hidden, confined cursor; unbounded motion for camera control) on the
- * input's window. The setting is kept and applied as soon as a window is known. */
+ * input's window. The setting is kept and applied as soon as a window is known. Repeating the
+ * same request preserves any platform-refusal retry backoff; changing intent applies now. */
 DE_API void de_mouse_set_relative(de_input *in, bool relative);
 /** The relative mouse mode last set with de_mouse_set_relative(). */
 DE_API bool de_mouse_relative(const de_input *in);
+
+/** Capture request/application diagnostics. Configured is the window's backend flag, NOT
+ * independent proof of native cursor disassociation or unbounded physical-device movement. */
+typedef struct de_mouse_capture_status {
+    de_window window;
+    bool requested, configured, focused, pending;
+    de_result last_result; /**< Last platform apply/refusal result; DE_OK before any attempt. */
+    u32 attempts;          /**< Platform mode-setting attempts, including releases. */
+} de_mouse_capture_status;
+/** Main-thread snapshot. A refusal remains observable while a bounded retry is pending. */
+DE_API de_mouse_capture_status de_mouse_capture_get(const de_input *in);
+/** Rebinds relative mouse and IME input to a replacement window; zero follows native focus.
+ * Releases the previous capture before enabling the new target. Main thread only.
+ * Repeating the same binding preserves active IME input and capture retry backoff.
+ * @return DE_OK when bound; any current apply failure remains in de_mouse_capture_get(). */
+DE_API de_result de_input_set_window(de_input *in, de_window window);
 
 /** Gamepad families. SWITCH covers the Switch Pro controller and Joy-Cons, STEAM the Steam Deck
  * and the Steam Controller. Same values as de_platform_pad_type. */

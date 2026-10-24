@@ -105,3 +105,31 @@ if(TARGET de_input)
             DE_GLYPH_DOC="${DE_ROOT_DIR}/docs/input/glyph-ids.md")
     endif()
 endif()
+
+# DENG-606: real native focus/handoff coverage; no synthetic motion is hardware proof.
+if(TARGET de_input AND TARGET de_tp_sdl3)
+    de_add_test(NAME input_capture_window SOURCES test_capture_window.c
+        LIBS de_input de_test_support de_tp_sdl3 LABELS unit window)
+    if(TARGET test_input_capture_window)
+        target_include_directories(test_input_capture_window PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
+
+# These tests own OS keyboard focus. Parallel processes can steal focus from each other,
+# including between the two cases in this executable (CTest launches one process per case).
+# Keep the native assertions and deadlines intact; isolate the desktop resource instead.
+if(TARGET test_input_capture_window AND
+   NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_input_capture_window_serial.cmake" [=[
+if(EXISTS "${_de_tests}")
+    file(STRINGS "${_de_tests}" _de_capture_adds REGEX "^add_test\\(")
+    foreach(_de_line IN LISTS _de_capture_adds)
+        if(_de_line MATCHES "^add_test\\(\\[==\\[([^]]+)\\]==\\]")
+            set_tests_properties("${CMAKE_MATCH_1}" PROPERTIES RUN_SERIAL TRUE)
+        endif()
+    endforeach()
+endif()
+]=])
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+                 "${CMAKE_CURRENT_BINARY_DIR}/test_input_capture_window_serial.cmake")
+endif()
