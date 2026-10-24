@@ -13,6 +13,9 @@
  *   - `anim_error_angle` (float, degrees, default 0.05): the same for joint orientations.
  *   - `anim_joint_names` (bool, default true): keep the joint name strings in the skeleton (a Dev
  *     aid; the hashes are always there). A Shipping cook profile sets it false.
+ *   - `markers = { L = [0.0, 0.5], R = [0.25, 0.75] }`: optional named timestamps
+ *     in seconds, applied to every cooked clip of this model. Each time must fit
+ *     every such clip. Empty tables/arrays leave clip bytes unchanged.
  */
 #ifndef DE_COOK_MODEL_ANIM_COOK_H
 #define DE_COOK_MODEL_ANIM_COOK_H
@@ -25,12 +28,19 @@
 
 DE_EXTERN_C_BEGIN
 
-/** The animation settings of one import. */
+/** Marker metadata supplied to the clip writer or parsed from the manifest. */
+typedef struct de_model_anim_marker {
+    de_name name;
+    f32 time; /**< seconds in this clip, finite in [0, duration] */
+} de_model_anim_marker;
+/** The animation settings of one import. Defaults contain no markers. */
 typedef struct de_model_anim_settings {
     f32 sample_rate; /**< Hz, > 0 */
     f32 error;       /**< metres, > 0 */
     f32 error_angle; /**< radians, > 0 */
     bool joint_names;
+    const de_model_anim_marker *markers; /**< optional caller-owned array, copied/sorted by cook */
+    u32 marker_count;
 } de_model_anim_settings;
 
 #define DE_MODEL_ANIM_DEFAULT_RATE        30.0

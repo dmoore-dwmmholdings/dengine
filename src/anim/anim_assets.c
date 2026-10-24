@@ -24,7 +24,15 @@ static de_result load(de_asset_load_ctx *ctx, u32 kind) {
         return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "animation: %s",
                                       why ? why : "invalid cooked blob");
     }
-    de_asset_load_ctx_set_object(ctx, object, size);
+    if (kind == 2) {
+        de_fp_env_init_thread();
+        if (!de__anim_prepare_clip(a, &object->clip, &object->prepared)) {
+            DE_FREE(a, object, size);
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "prepared animation clip");
+        }
+    }
+    de_asset_load_ctx_set_object(ctx, object,
+                                 (u64)size + (object->prepared ? object->prepared->bytes : 0));
     return DE_OK;
 }
 static de_result load_skeleton(de_asset_load_ctx *ctx) {
@@ -38,6 +46,8 @@ static void unload(void *object, void *user) {
     de__anim_asset *asset = object;
     if (asset) {
         de_allocator a = asset->allocator;
+        if (asset->prepared)
+            DE_FREE(&a, asset->prepared, asset->prepared->bytes);
         DE_FREE(&a, asset, asset->bytes);
     }
 }

@@ -1,6 +1,7 @@
 #include "anim_internal.h"
 
 de_result de__anim_features_init(de_anim_system *s, de_world *w) {
+    DE_TRY(de_anim__graph_init(s, w));
     return de_anim__sprite_init(s, w);
 }
 

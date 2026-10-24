@@ -1,5 +1,5 @@
 /*
- * de_cooked_clip.h: the cooked animation clip format DCLP, version 1 (SPEC §11.6, §21.5;
+ * de_cooked_clip.h: the cooked animation clip formats DCLP v1/v2 (SPEC §11.6, §21.5;
  * DENG-104). Internal; include as "anim/formats/de_cooked_clip.h".
  *
  * The bytes of an `anim_clip` asset, a sub-asset `<model>#anim:<name>` of a model. The model
@@ -49,15 +49,22 @@
  *                48  u32   data bytes
  *                52  u32   total size of the blob
  *                56  u64   skeleton asset ID (`<model>#skeleton:<name>`)
- *                64  u64   reserved, 0
+ *                64  u32   marker offset (v2 only; v1 reserved, 0)
+ *                68  u32   marker count (v2 only; v1 reserved, 0)
  *                72  u64   reserved, 0
  *   tracks      T x 16: u16 joint, u8 channel (DE_COOKED_CLIP_CH_*), u8 encoding
  *               (DE_COOKED_CLIP_ENC_*), u8 components (1 or 3 for T/S, 4 for R), u8 flags, u16 0,
  *               u32 key count K (1 for CONST), u32 offset into the data (4-byte aligned).
  *   times       N x f32.
  *   data        per track, in track order, each 4-byte aligned.
+ *   markers     v2 only: M x 16 bytes appended after data: u64 name hash, f32 seconds,
+ *               u32 reserved 0. Sorted by time, then unsigned name hash; duplicate
+ *               (time, name) pairs are invalid. Times are finite in [0, duration].
+ *               Names are nonzero de_name hashes. Marker bytes are excluded from data bytes.
  *
- * Bump DE_COOKED_CLIP_VERSION on any change.
+ * V1 remains the exact writer format when no markers are authored. V2 requires
+ * at least one marker and is refused by older v1 readers, rather than silently
+ * losing foot-phase metadata. Bump the version for further layout changes.
  *
  * Determinism: the sampling helpers below use only + - * / and de_dsqrt (no <math.h>), so the
  * deterministic animator (S27) can reuse them with de_dmath. The cooker evaluates its error with
@@ -75,10 +82,13 @@
 
 DE_EXTERN_C_BEGIN
 
-#define DE_COOKED_CLIP_MAGIC       "DCLP"
-#define DE_COOKED_CLIP_VERSION     1u
-#define DE_COOKED_CLIP_HEADER_SIZE 80u
-#define DE_COOKED_CLIP_TRACK_SIZE  16u
+#define DE_COOKED_CLIP_MAGIC           "DCLP"
+#define DE_COOKED_CLIP_VERSION         1u
+#define DE_COOKED_CLIP_HEADER_SIZE     80u
+#define DE_COOKED_CLIP_TRACK_SIZE      16u
+#define DE_COOKED_CLIP_VERSION_MARKERS 2u
+#define DE_COOKED_CLIP_MARKER_SIZE     16u
+#define DE_COOKED_CLIP_MAX_MARKERS     0xFFFFu
 /** Time indices are u16. */
 #define DE_COOKED_CLIP_MAX_TIMES 0xFFFFu
 
@@ -129,7 +139,21 @@ typedef struct de_cooked_clip_view {
     u64 skeleton_id;
     const u8 *tracks, *times, *data;
     u32 data_size;
+    const u8 *markers;
+    u32 marker_count;
 } de_cooked_clip_view;
+
+/** One authored marker, independent of blob alignment and host endianness. */
+typedef struct de_cooked_clip_marker {
+    de_name name;
+    f32 time;
+} de_cooked_clip_marker;
+
+/** Marker i (< marker_count) from a checked view. */
+static inline de_cooked_clip_marker de_cooked_clip_get_marker(const de_cooked_clip_view *v, u32 i) {
+    const u8 *p = v->markers + (u64)i * DE_COOKED_CLIP_MARKER_SIZE;
+    return (de_cooked_clip_marker){{de_canim_get_u64(p)}, de_canim_get_f32(p + 8)};
+}
 
 /** Bytes of the u16 time indices of a K-key track, padded to 4. */
 static inline u64 de_cooked_clip_index_bytes(u64 k) {
@@ -205,7 +229,8 @@ static inline bool de_cooked_clip_parse(const void *data, u64 size, de_cooked_cl
         w = "not a cooked clip (magic)";
         goto fail;
     }
-    if (de_canim_get_u32(p + 4) != DE_COOKED_CLIP_VERSION) {
+    u32 version = de_canim_get_u32(p + 4);
+    if (version != DE_COOKED_CLIP_VERSION && version != DE_COOKED_CLIP_VERSION_MARKERS) {
         w = "unsupported format version";
         goto fail;
     }
@@ -238,6 +263,37 @@ static inline bool de_cooked_clip_parse(const void *data, u64 size, de_cooked_cl
     out->tracks = p + trk;
     out->times = p + tim;
     out->data = p + dat;
+    if (version == DE_COOKED_CLIP_VERSION_MARKERS) {
+        u32 marker_offset = de_canim_get_u32(p + 64);
+        out->marker_count = de_canim_get_u32(p + 68);
+        u64 marker_bytes = (u64)out->marker_count * DE_COOKED_CLIP_MARKER_SIZE;
+        if (!out->marker_count || out->marker_count > DE_COOKED_CLIP_MAX_MARKERS ||
+            (marker_offset & 3u) || de_canim_get_u64(p + 72) != 0 ||
+            marker_offset < (u64)dat + out->data_size ||
+            marker_offset < (u64)tim + (u64)out->time_count * 4u ||
+            marker_offset < (u64)trk + (u64)out->track_count * DE_COOKED_CLIP_TRACK_SIZE ||
+            !de_canim_range_ok(size, marker_offset, marker_bytes) ||
+            (u64)marker_offset + marker_bytes != size) {
+            w = "bad marker sizes or offsets";
+            goto fail;
+        }
+        out->markers = p + marker_offset;
+        f32 last_time = -1;
+        u64 last_name = 0;
+        for (u32 i = 0; i < out->marker_count; ++i) {
+            const u8 *record = out->markers + (u64)i * DE_COOKED_CLIP_MARKER_SIZE;
+            de_cooked_clip_marker marker = de_cooked_clip_get_marker(out, i);
+            if (!marker.name.hash || (de_canim_get_u32(record + 8) & 0x7F800000u) == 0x7F800000u ||
+                !(marker.time >= 0 && marker.time <= out->duration) ||
+                de_canim_get_u32(record + 12) != 0 || marker.time < last_time ||
+                (marker.time == last_time && marker.name.hash <= last_name)) {
+                w = "bad marker name, time or order";
+                goto fail;
+            }
+            last_time = marker.time;
+            last_name = marker.name.hash;
+        }
+    }
     f32 prev = de_canim_get_f32(out->times);
     if (prev != 0.0f) {
         w = "the time table does not start at 0";

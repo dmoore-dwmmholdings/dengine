@@ -64,6 +64,65 @@ static inline de_quat de__anim_slerp(de_quat a, de_quat b, f32 t, bool determini
 static inline bool de__anim_pose_valid(const de__anim_local_pose *p) {
     return p && (!p->count || (p->rotations && p->translations && p->scales));
 }
+static inline de_quat de__anim_quat_product(de_quat a, de_quat b) {
+    return (de_quat){a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                     a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                     a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                     a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+static inline de_vec3 de__anim_difference(de_vec3 value, de_vec3 reference) {
+    return (de_vec3){value.x - reference.x, value.y - reference.y, value.z - reference.z};
+}
+static inline de_vec3 de__anim_add_delta(de_vec3 base, de_vec3 delta, f32 weight) {
+    if (weight == 0)
+        return base;
+    return (de_vec3){base.x + delta.x * weight, base.y + delta.y * weight,
+                     base.z + delta.z * weight};
+}
+static inline de_quat de__anim_rotation_delta(de_quat value, de_quat reference,
+                                              bool deterministic) {
+    de_quat inverse = {-reference.x, -reference.y, -reference.z, reference.w};
+    return de__anim_normalize(de__anim_quat_product(inverse, value), deterministic);
+}
+static inline de_quat de__anim_add_rotation(de_quat base, de_quat delta, f32 weight,
+                                            bool deterministic) {
+    if (weight == 0)
+        return base;
+    de_quat scaled = de__anim_slerp((de_quat){0, 0, 0, 1}, delta, weight, deterministic);
+    return de__anim_normalize(de__anim_quat_product(base, scaled), deterministic);
+}
+/* Blend-space predicates use strict double arithmetic on the original f32
+ * coordinates. Their products fit f64 across the entire finite f32 range;
+ * keeping coordinates unshifted also preserves tiny points next to large ones. */
+static inline bool de__anim_finite(f32 value) {
+    union {
+        f32 f;
+        u32 u;
+    } bits = {.f = value};
+    return (bits.u & 0x7f800000u) != 0x7f800000u;
+}
+static inline f64 de__anim_orient2d(de_vec2 a, de_vec2 b, de_vec2 c) {
+    return ((f64)b.x - a.x) * ((f64)c.y - a.y) - ((f64)b.y - a.y) * ((f64)c.x - a.x);
+}
+/* Positive for d inside the circle of the CCW triangle abc. */
+static inline f64 de__anim_incircle(de_vec2 a, de_vec2 b, de_vec2 c, de_vec2 d) {
+    f64 ax = (f64)a.x - d.x, ay = (f64)a.y - d.y;
+    f64 bx = (f64)b.x - d.x, by = (f64)b.y - d.y;
+    f64 cx = (f64)c.x - d.x, cy = (f64)c.y - d.y;
+    return (ax * ax + ay * ay) * (bx * cy - by * cx) - (bx * bx + by * by) * (ax * cy - ay * cx) +
+           (cx * cx + cy * cy) * (ax * by - ay * bx);
+}
+static inline f64 de__anim_segment_projection(de_vec2 a, de_vec2 b, de_vec2 p,
+                                              f64 *distance_squared) {
+    f64 x = (f64)b.x - a.x, y = (f64)b.y - a.y;
+    f64 px = (f64)p.x - a.x, py = (f64)p.y - a.y;
+    f64 t = (px * x + py * y) / (x * x + y * y);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    px -= t * x;
+    py -= t * y;
+    *distance_squared = px * px + py * py;
+    return t;
+}
 /* Exact in-place aliasing with either input is supported; partial overlapping
  * channel arrays are not. Invalid shapes/weights write nothing. Endpoints copy
  * exactly; interior weights interpolate root delta as one additional bone. */

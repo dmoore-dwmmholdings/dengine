@@ -292,6 +292,13 @@ static void value_size(const de__manifest_value *value, size_t *ptrs, size_t *ch
         *nodes += value->u.values.count;
         for (u32 i = 0; i < value->u.values.count; ++i)
             value_size(&value->u.values.items[i], ptrs, chars, nodes);
+    } else if (value->type == DE__MANIFEST_TABLE) {
+        *ptrs += value->u.table.count;
+        *nodes += value->u.table.count;
+        for (u32 i = 0; i < value->u.table.count; ++i) {
+            *chars += strlen(value->u.table.keys[i]) + 1u;
+            value_size(&value->u.table.items[i], ptrs, chars, nodes);
+        }
     }
 }
 static void settings_size(const de__manifest_asset *a, size_t *ptrs, size_t *chars, size_t *nodes) {
@@ -326,6 +333,17 @@ static void copy_value(de__manifest_value *dst, const de__manifest_value *src, c
         dst->u.values.items = items;
         for (u32 i = 0; i < src->u.values.count; ++i)
             copy_value(&items[i], &src->u.values.items[i], ptrs, nodes, chars);
+    } else if (src->type == DE__MANIFEST_TABLE) {
+        const char **keys = *ptrs;
+        de__manifest_value *items = *nodes;
+        *ptrs += src->u.table.count;
+        *nodes += src->u.table.count;
+        dst->u.table.keys = keys;
+        dst->u.table.items = items;
+        for (u32 i = 0; i < src->u.table.count; ++i) {
+            keys[i] = copy_str(chars, src->u.table.keys[i]);
+            copy_value(&items[i], &src->u.table.items[i], ptrs, nodes, chars);
+        }
     }
 }
 

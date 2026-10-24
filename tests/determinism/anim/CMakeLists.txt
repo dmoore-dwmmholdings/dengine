@@ -10,6 +10,7 @@ target_compile_options(test_anim_determinism PRIVATE ${DE_DETERMINISTIC_FLAGS})
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets")
 target_compile_definitions(test_anim_determinism PRIVATE DE_ANIM_HAS_COOKER=0
     "DE_ANIM_DET_ASSETS=\"${CMAKE_CURRENT_BINARY_DIR}/assets\""
+    "DE_ANIM_GRAPH_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/anim_graph_checksums.txt\""
     "DE_ANIM_DET_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/anim_checksums.txt\""
     "DE_DET_OUT_DIR=\"${DE_DET_OUT_DIR}\"")
 if(WIN32)
@@ -21,4 +22,10 @@ de_det_add_tests(TARGET test_anim_determinism TESTS
     determinism_anim.workers_8=anim_determinism.workers_8
     determinism_anim.timing_mode_toggle=anim_determinism.timing_mode_toggle
     determinism_anim.rollback_and_cadence=anim_determinism.rollback_and_cadence
-    determinism_anim.detects_pose_bit_change=anim_determinism.detects_pose_bit_change)
+    determinism_anim.detects_pose_bit_change=anim_determinism.detects_pose_bit_change
+    determinism_anim.graph_workers_1=anim_graph_determinism.workers_1
+    determinism_anim.graph_workers_4=anim_graph_determinism.workers_4
+    determinism_anim.graph_workers_8=anim_graph_determinism.workers_8
+    determinism_anim.graph_visual_cadence=anim_graph_determinism.visual_cadence
+    determinism_anim.graph_rollback_and_cadence=anim_graph_determinism.rollback_and_cadence
+    determinism_anim.graph_detects_pose_bit_change=anim_graph_determinism.detects_pose_bit_change)

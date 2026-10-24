@@ -896,12 +896,21 @@ i32 de_model_anim_pick_skeleton(const de_model_ir *ir, const de_model_anim *anim
     return best;
 }
 
+static int marker_compare(const void *a, const void *b) {
+    const de_model_anim_marker *x = a, *y = b;
+    if (x->time != y->time)
+        return x->time < y->time ? -1 : 1;
+    return x->name.hash < y->name.hash ? -1 : x->name.hash > y->name.hash;
+}
+
 de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_anim *anim,
                               const de_model_skeleton *skel, u64 skeleton_id,
                               const de_model_anim_settings *s, de_model_clip_stats *stats) {
     de_model_clip_stats st_local;
     de_model_clip_stats *st = stats != NULL ? stats : &st_local;
     memset(st, 0, sizeof *st);
+    if (s->marker_count > DE_COOKED_CLIP_MAX_MARKERS || (s->marker_count && !s->markers))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid animation marker array");
     u32 jc = skel->joint_count;
     clip_ctx cc;
     memset(&cc, 0, sizeof cc);
@@ -963,6 +972,27 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
                          anim->name, outside, ir->skins[skel->skin].name);
     if (dups != 0)
         de_model_ir_warn(ir, "animation \"%s\": %u duplicate channel(s) ignored", anim->name, dups);
+
+    /* Copy/sort authoring metadata without mutating the caller. Legacy clips allocate
+     * nothing here and keep exactly the v1 header/payload recipe. */
+    de_model_anim_marker *markers = NULL;
+    if (s->marker_count) {
+        markers = de_model_ir_array(ir, s->marker_count, sizeof *markers);
+        if (!markers)
+            return DE_ERR_OUT_OF_MEMORY;
+        for (u32 i = 0; i < s->marker_count; ++i) {
+            markers[i] = s->markers[i];
+            if (!markers[i].name.hash || !isfinite(markers[i].time) ||
+                !(markers[i].time >= 0 && markers[i].time <= duration))
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "animation marker outside clip or unnamed");
+            if (markers[i].time == 0)
+                markers[i].time = 0; /* Canonicalize authored negative zero. */
+        }
+        qsort(markers, s->marker_count, sizeof *markers, marker_compare);
+        for (u32 i = 1; i < s->marker_count; ++i)
+            if (!marker_compare(&markers[i - 1], &markers[i]))
+                return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "duplicate animation marker");
+    }
 
     /* 2. The time table. */
     /* The grid alone must fit; the merged table is checked once the shared key times are
@@ -1185,7 +1215,7 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
     for (u32 k = 0; k < cc.track_count; ++k)
         any_root = any_root || (cc.tracks[k].flags & DE_COOKED_CLIP_TRACK_ROOT) != 0;
     de_model_buf_put(b, DE_COOKED_CLIP_MAGIC, 4);
-    de_model_buf_u32(b, DE_COOKED_CLIP_VERSION);
+    de_model_buf_u32(b, s->marker_count ? DE_COOKED_CLIP_VERSION_MARKERS : DE_COOKED_CLIP_VERSION);
     de_model_buf_u32(b, loop ? DE_COOKED_CLIP_LOOP : 0u);
     de_model_buf_u32(b, jc);
     de_model_buf_u32(b, cc.track_count);
@@ -1231,10 +1261,20 @@ de_result de_model_clip_write(de_model_buf *b, de_model_ir *ir, const de_model_a
         if (tk->enc == DE_COOKED_CLIP_ENC_RAW)
             ++st->raw_tracks;
     }
+    u64 data_end = b->size - start;
+    if (s->marker_count) {
+        for (u32 i = 0; i < s->marker_count; ++i) {
+            de_model_buf_u64(b, markers[i].name.hash);
+            de_model_buf_f32(b, markers[i].time);
+            de_model_buf_u32(b, 0);
+        }
+        de_model_buf_patch_u32(b, start + 64, (u32)data_end);
+        de_model_buf_patch_u32(b, start + 68, s->marker_count);
+    }
     de_model_buf_patch_u32(b, at_offsets, (u32)trk);
     de_model_buf_patch_u32(b, at_offsets + 4, (u32)tim);
     de_model_buf_patch_u32(b, at_offsets + 8, (u32)dat);
-    de_model_buf_patch_u32(b, at_offsets + 12, (u32)(b->size - start - dat));
+    de_model_buf_patch_u32(b, at_offsets + 12, (u32)(data_end - dat));
     de_model_buf_patch_u32(b, at_offsets + 16, (u32)(b->size - start));
     st->times = n;
     st->bytes = b->size - start;

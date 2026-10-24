@@ -212,7 +212,7 @@ const de_cook_subasset *de_cook_result_subasset(const de_cook_result *r, const c
  *   "DESH" u32 version (1) u32 count
  *   per setting, keys sorted bytewise (strcmp):
  *     u32 key length, key bytes, u8 type tag (1 bool, 2 integer, 3 float, 4 string,
- *     5 string array, 6 typed array), value:
+ *     5 string array, 6 typed array, 7 table), value:
  *       bool    u8 0 or 1
  *       integer i64
  *       float   u64 IEEE-754 bit pattern of the f64
@@ -220,7 +220,9 @@ const de_cook_subasset *de_cook_result_subasset(const de_cook_result *r, const c
  *       string array u32 count, then each item as a string, in order
  *       typed array  u32 count, then each item as type tag + value, recursively, in order
  *
- * Existing scalar/string-array encodings are unchanged. Manifest arrays nest at most 16 levels.
+ *       table        u32 count, then bytewise-sorted key strings and tagged values
+ *
+ * Existing encodings are unchanged. Manifest arrays/tables nest at most 16 container levels.
  *
  * `settings` need not be sorted. Two settings with the same key hash as written (the manifest
  * never has duplicates). Allocation-free; any thread.
