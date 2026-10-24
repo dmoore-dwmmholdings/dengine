@@ -455,6 +455,88 @@ TEST_F(mtl, pipeline_compute_bindless, pipe_fx) {
     de_gpu_pipeline_destroy(f->d, pipe);
 }
 
+/* Native pipelines, as used by the text atlas, must retain typed push reflection.
+ * Replay parameters after a blit/compute encoder transition and a pipeline change. */
+TEST_F(mtl, source_parameter_reflection_and_encoder_replay, pipe_fx) {
+    open_device(f);
+    char why[300];
+    ASSERT_TRUE(de_pipe_test_cook(TARGET, why, sizeof why));
+    de_pipe_test_shader cs;
+    ASSERT_TRUE(de_pipe_test_get(TARGET, "parameter_replay.slang", "cs_main", &cs));
+    ASSERT_EQ(cs.push_constant_bytes, 32u);
+    de_gpu_pipeline_desc desc = {.kind = DE_PIPE_COMPUTE,
+                                 .cs = cs.blob,
+                                 .push_constant_bytes = 32,
+                                 .threadgroup_size = {8, 8, 1},
+                                 .name = "source parameter replay"};
+    de_gpu_pipeline pipes[2] = {de_gpu_pipeline_create(f->d, &desc),
+                                de_gpu_pipeline_create(f->d, &desc)};
+    ASSERT_TRUE(pipes[0].id && pipes[1].id);
+    bool reflected = true;
+    for (u32 i = 0; i < 2; ++i) {
+        const mtl_pipeline *mp =
+            DE__GPU_PAYLOAD(mtl_pipeline, de__gpu_get_pipeline(f->d, pipes[i]));
+        EXPECT_EQ(mp->push_bytes, 32u);
+        EXPECT_TRUE((mp->push_stages & DE__MTL_PUSH_COMPUTE) != 0);
+        reflected &= mp->push_bytes == 32 && (mp->push_stages & DE__MTL_PUSH_COMPUTE) != 0;
+    }
+    if (!reflected) {
+        for (u32 i = 0; i < 2; ++i)
+            de_gpu_pipeline_destroy(f->d, pipes[i]);
+        return; /* Retain assertion failure instead of provoking Metal's process abort. */
+    }
+    u32 source[3 * 64];
+    for (u32 phase = 0; phase < 3; ++phase)
+        for (u32 i = 0; i < 64; ++i)
+            source[phase * 64 + i] =
+                0xff000000u | ((phase + 1) * 47u << 16) | (i * 3u << 8) | (i + 5);
+    de_gpu_buffer input = upload(f->d, source, sizeof source, DE_USAGE_STORAGE, 4, "atlas pixels");
+    de_gpu_texture out = de_gpu_texture_create(
+        f->d, &(de_gpu_texture_desc){.width = 8,
+                                     .height = 8,
+                                     .format = DE_FMT_RGBA8_UNORM,
+                                     .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                     .name = "parameter out"});
+    de_gpu_buffer rb = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = 3 * 8 * 256,
+                                                                        .usage = DE_USAGE_COPY_DST,
+                                                                        .memory = DE_MEM_READBACK,
+                                                                        .name = "parameter rb"});
+    ASSERT_TRUE(out.id && rb.id);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "parameter replay");
+    ASSERT_TRUE(cmd);
+    for (u32 phase = 0; phase < 3; ++phase) {
+        de_gpu_barrier barrier =
+            tex_barrier(out, phase ? DE_ACCESS_COPY_SRC : DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+        if (phase != 1)
+            de_gpu_cmd_set_pipeline(cmd, pipes[phase == 2]);
+        u32 pc[8] = {de_gpu_buffer_bindless(f->d, input),
+                     de_gpu_texture_bindless(f->d, out, 0, true),
+                     phase * 256,
+                     32,
+                     0,
+                     0,
+                     8,
+                     8};
+        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+        de_gpu_cmd_dispatch(cmd, 1, 1, 1);
+        barrier = tex_barrier(out, DE_ACCESS_SHADER_WRITE, DE_ACCESS_COPY_SRC);
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, rb, phase * 8 * 256, 256, out, 0, 0);
+    }
+    submit_wait(f->d, DE_QUEUE_GRAPHICS, cmd);
+    const u8 *bytes = de_gpu_buffer_map(f->d, rb);
+    ASSERT_TRUE(bytes);
+    for (u32 phase = 0; phase < 3; ++phase)
+        for (u32 y = 0; y < 8; ++y)
+            EXPECT_MEMEQ(bytes + phase * 8 * 256 + y * 256, source + phase * 64 + y * 8, 32);
+    de_gpu_buffer_destroy(f->d, rb);
+    de_gpu_buffer_destroy(f->d, input);
+    de_gpu_texture_destroy(f->d, out);
+    for (u32 i = 0; i < 2; ++i)
+        de_gpu_pipeline_destroy(f->d, pipes[i]);
+}
+
 /* ---------- Indirect count (ICB) ---------- */
 
 static void indirect_count_body(de_gpu_device *d) {

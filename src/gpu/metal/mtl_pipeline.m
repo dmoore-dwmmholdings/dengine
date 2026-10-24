@@ -322,7 +322,9 @@ static id make_state(de_gpu_device *d, id descriptor, bool archive_ok, make_fn m
     const u64 t0 = de_time_now_ns();
     /* MTLPipelineOptionBindingInfo (1 << 0): spelled as the value, because the macOS 14 SDK (CI's
      * Xcode 15.4) only has its deprecated name, MTLPipelineOptionArgumentInfo. */
-    const MTLPipelineOption opts = (MTLPipelineOption)(1u << 0);
+    /* push_scan reads bufferStructType to validate member coverage. BindingInfo alone can
+     * return no reflection for an atlas-style kernel on native Metal, dropping its push binding. */
+    const MTLPipelineOption opts = (MTLPipelineOption)((1u << 0) | MTLPipelineOptionBufferTypeInfo);
     const MTLPipelineOption from_archive = opts | MTLPipelineOptionFailOnBinaryArchiveMiss;
     const bool archived = archive_ok && de__mtl_archive_list(d) != NULL;
     id state = nil;
