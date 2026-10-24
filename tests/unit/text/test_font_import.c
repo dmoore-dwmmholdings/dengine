@@ -189,22 +189,17 @@ TEST(font, cff_outlines_and_ranges) {
     EXPECT_GT(r.size, 1000u);
     de_cook_result_free(&r);
 }
-static void msdf_coverage(const char *name) {
-    de__manifest_kv settings[] = {
-        {.key = "charset", .value = {.type = DE__MANIFEST_STRING, .u.s = "ascii"}},
-        {.key = "em_px", .value = {.type = DE__MANIFEST_INT, .u.i = 48}}};
-    de_cook_result cooked = {0};
-    ASSERT_EQ(font_cook(name, settings, 2, &cooked), DE_OK);
-    const u8 *p = cooked.data;
+static void msdf_coverage_glyphs(const char *name, const de_cook_result *cooked,
+                                 const u32 *characters, u32 character_count, u32 small_size) {
+    const u8 *p = cooked->data;
     u32 ng = de__font_u32(p + 12), nc = de__font_u32(p + 16), ns = de__font_u32(p + 28),
         pw = de__font_u32(p + 52), ph = de__font_u32(p + 56);
     const u8 *source = p + 64 + (u64)ng * 48 + (u64)nc * 8;
     stbtt_fontinfo font;
     ASSERT_TRUE(stbtt_InitFont(&font, source, 0));
-    const char *characters = "BOag";
-    const u32 sizes[] = {16, 192};
+    const u32 sizes[] = {small_size, 192};
     for (u32 size_index = 0; size_index < 2; ++size_index)
-        for (u32 c = 0; characters[c]; ++c) {
+        for (u32 c = 0; c < character_count; ++c) {
             u32 size = sizes[size_index], gid = (u32)stbtt_FindGlyphIndex(&font, characters[c]);
             const u8 *glyph = NULL;
             for (u32 i = 0; i < ng; ++i)
@@ -233,13 +228,48 @@ static void msdf_coverage(const char *name) {
                 }
             ASSERT_GT(combined, 0u);
             f32 iou = (f32)intersection / combined;
-            printf("%s %c at%upx coverage IoU %.5f\n", name, characters[c], size, (double)iou);
-            /* At16px, one aliased boundary pixel is a substantial fraction of a thin
-             * stroke. The large comparison enforces precise outline/counter agreement. */
-            EXPECT_TRUE(iou >= (size == 16 ? .75f : .97f));
+            printf("%s U+%04X at%upx coverage IoU %.5f\n", name, characters[c], size, (double)iou);
+            /* At UI sizes (16px Latin/CFF, 32px CJK), aliased boundary pixels are a substantial
+             * fraction of thin strokes. The large comparison enforces precise coverage. */
+            EXPECT_TRUE(iou >= (size_index == 0 ? .75f : .97f));
             stbtt_FreeBitmap(reference, NULL);
         }
+}
+static void msdf_coverage(const char *name) {
+    de__manifest_kv settings[] = {
+        {.key = "charset", .value = {.type = DE__MANIFEST_STRING, .u.s = "ascii"}},
+        {.key = "em_px", .value = {.type = DE__MANIFEST_INT, .u.i = 48}}};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(font_cook(name, settings, 2, &cooked), DE_OK);
+    const u32 characters[] = {'B', 'O', 'a', 'g'};
+    msdf_coverage_glyphs(name, &cooked, characters, 4, 16);
     de_cook_result_free(&cooked);
+}
+TEST(font, cjk_msdf_strokes_and_background_at_ui_and_large_sizes) {
+    ASSERT_EQ(de_fs_mount("fontcjk", DE_FONT_DATA "/../cjk", DE_MOUNT_READ_ONLY, 0), DE_OK);
+    de_cooker *cooker = NULL;
+    ASSERT_EQ(de_cooker_create(NULL, &cooker), DE_OK);
+    de_asset_type_desc type = de_font_import_type_desc();
+    EXPECT_GE(type.importer_version, 3u); /* Changed atlases must invalidate source caches. */
+    ASSERT_EQ(de_cooker_register_type(cooker, &type), DE_OK);
+    de__manifest_kv settings[] = {
+        {.key = "charset", .value = {.type = DE__MANIFEST_STRING, .u.s = "ascii"}},
+        {.key = "chars", .value = {.type = DE__MANIFEST_STRING, .u.s = "世界"}},
+        {.key = "em_px", .value = {.type = DE__MANIFEST_INT, .u.i = 48}}};
+    de__manifest_asset asset = {.id = "font/cjk",
+                                .type = "font",
+                                .source = "test.ttf",
+                                .settings = settings,
+                                .setting_count = 3};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(de_cooker_cook(cooker, &(de_cook_input){.asset = &asset, .asset_root = "fontcjk:/"},
+                             &cooked),
+              DE_OK);
+    const u32 characters[] = {0x4e16, 0x754c};
+    msdf_coverage_glyphs("cjk/test.ttf", &cooked, characters, 2, 32);
+    de_cook_result_free(&cooked);
+    de_cooker_destroy(cooker);
+    ASSERT_EQ(de_fs_unmount("fontcjk", DE_FONT_DATA "/../cjk"), DE_OK);
 }
 TEST(font, cff_msdf_strokes_counters_and_background_at_small_and_large_sizes) {
     msdf_coverage("SourceCodePro.otf");

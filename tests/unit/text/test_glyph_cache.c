@@ -50,9 +50,9 @@ TEST_F(glyph_cache, cjk500_dedupe_and_frame_budget, runtime_fx) {
     }
     printf("500 CJK generated in %u integration frames\n", frames);
 }
-TEST_F(glyph_cache, cook_runtime_byte_equal, runtime_fx) {
+static void cook_runtime_glyph_equal(runtime_fx *f, u32 codepoint) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);
-    u32 glyph = de_text__codepoint(font, 0x6f22);
+    u32 glyph = de_text__codepoint(font, codepoint);
     de__font_glyph *old = NULL;
     for (u32 i = 0; i < font->count; ++i)
         if (font->glyphs[i].index == glyph)
@@ -72,6 +72,11 @@ TEST_F(glyph_cache, cook_runtime_byte_equal, runtime_fx) {
     for (u32 y = 0; y < now.h; ++y)
         ASSERT_MEMEQ(font->pixels[old->page] + 4 * ((u64)(old->y + y) * font->width + old->x),
                      page + 4 * ((u64)(now.y + y) * font->width + now.x), now.w * 4);
+}
+TEST_F(glyph_cache, cook_runtime_byte_equal, runtime_fx) {
+    cook_runtime_glyph_equal(f, 0x6f22);
+    cook_runtime_glyph_equal(f, 0x4e16);
+    cook_runtime_glyph_equal(f, 0x754c);
 }
 TEST_F(glyph_cache, saturated_dirty_list_preserves_first_runtime_page_update, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);

@@ -90,9 +90,12 @@ seeds text's frame queue from the renderer's current frame. Thereafter call
 frames advance the renderer without advancing the text queue. Use the uploader's
 flush/acquire calls for upload progress that should not advance a render frame.
 
-MSDF import normalizes contour orientation for both TrueType and CFF outlines,
-including opposite-winding counters. Font importer version2 invalidates prior
-cooked atlases so CFF assets affected by inverted coverage are rebuilt.
+MSDF generation preserves the font's nonzero fill rule, including overlapping
+stroke contours and counters in TrueType and CFF outlines. Distance-field signs
+are corrected against that fill instead of reorienting individual contours.
+Font importer version3 invalidates older cached atlases; rebuild the cooker and
+recook packaged MSDF fonts when upgrading. Runtime-generated glyphs use the same
+correction. The DFNT format and bitmap-font behavior are unchanged.
 
 `de_text_draw` copies quads into the current frame list. `pos` is x,y,width,height
 in pixels; `uv` is minimum/maximum atlas UV. Each quad's nonzero font selects its
