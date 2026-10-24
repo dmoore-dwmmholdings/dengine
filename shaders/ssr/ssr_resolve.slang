@@ -6,6 +6,20 @@ import ssr_common;
 struct HistoryParams {
     uint color, depth, normal, dst_color, dst_surface, width, height, reserved;
 };
+// Shared by production resolve and the native subpixel-hit oracle.
+[ForceInline]
+float4 ssr_hit_history(SsrParams pc, DeSceneConstants sc, float2 uv, float depth,
+                       float2 motion, float3 normal) {
+    // Hi-Z returns a leaf's point-sampled depth. Its continuous ray UV is not the
+    // point where that depth was measured. Anchor the validation plane at its texel centre,
+    // while keeping the continuous UV for bilinear radiance sampling.
+    uint2 size = uint2(pc.width, pc.height);
+    uint2 pixel = min(uint2(uv * float2(size)), size - 1);
+    float2 source_uv = (float2(pixel) + .5) / float2(size);
+    float3 position = ssr_position(sc, source_uv, depth);
+    return ssr_history_sample(pc, sc, pc.history_color, ssr_previous_uv(uv, motion),
+                              position, normal, true);
+}
 // Lighting blends SSR with fallback using confidence. Accumulate its contribution,
 // not two independent averages: correlated colour/coverage must preserve energy.
 float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, float alpha,
@@ -87,11 +101,11 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
                 uint2 hp = min(uint2(hit.xy * float2(pc.width, pc.height)),
                                uint2(pc.width - 1, pc.height - 1));
                 SurfaceData hs = ssr_surface(pc, hp);
-                float2 prev = ssr_previous_uv(hit.xy, de_tex2d(pc.motion).Load(int3(hp, 0)).xy);
                 // History is pre-exposed; correct into this frame, then remove its exposure once.
                 float exposure = max(sc.pre_exposure, 1e-8);
                 float ratio = exposure / max(pc.previous_exposure, 1e-8);
-                float4 history = ssr_history_sample(pc, sc, pc.history_color, prev, hit_position, hs.normal, true);
+                float4 history = ssr_hit_history(pc, sc, hit.xy, hit.z,
+                                                de_tex2d(pc.motion).Load(int3(hp, 0)).xy, hs.normal);
                 if (!(history.a > 0)) continue; // No valid taps: retain the probe/sky fallback.
                 float3 color = history.rgb * ratio / exposure;
                 if (!all(isfinite(color)))
@@ -154,6 +168,7 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
     SsrParams pc = (SsrParams)0;
     pc.width = pc.height = 4;
     pc.history_surface = q.surface;
+    pc.history_color = q.color;
     pc.history_valid = q.valid;
     DeSceneConstants sc = (DeSceneConstants)0;
     sc.prev_view_proj[0] = float4(1,0,0,0);
@@ -183,6 +198,22 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
         sc.proj[2].z = 1;
     }
     pc.thickness = .1;
+    if ((q.valid & 64u) != 0) {
+        sc.inv_view_proj[0] = float4(1,0,0,0);
+        sc.inv_view_proj[1] = float4(0,1,0,0);
+        if ((q.valid & 2u) != 0) {
+            sc.inv_view_proj[2] = float4(0,0,0,-1);
+            sc.inv_view_proj[3] = float4(-.002,0,10,0);
+        } else {
+            sc.inv_view_proj[2] = float4(-.2,0,1,0);
+            sc.inv_view_proj[3] = float4(0,0,0,1);
+        }
+        // Depth belongs to texel (2,2), but the ray enters elsewhere within that texel.
+        float depth = (q.valid & 2u) != 0 ? .00105 : .55;
+        de_rwtex2d(q.output)[id.xy] =
+            ssr_hit_history(pc, sc, float2(.6,.5), depth, float2(0), float3(0,0,1));
+        return;
+    }
     float2 uv = float2(.5,.5);
     de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,float3(0,0,1),true);
 }

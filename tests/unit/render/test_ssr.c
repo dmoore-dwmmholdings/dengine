@@ -1314,12 +1314,15 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         ASSERT_TRUE(images[i].id);
         f->textures[f->texture_count++] = images[i];
     }
-    for (u32 test = 0; test < 20; ++test) {
+    for (u32 test = 0; test < 24; ++test) {
         /* Stationary cases: 10 depth, 11 normal, 12 distant depth, 13 nearest-invalid,
          * 14 NaN normal, 15 NaN colour, 16/17 tilted near/far, 18 all-invalid distant,
-         * 19 orthographic tilted plane. Valid neighbours must survive partial rejection. */
-        const bool distant = (test >= 6 && test <= 8) || test == 12 || test == 17 || test == 18;
-        const bool tilted = test == 16 || test == 17 || test == 19;
+         * 19 orthographic tilted plane; 20/21 subpixel ray-hit depth at near/far planes;
+         * 22/23 preserve a varying radiance footprint (2*.1 + 3*.9 = 2.9, not 3).
+         * Valid neighbours and valid source texels must survive partial rejection. */
+        const bool distant = (test >= 6 && test <= 8) || test == 12 || test == 17 || test == 18 ||
+                             test == 21 || test == 23;
+        const bool tilted = test == 16 || test == 17 || test == 19 || test >= 20;
         u8 *data = de_gpu_buffer_map(f->dev, upload);
         memset(data, 0, 2048);
         for (u32 y = 0; y < 4; ++y)
@@ -1359,6 +1362,8 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
                     color[0] = NAN;
                 if (tilted)
                     surface[0] += (distant ? .0002f : .2f) * (((f32)x + .5f) * .5f - 1.0f);
+                if (test >= 22)
+                    color[0] = color[1] = color[2] = (f32)x + 1.0f;
                 if (test == 9) {
                     /* Equal-time bright/low-confidence and dim/high-confidence samples:
                      * mean contribution .9, mean confidence .5, conditional radiance 1.8.
@@ -1387,7 +1392,8 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
                      test == 9 ? 4u
                                : (test == 4 ? 0u
                                             : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
-                                               (tilted ? 16u : 0u) | (test == 19 ? 32u : 0u)))};
+                                               (tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
+                                               (test >= 20 ? 64u : 0u)))};
         de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
         de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, 1, 1, 1);
@@ -1402,8 +1408,9 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         for (u32 i = 0; i < 16; ++i) {
             const bool moving = test == 9 && i % 4 == 1;
             const f32 expected_color =
-                test == 9 ? (moving ? 5.0f : 1.8f)
-                          : (test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f : 1.0f);
+                test >= 22  ? 2.9f
+                : test == 9 ? (moving ? 5.0f : 1.8f)
+                            : (test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f : 1.0f);
             EXPECT_FLOAT_EQ(result[i * 4], expected_color, 1e-6);
             EXPECT_TRUE(isfinite(result[i * 4]));
             const f32 expected_coverage =
