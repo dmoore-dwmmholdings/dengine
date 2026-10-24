@@ -83,6 +83,17 @@ acquired image may legitimately have no new native call. Timing overlap alone
 does not establish which thread blocked the host, and a valid report does not
 mean the performance acceptance passed. Keep raw traces with the report.
 
+## Stationary reflection confidence
+
+SSR accumulates stationary reflected contribution and confidence together, then
+recovers conditional radiance for the lighting override. This prevents a noisy
+blend weight from undoing radiance convergence and preserves energy when colour
+and coverage are correlated. Moving surfaces retain immediate confidence changes;
+all-miss frames restore probe/sky fallback immediately. Existing history validity,
+clipping, accumulation age, view isolation and effect-off controls still apply.
+This bounds one source of stationary reflection flicker; it does not eliminate
+all stochastic AO/SSR noise or implement temporal upscaling.
+
 ## Immutable view and pixel context
 
 Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.

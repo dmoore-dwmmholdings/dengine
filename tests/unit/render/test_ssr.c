@@ -824,6 +824,68 @@ static void rough_converges(sfx *f, de_gpu_backend backend) {
     free(previous);
     free(moments);
 }
+static void confidence_converges(sfx *f, de_gpu_backend backend) {
+    mirror_scene(f, backend, 0.25f, 2000);
+    const size_t count = (size_t)f->width * f->height;
+    u16 *image = malloc(count * 8);
+    f64 *mean = calloc(count * 4, sizeof *mean), *m2 = calloc(count * 4, sizeof *m2);
+    ASSERT_TRUE(image && mean && m2);
+    for (u32 frame = 0; frame < 96; ++frame) {
+        view_frame(f);
+        read_texture(f, current_info(f).temporal, DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE, 8,
+                     image);
+        if (frame < 64)
+            continue;
+        for (size_t i = 0; i < count; ++i) {
+            const f64 confidence = half_to_f32(image[i * 4 + 3]);
+            EXPECT_TRUE(isfinite(confidence) && confidence >= 0 && confidence <= 1);
+            for (u32 c = 0; c < 4; ++c) {
+                /* Lighting uses RGB * confidence; stable RGB alone is insufficient. */
+                const f64 value = c == 3 ? confidence : half_to_f32(image[i * 4 + c]) * confidence;
+                EXPECT_TRUE(isfinite(value));
+                const f64 delta = value - mean[i * 4 + c];
+                mean[i * 4 + c] += delta / (frame - 63);
+                m2[i * 4 + c] += delta * (value - mean[i * 4 + c]);
+            }
+        }
+    }
+    f64 confidence_variance = 0, contribution_variance = 0;
+    u32 reflective = 0;
+    for (size_t i = 0; i < count; ++i) {
+        confidence_variance += m2[i * 4 + 3] / 32;
+        for (u32 c = 0; c < 3; ++c)
+            contribution_variance += m2[i * 4 + c] / 32;
+        reflective += mean[i * 4 + 3] > 0.1;
+    }
+    confidence_variance /= count;
+    contribution_variance /= count * 3;
+    printf("stationary SSR: confidence variance %g, HDR contribution variance %g, %u receivers\n",
+           confidence_variance, contribution_variance, reflective);
+    EXPECT_GT(reflective, 1000u); /* Reject a vacuous result from disabling SSR. */
+    /* Original instantaneous confidence measured .001704 / 1705.86 on native Metal.
+     * Leave substantial headroom over the corrected .000420 / 412.79. */
+    EXPECT_TRUE(confidence_variance < .001);
+    EXPECT_TRUE(contribution_variance < 1000);
+
+    /* Remove reflected geometry while the receiver/history remain valid: all misses must
+     * immediately restore fallback, even after confidence has accumulated for 96 frames. */
+    for (u32 slot = 1; slot < f->scene.f.instances.count; ++slot) {
+        f->scene.f.removed_instances[f->scene.f.removed_instance_count++] = slot;
+        f->scene.f.instances.entity[slot] = 0;
+    }
+    f->scene.f.instances.count = 1;
+    view_frame(f);
+    EXPECT_TRUE(current_info(f).history_valid);
+    read_texture(f, current_info(f).temporal, DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE, 8,
+                 image);
+    f32 max_missing_confidence = 0;
+    for (size_t i = 0; i < count; ++i)
+        max_missing_confidence = fmaxf(max_missing_confidence, half_to_f32(image[i * 4 + 3]));
+    EXPECT_FLOAT_EQ(max_missing_confidence, 0, 0);
+    free(image);
+    free(mean);
+    free(m2);
+}
 static void exposure_correct(sfx *f, de_gpu_backend backend) {
     mirror_scene(f, backend, 0.01f, 10);
     g_mat[0].standard.metallic = 0; // nonwhite dielectric, response must be applied once
@@ -927,6 +989,9 @@ static void off_no_dispatch(sfx *f, de_gpu_backend backend) {
     EXPECT_FALSE(current_info(f).history_valid);
 }
 #define SSR_BACKEND_TESTS(suffix, backend)                                                         \
+    TEST_F(ssr, ssr_confidence_converges_##suffix, sfx) {                                          \
+        confidence_converges(f, backend);                                                          \
+    }                                                                                              \
     TEST_F(ssr, ssr_rough_converges_no_nan_##suffix, sfx) {                                        \
         rough_converges(f, backend);                                                               \
     }                                                                                              \
@@ -1237,7 +1302,7 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         ASSERT_TRUE(images[i].id);
         f->textures[f->texture_count++] = images[i];
     }
-    for (u32 test = 0; test < 9; ++test) {
+    for (u32 test = 0; test < 10; ++test) {
         u8 *data = de_gpu_buffer_map(f->dev, upload);
         memset(data, 0, 2048);
         for (u32 y = 0; y < 4; ++y)
@@ -1259,6 +1324,15 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
                     color[0] = NAN;
                 if ((test == 6 && poison) || test == 8)
                     surface[0] = .00101f; /* A ~1m separation at 100m passes a raw depth epsilon. */
+                if (test == 9) {
+                    /* Equal-time bright/low-confidence and dim/high-confidence samples:
+                     * mean contribution .9, mean confidence .5, conditional radiance 1.8.
+                     * Independent RGB/alpha averages would incorrectly contribute 2.5. */
+                    color[0] = color[1] = color[2] = 1;
+                    color[3] = .9f;
+                    surface[0] = surface[1] = surface[2] = 9;
+                    surface[3] = .1f;
+                }
             }
         de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "ssr.history.footprint");
         ASSERT_TRUE(cmd);
@@ -1275,7 +1349,7 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         u32 pc[4] = {de_gpu_texture_bindless(f->dev, images[0], 0, true),
                      de_gpu_texture_bindless(f->dev, images[1], 0, true),
                      de_gpu_texture_bindless(f->dev, images[2], 0, true),
-                     test == 4 ? 0 : (test >= 6 ? 3 : 1)};
+                     test == 9 ? 4 : (test == 4 ? 0 : (test >= 6 ? 3 : 1))};
         de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
         de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, 1, 1, 1);
@@ -1286,12 +1360,18 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         float result[4 * 4 * 4];
         read_texture(f, images[2], DE_ACCESS_SHADER_WRITE, 16, result);
         for (u32 i = 0; i < 16; ++i) {
-            EXPECT_FLOAT_EQ(result[i * 4], test == 3 || test == 4 || test == 8 ? 0 : 1, 1e-6);
+            const bool moving = test == 9 && i % 4 == 1;
+            const f32 expected_color =
+                test == 9 ? (moving ? 5 : 1.8f) : (test == 3 || test == 4 || test == 8 ? 0 : 1);
+            EXPECT_FLOAT_EQ(result[i * 4], expected_color, 1e-6);
             EXPECT_TRUE(isfinite(result[i * 4]));
             const f32 expected_coverage =
                 test == 3 || test == 4 || test == 8
                     ? 0
-                    : (test == 1 || test == 2 || test == 5 || test == 6 ? .5f : 1);
+                    : (test == 9 && moving
+                           ? .9f
+                           : (test == 1 || test == 2 || test == 5 || test == 6 || test == 9 ? .5f
+                                                                                            : 1));
             EXPECT_FLOAT_EQ(result[i * 4 + 3], expected_coverage, 1e-6);
         }
     }

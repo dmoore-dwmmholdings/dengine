@@ -6,6 +6,16 @@ import ssr_common;
 struct HistoryParams {
     uint color, depth, normal, dst_color, dst_surface, width, height, reserved;
 };
+// Lighting blends SSR with fallback using confidence. Accumulate its contribution,
+// not two independent averages: correlated colour/coverage must preserve energy.
+float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, float alpha,
+                               bool stationary) {
+    // Do not lag confidence behind camera/object motion or extend reflection-edge trails.
+    if (!stationary) return float4(lerp(clipped, current.rgb, alpha), current.a);
+    float confidence = lerp(previous.a, current.a, alpha);
+    float3 contribution = lerp(clipped * previous.a, current.rgb * current.a, alpha);
+    return float4(contribution / max(confidence, 1e-8), confidence);
+}
 [shader("compute")][numthreads(8, 8, 1)] void cs_scene_history(uint3 id : SV_DispatchThreadID,
                                                                uniform HistoryParams pc) {
     if (id.x >= pc.width || id.y >= pc.height)
@@ -115,7 +125,8 @@ struct HistoryParams {
                     float3 clipped = clamp(old.rgb, max(result.rgb - 3 * sigma, float3(0, 0, 0)),
                                            result.rgb + 3 * sigma);
                     float count = min(stats.z, 31), a = 1 / (count + 1);
-                    result.rgb = lerp(clipped, result.rgb, a);
+                    bool stationary = length((prev - uv) * float2(pc.width, pc.height)) <= .01;
+                    result = ssr_temporal_accumulate(old, result, clipped, a, stationary);
                     moments = float4(lerp(stats.xy, float2(l, l * l), a), count + 1, 0);
                 }
             }
@@ -136,6 +147,13 @@ struct HistoryQueryParams { uint color, surface, output, valid; };
 [shader("compute")][numthreads(8,8,1)]
 void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQueryParams q) {
     if (any(id.xy >= 4)) return;
+    if ((q.valid & 4u) != 0) {
+        float4 previous = de_rwtex2d(q.surface)[id.xy];
+        float4 current = de_rwtex2d(q.color)[id.xy];
+        de_rwtex2d(q.output)[id.xy] =
+            ssr_temporal_accumulate(previous, current, previous.rgb, .5, id.x != 1);
+        return;
+    }
     SsrParams pc = (SsrParams)0;
     pc.width = pc.height = 4;
     pc.history_surface = q.surface;
