@@ -453,6 +453,7 @@ typedef struct rsx {
     world w;
     de_vec3 eye, target;
     f32 fov;
+    bool orthographic;
     u32 width, height;
     de_gpu_texture tex[MAX_TEX + 1];
     u32 tex_count;
@@ -780,7 +781,8 @@ static void rb_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 
 static void camera(const rsx *f, de_mat4 *view, de_mat4 *proj) {
     *view = de_m4_look_at(f->eye, f->target, (de_vec3){0.0f, 1.0f, 0.0f});
-    *proj = de_m4_perspective_rz(f->fov, (f32)f->width / (f32)f->height, 0.1f);
+    *proj = f->orthographic ? de_m4_ortho_rz(-6.0f, 6.0f, -3.6f, 3.6f, 0.1f, 100.0f)
+                            : de_m4_perspective_rz(f->fov, (f32)f->width / (f32)f->height, 0.1f);
 }
 
 static u64 align_up(u64 v, u64 a) {
@@ -2118,6 +2120,15 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
 
 #define GPU_TESTS(sfx, backend)                                                                    \
     TEST_F(resolve, positions_uvs_cpu_ref_##sfx, rsx) {                                            \
+        positions_uvs(f, backend);                                                                 \
+    }                                                                                              \
+    TEST_F(resolve, positions_uvs_orthographic_cpu_ref_##sfx, rsx) {                               \
+        f->orthographic = true;                                                                    \
+        positions_uvs(f, backend);                                                                 \
+    }                                                                                              \
+    TEST_F(resolve, positions_uvs_wide_oblique_cpu_ref_##sfx, rsx) {                               \
+        f->fov = 1.5f;                                                                             \
+        f->eye = (de_vec3){2.5f, 1.0f, 6.0f};                                                      \
         positions_uvs(f, backend);                                                                 \
     }                                                                                              \
     TEST_F(resolve, texture_lod_vs_hw_##sfx, rsx) {                                                \
