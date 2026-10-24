@@ -68,6 +68,16 @@ typedef struct sfx {
 static void sfx_setup(sfx *f) {
     f->alloc = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_RENDER);
 }
+TEST(ssr, fixture_removal_capacity) {
+    world scene;
+    world_init(&scene, 8);
+    for (u32 slot = 0; slot < scene.cap; ++slot)
+        scene.f.removed_instances[scene.f.removed_instance_count++] = slot;
+    EXPECT_EQ(scene.f.removed_instance_count, scene.cap);
+    for (u32 slot = 0; slot < scene.cap; ++slot)
+        EXPECT_EQ(scene.f.removed_instances[slot], slot);
+    world_free(&scene);
+}
 static void sfx_teardown(sfx *f) {
     if (f->dev && f->dev->vt == &counted_wait_vt)
         f->dev->vt = original_wait_vt;

@@ -268,7 +268,7 @@ static inline void world_init(world *w, u32 cap) {
     li->transform = (de_affine *)zalloc(MAX_LIGHTS * sizeof(de_affine));
     li->light = (DeLight *)zalloc(MAX_LIGHTS * sizeof(DeLight));
     w->f.dirty_instances = (u32 *)zalloc(cap * sizeof(u32));
-    w->f.removed_instances = (u32 *)zalloc(sizeof(u32));
+    w->f.removed_instances = (u32 *)zalloc(cap * sizeof(u32));
     w->f.dirty_lights = (u32 *)zalloc(MAX_LIGHTS * sizeof(u32));
     w->f.removed_lights = (u32 *)zalloc(sizeof(u32));
 }
