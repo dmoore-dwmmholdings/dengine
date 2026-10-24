@@ -2055,8 +2055,10 @@ static void skin_render(rsx *f, de_gpu_backend backend, bool allocation_check) {
 }
 
 /* Actual sprite instance -> shared quad -> alpha vis -> model-2 resolve readbacks. */
-static void sprite_render(rsx *f, de_gpu_backend backend) {
+static void sprite_render(rsx *f, de_gpu_backend backend, bool require_mesh) {
     rsx_open(f, backend);
+    if (require_mesh && !de_gpu_get_caps(f->dev)->mesh_shaders)
+        SKIP("native alpha reflection regression requires mesh shaders");
     DeSprite sprites[2] = {{.size = {4, 4},
                             .pivot = {.5f, .5f},
                             .uv_rect = {0, 0, 1, 1},
@@ -2130,6 +2132,8 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
  * indices/visible-list orders; one good frame can hide intermittent UV corruption. */
 TEST_F(resolve, positions_uvs_orthographic_stability_metal, rsx) {
 #if defined(__APPLE__)
+    if (getenv("CI"))
+        SKIP("native Metal shader-validation repro; hosted CI GPU instrumentation is unsafe");
     setenv("MTL_DEBUG_LAYER", "1", 1);
     setenv("MTL_SHADER_VALIDATION", "1", 1);
 #endif
@@ -2244,8 +2248,20 @@ TEST_F(resolve, skin_bind_reference_motion_metal, rsx) {
     skin_render(f, DE_GPU_METAL, false);
 }
 TEST_F(resolve, sprite_vis_normal_emissive_cutout_metal, rsx) {
-    sprite_render(f, DE_GPU_METAL);
+    sprite_render(f, DE_GPU_METAL, false);
 }
+/* DENG-617: a fragment binding must not conceal the missing mesh-stage push
+ * binding. Exercise the production alpha mesh and its pixel oracle with instrumentation. */
+TEST_F(resolve, native_alpha_push_bindings_metal, rsx) {
+#if defined(__APPLE__)
+    if (getenv("CI"))
+        SKIP("native Metal shader-validation repro; hosted CI GPU instrumentation is unsafe");
+    ASSERT_EQ(setenv("MTL_DEBUG_LAYER", "1", 1), 0);
+    ASSERT_EQ(setenv("MTL_SHADER_VALIDATION", "1", 1), 0);
+#endif
+    sprite_render(f, DE_GPU_METAL, true);
+}
+
 GPU_TESTS(metal, DE_GPU_METAL)
 GPU_TESTS(vulkan, DE_GPU_VULKAN)
 GPU_TESTS(d3d12, DE_GPU_D3D12)
