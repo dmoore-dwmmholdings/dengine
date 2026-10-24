@@ -23,7 +23,9 @@ KINDS = ('present_enqueue', 'present_scheduled', 'present_completed', 'drawable_
 def callbacks(log):
     events, errors = {}, []
     for line in log.splitlines():
-        match = re.search(r'\b(' + '|'.join(KINDS) + r')\s+(.*)', line)
+        # stdout and stderr can join a complete record to an unrelated text
+        # prefix; do not require a word boundary before its intact marker.
+        match = re.search(r'(' + '|'.join(KINDS) + r')\s+(.*)', line)
         if not match:
             continue
         kind, payload = match.groups()

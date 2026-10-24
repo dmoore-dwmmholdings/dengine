@@ -32,6 +32,15 @@ class PresentationReportTest(unittest.TestCase):
         self.assertEqual(len(events), 3)
         self.assertEqual(report['event_counts']['drawable_presented'], 3)
 
+    def test_intact_marker_after_interleaved_stdout_prefix(self):
+        # Captured natively as ANC_PROBpresent_enqueue ... . No event is invented
+        # or repaired: all required integer fields must still be present.
+        _, report = callbacks(records().replace('present_enqueue ', 'ANC_PROBpresent_enqueue '))
+        self.assertTrue(report['valid'])
+        self.assertEqual(report['event_counts']['present_enqueue'], 1)
+        _, truncated = callbacks(records().replace('present_enqueue ', 'resent_enqueue '))
+        self.assertFalse(truncated['valid'])
+
     def test_missing_duplicate_or_orphan_callbacks_are_incomplete(self):
         for log in ('', records().replace('present_enqueue', 'unknown'),
                     '\n'.join(records().splitlines()[:-1]), records() * 2):
