@@ -463,6 +463,14 @@ const de_render_stats *de_renderer_stats(const de_renderer *r) {
 
 /* ---------- Frame ---------- */
 
+void de_renderer_pump_uploads(de_renderer *r) {
+    if (r == NULL || r->uploader == NULL)
+        return;
+    de__render_world_wait_idle(r);
+    de_render_uploader_flush(r->uploader);
+    (void)de_render_uploader_acquire_submit(r->uploader);
+}
+
 /* Step 3 (renderer_internal.h): the main-thread part of a frame. */
 void de__renderer_kick_prepare(de_renderer *r) {
     if (r == NULL)

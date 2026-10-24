@@ -1,5 +1,18 @@
 # Renderer
 
+## Loading GPU assets without presentation
+
+Call `de_renderer_pump_uploads(renderer)` from the main thread while waiting for
+GPU assets, followed by `de_asset_wait` or `de_asset_system_update` to publish
+completed loads. It waits for any previous CPU render recording, flushes staged
+copies and submits their matching graphics-queue acquires. It does not acquire a
+drawable, render a scene, present, or advance frame/history state. Check the load
+status as usual. Keep pumping window events and draw loading-screen frames when
+the application needs them; this call only advances uploads. Do not call it from
+Extract or render callbacks.
+The existing upload byte limit applies per pump call; the host controls how often
+to pump while keeping its loading UI responsive.
+
 ## Forward participants (DENG-322 provider)
 
 `de_render_add_forward_participant` registers a bounded renderer-owned provider:

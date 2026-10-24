@@ -32,7 +32,20 @@
 #include <dengine/de_task.h>
 
 #include "render/loaders/render_assets.h"
+#include "render/loaders/upload_ring.h"
 #include "render/renderer_internal.h"
+#include "render/world/render_world.h"
+#if defined(DE_RENDER_PUMP_PACK_TEST)
+#include "loader_test_util.h"
+#include "dpak_writer.h"
+#if defined(_WIN32)
+#include <process.h>
+#define pump_test_pid _getpid
+#else
+#include <unistd.h>
+#define pump_test_pid getpid
+#endif
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -314,6 +327,8 @@ typedef struct rfx {
     de_type_registry *types;
     de_gpu_device *d;
     de_renderer *r;
+    de_world *world;
+    char upload_pack_path[160];
     char why[1200];
 } rfx;
 
@@ -343,6 +358,10 @@ static void rfx_teardown(rfx *f) {
     if (f->assets != NULL)
         de_asset_system_destroy(f->assets); /* first: its unloads use the renderer's uploader */
     de_renderer_destroy(f->r);
+    if (f->world != NULL)
+        de_world_destroy(f->world);
+    if (f->upload_pack_path[0])
+        EXPECT_EQ(de_file_delete(f->upload_pack_path), DE_OK);
     if (f->d != NULL)
         de_gpu_device_destroy(f->d);
     if (f->types != NULL)
@@ -464,8 +483,141 @@ TEST_F(renderer, create_destroy_metal, rfx) {
     run_create_destroy(f, DE_GPU_METAL);
 }
 
+#if defined(DE_RENDER_PUMP_PACK_TEST)
+/* Real asset loads must progress without a view/frame; copy fences still gate publication.
+ * Readback deliberately supplies no uploader, so it cannot repair a missing queue acquire. */
+static void pump_uploads_without_frames(rfx *f, de_gpu_backend backend) {
+    start(f, backend, true);
+    de_renderer_pump_uploads(NULL);
+    const de_render_stats initial_stats = *de_renderer_stats(f->r);
+    snprintf(f->upload_pack_path, sizeof f->upload_pack_path, "rr:/pump-%lu-%llu.dpak",
+             (unsigned long)pump_test_pid(), (unsigned long long)de_time_now_ns());
+    lt_blob texture = lt_dtex(DE_TEX_2D, DE_FMT_RGBA8_UNORM, 64, 32, 1, 1, 0, 7, false);
+    lt_blob mesh = lt_dmsh(300, 0, 11);
+    ASSERT_TRUE(texture.data != NULL && mesh.data != NULL);
+    dpak_writer *writer = NULL;
+    ASSERT_EQ(dpak_writer_create(&(dpak_writer_desc){.include_names = true}, &writer), DE_OK);
+    ASSERT_EQ(dpak_writer_add(writer, de_asset_id_from("pump/t").hash, "texture", texture.data,
+                              texture.size, NULL, 0, "pump/t"),
+              DE_OK);
+    ASSERT_EQ(dpak_writer_add(writer, de_asset_id_from("pump/m").hash, "mesh", mesh.data, mesh.size,
+                              NULL, 0, "pump/m"),
+              DE_OK);
+    ASSERT_EQ(dpak_writer_add(writer, de_asset_id_from("pump/bad").hash, "texture", "broken", 6,
+                              NULL, 0, "pump/bad"),
+              DE_OK);
+    const u64 ids[] = {de_asset_id_from("pump/t").hash, de_asset_id_from("pump/m").hash};
+    ASSERT_EQ(dpak_writer_add_bundle(writer, "pump", ids, 2, NULL, 0, false, 0), DE_OK);
+    ASSERT_EQ(dpak_writer_finish(writer, f->upload_pack_path), DE_OK);
+    dpak_writer_destroy(writer);
+    ASSERT_EQ(de_asset_pack_mount(f->assets, f->upload_pack_path, 0), DE_OK);
+    de_render_uploader *u = de__renderer_uploader(f->r);
+    de__uploader_test_hold_fence(u, 0);
+    de_load_handle load = de_asset_load_bundle(f->assets, "pump", 0);
+    u64 deadline = de_time_now_ns() + WAIT_NS;
+    while (de_render_uploader_stats(u).submitted == 0 && de_time_now_ns() < deadline) {
+        de_renderer_pump_uploads(f->r);
+        (void)de_asset_wait(f->assets, load, 1000000);
+    }
+    ASSERT_GT(de_render_uploader_stats(u).submitted, 0u);
+    for (u32 i = 0; i < 10; ++i) {
+        de_renderer_pump_uploads(f->r);
+        EXPECT_EQ(de_asset_wait(f->assets, load, 1000000), DE_LOAD_LOADING);
+    }
+    de__uploader_test_hold_fence(u, UINT64_MAX);
+    de_load_state state = DE_LOAD_LOADING;
+    deadline = de_time_now_ns() + WAIT_NS;
+    while (state == DE_LOAD_LOADING && de_time_now_ns() < deadline) {
+        de_renderer_pump_uploads(f->r);
+        state = de_asset_wait(f->assets, load, 1000000);
+    }
+    de_load_info info;
+    (void)de_asset_status(f->assets, load, &info);
+    printf("upload bundle: ready %u failed %u first %s\n", info.assets_ready, info.assets_failed,
+           info.first_error_msg);
+    ASSERT_EQ(state, DE_LOAD_READY);
+    u64 frames = UINT64_MAX;
+    (void)de__renderer_frame_fence(f->r, &frames);
+    EXPECT_EQ(frames, 0u);
+    EXPECT_MEMEQ(&initial_stats, de_renderer_stats(f->r), sizeof initial_stats);
+    EXPECT_EQ(de_render_uploader_stats(u).pending_acquires, 0u);
+    const de_render_texture *t =
+        de_render_texture_get(f->assets, de_asset_texture(f->assets, de_asset_id_from("pump/t")));
+    const de_render_mesh *m =
+        de_render_mesh_get(f->assets, de_asset_mesh(f->assets, de_asset_id_from("pump/m")));
+    ASSERT_TRUE(t != NULL && m != NULL);
+    EXPECT_EQ(t->width, 64u);
+    EXPECT_EQ(m->vertex_count, 300u);
+    if (backend != DE_GPU_NULL) {
+        lt_tex_read read = {.row_pitch = 256, .rows = 32};
+        u64 offsets[DE_RENDER_MESH_BUFFER_COUNT], size;
+        u8 *pixels = NULL;
+        ASSERT_TRUE(lt_readback(f->d, NULL, t->texture, &read, 1, m->buffers, m->buffer_bytes,
+                                offsets, DE_RENDER_MESH_BUFFER_COUNT, &pixels, &size));
+        de_cooked_texture_subresource sub = lt_dtex_sub(&texture, 0);
+        EXPECT_MEMEQ(pixels + read.dst_off, texture.data + sub.offset, 256u * 32u);
+        de_cooked_mesh_view view;
+        ASSERT_TRUE(de_cooked_mesh_parse(mesh.data, mesh.size, &view, NULL));
+        for (u32 i = 0; i < DE_COOKED_STREAM_COUNT; ++i)
+            if (view.streams[i] != NULL)
+                EXPECT_MEMEQ(pixels + offsets[DE_RENDER_MESH_VERTICES] + m->stream_offset[i],
+                             view.streams[i],
+                             (size_t)view.vertex_count *
+                                 de_cooked_vertex_format_size(view.stream_format[i]));
+        EXPECT_MEMEQ(pixels + offsets[DE_RENDER_MESH_MESHLETS], view.meshlets,
+                     (size_t)m->buffer_bytes[DE_RENDER_MESH_MESHLETS]);
+        EXPECT_MEMEQ(pixels + offsets[DE_RENDER_MESH_MESHLET_VERTICES], view.meshlet_vertices,
+                     (size_t)m->buffer_bytes[DE_RENDER_MESH_MESHLET_VERTICES]);
+        EXPECT_MEMEQ(pixels + offsets[DE_RENDER_MESH_MESHLET_TRIANGLES], view.meshlet_triangles,
+                     (size_t)m->buffer_bytes[DE_RENDER_MESH_MESHLET_TRIANGLES]);
+        EXPECT_MEMEQ(pixels + offsets[DE_RENDER_MESH_INDICES], view.indices,
+                     (size_t)m->buffer_bytes[DE_RENDER_MESH_INDICES]);
+        free(pixels);
+    }
+    de_load_handle bad = de_asset_load(f->assets, de_asset_id_from("pump/bad"), 0);
+    state = DE_LOAD_LOADING;
+    deadline = de_time_now_ns() + WAIT_NS;
+    while (state == DE_LOAD_LOADING && de_time_now_ns() < deadline) {
+        de_renderer_pump_uploads(f->r);
+        state = de_asset_wait(f->assets, bad, 1000000);
+    }
+    EXPECT_EQ(state, DE_LOAD_FAILED);
+    (void)de__renderer_frame_fence(f->r, &frames);
+    EXPECT_EQ(frames, 0u);
+    de_asset_release(f->assets, bad);
+    /* A pending CPU render is consumed before the next pump. in_flight is cleared only by
+     * the main-thread wait, even if the worker already finished. No timing threshold needed. */
+    ASSERT_EQ(de_world_create(
+                  &(de_world_desc){.types = f->types, .tasks = f->tasks, .allocator = &f->alloc},
+                  &f->world),
+              DE_OK);
+    de_renderer_attach(f->r, f->world);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "1"), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->world), DE_OK);
+    ASSERT_TRUE(de__rw_of(f->r)->rt.in_flight);
+    de_renderer_pump_uploads(f->r);
+    EXPECT_FALSE(de__rw_of(f->r)->rt.in_flight);
+    (void)de__renderer_frame_fence(f->r, &frames);
+    EXPECT_EQ(frames, 1u);
+    ASSERT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    (void)de__renderer_frame_fence(f->r, &frames);
+    EXPECT_EQ(frames, 2u);
+    de_asset_release(f->assets, load);
+    lt_free(&texture);
+    lt_free(&mesh);
+}
+TEST_F(renderer, pump_uploads_without_frames_null, rfx) {
+    pump_uploads_without_frames(f, DE_GPU_NULL);
+}
+TEST_F(renderer, pump_uploads_without_frames_metal, rfx) {
+    pump_uploads_without_frames(f, DE_GPU_METAL);
+}
+
+#endif
+
 TEST_F(renderer, create_args, rfx) {
     start(f, DE_GPU_NULL, false);
+    de_renderer_pump_uploads(f->r);
     de_renderer *r = NULL;
     EXPECT_EQ(de_renderer_create(NULL, &r), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->d}, NULL),
