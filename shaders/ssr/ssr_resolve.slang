@@ -88,8 +88,6 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
                                uint2(pc.width - 1, pc.height - 1));
                 SurfaceData hs = ssr_surface(pc, hp);
                 float2 prev = ssr_previous_uv(hit.xy, de_tex2d(pc.motion).Load(int3(hp, 0)).xy);
-                if (!ssr_history_valid(pc, sc, prev, hit_position, hs.normal))
-                    continue;
                 // History is pre-exposed; correct into this frame, then remove its exposure once.
                 float exposure = max(sc.pre_exposure, 1e-8);
                 float ratio = exposure / max(pc.previous_exposure, 1e-8);
@@ -112,8 +110,7 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
             float l = dot(result.rgb, float3(0.2126, 0.7152, 0.0722));
             moments = float4(l, l * l, 1, 0);
             float2 prev = ssr_previous_uv(uv, de_tex2d(pc.motion).Load(int3(pixel, 0)).xy);
-            if ((pc.history_valid & 2u) != 0 &&
-                ssr_history_valid(pc, sc, prev, position, surface.normal)) {
+            if ((pc.history_valid & 2u) != 0) {
                 float4 old =
                     ssr_history_sample(pc, sc, pc.previous_specular, prev, position, surface.normal);
                 float4 stats =
@@ -175,6 +172,15 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
         sc.view_proj[0] = float4(1,0,0,20);
         sc.view_proj[2] = sc.prev_view_proj[2];
         sc.view_proj[3] = sc.prev_view_proj[3];
+    }
+    if ((q.valid & 16u) != 0)
+        sc.prev_view_proj[2].x = (q.valid & 2u) != 0 ? .0002 : .2;
+    if ((q.valid & 8u) != 0)
+        for (uint row = 0; row < 4; ++row)
+            sc.view_proj[row] = sc.prev_view_proj[row];
+    if ((q.valid & 32u) != 0) {
+        sc.proj[3].w = 1;
+        sc.proj[2].z = 1;
     }
     pc.thickness = .1;
     float2 uv = float2(.5,.5);

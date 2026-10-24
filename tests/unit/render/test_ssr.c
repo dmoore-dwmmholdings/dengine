@@ -829,7 +829,9 @@ static void rough_converges(sfx *f, de_gpu_backend backend) {
     EXPECT_TRUE(late_samples > 100);
     EXPECT_TRUE(accumulated > 100);
     EXPECT_TRUE(brightest_moment > 65504);
-    EXPECT_TRUE(late < early);
+    /* Exact half-float stability is already converged; require strict improvement otherwise.
+     * The receiver/sample-count and HDR moment checks above prevent empty/black success. */
+    EXPECT_TRUE(late < early || (early == 0 && late == 0));
     free(image);
     free(previous);
     free(moments);
@@ -1312,17 +1314,22 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         ASSERT_TRUE(images[i].id);
         f->textures[f->texture_count++] = images[i];
     }
-    for (u32 test = 0; test < 10; ++test) {
+    for (u32 test = 0; test < 20; ++test) {
+        /* Stationary cases: 10 depth, 11 normal, 12 distant depth, 13 nearest-invalid,
+         * 14 NaN normal, 15 NaN colour, 16/17 tilted near/far, 18 all-invalid distant,
+         * 19 orthographic tilted plane. Valid neighbours must survive partial rejection. */
+        const bool distant = (test >= 6 && test <= 8) || test == 12 || test == 17 || test == 18;
+        const bool tilted = test == 16 || test == 17 || test == 19;
         u8 *data = de_gpu_buffer_map(f->dev, upload);
         memset(data, 0, 2048);
         for (u32 y = 0; y < 4; ++y)
             for (u32 x = 0; x < 4; ++x) {
                 float *color = (float *)(data + y * 256 + x * 16);
                 float *surface = (float *)(data + 1024 + y * 256 + x * 16);
-                bool poison = y < 2 && test != 0 && test != 7;
+                bool poison = y < 2 && test != 0 && test != 7 && !tilted;
                 color[0] = color[1] = color[2] = poison ? 100.0f : 1.0f;
                 color[3] = 1;
-                surface[0] = test >= 6 ? .001f : .5f;
+                surface[0] = distant ? .001f : .5f;
                 surface[3] = 1;
                 if ((test == 1 && poison) || test == 3)
                     surface[0] = .25f;
@@ -1334,6 +1341,24 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
                     color[0] = NAN;
                 if ((test == 6 && poison) || test == 8)
                     surface[0] = .00101f; /* A ~1m separation at 100m passes a raw depth epsilon. */
+                if ((test == 10 && poison) || (test == 13 && x == 2 && y == 2)) {
+                    surface[0] = .25f;
+                    color[0] = color[1] = color[2] = 100.0f;
+                }
+                if (test == 13 && !(x == 2 && y == 2))
+                    color[0] = color[1] = color[2] = 1.0f;
+                if (test == 11 && poison) {
+                    surface[1] = 1;
+                    surface[3] = 0;
+                }
+                if ((test == 12 && poison) || test == 18)
+                    surface[0] = .00101f;
+                if (test == 14 && poison)
+                    surface[1] = NAN;
+                if (test == 15 && poison)
+                    color[0] = NAN;
+                if (tilted)
+                    surface[0] += (distant ? .0002f : .2f) * (((f32)x + .5f) * .5f - 1.0f);
                 if (test == 9) {
                     /* Equal-time bright/low-confidence and dim/high-confidence samples:
                      * mean contribution .9, mean confidence .5, conditional radiance 1.8.
@@ -1359,7 +1384,10 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         u32 pc[4] = {de_gpu_texture_bindless(f->dev, images[0], 0, true),
                      de_gpu_texture_bindless(f->dev, images[1], 0, true),
                      de_gpu_texture_bindless(f->dev, images[2], 0, true),
-                     test == 9 ? 4 : (test == 4 ? 0 : (test >= 6 ? 3 : 1))};
+                     test == 9 ? 4u
+                               : (test == 4 ? 0u
+                                            : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
+                                               (tilted ? 16u : 0u) | (test == 19 ? 32u : 0u)))};
         de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
         de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, 1, 1, 1);
@@ -1369,19 +1397,22 @@ static void history_footprint(sfx *f, de_gpu_backend backend) {
         de_gpu_wait_idle(f->dev);
         float result[4 * 4 * 4];
         read_texture(f, images[2], DE_ACCESS_SHADER_WRITE, 16, result);
+        printf("history footprint case %u: radiance=%g coverage=%g\n", test, (double)result[0],
+               (double)result[3]);
         for (u32 i = 0; i < 16; ++i) {
             const bool moving = test == 9 && i % 4 == 1;
             const f32 expected_color =
-                test == 9 ? (moving ? 5 : 1.8f) : (test == 3 || test == 4 || test == 8 ? 0 : 1);
+                test == 9 ? (moving ? 5.0f : 1.8f)
+                          : (test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f : 1.0f);
             EXPECT_FLOAT_EQ(result[i * 4], expected_color, 1e-6);
             EXPECT_TRUE(isfinite(result[i * 4]));
             const f32 expected_coverage =
-                test == 3 || test == 4 || test == 8
-                    ? 0
-                    : (test == 9 && moving
-                           ? .9f
-                           : (test == 1 || test == 2 || test == 5 || test == 6 || test == 9 ? .5f
-                                                                                            : 1));
+                test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f
+                : test == 13                                      ? .75f
+                : test == 9                                       ? (moving ? .9f : .5f)
+                : test == 1 || test == 2 || test == 5 || test == 6 || (test >= 10 && test <= 15)
+                    ? .5f
+                    : 1.0f;
             EXPECT_FLOAT_EQ(result[i * 4 + 3], expected_coverage, 1e-6);
         }
     }
