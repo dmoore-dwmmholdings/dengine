@@ -73,6 +73,16 @@ timestamps rather than treating delayed acquire counters as native-call timing.
 Keep cold frames and failures, use one game instance, and retain an uninstrumented
 control because diagnostic logging can perturb timings.
 
+Generate a JSON report with
+`python3 tools/diagnostics/acquire_trace_report.py --host /absolute/host.csv --log /absolute/game.log --out /absolute/report.json`.
+The report includes all cold/warm host work and start-to-start intervals, phase
+quantiles, failures, and calls overlapping every host interval above 50 ms. It
+checks that each native call is contained in exactly one backend interval;
+missing, truncated or ambiguous attribution returns exit status 2. A reused
+acquired image may legitimately have no new native call. Timing overlap alone
+does not establish which thread blocked the host, and a valid report does not
+mean the performance acceptance passed. Keep raw traces with the report.
+
 ## Immutable view and pixel context
 
 Pixel sprite snapshots retain each view's last successfully rendered camera/grid/plane.
