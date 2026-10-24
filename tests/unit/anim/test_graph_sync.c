@@ -354,3 +354,131 @@ TEST(anim_graph_sync, conflicting_sync_component_layout_is_rejected_before_sampl
         anim_fixture_teardown(&f);
     }
 }
+
+static void write_marked_clip(const char *path, f32 duration, f32 right) {
+    anim_blob blob = clip_blob(2);
+    u32 offset = blob.bytes;
+    blob.bytes += 3 * DE_COOKED_CLIP_MARKER_SIZE;
+    u8 *bytes = realloc(blob.data, blob.bytes);
+    ASSERT_TRUE(bytes);
+    blob.data = bytes;
+    memset(bytes + offset, 0, blob.bytes - offset);
+    de_cooked_put_u32(bytes + 4, DE_COOKED_CLIP_VERSION_MARKERS);
+    de_cooked_put_f32(bytes + 32, duration);
+    de_cooked_put_f32(bytes + 132, duration);
+    de_cooked_put_u32(bytes + 52, blob.bytes);
+    de_cooked_put_u32(bytes + 64, offset);
+    de_cooked_put_u32(bytes + 68, 3);
+    const f32 times[] = {0, right, duration};
+    for (u32 i = 0; i < 3; ++i) {
+        de_cooked_put_u64(bytes + offset + i * 16, de_name_from(i == 1 ? "R" : "L").hash);
+        de_cooked_put_f32(bytes + offset + i * 16 + 8, times[i]);
+    }
+    ASSERT_EQ(de_file_write_all_atomic(path, bytes, blob.bytes), DE_OK);
+    free(bytes);
+}
+static de_anim_graph marked_graph(anim_fixture *f) {
+    load_assets(f, 2);
+    write_marked_clip("animtest:/marked-walk.dclp", 1, .5f);
+    write_marked_clip("animtest:/marked-run.dclp", .6f, .15f);
+    const char *manifest =
+        "[assets.\"test/skeleton\"]\ntype='skeleton'\nsource='skeleton.dskl'\n"
+        "[assets.\"test/clip\"]\ntype='anim_clip'\nsource='clip.dclp'\n"
+        "[assets.\"test/marked-walk\"]\ntype='anim_clip'\nsource='marked-walk.dclp'\n"
+        "[assets.\"test/marked-run\"]\ntype='anim_clip'\nsource='marked-run.dclp'\n";
+    ASSERT_EQ(de_file_write_all_atomic("animtest:/assets.toml", manifest, strlen(manifest)), DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->assets, "animtest:/assets.toml"), DE_OK);
+    de_load_handle a = de_asset_load(f->assets, de_asset_id_from("test/marked-walk"), 0);
+    de_load_handle b = de_asset_load(f->assets, de_asset_id_from("test/marked-run"), 0);
+    ASSERT_EQ(de_asset_wait(f->assets, a, 10000000000ull), DE_LOAD_READY);
+    ASSERT_EQ(de_asset_wait(f->assets, b, 10000000000ull), DE_LOAD_READY);
+    f->clip = de_anim_clip_asset(f->anim, de_asset_id_from("test/marked-walk"));
+    de_anim_clip run = de_anim_clip_asset(f->anim, de_asset_id_from("test/marked-run"));
+    ASSERT_TRUE(f->clip.id && run.id);
+    de_anim_graph graph = sync_graph(f, 1, run);
+    de_asset_release(f->assets, a);
+    de_asset_release(f->assets, b);
+    return graph;
+}
+TEST_F(anim_graph_sync, actual_marker_poses_align_different_foot_times_and_keep_leader_phase,
+       anim_fixture) {
+    de_anim_graph graph = marked_graph(f);
+    de_entity entity = sync_actor(f, graph, false, .5f);
+    anim_frame(f, 0);
+    /* At walk's R=.5, run must sample its R=.15, not normalized time .3. */
+    EXPECT_FLOAT_EQ(bone_x(f, entity), .75f, 2e-6f);
+    f64 phase = sync_state(f, entity, graph)->clocks[1].phase;
+    de_anim_set_float(f->world, entity, de_name_from("blend"), 1);
+    anim_frame(f, 0);
+    EXPECT_FLOAT_EQ(sync_state(f, entity, graph)->clocks[1].phase, phase, 0);
+    EXPECT_FLOAT_EQ(bone_x(f, entity), .5f, 2e-6f);
+    DeAnimator *actor = de_entity_get(f->world, entity, f->anim->component);
+    actor->playing = true;
+    anim_frame(f, .06f);
+    EXPECT_FLOAT_EQ(bone_x(f, entity), .7f, 3e-6f);
+    actor = de_entity_get(f->world, entity, f->anim->component);
+    actor->speed = -1;
+    anim_frame(f, .06f);
+    EXPECT_FLOAT_EQ(bone_x(f, entity), .5f, 3e-6f);
+}
+TEST(anim_graph_sync, marked_snapshot_and_parallel_replay_preserve_full_phase_without_allocations) {
+    const u32 workers[] = {0, 3, 7};
+    u64 reference[16] = {0};
+    for (u32 mode = 0; mode < 3; ++mode) {
+        anim_fixture f = {0};
+        anim_fixture_setup_workers(&f, false, workers[mode]);
+        de_anim_graph graph = marked_graph(&f);
+        de_entity actors[96];
+        for (u32 i = 0; i < 96; ++i) {
+            actors[i] = sync_actor(&f, graph, true, (f32)(i % 7) / 16);
+            DeAnimator *actor = de_entity_get(f.world, actors[i], f.anim->component);
+            actor->playing = true;
+        }
+        /* Warm both schedules, transform propagation and query/task scratch. */
+        anim_frame(&f, 0);
+        sync_tick(&f, .03125f);
+        anim_frame(&f, 0);
+        (void)de_anim_checksum(f.world);
+        de_world_snapshot snapshot = {0};
+        ASSERT_EQ(de_world_snapshot_take(f.world, &f.allocator, &snapshot), DE_OK);
+        u64 worlds[16];
+        for (u32 replay = 0; replay < 2; ++replay) {
+            if (replay)
+                ASSERT_EQ(de_world_snapshot_restore(f.world, &snapshot), DE_OK);
+            de_alloc_guard guard = {0};
+            for (u32 tick = 0; tick < 16; ++tick) {
+                de_alloc_guard_begin(&guard);
+                for (u32 i = 0; i < 96; ++i) {
+                    sync_inputs(&f, actors[i], tick + i);
+                    DeAnimator *actor = de_entity_get(f.world, actors[i], f.anim->component);
+                    actor->speed = tick % 5 == 0 ? -1 : 1;
+                    if (replay)
+                        actor->deterministic = false;
+                }
+                if (replay) {
+                    anim_frame(&f, .02f);
+                    for (u32 i = 0; i < 96; ++i) {
+                        DeAnimator *actor = de_entity_get(f.world, actors[i], f.anim->component);
+                        actor->deterministic = true;
+                    }
+                }
+                sync_tick(&f, .03125f);
+                u64 checksum = de_anim_checksum(f.world);
+                if (!mode && !replay)
+                    reference[tick] = checksum;
+                else
+                    EXPECT_EQ(checksum, reference[tick]);
+                de_alloc_guard_end(&guard);
+                DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+                /* The generic ECS checksum allocates its own verification scratch. */
+                u64 world = de_world_checksum(f.world, DE_COMP_SNAPSHOT);
+                if (!replay)
+                    worlds[tick] = world;
+                else
+                    EXPECT_EQ(world, worlds[tick]);
+            }
+        }
+        de_world_snapshot_free(&f.allocator, &snapshot);
+        anim_fixture_teardown(&f);
+    }
+}

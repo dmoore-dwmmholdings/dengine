@@ -7,11 +7,155 @@ static bool finite64(f64 value) {
     memcpy(&bits, &value, sizeof bits);
     return (bits & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
 }
+static de_cooked_clip_marker ring_marker(const de__anim_marker_ring *ring, u32 i) {
+    de_cooked_clip_marker marker =
+        de_cooked_clip_get_marker(ring->clip, (ring->start + i) % ring->count);
+    if (marker.time == ring->clip->duration)
+        marker.time = 0;
+    return marker;
+}
+static bool marker_ring(const de_cooked_clip_view *clip, de__anim_marker_ring *out) {
+    if (!clip || !clip->markers || clip->marker_count < 2 ||
+        clip->marker_count > DE_COOKED_CLIP_MAX_MARKERS || !de__anim_finite(clip->duration) ||
+        !(clip->duration > 0))
+        return false;
+    de__anim_marker_ring ring = {.clip = clip, .count = clip->marker_count};
+    de_cooked_clip_marker first = de_cooked_clip_get_marker(clip, 0);
+    de_cooked_clip_marker last = de_cooked_clip_get_marker(clip, ring.count - 1);
+    if (last.time == clip->duration) {
+        if (first.time == 0) {
+            if (first.name.hash != last.name.hash)
+                return false;
+            --ring.count;
+        } else
+            ring.start = ring.count - 1;
+    }
+    if (ring.count < 2)
+        return false;
+    f32 previous = -1;
+    for (u32 i = 0; i < ring.count; ++i) {
+        de_cooked_clip_marker marker = ring_marker(&ring, i);
+        if (!marker.name.hash || !de__anim_finite(marker.time) ||
+            !(marker.time >= 0 && marker.time > previous && marker.time < clip->duration))
+            return false;
+        previous = marker.time;
+    }
+    /* Booth's minimum cyclic name rotation: bounded linear work even for long
+     * nearly periodic tracks, without allocating a prefix/suffix table. */
+    u32 i = 0, j = 1, k = 0;
+    while (i < ring.count && j < ring.count && k < ring.count) {
+        u64 a = ring_marker(&ring, (i + k) % ring.count).name.hash;
+        u64 b = ring_marker(&ring, (j + k) % ring.count).name.hash;
+        if (a == b) {
+            ++k;
+            continue;
+        }
+        if (a > b) {
+            i += k + 1;
+            if (i == j)
+                ++i;
+        } else {
+            j += k + 1;
+            if (i == j)
+                ++j;
+        }
+        k = 0;
+    }
+    ring.pivot = i < j ? i : j;
+    /* Only divisors can be periods; comparing them avoids quadratic rotation
+     * matching for long nearly periodic marker sequences. */
+    ring.period = ring.count;
+    for (u32 period = 1; period < ring.count; ++period) {
+        if (ring.count % period)
+            continue;
+        bool repeated = true;
+        for (u32 n = period; n < ring.count && repeated; ++n)
+            repeated = ring_marker(&ring, (ring.pivot + n) % ring.count).name.hash ==
+                       ring_marker(&ring, (ring.pivot + n % period) % ring.count).name.hash;
+        if (repeated) {
+            ring.period = period;
+            break;
+        }
+    }
+    *out = ring;
+    return true;
+}
+bool de__anim_marker_map_init(de__anim_marker_map *out, const de_cooked_clip_view *reference,
+                              const de_cooked_clip_view *clip) {
+    if (!out)
+        return false;
+    memset(out, 0, sizeof *out);
+    if (!marker_ring(reference, &out->reference) || !marker_ring(clip, &out->clip) ||
+        out->reference.period != out->clip.period)
+        return false;
+    u32 n = out->reference.period;
+    for (u32 i = 0; i < n; ++i)
+        if (ring_marker(&out->reference, (out->reference.pivot + i) % out->reference.count)
+                .name.hash !=
+            ring_marker(&out->clip, (out->clip.pivot + i) % out->clip.count).name.hash)
+            return false;
+    out->shift = (i32)out->clip.pivot - (i32)out->reference.pivot;
+    out->valid = true;
+    return true;
+}
+static f64 marker_time(const de__anim_marker_ring *ring, u32 i) {
+    return (f64)ring_marker(ring, i).time / (f64)ring->clip->duration;
+}
+/* Convert normalized clip cycles through an unbounded marker-interval index.
+ * Signed pivot displacement aligns names; exchanging rings and negating it is
+ * the inverse, including clips containing different numbers of foot cycles. */
+static f64 marker_phase(const de__anim_marker_ring *from, const de__anim_marker_ring *to, i32 shift,
+                        f64 phase) {
+    f64 fraction = de__anim_wrap_time(phase, 1);
+    f64 cycles = phase - fraction;
+    u32 begin;
+    if (fraction < marker_time(from, 0)) {
+        begin = from->count - 1;
+        fraction += 1;
+        cycles -= 1;
+    } else {
+        u32 lo = 0, hi = from->count;
+        while (lo + 1 < hi) {
+            u32 mid = lo + (hi - lo) / 2;
+            if (marker_time(from, mid) <= fraction)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        begin = lo;
+    }
+    u32 next = (begin + 1) % from->count;
+    f64 a = marker_time(from, begin), b = marker_time(from, next) + (next == 0 ? 1 : 0);
+    f64 intervals = cycles * from->count + begin + (fraction - a) / (b - a) + shift;
+    if (!finite64(intervals))
+        return intervals;
+    f64 remaining = de__anim_wrap_time(intervals, to->count);
+    u32 target = (u32)remaining;
+    u32 target_next = (target + 1) % to->count;
+    f64 c = marker_time(to, target), d = marker_time(to, target_next) + (target_next == 0 ? 1 : 0);
+    return (intervals - remaining) / to->count + c + (remaining - target) * (d - c);
+}
+static f64 to_leaf(const de__anim_marker_map *map, f64 phase) {
+    if (!map || !map->valid || (map->reference.clip == map->clip.clip && !map->shift))
+        return phase;
+    return marker_phase(&map->reference, &map->clip, map->shift, phase);
+}
+static f64 to_reference(const de__anim_marker_map *map, f64 phase) {
+    if (!map || !map->valid || (map->reference.clip == map->clip.clip && !map->shift))
+        return phase;
+    return marker_phase(&map->clip, &map->reference, -map->shift, phase);
+}
 bool de__anim_sync_step(de__anim_sync_clock *clock, de_name group, const de__anim_sync_leaf *leaves,
                         u32 count, f64 time, bool reset) {
+    return de__anim_sync_step_marked(clock, group, leaves, count, NULL, time, reset);
+}
+bool de__anim_sync_step_marked(de__anim_sync_clock *clock, de_name group,
+                               const de__anim_sync_leaf *leaves, u32 count,
+                               const de__anim_marker_map *maps, f64 time, bool reset) {
     if (!clock || !group.hash || (count && !leaves) || !finite64(time))
         return false;
     const de__anim_sync_leaf *leader = NULL;
+    u32 leader_index = 0;
     for (u32 i = 0; i < count; ++i) {
         const de__anim_sync_leaf *leaf = &leaves[i];
         if (!de__anim_finite(leaf->demand) || leaf->demand < 0 || leaf->demand > 1 ||
@@ -21,8 +165,10 @@ bool de__anim_sync_step(de__anim_sync_clock *clock, de_name group, const de__ani
         if (leaf->group.hash != group.hash || !(leaf->demand > 1e-4f) || !(leaf->duration > 0))
             continue;
         if (!leader || leaf->demand > leader->demand ||
-            (leaf->demand == leader->demand && leaf->node < leader->node))
+            (leaf->demand == leader->demand && leaf->node < leader->node)) {
             leader = leaf;
+            leader_index = i;
+        }
     }
     de__anim_sync_clock next = *clock;
     if (reset || next.group.hash != group.hash) {
@@ -34,7 +180,16 @@ bool de__anim_sync_step(de__anim_sync_clock *clock, de_name group, const de__ani
     next.leader = leader ? leader->node : DE__ANIM_SYNC_NONE;
     if (leader) {
         f64 rate = (f64)leader->speed / (f64)leader->duration;
-        f64 phase = next.initialized ? next.phase + (time - next.time) * rate : time * rate;
+        const de__anim_marker_map *map = maps ? &maps[leader_index] : NULL;
+        f64 phase;
+        if (!next.initialized)
+            phase = to_reference(map, time * rate);
+        else if (time == next.time)
+            phase = next.phase;
+        else if (!map || !map->valid)
+            phase = next.phase + (time - next.time) * rate;
+        else
+            phase = to_reference(map, to_leaf(map, next.phase) + (time - next.time) * rate);
         if (!finite64(phase))
             return false;
         next.phase = phase;
@@ -56,6 +211,18 @@ bool de__anim_sync_sample_time(const de__anim_sync_clock *clock, f32 duration, b
         phase = phase < 0 ? 0 : phase > 1 ? 1 : phase;
     *time = (f32)(phase * (f64)duration);
     return true;
+}
+
+bool de__anim_sync_sample_marked_time(const de__anim_sync_clock *clock,
+                                      const de__anim_marker_map *map, f32 duration, bool loop,
+                                      f32 *time) {
+    if (!clock)
+        return false;
+    de__anim_sync_clock local = *clock;
+    if (!finite64(local.phase))
+        return false;
+    local.phase = to_leaf(map, local.phase);
+    return de__anim_sync_sample_time(&local, duration, loop, time);
 }
 
 /* Group state is an actor component with a size specialized by group count.

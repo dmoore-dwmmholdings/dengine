@@ -138,3 +138,143 @@ TEST(anim_sync, invalid_input_does_not_mutate_clock_or_output) {
     EXPECT_FALSE(de__anim_sync_sample_time(&c, -1, true, &out));
     EXPECT_FLOAT_EQ(out, 17, 0);
 }
+
+#include "render/formats/de_cooked_le.h"
+static de_cooked_clip_view marker_view(u8 *bytes, const char *const *names, const f32 *times,
+                                       u32 count, f32 duration) {
+    memset(bytes, 0, (size_t)count * 16);
+    for (u32 i = 0; i < count; ++i) {
+        de_cooked_put_u64(bytes + i * 16, de_name_from(names[i]).hash);
+        de_cooked_put_f32(bytes + i * 16 + 8, times[i]);
+    }
+    return (de_cooked_clip_view){.duration = duration, .markers = bytes, .marker_count = count};
+}
+TEST(anim_sync, marker_intervals_preserve_phase_across_shifted_leaders_and_reverse_wrap) {
+    u8 a[48], b[48];
+    const char *an[] = {"L", "R", "L"}, *bn[] = {"R", "L", "R"};
+    const f32 at[] = {0, .5f, 1}, bt[] = {0, .125f, .5f};
+    de_cooked_clip_view reference = marker_view(a, an, at, 3, 1);
+    de_cooked_clip_view other = marker_view(b, bn, bt, 3, .5f);
+    de__anim_marker_map maps[2];
+    ASSERT_TRUE(de__anim_marker_map_init(&maps[0], &reference, &reference));
+    ASSERT_TRUE(de__anim_marker_map_init(&maps[1], &reference, &other));
+    de__anim_sync_leaf leaves[] = {leaf(0, .5f, 1, 1), leaf(1, .5f, .5f, 1)};
+    de__anim_sync_clock clock = {0};
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .25, false));
+    f32 time;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .3125f, 0);
+    leaves[1].demand = .75f;
+    f64 phase = clock.phase;
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .25, false));
+    EXPECT_FLOAT_EQ(clock.phase, phase, 0);
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .375, false));
+    EXPECT_FLOAT_EQ(clock.phase, 5.0 / 12, 1e-14);
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .4375f, 1e-7f);
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .25, true));
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .25f, 1e-7f);
+    clock.phase = -.25;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .0625f, 0);
+    clock.phase = 10.25;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .3125f, 1e-7f);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    for (u32 i = 0; i < 512; ++i) {
+        leaves[1].speed = i % 2 ? -1 : 1;
+        ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, (f64)i / 64,
+                                              false));
+        ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    }
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+}
+TEST(anim_sync, marker_cyclic_sequence_rotations_and_incompatible_fallback) {
+    u8 a[32 * 16], b[32 * 16];
+    const char *names[] = {"A", "B", "C", "D", "E", "F", "G"};
+    for (u32 shift = 0; shift < 7; ++shift) {
+        const char *rotated[7];
+        f32 at[7], bt[7];
+        for (u32 i = 0; i < 7; ++i) {
+            rotated[(i + shift) % 7] = names[i];
+            at[i] = (f32)i / 8;
+            bt[i] = (f32)i / 16;
+        }
+        de_cooked_clip_view reference = marker_view(a, names, at, 7, 1);
+        de_cooked_clip_view other = marker_view(b, rotated, bt, 7, .5f);
+        de__anim_marker_map map;
+        ASSERT_TRUE(de__anim_marker_map_init(&map, &reference, &other));
+        for (u32 i = 0; i < 7; ++i) {
+            de__anim_sync_clock clock = {.initialized = true, .phase = at[i]};
+            f32 time;
+            ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .5f, true, &time));
+            EXPECT_FLOAT_EQ(time, bt[(i + shift) % 7], 1e-7);
+        }
+        other.marker_count = 6;
+        EXPECT_FALSE(de__anim_marker_map_init(&map, &reference, &other));
+        de__anim_sync_clock clock = {.initialized = true, .phase = .25};
+        f32 time;
+        ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &map, .5f, true, &time));
+        EXPECT_FLOAT_EQ(time, .125f, 0);
+    }
+    /* A reference starting after zero and a follower ending on the seam. */
+    const char *seam_a[] = {"L", "R"}, *seam_b[] = {"R", "L"};
+    const f32 seam_at[] = {.25f, .75f}, seam_bt[] = {.125f, .5f};
+    de_cooked_clip_view seam_reference = marker_view(a, seam_a, seam_at, 2, 1);
+    de_cooked_clip_view seam_other = marker_view(b, seam_b, seam_bt, 2, .5f);
+    de__anim_marker_map seam_map;
+    ASSERT_TRUE(de__anim_marker_map_init(&seam_map, &seam_reference, &seam_other));
+    const f64 phases[] = {0, .25, .75, -.25};
+    const f32 expected[] = {.3125f, 0, .125f, .125f};
+    for (u32 i = 0; i < 4; ++i) {
+        de__anim_sync_clock clock = {.initialized = true, .phase = phases[i]};
+        f32 time;
+        ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &seam_map, .5f, true, &time));
+        EXPECT_FLOAT_EQ(time, expected[i], 1e-7);
+    }
+    const char *repeat[] = {"L", "R", "L", "R"};
+    f32 at[] = {.125f, .375f, .625f, .875f};
+    f32 bt[] = {.0625f, .125f, .3125f, .5f};
+    de_cooked_clip_view reference = marker_view(a, repeat, at, 4, 1);
+    de_cooked_clip_view other = marker_view(b, repeat, bt, 4, .5f);
+    de__anim_marker_map map;
+    ASSERT_TRUE(de__anim_marker_map_init(&map, &reference, &other));
+    bt[1] = bt[0];
+    other = marker_view(b, repeat, bt, 4, .5f);
+    EXPECT_FALSE(de__anim_marker_map_init(&map, &reference, &other));
+}
+
+TEST(anim_sync, different_numbers_of_repeated_foot_cycles_align_and_advance_locally) {
+    u8 a[32], b[64];
+    const char *an[] = {"L", "R"}, *bn[] = {"L", "R", "L", "R"};
+    const f32 at[] = {0, .5f}, bt[] = {0, .125f, .25f, .375f};
+    de_cooked_clip_view reference = marker_view(a, an, at, 2, 1);
+    de_cooked_clip_view other = marker_view(b, bn, bt, 4, .5f);
+    de__anim_marker_map maps[2];
+    ASSERT_TRUE(de__anim_marker_map_init(&maps[0], &reference, &reference));
+    ASSERT_TRUE(de__anim_marker_map_init(&maps[1], &reference, &other));
+    de__anim_sync_leaf leaves[] = {leaf(0, .5f, 1, 1), leaf(1, .5f, .5f, 1)};
+    de__anim_sync_clock clock = {0};
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .5, false));
+    f32 time;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .125f, 0);
+    leaves[1].demand = 1;
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .5, false));
+    EXPECT_FLOAT_EQ(clock.phase, .5, 0);
+    ASSERT_TRUE(de__anim_sync_step_marked(&clock, leaves[0].group, leaves, 2, maps, .625, false));
+    EXPECT_FLOAT_EQ(clock.phase, 1, 0);
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .25f, 0);
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[0], 1, true, &time));
+    EXPECT_FLOAT_EQ(time, 0, 0);
+    clock.phase = -1;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, true, &time));
+    EXPECT_FLOAT_EQ(time, .25f, 0);
+    clock.phase = 20;
+    ASSERT_TRUE(de__anim_sync_sample_marked_time(&clock, &maps[1], .5f, false, &time));
+    EXPECT_FLOAT_EQ(time, .5f, 0);
+}
