@@ -454,6 +454,7 @@ typedef struct rsx {
     de_vec3 eye, target;
     f32 fov;
     bool orthographic;
+    u32 position_frames; /* zero: one frame; stability cases retain the same oracle */
     u32 width, height;
     de_gpu_texture tex[MAX_TEX + 1];
     u32 tex_count;
@@ -1077,16 +1078,7 @@ static de_affine trs(de_vec3 t, de_vec3 axis, f32 angle, f32 s) {
 /* resolve_positions_uvs_cpu_ref: reconstructed world positions and UVs (F32X2 and UNORM16X2
  * meshes, tilted planes) against the CPU ray cast within 1e-4 relative; the GB1 normal against
  * the plane's within 0.1 degrees. */
-static void positions_uvs(rsx *f, de_gpu_backend b) {
-    rsx_open(f, b);
-    const u32 a = rsx_mesh_plane(f, 3, 2, 1.0f, 2.0f, false);
-    const u32 q = rsx_mesh_plane(f, 2, 2, 1.5f, 3.0f, true);
-    const u32 mat = material_add((de_vec4){0.8f, 0.6f, 0.4f, 1.0f});
-    const de_affine x0 = trs((de_vec3){-1.8f, 0.6f, 0.0f}, (de_vec3){1, 0, 0}, -0.6f, 1.2f);
-    const de_affine x1 = trs((de_vec3){1.9f, -0.4f, -1.0f}, (de_vec3){0, 1, 0}, 0.5f, 1.0f);
-    world_set(&f->w, 0, a, x0, x0, mat);
-    world_set(&f->w, 1, q, x1, x1, mat);
-    ASSERT_TRUE(rsx_frame(f));
+static void check_positions_uvs(rsx *f) {
     ASSERT_TRUE(f->res.valid);
     const rs_result *r = &f->res;
     u32 covered = 0, pos_bad = 0, uv_bad = 0, n_bad = 0;
@@ -1158,6 +1150,22 @@ static void positions_uvs(rsx *f, de_gpu_backend b) {
         ++checked;
         if (checked > 500u)
             break;
+    }
+}
+
+static void positions_uvs(rsx *f, de_gpu_backend b) {
+    rsx_open(f, b);
+    const u32 a = rsx_mesh_plane(f, 3, 2, 1.0f, 2.0f, false);
+    const u32 q = rsx_mesh_plane(f, 2, 2, 1.5f, 3.0f, true);
+    const u32 mat = material_add((de_vec4){0.8f, 0.6f, 0.4f, 1.0f});
+    const de_affine x0 = trs((de_vec3){-1.8f, 0.6f, 0.0f}, (de_vec3){1, 0, 0}, -0.6f, 1.2f);
+    const de_affine x1 = trs((de_vec3){1.9f, -0.4f, -1.0f}, (de_vec3){0, 1, 0}, 0.5f, 1.0f);
+    world_set(&f->w, 0, a, x0, x0, mat);
+    world_set(&f->w, 1, q, x1, x1, mat);
+    const u32 frames = f->position_frames ? f->position_frames : 1u;
+    for (u32 i = 0; i < frames; ++i) {
+        ASSERT_TRUE(rsx_frame(f));
+        check_positions_uvs(f);
     }
 }
 
@@ -2116,6 +2124,18 @@ static void sprite_render(rsx *f, de_gpu_backend backend) {
     ASSERT_GT(stats.instances_visible, 0u);
     in->sprite = NULL;
     free(many);
+}
+
+/* DENG-616: preserve the independent double-ray oracle across changing frame
+ * indices/visible-list orders; one good frame can hide intermittent UV corruption. */
+TEST_F(resolve, positions_uvs_orthographic_stability_metal, rsx) {
+#if defined(__APPLE__)
+    setenv("MTL_DEBUG_LAYER", "1", 1);
+    setenv("MTL_SHADER_VALIDATION", "1", 1);
+#endif
+    f->orthographic = true;
+    f->position_frames = 32u;
+    positions_uvs(f, DE_GPU_METAL);
 }
 
 #define GPU_TESTS(sfx, backend)                                                                    \
