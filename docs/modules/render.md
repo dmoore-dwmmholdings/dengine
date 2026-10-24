@@ -52,6 +52,18 @@ publishes constants without dispatching nonexistent deferred tiles. Opaque
 screen-space RT production is skipped when no opaque G-buffer exists; forward
 surfaces retain their own direct clustered shading.
 
+## Transparent Standard material specialization
+
+The renderer prewarms a base Standard pipeline alongside the full forward pipeline.
+A mesh draw uses the base pipeline only when every referenced forward submesh has a
+known Standard, Unlit or Sprite model and no extended/unknown feature bits. Extended
+lobes, custom models and unknown bits keep the full pipeline. Eligibility is gathered
+from the current material table each frame, including secondary submeshes, so material
+changes switch pipelines without compiling during rendering. Mixed draws retain their
+existing back-to-front order and double-sided back/front order. Participants and RT
+refraction capture retain their existing paths. Material-pipeline statistics include
+the additional prewarmed pipeline (six built-in pipelines instead of five).
+
 ## Host window surfaces
 
 The host creates its window before the game's `init` callback. `[window] surface`

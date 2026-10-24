@@ -13,9 +13,10 @@
  * first), blending into the HDR target while testing reverse-Z depth without writing it.
  *
  * No pass at all when nothing transparent is in view (the list is empty, or no material in the
- * scene is forward). The pipeline is made at create (pre-warmed): a transparent object appearing
- * never creates one. The pass reads the cluster lists, the LTC tables, the environment strip and
- * the lighting constants of the view's lighting context (lighting.h), as the deferred pass does.
+ * scene is forward). Both material pipelines are made at create (pre-warmed): a transparent object
+ * appearing never creates one. The pass reads the cluster lists, the LTC tables, the environment
+ * strip and the lighting constants of the view's lighting context (lighting.h), as the deferred
+ * pass does.
  *
  * Limits: picking reads the vis buffer only, so transparent surfaces cannot be picked; the
  * opaque AO/SSR/SSGI are cleared for transparent receivers; CSM and IBL use the surface's own
@@ -47,6 +48,7 @@ struct de__forward {
     char why[256];
     de_gpu_pipeline pipeline; /**< vs_forward + ps_forward */
     de_gpu_pipeline capture;
+    de_gpu_pipeline base_pipeline;
     u32 push_bytes;
     de_gpu_sampler sampler; /**< the material sampler (as the resolve's) */
     u32 sampler_bindless;
@@ -109,28 +111,32 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
                       : DE_FAIL_WRAP(DE_ERR_INTERNAL, "forward: the material sampler");
     if (r == DE_OK) {
         fw->sampler_bindless = de_gpu_sampler_bindless(fw->dev, fw->sampler);
-        static const char *const k_entries[3] = {"vs_forward", "ps_forward",
-                                                 "ps_capture_refraction"};
+        static const char *const k_entries[4] = {"vs_forward", "ps_forward",
+                                                 "ps_capture_refraction", "ps_forward_base"};
         de__engine_shader_code code;
-        r = de__vis_shader_load(vis, "forward_transparent", k_entries, 3, &code);
+        r = de__vis_shader_load(vis, "forward_transparent", k_entries, 4, &code);
         if (r == DE_OK) {
             u32 reflected = code.entries[0].push_constant_bytes;
-            if (code.entries[1].push_constant_bytes > reflected)
-                reflected = code.entries[1].push_constant_bytes;
+            for (u32 i = 1; i < 4; ++i)
+                if (code.entries[i].push_constant_bytes > reflected)
+                    reflected = code.entries[i].push_constant_bytes;
             fw->push_bytes = push_of(reflected, (u32)sizeof(de__fwd_params));
-            fw->pipeline = de_gpu_pipeline_create(
-                fw->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
-                                                 .vs = code.entries[0].blob,
-                                                 .ps = code.entries[1].blob,
-                                                 .color_formats = {DE_FMT_RGBA16_FLOAT},
-                                                 .color_count = 1,
-                                                 .blend = {DE_BLEND_PREMUL},
-                                                 .depth_format = DE_FMT_D32_FLOAT,
-                                                 .cull = DE_CULL_NONE,
-                                                 .depth_test = true,
-                                                 .depth_write = false,
-                                                 .push_constant_bytes = fw->push_bytes,
-                                                 .name = "forward transparent"});
+            de_gpu_pipeline_desc pipeline = {.kind = DE_PIPE_GRAPHICS,
+                                             .vs = code.entries[0].blob,
+                                             .ps = code.entries[1].blob,
+                                             .color_formats = {DE_FMT_RGBA16_FLOAT},
+                                             .color_count = 1,
+                                             .blend = {DE_BLEND_PREMUL},
+                                             .depth_format = DE_FMT_D32_FLOAT,
+                                             .cull = DE_CULL_NONE,
+                                             .depth_test = true,
+                                             .depth_write = false,
+                                             .push_constant_bytes = fw->push_bytes,
+                                             .name = "forward transparent"};
+            fw->pipeline = de_gpu_pipeline_create(fw->dev, &pipeline);
+            pipeline.ps = code.entries[3].blob;
+            pipeline.name = "forward transparent base";
+            fw->base_pipeline = de_gpu_pipeline_create(fw->dev, &pipeline);
             if (vis->renderer && vis->renderer->caps.ray_query)
                 fw->capture = de_gpu_pipeline_create(
                     fw->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
@@ -148,7 +154,7 @@ de_result de__forward_create_ex(de__vis_shared *vis, de__lighting *lighting, de_
             de__engine_shader_code_free(&code);
             if (r == DE_OK && vis->renderer && vis->renderer->caps.ray_query && !fw->capture.id)
                 r = DE_FAIL(DE_ERR_INTERNAL, "forward: RT capture pipeline");
-            if (!DE_HANDLE_VALID(fw->pipeline)) {
+            if (!DE_HANDLE_VALID(fw->pipeline) || !DE_HANDLE_VALID(fw->base_pipeline)) {
                 const de_error *e = de_error_last();
                 r = DE_FAIL_WRAP(e != NULL && e->result != DE_OK ? e->result : DE_ERR_INTERNAL,
                                  "forward: the pipeline");
@@ -181,6 +187,7 @@ void de__forward_destroy(de__forward *fw) {
         for (u32 f = 0; f < DE__VIS_FRAME_RING; ++f)
             de_gpu_buffer_destroy(fw->dev, fw->indirect[v][f]);
     de_gpu_pipeline_destroy(fw->dev, fw->capture);
+    de_gpu_pipeline_destroy(fw->dev, fw->base_pipeline);
     if (DE_HANDLE_VALID(fw->pipeline))
         de_gpu_pipeline_destroy(fw->dev, fw->pipeline);
     if (DE_HANDLE_VALID(fw->sampler))
@@ -193,7 +200,7 @@ bool de__forward_enabled(const de__forward *fw) {
 }
 
 u32 de__forward_pipeline_count(const de__forward *fw) {
-    return de__forward_enabled(fw) ? 1u : 0u;
+    return de__forward_enabled(fw) ? 2u : 0u;
 }
 
 /* =================================================================================================
@@ -232,7 +239,6 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
     if (!p->rt) {
         de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
-        de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
     }
     de_gpu_cmd_set_index_buffer(cmd, de_rg_buffer(pass, p->indices), 0, false);
     u8 push[128];
@@ -242,6 +248,7 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         pc.instance = d->instance;
         pc.meshlet_first = d->meshlet_first;
         pc.side = d->side;
+        const de_gpu_pipeline pipeline = d->base_standard ? p->fw->base_pipeline : p->fw->pipeline;
         if (p->rt) {
             de__rt_refraction_clear(cmd, p->rt, &pc);
             de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
@@ -254,8 +261,8 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
             de_gpu_cmd_end_render(cmd);
             de__rt_refraction_trace(cmd, p->rt, &pc);
             de_gpu_cmd_begin_render(cmd, &color, 1, &depth);
-            de_gpu_cmd_set_pipeline(cmd, p->fw->pipeline);
         }
+        de_gpu_cmd_set_pipeline(cmd, pipeline);
         memcpy(push, &pc, sizeof pc);
         de_gpu_cmd_push_constants(cmd, push, p->fw->push_bytes);
         de_gpu_cmd_draw_indexed_indirect(cmd, de_rg_buffer(pass, p->indirect),
@@ -359,14 +366,18 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
             continue;
         }
         if (it->flags & DE__FWD_ITEM_DOUBLE_SIDED)
-            draws[nd++] = (de__forward_draw){.instance = it->instance,
-                                             .side = DE__FWD_SIDE_BACK,
-                                             .meshlet_first = it->meshlet_first,
-                                             .meshlet_count = it->meshlet_count};
-        draws[nd++] = (de__forward_draw){.instance = it->instance,
-                                         .side = DE__FWD_SIDE_FRONT,
-                                         .meshlet_first = it->meshlet_first,
-                                         .meshlet_count = it->meshlet_count};
+            draws[nd++] =
+                (de__forward_draw){.instance = it->instance,
+                                   .side = DE__FWD_SIDE_BACK,
+                                   .meshlet_first = it->meshlet_first,
+                                   .meshlet_count = it->meshlet_count,
+                                   .base_standard = (it->flags & DE__FWD_ITEM_BASE_STANDARD) != 0u};
+        draws[nd++] =
+            (de__forward_draw){.instance = it->instance,
+                               .side = DE__FWD_SIDE_FRONT,
+                               .meshlet_first = it->meshlet_first,
+                               .meshlet_count = it->meshlet_count,
+                               .base_standard = (it->flags & DE__FWD_ITEM_BASE_STANDARD) != 0u};
         transmissive |= (it->flags & DE__FWD_ITEM_TRANSMISSIVE) != 0u;
     }
 

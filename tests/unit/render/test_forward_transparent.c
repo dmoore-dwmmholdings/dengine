@@ -325,6 +325,7 @@ static void world_init(world *w, u32 cap) {
     in->bounds = (de_aabb *)zalloc(cap * sizeof(de_aabb));
     in->layer_mask = (u32 *)zalloc(cap * sizeof(u32));
     in->flags = (u8 *)zalloc(cap);
+    in->sprite = zalloc((size_t)cap * sizeof *in->sprite);
     de__rw_lights *li = &w->f.lights;
     li->entity = (u64 *)zalloc(MAX_LIGHTS * sizeof(u64));
     li->transform = (de_affine *)zalloc(MAX_LIGHTS * sizeof(de_affine));
@@ -345,6 +346,7 @@ static void world_free(world *w) {
     free(in->bounds);
     free(in->layer_mask);
     free(in->flags);
+    free(in->sprite);
     free(w->f.lights.entity);
     free(w->f.lights.transform);
     free(w->f.lights.light);
@@ -442,6 +444,7 @@ typedef struct lx {
     de_gpu_device *dev;
     de_gpu_backend backend;
     bool real_gpu, warm;
+    bool force_full_forward;
     de_rg *g;
     de__gpu_scene *gs;
     de__vis_shared *vis;
@@ -774,6 +777,9 @@ static bool lx_frame(lx *f) {
     de__forward_context *fc = NULL;
     if (de__forward_build(f->fw, f->g, vc, lc, &f->w.f, &fc) != DE_OK)
         return false;
+    if (fc && f->force_full_forward)
+        for (u32 i = 0; i < fc->draw_count; ++i)
+            ((de__forward_draw *)fc->draws)[i].base_standard = false;
     u32 forward_passes = 0;
     for (u32 i = passes_before; i < f->g->pass_count; ++i)
         forward_passes += strncmp(f->g->passes[i]->name, "forward.", 8) == 0;
@@ -964,7 +970,7 @@ static void routing(lx *f, de_gpu_backend b) {
  * view: still no pass. The pipeline count never changes (pre-warmed at create). */
 static void zero_work(lx *f, de_gpu_backend b) {
     lx_open(f, b);
-    EXPECT_EQ(de__forward_pipeline_count(f->fw), 1u);
+    EXPECT_EQ(de__forward_pipeline_count(f->fw), 2u);
     lx_floor(f, mat_unlit(0.2f, 0.2f, 0.2f, 1.0f, 0));
     const u32 quad = mat_standard(0.6f, 1.0f, DE_COOKED_ALPHA_OPAQUE, false);
     world_set(&f->w, 1, lx_mesh_plane(f, 1, 1, 2.0f), at(0, 0, 3), quad);
@@ -983,7 +989,7 @@ static void zero_work(lx *f, de_gpu_backend b) {
     EXPECT_TRUE(f->res.forward);
     EXPECT_EQ(f->res.forward_passes, 1u);
     EXPECT_FALSE(f->res.scene_color);
-    EXPECT_EQ(de__forward_pipeline_count(f->fw), 1u);
+    EXPECT_EQ(de__forward_pipeline_count(f->fw), 2u);
 }
 
 /* Three overlapping Unlit quads of alpha 0.5, listed out of depth order (slot 1 the nearest, slot
@@ -1209,6 +1215,78 @@ static void matches_deferred(lx *f, de_gpu_backend b) {
     matches_deferred_layer(f, b, FX_LAYER_NONE);
 }
 
+/* Mix base/full/base draws in one pass and compare every HDR pixel to the full shader.
+ * Change one material between frames to cover specialization invalidation. */
+static void base_specialization(lx *f, de_gpu_backend b) {
+    lx_open(f, b);
+    lx_floor(f, mat_unlit(.1f, .2f, .3f, 1, DE_COOKED_ALPHA_OPAQUE));
+    u32 mesh = lx_mesh_plane(f, 1, 1, 2);
+    g_mesh[mesh - 1].rm.submesh_count = 2;
+    u32 base = mat_standard(.6f, .5f, DE_COOKED_ALPHA_BLEND, true);
+    u32 layer = mat_standard(.4f, .5f, DE_COOKED_ALPHA_BLEND, false);
+    mat_of(layer)->standard.clearcoat = 1;
+    world_set(&f->w, 1, mesh, at(0, 0, 2), base);
+    world_set(&f->w, 2, mesh, at(0, 0, 3), layer);
+    world_set(&f->w, 3, mesh, at(0, 0, 4), base);
+    point_light(f, 0, 0, 0, 8, 1500);
+    for (u32 phase = 0; phase < 3; ++phase) {
+        mat_of(layer)->standard.clearcoat = phase == 1 ? 0 : 1;
+        if (phase == 2) {
+            /* A secondary forward submesh must also participate in eligibility. */
+            f->w.f.instances.materials[DE__RW_MATERIALS + 1].id = layer;
+            f->w.f.instances.materials[3 * DE__RW_MATERIALS + 1].id = layer;
+        }
+        f->w.touch_all = true;
+        f->force_full_forward = false;
+        lx_run(f);
+        ASSERT_EQ(f->res.draw_count, 5u);
+        for (u32 i = 0; i < f->res.draw_count; ++i)
+            EXPECT_EQ(f->res.draws[i].base_standard, phase != 2 && (i != 2 || phase == 1));
+        const size_t bytes = (size_t)f->width * f->height * 4 * sizeof(f32);
+        f32 *specialized = malloc(bytes);
+        ASSERT_TRUE(specialized);
+        memcpy(specialized, f->res.lighting, bytes);
+        f->force_full_forward = true;
+        lx_run(f);
+        u32 bad = 0;
+        for (size_t i = 0; i < bytes / sizeof(f32); ++i)
+            bad += !close_to(specialized[i], f->res.lighting[i], .01f, 1e-3f);
+        free(specialized);
+        EXPECT_EQ(bad, 0u);
+    }
+}
+
+static void sprite_base_specialization(lx *f, de_gpu_backend b) {
+    lx_open(f, b);
+    lx_floor(f, mat_unlit(.1f, .1f, .1f, 1, DE_COOKED_ALPHA_OPAQUE));
+    world_set(&f->w, 1, lx_mesh_plane(f, 1, 1, 2), at(0, 0, 3),
+              mat_standard(.5f, .5f, DE_COOKED_ALPHA_BLEND, true));
+    f->w.f.instances.flags[1] |= DE__RW_INST_SPRITE;
+    f->w.f.instances.sprite[1] = (DeSprite){.translucent = true,
+                                            .uv_rect = {.25f, .125f, .5f, .25f},
+                                            .flip_x = true,
+                                            .color = {.8f, .3f, .1f, .5f}};
+    point_light(f, 0, 0, 0, 6, 1500);
+    lx_run(f);
+    ASSERT_EQ(f->res.draw_count, 2u);
+    EXPECT_TRUE(f->res.draws[0].base_standard);
+    EXPECT_TRUE(f->res.draws[1].base_standard);
+    const size_t count = (size_t)f->width * f->height * 4;
+    f32 *specialized = zalloc(count * sizeof *specialized);
+    memcpy(specialized, f->res.lighting, count * sizeof *specialized);
+    f->force_full_forward = true;
+    lx_run(f);
+    u32 bad = 0, visible = 0;
+    for (size_t i = 0; i < count; ++i) {
+        bad += !close_to(specialized[i], f->res.lighting[i], .01f, 1e-3f);
+        if (i % 4 == 0)
+            visible += specialized[i] > .15f * f->res.pre_exposure;
+    }
+    free(specialized);
+    EXPECT_EQ(bad, 0u);
+    EXPECT_GT(visible, 100u);
+}
+
 /* A quad turned away from the camera: double-sided, it draws twice (back faces, then front
  * faces) and is seen; single-sided, it draws once (front faces) and is culled. */
 static void double_sided(lx *f, de_gpu_backend b) {
@@ -1308,6 +1386,12 @@ static void scene_color(lx *f, de_gpu_backend b) {
 }
 
 #define GPU_TESTS(sfx, backend)                                                                    \
+    TEST_F(forward, forward_sprite_base_matches_full_##sfx, lx) {                                  \
+        sprite_base_specialization(f, backend);                                                    \
+    }                                                                                              \
+    TEST_F(forward, forward_base_specialization_matches_full_##sfx, lx) {                          \
+        base_specialization(f, backend);                                                           \
+    }                                                                                              \
     TEST_F(forward, forward_routing_excludes_visbuffer_##sfx, lx) {                                \
         routing(f, backend);                                                                       \
     }                                                                                              \
@@ -1474,6 +1558,32 @@ TEST(forward, forward_routing_predicate) {
     EXPECT_TRUE((m.features & DE__MATERIAL_FEATURE_TRANSMISSION) != 0u);
     m.flags = 0u;
     EXPECT_FALSE(de__forward_material(&m)); /* not READY */
+}
+
+TEST(forward, base_specialization_rejects_extended_unknown_and_unready_materials) {
+    de__gs_material m = {.model = DE__GS_MATERIAL_MODEL_STANDARD,
+                         .flags = DE__GS_MATERIAL_READY,
+                         .features =
+                             DE__MATERIAL_FEATURE_FORWARD | DE__MATERIAL_FEATURE_DOUBLE_SIDED};
+    EXPECT_TRUE(de__forward_base_material(&m));
+    for (u32 bit = 0; bit < 32; ++bit) {
+        m.features = DE__MATERIAL_FEATURE_FORWARD | (1u << bit);
+        const bool allowed = bit == 8 || bit == 9 || bit == 10 || bit == 11;
+        EXPECT_EQ(de__forward_base_material(&m), allowed);
+    }
+    m.features = DE__MATERIAL_FEATURE_FORWARD;
+    m.model = DE__GS_MATERIAL_MODEL_UNLIT;
+    EXPECT_TRUE(de__forward_base_material(&m));
+    m.model = DE__GS_MATERIAL_MODEL_SPRITE;
+    EXPECT_TRUE(de__forward_base_material(&m));
+    m.model = DE__MATERIAL_MODEL_MAX - 1;
+    EXPECT_FALSE(de__forward_base_material(&m));
+    m.model = DE__GS_MATERIAL_MODEL_STANDARD;
+    m.flags = 0;
+    EXPECT_FALSE(de__forward_base_material(&m));
+    m.flags = DE__GS_MATERIAL_READY;
+    m.features = 0;
+    EXPECT_FALSE(de__forward_base_material(&m));
 }
 
 static char *read_text(const char *path) {

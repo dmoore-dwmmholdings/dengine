@@ -527,7 +527,7 @@ TEST_F(materials, material_set_params_no_pipeline_rebuild, mfx) {
     const de_render_stats st0 = *de_renderer_stats(f->r);
     EXPECT_EQ(st0.permutations_per_model[0], 3u);
     EXPECT_EQ(st0.permutations_per_model[1], 1u);
-    EXPECT_EQ(st0.material_pipelines, 5u); /* + the forward transparent pass's (DENG-305) */
+    EXPECT_EQ(st0.material_pipelines, 6u); /* + full and base forward pipelines */
     for (u32 n = 0; n < 8; ++n) {
         for (u32 i = 0; i < 1000; ++i) {
             de_standard_material p;
@@ -619,7 +619,7 @@ TEST_F(materials, material_permutation_switch_counted, mfx) {
     const de_render_stats *st = de_renderer_stats(f->r);
     EXPECT_EQ(st->material_permutation_switches, 1u);
     EXPECT_EQ(st->permutations_per_model[0], 3u);
-    EXPECT_EQ(st->material_pipelines, 5u); /* + the forward transparent pass's (DENG-305) */
+    EXPECT_EQ(st->material_pipelines, 6u); /* + full and base forward pipelines */
     EXPECT_EQ(live_pipelines(f), pipes);
     EXPECT_EQ(de__gpu_scene_material_permutation(f->r->gpu_scene, 0), 1u); /* CLEARCOAT */
     de__material_params b;

@@ -134,8 +134,9 @@ void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_it
  * The gather
  * ============================================================================================== */
 
-/* Per material slot: forward (bit 0), double-sided (bit 1), transmissive (bit 2). */
-enum { MAT_FORWARD = 1u, MAT_DOUBLE_SIDED = 2u, MAT_TRANSMISSIVE = 4u };
+/* Per material slot: forward (bit 0), double-sided (bit 1), transmissive (bit 2), full model (bit
+ * 3). */
+enum { MAT_FORWARD = 1u, MAT_DOUBLE_SIDED = 2u, MAT_TRANSMISSIVE = 4u, MAT_FULL_MODEL = 8u };
 
 u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
                            de__transparent_item **out, de__transparent_counts *counts) {
@@ -163,7 +164,7 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
         if (m == NULL || !de__forward_material(m))
             continue;
         mat[s] =
-            (u8)(MAT_FORWARD |
+            (u8)(MAT_FORWARD | (de__forward_base_material(m) ? 0u : MAT_FULL_MODEL) |
                  ((m->flags & DE__GS_MATERIAL_DOUBLE_SIDED) != 0u ? MAT_DOUBLE_SIDED : 0u) |
                  ((m->features & DE__MATERIAL_FEATURE_TRANSMISSION) != 0u ? MAT_TRANSMISSIVE : 0u));
         c.forward_materials++;
@@ -235,7 +236,8 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             .instance = s,
             .entity = in->entity[s],
             .index = n,
-            .flags = ((bits & MAT_DOUBLE_SIDED) != 0u ? (u32)DE__FWD_ITEM_DOUBLE_SIDED : 0u) |
+            .flags = ((bits & MAT_FULL_MODEL) == 0u ? (u32)DE__FWD_ITEM_BASE_STANDARD : 0u) |
+                     ((bits & MAT_DOUBLE_SIDED) != 0u ? (u32)DE__FWD_ITEM_DOUBLE_SIDED : 0u) |
                      ((bits & MAT_TRANSMISSIVE) != 0u ? (u32)DE__FWD_ITEM_TRANSMISSIVE : 0u),
             .meshlet_first = mesh->lods[0].meshlet_first,
             .meshlet_count = mesh->lods[0].meshlet_count};
