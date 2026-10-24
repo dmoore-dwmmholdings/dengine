@@ -1230,7 +1230,7 @@ static void base_specialization(lx *f, de_gpu_backend b) {
     world_set(&f->w, 3, mesh, at(0, 0, 4), base);
     point_light(f, 0, 0, 0, 8, 1500);
     for (u32 phase = 0; phase < 3; ++phase) {
-        mat_of(layer)->standard.clearcoat = phase == 1 ? 0 : 1;
+        mat_of(layer)->standard.clearcoat = phase == 1 ? 0.0f : 1.0f;
         if (phase == 2) {
             /* A secondary forward submesh must also participate in eligibility. */
             f->w.f.instances.materials[DE__RW_MATERIALS + 1].id = layer;
