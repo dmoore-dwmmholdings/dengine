@@ -135,6 +135,7 @@ float surface_weight(GtaoParams pc, DeSceneConstants sc, uint2 pixel, float3 p, 
         DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.slot];
         float2 uv = (float2(pixel) + 0.5) / float2(pc.width, pc.height);
         float2 previous_uv = uv + de_tex2d(pc.motion).Load(int3(pixel, 0)).xy * float2(-0.5, 0.5);
+        float motion_pixels = length((previous_uv - uv) * float2(pc.width, pc.height));
         float3 p = ssr_position(sc, uv, current.w);
         float4 point = float4(p, 1);
         float4 clip = float4(dot(sc.prev_view_proj[0], point), dot(sc.prev_view_proj[1], point),
@@ -153,20 +154,30 @@ float surface_weight(GtaoParams pc, DeSceneConstants sc, uint2 pixel, float3 p, 
                                    : abs(expected / max(surface.x, 1e-12) - 1.0) * abs(clip.w);
             if (surface.x > 0 && separation <= pc.radius * 0.05 &&
                 dot(normal, surface.yzw) >= 0.85 && all(isfinite(old)) && old.w >= 1) {
-                float lo = current.x, hi = current.x, mean = 0, second = 0;
+                float lo = current.x, hi = current.x, mean = 0, second = 0, count = 0;
                 for (int y = -1; y <= 1; ++y)
                     for (int x = -1; x <= 1; ++x) {
                         int2 s =
                             clamp(int2(id.xy) + int2(x, y), int2(0), int2(pc.tw - 1, pc.th - 1));
-                        float a = de_rwtex2d(pc.spatial)[s].x;
+                        float4 neighbor = de_rwtex2d(pc.spatial)[s];
+                        // An unrelated foreground/background must not widen the history
+                        // clamp at a moving silhouette. Keep stationary stochastic convergence.
+                        // Reuse the spatial filter's surface test.
+                        uint2 source = gtao_pixel(pc, uint2(s));
+                        if (motion_pixels > 0.01 &&
+                            surface_weight(pc, sc, pixel, p, normal, source, neighbor.w) < 0.1)
+                            continue;
+                        float a = neighbor.x;
                         lo = min(lo, a);
                         hi = max(hi, a);
                         mean += a;
                         second += a * a;
+                        count += 1;
                     }
                 age = min(old.w + 1.0, 32.0);
                 float alpha = max(1.0 / age, 1.0 - pc.history_weight);
-                float sigma = sqrt(max(second / 9.0 - (mean / 9.0) * (mean / 9.0), 0));
+                count = max(count, 1);
+                float sigma = sqrt(max(second / count - (mean / count) * (mean / count), 0));
                 float margin = max(0.02, 3.0 * sigma);
                 current.x = lerp(clamp(old.x, lo - margin, hi + margin), current.x, alpha);
                 float3 b =

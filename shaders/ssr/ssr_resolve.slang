@@ -83,15 +83,15 @@ struct HistoryParams {
                 // History is pre-exposed; correct into this frame, then remove its exposure once.
                 float exposure = max(sc.pre_exposure, 1e-8);
                 float ratio = exposure / max(pc.previous_exposure, 1e-8);
-                float3 color =
-                    ssr_history_load(pc.history_color, prev, uint2(pc.width, pc.height)).rgb *
-                    ratio / exposure;
+                float4 history = ssr_history_sample(pc, sc, pc.history_color, prev, hit_position, hs.normal, true);
+                if (!(history.a > 0)) continue; // No valid taps: retain the probe/sky fallback.
+                float3 color = history.rgb * ratio / exposure;
                 if (!all(isfinite(color)))
                     continue;
                 color = max(color, float3(0, 0, 0));
                 sum += color * w;
                 weight += w;
-                coverage += w * hit.w;
+                coverage += w * hit.w * history.a;
                 float l = dot(color, float3(0.2126, 0.7152, 0.0722));
                 lum += l * w;
                 lum2 += l * l * w;
@@ -105,9 +105,9 @@ struct HistoryParams {
             if ((pc.history_valid & 2u) != 0 &&
                 ssr_history_valid(pc, sc, prev, position, surface.normal)) {
                 float4 old =
-                    ssr_history_load(pc.previous_specular, prev, uint2(pc.width, pc.height));
+                    ssr_history_sample(pc, sc, pc.previous_specular, prev, position, surface.normal);
                 float4 stats =
-                    ssr_history_load(pc.previous_moments, prev, uint2(pc.width, pc.height));
+                    ssr_history_sample(pc, sc, pc.previous_moments, prev, position, surface.normal);
                 if (old.a > 0 && all(isfinite(old)) && all(isfinite(stats))) {
                     float variance = max(lum2 / weight - (lum / weight) * (lum / weight), 0);
                     float sigma = max(sqrt(variance) * max(max(response.r, response.g), response.b),
@@ -129,4 +129,36 @@ struct HistoryParams {
     de_rwtex2d(pc.output)[pixel] = result;
     de_rwtex2d(pc.write_specular)[pixel] = result;
     de_rwtex2d(pc.write_moments)[pixel] = moments;
+}
+
+// Native regression oracle: uses the same history sampling as reflection resolve.
+struct HistoryQueryParams { uint color, surface, output, valid; };
+[shader("compute")][numthreads(8,8,1)]
+void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQueryParams q) {
+    if (any(id.xy >= 4)) return;
+    SsrParams pc = (SsrParams)0;
+    pc.width = pc.height = 4;
+    pc.history_surface = q.surface;
+    pc.history_valid = q.valid;
+    DeSceneConstants sc = (DeSceneConstants)0;
+    sc.prev_view_proj[0] = float4(1,0,0,0);
+    sc.prev_view_proj[1] = float4(0,1,0,0);
+    sc.prev_view_proj[2] = float4(0,0,1,0);
+    sc.prev_view_proj[3] = float4(0,0,0,1);
+    sc.view_proj[0] = float4(1,0,0,.2);
+    sc.view_proj[1] = float4(0,1,0,0);
+    sc.view_proj[2] = float4(0,0,1,0);
+    sc.view_proj[3] = float4(0,0,0,1);
+    float3 position = float3(0,0,.5);
+    if ((q.valid & 2u) != 0) {
+        position = float3(0,0,-100);
+        sc.prev_view_proj[2] = float4(0,0,0,.1);
+        sc.prev_view_proj[3] = float4(0,0,-1,0);
+        sc.view_proj[0] = float4(1,0,0,20);
+        sc.view_proj[2] = sc.prev_view_proj[2];
+        sc.view_proj[3] = sc.prev_view_proj[3];
+    }
+    pc.thickness = .1;
+    float2 uv = float2(.5,.5);
+    de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,float3(0,0,1),true);
 }

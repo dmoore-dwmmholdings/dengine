@@ -57,6 +57,7 @@ typedef struct sc_fx {
     bool platform;
     de_window window;
     de_gpu_device *d;
+    const de__gpu_backend_vtable *backend;
     de_gpu_swapchain sc;
     char skip[1200];
     char err[1100];
@@ -92,10 +93,13 @@ static void sc_fx_setup(sc_fx *f) {
     if (r == DE_ERR_UNSUPPORTED)
         SKIP("no Metal device on this machine");
     ASSERT_EQ(r, DE_OK);
+    f->backend = f->d->vt;
 }
 
 static void sc_fx_teardown(sc_fx *f) {
     if (f->d) {
+        if (f->backend)
+            f->d->vt = f->backend;
         if (f->sc.id)
             de_gpu_swapchain_destroy(f->d, f->sc);
         de_gpu_device_destroy(f->d);
@@ -305,4 +309,107 @@ TEST_F(mtl, swapchain_present_resize, sc_fx) {
     de_gpu_texture none = {0};
     EXPECT_EQ(de_gpu_swapchain_acquire(f->d, f->sc, &none), DE_ERR_BUSY);
     de_gpu_wait_idle(f->d);
+}
+
+static const de__gpu_backend_vtable *acquire_backend;
+static de__gpu_backend_vtable acquire_probe;
+static bool acquire_called;
+static de_result check_collected_acquire(de_gpu_device *d, de__gpu_swapchain *s,
+                                         de_gpu_texture *image) {
+    acquire_called = true;
+    EXPECT_EQ(de__gpu_deferred_count(d), 0u);
+    return acquire_backend->swapchain_acquire(d, s, image);
+}
+TEST_F(mtl, swapchain_collects_completed_before_acquire, sc_fx) {
+    f->sc = de_gpu_swapchain_create(f->d, &(de_gpu_swapchain_desc){.window = f->window});
+    ASSERT_TRUE(f->sc.id);
+    de_gpu_buffer buffer = de_gpu_buffer_create(
+        f->d,
+        &(de_gpu_buffer_desc){.size = 256, .memory = DE_MEM_UPLOAD, .usage = DE_USAGE_COPY_SRC});
+    ASSERT_TRUE(buffer.id);
+    de_gpu_buffer_destroy(f->d, buffer);
+    ASSERT_GT(de__gpu_deferred_count(f->d), 0u);
+    acquire_backend = f->d->vt;
+    acquire_probe = *acquire_backend;
+    acquire_probe.swapchain_acquire = check_collected_acquire;
+    f->d->vt = &acquire_probe;
+    acquire_called = false;
+    de_gpu_texture image;
+    EXPECT_EQ(de_gpu_swapchain_acquire(f->d, f->sc, &image), DE_OK);
+    EXPECT_TRUE(acquire_called);
+    f->d->vt = acquire_backend;
+}
+
+static u64 delay_completed(de_gpu_device *device, de_gpu_queue queue) {
+    (void)device;
+    (void)queue;
+    return 0; /* Emulate delayed CPU observation of otherwise progressing GPU submissions. */
+}
+TEST_F(mtl, swapchain_present_does_not_pin_drawable_texture_until_collection, sc_fx) {
+    f->sc = de_gpu_swapchain_create(
+        f->d, &(de_gpu_swapchain_desc){
+                  .window = f->window, .image_count = 3, .present = DE_PRESENT_IMMEDIATE});
+    ASSERT_TRUE(f->sc.id);
+    acquire_probe = *f->backend;
+    acquire_probe.queue_completed = delay_completed;
+    f->d->vt = &acquire_probe;
+    for (u32 i = 0; i < 8; ++i) {
+        de_gpu_texture image;
+        ASSERT_TRUE(plain_frame(f, i, &image));
+    }
+    EXPECT_GT(de__gpu_deferred_count(f->d), 3u);
+    f->d->vt = f->backend;
+}
+
+typedef struct resize_worker_case {
+    sc_fx *f;
+    u32 rendered;
+} resize_worker_case;
+static i32 resize_without_runloop(void *user) {
+    resize_worker_case *c = user;
+    sc_fx *f = c->f;
+    for (u32 i = 0; i < 8; ++i) {
+        const u32 width = 64 + i * 8, height = 80 + i * 4;
+        de_result r = de_gpu_swapchain_resize(f->d, f->sc, width, height);
+        if (r != DE_OK)
+            return (i32)r;
+        de_gpu_texture image;
+        r = de_gpu_swapchain_acquire(f->d, f->sc, &image);
+        if (r != DE_OK)
+            return (i32)r;
+        de__gpu_texture *texture = de__gpu_get_texture(f->d, image);
+        if (!texture || texture->width != width || texture->height != height)
+            return -1;
+        de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "worker resize");
+        if (!cmd)
+            return -2;
+        de_gpu_barrier b = {.texture = image, .after = DE_ACCESS_RENDER_TARGET};
+        de_gpu_cmd_barriers(cmd, &b, 1);
+        de_gpu_attachment color = {.texture = image, .clear = true, .store = true};
+        de_gpu_cmd_begin_render(cmd, &color, 1, NULL);
+        de_gpu_cmd_end_render(cmd);
+        b.before = DE_ACCESS_RENDER_TARGET;
+        b.after = DE_ACCESS_PRESENT;
+        de_gpu_cmd_barriers(cmd, &b, 1);
+        r = de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS,
+                                &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1});
+        if (r != DE_OK)
+            return (i32)r;
+        r = de_gpu_swapchain_present(f->d, f->sc);
+        if (r != DE_OK)
+            return (i32)r;
+        ++c->rendered;
+    }
+    return 0;
+}
+TEST_F(mtl, swapchain_resize_render_thread_without_runloop, sc_fx) {
+    f->sc = de_gpu_swapchain_create(f->d, &(de_gpu_swapchain_desc){.window = f->window});
+    ASSERT_TRUE(f->sc.id);
+    resize_worker_case c = {.f = f};
+    de_thread *thread;
+    ASSERT_EQ(de_thread_create(resize_without_runloop, &c, "swapchain-resize", DE_THREAD_NORMAL, 0,
+                               &thread),
+              DE_OK);
+    EXPECT_EQ(de_thread_join(thread), 0);
+    EXPECT_EQ(c.rendered, 8u);
 }

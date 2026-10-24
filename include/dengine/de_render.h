@@ -874,6 +874,10 @@ typedef struct de_render_stats {
     /** S16: native BLAS plus decoded positions/metadata, charged to GPU mesh residency. */
     u64 rt_blas_bytes;
     u32 rt_meshes, rt_blas_count, rt_compacted_blas;
+    /** CPU backpressure waiting for this frame's arena/GPU slot, separate from recording. */
+    f32 frame_wait_ms;
+    /** CPU time inside swapchain acquisition/presentation; zero for offscreen frames. */
+    f32 frame_acquire_ms, frame_present_ms;
 } de_render_stats;
 DE_API const de_render_stats *de_renderer_stats(const de_renderer *r);
 
