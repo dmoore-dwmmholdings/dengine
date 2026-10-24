@@ -23,3 +23,10 @@ float4 ps_main(uniform DrawData pc) : SV_Target
 {
     return pc.color;
 }
+
+// DENG-617: a present fragment stage that legitimately has no push block.
+[shader("fragment")]
+float4 ps_solid() : SV_Target
+{
+    return float4(0.25, 0.5, 0.75, 1.0);
+}

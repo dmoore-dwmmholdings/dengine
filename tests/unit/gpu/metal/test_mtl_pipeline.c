@@ -264,9 +264,9 @@ static u32 max_u32(u32 a, u32 b) {
     return a > b ? a : b;
 }
 
-static de_gpu_pipeline triangle_pipeline(de_gpu_device *d, bool depth) {
+static de_gpu_pipeline triangle_pipeline_entry(de_gpu_device *d, bool depth, const char *entry) {
     de_pipe_test_shader vs = shader("triangle.slang", "vs_main");
-    de_pipe_test_shader ps = shader("triangle.slang", "ps_main");
+    de_pipe_test_shader ps = shader("triangle.slang", entry);
     de_gpu_pipeline_desc pd = {.kind = DE_PIPE_GRAPHICS,
                                .vs = vs.blob,
                                .ps = ps.blob,
@@ -286,6 +286,10 @@ static de_gpu_pipeline triangle_pipeline(de_gpu_device *d, bool depth) {
     }
     ASSERT_TRUE(DE_HANDLE_VALID(p));
     return p;
+}
+
+static de_gpu_pipeline triangle_pipeline(de_gpu_device *d, bool depth) {
+    return triangle_pipeline_entry(d, depth, "ps_main");
 }
 
 static de_gpu_pipeline compute_pipeline(de_gpu_device *d, const char *file, const char *name) {
@@ -949,6 +953,40 @@ static void run_pipelines(de_gpu_device *d, u64 *ns, u32 *count) {
     de_gpu_pipeline p[4];
     *ns = create_pipelines(d, p, count);
     destroy_pipelines(d, p, *count);
+}
+
+/* Reflection-only probes must neither invent an unused fragment push binding
+ * nor count as another public pipeline archive lookup. */
+TEST_F(mtl_archive, unused_fragment_push_lookup_count, pipe_fx) {
+    need_shaders(f);
+    const char *dir = cache_dir("unused-fragment-push");
+    f->d = make_device(f, dir);
+    const char *archive_path = NULL;
+    u32 state = de__mtl_archive_state(f->d, NULL, NULL, &archive_path);
+    char path[512];
+    snprintf(path, sizeof path, "%s", archive_path);
+    if (state != DE__MTL_ARCHIVE_EMPTY) {
+        de_gpu_device_destroy(f->d);
+        f->d = NULL;
+        ASSERT_EQ(de_file_delete(path), DE_OK);
+        f->d = make_device(f, dir);
+    }
+    for (u32 warm = 0; warm < 2; ++warm) {
+        de_gpu_pipeline pipeline = triangle_pipeline_entry(f->d, false, "ps_solid");
+        const de__gpu_pipeline *p = de__gpu_get_pipeline(f->d, pipeline);
+        ASSERT_TRUE(p != NULL);
+        const mtl_pipeline *mp = DE__GPU_PAYLOAD(mtl_pipeline, p);
+        EXPECT_EQ(mp->push_stages, (u32)DE__MTL_PUSH_VERTEX);
+        u32 hits = 0, misses = 0;
+        (void)de__mtl_archive_state(f->d, &hits, &misses, NULL);
+        EXPECT_EQ(hits, warm ? 1u : 0u);
+        EXPECT_EQ(misses, warm ? 0u : 1u);
+        de_gpu_pipeline_destroy(f->d, pipeline);
+        de_gpu_device_destroy(f->d);
+        f->d = NULL;
+        if (!warm)
+            f->d = make_device(f, dir);
+    }
 }
 
 TEST_F(mtl_archive, binary_archive_roundtrip, pipe_fx) {
