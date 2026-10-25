@@ -126,6 +126,13 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
         desc = *d;
     else
         memset(&desc, 0, sizeof desc);
+    if (desc.offscreen && desc.headless)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "engine create: offscreen and headless conflict");
+#if defined(DE_HEADLESS)
+    if (desc.offscreen)
+        return DE_FAIL(DE_ERR_UNSUPPORTED,
+                       "engine create: offscreen GPU needs a non-headless build");
+#endif
 
     /* 1. Allocator. */
     const de_allocator *a = desc.allocator != NULL ? desc.allocator : de_heap_allocator();
@@ -142,6 +149,7 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     e->timing = e->config.timing;
     de_atomic_init_u32(&e->quit, 0);
     e->headless = desc.headless;
+    e->pub.offscreen = desc.offscreen;
 
     /* 2. Log categories. Process-wide: registering an existing name returns it. */
     e->log_host = de_log_register_category("host", DE_LOG_INFO);
@@ -155,12 +163,16 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     de_platform_desc pd;
     memset(&pd, 0, sizeof pd);
     pd.app_name = e->config.name;
-    pd.flags = desc.headless ? (u32)DE_PLATFORM_HEADLESS : 0u;
+    pd.flags = desc.headless || desc.offscreen ? (u32)DE_PLATFORM_HEADLESS : 0u;
     pd.allocator = a;
     de_result r = de_platform_init(&pd);
     if (r == DE_OK) {
         e->owns_platform = true;
     } else if (r == DE_ERR_BUSY) {
+        /* A video platform may already have activated the application. It cannot become a
+         * windowless host retroactively, nor may this host shut down the caller's platform. */
+        if (desc.offscreen && !de_platform_headless())
+            return engine_fail(e, DE_ERR_BUSY, "offscreen requires an events-only platform");
         /* The caller (a tool, an editor, a test) runs the platform already: use it, and leave
          * its shutdown to the caller. */
         de_error_clear();
@@ -168,7 +180,7 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     } else {
         return engine_fail(e, r, "platform init");
     }
-    if (de_platform_headless())
+    if (de_platform_headless() && !desc.offscreen)
         e->headless = true;
     /* 4b. Crash reports and the `quit` command (DENG-96, host_crash.c); never fails. */
     de__host_crash_engine_init(e);
@@ -304,7 +316,7 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
 
     /* 8. Select the surface before window creation: game init can create its renderer on
      * this same window. D3D12 and explicit "none" need no API-specific surface. */
-    if (!e->headless) {
+    if (!e->headless && !desc.offscreen) {
         de_window_desc wnd;
         memset(&wnd, 0, sizeof wnd);
         wnd.title = e->config.window_title[0] != '\0' ? e->config.window_title : e->config.name;

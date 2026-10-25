@@ -10,9 +10,10 @@
 # engine_window (label `window`), which checks that a zeroed desc opens a window and skips
 # without a video driver.
 de_add_test(NAME engine SOURCES test_engine.c LIBS de_host TIMEOUT 300)
+de_add_test(NAME engine_offscreen SOURCES test_engine_offscreen.c LIBS de_host TIMEOUT 300)
 de_add_test(NAME game_toml SOURCES test_game_toml.c LIBS de_host)
 de_add_test(NAME engine_window SOURCES test_engine_window.c LIBS de_host LABELS unit window)
-foreach(_de_host_test test_engine test_game_toml test_engine_window)
+foreach(_de_host_test test_engine test_engine_offscreen test_game_toml test_engine_window)
     if(TARGET ${_de_host_test})
         target_include_directories(${_de_host_test} PRIVATE "${DE_ROOT_DIR}/src")
         target_compile_definitions(${_de_host_test} PRIVATE
@@ -21,6 +22,9 @@ foreach(_de_host_test test_engine test_game_toml test_engine_window)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_de_host_test}_tmp")
     endif()
 endforeach()
+if(TARGET test_engine_offscreen AND TARGET de_tp_sdl3)
+    target_link_libraries(test_engine_offscreen PRIVATE de_tp_sdl3)
+endif()
 
 # DENG-92: game library loading. fixtures/ builds test_game with de_add_game() and the plain
 # libraries of test_game_module.c (see fixtures/CMakeLists.txt). The host_game_* entries run

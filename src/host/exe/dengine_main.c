@@ -35,6 +35,7 @@ static void usage(FILE *out, const char *program) {
             "  --game-toml <vpath>  the project file (default: game:/game.toml)\n"
             "  --dev-dir <dir>      the project directory mounted as dev:/ (assets.toml, sources)\n"
             "  --headless           no window, GPU, audio or UI\n"
+            "  --offscreen          no video/windows; game-owned offscreen GPU rendering\n"
             "  --frames <n>         stop after n frames\n"
             "  +<cvar> <value>      set a cvar at startup\n",
             program);
