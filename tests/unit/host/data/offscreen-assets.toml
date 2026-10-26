@@ -1,0 +1,6 @@
+[project]
+asset_root = "assets"
+version = 1
+
+[assets]
+"offscreen/checker" = {type="texture", source="checker.png", compression="none", mips=false, srgb=false}

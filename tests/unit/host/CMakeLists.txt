@@ -25,6 +25,35 @@ endforeach()
 if(TARGET test_engine_offscreen AND TARGET de_tp_sdl3)
     target_link_libraries(test_engine_offscreen PRIVATE de_tp_sdl3)
 endif()
+if(DE_HAS_RENDER AND NOT DE_IS_SHIPPING)
+    # Deliberately not registered as an automatic native test. The public-only fixture
+    # requires --allow-native for real hardware; no window-capable SDL video driver is used.
+    # It exercises Dev source cooking; Shipping retains packed-only asset policy.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(de_offscreen_capture offscreen_capture.c)
+    target_link_libraries(de_offscreen_capture PRIVATE de_host de_build_flags)
+    set(_de_offscreen_data "${CMAKE_CURRENT_BINARY_DIR}/offscreen-data")
+    file(MAKE_DIRECTORY "${_de_offscreen_data}/assets")
+    configure_file(data/offscreen-assets.toml "${_de_offscreen_data}/offscreen-assets.toml" COPYONLY)
+    configure_file(data/offscreen.toml "${_de_offscreen_data}/offscreen.toml" COPYONLY)
+    # Reuse the original2x2 texture oracle byte-for-byte; do not weaken VFS path containment.
+    configure_file("${DE_ROOT_DIR}/tests/unit/import/data/texture/checker.png"
+        "${_de_offscreen_data}/assets/checker.png" COPYONLY)
+    target_compile_definitions(de_offscreen_capture PRIVATE
+        DE_OFFSCREEN_DATA_DIR="${_de_offscreen_data}")
+    set_target_properties(de_offscreen_capture PROPERTIES OUTPUT_NAME de-offscreen-capture)
+    add_test(NAME offscreen_capture_null COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_capture.py"
+        "$<TARGET_FILE:de_offscreen_capture>" --backend null)
+    set_tests_properties(offscreen_capture_null PROPERTIES LABELS "unit;host" TIMEOUT 180)
+    if(APPLE)
+        add_executable(de_offscreen_observe offscreen_desktop_observer.m)
+        target_link_libraries(de_offscreen_observe PRIVATE de_build_flags
+            "-framework AppKit" "-framework CoreGraphics")
+        set_source_files_properties(offscreen_desktop_observer.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        set_target_properties(de_offscreen_observe PROPERTIES OUTPUT_NAME de-offscreen-observe)
+    endif()
+endif()
 
 # DENG-92: game library loading. fixtures/ builds test_game with de_add_game() and the plain
 # libraries of test_game_module.c (see fixtures/CMakeLists.txt). The host_game_* entries run
