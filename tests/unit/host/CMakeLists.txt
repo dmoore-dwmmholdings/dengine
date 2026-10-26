@@ -46,6 +46,11 @@ if(DE_HAS_RENDER AND NOT DE_IS_SHIPPING)
         "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_capture.py"
         "$<TARGET_FILE:de_offscreen_capture>" --backend null)
     set_tests_properties(offscreen_capture_null PROPERTIES LABELS "unit;host" TIMEOUT 180)
+    if(UNIX)
+        add_test(NAME offscreen_capture_cancel COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_cancel.py")
+        set_tests_properties(offscreen_capture_cancel PROPERTIES LABELS "unit;host" TIMEOUT 30)
+    endif()
     if(APPLE)
         add_executable(de_offscreen_observe offscreen_desktop_observer.m)
         target_link_libraries(de_offscreen_observe PRIVATE de_build_flags

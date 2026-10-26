@@ -2,6 +2,7 @@
  * Observe before spawning the exact child; PID-only sampling is deliberately insufficient. */
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -101,6 +102,8 @@ int main(int argc, char **argv) {
             if (visible > max_visible)
                 max_visible = visible;
             pid_t result = waitpid(child, &status, WNOHANG);
+            if (result < 0 && errno == EINTR)
+                continue; /* Still own the child: process the pending stop on the next poll. */
             if (result == child)
                 break;
             if (result < 0) {

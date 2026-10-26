@@ -54,9 +54,9 @@ def execute(name, command, guard=False):
                                **({'start_new_session': True} if os.name != 'nt' else {}))
     try:
         stdout, stderr = process.communicate(timeout=620 if args.backend != 'null' else 120)
-    except subprocess.TimeoutExpired as error:
+    except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
         # An observer owns a fixture child. Stop the isolated group while its leader still
-        # has this unreaped PID; never leave a native fixture behind on a harness timeout.
+        # has this unreaped PID; never leave a native fixture behind on timeout or Ctrl-C.
         if process.poll() is None:
             if os.name != 'nt':
                 os.killpg(process.pid, signal.SIGTERM)
@@ -73,7 +73,9 @@ def execute(name, command, guard=False):
             stdout, stderr = process.communicate()
         (root / (name + '.log')).write_text(stdout + stderr)
         facts['executions'].append({'name': name, 'command': command,
-                                    'timeout': True, 'terminal': 'owned child/group stopped and reaped',
+                                    'timeout': isinstance(error, subprocess.TimeoutExpired),
+                                    'interrupted': isinstance(error, KeyboardInterrupt),
+                                    'terminal': 'owned child/group stopped and reaped',
                                     'exit': process.returncode})
         save()
         raise
