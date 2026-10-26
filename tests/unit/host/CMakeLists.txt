@@ -25,10 +25,13 @@ endforeach()
 if(TARGET test_engine_offscreen AND TARGET de_tp_sdl3)
     target_link_libraries(test_engine_offscreen PRIVATE de_tp_sdl3)
 endif()
-if(DE_HAS_RENDER AND NOT DE_IS_SHIPPING)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _de_offscreen_build_type)
+if(DE_HAS_RENDER AND DE_BUILD_TOOLS AND
+   (DE_MULTI_CONFIG OR _de_offscreen_build_type MATCHES "^(DEBUG|DEV)$"))
     # Deliberately not registered as an automatic native test. The public-only fixture
     # requires --allow-native for real hardware; no window-capable SDL video driver is used.
-    # It exercises Dev source cooking; Shipping retains packed-only asset policy.
+    # It exercises Debug/Dev source cooking. Release/Shipping retain packed-only policy;
+    # this fixture supplies no pre-cooked pack and cannot exercise those configurations.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(de_offscreen_capture offscreen_capture.c)
     target_link_libraries(de_offscreen_capture PRIVATE de_host de_build_flags)
@@ -42,13 +45,17 @@ if(DE_HAS_RENDER AND NOT DE_IS_SHIPPING)
     target_compile_definitions(de_offscreen_capture PRIVATE
         DE_OFFSCREEN_DATA_DIR="${_de_offscreen_data}")
     set_target_properties(de_offscreen_capture PROPERTIES OUTPUT_NAME de-offscreen-capture)
+    set(_de_offscreen_test_configs)
+    if(DE_MULTI_CONFIG)
+        set(_de_offscreen_test_configs CONFIGURATIONS Debug Dev)
+    endif()
     add_test(NAME offscreen_capture_null COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_capture.py"
-        "$<TARGET_FILE:de_offscreen_capture>" --backend null)
+        "$<TARGET_FILE:de_offscreen_capture>" --backend null ${_de_offscreen_test_configs})
     set_tests_properties(offscreen_capture_null PROPERTIES LABELS "unit;host" TIMEOUT 180)
     if(UNIX)
         add_test(NAME offscreen_capture_cancel COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_cancel.py")
+            "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_cancel.py" ${_de_offscreen_test_configs})
         set_tests_properties(offscreen_capture_cancel PROPERTIES LABELS "unit;host" TIMEOUT 30)
     endif()
     if(APPLE)

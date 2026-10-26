@@ -224,7 +224,15 @@ static de_result capture(de_engine *e) {
     u64 hash = 14695981039346656037ULL;
     u32 nonzero = 0;
     bool ordered_color = true;
-    FILE *file = state.output && native ? fopen(state.output, "wb") : NULL;
+    FILE *file = NULL;
+    if (state.output && native) {
+#if defined(_WIN32)
+        if (fopen_s(&file, state.output, "wb"))
+            file = NULL;
+#else
+        file = fopen(state.output, "wb");
+#endif
+    }
     if (state.output && native && !file)
         return DE_FAIL(DE_ERR_IO, "cannot create fixture capture");
     bool ok = true;
