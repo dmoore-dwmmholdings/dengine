@@ -57,19 +57,28 @@ public bool ssr_history_valid(SsrParams pc, DeSceneConstants sc, float2 uv, floa
     float expected = clip.z / clip.w;
     return abs(surface.x - expected) <= max(0.002 * expected, 2e-4);
 }
-// Motion must validate each bilinear contributor, not accept four surfaces after one test.
-// Keep the established stationary footprint (and convergence); always reject nonfinite colour.
+// Validate every contributor, including stationary receivers. A projected receiver plane
+// predicts each tap's depth: a constant centre depth wrongly rejects continuous tilted surfaces.
 public float4 ssr_history_sample(SsrParams pc, DeSceneConstants sc, uint index, float2 uv,
                                  float3 position, float3 normal, bool footprint_coverage = false) {
-    if (!ssr_history_valid(pc, sc, uv, position, normal)) return float4(0);
+    if ((pc.history_valid & 1u) == 0 || !all(isfinite(uv)) || any(uv < 0) || any(uv >= 1) ||
+        !all(isfinite(normal)) || dot(normal, normal) < 1e-8)
+        return float4(0);
     float4 point = float4(position, 1);
-    float4 current = float4(dot(sc.view_proj[0], point), dot(sc.view_proj[1], point),
-                            dot(sc.view_proj[2], point), dot(sc.view_proj[3], point));
-    float2 current_uv = current.xy / current.w * float2(.5, -.5) + .5;
-    bool moving = current.w <= 0 || length((current_uv - uv) * float2(pc.width, pc.height)) > .01;
     float4 previous = float4(dot(sc.prev_view_proj[0], point), dot(sc.prev_view_proj[1], point),
                              dot(sc.prev_view_proj[2], point), dot(sc.prev_view_proj[3], point));
-    float expected = previous.z / previous.w;
+    if (!all(isfinite(previous)) || !(previous.w > 0)) return float4(0);
+    float3 ndc = previous.xyz / previous.w;
+    float3 tangent = normalize(cross(normal, abs(normal.z) < .9 ? float3(0,0,1) : float3(0,1,0)));
+    float3 bitangent = cross(normal, tangent);
+    float4 dt = float4(dot(sc.prev_view_proj[0].xyz, tangent), dot(sc.prev_view_proj[1].xyz, tangent),
+                       dot(sc.prev_view_proj[2].xyz, tangent), dot(sc.prev_view_proj[3].xyz, tangent));
+    float4 db = float4(dot(sc.prev_view_proj[0].xyz, bitangent), dot(sc.prev_view_proj[1].xyz, bitangent),
+                       dot(sc.prev_view_proj[2].xyz, bitangent), dot(sc.prev_view_proj[3].xyz, bitangent));
+    float3 plane = cross(dt.xyz - ndc * dt.w, db.xyz - ndc * db.w);
+    if (!all(isfinite(plane)) || abs(plane.z) <= 1e-6 * length(plane)) return float4(0);
+    float2 slope = -plane.xy / plane.z;
+    float2 previous_uv = ndc.xy * float2(.5, -.5) + .5;
     float2 p = uv * float2(pc.width, pc.height) - 0.5;
     int2 base = int2(floor(p));
     float2 f = frac(p);
@@ -82,16 +91,17 @@ public float4 ssr_history_sample(SsrParams pc, DeSceneConstants sc, uint index, 
                 continue;
             float2 center = (float2(q) + 0.5) / float2(pc.width, pc.height);
             float w = (x == 0 ? 1-f.x : f.x) * (y == 0 ? 1-f.y : f.y);
-            if (w > 0 && (!moving || ssr_history_valid(pc, sc, center, position, normal))) {
-                if (moving) {
-                    float depth = de_rwtex2d(pc.history_surface)[q].x;
-                    // A fixed reverse-Z epsilon accepts metre-scale separation at a distance.
-                    // Use the ray trace's world-space thickness for moving history footprints.
-                    float separation = sc.proj[3].w > .5
-                        ? abs(depth - expected) / max(abs(sc.proj[2].z), 1e-8)
-                        : abs(expected / max(depth, 1e-12) - 1) * abs(previous.w);
-                    if (separation > max(pc.thickness, .01)) continue;
-                }
+            if (w > 0) {
+                float4 surface = de_rwtex2d(pc.history_surface)[q];
+                float expected = ndc.z + dot(slope, (center - previous_uv) * float2(2, -2));
+                if (!all(isfinite(surface)) || !(surface.x > 0) || !(expected > 0) ||
+                    dot(surface.yzw, normal) < .85 ||
+                    abs(surface.x - expected) > max(.002 * expected, 2e-4)) continue;
+                // Raw reverse-Z tolerance alone accepts metre-scale separation at a distance.
+                float separation = sc.proj[3].w > .5
+                    ? abs(surface.x - expected) / max(abs(sc.proj[2].z), 1e-8)
+                    : abs(expected / surface.x - 1) * abs(previous.w);
+                if (separation > max(pc.thickness, .01)) continue;
                 float4 value = de_rwtex2d(index)[q];
                 if (all(isfinite(value))) { sum += value * w; weight += w; }
             }
