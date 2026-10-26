@@ -223,12 +223,19 @@ static de_result capture(de_engine *e) {
     bool native = state.backend != DE_GPU_NULL;
     u64 hash = 14695981039346656037ULL;
     u32 nonzero = 0;
+    bool ordered_color = true;
     FILE *file = state.output && native ? fopen(state.output, "wb") : NULL;
     if (state.output && native && !file)
         return DE_FAIL(DE_ERR_IO, "cannot create fixture capture");
     bool ok = true;
     for (u32 y = 0; y < HEIGHT; ++y) {
         const u8 *row = bytes + 512 + y * PITCH;
+        /* The full-target blue-biased clear must reach readback, not merely some nonzero
+         * background. Tone/output conversion preserves this widely separated channel order. */
+        for (u32 x = 0; x < WIDTH; ++x)
+            if (!(row[x * 4] < row[x * 4 + 1] && row[x * 4 + 1] < row[x * 4 + 2]) ||
+                row[x * 4 + 3] != 255)
+                ordered_color = false;
         for (u32 x = 0; x < WIDTH * 4; ++x) {
             hash = (hash ^ row[x]) * 1099511628211ULL;
             if (x % 4 != 3 && row[x])
@@ -240,7 +247,7 @@ static de_result capture(de_engine *e) {
     if (file && fclose(file))
         ok = false;
     state.image_hash = hash;
-    state.pixels_ok = native && nonzero && state.asset_pixels_ok;
+    state.pixels_ok = native && nonzero && ordered_color && state.asset_pixels_ok;
     if (!ok || (native && !state.pixels_ok))
         return DE_FAIL(DE_ERR_IO, "fixture output/texture readback failed");
     return DE_OK;
