@@ -94,3 +94,6 @@ if(TARGET de_ui AND DE_HAS_RENDER)
   endif()
  endif()
 endif()
+
+# DENG-657: replay the real cold-frame watchdog condition without a renderer or GPU.
+de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LABELS unit ui)
