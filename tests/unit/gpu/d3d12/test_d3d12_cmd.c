@@ -222,7 +222,7 @@ static void body_clear_readback(de_gpu_device *d) {
     de_gpu_fence_destroy(d, fence);
 }
 
-static void body_copy_bc7_mips(de_gpu_device *d) {
+static void body_copy_bc7_mips(de_gpu_device *d, de_gpu_queue q) {
     enum { SIZE = 64, MIPS = 4, PITCH = 256 };
     de_gpu_texture tex = de_gpu_texture_create(
         d, &(de_gpu_texture_desc){.format = DE_FMT_BC7_UNORM,
@@ -259,7 +259,7 @@ static void body_copy_bc7_mips(de_gpu_device *d) {
     memset(dst, 0, (size_t)total);
 
     de_error_clear();
-    de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "bc7 round trip");
+    de_gpu_cmd *c = de_gpu_cmd_begin(d, q, "bc7 round trip");
     ASSERT_TRUE(c != NULL);
     de_gpu_barrier b = tex_barrier(tex, DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
     de_gpu_cmd_barriers(c, &b, 1);
@@ -270,7 +270,7 @@ static void body_copy_bc7_mips(de_gpu_device *d) {
     for (u32 m = 0; m < MIPS; ++m)
         de_gpu_cmd_copy_texture_to_buffer(c, rb, offset[m], PITCH, tex, m, 0);
     EXPECT_TRUE(de_error_last() == NULL);
-    submit_wait(d, DE_QUEUE_GRAPHICS, c, fence, 1);
+    submit_wait(d, q, c, fence, 1);
 
     for (u32 m = 0; m < MIPS; ++m) {
         u32 bad = 0;
@@ -471,6 +471,13 @@ TEST_F(d3d12, legacy_texture_copy_queue_handoff_api, legacy_api_copy_fx) {
     body_texture_copy_queue(f->d);
 }
 
+TEST_F(d3d12, copy_queue_bc7_mips, cmd_fx) {
+    body_copy_bc7_mips(f->d, DE_QUEUE_COPY);
+}
+TEST_F(d3d12, legacy_copy_queue_bc7_mips, legacy_fx) {
+    body_copy_bc7_mips(f->d, DE_QUEUE_COPY);
+}
+
 TEST_F(d3d12, clear_readback, cmd_fx) {
     print_mode(f->d);
     body_clear_readback(f->d);
@@ -478,7 +485,7 @@ TEST_F(d3d12, clear_readback, cmd_fx) {
 
 TEST_F(d3d12, copy_bc7_mips, cmd_fx) {
     print_mode(f->d);
-    body_copy_bc7_mips(f->d);
+    body_copy_bc7_mips(f->d, DE_QUEUE_GRAPHICS);
 }
 
 TEST_F(d3d12, cross_queue_timeline, cmd_fx) {
@@ -507,7 +514,7 @@ TEST_F(d3d12, legacy_barriers_forced, legacy_fx) {
     EXPECT_FALSE(de__d3d12_enhanced_barriers_active(f->d));
     print_mode(f->d);
     body_clear_readback(f->d);
-    body_copy_bc7_mips(f->d);
+    body_copy_bc7_mips(f->d, DE_QUEUE_GRAPHICS);
     body_cross_queue(f->d);
 }
 
