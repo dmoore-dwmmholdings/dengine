@@ -49,11 +49,12 @@ jobs:
           cmake --preset "${PRESET}"
           cmake --build --preset "${PRESET}" --target test_ui_popup_native
           set +e
-          DE_UI_POPUP_EVIDENCE_DIR="$PWD/evidence/before" ctest --test-dir "build/${PRESET}" -R '^ui_popup_native\.ui_popup_native\.generated_widgets_stay_on_world_panel$' --no-tests=error --output-on-failure --test-output-size-failed 1048576 --output-junit "$PWD/evidence/before/results.xml" > evidence/before/ctest.log 2>&1
+          DE_UI_POPUP_EVIDENCE_DIR="$PWD/evidence/before" ctest --test-dir "build/${PRESET}" -R '^ui_popup_native\.generated_widgets_stay_on_world_panel$' --no-tests=error --output-on-failure --test-output-size-failed 1048576 --output-junit "$PWD/evidence/before/results.xml" > evidence/before/ctest.log 2>&1
           result=$?
           set -e
           cat evidence/before/ctest.log
           test "${result}" -ne 0
+          python -c "import xml.etree.ElementTree as E; c=E.parse('evidence/before/results.xml').findall('.//testcase'); assert len(c)==1 and c[0].find('failure') is not None and c[0].find('skipped') is None"
           cp "build/${PRESET}/Testing/Temporary/LastTest.log" evidence/before/LastTest.log
       - name: Fixed runtime
         shell: bash
@@ -61,7 +62,7 @@ jobs:
           git restore -- src/ui/widgets/advanced.c src/ui/widgets/advanced_internal.h src/ui/widgets/dropdown.c src/ui/widgets/tooltip.c
           git diff --exit-code
           cmake --build --preset "${PRESET}" --target test_ui_popup_native test_ui_layout test_ui_world_pixel
-          DE_UI_POPUP_EVIDENCE_DIR="$PWD/evidence/after" ctest --test-dir "build/${PRESET}" -R '^ui_popup_native\.ui_popup_native\.generated_widgets_stay_on_world_panel$' --no-tests=error --output-on-failure --test-output-size-passed 1048576 --test-output-size-failed 1048576 --output-junit "$PWD/evidence/after/results.xml"
+          DE_UI_POPUP_EVIDENCE_DIR="$PWD/evidence/after" ctest --test-dir "build/${PRESET}" -R '^ui_popup_native\.generated_widgets_stay_on_world_panel$' --no-tests=error --output-on-failure --test-output-size-passed 1048576 --test-output-size-failed 1048576 --output-junit "$PWD/evidence/after/results.xml"
           cp "build/${PRESET}/Testing/Temporary/LastTest.log" evidence/after/LastTest.log
           ctest --test-dir "build/${PRESET}" -R '^ui_layout\.ui_advanced\.(generated_.*|dropdown_flips_selects_once_and_cancel_preserves_value|tabs_generate_headers_hide_inactive_pages_and_emit_change|tooltip_delay_focus_safe_bounds_and_press_hide|actual_escape_and_outside_click_close_dropdown_without_selection)$|^ui_world_pixel\.ui_world\.(per_root_panel_pixels_preserve_screen_root|popups_use_panel_extent_scale_and_ignore_screen_safe_insets|popup_percent_and_oversize_clamps_are_independent_between_panels)$' --no-tests=error --output-on-failure --output-junit "$PWD/evidence/after/cpu.xml"
       - name: Verify execution and captures
