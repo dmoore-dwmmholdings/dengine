@@ -1,4 +1,4 @@
-name: DENG-660 raster and culling ablations (CI only)
+name: DENG-660 final-frame lighting readback (CI only)
 on:
   workflow_dispatch:
     inputs:
@@ -45,7 +45,7 @@ jobs:
         run: |
           cmake --preset "${PRESET}"
           cmake --build --preset "${PRESET}" --target de_golden --parallel 4
-      - name: Compare observed raster and culling states on unchanged scene
+      - name: Capture final-frame lighting data with unchanged-image controls
         shell: bash
         run: python .github/scripts/deng660-probes.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

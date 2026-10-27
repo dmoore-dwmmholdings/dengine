@@ -18,6 +18,8 @@
 
 #include "render/components_internal.h"
 #include "render/renderer_internal.h"
+#include "render/lighting/lighting.h"
+#include "render/scene/gpu_scene.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/views_internal.h"
 #include "render/probes/probes_internal.h"
@@ -62,7 +64,107 @@ typedef struct mg {
     u32 pitch;
     u8 *now, *prev;
     bool saved_refraction, refraction_changed;
+    de_gpu_buffer diagnostic_rb;
+    de_rg_resource diagnostic_reads[8];
+    u64 diagnostic_offsets[8], diagnostic_sizes[8], diagnostic_scene_offset;
+    u32 diagnostic_pitch, diagnostic_width, diagnostic_height;
+    de__lighting_view diagnostic_view;
+    bool diagnostic_captured;
 } mg;
+
+/* CI-only final-frame inspection. Require the final image to remain byte-identical to the
+ * uninstrumented control before drawing conclusions: extra copies extend RG lifetimes. */
+static void mg_diagnostic_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    mg *m = user;
+    for (u32 i = 0; i < 6; ++i)
+        de_gpu_cmd_copy_buffer(cmd, m->diagnostic_rb, m->diagnostic_offsets[i],
+                              de_rg_buffer(pass, m->diagnostic_reads[i]),
+                              i == 5 ? m->diagnostic_scene_offset : 0, m->diagnostic_sizes[i]);
+    for (u32 i = 6; i < 8; ++i)
+        de_gpu_cmd_copy_texture_to_buffer(cmd, m->diagnostic_rb, m->diagnostic_offsets[i],
+                                         m->diagnostic_pitch,
+                                         de_rg_texture(pass, m->diagnostic_reads[i]), 0, 0);
+}
+
+static void mg_diagnostic_hook(de_rg *g, de_view view, void *user) {
+    mg *m = user;
+    if (view.id != m->view.id || m->r->frame_index != 95u)
+        return;
+    de__vis_context *vc = de__vis_frame_context(de__views_vis(m->r), view, g, m->r->frame_index);
+    de__lighting_context *lc =
+        de__lighting_frame_context(de__views_lighting(m->r), view, g, m->r->frame_index);
+    if (!vc || !lc || !lc->lit) {
+        de_golden_fail(m->ctx, "DENG660 missing final-frame lighting context");
+        return;
+    }
+    m->diagnostic_width = lc->width;
+    m->diagnostic_height = lc->height;
+    m->diagnostic_pitch = (lc->width * 4u + 511u) & ~511u;
+    m->diagnostic_view = lc->view;
+    m->diagnostic_scene_offset = (u64)vc->scene_view_slot * sizeof(de__gs_view);
+    const de_rg_resource reads[8] = {lc->lights, lc->counters, lc->grid_buf, lc->list,
+                                     lc->bounds, vc->scene_views, vc->depth, vc->gbuffer[1]};
+    const u64 sizes[8] = {(u64)lc->local_capacity * sizeof(de__cluster_light),
+                          DE__LIGHTING_COUNTER_BYTES, (u64)lc->grid.count * 8u,
+                          (u64)lc->list_capacity * 4u, (u64)lc->grid.count * 32u,
+                          sizeof(de__gs_view), (u64)m->diagnostic_pitch * lc->height,
+                          (u64)m->diagnostic_pitch * lc->height};
+    u64 total = 0;
+    for (u32 i = 0; i < 8; ++i) {
+        m->diagnostic_reads[i] = reads[i];
+        m->diagnostic_offsets[i] = total;
+        m->diagnostic_sizes[i] = sizes[i];
+        total = (total + sizes[i] + 511u) & ~511ull;
+    }
+    m->diagnostic_rb = de_gpu_buffer_create(
+        m->ctx->device, &(de_gpu_buffer_desc){.size = total, .usage = DE_USAGE_COPY_DST,
+                                             .memory = DE_MEM_READBACK});
+    if (!DE_HANDLE_VALID(m->diagnostic_rb)) {
+        de_golden_fail(m->ctx, "DENG660 readback allocation failed");
+        return;
+    }
+    de_rg_pass *p = de_rg_add_pass(g, "test.deng660.readback", DE_QUEUE_GRAPHICS,
+                                  mg_diagnostic_execute, m);
+    for (u32 i = 0; i < 8; ++i)
+        de_rg_read(p, reads[i], DE_ACCESS_COPY_SRC);
+    de_rg_write(p, de_rg_import_buffer(g, m->diagnostic_rb, DE_ACCESS_COPY_DST),
+                DE_ACCESS_COPY_DST);
+    de_rg_pass_side_effect(p);
+    m->diagnostic_captured = true;
+}
+
+static bool mg_diagnostic_dump(mg *m) {
+    const char *dir = getenv("DE_DENG660_READBACK");
+    if (!dir)
+        return true;
+    if (!m->diagnostic_captured)
+        return false;
+    const u8 *data = de_gpu_buffer_map(m->ctx->device, m->diagnostic_rb);
+    if (!data)
+        return false;
+    const char *names[8] = {"lights", "counters", "grid", "list", "bounds", "scene", "depth",
+                            "gbuffer1"};
+    char path[2048];
+    for (u32 i = 0; i < 9; ++i) {
+        snprintf(path, sizeof path, "%s/%s.bin", dir, i < 8 ? names[i] : "view");
+        FILE *f = fopen(path, "wb");
+        if (!f)
+            return false;
+        const void *src = i < 8 ? (const void *)(data + m->diagnostic_offsets[i])
+                                : (const void *)&m->diagnostic_view;
+        size_t size = i < 8 ? (size_t)m->diagnostic_sizes[i] : sizeof m->diagnostic_view;
+        bool ok = fwrite(src, 1, size, f) == size;
+        if (fclose(f) != 0 || !ok)
+            return false;
+    }
+    snprintf(path, sizeof path, "%s/metadata.json", dir);
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return false;
+    int n = fprintf(f, "{\"width\":%u,\"height\":%u,\"pitch\":%u,\"frame\":95}\n",
+                    m->diagnostic_width, m->diagnostic_height, m->diagnostic_pitch);
+    return fclose(f) == 0 && n > 0;
+}
 
 static void mg_cvar(const char *name, const char *value) {
     const de_cvar cv = de_cvar_find(name);
@@ -209,6 +311,8 @@ static void mg_close(mg *m) {
         de_gpu_fence_destroy(d, m->fence);
     if (DE_HANDLE_VALID(m->rb))
         de_gpu_buffer_destroy(d, m->rb);
+    if (DE_HANDLE_VALID(m->diagnostic_rb))
+        de_gpu_buffer_destroy(d, m->diagnostic_rb);
     if (DE_HANDLE_VALID(m->target))
         de_gpu_texture_destroy(d, m->target);
     free(m->now);
@@ -423,6 +527,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         return;
     }
     camera->view = m.view;
+    if (getenv("DE_DENG660_READBACK"))
+        de_render_add_hook(m.r, DE_HOOK_AFTER_TRANSPARENT, mg_diagnostic_hook, &m);
 
     /* Fixed simulation/frame count: temporal effects and PCSS use this exact sequence. */
     if (m.r->frame_index > 48u) {
@@ -438,6 +544,11 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         }
     }
     if (!mg_read(&m)) {
+        mg_close(&m);
+        return;
+    }
+    if (!mg_diagnostic_dump(&m)) {
+        de_golden_fail(ctx, "DENG660 final-frame diagnostic dump failed");
         mg_close(&m);
         return;
     }
