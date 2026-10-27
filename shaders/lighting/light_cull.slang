@@ -346,35 +346,23 @@ bool light_less(CullParams pc, uint a, uint b)
     return false;
 }
 
-// Keep one resource handle for the complete read/modify/write heap. In particular the DXIL
-// path must not manufacture a fresh descriptor-heap handle for each load and store.
-#if defined(DE_SHADER_TARGET_DXIL)
-typedef RWStructuredBuffer<uint> DeLightList;
-DeLightList light_list(CullParams pc)
-{
-    return RWStructuredBuffer<uint>(ResourceDescriptorHeap[NonUniformResourceIndex(pc.list)]);
-}
-#else
-typedef DeBuffer<uint> DeLightList;
-DeLightList light_list(CullParams pc) { return de_buffer<uint>(pc.list); }
-#endif
-
 // Each cluster owns a disjoint list range. Use that range as a bounded max heap, without
 // another allocation or an O(lights * cap) insertion sort.
-void light_heap_down(CullParams pc, DeLightList list, uint base, uint count, uint at, uint value)
+void light_heap_down(CullParams pc, uint base, uint count, uint at, uint value)
 {
     while (at * 2 + 1 < count) {
         uint child = at * 2 + 1;
         if (child + 1 < count &&
-            light_less(pc, list[base + child], list[base + child + 1]))
+            light_less(pc, de_buffer<uint>(pc.list)[base + child],
+                           de_buffer<uint>(pc.list)[base + child + 1]))
             ++child;
-        uint next = list[base + child];
+        uint next = de_buffer<uint>(pc.list)[base + child];
         if (!light_less(pc, value, next))
             break;
-        list[base + at] = next;
+        de_buffer<uint>(pc.list)[base + at] = next;
         at = child;
     }
-    list[base + at] = value;
+    de_buffer<uint>(pc.list)[base + at] = value;
 }
 
 [shader("compute")]
@@ -388,7 +376,6 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
     uint2 cell = de_robuffer<uint2>(pc.grid)[c];
     if (cell.y == 0u)
         return;
-    DeLightList list = light_list(pc);
     float3 lo, hi;
     cluster_bounds(pc, c, lo, hi);
     uint n = min(de_bytes(pc.counters).load(DE_LIGHTING_COUNTER_LOCAL), lv.local_capacity);
@@ -400,23 +387,23 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
             uint at = k++;
             while (at > 0) {
                 uint parent = (at - 1) / 2;
-                uint next = list[cell.x + parent];
+                uint next = de_buffer<uint>(pc.list)[cell.x + parent];
                 if (!light_less(pc, next, i))
                     break;
-                list[cell.x + at] = next;
+                de_buffer<uint>(pc.list)[cell.x + at] = next;
                 at = parent;
             }
-            list[cell.x + at] = i;
-        } else if (light_less(pc, i, list[cell.x])) {
-            light_heap_down(pc, list, cell.x, k, 0, i);
+            de_buffer<uint>(pc.list)[cell.x + at] = i;
+        } else if (light_less(pc, i, de_buffer<uint>(pc.list)[cell.x])) {
+            light_heap_down(pc, cell.x, k, 0, i);
         }
     }
     // Heap sort produces the same summation order even when the cluster is not capped.
     for (uint end = k; end > 1; --end) {
-        uint largest = list[cell.x];
-        uint value = list[cell.x + end - 1];
-        list[cell.x + end - 1] = largest;
-        light_heap_down(pc, list, cell.x, end - 1, 0, value);
+        uint largest = de_buffer<uint>(pc.list)[cell.x];
+        uint value = de_buffer<uint>(pc.list)[cell.x + end - 1];
+        de_buffer<uint>(pc.list)[cell.x + end - 1] = largest;
+        light_heap_down(pc, cell.x, end - 1, 0, value);
     }
 }
 
