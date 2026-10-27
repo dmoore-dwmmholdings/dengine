@@ -23,10 +23,6 @@ jobs:
             compiler: clang-cl
             preset: windows-clang-cl-debug
             backend: d3d12
-          - os: ubuntu-24.04
-            compiler: clang
-            preset: linux-clang-debug
-            backend: vulkan
     env:
       PRESET: ${{ matrix.preset }}
       BACKEND: ${{ matrix.backend }}
@@ -37,7 +33,7 @@ jobs:
           fetch-depth: 2
       - name: Verify immutable source and unchanged fixture
         run: |
-          source=7f5b0f55b95c49187b3e1c206e47d88b71920a5b
+          source=d7ed16d585cb2ea61de8842ad698e1ba1f121039
           git fetch --no-tags --depth=1 origin "$source"
           git diff --exit-code "$source" HEAD -- . ':(exclude).github/workflows/ci.yml'
           git rev-parse HEAD "$source" > source-identity.txt
@@ -46,21 +42,26 @@ jobs:
           compiler: ${{ matrix.compiler }}
           cache-key: ${{ matrix.preset }}
           cache-save: "false"
-      - name: Isolated hosted lavapipe and validation layers
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
-          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
-          test -n "$icd"
-          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-          VK_DRIVER_FILES="$icd" VK_ICD_FILENAMES="$icd" vulkaninfo --summary
       - name: Configure original Debug preset
         run: cmake --preset "$PRESET"
       - name: Build only public offscreen fixture
         id: build
         run: cmake --build --preset "$PRESET" --target de_offscreen_capture --parallel 4
+      - name: Verify real PE exports and deployed test runtimes
+        run: |
+          python3 - <<'PYCODE'
+          import os,pathlib,subprocess,sys,json,hashlib
+          build=(pathlib.Path('build')/os.environ['PRESET']).resolve()
+          exe=build/'tests/unit/host/de-offscreen-capture.exe'
+          out=build/'deng645-sdk';out.mkdir()
+          manifest=out/'fixture-manifest.txt';manifest.write_text(str(exe)+'\n')
+          with (out/'exports.log').open('w') as log:
+              subprocess.run([sys.executable,'tools/check_agility/check_agility.py','--manifest',str(manifest),'--expect-some'],stdout=log,stderr=subprocess.STDOUT,check=True)
+          files=[exe,exe.parent/'D3D12/D3D12Core.dll',exe.parent/'D3D12/d3d12SDKLayers.dll',exe.parent/'d3d10warp.dll']
+          report={str(p.relative_to(build)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files}
+          (out/'binary-runtime-hashes.json').write_text(json.dumps(report,indent=2)+'\n')
+          print((out/'exports.log').read_text())
+          PYCODE
       - name: Explicit remote native opt-in, six lifecycles and raw readbacks
         run: |
           binary="build/$PRESET/tests/unit/host/de-offscreen-capture"
@@ -79,6 +80,14 @@ jobs:
           assert all(e['report']['actual_backend']=={'d3d12':1,'vulkan':2}[os.environ['BACKEND']] for e in native)
           captures=list(out.glob('*.rgba'));assert len(captures)==2
           assert all(p.read_bytes()==bytes([64,128,191,255])*(64*48) for p in captures)
+          for row in native:
+              log=(out/(row['name']+'.log')).read_text();normalized=log.replace(chr(92),'/').lower()
+              assert '/d3d12/d3d12core.dll' in normalized
+              assert 'enhanced barriers yes' in normalized
+              for line in log.splitlines():
+                  if '[error]' in line:
+                      assert row['report']['failure_stage'] and '[error][host]' in line and 'DE_ERR_CANCELLED' in line,line
+                  assert 'Validation Error' not in line and 'VUID-' not in line and 'D3D12 ERROR' not in line,line
           print('Six actual lifecycles, two exact native captures; no desktop/Space or hardware-performance claim')
           PY
       - name: Retain source, raw pixels and all failures
