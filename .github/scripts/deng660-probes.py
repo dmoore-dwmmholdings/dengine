@@ -30,5 +30,13 @@ stage=out/'readback'
 for name in ['lights','counters','grid','list','bounds','scene','depth','gbuffer1','view']:
  assert (stage/(name+'.bin')).is_file() and (stage/(name+'.bin')).stat().st_size>0
 assert json.loads((stage/'metadata.json').read_text())['frame']==95
+compiler=shutil.which('dxc')
+if not compiler:
+ candidates=sorted((Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Windows Kits/10/bin').glob('*/x64/dxc.exe'))
+ assert candidates,'dxc not found for retained DXIL disassembly'
+ compiler=str(candidates[-1])
+with (stage/'lighting_cull.dxil.txt').open('w') as log:
+ subprocess.run([compiler,'-dumpbin',str(stage/'lighting_cull.dxil')],stdout=log,stderr=subprocess.STDOUT,check=True)
+
 failed|=not all(summary['control'].values());(out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
 subprocess.run(['git','diff','--exit-code'],check=True);sys.exit(int(failed))

@@ -20,6 +20,7 @@
 #include "render/renderer_internal.h"
 #include "render/lighting/lighting.h"
 #include "render/scene/gpu_scene.h"
+#include "render/shaders/engine_shaders.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/views_internal.h"
 #include "render/probes/probes_internal.h"
@@ -157,6 +158,23 @@ static bool mg_diagnostic_dump(mg *m) {
         if (fclose(f) != 0 || !ok)
             return false;
     }
+    de__engine_shader_code code = {0};
+    const char *const entries[5] = {"cs_light_clear", "cs_light_prep", "cs_light_count",
+                                     "cs_light_scan", "cs_light_fill"};
+    if (de__vis_shader_load(de__views_vis(m->r), "lighting_cull", entries, 5, &code) != DE_OK)
+        return false;
+    snprintf(path, sizeof path, "%s/lighting_cull.dxil", dir);
+    FILE *binary = fopen(path, "wb");
+    bool dumped = false;
+    if (binary) {
+        const de_gpu_shader_blob *blob = &code.entries[4].blob;
+        dumped = fwrite(blob->code, 1, (size_t)blob->size, binary) == (size_t)blob->size;
+        if (fclose(binary) != 0)
+            dumped = false;
+    }
+    de__engine_shader_code_free(&code);
+    if (!dumped)
+        return false;
     snprintf(path, sizeof path, "%s/metadata.json", dir);
     FILE *f = fopen(path, "wb");
     if (!f)
