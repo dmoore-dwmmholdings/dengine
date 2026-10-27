@@ -26,6 +26,7 @@
 #include "platform/de_atomic.h"
 #include "render/world/render_world.h"
 #include "render/skin/skin_internal.h"
+#include "render/shadows/shadows_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -354,4 +355,52 @@ TEST_F(render_thread, unpipelined_equivalence, rtt) {
     EXPECT_EQ(first_diff, SCRIPT_FRAMES);
     /* The script is not trivial: digests change from frame to frame. */
     EXPECT_NE(piped.digest[10], piped.digest[11]);
+}
+
+/* DENG-644: run the actual selector on immutable Extract buffers while simulation advances. */
+typedef struct admission_handoff {
+    de_atomic_u32 frames, failures;
+} admission_handoff;
+static void admission_hook(de_renderer *r, const de__render_world_frame *fr, void *user) {
+    (void)r;
+    admission_handoff *s = user;
+    const u64 before = rwt_digest(fr);
+    u32 selected[DE__ATLAS_LIGHTS];
+    const u32 count =
+        de__atlas_select_lights(fr, fr->view_count ? &fr->views[0] : NULL, 1, false, 1, selected);
+    /* No asset system: bounds are unknown, so the finite light must remain eligible. */
+    if (count != 1 || selected[0] != 0)
+        de_atomic_fetch_add_u32(&s->failures, 1, DE_ATOMIC_RELAXED);
+    de_sleep_ns(SLOW_RENDER_NS);
+    if (rwt_digest(fr) != before)
+        de_atomic_fetch_add_u32(&s->failures, 1, DE_ATOMIC_RELAXED);
+    de_atomic_fetch_add_u32(&s->frames, 1, DE_ATOMIC_RELAXED);
+}
+TEST_F(render_thread, shadow_admission_preserves_extract_snapshot, rtt) {
+    for (u32 piped = 0; piped < 2; ++piped) {
+        rwt *x = &f->fx;
+        rwt_start(x, 2, piped != 0);
+        admission_handoff state;
+        de_atomic_init_u32(&state.frames, 0);
+        de_atomic_init_u32(&state.failures, 0);
+        de__render_world_set_frame_hook(x->r, admission_hook, &state);
+        const de_entity cam = rwt_spawn_camera(x, at(0, 0, 20), 0);
+        const de_entity mesh = rwt_spawn_mesh(x, at(0, 0, 0), 1);
+        const de_entity light = rwt_spawn_light(x, at(0, 0, 4), DE_LIGHT_POINT);
+        DeLight *l = de_entity_get(x->w, light, x->ids.light);
+        l->cast_shadows = true;
+        l->intensity = 10;
+        l->range = 8;
+        for (u32 frame = 0; frame < 24; ++frame) {
+            rwt_move(x, cam, (de_dvec3){800.0 * frame, 0, 20});
+            rwt_move(x, mesh, (de_dvec3){800.0 * frame, 0, 0});
+            rwt_move(x, light, (de_dvec3){800.0 * frame, 0, 4});
+            ASSERT_EQ(rwt_frame(x), DE_OK);
+        }
+        de__render_world_wait_idle(x->r);
+        EXPECT_EQ(de_atomic_load_u32(&state.frames, DE_ATOMIC_ACQUIRE), 24);
+        EXPECT_EQ(de_atomic_load_u32(&state.failures, DE_ATOMIC_RELAXED), 0);
+        de__render_world_set_frame_hook(x->r, NULL, NULL);
+        rwt_stop(x);
+    }
 }

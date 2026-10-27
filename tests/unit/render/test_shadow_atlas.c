@@ -336,6 +336,8 @@ static void cached_removal(lx *f, de_gpu_backend backend) {
                            .cast_shadows = true};
     world_light(&f->w, 0, &light, at(-4, 0, 4));
     world_light(&f->w, 1, &light, at(4, 0, 4));
+    /* A non-casting receiver survives removal: preserve stale-depth erasure coverage. */
+    world_set(&f->w, 2, mesh, at(-4, 0, 0), mat);
     de__atlas_info info = atlas_begin(f, DE_QUALITY_LOW);
     ASSERT_EQ(info.rendered, 2);
     const f32 *pixels = atlas_end_read(f, &info);
@@ -567,6 +569,8 @@ static void inactive_gap(lx *f, de_gpu_backend backend) {
         f->w.f.instances.flags[i] |= DE__RW_INST_CAST_SHADOWS;
         world_light(&f->w, i, &light, at(i ? 4.f : -4.f, 0, 4));
     }
+    /* This receiver survives caster removal, requiring the stale tile to be erased. */
+    world_set(&f->w, 2, mesh, at(-4, 0, 0), mat);
     de__atlas_info info = atlas_begin(f, DE_QUALITY_LOW);
     const f32 *pixels = atlas_end_read(f, &info);
     EXPECT_GT(tile_nonzero(&info, pixels, 0), 100u);
@@ -684,6 +688,10 @@ static void lifecycle(lx *f, de_gpu_backend backend) {
 static void budget_movers(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
+    /* Keep scheduler/coherence coverage meaningful after receiver-aware admission. */
+    const u32 receiver_mat = material_add(.5f, .6f, 0, .5f);
+    const u32 receiver_mesh = lx_mesh_plane(f, 1, 1, 2);
+    world_set(&f->w, 0, receiver_mesh, at(0, 0, -2), receiver_mat);
     const DeLight light = {.kind = DE_LIGHT_SPOT,
                            .color = {1, 1, 1},
                            .intensity = 100,
@@ -714,6 +722,10 @@ static void point_coherence(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
     ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "1"));
+    /* Keep scheduler/coherence coverage meaningful after receiver-aware admission. */
+    const u32 receiver_mat = material_add(.5f, .6f, 0, .5f);
+    const u32 receiver_mesh = lx_mesh_plane(f, 1, 1, 2);
+    world_set(&f->w, 0, receiver_mesh, at(0, 0, -2), receiver_mat);
     const DeLight light = {.kind = DE_LIGHT_POINT,
                            .color = {1, 1, 1},
                            .intensity = 100,
@@ -968,6 +980,8 @@ static void rotating_groups(lx *f, de_gpu_backend backend) {
     u32 mat = material_add(.5f, .6f, 0, .5f), mesh = lx_mesh_plane(f, 1, 1, 2);
     world_set(&f->w, 0, mesh, at(0, 0, 0), mat);
     f->w.f.instances.flags[0] |= DE__RW_INST_CAST_SHADOWS;
+    world_set(&f->w, 1, mesh, at(0, 0, 0), mat);
+    f->w.f.instances.layer_mask[1] = 2; /* non-casting receiver, zero-depth fallback still tested */
     DeLight light = {.kind = DE_LIGHT_SPOT,
                      .color = {1, 1, 1},
                      .intensity = 100,
@@ -1292,6 +1306,9 @@ static void capture_progress(lx *f, de_gpu_backend backend) {
         EXPECT_TRUE(directional.ready);
         EXPECT_EQ(directional.lights, 1);
     }
+    /* The second mask must have a receiver to exercise a competing shadow cache. */
+    world_set(&f->w, 1, mesh, at(0, 0, 0), mat);
+    f->w.f.instances.layer_mask[1] = 2;
     de_view_set_layer_mask(renderer, de_renderer_main_view(renderer), 1);
     for (u32 face = 0; face < 6; ++face)
         de_view_set_layer_mask(renderer, capture.views[face], 2);
@@ -1325,6 +1342,132 @@ static void capture_progress(lx *f, de_gpu_backend backend) {
     f->w.f.view_count = 0;
     EXPECT_EQ(validation_errors(f->dev), 0);
 }
+/* Two independent layer groups; one point-light slot per group. No windows/platform init. */
+static void receiver_admission(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
+    ASSERT_TRUE(cvar_set("r.shadow_local_max", "1"));
+    ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "12"));
+    const u32 mat = material_add(.5f, .6f, 0, .5f), mesh = lx_mesh_plane(f, 1, 1, 4);
+    for (u32 i = 0; i < 2; ++i) {
+        world_set(&f->w, i, mesh, at(i ? 1000.f : 0.f, 0, 0), mat);
+        f->w.f.instances.layer_mask[i] = 1u << i;
+        f->w.f.instances.flags[i] |= DE__RW_INST_CAST_SHADOWS;
+        const DeLight light = {.kind = DE_LIGHT_POINT,
+                               .color = {1, 1, 1},
+                               .intensity = i ? 1e9f : 10,
+                               .range = 8,
+                               .cast_shadows = true};
+        world_light(&f->w, i, &light, at(i ? 1000.f : 0.f, 0, 4));
+    }
+    world_begin(&f->w);
+    ASSERT_EQ(de__gpu_scene_update(f->gs, &f->w.f), DE_OK);
+    de__rw_view camera = {.offset = {0, 0, 20}};
+    de_render_settings settings = {.shadows = DE_QUALITY_LOW};
+    de__shadow_atlas_frame_begin(f->atlas, 0, &camera);
+    for (u32 i = 0; i < 2; ++i)
+        ASSERT_EQ(
+            de__shadow_atlas_frame_view(f->atlas, (de_view){.id = i + 1}, 1u << i, DE_QUALITY_LOW),
+            DE_OK);
+    for (u32 i = 0; i < 2; ++i) {
+        de__rg_reset(f->g);
+        de_arena_reset(f->arena);
+        ASSERT_EQ(de__rg_begin(f->g, f->arena), DE_OK);
+        ASSERT_EQ(de__gpu_scene_add_passes(f->gs, f->g), DE_OK);
+        de__view_frame vf = {.view = {.id = i + 1},
+                             .graph = f->g,
+                             .world = &f->w.f,
+                             .camera = &camera,
+                             .settings = &settings,
+                             .frame_index = 0};
+        de__vis_context vc = {.gpu_scene = f->gs, .frames_completed = 1, .layer_mask = 1u << i};
+        ASSERT_EQ(de__shadow_atlas_build(f->atlas, &vf, &vc), DE_OK);
+        de__atlas_info info;
+        ASSERT_TRUE(de__shadow_atlas_get(f->atlas, vf.view, &info));
+        EXPECT_EQ(info.lights, 1);
+        EXPECT_EQ(info.rendered, 6);
+        EXPECT_EQ(info.data[1].identity[0], 5000u + i);
+        const f32 *pixels = atlas_end_read_view(f, &info, vf.view, 0);
+        u32 covered = 0;
+        for (u64 j = 0; j < (u64)info.size * info.size; ++j)
+            covered += pixels[j] > 0;
+        EXPECT_GT(covered, 100u);
+        printf("DENG-644 view%u selected=%u lights=%u faces=%u occupied=%u depth-pixels=%u\n", i,
+               info.data[1].identity[0], info.lights, info.rendered, info.occupied, covered);
+        const char *dir = getenv("DE_SHADOW_EVIDENCE_DIR");
+        if (dir && *dir) {
+            char path[1024];
+            snprintf(path, sizeof path, "%s/view%u.pgm", dir, i);
+            FILE *file = fopen(path, "wb");
+            ASSERT_TRUE(file != NULL);
+            u32 rect[4];
+            tile_rect(&info, 0, 5, rect); /* -Z cube face: the plane beneath the light. */
+            fprintf(file, "P5\n%u %u\n255\n", rect[2], rect[3]);
+            for (u32 y = 0; y < rect[3]; ++y)
+                for (u32 x = 0; x < rect[2]; ++x) {
+                    const f32 d = pixels[(rect[1] + y) * info.size + rect[0] + x];
+                    const u8 value = d > 0 ? (u8)fminf(255, 64 + d * 191) : 0;
+                    ASSERT_EQ(fwrite(&value, 1, 1, file), 1);
+                }
+            ASSERT_EQ(fclose(file), 0);
+        }
+    }
+    /* Retire an empty receiver group, then reactivate it with geometry under the other light. */
+    for (u32 phase = 1; phase <= 2; ++phase) {
+        if (phase == 1) {
+            f->w.f.instances.entity[0] = 0;
+            f->w.f.removed_instance_count = 1;
+            f->w.f.removed_instances[0] = 0;
+        } else {
+            f->w.f.removed_instance_count = 0;
+            world_set(&f->w, 0, mesh, at(1000, 0, 0), mat);
+            f->w.f.instances.flags[0] |= DE__RW_INST_CAST_SHADOWS;
+        }
+        world_begin(&f->w);
+        ASSERT_EQ(de__gpu_scene_update(f->gs, &f->w.f), DE_OK);
+        de__shadow_atlas_frame_begin(f->atlas, phase, &camera);
+        de__rg_reset(f->g);
+        de_arena_reset(f->arena);
+        ASSERT_EQ(de__rg_begin(f->g, f->arena), DE_OK);
+        ASSERT_EQ(de__gpu_scene_add_passes(f->gs, f->g), DE_OK);
+        de__view_frame vf = {.view = {.id = 1},
+                             .graph = f->g,
+                             .world = &f->w.f,
+                             .camera = &camera,
+                             .settings = &settings,
+                             .frame_index = phase};
+        de__vis_context vc = {.gpu_scene = f->gs, .frames_completed = phase + 1, .layer_mask = 1};
+        ASSERT_EQ(de__shadow_atlas_build(f->atlas, &vf, &vc), DE_OK);
+        de__atlas_info info;
+        ASSERT_TRUE(de__shadow_atlas_get(f->atlas, vf.view, &info));
+        EXPECT_EQ(info.lights, phase == 1 ? 0 : 1);
+        EXPECT_EQ(info.rendered, phase == 1 ? 0 : 6);
+        if (phase == 1) {
+            EXPECT_EQ(info.occupied, 0);
+            EXPECT_EQ(info.data[1].identity[0], 0);
+            de__shadow_atlas_complete(f->atlas, vf.view, f->g, false, false);
+            de__gpu_scene_frame_end(f->gs, f->g, false);
+        } else {
+            EXPECT_EQ(info.data[1].identity[0], 5001);
+            const f32 *pixels = atlas_end_read_view(f, &info, vf.view, phase);
+            u32 covered = 0;
+            for (u64 j = 0; j < (u64)info.size * info.size; ++j)
+                covered += pixels[j] > 0;
+            EXPECT_GT(covered, 100u);
+        }
+    }
+    ASSERT_TRUE(cvar_set("r.shadow_local_max", "32"));
+    ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "8"));
+    EXPECT_EQ(validation_errors(f->dev), 0);
+}
+#define ADMISSION_TEST(tag, backend)                                                               \
+    TEST_F(shadow_atlas, atlas_receiver_admission_##tag, lx) {                                     \
+        receiver_admission(f, backend);                                                            \
+    }
+ADMISSION_TEST(metal, DE_GPU_METAL)
+ADMISSION_TEST(vulkan, DE_GPU_VULKAN)
+ADMISSION_TEST(d3d12, DE_GPU_D3D12)
+
 #define ATLAS_TESTS(tag, backend)                                                                  \
     TEST_F(shadow_atlas, atlas_dirty_caster_rerender_##tag, lx) {                                  \
         cached_removal(f, backend);                                                                \
