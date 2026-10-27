@@ -1276,3 +1276,12 @@ if(DE_BUILD_TOOLS)
         endif()
     endif()
 endif()
+
+# DENG-644: pure production admission/ranking; no platform or GPU device initialization.
+de_add_test(NAME render_shadow_admission
+    SOURCES test_shadow_admission.c
+    LIBS de_render de_test_support
+    LABELS unit render)
+if(TARGET test_render_shadow_admission)
+    target_include_directories(test_render_shadow_admission PRIVATE "${DE_ROOT_DIR}/src")
+endif()

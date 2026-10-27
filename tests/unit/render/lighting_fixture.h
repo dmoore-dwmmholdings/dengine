@@ -375,6 +375,8 @@ typedef struct lx_result {
 } lx_result;
 
 typedef struct lx {
+    bool shadow_budget_saved;
+    i64 shadow_local_max_saved, shadow_updates_saved;
     de_tracking_allocator track;
     de_allocator alloc;
     de_arena *arena;
@@ -467,7 +469,24 @@ static inline void free_result(lx_result *r) {
     memset(r, 0, sizeof *r);
 }
 
+static inline void lx_save_shadow_budget(lx *f) {
+    const de_cvar max = de_cvar_find("r.shadow_local_max"),
+                  updates = de_cvar_find("r.shadow_atlas_updates_per_frame");
+    ASSERT_TRUE(DE_HANDLE_VALID(max) && DE_HANDLE_VALID(updates));
+    f->shadow_local_max_saved = de_cvar_int(max);
+    f->shadow_updates_saved = de_cvar_int(updates);
+    f->shadow_budget_saved = true;
+}
+
 static inline void lx_teardown(lx *f) {
+    if (f->shadow_budget_saved) {
+        char value[32];
+        snprintf(value, sizeof value, "%lld", (long long)f->shadow_local_max_saved);
+        EXPECT_TRUE(cvar_set("r.shadow_local_max", value));
+        snprintf(value, sizeof value, "%lld", (long long)f->shadow_updates_saved);
+        EXPECT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", value));
+        f->shadow_budget_saved = false;
+    }
     de__forward_destroy(f->forward);
     f->forward = NULL;
     de__contact_destroy(f->contact);
