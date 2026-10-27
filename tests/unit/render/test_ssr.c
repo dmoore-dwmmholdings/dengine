@@ -1326,9 +1326,9 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
         const bool distant = (test >= 6 && test <= 8) || test == 12 || test == 17 || test == 18 ||
                              test == 21 || test == 23;
         const bool analytic_tilted =
-            test == 16 || test == 17 || test == 19 || (test >= 20 && test < 24);
+            test == 16 || test == 17 || test == 19 || (test >= 20 && test < 24) || test == 31;
         const bool tilted = analytic_tilted || test == 26;
-        const bool shaded = test >= 24;
+        const bool shaded = test >= 24 && test <= 30;
         u8 *data = de_gpu_buffer_map(f->dev, upload);
         memset(data, 0, 3072);
         for (u32 y = 0; y < 4; ++y)
@@ -1377,8 +1377,15 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
                     surface[3] = inv_length;
                 }
                 depth[0] = distant ? .001f : .5f;
-                if ((test >= 20 && test < 24) || test == 26)
+                if ((test >= 20 && test < 24) || test == 26 || test == 31)
                     depth[0] += (distant ? .0002f : .2f) * (((f32)x + .5f) * .5f - 1.f);
+                if (test == 31 && y < 2) {
+                    /* Actual ray-hit helper: only the lower half is on the hit plane.
+                     * Top taps are a separate bright surface; valid colour stays 1,
+                     * while the unrenormalized surviving bilinear coverage is .5. */
+                    surface[0] = .25f;
+                    color[0] = color[1] = color[2] = 100;
+                }
                 if (test == 25) {
                     surface[1] = 1;
                     surface[3] = 0;
@@ -1417,19 +1424,20 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
         }
         de_gpu_barrier b = {.texture = images[2], .after = DE_ACCESS_SHADER_WRITE};
         de_gpu_cmd_barriers(cmd, &b, 1);
-        u32 pc[8] = {
-            de_gpu_texture_bindless(f->dev, images[0], 0, true),
-            de_gpu_texture_bindless(f->dev, images[1], 0, true),
-            de_gpu_texture_bindless(f->dev, images[2], 0, true),
-            test == 9 ? 4u
-                      : (test == 4 ? 0u
-                                   : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
-                                      (analytic_tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
-                                      (test >= 20 && test < 24 ? 64u : 0u) | (shaded ? 128u : 0u))),
-            de_gpu_texture_bindless(f->dev, images[3], 0, false),
-            0,
-            0,
-            0};
+        u32 pc[8] = {de_gpu_texture_bindless(f->dev, images[0], 0, true),
+                     de_gpu_texture_bindless(f->dev, images[1], 0, true),
+                     de_gpu_texture_bindless(f->dev, images[2], 0, true),
+                     test == 9
+                         ? 4u
+                         : (test == 4 ? 0u
+                                      : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
+                                         (analytic_tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
+                                         ((test >= 20 && test < 24) || test == 31 ? 64u : 0u) |
+                                         (shaded ? 128u : 0u))),
+                     de_gpu_texture_bindless(f->dev, images[3], 0, false),
+                     0,
+                     0,
+                     0};
         de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
         de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, 1, 1, 1);
@@ -1453,6 +1461,7 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
             const f32 expected_coverage =
                 rejected     ? 0.0f
                 : test == 13 ? .75f
+                : test == 31 ? .5f
                 : test == 9  ? (moving ? .9f : .5f)
                 : test == 1 || test == 2 || test == 5 || test == 6 || (test >= 10 && test <= 15)
                     ? .5f
@@ -1470,6 +1479,9 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
     }                                                                                              \
     TEST_F(ssr, history_depth_plane_guards_##tag, sfx) {                                           \
         history_footprint_range(f, backend, 25, 31);                                               \
+    }                                                                                              \
+    TEST_F(ssr, history_hit_partial_coverage_##tag, sfx) {                                         \
+        history_footprint_range(f, backend, 31, 32);                                               \
     }
 HISTORY_FOOTPRINT_TEST(metal, DE_GPU_METAL)
 HISTORY_FOOTPRINT_TEST(vulkan, DE_GPU_VULKAN)
