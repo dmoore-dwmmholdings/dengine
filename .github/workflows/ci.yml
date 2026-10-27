@@ -59,7 +59,7 @@ jobs:
           summary={};failed=False
           for family,names in families.items():
               report=out/(family+'.xml');log=out/(family+'.log')
-              pattern=r'^(?:'+'|'.join(map(re.escape,names))+r')$'
+              pattern=r'^('+'|'.join(map(re.escape,names))+r')$'
               cmd=['ctest','--test-dir',str(root),'-R',pattern,'--parallel','1','--no-tests=error','--output-on-failure','--test-output-size-passed','1048576','--test-output-size-failed','1048576','--output-junit',str(report)]
               with log.open('w') as stream:r=subprocess.run(cmd,stdout=stream,stderr=subprocess.STDOUT)
               cases=list(E.parse(report).iter('testcase'));errors=[]
