@@ -1,5 +1,6 @@
 #ifndef DE_WORLD_UI_GOLDEN_FIXTURE_H
 #define DE_WORLD_UI_GOLDEN_FIXTURE_H
+#include "../glyph_wait.h"
 /* DENG-317 diagnostic components: real retained layout, cooked assets, Extract and UI pass.
  * The test-only host bridge/readback uses the unchanged S10 renderer-scene convention. */
 #include "golden.h"
@@ -222,9 +223,11 @@ static de_result render(ui_scene *s, f32 expected_scale) {
         DE_TRY(pump(s));
         /* Shaping can request an uncooked ligature. Let its real background glyph generation
          * and atlas upload finish before a reference is captured. */
-        if (frame >= 4 && !de_text_get_stats(s->text).runtime_pending)
+        de_ui_golden_wait_status wait = de_ui_golden_glyph_wait(
+            frame, de_text_get_stats(s->text).runtime_pending, de_time_now_ns() - started);
+        if (wait == DE_UI_GOLDEN_READY)
             break;
-        if (de_time_now_ns() - started > 5ULL * 1000000000)
+        if (wait == DE_UI_GOLDEN_TIMEOUT)
             return DE_FAIL(DE_ERR_TIMEOUT, "UI golden runtime glyph generation did not settle");
     }
     if (fabsf(de_ui_get_layout_stats(s->ui).scale - expected_scale) > .001f)
