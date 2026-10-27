@@ -189,12 +189,23 @@ public float2 de_resolve_uv(DeResolvePoint r, uint set, out float2 dx, out float
         dx=de_resolve_lerp2(r.bary_dx,u,v,w);dy=de_resolve_lerp2(r.bary_dy,u,v,w);
         return de_resolve_lerp2(r.bary,u,v,w);
     }
+#if defined(DE_SHADER_TARGET_METAL)
+    // DENG-616: keep vertex/UV accesses explicit, as for object_pos above.
+    // Avoid validation-sensitive dynamic indexing for all Metal callers, including RT.
+    float2 t0 = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex.x) : de_vis_mesh_uv1(r.mesh, r.vertex.x);
+    float2 t1 = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex.y) : de_vis_mesh_uv1(r.mesh, r.vertex.y);
+    float2 t2 = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex.z) : de_vis_mesh_uv1(r.mesh, r.vertex.z);
+    dx = de_resolve_lerp2(r.bary_dx, t0, t1, t2);
+    dy = de_resolve_lerp2(r.bary_dy, t0, t1, t2);
+    return de_resolve_lerp2(r.bary, t0, t1, t2);
+#else
     float2 t[3];
     for (uint k = 0; k < 3u; ++k)
         t[k] = set == 0u ? de_vis_mesh_uv0(r.mesh, r.vertex[k]) : de_vis_mesh_uv1(r.mesh, r.vertex[k]);
     dx = de_resolve_lerp2(r.bary_dx, t[0], t[1], t[2]);
     dy = de_resolve_lerp2(r.bary_dy, t[0], t[1], t[2]);
     return de_resolve_lerp2(r.bary, t[0], t[1], t[2]);
+#endif
 }
 
 /// Object normal `n` through a 3x4 transform's linear part M: the cofactor matrix of M (rows

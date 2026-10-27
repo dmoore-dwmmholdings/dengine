@@ -400,15 +400,96 @@ static bool earlier(ranked_light a, ranked_light b) {
     return a.importance > b.importance || (a.importance == b.importance && a.entity < b.entity);
 }
 
-static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
-                             const de__vis_context *vc, atlas_group *group) {
-    atlas_view *v = &group->cache;
-    v->rendered = 0;
+/* All receiver geometry in the mask group is a conservative superset of every member
+ * camera's visible receivers (including captures and cameras outside a light's sphere).
+ * Do not apply this test to casters: off-camera occluders must still render into the map.
+ * Unknown bounds/custom forward geometry retain the light. No snapshot writes or allocation.
+ * Spot/area lights deliberately use their containing range sphere, never a narrow cone test. */
+typedef struct receiver_bounds {
+    de_aabb union_bounds;
+    bool any, unknown;
+} receiver_bounds;
+static receiver_bounds receiver_union(const de__rw_instances *w, u32 mask) {
+    receiver_bounds result = {0};
+    if (w->count && (!w->entity || !w->layer_mask || !w->flags || !w->bounds)) {
+        result.unknown = true;
+        return result;
+    }
+    for (u32 i = 0; i < w->count; ++i) {
+        if (!w->entity[i] || !(w->layer_mask[i] & mask))
+            continue;
+        if (!(w->flags[i] & DE__RW_INST_HAS_BOUNDS)) {
+            result.unknown = true;
+            return result;
+        }
+        const de_aabb b = w->bounds[i];
+        if (!isfinite(b.min.x) || !isfinite(b.min.y) || !isfinite(b.min.z) || !isfinite(b.max.x) ||
+            !isfinite(b.max.y) || !isfinite(b.max.z) || b.min.x > b.max.x || b.min.y > b.max.y ||
+            b.min.z > b.max.z) {
+            result.unknown = true;
+            return result;
+        }
+        if (!result.any) {
+            result.union_bounds = b;
+            result.any = true;
+        } else {
+            de_aabb *u = &result.union_bounds;
+            u->min.x = fminf(u->min.x, b.min.x);
+            u->min.y = fminf(u->min.y, b.min.y);
+            u->min.z = fminf(u->min.z, b.min.z);
+            u->max.x = fmaxf(u->max.x, b.max.x);
+            u->max.y = fmaxf(u->max.y, b.max.y);
+            u->max.z = fmaxf(u->max.z, b.max.z);
+        }
+    }
+    return result;
+}
+/* Match light_cull.slang: area influence includes the emitter's containing radius.
+ * Invalid dimensions cannot justify rejection; retaining is conservative. */
+static f32 receiver_sphere_range(const DeLight *l, f32 range) {
+    f32 extent = 0;
+    if (l->kind == DE_LIGHT_RECT) {
+        if (!isfinite(l->area_size.x) || !isfinite(l->area_size.y))
+            return INFINITY;
+        extent = hypotf(.5f * l->area_size.x, .5f * l->area_size.y);
+    } else if (l->kind == DE_LIGHT_DISK) {
+        if (!isfinite(l->area_size.x) || l->area_size.x < 0)
+            return INFINITY;
+        extent = .5f * l->area_size.x;
+    }
+    return range + extent;
+}
+static bool receiver_touches(de_aabb b, de_vec3 p, f32 range) {
+    const f32 lo[3] = {b.min.x, b.min.y, b.min.z}, hi[3] = {b.max.x, b.max.y, b.max.z},
+              c[3] = {p.x, p.y, p.z};
+    f64 distance2 = 0;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 d = fmax((f64)lo[axis] - c[axis], fmax((f64)c[axis] - hi[axis], 0));
+        distance2 += d * d;
+    }
+    /* Inclusive with the same relative guard for broad and exact receiver bounds. */
+    return distance2 <= (f64)range * range * (1.0 + 1e-6);
+}
+static bool receiver_influence(const de__rw_instances *w, u32 mask, de_vec3 p, f32 range) {
+    for (u32 i = 0; i < w->count; ++i)
+        if (w->entity[i] && (w->layer_mask[i] & mask) && receiver_touches(w->bounds[i], p, range))
+            return true;
+    return false;
+}
+/* Pure selection is shared by the production atlas and CPU regression fixtures. */
+u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_view *camera,
+                            u32 mask, bool unknown_receivers, u32 limit,
+                            u32 out[DE__ATLAS_LIGHTS]) {
+    if (!frame || !camera || !out || !limit)
+        return 0;
+    mask = mask ? mask : ~0u;
+    receiver_bounds receivers = {0};
+    bool receivers_checked = unknown_receivers;
     ranked_light selected[DE__ATLAS_LIGHTS];
-    u32 count = 0, limit = (u32)de_cvar_int(s->cv_max);
+    u32 count = 0;
     if (limit > DE__ATLAS_LIGHTS)
         limit = DE__ATLAS_LIGHTS;
-    const de__rw_lights *world = &vf->world->lights;
+    const de__rw_lights *world = &frame->lights;
     for (u32 i = 0; i < world->count; ++i) {
         const DeLight *l = &world->light[i];
         if (!world->entity[i] || l->kind == DE_LIGHT_DIRECTIONAL || !l->cast_shadows ||
@@ -416,11 +497,11 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
             continue;
         de_vec3 p = {world->transform[i].m[9], world->transform[i].m[10],
                      world->transform[i].m[11]};
-        f32 range = range_of(l), d = de_v3_length(de_v3_sub(p, vf->camera->offset));
+        f32 range = range_of(l), d = de_v3_length(de_v3_sub(p, camera->offset));
         if (!isfinite(range) || !(range > 0))
             continue;
         f64 projected = (f64)range * range;
-        if (vf->camera->camera.projection != DE_PROJ_ORTHOGRAPHIC)
+        if (camera->camera.projection != DE_PROJ_ORTHOGRAPHIC)
             projected /= fmaxf(d * d, .01f);
         ranked_light item = {i, world->entity[i], l->intensity * projected};
         u32 insert = count;
@@ -428,12 +509,39 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
             --insert;
         if (insert >= limit)
             continue;
+        const f32 receiver_range = receiver_sphere_range(l, range);
+        /* No receiver walk when the view has no eligible local shadow lights. */
+        if (!receivers_checked) {
+            receivers = receiver_union(&frame->instances, mask);
+            unknown_receivers = receivers.unknown;
+            receivers_checked = true;
+            if (!unknown_receivers && !receivers.any)
+                return 0;
+        }
+        if (!unknown_receivers && (!receiver_touches(receivers.union_bounds, p, receiver_range) ||
+                                   !receiver_influence(&frame->instances, mask, p, receiver_range)))
+            continue;
         if (count < limit)
             ++count;
         for (u32 j = count - 1; j > insert; --j)
             selected[j] = selected[j - 1];
         selected[insert] = item;
     }
+    for (u32 i = 0; i < count; ++i)
+        out[i] = selected[i].slot;
+    return count;
+}
+
+static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
+                             const de__vis_context *vc, atlas_group *group) {
+    atlas_view *v = &group->cache;
+    v->rendered = 0;
+    u32 selected[DE__ATLAS_LIGHTS];
+    const u32 count =
+        de__atlas_select_lights(vf->world, vf->camera, group->mask,
+                                vf->renderer && vf->renderer->forward_participant_count != 0,
+                                (u32)de_cvar_int(s->cv_max), selected);
+    const de__rw_lights *world = &vf->world->lights;
     if (!count) {
         for (u32 i = 0; i < v->lights; ++i)
             for (u32 f = 0; f < v->light[i].faces; ++f)
@@ -476,7 +584,7 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
     }
     u32 faces = 0;
     for (u32 i = 0; i < count; ++i)
-        faces += world->light[selected[i].slot].kind == DE_LIGHT_POINT ? 6 : 1;
+        faces += world->light[selected[i]].kind == DE_LIGHT_POINT ? 6 : 1;
     u32 base = 16;
     while (base < 2048 && (u64)(base * 2) * (base * 2) * faces * 2 <= ((u64)size * size))
         base *= 2;
@@ -490,7 +598,7 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
     bool used[DE__ATLAS_LIGHTS] = {0};
     for (u32 i = 0; i < count; ++i)
         for (u32 j = 0; j < v->lights; ++j)
-            if (old[j].entity == selected[i].entity) {
+            if (old[j].entity == world->entity[selected[i]]) {
                 v->light[i] = old[j];
                 used[j] = true;
                 break;
@@ -519,7 +627,7 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
     de_mat4 views[DE__ATLAS_FACES], projs[DE__ATLAS_FACES];
     for (u32 i = 0; i < count; ++i) {
         atlas_light *cache = &v->light[i];
-        u32 index = selected[i].slot;
+        u32 index = selected[i];
         const DeLight *l = &world->light[index];
         const de_affine *xf = &world->transform[index];
         de_vec3 p = {xf->m[9], xf->m[10], xf->m[11]};
@@ -559,12 +667,12 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
                           ? caster_signature(vf, vc, p, range)
                           : cache->casters;
         if (moved || cache->signature != signature || cache->casters != casters ||
-            cache->entity != selected[i].entity || cache->dynamic) {
+            cache->entity != world->entity[selected[i]] || cache->dynamic) {
             if (!cache->entity || cache->completed == ((1u << cache->faces) - 1u))
                 cache->dirty_since = vf->frame_index + 1u;
             cache->completed = 0;
         }
-        cache->entity = selected[i].entity;
+        cache->entity = world->entity[selected[i]];
         cache->signature = signature;
         cache->casters = casters;
         cache->scheduled = 0;

@@ -25,8 +25,10 @@ void de_ui__dropdown_submit(de_ui *ui, de_entity e) {
         return;
     }
     const DeUiNode *n = de_entity_get_const(ui->world, e, ui->ids.node);
-    f32 width = n ? n->computed_rect.z / ui->scale : 160;
-    de_entity popup = de_ui__advanced_node(ui, (de_entity){0}, width, 32 * (f32)drop.option_count);
+    de_vec4 owner_rect = n ? n->computed_rect : (de_vec4){0};
+    de_ui_popup_context context = de_ui__popup_context(ui, e);
+    f32 width = n ? owner_rect.z / context.scale : 160;
+    de_entity popup = de_ui__advanced_node(ui, context.parent, width, 32 * (f32)drop.option_count);
     if (!popup.bits)
         return;
     DeUiNode *pn = de_entity_get(ui->world, popup, ui->ids.node);
@@ -36,9 +38,9 @@ void de_ui__dropdown_submit(de_ui *ui, de_entity e) {
     DeUiPopup *placement = de_entity_add(ui->world, popup, ui->ids.popup);
     placement->anchor = e;
     placement->modal = true;
-    f32 bottom = (f32)ui->height - ui->safe.bottom;
+    f32 bottom = context.bounds.y + context.bounds.w;
     placement->placement =
-        n && n->computed_rect.y + n->computed_rect.w + 32 * ui->scale * drop.option_count > bottom
+        n && owner_rect.y + owner_rect.w + 32 * context.scale * drop.option_count > bottom
             ? DE_UI_POPUP_TOP
             : DE_UI_POPUP_BOTTOM;
     DeUiStyle *style = de_entity_add(ui->world, popup, ui->ids.style);

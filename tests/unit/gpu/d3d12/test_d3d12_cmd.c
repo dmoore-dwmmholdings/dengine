@@ -76,11 +76,11 @@ static void force_legacy(bool on) {
     ASSERT_EQ(de_cvar_set(cv, on ? "true" : "false"), DE_OK);
 }
 
-static void open_device(cmd_fx *f) {
+static void open_device(cmd_fx *f, bool gpu_validation) {
     f->alloc = de_tracking_allocator_init(&f->tracker, NULL, DE_MEM_RENDER);
     de_gpu_device_desc desc = {.backend = DE_GPU_D3D12,
                                .debug_layer = true,
-                               .gpu_validation = true,
+                               .gpu_validation = gpu_validation,
                                .allocator = &f->alloc};
     de_result r = de_gpu_device_create(&desc, &f->d);
     if (r == DE_ERR_UNSUPPORTED) {
@@ -94,7 +94,7 @@ static void open_device(cmd_fx *f) {
 /* The barrier path is the device's default (DE_D3D12_FORCE_LEGACY_BARRIERS=1 forces legacy for a
  * whole run). */
 static void cmd_fx_setup(cmd_fx *f) {
-    open_device(f);
+    open_device(f, true);
 }
 
 static void cmd_fx_teardown(cmd_fx *f) {
@@ -111,11 +111,28 @@ static void cmd_fx_teardown(cmd_fx *f) {
 typedef cmd_fx legacy_fx;
 static void legacy_fx_setup(legacy_fx *f) {
     force_legacy(true);
-    open_device(f);
+    open_device(f, true);
 }
 static void legacy_fx_teardown(legacy_fx *f) {
     cmd_fx_teardown(f);
     force_legacy(false);
+}
+
+/* Match the golden harness's API-only validation as a separate control (DENG-651). */
+typedef cmd_fx api_copy_fx;
+static void api_copy_fx_setup(api_copy_fx *f) {
+    open_device(f, false);
+}
+static void api_copy_fx_teardown(api_copy_fx *f) {
+    cmd_fx_teardown(f);
+}
+typedef cmd_fx legacy_api_copy_fx;
+static void legacy_api_copy_fx_setup(legacy_api_copy_fx *f) {
+    force_legacy(true);
+    open_device(f, false);
+}
+static void legacy_api_copy_fx_teardown(legacy_api_copy_fx *f) {
+    legacy_fx_teardown(f);
 }
 
 static void print_mode(de_gpu_device *d) {
@@ -205,7 +222,7 @@ static void body_clear_readback(de_gpu_device *d) {
     de_gpu_fence_destroy(d, fence);
 }
 
-static void body_copy_bc7_mips(de_gpu_device *d) {
+static void body_copy_bc7_mips(de_gpu_device *d, de_gpu_queue q) {
     enum { SIZE = 64, MIPS = 4, PITCH = 256 };
     de_gpu_texture tex = de_gpu_texture_create(
         d, &(de_gpu_texture_desc){.format = DE_FMT_BC7_UNORM,
@@ -242,7 +259,7 @@ static void body_copy_bc7_mips(de_gpu_device *d) {
     memset(dst, 0, (size_t)total);
 
     de_error_clear();
-    de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "bc7 round trip");
+    de_gpu_cmd *c = de_gpu_cmd_begin(d, q, "bc7 round trip");
     ASSERT_TRUE(c != NULL);
     de_gpu_barrier b = tex_barrier(tex, DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
     de_gpu_cmd_barriers(c, &b, 1);
@@ -253,7 +270,7 @@ static void body_copy_bc7_mips(de_gpu_device *d) {
     for (u32 m = 0; m < MIPS; ++m)
         de_gpu_cmd_copy_texture_to_buffer(c, rb, offset[m], PITCH, tex, m, 0);
     EXPECT_TRUE(de_error_last() == NULL);
-    submit_wait(d, DE_QUEUE_GRAPHICS, c, fence, 1);
+    submit_wait(d, q, c, fence, 1);
 
     for (u32 m = 0; m < MIPS; ++m) {
         u32 bad = 0;
@@ -362,7 +379,104 @@ static void body_cross_queue(de_gpu_device *d) {
     EXPECT_EQ(de__gpu_deferred_count(d), 0u);
 }
 
+/* DENG-651 diagnostic: a sampled RGBA texture crosses copy->graphics->copy repeatedly.
+ * Both queues are real; graphics is submitted first and waits for the upload fence. */
+static void body_texture_copy_queue(de_gpu_device *d) {
+    enum { W = 64, H = 64, PITCH = W * 4, BYTES = PITCH * H };
+    de_gpu_texture tex = de_gpu_texture_create(
+        d, &(de_gpu_texture_desc){.format = DE_FMT_RGBA8_UNORM,
+                                  .width = W,
+                                  .height = H,
+                                  .usage = DE_USAGE_SAMPLED | DE_USAGE_COPY_DST | DE_USAGE_COPY_SRC,
+                                  .name = "DENG-651 sampled copy texture"});
+    de_gpu_buffer up = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = BYTES,
+                                                                     .usage = DE_USAGE_COPY_SRC,
+                                                                     .memory = DE_MEM_UPLOAD,
+                                                                     .name = "DENG-651 upload"});
+    de_gpu_buffer rb = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = BYTES,
+                                                                     .usage = DE_USAGE_COPY_DST,
+                                                                     .memory = DE_MEM_READBACK,
+                                                                     .name = "DENG-651 readback"});
+    de_gpu_fence copied = de_gpu_fence_create(d, 0), consumed = de_gpu_fence_create(d, 0);
+    ASSERT_TRUE(DE_HANDLE_VALID(tex) && DE_HANDLE_VALID(up) && DE_HANDLE_VALID(rb) &&
+                DE_HANDLE_VALID(copied) && DE_HANDLE_VALID(consumed));
+    u8 *src = de_gpu_buffer_map(d, up), *dst = de_gpu_buffer_map(d, rb);
+    ASSERT_TRUE(src && dst);
+    de_gpu_barrier to_graphics = tex_barrier(tex, DE_ACCESS_COPY_DST, DE_ACCESS_COPY_SRC);
+    to_graphics.src_queue = DE_QUEUE_COPY;
+    to_graphics.dst_queue = DE_QUEUE_GRAPHICS;
+    de_gpu_barrier to_copy = tex_barrier(tex, DE_ACCESS_COPY_SRC, DE_ACCESS_COPY_DST);
+    to_copy.src_queue = DE_QUEUE_GRAPHICS;
+    to_copy.dst_queue = DE_QUEUE_COPY;
+    for (u32 phase = 0; phase < 3; ++phase) {
+        for (u32 i = 0; i < BYTES; ++i)
+            src[i] = (u8)(i * 17u + phase * 31u + 7u);
+        memset(dst, 0xEE, BYTES);
+        de_error_clear();
+        de_gpu_cmd *c = de_gpu_cmd_begin(d, DE_QUEUE_COPY, "DENG-651 texture upload");
+        ASSERT_TRUE(c != NULL);
+        de_gpu_barrier first =
+            phase ? to_copy : tex_barrier(tex, DE_ACCESS_NONE, DE_ACCESS_COPY_DST);
+        de_gpu_cmd_barriers(c, &first, 1);
+        if (!phase)
+            print_mode(d); /* Actual mode is selected by that first barrier. */
+        de_gpu_cmd_copy_buffer_to_texture(c, tex, 0, 0, up, 0, PITCH);
+        de_gpu_cmd_barriers(c, &to_graphics, 1);
+        de_gpu_cmd *g = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "DENG-651 graphics consumer");
+        ASSERT_TRUE(g != NULL);
+        de_gpu_cmd_barriers(g, &to_graphics, 1);
+        de_gpu_cmd_copy_texture_to_buffer(g, rb, 0, PITCH, tex, 0, 0);
+        if (phase < 2)
+            de_gpu_cmd_barriers(g, &to_copy, 1);
+        EXPECT_TRUE(de_error_last() == NULL);
+        const de_gpu_wait wait = {.fence = copied, .value = phase + 1u};
+        const de_gpu_submit gs = {.cmds = &g,
+                                  .cmd_count = 1,
+                                  .waits = &wait,
+                                  .wait_count = 1,
+                                  .signal = consumed,
+                                  .signal_value = phase + 1u};
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &gs), DE_OK);
+        const de_gpu_submit cs = {
+            .cmds = &c, .cmd_count = 1, .signal = copied, .signal_value = phase + 1u};
+        ASSERT_EQ(de_gpu_queue_submit(d, DE_QUEUE_COPY, &cs), DE_OK);
+        ASSERT_EQ(de_gpu_fence_wait(d, consumed, phase + 1u, WAIT_NS), DE_OK);
+        u32 bad = 0;
+        for (u32 i = 0; i < BYTES; ++i)
+            bad += dst[i] != (u8)(i * 17u + phase * 31u + 7u);
+        printf("DENG-651 phase%u: %u bytes, %u mismatches, debug errors %u\n", phase, BYTES, bad,
+               de__d3d12_debug_error_count(d));
+        EXPECT_EQ(bad, 0u);
+        EXPECT_EQ(de__d3d12_debug_error_count(d), 0u);
+    }
+    de_gpu_texture_destroy(d, tex);
+    de_gpu_buffer_destroy(d, up);
+    de_gpu_buffer_destroy(d, rb);
+    de_gpu_fence_destroy(d, copied);
+    de_gpu_fence_destroy(d, consumed);
+}
+
 /* ---------- Tests ---------- */
+
+TEST_F(d3d12, texture_copy_queue_handoff, cmd_fx) {
+    body_texture_copy_queue(f->d);
+}
+TEST_F(d3d12, legacy_texture_copy_queue_handoff, legacy_fx) {
+    body_texture_copy_queue(f->d);
+}
+TEST_F(d3d12, texture_copy_queue_handoff_api, api_copy_fx) {
+    body_texture_copy_queue(f->d);
+}
+TEST_F(d3d12, legacy_texture_copy_queue_handoff_api, legacy_api_copy_fx) {
+    body_texture_copy_queue(f->d);
+}
+
+TEST_F(d3d12, copy_queue_bc7_mips, cmd_fx) {
+    body_copy_bc7_mips(f->d, DE_QUEUE_COPY);
+}
+TEST_F(d3d12, legacy_copy_queue_bc7_mips, legacy_fx) {
+    body_copy_bc7_mips(f->d, DE_QUEUE_COPY);
+}
 
 TEST_F(d3d12, clear_readback, cmd_fx) {
     print_mode(f->d);
@@ -371,7 +485,7 @@ TEST_F(d3d12, clear_readback, cmd_fx) {
 
 TEST_F(d3d12, copy_bc7_mips, cmd_fx) {
     print_mode(f->d);
-    body_copy_bc7_mips(f->d);
+    body_copy_bc7_mips(f->d, DE_QUEUE_GRAPHICS);
 }
 
 TEST_F(d3d12, cross_queue_timeline, cmd_fx) {
@@ -400,7 +514,7 @@ TEST_F(d3d12, legacy_barriers_forced, legacy_fx) {
     EXPECT_FALSE(de__d3d12_enhanced_barriers_active(f->d));
     print_mode(f->d);
     body_clear_readback(f->d);
-    body_copy_bc7_mips(f->d);
+    body_copy_bc7_mips(f->d, DE_QUEUE_GRAPHICS);
     body_cross_queue(f->d);
 }
 

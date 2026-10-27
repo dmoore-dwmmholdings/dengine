@@ -25,25 +25,31 @@ void de_ui__tooltip_prepare(de_ui *ui, de_entity e, f32 dt) {
         return;
     const DeUiText *source = de_entity_get_const(ui->world, e, ui->ids.text);
     DeUiText text = source ? *source : (DeUiText){0};
+    de_ui_popup_context context = de_ui__popup_context(ui, e);
     de_entity anchor = e;
     de_vec2 point = ui->widgets->pointer.position;
     const DeUiNode *owner = de_entity_get_const(ui->world, e, ui->ids.node);
-    if (interaction->hovered && owner && point.x >= owner->computed_rect.x &&
+    if (interaction->hovered && ui->widgets->pointer.root.bits == context.parent.bits && owner &&
+        point.x >= owner->computed_rect.x &&
         point.x < owner->computed_rect.x + owner->computed_rect.z &&
         point.y >= owner->computed_rect.y &&
         point.y < owner->computed_rect.y + owner->computed_rect.w) {
         anchor = de_ui__advanced_node(ui, e, 1, 1);
         DeUiAnchor *position = de_entity_add(ui->world, anchor, ui->ids.anchor);
-        position->offset_min = (de_vec2){(point.x - owner->computed_rect.x) / ui->scale + 12,
-                                         (point.y - owner->computed_rect.y) / ui->scale + 12};
+        position->offset_min = (de_vec2){(point.x - owner->computed_rect.x) / context.scale + 12,
+                                         (point.y - owner->computed_rect.y) / context.scale + 12};
         position->offset_max = (de_vec2){position->offset_min.x + 1, position->offset_min.y + 1};
     }
-    de_entity popup = de_ui__advanced_node(ui, (de_entity){0}, 240, 40);
+    de_entity popup = de_ui__advanced_node(ui, context.parent, 240, 40);
     if (!popup.bits)
         return;
     DeUiNode *n = de_entity_get(ui->world, popup, ui->ids.node);
     n->z_order = 2000;
     n->safe_area = true;
+    n->height = (de_ui_len){DE_UI_AUTO, 0};
+    n->min_height = (de_ui_len){DE_UI_PX, 40};
+    n->max_width = n->max_height = (de_ui_len){DE_UI_PERCENT, 100};
+    n->clip = true;
     DeUiText *label = de_entity_add(ui->world, popup, ui->ids.text);
     *label = text;
     label->loc_id = value.loc_id;

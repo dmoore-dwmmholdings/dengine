@@ -141,7 +141,8 @@ de_result de__headless_check(const de_engine *e) {
 de_result de__headless_begin(de__host *h) {
     if (h == NULL || h->engine == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "headless: no engine");
-    DE_TRY(de__headless_check(h->engine));
+    if (!h->engine->offscreen)
+        DE_TRY(de__headless_check(h->engine));
     if (g_installed) {
         DE_WARN(h->log, "headless: another run owns the stop handlers; this one has none");
         return DE_OK;
@@ -156,8 +157,9 @@ de_result de__headless_begin(de__host *h) {
     if (!SetConsoleCtrlHandler(headless_console_handler, TRUE))
         return DE_FAIL(DE_ERR_IO, "headless: SetConsoleCtrlHandler failed (error %lu)",
                        (unsigned long)GetLastError());
-    DE_INFO(h->log, "headless: no window, GPU, audio or UI; Ctrl+C or closing the console "
-                    "quits after the current frame");
+    DE_INFO(h->log, "%s; Ctrl+C or closing the console quits after the current frame",
+            h->engine->offscreen ? "offscreen: no video or windows"
+                                 : "headless: no window, GPU, audio or UI");
 #else
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -170,8 +172,9 @@ de_result de__headless_begin(de__host *h) {
         (void)sigaction(SIGINT, &g_prev_int, NULL);
         return DE_FAIL(DE_ERR_IO, "headless: sigaction(SIGTERM) failed");
     }
-    DE_INFO(h->log, "headless: no window, GPU, audio or UI; SIGINT or SIGTERM quits after the "
-                    "current frame");
+    DE_INFO(h->log, "%s; SIGINT or SIGTERM quits after the current frame",
+            h->engine->offscreen ? "offscreen: no video or windows"
+                                 : "headless: no window, GPU, audio or UI");
 #endif
     g_installed = true;
     h->headless_handlers = true;

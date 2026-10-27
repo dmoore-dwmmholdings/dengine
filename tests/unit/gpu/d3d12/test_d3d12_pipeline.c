@@ -937,6 +937,131 @@ static de_gpu_pipeline compute_pipeline(de_gpu_device *d, const char *file, cons
     return p;
 }
 
+/* DENG-618: no clear/copy initializes the RT. Compute creates every background texel;
+ * a real draw LOADs the image and replaces only one quadrant. A second compute use writes only
+ * the left half; the initialized right half must survive all transitions and the next draw. */
+static void first_uav_rt_readback(pipe_fx *f, de_gpu_queue producer) {
+    open_device(f);
+    need_pipelines(f, f->d, "compute-first RT readback");
+    de_gpu_device *d = f->d;
+    const bool cross_queue = producer == DE_QUEUE_COMPUTE;
+    de_gpu_pipeline compute = compute_pipeline(d, "uav_rt_init.slang", "first UAV RT fill");
+    const de_pipe_test_shader vs = shader("uav_rt_init.slang", "vs_main"),
+                              ps = shader("uav_rt_init.slang", "ps_main");
+    de_gpu_pipeline draw = de_gpu_pipeline_create(
+        d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_GRAPHICS,
+                                   .vs = vs.blob,
+                                   .ps = ps.blob,
+                                   .color_formats = {DE_FMT_RGBA8_UNORM},
+                                   .color_count = 1,
+                                   .cull = DE_CULL_NONE,
+                                   .push_constant_bytes =
+                                       max_u32(vs.push_constant_bytes, ps.push_constant_bytes),
+                                   .name = "first UAV RT overlay"});
+    ASSERT_TRUE(DE_HANDLE_VALID(draw));
+    target t = {0};
+    t.color = de_gpu_texture_create(
+        d, &(de_gpu_texture_desc){.format = DE_FMT_RGBA8_UNORM,
+                                  .width = SIZE,
+                                  .height = SIZE,
+                                  .usage =
+                                      DE_USAGE_RENDER_TARGET | DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                  .name = "compute first RT (no clear)"});
+    ASSERT_TRUE(DE_HANDLE_VALID(t.color));
+    t.readback = de_gpu_buffer_create(d, &(de_gpu_buffer_desc){.size = (u64)PITCH * SIZE,
+                                                               .usage = DE_USAGE_COPY_DST,
+                                                               .memory = DE_MEM_READBACK,
+                                                               .name = "first UAV RT readback"});
+    ASSERT_TRUE(DE_HANDLE_VALID(t.readback));
+    t.pixels = de_gpu_buffer_map(d, t.readback);
+    ASSERT_TRUE(t.pixels != NULL);
+    memset(t.pixels, 0xEE, (size_t)PITCH * SIZE);
+    de_gpu_barrier to_graphics =
+        tex_barrier(t.color, DE_ACCESS_SHADER_WRITE, DE_ACCESS_RENDER_TARGET);
+    to_graphics.src_queue = producer;
+    to_graphics.dst_queue = DE_QUEUE_GRAPHICS;
+    de_gpu_barrier to_compute = tex_barrier(t.color, DE_ACCESS_COPY_SRC, DE_ACCESS_SHADER_WRITE);
+    to_compute.src_queue = DE_QUEUE_GRAPHICS;
+    to_compute.dst_queue = producer;
+    for (u32 phase = 0; phase < 2; ++phase) {
+        de_error_clear();
+        de_gpu_cmd *c = de_gpu_cmd_begin(d, producer, "compute first RT image");
+        ASSERT_TRUE(c != NULL);
+        de_gpu_barrier first = tex_barrier(t.color, phase ? DE_ACCESS_COPY_SRC : DE_ACCESS_NONE,
+                                           DE_ACCESS_SHADER_WRITE);
+        if (phase && cross_queue)
+            first = to_compute; /* Acquire initialized contents: must not discard. */
+        de_gpu_cmd_barriers(c, &first, 1);
+        /* Selection is lazy: only the first barrier establishes the device's actual mode. */
+        const bool enhanced = de__d3d12_enhanced_barriers_active(d);
+        printf("DENG-618 producer=%s barriers=%s\n", cross_queue ? "compute" : "graphics",
+               enhanced ? "enhanced" : "legacy");
+        de_gpu_cmd_set_pipeline(c, compute);
+        const u32 params[4] = {de_gpu_texture_bindless(d, t.color, 0, true), SIZE, SIZE, phase};
+        de_gpu_cmd_push_constants(c, params, sizeof params);
+        de_gpu_cmd_dispatch(c, SIZE / 8, SIZE / 8, 1);
+        de_gpu_cmd_barriers(c, &to_graphics, 1);
+        if (cross_queue) {
+            submit_wait(d, producer, c); /* CPU fence wait orders the two real queues. */
+            c = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "LOAD compute image and draw UI");
+            ASSERT_TRUE(c != NULL);
+            de_gpu_cmd_barriers(c, &to_graphics, 1); /* Acquire producer's image. */
+        }
+        const de_gpu_attachment color = {.texture = t.color, .clear = false, .store = true};
+        de_gpu_cmd_begin_render(c, &color, 1, NULL);
+        de_gpu_cmd_viewport(c, 0, 0, (f32)SIZE, (f32)SIZE);
+        de_gpu_cmd_scissor(c, 0, 0, SIZE / 2, SIZE / 2);
+        de_gpu_cmd_set_pipeline(c, draw);
+        de_gpu_cmd_draw(c, 3, 1, 0, 0);
+        end_target(c, &t);
+        if (cross_queue && phase == 0)
+            de_gpu_cmd_barriers(c, &to_compute, 1); /* Release for initialized second use. */
+        EXPECT_TRUE(de_error_last() == NULL);
+        submit_wait(d, DE_QUEUE_GRAPHICS, c);
+        u32 bad = 0;
+        for (u32 y = 0; y < SIZE; ++y)
+            for (u32 x = 0; x < SIZE; ++x) {
+                const bool overlay = x < SIZE / 2 && y < SIZE / 2;
+                const u8 expected[4] = {
+                    overlay ? 17 : (u8)((x * 3u + ((phase && x < SIZE / 2) ? 41u : 0u)) & 255u),
+                    overlay ? 211 : (u8)((y * 5u + 17u) & 255u), overlay ? 59 : 91, 255};
+                const u8 *got = t.pixels + (size_t)y * PITCH + x * 4;
+                if (memcmp(got, expected, 4)) {
+                    if (!bad)
+                        printf("phase%u (%u,%u): %u,%u,%u,%u expected %u,%u,%u,%u\n", phase, x, y,
+                               got[0], got[1], got[2], got[3], expected[0], expected[1],
+                               expected[2], expected[3]);
+                    ++bad;
+                }
+            }
+        printf("DENG-618 phase%u: %u texels, %u mismatches\n", phase, SIZE * SIZE, bad);
+        EXPECT_EQ(bad, 0);
+        char dir[768];
+        const DWORD dir_length =
+            GetEnvironmentVariableA("DE_D3D12_INIT_EVIDENCE_DIR", dir, (DWORD)sizeof dir);
+        if (dir_length) {
+            ASSERT_LT(dir_length, (DWORD)sizeof dir);
+            char path[1024];
+            snprintf(path, sizeof path, "%s/%s-%s-phase%u.rgba", dir,
+                     cross_queue ? "compute" : "graphics", enhanced ? "enhanced" : "legacy", phase);
+            FILE *file = NULL;
+            ASSERT_EQ(fopen_s(&file, path, "wb"), 0);
+            ASSERT_TRUE(file != NULL);
+            EXPECT_EQ(fwrite(t.pixels, 1, (size_t)PITCH * SIZE, file), (size_t)PITCH * SIZE);
+            EXPECT_EQ(fclose(file), 0);
+        }
+    }
+    free_target(d, &t);
+    de_gpu_pipeline_destroy(d, draw);
+    de_gpu_pipeline_destroy(d, compute);
+}
+TEST_F(d3d12, compute_first_rt_graphics, pipe_fx) {
+    first_uav_rt_readback(f, DE_QUEUE_GRAPHICS);
+}
+TEST_F(d3d12, compute_first_rt_compute, pipe_fx) {
+    first_uav_rt_readback(f, DE_QUEUE_COMPUTE);
+}
+
 /* ---------- Triangle ---------- */
 
 TEST_F(d3d12, pipeline_triangle_readback, pipe_fx) {

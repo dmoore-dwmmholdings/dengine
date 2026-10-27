@@ -1,0 +1,11 @@
+# CTest does not expose discovered tests through CMake's if(TEST) predicate.
+# Guard the generated discovery file so an unbuilt target keeps its NOT_BUILT placeholder.
+if(CTEST_CONFIGURATION_TYPE)
+ set(_de_font_config "${CTEST_CONFIGURATION_TYPE}")
+else()
+ set(_de_font_config "@CMAKE_BUILD_TYPE@")
+endif()
+if(EXISTS "@CMAKE_CURRENT_BINARY_DIR@/test_text_import_tests-${_de_font_config}.cmake")
+ set_tests_properties(text_import.font.latin_metrics_and_determinism PROPERTIES TIMEOUT 150)
+endif()
+unset(_de_font_config)

@@ -117,6 +117,8 @@ typedef struct de__engine_desc {
     const de__game_config *config;
     /** No window, GPU, audio or UI; the platform starts with DE_PLATFORM_HEADLESS. */
     bool headless;
+    /** Events-only platform, no host window; game-owned offscreen GPU rendering is allowed. */
+    bool offscreen;
 } de__engine_desc;
 
 /**

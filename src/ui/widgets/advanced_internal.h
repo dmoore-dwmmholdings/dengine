@@ -104,4 +104,10 @@ void de_ui__tabs_increment(de_ui *ui, de_entity e);
 void de_ui__tabs_decrement(de_ui *ui, de_entity e);
 void de_ui__tooltip_prepare(de_ui *ui, de_entity e, f32 dt);
 de_entity de_ui__advanced_node(de_ui *ui, de_entity parent, f32 width, f32 height);
+typedef struct de_ui_popup_context {
+    de_entity parent;
+    de_vec4 bounds;
+    f32 scale;
+} de_ui_popup_context;
+de_ui_popup_context de_ui__popup_context(de_ui *ui, de_entity owner);
 #endif

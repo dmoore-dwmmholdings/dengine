@@ -130,13 +130,14 @@ static de_result host_run_game(de__host *h) {
     memset(&ed, 0, sizeof ed);
     ed.config = &h->config;
     ed.headless = h->desc.headless;
+    ed.offscreen = h->desc.offscreen;
     de_result r = de__engine_create(&ed, &h->engine);
     if (r != DE_OK)
         return r;
 
-    /* Headless (asked for, a DE_HEADLESS build, or a platform without video): from here until
-     * the loop ends, SIGINT/SIGTERM or a console Ctrl event quit after the current frame. */
-    if (de__engine_from(h->engine)->headless) {
+    /* Windowless hosts still need graceful stop handling. Offscreen permits a renderer;
+     * headless retains its separate no-GPU policy. */
+    if (de__engine_from(h->engine)->headless || h->engine->offscreen) {
         r = de__headless_begin(h);
         if (r != DE_OK) {
             de__engine_destroy(h->engine);
@@ -212,6 +213,14 @@ int de_host_run(const de_host_desc *desc) {
     memset(&h, 0, sizeof h);
     if (desc != NULL)
         h.desc = *desc;
+    /* Custom static hosts receive the same pre-platform mode selection as the generated and
+     * development executables. Never defer this until a game's init callback. */
+    for (int i = 1; h.desc.argv != NULL && i < h.desc.argc; ++i) {
+        if (h.desc.argv[i] != NULL && strcmp(h.desc.argv[i], "--offscreen") == 0)
+            h.desc.offscreen = true;
+        if (h.desc.argv[i] != NULL && strcmp(h.desc.argv[i], "--headless") == 0)
+            h.desc.headless = true;
+    }
 #if defined(DE_HEADLESS)
     h.desc.headless = true; /* a server build has no window, GPU, audio or UI to start */
 #endif

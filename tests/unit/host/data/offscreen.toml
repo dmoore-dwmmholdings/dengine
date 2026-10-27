@@ -1,0 +1,8 @@
+[game]
+name = "Offscreen capture"
+[tasks]
+workers = 1
+[assets]
+hot_reload = false
+[timing]
+frame_cap_hz = 120
