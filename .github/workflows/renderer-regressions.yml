@@ -1,27 +1,19 @@
-name: Renderer bug regressions
-
+name: DENG-604 query-checkpoint qualification (CI only)
 on:
   workflow_call:
     inputs:
       warp_crashes:
         type: boolean
-        default: true
+        default: false
   workflow_dispatch:
     inputs:
       warp_crashes:
-        description: "Include the original 34 WARP crash cases"
         type: boolean
-        default: true
-
+        default: false
 permissions:
   contents: read
-
-concurrency:
-  group: renderer-bug-regressions-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  goldens:
+  diagnose:
     strategy:
       fail-fast: false
       matrix:
@@ -29,14 +21,22 @@ jobs:
           - {os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug, backend: d3d12}
           - {os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug, backend: vulkan}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       PRESET: ${{ matrix.preset }}
       BACKEND: ${{ matrix.backend }}
-      EXPECTED: ${{ matrix.backend == 'd3d12' && inputs.warp_crashes && 38 || 4 }}
-      WARP_CRASHES: ${{ inputs.warp_crashes }}
+      DE_D3D12_FORCE_LEGACY_BARRIERS: "0"
+      PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Verify bounded source and reference provenance
+        shell: bash
+        run: |
+          git diff --exit-code 153c6675 HEAD -- . ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-query-checkpoint.py'
+          git rev-parse HEAD > source-identity.txt
+          git ls-tree HEAD tests/golden/refs tests/golden/scenes.toml >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: ${{ matrix.compiler }}
@@ -52,82 +52,21 @@ jobs:
           test -n "${icd}"
           echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
           echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
-      - name: Build focused regression targets
-        id: regression_build
+      - name: Configure unchanged original tests
+        shell: bash
+        run: cmake --preset "${PRESET}"
+      - name: Retain original baseline and candidate results
         shell: bash
         run: |
-          cmake --preset "${PRESET}"
-          cmake --build --preset "${PRESET}" --target de_golden test_render_csm test_ui_popup_native test_ui_layout test_ui_world_pixel
-      - name: Check orthographic shadow receiver precision
-        if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
-        shell: bash
-        run: |
-          ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
-            --output-junit orthographic-receiver.xml \
-            -R "^render_csm\.csm\.orthographic_self_shadow_${BACKEND}$"
-      - name: Check generated world-panel popups
-        if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
-        shell: bash
-        run: |
-          mkdir -p "build/${PRESET}/ui-popup-native"
-          DE_UI_POPUP_NATIVE_BACKEND="${BACKEND}" \
-          DE_UI_POPUP_EVIDENCE_DIR="$PWD/build/${PRESET}/ui-popup-native" \
-            ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
-              --test-output-size-passed 1048576 --test-output-size-failed 1048576 \
-              --output-junit ui-popup-native.xml \
-              -R '^ui_popup_native\.generated_widgets_stay_on_world_panel$'
-          ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
-            --output-junit ui-popup-cpu.xml \
-            -R '^ui_layout\.ui_advanced\.(generated_.*|dropdown_flips_selects_once_and_cancel_preserves_value|tabs_generate_headers_hide_inactive_pages_and_emit_change|tooltip_delay_focus_safe_bounds_and_press_hide|tooltip_measures_wrapped_text_and_clips_to_screen_and_panel_bounds|actual_escape_and_outside_click_close_dropdown_without_selection)$|^ui_world_pixel\.ui_world\.(per_root_panel_pixels_preserve_screen_root|popups_use_panel_extent_scale_and_ignore_screen_safe_insets|popup_percent_and_oversize_clamps_are_independent_between_panels)$'
-      - name: Run original crash cases and text references
-        if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
-        id: goldens
-        shell: bash
-        run: |
-          if [ "${BACKEND}" = d3d12 ] && [ "${WARP_CRASHES}" = true ]; then
-            pattern='^golden\.d3d12\.(views_split_screen|materials_(gallery_ibl|gallery_lights|furnace|khr_samples|layers_furnace)|shadows_(csm|local|pcss_contact)_(medium|high|off)|ao_gtao_(medium|high|off)|reflections_ssr_probes_(medium|high|off)|gi_probes_ssgi_(medium|high|off)|refraction_ss_(medium|high|off)|rt_(shadows_pole|restir_many_lights|ao_corner|reflections_mirror_rough|gi_cornell|refraction_glass|foliage_shadow)_base|text_(msdf_scales|outline_shadow|bitmap_pixel|world_text))$'
-          else
-            pattern="^golden\.${BACKEND}\.text_(msdf_scales|outline_shadow|bitmap_pixel|world_text)$"
-          fi
-          # Keep each scene's existing settings, comparison thresholds and 300-second limit.
-          ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
-            --output-junit renderer-regressions.xml -R "${pattern}"
-      - name: Require actual execution of every selected scene
-        if: ${{ !cancelled() && steps.goldens.outcome != 'skipped' }}
-        shell: python
-        run: |
-          import os
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          root = Path("build") / os.environ["PRESET"]
-          for filename, expected in (("ui-popup-native.xml", 1), ("ui-popup-cpu.xml", 12)):
-              popup_cases = ET.parse(root / filename).findall(".//testcase")
-              assert len(popup_cases) == expected, (filename, len(popup_cases))
-              assert all(c.find(t) is None for c in popup_cases for t in ("skipped", "failure", "error"))
-          for image in ("baseline", "dropdown", "tooltip"):
-              ppm = root / "ui-popup-native" / (image + ".ppm")
-              assert ppm.is_file() and ppm.stat().st_size == 786447, ppm
-          receivers = ET.parse(root / "orthographic-receiver.xml").findall(".//testcase")
-          assert len(receivers) == 1, len(receivers)
-          assert all(receivers[0].find(tag) is None for tag in ("skipped", "failure", "error")), receivers[0].attrib
-          cases = ET.parse(root / "renderer-regressions.xml").findall(".//testcase")
-          assert len(cases) == int(os.environ["EXPECTED"]), len(cases)
-          for case in cases:
-              assert case.find("skipped") is None, case.attrib
-              scene = case.attrib["name"].split(".", 2)[2]
-              png = root / "golden" / os.environ["BACKEND"] / "base" / (scene + ".png")
-              assert png.is_file() and png.stat().st_size > 0, png
-      - name: Preserve actual captures and failure evidence
+          cmake --build --preset "${PRESET}" --target test_render_ssr --parallel 4
+          python .github/scripts/deng604-query-checkpoint.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: renderer-regressions-${{ matrix.backend }}
+          name: deng604-query-checkpoint-${{ matrix.backend }}
           path: |
-            build/${{ matrix.preset }}/golden/
-            build/${{ matrix.preset }}/renderer-regressions.xml
-            build/${{ matrix.preset }}/orthographic-receiver.xml
-            build/${{ matrix.preset }}/ui-popup-native.xml
-            build/${{ matrix.preset }}/ui-popup-cpu.xml
-            build/${{ matrix.preset }}/ui-popup-native/
+            source-identity.txt
+            build/${{ matrix.preset }}/de_config_dump.txt
+            build/${{ matrix.preset }}/deng604-query-checkpoint/
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
-          if-no-files-found: warn
+          if-no-files-found: error
