@@ -95,7 +95,8 @@ else:
     assert counts["full"] == 2454 and counts["partial"] == 124
 assert counts["inactive"] == tw*th-counts["positive"]
 report = {"moving_camera": moving, "max_motion_ndc": g["max_motion"],
-          "previous_depth_max_error": max(g["previous_depth_errors"], default=0), "counts": counts, "max_coverage_error": max_coverage_error,
+          "previous_depth_max_error": max(g["previous_depth_errors"], default=0),
+          "previous_snapped_empty": g["previous_snapped_empty"], "counts": counts, "max_coverage_error": max_coverage_error,
           "max_color_error": max_color_error, "mismatches": len(errors),
           "examples": errors[:40], "coverage_tolerance": 1e-4,
           "color_tolerance": "abs(error) <= 1e-4 * (1 + abs(expected))",

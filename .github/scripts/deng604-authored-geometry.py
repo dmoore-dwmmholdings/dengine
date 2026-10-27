@@ -50,6 +50,7 @@ for y in range(h):
 static_matrices=list(floats[32:48])==list(floats[64:80]);max_motion=max(abs(v) for p in motion for v in p);surface_depth_mismatch=sum(a[0]!=b[0] for a,b in zip(depth,surface))
 previous_faces=faces
 previous_depth_errors=[]
+previous_snapped_empty=[]
 if os.getenv('DE_DENG604_MOTION'):
  assert not static_matrices and max_motion>1e-5 and surface_depth_mismatch>100
  def inverse4(matrix):
@@ -65,6 +66,32 @@ if os.getenv('DE_DENG604_MOTION'):
  inv=inverse4(floats[64:80]);eye=[inv[r*4+2]/inv[14] for r in range(3)]
  expected_previous=[.35*math.sin((94-48)*.11),camera[1],camera[2]]
  assert max(abs(a-b) for a,b in zip(eye,expected_previous))<1e-3,(eye,expected_previous)
+ def snapped_face_empty(x,y,face):
+  # D3D coordinate snapping is exactly 8 fractional bits. This narrowly handles
+  # an ideal ray hit which becomes empty after snapping an unclipped face.
+  # https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm
+  assert origin==[0,0,0]
+  box=next(b for b in boxes if b['id']==face[0]);axis,sign,plane=face[1:]
+  other=[a for a in range(3) if a!=axis];quad=[]
+  previous=floats[64:80]
+  for a,b in [(0,0),(1,0),(1,1),(0,1)]:
+   point=[0.,0.,0.];point[axis]=plane
+   point[other[0]]=box['hi' if a else 'lo'][other[0]]
+   point[other[1]]=box['hi' if b else 'lo'][other[1]]
+   clip=[sum(previous[r*4+k]*(point+[1])[k] for k in range(4)) for r in range(4)]
+   if clip[3]<=0:return None
+   q=[(clip[0]/clip[3]*.5+.5)*w,(-clip[1]/clip[3]*.5+.5)*h]
+   # Frustum clipping creates new vertices; no inference for clipped faces.
+   if not(0<q[0]<w and 0<q[1]<h):return None
+   quad.append(q)
+  point=[x+.5,y+.5]
+  def edge_values(q):
+   return [(q[(i+1)%4][0]-q[i][0])*(point[1]-q[i][1])-(q[(i+1)%4][1]-q[i][1])*(point[0]-q[i][0]) for i in range(4)]
+  def inside(q):
+   values=edge_values(q);return all(v<0 for v in values) or all(v>0 for v in values)
+  snapped=[[round(v*256)/256 for v in q] for q in quad]
+  if not inside(quad) or inside(snapped):return None
+  return {'pixel':[x,y],'face':face,'floating_quad':quad,'snapped_quad':snapped,'floating_edge_cross':edge_values(quad),'snapped_edge_cross':edge_values(snapped)}
  previous_faces=[];previous_missing_geometry=previous_missing_raster=0
  for y in range(h):
   for x in range(w):
@@ -72,7 +99,12 @@ if os.getenv('DE_DENG604_MOTION'):
    if z>0 and hit:
     point=unproject((x+.5)/w,(y+.5)/h,z);previous_depth_errors.append(max(abs(a-b) for a,b in zip(point,hit[2])))
    elif z>0:previous_missing_geometry+=1
-   elif hit:previous_missing_raster+=1
+   elif hit:
+    snapped=snapped_face_empty(x,y,hit[1])
+    if snapped is None:previous_missing_raster+=1
+    else:
+     previous_snapped_empty.append(snapped)
+     previous_faces[-1]=None
  assert previous_missing_geometry==previous_missing_raster==0
  assert max(previous_depth_errors)<.003
  inv,eye=current_inv,current_eye
