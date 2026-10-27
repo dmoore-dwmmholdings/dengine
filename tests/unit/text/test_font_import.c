@@ -1,4 +1,30 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* Optional raw font evidence uses getenv/fopen. */
+#endif
 #include "font_test_util.h"
+#include <stdlib.h>
+
+/* Optional full-byte artifacts for matched generator controls; never changes the oracle. */
+static void font_evidence(const char *name, const de_cook_result *cooked) {
+    const char *directory = getenv("DE_FONT_IMPORT_EVIDENCE_DIR");
+    if (!directory || !directory[0])
+        return;
+    char safe[128], path[4096];
+    size_t n = strlen(name);
+    ASSERT_LT(n, sizeof safe);
+    for (size_t i = 0; i <= n; ++i)
+        safe[i] = name[i] == '/' || name[i] == '\\' ? '_' : name[i];
+    int length = snprintf(path, sizeof path, "%s/%s.dfnt", directory, safe);
+    ASSERT_GT(length, 0);
+    ASSERT_LT((size_t)length, sizeof path);
+    FILE *file = fopen(path, "wb");
+    ASSERT_TRUE(file);
+    size_t written = fwrite(cooked->data, 1, (size_t)cooked->size, file);
+    int closed = fclose(file);
+    EXPECT_EQ(written, (size_t)cooked->size);
+    EXPECT_EQ(closed, 0);
+}
+
 static de_result range_manifest_read(void *user, const char *path, const de_allocator *a,
                                      void **data, u64 *size) {
     (void)path;
@@ -83,10 +109,22 @@ TEST(font, latin_metrics_and_determinism) {
     de__manifest_kv s = {.key = "charset",
                          .value = {.type = DE__MANIFEST_STRING, .u.s = "latin-ext"}};
     de_cook_result r = {0}, r2 = {0};
-    ASSERT_EQ(font_cook("NotoSans.ttf", &s, 1, &r), DE_OK);
-    ASSERT_EQ(font_cook("NotoSans.ttf", &s, 1, &r2), DE_OK);
+    /* This case compares independent complete cooks itself. Nested verification would do four
+     * expensive imports; keep the same two-cook byte and metadata oracle without duplicating it. */
+    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF), DE_OK);
+    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF), DE_OK);
+    ASSERT_EQ(r.output_hash, r2.output_hash); /* Includes dependencies/subassets/extra sources. */
+    ASSERT_EQ(r.dependency_count, r2.dependency_count);
+    ASSERT_EQ(r.subasset_count, r2.subasset_count);
+    ASSERT_EQ(r.extra_source_count, r2.extra_source_count);
+    ASSERT_EQ(r.settings_hash, r2.settings_hash);
+    ASSERT_EQ(r.importer_version, r2.importer_version);
+    ASSERT_EQ(r.platform, r2.platform);
+    ASSERT_STREQ(r.source, r2.source);
     ASSERT_EQ(r.size, r2.size);
     ASSERT_MEMEQ(r.data, r2.data, (size_t)r.size);
+    font_evidence("latin-ext-first", &r);
+    font_evidence("latin-ext-second", &r2);
     const u8 *p = r.data;
     ASSERT_MEMEQ(p, "DFNT", 4);
     u32 ng = de__font_u32(p + 12), nc = de__font_u32(p + 16), ns = de__font_u32(p + 28);
@@ -191,6 +229,7 @@ TEST(font, cff_outlines_and_ranges) {
 }
 static void msdf_coverage_glyphs(const char *name, const de_cook_result *cooked,
                                  const u32 *characters, u32 character_count, u32 small_size) {
+    font_evidence(name, cooked);
     const u8 *p = cooked->data;
     u32 ng = de__font_u32(p + 12), nc = de__font_u32(p + 16), ns = de__font_u32(p + 28),
         pw = de__font_u32(p + 52), ph = de__font_u32(p + 56);
