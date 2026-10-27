@@ -33,7 +33,7 @@ jobs:
       - name: Verify held candidate and CI wrapper provenance
         shell: bash
         run: |
-          git diff --exit-code 109787f6 HEAD -- . ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-depth-scenes.py'
+          git diff --exit-code 1d869e05 HEAD -- . ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-depth-scenes.py'
           git rev-parse HEAD > source-identity.txt
           git ls-tree HEAD tests/golden/refs/d3d12/base tests/golden/scenes.toml >> source-identity.txt
       - uses: ./.github/actions/setup-dengine

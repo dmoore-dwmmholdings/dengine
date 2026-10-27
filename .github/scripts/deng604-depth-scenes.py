@@ -9,7 +9,7 @@ native='hiz_trace_matches_linear_march ssr_mirror_floor_reference ssr_confidence
 unitnames=['render_ssr.ssr.fixture_removal_capacity']+['render_ssr.ssr.'+n+'_'+backend for n in native]
 scenes=[f'{effect}_{quality}' for effect in ('ao_gtao','reflections_ssr_probes') for quality in ('off','medium','high')]
 goldnames=['golden.'+backend+'.'+n for n in scenes]
-summary={'base':base,'candidate':'109787f6080c7526e0650c2a16c663f7f682dc26','backend':backend,'stages':{}};failed=False
+summary={'base':base,'candidate':'1d869e05','backend':backend,'stages':{}};failed=False
 
 def command(args,path):
  with path.open('w') as log:p=subprocess.run(args,stdout=log,stderr=subprocess.STDOUT)
