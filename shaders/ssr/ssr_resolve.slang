@@ -18,7 +18,7 @@ float4 ssr_hit_history(SsrParams pc, DeSceneConstants sc, float2 uv, float depth
     float2 source_uv = (float2(pixel) + .5) / float2(size);
     float3 position = ssr_position(sc, source_uv, depth);
     float3 geometric_normal;
-    if (!ssr_geometric_normal(pc, sc, pixel, depth, position, geometric_normal))
+    if (!ssr_geometric_normal(pc, sc, pixel, depth, position, normal, geometric_normal))
         return float4(0);
     return ssr_history_sample(pc, sc, pc.history_color, ssr_previous_uv(uv, motion),
                               position, normal, geometric_normal, true);
@@ -129,7 +129,7 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
             float2 prev = ssr_previous_uv(uv, de_tex2d(pc.motion).Load(int3(pixel, 0)).xy);
             if ((pc.history_valid & 2u) != 0) {
                 float3 geometric_normal;
-                bool plane_valid = ssr_geometric_normal(pc, sc, pixel, z, position, geometric_normal);
+                bool plane_valid = ssr_geometric_normal(pc, sc, pixel, z, position, surface.normal, geometric_normal);
                 float4 old = float4(0), stats = float4(0);
                 if (plane_valid) {
                     old = ssr_history_sample(pc, sc, pc.previous_specular, prev, position,
@@ -241,7 +241,7 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
         uint2 pixel = uint2(2,2);
         float depth = de_tex2d(pc.depth).Load(int3(pixel,0)).r;
         float3 center = ssr_position(sc, (float2(pixel)+.5)/4, depth);
-        plane_valid = ssr_geometric_normal(pc, sc, pixel, depth, center, geometric_normal);
+        plane_valid = ssr_geometric_normal(pc, sc, pixel, depth, center, normal, geometric_normal);
     }
     float4 value = float4(0);
     if (plane_valid) value = ssr_history_sample(pc,sc,q.color,uv,position,normal,geometric_normal,true);
