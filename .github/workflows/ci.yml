@@ -1,4 +1,4 @@
-# CI-only DENG-618 qualification wrapper; never merge this workflow override.
+# CI-only DENG-618 final instrumentation check. Original matched run40467152995 is retained.
 name: CI
 on:
   workflow_dispatch:
@@ -9,77 +9,68 @@ concurrency:
   cancel-in-progress: false
 jobs:
   numeric:
-    name: DENG-618 ${{ matrix.kind }} ${{ matrix.config }}
+    name: DENG-618 final numeric Debug
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - kind: candidate
-            config: Debug
-            preset: windows-clang-cl-debug
-          - kind: candidate
-            config: Release
-            preset: windows-clang-cl-release
-          - kind: baseline
-            config: Debug
-            preset: windows-clang-cl-debug
     env:
-      PRESET: ${{ matrix.preset }}
-      DENG618_KIND: ${{ matrix.kind }}
+      PRESET: windows-clang-cl-debug
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 2
-      - name: Verify matched runtime and fixture sources
+      - name: Verify exact candidate inputs
         run: |
-          candidate=77cdc8b15a0bfc1e7368e5687e0c6c6e05bfa09d
-          baseline=6cb88bf435eea0f7eb4df20220a349cc7c5b56d1
-          git fetch --no-tags --depth=1 origin "$candidate" "$baseline"
+          candidate=c04675d9c1a71838a769833015cd679ccf2a796e
+          git fetch --no-tags --depth=1 origin "$candidate"
           git diff --exit-code "$candidate" HEAD -- . ':(exclude).github/workflows/ci.yml'
-          runtime="$candidate"
-          if [ "$DENG618_KIND" = baseline ]; then
-            runtime="$baseline"
-            git restore --source="$baseline" -- src/gpu/d3d12/d3d12_barriers.c src/gpu/d3d12/d3d12_internal.h tests/unit/gpu/d3d12/test_d3d12_barrier_tables.c
-          fi
-          git diff --exit-code "$runtime" -- src include shaders cmake third_party CMakeLists.txt CMakePresets.json
-          git diff --exit-code "$candidate" -- tests ':(exclude)tests/unit/gpu/d3d12/test_d3d12_barrier_tables.c'
-          git diff --exit-code "$runtime" -- tests/unit/gpu/d3d12/test_d3d12_barrier_tables.c
           git rev-parse HEAD > source-identity.txt
-          echo "$runtime" >> source-identity.txt
-          git diff --stat "$candidate" -- src tests >> source-identity.txt
-          sha256sum src/gpu/d3d12/d3d12_barriers.c src/gpu/d3d12/d3d12_internal.h tests/unit/gpu/d3d12/test_d3d12_pipeline.c tests/unit/gpu/data/pipelines/uav_rt_init.slang >> source-identity.txt
+          echo "$candidate" >> source-identity.txt
+          git rev-parse "$candidate:src" HEAD:src "$candidate:tests" HEAD:tests "$candidate:shaders" HEAD:shaders >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: clang-cl
-          cache-key: ${{ matrix.preset }}
+          cache-key: windows-clang-cl-debug
           cache-save: "false"
-      - name: Configure unchanged preset
+      - name: Configure unchanged Debug preset
         run: cmake --preset "$PRESET"
-      - name: Build numeric and original golden executables
-        id: build
-        run: cmake --build --preset "$PRESET" --target test_gpu_d3d12 de_golden --parallel 4
-      - name: Exact numeric readback with actual enhanced and legacy barriers
+      - name: Build numeric executable
+        run: cmake --build --preset "$PRESET" --target test_gpu_d3d12 --parallel 4
+      - name: Require actual enhanced and legacy numeric cases
         run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/$PRESET" --numeric-only
-      - name: Preserve original golden and legacy Debug validation failures
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/$PRESET"
-      - name: Retain raw readbacks, reports and original scene failures
+      - name: Independently verify all eight raw readbacks
+        run: |
+          python3 - <<'PY'
+          import os,pathlib,re,hashlib,json
+          root=pathlib.Path('build')/os.environ['PRESET']/'d3d12-init-readbacks'
+          expected_names={f'{producer}-{mode}-phase{phase}.rgba' for producer in ('graphics','compute') for mode in ('enhanced','legacy') for phase in (0,1)}
+          assert {p.name for p in root.glob('*.rgba')}==expected_names
+          report={}
+          for name in sorted(expected_names):
+              data=(root/name).read_bytes()
+              phase=int(re.search(r'phase(\d)',name)[1])
+              expected=bytearray()
+              for y in range(64):
+                  for x in range(64):
+                      expected.extend((17,211,59,255) if x<32 and y<32 else ((x*3+(41 if phase and x<32 else 0))&255,(y*5+17)&255,91,255))
+              assert data==expected,name
+              report[name]={'sha256':hashlib.sha256(data).hexdigest(),'exact_texels':4096}
+          (root/'raw-report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('Eight raw RGBA frames match the independent pixel oracle exactly')
+          PY
+      - name: Retain full reports and raw readbacks
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: deng618-${{ matrix.kind }}-${{ matrix.config }}
+          name: deng618-final-numeric
           path: |
             source-identity.txt
-            build/${{ matrix.preset }}/de_config_dump.txt
-            build/${{ matrix.preset }}/d3d12-init-*.xml
-            build/${{ matrix.preset }}/d3d12-init-*.log
-            build/${{ matrix.preset }}/d3d12-init-readbacks/
-            build/${{ matrix.preset }}/golden-init-*/
-            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+            build/${{ env.PRESET }}/de_config_dump.txt
+            build/${{ env.PRESET }}/d3d12-init-numeric-*.xml
+            build/${{ env.PRESET }}/d3d12-init-numeric-*.log
+            build/${{ env.PRESET }}/d3d12-init-readbacks/
+            build/${{ env.PRESET }}/Testing/Temporary/LastTest.log
           if-no-files-found: error
