@@ -80,7 +80,8 @@ static void diagnostic_capture(de__ssr *s, const de__view_frame *vf, const ssr_p
                                   b->output,
                                   b->write_moments,
                                   vc->scene_views};
-    const u32 bytes[11] = {4, 4, 4, 16, 16, 8, 16, 8, 8, 8, 8};
+    /* Temporal moments are RGBA32_FLOAT; radiance/specular are RGBA16_FLOAT. */
+    const u32 bytes[11] = {4, 4, 4, 16, 16, 8, 16, 8, 16, 8, 16};
     u64 total = 0;
     for (u32 i = 0; i < 12; ++i) {
         s->diag_reads[i] = r[i];
