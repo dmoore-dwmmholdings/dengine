@@ -110,6 +110,10 @@ DE_STATIC_ASSERT(sizeof(de__atlas_gpu) == 208, "AtlasShadow is 208 bytes");
 DE_STATIC_ASSERT(offsetof(de__atlas_gpu, map) == 128, "Atlas map offset is unchanged");
 typedef struct de__shadow_atlas de__shadow_atlas;
 f32 de__atlas_light_range(const DeLight *light, f32 cutoff);
+/** Conservative group-mask receiver admission; output contains ranked light slots. */
+u32 de__atlas_select_lights(const struct de__render_world_frame *world,
+                            const struct de__rw_view *camera, u32 mask, bool unknown_receivers,
+                            u32 limit, u32 out[DE__ATLAS_LIGHTS]);
 de_result de__shadow_atlas_create_ex(de_gpu_device *dev, const de_allocator *alloc,
                                      de__shadow_atlas **out);
 de_result de__shadow_atlas_create(de_renderer *r, de__shadow_atlas **out);
