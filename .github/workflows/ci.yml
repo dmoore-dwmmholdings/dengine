@@ -1,326 +1,20 @@
-# CI: build + unit tests on every compiler x config of SPEC §19.3, plus the headless server
-# builds. Every job runs one CMakePresets.json preset, so a job is reproduced locally with
-#   cmake --preset <p> && cmake --build --preset <p> && ctest --preset <p>
-# (docs/ci.md). GPU/golden jobs come in S10; sanitizers are in sanitizers.yml, repository checks
-# in checks.yml.
-#
-# Two tiers (docs/ci.md): `full` runs every job; `quick` runs the jobs marked quick below. A run
-# on a feature/** branch is quick, everything else is full; `gh workflow run CI -f tier=full`
-# forces the full matrix on any branch.
+# CI-only branch; do not merge this wrapper. Product/test inputs match the stated candidate.
 name: CI
-
 on:
-  push:
-    branches: [main, dev, "sprint/**"]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      base_tier_capture:
-        description: "Capture DENG-343 scenes twice on lavapipe and WARP"
-        type: boolean
-        default: false
-      tier:
-        description: "auto (quick on feature/**, full elsewhere), quick or full"
-        type: choice
-        options: [auto, quick, full]
-        default: auto
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # A push to dev or main never cancels the running run: merges land faster than a full run
-  # takes, so cancelling left dev with no finished result. The group keeps at most one queued
-  # run (the newest) behind the running one. Other refs cancel as before.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/main' }}
-
 permissions:
   contents: read
-
+concurrency:
+  group: deng644-caster-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  plan:
-    name: plan (${{ inputs.tier || 'auto' }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-    steps:
-      - id: plan
-        shell: bash
-        env:
-          TIER: ${{ inputs.tier || 'auto' }}
-          REF: ${{ github.ref }}
-        run: |
-          if [ "${TIER}" = auto ]; then
-            case "${REF}" in refs/heads/feature/*) TIER=quick ;; *) TIER=full ;; esac
-          fi
-          # One job per line. quick: true marks the jobs of the quick tier. They are the ones
-          # that caught most branch failures: MSVC warnings (C4127, C4702, C4389, C4200), GCC
-          # flow warnings that only fire optimized (-Wmaybe-uninitialized, -Wformat-truncation),
-          # and the build without the GPU and window modules.
-          #
-          # Windows x64: clang-cl is the primary compiler, MSVC must stay green (SPEC §2, §3.2).
-          # With a compiler launcher set, Debug and Dev use /Z7 (cmake/DeBuildTypes.cmake), so
-          # sccache caches cl Debug builds too. Linux x64: Clang primary, GCC for portability;
-          # GCC Dev is optimized with asserts on, so its flow-based warnings fire there and not in
-          # Debug (DENG-356). macOS arm64: Apple Clang. Headless server builds: DE_HEADLESS=ON
-          # (SPEC §4.2). Shipping (DE_SHIPPING: packed assets, no cooker, no dev:/) runs on each OS in
-          # the full tier only; before these jobs, Shipping-only test failures surfaced only in the
-          # sprint exit checks (DENG-389).
-          jobs=$(cat <<'EOF'
-          { "name": "windows clang-cl Debug", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-debug" }
-          { "name": "windows clang-cl Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-release" }
-          { "name": "windows msvc Debug", "os": "windows-2022", "compiler": "msvc", "preset": "windows-msvc-debug", "quick": true }
-          { "name": "windows msvc Release", "os": "windows-2022", "compiler": "msvc", "preset": "windows-msvc-release" }
-          { "name": "linux clang Debug", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-debug" }
-          { "name": "linux clang Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-release" }
-          { "name": "linux gcc Debug", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-debug" }
-          { "name": "linux gcc Dev", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-dev", "quick": true }
-          { "name": "linux gcc Release", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-release" }
-          { "name": "macos apple-clang Debug", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-debug" }
-          { "name": "macos apple-clang Release", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-release" }
-          { "name": "windows clang-cl Shipping", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-shipping" }
-          { "name": "linux clang Shipping", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-shipping" }
-          { "name": "macos apple-clang Shipping", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-shipping" }
-          { "name": "headless linux Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-headless-release", "quick": true }
-          { "name": "headless windows Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-headless-release" }
-          EOF
-          )
-          if [ "${TIER}" = quick ]; then
-            matrix=$(jq -cs '{include: [.[] | select(.quick)]}' <<<"${jobs}")
-          else
-            matrix=$(jq -cs '{include: .}' <<<"${jobs}")
-          fi
-          echo "tier: ${TIER}"
-          jq . <<<"${matrix}"
-          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
-
-  build:
-    name: ${{ matrix.name }}
-    needs: plan
+  caster:
+    name: DENG-644 off-camera caster (${{ matrix.backend }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
-      PRESET: ${{ matrix.preset }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/setup-dengine
-        with:
-          compiler: ${{ matrix.compiler }}
-          cache-key: ${{ matrix.preset }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
-
-      - name: Configure
+    timeout-minutes: 30
+    defaults:
+      run:
         shell: bash
-        run: |
-          cmake --preset "${PRESET}"
-          cat "build/${PRESET}/de_config_dump.txt"
-
-      - name: Build
-        shell: bash
-        # All presets use Ninja. Report independent compile errors together so portability
-        # fixes do not require a separate CI round trip for each failing translation unit.
-        run: cmake --build --preset "${PRESET}" -- -k 0
-
-      - name: Test
-        shell: bash
-        # DENG-418: a de_test executable that crashes prints its stack on stderr and, on Windows,
-        # writes a minidump into DE_TEST_DUMP_DIR (uploaded below with the test logs).
-        env:
-          DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
-        run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: logs-${{ matrix.preset }}
-          path: |
-            build/${{ matrix.preset }}/Testing/Temporary/
-            build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
-            build/${{ matrix.preset }}/de_config_dump.txt
-            build/${{ matrix.preset }}/test-dumps/
-          if-no-files-found: ignore
-          retention-days: 7
-
-  # Golden images (DENG-329, SPEC §19.2/§19.3; docs/testing/golden.md): de-golden renders the
-  # scenes of tests/golden/ on each backend and compares them with the references in
-  # tests/golden/refs/<backend>/<tier>/ by LDR-FLIP. Hosted runners have no GPU, so Vulkan runs on
-  # Mesa lavapipe and D3D12 on the vendored WARP (DENG-405). The macOS runner's paravirtual Metal
-  # device is below the Base tier, so its scenes report SKIPPED (exit 77); this job only shows that
-  # the harness builds and starts there (self-hosted Apple GPUs come in S20). Each job also runs
-  # its backend's example_hello_* CTests (DENG-327), so the Vulkan path runs on CI.
-  #
-  # Full tier only (docs/ci.md): the same condition as the `plan` job's tier choice. On a failure,
-  # the artifact golden-<backend> holds the images, and for a failed comparison the reference and
-  # the FLIP heat map, laid out as tests/golden/refs/ (a reviewed image can be copied there).
-  golden:
-    name: golden ${{ matrix.name }}
-    if: inputs.tier == 'full' || (inputs.tier != 'quick' && !startsWith(github.ref, 'refs/heads/feature/'))
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux vulkan (lavapipe)
-            os: ubuntu-24.04
-            compiler: clang
-            preset: linux-clang-debug
-            backend: vulkan
-            # DENG-105: render_loaders.* uploads, hands over and reads back assets on lavapipe.
-            # DENG-414: render_graph_gpu.* runs compiled render graphs (transfers, aliasing, a
-            # transient buffer reused across frames) with validation + synchronization validation.
-            # DENG-410: gpu_backends.* (adapter list, command-list reserve, bindless.slang's
-            # read-only and byte-address buffer accessors) on lavapipe with validation.
-            # DENG-177: render_gpu_scene.* uploads the GPU scene tables (growth copies, copy runs,
-            # the scatter.slang kernels) and reads them back every frame for 1000 frames.
-            # DENG-229: render_vis.* runs GPU instance culling (instance_cull.slang, atomics on
-            # bindless byte buffers) and compares it with the CPU reference instance by instance.
-            # DENG-231: render_meshlet_cull.* runs GPU meshlet culling (meshlet_cull.slang, wave
-            # intrinsics) and compares it with the CPU reference and the triangles.
-            # DENG-233: render_occlusion.* builds HZBs (bit-exact against the CPU) and runs
-            # two-phase occlusion culling on an occluder wall, cuts and new instances.
-            # DENG-234: render_raster_mesh.* draws the vis buffer with mesh shaders
-            # (VK_EXT_mesh_shader) and compares the IDs with a CPU rasterizer.
-            # DENG-426: gpu_vulkan.* (test_gpu_vulkan: the Vulkan backend's device, resource,
-            # command, sync, swapchain and pipeline tests) with validation + sync validation.
-            # DENG-236: render_raster_alpha.* draws alpha-tested (mask) meshlets on both paths.
-            # DENG-235: render_raster_compute.* runs the compute-expansion raster (the vis-buffer
-            # path where mesh shaders are missing) and compares the vis ID and depth with a CPU
-            # rasterizer; moltenvk_smoke is its small Vulkan scene.
-            # DENG-237: render_classify.* bins synthetic vis buffers into per-model tile lists
-            # and compares them with a CPU reference.
-            # DENG-239: render_picking.* reads entities and triangles back from the vis buffer.
-            # DENG-238: render_resolve.* resolves planes through the whole vis frame (positions,
-            # UVs, LOD against a forward pass, motion, feedback) against CPU references.
-            # DENG-298: render_brdf.* runs the BSDF modules (shaders/brdf/) and the S13 Standard
-            # BSDF on the GPU against a C reference; render_resolve.* also a game material model.
-            # DENG-299: render_standard.* runs the Standard model (energy LUT, furnaces, sampling).
-            # DENG-303: render_clustered_lights.* lights planes through the clustered lists and
-            # the deferred pass against CPU references (units, cones, ranges, area lights,
-            # emissive proxies, the split, the cluster sets).
-            # DENG-300: render_standard_layers.* the Standard layers (clearcoat, sheen, anisotropy,
-            # thin film).
-            # DENG-304: render_ibl_exposure.* image-based lighting (furnaces, rotation, the strip
-            # copy of a BC6H cube), EV100 exposure and the output pass.
-            # DENG-301: render_transmission.* transmission, volume, diffuse transmission, Unlit.
-            # DENG-305: render_forward_transparent.* the forward transparent pass (routing, the
-            # back-to-front blend against a CPU reference, forward vs deferred, the scene colour).
-            # DENG-306: render_sss.* separable Burley SSS (unflagged pixels, depth edges, the
-            # world-space radius).
-            targets: de_golden test_flip hello_triangle test_render_loaders test_render_graph_gpu test_gpu_backends test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_alpha test_gpu_vulkan test_render_raster_compute test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_ibl_layers test_render_transmission test_render_forward_transparent test_render_sss test_render_reflection_probes test_render_ssr test_render_irradiance_ssgi test_render_csm test_render_shadow_atlas test_render_pcss_contact test_render_gtao test_render_ss_refraction
-            tests: '^(flip\.|golden\.|example_hello_.*_vulkan$|render_loaders\.|render_graph_gpu\.|gpu_backends\.|render_gpu_scene\.|render_vis\.|render_meshlet_cull\.|render_occlusion\.|render_raster_mesh\.|gpu_vulkan\.|render_raster_compute\.|render_raster_alpha\.|render_classify\.|render_picking\.|render_resolve\.|render_brdf\.|render_standard\.|render_clustered_lights\.|render_standard_layers\.|render_ibl_exposure\.|render_ibl_layers\.|render_transmission\.|render_forward_transparent\.|render_sss\.|render_reflection_probes\.|render_ssr\.|render_irradiance_ssgi\.|render_csm\.|render_shadow_atlas\.|render_pcss_contact\.|render_gtao\.|render_ss_refraction\.)'
-            require: --backend vulkan
-          - name: windows d3d12 (WARP)
-            os: windows-2022
-            compiler: clang-cl
-            preset: windows-clang-cl-debug
-            backend: d3d12
-            # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
-            # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
-            # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_ibl_layers test_render_transmission test_render_forward_transparent test_render_sss test_render_reflection_probes test_render_ssr test_render_irradiance_ssgi test_render_csm test_render_shadow_atlas test_render_pcss_contact test_render_gtao test_render_ss_refraction
-            tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
-            verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf|render_standard|render_clustered_lights|render_standard_layers|render_ibl_exposure|render_ibl_layers|render_transmission|render_forward_transparent|render_sss|render_reflection_probes|render_ssr|render_irradiance_ssgi|render_csm|render_shadow_atlas|render_pcss_contact|render_gtao|render_ss_refraction)\..*_d3d12$'
-            require: --backend d3d12 --warp
-          - name: macos metal (hosted, skips below Base)
-            os: macos-14
-            compiler: apple-clang
-            preset: macos-debug
-            backend: metal
-            targets: de_golden test_flip hello_triangle
-            tests: '^(flip\.|golden\.|example_hello_.*_metal$)'
-            require: ""
-    env:
-      PRESET: ${{ matrix.preset }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/setup-dengine
-        with:
-          compiler: ${{ matrix.compiler }}
-          cache-key: ${{ matrix.preset }} # restores the build job's compiler cache
-          cache-save: "false"
-
-      - name: Mesa lavapipe (Vulkan on the CPU)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers \
-            libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
-          ls /usr/share/vulkan/icd.d
-          # lvp_icd.json (Mesa 25) or lvp_icd.<arch>.json (older Mesa).
-          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
-          if [ -z "${icd}" ]; then
-            echo "::error::no lavapipe ICD in /usr/share/vulkan/icd.d"
-            exit 1
-          fi
-          # Only lavapipe: VK_DRIVER_FILES (loader 1.3.234+) and the older VK_ICD_FILENAMES.
-          echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
-          echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
-          VK_DRIVER_FILES="${icd}" VK_ICD_FILENAMES="${icd}" vulkaninfo --summary
-
-      - name: Configure
-        shell: bash
-        run: |
-          cmake --preset "${PRESET}"
-          cat "build/${PRESET}/de_config_dump.txt"
-
-      - name: Build
-        shell: bash
-        env:
-          TARGETS: ${{ matrix.targets }}
-        run: |
-          read -r -a targets <<<"${TARGETS}"
-          cmake --build --preset "${PRESET}" --target "${targets[@]}"
-
-      - name: Golden and example tests
-        shell: bash
-        env:
-          TESTS: ${{ matrix.tests }}
-        run: ctest --preset "${PRESET}" --output-on-failure -R "${TESTS}"
-
-      - name: D3D12 render tests (verbose)
-        if: matrix.verbose_tests != ''
-        shell: bash
-        env:
-          TESTS: ${{ matrix.verbose_tests }}
-        run: ctest --preset "${PRESET}" -V -R "${TESTS}"
-
-      # A backend that skips every scene would leave the step above green; the Linux and Windows
-      # jobs exist to run their backend, so one scene must render there (exit 77 fails this step).
-      - name: Require a real ${{ matrix.backend }} run
-        if: matrix.require != ''
-        shell: bash
-        env:
-          REQUIRE: ${{ matrix.require }}
-        run: |
-          read -r -a args <<<"${REQUIRE}"
-          exe="build/${PRESET}/tests/golden/de-golden"
-          [ -f "${exe}.exe" ] && exe="${exe}.exe"
-          "${exe}" "${args[@]}" --scene rhi_clear
-
-      - name: Upload golden images and test logs
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: golden-${{ matrix.backend }}
-          path: |
-            build/${{ matrix.preset }}/golden/
-            build/${{ matrix.preset }}/Testing/Temporary/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  base-tier-capture:
-    name: Base-tier capture ${{ matrix.backend }}
-    if: inputs.base_tier_capture
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -334,74 +28,62 @@ jobs:
             preset: windows-clang-cl-debug
             backend: d3d12
     env:
-      PRESET: ${{ matrix.preset }}
+      DENG644_PRESET: ${{ matrix.preset }}
+      DENG644_BACKEND: ${{ matrix.backend }}
+      PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - name: Verify candidate source identity
+        run: |
+          git diff --exit-code f056b4c7cee600203b29b9fbf1571d9dc9cc60ca HEAD -- . ':(exclude).github/workflows/ci.yml'
+          git rev-parse HEAD > source-identity.txt
+          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:src HEAD:src >> source-identity.txt
+          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:tests HEAD:tests >> source-identity.txt
+          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:shaders HEAD:shaders >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: ${{ matrix.compiler }}
-          cache-key: ${{ matrix.preset }} # restores the build job's compiler cache
+          cache-key: ${{ matrix.preset }}
           cache-save: "false"
-
-      - name: Mesa lavapipe (Vulkan on the CPU)
-        if: runner.os == 'Linux'
-        shell: bash
+      - name: Install existing Vulkan CI runtime
+        if: matrix.backend == 'vulkan'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends \
-            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers \
-            libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
-          ls /usr/share/vulkan/icd.d
-          # lvp_icd.json (Mesa 25) or lvp_icd.<arch>.json (older Mesa).
-          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
-          if [ -z "${icd}" ]; then
-            echo "::error::no lavapipe ICD in /usr/share/vulkan/icd.d"
-            exit 1
-          fi
-          # Only lavapipe: VK_DRIVER_FILES (loader 1.3.234+) and the older VK_ICD_FILENAMES.
-          echo "VK_DRIVER_FILES=${icd}" >> "${GITHUB_ENV}"
-          echo "VK_ICD_FILENAMES=${icd}" >> "${GITHUB_ENV}"
-          VK_DRIVER_FILES="${icd}" VK_ICD_FILENAMES="${icd}" vulkaninfo --summary
-
-      - name: Configure
-        shell: bash
+          sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers libasound2-dev libpipewire-0.3-dev libspa-0.2-dev
+          deng644_icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
+          test -n "$deng644_icd"
+          echo "VK_DRIVER_FILES=$deng644_icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$deng644_icd" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$deng644_icd" VK_ICD_FILENAMES="$deng644_icd" vulkaninfo --summary
+      - name: Configure unchanged Debug preset
+        run: cmake --preset "$DENG644_PRESET"
+      - name: Build affected executable
+        run: cmake --build --preset "$DENG644_PRESET" --target test_render_shadow_atlas --parallel 4
+      - name: Require actual native off-camera regression
         run: |
-          cmake --preset "${PRESET}"
-          cat "build/${PRESET}/de_config_dump.txt"
-
-      - name: Build
-        id: capture_build
-        shell: bash
-        env:
-          TARGETS: de_golden
-        run: |
-          read -r -a targets <<<"${TARGETS}"
-          cmake --build --preset "${PRESET}" --target "${targets[@]}"
-
-      - name: Capture seven scenes and byte-identical repeats
-        shell: bash
-        env:
-          BACKEND: ${{ matrix.backend }}
-        run: |
-          exe="build/${PRESET}/tests/golden/de-golden"
-          [ -f "${exe}.exe" ] && exe="${exe}.exe"
-          python3 tests/golden/base_tier/capture.py --exe "${exe}" --backend "${BACKEND}" --out "build/${PRESET}/base-tier-capture"
-      # DENG-466: finish the original crash matrix even if a capture comparison fails.
-      # CTest retains the original 300-second limits and image thresholds for every case.
-      - name: Qualify original WARP renderer crashes
-        if: ${{ !cancelled() && matrix.backend == 'd3d12' && steps.capture_build.outcome == 'success' }}
-        shell: bash
-        run: |
-          ctest --test-dir "build/${PRESET}" --output-on-failure --no-tests=error \
-            -R '^golden\.d3d12\.(views_split_screen|materials_(gallery_ibl|gallery_lights|furnace|khr_samples|layers_furnace)|shadows_(csm|local|pcss_contact)_(medium|high|off)|ao_gtao_(medium|high|off)|reflections_ssr_probes_(medium|high|off)|gi_probes_ssgi_(medium|high|off)|refraction_ss_(medium|high|off)|rt_(shadows_pole|restir_many_lights|ao_corner|reflections_mirror_rough|gi_cornell|refraction_glass|foliage_shadow)_base)$'
-      - name: Preserve captures, repeats and raw logs
+          python3 - <<'PY'
+          import os,pathlib,subprocess,sys
+          preset=os.environ['DENG644_PRESET']
+          backend=os.environ['DENG644_BACKEND']
+          root=pathlib.Path('build')/preset
+          out=root/'deng644-offcamera'
+          out.mkdir(parents=True,exist_ok=True)
+          exe=root/'tests/unit/render'/('test_render_shadow_atlas.exe' if os.name=='nt' else 'test_render_shadow_atlas')
+          env=dict(os.environ,DE_SHADOW_EVIDENCE_DIR=str(out))
+          with (out/'native.log').open('wb') as log:
+              result=subprocess.run([str(exe),'--filter=shadow_atlas.atlas_off_camera_caster_'+backend],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=300)
+          print((out/'native.log').read_text(errors='replace'))
+          sys.exit(result.returncode)
+          PY
+      - name: Preserve raw native evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: base-tier-${{ matrix.backend }}
+          name: deng644-offcamera-${{ matrix.backend }}
           path: |
-            build/${{ matrix.preset }}/base-tier-capture/
-            build/${{ matrix.preset }}/golden/
-            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
-          if-no-files-found: warn
+            source-identity.txt
+            build/${{ matrix.preset }}/deng644-offcamera/
+            build/${{ matrix.preset }}/de_config_dump.txt
+          if-no-files-found: error
