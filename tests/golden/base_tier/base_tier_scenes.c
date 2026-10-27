@@ -383,6 +383,18 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         return;
     }
     while (m.r->frame_index < 96u) {
+        /* DENG604_MOTION_BEGIN */
+        if (getenv("DE_DENG604_MOTION")) {
+            de_builtin_component_ids builtin = de_builtin_components(m.world);
+            DeTransform *pose = de_entity_get(m.world, cam, builtin.transform);
+            if (!pose) {
+                de_golden_fail(ctx, "DENG604 moving camera has no transform");
+                mg_close(&m);
+                return;
+            }
+            pose->position.x = 0.35 * sin(((double)m.r->frame_index - 48.0) * 0.11);
+        }
+        /* DENG604_MOTION_END */
         if (!mg_frame(&m)) {
             mg_close(&m);
             return;

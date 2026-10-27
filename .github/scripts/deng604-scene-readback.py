@@ -4,6 +4,10 @@ import hashlib,json,os,re,shutil,subprocess,sys,xml.etree.ElementTree as E
 root=Path.cwd();build=root/'build/windows-clang-cl-debug';out=build/'deng604-scene-readback';out.mkdir(exist_ok=True)
 files=['src/render/passes/ssr/ssr.c','src/render/passes/ssr/scene_history.c','src/render/passes/ssr/ssr_internal.h','tests/golden/base_tier/base_tier_scenes.c']
 saved={f:(root/f).read_bytes() for f in files};original={f:subprocess.check_output(['git','show','a5e3a548:'+f]) for f in files}
+fixture='tests/golden/base_tier/base_tier_scenes.c'
+fixture_source=saved[fixture].decode()
+hook='        /* DENG604_MOTION_BEGIN */'+fixture_source.split('        /* DENG604_MOTION_BEGIN */')[1].split('        /* DENG604_MOTION_END */')[0]+'        /* DENG604_MOTION_END */\n'
+original[fixture]=original[fixture].replace(b'    while (m.r->frame_index < 96u) {\n',b'    while (m.r->frame_index < 96u) {\n'+hook.encode())
 shaders=['shaders/ssr/ssr_common.slang','shaders/ssr/ssr_resolve.slang'];saved_shaders={f:(root/f).read_bytes() for f in shaders};candidate={f:subprocess.check_output(['git','show','a5e3a548:'+f]) for f in shaders}
 summary={'product':'a5e3a548','base':'81743f90','stages':{}};failed=False
 try:
@@ -13,7 +17,7 @@ try:
   for f,data in shader.items():(root/f).write_bytes(data)
   with (d/'build.log').open('w') as log:r=subprocess.run(['cmake','--build','--preset','windows-clang-cl-debug','--target','de_golden','--parallel','4'],stdout=log,stderr=subprocess.STDOUT)
   assert r.returncode==0,label+' build failed'
-  env=dict(os.environ);env.pop('DE_DENG604_READBACK',None)
+  env=dict(os.environ);env['DE_DENG604_MOTION']='1';env.pop('DE_DENG604_READBACK',None)
   if instrumented:env['DE_DENG604_READBACK']=str(d.resolve())
   name='golden.d3d12.reflections_ssr_probes_medium'
   with (d/'ctest.log').open('w') as log:r=subprocess.run(['ctest','--test-dir',str(build),'-R','^'+re.escape(name)+'$','--parallel','1','--no-tests=error','--output-on-failure','--test-output-size-passed','1048576','--test-output-size-failed','1048576','--output-junit',str(d/'results.xml')],env=env,stdout=log,stderr=subprocess.STDOUT)
@@ -32,7 +36,7 @@ try:
   matches=(out/(label+'-control')/'image.png').read_bytes()==(out/(label+'-capture')/'image.png').read_bytes()
   summary[label+'_capture_image_exact']=matches;failed|=not matches
  assert summary['candidate_capture_image_exact'], 'query instrumentation changed rendered image'
- subprocess.run([sys.executable,'.github/scripts/deng604-scene-hit-oracle.py',str(out/'candidate-capture'),str(out/'hit-oracle.json')],check=True)
+ subprocess.run([sys.executable,'.github/scripts/deng604-scene-hit-oracle.py',str(out/'candidate-capture'),str(out/'hit-oracle.json')],check=True,env=dict(os.environ,DE_DENG604_MOTION='1'))
  (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
 finally:
  for f,data in saved.items():(root/f).write_bytes(data)

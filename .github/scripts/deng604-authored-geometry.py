@@ -1,6 +1,6 @@
 """Offline authored-box geometry check; independent of SSR history-plane reconstruction."""
 from pathlib import Path
-import collections,json,math,struct,sys,tomllib
+import collections,json,math,struct,sys,tomllib,os
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);repo=Path.cwd()
 meta=json.loads((root/'metadata.json').read_text());w,h=meta['width'],meta['height'];tw,th=meta['trace_width'],meta['trace_height'];raw=(root/'scene.bin').read_bytes();assert len(raw)==432
 floats=struct.unpack('<96f',raw[:384]);inv=floats[48:64];origin=[floats[84+i]+floats[88+i] for i in range(3)];eye=[floats[80+i]+origin[i] for i in range(3)]
@@ -13,7 +13,9 @@ for e in scene['entity']:
   material=tomllib.loads((repo/'tests/golden/base_tier/assets/materials'/(mat.split('/')[-1]+'.mat.toml')).read_text());assert not any('normal' in k for k in material)
  boxes.append({'id':e['id'],'lo':[pos[i]-scale[i]*.5 for i in range(3)],'hi':[pos[i]+scale[i]*.5 for i in range(3)]})
 assert len(boxes)==7
-camera=next(e for e in scene['entity'] if 'DeCamera' in e)['DeTransform']['position'];assert max(abs(a-b) for a,b in zip(camera,eye))<1e-4,(camera,eye)
+camera=next(e for e in scene['entity'] if 'DeCamera' in e)['DeTransform']['position']
+if os.getenv('DE_DENG604_MOTION'):camera[0]=.35*math.sin((95-48)*.11)
+assert max(abs(a-b) for a,b in zip(camera,eye))<1e-4,(camera,eye)
 def texture(name,index,fmt,width,height):
  data=(root/(name+'.bin')).read_bytes();pitch=meta['row_pitches'][index];stride=struct.calcsize('<'+fmt);assert len(data)==pitch*height
  return [struct.unpack_from('<'+fmt,data,y*pitch+x*stride) for y in range(height) for x in range(width)]
@@ -46,6 +48,34 @@ for y in range(h):
   elif z>0:missing_geometry+=1
   elif hit:missing_raster+=1
 static_matrices=list(floats[32:48])==list(floats[64:80]);max_motion=max(abs(v) for p in motion for v in p);surface_depth_mismatch=sum(a[0]!=b[0] for a,b in zip(depth,surface))
+previous_faces=faces
+previous_depth_errors=[]
+if os.getenv('DE_DENG604_MOTION'):
+ assert not static_matrices and max_motion>1e-5 and surface_depth_mismatch>100
+ def inverse4(matrix):
+  rows=[[float(matrix[r*4+c]) for c in range(4)]+[float(r==c) for c in range(4)] for r in range(4)]
+  for k in range(4):
+   pivot=max(range(k,4),key=lambda i:abs(rows[i][k]));assert abs(rows[pivot][k])>1e-12
+   rows[k],rows[pivot]=rows[pivot],rows[k];scale=rows[k][k];rows[k]=[v/scale for v in rows[k]]
+   for i in range(4):
+    if i!=k:
+     scale=rows[i][k];rows[i]=[a-scale*b for a,b in zip(rows[i],rows[k])]
+  return [v for row in rows for v in row[4:]]
+ current_inv,current_eye=inv,eye
+ inv=inverse4(floats[64:80]);eye=[inv[r*4+2]/inv[14] for r in range(3)]
+ expected_previous=[.35*math.sin((94-48)*.11),camera[1],camera[2]]
+ assert max(abs(a-b) for a,b in zip(eye,expected_previous))<1e-3,(eye,expected_previous)
+ previous_faces=[];previous_missing_geometry=previous_missing_raster=0
+ for y in range(h):
+  for x in range(w):
+   hit=intersection((x+.5)/w,(y+.5)/h);previous_faces.append(hit[1] if hit else None);z=surface[y*w+x][0]
+   if z>0 and hit:
+    point=unproject((x+.5)/w,(y+.5)/h,z);previous_depth_errors.append(max(abs(a-b) for a,b in zip(point,hit[2])))
+   elif z>0:previous_missing_geometry+=1
+   elif hit:previous_missing_raster+=1
+ assert previous_missing_geometry==previous_missing_raster==0
+ assert max(previous_depth_errors)<.003
+ inv,eye=current_inv,current_eye
 counts=collections.Counter();coverage=collections.Counter();examples=[]
 # Use current authored visible faces as history geometry only for an actually stationary camera.
 if static_matrices and max_motion<=1e-5 and surface_depth_mismatch==0:

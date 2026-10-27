@@ -1,4 +1,4 @@
-name: DENG-604 scene-hit oracle (CI only)
+name: DENG-604 moving-scene hit oracle (CI only)
 on:
   workflow_dispatch:
     inputs:
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: deng604-scene-hit-oracle-${{ matrix.config }}
+          name: deng604-moving-scene-oracle-${{ matrix.config }}
           path: |
             source-identity.txt
             build/${{ matrix.preset }}/de_config_dump.txt
