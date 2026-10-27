@@ -206,6 +206,13 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
         SurfaceData s = M.resolve_gbuffer(M.load_params(m), v, lod);
         s.model = pc.model;
         DeGbSurface g = de_surface_to_gb(s);
+        // A one-pixel face cannot establish two depth tangents. Preserve geometric
+        // provenance only for an identical final normal, never infer it from a material
+        // lacking a normal map: interpolated/smoothed normals can differ as well.
+        if ((s.features & DE_MATERIAL_FEATURE_UNLIT) == 0u && all(isfinite(s.normal)) &&
+            dot(s.normal, s.normal) > 1e-8 &&
+            (all(s.normal == v.geometric_normal) || all(s.normal == -v.geometric_normal)))
+            g.flags |= DE_GB_FLAG_GEOMETRIC_NORMAL;
         de_rwtex2d(pc.gb0)[p] = gb0_encode(g);
         if ((s.features & DE_MATERIAL_FEATURE_UNLIT) == 0u)
             de_rwtex2d(pc.gb1)[p] = gb1_encode(g);

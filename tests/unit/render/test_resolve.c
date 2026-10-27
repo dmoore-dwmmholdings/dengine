@@ -1145,8 +1145,8 @@ static void check_positions_uvs(rsx *f) {
         EXPECT_EQ(g0 >> 24, 255u);   /* AO 1 */
         EXPECT_LE((g2 & 255u), 65u); /* metallic 0.25 */
         EXPECT_GE((g2 & 255u), 62u);
-        EXPECT_EQ((g2 >> 8) & 255u, 0u);  /* Standard */
-        EXPECT_EQ((g2 >> 16) & 255u, 0u); /* no flags */
+        EXPECT_EQ((g2 >> 8) & 255u, 0u);                                   /* Standard */
+        EXPECT_EQ((g2 >> 16) & (255u ^ DE__GB_FLAG_GEOMETRIC_NORMAL), 0u); /* no material flags */
         ++checked;
         if (checked > 500u)
             break;
@@ -1455,7 +1455,7 @@ static void game_model_dispatch(rsx *f, de_gpu_backend b) {
         if (t.slot == 1u) {
             ++flat;
             EXPECT_EQ((g2 >> 8) & 255u, 5u);
-            EXPECT_EQ((g2 >> 16) & 255u, 0u); /* no flags */
+            EXPECT_EQ((g2 >> 16) & 255u, (u32)DE__GB_FLAG_GEOMETRIC_NORMAL);
             for (u32 c = 0; c < 3u; ++c) {
                 const f32 lin =
                     de__gb_srgb_decode((f32)((r->gb[0][i] >> (8u * c)) & 255u) / 255.0f);
