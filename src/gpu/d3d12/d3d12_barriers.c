@@ -281,7 +281,9 @@ u32 de__d3d12_legacy_state_of(de_gpu_queue q, u32 access, bool texture) {
         if (access & k_bits[i].bit)
             state |= texture ? k_bits[i].tex_state : k_bits[i].buf_state;
     if (q == DE_QUEUE_COPY)
-        state &= COPY_STATES;
+        /* Copy-queue texture subresources remain COMMON (DENG-651). Keep buffer state
+         * transitions independent; direct/compute texture consumers still transition. */
+        state = texture ? DE__D3D12_STATE_COMMON : state & COPY_STATES;
     else if (q == DE_QUEUE_COMPUTE)
         state &= ~(u32)COMPUTE_STATES_DROPPED;
     return state;
