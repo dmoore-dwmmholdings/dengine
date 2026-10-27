@@ -945,9 +945,6 @@ static void first_uav_rt_readback(pipe_fx *f, de_gpu_queue producer) {
     need_pipelines(f, f->d, "compute-first RT readback");
     de_gpu_device *d = f->d;
     const bool cross_queue = producer == DE_QUEUE_COMPUTE;
-    const bool enhanced = de__d3d12_enhanced_barriers_active(d);
-    printf("DENG-618 producer=%s barriers=%s\n", cross_queue ? "compute" : "graphics",
-           enhanced ? "enhanced" : "legacy");
     de_gpu_pipeline compute = compute_pipeline(d, "uav_rt_init.slang", "first UAV RT fill");
     const de_pipe_test_shader vs = shader("uav_rt_init.slang", "vs_main"),
                               ps = shader("uav_rt_init.slang", "ps_main");
@@ -995,6 +992,10 @@ static void first_uav_rt_readback(pipe_fx *f, de_gpu_queue producer) {
         if (phase && cross_queue)
             first = to_compute; /* Acquire initialized contents: must not discard. */
         de_gpu_cmd_barriers(c, &first, 1);
+        /* Selection is lazy: only the first barrier establishes the device's actual mode. */
+        const bool enhanced = de__d3d12_enhanced_barriers_active(d);
+        printf("DENG-618 producer=%s barriers=%s\n", cross_queue ? "compute" : "graphics",
+               enhanced ? "enhanced" : "legacy");
         de_gpu_cmd_set_pipeline(c, compute);
         const u32 params[4] = {de_gpu_texture_bindless(d, t.color, 0, true), SIZE, SIZE, phase};
         de_gpu_cmd_push_constants(c, params, sizeof params);
