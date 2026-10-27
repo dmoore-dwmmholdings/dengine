@@ -444,6 +444,21 @@ static receiver_bounds receiver_union(const de__rw_instances *w, u32 mask) {
     }
     return result;
 }
+/* Match light_cull.slang: area influence includes the emitter's containing radius.
+ * Invalid dimensions cannot justify rejection; retaining is conservative. */
+static f32 receiver_sphere_range(const DeLight *l, f32 range) {
+    f32 extent = 0;
+    if (l->kind == DE_LIGHT_RECT) {
+        if (!isfinite(l->area_size.x) || !isfinite(l->area_size.y))
+            return INFINITY;
+        extent = hypotf(.5f * l->area_size.x, .5f * l->area_size.y);
+    } else if (l->kind == DE_LIGHT_DISK) {
+        if (!isfinite(l->area_size.x) || l->area_size.x < 0)
+            return INFINITY;
+        extent = .5f * l->area_size.x;
+    }
+    return range + extent;
+}
 static bool receiver_touches(de_aabb b, de_vec3 p, f32 range) {
     const f32 lo[3] = {b.min.x, b.min.y, b.min.z}, hi[3] = {b.max.x, b.max.y, b.max.z},
               c[3] = {p.x, p.y, p.z};
@@ -494,6 +509,7 @@ u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_vi
             --insert;
         if (insert >= limit)
             continue;
+        const f32 receiver_range = receiver_sphere_range(l, range);
         /* No receiver walk when the view has no eligible local shadow lights. */
         if (!receivers_checked) {
             receivers = receiver_union(&frame->instances, mask);
@@ -502,8 +518,8 @@ u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_vi
             if (!unknown_receivers && !receivers.any)
                 return 0;
         }
-        if (!unknown_receivers && (!receiver_touches(receivers.union_bounds, p, range) ||
-                                   !receiver_influence(&frame->instances, mask, p, range)))
+        if (!unknown_receivers && (!receiver_touches(receivers.union_bounds, p, receiver_range) ||
+                                   !receiver_influence(&frame->instances, mask, p, receiver_range)))
             continue;
         if (count < limit)
             ++count;
