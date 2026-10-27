@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 /* Explicit opt-in: never create a native device during ordinary CPU UI tests. */
 #include "ui_test_util.h"
 #include "ui/widgets/advanced_internal.h"
