@@ -40,6 +40,84 @@ static de_gpu_barrier buf_barrier(u32 before, u32 after) {
     return b;
 }
 
+/* output.basic is compute-written before a UI render pass loads it. A first UAV write
+ * must initialize an RT-capable placed texture's compression metadata too (DENG-618). */
+TEST(d3d12, first_uav_write_initializes_render_target_metadata) {
+    const de__d3d12_texture_shape rt = {.mips = 4, .layers = 3, .planes = 1, .rt_ds = true};
+    const de_gpu_queue queues[] = {DE_QUEUE_GRAPHICS, DE_QUEUE_COMPUTE};
+    for (u32 i = 0; i < 2; ++i) {
+        de_gpu_barrier b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+        b.mip_first = 1;
+        b.mip_count = 2;
+        b.layer_first = 1;
+        b.layer_count = 2;
+        de__d3d12_enhanced e;
+        ASSERT_TRUE(de__d3d12_translate_enhanced(queues[i], &b, &rt, &e));
+        EXPECT_EQ(e.layout_before, LAYOUT(UNDEFINED));
+        EXPECT_EQ(e.layout_after, LAYOUT(UNORDERED_ACCESS));
+        EXPECT_TRUE(e.discard);
+        EXPECT_EQ(e.mip_first, 1u);
+        EXPECT_EQ(e.mip_count, 2u);
+        EXPECT_EQ(e.layer_first, 1u);
+        EXPECT_EQ(e.layer_count, 2u);
+        EXPECT_EQ(e.plane_count, 1u);
+
+        /* Preserve initialized data and resources handed over by another queue. */
+        b.before = DE_ACCESS_SHADER_WRITE;
+        ASSERT_TRUE(de__d3d12_translate_enhanced(queues[i], &b, &rt, &e));
+        EXPECT_FALSE(e.discard);
+        b = tex_barrier(DE_ACCESS_COPY_DST, DE_ACCESS_SHADER_WRITE);
+        b.src_queue = DE_QUEUE_COPY;
+        b.dst_queue = queues[i];
+        ASSERT_TRUE(de__d3d12_translate_enhanced(queues[i], &b, &rt, &e));
+        EXPECT_EQ(e.layout_before, LAYOUT(COMMON));
+        EXPECT_FALSE(e.discard);
+    }
+    const de__d3d12_texture_shape plain = {.mips = 1, .layers = 1, .planes = 1};
+    de__d3d12_enhanced e;
+    de_gpu_barrier b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+    ASSERT_TRUE(de__d3d12_translate_enhanced(DE_QUEUE_GRAPHICS, &b, &plain, &e));
+    EXPECT_FALSE(e.discard);
+    b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_SHADER_READ);
+    ASSERT_TRUE(de__d3d12_translate_enhanced(DE_QUEUE_GRAPHICS, &b, &rt, &e));
+    EXPECT_FALSE(e.discard);
+}
+
+TEST(d3d12, legacy_first_uav_initialization_access) {
+    const de__d3d12_texture_shape rt = {.mips = 4, .layers = 3, .planes = 1, .rt_ds = true};
+    const de__d3d12_texture_shape plain = {.mips = 1, .layers = 1, .planes = 1};
+    de_gpu_barrier b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_SHADER_WRITE);
+    /* The two command-list types have different legal DiscardResource states. */
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt),
+              (u32)DE_ACCESS_RENDER_TARGET);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_COMPUTE, &b, &rt), (u32)DE_ACCESS_SHADER_WRITE);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_COPY, &b, &rt), (u32)DE_ACCESS_NONE);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &plain), (u32)DE_ACCESS_NONE);
+    b.before = DE_ACCESS_SHADER_WRITE;
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt), (u32)DE_ACCESS_NONE);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_COMPUTE, &b, &rt), (u32)DE_ACCESS_NONE);
+    b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_SHADER_READ);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt), (u32)DE_ACCESS_NONE);
+    b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_RENDER_TARGET);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt),
+              (u32)DE_ACCESS_RENDER_TARGET);
+    u32 before, after;
+    EXPECT_EQ(de__d3d12_translate_legacy(DE_QUEUE_GRAPHICS, &b, true, STATE(RENDER_TARGET), &before,
+                                         &after),
+              DE__D3D12_LEGACY_NOTHING);
+    /* Explicit NONE can reactivate aliased metadata without changing a tracked RT state. */
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt),
+              (u32)DE_ACCESS_RENDER_TARGET);
+    b = tex_barrier(DE_ACCESS_NONE, DE_ACCESS_DEPTH_WRITE);
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt), (u32)DE_ACCESS_DEPTH_WRITE);
+    b = tex_barrier(DE_ACCESS_COPY_DST, DE_ACCESS_SHADER_WRITE);
+    b.src_queue = DE_QUEUE_COPY;
+    b.dst_queue = DE_QUEUE_GRAPHICS;
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt), (u32)DE_ACCESS_NONE);
+    b.before = DE_ACCESS_NONE;
+    EXPECT_EQ(de__d3d12_legacy_init_access(DE_QUEUE_GRAPHICS, &b, &rt), (u32)DE_ACCESS_NONE);
+}
+
 TEST(d3d12, barrier_translation_table) {
     const de_gpu_queue G = DE_QUEUE_GRAPHICS, C = DE_QUEUE_COMPUTE, X = DE_QUEUE_COPY;
     de__d3d12_access_info a;

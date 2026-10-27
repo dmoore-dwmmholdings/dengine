@@ -263,11 +263,13 @@ bool de__d3d12_translate_enhanced(de_gpu_queue cmd_queue, const de_gpu_barrier *
         de__d3d12_barrier_range(b, tex, &out->mip_first, &out->mip_count, &out->layer_first,
                                 &out->layer_count);
         out->plane_count = tex->planes ? tex->planes : 1u;
-        /* First use of a render target or depth buffer: its contents (and compression metadata)
-         * are initialized by the barrier. A copy queue never sees UNDEFINED. */
+        /* First use of an RT/DS-capable texture initializes compression metadata, including
+         * compute-written render targets later loaded by UI (DENG-618). A copy queue never
+         * sees UNDEFINED. Initialized textures and queue handoffs retain their contents. */
         out->discard = tex->rt_ds && src.layout == DE__D3D12_LAYOUT_UNDEFINED &&
                        (dst.layout == DE__D3D12_LAYOUT_RENDER_TARGET ||
-                        dst.layout == DE__D3D12_LAYOUT_DEPTH_STENCIL_WRITE);
+                        dst.layout == DE__D3D12_LAYOUT_DEPTH_STENCIL_WRITE ||
+                        dst.layout == DE__D3D12_LAYOUT_UNORDERED_ACCESS);
     }
     return true;
 }
@@ -305,6 +307,23 @@ de__d3d12_legacy_op de__d3d12_translate_legacy(de_gpu_queue cmd_queue, const de_
         return DE__D3D12_LEGACY_TRANSITION;
     return *after == DE__D3D12_STATE_UNORDERED_ACCESS ? DE__D3D12_LEGACY_UAV
                                                       : DE__D3D12_LEGACY_NOTHING;
+}
+
+u32 de__d3d12_legacy_init_access(de_gpu_queue cmd_queue, const de_gpu_barrier *b,
+                                 const de__d3d12_texture_shape *tex) {
+    if (!tex->rt_ds || de__d3d12_access_normalize(b->before) != DE_ACCESS_NONE ||
+        de__d3d12_transfer_of(cmd_queue, b) != DE__D3D12_TRANSFER_NONE)
+        return DE_ACCESS_NONE;
+    const u32 after = de__d3d12_access_normalize(b->after);
+    if (cmd_queue == DE_QUEUE_GRAPHICS) {
+        if (after == DE_ACCESS_DEPTH_WRITE)
+            return DE_ACCESS_DEPTH_WRITE;
+        if (after == DE_ACCESS_RENDER_TARGET || after == DE_ACCESS_SHADER_WRITE)
+            return DE_ACCESS_RENDER_TARGET;
+    } else if (cmd_queue == DE_QUEUE_COMPUTE && after == DE_ACCESS_SHADER_WRITE) {
+        return DE_ACCESS_SHADER_WRITE;
+    }
+    return DE_ACCESS_NONE;
 }
 
 u32 de__d3d12_subresource(u32 mip, u32 layer, u32 plane, u32 mips, u32 layers) {
@@ -514,8 +533,8 @@ static void push_uav(d3d12_cmd *dc, legacy_batch *l, ID3D12Resource *res) {
     r->UAV.pResource = res;
 }
 
-/* Legacy DiscardResource after a first-use transition of a render target or depth buffer: the
- * transition has put the subresources in RENDER_TARGET / DEPTH_WRITE, which the call needs. */
+/* Legacy DiscardResource after a first-use transition. Direct lists require RENDER_TARGET /
+ * DEPTH_WRITE for RT/DS textures; compute lists require UAV (DENG-618). */
 typedef struct legacy_discard {
     ID3D12Resource *res;
     u32 mip_first, mip_count, layer_first, layer_count;
@@ -551,7 +570,6 @@ static void legacy_texture(de_gpu_cmd *c, d3d12_cmd *dc, legacy_batch *l, const 
     bool uniform = whole;
     for (u32 i = 1; uniform && i < total; ++i)
         uniform = states[i] == states[0];
-    bool discarded = false;
     if (uniform) {
         u32 before, after;
         de__d3d12_legacy_op op =
@@ -562,7 +580,6 @@ static void legacy_texture(de_gpu_cmd *c, d3d12_cmd *dc, legacy_batch *l, const 
             push_uav(dc, l, dt->res);
         for (u32 i = 0; i < total; ++i)
             states[i] = after;
-        discarded = op == DE__D3D12_LEGACY_TRANSITION;
     } else {
         bool uav = false;
         for (u32 layer = lf; layer < lf + lc; ++layer) {
@@ -576,7 +593,6 @@ static void legacy_texture(de_gpu_cmd *c, d3d12_cmd *dc, legacy_batch *l, const 
                         push_transition(dc, l, dt->res,
                                         de__d3d12_subresource(mip, layer, p, s.mips, s.layers),
                                         before, after);
-                    discarded = true;
                 } else if (op == DE__D3D12_LEGACY_UAV) {
                     uav = true;
                 }
@@ -586,11 +602,9 @@ static void legacy_texture(de_gpu_cmd *c, d3d12_cmd *dc, legacy_batch *l, const 
         if (uav)
             push_uav(dc, l, dt->res);
     }
-    /* NONE before = contents discarded: initialize a render target or depth buffer. */
-    const u32 next = de__d3d12_legacy_state_of(c->queue, b->after, true);
-    if (discarded && s.rt_ds && de__d3d12_access_normalize(b->before) == DE_ACCESS_NONE &&
-        de__d3d12_transfer_of(c->queue, b) == DE__D3D12_TRANSFER_NONE &&
-        (next == DE__D3D12_STATE_RENDER_TARGET || next == DE__D3D12_STATE_DEPTH_WRITE)) {
+    /* NONE can activate aliased contents even if the tracked state did not change. */
+    const u32 init = de__d3d12_legacy_init_access(c->queue, b, &s);
+    if (init != DE_ACCESS_NONE && init == de__d3d12_access_normalize(b->after)) {
         discard->res = dt->res;
         discard->mip_first = mf;
         discard->mip_count = mc;
@@ -735,8 +749,35 @@ static void record_legacy(de_gpu_cmd *c, d3d12_cmd *dc, const de_gpu_barrier *b,
             de__gpu_texture *rec = de__gpu_get_texture(d, x->texture);
             if (!rec)
                 continue;
+            /* Complete pending initialization before another transition of that resource. */
+            ID3D12Resource *res = DE__GPU_PAYLOAD(d3d12_texture, rec)->res;
+            for (u32 j = 0; j < ndiscard; ++j) {
+                if (discards[j].res == res) {
+                    flush_legacy(dc, &l);
+                    legacy_discards(dc, discards, ndiscard);
+                    ndiscard = 0;
+                    break;
+                }
+            }
             legacy_discard dis;
             dis.res = NULL;
+            const de__d3d12_texture_shape shape = de__d3d12_texture_shape_of(rec);
+            const u32 init = de__d3d12_legacy_init_access(c->queue, x, &shape);
+            if (init != DE_ACCESS_NONE && init != de__d3d12_access_normalize(x->after)) {
+                /* Direct-list UAV-first RT: transition -> discard -> transition to UAV.
+                 * Discarding after the UAV dispatch would lose the compute-produced image. */
+                flush_legacy(dc, &l);
+                legacy_discards(dc, discards, ndiscard);
+                ndiscard = 0;
+                de_gpu_barrier first = *x;
+                first.after = init;
+                legacy_texture(c, dc, &l, &first, rec, &dis);
+                flush_legacy(dc, &l);
+                if (!dis.res)
+                    continue;
+                legacy_discards(dc, &dis, 1);
+                dis.res = NULL;
+            }
             legacy_texture(c, dc, &l, x, rec, &dis);
             if (dis.res) {
                 if (ndiscard == sizeof discards / sizeof discards[0]) {

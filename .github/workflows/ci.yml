@@ -119,6 +119,7 @@ jobs:
           cat "build/${PRESET}/de_config_dump.txt"
 
       - name: Build
+        id: build
         shell: bash
         # All presets use Ninja. Report independent compile errors together so portability
         # fixes do not require a separate CI round trip for each failing translation unit.
@@ -132,6 +133,18 @@ jobs:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
+      - name: D3D12 compute-first numeric readback (Release)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.preset == 'windows-clang-cl-release' }}
+        shell: bash
+        run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}" --numeric-only
+
+      - name: D3D12 compute-first UI initialization (Release)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.preset == 'windows-clang-cl-release' }}
+        shell: bash
+        run: |
+          cmake --build --preset "${PRESET}" --target de_golden
+          python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}"
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -142,6 +155,8 @@ jobs:
             build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ matrix.preset }}/de_config_dump.txt
             build/${{ matrix.preset }}/test-dumps/
+            build/${{ matrix.preset }}/d3d12-init-*
+            build/${{ matrix.preset }}/golden-init-*/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -222,7 +237,7 @@ jobs:
             # DENG-423: the D3D12 render tests, verbose, so the log shows the runtime and WARP
             # each one ran on (render_d3d12_test.c prints them; on the vendored WARP it requires
             # the Agility runtime and the Base tier).
-            targets: de_golden test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_ibl_layers test_render_transmission test_render_forward_transparent test_render_sss test_render_reflection_probes test_render_ssr test_render_irradiance_ssgi test_render_csm test_render_shadow_atlas test_render_pcss_contact test_render_gtao test_render_ss_refraction
+            targets: de_golden test_gpu_d3d12 test_flip hello_triangle hello_triangle_warp test_render_loaders test_render_graph_gpu test_render_gpu_scene test_render_vis test_render_meshlet_cull test_render_occlusion test_render_raster_mesh test_render_raster_compute test_render_raster_alpha test_render_classify test_render_picking test_render_resolve test_render_brdf test_render_standard test_render_clustered_lights test_render_standard_layers test_render_ibl_exposure test_render_ibl_layers test_render_transmission test_render_forward_transparent test_render_sss test_render_reflection_probes test_render_ssr test_render_irradiance_ssgi test_render_csm test_render_shadow_atlas test_render_pcss_contact test_render_gtao test_render_ss_refraction
             tests: '^(flip\.|golden\.|example_hello_.*_d3d12$)'
             verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf|render_standard|render_clustered_lights|render_standard_layers|render_ibl_exposure|render_ibl_layers|render_transmission|render_forward_transparent|render_sss|render_reflection_probes|render_ssr|render_irradiance_ssgi|render_csm|render_shadow_atlas|render_pcss_contact|render_gtao|render_ss_refraction)\..*_d3d12$'
             require: --backend d3d12 --warp
@@ -272,6 +287,7 @@ jobs:
           cat "build/${PRESET}/de_config_dump.txt"
 
       - name: Build
+        id: golden_build
         shell: bash
         env:
           TARGETS: ${{ matrix.targets }}
@@ -291,6 +307,16 @@ jobs:
         env:
           TESTS: ${{ matrix.verbose_tests }}
         run: ctest --preset "${PRESET}" -V -R "${TESTS}"
+
+      - name: D3D12 compute-first numeric readback (Debug)
+        if: ${{ !cancelled() && steps.golden_build.outcome == 'success' && matrix.backend == 'd3d12' }}
+        shell: bash
+        run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}" --numeric-only
+
+      - name: D3D12 compute-first UI initialization (Debug)
+        if: ${{ !cancelled() && steps.golden_build.outcome == 'success' && matrix.backend == 'd3d12' }}
+        shell: bash
+        run: python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}"
 
       # A backend that skips every scene would leave the step above green; the Linux and Windows
       # jobs exist to run their backend, so one scene must render there (exit 77 fails this step).
@@ -313,6 +339,8 @@ jobs:
           path: |
             build/${{ matrix.preset }}/golden/
             build/${{ matrix.preset }}/Testing/Temporary/
+            build/${{ matrix.preset }}/d3d12-init-*
+            build/${{ matrix.preset }}/golden-init-*/
           if-no-files-found: ignore
           retention-days: 14
 
