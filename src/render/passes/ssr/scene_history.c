@@ -1,9 +1,13 @@
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "render/passes/ssr/ssr_internal.h"
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
 #include "render/passes/vis/gbuffer.h"
 #include "render/world/render_world.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define HISTORY_ACCESS (DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE)
 typedef struct history_view {
@@ -80,7 +84,8 @@ static bool reserve(de__scene_history *h, history_view *v, const de__view_frame 
     de_gpu_texture_desc desc = {.width = vf->width,
                                 .height = vf->height,
                                 .format = DE_FMT_RGBA16_FLOAT,
-                                .usage = DE_USAGE_STORAGE,
+                                .usage = DE_USAGE_STORAGE |
+                                         (getenv("DE_DENG604_READBACK") ? DE_USAGE_COPY_SRC : 0),
                                 .name = "history.color"};
     for (u32 i = 0; i < 2; ++i) {
         color[i] = de_gpu_texture_create(h->renderer->dev, &desc);

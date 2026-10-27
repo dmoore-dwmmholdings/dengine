@@ -18,6 +18,7 @@
 
 #include "render/components_internal.h"
 #include "render/renderer_internal.h"
+#include "render/passes/ssr/ssr_internal.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/views_internal.h"
 #include "render/probes/probes_internal.h"
@@ -388,6 +389,12 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         }
     }
     if (!mg_read(&m)) {
+        mg_close(&m);
+        return;
+    }
+    if (getenv("DE_DENG604_READBACK") &&
+        !de__ssr_diagnostic_dump(m.r->ssr, m.view, getenv("DE_DENG604_READBACK"))) {
+        de_golden_fail(ctx, "DENG604 final-frame SSR readback failed");
         mg_close(&m);
         return;
     }

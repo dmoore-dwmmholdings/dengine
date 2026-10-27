@@ -47,5 +47,7 @@ typedef struct de__ssr_info {
     de_gpu_texture temporal, moments; /**< Owned persistent history; borrowed until resize. */
 } de__ssr_info;
 bool de__ssr_view_info(const de__ssr *s, de_view view, de__ssr_info *out);
+/* CI-only; removed from product. */
+bool de__ssr_diagnostic_dump(de__ssr *s, de_view view, const char *dir);
 DE_EXTERN_C_END
 #endif
