@@ -276,6 +276,50 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         mg_close(&m);
         return;
     }
+    const char *probe = getenv("DE_DENG660_PROBE");
+    if (probe != NULL) {
+        const char *setting = NULL;
+        const char *value = "0";
+        if (strcmp(probe, "compute") == 0) {
+            setting = "r.raster_path";
+            value = "compute";
+        } else if (strcmp(probe, "triangles_off") == 0)
+            setting = "r.raster_tri_cull";
+        else if (strcmp(probe, "occlusion_off") == 0)
+            setting = "r.occlusion";
+        else if (strcmp(probe, "instances_off") == 0) {
+            setting = "r.cull_disable";
+            value = "1";
+        } else if (strcmp(probe, "cones_off") == 0)
+            setting = "r.cull_meshlet_cone";
+        else if (strcmp(probe, "default") != 0) {
+            de_golden_fail(ctx, "unknown DENG660 probe %s", probe);
+            mg_close(&m);
+            return;
+        }
+        if (setting != NULL) {
+            const de_cvar cv = de_cvar_find(setting);
+            if (!DE_HANDLE_VALID(cv) || de_cvar_set(cv, value) != DE_OK ||
+                (strcmp(probe, "compute") == 0
+                     ? de__vis_raster_choose(vis) != DE__VIS_RASTER_COMPUTE
+                     : de_cvar_bool(cv) != (strcmp(probe, "instances_off") == 0))) {
+                de_golden_fail(ctx, "DENG660 setting did not take effect: %s", setting);
+                mg_close(&m);
+                return;
+            }
+        }
+        const de__vis_raster_path raster = de__vis_raster_choose(vis);
+        printf(
+            "DENG660_PROBE mode=%s raster=%s occlusion=%d triangles=%d cones=%d instances_off=%d\n",
+            probe,
+            raster == DE__VIS_RASTER_MESH      ? "mesh"
+            : raster == DE__VIS_RASTER_COMPUTE ? "compute"
+                                               : "none",
+            de_cvar_bool(de_cvar_find("r.occlusion")),
+            de_cvar_bool(de_cvar_find("r.raster_tri_cull")),
+            de_cvar_bool(de_cvar_find("r.cull_meshlet_cone")),
+            de_cvar_bool(de_cvar_find("r.cull_disable")));
+    }
     m.saved_refraction = de_cvar_bool(de_cvar_find("r.refraction"));
     m.refraction_changed = true;
     mg_cvar("r.refraction", o->quality == DE_QUALITY_OFF ? "0" : "1");
