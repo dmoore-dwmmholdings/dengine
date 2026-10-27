@@ -38,7 +38,7 @@ static void admission_setup(admission *f) {
                                  .intensity = i ? 1e9f : 10,
                                  .range = 8,
                                  .cast_shadows = true};
-        f->transforms[i] = de_affine_from_trs((de_vec3){i ? 1000 : 0, 0, 4}, de_quat_identity(),
+        f->transforms[i] = de_affine_from_trs((de_vec3){i ? 1000.f : 0.f, 0, 4}, de_quat_identity(),
                                               (de_vec3){1, 1, 1});
     }
     f->world.lights = (de__rw_lights){
