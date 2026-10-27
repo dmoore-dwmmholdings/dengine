@@ -44,12 +44,13 @@ static void popup_native_compare(const u8 *before, const u8 *after, const char *
             bool changed = false;
             for (u32 c = 0; c < 3; ++c)
                 changed |= abs((int)before[at + c] - (int)after[at + c]) > 2;
-            if (y < 120 || y >= 392)
+            /* A 1m-high panel in a 2m orthographic view spans exactly rows [128,384). */
+            if (y < 128 || y >= 384)
                 outside_changed += changed;
             else
                 inside_changed += changed;
         }
-    printf("%s: inside changed=%u, outside panel guard changed=%u\n", name, inside_changed,
+    printf("%s: inside changed=%u, outside panel changed=%u\n", name, inside_changed,
            outside_changed);
     if (strcmp(name, "baseline") != 0)
         EXPECT_TRUE(inside_changed > 1000);
