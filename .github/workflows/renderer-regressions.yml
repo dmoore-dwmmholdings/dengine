@@ -29,10 +29,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - name: Verify only reviewed references and CI wrapper differ
+      - name: Verify held candidate and CI wrapper provenance
         shell: bash
         run: |
-          git diff --exit-code b82abe648e73b9641a4ac85407fe34a996a2a742 HEAD -- . ':(exclude)shaders/ssr/ssr_common.slang' ':(exclude)shaders/ssr/ssr_resolve.slang' ':(exclude)tests/unit/render/test_ssr.c' ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-shading-normal-acceptance.py'
+          git diff --exit-code b82abe648e73b9641a4ac85407fe34a996a2a742 HEAD -- . ':(exclude)shaders/ssr/ssr_common.slang' ':(exclude)shaders/ssr/ssr_resolve.slang' ':(exclude)tests/unit/render/test_ssr.c' ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-shading-normal.py'
           git rev-parse HEAD > source-identity.txt
           git ls-tree HEAD tests/golden/refs/d3d12/base tests/golden/scenes.toml >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
@@ -47,7 +47,7 @@ jobs:
           cmake --build --preset "${PRESET}" --target test_render_ssr --parallel 4
       - name: Compare original sampler control and held candidate
         shell: bash
-        run: python .github/scripts/deng604-shading-normal-acceptance.py
+        run: python .github/scripts/deng604-shading-normal.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
