@@ -326,6 +326,16 @@ uint light_position_key(float3 position)
     return h ^ (h >> 16);
 }
 
+// Compare the raw lanes without dynamically indexed temporary arrays in every invocation.
+int light_compare4(uint4 x, uint4 y)
+{
+    if (x.x != y.x) return x.x < y.x ? -1 : 1;
+    if (x.y != y.y) return x.y < y.y ? -1 : 1;
+    if (x.z != y.z) return x.z < y.z ? -1 : 1;
+    if (x.w != y.w) return x.w < y.w ? -1 : 1;
+    return 0;
+}
+
 // A total order independent of compacted indices. Resolve spatial-key ties by the complete
 // shading/culling payload, including signed zero. Equal records are interchangeable.
 bool light_less(CullParams pc, uint a, uint b)
@@ -335,15 +345,17 @@ bool light_less(CullParams pc, uint a, uint b)
     uint xkey = light_position_key(x.position.xyz), ykey = light_position_key(y.position.xyz);
     if (xkey != ykey)
         return xkey < ykey;
-    uint4 xx[6] = {asuint(x.position), asuint(x.direction), asuint(x.color),
-                   asuint(x.shape), asuint(x.axis), asuint(x.bound)};
-    uint4 yy[6] = {asuint(y.position), asuint(y.direction), asuint(y.color),
-                   asuint(y.shape), asuint(y.axis), asuint(y.bound)};
-    for (uint field = 0; field < 6; ++field)
-        for (uint lane = 0; lane < 4; ++lane)
-            if (xx[field][lane] != yy[field][lane])
-                return xx[field][lane] < yy[field][lane];
-    return false;
+    int order = light_compare4(asuint(x.position), asuint(y.position));
+    if (order != 0) return order < 0;
+    order = light_compare4(asuint(x.direction), asuint(y.direction));
+    if (order != 0) return order < 0;
+    order = light_compare4(asuint(x.color), asuint(y.color));
+    if (order != 0) return order < 0;
+    order = light_compare4(asuint(x.shape), asuint(y.shape));
+    if (order != 0) return order < 0;
+    order = light_compare4(asuint(x.axis), asuint(y.axis));
+    if (order != 0) return order < 0;
+    return light_compare4(asuint(x.bound), asuint(y.bound)) < 0;
 }
 
 // Each cluster owns a disjoint list range. Use that range as a bounded max heap, without
