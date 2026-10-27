@@ -4,6 +4,7 @@
 #endif
 
 #include "golden.h"
+#include "cooked_assets.h"
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
@@ -30,20 +31,13 @@
 
 #define MG_LOAD_WAIT_NS  (300ull * 1000000000ull) /* the first run cooks every asset */
 #define MG_FRAME_WAIT_NS (120ull * 1000000000ull)
-/* The runtime cooks sources on load (SOURCE mode) only with the importers: Debug and Dev builds
- * with the tools (DE_HAS_COOKER). */
-#if defined(DE_HAS_COOKER) && DE_HAS_COOKER
-#define MG_RUNTIME_COOKS 1
-#else
-#define MG_RUNTIME_COOKS 0
-#endif
 
 typedef struct mg_opts {
     const char *scene; /**< the scene asset */
     de_quality quality;
 } mg_opts;
 
-#if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
+#if DE_GOLDEN_COOK
 
 /* The gallery's models (assets.toml): each scene names their meshes. */
 #define MG_MODEL_COUNT 4u
@@ -64,6 +58,7 @@ typedef struct mg {
     de_view view;
     de_load_handle scene_load;
     de_load_handle model_load[MG_MODEL_COUNT];
+    char asset_pack[256];
     u32 pitch;
     u8 *now, *prev;
     bool saved_refraction, refraction_changed;
@@ -199,6 +194,8 @@ static void mg_close(mg *m) {
      * then the renderer (waits for the GPU), then the world. */
     if (m->assets != NULL)
         de_asset_system_destroy(m->assets);
+    if (de_golden_pack_cleanup(m->asset_pack) != DE_OK)
+        de_golden_fail(m->ctx, "cleaning temporary asset pack: %s", mg_err());
     if (m->r != NULL)
         de_renderer_destroy(m->r);
     if (m->world != NULL)
@@ -258,7 +255,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         de_task_system_create(&(de_task_system_desc){.worker_count = 2}, &m.tasks) != DE_OK ||
         de_type_registry_create(NULL, &m.types) != DE_OK ||
         de_world_create(&(de_world_desc){.types = m.types, .tasks = m.tasks}, &m.world) != DE_OK ||
-        de_asset_system_create(&(de_asset_system_desc){.tasks = m.tasks,
+        de_asset_system_create(&(de_asset_system_desc){.mode = DE_GOLDEN_ASSET_MODE,
+                                                       .tasks = m.tasks,
                                                        .io_threads = 1,
                                                        .cache_dir = cache,
                                                        .staging_ring_bytes = 32u << 20,
@@ -330,6 +328,11 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
      * dependencies before it is READY. */
     if (de_asset_manifest_load(m.assets, "basetier:/assets.toml") != DE_OK) {
         de_golden_fail(ctx, "assets.toml: %s", mg_err());
+        mg_close(&m);
+        return;
+    }
+    if (de_golden_pack_assets(m.assets, "basetier:/", m.asset_pack) != DE_OK) {
+        de_golden_fail(ctx, "preparing packed gallery assets: %s", mg_err());
         mg_close(&m);
         return;
     }
@@ -454,12 +457,11 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     mg_close(&m);
 }
 
-#else /* !(DE_GOLDEN_COOK && MG_RUNTIME_COOKS) */
+#else /* !DE_GOLDEN_COOK */
 
 static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     (void)o;
-    de_golden_skip(ctx, "this build's asset system cannot cook sources (Release and Shipping have "
-                        "no importers; DE_HAS_COOKER): the gallery's assets are cooked on load");
+    de_golden_skip(ctx, "gallery test-side asset preparation is unavailable (DE_GOLDEN_COOK)");
 }
 
 #endif

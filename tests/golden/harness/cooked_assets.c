@@ -1,8 +1,10 @@
 #include "cooked_assets.h"
 #include <dengine/de_platform.h>
 #include <stdio.h>
+#include <string.h>
 #if defined(DE_GOLDEN_COOK)
 #include "asset/asset_internal.h"
+#include "asset/slots_internal.h"
 #include "cook/lib/de_cooker.h"
 #include "dpak_writer.h"
 #if defined(_WIN32)
@@ -12,6 +14,28 @@
 #include <unistd.h>
 #define golden_pid getpid
 #endif
+
+static de_result register_cook_types(de_cooker *cooker, de_asset_system *assets) {
+    u32 count = 0;
+    const char *const *names = de_cooker_engine_type_names(&count);
+    for (u32 i = 0; i < count; ++i) {
+        de_asset_type_desc type;
+        if (de_cooker_builtin_importer(names[i], &type)) {
+            /* Scene and glTF-prefab cooking use the runtime's reflected components. */
+            if (strcmp(names[i], "scene") == 0 || strcmp(names[i], "prefab") == 0)
+                type.user = assets;
+        } else {
+            /* Built-in blobs deliberately have no importer: cook their bytes unchanged. */
+            const de_asset_type_desc *runtime =
+                de__asset_type_get(assets, de__asset_type_find(assets, names[i]));
+            if (!runtime)
+                continue;
+            type = *runtime;
+        }
+        DE_TRY(de_cooker_register_type(cooker, &type));
+    }
+    return DE_OK;
+}
 
 static de_result add_cooked(dpak_writer *writer, const de__manifest_asset *asset,
                             const de_cook_result *cooked) {
@@ -54,6 +78,8 @@ de_result de_golden_pack_assets(de_asset_system *assets, const char *asset_root,
     dpak_writer *writer = NULL;
     de_result r = de_cooker_create(NULL, &cooker);
     if (r == DE_OK)
+        r = register_cook_types(cooker, assets);
+    if (r == DE_OK)
         r = dpak_writer_create(&(dpak_writer_desc){.include_names = true, .zstd_level = 1},
                                &writer);
     for (u32 i = 0; r == DE_OK && i < assets->manifest->asset_count; ++i) {
@@ -72,6 +98,8 @@ de_result de_golden_pack_assets(de_asset_system *assets, const char *asset_root,
                                &cooked);
         if (r == DE_OK)
             r = add_cooked(writer, asset, &cooked);
+        if (r != DE_OK)
+            r = DE_FAIL_WRAP(r, "preparing golden asset %s", asset->id);
         de_cook_result_free(&cooked);
     }
     if (r == DE_OK)
