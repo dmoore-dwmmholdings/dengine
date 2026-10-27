@@ -170,3 +170,31 @@ TEST_F(shadow_admission, union_matches_independent_point_distance_oracle, admiss
                   expected ? 1 : 0);
     }
 }
+
+TEST_F(shadow_admission, rectangle_receiver_uses_emitter_extent, admission) {
+    f->world.lights.count = 1;
+    f->lights[0].kind = DE_LIGHT_RECT;
+    f->lights[0].range = 10;
+    f->lights[0].area_size = (de_vec2){4, 4};
+    f->bounds[0] = (de_aabb){{12, 0, 4}, {12, 0, 4}};
+    EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
+    f->bounds[0] = (de_aabb){{13, 0, 4}, {13, 0, 4}};
+    EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 0);
+}
+TEST_F(shadow_admission, disk_receiver_uses_radius_not_rectangle_diagonal, admission) {
+    f->world.lights.count = 1;
+    f->lights[0].kind = DE_LIGHT_DISK;
+    f->lights[0].range = 10;
+    f->lights[0].area_size = (de_vec2){4, 100}; /* Disk ignores area_size.y. */
+    f->bounds[0] = (de_aabb){{12, 0, 4}, {12, 0, 4}};
+    EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
+    f->bounds[0] = (de_aabb){{12.1f, 0, 4}, {12.1f, 0, 4}};
+    EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 0);
+}
+TEST_F(shadow_admission, unknown_area_extent_retains_candidate, admission) {
+    f->world.lights.count = 1;
+    f->lights[0].kind = DE_LIGHT_RECT;
+    f->lights[0].area_size = (de_vec2){NAN, 4};
+    f->bounds[0] = (de_aabb){{100, 0, 4}, {100, 0, 4}};
+    EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
+}
