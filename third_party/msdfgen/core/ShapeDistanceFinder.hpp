@@ -15,14 +15,15 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
     typename ContourCombiner::EdgeSelectorType::EdgeCache *edgeCache = shapeEdgeCache.empty() ? NULL : &shapeEdgeCache[0];
 #endif
 
-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
+    for (std::size_t contourIndex = 0; contourIndex < shape.contours.size(); ++contourIndex) {
+        const Contour *contour = shape.contours.data()+contourIndex;
         if (!contour->edges.empty()) {
-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
+            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contourIndex));
 
-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
+            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? contour->edges.data()[contour->edges.size()-2] : contour->edges.data()[0];
             const EdgeSegment *curEdge = contour->edges.back();
-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
-                const EdgeSegment *nextEdge = *edge;
+            for (std::size_t edgeIndex = 0; edgeIndex < contour->edges.size(); ++edgeIndex) {
+                const EdgeSegment *nextEdge = contour->edges.data()[edgeIndex];
                 edgeSelector.addEdge(*edgeCache++, prevEdge, curEdge, nextEdge);
                 prevEdge = curEdge;
                 curEdge = nextEdge;
@@ -38,14 +39,15 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
     ContourCombiner contourCombiner(shape);
     contourCombiner.reset(origin);
 
-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
+    for (std::size_t contourIndex = 0; contourIndex < shape.contours.size(); ++contourIndex) {
+        const Contour *contour = shape.contours.data()+contourIndex;
         if (!contour->edges.empty()) {
-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
+            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contourIndex));
 
-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
+            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? contour->edges.data()[contour->edges.size()-2] : contour->edges.data()[0];
             const EdgeSegment *curEdge = contour->edges.back();
-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
-                const EdgeSegment *nextEdge = *edge;
+            for (std::size_t edgeIndex = 0; edgeIndex < contour->edges.size(); ++edgeIndex) {
+                const EdgeSegment *nextEdge = contour->edges.data()[edgeIndex];
                 typename ContourCombiner::EdgeSelectorType::EdgeCache dummy;
                 edgeSelector.addEdge(dummy, prevEdge, curEdge, nextEdge);
                 prevEdge = curEdge;
