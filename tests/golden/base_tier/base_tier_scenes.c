@@ -283,6 +283,9 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         if (strcmp(probe, "compute") == 0) {
             setting = "r.raster_path";
             value = "compute";
+        } else if (strcmp(probe, "ambient") == 0) {
+            setting = "r.ambient_fallback";
+            value = "1";
         } else if (strcmp(probe, "triangles_off") == 0)
             setting = "r.raster_tri_cull";
         else if (strcmp(probe, "occlusion_off") == 0)
@@ -302,6 +305,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
             if (!DE_HANDLE_VALID(cv) || de_cvar_set(cv, value) != DE_OK ||
                 (strcmp(probe, "compute") == 0
                      ? de__vis_raster_choose(vis) != DE__VIS_RASTER_COMPUTE
+                 : strcmp(probe, "ambient") == 0
+                     ? fabs(de_cvar_float(cv) - 1.) > 1e-12
                      : de_cvar_bool(cv) != (strcmp(probe, "instances_off") == 0))) {
                 de_golden_fail(ctx, "DENG660 setting did not take effect: %s", setting);
                 mg_close(&m);
@@ -309,16 +314,17 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
             }
         }
         const de__vis_raster_path raster = de__vis_raster_choose(vis);
-        printf(
-            "DENG660_PROBE mode=%s raster=%s occlusion=%d triangles=%d cones=%d instances_off=%d\n",
-            probe,
-            raster == DE__VIS_RASTER_MESH      ? "mesh"
-            : raster == DE__VIS_RASTER_COMPUTE ? "compute"
-                                               : "none",
-            de_cvar_bool(de_cvar_find("r.occlusion")),
-            de_cvar_bool(de_cvar_find("r.raster_tri_cull")),
-            de_cvar_bool(de_cvar_find("r.cull_meshlet_cone")),
-            de_cvar_bool(de_cvar_find("r.cull_disable")));
+        printf("DENG660_PROBE mode=%s raster=%s occlusion=%d triangles=%d cones=%d "
+               "instances_off=%d ambient=%g\n",
+               probe,
+               raster == DE__VIS_RASTER_MESH      ? "mesh"
+               : raster == DE__VIS_RASTER_COMPUTE ? "compute"
+                                                  : "none",
+               de_cvar_bool(de_cvar_find("r.occlusion")),
+               de_cvar_bool(de_cvar_find("r.raster_tri_cull")),
+               de_cvar_bool(de_cvar_find("r.cull_meshlet_cone")),
+               de_cvar_bool(de_cvar_find("r.cull_disable")),
+               de_cvar_float(de_cvar_find("r.ambient_fallback")));
     }
     m.saved_refraction = de_cvar_bool(de_cvar_find("r.refraction"));
     m.refraction_changed = true;
