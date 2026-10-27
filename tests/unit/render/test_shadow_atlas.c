@@ -1467,6 +1467,88 @@ ADMISSION_TEST(metal, DE_GPU_METAL)
 ADMISSION_TEST(vulkan, DE_GPU_VULKAN)
 ADMISSION_TEST(d3d12, DE_GPU_D3D12)
 
+/* The orthographic camera sees x[-1,1]; the entire caster is outside that frustum.
+ * Light(3,0,8) -> caster(1.5,0,4) -> visible floor(0,0,0) is an analytic shadow ray. */
+static void off_camera_caster(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    f->width = f->height = 64;
+    f->ortho_height = 2;
+    f->eye = (de_vec3){0, 0, 10};
+    f->target = (de_vec3){0};
+    ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
+    f->shadow_quality = DE_QUALITY_LOW;
+    const u32 mat = material_add(.2158605f, .6f, 0, .5f);
+    const u32 floor = lx_mesh_plane(f, 1, 1, 2), caster = lx_mesh_plane(f, 1, 1, .5f);
+    world_set(&f->w, 0, floor, at(0, 0, 0), mat);
+    world_set(&f->w, 1, caster, at(1.5f, 0, 4), mat);
+    EXPECT_TRUE(f->w.f.instances.bounds[1].min.x > .5f * f->ortho_height);
+    const DeLight light = {.kind = DE_LIGHT_SPOT,
+                           .color = {1, 1, 1},
+                           .intensity = 10000,
+                           .range = 20,
+                           .spot_inner = .7f,
+                           .spot_outer = .9f,
+                           .cast_shadows = true};
+    world_light(&f->w, 0, &light, at(3, 0, 8));
+    f32 baseline[16 * 16] = {0};
+    for (u32 phase = 0; phase < 3; ++phase) {
+        if (phase == 1)
+            f->w.f.instances.flags[1] |= DE__RW_INST_CAST_SHADOWS;
+        else
+            f->w.f.instances.flags[1] &= (u8)~DE__RW_INST_CAST_SHADOWS;
+        f->w.touch_all = true;
+        ASSERT_TRUE(lx_frame(f));
+        u32 checked = 0;
+        for (u32 y = 24; y < 40; ++y)
+            for (u32 x = 24; x < 40; ++x) {
+                const u32 index = (y - 24) * 16 + x - 24;
+                const f32 value = f->res.lighting[(y * f->width + x) * 4];
+                EXPECT_TRUE(isfinite(value));
+                if (phase == 0) {
+                    EXPECT_TRUE(value > .01f);
+                    baseline[index] = value;
+                } else if (phase == 1) {
+                    EXPECT_TRUE(value < baseline[index] * .1f);
+                } else {
+                    EXPECT_FLOAT_EQ(value, baseline[index], baseline[index] * .01f + 1e-5f);
+                }
+                ++checked;
+            }
+        EXPECT_EQ(checked, 256);
+        printf("off-camera caster phase%u:256visible floor samples checked\n", phase);
+        const char *dir = getenv("DE_SHADOW_EVIDENCE_DIR");
+        if (dir && *dir) {
+            char path[1024];
+            snprintf(path, sizeof path, "%s/off-camera-phase%u.rgba32f", dir, phase);
+            FILE *file = fopen(path, "wb");
+            ASSERT_TRUE(file != NULL);
+            ASSERT_EQ(fwrite(f->res.lighting, sizeof(f32), (size_t)f->width * f->height * 4, file),
+                      (size_t)f->width * f->height * 4);
+            ASSERT_EQ(fclose(file), 0);
+            snprintf(path, sizeof path, "%s/off-camera-phase%u.ppm", dir, phase);
+            file = fopen(path, "wb");
+            ASSERT_TRUE(file != NULL);
+            fprintf(file, "P6\n%u %u\n255\n", f->width, f->height);
+            for (u32 i = 0; i < f->width * f->height; ++i)
+                for (u32 channel = 0; channel < 3; ++channel) {
+                    const f32 raw = f->res.lighting[i * 4 + channel];
+                    const f32 v = isfinite(raw) ? fmaxf(0, raw) : 0;
+                    const u8 value = (u8)(255.f * (v / (1.f + v)) + .5f);
+                    ASSERT_EQ(fwrite(&value, 1, 1, file), 1);
+                }
+            ASSERT_EQ(fclose(file), 0);
+        }
+    }
+    EXPECT_EQ(validation_errors(f->dev), 0);
+}
+#define OFF_CAMERA_TEST(tag, backend)                                                              \
+    TEST_F(shadow_atlas, atlas_off_camera_caster_##tag, lx) {                                      \
+        off_camera_caster(f, backend);                                                             \
+    }
+OFF_CAMERA_TEST(metal, DE_GPU_METAL)
+OFF_CAMERA_TEST(vulkan, DE_GPU_VULKAN)
+OFF_CAMERA_TEST(d3d12, DE_GPU_D3D12)
+
 #define ATLAS_TESTS(tag, backend)                                                                  \
     TEST_F(shadow_atlas, atlas_dirty_caster_rerender_##tag, lx) {                                  \
         cached_removal(f, backend);                                                                \
