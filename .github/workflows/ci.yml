@@ -1,4 +1,4 @@
-# CI-only DENG-653 CPU-only profiling; do not merge this override.
+# CI-only matched DENG-653 controls; do not merge this override.
 name: CI
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   qualify:
-    name: DENG-653 font ${{ matrix.config }}
+    name: DENG-653 ${{ matrix.kind }} ${{ matrix.config }}
     runs-on: windows-2022
     timeout-minutes: 35
     defaults:
@@ -19,25 +19,46 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - config: Debug
+          - kind: candidate
+            config: Debug
             preset: windows-clang-cl-debug
-          - config: Release
+          - kind: candidate
+            config: Release
             preset: windows-clang-cl-release
+          - kind: candidate
+            config: Shipping
+            preset: windows-clang-cl-shipping
+          - kind: baseline
+            config: Debug
+            preset: windows-clang-cl-debug
+          - kind: baseline
+            config: Release
+            preset: windows-clang-cl-release
+          - kind: baseline
+            config: Shipping
+            preset: windows-clang-cl-shipping
     env:
       PRESET: ${{ matrix.preset }}
-      DE_D3D12_FORCE_LEGACY_BARRIERS: "0"
+      DENG653_KIND: ${{ matrix.kind }}
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 2
-      - name: Verify exact published product and test inputs
+      - name: Verify exact candidate tests and matched runtime source
         run: |
-          source=6e52b95642491963336f20b6df58e0bc54ad306a
-          git fetch --no-tags --depth=1 origin "$source"
-          git diff --exit-code "$source" HEAD -- . ':(exclude).github/workflows/ci.yml'
-          git rev-parse HEAD "$source" > source-identity.txt
-          git ls-tree "$source" tests/golden tests/unit/text src/text >> source-identity.txt
+          candidate=0dce5387130a7e25c5c7be4a9ced7497a32cba75
+          baseline=6e52b95642491963336f20b6df58e0bc54ad306a
+          git fetch --no-tags --depth=1 origin "$candidate" "$baseline"
+          git diff --exit-code "$candidate" HEAD -- . ':(exclude).github/workflows/ci.yml'
+          runtime="$candidate"
+          if [ "$DENG653_KIND" = baseline ]; then
+            runtime="$baseline"
+            git restore --source="$baseline" -- third_party/msdfgen/core/ShapeDistanceFinder.hpp third_party/msdfgen/core/contour-combiners.cpp third_party/vendor.toml
+          fi
+          git diff --exit-code "$runtime" -- src include shaders cmake CMakeLists.txt CMakePresets.json third_party/msdfgen/core third_party/vendor.toml
+          git diff --exit-code "$candidate" -- tests tools
+          git rev-parse HEAD "$candidate" "$runtime" > source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: clang-cl
@@ -48,18 +69,20 @@ jobs:
       - name: Build original CPU font test
         id: build
         run: cmake --build --preset "$PRESET" --target test_text_import --parallel 4
-      - name: Preserve original font test and 60-second deadline
+      - name: Preserve all original font tests and deadlines
         run: |
-          mkdir -p "build/$PRESET/deng653"
+          mkdir -p "build/$PRESET/deng653/dfnt"
+          export DE_FONT_IMPORT_EVIDENCE_DIR="$PWD/build/$PRESET/deng653/dfnt"
           ninja -C "build/$PRESET" -t commands test_text_import > "build/$PRESET/deng653/compiler-commands.txt"
-          ctest --test-dir "build/$PRESET" -R '^text_import.font.latin_metrics_and_determinism$' --no-tests=error --output-on-failure --test-output-size-passed 1048576 --test-output-size-failed 1048576 --output-junit "$PWD/build/$PRESET/deng653/original.xml" > "build/$PRESET/deng653/original.log" 2>&1
+          ctest --test-dir "build/$PRESET" -R '^text_import.font\.' --no-tests=error --output-on-failure --test-output-size-passed 1048576 --test-output-size-failed 1048576 --output-junit "$PWD/build/$PRESET/deng653/original.xml" > "build/$PRESET/deng653/original.log" 2>&1
       - name: Separate bounded diagnostic timing, never an acceptance override
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.config == 'Debug' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $PWD "build/$env:PRESET"
           $out = Join-Path $root 'deng653'
+          $env:DE_FONT_IMPORT_EVIDENCE_DIR = Join-Path $out 'dfnt'
           $info = [System.Diagnostics.ProcessStartInfo]::new()
           $info.FileName = Join-Path $root 'tests/unit/text/test_text_import.exe'
           $info.Arguments = '--filter=font.latin_metrics_and_determinism'
@@ -91,15 +114,29 @@ jobs:
           $watch.Stop()
           $stdout.GetAwaiter().GetResult() | Set-Content (Join-Path $out 'diagnostic-stdout.log')
           $stderr.GetAwaiter().GetResult() | Set-Content (Join-Path $out 'diagnostic-stderr.log')
-          $report = @{ purpose='separate diagnostic; original CTest deadline/results retained'; exitCode=$process.ExitCode; timedOut=$timedOut; wallSeconds=$watch.Elapsed.TotalSeconds; cpuSeconds=$process.TotalProcessorTime.TotalSeconds; samples=$samples; pid=$process.Id; source='6e52b95642491963336f20b6df58e0bc54ad306a' }
+          $report = @{ purpose='separate diagnostic; original CTest deadline/results retained'; exitCode=$process.ExitCode; timedOut=$timedOut; wallSeconds=$watch.Elapsed.TotalSeconds; cpuSeconds=$process.TotalProcessorTime.TotalSeconds; samples=$samples; pid=$process.Id; kind=$env:DENG653_KIND; candidate='0dce5387130a7e25c5c7be4a9ced7497a32cba75' }
           $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'cpu-profile.json')
           $report | Select-Object purpose,exitCode,timedOut,wallSeconds,cpuSeconds | ConvertTo-Json
           if ($timedOut -or $process.ExitCode -ne 0) { exit 1 }
+      - name: Audit exact original case set and retain every failure
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          python3 - <<'PYCODE'
+          import os,pathlib,re,json,sys,xml.etree.ElementTree as E
+          out=pathlib.Path('build')/os.environ['PRESET']/'deng653'
+          expected={'text_import.font.'+n for n in re.findall(r'TEST\(font, (\w+)\)',pathlib.Path('tests/unit/text/test_font_import.c').read_text())}
+          cases=list(E.parse(out/'original.xml').iter('testcase'))
+          assert len(expected)==10 and len(cases)==10 and {c.get('name') for c in cases}==expected
+          result={c.get('name'):{'failed':c.find('failure') is not None or c.find('error') is not None,'skipped':c.find('skipped') is not None or c.get('status')=='notrun','seconds':c.get('time')} for c in cases}
+          (out/'original-summary.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          sys.exit(int(any(c['failed'] or c['skipped'] for c in result.values())))
+          PYCODE
       - name: Retain CPU traces, compile flags and original deadline failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: deng653-font-${{ matrix.config }}
+          name: deng653-${{ matrix.kind }}-${{ matrix.config }}
           path: |
             source-identity.txt
             build/${{ matrix.preset }}/de_config_dump.txt
