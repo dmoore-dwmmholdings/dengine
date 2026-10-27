@@ -405,37 +405,71 @@ static bool earlier(ranked_light a, ranked_light b) {
  * Do not apply this test to casters: off-camera occluders must still render into the map.
  * Unknown bounds/custom forward geometry retain the light. No snapshot writes or allocation.
  * Spot/area lights deliberately use their containing range sphere, never a narrow cone test. */
-static bool receiver_influence(const de__rw_instances *w, u32 mask, de_vec3 p, f32 range) {
-    if (w->count && (!w->entity || !w->layer_mask || !w->flags || !w->bounds))
-        return true;
-    mask = mask ? mask : ~0u;
+typedef struct receiver_bounds {
+    de_aabb union_bounds;
+    bool any, unknown;
+} receiver_bounds;
+static receiver_bounds receiver_union(const de__rw_instances *w, u32 mask) {
+    receiver_bounds result = {0};
+    if (w->count && (!w->entity || !w->layer_mask || !w->flags || !w->bounds)) {
+        result.unknown = true;
+        return result;
+    }
     for (u32 i = 0; i < w->count; ++i) {
         if (!w->entity[i] || !(w->layer_mask[i] & mask))
             continue;
-        if (!(w->flags[i] & DE__RW_INST_HAS_BOUNDS))
-            return true;
-        const de_aabb b = w->bounds[i];
-        const f32 lo[3] = {b.min.x, b.min.y, b.min.z}, hi[3] = {b.max.x, b.max.y, b.max.z},
-                  c[3] = {p.x, p.y, p.z};
-        f64 distance2 = 0;
-        for (u32 axis = 0; axis < 3; ++axis) {
-            if (!isfinite(lo[axis]) || !isfinite(hi[axis]) || lo[axis] > hi[axis])
-                return true;
-            const f64 d = fmax((f64)lo[axis] - c[axis], fmax((f64)c[axis] - hi[axis], 0));
-            distance2 += d * d;
+        if (!(w->flags[i] & DE__RW_INST_HAS_BOUNDS)) {
+            result.unknown = true;
+            return result;
         }
-        /* Inclusive with a small relative guard at authored range/bounds boundaries. */
-        if (distance2 <= (f64)range * range * (1.0 + 1e-6))
-            return true;
+        const de_aabb b = w->bounds[i];
+        if (!isfinite(b.min.x) || !isfinite(b.min.y) || !isfinite(b.min.z) || !isfinite(b.max.x) ||
+            !isfinite(b.max.y) || !isfinite(b.max.z) || b.min.x > b.max.x || b.min.y > b.max.y ||
+            b.min.z > b.max.z) {
+            result.unknown = true;
+            return result;
+        }
+        if (!result.any) {
+            result.union_bounds = b;
+            result.any = true;
+        } else {
+            de_aabb *u = &result.union_bounds;
+            u->min.x = fminf(u->min.x, b.min.x);
+            u->min.y = fminf(u->min.y, b.min.y);
+            u->min.z = fminf(u->min.z, b.min.z);
+            u->max.x = fmaxf(u->max.x, b.max.x);
+            u->max.y = fmaxf(u->max.y, b.max.y);
+            u->max.z = fmaxf(u->max.z, b.max.z);
+        }
     }
+    return result;
+}
+static bool receiver_touches(de_aabb b, de_vec3 p, f32 range) {
+    const f32 lo[3] = {b.min.x, b.min.y, b.min.z}, hi[3] = {b.max.x, b.max.y, b.max.z},
+              c[3] = {p.x, p.y, p.z};
+    f64 distance2 = 0;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 d = fmax((f64)lo[axis] - c[axis], fmax((f64)c[axis] - hi[axis], 0));
+        distance2 += d * d;
+    }
+    /* Inclusive with the same relative guard for broad and exact receiver bounds. */
+    return distance2 <= (f64)range * range * (1.0 + 1e-6);
+}
+static bool receiver_influence(const de__rw_instances *w, u32 mask, de_vec3 p, f32 range) {
+    for (u32 i = 0; i < w->count; ++i)
+        if (w->entity[i] && (w->layer_mask[i] & mask) && receiver_touches(w->bounds[i], p, range))
+            return true;
     return false;
 }
 /* Pure selection is shared by the production atlas and CPU regression fixtures. */
 u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_view *camera,
                             u32 mask, bool unknown_receivers, u32 limit,
                             u32 out[DE__ATLAS_LIGHTS]) {
-    if (!frame || !camera || !out)
+    if (!frame || !camera || !out || !limit)
         return 0;
+    mask = mask ? mask : ~0u;
+    receiver_bounds receivers = {0};
+    bool receivers_checked = unknown_receivers;
     ranked_light selected[DE__ATLAS_LIGHTS];
     u32 count = 0;
     if (limit > DE__ATLAS_LIGHTS)
@@ -460,7 +494,16 @@ u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_vi
             --insert;
         if (insert >= limit)
             continue;
-        if (!unknown_receivers && !receiver_influence(&frame->instances, mask, p, range))
+        /* No receiver walk when the view has no eligible local shadow lights. */
+        if (!receivers_checked) {
+            receivers = receiver_union(&frame->instances, mask);
+            unknown_receivers = receivers.unknown;
+            receivers_checked = true;
+            if (!unknown_receivers && !receivers.any)
+                return 0;
+        }
+        if (!unknown_receivers && (!receiver_touches(receivers.union_bounds, p, range) ||
+                                   !receiver_influence(&frame->instances, mask, p, range)))
             continue;
         if (count < limit)
             ++count;

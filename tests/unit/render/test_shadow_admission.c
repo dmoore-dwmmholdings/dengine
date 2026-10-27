@@ -126,3 +126,47 @@ TEST_F(shadow_admission, tangent_and_spot_cone_are_conservative, admission) {
     f->bounds[0].min.x = NAN;
     EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
 }
+
+TEST_F(shadow_admission, union_gap_still_checks_individual_receivers, admission) {
+    f->masks[1] = 1;
+    f->transforms[1].m[9] = 500; /* Inside the union AABB, outside either actual receiver. */
+    ASSERT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
+    EXPECT_EQ(f->selected[0], 0);
+}
+TEST_F(shadow_admission, unknown_receiver_after_known_bounds_keeps_all_candidates, admission) {
+    f->masks[1] = 1;
+    f->flags[1] = 0;
+    f->transforms[1].m[9] = 2000; /* Must survive even outside known receiver union. */
+    ASSERT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected), 1);
+    EXPECT_EQ(f->selected[0], 1);
+}
+
+TEST_F(shadow_admission, union_matches_independent_point_distance_oracle, admission) {
+    f->world.lights.count = 1;
+    f->lights[0].range = 4;
+    u32 seed = 0x644u;
+    for (u32 trial = 0; trial < 512; ++trial) {
+        de_vec3 points[3];
+        for (u32 j = 0; j < 3; ++j) {
+            f32 *v[3] = {&points[j].x, &points[j].y, &points[j].z};
+            for (u32 axis = 0; axis < 3; ++axis) {
+                seed = seed * 1664525u + 1013904223u;
+                *v[axis] = (f32)((i32)(seed % 33u) - 16);
+            }
+        }
+        f->transforms[0].m[9] = points[2].x;
+        f->transforms[0].m[10] = points[2].y;
+        f->transforms[0].m[11] = points[2].z;
+        bool expected = false;
+        for (u32 j = 0; j < 2; ++j) {
+            f->masks[j] = ((trial >> j) & 1u) ? 1u : 2u;
+            f->bounds[j] = (de_aabb){points[j], points[j]};
+            const f64 dx = (f64)points[j].x - points[2].x;
+            const f64 dy = (f64)points[j].y - points[2].y;
+            const f64 dz = (f64)points[j].z - points[2].z;
+            expected |= f->masks[j] == 1 && dx * dx + dy * dy + dz * dz <= 16.0;
+        }
+        EXPECT_EQ(de__atlas_select_lights(&f->world, &f->camera, 1, false, 1, f->selected),
+                  expected ? 1 : 0);
+    }
+}

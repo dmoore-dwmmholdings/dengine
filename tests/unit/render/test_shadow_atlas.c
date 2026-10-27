@@ -691,7 +691,7 @@ static void budget_movers(lx *f, de_gpu_backend backend) {
     /* Keep scheduler/coherence coverage meaningful after receiver-aware admission. */
     const u32 receiver_mat = material_add(.5f, .6f, 0, .5f);
     const u32 receiver_mesh = lx_mesh_plane(f, 1, 1, 2);
-    world_set(&f->w, 0, receiver_mesh, at(0, 0, -2), receiver_mat);
+    world_set(&f->w, 0, receiver_mesh, at(0, 0, -1), receiver_mat);
     const DeLight light = {.kind = DE_LIGHT_SPOT,
                            .color = {1, 1, 1},
                            .intensity = 100,
@@ -1346,6 +1346,7 @@ static void capture_progress(lx *f, de_gpu_backend backend) {
 static void receiver_admission(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
+    lx_save_shadow_budget(f);
     ASSERT_TRUE(cvar_set("r.shadow_local_max", "1"));
     ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "12"));
     const u32 mat = material_add(.5f, .6f, 0, .5f), mesh = lx_mesh_plane(f, 1, 1, 4);
@@ -1456,8 +1457,6 @@ static void receiver_admission(lx *f, de_gpu_backend backend) {
             EXPECT_GT(covered, 100u);
         }
     }
-    ASSERT_TRUE(cvar_set("r.shadow_local_max", "32"));
-    ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "8"));
     EXPECT_EQ(validation_errors(f->dev), 0);
 }
 #define ADMISSION_TEST(tag, backend)                                                               \
@@ -1528,3 +1527,26 @@ ATLAS_TESTS(d3d12, DE_GPU_D3D12)
 DEFAULT_POINT_TEST(metal, DE_GPU_METAL)
 DEFAULT_POINT_TEST(vulkan, DE_GPU_VULKAN)
 DEFAULT_POINT_TEST(d3d12, DE_GPU_D3D12)
+
+/* No platform/native backend: teardown must restore non-default budgets after an early return. */
+TEST(shadow_atlas, atlas_fixture_restores_saved_budgets) {
+    lx f = {0};
+    lx_setup(&f);
+    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_NULL}, &f.dev), DE_OK);
+    ASSERT_EQ(de__shadow_atlas_create_ex(f.dev, &f.alloc, &f.atlas), DE_OK);
+    const i64 original_max = de_cvar_int(de_cvar_find("r.shadow_local_max"));
+    const i64 original_updates = de_cvar_int(de_cvar_find("r.shadow_atlas_updates_per_frame"));
+    EXPECT_TRUE(cvar_set("r.shadow_local_max", "2"));
+    EXPECT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "9"));
+    lx_save_shadow_budget(&f);
+    EXPECT_TRUE(cvar_set("r.shadow_local_max", "1"));
+    EXPECT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "12"));
+    lx_teardown(&f); /* Same cleanup invoked when a fixture assertion leaves its body. */
+    EXPECT_EQ(de_cvar_int(de_cvar_find("r.shadow_local_max")), 2);
+    EXPECT_EQ(de_cvar_int(de_cvar_find("r.shadow_atlas_updates_per_frame")), 9);
+    char value[32];
+    snprintf(value, sizeof value, "%lld", (long long)original_max);
+    EXPECT_TRUE(cvar_set("r.shadow_local_max", value));
+    snprintf(value, sizeof value, "%lld", (long long)original_updates);
+    EXPECT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", value));
+}
