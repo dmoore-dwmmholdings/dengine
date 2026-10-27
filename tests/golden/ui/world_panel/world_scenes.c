@@ -111,8 +111,11 @@ static void world_scene(de_golden_ctx *ctx, u32 variant) {
     }
     if (result == DE_OK)
         output(&s, pixels);
-    else
-        de_golden_fail(ctx, "World UI variant%u: %s", variant, de_result_str(result));
+    else {
+        const de_error *error = de_error_last();
+        de_golden_fail(ctx, "World UI variant%u: %s (%s)", variant, de_result_str(result),
+                       error ? error->message : "no error context");
+    }
     free(pixels);
     cleanup(&s);
 #else

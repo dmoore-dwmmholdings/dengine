@@ -53,14 +53,14 @@ for phase in ('before', 'after'):
                  'test_ui_world_pixel', 'test_ui_popup_native'])
     directory = out / phase
     code, cases = ctest(pattern, directory, 'goldens')
+    shutil.copytree(build / 'golden' / backend / 'base', directory / 'images', dirs_exist_ok=True)
+    shutil.copyfile(build / 'Testing/Temporary/LastTest.log', directory / 'native-LastTest.log')
     assert code != 0 and len(cases) == len(scenes)
     assert {c.attrib['name'].split('.', 2)[2] for c in cases} == set(scenes)
     for c in cases:
         output = c.findtext('system-out') or ''
         assert c.find('failure') is not None and ': no reference ' in output, c.attrib
         assert '[error]' not in output and '[fatal]' not in output, c.attrib
-    shutil.copytree(build / 'golden' / backend / 'base', directory / 'images', dirs_exist_ok=True)
-    shutil.copyfile(build / 'Testing/Temporary/LastTest.log', directory / 'native-LastTest.log')
     manifest[phase] = {}
     for scene in scenes:
         image = directory / 'images' / (scene + '.png')

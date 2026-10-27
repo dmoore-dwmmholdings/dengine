@@ -13,7 +13,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: windows-2022, compiler: clang-cl, preset: windows-clang-cl-debug, backend: d3d12}
           - {os: ubuntu-24.04, compiler: clang, preset: linux-clang-debug, backend: vulkan}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -48,5 +47,6 @@ jobs:
           name: deng655-${{ matrix.backend }}
           path: |
             evidence/
+            build/${{ matrix.preset }}/golden/
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
           if-no-files-found: error

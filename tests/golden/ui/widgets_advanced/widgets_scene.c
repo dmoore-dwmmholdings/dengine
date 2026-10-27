@@ -206,7 +206,18 @@ static de_result render(ui_scene *s, f32 expected_scale) {
     DE_TRY(s->error);
     const u64 started = de_time_now_ns();
     for (u32 frame = 0;; ++frame) {
-        DE_TRY(pump(s));
+        const u64 pump_started = de_time_now_ns();
+        de_result step = pump(s);
+        const u64 pumped = de_time_now_ns();
+        fprintf(stderr, "DENG657 %s frame=%u pump_ns=%llu elapsed_ns=%llu pending=%u result=%s\n",
+                __FILE__, frame, (unsigned long long)(pumped - pump_started),
+                (unsigned long long)(pumped - started), de_text_get_stats(s->text).runtime_pending,
+                de_result_str(step));
+        if (step != DE_OK) {
+            const de_error *error = de_error_last();
+            fprintf(stderr, "DENG657 pump error context: %s\n", error ? error->message : "none");
+        }
+        DE_TRY(step);
         /* Shaping can request an uncooked ligature. Let its real background glyph generation
          * and atlas upload finish before a reference is captured. */
         if (frame >= 4 && !de_text_get_stats(s->text).runtime_pending)
