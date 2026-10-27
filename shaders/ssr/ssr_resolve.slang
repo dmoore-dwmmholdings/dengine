@@ -215,5 +215,7 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
         return;
     }
     float2 uv = float2(.5,.5);
-    de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,float3(0,0,1),true);
+    // A normal map changes shading, not the flat geometry represented by the depth samples.
+    float3 normal = (q.valid & 128u) != 0 ? normalize(float3(.25,0,1)) : float3(0,0,1);
+    de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,normal,true);
 }
