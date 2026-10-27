@@ -1299,9 +1299,8 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
     ASSERT_EQ(de__vis_kernel_create(vis, &code, 0, entry, group, 32, &f->kernel), DE_OK);
     de__engine_shader_code_free(&code);
     de_gpu_buffer upload = de_gpu_buffer_create(
-        f->dev, &(de_gpu_buffer_desc){.size = 3072,
-                                      .memory = DE_MEM_UPLOAD,
-                                      .usage = DE_USAGE_COPY_SRC | DE_USAGE_SAMPLED});
+        f->dev,
+        &(de_gpu_buffer_desc){.size = 3072, .memory = DE_MEM_UPLOAD, .usage = DE_USAGE_COPY_SRC});
     ASSERT_TRUE(upload.id);
     f->buffers[f->buffer_count++] = upload;
     de_gpu_texture images[4];
