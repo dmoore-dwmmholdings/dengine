@@ -46,6 +46,10 @@ void de_ui__tooltip_prepare(de_ui *ui, de_entity e, f32 dt) {
     DeUiNode *n = de_entity_get(ui->world, popup, ui->ids.node);
     n->z_order = 2000;
     n->safe_area = true;
+    n->height = (de_ui_len){DE_UI_AUTO, 0};
+    n->min_height = (de_ui_len){DE_UI_PX, 40};
+    n->max_width = n->max_height = (de_ui_len){DE_UI_PERCENT, 100};
+    n->clip = true;
     DeUiText *label = de_entity_add(ui->world, popup, ui->ids.text);
     *label = text;
     label->loc_id = value.loc_id;

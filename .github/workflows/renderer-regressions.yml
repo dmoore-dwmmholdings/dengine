@@ -78,7 +78,7 @@ jobs:
               -R '^ui_popup_native\.generated_widgets_stay_on_world_panel$'
           ctest --test-dir "build/${PRESET}" --no-tests=error --output-on-failure \
             --output-junit ui-popup-cpu.xml \
-            -R '^ui_layout\.ui_advanced\.(generated_.*|dropdown_flips_selects_once_and_cancel_preserves_value|tabs_generate_headers_hide_inactive_pages_and_emit_change|tooltip_delay_focus_safe_bounds_and_press_hide|actual_escape_and_outside_click_close_dropdown_without_selection)$|^ui_world_pixel\.ui_world\.(per_root_panel_pixels_preserve_screen_root|popups_use_panel_extent_scale_and_ignore_screen_safe_insets|popup_percent_and_oversize_clamps_are_independent_between_panels)$'
+            -R '^ui_layout\.ui_advanced\.(generated_.*|dropdown_flips_selects_once_and_cancel_preserves_value|tabs_generate_headers_hide_inactive_pages_and_emit_change|tooltip_delay_focus_safe_bounds_and_press_hide|tooltip_measures_wrapped_text_and_clips_to_screen_and_panel_bounds|actual_escape_and_outside_click_close_dropdown_without_selection)$|^ui_world_pixel\.ui_world\.(per_root_panel_pixels_preserve_screen_root|popups_use_panel_extent_scale_and_ignore_screen_safe_insets|popup_percent_and_oversize_clamps_are_independent_between_panels)$'
       - name: Run original crash cases and text references
         if: ${{ !cancelled() && steps.regression_build.outcome == 'success' }}
         id: goldens
@@ -100,7 +100,7 @@ jobs:
           from pathlib import Path
           import xml.etree.ElementTree as ET
           root = Path("build") / os.environ["PRESET"]
-          for filename, expected in (("ui-popup-native.xml", 1), ("ui-popup-cpu.xml", 11)):
+          for filename, expected in (("ui-popup-native.xml", 1), ("ui-popup-cpu.xml", 12)):
               popup_cases = ET.parse(root / filename).findall(".//testcase")
               assert len(popup_cases) == expected, (filename, len(popup_cases))
               assert all(c.find(t) is None for c in popup_cases for t in ("skipped", "failure", "error"))
