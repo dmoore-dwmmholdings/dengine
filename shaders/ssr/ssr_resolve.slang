@@ -17,8 +17,11 @@ float4 ssr_hit_history(SsrParams pc, DeSceneConstants sc, float2 uv, float depth
     uint2 pixel = min(uint2(uv * float2(size)), size - 1);
     float2 source_uv = (float2(pixel) + .5) / float2(size);
     float3 position = ssr_position(sc, source_uv, depth);
+    float3 geometric_normal;
+    if (!ssr_geometric_normal(pc, sc, pixel, depth, position, geometric_normal))
+        return float4(0);
     return ssr_history_sample(pc, sc, pc.history_color, ssr_previous_uv(uv, motion),
-                              position, normal, true);
+                              position, normal, geometric_normal, true);
 }
 // Lighting blends SSR with fallback using confidence. Accumulate its contribution,
 // not two independent averages: correlated colour/coverage must preserve energy.
@@ -125,10 +128,15 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
             moments = float4(l, l * l, 1, 0);
             float2 prev = ssr_previous_uv(uv, de_tex2d(pc.motion).Load(int3(pixel, 0)).xy);
             if ((pc.history_valid & 2u) != 0) {
-                float4 old =
-                    ssr_history_sample(pc, sc, pc.previous_specular, prev, position, surface.normal);
-                float4 stats =
-                    ssr_history_sample(pc, sc, pc.previous_moments, prev, position, surface.normal);
+                float3 geometric_normal;
+                bool plane_valid = ssr_geometric_normal(pc, sc, pixel, z, position, geometric_normal);
+                float4 old = float4(0), stats = float4(0);
+                if (plane_valid) {
+                    old = ssr_history_sample(pc, sc, pc.previous_specular, prev, position,
+                                              surface.normal, geometric_normal);
+                    stats = ssr_history_sample(pc, sc, pc.previous_moments, prev, position,
+                                                surface.normal, geometric_normal);
+                }
                 if (old.a > 0 && all(isfinite(old)) && all(isfinite(stats))) {
                     float variance = max(lum2 / weight - (lum / weight) * (lum / weight), 0);
                     float sigma = max(sqrt(variance) * max(max(response.r, response.g), response.b),
@@ -154,7 +162,7 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
 }
 
 // Native regression oracle: uses the same history sampling as reflection resolve.
-struct HistoryQueryParams { uint color, surface, output, valid; };
+struct HistoryQueryParams { uint color, surface, output, valid; uint depth; uint3 reserved; };
 [shader("compute")][numthreads(8,8,1)]
 void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQueryParams q) {
     if (any(id.xy >= 4)) return;
@@ -170,7 +178,12 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
     pc.history_surface = q.surface;
     pc.history_color = q.color;
     pc.history_valid = q.valid;
+    pc.depth = q.depth;
     DeSceneConstants sc = (DeSceneConstants)0;
+    sc.view[0] = float4(1,0,0,0);
+    sc.view[1] = float4(0,1,0,0);
+    sc.view[2] = float4(0,0,1,0);
+    sc.view[3] = float4(0,0,0,1);
     sc.prev_view_proj[0] = float4(1,0,0,0);
     sc.prev_view_proj[1] = float4(0,1,0,0);
     sc.prev_view_proj[2] = float4(0,0,1,0);
@@ -217,5 +230,19 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
     float2 uv = float2(.5,.5);
     // A normal map changes shading, not the flat geometry represented by the depth samples.
     float3 normal = (q.valid & 128u) != 0 ? normalize(float3(.25,0,1)) : float3(0,0,1);
-    de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,normal,true);
+    float3 geometric_normal = float3(0,0,1);
+    if ((q.valid & 128u) != 0) {
+        sc.inv_view_proj[0] = float4(1,0,0,0);
+        sc.inv_view_proj[1] = float4(0,1,0,0);
+        sc.inv_view_proj[2] = float4(0,0,1,0);
+        sc.inv_view_proj[3] = float4(0,0,0,1);
+        uint2 pixel = uint2(2,2);
+        float depth = de_tex2d(pc.depth).Load(int3(pixel,0)).r;
+        float3 center = ssr_position(sc, (float2(pixel)+.5)/4, depth);
+        if (!ssr_geometric_normal(pc, sc, pixel, depth, center, geometric_normal)) {
+            de_rwtex2d(q.output)[id.xy] = float4(0);
+            return;
+        }
+    }
+    de_rwtex2d(q.output)[id.xy] = ssr_history_sample(pc,sc,q.color,uv,position,normal,geometric_normal,true);
 }

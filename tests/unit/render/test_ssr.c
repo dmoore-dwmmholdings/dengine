@@ -1296,21 +1296,22 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
     de__engine_shader_code code;
     de__vis_shared *vis = de__views_vis(f->r);
     ASSERT_EQ(de__vis_shader_load(vis, "ssr_resolve", &entry, 1, &code), DE_OK);
-    ASSERT_EQ(de__vis_kernel_create(vis, &code, 0, entry, group, 16, &f->kernel), DE_OK);
+    ASSERT_EQ(de__vis_kernel_create(vis, &code, 0, entry, group, 32, &f->kernel), DE_OK);
     de__engine_shader_code_free(&code);
     de_gpu_buffer upload = de_gpu_buffer_create(
-        f->dev,
-        &(de_gpu_buffer_desc){.size = 2048, .memory = DE_MEM_UPLOAD, .usage = DE_USAGE_COPY_SRC});
+        f->dev, &(de_gpu_buffer_desc){.size = 3072,
+                                      .memory = DE_MEM_UPLOAD,
+                                      .usage = DE_USAGE_COPY_SRC | DE_USAGE_SAMPLED});
     ASSERT_TRUE(upload.id);
     f->buffers[f->buffer_count++] = upload;
-    de_gpu_texture images[3];
-    for (u32 i = 0; i < 3; ++i) {
+    de_gpu_texture images[4];
+    for (u32 i = 0; i < 4; ++i) {
         images[i] = de_gpu_texture_create(
             f->dev, &(de_gpu_texture_desc){.width = 4,
                                            .height = 4,
                                            .format = DE_FMT_RGBA32_FLOAT,
                                            .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_DST |
-                                                    DE_USAGE_COPY_SRC});
+                                                    DE_USAGE_COPY_SRC | DE_USAGE_SAMPLED});
         ASSERT_TRUE(images[i].id);
         f->textures[f->texture_count++] = images[i];
     }
@@ -1320,17 +1321,22 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
          * 19 orthographic tilted plane; 20/21 subpixel ray-hit depth at near/far planes;
          * 22/23 preserve a varying radiance footprint (2*.1 + 3*.9 = 2.9, not 3).
          * 24: the geometric plane remains flat while its matching shading normals are tilted.
+         * 25 normal mismatch, 26 tilted geometry with mapped normals, 27 stale depth,
+         * 28 missing current neighbours, 29 isolated current surface, 30 wrong history plane.
          * Valid neighbours and valid source texels must survive partial rejection. */
         const bool distant = (test >= 6 && test <= 8) || test == 12 || test == 17 || test == 18 ||
                              test == 21 || test == 23;
-        const bool tilted = test == 16 || test == 17 || test == 19 || (test >= 20 && test < 24);
-        const bool shaded = test == 24;
+        const bool analytic_tilted =
+            test == 16 || test == 17 || test == 19 || (test >= 20 && test < 24);
+        const bool tilted = analytic_tilted || test == 26;
+        const bool shaded = test >= 24;
         u8 *data = de_gpu_buffer_map(f->dev, upload);
-        memset(data, 0, 2048);
+        memset(data, 0, 3072);
         for (u32 y = 0; y < 4; ++y)
             for (u32 x = 0; x < 4; ++x) {
                 float *color = (float *)(data + y * 256 + x * 16);
                 float *surface = (float *)(data + 1024 + y * 256 + x * 16);
+                float *depth = (float *)(data + 2048 + y * 256 + x * 16);
                 bool poison = y < 2 && test != 0 && test != 7 && !tilted && !shaded;
                 color[0] = color[1] = color[2] = poison ? 100.0f : 1.0f;
                 color[3] = 1;
@@ -1371,6 +1377,24 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
                     surface[1] = .25f * inv_length;
                     surface[3] = inv_length;
                 }
+                depth[0] = distant ? .001f : .5f;
+                if ((test >= 20 && test < 24) || test == 26)
+                    depth[0] += (distant ? .0002f : .2f) * (((f32)x + .5f) * .5f - 1.f);
+                if (test == 25) {
+                    surface[1] = 1;
+                    surface[3] = 0;
+                }
+                if (test == 27)
+                    surface[0] = .25f;
+                if (test == 28)
+                    depth[0] = x == 2 && y == 2 ? .5f : 0;
+                if (test == 29)
+                    depth[0] = x == 2 && y == 2 ? .5f : .25f;
+                if (test == 30) {
+                    /* Wrong history fits its own plane but disagrees with current geometry. */
+                    surface[0] = .5f + .5f * (1.f - ((f32)y + .5f) * .5f);
+                    color[0] = color[1] = color[2] = 100;
+                }
                 if (test == 9) {
                     /* Equal-time bright/low-confidence and dim/high-confidence samples:
                      * mean contribution .9, mean confidence .5, conditional radiance 1.8.
@@ -1383,25 +1407,30 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
             }
         de_gpu_cmd *cmd = de_gpu_cmd_begin(f->dev, DE_QUEUE_GRAPHICS, "ssr.history.footprint");
         ASSERT_TRUE(cmd);
-        for (u32 i = 0; i < 2; ++i) {
-            de_gpu_barrier b = {.texture = images[i], .after = DE_ACCESS_COPY_DST};
+        for (u32 i = 0; i < 3; ++i) {
+            u32 image = i == 2 ? 3 : i;
+            de_gpu_barrier b = {.texture = images[image], .after = DE_ACCESS_COPY_DST};
             de_gpu_cmd_barriers(cmd, &b, 1);
-            de_gpu_cmd_copy_buffer_to_texture(cmd, images[i], 0, 0, upload, i * 1024, 256);
+            de_gpu_cmd_copy_buffer_to_texture(cmd, images[image], 0, 0, upload, i * 1024, 256);
             b.before = DE_ACCESS_COPY_DST;
-            b.after = DE_ACCESS_SHADER_READ | DE_ACCESS_SHADER_WRITE;
+            b.after = DE_ACCESS_SHADER_READ | (image == 3 ? 0 : DE_ACCESS_SHADER_WRITE);
             de_gpu_cmd_barriers(cmd, &b, 1);
         }
         de_gpu_barrier b = {.texture = images[2], .after = DE_ACCESS_SHADER_WRITE};
         de_gpu_cmd_barriers(cmd, &b, 1);
-        u32 pc[4] = {de_gpu_texture_bindless(f->dev, images[0], 0, true),
-                     de_gpu_texture_bindless(f->dev, images[1], 0, true),
-                     de_gpu_texture_bindless(f->dev, images[2], 0, true),
-                     test == 9 ? 4u
-                               : (test == 4 ? 0u
-                                            : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
-                                               (tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
-                                               (test >= 20 && test < 24 ? 64u : 0u) |
-                                               (shaded ? 128u : 0u)))};
+        u32 pc[8] = {
+            de_gpu_texture_bindless(f->dev, images[0], 0, true),
+            de_gpu_texture_bindless(f->dev, images[1], 0, true),
+            de_gpu_texture_bindless(f->dev, images[2], 0, true),
+            test == 9 ? 4u
+                      : (test == 4 ? 0u
+                                   : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
+                                      (analytic_tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
+                                      (test >= 20 && test < 24 ? 64u : 0u) | (shaded ? 128u : 0u))),
+            de_gpu_texture_bindless(f->dev, images[3], 0, false),
+            0,
+            0,
+            0};
         de_gpu_cmd_set_pipeline(cmd, f->kernel.pipeline);
         de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
         de_gpu_cmd_dispatch(cmd, 1, 1, 1);
@@ -1415,16 +1444,17 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
                (double)result[3]);
         for (u32 i = 0; i < 16; ++i) {
             const bool moving = test == 9 && i % 4 == 1;
-            const f32 expected_color =
-                test == 22 || test == 23 ? 2.9f
-                : test == 9 ? (moving ? 5.0f : 1.8f)
-                            : (test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f : 1.0f);
+            const bool rejected = test == 3 || test == 4 || test == 8 || test == 18 || test == 25 ||
+                                  (test >= 27 && test <= 30);
+            const f32 expected_color = test == 22 || test == 23 ? 2.9f
+                                       : test == 9              ? (moving ? 5.0f : 1.8f)
+                                                                : (rejected ? 0.0f : 1.0f);
             EXPECT_FLOAT_EQ(result[i * 4], expected_color, 1e-6);
             EXPECT_TRUE(isfinite(result[i * 4]));
             const f32 expected_coverage =
-                test == 3 || test == 4 || test == 8 || test == 18 ? 0.0f
-                : test == 13                                      ? .75f
-                : test == 9                                       ? (moving ? .9f : .5f)
+                rejected     ? 0.0f
+                : test == 13 ? .75f
+                : test == 9  ? (moving ? .9f : .5f)
                 : test == 1 || test == 2 || test == 5 || test == 6 || (test >= 10 && test <= 15)
                     ? .5f
                     : 1.0f;
@@ -1438,6 +1468,9 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
     }                                                                                              \
     TEST_F(ssr, history_shading_normal_flat_plane_##tag, sfx) {                                    \
         history_footprint_range(f, backend, 24, 25);                                               \
+    }                                                                                              \
+    TEST_F(ssr, history_depth_plane_guards_##tag, sfx) {                                           \
+        history_footprint_range(f, backend, 25, 31);                                               \
     }
 HISTORY_FOOTPRINT_TEST(metal, DE_GPU_METAL)
 HISTORY_FOOTPRINT_TEST(vulkan, DE_GPU_VULKAN)

@@ -57,20 +57,66 @@ public bool ssr_history_valid(SsrParams pc, DeSceneConstants sc, float2 uv, floa
     float expected = clip.z / clip.w;
     return abs(surface.x - expected) <= max(0.002 * expected, 2e-4);
 }
+// One depth-derived tangent. Prefer the nearer depth sample on either side so silhouettes
+// do not normally borrow their opposite surface. A local isolated depth extremum with two
+// distant neighbours does not establish a receiver plane and must fall back.
+bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
+                    float3 position, int2 step, out float3 axis) {
+    axis = float3(0);
+    int2 lo = int2(pixel) - step, hi = int2(pixel) + step;
+    int2 size = int2(pc.width, pc.height);
+    bool vl = all(lo >= 0) && all(lo < size), vh = all(hi >= 0) && all(hi < size);
+    float zl = 0, zh = 0;
+    if (vl) zl = de_tex2d(pc.depth).Load(int3(lo, 0)).r;
+    if (vh) zh = de_tex2d(pc.depth).Load(int3(hi, 0)).r;
+    vl = vl && isfinite(zl) && zl > 0;
+    vh = vh && isfinite(zh) && zh > 0;
+    if (!vl && !vh) return false;
+    bool use_lo = vl && (!vh || abs(zl - depth) < abs(zh - depth));
+    int2 q = use_lo ? lo : hi;
+    float z = use_lo ? zl : zh;
+    float3 neighbour = ssr_position(sc, (float2(q) + .5) / float2(size), z);
+    if (!all(isfinite(neighbour))) return false;
+    float3 delta = neighbour - position;
+    if (vl && vh && (zl - depth) * (zh - depth) > 0 &&
+        abs(dot(sc.view[2].xyz, delta)) > max(pc.thickness, .01)) return false;
+    axis = use_lo ? -delta : delta;
+    return all(isfinite(axis)) && dot(axis, axis) > 1e-20;
+}
+
+// Shading normals include normal maps and cannot predict the geometry's depth footprint.
+// Four depth loads / two position reconstructions establish a local geometric plane.
+public bool ssr_geometric_normal(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
+                                  float3 position, out float3 normal) {
+    normal = float3(0);
+    if (!(depth > 0) || !isfinite(depth) || !all(isfinite(position))) return false;
+    float3 dx, dy;
+    if (!ssr_depth_axis(pc, sc, pixel, depth, position, int2(1,0), dx) ||
+        !ssr_depth_axis(pc, sc, pixel, depth, position, int2(0,1), dy)) return false;
+    float3 n = cross(normalize(dx), normalize(dy));
+    float length2 = dot(n, n);
+    if (!all(isfinite(n)) || !(length2 > 1e-8)) return false;
+    normal = n * rsqrt(length2);
+    return true;
+}
+
 // Validate every contributor, including stationary receivers. A projected receiver plane
 // predicts each tap's depth: a constant centre depth wrongly rejects continuous tilted surfaces.
 public float4 ssr_history_sample(SsrParams pc, DeSceneConstants sc, uint index, float2 uv,
-                                 float3 position, float3 normal, bool footprint_coverage = false) {
+                                 float3 position, float3 normal, float3 geometric_normal,
+                                 bool footprint_coverage = false) {
     if ((pc.history_valid & 1u) == 0 || !all(isfinite(uv)) || any(uv < 0) || any(uv >= 1) ||
-        !all(isfinite(normal)) || dot(normal, normal) < 1e-8)
+        !all(isfinite(normal)) || dot(normal, normal) < 1e-8 ||
+        !all(isfinite(geometric_normal)) || dot(geometric_normal, geometric_normal) < 1e-8)
         return float4(0);
     float4 point = float4(position, 1);
     float4 previous = float4(dot(sc.prev_view_proj[0], point), dot(sc.prev_view_proj[1], point),
                              dot(sc.prev_view_proj[2], point), dot(sc.prev_view_proj[3], point));
     if (!all(isfinite(previous)) || !(previous.w > 0)) return float4(0);
     float3 ndc = previous.xyz / previous.w;
-    float3 tangent = normalize(cross(normal, abs(normal.z) < .9 ? float3(0,0,1) : float3(0,1,0)));
-    float3 bitangent = cross(normal, tangent);
+    float3 tangent = normalize(cross(geometric_normal, abs(geometric_normal.z) < .9 ?
+                                      float3(0,0,1) : float3(0,1,0)));
+    float3 bitangent = cross(geometric_normal, tangent);
     float4 dt = float4(dot(sc.prev_view_proj[0].xyz, tangent), dot(sc.prev_view_proj[1].xyz, tangent),
                        dot(sc.prev_view_proj[2].xyz, tangent), dot(sc.prev_view_proj[3].xyz, tangent));
     float4 db = float4(dot(sc.prev_view_proj[0].xyz, bitangent), dot(sc.prev_view_proj[1].xyz, bitangent),
