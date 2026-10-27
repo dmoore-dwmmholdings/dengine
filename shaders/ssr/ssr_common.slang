@@ -61,7 +61,7 @@ public bool ssr_history_valid(SsrParams pc, DeSceneConstants sc, float2 uv, floa
 // do not normally borrow their opposite surface. A local isolated depth extremum with two
 // distant neighbours does not establish a receiver plane and must fall back.
 bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
-                    float3 position, int2 step, out float3 axis) {
+                    float3 position, int2 step, float3 shading_normal, out float3 axis) {
     axis = float3(0);
     int2 lo = int2(pixel) - step, hi = int2(pixel) + step;
     int2 size = int2(pc.width, pc.height);
@@ -73,6 +73,20 @@ bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
     vh = vh && isfinite(zh) && zh > 0;
     if (!vl && !vh) return false;
     bool use_lo = vl && (!vh || abs(zl - depth) < abs(zh - depth));
+    // At a corner the closest reverse-Z sample may lie on another face. Use shading
+    // agreement only as a neighbour preference; mapped normals never define the plane.
+    // If neither side agrees (e.g. a varying normal map), retain the depth choice.
+    if (vl && vh) {
+        int2 first = use_lo ? lo : hi;
+        float3 first_normal = gb_decode(float4(0), de_tex2d(pc.gb1).Load(int3(first,0)), float4(0)).normal;
+        bool agrees = all(isfinite(first_normal)) && dot(first_normal, shading_normal) >= .85;
+        if (!agrees) {
+            int2 other = use_lo ? hi : lo;
+            float3 other_normal = gb_decode(float4(0), de_tex2d(pc.gb1).Load(int3(other,0)), float4(0)).normal;
+            if (all(isfinite(other_normal)) && dot(other_normal, shading_normal) >= .85)
+                use_lo = !use_lo;
+        }
+    }
     int2 q = use_lo ? lo : hi;
     float z = use_lo ? zl : zh;
     float3 neighbour = ssr_position(sc, (float2(q) + .5) / float2(size), z);
@@ -86,13 +100,14 @@ bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
 
 // Shading normals include normal maps and cannot predict the geometry's depth footprint.
 // Four depth loads / two position reconstructions establish a local geometric plane.
+// Neighbour preference adds up to four GB1 loads; shading normals never set its slope.
 public bool ssr_geometric_normal(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
-                                  float3 position, out float3 normal) {
+                                  float3 position, float3 shading_normal, out float3 normal) {
     normal = float3(0);
     if (!(depth > 0) || !isfinite(depth) || !all(isfinite(position))) return false;
     float3 dx, dy;
-    if (!ssr_depth_axis(pc, sc, pixel, depth, position, int2(1,0), dx) ||
-        !ssr_depth_axis(pc, sc, pixel, depth, position, int2(0,1), dy)) return false;
+    if (!ssr_depth_axis(pc, sc, pixel, depth, position, int2(1,0), shading_normal, dx) ||
+        !ssr_depth_axis(pc, sc, pixel, depth, position, int2(0,1), shading_normal, dy)) return false;
     float3 n = cross(normalize(dx), normalize(dy));
     float length2 = dot(n, n);
     if (!all(isfinite(n)) || !(length2 > 1e-8)) return false;

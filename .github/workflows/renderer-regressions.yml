@@ -1,4 +1,4 @@
-name: DENG-604 scene-readback regression (CI only)
+name: DENG-604 scene-hit oracle (CI only)
 on:
   workflow_dispatch:
     inputs:
@@ -33,7 +33,14 @@ jobs:
       - name: Verify held candidate and CI wrapper provenance
         shell: bash
         run: |
-          git diff --exit-code dac9650c HEAD -- . ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-scene-readback.py' ':(exclude)src/render/passes/ssr/ssr.c' ':(exclude)src/render/passes/ssr/scene_history.c' ':(exclude)src/render/passes/ssr/ssr_internal.h' ':(exclude)tests/golden/base_tier/base_tier_scenes.c'
+          git diff --exit-code a5e3a548 HEAD -- . ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng604-scene-readback.py' ':(exclude).github/scripts/deng604-authored-geometry.py' ':(exclude).github/scripts/deng604-scene-hit-oracle.py' ':(exclude)shaders/ssr/ssr_resolve.slang' ':(exclude)src/render/passes/ssr/ssr.c' ':(exclude)src/render/passes/ssr/scene_history.c' ':(exclude)src/render/passes/ssr/ssr_internal.h' ':(exclude)tests/golden/base_tier/base_tier_scenes.c'
+          python - <<'PYCODE'
+          import pathlib,subprocess
+          p=pathlib.Path('shaders/ssr/ssr_resolve.slang').read_bytes()
+          marker=b'// CI-ONLY actual-scene footprint readback;'
+          product=subprocess.check_output(['git','show','a5e3a548:shaders/ssr/ssr_resolve.slang'])
+          assert p.split(marker)[0].rstrip()==product.rstrip()
+          PYCODE
           git rev-parse HEAD > source-identity.txt
           git ls-tree HEAD tests/golden/refs/d3d12/base tests/golden/scenes.toml >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
@@ -45,13 +52,13 @@ jobs:
         shell: bash
         run: |
           cmake --preset "${PRESET}"
-      - name: Compare current-main and candidate native scenes
+      - name: Capture exact candidate image and actual hit queries
         shell: bash
         run: python .github/scripts/deng604-scene-readback.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: deng604-scene-readback-${{ matrix.config }}
+          name: deng604-scene-hit-oracle-${{ matrix.config }}
           path: |
             source-identity.txt
             build/${{ matrix.preset }}/de_config_dump.txt

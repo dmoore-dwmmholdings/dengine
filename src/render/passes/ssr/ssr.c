@@ -36,13 +36,13 @@ struct de__ssr {
     de_renderer *renderer;
     de__scene_history *history;
     de__vis_shared *vis;
-    de__vis_kernel trace, resolve;
+    de__vis_kernel trace, resolve, diag_query;
     de_cvar max_roughness, thickness, max_steps;
     ssr_view views[DE__VIEW_MAX];
     de_gpu_buffer diag_rb;
-    de_rg_resource diag_reads[12];
-    u64 diag_offsets[12], diag_sizes[12];
-    u32 diag_pitch[11];
+    de_rg_resource diag_reads[13];
+    u64 diag_offsets[13], diag_sizes[13];
+    u32 diag_pitch[12];
     ssr_params diag_pc;
     de_view diag_view;
 };
@@ -54,21 +54,63 @@ typedef struct ssr_pass {
     de_rg_resource depth, gb[3], motion, hzb, hits, rays, history_color, history_surface;
     de_rg_resource previous_specular, previous_moments, write_specular, write_moments, output;
 } ssr_pass;
+/* Only used by the diagnostic pass; all product shaders and inputs are unchanged. */
+static void diagnostic_query(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    ssr_pass *b = user;
+    ssr_params pc = b->pc;
+    de_gpu_device *dev = b->s->renderer->dev;
+    pc.depth = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->depth), 0, false);
+    pc.gb1 = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->gb[1]), 0, false);
+    pc.motion = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->motion), 0, false);
+    pc.hits = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->hits), 0, false);
+    pc.history_color = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->history_color), 0, true);
+    pc.history_surface =
+        de_gpu_texture_bindless(dev, de_rg_texture(pass, b->history_surface), 0, true);
+    pc.output = de_gpu_texture_bindless(dev, de_rg_texture(pass, b->output), 0, true);
+    de_gpu_cmd_set_pipeline(cmd, b->s->diag_query.pipeline);
+    de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
+    de_gpu_cmd_dispatch(cmd, (pc.tw + 7) / 8, (pc.th + 7) / 8, 1);
+}
 /* CI-only frame95 buffer evidence; never part of the product checkpoint. */
 static void diagnostic_copy(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     de__ssr *s = user;
-    for (u32 i = 0; i < 11; ++i)
+    for (u32 i = 0; i < 12; ++i)
         de_gpu_cmd_copy_texture_to_buffer(cmd, s->diag_rb, s->diag_offsets[i], s->diag_pitch[i],
                                           de_rg_texture(pass, s->diag_reads[i]), 0, 0);
-    de_gpu_cmd_copy_buffer(cmd, s->diag_rb, s->diag_offsets[11],
-                           de_rg_buffer(pass, s->diag_reads[11]),
+    de_gpu_cmd_copy_buffer(cmd, s->diag_rb, s->diag_offsets[12],
+                           de_rg_buffer(pass, s->diag_reads[12]),
                            (u64)s->diag_pc.slot * sizeof(de__gs_view), sizeof(de__gs_view));
 }
 static void diagnostic_capture(de__ssr *s, const de__view_frame *vf, const ssr_pass *b,
                                const de__vis_context *vc) {
     if (!getenv("DE_DENG604_READBACK") || vf->frame_index != 95 || s->diag_rb.id)
         return;
-    const de_rg_resource r[12] = {b->depth,
+    de_gpu_texture_desc query_desc = {.width = b->pc.tw,
+                                      .height = b->pc.th,
+                                      .format = DE_FMT_RGBA32_FLOAT,
+                                      .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
+                                      .name = "test.ssr.hit_footprints"};
+    de_rg_resource query_output = de_rg_create_texture(vf->graph, &query_desc);
+    if (!DE_HANDLE_VALID(query_output))
+        return;
+    ssr_pass *q = de_arena_push_zero(vf->graph->arena, sizeof *q, 16);
+    if (!q)
+        return;
+    *q = *b;
+    q->output = query_output;
+    de_rg_pass *query =
+        de_rg_add_pass(vf->graph, "test.ssr.hit_queries", DE_QUEUE_GRAPHICS, diagnostic_query, q);
+    de_rg_read(query, b->depth, DE_ACCESS_SHADER_READ);
+    de_rg_read(query, b->gb[1], DE_ACCESS_SHADER_READ);
+    de_rg_read(query, b->motion, DE_ACCESS_SHADER_READ);
+    de_rg_read(query, b->hits, DE_ACCESS_SHADER_READ);
+    de_rg_read(query, b->history_color, DE_ACCESS_SHADER_READ);
+    de_rg_write(query, b->history_color, DE_ACCESS_SHADER_WRITE);
+    de_rg_read(query, b->history_surface, DE_ACCESS_SHADER_READ);
+    de_rg_write(query, b->history_surface, DE_ACCESS_SHADER_WRITE);
+    de_rg_read(query, vc->scene_views, DE_ACCESS_SHADER_READ);
+    de_rg_write(query, query_output, DE_ACCESS_SHADER_WRITE);
+    const de_rg_resource r[13] = {b->depth,
                                   b->gb[1],
                                   b->motion,
                                   b->hits,
@@ -79,15 +121,16 @@ static void diagnostic_capture(de__ssr *s, const de__view_frame *vf, const ssr_p
                                   b->previous_moments,
                                   b->output,
                                   b->write_moments,
+                                  query_output,
                                   vc->scene_views};
     /* Temporal moments are RGBA32_FLOAT; radiance/specular are RGBA16_FLOAT. */
-    const u32 bytes[11] = {4, 4, 4, 16, 16, 8, 16, 8, 16, 8, 16};
+    const u32 bytes[12] = {4, 4, 4, 16, 16, 8, 16, 8, 16, 8, 16, 16};
     u64 total = 0;
-    for (u32 i = 0; i < 12; ++i) {
+    for (u32 i = 0; i < 13; ++i) {
         s->diag_reads[i] = r[i];
         s->diag_offsets[i] = total;
-        if (i < 11) {
-            bool trace = i == 3 || i == 4;
+        if (i < 12) {
+            bool trace = i == 3 || i == 4 || i == 11;
             u32 w = trace ? b->pc.tw : b->pc.width;
             u32 h = trace ? b->pc.th : b->pc.height;
             s->diag_pitch[i] = (w * bytes[i] + 511u) & ~511u;
@@ -107,7 +150,7 @@ static void diagnostic_capture(de__ssr *s, const de__view_frame *vf, const ssr_p
         return;
     de_rg_pass *p =
         de_rg_add_pass(vf->graph, "test.ssr.frame95", DE_QUEUE_GRAPHICS, diagnostic_copy, s);
-    for (u32 i = 0; i < 12; ++i)
+    for (u32 i = 0; i < 13; ++i)
         de_rg_read(p, r[i], DE_ACCESS_COPY_SRC);
     de_rg_write(p, de_rg_import_buffer(vf->graph, s->diag_rb, DE_ACCESS_COPY_DST),
                 DE_ACCESS_COPY_DST);
@@ -119,7 +162,7 @@ bool de__ssr_diagnostic_dump(de__ssr *s, de_view view, const char *dir) {
     const u8 *data = de_gpu_buffer_map(s->renderer->dev, s->diag_rb);
     if (!data)
         return false;
-    const char *names[12] = {"depth",
+    const char *names[13] = {"depth",
                              "gbuffer1",
                              "motion",
                              "hits",
@@ -130,18 +173,19 @@ bool de__ssr_diagnostic_dump(de__ssr *s, de_view view, const char *dir) {
                              "previous_moments",
                              "output",
                              "write_moments",
+                             "hit_footprints",
                              "scene"};
     char path[2048];
     bool ok = true;
-    for (u32 i = 0; i < 13; ++i) {
-        snprintf(path, sizeof path, "%s/%s.bin", dir, i < 12 ? names[i] : "params");
+    for (u32 i = 0; i < 14; ++i) {
+        snprintf(path, sizeof path, "%s/%s.bin", dir, i < 13 ? names[i] : "params");
         FILE *file = fopen(path, "wb");
         if (!file) {
             ok = false;
             break;
         }
-        const void *src = i < 12 ? (const void *)(data + s->diag_offsets[i]) : &s->diag_pc;
-        size_t n = i < 12 ? (size_t)s->diag_sizes[i] : sizeof s->diag_pc;
+        const void *src = i < 13 ? (const void *)(data + s->diag_offsets[i]) : &s->diag_pc;
+        size_t n = i < 13 ? (size_t)s->diag_sizes[i] : sizeof s->diag_pc;
         bool written = fwrite(src, 1, n, file) == n;
         if (fclose(file) != 0 || !written) {
             ok = false;
@@ -158,7 +202,7 @@ bool de__ssr_diagnostic_dump(de__ssr *s, de_view view, const char *dir) {
             "{\"frame\":95,\"width\":%u,\"height\":%u,\"trace_width\":%u,\"trace_height\":%u,\"row_"
             "pitches\":[",
             s->diag_pc.width, s->diag_pc.height, s->diag_pc.tw, s->diag_pc.th);
-    for (u32 i = 0; i < 11; ++i)
+    for (u32 i = 0; i < 12; ++i)
         fprintf(file, "%s%u", i ? "," : "", s->diag_pitch[i]);
     fprintf(file, "]}\n");
     return fclose(file) == 0;
@@ -431,6 +475,17 @@ de_result de__ssr_create(de_renderer *r, de__ssr **out) {
             }
         }
     }
+    if (result == DE_OK && getenv("DE_DENG604_READBACK")) {
+        const char *entry = "cs_ssr_scene_hit_queries";
+        const u32 group[] = {8, 8, 1};
+        de__engine_shader_code code;
+        result = de__vis_shader_load(s->vis, "ssr_resolve", &entry, 1, &code);
+        if (result == DE_OK) {
+            result = de__vis_kernel_create(s->vis, &code, 0, entry, group, sizeof(ssr_params),
+                                           &s->diag_query);
+            de__engine_shader_code_free(&code);
+        }
+    }
     if (result == DE_OK)
         result = de__view_register_stage(r, DE__VIEW_SLOT_VISIBILITY, 10, "screen.closest_depth",
                                          common_stage, s);
@@ -458,6 +513,7 @@ void de__ssr_destroy(de__ssr *s) {
         release_view(s, &s->views[i]);
     de__vis_kernel_destroy(s->vis, &s->trace);
     de__vis_kernel_destroy(s->vis, &s->resolve);
+    de__vis_kernel_destroy(s->vis, &s->diag_query);
     DE_FREE(s->renderer->alloc, s, sizeof *s);
 }
 void de__ssr_view_complete(de__ssr *s, de_view view, u64 frame, bool success) {
