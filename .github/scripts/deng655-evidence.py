@@ -40,7 +40,7 @@ checked(['git', 'restore', '--source=7777e995546b7ccea2e045b8e060de048e997b5b', 
 (out / 'original-runtime.diff').write_text(subprocess.check_output(['git', 'diff'], text=True))
 checked(['cmake', '--preset', preset])
 checked(['cmake', '--build', '--preset', preset, '--target', 'de_golden', 'test_ui_layout',
-         'test_ui_world_pixel', 'test_ui_popup_native'])
+         'test_ui_world_pixel', 'test_ui_popup_native', 'test_ui_golden_wait'])
 code, cases = ctest(new_case, out / 'before', 'cpu')
 assert code != 0 and len(cases) == 1 and cases[0].find('failure') is not None
 assert 'tooltip variant' in (cases[0].findtext('system-out') or '')
@@ -50,11 +50,17 @@ for phase in ('before', 'after'):
         checked(['git', 'restore', '--', 'src/ui/widgets/tooltip.c'])
         checked(['git', 'diff', '--exit-code'])
         checked(['cmake', '--build', '--preset', preset, '--target', 'de_golden', 'test_ui_layout',
-                 'test_ui_world_pixel', 'test_ui_popup_native'])
+                 'test_ui_world_pixel', 'test_ui_popup_native', 'test_ui_golden_wait'])
     directory = out / phase
     code, cases = ctest(pattern, directory, 'goldens')
     shutil.copytree(build / 'golden' / backend / 'base', directory / 'images', dirs_exist_ok=True)
     shutil.copyfile(build / 'Testing/Temporary/LastTest.log', directory / 'native-LastTest.log')
+    occluded = next(c for c in cases if c.attrib['name'].endswith('.ui_world_occluded'))
+    import re
+    frames = re.findall(r'DENG657 .* frame=(\d+) pump_ns=(\d+) elapsed_ns=(\d+) pending=(\d+) result=(\w+)', occluded.findtext('system-out') or '')
+    assert len(frames) >= 5 and [int(f[0]) for f in frames[:5]] == list(range(5)), frames
+    assert frames[-1][3:] == ('0', 'DE_OK'), frames
+    (directory / 'occluded-frames.json').write_text(json.dumps(frames, indent=2) + '\n')
     assert code != 0 and len(cases) == len(scenes)
     assert {c.attrib['name'].split('.', 2)[2] for c in cases} == set(scenes)
     for c in cases:
@@ -72,6 +78,8 @@ for phase in ('before', 'after'):
 for scene in scenes:
     equal = manifest['before'][scene]['sha256'] == manifest['after'][scene]['sha256']
     assert equal == (scene != 'ui_widgets_advanced_controls'), (scene, equal)
+code, cases = ctest(r'^ui_golden_wait\.', out / 'after', 'watchdog')
+assert code == 0 and len(cases) == 2 and all(c.find('failure') is None for c in cases)
 code, cases = ctest(cpu_cases, out / 'after', 'cpu')
 assert code == 0 and len(cases) == 12 and all(c.find('failure') is None for c in cases)
 env = os.environ.copy()
