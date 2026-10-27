@@ -66,7 +66,7 @@ if(DE_BUILD_TOOLS AND TARGET de_tp_slang AND TARGET de_gpu_shader)
     target_compile_definitions(de_golden PRIVATE DE_GOLDEN_COOK=1)
     de_add_test(NAME golden_assets
         SOURCES harness/test_cooked_assets.c harness/cooked_assets.c
-        LIBS de_asset de_text de_cooker de_pack_lib
+        LIBS de_asset de_text de_render de_ecs de_reflect de_cooker de_pack_lib
         LABELS golden)
     target_include_directories(test_golden_assets PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
     target_compile_definitions(test_golden_assets PRIVATE DE_GOLDEN_COOK=1
