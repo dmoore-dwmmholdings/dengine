@@ -294,8 +294,10 @@ TEST_F(ui_advanced, tooltip_measures_wrapped_text_and_clips_to_screen_and_panel_
         de_vec4 rect = ui_rect(f, popup);
         label = de_entity_get(f->world, popup, f->ui->ids.text);
         f32 scale = world ? 1 : f->ui->scale;
-        f32 available_height = world ? (variant == 3 ? 60 : 100) : (variant == 1 ? 90 : 140);
-        f32 available_width = world ? (variant == 3 ? 80 : 200) : (variant == 1 ? 130 : 360);
+        f32 available_height =
+            world ? (variant == 3 ? 60.f : 100.f) : (variant == 1 ? 90.f : 140.f);
+        f32 available_width =
+            world ? (variant == 3 ? 80.f : 200.f) : (variant == 1 ? 130.f : 360.f);
         de_text_style style = label->style;
         style.size_px *= scale;
         de_text_layout *layout = NULL;
@@ -315,8 +317,8 @@ TEST_F(ui_advanced, tooltip_measures_wrapped_text_and_clips_to_screen_and_panel_
         EXPECT_TRUE(rect.z <= available_width);
         const DeUiNode *node = de_entity_get_const(f->world, popup, f->ui->ids.node);
         EXPECT_TRUE(node->clip);
-        f32 left = world ? 0 : (variant == 1 ? 5 : 10);
-        f32 top = world ? 0 : (variant == 1 ? 5 : 20);
+        f32 left = world ? 0.f : (variant == 1 ? 5.f : 10.f);
+        f32 top = world ? 0.f : (variant == 1 ? 5.f : 20.f);
         EXPECT_TRUE(rect.x >= left && rect.x + rect.z <= left + available_width + .5f);
         EXPECT_TRUE(rect.y >= top && rect.y + rect.w <= top + available_height + .5f);
         if (variant == 2) {
