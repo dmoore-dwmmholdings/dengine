@@ -1319,6 +1319,36 @@ static void feedback_mips(rsx *f, de_gpu_backend b) {
     EXPECT_GE(far_mip, 2u);
 }
 
+/* A provenance bit is valid only when resolve's final normal represents the
+ * actual triangle plane. A real normal-map perturbation must clear it. */
+static void geometry_normal_provenance(rsx *f, de_gpu_backend backend) {
+    rsx_open(f, backend);
+    const u32 plane = rsx_mesh_plane(f, 2, 2, 1.f, 1.f, false);
+    const u32 plain = material_add((de_vec4){1, 1, 1, 1});
+    const u32 mapped = material_add((de_vec4){1, 1, 1, 1});
+    const u8 red[1] = {192};
+    const u32 normal_map = rsx_texture(f, 1, red, 128, 255);
+    g_mat[mapped - 1u].textures[DE_COOKED_TEX_NORMAL].id = normal_map;
+    const de_affine identity = de_affine_identity();
+    for (u32 phase = 0; phase < 2; ++phase) {
+        world_set(&f->w, 0, plane, identity, identity, phase ? mapped : plain);
+        ASSERT_TRUE(rsx_frame(f));
+        ASSERT_TRUE(f->res.valid);
+        u32 covered = 0;
+        for (size_t i = 0; i < (size_t)f->res.width * f->res.height; ++i) {
+            if (f->res.ids[i] == DE__VIS_ID_EMPTY)
+                continue;
+            ++covered;
+            /* GB2 spare bit32; checked independently of the producer implementation. */
+            EXPECT_EQ((f->res.gb[2][i] >> 16) & 32u, phase ? 0u : 32u);
+            f32 normal[3], roughness;
+            de__gb1_unpack(f->res.gb[1][i], normal, &roughness);
+            EXPECT_TRUE(phase ? fabsf(normal[2]) < .99f : fabsf(normal[2]) > .999f);
+        }
+        EXPECT_GT(covered, 500u);
+    }
+}
+
 /* resolve_unlit_model_dispatch: an Unlit material's pixels get its base colour in GB0 and as
  * radiance, GB2 the Unlit model and flag; Standard pixels beside them the Standard model; both
  * models' dispatches processed tiles. */
@@ -2169,6 +2199,9 @@ TEST_F(resolve, positions_uvs_orthographic_stability_metal, rsx) {
     }                                                                                              \
     TEST_F(resolve, unlit_model_dispatch_##sfx, rsx) {                                             \
         unlit_dispatch(f, backend);                                                                \
+    }                                                                                              \
+    TEST_F(resolve, geometry_normal_provenance_##sfx, rsx) {                                       \
+        geometry_normal_provenance(f, backend);                                                    \
     }                                                                                              \
     TEST_F(resolve, only_listed_tiles_##sfx, rsx) {                                                \
         only_listed(f, backend);                                                                   \
