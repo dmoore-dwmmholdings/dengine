@@ -37,6 +37,7 @@ jobs:
           fetch-depth: 2
       - name: Verify candidate source identity
         run: |
+          git fetch --no-tags --depth=1 origin 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b
           git diff --exit-code 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b HEAD -- . ':(exclude).github/workflows/ci.yml'
           git rev-parse HEAD > source-identity.txt
           git rev-parse 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b:src HEAD:src >> source-identity.txt
