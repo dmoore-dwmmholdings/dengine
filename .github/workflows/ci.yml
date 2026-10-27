@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   caster:
-    name: DENG-644 off-camera caster (${{ matrix.backend }})
+    name: DENG-644 final native and admission (${{ matrix.backend }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -37,11 +37,11 @@ jobs:
           fetch-depth: 2
       - name: Verify candidate source identity
         run: |
-          git diff --exit-code f056b4c7cee600203b29b9fbf1571d9dc9cc60ca HEAD -- . ':(exclude).github/workflows/ci.yml'
+          git diff --exit-code 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b HEAD -- . ':(exclude).github/workflows/ci.yml'
           git rev-parse HEAD > source-identity.txt
-          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:src HEAD:src >> source-identity.txt
-          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:tests HEAD:tests >> source-identity.txt
-          git rev-parse f056b4c7cee600203b29b9fbf1571d9dc9cc60ca:shaders HEAD:shaders >> source-identity.txt
+          git rev-parse 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b:src HEAD:src >> source-identity.txt
+          git rev-parse 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b:tests HEAD:tests >> source-identity.txt
+          git rev-parse 5fa2908c2f0c40064d9b4f663fe5f0ad098d901b:shaders HEAD:shaders >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
           compiler: ${{ matrix.compiler }}
@@ -60,23 +60,27 @@ jobs:
       - name: Configure unchanged Debug preset
         run: cmake --preset "$DENG644_PRESET"
       - name: Build affected executable
-        run: cmake --build --preset "$DENG644_PRESET" --target test_render_shadow_atlas --parallel 4
-      - name: Require actual native off-camera regression
+        run: cmake --build --preset "$DENG644_PRESET" --target test_render_shadow_atlas test_render_shadow_admission --parallel 4
+      - name: Require all native atlas and CPU admission cases
         run: |
-          python3 - <<'PY'
-          import os,pathlib,subprocess,sys
+          python3 - <<'PYTEST'
+          import os,pathlib,subprocess,sys,xml.etree.ElementTree as E
           preset=os.environ['DENG644_PRESET']
           backend=os.environ['DENG644_BACKEND']
           root=pathlib.Path('build')/preset
           out=root/'deng644-offcamera'
           out.mkdir(parents=True,exist_ok=True)
-          exe=root/'tests/unit/render'/('test_render_shadow_atlas.exe' if os.name=='nt' else 'test_render_shadow_atlas')
-          env=dict(os.environ,DE_SHADOW_EVIDENCE_DIR=str(out))
+          env=dict(os.environ,DE_SHADOW_EVIDENCE_DIR=str(out.resolve()))
+          pattern=r'render_shadow_admission\.|render_shadow_atlas\.shadow_atlas\..*_'+backend+'$'
           with (out/'native.log').open('wb') as log:
-              result=subprocess.run([str(exe),'--filter=shadow_atlas.atlas_off_camera_caster_'+backend],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=300)
+              result=subprocess.run(['ctest','--test-dir',str(root),'-R',pattern,'--parallel','1','--output-on-failure','--no-tests=error','--output-junit',str((out/'native.xml').resolve())],env=env,stdout=log,stderr=subprocess.STDOUT)
           print((out/'native.log').read_text(errors='replace'))
+          cases=list(E.parse(out/'native.xml').iter('testcase'))
+          assert len(cases)==34, len(cases)
+          assert not any(c.find('skipped') is not None for c in cases), 'native skips are not acceptance'
+          assert not any(c.find('failure') is not None for c in cases), 'test failure'
           sys.exit(result.returncode)
-          PY
+          PYTEST
       - name: Preserve raw native evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
