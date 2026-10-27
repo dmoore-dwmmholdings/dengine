@@ -109,8 +109,18 @@ TEST(font, latin_metrics_and_determinism) {
     de__manifest_kv s = {.key = "charset",
                          .value = {.type = DE__MANIFEST_STRING, .u.s = "latin-ext"}};
     de_cook_result r = {0}, r2 = {0};
-    ASSERT_EQ(font_cook("NotoSans.ttf", &s, 1, &r), DE_OK);
-    ASSERT_EQ(font_cook("NotoSans.ttf", &s, 1, &r2), DE_OK);
+    /* This case compares independent complete cooks itself. Nested verification would do four
+     * expensive imports; keep the same two-cook byte and metadata oracle without duplicating it. */
+    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF), DE_OK);
+    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF), DE_OK);
+    ASSERT_EQ(r.output_hash, r2.output_hash); /* Includes dependencies/subassets/extra sources. */
+    ASSERT_EQ(r.dependency_count, r2.dependency_count);
+    ASSERT_EQ(r.subasset_count, r2.subasset_count);
+    ASSERT_EQ(r.extra_source_count, r2.extra_source_count);
+    ASSERT_EQ(r.settings_hash, r2.settings_hash);
+    ASSERT_EQ(r.importer_version, r2.importer_version);
+    ASSERT_EQ(r.platform, r2.platform);
+    ASSERT_STREQ(r.source, r2.source);
     ASSERT_EQ(r.size, r2.size);
     ASSERT_MEMEQ(r.data, r2.data, (size_t)r.size);
     font_evidence("latin-ext-first", &r);

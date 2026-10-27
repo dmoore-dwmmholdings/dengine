@@ -15,11 +15,11 @@ static inline void font_mount(void) {
         m = true;
     }
 }
-static inline de_result font_cook(const char *source, const de__manifest_kv *s, u32 ns,
-                                  de_cook_result *out) {
+static inline de_result font_cook_with_verify(const char *source, const de__manifest_kv *s, u32 ns,
+                                              de_cook_result *out, de_cook_verify verify) {
     font_mount();
     de_cooker *c = NULL;
-    de_result r = de_cooker_create(&(de_cooker_desc){.verify_determinism = DE_COOK_VERIFY_ON}, &c);
+    de_result r = de_cooker_create(&(de_cooker_desc){.verify_determinism = verify}, &c);
     if (r != DE_OK)
         return r;
     de_asset_type_desc td = de_font_import_type_desc();
@@ -31,5 +31,9 @@ static inline de_result font_cook(const char *source, const de__manifest_kv *s, 
     }
     de_cooker_destroy(c);
     return r;
+}
+static inline de_result font_cook(const char *source, const de__manifest_kv *s, u32 ns,
+                                  de_cook_result *out) {
+    return font_cook_with_verify(source, s, ns, out, DE_COOK_VERIFY_ON);
 }
 #endif
