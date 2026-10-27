@@ -255,3 +255,93 @@ TEST_F(ui_advanced, generated_tooltip_pointer_uses_panel_units_and_rejects_other
     EXPECT_EQ(place->anchor.bits, owner.bits);
 }
 #endif
+
+#if defined(DE_UI_TEST_FONTS) && DE_HAS_RENDER
+#include "../text/runtime_test_util.h"
+TEST_F(ui_advanced, tooltip_measures_wrapped_text_and_clips_to_screen_and_panel_bounds, ui_fx) {
+    runtime_fx fonts = {0};
+    runtime_fx_setup(&fonts);
+    f->ui->desc.text = fonts.t;
+    static const char content[] = "A tooltip stays within the safe area.";
+    for (u32 variant = 0; variant < 4; ++variant) {
+        bool world = variant >= 2;
+        de_ui_set_viewport(
+            f->ui, variant == 1 ? 140 : 400, variant == 1 ? 100 : 200,
+            variant == 1 ? (de_window_insets){5, 5, 5, 5}
+                         : (de_window_insets){.left = 10, .top = 20, .right = 30, .bottom = 40});
+        de_entity root = world ? generated_popup_panel(f) : ui_node(f, DE_ENTITY_NULL);
+        if (variant == 3) {
+            DeUiWorldPanel *panel =
+                de_entity_get(f->world, root, de_component_find(f->world, "DeUiWorldPanel"));
+            panel->size_m = (de_vec2){.8f, .6f};
+        }
+        de_entity owner = ui_node(f, root);
+        *(DeUiAnchor *)de_entity_add(f->world, owner, f->ui->ids.anchor) =
+            (DeUiAnchor){.offset_min = {10, 10}, .offset_max = {50, 30}};
+        DeUiText *label = de_entity_add(f->world, owner, f->ui->ids.text);
+        label->style = (de_text_style){
+            .font = fonts.latin, .size_px = 20, .line_height = 1, .color = {1, 1, 1, 1}};
+        de_entity_add(f->world, owner, f->ui->advanced->tooltip);
+        ((DeUiInteractionState *)de_entity_add(f->world, owner, f->ui->ids.state))->focused = true;
+        ui_frame(f);
+        const de_ui_tooltip_state *state =
+            de_entity_get_const(f->world, owner, f->ui->advanced->tooltip_state);
+        ASSERT_TRUE(state && state->popup.bits);
+        de_entity popup = state->popup;
+        label = de_entity_get(f->world, popup, f->ui->ids.text);
+        label->literal = (de_str){content, sizeof(content) - 1};
+        ui_frame(f);
+        de_vec4 rect = ui_rect(f, popup);
+        label = de_entity_get(f->world, popup, f->ui->ids.text);
+        f32 scale = world ? 1 : f->ui->scale;
+        f32 available_height = world ? (variant == 3 ? 60 : 100) : (variant == 1 ? 90 : 140);
+        f32 available_width = world ? (variant == 3 ? 80 : 200) : (variant == 1 ? 130 : 360);
+        de_text_style style = label->style;
+        style.size_px *= scale;
+        de_text_layout *layout = NULL;
+        ASSERT_EQ(
+            de_text_layout_build(fonts.t,
+                                 &(de_text_layout_desc){.utf8 = {content, sizeof(content) - 1},
+                                                        .style = &style,
+                                                        .max_width = rect.z - 2 * scale},
+                                 NULL, &layout),
+            DE_OK);
+        de_vec2 measured = de_text_layout_size(layout);
+        de_text_layout_free(layout);
+        f32 expected_height = fminf(available_height, fmaxf(40 * scale, measured.y + 2 * scale));
+        printf("tooltip variant%u rect %.1fx%.1f measured %.1f expected %.1f\n", variant, rect.z,
+               rect.w, measured.y, expected_height);
+        EXPECT_FLOAT_EQ(rect.w, expected_height, .5f);
+        EXPECT_TRUE(rect.z <= available_width);
+        const DeUiNode *node = de_entity_get_const(f->world, popup, f->ui->ids.node);
+        EXPECT_TRUE(node->clip);
+        f32 left = world ? 0 : (variant == 1 ? 5 : 10);
+        f32 top = world ? 0 : (variant == 1 ? 5 : 20);
+        EXPECT_TRUE(rect.x >= left && rect.x + rect.z <= left + available_width + .5f);
+        EXPECT_TRUE(rect.y >= top && rect.y + rect.w <= top + available_height + .5f);
+        if (variant == 2) {
+            DeUiWorldPanel *panel =
+                de_entity_get(f->world, root, de_component_find(f->world, "DeUiWorldPanel"));
+            panel->size_m = (de_vec2){.8f, .6f};
+            ui_frame(f);
+            EXPECT_FLOAT_EQ(ui_rect(f, popup).z, 80, .5f);
+            EXPECT_FLOAT_EQ(ui_rect(f, popup).w, 60, .5f);
+            panel = de_entity_get(f->world, root, de_component_find(f->world, "DeUiWorldPanel"));
+            panel->size_m = (de_vec2){2, 1};
+            ui_frame(f);
+            EXPECT_FLOAT_EQ(ui_rect(f, popup).w, expected_height, .5f);
+            label = de_entity_get(f->world, popup, f->ui->ids.text);
+            label->literal = (de_str){"Tip", 3};
+            ui_frame(f);
+            EXPECT_FLOAT_EQ(ui_rect(f, popup).w, 40, .5f);
+        }
+        EXPECT_FLOAT_EQ(f->ui->scale, variant == 1 ? 1 : 2, 0);
+        ((DeUiInteractionState *)de_entity_get(f->world, owner, f->ui->ids.state))->focused = false;
+        ui_frame(f);
+        EXPECT_FALSE(de_entity_alive(f->world, popup));
+        de_entity_despawn_recursive(f->world, root);
+    }
+    f->ui->desc.text = NULL;
+    runtime_fx_teardown(&fonts);
+}
+#endif
