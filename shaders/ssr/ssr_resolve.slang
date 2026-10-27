@@ -162,7 +162,7 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
 }
 
 // Native regression oracle: uses the same history sampling as reflection resolve.
-struct HistoryQueryParams { uint color, surface, output, valid; uint depth, reserved0, reserved1, reserved2; };
+struct HistoryQueryParams { uint color, surface, output, valid; uint depth, gb1, reserved1, reserved2; };
 [shader("compute")][numthreads(8,8,1)]
 void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQueryParams q) {
     if (any(id.xy >= 4)) return;
@@ -179,6 +179,7 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
     pc.history_color = q.color;
     pc.history_valid = q.valid;
     pc.depth = q.depth;
+    pc.gb1 = q.gb1;
     DeSceneConstants sc = (DeSceneConstants)0;
     sc.view[0] = float4(1,0,0,0);
     sc.view[1] = float4(0,1,0,0);
