@@ -35,6 +35,8 @@ w, h, tw, th = g["w"], g["h"], g["tw"], g["th"]
 actual = g["texture"]("hit_footprints", 11, "4f", tw, th)
 color = g["texture"]("history_color", 5, "4e", w, h)
 faces = g["faces"]
+packed_gb2 = g["texture"]("gbuffer2", 12, "I", w, h)
+verified_hits = 0
 counts = {"positive": 0, "inactive": 0, "full": 0, "partial": 0, "none": 0}
 errors = []
 max_coverage_error = max_color_error = 0.0
@@ -49,6 +51,11 @@ for i, (hit, sample) in enumerate(zip(g["hits"], actual)):
     hx, hy = min(int(u*w), w-1), min(int(v*h), h-1)
     face = faces[hy*w+hx]
     assert face is not None
+    flags = (packed_gb2[hy*w+hx][0] >> 16) & 255
+    # This fixture has seven flat, lit, unmapped boxes; provenance must come
+    # from actual material resolve, never a synthetic query parameter.
+    assert (flags & 32) != 0 and (flags & 16) == 0, (i, flags, face)
+    verified_hits += 1
     mx, my = g["motion"][hy*w+hx]
     previous_u, previous_v = u-mx*.5, v+my*.5
     in_domain = 0 <= previous_u < 1 and 0 <= previous_v < 1
@@ -94,7 +101,8 @@ else:
     assert counts["positive"] == 2578
     assert counts["full"] == 2454 and counts["partial"] == 124
 assert counts["inactive"] == tw*th-counts["positive"]
-report = {"moving_camera": moving, "max_motion_ndc": g["max_motion"],
+assert verified_hits == counts["positive"]
+report = {"producer_verified_hits": verified_hits, "moving_camera": moving, "max_motion_ndc": g["max_motion"],
           "previous_depth_max_error": max(g["previous_depth_errors"], default=0),
           "previous_snapped_empty": g["previous_snapped_empty"], "counts": counts, "max_coverage_error": max_coverage_error,
           "max_color_error": max_color_error, "mismatches": len(errors),

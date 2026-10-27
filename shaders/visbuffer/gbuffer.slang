@@ -21,6 +21,9 @@ public static const uint DE_GB_FLAG_TRANSMISSION = 2;
 public static const uint DE_GB_FLAG_SUBSURFACE = 4;
 public static const uint DE_GB_FLAG_CLEARCOAT = 8;
 public static const uint DE_GB_FLAG_UNLIT = 16;
+/// The stored shading normal encodes the triangle geometric normal (up to sign).
+/// Only the producer may establish this; a normal-map/material declaration is insufficient.
+public static const uint DE_GB_FLAG_GEOMETRIC_NORMAL = 32;
 /// Bits of each octahedral normal component.
 public static const uint DE_GB_NORMAL_BITS = 11;
 

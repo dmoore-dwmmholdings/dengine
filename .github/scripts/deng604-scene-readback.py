@@ -3,13 +3,13 @@ from pathlib import Path
 import hashlib,json,os,re,shutil,subprocess,sys,xml.etree.ElementTree as E
 root=Path.cwd();build=root/'build/windows-clang-cl-debug';out=build/'deng604-scene-readback';out.mkdir(exist_ok=True)
 files=['src/render/passes/ssr/ssr.c','src/render/passes/ssr/scene_history.c','src/render/passes/ssr/ssr_internal.h','tests/golden/base_tier/base_tier_scenes.c']
-saved={f:(root/f).read_bytes() for f in files};original={f:subprocess.check_output(['git','show','a5e3a548:'+f]) for f in files}
+saved={f:(root/f).read_bytes() for f in files};original={f:subprocess.check_output(['git','show','8c53f288:'+f]) for f in files}
 fixture='tests/golden/base_tier/base_tier_scenes.c'
 fixture_source=saved[fixture].decode()
 hook='        /* DENG604_MOTION_BEGIN */'+fixture_source.split('        /* DENG604_MOTION_BEGIN */')[1].split('        /* DENG604_MOTION_END */')[0]+'        /* DENG604_MOTION_END */\n'
 original[fixture]=original[fixture].replace(b'    while (m.r->frame_index < 96u) {\n',b'    while (m.r->frame_index < 96u) {\n'+hook.encode())
-shaders=['shaders/ssr/ssr_common.slang','shaders/ssr/ssr_resolve.slang'];saved_shaders={f:(root/f).read_bytes() for f in shaders};candidate={f:subprocess.check_output(['git','show','a5e3a548:'+f]) for f in shaders}
-summary={'product':'a5e3a548','base':'81743f90','stages':{}};failed=False
+shaders=['shaders/ssr/ssr_common.slang','shaders/ssr/ssr_resolve.slang'];saved_shaders={f:(root/f).read_bytes() for f in shaders};candidate={f:subprocess.check_output(['git','show','8c53f288:'+f]) for f in shaders}
+summary={'product':'8c53f288','base':'81743f90','stages':{}};failed=False
 try:
  for label,shader,instrumented in [('candidate-control',candidate,False),('candidate-capture',saved_shaders,True)]:
   d=out/label;d.mkdir(exist_ok=True)
@@ -26,8 +26,8 @@ try:
   assert '[error]' not in text and '[fatal]' not in text
   image=build/'golden/d3d12/base/reflections_ssr_probes_medium.png';assert image.is_file();shutil.copy2(image,d/'image.png')
   if instrumented:
-   meta=json.loads((d/'metadata.json').read_text());assert meta['frame']==95 and len(meta['row_pitches'])==12
-   names=['depth','gbuffer1','motion','hits','rays','history_color','history_surface','previous_specular','previous_moments','output','write_moments','hit_footprints']
+   meta=json.loads((d/'metadata.json').read_text());assert meta['frame']==95 and len(meta['row_pitches'])==13
+   names=['depth','gbuffer1','motion','hits','rays','history_color','history_surface','previous_specular','previous_moments','output','write_moments','hit_footprints','gbuffer2']
    for i,n in enumerate(names):assert (d/(n+'.bin')).stat().st_size==meta['row_pitches'][i]*(meta['trace_height'] if i in (3,4,11) else meta['height'])
    assert (d/'params.bin').stat().st_size==128 and (d/'scene.bin').stat().st_size>0
   summary['stages'][label]={'exit':r.returncode,'failure':c.find('failure').attrib if c.find('failure') is not None else None,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'sources':{f:hashlib.sha256((root/f).read_bytes()).hexdigest() for f in files+shaders},'buffers':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in d.glob('*.bin')}}
@@ -35,6 +35,7 @@ try:
  for label in ['candidate']:
   matches=(out/(label+'-control')/'image.png').read_bytes()==(out/(label+'-capture')/'image.png').read_bytes()
   summary[label+'_capture_image_exact']=matches;failed|=not matches
+ (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
  assert summary['candidate_capture_image_exact'], 'query instrumentation changed rendered image'
  subprocess.run([sys.executable,'.github/scripts/deng604-scene-hit-oracle.py',str(out/'candidate-capture'),str(out/'hit-oracle.json')],check=True,env=dict(os.environ,DE_DENG604_MOTION='1'))
  (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')

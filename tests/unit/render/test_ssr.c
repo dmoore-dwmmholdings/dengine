@@ -1406,6 +1406,21 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
                 current_normal[1] = (f32)((packed >> 10) & 1023u) / 1023.f;
                 current_normal[2] = (f32)((packed >> 20) & 1023u) / 1023.f;
                 current_normal[3] = (f32)(packed >> 30) / 3.f;
+                if (test >= 34) {
+                    /* A one-pixel face has no horizontal depth tangent. Its producer
+                     * verified that the stored normal represents the geometric plane. */
+                    const f32 nx = ((f32)x + .5f) * .5f - 1.f;
+                    surface[0] = .5f - .25f * nx;
+                    depth[0] = x == 2 ? .5f - .25f * nx : (x < 2 ? .25f : .7f);
+                    if (test == 35) {
+                        surface[1] = 1;
+                        surface[3] = 0;
+                    }
+                    if (test == 36)
+                        surface[0] = .25f;
+                    if (test == 37)
+                        depth[0] = 0;
+                }
                 if (test == 25) {
                     surface[1] = 1;
                     surface[3] = 0;
@@ -1453,7 +1468,7 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
                                       : (1u | (distant ? 2u : 0u) | (test >= 10 ? 8u : 0u) |
                                          (analytic_tilted ? 16u : 0u) | (test == 19 ? 32u : 0u) |
                                          ((test >= 20 && test < 24) || test == 31 ? 64u : 0u) |
-                                         (shaded ? 128u : 0u))),
+                                         (shaded ? 128u : 0u) | (test >= 34 ? 256u : 0u))),
                      de_gpu_texture_bindless(f->dev, images[3], 0, false),
                      de_gpu_texture_bindless(f->dev, images[4], 0, false),
                      0,
@@ -1472,7 +1487,7 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
         for (u32 i = 0; i < 16; ++i) {
             const bool moving = test == 9 && i % 4 == 1;
             const bool rejected = test == 3 || test == 4 || test == 8 || test == 18 || test == 25 ||
-                                  (test >= 27 && test <= 30);
+                                  (test >= 27 && test <= 30) || (test >= 35 && test <= 37);
             const f32 expected_color = test == 22 || test == 23 ? 2.9f
                                        : test == 9              ? (moving ? 5.0f : 1.8f)
                                                                 : (rejected ? 0.0f : 1.0f);
@@ -1505,6 +1520,9 @@ static void history_footprint_range(sfx *f, de_gpu_backend backend, u32 first, u
     }                                                                                              \
     TEST_F(ssr, history_neighbor_plane_continuity_##tag, sfx) {                                    \
         history_footprint_range(f, backend, 32, 34);                                               \
+    }                                                                                              \
+    TEST_F(ssr, history_verified_geometry_##tag, sfx) {                                            \
+        history_footprint_range(f, backend, 34, 38);                                               \
     }
 HISTORY_FOOTPRINT_TEST(metal, DE_GPU_METAL)
 HISTORY_FOOTPRINT_TEST(vulkan, DE_GPU_VULKAN)

@@ -57,7 +57,8 @@ enum {
     DE__GB_FLAG_TRANSMISSION = 2u, /**< transmission or diffuse transmission > 0 */
     DE__GB_FLAG_SUBSURFACE = 4u,
     DE__GB_FLAG_CLEARCOAT = 8u,
-    DE__GB_FLAG_UNLIT = 16u
+    DE__GB_FLAG_UNLIT = 16u,
+    DE__GB_FLAG_GEOMETRIC_NORMAL = 32u /**< producer-verified triangle normal, up to sign */
 };
 
 /** Bits of each octahedral normal component (10 in r / g, 1 in a). */

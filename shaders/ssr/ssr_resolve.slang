@@ -9,7 +9,7 @@ struct HistoryParams {
 // Shared by production resolve and the native subpixel-hit oracle.
 [ForceInline]
 float4 ssr_hit_history(SsrParams pc, DeSceneConstants sc, float2 uv, float depth,
-                       float2 motion, float3 normal) {
+                       float2 motion, float3 normal, bool verified_geometry = false) {
     // Hi-Z returns a leaf's point-sampled depth. Its continuous ray UV is not the
     // point where that depth was measured. Anchor the validation plane at its texel centre,
     // while keeping the continuous UV for bilinear radiance sampling.
@@ -18,7 +18,8 @@ float4 ssr_hit_history(SsrParams pc, DeSceneConstants sc, float2 uv, float depth
     float2 source_uv = (float2(pixel) + .5) / float2(size);
     float3 position = ssr_position(sc, source_uv, depth);
     float3 geometric_normal;
-    if (!ssr_geometric_normal(pc, sc, pixel, depth, position, normal, geometric_normal))
+    if (!ssr_geometric_normal(pc, sc, pixel, depth, position, normal, geometric_normal,
+                               verified_geometry))
         return float4(0);
     return ssr_history_sample(pc, sc, pc.history_color, ssr_previous_uv(uv, motion),
                               position, normal, geometric_normal, true);
@@ -57,7 +58,8 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
     float2 uv = (float2(pixel) + 0.5) / float2(pc.width, pc.height);
     DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.slot];
     float z = de_tex2d(pc.depth).Load(int3(pixel, 0)).r;
-    SurfaceData surface = ssr_surface(pc, pixel);
+    bool surface_geometry;
+    SurfaceData surface = ssr_surface(pc, pixel, surface_geometry);
     float4 result = float4(0, 0, 0, 0), moments = float4(0, 0, 0, 0);
     if (z > 0 && surface.roughness < pc.max_roughness &&
         (surface.features & DE_MATERIAL_FEATURE_UNLIT) == 0) {
@@ -103,12 +105,14 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
                     continue;
                 uint2 hp = min(uint2(hit.xy * float2(pc.width, pc.height)),
                                uint2(pc.width - 1, pc.height - 1));
-                SurfaceData hs = ssr_surface(pc, hp);
+                bool hit_geometry;
+                SurfaceData hs = ssr_surface(pc, hp, hit_geometry);
                 // History is pre-exposed; correct into this frame, then remove its exposure once.
                 float exposure = max(sc.pre_exposure, 1e-8);
                 float ratio = exposure / max(pc.previous_exposure, 1e-8);
                 float4 history = ssr_hit_history(pc, sc, hit.xy, hit.z,
-                                                de_tex2d(pc.motion).Load(int3(hp, 0)).xy, hs.normal);
+                                                de_tex2d(pc.motion).Load(int3(hp, 0)).xy, hs.normal,
+                                                hit_geometry);
                 if (!(history.a > 0)) continue; // No valid taps: retain the probe/sky fallback.
                 float3 color = history.rgb * ratio / exposure;
                 if (!all(isfinite(color)))
@@ -129,7 +133,8 @@ float4 ssr_temporal_accumulate(float4 previous, float4 current, float3 clipped, 
             float2 prev = ssr_previous_uv(uv, de_tex2d(pc.motion).Load(int3(pixel, 0)).xy);
             if ((pc.history_valid & 2u) != 0) {
                 float3 geometric_normal;
-                bool plane_valid = ssr_geometric_normal(pc, sc, pixel, z, position, surface.normal, geometric_normal);
+                bool plane_valid = ssr_geometric_normal(pc, sc, pixel, z, position, surface.normal,
+                                                         geometric_normal, surface_geometry);
                 float4 old = float4(0), stats = float4(0);
                 if (plane_valid) {
                     old = ssr_history_sample(pc, sc, pc.previous_specular, prev, position,
@@ -241,7 +246,8 @@ void cs_ssr_history_queries(uint3 id : SV_DispatchThreadID, uniform HistoryQuery
         uint2 pixel = uint2(2,2);
         float depth = de_tex2d(pc.depth).Load(int3(pixel,0)).r;
         float3 center = ssr_position(sc, (float2(pixel)+.5)/4, depth);
-        plane_valid = ssr_geometric_normal(pc, sc, pixel, depth, center, normal, geometric_normal);
+        plane_valid = ssr_geometric_normal(pc, sc, pixel, depth, center, normal, geometric_normal,
+                                               (q.valid & 256u) != 0u);
     }
     float4 value = float4(0);
     if (plane_valid) value = ssr_history_sample(pc,sc,q.color,uv,position,normal,geometric_normal,true);
@@ -257,8 +263,11 @@ void cs_ssr_scene_hit_queries(uint3 id : SV_DispatchThreadID, uniform SsrParams 
     if (hit.z > 0 && hit.w > 0) {
         DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.slot];
         uint2 hp = min(uint2(hit.xy * float2(pc.width,pc.height)),uint2(pc.width-1,pc.height-1));
-        float3 normal = gb_decode(float4(0),de_tex2d(pc.gb1).Load(int3(hp,0)),float4(0)).normal;
-        value = ssr_hit_history(pc,sc,hit.xy,hit.z,de_tex2d(pc.motion).Load(int3(hp,0)).xy,normal);
+        DeGbSurface surface = gb_decode(float4(0),de_tex2d(pc.gb1).Load(int3(hp,0)),
+                                       de_tex2d(pc.gb2).Load(int3(hp,0)));
+        bool geometry = (surface.flags & DE_GB_FLAG_GEOMETRIC_NORMAL) != 0u;
+        value = ssr_hit_history(pc,sc,hit.xy,hit.z,de_tex2d(pc.motion).Load(int3(hp,0)).xy,
+                               surface.normal,geometry);
     }
     de_rwtex2d(pc.output)[id.xy] = value;
 }

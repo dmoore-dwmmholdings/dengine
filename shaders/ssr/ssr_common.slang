@@ -23,10 +23,16 @@ public float3 ssr_position(DeSceneConstants sc, float2 uv, float depth) {
 public float3 ssr_view(DeSceneConstants sc, float3 p) {
     return sc.proj[3].w > 0.5 ? normalize(sc.view[2].xyz) : normalize(sc.camera_position.xyz - p);
 }
-public SurfaceData ssr_surface(SsrParams pc, uint2 pixel) {
+public SurfaceData ssr_surface(SsrParams pc, uint2 pixel, out bool geometric_normal) {
     int3 p = int3(pixel, 0);
-    return de_surface_from_gb(
-        gb_decode(de_tex2d(pc.gb0).Load(p), de_tex2d(pc.gb1).Load(p), de_tex2d(pc.gb2).Load(p)));
+    DeGbSurface g = gb_decode(de_tex2d(pc.gb0).Load(p), de_tex2d(pc.gb1).Load(p),
+                              de_tex2d(pc.gb2).Load(p));
+    geometric_normal = (g.flags & DE_GB_FLAG_GEOMETRIC_NORMAL) != 0u;
+    return de_surface_from_gb(g);
+}
+public SurfaceData ssr_surface(SsrParams pc, uint2 pixel) {
+    bool unused;
+    return ssr_surface(pc, pixel, unused);
 }
 public float2 ssr_previous_uv(float2 uv, float2 motion) {
     return uv + motion * float2(-0.5, 0.5); // motion is NDC current-minus-previous, not UV
@@ -98,13 +104,21 @@ bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
     return all(isfinite(axis)) && dot(axis, axis) > 1e-20;
 }
 
-// Shading normals include normal maps and cannot predict the geometry's depth footprint.
-// Four depth loads / two position reconstructions establish a local geometric plane.
-// Neighbour preference adds up to four GB1 loads; shading normals never set its slope.
+// Generic shading normals cannot predict the geometry's depth footprint. A producer-verified
+// stored triangle normal is usable even when a face is only one pixel wide.
+// Otherwise four depth loads / two position reconstructions establish a local geometric plane.
+// Neighbour preference adds up to four GB1 loads; unverified shading normals never set its slope.
 public bool ssr_geometric_normal(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
-                                  float3 position, float3 shading_normal, out float3 normal) {
+                                  float3 position, float3 shading_normal, out float3 normal,
+                                  bool verified_geometry = false) {
     normal = float3(0);
     if (!(depth > 0) || !isfinite(depth) || !all(isfinite(position))) return false;
+    if (verified_geometry) {
+        float length2 = dot(shading_normal, shading_normal);
+        if (!all(isfinite(shading_normal)) || !isfinite(length2) || !(length2 > 1e-8)) return false;
+        normal = shading_normal * rsqrt(length2);
+        return true;
+    }
     float3 dx, dy;
     if (!ssr_depth_axis(pc, sc, pixel, depth, position, int2(1,0), shading_normal, dx) ||
         !ssr_depth_axis(pc, sc, pixel, depth, position, int2(0,1), shading_normal, dy)) return false;
