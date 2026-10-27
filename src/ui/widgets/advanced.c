@@ -1,5 +1,6 @@
 #include "advanced_internal.h"
 #include "ui/style/stylesheet_internal.h"
+#include "ui/world/world_internal.h"
 #include <math.h>
 de_component de_ui__advanced_component(de_ui *ui, const char *name, u32 size, u32 align,
                                        const de_field_info *fields, u32 count, bool authored) {
@@ -77,6 +78,24 @@ void de_ui__advanced_tag(de_ui *ui, de_entity e, de_ui_widget_type type) {
         if (tag)
             tag->type = type;
     }
+}
+de_ui_popup_context de_ui__popup_context(de_ui *ui, de_entity owner) {
+    de_ui_popup_context context = {
+        .bounds = {(f32)ui->safe.left, (f32)ui->safe.top,
+                   fmaxf(0, (f32)ui->width - ui->safe.left - ui->safe.right),
+                   fmaxf(0, (f32)ui->height - ui->safe.top - ui->safe.bottom)},
+        .scale = ui->scale};
+    de_entity root = owner, parent = de_entity_parent(ui->world, root);
+    while (parent.bits && de_entity_has(ui->world, parent, ui->ids.node)) {
+        root = parent;
+        parent = de_entity_parent(ui->world, root);
+    }
+    if (de_ui__world_root_extent(ui, root, &context.bounds)) {
+        /* Portal to the panel root, outside any scroll/control clip, in panel-local pixels. */
+        context.parent = root;
+        context.scale = 1;
+    }
+    return context;
 }
 de_entity de_ui__advanced_node(de_ui *ui, de_entity parent, f32 w, f32 h) {
     de_entity e = de_entity_spawn(ui->world);
