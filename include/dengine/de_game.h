@@ -59,6 +59,8 @@ typedef struct de_engine {
     de_net_session *net; /* created by the game when needed */
     de_steam *steam;
     void *game_state; /* game-owned; survives hot reload */
+    /** Host-selected windowless GPU mode. Read only; see de_host_desc.offscreen. */
+    bool offscreen;
 } de_engine;
 
 /* ---------- Timing ---------- */
@@ -147,6 +149,16 @@ typedef struct de_host_desc {
      * data; NULL = the directory of the executable. `dengine --game <lib>` sets it to the game
      * library's directory. Ignored when the caller has called de_fs_init already. */
     const char *game_dir;
+    /** Windowless GPU tools/tests. Starts the platform with events only, before game init;
+     * no video driver, displays, windows or cursor capture can be created through the platform
+     * API. Unlike headless, game-owned GPU/renderer instances and Extract remain available.
+     * Create the renderer with window zero and views with explicit pixel-sized render targets;
+     * game.toml's window dimensions/mode do not create a surface. Normal event pumping and
+     * frame_cap_hz pacing remain; these timings do not measure display presentation.
+     * Mutually exclusive with headless; unsupported in a DE_HEADLESS build. A caller-owned
+     * platform must already be events-only, otherwise startup fails without changing it.
+     * The game must not start another video subsystem or use native UI outside the engine. */
+    bool offscreen;
 } de_host_desc;
 
 /**
@@ -162,6 +174,8 @@ typedef struct de_host_desc {
  * `init`, `register_types`, `register_systems`, runs the main loop, calls `shutdown`, and
  * destroys everything in reverse order. `shutdown` is called only when `init` succeeded.
  *
+ * `--offscreen` selects desc.offscreen before platform startup, including for custom static
+ * hosts. `--headless` selects desc.headless; requesting both is an error.
  * Main thread only (the platform layer and the task system's worker 0 live there).
  * @return the process exit code: 0 on success, 1 on any failure (the error and its cause chain
  *         are logged in category "host").

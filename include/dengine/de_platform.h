@@ -60,7 +60,8 @@ DE_API de_result de_platform_init(const de_platform_desc *desc);
 DE_API void de_platform_shutdown(void);
 
 /** True when the platform runs without video (DE_PLATFORM_HEADLESS, a DE_HEADLESS build, or
- * not initialised). */
+ * not initialised). This reports video availability, not GPU availability: an offscreen host
+ * uses events-only platform services while allowing game-owned offscreen GPU rendering. */
 DE_API bool de_platform_headless(void);
 
 /* ---------- Displays ----------

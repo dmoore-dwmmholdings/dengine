@@ -10,9 +10,10 @@
 # engine_window (label `window`), which checks that a zeroed desc opens a window and skips
 # without a video driver.
 de_add_test(NAME engine SOURCES test_engine.c LIBS de_host TIMEOUT 300)
+de_add_test(NAME engine_offscreen SOURCES test_engine_offscreen.c LIBS de_host TIMEOUT 300)
 de_add_test(NAME game_toml SOURCES test_game_toml.c LIBS de_host)
 de_add_test(NAME engine_window SOURCES test_engine_window.c LIBS de_host LABELS unit window)
-foreach(_de_host_test test_engine test_game_toml test_engine_window)
+foreach(_de_host_test test_engine test_engine_offscreen test_game_toml test_engine_window)
     if(TARGET ${_de_host_test})
         target_include_directories(${_de_host_test} PRIVATE "${DE_ROOT_DIR}/src")
         target_compile_definitions(${_de_host_test} PRIVATE
@@ -21,6 +22,50 @@ foreach(_de_host_test test_engine test_game_toml test_engine_window)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_de_host_test}_tmp")
     endif()
 endforeach()
+if(TARGET test_engine_offscreen AND TARGET de_tp_sdl3)
+    target_link_libraries(test_engine_offscreen PRIVATE de_tp_sdl3)
+endif()
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _de_offscreen_build_type)
+if(DE_HAS_RENDER AND DE_BUILD_TOOLS AND
+   (DE_MULTI_CONFIG OR _de_offscreen_build_type MATCHES "^(DEBUG|DEV)$"))
+    # Deliberately not registered as an automatic native test. The public-only fixture
+    # requires --allow-native for real hardware; no window-capable SDL video driver is used.
+    # It exercises Debug/Dev source cooking. Release/Shipping retain packed-only policy;
+    # this fixture supplies no pre-cooked pack and cannot exercise those configurations.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(de_offscreen_capture offscreen_capture.c)
+    target_link_libraries(de_offscreen_capture PRIVATE de_host de_build_flags)
+    set(_de_offscreen_data "${CMAKE_CURRENT_BINARY_DIR}/offscreen-data")
+    file(MAKE_DIRECTORY "${_de_offscreen_data}/assets")
+    configure_file(data/offscreen-assets.toml "${_de_offscreen_data}/offscreen-assets.toml" COPYONLY)
+    configure_file(data/offscreen.toml "${_de_offscreen_data}/offscreen.toml" COPYONLY)
+    # Reuse the original2x2 texture oracle byte-for-byte; do not weaken VFS path containment.
+    configure_file("${DE_ROOT_DIR}/tests/unit/import/data/texture/checker.png"
+        "${_de_offscreen_data}/assets/checker.png" COPYONLY)
+    target_compile_definitions(de_offscreen_capture PRIVATE
+        DE_OFFSCREEN_DATA_DIR="${_de_offscreen_data}")
+    set_target_properties(de_offscreen_capture PROPERTIES OUTPUT_NAME de-offscreen-capture)
+    set(_de_offscreen_test_configs)
+    if(DE_MULTI_CONFIG)
+        set(_de_offscreen_test_configs CONFIGURATIONS Debug Dev)
+    endif()
+    add_test(NAME offscreen_capture_null COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_capture.py"
+        "$<TARGET_FILE:de_offscreen_capture>" --backend null ${_de_offscreen_test_configs})
+    set_tests_properties(offscreen_capture_null PROPERTIES LABELS "unit;host" TIMEOUT 180)
+    if(UNIX)
+        add_test(NAME offscreen_capture_cancel COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/check_offscreen_cancel.py" ${_de_offscreen_test_configs})
+        set_tests_properties(offscreen_capture_cancel PROPERTIES LABELS "unit;host" TIMEOUT 30)
+    endif()
+    if(APPLE)
+        add_executable(de_offscreen_observe offscreen_desktop_observer.m)
+        target_link_libraries(de_offscreen_observe PRIVATE de_build_flags
+            "-framework AppKit" "-framework CoreGraphics")
+        set_source_files_properties(offscreen_desktop_observer.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        set_target_properties(de_offscreen_observe PROPERTIES OUTPUT_NAME de-offscreen-observe)
+    endif()
+endif()
 
 # DENG-92: game library loading. fixtures/ builds test_game with de_add_game() and the plain
 # libraries of test_game_module.c (see fixtures/CMakeLists.txt). The host_game_* entries run
