@@ -23,10 +23,16 @@ public float3 ssr_position(DeSceneConstants sc, float2 uv, float depth) {
 public float3 ssr_view(DeSceneConstants sc, float3 p) {
     return sc.proj[3].w > 0.5 ? normalize(sc.view[2].xyz) : normalize(sc.camera_position.xyz - p);
 }
-public SurfaceData ssr_surface(SsrParams pc, uint2 pixel) {
+public SurfaceData ssr_surface(SsrParams pc, uint2 pixel, out bool geometric_normal) {
     int3 p = int3(pixel, 0);
-    return de_surface_from_gb(
-        gb_decode(de_tex2d(pc.gb0).Load(p), de_tex2d(pc.gb1).Load(p), de_tex2d(pc.gb2).Load(p)));
+    DeGbSurface g = gb_decode(de_tex2d(pc.gb0).Load(p), de_tex2d(pc.gb1).Load(p),
+                              de_tex2d(pc.gb2).Load(p));
+    geometric_normal = (g.flags & DE_GB_FLAG_GEOMETRIC_NORMAL) != 0u;
+    return de_surface_from_gb(g);
+}
+public SurfaceData ssr_surface(SsrParams pc, uint2 pixel) {
+    bool unused;
+    return ssr_surface(pc, pixel, unused);
 }
 public float2 ssr_previous_uv(float2 uv, float2 motion) {
     return uv + motion * float2(-0.5, 0.5); // motion is NDC current-minus-previous, not UV
@@ -57,19 +63,97 @@ public bool ssr_history_valid(SsrParams pc, DeSceneConstants sc, float2 uv, floa
     float expected = clip.z / clip.w;
     return abs(surface.x - expected) <= max(0.002 * expected, 2e-4);
 }
-// Motion must validate each bilinear contributor, not accept four surfaces after one test.
-// Keep the established stationary footprint (and convergence); always reject nonfinite colour.
+// One depth-derived tangent. Prefer the nearer depth sample on either side so silhouettes
+// do not normally borrow their opposite surface. A local isolated depth extremum with two
+// distant neighbours does not establish a receiver plane and must fall back.
+bool ssr_depth_axis(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
+                    float3 position, int2 step, float3 shading_normal, out float3 axis) {
+    axis = float3(0);
+    int2 lo = int2(pixel) - step, hi = int2(pixel) + step;
+    int2 size = int2(pc.width, pc.height);
+    bool vl = all(lo >= 0) && all(lo < size), vh = all(hi >= 0) && all(hi < size);
+    float zl = 0, zh = 0;
+    if (vl) zl = de_tex2d(pc.depth).Load(int3(lo, 0)).r;
+    if (vh) zh = de_tex2d(pc.depth).Load(int3(hi, 0)).r;
+    vl = vl && isfinite(zl) && zl > 0;
+    vh = vh && isfinite(zh) && zh > 0;
+    if (!vl && !vh) return false;
+    bool use_lo = vl && (!vh || abs(zl - depth) < abs(zh - depth));
+    // At a corner the closest reverse-Z sample may lie on another face. Use shading
+    // agreement only as a neighbour preference; mapped normals never define the plane.
+    // If neither side agrees (e.g. a varying normal map), retain the depth choice.
+    if (vl && vh) {
+        int2 first = use_lo ? lo : hi;
+        float3 first_normal = gb_decode(float4(0), de_tex2d(pc.gb1).Load(int3(first,0)), float4(0)).normal;
+        bool agrees = all(isfinite(first_normal)) && dot(first_normal, shading_normal) >= .85;
+        if (!agrees) {
+            int2 other = use_lo ? hi : lo;
+            float3 other_normal = gb_decode(float4(0), de_tex2d(pc.gb1).Load(int3(other,0)), float4(0)).normal;
+            if (all(isfinite(other_normal)) && dot(other_normal, shading_normal) >= .85)
+                use_lo = !use_lo;
+        }
+    }
+    int2 q = use_lo ? lo : hi;
+    float z = use_lo ? zl : zh;
+    float3 neighbour = ssr_position(sc, (float2(q) + .5) / float2(size), z);
+    if (!all(isfinite(neighbour))) return false;
+    float3 delta = neighbour - position;
+    if (vl && vh && (zl - depth) * (zh - depth) > 0 &&
+        abs(dot(sc.view[2].xyz, delta)) > max(pc.thickness, .01)) return false;
+    axis = use_lo ? -delta : delta;
+    return all(isfinite(axis)) && dot(axis, axis) > 1e-20;
+}
+
+// Generic shading normals cannot predict the geometry's depth footprint. A producer-verified
+// stored triangle normal is usable even when a face is only one pixel wide.
+// Otherwise four depth loads / two position reconstructions establish a local geometric plane.
+// Neighbour preference adds up to four GB1 loads; unverified shading normals never set its slope.
+public bool ssr_geometric_normal(SsrParams pc, DeSceneConstants sc, uint2 pixel, float depth,
+                                  float3 position, float3 shading_normal, out float3 normal,
+                                  bool verified_geometry = false) {
+    normal = float3(0);
+    if (!(depth > 0) || !isfinite(depth) || !all(isfinite(position))) return false;
+    if (verified_geometry) {
+        float length2 = dot(shading_normal, shading_normal);
+        if (!all(isfinite(shading_normal)) || !isfinite(length2) || !(length2 > 1e-8)) return false;
+        normal = shading_normal * rsqrt(length2);
+        return true;
+    }
+    float3 dx, dy;
+    if (!ssr_depth_axis(pc, sc, pixel, depth, position, int2(1,0), shading_normal, dx) ||
+        !ssr_depth_axis(pc, sc, pixel, depth, position, int2(0,1), shading_normal, dy)) return false;
+    float3 n = cross(normalize(dx), normalize(dy));
+    float length2 = dot(n, n);
+    if (!all(isfinite(n)) || !(length2 > 1e-8)) return false;
+    normal = n * rsqrt(length2);
+    return true;
+}
+
+// Validate every contributor, including stationary receivers. A projected receiver plane
+// predicts each tap's depth: a constant centre depth wrongly rejects continuous tilted surfaces.
 public float4 ssr_history_sample(SsrParams pc, DeSceneConstants sc, uint index, float2 uv,
-                                 float3 position, float3 normal, bool footprint_coverage = false) {
-    if (!ssr_history_valid(pc, sc, uv, position, normal)) return float4(0);
+                                 float3 position, float3 normal, float3 geometric_normal,
+                                 bool footprint_coverage = false) {
+    if ((pc.history_valid & 1u) == 0 || !all(isfinite(uv)) || any(uv < 0) || any(uv >= 1) ||
+        !all(isfinite(normal)) || dot(normal, normal) < 1e-8 ||
+        !all(isfinite(geometric_normal)) || dot(geometric_normal, geometric_normal) < 1e-8)
+        return float4(0);
     float4 point = float4(position, 1);
-    float4 current = float4(dot(sc.view_proj[0], point), dot(sc.view_proj[1], point),
-                            dot(sc.view_proj[2], point), dot(sc.view_proj[3], point));
-    float2 current_uv = current.xy / current.w * float2(.5, -.5) + .5;
-    bool moving = current.w <= 0 || length((current_uv - uv) * float2(pc.width, pc.height)) > .01;
     float4 previous = float4(dot(sc.prev_view_proj[0], point), dot(sc.prev_view_proj[1], point),
                              dot(sc.prev_view_proj[2], point), dot(sc.prev_view_proj[3], point));
-    float expected = previous.z / previous.w;
+    if (!all(isfinite(previous)) || !(previous.w > 0)) return float4(0);
+    float3 ndc = previous.xyz / previous.w;
+    float3 tangent = normalize(cross(geometric_normal, abs(geometric_normal.z) < .9 ?
+                                      float3(0,0,1) : float3(0,1,0)));
+    float3 bitangent = cross(geometric_normal, tangent);
+    float4 dt = float4(dot(sc.prev_view_proj[0].xyz, tangent), dot(sc.prev_view_proj[1].xyz, tangent),
+                       dot(sc.prev_view_proj[2].xyz, tangent), dot(sc.prev_view_proj[3].xyz, tangent));
+    float4 db = float4(dot(sc.prev_view_proj[0].xyz, bitangent), dot(sc.prev_view_proj[1].xyz, bitangent),
+                       dot(sc.prev_view_proj[2].xyz, bitangent), dot(sc.prev_view_proj[3].xyz, bitangent));
+    float3 plane = cross(dt.xyz - ndc * dt.w, db.xyz - ndc * db.w);
+    if (!all(isfinite(plane)) || abs(plane.z) <= 1e-6 * length(plane)) return float4(0);
+    float2 slope = -plane.xy / plane.z;
+    float2 previous_uv = ndc.xy * float2(.5, -.5) + .5;
     float2 p = uv * float2(pc.width, pc.height) - 0.5;
     int2 base = int2(floor(p));
     float2 f = frac(p);
@@ -82,16 +166,17 @@ public float4 ssr_history_sample(SsrParams pc, DeSceneConstants sc, uint index, 
                 continue;
             float2 center = (float2(q) + 0.5) / float2(pc.width, pc.height);
             float w = (x == 0 ? 1-f.x : f.x) * (y == 0 ? 1-f.y : f.y);
-            if (w > 0 && (!moving || ssr_history_valid(pc, sc, center, position, normal))) {
-                if (moving) {
-                    float depth = de_rwtex2d(pc.history_surface)[q].x;
-                    // A fixed reverse-Z epsilon accepts metre-scale separation at a distance.
-                    // Use the ray trace's world-space thickness for moving history footprints.
-                    float separation = sc.proj[3].w > .5
-                        ? abs(depth - expected) / max(abs(sc.proj[2].z), 1e-8)
-                        : abs(expected / max(depth, 1e-12) - 1) * abs(previous.w);
-                    if (separation > max(pc.thickness, .01)) continue;
-                }
+            if (w > 0) {
+                float4 surface = de_rwtex2d(pc.history_surface)[q];
+                float expected = ndc.z + dot(slope, (center - previous_uv) * float2(2, -2));
+                if (!all(isfinite(surface)) || !(surface.x > 0) || !(expected > 0) ||
+                    dot(surface.yzw, normal) < .85 ||
+                    abs(surface.x - expected) > max(.002 * expected, 2e-4)) continue;
+                // Raw reverse-Z tolerance alone accepts metre-scale separation at a distance.
+                float separation = sc.proj[3].w > .5
+                    ? abs(surface.x - expected) / max(abs(sc.proj[2].z), 1e-8)
+                    : abs(expected / surface.x - 1) * abs(previous.w);
+                if (separation > max(pc.thickness, .01)) continue;
                 float4 value = de_rwtex2d(index)[q];
                 if (all(isfinite(value))) { sum += value * w; weight += w; }
             }
