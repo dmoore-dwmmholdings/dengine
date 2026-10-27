@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 2
       - name: Verify exact candidate tests and matched runtime source
         run: |
-          candidate=1cd64c417f163114677dc8257b753ca00a233204
+          candidate=1eb81241ccdda38f3ad5a12878ebd7653ba01998
           baseline=6e52b95642491963336f20b6df58e0bc54ad306a
           git fetch --no-tags --depth=1 origin "$candidate" "$baseline"
           git diff --exit-code "$candidate" HEAD -- . ':(exclude).github/workflows/ci.yml'
@@ -105,7 +105,7 @@ jobs:
           $watch.Stop()
           $stdout.GetAwaiter().GetResult() | Set-Content (Join-Path $out 'diagnostic-stdout.log')
           $stderr.GetAwaiter().GetResult() | Set-Content (Join-Path $out 'diagnostic-stderr.log')
-          $report = @{ purpose='separate diagnostic; original CTest deadline/results retained'; exitCode=$process.ExitCode; timedOut=$timedOut; wallSeconds=$watch.Elapsed.TotalSeconds; cpuSeconds=$process.TotalProcessorTime.TotalSeconds; samples=$samples; pid=$process.Id; kind=$env:DENG653_KIND; candidate='1cd64c417f163114677dc8257b753ca00a233204' }
+          $report = @{ purpose='separate diagnostic; original CTest deadline/results retained'; exitCode=$process.ExitCode; timedOut=$timedOut; wallSeconds=$watch.Elapsed.TotalSeconds; cpuSeconds=$process.TotalProcessorTime.TotalSeconds; samples=$samples; pid=$process.Id; kind=$env:DENG653_KIND; candidate='1eb81241ccdda38f3ad5a12878ebd7653ba01998' }
           $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $out 'cpu-profile.json')
           $report | Select-Object purpose,exitCode,timedOut,wallSeconds,cpuSeconds | ConvertTo-Json
           if ($timedOut -or $process.ExitCode -ne 0) { exit 1 }
