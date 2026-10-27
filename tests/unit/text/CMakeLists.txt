@@ -11,6 +11,15 @@ if(TARGET test_text_import)
  target_sources(test_text_import PRIVATE test_font_runtime.c test_fallback.c)
 endif()
 
+# DENG-654: two complete Latin-ext cooks take ~94 CPU seconds under Apple ASan.
+# Scope the bounded sanitizer budget to that discovered case; ordinary builds keep 60s.
+if(TARGET test_text_import AND APPLE AND DE_SANITIZE MATCHES "(^|,)address(,|$)")
+ configure_file(cmake/font_asan_budget.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/font_asan_budget.cmake" @ONLY)
+ set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+  "${CMAKE_CURRENT_BINARY_DIR}/font_asan_budget.cmake")
+endif()
+
 if(TARGET test_text_import)
  target_link_libraries(test_text_import PRIVATE de_tp_harfbuzz)
 endif()
