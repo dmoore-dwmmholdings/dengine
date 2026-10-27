@@ -1,0 +1,66 @@
+DENG-653: Keep contour and edge visitation identical while avoiding checked
+STL iterator bookkeeping in per-pixel distance search/reset. Shape storage is
+immutable during generation; each data() access stays inside the vector size.
+No distance/fill/error-correction arithmetic or Debug optimization flags change.
+
+diff --git a/core/ShapeDistanceFinder.hpp b/core/ShapeDistanceFinder.hpp
+index 07fb5cdc..3e876352 100644
+--- a/core/ShapeDistanceFinder.hpp
++++ b/core/ShapeDistanceFinder.hpp
+@@ -15,14 +15,15 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
+     typename ContourCombiner::EdgeSelectorType::EdgeCache *edgeCache = shapeEdgeCache.empty() ? NULL : &shapeEdgeCache[0];
+ #endif
+ 
+-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
++    for (std::size_t contourIndex = 0; contourIndex < shape.contours.size(); ++contourIndex) {
++        const Contour *contour = shape.contours.data()+contourIndex;
+         if (!contour->edges.empty()) {
+-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
++            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contourIndex));
+ 
+-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
++            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? contour->edges.data()[contour->edges.size()-2] : contour->edges.data()[0];
+             const EdgeSegment *curEdge = contour->edges.back();
+-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
+-                const EdgeSegment *nextEdge = *edge;
++            for (std::size_t edgeIndex = 0; edgeIndex < contour->edges.size(); ++edgeIndex) {
++                const EdgeSegment *nextEdge = contour->edges.data()[edgeIndex];
+                 edgeSelector.addEdge(*edgeCache++, prevEdge, curEdge, nextEdge);
+                 prevEdge = curEdge;
+                 curEdge = nextEdge;
+@@ -38,14 +39,15 @@ typename ShapeDistanceFinder<ContourCombiner>::DistanceType ShapeDistanceFinder<
+     ContourCombiner contourCombiner(shape);
+     contourCombiner.reset(origin);
+ 
+-    for (std::vector<Contour>::const_iterator contour = shape.contours.begin(); contour != shape.contours.end(); ++contour) {
++    for (std::size_t contourIndex = 0; contourIndex < shape.contours.size(); ++contourIndex) {
++        const Contour *contour = shape.contours.data()+contourIndex;
+         if (!contour->edges.empty()) {
+-            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contour-shape.contours.begin()));
++            typename ContourCombiner::EdgeSelectorType &edgeSelector = contourCombiner.edgeSelector(int(contourIndex));
+ 
+-            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? *(contour->edges.end()-2) : *contour->edges.begin();
++            const EdgeSegment *prevEdge = contour->edges.size() >= 2 ? contour->edges.data()[contour->edges.size()-2] : contour->edges.data()[0];
+             const EdgeSegment *curEdge = contour->edges.back();
+-            for (std::vector<EdgeHolder>::const_iterator edge = contour->edges.begin(); edge != contour->edges.end(); ++edge) {
+-                const EdgeSegment *nextEdge = *edge;
++            for (std::size_t edgeIndex = 0; edgeIndex < contour->edges.size(); ++edgeIndex) {
++                const EdgeSegment *nextEdge = contour->edges.data()[edgeIndex];
+                 typename ContourCombiner::EdgeSelectorType::EdgeCache dummy;
+                 edgeSelector.addEdge(dummy, prevEdge, curEdge, nextEdge);
+                 prevEdge = curEdge;
+diff --git a/core/contour-combiners.cpp b/core/contour-combiners.cpp
+index 64146d5a..c0ccea11 100644
+--- a/core/contour-combiners.cpp
++++ b/core/contour-combiners.cpp
+@@ -65,8 +65,8 @@ OverlappingContourCombiner<EdgeSelector>::OverlappingContourCombiner(const Shape
+ template <class EdgeSelector>
+ void OverlappingContourCombiner<EdgeSelector>::reset(const Point2 &p) {
+     this->p = p;
+-    for (typename std::vector<EdgeSelector>::iterator contourEdgeSelector = edgeSelectors.begin(); contourEdgeSelector != edgeSelectors.end(); ++contourEdgeSelector)
+-        contourEdgeSelector->reset(p);
++    for (std::size_t i = 0; i < edgeSelectors.size(); ++i)
++        edgeSelectors.data()[i].reset(p);
+ }
+ 
+ template <class EdgeSelector>

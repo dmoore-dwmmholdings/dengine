@@ -451,6 +451,9 @@ license = "MIT"
 license_file = "LICENSE.txt"
 files = ["core/**", "msdfgen.h"]
 
+# Preserve traversal order while avoiding checked STL iterator bookkeeping per SDF pixel (DENG-653).
+patches = ["patches/0001-bound-hot-contour-traversal.patch"]
+
 [[lib]]
 name="harfbuzz"
 version="14.3.1"
