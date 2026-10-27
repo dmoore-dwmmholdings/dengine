@@ -825,7 +825,59 @@ static void capped_selection_stable(lx *f, de_gpu_backend b) {
     }
 }
 
+/* DENG-660: the native room lost point/spot lights because two- and three-entry lists
+ * duplicated another light during sorting. Exercise small, mixed-kind heaps as well as
+ * the existing large/capped sets, independent of atomic compaction order. */
+static void small_mixed_light_sets(lx *f, de_gpu_backend b) {
+    lx_open(f, b);
+    lx_floor(f, material_add(0.8f, 0.5f, 0.0f, 0.5f));
+    const DeLight lights[3] = {
+        {.kind = DE_LIGHT_POINT, .color = {1, 0.6f, 0.25f}, .intensity = 1800, .range = 30},
+        {.kind = DE_LIGHT_RECT,
+         .color = {0.4f, 1, 0.6f},
+         .intensity = 80,
+         .range = 30,
+         .area_size = {2, 1}},
+        {.kind = DE_LIGHT_SPOT,
+         .color = {0.3f, 0.5f, 1},
+         .intensity = 1500,
+         .range = 30,
+         .spot_inner = 0.35f,
+         .spot_outer = 0.65f}};
+    const de_vec3 positions[3] = {{0, 1.5f, 1.8f}, {4, 2, 4}, {-4, 0, 5}};
+    const u32 caps[3] = {1, 3, 256};
+    for (u32 n = 2; n <= 3; ++n) {
+        for (u32 permutation = 0; permutation < 2; ++permutation) {
+            for (u32 i = 0; i < n; ++i) {
+                u32 rank = permutation ? n - 1 - i : i;
+                de_vec3 p = positions[rank];
+                world_light(&f->w, i, &lights[rank], at(p.x, p.y, p.z));
+            }
+            for (u32 c = 0; c < 3; ++c) {
+                char value[16];
+                snprintf(value, sizeof value, "%u", caps[c]);
+                ASSERT_TRUE(cvar_set("r.cluster_max_lights", value));
+                lx_run(f);
+                const lx_result *r = &f->res;
+                EXPECT_EQ(r->counters[DE__LIGHTING_COUNTER_LOCAL / 4u], n);
+                EXPECT_EQ(r->counters[DE__LIGHTING_COUNTER_DROPPED / 4u], 0u);
+                u64 total = 0;
+                u32 marginal = 0;
+                u32 mism = compare_lists(r, caps[c], &total, &marginal);
+                EXPECT_GT(total, 100u);
+                EXPECT_EQ(mism, 0u);
+                printf("small mixed %u cap %u permutation %u: %llu touches, %u marginal, "
+                       "%u mismatches\n",
+                       n, caps[c], permutation, (unsigned long long)total, marginal, mism);
+            }
+        }
+    }
+}
+
 #define GPU_TESTS(sfx, backend)                                                                    \
+    TEST_F(clustered_lights, small_mixed_light_sets_##sfx, lx) {                                   \
+        small_mixed_light_sets(f, backend);                                                        \
+    }                                                                                              \
     TEST_F(clustered_lights, capped_selection_stable_##sfx, lx) {                                  \
         capped_selection_stable(f, backend);                                                       \
     }                                                                                              \

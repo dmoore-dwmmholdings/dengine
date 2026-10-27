@@ -402,8 +402,8 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
     for (uint end = k; end > 1; --end) {
         uint largest = de_buffer<uint>(pc.list)[cell.x];
         uint value = de_buffer<uint>(pc.list)[cell.x + end - 1];
-        de_buffer<uint>(pc.list)[cell.x + end - 1] = largest;
         light_heap_down(pc, cell.x, end - 1, 0, value);
+        de_buffer<uint>(pc.list)[cell.x + end - 1] = largest;
     }
 }
 
