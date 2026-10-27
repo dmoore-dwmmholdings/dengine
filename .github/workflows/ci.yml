@@ -50,9 +50,7 @@ jobs:
           fi
           git diff --exit-code "$runtime" -- src include shaders cmake third_party CMakeLists.txt CMakePresets.json
           git diff --exit-code "$candidate" -- tests tools
-          git rev-parse HEAD > source-identity.txt
-          echo "$runtime" >> source-identity.txt
-          echo "$candidate" >> source-identity.txt
+          git rev-parse HEAD "$runtime" "$candidate" > source-identity.txt
           sha256sum src/gpu/d3d12/d3d12_barriers.c tests/unit/gpu/d3d12/test_d3d12_cmd.c tests/unit/gpu/d3d12/test_d3d12_barrier_tables.c >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
         with:
