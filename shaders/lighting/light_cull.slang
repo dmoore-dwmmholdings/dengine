@@ -378,7 +378,7 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
         return;
     float3 lo, hi;
     cluster_bounds(pc, c, lo, hi);
-    uint n = min(de_bytes(pc.counters).load(DE_LIGHTING_COUNTER_LOCAL), lv.local_capacity);
+    uint n = min(de_rwbytes(pc.counters).load(DE_LIGHTING_COUNTER_LOCAL), lv.local_capacity);
     uint k = 0;
     for (uint i = 0; i < n; ++i) {
         if (!de_light_touches(de_robuffer<DeClusterLight>(pc.lights)[i], lo, hi))
@@ -398,12 +398,24 @@ void cs_light_fill(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
             light_heap_down(pc, cell.x, k, 0, i);
         }
     }
+    // CI-only: snapshot the two-element heap and its final swap inputs. Counter words16..28
+    // are diagnostic payload here, not the production entry/drop statistics.
+    uint trace_root = c == 0u ? de_buffer<uint>(pc.list)[cell.x] : 0u;
+    uint trace_tail = c == 0u ? de_buffer<uint>(pc.list)[cell.x + cell.y - 1u] : 0u;
+    uint trace_largest = 0xffffffffu, trace_value = 0xffffffffu;
     // Heap sort produces the same summation order even when the cluster is not capped.
     for (uint end = k; end > 1; --end) {
         uint largest = de_buffer<uint>(pc.list)[cell.x];
         uint value = de_buffer<uint>(pc.list)[cell.x + end - 1];
+        if (c == 0u && end == 2u) {
+            trace_largest = largest;
+            trace_value = value;
+        }
         de_buffer<uint>(pc.list)[cell.x + end - 1] = largest;
         light_heap_down(pc, cell.x, end - 1, 0, value);
+    }
+    if (c == 0u) {
+        de_rwbytes(pc.counters).store4(16u, uint4(trace_root, trace_tail, trace_largest, trace_value));
     }
 }
 

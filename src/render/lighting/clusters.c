@@ -253,6 +253,7 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     de_rg_read(p, lc->lights, DE_ACCESS_SHADER_READ);
     de_rg_read(p, lc->grid_buf, DE_ACCESS_SHADER_READ);
     de_rg_read(p, lc->counters, DE_ACCESS_SHADER_READ);
+    de_rg_write(p, lc->counters, DE_ACCESS_SHADER_WRITE); /* CI-only heap trace */
     de_rg_write(p, lc->list, DE_ACCESS_SHADER_WRITE);
     return true;
 }

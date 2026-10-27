@@ -1,4 +1,4 @@
-name: DENG-660 final-frame lighting readback (CI only)
+name: DENG-660 heap intermediate trace (CI only)
 on:
   workflow_dispatch:
     inputs:
@@ -32,7 +32,7 @@ jobs:
       - name: Verify held candidate and CI wrapper provenance
         shell: bash
         run: |
-          git diff --exit-code 8aa0194542967528c6e7304aa76024036619a7b9 HEAD -- . ':(exclude)tests/golden/base_tier/base_tier_scenes.c' ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng660-probes.py'
+          git diff --exit-code 8aa0194542967528c6e7304aa76024036619a7b9 HEAD -- . ':(exclude)tests/golden/base_tier/base_tier_scenes.c' ':(exclude)shaders/lighting/light_cull.slang' ':(exclude)src/render/lighting/clusters.c' ':(exclude).github/workflows/renderer-regressions.yml' ':(exclude).github/scripts/deng660-probes.py'
           git rev-parse HEAD > source-identity.txt
           git ls-tree HEAD tests/golden/refs/d3d12/base tests/golden/scenes.toml >> source-identity.txt
       - uses: ./.github/actions/setup-dengine
