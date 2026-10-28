@@ -4,6 +4,7 @@
  * Shipping compile de_asset_last_error and no-op hooks.
  */
 
+#include "asset/diagnostic_internal.h"
 #include "asset/hot_reload_internal.h"
 
 #include "asset/asset_internal.h"
@@ -817,6 +818,8 @@ static void dependents_fn(de_asset_system *s, u32 handle_id, void *user) {
     }
 }
 
+static void reload_details(de__pjob *job, de_asset_event *ev, const char *message);
+
 void de__asset_reload_swap(de_asset_system *s, de__pjob *job, de_asset_id *deps) {
     de__asset_reload *R = s->reload;
     const u32 dep_count = job->dep_slot_count;
@@ -852,6 +855,7 @@ void de__asset_reload_swap(de_asset_system *s, de__pjob *job, de_asset_id *deps)
     de_asset_event ev;
     memset(&ev, 0, sizeof ev);
     ev.kind = DE_ASSET_EV_RELOADED;
+    reload_details(job, &ev, NULL);
     ev.id = id;
     ev.state = DE_LOAD_READY;
     ev.error = DE_OK;
@@ -870,11 +874,38 @@ void de__asset_reload_swap(de_asset_system *s, de__pjob *job, de_asset_id *deps)
     R->stats.dependents += w.calls;
 }
 
+static void reload_details(de__pjob *job, de_asset_event *ev, const char *message) {
+    ev->has_cook_ms = job->has_cook_ms;
+    ev->cook_ms = job->cook_ms;
+    char diagnostic[DE_ASSET_EVENT_SOURCE_CAP];
+    const bool located =
+        de__asset_diagnostic_location(message, diagnostic, sizeof diagnostic, &ev->line);
+    const char *source = located ? diagnostic : job->vpath;
+    if (source == NULL)
+        return;
+    if (strstr(source, ":/") != NULL && !(source[1] == ':' && source[2] == '/')) {
+        if (de_fs_resolve(source, ev->source, sizeof ev->source) == DE_OK)
+            return;
+        de_error_clear();
+    }
+    const size_t n = strlen(source);
+    if (n < sizeof ev->source)
+        memcpy(ev->source, source, n + 1);
+}
+
 void de__asset_reload_failed(de_asset_system *s, de__pjob *job, de_result code, const char *msg) {
     de__asset_reload *R = s->reload;
     if (R == NULL)
         return;
     record_error(R, job->id, code, msg);
+    /* A failed recook leaves the previous object usable, but editors still need the failure. */
+    de_asset_event event = {0};
+    event.kind = DE_ASSET_EV_FAILED;
+    event.id = job->id;
+    event.state = DE_LOAD_READY;
+    event.error = code;
+    reload_details(job, &event, msg);
+    de__asset_emit(s, &event);
 }
 
 void de__asset_reload_job_gone(de_asset_system *s, de__pjob *job) {

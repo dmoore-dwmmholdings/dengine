@@ -476,8 +476,8 @@ TEST_F(hot_reload, dependents_notified, hr_fx) {
 
 /* ---- hot_reload.failure_keeps_old --------------------------------------------------------------
  *
- * A source that makes the loader fail: the old object stays, an Error is logged, no event, and
- * de_asset_last_error has the message. Fixing it reloads and clears the error. */
+ * A source that makes the loader fail: the old object stays, an Error and FAILED event report it,
+ * and de_asset_last_error has the message. Fixing it reloads and clears the error. */
 
 #if DE__ASSET_RELOAD_ENABLED
 static u32 g_errors;
@@ -516,7 +516,12 @@ TEST_F(hot_reload, failure_keeps_old, hr_fx) {
     changed(f, "a.hr");
     EXPECT_NE(pump(f), 0u);
     EXPECT_EQ(rstats(f).failed, 1u);
-    EXPECT_EQ(g_ev_count, 0u); /* a failed reload sends no event */
+    ASSERT_EQ(g_ev_count, 1u);
+    EXPECT_EQ(g_ev[0].kind, DE_ASSET_EV_FAILED);
+    EXPECT_EQ(g_ev[0].state, DE_LOAD_READY); /* the previous object stays usable */
+    EXPECT_EQ(g_ev[0].id.hash, id_of("a").hash);
+    EXPECT_FALSE(g_ev[0].has_cook_ms); /* this fixture uses a loader, not an importer */
+    EXPECT_TRUE(g_ev[0].source[0] != '\0');
     EXPECT_TRUE(obj_of(f, "a") == v1);
     EXPECT_STREQ(hr_bytes(obj_of(f, "a")), "good v1");
     EXPECT_EQ(version_of(f, "a"), ver);
@@ -589,6 +594,11 @@ TEST_F(hot_reload, extra_source, hr_fx) {
     EXPECT_NE(pump(f), 0u);
     EXPECT_EQ(rstats(f).started, 1u); /* only the owner */
     EXPECT_EQ(reloaded(id_of("m")), 1u);
+    ASSERT_TRUE(g_ev_count > 0u);
+    EXPECT_TRUE(g_ev[0].has_cook_ms);
+    EXPECT_TRUE(g_ev[0].cook_ms >= 0.0);
+    EXPECT_TRUE(g_ev[0].source[0] != '\0');
+    EXPECT_TRUE(strstr(g_ev[0].source, "hr:/") == NULL);
     EXPECT_EQ(reloaded(id_of("p")), 0u);
     EXPECT_STREQ(hr_bytes(obj_of(f, "m")), "inc:inc.txt\n|include v2");
 
@@ -597,6 +607,13 @@ TEST_F(hot_reload, extra_source, hr_fx) {
     changed(f, "inc.txt");
     EXPECT_NE(pump(f), 0u);
     EXPECT_EQ(rstats(f).failed, 1u);
+    ASSERT_EQ(g_ev_count, 2u);
+    EXPECT_EQ(g_ev[1].kind, DE_ASSET_EV_FAILED);
+    EXPECT_EQ(g_ev[1].state, DE_LOAD_READY);
+    EXPECT_TRUE(g_ev[1].has_cook_ms);
+    EXPECT_TRUE(g_ev[1].cook_ms >= 0.0);
+    EXPECT_TRUE(g_ev[1].source[0] != '\0');
+    EXPECT_TRUE(strstr(g_ev[1].source, "hr:/") == NULL);
     EXPECT_STREQ(hr_bytes(obj_of(f, "m")), "inc:inc.txt\n|include v2");
     char msg[256];
     EXPECT_EQ((int)de_asset_last_error(f->s, id_of("m"), msg, sizeof msg), (int)DE_ERR_PARSE);

@@ -48,6 +48,8 @@
 typedef struct view_main {
     u32 gen;    /**< generation of the slot's current handle */
     bool alive; /**< the handle with `gen` is valid */
+    bool paused;
+    u32 max_fps;
     de_gpu_texture target;
     f32 viewport[4];
     i32 order;
@@ -74,6 +76,7 @@ typedef struct view_rs {
     u32 out_access;    /**< access the output is in between frames */
     u32 target_access; /**< access the target is in between frames (render-to-texture) */
     u64 executed;
+    u64 next_render_ns;
     bool has_prev;
     de_mat4 prev_view_proj;
     de__pixel_snap_grid prev_pixel_grid;
@@ -435,6 +438,28 @@ void de_view_set_pixel_art(de_renderer *r, de_view v, const de_pixel_art_setting
     de_mutex_unlock(&vs->lock);
 }
 
+void de_view_set_max_fps(de_renderer *r, de_view v, u32 fps) {
+    de__views *vs = views_of(r);
+    if (vs == NULL)
+        return;
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m != NULL)
+        m->max_fps = fps > 240 ? 240 : fps;
+    de_mutex_unlock(&vs->lock);
+}
+
+void de_view_set_paused(de_renderer *r, de_view v, bool paused) {
+    de__views *vs = views_of(r);
+    if (vs == NULL)
+        return;
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m != NULL)
+        m->paused = paused;
+    de_mutex_unlock(&vs->lock);
+}
+
 void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask) {
     de__views *vs = views_of(r);
     if (vs == NULL)
@@ -686,8 +711,11 @@ static void sync(de_renderer *r, de__views *vs) {
             s->live = true;
             s->gen = m->gen;
         }
-        if (s->live)
+        if (s->live) {
+            if (s->copy.max_fps != m->max_fps || s->copy.paused != m->paused)
+                s->next_render_ns = 0;
             s->copy = *m;
+        }
     }
     if (vs->list_version != vs->version)
         rebuild_list(vs);
@@ -1409,10 +1437,19 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
     r->stats.cpu_record_ms = 0.0f;
     u32 stat_count = 0;
     for (u32 k = 0; k < vs->order_count; ++k) {
+        view_rs *s = &vs->rs[vs->order[k]];
+        const u64 now = de_time_now_ns();
+        if (s->copy.paused || (s->copy.max_fps && now < s->next_render_ns)) {
+            s->ok = false;
+            continue;
+        }
         render_view(r, vs, arena, world, k, frame_index);
-        const view_rs *s = &vs->rs[vs->order[k]];
-        if (s->ok)
+        if (s->ok) {
+            s->next_render_ns = s->copy.max_fps
+                                    ? now + (1000000000ull + s->copy.max_fps - 1u) / s->copy.max_fps
+                                    : 0;
             add_stats(r, vs, s->graph, &stat_count);
+        }
     }
     vs->last_order_count = vs->order_count;
     for (u32 k = 0; k < vs->order_count; ++k)

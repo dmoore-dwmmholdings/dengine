@@ -609,6 +609,16 @@ static void tick(de__editor *ed) {
         memset(&d, 0, sizeof d);
         d.id = id_str(ed, ev->id, &a);
         d.kind = kind;
+        d.has_ms = ev->has_cook_ms;
+        d.ms = ev->cook_ms;
+        if (ev->source[0]) {
+            d.has_source = true;
+            d.source = de_ep_cstr(ev->source);
+        }
+        if (ev->line) {
+            d.has_line = true;
+            d.line = ev->line;
+        }
         char msg[256];
         if (kind == DE_EP_ASSET_EVENT_KIND_FAILED &&
             de_asset_last_error(s, ev->id, msg, sizeof msg) != DE_OK) {

@@ -23,7 +23,8 @@
  *      dependencies. The old object and its dependency refs are retired: unloaded after
  *      `reload_retire_frames` more updates (default 3, the frames in flight).
  *   4. Failed: the old object stays, the error is kept for de_asset_last_error and logged at
- *      Error with its cause chain. No event. The next successful reload clears it.
+ *      Error with its cause chain. A FAILED event reports recook timing and location while
+ *      state stays READY. The next successful reload clears the error.
  *
  * Skipped: assets a mounted pack serves (logged at Info once per asset), PACKED mode (packs do
  * not change at run time), slots that are not READY (a load in flight is retried next frame; a

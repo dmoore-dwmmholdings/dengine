@@ -76,11 +76,10 @@ void de__request_finish(de_asset_system *s, de__request *r, de_load_state state)
      * released. The handle is rebuilt from the request's index and generation. */
     if (events && !r->releasing && s->emit_fn != NULL && s->load != NULL) {
         u32 index = (u32)(r - s->load->requests);
-        de_asset_event ev = {DE_ASSET_EV_REQUEST_DONE,
-                             {de__slot_handle_make(index, r->gen)},
-                             {0},
-                             state,
-                             r->first_error};
+        de_asset_event ev = {.kind = DE_ASSET_EV_REQUEST_DONE,
+                             .handle = {de__slot_handle_make(index, r->gen)},
+                             .state = state,
+                             .error = r->first_error};
         de__asset_emit(s, &ev);
     }
 }

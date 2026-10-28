@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.0"
-#define DE_EP_SCHEMA_HASH "e250627de413cc5e"
+#define DE_EP_PROTOCOL_VERSION "1.1"
+#define DE_EP_SCHEMA_HASH "be30e09791020691"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -221,6 +221,7 @@ typedef struct de_ep_view_create_params de_ep_view_create_params;
 typedef struct de_ep_view_created de_ep_view_created;
 typedef struct de_ep_view_frame de_ep_view_frame;
 typedef struct de_ep_view_lost de_ep_view_lost;
+typedef struct de_ep_view_max_fps_params de_ep_view_max_fps_params;
 typedef struct de_ep_view_params de_ep_view_params;
 typedef struct de_ep_view_paused_params de_ep_view_paused_params;
 typedef struct de_ep_view_release_params de_ep_view_release_params;
@@ -428,6 +429,12 @@ struct de_ep_asset_event {
     de_ep_asset_event_kind kind;
     bool has_error;
     de_ep_str error;
+    bool has_ms;
+    double ms; /* engine-measured recook duration in milliseconds, excluding editor latency */
+    bool has_source;
+    de_ep_str source; /* diagnostic source path when known, otherwise the asset source */
+    bool has_line;
+    uint32_t line; /* one-based diagnostic line; omitted when unknown */
 };
 
 struct de_ep_asset_id_params {
@@ -1249,6 +1256,11 @@ struct de_ep_view_lost {
     de_ep_str reason;
 };
 
+struct de_ep_view_max_fps_params {
+    uint32_t view;
+    uint32_t fps; /* 0 is uncapped; 1-240 limits editor-view rendering, independently of simulation. New views default to 60. */
+};
+
 struct de_ep_view_params {
     uint32_t view;
 };
@@ -1550,6 +1562,8 @@ void de_ep_write_view_frame(mpack_writer_t *w, const de_ep_view_frame *v);
 void de_ep_read_view_frame(mpack_reader_t *r, de_ep_arena *a, de_ep_view_frame *out);
 void de_ep_write_view_lost(mpack_writer_t *w, const de_ep_view_lost *v);
 void de_ep_read_view_lost(mpack_reader_t *r, de_ep_arena *a, de_ep_view_lost *out);
+void de_ep_write_view_max_fps_params(mpack_writer_t *w, const de_ep_view_max_fps_params *v);
+void de_ep_read_view_max_fps_params(mpack_reader_t *r, de_ep_arena *a, de_ep_view_max_fps_params *out);
 void de_ep_write_view_params(mpack_writer_t *w, const de_ep_view_params *v);
 void de_ep_read_view_params(mpack_reader_t *r, de_ep_arena *a, de_ep_view_params *out);
 void de_ep_write_view_paused_params(mpack_writer_t *w, const de_ep_view_paused_params *v);
@@ -1642,6 +1656,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_VIEW_RESIZE,
     DE_EP_METHOD_VIEW_SET_CAMERA,
     DE_EP_METHOD_VIEW_SET_HIDDEN,
+    DE_EP_METHOD_VIEW_SET_MAX_FPS,
     DE_EP_METHOD_VIEW_SET_PAUSED,
     DE_EP_METHOD_VIEW_SET_RENDER_MODE,
     DE_EP_METHOD_VIEW_SET_SHOW_FLAGS,
@@ -1849,6 +1864,8 @@ bool de_ep_read_params_view_set_camera(const de_ep_request *req, de_ep_arena *a,
 void de_ep_write_response_view_set_camera(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_set_hidden(const de_ep_request *req, de_ep_arena *a, de_ep_entity_list *out);
 void de_ep_write_response_view_set_hidden(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_view_set_max_fps(const de_ep_request *req, de_ep_arena *a, de_ep_view_max_fps_params *out);
+void de_ep_write_response_view_set_max_fps(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_set_paused(const de_ep_request *req, de_ep_arena *a, de_ep_view_paused_params *out);
 void de_ep_write_response_view_set_paused(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_set_render_mode(const de_ep_request *req, de_ep_arena *a, de_ep_view_render_mode_params *out);

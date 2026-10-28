@@ -1,0 +1,1 @@
+shader.slang(42,3): error 30015: invalid type

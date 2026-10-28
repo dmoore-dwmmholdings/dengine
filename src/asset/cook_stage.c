@@ -548,7 +548,10 @@ static void cook_task_run(void *user) {
     de_cook_input in = {.asset = &a, .asset_root = t->asset_root, .source = NULL};
     de_cook_result r;
     de_error_clear();
+    const u64 started_ns = de_time_now_ns();
     de_result rc = de_cooker_cook(cs->cooker, &in, &r);
+    job->cook_ms = (f64)(de_time_now_ns() - started_ns) / 1000000.0;
+    job->has_cook_ms = true;
     if (rc != DE_OK) {
         const de_error *e = de_error_last();
         const char *msg = e != NULL && e->result == rc ? e->message : de_result_str(rc);

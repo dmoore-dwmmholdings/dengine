@@ -72,3 +72,10 @@ if(TARGET fuzz_dpak_file)
     target_compile_definitions(fuzz_dpak_file PRIVATE
         "DE_FUZZ_DPAK_FILE_DIR=\"${CMAKE_CURRENT_BINARY_DIR}\"")
 endif()
+
+# DENG-662: diagnostic source/line parser, including truncated and hostile compiler text.
+de_add_fuzz_target(NAME asset_diagnostic SOURCES fuzz_diagnostic.c LIBS de_asset
+                   CORPUS corpus/diagnostic)
+if(TARGET fuzz_asset_diagnostic)
+    target_include_directories(fuzz_asset_diagnostic PRIVATE "${DE_ROOT_DIR}/src")
+endif()

@@ -349,12 +349,20 @@ typedef enum de_asset_event_kind {
     DE_ASSET_EV_REQUEST_DONE /* a load handle reached a final state */
 } de_asset_event_kind;
 
+enum { DE_ASSET_EVENT_SOURCE_CAP = 512 };
+
 typedef struct de_asset_event {
     de_asset_event_kind kind;
     de_load_handle handle; /* set for REQUEST_DONE */
     de_asset_id id;        /* set for per-asset events */
     de_load_state state;
     de_result error;
+    /** Optional engine-measured cook duration, excluding event delivery and editor latency. */
+    bool has_cook_ms;
+    f64 cook_ms;
+    /** Reload source/diagnostic native path when known; owned by this event. Empty = unknown. */
+    char source[DE_ASSET_EVENT_SOURCE_CAP];
+    u32 line; /**< one-based compiler diagnostic line; 0 = unknown */
 } de_asset_event;
 
 /** Resource holding the asset system of a world (SPEC §7.1), inserted by the first

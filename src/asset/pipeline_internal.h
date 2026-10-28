@@ -250,6 +250,8 @@ struct de_asset_load_ctx {
      * (de__asset_reload_swap); a failure goes to de__asset_reload_failed, not to the slot. Not in
      * the slot -> job map, so the load API never sees it. Set at submit. */
     bool reload;
+    bool has_cook_ms; /**< cook thread writes before publishing the finished job */
+    f64 cook_ms;
     /** The cooker's extra sources as normalised virtual paths, NUL-separated (`extra_count` of
      * them in `extra_size` bytes), written by the cook thread before it hands the job on; NULL
      * without hot reload or extra sources. Freed with the job. */

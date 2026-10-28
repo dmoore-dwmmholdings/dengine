@@ -219,6 +219,13 @@ DE_API de_view de_view_create(de_renderer *r, const de_view_desc *desc);
  * logged); a stale handle is ignored.
  */
 DE_API void de_view_destroy(de_renderer *r, de_view v);
+/** Limits this view's GPU rendering independently of simulation. Zero (the default) is
+ * uncapped; values above 240 are clamped. The previous output remains available on skipped
+ * frames. Changing the limit makes the next frame eligible immediately. Main thread. */
+DE_API void de_view_set_max_fps(de_renderer *r, de_view v, u32 fps);
+/** Pauses only this view's rendering, retaining its last output and GPU resources. Resuming
+ * makes the next frame eligible immediately. Main thread; stale handles are ignored. */
+DE_API void de_view_set_paused(de_renderer *r, de_view v, bool paused);
 /* ---------- Picking (SPEC §20.1; DENG-239) ----------
  * What is under a pixel of a view, read from the view's visibility buffer: the entity (its
  * de_entity bits, as the render world has them) and the triangle. Only visibility-buffer geometry

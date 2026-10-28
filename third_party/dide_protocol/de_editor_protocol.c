@@ -304,6 +304,9 @@ void de_ep_write_asset_event(mpack_writer_t *w, const de_ep_asset_event *v) {
     ++n;
     ++n;
     n += v->has_error ? 1u : 0u;
+    n += v->has_ms ? 1u : 0u;
+    n += v->has_source ? 1u : 0u;
+    n += v->has_line ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "id");
     de_ep_write_str(w, v->id);
@@ -312,6 +315,18 @@ void de_ep_write_asset_event(mpack_writer_t *w, const de_ep_asset_event *v) {
     if (v->has_error) {
         mpack_write_cstr(w, "error");
         de_ep_write_str(w, v->error);
+    }
+    if (v->has_ms) {
+        mpack_write_cstr(w, "ms");
+        mpack_write_double(w, v->ms);
+    }
+    if (v->has_source) {
+        mpack_write_cstr(w, "source");
+        de_ep_write_str(w, v->source);
+    }
+    if (v->has_line) {
+        mpack_write_cstr(w, "line");
+        mpack_write_u32(w, v->line);
     }
     mpack_finish_map(w);
 }
@@ -338,6 +353,18 @@ void de_ep_read_asset_event(mpack_reader_t *r, de_ep_arena *a, de_ep_asset_event
             seen |= (uint64_t)1 << 2;
             out->has_error = true;
             de_ep_read_str(r, &out->error);
+        } else if (de_ep_str_eq(k, "ms")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_ms = true;
+            out->ms = mpack_expect_double(r);
+        } else if (de_ep_str_eq(k, "source")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_source = true;
+            de_ep_read_str(r, &out->source);
+        } else if (de_ep_str_eq(k, "line")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_line = true;
+            out->line = mpack_expect_u32(r);
         } else {
             mpack_discard(r);
         }
@@ -6323,6 +6350,40 @@ void de_ep_read_view_lost(mpack_reader_t *r, de_ep_arena *a, de_ep_view_lost *ou
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_view_max_fps_params(mpack_writer_t *w, const de_ep_view_max_fps_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "view");
+    mpack_write_u32(w, v->view);
+    mpack_write_cstr(w, "fps");
+    mpack_write_u32(w, v->fps);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_view_max_fps_params(mpack_reader_t *r, de_ep_arena *a, de_ep_view_max_fps_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "view")) {
+            seen |= (uint64_t)1 << 0;
+            out->view = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "fps")) {
+            seen |= (uint64_t)1 << 1;
+            out->fps = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_view_params(mpack_writer_t *w, const de_ep_view_params *v) {
     uint32_t n = 0;
     ++n;
@@ -6747,6 +6808,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "view.resize",
     "view.setCamera",
     "view.setHidden",
+    "view.setMaxFps",
     "view.setPaused",
     "view.setRenderMode",
     "view.setShowFlags",
@@ -6835,6 +6897,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "views.sharedTexture",
     "views.sharedTexture",
     NULL,
+    "views.frameRateLimit",
     "views.sharedTexture",
     "views.sharedTexture",
     "views.sharedTexture",
@@ -7892,6 +7955,19 @@ bool de_ep_read_params_view_set_hidden(const de_ep_request *req, de_ep_arena *a,
 }
 
 void de_ep_write_response_view_set_hidden(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_view_set_max_fps(const de_ep_request *req, de_ep_arena *a, de_ep_view_max_fps_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_view_max_fps_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_view_set_max_fps(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_empty(w, result);
     de_ep_write_result_end(w);

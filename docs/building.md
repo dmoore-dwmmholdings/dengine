@@ -332,7 +332,7 @@ GitHub CLI session, from `engine/`:
 
 ```sh
 mkdir -p build/vendor-cache
-gh api repos/dmoore-dwmmholdings/dide/tarball/93a5ab93bed58b09b0b722e975edb7a2ec3fc972 \
-  > build/vendor-cache/dide_protocol-202de0d26765dbe0-93a5ab93bed58b09b0b722e975edb7a2ec3fc972
+gh api repos/dmoore-dwmmholdings/dide/tarball/52f3bb1df587c499117ffa3f10bd4692e2a74d61 \
+  > build/vendor-cache/dide_protocol-fdf480a0b8145df5-52f3bb1df587c499117ffa3f10bd4692e2a74d61
 python3 tools/vendor/vendor.py --cache build/vendor-cache verify dide_protocol --offline
 ```

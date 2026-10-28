@@ -227,6 +227,44 @@ TEST_F(views, default_main_view, vfx) {
     stop(f);
 }
 
+TEST_F(views, frame_limit_pause_and_resume, vfx) {
+    start(f, DE_GPU_NULL);
+    const de_view main = de_renderer_main_view(f->r);
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, main, 1)));
+    const de_view inset = view(f, "limited", 0, 0, 0.5f, 0.5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(DE_HANDLE_VALID(inset));
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, inset, 0)));
+    de_view_set_max_fps(f->r, inset, 1);
+    ASSERT_EQ(frame(f), DE_OK);
+    const u64 first = info(f, inset).executed;
+    ASSERT_EQ(first, 1u);
+    for (u32 i = 0; i < 3; ++i)
+        ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first);
+    EXPECT_TRUE(info(f, main).executed > first);
+    de_view_set_max_fps(f->r, inset, 0);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first + 1);
+    de_view_set_paused(f->r, inset, true);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first + 1);
+    de_view_set_paused(f->r, inset, false);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first + 2);
+    /* A changed cap must take effect immediately, even while the old deadline is far away. */
+    de_view_set_max_fps(f->r, inset, 1);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first + 3);
+    de_view_set_max_fps(f->r, inset, 120);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(info(f, inset).executed, first + 4);
+    de_view_destroy(f->r, inset);
+    de_view_set_paused(f->r, inset, false);
+    de_view_set_max_fps(f->r, inset, 30);
+    ASSERT_EQ(frame(f), DE_OK);
+    stop(f);
+}
+
 TEST_F(views, settings_per_view, vfx) {
     start(f, DE_GPU_NULL);
     const de_view mv = de_renderer_main_view(f->r);

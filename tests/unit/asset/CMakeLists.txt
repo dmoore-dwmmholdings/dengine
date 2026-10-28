@@ -146,3 +146,9 @@ if(TARGET test_asset_scene)
         target_link_libraries(test_asset_scene PRIVATE "$<$<CONFIG:Debug,Dev>:de_cooker>")
     endif()
 endif()
+
+# DENG-662: compiler location metadata used by editor reload notifications.
+de_add_test(NAME asset_diagnostic SOURCES test_diagnostic.c LIBS de_asset)
+if(TARGET test_asset_diagnostic)
+    target_include_directories(test_asset_diagnostic PRIVATE "${DE_ROOT_DIR}/src")
+endif()

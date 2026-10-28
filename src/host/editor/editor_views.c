@@ -128,11 +128,13 @@ typedef struct ed_view {
     u32 w, h;   /* the IDE's size */
     u32 sw, sh; /* the source size (what the readback holds) */
     f32 scale;
-    de_view rv;             /* the renderer view (the main view for a Game view) */
-    de_gpu_texture target;  /* an editor view's render target */
-    de_entity cam;          /* an editor view's camera entity */
-    bool cam_dirty;         /* the IDE's camera moved: write it to the entity */
-    de_ep_camera camera;    /* the IDE's camera */
+    u32 max_fps;
+    u64 next_readback_ns;  /* render thread; reset while idle on a policy change */
+    de_view rv;            /* the renderer view (the main view for a Game view) */
+    de_gpu_texture target; /* an editor view's render target */
+    de_entity cam;         /* an editor view's camera entity */
+    bool cam_dirty;        /* the IDE's camera moved: write it to the entity */
+    de_ep_camera camera;   /* the IDE's camera */
     f64 cam_pos[3];
     f32 cam_rot[4];
     char render_mode[32];
@@ -723,6 +725,28 @@ static void exec_copy(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
                                       de_rg_texture(pass, x->color), 0, 0);
 }
 
+/* Multiple Game panels share the main camera. Render at the fastest visible panel's cap;
+ * each panel's readback is still capped separately. No panels restores the runtime defaults. */
+static void apply_game_rate(de__editor *ed) {
+    bool any = false, uncapped = false;
+    u32 fps = 0;
+    for (u32 i = 0; i < ED_MAX_VIEWS; ++i) {
+        ed_view *v = &g_views.views[i];
+        if (!v->id || !v->game || v->paused)
+            continue;
+        any = true;
+        uncapped |= v->max_fps == 0;
+        if (v->max_fps > fps)
+            fps = v->max_fps;
+    }
+    bool has_game = false;
+    for (u32 i = 0; i < ED_MAX_VIEWS; ++i)
+        has_game |= g_views.views[i].id && g_views.views[i].game;
+    const de_view main = de_renderer_main_view(ed->e->renderer);
+    de_view_set_max_fps(ed->e->renderer, main, any && !uncapped ? fps : 0);
+    de_view_set_paused(ed->e->renderer, main, has_game && !any);
+}
+
 /* Render thread: at the UI point of each view's graph, copy the views we serve. */
 static void hook_ui(de_rg *g, de_view rv, void *user) {
     (void)user;
@@ -737,6 +761,11 @@ static void hook_ui(de_rg *g, de_view rv, void *user) {
         de_view_size(ed->e->renderer, rv, &w, &h);
         if (w != v->rb_w || h != v->rb_h)
             continue; /* the main thread resizes the readback first */
+        const u64 now = de_time_now_ns();
+        if (v->game && v->max_fps && now < v->next_readback_ns)
+            continue;
+        if (v->game && v->max_fps)
+            v->next_readback_ns = now + (1000000000ull + v->max_fps - 1u) / v->max_fps;
         const u64 seq = de_atomic_load_u64(&v->produced, DE_ATOMIC_ACQUIRE);
         const u32 slot = (u32)(seq % ED_RB_SLOTS);
         rb_exec *x = &g_exec[i][slot];
@@ -818,7 +847,14 @@ static void view_release_all(de__editor *ed, ed_view *v) {
 #if ED_VIEWS
     view_gpu_free(v);
 #endif
+    const bool was_game = v->game;
     memset(v, 0, sizeof *v);
+#if ED_VIEWS
+    if (was_game)
+        apply_game_rate(ed);
+#else
+    (void)was_game;
+#endif
 }
 
 #if ED_VIEWS
@@ -934,6 +970,11 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "could not create the view");
         return;
     }
+    v->max_fps = 60;
+    if (v->game)
+        apply_game_rate(ed);
+    else
+        de_view_set_max_fps(ed->e->renderer, v->rv, v->max_fps);
     de_atomic_store_u64(&v->produced, 0, DE_ATOMIC_RELEASE);
     if (!g_views.hook) {
         de_render_add_hook(ed->e->renderer, DE_HOOK_UI, hook_ui, NULL);
@@ -997,6 +1038,10 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     if (!readback_alloc(ed, v, v->sw, v->sh) || !ring_create(v, v->sw, v->sh)) {
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "resize failed");
         return;
+    }
+    if (!v->game) {
+        de_view_set_max_fps(ed->e->renderer, v->rv, v->max_fps);
+        de_view_set_paused(ed->e->renderer, v->rv, v->paused);
     }
     v->consumed = de_atomic_load_u64(&v->produced, DE_ATOMIC_ACQUIRE);
     de_ep_view_resized r;
@@ -1074,13 +1119,50 @@ static void on_show_flags(de__editor *ed, const de_ep_request *req, de_ep_arena 
     empty_response(w, req->id);
 }
 
+static void on_max_fps(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
+    (void)ed;
+    DE__ED_PARAMS(view_set_max_fps, de_ep_view_max_fps_params, q);
+    if (!ED_VIEWS || ed->e->renderer == NULL || ed->e->gpu == NULL) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "views.frameRateLimit is unavailable");
+        return;
+    }
+    if (q.fps > 240) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "fps must be between 0 and 240");
+        return;
+    }
+    ed_view *v = view_or_fail(req, w, q.view);
+    if (v == NULL)
+        return;
+#if ED_VIEWS
+    de__render_world_wait_idle(ed->e->renderer);
+    v->max_fps = q.fps;
+    v->next_readback_ns = 0;
+    if (v->game)
+        apply_game_rate(ed);
+    else
+        de_view_set_max_fps(ed->e->renderer, v->rv, q.fps);
+#endif
+    empty_response(w, req->id);
+}
+
 static void on_paused(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_set_paused, de_ep_view_paused_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
         return;
+#if ED_VIEWS
+    de__render_world_wait_idle(ed->e->renderer);
     v->paused = q.paused;
+    v->next_readback_ns = 0;
+    if (v->game)
+        apply_game_rate(ed);
+    else
+        de_view_set_paused(ed->e->renderer, v->rv, q.paused);
+#else
+    v->paused = q.paused;
+#endif
     empty_response(w, req->id);
 }
 
@@ -1450,7 +1532,7 @@ static void tick(de__editor *ed) {
 #if ED_VIEWS
     for (u32 i = 0; i < ED_MAX_VIEWS; ++i) {
         ed_view *v = &g_views.views[i];
-        if (v->id == 0)
+        if (v->id == 0 || v->paused)
             continue;
         if (v->game) {
             /* The window changed size: follow it with a new readback (the ring stays; frames of
@@ -1508,8 +1590,10 @@ void de__ed_views_register(de__editor *ed) {
     ed->views = (struct de__ed_views *)&g_views;
     g_ed = ed;
 #if ED_VIEWS
-    if (ed->e->renderer != NULL && ed->e->gpu != NULL)
+    if (ed->e->renderer != NULL && ed->e->gpu != NULL) {
         de__ed_add_capability(ed, "views.sharedTexture");
+        de__ed_add_capability(ed, "views.frameRateLimit");
+    }
 #endif
     de__ed_on(ed, DE_EP_METHOD_VIEW_CREATE, on_create);
     de__ed_on(ed, DE_EP_METHOD_VIEW_RESIZE, on_resize);
@@ -1518,6 +1602,7 @@ void de__ed_views_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_VIEW_SET_RENDER_MODE, on_render_mode);
     de__ed_on(ed, DE_EP_METHOD_VIEW_SET_SHOW_FLAGS, on_show_flags);
     de__ed_on(ed, DE_EP_METHOD_VIEW_SET_PAUSED, on_paused);
+    de__ed_on(ed, DE_EP_METHOD_VIEW_SET_MAX_FPS, on_max_fps);
     de__ed_on(ed, DE_EP_METHOD_VIEW_DESTROY, on_destroy);
     de__ed_on(ed, DE_EP_METHOD_VIEW_SET_HIDDEN, on_set_hidden);
     de__ed_on(ed, DE_EP_METHOD_PICK, on_pick);

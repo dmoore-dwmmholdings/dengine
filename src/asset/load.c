@@ -161,7 +161,8 @@ static void load_slot_fail(de_asset_system *s, de__slot *sl, de__load_slot *ls, 
     de_atomic_store_u64(&ls->bytes_done, w, DE_ATOMIC_RELAXED);
     /* DENG-143: per-asset DE_ASSET_EV_FAILED (only if a waiting request wants events). */
     if (ls->interest_events != 0) {
-        de_asset_event ev = {DE_ASSET_EV_FAILED, {0}, sl->id, DE_LOAD_FAILED, sl->error};
+        de_asset_event ev = {
+            .kind = DE_ASSET_EV_FAILED, .id = sl->id, .state = DE_LOAD_FAILED, .error = sl->error};
         de__asset_emit(s, &ev);
     }
 }
@@ -184,7 +185,8 @@ static void load_slot_ready(de_asset_system *s, u32 slot, de__slot *sl, de__load
     de__budget_on_publish(s, slot, bytes); /* DENG-144: residency accounting, LRU */
     /* DENG-143: per-asset DE_ASSET_EV_LOADED (only if a waiting request wants events). */
     if (ls->interest_events != 0) {
-        de_asset_event ev = {DE_ASSET_EV_LOADED, {0}, sl->id, DE_LOAD_READY, DE_OK};
+        de_asset_event ev = {
+            .kind = DE_ASSET_EV_LOADED, .id = sl->id, .state = DE_LOAD_READY, .error = DE_OK};
         de__asset_emit(s, &ev);
     }
 }
