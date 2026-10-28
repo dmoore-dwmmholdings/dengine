@@ -11,6 +11,7 @@
 
 #include "render/renderer_internal.h"
 #include "render/sprite/sprite_internal.h"
+#include "render/view_hidden.h"
 
 #include <math.h>
 #include <string.h>
@@ -175,6 +176,8 @@ de_result de__rw_init(de__render_world *rw, de_renderer *r, u32 frames_in_flight
 }
 
 static void frame_free(de__render_world *rw, de__render_world_frame *f) {
+    for (u32 i = 0; i < 32; ++i)
+        de__view_hidden_release(f->frozen_hidden[i]);
     de__skin_frame_free(rw->alloc, f);
     rw_array arr[RW_MAX_ARRAYS];
     u32 n = inst_arrays(&f->instances, arr);
@@ -223,6 +226,10 @@ de__render_world_frame *de__rw_begin(de__render_world *rw) {
     f->origin = rw->origin;
     f->origin_changed = false;
     f->view_count = 0;
+    for (u32 i = 0; i < 32; ++i) {
+        de__view_hidden_release(f->frozen_hidden[i]);
+        f->frozen_hidden[i] = NULL;
+    }
     f->frozen_view_count = 0;
     f->skin_count = f->skin_joint_count = 0;
     f->main_view = DE__RW_NONE;

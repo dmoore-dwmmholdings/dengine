@@ -79,7 +79,7 @@ typedef struct di_params {
     u32 hits, diffuse, specular, distance;
     u32 width, height, frame, candidates;
     u32 unbiased, initial_visibility, history_valid, metadata;
-    u32 sampler, layers, padding[26];
+    u32 sampler, layers, hidden_entities, hidden_count, padding[24];
 } di_params;
 DE_STATIC_ASSERT(sizeof(di_params) == 256, "DI parameters mirror 64 words");
 #define DI_RING         8u
@@ -402,6 +402,7 @@ static bool view_capacity(de__restir_di *s, di_view *v, u32 width, u32 height) {
 }
 typedef struct di_resources {
     de_rg_resource depth, gb[3], motion, ids, visible, scene;
+    de_rg_resource hidden_entities;
     de_rg_resource sources, work, descriptors, scratch, previous, temporal, history_previous,
         history_current, rays, hits, diffuse, specular, distance;
 } di_resources;
@@ -497,6 +498,8 @@ static de_result add_pass(di_pass *base, de_rg *g, u32 kernel, u32 phase, bool t
     di_resources *r = &p->resources;
     de_rg_pass_side_effect(pass);
     de_rg_read(pass, r->scene, DE_ACCESS_SHADER_READ);
+    if (r->hidden_entities.id)
+        de_rg_read(pass, r->hidden_entities, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, p->rt.dependency, DE_ACCESS_SHADER_READ);
     if (kernel == K_SOURCES) {
         de_rg_read(pass, r->descriptors, DE_ACCESS_SHADER_READ);
@@ -618,6 +621,7 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
         .ids = vc->vis_ids_buffer,
         .visible = vc->visible_meshlets,
         .scene = vc->scene_views,
+        .hidden_entities = vc->hidden_entities,
         .sources = de_rg_import_buffer(g, s->sources, DE_ACCESS_SHADER_READ),
         .work = de_rg_import_buffer(g, s->alias_work, DE_ACCESS_SHADER_READ),
         .descriptors =
@@ -667,6 +671,8 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
                                .history_valid = history,
                                .metadata = rt->metadata,
                                .layers = vc->layer_mask,
+                               .hidden_entities = vc->hidden_bindless,
+                               .hidden_count = vc->hidden_count,
                                .sampler = de_gpu_sampler_bindless(d, s->r->rt_scene->sampler)}};
     u32 stage = 0;
     if (s->needs_alias) {

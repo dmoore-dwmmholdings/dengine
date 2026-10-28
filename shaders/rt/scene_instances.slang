@@ -25,7 +25,8 @@ void cs_instances(uint3 id:SV_DispatchThreadID, uniform Params p) {
     DeVisCullView v=de_robuffer<DeVisCullView>(p.cull)[0];
     uint need=DE_GPU_INSTANCE_LIVE|DE_GPU_INSTANCE_VISIBLE_IN_RT;
     bool valid=(inst.flags&need)==need && inst.mesh!=DE_GPU_NONE &&
-        (v.layer_mask==0 || (inst.layer_mask&v.layer_mask)!=0);
+        (v.layer_mask==0 || (inst.layer_mask&v.layer_mask)!=0) &&
+        !de_cull_hidden(v,inst.entity_lo,inst.entity_hi);
     uint handle=0,lod=0,kind=0;
     if(valid) {
         DeGpuMesh mesh=de_robuffer<DeGpuMesh>(p.meshes)[inst.mesh];

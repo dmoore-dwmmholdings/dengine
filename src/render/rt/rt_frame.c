@@ -142,6 +142,8 @@ void de__rt_view_stage(de__view_frame *vf, void *user) {
     }
     de_rg_read(pass, de__gpu_scene_import(r->gpu_scene, vf->graph, DE__GS_INSTANCES),
                DE_ACCESS_SHADER_READ);
+    if (vc->hidden_entities.id)
+        de_rg_read(pass, vc->hidden_entities, DE_ACCESS_SHADER_READ);
     de_rg_read(pass, de__gpu_scene_import(r->gpu_scene, vf->graph, DE__GS_MESHES),
                DE_ACCESS_SHADER_READ);
     de_rg_read(

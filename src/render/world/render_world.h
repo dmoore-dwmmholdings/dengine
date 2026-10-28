@@ -177,6 +177,7 @@ typedef struct de__render_world_frame {
     bool origin_changed; /**< rebased this frame (also the first frame): everything changed */
 
     u32 frozen_view_count;
+    const struct de__view_hidden *frozen_hidden[32];
     de_view_frame_info frozen_views[32];
     de_render_settings frozen_settings[32];
     de_gpu_texture frozen_targets[32];

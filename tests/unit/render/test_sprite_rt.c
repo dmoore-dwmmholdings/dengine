@@ -373,6 +373,14 @@ TEST_F(sprite_rt, pixel_snap_tlas_matches_view_instances, sprite_rt_fixture) {
     de_view_set_pixel_art(r->r, r->view, &settings);
     hits = frame_rt(r);
     ASSERT_TRUE(hits[0].t > 0 && hits[1].t < 0);
+    const u64 hidden_entity = r->w.f.instances.entity[0];
+    ASSERT_EQ(de_view_set_hidden(r->r, r->view, &hidden_entity, 1), DE_OK);
+    hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t < 0 && hits[1].t < 0);
+    EXPECT_EQ(r->w.f.instances.entity[0], hidden_entity);
+    ASSERT_EQ(de_view_set_hidden(r->r, r->view, NULL, 0), DE_OK);
+    hits = frame_rt(r);
+    ASSERT_TRUE(hits[0].t > 0 && hits[1].t < 0);
     de_view_set_pixel_art(r->r, r->view, NULL);
     hits = frame_rt(r);
     ASSERT_TRUE(hits[0].t < 0 && hits[1].t > 0);

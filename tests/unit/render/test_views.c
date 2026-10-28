@@ -388,6 +388,85 @@ TEST_F(views, settings_per_view, vfx) {
     stop(f);
 }
 
+TEST(views, hidden_policy_large_copied_and_generation_safe) {
+    de_tracking_allocator track;
+    de_allocator alloc = de_tracking_allocator_init(&track, NULL, DE_MEM_RENDER);
+    const u32 count = 1000000;
+    u64 *input = DE_ALLOC(&alloc, (u64)count * sizeof(u64), 8, DE_MEM_RENDER);
+    ASSERT_TRUE(input != NULL);
+    for (u32 i = 0; i < count; ++i)
+        input[i] = (UINT64_C(7) << 32) | (count - i);
+    input[0] = 0;
+    input[1] = input[2];
+    const de__view_hidden *policy = NULL;
+    ASSERT_EQ(de__view_hidden_create(&alloc, input, count, &policy), DE_OK);
+    EXPECT_EQ(de__view_hidden_count(policy), count - 2);
+    memset(input, 0, (size_t)count * sizeof(u64));
+    EXPECT_TRUE(de__view_hidden_contains(policy, (UINT64_C(7) << 32) | 12345));
+    EXPECT_FALSE(de__view_hidden_contains(policy, (UINT64_C(8) << 32) | 12345));
+    EXPECT_FALSE(de__view_hidden_contains(policy, 0));
+    const de__view_hidden *copy = de__view_hidden_retain(policy);
+    de__view_hidden_release(policy);
+    EXPECT_TRUE(de__view_hidden_contains(copy, (UINT64_C(7) << 32) | 1));
+    de__view_hidden_release(copy);
+    DE_FREE(&alloc, input, (u64)count * sizeof(u64));
+    EXPECT_EQ(de_tracking_allocator_stats(&track).blocks_live, 0u);
+}
+
+typedef struct hidden_observer {
+    de_view view;
+    u32 count, other_count;
+    bool found;
+} hidden_observer;
+static void observe_hidden(de__view_frame *vf, void *user) {
+    hidden_observer *o = user;
+    if (vf->view.id == o->view.id) {
+        o->count = de__view_hidden_count(vf->hidden);
+        o->found = de__view_hidden_contains(vf->hidden, 55);
+    } else {
+        o->other_count = de__view_hidden_count(vf->hidden);
+    }
+}
+TEST_F(views, hidden_policy_frozen_independent_and_zero_alloc, vfx) {
+    start(f, DE_GPU_NULL);
+    const de_view main = de_renderer_main_view(f->r);
+    const de_view inset = view(f, "filtered", 0, 0, 0.5f, 0.5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, main, 1)));
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, inset, 0)));
+    hidden_observer observer = {.view = inset};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_VISIBILITY, 10, "test.hidden",
+                                      observe_hidden, &observer),
+              DE_OK);
+    const u64 ids[] = {55, 0, 55, UINT64_C(1) << 32};
+    ASSERT_EQ(de_view_set_hidden(f->r, inset, ids, 4), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, 1.0f / 60, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, 1.0f / 60, 0), DE_OK);
+    ASSERT_EQ(de_view_set_hidden(f->r, inset, NULL, 0), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
+    EXPECT_EQ(observer.count, 2u);
+    EXPECT_TRUE(observer.found);
+    EXPECT_EQ(observer.other_count, 0u);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(observer.count, 0u);
+    EXPECT_EQ(de_view_set_hidden(f->r, inset, NULL, 1), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    ASSERT_EQ(de_view_set_hidden(f->r, inset, ids, 4), DE_OK);
+    for (u32 i = 0; i < 8; ++i)
+        ASSERT_EQ(frame(f), DE_OK);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    de_result result = DE_OK;
+    for (u32 i = 0; i < 50 && result == DE_OK; ++i)
+        result = frame(f);
+    de_alloc_guard_end(&guard);
+    ASSERT_EQ(result, DE_OK);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    de_view_destroy(f->r, inset);
+    EXPECT_EQ(de_view_set_hidden(f->r, inset, NULL, 0), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    de__view_unregister_stage(f->r, observe_hidden, &observer);
+}
+
 /* ---- Split screen, render scale, cache ------------------------------------------------------ */
 
 TEST_F(views, split_screen_two_graphs, vfx) {

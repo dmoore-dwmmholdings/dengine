@@ -1343,6 +1343,79 @@ static void capture_progress(lx *f, de_gpu_backend backend) {
     EXPECT_EQ(validation_errors(f->dev), 0);
 }
 /* Two independent layer groups; one point-light slot per group. No windows/platform init. */
+static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
+    lx_save_shadow_budget(f);
+    ASSERT_TRUE(cvar_set("r.shadow_local_max", "1"));
+    ASSERT_TRUE(cvar_set("r.shadow_atlas_updates_per_frame", "12"));
+    const u32 material = material_add(.5f, .6f, 0, .5f);
+    const u32 mesh = lx_mesh_plane(f, 1, 1, 4);
+    world_set(&f->w, 0, mesh, at(0, 0, 0), material);
+    world_set(&f->w, 1, mesh, at(0, 0, -3), material);
+    f->w.f.instances.flags[0] |= DE__RW_INST_CAST_SHADOWS;
+    const DeLight light = {.kind = DE_LIGHT_POINT,
+                           .color = {1, 1, 1},
+                           .intensity = 10,
+                           .range = 20,
+                           .cast_shadows = true};
+    world_light(&f->w, 0, &light, at(0, 0, 4));
+    world_begin(&f->w);
+    ASSERT_EQ(de__gpu_scene_update(f->gs, &f->w.f), DE_OK);
+    const u64 entity = f->w.f.instances.entity[0];
+    const de__view_hidden *hidden = NULL;
+    ASSERT_EQ(de__view_hidden_create(&f->alloc, &entity, 1, &hidden), DE_OK);
+    de_gpu_buffer ids =
+        de_gpu_buffer_create(f->dev, &(de_gpu_buffer_desc){.size = sizeof(u64),
+                                                           .stride = sizeof(u64),
+                                                           .usage = DE_USAGE_STORAGE,
+                                                           .memory = DE_MEM_UPLOAD});
+    ASSERT_TRUE(ids.id != 0);
+    memcpy(de_gpu_buffer_map(f->dev, ids), &entity, sizeof entity);
+    const de__rw_view camera = {.offset = {0, 0, 20}};
+    const de_render_settings settings = {.shadows = DE_QUALITY_LOW};
+    de__shadow_atlas_frame_begin(f->atlas, 0, &camera);
+    for (u32 i = 0; i < 2; ++i)
+        ASSERT_EQ(de__shadow_atlas_frame_view_hidden(f->atlas, (de_view){.id = i + 1}, 1,
+                                                     DE_QUALITY_LOW, i ? hidden : NULL),
+                  DE_OK);
+    de_gpu_texture canonical = {0};
+    for (u32 i = 0; i < 2; ++i) {
+        de__rg_reset(f->g);
+        de_arena_reset(f->arena);
+        ASSERT_EQ(de__rg_begin(f->g, f->arena), DE_OK);
+        ASSERT_EQ(de__gpu_scene_add_passes(f->gs, f->g), DE_OK);
+        const de__view_frame vf = {.view = {.id = i + 1},
+                                   .graph = f->g,
+                                   .world = &f->w.f,
+                                   .camera = &camera,
+                                   .settings = &settings,
+                                   .frame_index = 0,
+                                   .hidden = i ? hidden : NULL,
+                                   .hidden_buffer = i ? ids : (de_gpu_buffer){0}};
+        const de__vis_context vc = {.gpu_scene = f->gs, .frames_completed = 1, .layer_mask = 1};
+        ASSERT_EQ(de__shadow_atlas_build(f->atlas, &vf, &vc), DE_OK);
+        de__atlas_info info;
+        ASSERT_TRUE(de__shadow_atlas_get(f->atlas, vf.view, &info));
+        EXPECT_EQ(info.lights, 1u);
+        if (i)
+            EXPECT_TRUE(info.depth.id != canonical.id);
+        else
+            canonical = info.depth;
+        const f32 *pixels = atlas_end_read_view(f, &info, vf.view, 0);
+        u32 covered = 0;
+        for (u64 pixel = 0; pixel < (u64)info.size * info.size; ++pixel)
+            covered += pixels[pixel] > 0;
+        if (i)
+            EXPECT_EQ(covered, 0u);
+        else
+            EXPECT_GT(covered, 100u);
+    }
+    de_gpu_wait_idle(f->dev);
+    de_gpu_buffer_destroy(f->dev, ids);
+    de__view_hidden_release(hidden);
+    EXPECT_EQ(validation_errors(f->dev), 0u);
+}
 static void receiver_admission(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
@@ -1466,6 +1539,13 @@ static void receiver_admission(lx *f, de_gpu_backend backend) {
 ADMISSION_TEST(metal, DE_GPU_METAL)
 ADMISSION_TEST(vulkan, DE_GPU_VULKAN)
 ADMISSION_TEST(d3d12, DE_GPU_D3D12)
+#define HIDDEN_SHADOW_TEST(tag, backend)                                                           \
+    TEST_F(shadow_atlas, hidden_shadow_groups_##tag, lx) {                                         \
+        hidden_shadow_groups(f, backend);                                                          \
+    }
+HIDDEN_SHADOW_TEST(metal, DE_GPU_METAL)
+HIDDEN_SHADOW_TEST(vulkan, DE_GPU_VULKAN)
+HIDDEN_SHADOW_TEST(d3d12, DE_GPU_D3D12)
 
 /* The orthographic camera sees x[-1,1]; the entire caster is outside that frustum.
  * Light(3,0,8) -> caster(1.5,0,4) -> visible floor(0,0,0) is an analytic shadow ray. */

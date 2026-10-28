@@ -442,6 +442,8 @@ struct lx {
     de_gpu_fence fence;
     u64 frames;
     de_gpu_buffer rb;
+    de_gpu_buffer hidden_buffer;
+    const de__view_hidden *hidden;
     u64 rb_size;
     world w;
     de_vec3 eye, target;
@@ -521,6 +523,9 @@ static void lx_teardown(lx *f) {
     }
     if (f->dev)
         de_gpu_wait_idle(f->dev);
+    if (f->dev)
+        de_gpu_buffer_destroy(f->dev, f->hidden_buffer);
+    de__view_hidden_release(f->hidden);
     de__lighting_destroy(f->lt);
     de__brdf_luts_destroy(f->luts);
     de__vis_shared_destroy(f->vis);
@@ -800,6 +805,8 @@ static bool lx_frame(lx *f) {
     if (de__rg_begin(f->g, f->arena) != DE_OK || de__gpu_scene_add_passes(f->gs, f->g) != DE_OK)
         return false;
     const de__vis_frame_desc d = {.gpu_scene = f->gs,
+                                  .hidden = f->hidden,
+                                  .hidden_buffer = f->hidden_buffer,
                                   .view = (de_view){.id = 1},
                                   .view_slot = 0,
                                   .frame_index = n,
@@ -1684,6 +1691,87 @@ typedef struct debug_user {
     de__output_basic *output;
     de_view_render_mode mode;
 } debug_user;
+
+static void hidden_set(lx *f, const u64 *ids, u32 count) {
+    const de__view_hidden *policy = NULL;
+    ASSERT_EQ(de__view_hidden_create(&f->alloc, ids, count, &policy), DE_OK);
+    de_gpu_buffer next = {0};
+    const u32 used = de__view_hidden_count(policy);
+    if (used) {
+        next = de_gpu_buffer_create(f->dev, &(de_gpu_buffer_desc){.size = (u64)used * sizeof(u64),
+                                                                  .stride = sizeof(u64),
+                                                                  .usage = DE_USAGE_STORAGE,
+                                                                  .memory = DE_MEM_UPLOAD,
+                                                                  .name = "hidden test IDs"});
+        ASSERT_TRUE(next.id != 0);
+        memcpy(de_gpu_buffer_map(f->dev, next), de__view_hidden_ids(policy),
+               (size_t)used * sizeof(u64));
+    }
+    de_gpu_buffer_destroy(f->dev, f->hidden_buffer);
+    de__view_hidden_release(f->hidden);
+    f->hidden = policy;
+    f->hidden_buffer = next;
+}
+static void expect_sides(const lx_result *r, bool left, bool right) {
+    u32 a = 0, b = 0;
+    for (size_t i = 0; i < (size_t)r->width * r->height; ++i)
+        if (r->pos[4 * i + 3] > 0.5f) {
+            if (r->pos[4 * i] < 0)
+                ++a;
+            else
+                ++b;
+        }
+    if (left)
+        EXPECT_GT(a, 100u);
+    else
+        EXPECT_EQ(a, 0u);
+    if (right)
+        EXPECT_GT(b, 100u);
+    else
+        EXPECT_EQ(b, 0u);
+}
+static void hidden_geometry_and_lights(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    const u32 mesh = lx_square(f);
+    const u32 mat = material_add(0.5f, 0.6f, 0.0f, 0.0f);
+    world_set(&f->w, 0, mesh, at(-2, 0, 0), mat);
+    world_set(&f->w, 1, mesh, at(2, 0, 0), mat);
+    env_uniform(f, 1.0f);
+    lx_run(f);
+    expect_sides(&f->res, true, true);
+    const u64 left = f->w.f.instances.entity[0], right = f->w.f.instances.entity[1];
+    hidden_set(f, &left, 1);
+    lx_run(f);
+    expect_sides(&f->res, false, true);
+    const u64 wrong_generation = right + (UINT64_C(1) << 32);
+    hidden_set(f, &wrong_generation, 1);
+    lx_run(f);
+    expect_sides(&f->res, true, true);
+    const u64 both[] = {right, left, right, 0};
+    hidden_set(f, both, 4);
+    lx_run(f);
+    expect_sides(&f->res, false, false);
+    hidden_set(f, NULL, 0);
+    lx_run(f);
+    expect_sides(&f->res, true, true);
+    EXPECT_EQ(f->w.f.instances.entity[0], left);
+    EXPECT_EQ(f->w.f.instances.entity[1], right);
+    de__rw_lights *lights = &f->w.f.lights;
+    const u64 light = (UINT64_C(4) << 32) | 27;
+    lights->count = 1;
+    lights->entity[0] = light;
+    lights->transform[0] = at(0, 0, 4);
+    lights->light[0] = (DeLight){.kind = DE_LIGHT_DIRECTIONAL, .color = {1, 1, 1}, .intensity = 10};
+    f->w.touch_lights = true;
+    lx_run(f);
+    EXPECT_EQ(f->res.counters[DE__LIGHTING_COUNTER_DIRECTIONAL / 4], 1u);
+    hidden_set(f, &light, 1);
+    lx_run(f);
+    EXPECT_EQ(f->res.counters[DE__LIGHTING_COUNTER_DIRECTIONAL / 4], 0u);
+    hidden_set(f, NULL, 0);
+    lx_run(f);
+    EXPECT_EQ(f->res.counters[DE__LIGHTING_COUNTER_DIRECTIONAL / 4], 1u);
+}
 static void debug_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) {
     (void)lc;
     const debug_user *u = f->user;
@@ -1933,6 +2021,9 @@ static void strip_copy(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(ibl, material_debug_modes_##sfx, lx) {                                                  \
         material_debug(f, backend);                                                                \
+    }                                                                                              \
+    TEST_F(ibl, hidden_geometry_and_lights_##sfx, lx) {                                            \
+        hidden_geometry_and_lights(f, backend);                                                    \
     }                                                                                              \
     TEST_F(ibl, ibl_strip_copy_bc6h_##sfx, lx) {                                                   \
         strip_copy(f, backend);                                                                    \

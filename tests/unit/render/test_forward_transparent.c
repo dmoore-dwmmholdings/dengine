@@ -455,6 +455,8 @@ typedef struct lx {
     de_gpu_fence fence;
     u64 frames;
     de_gpu_buffer rb;
+    const de__view_hidden *hidden;
+    de_gpu_buffer hidden_buffer;
     u64 rb_size;
     world w;
     de_vec3 eye, target;
@@ -516,6 +518,9 @@ static void lx_teardown(lx *f) {
     }
     if (f->dev)
         de_gpu_wait_idle(f->dev);
+    if (f->dev)
+        de_gpu_buffer_destroy(f->dev, f->hidden_buffer);
+    de__view_hidden_release(f->hidden);
     de__forward_destroy(f->fw);
     de__lighting_destroy(f->lt);
     de__brdf_luts_destroy(f->luts);
@@ -757,6 +762,8 @@ static bool lx_frame(lx *f) {
     if (de__rg_begin(f->g, f->arena) != DE_OK || de__gpu_scene_add_passes(f->gs, f->g) != DE_OK)
         return false;
     const de__vis_frame_desc d = {.gpu_scene = f->gs,
+                                  .hidden = f->hidden,
+                                  .hidden_buffer = f->hidden_buffer,
                                   .view = (de_view){.id = 1},
                                   .view_slot = 0,
                                   .frame_index = n,
@@ -925,6 +932,37 @@ static void point_light(lx *f, u32 slot, f32 x, f32 y, f32 z, f32 lumens) {
 /* A blended quad over the floor: the vis buffer under it holds the floor, its meshlets are
  * counted as forward, and the pass draws it. Made opaque, the vis buffer holds it (the check
  * would see a leak). */
+static void hidden_forward(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    lx_floor(f, mat_unlit(.2f, .2f, .2f, 1, DE_COOKED_ALPHA_OPAQUE));
+    const u32 material = mat_unlit(0, 1, 0, .5f, DE_COOKED_ALPHA_BLEND);
+    world_set(&f->w, 1, lx_mesh_plane(f, 1, 1, 2), at(0, 0, 3), material);
+    lx_run(f);
+    const u32 x = f->width / 2, y = f->height / 2;
+    const f32 *first = px_of(f->res.lighting, f, x, y);
+    const f32 visible[3] = {first[0], first[1], first[2]};
+    ASSERT_TRUE(visible[1] > visible[0] + .1f);
+    const u64 entity = f->w.f.instances.entity[1];
+    ASSERT_EQ(de__view_hidden_create(&f->alloc, &entity, 1, &f->hidden), DE_OK);
+    f->hidden_buffer = de_gpu_buffer_create(f->dev, &(de_gpu_buffer_desc){.size = sizeof(u64),
+                                                                          .stride = sizeof(u64),
+                                                                          .usage = DE_USAGE_STORAGE,
+                                                                          .memory = DE_MEM_UPLOAD});
+    ASSERT_TRUE(f->hidden_buffer.id != 0);
+    memcpy(de_gpu_buffer_map(f->dev, f->hidden_buffer), &entity, sizeof entity);
+    lx_run(f);
+    const f32 *hidden = px_of(f->res.lighting, f, x, y);
+    EXPECT_FLOAT_EQ(hidden[0], hidden[1], .001f);
+    EXPECT_FLOAT_EQ(hidden[1], hidden[2], .001f);
+    EXPECT_TRUE(hidden[0] > .05f);
+    de__view_hidden_release(f->hidden);
+    f->hidden = NULL;
+    lx_run(f);
+    const f32 *restored = px_of(f->res.lighting, f, x, y);
+    for (u32 c = 0; c < 3; ++c)
+        EXPECT_FLOAT_EQ(restored[c], visible[c], .001f);
+    EXPECT_EQ(f->w.f.instances.entity[1], entity);
+}
 static void routing(lx *f, de_gpu_backend b) {
     lx_open(f, b);
     lx_floor(f, mat_unlit(0.2f, 0.2f, 0.2f, 1.0f, 0));
@@ -1384,6 +1422,14 @@ static void scene_color(lx *f, de_gpu_backend b) {
     EXPECT_FALSE(f->res.scene_color);
     EXPECT_EQ(f->res.forward_passes, 1u);
 }
+
+#define HIDDEN_FORWARD_TEST(tag, backend)                                                          \
+    TEST_F(forward, hidden_forward_##tag, lx) {                                                    \
+        hidden_forward(f, backend);                                                                \
+    }
+HIDDEN_FORWARD_TEST(metal, DE_GPU_METAL)
+HIDDEN_FORWARD_TEST(vulkan, DE_GPU_VULKAN)
+HIDDEN_FORWARD_TEST(d3d12, DE_GPU_D3D12)
 
 #define GPU_TESTS(sfx, backend)                                                                    \
     TEST_F(forward, forward_sprite_base_matches_full_##sfx, lx) {                                  \

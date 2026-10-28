@@ -23,6 +23,8 @@ bool de__atlas_alloc_free(de__atlas_alloc *a, de__atlas_tile tile);
 typedef struct de__shadow_views de__shadow_views;
 typedef struct de__shadow_view_desc {
     de__gpu_scene *scene;
+    const de__view_hidden *hidden;
+    de_gpu_buffer hidden_buffer;
     de_rg_resource depth;
     u32 context, layer, rect[4];
     u32 width, height, layer_mask;
@@ -123,6 +125,8 @@ void de__shadow_atlas_frame_begin(de__shadow_atlas *s, u64 frame,
                                   const struct de__rw_view *ranking_camera);
 de_result de__shadow_atlas_frame_view(de__shadow_atlas *s, de_view view, u32 layer_mask,
                                       de_quality quality);
+de_result de__shadow_atlas_frame_view_hidden(de__shadow_atlas *s, de_view view, u32 layer_mask,
+                                             de_quality quality, const de__view_hidden *hidden);
 bool de__shadow_atlas_capture_ready(const de__shadow_atlas *s, de_view view);
 void de__shadow_atlas_destroy(de__shadow_atlas *s);
 de_result de__shadow_atlas_build(de__shadow_atlas *s, const de__view_frame *vf,

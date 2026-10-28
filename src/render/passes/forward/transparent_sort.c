@@ -182,6 +182,8 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
     de__transparent_item *items = NULL;
     u32 n = 0, cap = 0;
     for (u32 s = 0; s < in->count; ++s) {
+        if (de__view_hidden_contains(v->hidden, in->entity[s]))
+            continue;
         if (in->entity[s] == 0 || (in->flags[s] & DE__RW_INST_HAS_BOUNDS) == 0)
             continue;
         u32 mesh_slot = DE__GS_NONE;

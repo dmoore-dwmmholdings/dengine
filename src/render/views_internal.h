@@ -75,6 +75,7 @@
 #include <dengine/de_math.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_render.h>
+#include "render/view_hidden.h"
 
 DE_EXTERN_C_BEGIN
 
@@ -154,6 +155,8 @@ typedef struct de__view_frame {
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
     de_view_display display;
+    const de__view_hidden *hidden;
+    de_gpu_buffer hidden_buffer;
     bool probe_capture; /**< Fixed radiance capture: no temporal effects or probes. */
     const de_pixel_art_settings *pixel_art;
     de_vec2 pixel_residual;
@@ -163,6 +166,8 @@ typedef struct de__view_frame {
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */
 typedef void (*de__view_stage_fn)(de__view_frame *vf, void *user);
+/** Share an already immutable policy (editor Scene views share one list). Main thread. */
+de_result de__view_set_hidden_policy(de_renderer *r, de_view v, const de__view_hidden *policy);
 
 /**
  * Adds a stage to the registration list of `r`. `name` is copied (for messages). Main thread,

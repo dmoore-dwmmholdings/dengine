@@ -30,6 +30,7 @@
 #include "render/loaders/render_assets.h"
 #include "render/renderer_internal.h"
 #include "render/world/render_world.h"
+#include "render/views_internal.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -171,8 +172,7 @@ typedef struct de__ed_views {
     bool hook;
     ed_pick picks[ED_MAX_PICKS];
     u64 next_pick;
-    u64 hidden[1024];
-    u32 hidden_count;
+    const de__view_hidden *hidden;
     de_component c_camera;
 #if ED_VIEWS
     ed_bridge bridge;
@@ -993,6 +993,7 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
             de_view_set_render_scale(ed->e->renderer, v->rv, 1.0f);
             const de_view_display display = display_policy(mode, v->show);
             (void)de_view_set_display(ed->e->renderer, v->rv, &display);
+            (void)de__view_set_hidden_policy(ed->e->renderer, v->rv, g_views.hidden);
             const de_builtin_component_ids b = de_builtin_components(ed->e->world);
             v->cam = de_entity_spawn(ed->e->world);
             (void)de_entity_add(ed->e->world, v->cam, b.transform);
@@ -1084,6 +1085,7 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         (void)render_mode(de_ep_cstr(v->render_mode), &mode);
         const de_view_display display = display_policy(mode, v->show);
         (void)de_view_set_display(ed->e->renderer, v->rv, &display);
+        (void)de__view_set_hidden_policy(ed->e->renderer, v->rv, g_views.hidden);
     }
     v->consumed = de_atomic_load_u64(&v->produced, DE_ATOMIC_ACQUIRE);
     de_ep_view_resized r;
@@ -1247,19 +1249,49 @@ static void on_destroy(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
 static void on_set_hidden(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_set_hidden, de_ep_entity_list, q);
-    g_views.hidden_count = 0;
-    for (u32 i = 0; i < q.entities.count && g_views.hidden_count < 1024; ++i)
-        g_views.hidden[g_views.hidden_count++] = q.entities.items[i];
+#if ED_VIEWS
+    if (!ed->e->renderer) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "hidden rendering requires a renderer");
+        return;
+    }
+    const de__view_hidden *policy = NULL;
+    if (de__view_hidden_create(ed->e->renderer->alloc, q.entities.items, q.entities.count,
+                               &policy) != DE_OK) {
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "could not copy hidden entities");
+        return;
+    }
+    /* Validate before changing any view, then share one immutable list across Scene views.
+     * Game panels keep the canonical runtime image. New/resized Scene views inherit it too. */
+    for (u32 i = 0; i < ED_MAX_VIEWS; ++i) {
+        const ed_view *v = &g_views.views[i];
+        if (v->id && !v->game && !de__view_valid(ed->e->renderer, v->rv)) {
+            de__view_hidden_release(policy);
+            de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "stale renderer view");
+            return;
+        }
+    }
+    for (u32 i = 0; i < ED_MAX_VIEWS; ++i) {
+        const ed_view *v = &g_views.views[i];
+        if (v->id && !v->game)
+            (void)de__view_set_hidden_policy(ed->e->renderer, v->rv, policy);
+    }
+    de__view_hidden_release(g_views.hidden);
+    g_views.hidden = policy;
     empty_response(w, req->id);
+#else
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "hidden rendering requires shared views");
+#endif
 }
 
 /* ---------- Picking ---------- */
 
 static bool hidden(u64 e) {
-    for (u32 i = 0; i < g_views.hidden_count; ++i)
-        if (g_views.hidden[i] == e)
-            return true;
+#if ED_VIEWS
+    return de__view_hidden_contains(g_views.hidden, e);
+#else
+    (void)e;
     return false;
+#endif
 }
 
 /* The source pixel of an IDE position. */
@@ -1651,6 +1683,10 @@ static void reset(de__editor *ed) {
         if (g_views.views[i].id != 0)
             view_release_all(ed, &g_views.views[i]);
     memset(g_views.picks, 0, sizeof g_views.picks);
+#if ED_VIEWS
+    de__view_hidden_release(g_views.hidden);
+    g_views.hidden = NULL;
+#endif
     de__ed_gizmo_reset(ed);
 }
 

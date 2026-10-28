@@ -64,6 +64,7 @@ typedef struct view_main {
     u32 seq;                     /**< creation sequence: ties of `order` */
     u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask (0: every layer) */
     de_view_display display;
+    const de__view_hidden *hidden;
 } view_main;
 
 /** The render-thread side of a view slot. */
@@ -71,6 +72,8 @@ typedef struct view_rs {
     bool live; /**< has state for generation `gen` */
     u32 gen;
     view_main copy; /**< the main side as of this frame's sync */
+    de_gpu_buffer hidden_buffers[DE__RENDER_MAX_FRAMES_IN_FLIGHT];
+    u32 hidden_capacity[DE__RENDER_MAX_FRAMES_IN_FLIGHT];
     de_rg *graph;
     de_gpu_texture output; /**< DE__VIEW_OUTPUT_FORMAT, out_w x out_h */
     u32 out_w, out_h;
@@ -376,6 +379,8 @@ void de_view_destroy(de_renderer *r, de_view v) {
     de_mutex_lock(&vs->lock);
     view_main *m = main_of(vs, v);
     if (m != NULL) {
+        de__view_hidden_release(m->hidden);
+        m->hidden = NULL;
         m->alive = false;
         m->gen = next_gen(m->gen); /* stale at once; the render side retires its objects */
     }
@@ -486,6 +491,30 @@ de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *
         m->display = policy;
     de_mutex_unlock(&vs->lock);
     return m ? DE_OK : DE_FAIL(DE_ERR_INVALID_ARGUMENT, "stale view");
+}
+
+de_result de__view_set_hidden_policy(de_renderer *r, de_view v, const de__view_hidden *policy) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "no renderer views");
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m && !de__view_hidden_equal(m->hidden, policy)) {
+        const de__view_hidden *previous = m->hidden;
+        m->hidden = de__view_hidden_retain(policy);
+        de__view_hidden_release(previous);
+    }
+    de_mutex_unlock(&vs->lock);
+    return m ? DE_OK : DE_FAIL(DE_ERR_INVALID_ARGUMENT, "stale view");
+}
+de_result de_view_set_hidden(de_renderer *r, de_view v, const u64 *entities, u32 count) {
+    if (!r || !de__view_valid(r, v))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "stale view");
+    const de__view_hidden *policy = NULL;
+    DE_TRY(de__view_hidden_create(r->alloc, entities, count, &policy));
+    de_result result = de__view_set_hidden_policy(r, v, policy);
+    de__view_hidden_release(policy);
+    return result;
 }
 
 bool de__view_valid(const de_renderer *r, de_view v) {
@@ -684,6 +713,9 @@ static void release_now(de_renderer *r, de_rg *g, de_gpu_texture out) {
 /* Retires the render side of a slot: its objects go once the frame fence passes every frame
  * submitted so far. */
 static void retire(de_renderer *r, de__views *vs, view_rs *s) {
+    de__view_hidden_release(s->copy.hidden);
+    for (u32 i = 0; i < DE__RENDER_MAX_FRAMES_IN_FLIGHT; ++i)
+        de_gpu_buffer_destroy(r->dev, s->hidden_buffers[i]);
     de__denoise_forget(r->denoise, make_handle((u32)(s - vs->rs), s->gen));
     de__pt_forget(r->pt, make_handle((u32)(s - vs->rs), s->gen));
     if (s->graph != NULL || DE_HANDLE_VALID(s->output)) {
@@ -731,6 +763,10 @@ static void sync(de_renderer *r, de__views *vs) {
         if (s->live) {
             if (s->copy.max_fps != m->max_fps || s->copy.paused != m->paused)
                 s->next_render_ns = 0;
+            if (s->copy.hidden != m->hidden) {
+                de__view_hidden_retain(m->hidden);
+                de__view_hidden_release(s->copy.hidden);
+            }
             s->copy = *m;
         }
     }
@@ -834,6 +870,10 @@ static de_view_frame_info metadata(const de__view_frame *vf) {
 }
 void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
     de__views *vs = views_of(r);
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i) {
+        de__view_hidden_release(world->frozen_hidden[i]);
+        world->frozen_hidden[i] = NULL;
+    }
     world->frozen_view_count = 0;
     if (!vs)
         return;
@@ -891,6 +931,7 @@ void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
         camera_metadata(r, world, cam, &vf);
         u32 at = world->frozen_view_count++;
         world->frozen_views[at] = metadata(&vf);
+        world->frozen_hidden[at] = de__view_hidden_retain(m->hidden);
         world->frozen_views[at].frame_index = UINT64_MAX;
         world->frozen_views[at].ring_index = UINT32_MAX;
         world->frozen_settings[at] = eff;
@@ -1074,6 +1115,40 @@ static de_result material_sample_reads(de_renderer *r, de__views *vs, de_rg *g, 
 }
 
 /* Builds, compiles and executes the graph of the view at position `pos` of the order. */
+static bool prepare_hidden(de_renderer *r, view_rs *s, de__view_frame *vf) {
+    const u32 count = de__view_hidden_count(vf->hidden);
+    if (!count)
+        return true;
+    const u32 ring = (u32)(vf->frame_index % r->frames_in_flight);
+    if (s->hidden_capacity[ring] < count) {
+        u32 cap = 64;
+        while (cap < count) {
+            if (cap > UINT32_MAX / 2) {
+                cap = count;
+                break;
+            }
+            cap *= 2;
+        }
+        const de_gpu_buffer next =
+            de_gpu_buffer_create(r->dev, &(de_gpu_buffer_desc){.size = (u64)cap * sizeof(u64),
+                                                               .stride = sizeof(u64),
+                                                               .usage = DE_USAGE_STORAGE,
+                                                               .memory = DE_MEM_UPLOAD,
+                                                               .name = "view hidden entity IDs"});
+        if (!next.id)
+            return false;
+        de_gpu_buffer_destroy(r->dev, s->hidden_buffers[ring]);
+        s->hidden_buffers[ring] = next;
+        s->hidden_capacity[ring] = cap;
+    }
+    vf->hidden_buffer = s->hidden_buffers[ring];
+    void *mapped = de_gpu_buffer_map(r->dev, vf->hidden_buffer);
+    if (!mapped)
+        return false;
+    memcpy(mapped, de__view_hidden_ids(vf->hidden), (size_t)count * sizeof(u64));
+    return true;
+}
+
 static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
                         const de__render_world_frame *world, u32 pos, u64 frame_index) {
     const u32 slot = vs->order[pos];
@@ -1171,6 +1246,12 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
     vf.layer_mask = s->copy.layer_mask;
     vf.display = s->copy.display;
+    vf.hidden = frozen ? world->frozen_hidden[frozen_index] : s->copy.hidden;
+    if (!prepare_hidden(r, s, &vf)) {
+        de__rg_reset(g);
+        view_failed(r, s, "hidden entity upload");
+        return;
+    }
     camera_metadata(r, world, vf.camera, &vf);
     if (frozen) {
         vf.view_matrix = frozen->view_matrix;
@@ -1459,9 +1540,15 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
     for (u32 k = 0; k < vs->order_count; ++k) {
         const view_rs *s = &vs->rs[vs->order[k]];
         const de_render_settings settings = effective_settings(r, &s->copy, &r->frame);
-        const de_result registration =
-            de__shadow_atlas_frame_view(r->shadow_atlas, make_handle(vs->order[k], s->gen),
-                                        s->copy.layer_mask, settings.shadows);
+        const de_view handle = make_handle(vs->order[k], s->gen);
+        const de__view_hidden *hidden = s->copy.hidden;
+        for (u32 i = 0; world && i < world->frozen_view_count; ++i)
+            if (world->frozen_views[i].view.id == handle.id) {
+                hidden = world->frozen_hidden[i];
+                break;
+            }
+        const de_result registration = de__shadow_atlas_frame_view_hidden(
+            r->shadow_atlas, handle, s->copy.layer_mask, settings.shadows, hidden);
         if (registration != DE_OK)
             DE_ERROR(r->log, "shadow atlas receiver registration: %s", de_result_str(registration));
     }
@@ -1573,8 +1660,13 @@ void de__views_destroy(de_renderer *r) {
     de__sss_destroy(vs->sss);                   /* DENG-306 */
     de__lighting_destroy(vs->lighting);         /* DENG-303 */
     de__vis_frame_destroy(r, vs->vis);          /* DENG-229 */
-    for (u32 i = 0; i < DE__VIEW_MAX; ++i)
+    for (u32 i = 0; i < DE__VIEW_MAX; ++i) {
+        de__view_hidden_release(vs->main[i].hidden);
+        de__view_hidden_release(vs->rs[i].copy.hidden);
+        for (u32 ring = 0; ring < DE__RENDER_MAX_FRAMES_IN_FLIGHT; ++ring)
+            de_gpu_buffer_destroy(r->dev, vs->rs[i].hidden_buffers[ring]);
         release_now(r, vs->rs[i].graph, vs->rs[i].output);
+    }
     for (u32 i = 0; i < vs->retired_count; ++i)
         release_now(r, vs->retired[i].graph, vs->retired[i].output);
     de__pixel_destroy(r, vs->pixel);

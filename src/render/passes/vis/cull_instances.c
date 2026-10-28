@@ -493,6 +493,8 @@ static bool add_phase(de_rg *g, de__vis_context *vc, ci_state *st, ci_view *pv,
     p = de_rg_add_pass(g, p2 ? "vis.cull_instances2" : "vis.cull_instances", DE_QUEUE_GRAPHICS,
                        cull_execute, pu);
     de_rg_read(p, vc->scene_instances, DE_ACCESS_SHADER_READ);
+    if (vc->hidden_entities.id)
+        de_rg_read(p, vc->hidden_entities, DE_ACCESS_SHADER_READ);
     de_rg_read(p, vc->scene_meshes, DE_ACCESS_SHADER_READ);
     de_rg_read(p, counters, DE_ACCESS_SHADER_READ); /* atomics: read-modify-write */
     de_rg_write(p, counters, DE_ACCESS_SHADER_WRITE);
@@ -606,6 +608,8 @@ void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
     }
     cv.instance_count = count;
     cv.layer_mask = vc->layer_mask;
+    cv.hidden_entities = vc->hidden_bindless;
+    cv.hidden_count = vc->hidden_count;
     cv.work_capacity = cap;
     /* DENG-233: the HZB phase 2 tests against, and both phases' visibility flags. r.cull_disable
      * also turns occlusion off. */

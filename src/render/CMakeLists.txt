@@ -529,3 +529,8 @@ if(TARGET de_render)
     target_sources(de_render PRIVATE passes/forward/forward_participants.c
         passes/forward/forward_participants.h)
 endif()
+
+# DENG-640: shared immutable per-view hidden-entity policies.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE view_hidden.c view_hidden.h)
+endif()

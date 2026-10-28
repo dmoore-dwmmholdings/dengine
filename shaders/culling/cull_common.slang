@@ -20,6 +20,7 @@
 // 100 km away for orthographic views), so the far plane is never tested: the five planes are
 // left, right, bottom, top, near.
 module cull_common;
+import bindless;
 
 import occlusion;
 
@@ -49,9 +50,32 @@ public struct DeVisCullView
     public uint visibility;     // bindless index of the view's visibility flags (raw, u32 per
                                 // instance slot: 1 = visible after the last frame's phase 2)
     public uint visibility_count; // slots the last frame wrote (0: no history, e.g. a camera cut)
-    public uint reserved0;
-    public uint reserved1;
+    public uint hidden_entities; // sorted uint2 full entity IDs: lo,hi
+    public uint hidden_count;
 };
+
+/// Sorted full IDs preserve generations; no instance table is copied per view.
+public bool de_hidden_entity(uint entities, uint count, uint lo_word, uint hi_word)
+{
+    if (count == 0u || entities == 0u)
+        return false;
+    uint lo = 0u, hi = count;
+    while (lo < hi)
+    {
+        uint mid = lo + (hi - lo) / 2u;
+        uint2 value = de_robuffer<uint2>(entities)[mid];
+        if (value.y < hi_word || (value.y == hi_word && value.x < lo_word))
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    if (lo >= count)
+        return false;
+    return all(de_robuffer<uint2>(entities)[lo] == uint2(lo_word, hi_word));
+}
+public bool de_cull_hidden(DeVisCullView v, uint lo_word, uint hi_word) {
+    return de_hidden_entity(v.hidden_entities, v.hidden_count, lo_word, hi_word);
+}
 
 /// The bounds an occlusion test sees: a world AABB and its bounding sphere (render-origin space).
 public struct DeCullBounds

@@ -1,5 +1,6 @@
 module restir_di_common;
 import bindless;
+import "../culling/cull_common";
 __exported import reservoir;
 __exported import rt_types;
 import rt_opacity;
@@ -31,7 +32,7 @@ public struct DiParams {
     public uint hits,diffuse,specular,distance;
     public uint width,height,frame,candidates;
     public uint unbiased,initial_visibility,history_valid,metadata;
-    public uint sampler,layers,unused1,unused2;
+    public uint sampler,layers,hidden_entities,hidden_count;
     public uint unused3,unused4,unused5,unused6;
     public uint unused7,unused8,unused9,unused10;
     public uint unused11,unused12,unused13,unused14;
@@ -123,6 +124,18 @@ public DiSample di_evaluate(DiParams p,DiSurface surface,uint source_index,float
     DiSample out=(DiSample)0;out.ray.direction=float4(0,0,1,0);
     if(!surface.valid || source_index>=p.source_count)return out;
     DiSource source=de_robuffer<DiSource>(p.sources)[source_index];
+    if(p.hidden_count!=0u) {
+        DeSceneConstants sc=di_scene(p);
+        if(source.kind==0u) {
+            if(source.index>=sc.light_count)return out;
+            DeGpuLight light=de_robuffer<DeGpuLight>(sc.lights)[source.index];
+            if(de_hidden_entity(p.hidden_entities,p.hidden_count,light.entity_lo,light.entity_hi))return out;
+        } else {
+            if(source.index>=sc.instance_count)return out;
+            DeGpuInstance inst=de_robuffer<DeGpuInstance>(sc.instances)[source.index];
+            if(de_hidden_entity(p.hidden_entities,p.hidden_count,inst.entity_lo,inst.entity_hi))return out;
+        }
+    }
     float3 wi,incident;float limit;
     SurfaceData material=surface.material;
     if(source.kind==0) {

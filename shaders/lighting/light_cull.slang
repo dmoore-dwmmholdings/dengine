@@ -25,6 +25,7 @@
 // complete records consistently, including when a cluster exceeds its bounded list budget.
 import bindless;
 import push_constants;
+import "../culling/cull_common";
 import "../shadows/atlas_sample";
 import "../shadows/contact_common";
 import "../lighting/lighting_common";
@@ -48,7 +49,7 @@ struct CullParams
     uint clear_bytes; // cs_light_clear: bytes of `counters` to zero (a multiple of 4, <= 256)
     uint reserved1;
     uint contact_records;
-    uint3 padding;
+    uint hidden_entities, hidden_count, padding;
 };
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
@@ -155,7 +156,8 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
         if (sc.lights == DE_BINDLESS_INVALID || t >= sc.light_count)
             return;
         DeGpuLight g = de_robuffer<DeGpuLight>(sc.lights)[t];
-        if ((g.flags & DE_GPU_LIGHT_LIVE) == 0u || !(g.color.w > 0.0))
+        if ((g.flags & DE_GPU_LIGHT_LIVE) == 0u || !(g.color.w > 0.0) ||
+            de_hidden_entity(pc.hidden_entities,pc.hidden_count,g.entity_lo,g.entity_hi))
             return;
         if (g.kind == DE_LIGHT_KIND_DIRECTIONAL)
         {
@@ -184,7 +186,8 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
         sc.materials == DE_BINDLESS_INVALID)
         return;
     DeGpuInstance inst = de_robuffer<DeGpuInstance>(sc.instances)[s];
-    if ((inst.flags & DE_GPU_INSTANCE_LIVE) == 0u || (inst.flags & DE_GPU_INSTANCE_HAS_BOUNDS) == 0u)
+    if ((inst.flags & DE_GPU_INSTANCE_LIVE) == 0u || (inst.flags & DE_GPU_INSTANCE_HAS_BOUNDS) == 0u ||
+        de_hidden_entity(pc.hidden_entities,pc.hidden_count,inst.entity_lo,inst.entity_hi))
         return;
     uint slot = inst.materials[0].x;
     if (slot == DE_GPU_NONE || slot >= sc.material_count)

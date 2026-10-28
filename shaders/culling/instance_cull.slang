@@ -112,7 +112,8 @@ void cs_instance_cull(uint3 id : SV_DispatchThreadID, uniform InstanceCullParams
     uint need = DE_GPU_INSTANCE_LIVE | DE_GPU_INSTANCE_HAS_BOUNDS;
     uint mesh_need = DE_GPU_MESH_READY | DE_GPU_MESH_MESHLETS;
     bool candidate = (inst.flags & need) == need && inst.mesh != DE_GPU_NONE &&
-                     (inst.layer_mask & v.layer_mask) != 0;
+                     (inst.layer_mask & v.layer_mask) != 0 &&
+                     !de_cull_hidden(v, inst.entity_lo, inst.entity_hi);
     if (candidate)
     {
         mesh = de_robuffer<DeGpuMesh>(pc.meshes)[inst.mesh];

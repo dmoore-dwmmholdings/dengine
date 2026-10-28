@@ -106,6 +106,7 @@ static bool same_fit(const de__csm_cascade *a, const de__csm_cascade *b) {
 
 typedef struct csm_view {
     de_view view;
+    const de__view_hidden *hidden;
     de_gpu_texture depth, mirrors[8];
     de_gpu_buffer metadata[DE__VIS_FRAME_RING];
     de__csm_gpu *mapped[DE__VIS_FRAME_RING];
@@ -128,6 +129,7 @@ struct de__csm {
     de_cvar cv_lights, cv_distance, cv_far_interval, cv_pcss;
 };
 static void csm_release(de__csm *s, csm_view *v) {
+    de__view_hidden_release(v->hidden);
     if (!v->borrowed) {
         if (v->depth.id)
             de_gpu_texture_destroy(s->dev, v->depth);
@@ -275,6 +277,7 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
         limit = 2;
     for (u32 i = 0; i < world->count && lights < limit; ++i)
         if (world->entity[i] && world->light[i].kind == DE_LIGHT_DIRECTIONAL &&
+            !de__view_hidden_contains(vf->hidden, world->entity[i]) &&
             world->light[i].cast_shadows && world->light[i].intensity > 0 &&
             isfinite(world->light[i].intensity))
             selected[lights++] = i;
@@ -373,6 +376,11 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
     data[0].identity[1] = count;
     de_rg_resource depth = de_rg_import_texture(vf->graph, v->depth, v->depth_access);
     de_rg_resource mirrors[8] = {0};
+    if (!de__view_hidden_equal(v->hidden, vf->hidden)) {
+        de__view_hidden_release(v->hidden);
+        v->hidden = de__view_hidden_retain(vf->hidden);
+        memset(v->valid, 0, sizeof v->valid);
+    }
     bool changed = vf->world->dirty_instance_count || vf->world->removed_instance_count ||
                    vf->world->origin_changed;
     u32 cadence = (u32)de_cvar_int(s->cv_far_interval);
@@ -396,6 +404,8 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
                 DE_TRY(de__shadow_view_build(
                     s->pool, vf->graph,
                     &(de__shadow_view_desc){.scene = vc->gpu_scene,
+                                            .hidden = vf->hidden,
+                                            .hidden_buffer = vf->hidden_buffer,
                                             .depth = depth,
                                             .context = slot * 8 + layer,
                                             .layer = layer,

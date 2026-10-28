@@ -28,7 +28,7 @@ typedef struct cl_cull_params {
     u32 view, entry, scene, view_slot;
     u32 bounds, lights, dir_lights, grid;
     u32 list, counters, clear_bytes, reserved1;
-    u32 contact_records, padding[3];
+    u32 contact_records, hidden_entities, hidden_count, padding;
 } cl_cull_params;
 DE_STATIC_ASSERT(sizeof(cl_cull_params) == 64, "CullParams is 64 bytes");
 
@@ -164,7 +164,9 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
                           .pc = {.view = vs->constants_bindless,
                                  .entry = vs->entry,
                                  .scene = vc->scene_views_bindless,
-                                 .view_slot = slot},
+                                 .view_slot = slot,
+                                 .hidden_entities = vc->hidden_bindless,
+                                 .hidden_count = vc->hidden_count},
                           .width = grid->width,
                           .height = grid->height};
 
@@ -218,6 +220,8 @@ bool de__clusters_build(de__lighting *lt, de_rg *g, de__vis_context *vc,
     de_rg_write(p, lc->tile_counters, DE_ACCESS_SHADER_WRITE);
 
     p = de_rg_add_pass(g, "lighting.lights_prep", DE_QUEUE_GRAPHICS, cull_execute, pp);
+    if (vc->hidden_entities.id)
+        de_rg_read(p, vc->hidden_entities, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(vc->scene_views))
         de_rg_read(p, vc->scene_views, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(scene_lights))

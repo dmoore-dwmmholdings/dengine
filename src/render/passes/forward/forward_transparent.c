@@ -318,6 +318,7 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
 
     /* The list. */
     const de__transparent_view tv = {.gs = vc->gpu_scene,
+                                     .hidden = vc->hidden,
                                      .world = world,
                                      .cull = &vc->cull,
                                      .layer_mask = vc->layer_mask,

@@ -158,7 +158,7 @@ typedef struct de__vis_cull_view {
      * visibility flags (bindless index; slots the last frame wrote, 0 = no history). */
     u32 hzb, hzb_width, hzb_height, hzb_mips;
     u32 visibility, visibility_count;
-    u32 reserved0, reserved1;
+    u32 hidden_entities, hidden_count; /**< sorted uint2 entity IDs (lo,hi); 0 count: no filter */
 } de__vis_cull_view;
 DE_STATIC_ASSERT(sizeof(de__vis_cull_view) == 224, "DeVisCullView is 224 bytes");
 
@@ -405,6 +405,10 @@ typedef struct de__vis_context {
     de_arena *arena; /**< the graph's frame arena (pass data) */
     de__gpu_scene *gpu_scene;
 
+    const de__view_hidden *hidden;
+    de_rg_resource hidden_entities;
+    u32 hidden_bindless, hidden_count;
+
     /* The view. */
     de_view view;
     u32 view_slot; /**< 0 .. DE__VIEW_MAX - 1: per-view state and the GPU scene's view slot */
@@ -565,6 +569,8 @@ typedef struct de__vis_frame_desc {
     u32 depth_override_width, depth_override_height;
     /** DENG-239: the view's output size (pick coordinates); 0: the internal size. */
     u32 output_width, output_height;
+    const de__view_hidden *hidden;
+    de_gpu_buffer hidden_buffer;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */

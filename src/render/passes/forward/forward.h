@@ -117,6 +117,7 @@ void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_it
 
 /** What de__transparent_gather reads. */
 typedef struct de__transparent_view {
+    const de__view_hidden *hidden;
     const de__gpu_scene *gs;
     const struct de__render_world_frame *world;
     const de__vis_cull_view *cull; /**< frustum (when its flags have DE__VIS_CULL_FRUSTUM) */

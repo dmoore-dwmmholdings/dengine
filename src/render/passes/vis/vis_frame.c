@@ -350,6 +350,14 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->graph = g;
     vc->arena = g->arena;
     vc->gpu_scene = d->gpu_scene;
+    vc->hidden = d->hidden;
+    vc->hidden_count = de__view_hidden_count(d->hidden);
+    if (vc->hidden_count) {
+        if (!d->hidden_buffer.id)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "hidden policy without GPU entity list");
+        vc->hidden_entities = de_rg_import_buffer(g, d->hidden_buffer, DE_ACCESS_SHADER_READ);
+        vc->hidden_bindless = de_gpu_buffer_bindless(s->dev, d->hidden_buffer);
+    }
     vc->view = d->view;
     vc->view_slot = d->view_slot;
     vc->scene_view_slot = d->view_slot;
@@ -470,7 +478,9 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .proj = vf->proj,
                             .prev_view_proj = vf->prev_view_proj,
                             .settings = vf->settings,
-                            .layer_mask = vf->layer_mask,       /* DENG-239 */
+                            .layer_mask = vf->layer_mask, /* DENG-239 */
+                            .hidden = vf->hidden,
+                            .hidden_buffer = vf->hidden_buffer,
                             .output_width = vf->viewport_px[2], /* DENG-239: pick coordinates */
                             .output_height = vf->viewport_px[3]};
     if (vf->camera != NULL)

@@ -179,6 +179,14 @@ de_result de__shadow_view_build(de__shadow_views *s, de_rg *g, const de__shadow_
     vc->graph = g;
     vc->arena = g->arena;
     vc->gpu_scene = d->scene;
+    vc->hidden = d->hidden;
+    vc->hidden_count = de__view_hidden_count(d->hidden);
+    if (vc->hidden_count) {
+        if (!d->hidden_buffer.id)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "shadow hidden policy without GPU list");
+        vc->hidden_entities = de_rg_import_buffer(g, d->hidden_buffer, DE_ACCESS_SHADER_READ);
+        vc->hidden_bindless = de_gpu_buffer_bindless(b->vis->dev, d->hidden_buffer);
+    }
     vc->view = (de_view){.id = slot + 1u};
     vc->view_slot = slot;
     vc->scene_view_slot = entry;

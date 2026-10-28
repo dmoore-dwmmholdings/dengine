@@ -284,6 +284,11 @@ typedef struct de_view_display {
 /** Copies display policy into the next immutable Extract frame. NULL restores Lit with UI and
  * post effects enabled. Main thread. Invalid policy or stale view: DE_ERR_INVALID_ARGUMENT. */
 DE_API de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display);
+/** Copies entities excluded from this view's geometry and direct lights. Full entity IDs (including
+ * generations) are sorted/deduplicated; zero IDs are ignored. Count zero clears the filter. Does
+ * not change ECS or another view. The immutable policy stays alive for in-flight Extract frames.
+ * Main thread; invalid input/stale view returns DE_ERR_INVALID_ARGUMENT. */
+DE_API de_result de_view_set_hidden(de_renderer *r, de_view v, const u64 *entities, u32 count);
 
 /** The main view, made with the renderer (target zero, the whole viewport, order 0, name
  * "main"). A DeCamera whose `view` is zero renders through it. */
