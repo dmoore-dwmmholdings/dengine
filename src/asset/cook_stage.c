@@ -80,6 +80,13 @@ bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_
     (void)type_hash;
     return false;
 }
+void de__cook_stage_visit_subassets(de_asset_system *s, de_asset_id parent,
+                                    void (*visit)(de_asset_id id, void *user), void *user) {
+    (void)s;
+    (void)parent;
+    (void)visit;
+    (void)user;
+}
 
 void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *out) {
     (void)s;
@@ -287,6 +294,17 @@ bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_
         *type_hash = e->type_hash;
     de_mutex_unlock(&cs->lock);
     return e != NULL;
+}
+void de__cook_stage_visit_subassets(de_asset_system *s, de_asset_id parent,
+                                    void (*visit)(de_asset_id id, void *user), void *user) {
+    de__cook_stage *cs = s != NULL && s->pipeline != NULL ? s->pipeline->cook : NULL;
+    if (!cs || !parent.hash || !visit)
+        return;
+    de_mutex_lock(&cs->lock);
+    for (u32 i = 0; i < cs->sub_count; ++i)
+        if (cs->subs[i].parent.hash == parent.hash)
+            visit(cs->subs[i].id, user);
+    de_mutex_unlock(&cs->lock);
 }
 
 /* ---- Plan (main thread) ---------------------------------------------------------------------- */

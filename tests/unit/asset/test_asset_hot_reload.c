@@ -130,6 +130,12 @@ static de_result hri_import(de_asset_import_ctx *ctx) {
     }
     return DE_OK;
 }
+static de_result hri_sub_import(de_asset_import_ctx *ctx) {
+    u64 size;
+    const void *source = de_asset_import_source(ctx, &size);
+    de_result result = de_asset_import_write(ctx, source, size);
+    return result == DE_OK ? de_asset_import_add_subasset(ctx, "part", "hr", source, size) : result;
+}
 #endif
 
 /* ---- Fixture ------------------------------------------------------------------------------- */
@@ -219,6 +225,11 @@ static void register_types(hr_fx *f) {
     d.name = "hri";
     d.extensions = exts_i;
     d.import = hri_import;
+    ASSERT_TRUE(DE_HANDLE_VALID(de_asset_type_register(f->s, &d)));
+    d.name = "hri_sub";
+    d.extensions = NULL;
+    d.extension_count = 0;
+    d.import = hri_sub_import;
     ASSERT_TRUE(DE_HANDLE_VALID(de_asset_type_register(f->s, &d)));
 #endif
 }
@@ -650,6 +661,52 @@ TEST_F(hot_reload, extra_source, hr_fx) {
  * A manifest edit that changes one asset's setting reloads only that asset (with the new
  * setting); an added asset is loadable without a restart; a removed one keeps its data; a type
  * change is refused with an error. */
+
+TEST_F(hot_reload, generated_child_manifest_edits_without_loaded_parent, hr_fx) {
+#if !DE__ASSET_RELOAD_ENABLED || !DE_HAS_COOKER
+    SKIP("needs hot reload and the in-process cooker");
+#else
+    fx_system(f, "generated_manifest", false, 0, false);
+    put(f, "same.hri", "A");
+    put(f, "moved.hri", "M");
+    manifest(f, "[assets]\n"
+                "a={type='hri_sub',source='same.hri',level=1}\n"
+                "b={type='hri_sub',source='same.hri',level=1}\n");
+    const char *const a[] = {"a"}, *const b[] = {"b"}, *const parts[] = {"a#part", "b#part"};
+    de_load_handle ha = load_all(f, a, 1), hb = load_all(f, b, 1);
+    de_load_handle children = load_all(f, parts, 2);
+    u32 child_handle = handle_of(f, "a#part");
+    const hr_obj *b_before = obj_of(f, "b"), *b_child_before = obj_of(f, "b#part");
+    de_asset_release(f->s, ha);
+    de_asset_flush_unused(f->s);
+    ASSERT_TRUE(obj_of(f, "a") == NULL);
+    ASSERT_TRUE(obj_of(f, "a#part") != NULL);
+    const char *edits[] = {"[assets]\na={type='hri_sub',source='same.hri',level=2}\n"
+                           "b={type='hri_sub',source='same.hri',level=1}\n",
+                           "[assets]\na={type='hri_sub',source='moved.hri',level=3}\n"
+                           "b={type='hri_sub',source='same.hri',level=1}\n",
+                           "[assets]\na={type='hr',source='moved.hri',level=4}\n"
+                           "b={type='hri_sub',source='same.hri',level=1}\n"};
+    for (u32 edit = 0; edit < 3; ++edit) {
+        u32 version = version_of(f, "a#part");
+        g_ev_count = 0;
+        put(f, "assets.toml", edits[edit]);
+        changed(f, "assets.toml");
+        ASSERT_NE(pump(f), 0u);
+        EXPECT_EQ(handle_of(f, "a#part"), child_handle);
+        EXPECT_EQ(version_of(f, "a#part"), version + (edit < 2 ? 1u : 0u));
+        EXPECT_EQ(reloaded(id_of("a#part")), edit < 2 ? 1u : 0u);
+        EXPECT_EQ(reloaded((de_asset_id){0}), edit < 2 ? 1u : 0u);
+        EXPECT_EQ(obj_of(f, "a#part")->level, edit ? 3 : 2);
+        EXPECT_STREQ(hr_bytes(obj_of(f, "a#part")), edit ? "M" : "A");
+        EXPECT_TRUE(obj_of(f, "a") == NULL);
+        EXPECT_TRUE(obj_of(f, "b") == b_before);
+        EXPECT_TRUE(obj_of(f, "b#part") == b_child_before);
+    }
+    de_asset_release(f->s, hb);
+    de_asset_release(f->s, children);
+#endif
+}
 
 TEST_F(hot_reload, manifest_edit, hr_fx) {
 #if !DE__ASSET_RELOAD_ENABLED

@@ -77,6 +77,11 @@ void de__cook_stage_shutdown(de__pipeline *pl);
  * its type name. Main thread. */
 bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_hash);
 
+/** Visits known generated children of parent on the main thread. The callback runs under the
+ * cook-stage lock and must not reenter the stage. No cooker builds visit nothing. */
+void de__cook_stage_visit_subassets(de_asset_system *s, de_asset_id parent,
+                                    void (*visit)(de_asset_id id, void *user), void *user);
+
 /** DENG-387: counters for tests. */
 typedef struct de__cook_stage_stats {
     u32 threads;          /**< cook threads running (0: none yet, no task system, or no cooker) */

@@ -9,6 +9,7 @@
 
 #include "asset/asset_internal.h"
 #include "asset/budget_internal.h"
+#include "asset/cook_stage_internal.h"
 #include "asset/load_internal.h"
 #include "asset/manifest_internal.h"
 #include "asset/mount_internal.h"
@@ -315,6 +316,11 @@ static void queue_unique(de__asset_reload *R) {
 static void queue_cb(de_asset_id id, void *user) {
     queue_add((de__asset_reload *)user, id);
 }
+static void queue_existing_subasset(de_asset_id id, void *user) {
+    de__asset_reload *R = user;
+    if (de__slot_find(R->s, id))
+        queue_add(R, id);
+}
 
 /* ---- Retired objects --------------------------------------------------------------------------
  */
@@ -577,6 +583,10 @@ static void manifest_reload(de__asset_reload *R) {
             changed++;
             if (sl != NULL)
                 queue_add(R, id); /* start_queued refuses a changed type */
+            /* Generated layers/textures use the parent's settings/source, even if only a
+             * child was loaded. Do not replace children across a parent type change. */
+            if (!(ch[i].what & DE__MANIFEST_CHANGED_TYPE))
+                de__cook_stage_visit_subassets(s, id, queue_existing_subasset, R);
         }
     }
     DE_INFO(s->log, "hot reload: manifest %s loaded again: %u added, %u removed, %u changed", root,
