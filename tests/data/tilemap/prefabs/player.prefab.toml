@@ -1,0 +1,8 @@
+# The prefab the fixture maps spawn for their `Player` entity (DENG-80 tests). TmHealth is a
+# component the test registers.
+[[entity]]
+id = "0x0000000000000001"
+[entity.TmHealth]
+current = 1.0
+max = 100.0
+lives = 1

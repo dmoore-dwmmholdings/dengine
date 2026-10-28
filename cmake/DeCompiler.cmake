@@ -111,3 +111,11 @@ if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     target_compile_options(de_build_flags INTERFACE
         "$<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>")
 endif()
+
+# ---- clang-cl older than the MSVC STL expects ----
+# The MSVC STL (VS 17.10+) refuses Clang before 19 with STL1000 in every C++ file (Tracy,
+# msdfgen, ...). The STL still works with Clang 18; this define is its documented escape hatch.
+# Directory scope, so vendored C++ gets it too.
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
+    add_compile_definitions("$<$<COMPILE_LANGUAGE:CXX>:_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH>")
+endif()

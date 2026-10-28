@@ -93,6 +93,25 @@ typedef struct de_field_attrs {
     u32 array_count;         /* for FIXED_ARRAY */
 } de_field_attrs;
 
+/* ---------- Inspector hints (DENG-555, DENG-624) ----------
+ * Editor metadata for one field, kept beside the registry (never part of the schema hash).
+ * Zero means none. */
+typedef struct de_field_hints {
+    const char *group;          /**< a heading the field sits under */
+    i32 order;                  /**< display order, lower first (0 = declaration order) */
+    const char *show_if;        /**< "mode == 2", "kind != point", "enabled", "!enabled" */
+    f64 slider_min, slider_max; /**< a slider with this range, if min < max */
+    bool multiline;             /**< a string edited in a text area */
+    bool color;                 /**< a vec3 / vec4 edited as a colour */
+} de_field_hints;
+
+/** Sets the hints of field `field` of the struct type called `type_name` (strings copied).
+ * Main thread, like registration. DE_ERR_OUT_OF_MEMORY or DE_ERR_INVALID_ARGUMENT. */
+DE_API de_result de_field_hints_set(const char *type_name, const char *field,
+                                    const de_field_hints *hints);
+/** The hints of a field, or NULL. */
+DE_API const de_field_hints *de_field_hints_get(const char *type_name, const char *field);
+
 typedef struct de_field_info {
     const char *name; /**< C identifier: [A-Za-z_][A-Za-z0-9_]* */
     u32 offset, size; /**< byte offset in the type, and byte size */
@@ -470,7 +489,8 @@ DE_API de_result de_text_doc_read_member(const de_text_doc *doc, const char *tab
  * Field access by path, for UI binding, the inspector and scripting. A path is segments joined
  * by '.': a field name of the current struct, optionally followed by `[n]` on a FIXED_ARRAY
  * field; or, after a vector field (VEC2/3/4, DVEC3, QUAT, COLOR), a component `x` `y` `z` `w`
- * (`r` `g` `b` `a` for COLOR). Examples: "transform.position.x", "items[3].count".
+ * (`r` `g` `b` `a` for COLOR), or `[n]` for component n. Examples: "transform.position.x",
+ * "transform.position[0]" (the same), "items[3].count".
  *
  * On success `*field` gets the description of the last segment and `*offset` its byte offset
  * from the start of the object. A component or an array element gets a description the registry

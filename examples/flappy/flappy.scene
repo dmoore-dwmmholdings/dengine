@@ -1,0 +1,467 @@
+# Flappy's level (DENG-648): the DENG-215 scene format, one [[entity]] per entity.
+# Side view in world X-Z (Z up), 32 pixels per metre; the camera looks along +Y.
+# The game moves the bird, pipes and clouds while it runs; this is where they start.
+
+[[entity]]
+id = "0xf1a9000000000001"
+[entity.Name]
+value = "Camera"
+[entity.DeTransform]
+position = [0, -12, 6.25]
+rotation = [0.707107, 0, 0, 0.707107]
+scale = [1, 1, 1]
+[entity.DeCamera]
+projection = "DE_PROJ_ORTHOGRAPHIC"
+ortho_height = 12.5
+near_z = 0.1
+exposure_ev100 = 0.0
+
+[[entity]]
+id = "0xf1a9000000000002"
+[entity.Name]
+value = "Sky"
+[entity.DeTransform]
+position = [0, 6, 6.25]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/sky"
+emissive_tex = "flappy/tex/sky"
+uv_rect = [0, 0, 1, 1]
+size = [10, 12.5]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+
+[[entity]]
+id = "0xf1a9000000000003"
+[entity.Name]
+value = "Cloud 0"
+[entity.DeTransform]
+position = [-2.75, 5, 9.96875]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cloud"
+emissive_tex = "flappy/tex/cloud"
+uv_rect = [0, 0, 1, 1]
+size = [2, 0.6875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+translucent = true
+[entity.FlappyCloud]
+index = 0
+
+[[entity]]
+id = "0xf1a9000000000004"
+[entity.Name]
+value = "Cloud 1"
+[entity.DeTransform]
+position = [1.3125, 5, 8.34375]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cloud"
+emissive_tex = "flappy/tex/cloud"
+uv_rect = [0, 0, 1, 1]
+size = [2.4375, 0.6875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+translucent = true
+[entity.FlappyCloud]
+index = 1
+
+[[entity]]
+id = "0xf1a9000000000005"
+[entity.Name]
+value = "Cloud 2"
+[entity.DeTransform]
+position = [5.375, 5, 6.71875]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cloud"
+emissive_tex = "flappy/tex/cloud"
+uv_rect = [0, 0, 1, 1]
+size = [2.875, 0.6875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+translucent = true
+[entity.FlappyCloud]
+index = 2
+
+[[entity]]
+id = "0xf1a9000000000006"
+[entity.Name]
+value = "Pipe 0 top"
+[entity.DeTransform]
+position = [6.90625, 2, 9.03125]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 3.9375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 0
+part = 0
+
+[[entity]]
+id = "0xf1a9000000000007"
+[entity.Name]
+value = "Pipe 0 top cap"
+[entity.DeTransform]
+position = [6.90625, 2, 7.28125]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 0
+part = 1
+
+[[entity]]
+id = "0xf1a9000000000008"
+[entity.Name]
+value = "Pipe 0 bottom"
+[entity.DeTransform]
+position = [6.90625, 2, 2.75]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 2.375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 0
+part = 2
+
+[[entity]]
+id = "0xf1a9000000000009"
+[entity.Name]
+value = "Pipe 0 bottom cap"
+[entity.DeTransform]
+position = [6.90625, 2, 3.71875]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 0
+part = 3
+
+[[entity]]
+id = "0xf1a900000000000a"
+[entity.Name]
+value = "Pipe 1 top"
+[entity.DeTransform]
+position = [12.34375, 2, 8.703125]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 4.59375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 1
+part = 0
+
+[[entity]]
+id = "0xf1a900000000000b"
+[entity.Name]
+value = "Pipe 1 top cap"
+[entity.DeTransform]
+position = [12.34375, 2, 6.625]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 1
+part = 1
+
+[[entity]]
+id = "0xf1a900000000000c"
+[entity.Name]
+value = "Pipe 1 bottom"
+[entity.DeTransform]
+position = [12.34375, 2, 2.421875]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 1.71875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 1
+part = 2
+
+[[entity]]
+id = "0xf1a900000000000d"
+[entity.Name]
+value = "Pipe 1 bottom cap"
+[entity.DeTransform]
+position = [12.34375, 2, 3.0625]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 1
+part = 3
+
+[[entity]]
+id = "0xf1a900000000000e"
+[entity.Name]
+value = "Pipe 2 top"
+[entity.DeTransform]
+position = [17.78125, 2, 8.890625]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 4.21875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 2
+part = 0
+
+[[entity]]
+id = "0xf1a900000000000f"
+[entity.Name]
+value = "Pipe 2 top cap"
+[entity.DeTransform]
+position = [17.78125, 2, 7]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 2
+part = 1
+
+[[entity]]
+id = "0xf1a9000000000010"
+[entity.Name]
+value = "Pipe 2 bottom"
+[entity.DeTransform]
+position = [17.78125, 2, 2.609375]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 2.09375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 2
+part = 2
+
+[[entity]]
+id = "0xf1a9000000000011"
+[entity.Name]
+value = "Pipe 2 bottom cap"
+[entity.DeTransform]
+position = [17.78125, 2, 3.4375]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 2
+part = 3
+
+[[entity]]
+id = "0xf1a9000000000012"
+[entity.Name]
+value = "Pipe 3 top"
+[entity.DeTransform]
+position = [23.21875, 2, 9.65625]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 2.6875]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 3
+part = 0
+
+[[entity]]
+id = "0xf1a9000000000013"
+[entity.Name]
+value = "Pipe 3 top cap"
+[entity.DeTransform]
+position = [23.21875, 2, 8.53125]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 3
+part = 1
+
+[[entity]]
+id = "0xf1a9000000000014"
+[entity.Name]
+value = "Pipe 3 bottom"
+[entity.DeTransform]
+position = [23.21875, 2, 3.375]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/pipe"
+emissive_tex = "flappy/tex/pipe"
+uv_rect = [0, 0, 1, 1]
+size = [1.3125, 3.625]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 3
+part = 2
+
+[[entity]]
+id = "0xf1a9000000000015"
+[entity.Name]
+value = "Pipe 3 bottom cap"
+[entity.DeTransform]
+position = [23.21875, 2, 4.96875]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/cap"
+emissive_tex = "flappy/tex/cap"
+uv_rect = [0, 0, 1, 1]
+size = [1.5, 0.4375]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyPipe]
+pair = 3
+part = 3
+
+[[entity]]
+id = "0xf1a9000000000016"
+[entity.Name]
+value = "Ground"
+[entity.DeTransform]
+position = [0, 1, 0.78125]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/ground"
+emissive_tex = "flappy/tex/ground"
+uv_rect = [0, 0, 1, 1]
+size = [10, 1.5625]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+
+[[entity]]
+id = "0xf1a9000000000017"
+[entity.Name]
+value = "Rail"
+[entity.DeTransform]
+position = [0, 1, 11.75]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/rail"
+emissive_tex = "flappy/tex/rail"
+uv_rect = [0, 0, 1, 1]
+size = [10, 1.5]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+
+[[entity]]
+id = "0xf1a9000000000018"
+[entity.Name]
+value = "Bird"
+[entity.DeTransform]
+position = [-2.1875, 0, 6.5625]
+rotation = [0, 0, 0, 1]
+scale = [1, 1, 1]
+[entity.DeSprite]
+texture = "flappy/tex/bird"
+emissive_tex = "flappy/tex/bird"
+uv_rect = [0, 0, 1, 1]
+size = [0.75, 0.625]
+pivot = [0.5, 0.5]
+color = [1, 1, 1, 1]
+cast_shadows = false
+[entity.FlappyBird]
+flap_tilt = 0.45

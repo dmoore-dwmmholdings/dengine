@@ -69,6 +69,68 @@ DE_API u32 de_tilemap_get_tile(de_asset_system *s, de_tilemap m, u32 layer, i32 
 DE_API void de_tilemap_set_tile(de_world *w, de_entity e, u32 layer, i32 x, i32 y,
                                 u32 tile); /* runtime edit */
 
+/* ---- DENG-80: tilemap runtime ----
+ *
+ * A `tilemap` asset (manifest `type = "tilemap"`, an LDtk `.ldtk` or Tiled `.tmj` / `.tmx`
+ * source, cooked by the built-in importer) holds layers of cells. Cells are addressed per layer
+ * as (x, y), x right and y down from the layer's top-left cell, like the editors. A tile value is
+ * 0 for an empty cell, else (tile index + 1) | DE_TILEMAP_FLIP_* bits; the tile index counts the
+ * map's tiles over all its tilesets, in tileset order (Tiled's gid minus the tileset's firstgid,
+ * plus the tile counts of the tilesets before it).
+ *
+ * An entity with DeTilemap (and DeTransform; it gets an identity one if it has none) shows the
+ * map once the asset is READY: de_tilemap_attach adds the PostUpdate system `tilemap.update`,
+ * which builds the map in 32 x 32 cell chunks. Each chunk is a child entity of the map entity
+ * whose children draw the chunk's tiles through the Sprite material model (DeSprite: lit, in the
+ * visibility buffer and RT like any sprite, SPEC §12.12). `layer_mask` 0 shows every layer; else
+ * bit i shows layer i (layers 32 and up follow bit 31). `generate_colliders` adds static 2D
+ * colliders (DeCollider2D root entities): solid tiles merged into boxes per chunk, and the
+ * tiles' own collision shapes (polygons, chains of at most 8 points). `spawn_entities`
+ * instantiates the prefab mapped to each map entity, once, at its position, with its fields
+ * applied by reflection path. `lit` sets the sprites' `cast_shadows`.
+ *
+ * Map space is the configured 2D plane (SPEC §12.12): side view maps (u, v) to world (X, Z),
+ * top-down to (X, Y); layer i sits `layer_spacing * i` towards the camera.
+ *
+ * de_tilemap_set_tile changes one cell of the entity's live copy of the map (not the asset) and
+ * marks its chunk; the next run of `tilemap.update` (or de_tilemap_flush) rebuilds that chunk's
+ * tiles and colliders only. de_tilemap_get_tile reads the asset's cooked cells (0 outside the
+ * layer, or when the asset is not READY).
+ */
+#define DE_TILEMAP_TILE_MASK 0x00FFFFFFu /**< tile index + 1 */
+#define DE_TILEMAP_FLIP_D    (1u << 29)  /**< diagonal flip (applied first), as Tiled */
+#define DE_TILEMAP_FLIP_V    (1u << 30)
+#define DE_TILEMAP_FLIP_H    (1u << 31)
+
+/** de_tilemap_attach() parameters; `(de_tilemap_desc){0}` is valid. */
+typedef struct de_tilemap_desc {
+    bool top_down;       /**< false: side view (X-Z plane), true: top-down (X-Y plane) */
+    f32 layer_spacing;   /**< meters between layers along the view axis; 0 = 0.01 */
+} de_tilemap_desc;
+
+/**
+ * Registers the `tilemap` asset type with `assets` (if no type of that name exists; Debug and Dev
+ * builds with the cooker get the built-in importer), the reflected DeTilemap component, the
+ * resource `DeTilemapSystemRef` and the system `tilemap.update` (PostUpdate, exclusive, main
+ * thread, before transform propagation) in `w`. Attaching the same world again does nothing. The
+ * asset system must outlive the world's use of tilemaps; the runtime state is freed with the world
+ * (or by de_tilemap_detach). Main thread, outside schedules.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `w`), DE_ERR_OUT_OF_MEMORY, or the registration's
+ *         error.
+ */
+DE_API de_result de_tilemap_attach(de_world *w, de_asset_system *assets,
+                                   const de_tilemap_desc *desc);
+/** Removes the system and the resource and frees the runtime state. Entities stay. */
+DE_API void de_tilemap_detach(de_world *w);
+/** Runs the work of `tilemap.update` now (no animation time passes): builds new maps and dirty
+ * chunks. For tools and editors outside the frame loop. Main thread, outside schedules. */
+DE_API void de_tilemap_flush(de_world *w);
+/** Typed access to a `tilemap` asset (see de_asset_texture). */
+DE_API de_tilemap de_asset_tilemap(de_asset_system *s, de_asset_id id);
+/** The live tile of the entity's map (after set_tile edits), or 0 (no live map, outside). */
+DE_API u32 de_tilemap_get_cell(de_world *w, de_entity e, u32 layer, i32 x, i32 y);
+/* ---- end DENG-80 ---- */
+
 /* ===================== Video (AV1 + Opus, WebM/MKV) ===================== */
 typedef struct DeVideoPlayer {
     de_video video;

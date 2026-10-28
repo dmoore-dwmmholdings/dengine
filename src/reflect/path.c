@@ -3,8 +3,9 @@
  *
  * Grammar: path = segment { "." segment }; segment = identifier [ "[" digits "]" ].
  * A segment resolves against the current struct's fields, or, when the current field is a
- * vector kind, against its components (x y z w; r g b a for COLOR). `[n]` applies only to
- * FIXED_ARRAY fields and moves to element n. Allocates nothing.
+ * vector kind, against its components (x y z w; r g b a for COLOR). `[n]` moves to element n
+ * of a FIXED_ARRAY field, or to component n of a vector (`position[2]` = `position.z`, as
+ * DIDE's Inspector writes one axis). Allocates nothing.
  */
 #include "reflect_internal.h"
 
@@ -133,6 +134,22 @@ de_result de_reflect_resolve_path(const de_type_registry *r, de_type_id type, co
                                seg);
             }
             ++p;
+            /* A vector's components by position: `position[2]` is `position.z` (DENG-650). */
+            if (c.field->kind != DE_FK_FIXED_ARRAY && has_components(&c)) {
+                if (v >= c.extra->comp_count) {
+                    quote(seg, start, (size_t)(p - start));
+                    return DE_FAIL(DE_ERR_NOT_FOUND,
+                                   "type '%s' path '%s': segment '%s': index out of range (%u "
+                                   "components)",
+                                   tn, path, seg, c.extra->comp_count);
+                }
+                const de_field_info *comp = &c.extra->comps[v];
+                c.offset += comp->offset;
+                c.field = comp;
+                c.extra = NULL;
+                c.in_element = false;
+                goto next;
+            }
             if (c.field->kind != DE_FK_FIXED_ARRAY || c.in_element || !c.extra) {
                 quote(seg, start, (size_t)(p - start));
                 return DE_FAIL(DE_ERR_NOT_FOUND,
@@ -151,6 +168,7 @@ de_result de_reflect_resolve_path(const de_type_registry *r, de_type_id type, co
             c.field = &c.extra->element;
             c.in_element = true;
         }
+    next:
 
         /* What the next segment names. */
         c.layout = NULL;

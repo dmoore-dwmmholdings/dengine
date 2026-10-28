@@ -724,6 +724,45 @@ static void run_mesh_roundtrip(lfx *f, de_gpu_backend b, const char *name) {
 TEST_F(loaders, mesh_roundtrip_null, lfx) {
     run_mesh_roundtrip(f, DE_GPU_NULL, "mesh_null");
 }
+
+/* With de__render_keep_cpu_meshes on (the editor service, DENG-650), a mesh keeps LOD 0's
+ * positions and triangles on the CPU, equal to the cooked ones; off, it keeps none. */
+TEST_F(loaders, mesh_keeps_cpu_lod0, lfx) {
+    start(f, "mesh_cpu", (start_opts){.backend = DE_GPU_NULL});
+    lt_blob m = lt_dmsh(300, 0x1234, 7);
+    put_blob(f, "m.dmsh", &m);
+    put_blob(f, "n.dmsh", &m);
+    manifest(f, "[assets]\n\"rt/m\" = { type = \"mesh\", source = \"m.dmsh\" }\n"
+                "\"rt/n\" = { type = \"mesh\", source = \"n.dmsh\" }\n");
+    de__render_keep_cpu_meshes(true);
+    de_load_handle h = de_asset_load(f->s, id("rt/m"), 0);
+    ASSERT_EQ((int)pump(f, h), (int)DE_LOAD_READY);
+    de__render_keep_cpu_meshes(false);
+    de_load_handle h2 = de_asset_load(f->s, id("rt/n"), 0);
+    ASSERT_EQ((int)pump(f, h2), (int)DE_LOAD_READY);
+    const de_render_mesh *r = de_render_mesh_get(f->s, de_asset_mesh(f->s, id("rt/m")));
+    ASSERT_TRUE(r != NULL);
+    de_cooked_mesh_view v;
+    ASSERT_TRUE(de_cooked_mesh_parse(m.data, m.size, &v, NULL));
+    const de_cooked_mesh_lod l0 = de_cooked_mesh_get_lod(&v, 0);
+    ASSERT_TRUE(r->cpu_positions != NULL && r->cpu_triangles != NULL);
+    EXPECT_EQ(r->cpu_vertex_count, l0.vertex_count);
+    EXPECT_EQ(r->cpu_triangle_count, l0.index_count / 3u);
+    for (u32 i = 0; i < r->cpu_vertex_count; ++i) {
+        f32 p[3];
+        de_cooked_mesh_position(&v, i, p);
+        EXPECT_MEMEQ(r->cpu_positions + 3u * i, p, sizeof p);
+    }
+    for (u32 i = 0; i < r->cpu_triangle_count * 3u; ++i)
+        EXPECT_EQ(r->cpu_triangles[i], de_cooked_mesh_index(&v, l0.index_first + i));
+    const de_render_mesh *r2 = de_render_mesh_get(f->s, de_asset_mesh(f->s, id("rt/n")));
+    ASSERT_TRUE(r2 != NULL);
+    EXPECT_TRUE(r2->cpu_positions == NULL && r2->cpu_triangles == NULL);
+    EXPECT_EQ(r2->cpu_triangle_count, 0u);
+    de_asset_release(f->s, h);
+    de_asset_release(f->s, h2);
+    lt_free(&m);
+}
 TEST_F(loaders, mesh_roundtrip_metal, lfx) {
     run_mesh_roundtrip(f, DE_GPU_METAL, "mesh_metal");
 }

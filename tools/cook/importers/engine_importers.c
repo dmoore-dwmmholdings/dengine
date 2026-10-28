@@ -17,6 +17,7 @@
 #include "cook/importers/scene/scene_import.h"
 #include "cook/importers/texture/texture_import.h"
 #include "cook/importers/sprite_clip/sprite_clip_import.h"
+#include "cook/importers/tilemap/tilemap_import.h"
 #if DE_COOKER_HAS_SHADER_IMPORTER /* tools/cook/importers/shader/CMakeLists.txt */
 #include "cook/importers/shader/shader_importer.h"
 #endif
@@ -63,6 +64,7 @@ static const struct {
     {"model", model_desc},
     {"material", de_mat_toml_import_type_desc}, /* DENG-302: `.mat.toml` */
     {"sprite_clip", de_sprite_clip_import_type_desc},
+    {"tilemap", de_tilemap_import_type_desc},
 #if DE_COOKER_HAS_SHADER_IMPORTER
     {"shader", shader_desc},
 #endif

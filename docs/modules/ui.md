@@ -389,6 +389,9 @@ its panel routing while dragged. Focus and activation use the existing widget
 and navigation paths. Set `de_ui_desc.view` to select a view; zero uses the main
 view for world pointer projection.
 
+A UI draws only on its view (zero: the main view), never on other views such as
+render targets or the editor's scene views (DENG-650).
+
 For pixel UI, set `de_ui_desc.pixel_art` and enable integer pixel rendering on
 the selected view. Layout uses the view's internal pixel grid and an integer
 `ui.scale`; rectangle, clip and glyph edges snap to that grid. Bitmap font pages

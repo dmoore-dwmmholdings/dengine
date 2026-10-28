@@ -17,7 +17,9 @@ foreach(_name IN LISTS _pkgconfig_names)
     endif()
     execute_process(COMMAND "${_candidate}" --version
         RESULT_VARIABLE _version_result OUTPUT_VARIABLE _version ERROR_VARIABLE _version_error)
-    if(_version_result STREQUAL "0")
+    string(STRIP "${_version}" _version)
+    # vcpkg may supply an executable named pkg-config which is not pkg-config.
+    if(_version_result STREQUAL "0" AND _version MATCHES "^[0-9]+(\\.[0-9]+)+$")
         set(_pkgconfig "${_candidate}")
         break()
     endif()

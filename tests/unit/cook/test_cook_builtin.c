@@ -36,7 +36,7 @@ static int cook_no_hooks(const char *const *args, const de_cook_hooks *hooks) {
 /* ---- cook_builtin.table ---------------------------------------------------------------------- */
 
 TEST(cook_builtin, table) {
-    static const char *const names[] = {"texture", "model", "shader", "sound"};
+    static const char *const names[] = {"texture", "model", "shader", "sound", "sprite_clip", "tilemap"};
     for (u32 i = 0; i < (u32)(sizeof names / sizeof names[0]); ++i) {
         de_asset_type_desc d;
         ASSERT_TRUE(de_cooker_builtin_importer(names[i], &d));
@@ -275,7 +275,7 @@ TEST(cook_builtin, project_type_wins) {
     cct_path(mpath, sizeof mpath, "wins/proj/assets.toml");
     cct_path(out, sizeof out, "wins");
     const char *a[] = {mpath, "--platform", "linux", "--out", out, "--no-cache", "--quiet", NULL};
-    const de_cook_hooks hooks = {register_copy_shader, NULL};
+    const de_cook_hooks hooks = {register_copy_shader, NULL, NULL};
     ASSERT_EQ(cook_no_hooks(a, &hooks), DE_COOK_EXIT_OK);
 
     size_t n = 0;

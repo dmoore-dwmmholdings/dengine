@@ -1,0 +1,3 @@
+Google Fonts repository commit 47d54ca1ebb14fd864695f1d39dc734f39017c33
+Source: ofl/notosans/NotoSans[wdth,wght].ttf (copied from tests/data/fonts/latin)
+License: OFL-1.1 (OFL.txt)

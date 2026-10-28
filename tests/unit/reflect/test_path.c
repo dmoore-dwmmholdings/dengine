@@ -118,6 +118,14 @@ TEST_F(path, components, path_fx) {
     resolve_ok(f->r, f->ids.all_kinds, "color.a", offsetof(TAllKinds, color) + 12);
     resolve_ok(f->r, f->ids.all_kinds, "color.z", offsetof(TAllKinds, color) + 8); /* alias */
     resolve_ok(f->r, f->ids.all_kinds, "vec.y", offsetof(TAllKinds, vec) + 4);     /* a struct */
+
+    /* A component by position, as DIDE's Inspector writes one axis (DENG-650). */
+    fi = resolve_ok(f->r, f->ids.entity_data, "transform.position[2]", pos + 16);
+    ASSERT_TRUE(fi != NULL);
+    EXPECT_STREQ(fi->name, "z");
+    resolve_ok(f->r, f->ids.all_kinds, "v4[3]", offsetof(TAllKinds, v4) + 12);
+    resolve_ok(f->r, f->ids.all_kinds, "color[1]", offsetof(TAllKinds, color) + 4);
+    resolve_ok(f->r, f->ids.all_kinds, "q[3]", offsetof(TAllKinds, q) + 12);
 }
 
 TEST_F(path, array_index, path_fx) {
@@ -178,6 +186,7 @@ TEST_F(path, errors, path_fx) {
     resolve_fails(r, inv, "items[99999999999999999999999]", DE_ERR_NOT_FOUND,
                   "items[99999999999999999999999]");
     resolve_fails(r, inv, "count[0]", DE_ERR_NOT_FOUND, "count[0]");
+    resolve_fails(r, ed, "transform.position[3]", DE_ERR_NOT_FOUND, "position[3]"); /* 3 comps */
     resolve_fails(r, inv, "items[1][2]", DE_ERR_INVALID_ARGUMENT, "items[1][2]");
 
     /* Malformed paths. */

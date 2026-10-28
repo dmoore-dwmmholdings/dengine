@@ -10,6 +10,8 @@
 
 #include "render/loaders/loaders_internal.h"
 
+#include "platform/de_atomic.h"
+
 #include "render/formats/de_cooked_mesh.h"
 
 #include <dengine/de_asset.h>
@@ -23,6 +25,12 @@
 
 static u64 align_up(u64 v, u64 a) {
     return (v + a - 1u) & ~(a - 1u);
+}
+
+static de_atomic_u32 g_keep_cpu;
+
+void de__render_keep_cpu_meshes(bool on) {
+    de_atomic_store_u32(&g_keep_cpu, on ? 1u : 0u, memory_order_release);
 }
 
 /* One GPU section: where it is in the blob and where it goes. */
@@ -63,11 +71,22 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
     if (!de_cooked_mesh_parse(p, size, &v, &why))
         return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "not a cooked mesh: %s", why);
 
-    /* The record, then its submesh and LOD-submesh tables, in one block. */
+    /* The record, then its submesh and LOD-submesh tables, in one block; then, for the editor,
+     * LOD 0's positions and triangles. */
     const size_t head = (size_t)align_up(sizeof(de_render_mesh), 16u);
     const size_t subs = (size_t)align_up(sizeof(de_render_submesh) * v.submesh_count, 16u);
-    const size_t ranges = sizeof(de_cooked_mesh_range) * (size_t)v.lod_count * v.submesh_count;
-    const size_t block = head + subs + ranges;
+    const size_t ranges =
+        (size_t)align_up(sizeof(de_cooked_mesh_range) * (size_t)v.lod_count * v.submesh_count, 16u);
+    de_cooked_mesh_lod lod0;
+    memset(&lod0, 0, sizeof lod0);
+    if (v.lod_count > 0 && de_atomic_load_u32(&g_keep_cpu, memory_order_acquire) != 0)
+        lod0 = de_cooked_mesh_get_lod(&v, 0);
+    const bool keep = lod0.index_count >= 3 && lod0.vertex_count > 0 &&
+                      (u64)lod0.index_first + lod0.index_count <= v.index_count &&
+                      lod0.vertex_count <= v.vertex_count && v.streams[DE_COOKED_STREAM_POSITION] != NULL;
+    const size_t cpu_pos = keep ? (size_t)align_up((u64)lod0.vertex_count * 12u, 16u) : 0;
+    const size_t cpu_tri = keep ? (size_t)(lod0.index_count / 3u) * 12u : 0;
+    const size_t block = head + subs + ranges + cpu_pos + cpu_tri;
     de_render_mesh *m =
         (de_render_mesh *)DE_ALLOC(u->alloc, block, DE_ALIGNOF(de_render_mesh), DE_MEM_RENDER);
     if (m == NULL)
@@ -79,6 +98,26 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
     de_cooked_mesh_range *lr = (de_cooked_mesh_range *)((u8 *)m + head + subs);
     m->submeshes = sm;
     m->lod_submeshes = lr;
+    if (keep) {
+        f32 *pos = (f32 *)((u8 *)m + head + subs + ranges);
+        u32 *tri = (u32 *)((u8 *)pos + cpu_pos);
+        for (u32 i = 0; i < lod0.vertex_count; ++i)
+            de_cooked_mesh_position(&v, i, pos + 3u * (u64)i);
+        const u32 nt = lod0.index_count / 3u;
+        u32 kept = 0;
+        for (u32 t = 0; t < nt; ++t) {
+            u32 k[3];
+            for (u32 j = 0; j < 3; ++j)
+                k[j] = de_cooked_mesh_index(&v, lod0.index_first + 3u * t + j);
+            if (k[0] >= lod0.vertex_count || k[1] >= lod0.vertex_count || k[2] >= lod0.vertex_count)
+                continue; /* not this LOD's vertex: never in a valid DMSH */
+            memcpy(tri + 3u * (u64)kept++, k, sizeof k);
+        }
+        m->cpu_positions = pos;
+        m->cpu_triangles = tri;
+        m->cpu_vertex_count = lod0.vertex_count;
+        m->cpu_triangle_count = kept;
+    }
     m->vertex_count = v.vertex_count;
     m->index_count = v.index_count;
     m->meshlet_count = v.meshlet_count;

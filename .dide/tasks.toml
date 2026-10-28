@@ -1,0 +1,7 @@
+[tasks."build flappy"]
+command = "cmake"
+args = ["--build", "--preset", "windows-clang-cl-dev", "--target", "flappy"]
+group = "build"
+isDefault = true
+problemMatcher = ["clang-cl", "lld"]
+description = "Build the Flappy example"

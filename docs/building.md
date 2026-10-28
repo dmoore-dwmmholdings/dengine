@@ -291,3 +291,45 @@ quads with `de_text_layout_quads`, and submit `de_text_draw` during a main-threa
 Keep game state and load handles alive until shutdown, release game-owned loads/layouts there,
 and implement reload callbacks when enabling development hot reload. See the public-only
 `tests/unit/host/fixtures/owned_game.c` for module creation and host-owned cleanup.
+
+## Engine and IDE workspace
+
+The engine and [DIDE](https://github.com/dmoore-dwmmholdings/dide) remain separate repositories.
+Keep them together as `engine/` and `dide/` under one workspace folder, with both on `main`.
+From `engine/`, build the development host and the IDE example:
+
+```sh
+cmake --preset dev
+cmake --build --preset dev
+```
+
+From `dide/`, run `DIDE_DENGINE_DIR=../engine cargo xtask check --no-audit` to check the IDE
+against this engine checkout, and `pnpm tauri dev` to start it. Open
+`engine/examples/flappy/Flappy.dproj` in DIDE; its build presets select the host platform.
+The editor IPC protocol is vendored into the engine, so engine builds do not require DIDE.
+
+The incoming editor service shares viewport textures through D3D12 on Windows. Its macOS
+service supports IPC and scene editing but does not advertise `views.sharedTexture`; a real
+engine viewport on macOS still requires the Metal/IOSurface bridge (DENG-556).
+
+The October 2026 integration builds natively on macOS, including the Flappy executable and
+the embedded-frontend IDE. UI unit tests, focused engine integration checks, Rust workspace
+linting, and the IDE dependency license checks pass. The wider suites are not green: Metal
+golden tests timed out, engine performance budgets failed, and IDE tests expose additional
+platform and mock-service issues. The real-engine IPC conformance run reports 12 passed,
+8 failed, and 2 skipped; remaining failures include snapshot diffs, subscription limits,
+disconnect handling, round-trip timing, and shutdown. Run the suite from `dide/` with:
+
+```sh
+cargo run --locked -p dide-conformance -- --json -- ../engine/build/dev/examples/flappy/flappy/flappy
+```
+
+The protocol archive is pinned to a private DIDE commit. To verify it with an authenticated
+GitHub CLI session, from `engine/`:
+
+```sh
+mkdir -p build/vendor-cache
+gh api repos/dmoore-dwmmholdings/dide/tarball/93a5ab93bed58b09b0b722e975edb7a2ec3fc972 \
+  > build/vendor-cache/dide_protocol-202de0d26765dbe0-93a5ab93bed58b09b0b722e975edb7a2ec3fc972
+python3 tools/vendor/vendor.py --cache build/vendor-cache verify dide_protocol --offline
+```

@@ -57,6 +57,9 @@ typedef struct de__host {
 
     /* ---- DENG-93: game library hot reload (hot_reload.c). Zeroed: off. ---- */
     de__hot_reload hot_reload;
+
+    /* ---- DENG-623: the Dev-only editor service (editor/editor.c). NULL: not running. ---- */
+    struct de__editor *editor;
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */

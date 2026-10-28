@@ -1,0 +1,13 @@
+# tests/data/tilemap/assets.toml: the tilemap fixtures (DENG-80) as a project, for the runtime
+# tests (tests/unit/tilemap/) and `de-cook --check`. Fixtures: generate.py.
+[project]
+asset_root = "."
+
+[assets]
+"tiles/terrain"    = { type = "texture", source = "tiles/terrain.png", pixel_art = true, compression = "none" }
+"maps/fixture_tmj" = { type = "tilemap", source = "maps/fixture.tmj", entities = ["Player=prefabs/player"] }
+"maps/fixture_tmx" = { type = "tilemap", source = "maps/fixture.tmx", entities = ["Player=prefabs/player"] }
+"maps/fixture_ldtk" = { type = "tilemap", source = "maps/fixture.ldtk", entities = ["Player=prefabs/player"] }
+"prefabs/player"   = { type = "prefab", source = "prefabs/player.prefab.toml" }
+# The tilemap entry of examples/assets.toml, with a source that exists here.
+"level01/tiles"    = { type = "tilemap",  source = "maps/fixture.ldtk" }

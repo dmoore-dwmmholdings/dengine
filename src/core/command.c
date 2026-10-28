@@ -205,6 +205,15 @@ de_result de_command_unregister(const char *name) {
     return DE_FAIL(DE_ERR_NOT_FOUND, "de_command_unregister: no command '%s'", name);
 }
 
+bool de__command_name_at(u32 index, char *out, size_t cap) {
+    lock();
+    const bool ok = index < g_cmd.entries.count && cap > 0;
+    if (ok)
+        snprintf(out, cap, "%s", DE_ARRAY_AT(&g_cmd.entries, cmd_entry, index).name);
+    unlock();
+    return ok;
+}
+
 u32 de__command_count(void) {
     lock();
     u32 n = g_cmd.entries.count;

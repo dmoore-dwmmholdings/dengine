@@ -1,0 +1,12 @@
+# examples/scenes/tilemap: a two-layer Tiled map with a lit camera (DENG-80). The golden image
+# tilemap_lit_two_layers renders it. Sources are written by tests/data/tilemap/generate.py.
+[project]
+asset_root = "."
+
+[assets]
+"tiles/terrain" = { type = "texture", source = "tiles/terrain.png", pixel_art = true, compression = "none" }
+"maps/level"    = { type = "tilemap", source = "maps/level.tmj" }
+"scene/tilemap" = { type = "scene", source = "tilemap.scene.toml" }
+
+[bundles.tilemap]
+assets = ["tiles/*", "maps/*", "scene/*"]

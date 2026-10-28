@@ -1,0 +1,11 @@
+[game]
+name = "Flappy"
+
+[window]
+title = "Flappy"
+width = 480
+height = 600
+surface = "vulkan"
+
+[timing]
+fixed_hz = 120

@@ -34,6 +34,10 @@ void de__command_set_exec_hook(de__command_exec_hook_fn fn, void *user);
  */
 de_result de__command_tokenize(char *line, int max_args, char **argv, int *argc);
 
+/** The name of command `index` (registration order) into `out`; false past the end (the editor
+ * service's console completion, DENG-630). */
+bool de__command_name_at(u32 index, char *out, size_t cap);
+
 /** Number of registered commands (built-ins included). */
 u32 de__command_count(void);
 

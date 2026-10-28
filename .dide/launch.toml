@@ -1,0 +1,19 @@
+schema = 1
+
+# Engine: Start Session uses the first engine configuration.
+[[configurations]]
+name = "Flappy (engine session)"
+type = "engine"
+program = { target = "flappy" }
+preLaunchTask = "build flappy"
+
+[[configurations]]
+name = "Flappy"
+program = { target = "flappy" }
+preLaunchTask = "build flappy"
+
+# DIDE's stand-in engine, for comparison.
+[[configurations]]
+name = "Mock engine"
+type = "engine"
+program = 'C:\coding\games\dide\target\debug\dide-mock-engine.exe'

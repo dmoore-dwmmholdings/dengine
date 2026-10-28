@@ -1,0 +1,60 @@
+{
+ "compressionlevel": -1,
+ "height": 4,
+ "infinite": false,
+ "layers": [
+  {
+   "id": 1,
+   "name": "l",
+   "type": "tilelayer",
+   "width": 6,
+   "height": 4,
+   "x": 0,
+   "y": 0,
+   "opacity": 1,
+   "visible": true,
+   "data": [
+    1,
+    5,
+    0,
+    2147483655,
+    1073741828,
+    6,
+    0,
+    2,
+    536870915,
+    0,
+    8,
+    5,
+    3221225473,
+    0,
+    0,
+    6,
+    7,
+    0,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5
+   ]
+  }
+ ],
+ "nextlayerid": 3,
+ "nextobjectid": 3,
+ "orientation": "orthogonal",
+ "renderorder": "right-down",
+ "tiledversion": "1.10.2",
+ "tileheight": 16,
+ "tilesets": [
+  {
+   "firstgid": 1,
+   "source": "../tiles/terrain.tsj"
+  }
+ ],
+ "tilewidth": 16,
+ "type": "map",
+ "version": "1.10",
+ "width": 6
+}

@@ -298,6 +298,16 @@ from = "gameplay/video"
 to = "audio"
 why = "Video playback feeds its sound track to the audio mixer (DENG-60: OPTIONAL_DEPS audio)."
 
+[[allow]]
+from = "gameplay/tilemap"
+to = "physics"
+why = "Tilemaps build static DeCollider2D colliders and 2D chain shapes for their solid tiles (DENG-80: OPTIONAL_DEPS physics)."
+
+[[allow]]
+from = "gameplay/tilemap"
+to = "cook"
+why = "Dev builds only (DE_HAS_COOKER): the runtime `tilemap` type takes the cooker's built-in tilemap importer (de_cooker_builtin_importer; DENG-80). Shipping does not link the cooker."
+
 # host
 [[allow]]
 from = "services/*"

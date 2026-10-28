@@ -48,10 +48,10 @@ static void execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
 }
 void de_ui__render_hook(de_rg *graph, de_view view, void *user) {
     struct de_ui_render *r = user;
-    if (r->ui->desc.view.id && r->ui->desc.view.id != view.id)
-        return;
-    if (r->ui->desc.pixel_art && !r->ui->desc.view.id &&
-        view.id != de_renderer_main_view(r->ui->desc.renderer).id)
+    /* The UI's view, or the main one: not other views (render targets, editor scene views,
+     * DENG-650), whose cameras the screen-space UI has nothing to do with. */
+    const de_view own = r->ui->desc.view.id ? r->ui->desc.view : de_renderer_main_view(r->ui->desc.renderer);
+    if (own.id != view.id)
         return;
 
     de_render_hook_info info;

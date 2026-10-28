@@ -105,6 +105,11 @@ DE_API de_timing de_engine_get_timing(const de_engine *e);
 DE_API void de_engine_request_quit(de_engine *e);
 /** True once de_engine_request_quit() was called. Thread-safe. False for a NULL `e`. */
 DE_API bool de_engine_quit_requested(const de_engine *e);
+/** True when the engine runs as a DIDE engine session (a Dev build started with the editor
+ * service: `--editor-service` and DE_EDITOR_TOKEN). The game window is then hidden (the IDE
+ * shows the game in its views; DE_EDITOR_SHOW_WINDOW=1 keeps the window), and the editor opens
+ * scenes itself, so a game may leave its level to it (DENG-647). False in other builds. */
+DE_API bool de_engine_editor_session(const de_engine *e);
 
 /* ---------- Game API ---------- */
 #define DE_GAME_API_VERSION 1

@@ -49,6 +49,7 @@
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
+#include <dengine/de_game.h>
 #include <dengine/de_reflect.h>
 
 #include "check.h"
@@ -66,6 +67,13 @@ typedef struct de_cook_hooks {
      */
     de_result (*register_types)(void *user, de_asset_system *s, de_type_registry *types);
     void *user;
+    /**
+     * A game linked into the calling tool: a static de_add_game() game (Windows without
+     * DE_BUILD_SHARED, Shipping), which `--game` cannot load. Its register_types runs as a
+     * `--game` library's does, before `register_types` above. NULL for none; given together
+     * with `--game`, the command stops with exit code 2.
+     */
+    const de_game_api *game;
 } de_cook_hooks;
 
 /**

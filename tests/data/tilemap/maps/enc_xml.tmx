@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.10.2" orientation="orthogonal" renderorder="right-down" width="6" height="4" tilewidth="16" tileheight="16" infinite="0" nextlayerid="3" nextobjectid="3">
+ <tileset firstgid="1" source="../tiles/terrain.tsx"/>
+ <layer id="1" name="l" width="6" height="4">
+  <data>
+   <tile gid="1"/>
+   <tile gid="5"/>
+   <tile/>
+   <tile gid="2147483655"/>
+   <tile gid="1073741828"/>
+   <tile gid="6"/>
+   <tile/>
+   <tile gid="2"/>
+   <tile gid="536870915"/>
+   <tile/>
+   <tile gid="8"/>
+   <tile gid="5"/>
+   <tile gid="3221225473"/>
+   <tile/>
+   <tile/>
+   <tile gid="6"/>
+   <tile gid="7"/>
+   <tile/>
+   <tile gid="5"/>
+   <tile gid="5"/>
+   <tile gid="5"/>
+   <tile gid="5"/>
+   <tile gid="5"/>
+   <tile gid="5"/>
+  </data>
+ </layer>
+</map>

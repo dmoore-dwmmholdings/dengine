@@ -246,6 +246,7 @@ Applies to modules marked deterministic: ECS simulation schedules, physics, anim
 Archetype ECS, similar in design to Bevy and flecs.
 
 ### 7.1 Data model
+- **World:** the game runs one main world. Dev builds may add lightweight preview worlds for the editor (material, particle and animation previews, prefab mode). They share the asset system and renderer, and have their own views (DIDE E18).
 - **Entity:** 64-bit ID = 32-bit index + 32-bit generation.
 - **Component:** registered type with reflection data (§9). Tag components have zero size. Components are POD; resources they own are handles.
 - **Archetype:** unique set of component types. Stores entities in tables with one column per component (SoA). Tables grow in fixed-size chunks from a pool.
@@ -292,7 +293,7 @@ Archetype ECS, similar in design to Bevy and flecs.
 - The editor, serialization, netcode replication, ECS inspector, and scripting bindings all read the same reflection data. Nothing is described twice.
 
 ### 9.2 Formats
-- **Text (dev):** scenes, prefabs, save games in a readable, diff-friendly format (TOML-compatible; open question Q9). Entities referenced by stable 64-bit scene IDs, assets by asset ID.
+- **Text (dev):** scenes, prefabs, save games in a readable, diff-friendly TOML format: one table per entity, keyed by scene ID, with sorted, stable output (Q9, resolved). Entities referenced by stable 64-bit scene IDs, assets by asset ID.
 - **Binary (ship):** same data, versioned, little-endian, schema hash per type.
 - **Versioning:** each type has a version. On load, older versions run their `migrate` hook. Unknown fields are skipped with a warning.
 - **Save games:** a save is a filtered world serialization (components flagged `serialize` on entities tagged `Persistent`) plus game-defined blobs. Saves can route through Steam Cloud (§21.1).
@@ -836,7 +837,7 @@ Later milestones (physics, audio, input, animation, UI/text, networking, world s
 | Q6 | Team size and timeline. Solo? Shapes how much is "own" vs vendored (R1). |
 | Q7 | Documentation: generated API reference, tutorials, sample games? Which sample game ships with v1? |
 | Q8 | Versioning and ABI policy: semantic versioning, ABI stability guarantees per major version? |
-| Q9 | Text scene format: TOML, or a dedicated format better suited to large nested entity data? |
+| Q9 | ~~Text scene format: TOML, or a dedicated format better suited to large nested entity data?~~ Resolved: TOML, one table per entity (§9.2, DIDE Q13). |
 | Q10 | Max world size and streaming cell size for large worlds? Any multiplayer large-world use (server-side streaming)? |
 | Q11 | Streaming audio codec: Vorbis only, Opus only, or both? |
 | Q12 | Extra material models: hair, eye, cloth, car paint? |

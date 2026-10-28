@@ -201,6 +201,9 @@ static de_gpu_texture floating_view(ui_fx *f, de_gpu_buffer *readback, de_view *
     *view = de_view_create(
         f->renderer, &(de_view_desc){.target = target, .name = "UI linear nits qualification"});
     ASSERT_TRUE(view->id);
+    /* The editor integration now confines UI to its explicit view (or the main view by default).
+     * This fixture captures an offscreen view, so bind its UI to that view before extraction. */
+    f->ui->desc.view = *view;
     de_builtin_component_ids bi = de_builtin_components(f->world);
     de_component camera = de_component_find(f->world, "DeCamera");
     de_component components[] = {bi.transform, camera};

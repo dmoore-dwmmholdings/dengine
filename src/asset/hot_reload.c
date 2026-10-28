@@ -126,6 +126,11 @@ void de__asset_reload_get_stats(const de_asset_system *s, de__asset_reload_stats
     (void)s;
     memset(out, 0, sizeof *out);
 }
+bool de__asset_reload_queue(de_asset_system *s, de_asset_id id) {
+    (void)s;
+    (void)id;
+    return false;
+}
 
 #else /* DE__ASSET_RELOAD_ENABLED */
 
@@ -710,6 +715,14 @@ void de__asset_reload_shutdown(de_asset_system *s) {
     DE_FREE(R->alloc, R, sizeof *R);
 }
 
+bool de__asset_reload_queue(de_asset_system *s, de_asset_id id) {
+    de__asset_reload *R = s->reload;
+    if (R == NULL || id.hash == 0)
+        return false;
+    queue_add(R, id);
+    return true;
+}
+
 void de__asset_reload_update(de_asset_system *s) {
     de__asset_reload *R = s->reload;
     if (R == NULL)
@@ -753,6 +766,16 @@ void de__asset_reload_on_change(de_asset_system *s, const char *vpath, de_watch_
     if (is_manifest_file(s->manifest, norm) || is_manifest_file(s->failed_manifest, norm))
         R->manifest_dirty = true;
     (void)de__rindex_lookup(&R->index, norm, queue_cb, R);
+}
+
+bool de__asset_reload_manifest_now(de_asset_system *s) {
+    de__asset_reload *R = s != NULL ? s->reload : NULL;
+    if (R == NULL)
+        return false;
+    R->manifest_dirty = false;
+    manifest_reload(R);
+    watches_sync(R);
+    return true;
 }
 
 /* ---- Pipeline hooks ---------------------------------------------------------------------------

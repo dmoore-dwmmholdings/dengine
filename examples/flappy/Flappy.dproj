@@ -1,0 +1,82 @@
+# Flappy, as a DIDE project. Open this file in DIDE (File > Open Project…).
+# Paths are relative to this file.
+
+[project]
+name = "Flappy"
+description = "A Flappy Bird clone built as a DEngine host game."
+# The workspace is the engine checkout: CMake, clangd, search and git run there.
+root = "../.."
+engine = "dengine"
+
+[build]
+target = "flappy"
+default_configuration = "Dev"
+
+# The engine's CMake presets, per OS. Dev has the editor service, which the
+# engine session needs.
+[[configuration]]
+name = "Debug"
+preset = { windows = "windows-clang-cl-debug", macos = "macos-debug", linux = "linux-clang-debug" }
+
+[[configuration]]
+name = "Dev"
+preset = { windows = "windows-clang-cl-dev", macos = "macos-dev", linux = "linux-clang-dev" }
+
+[[configuration]]
+name = "Release"
+preset = { windows = "windows-clang-cl-release", macos = "macos-release", linux = "linux-clang-release" }
+
+[[configuration]]
+name = "Shipping"
+preset = { windows = "windows-clang-cl-shipping", macos = "macos-shipping", linux = "linux-clang-shipping" }
+
+# Run and Debug start the selected target. The engine session runs the game
+# inside DIDE: the scene view, the inspector, Play/Pause/Step.
+[[run]]
+name = "Flappy (engine session)"
+kind = "engine"
+target = "flappy"
+configurations = ["Dev"]
+
+[[run]]
+name = "Flappy"
+target = "flappy"
+
+[[folder]]
+name = "Scenes"
+files = ["flappy.scene"]
+
+[[folder]]
+name = "Source"
+files = ["main.c", "cook.c", "../flappy_bird/game.h"]
+
+[[folder]]
+name = "Art"
+include = ["art/*.png", "fonts/*"]
+files = ["art/generate.py"]
+
+[[folder]]
+name = "Config"
+files = ["game.toml", "game.macos.toml", "assets.toml", "CMakeLists.txt"]
+
+[[folder]]
+name = "Docs"
+files = [{ path = "README.md", open = "preview" }]
+
+[open]
+"*.md" = "preview"
+
+[startup]
+# The level opens in the World lead, side-on in 2D; the engine session loads it on connect.
+open = ["main.c", "flappy.scene"]
+lead = "world"
+run = "Flappy (engine session)"
+camera = { projection = "2d-xz", position = [0, -10, 6.25], ortho_height = 13 }
+
+# Release ships; it has no cooker, so its assets come from flappy.dpak, cooked in Dev
+# (CMakeLists.txt, flappy_pack) and put beside the executable.
+[publish.itch]
+target = "dmoore-dwmmholdings/flappy"
+channel = "windows"
+configuration = "Release"
+cook = { configuration = "Dev", target = "flappy_pack", files = ["examples/flappy/pack/flappy.dpak"] }

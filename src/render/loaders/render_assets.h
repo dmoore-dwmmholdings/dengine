@@ -243,6 +243,12 @@ typedef struct de_render_mesh {
     const de_render_submesh *submeshes;        /**< submesh_count */
     const de_cooked_mesh_range *lod_submeshes; /**< lod_count x submesh_count, LOD-major */
     u64 gpu_bytes;
+    /** LOD 0 on the CPU, in object space, for the editor's ray hits (DENG-650): positions (x, y,
+     * z per vertex) and triangles (3 indices each). NULL unless de__render_keep_cpu_meshes was
+     * on when the mesh loaded. */
+    const f32 *cpu_positions;
+    const u32 *cpu_triangles;
+    u32 cpu_vertex_count, cpu_triangle_count;
     struct de__upload *upload_;
     size_t block_size_;
     de__render_retire retire_; /**< internal: the retire list (DENG-422) */
@@ -307,6 +313,10 @@ const de_render_texture *de_render_texture_get(de_asset_system *s, de_texture t)
 const de_render_mesh *de_render_mesh_get(de_asset_system *s, de_mesh m);
 const de_render_material *de_render_material_get(de_asset_system *s, de_material m);
 const de_render_model *de_render_model_get(de_asset_system *s, de_model m);
+
+/** Meshes loaded from now on keep LOD 0 on the CPU (de_render_mesh.cpu_positions): the editor
+ * service turns it on (DENG-650). Any thread; process-wide. */
+void de__render_keep_cpu_meshes(bool on);
 
 DE_EXTERN_C_END
 
