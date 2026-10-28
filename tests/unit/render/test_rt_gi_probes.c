@@ -280,7 +280,7 @@ TEST_F(ddgi, light_selection_resets_live_probe_history, ddgi_fixture) {
     ASSERT_TRUE(cvar_set("r.ambient_fallback", "0"));
     for (u32 i = 0; i < 2; ++i) {
         DeLight light = {.kind = DE_LIGHT_POINT,
-                         .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                         .color = {i ? 0.f : 1.f, i ? 1.f : 0.f, 0.f},
                          .intensity = 100,
                          .range = 20,
                          .cast_shadows = true,

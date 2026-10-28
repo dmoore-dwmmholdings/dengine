@@ -1785,7 +1785,7 @@ static void light_view_masks(lx *f, de_gpu_backend backend) {
             lights->entity[i] = ((u64)4 << 32) | (i + 27);
             lights->transform[i] = at(0, 0, 4);
             lights->light[i] = (DeLight){.kind = (de_light_kind)kind,
-                                         .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                                         .color = {i ? 0.f : 1.f, i ? 1.f : 0.f, 0.f},
                                          .intensity = 1000,
                                          .range = 10,
                                          .view_mask = 1u << i};

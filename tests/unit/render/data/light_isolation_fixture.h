@@ -52,8 +52,8 @@ static inline de_result de_test_light_scene_create(de_renderer *renderer, de_wor
         DeLight *l = de_entity_get(world, out->lights[i], light);
         l->kind = kind;
         l->color = i ? (de_vec3){0, 1, 0} : (de_vec3){1, 0, 0};
-        l->intensity = kind == DE_LIGHT_DIRECTIONAL ? 10 : 2000;
-        l->range = kind == DE_LIGHT_DIRECTIONAL ? 0 : 20;
+        l->intensity = kind == DE_LIGHT_DIRECTIONAL ? 10.f : 2000.f;
+        l->range = kind == DE_LIGHT_DIRECTIONAL ? 0.f : 20.f;
         l->view_mask = 1u << i;
         l->cast_shadows = true;
     }

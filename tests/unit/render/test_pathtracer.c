@@ -170,7 +170,7 @@ TEST_F(pathtracer, analytic_light_masks_reset_and_filter_every_sampling_path, pt
     for (u32 kind = 0; kind < 3; ++kind) {
         for (u32 i = 0; i < 2; ++i) {
             DeLight light = {.kind = kinds[kind],
-                             .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                             .color = {i ? 0.f : 1.f, i ? 1.f : 0.f, 0.f},
                              .intensity = 100,
                              .range = 20,
                              .area_size = {1, 1},

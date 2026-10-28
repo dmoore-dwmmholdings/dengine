@@ -532,7 +532,8 @@ static void pump_uploads_without_frames(rfx *f, de_gpu_backend backend) {
     de__uploader_test_hold_fence(u, UINT64_MAX);
     de_load_state state = DE_LOAD_LOADING;
     deadline = de_time_now_ns() + WAIT_NS;
-    while (state == DE_LOAD_LOADING && de_time_now_ns() < deadline) {
+    /* A timed wait can still be PENDING before its worker reports progress. */
+    while ((state == DE_LOAD_PENDING || state == DE_LOAD_LOADING) && de_time_now_ns() < deadline) {
         de_renderer_pump_uploads(f->r);
         state = de_asset_wait(f->assets, load, 1000000);
     }
@@ -582,7 +583,7 @@ static void pump_uploads_without_frames(rfx *f, de_gpu_backend backend) {
     de_load_handle bad = de_asset_load(f->assets, de_asset_id_from("pump/bad"), 0);
     state = DE_LOAD_LOADING;
     deadline = de_time_now_ns() + WAIT_NS;
-    while (state == DE_LOAD_LOADING && de_time_now_ns() < deadline) {
+    while ((state == DE_LOAD_PENDING || state == DE_LOAD_LOADING) && de_time_now_ns() < deadline) {
         de_renderer_pump_uploads(f->r);
         state = de_asset_wait(f->assets, bad, 1000000);
     }
