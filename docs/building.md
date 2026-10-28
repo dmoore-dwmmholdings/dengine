@@ -308,15 +308,18 @@ against this engine checkout, and `pnpm tauri dev` to start it. Open
 `engine/examples/flappy/Flappy.dproj` in DIDE; its build presets select the host platform.
 The editor IPC protocol is vendored into the engine, so engine builds do not require DIDE.
 
-The incoming editor service shares viewport textures through D3D12 on Windows. Its macOS
-service supports IPC and scene editing but does not advertise `views.sharedTexture`; a real
-engine viewport on macOS still requires the Metal/IOSurface bridge (DENG-556).
+The editor service supports native views on Windows and macOS. Windows shares D3D12 textures;
+macOS presents Metal readbacks through a protected shared-frame ring and an AppKit layer.
+The combined DIDE installer includes this engine, the shader compiler, CMake and Ninja. Installed
+users select New Project without locating a checkout; native game compilation requires Xcode
+with Metal tools on macOS or Visual Studio C++ developer tools on Windows. See DIDE
+`packaging/README.md` for building the combined installer.
 
 The October 2026 integration builds natively on macOS, including the Flappy executable and
 the embedded-frontend IDE. UI unit tests, focused engine integration checks, Rust workspace
 linting, and the IDE dependency license checks pass. The wider suites are not green: Metal
 golden tests timed out, engine performance budgets failed, and IDE tests expose additional
-platform and mock-service issues. The real-engine IPC conformance run reports 12 passed,
+platform and mock-service issues. The initial merge's real-engine IPC conformance run reported 12 passed,
 8 failed, and 2 skipped; remaining failures include snapshot diffs, subscription limits,
 disconnect handling, round-trip timing, and shutdown. Run the suite from `dide/` with:
 
