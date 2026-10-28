@@ -1343,7 +1343,7 @@ static void capture_progress(lx *f, de_gpu_backend backend) {
     EXPECT_EQ(validation_errors(f->dev), 0);
 }
 /* Two independent layer groups; one point-light slot per group. No windows/platform init. */
-static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
+static void filtered_shadow_groups(lx *f, de_gpu_backend backend, bool light_masks) {
     lx_open(f, backend);
     ASSERT_EQ(de__shadow_atlas_create_ex(f->dev, &f->alloc, &f->atlas), DE_OK);
     lx_save_shadow_budget(f);
@@ -1360,6 +1360,12 @@ static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
                            .range = 20,
                            .cast_shadows = true};
     world_light(&f->w, 0, &light, at(0, 0, 4));
+    if (light_masks) {
+        DeLight other = light;
+        other.view_mask = 2;
+        world_light(&f->w, 1, &other, at(1, 0, 4));
+        f->w.f.lights.light[0].view_mask = 1;
+    }
     world_begin(&f->w);
     ASSERT_EQ(de__gpu_scene_update(f->gs, &f->w.f), DE_OK);
     const u64 entity = f->w.f.instances.entity[0];
@@ -1376,10 +1382,12 @@ static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
     const de_render_settings settings = {.shadows = DE_QUALITY_LOW};
     de__shadow_atlas_frame_begin(f->atlas, 0, &camera);
     for (u32 i = 0; i < 2; ++i)
-        ASSERT_EQ(de__shadow_atlas_frame_view_hidden(f->atlas, (de_view){.id = i + 1}, 1,
-                                                     DE_QUALITY_LOW, i ? hidden : NULL),
+        ASSERT_EQ(de__shadow_atlas_frame_view_policy(
+                      f->atlas, (de_view){.id = i + 1}, 1, DE_QUALITY_LOW,
+                      !light_masks && i ? hidden : NULL, light_masks ? ~(1u << i) : 0),
                   DE_OK);
     de_gpu_texture canonical = {0};
+    u64 first_hash = 0;
     for (u32 i = 0; i < 2; ++i) {
         de__rg_reset(f->g);
         de_arena_reset(f->arena);
@@ -1391,22 +1399,34 @@ static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
                                    .camera = &camera,
                                    .settings = &settings,
                                    .frame_index = 0,
-                                   .hidden = i ? hidden : NULL,
-                                   .hidden_buffer = i ? ids : (de_gpu_buffer){0}};
+                                   .hidden = !light_masks && i ? hidden : NULL,
+                                   .hidden_buffer = !light_masks && i ? ids : (de_gpu_buffer){0},
+                                   .excluded_light_mask = light_masks ? ~(1u << i) : 0};
         const de__vis_context vc = {.gpu_scene = f->gs, .frames_completed = 1, .layer_mask = 1};
         ASSERT_EQ(de__shadow_atlas_build(f->atlas, &vf, &vc), DE_OK);
         de__atlas_info info;
         ASSERT_TRUE(de__shadow_atlas_get(f->atlas, vf.view, &info));
         EXPECT_EQ(info.lights, 1u);
+        const u64 selected = info.data[1].identity[0] | ((u64)info.data[1].identity[1] << 32);
+        EXPECT_EQ(selected, f->w.f.lights.entity[light_masks ? i : 0]);
         if (i)
             EXPECT_TRUE(info.depth.id != canonical.id);
         else
             canonical = info.depth;
         const f32 *pixels = atlas_end_read_view(f, &info, vf.view, 0);
         u32 covered = 0;
-        for (u64 pixel = 0; pixel < (u64)info.size * info.size; ++pixel)
+        u64 hash = UINT64_C(1469598103934665603);
+        for (u64 pixel = 0; pixel < (u64)info.size * info.size; ++pixel) {
             covered += pixels[pixel] > 0;
-        if (i)
+            u32 bits;
+            memcpy(&bits, &pixels[pixel], sizeof bits);
+            hash = (hash ^ bits) * UINT64_C(1099511628211);
+        }
+        if (!i)
+            first_hash = hash;
+        else if (light_masks)
+            EXPECT_NE(hash, first_hash);
+        if (i && !light_masks)
             EXPECT_EQ(covered, 0u);
         else
             EXPECT_GT(covered, 100u);
@@ -1415,6 +1435,9 @@ static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
     de_gpu_buffer_destroy(f->dev, ids);
     de__view_hidden_release(hidden);
     EXPECT_EQ(validation_errors(f->dev), 0u);
+}
+static void hidden_shadow_groups(lx *f, de_gpu_backend backend) {
+    filtered_shadow_groups(f, backend, false);
 }
 static void receiver_admission(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
@@ -1546,6 +1569,15 @@ ADMISSION_TEST(d3d12, DE_GPU_D3D12)
 HIDDEN_SHADOW_TEST(metal, DE_GPU_METAL)
 HIDDEN_SHADOW_TEST(vulkan, DE_GPU_VULKAN)
 HIDDEN_SHADOW_TEST(d3d12, DE_GPU_D3D12)
+TEST_F(shadow_atlas, light_mask_shadow_groups_metal, lx) {
+    filtered_shadow_groups(f, DE_GPU_METAL, true);
+}
+TEST_F(shadow_atlas, light_mask_shadow_groups_vulkan, lx) {
+    filtered_shadow_groups(f, DE_GPU_VULKAN, true);
+}
+TEST_F(shadow_atlas, light_mask_shadow_groups_d3d12, lx) {
+    filtered_shadow_groups(f, DE_GPU_D3D12, true);
+}
 
 /* The orthographic camera sees x[-1,1]; the entire caster is outside that frustum.
  * Light(3,0,8) -> caster(1.5,0,4) -> visible floor(0,0,0) is an analytic shadow ray. */

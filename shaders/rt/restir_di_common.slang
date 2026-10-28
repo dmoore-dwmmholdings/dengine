@@ -14,12 +14,16 @@ import "../lighting/lighting_common";
 
 public struct DiDescriptor { public uint kind,index,first,submesh; };
 public struct DiSource {
+    // first: triangle index offset for emissive geometry; view-mask bits for analytic lights.
     public uint kind,index,first,material;
     public float4 p0,p1,p2,radiance;
     public DeClusterLight light;
     public float power,pdf,probability;
     public uint alias;
 };
+public bool di_analytic_in_view(DiSource source,uint excluded_mask) {
+    return ((source.first==0u?~0u:source.first)&~excluded_mask)!=0u;
+}
 public struct DiHistory { public float4 position,normal; };
 // 64 scalar words; a distinct immutable upload entry belongs to each recorded pass.
 public struct DiParams {
@@ -33,7 +37,7 @@ public struct DiParams {
     public uint width,height,frame,candidates;
     public uint unbiased,initial_visibility,history_valid,metadata;
     public uint sampler,layers,hidden_entities,hidden_count;
-    public uint unused3,unused4,unused5,unused6;
+    public uint excluded_light_mask,unused4,unused5,unused6;
     public uint unused7,unused8,unused9,unused10;
     public uint unused11,unused12,unused13,unused14;
     public uint unused15,unused16,unused17,unused18;
@@ -124,6 +128,7 @@ public DiSample di_evaluate(DiParams p,DiSurface surface,uint source_index,float
     DiSample out=(DiSample)0;out.ray.direction=float4(0,0,1,0);
     if(!surface.valid || source_index>=p.source_count)return out;
     DiSource source=de_robuffer<DiSource>(p.sources)[source_index];
+    if(source.kind==0u && !di_analytic_in_view(source,p.excluded_light_mask))return out;
     if(p.hidden_count!=0u) {
         DeSceneConstants sc=di_scene(p);
         if(source.kind==0u) {

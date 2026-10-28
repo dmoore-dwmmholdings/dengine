@@ -79,7 +79,7 @@ typedef struct di_params {
     u32 hits, diffuse, specular, distance;
     u32 width, height, frame, candidates;
     u32 unbiased, initial_visibility, history_valid, metadata;
-    u32 sampler, layers, hidden_entities, hidden_count, padding[24];
+    u32 sampler, layers, hidden_entities, hidden_count, excluded_light_mask, padding[23];
 } di_params;
 DE_STATIC_ASSERT(sizeof(di_params) == 256, "DI parameters mirror 64 words");
 #define DI_RING         8u
@@ -673,6 +673,7 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
                                .layers = vc->layer_mask,
                                .hidden_entities = vc->hidden_bindless,
                                .hidden_count = vc->hidden_count,
+                               .excluded_light_mask = vc->excluded_light_mask,
                                .sampler = de_gpu_sampler_bindless(d, s->r->rt_scene->sampler)}};
     u32 stage = 0;
     if (s->needs_alias) {

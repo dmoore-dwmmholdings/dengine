@@ -30,6 +30,11 @@ static de__contact_light record(const de__rw_lights *w, u32 i, u32 channel, f32 
 }
 void de__contact_select(const de__rw_lights *w, u64 directional, u32 max_locals, f32 cutoff,
                         de__contact_metadata *out) {
+    de__contact_select_view(w, directional, max_locals, cutoff, 0, NULL, out);
+}
+void de__contact_select_view(const de__rw_lights *w, u64 directional, u32 max_locals, f32 cutoff,
+                             u32 excluded_light_mask, const de__view_hidden *hidden,
+                             de__contact_metadata *out) {
     memset(out, 0, sizeof *out);
     if (!w)
         return;
@@ -39,7 +44,9 @@ void de__contact_select(const de__rw_lights *w, u64 directional, u32 max_locals,
     f32 scores[4] = {0};
     for (u32 i = 0; i < w->count; ++i) {
         const DeLight *l = &w->light[i];
-        if (!w->entity[i] || !l->cast_shadows || !(l->intensity > 0.f) || !isfinite(l->intensity))
+        if (!w->entity[i] || !l->cast_shadows || !(l->intensity > 0.f) || !isfinite(l->intensity) ||
+            !de__light_in_view(l, excluded_light_mask) ||
+            de__view_hidden_contains(hidden, w->entity[i]))
             continue;
         if (l->kind == DE_LIGHT_DIRECTIONAL) {
             if (directional && w->entity[i] == directional) {
@@ -163,8 +170,9 @@ de_result de__contact_build(de__contact *s, const de__view_frame *vf, const de__
         return DE_FAIL(DE_ERR_INTERNAL, "contact kernel unavailable");
     de__contact_metadata data;
     de_cvar cutoff = de_cvar_find("r.light_cutoff_lux");
-    de__contact_select(&vf->world->lights, directional, cfg.max_locals,
-                       cutoff.id ? (f32)de_cvar_float(cutoff) : .05f, &data);
+    de__contact_select_view(&vf->world->lights, directional, cfg.max_locals,
+                            cutoff.id ? (f32)de_cvar_float(cutoff) : .05f, vf->excluded_light_mask,
+                            vf->hidden, &data);
     if (!data.header[2] && !data.header[3])
         return DE_OK;
     const u32 ring = (u32)(vf->frame_index % DE__VIS_FRAME_RING);

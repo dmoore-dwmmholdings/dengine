@@ -357,6 +357,7 @@ typedef struct de__vis_shared {
     char why[256]; /**< why it is off */
     /** The view handle each slot culled for last (a new handle sets de__vis_context.view_new). */
     de_view views[DE__VIEW_MAX];
+    u32 excluded_light_masks[DE__VIEW_MAX];
     /** Each stage's own state (its init allocates it, its shutdown frees it). */
     void *stage[DE__VIS_STAGE_COUNT];
     /** The cvars (process-wide; registered by de__vis_shared_create). */
@@ -408,6 +409,7 @@ typedef struct de__vis_context {
     const de__view_hidden *hidden;
     de_rg_resource hidden_entities;
     u32 hidden_bindless, hidden_count;
+    u32 excluded_light_mask;
 
     /* The view. */
     de_view view;
@@ -571,6 +573,7 @@ typedef struct de__vis_frame_desc {
     u32 output_width, output_height;
     const de__view_hidden *hidden;
     de_gpu_buffer hidden_buffer;
+    u32 excluded_light_mask;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */

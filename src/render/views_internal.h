@@ -154,6 +154,7 @@ typedef struct de__view_frame {
     de_gpu_format color_format;
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
+    u32 excluded_light_mask; /**< Complement of the public selection; zero keeps legacy fixtures. */
     de_view_display display;
     const de__view_hidden *hidden;
     de_gpu_buffer hidden_buffer;

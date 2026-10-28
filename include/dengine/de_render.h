@@ -289,6 +289,13 @@ DE_API de_result de_view_set_display(de_renderer *r, de_view v, const de_view_di
  * not change ECS or another view. The immutable policy stays alive for in-flight Extract frames.
  * Main thread; invalid input/stale view returns DE_ERR_INVALID_ARGUMENT. */
 DE_API de_result de_view_set_hidden(de_renderer *r, de_view v, const u64 *entities, u32 count);
+/** Select analytic lights independently of geometry layers. A light participates when
+ * (DeLight.view_mask & mask) != 0; a zero DeLight.view_mask means all bits for legacy scenes
+ * and zero-initialized components. Views start with ~0u (all); mask 0 selects no analytic lights.
+ * This is per-camera selection, not receiver-light linking. Emissive geometry, the environment
+ * and authored/baked probes keep their existing geometry/environment scope. Main thread;
+ * copied at Extract, including delayed recording. Invalid/stale view: DE_ERR_INVALID_ARGUMENT. */
+DE_API de_result de_view_set_light_mask(de_renderer *r, de_view v, u32 mask);
 
 /** The main view, made with the renderer (target zero, the whole viewport, order 0, name
  * "main"). A DeCamera whose `view` is zero renders through it. */
@@ -559,6 +566,8 @@ typedef struct DeLight {
     de_vec2 area_size;
     f32 source_radius; /* directional: angular radius (radians); local: radius (metres) */
     bool cast_shadows;
+    u32 view_mask; /**< Analytic-light view inclusion bits; 0 or ~0u = all views (legacy default).
+                    */
 } DeLight;
 
 /** Local radiance influence. Extent is half size (sphere uses extent.x), in metres. */
@@ -742,6 +751,7 @@ typedef struct de_view_frame_info {
     de_pixel_art_settings pixel;
     de_vec2 pixel_residual;
     de_view_display display;
+    u32 light_mask; /**< Selected analytic-light bits; ~0u by default, 0 selects none. */
 } de_view_frame_info;
 /** Inside this view's render hook. Metadata is frozen with the immutable Extract frame. */
 DE_API bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_info *out);
@@ -863,7 +873,7 @@ typedef struct DeWater {
  * - DeMeshRenderer: layer_mask ~0u, cast_shadows and visible_in_rt true.
  * - DeLight: DE_LIGHT_POINT, white, de_light_default_intensity(DE_LIGHT_POINT), range 0
  *   (physical cutoff), spot_outer pi/4 (spot_inner 0), area_size 1 x 1 m, source_radius
- *   0.05 m, cast_shadows true.
+ *   0.05 m, cast_shadows true, view_mask 0 (all views, including legacy scenes).
  * - DeEnvironment: intensity 1. DeSprite: uv_rect (0, 0, 1, 1), size 1 x 1 m, pivot (0.5, 0.5),
  *   white, cast_shadows true.
  * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.

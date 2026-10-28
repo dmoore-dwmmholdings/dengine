@@ -388,6 +388,7 @@ static u32 frw_add_light(frw *w) {
     l->area_size = (de_vec2){rndf(w), rndf(w)};
     l->source_radius = rndf(w);
     l->cast_shadows = rnd(w) % 2u != 0;
+    l->view_mask = rnd(w); /* Include arbitrary/high bits: the GPU payload must stay bit exact. */
     ldirty(w, s);
     return s;
 }
@@ -492,7 +493,10 @@ static bool check_light(const frw *w, u32 s, const de__gs_light *e) {
     CHK(rows_eq(e->transform, &li->transform[s]), "transform");
     CHK(f4eq(&e->color, l->color.x, l->color.y, l->color.z, l->intensity), "color");
     CHK(f4eq(&e->params, l->range, l->spot_inner, l->spot_outer, l->source_radius), "params");
-    CHK(f4eq(&e->area, l->area_size.x, l->area_size.y, 0.0f, 0.0f), "area");
+    CHK(memcmp(e->area.v, &l->area_size, sizeof l->area_size) == 0 && e->area.v[3] == 0, "area");
+    u32 view_mask;
+    memcpy(&view_mask, &e->area.v[2], sizeof view_mask);
+    CHK(view_mask == l->view_mask, "view mask bits");
     CHK(e->kind == (u32)l->kind, "kind");
     CHK(e->flags == (DE__GS_LIGHT_LIVE | (l->cast_shadows ? DE__GS_LIGHT_CAST_SHADOWS : 0u)),
         "flags");

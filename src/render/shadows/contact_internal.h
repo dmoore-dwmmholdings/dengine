@@ -28,6 +28,9 @@ typedef struct de__contact_params {
 DE_STATIC_ASSERT(sizeof(de__contact_params) == 64, "ContactParams is 64 bytes");
 void de__contact_select(const de__rw_lights *lights, u64 directional, u32 max_locals, f32 cutoff,
                         de__contact_metadata *out);
+void de__contact_select_view(const de__rw_lights *lights, u64 directional, u32 max_locals,
+                             f32 cutoff, u32 excluded_light_mask, const de__view_hidden *hidden,
+                             de__contact_metadata *out);
 typedef struct de__contact de__contact;
 de_result de__contact_create_ex(de_gpu_device *dev, const de_allocator *alloc, de__vis_shared *vis,
                                 de__contact **out);

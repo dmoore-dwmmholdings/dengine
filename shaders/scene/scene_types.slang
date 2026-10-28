@@ -123,12 +123,18 @@ public struct DeGpuLight
     public float4 transform[3]; // rows, relative to the render origin; the light points along it
     public float4 color;        // linear rgb, intensity
     public float4 params;       // range, spot_inner, spot_outer, source_radius
-    public float4 area;         // area_size xy
+    public float4 area;         // area_size xy; z = asfloat(DeLight.view_mask), 0 means all
     public uint kind;           // de_light_kind
     public uint flags;          // DE_GPU_LIGHT_*
     public uint entity_lo;
     public uint entity_hi;
 };
+
+public bool de_light_in_view(DeGpuLight light, uint excluded_mask)
+{
+    uint mask = asuint(light.area.z);
+    return ((mask == 0u ? ~0u : mask) & ~excluded_mask) != 0u;
+}
 
 /// The scene constants of one view (432 bytes), one entry per view slot.
 public struct DeSceneConstants

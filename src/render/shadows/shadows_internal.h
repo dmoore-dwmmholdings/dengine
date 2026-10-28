@@ -127,6 +127,9 @@ de_result de__shadow_atlas_frame_view(de__shadow_atlas *s, de_view view, u32 lay
                                       de_quality quality);
 de_result de__shadow_atlas_frame_view_hidden(de__shadow_atlas *s, de_view view, u32 layer_mask,
                                              de_quality quality, const de__view_hidden *hidden);
+de_result de__shadow_atlas_frame_view_policy(de__shadow_atlas *s, de_view view, u32 layer_mask,
+                                             de_quality quality, const de__view_hidden *hidden,
+                                             u32 excluded_light_mask);
 bool de__shadow_atlas_capture_ready(const de__shadow_atlas *s, de_view view);
 void de__shadow_atlas_destroy(de__shadow_atlas *s);
 de_result de__shadow_atlas_build(de__shadow_atlas *s, const de__view_frame *vf,

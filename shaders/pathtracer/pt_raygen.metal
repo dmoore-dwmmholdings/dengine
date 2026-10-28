@@ -14,6 +14,13 @@ inline PtParams_0 pt_load(constant DeRtHeap &heap,constant PtPush &pc,thread Ker
                                             float pdf,float3 previous,thread KernelContext_0 *ctx) {
     return pt_endpoint_0(p,ray,hit,pdf,previous,ctx);
 }
+// Keep per-view light selection and material evaluation out of the traversal loop's CFG too.
+[[clang::noinline]] PtStep_0 pt_step_native(thread const PtParams_0 *p,
+                                          thread const DeRtRay_0 *ray,thread const DeRtHit_0 *hit,
+                                          uint pixel,uint bounce,float pdf,float3 previous,
+                                          thread KernelContext_0 *ctx) {
+    return pt_step_0(p,ray,hit,pixel,bounce,pdf,previous,ctx);
+}
 [[visible]] void pt_miss(thread DeRtPayload &p,thread const DeRtHit &,constant DeRtHeap &,constant uchar *) {p.words[0]=as_type<uint>(-1.f);p.words[1]=0xffffffffu;}
 [[visible]] void pt_closest(thread DeRtPayload &p,thread const DeRtHit &h,constant DeRtHeap &,constant uchar *) {
     p.words[0]=as_type<uint>(h.distance);p.words[1]=h.custom_index;p.words[2]=h.primitive;
@@ -74,7 +81,7 @@ inline void pt_raygen_impl(constant DeRtHeap &heap,constant PtPush &pc,
     for(uint bounce=0;bounce<=p.ptp_max_bounces;++bounce) {
         auto h=bounce==0?first:pt_intersect(heap,p,r,0,intersections,functions,sbt,(constant uchar *)&pc,ctx);
         if(bounce==p.ptp_max_bounces){radiance+=throughput*pt_endpoint_native(&p,&r,&h,pdf,previous,&ctx);break;}
-        auto step=pt_step_0(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
+        auto step=pt_step_native(&p,&r,&h,pixel,bounce,pdf,previous,&ctx);
         radiance+=throughput*step.pts_emitted;
         bool visible=true;
         if(step.pts_casts_shadows!=0 && step.pts_shadow.ptr_direction.w>step.pts_shadow.ptr_origin.w && any(step.pts_direct>0))

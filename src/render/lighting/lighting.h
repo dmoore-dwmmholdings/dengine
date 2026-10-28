@@ -40,6 +40,11 @@ DE_EXTERN_C_BEGIN
 struct de_asset_system;
 struct de__render_world_frame;
 
+/** Same predicate as scene_types.slang; zero light bits preserve pre-mask scene behavior. */
+static inline bool de__light_in_view(const DeLight *light, u32 excluded_mask) {
+    return ((light->view_mask ? light->view_mask : ~0u) & ~excluded_mask) != 0;
+}
+
 /* =================================================================================================
  * GPU layouts (lights.slang, lighting_common.slang; the test lighting.layout_match compares)
  * ============================================================================================== */

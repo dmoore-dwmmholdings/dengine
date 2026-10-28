@@ -509,6 +509,8 @@ static void pack_light(const de__gpu_scene *gs, u32 s, de__gs_light *o) {
     f4(&o->color, l->color.x, l->color.y, l->color.z, l->intensity);
     f4(&o->params, l->range, l->spot_inner, l->spot_outer, l->source_radius);
     f4(&o->area, l->area_size.x, l->area_size.y, 0.0f, 0.0f);
+    /* Keep the 112-byte record ABI; area.z is an integer bit payload, never numeric float. */
+    memcpy(&o->area.v[2], &l->view_mask, sizeof l->view_mask);
     o->kind = (u32)l->kind;
     o->flags = DE__GS_LIGHT_LIVE | (l->cast_shadows ? DE__GS_LIGHT_CAST_SHADOWS : 0u);
     o->entity_lo = (u32)f->lights.entity[s];

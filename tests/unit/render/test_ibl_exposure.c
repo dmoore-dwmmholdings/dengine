@@ -444,6 +444,7 @@ struct lx {
     de_gpu_buffer rb;
     de_gpu_buffer hidden_buffer;
     const de__view_hidden *hidden;
+    u32 excluded_light_mask;
     u64 rb_size;
     world w;
     de_vec3 eye, target;
@@ -807,6 +808,7 @@ static bool lx_frame(lx *f) {
     const de__vis_frame_desc d = {.gpu_scene = f->gs,
                                   .hidden = f->hidden,
                                   .hidden_buffer = f->hidden_buffer,
+                                  .excluded_light_mask = f->excluded_light_mask,
                                   .view = (de_view){.id = 1},
                                   .view_slot = 0,
                                   .frame_index = n,
@@ -1772,6 +1774,51 @@ static void hidden_geometry_and_lights(lx *f, de_gpu_backend backend) {
     lx_run(f);
     EXPECT_EQ(f->res.counters[DE__LIGHTING_COUNTER_DIRECTIONAL / 4], 1u);
 }
+static void light_view_masks(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    world_set(&f->w, 0, lx_square(f), at(0, 0, 0), material_add(.5f, .6f, 0, 0));
+    env_uniform(f, 0);
+    de__rw_lights *lights = &f->w.f.lights;
+    lights->count = 2;
+    for (u32 kind = DE_LIGHT_DIRECTIONAL; kind <= DE_LIGHT_POINT; ++kind) {
+        for (u32 i = 0; i < 2; ++i) {
+            lights->entity[i] = ((u64)4 << 32) | (i + 27);
+            lights->transform[i] = at(0, 0, 4);
+            lights->light[i] = (DeLight){.kind = (de_light_kind)kind,
+                                         .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                                         .intensity = 1000,
+                                         .range = 10,
+                                         .view_mask = 1u << i};
+        }
+        f->w.touch_lights = true;
+        const u32 masks[] = {~0u, 1, 2, 0, 1};
+        for (u32 k = 0; k < sizeof masks / sizeof masks[0]; ++k) {
+            f->excluded_light_mask = ~masks[k];
+            lx_run(f);
+            f64 sum[2] = {0};
+            for (u32 p = 0; p < f->res.width * f->res.height; ++p)
+                for (u32 c = 0; c < 2; ++c)
+                    sum[c] += f->res.lighting[4 * p + c];
+            printf("light-mask kind=%u mask=%08x pixel sums R=%g G=%g\n", kind, masks[k], sum[0],
+                   sum[1]);
+            for (u32 c = 0; c < 2; ++c) {
+                if (masks[k] & (1u << c))
+                    EXPECT_TRUE(sum[c] > .1);
+                else
+                    EXPECT_TRUE(sum[c] < .0001);
+            }
+        }
+        // Legacy zero-initialized components still illuminate every nonempty view mask.
+        lights->light[0].view_mask = 0;
+        lights->light[1].view_mask = 0;
+        f->w.touch_lights = true;
+        f->excluded_light_mask = ~0x80000000u;
+        lx_run(f);
+        const u32 counter = kind == DE_LIGHT_DIRECTIONAL ? DE__LIGHTING_COUNTER_DIRECTIONAL
+                                                         : DE__LIGHTING_COUNTER_LOCAL;
+        EXPECT_EQ(f->res.counters[counter / 4], 2u);
+    }
+}
 static void debug_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) {
     (void)lc;
     const debug_user *u = f->user;
@@ -2024,6 +2071,9 @@ static void strip_copy(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(ibl, hidden_geometry_and_lights_##sfx, lx) {                                            \
         hidden_geometry_and_lights(f, backend);                                                    \
+    }                                                                                              \
+    TEST_F(ibl, light_view_masks_##sfx, lx) {                                                      \
+        light_view_masks(f, backend);                                                              \
     }                                                                                              \
     TEST_F(ibl, ibl_strip_copy_bc6h_##sfx, lx) {                                                   \
         strip_copy(f, backend);                                                                    \

@@ -19,7 +19,7 @@ typedef struct pt_params {
     u32 accumulation, output, brdf_lut, seed;
     f32 inv_view_proj[4][4], camera[4];
     de__ibl_gpu ibl;
-    u32 environment_revision, flags, sampling_table, reserved1;
+    u32 environment_revision, flags, sampling_table, excluded_light_mask;
     f32 exposure;
     u32 light_count, directional_alias, directional_offset;
     de__pt_media_params media;
@@ -354,7 +354,9 @@ static de_result directional_alias(de__pt *p, pt_view *v, de__view_frame *f, u32
     for (u32 i = 0; i < count; ++i) {
         const DeLight *l = &world->lights.light[i];
         f64 w = 0;
-        if (world->lights.entity[i] && l->kind == DE_LIGHT_DIRECTIONAL)
+        if (world->lights.entity[i] && l->kind == DE_LIGHT_DIRECTIONAL &&
+            de__light_in_view(l, f->excluded_light_mask) &&
+            !de__view_hidden_contains(f->hidden, world->lights.entity[i]))
             w = (.2126 * l->color.x + .7152 * l->color.y + .0722 * l->color.z) * l->intensity;
         power[i] = isfinite(w) && w > 0 ? (f32)fmin(w, FLT_MAX) : 0;
         positive |= power[i] > 0;
@@ -419,7 +421,8 @@ void de__pt_build(de__view_frame *f, void *user) {
         trace_pipeline = p->media_pipeline;
     }
     const u64 signature = de__gpu_scene_source_signature(p->r->gpu_scene) ^
-                          de__material_instances_epoch(p->r->material_instances) ^ media_signature;
+                          de__material_instances_epoch(p->r->material_instances) ^ media_signature ^
+                          ((u64)f->excluded_light_mask * UINT64_C(0x9e3779b97f4a7c15));
     u32 strategy = (u32)de_cvar_int(p->strategy), seed = (u32)de_cvar_int(p->seed);
     bool golden = de_cvar_bool(p->golden);
     if (golden) {
@@ -466,6 +469,7 @@ void de__pt_build(de__view_frame *f, void *user) {
         .seed = seed,
         .flags = strategy,
         .sampling_table = de_gpu_buffer_bindless(p->r->dev, p->sampling_table),
+        .excluded_light_mask = f->excluded_light_mask,
         .ibl = lighting.view.ibl,
         .exposure =
             de__lighting_view_exposure(de__views_lighting(p->r), (f->view.id & 255u) - 1u, f->view,

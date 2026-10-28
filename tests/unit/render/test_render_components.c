@@ -46,7 +46,7 @@ static const struct {
 } k_comps[] = {
     {"DeCamera", 8, offsetof(DeRenderComponents, camera)},
     {"DeMeshRenderer", 5, offsetof(DeRenderComponents, mesh_renderer)},
-    {"DeLight", 9, offsetof(DeRenderComponents, light)},
+    {"DeLight", 10, offsetof(DeRenderComponents, light)},
     {"DeEnvironment", 3, offsetof(DeRenderComponents, environment)},
     {"DeSprite", 16, offsetof(DeRenderComponents, sprite)},
     {"DeSky", 5, offsetof(DeRenderComponents, sky)},
@@ -400,6 +400,33 @@ TEST_F(render_components, text_roundtrip, cfx) {
     de_mem_writer_free(&mw);
 }
 
+TEST_F(render_components, legacy_light_selection_and_high_bit_roundtrip, cfx) {
+    ASSERT_EQ(de_render_register_components(f->w), DE_OK);
+    const de_type_id type = type_of(f, "DeLight");
+    const char legacy[] = "__type = \"DeLight\"\n__version = 1\nintensity = 17\n";
+    DeLight light;
+    ASSERT_EQ(de_type_construct(f->types, type, &light), DE_OK);
+    de_mem_reader mr;
+    de_mem_reader_init(&mr, legacy, sizeof legacy - 1);
+    de_reader reader = de_reader_from_mem(&mr);
+    ASSERT_EQ(de_deserialize_object(f->types, type, &light, NULL, &reader), DE_OK);
+    EXPECT_EQ(light.view_mask, 0u);
+    EXPECT_FLOAT_EQ(light.intensity, 17, 0);
+    light.view_mask = 0x80000002u;
+    de_mem_writer mw;
+    de_mem_writer_init(&mw, &f->alloc);
+    de_writer writer = de_writer_from_mem(&mw);
+    ASSERT_EQ(de_serialize_object(f->types, type, &light, NULL, &writer), DE_OK);
+    DeLight copy;
+    ASSERT_EQ(de_type_construct(f->types, type, &copy), DE_OK);
+    de_mem_reader_init(&mr, mw.data, mw.size);
+    reader = de_reader_from_mem(&mr);
+    ASSERT_EQ(de_deserialize_object(f->types, type, &copy, NULL, &reader), DE_OK);
+    EXPECT_EQ(copy.view_mask, 0x80000002u);
+    EXPECT_FLOAT_EQ(copy.intensity, 17, 0);
+    de_mem_writer_free(&mw);
+}
+
 /* ---- render_components.defaults -------------------------------------------------------------- */
 
 static void construct_from(cfx *f, const char *name, void *obj, size_t size, u8 fill) {
@@ -447,6 +474,7 @@ TEST_F(render_components, defaults, cfx) {
         EXPECT_FLOAT_EQ(l.area_size.y, 1.0, 0);
         EXPECT_FLOAT_EQ(l.source_radius, 0.05, 1e-7);
         EXPECT_TRUE(l.cast_shadows);
+        EXPECT_EQ(l.view_mask, 0u);
 
         DeEnvironment env;
         construct_from(f, "DeEnvironment", &env, sizeof env, fill);

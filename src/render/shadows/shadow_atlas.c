@@ -30,7 +30,7 @@ typedef struct atlas_view {
 typedef struct atlas_group {
     atlas_view cache;
     const de__view_hidden *hidden;
-    u32 mask, spent;
+    u32 mask, excluded_light_mask, spent;
     de_quality quality;
     bool keyed, requested, built;
     u64 built_frame;
@@ -175,6 +175,11 @@ de_result de__shadow_atlas_frame_view(de__shadow_atlas *s, de_view view, u32 mas
 }
 de_result de__shadow_atlas_frame_view_hidden(de__shadow_atlas *s, de_view view, u32 mask,
                                              de_quality quality, const de__view_hidden *hidden) {
+    return de__shadow_atlas_frame_view_policy(s, view, mask, quality, hidden, 0);
+}
+de_result de__shadow_atlas_frame_view_policy(de__shadow_atlas *s, de_view view, u32 mask,
+                                             de_quality quality, const de__view_hidden *hidden,
+                                             u32 excluded_light_mask) {
     u32 slot = (view.id & 255u) - 1u;
     if (!s || slot >= DE__VIEW_MAX)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "atlas receiver registration");
@@ -193,6 +198,7 @@ de_result de__shadow_atlas_frame_view_hidden(de__shadow_atlas *s, de_view view, 
     u32 found = DE__VIEW_MAX;
     for (u32 i = 0; i < DE__VIEW_MAX; ++i)
         if (s->groups[i].keyed && s->groups[i].mask == mask &&
+            s->groups[i].excluded_light_mask == excluded_light_mask &&
             de__view_hidden_equal(s->groups[i].hidden, hidden)) {
             found = i;
             break;
@@ -212,8 +218,10 @@ de_result de__shadow_atlas_frame_view_hidden(de__shadow_atlas *s, de_view view, 
             return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "atlas groups reserved by unsubmitted graphs");
         release(s, &s->groups[found].cache);
         de__view_hidden_release(s->groups[found].hidden);
-        s->groups[found] =
-            (atlas_group){.keyed = true, .mask = mask, .hidden = de__view_hidden_retain(hidden)};
+        s->groups[found] = (atlas_group){.keyed = true,
+                                         .mask = mask,
+                                         .hidden = de__view_hidden_retain(hidden),
+                                         .excluded_light_mask = excluded_light_mask};
     }
     atlas_group *group = &s->groups[found];
     group->requested = true;
@@ -493,7 +501,7 @@ static bool receiver_influence(const de__rw_instances *w, u32 mask, de_vec3 p, f
 /* Pure selection is shared by the production atlas and CPU regression fixtures. */
 static u32 select_lights(const de__render_world_frame *frame, const de__rw_view *camera, u32 mask,
                          bool unknown_receivers, u32 limit, const de__view_hidden *hidden,
-                         u32 out[DE__ATLAS_LIGHTS]) {
+                         u32 excluded_light_mask, u32 out[DE__ATLAS_LIGHTS]) {
     if (!frame || !camera || !out || !limit)
         return 0;
     mask = mask ? mask : ~0u;
@@ -507,8 +515,8 @@ static u32 select_lights(const de__render_world_frame *frame, const de__rw_view 
     for (u32 i = 0; i < world->count; ++i) {
         const DeLight *l = &world->light[i];
         if (!world->entity[i] || de__view_hidden_contains(hidden, world->entity[i]) ||
-            l->kind == DE_LIGHT_DIRECTIONAL || !l->cast_shadows || !(l->intensity > 0) ||
-            !isfinite(l->intensity))
+            !de__light_in_view(l, excluded_light_mask) || l->kind == DE_LIGHT_DIRECTIONAL ||
+            !l->cast_shadows || !(l->intensity > 0) || !isfinite(l->intensity))
             continue;
         de_vec3 p = {world->transform[i].m[9], world->transform[i].m[10],
                      world->transform[i].m[11]};
@@ -551,7 +559,7 @@ static u32 select_lights(const de__render_world_frame *frame, const de__rw_view 
 u32 de__atlas_select_lights(const de__render_world_frame *frame, const de__rw_view *camera,
                             u32 mask, bool unknown_receivers, u32 limit,
                             u32 out[DE__ATLAS_LIGHTS]) {
-    return select_lights(frame, camera, mask, unknown_receivers, limit, NULL, out);
+    return select_lights(frame, camera, mask, unknown_receivers, limit, NULL, 0, out);
 }
 
 static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
@@ -561,7 +569,8 @@ static de_result cache_build(de__shadow_atlas *s, const de__view_frame *vf,
     u32 selected[DE__ATLAS_LIGHTS];
     const u32 count = select_lights(vf->world, vf->camera, group->mask,
                                     vf->renderer && vf->renderer->forward_participant_count != 0,
-                                    (u32)de_cvar_int(s->cv_max), vf->hidden, selected);
+                                    (u32)de_cvar_int(s->cv_max), vf->hidden,
+                                    group->excluded_light_mask, selected);
     const de__rw_lights *world = &vf->world->lights;
     if (!count) {
         for (u32 i = 0; i < v->lights; ++i)
@@ -832,8 +841,8 @@ de_result de__shadow_atlas_build(de__shadow_atlas *s, const de__view_frame *vf,
     receiver->rendered = 0;
     if (!s->configured || s->config_frame != vf->frame_index)
         de__shadow_atlas_frame_begin(s, vf->frame_index, vf->camera);
-    DE_TRY(de__shadow_atlas_frame_view_hidden(s, vf->view, vc->layer_mask, vf->settings->shadows,
-                                              vf->hidden));
+    DE_TRY(de__shadow_atlas_frame_view_policy(s, vf->view, vc->layer_mask, vf->settings->shadows,
+                                              vf->hidden, vf->excluded_light_mask));
     if (!receiver->active || !vf->world || !vf->camera) {
         receiver->active = false;
         return DE_OK;

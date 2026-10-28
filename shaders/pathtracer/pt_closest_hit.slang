@@ -16,7 +16,7 @@ public struct PtParams {
     public float4 inv_view_proj[4];
     public float4 camera;
     public DeIbl ibl;
-    public uint environment_revision,flags,sampling_table,reserved1;
+    public uint environment_revision,flags,sampling_table,excluded_light_mask;
     public float exposure; public uint light_count,directional_alias,directional_offset;
     public PtMediaParams media;
     public uint aov_albedo,aov_normal,aov_depth,aov_position,aov_material,aov_moments,aov_pad1,aov_pad2;
@@ -99,7 +99,7 @@ public float pt_emission_pdf(PtParams p,DeRtHit h,float3 previous,float3 positio
 public float4 pt_area_hit(PtParams p,DeRtRay ray,float geometry_t,out float light_pdf) {
     float nearest=geometry_t>=0?geometry_t:ray.direction.w;float3 emitted=0;light_pdf=0;
     for(uint i=0;i<p.source_count;++i) {
-        DiSource source=de_robuffer<DiSource>(p.sources)[i];if(source.kind!=0)continue;
+        DiSource source=de_robuffer<DiSource>(p.sources)[i];if(source.kind!=0 || !di_analytic_in_view(source,p.excluded_light_mask))continue;
         DeClusterLight light=source.light;uint kind=de_light_kind(light);
         if(kind!=DE_LIGHT_KIND_RECT&&kind!=DE_LIGHT_KIND_DISK)continue;
         float3 normal=normalize(light.direction.xyz);float denom=dot(normal,ray.direction.xyz);
@@ -139,6 +139,7 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         float2 uv=float2(pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+3),pt_random(p.sampling_table,pixel^p.seed,p.sample,dimension+4));
         density=source.pdf*categories.y;
         if(source.kind==0) {
+            if(!di_analytic_in_view(source,p.excluded_light_mask))return o;
             DeClusterLight light=source.light;o.shadow=de_rt_shadow_ray(light,position,normal,uv);wi=o.shadow.direction.xyz;
             uint kind=de_light_kind(light);casts=(asuint(light.axis.w)&DE_CLUSTER_LIGHT_SHADOWS)!=0;
             if(kind==DE_LIGHT_KIND_RECT||kind==DE_LIGHT_KIND_DISK) {o.delta=0;
@@ -175,7 +176,7 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
         uint index=frac(pick)<a.x?entry:asuint(a.z);
         float pdf=de_robuffer<float4>(p.directional_alias)[p.directional_offset+index].y;
         DeGpuLight l=de_robuffer<DeGpuLight>(sc.lights)[index];
-        if(l.kind==DE_LIGHT_KIND_DIRECTIONAL && (l.flags&DE_GPU_LIGHT_LIVE)!=0) {
+        if(l.kind==DE_LIGHT_KIND_DIRECTIONAL && (l.flags&DE_GPU_LIGHT_LIVE)!=0 && de_light_in_view(l,p.excluded_light_mask)) {
             wi=normalize(float3(l.transform[0].z,l.transform[1].z,l.transform[2].z));incident=l.color.rgb*l.color.w;
             density=pdf*categories.z;casts=(l.flags&DE_GPU_LIGHT_CAST_SHADOWS)!=0;
             o.shadow.origin=float4(de_rt_offset(position,normal,wi),.00001);o.shadow.direction=float4(wi,1e6);

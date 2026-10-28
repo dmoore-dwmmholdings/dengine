@@ -275,6 +275,42 @@ static void ddgi_sample(ddgi_fixture *f, const de_vec3 *points, u32 count, de_ve
 static double energy(de_vec4 v) {
     return v.x + v.y + v.z;
 }
+TEST_F(ddgi, light_selection_resets_live_probe_history, ddgi_fixture) {
+    rt_fixture *r = &f->shadow.rt;
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "0"));
+    for (u32 i = 0; i < 2; ++i) {
+        DeLight light = {.kind = DE_LIGHT_POINT,
+                         .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                         .intensity = 100,
+                         .range = 20,
+                         .cast_shadows = true,
+                         .view_mask = 1u << i};
+        world_light(&r->w, i, &light, at(3, 0, 3));
+    }
+    const de_vec3 points[] = {{3, 0, .3f}, {4.2f, 0, .3f}, {1.8f, 0, .3f}};
+    const u32 masks[] = {1, 2, 0};
+    for (u32 phase = 0; phase < 3; ++phase) {
+        ASSERT_EQ(de_view_set_light_mask(r->r, r->view, masks[phase]), DE_OK);
+        for (u32 frame = 0; frame < 12; ++frame)
+            ddgi_frame(f);
+        de_vec4 sampled[3];
+        ddgi_sample(f, points, 3, sampled);
+        f64 red = 0, green = 0;
+        for (u32 i = 0; i < 3; ++i) {
+            red += sampled[i].x;
+            green += sampled[i].y;
+        }
+        printf("DDGI selection mask=%u red=%g green=%g\n", masks[phase], red, green);
+        if (masks[phase] & 1)
+            EXPECT_TRUE(red > .001);
+        else
+            EXPECT_TRUE(fabs(red) < .0001);
+        if (masks[phase] & 2)
+            EXPECT_TRUE(green > .001);
+        else
+            EXPECT_TRUE(fabs(green) < .0001);
+    }
+}
 TEST_F(ddgi, cornell_bleeding_and_moving_light, ddgi_fixture) {
     const de_vec3 points[] = {{4.2f, 0, .3f}, {3, 0, .3f}, {1.8f, 0, .3f}};
     de_vec4 early[3], late[3], moved[3], steady[3];

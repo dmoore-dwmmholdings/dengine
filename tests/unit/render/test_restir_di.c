@@ -140,6 +140,34 @@ static void di_frame(di_fixture *f) {
     shadow_frame(&f->shadow);
     read_di(f);
 }
+TEST_F(restir_di, analytic_sources_respect_view_light_selection, di_fixture) {
+    rt_fixture *r = &f->shadow.rt;
+    set_lights(f, 2);
+    const u32 bits[] = {1, UINT32_C(0x80000000)};
+    for (u32 i = 0; i < 2; ++i) {
+        r->w.f.lights.light[i].view_mask = bits[i];
+        r->w.f.lights.light[i].color = i ? (de_vec3){0, 1, 0} : (de_vec3){1, 0, 0};
+        r->w.f.lights.transform[i] = at(3, 0, 4);
+    }
+    de__restir_di_debug(r->r->restir_di, &(de__di_debug){.reference = true});
+    const u32 masks[] = {bits[0], bits[1], 0, bits[0] | bits[1]};
+    for (u32 k = 0; k < 4; ++k) {
+        ASSERT_EQ(de_view_set_light_mask(r->r, r->view, masks[k]), DE_OK);
+        di_frame(f);
+        EXPECT_EQ(f->info.alias_builds, 1u);
+        f64 sum[2] = {0};
+        for (u32 p = 0; p < PIXELS; ++p)
+            for (u32 c = 0; c < 2; ++c)
+                sum[c] += f->current[p * 3 + c];
+        printf("DI mask=%u red=%g green=%g\n", masks[k], sum[0], sum[1]);
+        for (u32 c = 0; c < 2; ++c) {
+            if (masks[k] & bits[c])
+                EXPECT_TRUE(sum[c] > .001);
+            else
+                EXPECT_TRUE(fabs(sum[c]) < .0001);
+        }
+    }
+}
 TEST_F(restir_di, converges_to_reference, di_fixture) {
     rt_fixture *r = &f->shadow.rt;
     de__restir_di_debug(r->r->restir_di, &(de__di_debug){.reference = true});

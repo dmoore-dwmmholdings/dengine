@@ -263,11 +263,12 @@ static bool reserve_view(de__rt_gi *s, ddgi_view *v, u32 rays, u32 ring) {
            v->ray_info.id && v->params_map && v->metadata_map[ring][0] && v->metadata_map[ring][1];
 }
 static bool reserve_volume(de__rt_gi *s, ddgi_volume *v, const de__irradiance_snapshot *snapshot,
-                           u32 cascade) {
+                           u32 cascade, u32 excluded_light_mask) {
     de__gi_layout layout;
     if (de__gi_layout_make(&snapshot->volume, &layout) != DE_OK)
         return false;
-    u64 hash = de__gi_settings_hash(snapshot);
+    u64 hash =
+        de__gi_settings_hash(snapshot) ^ ((u64)excluded_light_mask * UINT64_C(0x9e3779b97f4a7c15));
     if (v->entity == snapshot->entity && v->settings == hash && v->cascade == cascade &&
         v->payload.id && v->irradiance[0].id && v->irradiance[1].id && v->moments[0].id &&
         v->moments[1].id && v->state[0].id && v->state[1].id && v->history[0].id &&
@@ -477,7 +478,8 @@ static de_result build(void *user, de_rg *g, de__vis_context *vc, de__lighting_c
             resident += layout.payload_bytes * 2;
             if (resident > 64ull * 1024 * 1024)
                 break;
-            if (!reserve_volume(s, &view->volumes[count], &snapshot, cascade))
+            if (!reserve_volume(s, &view->volumes[count], &snapshot, cascade,
+                                vc->excluded_light_mask))
                 return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "DDGI volume capacity");
             snapshots[count] = snapshot;
             total += view->volumes[count].layout.probes;

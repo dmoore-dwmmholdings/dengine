@@ -152,6 +152,54 @@ static float *pt_read(pt_fixture *f) {
     de_gpu_wait_idle(r->d);
     return de_gpu_buffer_map(r->d, f->rb);
 }
+TEST_F(pathtracer, analytic_light_masks_reset_and_filter_every_sampling_path, pt_fixture) {
+    rt_fixture *r = &f->rt;
+    g_mat[0].standard.unlit = false;
+    g_mat[0].standard.emissive = (de_vec3){0};
+    g_mat[0].standard.emissive_strength = 0;
+    g_mat[0].standard.base_color = (de_vec4){.8f, .8f, .8f, 1};
+    r->w.touch_all = true;
+    de_render_settings settings = de_renderer_get_settings(r->r);
+    settings.path_max_bounces = 1;
+    de_renderer_set_settings(r->r, &settings);
+    ASSERT_TRUE(cvar_set("r.ambient_fallback", "0"));
+    ASSERT_TRUE(cvar_set("r.pt.sampling_strategy", "1"));
+    const de_light_kind kinds[] = {DE_LIGHT_DIRECTIONAL, DE_LIGHT_POINT, DE_LIGHT_RECT};
+    const u32 bits[] = {1, UINT32_C(0x80000000)};
+    const u32 masks[] = {bits[0], bits[1], 0, bits[0] | bits[1]};
+    for (u32 kind = 0; kind < 3; ++kind) {
+        for (u32 i = 0; i < 2; ++i) {
+            DeLight light = {.kind = kinds[kind],
+                             .color = {i ? 0 : 1, i ? 1 : 0, 0},
+                             .intensity = 100,
+                             .range = 20,
+                             .area_size = {1, 1},
+                             .view_mask = bits[i]};
+            world_light(&r->w, i, &light, at(3, 0, 3));
+        }
+        for (u32 k = 0; k < 4; ++k) {
+            ASSERT_EQ(de_view_set_light_mask(r->r, r->view, masks[k]), DE_OK);
+            pt_frame(f);
+            EXPECT_EQ(f->info.samples,
+                      1u); // Selection changes reset only this view's accumulation.
+            for (u32 frame = 1; frame < 8; ++frame)
+                pt_frame(f);
+            const f32 *pixels = pt_read(f);
+            f64 sum[2] = {0};
+            for (u32 p = 0; p < f->info.width * f->info.height; ++p)
+                for (u32 c = 0; c < 2; ++c)
+                    sum[c] += pixels[p * 4 + c];
+            printf("PT light kind=%u mask=%u red=%g green=%g\n", kinds[kind], masks[k], sum[0],
+                   sum[1]);
+            for (u32 c = 0; c < 2; ++c) {
+                if (masks[k] & bits[c])
+                    EXPECT_TRUE(sum[c] > .001);
+                else
+                    EXPECT_TRUE(fabs(sum[c]) < .0001);
+            }
+        }
+    }
+}
 TEST_F(pathtracer, sample_dimensions_cover_two_dimensional_cells, pt_fixture) {
 #if DE_HAS_GPU_METAL
     extern const unsigned char de__pt_metal_library[];

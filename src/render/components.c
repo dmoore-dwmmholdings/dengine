@@ -221,8 +221,11 @@ static de_result reg_light(de_world *w, de_component *out) {
         DE_FIELD_EX(DeLight, source_radius, DE_FK_F32, AUTHORED,
                     {0, 0, "m", "Emitter radius; sets the soft-shadow size", 0, 0}),
         DE_FIELD(DeLight, cast_shadows, DE_FK_BOOL, AUTHORED),
+        DE_FIELD_EX(
+            DeLight, view_mask, DE_FK_U32, AUTHORED,
+            {0, 0, 0, "Per-view analytic-light selection; 0 or all bits = every view", 0, 0}),
     };
-    return register_component(w, DE_TYPE_DESC(DeLight, 1, k_fields), construct_light, out);
+    return register_component(w, DE_TYPE_DESC(DeLight, 2, k_fields), construct_light, out);
 }
 
 /* ---- DeEnvironment ----------------------------------------------------------------------- */

@@ -63,6 +63,7 @@ typedef struct view_main {
     f32 render_scale;            /**< 0: the settings' render_scale */
     u32 seq;                     /**< creation sequence: ties of `order` */
     u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask (0: every layer) */
+    u32 excluded_light_mask;     /**< Complement: zero-initialized views select every light bit. */
     de_view_display display;
     const de__view_hidden *hidden;
 } view_main;
@@ -477,6 +478,18 @@ void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask) {
     de_mutex_unlock(&vs->lock);
 }
 
+de_result de_view_set_light_mask(de_renderer *r, de_view v, u32 mask) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "no renderer views");
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m)
+        m->excluded_light_mask = ~mask;
+    de_mutex_unlock(&vs->lock);
+    return m ? DE_OK : DE_FAIL(DE_ERR_INVALID_ARGUMENT, "stale view");
+}
+
 de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display) {
     const de_view_display policy = display ? *display : (de_view_display){0};
     if ((u32)policy.mode >= DE_VIEW_RENDER_MODE_COUNT ||
@@ -845,6 +858,7 @@ static de_view_frame_info metadata(const de__view_frame *vf) {
                               .ring_index = (u32)(vf->frame_index % vf->renderer->frames_in_flight),
                               .frames_in_flight = vf->renderer->frames_in_flight,
                               .layer_mask = vf->layer_mask,
+                              .light_mask = ~vf->excluded_light_mask,
                               .display = vf->display,
                               .render_origin = vf->world ? vf->world->origin : (de_dvec3){0},
                               .view_matrix = vf->view_matrix,
@@ -914,6 +928,7 @@ void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
                              .world = world,
                              .view = v,
                              .layer_mask = m->layer_mask,
+                             .excluded_light_mask = m->excluded_light_mask,
                              .display = m->display};
         viewport_px(m->viewport, tw, th, vf.viewport_px);
         vf.width = round_px(vf.viewport_px[2] * eff.render_scale, 1, 16384);
@@ -972,8 +987,11 @@ bool de_view_layout_info(de_renderer *r, de_view view, de_view_frame_info *out) 
         de_mutex_unlock(&vs->lock);
         return false;
     }
-    de__view_frame vf = {
-        .renderer = r, .view = view, .layer_mask = m->layer_mask, .display = m->display};
+    de__view_frame vf = {.renderer = r,
+                         .view = view,
+                         .layer_mask = m->layer_mask,
+                         .excluded_light_mask = m->excluded_light_mask,
+                         .display = m->display};
     viewport_px(m->viewport, width, height, vf.viewport_px);
     settings = effective_settings(r, m, &settings);
     vf.width = round_px(vf.viewport_px[2] * settings.render_scale, 1, 16384);
@@ -1168,6 +1186,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->copy.pixel_art = frozen->pixel_art;
         s->copy.pixel = frozen->pixel;
         s->copy.layer_mask = frozen->layer_mask;
+        s->copy.excluded_light_mask = ~frozen->light_mask;
         s->copy.display = frozen->display;
         s->copy.target = world->frozen_targets[frozen_index];
     }
@@ -1245,6 +1264,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         vf.pixel_art = &s->copy.pixel;
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
     vf.layer_mask = s->copy.layer_mask;
+    vf.excluded_light_mask = s->copy.excluded_light_mask;
     vf.display = s->copy.display;
     vf.hidden = frozen ? world->frozen_hidden[frozen_index] : s->copy.hidden;
     if (!prepare_hidden(r, s, &vf)) {
@@ -1542,13 +1562,16 @@ de_result de__views_render(de_renderer *r, de_arena *arena, de_gpu_texture targe
         const de_render_settings settings = effective_settings(r, &s->copy, &r->frame);
         const de_view handle = make_handle(vs->order[k], s->gen);
         const de__view_hidden *hidden = s->copy.hidden;
+        u32 mask = s->copy.layer_mask, excluded_lights = s->copy.excluded_light_mask;
         for (u32 i = 0; world && i < world->frozen_view_count; ++i)
             if (world->frozen_views[i].view.id == handle.id) {
                 hidden = world->frozen_hidden[i];
+                mask = world->frozen_views[i].layer_mask;
+                excluded_lights = ~world->frozen_views[i].light_mask;
                 break;
             }
-        const de_result registration = de__shadow_atlas_frame_view_hidden(
-            r->shadow_atlas, handle, s->copy.layer_mask, settings.shadows, hidden);
+        const de_result registration = de__shadow_atlas_frame_view_policy(
+            r->shadow_atlas, handle, mask, settings.shadows, hidden, excluded_lights);
         if (registration != DE_OK)
             DE_ERROR(r->log, "shadow atlas receiver registration: %s", de_result_str(registration));
     }

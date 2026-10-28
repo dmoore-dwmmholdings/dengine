@@ -38,6 +38,8 @@
 #if defined(DE_RENDER_PUMP_PACK_TEST)
 #include "loader_test_util.h"
 #include "dpak_writer.h"
+#include "data/light_isolation_fixture.h"
+#include "render/shadows/shadows_internal.h"
 #if defined(_WIN32)
 #include <process.h>
 #define pump_test_pid _getpid
@@ -328,6 +330,7 @@ typedef struct rfx {
     de_gpu_device *d;
     de_renderer *r;
     de_world *world;
+    de_load_handle isolation_load;
     char upload_pack_path[160];
     char why[1200];
 } rfx;
@@ -355,6 +358,8 @@ static void rfx_setup(rfx *f) {
 }
 
 static void rfx_teardown(rfx *f) {
+    if (f->assets && f->isolation_load.id)
+        de_asset_release(f->assets, f->isolation_load);
     if (f->assets != NULL)
         de_asset_system_destroy(f->assets); /* first: its unloads use the renderer's uploader */
     de_renderer_destroy(f->r);
@@ -611,6 +616,313 @@ TEST_F(renderer, pump_uploads_without_frames_null, rfx) {
 }
 TEST_F(renderer, pump_uploads_without_frames_metal, rfx) {
     pump_uploads_without_frames(f, DE_GPU_METAL);
+}
+
+/* The authored scene above uses public headers only. These helpers create ordinary loaded
+ * mesh/material assets and observe the production pipeline, including the full target image. */
+#define ISOLATION_SIZE                                                                             \
+    128u /* RGBA8 row pitch is a multiple of the portable 256-byte alignment.                      \
+          */
+static lt_blob isolation_plane(u64 material) {
+    lt_blob b = lt_dmsh(4, material, 0);
+    de_cooked_put_f32(b.data + 160, 1.f / 65535);
+    de_cooked_put_f32(b.data + 164, 1.f / 65535);
+    const u32 streams = de_cooked_get_u32(b.data + 56);
+    for (u32 s = 0; s < 3; ++s) {
+        u8 *record = b.data + streams + s * DE_COOKED_MESH_STREAM_SIZE;
+        const u32 offset = de_cooked_get_u32(record + 8), bytes = de_cooked_get_u32(record + 12);
+        memset(b.data + offset, 0, bytes);
+        for (u32 i = 0; i < 4; ++i) {
+            const u16 values[4] = {(i & 1) ? 65535 : 0, (i & 2) ? 65535 : 0, 32768, 0};
+            if (s == 1)
+                continue; // oct (0,0) is +Z
+            for (u32 c = 0; c < (s == 0 ? 4u : 2u); ++c) {
+                const u32 at = offset + i * (s == 0 ? 8 : 4) + c * 2;
+                b.data[at] = (u8)values[c];
+                b.data[at + 1] = (u8)(values[c] >> 8);
+            }
+        }
+    }
+    const u8 indices[] = {0, 1, 2, 2, 1, 3};
+    const u32 index_offset = de_cooked_get_u32(b.data + 84);
+    for (u32 i = 0; i < 6; ++i)
+        de_cooked_put_u32(b.data + index_offset + i * 4, indices[i]);
+    memcpy(b.data + de_cooked_get_u32(b.data + 80), indices, sizeof indices);
+    de_cooked_put_f32(b.data + de_cooked_get_u32(b.data + 72) + 28, 2);
+    de_cooked_mesh_view decoded;
+    ASSERT_TRUE(de_cooked_mesh_parse(b.data, b.size, &decoded, NULL));
+    f32 uv[2];
+    ASSERT_TRUE(de_cooked_mesh_uv(&decoded, 0, 3, uv));
+    EXPECT_FLOAT_EQ(uv[0], 1, 1e-6);
+    EXPECT_FLOAT_EQ(uv[1], 1, 1e-6);
+    return b;
+}
+static void isolation_assets(rfx *f, de_mesh *mesh_out, de_material *material_out) {
+    const de_asset_id mesh_id = de_asset_id_from("isolation/plane"),
+                      material_id = de_asset_id_from("isolation/white");
+    lt_blob mesh = isolation_plane(material_id.hash), material = lt_dmat(NULL, NULL, 0, 1);
+    snprintf(f->upload_pack_path, sizeof f->upload_pack_path, "rr:/isolation-%lu-%llu.dpak",
+             (unsigned long)pump_test_pid(), (unsigned long long)de_time_now_ns());
+    dpak_writer *writer = NULL;
+    ASSERT_EQ(dpak_writer_create(&(dpak_writer_desc){.include_names = true}, &writer), DE_OK);
+    ASSERT_EQ(dpak_writer_add(writer, mesh_id.hash, "mesh", mesh.data, mesh.size, &material_id.hash,
+                              1, "isolation/plane"),
+              DE_OK);
+    ASSERT_EQ(dpak_writer_add(writer, material_id.hash, "material", material.data, material.size,
+                              NULL, 0, "isolation/white"),
+              DE_OK);
+    const u64 ids[] = {mesh_id.hash, material_id.hash};
+    ASSERT_EQ(dpak_writer_add_bundle(writer, "isolation", ids, 2, NULL, 0, false, 0), DE_OK);
+    ASSERT_EQ(dpak_writer_finish(writer, f->upload_pack_path), DE_OK);
+    dpak_writer_destroy(writer);
+    lt_free(&mesh);
+    lt_free(&material);
+    ASSERT_EQ(de_asset_pack_mount(f->assets, f->upload_pack_path, 0), DE_OK);
+    de_load_handle load = de_asset_load_bundle(f->assets, "isolation", 0);
+    f->isolation_load = load;
+    de_load_state state = DE_LOAD_LOADING;
+    const u64 deadline = de_time_now_ns() + WAIT_NS;
+    while (state == DE_LOAD_LOADING && de_time_now_ns() < deadline) {
+        de_renderer_pump_uploads(f->r);
+        state = de_asset_wait(f->assets, load, 1000000);
+    }
+    ASSERT_EQ(state, DE_LOAD_READY);
+    *mesh_out = de_asset_mesh(f->assets, mesh_id);
+    *material_out = de_asset_material(f->assets, material_id);
+}
+static void isolation_frame(rfx *f) {
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, .016f, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, .016f, 0), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->world), DE_OK);
+    de__render_world_wait_idle(f->r);
+    de_gpu_wait_idle(f->d);
+}
+static void isolation_read(rfx *f, de_gpu_texture texture, u8 *pixels) {
+    const u32 pitch = ISOLATION_SIZE * 4, bytes = pitch * ISOLATION_SIZE;
+    de_gpu_buffer rb = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = bytes,
+                                                                        .usage = DE_USAGE_COPY_DST,
+                                                                        .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(rb.id != 0);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "isolation readback");
+    de_gpu_barrier barrier = {
+        .texture = texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, rb, 0, pitch, texture, 0, 0);
+    barrier.before = DE_ACCESS_COPY_SRC;
+    barrier.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
+    de_gpu_submit submit = {.cmds = &cmd, .cmd_count = 1, .signal = fence, .signal_value = 1};
+    ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &submit), DE_OK);
+    ASSERT_EQ(de_gpu_fence_wait(f->d, fence, 1, WAIT_NS), DE_OK);
+    memcpy(pixels, de_gpu_buffer_map(f->d, rb), bytes);
+    de_gpu_fence_destroy(f->d, fence);
+    de_gpu_buffer_destroy(f->d, rb);
+}
+static u64 isolation_depth_hash(rfx *f, de_gpu_texture texture, u32 size, u32 minimum_covered) {
+    const u32 pitch = size * 4;
+    de_gpu_buffer rb = de_gpu_buffer_create(f->d, &(de_gpu_buffer_desc){.size = (u64)pitch * size,
+                                                                        .usage = DE_USAGE_COPY_DST,
+                                                                        .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(rb.id != 0);
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(f->d, DE_QUEUE_GRAPHICS, "isolation shadow readback");
+    de_gpu_barrier barrier = {
+        .texture = texture, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, rb, 0, pitch, texture, 0, 0);
+    barrier.before = DE_ACCESS_COPY_SRC;
+    barrier.after = DE_ACCESS_SHADER_READ;
+    de_gpu_cmd_barriers(cmd, &barrier, 1);
+    de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
+    de_gpu_submit submit = {.cmds = &cmd, .cmd_count = 1, .signal = fence, .signal_value = 1};
+    ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_GRAPHICS, &submit), DE_OK);
+    ASSERT_EQ(de_gpu_fence_wait(f->d, fence, 1, WAIT_NS), DE_OK);
+    const u32 *bits = de_gpu_buffer_map(f->d, rb);
+    u64 hash = UINT64_C(1469598103934665603);
+    u32 covered = 0;
+    for (u64 i = 0; i < (u64)size * size; ++i) {
+        covered += bits[i] != 0;
+        hash = (hash ^ bits[i]) * UINT64_C(1099511628211);
+    }
+    printf("isolation depth size=%u covered=%u hash=%016llx\n", size, covered,
+           (unsigned long long)hash);
+    EXPECT_GE(covered, minimum_covered);
+    de_gpu_fence_destroy(f->d, fence);
+    de_gpu_buffer_destroy(f->d, rb);
+    return hash;
+}
+static u64 isolation_shadow(rfx *f, de_view view, de_light_kind kind, u64 expected) {
+    if (kind == DE_LIGHT_DIRECTIONAL) {
+        de__csm_info info;
+        ASSERT_TRUE(de__csm_get(f->r->csm, view, &info));
+        ASSERT_TRUE(info.ready);
+        ASSERT_EQ(info.lights, 1u);
+        EXPECT_EQ(info.data[1].identity[0] | ((u64)info.data[1].identity[1] << 32), expected);
+        u64 hash = 0;
+        for (u32 i = 0; i < info.cascades; ++i) {
+            // The two-metre plane spans resolution/radius texels. Use its guaranteed interior
+            // footprint, allowing one edge texel per side, rather than a fixed far-cascade area.
+            const u32 interior =
+                (u32)fmaxf(1, floorf(info.resolution / info.data[1 + i].sphere[3]) - 2);
+            hash ^=
+                isolation_depth_hash(f, info.mirrors[i], info.resolution, interior * interior) + i;
+        }
+        return hash;
+    }
+    de__atlas_info info;
+    ASSERT_TRUE(de__shadow_atlas_get(f->r->shadow_atlas, view, &info));
+    ASSERT_TRUE(info.ready);
+    ASSERT_EQ(info.lights, 1u);
+    EXPECT_EQ(info.data[1].identity[0] | ((u64)info.data[1].identity[1] << 32), expected);
+    return isolation_depth_hash(f, info.mirror, info.size, 100);
+}
+static void public_light_isolation(rfx *f, de_light_kind kind) {
+    start(f, DE_GPU_METAL, true);
+    de_mesh mesh;
+    de_material material;
+    isolation_assets(f, &mesh, &material);
+    ASSERT_EQ(
+        de_world_create(&(de_world_desc){.allocator = &f->alloc, .types = f->types}, &f->world),
+        DE_OK);
+    de_renderer_attach(f->r, f->world);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "1"), DE_OK);
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.ambient_fallback"), "0"), DE_OK);
+    de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+    settings.ao = settings.reflections = settings.gi = settings.sss = settings.volumetrics =
+        DE_QUALITY_OFF;
+    de_renderer_set_settings(f->r, &settings);
+    const de_cvar emissive_threshold = de_cvar_find("r.emissive_light_threshold");
+    const f64 old_emissive_threshold = de_cvar_float(emissive_threshold);
+    ASSERT_EQ(de_cvar_set(emissive_threshold, "0"), DE_OK);
+    de_gpu_texture targets[2];
+    for (u32 i = 0; i < 2; ++i) {
+        targets[i] = de_gpu_texture_create(
+            f->d, &(de_gpu_texture_desc){.width = ISOLATION_SIZE,
+                                         .height = ISOLATION_SIZE,
+                                         .format = DE_FMT_RGBA8_UNORM,
+                                         .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                                  DE_USAGE_COPY_SRC});
+        ASSERT_TRUE(targets[i].id != 0);
+    }
+    de_test_light_scene scene = {0};
+    ASSERT_EQ(de_test_light_scene_create(f->r, f->world, mesh, material, targets, kind, &scene),
+              DE_OK);
+    for (u32 i = 0; i < 8; ++i)
+        isolation_frame(f);
+    const u64 office_shadow = isolation_shadow(f, scene.views[0], kind, scene.lights[0].bits);
+    (void)isolation_shadow(f, scene.views[1], kind, scene.lights[1].bits);
+    u8 before[2][ISOLATION_SIZE * ISOLATION_SIZE * 4], after[sizeof before[0]];
+    for (u32 i = 0; i < 2; ++i) {
+        isolation_read(f, targets[i], before[i]);
+        u32 colored = 0, leaked = 0;
+        for (u32 p = 0; p < ISOLATION_SIZE * ISOLATION_SIZE; ++p) {
+            colored += before[i][4 * p + i] > 10;
+            leaked += before[i][4 * p + (1 - i)] > 1;
+        }
+        printf("public light isolation kind=%u view=%u lit=%u leaked=%u\n", kind, i, colored,
+               leaked);
+        EXPECT_GT(colored, 100u);
+        EXPECT_EQ(leaked, 0u);
+    }
+    // N's selection must survive a new mask written after Extract and before render recording.
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, .016f, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, .016f, 0), DE_OK);
+    ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[1], 1), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->world), DE_OK);
+    de__render_world_wait_idle(f->r);
+    de_gpu_wait_idle(f->d);
+    isolation_read(f, targets[1], after);
+    EXPECT_MEMEQ(after, before[1], sizeof after);
+    isolation_frame(f);
+    EXPECT_EQ(isolation_shadow(f, scene.views[0], kind, scene.lights[0].bits), office_shadow);
+    isolation_read(f, targets[0], after);
+    EXPECT_MEMEQ(after, before[0], sizeof after);
+    isolation_read(f, targets[1], after);
+    EXPECT_MEMEQ(after, before[0], sizeof after);
+    ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[1], 0), DE_OK);
+    isolation_frame(f);
+    isolation_read(f, targets[0], after);
+    EXPECT_MEMEQ(after, before[0], sizeof after);
+    isolation_read(f, targets[1], after);
+    u32 lit = 0;
+    for (u32 p = 0; p < ISOLATION_SIZE * ISOLATION_SIZE; ++p)
+        lit += after[4 * p] || after[4 * p + 1] || after[4 * p + 2];
+    EXPECT_EQ(lit, 0u);
+    ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[1], 2), DE_OK);
+    de_entity monitor;
+    de_material monitor_material;
+    ASSERT_EQ(de_test_light_scene_monitor(f->r, f->world, mesh, material, targets[1], &monitor,
+                                          &monitor_material),
+              DE_OK);
+    isolation_frame(f);
+    u8 monitored[sizeof after];
+    isolation_read(f, targets[0], monitored);
+    u32 green_monitor = 0, outside_changed = 0;
+    for (u32 y = 0; y < ISOLATION_SIZE; ++y)
+        for (u32 x = 0; x < ISOLATION_SIZE; ++x) {
+            const u32 at = (y * ISOLATION_SIZE + x) * 4;
+            if (x < 40 && y < 40)
+                green_monitor += monitored[at + 1] > 10;
+            else
+                outside_changed += memcmp(monitored + at, before[0] + at, 4) != 0;
+        }
+    EXPECT_GT(green_monitor, 10u);
+    EXPECT_EQ(outside_changed, 0u);
+    ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[1], 1), DE_OK);
+    isolation_frame(f);
+    isolation_read(f, targets[0], after);
+    u32 monitor_changed = 0, green_remaining = 0;
+    outside_changed = 0;
+    for (u32 y = 0; y < ISOLATION_SIZE; ++y)
+        for (u32 x = 0; x < ISOLATION_SIZE; ++x) {
+            const u32 at = (y * ISOLATION_SIZE + x) * 4;
+            if (x < 40 && y < 40) {
+                monitor_changed += memcmp(monitored + at, after + at, 4) != 0;
+                green_remaining += after[at + 1] > 1;
+            } else
+                outside_changed += memcmp(monitored + at, after + at, 4) != 0;
+        }
+    EXPECT_GT(monitor_changed, 10u);
+    EXPECT_EQ(green_remaining, 0u);
+    EXPECT_EQ(outside_changed, 0u);
+    EXPECT_EQ(isolation_shadow(f, scene.views[0], kind, scene.lights[0].bits), office_shadow);
+    de_entity_despawn(f->world, monitor);
+    ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[1], 2), DE_OK);
+    isolation_frame(f);
+    de_material_destroy_instance(f->r, monitor_material);
+    const de_component camera_component = de_component_find(f->world, "DeCamera");
+    for (u32 i = 0; i < 2; ++i) {
+        const de_view old = scene.views[i];
+        de_view_destroy(f->r, old);
+        scene.views[i] = de_view_create(
+            f->r, &(de_view_desc){.target = targets[i], .order = (i32)i, .name = "reordered"});
+        ASSERT_TRUE(scene.views[i].id != 0 && scene.views[i].id != old.id);
+        EXPECT_EQ(de_view_set_light_mask(f->r, old, 1), DE_ERR_INVALID_ARGUMENT);
+        de_error_clear();
+        de_view_set_layer_mask(f->r, scene.views[i], 1u << i);
+        ASSERT_EQ(de_view_set_light_mask(f->r, scene.views[i], 1u << i), DE_OK);
+        ((DeCamera *)de_entity_get(f->world, scene.cameras[i], camera_component))->view =
+            scene.views[i];
+    }
+    isolation_frame(f);
+    isolation_read(f, targets[0], after);
+    EXPECT_MEMEQ(after, before[0], sizeof after);
+    isolation_read(f, targets[1], after);
+    EXPECT_MEMEQ(after, before[1], sizeof after);
+    for (u32 i = 0; i < 2; ++i) {
+        de_view_destroy(f->r, scene.views[i]);
+        de_gpu_texture_destroy(f->d, targets[i]);
+    }
+    ASSERT_EQ(de_cvar_set(de_cvar_find("r.ambient_fallback"), ".03"), DE_OK);
+    char threshold[64];
+    snprintf(threshold, sizeof threshold, "%.17g", old_emissive_threshold);
+    ASSERT_EQ(de_cvar_set(emissive_threshold, threshold), DE_OK);
+}
+TEST_F(renderer, public_light_isolation_directional_metal, rfx) {
+    public_light_isolation(f, DE_LIGHT_DIRECTIONAL);
+}
+TEST_F(renderer, public_light_isolation_point_metal, rfx) {
+    public_light_isolation(f, DE_LIGHT_POINT);
 }
 
 #endif

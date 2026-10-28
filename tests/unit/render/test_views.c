@@ -467,6 +467,66 @@ TEST_F(views, hidden_policy_frozen_independent_and_zero_alloc, vfx) {
     de__view_unregister_stage(f->r, observe_hidden, &observer);
 }
 
+typedef struct light_mask_observer {
+    de_view selected;
+    u32 mask, other_mask;
+} light_mask_observer;
+static void observe_light_mask(de__view_frame *vf, void *user) {
+    light_mask_observer *o = user;
+    if (vf->view.id == o->selected.id)
+        o->mask = ~vf->excluded_light_mask;
+    else
+        o->other_mask = ~vf->excluded_light_mask;
+}
+TEST_F(views, light_masks_frozen_independent_generation_safe_and_zero_alloc, vfx) {
+    start(f, DE_GPU_NULL);
+    const de_view main = de_renderer_main_view(f->r);
+    const de_view inset = view(f, "light isolation", 0, 0, .5f, .5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, main, 0)));
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, inset, 0)));
+    light_mask_observer o = {.selected = inset};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_VISIBILITY, 10, "test.light-mask",
+                                      observe_light_mask, &o),
+              DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.mask, ~0u);
+    EXPECT_EQ(o.other_mask, ~0u);
+    ASSERT_EQ(de_view_set_light_mask(f->r, inset, 0x80000002u), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, .016f, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, .016f, 0), DE_OK);
+    de_view_frame_info frozen;
+    ASSERT_TRUE(de_renderer_extract_view_info(f->r, inset, &frozen));
+    EXPECT_EQ(frozen.light_mask, 0x80000002u);
+    ASSERT_EQ(de_view_set_light_mask(f->r, inset, 0), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
+    EXPECT_EQ(o.mask, 0x80000002u);
+    EXPECT_EQ(o.other_mask, ~0u);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.mask, 0u);
+    for (u32 i = 0; i < 8; ++i)
+        ASSERT_EQ(frame(f), DE_OK);
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    de_result result = DE_OK;
+    for (u32 i = 0; i < 25 && result == DE_OK; ++i)
+        result = frame(f);
+    de_alloc_guard_end(&guard);
+    ASSERT_EQ(result, DE_OK);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    de_view_destroy(f->r, inset);
+    EXPECT_EQ(de_view_set_light_mask(f->r, inset, 1), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    de_view next = view(f, "reused", 0, 0, .5f, .5f, 1, (de_gpu_texture){0});
+    EXPECT_NE(next.id, inset.id);
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, next, 0)));
+    o.selected = next;
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.mask, ~0u);
+    EXPECT_EQ(de_view_set_light_mask(NULL, next, 1), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    de__view_unregister_stage(f->r, observe_light_mask, &o);
+}
+
 /* ---- Split screen, render scale, cache ------------------------------------------------------ */
 
 TEST_F(views, split_screen_two_graphs, vfx) {

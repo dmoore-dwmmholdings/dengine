@@ -277,6 +277,7 @@ de_result de__csm_build(de__csm *s, const de__view_frame *vf, const de__vis_cont
         limit = 2;
     for (u32 i = 0; i < world->count && lights < limit; ++i)
         if (world->entity[i] && world->light[i].kind == DE_LIGHT_DIRECTIONAL &&
+            de__light_in_view(&world->light[i], vf->excluded_light_mask) &&
             !de__view_hidden_contains(vf->hidden, world->entity[i]) &&
             world->light[i].cast_shadows && world->light[i].intensity > 0 &&
             isfinite(world->light[i].intensity))

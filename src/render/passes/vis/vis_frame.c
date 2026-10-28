@@ -351,6 +351,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->arena = g->arena;
     vc->gpu_scene = d->gpu_scene;
     vc->hidden = d->hidden;
+    vc->excluded_light_mask = d->excluded_light_mask;
     vc->hidden_count = de__view_hidden_count(d->hidden);
     if (vc->hidden_count) {
         if (!d->hidden_buffer.id)
@@ -361,8 +362,10 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->view = d->view;
     vc->view_slot = d->view_slot;
     vc->scene_view_slot = d->view_slot;
-    vc->view_new = s->views[d->view_slot].id != d->view.id;
+    vc->view_new = s->views[d->view_slot].id != d->view.id ||
+                   s->excluded_light_masks[d->view_slot] != d->excluded_light_mask;
     s->views[d->view_slot] = d->view;
+    s->excluded_light_masks[d->view_slot] = d->excluded_light_mask;
     vc->frame_index = d->frame_index;
     vc->frames_completed = d->frames_completed;
     vc->width = d->width;
@@ -481,6 +484,7 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .layer_mask = vf->layer_mask, /* DENG-239 */
                             .hidden = vf->hidden,
                             .hidden_buffer = vf->hidden_buffer,
+                            .excluded_light_mask = vf->excluded_light_mask,
                             .output_width = vf->viewport_px[2], /* DENG-239: pick coordinates */
                             .output_height = vf->viewport_px[3]};
     if (vf->camera != NULL)

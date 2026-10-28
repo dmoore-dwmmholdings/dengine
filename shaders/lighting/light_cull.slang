@@ -49,7 +49,9 @@ struct CullParams
     uint clear_bytes; // cs_light_clear: bytes of `counters` to zero (a multiple of 4, <= 256)
     uint reserved1;
     uint contact_records;
-    uint hidden_entities, hidden_count, padding;
+    uint hidden_entities;
+    uint hidden_count;
+    uint excluded_light_mask;
 };
 
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
@@ -157,6 +159,7 @@ void cs_light_prep(uint3 id : SV_DispatchThreadID, uniform CullParams pc)
             return;
         DeGpuLight g = de_robuffer<DeGpuLight>(sc.lights)[t];
         if ((g.flags & DE_GPU_LIGHT_LIVE) == 0u || !(g.color.w > 0.0) ||
+            !de_light_in_view(g, pc.excluded_light_mask) ||
             de_hidden_entity(pc.hidden_entities,pc.hidden_count,g.entity_lo,g.entity_hi))
             return;
         if (g.kind == DE_LIGHT_KIND_DIRECTIONAL)

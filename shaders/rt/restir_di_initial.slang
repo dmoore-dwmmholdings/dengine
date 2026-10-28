@@ -12,6 +12,7 @@ void cs_sources(uint3 id:SV_DispatchThreadID,uniform DiPush pc) {
     s.kind=desc.kind;s.index=desc.index;s.first=desc.first;s.material=DI_NONE;
     if(desc.kind==0) {
         DeGpuLight g=de_robuffer<DeGpuLight>(sc.lights)[desc.index];
+        s.first=asuint(g.area.z);
         DeClusterLight l=(DeClusterLight)0;uint kind=g.kind;
         float3 z=float3(g.transform[0].z,g.transform[1].z,g.transform[2].z);
         float3 x=float3(g.transform[0].x,g.transform[1].x,g.transform[2].x);

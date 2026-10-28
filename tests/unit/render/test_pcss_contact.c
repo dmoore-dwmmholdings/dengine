@@ -484,6 +484,39 @@ static void contact_scene(lx *f, de_gpu_backend backend, u32 mode) {
     }
     free(baseline);
 }
+TEST(pcss_contact, contact_view_selection_precedes_the_local_budget) {
+    u64 ids[] = {10, 20, 30};
+    de_affine transforms[] = {at(0, 0, 4), at(0, 0, 4), at(0, 0, 4)};
+    DeLight lights[] = {{.kind = DE_LIGHT_DIRECTIONAL,
+                         .intensity = 100,
+                         .color = {1, 1, 1},
+                         .view_mask = 2,
+                         .cast_shadows = true},
+                        {.kind = DE_LIGHT_POINT,
+                         .intensity = 1000,
+                         .color = {1, 1, 1},
+                         .view_mask = 2,
+                         .cast_shadows = true},
+                        {.kind = DE_LIGHT_POINT,
+                         .intensity = 1,
+                         .color = {1, 1, 1},
+                         .view_mask = 1,
+                         .cast_shadows = true}};
+    de__rw_lights world = {.count = 3, .entity = ids, .transform = transforms, .light = lights};
+    de__contact_metadata selected;
+    de__contact_select_view(&world, ids[0], 1, .05f, ~1u, NULL, &selected);
+    EXPECT_EQ(selected.header[3], 0u);
+    EXPECT_EQ(selected.header[2], 1u);
+    EXPECT_EQ(selected.light[1].entity[0], 30u);
+    const de__view_hidden *hidden = NULL;
+    ASSERT_EQ(de__view_hidden_create(de_heap_allocator(), &ids[2], 1, &hidden), DE_OK);
+    de__contact_select_view(&world, ids[0], 1, .05f, ~1u, hidden, &selected);
+    EXPECT_EQ(selected.header[2], 0u);
+    de__view_hidden_release(hidden);
+    de__contact_select_view(&world, ids[0], 1, .05f, ~0u, NULL, &selected);
+    EXPECT_EQ(selected.header[2], 0u);
+    EXPECT_EQ(selected.header[3], 0u);
+}
 TEST(pcss_contact, contact_physical_selection_and_identity) {
     u64 ids[8] = {900u, 100u, 5004u, 5003u, 5002u, 5001u, 5000u, 4999u};
     de_affine transforms[8];

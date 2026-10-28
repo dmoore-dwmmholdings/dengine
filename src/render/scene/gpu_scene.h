@@ -267,6 +267,8 @@ DE_STATIC_ASSERT(offsetof(de__gs_instance, mesh) == 144 &&
 DE_STATIC_ASSERT(offsetof(de__gs_mesh, position_offset) == 48 && offsetof(de__gs_mesh, lods) == 224,
                  "DeGpuMesh layout");
 DE_STATIC_ASSERT(offsetof(de__gs_light, kind) == 96, "DeGpuLight layout");
+DE_STATIC_ASSERT(offsetof(de__gs_light, area) + 2 * sizeof(f32) == 88,
+                 "DeGpuLight view mask payload offset");
 DE_STATIC_ASSERT(offsetof(de__gs_view, camera_position) == 320 &&
                      offsetof(de__gs_view, instances) == 384,
                  "DeSceneConstants layout");
