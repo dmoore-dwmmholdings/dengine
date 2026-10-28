@@ -4,6 +4,7 @@
  *
  *   de-cook --check <assets.toml> [options]    validate a manifest (check.c, DENG-145)
  *   de-cook cook <assets.toml> [options]       cook a project into a pack (cook_cmd.c, DENG-213)
+ *   de-cook shader <source.slang> [options]   inspect generated code/reflection (DENG-664)
  *
  * Later commands are further entries of `commands`.
  */
@@ -12,6 +13,7 @@
 
 #include "check.h"
 #include "cook_cmd.h"
+#include "shader_cmd.h"
 
 static void write_std(void *user, de_cook_stream stream, const char *text, size_t len) {
     (void)user;
@@ -27,17 +29,20 @@ typedef struct command {
 static const command commands[] = {
     {"--check", de_cook_check_main},
     {"cook", de_cook_cook_main},
+    {"shader", de_cook_shader_main},
 };
 
 static void usage(const de_cook_io *io, de_cook_stream stream) {
-    static const char text[] = "usage: de-cook <command> [arguments]\n"
-                               "\n"
-                               "commands:\n"
-                               "  --check    validate an asset manifest (assets.toml)\n"
-                               "  cook       cook a project into a .dpak pack\n"
-                               "\n"
-                               "`de-cook <command> --help` describes a command.\n"
-                               "\n";
+    static const char text[] =
+        "usage: de-cook <command> [arguments]\n"
+        "\n"
+        "commands:\n"
+        "  --check    validate an asset manifest (assets.toml)\n"
+        "  cook       cook a project into a .dpak pack\n"
+        "  shader     inspect one Slang shader (code, reflection, diagnostics)\n"
+        "\n"
+        "`de-cook <command> --help` describes a command.\n"
+        "\n";
     io->write(io->user, stream, text, sizeof text - 1);
     de_cook_check_usage(io, stream);
 }

@@ -44,6 +44,7 @@ using build_tag_fn = const char *(*)();
 
 /* The reflection functions this file calls, resolved by name. */
 struct reflection_fns {
+    decltype(&spReflection_ToJson) to_json;
     decltype(&spReflection_getEntryPointCount) entry_point_count;
     decltype(&spReflection_getEntryPointByIndex) entry_point_by_index;
     decltype(&spReflection_GetParameterCount) parameter_count;
@@ -246,6 +247,7 @@ void load(slang_state &s) {
     bool all =
         resolve(s.lib, "slang_createGlobalSession2", create) &&
         resolve(s.lib, "spGetBuildTagString", tag) &&
+        resolve(s.lib, "spReflection_ToJson", f.to_json) &&
         resolve(s.lib, "spReflection_getEntryPointCount", f.entry_point_count) &&
         resolve(s.lib, "spReflection_getEntryPointByIndex", f.entry_point_by_index) &&
         resolve(s.lib, "spReflection_GetParameterCount", f.parameter_count) &&
@@ -290,6 +292,10 @@ void load(slang_state &s) {
         SLANG_SUCCEEDED(s.global->checkCompileTargetSupport(SLANG_METAL_LIB));
     s.target_ok[DE__SLANG_METAL] =
         SLANG_SUCCEEDED(s.global->checkCompileTargetSupport(SLANG_METAL));
+    s.target_ok[DE__SLANG_SPIRV_ASM] =
+        SLANG_SUCCEEDED(s.global->checkCompileTargetSupport(SLANG_SPIRV_ASM));
+    s.target_ok[DE__SLANG_DXIL_ASM] =
+        SLANG_SUCCEEDED(s.global->checkCompileTargetSupport(SLANG_DXIL_ASM));
     s.ok = true;
 #endif
 }
@@ -458,11 +464,13 @@ void append_diag(de__slang_compile_result *out, ISlangBlob *diag) {
     if (n > 0 && text[n - 1u] == '\0')
         --n;
     if (n > cap) {
+        out->diagnostics_truncated = true;
         text += n - cap;
         n = cap;
     }
     size_t used = std::strlen(out->diagnostics);
     if (used + n > cap) {
+        out->diagnostics_truncated = true;
         size_t drop = used + n - cap;
         std::memmove(out->diagnostics, out->diagnostics + drop, used - drop);
         used -= drop;
@@ -473,7 +481,8 @@ void append_diag(de__slang_compile_result *out, ISlangBlob *diag) {
 
 void set_diag(de__slang_compile_result *out, const char *fmt, const char *a = "",
               const char *b = "") {
-    std::snprintf(out->diagnostics, sizeof out->diagnostics, fmt, a, b);
+    const int n = std::snprintf(out->diagnostics, sizeof out->diagnostics, fmt, a, b);
+    out->diagnostics_truncated = n < 0 || static_cast<size_t>(n) >= sizeof out->diagnostics;
 }
 
 SlangStage to_slang_stage(u32 stage) {
@@ -596,10 +605,10 @@ std::string module_name_of(const char *path) {
 de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
                          de__slang_compile_result *out) {
     static const SlangCompileTarget k_formats[DE__SLANG_TARGET_COUNT_] = {
-        SLANG_SPIRV, SLANG_DXIL, SLANG_METAL_LIB, SLANG_METAL};
+        SLANG_SPIRV, SLANG_DXIL, SLANG_METAL_LIB, SLANG_METAL, SLANG_SPIRV_ASM, SLANG_DXIL_ASM};
     static const char *const k_target_define[DE__SLANG_TARGET_COUNT_] = {
-        "DE_SHADER_TARGET_SPIRV", "DE_SHADER_TARGET_DXIL", "DE_SHADER_TARGET_METAL",
-        "DE_SHADER_TARGET_METAL"};
+        "DE_SHADER_TARGET_SPIRV", "DE_SHADER_TARGET_DXIL",  "DE_SHADER_TARGET_METAL",
+        "DE_SHADER_TARGET_METAL", "DE_SHADER_TARGET_SPIRV", "DE_SHADER_TARGET_DXIL"};
 
     /* Defines: the target's, then the permutation's ("NAME" or "NAME=VALUE"). */
     std::vector<std::string> names, values;
@@ -628,9 +637,9 @@ de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
 
     slang::TargetDesc td = {};
     td.format = k_formats[d.target];
-    if (d.target == DE__SLANG_SPIRV)
+    if (d.target == DE__SLANG_SPIRV || d.target == DE__SLANG_SPIRV_ASM)
         td.profile = s.global->findProfile("spirv_1_6");
-    else if (d.target == DE__SLANG_DXIL)
+    else if (d.target == DE__SLANG_DXIL || d.target == DE__SLANG_DXIL_ASM)
         td.profile = s.global->findProfile(
             "sm_6_6"); // RT stages emit DXIL libraries (lib_6_6), not compute entry blobs.
     td.lineDirectiveMode = SLANG_LINE_DIRECTIVE_MODE_NONE;
@@ -729,6 +738,10 @@ de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
     }
 
     const size_t count = eps.size();
+    if (d.max_entries && count > d.max_entries) {
+        set_diag(out, "too many shader entry points for inspection");
+        return DE_ERR_INVALID_ARGUMENT;
+    }
     const de_allocator *a = d.allocator;
     out->alloc_ = a;
     out->entries = static_cast<de__slang_entry_out *>(DE_ALLOC(
@@ -744,6 +757,7 @@ de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
     out->entry_count = static_cast<u32>(count);
 
     /* One program per entry point: its code and its layout are its own. */
+    u64 output_bytes = 0;
     for (size_t i = 0; i < count; ++i) {
         std::vector<slang::IComponentType *> comps(parts);
         comps.push_back(eps[i].p);
@@ -793,6 +807,34 @@ de_result compile_locked(slang_state &s, const de__slang_compile_desc &d,
                 o.threadgroup[k] = tg[k] > 0xffffffffu ? 0xffffffffu : static_cast<u32>(tg[k]);
         }
         o.push_constant_bytes = push_constant_bytes(s.fn, refl, ep);
+        output_bytes += code->getBufferSize();
+        if (d.max_output_bytes && output_bytes > d.max_output_bytes) {
+            set_diag(out, "shader inspection output exceeds its byte limit");
+            return DE_ERR_INVALID_ARGUMENT;
+        }
+        if (d.reflection_json) {
+            com_ref<ISlangBlob> json;
+            if (SLANG_FAILED(s.fn.to_json(refl, nullptr, json.put())) || json.p == nullptr ||
+                json->getBufferSize() > 8u * 1024u * 1024u) {
+                set_diag(out, "cannot produce bounded shader reflection JSON");
+                return DE_ERR_INTERNAL;
+            }
+            o.reflection_size = json->getBufferSize();
+            output_bytes += o.reflection_size;
+            if (d.max_output_bytes && output_bytes > d.max_output_bytes) {
+                set_diag(out, "shader inspection output exceeds its byte limit");
+                return DE_ERR_INVALID_ARGUMENT;
+            }
+            o.reflection_json =
+                static_cast<char *>(DE_ALLOC(a, o.reflection_size + 1u, 1, DE_MEM_ASSET));
+            if (!o.reflection_json) {
+                set_diag(out, "out of memory");
+                return DE_ERR_OUT_OF_MEMORY;
+            }
+            std::memcpy(o.reflection_json, json->getBufferPointer(),
+                        static_cast<size_t>(o.reflection_size));
+            o.reflection_json[o.reflection_size] = '\0';
+        }
 
         size_t size = code->getBufferSize();
         o.code = DE_ALLOC(a, size != 0 ? size : 1u, DE__SHADER_CODE_ALIGN, DE_MEM_ASSET);
@@ -824,6 +866,10 @@ const char *de__slang_target_name(de__slang_target t) {
         return "metallib";
     case DE__SLANG_METAL:
         return "metal";
+    case DE__SLANG_SPIRV_ASM:
+        return "spirv-asm";
+    case DE__SLANG_DXIL_ASM:
+        return "dxil-asm";
     default:
         return "unknown";
     }
@@ -881,12 +927,18 @@ de_result de__slang_compile(const de__slang_compile_desc *d, de__slang_compile_r
         while (first != nullptr && first != out->diagnostics && first[-1] != '\n' &&
                first[-1] != ' ')
             first = std::strstr(first + 1, "error");
-        if (first != nullptr && first != out->diagnostics)
+        if (first != nullptr && first != out->diagnostics) {
+            /* Keep the file/line prefix of the first error for machine diagnostics. */
+            while (first > out->diagnostics && first[-1] != '\n')
+                --first;
             std::memmove(out->diagnostics, first, std::strlen(first) + 1u);
+        }
         char keep[sizeof out->diagnostics];
+        const bool truncated = out->diagnostics_truncated;
         std::memcpy(keep, out->diagnostics, sizeof keep);
         de__slang_compile_result_free(out);
         std::memcpy(out->diagnostics, keep, sizeof keep);
+        out->diagnostics_truncated = truncated;
     }
     return r;
 }
@@ -899,6 +951,8 @@ void de__slang_compile_result_free(de__slang_compile_result *r) {
     }
     const de_allocator *a = r->alloc_;
     for (u32 i = 0; i < r->entry_count; ++i) {
+        if (r->entries != nullptr && r->entries[i].reflection_json != nullptr)
+            DE_FREE(a, r->entries[i].reflection_json, r->entries[i].reflection_size + 1u);
         if (r->entries != nullptr && r->entries[i].code != nullptr)
             DE_FREE(a, r->entries[i].code,
                     r->entries[i].code_size != 0 ? static_cast<size_t>(r->entries[i].code_size)

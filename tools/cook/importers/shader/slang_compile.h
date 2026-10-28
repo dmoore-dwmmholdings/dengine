@@ -25,14 +25,16 @@ DE_EXTERN_C_BEGIN
 
 /** What a compile produces. */
 typedef enum de__slang_target {
-    DE__SLANG_SPIRV = 0,    /**< SPIR-V 1.6 binary (Vulkan 1.3) */
-    DE__SLANG_DXIL = 1,     /**< DXIL, shader model 6.6 (needs DXC on the host) */
-    DE__SLANG_METALLIB = 2, /**< Metal library (needs the Metal toolchain: macOS) */
-    DE__SLANG_METAL = 3,    /**< Metal source text (tests and debugging) */
+    DE__SLANG_SPIRV = 0,     /**< SPIR-V 1.6 binary (Vulkan 1.3) */
+    DE__SLANG_DXIL = 1,      /**< DXIL, shader model 6.6 (needs DXC on the host) */
+    DE__SLANG_METALLIB = 2,  /**< Metal library (needs the Metal toolchain: macOS) */
+    DE__SLANG_METAL = 3,     /**< Metal source text (tests and debugging) */
+    DE__SLANG_SPIRV_ASM = 4, /**< SPIR-V disassembly (inspection tools) */
+    DE__SLANG_DXIL_ASM = 5,  /**< DXIL disassembly (requires DXC) */
     DE__SLANG_TARGET_COUNT_
 } de__slang_target;
 
-/** "spirv", "dxil", "metallib", "metal". */
+/** Target name, including the "-asm" suffix for inspection targets. */
 const char *de__slang_target_name(de__slang_target t);
 
 /**
@@ -77,6 +79,8 @@ typedef struct de__slang_entry_out {
     u32 stage; /**< de__shader_stage */
     u32 threadgroup[3];
     u32 push_constant_bytes; /**< entry-point uniforms and push-constant buffers, this layout */
+    char *reflection_json;   /**< Optional full Slang layout JSON, NUL terminated. */
+    u64 reflection_size;
 } de__slang_entry_out;
 
 typedef struct de__slang_compile_desc {
@@ -102,6 +106,9 @@ typedef struct de__slang_compile_desc {
     u32 entry_count;
     /** Code buffers, entry names and the result arrays; must be valid. */
     const de_allocator *allocator;
+    bool reflection_json; /**< Inspection only; normal cooks avoid this allocation. */
+    u32 max_entries;      /**< 0: no inspection limit. */
+    u64 max_output_bytes; /**< 0: no inspection limit; code plus optional reflection. */
 } de__slang_compile_desc;
 
 typedef struct de__slang_compile_result {
@@ -111,6 +118,7 @@ typedef struct de__slang_compile_result {
     char **entry_names;
     /** Slang's warnings (also on success), or the error. NUL-terminated, possibly cut. */
     char diagnostics[2048];
+    bool diagnostics_truncated;
 
     /* Private. */
     const de_allocator *alloc_;

@@ -73,6 +73,14 @@ target_sources(de_cooker PRIVATE importers/scene/scene_import.c)
 # names it; `de_cook_shader` remains as an INTERFACE alias of de_cooker.
 add_subdirectory(importers/shader)
 
+# DENG-664: single-file inspection command; parsers also link into unit/fuzz harnesses.
+add_library(de_cook_shader_cmd STATIC shader_cmd.c shader_args.c shader_cmd.h)
+target_include_directories(de_cook_shader_cmd PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+    PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+target_link_libraries(de_cook_shader_cmd PUBLIC de_cook_check PRIVATE de_cooker de_build_flags)
+set_target_properties(de_cook_shader_cmd PROPERTIES FOLDER "dengine/tools")
+target_link_libraries(de-cook PRIVATE de_cook_shader_cmd)
+
 # DENG-102: the FBX front end of the model importer (tools/cook/importers/model/fbx_*.c): ufbx
 # (tools-only vendored library) into the same model IR as glTF. Entry for the fuzz target:
 # "cook/importers/model/fbx_import.h" (de_model_fbx_load).

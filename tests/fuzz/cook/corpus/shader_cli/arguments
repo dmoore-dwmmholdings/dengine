@@ -1,0 +1,13 @@
+test.slang
+--target
+spirv
+--code
+code.txt
+--reflection
+reflection.json
+--report
+report.json
+-Iinclude path
+-DVALUE=2
+--entry
+cs_main

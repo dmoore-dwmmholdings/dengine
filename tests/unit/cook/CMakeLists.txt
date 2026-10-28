@@ -6,6 +6,15 @@ if(NOT DE_BUILD_TOOLS)
     return()
 endif()
 
+de_add_test(NAME shader_cli SOURCES test_shader_cli.c LIBS de_cook_shader_cmd)
+if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR))
+    add_test(NAME shader_cli.outputs COMMAND "${CMAKE_COMMAND}"
+        "-DDE_CLI=$<TARGET_FILE:de-cook>" "-DDE_ROOT=${DE_ROOT_DIR}"
+        "-DDE_TMP=${CMAKE_CURRENT_BINARY_DIR}/shader_cli_tmp"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/shader_cli_outputs.cmake")
+    set_tests_properties(shader_cli.outputs PROPERTIES LABELS "unit;cook;shader" TIMEOUT 180)
+endif()
+
 de_add_test(NAME cook_check SOURCES test_check.c LIBS de_cook_check de_platform)
 if(TARGET test_cook_check)
     target_compile_definitions(test_cook_check PRIVATE

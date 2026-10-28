@@ -1,0 +1,6 @@
+error[E30015]: undefined identifier
+ --> C:\shader space\a.slang:3:18
+  |
+3 | void main() { missing_identifier = 1; }
+  |                  ^^^^^^^^^^^^^^^^^^ undefined identifier
+error[E39999]: import failed
