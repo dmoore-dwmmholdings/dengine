@@ -592,3 +592,18 @@ license_file = "LICENSE.txt"
 files = ["scipy/stats/_sobol_direction_numbers.npz"]
 local = ["JOE_KUO_LICENSE"]
 notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matrix; no runtime dependency."
+
+# DIDE's editor IPC protocol for the engine side (DENG-555, DENG-623): the generated C encoders and
+# decoders, the hand-written transport and mpack 1.1.1, copied from dide `protocol/c` at the commit
+# below (README "Vendoring into DEngine"). The DIDE repo is the source of truth: regenerate there,
+# then copy again. TODO(DENG-623): sha256 is a placeholder until that commit is pushed and its
+# archive can be hashed; `vendor.py verify` fails until then.
+[[lib]]
+name = "dide_protocol"
+version = "1.0-93a5ab93bed5"
+url = "https://github.com/dmoore-dwmmholdings/dide/archive/93a5ab93bed58b09b0b722e975edb7a2ec3fc972.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+license = "MIT"
+license_file = "protocol/c/third_party/mpack/LICENSE"
+files = ["protocol/c/de_editor_*", "protocol/c/third_party/mpack/*"]
+notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."

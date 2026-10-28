@@ -614,6 +614,27 @@ static de_result cc_make_native_dir(const char *path) {
  * and component types land in the tool's asset system and registry, so the cooker mirrors them
  * like the built-in ones.
  */
+static int cc_register_game(cc_run *run) {
+    u32 before = 0;
+    (void)de__asset_type_names(run->assets, &before);
+    de_engine *e = &run->engine;
+    memset(e, 0, sizeof *e);
+    e->allocator = run->a;
+    e->tasks = run->tasks;
+    e->types = run->types;
+    e->world = run->world;
+    e->assets = run->assets;
+    run->game.table.register_types(e, run->types);
+    /* register_types cannot report a failure; a type it did not register shows up as an unknown
+     * type in the manifest check. Drop what it left in the error context (it may point into
+     * the library). */
+    de_error_clear();
+    u32 after = 0;
+    (void)de__asset_type_names(run->assets, &after);
+    run->game_asset_types = after - before;
+    return -1;
+}
+
 static int cc_load_game(cc_run *run) {
     const de_cook_io *io = run->io;
     const char *arg = run->o->game;
@@ -638,27 +659,9 @@ static int cc_load_game(cc_run *run) {
     int n = snprintf(path, sizeof path, "%s%s", has_dir ? "" : "./", arg);
     if (n < 0 || (size_t)n >= sizeof path)
         return cc_io_error(io, "game library path too long:", arg);
-    u32 before = 0;
-    (void)de__asset_type_names(run->assets, &before);
     if (de__game_module_load(&run->game, path) != DE_OK)
         return cc_io_error(io, "cannot load the game library", arg);
-
-    de_engine *e = &run->engine;
-    memset(e, 0, sizeof *e);
-    e->allocator = run->a;
-    e->tasks = run->tasks;
-    e->types = run->types;
-    e->world = run->world;
-    e->assets = run->assets;
-    run->game.table.register_types(e, run->types);
-    /* register_types cannot report a failure; a type it did not register shows up as an unknown
-     * type in the manifest check. Drop what it left in the error context (it may point into
-     * the library). */
-    de_error_clear();
-    u32 after = 0;
-    (void)de__asset_type_names(run->assets, &after);
-    run->game_asset_types = after - before;
-    return -1;
+    return cc_register_game(run);
 #endif
 }
 
@@ -706,6 +709,16 @@ static int cc_setup_runtime(cc_run *run) {
     ad.io_threads = 1;
     if (de_asset_system_create(&ad, &run->assets) != DE_OK)
         return cc_io_error(io, "cannot create the asset system", NULL);
+    const de_game_api *linked = run->hooks != NULL ? run->hooks->game : NULL;
+    if (run->o->game != NULL && linked != NULL)
+        return cc_io_error(io, "--game is not allowed: this tool links its game", NULL);
+    if (linked != NULL) {
+        if (de__game_module_set_static(&run->game, linked) != DE_OK)
+            return cc_io_error(io, "the linked game's API is not valid", NULL);
+        int rc = cc_register_game(run);
+        if (rc >= 0)
+            return rc;
+    }
     if (run->o->game != NULL) {
         int rc = cc_load_game(run);
         if (rc >= 0)
@@ -1188,7 +1201,7 @@ static int cc_cook(cc_run *run) {
         cc_printf(io, DE_COOK_STDOUT, "  cache hits: %llu, misses: %llu, stores: %llu\n",
                   (unsigned long long)cs.hits, (unsigned long long)cs.misses,
                   (unsigned long long)cs.stores);
-    if (o->game != NULL)
+    if (run->game.api != NULL)
         cc_printf(io, DE_COOK_STDOUT, "  game: %s (%u asset types added)\n", run->game.table.name,
                   (unsigned)run->game_asset_types);
     cc_printf(io, DE_COOK_STDOUT, "  bytes raw: %llu, stored: %llu, pack: %llu\n",

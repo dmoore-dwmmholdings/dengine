@@ -170,3 +170,6 @@ endif()
 
 # DENG-96: the console command registry (de_debug.h, console commands section; SPEC §18.6).
 target_sources(de_core PRIVATE command_internal.h command.c)
+
+# DENG-572: debug draw (de_debug.h, debug draw section): categories, lines, shapes, pause.
+target_sources(de_core PRIVATE debug_draw.c)

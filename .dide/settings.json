@@ -1,0 +1,3 @@
+{
+  "cmake.configurePreset": "windows-clang-cl-dev"
+}

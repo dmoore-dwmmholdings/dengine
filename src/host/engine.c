@@ -5,6 +5,9 @@
  * hidden globals). The process-wide services (profiler, log, VFS, cvar registry) are not
  * created here: de_host_run starts them before the engine and stops them after it.
  */
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS /* getenv: editor sessions (DENG-647) */
+#endif
 #include "host/engine_internal.h"
 #include "host/host_crash.h" /* DENG-96 */
 #include "host/host_packs.h" /* DENG-213 */
@@ -12,6 +15,7 @@
 #include <dengine/de_debug.h>
 #include <dengine/de_anim.h>
 #include "anim/anim_host.h"
+#include <dengine/de_gameplay.h> /* DENG-80: de_tilemap_attach */
 #include <dengine/de_text.h>
 #include <dengine/de_input.h> /* DENG-84 */
 #include <dengine/de_math.h>
@@ -26,6 +30,7 @@
 #include <dengine/de_ui.h>
 #endif
 
+#include <stdlib.h> /* getenv: editor sessions (DENG-647) */
 #include <string.h>
 
 /* Release owned modules in dependency order, including game-created GPU/renderer/UI.
@@ -302,6 +307,12 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
     de__anim_bind_renderer(e->pub.anim, e->pub.renderer);
     de_anim_attach(e->pub.anim, e->pub.world);
 
+    /* DENG-80: tilemaps (the `tilemap` asset type, DeTilemap, `tilemap.update`). Side view, the
+     * renderer's default 2D plane; a top-down game detaches and attaches again with its desc. */
+    r = de_tilemap_attach(e->pub.world, e->pub.assets, NULL);
+    if (r != DE_OK)
+        return engine_fail(e, r, "tilemap");
+
     /* 8. Select the surface before window creation: game init can create its renderer on
      * this same window. D3D12 and explicit "none" need no API-specific surface. */
     if (!e->headless) {
@@ -314,6 +325,11 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out) {
         wnd.display_index = -1;
         wnd.resizable = true;
         wnd.high_dpi = e->config.window_high_dpi;
+        /* DENG-647: an editor session shows the game in the IDE, not in a window of its own. */
+        if (de_engine_editor_session(&e->pub)) {
+            const char *show = getenv("DE_EDITOR_SHOW_WINDOW");
+            wnd.hidden = show == NULL || show[0] != '1';
+        }
         wnd.surface = e->config.window_surface;
         if (e->config.window_surface_auto) {
             wnd.surface = DE_WINDOW_SURFACE_NONE;
@@ -370,6 +386,16 @@ void de_engine_request_quit(de_engine *e) {
     if (e == NULL)
         return;
     de_atomic_store_u32(&de__engine_from(e)->quit, 1u, DE_ATOMIC_RELEASE);
+}
+
+bool de_engine_editor_session(const de_engine *e) {
+    (void)e;
+#if DE_HAS_EDITOR_SERVICE
+    const char *token = getenv("DE_EDITOR_TOKEN");
+    return token != NULL && token[0] != '\0';
+#else
+    return false;
+#endif
 }
 
 bool de_engine_quit_requested(const de_engine *e) {

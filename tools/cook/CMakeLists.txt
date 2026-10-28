@@ -220,3 +220,18 @@ target_sources(de_cooker PRIVATE importers/sprite_proxy.c)
 # DENG-264: string-table directory importer and shared deterministic message validation.
 target_sources(de_cooker PRIVATE "${DE_ROOT_DIR}/src/text/loc/string_table_import.c")
 target_link_libraries(de_cooker PRIVATE de_loc_common)
+
+# DENG-80: the tilemap importer (importers/tilemap/): LDtk (.ldtk/.ldtkl) and Tiled (.tmj/.tmx,
+# .tsj/.tsx) to DTMP (src/gameplay/tilemap/tilemap_cooked.h, header-only). Own strict JSON and
+# TMX-subset XML readers; zlib/gzip layers through stb_image's zlib functions, zstd layers through
+# the vendored zstd. Registered as the built-in `tilemap` importer (engine_importers.c).
+target_sources(de_cooker PRIVATE
+    importers/tilemap/tilemap_import.h
+    importers/tilemap/tilemap_ir.h
+    importers/tilemap/tilemap_ir.c
+    importers/tilemap/tilemap_json.c
+    importers/tilemap/tilemap_xml.c
+    importers/tilemap/import_tiled.c
+    importers/tilemap/import_ldtk.c
+    importers/tilemap/tilemap_import.c)
+target_link_libraries(de_cooker PRIVATE de_tp_stb de_tp_zstd)

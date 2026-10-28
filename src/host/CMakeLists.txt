@@ -94,3 +94,33 @@ target_sources(de_host PRIVATE host_packs.h host_packs.c)
 if(TARGET dengine_exe)
     de_d3d12_agility_deploy(dengine_exe)
 endif()
+
+# DENG-623 (DENG-622): the Dev-only editor service for DIDE engine sessions (editor/*.c), on the
+# vendored editor IPC (third_party/dide_protocol). Never in Shipping.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    target_sources(de_host PRIVATE
+        editor/editor_internal.h
+        editor/editor.c
+        editor/editor_session.c
+        editor/editor_value.c
+        editor/editor_reflect.c
+        editor/editor_world.c
+        editor/editor_edit.c
+        editor/editor_scene.c
+        editor/editor_assets.c
+        editor/editor_logs.c
+        editor/editor_views.c
+        editor/editor_gizmo.c
+        editor/editor_gizmo.h
+        editor/editor_debugdraw.c
+        editor/editor_extra.c)
+    target_link_libraries(de_host PRIVATE de_tp_dide_protocol)
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_dide_protocol)
+    target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=1)
+    # Views (DENG-631): the service's own D3D12 device shares textures with the IDE.
+    if(WIN32 AND TARGET de_gpu_d3d12)
+        target_link_libraries(de_host PRIVATE de_tp_d3d12_agility d3d12 dxgi)
+    endif()
+else()
+    target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=0)
+endif()

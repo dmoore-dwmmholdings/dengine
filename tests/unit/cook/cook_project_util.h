@@ -27,7 +27,7 @@
 
 /* ---- Fixture types (cook_project_types.h) --------------------------------------------------- */
 
-static const de_cook_hooks g_cct_hooks = {cct_register_types, NULL};
+static const de_cook_hooks g_cct_hooks = {cct_register_types, NULL, NULL};
 
 /* ---- Output capture ---------------------------------------------------------------------- */
 

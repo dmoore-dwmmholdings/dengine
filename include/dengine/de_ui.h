@@ -24,7 +24,7 @@ typedef struct de_ui_desc {
     de_window window;        /**< Optional window for output size and safe insets. */
     u32 max_nodes;           /**< Zero:65536 retained nodes. Capacity is allocated at create. */
     de_asset_system *assets; /**< Optional stylesheet and font/texture asset source. */
-    de_view view; /**< Optional view; zero selects renderer main for pixel UI/world pointer. */
+    de_view view; /**< The view the UI draws on (and points into); zero: the renderer's main view. */
 } de_ui_desc;
 
 DE_API de_result de_ui_create(const de_ui_desc *desc, de_ui **out);

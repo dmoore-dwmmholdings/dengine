@@ -21,6 +21,9 @@
  */
 #include "host/host_internal.h"
 #include "host/host_crash.h" /* DENG-96 */
+#if DE_HAS_EDITOR_SERVICE
+#include "host/editor/editor_internal.h" /* DENG-623 */
+#endif
 
 #include <dengine/de_debug.h>
 #if DE_HAS_RENDER
@@ -165,6 +168,9 @@ static de_result host_run_game(de__host *h) {
     /* DENG-93: systems the game adds carry its owner tag, so a hot reload can remove them. */
     de__world_set_system_owner(e->world, DE__HOST_GAME_SYSTEM_OWNER);
     de_error_clear(); /* so a failed init without its own error context is told apart */
+#if DE_HAS_EDITOR_SERVICE
+    de__editor_preinit(h);
+#endif
     r = api->init != NULL ? api->init(e) : DE_OK;
     if (r != DE_OK) {
         de__world_set_system_owner(e->world, DE__SYSTEM_OWNER_ENGINE);
@@ -187,7 +193,15 @@ static de_result host_run_game(de__host *h) {
         api->register_systems(e, e->world);
     de__world_set_system_owner(e->world, DE__SYSTEM_OWNER_ENGINE); /* DENG-93 */
 
+#if DE_HAS_EDITOR_SERVICE
+    /* DENG-623: `--editor-service <endpoint>` (DIDE engine sessions). */
+    r = de__editor_start(h);
+    if (r == DE_OK)
+        r = de__loop_run(h);
+    de__editor_stop(h);
+#else
     r = de__loop_run(h);
+#endif
     /* The previous handlers again: a second signal during shutdown is not swallowed. */
     de__headless_end(h);
 

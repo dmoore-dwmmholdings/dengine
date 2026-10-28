@@ -1,0 +1,10 @@
+# mpack (MIT), the MessagePack library the generated C uses.
+name = "mpack"
+version = "1.1.1"
+url = "https://github.com/ludocode/mpack/releases/download/v1.1.1/mpack-amalgamation-1.1.1.tar.gz"
+archive_sha256 = "24ef7a4b967751740b739bc3a8065d9cd0ca2fb2628bcfedab192c1b4e9df777"
+files = ["src/mpack/mpack.c", "src/mpack/mpack.h", "LICENSE"]
+
+[sha256]
+"mpack.c" = "cd094a4fbc92606319dcccba98fc09e5728edf8fe0a3c389fb9a2e179ab5ebb2"
+"mpack.h" = "3abdc8950bdb4bd44d56f23dca2f77fc776558842137a718ca77879d5e6565e8"

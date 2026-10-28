@@ -228,6 +228,15 @@ void de__asset_reload_update(de_asset_system *s);
 void de__asset_reload_on_change(de_asset_system *s, const char *vpath, de_watch_change change,
                                 bool is_dir);
 
+/** Queues asset `id` for a reload at the next update, as if its source changed (the editor
+ * service's asset.reimport, DENG-629). False when hot reload is off. Main thread. */
+bool de__asset_reload_queue(de_asset_system *s, de_asset_id id);
+
+/** Loads the manifest again now, as a change to it would at the next update: an editor that just
+ * added an entry (DIDE's Create > 3D Object, DENG-650) need not wait for the file watcher. False
+ * when hot reload is off. Main thread. */
+bool de__asset_reload_manifest_now(de_asset_system *s);
+
 /* Pipeline hooks (pipeline.c). `job` is a de__pjob. Main thread. */
 
 /** A normal load published `job`: index the paths it read (no-op for pack jobs). */

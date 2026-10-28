@@ -16,6 +16,7 @@
 #include "cook/importers/model/model_import.h"
 #include "cook/importers/scene/scene_import.h"
 #include "cook/importers/texture/texture_import.h"
+#include "cook/importers/tilemap/tilemap_import.h" /* DENG-80 */
 #if DE_COOKER_HAS_SHADER_IMPORTER /* tools/cook/importers/shader/CMakeLists.txt */
 #include "cook/importers/shader/shader_importer.h"
 #endif
@@ -61,6 +62,7 @@ static const struct {
     {"sound", de_sound_import_type_desc},
     {"model", model_desc},
     {"material", de_mat_toml_import_type_desc}, /* DENG-302: `.mat.toml` */
+    {"tilemap", de_tilemap_import_type_desc},   /* DENG-80: LDtk / Tiled */
 #if DE_COOKER_HAS_SHADER_IMPORTER
     {"shader", shader_desc},
 #endif

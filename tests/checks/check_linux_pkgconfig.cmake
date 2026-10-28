@@ -6,6 +6,14 @@ if(NOT _pkgconfig)
     message("linux_pkgconfig_isolation: SKIPPED (pkg-config unavailable)")
     return()
 endif()
+# Something else by that name (vcpkg installs a `pkg-config.exe` that is vcpkg itself): pkg-config
+# and pkgconf answer --version with a bare version number.
+execute_process(COMMAND "${_pkgconfig}" --version RESULT_VARIABLE _vresult
+    OUTPUT_VARIABLE _version ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT _vresult EQUAL 0 OR NOT _version MATCHES "^[0-9]+(\\.[0-9]+)+$")
+    message("linux_pkgconfig_isolation: SKIPPED (${_pkgconfig} is not pkg-config)")
+    return()
+endif()
 file(REMOVE_RECURSE "${DE_TEST_DIR}")
 set(_root "${DE_TEST_DIR}/sysroot")
 set(_host "${DE_TEST_DIR}/host-pkgconfig")

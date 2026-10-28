@@ -6,6 +6,7 @@
 #ifndef DE_DEBUG_H
 #define DE_DEBUG_H
 #include "de_base.h"
+#include "de_math.h"
 DE_EXTERN_C_BEGIN
 
 /* ---------- Profiling (S06 DENG-94) ----------
@@ -537,6 +538,54 @@ DE_API void de_crash_thread_init(void);
 /** The build ID: the git commit (`git rev-parse --short HEAD` at configure time), or "unknown"
  * outside a git checkout. Written into every crash report. Never NULL. */
 DE_API const char *de_build_id(void);
+
+/* ---------- Debug draw (DENG-572) ----------
+ *
+ * World-space lines and shapes that live for a time and belong to a named category. The editor
+ * service draws them into its views (DENG-632) and lists the categories for the IDE, which turns
+ * them on and off, recolours them and pauses them (paused shapes stay past their lifetime).
+ * Debug and Dev builds; in Shipping every call is a no-op. Any thread.
+ *
+ * A shape drawn with `seconds` 0 lasts one frame. `color` alpha 0 takes the category's colour.
+ */
+typedef struct de_draw_category {
+    u32 id; /**< 0 = invalid */
+} de_draw_category;
+
+/** The category `name`, registered on first use with `rgb` (0xRRGGBB). `game` marks a category
+ * game code defines. Up to 64 categories; an invalid id after that. */
+DE_API de_draw_category de_draw_category_register(const char *name, u32 rgb, bool game);
+DE_API void de_draw_line(de_draw_category c, de_dvec3 a, de_dvec3 b, de_vec4 color, f32 seconds);
+DE_API void de_draw_arrow(de_draw_category c, de_dvec3 from, de_dvec3 to, de_vec4 color, f32 seconds);
+DE_API void de_draw_box(de_draw_category c, de_dvec3 min, de_dvec3 max, de_vec4 color, f32 seconds);
+DE_API void de_draw_sphere(de_draw_category c, de_dvec3 center, f32 radius, de_vec4 color,
+                           f32 seconds);
+/** A text label at `at` (the editor draws a marker there; the text is counted). */
+DE_API void de_draw_text(de_draw_category c, de_dvec3 at, const char *text, de_vec4 color,
+                         f32 seconds);
+
+/** One live line, as the editor reads them. */
+typedef struct de_draw_line_item {
+    de_dvec3 a, b;
+    de_vec4 color;
+} de_draw_line_item;
+/** One category, as the editor reads them. */
+typedef struct de_draw_category_info {
+    const char *name;
+    u32 rgb;
+    bool on, game;
+    u32 shapes; /**< drawn in the last frame */
+} de_draw_category_info;
+
+DE_API void de_draw_set_enabled(const char *category, bool on);
+DE_API void de_draw_set_color(const char *category, u32 rgb);
+DE_API void de_draw_set_paused(bool paused);
+DE_API bool de_draw_paused(void);
+/** Number of categories (registration order); `out` (nullable) gets up to `cap` of them. */
+DE_API u32 de_draw_categories(de_draw_category_info *out, u32 cap);
+/** Ages every shape by `dt` seconds (unless paused) and drops the expired ones; returns the
+ * live lines of enabled categories, up to `cap`, in `out`. Main thread, once per frame. */
+DE_API u32 de_draw_update(f32 dt, de_draw_line_item *out, u32 cap);
 
 DE_EXTERN_C_END
 #endif

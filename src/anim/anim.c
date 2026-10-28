@@ -2,7 +2,7 @@
 #include "asset/slots_internal.h"
 #include <dengine/de_reflect.h>
 #include <string.h>
-#include <math.h>
+
 typedef struct DeAnimSystemRef {
     de_anim_system *system;
 } DeAnimSystemRef;

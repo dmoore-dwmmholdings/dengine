@@ -1,0 +1,19 @@
+[project]
+asset_root = "."
+version = 1
+
+[assets]
+"flappy/font" = {type="font", source="fonts/NotoSans.ttf", mode="msdf", charset="ascii", em_px=48, px_range=6, page_size=1024}
+# Pixel art from art/generate.py (DENG-648).
+"flappy/tex/sky" = {type="texture", source="art/sky.png", pixel_art=true, compression="none"}
+"flappy/tex/rail" = {type="texture", source="art/rail.png", pixel_art=true, compression="none"}
+"flappy/tex/ground" = {type="texture", source="art/ground.png", pixel_art=true, compression="none"}
+"flappy/tex/pipe" = {type="texture", source="art/pipe.png", pixel_art=true, compression="none"}
+"flappy/tex/cap" = {type="texture", source="art/cap.png", pixel_art=true, compression="none"}
+"flappy/tex/bird" = {type="texture", source="art/bird.png", pixel_art=true, compression="none"}
+"flappy/tex/cloud" = {type="texture", source="art/cloud.png", pixel_art=true, compression="none"}
+# The level (DENG-215 scene format).
+"flappy/level" = {type="scene", source="flappy.scene"}
+
+[bundles.flappy_art]
+assets = ["flappy/tex/*"]

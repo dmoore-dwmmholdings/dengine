@@ -275,7 +275,7 @@ TEST(cook_builtin, project_type_wins) {
     cct_path(mpath, sizeof mpath, "wins/proj/assets.toml");
     cct_path(out, sizeof out, "wins");
     const char *a[] = {mpath, "--platform", "linux", "--out", out, "--no-cache", "--quiet", NULL};
-    const de_cook_hooks hooks = {register_copy_shader, NULL};
+    const de_cook_hooks hooks = {register_copy_shader, NULL, NULL};
     ASSERT_EQ(cook_no_hooks(a, &hooks), DE_COOK_EXIT_OK);
 
     size_t n = 0;

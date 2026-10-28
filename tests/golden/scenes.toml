@@ -557,3 +557,12 @@ size = [1920,1080]
 tiers = ["base"]
 threshold_mean = 0.001
 threshold_p99 = 0.015
+
+# DENG-80: the tilemap runtime's chunk sprites (Sprite material model, visibility buffer, lit):
+# examples/scenes/tilemap, two layers, a directional and a point light, animation clock at 0.
+[scene.tilemap_lit_two_layers]
+description = "Two-layer Tiled map drawn as chunked tile sprites through the Sprite material path, lit by a directional and a point light (DENG-80)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.002
+threshold_p99 = 0.02
