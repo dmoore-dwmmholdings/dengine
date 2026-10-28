@@ -1,0 +1,144 @@
+"""Own-made CC0 binary fixtures, generated without Aseprite or third-party artwork.
+
+These are parser oracles. They are not Aseprite-export PNG reference qualification.
+Run from any directory; output is deterministic and each file is under 50 KiB.
+"""
+from pathlib import Path
+import struct
+import zlib
+
+
+def pack(fmt, *values):
+    return struct.pack("<" + fmt, *values)
+
+
+def string(value):
+    data = value.encode("utf-8")
+    return pack("H", len(data)) + data
+
+
+def chunk(kind, data):
+    return pack("IH", len(data) + 6, kind) + data
+
+
+def frame(chunks, ms=100, extended=False):
+    data = b"".join(chunks)
+    return pack("IHHH2xI", len(data) + 16, 0xF1FA,
+                0xFFFF if extended else len(chunks), ms,
+                len(chunks) if extended else 0) + data
+
+
+def layer(name="Body", flags=1, kind=0, level=0, opacity=255, blend=0):
+    return chunk(0x2004, pack("6HB3x", flags, kind, level, 0, 0, blend, opacity)
+                 + string(name) + (pack("I", 0) if kind == 2 else b""))
+
+
+def cel(data, depth=32, kind=0, index=0, linked=0, x=0, y=0, z=0, opacity=255, height=1):
+    head = pack("HhhBHh5x", index, x, y, opacity, kind, z)
+    if kind == 1:
+        body = pack("H", linked)
+    else:
+        body = pack("HH", len(data) // (depth // 8) // height, height)
+        body += zlib.compress(data, level=9) if kind == 2 else data
+    return chunk(0x2005, head + body)
+
+
+def palette(colors, first=0):
+    return chunk(0x2019, pack("III8x", first + len(colors), first, first + len(colors) - 1)
+                 + b"".join(pack("H4B", 0, *color) for color in colors))
+
+
+def user(text):
+    return chunk(0x2020, pack("I", 1) + string(text))
+
+
+def document(frames, depth=32, width=2, height=1, flags=3):
+    body = b"".join(frames)
+    header = bytearray(128)
+    struct.pack_into("<I5HIH", header, 0, 128 + len(body), 0xA5E0,
+                     len(frames), width, height, depth, flags, 100)
+    header[26] = 0
+    return bytes(header) + body
+
+
+def main():
+    out = Path(__file__).parent
+    tags = chunk(0x2018, pack("H8x", 4) + b"".join(
+        pack("HHBH10x", 0, 1, i, i) + string(name)
+        for i, name in enumerate(["walk", "back", "bounce", "back-bounce"])))
+    slices = chunk(0x2022, pack("III", 2, 3, 0) + string("panel")
+                   + pack("IiiIIiiIIii", 0, -1, 0, 2, 1, 0, 0, 2, 1, 1, -2)
+                   + pack("IiiIIiiIIii", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    files = {
+        "rgba.aseprite": document([
+            frame([layer("Group", kind=1, opacity=128), layer(level=1), user("layer-note"),
+                   layer("Hidden", flags=0),
+                   palette([(0, 0, 0, 0)]), user("sprite-note"),
+                   cel(bytes([255, 0, 0, 255, 0, 0, 255, 128]), index=1), user("cel-note"),
+                   cel(bytes([0, 255, 0, 255]), index=2), tags,
+                   *[user(f"tag-{i}") for i in range(4)], slices, user("slice-note")], extended=True),
+            frame([cel(b"", kind=1, index=1, linked=0, x=-1, z=2, opacity=200)], ms=200)]),
+        "indexed.aseprite": document([
+            frame([layer(), chunk(0x0004, pack("HBB3B", 1, 0, 1, 1, 2, 3)),
+                   palette([(0, 0, 0, 0), (255, 0, 0, 255), (0, 0, 255, 128)]),
+                   cel(bytes([1, 0]), depth=8, kind=2)]),
+            frame([palette([(0, 255, 0, 255)], first=1), cel(b"", kind=1, linked=0)])], depth=8),
+        "gray.aseprite": document([frame([layer(), cel(bytes([129, 64]), depth=16)])], depth=16, width=1),
+        "legacy6.aseprite": document([frame([layer(), chunk(0x0011, pack("HBB6B", 1, 0, 2, 0, 32, 63, 63, 32, 0)),
+                                            cel(bytes([1, 0]), depth=8)])], depth=8),
+        "legacy8.aseprite": document([frame([layer(), chunk(0x0004, pack("HBB6B", 1, 0, 2, 0, 123, 255, 255, 123, 0)),
+                                            cel(bytes([1, 0]), depth=8)])], depth=8),
+        "mixed-palette.aseprite": document([
+            frame([layer(), chunk(0x0004, pack("HBB6B", 1, 0, 2, 0, 0, 0, 255, 0, 0)),
+                   cel(bytes([1, 0]), depth=8)]),
+            frame([palette([(0, 255, 0, 255)], first=1), cel(b"", kind=1, linked=0)]),
+            frame([chunk(0x0004, pack("HBB3B", 1, 1, 1, 0, 0, 255)),
+                   cel(b"", kind=1, linked=0)])], depth=8),
+        "palette-packets.aseprite": document([frame([
+            layer(), chunk(0x0004, pack("H", 2) + bytes([1, 2, 255, 0, 0, 0, 0, 255, 4, 1, 0, 255, 0])),
+            cel(bytes([2, 5]), depth=8)])], depth=8),
+        "cycle.aseprite": document([frame([layer(), cel(b"", kind=1, linked=1)]), frame([cel(b"", kind=1, linked=0)])]),
+        "forward.aseprite": document([frame([layer(), cel(b"", kind=1, linked=1)]), frame([cel(bytes([11, 22, 33, 255]))])]),
+        "missing-link.aseprite": document([frame([layer(), cel(b"", kind=1, linked=1)]), frame([])]),
+    }
+    red, green, blue = bytes([255, 0, 0, 255]), bytes([0, 255, 0, 255]), bytes([0, 0, 255, 255])
+    nested = [frame([
+        layer("Background", flags=9), layer("Outer", kind=1, opacity=128),
+        layer("Red", level=1), layer("Inner", kind=1, level=1, opacity=128),
+        layer("Green", level=2), layer("Hidden parent", kind=1, flags=0),
+        layer("Hidden child", level=1), cel(blue * 4, height=2),
+        cel(red, index=2), cel(green, index=4), cel(red, index=6, x=1, y=1)]),
+        frame([cel(b"", kind=1, linked=0), cel(b"", kind=1, index=2, linked=0, x=-1),
+               cel(b"", kind=1, index=4, linked=0, x=1, y=1)])]
+    files["nested.aseprite"] = document(nested, height=2)
+    files["group-flag.aseprite"] = document(nested, height=2, flags=2)
+    files["z-order.aseprite"] = document([
+        frame([layer("Red"), layer("Hidden", flags=0), layer("Blue"),
+               cel(red, z=1), cel(blue, index=2)]),
+        frame([cel(b"", kind=1, linked=0, z=2), cel(b"", kind=1, index=2, linked=0)]),
+        frame([cel(b"", kind=1, linked=0), cel(b"", kind=1, index=2, linked=0, z=-2)]),
+        frame([cel(b"", kind=1, linked=0), cel(b"", kind=1, index=2, linked=0, z=-1)])], width=1)
+    grouped = [frame([layer("Group", kind=1), layer("Red", level=1), layer("Blue"),
+                      cel(red, index=1, z=100), cel(blue, index=2)])]
+    files["group-order.aseprite"] = document(grouped, width=1)
+    files["legacy-group-order.aseprite"] = document(grouped, width=1, flags=1)
+    files["indexed-background.aseprite"] = document([frame([
+        layer("Background", flags=9), layer("Foreground"),
+        palette([(255, 0, 0, 255), (0, 255, 0, 255)]),
+        cel(bytes([0, 0]), depth=8), cel(bytes([0, 1]), depth=8, index=1)])], depth=8)
+    files["warnings.aseprite"] = document([frame([
+        layer("Multiply", blend=1), layer("Hidden blend", flags=0, blend=2),
+        layer("Tiles", kind=2), cel(red)])], width=1)
+    files["alpha.aseprite"] = document([frame([
+        layer("Red"), layer("Blue"), cel(bytes([255, 0, 0, 128])),
+        cel(bytes([0, 0, 255, 128]), index=1)])], width=1)
+    files["deep.aseprite"] = document([frame([
+        *[layer("G", kind=1, level=i) for i in range(127)],
+        layer("Leaf", level=127), cel(red, index=127)])], width=1)
+    for name, data in files.items():
+        assert len(data) < 50 * 1024
+        (out / name).write_bytes(data)
+
+
+if __name__ == "__main__":
+    main()

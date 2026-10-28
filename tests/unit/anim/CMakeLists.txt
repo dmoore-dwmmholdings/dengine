@@ -59,3 +59,13 @@ if(TARGET test_anim)
         set_source_files_properties(test_graph_benchmark.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
     endif()
 endif()
+
+# DENG-81: parser tests have no GPU/runtime dependency; the importer remains tools-only.
+if(DE_BUILD_TOOLS)
+    de_add_test(NAME aseprite SOURCES test_aseprite.c LIBS de_cooker)
+    if(TARGET test_aseprite)
+        target_include_directories(test_aseprite PRIVATE "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_aseprite PRIVATE
+            DE_ASEPRITE_DATA_DIR="${DE_ROOT_DIR}/tests/data/aseprite")
+    endif()
+endif()

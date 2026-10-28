@@ -245,3 +245,9 @@ target_sources(de_cooker PRIVATE
     importers/tilemap/import_ldtk.c
     importers/tilemap/tilemap_import.c)
 target_link_libraries(de_cooker PRIVATE de_tp_stb de_tp_zstd)
+
+# DENG-81: bounded source decoder for the direct Aseprite importer.
+target_sources(de_cooker PRIVATE importers/aseprite/aseprite_parse.c
+    importers/aseprite/aseprite_parse.h
+    importers/aseprite/aseprite_render.c
+    importers/aseprite/aseprite_render.h)
