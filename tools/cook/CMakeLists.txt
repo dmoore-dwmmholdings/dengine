@@ -251,3 +251,5 @@ target_sources(de_cooker PRIVATE importers/aseprite/aseprite_parse.c
     importers/aseprite/aseprite_parse.h
     importers/aseprite/aseprite_render.c
     importers/aseprite/aseprite_render.h)
+target_sources(de_cooker PRIVATE importers/aseprite/atlas_pack.c
+    importers/aseprite/atlas_pack.h importers/aseprite/atlas_texture.c)

@@ -135,6 +135,22 @@ def main():
     files["deep.aseprite"] = document([frame([
         *[layer("G", kind=1, level=i) for i in range(127)],
         layer("Leaf", level=127), cel(red, index=127)])], width=1)
+    files["atlas.aseprite"] = document([
+        frame([layer(), cel(bytes([0, 0, 0, 0] * 5 + [255, 0, 0, 255, 0, 255, 0, 255]
+                                  + [0, 0, 0, 0] * 5), height=3, x=2, y=1)]),
+        frame([cel(red + green + blue, height=3, x=5, y=2)], ms=123),
+        frame([cel(red + green + blue + bytes([255, 255, 0, 128]), height=2, y=3)]),
+        frame([cel(bytes([123, 45, 67, 0] * 4), height=2, x=-1, y=-1)]),
+        frame([cel(red + green + blue + red + green + blue, x=1, y=5)]),
+        frame([cel(b"", kind=1, linked=0, x=-1, y=-1)], ms=250)], width=8, height=6)
+    varied = []
+    for i in range(24):
+        w, h = i * 5 % 7 + 1, i * 3 % 5 + 1
+        pixels = bytes(v for y in range(h) for x in range(w)
+                       for v in [i * 11 % 256, x * 23, y * 31, 255])
+        varied.append(frame(([layer()] if i == 0 else []) +
+                            [cel(pixels, height=h, x=(9 - w) // 2, y=(9 - h) // 2)], ms=i + 1))
+    files["atlas-grid.aseprite"] = document(varied, width=9, height=9)
     for name, data in files.items():
         assert len(data) < 50 * 1024
         (out / name).write_bytes(data)

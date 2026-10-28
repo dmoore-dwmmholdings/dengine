@@ -63,6 +63,12 @@ endif()
 # DENG-81: parser tests have no GPU/runtime dependency; the importer remains tools-only.
 if(DE_BUILD_TOOLS)
     de_add_test(NAME aseprite SOURCES test_aseprite.c LIBS de_cooker)
+    de_add_test(NAME aseprite_texture SOURCES test_aseprite_texture.c LIBS de_cooker)
+    if(TARGET test_aseprite_texture)
+        target_include_directories(test_aseprite_texture PRIVATE "${DE_ROOT_DIR}/tools" "${DE_ROOT_DIR}/src")
+        target_compile_definitions(test_aseprite_texture PRIVATE
+            DE_ASEPRITE_DATA_DIR="${DE_ROOT_DIR}/tests/data/aseprite")
+    endif()
     if(TARGET test_aseprite)
         target_include_directories(test_aseprite PRIVATE "${DE_ROOT_DIR}/tools")
         target_compile_definitions(test_aseprite PRIVATE

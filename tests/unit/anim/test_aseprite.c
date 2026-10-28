@@ -2,12 +2,13 @@
 #include "de_test.h"
 #include "cook/importers/aseprite/aseprite_parse.h"
 #include "cook/importers/aseprite/aseprite_render.h"
+#include "cook/importers/aseprite/atlas_pack.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct tracker {
-    size_t calls, fail_at, live, bytes;
+    size_t calls, fail_at, live, bytes, peak;
 } tracker;
 typedef struct allocation {
     size_t bytes, marker;
@@ -25,6 +26,8 @@ static void *tracked_alloc(void *user, size_t bytes, size_t align, u32 tag) {
     p->marker = 0x415345;
     ++t->live;
     t->bytes += bytes;
+    if (t->bytes > t->peak)
+        t->peak = t->bytes;
     return p + 1;
 }
 static void tracked_free(void *user, void *ptr, size_t bytes) {
@@ -44,6 +47,7 @@ typedef struct ase_fx {
     de_allocator allocator;
     de_aseprite_doc *doc;
     de_aseprite_renderer *renderer;
+    de_aseprite_atlas *atlas, *second_atlas;
     u8 source[8192];
     size_t bytes;
 } ase_fx;
@@ -53,6 +57,8 @@ static void ase_fx_setup(ase_fx *f) {
         (de_allocator){.alloc = tracked_alloc, .free = tracked_free, .user = &f->tracking};
 }
 static void ase_fx_teardown(ase_fx *f) {
+    de_aseprite_atlas_free(f->atlas);
+    de_aseprite_atlas_free(f->second_atlas);
     de_aseprite_renderer_destroy(f->renderer);
     de_aseprite_free(f->doc);
     EXPECT_EQ(f->tracking.live, 0u);
@@ -381,6 +387,182 @@ TEST_F(aseprite, composite_maximum_supported_group_depth, ase_fx) {
     ASSERT_MEMEQ(pixels, red, sizeof pixels);
     render(f, 0, 127, pixels, sizeof pixels);
     ASSERT_MEMEQ(pixels, red, sizeof pixels);
+}
+static de_aseprite_atlas *build_atlas(ase_fx *f, bool keep, u32 limit) {
+    de_aseprite_atlas_desc options = {.keep_layers = keep, .max_size = limit};
+    const char *why = "unchanged";
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &options, &f->atlas, &why), DE_OK);
+    ASSERT_TRUE(f->atlas != NULL);
+    ASSERT_TRUE(why == NULL);
+    return f->atlas;
+}
+static void verify_atlas(ase_fx *f) {
+    const de_aseprite_atlas *a = f->atlas;
+    ASSERT_TRUE(a->width <= 64 && a->height <= 64);
+    u8 occupied[64 * 64] = {0}, canvas[4096];
+    size_t bytes = (size_t)f->doc->width * f->doc->height * 4u;
+    ASSERT_TRUE(bytes <= sizeof canvas);
+    if (!f->renderer)
+        ASSERT_EQ(
+            de_aseprite_renderer_create(f->doc, &f->allocator, 0, NULL, NULL, &f->renderer, NULL),
+            DE_OK);
+    for (u32 s = 0; s < a->set_count; ++s) {
+        ASSERT_EQ(a->sets[s].first_frame, s * f->doc->frame_count);
+        for (u32 index = 0; index < a->frames_per_set; ++index) {
+            const de_aseprite_atlas_frame *frame = &a->frames[s * a->frames_per_set + index];
+            ASSERT_TRUE(frame->x >= 1 && frame->y >= 1);
+            ASSERT_TRUE(frame->x + frame->width < a->width);
+            ASSERT_TRUE(frame->y + frame->height < a->height);
+            ASSERT_TRUE(frame->trim_x + frame->trim_width <= f->doc->width);
+            ASSERT_TRUE(frame->trim_y + frame->trim_height <= f->doc->height);
+            ASSERT_EQ(frame->ms, f->doc->frames[index].ms);
+            render(f, index, a->sets[s].layer, canvas, sizeof canvas);
+            for (u32 y = 0; y < frame->height + 2u; ++y)
+                for (u32 x = 0; x < frame->width + 2u; ++x) {
+                    u32 px = frame->x + x - 1u, py = frame->y + y - 1u;
+                    size_t at = (size_t)py * a->width + px;
+                    ASSERT_EQ(occupied[at], 0u);
+                    occupied[at] = 1;
+                    const u8 zero[4] = {0};
+                    const u8 *expected = zero;
+                    if (frame->trim_width) {
+                        u32 sx = x ? x - 1u : 0, sy = y ? y - 1u : 0;
+                        if (sx >= frame->width)
+                            sx = frame->width - 1u;
+                        if (sy >= frame->height)
+                            sy = frame->height - 1u;
+                        expected = canvas + (((size_t)frame->trim_y + sy) * a->canvas_width +
+                                             frame->trim_x + sx) *
+                                                4u;
+                    } else {
+                        ASSERT_EQ(frame->width, 1u);
+                        ASSERT_EQ(frame->height, 1u);
+                        ASSERT_EQ(frame->trim_height, 0u);
+                    }
+                    ASSERT_MEMEQ(a->rgba + at * 4u, expected, 4);
+                }
+        }
+    }
+    for (size_t i = 0; i < (size_t)a->width * a->height; ++i)
+        if (!occupied[i]) {
+            const u8 zero[4] = {0};
+            ASSERT_MEMEQ(a->rgba + i * 4u, zero, 4);
+        }
+}
+TEST_F(aseprite, atlas_trim_empty_clipping_extrusion_and_durations, ase_fx) {
+    parse(f, "atlas");
+    de_aseprite_atlas *a = build_atlas(f, false, 32);
+    ASSERT_EQ(a->set_count, 1u);
+    ASSERT_EQ(a->frame_count, 6u);
+    const u32 bounds[6][4] = {{3, 2, 2, 1}, {5, 2, 1, 3}, {0, 3, 2, 2},
+                              {0, 0, 0, 0}, {1, 5, 6, 1}, {0, 0, 2, 1}};
+    for (u32 i = 0; i < 6; ++i) {
+        ASSERT_EQ(a->frames[i].trim_x, bounds[i][0]);
+        ASSERT_EQ(a->frames[i].trim_y, bounds[i][1]);
+        ASSERT_EQ(a->frames[i].trim_width, bounds[i][2]);
+        ASSERT_EQ(a->frames[i].trim_height, bounds[i][3]);
+    }
+    ASSERT_EQ(a->frames[1].ms, 123u);
+    ASSERT_EQ(a->frames[5].ms, 250u);
+    verify_atlas(f);
+}
+TEST_F(aseprite, atlas_keep_visible_image_sets_and_groups, ase_fx) {
+    parse(f, "nested");
+    de_aseprite_atlas *a = build_atlas(f, true, 32);
+    ASSERT_EQ(a->set_count, 4u);
+    ASSERT_EQ(a->frames_per_set, 2u);
+    ASSERT_EQ(a->frame_count, 8u);
+    ASSERT_EQ(a->sets[0].layer, UINT32_MAX);
+    expect_string(a->sets[1].name, "Background");
+    expect_string(a->sets[2].name, "Red");
+    expect_string(a->sets[3].name, "Green");
+    ASSERT_EQ(a->sets[1].layer, 0u);
+    ASSERT_EQ(a->sets[2].layer, 2u);
+    ASSERT_EQ(a->sets[3].layer, 4u);
+    verify_atlas(f);
+}
+TEST_F(aseprite, atlas_varied_rectangles_deterministic_and_disjoint, ase_fx) {
+    parse(f, "atlas-grid");
+    de_aseprite_atlas *a = build_atlas(f, false, 64);
+    ASSERT_EQ(a->frame_count, 24u);
+    verify_atlas(f);
+    const de_aseprite_atlas_desc desc = {.max_size = 64};
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->second_atlas, NULL), DE_OK);
+    ASSERT_EQ(a->width, f->second_atlas->width);
+    ASSERT_EQ(a->height, f->second_atlas->height);
+    ASSERT_EQ(a->rgba_bytes, f->second_atlas->rgba_bytes);
+    ASSERT_MEMEQ(a->rgba, f->second_atlas->rgba, a->rgba_bytes);
+    ASSERT_MEMEQ(a->frames, f->second_atlas->frames, (size_t)a->frame_count * sizeof *a->frames);
+}
+TEST_F(aseprite, atlas_non_power_of_two_limit_and_oversized_sets, ase_fx) {
+    parse(f, "deep");
+    de_aseprite_atlas *a = build_atlas(f, false, 3);
+    ASSERT_EQ(a->width, 3u);
+    ASSERT_EQ(a->height, 3u);
+    verify_atlas(f);
+    de_aseprite_atlas_free(f->atlas);
+    f->atlas = NULL;
+    size_t live = f->tracking.live;
+    de_aseprite_atlas_desc desc = {.max_size = 3, .keep_layers = true};
+    const char *why = NULL;
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, &why),
+              DE_ERR_UNSUPPORTED);
+    ASSERT_TRUE(f->atlas == NULL);
+    ASSERT_TRUE(why != NULL);
+    desc.max_size = 2;
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    desc.max_size = 16385;
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, NULL),
+              DE_ERR_INVALID_ARGUMENT);
+    ASSERT_EQ(f->tracking.live, live);
+}
+TEST_F(aseprite, atlas_budget_and_every_allocation_failure, ase_fx) {
+    parse(f, "nested");
+    size_t baseline = f->tracking.bytes, live = f->tracking.live, calls = f->tracking.calls;
+    f->tracking.peak = baseline;
+    build_atlas(f, true, 32);
+    size_t peak = f->tracking.peak - baseline, allocations = f->tracking.calls - calls;
+    de_aseprite_atlas_free(f->atlas);
+    f->atlas = NULL;
+    ASSERT_EQ(f->tracking.bytes, baseline);
+    de_aseprite_atlas_desc desc = {.max_size = 32, .keep_layers = true, .max_bytes = peak};
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, NULL), DE_OK);
+    de_aseprite_atlas_free(f->atlas);
+    f->atlas = NULL;
+    desc.max_bytes = peak - 1u;
+    const char *why = NULL;
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, &why),
+              DE_ERR_UNSUPPORTED);
+    ASSERT_TRUE(why != NULL);
+    ASSERT_TRUE(f->atlas == NULL);
+    desc.max_bytes = 1;
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, &why),
+              DE_ERR_UNSUPPORTED);
+    ASSERT_TRUE(why != NULL);
+    desc.max_bytes = 0;
+    for (size_t i = 0; i < allocations; ++i) {
+        f->tracking.fail_at = f->tracking.calls + i;
+        why = NULL;
+        ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, &why),
+                  DE_ERR_OUT_OF_MEMORY);
+        ASSERT_TRUE(f->atlas == NULL);
+        ASSERT_TRUE(why != NULL);
+        ASSERT_EQ(f->tracking.bytes, baseline);
+        ASSERT_EQ(f->tracking.live, live);
+    }
+    f->tracking.fail_at = SIZE_MAX;
+}
+TEST_F(aseprite, atlas_warns_once_and_skips_tilemap_sets, ase_fx) {
+    parse(f, "warnings");
+    warnings w = {0};
+    const de_aseprite_atlas_desc desc = {
+        .max_size = 16, .keep_layers = true, .warning = capture_warning, .warning_user = &w};
+    ASSERT_EQ(de_aseprite_atlas_build(f->doc, &f->allocator, &desc, &f->atlas, NULL), DE_OK);
+    ASSERT_EQ(w.count, 2u);
+    ASSERT_EQ(f->atlas->set_count, 2u);
+    expect_string(f->atlas->sets[1].name, "Multiply");
+    verify_atlas(f);
 }
 TEST_F(aseprite, every_truncation_and_chunk_boundaries, ase_fx) {
     load(f, "rgba");

@@ -1,7 +1,8 @@
 /*
  * texture_internal.h: what the files of the texture importer share (DENG-98): the settings, the
- * decoded image, the mip chain, the encoders and the DTEX writer. Private to
- * tools/cook/importers/texture/ and its tests; the importer entry is texture_import.h.
+ * decoded image, the mip chain, the encoders and the DTEX writer. Tool-private;
+ * the Aseprite atlas stage also reuses the DTEX writer. The texture importer entry
+ * is texture_import.h.
  *
  * The pipeline of one import (texture_import.c):
  *

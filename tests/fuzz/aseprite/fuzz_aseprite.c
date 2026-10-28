@@ -1,6 +1,7 @@
 #include "de_fuzz.h"
 #include "cook/importers/aseprite/aseprite_parse.h"
 #include "cook/importers/aseprite/aseprite_render.h"
+#include "cook/importers/aseprite/atlas_pack.h"
 #include <stdlib.h>
 
 /* Exact malloc blocks expose decoder overreads to ASan; the engine's arena heap would
@@ -57,6 +58,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 de_aseprite_renderer_destroy(renderer);
             } else if (renderer)
                 abort();
+            de_aseprite_atlas *atlas = NULL;
+            const de_aseprite_atlas_desc options = {
+                .keep_layers = true, .max_size = 64, .max_bytes = 512u * 1024u};
+            de_result packed = de_aseprite_atlas_build(doc, &allocator, &options, &atlas, NULL);
+            if (packed == DE_OK) {
+                if (!atlas || !atlas->rgba || !atlas->frame_count ||
+                    atlas->rgba_bytes != (size_t)atlas->width * atlas->height * 4u)
+                    abort();
+                for (u32 i = 0; i < atlas->frame_count; ++i) {
+                    const de_aseprite_atlas_frame *f = &atlas->frames[i];
+                    if (!f->x || !f->y || f->x + f->width >= atlas->width ||
+                        f->y + f->height >= atlas->height)
+                        abort();
+                }
+            } else if (atlas)
+                abort();
+            de_aseprite_atlas_free(atlas);
         }
     } else if (doc)
         abort();
