@@ -4,12 +4,12 @@
 typedef struct sprite_entry {
     de_entity entity;
     de_load_handle ref;
-    u32 handle, version, from, to, frame, output_frame;
-    u64 seen, tag, phase, period, leg, old_phase;
+    u32 handle, version, from, to, frame, output_frame, repeats;
+    u64 seen, tag, phase, period, leg, limit, old_phase;
     i64 delta;
     f64 fraction;
     f32 published;
-    bool ping, reverse, input_ping, ready, initial, apply, end_event, ended, was_playing;
+    bool ping, reverse, input_ping, ready, initial, apply, end_event, ended, was_playing, looping;
     DeSpriteAnimator input;
     const de__anim_asset *asset;
     de_texture texture;
@@ -21,7 +21,7 @@ struct de__sprite_runtime {
     de_component sprite;
     sprite_entry *entries;
     u32 capacity;
-    u64 epoch, type_hash;
+    u64 epoch, type_hash, aseprite_type_hash;
     f32 dt;
 };
 static void release(struct de__sprite_runtime *r, sprite_entry *e) {
@@ -55,9 +55,11 @@ static u32 locate(const sprite_entry *e, u64 phase, u32 *offset) {
     const u64 *p = e->asset->sprite_prefix;
     bool reverse = e->reverse;
     u64 key;
-    bool terminal = phase == e->period;
+    bool terminal = phase == e->limit;
     if (terminal)
         --phase;
+    if (phase >= e->period)
+        phase %= e->period;
     if (e->ping && phase >= e->leg) {
         phase -= e->leg;
         reverse = !reverse;
@@ -81,6 +83,7 @@ static bool configure(sprite_entry *e, const de__anim_asset *asset, const DeSpri
     e->from = 0;
     e->to = asset->sprite.frame_count - 1;
     e->reverse = false;
+    e->repeats = 0;
     if (a->tag.hash) {
         u32 lo = 0, hi = asset->sprite.tag_count;
         while (lo < hi) {
@@ -97,8 +100,9 @@ static bool configure(sprite_entry *e, const de__anim_asset *asset, const DeSpri
             return false;
         e->from = t.from;
         e->to = t.to;
-        e->reverse = t.direction == 1;
-        e->ping = a->ping_pong || t.direction == 2;
+        e->reverse = t.direction == 1 || t.direction == 3;
+        e->ping = a->ping_pong || t.direction >= 2;
+        e->repeats = t.repeats;
     } else
         e->ping = a->ping_pong;
     if (e->from == e->to)
@@ -108,6 +112,17 @@ static bool configure(sprite_entry *e, const de__anim_asset *asset, const DeSpri
     if (e->ping)
         e->period += e->leg - de__sprite_frame_at(&asset->sprite, e->from).ms -
                      de__sprite_frame_at(&asset->sprite, e->to).ms;
+    e->limit = e->period;
+    if (e->repeats) {
+        e->limit = e->leg * e->repeats;
+        if (e->ping) {
+            u64 first = de__sprite_frame_at(&asset->sprite, e->reverse ? e->to : e->from).ms;
+            u64 last = de__sprite_frame_at(&asset->sprite, e->reverse ? e->from : e->to).ms;
+            u32 turns = e->repeats - 1;
+            e->limit -= ((u64)turns + 1) / 2 * last + (u64)(turns / 2) * first;
+        }
+    }
+    e->looping = a->loop && !e->repeats;
     e->phase = 0;
     e->fraction = 0;
     e->ended = false;
@@ -121,6 +136,9 @@ static bool clock_ms(f64 value, i64 *whole) {
         return false;
     *whole = (i64)value;
     return true;
+}
+static bool sprite_type(const struct de__sprite_runtime *r, const de__slot *slot) {
+    return slot && (slot->type_hash == r->type_hash || slot->type_hash == r->aseprite_type_hash);
 }
 static void gather(const de_query_chunk *c, void *user) {
     struct de__sprite_runtime *r = user;
@@ -140,7 +158,7 @@ static void gather(const de_query_chunk *c, void *user) {
             e->published = published;
             const de__slot *slot =
                 r->owner->assets ? de__slot_get(r->owner->assets, a->clip.id) : NULL;
-            if (slot && slot->type_hash == r->type_hash)
+            if (sprite_type(r, slot))
                 e->ref = de_asset_load(r->owner->assets, slot->id, DE_LOAD_NO_EVENTS);
         }
         e->seen = r->epoch;
@@ -151,9 +169,7 @@ static void gather(const de_query_chunk *c, void *user) {
         e->apply = false;
         const de__slot *slot = r->owner->assets ? de__slot_get(r->owner->assets, a->clip.id) : NULL;
         const de__anim_asset *asset =
-            slot && slot->state == DE_LOAD_READY && slot->type_hash == r->type_hash
-                ? de__slot_object(slot)
-                : NULL;
+            sprite_type(r, slot) && slot->state == DE_LOAD_READY ? de__slot_object(slot) : NULL;
         bool reset = asset && (e->asset != asset || e->version != slot->version ||
                                e->tag != a->tag.hash || e->input_ping != a->ping_pong || !e->ready);
         e->ready = false;
@@ -168,17 +184,18 @@ static void gather(const de_query_chunk *c, void *user) {
                 continue;
         }
         e->version = slot->version;
+        e->looping = a->loop && !e->repeats;
         if (a->time != e->published) {
             i64 ms;
             if (!clock_ms((f64)a->time * 1000, &ms))
                 continue;
-            if (a->loop) {
+            if (e->looping) {
                 i64 phase = ms % (i64)e->period;
                 if (phase < 0)
                     phase += (i64)e->period;
                 e->phase = (u64)phase;
             } else
-                e->phase = ms < 0 ? 0 : (u64)ms > e->period ? e->period : (u64)ms;
+                e->phase = ms < 0 ? 0 : (u64)ms > e->limit ? e->limit : (u64)ms;
             e->fraction = 0;
             e->initial = true;
             e->ended = false;
@@ -201,7 +218,7 @@ static void compute(const de_query_chunk *c, void *user) {
             i64 delta;
             if (clock_ms(elapsed, &delta)) {
                 e->fraction = elapsed - (f64)delta;
-                if (e->input.loop) {
+                if (e->looping) {
                     i64 phase = (i64)e->phase + delta % (i64)e->period;
                     if (phase < 0)
                         phase += (i64)e->period;
@@ -212,9 +229,9 @@ static void compute(const de_query_chunk *c, void *user) {
                     e->ended = false;
                 } else {
                     bool end = false;
-                    if (delta > 0 && (u64)delta >= e->period - e->phase) {
-                        delta = (i64)(e->period - e->phase);
-                        e->phase = e->period;
+                    if (delta > 0 && (u64)delta >= e->limit - e->phase) {
+                        delta = (i64)(e->limit - e->phase);
+                        e->phase = e->limit;
                         end = true;
                     } else if (delta < 0 && delta <= -(i64)e->phase) {
                         delta = -(i64)e->phase;
@@ -242,6 +259,8 @@ static void compute(const de_query_chunk *c, void *user) {
             sprite->texture = e->texture;
             sprite->uv_rect = (de_vec4){f.rect[0], f.rect[1], f.rect[2], f.rect[3]};
             sprite->pivot = (de_vec2){f.pivot[0], f.pivot[1]};
+            if (e->asset->sprite.version == DE__SPRITE_CLIP_GEOMETRY_VERSION)
+                sprite->size = (de_vec2){f.size[0], f.size[1]};
             e->frame = e->output_frame;
         }
         e->published = (f32)((f64)e->phase / 1000);
@@ -286,17 +305,16 @@ static void events(struct de__sprite_runtime *r, sprite_entry *e) {
                 break;
             left -= step;
             phase += step;
-            if (phase == e->period) {
-                if (!e->input.loop)
-                    break;
+            if (!e->looping && phase == e->limit)
+                break;
+            if (e->looping && phase == e->period)
                 phase = 0;
-            }
         } else {
             if (left <= offset)
                 break;
             left -= (u64)offset + 1;
             if (phase < (u64)offset + 1) {
-                if (!e->input.loop)
+                if (!e->looping)
                     break;
                 phase = e->period - 1;
             } else
@@ -342,6 +360,7 @@ de_result de_anim__sprite_init(de_anim_system *s, de_world *w) {
     r->owner = s;
     r->world = w;
     r->type_hash = de_hash64_str("sprite_clip");
+    r->aseprite_type_hash = de_hash64_str("aseprite");
     de_query_term term = {s->sprite_component, DE_READ};
     de_query_desc q = {.terms = &term, .term_count = 1};
     r->system =

@@ -143,6 +143,20 @@ TEST_F(sprite_anim, unequal_durations_match_millisecond_oracle_in_both_direction
                          "[[events]]\nframe=2\nname='f2'\n"
                          "[[events]]\nframe=3\nname='f3'\n";
     sprite_load_text(f, source, strlen(source));
+    EXPECT_EQ(de_anim_sprite_frame_count(f->base.anim, f->clip), 4u);
+    de_sprite_frame_info legacy;
+    ASSERT_TRUE(de_anim_sprite_frame(f->base.anim, f->clip, 2, &legacy));
+    EXPECT_FALSE(legacy.has_geometry);
+    EXPECT_EQ(legacy.canvas_width, 0u);
+    EXPECT_FLOAT_EQ(legacy.size.x, 0, 0);
+    EXPECT_FLOAT_EQ(legacy.source_pivot.x, 0, 0);
+    EXPECT_FLOAT_EQ(legacy.duration, .029f, 0);
+    de_sprite_slice_info untouched;
+    memset(&untouched, 0x5a, sizeof untouched);
+    de_sprite_slice_info before = untouched;
+    EXPECT_FALSE(
+        de_anim_sprite_slice(f->base.anim, f->clip, 0, de_name_from("absent"), &untouched));
+    ASSERT_MEMEQ(&untouched, &before, sizeof before);
     const u32 paths[3][6] = {{0, 1, 2, 3}, {3, 2, 1, 0}, {0, 1, 2, 3, 2, 1}};
     const char *tags[] = {"forward", "reverse", "bounce"};
     const u32 duration[] = {7, 13, 29, 41};

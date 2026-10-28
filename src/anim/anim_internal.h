@@ -17,6 +17,9 @@ typedef struct de__anim_asset {
     u64 *sprite_prefix;
     struct de__anim_prepared_clip *prepared;
 } de__anim_asset;
+de_result de__sprite_asset_load(de_asset_load_ctx *ctx);
+void de__sprite_asset_unload(void *object, void *user);
+de_result de__aseprite_register_asset(de_anim_system *system);
 /* Immutable asset-owned sampling cache. Oversized clips retain compressed sampling. */
 typedef struct de__anim_prepared_track {
     u32 joint, channel, components, key_count;

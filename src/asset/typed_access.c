@@ -20,6 +20,14 @@
 
 #include <string.h>
 
+/* DENG-81: this explicit builtin alias shares the DSCP loader/object and de_anim_clip
+ * handle family. Reflected sprite_clip references must resolve a primary Aseprite too.
+ * No other type is widened, and requesting the narrower aseprite type remains exact. */
+static bool type_matches(u64 actual, u64 wanted) {
+    return actual == wanted ||
+           (wanted == de_hash64_str("sprite_clip") && actual == de_hash64_str("aseprite"));
+}
+
 u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_name) {
     if (s == NULL || id.hash == 0) {
         (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "asset handle: NULL system or asset ID 0");
@@ -30,7 +38,7 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
     u32 h = de__slot_find(s, id);
     if (h != 0) {
         const de__slot *sl = de__slot_get(s, h);
-        if (want != 0 && sl->type_hash != want) {
+        if (want != 0 && !type_matches(sl->type_hash, want)) {
             const de__manifest_asset *ma = de__resolved_asset(s->resolved, id);
             const de_asset_type_desc *td = de__asset_type_get(s, de__slot_type(s, sl));
             const char *have = ma != NULL ? ma->type : td != NULL ? td->name : "another type";
@@ -47,7 +55,7 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
     de__mount_entry pe;
     if (ma == NULL && de__mount_lookup(s, id, &pe)) {
         /* DENG-212: an asset of a mounted pack (PACKED mode has no manifest): its TOC type. */
-        if (want != 0 && pe.toc.type_hash != want) {
+        if (want != 0 && !type_matches(pe.toc.type_hash, want)) {
             (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "asset %016llx of pack \"%s\" is not a %s",
                           (unsigned long long)id.hash, pe.pack->vpath, type_name);
             return 0;
@@ -59,7 +67,7 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
     u64 sub_type = 0;
     if (ma == NULL && de__cook_stage_subasset_type(s, id, &sub_type)) {
         /* DENG-209: a sub-asset an in-process cook declared (cook_stage.c). */
-        if (want != 0 && sub_type != want) {
+        if (want != 0 && !type_matches(sub_type, want)) {
             (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "sub-asset %016llx is of another type, not a %s",
                           (unsigned long long)id.hash, type_name);
             return 0;
@@ -73,7 +81,7 @@ u32 de__asset_handle_of(de_asset_system *s, de_asset_id id, const char *type_nam
                       (unsigned long long)id.hash);
         return 0;
     }
-    if (type_name != NULL && strcmp(ma->type, type_name) != 0) {
+    if (type_name != NULL && !type_matches(de_hash64_str(ma->type), want)) {
         (void)DE_FAIL(DE_ERR_INVALID_ARGUMENT, "asset \"%s\" is a %s (%s), not a %s", ma->id,
                       ma->type, ma->file, type_name);
         return 0;

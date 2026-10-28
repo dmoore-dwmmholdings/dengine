@@ -89,7 +89,7 @@ static void anim_fixture_setup_workers(anim_fixture *f, bool hot_reload, u32 wor
 static void anim_fixture_setup_options(anim_fixture *f, bool hot_reload) {
     anim_fixture_setup_workers(f, hot_reload, 3);
 }
-static void anim_fixture_setup(anim_fixture *f) {
+static inline void anim_fixture_setup(anim_fixture *f) {
     anim_fixture_setup_options(f, false);
 }
 static void anim_fixture_teardown(anim_fixture *f) {

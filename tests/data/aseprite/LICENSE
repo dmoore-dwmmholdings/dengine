@@ -1,3 +1,4 @@
-The binary fixtures and generate.py in this directory are original, generated test data.
+The binary fixtures, reference PNG artwork, and generation/export helpers in this
+directory are original, generated test data and code.
 They contain no third-party artwork. They are dedicated to the public domain under
 CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/

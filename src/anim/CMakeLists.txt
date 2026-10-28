@@ -19,6 +19,7 @@ de_add_module(
 target_sources(de_anim PRIVATE anim.c anim_system.c anim_assets.c anim_reflect.c anim_math.h anim_math_fast.c clip_sample.c sampling.c pose.c pose.h anim_internal.h)
 target_sources(de_anim PRIVATE sprite_clip_format.h)
 target_sources(de_anim PRIVATE sprite_clip.c sprite_anim.c)
+target_sources(de_anim PRIVATE aseprite/aseprite_asset.c)
 target_sources(de_anim PRIVATE anim_clock.c anim_deterministic.c anim_checksum.c pose_deterministic.c)
 target_sources(de_anim PRIVATE blend.c blend.h)
 target_sources(de_anim PRIVATE blend_tree.c blend_tree.h)

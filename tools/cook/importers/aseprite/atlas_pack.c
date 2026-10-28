@@ -144,8 +144,11 @@ static bool pack(de_aseprite_atlas *a, const u32 *order, skyline *nodes, u32 wid
 static void trim(de_aseprite_atlas_frame *f, const u8 *canvas, u32 width, u32 height) {
     u32 left = width, top = height, right = 0, bottom = 0;
     for (u32 y = 0; y < height; ++y)
-        for (u32 x = 0; x < width; ++x)
-            if (canvas[((size_t)y * width + x) * 4u + 3u]) {
+        for (u32 x = 0; x < width; ++x) {
+            const u8 *pixel = canvas + ((size_t)y * width + x) * 4u;
+            /* Aseprite retains RGB beneath alpha zero. Trim canonical zero pixels
+             * only, so expanding cooked geometry reproduces every source RGBA byte. */
+            if (pixel[0] || pixel[1] || pixel[2] || pixel[3]) {
                 if (x < left)
                     left = x;
                 if (y < top)
@@ -155,6 +158,7 @@ static void trim(de_aseprite_atlas_frame *f, const u8 *canvas, u32 width, u32 he
                 if (y + 1u > bottom)
                     bottom = y + 1u;
             }
+        }
     if (right) {
         f->trim_x = left;
         f->trim_y = top;

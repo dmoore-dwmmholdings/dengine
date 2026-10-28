@@ -179,6 +179,41 @@ typedef struct DeSpriteAnimator {
     bool playing, loop, ping_pong;
 } DeSpriteAnimator;
 
+/** Copied sprite frame metadata. Geometry is authored by Aseprite; legacy DSCP v1
+ * clips return has_geometry=false and leave size/trim/canvas/source_pivot zero.
+ * UVs address the atlas; size is the trimmed quad in meters; pivot is relative to
+ * that quad's bottom-left and may lie outside it. source_pivot is relative to the
+ * original canvas's top-left, with source Y increasing downward. */
+typedef struct de_sprite_frame_info {
+    de_vec4 uv_rect;
+    de_vec2 size, pivot, source_pivot;
+    u32 trim[4]; /**< Original-canvas x,y,width,height in pixels; zero extent is empty. */
+    u32 canvas_width, canvas_height;
+    f32 duration; /**< Seconds. */
+    bool has_geometry;
+} de_sprite_frame_info;
+/** Keyed source-pixel slice metadata. Origin is on the untrimmed source canvas;
+ * centre and pivot are relative to the slice origin. nine_slice holds left/top/right/bottom
+ * borders for DeUiImage. Raw signed centre/pivot values are retained, including outside bounds. */
+typedef struct de_sprite_slice_info {
+    de_ivec2 origin, center_origin, pivot;
+    u32 width, height, center_width, center_height;
+    de_vec4 nine_slice;
+    bool has_nine_slice, has_pivot;
+} de_sprite_slice_info;
+/** Number of frames in a loaded sprite/Aseprite clip, or zero for missing/not-ready/wrong-kind.
+ * Main thread between schedules; no allocation or retained/borrowed object pointers. */
+DE_API u32 de_anim_sprite_frame_count(de_anim_system *, de_anim_clip);
+/** Copies a loaded clip's frame metadata. False leaves out untouched, including a bad frame
+ * index or NULL out. Main thread between schedules; refreshes naturally after asset reload. */
+DE_API bool de_anim_sprite_frame(de_anim_system *, de_anim_clip, u32 frame,
+                                 de_sprite_frame_info *out);
+/** Copies the latest key of a named slice at/before frame. False leaves out untouched for
+ * missing/not-ready clips, missing slices, hidden keys (zero extent), bad frame or NULL out.
+ * Main thread between schedules; output is independent of subsequent reload/eviction. */
+DE_API bool de_anim_sprite_slice(de_anim_system *, de_anim_clip, u32 frame, de_name slice,
+                                 de_sprite_slice_info *out);
+
 typedef enum de_anim_event_kind {
     DE_ANIM_EV_CLIP_END,
     DE_ANIM_EV_MARKER,

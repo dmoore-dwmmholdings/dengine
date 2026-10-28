@@ -1,0 +1,533 @@
+{
+  "schema": 2,
+  "exportMode": "Image.drawSprite RGBA compositor",
+  "scriptSha256": "1d97248bf6a4bdcd438ba73e7f02772a5f1b502cb11183fdf19bd1f6a465d2ec",
+  "tool": {
+    "version": "Aseprite 1.3.18.6-dev",
+    "binarySha256": "b69ba31dcde57ee8d814cd41e7fa16d01ca537ca9f7f830004877fae36638ea0",
+    "sourceBuild": {
+      "version": "1.3.18.6",
+      "url": "https://github.com/aseprite/aseprite/releases/download/v1.3.18.6/Aseprite-v1.3.18.6-Source.zip",
+      "sha256": "fa9dd07a0c2a5ec91a4166333296bbb9e5c237933b59875d0cfee849d2358306",
+      "options": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+        "-DLAF_BACKEND=none",
+        "-DENABLE_NEWS=OFF",
+        "-DENABLE_UPDATER=OFF",
+        "-DENABLE_SCRIPTING=ON",
+        "-DENABLE_WEBSOCKET=OFF",
+        "-DENABLE_TESTS=OFF",
+        "-DENABLE_STEAM=OFF",
+        "-DENABLE_DRM=OFF",
+        "-DENABLE_PSD=OFF",
+        "-DENABLE_WEBP=OFF",
+        "-DENABLE_CCACHE=OFF"
+      ],
+      "sourcePatches": []
+    }
+  },
+  "exports": [
+    {
+      "fixture": "rgba.aseprite",
+      "sourceSha256": "6d45469de3b090e1e638cbb548b811a0d511e2854127081790b7efe26e92a169",
+      "layer": null,
+      "prefix": "rgba",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "rgba-0.png",
+          "sha256": "14d1d536d98321122112971bbaa704d75b73e18847978152a2b64c3cdcef4f9a"
+        },
+        {
+          "file": "rgba-1.png",
+          "sha256": "b33c18240855745bfdf0ff7591a4397404ed627633f582e13b39a631adf1a163"
+        }
+      ]
+    },
+    {
+      "fixture": "indexed.aseprite",
+      "sourceSha256": "bb103d1aba318ca472d3a9ad0cd50e8be61902a722181e32f3605155632cf64b",
+      "layer": null,
+      "prefix": "indexed",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "indexed-0.png",
+          "sha256": "470f219aa24129e8e1b484b16510594d10efd46852930d50a7e6c4b666a44c2c"
+        },
+        {
+          "file": "indexed-1.png",
+          "sha256": "1a7fcf7c6dc2c2e91f49e6b079b678807f5aa50e2c6455e2dd94f138d2834699"
+        }
+      ]
+    },
+    {
+      "fixture": "gray.aseprite",
+      "sourceSha256": "535640765654fc144e61ce9424d782574f3a6c09f93ec7f6bef0131a7f97f886",
+      "layer": null,
+      "prefix": "gray",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "gray-0.png",
+          "sha256": "03e924b3bca563f64e43a925bd2378bc80edd0dae1bed0c92cfcc2e05aed9976"
+        }
+      ]
+    },
+    {
+      "fixture": "legacy6.aseprite",
+      "sourceSha256": "387f53141fc708410d62bb3d6067c4fe2933316ae524ed6f51cda7fddc408335",
+      "layer": null,
+      "prefix": "legacy6",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "legacy6-0.png",
+          "sha256": "2735ab4e1f98da27ed0e2bc10d55ec1b66a63ec83b1ead253c39b84e31537e97"
+        }
+      ]
+    },
+    {
+      "fixture": "legacy8.aseprite",
+      "sourceSha256": "f246fbdea286e25ecd75e6542770d2da96068a793e55c22813a8cfc631250b69",
+      "layer": null,
+      "prefix": "legacy8",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "legacy8-0.png",
+          "sha256": "344d037fdcb8a85d1daa263f21dfef2f2dbc3757450ca78fd4defa03a7f45f8b"
+        }
+      ]
+    },
+    {
+      "fixture": "mixed-palette.aseprite",
+      "sourceSha256": "e466b75ffc7ce38604e2dfc69db7c5a52d11e7ebc74560a791f077511db28642",
+      "layer": null,
+      "prefix": "mixed-palette",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "mixed-palette-0.png",
+          "sha256": "470f219aa24129e8e1b484b16510594d10efd46852930d50a7e6c4b666a44c2c"
+        },
+        {
+          "file": "mixed-palette-1.png",
+          "sha256": "1a7fcf7c6dc2c2e91f49e6b079b678807f5aa50e2c6455e2dd94f138d2834699"
+        },
+        {
+          "file": "mixed-palette-2.png",
+          "sha256": "1a7fcf7c6dc2c2e91f49e6b079b678807f5aa50e2c6455e2dd94f138d2834699"
+        }
+      ]
+    },
+    {
+      "fixture": "palette-packets.aseprite",
+      "sourceSha256": "c5133551c836502134931c86dd7bade7df4c8efea7304487501d6e5c63a5906d",
+      "layer": null,
+      "prefix": "palette-packets",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "palette-packets-0.png",
+          "sha256": "0da24c7a83b606a1aec45a6cf8670771a9f677d174e68d6e1537327e419ba41e"
+        }
+      ]
+    },
+    {
+      "fixture": "nested.aseprite",
+      "sourceSha256": "cea2ad003c091bd081a34b75ae21c6a5102bc78e0e9c41092358196e9eba85c2",
+      "layer": null,
+      "prefix": "nested",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "nested-0.png",
+          "sha256": "9a8a0b53d2db89a20e230ff15e885f6937b24023be1f2767c3e52f98e85bd989"
+        },
+        {
+          "file": "nested-1.png",
+          "sha256": "755ee5b4d1ca93295f01786aab6de30529ddc1891e01d5fde66840c378f8e0ee"
+        }
+      ]
+    },
+    {
+      "fixture": "group-flag.aseprite",
+      "sourceSha256": "c15f814c1f714ca838f92880b7fec48ec3cdd0a1500ca3c661592ea38c155e53",
+      "layer": null,
+      "prefix": "group-flag",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "group-flag-0.png",
+          "sha256": "4a32cd9a0d00f7dc6c99012aa8fd002eceae4c6ba562ca8c5eacd1498709840b"
+        },
+        {
+          "file": "group-flag-1.png",
+          "sha256": "c4140a4857b3ef8836c5b1ddcaa7bdc7ccdc1db85c8d167b9aad368600ee86b2"
+        }
+      ]
+    },
+    {
+      "fixture": "z-order.aseprite",
+      "sourceSha256": "e95f71e336dabdb6e6040b3d6ed65c4e8b4d32f77b8b9f063a33dfe8006fd193",
+      "layer": null,
+      "prefix": "z-order",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "z-order-0.png",
+          "sha256": "890b126e475779fe30d271dc60d1a7c1cd6ed771cdd8b7c6cfa9e79adafc623f"
+        },
+        {
+          "file": "z-order-1.png",
+          "sha256": "e76946638b0b4a6d01a97d7d69e5a5c3dd6b3305feba3eadc1dbc5db6a2161c8"
+        },
+        {
+          "file": "z-order-2.png",
+          "sha256": "e76946638b0b4a6d01a97d7d69e5a5c3dd6b3305feba3eadc1dbc5db6a2161c8"
+        },
+        {
+          "file": "z-order-3.png",
+          "sha256": "890b126e475779fe30d271dc60d1a7c1cd6ed771cdd8b7c6cfa9e79adafc623f"
+        }
+      ]
+    },
+    {
+      "fixture": "alpha.aseprite",
+      "sourceSha256": "6731f9e1386cbbcd05e28863d166d80c6c2ac6779d5af6e191cb36dded0fa581",
+      "layer": null,
+      "prefix": "alpha",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "alpha-0.png",
+          "sha256": "1ab603f2568326b058c6995d67dda37f58d08f421dfd81294003003a6074d36e"
+        }
+      ]
+    },
+    {
+      "fixture": "group-order.aseprite",
+      "sourceSha256": "0d63730a8ba7e303a13a8de9ed6602d146a2a7d4a03410e8eb4ec8ccfbbfb271",
+      "layer": null,
+      "prefix": "group-order",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "group-order-0.png",
+          "sha256": "890b126e475779fe30d271dc60d1a7c1cd6ed771cdd8b7c6cfa9e79adafc623f"
+        }
+      ]
+    },
+    {
+      "fixture": "legacy-group-order.aseprite",
+      "sourceSha256": "884d6b6713ac4c9b0ceed12b4ebc9cb97143613ea81a96028b3394a381681a92",
+      "layer": null,
+      "prefix": "legacy-group-order",
+      "composeGroups": false,
+      "pngs": [
+        {
+          "file": "legacy-group-order-0.png",
+          "sha256": "e76946638b0b4a6d01a97d7d69e5a5c3dd6b3305feba3eadc1dbc5db6a2161c8"
+        }
+      ]
+    },
+    {
+      "fixture": "indexed-background.aseprite",
+      "sourceSha256": "a98bc4a18c27c761094b388098133d4cdc90d81bfeceaf9459becd5e67a2efbf",
+      "layer": null,
+      "prefix": "indexed-background",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "indexed-background-0.png",
+          "sha256": "45a5b659d4c57fe2c6fe4ae2ae5e5060815d5befdc693a674f26162dd6acb799"
+        }
+      ]
+    },
+    {
+      "fixture": "atlas.aseprite",
+      "sourceSha256": "2b8b7fe160dafd92412b0d70a8e14d86dac68302df96e53b793784ffef57abd5",
+      "layer": null,
+      "prefix": "atlas",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "atlas-0.png",
+          "sha256": "ace9e3ed8d56ab72dcf0cb42d1d52704d41c9efb3232cedd7b408c639d184169"
+        },
+        {
+          "file": "atlas-1.png",
+          "sha256": "1363b8dd10dfe5a4783decd94a87c33ba4aed06a9d7f26e09d1cef9e43b23b49"
+        },
+        {
+          "file": "atlas-2.png",
+          "sha256": "abe63efe8a814d229131f90acf7e22bf714f94d2f5b9c5f9ba1d1aea72672fb5"
+        },
+        {
+          "file": "atlas-3.png",
+          "sha256": "6adf45818b3e99c6c85eb3646f2e9f52bf043f1856c193a7366fc253694a0bfd"
+        },
+        {
+          "file": "atlas-4.png",
+          "sha256": "20b59b6dc4f7a0a9888874f1f16f486a63c575226e6d6272d80128fbe539c7c2"
+        },
+        {
+          "file": "atlas-5.png",
+          "sha256": "41aacb1b81bfedfc4cd25ff28900b10b3eb282ac2bd8862949483152b3ddc47a"
+        }
+      ]
+    },
+    {
+      "fixture": "atlas-grid.aseprite",
+      "sourceSha256": "9ec8e58a20f91be275697a1170c058a70c45f81824fc003c69573a8c087980c4",
+      "layer": null,
+      "prefix": "atlas-grid",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "atlas-grid-0.png",
+          "sha256": "c3aef1d7cfb8c50f83c2cffc6ac00ab3847f13c797925c7f022a1ca1983873ad"
+        },
+        {
+          "file": "atlas-grid-1.png",
+          "sha256": "55a29966688353e0763e527ee7e04ee28c764b5a54e771b1cd747cf0f18b7ab3"
+        },
+        {
+          "file": "atlas-grid-2.png",
+          "sha256": "37d7a5d3660f10b13009f8fe117d9ed49991105ef2220c054bbc1f272efea9e0"
+        },
+        {
+          "file": "atlas-grid-3.png",
+          "sha256": "84010e654e6ce1effd2147dfe9cb0708aea351608d0854f90e8e32b92d614701"
+        },
+        {
+          "file": "atlas-grid-4.png",
+          "sha256": "70e1b7d6efceeaa01be66f87b8f654fe2af71432dd19bda5dc074ac933206de7"
+        },
+        {
+          "file": "atlas-grid-5.png",
+          "sha256": "24451d0c19c70e71f219eaede79851ac2e1a26f2538e729682a2d89b72abb9fd"
+        },
+        {
+          "file": "atlas-grid-6.png",
+          "sha256": "885e6a95d7d691d242dd951d8b44add8f5dbffb7d05ba65f4193855037f1cef3"
+        },
+        {
+          "file": "atlas-grid-7.png",
+          "sha256": "f27eeb8502026a3955fa3e5cb480b783414d8edbc93c1af4cfab93adea912ef2"
+        },
+        {
+          "file": "atlas-grid-8.png",
+          "sha256": "ddf0963a924eeba416186a0e9028018d25d4a4519e87a0c473b9e1043e4a1b42"
+        },
+        {
+          "file": "atlas-grid-9.png",
+          "sha256": "9a3d1765a1453e863440b66363d2ef05a0e2a8496792d6e16b185358fcaacfd6"
+        },
+        {
+          "file": "atlas-grid-10.png",
+          "sha256": "e286b3e51e08e4a180b078795ce52911eb2a4b132ca36c672e73f819755f9403"
+        },
+        {
+          "file": "atlas-grid-11.png",
+          "sha256": "7361750e2ec429821ffbe9352c453de54caaad886289204f67daed587a7fde12"
+        },
+        {
+          "file": "atlas-grid-12.png",
+          "sha256": "cd44bbb0ecdabd2068a4dc8a5a7179d9185df5f5e80521d279cecb17a31897ea"
+        },
+        {
+          "file": "atlas-grid-13.png",
+          "sha256": "4de543b44db7326bf7d07ec42e329ef58f2c7e47bb080674f782fbd3743a2bcd"
+        },
+        {
+          "file": "atlas-grid-14.png",
+          "sha256": "460bf9ebfce2bb26813b3b089c3a8e7b9e8797b372219902eaac5bf37e3bc59e"
+        },
+        {
+          "file": "atlas-grid-15.png",
+          "sha256": "6d6d19c05479e4d466f0899415b0aca5e78e10b9f82d7216c00c45206dd88df9"
+        },
+        {
+          "file": "atlas-grid-16.png",
+          "sha256": "5cd98f557f22df5991e9d11f564610683f42183baa999bafcdab1cdcf471b8ed"
+        },
+        {
+          "file": "atlas-grid-17.png",
+          "sha256": "7d37365a37894e1bc8d6da23262e3f418cf1975080ee36a6561a0ef997256966"
+        },
+        {
+          "file": "atlas-grid-18.png",
+          "sha256": "e5db039570d047dd70fd9cea5b2ce35562f36395bfa2eae68c41b212315cb582"
+        },
+        {
+          "file": "atlas-grid-19.png",
+          "sha256": "17b70709b46546e52f3ce613b052fd6a2636e48b1894ed81ece3e1b7ac4a0f1c"
+        },
+        {
+          "file": "atlas-grid-20.png",
+          "sha256": "c1182831481ee595dec201f5f7465fbb5403e4d52255d3ca3ffa618958095825"
+        },
+        {
+          "file": "atlas-grid-21.png",
+          "sha256": "1df4b406c3675e391f3225f5759fbdb5d1f77801336fedd7d0aea576507cbb17"
+        },
+        {
+          "file": "atlas-grid-22.png",
+          "sha256": "a4fd6cba7c2b2966ced9aa1c759a7c672b7fde1d62d6e6453cb714e89db06984"
+        },
+        {
+          "file": "atlas-grid-23.png",
+          "sha256": "29cfae9829f86882f30dcccc86460a5a913eb4c5ee48a3857a5ea4facdfad3ec"
+        }
+      ]
+    },
+    {
+      "fixture": "playback.aseprite",
+      "sourceSha256": "72d96bd49db882cf3cb2d7ff98670ca8ad5bc60ac0ab856f783cfe9eff27d3a3",
+      "layer": null,
+      "prefix": "playback",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "playback-0.png",
+          "sha256": "596b332603af9c57102e516fa9ee44383409f7efd72e9e91b01f9376b94d0ab9"
+        },
+        {
+          "file": "playback-1.png",
+          "sha256": "536ffcfb58ce666989ab90b09ca2dd6f84c71725d3fbb9dfcfd1996685fb3251"
+        },
+        {
+          "file": "playback-2.png",
+          "sha256": "0ecd9520c905cb52675b1a061b4892b7ba73b46cb96edb20883f950e3da78ebd"
+        },
+        {
+          "file": "playback-3.png",
+          "sha256": "04da01a384b888e6d967faf9d88812a8a2cca484154720d2670bdb8198092f97"
+        }
+      ]
+    },
+    {
+      "fixture": "deep.aseprite",
+      "sourceSha256": "7666cabbf4be533557538eecfd522eecb872408e611cc4e4b62d2faa174f27f2",
+      "layer": null,
+      "prefix": "deep",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "deep-0.png",
+          "sha256": "e76946638b0b4a6d01a97d7d69e5a5c3dd6b3305feba3eadc1dbc5db6a2161c8"
+        }
+      ]
+    },
+    {
+      "fixture": "background-opacity.aseprite",
+      "sourceSha256": "f18e57f7c32489943e7e54970ce7f40104b20a39098036e2c43cc0f7a9cfa04e",
+      "layer": null,
+      "prefix": "background-opacity",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "background-opacity-0.png",
+          "sha256": "e76946638b0b4a6d01a97d7d69e5a5c3dd6b3305feba3eadc1dbc5db6a2161c8"
+        }
+      ]
+    },
+    {
+      "fixture": "transparent-rgb.aseprite",
+      "sourceSha256": "c40226c5739df0854517ce8ac1d87059af4d61856226d869f88354a791594334",
+      "layer": null,
+      "prefix": "transparent-rgb",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "transparent-rgb-0.png",
+          "sha256": "08a03b2fd63438e0e1dbc4e8056aa06d2ed39abcd2627ce78d69288137a7ddf2"
+        },
+        {
+          "file": "transparent-rgb-1.png",
+          "sha256": "deb1a953aca134e22101ad811f9193a1af2a433584843b4ba8397c6560e3d538"
+        }
+      ]
+    },
+    {
+      "fixture": "rgba.aseprite",
+      "sourceSha256": "6d45469de3b090e1e638cbb548b811a0d511e2854127081790b7efe26e92a169",
+      "layer": "Body",
+      "prefix": "rgba-body",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "rgba-body-0.png",
+          "sha256": "14d1d536d98321122112971bbaa704d75b73e18847978152a2b64c3cdcef4f9a"
+        },
+        {
+          "file": "rgba-body-1.png",
+          "sha256": "b33c18240855745bfdf0ff7591a4397404ed627633f582e13b39a631adf1a163"
+        }
+      ]
+    },
+    {
+      "fixture": "nested.aseprite",
+      "sourceSha256": "cea2ad003c091bd081a34b75ae21c6a5102bc78e0e9c41092358196e9eba85c2",
+      "layer": "Red",
+      "prefix": "nested-red",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "nested-red-0.png",
+          "sha256": "a747c04749f6ec6bc9a12a9d91b77378eaf93b04156e38645ace79d6e46f3472"
+        },
+        {
+          "file": "nested-red-1.png",
+          "sha256": "96e0364dc1144aae90f0ceb0c4d00135461dad0186c908166853257936dfb7a3"
+        }
+      ]
+    },
+    {
+      "fixture": "nested.aseprite",
+      "sourceSha256": "cea2ad003c091bd081a34b75ae21c6a5102bc78e0e9c41092358196e9eba85c2",
+      "layer": "Green",
+      "prefix": "nested-green",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "nested-green-0.png",
+          "sha256": "57a362f88e98e61655eb07ab79180cca62a6fe24f97d8d3e508cce3017e0919e"
+        },
+        {
+          "file": "nested-green-1.png",
+          "sha256": "3da6ce4ee9fd2aaddbf5dca80d2d17f3f63b0118e9b8f95d0b0a4ca0374f02a0"
+        }
+      ]
+    },
+    {
+      "fixture": "playback.aseprite",
+      "sourceSha256": "72d96bd49db882cf3cb2d7ff98670ca8ad5bc60ac0ab856f783cfe9eff27d3a3",
+      "layer": "Body",
+      "prefix": "playback-body",
+      "composeGroups": true,
+      "pngs": [
+        {
+          "file": "playback-body-0.png",
+          "sha256": "596b332603af9c57102e516fa9ee44383409f7efd72e9e91b01f9376b94d0ab9"
+        },
+        {
+          "file": "playback-body-1.png",
+          "sha256": "536ffcfb58ce666989ab90b09ca2dd6f84c71725d3fbb9dfcfd1996685fb3251"
+        },
+        {
+          "file": "playback-body-2.png",
+          "sha256": "0ecd9520c905cb52675b1a061b4892b7ba73b46cb96edb20883f950e3da78ebd"
+        },
+        {
+          "file": "playback-body-3.png",
+          "sha256": "04da01a384b888e6d967faf9d88812a8a2cca484154720d2670bdb8198092f97"
+        }
+      ]
+    }
+  ]
+}

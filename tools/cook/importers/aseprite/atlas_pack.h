@@ -30,6 +30,7 @@ typedef struct de_aseprite_atlas_desc {
 } de_aseprite_atlas_desc;
 
 /* Two rendering passes share one canvas: measure trim bounds, then fill the chosen layout.
+ * Trimming removes zero-RGBA margins; transparent RGB is retained for lossless reconstruction.
  * Deterministic sorted skyline packing, no rotation. Empty frames occupy a transparent 1x1
  * content tile. Every tile includes one extruded texel on every side, including corners.
  * On failure *out is NULL, all atlas allocations are freed, and why is a static diagnostic.

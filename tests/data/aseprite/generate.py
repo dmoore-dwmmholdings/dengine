@@ -76,7 +76,7 @@ def main():
                    palette([(0, 0, 0, 0)]), user("sprite-note"),
                    cel(bytes([255, 0, 0, 255, 0, 0, 255, 128]), index=1), user("cel-note"),
                    cel(bytes([0, 255, 0, 255]), index=2), tags,
-                   *[user(f"tag-{i}") for i in range(4)], slices, user("slice-note")], extended=True),
+                   *[user(f"tag-{i}") for i in range(4)], slices, user("slice-note")]),
             frame([cel(b"", kind=1, index=1, linked=0, x=-1, z=2, opacity=200)], ms=200)]),
         "indexed.aseprite": document([
             frame([layer(), chunk(0x0004, pack("HBB3B", 1, 0, 1, 1, 2, 3)),
@@ -84,7 +84,7 @@ def main():
                    cel(bytes([1, 0]), depth=8, kind=2)]),
             frame([palette([(0, 255, 0, 255)], first=1), cel(b"", kind=1, linked=0)])], depth=8),
         "gray.aseprite": document([frame([layer(), cel(bytes([129, 64]), depth=16)])], depth=16, width=1),
-        "legacy6.aseprite": document([frame([layer(), chunk(0x0011, pack("HBB6B", 1, 0, 2, 0, 32, 63, 63, 32, 0)),
+        "legacy6.aseprite": document([frame([layer(), chunk(0x000b, pack("HBB6B", 1, 0, 2, 0, 32, 63, 63, 32, 0)),
                                             cel(bytes([1, 0]), depth=8)])], depth=8),
         "legacy8.aseprite": document([frame([layer(), chunk(0x0004, pack("HBB6B", 1, 0, 2, 0, 123, 255, 255, 123, 0)),
                                             cel(bytes([1, 0]), depth=8)])], depth=8),
@@ -112,6 +112,11 @@ def main():
                cel(b"", kind=1, index=4, linked=0, x=1, y=1)])]
     files["nested.aseprite"] = document(nested, height=2)
     files["group-flag.aseprite"] = document(nested, height=2, flags=2)
+    files["background-opacity.aseprite"] = document([frame([
+        layer("Background", flags=9, opacity=5, blend=1), cel(red)])], width=1)
+    files["transparent-rgb.aseprite"] = document([
+        frame([layer(), cel(red + bytes(4) + bytes([123, 45, 67, 0]), x=1, y=1)]),
+        frame([cel(bytes(12), x=1, y=1)])], width=5, height=3)
     files["z-order.aseprite"] = document([
         frame([layer("Red"), layer("Hidden", flags=0), layer("Blue"),
                cel(red, z=1), cel(blue, index=2)]),
@@ -151,6 +156,36 @@ def main():
         varied.append(frame(([layer()] if i == 0 else []) +
                             [cel(pixels, height=h, x=(9 - w) // 2, y=(9 - h) // 2)], ms=i + 1))
     files["atlas-grid.aseprite"] = document(varied, width=9, height=9)
+    playback_tags = chunk(0x2018, pack("H8x", 26) + b"".join(
+        pack("HHBH10x", 0, 3, direction, repeats) + string(f"d{direction}-r{repeats}")
+        for direction in range(4) for repeats in range(5))
+        + pack("HHBH10x", 0, 3, 2, 0) + string("walk")
+        + b"".join(pack("HHBH10x", 1, 1, direction, 3) + string(f"single{direction}")
+                   for direction in range(4))
+        + pack("HHBH10x", 1, 1, 3, 0) + string("single-loop"))
+    playback_slices = chunk(0x2022, pack("III", 3, 3, 0) + string("origin")
+        + pack("IiiIIiiIIii", 0, 1, 1, 6, 4, 1, 1, 4, 2, 2, 2)
+        + pack("IiiIIiiIIii", 2, 2, -1, 5, 5, 1, 2, 3, 2, 1, 3)
+        + pack("IiiIIiiIIii", 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0))
+    late_slice = chunk(0x2022, pack("III", 1, 1, 0) + string("late")
+        + pack("IiiIIiiII", 1, -5, 8, 3, 2, -1, 0, 4, 2))
+    playback = []
+    for i, ms in enumerate((7, 13, 29, 41)):
+        metadata = [layer("Body"), layer("Hidden", flags=0), playback_tags,
+                    playback_slices, late_slice] if i == 0 else []
+        playback.append(frame(metadata + [cel(bytes([(i + 1) * 40, 0, 0, 255]), x=i + 1, y=2),
+                                         cel(bytes([0, 255, 0, 255]), index=1)], ms=ms))
+    files["playback.aseprite"] = document(playback, width=8, height=6)
+    # Independent little-endian DSCP v2 seed for the shared cooked-format fuzz reader.
+    dscp = bytearray(248)
+    dscp[:4] = b"DSCP"
+    struct.pack_into("<10I", dscp, 4, 2, len(dscp), 1, 1, 0, 96, 160, 184, 4, 4)
+    struct.pack_into("<QQII f II", dscp, 48, 1, 17, 4, 4, 100.0, 1, 184)
+    struct.pack_into("<4fI2fI4I4f", dscp, 96, .25, .25, .5, .5, 17, .5, .5, 0,
+                     1, 1, 2, 2, .02, .02, .5, .5)
+    struct.pack_into("<Q4I", dscp, 160, 2, 0, 0, 3, 3)
+    struct.pack_into("<QIIiiIIiiIIii", dscp, 184, 3, 0, 3, 0, 0, 4, 4, 1, 1, 2, 2, 1, 1)
+    files["geometry-v2.dscp"] = bytes(dscp)
     for name, data in files.items():
         assert len(data) < 50 * 1024
         (out / name).write_bytes(data)

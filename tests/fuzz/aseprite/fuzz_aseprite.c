@@ -2,6 +2,8 @@
 #include "cook/importers/aseprite/aseprite_parse.h"
 #include "cook/importers/aseprite/aseprite_render.h"
 #include "cook/importers/aseprite/atlas_pack.h"
+#include "cook/importers/aseprite/aseprite_import.h"
+#include "anim/sprite_clip_format.h"
 #include <stdlib.h>
 
 /* Exact malloc blocks expose decoder overreads to ASan; the engine's arena heap would
@@ -20,6 +22,8 @@ static void fuzz_free(void *user, void *ptr, size_t bytes) {
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (size > 1024u * 1024u)
         return 0;
+    de__sprite_clip_view cooked;
+    (void)de__sprite_clip_parse(data, size, &cooked, NULL);
     de_aseprite_doc *doc = NULL;
     const de_allocator allocator = {.alloc = fuzz_alloc, .free = fuzz_free};
     de_result r = de_aseprite_parse(data, size, &allocator, 8u * 1024u * 1024u, &doc, NULL);
@@ -72,6 +76,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                         f->y + f->height >= atlas->height)
                         abort();
                 }
+                void *blob = NULL;
+                u64 bytes = 0;
+                de_result encoded = de_aseprite_clip_encode(doc, atlas, 0, (de_asset_id){1}, 100,
+                                                            NULL, &allocator, &blob, &bytes, NULL);
+                if (encoded == DE_OK) {
+                    if (!de__sprite_clip_parse(blob, bytes, &cooked, NULL) ||
+                        cooked.frame_count != doc->frame_count)
+                        abort();
+                    DE_FREE(&allocator, blob, (size_t)bytes);
+                } else if (blob || bytes)
+                    abort();
             } else if (atlas)
                 abort();
             de_aseprite_atlas_free(atlas);

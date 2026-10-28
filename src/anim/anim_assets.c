@@ -68,7 +68,8 @@ de_result de__anim_register_assets(de_anim_system *s) {
                                                                  .user = (void *)s->alloc})
              .id)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "clip asset registration");
-    return de__sprite_register_asset(s);
+    DE_TRY(de__sprite_register_asset(s));
+    return de__aseprite_register_asset(s);
 }
 const de__anim_asset *de__anim_asset_get(de_anim_system *s, u32 handle, const char *type) {
     if (!s->assets || !handle)
@@ -85,7 +86,8 @@ de_anim_clip de_anim_clip_asset(de_anim_system *s, de_asset_id id) {
     u32 h = s && s->assets ? de__asset_handle_of(s->assets, id, NULL) : 0;
     const de__slot *slot = h ? de__slot_get(s->assets, h) : NULL;
     if (!slot || (slot->type_hash != de_hash64_str("anim_clip") &&
-                  slot->type_hash != de_hash64_str("sprite_clip")))
+                  slot->type_hash != de_hash64_str("sprite_clip") &&
+                  slot->type_hash != de_hash64_str("aseprite")))
         return (de_anim_clip){0};
     return (de_anim_clip){h};
 }
@@ -95,7 +97,8 @@ de_anim_clip_kind de_anim_clip_kind_get(de_anim_system *s, de_anim_clip clip) {
         return DE_ANIM_CLIP_NONE;
     if (slot->type_hash == de_hash64_str("anim_clip"))
         return DE_ANIM_CLIP_SKELETAL;
-    if (slot->type_hash == de_hash64_str("sprite_clip"))
+    if (slot->type_hash == de_hash64_str("sprite_clip") ||
+        slot->type_hash == de_hash64_str("aseprite"))
         return DE_ANIM_CLIP_SPRITE;
     return DE_ANIM_CLIP_NONE;
 }

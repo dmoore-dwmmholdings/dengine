@@ -173,6 +173,19 @@ TEST_F(aseprite, tags_and_slice_keys, ase_fx) {
     ASSERT_EQ(s->keys[1].frame, 1u);
     ASSERT_EQ(s->keys[1].width, 0u);
 }
+TEST_F(aseprite, extended_chunk_count_keeps_the_bounded_decoder_path, ase_fx) {
+    load(f, "rgba");
+    /* Canonical small authoring fixtures use the ordinary count. Exercise the sentinel
+     * separately: Aseprite itself only accepts it when the extended count exceeds 65535. */
+    f->source[140] = f->source[134];
+    f->source[141] = f->source[135];
+    f->source[134] = 255;
+    f->source[135] = 255;
+    ASSERT_EQ(de_aseprite_parse(f->source, f->bytes, &f->allocator, 0, &f->doc, NULL), DE_OK);
+    EXPECT_EQ(f->doc->frame_count, 2u);
+    EXPECT_EQ(f->doc->cel_count, 3u);
+    EXPECT_EQ(f->doc->tag_count, 4u);
+}
 TEST_F(aseprite, indexed_compression_and_animated_palette, ase_fx) {
     de_aseprite_doc *d = parse(f, "indexed");
     ASSERT_EQ(d->depth, 8u);
@@ -212,6 +225,15 @@ TEST_F(aseprite, grayscale_and_legacy_palettes, ase_fx) {
     const u8 blue[] = {0, 0, 255, 255}, green[] = {0, 255, 0, 255};
     ASSERT_MEMEQ(d->frames[0].palette[2], blue, 4);
     ASSERT_MEMEQ(d->frames[0].palette[5], green, 4);
+}
+TEST_F(aseprite, documented_legacy_six_bit_alias_is_retained, ase_fx) {
+    load(f, "legacy6");
+    size_t chunk = find_chunk(f, 0x000b, 0);
+    f->source[chunk + 4] = 0x11;
+    f->source[chunk + 5] = 0;
+    ASSERT_EQ(de_aseprite_parse(f->source, f->bytes, &f->allocator, 0, &f->doc, NULL), DE_OK);
+    const u8 six[] = {0, 130, 255, 255};
+    ASSERT_MEMEQ(f->doc->frames[0].palette[0], six, 4);
 }
 TEST_F(aseprite, forward_links_and_invalid_link_graphs, ase_fx) {
     de_aseprite_doc *d = parse(f, "forward");
@@ -333,15 +355,21 @@ TEST_F(aseprite, composite_warns_once_with_layer_names, ase_fx) {
     render(f, 0, UINT32_MAX, pixels, sizeof pixels);
     ASSERT_EQ(w.count, 2u);
 }
-TEST_F(aseprite, composite_group_opacity_uses_independent_header_flag, ase_fx) {
+TEST_F(aseprite, composite_opacity_valid_flag_applies_to_groups_and_backgrounds, ase_fx) {
     de_aseprite_doc *doc = render_parse(f, "group-flag");
     ASSERT_EQ(doc->flags, 2u);
-    ASSERT_EQ(doc->layers[1].opacity, 128u);
-    ASSERT_EQ(doc->layers[3].opacity, 128u);
+    ASSERT_EQ(doc->layers[1].opacity, 255u);
+    ASSERT_EQ(doc->layers[3].opacity, 255u);
     u8 pixels[16];
     render(f, 0, UINT32_MAX, pixels, sizeof pixels);
-    const u8 expected[] = {63, 64, 127, 255};
+    const u8 expected[] = {0, 255, 0, 255};
     ASSERT_MEMEQ(pixels, expected, sizeof expected);
+    doc = render_parse(f, "background-opacity");
+    ASSERT_EQ(doc->layers[0].opacity, 255u);
+    ASSERT_EQ(doc->layers[0].blend, 0u);
+    render(f, 0, UINT32_MAX, pixels, sizeof pixels);
+    const u8 red[] = {255, 0, 0, 255};
+    ASSERT_MEMEQ(pixels, red, sizeof red);
 }
 TEST_F(aseprite, composite_budget_oom_stride_and_argument_failures, ase_fx) {
     parse(f, "nested");
@@ -455,7 +483,7 @@ TEST_F(aseprite, atlas_trim_empty_clipping_extrusion_and_durations, ase_fx) {
     ASSERT_EQ(a->set_count, 1u);
     ASSERT_EQ(a->frame_count, 6u);
     const u32 bounds[6][4] = {{3, 2, 2, 1}, {5, 2, 1, 3}, {0, 3, 2, 2},
-                              {0, 0, 0, 0}, {1, 5, 6, 1}, {0, 0, 2, 1}};
+                              {0, 0, 1, 1}, {1, 5, 6, 1}, {0, 0, 2, 1}};
     for (u32 i = 0; i < 6; ++i) {
         ASSERT_EQ(a->frames[i].trim_x, bounds[i][0]);
         ASSERT_EQ(a->frames[i].trim_y, bounds[i][1]);
@@ -464,6 +492,18 @@ TEST_F(aseprite, atlas_trim_empty_clipping_extrusion_and_durations, ase_fx) {
     }
     ASSERT_EQ(a->frames[1].ms, 123u);
     ASSERT_EQ(a->frames[5].ms, 250u);
+    verify_atlas(f);
+}
+TEST_F(aseprite, atlas_trims_zero_rgba_but_preserves_transparent_color, ase_fx) {
+    parse(f, "transparent-rgb");
+    de_aseprite_atlas *a = build_atlas(f, false, 32);
+    ASSERT_EQ(a->frame_count, 2u);
+    ASSERT_EQ(a->frames[0].trim_x, 1u);
+    ASSERT_EQ(a->frames[0].trim_y, 1u);
+    ASSERT_EQ(a->frames[0].trim_width, 3u);
+    ASSERT_EQ(a->frames[0].trim_height, 1u);
+    ASSERT_EQ(a->frames[1].trim_width, 0u);
+    ASSERT_EQ(a->frames[1].trim_height, 0u);
     verify_atlas(f);
 }
 TEST_F(aseprite, atlas_keep_visible_image_sets_and_groups, ase_fx) {

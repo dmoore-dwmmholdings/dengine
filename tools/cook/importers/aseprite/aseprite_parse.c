@@ -205,9 +205,10 @@ static bool layer(parser *p, cursor *c, u32 frame) {
     p->parents[l->depth] = d->layer_count;
     for (u32 i = l->depth + 1u; i < ASE_DEPTH_MAX; ++i)
         p->parents[i] = UINT32_MAX;
-    if (l->type != 1 && !(d->flags & 1u))
+    if (!(d->flags & 1u))
         l->opacity = 255;
-    if (l->type == 1 && !(d->flags & 2u)) {
+    /* Background layers have neither authored opacity nor a blend mode. */
+    if ((l->flags & 8u) || (l->type == 1 && !(d->flags & 2u))) {
         l->opacity = 255;
         l->blend = 0;
     }
@@ -314,7 +315,7 @@ static bool palette(de_aseprite_doc *d, cursor *c, u16 kind, bool modern, u8 col
             for (u32 j = 0; j < n; ++j) {
                 for (u32 k = 0; k < 3; ++k) {
                     u32 value = byte(c);
-                    if (kind == 0x0011) {
+                    if (kind == 0x000b || kind == 0x0011) {
                         if (value > 63)
                             return fail(d, "invalid six-bit Aseprite palette color");
                         value = (value << 2) | (value >> 4);
@@ -495,6 +496,7 @@ static bool chunks(de_aseprite_doc *d, const u8 *source) {
                 ok = cel(&p, &c, i);
                 break;
             case 0x0004:
+            case 0x000b: /* Upstream FLI_COLOR is decimal11; retain documented0x0011 too. */
             case 0x0011:
             case 0x2019:
                 ok = palette(d, &c, type, p.modern_palette, colors);
