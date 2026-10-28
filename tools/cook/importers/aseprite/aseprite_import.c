@@ -219,6 +219,75 @@ static bool setting_type(de_asset_import_ctx *ctx, const char *key, de_asset_set
     const de_asset_setting_value *value = de_asset_import_setting_value(ctx, key);
     return !value || value->type == type;
 }
+static de_result slice_vector(de_asset_import_ctx *ctx, const char *key, u32 count, i64 out[4],
+                              bool *present) {
+    const de_asset_setting_value *value = de_asset_import_setting_value(ctx, key);
+    *present = value != NULL;
+    if (!value)
+        return DE_OK;
+    if (value->type != DE_ASSET_SETTING_ARRAY || value->u.values.count != count ||
+        !value->u.values.items)
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,
+                                    "%.128s must be an array of exactly %u integers", key, count);
+    for (u32 i = 0; i < count; ++i) {
+        const de_asset_setting_value *item = &value->u.values.items[i];
+        i64 minimum = i < 2 ? INT32_MIN : 0;
+        i64 maximum = i < 2 ? INT32_MAX : (i64)UINT32_MAX;
+        if (item->type != DE_ASSET_SETTING_INT || item->u.i < minimum || item->u.i > maximum)
+            return de_asset_import_fail(
+                ctx, DE_ERR_INVALID_ARGUMENT, "%.128s[%u] must be %s", key, i,
+                i < 2 ? "a signed 32-bit integer" : "a nonnegative 32-bit integer dimension");
+        out[i] = item->u.i;
+    }
+    return DE_OK;
+}
+static de_result slice_overrides(de_asset_import_ctx *ctx, de_aseprite_doc *doc,
+                                 const de_allocator *allocator) {
+    if (!doc->slice_count)
+        return DE_OK;
+    size_t longest = 0;
+    for (u32 i = 0; i < doc->slice_count; ++i)
+        if (doc->slices[i].name.size > longest)
+            longest = doc->slices[i].name.size;
+    /* Source names are length-prefixed u16 strings, independently of manifest path limits. */
+    size_t capacity = longest + sizeof "slice..center";
+    char *key = DE_ALLOC(allocator, capacity, 1, DE_MEM_ASSET);
+    if (!key)
+        return de_asset_import_fail(ctx, DE_ERR_OUT_OF_MEMORY, "Aseprite slice setting key");
+    de_result result = DE_OK;
+    for (u32 i = 0; i < doc->slice_count && result == DE_OK; ++i) {
+        de_aseprite_slice *slice = &doc->slices[i];
+        /* A borrowed name containing NUL cannot equal a C-string setting key. */
+        if (memchr(slice->name.data, 0, slice->name.size))
+            continue;
+        memcpy(key, "slice.", 6);
+        memcpy(key + 6, slice->name.data, slice->name.size);
+        for (u32 kind = 0; kind < 2 && result == DE_OK; ++kind) {
+            memcpy(key + 6 + slice->name.size, kind ? ".center" : ".pivot",
+                   kind ? sizeof ".center" : sizeof ".pivot");
+            i64 values[4] = {0};
+            bool present;
+            result = slice_vector(ctx, key, kind ? 4 : 2, values, &present);
+            if (result != DE_OK || !present)
+                continue;
+            slice->flags |= kind ? 1u : 2u;
+            for (u32 j = 0; j < slice->key_count; ++j) {
+                de_aseprite_slice_key *k = &slice->keys[j];
+                if (kind) {
+                    k->center_x = (i32)values[0];
+                    k->center_y = (i32)values[1];
+                    k->center_width = (u32)values[2];
+                    k->center_height = (u32)values[3];
+                } else {
+                    k->pivot_x = (i32)values[0];
+                    k->pivot_y = (i32)values[1];
+                }
+            }
+        }
+    }
+    DE_FREE(allocator, key, capacity);
+    return result;
+}
 de_result de_aseprite_import(de_asset_import_ctx *ctx) {
     const de_allocator *allocator = de_asset_import_allocator(ctx);
     const char *layers = de_asset_import_setting_string(ctx, "layers", "flatten");
@@ -244,6 +313,9 @@ de_result de_aseprite_import(de_asset_import_ctx *ctx) {
     const void *source = de_asset_import_source(ctx, &source_bytes);
     const char *why = NULL;
     de_result result = de_aseprite_parse(source, source_bytes, allocator, 0, &doc, &why);
+    if (result != DE_OK)
+        goto done;
+    result = slice_overrides(ctx, doc, allocator);
     if (result != DE_OK)
         goto done;
     de_aseprite_atlas_desc options = {
@@ -317,6 +389,6 @@ de_asset_type_desc de_aseprite_import_type_desc(void) {
     return (de_asset_type_desc){.name = "aseprite",
                                 .extensions = extensions,
                                 .extension_count = 2,
-                                .importer_version = 1,
+                                .importer_version = 2,
                                 .import = de_aseprite_import};
 }

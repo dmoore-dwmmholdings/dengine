@@ -176,6 +176,14 @@ def main():
         playback.append(frame(metadata + [cel(bytes([(i + 1) * 40, 0, 0, 255]), x=i + 1, y=2),
                                          cel(bytes([0, 255, 0, 255]), index=1)], ms=ms))
     files["playback.aseprite"] = document(playback, width=8, height=6)
+    # DIDE import settings add metadata to slices that authored no optional fields.
+    bare_slices = [chunk(0x2022, pack("III", 2, 0, 0) + string(name)
+                        + pack("IiiII", 0, -1, 2, 8, 6)
+                        + pack("IiiII", 1, 3, -2, 4, 5))
+                   for name in ["bare.with.dots", "long." + "n" * 2048]]
+    files["slice-overrides.aseprite"] = document([
+        frame([layer(), cel(bytes([123, 45, 67, 255])), *bare_slices]),
+        frame([cel(b"", kind=1, linked=0)])], width=8, height=6)
     # Independent little-endian DSCP v2 seed for the shared cooked-format fuzz reader.
     dscp = bytearray(248)
     dscp[:4] = b"DSCP"

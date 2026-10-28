@@ -491,3 +491,93 @@ TEST_F(aseprite_runtime,
     ASSERT_TRUE(de_anim_sprite_frame(f->base.anim, f->clip, 0, &fresh));
     EXPECT_FLOAT_EQ(fresh.duration, .017f, 0);
 }
+TEST_F(aseprite_runtime, manifest_slice_apply_reset_preserve_handles_source_and_atlas,
+       ase_runtime_fx) {
+    source_load(f);
+    finish_load(f);
+    const char *manifests[] = {
+        ("[defaults.aseprite]\nlayers='keep'\npixel_art=true\npixels_per_meter=20\n"
+         "[assets.\"hero/sprites\"]\ntype='aseprite'\nsource='aseprite-source.aseprite'\n"
+         "\"slice.origin.pivot\"=[-7,9]\n\"slice.origin.center\"=[-2,3,7,0]\n"
+         "\"slice.late.pivot\"=[8,-4]\n"),
+        ("[defaults.aseprite]\nlayers='keep'\npixel_art=true\npixels_per_meter=20\n"
+         "[assets.\"hero/sprites\"]\ntype='aseprite'\nsource='aseprite-source.aseprite'\n"
+         "\"slice.origin.center\"=[1,2,-1,4]\n"),
+        ("[defaults.aseprite]\nlayers='keep'\npixel_art=true\npixels_per_meter=20\n"
+         "[assets.\"hero/sprites\"]\ntype='aseprite'\nsource='aseprite-source.aseprite'\n")};
+    u32 handles[] = {f->clip.id, f->layer.id, f->texture.id};
+    const ase_test_texture *texture = de__slot_object(de__slot_get(f->base.assets, handles[2]));
+    u64 atlas_hash = texture->hash;
+    for (u32 edit = 0; edit < 3; ++edit) {
+        bool invalid = edit == 1, reset = edit == 2;
+        u32 versions[3];
+        for (u32 i = 0; i < 3; ++i)
+            versions[i] = de__slot_get(f->base.assets, handles[i])->version;
+        ASSERT_EQ(de_file_write_all_atomic("animtest:/aseprite-assets.toml", manifests[edit],
+                                           strlen(manifests[edit])),
+                  DE_OK);
+        ASSERT_TRUE(de__asset_reload_manifest_now(f->base.assets));
+        u64 deadline = de_time_now_ns() + 10000000000ull;
+        for (;;) {
+            de_asset_system_update(f->base.assets, NULL);
+            bool ready = true;
+            for (u32 i = 0; i < 3; ++i)
+                ready = ready &&
+                        (invalid ? de_asset_last_error(f->base.assets,
+                                                       de__slot_get(f->base.assets, handles[i])->id,
+                                                       NULL, 0) != DE_OK
+                                 : de__slot_get(f->base.assets, handles[i])->version > versions[i]);
+            if (ready)
+                break;
+            ASSERT_TRUE(de_time_now_ns() < deadline);
+            de_sleep_ns(1000000);
+        }
+        if (invalid)
+            for (u32 i = 0; i < 3; ++i)
+                EXPECT_EQ(de__slot_get(f->base.assets, handles[i])->version, versions[i]);
+        EXPECT_EQ(de_anim_clip_asset(f->base.anim, de_asset_id_from("hero/sprites")).id,
+                  handles[0]);
+        EXPECT_EQ(de_anim_clip_asset(f->base.anim, de_asset_id_from("hero/sprites#layer/Body")).id,
+                  handles[1]);
+        EXPECT_EQ(de_asset_texture(f->base.assets, de_asset_id_from("hero/sprites#atlas")).id,
+                  handles[2]);
+        for (u32 clip = 0; clip < 2; ++clip) {
+            de_anim_clip handle = clip ? f->layer : f->clip;
+            de_sprite_slice_info origin, late;
+            ASSERT_TRUE(
+                de_anim_sprite_slice(f->base.anim, handle, 0, de_name_from("origin"), &origin));
+            EXPECT_EQ(origin.pivot.x, reset ? 2 : -7);
+            EXPECT_EQ(origin.pivot.y, reset ? 2 : 9);
+            EXPECT_EQ(origin.center_origin.x, reset ? 1 : -2);
+            EXPECT_EQ(origin.center_origin.y, reset ? 1 : 3);
+            EXPECT_EQ(origin.center_width, reset ? 4u : 7u);
+            EXPECT_EQ(origin.center_height, reset ? 2u : 0u);
+            EXPECT_FLOAT_EQ(origin.nine_slice.x, reset ? 1 : -2, 0);
+            EXPECT_FLOAT_EQ(origin.nine_slice.y, reset ? 1 : 3, 0);
+            EXPECT_FLOAT_EQ(origin.nine_slice.z, 1, 0);
+            EXPECT_FLOAT_EQ(origin.nine_slice.w, 1, 0);
+            EXPECT_FALSE(
+                de_anim_sprite_slice(f->base.anim, handle, 3, de_name_from("origin"), &origin));
+            EXPECT_FALSE(
+                de_anim_sprite_slice(f->base.anim, handle, 0, de_name_from("late"), &late));
+            ASSERT_TRUE(de_anim_sprite_slice(f->base.anim, handle, 1, de_name_from("late"), &late));
+            EXPECT_EQ(late.has_pivot, !reset);
+            EXPECT_EQ(late.pivot.x, reset ? 0 : 8);
+            EXPECT_EQ(late.pivot.y, reset ? 0 : -4);
+            EXPECT_EQ(late.center_origin.x, -1);
+        }
+        de_sprite_frame_info frame;
+        ASSERT_TRUE(de_anim_sprite_frame(f->base.anim, f->clip, 0, &frame));
+        EXPECT_FLOAT_EQ(frame.source_pivot.x, reset ? 3.f / 8 : -6.f / 8, 0);
+        texture = de__slot_object(de__slot_get(f->base.assets, handles[2]));
+        EXPECT_EQ(texture->hash, atlas_hash);
+        void *source = NULL;
+        u64 bytes;
+        ASSERT_EQ(de_file_read_all("animtest:/aseprite-source.aseprite", &f->base.allocator,
+                                   &source, &bytes),
+                  DE_OK);
+        ASSERT_EQ(bytes, f->source_bytes);
+        ASSERT_MEMEQ(source, f->source, (size_t)bytes);
+        DE_FREE(&f->base.allocator, source, (size_t)bytes + 1);
+    }
+}
