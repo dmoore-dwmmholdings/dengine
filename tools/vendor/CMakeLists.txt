@@ -8,6 +8,9 @@
 #                             fetch/verify/--all-hosts/extract, and a configure of a small project
 #                             that imports one through cmake/DePrebuilt.cmake, with this build's
 #                             cmake and generator. Offline too.
+if(NOT DE_BUILD_TESTS)
+    return()
+endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 
 add_test(NAME vendor_selftest

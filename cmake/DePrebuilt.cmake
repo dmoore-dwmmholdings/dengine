@@ -98,6 +98,15 @@ function(de_prebuilt_import name)
         message(FATAL_ERROR "${msg}")
     endif()
 
+    # Installed DIDE carries the pinned compiler beside the engine sources. Use that
+    # immutable payload directly; a new game never needs the development checkout/cache.
+    set(bundled "${root}/prebuilt/${host}/${name}")
+    if(EXISTS "${bundled}/.de-prebuilt.json")
+        set(DE_PREBUILT_${var}_FOUND TRUE PARENT_SCOPE)
+        set(DE_PREBUILT_${var}_DIR "${bundled}" PARENT_SCOPE)
+        set(DE_PREBUILT_${var}_HOST "${host}" PARENT_SCOPE)
+        return()
+    endif()
     if(NOT Python3_EXECUTABLE)
         find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
     endif()

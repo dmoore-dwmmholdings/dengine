@@ -7,6 +7,9 @@
  * "engine/shaders/<name>", the source path relative to shaders/, the permutations, the host
  * platform's default targets), so its `.decache` key is the build-time cook's.
  */
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS /* Installed distribution resource overrides. */
+#endif
 #include "render/shaders/engine_shaders.h"
 
 #include "gpu/shader/shader_internal.h"
@@ -21,6 +24,7 @@
 #include <dengine/de_platform.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /** Permutations of one engine shader at most. */
@@ -171,10 +175,13 @@ static de_result source_cook(const de__engine_shader_info *info, de__shader_targ
         set_why(why, cap, "%s%s", "no shader importer in this build (no Slang)", "");
         return DE_ERR_UNSUPPORTED;
     }
-    const char *cache = g_cache_override != NULL ? g_cache_override : DE_RENDER_ENGINE_SHADER_CACHE;
-    if (!mount_once("deengshd", DE_RENDER_ENGINE_SHADER_ROOT, 0, mounted_root,
+    const char *root = getenv("DE_ENGINE_SHADER_ROOT");
+    if (root == NULL || root[0] == '\0') root = DE_RENDER_ENGINE_SHADER_ROOT;
+    const char *cache = g_cache_override != NULL ? g_cache_override : getenv("DE_ENGINE_SHADER_CACHE");
+    if (cache == NULL || cache[0] == '\0') cache = DE_RENDER_ENGINE_SHADER_CACHE;
+    if (!mount_once("deengshd", root, 0, mounted_root,
                     sizeof mounted_root)) {
-        set_why(why, cap, "the shader sources are not at %s%s", DE_RENDER_ENGINE_SHADER_ROOT, "");
+        set_why(why, cap, "the shader sources are not at %s%s", root, "");
         return DE_ERR_NOT_FOUND;
     }
     const bool cached =

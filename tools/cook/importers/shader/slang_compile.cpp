@@ -10,6 +10,9 @@
  * Determinism (SPEC §11.5): the session gets no debug information and only relative paths; the
  * importer serves every file. The same source, defines and target give the same bytes.
  */
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS /* Installed distribution compiler path. */
+#endif
 #include "cook/importers/shader/slang_compile.h"
 
 #include "gpu/shader/shader_format.h"
@@ -228,10 +231,13 @@ void load(slang_state &s) {
         de_error_clear(); /* a failure only leaves the old order; Slang still loads */
     }
 #endif
-    if (de_dylib_open(DE_SLANG_LIBRARY, &s.lib) != DE_OK) {
+    const char *library = std::getenv("DE_SLANG_LIBRARY");
+    if (library == nullptr || library[0] == '\0')
+        library = DE_SLANG_LIBRARY;
+    if (de_dylib_open(library, &s.lib) != DE_OK) {
         const de_error *e = de_error_last();
         std::snprintf(s.why, sizeof s.why, "cannot open the Slang compiler \"%s\": %.200s",
-                      DE_SLANG_LIBRARY, e != nullptr ? e->message : "unknown error");
+                      library, e != nullptr ? e->message : "unknown error");
         return;
     }
     create_global_session_fn create = nullptr;
@@ -271,7 +277,7 @@ void load(slang_state &s) {
                       s.version);
         return;
     }
-    std::string dir(DE_SLANG_LIBRARY);
+    std::string dir(library);
     size_t slash = dir.find_last_of("/\\");
     dir.resize(slash != std::string::npos ? slash : 0);
     s.loader = new (std::nothrow) dir_loader(dir);

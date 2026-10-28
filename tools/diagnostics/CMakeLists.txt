@@ -1,4 +1,7 @@
 # Stdlib-only trace attribution checks; no GPU or private ANC checkout required.
+if(NOT DE_BUILD_TESTS)
+    return()
+endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(NAME acquire_trace_report_selftest
     COMMAND "${Python3_EXECUTABLE}" -m unittest discover

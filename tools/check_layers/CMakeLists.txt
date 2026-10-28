@@ -6,6 +6,9 @@
 #
 # Both are plain Python (stdlib only, 3.10+) and carry the ctest label `check`.
 # REQUIRED: the check must not disappear silently on a machine without Python.
+if(NOT DE_BUILD_TESTS)
+    return()
+endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 
 add_test(NAME layering_check

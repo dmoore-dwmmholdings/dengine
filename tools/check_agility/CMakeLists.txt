@@ -9,6 +9,9 @@
 #                             every host.
 #
 # Plain Python (stdlib only, 3.10+), ctest label `check`.
+if(NOT DE_BUILD_TESTS)
+    return()
+endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 
 add_test(NAME agility_exports_selftest

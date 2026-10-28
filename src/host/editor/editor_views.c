@@ -37,7 +37,7 @@
 #include <string.h>
 
 #if defined(_WIN32) && DE_HAS_RENDER && DE_HAS_GPU_D3D12
-#define ED_VIEWS 1
+#define ED_WIN_VIEWS 1
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -51,8 +51,19 @@
 #undef near /* windef.h: the camera has fields named near and far */
 #undef far
 #else
-#define ED_VIEWS 0
+#define ED_WIN_VIEWS 0
 #endif
+
+#if defined(__APPLE__) && DE_HAS_RENDER && DE_HAS_GPU_METAL
+#define ED_MAC_VIEWS 1
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#else
+#define ED_MAC_VIEWS 0
+#endif
+#define ED_VIEWS (ED_WIN_VIEWS || ED_MAC_VIEWS)
 
 #define ED_MAX_VIEWS 8u
 #define ED_RB_SLOTS  4u
@@ -62,7 +73,7 @@
 
 /* ---------- Shared ring (the bridge's D3D12 device) ---------- */
 
-#if ED_VIEWS
+#if ED_WIN_VIEWS
 typedef struct ed_ring {
     u32 generation;
     u32 w, h;
@@ -83,6 +94,19 @@ typedef struct ed_bridge {
     char adapter[24];
     char prefix[48];
 } ed_bridge;
+#endif
+
+#if ED_MAC_VIEWS
+/* Private, same-user shared frame files. A sequence word protects the pixel copy. */
+typedef struct ed_ring {
+    u32 generation, w, h;
+    char path[ED_RING][128];
+    void *map[ED_RING];
+    size_t bytes;
+    u64 last_fence;
+    bool released;
+} ed_ring;
+typedef struct ed_bridge { char adapter[24]; } ed_bridge;
 #endif
 
 #define ED_PICK_SKIP 128u
@@ -125,6 +149,7 @@ typedef struct ed_view {
     ed_ring rings[ED_MAX_RINGS];
     u32 ring_count;
     u32 next_generation;
+#if ED_WIN_VIEWS
     ID3D12Fence *fence;
     HANDLE fence_handle;
     char fence_name[96];
@@ -132,6 +157,9 @@ typedef struct ed_view {
     ID3D12Resource *upload;
     u64 upload_bytes;
     u8 *upload_map;
+#else
+    u64 fence_value;
+#endif
 #endif
 } ed_view;
 
@@ -252,7 +280,7 @@ static ed_view *view_find(u32 id) {
     return NULL;
 }
 
-#if ED_VIEWS
+#if ED_WIN_VIEWS
 /* ---------- The bridge device ---------- */
 
 static bool parse_luid(const char *s, LUID *out) {
@@ -425,6 +453,11 @@ static void view_gpu_free(ed_view *v) {
     v->fence_handle = NULL;
 }
 
+#endif /* ED_WIN_VIEWS */
+#if ED_MAC_VIEWS
+#include "editor_views_macos.inc"
+#endif
+#if ED_VIEWS
 static void quat_rotate(const f32 q[4], const f64 v[3], f64 out[3]);
 
 /* ---------- Overlay: debug draw and the gizmo, drawn into the frame on the CPU ---------- */
@@ -550,6 +583,7 @@ static void overlay(ed_view *v, u8 *map, u32 pitch, u32 w, u32 h) {
 }
 
 /* Converts `src` (rows of `pitch` bytes, linear RGBA16F) to sRGB RGBA8 in the newest ring. */
+#if ED_WIN_VIEWS
 static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *surface, u64 *fence) {
     ed_bridge *b = &g_views.bridge;
     ed_ring *r = &v->rings[v->ring_count - 1];
@@ -619,6 +653,33 @@ static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *sur
     *fence = v->fence_value;
     return true;
 }
+#endif /* ED_WIN_VIEWS */
+#if ED_MAC_VIEWS
+static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *surface, u64 *fence) {
+    ed_ring *r = &v->rings[v->ring_count - 1];
+    if (r->w != w || r->h != h) return false;
+    half_tables();
+    const u32 slot = (u32)(v->frames % ED_RING);
+    u64 *sequence = (u64 *)r->map[slot];
+    const u64 serial = (++v->fence_value) * 2u;
+    __atomic_store_n(sequence, serial - 1u, __ATOMIC_RELEASE);
+    u8 *pixels = (u8 *)r->map[slot] + 64;
+    for (u32 y = 0; y < h; ++y) {
+        const u16 *in = (const u16 *)(src + (size_t)y * pitch);
+        u8 *out = pixels + (size_t)y * w * 4u;
+        for (u32 x = 0; x < w; ++x, in += 4, out += 4) {
+            out[0] = g_half_srgb[in[0]]; out[1] = g_half_srgb[in[1]];
+            out[2] = g_half_srgb[in[2]]; out[3] = 255;
+        }
+    }
+    overlay(v, pixels, w * 4u, w, h);
+    __atomic_store_n(sequence, serial, __ATOMIC_RELEASE);
+    r->last_fence = serial;
+    *surface = slot; *fence = serial;
+    return true;
+}
+#endif
+
 #endif /* ED_VIEWS */
 
 /* ---------- Engine side: renderer views, cameras, readback ---------- */
@@ -633,6 +694,7 @@ static void readback_free(de__editor *ed, ed_view *v) {
 
 #if ED_VIEWS
 static bool readback_alloc(de__editor *ed, ed_view *v, u32 w, u32 h) {
+    if (!w || !h || w > 8192 || h > 8192) return false;
     readback_free(ed, v);
     v->rb_w = w;
     v->rb_h = h;
@@ -762,30 +824,26 @@ static void view_release_all(de__editor *ed, ed_view *v) {
 #if ED_VIEWS
 static void write_surfaces(ed_view *v, de_ep_arena *a, u32 *generation, de_ep_list_surface *out) {
     memset(out, 0, sizeof *out);
-#if ED_VIEWS
     const ed_ring *r = &v->rings[v->ring_count - 1];
     *generation = r->generation;
     out->items = (de_ep_surface *)de__ed_alloc(a, sizeof(de_ep_surface) * ED_RING);
     for (u32 i = 0; i < ED_RING && out->items != NULL; ++i) {
+        de_ep_surface *surface = &out->items[out->count++];
+        memset(surface, 0, sizeof *surface);
+        surface->index = i;
+#if ED_WIN_VIEWS
         char *name = (char *)de__ed_alloc(a, 128);
-        if (name == NULL)
-            break;
+        if (name == NULL) { --out->count; break; }
         snprintf(name, 128, "%s-v%u-g%u-s%u", g_views.bridge.prefix, v->id, r->generation, i);
-        de_ep_surface *s = &out->items[out->count++];
-        memset(s, 0, sizeof *s);
-        s->index = i;
-        s->handle = de_ep_cstr(name);
-        s->has_fence = true;
-        s->fence = de_ep_cstr(v->fence_name);
-        s->format = de_ep_cstr("rgba8_srgb");
-    }
+        surface->handle = de_ep_cstr(name);
+        surface->has_fence = true;
+        surface->fence = de_ep_cstr(v->fence_name);
 #else
-    (void)v;
-    (void)a;
-    *generation = 0;
+        surface->handle = de_ep_cstr(r->path[i]);
 #endif
+        surface->format = de_ep_cstr("rgba8_srgb");
+    }
 }
-
 #endif /* ED_VIEWS */
 
 /* ---------- view.* ---------- */
@@ -804,7 +862,12 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "no D3D12 device for shared surfaces");
         return;
     }
-    if (adapter != NULL && _stricmp(adapter, g_views.bridge.adapter) != 0) {
+#if ED_WIN_VIEWS
+    const bool adapter_mismatch = adapter != NULL && _stricmp(adapter, g_views.bridge.adapter) != 0;
+#else
+    const bool adapter_mismatch = adapter != NULL && strcmp(adapter, g_views.bridge.adapter) != 0;
+#endif
+    if (adapter_mismatch) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "shared surfaces are on adapter %s, not %s",
                      g_views.bridge.adapter, adapter);
         return;
@@ -958,7 +1021,11 @@ static void on_release(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
         if (v->rings[i].generation == q.generation)
             v->rings[i].released = true;
     /* Free released rings whose last frame completed. */
+#if ED_WIN_VIEWS
     const u64 done = v->fence != NULL ? ID3D12Fence_GetCompletedValue(v->fence) : 0;
+#else
+    const u64 done = v->fence_value * 2u;
+#endif
     u32 k = 0;
     for (u32 i = 0; i < v->ring_count; ++i) {
         ed_ring *r = &v->rings[i];
@@ -1467,7 +1534,7 @@ void de__ed_views_register(de__editor *ed) {
 void de__ed_views_shutdown(de__editor *ed);
 void de__ed_views_shutdown(de__editor *ed) {
     reset(ed);
-#if ED_VIEWS
+#if ED_WIN_VIEWS
     ed_bridge *b = &g_views.bridge;
     if (g_views.bridge_ok) {
         CloseHandle(b->event);
