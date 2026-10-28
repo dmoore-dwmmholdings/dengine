@@ -1680,6 +1680,95 @@ static void output_encode(lx *f, de_gpu_backend b) {
 
 /* ---------- The strip copy of a BC6H cube ---------- */
 
+typedef struct debug_user {
+    de__output_basic *output;
+    de_view_render_mode mode;
+} debug_user;
+static void debug_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) {
+    (void)lc;
+    const debug_user *u = f->user;
+    f->extra_tex = de__output_debug_add(u->output, f->g, f->arena, vc, u->mode);
+    f->extra_bpp = 8;
+    EXPECT_TRUE(f->extra_tex.id != 0);
+}
+
+/* Every diagnostic mode is checked against independently decoded readback values,
+ * with both covered pixels and background. A static plane has zero NDC motion. */
+static void material_debug(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    de__output_basic *output = NULL;
+    ASSERT_EQ(de__output_basic_create_ex(f->vis, &output), DE_OK);
+    ASSERT_TRUE(de__output_basic_enabled(output));
+    const u32 mesh = lx_square(f);
+    const u32 mat = material_add(0.3f, 0.7f, 0.4f, 0.0f);
+    g_mat[mat - 1].standard.emissive = (de_vec3){0.05f, 0.1f, 0.15f};
+    world_set(&f->w, 0, mesh, at(0, 0, 0), mat);
+    env_uniform(f, 0.0f);
+    debug_user user = {.output = output};
+    f->user = &user;
+    f->extra = debug_extra;
+    for (u32 mode = DE_VIEW_RENDER_UNLIT; mode < DE_VIEW_RENDER_MODE_COUNT; ++mode) {
+        user.mode = (de_view_render_mode)mode;
+        lx_run(f);
+        const lx_result *r = &f->res;
+        ASSERT_TRUE(r->extra != NULL);
+        u32 covered = 0, background = 0, bad = 0;
+        for (size_t i = 0; i < (size_t)r->width * r->height; ++i) {
+            surf s;
+            f32 want[3] = {0};
+            if (surf_at(r, i, &s)) {
+                ++covered;
+                for (u32 c = 0; c < 3; ++c) {
+                    switch (user.mode) {
+                    case DE_VIEW_RENDER_UNLIT:
+                        want[c] = s.base + 0.05f * (f32)(c + 1);
+                        break;
+                    case DE_VIEW_RENDER_BASE_COLOR:
+                        want[c] = s.base;
+                        break;
+                    case DE_VIEW_RENDER_NORMALS:
+                        want[c] = s.n[c] * 0.5f + 0.5f;
+                        break;
+                    case DE_VIEW_RENDER_ROUGHNESS:
+                        want[c] = s.roughness;
+                        break;
+                    case DE_VIEW_RENDER_METALLIC:
+                        want[c] = s.metallic;
+                        break;
+                    case DE_VIEW_RENDER_AO:
+                        want[c] = (f32)(r->gb[0][i] >> 24) / 255.0f;
+                        break;
+                    case DE_VIEW_RENDER_EMISSIVE:
+                        want[c] = 0.05f * (f32)(c + 1);
+                        break;
+                    case DE_VIEW_RENDER_MOTION:
+                        want[c] = 0.5f;
+                        break;
+                    case DE_VIEW_RENDER_DEPTH:
+                        want[c] = 0.1f / (f->eye.z - s.pos[2]);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            } else {
+                ++background;
+            }
+            for (u32 c = 0; c < 3; ++c)
+                bad += fabsf(r->extra[4 * i + c] - want[c]) > 0.001f;
+            bad += fabsf(r->extra[4 * i + 3] - 1.0f) > 0.001f;
+        }
+        printf("material debug mode %u: %u covered, %u background, %u bad channels\n", mode,
+               covered, background, bad);
+        EXPECT_GT(covered, 100u);
+        EXPECT_GT(background, 100u);
+        EXPECT_EQ(bad, 0u);
+    }
+    f->extra = NULL;
+    de_gpu_wait_idle(f->dev);
+    de__output_basic_destroy(output);
+}
+
 typedef struct blob_upload {
     de_rg_resource t;
     de_gpu_buffer src;
@@ -1841,6 +1930,9 @@ static void strip_copy(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(ibl, output_basic_srgb_encode_##sfx, lx) {                                              \
         output_encode(f, backend);                                                                 \
+    }                                                                                              \
+    TEST_F(ibl, material_debug_modes_##sfx, lx) {                                                  \
+        material_debug(f, backend);                                                                \
     }                                                                                              \
     TEST_F(ibl, ibl_strip_copy_bc6h_##sfx, lx) {                                                   \
         strip_copy(f, backend);                                                                    \

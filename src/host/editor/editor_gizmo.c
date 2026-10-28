@@ -445,6 +445,10 @@ u32 de__ed_show_flags(const de_ep_list_str *names) {
             f |= DE__ED_SHOW_LIGHTS;
         else if (de_ep_str_eq(s, "colliders"))
             f |= DE__ED_SHOW_COLLIDERS;
+        else if (de_ep_str_eq(s, "uiLayer"))
+            f |= DE__ED_SHOW_UI;
+        else if (de_ep_str_eq(s, "postEffects"))
+            f |= DE__ED_SHOW_POST;
     }
     return f;
 }

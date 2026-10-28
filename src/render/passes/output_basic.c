@@ -17,6 +17,7 @@
 
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
+#include "render/passes/vis/gbuffer.h"
 
 #include <string.h>
 
@@ -30,6 +31,7 @@ struct de__output_basic {
     de__vis_shared *vis;
     de__lighting *lighting;
     de__vis_kernel kernel;
+    de__vis_kernel debug_kernel;
     bool enabled;
 };
 
@@ -50,13 +52,16 @@ de_result de__output_basic_create_ex(de__vis_shared *vis, de__output_basic **out
     memset(ob, 0, sizeof *ob);
     ob->vis = vis;
     if (vis->enabled) {
-        static const char *const k_entries[1] = {"cs_output_basic"};
+        static const char *const k_entries[2] = {"cs_output_basic", "cs_view_debug"};
         static const u32 g8[3] = {8u, 8u, 1u};
         de__engine_shader_code code;
-        de_result r = de__vis_shader_load(vis, "post_output_basic", k_entries, 1, &code);
+        de_result r = de__vis_shader_load(vis, "post_output_basic", k_entries, 2, &code);
         if (r == DE_OK) {
             r = de__vis_kernel_create(vis, &code, 0, "output basic", g8, (u32)sizeof(ob_params),
                                       &ob->kernel);
+            if (r == DE_OK)
+                r = de__vis_kernel_create(vis, &code, 1, "view material debug", g8, 48u,
+                                          &ob->debug_kernel);
             de__engine_shader_code_free(&code);
         }
         if (r == DE_OK) {
@@ -79,6 +84,7 @@ void de__output_basic_destroy(de__output_basic *ob) {
     if (ob == NULL)
         return;
     de__vis_kernel_destroy(ob->vis, &ob->kernel);
+    de__vis_kernel_destroy(ob->vis, &ob->debug_kernel);
     DE_FREE(ob->vis->alloc, ob, sizeof *ob);
 }
 
@@ -130,10 +136,86 @@ de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *ar
     return dst;
 }
 
+typedef struct debug_params {
+    u32 gb0, gb1, gb2, motion, depth, emission, dst, width, height, mode, reserved0, reserved1;
+} debug_params;
+DE_STATIC_ASSERT(sizeof(debug_params) == 48, "ViewDebugParams is 48 bytes");
+typedef struct debug_pass {
+    de__output_basic *ob;
+    const de__vis_context *vc;
+    de_rg_resource dst;
+    de_view_render_mode mode;
+} debug_pass;
+
+static u32 debug_texture(const debug_pass *p, const de_rg_pass *pass, de_rg_resource src) {
+    return de_gpu_texture_bindless(p->ob->vis->dev, de_rg_texture(pass, src), 0, false);
+}
+static void debug_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const debug_pass *p = user;
+    const de__vis_context *vc = p->vc;
+    const debug_params pc = {
+        .gb0 = debug_texture(p, pass, vc->gbuffer[DE__GB0]),
+        .gb1 = debug_texture(p, pass, vc->gbuffer[DE__GB1]),
+        .gb2 = debug_texture(p, pass, vc->gbuffer[DE__GB2]),
+        .motion = debug_texture(p, pass, vc->gbuffer[DE__GB_MOTION]),
+        .depth = debug_texture(p, pass, vc->depth),
+        .emission = debug_texture(p, pass, vc->gbuffer[DE__GB_LIGHTING]),
+        .dst = de_gpu_texture_bindless(p->ob->vis->dev, de_rg_texture(pass, p->dst), 0, true),
+        .width = vc->width,
+        .height = vc->height,
+        .mode = (u32)p->mode};
+    de_gpu_cmd_set_pipeline(cmd, p->ob->debug_kernel.pipeline);
+    de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
+    de_gpu_cmd_dispatch(cmd, (pc.width + 7u) / 8u, (pc.height + 7u) / 8u, 1);
+}
+
+de_rg_resource de__output_debug_add(de__output_basic *ob, de_rg *g, de_arena *arena,
+                                    const de__vis_context *vc, de_view_render_mode mode) {
+    if (!de__output_basic_enabled(ob) || !vc || !g || !arena || mode <= DE_VIEW_RENDER_LIT ||
+        mode >= DE_VIEW_RENDER_MODE_COUNT || !vc->depth.id)
+        return (de_rg_resource){0};
+    for (u32 i = 0; i < DE__GB_COUNT; ++i)
+        if (!vc->gbuffer[i].id)
+            return (de_rg_resource){0};
+    de_rg_resource dst = de_rg_create_texture(
+        g, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
+                                  .width = vc->width,
+                                  .height = vc->height,
+                                  .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED | DE_USAGE_COPY_SRC |
+                                           DE_USAGE_RENDER_TARGET,
+                                  .name = "view.material_debug"});
+    debug_pass *p = de_arena_push(arena, sizeof *p, 16);
+    if (!dst.id || !p)
+        return (de_rg_resource){0};
+    *p = (debug_pass){.ob = ob, .vc = vc, .dst = dst, .mode = mode};
+    de_rg_pass *pass =
+        de_rg_add_pass(g, "view.material_debug", DE_QUEUE_GRAPHICS, debug_execute, p);
+    if (!pass)
+        return (de_rg_resource){0};
+    de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
+    for (u32 i = 0; i < DE__GB_COUNT; ++i)
+        de_rg_read(pass, vc->gbuffer[i], DE_ACCESS_SHADER_READ);
+    de_rg_write(pass, dst, DE_ACCESS_SHADER_WRITE);
+    return dst;
+}
+
 /* The view stage. */
 static void output_stage(de__view_frame *vf, void *user) {
     de__output_basic *ob = (de__output_basic *)user;
-    if (!de__output_basic_enabled(ob) || vf->color.id != vf->initial_color.id)
+    if (!de__output_basic_enabled(ob))
+        return;
+    if (vf->display.mode != DE_VIEW_RENDER_LIT) {
+        const de__vis_context *vc =
+            de__vis_frame_context(ob->vis, vf->view, vf->graph, vf->frame_index);
+        const de_rg_resource out =
+            de__output_debug_add(ob, vf->graph, vf->graph->arena, vc, vf->display.mode);
+        if (out.id) {
+            vf->color = out;
+            vf->color_format = DE_FMT_RGBA16_FLOAT;
+        }
+        return;
+    }
+    if (vf->color.id != vf->initial_color.id)
         return; /* off, or a debug view replaced the colour */
     const de__lighting_context *lc =
         de__lighting_frame_context(ob->lighting, vf->view, vf->graph, vf->frame_index);

@@ -343,6 +343,9 @@ de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *ar
  * (DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP), where DE_HOOK_BEFORE_TONEMAP and
  * DE_HOOK_AFTER_TONEMAP sit around it. Main thread, from de__views_create. */
 de_result de__output_basic_create(de_renderer *r, de__lighting *lt, de__output_basic **out);
+/** G-buffer visualization. Emissive/unlit expect the resolve target before lighting modifies it. */
+de_rg_resource de__output_debug_add(de__output_basic *ob, de_rg *g, de_arena *arena,
+                                    const de__vis_context *vc, de_view_render_mode mode);
 
 /* ---------- The renderer (views.c) ---------- */
 

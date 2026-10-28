@@ -29,9 +29,11 @@ typedef struct de__ed_canvas {
 #define DE__ED_SHOW_CAMERAS (1u << 3)
 #define DE__ED_SHOW_LIGHTS  (1u << 4)
 #define DE__ED_SHOW_COLLIDERS (1u << 5) /* every 2D collider (the selection's always show) */
-#define DE__ED_SHOW_DEFAULT                                                                         \
+#define DE__ED_SHOW_UI        (1u << 6)
+#define DE__ED_SHOW_POST      (1u << 7)
+#define DE__ED_SHOW_DEFAULT                                                                        \
     (DE__ED_SHOW_GRID | DE__ED_SHOW_GIZMOS | DE__ED_SHOW_OUTLINE | DE__ED_SHOW_CAMERAS |           \
-     DE__ED_SHOW_LIGHTS)
+     DE__ED_SHOW_LIGHTS | DE__ED_SHOW_UI | DE__ED_SHOW_POST)
 
 /** The show flags named in `names` (view.setShowFlags). */
 u32 de__ed_show_flags(const de_ep_list_str *names);

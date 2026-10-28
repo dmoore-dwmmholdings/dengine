@@ -233,6 +233,35 @@ static de_vec4 read_float_pixel(ui_fx *f, de_gpu_texture target, de_gpu_buffer b
     ASSERT_TRUE(p);
     return p[y * 512 + x];
 }
+TEST_F(ui_draw, metal_display_hides_ui_and_restores_pixels, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    draw_kick(f);
+    const de_vec4 background = read_float_pixel(f, target, readback, 256, 256);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){0, 1, 0, 1}, 1);
+    draw_kick(f);
+    const de_vec4 visible = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(visible.x, 0, .001f);
+    EXPECT_FLOAT_EQ(visible.y, 1, .001f);
+    const de_view_display hidden = {.disabled_features = DE_VIEW_HIDE_UI};
+    ASSERT_EQ(de_view_set_display(f->renderer, view, &hidden), DE_OK);
+    draw_kick(f);
+    const de_vec4 absent = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(absent.x, background.x, .001f);
+    EXPECT_FLOAT_EQ(absent.y, background.y, .001f);
+    EXPECT_FLOAT_EQ(absent.z, background.z, .001f);
+    ASSERT_EQ(de_view_set_display(f->renderer, view, NULL), DE_OK);
+    draw_kick(f);
+    const de_vec4 restored = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(restored.x, visible.x, .001f);
+    EXPECT_FLOAT_EQ(restored.y, visible.y, .001f);
+    EXPECT_FLOAT_EQ(restored.z, visible.z, .001f);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+}
 TEST_F(ui_draw, metal_linear_ui_nits_alpha_and_two_thousand_widget_batch, ui_fx) {
     draw_renderer(f, DE_GPU_METAL);
     de_gpu_buffer readback;

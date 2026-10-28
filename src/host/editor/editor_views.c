@@ -884,11 +884,47 @@ static void write_surfaces(ed_view *v, de_ep_arena *a, u32 *generation, de_ep_li
 
 /* ---------- view.* ---------- */
 
+static const char *const k_render_modes[DE_VIEW_RENDER_MODE_COUNT] = {
+    "lit",      "unlit", "baseColor", "normals",       "roughness",
+    "metallic", "ao",    "emissive",  "motionVectors", "depth"};
+u32 de__ed_views_render_modes(const char *const **names) {
+    *names = k_render_modes;
+    return ED_VIEWS ? DE_VIEW_RENDER_MODE_COUNT : 0;
+}
+static bool render_mode(de_ep_str name, de_view_render_mode *out) {
+    if (!name.len) {
+        *out = DE_VIEW_RENDER_LIT;
+        return true;
+    }
+    for (u32 i = 0; i < DE_VIEW_RENDER_MODE_COUNT; ++i)
+        if (de_ep_str_eq(name, k_render_modes[i])) {
+            *out = (de_view_render_mode)i;
+            return true;
+        }
+    return false;
+}
+
+#if ED_VIEWS
+static de_view_display display_policy(de_view_render_mode mode, u32 show) {
+    return (de_view_display){.mode = mode,
+                             .disabled_features =
+                                 ((show & DE__ED_SHOW_UI) ? 0u : DE_VIEW_HIDE_UI) |
+                                 ((show & DE__ED_SHOW_POST) ? 0u : DE_VIEW_DISABLE_POST_EFFECTS)};
+}
+
+#endif
+
 static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(view_create, de_ep_view_create_params, q);
 #if ED_VIEWS
     if (ed->e->renderer == NULL || ed->e->gpu == NULL) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "this session has no renderer");
+        return;
+    }
+    de_view_render_mode mode;
+    if (!render_mode(q.render_mode, &mode) ||
+        (q.has_game && q.game && mode != DE_VIEW_RENDER_LIT)) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
         return;
     }
     char *adapter = q.has_adapter ? de__ed_cstr(a, q.adapter) : NULL;
@@ -922,7 +958,7 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     v->w = q.width ? q.width : 1;
     v->h = q.height ? q.height : 1;
     v->scale = q.scale;
-    v->show = DE__ED_SHOW_DEFAULT;
+    v->show = de__ed_show_flags(&q.show_flags);
     snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len, q.render_mode.ptr);
     camera_store(v, &q.camera);
     DE_INFO(ed->log, "view.create: bridge on %s; waiting for the renderer to go idle",
@@ -955,6 +991,8 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
                     : (de_view){0};
         if (DE_HANDLE_VALID(v->rv)) {
             de_view_set_render_scale(ed->e->renderer, v->rv, 1.0f);
+            const de_view_display display = display_policy(mode, v->show);
+            (void)de_view_set_display(ed->e->renderer, v->rv, &display);
             const de_builtin_component_ids b = de_builtin_components(ed->e->world);
             v->cam = de_entity_spawn(ed->e->world);
             (void)de_entity_add(ed->e->world, v->cam, b.transform);
@@ -1042,6 +1080,10 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     if (!v->game) {
         de_view_set_max_fps(ed->e->renderer, v->rv, v->max_fps);
         de_view_set_paused(ed->e->renderer, v->rv, v->paused);
+        de_view_render_mode mode = DE_VIEW_RENDER_LIT;
+        (void)render_mode(de_ep_cstr(v->render_mode), &mode);
+        const de_view_display display = display_policy(mode, v->show);
+        (void)de_view_set_display(ed->e->renderer, v->rv, &display);
     }
     v->consumed = de_atomic_load_u64(&v->produced, DE_ATOMIC_ACQUIRE);
     de_ep_view_resized r;
@@ -1105,6 +1147,18 @@ static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
         return;
+    de_view_render_mode mode;
+    if (!render_mode(q.render_mode, &mode) || (v->game && mode != DE_VIEW_RENDER_LIT)) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
+        return;
+    }
+#if ED_VIEWS
+    const de_view_display display = display_policy(mode, v->show);
+    if (!v->game && de_view_set_display(ed->e->renderer, v->rv, &display) != DE_OK) {
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "could not apply render mode");
+        return;
+    }
+#endif
     snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len, q.render_mode.ptr);
     empty_response(w, req->id);
 }
@@ -1115,7 +1169,22 @@ static void on_show_flags(de__editor *ed, const de_ep_request *req, de_ep_arena 
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
         return;
-    v->show = de__ed_show_flags(&q.show_flags);
+    const u32 show = de__ed_show_flags(&q.show_flags);
+#if ED_VIEWS
+    de_view_render_mode mode = DE_VIEW_RENDER_LIT;
+    (void)render_mode(de_ep_cstr(v->render_mode), &mode);
+    const de_view_display display = display_policy(mode, show);
+    if (v->game && display.disabled_features) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED,
+                     "Game views share the runtime output; display overrides are unavailable");
+        return;
+    }
+    if (!v->game && de_view_set_display(ed->e->renderer, v->rv, &display) != DE_OK) {
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "could not apply show flags");
+        return;
+    }
+#endif
+    v->show = show;
     empty_response(w, req->id);
 }
 

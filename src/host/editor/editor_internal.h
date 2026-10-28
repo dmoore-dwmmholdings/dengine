@@ -171,6 +171,8 @@ u64 de__ed_scene_of(de__editor *ed, de_entity e);
 /** True for the editor's own entities (its views' cameras): not part of any scene, so world
  * queries, deltas and saves leave them out and the IDE never lists them. */
 bool de__ed_views_owns(u64 entity);
+/** Supported selectable view outputs; render-graph pass names are not image outputs. */
+u32 de__ed_views_render_modes(const char *const **names);
 /** Entity `e`, spawned by an edit, joins `scene` (0: `parent`'s scene, or the active one) with a
  * new scene id, so a save writes it to that scene. */
 void de__ed_scene_adopt(de__editor *ed, de_entity e, u64 scene, de_entity parent);

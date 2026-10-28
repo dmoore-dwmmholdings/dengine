@@ -63,6 +63,7 @@ typedef struct view_main {
     f32 render_scale;            /**< 0: the settings' render_scale */
     u32 seq;                     /**< creation sequence: ties of `order` */
     u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask (0: every layer) */
+    de_view_display display;
 } view_main;
 
 /** The render-thread side of a view slot. */
@@ -471,6 +472,22 @@ void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask) {
     de_mutex_unlock(&vs->lock);
 }
 
+de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display) {
+    const de_view_display policy = display ? *display : (de_view_display){0};
+    if ((u32)policy.mode >= DE_VIEW_RENDER_MODE_COUNT ||
+        (policy.disabled_features & ~(DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS)))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid view display policy");
+    de__views *vs = views_of(r);
+    if (!vs)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "no renderer views");
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m)
+        m->display = policy;
+    de_mutex_unlock(&vs->lock);
+    return m ? DE_OK : DE_FAIL(DE_ERR_INVALID_ARGUMENT, "stale view");
+}
+
 bool de__view_valid(const de_renderer *r, de_view v) {
     de__views *vs = views_of(r);
     if (vs == NULL)
@@ -792,6 +809,7 @@ static de_view_frame_info metadata(const de__view_frame *vf) {
                               .ring_index = (u32)(vf->frame_index % vf->renderer->frames_in_flight),
                               .frames_in_flight = vf->renderer->frames_in_flight,
                               .layer_mask = vf->layer_mask,
+                              .display = vf->display,
                               .render_origin = vf->world ? vf->world->origin : (de_dvec3){0},
                               .view_matrix = vf->view_matrix,
                               .projection = vf->proj,
@@ -852,7 +870,11 @@ void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
         if (!tw || !th)
             continue;
         const de_render_settings eff = effective_settings(r, m, &settings);
-        de__view_frame vf = {.renderer = r, .world = world, .view = v, .layer_mask = m->layer_mask};
+        de__view_frame vf = {.renderer = r,
+                             .world = world,
+                             .view = v,
+                             .layer_mask = m->layer_mask,
+                             .display = m->display};
         viewport_px(m->viewport, tw, th, vf.viewport_px);
         vf.width = round_px(vf.viewport_px[2] * eff.render_scale, 1, 16384);
         vf.height = round_px(vf.viewport_px[3] * eff.render_scale, 1, 16384);
@@ -909,7 +931,8 @@ bool de_view_layout_info(de_renderer *r, de_view view, de_view_frame_info *out) 
         de_mutex_unlock(&vs->lock);
         return false;
     }
-    de__view_frame vf = {.renderer = r, .view = view, .layer_mask = m->layer_mask};
+    de__view_frame vf = {
+        .renderer = r, .view = view, .layer_mask = m->layer_mask, .display = m->display};
     viewport_px(m->viewport, width, height, vf.viewport_px);
     settings = effective_settings(r, m, &settings);
     vf.width = round_px(vf.viewport_px[2] * settings.render_scale, 1, 16384);
@@ -1070,6 +1093,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         s->copy.pixel_art = frozen->pixel_art;
         s->copy.pixel = frozen->pixel;
         s->copy.layer_mask = frozen->layer_mask;
+        s->copy.display = frozen->display;
         s->copy.target = world->frozen_targets[frozen_index];
     }
     /* Where it goes: its target, or the swapchain / offscreen target. */
@@ -1146,6 +1170,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         vf.pixel_art = &s->copy.pixel;
     memcpy(vf.viewport_px, s->vp, sizeof vf.viewport_px);
     vf.layer_mask = s->copy.layer_mask;
+    vf.display = s->copy.display;
     camera_metadata(r, world, vf.camera, &vf);
     if (frozen) {
         vf.view_matrix = frozen->view_matrix;
@@ -1185,12 +1210,20 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.color_format = DE__VIEW_OUTPUT_FORMAT;
 
     /* PT retains only canonical GPU scene/TLAS declarations; unused visibility work is culled. */
-    const bool path = de__pt_enabled(r, vf.settings) && !vf.probe_capture;
+    const bool diagnostic = vf.display.mode != DE_VIEW_RENDER_LIT;
+    const bool path = !diagnostic && de__pt_enabled(r, vf.settings) && !vf.probe_capture;
     bool path_started = false;
     /* The stages and hooks, in slot, order, phase and registration order. */
     vs->building = &vf;
     for (u32 i = 0; i < vs->list_count; ++i) {
         const seq_entry *e = &vs->list[i];
+        /* Material visualizations retain the resolve's original emission and G-buffer.
+         * Output hooks still run: editor readback is one of them, not a UI drawing pass. */
+        if (diagnostic && e->slot > DE__VIEW_SLOT_VISIBILITY && e->slot < DE__VIEW_SLOT_POST)
+            continue;
+        if ((vf.display.disabled_features & DE_VIEW_DISABLE_POST_EFFECTS) && !e->hook &&
+            e->slot == DE__VIEW_SLOT_POST && strcmp(e->name, "output.basic") != 0)
+            continue;
         if (path && e->slot < DE__VIEW_SLOT_POST &&
             (e->hook ||
              (strcmp(e->name, "gpu_scene.view") != 0 && strcmp(e->name, "vis.frame") != 0 &&

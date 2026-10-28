@@ -445,6 +445,8 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
     de__text_unlock(t->runtime);
 }
 void de__text_ui_stage(de__view_frame *vf, void *user) {
+    if (vf->display.disabled_features & DE_VIEW_HIDE_UI)
+        return;
     de__text_draw_stage(user, vf, false);
 }
 void de__text_world_stage(de__view_frame *vf, void *user) {

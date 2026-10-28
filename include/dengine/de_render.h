@@ -259,6 +259,32 @@ DE_API bool de_view_pick_result(de_renderer *r, u64 request_id, u64 *entity_bits
  */
 DE_API void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask);
 
+/** Per-view visualization of the resolved G-buffer (opaque and alpha-tested geometry).
+ * Diagnostic views use the current frame's material data and bypass lighting/RT effects.
+ * Depth is raw reverse-Z; motion is signed NDC velocity mapped around neutral gray. */
+typedef enum de_view_render_mode {
+    DE_VIEW_RENDER_LIT = 0,
+    DE_VIEW_RENDER_UNLIT,
+    DE_VIEW_RENDER_BASE_COLOR,
+    DE_VIEW_RENDER_NORMALS,
+    DE_VIEW_RENDER_ROUGHNESS,
+    DE_VIEW_RENDER_METALLIC,
+    DE_VIEW_RENDER_AO,
+    DE_VIEW_RENDER_EMISSIVE,
+    DE_VIEW_RENDER_MOTION,
+    DE_VIEW_RENDER_DEPTH,
+    DE_VIEW_RENDER_MODE_COUNT
+} de_view_render_mode;
+enum { DE_VIEW_HIDE_UI = 1u, DE_VIEW_DISABLE_POST_EFFECTS = 2u };
+typedef struct de_view_display {
+    de_view_render_mode mode;
+    u32 disabled_features; /**< DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS; zero enables both.
+                            */
+} de_view_display;
+/** Copies display policy into the next immutable Extract frame. NULL restores Lit with UI and
+ * post effects enabled. Main thread. Invalid policy or stale view: DE_ERR_INVALID_ARGUMENT. */
+DE_API de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display);
+
 /** The main view, made with the renderer (target zero, the whole viewport, order 0, name
  * "main"). A DeCamera whose `view` is zero renders through it. */
 DE_API de_view de_renderer_main_view(const de_renderer *r);
@@ -710,6 +736,7 @@ typedef struct de_view_frame_info {
     bool pixel_art;
     de_pixel_art_settings pixel;
     de_vec2 pixel_residual;
+    de_view_display display;
 } de_view_frame_info;
 /** Inside this view's render hook. Metadata is frozen with the immutable Extract frame. */
 DE_API bool de_view_frame_info_get(de_renderer *r, de_view view, de_view_frame_info *out);

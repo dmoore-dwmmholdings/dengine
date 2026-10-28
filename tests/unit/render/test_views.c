@@ -265,6 +265,75 @@ TEST_F(views, frame_limit_pause_and_resume, vfx) {
     stop(f);
 }
 
+typedef struct display_observer {
+    de_renderer *renderer;
+    de_view view;
+    de_view_display last;
+    u32 hooks, post;
+} display_observer;
+static void observe_display(de_rg *g, de_view v, void *user) {
+    (void)g;
+    display_observer *o = user;
+    if (v.id != o->view.id)
+        return;
+    de_view_frame_info info;
+    if (de_view_frame_info_get(o->renderer, v, &info)) {
+        o->last = info.display;
+        ++o->hooks;
+    }
+}
+static void observe_post(de__view_frame *vf, void *user) {
+    display_observer *o = user;
+    if (vf->view.id == o->view.id)
+        ++o->post;
+}
+
+TEST_F(views, display_policy_is_frozen_and_independent, vfx) {
+    start(f, DE_GPU_NULL);
+    const de_view main = de_renderer_main_view(f->r);
+    const de_view inset = view(f, "display", 0, 0, 0.5f, 0.5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, main, 1)));
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, inset, 0)));
+    display_observer o = {.renderer = f->r, .view = inset};
+    de_render_add_hook(f->r, DE_HOOK_UI, observe_display, &o);
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, 100, "test.post", observe_post, &o),
+              DE_OK);
+    de_view_display policy = {.mode = DE_VIEW_RENDER_DEPTH,
+                              .disabled_features = DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS};
+    ASSERT_EQ(de_view_set_display(f->r, inset, &policy), DE_OK);
+    policy.mode = DE_VIEW_RENDER_NORMALS; /* The setter copied it. */
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, 1.0f / 60, 0), DE_OK);
+    ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, 1.0f / 60, 0), DE_OK);
+    de_view_frame_info frozen, other;
+    ASSERT_TRUE(de_renderer_extract_view_info(f->r, inset, &frozen));
+    ASSERT_TRUE(de_renderer_extract_view_info(f->r, main, &other));
+    EXPECT_EQ(frozen.display.mode, DE_VIEW_RENDER_DEPTH);
+    EXPECT_EQ(other.display.mode, DE_VIEW_RENDER_LIT);
+    EXPECT_EQ(other.display.disabled_features, 0u);
+    ASSERT_EQ(de_view_set_display(f->r, inset, &policy), DE_OK);
+    ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
+    EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_DEPTH); /* This Extract frame owns the old policy. */
+    EXPECT_EQ(o.hooks, 1u); /* Hiding UI must not suppress the editor's output/readback hook. */
+    EXPECT_EQ(o.post, 0u);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_NORMALS);
+    const de_view_display invalid = {.mode = DE_VIEW_RENDER_MODE_COUNT};
+    EXPECT_EQ(de_view_set_display(f->r, inset, &invalid), DE_ERR_INVALID_ARGUMENT);
+    const de_view_display bad_flags = {.disabled_features = 0x80000000u};
+    EXPECT_EQ(de_view_set_display(f->r, inset, &bad_flags), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    ASSERT_EQ(de_view_set_display(f->r, inset, NULL), DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_LIT);
+    EXPECT_EQ(o.last.disabled_features, 0u);
+    EXPECT_EQ(o.post, 1u);
+    de_view_destroy(f->r, inset);
+    EXPECT_EQ(de_view_set_display(f->r, inset, NULL), DE_ERR_INVALID_ARGUMENT);
+    de_error_clear();
+    de_render_remove_hook(f->r, DE_HOOK_UI, observe_display, &o);
+    de__view_unregister_stage(f->r, observe_post, &o);
+}
+
 TEST_F(views, settings_per_view, vfx) {
     start(f, DE_GPU_NULL);
     const de_view mv = de_renderer_main_view(f->r);

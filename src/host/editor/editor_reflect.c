@@ -254,15 +254,15 @@ static void on_debug_outputs(de__editor *ed, const de_ep_request *req, de_ep_are
     de_ep_debug_output_list list;
     memset(&list, 0, sizeof list);
 #if DE_HAS_RENDER
-    if (ed->e->renderer != NULL) {
-        const de_render_stats *rs = de_renderer_stats(ed->e->renderer);
-        if (rs != NULL && rs->pass_names != NULL) {
-            list.outputs.items =
-                (de_ep_debug_output *)de__ed_alloc(a, sizeof(de_ep_debug_output) * (rs->pass_count + 1));
-            for (u32 i = 0; i < rs->pass_count && list.outputs.items != NULL; ++i) {
-                list.outputs.items[list.outputs.count].name = de_ep_cstr(rs->pass_names[i]);
-                list.outputs.items[list.outputs.count++].kind = de_ep_cstr("pass");
-            }
+    if (ed->e->renderer != NULL && ed->e->gpu != NULL) {
+        const char *const *names = NULL;
+        const u32 count = de__ed_views_render_modes(&names);
+        list.outputs.items =
+            (de_ep_debug_output *)de__ed_alloc(a, sizeof(de_ep_debug_output) * count);
+        for (u32 i = 0; i < count && list.outputs.items != NULL; ++i) {
+            list.outputs.items[i].name = de_ep_cstr(names[i]);
+            list.outputs.items[i].kind = de_ep_cstr("renderMode");
+            ++list.outputs.count;
         }
     }
 #else

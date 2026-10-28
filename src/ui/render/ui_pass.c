@@ -53,6 +53,10 @@ void de_ui__render_hook(de_rg *graph, de_view view, void *user) {
     const de_view own = r->ui->desc.view.id ? r->ui->desc.view : de_renderer_main_view(r->ui->desc.renderer);
     if (own.id != view.id)
         return;
+    de_view_frame_info display;
+    if (de_view_frame_info_get(r->ui->desc.renderer, view, &display) &&
+        (display.display.disabled_features & DE_VIEW_HIDE_UI))
+        return;
 
     de_render_hook_info info;
     if (!de_view_hook_info(r->ui->desc.renderer, view, &info) ||
