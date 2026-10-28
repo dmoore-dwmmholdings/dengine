@@ -315,6 +315,18 @@ typedef struct de_writer {
     de_result (*write)(void *user, const void *data, size_t bytes);
     void *user;
 } de_writer;
+
+/** Writes deterministic debugger definitions from the current registry (DENG-586).
+ * Each non-NULL writer receives a complete Natvis XML or LLDB Python module. At least one
+ * writer is required. Registration must be idle; the registry is unchanged. Sorting uses
+ * the registry allocator and is freed before return. Writer failures propagate; callers
+ * must discard partial output. Generated formatters never execute debuggee functions.
+ * Core string/container summaries are bounded; registered structs retain normal expansion.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT, DE_ERR_OUT_OF_MEMORY, or a writer error.
+ * Shipping returns DE_ERR_UNSUPPORTED and contains no embedded Python formatter.
+ */
+DE_API de_result de_debug_visualizers_write(const de_type_registry *r, de_writer *natvis,
+                                           de_writer *lldb);
 typedef struct de_reader {
     de_result (*read)(void *user, void *data, size_t bytes, size_t *read);
     void *user;

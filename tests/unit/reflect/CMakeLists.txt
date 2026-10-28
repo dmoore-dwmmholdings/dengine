@@ -15,6 +15,37 @@ if(TARGET test_reg)
                                               CXX_EXTENSIONS OFF)
 endif()
 
+# DENG-586: reflection writer, shared game registration source, native build-time generation.
+de_add_test(NAME debugger SOURCES test_debugger.c LIBS de_reflect)
+if(DE_BUILD_TESTS AND NOT DE_IS_SHIPPING)
+    add_executable(de_debugger_fixture debugger_fixture.c debugger_registration.c)
+    target_link_libraries(de_debugger_fixture PRIVATE de_reflect de_core de_build_flags)
+    target_include_directories(de_debugger_fixture PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(de_debugger_fixture PRIVATE DEBUG_HEALTH_EXTRA=1)
+    if(MSVC)
+        target_compile_options(de_debugger_fixture PRIVATE /Od)
+    else()
+        target_compile_options(de_debugger_fixture PRIVATE -O0)
+    endif()
+    include(DeDebugVisualizers)
+    de_add_debug_visualizers(NAME test_game REGISTER debug_register_types
+        SOURCES debugger_registration.c FOR_TARGET de_debugger_fixture)
+    if(NOT CMAKE_CROSSCOMPILING OR CMAKE_CROSSCOMPILING_EMULATOR)
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        set(_de_visualizer_check "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_debugger.py"
+            --folder "${CMAKE_BINARY_DIR}/dide/visualizers"
+            --generator "$<TARGET_FILE:test_game_visualizer_gen>")
+        add_test(NAME debugger.generated_formats COMMAND ${_de_visualizer_check})
+        set_tests_properties(debugger.generated_formats PROPERTIES LABELS "unit;reflect;debugger" TIMEOUT 60)
+        find_program(DE_LLDB_EXECUTABLE NAMES lldb)
+        if(DE_LLDB_EXECUTABLE)
+            add_test(NAME debugger.native_lldb COMMAND ${_de_visualizer_check}
+                --fixture "$<TARGET_FILE:de_debugger_fixture>" --lldb "${DE_LLDB_EXECUTABLE}")
+            set_tests_properties(debugger.native_lldb PROPERTIES LABELS "unit;reflect;debugger" TIMEOUT 90 RUN_SERIAL TRUE)
+        endif()
+    endif()
+endif()
+
 de_add_test(NAME path SOURCES test_path.c LIBS de_reflect)
 
 # DENG-295: the TOML text serializer. Golden files are in data/ (text_*.toml); check_toml.py

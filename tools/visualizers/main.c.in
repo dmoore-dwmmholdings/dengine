@@ -1,0 +1,48 @@
+/* Generated registration-only driver; no game initialization or target code evaluation. */
+#include "core_types.h"
+#include <stdio.h>
+#if defined(_WIN32)
+#include <wchar.h>
+#define PATH_CHAR wchar_t
+#define OPEN(p) _wfopen(p, L"wbx")
+#define REMOVE(p) _wremove(p)
+#define MAIN wmain
+#else
+#define PATH_CHAR char
+#define OPEN(p) fopen(p, "wbx")
+#define REMOVE(p) remove(p)
+#define MAIN main
+#endif
+@DE_VISUALIZER_DECL@
+static de_result write_file(void *user, const void *data, size_t size) {
+    return fwrite(data, 1, size, user) == size ? DE_OK : DE_ERR_IO;
+}
+int MAIN(int argc, PATH_CHAR **argv) {
+    if (argc != 3) {
+        fputs("usage: visualizer_gen <new.natvis> <new.py>\n", stderr);
+        return 2;
+    }
+    de_type_registry *registry = NULL;
+    de_result result = de_type_registry_create(NULL, &registry);
+    if (result == DE_OK) result = de__debugger_core_types(registry);
+    if (result == DE_OK) result = @DE_VISUALIZER_CALL@;
+    FILE *xml = NULL, *py = NULL;
+    if (result == DE_OK) {
+        xml = OPEN(argv[1]);
+        if (xml) py = OPEN(argv[2]);
+        if (!xml || !py) result = DE_ERR_IO;
+    }
+    if (result == DE_OK) {
+        de_writer x = {write_file, xml}, p = {write_file, py};
+        result = de_debug_visualizers_write(registry, &x, &p);
+    }
+    if (xml && fclose(xml)) result = DE_ERR_IO;
+    if (py && fclose(py)) result = DE_ERR_IO;
+    if (result != DE_OK) {
+        if (xml) (void)REMOVE(argv[1]);
+        if (py) (void)REMOVE(argv[2]);
+        fprintf(stderr, "visualizer generation failed: %s\n", de_result_str(result));
+    }
+    de_type_registry_destroy(registry);
+    return result == DE_OK ? 0 : 1;
+}

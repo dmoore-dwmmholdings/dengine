@@ -62,6 +62,7 @@ if(NOT DE_IS_SHIPPING)
 endif()
 
 include(DeAddGame)
+include(DeDebugVisualizers)
 
 # DENG-91: the main loop's timing core (fixed/variable steps, catch-up, alpha) and the loop's
 # internal types; loop.c itself is in the list above.
