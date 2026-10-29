@@ -174,6 +174,36 @@ letterbox and palette. `DE_HOOK_UI` keeps its existing output-resolution stage.
 A participant's callback/data must remain valid through the submission fence;
 the metadata and graph context are immutable until that frame retires.
 
+## Per-view mesh LOD inspection
+
+`de_view_set_display` accepts an explicit cooked mesh level for inspection views:
+
+```c
+de_view_display preview = {.force_mesh_lod = true, .mesh_lod = selected_lod};
+de_view_set_display(renderer, preview_view, &preview);
+```
+
+Levels 0 through 7 are valid. A mesh with a shorter chain uses its final level.
+The choice bypasses the camera error metric and global LOD bias, including while
+`r.cull_freeze` retains a previous camera. Clearing `force_mesh_lod` or passing
+NULL restores the automatic policy. An invalid forced level leaves the accepted
+view policy unchanged. Existing zero-initialized policies retain their behavior.
+
+The policy is copied into the immutable Extract frame with the other display
+settings. A change after Extract applies to the next extracted frame, and another
+view retains its own policy. Visibility-buffer work lists and forward transparent
+draws use the selected cooked meshlet ranges. RT requests select that level too,
+but may fall back to a coarser resident BLAS; an override does not create missing
+geometry. Automatic forward transparency still uses its existing LOD0 policy
+(DENG-694).
+
+DENG-693 qualifies mixed-chain selection against actual Metal work-list readback,
+different transparent LOD geometry/pixels, native RT selected-level/residency
+readback, and frozen/independent renderer views. Strict Windows C11 compilation
+is checked; Windows linking/runtime is not qualified here. This is renderer
+infrastructure for DENG-635, whose isolated model/material rendering and
+before/after importer-settings service remain separate work.
+
 ## Provider verification
 
 Focused native/CPU checks pass: seven participant tests, ten forward regression

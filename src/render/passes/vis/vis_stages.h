@@ -151,8 +151,8 @@ enum { DE__VIS_CULL_FRUSTUM = 1u, DE__VIS_CULL_FROZEN = 2u, DE__VIS_CULL_OCCLUSI
 typedef struct de__vis_cull_view {
     f32 planes[DE__VIS_CULL_PLANES][4]; /**< normal xyz (unit, inward), d */
     f32 camera[4];                      /**< culling camera (render-origin space), near_z */
-    f32 lod[4];                         /**< LOD scale, orthographic (0/1), LOD bias, 0 */
-    f32 view_proj[4][4];                /**< the culling view-projection, rows */
+    f32 lod[4];          /**< LOD scale, orthographic (0/1), bias, forced level+1 (0 auto) */
+    f32 view_proj[4][4]; /**< the culling view-projection, rows */
     u32 instance_count, layer_mask, work_capacity, flags;
     /* DENG-233: the view's HZB (sampled bindless index, mip 0 size, mips; 0 = none) and its
      * visibility flags (bindless index; slots the last frame wrote, 0 = no history). */
@@ -434,6 +434,7 @@ typedef struct de__vis_context {
     bool cull_freeze, cull_disable;
     f32 lod_error_px;
     i32 lod_bias;
+    u32 forced_lod; /**< Cooked level+1, 0 automatic; copied from this view's frozen display. */
 
     /* Instance culling (cull_instances.c), per phase (DE__VIS_PHASE_INDEX). */
     de__vis_cull_view cull;  /**< this frame's cull constants */
@@ -574,6 +575,7 @@ typedef struct de__vis_frame_desc {
     const de__view_hidden *hidden;
     de_gpu_buffer hidden_buffer;
     u32 excluded_light_mask;
+    de_view_display display;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */

@@ -163,6 +163,13 @@ f32 de__vis_max_axis_scale(const de__gs_instance *inst) {
 
 u32 de__vis_select_lod(const de__vis_cull_view *v, const de__gs_instance *inst,
                        const de__gs_mesh *m) {
+    const u32 levels = m->lod_count < DE__GS_MESH_LODS ? m->lod_count : DE__GS_MESH_LODS;
+    if (!levels)
+        return 0;
+    if (v->lod[3] > 0.0f) {
+        const u32 forced = (u32)v->lod[3] - 1u;
+        return forced < levels ? forced : levels - 1u;
+    }
     const f32 *c = inst->sphere.v;
     f32 dist = 1.0f;
     if (v->lod[1] == 0.0f) {
@@ -171,7 +178,7 @@ u32 de__vis_select_lod(const de__vis_cull_view *v, const de__gs_instance *inst,
         dist = d > v->camera[3] ? d : v->camera[3];
     }
     const f32 scale = de__vis_max_axis_scale(inst);
-    const i32 count = (i32)(m->lod_count < DE__GS_MESH_LODS ? m->lod_count : DE__GS_MESH_LODS);
+    const i32 count = (i32)levels;
     i32 lod = 0;
     for (i32 l = count - 1; l > 0; --l) {
         if (m->lods[l].error * scale * v->lod[0] <= dist) {
@@ -598,6 +605,8 @@ void de__vis_cull_instances(de_rg *g, de__vis_context *vc, de__vis_phase phase) 
     } else {
         pv->frozen = false;
     }
+    /* Freeze only the camera's automatic policy; an explicit per-view choice remains live. */
+    cv.lod[3] = (f32)vc->forced_lod;
     if (vc->cull_disable)
         cv.flags &= ~(u32)DE__VIS_CULL_FRUSTUM;
     u32 count = vc->instance_count;

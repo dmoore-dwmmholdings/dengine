@@ -462,6 +462,7 @@ typedef struct lx {
     de_vec3 eye, target;
     f32 fov;
     u32 width, height;
+    de_view_display display;
     fx_result res;
 } lx;
 
@@ -764,6 +765,7 @@ static bool lx_frame(lx *f) {
     const de__vis_frame_desc d = {.gpu_scene = f->gs,
                                   .hidden = f->hidden,
                                   .hidden_buffer = f->hidden_buffer,
+                                  .display = f->display,
                                   .view = (de_view){.id = 1},
                                   .view_slot = 0,
                                   .frame_index = n,
@@ -932,6 +934,51 @@ static void point_light(lx *f, u32 slot, f32 x, f32 y, f32 z, f32 lumens) {
 /* A blended quad over the floor: the vis buffer under it holds the floor, its meshlets are
  * counted as forward, and the pass draws it. Made opaque, the vis buffer holds it (the check
  * would see a leak). */
+static u32 green_pixels(const lx *f) {
+    u32 count = 0;
+    for (u32 i = 0; i < f->width * f->height; ++i) {
+        const f32 *pixel = f->res.lighting + 4u * i;
+        count += pixel[1] > pixel[0] + 0.1f && pixel[1] > pixel[2] + 0.1f;
+    }
+    return count;
+}
+
+static void forced_forward_lod(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    lx_floor(f, mat_unlit(.2f, .2f, .2f, 1, DE_COOKED_ALPHA_OPAQUE));
+    const u32 material = mat_unlit(0, 1, 0, .5f, DE_COOKED_ALPHA_BLEND);
+    const u32 mesh = lx_mesh_plane(f, 2, 2, 1);
+    /* LOD0 is the entire four-patch quad; authored LOD1 contains only its last quadrant. */
+    de_render_mesh *record = &g_mesh[mesh - 1u].rm;
+    record->lod_count = 2;
+    record->lods[1] = (de_cooked_mesh_lod){.meshlet_first = 3,
+                                           .meshlet_count = 1,
+                                           .triangle_count = PATCH_TRIS,
+                                           .vertex_count = PATCH_VERT,
+                                           .error = 1};
+    world_set(&f->w, 1, mesh, at(0, 0, 3), material);
+    lx_run(f);
+    const u32 whole = green_pixels(f);
+    ASSERT_GT(whole, 100u);
+    ASSERT_EQ(f->res.draw_count, 1u);
+    EXPECT_EQ(f->res.draws[0].meshlet_first, 0u);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+    f->display = (de_view_display){.force_mesh_lod = true, .mesh_lod = 1};
+    lx_run(f);
+    const u32 quarter = green_pixels(f);
+    EXPECT_GT(quarter, whole / 5u);
+    EXPECT_LT(quarter, whole / 3u);
+    EXPECT_EQ(f->res.draws[0].meshlet_first, 3u);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 1u);
+    f->display.mesh_lod = 7; /* Mixed/short mesh chains use their final level. */
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), quarter);
+    f->display = (de_view_display){0};
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), whole);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+}
+
 static void hidden_forward(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
     lx_floor(f, mat_unlit(.2f, .2f, .2f, 1, DE_COOKED_ALPHA_OPAQUE));
@@ -1424,6 +1471,9 @@ static void scene_color(lx *f, de_gpu_backend b) {
 }
 
 #define HIDDEN_FORWARD_TEST(tag, backend)                                                          \
+    TEST_F(forward, forced_forward_lod_##tag, lx) {                                                \
+        forced_forward_lod(f, backend);                                                            \
+    }                                                                                              \
     TEST_F(forward, hidden_forward_##tag, lx) {                                                    \
         hidden_forward(f, backend);                                                                \
     }

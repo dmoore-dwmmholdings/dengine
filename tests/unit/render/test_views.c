@@ -29,6 +29,7 @@
 #include "gpu/gpu_backend.h"
 #include "render/components_internal.h"
 #include "render/graph/rg_internal.h"
+#include "render/passes/vis/vis_stages.h"
 #include "render/renderer_internal.h"
 #include "render/views_internal.h"
 #include "render/world/render_world.h"
@@ -270,6 +271,7 @@ typedef struct display_observer {
     de_view view;
     de_view_display last;
     u32 hooks, post;
+    u32 forced_lod;
 } display_observer;
 static void observe_display(de_rg *g, de_view v, void *user) {
     (void)g;
@@ -279,6 +281,10 @@ static void observe_display(de_rg *g, de_view v, void *user) {
     de_view_frame_info info;
     if (de_view_frame_info_get(o->renderer, v, &info)) {
         o->last = info.display;
+        const de__vis_context *context =
+            de__vis_frame_context(de__views_vis(o->renderer), v, g, info.frame_index);
+        if (context)
+            o->forced_lod = context->forced_lod;
         ++o->hooks;
     }
 }
@@ -299,33 +305,49 @@ TEST_F(views, display_policy_is_frozen_and_independent, vfx) {
     ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, 100, "test.post", observe_post, &o),
               DE_OK);
     de_view_display policy = {.mode = DE_VIEW_RENDER_DEPTH,
-                              .disabled_features = DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS};
+                              .disabled_features = DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS,
+                              .force_mesh_lod = true,
+                              .mesh_lod = 2};
     ASSERT_EQ(de_view_set_display(f->r, inset, &policy), DE_OK);
     policy.mode = DE_VIEW_RENDER_NORMALS; /* The setter copied it. */
+    policy.mesh_lod = 5;
     ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, 1.0f / 60, 0), DE_OK);
     ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, 1.0f / 60, 0), DE_OK);
     de_view_frame_info frozen, other;
     ASSERT_TRUE(de_renderer_extract_view_info(f->r, inset, &frozen));
     ASSERT_TRUE(de_renderer_extract_view_info(f->r, main, &other));
     EXPECT_EQ(frozen.display.mode, DE_VIEW_RENDER_DEPTH);
+    EXPECT_TRUE(frozen.display.force_mesh_lod);
+    EXPECT_EQ(frozen.display.mesh_lod, 2u);
     EXPECT_EQ(other.display.mode, DE_VIEW_RENDER_LIT);
     EXPECT_EQ(other.display.disabled_features, 0u);
+    EXPECT_FALSE(other.display.force_mesh_lod);
     ASSERT_EQ(de_view_set_display(f->r, inset, &policy), DE_OK);
     ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
     EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_DEPTH); /* This Extract frame owns the old policy. */
+    EXPECT_EQ(o.last.mesh_lod, 2u);
+    EXPECT_EQ(o.forced_lod, 3u);
     EXPECT_EQ(o.hooks, 1u); /* Hiding UI must not suppress the editor's output/readback hook. */
     EXPECT_EQ(o.post, 0u);
     ASSERT_EQ(frame(f), DE_OK);
     EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_NORMALS);
+    EXPECT_EQ(o.last.mesh_lod, 5u);
+    EXPECT_EQ(o.forced_lod, 6u);
     const de_view_display invalid = {.mode = DE_VIEW_RENDER_MODE_COUNT};
     EXPECT_EQ(de_view_set_display(f->r, inset, &invalid), DE_ERR_INVALID_ARGUMENT);
     const de_view_display bad_flags = {.disabled_features = 0x80000000u};
     EXPECT_EQ(de_view_set_display(f->r, inset, &bad_flags), DE_ERR_INVALID_ARGUMENT);
+    const de_view_display bad_lod = {.force_mesh_lod = true, .mesh_lod = 8};
+    EXPECT_EQ(de_view_set_display(f->r, inset, &bad_lod), DE_ERR_INVALID_ARGUMENT);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(o.last.mesh_lod, 5u); /* Invalid input preserves the accepted policy. */
     de_error_clear();
     ASSERT_EQ(de_view_set_display(f->r, inset, NULL), DE_OK);
     ASSERT_EQ(frame(f), DE_OK);
     EXPECT_EQ(o.last.mode, DE_VIEW_RENDER_LIT);
     EXPECT_EQ(o.last.disabled_features, 0u);
+    EXPECT_FALSE(o.last.force_mesh_lod);
+    EXPECT_EQ(o.forced_lod, 0u);
     EXPECT_EQ(o.post, 1u);
     de_view_destroy(f->r, inset);
     EXPECT_EQ(de_view_set_display(f->r, inset, NULL), DE_ERR_INVALID_ARGUMENT);

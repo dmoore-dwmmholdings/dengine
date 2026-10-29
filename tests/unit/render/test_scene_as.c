@@ -69,6 +69,23 @@ TEST_F(scene_as, blas_per_lod, rt_fixture) {
     EXPECT_EQ(scene->blas_count, 2u);
     mesh_free(&second, f->d);
 }
+TEST_F(scene_as, forced_lod_uses_view_policy_and_resident_fallback, rt_fixture) {
+    de_view_display policy = {.force_mesh_lod = true, .mesh_lod = 1};
+    ASSERT_EQ(de_view_set_display(f->r, f->view, &policy), DE_OK);
+    EXPECT_EQ(frame_rt(f)[1].lod, 1u);
+    policy.mesh_lod = 7; /* This mesh has only two levels. */
+    ASSERT_EQ(de_view_set_display(f->r, f->view, &policy), DE_OK);
+    EXPECT_EQ(frame_rt(f)[1].lod, 1u);
+    policy.mesh_lod = 0;
+    ASSERT_EQ(de_view_set_display(f->r, f->view, &policy), DE_OK);
+    EXPECT_EQ(frame_rt(f)[1].lod, 0u);
+    de_gpu_accel saved = f->r->rt_scene->meshes[0].blas[0];
+    f->r->rt_scene->meshes[0].blas[0].id = 0;
+    EXPECT_EQ(frame_rt(f)[1].lod, 1u); /* Never use a missing BLAS to satisfy an override. */
+    f->r->rt_scene->meshes[0].blas[0] = saved;
+    ASSERT_EQ(de_view_set_display(f->r, f->view, NULL), DE_OK);
+    EXPECT_EQ(frame_rt(f)[1].lod, 0u);
+}
 TEST_F(scene_as, base_tier_noop, rt_fixture) {
     de__view_unregister_stage(f->r, trace_stage, f);
     de_render_settings settings = {.tier = DE_TIER_BASE, .render_scale = 1};

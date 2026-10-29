@@ -14,13 +14,18 @@ public float max_axis_scale(float4 rows[3])
 /// The LOD of `m` for an instance with bounding sphere (c, r) and axis scale `scale`.
 public uint select_lod(DeGpuMesh m, float scale, float3 c, float r, DeVisCullView v)
 {
+    uint levels = min(m.lod_count, DE_GPU_MESH_LODS);
+    if (levels == 0u)
+        return 0u;
+    if (v.lod.w > 0.0)
+        return min(uint(v.lod.w) - 1u, levels - 1u);
     float dist = 1.0;
     if (v.lod.y == 0.0)
     {
         float3 d = c - v.camera.xyz;
         dist = max(sqrt(d.x * d.x + d.y * d.y + d.z * d.z) - r, v.camera.w);
     }
-    int count = int(min(m.lod_count, DE_GPU_MESH_LODS));
+    int count = int(levels);
     int lod = 0;
     for (int l = count - 1; l > 0; --l)
     {

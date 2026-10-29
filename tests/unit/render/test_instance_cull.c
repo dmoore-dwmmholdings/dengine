@@ -257,6 +257,8 @@ typedef struct icx {
     u32 width, height;
     u32 layer_mask;
     u32 fixed_capacity;
+    u32 view_slot;
+    de_view_display display;
     bool readback; /* add the test's readback pass */
     cull_result res;
 } icx;
@@ -468,8 +470,8 @@ static bool icx_frame(icx *f, de__vis_context **vc_out) {
         return false;
     const de_vec3 up = {0.0f, 0.0f, 1.0f};
     de__vis_frame_desc d = {.gpu_scene = f->gs,
-                            .view = (de_view){.id = 1},
-                            .view_slot = 0,
+                            .view = (de_view){.id = f->view_slot + 1u},
+                            .view_slot = f->view_slot,
                             .frame_index = n,
                             .frames_completed = n, /* every earlier frame was waited for */
                             .width = f->width,
@@ -480,6 +482,7 @@ static bool icx_frame(icx *f, de__vis_context **vc_out) {
                             .camera_position = f->eye,
                             .origin = f->w.f.origin,
                             .layer_mask = f->layer_mask,
+                            .display = f->display,
                             .work_capacity_fixed = f->fixed_capacity};
     de__vis_context *vc = NULL;
     if (de__vis_frame_build(f->vis, f->g, &d, &vc) != DE_OK || vc == NULL)
@@ -1029,6 +1032,28 @@ TEST(instance_cull, lod_selection_cpu) {
     EXPECT_EQ(de__vis_select_lod(&v, &e, &m), 0u);
 }
 
+TEST(instance_cull, forced_lod_ignores_camera_and_bias_and_clamps_per_mesh) {
+    de__vis_cull_view v = {0};
+    de__gs_instance instance = {0};
+    de__gs_mesh mesh = {0};
+    for (u32 levels = 1; levels <= DE__GS_MESH_LODS; ++levels) {
+        mesh.lod_count = levels;
+        for (u32 selected = 0; selected < DE__GS_MESH_LODS; ++selected) {
+            v.lod[3] = (f32)(selected + 1u);
+            for (u32 distance_case = 0; distance_case < 2; ++distance_case) {
+                v.lod[0] = distance_case ? 1e8f : 1.0f;
+                v.lod[1] = (f32)distance_case;
+                v.lod[2] = distance_case ? -7.0f : 7.0f;
+                instance.sphere.v[1] = distance_case ? 1e8f : 0.1f;
+                const u32 expected = selected < levels ? selected : levels - 1u;
+                EXPECT_EQ(de__vis_select_lod(&v, &instance, &mesh), expected);
+            }
+        }
+    }
+    mesh.lod_count = 0;
+    EXPECT_EQ(de__vis_select_lod(&v, &instance, &mesh), 0u);
+}
+
 /* ================================================================================================
  * GPU tests
  * ============================================================================================== */
@@ -1128,6 +1153,47 @@ static void lod_selection(icx *f, de_gpu_backend b) {
             distinct += (seen >> l) & 1u;
         EXPECT_GE(distinct, 4u);
     }
+}
+
+/* Read actual GPU work-list levels/ranges, independently of the CPU selector's answer. */
+static void forced_lod_selection(icx *f, de_gpu_backend backend) {
+    icx_open(f, backend, 32u, 27u);
+    f->eye = (de_vec3){0, -2, 0};
+    f->target = (de_vec3){0, 1, 0};
+    for (u32 i = 0; i < 32u; ++i)
+        world_set(&f->w, i, 1u + i % 12u,
+                  de_affine_from_trs((de_vec3){0, 20.0f + 3.0f * (f32)i, 0}, (de_quat){0, 0, 0, 1},
+                                     (de_vec3){1, 1, 1}),
+                  1u, true);
+    ASSERT_TRUE(cvar_set("r.lod_bias", "-7")); /* Automatic always selects level zero. */
+    ASSERT_TRUE(cvar_set("r.cull_freeze", "1"));
+    for (u32 selected = 0; selected < DE__GS_MESH_LODS; ++selected) {
+        f->display = (de_view_display){.force_mesh_lod = true, .mesh_lod = selected};
+        de__vis_context *context = NULL;
+        ASSERT_TRUE(icx_frame(f, &context));
+        EXPECT_FLOAT_EQ(context->cull.lod[3], (f32)(selected + 1u), 0.0f);
+        ASSERT_GT(f->res.item_count, 0u);
+        check_against_cpu(f, true, NULL);
+        for (u32 i = 0; i < f->res.item_count; ++i) {
+            const de__vis_work_item *item = &f->res.items[i];
+            const de__gs_instance *instance = &f->res.inst[item->instance];
+            const de__gs_mesh *mesh = &f->res.mesh[instance->mesh];
+            const u32 expected = selected < mesh->lod_count ? selected : mesh->lod_count - 1u;
+            EXPECT_EQ(item->lod, expected);
+        }
+        /* Another view remains automatic while the first one's frozen camera is retained. */
+        f->view_slot = 1u;
+        f->display = (de_view_display){0};
+        ASSERT_TRUE(icx_frame(f, NULL));
+        ASSERT_GT(f->res.item_count, 0u);
+        for (u32 i = 0; i < f->res.item_count; ++i)
+            EXPECT_EQ(f->res.items[i].lod, 0u);
+        f->view_slot = 0u;
+    }
+    f->display = (de_view_display){0};
+    ASSERT_TRUE(icx_frame(f, NULL));
+    for (u32 i = 0; i < f->res.item_count; ++i)
+        EXPECT_EQ(f->res.items[i].lod, 0u); /* Clearing an override also works during freeze. */
 }
 
 /* instance_cull_chunking: chunks of at most 64 meshlets (65 meshlets are 64 + 1); a full work
@@ -1243,6 +1309,9 @@ static void indirect_args_valid(icx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(instance_cull, lod_selection_##backend_suffix, icx) {                                   \
         lod_selection(f, backend);                                                                 \
+    }                                                                                              \
+    TEST_F(instance_cull, forced_lod_selection_##backend_suffix, icx) {                            \
+        forced_lod_selection(f, backend);                                                          \
     }                                                                                              \
     TEST_F(instance_cull, chunking_##backend_suffix, icx) {                                        \
         chunking(f, backend);                                                                      \

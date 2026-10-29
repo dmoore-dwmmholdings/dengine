@@ -86,7 +86,7 @@ typedef struct de__transparent_item {
     u32 flags;    /**< DE__FWD_ITEM_* */
     u32 participant, participant_item; /**< Zero participant means an ordinary mesh. */
     bool always_on_top;
-    u32 meshlet_first, meshlet_count; /**< LOD 0's meshlets */
+    u32 meshlet_first, meshlet_count; /**< Selected LOD's meshlets (automatic forward uses LOD0). */
     i16 layer, order;                 /**< S19: authored sprite order; meshes use zero. */
 } de__transparent_item;
 

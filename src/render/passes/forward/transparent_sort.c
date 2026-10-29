@@ -192,8 +192,14 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             continue;
         const de__gs_mesh *mesh =
             (const de__gs_mesh *)de__gpu_scene_entry(v->gs, DE__GS_MESHES, mesh_slot);
-        if (mesh == NULL || (mesh->flags & need_mesh) != need_mesh || mesh->lod_count == 0 ||
-            mesh->lods[0].meshlet_count == 0)
+        if (mesh == NULL || (mesh->flags & need_mesh) != need_mesh || mesh->lod_count == 0)
+            continue;
+        /* Automatic forward rendering retains its existing LOD0 policy. An inspection view's
+         * explicit choice must match visibility-buffer and RT selection, including short chains. */
+        const u32 levels = mesh->lod_count < DE__GS_MESH_LODS ? mesh->lod_count : DE__GS_MESH_LODS;
+        const u32 requested = cv && cv->lod[3] > 0.0f ? (u32)cv->lod[3] - 1u : 0u;
+        const u32 lod = requested < levels ? requested : levels - 1u;
+        if (!mesh->lods[lod].meshlet_count)
             continue;
         u32 bits = 0;
         const u32 subs = mesh->submesh_count < DE__GS_INSTANCE_MATERIALS
@@ -241,8 +247,8 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             .flags = ((bits & MAT_FULL_MODEL) == 0u ? (u32)DE__FWD_ITEM_BASE_STANDARD : 0u) |
                      ((bits & MAT_DOUBLE_SIDED) != 0u ? (u32)DE__FWD_ITEM_DOUBLE_SIDED : 0u) |
                      ((bits & MAT_TRANSMISSIVE) != 0u ? (u32)DE__FWD_ITEM_TRANSMISSIVE : 0u),
-            .meshlet_first = mesh->lods[0].meshlet_first,
-            .meshlet_count = mesh->lods[0].meshlet_count};
+            .meshlet_first = mesh->lods[lod].meshlet_first,
+            .meshlet_count = mesh->lods[lod].meshlet_count};
         n++;
     }
     c.listed = n;

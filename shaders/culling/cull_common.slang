@@ -37,7 +37,7 @@ public struct DeVisCullView
     public float4 planes[5];    // left, right, bottom, top, near: normal xyz (unit), d in w
     public float4 camera;       // xyz: the culling camera, relative to the render origin; w: near
     public float4 lod;          // x: LOD scale (pixels per metre at distance 1 / r.lod_error_px);
-                                // y: 1 for an orthographic view; z: r.lod_bias; w: 0
+                                // y: orthographic; z: r.lod_bias; w: forced level+1 (0 automatic)
     public float4 view_proj[4]; // the culling view-projection, rows
     public uint instance_count; // instance slots to test
     public uint layer_mask;     // instances whose layer_mask shares no bit with it are skipped

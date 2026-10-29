@@ -493,7 +493,8 @@ de_result de_view_set_light_mask(de_renderer *r, de_view v, u32 mask) {
 de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display) {
     const de_view_display policy = display ? *display : (de_view_display){0};
     if ((u32)policy.mode >= DE_VIEW_RENDER_MODE_COUNT ||
-        (policy.disabled_features & ~(DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS)))
+        (policy.disabled_features & ~(DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS)) ||
+        (policy.force_mesh_lod && policy.mesh_lod >= DE_COOKED_MESH_MAX_LODS))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid view display policy");
     de__views *vs = views_of(r);
     if (!vs)

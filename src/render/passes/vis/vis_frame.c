@@ -387,6 +387,7 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     if (!(vc->lod_error_px > 0.0f))
         vc->lod_error_px = 1.0f;
     vc->lod_bias = (i32)de_cvar_int(s->cv_lod_bias);
+    vc->forced_lod = d->display.force_mesh_lod ? d->display.mesh_lod + 1u : 0u;
 
     const bool participants = s->renderer && s->renderer->forward_participant_count != 0;
     if (d->gpu_scene != NULL) {
@@ -485,6 +486,7 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .hidden = vf->hidden,
                             .hidden_buffer = vf->hidden_buffer,
                             .excluded_light_mask = vf->excluded_light_mask,
+                            .display = vf->display,
                             .output_width = vf->viewport_px[2], /* DENG-239: pick coordinates */
                             .output_height = vf->viewport_px[3]};
     if (vf->camera != NULL)

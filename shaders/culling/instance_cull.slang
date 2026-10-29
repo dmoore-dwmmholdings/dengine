@@ -19,6 +19,7 @@
 // r.lod_error_px; then r.lod_bias LODs coarser (negative: finer), clamped to the mesh's LODs.
 // DeVisCullView.lod.x already holds (height / 2 * proj[1][1]) / r.lod_error_px, so LOD l fits
 // when error_l * scale * lod.x <= distance. An orthographic view uses distance 1.
+// A positive lod.w instead forces cooked level lod.w-1, clamped per mesh, without global bias.
 import push_constants;
 import "../scene/scene_types";
 import "../visbuffer/vis_types";

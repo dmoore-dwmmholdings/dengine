@@ -280,9 +280,14 @@ typedef struct de_view_display {
     de_view_render_mode mode;
     u32 disabled_features; /**< DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS; zero enables both.
                             */
+    bool force_mesh_lod;   /**< Select mesh_lod independently of camera error and global LOD bias.
+                            * Zero/default keeps automatic visibility-buffer LOD selection. */
+    u32 mesh_lod; /**< Forced cooked level, 0..7; meshes with fewer levels use their last level.
+                   * Ignored unless force_mesh_lod. RT may use a coarser resident BLAS. */
 } de_view_display;
 /** Copies display policy into the next immutable Extract frame. NULL restores Lit with UI and
- * post effects enabled. Main thread. Invalid policy or stale view: DE_ERR_INVALID_ARGUMENT. */
+ * post effects enabled and automatic mesh LODs. Main thread. Invalid policy (including a forced
+ * mesh_lod above 7) or stale view: DE_ERR_INVALID_ARGUMENT; accepted policy stays unchanged. */
 DE_API de_result de_view_set_display(de_renderer *r, de_view v, const de_view_display *display);
 /** Copies entities excluded from this view's geometry and direct lights. Full entity IDs (including
  * generations) are sorted/deduplicated; zero IDs are ignored. Count zero clears the filter. Does
