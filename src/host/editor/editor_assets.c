@@ -152,6 +152,9 @@ static void on_status(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
 static void on_reimport(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                         mpack_writer_t *w) {
     DE__ED_PARAMS(asset_reimport, de_ep_asset_ids, q);
+#if DE_HAS_RENDER
+    de__ed_preview_invalidate();
+#endif
     for (u32 i = 0; i < q.ids.count; ++i) {
         char *id = de__ed_cstr(a, q.ids.items[i]);
         /* An entry the IDE just added: read the manifest now rather than at the watcher's next
@@ -802,9 +805,15 @@ static void tick(de__editor *ed) {
             kind = DE_EP_ASSET_EVENT_KIND_LOADED;
             break;
         case DE_ASSET_EV_FAILED:
+#if DE_HAS_RENDER
+            de__ed_preview_invalidate();
+#endif
             kind = DE_EP_ASSET_EVENT_KIND_FAILED;
             break;
         case DE_ASSET_EV_RELOADED:
+#if DE_HAS_RENDER
+            de__ed_preview_invalidate();
+#endif
             kind = DE_EP_ASSET_EVENT_KIND_RELOADED;
             break;
         case DE_ASSET_EV_EVICTED:

@@ -431,6 +431,9 @@ de_result de__editor_start(de__host *h) {
     de__ed_edit_register(ed);
     de__ed_scene_register(ed);
     de__ed_assets_register(ed);
+#if DE_HAS_RENDER
+    de__ed_preview_register(ed);
+#endif
     de__ed_logs_register(ed);
     de__ed_views_register(ed);
     de__ed_debugdraw_register(ed);
@@ -454,6 +457,9 @@ void de__editor_stop(de__host *h) {
     de__ed_session_shutdown();
     de__ed_logs_shutdown();
     de__ed_views_shutdown(ed);
+#if DE_HAS_RENDER
+    de__ed_preview_shutdown(ed);
+#endif
     const de_allocator *al = de_heap_allocator();
     if (ed->in)
         DE_FREE(al, ed->in, ed->in_cap);

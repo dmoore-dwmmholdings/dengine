@@ -130,3 +130,9 @@ endif()
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_model_inspection.c editor/editor_model_inspection.h)
 endif()
+
+# DENG-695: isolated GPU model preview and bounded caller-owned PNG encoding.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_preview.c editor/editor_preview_image.c
+        editor/editor_preview_image.h)
+endif()

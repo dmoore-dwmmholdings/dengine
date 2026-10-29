@@ -333,3 +333,10 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         LIBS de_render de_tp_dide_protocol)
     target_include_directories(test_editor_model_inspection PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-695: validate bounded preview PNGs with an independent image decoder.
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_preview_image SOURCES test_preview_image.c
+        "${DE_ROOT_DIR}/src/host/editor/editor_preview_image.c" LIBS de_core de_tp_stb)
+    target_include_directories(test_editor_preview_image PRIVATE "${DE_ROOT_DIR}/src")
+endif()

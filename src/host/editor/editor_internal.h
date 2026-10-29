@@ -92,6 +92,11 @@ void de__ed_on(de__editor *ed, de_ep_method m, de__ed_handler fn);
 void de__ed_on_tick(de__editor *ed, de__ed_tick_fn fn);
 void de__ed_on_reset(de__editor *ed, de__ed_reset_fn fn);
 void de__ed_add_capability(de__editor *ed, const char *cap);
+#if DE_HAS_RENDER
+void de__ed_preview_register(de__editor *ed);
+void de__ed_preview_invalidate(void);
+void de__ed_preview_shutdown(de__editor *ed);
+#endif
 
 /** Called by a handler that answers later: the dispatcher sends nothing now. The area keeps the
  * request id and answers with de__ed_respond_begin / de__ed_send(kind response). */
