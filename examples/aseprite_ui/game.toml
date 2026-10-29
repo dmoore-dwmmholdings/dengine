@@ -1,0 +1,11 @@
+[game]
+name = "Aseprite UI"
+
+[window]
+title = "Aseprite UI — live slice settings"
+width = 768
+height = 480
+surface = "vulkan"
+
+[timing]
+frame_cap_hz = 60

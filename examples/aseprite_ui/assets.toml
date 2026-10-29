@@ -1,0 +1,11 @@
+# Slice settings belong here; panel.aseprite remains unchanged.
+[project]
+asset_root = "."
+
+[assets."aseprite_ui/panel"]
+type = "aseprite"
+source = "panel.aseprite"
+pixel_art = true
+
+[bundles.panels]
+assets = ["aseprite_ui/panel"]

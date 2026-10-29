@@ -1,0 +1,36 @@
+[project]
+name = "Aseprite UI"
+description = "Live Aseprite slice settings on retained UI panels."
+root = "../.."
+engine = "dengine"
+
+[build]
+target = "aseprite_ui"
+default_configuration = "Dev"
+
+[[configuration]]
+name = "Dev"
+preset = { windows = "windows-clang-cl-dev", macos = "macos-dev", linux = "linux-clang-dev" }
+
+[[run]]
+name = "Aseprite UI (engine session)"
+kind = "engine"
+target = "aseprite_ui"
+configurations = ["Dev"]
+
+[[folder]]
+name = "Source"
+files = ["main.c", "capture.c", "capture.h"]
+
+[[folder]]
+name = "Assets"
+files = ["assets.toml", "panel.aseprite", "generate.py"]
+
+[[folder]]
+name = "Docs"
+files = [{ path = "README.md", open = "preview" }]
+
+[startup]
+open = ["README.md", "assets.toml"]
+lead = "world"
+run = "Aseprite UI (engine session)"
