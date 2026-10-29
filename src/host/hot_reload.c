@@ -12,6 +12,9 @@
 #include <dengine/de_debug.h>
 
 #include "ecs/in_schedule_internal.h"
+#if DE_HAS_EDITOR_SERVICE
+#include "host/editor/editor_internal.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -329,7 +332,7 @@ static bool sync_changed_something(const de__world_sync_stats *s) {
     return s->refreshed + s->relaid_out + s->resources + s->events > 0;
 }
 
-de_result de__hot_reload_reload(de__host *h, bool *fatal) {
+static de_result reload_game(de__host *h, bool *fatal) {
     if (fatal != NULL)
         *fatal = false;
     if (h == NULL || !h->hot_reload.enabled || h->engine == NULL)
@@ -426,6 +429,25 @@ de_result de__hot_reload_reload(de__host *h, bool *fatal) {
                 "that matched",
                 st.migrate_refused);
     return DE_OK;
+}
+
+de_result de__hot_reload_reload(de__host *h, bool *fatal) {
+    /* Only actual eligible attempts get a paired lifecycle. Refusal and rollback must finish
+     * the same transition as success; malformed calls do not announce a reload. */
+    const bool attempt = h && h->hot_reload.enabled && h->engine && !de__ecs_in_schedule();
+    const u64 started = attempt ? de_time_now_ns() : 0;
+#if DE_HAS_EDITOR_SERVICE
+    if (attempt)
+        de__ed_game_reloading(h);
+#endif
+    const de_result result = reload_game(h, fatal);
+#if DE_HAS_EDITOR_SERVICE
+    if (attempt)
+        de__ed_game_reloaded(h, started, result);
+#else
+    (void)started;
+#endif
+    return result;
 }
 
 de_result de__hot_reload_poll(de__host *h) {

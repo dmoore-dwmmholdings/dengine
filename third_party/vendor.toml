@@ -600,9 +600,9 @@ notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matri
 # cache before offline verification (see docs/building.md).
 [[lib]]
 name = "dide_protocol"
-version = "1.5-229e318cc4b6"
-url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/229e318cc4b6de66f26b712ccf734e94fa9e1baa"
-sha256 = "4a4feadb14f0d2230caae2d588c9d9abfa532932f7cb09ffe6dbcdd88f84819a"
+version = "1.6-b9c55cc5ff7b"
+url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/b9c55cc5ff7b56ed6989db3cbe7eba87b385f031"
+sha256 = "a2e575663d32d79a4d8bc4c6f25642ebb52f0114c7aff8e88d0e6a8caaf575f4"
 license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"

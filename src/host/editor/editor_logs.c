@@ -63,7 +63,6 @@ typedef struct de__ed_logs {
     u32 next_id;
     u64 last_frame_ns;
     f64 frame_ms;
-    u32 game_generation;
 } de__ed_logs;
 
 static de__ed_logs g_logs;
@@ -391,17 +390,7 @@ static void tick(de__editor *ed) {
         g_logs.frame_ms = g_logs.frame_ms * 0.9 + (f64)(now - g_logs.last_frame_ns) * 1e-6 * 0.1;
     g_logs.last_frame_ns = now;
     g_logs.frame = de__ed_frame(ed);
-    /* A game library hot reload: the host bumped the module's generation. */
-    if (ed->h->game.generation != g_logs.game_generation) {
-        g_logs.game_generation = ed->h->game.generation;
-        de_ep_reloaded d;
-        d.library = de_ep_cstr(ed->h->game.path);
-        d.ms = 0;
-        mpack_writer_t nw;
-        const u64 seq = de__ed_note_begin(ed, &nw);
-        de_ep_write_notify_session_reloaded(&nw, seq, &d);
-        de__ed_send(ed, &nw, DE_EP_KIND_NOTIFICATION);
-    }
+    /* Game reload lifecycle is emitted at the actual attempt boundary (editor_session.c). */
     send_logs(ed);
     send_stats(ed);
 }
@@ -417,7 +406,6 @@ void de__ed_logs_register(de__editor *ed) {
     ed->logs = (struct de__ed_logs *)&g_logs;
     de_mutex_init(&g_logs.lock);
     g_logs.start_ns = de_time_now_ns();
-    g_logs.game_generation = ed->h->game.generation;
     de_log_add_sink(sink, NULL);
     g_logs.sink = true;
     de__ed_on(ed, DE_EP_METHOD_LOG_SUBSCRIBE, on_log_subscribe);

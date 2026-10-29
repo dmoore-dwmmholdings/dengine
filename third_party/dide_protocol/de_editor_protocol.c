@@ -5170,11 +5170,16 @@ void de_ep_write_reloaded(mpack_writer_t *w, const de_ep_reloaded *v) {
     uint32_t n = 0;
     ++n;
     ++n;
+    n += v->has_error ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "library");
     de_ep_write_str(w, v->library);
     mpack_write_cstr(w, "ms");
     mpack_write_double(w, v->ms);
+    if (v->has_error) {
+        mpack_write_cstr(w, "error");
+        de_ep_write_str(w, v->error);
+    }
     mpack_finish_map(w);
 }
 
@@ -5191,6 +5196,10 @@ void de_ep_read_reloaded(mpack_reader_t *r, de_ep_arena *a, de_ep_reloaded *out)
         } else if (de_ep_str_eq(k, "ms")) {
             seen |= (uint64_t)1 << 1;
             out->ms = mpack_expect_double(r);
+        } else if (de_ep_str_eq(k, "error")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_error = true;
+            de_ep_read_str(r, &out->error);
         } else {
             mpack_discard(r);
         }

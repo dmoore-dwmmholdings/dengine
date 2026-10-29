@@ -87,6 +87,57 @@ static void send_state(de__editor *ed) {
     de__ed_send(ed, &w, DE_EP_KIND_NOTIFICATION);
 }
 
+/* Reload telemetry is main-thread only. A failed transport is left for the normal pump to
+ * drop: dropping here runs area resets that can erase the reload's thread-local error chain. */
+static void reload_send(de__editor *ed, mpack_writer_t *writer) {
+    const size_t bytes = mpack_writer_buffer_used(writer);
+    const mpack_error_t error = mpack_writer_destroy(writer);
+    if (error == mpack_ok)
+        (void)de_ep_send(&ed->conn, DE_EP_KIND_NOTIFICATION, ed->note, bytes);
+}
+
+void de__ed_game_reloading(de__host *h) {
+    de__editor *ed = h ? h->editor : NULL;
+    if (!ed || !ed->connected || !ed->authed || !ed->reload_outcomes)
+        return;
+    const de_ep_reloading data = {.library = de_ep_cstr(h->hot_reload.file_name)};
+    mpack_writer_t writer;
+    const u64 seq = de__ed_note_begin(ed, &writer);
+    de_ep_write_notify_session_reloading(&writer, seq, &data);
+    reload_send(ed, &writer);
+}
+
+void de__ed_game_reloaded(de__host *h, u64 started_ns, de_result result) {
+    de__editor *ed = h ? h->editor : NULL;
+    if (!ed)
+        return;
+    {
+        /* After a swap or rollback, systems have new handles and default to enabled. Reapply
+         * the current mode even if it has not changed, so reload never starts simulation in Edit.
+         */
+        const bool on = running_mode(ed->mode) || g_session.step_frames > 0;
+        g_session.game_on = !on;
+        game_systems(ed, on);
+    }
+    /* Older clients cannot represent a refusal: do not start a spinner or publish a false
+     * successful completion to them. They still receive real successful reloads and logs. */
+    if (!ed->connected || !ed->authed || (result != DE_OK && !ed->reload_outcomes))
+        return;
+    const u64 now = de_time_now_ns();
+    de_ep_reloaded data = {.library = de_ep_cstr(h->hot_reload.file_name),
+                           .ms = now >= started_ns ? (f64)(now - started_ns) / 1000000.0 : 0};
+    if (result != DE_OK) {
+        const de_error *error = de_error_last();
+        data.has_error = true;
+        data.error =
+            de_ep_cstr(error && error->message[0] ? error->message : de_result_str(result));
+    }
+    mpack_writer_t writer;
+    const u64 seq = de__ed_note_begin(ed, &writer);
+    de_ep_write_notify_session_reloaded(&writer, seq, &data);
+    reload_send(ed, &writer);
+}
+
 /* ---------- Snapshots ---------- */
 
 static void snap_free(ed_snap *s) {

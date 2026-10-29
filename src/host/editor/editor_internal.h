@@ -41,6 +41,7 @@ struct de__editor {
     de_ep_listener listener;
     de_ep_conn conn;
     bool connected, authed;
+    bool reload_outcomes; /**< negotiated peer understands optional reload failure (IPC >= 1.6) */
     char token[160];
     u32 epoch;          /**< bumped on each connection: ids from an older one are stale */
     u64 seq;            /**< notification sequence number */
@@ -197,6 +198,9 @@ void de__ed_world_resync(de__editor *ed);
 /* ---------- Areas: each registers its handlers ---------- */
 
 void de__ed_session_register(de__editor *ed);
+/** Main-thread game-library reload telemetry; never called from a crash handler. */
+void de__ed_game_reloading(struct de__host *h);
+void de__ed_game_reloaded(struct de__host *h, u64 started_ns, de_result result);
 void de__ed_reflect_register(de__editor *ed);
 void de__ed_world_register(de__editor *ed);
 void de__ed_edit_register(de__editor *ed);

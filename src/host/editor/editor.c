@@ -218,7 +218,15 @@ static void ed_build_info(de__editor *ed, de_ep_build_info *b) {
     static char version[32];
     snprintf(version, sizeof version, "%d.%d.%d", DE_VERSION_MAJOR, DE_VERSION_MINOR,
              DE_VERSION_PATCH);
-    b->id = de_ep_cstr(ed->h->config.name);
+    /* A game generation changes only after a committed library swap. It identifies this
+     * process's loaded game instance, not a source-content hash or executable build hash. */
+    static char game_build[512];
+    if (ed->h->game.lib) {
+        snprintf(game_build, sizeof game_build, "%s#game%u", ed->h->config.name,
+                 ed->h->game.generation);
+        b->id = de_ep_cstr(game_build);
+    } else
+        b->id = de_ep_cstr(ed->h->config.name);
     b->engine_version = de_ep_cstr(version);
     b->gpu_backend = de_ep_cstr("none");
 #if DE_HAS_GPU
@@ -284,6 +292,9 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     de_ep_write_response_hello(&w, req->id, &r);
     if (!de__ed_send(ed, &w, DE_EP_KIND_RESPONSE))
         return false;
+    unsigned major = 0, minor = 0;
+    ed->reload_outcomes =
+        sscanf(agreed, "%u.%u", &major, &minor) == 2 && (major > 1 || (major == 1 && minor >= 6));
     ed->authed = true;
     DE_INFO(ed->log, "editor: IDE connected (protocol %s, epoch %u)", agreed, ed->epoch);
     return true;

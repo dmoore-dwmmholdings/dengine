@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.5"
-#define DE_EP_SCHEMA_HASH "a6d990b61f87e681"
+#define DE_EP_PROTOCOL_VERSION "1.6"
+#define DE_EP_SCHEMA_HASH "883b5ae1001781a5"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -1118,6 +1118,8 @@ struct de_ep_reflect_changed {
 struct de_ep_reloaded {
     de_ep_str library;
     double ms;
+    bool has_error;
+    de_ep_str error; /* A failed reload attempt. Retain the last successful build metadata; refusal/rollback keeps the old game, while unrecoverable failures may exit. Absent means success (including older peers). */
 };
 
 struct de_ep_reloading {
