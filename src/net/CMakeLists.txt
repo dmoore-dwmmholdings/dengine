@@ -38,3 +38,9 @@ de_add_module(
     LIBS ${_de_net_libs}
     DETERMINISTIC
 )
+
+# DENG-56: preallocated development-only datagram condition simulator; no-op public setter in
+# Release/Shipping until S32's session implementation supplies the Dev entry point.
+if(TARGET de_net)
+    target_sources(de_net PRIVATE net_sim.c net_sim.h)
+endif()
