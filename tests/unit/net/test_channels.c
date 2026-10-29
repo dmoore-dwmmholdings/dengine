@@ -1,6 +1,7 @@
 #include "de_test.h"
 #include "de_alloc_guard.h"
 #include "net/channel.h"
+#include "net/congestion.h"
 #include "net/connection.h"
 #include "net/net_sim.h"
 #include <stdio.h>
@@ -29,9 +30,16 @@ static u64 fake_now(void *user) {
 }
 static de__conn *captured(capture *out, u64 *now) {
     de__conn *c = NULL;
-    const de__chan_desc d = {
-        .send_packet = capture_send, .send_user = out, .now_ns = fake_now, .clock_user = now};
+    const de__chan_desc d = {.send_packet = capture_send,
+                             .send_user = out,
+                             .now_ns = fake_now,
+                             .clock_user = now,
+                             .max_bandwidth_kbps = 1000000,
+                             .tick_rate_hz = 1000000};
     ASSERT_EQ(de__chan_create(&d, &c), DE_OK);
+    // Codec/window cases assume a warmed high-capacity link; default startup
+    // pacing is qualified separately by test_net_congestion.
+    de__conn_cc(c)->rate = de__conn_cc_view(c)->cap;
     return c;
 }
 static void ack(de__conn *c, u16 peer_sequence, u16 sequence, u32 bits) {
@@ -197,6 +205,7 @@ TEST(net_channels, stale_packet_ack_cannot_clear_reused_message_id_generation) {
     u32 sent = 1;
     u16 peer_sequence = 1;
     while (sent < 65536) {
+        now += MS; // replenish the real token bucket; this case isolates ID-generation safety
         const u32 count =
             65536u - sent < DE__CHAN_PACKET_MESSAGES ? 65536u - sent : DE__CHAN_PACKET_MESSAGES;
         for (u32 i = 0; i < count; ++i)
@@ -309,7 +318,8 @@ static void open_rig(rig *r) {
         const de__chan_desc d = {.send_packet = encrypted_send,
                                  .send_user = &r->link[i],
                                  .now_ns = fake_now,
-                                 .clock_user = &r->now};
+                                 .clock_user = &r->now,
+                                 .tick_rate_hz = 200};
         ASSERT_EQ(de__chan_create(&d, &r->channel[i]), DE_OK);
     }
     ASSERT_EQ(de__net_client_bind_channels(r->client, r->channel[0]), DE_OK);
@@ -431,7 +441,7 @@ TEST(net_channels, ten_thousand_encrypted_messages_under_loss_jitter_duplication
     bool done = false;
     de_alloc_guard guard = {0};
     de_alloc_guard_begin(&guard);
-    for (u32 step = 0; step < 24000; ++step) {
+    for (u32 step = 0; step < 120000; ++step) { // AIMD legitimately throttles sustained20% loss
         for (u32 side = 0; side < 2; ++side)
             for (u32 ch = 0; ch < 3; ++ch) {
                 for (u32 n = 0; n < 16 && sent[side][ch] < 10000; ++n) {

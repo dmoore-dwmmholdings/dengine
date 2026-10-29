@@ -50,3 +50,8 @@ if(TARGET de_net)
     target_sources(de_net PRIVATE packet.c packet.h ack.c rtt.c channel.c channel.h
         mtu.c congestion.c)
 endif()
+
+# DENG-55: bounded adaptive send pacing and rolling peer/channel statistics.
+if(TARGET de_net)
+    target_sources(de_net PRIVATE congestion.h net_stats.c net_stats.h)
+endif()

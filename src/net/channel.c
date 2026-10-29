@@ -1,4 +1,7 @@
 #include "net/channel.h"
+#include "net/congestion.h"
+#include "net/net_stats.h"
+#include <dengine/de_debug.h>
 #include <dengine/de_platform.h>
 #include <string.h>
 
@@ -18,9 +21,9 @@ typedef struct reference {
 } reference;
 typedef struct sent_packet {
     u64 time;
-    u32 bytes, count;
+    u32 bytes, count, stats_serial;
     u16 sequence;
-    bool valid;
+    bool valid, loss_reported;
     reference messages[DE__CHAN_PACKET_MESSAGES];
 } sent_packet;
 struct de__conn {
@@ -34,10 +37,19 @@ struct de__conn {
     u16 packet_next, ordered_next;
     u32 head[3], count[3];
     bool ack_pending;
+    de__cc_state cc;
+    de__net_stats rates;
+    de_cvar bandwidth_cvar;
 };
 _Static_assert(sizeof(de__conn) <= 5u * 1024u * 1024u, "channel storage must remain bounded");
 static u64 clock_now(const de__conn *c) {
     return c->desc.now_ns ? c->desc.now_ns(c->desc.clock_user) : de_time_now_ns();
+}
+static u32 bandwidth(const de__conn *c) {
+    if (c->desc.max_bandwidth_kbps)
+        return c->desc.max_bandwidth_kbps;
+    return DE_HANDLE_VALID(c->bandwidth_cvar) ? (u32)de_cvar_int(c->bandwidth_cvar)
+                                              : DE__CC_DEFAULT_KBPS;
 }
 de_result de__chan_create(const de__chan_desc *desc, de__conn **out) {
     if (out)
@@ -52,6 +64,16 @@ de_result de__chan_create(const de__chan_desc *desc, de__conn **out) {
     c->desc = *desc;
     c->desc.allocator = a;
     c->stats.allocated_bytes = sizeof *c;
+    if (!desc->max_bandwidth_kbps) {
+        const de_cvar_desc cv = {.name = "net.max_bandwidth_kbps",
+                                 .help = "Per-connection channel send cap in decimal kilobits/s",
+                                 .type = DE_CVAR_INT,
+                                 .default_number = DE__CC_DEFAULT_KBPS,
+                                 .min = DE__CC_FLOOR_KBPS,
+                                 .max = 1000000};
+        c->bandwidth_cvar = de_cvar_register(&cv);
+    }
+    de__cc_init(&c->cc, bandwidth(c), desc->tick_rate_hz, de__mtu_payload(c));
     *out = c;
     return DE_OK;
 }
@@ -59,9 +81,12 @@ void de__chan_reset(de__conn *c) {
     if (!c)
         return;
     const de__chan_desc desc = c->desc;
+    const de_cvar cv = c->bandwidth_cvar;
     memset(c, 0, sizeof *c);
     c->desc = desc;
+    c->bandwidth_cvar = cv;
     c->stats.allocated_bytes = sizeof *c;
+    de__cc_init(&c->cc, bandwidth(c), desc.tick_rate_hz, de__mtu_payload(c));
 }
 void de__chan_destroy(de__conn *c) {
     if (c) {
@@ -117,6 +142,7 @@ static void acknowledge(de__conn *c, const de__chan_packet *p) {
             sampled = true;
         }
         de__cc_on_ack(c, s->bytes, elapsed);
+        de__stats_outcome(&c->rates, s->stats_serial, false);
         c->stats.acked++;
         s->valid = false;
     }
@@ -130,6 +156,7 @@ de_result de__conn_read_payload(de__conn *c, const void *data, u32 bytes) {
         return DE_ERR_PARSE;
     }
     c->stats.packets_in++;
+    de__stats_packet_in(&c->rates, clock_now(c), bytes);
     acknowledge(c, &p);
     if (de__chan_sequence_seen(&c->received, p.sequence)) {
         c->stats.duplicate++;
@@ -209,6 +236,7 @@ void de__chan_receive(de__conn *c, de__chan_message_fn fn, void *user) {
             fn(user, (de_channel)ch, m->data, m->bytes);
             c->stats.channel[ch].bytes_in += m->bytes;
             c->stats.channel[ch].msgs_in++;
+            de__stats_channel(&c->rates, clock_now(c), (de_channel)ch, m->bytes, true, false);
             m->used = false;
             c->count[ch]--;
             if (ch == DE_CHANNEL_RELIABLE_ORDERED)
@@ -227,9 +255,30 @@ static void discard_unreliable(de__conn *c) {
         }
     }
 }
+static void packet_lost(de__conn *c, sent_packet *p) {
+    if (!p->valid || p->loss_reported)
+        return;
+    p->loss_reported = true;
+    c->stats.lost++;
+    de__stats_outcome(&c->rates, p->stats_serial, true);
+    de__cc_on_loss(c, p->bytes);
+}
 de_result de__conn_write_packets(de__conn *c, u64 now) {
     if (!c)
         return DE_ERR_INVALID_ARGUMENT;
+    u64 timeout = c->rtt.smoothed_ns > UINT64_MAX / 4u ? UINT64_MAX : c->rtt.smoothed_ns * 4u;
+    if (timeout < 250000000ull)
+        timeout = 250000000ull;
+    for (u32 i = 0; i < DE__CHAN_ACK_WINDOW; ++i) {
+        sent_packet *p = &c->packets[i];
+        if (p->valid && now >= p->time && now - p->time >= timeout)
+            packet_lost(c, p);
+    }
+    u32 lost, resolved;
+    de__stats_loss(&c->rates, &lost, &resolved);
+    de__cc_tick(&c->cc, now, bandwidth(c), c->rtt.smoothed_ns, lost, resolved);
+    DE_PROFILE_PLOT("net.bytes_out", de__conn_stats(c).bytes_out_per_sec);
+    DE_PROFILE_PLOT("net.rtt_ms", (f64)c->rtt.smoothed_ns / 1000000.0);
     u32 budget = de__cc_send_budget(c);
     const u32 mtu = de__mtu_payload(c);
     const u32 limit = mtu < DE__CHAN_PACKET_MAX ? mtu : DE__CHAN_PACKET_MAX;
@@ -243,8 +292,13 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
         message *selected[DE__CHAN_PACKET_MESSAGES];
         reference refs[DE__CHAN_PACKET_MESSAGES];
         u32 bytes = DE__CHAN_HEADER, count = 0;
+        bool resend_pending = false;
         // Globally stable priority: reliable resends, then new reliable, then unreliable.
         for (u32 phase = 0; phase < 3; ++phase) {
+            // Do not let a continuous stream of tiny new messages spend every
+            // partial refill while a full-size reliable resend waits forever.
+            if (phase && resend_pending && capacity < limit)
+                break;
             const u32 first = phase == 2 ? 0 : 1, end = phase == 2 ? 1 : 3;
             for (u32 ch = first; ch < end; ++ch) {
                 for (u32 offset = 0; offset < DE__CHAN_WINDOW; ++offset) {
@@ -257,6 +311,8 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
                         continue;
                     if (phase == 1 && m->sent)
                         continue;
+                    if (phase == 0)
+                        resend_pending = true;
                     const u32 n = de__chan_packet_message(data + bytes, capacity - bytes,
                                                           (de_channel)ch, id, m->data, m->bytes);
                     if (!n)
@@ -267,7 +323,7 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
                 }
             }
         }
-        if (!count && !c->ack_pending)
+        if (!count && (!c->ack_pending || (resend_pending && capacity < limit)))
             break;
         de__chan_packet_header(data, c->packet_next, c->received.initialized, c->received.newest,
                                de__chan_ack_bits(&c->received));
@@ -275,15 +331,15 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
         if (result != DE_OK)
             break;
         sent_packet *packet = &c->packets[c->packet_next % DE__CHAN_ACK_WINDOW];
-        if (packet->valid) {
-            c->stats.lost++;
-            de__cc_on_loss(c, packet->bytes);
-        }
-        packet->valid = true;
+        packet_lost(c, packet);
+        packet->valid = count != 0; /* ACK-only packets do not solicit an ACK. */
+        packet->loss_reported = false;
         packet->sequence = c->packet_next++;
         packet->time = now;
         packet->bytes = bytes;
         packet->count = 0;
+        packet->stats_serial = de__stats_packet_out(&c->rates, now, bytes, count != 0);
+        de__cc_sent(&c->cc, bytes);
         for (u32 i = 0; i < count; ++i) {
             message *m = selected[i];
             de__chan_counters *st = &c->stats.channel[refs[i].channel];
@@ -293,6 +349,8 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
                 st->msgs_out++;
                 st->bytes_out += m->bytes;
             }
+            de__stats_channel(&c->rates, now, (de_channel)refs[i].channel, m->bytes, false,
+                              m->sent);
             m->sent = true;
             m->last_sent = now;
             if (refs[i].channel == DE_CHANNEL_UNRELIABLE) {
@@ -304,7 +362,7 @@ de_result de__conn_write_packets(de__conn *c, u64 now) {
         }
         c->stats.packets_out++;
         c->ack_pending = false;
-        budget -= bytes;
+        budget = de__cc_send_budget(c);
     }
     // Unreliable traffic gets this tick only; it cannot accumulate behind reliable work.
     discard_unreliable(c);
@@ -317,4 +375,23 @@ de__chan_stats de__chan_get_stats(const de__conn *c) {
     stats.rtt_ns = c->rtt.smoothed_ns;
     stats.jitter_ns = c->rtt.variance_ns;
     return stats;
+}
+
+de__cc_state *de__conn_cc(de__conn *c) {
+    return c ? &c->cc : NULL;
+}
+const de__cc_state *de__conn_cc_view(const de__conn *c) {
+    return c ? &c->cc : NULL;
+}
+de_peer_stats de__conn_stats(const de__conn *c) {
+    return c ? de__stats_peer(&c->rates, clock_now(c), c->rtt.smoothed_ns, c->rtt.variance_ns)
+             : (de_peer_stats){0};
+}
+bool de__conn_channel_stats(const de__conn *c, de_channel ch, de__channel_rates *out) {
+    if (out)
+        *out = (de__channel_rates){0};
+    if (!c || !out || (u32)ch > 2u)
+        return false;
+    *out = de__stats_rates(&c->rates, clock_now(c), ch);
+    return true;
 }

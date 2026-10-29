@@ -58,3 +58,12 @@ if(TARGET de_net)
         target_include_directories(test_net_channels PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endif()
+
+# DENG-55: adaptive rate control and allocation-free rolling telemetry.
+if(TARGET de_net)
+    de_add_test(NAME net_congestion SOURCES test_congestion.c test_net_stats.c
+        LIBS de_net de_test_support)
+    if(TARGET test_net_congestion)
+        target_include_directories(test_net_congestion PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

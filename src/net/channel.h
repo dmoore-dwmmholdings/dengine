@@ -11,6 +11,9 @@ typedef struct de__chan_desc {
     void *send_user;
     u64 (*now_ns)(void *user);
     void *clock_user;
+    /* 0 uses the live net.max_bandwidth_kbps cvar (default512, floor32).
+     * A nonzero cap is connection-local; tick rate defaults to60 packets/s. */
+    u32 max_bandwidth_kbps, tick_rate_hz;
 } de__chan_desc;
 typedef struct de__chan_counters {
     u64 bytes_in, bytes_out, msgs_in, msgs_out, resends, dropped;
