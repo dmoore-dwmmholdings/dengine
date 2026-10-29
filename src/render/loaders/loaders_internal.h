@@ -21,6 +21,11 @@ void de__texture_unload(void *object, void *user);
 de_result de__texture_ready(void *object, void *user);
 
 /* mesh_loader.c: DMSH v2. */
+/** Normal DMSH parse/GPU-only staging path for bounded engine-owned preview geometry.
+ * On success *out owns a normal mesh record; call ready until upload completion, then unload.
+ * Input bytes may be released after this returns: staging copies them before queueing. */
+de_result de__mesh_from_cooked(de_render_uploader *u, de_asset_id id, const void *data, u64 size,
+                               struct de_render_mesh **out);
 de_result de__mesh_load(de_asset_load_ctx *ctx);
 void de__mesh_unload(void *object, void *user);
 de_result de__mesh_ready(void *object, void *user);

@@ -3542,6 +3542,61 @@ void de_ep_read_log_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_lo
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_material_render_params(mpack_writer_t *w, const de_ep_material_render_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_revision ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    mpack_write_cstr(w, "shape");
+    de_ep_write_str(w, v->shape);
+    mpack_write_cstr(w, "yaw");
+    mpack_write_float(w, v->yaw);
+    mpack_write_cstr(w, "size");
+    mpack_write_u32(w, v->size);
+    if (v->has_revision) {
+        mpack_write_cstr(w, "revision");
+        mpack_write_u32(w, v->revision);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_render_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else if (de_ep_str_eq(k, "shape")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->shape);
+        } else if (de_ep_str_eq(k, "yaw")) {
+            seen |= (uint64_t)1 << 2;
+            out->yaw = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "size")) {
+            seen |= (uint64_t)1 << 3;
+            out->size = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_revision = true;
+            out->revision = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_model_attribute(mpack_writer_t *w, const de_ep_model_attribute *v) {
     uint32_t n = 0;
     ++n;
@@ -7314,6 +7369,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "asset.previewSettings",
     "asset.referencers",
     "asset.reimport",
+    "asset.renderMaterial",
     "asset.renderModel",
     "asset.status",
     "asset.thumbnail",
@@ -7405,6 +7461,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "assets.materialPreview",
     NULL,
     NULL,
     NULL,
@@ -7699,6 +7756,19 @@ bool de_ep_read_params_asset_reimport(const de_ep_request *req, de_ep_arena *a, 
 void de_ep_write_response_asset_reimport(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_empty(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_asset_render_material(const de_ep_request *req, de_ep_arena *a, de_ep_material_render_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_material_render_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_asset_render_material(mpack_writer_t *w, uint64_t id, const de_ep_blob_ref *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_blob_ref(w, result);
     de_ep_write_result_end(w);
 }
 

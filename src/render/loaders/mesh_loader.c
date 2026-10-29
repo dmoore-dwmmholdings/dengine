@@ -60,16 +60,16 @@ static u32 buffer_usage(u32 which) {
     return usage;
 }
 
-de_result de__mesh_load(de_asset_load_ctx *ctx) {
-    de_render_uploader *u = de__loader_uploader(ctx);
-    if (u == NULL)
-        return DE_ERR_INTERNAL;
-    u64 size = 0;
-    const u8 *p = (const u8 *)de_asset_load_ctx_data(ctx, &size);
+de_result de__mesh_from_cooked(de_render_uploader *u, de_asset_id id, const void *data, u64 size,
+                               de_render_mesh **out) {
+    if (!u || u->broken || !data || !out)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "cooked mesh construction");
+    *out = NULL;
+    const u8 *p = data;
     de_cooked_mesh_view v;
     const char *why = NULL;
     if (!de_cooked_mesh_parse(p, size, &v, &why))
-        return de_asset_load_ctx_fail(ctx, DE_ERR_PARSE, "not a cooked mesh: %s", why);
+        return DE_FAIL(DE_ERR_PARSE, "not a cooked mesh: %s", why);
 
     /* The record, then its submesh and LOD-submesh tables, in one block; then, for the editor,
      * LOD 0's positions and triangles. */
@@ -90,10 +90,10 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
     de_render_mesh *m =
         (de_render_mesh *)DE_ALLOC(u->alloc, block, DE_ALIGNOF(de_render_mesh), DE_MEM_RENDER);
     if (m == NULL)
-        return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "no memory for the mesh");
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "no memory for the mesh");
     memset(m, 0, block);
     m->block_size_ = block;
-    m->asset_id_ = de_asset_load_ctx_id(ctx);
+    m->asset_id_ = id;
     de_render_submesh *sm = (de_render_submesh *)((u8 *)m + head);
     de_cooked_mesh_range *lr = (de_cooked_mesh_range *)((u8 *)m + head + subs);
     m->submeshes = sm;
@@ -191,7 +191,7 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
         target_of[b] = UINT32_MAX;
         if (m->buffer_bytes[b] == 0)
             continue;
-        de__loader_name(name, sizeof name, kind[b], de_asset_load_ctx_id(ctx));
+        de__loader_name(name, sizeof name, kind[b], id);
         m->buffers[b] =
             de_gpu_buffer_create(u->dev, &(de_gpu_buffer_desc){.size = m->buffer_bytes[b],
                                                                .usage = buffer_usage(b),
@@ -202,7 +202,7 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
             char msg[DE_ERROR_MESSAGE_MAX];
             snprintf(msg, sizeof msg, "%s", de__loader_rhi_message());
             mesh_free(u, m);
-            return de_asset_load_ctx_fail(ctx, r, "cannot create the %s buffer: %s", kind[b], msg);
+            return DE_FAIL(r, "cannot create the %s buffer: %s", kind[b], msg);
         }
         m->bindless[b] = de_gpu_buffer_bindless(u->dev, m->buffers[b]);
         m->gpu_bytes += m->buffer_bytes[b];
@@ -220,7 +220,7 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
     de__upload *up = de__upload_new(u, npieces);
     if (up == NULL) {
         mesh_free(u, m);
-        return de_asset_load_ctx_fail(ctx, DE_ERR_OUT_OF_MEMORY, "no memory for the upload");
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "no memory for the upload");
     }
     m->upload_ = up;
     memcpy(up->targets, targets, sizeof targets[0] * ntargets);
@@ -241,9 +241,26 @@ de_result de__mesh_load(de_asset_load_ctx *ctx) {
         char msg[DE_ERROR_MESSAGE_MAX];
         snprintf(msg, sizeof msg, "%s", de__loader_rhi_message());
         mesh_free(u, m);
-        return de_asset_load_ctx_fail(ctx, r, "%s", msg);
+        return DE_FAIL(r, "%s", msg);
     }
-    de_asset_load_ctx_set_object(ctx, m, m->gpu_bytes);
+    *out = m;
+    return DE_OK;
+}
+
+de_result de__mesh_load(de_asset_load_ctx *ctx) {
+    de_render_uploader *u = de__loader_uploader(ctx);
+    if (!u)
+        return DE_ERR_INTERNAL;
+    u64 size = 0;
+    const void *data = de_asset_load_ctx_data(ctx, &size);
+    de_render_mesh *mesh = NULL;
+    const de_result result = de__mesh_from_cooked(u, de_asset_load_ctx_id(ctx), data, size, &mesh);
+    if (result != DE_OK) {
+        char message[DE_ERROR_MESSAGE_MAX];
+        snprintf(message, sizeof message, "%s", de__loader_rhi_message());
+        return de_asset_load_ctx_fail(ctx, result, "%s", message);
+    }
+    de_asset_load_ctx_set_object(ctx, mesh, mesh->gpu_bytes);
     return DE_OK;
 }
 

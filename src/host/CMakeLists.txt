@@ -149,3 +149,11 @@ endif()
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_model_frames.c editor/editor_model_frames.h)
 endif()
+
+# DENG-699: fixed, bounded material-preview primitives use the ordinary mesh cooker.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND DE_BUILD_TOOLS)
+    target_sources(de_host PRIVATE
+        "$<$<CONFIG:Debug,Dev>:${CMAKE_CURRENT_SOURCE_DIR}/editor/editor_preview_material.c>"
+        editor/editor_preview_material.h)
+    target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
+endif()

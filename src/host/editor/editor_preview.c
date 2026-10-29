@@ -2,8 +2,12 @@
 #include "editor_internal.h"
 #include "editor_preview_image.h"
 #include "editor_model_frames.h"
+#if DE_HAS_COOKER
+#include "editor_preview_material.h"
+#endif
 #include "anim/anim_internal.h"
 #include "asset/asset_internal.h"
+#include "asset/hot_reload_internal.h"
 #include "platform/de_atomic.h"
 #include "render/loaders/render_assets.h"
 #include "render/formats/de_cooked_model.h"
@@ -42,7 +46,12 @@ typedef struct preview_context {
     de_entity camera;
     de_entity nodes[PREVIEW_NODES];
     u32 node_count, selection;
-    bool scene_ready;
+    bool scene_ready, material, has_source_token;
+    u32 source_token;
+    u32 shape;
+#if DE_HAS_COOKER
+    de__ed_material_meshes primitive_meshes;
+#endif
     de_dvec3 center;
     f32 radius;
     de_dvec3 bounds_min, bounds_max;
@@ -59,8 +68,10 @@ static struct {
     char id[1024], root[DE_FS_PATH_MAX];
     char overlay[16];
     de_ep_model_render_params query;
-    u64 request, deadline, revision;
-    bool pending, rendering;
+    u64 request, deadline, revision, source_changes;
+    bool pending, rendering, material, has_source_token;
+    u32 source_token;
+    u32 shape;
 } g_preview;
 
 static const de_allocator *allocator(void) {
@@ -121,15 +132,22 @@ static de_result stats(int argc, const char *const *argv, void *user) {
     if (argc != 1)
         return DE_ERR_INVALID_ARGUMENT;
     const preview_context *c = g_preview.context;
+    u32 geometry_meshes = 0;
+#if DE_HAS_COOKER
+    if (c)
+        for (u32 i = 0; i < DE__RENDER_PREVIEW_SHAPES; ++i)
+            geometry_meshes += c->primitive_meshes.handles[i].id != 0;
+#endif
     const de_log_category log = de_log_register_category("editor.preview", DE_LOG_INFO);
     DE_INFO(log,
             "contexts=%u pending=%u rgba_bytes=%zu readback_bytes=%llu overlay_lines=%u "
-            "overlay_bytes=%zu",
+            "overlay_bytes=%zu geometry_meshes=%u",
             c ? 1u : 0u, g_preview.pending ? 1u : 0u, c ? c->rgba_bytes : 0u,
             c ? (unsigned long long)c->pitch * c->size : 0ull, c ? c->frame_count : 0u,
             c ? (c->frame_lines ? DE__ED_FRAME_LINES * sizeof *c->frame_lines : 0) +
                     (c->frame_joints ? DE__ED_FRAME_JOINTS * sizeof *c->frame_joints : 0)
-              : 0u);
+              : 0u,
+            geometry_meshes);
     return DE_OK;
 }
 void de__ed_preview_shutdown(de__editor *ed) {
@@ -167,6 +185,10 @@ static de_result create_context(de__editor *ed, preview_context **out) {
     memset(c, 0, sizeof *c);
     c->device = ed->e->gpu;
     c->revision = g_preview.revision;
+    c->material = g_preview.material;
+    c->has_source_token = g_preview.has_source_token;
+    c->source_token = g_preview.source_token;
+    c->shape = UINT32_MAX;
     snprintf(c->id, sizeof c->id, "%s", g_preview.id);
     snprintf(c->root, sizeof c->root, "%s", g_preview.root);
     de_result result = de_type_registry_create(allocator(), &c->types);
@@ -434,13 +456,56 @@ static de_result prepare_frames(preview_context *c, const de_render_model *model
     return isfinite(*radius) && *radius > 0 ? DE_OK : DE_ERR_UNSUPPORTED;
 }
 static de_result render(preview_context *c, const de_ep_model_render_params *query) {
-    const de_render_model *model =
-        de_render_model_get(c->assets, de_asset_model(c->assets, de_asset_id_from(c->id)));
+    const de_render_model *model = NULL;
+#if DE_HAS_COOKER
+    de_render_model primitive_model = {0};
+    de_render_model_node primitive_node = {.parent = DE_COOKED_NONE,
+                                           .skin = DE_COOKED_NONE,
+                                           .rotation = {0, 0, 0, 1},
+                                           .scale = {1, 1, 1}};
+    de_mesh primitive = {0};
+    de_material material = {0};
+    if (c->material) {
+        DE_TRY(de__ed_material_mesh(c->assets, &c->primitive_meshes,
+                                    (de__render_preview_shape)g_preview.shape, &primitive));
+        material = de_asset_material(c->assets, de_asset_id_from(c->id));
+        if (!de_render_material_get(c->assets, material))
+            return DE_ERR_PARSE;
+        if (c->shape != g_preview.shape) {
+            c->scene_ready = false;
+            c->shape = g_preview.shape;
+        }
+        primitive_node.mesh = primitive;
+        primitive_model.node_count = primitive_model.mesh_count = 1;
+        primitive_model.nodes = &primitive_node;
+        primitive_model.meshes = &primitive;
+        model = &primitive_model;
+    } else
+#endif
+        model = de_render_model_get(c->assets, de_asset_model(c->assets, de_asset_id_from(c->id)));
     if (!model)
         return DE_ERR_PARSE;
     DE_TRY(build_scene(c, model, query));
+#if DE_HAS_COOKER
+    if (c->material) {
+        DeMeshRenderer *instance =
+            de_entity_get(c->world, c->nodes[0], de_component_find(c->world, "DeMeshRenderer"));
+        instance->materials[0] = material;
+    }
+#endif
     de_dvec3 center = c->center;
     f32 radius = c->radius;
+#if DE_HAS_COOKER
+    if (c->material) {
+        /* A material swatch has one identity instance. Its actual cooked sphere frames a
+         * round primitive closely instead of fitting the looser AABB diagonal. */
+        const de_render_mesh *geometry = de_render_mesh_get(c->assets, primitive);
+        center = (de_dvec3){geometry->sphere[0], geometry->sphere[1], geometry->sphere[2]};
+        radius = geometry->sphere[3];
+        if (!isfinite(radius) || radius <= 0)
+            return DE_ERR_UNSUPPORTED;
+    }
+#endif
     DE_TRY(prepare_frames(c, model, query, &center, &radius));
     const de_view_render_mode mode = overlay_mode(query->overlay);
     if (mode == DE_VIEW_RENDER_UV0 || mode == DE_VIEW_RENDER_UV1) {
@@ -496,10 +561,20 @@ static void fail(de__editor *ed, de_ep_error code, const char *message) {
     clear_context();
     mpack_writer_t writer;
     de__ed_respond_begin(ed, &writer);
-    de__ed_error(&writer, request, code, "model preview: %s", message);
+    de__ed_error(&writer, request, code, "%s preview: %s",
+                 g_preview.material ? "material" : "model", message);
     (void)de__ed_send(ed, &writer, DE_EP_KIND_RESPONSE);
 }
 static void tick(de__editor *ed) {
+    /* Preview-only materials need not be loaded by the game, so they can have no RELOADED
+     * asset event. Reuse the main asset system's existing source watcher clock, including
+     * unloaded source/texture changes; never create a second watcher in the private world. */
+    de__asset_reload_stats sources;
+    de__asset_reload_get_stats(ed->e->assets, &sources);
+    if (sources.changes != g_preview.source_changes) {
+        g_preview.source_changes = sources.changes;
+        de__ed_preview_invalidate();
+    }
     preview_context *c = g_preview.context;
     const u64 now = de_time_now_ns();
     if (!g_preview.pending) {
@@ -513,7 +588,9 @@ static void tick(de__editor *ed) {
     }
     if (!g_preview.rendering) {
         if (c && (strcmp(c->id, g_preview.id) || strcmp(c->root, g_preview.root) ||
-                  c->revision != g_preview.revision)) {
+                  c->revision != g_preview.revision || c->material != g_preview.material ||
+                  (g_preview.material && g_preview.has_source_token &&
+                   (!c->has_source_token || c->source_token != g_preview.source_token)))) {
             clear_context();
             c = NULL;
         }
@@ -536,6 +613,8 @@ static void tick(de__editor *ed) {
             return;
         }
         const de_result result = render(c, &g_preview.query);
+        if (result == DE_ERR_BUSY)
+            return; /* normal primitive uploads join the same bounded deferred request */
         if (result != DE_OK) {
             fail(ed,
                  result == DE_ERR_INVALID_ARGUMENT ? DE_EP_ERR_INVALID_PARAMS
@@ -567,6 +646,7 @@ static void tick(de__editor *ed) {
     size_t size = 0;
     const de_result encoded = de__ed_preview_png(c->size, c->size, c->rgba, png, capacity, &size);
     const u64 request = g_preview.request;
+    const bool material = g_preview.material;
     if (encoded != DE_OK) {
         DE_FREE(allocator(), png, capacity);
         fail(ed, DE_EP_ERR_INTERNAL, "PNG encoding failed");
@@ -581,21 +661,21 @@ static void tick(de__editor *ed) {
             const de_ep_blob_ref reference = {.blob_id = blob};
             mpack_writer_t writer;
             de__ed_respond_begin(ed, &writer);
-            de_ep_write_response_asset_render_model(&writer, request, &reference);
+            if (material)
+                de_ep_write_response_asset_render_material(&writer, request, &reference);
+            else
+                de_ep_write_response_asset_render_model(&writer, request, &reference);
             (void)de__ed_send(ed, &writer, DE_EP_KIND_RESPONSE);
         }
     }
     DE_FREE(allocator(), png, capacity);
 }
-static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena *arena,
-                      mpack_writer_t *writer) {
-    const de_ep_request *req = request;
-    de_ep_arena *a = arena;
-    mpack_writer_t *w = writer;
-    DE__ED_PARAMS(asset_render_model, de_ep_model_render_params, query);
+static void enqueue(de__editor *ed, const de_ep_request *request, de_ep_model_render_params query,
+                    bool material, u32 shape, bool has_source_token, u32 source_token,
+                    mpack_writer_t *writer) {
     if (!ed->e->gpu || !ed->e->renderer || !ed->e->assets || !ed->e->assets->manifest) {
         de__ed_error(writer, request->id, DE_EP_ERR_UNSUPPORTED,
-                     "model previews need a source-mode renderer");
+                     "asset previews need a source-mode renderer");
         return;
     }
     if (!query.id.len || query.id.len >= sizeof g_preview.id ||
@@ -603,7 +683,7 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
         query.lod >= 8 || (query.has_mesh && query.mesh >= 1024) || !isfinite(query.yaw) ||
         query.overlay.len >= sizeof g_preview.overlay) {
         de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS,
-                     "invalid bounded model preview parameters");
+                     "invalid bounded asset preview parameters");
         return;
     }
     if (overlay_mode(query.overlay) == DE_VIEW_RENDER_MODE_COUNT) {
@@ -612,7 +692,7 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
         return;
     }
     if (g_preview.pending) {
-        de__ed_error(writer, request->id, DE_EP_ERR_BUSY, "one model preview is already rendering");
+        de__ed_error(writer, request->id, DE_EP_ERR_BUSY, "one asset preview is already rendering");
         return;
     }
     char id[sizeof g_preview.id];
@@ -620,12 +700,12 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
     id[query.id.len] = 0;
     const de__manifest_asset *entry = de__manifest_find_asset(ed->e->assets->manifest, id);
     if (!entry) {
-        de__ed_error(writer, request->id, DE_EP_ERR_NOT_FOUND, "model asset not found");
+        de__ed_error(writer, request->id, DE_EP_ERR_NOT_FOUND, "preview asset not found");
         return;
     }
-    if (strcmp(entry->type, "model")) {
-        de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS,
-                     "preview requires a model asset");
+    if (strcmp(entry->type, material ? "material" : "model")) {
+        de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS, "preview requires a %s asset",
+                     material ? "material" : "model");
         return;
     }
     const char *root = ed->e->assets->manifest->root;
@@ -640,15 +720,51 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
     memcpy(g_preview.overlay, query.overlay.ptr, query.overlay.len);
     g_preview.overlay[query.overlay.len] = 0;
     g_preview.query.overlay = de_ep_cstr(g_preview.overlay);
+    g_preview.material = material;
+    g_preview.shape = shape;
+    g_preview.has_source_token = has_source_token;
+    g_preview.source_token = source_token;
     g_preview.request = request->id;
     g_preview.deadline = de_time_now_ns() + PREVIEW_TIMEOUT_NS;
     g_preview.pending = true;
     g_preview.rendering = false;
     de__ed_defer(ed);
 }
+static void on_render(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+    DE__ED_PARAMS(asset_render_model, de_ep_model_render_params, query);
+    enqueue(ed, req, query, false, 0, false, 0, w);
+}
+static void on_material(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                        mpack_writer_t *w) {
+#if DE_HAS_COOKER
+    DE__ED_PARAMS(asset_render_material, de_ep_material_render_params, query);
+    const char *const shapes[] = {"sphere", "box", "plane"};
+    u32 shape = 0;
+    while (shape < DE__RENDER_PREVIEW_SHAPES && !de_ep_str_eq(query.shape, shapes[shape]))
+        ++shape;
+    if (shape == DE__RENDER_PREVIEW_SHAPES) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS,
+                     "material shape must be sphere, box or plane");
+        return;
+    }
+    enqueue(
+        ed, req,
+        (de_ep_model_render_params){
+            .id = query.id, .overlay = de_ep_cstr("none"), .yaw = query.yaw, .size = query.size},
+        true, shape, query.has_revision, query.revision, w);
+#else
+    (void)ed;
+    (void)a;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "material previews need the source cooker");
+#endif
+}
 void de__ed_preview_register(de__editor *ed) {
     memset(&g_preview, 0, sizeof g_preview);
     de__ed_on(ed, DE_EP_METHOD_ASSET_RENDER_MODEL, on_render);
+    de__ed_on(ed, DE_EP_METHOD_ASSET_RENDER_MATERIAL, on_material);
+#if DE_HAS_COOKER
+    de__ed_add_capability(ed, "assets.materialPreview");
+#endif
     de__ed_add_capability(ed, "assets.modelGeometry");
     de__ed_add_capability(ed, "assets.modelFrames");
     de__ed_on_tick(ed, tick);

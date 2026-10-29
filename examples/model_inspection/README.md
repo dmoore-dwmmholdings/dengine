@@ -1,8 +1,8 @@
 # Cooked model inspection and GPU previews
 
-This Dev sample gives DIDE real multi-mesh metadata through editor IPC 1.3. It creates
-and attaches the ordinary GPU renderer so model/mesh/material assets can cook and upload,
-but places no model into the game world. The inspector triggers the first asynchronous load.
+This Dev sample gives DIDE real multi-mesh metadata through editor IPC 1.5 (inspection was
+introduced in 1.3). It creates and attaches the ordinary GPU renderer so model/mesh/material
+assets can cook and upload, but places no model into the game world. The inspector triggers the first asynchronous load.
 `asset.renderModel` renders the selected cooked mesh, or the whole node hierarchy, in a
 separate offscreen world using the actual imported materials. Preview entities never enter
 the game world. Requested LOD and yaw affect the GPU image; shorter whole-model mesh LOD
@@ -53,7 +53,7 @@ edges are visible through surfaces; they are not depth-tested or animated poses.
 fits the overlay as well as geometry without changing the next plain view's cached framing.
 There are at most 32768 line/marker records and 4096 joints per skeleton; oversized, invalid,
 singular or missing binding data fails explicitly. The IDE hides unavailable skeleton modes.
-Standalone material previews and full skeletal animation inspection remain separate work.
+Full skeletal animation inspection remains separate work.
 Metadata and preview requests each retain one active request and one replaceable pending
 request; close/session/source changes invalidate late results. Compatible completed turntable
 frames can publish while a newer angle waits, preventing starvation when rendering is slower
@@ -90,6 +90,31 @@ Both model variables are required when either is set. `DIDE_VIEWER_CAPTURE_DIR` 
 saves native light/dark/high-contrast captures after control transitions settle. This is a
 focused GPU feature test, not a whole-engine release, full-workload memory benchmark or
 cross-platform runtime qualification.
+
+`asset.renderMaterial {id, shape, yaw, size, revision?}` requires `assets.materialPreview`. A saved
+manifest material asset renders on fixed sphere, box or plane geometry under the same two
+directional lights. In DIDE, open a manifest material's asset-browser viewer, select a shape,
+and turn it manually or enable the turntable. This is a read-only saved-material preview;
+material property/graph editing and path-traced previews remain separate work. Generated
+model material sub-assets are not standalone manifest material IDs for this method.
+
+Primitive geometry uses the production model mesh cooker and normal GPU-only mesh upload
+and retirement, with at most three reused primitive records per private context. The cook
+has a 4 MiB IR budget and returns at most 256 KiB of cooked geometry. Names under
+`__didePreview/` that collide with authored assets fail without overwriting them. Source
+freshness also reads the existing main asset-system watch-change counter, so a preview-only
+material or texture can invalidate without a game-loaded `RELOADED` event. It adds no watcher.
+The optional opaque caller `revision` token forces a fresh private cook after IDE source events,
+independently of engine-watcher timing; it is not a content hash.
+`editor.previewStats` reports `geometry_meshes` as well as image/overlay ownership.
+
+With the same environment variables, the native filter
+`real_material_preview_shapes_and_source_refresh` checks actual shape/yaw pixels, material
+colour and texture-only edits/restoration, interleaved model/material requests, source identity,
+world isolation, idle primitive release and clean exit. Four-theme captures wait for the exact
+displayed PNG to decode. A separate null-backend ownership unit checks residency accounting,
+reuse, reserved-ID collisions and zero tracked allocations after teardown; this is not a
+whole-application memory benchmark.
 
 The bind test also checks real joint metadata, transformed selected/whole-model boxes and
 bind/yaw pixels, an inverse-bind-only edit/restoration with unchanged geometry bounds, plain

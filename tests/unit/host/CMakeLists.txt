@@ -355,3 +355,19 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         "${DE_ROOT_DIR}/src/host/editor/editor_model_frames.c" LIBS de_core)
     target_include_directories(test_editor_model_frames PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-699: fixed preview geometry through the actual production mesh cooker.
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND DE_BUILD_TOOLS AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_preview_geometry SOURCES test_preview_geometry.c
+        "${DE_ROOT_DIR}/src/render/loaders/preview_geometry.c" LIBS de_cooker de_render)
+    target_include_directories(test_editor_preview_geometry PRIVATE
+        "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+endif()
+
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND DE_BUILD_TOOLS AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_preview_material SOURCES test_preview_material.c
+        "${DE_ROOT_DIR}/src/render/loaders/preview_geometry.c"
+        "${DE_ROOT_DIR}/src/host/editor/editor_preview_material.c" LIBS de_cooker de_render)
+    target_include_directories(test_editor_preview_material PRIVATE
+        "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+endif()

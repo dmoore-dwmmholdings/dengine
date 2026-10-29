@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.3"
-#define DE_EP_SCHEMA_HASH "0cf663782faa9c42"
+#define DE_EP_PROTOCOL_VERSION "1.5"
+#define DE_EP_SCHEMA_HASH "a6d990b61f87e681"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -160,6 +160,7 @@ typedef struct de_ep_input_focus_params de_ep_input_focus_params;
 typedef struct de_ep_limits de_ep_limits;
 typedef struct de_ep_log_record de_ep_log_record;
 typedef struct de_ep_log_subscribe_params de_ep_log_subscribe_params;
+typedef struct de_ep_material_render_params de_ep_material_render_params;
 typedef struct de_ep_model_attribute de_ep_model_attribute;
 typedef struct de_ep_model_info de_ep_model_info;
 typedef struct de_ep_model_inspect_params de_ep_model_inspect_params;
@@ -906,6 +907,16 @@ struct de_ep_log_subscribe_params {
     de_ep_list_str categories;
 };
 
+/* Saved source-mode material rendered in an isolated preview world; no material edits or game-world mutation. */
+struct de_ep_material_render_params {
+    de_ep_str id; /* Manifest material asset ID, not a model ID. */
+    de_ep_str shape; /* sphere, box or plane; fixed bounded preview geometry. */
+    float yaw; /* Camera degrees about +Z. */
+    uint32_t size; /* Square PNG edge in pixels, 1..1024. */
+    bool has_revision;
+    uint32_t revision; /* Opaque caller cache token. Change after observed source/dependency edits to invalidate the private preview before its next cook; not a content hash. Absent uses engine source-watch invalidation. */
+};
+
 struct de_ep_model_attribute {
     de_ep_str name; /* position, normal, tangent, uv0, uv1, color, joints, weights */
     de_ep_str format; /* as cooked: f32x3, snorm16x3, unorm16x2, ... */
@@ -1531,6 +1542,8 @@ void de_ep_write_log_record(mpack_writer_t *w, const de_ep_log_record *v);
 void de_ep_read_log_record(mpack_reader_t *r, de_ep_arena *a, de_ep_log_record *out);
 void de_ep_write_log_subscribe_params(mpack_writer_t *w, const de_ep_log_subscribe_params *v);
 void de_ep_read_log_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_log_subscribe_params *out);
+void de_ep_write_material_render_params(mpack_writer_t *w, const de_ep_material_render_params *v);
+void de_ep_read_material_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_render_params *out);
 void de_ep_write_model_attribute(mpack_writer_t *w, const de_ep_model_attribute *v);
 void de_ep_read_model_attribute(mpack_reader_t *r, de_ep_arena *a, de_ep_model_attribute *out);
 void de_ep_write_model_info(mpack_writer_t *w, const de_ep_model_info *v);
@@ -1697,6 +1710,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_ASSET_PREVIEW_SETTINGS,
     DE_EP_METHOD_ASSET_REFERENCERS,
     DE_EP_METHOD_ASSET_REIMPORT,
+    DE_EP_METHOD_ASSET_RENDER_MATERIAL,
     DE_EP_METHOD_ASSET_RENDER_MODEL,
     DE_EP_METHOD_ASSET_STATUS,
     DE_EP_METHOD_ASSET_THUMBNAIL,
@@ -1843,6 +1857,8 @@ bool de_ep_read_params_asset_referencers(const de_ep_request *req, de_ep_arena *
 void de_ep_write_response_asset_referencers(mpack_writer_t *w, uint64_t id, const de_ep_asset_ids *result);
 bool de_ep_read_params_asset_reimport(const de_ep_request *req, de_ep_arena *a, de_ep_asset_ids *out);
 void de_ep_write_response_asset_reimport(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_asset_render_material(const de_ep_request *req, de_ep_arena *a, de_ep_material_render_params *out);
+void de_ep_write_response_asset_render_material(mpack_writer_t *w, uint64_t id, const de_ep_blob_ref *result);
 bool de_ep_read_params_asset_render_model(const de_ep_request *req, de_ep_arena *a, de_ep_model_render_params *out);
 void de_ep_write_response_asset_render_model(mpack_writer_t *w, uint64_t id, const de_ep_blob_ref *result);
 bool de_ep_read_params_asset_status(const de_ep_request *req, de_ep_arena *a, de_ep_asset_ids *out);

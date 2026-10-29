@@ -534,3 +534,11 @@ endif()
 if(TARGET de_render)
     target_sources(de_render PRIVATE view_hidden.c view_hidden.h)
 endif()
+
+# DENG-699: Dev-only fixed material-preview geometry, using the existing cooker boundary.
+if(DE_BUILD_TOOLS)
+    target_sources(de_render PRIVATE
+        "$<$<CONFIG:Debug,Dev>:${CMAKE_CURRENT_SOURCE_DIR}/loaders/preview_geometry.c>"
+        loaders/preview_geometry.h)
+    target_include_directories(de_render PRIVATE "${DE_ROOT_DIR}/tools")
+endif()
