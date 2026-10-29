@@ -221,3 +221,25 @@ TEST(net_stats, actual_loss_timeout_late_ack_and_ack_only_do_not_double_count) {
     ASSERT_TRUE(de__conn_stats(c).loss == 0.0f);
     de__chan_destroy(c);
 }
+
+TEST(net_stats, ack_header_uses_newest_timing_sample_for_congestion_too) {
+    u64 now = 0;
+    wire w = {.now = &now};
+    de__conn *c = NULL;
+    const de__chan_desc d = {
+        .send_packet = send_packet, .send_user = &w, .now_ns = clock_ns, .clock_user = &now};
+    ASSERT_EQ(de__chan_create(&d, &c), DE_OK);
+    u8 value = 1, packet[DE__CHAN_HEADER];
+    ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, 1), DE_OK);
+    ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
+    now = 10u * MS;
+    ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, 1), DE_OK);
+    ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
+    now = 100u * MS;
+    de__chan_packet_header(packet, 0, true, 1, 1); // ACK packet1 and older packet0
+    ASSERT_EQ(de__conn_read_payload(c, packet, sizeof packet), DE_OK);
+    ASSERT_EQ(de__chan_get_stats(c).acked, 2u);
+    ASSERT_EQ(de__chan_get_stats(c).rtt_ns, 90u * MS);
+    ASSERT_EQ(de__conn_cc_view(c)->latest_rtt_ns, 90u * MS);
+    de__chan_destroy(c);
+}

@@ -137,11 +137,12 @@ static void acknowledge(de__conn *c, const de__chan_packet *p) {
         const u64 elapsed = now >= s->time ? now - s->time : 0;
         // One unambiguous packet-time sample per ack header, newest first. Retransmitted
         // messages use a fresh packet sequence, so the specific send time is still known.
-        if (!sampled && now >= s->time) {
+        const bool sample = !sampled && now >= s->time;
+        if (sample) {
             de__chan_rtt_sample(&c->rtt, elapsed);
             sampled = true;
         }
-        de__cc_on_ack(c, s->bytes, elapsed);
+        de__cc_on_ack(c, s->bytes, sample ? elapsed : 0);
         de__stats_outcome(&c->rates, s->stats_serial, false);
         c->stats.acked++;
         s->valid = false;

@@ -25,6 +25,8 @@ void de__cc_init(de__cc_state *c, u32 kbps, u32 hz, u32 mtu) {
     c->packet_credit = (u64)packet_burst(c) * SECOND;
 }
 void de__cc_ack(de__cc_state *c, u64 rtt) {
+    if (!rtt)
+        return; /* zero means no fresh timing sample, including other ACK bits */
     c->latest_rtt_ns = rtt;
     if (rtt && (!c->min_rtt_ns || rtt < c->min_rtt_ns))
         c->min_rtt_ns = rtt;
