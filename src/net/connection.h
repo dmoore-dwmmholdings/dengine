@@ -417,7 +417,8 @@ const de__net_keys *de__net_client_keys(const de__net_client *c);
 bool de__net_client_plaintext(const de__net_client *c);
 
 /* DENG-53: optional non-owning channel routing. Bind immediately after connection,
- * before channel traffic; resets supplied storage. NULL unbinds and restores raw payloads.
+ * before channel traffic; resets supplied storage. NULL unbinds and restores raw payloads,
+ * and is idempotent even while disconnecting/offline (the client/server must still exist).
  * Binding is cleared on disconnect/timeout; stop using it and unbind before destroy.
  * Owner ticks call de__conn_write_packets and de__chan_receive, using raw *_send as
  * the descriptor's send callback. A second non-NULL binding returns DE_ERR_BUSY. */

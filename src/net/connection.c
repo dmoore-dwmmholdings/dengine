@@ -1176,7 +1176,8 @@ bool de__net_client_plaintext(const de__net_client *c) {
 }
 
 de_result de__net_server_bind_channels(de__net_server *s, u32 slot, de__conn *channels) {
-    if (!s || slot >= s->max_peers || s->slots[slot].state != DE__NET_SLOT_CONNECTED)
+    if (!s || slot >= s->max_peers ||
+        (channels && s->slots[slot].state != DE__NET_SLOT_CONNECTED))
         return DE_ERR_NOT_FOUND;
     if (channels && s->slots[slot].channels)
         return DE_ERR_BUSY;
@@ -1185,7 +1186,7 @@ de_result de__net_server_bind_channels(de__net_server *s, u32 slot, de__conn *ch
     return DE_OK;
 }
 de_result de__net_client_bind_channels(de__net_client *c, de__conn *channels) {
-    if (!c || c->state != DE__NET_CLIENT_CONNECTED)
+    if (!c || (channels && c->state != DE__NET_CLIENT_CONNECTED))
         return DE_ERR_NOT_FOUND;
     if (channels && c->channels)
         return DE_ERR_BUSY;

@@ -397,6 +397,27 @@ TEST(net_channels, reconnect_discards_bindings_and_fresh_bind_resets_pending_mes
     close_rig(&r);
 }
 
+TEST(net_channels, binding_cleanup_is_idempotent_during_disconnect_and_offline) {
+    rig r;
+    open_rig(&r);
+    de__net_client_disconnect(r.client, 1);
+    de__net_server_kick(r.server, 0, 1);
+    ASSERT_EQ(de__net_client_bind_channels(r.client, NULL), DE_OK);
+    ASSERT_EQ(de__net_server_bind_channels(r.server, 0, NULL), DE_OK);
+    for (u32 i = 0; i < 4; ++i) {
+        de__net_server_update(r.server);
+        de__net_client_update(r.client);
+        r.now += MS;
+    }
+    ASSERT_EQ(de__net_client_get_state(r.client), DE__NET_CLIENT_DISCONNECTED);
+    ASSERT_EQ(de__net_server_slot(r.server, 0).state, DE__NET_SLOT_FREE);
+    ASSERT_EQ(de__net_client_bind_channels(r.client, NULL), DE_OK);
+    ASSERT_EQ(de__net_server_bind_channels(r.server, 0, NULL), DE_OK);
+    ASSERT_EQ(de__net_client_bind_channels(r.client, r.channel[0]), DE_ERR_NOT_FOUND);
+    ASSERT_EQ(de__net_server_bind_channels(r.server, 0, r.channel[1]), DE_ERR_NOT_FOUND);
+    close_rig(&r);
+}
+
 TEST(net_channels, ten_thousand_encrypted_messages_under_loss_jitter_duplication_without_heap) {
     rig r;
     open_rig(&r);
