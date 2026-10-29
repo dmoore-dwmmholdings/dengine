@@ -7,6 +7,7 @@
 #include <dengine/de_asset.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
+#include <dengine/de_text.h>
 
 #include "asset/asset_internal.h"
 #include "asset/hot_reload_internal.h"
@@ -32,6 +33,7 @@ typedef struct de__ed_assets {
     bool has_reader;
     /* Loads asset.reimport started for entries new to the manifest; released once final. */
     de_load_handle loads[ED_LOADS];
+    de_asset_id font_load_ids[ED_LOADS];
     u32 load_count;
 } de__ed_assets;
 
@@ -49,11 +51,15 @@ static const de__manifest *manifest(de__editor *ed) {
 static const char *state_name(de_load_state st) {
     switch (st) {
     case DE_LOAD_PENDING:
-    case DE_LOAD_LOADING: return "loading";
-    case DE_LOAD_READY: return "loaded";
+    case DE_LOAD_LOADING:
+        return "loading";
+    case DE_LOAD_READY:
+        return "loaded";
     case DE_LOAD_PARTIAL:
-    case DE_LOAD_FAILED: return "failed";
-    default: return "unloaded";
+    case DE_LOAD_FAILED:
+        return "failed";
+    default:
+        return "unloaded";
     }
 }
 
@@ -96,7 +102,8 @@ static void on_list(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
         buf[n] = '\0';
         start = (u32)strtoul(buf, NULL, 10);
     }
-    list.assets.items = (de_ep_asset_info *)de__ed_alloc(a, sizeof(de_ep_asset_info) * ED_ASSET_PAGE);
+    list.assets.items =
+        (de_ep_asset_info *)de__ed_alloc(a, sizeof(de_ep_asset_info) * ED_ASSET_PAGE);
     u32 i = start;
     for (; m != NULL && i < m->asset_count && list.assets.items != NULL; ++i) {
         if (!matches(&m->assets[i], q.filter))
@@ -126,7 +133,8 @@ static void on_status(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     DE__ED_PARAMS(asset_status, de_ep_asset_ids, q);
     de_ep_asset_list list;
     memset(&list, 0, sizeof list);
-    list.assets.items = (de_ep_asset_info *)de__ed_alloc(a, sizeof(de_ep_asset_info) * (q.ids.count + 1));
+    list.assets.items =
+        (de_ep_asset_info *)de__ed_alloc(a, sizeof(de_ep_asset_info) * (q.ids.count + 1));
     for (u32 i = 0; i < q.ids.count && list.assets.items != NULL; ++i) {
         const de__manifest_asset *ma = find_asset(ed, q.ids.items[i]);
         if (ma == NULL) {
@@ -146,12 +154,13 @@ static void on_reimport(de__editor *ed, const de_ep_request *req, de_ep_arena *a
         char *id = de__ed_cstr(a, q.ids.items[i]);
         /* An entry the IDE just added: read the manifest now rather than at the watcher's next
          * event. A new entry loads with the manifest; there is nothing to reimport. */
-        if (id != NULL && find_asset(ed, q.ids.items[i]) == NULL && de__asset_reload_manifest_now(S(ed)) &&
-            find_asset(ed, q.ids.items[i]) != NULL) {
+        if (id != NULL && find_asset(ed, q.ids.items[i]) == NULL &&
+            de__asset_reload_manifest_now(S(ed)) && find_asset(ed, q.ids.items[i]) != NULL) {
             /* Start loading it (frames finish the load; asset.status says when), so what it
              * declares, such as a model's meshes, can be referenced. */
             if (g_assets.load_count < ED_LOADS)
-                g_assets.loads[g_assets.load_count++] = de_asset_load(S(ed), de_asset_id_from(id), 0);
+                g_assets.loads[g_assets.load_count++] =
+                    de_asset_load(S(ed), de_asset_id_from(id), 0);
             continue;
         }
         if (id == NULL || find_asset(ed, q.ids.items[i]) == NULL) {
@@ -161,11 +170,13 @@ static void on_reimport(de__editor *ed, const de_ep_request *req, de_ep_arena *a
         /* Known but never loaded: load it (as a new entry). */
         if (de_asset_status_of(S(ed), de_asset_id_from(id)) == DE_LOAD_INVALID) {
             if (g_assets.load_count < ED_LOADS)
-                g_assets.loads[g_assets.load_count++] = de_asset_load(S(ed), de_asset_id_from(id), 0);
+                g_assets.loads[g_assets.load_count++] =
+                    de_asset_load(S(ed), de_asset_id_from(id), 0);
             continue;
         }
         if (!de__asset_reload_queue(S(ed), de_asset_id_from(id))) {
-            de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "hot reload is off ([assets] hot_reload)");
+            de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED,
+                         "hot reload is off ([assets] hot_reload)");
             return;
         }
     }
@@ -290,6 +301,88 @@ static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *
 
 /* ---------- Importer schemas ---------- */
 
+static bool font_load_pending(de_asset_system *assets, de_asset_id id) {
+    for (u32 i = 0; i < g_assets.load_count; ++i)
+        if (g_assets.font_load_ids[i].hash == id.hash)
+            return true;
+    if (g_assets.load_count == ED_LOADS)
+        return false;
+    de_load_handle load = de_asset_load(assets, id, 0);
+    if (!load.id)
+        return false;
+    u32 at = g_assets.load_count++;
+    g_assets.loads[at] = load;
+    g_assets.font_load_ids[at] = id;
+    return true;
+}
+
+static void on_font_atlas(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
+    DE__ED_PARAMS(asset_font_atlas, de_ep_font_atlas_params, q);
+    if (!ed->e->text) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "assets.fontAtlas");
+        return;
+    }
+    if (!q.size || q.size > 1024) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "font atlas size must be 1..1024");
+        return;
+    }
+    const de__manifest_asset *ma = find_asset(ed, q.id);
+    if (!ma) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "font asset not found");
+        return;
+    }
+    if (strcmp(ma->type, "font")) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "asset is not a font");
+        return;
+    }
+    de_asset_id id = de_asset_id_from(ma->id);
+    de_font handle = de_asset_font(S(ed), id);
+    de_font_atlas_info info;
+    if (de_text_copy_font_atlas(ed->e->text, handle, 0, q.size, NULL, 0, &info) != DE_OK) {
+        if (de_asset_status_of(S(ed), id) == DE_LOAD_FAILED) {
+            char error[256] = {0};
+            (void)de_asset_last_error(S(ed), id, error, sizeof error);
+            de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "font load failed: %s", error);
+        } else {
+            (void)font_load_pending(S(ed), id);
+            de__ed_error(w, req->id, DE_EP_ERR_BUSY, "font atlas is loading; retry");
+        }
+        return;
+    }
+    if (q.page >= info.page_count) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "font atlas page is out of range");
+        return;
+    }
+    const u64 bytes = (u64)info.width * info.height * 4;
+    u8 *pixels = de__ed_alloc(a, (size_t)bytes);
+    if (!pixels || de_text_copy_font_atlas(ed->e->text, handle, q.page, q.size, pixels, bytes,
+                                           &info) != DE_OK) {
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "font atlas changed; retry");
+        return;
+    }
+    u64 blob = de__ed_send_blob(ed, pixels, (size_t)bytes);
+    if (!blob) {
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "font atlas transfer failed");
+        return;
+    }
+    de_ep_font_atlas_page result = {.page = q.page,
+                                    .page_count = info.page_count,
+                                    .baked_page_count = info.baked_page_count,
+                                    .width = info.width,
+                                    .height = info.height,
+                                    .atlas_width = info.atlas_width,
+                                    .atlas_height = info.atlas_height,
+                                    .generation = info.generation,
+                                    .source_revision = info.source_revision,
+                                    .distance_range = info.distance_range,
+                                    .mode = de_ep_cstr(info.pixel    ? "pixel"
+                                                       : info.bitmap ? "bitmap"
+                                                                     : "msdf"),
+                                    .pixels = {.blob_id = blob}};
+    de_ep_write_response_asset_font_atlas(w, req->id, &result);
+}
+
 typedef struct schema_prop {
     const char *name, *type, *def, *values, *desc;
     f64 min, max;
@@ -303,7 +396,8 @@ static const schema_prop k_texture[] = {
     {"alpha_coverage", "number", NULL, NULL, "Alpha-test cutoff kept in every mip", 0, 1},
     {"max_size", "integer", NULL, NULL, "Longest edge, scaled down to it", 1, 16384},
     {"address", "string", "wrap", "wrap clamp", "How mips read past edges", 0, 0},
-    {"compression", "string", "auto", "auto none bc1 bc3 bc4 bc5 bc6h bc7", "Block compression", 0, 0},
+    {"compression", "string", "auto", "auto none bc1 bc3 bc4 bc5 bc6h bc7", "Block compression", 0,
+     0},
     {"quality", "string", "normal", "fast normal high", "Encoder effort", 0, 0},
     {"rdo_quality", "number", "0", NULL, "Rate-distortion lambda (0: off)", 0, 4},
     {"rt_proxy", "boolean", "false", NULL, "Cook a silhouette proxy for sprite ray tracing", 0, 0},
@@ -402,7 +496,8 @@ static void on_preview(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     (void)ed;
     DE__ED_PARAMS(asset_preview_settings, de_ep_asset_preview_params, q);
     (void)q;
-    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "settings previews need an in-process cook (DENG-578)");
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED,
+                 "settings previews need an in-process cook (DENG-578)");
 }
 
 /* ---------- Cook cache ---------- */
@@ -506,7 +601,8 @@ static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena 
     }
     de_ep_model_info mi;
     memset(&mi, 0, sizeof mi);
-    mi.nodes.items = (de_ep_model_node *)de__ed_alloc(a, sizeof(de_ep_model_node) * (rm->node_count + 1));
+    mi.nodes.items =
+        (de_ep_model_node *)de__ed_alloc(a, sizeof(de_ep_model_node) * (rm->node_count + 1));
     for (u32 i = 0; i < rm->node_count && mi.nodes.items != NULL; ++i) {
         de_ep_model_node *n = &mi.nodes.items[mi.nodes.count++];
         memset(n, 0, sizeof *n);
@@ -524,16 +620,18 @@ static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena 
     static f32 bmin[3], bmax[3];
     const de_render_mesh *mesh = rm->mesh_count > 0 ? de_render_mesh_get(s, rm->meshes[0]) : NULL;
     if (mesh != NULL) {
-        mi.lods.items = (de_ep_model_lod *)de__ed_alloc(a, sizeof(de_ep_model_lod) * (mesh->lod_count + 1));
+        mi.lods.items =
+            (de_ep_model_lod *)de__ed_alloc(a, sizeof(de_ep_model_lod) * (mesh->lod_count + 1));
         for (u32 l = 0; l < mesh->lod_count && mi.lods.items != NULL; ++l) {
             de_ep_model_lod *o = &mi.lods.items[mi.lods.count++];
             o->triangles = mesh->lods[l].index_count / 3u;
             o->meshlets = mesh->lods[l].meshlet_count;
             o->screen_error = mesh->lod_error * (f32)(l + 1);
         }
-        static const char *const stream_names[] = {"position", "normal", "tangent", "uv0", "uv1",
-                                                   "color", "joints", "weights"};
-        mi.attributes.items = (de_ep_model_attribute *)de__ed_alloc(a, sizeof(de_ep_model_attribute) * DE_COOKED_STREAM_COUNT);
+        static const char *const stream_names[] = {"position", "normal", "tangent", "uv0",
+                                                   "uv1",      "color",  "joints",  "weights"};
+        mi.attributes.items = (de_ep_model_attribute *)de__ed_alloc(
+            a, sizeof(de_ep_model_attribute) * DE_COOKED_STREAM_COUNT);
         for (u32 k = 0; k < DE_COOKED_STREAM_COUNT && k < 8 && mi.attributes.items != NULL; ++k) {
             if (mesh->stream_format[k] == 0)
                 continue;
@@ -553,7 +651,8 @@ static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena 
         mi.bounds_max.items = bmax;
         mi.bounds_max.count = 3;
     }
-    mi.slots.items = (de_ep_model_slot *)de__ed_alloc(a, sizeof(de_ep_model_slot) * (rm->material_count + 1));
+    mi.slots.items =
+        (de_ep_model_slot *)de__ed_alloc(a, sizeof(de_ep_model_slot) * (rm->material_count + 1));
     for (u32 i = 0; i < rm->material_count && mi.slots.items != NULL; ++i) {
         de_ep_model_slot *o = &mi.slots.items[mi.slots.count++];
         char *nm = (char *)de__ed_alloc(a, 16);
@@ -583,6 +682,8 @@ static void tick(de__editor *ed) {
         if (st == DE_LOAD_READY || st == DE_LOAD_FAILED || st == DE_LOAD_CANCELLED) {
             de_asset_release(s, g_assets.loads[i]);
             g_assets.loads[i] = g_assets.loads[--g_assets.load_count];
+            g_assets.font_load_ids[i] = g_assets.font_load_ids[g_assets.load_count];
+            g_assets.font_load_ids[g_assets.load_count] = (de_asset_id){0};
         } else {
             ++i;
         }
@@ -598,11 +699,20 @@ static void tick(de__editor *ed) {
     while ((ev = (const de_asset_event *)de_event_next(ed->e->world, &g_assets.events)) != NULL) {
         de_ep_asset_event_kind kind;
         switch (ev->kind) {
-        case DE_ASSET_EV_LOADED: kind = DE_EP_ASSET_EVENT_KIND_LOADED; break;
-        case DE_ASSET_EV_FAILED: kind = DE_EP_ASSET_EVENT_KIND_FAILED; break;
-        case DE_ASSET_EV_RELOADED: kind = DE_EP_ASSET_EVENT_KIND_RELOADED; break;
-        case DE_ASSET_EV_EVICTED: kind = DE_EP_ASSET_EVENT_KIND_EVICTED; break;
-        default: continue;
+        case DE_ASSET_EV_LOADED:
+            kind = DE_EP_ASSET_EVENT_KIND_LOADED;
+            break;
+        case DE_ASSET_EV_FAILED:
+            kind = DE_EP_ASSET_EVENT_KIND_FAILED;
+            break;
+        case DE_ASSET_EV_RELOADED:
+            kind = DE_EP_ASSET_EVENT_KIND_RELOADED;
+            break;
+        case DE_ASSET_EV_EVICTED:
+            kind = DE_EP_ASSET_EVENT_KIND_EVICTED;
+            break;
+        default:
+            continue;
         }
         de_ep_arena a = {ed->arena, ed->arena_cap, 0};
         de_ep_asset_event d;
@@ -641,6 +751,9 @@ void de__ed_assets_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_ASSET_DEPENDENCIES, on_dependencies);
     de__ed_on(ed, DE_EP_METHOD_ASSET_REFERENCERS, on_referencers);
     de__ed_on(ed, DE_EP_METHOD_ASSET_THUMBNAIL, on_thumbnail);
+    de__ed_on(ed, DE_EP_METHOD_ASSET_FONT_ATLAS, on_font_atlas);
+    if (ed->e->text)
+        de__ed_add_capability(ed, "assets.fontAtlas");
     de__ed_on(ed, DE_EP_METHOD_ASSET_IMPORTER_SCHEMA, on_schema);
     de__ed_on(ed, DE_EP_METHOD_ASSET_PREVIEW_SETTINGS, on_preview);
     de__ed_on(ed, DE_EP_METHOD_CACHE_STATS, on_cache_stats);

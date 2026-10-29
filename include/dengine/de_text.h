@@ -116,6 +116,25 @@ typedef struct de_text_page_info {
 } de_text_page_info;
 DE_API de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page,
                                        de_text_page_info *out);
+/** CPU atlas inspection, independent of a renderer. Page indices cover baked pages first,
+ * followed by integrated runtime glyph pages. Dimensions describe the copied preview;
+ * atlas_width/height are the original page size. Source revision distinguishes decoded font
+ * lifetimes; generation is the current runtime diagnostic counter, not a content hash.
+ * Single-channel coverage expands to opaque grayscale; four-channel bytes are preserved. */
+typedef struct de_font_atlas_info {
+    u64 source_revision;
+    u32 width, height, atlas_width, atlas_height;
+    u32 page_count, baked_page_count, generation;
+    f32 distance_range;
+    bool bitmap, pixel;
+} de_font_atlas_info;
+/** Main thread between schedules/asset updates. No allocation or borrowed pixel pointers.
+ * max_edge=0 copies full resolution; 1..16384 fits the page within that edge with nearest
+ * sampling. NULL rgba with capacity=0 queries metadata only. Otherwise capacity must hold
+ * width*height*4 tightly packed RGBA8 bytes. Any failure leaves rgba and out untouched.
+ * Query/copy are separate snapshots: requery if a reload changes the required capacity. */
+DE_API de_result de_text_copy_font_atlas(de_text_system *t, de_font font, u32 page, u32 max_edge,
+                                         void *rgba, u64 capacity, de_font_atlas_info *out);
 /** Allocation-free generation pins; balance successful pins before destroying the text system. */
 DE_API bool de_text_pin_font(de_text_system *t, de_font font);
 DE_API void de_text_unpin_font(de_text_system *t, de_font font);

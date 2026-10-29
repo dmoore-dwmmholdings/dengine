@@ -1,0 +1,5 @@
+[game]
+name = "Font Atlas Inspection"
+
+[timing]
+frame_cap_hz = 60

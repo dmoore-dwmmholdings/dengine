@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.1"
-#define DE_EP_SCHEMA_HASH "be30e09791020691"
+#define DE_EP_PROTOCOL_VERSION "1.2"
+#define DE_EP_SCHEMA_HASH "99a5b8d0772efbd4"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -147,6 +147,8 @@ typedef struct de_ep_event_record de_ep_event_record;
 typedef struct de_ep_events_params de_ep_events_params;
 typedef struct de_ep_field_change de_ep_field_change;
 typedef struct de_ep_field_info de_ep_field_info;
+typedef struct de_ep_font_atlas_page de_ep_font_atlas_page;
+typedef struct de_ep_font_atlas_params de_ep_font_atlas_params;
 typedef struct de_ep_gizmo_drag_end de_ep_gizmo_drag_end;
 typedef struct de_ep_gizmo_drag_update de_ep_gizmo_drag_update;
 typedef struct de_ep_gizmo_tool_params de_ep_gizmo_tool_params;
@@ -753,6 +755,27 @@ struct de_ep_field_info {
     uint32_t count; /* array length; 1 for a scalar */
     de_ep_list_str flags;
     de_ep_map_raw attributes;
+};
+
+struct de_ep_font_atlas_page {
+    uint32_t page;
+    uint32_t page_count;
+    uint32_t baked_page_count;
+    uint32_t width;
+    uint32_t height;
+    uint32_t atlas_width;
+    uint32_t atlas_height;
+    uint32_t generation;
+    uint64_t source_revision;
+    float distance_range;
+    de_ep_str mode;
+    de_ep_blob_ref pixels;
+};
+
+struct de_ep_font_atlas_params {
+    de_ep_str id;
+    uint32_t page;
+    uint32_t size;
 };
 
 struct de_ep_gizmo_drag_end {
@@ -1414,6 +1437,10 @@ void de_ep_write_field_change(mpack_writer_t *w, const de_ep_field_change *v);
 void de_ep_read_field_change(mpack_reader_t *r, de_ep_arena *a, de_ep_field_change *out);
 void de_ep_write_field_info(mpack_writer_t *w, const de_ep_field_info *v);
 void de_ep_read_field_info(mpack_reader_t *r, de_ep_arena *a, de_ep_field_info *out);
+void de_ep_write_font_atlas_page(mpack_writer_t *w, const de_ep_font_atlas_page *v);
+void de_ep_read_font_atlas_page(mpack_reader_t *r, de_ep_arena *a, de_ep_font_atlas_page *out);
+void de_ep_write_font_atlas_params(mpack_writer_t *w, const de_ep_font_atlas_params *v);
+void de_ep_read_font_atlas_params(mpack_reader_t *r, de_ep_arena *a, de_ep_font_atlas_params *out);
 void de_ep_write_gizmo_drag_end(mpack_writer_t *w, const de_ep_gizmo_drag_end *v);
 void de_ep_read_gizmo_drag_end(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo_drag_end *out);
 void de_ep_write_gizmo_drag_update(mpack_writer_t *w, const de_ep_gizmo_drag_update *v);
@@ -1584,6 +1611,7 @@ void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta
 typedef enum de_ep_method {
     DE_EP_METHOD_UNKNOWN = 0,
     DE_EP_METHOD_ASSET_DEPENDENCIES,
+    DE_EP_METHOD_ASSET_FONT_ATLAS,
     DE_EP_METHOD_ASSET_IMPORTER_SCHEMA,
     DE_EP_METHOD_ASSET_LIST,
     DE_EP_METHOD_ASSET_MODEL_INFO,
@@ -1720,6 +1748,8 @@ void de_ep_write_request_end(mpack_writer_t *w);
 
 bool de_ep_read_params_asset_dependencies(const de_ep_request *req, de_ep_arena *a, de_ep_asset_id_params *out);
 void de_ep_write_response_asset_dependencies(mpack_writer_t *w, uint64_t id, const de_ep_asset_ids *result);
+bool de_ep_read_params_asset_font_atlas(const de_ep_request *req, de_ep_arena *a, de_ep_font_atlas_params *out);
+void de_ep_write_response_asset_font_atlas(mpack_writer_t *w, uint64_t id, const de_ep_font_atlas_page *result);
 bool de_ep_read_params_asset_importer_schema(const de_ep_request *req, de_ep_arena *a, de_ep_asset_type_params *out);
 void de_ep_write_response_asset_importer_schema(mpack_writer_t *w, uint64_t id, const de_ep_schema *result);
 bool de_ep_read_params_asset_list(const de_ep_request *req, de_ep_arena *a, de_ep_asset_list_params *out);

@@ -269,6 +269,70 @@ de_result de_text_get_page_info(de_text_system *t, de_font font, u32 page, de_te
     out->texture = de_text_page_texture(t, font, page);
     return DE_OK;
 }
+de_result de_text_copy_font_atlas(de_text_system *t, de_font font, u32 page, u32 max_edge,
+                                  void *rgba, u64 capacity, de_font_atlas_info *out) {
+    if (!t || !out || max_edge > 16384 || (!rgba && capacity))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "font atlas snapshot: invalid argument");
+    de__text_lock(t->runtime);
+    const de_text_font *f = de_text__font_get(t, font);
+    u32 pages = f ? de_text__page_count(t, font) : 0;
+    const u8 *source = f && page < pages ? de_text__page_data(t, font, page) : NULL;
+    if (!source) {
+        de__text_unlock(t->runtime);
+        return DE_FAIL(DE_ERR_NOT_FOUND, "font atlas page not ready");
+    }
+    u32 width = f->width, height = f->height;
+    if (max_edge && (width > max_edge || height > max_edge)) {
+        if (width >= height) {
+            height = (u32)((u64)height * max_edge / width);
+            width = max_edge;
+        } else {
+            width = (u32)((u64)width * max_edge / height);
+            height = max_edge;
+        }
+        if (!width)
+            width = 1;
+        if (!height)
+            height = 1;
+    }
+    u64 bytes = (u64)width * height * 4;
+    if (rgba && capacity < bytes) {
+        de__text_unlock(t->runtime);
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "font atlas destination needs %llu bytes",
+                       (unsigned long long)bytes);
+    }
+    de_font_atlas_info info = {.source_revision = f->identity,
+                               .width = width,
+                               .height = height,
+                               .atlas_width = f->width,
+                               .atlas_height = f->height,
+                               .page_count = pages,
+                               .baked_page_count = f->pages,
+                               .generation = f->generation,
+                               .distance_range = f->range,
+                               .bitmap = f->mode != DE_FONT_MSDF,
+                               .pixel = f->mode == DE_FONT_PIXEL};
+    if (rgba) {
+        u8 *destination = rgba;
+        for (u32 y = 0; y < height; ++y) {
+            u32 sy = (u32)((u64)y * f->height / height);
+            for (u32 x = 0; x < width; ++x) {
+                u32 sx = (u32)((u64)x * f->width / width);
+                const u8 *p = source + ((u64)sy * f->width + sx) * f->channels;
+                u8 *d = destination + ((u64)y * width + x) * 4;
+                if (f->channels == 4)
+                    memcpy(d, p, 4);
+                else {
+                    d[0] = d[1] = d[2] = *p;
+                    d[3] = 255;
+                }
+            }
+        }
+    }
+    *out = info;
+    de__text_unlock(t->runtime);
+    return DE_OK;
+}
 bool de_text_pin_font(de_text_system *t, de_font font) {
     return t && de_text__font_get(t, font) && de__slot_ref_handle(t->assets, font.id);
 }

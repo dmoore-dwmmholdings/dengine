@@ -1,0 +1,21 @@
+[project]
+asset_root = "../../tests/data/fonts"
+
+[defaults.font]
+em_px = 12
+px_range = 2
+page_size = 32
+charset = "ascii"
+
+[assets."font_atlas/latin"]
+type = "font"
+source = "latin/NotoSans.ttf"
+fallback = ["font_atlas/cjk"]
+
+[assets."font_atlas/cjk"]
+type = "font"
+source = "cjk/test.ttf"
+chars = "一丁"
+
+[bundles.font_atlas]
+assets = ["font_atlas/latin", "font_atlas/cjk"]

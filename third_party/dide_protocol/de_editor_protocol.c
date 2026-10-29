@@ -2664,6 +2664,140 @@ void de_ep_read_field_info(mpack_reader_t *r, de_ep_arena *a, de_ep_field_info *
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_font_atlas_page(mpack_writer_t *w, const de_ep_font_atlas_page *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "page");
+    mpack_write_u32(w, v->page);
+    mpack_write_cstr(w, "pageCount");
+    mpack_write_u32(w, v->page_count);
+    mpack_write_cstr(w, "bakedPageCount");
+    mpack_write_u32(w, v->baked_page_count);
+    mpack_write_cstr(w, "width");
+    mpack_write_u32(w, v->width);
+    mpack_write_cstr(w, "height");
+    mpack_write_u32(w, v->height);
+    mpack_write_cstr(w, "atlasWidth");
+    mpack_write_u32(w, v->atlas_width);
+    mpack_write_cstr(w, "atlasHeight");
+    mpack_write_u32(w, v->atlas_height);
+    mpack_write_cstr(w, "generation");
+    mpack_write_u32(w, v->generation);
+    mpack_write_cstr(w, "sourceRevision");
+    mpack_write_u64(w, v->source_revision);
+    mpack_write_cstr(w, "distanceRange");
+    mpack_write_float(w, v->distance_range);
+    mpack_write_cstr(w, "mode");
+    de_ep_write_str(w, v->mode);
+    mpack_write_cstr(w, "pixels");
+    de_ep_write_blob_ref(w, &v->pixels);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_font_atlas_page(mpack_reader_t *r, de_ep_arena *a, de_ep_font_atlas_page *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "page")) {
+            seen |= (uint64_t)1 << 0;
+            out->page = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "pageCount")) {
+            seen |= (uint64_t)1 << 1;
+            out->page_count = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "bakedPageCount")) {
+            seen |= (uint64_t)1 << 2;
+            out->baked_page_count = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "width")) {
+            seen |= (uint64_t)1 << 3;
+            out->width = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "height")) {
+            seen |= (uint64_t)1 << 4;
+            out->height = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "atlasWidth")) {
+            seen |= (uint64_t)1 << 5;
+            out->atlas_width = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "atlasHeight")) {
+            seen |= (uint64_t)1 << 6;
+            out->atlas_height = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "generation")) {
+            seen |= (uint64_t)1 << 7;
+            out->generation = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "sourceRevision")) {
+            seen |= (uint64_t)1 << 8;
+            out->source_revision = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "distanceRange")) {
+            seen |= (uint64_t)1 << 9;
+            out->distance_range = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "mode")) {
+            seen |= (uint64_t)1 << 10;
+            de_ep_read_str(r, &out->mode);
+        } else if (de_ep_str_eq(k, "pixels")) {
+            seen |= (uint64_t)1 << 11;
+            de_ep_read_blob_ref(r, a, &out->pixels);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(4095)) != UINT64_C(4095))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_font_atlas_params(mpack_writer_t *w, const de_ep_font_atlas_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    mpack_write_cstr(w, "page");
+    mpack_write_u32(w, v->page);
+    mpack_write_cstr(w, "size");
+    mpack_write_u32(w, v->size);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_font_atlas_params(mpack_reader_t *r, de_ep_arena *a, de_ep_font_atlas_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else if (de_ep_str_eq(k, "page")) {
+            seen |= (uint64_t)1 << 1;
+            out->page = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "size")) {
+            seen |= (uint64_t)1 << 2;
+            out->size = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_gizmo_drag_end(mpack_writer_t *w, const de_ep_gizmo_drag_end *v) {
     uint32_t n = 0;
     ++n;
@@ -6736,6 +6870,7 @@ void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta
 static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "",
     "asset.dependencies",
+    "asset.fontAtlas",
     "asset.importerSchema",
     "asset.list",
     "asset.modelInfo",
@@ -6825,6 +6960,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
 static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
+    "assets.fontAtlas",
     NULL,
     NULL,
     NULL,
@@ -7021,6 +7157,19 @@ bool de_ep_read_params_asset_dependencies(const de_ep_request *req, de_ep_arena 
 void de_ep_write_response_asset_dependencies(mpack_writer_t *w, uint64_t id, const de_ep_asset_ids *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_asset_ids(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_asset_font_atlas(const de_ep_request *req, de_ep_arena *a, de_ep_font_atlas_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_font_atlas_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_asset_font_atlas(mpack_writer_t *w, uint64_t id, const de_ep_font_atlas_page *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_font_atlas_page(w, result);
     de_ep_write_result_end(w);
 }
 

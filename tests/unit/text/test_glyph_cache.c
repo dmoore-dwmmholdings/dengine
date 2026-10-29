@@ -1,5 +1,6 @@
 #include "runtime_test_util.h"
 #include "text/glyph_cache_internal.h"
+#include <stdlib.h>
 static u32 unbaked(runtime_fx *f, u32 *glyphs, u32 max) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);
     u32 count = 0;
@@ -15,6 +16,76 @@ static u32 unbaked(runtime_fx *f, u32 *glyphs, u32 max) {
             glyphs[count++] = gid;
     }
     return count;
+}
+TEST_F(glyph_cache, atlas_snapshots_copy_baked_runtime_and_survive_eviction, runtime_fx) {
+    de_text_font *font = de_text__font_get(f->t, f->cjk);
+    de_font_atlas_info info;
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, NULL, 0, &info), DE_OK);
+    ASSERT_EQ(info.width, font->width);
+    ASSERT_EQ(info.height, font->height);
+    ASSERT_EQ(info.page_count, font->pages);
+    ASSERT_EQ(info.baked_page_count, font->pages);
+    size_t bytes = (size_t)info.width * info.height * 4;
+    u8 *copy = malloc(bytes + 16);
+    ASSERT_TRUE(copy != NULL);
+    memset(copy, 0xd3, bytes + 16);
+    de_font_atlas_info untouched;
+    memset(&untouched, 0xd3, sizeof untouched);
+    de_font_atlas_info failed = untouched;
+    EXPECT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, copy, bytes - 1, &failed),
+              DE_ERR_INVALID_ARGUMENT);
+    ASSERT_MEMEQ(&failed, &untouched, sizeof failed);
+    for (size_t i = 0; i < bytes + 16; ++i)
+        ASSERT_EQ(copy[i], 0xd3u);
+    EXPECT_EQ(de_text_copy_font_atlas(f->t, f->cjk, info.page_count, 8, copy, bytes, &failed),
+              DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_text_copy_font_atlas(NULL, f->cjk, 0, 8, copy, bytes, &failed),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 16385, copy, bytes, &failed),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, NULL, 1, &failed),
+              DE_ERR_INVALID_ARGUMENT);
+    ASSERT_MEMEQ(&failed, &untouched, sizeof failed);
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, copy, bytes, &info), DE_OK);
+    ASSERT_MEMEQ(copy, font->pixels[0], bytes);
+    for (size_t i = bytes; i < bytes + 16; ++i)
+        ASSERT_EQ(copy[i], 0xd3u);
+    u64 original_hash = de_hash64(copy, bytes, 0);
+    u64 source_revision = info.source_revision;
+    u8 preview[8 * 8 * 4];
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 8, preview, sizeof preview, &info), DE_OK);
+    EXPECT_EQ(info.width, 8u);
+    EXPECT_EQ(info.height, 8u);
+    EXPECT_EQ(info.atlas_width, font->width);
+    for (u32 y = 0; y < 8; ++y)
+        for (u32 x = 0; x < 8; ++x) {
+            size_t source =
+                ((size_t)(y * font->height / 8) * font->width + x * font->width / 8) * 4;
+            ASSERT_MEMEQ(preview + (y * 8 + x) * 4, font->pixels[0] + source, 4);
+        }
+    u32 glyph;
+    ASSERT_EQ(unbaked(f, &glyph, 1), 1u);
+    de_text__glyph_miss(f->t, f->cjk, glyph);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    de_text_glyph_entry entry;
+    ASSERT_TRUE(de_text__glyph(f->t, f->cjk, glyph, &entry));
+    ASSERT_GE(entry.page, font->pages);
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, entry.page, 0, copy, bytes, &info), DE_OK);
+    EXPECT_GT(info.page_count, info.baked_page_count);
+    EXPECT_EQ(info.source_revision, source_revision);
+    EXPECT_EQ(info.generation, font->generation); /* Diagnostic counter; DENG-690. */
+    ASSERT_MEMEQ(copy, de_text__page_data(f->t, f->cjk, entry.page), bytes);
+    de__slot *slot = de__slot_get(f->assets, f->cjk.id);
+    de__slot_set_object(slot, NULL);
+    u64 snapshot_hash = de_hash64(copy, bytes, 0);
+    EXPECT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, copy, bytes, &failed), DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_hash64(copy, bytes, 0), snapshot_hash);
+    ASSERT_MEMEQ(&failed, &untouched, sizeof failed);
+    de__slot_set_object(slot, font);
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, copy, bytes, &info), DE_OK);
+    EXPECT_EQ(de_hash64(copy, bytes, 0), original_hash);
+    free(copy);
 }
 TEST_F(glyph_cache, cjk500_dedupe_and_frame_budget, runtime_fx) {
     u32 glyphs[500];
@@ -181,6 +252,34 @@ TEST_F(glyph_cache, bitmap_does_not_enqueue, runtime_fx) {
     EXPECT_FALSE(de_text__glyph(f->t, font, 999, &entry));
     de_text__glyph_miss(f->t, font, 999);
     EXPECT_EQ(de_text_get_stats(f->t).runtime_pending, 0u);
+    de_font_atlas_info info;
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, font, 0, 0, NULL, 0, &info), DE_OK);
+    EXPECT_TRUE(info.bitmap);
+    EXPECT_FALSE(info.pixel);
+    de_text_font *decoded = de_text__font_get(f->t, font);
+    size_t bytes = (size_t)info.width * info.height * 4;
+    u8 *copy = malloc(bytes);
+    ASSERT_TRUE(copy != NULL);
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, font, 0, 0, copy, bytes, &info), DE_OK);
+    ASSERT_MEMEQ(copy, decoded->pixels[0], bytes);
+    /* A single-channel pixel page has coverage, not alpha. Exercise this supported
+     * decoded layout with the first coverage plane of the same owned allocation. */
+    u32 channels = decoded->channels;
+    de__font_mode mode = decoded->mode;
+    decoded->channels = 1;
+    decoded->mode = DE_FONT_PIXEL;
+    de_result result = de_text_copy_font_atlas(f->t, font, 0, 0, copy, bytes, &info);
+    decoded->channels = channels;
+    decoded->mode = mode;
+    ASSERT_EQ(result, DE_OK);
+    EXPECT_TRUE(info.bitmap && info.pixel);
+    for (size_t i = 0; i < bytes / 4; ++i) {
+        EXPECT_EQ(copy[i * 4], decoded->pixels[0][i]);
+        EXPECT_EQ(copy[i * 4 + 1], copy[i * 4]);
+        EXPECT_EQ(copy[i * 4 + 2], copy[i * 4]);
+        EXPECT_EQ(copy[i * 4 + 3], 255u);
+    }
+    free(copy);
     de_asset_release(f->assets, h);
 }
 
