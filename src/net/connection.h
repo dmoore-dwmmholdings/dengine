@@ -416,4 +416,12 @@ const de__net_keys *de__net_client_keys(const de__net_client *c);
 /** True when the session sends plaintext packets (both sides turned encryption off). */
 bool de__net_client_plaintext(const de__net_client *c);
 
+/* DENG-53: optional non-owning channel routing. Bind immediately after connection,
+ * before channel traffic; resets supplied storage. NULL unbinds and restores raw payloads.
+ * Binding is cleared on disconnect/timeout; stop using it and unbind before destroy.
+ * Owner ticks call de__conn_write_packets and de__chan_receive, using raw *_send as
+ * the descriptor's send callback. A second non-NULL binding returns DE_ERR_BUSY. */
+de_result de__net_server_bind_channels(de__net_server *s, u32 slot, de__conn *channels);
+de_result de__net_client_bind_channels(de__net_client *c, de__conn *channels);
+
 #endif /* DE_NET_CONNECTION_H */

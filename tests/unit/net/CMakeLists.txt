@@ -49,3 +49,12 @@ if(TARGET de_net AND NOT DE_IS_SHIPPING)
         target_include_directories(test_net_sim PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endif()
+
+# DENG-53: authenticated delivery, selective acknowledgements and resend qualification.
+if(TARGET de_net)
+    de_add_test(NAME net_channels SOURCES test_packet.c test_ack.c test_channels.c
+        LIBS de_net de_test_support)
+    if(TARGET test_net_channels)
+        target_include_directories(test_net_channels PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

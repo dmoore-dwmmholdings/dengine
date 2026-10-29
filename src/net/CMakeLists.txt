@@ -44,3 +44,9 @@ de_add_module(
 if(TARGET de_net)
     target_sources(de_net PRIVATE net_sim.c net_sim.h)
 endif()
+
+# DENG-53: delivery semantics above authenticated PAYLOAD; DENG-54/55 replace the two hooks.
+if(TARGET de_net)
+    target_sources(de_net PRIVATE packet.c packet.h ack.c rtt.c channel.c channel.h
+        mtu.c congestion.c)
+endif()

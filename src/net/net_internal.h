@@ -197,4 +197,11 @@ void de__net_address_unmap(de_net_address *a);
  */
 de_result de__net_split_host_port(const char *text, char *host, u32 host_cap, u16 *port);
 
+/* DENG-53: connection-owned channel state; replace these hooks in DENG-54/55. */
+typedef struct de__conn de__conn;
+u32 de__mtu_payload(const de__conn *conn);
+u32 de__cc_send_budget(const de__conn *conn);
+void de__cc_on_ack(de__conn *conn, u32 bytes, u64 rtt_ns);
+void de__cc_on_loss(de__conn *conn, u32 bytes);
+
 #endif /* DE_NET_INTERNAL_H */

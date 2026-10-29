@@ -12,6 +12,7 @@
  *     64 players), so behaviour never depends on hashing.
  */
 #include "net/connection.h"
+#include "net/channel.h"
 
 #include <dengine/de_debug.h>
 #include <dengine/de_platform.h>
@@ -123,7 +124,12 @@ u64 de__net_conn_stats_dropped(const de__net_conn_stats *s) {
 
 /* PAYLOAD dispatch: the one place a received PAYLOAD body leaves the connection layer.
  * DENG-53 routing hook: route `data` to the channel layer here (one line). */
-static void dispatch_payload(const de__net_callbacks *cb, u32 slot, const u8 *data, u32 bytes) {
+static void dispatch_payload(const de__net_callbacks *cb, u32 slot, const u8 *data, u32 bytes,
+                             de__conn *channels) {
+    if (channels != NULL) {
+        (void)de__conn_read_payload(channels, data, bytes);
+        return;
+    }
     if (cb->payload != NULL)
         cb->payload(cb->user, slot, data, bytes);
 }
@@ -149,6 +155,7 @@ static bool is_session_type(de__net_packet_type t) {
  */
 
 typedef struct srv_slot {
+    de__conn *channels; /* non-owning; cleared with slot release */
     de__net_slot_state state;
     u32 generation;
     de_net_address address;
@@ -512,7 +519,7 @@ static void srv_on_session(de__net_server *s, srv_slot *sl, de__net_packet *p) {
         break;
     case DE__NET_PACKET_PAYLOAD:
         s->stats.payloads_received++;
-        dispatch_payload(&s->cb, index, p->body, p->body_bytes);
+        dispatch_payload(&s->cb, index, p->body, p->body_bytes, sl->channels);
         break;
     case DE__NET_PACKET_DISCONNECT: {
         u8 code = p->body[0];
@@ -729,6 +736,7 @@ const de__net_keys *de__net_server_slot_keys(const de__net_server *s, u32 slot) 
  */
 
 struct de__net_client {
+    de__conn *channels; /* non-owning; cleared with session wipe */
     const de_allocator *alloc;
     size_t alloc_size;
     de__socket *socket;
@@ -771,6 +779,7 @@ struct de__net_client {
 
 /* Wipes every secret and handshake value; keeps configuration, counters and the end reason. */
 static void cli_wipe_session(de__net_client *c) {
+    c->channels = NULL;
     de__net_wipe(c->token, sizeof c->token);
     de__net_wipe(c->psk, sizeof c->psk);
     c->has_psk = false;
@@ -916,7 +925,7 @@ static void cli_on_sealed(de__net_client *c, de__net_packet *p) {
     switch (p->type) {
     case DE__NET_PACKET_PAYLOAD:
         c->stats.payloads_received++;
-        dispatch_payload(&c->cb, c->slot, p->body, p->body_bytes);
+        dispatch_payload(&c->cb, c->slot, p->body, p->body_bytes, c->channels);
         break;
     case DE__NET_PACKET_DISCONNECT:
         cli_end(c, DE__NET_END_REMOTE, p->body[0]);
@@ -1164,4 +1173,23 @@ const de__net_keys *de__net_client_keys(const de__net_client *c) {
 
 bool de__net_client_plaintext(const de__net_client *c) {
     return c != NULL && c->plaintext;
+}
+
+de_result de__net_server_bind_channels(de__net_server *s, u32 slot, de__conn *channels) {
+    if (!s || slot >= s->max_peers || s->slots[slot].state != DE__NET_SLOT_CONNECTED)
+        return DE_ERR_NOT_FOUND;
+    if (channels && s->slots[slot].channels)
+        return DE_ERR_BUSY;
+    de__chan_reset(channels);
+    s->slots[slot].channels = channels;
+    return DE_OK;
+}
+de_result de__net_client_bind_channels(de__net_client *c, de__conn *channels) {
+    if (!c || c->state != DE__NET_CLIENT_CONNECTED)
+        return DE_ERR_NOT_FOUND;
+    if (channels && c->channels)
+        return DE_ERR_BUSY;
+    de__chan_reset(channels);
+    c->channels = channels;
+    return DE_OK;
 }
