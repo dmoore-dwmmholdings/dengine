@@ -222,3 +222,15 @@ if(DE_BUILD_TESTS AND NOT (CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMU
         --cache "${_de_cook_builtin_out}/cache" --pack-name builtin --jobs 2)
     set_tests_properties(cook_cli.builtin_project PROPERTIES TIMEOUT 300)
 endif()
+
+# DENG-696: detached real before/after texture/model/audio cooks, without GPU or live assets.
+if(DE_HAS_RENDER)
+    de_add_test(NAME cook_preview SOURCES test_cook_preview.c LIBS de_cooker de_render)
+    if(TARGET test_cook_preview)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_cook_preview_tmp")
+        target_include_directories(test_cook_preview PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_cook_preview PRIVATE
+            "DE_COOK_TEST_TMP_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/test_cook_preview_tmp\""
+            "DE_PREVIEW_SOURCE_DIR=\"${DE_ROOT_DIR}\"")
+    endif()
+endif()

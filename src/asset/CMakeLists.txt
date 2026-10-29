@@ -89,3 +89,6 @@ target_sources(de_asset PRIVATE hot_reload.c hot_reload_internal.h reverse_index
 # cooker, DE_HAS_COOKER; scene_instantiate.c: de_prefab_instantiate).
 target_sources(de_asset PRIVATE blob_type.c scene/scene_format.h scene/scene_type.c
                                 scene/scene_instantiate.c)
+
+# DENG-696: detached before/after importer cooks; cooker-free builds keep typed stubs.
+target_sources(de_asset PRIVATE cook_preview.c cook_preview_internal.h)
