@@ -1,0 +1,9 @@
+[project]
+asset_root = "."
+
+[assets."models/inspection"]
+type = "model"
+source = "inspection.gltf"
+generate_lods = true
+lod_error = 0.1
+max_position_error = 0.001

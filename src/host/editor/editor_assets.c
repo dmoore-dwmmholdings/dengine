@@ -10,6 +10,7 @@
 #include <dengine/de_text.h>
 
 #include "asset/asset_internal.h"
+#include "asset/cook_stage_internal.h"
 #include "asset/hot_reload_internal.h"
 #include "asset/manifest_internal.h"
 #include "asset/resolve_internal.h"
@@ -18,6 +19,7 @@
 #if DE_HAS_RENDER
 #include "render/formats/de_cooked_model.h"
 #include "render/loaders/render_assets.h"
+#include "host/editor/editor_model_inspection.h"
 #endif
 
 #include <stdio.h>
@@ -33,7 +35,7 @@ typedef struct de__ed_assets {
     bool has_reader;
     /* Loads asset.reimport started for entries new to the manifest; released once final. */
     de_load_handle loads[ED_LOADS];
-    de_asset_id font_load_ids[ED_LOADS];
+    de_asset_id load_ids[ED_LOADS];
     u32 load_count;
 } de__ed_assets;
 
@@ -301,9 +303,9 @@ static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *
 
 /* ---------- Importer schemas ---------- */
 
-static bool font_load_pending(de_asset_system *assets, de_asset_id id) {
+static bool asset_load_pending(de_asset_system *assets, de_asset_id id) {
     for (u32 i = 0; i < g_assets.load_count; ++i)
-        if (g_assets.font_load_ids[i].hash == id.hash)
+        if (g_assets.load_ids[i].hash == id.hash)
             return true;
     if (g_assets.load_count == ED_LOADS)
         return false;
@@ -312,7 +314,7 @@ static bool font_load_pending(de_asset_system *assets, de_asset_id id) {
         return false;
     u32 at = g_assets.load_count++;
     g_assets.loads[at] = load;
-    g_assets.font_load_ids[at] = id;
+    g_assets.load_ids[at] = id;
     return true;
 }
 
@@ -345,7 +347,7 @@ static void on_font_atlas(de__editor *ed, const de_ep_request *req, de_ep_arena 
             (void)de_asset_last_error(S(ed), id, error, sizeof error);
             de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "font load failed: %s", error);
         } else {
-            (void)font_load_pending(S(ed), id);
+            (void)asset_load_pending(S(ed), id);
             de__ed_error(w, req->id, DE_EP_ERR_BUSY, "font atlas is loading; retry");
         }
         return;
@@ -578,6 +580,103 @@ static void on_cache_clear(de__editor *ed, const de_ep_request *req, de_ep_arena
 
 /* ---------- Models ---------- */
 
+#if DE_HAS_RENDER
+typedef struct model_names {
+    de__editor *ed;
+    de_ep_arena *arena;
+    de_result error;
+} model_names;
+static const char *model_asset_name(model_names *context, de_asset_id id) {
+    de_asset_system *assets = S(context->ed);
+    const char *path = de_asset_id_path(assets, id);
+    if (path)
+        return path;
+    size_t bytes = 0;
+    context->error = de__cook_stage_subasset_path(assets, id, NULL, 0, &bytes);
+    if (context->error != DE_OK)
+        return NULL;
+    char *copy = de__ed_alloc(context->arena, bytes);
+    if (!copy) {
+        context->error = DE_ERR_OUT_OF_MEMORY;
+        return NULL;
+    }
+    context->error = de__cook_stage_subasset_path(assets, id, copy, bytes, &bytes);
+    return context->error == DE_OK ? copy : NULL;
+}
+static const char *model_handle_name(void *user, u32 handle) {
+    model_names *context = user;
+    const de__slot *slot = de__slot_get(S(context->ed), handle);
+    return slot ? model_asset_name(context, slot->id) : NULL;
+}
+static const char *model_material_name(void *user, de_asset_id id) {
+    return model_asset_name(user, id);
+}
+#endif
+static void on_model_inspect(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                             mpack_writer_t *w) {
+    DE__ED_PARAMS(asset_model_inspect, de_ep_model_inspect_params, q);
+#if DE_HAS_RENDER
+    if (!ed->e->renderer) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "assets.modelInspection");
+        return;
+    }
+    const de__manifest_asset *entry = find_asset(ed, q.id);
+    if (!entry) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "model asset not found");
+        return;
+    }
+    if (strcmp(entry->type, "model")) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "inspection requires a model asset");
+        return;
+    }
+    if (q.mesh >= 1024) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "model mesh index is out of range");
+        return;
+    }
+    de_asset_system *assets = S(ed);
+    de_asset_id id = de_asset_id_from(entry->id);
+    de_model handle = de_asset_model(assets, id);
+    const de_render_model *model = de_render_model_get(assets, handle);
+    de_load_state state = de_asset_status_of(assets, id);
+    if (!model || state == DE_LOAD_FAILED || state == DE_LOAD_PARTIAL) {
+        if (state == DE_LOAD_FAILED || state == DE_LOAD_PARTIAL) {
+            char error[256] = {0};
+            (void)de_asset_last_error(assets, id, error, sizeof error);
+            de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "model load failed: %s", error);
+        } else {
+            (void)asset_load_pending(assets, id);
+            de__ed_error(w, req->id, DE_EP_ERR_BUSY, "model inspection is loading; retry");
+        }
+        return;
+    }
+    if (model->mesh_count && q.mesh >= model->mesh_count) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "model mesh index is out of range");
+        return;
+    }
+    const de_render_mesh *mesh =
+        model->mesh_count ? de_render_mesh_get(assets, model->meshes[q.mesh]) : NULL;
+    de_ep_model_inspection result;
+    model_names context = {.ed = ed, .arena = a, .error = DE_OK};
+    const de__ed_model_names names = {model_handle_name, model_material_name, &context};
+    de_result status = de__ed_model_inspect(model, mesh, q.mesh, &names, a, &result);
+    if (status == DE_ERR_NOT_FOUND && context.error != DE_OK)
+        status = context.error;
+    if (status != DE_OK) {
+        de__ed_error(w, req->id,
+                     status == DE_ERR_INVALID_ARGUMENT ? DE_EP_ERR_INVALID_PARAMS
+                     : status == DE_ERR_UNSUPPORTED    ? DE_EP_ERR_UNSUPPORTED
+                                                       : DE_EP_ERR_INTERNAL,
+                     "model inspection could not produce complete metadata: %s",
+                     de_result_str(status));
+        return;
+    }
+    de_ep_write_response_asset_model_inspect(w, req->id, &result);
+#else
+    (void)q;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "assets.modelInspection");
+#endif
+}
+
 static void on_model_info(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                           mpack_writer_t *w) {
     DE__ED_PARAMS(asset_model_info, de_ep_asset_id_params, q);
@@ -682,8 +781,8 @@ static void tick(de__editor *ed) {
         if (st == DE_LOAD_READY || st == DE_LOAD_FAILED || st == DE_LOAD_CANCELLED) {
             de_asset_release(s, g_assets.loads[i]);
             g_assets.loads[i] = g_assets.loads[--g_assets.load_count];
-            g_assets.font_load_ids[i] = g_assets.font_load_ids[g_assets.load_count];
-            g_assets.font_load_ids[g_assets.load_count] = (de_asset_id){0};
+            g_assets.load_ids[i] = g_assets.load_ids[g_assets.load_count];
+            g_assets.load_ids[g_assets.load_count] = (de_asset_id){0};
         } else {
             ++i;
         }
@@ -759,5 +858,10 @@ void de__ed_assets_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_CACHE_STATS, on_cache_stats);
     de__ed_on(ed, DE_EP_METHOD_CACHE_CLEAR, on_cache_clear);
     de__ed_on(ed, DE_EP_METHOD_ASSET_MODEL_INFO, on_model_info);
+    de__ed_on(ed, DE_EP_METHOD_ASSET_MODEL_INSPECT, on_model_inspect);
+#if DE_HAS_RENDER
+    if (ed->e->renderer)
+        de__ed_add_capability(ed, "assets.modelInspection");
+#endif
     de__ed_on_tick(ed, tick);
 }

@@ -80,6 +80,12 @@ bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_
     (void)type_hash;
     return false;
 }
+de_result de__cook_stage_subasset_path(de_asset_system *s, de_asset_id id, char *out,
+                                       size_t capacity, size_t *needed) {
+    (void)s;
+    (void)id;
+    return !needed || (!out && capacity) ? DE_ERR_INVALID_ARGUMENT : DE_ERR_NOT_FOUND;
+}
 void de__cook_stage_visit_subassets(de_asset_system *s, de_asset_id parent,
                                     void (*visit)(de_asset_id id, void *user), void *user) {
     (void)s;
@@ -272,6 +278,43 @@ static void subs_record(de__pipeline *pl, de__cook_stage *cs, de_asset_id parent
         cs->subs[cs->sub_count++] = e;
     }
     de_mutex_unlock(&cs->lock);
+}
+
+de_result de__cook_stage_subasset_path(de_asset_system *s, de_asset_id id, char *out,
+                                       size_t capacity, size_t *needed) {
+    if (!needed || (!out && capacity))
+        return DE_ERR_INVALID_ARGUMENT;
+    de__cook_stage *cs = s && s->pipeline ? s->pipeline->cook : NULL;
+    if (!cs || !id.hash)
+        return DE_ERR_NOT_FOUND;
+    de_result result = DE_ERR_NOT_FOUND;
+    de_mutex_lock(&cs->lock);
+    const cook_sub *entry = sub_find_locked(cs, id);
+    const char *parent = entry ? de__resolved_path(s->resolved, entry->parent) : NULL;
+    if (parent) {
+        size_t prefix = strlen(parent), suffix = entry->name_size;
+        char path[DE_FS_PATH_MAX];
+        if (prefix >= sizeof path || suffix > sizeof path - prefix - 1) {
+            result = DE_ERR_UNSUPPORTED;
+        } else {
+            size_t bytes = prefix + 1 + suffix;
+            memcpy(path, parent, prefix);
+            path[prefix] = '#';
+            memcpy(path + prefix + 1, entry->name, suffix);
+            if (de_asset_id_from(path).hash != id.hash) {
+                result = DE_ERR_PARSE;
+            } else if (out && capacity < bytes) {
+                result = DE_ERR_INVALID_ARGUMENT;
+            } else {
+                if (out)
+                    memcpy(out, path, bytes);
+                *needed = bytes;
+                result = DE_OK;
+            }
+        }
+    }
+    de_mutex_unlock(&cs->lock);
+    return result;
 }
 
 void de__cook_stage_get_stats(const de_asset_system *s, de__cook_stage_stats *out) {

@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.2"
-#define DE_EP_SCHEMA_HASH "99a5b8d0772efbd4"
+#define DE_EP_PROTOCOL_VERSION "1.3"
+#define DE_EP_SCHEMA_HASH "0cf663782faa9c42"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -162,10 +162,15 @@ typedef struct de_ep_log_record de_ep_log_record;
 typedef struct de_ep_log_subscribe_params de_ep_log_subscribe_params;
 typedef struct de_ep_model_attribute de_ep_model_attribute;
 typedef struct de_ep_model_info de_ep_model_info;
+typedef struct de_ep_model_inspect_params de_ep_model_inspect_params;
+typedef struct de_ep_model_inspection de_ep_model_inspection;
 typedef struct de_ep_model_lod de_ep_model_lod;
+typedef struct de_ep_model_mesh_lod de_ep_model_mesh_lod;
 typedef struct de_ep_model_node de_ep_model_node;
 typedef struct de_ep_model_render_params de_ep_model_render_params;
 typedef struct de_ep_model_slot de_ep_model_slot;
+typedef struct de_ep_model_submesh de_ep_model_submesh;
+typedef struct de_ep_model_submesh_lod de_ep_model_submesh_lod;
 typedef struct de_ep_net_checksums de_ep_net_checksums;
 typedef struct de_ep_net_checksums_params de_ep_net_checksums_params;
 typedef struct de_ep_net_desync de_ep_net_desync;
@@ -393,6 +398,16 @@ typedef struct de_ep_list_field_change {
     uint32_t count;
 } de_ep_list_field_change;
 
+typedef struct de_ep_list_model_mesh_lod {
+    de_ep_model_mesh_lod *items;
+    uint32_t count;
+} de_ep_list_model_mesh_lod;
+
+typedef struct de_ep_list_model_submesh {
+    de_ep_model_submesh *items;
+    uint32_t count;
+} de_ep_list_model_submesh;
+
 typedef struct de_ep_list_peer_checksum {
     de_ep_peer_checksum *items;
     uint32_t count;
@@ -407,6 +422,11 @@ typedef struct de_ep_list_model_attribute {
     de_ep_model_attribute *items;
     uint32_t count;
 } de_ep_list_model_attribute;
+
+typedef struct de_ep_list_model_submesh_lod {
+    de_ep_model_submesh_lod *items;
+    uint32_t count;
+} de_ep_list_model_submesh_lod;
 
 typedef struct de_ep_list_debug_draw_category {
     de_ep_debug_draw_category *items;
@@ -903,10 +923,41 @@ struct de_ep_model_info {
     de_ep_list_model_slot slots;
 };
 
+struct de_ep_model_inspect_params {
+    de_ep_str id;
+    uint32_t mesh; /* Index into meshes. Zero also queries a model containing no meshes. */
+};
+
+/* Complete node/mesh references plus one mesh's actual cooked metadata, gated by assets.modelInspection. At most 8192 nodes, 1024 mesh IDs, 4096 submeshes and 8 LODs; oversized models return an explicit error rather than partial metadata. */
+struct de_ep_model_inspection {
+    de_ep_list_model_node nodes;
+    de_ep_list_model_node bones; /* Existing skeleton summary when available; empty is not proof the source has no skin. */
+    de_ep_list_str meshes; /* Actual mesh asset IDs in model order; node.mesh references one of these. */
+    bool has_mesh;
+    uint32_t mesh; /* Selected index; absent only when meshes is empty. */
+    uint32_t vertices;
+    de_ep_list_model_mesh_lod lods;
+    de_ep_list_model_attribute attributes;
+    de_ep_list_u32 uv_channels; /* Actual channel indices, including sparse UV1-only layouts. */
+    de_ep_list_f32 bounds_min;
+    de_ep_list_f32 bounds_max;
+    de_ep_list_f32 position_offset;
+    de_ep_list_f32 position_scale;
+    float max_position_error; /* Configured maximum permitted position-quantization error in object-space metres (import budget, not measured error). */
+    de_ep_list_model_submesh submeshes;
+};
+
 struct de_ep_model_lod {
     uint32_t triangles;
     uint32_t meshlets;
     float screen_error; /* the screen-space error it switches at (the model's lod_error scaled per LOD) */
+};
+
+struct de_ep_model_mesh_lod {
+    uint32_t triangles;
+    uint32_t meshlets;
+    uint32_t vertices;
+    float error_metres; /* Actual cooked object-space simplification error; zero for LOD 0. Not a camera switch distance. */
 };
 
 struct de_ep_model_node {
@@ -923,11 +974,28 @@ struct de_ep_model_render_params {
     de_ep_str overlay; /* none, wireframe, meshlets, uv0, uv1, skeleton, bounds */
     float yaw; /* degrees about +Z (the turntable) */
     uint32_t size;
+    bool has_mesh;
+    uint32_t mesh; /* Mesh index from modelInspect when selecting an individual mesh; absent preserves whole-model legacy previews. */
 };
 
 struct de_ep_model_slot {
     de_ep_str name;
     de_ep_str material; /* the material sub-asset or asset ID it uses */
+};
+
+struct de_ep_model_submesh {
+    de_ep_str material; /* Assigned material asset ID; empty selects the engine default. */
+    de_ep_list_f32 bounds_min;
+    de_ep_list_f32 bounds_max;
+    de_ep_list_model_submesh_lod lods;
+};
+
+struct de_ep_model_submesh_lod {
+    uint32_t index_first; /* First index in the cooked mesh's combined LOD index buffer. */
+    uint32_t index_count;
+    uint32_t meshlet_first; /* First meshlet in the cooked mesh's combined LOD meshlet table. */
+    uint32_t triangles;
+    uint32_t meshlets;
 };
 
 struct de_ep_net_checksums {
@@ -1467,14 +1535,24 @@ void de_ep_write_model_attribute(mpack_writer_t *w, const de_ep_model_attribute 
 void de_ep_read_model_attribute(mpack_reader_t *r, de_ep_arena *a, de_ep_model_attribute *out);
 void de_ep_write_model_info(mpack_writer_t *w, const de_ep_model_info *v);
 void de_ep_read_model_info(mpack_reader_t *r, de_ep_arena *a, de_ep_model_info *out);
+void de_ep_write_model_inspect_params(mpack_writer_t *w, const de_ep_model_inspect_params *v);
+void de_ep_read_model_inspect_params(mpack_reader_t *r, de_ep_arena *a, de_ep_model_inspect_params *out);
+void de_ep_write_model_inspection(mpack_writer_t *w, const de_ep_model_inspection *v);
+void de_ep_read_model_inspection(mpack_reader_t *r, de_ep_arena *a, de_ep_model_inspection *out);
 void de_ep_write_model_lod(mpack_writer_t *w, const de_ep_model_lod *v);
 void de_ep_read_model_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_lod *out);
+void de_ep_write_model_mesh_lod(mpack_writer_t *w, const de_ep_model_mesh_lod *v);
+void de_ep_read_model_mesh_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_mesh_lod *out);
 void de_ep_write_model_node(mpack_writer_t *w, const de_ep_model_node *v);
 void de_ep_read_model_node(mpack_reader_t *r, de_ep_arena *a, de_ep_model_node *out);
 void de_ep_write_model_render_params(mpack_writer_t *w, const de_ep_model_render_params *v);
 void de_ep_read_model_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_model_render_params *out);
 void de_ep_write_model_slot(mpack_writer_t *w, const de_ep_model_slot *v);
 void de_ep_read_model_slot(mpack_reader_t *r, de_ep_arena *a, de_ep_model_slot *out);
+void de_ep_write_model_submesh(mpack_writer_t *w, const de_ep_model_submesh *v);
+void de_ep_read_model_submesh(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh *out);
+void de_ep_write_model_submesh_lod(mpack_writer_t *w, const de_ep_model_submesh_lod *v);
+void de_ep_read_model_submesh_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh_lod *out);
 void de_ep_write_net_checksums(mpack_writer_t *w, const de_ep_net_checksums *v);
 void de_ep_read_net_checksums(mpack_reader_t *r, de_ep_arena *a, de_ep_net_checksums *out);
 void de_ep_write_net_checksums_params(mpack_writer_t *w, const de_ep_net_checksums_params *v);
@@ -1615,6 +1693,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_ASSET_IMPORTER_SCHEMA,
     DE_EP_METHOD_ASSET_LIST,
     DE_EP_METHOD_ASSET_MODEL_INFO,
+    DE_EP_METHOD_ASSET_MODEL_INSPECT,
     DE_EP_METHOD_ASSET_PREVIEW_SETTINGS,
     DE_EP_METHOD_ASSET_REFERENCERS,
     DE_EP_METHOD_ASSET_REIMPORT,
@@ -1756,6 +1835,8 @@ bool de_ep_read_params_asset_list(const de_ep_request *req, de_ep_arena *a, de_e
 void de_ep_write_response_asset_list(mpack_writer_t *w, uint64_t id, const de_ep_asset_list *result);
 bool de_ep_read_params_asset_model_info(const de_ep_request *req, de_ep_arena *a, de_ep_asset_id_params *out);
 void de_ep_write_response_asset_model_info(mpack_writer_t *w, uint64_t id, const de_ep_model_info *result);
+bool de_ep_read_params_asset_model_inspect(const de_ep_request *req, de_ep_arena *a, de_ep_model_inspect_params *out);
+void de_ep_write_response_asset_model_inspect(mpack_writer_t *w, uint64_t id, const de_ep_model_inspection *result);
 bool de_ep_read_params_asset_preview_settings(const de_ep_request *req, de_ep_arena *a, de_ep_asset_preview_params *out);
 void de_ep_write_response_asset_preview_settings(mpack_writer_t *w, uint64_t id, const de_ep_asset_preview *result);
 bool de_ep_read_params_asset_referencers(const de_ep_request *req, de_ep_arena *a, de_ep_asset_id_params *out);

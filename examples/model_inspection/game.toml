@@ -1,0 +1,11 @@
+[game]
+name = "Model Inspection"
+
+[window]
+title = "Model Inspection — cooked mesh metadata"
+width = 640
+height = 360
+surface = "auto"
+
+[timing]
+frame_cap_hz = 60

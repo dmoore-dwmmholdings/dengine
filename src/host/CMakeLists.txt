@@ -125,3 +125,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
 else()
     target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=0)
 endif()
+
+# DENG-691: bounded per-mesh editor inspection; no service or format dependency in Shipping.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_model_inspection.c editor/editor_model_inspection.h)
+endif()

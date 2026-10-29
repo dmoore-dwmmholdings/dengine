@@ -76,6 +76,11 @@ void de__cook_stage_shutdown(de__pipeline *pl);
 /** True if `id` is a sub-asset an in-process cook declared; `*type_hash` gets de_hash64_str of
  * its type name. Main thread. */
 bool de__cook_stage_subasset_type(de_asset_system *s, de_asset_id id, u64 *type_hash);
+/** Main-thread reverse lookup of a generated ID. Copies parent#name under the registry lock;
+ * no borrowed registry strings or allocations. NULL out/capacity0 queries needed bytes incl NUL.
+ * Any failure preserves out and needed. Missing/cooker-free entries return NOT_FOUND. */
+de_result de__cook_stage_subasset_path(de_asset_system *s, de_asset_id id, char *out,
+                                       size_t capacity, size_t *needed);
 
 /** Visits known generated children of parent on the main thread. The callback runs under the
  * cook-stage lock and must not reenter the stage. No cooker builds visit nothing. */

@@ -34,6 +34,7 @@
 #include <dengine/de_task.h>
 
 #include "asset/asset_internal.h"
+#include "asset/cook_stage_internal.h"
 #include "asset/hot_reload_internal.h"
 #include "asset/load_internal.h"
 #include "asset/pipeline_internal.h"
@@ -828,6 +829,24 @@ TEST_F(loaders, model_cook_end_to_end, lfx) {
         if (DE_HANDLE_VALID(m->nodes[i].mesh)) {
             with_mesh++;
             EXPECT_EQ(m->nodes[i].mesh.id, m->meshes[0].id);
+            const de__slot *slot = de__slot_get(f->s, m->nodes[i].mesh.id);
+            ASSERT_TRUE(slot != NULL);
+            size_t needed = 0;
+            ASSERT_EQ(de__cook_stage_subasset_path(f->s, slot->id, NULL, 0, &needed), DE_OK);
+            char path[512], expected[512];
+            memset(path, 0xb3, sizeof path);
+            size_t sentinel = 7654;
+            EXPECT_EQ(de__cook_stage_subasset_path(f->s, slot->id, path, needed - 1, &sentinel),
+                      DE_ERR_INVALID_ARGUMENT);
+            EXPECT_EQ(sentinel, 7654u);
+            for (size_t j = 0; j < sizeof path; ++j)
+                EXPECT_EQ((u8)path[j], 0xb3u);
+            ASSERT_EQ(de__cook_stage_subasset_path(f->s, slot->id, path, sizeof path, &needed),
+                      DE_OK);
+            (void)snprintf(expected, sizeof expected, "props/box#%s", m->nodes[i].name);
+            EXPECT_STREQ(path, expected);
+            EXPECT_EQ(de_asset_id_from(path).hash, slot->id.hash);
+            EXPECT_EQ(needed, strlen(path) + 1);
         }
     EXPECT_EQ(with_mesh, 1u);
     const de_render_mesh *rm = de_render_mesh_get(f->s, m->meshes[0]);

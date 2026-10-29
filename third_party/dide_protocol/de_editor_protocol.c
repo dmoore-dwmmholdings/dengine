@@ -3716,6 +3716,259 @@ void de_ep_read_model_info(mpack_reader_t *r, de_ep_arena *a, de_ep_model_info *
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_model_inspect_params(mpack_writer_t *w, const de_ep_model_inspect_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    mpack_write_cstr(w, "mesh");
+    mpack_write_u32(w, v->mesh);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_model_inspect_params(mpack_reader_t *r, de_ep_arena *a, de_ep_model_inspect_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else if (de_ep_str_eq(k, "mesh")) {
+            seen |= (uint64_t)1 << 1;
+            out->mesh = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_model_inspection(mpack_writer_t *w, const de_ep_model_inspection *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_mesh ? 1u : 0u;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "nodes");
+    mpack_start_array(w, v->nodes.count);
+    for (uint32_t i_1 = 0; i_1 < v->nodes.count; ++i_1) {
+        de_ep_write_model_node(w, &v->nodes.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "bones");
+    mpack_start_array(w, v->bones.count);
+    for (uint32_t i_1 = 0; i_1 < v->bones.count; ++i_1) {
+        de_ep_write_model_node(w, &v->bones.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "meshes");
+    mpack_start_array(w, v->meshes.count);
+    for (uint32_t i_1 = 0; i_1 < v->meshes.count; ++i_1) {
+        de_ep_write_str(w, v->meshes.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_mesh) {
+        mpack_write_cstr(w, "mesh");
+        mpack_write_u32(w, v->mesh);
+    }
+    mpack_write_cstr(w, "vertices");
+    mpack_write_u32(w, v->vertices);
+    mpack_write_cstr(w, "lods");
+    mpack_start_array(w, v->lods.count);
+    for (uint32_t i_1 = 0; i_1 < v->lods.count; ++i_1) {
+        de_ep_write_model_mesh_lod(w, &v->lods.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "attributes");
+    mpack_start_array(w, v->attributes.count);
+    for (uint32_t i_1 = 0; i_1 < v->attributes.count; ++i_1) {
+        de_ep_write_model_attribute(w, &v->attributes.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "uvChannels");
+    mpack_start_array(w, v->uv_channels.count);
+    for (uint32_t i_1 = 0; i_1 < v->uv_channels.count; ++i_1) {
+        mpack_write_u32(w, v->uv_channels.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "boundsMin");
+    mpack_start_array(w, v->bounds_min.count);
+    for (uint32_t i_1 = 0; i_1 < v->bounds_min.count; ++i_1) {
+        mpack_write_float(w, v->bounds_min.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "boundsMax");
+    mpack_start_array(w, v->bounds_max.count);
+    for (uint32_t i_1 = 0; i_1 < v->bounds_max.count; ++i_1) {
+        mpack_write_float(w, v->bounds_max.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "positionOffset");
+    mpack_start_array(w, v->position_offset.count);
+    for (uint32_t i_1 = 0; i_1 < v->position_offset.count; ++i_1) {
+        mpack_write_float(w, v->position_offset.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "positionScale");
+    mpack_start_array(w, v->position_scale.count);
+    for (uint32_t i_1 = 0; i_1 < v->position_scale.count; ++i_1) {
+        mpack_write_float(w, v->position_scale.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "maxPositionError");
+    mpack_write_float(w, v->max_position_error);
+    mpack_write_cstr(w, "submeshes");
+    mpack_start_array(w, v->submeshes.count);
+    for (uint32_t i_1 = 0; i_1 < v->submeshes.count; ++i_1) {
+        de_ep_write_model_submesh(w, &v->submeshes.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_model_inspection(mpack_reader_t *r, de_ep_arena *a, de_ep_model_inspection *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "nodes")) {
+            seen |= (uint64_t)1 << 0;
+            out->nodes.count = mpack_expect_array(r);
+            out->nodes.items = (de_ep_model_node *)de_ep_arena_array(r, a, out->nodes.count, sizeof(*out->nodes.items));
+            for (uint32_t i_3 = 0; out->nodes.items && i_3 < out->nodes.count; ++i_3)
+            {
+                de_ep_read_model_node(r, a, &out->nodes.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "bones")) {
+            seen |= (uint64_t)1 << 1;
+            out->bones.count = mpack_expect_array(r);
+            out->bones.items = (de_ep_model_node *)de_ep_arena_array(r, a, out->bones.count, sizeof(*out->bones.items));
+            for (uint32_t i_3 = 0; out->bones.items && i_3 < out->bones.count; ++i_3)
+            {
+                de_ep_read_model_node(r, a, &out->bones.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "meshes")) {
+            seen |= (uint64_t)1 << 2;
+            out->meshes.count = mpack_expect_array(r);
+            out->meshes.items = (de_ep_str *)de_ep_arena_array(r, a, out->meshes.count, sizeof(*out->meshes.items));
+            for (uint32_t i_3 = 0; out->meshes.items && i_3 < out->meshes.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->meshes.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "mesh")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_mesh = true;
+            out->mesh = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "vertices")) {
+            seen |= (uint64_t)1 << 4;
+            out->vertices = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "lods")) {
+            seen |= (uint64_t)1 << 5;
+            out->lods.count = mpack_expect_array(r);
+            out->lods.items = (de_ep_model_mesh_lod *)de_ep_arena_array(r, a, out->lods.count, sizeof(*out->lods.items));
+            for (uint32_t i_3 = 0; out->lods.items && i_3 < out->lods.count; ++i_3)
+            {
+                de_ep_read_model_mesh_lod(r, a, &out->lods.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "attributes")) {
+            seen |= (uint64_t)1 << 6;
+            out->attributes.count = mpack_expect_array(r);
+            out->attributes.items = (de_ep_model_attribute *)de_ep_arena_array(r, a, out->attributes.count, sizeof(*out->attributes.items));
+            for (uint32_t i_3 = 0; out->attributes.items && i_3 < out->attributes.count; ++i_3)
+            {
+                de_ep_read_model_attribute(r, a, &out->attributes.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "uvChannels")) {
+            seen |= (uint64_t)1 << 7;
+            out->uv_channels.count = mpack_expect_array(r);
+            out->uv_channels.items = (uint32_t *)de_ep_arena_array(r, a, out->uv_channels.count, sizeof(*out->uv_channels.items));
+            for (uint32_t i_3 = 0; out->uv_channels.items && i_3 < out->uv_channels.count; ++i_3)
+            {
+                out->uv_channels.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "boundsMin")) {
+            seen |= (uint64_t)1 << 8;
+            out->bounds_min.count = mpack_expect_array(r);
+            out->bounds_min.items = (float *)de_ep_arena_array(r, a, out->bounds_min.count, sizeof(*out->bounds_min.items));
+            for (uint32_t i_3 = 0; out->bounds_min.items && i_3 < out->bounds_min.count; ++i_3)
+            {
+                out->bounds_min.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "boundsMax")) {
+            seen |= (uint64_t)1 << 9;
+            out->bounds_max.count = mpack_expect_array(r);
+            out->bounds_max.items = (float *)de_ep_arena_array(r, a, out->bounds_max.count, sizeof(*out->bounds_max.items));
+            for (uint32_t i_3 = 0; out->bounds_max.items && i_3 < out->bounds_max.count; ++i_3)
+            {
+                out->bounds_max.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "positionOffset")) {
+            seen |= (uint64_t)1 << 10;
+            out->position_offset.count = mpack_expect_array(r);
+            out->position_offset.items = (float *)de_ep_arena_array(r, a, out->position_offset.count, sizeof(*out->position_offset.items));
+            for (uint32_t i_3 = 0; out->position_offset.items && i_3 < out->position_offset.count; ++i_3)
+            {
+                out->position_offset.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "positionScale")) {
+            seen |= (uint64_t)1 << 11;
+            out->position_scale.count = mpack_expect_array(r);
+            out->position_scale.items = (float *)de_ep_arena_array(r, a, out->position_scale.count, sizeof(*out->position_scale.items));
+            for (uint32_t i_3 = 0; out->position_scale.items && i_3 < out->position_scale.count; ++i_3)
+            {
+                out->position_scale.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "maxPositionError")) {
+            seen |= (uint64_t)1 << 12;
+            out->max_position_error = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "submeshes")) {
+            seen |= (uint64_t)1 << 13;
+            out->submeshes.count = mpack_expect_array(r);
+            out->submeshes.items = (de_ep_model_submesh *)de_ep_arena_array(r, a, out->submeshes.count, sizeof(*out->submeshes.items));
+            for (uint32_t i_3 = 0; out->submeshes.items && i_3 < out->submeshes.count; ++i_3)
+            {
+                de_ep_read_model_submesh(r, a, &out->submeshes.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(16375)) != UINT64_C(16375))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_model_lod(mpack_writer_t *w, const de_ep_model_lod *v) {
     uint32_t n = 0;
     ++n;
@@ -3753,6 +4006,52 @@ void de_ep_read_model_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_lod *ou
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_model_mesh_lod(mpack_writer_t *w, const de_ep_model_mesh_lod *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "triangles");
+    mpack_write_u32(w, v->triangles);
+    mpack_write_cstr(w, "meshlets");
+    mpack_write_u32(w, v->meshlets);
+    mpack_write_cstr(w, "vertices");
+    mpack_write_u32(w, v->vertices);
+    mpack_write_cstr(w, "errorMetres");
+    mpack_write_float(w, v->error_metres);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_model_mesh_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_mesh_lod *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "triangles")) {
+            seen |= (uint64_t)1 << 0;
+            out->triangles = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "meshlets")) {
+            seen |= (uint64_t)1 << 1;
+            out->meshlets = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "vertices")) {
+            seen |= (uint64_t)1 << 2;
+            out->vertices = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "errorMetres")) {
+            seen |= (uint64_t)1 << 3;
+            out->error_metres = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -3809,6 +4108,7 @@ void de_ep_write_model_render_params(mpack_writer_t *w, const de_ep_model_render
     ++n;
     ++n;
     ++n;
+    n += v->has_mesh ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "id");
     de_ep_write_str(w, v->id);
@@ -3820,6 +4120,10 @@ void de_ep_write_model_render_params(mpack_writer_t *w, const de_ep_model_render
     mpack_write_float(w, v->yaw);
     mpack_write_cstr(w, "size");
     mpack_write_u32(w, v->size);
+    if (v->has_mesh) {
+        mpack_write_cstr(w, "mesh");
+        mpack_write_u32(w, v->mesh);
+    }
     mpack_finish_map(w);
 }
 
@@ -3845,6 +4149,10 @@ void de_ep_read_model_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_mod
         } else if (de_ep_str_eq(k, "size")) {
             seen |= (uint64_t)1 << 4;
             out->size = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "mesh")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_mesh = true;
+            out->mesh = mpack_expect_u32(r);
         } else {
             mpack_discard(r);
         }
@@ -3885,6 +4193,134 @@ void de_ep_read_model_slot(mpack_reader_t *r, de_ep_arena *a, de_ep_model_slot *
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_model_submesh(mpack_writer_t *w, const de_ep_model_submesh *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "material");
+    de_ep_write_str(w, v->material);
+    mpack_write_cstr(w, "boundsMin");
+    mpack_start_array(w, v->bounds_min.count);
+    for (uint32_t i_1 = 0; i_1 < v->bounds_min.count; ++i_1) {
+        mpack_write_float(w, v->bounds_min.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "boundsMax");
+    mpack_start_array(w, v->bounds_max.count);
+    for (uint32_t i_1 = 0; i_1 < v->bounds_max.count; ++i_1) {
+        mpack_write_float(w, v->bounds_max.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "lods");
+    mpack_start_array(w, v->lods.count);
+    for (uint32_t i_1 = 0; i_1 < v->lods.count; ++i_1) {
+        de_ep_write_model_submesh_lod(w, &v->lods.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_model_submesh(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "material")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->material);
+        } else if (de_ep_str_eq(k, "boundsMin")) {
+            seen |= (uint64_t)1 << 1;
+            out->bounds_min.count = mpack_expect_array(r);
+            out->bounds_min.items = (float *)de_ep_arena_array(r, a, out->bounds_min.count, sizeof(*out->bounds_min.items));
+            for (uint32_t i_3 = 0; out->bounds_min.items && i_3 < out->bounds_min.count; ++i_3)
+            {
+                out->bounds_min.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "boundsMax")) {
+            seen |= (uint64_t)1 << 2;
+            out->bounds_max.count = mpack_expect_array(r);
+            out->bounds_max.items = (float *)de_ep_arena_array(r, a, out->bounds_max.count, sizeof(*out->bounds_max.items));
+            for (uint32_t i_3 = 0; out->bounds_max.items && i_3 < out->bounds_max.count; ++i_3)
+            {
+                out->bounds_max.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "lods")) {
+            seen |= (uint64_t)1 << 3;
+            out->lods.count = mpack_expect_array(r);
+            out->lods.items = (de_ep_model_submesh_lod *)de_ep_arena_array(r, a, out->lods.count, sizeof(*out->lods.items));
+            for (uint32_t i_3 = 0; out->lods.items && i_3 < out->lods.count; ++i_3)
+            {
+                de_ep_read_model_submesh_lod(r, a, &out->lods.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_model_submesh_lod(mpack_writer_t *w, const de_ep_model_submesh_lod *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "indexFirst");
+    mpack_write_u32(w, v->index_first);
+    mpack_write_cstr(w, "indexCount");
+    mpack_write_u32(w, v->index_count);
+    mpack_write_cstr(w, "meshletFirst");
+    mpack_write_u32(w, v->meshlet_first);
+    mpack_write_cstr(w, "triangles");
+    mpack_write_u32(w, v->triangles);
+    mpack_write_cstr(w, "meshlets");
+    mpack_write_u32(w, v->meshlets);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_model_submesh_lod(mpack_reader_t *r, de_ep_arena *a, de_ep_model_submesh_lod *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "indexFirst")) {
+            seen |= (uint64_t)1 << 0;
+            out->index_first = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "indexCount")) {
+            seen |= (uint64_t)1 << 1;
+            out->index_count = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "meshletFirst")) {
+            seen |= (uint64_t)1 << 2;
+            out->meshlet_first = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "triangles")) {
+            seen |= (uint64_t)1 << 3;
+            out->triangles = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "meshlets")) {
+            seen |= (uint64_t)1 << 4;
+            out->meshlets = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -6874,6 +7310,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "asset.importerSchema",
     "asset.list",
     "asset.modelInfo",
+    "asset.modelInspect",
     "asset.previewSettings",
     "asset.referencers",
     "asset.reimport",
@@ -6964,6 +7401,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "assets.modelInspection",
     NULL,
     NULL,
     NULL,
@@ -7209,6 +7647,19 @@ bool de_ep_read_params_asset_model_info(const de_ep_request *req, de_ep_arena *a
 void de_ep_write_response_asset_model_info(mpack_writer_t *w, uint64_t id, const de_ep_model_info *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_model_info(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_asset_model_inspect(const de_ep_request *req, de_ep_arena *a, de_ep_model_inspect_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_model_inspect_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_asset_model_inspect(mpack_writer_t *w, uint64_t id, const de_ep_model_inspection *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_model_inspection(w, result);
     de_ep_write_result_end(w);
 }
 

@@ -324,3 +324,12 @@ if(TARGET test_owned_game)
         add_dependencies(test_owned_game test_owned_game_module)
     endif()
 endif()
+
+# DENG-691: the allocation-bounded editor model adapter, without a GPU or live editor session.
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_model_inspection
+        SOURCES test_model_inspection.c
+            "${DE_ROOT_DIR}/src/host/editor/editor_model_inspection.c"
+        LIBS de_render de_tp_dide_protocol)
+    target_include_directories(test_editor_model_inspection PRIVATE "${DE_ROOT_DIR}/src")
+endif()
