@@ -66,3 +66,9 @@ de_add_game(NAME test_owned_game_module SOURCES owned_game.c GAME_TOML ../data/o
 get_target_property(_owned_game_dir test_owned_game_module DE_GAME_DIR)
 configure_file(../data/owned_assets.toml "${_owned_game_dir}/owned_assets.toml" COPYONLY)
 configure_file(../data/owned_probe.bin "${_owned_game_dir}/owned_probe.bin" COPYONLY)
+
+# DENG-701: actual fatal commands, used only by isolated real-host IPC/session qualification.
+if(DE_GAME_DYLIB)
+    de_add_game(NAME crash_game SOURCES crash_game.c)
+    target_link_libraries(crash_game PRIVATE de_build_flags)
+endif()

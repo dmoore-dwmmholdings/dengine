@@ -9,6 +9,7 @@
  * of every component as MessagePack (for snapshot.diff). Game state kept outside the world (a
  * game's static variables) is not part of either. */
 #include "host/editor/editor_internal.h"
+#include "host/editor/editor_crash.h"
 
 #include <dengine/de_memory.h>
 
@@ -93,7 +94,7 @@ static void reload_send(de__editor *ed, mpack_writer_t *writer) {
     const size_t bytes = mpack_writer_buffer_used(writer);
     const mpack_error_t error = mpack_writer_destroy(writer);
     if (error == mpack_ok)
-        (void)de_ep_send(&ed->conn, DE_EP_KIND_NOTIFICATION, ed->note, bytes);
+        (void)de__ed_crash_send(&ed->conn, DE_EP_KIND_NOTIFICATION, ed->note, bytes, ed->seq + 1);
 }
 
 void de__ed_game_reloading(de__host *h) {

@@ -157,3 +157,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND DE_BU
         editor/editor_preview_material.h)
     target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
 endif()
+
+# DENG-701: fatal notifications never reuse the blocking main-thread transport.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    target_sources(de_host PRIVATE editor/editor_crash.c editor/editor_crash.h)
+endif()

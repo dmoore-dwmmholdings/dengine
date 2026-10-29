@@ -3,6 +3,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* getenv, vsnprintf */
 #endif
 #include "host/editor/editor_internal.h"
+#include "host/editor/editor_crash.h"
 
 #include <dengine/de_gpu.h>
 #include <dengine/de_memory.h>
@@ -96,7 +97,7 @@ bool de__ed_send(de__editor *ed, mpack_writer_t *w, u8 kind) {
     }
     if (!ed->connected)
         return false;
-    if (de_ep_send(&ed->conn, kind, buf, n) != DE_EP_IO_OK) {
+    if (de__ed_crash_send(&ed->conn, kind, buf, n, ed->seq + 1) != DE_EP_IO_OK) {
         ed_drop(ed, "send failed");
         return false;
     }
@@ -207,7 +208,8 @@ static void ed_drop(de__editor *ed, const char *why) {
     if (!ed->connected)
         return;
     DE_INFO(ed->log, "editor: IDE disconnected (%s)", why);
-    de_ep_disconnect(&ed->conn);
+    if (de__ed_crash_disarm())
+        de_ep_disconnect(&ed->conn);
     ed->connected = ed->authed = false;
     ed->idle_since_ns = de_time_now_ns();
     for (u32 i = 0; i < ed->reset_count; ++i)
@@ -296,6 +298,8 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     ed->reload_outcomes =
         sscanf(agreed, "%u.%u", &major, &minor) == 2 && (major > 1 || (major == 1 && minor >= 6));
     ed->authed = true;
+    if (!de__ed_crash_arm(&ed->conn, ed->seq + 1))
+        DE_WARN(ed->log, "editor: crash notification unavailable; IDE will use process exit");
     DE_INFO(ed->log, "editor: IDE connected (protocol %s, epoch %u)", agreed, ed->epoch);
     return true;
 }
@@ -338,6 +342,8 @@ static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a
 static de_result ed_pump(de__host *h, void *user) {
     (void)h;
     de__editor *ed = (de__editor *)user;
+    if (de__ed_crash_frozen())
+        return DE_OK;
 #if DE_HAS_RENDER
     /* Reap cancelled workers even with no IDE connected. Frame polling never joins a live job. */
     de__ed_settings_pump(ed);
@@ -408,6 +414,9 @@ de_result de__editor_start(de__host *h) {
     const char *token = getenv("DE_EDITOR_TOKEN");
     if (token == NULL || token[0] == '\0')
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "--editor-service needs DE_EDITOR_TOKEN");
+    const de_result crash = de__ed_crash_register();
+    if (crash != DE_OK)
+        return DE_FAIL(crash, "editor service crash handler registration");
     const de_allocator *al = de_heap_allocator();
     de__editor *ed = DE_NEW(al, de__editor, DE_MEM_GENERAL);
     if (ed == NULL)
@@ -469,7 +478,8 @@ void de__editor_stop(de__host *h) {
     if (ed == NULL)
         return;
     ed_drop(ed, "shutdown");
-    de_ep_listener_close(&ed->listener);
+    if (de__ed_crash_disarm())
+        de_ep_listener_close(&ed->listener);
     de__ed_session_shutdown();
     de__ed_logs_shutdown();
     de__ed_views_shutdown(ed);

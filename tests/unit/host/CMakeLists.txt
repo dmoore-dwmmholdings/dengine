@@ -371,3 +371,27 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND DE_BUILD_TOOLS AND TARGET de_tp_dide
     target_include_directories(test_editor_preview_material PRIVATE
         "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
 endif()
+
+# DENG-701: qualify the fatal serializer with Debug mpack allocation tracking even in Dev.
+# Separate protocol objects keep the writer ABI consistent; never mix Debug/non-Debug mpack.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    add_library(de_test_crash_protocol STATIC
+        "${DE_ROOT_DIR}/third_party/dide_protocol/de_editor_protocol.c"
+        "${DE_ROOT_DIR}/third_party/dide_protocol/de_editor_transport.c"
+        "${DE_ROOT_DIR}/third_party/dide_protocol/third_party/mpack/mpack.c")
+    target_include_directories(de_test_crash_protocol SYSTEM PUBLIC
+        "${DE_ROOT_DIR}/third_party/dide_protocol")
+    target_compile_definitions(de_test_crash_protocol PUBLIC MPACK_DEBUG=1 MPACK_WRITE_TRACKING=1)
+    target_compile_options(de_test_crash_protocol PRIVATE
+        $<IF:$<STREQUAL:${DE_COMPILER_FRONTEND},MSVC>,/w,-w>)
+    if(WIN32)
+        target_compile_definitions(de_test_crash_protocol PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_link_libraries(de_test_crash_protocol PUBLIC advapi32)
+    endif()
+    de_add_test(NAME editor_crash SOURCES test_editor_crash.c
+        "${DE_ROOT_DIR}/src/host/editor/editor_crash.c"
+        LIBS de_platform de_test_support de_test_crash_protocol TIMEOUT 20)
+    if(TARGET test_editor_crash)
+        target_include_directories(test_editor_crash PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
