@@ -1,6 +1,8 @@
 /* DENG-695: one isolated, reusable model-preview world. Never inserts game-world entities. */
 #include "editor_internal.h"
 #include "editor_preview_image.h"
+#include "editor_model_frames.h"
+#include "anim/anim_internal.h"
 #include "asset/asset_internal.h"
 #include "platform/de_atomic.h"
 #include "render/loaders/render_assets.h"
@@ -43,6 +45,11 @@ typedef struct preview_context {
     bool scene_ready;
     de_dvec3 center;
     f32 radius;
+    de_dvec3 bounds_min, bounds_max;
+    de__ed_frame_line *frame_lines;
+    de_dvec3 *frame_joints;
+    u32 frame_count;
+    de_view_frame_info overlay_frame;
     de_rg_resource copy_color, copy_buffer;
     de_atomic_u64 captured_frame;
 } preview_context;
@@ -60,10 +67,11 @@ static const de_allocator *allocator(void) {
     return de_heap_allocator();
 }
 static de_view_render_mode overlay_mode(de_ep_str overlay) {
-    const char *const names[] = {"none", "wireframe", "meshlets", "uv0", "uv1"};
-    const de_view_render_mode modes[] = {DE_VIEW_RENDER_LIT, DE_VIEW_RENDER_WIREFRAME,
-                                         DE_VIEW_RENDER_MESHLETS, DE_VIEW_RENDER_UV0,
-                                         DE_VIEW_RENDER_UV1};
+    const char *const names[] = {"none", "wireframe", "meshlets", "uv0",
+                                 "uv1",  "bounds",    "skeleton"};
+    const de_view_render_mode modes[] = {
+        DE_VIEW_RENDER_LIT, DE_VIEW_RENDER_WIREFRAME, DE_VIEW_RENDER_MESHLETS, DE_VIEW_RENDER_UV0,
+        DE_VIEW_RENDER_UV1, DE_VIEW_RENDER_LIT,       DE_VIEW_RENDER_LIT};
     for (u32 i = 0; i < (sizeof names / sizeof names[0]); ++i)
         if (de_ep_str_eq(overlay, names[i]))
             return modes[i];
@@ -87,6 +95,10 @@ static void context_destroy(preview_context *c) {
         de_gpu_buffer_destroy(c->device, c->readback);
     if (c->rgba)
         DE_FREE(allocator(), c->rgba, c->rgba_bytes);
+    if (c->frame_lines)
+        DE_FREE(allocator(), c->frame_lines, DE__ED_FRAME_LINES * sizeof *c->frame_lines);
+    if (c->frame_joints)
+        DE_FREE(allocator(), c->frame_joints, DE__ED_FRAME_JOINTS * sizeof *c->frame_joints);
     DE_FREE(allocator(), c, sizeof *c);
 }
 static void clear_context(void) {
@@ -110,9 +122,14 @@ static de_result stats(int argc, const char *const *argv, void *user) {
         return DE_ERR_INVALID_ARGUMENT;
     const preview_context *c = g_preview.context;
     const de_log_category log = de_log_register_category("editor.preview", DE_LOG_INFO);
-    DE_INFO(log, "contexts=%u pending=%u rgba_bytes=%zu readback_bytes=%llu", c ? 1u : 0u,
-            g_preview.pending ? 1u : 0u, c ? c->rgba_bytes : 0u,
-            c ? (unsigned long long)c->pitch * c->size : 0ull);
+    DE_INFO(log,
+            "contexts=%u pending=%u rgba_bytes=%zu readback_bytes=%llu overlay_lines=%u "
+            "overlay_bytes=%zu",
+            c ? 1u : 0u, g_preview.pending ? 1u : 0u, c ? c->rgba_bytes : 0u,
+            c ? (unsigned long long)c->pitch * c->size : 0ull, c ? c->frame_count : 0u,
+            c ? (c->frame_lines ? DE__ED_FRAME_LINES * sizeof *c->frame_lines : 0) +
+                    (c->frame_joints ? DE__ED_FRAME_JOINTS * sizeof *c->frame_joints : 0)
+              : 0u);
     return DE_OK;
 }
 void de__ed_preview_shutdown(de__editor *ed) {
@@ -140,6 +157,7 @@ static void capture(de_rg *graph, de_view view, void *user) {
     de_rg_read(pass, c->copy_color, DE_ACCESS_COPY_SRC);
     de_rg_write(pass, c->copy_buffer, DE_ACCESS_COPY_DST);
     de_rg_pass_side_effect(pass);
+    c->overlay_frame = info;
     de_atomic_store_u64(&c->captured_frame, info.frame_index + 1u, DE_ATOMIC_RELEASE);
 }
 static de_result create_context(de__editor *ed, preview_context **out) {
@@ -169,6 +187,13 @@ static de_result create_context(de__editor *ed, preview_context **out) {
             &c->renderer);
     if (result == DE_OK) {
         de_renderer_attach(c->renderer, c->world);
+        /* Skinned model prefabs require animation component reflection even though this
+         * private world displays a static bind reference and spawns no animators. */
+        de_anim_attach(c->anim, c->world);
+        if (c->anim->world != c->world) {
+            context_destroy(c);
+            return DE_ERR_INVALID_ARGUMENT;
+        }
         de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
         settings.ao = settings.gi = settings.reflections = settings.shadows = settings.volumetrics =
             DE_QUALITY_OFF;
@@ -311,6 +336,8 @@ static de_result build_scene(preview_context *c, const de_render_model *model,
     }
     if (!has_bounds)
         return DE_ERR_UNSUPPORTED;
+    c->bounds_min = (de_dvec3){base.x + bounds.min.x, base.y + bounds.min.y, base.z + bounds.min.z};
+    c->bounds_max = (de_dvec3){base.x + bounds.max.x, base.y + bounds.max.y, base.z + bounds.max.z};
     c->center = (de_dvec3){base.x + (f64)bounds.min.x + .5 * ((f64)bounds.max.x - bounds.min.x),
                            base.y + (f64)bounds.min.y + .5 * ((f64)bounds.max.y - bounds.min.y),
                            base.z + (f64)bounds.min.z + .5 * ((f64)bounds.max.z - bounds.min.z)};
@@ -338,12 +365,83 @@ static de_result build_scene(preview_context *c, const de_render_model *model,
     c->scene_ready = true;
     return DE_OK;
 }
+static de_result prepare_frames(preview_context *c, const de_render_model *model,
+                                const de_ep_model_render_params *query, de_dvec3 *center,
+                                f32 *radius) {
+    c->frame_count = 0;
+    const bool box = de_ep_str_eq(query->overlay, "bounds");
+    if (!box && !de_ep_str_eq(query->overlay, "skeleton"))
+        return DE_OK;
+    if (!c->frame_lines)
+        c->frame_lines =
+            DE_ALLOC(allocator(), DE__ED_FRAME_LINES * sizeof *c->frame_lines, 16, DE_MEM_RENDER);
+    if (!box && !c->frame_joints)
+        c->frame_joints =
+            DE_ALLOC(allocator(), DE__ED_FRAME_JOINTS * sizeof *c->frame_joints, 16, DE_MEM_RENDER);
+    if (!c->frame_lines || (!box && !c->frame_joints))
+        return DE_ERR_OUT_OF_MEMORY;
+    u32 selected_skin = 0;
+    if (!box && query->has_mesh) {
+        const de_result binding = de__ed_model_skin(model, query->mesh, &selected_skin);
+        if (binding != DE_OK)
+            return binding == DE_ERR_NOT_FOUND ? DE_ERR_UNSUPPORTED : binding;
+    }
+    const de_component mesh_type = de_component_find(c->world, "DeMeshRenderer");
+    const de_component transform_type = de_builtin_components(c->world).global_transform;
+    for (u32 i = 0; i < c->node_count; ++i) {
+        const DeMeshRenderer *instance = de_entity_get_const(c->world, c->nodes[i], mesh_type);
+        if (!instance || !instance->mesh.id)
+            continue;
+        const de_transform *pose = de_entity_get_const(c->world, c->nodes[i], transform_type);
+        const de_render_mesh *mesh = de_render_mesh_get(c->assets, instance->mesh);
+        if (!pose || !mesh)
+            return DE_ERR_PARSE;
+        if (box) {
+            DE_TRY(de__ed_model_box(pose, mesh->bounds_min, mesh->bounds_max, c->frame_lines,
+                                    DE__ED_FRAME_LINES, &c->frame_count));
+            continue;
+        }
+        const u32 skin = query->has_mesh ? selected_skin : model->nodes[i].skin;
+        if (skin == DE_COOKED_NONE)
+            continue;
+        if (skin >= model->skeleton_count || !model->skeleton_ids)
+            return DE_ERR_PARSE;
+        de_skeleton handle = de_anim_skeleton(c->anim, model->skeleton_ids[skin]);
+        const de__anim_asset *asset = de__anim_asset_get(c->anim, handle.id, "skeleton");
+        if (!asset)
+            return DE_ERR_NOT_FOUND;
+        DE_TRY(de__ed_model_bind(&asset->skeleton, pose, c->frame_joints, DE__ED_FRAME_JOINTS,
+                                 c->frame_lines, DE__ED_FRAME_LINES, &c->frame_count));
+    }
+    if (!c->frame_count)
+        return DE_ERR_UNSUPPORTED;
+    de_dvec3 lo = c->bounds_min, hi = c->bounds_max;
+    for (u32 i = 0; i < c->frame_count; ++i) {
+        const de_dvec3 points[] = {c->frame_lines[i].a, c->frame_lines[i].b};
+        for (u32 k = 0; k < 2; ++k) {
+            lo.x = fmin(lo.x, points[k].x);
+            lo.y = fmin(lo.y, points[k].y);
+            lo.z = fmin(lo.z, points[k].z);
+            hi.x = fmax(hi.x, points[k].x);
+            hi.y = fmax(hi.y, points[k].y);
+            hi.z = fmax(hi.z, points[k].z);
+        }
+    }
+    *center =
+        (de_dvec3){lo.x + .5 * (hi.x - lo.x), lo.y + .5 * (hi.y - lo.y), lo.z + .5 * (hi.z - lo.z)};
+    *radius = (f32)(.5 * sqrt((hi.x - lo.x) * (hi.x - lo.x) + (hi.y - lo.y) * (hi.y - lo.y) +
+                              (hi.z - lo.z) * (hi.z - lo.z)));
+    return isfinite(*radius) && *radius > 0 ? DE_OK : DE_ERR_UNSUPPORTED;
+}
 static de_result render(preview_context *c, const de_ep_model_render_params *query) {
     const de_render_model *model =
         de_render_model_get(c->assets, de_asset_model(c->assets, de_asset_id_from(c->id)));
     if (!model)
         return DE_ERR_PARSE;
     DE_TRY(build_scene(c, model, query));
+    de_dvec3 center = c->center;
+    f32 radius = c->radius;
+    DE_TRY(prepare_frames(c, model, query, &center, &radius));
     const de_view_render_mode mode = overlay_mode(query->overlay);
     if (mode == DE_VIEW_RENDER_UV0 || mode == DE_VIEW_RENDER_UV1) {
         bool present = false;
@@ -369,17 +467,17 @@ static de_result render(preview_context *c, const de_ep_model_render_params *que
     DeTransform *pose =
         de_entity_get(c->world, c->camera, de_builtin_components(c->world).transform);
     const f32 yaw = fmodf(query->yaw, 360) * (DE_PI / 180.0f);
-    const f32 distance = c->radius * 2.8f;
+    const f32 distance = radius * 2.8f;
     pose->position =
-        (de_dvec3){c->center.x + sinf(yaw) * distance * .8660254f,
-                   c->center.y - cosf(yaw) * distance * .8660254f, c->center.z + distance * .5f};
+        (de_dvec3){center.x + sinf(yaw) * distance * .8660254f,
+                   center.y - cosf(yaw) * distance * .8660254f, center.z + distance * .5f};
     pose->rotation = de_quat_mul(de_quat_axis_angle((de_vec3){0, 0, 1}, yaw),
                                  de_quat_axis_angle((de_vec3){1, 0, 0}, DE_PI / 3.0f));
     pose->scale = (de_vec3){1, 1, 1};
     camera->view = c->view;
     camera->projection = DE_PROJ_PERSPECTIVE;
     camera->fov_y = 1.0f;
-    camera->near_z = c->radius * .001f;
+    camera->near_z = radius * .001f;
     camera->exposure_ev100 = 0;
     const de_view_display display = {.mode = mode,
                                      .disabled_features =
@@ -463,6 +561,9 @@ static void tick(de__editor *ed) {
         return;
     }
     de__ed_preview_rgba(c->size, c->size, c->mapped, c->pitch, c->rgba);
+    if (c->frame_count)
+        de__ed_model_frame_draw(c->frame_lines, c->frame_count, &c->overlay_frame, c->size,
+                                c->rgba);
     size_t size = 0;
     const de_result encoded = de__ed_preview_png(c->size, c->size, c->rgba, png, capacity, &size);
     const u64 request = g_preview.request;
@@ -549,6 +650,7 @@ void de__ed_preview_register(de__editor *ed) {
     memset(&g_preview, 0, sizeof g_preview);
     de__ed_on(ed, DE_EP_METHOD_ASSET_RENDER_MODEL, on_render);
     de__ed_add_capability(ed, "assets.modelGeometry");
+    de__ed_add_capability(ed, "assets.modelFrames");
     de__ed_on_tick(ed, tick);
     de__ed_on_reset(ed, reset);
     (void)de_command_register("editor.previewStats",

@@ -40,6 +40,7 @@
 #include "asset/pipeline_internal.h"
 #include "asset/slots_internal.h"
 #include "loader_test_util.h"
+#include "render/formats/de_cooked_model.h"
 #include "render/loaders/render_assets.h"
 #include "render/loaders/upload_ring.h"
 
@@ -824,11 +825,13 @@ TEST_F(loaders, model_cook_end_to_end, lfx) {
     EXPECT_GE(m->node_count, 1u);
     EXPECT_EQ(m->mesh_count, 1u);
     EXPECT_EQ(m->material_count, 1u);
+    EXPECT_EQ(m->skeleton_count, 0u); /* An unskinned model retains no cooked skin IDs. */
     u32 with_mesh = 0;
     for (u32 i = 0; i < m->node_count; ++i)
         if (DE_HANDLE_VALID(m->nodes[i].mesh)) {
             with_mesh++;
             EXPECT_EQ(m->nodes[i].mesh.id, m->meshes[0].id);
+            EXPECT_EQ(m->nodes[i].skin, DE_COOKED_NONE);
             const de__slot *slot = de__slot_get(f->s, m->nodes[i].mesh.id);
             ASSERT_TRUE(slot != NULL);
             size_t needed = 0;

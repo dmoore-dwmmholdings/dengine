@@ -7,3 +7,8 @@ source = "inspection.gltf"
 generate_lods = true
 lod_error = 0.1
 max_position_error = 0.001
+
+[assets."models/rig"]
+type = "model"
+source = "rig.gltf"
+anim_joint_names = true

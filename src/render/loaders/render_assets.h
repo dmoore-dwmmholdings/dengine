@@ -302,6 +302,10 @@ typedef struct de_render_model {
     const de_material *materials;
     de_prefab prefab; /**< the `#prefab` sub-asset; invalid when the model has none */
     size_t block_size_;
+    /** Cooked skin order, for consumers such as anim/editor. Asset IDs keep render independent
+     * of the skeleton format and animation runtime. Model dependencies own their lifetime. */
+    u32 skeleton_count;
+    const de_asset_id *skeleton_ids;
 } de_render_model;
 
 /**

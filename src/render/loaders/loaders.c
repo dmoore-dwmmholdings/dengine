@@ -70,7 +70,8 @@ de_result de__model_load(de_asset_load_ctx *ctx) {
     const size_t o_mesh_ids = o_mats + align16(sizeof(de_material) * v.material_count);
     const size_t o_mat_ids = o_mesh_ids + align16(sizeof(de_asset_id) * v.mesh_count);
     const size_t o_node_mesh = o_mat_ids + align16(sizeof(de_asset_id) * v.material_count);
-    const size_t o_strings = o_node_mesh + align16(sizeof(u32) * v.node_count);
+    const size_t o_skeletons = o_node_mesh + align16(sizeof(u32) * v.node_count);
+    const size_t o_strings = o_skeletons + align16(sizeof(de_asset_id) * v.skeleton_count);
     const size_t block = o_strings + (size_t)v.string_size + 1u;
     u8 *b = (u8 *)DE_ALLOC(u->alloc, block, 16, DE_MEM_RENDER);
     if (b == NULL)
@@ -90,6 +91,10 @@ de_result de__model_load(de_asset_load_ctx *ctx) {
     m->pub.roots = roots;
     m->pub.meshes = (const de_mesh *)(b + o_meshes);
     m->pub.materials = (const de_material *)(b + o_mats);
+    m->pub.skeleton_count = v.skeleton_count;
+    m->pub.skeleton_ids = (const de_asset_id *)(b + o_skeletons);
+    for (u32 i = 0; i < v.skeleton_count; ++i)
+        ((de_asset_id *)m->pub.skeleton_ids)[i].hash = de_cooked_model_skeleton_id(&v, i);
     m->mesh_ids = (de_asset_id *)(b + o_mesh_ids);
     m->material_ids = (de_asset_id *)(b + o_mat_ids);
     m->node_mesh = (u32 *)(b + o_node_mesh);

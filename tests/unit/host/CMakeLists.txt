@@ -348,3 +348,10 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         LIBS de_core de_tp_dide_protocol de_tp_bcdec)
     target_include_directories(test_editor_settings_preview PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-698: pure transformed bounds, inverse-bind and clipped diagnostic geometry.
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_model_frames SOURCES test_model_frames.c
+        "${DE_ROOT_DIR}/src/host/editor/editor_model_frames.c" LIBS de_core)
+    target_include_directories(test_editor_model_frames PRIVATE "${DE_ROOT_DIR}/src")
+endif()

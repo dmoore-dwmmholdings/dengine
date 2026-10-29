@@ -20,6 +20,8 @@
 #include "render/formats/de_cooked_model.h"
 #include "render/loaders/render_assets.h"
 #include "host/editor/editor_model_inspection.h"
+#include "host/editor/editor_model_frames.h"
+#include "anim/anim_internal.h"
 #endif
 
 #include <stdio.h>
@@ -662,6 +664,54 @@ static void on_model_inspect(de__editor *ed, const de_ep_request *req, de_ep_are
     model_names context = {.ed = ed, .arena = a, .error = DE_OK};
     const de__ed_model_names names = {model_handle_name, model_material_name, &context};
     de_result status = de__ed_model_inspect(model, mesh, q.mesh, &names, a, &result);
+    /* A mesh can be instanced with several different skins. Keep its geometry metadata useful;
+     * bones describe only an unambiguous cooked binding, never an arbitrary first skeleton. */
+    u32 skin = 0;
+    de_result binding = DE_ERR_NOT_FOUND;
+    if (status == DE_OK && model->mesh_count && ed->e->anim) {
+        binding = de__ed_model_skin(model, q.mesh, &skin);
+        if (binding != DE_OK && binding != DE_ERR_NOT_FOUND && binding != DE_ERR_UNSUPPORTED)
+            status = binding;
+    }
+    if (status == DE_OK && binding == DE_OK) {
+        de_skeleton skeleton = de_anim_skeleton(ed->e->anim, model->skeleton_ids[skin]);
+        const de__anim_asset *asset = de__anim_asset_get(ed->e->anim, skeleton.id, "skeleton");
+        if (!asset) {
+            de__ed_error(w, req->id, DE_EP_ERR_BUSY, "cooked skeleton metadata is loading");
+            return;
+        }
+        const de_cooked_skeleton_view *s = &asset->skeleton;
+        if (s->joint_count > DE__ED_FRAME_JOINTS)
+            status = DE_ERR_UNSUPPORTED;
+        else {
+            result.bones.items = de__ed_alloc(a, s->joint_count * sizeof *result.bones.items);
+            if (s->joint_count && !result.bones.items)
+                status = DE_ERR_OUT_OF_MEMORY;
+            for (u32 i = 0; status == DE_OK && i < s->joint_count; ++i) {
+                de_ep_model_node *bone = &result.bones.items[i];
+                memset(bone, 0, sizeof *bone);
+                const char *name = de_cooked_skeleton_name(s, i);
+                if (name && strlen(name) > 4096) {
+                    status = DE_ERR_UNSUPPORTED;
+                    break;
+                }
+                if (!name) {
+                    char *fallback = de__ed_alloc(a, 32);
+                    if (!fallback) {
+                        status = DE_ERR_OUT_OF_MEMORY;
+                        break;
+                    }
+                    snprintf(fallback, 32, "Joint %u", i);
+                    name = fallback;
+                }
+                bone->name = de_ep_cstr(name);
+                const u16 parent = de_cooked_skeleton_parent(s, i);
+                bone->has_parent = parent != DE_COOKED_SKEL_NO_PARENT;
+                bone->parent = parent;
+            }
+            result.bones.count = status == DE_OK ? s->joint_count : 0;
+        }
+    }
     if (status == DE_ERR_NOT_FOUND && context.error != DE_OK)
         status = context.error;
     if (status != DE_OK) {

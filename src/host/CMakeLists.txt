@@ -144,3 +144,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_link_libraries(de_host PRIVATE de_tp_bcdec)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_bcdec)
 endif()
+
+# DENG-698: bounded transformed-box and cooked-bind diagnostic projection/compositing.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_model_frames.c editor/editor_model_frames.h)
+endif()
