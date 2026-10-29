@@ -60,7 +60,7 @@ de_result de__output_basic_create_ex(de__vis_shared *vis, de__output_basic **out
             r = de__vis_kernel_create(vis, &code, 0, "output basic", g8, (u32)sizeof(ob_params),
                                       &ob->kernel);
             if (r == DE_OK)
-                r = de__vis_kernel_create(vis, &code, 1, "view material debug", g8, 48u,
+                r = de__vis_kernel_create(vis, &code, 1, "view material debug", g8, 80u,
                                           &ob->debug_kernel);
             de__engine_shader_code_free(&code);
         }
@@ -138,8 +138,9 @@ de_rg_resource de__output_basic_add(de__output_basic *ob, de_rg *g, de_arena *ar
 
 typedef struct debug_params {
     u32 gb0, gb1, gb2, motion, depth, emission, dst, width, height, mode, reserved0, reserved1;
+    u32 ids, pitch, scene, view_slot, visible, visible_count, reserved2, reserved3;
 } debug_params;
-DE_STATIC_ASSERT(sizeof(debug_params) == 48, "ViewDebugParams is 48 bytes");
+DE_STATIC_ASSERT(sizeof(debug_params) == 80, "ViewDebugParams is 80 bytes");
 typedef struct debug_pass {
     de__output_basic *ob;
     const de__vis_context *vc;
@@ -153,7 +154,7 @@ static u32 debug_texture(const debug_pass *p, const de_rg_pass *pass, de_rg_reso
 static void debug_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     const debug_pass *p = user;
     const de__vis_context *vc = p->vc;
-    const debug_params pc = {
+    debug_params pc = {
         .gb0 = debug_texture(p, pass, vc->gbuffer[DE__GB0]),
         .gb1 = debug_texture(p, pass, vc->gbuffer[DE__GB1]),
         .gb2 = debug_texture(p, pass, vc->gbuffer[DE__GB2]),
@@ -164,6 +165,15 @@ static void debug_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
         .width = vc->width,
         .height = vc->height,
         .mode = (u32)p->mode};
+    if (p->mode >= DE_VIEW_RENDER_WIREFRAME) {
+        pc.ids = de_gpu_buffer_bindless(p->ob->vis->dev, de_rg_buffer(pass, vc->vis_ids_buffer));
+        pc.pitch = vc->vis_ids_pitch;
+        pc.scene = de_gpu_buffer_bindless(p->ob->vis->dev, de_rg_buffer(pass, vc->scene_views));
+        pc.view_slot = vc->scene_view_slot;
+        pc.visible =
+            de_gpu_buffer_bindless(p->ob->vis->dev, de_rg_buffer(pass, vc->visible_meshlets));
+        pc.visible_count = vc->visible_capacity + vc->visible_alpha_capacity;
+    }
     de_gpu_cmd_set_pipeline(cmd, p->ob->debug_kernel.pipeline);
     de_gpu_cmd_push_constants(cmd, &pc, sizeof pc);
     de_gpu_cmd_dispatch(cmd, (pc.width + 7u) / 8u, (pc.height + 7u) / 8u, 1);
@@ -177,6 +187,10 @@ de_rg_resource de__output_debug_add(de__output_basic *ob, de_rg *g, de_arena *ar
     for (u32 i = 0; i < DE__GB_COUNT; ++i)
         if (!vc->gbuffer[i].id)
             return (de_rg_resource){0};
+    if (mode >= DE_VIEW_RENDER_WIREFRAME &&
+        (!vc->vis_ids_buffer.id || !vc->scene_views.id || !vc->scene_instances.id ||
+         !vc->scene_meshes.id || !vc->visible_meshlets.id))
+        return (de_rg_resource){0};
     de_rg_resource dst = de_rg_create_texture(
         g, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
                                   .width = vc->width,
@@ -195,6 +209,13 @@ de_rg_resource de__output_debug_add(de__output_basic *ob, de_rg *g, de_arena *ar
     de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
     for (u32 i = 0; i < DE__GB_COUNT; ++i)
         de_rg_read(pass, vc->gbuffer[i], DE_ACCESS_SHADER_READ);
+    if (mode >= DE_VIEW_RENDER_WIREFRAME) {
+        de_rg_read(pass, vc->vis_ids_buffer, DE_ACCESS_SHADER_READ);
+        de_rg_read(pass, vc->scene_views, DE_ACCESS_SHADER_READ);
+        de_rg_read(pass, vc->scene_instances, DE_ACCESS_SHADER_READ);
+        de_rg_read(pass, vc->scene_meshes, DE_ACCESS_SHADER_READ);
+        de_rg_read(pass, vc->visible_meshlets, DE_ACCESS_SHADER_READ);
+    }
     de_rg_write(pass, dst, DE_ACCESS_SHADER_WRITE);
     return dst;
 }

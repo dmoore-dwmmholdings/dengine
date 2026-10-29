@@ -50,6 +50,7 @@ typedef struct preview_context {
 static struct {
     preview_context *context;
     char id[1024], root[DE_FS_PATH_MAX];
+    char overlay[16];
     de_ep_model_render_params query;
     u64 request, deadline, revision;
     bool pending, rendering;
@@ -57,6 +58,16 @@ static struct {
 
 static const de_allocator *allocator(void) {
     return de_heap_allocator();
+}
+static de_view_render_mode overlay_mode(de_ep_str overlay) {
+    const char *const names[] = {"none", "wireframe", "meshlets", "uv0", "uv1"};
+    const de_view_render_mode modes[] = {DE_VIEW_RENDER_LIT, DE_VIEW_RENDER_WIREFRAME,
+                                         DE_VIEW_RENDER_MESHLETS, DE_VIEW_RENDER_UV0,
+                                         DE_VIEW_RENDER_UV1};
+    for (u32 i = 0; i < (sizeof names / sizeof names[0]); ++i)
+        if (de_ep_str_eq(overlay, names[i]))
+            return modes[i];
+    return DE_VIEW_RENDER_MODE_COUNT;
 }
 
 static void context_destroy(preview_context *c) {
@@ -333,6 +344,19 @@ static de_result render(preview_context *c, const de_ep_model_render_params *que
     if (!model)
         return DE_ERR_PARSE;
     DE_TRY(build_scene(c, model, query));
+    const de_view_render_mode mode = overlay_mode(query->overlay);
+    if (mode == DE_VIEW_RENDER_UV0 || mode == DE_VIEW_RENDER_UV1) {
+        bool present = false;
+        const u32 stream = mode == DE_VIEW_RENDER_UV0 ? DE_COOKED_STREAM_UV0 : DE_COOKED_STREAM_UV1;
+        for (u32 i = 0; i < model->mesh_count; ++i) {
+            if (query->has_mesh && i != query->mesh)
+                continue;
+            const de_render_mesh *mesh = de_render_mesh_get(c->assets, model->meshes[i]);
+            present |= mesh && mesh->stream_offset[stream] != UINT32_MAX;
+        }
+        if (!present)
+            return DE_ERR_UNSUPPORTED;
+    }
     /* Validate even when a previous request reuses the scene. */
     if (query->has_mesh) {
         const de_render_mesh *mesh = de_render_mesh_get(c->assets, model->meshes[query->mesh]);
@@ -357,7 +381,8 @@ static de_result render(preview_context *c, const de_ep_model_render_params *que
     camera->fov_y = 1.0f;
     camera->near_z = c->radius * .001f;
     camera->exposure_ev100 = 0;
-    const de_view_display display = {.disabled_features =
+    const de_view_display display = {.mode = mode,
+                                     .disabled_features =
                                          DE_VIEW_HIDE_UI | DE_VIEW_DISABLE_POST_EFFECTS,
                                      .force_mesh_lod = true,
                                      .mesh_lod = query->lod};
@@ -474,12 +499,13 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
     }
     if (!query.id.len || query.id.len >= sizeof g_preview.id ||
         memchr(query.id.ptr, 0, query.id.len) || !query.size || query.size > 1024 ||
-        query.lod >= 8 || (query.has_mesh && query.mesh >= 1024) || !isfinite(query.yaw)) {
+        query.lod >= 8 || (query.has_mesh && query.mesh >= 1024) || !isfinite(query.yaw) ||
+        query.overlay.len >= sizeof g_preview.overlay) {
         de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS,
                      "invalid bounded model preview parameters");
         return;
     }
-    if (!de_ep_str_eq(query.overlay, "none")) {
+    if (overlay_mode(query.overlay) == DE_VIEW_RENDER_MODE_COUNT) {
         de__ed_error(writer, request->id, DE_EP_ERR_UNSUPPORTED,
                      "model preview overlay is not implemented");
         return;
@@ -510,7 +536,9 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
     snprintf(g_preview.root, sizeof g_preview.root, "%s", root);
     g_preview.query = query;
     g_preview.query.id = de_ep_cstr(g_preview.id);
-    g_preview.query.overlay = de_ep_cstr("none");
+    memcpy(g_preview.overlay, query.overlay.ptr, query.overlay.len);
+    g_preview.overlay[query.overlay.len] = 0;
+    g_preview.query.overlay = de_ep_cstr(g_preview.overlay);
     g_preview.request = request->id;
     g_preview.deadline = de_time_now_ns() + PREVIEW_TIMEOUT_NS;
     g_preview.pending = true;
@@ -520,6 +548,7 @@ static void on_render(de__editor *ed, const de_ep_request *request, de_ep_arena 
 void de__ed_preview_register(de__editor *ed) {
     memset(&g_preview, 0, sizeof g_preview);
     de__ed_on(ed, DE_EP_METHOD_ASSET_RENDER_MODEL, on_render);
+    de__ed_add_capability(ed, "assets.modelGeometry");
     de__ed_on_tick(ed, tick);
     de__ed_on_reset(ed, reset);
     (void)de_command_register("editor.previewStats",

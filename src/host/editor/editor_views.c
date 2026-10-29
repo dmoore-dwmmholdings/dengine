@@ -884,19 +884,20 @@ static void write_surfaces(ed_view *v, de_ep_arena *a, u32 *generation, de_ep_li
 
 /* ---------- view.* ---------- */
 
-static const char *const k_render_modes[DE_VIEW_RENDER_MODE_COUNT] = {
-    "lit",      "unlit", "baseColor", "normals",       "roughness",
-    "metallic", "ao",    "emissive",  "motionVectors", "depth"};
+/* Geometry modes are currently advertised by assets.modelGeometry, not the scene toolbar. */
+static const char *const k_render_modes[] = {"lit",           "unlit",    "baseColor", "normals",
+                                             "roughness",     "metallic", "ao",        "emissive",
+                                             "motionVectors", "depth"};
 u32 de__ed_views_render_modes(const char *const **names) {
     *names = k_render_modes;
-    return ED_VIEWS ? DE_VIEW_RENDER_MODE_COUNT : 0;
+    return ED_VIEWS ? (sizeof k_render_modes / sizeof k_render_modes[0]) : 0;
 }
 static bool render_mode(de_ep_str name, de_view_render_mode *out) {
     if (!name.len) {
         *out = DE_VIEW_RENDER_LIT;
         return true;
     }
-    for (u32 i = 0; i < DE_VIEW_RENDER_MODE_COUNT; ++i)
+    for (u32 i = 0; i < (sizeof k_render_modes / sizeof k_render_modes[0]); ++i)
         if (de_ep_str_eq(name, k_render_modes[i])) {
             *out = (de_view_render_mode)i;
             return true;

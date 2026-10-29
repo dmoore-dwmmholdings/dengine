@@ -10,6 +10,10 @@
 import bindless;
 import push_constants;
 import "../visbuffer/gbuffer";
+import "../scene/scene_types";
+import "../visbuffer/vis_types";
+import "../visbuffer/vis_decode";
+import "../visbuffer/resolve_common";
 
 /// Push constants (32 bytes; output_basic.c ob_params).
 struct OutputParams
@@ -46,7 +50,45 @@ void cs_output_basic(uint3 id : SV_DispatchThreadID, uniform OutputParams pc)
 struct ViewDebugParams
 {
     uint gb0, gb1, gb2, motion, depth, emission, dst, width, height, mode, reserved0, reserved1;
+    uint ids, pitch, scene, view_slot, visible, visible_count, reserved2, reserved3;
 };
+
+// Reconstruct this frame's actual visible triangle; no global debug cvar or material mutation.
+float3 geometry_debug(uint2 pixel, ViewDebugParams pc)
+{
+    uint id = de_bytes(pc.ids).load(pixel.y * pc.pitch + pixel.x * 4u);
+    if (id == DE_VIS_ID_EMPTY)
+        return 0.0;
+    DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.view_slot];
+    DeResolvePoint r = de_resolve_point(id, pixel, float2(pc.width, pc.height), sc,
+                                      pc.visible, pc.visible_count);
+    if (!r.valid)
+        return 0.0;
+    if (pc.mode == 10u) // wireframe: screen-space distance from perspective barycentric edges
+    {
+        float3 gradient = max(abs(r.bary_dx) + abs(r.bary_dy), 1e-8);
+        float3 distance = abs(r.bary) / gradient;
+        float edge = 1.0 - smoothstep(0.5, 1.5, min(distance.x, min(distance.y, distance.z)));
+        return lerp(float3(0.025), float3(0.9), edge);
+    }
+    if (pc.mode == 11u) // stable cooked mesh/meshlet identity, independent of visible-list order
+    {
+        DeVisMeshlet vm = de_robuffer<DeVisMeshlet>(pc.visible)[r.entry];
+        uint hash = vm.meshlet * 0x9e3779b9u ^ r.inst.mesh * 0x85ebca6bu;
+        hash ^= hash >> 16u;
+        hash *= 0x7feb352du;
+        hash ^= hash >> 15u;
+        return 0.15 + 0.75 * float3(hash & 255u, (hash >> 8u) & 255u,
+                                    (hash >> 16u) & 255u) / 255.0;
+    }
+    uint set = pc.mode == 12u ? 0u : 1u;
+    if (!de_vis_mesh_has_stream(r.mesh, set == 0u ? DE_VIS_STREAM_UV0 : DE_VIS_STREAM_UV1))
+        return float3(1.0, 0.0, 1.0);
+    float2 dx, dy;
+    float2 uv = de_resolve_uv(r, set, dx, dy);
+    float checker = fmod(floor(uv.x * 16.0) + floor(uv.y * 16.0), 2.0);
+    return float3(frac(uv), checker == 0.0 ? 0.2 : 0.8);
+}
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cs_view_debug(uint3 id : SV_DispatchThreadID, uniform ViewDebugParams pc)
@@ -54,6 +96,11 @@ void cs_view_debug(uint3 id : SV_DispatchThreadID, uniform ViewDebugParams pc)
     if (id.x >= pc.width || id.y >= pc.height)
         return;
     int3 pixel = int3(id.xy, 0);
+    if (pc.mode >= 10u)
+    {
+        de_rwtex2d(pc.dst)[id.xy] = float4(saturate(geometry_debug(id.xy, pc)), 1.0);
+        return;
+    }
     float4 emission = de_tex2d(pc.emission).Load(pixel);
     float3 color = 0.0;
     if (emission.a > 0.0)

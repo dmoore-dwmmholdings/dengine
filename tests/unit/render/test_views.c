@@ -349,6 +349,18 @@ TEST_F(views, display_policy_is_frozen_and_independent, vfx) {
     EXPECT_FALSE(o.last.force_mesh_lod);
     EXPECT_EQ(o.forced_lod, 0u);
     EXPECT_EQ(o.post, 1u);
+    for (u32 mode = DE_VIEW_RENDER_WIREFRAME; mode <= DE_VIEW_RENDER_UV1; ++mode) {
+        const de_view_display geometry = {.mode = (de_view_render_mode)mode};
+        ASSERT_EQ(de_view_set_display(f->r, inset, &geometry), DE_OK);
+        ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_POST_UPDATE, 1.0f / 60, 0), DE_OK);
+        ASSERT_EQ(de_world_run_schedule(f->w, DE_SCHEDULE_EXTRACT, 1.0f / 60, 0), DE_OK);
+        ASSERT_TRUE(de_renderer_extract_view_info(f->r, inset, &frozen));
+        EXPECT_EQ(frozen.display.mode, (de_view_render_mode)mode);
+        ASSERT_TRUE(de_renderer_extract_view_info(f->r, main, &other));
+        EXPECT_EQ(other.display.mode, DE_VIEW_RENDER_LIT);
+        ASSERT_EQ(de__render_extract_and_kick(f->r, f->w), DE_OK);
+        EXPECT_EQ(o.last.mode, (de_view_render_mode)mode);
+    }
     de_view_destroy(f->r, inset);
     EXPECT_EQ(de_view_set_display(f->r, inset, NULL), DE_ERR_INVALID_ARGUMENT);
     de_error_clear();

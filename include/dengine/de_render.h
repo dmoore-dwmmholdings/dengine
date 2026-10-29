@@ -261,7 +261,10 @@ DE_API void de_view_set_layer_mask(de_renderer *r, de_view v, u32 mask);
 
 /** Per-view visualization of the resolved G-buffer (opaque and alpha-tested geometry).
  * Diagnostic views use the current frame's material data and bypass lighting/RT effects.
- * Depth is raw reverse-Z; motion is signed NDC velocity mapped around neutral gray. */
+ * Depth is raw reverse-Z; motion is signed NDC velocity mapped around neutral gray.
+ * Geometry diagnostics use actual visible triangles/meshlet IDs/vertex UV streams. Wireframe
+ * draws approximately one-pixel triangle edges; UVs repeat a unit-square colour/checker pattern
+ * and missing channels are magenta. Transparent forward geometry is not included. */
 typedef enum de_view_render_mode {
     DE_VIEW_RENDER_LIT = 0,
     DE_VIEW_RENDER_UNLIT,
@@ -273,6 +276,10 @@ typedef enum de_view_render_mode {
     DE_VIEW_RENDER_EMISSIVE,
     DE_VIEW_RENDER_MOTION,
     DE_VIEW_RENDER_DEPTH,
+    DE_VIEW_RENDER_WIREFRAME,
+    DE_VIEW_RENDER_MESHLETS,
+    DE_VIEW_RENDER_UV0,
+    DE_VIEW_RENDER_UV1,
     DE_VIEW_RENDER_MODE_COUNT
 } de_view_render_mode;
 enum { DE_VIEW_HIDE_UI = 1u, DE_VIEW_DISABLE_POST_EFFECTS = 2u };

@@ -1827,7 +1827,7 @@ static void debug_extra(lx *f, de__vis_context *vc, de__lighting_context *lc) {
     EXPECT_TRUE(f->extra_tex.id != 0);
 }
 
-/* Every diagnostic mode is checked against independently decoded readback values,
+/* Material diagnostic modes are checked against independently decoded readback values,
  * with both covered pixels and background. A static plane has zero NDC motion. */
 static void material_debug(lx *f, de_gpu_backend backend) {
     lx_open(f, backend);
@@ -1842,7 +1842,7 @@ static void material_debug(lx *f, de_gpu_backend backend) {
     debug_user user = {.output = output};
     f->user = &user;
     f->extra = debug_extra;
-    for (u32 mode = DE_VIEW_RENDER_UNLIT; mode < DE_VIEW_RENDER_MODE_COUNT; ++mode) {
+    for (u32 mode = DE_VIEW_RENDER_UNLIT; mode <= DE_VIEW_RENDER_DEPTH; ++mode) {
         user.mode = (de_view_render_mode)mode;
         lx_run(f);
         const lx_result *r = &f->res;
@@ -1898,6 +1898,88 @@ static void material_debug(lx *f, de_gpu_backend backend) {
         EXPECT_GT(covered, 100u);
         EXPECT_GT(background, 100u);
         EXPECT_EQ(bad, 0u);
+    }
+    f->extra = NULL;
+    de_gpu_wait_idle(f->dev);
+    de__output_basic_destroy(output);
+}
+
+/* Geometry modes use this frame's real meshlets/streams. Independently reconstruct the plane's
+ * UVs from world positions; UV1 is genuinely absent and must not masquerade as UV0 or (0,0). */
+static void geometry_debug(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    f->eye.z = 3; /* Enough pixels per triangle to distinguish one-pixel edges and interiors. */
+    de__output_basic *output = NULL;
+    ASSERT_EQ(de__output_basic_create_ex(f->vis, &output), DE_OK);
+    ASSERT_TRUE(de__output_basic_enabled(output));
+    world_set(&f->w, 0, lx_square(f), at(0, 0, 0), material_add(.3f, .7f, .4f, 0));
+    env_uniform(f, 0);
+    debug_user user = {.output = output};
+    f->user = &user;
+    f->extra = debug_extra;
+    for (u32 iteration = 0; iteration < 8; ++iteration) {
+        const u32 mode = DE_VIEW_RENDER_WIREFRAME + iteration % 4;
+        user.mode = (de_view_render_mode)mode;
+        lx_run(f);
+        const lx_result *r = &f->res;
+        ASSERT_TRUE(r->extra != NULL);
+        u32 covered = 0, background = 0, dark = 0, bright = 0, checked_uv = 0, bad = 0;
+        u32 colors[16] = {0}, color_count = 0;
+        for (size_t i = 0; i < (size_t)r->width * r->height; ++i) {
+            const f32 *pixel = r->extra + 4 * i;
+            surf s;
+            if (!surf_at(r, i, &s)) {
+                ++background;
+                for (u32 c = 0; c < 3; ++c)
+                    bad += fabsf(pixel[c]) > .001f;
+            } else {
+                ++covered;
+                if (mode == DE_VIEW_RENDER_WIREFRAME) {
+                    dark += pixel[0] < .05f;
+                    bright += pixel[0] > .8f;
+                    bad += fabsf(pixel[0] - pixel[1]) > .001f || fabsf(pixel[0] - pixel[2]) > .001f;
+                } else if (mode == DE_VIEW_RENDER_MESHLETS) {
+                    u32 packed = 0;
+                    for (u32 c = 0; c < 3; ++c) {
+                        bad += pixel[c] < .149f || pixel[c] > .901f;
+                        packed |= (u32)(pixel[c] * 255 + .5f) << (c * 8);
+                    }
+                    u32 at = 0;
+                    while (at < color_count && colors[at] != packed)
+                        ++at;
+                    if (at == color_count && color_count < (sizeof colors / sizeof colors[0]))
+                        colors[color_count++] = packed;
+                } else if (mode == DE_VIEW_RENDER_UV0) {
+                    const f32 u = s.pos[0] * .5f + .5f, v = .5f - s.pos[1] * .5f;
+                    /* Avoid checker boundaries; the render target is half precision. */
+                    if (fabsf(u * 16 - roundf(u * 16)) > .01f &&
+                        fabsf(v * 16 - roundf(v * 16)) > .01f) {
+                        ++checked_uv;
+                        const f32 blue =
+                            ((u32)floorf(u * 16) + (u32)floorf(v * 16)) & 1u ? .8f : .2f;
+                        bad += fabsf(pixel[0] - u) > .002f || fabsf(pixel[1] - v) > .002f ||
+                               fabsf(pixel[2] - blue) > .002f;
+                    }
+                } else {
+                    bad += fabsf(pixel[0] - 1) > .001f || fabsf(pixel[1]) > .001f ||
+                           fabsf(pixel[2] - 1) > .001f;
+                }
+            }
+            bad += fabsf(pixel[3] - 1) > .001f;
+        }
+        printf("geometry mode %u: %u covered, %u background, %u UV checked, %u colours, %u bad\n",
+               mode, covered, background, checked_uv, color_count, bad);
+        EXPECT_GT(covered, 100u);
+        EXPECT_GT(background, 100u);
+        EXPECT_EQ(bad, 0u);
+        if (mode == DE_VIEW_RENDER_WIREFRAME) {
+            EXPECT_GT(dark, 50u);
+            EXPECT_GT(bright, 50u);
+        }
+        if (mode == DE_VIEW_RENDER_MESHLETS)
+            EXPECT_EQ(color_count, 4u);
+        if (mode == DE_VIEW_RENDER_UV0)
+            EXPECT_GT(checked_uv, 100u);
     }
     f->extra = NULL;
     de_gpu_wait_idle(f->dev);
@@ -2068,6 +2150,9 @@ static void strip_copy(lx *f, de_gpu_backend b) {
     }                                                                                              \
     TEST_F(ibl, material_debug_modes_##sfx, lx) {                                                  \
         material_debug(f, backend);                                                                \
+    }                                                                                              \
+    TEST_F(ibl, geometry_debug_modes_##sfx, lx) {                                                  \
+        geometry_debug(f, backend);                                                                \
     }                                                                                              \
     TEST_F(ibl, hidden_geometry_and_lights_##sfx, lx) {                                            \
         hidden_geometry_and_lights(f, backend);                                                    \
