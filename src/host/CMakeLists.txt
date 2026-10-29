@@ -136,3 +136,11 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_preview.c editor/editor_preview_image.c
         editor/editor_preview_image.h)
 endif()
+
+# DENG-696: real detached importer comparisons, including decoded cooked BC texture pixels.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_settings.c editor/editor_settings_value.c
+        editor/editor_settings_value.h editor/editor_settings_image.c editor/editor_settings_image.h)
+    target_link_libraries(de_host PRIVATE de_tp_bcdec)
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_bcdec)
+endif()

@@ -80,6 +80,12 @@ de_cook_platform de_cook_platform_host(void);
 
 typedef struct de_cooker de_cooker;
 
+/* Snapshot reader: de_file_read_all's size+1 allocation/free contract. Paths have passed
+ * ordinary asset-root boundary checks. Applies to primary files and importer reads/subcooks;
+ * a custom reader cannot use the persistent cook cache. */
+typedef de_result (*de_cook_read_fn)(void *user, const char *path, const de_allocator *allocator,
+                                     void **data, u64 *size);
+
 /** Whether de_cooker_cook runs each import twice and compares the outputs. */
 typedef enum de_cook_verify {
     DE_COOK_VERIFY_DEFAULT = 0, /**< on in Debug builds (DE_DEBUG), off otherwise */
@@ -105,6 +111,13 @@ typedef struct de_cooker_desc {
 de_result de_cooker_create(const de_cooker_desc *desc, de_cooker **out);
 /** Destroys a cooker. No cook may be running. NULL is ignored. */
 void de_cooker_destroy(de_cooker *c);
+/* Set before the first cook, with no concurrent cook or registration. NULL restores ordinary
+ * reads. Refuses a cooker with a persistent cache, whose keys require its ordinary file I/O. */
+de_result de_cooker_set_reader(de_cooker *c, de_cook_read_fn read, void *user);
+/* Optional admission limit for texture decoding, including nested model textures. 0 = normal
+ * importer policy. Caps max_decoded_mib without changing outputs of admitted images. Set before
+ * cooking, with no concurrent cook. It bounds decoder temporaries outside custom allocators. */
+de_result de_cooker_set_texture_decode_limit(de_cooker *c, u32 mib);
 
 /** The platform cooks target (resolved: never DE_COOK_PLATFORM_HOST). */
 de_cook_platform de_cooker_platform(const de_cooker *c);

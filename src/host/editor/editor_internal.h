@@ -96,6 +96,10 @@ void de__ed_add_capability(de__editor *ed, const char *cap);
 void de__ed_preview_register(de__editor *ed);
 void de__ed_preview_invalidate(void);
 void de__ed_preview_shutdown(de__editor *ed);
+void de__ed_settings_register(de__editor *ed);
+void de__ed_settings_pump(de__editor *ed);
+void de__ed_settings_invalidate(void);
+void de__ed_settings_shutdown(de__editor *ed);
 #endif
 
 /** Called by a handler that answers later: the dispatcher sends nothing now. The area keeps the

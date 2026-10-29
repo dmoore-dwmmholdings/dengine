@@ -10,7 +10,59 @@ typedef struct preview_owner {
     const de_allocator *alloc;
     de_cooker *cooker;
     de_cook_result results[2];
+    struct {
+        char *path;
+        void *data;
+        u64 size, hash;
+    } files[256];
+    u32 file_count;
 } preview_owner;
+
+static de_result snapshot_read(void *user, const char *path, const de_allocator *allocator,
+                               void **data, u64 *size) {
+    preview_owner *owner = user;
+    u32 index = 0;
+    while (index < owner->file_count && strcmp(path, owner->files[index].path))
+        ++index;
+    if (index == owner->file_count) {
+        if (index == 256)
+            return DE_ERR_UNSUPPORTED;
+        de_file *file = NULL;
+        DE_TRY(de_file_open(path, DE_FILE_READ, &file));
+        const u64 bytes = de_file_size(file);
+        de_file_close(file);
+        if (bytes > (64u << 20))
+            return DE_ERR_UNSUPPORTED;
+        void *contents = NULL;
+        u64 count = 0;
+        DE_TRY(de_file_read_all(path, owner->alloc, &contents, &count));
+        if (count > (64u << 20)) {
+            DE_FREE(owner->alloc, contents, (size_t)count + 1);
+            return DE_ERR_UNSUPPORTED;
+        }
+        const size_t length = strlen(path) + 1;
+        char *copy = DE_ALLOC(owner->alloc, length, 1, DE_MEM_ASSET);
+        if (!copy) {
+            DE_FREE(owner->alloc, contents, (size_t)count + 1);
+            return DE_ERR_OUT_OF_MEMORY;
+        }
+        memcpy(copy, path, length);
+        owner->files[index].path = copy;
+        owner->files[index].data = contents;
+        owner->files[index].size = count;
+        owner->files[index].hash = de_hash64(contents, (size_t)count, 0);
+        ++owner->file_count;
+    }
+    const u64 bytes = owner->files[index].size;
+    void *copy = DE_ALLOC(allocator, (size_t)bytes + 1, 16, DE_MEM_ASSET);
+    if (!copy)
+        return DE_ERR_OUT_OF_MEMORY;
+    memcpy(copy, owner->files[index].data, (size_t)bytes);
+    ((u8 *)copy)[bytes] = 0;
+    *data = copy;
+    *size = bytes;
+    return DE_OK;
+}
 
 static const de__manifest_value *find(const de__manifest_kv *items, u32 count, const char *key) {
     for (u32 i = 0; i < count; ++i)
@@ -129,6 +181,17 @@ de_result de__asset_cook_preview(de_asset_system *snapshot, const char *id,
                                                           .platform = platform,
                                                           .verify_determinism = DE_COOK_VERIFY_OFF},
                                         &owner->cooker);
+    if (result == DE_OK)
+        result = de_cooker_set_reader(owner->cooker, snapshot_read, owner);
+    if (result == DE_OK)
+        result = de_cooker_set_texture_decode_limit(owner->cooker, 64);
+    for (u32 i = 0; result == DE_OK && i < manifest->file_count; ++i) {
+        void *bytes = NULL;
+        u64 size = 0;
+        result = snapshot_read(owner, manifest->files[i], owner->alloc, &bytes, &size);
+        if (bytes)
+            DE_FREE(owner->alloc, bytes, (size_t)size + 1);
+    }
     u32 type_count = 0;
     const char *const *types = de_cooker_engine_type_names(&type_count);
     for (u32 i = 0; result == DE_OK && i < type_count; ++i) {
@@ -174,8 +237,29 @@ void de__asset_cook_preview_free(de__cook_preview *preview) {
     de_cook_result_free(&owner->results[0]);
     de_cook_result_free(&owner->results[1]);
     de_cooker_destroy(owner->cooker);
+    for (u32 i = 0; i < owner->file_count; ++i) {
+        DE_FREE(owner->alloc, owner->files[i].path, strlen(owner->files[i].path) + 1);
+        DE_FREE(owner->alloc, owner->files[i].data, (size_t)owner->files[i].size + 1);
+    }
     DE_FREE(owner->alloc, owner, sizeof *owner);
     memset(preview, 0, sizeof *preview);
+}
+de_result de__asset_cook_preview_validate(const de__cook_preview *preview) {
+    if (!preview || !preview->private_)
+        return DE_ERR_INVALID_ARGUMENT;
+    const preview_owner *owner = preview->private_;
+    for (u32 i = 0; i < owner->file_count; ++i) {
+        void *data = NULL;
+        u64 size = 0;
+        if (de_file_read_all(owner->files[i].path, owner->alloc, &data, &size) != DE_OK)
+            return DE_ERR_BUSY;
+        const bool same = size == owner->files[i].size &&
+                          de_hash64(data, (size_t)size, 0) == owner->files[i].hash;
+        DE_FREE(owner->alloc, data, (size_t)size + 1);
+        if (!same)
+            return DE_ERR_BUSY;
+    }
+    return DE_OK;
 }
 #else
 de_result de__asset_cook_preview(de_asset_system *snapshot, const char *id,
@@ -198,5 +282,9 @@ bool de__asset_cook_preview_child(const de__cook_preview_side *side, u32 index,
 }
 void de__asset_cook_preview_free(de__cook_preview *preview) {
     (void)preview;
+}
+de_result de__asset_cook_preview_validate(const de__cook_preview *preview) {
+    (void)preview;
+    return DE_ERR_UNSUPPORTED;
 }
 #endif

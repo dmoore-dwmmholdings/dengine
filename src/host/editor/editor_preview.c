@@ -90,6 +90,7 @@ static void reset(de__editor *ed) {
 }
 void de__ed_preview_invalidate(void) {
     ++g_preview.revision;
+    de__ed_settings_invalidate();
 }
 static de_result stats(int argc, const char *const *argv, void *user) {
     (void)argv;

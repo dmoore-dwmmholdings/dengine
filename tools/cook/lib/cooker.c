@@ -111,6 +111,20 @@ void de_cooker_destroy(de_cooker *c) {
     DE_FREE(a, c, sizeof *c);
 }
 
+de_result de_cooker_set_reader(de_cooker *c, de_cook_read_fn read, void *user) {
+    if (!c || c->cache_dir)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "snapshot readers cannot use the cook cache");
+    c->read = read;
+    c->read_user = user;
+    return DE_OK;
+}
+de_result de_cooker_set_texture_decode_limit(de_cooker *c, u32 mib) {
+    if (!c || mib > (1u << 20))
+        return DE_ERR_INVALID_ARGUMENT;
+    c->texture_decode_mib = mib;
+    return DE_OK;
+}
+
 de_cook_platform de_cooker_platform(const de_cooker *c) {
     return c != NULL ? c->platform : de_cook_platform_host();
 }
@@ -319,7 +333,9 @@ de_result de_cooker_cook(de_cooker *c, const de_cook_input *in, de_cook_result *
         return DE_OK;
     void *source = probe.source;
     u64 source_size = probe.source_size;
-    de_result r = source != NULL ? DE_OK : de__cook_read_source(vpath, c->alloc, &source, &source_size);
+    de_result r = source != NULL ? DE_OK
+                  : c->read      ? c->read(c->read_user, vpath, c->alloc, &source, &source_size)
+                                 : de__cook_read_source(vpath, c->alloc, &source, &source_size);
     if (r != DE_OK) {
         const de_error *e = de_error_last();
         return DE_FAIL(r, "asset \"%s\": cannot read source \"%s\": %s", a->id, rel,

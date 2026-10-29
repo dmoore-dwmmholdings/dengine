@@ -340,3 +340,11 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         "${DE_ROOT_DIR}/src/host/editor/editor_preview_image.c" LIBS de_core de_tp_stb)
     target_include_directories(test_editor_preview_image PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_settings_preview SOURCES test_settings_preview.c
+        "${DE_ROOT_DIR}/src/host/editor/editor_settings_value.c"
+        "${DE_ROOT_DIR}/src/host/editor/editor_settings_image.c"
+        LIBS de_core de_tp_dide_protocol de_tp_bcdec)
+    target_include_directories(test_editor_settings_preview PRIVATE "${DE_ROOT_DIR}/src")
+endif()

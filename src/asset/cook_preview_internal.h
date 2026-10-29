@@ -33,5 +33,8 @@ de_result de__asset_cook_preview(de_asset_system *snapshot, const char *id,
 bool de__asset_cook_preview_child(const de__cook_preview_side *side, u32 index,
                                   de__cook_preview_child *out);
 void de__asset_cook_preview_free(de__cook_preview *preview);
+/* Worker-side final source check. BUSY means captured manifest/source bytes changed/deleted.
+ * Both sides share captured per-file bytes; this is not an atomic multi-file transaction. */
+de_result de__asset_cook_preview_validate(const de__cook_preview *preview);
 DE_EXTERN_C_END
 #endif

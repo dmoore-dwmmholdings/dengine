@@ -404,8 +404,8 @@ patches = [
 [[lib]]
 name = "bcdec"
 # Reference BC1 to BC7 decoder for the texture importer's tests (DENG-99): the BC tests decode the
-# cooked blocks with it and measure PSNR. Test-only: only tests/unit/import links it, never
-# de_cooker, de-cook or a runtime target. Header-only C. Upstream has no tags: pinned to a commit.
+# cooked blocks with it and measure PSNR. DENG-696 also uses it for Dev editor comparison PNGs;
+# Shipping has no editor dependency. Header-only C. Upstream has no tags: pinned to a commit.
 version = "2026-09-02-80859ed"
 url = "https://github.com/iOrange/bcdec/archive/80859ed3b7afb1c527a2a99d70c61457bea72d0c.tar.gz"
 sha256 = "c54b589fd1db768994c8bb4bbe9dbd658fb9401ce56cb7a1c544cb1ca2c0a033"

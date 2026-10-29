@@ -327,6 +327,10 @@ static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a
 static de_result ed_pump(de__host *h, void *user) {
     (void)h;
     de__editor *ed = (de__editor *)user;
+#if DE_HAS_RENDER
+    /* Reap cancelled workers even with no IDE connected. Frame polling never joins a live job. */
+    de__ed_settings_pump(ed);
+#endif
     if (!ed->connected) {
         const de_ep_io io = de_ep_accept(&ed->listener, &ed->conn, (u32)ed->in_cap, 0);
         if (io == DE_EP_IO_OK) {
@@ -433,6 +437,7 @@ de_result de__editor_start(de__host *h) {
     de__ed_assets_register(ed);
 #if DE_HAS_RENDER
     de__ed_preview_register(ed);
+    de__ed_settings_register(ed);
 #endif
     de__ed_logs_register(ed);
     de__ed_views_register(ed);
@@ -459,6 +464,7 @@ void de__editor_stop(de__host *h) {
     de__ed_views_shutdown(ed);
 #if DE_HAS_RENDER
     de__ed_preview_shutdown(ed);
+    de__ed_settings_shutdown(ed);
 #endif
     const de_allocator *al = de_heap_allocator();
     if (ed->in)

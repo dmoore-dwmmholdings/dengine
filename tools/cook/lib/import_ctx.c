@@ -298,7 +298,11 @@ bool de_asset_import_setting_bool(const de_asset_import_ctx *ctx, const char *ke
 
 i64 de_asset_import_setting_int(const de_asset_import_ctx *ctx, const char *key, i64 fallback) {
     const de__manifest_kv *kv = ctx_setting(ctx, key);
-    return kv != NULL && kv->value.type == DE__MANIFEST_INT ? kv->value.u.i : fallback;
+    i64 result = kv != NULL && kv->value.type == DE__MANIFEST_INT ? kv->value.u.i : fallback;
+    if (ctx && ctx->c->texture_decode_mib && !strcmp(ctx->type->name, "texture") &&
+        !strcmp(key, "max_decoded_mib") && result > (i64)ctx->c->texture_decode_mib)
+        result = (i64)ctx->c->texture_decode_mib;
+    return result;
 }
 
 f64 de_asset_import_setting_float(const de_asset_import_ctx *ctx, const char *key, f64 fallback) {
@@ -372,7 +376,8 @@ de_result de_asset_import_read_file(de_asset_import_ctx *ctx, const char *rel_pa
 
     void *bytes = NULL;
     u64 len = 0;
-    de_result r = de_file_read_all(norm, &ctx->scratch, &bytes, &len);
+    de_result r = ctx->c->read ? ctx->c->read(ctx->c->read_user, norm, &ctx->scratch, &bytes, &len)
+                               : de_file_read_all(norm, &ctx->scratch, &bytes, &len);
     if (r != DE_OK) {
         const de_error *e = de_error_last();
         return DE_FAIL(r, "asset \"%s\": cannot read \"%s\": %s", ctx->id_str, rel,

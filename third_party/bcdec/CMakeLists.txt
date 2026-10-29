@@ -1,7 +1,7 @@
 # third_party/bcdec: bcdec (MIT or public domain), pinned in third_party/vendor.toml. A reference
-# BC1 to BC7 decoder, test-only (DENG-99): the texture importer's BC tests decode the cooked
-# blocks with it. Only test executables link de_tp_bcdec; de_cooker, de-cook and every runtime
-# target never do. Public include: `#include <bcdec.h>` (declarations; the implementation is
+# BC1 to BC7 decoder (DENG-99): texture importer tests and Dev editor comparison PNGs (DENG-696)
+# decode actual cooked blocks with it. Shipping has no editor dependency. Public include:
+# `#include <bcdec.h>` (declarations; the implementation is
 # compiled once in de_tp_bcdec.c).
 add_library(de_tp_bcdec STATIC de_tp_bcdec.c)
 target_include_directories(de_tp_bcdec SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -44,6 +44,9 @@ struct de_cooker {
     de_atomic_u32 type_count; /**< release on register, acquire on read */
 
     struct de__decache *cache; /**< DENG-210: the `.decache` of cache_dir (decache.h), or NULL */
+    de_cook_read_fn read;
+    void *read_user;
+    u32 texture_decode_mib;
 };
 
 /** The registered type `name`, or NULL (importer_registry.c). Any thread. */

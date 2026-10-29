@@ -78,6 +78,11 @@ TEST(cook_preview, actual_texture_compression_defaults_and_failure_atomicity) {
     EXPECT_EQ(after.format, DE_FMT_BC1_SRGB);
     EXPECT_EQ(after.mip_count, 1u); // omitted entry key inherits the manifest default
     EXPECT_TRUE(result.after.total_bytes < result.before.total_bytes);
+    EXPECT_EQ(de__asset_cook_preview_validate(&result), DE_OK);
+    ckt_put("preview_texture/photo.png", "changed source");
+    EXPECT_EQ(de__asset_cook_preview_validate(&result), DE_ERR_BUSY);
+    copy(&f, "tests/unit/import/data/gltf/CesiumLogoFlat.png", "photo.png");
+    EXPECT_EQ(de__asset_cook_preview_validate(&result), DE_OK);
     const de__manifest_asset *saved = de__manifest_find_asset(f.assets->manifest, "tex");
     EXPECT_STREQ(
         de__manifest_find_setting(saved->settings, saved->setting_count, "compression")->value.u.s,
@@ -112,6 +117,45 @@ TEST(cook_preview, actual_texture_compression_defaults_and_failure_atomicity) {
     EXPECT_EQ(de__asset_cook_preview(f.assets, "tex", duplicate, 2, DE_COOK_PLATFORM_HOST, &result),
               DE_ERR_INVALID_ARGUMENT);
     EXPECT_MEMEQ(&result, &sentinel, sizeof result);
+    teardown(&f);
+}
+
+TEST(cook_preview, rejects_large_decoded_headers_before_decoder_allocation) {
+    fixture f;
+    setup(&f, "decode_limit",
+          "[project]\nasset_root='.'\n[assets.tex]\ntype='texture'\nsource='photo.png'\nmax_"
+          "decoded_mib=4096\n");
+    copy(&f, "tests/unit/import/data/gltf/CesiumLogoFlat.png", "photo.png");
+    char file[160];
+    snprintf(file, sizeof file, "%s/photo.png", f.root);
+    void *data = NULL;
+    u64 size = 0;
+    ASSERT_EQ(de_file_read_all(file, &f.allocator, &data, &size), DE_OK);
+    ASSERT_TRUE(size > 33);
+    u8 *png = data;
+    /* Valid IHDR CRC, 4096-square header; the payload need never reach a decoder. */
+    for (u32 i = 0; i < 2; ++i) {
+        u8 *p = png + 16 + i * 4;
+        p[0] = 0;
+        p[1] = 0;
+        p[2] = 16;
+        p[3] = 0;
+    }
+    u32 crc = ~0u;
+    for (u32 i = 12; i < 29; ++i) {
+        crc ^= png[i];
+        for (u32 b = 0; b < 8; ++b)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    crc = ~crc;
+    for (u32 i = 0; i < 4; ++i)
+        png[29 + i] = (u8)(crc >> (24 - i * 8));
+    ASSERT_EQ(de_file_write_all_atomic(file, data, size), DE_OK);
+    DE_FREE(&f.allocator, data, (size_t)size + 1);
+    de__cook_preview result = {0};
+    EXPECT_EQ(de__asset_cook_preview(f.assets, "tex", NULL, 0, DE_COOK_PLATFORM_HOST, &result),
+              DE_ERR_UNSUPPORTED);
+    EXPECT_TRUE(result.private_ == NULL);
     teardown(&f);
 }
 TEST(cook_preview, actual_model_lods_subassets_and_accounted_bytes) {
