@@ -12,6 +12,7 @@ typedef struct de__net_sim_desc {
     u64 seed;                  /**< independent outgoing/incoming de_rng streams */
     u64 (*now_ns)(void *user); /**< NULL = de_time_now_ns; monotonic, never sleeps */
     void *clock_user;
+    u32 max_datagram; /**< 0: disabled; silently drop actual datagrams above this size */
 } de__net_sim_desc;
 
 typedef struct de__net_sim_stats {
@@ -19,6 +20,7 @@ typedef struct de__net_sim_stats {
     u64 delivered_out, delivered_in;
     u32 pending_out, pending_in;
     size_t allocated_bytes;
+    u64 mtu_dropped;
 } de__net_sim_stats;
 
 /* Takes ownership of inner ONLY on success. Preallocates all storage, capped at 64 MiB.
@@ -36,5 +38,6 @@ de_result de__net_sim_set(de__socket *s, const de_net_sim *settings);
 /* send/recv pump outgoing too. Call this on idle ticks; no timer/thread is created. */
 de_result de__net_sim_pump(de__socket *s);
 de__net_sim_stats de__net_sim_get_stats(const de__socket *s);
+de_result de__net_sim_set_max_datagram(de__socket *s, u32 bytes);
 #endif
 #endif

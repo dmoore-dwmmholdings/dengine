@@ -278,6 +278,7 @@ static u32 srv_index(const de__net_server *s, const srv_slot *sl) {
 }
 
 static void srv_slot_release(srv_slot *sl) {
+    de__chan_wire_overhead(sl->channels, NULL, NULL);
     u32 gen = sl->generation;
     de__net_wipe(sl, sizeof *sl);
     sl->generation = gen;
@@ -517,10 +518,14 @@ static void srv_on_session(de__net_server *s, srv_slot *sl, de__net_packet *p) {
         de__net_wipe(p->body, p->body_bytes);
         srv_send_accept(s, sl);
         break;
-    case DE__NET_PACKET_PAYLOAD:
+    case DE__NET_PACKET_PAYLOAD: {
         s->stats.payloads_received++;
         dispatch_payload(&s->cb, index, p->body, p->body_bytes, sl->channels);
+        const u8 error = de__chan_protocol_error(sl->channels);
+        if (error)
+            de__net_server_kick(s, index, error);
         break;
+    }
     case DE__NET_PACKET_DISCONNECT: {
         u8 code = p->body[0];
         srv_slot_release(sl);
@@ -620,6 +625,7 @@ void de__net_server_destroy(de__net_server *s) {
     s->now_ns = clock_now(&s->clock);
     for (u32 i = 0; i < s->max_peers; ++i) {
         srv_slot *sl = &s->slots[i];
+        de__chan_wire_overhead(sl->channels, NULL, NULL);
         if (sl->state == DE__NET_SLOT_CONNECTED) {
             sl->disconnect_code = 0;
             sl->disconnect_left = DE__NET_DISCONNECT_COPIES;
@@ -656,7 +662,10 @@ void de__net_server_update(de__net_server *s) {
     for (u32 i = 0; i < s->max_peers; ++i) {
         srv_slot *sl = &s->slots[i];
         if (sl->state == DE__NET_SLOT_CONNECTED) {
-            if (s->now_ns - sl->last_recv_ns >= s->timing.idle_timeout_ns) {
+            const u8 error = de__chan_protocol_error(sl->channels);
+            if (error) {
+                de__net_server_kick(s, i, error);
+            } else if (s->now_ns - sl->last_recv_ns >= s->timing.idle_timeout_ns) {
                 srv_slot_release(sl);
                 if (s->cb.timed_out != NULL)
                     s->cb.timed_out(s->cb.user, i, DE__NET_END_TIMEOUT);
@@ -779,6 +788,7 @@ struct de__net_client {
 
 /* Wipes every secret and handshake value; keeps configuration, counters and the end reason. */
 static void cli_wipe_session(de__net_client *c) {
+    de__chan_wire_overhead(c->channels, NULL, NULL);
     c->channels = NULL;
     de__net_wipe(c->token, sizeof c->token);
     de__net_wipe(c->psk, sizeof c->psk);
@@ -923,10 +933,14 @@ static void cli_on_sealed(de__net_client *c, de__net_packet *p) {
     de__net_replay_mark(&c->replay, p->seq);
     c->last_recv_ns = c->now_ns;
     switch (p->type) {
-    case DE__NET_PACKET_PAYLOAD:
+    case DE__NET_PACKET_PAYLOAD: {
         c->stats.payloads_received++;
         dispatch_payload(&c->cb, c->slot, p->body, p->body_bytes, c->channels);
+        const u8 error = de__chan_protocol_error(c->channels);
+        if (error)
+            de__net_client_disconnect(c, error);
         break;
+    }
     case DE__NET_PACKET_DISCONNECT:
         cli_end(c, DE__NET_END_REMOTE, p->body[0]);
         break;
@@ -1010,6 +1024,7 @@ de_result de__net_client_create(const de__net_client_desc *desc, de__net_client 
 void de__net_client_destroy(de__net_client *c) {
     if (c == NULL)
         return;
+    de__chan_wire_overhead(c->channels, NULL, NULL);
     c->now_ns = clock_now(&c->clock);
     if (c->state == DE__NET_CLIENT_CONNECTED) {
         c->disconnect_code = 0;
@@ -1093,7 +1108,9 @@ void de__net_client_update(de__net_client *c) {
         }
         break;
     case DE__NET_CLIENT_CONNECTED:
-        if (c->now_ns - c->last_recv_ns >= c->timing.idle_timeout_ns)
+        if (de__chan_protocol_error(c->channels))
+            de__net_client_disconnect(c, de__chan_protocol_error(c->channels));
+        else if (c->now_ns - c->last_recv_ns >= c->timing.idle_timeout_ns)
             cli_end(c, DE__NET_END_TIMEOUT, 0);
         else if (c->now_ns - c->last_send_ns >= c->timing.keepalive_ns)
             cli_send_sealed(c, DE__NET_PACKET_KEEPALIVE, NULL, 0);
@@ -1175,14 +1192,25 @@ bool de__net_client_plaintext(const de__net_client *c) {
     return c != NULL && c->plaintext;
 }
 
+static u32 server_channel_overhead(void *user) {
+    const srv_slot *sl = user;
+    u8 encoded[DE__NET_VARINT_MAX];
+    return 1u + de__net_varint_write(encoded, sl->send_seq) + DE__NET_TAG_BYTES;
+}
+static u32 client_channel_overhead(void *user) {
+    const de__net_client *c = user;
+    u8 encoded[DE__NET_VARINT_MAX];
+    return 1u + de__net_varint_write(encoded, c->send_seq) + DE__NET_TAG_BYTES;
+}
 de_result de__net_server_bind_channels(de__net_server *s, u32 slot, de__conn *channels) {
-    if (!s || slot >= s->max_peers ||
-        (channels && s->slots[slot].state != DE__NET_SLOT_CONNECTED))
+    if (!s || slot >= s->max_peers || (channels && s->slots[slot].state != DE__NET_SLOT_CONNECTED))
         return DE_ERR_NOT_FOUND;
     if (channels && s->slots[slot].channels)
         return DE_ERR_BUSY;
+    de__chan_wire_overhead(s->slots[slot].channels, NULL, NULL);
     de__chan_reset(channels);
     s->slots[slot].channels = channels;
+    de__chan_wire_overhead(channels, server_channel_overhead, &s->slots[slot]);
     return DE_OK;
 }
 de_result de__net_client_bind_channels(de__net_client *c, de__conn *channels) {
@@ -1190,7 +1218,9 @@ de_result de__net_client_bind_channels(de__net_client *c, de__conn *channels) {
         return DE_ERR_NOT_FOUND;
     if (channels && c->channels)
         return DE_ERR_BUSY;
+    de__chan_wire_overhead(c->channels, NULL, NULL);
     de__chan_reset(channels);
     c->channels = channels;
+    de__chan_wire_overhead(channels, client_channel_overhead, c);
     return DE_OK;
 }

@@ -35,7 +35,8 @@ static de__conn *captured(capture *out, u64 *now) {
                              .now_ns = fake_now,
                              .clock_user = now,
                              .max_bandwidth_kbps = 1000000,
-                             .tick_rate_hz = 1000000};
+                             .tick_rate_hz = 1000000,
+                             .disable_mtu_discovery = true};
     ASSERT_EQ(de__chan_create(&d, &c), DE_OK);
     // Codec/window cases assume a warmed high-capacity link; default startup
     // pacing is qualified separately by test_net_congestion.
@@ -105,11 +106,14 @@ TEST(net_channels, rejects_invalid_send_and_bounds_send_storage_and_failed_flush
     u64 now = 0;
     u8 value = 1;
     de__conn *c = captured(&out, &now);
-    ASSERT_TRUE(de__chan_get_stats(c).allocated_bytes <= 5u * 1024u * 1024u);
+    ASSERT_TRUE(de__chan_get_stats(c).allocated_bytes -
+                    de__chan_fragment_stats(c).allocated_bytes <=
+                5u * 1024u * 1024u);
+    ASSERT_EQ(de__chan_fragment_stats(c).pool_bytes, DE__FRAGMENT_DEFAULT_POOL);
     ASSERT_EQ(de__chan_send(c, (de_channel)3, &value, 1), DE_ERR_INVALID_ARGUMENT);
     ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, NULL, 1), DE_ERR_INVALID_ARGUMENT);
     ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, 0), DE_ERR_INVALID_ARGUMENT);
-    ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, DE__CHAN_MESSAGE_MAX + 1u),
+    ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, DE__FRAGMENT_MAX_MESSAGE + 1u),
               DE_ERR_INVALID_ARGUMENT);
     for (u32 i = 0; i < DE__CHAN_WINDOW; ++i) {
         ASSERT_EQ(de__chan_send(c, DE_CHANNEL_RELIABLE_ORDERED, &value, 1), DE_OK);
@@ -206,8 +210,7 @@ TEST(net_channels, stale_packet_ack_cannot_clear_reused_message_id_generation) {
     u16 peer_sequence = 1;
     while (sent < 65536) {
         now += MS; // replenish the real token bucket; this case isolates ID-generation safety
-        const u32 count =
-            65536u - sent < DE__CHAN_PACKET_MESSAGES ? 65536u - sent : DE__CHAN_PACKET_MESSAGES;
+        const u32 count = 65536u - sent < DE__CHAN_WINDOW ? 65536u - sent : DE__CHAN_WINDOW;
         for (u32 i = 0; i < count; ++i)
             ASSERT_EQ(de__chan_send(c, DE_CHANNEL_RELIABLE_ORDERED, &value, 1), DE_OK);
         ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
@@ -285,7 +288,7 @@ static void raw_received(void *user, u32 slot, const u8 *data, u32 bytes) {
     ASSERT_TRUE(memcmp(data, "raw", 3) == 0);
     r->raw_received++;
 }
-static void open_rig(rig *r) {
+static void open_rig_options(rig *r, bool fixed_mtu) {
     memset(r, 0, sizeof *r);
     const de__loopback_desc ld = {.queue_capacity = 512};
     ASSERT_EQ(de__loopback_net_create(&ld, NULL, &r->net), DE_OK);
@@ -319,12 +322,16 @@ static void open_rig(rig *r) {
                                  .send_user = &r->link[i],
                                  .now_ns = fake_now,
                                  .clock_user = &r->now,
-                                 .tick_rate_hz = 200};
+                                 .tick_rate_hz = 200,
+                                 .disable_mtu_discovery = fixed_mtu};
         ASSERT_EQ(de__chan_create(&d, &r->channel[i]), DE_OK);
     }
     ASSERT_EQ(de__net_client_bind_channels(r->client, r->channel[0]), DE_OK);
     ASSERT_EQ(de__net_server_bind_channels(r->server, 0, r->channel[1]), DE_OK);
     ASSERT_EQ(de__net_client_bind_channels(r->client, r->channel[0]), DE_ERR_BUSY);
+}
+static void open_rig(rig *r) {
+    open_rig_options(r, false);
 }
 static void close_rig(rig *r) {
     ASSERT_EQ(de__net_client_bind_channels(r->client, NULL), DE_OK);
@@ -495,7 +502,9 @@ TEST(net_channels, ten_thousand_encrypted_messages_under_loss_jitter_duplication
 
 TEST(net_channels, encrypted_packet_and_message_sequences_cross_wrap_twice) {
     rig r;
-    open_rig(&r);
+    /* Isolate sequence wrap from intentional control-probe bandwidth. The MTU
+     * transport test separately crosses actual outer varint header boundaries. */
+    open_rig_options(&r, true);
     record *received[2] = {calloc(1, sizeof(record)), calloc(1, sizeof(record))};
     ASSERT_TRUE(received[0] && received[1]);
     for (u32 id = 0; id < TOTAL; ++id) {

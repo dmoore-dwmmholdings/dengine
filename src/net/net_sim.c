@@ -45,6 +45,13 @@ static de_result sim_recv(de__socket *, de__datagram *, u32, u32 *);
 static simulator *as_sim(const de__socket *s) {
     return s && s->send_to == sim_send ? (simulator *)s : NULL;
 }
+static bool exceeds_mtu(simulator *s, u32 bytes) {
+    if (!s->desc.max_datagram || bytes <= s->desc.max_datagram)
+        return false;
+    s->counters.mtu_dropped++;
+    s->socket.stats.dropped++;
+    return true;
+}
 static delayed *slot(const simulator *s, const delay_queue *q, u32 index) {
     return (delayed *)(q->slots + (size_t)index * s->stride);
 }
@@ -167,6 +174,10 @@ de_result de__net_sim_pump(de__socket *socket) {
         delayed *d = slot(s, q, q->heap[0]);
         if (d->due > time)
             break;
+        if (exceeds_mtu(s, d->bytes)) {
+            pop(s, q);
+            continue;
+        }
         u32 sent = 0;
         const de_result r = de__socket_send_to(s->inner, &d->address, d + 1, d->bytes, &sent);
         if (r == DE_OK && sent == 0 && d->bytes != 0)
@@ -186,6 +197,10 @@ static de_result sim_send(de__socket *socket, const de_net_address *to, const vo
     de_result r = de__net_sim_pump(socket);
     if (r != DE_OK)
         return r;
+    if (exceeds_mtu(s, n)) {
+        *sent = n;
+        return DE_OK;
+    }
     if (bypass(s)) {
         r = de__socket_send_to(s->inner, to, bytes, n, sent);
         if (r != DE_OK)
@@ -211,6 +226,10 @@ static void receive_ready(simulator *s, de__datagram *messages, u32 count, u32 *
         if (d->due > time)
             break;
         de__datagram *m = &messages[*received];
+        if (exceeds_mtu(s, d->bytes)) {
+            pop(s, q);
+            continue;
+        }
         if (d->bytes > m->capacity || (d->bytes && !m->data))
             s->socket.stats.truncated++;
         else {
@@ -227,6 +246,18 @@ static void receive_ready(simulator *s, de__datagram *messages, u32 count, u32 *
 static de_result receive_inner(simulator *s, de__datagram *messages, u32 count, u32 *received) {
     const u64 truncated = s->inner->stats.truncated;
     const de_result r = de__socket_recv_from(s->inner, messages, count, received);
+    u32 kept = 0;
+    for (u32 i = 0; i < *received; ++i) {
+        if (exceeds_mtu(s, messages[i].bytes))
+            continue;
+        if (kept != i) {
+            const de__datagram old = messages[kept];
+            messages[kept] = messages[i];
+            messages[i] = old;
+        }
+        kept++;
+    }
+    *received = kept;
     s->socket.stats.truncated += s->inner->stats.truncated - truncated;
     if (r != DE_OK)
         s->counters.errors++;
@@ -314,7 +345,7 @@ de_result de__net_sim_wrap_ex(de__socket *inner, const de__net_sim_desc *desc,
     if (!d.slot_bytes)
         d.slot_bytes = SIM_SLOT_DEFAULT;
     if (!d.queue_capacity || d.queue_capacity > SIM_QUEUE_MAX ||
-        d.slot_bytes > DE__NET_MAX_UDP_PAYLOAD)
+        d.slot_bytes > DE__NET_MAX_UDP_PAYLOAD || d.max_datagram > DE__NET_MAX_UDP_PAYLOAD)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "net simulator: invalid storage limits");
     const size_t stride = (sizeof(delayed) + d.slot_bytes + 15u) & ~(size_t)15u;
     const u32 directions = d.incoming ? 2 : 1;
@@ -365,6 +396,13 @@ de_result de__net_sim_wrap_ex(de__socket *inner, const de__net_sim_desc *desc,
     }
     s->inner = inner;
     *out = &s->socket;
+    return DE_OK;
+}
+de_result de__net_sim_set_max_datagram(de__socket *socket, u32 bytes) {
+    simulator *s = as_sim(socket);
+    if (!s || bytes > DE__NET_MAX_UDP_PAYLOAD)
+        return DE_ERR_INVALID_ARGUMENT;
+    s->desc.max_datagram = bytes;
     return DE_OK;
 }
 #else

@@ -91,6 +91,58 @@ TEST(net_sim, zero_passthrough_and_no_heap) {
     close_rig(&r);
 }
 
+TEST(net_sim, max_datagram_drops_outgoing_and_incoming_even_without_other_conditions) {
+    for (u32 inbound = 0; inbound < 2; ++inbound) {
+        rig r;
+        open_rig(&r, 8, 54, inbound != 0);
+        de__socket *sim = inbound ? r.rx : r.tx;
+        ASSERT_EQ(de__net_sim_set_max_datagram(sim, 1400), DE_OK);
+        u8 data[1401] = {54}, storage[3][1401];
+        de__datagram slots[3];
+        for (u32 i = 0; i < 3; ++i)
+            slots[i] = (de__datagram){.data = storage[i], .capacity = sizeof storage[i]};
+        de_alloc_guard guard = {0};
+        de_alloc_guard_begin(&guard);
+        for (u32 i = 0; i < 3; ++i) {
+            u32 sent = 0;
+            const u32 bytes = i == 1 ? 1400 : 1401;
+            ASSERT_EQ(de__socket_send_to(r.tx, &r.rx->local, data, bytes, &sent), DE_OK);
+            ASSERT_EQ(sent, bytes);
+        }
+        u32 got = 0;
+        ASSERT_EQ(de__socket_recv_from(r.rx, slots, 3, &got), DE_OK);
+        de_alloc_guard_end(&guard);
+        DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+        ASSERT_EQ(got, 1u);
+        ASSERT_EQ(slots[0].bytes, 1400u);
+        ASSERT_EQ(((u8 *)slots[0].data)[0], 54u);
+        ASSERT_TRUE(slots[0].data != slots[1].data && slots[0].data != slots[2].data &&
+                    slots[1].data != slots[2].data);
+        ASSERT_EQ(de__net_sim_get_stats(sim).mtu_dropped, 2u);
+        close_rig(&r);
+    }
+}
+TEST(net_sim, changed_path_limit_also_drops_already_delayed_datagrams) {
+    rig r;
+    open_rig(&r, 8, 54, false);
+    const de_net_sim delayed = {50, 0, 0, 0};
+    ASSERT_EQ(de__net_sim_set(r.tx, &delayed), DE_OK);
+    u8 data[1401] = {0};
+    u32 sent = 0;
+    ASSERT_EQ(de__socket_send_to(r.tx, &r.rx->local, data, sizeof data, &sent), DE_OK);
+    ASSERT_EQ(de__net_sim_get_stats(r.tx).pending_out, 1u);
+    ASSERT_EQ(de__net_sim_set_max_datagram(r.tx, 1400), DE_OK);
+    r.ns = 50u * NS_MS;
+    ASSERT_EQ(de__net_sim_pump(r.tx), DE_OK);
+    ASSERT_EQ(de__net_sim_get_stats(r.tx).pending_out, 0u);
+    ASSERT_EQ(de__net_sim_get_stats(r.tx).mtu_dropped, 1u);
+    de__datagram slot = {.data = data, .capacity = sizeof data};
+    u32 got = 0;
+    ASSERT_EQ(de__socket_recv_from(r.rx, &slot, 1, &got), DE_OK);
+    ASSERT_EQ(got, 0u);
+    close_rig(&r);
+}
+
 typedef struct measure {
     u64 hash, delay_sum;
     u32 delivered, unique, repeated, reordered, last_id;

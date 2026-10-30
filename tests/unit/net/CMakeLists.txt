@@ -67,3 +67,19 @@ if(TARGET de_net)
         target_include_directories(test_net_congestion PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endif()
+
+# DENG-54: strict fragment codec, bounded pool and message lifetime.
+if(TARGET de_net)
+    de_add_test(NAME net_fragment SOURCES test_fragment.c LIBS de_net de_test_support)
+    if(TARGET test_net_fragment)
+        target_include_directories(test_net_fragment PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
+
+# DENG-54: allocation-free MTU search, retries, fallback and periodic confirmation.
+if(TARGET de_net)
+    de_add_test(NAME net_mtu SOURCES test_mtu.c LIBS de_net de_test_support)
+    if(TARGET test_net_mtu)
+        target_include_directories(test_net_mtu PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

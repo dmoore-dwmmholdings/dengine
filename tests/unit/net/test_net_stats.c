@@ -194,8 +194,12 @@ TEST(net_stats, actual_loss_timeout_late_ack_and_ack_only_do_not_double_count) {
     u64 now = 0;
     wire w = {.now = &now};
     de__conn *c = NULL;
-    const de__chan_desc d = {
-        .send_packet = send_packet, .send_user = &w, .now_ns = clock_ns, .clock_user = &now};
+    // Isolate exact ACK/loss packet counts from independent MTU control traffic.
+    const de__chan_desc d = {.send_packet = send_packet,
+                             .send_user = &w,
+                             .now_ns = clock_ns,
+                             .clock_user = &now,
+                             .disable_mtu_discovery = true};
     ASSERT_EQ(de__chan_create(&d, &c), DE_OK);
     u8 value = 1, packet[DE__CHAN_PACKET_MAX];
     ASSERT_EQ(de__chan_send(c, DE_CHANNEL_UNRELIABLE, &value, 1), DE_OK);

@@ -55,3 +55,13 @@ endif()
 if(TARGET de_net)
     target_sources(de_net PRIVATE congestion.h net_stats.c net_stats.h)
 endif()
+
+# DENG-54: bounded whole-message fragment reassembly.
+if(TARGET de_net)
+    target_sources(de_net PRIVATE fragment.c fragment.h)
+endif()
+
+# DENG-54: wire-size-aware path-discovery state.
+if(TARGET de_net)
+    target_sources(de_net PRIVATE mtu.h)
+endif()

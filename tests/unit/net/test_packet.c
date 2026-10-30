@@ -8,9 +8,9 @@ TEST(net_channels, packet_codec_bounds_and_canonical_lengths) {
     de__chan_packet_header(data, 65535, true, 17, 0x80000001u);
     u32 n = de__chan_packet_message(data + DE__CHAN_HEADER, sizeof data - DE__CHAN_HEADER,
                                     DE_CHANNEL_RELIABLE_ORDERED, 65535, payload, sizeof payload);
-    ASSERT_EQ(n + DE__CHAN_HEADER, sizeof data);
+    ASSERT_EQ(n + DE__CHAN_HEADER, 1200u);
     de__chan_packet p;
-    ASSERT_TRUE(de__chan_packet_read(data, sizeof data, &p));
+    ASSERT_TRUE(de__chan_packet_read(data, n + DE__CHAN_HEADER, &p));
     ASSERT_EQ(p.sequence, 65535u);
     ASSERT_EQ(p.ack_bits, 0x80000001u);
     ASSERT_EQ(p.count, 1u);
@@ -19,7 +19,7 @@ TEST(net_channels, packet_codec_bounds_and_canonical_lengths) {
     ASSERT_TRUE(memcmp(p.messages[0].data, payload, sizeof payload) == 0);
     ASSERT_EQ(de__chan_packet_message(data, sizeof data, (de_channel)3, 0, payload, 1), 0u);
     ASSERT_EQ(de__chan_packet_message(data, 4, DE_CHANNEL_UNRELIABLE, 0, payload, 1), 0u);
-    data[8] |= 2;
+    data[8] |= 4;
     ASSERT_FALSE(de__chan_packet_read(data, sizeof data, &p));
     de__chan_packet_header(data, 0, false, 0, 0);
     data[9] = 0;
@@ -48,10 +48,27 @@ TEST(net_channels, packet_fills_minimum_messages_and_accepts_ack_only) {
     for (u32 i = 0; i < DE__CHAN_PACKET_MESSAGES; ++i)
         bytes += de__chan_packet_message(data + bytes, sizeof data - bytes, DE_CHANNEL_UNRELIABLE,
                                          (u16)i, &value, 1);
-    ASSERT_EQ(bytes, 1199u);
+    ASSERT_EQ(bytes, DE__CHAN_HEADER + 5u * DE__CHAN_PACKET_MESSAGES);
     ASSERT_TRUE(de__chan_packet_read(data, bytes, &p));
     ASSERT_EQ(p.count, DE__CHAN_PACKET_MESSAGES);
     ASSERT_EQ(de__chan_packet_message(data + bytes, sizeof data - bytes, DE_CHANNEL_UNRELIABLE, 0,
                                       &value, 1),
               0u);
+}
+
+TEST(net_channels, mtu_probe_padding_and_flags_are_strict) {
+    u8 data[DE__CHAN_PACKET_MAX];
+    de__chan_packet p;
+    de__chan_packet_probe(data, 1400, 17, true, 12, 3);
+    ASSERT_TRUE(de__chan_packet_read(data, 1400, &p));
+    ASSERT_TRUE(p.probe && p.has_ack);
+    ASSERT_EQ(p.count, 0u);
+    ASSERT_EQ(p.sequence, 17u);
+    ASSERT_EQ(p.ack, 12u);
+    ASSERT_FALSE(de__chan_packet_read(data, 1199, &p));
+    data[1399] = 1;
+    ASSERT_FALSE(de__chan_packet_read(data, 1400, &p));
+    data[1399] = 0;
+    data[8] |= 4;
+    ASSERT_FALSE(de__chan_packet_read(data, 1400, &p));
 }
