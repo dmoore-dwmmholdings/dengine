@@ -1209,7 +1209,7 @@ TEST(clustered_lights, layout_match) {
 }
 
 /* lighting.renderer_stage: the renderer registers "lighting" after the vis frame and the output
- * pass (DENG-304) reads its target, so the cluster and deferred passes run and "output.basic"
+ * pass (DENG-304) reads its target, so the cluster and deferred passes run and "post.tonemap"
  * makes the view's colour; with r.cluster_debug the heatmap is the view's colour instead (no
  * output pass). */
 TEST(lighting, renderer_stage) {
@@ -1280,10 +1280,10 @@ TEST(lighting, renderer_stage) {
             deferred |= strcmp(e->text, "lighting.deferred") == 0;
             heatmap |= strcmp(e->text, "lighting.heatmap") == 0;
             bounds |= strcmp(e->text, "lighting.cluster_bounds") == 0;
-            output |= strcmp(e->text, "output.basic") == 0;
+            output |= strcmp(e->text, "post.tonemap") == 0;
         }
         printf("%s: %u lighting passes%s\n", heat ? "r.cluster_debug 1" : "default", lighting,
-               output ? ", output.basic" : "");
+               output ? ", post.tonemap" : "");
         if (!heat) {
             /* DENG-304: the output pass reads the lighting target, so lighting runs. */
             EXPECT_TRUE(deferred);

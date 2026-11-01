@@ -1,4 +1,5 @@
 #include "render/denoise/denoise_internal.h"
+#include "render/post/tonemap.h"
 #include "render/skin/skin_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
@@ -89,6 +90,7 @@ static void renderer_free(de_renderer *r) {
     de__rt_scene_destroy(r);
     de__skin_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
+    de__tonemappers_destroy(r);
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
@@ -256,6 +258,10 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         res = DE_FAIL_WRAP(res, "de_renderer_create: brdf LUT");
         goto fail;
     }
+
+    res = de__tonemappers_create(r);
+    if (res != DE_OK)
+        goto fail;
 
     /* DENG-176: the views (the main view, the pass-registration list, the composite). */
     res = de__views_create(r);
@@ -475,6 +481,7 @@ void de_renderer_pump_uploads(de_renderer *r) {
 void de__renderer_kick_prepare(de_renderer *r) {
     if (r == NULL)
         return;
+    de__tonemappers_prepare(r);
     if (r->uploader != NULL) {
         de_render_uploader_flush(r->uploader); /* also frees unloads whose frames completed */
         (void)de_render_uploader_acquire_submit(r->uploader);

@@ -556,6 +556,7 @@ void de__pt_build(de__view_frame *f, void *user) {
         de_rg_export(g, a, DE_ACCESS_SHADER_READ);
     }
     f->color = output;
+    f->color_is_scene_linear = true;
     if (de_cvar_bool(p->final_denoise) && !golden) {
         de__pt_info info = {.accumulation = v->accumulation,
                             .output = v->output,

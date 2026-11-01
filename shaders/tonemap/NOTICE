@@ -1,0 +1,11 @@
+DEngine tonemappers
+
+AgX analytic fit: Copyright (c) 2024 Missing Deadlines (Benjamin Wrensch), MIT.
+Based on Troy Sobotka's AgX. Adapted to Slang and runtime parameters.
+The complete MIT notice is retained in agx.slang.
+
+ACES fitted: Copyright (c) 2016 MJP, MIT. Original fit by Stephen Hill.
+Adapted to Slang and display-relative output. Complete MIT notice in aces_fitted.slang.
+
+Khronos PBR Neutral: Copyright 2024 The Khronos Group, Inc., Apache-2.0.
+Adapted to Slang and display-relative output. License in LICENSES/Apache-2.0.txt.

@@ -177,6 +177,7 @@ static void tg_run(de_golden_ctx *ctx) {
         return;
     }
     cam->view = p.view;
+    cam->tonemapper = de_tonemapper_builtin(p.r, DE_TM_NONE);
     for (u32 frame = 0; frame < 10u; ++frame)
         if (!tg_frame(&p)) {
             tg_close(&p);

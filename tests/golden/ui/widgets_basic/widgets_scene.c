@@ -156,7 +156,10 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, f32 scale) {
     de_entity camera;
     DE_TRY(de_entity_spawn_with(s->world, camera_components, 2, &camera));
     *(DeTransform *)de_entity_get(s->world, camera, builtins.transform) = de_transform_identity();
-    ((DeCamera *)de_entity_get(s->world, camera, camera_components[1]))->exposure_ev100 = 0;
+    DeCamera *camera_settings = de_entity_get(s->world, camera, camera_components[1]);
+    camera_settings->exposure_ev100 = 0;
+    /* Preserve this pre-post-processing fixture's display transform. */
+    camera_settings->tonemapper = de_tonemapper_builtin(s->renderer, DE_TM_NONE);
     s->root = node(s, (de_entity){0}, 0, 0, UI_W / scale, UI_H / scale, background, 0, 0);
     return s->error;
 }

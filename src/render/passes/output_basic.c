@@ -1,19 +1,15 @@
 /*
- * output_basic.c: the basic output pass (SPEC §12.7; DENG-304). Until the S18 tonemappers
- * (DENG-163) replace it, each view's lit image reaches the screen through this stage: the
- * pre-exposed linear HDR lighting target (lighting.h, the context de__lighting_build published for
- * the view) clamped to [0, 1], the equivalent of DE_TM_NONE (shaders/post/output_basic.slang,
- * engine shader `post_output_basic`). The result is a new RGBA16F texture the stage makes the
- * view's colour; views.c composites it into the view's output, and the sRGB swapchain applies the
- * sRGB OETF when the output graph draws the view (all three backends' swapchains are sRGB).
- *
- * The stage sits at (DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP), between DE_HOOK_BEFORE_TONEMAP
- * and DE_HOOK_AFTER_TONEMAP. It adds nothing when the view lit nothing this frame (no G-buffer) or
- * when an earlier stage already replaced the view's colour (a debug view: r.hzb_debug,
- * r.cluster_debug). It is the first pass that reads the lighting target, so with it the render
- * graph keeps lighting, the resolve and classification.
+ * Output routing (SPEC §12.7, §12.11; DENG-304, DENG-163). The production post.tonemap
+ * stage maps exposed scene-linear lighting or a PT/post replacement to display-linear color
+ * through the renderer's tonemapper registry. Probe captures retain scene radiance, diagnostic
+ * replacements bypass this conversion, and post-disabled views use the explicit None mapper.
+ * Swapchain/output encoding remains separate. Legacy clamp/sRGB helpers below remain available
+ * for focused output tests; the same shader also implements material diagnostic views.
+ * The stage stays between BEFORE_TONEMAP and AFTER_TONEMAP at post order70.
  */
 #include "render/lighting/lighting.h"
+#include "render/post/tonemap.h"
+#include "render/world/render_world.h"
 
 #include "render/graph/rg_internal.h"
 #include "render/renderer_internal.h"
@@ -236,22 +232,29 @@ static void output_stage(de__view_frame *vf, void *user) {
         }
         return;
     }
-    if (vf->color.id != vf->initial_color.id)
+    if (vf->color.id != vf->initial_color.id && !vf->color_is_scene_linear)
         return; /* off, or a debug view replaced the colour */
     const de__lighting_context *lc =
         de__lighting_frame_context(ob->lighting, vf->view, vf->graph, vf->frame_index);
-    if (lc == NULL || !lc->lit || !DE_HANDLE_VALID(lc->target))
+    if (!vf->color_is_scene_linear && (lc == NULL || !lc->lit || !DE_HANDLE_VALID(lc->target)))
         return;
+    const de_rg_resource source = vf->color_is_scene_linear ? vf->color : lc->target;
     if (vf->probe_capture) {
-        vf->color = lc->target;
+        vf->color = source;
         vf->color_format = DE_FMT_RGBA16_FLOAT;
         return;
     }
-    const de_rg_resource out = de__output_basic_add(ob, vf->graph, vf->graph->arena, lc->target,
-                                                    lc->width, lc->height, false);
+    const DeCamera *camera = vf->camera ? &vf->camera->camera : NULL;
+    de_tonemapper mapper = camera ? camera->tonemapper : (de_tonemapper){0};
+    if (vf->display.disabled_features & DE_VIEW_DISABLE_POST_EFFECTS)
+        mapper = de_tonemapper_builtin(vf->renderer, DE_TM_NONE);
+    const de_rg_resource out =
+        de__tonemap_add(vf->renderer, vf->graph, vf->graph->arena, source, vf->width, vf->height,
+                        mapper, camera ? camera->tonemap_params : NULL, 1.0f, false, NULL);
     if (DE_HANDLE_VALID(out)) {
         vf->color = out;
         vf->color_format = DE_FMT_RGBA16_FLOAT;
+        vf->color_is_scene_linear = false;
     }
 }
 
@@ -266,7 +269,7 @@ de_result de__output_basic_create(de_renderer *r, de__lighting *lt, de__output_b
     if (res != DE_OK)
         return res;
     ob->lighting = lt;
-    res = de__view_register_stage(r, DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP, "output.basic",
+    res = de__view_register_stage(r, DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP, "post.tonemap",
                                   output_stage, ob);
     if (res != DE_OK) {
         de__output_basic_destroy(ob);

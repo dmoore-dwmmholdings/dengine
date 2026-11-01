@@ -178,6 +178,7 @@ static void px_run(de_golden_ctx *ctx, u32 variant) {
     printf("  pixel2d camera projection=%u ortho=%g\n", (u32)cam->projection,
            (double)cam->ortho_height);
     cam->view = p.view;
+    cam->tonemapper = de_tonemapper_builtin(p.r, DE_TM_NONE);
     de_pixel_art_settings pixel = {.internal_width = 480,
                                    .internal_height = 270,
                                    .integer_scale_only = variant != 2,

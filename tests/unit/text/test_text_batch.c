@@ -404,7 +404,7 @@ static void observe_basic_output(de__view_frame *vf, void *user) {
     u32 index = de__rg_resource_index(vf->graph, vf->color);
     if (index < vf->graph->resource_count) {
         const de__rg_resource *resource = &vf->graph->resources[index];
-        if (strcmp(resource->name, "output.basic") == 0 &&
+        if (strcmp(resource->name, "post.tonemap") == 0 &&
             (resource->tex.usage & DE_USAGE_RENDER_TARGET) &&
             resource->tex.format == DE_FMT_RGBA16_FLOAT)
             ++f->basic_outputs;
@@ -438,6 +438,9 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
     ASSERT_EQ(wait_screen_asset(f, mesh_load), (int)DE_LOAD_READY);
     de_asset_release(f->fonts.assets, mesh_load);
     const DeRenderComponents *ids = de__render_components(f->w);
+    /* The pure-green overlay/depth oracle predates creative tonemapping. */
+    ((DeCamera *)de_entity_get(f->w, f->main_camera, ids->camera))->tonemapper =
+        de_tonemapper_builtin(f->r, DE_TM_NONE);
     de_builtin_component_ids bi = de_builtin_components(f->w);
     de_entity card = de_entity_spawn(f->w);
     DeTransform *card_transform = de_entity_add(f->w, card, bi.transform);
@@ -474,8 +477,11 @@ TEST_F(text_batch, metal_screen_text_over_lit_basic_output_main_rtt_and_hdr, tex
     *transform = de_transform_identity();
     transform->position.z = 2;
     DeCamera *rtt_camera = de_entity_add(f->w, camera, ids->camera);
-    *rtt_camera = (DeCamera){
-        .view = rtt, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    *rtt_camera = (DeCamera){.view = rtt,
+                             .projection = DE_PROJ_ORTHOGRAPHIC,
+                             .ortho_height = 2,
+                             .near_z = .1f,
+                             .tonemapper = de_tonemapper_builtin(f->r, DE_TM_NONE)};
     ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_OUTPUT, -100, "text.observe_basic",
                                       observe_basic_output, f),
               DE_OK);

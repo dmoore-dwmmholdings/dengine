@@ -543,7 +543,16 @@ typedef enum de_builtin_tonemapper {
     DE_TM_NONE
 } de_builtin_tonemapper;
 DE_API de_tonemapper de_tonemapper_builtin(de_renderer *r, de_builtin_tonemapper which);
-/* Custom: a Slang shader asset implementing ITonemapper + a parameter block. */
+/** Registers a READY Slang shader asset. Import tonemap/itonemapper and tonemap/kernel,
+ * implement ITonemapper, and
+ * instantiate de_tonemap_pixel<MyMapper> in cs_tonemap (compute 8x8x1, TonemapPassParams).
+ * Names are unique, 1..63 bytes; up to 27 custom mappers per renderer. Parameters are the first
+ * param_bytes of DeCamera.tonemap_params (0..32), with the rest zeroed. Main thread, between
+ * frames. The shader stays pinned until renderer or asset-system destruction. Reloads rebuild
+ * before the next render kick; rejected reloads retain the last good pipeline. Handles belong to
+ * this renderer and remain stable across reloads. Invalid on error (reason in the error context).
+ * AgX param[0] > 0.5 selects Punchy; Reinhard param[0] > 0 selects white point (default 4).
+ * Built-ins output display-linear Rec.709; zero camera handle selects AgX. */
 DE_API de_tonemapper de_tonemapper_register(de_renderer *r, const char *name, de_shader shader,
                                             u32 param_bytes);
 

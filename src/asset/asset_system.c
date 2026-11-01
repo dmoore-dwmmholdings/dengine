@@ -110,10 +110,34 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
     return DE_OK;
 }
 
+void de__asset_destroy_observe(de_asset_system *s, de__asset_destroy_observer *observer,
+                               void (*notify)(void *user), void *user) {
+    DE_ASSERT(s != NULL && observer != NULL && observer->system == NULL && notify != NULL);
+    *observer = (de__asset_destroy_observer){s, s->destroy_observers, notify, user};
+    s->destroy_observers = observer;
+}
+
+void de__asset_destroy_unobserve(de__asset_destroy_observer *observer) {
+    if (observer == NULL || observer->system == NULL)
+        return;
+    de__asset_destroy_observer **link = &observer->system->destroy_observers;
+    while (*link != NULL && *link != observer)
+        link = &(*link)->next;
+    if (*link == observer)
+        *link = observer->next;
+    observer->system = NULL;
+    observer->next = NULL;
+}
+
 void de_asset_system_destroy(de_asset_system *s) {
     if (s == NULL)
         return;
     const de_allocator *a = s->alloc;
+    while (s->destroy_observers != NULL) {
+        de__asset_destroy_observer *observer = s->destroy_observers;
+        de__asset_destroy_unobserve(observer);
+        observer->notify(observer->user);
+    }
     de__asset_events_detach(s);        /* DENG-143: first, so the teardown sends no events */
     de__load_shutdown(s);              /* DENG-141: releases every request and its slot refs */
     de__pipeline_shutdown(s);          /* DENG-142: after the requests cancelled its jobs */

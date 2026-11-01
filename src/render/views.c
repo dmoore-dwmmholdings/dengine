@@ -154,7 +154,7 @@ typedef struct de__views {
     /* DENG-303: clustered and deferred lighting (lighting/lighting_pass.c), the stage "lighting".
      */
     de__lighting *lighting;
-    /* DENG-304: the basic output pass (passes/output_basic.c), the stage "output.basic". */
+    /* DENG-304: output routing (passes/output_basic.c), the stage "post.tonemap". */
     de__output_basic *output_basic;
     /* DENG-305: the forward transparent pass (passes/forward/), the stage "forward.transparent". */
     struct de__forward *forward;
@@ -1352,7 +1352,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         if (diagnostic && e->slot > DE__VIEW_SLOT_VISIBILITY && e->slot < DE__VIEW_SLOT_POST)
             continue;
         if ((vf.display.disabled_features & DE_VIEW_DISABLE_POST_EFFECTS) && !e->hook &&
-            e->slot == DE__VIEW_SLOT_POST && strcmp(e->name, "output.basic") != 0)
+            e->slot == DE__VIEW_SLOT_POST && strcmp(e->name, "post.tonemap") != 0)
             continue;
         if (path && e->slot < DE__VIEW_SLOT_POST &&
             (e->hook ||
@@ -1699,7 +1699,7 @@ de_result de__views_create(de_renderer *r) {
     res = de__sss_create(r, vs->vis, vs->lighting, &vs->sss);
     if (res != DE_OK)
         return res;
-    /* DENG-304: the output pass registers its stage "output.basic" (where the tonemapper goes). */
+    /* DENG-304: output routing registers the stage "post.tonemap". */
     return de__output_basic_create(r, vs->lighting, &vs->output_basic);
 }
 

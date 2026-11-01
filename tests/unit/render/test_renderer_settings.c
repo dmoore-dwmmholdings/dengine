@@ -808,6 +808,11 @@ static void public_light_isolation(rfx *f, de_light_kind kind) {
     de_test_light_scene scene = {0};
     ASSERT_EQ(de_test_light_scene_create(f->r, f->world, mesh, material, targets, kind, &scene),
               DE_OK);
+    /* This oracle measures channel isolation before a creative display transform. */
+    for (u32 i = 0; i < 2; ++i)
+        ((DeCamera *)de_entity_get(f->world, scene.cameras[i],
+                                   de_component_find(f->world, "DeCamera")))
+            ->tonemapper = de_tonemapper_builtin(f->r, DE_TM_NONE);
     for (u32 i = 0; i < 8; ++i)
         isolation_frame(f);
     const u64 office_shadow = isolation_shadow(f, scene.views[0], kind, scene.lights[0].bits);

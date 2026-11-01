@@ -188,6 +188,7 @@ static de_result setup(anim_scene *s) {
                    .projection = DE_PROJ_PERSPECTIVE,
                    .fov_y = .8f,
                    .near_z = .01f,
+                   .tonemapper = de_tonemapper_builtin(s->renderer, DE_TM_NONE),
                    .exposure_ev100 = 0};
     return DE_OK;
 }

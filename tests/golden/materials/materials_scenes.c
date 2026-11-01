@@ -584,6 +584,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         m.rt_state = de__golden_rt_prepare(ctx, m.r, m.view, o->rt_effect, o->base_fallback);
     }
     camera->view = m.view;
+    /* Pre-S18 references use the original clamp transfer, independently of game defaults. */
+    camera->tonemapper = de_tonemapper_builtin(m.r, DE_TM_NONE);
 
     /* Frames until the image settles: no pixel changes by more than one code value (light-list
      * order comes from atomics, so the last bit may flicker) for MG_SETTLED frames in a row. Before

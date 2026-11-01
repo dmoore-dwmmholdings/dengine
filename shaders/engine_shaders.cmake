@@ -123,3 +123,4 @@ de_engine_shader(ui_world ui/ui_world.slang)
 
 # DENG-703: asset-free startup brand reveal, embedded for standalone Shipping games too.
 de_engine_shader(startup_splash startup/splash.slang)
+de_engine_shader(post_tonemap post/tonemap_pass.slang)

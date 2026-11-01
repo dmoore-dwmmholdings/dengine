@@ -1285,3 +1285,17 @@ de_add_test(NAME render_shadow_admission
 if(TARGET test_render_shadow_admission)
     target_include_directories(test_render_shadow_admission PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-163: actual tonemapper readback and source-asset reload acceptance.
+de_add_test(NAME render_tonemap
+    SOURCES test_tonemap.c
+    LIBS ${_de_vis_libs}
+    LABELS unit gpu render
+    TIMEOUT 300)
+if(TARGET test_render_tonemap)
+    target_include_directories(test_render_tonemap PRIVATE "${DE_ROOT_DIR}/src")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tonemap_tmp")
+    target_compile_definitions(test_render_tonemap PRIVATE
+        "DE_TONEMAP_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
+        "DE_TONEMAP_TEST_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/tonemap_tmp\"")
+endif()

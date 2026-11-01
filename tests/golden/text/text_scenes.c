@@ -59,7 +59,10 @@ static de_result setup(text_scene *s, de_golden_ctx *ctx) {
     DeTransform *transform = de_entity_get(s->world, camera, bi.transform);
     *transform = de_transform_identity();
     transform->position = (de_dvec3){0, 0, 2};
-    ((DeCamera *)de_entity_get(s->world, camera, ids->camera))->exposure_ev100 = 0;
+    DeCamera *camera_settings = de_entity_get(s->world, camera, ids->camera);
+    camera_settings->exposure_ev100 = 0;
+    /* Preserve this pre-post-processing fixture's display transform. */
+    camera_settings->tonemapper = de_tonemapper_builtin(s->renderer, DE_TM_NONE);
     DE_TRY(de_text_attach(s->text, s->renderer, s->world));
     return DE_OK;
 }

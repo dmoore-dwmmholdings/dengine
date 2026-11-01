@@ -21,6 +21,16 @@ DE_EXTERN_C_BEGIN
 /** Longest locale tag de_asset_set_locale keeps, without the NUL. */
 #define DE__ASSET_LOCALE_MAX 35
 
+/** Intrusive main-thread observer. Storage belongs to the observer, which removes it before
+ * freeing that storage. Destruction detaches it before notification; callbacks only invalidate
+ * their asset-system references and must not register new observers. */
+typedef struct de__asset_destroy_observer {
+    de_asset_system *system;
+    struct de__asset_destroy_observer *next;
+    void (*notify)(void *user);
+    void *user;
+} de__asset_destroy_observer;
+
 struct de_asset_system {
     /* ---- DENG-138: system, manifest, locale ---------------------------------------------- */
     const de_allocator *alloc; /**< desc.allocator, or de_heap_allocator() */
@@ -89,7 +99,16 @@ struct de_asset_system {
      * the retired objects (hot_reload_internal.h). NULL unless desc.hot_reload is set in a
      * Debug or Dev build. Created by de_asset_system_create; read-only pointer afterwards. */
     struct de__asset_reload *reload;
+
+    /* DENG-163: owners of pinned assets can outlive the asset system during shutdown. */
+    de__asset_destroy_observer *destroy_observers;
 };
+
+/** Main thread; observer is zero-initialized and not already registered. No allocation. */
+void de__asset_destroy_observe(de_asset_system *s, de__asset_destroy_observer *observer,
+                               void (*notify)(void *user), void *user);
+/** Main thread; harmless after notification or on a zero observer. No allocation. */
+void de__asset_destroy_unobserve(de__asset_destroy_observer *observer);
 
 /** The current locale, or NULL when none is set. */
 static inline const char *de__asset_locale(const de_asset_system *s) {

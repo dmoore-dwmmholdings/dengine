@@ -373,6 +373,8 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         return;
     }
     camera->view = m.view;
+    /* Pre-S18 references use the original clamp transfer, independently of game defaults. */
+    camera->tonemapper = de_tonemapper_builtin(m.r, DE_TM_NONE);
 
     /* Fixed simulation/frame count: temporal effects and PCSS use this exact sequence. */
     if (m.r->frame_index > 48u) {

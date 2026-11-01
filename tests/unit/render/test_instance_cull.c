@@ -1560,7 +1560,7 @@ TEST(vis_frame, renderer_stage) {
             history = true;
             continue;
         }
-        if (strcmp(e->text, "output.basic") == 0)
+        if (strcmp(e->text, "post.tonemap") == 0)
             EXPECT_TRUE(history);
         at += (size_t)snprintf(got + at, sizeof got - at, "%s%s", at ? "," : "", e->text);
     }
@@ -1589,7 +1589,7 @@ TEST(vis_frame, renderer_stage) {
                  "lighting.cluster_bounds,"
                  "lighting.lights_clear,lighting.lights_prep,lighting.lights_count,"
                  "lighting.lights_scan,lighting.lights_fill,lighting.deferred,sss.clear,sss.tiles,"
-                 "sss.args,sss.blur_h,sss.blur_v,output.basic,"
+                 "sss.args,sss.blur_h,sss.blur_v,post.tonemap,"
                  "view.resolve");
     const de_render_stats *rs = de_renderer_stats(r);
     for (u32 i = 0; i < 4; ++i)

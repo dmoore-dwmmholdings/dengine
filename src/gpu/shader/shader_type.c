@@ -352,6 +352,17 @@ static const de__shader_obj *obj_of(de_asset_system *s, de_shader shader, de_res
     return o;
 }
 
+bool de__shader_loaded_version(de_asset_system *s, de_shader shader, u32 *version) {
+    if (version == NULL)
+        return false;
+    *version = 0;
+    de_result why;
+    if (obj_of(s, shader, &why) == NULL)
+        return false;
+    *version = de__slot_get(s, shader.id)->version;
+    return true;
+}
+
 de_result de__shader_blob(de_asset_system *s, de_shader shader, de_gpu_backend backend,
                           u32 permutation, const char *entry, de_gpu_shader_blob *out,
                           de__shader_reflection *refl) {

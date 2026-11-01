@@ -186,7 +186,9 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, bool pixel) {
                    .ortho_height = 270,
                    .fov_y = 1.2f,
                    .near_z = .01f,
-                   .exposure_ev100 = 0};
+                   .exposure_ev100 = 0,
+                   /* Retain the pre-S18 golden's display transform. */
+                   .tonemapper = de_tonemapper_builtin(s->renderer, DE_TM_NONE)};
     s->root = node(s, (de_entity){0}, 0, 0, pixel ? 480.f : 640.f, pixel ? 270.f : 360.f,
                    pixel ? background : surface, 0, 0);
     return s->error;

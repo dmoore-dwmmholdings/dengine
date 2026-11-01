@@ -152,6 +152,9 @@ typedef struct de__view_frame {
     de_rg_resource
         initial_color; /**< Original internal/output target before debug/post replacements. */
     de_gpu_format color_format;
+    /** PT and post effects set this when color replaces the scene-linear HDR input.
+     * Diagnostic replacements leave it false; tonemapping clears it after display conversion. */
+    bool color_is_scene_linear;
     de_post_settings post; /**< Immutable settings for this frame. */
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;

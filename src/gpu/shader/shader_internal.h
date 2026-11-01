@@ -97,6 +97,9 @@ de_result de__shader_blob(de_asset_system *s, de_shader shader, de_gpu_backend b
 
 /** The number of permutations of a loaded shader (0 when it is not loaded). Any thread. */
 u32 de__shader_permutation_count(de_asset_system *s, de_shader shader);
+/** Main-thread loaded-slot revision. False for stale, wrong-type or unloaded handles.
+ * Changes only when a successful load/reload publishes; no blob hashing or retained pointers. */
+bool de__shader_loaded_version(de_asset_system *s, de_shader shader, u32 *version);
 /** The defines of permutation `i` as written in the settings ("A=1;B"), or NULL. Any thread. */
 const char *de__shader_permutation_defines(de_asset_system *s, de_shader shader, u32 i);
 
