@@ -8,9 +8,9 @@ TEST(splash, reveal_hold_and_fade_are_bounded) {
     EXPECT_TRUE(start.alpha == 0.f);
     EXPECT_TRUE(start.text_alpha == 0.f);
     EXPECT_FALSE(start.done);
-    de__splash_sample hold = de__splash_at(900000000ull, false);
+    de__splash_sample hold = de__splash_at(2100000000ull, false);
     EXPECT_TRUE(hold.alpha == 1.f);
-    EXPECT_TRUE(hold.reveal == 1.f);
+    EXPECT_TRUE(hold.reveal > .69f && hold.reveal < .71f);
     EXPECT_TRUE(hold.text_alpha == 1.f);
     EXPECT_FALSE(hold.done);
     de__splash_sample end = de__splash_at(DE__SPLASH_DURATION_NS, false);
@@ -18,14 +18,14 @@ TEST(splash, reveal_hold_and_fade_are_bounded) {
     EXPECT_TRUE(end.alpha == 0.f);
     EXPECT_TRUE(end.background == 0.f);
     f32 previous = 0;
-    for (u64 t = 0; t <= 550000000ull; t += 1000000ull) {
+    for (u64 t = 0; t <= 300000000ull; t += 1000000ull) {
         de__splash_sample s = de__splash_at(t, false);
         EXPECT_TRUE(s.alpha >= previous && s.alpha <= 1);
         previous = s.alpha;
         EXPECT_TRUE(s.text_alpha >= 0 && s.text_alpha <= 1);
     }
     previous = 1;
-    for (u64 t = 1250000000ull; t <= DE__SPLASH_DURATION_NS; t += 1000000ull) {
+    for (u64 t = 2550000000ull; t <= DE__SPLASH_DURATION_NS; t += 1000000ull) {
         de__splash_sample s = de__splash_at(t, false);
         EXPECT_TRUE(s.alpha <= previous && s.alpha >= 0);
         previous = s.alpha;
@@ -35,7 +35,7 @@ TEST(splash, reveal_hold_and_fade_are_bounded) {
 TEST(splash, still_mode_has_no_reveal_motion) {
     de__splash_sample s = de__splash_at(0, true);
     EXPECT_TRUE(s.alpha == 1.f);
-    EXPECT_TRUE(s.reveal == 1.f);
+    EXPECT_TRUE(s.reveal == .64f);
     EXPECT_TRUE(s.settle == 1.f);
     EXPECT_TRUE(s.text_alpha == 1.f);
     EXPECT_FALSE(s.done);

@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     de_gpu_device *d = NULL;
-    de_gpu_pipeline pipe = {0};
+    de__splash_gpu gpu = {0};
     de_gpu_texture target = {0};
     de_gpu_buffer readback = {0};
     de_gpu_fence fence = {0};
@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     de_result r = de_gpu_device_create(&(de_gpu_device_desc){0}, &d);
     if (r != DE_OK)
         goto cleanup;
-    r = de__splash_pipeline(d, de_heap_allocator(), &pipe);
+    r = de__splash_create(d, de_heap_allocator(), &gpu);
     if (r != DE_OK)
         goto cleanup;
     target = de_gpu_texture_create(
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         r = DE_ERR_OUT_OF_MEMORY;
         goto cleanup;
     }
-    for (u32 frame = 0; frame <= 50; ++frame) {
+    for (u32 frame = 0; frame <= 90; ++frame) {
         de__splash_sample sample = de__splash_at((u64)frame * 1000000000ull / 30, false);
         de_gpu_cmd *cmd = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "Splash preview");
         if (!cmd) {
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
                                   .before = frame ? DE_ACCESS_COPY_SRC : DE_ACCESS_NONE,
                                   .after = DE_ACCESS_RENDER_TARGET};
         de_gpu_cmd_barriers(cmd, &barrier, 1);
-        de__splash_record(cmd, target, pipe, WIDTH, HEIGHT, sample);
+        de__splash_record(cmd, target, &gpu, WIDTH, HEIGHT, sample);
         barrier.before = DE_ACCESS_RENDER_TARGET;
         barrier.after = DE_ACCESS_COPY_SRC;
         de_gpu_cmd_barriers(cmd, &barrier, 1);
@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
             nonblack += pixels[i * 4] || pixels[i * 4 + 1] || pixels[i * 4 + 2];
         }
         if ((frame == 0 && bright != 0) ||
-            (frame == 27 && (bright < 100 || bright > WIDTH * HEIGHT / 8)) ||
-            (frame == 50 && nonblack != 0)) {
+            (frame == 54 && (bright < 100 || bright > WIDTH * HEIGHT / 8)) ||
+            (frame == 90 && nonblack != 0)) {
             fprintf(stderr, "pixel oracle failed frame%u bright%u nonblack%u\n", frame, bright,
                     nonblack);
             r = DE_ERR_INTERNAL;
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
             goto cleanup;
         }
     }
-    puts("51 native GPU frames; initial/hold/final pixel checks passed");
+    puts("91 native GPU frames; initial/hold/final pixel checks passed");
 cleanup:
     free(pixels);
     if (d) {
@@ -106,8 +106,7 @@ cleanup:
             de_gpu_buffer_destroy(d, readback);
         if (DE_HANDLE_VALID(target))
             de_gpu_texture_destroy(d, target);
-        if (DE_HANDLE_VALID(pipe))
-            de_gpu_pipeline_destroy(d, pipe);
+        de__splash_destroy(d, &gpu);
         de_gpu_device_destroy(d);
     }
     if (r != DE_OK) {

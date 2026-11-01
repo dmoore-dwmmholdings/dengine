@@ -165,3 +165,9 @@ endif()
 
 # DENG-703: common engine/game startup splash, with a headless/no-render no-op.
 target_sources(de_host PRIVATE splash.c splash.h)
+
+# DENG-703: decode the fixed embedded brand atlas once, using the existing pinned decoder.
+if(DE_HAS_RENDER)
+    target_link_libraries(de_host PRIVATE de_tp_stb)
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_stb)
+endif()
