@@ -171,3 +171,9 @@ if(DE_HAS_RENDER)
     target_link_libraries(de_host PRIVATE de_tp_stb)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_stb)
 endif()
+
+# DENG-709: read-only cooked skeleton sampling; no renderer or preview world required.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    target_sources(de_host PRIVATE editor/editor_animation.c
+        editor/editor_animation_pose.c editor/editor_animation_pose.h)
+endif()

@@ -408,3 +408,12 @@ if(DE_HAS_RENDER AND TARGET de_tp_stb)
     target_include_directories(de_splash_preview PRIVATE "${DE_ROOT_DIR}/src")
     target_link_libraries(de_splash_preview PRIVATE de_host de_tp_stb de_build_flags)
 endif()
+
+# DENG-709: actual compressed sampling, affine hierarchy and bounded request storage.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_animation_preview SOURCES test_animation_preview.c
+        "${DE_ROOT_DIR}/src/host/editor/editor_animation_pose.c"
+        LIBS de_anim de_test_support de_tp_dide_protocol)
+    target_include_directories(test_editor_animation_preview PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_animation_preview PRIVATE DE_ANIM_HAS_COOKER=0)
+endif()

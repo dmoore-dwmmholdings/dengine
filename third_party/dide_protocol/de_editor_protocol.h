@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.6"
-#define DE_EP_SCHEMA_HASH "883b5ae1001781a5"
+#define DE_EP_PROTOCOL_VERSION "1.7"
+#define DE_EP_SCHEMA_HASH "fca25a6f4c74bdd7"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -93,6 +93,11 @@ typedef enum de_ep_world_mode {
 const char *de_ep_world_mode_name(de_ep_world_mode v);
 bool de_ep_world_mode_parse(de_ep_str s, de_ep_world_mode *out);
 
+typedef struct de_ep_animation_joint de_ep_animation_joint;
+typedef struct de_ep_animation_joint_frame de_ep_animation_joint_frame;
+typedef struct de_ep_animation_metadata de_ep_animation_metadata;
+typedef struct de_ep_animation_preview de_ep_animation_preview;
+typedef struct de_ep_animation_preview_params de_ep_animation_preview_params;
 typedef struct de_ep_archetype de_ep_archetype;
 typedef struct de_ep_archetype_list de_ep_archetype_list;
 typedef struct de_ep_asset_event de_ep_asset_event;
@@ -419,6 +424,11 @@ typedef struct de_ep_list_asset_type_info {
     uint32_t count;
 } de_ep_list_asset_type_info;
 
+typedef struct de_ep_list_animation_joint {
+    de_ep_animation_joint *items;
+    uint32_t count;
+} de_ep_list_animation_joint;
+
 typedef struct de_ep_list_model_attribute {
     de_ep_model_attribute *items;
     uint32_t count;
@@ -433,6 +443,51 @@ typedef struct de_ep_list_debug_draw_category {
     de_ep_debug_draw_category *items;
     uint32_t count;
 } de_ep_list_debug_draw_category;
+
+typedef struct de_ep_list_animation_joint_frame {
+    de_ep_animation_joint_frame *items;
+    uint32_t count;
+} de_ep_list_animation_joint_frame;
+
+struct de_ep_animation_joint {
+    de_ep_str name;
+    bool has_parent;
+    uint32_t parent; /* Parent-first skeleton order; absent for a root. */
+};
+
+struct de_ep_animation_joint_frame {
+    de_ep_list_f32 matrix; /* Exactly12 finite values: column-major3x4 model-space affine, engine Z-up metres. Includes authored root motion; no extraction or IK. */
+};
+
+struct de_ep_animation_metadata {
+    de_ep_list_animation_joint joints; /* 1..4096 joints; each name at most4096 UTF-8 bytes, total names at most1MiB. */
+    de_ep_list_animation_joint_frame rest_pose; /* Model-space rest transforms in the same order; framing reference, not a sampled bind-pose claim. */
+};
+
+struct de_ep_animation_preview {
+    uint32_t clip_version;
+    uint32_t skeleton_version;
+    de_ep_str skeleton; /* Canonical skeleton ID where available, else its explicit hexadecimal asset hash. */
+    float duration_seconds;
+    float time_seconds;
+    float sample_rate;
+    uint32_t tracks;
+    bool loopable; /* The cook's matching-endpoint loop flag; the UI may choose its own preview looping. */
+    bool has_metadata;
+    de_ep_animation_metadata metadata; /* Required initially or whenever either version differs from the request. */
+    de_ep_list_animation_joint_frame pose; /* Sampled transforms matching metadata joint order, returned atomically with its version tokens. */
+};
+
+struct de_ep_animation_preview_params {
+    de_ep_str id; /* Canonical anim_clip ID. */
+    bool has_parent;
+    de_ep_str parent; /* Root model ID for an uncooked generated child; id must begin parent followed by #. */
+    float time_seconds; /* Finite time; clamped to the actual cooked duration. No playback or world state is changed. */
+    bool has_clip_version;
+    uint32_t clip_version;
+    bool has_skeleton_version;
+    uint32_t skeleton_version; /* Send both known tokens to omit unchanged metadata; omit both initially. */
+};
 
 struct de_ep_archetype {
     de_ep_list_str components;
@@ -1410,6 +1465,16 @@ struct de_ep_world_delta {
     de_ep_list_field_change changed;
 };
 
+void de_ep_write_animation_joint(mpack_writer_t *w, const de_ep_animation_joint *v);
+void de_ep_read_animation_joint(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_joint *out);
+void de_ep_write_animation_joint_frame(mpack_writer_t *w, const de_ep_animation_joint_frame *v);
+void de_ep_read_animation_joint_frame(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_joint_frame *out);
+void de_ep_write_animation_metadata(mpack_writer_t *w, const de_ep_animation_metadata *v);
+void de_ep_read_animation_metadata(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_metadata *out);
+void de_ep_write_animation_preview(mpack_writer_t *w, const de_ep_animation_preview *v);
+void de_ep_read_animation_preview(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview *out);
+void de_ep_write_animation_preview_params(mpack_writer_t *w, const de_ep_animation_preview_params *v);
+void de_ep_read_animation_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview_params *out);
 void de_ep_write_archetype(mpack_writer_t *w, const de_ep_archetype *v);
 void de_ep_read_archetype(mpack_reader_t *r, de_ep_arena *a, de_ep_archetype *out);
 void de_ep_write_archetype_list(mpack_writer_t *w, const de_ep_archetype_list *v);
@@ -1703,6 +1768,7 @@ void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta
 
 typedef enum de_ep_method {
     DE_EP_METHOD_UNKNOWN = 0,
+    DE_EP_METHOD_ASSET_ANIMATION_PREVIEW,
     DE_EP_METHOD_ASSET_DEPENDENCIES,
     DE_EP_METHOD_ASSET_FONT_ATLAS,
     DE_EP_METHOD_ASSET_IMPORTER_SCHEMA,
@@ -1841,6 +1907,8 @@ void de_ep_write_notification_end(mpack_writer_t *w);
 void de_ep_write_request_begin(mpack_writer_t *w, uint64_t id, const char *method);
 void de_ep_write_request_end(mpack_writer_t *w);
 
+bool de_ep_read_params_asset_animation_preview(const de_ep_request *req, de_ep_arena *a, de_ep_animation_preview_params *out);
+void de_ep_write_response_asset_animation_preview(mpack_writer_t *w, uint64_t id, const de_ep_animation_preview *result);
 bool de_ep_read_params_asset_dependencies(const de_ep_request *req, de_ep_arena *a, de_ep_asset_id_params *out);
 void de_ep_write_response_asset_dependencies(mpack_writer_t *w, uint64_t id, const de_ep_asset_ids *result);
 bool de_ep_read_params_asset_font_atlas(const de_ep_request *req, de_ep_arena *a, de_ep_font_atlas_params *out);

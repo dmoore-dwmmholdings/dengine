@@ -31,7 +31,7 @@ typedef void (*de__ed_tick_fn)(de__editor *ed);
 typedef void (*de__ed_reset_fn)(de__editor *ed);
 
 #define DE__ED_MAX_TICKS 16u
-#define DE__ED_MAX_CAPS  8u
+#define DE__ED_MAX_CAPS  16u
 
 struct de__editor {
     struct de__host *h;
@@ -206,6 +206,9 @@ void de__ed_world_register(de__editor *ed);
 void de__ed_edit_register(de__editor *ed);
 void de__ed_scene_register(de__editor *ed);
 void de__ed_assets_register(de__editor *ed);
+void de__ed_animation_register(de__editor *ed);
+void de__ed_animation_invalidate(de__editor *ed);
+void de__ed_animation_shutdown(de__editor *ed);
 void de__ed_logs_register(de__editor *ed);
 void de__ed_views_register(de__editor *ed);
 void de__ed_debugdraw_register(de__editor *ed);

@@ -199,6 +199,291 @@ bool de_ep_world_mode_parse(de_ep_str s, de_ep_world_mode *out) {
     return false;
 }
 
+void de_ep_write_animation_joint(mpack_writer_t *w, const de_ep_animation_joint *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_parent ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    if (v->has_parent) {
+        mpack_write_cstr(w, "parent");
+        mpack_write_u32(w, v->parent);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_animation_joint(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_joint *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "parent")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_parent = true;
+            out->parent = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_animation_joint_frame(mpack_writer_t *w, const de_ep_animation_joint_frame *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "matrix");
+    mpack_start_array(w, v->matrix.count);
+    for (uint32_t i_1 = 0; i_1 < v->matrix.count; ++i_1) {
+        mpack_write_float(w, v->matrix.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_animation_joint_frame(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_joint_frame *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "matrix")) {
+            seen |= (uint64_t)1 << 0;
+            out->matrix.count = mpack_expect_array(r);
+            out->matrix.items = (float *)de_ep_arena_array(r, a, out->matrix.count, sizeof(*out->matrix.items));
+            for (uint32_t i_3 = 0; out->matrix.items && i_3 < out->matrix.count; ++i_3)
+            {
+                out->matrix.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_animation_metadata(mpack_writer_t *w, const de_ep_animation_metadata *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "joints");
+    mpack_start_array(w, v->joints.count);
+    for (uint32_t i_1 = 0; i_1 < v->joints.count; ++i_1) {
+        de_ep_write_animation_joint(w, &v->joints.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "restPose");
+    mpack_start_array(w, v->rest_pose.count);
+    for (uint32_t i_1 = 0; i_1 < v->rest_pose.count; ++i_1) {
+        de_ep_write_animation_joint_frame(w, &v->rest_pose.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_animation_metadata(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_metadata *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "joints")) {
+            seen |= (uint64_t)1 << 0;
+            out->joints.count = mpack_expect_array(r);
+            out->joints.items = (de_ep_animation_joint *)de_ep_arena_array(r, a, out->joints.count, sizeof(*out->joints.items));
+            for (uint32_t i_3 = 0; out->joints.items && i_3 < out->joints.count; ++i_3)
+            {
+                de_ep_read_animation_joint(r, a, &out->joints.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "restPose")) {
+            seen |= (uint64_t)1 << 1;
+            out->rest_pose.count = mpack_expect_array(r);
+            out->rest_pose.items = (de_ep_animation_joint_frame *)de_ep_arena_array(r, a, out->rest_pose.count, sizeof(*out->rest_pose.items));
+            for (uint32_t i_3 = 0; out->rest_pose.items && i_3 < out->rest_pose.count; ++i_3)
+            {
+                de_ep_read_animation_joint_frame(r, a, &out->rest_pose.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_animation_preview(mpack_writer_t *w, const de_ep_animation_preview *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_metadata ? 1u : 0u;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "clipVersion");
+    mpack_write_u32(w, v->clip_version);
+    mpack_write_cstr(w, "skeletonVersion");
+    mpack_write_u32(w, v->skeleton_version);
+    mpack_write_cstr(w, "skeleton");
+    de_ep_write_str(w, v->skeleton);
+    mpack_write_cstr(w, "durationSeconds");
+    mpack_write_float(w, v->duration_seconds);
+    mpack_write_cstr(w, "timeSeconds");
+    mpack_write_float(w, v->time_seconds);
+    mpack_write_cstr(w, "sampleRate");
+    mpack_write_float(w, v->sample_rate);
+    mpack_write_cstr(w, "tracks");
+    mpack_write_u32(w, v->tracks);
+    mpack_write_cstr(w, "loopable");
+    mpack_write_bool(w, v->loopable);
+    if (v->has_metadata) {
+        mpack_write_cstr(w, "metadata");
+        de_ep_write_animation_metadata(w, &v->metadata);
+    }
+    mpack_write_cstr(w, "pose");
+    mpack_start_array(w, v->pose.count);
+    for (uint32_t i_1 = 0; i_1 < v->pose.count; ++i_1) {
+        de_ep_write_animation_joint_frame(w, &v->pose.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_animation_preview(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "clipVersion")) {
+            seen |= (uint64_t)1 << 0;
+            out->clip_version = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "skeletonVersion")) {
+            seen |= (uint64_t)1 << 1;
+            out->skeleton_version = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "skeleton")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->skeleton);
+        } else if (de_ep_str_eq(k, "durationSeconds")) {
+            seen |= (uint64_t)1 << 3;
+            out->duration_seconds = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "timeSeconds")) {
+            seen |= (uint64_t)1 << 4;
+            out->time_seconds = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "sampleRate")) {
+            seen |= (uint64_t)1 << 5;
+            out->sample_rate = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "tracks")) {
+            seen |= (uint64_t)1 << 6;
+            out->tracks = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "loopable")) {
+            seen |= (uint64_t)1 << 7;
+            out->loopable = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "metadata")) {
+            seen |= (uint64_t)1 << 8;
+            out->has_metadata = true;
+            de_ep_read_animation_metadata(r, a, &out->metadata);
+        } else if (de_ep_str_eq(k, "pose")) {
+            seen |= (uint64_t)1 << 9;
+            out->pose.count = mpack_expect_array(r);
+            out->pose.items = (de_ep_animation_joint_frame *)de_ep_arena_array(r, a, out->pose.count, sizeof(*out->pose.items));
+            for (uint32_t i_3 = 0; out->pose.items && i_3 < out->pose.count; ++i_3)
+            {
+                de_ep_read_animation_joint_frame(r, a, &out->pose.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(767)) != UINT64_C(767))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_animation_preview_params(mpack_writer_t *w, const de_ep_animation_preview_params *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_parent ? 1u : 0u;
+    ++n;
+    n += v->has_clip_version ? 1u : 0u;
+    n += v->has_skeleton_version ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "id");
+    de_ep_write_str(w, v->id);
+    if (v->has_parent) {
+        mpack_write_cstr(w, "parent");
+        de_ep_write_str(w, v->parent);
+    }
+    mpack_write_cstr(w, "timeSeconds");
+    mpack_write_float(w, v->time_seconds);
+    if (v->has_clip_version) {
+        mpack_write_cstr(w, "clipVersion");
+        mpack_write_u32(w, v->clip_version);
+    }
+    if (v->has_skeleton_version) {
+        mpack_write_cstr(w, "skeletonVersion");
+        mpack_write_u32(w, v->skeleton_version);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_animation_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_animation_preview_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "id")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->id);
+        } else if (de_ep_str_eq(k, "parent")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_parent = true;
+            de_ep_read_str(r, &out->parent);
+        } else if (de_ep_str_eq(k, "timeSeconds")) {
+            seen |= (uint64_t)1 << 2;
+            out->time_seconds = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "clipVersion")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_clip_version = true;
+            out->clip_version = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "skeletonVersion")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_skeleton_version = true;
+            out->skeleton_version = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(5)) != UINT64_C(5))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_archetype(mpack_writer_t *w, const de_ep_archetype *v) {
     uint32_t n = 0;
     ++n;
@@ -7369,6 +7654,7 @@ void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta
 
 static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "",
+    "asset.animationPreview",
     "asset.dependencies",
     "asset.fontAtlas",
     "asset.importerSchema",
@@ -7461,6 +7747,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
 
 static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
+    "assets.animationPreview",
     NULL,
     "assets.fontAtlas",
     NULL,
@@ -7649,6 +7936,19 @@ static void de_ep__params_reader(const de_ep_request *req, mpack_reader_t *r) {
         mpack_reader_init_data(r, (const char *)empty_map, 1);
     else
         mpack_reader_init_data(r, req->params.ptr, req->params.len);
+}
+
+bool de_ep_read_params_asset_animation_preview(const de_ep_request *req, de_ep_arena *a, de_ep_animation_preview_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_animation_preview_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_asset_animation_preview(mpack_writer_t *w, uint64_t id, const de_ep_animation_preview *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_animation_preview(w, result);
+    de_ep_write_result_end(w);
 }
 
 bool de_ep_read_params_asset_dependencies(const de_ep_request *req, de_ep_arena *a, de_ep_asset_id_params *out) {

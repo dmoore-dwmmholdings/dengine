@@ -154,6 +154,7 @@ static void on_status(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
 static void on_reimport(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                         mpack_writer_t *w) {
     DE__ED_PARAMS(asset_reimport, de_ep_asset_ids, q);
+    de__ed_animation_invalidate(ed);
 #if DE_HAS_RENDER
     de__ed_preview_invalidate();
 #endif
@@ -870,6 +871,7 @@ static void tick(de__editor *ed) {
             kind = DE_EP_ASSET_EVENT_KIND_FAILED;
             break;
         case DE_ASSET_EV_RELOADED:
+            de__ed_animation_invalidate(ed);
 #if DE_HAS_RENDER
             de__ed_preview_invalidate();
 #endif

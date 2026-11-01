@@ -99,6 +99,8 @@ static void reload_send(de__editor *ed, mpack_writer_t *writer) {
 
 void de__ed_game_reloading(de__host *h) {
     de__editor *ed = h ? h->editor : NULL;
+    if (ed)
+        de__ed_animation_invalidate(ed);
     if (!ed || !ed->connected || !ed->authed || !ed->reload_outcomes)
         return;
     const de_ep_reloading data = {.library = de_ep_cstr(h->hot_reload.file_name)};
