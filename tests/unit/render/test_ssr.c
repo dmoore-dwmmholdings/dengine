@@ -572,8 +572,16 @@ static void read_texture(sfx *f, de_gpu_texture texture, u32 before, u32 bytes_p
     de_gpu_buffer_destroy(f->dev, rb);
 }
 static void mirror_reference(sfx *f, const u16 *first);
+/* CPU ray references, exposure ratios and stochastic variance below compare identical raster
+ * sample locations. Keep that oracle independent of TAA's additional subpixel sampling. The
+ * other history/cut/resize/pipelining cases retain AUTO and exercise temporal AA integration. */
+static void fixed_sample_grid(sfx *f) {
+    f->settings.upscaler = DE_UPSCALE_NONE;
+    de_view_set_settings(f->r, f->view, &f->settings);
+}
 static void mirror_smoke(sfx *f, de_gpu_backend backend) {
     mirror_scene(f, backend, 0.01f, 1);
+    fixed_sample_grid(f);
     view_frame(f);
     de__ssr_info info;
     ASSERT_TRUE(de__ssr_view_info(f->r->ssr, f->view, &info));
@@ -781,6 +789,7 @@ static de__ssr_info current_info(sfx *f) {
 }
 static void rough_converges(sfx *f, de_gpu_backend backend) {
     mirror_scene(f, backend, 0.25f, 2000);
+    fixed_sample_grid(f);
     size_t count = (size_t)f->width * f->height;
     u16 *image = malloc(count * 8), *previous = calloc(count, 8);
     f32 *moments = malloc(count * 16);
@@ -898,6 +907,7 @@ static void confidence_converges(sfx *f, de_gpu_backend backend) {
 }
 static void exposure_correct(sfx *f, de_gpu_backend backend) {
     mirror_scene(f, backend, 0.01f, 10);
+    fixed_sample_grid(f);
     g_mat[0].standard.metallic = 0; // nonwhite dielectric, response must be applied once
     view_frame(f);
     size_t count = (size_t)f->width * f->height;
@@ -1017,6 +1027,7 @@ SSR_BACKEND_TESTS(d3d12, DE_GPU_D3D12)
 
 static void offscreen_zero(sfx *f, de_gpu_backend backend) {
     mirror_scene(f, backend, 0.01f, 1);
+    fixed_sample_grid(f);
     f->scene.f.instances.count = 1; // only floor: reflected rays leave the view
     ASSERT_EQ(de_cvar_set(de_cvar_find("r.ambient_fallback"), "2"), DE_OK);
     f->settings.reflections = DE_QUALITY_OFF;

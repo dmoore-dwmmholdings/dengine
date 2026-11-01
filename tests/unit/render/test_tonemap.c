@@ -351,7 +351,9 @@ static void open_view(tmfx *f, de_tonemapper mapper, const f32 params[8], view_i
     de_renderer_attach(f->r, f->world);
     const de_cvar pipelined = de_cvar_find("r.pipelined");
     ASSERT_EQ(de_cvar_set(pipelined, "0"), DE_OK);
-    const de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_HIGH);
+    de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_HIGH);
+    /* These mapper/reload oracles evaluate exact source HDR values, without a spatial filter. */
+    settings.upscaler = DE_UPSCALE_NONE;
     de_renderer_set_settings(f->r, &settings);
     f->target = de_gpu_texture_create(
         f->dev, &(de_gpu_texture_desc){.format = DE_FMT_RGBA16_FLOAT,
@@ -481,6 +483,51 @@ static void custom_roundtrip(tmfx *f, bool assets_first) {
         close_assets(f);
         EXPECT_FALSE(de_tonemapper_register(f->r, "after-shutdown", shader, 0).id);
     }
+}
+typedef struct tone_order_probe {
+    de_view view;
+    u32 temporal, mapper, pass_count;
+} tone_order_probe;
+static void observe_tone_order(de__view_frame *frame, void *user) {
+    tone_order_probe *probe = user;
+    if (frame->view.id != probe->view.id)
+        return;
+    probe->temporal = probe->mapper = UINT32_MAX;
+    probe->pass_count = frame->graph->pass_count;
+    for (u32 i = 0; i < probe->pass_count; ++i) {
+        if (!strcmp(frame->graph->passes[i]->name, "post.taa"))
+            probe->temporal = i;
+        if (!strcmp(frame->graph->passes[i]->name, "post.tonemap"))
+            probe->mapper = i;
+    }
+}
+TEST_F(tonemap, temporal_reconstruction_precedes_nonlinear_mapper, tmfx) {
+    open_fixture(f, false);
+    const f32 params[8] = {0};
+    view_input state;
+    open_view(f, de_tonemapper_builtin(f->r, DE_TM_REINHARD), params, &state);
+    de_render_settings settings = de_renderer_get_settings(f->r);
+    settings.upscaler = DE_UPSCALE_TAA;
+    de_view_set_settings(f->r, state.view, &settings);
+    tone_order_probe probe = {.view = state.view, .temporal = UINT32_MAX, .mapper = UINT32_MAX};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, 71, "test.tone_order",
+                                      observe_tone_order, &probe),
+              DE_OK);
+    f32(*source)[4] = de_gpu_buffer_map(f->dev, f->upload);
+    for (u32 i = 0; i < 16; ++i) {
+        source[i][0] = source[i][1] = source[i][2] = (i & 1u) ? 16.f : 0.f;
+        source[i][3] = 1;
+    }
+    f32 pixels[16][4];
+    render_view(f, pixels);
+    /* Reinhard is concave here: filtering HDR before mapping gives a bright dark-side edge.
+     * Filtering the already-clamped black/white output gives a much darker edge instead.
+     * This distinguishes stage order without reproducing the reconstruction kernel. */
+    EXPECT_TRUE(pixels[6][0] > .7f);
+    EXPECT_TRUE(pixels[6][0] <= 1.f);
+    EXPECT_LT(probe.temporal, probe.mapper);
+    EXPECT_LT(probe.mapper, probe.pass_count);
+    de__view_unregister_stage(f->r, observe_tone_order, &probe);
 }
 TEST_F(tonemap, custom_registration_reload_and_retained_pipeline, tmfx) {
     custom_roundtrip(f, false);

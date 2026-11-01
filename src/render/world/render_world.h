@@ -215,6 +215,7 @@ typedef struct de__render_world_frame {
     u32 view_capacity, inst_capacity, light_capacity;
     u64 inst_synced, light_synced; /**< the last frame whose slot changes it holds (0 = none) */
     de_atomic_u32 state;
+    f32 delta_seconds; /**< Extract's frame interval, immutable for temporal GPU consumers. */
 } de__render_world_frame;
 
 /* ---------- Slot pools (render_world.c) ---------- */

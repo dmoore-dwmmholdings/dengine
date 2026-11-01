@@ -156,6 +156,7 @@ static void sys_views(de_system_ctx *ctx) {
     if (ctx->world != rw->world)
         return;
     de__render_world_frame *f = de__rw_begin(rw);
+    f->delta_seconds = ctx->dt;
     main_cam m = {0};
     de_query_each(ctx->world, ctx->queries[0], find_main, &m);
     de__rw_update_origin(rw, m.found, m.pos);

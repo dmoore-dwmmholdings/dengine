@@ -1,4 +1,5 @@
 module ssr_common;
+__exported import "../denoise/history";
 __exported import bindless;
 __exported import "../scene/scene_types";
 __exported import "../visbuffer/gbuffer";
@@ -29,7 +30,10 @@ public SurfaceData ssr_surface(SsrParams pc, uint2 pixel) {
         gb_decode(de_tex2d(pc.gb0).Load(p), de_tex2d(pc.gb1).Load(p), de_tex2d(pc.gb2).Load(p)));
 }
 public float2 ssr_previous_uv(float2 uv, float2 motion) {
-    return uv + motion * float2(-0.5, 0.5); // motion is NDC current-minus-previous, not UV
+    return denoise_previous_uv(uv, motion);
+}
+public float2 ssr_previous_uv(DeSceneConstants sc, float2 uv, float2 motion) {
+    return denoise_previous_raster_uv(uv, motion, sc.jitter, sc.viewport.xy);
 }
 public float4 ssr_history_load(uint index, float2 uv, uint2 size) {
     float2 p = uv * float2(size) - 0.5;

@@ -8,7 +8,7 @@ void cs_prepare(uint3 id:SV_DispatchThreadID,uniform ReblurPush push){
     float4 raw=de_tex2d(p.raw).Load(int3(id.xy,0));uint2 hit_pixel=id.xy;
     if(p.kind==2&&p.scale>1&&s.material.roughness>=.05&&p.rays!=0){float nearest=-1;for(uint y=0;y<p.scale;++y)for(uint x=0;x<p.scale;++x){uint2 q=min((id.xy/p.scale)*p.scale+uint2(x,y),uint2(p.width-1,p.height-1));DeRtRay ray=de_robuffer<DeRtRay>(p.rays)[q.y*p.width+q.x];float z=de_tex2d(p.depth).Load(int3(q,0)).x;if(ray.direction.w>0&&z>nearest){nearest=z;hit_pixel=q;}}}
     float hit=de_tex2d(p.distance).Load(int3(hit_pixel,0)).x;float2 uv=(float2(id.xy)+.5)/float2(p.width,p.height),motion=de_tex2d(p.motion).Load(int3(id.xy,0)).xy;
-    if(p.kind==2&&hit>0&&s.valid){float2 previous=reblur_virtual_uv(sc,pos,s.material.normal,hit,uv+float2(-.5,.5)*motion,s.material.roughness);motion=(uv-previous)*float2(2,-2);}
+    if(p.kind==2&&hit>0&&s.valid){float2 unjittered_uv=uv+sc.jitter.xy/max(sc.viewport.xy,1);float2 previous=reblur_virtual_uv(sc,pos,s.material.normal,hit,denoise_previous_uv(unjittered_uv,motion),s.material.roughness);motion=(unjittered_uv-previous)*float2(2,-2);}
     de_rwtex2d(p.output)[id.xy]=float4(raw.rgb/factor,raw.a);de_rwtex2d(p.factor)[id.xy]=float4(factor,raw.a);de_rwtex2d(p.position)[id.xy]=float4(pos,1);de_rwtex2d(p.out_motion)[id.xy]=float4(motion,0,0);
     de_rwtex2d(p.out_hit)[id.xy]=float4(hit,0,0,0);
     float view_depth=abs(dot(sc.view[2],float4(pos,1))),normalized=hit/max(hit+view_depth,.001);float radius=p.kind==0?1+3*normalized:(s.material.roughness<.05?0:clamp(s.material.roughness*s.material.roughness*normalized*16,1.0,4.0));de_rwtex2d(p.radius)[id.xy]=float4(radius,0,0,0);de_rwtex2d(p.alpha)[id.xy]=float4(p.kind==0?.05:reblur_roughness_alpha(s.material.roughness),0,0,0);

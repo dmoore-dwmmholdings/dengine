@@ -126,11 +126,12 @@ static bool camera_cut(de__vis_shared *s, occ_view *v, const de__vis_context *vc
                           vc->origin.y + (f64)vc->camera_position.y,
                           vc->origin.z + (f64)vc->camera_position.z};
     const de_vec3 fwd = forward_of(&vc->view_matrix);
+    const de_mat4 *projection = vc->temporal_enabled ? &vc->unjittered_proj : &vc->proj;
     bool cut = !v->has_camera;
     if (v->has_camera) {
         /* Reprojection/depth history cannot cross projection modes, FOV, aspect or
          * clip-plane changes, even when the camera did not move. Keep this per view. */
-        if (memcmp(v->projection.m, vc->proj.m, sizeof v->projection.m) != 0)
+        if (memcmp(v->projection.m, projection->m, sizeof v->projection.m) != 0)
             cut = true;
         const f64 dx = cam.x - v->camera.x, dy = cam.y - v->camera.y, dz = cam.z - v->camera.z;
         const f64 limit =
@@ -143,7 +144,7 @@ static bool camera_cut(de__vis_shared *s, occ_view *v, const de__vis_context *vc
     v->has_camera = true;
     v->camera = cam;
     v->forward = fwd;
-    v->projection = vc->proj;
+    v->projection = *projection;
     return cut;
 }
 

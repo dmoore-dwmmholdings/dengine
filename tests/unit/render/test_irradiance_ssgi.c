@@ -1876,6 +1876,9 @@ static void before_forward_hook(de_rg *g, de_view view, void *user) {
 }
 static void forward_preserved(gifx *f, de_gpu_backend backend) {
     screen_scene(f, backend, 0.01f, 1);
+    /* This test subtracts pixel-identical opaque/transparent coverage across frames. */
+    f->settings.upscaler = DE_UPSCALE_NONE;
+    de_view_set_settings(f->r, f->view, &f->settings);
     u32 mat = material_add(1, 0.01f, 0, 1);
     g_mat[mat - 1].alpha_mode = DE_COOKED_ALPHA_BLEND;
     g_mat[mat - 1].standard.alpha_mode = DE_COOKED_ALPHA_BLEND;
@@ -1939,6 +1942,9 @@ TEST_F(gi, ssgi_forward_preserves_fallback_d3d12, gifx) {
 
 static void ssgi_material_exposure(gifx *f, de_gpu_backend backend) {
     screen_scene(f, backend, 1, 10);
+    /* Isolate material response/exposure at fixed raster sample positions. */
+    f->settings.upscaler = DE_UPSCALE_NONE;
+    de_view_set_settings(f->r, f->view, &f->settings);
     room_frame(f);
     // First frame has no scene history: zero-coverage history must remain zero energy when
     // the next frame first gains ray hits (the temporal clipping regression).

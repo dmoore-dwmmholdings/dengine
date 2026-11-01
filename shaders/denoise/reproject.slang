@@ -8,7 +8,7 @@ struct DnPush {uint params,entry;};
 void cs_reproject(uint3 id:SV_DispatchThreadID,uniform DnPush pc){
     DenoiseParams p=dn_load(pc.params,pc.entry);if(id.x>=p.width||id.y>=p.height)return;int2 xy=int2(id.xy);
     float2 motion=de_tex2d(p.motion).Load(int3(xy,0)).xy;
-    float2 at=denoise_previous_uv((float2(xy)+.5)/float2(p.width,p.height),motion)*float2(p.width,p.height)-.5;
+    float2 at=(denoise_previous_uv((float2(xy)+.5)/float2(p.width,p.height),motion)+p.raster_history_uv_offset)*float2(p.width,p.height)-.5;
     int2 base=int2(floor(at));float2 f=frac(at);float weight=0,age=0;float4 color=0;float2 moments=0;
     DeGbSurface surface=dn_surface(p,p.normal,xy);float z=de_tex2d(p.depth).Load(int3(xy,0)).x;float3 position=dn_position(p,xy,z,false);
     float2 material=de_tex2d(p.material).Load(int3(xy,0)).xy;

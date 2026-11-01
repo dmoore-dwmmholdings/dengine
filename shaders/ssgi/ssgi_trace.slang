@@ -39,7 +39,7 @@ void cs_ssgi_trace(uint3 id:SV_DispatchThreadID,uniform SsrParams pc) {
         SurfaceData hs=ssr_surface(pc,hp);
         if(dot(hs.normal,-direction)<.05)continue;
         float3 hit_position=ssr_position(sc,hit.uv,hit.depth);
-        float2 previous=ssr_previous_uv(hit.uv,de_tex2d(pc.motion).Load(int3(hp,0)).xy);
+        float2 previous=ssr_previous_uv(sc,hit.uv,de_tex2d(pc.motion).Load(int3(hp,0)).xy);
         if(!ssr_history_valid(pc,sc,previous,hit_position,hs.normal))continue;
         float exposure=max(sc.pre_exposure,1e-8);
         float3 color=ssr_history_load(pc.history_color,previous,uint2(pc.width,pc.height)).rgb*(exposure/max(pc.previous_exposure,1e-8))/exposure;

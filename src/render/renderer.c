@@ -1,5 +1,6 @@
 #include "render/denoise/denoise_internal.h"
 #include "render/post/tonemap.h"
+#include "render/upscale/upscaler.h"
 #include "render/skin/skin_internal.h"
 #include "render/pathtracer/pt_internal.h"
 #include "render/rt/restir_di.h"
@@ -53,6 +54,12 @@ static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
     de_renderer *r = (de_renderer *)user;
     de__gpu_view_params p = {
         .view = vf->view_matrix, .proj = vf->proj, .width = vf->width, .height = vf->height};
+    p.unjittered_proj = vf->unjittered_proj;
+    p.jitter = vf->jitter;
+    p.mip_bias = vf->mip_bias;
+    p.temporal_enabled = vf->temporal_enabled;
+    p.output_width = vf->output_width;
+    p.output_height = vf->output_height;
     if (vf->camera != NULL)
         p.camera_position = vf->camera->offset;
     const u32 slot = (vf->view.id & 0xFFu) - 1u; /* views.c: slot + 1 in the low byte */
@@ -90,6 +97,7 @@ static void renderer_free(de_renderer *r) {
     de__rt_scene_destroy(r);
     de__skin_destroy(r);
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
+    de__upscalers_destroy(r);
     de__tonemappers_destroy(r);
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */

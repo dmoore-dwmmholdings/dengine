@@ -108,7 +108,7 @@ typedef enum de__view_slot {
 } de__view_slot;
 
 /** Order of the tonemapper inside DE__VIEW_SLOT_POST (DE_HOOK_BEFORE/AFTER_TONEMAP sit there). */
-#define DE__VIEW_ORDER_TONEMAP 0
+#define DE__VIEW_ORDER_TONEMAP 70
 /** Order of the engine's UI composite inside DE__VIEW_SLOT_OUTPUT (DE_HOOK_UI runs after it). */
 #define DE__VIEW_ORDER_UI 0
 
@@ -167,6 +167,10 @@ typedef struct de__view_frame {
     de_vec2 pixel_residual;
     de__pixel_snap_grid pixel_grid, prev_pixel_grid;
     u32 output_width, output_height;
+    de_mat4 unjittered_proj, unjittered_view_proj;
+    de_vec2 jitter;
+    f32 mip_bias;
+    bool temporal_enabled;
 } de__view_frame;
 
 /** A stage's build callback: declares the stage's passes in `vf->graph`. Render thread. */

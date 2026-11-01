@@ -108,6 +108,7 @@ static de_result setup(anim_scene *s) {
     de_anim_set_renderer(s->anim, s->renderer);
     DE_TRY(de_cvar_set(de_cvar_find("r.pipelined"), "0"));
     de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+    settings.upscaler = DE_UPSCALE_NONE; /* Keep the existing spatial animation references. */
     settings.render_scale = 1;
     settings.ao = settings.reflections = settings.gi = settings.sss = settings.shadows =
         DE_QUALITY_OFF;

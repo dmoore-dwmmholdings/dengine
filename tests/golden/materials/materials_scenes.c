@@ -489,6 +489,7 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
     if (ctx->backend == DE_GPU_VULKAN)
         mg_cvar("r.rg_record_cost", "1048576");
     de_render_settings rs = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_HIGH);
+    rs.upscaler = DE_UPSCALE_NONE; /* Preserve the spatial material/IBL reference transform. */
     /* These S14 references isolate materials and IBL. Stochastic screen-space reflections
      * have independent CPU/G-buffer references and temporal tests in test_render_ssr. */
     rs.reflections = DE_QUALITY_OFF;

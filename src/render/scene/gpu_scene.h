@@ -228,7 +228,11 @@ enum { DE__GS_LIGHT_LIVE = 1u, DE__GS_LIGHT_CAST_SHADOWS = 2u };
     F(de__gs_uint, uint, view_slot, )                                                              \
     F(de__gs_uint, uint, flags, )                                                                  \
     F(de__gs_float, float, pre_exposure, )                                                         \
-    F(de__gs_float, float, prev_pre_exposure, )
+    F(de__gs_float, float, prev_pre_exposure, )                                                    \
+    F(de__gs_float4, float4, unjittered_view_proj, [4])                                            \
+    F(de__gs_float4, float4, prev_unjittered_view_proj, [4])                                       \
+    F(de__gs_float4, float4, jitter, )                                                             \
+    F(de__gs_float4, float4, temporal, )
 
 #define DE__GS_DECLARE_FIELD(ctype, stype, name, dims) ctype name dims;
 
@@ -250,7 +254,7 @@ typedef de__material_params de__gs_material;
 typedef struct de__gs_light {
     DE__GS_LIGHT_FIELDS(DE__GS_DECLARE_FIELD)
 } de__gs_light;
-/** DeSceneConstants (432 bytes). */
+/** DeSceneConstants (592 bytes). */
 typedef struct de__gs_view {
     DE__GS_VIEW_FIELDS(DE__GS_DECLARE_FIELD)
 } de__gs_view;
@@ -260,7 +264,7 @@ DE_STATIC_ASSERT(sizeof(de__gs_mesh_lod) == 32, "DeGpuMeshLod is 32 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_instance) == 208, "DeGpuInstance is 208 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_mesh) == 480, "DeGpuMesh is 480 bytes");
 DE_STATIC_ASSERT(sizeof(de__gs_light) == 112, "DeGpuLight is 112 bytes");
-DE_STATIC_ASSERT(sizeof(de__gs_view) == 432, "DeSceneConstants is 432 bytes");
+DE_STATIC_ASSERT(sizeof(de__gs_view) == 592, "DeSceneConstants is 592 bytes");
 DE_STATIC_ASSERT(offsetof(de__gs_instance, mesh) == 144 &&
                      offsetof(de__gs_instance, materials) == 176,
                  "DeGpuInstance layout");
@@ -469,6 +473,11 @@ typedef struct de__gpu_view_params {
     /** DENG-304: this frame's and the previous frame's exposure (lighting/exposure.c): passes
      * that write radiance multiply it by pre_exposure (0 = 1). */
     f32 pre_exposure, prev_pre_exposure;
+    de_mat4 unjittered_proj;
+    de_vec2 jitter;
+    f32 mip_bias;
+    u32 output_width, output_height;
+    bool temporal_enabled;
 } de__gpu_view_params;
 
 /** Counters (de__gpu_scene_stats). */
@@ -621,8 +630,8 @@ void de__gpu_scene_debug_pack(const de__gpu_scene *gs, de__gs_table_id t, u32 sl
 /** Instance slot `s`'s mesh slot (`*mesh`) and its DE__GS_INSTANCE_MATERIALS material slots
  * (`*materials`), DE__GS_NONE where none. False for a slot past the instance arrays. */
 bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh, const u32 **materials);
-/** The CPU copy of entry `slot` of the mesh or material table (NULL for another table or a slot
- * past its count). */
+/** The CPU copy of a mesh, material or active staged view entry. NULL for another table, an
+ * inactive view or a slot past its table. View entries include current/previous raster jitter. */
 const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot);
 
 /** Stable fingerprint of actual source records; excludes views/frame counters and previous

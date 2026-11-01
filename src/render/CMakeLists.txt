@@ -18,6 +18,9 @@ de_add_module(
         graph/rg_timing.c
         post/settings.c
         post/tonemap.c
+        post/jitter.c
+        post/taa.c
+        upscale/upscaler.c
     DEPS gpu asset ecs task
 )
 

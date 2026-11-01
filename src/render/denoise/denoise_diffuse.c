@@ -275,6 +275,7 @@ de_result de__reblur_build(de__radiance_denoiser *s, de_rg *g, const de__vis_con
                    .previous_inverse_view_proj = de_m4_inverse(&vc->prev_view_proj),
                    .camera_position = vc->camera_position,
                    .previous_origin_delta = s->delta[slot],
+                   .raster_history_uv_offset = vc->raster_history_uv_offset,
                    .position = position,
                    .temporal_alpha = alpha}};
     de_denoise_signal_desc desc = {.identity = 0x5245424c55520000ull + kind,

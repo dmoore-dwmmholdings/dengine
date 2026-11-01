@@ -48,6 +48,8 @@ static de_result setup(text_scene *s, de_golden_ctx *ctx) {
     DE_TRY(de_cvar_set(pipelined, "false"));
     de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
     settings.render_scale = 1;
+    /* This font/atlas reference uses fixed spatial sample positions. */
+    settings.upscaler = DE_UPSCALE_NONE;
     settings.ao = settings.reflections = settings.gi = settings.sss = settings.shadows =
         DE_QUALITY_OFF;
     de_renderer_set_settings(s->renderer, &settings);

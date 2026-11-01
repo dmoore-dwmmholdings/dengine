@@ -391,7 +391,8 @@ void de__vis_resolve(de_rg *g, de__vis_context *vc) {
     const de_render_settings *settings = vc->settings;
     const bool sampled_motion = !settings || settings->ao != DE_QUALITY_OFF ||
                                 settings->reflections != DE_QUALITY_OFF ||
-                                settings->gi != DE_QUALITY_OFF || settings->tier == DE_TIER_RT;
+                                settings->gi != DE_QUALITY_OFF || settings->tier == DE_TIER_RT ||
+                                settings->upscaler != DE_UPSCALE_NONE;
     for (u32 t = 0; t < DE__GB_COUNT; ++t) {
         static const char *const k_names[DE__GB_COUNT] = {"vis.gb0", "vis.gb1", "vis.gb2",
                                                           "vis.motion", "vis.lighting"};

@@ -1,4 +1,5 @@
 module reblur_common;
+__exported import history;
 __exported import reblur_weights;
 __exported import "../visbuffer/gbuffer";
 __exported import "../visbuffer/vis_decode";
@@ -18,7 +19,7 @@ public float3 reblur_position(DeSceneConstants sc,uint2 xy,ReblurParams p){float
 public float2 reblur_virtual_uv(DeSceneConstants sc,float3 position,float3 normal,float hit,float2 surface_previous,float roughness){
     float3 incident=normalize(position-sc.camera_position.xyz),reflected=reflect(incident,normal),actual_hit=position+reflected*hit;
     float3 virtual_hit=actual_hit-2*normal*dot(actual_hit-position,normal);
-    float4 previous=de_vis_clip(sc.prev_view_proj,virtual_hit);float2 virtual_uv=previous.xy/max(abs(previous.w),1e-20)*float2(.5,-.5)+.5;
+    float4 previous=sc.temporal.w!=0?de_vis_clip(sc.prev_unjittered_view_proj,virtual_hit):de_vis_clip(sc.prev_view_proj,virtual_hit);float2 virtual_uv=previous.xy/max(abs(previous.w),1e-20)*float2(.5,-.5)+.5;
     return lerp(virtual_uv,surface_previous,saturate(roughness*roughness*4));
 }
 public DeRtSurface reblur_surface(ReblurParams p,uint2 xy){DeSceneConstants sc=de_robuffer<DeSceneConstants>(p.scene)[p.slot];uint id=de_bytes(p.ids).load(xy.y*p.ids_pitch+xy.x*4);DeResolvePoint point=de_resolve_point(id,xy,float2(p.width,p.height),sc,p.visible,p.visible_count);return de_rt_surface(point,sc,sc.camera_position.xyz,p.sampler,p.lut);}

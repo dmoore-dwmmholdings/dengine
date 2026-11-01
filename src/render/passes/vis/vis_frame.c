@@ -372,6 +372,15 @@ de_result de__vis_frame_build(de__vis_shared *s, de_rg *g, const de__vis_frame_d
     vc->height = d->height;
     vc->view_matrix = d->view_matrix;
     vc->proj = d->proj;
+    vc->unjittered_proj = d->temporal_enabled ? d->unjittered_proj : d->proj;
+    vc->temporal_enabled = d->temporal_enabled;
+    const de__gs_view *scene_view = de__gpu_scene_entry(d->gpu_scene, DE__GS_VIEWS, d->view_slot);
+    if (scene_view && scene_view->viewport.v[0] > 0 && scene_view->viewport.v[1] > 0) {
+        vc->raster_history_uv_offset.x =
+            (scene_view->jitter.v[0] - scene_view->jitter.v[2]) / scene_view->viewport.v[0];
+        vc->raster_history_uv_offset.y =
+            (scene_view->jitter.v[1] - scene_view->jitter.v[3]) / scene_view->viewport.v[1];
+    }
     vc->view_proj = de_m4_mul(&d->proj, &d->view_matrix);
     vc->prev_view_proj = mat_is_zero(&d->prev_view_proj) ? vc->view_proj : d->prev_view_proj;
     vc->camera_position = d->camera_position;
@@ -488,7 +497,9 @@ static void vis_frame_stage(de__view_frame *vf, void *user) {
                             .excluded_light_mask = vf->excluded_light_mask,
                             .display = vf->display,
                             .output_width = vf->viewport_px[2], /* DENG-239: pick coordinates */
-                            .output_height = vf->viewport_px[3]};
+                            .output_height = vf->viewport_px[3],
+                            .unjittered_proj = vf->unjittered_proj,
+                            .temporal_enabled = vf->temporal_enabled};
     if (vf->camera != NULL)
         d.camera_position = vf->camera->offset;
     if (vf->world != NULL)

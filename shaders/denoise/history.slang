@@ -12,9 +12,15 @@ public struct DenoiseParams {
     public uint key,previous_key,out_key,zero_radius_passthrough;
     public uint position,previous_position,out_position,rgb_variance;
     public uint temporal_alpha,normal_world,channels,out_variance;
+    public float2 raster_history_uv_offset;
 };
 public DenoiseParams dn_load(uint buffer,uint entry){return de_robuffer<DenoiseParams>(buffer)[entry];}
 public float2 denoise_previous_uv(float2 uv,float2 motion){return uv+float2(-.5,.5)*motion;}
+// Scene motion excludes raster jitter. Input-resolution histories retain the raster grid;
+// the output-resolution TAA history intentionally uses denoise_previous_uv without this term.
+public float2 denoise_previous_raster_uv(float2 uv,float2 motion,float4 jitter,float2 input_size){
+    return denoise_previous_uv(uv,motion)+(jitter.xy-jitter.zw)/max(input_size,1);
+}
 public float3 dn_position(DenoiseParams p,int2 xy,float depth,bool previous){
     if(p.position!=0)return de_tex2d(previous?p.previous_position:p.position).Load(int3(xy,0)).xyz+(previous?p.origin_delta.xyz:float3(0));
     if(p.linear_depth!=0)return float3(float2(xy),depth);

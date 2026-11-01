@@ -288,6 +288,9 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         mg_cvar("r.rg_record_cost", "1048576");
     de_render_settings rs = de_render_settings_preset(
         DE_TIER_BASE, o->quality == DE_QUALITY_OFF ? DE_QUALITY_MEDIUM : o->quality);
+    /* These S15 references isolate each effect before temporal AA. TAA has separate native
+     * 16-sample reference, stability, reconstruction and motion tests in test_render_taa. */
+    rs.upscaler = DE_UPSCALE_NONE;
     rs.shadows = rs.ao = rs.reflections = rs.gi = DE_QUALITY_OFF;
     if (strstr(o->scene, "shadows_") != NULL)
         rs.shadows = o->quality;

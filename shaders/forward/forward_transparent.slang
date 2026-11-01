@@ -207,6 +207,9 @@ void fwd_resolve_surface(FwdVertex i,ForwardParams pc,DeSceneConstants sc,out De
     lod.dy[0] = ddy(i.uv0);
     lod.dx[1] = ddx(i.uv1);
     lod.dy[1] = ddy(i.uv1);
+    float mip_scale=exp2(sc.temporal.x);
+    lod.dx[0]*=mip_scale;lod.dy[0]*=mip_scale;
+    lod.dx[1]*=mip_scale;lod.dy[1]*=mip_scale;
     lod.sampler = pc.sampler;
     lod.feedback = 0u;
     lod.feedback_capacity = 0u;

@@ -28,6 +28,7 @@ typedef struct text_render_fx {
     de_atomic_u32 screen_errors;
     bool screen_sink;
     u32 basic_outputs;
+    u32 temporal_outputs;
     de_gpu_buffer world_depth;
     bool world_depth_found;
 } text_render_fx;
@@ -331,11 +332,22 @@ static void world_depth_copy_stage(de__view_frame *vf, void *user) {
         return;
     }
 }
+static void observe_world_temporal_output(de__view_frame *vf, void *user) {
+    text_render_fx *f = user;
+    const u32 index = de__rg_resource_index(vf->graph, vf->color);
+    if (index < vf->graph->resource_count &&
+        strcmp(vf->graph->resources[index].name, "post.taa") == 0)
+        ++f->temporal_outputs;
+}
 #endif
 TEST_F(text_batch, metal_world_text_only_has_valid_cleared_depth_and_visible_glyphs,
        text_render_fx) {
 #if defined(__APPLE__)
     start_render(f, DE_GPU_METAL);
+    /* Isolate the glyph color/coverage oracle while retaining AUTO temporal reconstruction. */
+    DeCamera *camera = de_entity_get(f->w, f->main_camera, de_component_find(f->w, "DeCamera"));
+    ASSERT_TRUE(camera);
+    camera->tonemapper = de_tonemapper_builtin(f->r, DE_TM_NONE);
     de_asset_id font_id = de_asset_id_from("font/tt-msdf");
     f->scene_loads[0] = de_asset_load(f->fonts.assets, font_id, 0);
     ASSERT_EQ(de_asset_wait(f->fonts.assets, f->scene_loads[0], TEXT_WAIT), (int)DE_LOAD_READY);
@@ -363,9 +375,15 @@ TEST_F(text_batch, metal_world_text_only_has_valid_cleared_depth_and_visible_gly
     ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_TRANSPARENT, 101, "text.depth.readback",
                                       world_depth_copy_stage, f),
               DE_OK);
-    de_text_update(f->fonts.t);
-    render_frame(f);
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, 11, "text.observe_temporal",
+                                      observe_world_temporal_output, f),
+              DE_OK);
+    for (u32 i = 0; i < 8; ++i) {
+        de_text_update(f->fonts.t);
+        render_frame(f);
+    }
     EXPECT_TRUE(f->world_depth_found);
+    EXPECT_EQ(f->temporal_outputs, 8u);
     u8 *pixels = readback(f);
     u32 green = 0;
     for (u32 i = 0; i < 1280 * 720; ++i)
@@ -382,6 +400,7 @@ TEST_F(text_batch, metal_world_text_only_has_valid_cleared_depth_and_visible_gly
     de_log_flush();
     EXPECT_EQ(de_atomic_load_u32(&f->screen_errors, DE_ATOMIC_RELAXED), 0u);
     de__view_unregister_stage(f->r, world_depth_copy_stage, f);
+    de__view_unregister_stage(f->r, observe_world_temporal_output, f);
     de__view_unregister_stage(f->r, coverage_clear_stage, NULL);
 #else
     SKIP("Metal native host required");

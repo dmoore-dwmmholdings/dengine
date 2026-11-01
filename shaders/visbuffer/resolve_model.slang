@@ -198,6 +198,9 @@ public void de_resolve_tiles<M : IMaterialModel>(uint3 group, uint t, ResolvePar
             continue;
         TextureLodInfo lod;
         VertexAttribs v = de_resolve_attribs(r, sc.camera_position.xyz, lod);
+        float mip_scale=exp2(sc.temporal.x);
+        lod.dx[0]*=mip_scale;lod.dy[0]*=mip_scale;
+        lod.dx[1]*=mip_scale;lod.dy[1]*=mip_scale;
         lod.sampler = pc.sampler;
         lod.feedback = pc.feedback;
         lod.feedback_capacity = pc.feedback_capacity;

@@ -136,7 +136,7 @@ public bool de_light_in_view(DeGpuLight light, uint excluded_mask)
     return ((mask == 0u ? ~0u : mask) & ~excluded_mask) != 0u;
 }
 
-/// The scene constants of one view (432 bytes), one entry per view slot.
+/// The scene constants of one view (592 bytes), one entry per view slot.
 public struct DeSceneConstants
 {
     public float4 view[4];           // render-origin space -> view space (rows)
@@ -160,4 +160,8 @@ public struct DeSceneConstants
     public uint flags;
     public float pre_exposure;      // DENG-304: radiance written to HDR targets is x this (0 = 1)
     public float prev_pre_exposure; // the previous frame's (temporal passes rescale history by it)
+    public float4 unjittered_view_proj[4];
+    public float4 prev_unjittered_view_proj[4];
+    public float4 jitter; // current/previous pixel offsets, Y down
+    public float4 temporal; // mip bias, output width, output height, unjittered matrices valid
 };

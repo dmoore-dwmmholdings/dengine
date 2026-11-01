@@ -40,6 +40,7 @@ typedef struct de_denoise_inputs {
     de_rg_resource position;       /**< Optional exact representative world-position guide. */
     de_rg_resource temporal_alpha; /**< Optional per-pixel EMA minimum. */
     bool normal_is_world; /**< Direct world-space XYZ plus roughness AOV, rather than GB1. */
+    de_vec2 raster_history_uv_offset; /**< Current-minus-previous raster jitter in normalized UV. */
 } de_denoise_inputs;
 typedef struct de_denoise_frame {
     de_rg *graph;

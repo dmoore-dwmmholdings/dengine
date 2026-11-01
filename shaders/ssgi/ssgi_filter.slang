@@ -38,7 +38,7 @@ void cs_ssgi_filter(uint3 id:SV_DispatchThreadID,uniform SsrParams pc) {
             float probability=saturate(coverage/total);
             float l=dot(numerator,float3(.2126,.7152,.0722));
             moments=float4(l,l*l,1,0);
-            float2 previous=ssr_previous_uv(uv,de_tex2d(pc.motion).Load(int3(pixel,0)).xy);
+            float2 previous=ssr_previous_uv(sc,uv,de_tex2d(pc.motion).Load(int3(pixel,0)).xy);
             if((pc.history_valid&2u)!=0&&ssr_history_valid(pc,sc,previous,position,surface.normal)) {
                 float4 old=ssr_history_load(pc.previous_specular,previous,uint2(pc.width,pc.height));
                 float4 stats=ssr_history_load(pc.previous_moments,previous,uint2(pc.width,pc.height));

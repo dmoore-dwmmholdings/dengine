@@ -1299,3 +1299,24 @@ if(TARGET test_render_tonemap)
         "DE_TONEMAP_SHADER_DIR=\"${DE_ROOT_DIR}/shaders\""
         "DE_TONEMAP_TEST_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/tonemap_tmp\"")
 endif()
+
+# DENG-156: shared sampling/selection and native temporal backend qualification.
+de_add_test(NAME render_taa SOURCES test_taa.c LIBS ${_de_vis_libs}
+    LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_taa)
+    target_include_directories(test_render_taa PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+if(TARGET test_render_taa AND DE_BUILD_TOOLS)
+    target_link_libraries(test_render_taa PRIVATE de_pack_lib de_golden_flip)
+    target_include_directories(test_render_taa PRIVATE "${DE_ROOT_DIR}/tools")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/taa_tmp")
+    target_compile_definitions(test_render_taa PRIVATE DE_TAA_SCENE_TEST=1
+        "DE_TAA_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/taa_tmp\"")
+endif()
+
+# Native Metal adapters are checked in; scene-layout changes must regenerate them too.
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_test(NAME render_taa.generated_metal_scene_layout
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_metal_scene_layout.py")
+set_tests_properties(render_taa.generated_metal_scene_layout PROPERTIES LABELS "check;render" TIMEOUT 15)

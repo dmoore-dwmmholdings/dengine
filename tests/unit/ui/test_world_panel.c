@@ -2,6 +2,7 @@
 #include "ui/world/world_internal.h"
 #include "ui/render/draw_list.h"
 #include "ui/widgets/widgets_internal.h"
+#include "render/upscale/upscaler.h"
 #include <stdio.h>
 static de_entity panel_root(ui_fx *f) {
     de_entity root = ui_node(f, (de_entity){0});
@@ -230,6 +231,9 @@ TEST_F(ui_world, native_actual_panel_consumer_and_large_origin_readback, ui_fx) 
                                                               .usage = DE_USAGE_COPY_DST,
                                                               .memory = DE_MEM_READBACK});
     (void)world_native_capture(f, target, buffer);
+    /* Compare the same first jitter phase on either side of the large-origin camera cut.
+     * AUTO stays active; different Halton phases would change silhouette sample positions. */
+    de__upscalers_forget(f->renderer, view);
     const u8 *pixels = world_native_capture(f, target, buffer);
     const u8 *center = pixels + ((size_t)256 * 512 + 256) * 4;
     printf("World UI native center RGB %u %u %u\n", center[0], center[1], center[2]);

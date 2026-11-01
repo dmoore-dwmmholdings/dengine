@@ -3,6 +3,7 @@ import gtao;
 import bindless;
 import push_constants;
 import "../lighting/lighting_common";
+import "../denoise/history";
 
 struct AoLightingQuery {
     float4 color_ao, view_roughness;
@@ -134,8 +135,9 @@ float surface_weight(GtaoParams pc, DeSceneConstants sc, uint2 pixel, float3 p, 
     if (pc.history_valid != 0 && current.w > 0) {
         DeSceneConstants sc = de_robuffer<DeSceneConstants>(pc.scene)[pc.slot];
         float2 uv = (float2(pixel) + 0.5) / float2(pc.width, pc.height);
-        float2 previous_uv = uv + de_tex2d(pc.motion).Load(int3(pixel, 0)).xy * float2(-0.5, 0.5);
-        float motion_pixels = length((previous_uv - uv) * float2(pc.width, pc.height));
+        float2 motion = de_tex2d(pc.motion).Load(int3(pixel, 0)).xy;
+        float2 previous_uv = denoise_previous_raster_uv(uv, motion, sc.jitter, sc.viewport.xy);
+        float motion_pixels = length(motion * .5 * float2(pc.width, pc.height));
         float3 p = ssr_position(sc, uv, current.w);
         float4 point = float4(p, 1);
         float4 clip = float4(dot(sc.prev_view_proj[0], point), dot(sc.prev_view_proj[1], point),

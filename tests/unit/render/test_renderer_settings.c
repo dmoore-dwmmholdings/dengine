@@ -789,6 +789,8 @@ static void public_light_isolation(rfx *f, de_light_kind kind) {
     ASSERT_EQ(de_cvar_set(de_cvar_find("r.pipelined"), "1"), DE_OK);
     ASSERT_EQ(de_cvar_set(de_cvar_find("r.ambient_fallback"), "0"), DE_OK);
     de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+    /* The isolation oracle compares complete images bit-for-bit across different frames. */
+    settings.upscaler = DE_UPSCALE_NONE;
     settings.ao = settings.reflections = settings.gi = settings.sss = settings.volumetrics =
         DE_QUALITY_OFF;
     de_renderer_set_settings(f->r, &settings);

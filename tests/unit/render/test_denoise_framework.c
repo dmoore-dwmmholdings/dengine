@@ -35,6 +35,7 @@ typedef struct dn_fixture {
     bool use_key, use_hit, rgb_variance_readback;
     de_denoise_result result;
     de_rg_resource identity;
+    de_vec2 raster_history_uv_offset;
     u64 frame;
     u32 width, height, channels, iterations;
     de_denoise_clamp clamp;
@@ -159,6 +160,7 @@ static de_denoise_result build(dn_fixture *f, de_view view, u64 signal, bool res
     frame.inputs.depth = de_rg_import_texture(f->graph, f->depth, DE_ACCESS_SHADER_READ);
     frame.inputs.normal = de_rg_import_texture(f->graph, f->normal, DE_ACCESS_SHADER_READ);
     frame.inputs.motion = de_rg_import_texture(f->graph, f->motion, DE_ACCESS_SHADER_READ);
+    frame.inputs.raster_history_uv_offset = f->raster_history_uv_offset;
     frame.inputs.material =
         identity.id ? identity : de_rg_import_texture(f->graph, f->material, DE_ACCESS_SHADER_READ);
     if (f->use_hit)
@@ -337,6 +339,46 @@ TEST_F(denoise_framework, reproject_validation, dn_fixture) {
     run(f, build(f, (de_view){1}, 1, false, false, (de_rg_resource){0}));
     EXPECT_FLOAT_EQ(age(f, 20, 16), 1, 0);
     EXPECT_FLOAT_EQ(age(f, 40, 16), 1, 0);
+}
+TEST_F(denoise_framework, raster_jitter_reprojects_without_surface_motion, dn_fixture) {
+    /* Unique surface identities make the independently shifted raster footprint observable:
+     * only its matching bilinear tap may contribute. Canonical object motion remains zero. */
+    for (u32 direction = 0; direction < 2; ++direction) {
+        const i32 sign = direction ? -1 : 1;
+        f->raster_history_uv_offset = (de_vec2){0};
+        for (u32 y = 0; y < H; ++y)
+            for (u32 x = 0; x < W; ++x) {
+                const u32 i = y * W + x;
+                f->data[4][i * 2] = (f32)(i + 1);
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][i * 4 + c] = (f32)(x + 2 * y) / 128;
+            }
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, true, false, (de_rg_resource){0}));
+        f->raster_history_uv_offset = (de_vec2){sign * .75f / W, -sign * .75f / H};
+        for (u32 y = 1; y + 1 < H; ++y)
+            for (u32 x = 1; x + 1 < W; ++x) {
+                const u32 i = y * W + x;
+                const i32 previous_x = (i32)x + sign, previous_y = (i32)y - sign;
+                f->data[4][i * 2] = (f32)(previous_y * (i32)W + previous_x + 1);
+                for (u32 c = 0; c < 3; ++c)
+                    f->data[0][i * 4 + c] = 0;
+            }
+        upload(f);
+        begin(f);
+        run(f, build(f, (de_view){1}, 1, false, false, (de_rg_resource){0}));
+        const f32 *pixels = color(f);
+        const u8 *validity = (const u8 *)pixels + 40960; /* R8_UNORM, quantized 9/16. */
+        for (u32 y = 4; y + 4 < H; ++y)
+            for (u32 x = 4; x + 4 < W; ++x) {
+                const i32 previous_x = (i32)x + sign, previous_y = (i32)y - sign;
+                EXPECT_FLOAT_EQ(age(f, x, y), 1, 0);
+                EXPECT_EQ(validity[y * 256u + x], 143u);
+                EXPECT_FLOAT_EQ(pixels[(y * W + x) * 4], (f32)(previous_x + 2 * previous_y) / 256,
+                                1e-6);
+            }
+    }
 }
 static u32 hash32(u32 x) {
     x ^= x >> 16;

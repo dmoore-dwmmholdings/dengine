@@ -119,6 +119,7 @@ static de_result setup(ui_scene *s, de_golden_ctx *ctx, bool pixel) {
     de_renderer_attach(s->renderer, s->world);
     DE_TRY(de_cvar_set(de_cvar_find("r.pipelined"), "false"));
     de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+    settings.upscaler = DE_UPSCALE_NONE; /* These spatial UI/occlusion references predate TAA. */
     settings.render_scale = 1;
     settings.ao = settings.reflections = settings.gi = settings.sss = settings.shadows =
         DE_QUALITY_OFF;

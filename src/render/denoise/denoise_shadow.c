@@ -279,6 +279,7 @@ de_result de__denoise_policy_build(de__signal_denoiser *s, de_rg *g, const de__v
                            .previous_inverse_view_proj = de_m4_inverse(&vc->prev_view_proj),
                            .camera_position = vc->camera_position,
                            .previous_origin_delta = origin_delta,
+                           .raster_history_uv_offset = vc->raster_history_uv_offset,
                            .validation_key = kind == 0 ? key : (de_rg_resource){0},
                            .position = position}};
             de_denoise_signal_desc desc = {

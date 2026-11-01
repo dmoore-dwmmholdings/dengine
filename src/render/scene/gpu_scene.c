@@ -661,6 +661,22 @@ static void pack_view(const de__gpu_scene *gs, u32 slot, de__gs_view *o) {
     o->flags = v->cur.flags;
     o->pre_exposure = v->cur.pre_exposure;           /* DENG-304 */
     o->prev_pre_exposure = v->cur.prev_pre_exposure; /* DENG-304 */
+    const de_mat4 unjittered = v->cur.temporal_enabled ? v->cur.unjittered_proj : v->cur.proj;
+    const de_mat4 unjittered_vp = de_m4_mul(&unjittered, &v->cur.view);
+    de_mat4 previous_unjittered_vp = unjittered_vp;
+    de_vec2 previous_jitter = v->cur.jitter;
+    if (v->prev_frame != 0 && v->prev_frame + 1u == v->cur_frame) {
+        const de_mat4 pv = rebase_view(&v->prev.view, v->prev_origin, v->cur_origin);
+        const de_mat4 previous_projection =
+            v->prev.temporal_enabled ? v->prev.unjittered_proj : v->prev.proj;
+        previous_unjittered_vp = de_m4_mul(&previous_projection, &pv);
+        previous_jitter = v->prev.jitter;
+    }
+    mat4_rows(o->unjittered_view_proj, &unjittered_vp);
+    mat4_rows(o->prev_unjittered_view_proj, &previous_unjittered_vp);
+    f4(&o->jitter, v->cur.jitter.x, v->cur.jitter.y, previous_jitter.x, previous_jitter.y);
+    f4(&o->temporal, v->cur.mip_bias, (f32)v->cur.output_width, (f32)v->cur.output_height,
+       1.f); /* The appended unjittered matrices are valid, including temporal-off transitions. */
 }
 
 /* Entry `slot` of table `t` as this frame uploads it. */
@@ -2023,9 +2039,13 @@ bool de__gpu_scene_instance_slots(const de__gpu_scene *gs, u32 s, u32 *mesh,
 }
 
 const void *de__gpu_scene_entry(const de__gpu_scene *gs, de__gs_table_id t, u32 slot) {
-    if (gs == NULL || (t != DE__GS_MESHES && t != DE__GS_MATERIALS))
+    if (gs == NULL || (t != DE__GS_MESHES && t != DE__GS_MATERIALS && t != DE__GS_VIEWS))
         return NULL;
     const de__gpu_table *tb = &gs->tables[t];
+    if (t == DE__GS_VIEWS)
+        return slot < gs->view_cap && slot < tb->capacity && tb->shadow && gs->views[slot].live
+                   ? tb->shadow + (size_t)slot * tb->stride
+                   : NULL;
     return slot < tb->count ? tb->shadow + (size_t)slot * tb->stride : NULL;
 }
 

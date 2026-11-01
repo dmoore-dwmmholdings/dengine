@@ -610,6 +610,10 @@ TEST_F(views, split_screen_two_graphs, vfx) {
 
 TEST_F(views, render_scale_independent, vfx) {
     start(f, DE_GPU_NULL);
+    /* This fixture verifies the transient-free, spatial-only graph cache. */
+    de_render_settings spatial = de_renderer_get_settings(f->r);
+    spatial.upscaler = DE_UPSCALE_NONE;
+    de_renderer_set_settings(f->r, &spatial);
     const de_view l = view(f, "left", 0, 0, 0.5f, 1, 0, (de_gpu_texture){0});
     const de_view r = view(f, "right", 0.5f, 0, 0.5f, 1, 1, (de_gpu_texture){0});
     (void)camera(f, l, 0.0);
@@ -850,7 +854,9 @@ TEST_F(views, hooks_called_in_order, vfx) {
     ASSERT_EQ(
         de__view_register_stage(r, DE__VIEW_SLOT_OUTPUT, DE__VIEW_ORDER_UI, "out", stage_fn, "out"),
         DE_OK);
-    ASSERT_EQ(de__view_register_stage(r, DE__VIEW_SLOT_POST, 5, "post+", stage_fn, "post+"), DE_OK);
+    ASSERT_EQ(de__view_register_stage(r, DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP + 5, "post+",
+                                      stage_fn, "post+"),
+              DE_OK);
     ASSERT_EQ(de__view_register_stage(r, DE__VIEW_SLOT_POST, DE__VIEW_ORDER_TONEMAP, "tonemap",
                                       stage_fn, "tonemap"),
               DE_OK);

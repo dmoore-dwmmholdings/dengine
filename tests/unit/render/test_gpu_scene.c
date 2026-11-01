@@ -1781,6 +1781,10 @@ TEST(gpu_scene, renderer_frames) {
     ASSERT_EQ(
         de_renderer_create(&(de_renderer_desc){.device = d, .types = types, .allocator = &a}, &r),
         DE_OK);
+    /* A static scene has zero uploads only when raster jitter is explicitly disabled. */
+    de_render_settings spatial = de_renderer_get_settings(r);
+    spatial.upscaler = DE_UPSCALE_NONE;
+    de_renderer_set_settings(r, &spatial);
     de_renderer_attach(r, w);
     const de_cvar pipelined = de_cvar_find("r.pipelined");
     ASSERT_TRUE(DE_HANDLE_VALID(pipelined));

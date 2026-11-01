@@ -98,6 +98,7 @@ void *de__golden_rt_prepare(de_golden_ctx *ctx, de_renderer *r, de_view view, u3
     set("r.rt.restir_di", effect == DE__GOLDEN_RT_DI ? "1" : "0");
     de_render_settings s =
         de_render_settings_preset(base ? DE_TIER_BASE : DE_TIER_RT, DE_QUALITY_HIGH);
+    s.upscaler = DE_UPSCALE_NONE; /* S17 locks each denoised signal, independently of S18 TAA. */
     s.shadows = s.ao = s.reflections = s.gi = s.volumetrics = s.sss = DE_QUALITY_OFF;
     s.render_scale = 1.f;
     s.dynamic_res_target_ms = 0.f;

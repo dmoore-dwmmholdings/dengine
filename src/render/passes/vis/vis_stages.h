@@ -550,6 +550,10 @@ typedef struct de__vis_context {
      * pixel of a resolved surface. Invalid otherwise. */
     de_rg_resource resolve_debug_pos, resolve_debug_uv;
     /* ---- later S13 tasks: append fields here ---- */
+    /* Raster jitter is not a camera cut; retain the base projection for history policy. */
+    de_mat4 unjittered_proj;
+    bool temporal_enabled;
+    de_vec2 raster_history_uv_offset;
 } de__vis_context;
 
 /** de__vis_frame_build inputs. */
@@ -576,6 +580,8 @@ typedef struct de__vis_frame_desc {
     de_gpu_buffer hidden_buffer;
     u32 excluded_light_mask;
     de_view_display display;
+    de_mat4 unjittered_proj;
+    bool temporal_enabled;
 } de__vis_frame_desc;
 
 /** de__vis_shared_create settings. */

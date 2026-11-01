@@ -398,7 +398,8 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
                     vf->graph, &(de_gpu_texture_desc){.format = DE_FMT_D32_FLOAT,
                                                       .width = width,
                                                       .height = height,
-                                                      .usage = DE_USAGE_DEPTH | DE_USAGE_COPY_SRC,
+                                                      .usage = DE_USAGE_DEPTH | DE_USAGE_COPY_SRC |
+                                                               DE_USAGE_SAMPLED,
                                                       .name = "text.depth"});
                 p->clear_depth = true;
                 if (!p->depth.id) {
@@ -406,6 +407,8 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
                     de__text_unlock(t->runtime);
                     return;
                 }
+                if (vc)
+                    vc->depth = p->depth;
             }
             de_rg_pass *pass = de_rg_add_pass(vf->graph, world ? "text.world" : "text.screen",
                                               DE_QUEUE_GRAPHICS, execute, p);
@@ -436,6 +439,10 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
                     p->lighting[6] = lc->ltc2;
                     lighting_reads(pass, lc);
                 }
+                /* World-only glyphs write scene HDR even without an opaque lighting target.
+                 * Publish that source so temporal reconstruction and tonemapping see it. */
+                if (world && (!lc || !lc->target.id))
+                    vf->color_is_scene_linear = true;
                 ++r->stats.draw_calls;
                 r->stats.glyphs += count;
             }

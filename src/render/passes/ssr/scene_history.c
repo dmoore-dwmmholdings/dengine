@@ -198,7 +198,8 @@ void de__scene_history_capture(de__scene_history *h, const de__view_frame *vf,
                         .normal = vc->gbuffer[DE__GB1],
                         .dst_color = c->write_color,
                         .dst_surface = c->write_surface,
-                        .pc = {.width = vf->width, .height = vf->height}};
+                        /* TAAU may already have changed the view's presentation dimensions. */
+                        .pc = {.width = c->width, .height = c->height}};
     de_rg_pass *pass =
         de_rg_add_pass(vf->graph, "screen.history_capture", DE_QUEUE_GRAPHICS, capture_execute, p);
     de_rg_read(pass, p->color, DE_ACCESS_SHADER_READ);
