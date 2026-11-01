@@ -162,3 +162,6 @@ endif()
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_crash.c editor/editor_crash.h)
 endif()
+
+# DENG-703: common engine/game startup splash, with a headless/no-render no-op.
+target_sources(de_host PRIVATE splash.c splash.h)

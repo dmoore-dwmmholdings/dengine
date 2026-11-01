@@ -395,3 +395,16 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         target_include_directories(test_editor_crash PRIVATE "${DE_ROOT_DIR}/src")
     endif()
 endif()
+
+# DENG-703: pure startup animation timeline and common-host launch policy.
+de_add_test(NAME splash SOURCES test_splash.c LIBS de_host LABELS unit host)
+if(TARGET test_splash)
+    target_include_directories(test_splash PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
+# DENG-703: explicit native-GPU visual fixture; no desktop capture/TCC access required.
+if(DE_HAS_RENDER AND TARGET de_tp_stb)
+    add_executable(de_splash_preview splash_preview.c)
+    target_include_directories(de_splash_preview PRIVATE "${DE_ROOT_DIR}/src")
+    target_link_libraries(de_splash_preview PRIVATE de_host de_tp_stb de_build_flags)
+endif()

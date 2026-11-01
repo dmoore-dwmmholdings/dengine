@@ -19,6 +19,7 @@
  * Cvar precedence, lowest first: cvar defaults, game.toml [cvars], user:/config.toml, `+name
  * value` on the command line. All are startup values, so DE_CVAR_READONLY cvars take them.
  */
+#include "host/splash.h"
 #include "host/host_internal.h"
 #include "host/host_crash.h" /* DENG-96 */
 #if DE_HAS_EDITOR_SERVICE
@@ -160,6 +161,15 @@ static de_result host_run_game(de__host *h) {
         de__engine_destroy(h->engine);
         h->engine = NULL;
         return r;
+    }
+    de__host_splash(h);
+    if (de_engine_quit_requested(h->engine)) {
+        de__headless_end(h);
+        de__engine_destroy(h->engine);
+        h->engine = NULL;
+        de__game_detach(h);
+        de__hot_reload_shutdown(h);
+        return DE_OK;
     }
     const de_game_api *api = h->api;
     const char *name = api->name != NULL ? api->name : h->config.name;

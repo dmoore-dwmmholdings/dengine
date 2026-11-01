@@ -164,6 +164,10 @@ typedef struct de_host_desc {
      * platform must already be events-only, otherwise startup fails without changing it.
      * The game must not start another video subsystem or use native UI outside the engine. */
     bool offscreen;
+    /** Omit the default startup splash. --no-splash/--splash override this;
+     * headless, offscreen and editor sessions always omit it. --frames runs omit
+     * it unless --splash is explicit. --splash-still uses a static 650ms mark. */
+    bool skip_splash;
 } de_host_desc;
 
 /**

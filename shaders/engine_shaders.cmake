@@ -120,3 +120,6 @@ de_engine_shader(ui ui/ui.slang)
 
 # DENG-322 world-space retained UI reuses the screen UI and shared lighting modules.
 de_engine_shader(ui_world ui/ui_world.slang)
+
+# DENG-703: asset-free startup brand reveal, embedded for standalone Shipping games too.
+de_engine_shader(startup_splash startup/splash.slang)
