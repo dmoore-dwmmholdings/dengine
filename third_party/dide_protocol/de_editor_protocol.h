@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.7"
-#define DE_EP_SCHEMA_HASH "fca25a6f4c74bdd7"
+#define DE_EP_PROTOCOL_VERSION "1.8"
+#define DE_EP_SCHEMA_HASH "eb33822460ae9041"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -1042,6 +1042,8 @@ struct de_ep_model_render_params {
     uint32_t size;
     bool has_mesh;
     uint32_t mesh; /* Mesh index from modelInspect when selecting an individual mesh; absent preserves whole-model legacy previews. */
+    bool has_revision;
+    uint32_t revision; /* Opaque caller source-generation token. With assets.modelPreviewRevision, a changed token forces a fresh model context; equal tokens reuse it across angles. Omit for legacy peers. */
 };
 
 struct de_ep_model_slot {

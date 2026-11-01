@@ -68,7 +68,7 @@ static struct {
     char id[1024], root[DE_FS_PATH_MAX];
     char overlay[16];
     de_ep_model_render_params query;
-    u64 request, deadline, revision, source_changes;
+    u64 request, deadline, revision, source_changes, contexts_created;
     bool pending, rendering, material, has_source_token;
     u32 source_token;
     u32 shape;
@@ -139,15 +139,17 @@ static de_result stats(int argc, const char *const *argv, void *user) {
             geometry_meshes += c->primitive_meshes.handles[i].id != 0;
 #endif
     const de_log_category log = de_log_register_category("editor.preview", DE_LOG_INFO);
-    DE_INFO(log,
-            "contexts=%u pending=%u rgba_bytes=%zu readback_bytes=%llu overlay_lines=%u "
-            "overlay_bytes=%zu geometry_meshes=%u",
-            c ? 1u : 0u, g_preview.pending ? 1u : 0u, c ? c->rgba_bytes : 0u,
-            c ? (unsigned long long)c->pitch * c->size : 0ull, c ? c->frame_count : 0u,
-            c ? (c->frame_lines ? DE__ED_FRAME_LINES * sizeof *c->frame_lines : 0) +
-                    (c->frame_joints ? DE__ED_FRAME_JOINTS * sizeof *c->frame_joints : 0)
-              : 0u,
-            geometry_meshes);
+    DE_INFO(
+        log,
+        "contexts=%u pending=%u rgba_bytes=%zu readback_bytes=%llu overlay_lines=%u "
+        "overlay_bytes=%zu geometry_meshes=%u created=%llu source_generation=%u generation_set=%u",
+        c ? 1u : 0u, g_preview.pending ? 1u : 0u, c ? c->rgba_bytes : 0u,
+        c ? (unsigned long long)c->pitch * c->size : 0ull, c ? c->frame_count : 0u,
+        c ? (c->frame_lines ? DE__ED_FRAME_LINES * sizeof *c->frame_lines : 0) +
+                (c->frame_joints ? DE__ED_FRAME_JOINTS * sizeof *c->frame_joints : 0)
+          : 0u,
+        geometry_meshes, (unsigned long long)g_preview.contexts_created, c ? c->source_token : 0u,
+        c && c->has_source_token ? 1u : 0u);
     return DE_OK;
 }
 void de__ed_preview_shutdown(de__editor *ed) {
@@ -237,6 +239,7 @@ static de_result create_context(de__editor *ed, preview_context **out) {
         return result;
     }
     *out = c;
+    ++g_preview.contexts_created;
     return DE_OK;
 }
 static de_result configure_image(preview_context *c, u32 size) {
@@ -589,7 +592,7 @@ static void tick(de__editor *ed) {
     if (!g_preview.rendering) {
         if (c && (strcmp(c->id, g_preview.id) || strcmp(c->root, g_preview.root) ||
                   c->revision != g_preview.revision || c->material != g_preview.material ||
-                  (g_preview.material && g_preview.has_source_token &&
+                  (g_preview.has_source_token &&
                    (!c->has_source_token || c->source_token != g_preview.source_token)))) {
             clear_context();
             c = NULL;
@@ -732,7 +735,7 @@ static void enqueue(de__editor *ed, const de_ep_request *request, de_ep_model_re
 }
 static void on_render(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(asset_render_model, de_ep_model_render_params, query);
-    enqueue(ed, req, query, false, 0, false, 0, w);
+    enqueue(ed, req, query, false, 0, query.has_revision, query.revision, w);
 }
 static void on_material(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                         mpack_writer_t *w) {
@@ -767,6 +770,7 @@ void de__ed_preview_register(de__editor *ed) {
 #endif
     de__ed_add_capability(ed, "assets.modelGeometry");
     de__ed_add_capability(ed, "assets.modelFrames");
+    de__ed_add_capability(ed, "assets.modelPreviewRevision");
     de__ed_on_tick(ed, tick);
     de__ed_on_reset(ed, reset);
     (void)de_command_register("editor.previewStats",

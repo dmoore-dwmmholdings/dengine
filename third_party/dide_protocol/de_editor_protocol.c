@@ -4449,6 +4449,7 @@ void de_ep_write_model_render_params(mpack_writer_t *w, const de_ep_model_render
     ++n;
     ++n;
     n += v->has_mesh ? 1u : 0u;
+    n += v->has_revision ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "id");
     de_ep_write_str(w, v->id);
@@ -4463,6 +4464,10 @@ void de_ep_write_model_render_params(mpack_writer_t *w, const de_ep_model_render
     if (v->has_mesh) {
         mpack_write_cstr(w, "mesh");
         mpack_write_u32(w, v->mesh);
+    }
+    if (v->has_revision) {
+        mpack_write_cstr(w, "revision");
+        mpack_write_u32(w, v->revision);
     }
     mpack_finish_map(w);
 }
@@ -4493,6 +4498,10 @@ void de_ep_read_model_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_mod
             seen |= (uint64_t)1 << 5;
             out->has_mesh = true;
             out->mesh = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 6;
+            out->has_revision = true;
+            out->revision = mpack_expect_u32(r);
         } else {
             mpack_discard(r);
         }
