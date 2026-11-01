@@ -945,7 +945,7 @@ TEST_F(gltf, prefab_golden_text, imp_fx) {
     ASSERT_EQ(de_model_names_build(&f->ir, &n), DE_OK);
     de_model_buf b;
     de_model_buf_init(&b, &f->ir);
-    ASSERT_TRUE(de_model_prefab_toml(&b, &f->ir, &n, "props/robot", "hierarchy.gltf"));
+    ASSERT_TRUE(de_model_prefab_toml(&b, &f->ir, &n, "props/robot", "hierarchy.gltf", true, true));
     void *golden = NULL;
     u64 golden_size = 0;
     ASSERT_EQ(de_file_read_all("gltf:/hierarchy.prefab.toml", &f->alloc, &golden, &golden_size),
@@ -1239,4 +1239,148 @@ TEST_F(gltf, runtime_nested_types, imp_fx) {
     de_asset_system_destroy(f->s);
     f->s = NULL;
 #endif
+}
+
+/* DENG-705: every output combination has truthful DMDL tables, dependencies and prefab refs. */
+static bool selected_text_contains(const void *bytes, u64 size, const char *text) {
+    size_t count = strlen(text);
+    for (u64 i = 0; i + count <= size; ++i)
+        if (memcmp((const u8 *)bytes + i, text, count) == 0)
+            return true;
+    return false;
+}
+TEST_F(gltf, selected_output_matrix, imp_fx) {
+    make_cooker(f, false, false);
+    static const char *const keys[] = {"import_animations", "import_materials", "import_meshes",
+                                       "import_prefab", "import_skeletons"};
+    de_cook_result original;
+    ASSERT_EQ(cook(f, "select/model", "output_selection.gltf", NULL, 0, &original), DE_OK);
+    for (u32 mask = 0; mask < 32; ++mask) {
+        de__manifest_kv flags[5] = {0};
+        for (u32 i = 0; i < 5; ++i) {
+            flags[i].key = keys[i];
+            flags[i].value.type = DE__MANIFEST_BOOL;
+            flags[i].value.u.b = (mask & (1u << i)) != 0;
+        }
+        bool clips = (mask & 1u) != 0, materials = (mask & 2u) != 0;
+        bool meshes = (mask & 4u) != 0, prefab = (mask & 8u) != 0, skeletons = (mask & 16u) != 0;
+        de_cook_result result;
+        de_result status = cook(f, "select/model", "output_selection.gltf", flags, 5, &result);
+        if (clips && !skeletons) {
+            EXPECT_EQ(status, DE_ERR_INVALID_ARGUMENT);
+            EXPECT_EQ(result.subasset_count, 0u);
+            de_cook_result_free(&result);
+            continue;
+        }
+        ASSERT_EQ(status, DE_OK);
+        de_cooked_model_view model;
+        ASSERT_TRUE(de_cooked_model_parse(result.data, result.size, &model, NULL));
+        EXPECT_EQ(model.mesh_count, meshes ? 3u : 0u);
+        EXPECT_EQ(model.material_count, materials ? 2u : 0u);
+        EXPECT_EQ(model.texture_count, 0u);
+        EXPECT_EQ(model.skeleton_count, skeletons ? 1u : 0u);
+        EXPECT_EQ(model.clip_count, clips ? 4u : 0u);
+        EXPECT_EQ(model.node_count, 5u);
+        EXPECT_EQ(model.prefab_id, prefab ? de_asset_id_from("select/model#prefab").hash : 0u);
+        EXPECT_EQ(result.subasset_count, (meshes ? 3u : 0u) + (materials ? 2u : 0u) +
+                                             (skeletons ? 1u : 0u) + (clips ? 4u : 0u) +
+                                             (prefab ? 1u : 0u));
+        EXPECT_EQ(result.dependency_count, result.subasset_count);
+        for (u32 i = 0; i < model.node_count; ++i) {
+            de_cooked_model_node node = de_cooked_model_get_node(&model, i);
+            if (!meshes)
+                EXPECT_EQ(node.mesh, DE_COOKED_NONE);
+            if (!skeletons)
+                EXPECT_EQ(node.skin, DE_COOKED_NONE);
+        }
+        for (u32 i = 0; i < result.subasset_count; ++i) {
+            const de_cook_subasset *asset = &result.subassets[i];
+            const de_cook_subasset *previous = de_cook_result_subasset(&original, asset->name);
+            ASSERT_TRUE(previous != NULL);
+            EXPECT_EQ(asset->id.hash, previous->id.hash);
+            char id[512];
+            snprintf(id, sizeof id, "select/model#%s", asset->name);
+            EXPECT_TRUE(has_dep(&result, id));
+            if (strcmp(asset->type, "mesh") == 0) {
+                de_cooked_mesh_view mesh;
+                ASSERT_TRUE(de_cooked_mesh_parse(asset->data, asset->size, &mesh, NULL));
+                if (!materials)
+                    for (u32 submesh = 0; submesh < mesh.submesh_count; ++submesh)
+                        EXPECT_EQ(de_cooked_mesh_submesh(&mesh, submesh).material_id, 0u);
+            }
+            if (strcmp(asset->type, "prefab") == 0) {
+                EXPECT_EQ(
+                    selected_text_contains(asset->data, asset->size, "[entity.DeMeshRenderer]"),
+                    meshes);
+                if (!materials)
+                    EXPECT_FALSE(selected_text_contains(asset->data, asset->size, "material:"));
+            }
+        }
+        de_cook_result again;
+        ASSERT_EQ(cook(f, "select/model", "output_selection.gltf", flags, 5, &again), DE_OK);
+        EXPECT_EQ(again.size, result.size);
+        EXPECT_MEMEQ(again.data, result.data, result.size);
+        EXPECT_EQ(again.subasset_count, result.subasset_count);
+        for (u32 i = 0; i < result.subasset_count; ++i) {
+            EXPECT_STREQ(again.subassets[i].name, result.subassets[i].name);
+            EXPECT_EQ(again.subassets[i].size, result.subassets[i].size);
+            EXPECT_MEMEQ(again.subassets[i].data, result.subassets[i].data,
+                         result.subassets[i].size);
+        }
+        if (mask == 31) {
+            EXPECT_EQ(result.size, original.size);
+            EXPECT_MEMEQ(result.data, original.data, result.size);
+        }
+        de_cook_result_free(&again);
+        de_cook_result_free(&result);
+    }
+    de_cook_result_free(&original);
+}
+TEST_F(gltf, selected_materials_omit_textures_and_flags_are_strict, imp_fx) {
+    make_cooker(f, false, true);
+    de__manifest_kv flag = {.key = "import_materials",
+                            .value = {.type = DE__MANIFEST_BOOL, .u.b = false}};
+    de_cook_result result;
+    ASSERT_EQ(cook(f, "select/textured", "BoxTextured.gltf", &flag, 1, &result), DE_OK);
+    de_cooked_model_view model;
+    ASSERT_TRUE(de_cooked_model_parse(result.data, result.size, &model, NULL));
+    EXPECT_EQ(model.material_count, 0u);
+    EXPECT_EQ(model.texture_count, 0u);
+    for (u32 i = 0; i < result.subasset_count; ++i) {
+        EXPECT_TRUE(strcmp(result.subassets[i].type, "material") != 0);
+        EXPECT_TRUE(strcmp(result.subassets[i].type, "texture") != 0);
+    }
+    de_cook_result_free(&result);
+    static const char *const keys[] = {"import_meshes", "import_materials", "import_skeletons",
+                                       "import_animations", "import_prefab"};
+    for (u32 i = 0; i < 5u; ++i) {
+        flag.key = keys[i];
+        flag.value.type = DE__MANIFEST_STRING;
+        flag.value.u.s = "false";
+        EXPECT_EQ(cook(f, "select/bad", "Box.gltf", &flag, 1, &result), DE_ERR_INVALID_ARGUMENT);
+        EXPECT_EQ(result.subasset_count, 0u);
+        de_cook_result_free(&result);
+    }
+}
+TEST_F(gltf, selected_glb_animation_only, imp_fx) {
+    make_cooker(f, false, false);
+    de__manifest_kv flags[] = {
+        {.key = "import_materials", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+        {.key = "import_meshes", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+        {.key = "import_prefab", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+    };
+    de_cook_result result;
+    ASSERT_EQ(cook(f, "select/glb", "output_selection.glb", flags, 3, &result), DE_OK);
+    de_cooked_model_view model;
+    ASSERT_TRUE(de_cooked_model_parse(result.data, result.size, &model, NULL));
+    EXPECT_EQ(model.mesh_count, 0u);
+    EXPECT_EQ(model.material_count, 0u);
+    EXPECT_EQ(model.skeleton_count, 1u);
+    EXPECT_EQ(model.clip_count, 4u);
+    EXPECT_EQ(model.prefab_id, 0u);
+    EXPECT_EQ(result.subasset_count, 5u);
+    for (u32 i = 0; i < result.subasset_count; ++i)
+        EXPECT_TRUE(!strcmp(result.subassets[i].type, "skeleton") ||
+                    !strcmp(result.subassets[i].type, "anim_clip"));
+    de_cook_result_free(&result);
 }

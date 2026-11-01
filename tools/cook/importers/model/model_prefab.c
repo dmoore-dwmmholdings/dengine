@@ -87,7 +87,8 @@ static int cmp_u64(const void *a, const void *b) {
 }
 
 bool de_model_prefab_toml(de_model_buf *b, const de_model_ir *ir, const de_model_names *names,
-                          const char *model_id, const char *source_path) {
+                          const char *model_id, const char *source_path, bool meshes,
+                          bool materials) {
     const u64 root_id = scene_id_of("#root"); /* '#' never occurs in a sub-asset name */
     u64 *ids = (u64 *)de_model_ir_array(b->ir, (u64)ir->node_count + 1u, sizeof(u64));
     if (ids == NULL) {
@@ -133,7 +134,7 @@ bool de_model_prefab_toml(de_model_buf *b, const de_model_ir *ir, const de_model
         put_floats(b, "position", n->translation, 3);
         put_floats(b, "rotation", n->rotation, 4);
         put_floats(b, "scale", n->scale, 3);
-        if (n->mesh < 0 || ir->meshes[n->mesh].submesh_count == 0)
+        if (!meshes || n->mesh < 0 || ir->meshes[n->mesh].submesh_count == 0)
             continue;
         const de_model_mesh *m = &ir->meshes[n->mesh];
         de_model_buf_printf(b, "[entity.DeMeshRenderer]\nmesh = ");
@@ -145,7 +146,7 @@ bool de_model_prefab_toml(de_model_buf *b, const de_model_ir *ir, const de_model
             if (s != 0)
                 de_model_buf_put(b, ", ", 2);
             i32 mat = m->submeshes[s].material;
-            if (mat >= 0)
+            if (materials && mat >= 0)
                 put_subasset(b, model_id, names->materials[mat]);
             else
                 de_model_buf_printf(b, "\"0x0000000000000000\""); /* the mesh's default */

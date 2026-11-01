@@ -138,12 +138,13 @@ void de_model_clip_s3_encode(const f64 q[4], u16 w[3], f32 dec[4]);
  * Emits the skeleton sub-assets (`skeleton:<name>`, type `skeleton`, one per IR skin in skin
  * order) and the clip sub-assets (`anim:<name>`, type `anim_clip`, one per animation that
  * animates a skeleton, in animation order). Fills the IDs and counts for the model (DMDL).
+ * With import_clips=false only skeletons are emitted; clip settings/markers are not consumed.
  * Animations of a model without skins are not cooked (a warning).
  */
 de_result de_model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, de_model_ir *ir,
                                             const de_model_names *names, de_asset_id *skeleton_ids,
                                             u32 *skeleton_count, de_asset_id *clip_ids,
-                                            u32 *clip_count);
+                                            u32 *clip_count, bool import_clips);
 
 DE_EXTERN_C_END
 

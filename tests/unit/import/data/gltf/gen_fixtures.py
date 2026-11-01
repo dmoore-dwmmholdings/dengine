@@ -9,6 +9,7 @@ KHRONOS_SAMPLES.txt.
 Every buffer is an embedded base64 data URI, so each fixture is one self-contained .gltf file.
 """
 import base64
+import copy
 import json
 import math
 import os
@@ -345,6 +346,45 @@ def khr_all():
     khr("KHR_materials_unlit", {}, core={"pbrMetallicRoughness": {"baseColorFactor": [0, 1, 0, 1]}})
 
 
+def output_selection():
+    """DENG-705/R155: three meshes, two materials, one skin and four real clips."""
+    with open(os.path.join(HERE, "skinned.gltf"), encoding="utf-8") as f:
+        j = json.load(f)
+    j["materials"] = [
+        {"name": "Skin", "pbrMetallicRoughness": {"baseColorFactor": [.7, .2, .1, 1]}},
+        {"name": "Steel", "pbrMetallicRoughness": {"metallicFactor": 1}},
+    ]
+    base = copy.deepcopy(j["meshes"][0])
+    j["meshes"] = []
+    for i, name in enumerate(["Body", "Sword", "Shield"]):
+        mesh = copy.deepcopy(base)
+        mesh["name"] = name
+        mesh["primitives"][0]["material"] = i % 2
+        j["meshes"].append(mesh)
+        if i:
+            j["nodes"].append({"name": name, "mesh": i, "skin": 0,
+                               "translation": [i * 2, 0, 0]})
+            j["scenes"][0]["nodes"].append(len(j["nodes"]) - 1)
+    animation = copy.deepcopy(j["animations"][0])
+    j["animations"] = []
+    for name in ["Idle", "Walk", "Run", "Jump"]:
+        clip = copy.deepcopy(animation)
+        clip["name"] = name
+        j["animations"].append(clip)
+    with open(os.path.join(HERE, "output_selection.gltf"), "w", encoding="utf-8") as f:
+        json.dump(j, f, indent=2, sort_keys=True)
+        f.write("\n")
+    binary = base64.b64decode(j["buffers"][0].pop("uri").split(",", 1)[1])
+    payload = json.dumps(j, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload += b" " * (-len(payload) % 4)
+    binary += b"\x00" * (-len(binary) % 4)
+    size = 12 + 8 + len(payload) + 8 + len(binary)
+    with open(os.path.join(HERE, "output_selection.glb"), "wb") as f:
+        f.write(struct.pack("<III", 0x46546C67, 2, size))
+        f.write(struct.pack("<II", len(payload), 0x4E4F534A) + payload)
+        f.write(struct.pack("<II", len(binary), 0x004E4942) + binary)
+
+
 if __name__ == "__main__":
     two_materials()
     strips_fans()
@@ -357,4 +397,5 @@ if __name__ == "__main__":
     compression("KHR_draco_mesh_compression", "draco_required.gltf")
     compression("EXT_meshopt_compression", "meshopt_required.gltf")
     skinned()
+    output_selection()
     khr_all()

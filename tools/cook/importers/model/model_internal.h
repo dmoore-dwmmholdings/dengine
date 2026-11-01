@@ -249,10 +249,13 @@ de_result de_model_meshlets_add(de_model_ir *ir, de_model_meshlets *ml, const u3
  * `DeTransform` and, for a node with a mesh, `DeMeshRenderer { mesh, materials }` naming
  * sub-assets of `model_id` (the model's asset ID string). Scene IDs are XXH3-64 of the node's
  * sub-asset name (the root: of "#root"), so they do not change when another node is added.
+ * With meshes=false the hierarchy has no render components. With materials=false
+ * material assignments use zero/default IDs instead of omitted material sub-assets.
  * Returns false when two scene IDs collide (the TOML is not usable).
  */
 bool de_model_prefab_toml(de_model_buf *b, const de_model_ir *ir, const de_model_names *names,
-                          const char *model_id, const char *source_path);
+                          const char *model_id, const char *source_path, bool meshes,
+                          bool materials);
 
 DE_EXTERN_C_END
 

@@ -204,7 +204,8 @@ de_result de_model_names_build(de_model_ir *ir, de_model_names *out) {
  * not cooked); node skins point into `skeleton_ids` when there is one per IR skin. */
 static void model_write(de_model_buf *b, const de_model_ir *ir, const de_model_names *names,
                         const u32 *mesh_index, const de_asset_id *mesh_ids, u32 mesh_count,
-                        const de_asset_id *material_ids, const de_asset_id *texture_ids,
+                        const de_asset_id *material_ids, u32 material_count,
+                        const de_asset_id *texture_ids, u32 texture_count,
                         const de_asset_id *skeleton_ids, u32 skeleton_count,
                         const de_asset_id *clip_ids, u32 clip_count, de_asset_id prefab_id) {
     de_model_buf_put(b, DE_COOKED_MODEL_MAGIC, 4);
@@ -213,8 +214,8 @@ static void model_write(de_model_buf *b, const de_model_ir *ir, const de_model_n
     de_model_buf_u32(b, ir->node_count);
     de_model_buf_u32(b, ir->root_count);
     de_model_buf_u32(b, mesh_count);
-    de_model_buf_u32(b, ir->material_count);
-    de_model_buf_u32(b, ir->texture_count);
+    de_model_buf_u32(b, material_count);
+    de_model_buf_u32(b, texture_count);
     de_model_buf_u32(b, skeleton_count);
     de_model_buf_u32(b, clip_count);
     u64 at_offsets = b->size;
@@ -249,9 +250,9 @@ static void model_write(de_model_buf *b, const de_model_ir *ir, const de_model_n
     u64 id_off = b->size;
     for (u32 i = 0; i < mesh_count; ++i)
         de_model_buf_u64(b, mesh_ids[i].hash);
-    for (u32 i = 0; i < ir->material_count; ++i)
+    for (u32 i = 0; i < material_count; ++i)
         de_model_buf_u64(b, material_ids[i].hash);
-    for (u32 i = 0; i < ir->texture_count; ++i)
+    for (u32 i = 0; i < texture_count; ++i)
         de_model_buf_u64(b, texture_ids[i].hash);
     for (u32 i = 0; i < skeleton_count; ++i)
         de_model_buf_u64(b, skeleton_ids[i].hash);
@@ -316,6 +317,7 @@ static de_result check_values(const de_model_ir *ir, const char *path) {
 typedef struct model_settings {
     f32 scale;
     bool import_cameras;
+    bool import_meshes, import_materials, import_skeletons, import_animations, import_prefab;
     /* DENG-106: `max_decoded_mib` (0 when not given: the default), passed on to texture cooks. */
     i64 max_decoded_mib;
     /* The mesh stage (DENG-103, mesh_cook.c). */
@@ -356,16 +358,20 @@ static de_result model_mesh_stage(de_asset_import_ctx *ctx, const model_settings
  * DENG-104 extension point: skeleton and clip sub-assets (`skeleton:<name>` and `anim:<name>`
  * from `names`), from ir->skins and ir->anims (raw, already in engine coordinates). Emit one
  * skeleton per IR skin in skin order, or none, so node skin indices stay valid; set the counts
- * and the IDs. Version 1 emits nothing.
+ * and the IDs. Selection never emits clips without their skeletons.
  */
 static de_result model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, const model_settings *s,
                                                 de_model_ir *ir, const de_model_names *names,
                                                 de_asset_id *skeleton_ids, u32 *skeleton_count,
                                                 de_asset_id *clip_ids, u32 *clip_count) {
-    (void)s;
+    if (!s->import_skeletons) {
+        *skeleton_count = 0;
+        *clip_count = 0;
+        return DE_OK;
+    }
     /* DENG-104: anim_skeleton.c and anim_clip_compress.c (settings `anim_*`, see anim_cook.h). */
     return de_model_emit_skeletons_and_clips(ctx, ir, names, skeleton_ids, skeleton_count, clip_ids,
-                                             clip_count);
+                                             clip_count, s->import_animations);
 }
 
 static de_asset_id sub_id(de_model_ir *ir, const char *model_id, const char *name) {
@@ -402,13 +408,18 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
     if (texture_ids == NULL || mesh_index == NULL)
         return DE_ERR_OUT_OF_MEMORY;
     for (u32 i = 0; i < ir->texture_count; ++i)
-        texture_ids[i] = sub_id(ir, model_id, names.textures[i]);
+        texture_ids[i] =
+            s->import_materials ? sub_id(ir, model_id, names.textures[i]) : (de_asset_id){0};
     for (u32 i = 0; i < ir->material_count; ++i)
-        material_ids[i] = sub_id(ir, model_id, names.materials[i]);
+        material_ids[i] =
+            s->import_materials ? sub_id(ir, model_id, names.materials[i]) : (de_asset_id){0};
+
+    u32 material_count = s->import_materials ? ir->material_count : 0;
+    u32 texture_count = s->import_materials ? ir->texture_count : 0;
 
     /* Textures, through the registered texture importer (pass-through until there is one). */
     bool raw_textures = false;
-    for (u32 i = 0; i < ir->texture_count; ++i) {
+    for (u32 i = 0; i < texture_count; ++i) {
         const de_model_texture *t = &ir->textures[i];
         de__manifest_kv kv[3];
         memset(kv, 0, sizeof kv);
@@ -432,7 +443,7 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
                              "image files as they are");
 
     /* Materials. */
-    for (u32 i = 0; i < ir->material_count; ++i) {
+    for (u32 i = 0; i < material_count; ++i) {
         de_model_buf b;
         de_model_buf_init(&b, ir);
         de_model_material_write(&b, &ir->materials[i], texture_ids);
@@ -446,7 +457,7 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
     u32 mesh_count = 0;
     for (u32 i = 0; i < ir->mesh_count; ++i) {
         mesh_index[i] = DE_COOKED_NONE;
-        if (ir->meshes[i].submesh_count == 0)
+        if (!s->import_meshes || ir->meshes[i].submesh_count == 0)
             continue;
         de_model_buf b;
         de_model_buf_init(&b, ir);
@@ -465,42 +476,67 @@ static de_result import_ir(de_asset_import_ctx *ctx, const model_settings *s, de
     for (u32 i = 0; i < clip_count; ++i)
         DE_TRY(de_asset_import_add_dependency(ctx, clip_ids[i]));
 
-    /* The prefab, through the registered prefab importer. */
-    for (u32 i = 0; i < ir->node_count; ++i) {
-        i32 m = ir->nodes[i].mesh;
-        if (ir->nodes[i].in_scene && m >= 0 && ir->meshes[m].submesh_count > 8u)
+    de_asset_id prefab_id = {0};
+    if (s->import_prefab) {
+        /* The prefab, through the registered prefab importer. */
+        for (u32 i = 0; i < ir->node_count; ++i) {
+            i32 m = ir->nodes[i].mesh;
+            if (ir->nodes[i].in_scene && m >= 0 && ir->meshes[m].submesh_count > 8u)
+                de_model_ir_warn(ir,
+                                 "node \"%s\": %u submeshes; the prefab's DeMeshRenderer names the "
+                                 "first 8 materials (the others use the mesh's defaults)",
+                                 names.nodes[i], ir->meshes[m].submesh_count);
+        }
+        de_model_buf toml;
+        de_model_buf_init(&toml, ir);
+        if (!de_model_prefab_toml(&toml, ir, &names, model_id, source_path, s->import_meshes,
+                                  s->import_materials))
+            return toml.failed
+                       ? DE_FAIL(DE_ERR_OUT_OF_MEMORY, "out of memory for the prefab")
+                       : DE_FAIL(DE_ERR_INTERNAL,
+                                 "two node names give the same prefab scene ID; rename one");
+        bool cooked = false;
+        DE_TRY(de_cooker_import_cook_subasset(ctx, names.prefab, "prefab", toml.data, toml.size,
+                                              NULL, 0, &cooked));
+        if (!cooked)
             de_model_ir_warn(ir,
-                             "node \"%s\": %u submeshes; the prefab's DeMeshRenderer names the "
-                             "first 8 materials (the others use the mesh's defaults)",
-                             names.nodes[i], ir->meshes[m].submesh_count);
-    }
-    de_model_buf toml;
-    de_model_buf_init(&toml, ir);
-    if (!de_model_prefab_toml(&toml, ir, &names, model_id, source_path))
-        return toml.failed ? DE_FAIL(DE_ERR_OUT_OF_MEMORY, "out of memory for the prefab")
-                           : DE_FAIL(DE_ERR_INTERNAL,
-                                     "two node names give the same prefab scene ID; rename one");
-    bool cooked = false;
-    DE_TRY(de_cooker_import_cook_subasset(ctx, names.prefab, "prefab", toml.data, toml.size, NULL,
-                                          0, &cooked));
-    if (!cooked)
-        de_model_ir_warn(ir, "no `prefab` importer is registered: the prefab sub-asset holds its "
+                             "no `prefab` importer is registered: the prefab sub-asset holds its "
                              "TOML source");
-    de_asset_id prefab_id = sub_id(ir, model_id, names.prefab);
-    DE_TRY(de_asset_import_add_dependency(ctx, prefab_id));
+        prefab_id = sub_id(ir, model_id, names.prefab);
+        DE_TRY(de_asset_import_add_dependency(ctx, prefab_id));
+    }
 
     de_model_buf b;
     de_model_buf_init(&b, ir);
-    model_write(&b, ir, &names, mesh_index, mesh_ids, mesh_count, material_ids, texture_ids,
-                skeleton_ids, skeleton_count, clip_ids, clip_count, prefab_id);
+    model_write(&b, ir, &names, mesh_index, mesh_ids, mesh_count, material_ids, material_count,
+                texture_ids, texture_count, skeleton_ids, skeleton_count, clip_ids, clip_count,
+                prefab_id);
     if (b.failed)
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "out of memory for the model");
     return de_asset_import_write(ctx, b.data, b.size);
 }
 
+static de_result model_flag(de_asset_import_ctx *ctx, const char *key, bool *out) {
+    const de_asset_setting_value *value = de_asset_import_setting_value(ctx, key);
+    if (value && value->type != DE_ASSET_SETTING_BOOL)
+        return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT, "setting `%s` must be a boolean",
+                                    key);
+    *out = value ? value->u.b : true;
+    return DE_OK;
+}
+
 de_result de_model_import(de_asset_import_ctx *ctx) {
     model_settings s;
     memset(&s, 0, sizeof s);
+    DE_TRY(model_flag(ctx, "import_meshes", &s.import_meshes));
+    DE_TRY(model_flag(ctx, "import_materials", &s.import_materials));
+    DE_TRY(model_flag(ctx, "import_skeletons", &s.import_skeletons));
+    DE_TRY(model_flag(ctx, "import_animations", &s.import_animations));
+    DE_TRY(model_flag(ctx, "import_prefab", &s.import_prefab));
+    if (s.import_animations && !s.import_skeletons)
+        return de_asset_import_fail(
+            ctx, DE_ERR_INVALID_ARGUMENT,
+            "import_animations requires import_skeletons; disable clips first");
     f64 scale = de_asset_import_setting_float(ctx, "scale", 1.0);
     if (!(scale > 0.0) || !(scale < 1e6) || isnan(scale))
         return de_asset_import_fail(ctx, DE_ERR_INVALID_ARGUMENT,

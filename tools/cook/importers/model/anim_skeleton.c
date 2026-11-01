@@ -461,14 +461,18 @@ static de_result read_markers(de_asset_import_ctx *ctx, de_model_ir *ir,
 de_result de_model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, de_model_ir *ir,
                                             const de_model_names *names, de_asset_id *skeleton_ids,
                                             u32 *skeleton_count, de_asset_id *clip_ids,
-                                            u32 *clip_count) {
+                                            u32 *clip_count, bool import_clips) {
     *skeleton_count = 0;
     *clip_count = 0;
     de_model_anim_settings s;
-    DE_TRY(de_model_anim_settings_read(ctx, &s));
-    DE_TRY(read_markers(ctx, ir, &s));
+    de_model_anim_settings_default(&s);
+    s.joint_names = de_asset_import_setting_bool(ctx, "anim_joint_names", true);
+    if (import_clips) {
+        DE_TRY(de_model_anim_settings_read(ctx, &s));
+        DE_TRY(read_markers(ctx, ir, &s));
+    }
     if (ir->skin_count == 0) {
-        if (ir->anim_count != 0)
+        if (import_clips && ir->anim_count != 0)
             de_model_ir_warn(ir,
                              "%u animation(s) not cooked: the model has no skin (node animation "
                              "without a skeleton is not supported yet)",
@@ -493,7 +497,7 @@ de_result de_model_emit_skeletons_and_clips(de_asset_import_ctx *ctx, de_model_i
             return DE_ERR_OUT_OF_MEMORY;
         *skeleton_count = i + 1u;
     }
-    for (u32 i = 0; i < ir->anim_count; ++i) {
+    for (u32 i = 0; import_clips && i < ir->anim_count; ++i) {
         const de_model_anim *an = &ir->anims[i];
         i32 k = de_model_anim_pick_skeleton(ir, an, skels, ir->skin_count);
         if (k < 0) {

@@ -930,3 +930,28 @@ TEST_F(fbx, reject_corrupt, fbx_fx) {
     EXPECT_TRUE(strstr(de_error_last()->message, "props/trunc") != NULL);
     EXPECT_TRUE(strstr(de_error_last()->message, "FBX") != NULL);
 }
+
+TEST_F(fbx, selected_hierarchy_only, fbx_fx) {
+    make_cooker(f, false);
+    de__manifest_kv flags[] = {
+        {.key = "import_animations", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+        {.key = "import_materials", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+        {.key = "import_meshes", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+        {.key = "import_prefab", .value = {.type = DE__MANIFEST_BOOL, .u.b = true}},
+        {.key = "import_skeletons", .value = {.type = DE__MANIFEST_BOOL, .u.b = false}},
+    };
+    de_cook_result result;
+    ASSERT_EQ(cook(f, "select/fbx", "skinned.fbx", flags, 5, &result), DE_OK);
+    de_cooked_model_view model;
+    ASSERT_TRUE(de_cooked_model_parse(result.data, result.size, &model, NULL));
+    EXPECT_TRUE(model.node_count > 0);
+    EXPECT_EQ(model.mesh_count, 0u);
+    EXPECT_EQ(model.material_count, 0u);
+    EXPECT_EQ(model.texture_count, 0u);
+    EXPECT_EQ(model.skeleton_count, 0u);
+    EXPECT_EQ(model.clip_count, 0u);
+    EXPECT_EQ(result.subasset_count, 1u);
+    EXPECT_STREQ(result.subassets[0].type, "prefab");
+    EXPECT_EQ(model.prefab_id, result.subassets[0].id.hash);
+    de_cook_result_free(&result);
+}

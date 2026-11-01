@@ -410,6 +410,15 @@ static const schema_prop k_texture[] = {
     {"rt_proxy", "boolean", "false", NULL, "Cook a silhouette proxy for sprite ray tracing", 0, 0},
 };
 static const schema_prop k_model[] = {
+    {"import_meshes", "boolean", "true", NULL, "Generate mesh assets; false keeps hierarchy only",
+     0, 0},
+    {"import_materials", "boolean", "true", NULL,
+     "Generate materials and their textures; false uses default materials", 0, 0},
+    {"import_skeletons", "boolean", "true", NULL,
+     "Generate skeletons; disable animation clips before turning this off", 0, 0},
+    {"import_animations", "boolean", "true", NULL,
+     "Generate animation clips (requires import_skeletons)", 0, 0},
+    {"import_prefab", "boolean", "true", NULL, "Generate the node hierarchy prefab", 0, 0},
     {"scale", "number", "1", NULL, "Uniform scale", 0.0001, 10000},
     {"import_cameras", "boolean", "false", NULL, "Import cameras and lights", 0, 0},
     {"generate_lods", "boolean", "true", NULL, "Build the LOD chain", 0, 0},

@@ -14,6 +14,12 @@
  *
  * Settings (the manifest asset and `[defaults.model]`; every setting is in the settings hash):
  *   - `scale` (float, default 1.0, > 0): uniform scale applied with the axis conversion.
+ *   - `import_meshes`, `import_materials`, `import_skeletons`, `import_animations`,
+ *     `import_prefab` (strict bool, all default true): select generated output classes.
+ *     Materials include their textures. Disabled meshes leave hierarchy-only nodes/prefabs;
+ *     disabled materials use zero/default material IDs. Clips require skeleton output;
+ *     import_animations=true with import_skeletons=false is refused. Source IR is still parsed
+ *     and validated in full. Names remain stable even for omitted output classes.
  *   - `import_cameras` (bool, default false): cameras and lights are not imported yet; true logs
  *     a warning.
  *   - `generate_lods` (bool, default true): the LOD chain (up to 8 LODs); false keeps LOD 0.
@@ -51,10 +57,11 @@ DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output: cached cooks of older versions are not reused. */
 #define DE_MODEL_IMPORTER_VERSION                                                                  \
-    7u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104); 4: faster clip key           \
+    8u /* 2: meshes v2 (DENG-103); 3: skeletons and clips (DENG-104); 4: faster clip key           \
           reduction and check passes (DENG-399); 5: the prefab keeps DeMeshRenderer where the      \
           render components are registered (DENG-178), so older cached prefabs are not reused;     \
-          6: materials are DMAT v2 (DENG-302); 7: optional named clip markers (DENG-182) */
+          6: materials are DMAT v2 (DENG-302); 7: optional named clip markers (DENG-182); 8:       \
+          selected outputs (DENG-705) */
 
 /** Default of the `max_decoded_mib` setting (DENG-106) and its largest value (1 TiB). */
 #define DE_MODEL_MAX_DECODED_MIB_DEFAULT 1024
