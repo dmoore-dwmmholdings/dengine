@@ -327,6 +327,49 @@ DE_API void de_view_set_render_scale(de_renderer *r, de_view v, f32 scale);
  * renderer's tier as a cap, clamped. The renderer's settings for a stale handle. */
 DE_API de_render_settings de_view_get_settings(de_renderer *r, de_view v);
 
+/* ---------- Per-view post-processing (SPEC §12.5, §12.11) ---------- */
+/** Zero initializes the engine defaults. Every numeric zero selects the documented default;
+ * use the effect flags to turn an effect off. Nonfinite/out-of-range values are sanitized.
+ * Bloom and LUT grading default on; DoF, motion blur, grain and vignette default off.
+ * TAA/upscaling is controlled by de_render_settings.upscaler. Auto exposure is selected by
+ * DeCamera.exposure_ev100 = NaN, not by another toggle here. */
+typedef struct de_post_settings {
+    bool bloom_disable, dof_enable, motion_blur_enable, grading_disable;
+    bool grain_enable, vignette_enable;
+    f32 bloom_intensity;           /**< Default 0.04. */
+    f32 bloom_threshold;           /**< Default 1, scene-linear. */
+    f32 exposure_compensation;     /**< Default 0 EV; range -32..32. */
+    f32 exposure_min_ev100;        /**< Default -8; range -32..32. */
+    f32 exposure_max_ev100;        /**< Default 16; range -32..32. */
+    f32 exposure_speed_up;         /**< Default 3 EV/s. */
+    f32 exposure_speed_down;       /**< Default 1 EV/s. */
+    f32 dof_focal_length_mm;       /**< Default 50; range 1..1000 mm. */
+    f32 dof_f_stop;                /**< Default 2.8; range 0.1..128. */
+    f32 dof_focus_distance;        /**< Default 10; range 0.001..1e9 metres. */
+    f32 motion_blur_shutter_angle; /**< Default 180; range 0..360 degrees. */
+    u32 motion_blur_samples;       /**< Default 8; maximum 64. */
+    de_texture grading_lut;        /**< Zero: no LUT, independent of the grading flag. */
+    f32 grading_lut_weight;        /**< Default 1; range 0..1. */
+    f32 grain_intensity;           /**< Default 0.05; range 0..1. */
+    f32 grain_size;                /**< Default 1; range 0.1..16 pixels. */
+    f32 vignette_intensity;        /**< Default 0.3; range 0..1. */
+    f32 vignette_smoothness;       /**< Default 0.5; range 0..1. */
+    f32 vignette_roundness;        /**< Default 1; range 0..1. */
+} de_post_settings;
+/** Copies sanitized settings; NULL restores defaults. Main thread; applies to the next frame.
+ * This stores configuration: each effect becomes active when its implementation is available. */
+DE_API void de_view_set_post(de_renderer *r, de_view v, const de_post_settings *s);
+/** Returns sanitized settings, or defaults for a NULL renderer or stale view. */
+DE_API de_post_settings de_view_get_post(de_renderer *r, de_view v);
+
+/** HDR calibration. Numeric zero selects defaults: paper white 200, peak 1000, UI 200 nits.
+ * force_sdr defaults false. Output encoding and this setter are implemented by DENG-164. */
+typedef struct de_hdr_settings {
+    f32 paper_white_nits, peak_nits, ui_brightness_nits;
+    bool force_sdr;
+} de_hdr_settings;
+DE_API void de_renderer_set_hdr(de_renderer *r, const de_hdr_settings *s);
+
 /* ---------- Render graph (for engine passes and game-defined passes) ----------
  * SPEC §12.3 (DENG-171). A de_rg is one frame's graph. Passes declare what they read and write,
  * the queue they run on and an execute callback; the graph derives the dependencies, culls passes

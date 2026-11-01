@@ -24,6 +24,7 @@
  * passes the last frame that used them, so frames in flight never see them go.
  */
 #include "render/views_internal.h"
+#include "render/post/settings.h"
 
 #include "render/graph/rg_internal.h"
 #include "render/scene/gpu_scene.h"
@@ -60,10 +61,11 @@ typedef struct view_main {
     de__rw_view capture_camera;
     bool has_settings;
     de_render_settings settings; /**< clamped to the device when set */
-    f32 render_scale;            /**< 0: the settings' render_scale */
-    u32 seq;                     /**< creation sequence: ties of `order` */
-    u32 layer_mask;              /**< DENG-239: de_view_set_layer_mask (0: every layer) */
-    u32 excluded_light_mask;     /**< Complement: zero-initialized views select every light bit. */
+    de_post_settings post;
+    f32 render_scale;        /**< 0: the settings' render_scale */
+    u32 seq;                 /**< creation sequence: ties of `order` */
+    u32 layer_mask;          /**< DENG-239: de_view_set_layer_mask (0: every layer) */
+    u32 excluded_light_mask; /**< Complement: zero-initialized views select every light bit. */
     de_view_display display;
     const de__view_hidden *hidden;
 } view_main;
@@ -551,6 +553,31 @@ de_render_settings de_view_get_settings(de_renderer *r, de_view v) {
     const view_main copy = m != NULL ? *m : (view_main){0};
     de_mutex_unlock(&vs->lock);
     return effective_settings(r, &copy, &rs);
+}
+
+void de_view_set_post(de_renderer *r, de_view v, const de_post_settings *s) {
+    de__views *vs = views_of(r);
+    if (!vs)
+        return;
+    const de_post_settings copy = de__post_settings_resolve(s);
+    de_mutex_lock(&vs->lock);
+    view_main *m = main_of(vs, v);
+    if (m)
+        m->post = copy;
+    de_mutex_unlock(&vs->lock);
+}
+
+de_post_settings de_view_get_post(de_renderer *r, de_view v) {
+    de__views *vs = views_of(r);
+    de_post_settings copy = {0};
+    if (vs) {
+        de_mutex_lock(&vs->lock);
+        const view_main *m = main_of(vs, v);
+        if (m)
+            copy = m->post;
+        de_mutex_unlock(&vs->lock);
+    }
+    return de__post_settings_resolve(&copy);
 }
 
 /* ---------- Main thread: stages and hooks ---------- */
@@ -1256,6 +1283,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.camera = s->copy.capture ? &s->copy.capture_camera : &world->views[s->camera];
     vf.probe_capture = s->copy.capture;
     vf.settings = &s->eff;
+    vf.post = de__post_settings_resolve(&s->copy.post);
     vf.frame_index = frame_index;
     vf.width = s->w;
     vf.height = s->h;

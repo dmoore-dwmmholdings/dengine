@@ -152,6 +152,7 @@ typedef struct de__view_frame {
     de_rg_resource
         initial_color; /**< Original internal/output target before debug/post replacements. */
     de_gpu_format color_format;
+    de_post_settings post; /**< Immutable settings for this frame. */
     /** DENG-239: de_view_set_layer_mask (0: every layer). */
     u32 layer_mask;
     u32 excluded_light_mask; /**< Complement of the public selection; zero keeps legacy fixtures. */

@@ -16,6 +16,7 @@ de_add_module(
         graph/rg_cache.c
         graph/rg_execute.c
         graph/rg_timing.c
+        post/settings.c
     DEPS gpu asset ecs task
 )
 

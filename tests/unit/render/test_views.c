@@ -37,6 +37,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include "render/post/settings.h"
 
 #define WAIT_NS ((u64)30 * 1000000000u)
 
@@ -1108,5 +1110,132 @@ TEST_F(views, metal_destroy_in_flight, vfx) {
     de_renderer_destroy(f->r);
     f->r = NULL;
     de_gpu_texture_destroy(f->d, t);
+    stop(f);
+}
+
+/* DENG-163: settings are configuration only until each post stage lands. */
+TEST(post_settings, zero_defaults) {
+    const de_post_settings zero = {0};
+    const de_post_settings p = de__post_settings_resolve(&zero);
+    EXPECT_FALSE(p.bloom_disable);
+    EXPECT_FALSE(p.dof_enable);
+    EXPECT_FALSE(p.motion_blur_enable);
+    EXPECT_FALSE(p.grading_disable);
+    EXPECT_FALSE(p.grain_enable);
+    EXPECT_FALSE(p.vignette_enable);
+    EXPECT_FLOAT_EQ(p.bloom_intensity, 0.04f, 0);
+    EXPECT_FLOAT_EQ(p.bloom_threshold, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_compensation, 0.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_min_ev100, -8.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_max_ev100, 16.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_speed_up, 3.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_speed_down, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.dof_focal_length_mm, 50.0f, 0);
+    EXPECT_FLOAT_EQ(p.dof_f_stop, 2.8f, 0);
+    EXPECT_FLOAT_EQ(p.dof_focus_distance, 10.0f, 0);
+    EXPECT_FLOAT_EQ(p.motion_blur_shutter_angle, 180.0f, 0);
+    EXPECT_EQ(p.motion_blur_samples, 8u);
+    EXPECT_EQ(p.grading_lut.id, 0u);
+    EXPECT_FLOAT_EQ(p.grading_lut_weight, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.grain_intensity, 0.05f, 0);
+    EXPECT_FLOAT_EQ(p.grain_size, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.vignette_intensity, 0.3f, 0);
+    EXPECT_FLOAT_EQ(p.vignette_smoothness, 0.5f, 0);
+    EXPECT_FLOAT_EQ(p.vignette_roundness, 1.0f, 0);
+    const de_hdr_settings h = de__hdr_settings_resolve(NULL);
+    EXPECT_FLOAT_EQ(h.paper_white_nits, 200.0f, 0);
+    EXPECT_FLOAT_EQ(h.peak_nits, 1000.0f, 0);
+    EXPECT_FLOAT_EQ(h.ui_brightness_nits, 200.0f, 0);
+    EXPECT_FALSE(h.force_sdr);
+}
+
+TEST(post_settings, sanitize_and_normalize_once) {
+    de_post_settings p = {.bloom_disable = true,
+                          .dof_enable = true,
+                          .bloom_intensity = -1,
+                          .bloom_threshold = NAN,
+                          .exposure_min_ev100 = 20,
+                          .exposure_max_ev100 = -20,
+                          .exposure_compensation = INFINITY,
+                          .dof_f_stop = 1000,
+                          .motion_blur_samples = UINT32_MAX,
+                          .grading_lut = {91},
+                          .grading_lut_weight = 3,
+                          .grain_size = 100};
+    p = de__post_settings_resolve(&p);
+    EXPECT_TRUE(p.bloom_disable);
+    EXPECT_TRUE(p.dof_enable);
+    EXPECT_FLOAT_EQ(p.bloom_intensity, 0.04f, 0);
+    EXPECT_FLOAT_EQ(p.bloom_threshold, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_min_ev100, -20.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_max_ev100, 20.0f, 0);
+    EXPECT_FLOAT_EQ(p.exposure_compensation, 0.0f, 0);
+    EXPECT_FLOAT_EQ(p.dof_f_stop, 128.0f, 0);
+    EXPECT_EQ(p.motion_blur_samples, 64u);
+    EXPECT_EQ(p.grading_lut.id, 91u);
+    EXPECT_FLOAT_EQ(p.grading_lut_weight, 1.0f, 0);
+    EXPECT_FLOAT_EQ(p.grain_size, 16.0f, 0);
+    const de_post_settings again = de__post_settings_resolve(&p);
+    EXPECT_FLOAT_EQ(again.bloom_intensity, p.bloom_intensity, 0);
+    EXPECT_FLOAT_EQ(again.exposure_min_ev100, p.exposure_min_ev100, 0);
+    EXPECT_FLOAT_EQ(again.dof_f_stop, p.dof_f_stop, 0);
+    EXPECT_FLOAT_EQ(again.grain_size, p.grain_size, 0);
+    de_hdr_settings h = {.paper_white_nits = 2000,
+                         .peak_nits = 100,
+                         .ui_brightness_nits = INFINITY,
+                         .force_sdr = true};
+    h = de__hdr_settings_resolve(&h);
+    EXPECT_FLOAT_EQ(h.peak_nits, 2000.0f, 0);
+    EXPECT_FLOAT_EQ(h.ui_brightness_nits, 200.0f, 0);
+    EXPECT_TRUE(h.force_sdr);
+}
+
+typedef struct post_observation {
+    de_view view;
+    f32 bloom[2];
+    u64 frame[2];
+    u32 count;
+} post_observation;
+static void observe_post_settings(de__view_frame *vf, void *user) {
+    post_observation *p = user;
+    if (vf->view.id == p->view.id && p->count < 2) {
+        p->frame[p->count] = vf->frame_index;
+        p->bloom[p->count++] = vf->post.bloom_intensity;
+    }
+}
+
+TEST_F(views, post_settings_copy_reset_generation_and_frame_snapshot, vfx) {
+    start(f, DE_GPU_NULL);
+    const de_view main = de_renderer_main_view(f->r);
+    ASSERT_TRUE(de_entity_alive(f->w, camera(f, main, 0)));
+    const de_view other = view(f, "post", 0, 0, 0.5f, 0.5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(DE_HANDLE_VALID(other));
+    post_observation observed = {.view = main};
+    ASSERT_EQ(de__view_register_stage(f->r, DE__VIEW_SLOT_POST, 0, "observe.post",
+                                      observe_post_settings, &observed),
+              DE_OK);
+    de_post_settings input = {.bloom_intensity = 0.2f, .dof_enable = true};
+    de_view_set_post(f->r, main, &input);
+    input.bloom_intensity = 0.9f; /* setter owns its copy */
+    EXPECT_FLOAT_EQ(de_view_get_post(f->r, main).bloom_intensity, 0.2f, 0);
+    EXPECT_TRUE(de_view_get_post(f->r, main).dof_enable);
+    EXPECT_FLOAT_EQ(de_view_get_post(f->r, other).bloom_intensity, 0.04f, 0);
+    ASSERT_EQ(frame(f), DE_OK);
+    de_view_set_post(f->r, main, NULL);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(observed.count, 2u);
+    EXPECT_GT(observed.frame[1], observed.frame[0]);
+    EXPECT_FLOAT_EQ(observed.bloom[0], 0.2f, 0);
+    EXPECT_FLOAT_EQ(observed.bloom[1], 0.04f, 0);
+    EXPECT_FALSE(de_view_get_post(f->r, main).dof_enable);
+    de_view_set_post(f->r, other, &input);
+    de_view_destroy(f->r, other);
+    de_view_set_post(f->r, other, &input); /* stale setter is harmless */
+    const de_view replacement = view(f, "replacement", 0, 0, 0.5f, 0.5f, 1, (de_gpu_texture){0});
+    ASSERT_TRUE(DE_HANDLE_VALID(replacement));
+    EXPECT_FLOAT_EQ(de_view_get_post(f->r, replacement).bloom_intensity, 0.04f, 0);
+    EXPECT_FLOAT_EQ(de_view_get_post(f->r, other).bloom_intensity, 0.04f, 0);
+    de_view_set_post(NULL, main, &input);
+    EXPECT_FLOAT_EQ(de_view_get_post(NULL, main).bloom_intensity, 0.04f, 0);
     stop(f);
 }
