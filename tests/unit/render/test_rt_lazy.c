@@ -11,6 +11,9 @@
 #include "render/rt/rt_shadows.h"
 #include "render/components_internal.h"
 #include "render/world/render_world.h"
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+#include "gpu/d3d12/d3d12_internal.h"
+#endif
 #include <string.h>
 
 typedef struct lazy_fx {
@@ -19,6 +22,7 @@ typedef struct lazy_fx {
     de_type_registry *types;
     de_world *world;
     de_gpu_texture targets[2];
+    de_gpu_buffer native_buffer;
     de_tracking_allocator memory, gpu_memory;
     de_allocator alloc, gpu_alloc;
     const de__gpu_backend_vtable *native;
@@ -85,6 +89,8 @@ static void lazy_fx_teardown(lazy_fx *f) {
     if (f->device)
         for (u32 i = 0; i < 2; ++i)
             de_gpu_texture_destroy(f->device, f->targets[i]);
+    if (f->device)
+        de_gpu_buffer_destroy(f->device, f->native_buffer);
     if (f->types)
         de_type_registry_destroy(f->types);
     if (f->device)
@@ -98,6 +104,45 @@ static void lazy_fx_teardown(lazy_fx *f) {
 TEST_F(rt_lazy, renderer_registration_does_not_create_hybrid_pipelines, lazy_fx) {
     /* All six original eager owners create cs_generate or cs_sources. Observe real calls. */
     EXPECT_EQ(f->rt_creates, 0u);
+}
+TEST_F(rt_lazy, d3d12_native_resources_keep_identity_under_forwarding_table, lazy_fx) {
+#if defined(_WIN32) && DE_HAS_GPU_D3D12
+    if (f->device->caps.backend != DE_GPU_D3D12)
+        SKIP("D3D12 native resource check requires a D3D12 device");
+    ASSERT_TRUE(f->device->vt == &f->instrumented && f->device->vt != f->native);
+    ASSERT_TRUE(de__d3d12_native_device(f->device) != NULL);
+    f->native_buffer = de_gpu_buffer_create(
+        f->device,
+        &(de_gpu_buffer_desc){.size = 64, .usage = DE_USAGE_COPY_SRC, .memory = DE_MEM_UPLOAD});
+    ASSERT_TRUE(f->native_buffer.id);
+    ID3D12Resource *buffer = de__d3d12_buffer_resource(f->device, f->native_buffer);
+    ASSERT_TRUE(buffer != NULL);
+    ASSERT_NE(ID3D12Resource_GetGPUVirtualAddress(buffer), 0u);
+    f->targets[0] = de_gpu_texture_create(
+        f->device,
+        &(de_gpu_texture_desc){
+            .width = 1, .height = 1, .format = DE_FMT_RGBA8_UNORM, .usage = DE_USAGE_SAMPLED});
+    ASSERT_TRUE(f->targets[0].id);
+    ASSERT_TRUE(de__d3d12_texture_resource(f->device, f->targets[0]) != NULL);
+    EXPECT_TRUE(de__d3d12_native_device(NULL) == NULL);
+    de_gpu_device *other = NULL;
+    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_NULL}, &other), DE_OK);
+    EXPECT_TRUE(de__d3d12_native_device(other) == NULL);
+    de_gpu_device_destroy(other);
+    other = NULL;
+    de__gpu_register_backend(DE_GPU_D3D12, &de__gpu_null_vtable);
+    de_result result = de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_D3D12}, &other);
+    de__gpu_register_backend(DE_GPU_D3D12, NULL);
+    ASSERT_EQ(result, DE_OK);
+    EXPECT_EQ(de_gpu_get_caps(other)->backend, DE_GPU_D3D12);
+    EXPECT_TRUE(de__d3d12_native_device(other) == NULL);
+    EXPECT_TRUE(de__d3d12_buffer_resource(other, (de_gpu_buffer){0}) == NULL);
+    EXPECT_TRUE(de__d3d12_texture_resource(other, (de_gpu_texture){0}) == NULL);
+    de_gpu_device_destroy(other);
+#else
+    (void)f;
+    SKIP("D3D12 native resources unavailable in this build");
+#endif
 }
 TEST(rt_lazy, partial_ao_owner_allocation_failure_releases_state) {
     de_tracking_allocator memory;

@@ -721,7 +721,9 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
 /* ---------- Test hooks ---------- */
 
 static d3d12_device *as_d3d12(de_gpu_device *d) {
-    return d && d->vt == &de__gpu_d3d12_vtable ? de__d3d12(d) : NULL;
+    /* Forwarding tables retain the native constructor. The requested backend enum
+     * alone is insufficient: tests/out-of-tree backends may override its table. */
+    return d && d->vt->device_create == d3d12_device_create ? de__d3d12(d) : NULL;
 }
 
 u32 de__d3d12_debug_error_count(de_gpu_device *d) {
