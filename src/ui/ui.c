@@ -13,6 +13,7 @@
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
+enum { DE_UI_LAYOUT_CHANGE_QUERIES = 9 };
 static u32 hash_entity(de_entity entity) {
     u64 v = entity.bits;
     v ^= v >> 33;
@@ -104,6 +105,15 @@ static void gather(const de_query_chunk *chunk, void *user) {
         de_ui_record *record = &ui->records[index];
         record->seen = ui->frame;
         record->node = nodes[i];
+        /* Color, opacity and other paint values do not change geometry. Border
+         * width is the style input consumed by measure/arrange, including its
+         * default zero when the style component is removed. */
+        const DeUiStyle *style = de_entity_get_const(ui->world, entity, ui->ids.style);
+        const f32 border_width = style ? style->border_width : 0;
+        if (border_width != record->border_width) {
+            record->border_width = border_width;
+            record->dirty = record->measure_dirty = true;
+        }
         de_component components[] = {ui->ids.anchor, ui->ids.grid,  ui->ids.grid_item,
                                      ui->ids.popup,  ui->ids.style, ui->ids.image,
                                      ui->ids.text};
@@ -246,7 +256,10 @@ de_result de_ui_create(const de_ui_desc *desc, de_ui **out) {
         return widgets_result;
     }
     de_result advanced_result = de_ui__advanced_init(ui);
-    if (advanced_result != DE_OK) { de_ui_destroy(ui); return advanced_result; }
+    if (advanced_result != DE_OK) {
+        de_ui_destroy(ui);
+        return advanced_result;
+    }
 #if defined(DE_UI_NAVIGATION)
     de_result focus_result = de_ui__focus_init(ui);
     if (focus_result != DE_OK) {
@@ -317,14 +330,13 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     de_query_term term = {ui->ids.node, DE_READ};
     de_query_desc all = {.terms = &term, .term_count = 1};
     ui->all_nodes = de_query_create(world, &all);
-    de_component changes[] = {ui->ids.node,          ui->ids.anchor, ui->ids.grid,
-                              ui->ids.grid_item,     ui->ids.popup,  ui->ids.style,
-                              ui->ids.image,         ui->ids.text,   ui->hierarchy.child_of,
-                              ui->hierarchy.children};
-    de_query_desc queries[11];
-    de_query_filter filters[10];
+    de_component changes[] = {ui->ids.node,      ui->ids.anchor,         ui->ids.grid,
+                              ui->ids.grid_item, ui->ids.popup,          ui->ids.image,
+                              ui->ids.text,      ui->hierarchy.child_of, ui->hierarchy.children};
+    de_query_desc queries[DE_UI_LAYOUT_CHANGE_QUERIES + 1];
+    de_query_filter filters[DE_UI_LAYOUT_CHANGE_QUERIES];
     queries[0] = all;
-    for (u32 i = 0; i < 10; ++i) {
+    for (u32 i = 0; i < DE_UI_LAYOUT_CHANGE_QUERIES; ++i) {
         filters[i] = (de_query_filter){changes[i], DE_CHANGED};
         queries[i + 1] = (de_query_desc){
             .terms = &term, .term_count = 1, .filters = &filters[i], .filter_count = 1};
@@ -337,7 +349,7 @@ void de_ui_attach(de_ui *ui, de_world *world) {
                                                .user = ui,
                                                .flags = DE_SYSTEM_MAIN_THREAD | DE_SYSTEM_EXCLUSIVE,
                                                .queries = queries,
-                                               .query_count = 11,
+                                               .query_count = DE_UI_LAYOUT_CHANGE_QUERIES + 1,
                                                .resources = &resource,
                                                .resource_count = 1});
     if (!ui->all_nodes.id || !ui->layout_system.id) {
@@ -444,7 +456,7 @@ void de_ui__layout_system(de_system_ctx *ctx) {
             last = index;
         }
     }
-    for (u32 i = 1; i < 11; ++i)
+    for (u32 i = 1; i < DE_UI_LAYOUT_CHANGE_QUERIES + 1; ++i)
         de_query_each(ui->world, ctx->queries[i], changed, ui);
     for (u32 i = 0; i < ui->record_count; ++i)
         if (ui->records[i].alive && ui->records[i].dirty)

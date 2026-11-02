@@ -49,6 +49,72 @@ TEST_F(ui_style_resolve, focus_pressed_disabled_and_preserve_unset_fields, ui_fx
     EXPECT_FLOAT_EQ(style_get(f, e).opacity, .6f, 0);
     EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 7, 0);
 }
+TEST_F(ui_style_resolve, changing_property_masks_preserves_latest_authored_values, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.\".opacity\"]\nopacity=0.2\n"
+                                   "[style.\".radius\"]\nradius=20"),
+              DE_OK);
+    de_entity e = style_button(f, (de_entity){0}, "opacity");
+    DeUiStyle *own = de_entity_add(f->world, e, f->ui->ids.style);
+    own->opacity = 1;
+    own->corner_radius = 3;
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .2f, 0);
+    own = de_entity_get(f->world, e, f->ui->ids.style);
+    own->opacity = .8f;     /* Authored edit to a previously controlled property. */
+    own->corner_radius = 7; /* Authored edit before this property enters the cascade. */
+    ui_node_edit(f, e)->padding[0] = (de_ui_len){DE_UI_PX, 11};
+    ui_node_edit(f, e)->style_class = de_name_from("radius");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 20, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->padding[0].value, 11, 0);
+    ui_node_edit(f, e)->style_class = (de_name){0};
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 7, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->padding[0].value, 11, 0);
+}
+TEST_F(ui_style_resolve, shared_cascade_keeps_entity_values_and_selector_revision_isolation,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n"
+                                   "[style.\".shared\"]\nopacity=0.4\nbackground='$primary'\n"
+                                   "[style.\"button.shared\"]\nopacity=0.2\n"
+                                   "[style.\"button.shared:hover\"]\nopacity=0.7\n"),
+              DE_OK);
+    enum { N = 64 };
+    de_entity entities[N];
+    for (u32 i = 0; i < N; ++i) {
+        entities[i] = style_button(f, (de_entity){0}, "shared");
+        DeUiStyle *own = de_entity_add(f->world, entities[i], f->ui->ids.style);
+        own->opacity = .8f;
+        own->corner_radius = (f32)i;
+        if (i % 4 == 0) {
+            DeUiWidgetType *widget = de_entity_get(f->world, entities[i], f->ui->style->widget);
+            widget->type = DE_UI_WIDGET_TEXT;
+        } else if (i % 4 == 1) {
+            DeUiInteractionState *interaction =
+                de_entity_add(f->world, entities[i], f->ui->ids.state);
+            interaction->hovered = true;
+        }
+    }
+    for (u32 phase = 0; phase < 3; ++phase) {
+        if (phase == 1)
+            ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+        if (phase == 2)
+            for (u32 i = 0; i < N; i += 2)
+                ui_node_edit(f, entities[i])->style_class = (de_name){0};
+        style_step(f, 0);
+        for (u32 i = 0; i < N; ++i) {
+            DeUiStyle value = style_get(f, entities[i]);
+            bool removed = phase == 2 && !(i & 1);
+            f32 opacity = removed ? .8f : i % 4 == 0 ? .4f : i % 4 == 1 ? .7f : .2f;
+            EXPECT_FLOAT_EQ(value.opacity, opacity, .00001f);
+            EXPECT_FLOAT_EQ(value.corner_radius, (f32)i, 0);
+            if (!removed)
+                EXPECT_FLOAT_EQ(value.background.x, phase ? 1.f : 0.f, 0);
+        }
+    }
+}
 TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),
@@ -68,6 +134,69 @@ TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     style_step(f, 0);
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
 }
+TEST_F(ui_style_resolve, visual_theme_changes_preserve_layout_and_authored_border_changes_reflow,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n"
+                                   "[style.button]\nbackground='$primary'"),
+              DE_OK);
+    de_entity root = ui_node(f, (de_entity){0}), child = style_button(f, root, NULL);
+    ui_node_edit(f, root)->width = (de_ui_len){DE_UI_PX, 100};
+    ui_node_edit(f, root)->height = (de_ui_len){DE_UI_PX, 80};
+    ui_node_edit(f, child)->width = (de_ui_len){DE_UI_PX, 20};
+    ui_node_edit(f, child)->height = (de_ui_len){DE_UI_PX, 10};
+    style_step(f, 0);
+    const de_vec4 before = ui_rect(f, child);
+    ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, child).background.x, 1, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 1u);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_measured, 0u);
+    expect_rect(ui_rect(f, child), before.x, before.y, before.z, before.w);
+    DeUiStyle *style = de_entity_get(f->world, child, f->ui->ids.style);
+    style->opacity = .5f;
+    style->corner_radius = 7;
+    style->border_color = (de_vec4){1, 0, 0, 1};
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+    EXPECT_FLOAT_EQ(style_get(f, child).opacity, .5f, 0);
+    style = de_entity_add(f->world, root, f->ui->ids.style);
+    style->border_width = 4;
+    style_step(f, 0);
+    EXPECT_TRUE(de_ui_get_layout_stats(f->ui).nodes_laid_out > 0);
+    expect_rect(ui_rect(f, child), 4, 4, 20, 10);
+    style = de_entity_get(f->world, root, f->ui->ids.style);
+    style->border_width = 8;
+    style_step(f, 0);
+    expect_rect(ui_rect(f, child), 8, 8, 20, 10);
+    de_entity_remove(f->world, root, f->ui->ids.style);
+    style_step(f, 0);
+    expect_rect(ui_rect(f, child), 0, 0, 20, 10);
+}
+TEST_F(ui_style_resolve, themed_border_width_updates_and_restores_content_geometry, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nedge=0\n[theme.dark.vars]\nedge=4\n"
+                                   "[style.\".border\"]\nborder_width='$edge'"),
+              DE_OK);
+    de_entity root = ui_node(f, (de_entity){0}), child = ui_node(f, root);
+    ui_node_edit(f, root)->style_class = de_name_from("border");
+    ui_node_edit(f, root)->width = (de_ui_len){DE_UI_PX, 100};
+    ui_node_edit(f, root)->height = (de_ui_len){DE_UI_PX, 80};
+    ui_node_edit(f, child)->width = (de_ui_len){DE_UI_PX, 20};
+    ui_node_edit(f, child)->height = (de_ui_len){DE_UI_PX, 10};
+    style_step(f, 0);
+    expect_rect(ui_rect(f, child), 0, 0, 20, 10);
+    ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+    style_step(f, 0);
+    EXPECT_TRUE(de_ui_get_layout_stats(f->ui).nodes_laid_out > 0);
+    expect_rect(ui_rect(f, child), 4, 4, 20, 10);
+    ASSERT_EQ(de_ui_set_theme(f->ui, ""), DE_OK);
+    style_step(f, 0);
+    EXPECT_TRUE(de_ui_get_layout_stats(f->ui).nodes_laid_out > 0);
+    expect_rect(ui_rect(f, child), 0, 0, 20, 10);
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+}
+
 TEST_F(ui_style_resolve, new_style_component_does_not_relayout_unchanged_next_frame, ui_fx) {
     de_entity root = ui_node(f, (de_entity){0}), button = style_button(f, root, NULL);
     EXPECT_FALSE(de_entity_has(f->world, button, f->ui->ids.style));

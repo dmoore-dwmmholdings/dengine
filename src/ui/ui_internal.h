@@ -28,6 +28,7 @@ typedef struct de_ui_record {
     de_vec2 measured_assigned;
     u32 measured_axes;
     u32 font_generation, component_mask;
+    f32 border_width;
     u64 locale_generation;
     bool dirty, measure_dirty, alive;
 } de_ui_record;

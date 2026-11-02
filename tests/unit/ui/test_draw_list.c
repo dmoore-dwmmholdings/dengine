@@ -233,6 +233,28 @@ static de_vec4 read_float_pixel(ui_fx *f, de_gpu_texture target, de_gpu_buffer b
     ASSERT_TRUE(p);
     return p[y * 512 + x];
 }
+TEST_F(ui_draw, metal_paint_change_updates_pixels_without_geometry_relayout, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){1, 0, 0, 1}, 1);
+    draw_kick(f);
+    const de_vec4 red = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(red.x, 1, .001f);
+    EXPECT_FLOAT_EQ(red.z, 0, .001f);
+    DeUiStyle *changed = de_entity_get(f->world, root, f->ui->ids.style);
+    changed->background = (de_vec4){0, 0, 1, 1};
+    draw_kick(f);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_measured, 0u);
+    const de_vec4 blue = read_float_pixel(f, target, readback, 256, 256);
+    EXPECT_FLOAT_EQ(blue.x, 0, .001f);
+    EXPECT_FLOAT_EQ(blue.z, 1, .001f);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+}
 TEST_F(ui_draw, metal_display_hides_ui_and_restores_pixels, ui_fx) {
     draw_renderer(f, DE_GPU_METAL);
     de_gpu_buffer readback;
