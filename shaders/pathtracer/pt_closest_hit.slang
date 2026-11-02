@@ -187,6 +187,10 @@ public PtLightProposal pt_light_sample(PtParams p,float3 position,float3 normal,
 }
 // Record the endpoint after the last permitted scattering event. It contributes
 // emission only: no additional light sample or BSDF bounce is evaluated here.
+// DENG-736: keep DXIL transport helpers out of the inlined raygen CFG.
+#if defined(DE_SHADER_TARGET_DXIL)
+[noinline]
+#endif
 public float3 pt_endpoint(PtParams p,DeRtRay ray,DeRtHit hit,float last_pdf,float3 previous) {
     uint strategy=p.flags&3u;
     if(strategy==1)return float3(0); // NEE already estimates this connection.
@@ -197,6 +201,9 @@ public float3 pt_endpoint(PtParams p,DeRtRay ray,DeRtHit hit,float last_pdf,floa
     float3 position=ray.origin.xyz+ray.direction.xyz*hit.t;
     return surface.valid&&any(surface.material.emissive!=0)&&pt_hit_emits(p,ray,hit)?surface.material.emissive*(strategy==2?1:pt_power(last_pdf,pt_emission_pdf(p,hit,previous,position))):float3(0);
 }
+#if defined(DE_SHADER_TARGET_DXIL)
+[noinline]
+#endif
 public PtStep pt_step(PtParams p,DeRtRay ray,DeRtHit hit,uint pixel,uint bounce,float last_pdf,float3 previous) {
     PtStep o=(PtStep)0;o.stop=1;o.consume=1;
     uint strategy=p.flags&3u;
@@ -269,6 +276,9 @@ public PtStep pt_phase_step(PtParams p,PtPath path,float3 position,float g,uint 
     float3 direction=pt_hg_sample(path.ray.direction.xyz,g,u);out.pdf=pt_hg(dot(path.ray.direction.xyz,direction),g);
     out.next.origin=float4(position+direction*.00001,.00001);out.next.direction=float4(direction,1e6);return out;
 }
+#if defined(DE_SHADER_TARGET_DXIL)
+[noinline]
+#endif
 public PtStep pt_path_event(PtParams p,inout PtPath path,DeRtHit hit,uint pixel) {
     path.event++;float limit=hit.t>=0?hit.t:path.ray.direction.w;
     // Analytic emitters are not boundaries of an internal subsurface walk.
@@ -381,6 +391,9 @@ public void pt_shadow_hit(PtParams p,inout PtShadow shadow,inout DeRtRay ray,DeR
         shadow.finished=1;
     }
 }
+#if defined(DE_SHADER_TARGET_DXIL)
+[noinline]
+#endif
 public void pt_path_finish(PtParams p,inout PtPath path,PtStep step,float3 visibility,uint pixel) {
     path.radiance+=path.throughput*(step.emitted+step.direct*visibility);
     if(step.stop!=0){path.finished=1;return;}
