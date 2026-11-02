@@ -86,7 +86,7 @@ TEST(d3d12, caps_evaluator) {
     EXPECT_EQ(c.max_bindless_textures, DE__D3D12_BINDLESS_TEXTURES);
     EXPECT_EQ(c.max_bindless_storage_textures, DE__D3D12_BINDLESS_STORAGE_TEXTURES);
     EXPECT_EQ(c.max_bindless_buffers, DE__D3D12_BINDLESS_BUFFERS);
-    EXPECT_EQ(c.max_bindless_accels, 0u);
+    EXPECT_EQ(c.max_bindless_accels, 65536u);
     EXPECT_EQ(c.max_bindless_samplers, 2048u);
     EXPECT_EQ(c.max_bindless_textures + c.max_bindless_storage_textures +
                   2u * c.max_bindless_buffers + c.max_bindless_accels,
@@ -157,6 +157,7 @@ TEST(d3d12, caps_evaluator) {
     de__d3d12_caps_evaluate(&f, &c);
     EXPECT_EQ(c.raytracing, DE_RT_API_ONLY);
     EXPECT_TRUE(c.ray_query);
+    EXPECT_EQ(c.max_bindless_accels, 65536u);
     EXPECT_FALSE(c.mesh_shaders);
     EXPECT_FALSE(c.enhanced_barriers);
     EXPECT_EQ(c.wave_size_min, 4u);
@@ -245,6 +246,65 @@ TEST(d3d12, bindless_shared_numbering) {
     EXPECT_LE(st, 6u);
     EXPECT_EQ(de__gpu_bindless_count(d, DE__GPU_BINDLESS_STORAGE_TEXTURE), 1u);
     de_gpu_device_destroy(d);
+}
+
+/* DENG-734: use the real D3D12 cap evaluator and shared numbering with the null
+ * backend's AS storage. This tests the portable creation path, not native DXR execution. */
+typedef struct d3d12_tlas_caps {
+    de__gpu_backend_vtable vt;
+    de_gpu_device *device;
+    de_gpu_accel tlas;
+    de_gpu_buffer buffer;
+} d3d12_tlas_caps;
+static de_result d3d12_tlas_caps_create(de_gpu_device *d, const de_gpu_device_desc *desc,
+                                        de_gpu_caps *caps) {
+    DE_TRY(de__gpu_null_vtable.device_create(d, desc, caps));
+    de__d3d12_features features = rtx_class();
+    features.software = true;
+    de__d3d12_caps_evaluate(&features, caps);
+    return DE_OK;
+}
+static void d3d12_tlas_caps_setup(d3d12_tlas_caps *f) {
+    f->vt = de__gpu_null_vtable;
+    f->vt.device_create = d3d12_tlas_caps_create;
+    f->vt.bindless_shared_resource_heap = true;
+    f->vt.bindless_shared_buffer_srv_count = DE__D3D12_BINDLESS_BUFFERS;
+    de__gpu_register_backend(DE_GPU_NULL, &f->vt);
+    de_result r = de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_NULL}, &f->device);
+    de__gpu_register_backend(DE_GPU_NULL, NULL);
+    ASSERT_EQ(r, DE_OK);
+}
+static void d3d12_tlas_caps_teardown(d3d12_tlas_caps *f) {
+    if (f->device) {
+        de_gpu_accel_destroy(f->device, f->tlas);
+        de_gpu_buffer_destroy(f->device, f->buffer);
+        de_gpu_device_destroy(f->device);
+    }
+}
+TEST_F(d3d12, evaluated_caps_allow_tlas_without_overlapping_buffer_views, d3d12_tlas_caps) {
+    const de_gpu_caps *caps = de_gpu_get_caps(f->device);
+    EXPECT_EQ(caps->raytracing, DE_RT_API_ONLY);
+    f->tlas = de_gpu_accel_create(
+        f->device, &(de_gpu_accel_desc){.is_tlas = true, .max_instances = 1, .allow_update = true});
+    ASSERT_TRUE(f->tlas.id != 0);
+    const u32 index = de_gpu_accel_bindless(f->device, f->tlas);
+    const u32 buffer_first = caps->max_bindless_textures + caps->max_bindless_storage_textures;
+    const u32 readonly_first = buffer_first + caps->max_bindless_buffers;
+    const u32 accel_first = readonly_first + caps->max_bindless_buffers;
+    EXPECT_EQ(index, accel_first);
+    EXPECT_GE(caps->max_bindless_accels, 65536u);
+    EXPECT_EQ(readonly_first, buffer_first + DE__D3D12_BUFFER_SRV_OFFSET);
+    EXPECT_EQ(accel_first + caps->max_bindless_accels, DE__D3D12_RESOURCE_HEAP_SIZE);
+    EXPECT_EQ(DE__D3D12_RESOURCE_HEAP_SIZE, 1000000u);
+    EXPECT_EQ(DE__D3D12_BUFFER_SRV_OFFSET, 200000u); /* Existing cooked-shader ABI. */
+    f->buffer = de_gpu_buffer_create(f->device,
+                                     &(de_gpu_buffer_desc){.size = 64, .usage = DE_USAGE_STORAGE});
+    ASSERT_TRUE(f->buffer.id != 0);
+    EXPECT_EQ(de_gpu_buffer_bindless(f->device, f->buffer), buffer_first);
+    EXPECT_LT(de_gpu_buffer_bindless(f->device, f->buffer), index);
+    EXPECT_LE(de_gpu_buffer_bindless(f->device, f->buffer) + DE__D3D12_BUFFER_SRV_OFFSET +
+                  caps->max_bindless_buffers,
+              index);
 }
 
 /* ---------- Windows: real devices ---------- */

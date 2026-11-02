@@ -8,7 +8,7 @@
  *   - cmd_reserve_null: de_gpu_cmd_reserve fills a queue's pool, so de_gpu_cmd_begin of that many
  *     lists allocates nothing; reserving fewer than the device owns does nothing.
  *   - d3d12_srv_offset: bindless.slang's DE__D3D12_BUFFER_SRV_OFFSET (where D3D12 shaders find a
- *     buffer's read-only view) is the D3D12 backend's, and the heap ends with that range.
+ *     buffer's read-only view) is the D3D12 backend's, before the acceleration range.
  * Backends (Metal, Vulkan, D3D12; each skips without a device, the shader importer or the feature):
  *   - adapters_<backend>: the adapter list equals what a device created on each index reports in
  *     de_gpu_caps (name, ids, memory), in de_gpu_device_desc.adapter order; a short `cap` gets
@@ -294,11 +294,11 @@ TEST(backends, d3d12_srv_offset) {
     ASSERT_TRUE(at != NULL);
     const unsigned long shader_offset = strtoul(at + strlen(key), NULL, 10);
     EXPECT_EQ((u64)shader_offset, (u64)DE__D3D12_BUFFER_SRV_OFFSET);
-    /* The read-only range follows every numbered range and ends the heap. */
+    /* DENG-734: read-only views follow the buffers; acceleration descriptors end the heap. */
     const u32 buffer0 = DE__D3D12_BINDLESS_TEXTURES + DE__D3D12_BINDLESS_STORAGE_TEXTURES;
-    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET,
-              buffer0 + DE__D3D12_BINDLESS_BUFFERS + DE__D3D12_BINDLESS_ACCELS);
-    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET + DE__D3D12_BINDLESS_BUFFERS,
+    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET, buffer0 + DE__D3D12_BINDLESS_BUFFERS);
+    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET + DE__D3D12_BINDLESS_BUFFERS +
+                  DE__D3D12_BINDLESS_ACCELS,
               DE__D3D12_RESOURCE_HEAP_SIZE);
     EXPECT_LE(DE__D3D12_RESOURCE_HEAP_SIZE, 1000000u);
 }

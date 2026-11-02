@@ -37,7 +37,7 @@ void de__gpu_bindless_init(de__gpu_bindless *b, const de_allocator *alloc,
     }
 }
 
-void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b) {
+void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b, u32 buffer_srv_count) {
     static const de__gpu_bindless_space order[] = {DE__GPU_BINDLESS_SAMPLED_TEXTURE,
                                                    DE__GPU_BINDLESS_STORAGE_TEXTURE,
                                                    DE__GPU_BINDLESS_BUFFER, DE__GPU_BINDLESS_ACCEL};
@@ -45,6 +45,9 @@ void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b) {
      * starts where the previous one ends and uses its whole size. */
     u32 end = b->spaces[order[0]].capacity;
     for (u32 i = 1; i < sizeof order / sizeof order[0]; ++i) {
+        /* Keep the buffer aliases together before assigning the acceleration range. */
+        if (order[i] == DE__GPU_BINDLESS_ACCEL)
+            end += buffer_srv_count;
         de__gpu_index_space *s = &b->spaces[order[i]];
         DE_ASSERT(s->next == s->first && s->live == 0);
         const u32 size = s->capacity;

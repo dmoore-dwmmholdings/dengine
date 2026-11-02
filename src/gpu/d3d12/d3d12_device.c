@@ -714,7 +714,8 @@ const de__gpu_backend_vtable de__gpu_d3d12_vtable = {
     .cmd_breadcrumb = de__d3d12_cmd_breadcrumb,
     .device_lost = de__d3d12_device_lost,
     .device_lost_report = de__d3d12_device_lost_report,
-    .enumerate_adapters = d3d12_enumerate_adapters, /* DENG-410 */
+    .enumerate_adapters = d3d12_enumerate_adapters,                 /* DENG-410 */
+    .bindless_shared_buffer_srv_count = DE__D3D12_BINDLESS_BUFFERS, /* DENG-734 */
 };
 
 /* ---------- Test hooks ---------- */

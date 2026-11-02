@@ -85,8 +85,8 @@ ParameterBlock<DeBindlessHeap> de__heap;
 #else
 // D3D12: the read-only view (SRV) of the buffer at index i is at heap slot i + this offset
 // (DENG-410). It must equal DE__D3D12_BUFFER_SRV_OFFSET in src/gpu/d3d12/d3d12_internal.h, the
-// size of the backend's buffer range plus its acceleration-structure range; changing it is a
-// cooked-shader format change (bump the importer version).
+// size of the backend's buffer range. Its read-only views precede the acceleration-structure
+// range (DENG-734); changing this offset is a cooked-shader format change (bump the importer version).
 static const uint DE__D3D12_BUFFER_SRV_OFFSET = 200000;
 #endif
 

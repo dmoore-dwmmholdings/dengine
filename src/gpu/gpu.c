@@ -412,7 +412,8 @@ de_result de_gpu_device_create(const de_gpu_device_desc *desc, de_gpu_device **o
 
     de__gpu_bindless_init(&d->bindless, a, &d->caps);
     if (vt->bindless_shared_resource_heap)
-        de__gpu_bindless_share_resource_numbering(&d->bindless);
+        de__gpu_bindless_share_resource_numbering(&d->bindless,
+                                                  vt->bindless_shared_buffer_srv_count);
     for (u32 k = 0; k < DE__GPU_KIND_COUNT; ++k) {
         size_t elem = DE__GPU_ALIGN16(k_rec_size[k]) + vt->payload_size[k];
         r = de__gpu_pool_init(&d->pools[k], a, de__gpu_kind_name((de__gpu_kind)k), (u32)elem,

@@ -386,6 +386,9 @@ typedef struct de__gpu_backend_vtable {
     void (*cmd_accel_emit)(de_gpu_cmd *, de__gpu_accel *);
     bool (*accel_compacted_size)(de_gpu_device *, de__gpu_accel *, u64 *);
     void (*cmd_accel_compact)(de_gpu_cmd *, de__gpu_accel *, de__gpu_accel *);
+    /* DENG-734: reserved descriptors between the shared buffer and acceleration ranges.
+     * D3D12 puts its buffers' read-only views here; zero preserves ordinary shared numbering. */
+    u32 bindless_shared_buffer_srv_count;
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */
@@ -493,11 +496,11 @@ void de__gpu_bindless_init(de__gpu_bindless *b, const de_allocator *alloc, const
 /**
  * One numbering for the resource spaces (vtable `bindless_shared_resource_heap`, DENG-285), right
  * after init: sampled textures take 1 .. T-1, storage textures T .. T+S-1, buffers the next B
- * indices, acceleration structures the next A (T, S, B, A = the caps' max_bindless_* sizes), so
- * the whole numbering needs T + S + B + A descriptor slots with slot 0 reserved. Samplers are
- * unchanged.
+ * indices, then `buffer_srv_count` reserved shadow views, then acceleration structures A
+ * (T, S, B, A = the caps' max_bindless_* sizes). The whole numbering needs
+ * T + S + B + buffer_srv_count + A descriptor slots with slot 0 reserved. Samplers are unchanged.
  */
-void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b);
+void de__gpu_bindless_share_resource_numbering(de__gpu_bindless *b, u32 buffer_srv_count);
 void de__gpu_bindless_destroy(de__gpu_bindless *b);
 /** A free index of `space`, or DE_GPU_BINDLESS_INVALID with DE_ERR_OUT_OF_MEMORY when full. */
 u32 de__gpu_bindless_alloc(de__gpu_bindless *b, de__gpu_bindless_space space);
