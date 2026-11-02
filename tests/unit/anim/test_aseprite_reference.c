@@ -99,7 +99,7 @@ TEST_F(aseprite_reference, complete_cooked_frames_equal_real_aseprite_exports, r
         ASSERT_TRUE(!layer_name || layer != NULL);
         de_cooked_texture_view texture;
         ASSERT_TRUE(de_cooked_texture_parse(atlas->data, atlas->size, &texture, NULL));
-        de_cooked_texture_subresource resource;
+        de_cooked_texture_subresource resource = {0};
         ASSERT_TRUE(de_cooked_texture_subresource_at(&texture, 0, &resource));
         de__sprite_clip_view clip;
         ASSERT_TRUE(de__sprite_clip_parse(layer ? layer->data : f->result.data,

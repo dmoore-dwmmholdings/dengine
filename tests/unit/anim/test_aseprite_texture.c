@@ -81,7 +81,7 @@ static void verify_payload(texture_fx *f, u32 blob, bool pixel_art) {
               pixel_art ? (u32)DE_COOKED_TEXTURE_PIXEL_ART : 0u);
     ASSERT_TRUE(view.flags & DE_COOKED_TEXTURE_SRGB);
     ASSERT_TRUE(view.flags & DE_COOKED_TEXTURE_HAS_ALPHA);
-    de_cooked_texture_subresource sub;
+    de_cooked_texture_subresource sub = {0};
     ASSERT_TRUE(de_cooked_texture_subresource_at(&view, 0, &sub));
     for (u32 y = 0; y < view.height; ++y) {
         const u8 *row = (const u8 *)f->blob[blob] + sub.offset + (size_t)y * sub.row_pitch;
