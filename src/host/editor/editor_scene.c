@@ -988,12 +988,12 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
         dot ? de__ed_component(ed, (de_ep_str){path, (u32)(dot - path)}) : (de_component){0};
     de_type_id type;
     u32 size = 0;
-    u8 *data = c.id && de__ed_component_type(ed, c, &type, &size)
-                   ? (u8 *)de_entity_get(ed->e->world, (de_entity){q.entity}, c)
-                   : NULL;
+    u8 *data = NULL;
     const de_field_info *f = NULL;
     u32 off = 0;
-    if (data == NULL || de_reflect_resolve_path(ed->e->types, type, dot + 1, &f, &off) != DE_OK) {
+    if (c.id == 0 || !de__ed_component_type(ed, c, &type, &size) ||
+        (data = (u8 *)de_entity_get(ed->e->world, (de_entity){q.entity}, c)) == NULL ||
+        de_reflect_resolve_path(ed->e->types, type, dot + 1, &f, &off) != DE_OK) {
         de_error_clear();
         de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "no field %s", path ? path : "");
         return;

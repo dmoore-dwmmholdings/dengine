@@ -440,3 +440,10 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_compile_definitions(test_editor_prefab PRIVATE
         DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
 endif()
+
+# DENG-676: production CPU gizmo paths, with no native graphics.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_safety SOURCES test_editor_safety.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_safety PRIVATE "${DE_ROOT_DIR}/src")
+endif()

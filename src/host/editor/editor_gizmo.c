@@ -578,7 +578,7 @@ static void rect_of(de_world *w, const de__ed_cam *c, const gz_ent *g, gz_layout
 static gz_layout layout(de_world *w, const de__ed_cam *c) {
     gz_layout L;
     memset(&L, 0, sizeof L);
-    gz_ent first;
+    gz_ent first = {0};
     u32 n = 0;
     v3 sum = V(0, 0, 0);
     for (u32 i = 0; i < G.sel_count; ++i) {
@@ -726,14 +726,15 @@ static i32 hit_test(const de__ed_cam *c, const gz_layout *L, f64 x, f64 y) {
             f64 px, py;
             /* The back half of an axis ring is behind the gizmo: not grabbed. */
             const bool front = h == H_RV || dot(off, L->dir) <= 1e-9;
-            const bool vis = front && proj(c, add(L->o, off), &px, &py);
-            if (vis && prev)
-                TRY(h, dist_seg(x, y, px0, py0, px, py), 7.0, 1.0);
-            prev = vis;
-            if (vis) {
-                px0 = px;
-                py0 = py;
+            if (!front || !proj(c, add(L->o, off), &px, &py)) {
+                prev = false;
+                continue;
             }
+            if (prev)
+                TRY(h, dist_seg(x, y, px0, py0, px, py), 7.0, 1.0);
+            prev = true;
+            px0 = px;
+            py0 = py;
         }
     }
 #undef TRY
