@@ -20,6 +20,7 @@
 #include "host/host_internal.h"
 #include "reflect/ser_internal.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -240,9 +241,18 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
             void *data = de_entity_add(w, (de_entity){m.ents[i]}, c);
             if (size == 0 || data == NULL)
                 continue;
-            if (de_text_doc_read_member(doc, "entity", i, key, ed->e->types, type, data, &opt) != DE_OK) {
+            if (de_text_doc_read_member(doc, "entity", i, key, ed->e->types, type, data, &opt) !=
+                DE_OK) {
                 const de_error *e = de_error_last();
-                snprintf(err, err_cap, "entity %u, %s: %s", i, key, e != NULL ? e->message : "bad value");
+                /* Keep the entity/component prefix, then bound the diagnostic to what fits. */
+                const int n = snprintf(err, err_cap, "entity %u, %s: ", i, key);
+                if (n >= 0 && (size_t)n < err_cap) {
+                    const size_t remaining = err_cap - (size_t)n;
+                    const int precision =
+                        remaining - 1 > (size_t)INT_MAX ? INT_MAX : (int)(remaining - 1);
+                    snprintf(err + n, remaining, "%.*s", precision,
+                             e != NULL ? e->message : "bad value");
+                }
                 de_error_clear();
                 ok = false;
                 break;
@@ -517,8 +527,9 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
             putf(out, "[entity.%s]\n", ci->name);
             const u32 col = a->column_of[idx[k]];
             if (col != ECS_INVALID_INDEX && ci->size != 0)
-                put_component(ed, out, ci->type,
-                              (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)rec->row * ci->size, &opt);
+                put_component(
+                    ed, out, ci->type,
+                    (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)rec->row * ci->size, &opt);
         }
     }
     DE_FREE(al, list, sizeof(save_ent) * (total + 1));
@@ -579,7 +590,8 @@ static void on_list(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     (void)ed;
     de_ep_scene_list list;
     memset(&list, 0, sizeof list);
-    list.scenes.items = (de_ep_scene_info *)de__ed_alloc(a, sizeof(de_ep_scene_info) * ED_MAX_SCENES);
+    list.scenes.items =
+        (de_ep_scene_info *)de__ed_alloc(a, sizeof(de_ep_scene_info) * ED_MAX_SCENES);
     for (u32 i = 0; i < ED_MAX_SCENES && list.scenes.items != NULL; ++i) {
         const ed_scene *s = &g_scene.scenes[i];
         if (s->id == 0)
@@ -753,13 +765,15 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
             continue;
         for (u32 c = 0; c < row.components.count; ++c) {
             mpack_tree_t tree;
-            mpack_tree_init_data(&tree, row.components.items[c].value.ptr, row.components.items[c].value.len);
+            mpack_tree_init_data(&tree, row.components.items[c].value.ptr,
+                                 row.components.items[c].value.len);
             mpack_tree_parse(&tree);
             mpack_node_t m = mpack_tree_root(&tree);
             if (mpack_tree_error(&tree) == mpack_ok && mpack_node_type(m) == mpack_type_map) {
                 for (size_t f = 0; f < mpack_node_map_count(m); ++f) {
                     if (count == cap) {
-                        ed_base *g = (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap * 2, 8, DE_MEM_GENERAL);
+                        ed_base *g =
+                            (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap * 2, 8, DE_MEM_GENERAL);
                         if (g == NULL)
                             break;
                         memcpy(g, base, sizeof(ed_base) * count);
@@ -770,8 +784,9 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
                     mpack_node_t k = mpack_node_map_key_at(m, f), v = mpack_node_map_value_at(m, f);
                     ed_base *b = &base[count++];
                     b->entity = ents[i];
-                    snprintf(b->path, sizeof b->path, "%.*s.%.*s", (int)row.components.items[c].key.len,
-                             row.components.items[c].key.ptr, (int)mpack_node_strlen(k), mpack_node_str(k));
+                    snprintf(b->path, sizeof b->path, "%.*s.%.*s",
+                             (int)row.components.items[c].key.len, row.components.items[c].key.ptr,
+                             (int)mpack_node_strlen(k), mpack_node_str(k));
                     b->off = (u32)bytes.size;
                     b->len = (u32)mpack_node_data_len(v);
                     de_writer bw = de_writer_from_mem(&bytes);
@@ -827,12 +842,13 @@ static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena
         return;
     }
     de_entity root = DE_ENTITY_NULL;
-    const de_result r = de_prefab_instantiate(s, ed->e->world, p,
-                                              q.has_parent ? (de_entity){q.parent} : DE_ENTITY_NULL, &root);
+    const de_result r = de_prefab_instantiate(
+        s, ed->e->world, p, q.has_parent ? (de_entity){q.parent} : DE_ENTITY_NULL, &root);
     de_asset_release(s, lh);
     if (r != DE_OK) {
         const de_error *e = de_error_last();
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s", e != NULL ? e->message : "instantiate failed");
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s",
+                     e != NULL ? e->message : "instantiate failed");
         de_error_clear();
         return;
     }
@@ -844,7 +860,8 @@ static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena
     if (g_scene.instance_count == g_scene.instance_cap) {
         const de_allocator *al = de_heap_allocator();
         const u32 cap = g_scene.instance_cap ? g_scene.instance_cap * 2 : 16;
-        ed_instance *grown = (ed_instance *)DE_ALLOC(al, sizeof(ed_instance) * cap, 8, DE_MEM_GENERAL);
+        ed_instance *grown =
+            (ed_instance *)DE_ALLOC(al, sizeof(ed_instance) * cap, 8, DE_MEM_GENERAL);
         if (grown != NULL) {
             if (g_scene.instances != NULL) {
                 memcpy(grown, g_scene.instances, sizeof(ed_instance) * g_scene.instance_count);
@@ -867,11 +884,13 @@ static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena
 }
 
 /* The current value of `path` on `entity`, as raw MessagePack in the arena. */
-static bool current_value(de__editor *ed, de_ep_arena *a, u64 entity, const char *path, de_ep_raw *out) {
+static bool current_value(de__editor *ed, de_ep_arena *a, u64 entity, const char *path,
+                          de_ep_raw *out) {
     de_ep_str p = de_ep_cstr(path);
     de_ep_list_str fields = {&p, 1};
     de_ep_entity_row row;
-    if (!de__ed_entity_row(ed, a, (de_entity){entity}, NULL, &fields, &row) || row.components.count != 1)
+    if (!de__ed_entity_row(ed, a, (de_entity){entity}, NULL, &fields, &row) ||
+        row.components.count != 1)
         return false;
     *out = row.components.items[0].value;
     return true;
@@ -888,7 +907,8 @@ static void on_overrides(de__editor *ed, const de_ep_request *req, de_ep_arena *
     }
     de_ep_override_list list;
     memset(&list, 0, sizeof list);
-    list.overrides.items = (de_ep_override *)de__ed_alloc(a, sizeof(de_ep_override) * (inst->base_count + 1));
+    list.overrides.items =
+        (de_ep_override *)de__ed_alloc(a, sizeof(de_ep_override) * (inst->base_count + 1));
     for (u32 i = 0; i < inst->base_count && list.overrides.items != NULL; ++i) {
         const ed_base *b = &inst->base[i];
         if (b->entity != q.entity)
@@ -925,7 +945,8 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
     ed_instance *inst = instance_of(ed, q.entity);
     ed_base *b = inst != NULL ? base_find(inst, q.entity, q.path) : NULL;
     if (b == NULL) {
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "no prefab field %.*s", (int)q.path.len, q.path.ptr);
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "no prefab field %.*s", (int)q.path.len,
+                     q.path.ptr);
         return;
     }
     if (apply) {
@@ -933,7 +954,8 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
         de_ep_raw cur;
         if (current_value(ed, a, q.entity, b->path, &cur)) {
             /* The new bytes go after the old ones. */
-            u8 *grown = (u8 *)DE_ALLOC(de_heap_allocator(), inst->byte_count + cur.len, 8, DE_MEM_GENERAL);
+            u8 *grown =
+                (u8 *)DE_ALLOC(de_heap_allocator(), inst->byte_count + cur.len, 8, DE_MEM_GENERAL);
             if (grown != NULL) {
                 if (inst->bytes != NULL) {
                     memcpy(grown, inst->bytes, inst->byte_count);
@@ -954,7 +976,8 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
     /* Revert: set the field back to the prefab's value. */
     char *path = de__ed_cstr(a, q.path);
     char *dot = path != NULL ? strchr(path, '.') : NULL;
-    const de_component c = dot ? de__ed_component(ed, (de_ep_str){path, (u32)(dot - path)}) : (de_component){0};
+    const de_component c =
+        dot ? de__ed_component(ed, (de_ep_str){path, (u32)(dot - path)}) : (de_component){0};
     de_type_id type;
     u32 size = 0;
     u8 *data = c.id && de__ed_component_type(ed, c, &type, &size)
@@ -975,8 +998,8 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
     while (index < fc && &fields[index] != f)
         ++index;
     const bool ok = mpack_tree_error(&tree) == mpack_ok &&
-                    de__ed_read_field(ed, mpack_tree_root(&tree), index < fc ? type : (de_type_id){0},
-                                      index, f, data + off);
+                    de__ed_read_field(ed, mpack_tree_root(&tree),
+                                      index < fc ? type : (de_type_id){0}, index, f, data + off);
     mpack_tree_destroy(&tree);
     if (!ok) {
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "could not restore %s", path);

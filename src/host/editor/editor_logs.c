@@ -20,9 +20,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define ED_LOG_RING 2048u
-#define ED_LOG_MSG  480u
-#define ED_LOG_SUBS 8u
+#define ED_LOG_RING  2048u
+#define ED_LOG_MSG   480u
+#define ED_LOG_SUBS  8u
 #define ED_STAT_SUBS 8u
 
 typedef struct ed_log_rec {
@@ -207,7 +207,7 @@ static void on_exec(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     const de_error *err = r != DE_OK ? de_error_last() : NULL;
     char errmsg[256] = "";
     if (err != NULL)
-        snprintf(errmsg, sizeof errmsg, "%s", err->message);
+        snprintf(errmsg, sizeof errmsg, "%.*s", (int)(sizeof errmsg - 1), err->message);
     de_error_clear();
     de_log_flush();
     /* What this thread logged during the command. */
@@ -325,7 +325,8 @@ static void send_stats(de__editor *ed) {
         u32 n = 0;
         if (s->groups & 1) {
             kv[n++] = (de_ep_kv_f64){de_ep_cstr("frame.ms"), g_logs.frame_ms};
-            kv[n++] = (de_ep_kv_f64){de_ep_cstr("frame.fps"), g_logs.frame_ms > 0 ? 1000.0 / g_logs.frame_ms : 0};
+            kv[n++] = (de_ep_kv_f64){de_ep_cstr("frame.fps"),
+                                     g_logs.frame_ms > 0 ? 1000.0 / g_logs.frame_ms : 0};
         }
 #if DE_HAS_RENDER
         if ((s->groups & 2) && ed->e->renderer != NULL) {
@@ -350,8 +351,10 @@ static void send_stats(de__editor *ed) {
             const de_asset_stats as = de_asset_get_stats(ed->e->assets);
             kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.loads_in_flight"), as.loads_in_flight};
             kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.resident"), as.assets_resident};
-            kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.gpu_texture_bytes"), (f64)as.bytes_resident[0]};
-            kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.gpu_mesh_bytes"), (f64)as.bytes_resident[1]};
+            kv[n++] =
+                (de_ep_kv_f64){de_ep_cstr("assets.gpu_texture_bytes"), (f64)as.bytes_resident[0]};
+            kv[n++] =
+                (de_ep_kv_f64){de_ep_cstr("assets.gpu_mesh_bytes"), (f64)as.bytes_resident[1]};
             kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.audio_bytes"), (f64)as.bytes_resident[2]};
             kv[n++] = (de_ep_kv_f64){de_ep_cstr("assets.cpu_bytes"), (f64)as.bytes_resident[3]};
         }
