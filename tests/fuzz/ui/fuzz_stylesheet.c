@@ -17,7 +17,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         abort();
     de_ui_attach(ui, world);
     de_ui_set_viewport(ui, 400, 200, (de_window_insets){0});
-    de_ui_style_sheet_slot *slot = &ui->style->sheets[0];
+    /* Creation already installed the builtin sheet. Keep its ownership intact and
+     * exercise the normal builtin + custom cascade in a separate slot. */
+    if (ui->style->sheet_count >= DE_UI_STYLE_SHEETS)
+        abort();
+    de_ui_style_sheet_slot *slot = &ui->style->sheets[ui->style->sheet_count];
     slot->sheet = sheet;
     if (sheet->rule_count) {
         slot->compiled = DE_ALLOC(ui->alloc, (u64)sheet->rule_count * sizeof *slot->compiled,
@@ -27,7 +31,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     if (de_ui__compile_sheet(ui->style, slot) != DE_OK)
         abort();
-    ui->style->sheet_count = 1;
+    ++ui->style->sheet_count;
     ++ui->style->revision;
     de_entity entity;
     if (de_entity_spawn_with(world, &ui->ids.node, 1, &entity) != DE_OK)
