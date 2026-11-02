@@ -453,3 +453,15 @@ if(TARGET de_test_crash_protocol)
     de_add_test(NAME editor_protocol_raw SOURCES test_editor_protocol_raw.c
         LIBS de_test_crash_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
 endif()
+
+# DENG-733: these host fixtures create native renderers in the test process. Give that
+# executable the Agility exports/runtime and test-only WARP, as the D3D12 render tests do.
+# Without deployment the system runtime can report SM6.2 and never reach the lifecycle checks.
+if(TARGET de_gpu_d3d12)
+    foreach(_de_host_gpu_test test_engine_window test_owned_game)
+        if(TARGET ${_de_host_gpu_test})
+            de_d3d12_agility_deploy(${_de_host_gpu_test})
+            de_d3d12_warp_deploy(${_de_host_gpu_test})
+        endif()
+    endforeach()
+endif()
