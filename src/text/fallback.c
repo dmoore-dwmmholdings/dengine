@@ -46,13 +46,11 @@ void de_text_set_fallbacks(de_text_system *t, de_font primary, const de_font *fo
     ++r->epoch;
     de__text_unlock(r);
 }
-bool de_text__resolve(de_text_system *t, de_font primary, u32 cp, de_font *out, u32 *glyph) {
-    if (out)
-        *out = primary;
-    if (glyph)
-        *glyph = 0;
-    if (!t || !out || !glyph || !primary.id)
-        return false;
+de__text_resolver de__text_resolve_begin(de_text_system *t, de_font primary) {
+    de__text_resolver resolver = {.primary = primary};
+    if (!t || !primary.id)
+        return resolver;
+    resolver.text = t;
     struct de__text_runtime *r = t->runtime;
     de__text_lock(r);
     de__text_chain *c = NULL;
@@ -65,6 +63,21 @@ bool de_text__resolve(de_text_system *t, de_font primary, u32 cp, de_font *out, 
     if (c)
         for (u32 i = 0; i < c->count; ++i)
             de__text_watch_font(t, c->fonts[i]);
+    resolver.chain = c;
+    return resolver;
+}
+void de__text_resolve_end(const de__text_resolver *resolver) {
+    if (resolver->text)
+        de__text_unlock(resolver->text->runtime);
+}
+bool de__text_resolve_next(const de__text_resolver *resolver, u32 cp, de_font *out, u32 *glyph) {
+    *out = resolver->primary;
+    *glyph = 0;
+    de_text_system *t = resolver->text;
+    if (!t)
+        return false;
+    struct de__text_runtime *r = t->runtime;
+    de__text_chain *c = resolver->chain;
     de__text_cp_cache *slot = NULL;
     if (c) {
         u32 hash = (cp * 2654435761u) & (DE_TEXT_CACHE - 1);
@@ -77,15 +90,13 @@ bool de_text__resolve(de_text_system *t, de_font primary, u32 cp, de_font *out, 
             if (s->cp == cp) {
                 *out = (de_font){s->font};
                 *glyph = s->glyph;
-                bool found = s->found;
-                de__text_unlock(r);
-                return found;
+                return s->found;
             }
         }
     }
     bool found = false;
     for (u32 i = 0; i < 1 + (c ? c->count : 0); ++i) {
-        de_font f = i ? c->fonts[i - 1] : primary;
+        de_font f = i ? c->fonts[i - 1] : resolver->primary;
         de_text_font *font = de_text__font_get(t, f);
         u32 g = de_text__codepoint(font, cp);
         if (g) {
@@ -97,7 +108,18 @@ bool de_text__resolve(de_text_system *t, de_font primary, u32 cp, de_font *out, 
     }
     if (slot)
         *slot = (de__text_cp_cache){cp, *glyph, out->id, r->epoch, found};
-    de__text_unlock(r);
+    return found;
+}
+bool de_text__resolve(de_text_system *t, de_font primary, u32 cp, de_font *out, u32 *glyph) {
+    if (out)
+        *out = primary;
+    if (glyph)
+        *glyph = 0;
+    if (!t || !out || !glyph || !primary.id)
+        return false;
+    de__text_resolver resolver = de__text_resolve_begin(t, primary);
+    bool found = de__text_resolve_next(&resolver, cp, out, glyph);
+    de__text_resolve_end(&resolver);
     return found;
 }
 

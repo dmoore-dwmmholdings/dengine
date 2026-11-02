@@ -1,4 +1,5 @@
 #include "shaper_internal.h"
+#include "text/fallback_internal.h"
 #include <string.h>
 u32 de__text_utf8(const char *s, u32 n, u32 *off) {
     u32 at = *off;
@@ -57,14 +58,28 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
         DE_ALLOC(a, (u64)text.len * sizeof *items, _Alignof(de_text_item), DE_MEM_UI);
     if (!items)
         return DE_ERR_OUT_OF_MEMORY;
+    /* Leading weak characters all look toward the same first strong script.
+     * Scan once, outside the fallback lock, rather than rescanning every suffix. */
+    hb_script_t leading = HB_SCRIPT_UNKNOWN;
+    for (u32 look = 0; look < text.len;) {
+        u32 cp = de__text_utf8(text.ptr, (u32)text.len, &look);
+        hb_script_t script = hb_unicode_script(hb_unicode_funcs_get_default(), cp);
+        if (script != HB_SCRIPT_COMMON && script != HB_SCRIPT_INHERITED &&
+            script != HB_SCRIPT_UNKNOWN) {
+            leading = script;
+            break;
+        }
+    }
     u32 at = 0;
+    u32 batch_count = 0;
     hb_script_t previous = HB_SCRIPT_UNKNOWN;
     de_font previous_font = primary;
+    de__text_resolver resolver = de__text_resolve_begin(t, primary);
     while (at < text.len) {
         u32 start = at, cp = de__text_utf8(text.ptr, (u32)text.len, &at);
         de_font font;
         u32 glyph;
-        (void)de_text__resolve(t, primary, cp, &font, &glyph);
+        (void)de__text_resolve_next(&resolver, cp, &font, &glyph);
         hb_script_t script = hb_unicode_script(hb_unicode_funcs_get_default(), cp);
         bool weak = script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED ||
                     script == HB_SCRIPT_UNKNOWN;
@@ -76,18 +91,8 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
                 if (cp == 0x20 || cp == 0x09 ||
                     (inherited && de_text__codepoint(de_text__font_get(t, previous_font), cp)))
                     font = previous_font;
-            } else {
-                u32 look = at;
-                while (look < text.len) {
-                    u32 next = de__text_utf8(text.ptr, (u32)text.len, &look);
-                    hb_script_t ss = hb_unicode_script(hb_unicode_funcs_get_default(), next);
-                    if (ss != HB_SCRIPT_COMMON && ss != HB_SCRIPT_INHERITED &&
-                        ss != HB_SCRIPT_UNKNOWN) {
-                        script = ss;
-                        break;
-                    }
-                }
-            }
+            } else if (leading != HB_SCRIPT_UNKNOWN)
+                script = leading;
         }
         if (*count && items[*count - 1].font.id == font.id && items[*count - 1].script == script)
             items[*count - 1].end = at;
@@ -97,7 +102,15 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
             previous = script;
             previous_font = font;
         }
+        /* Release periodically so long strings do not monopolize worker lookups
+         * or fallback-chain updates. No prepared chain survives the unlock. */
+        if (++batch_count == 128 && at < text.len) {
+            de__text_resolve_end(&resolver);
+            resolver = de__text_resolve_begin(t, primary);
+            batch_count = 0;
+        }
     }
+    de__text_resolve_end(&resolver);
     *out = items;
     return DE_OK;
 }

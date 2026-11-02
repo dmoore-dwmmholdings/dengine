@@ -77,3 +77,55 @@ TEST_F(itemize, inherited_marks_follow_fallback_base_when_covered, runtime_fx) {
     DE_FREE(de_heap_allocator(), items, text.len * sizeof *items);
     de_asset_release(f->assets, load);
 }
+
+TEST_F(itemize, long_runs_refresh_fallbacks_between_calls, runtime_fx) {
+    char text[1200];
+    for (u32 i = 0; i < 300; ++i)
+        memcpy(text + i * 4, "A漢", 4);
+    const de_allocator *a = de_heap_allocator();
+    for (u32 pass = 0; pass < 3; ++pass) {
+        de_text_set_fallbacks(f->t, f->latin, pass == 1 ? NULL : &f->cjk, pass == 1 ? 0 : 1);
+        de_text_item *items;
+        u32 count;
+        ASSERT_EQ(de_text__itemize(f->t, f->latin, (de_str){text, sizeof text}, a, &items, &count),
+                  DE_OK);
+        ASSERT_EQ(count, 600u);
+        for (u32 i = 0; i < 300; ++i) {
+            EXPECT_EQ(items[i * 2].font.id, f->latin.id);
+            EXPECT_EQ(items[i * 2].script, HB_SCRIPT_LATIN);
+            EXPECT_EQ(items[i * 2].start, i * 4);
+            EXPECT_EQ(items[i * 2].end, i * 4 + 1);
+            EXPECT_EQ(items[i * 2 + 1].font.id, pass == 1 ? f->latin.id : f->cjk.id);
+            EXPECT_EQ(items[i * 2 + 1].script, HB_SCRIPT_HAN);
+            EXPECT_EQ(items[i * 2 + 1].start, i * 4 + 1);
+            EXPECT_EQ(items[i * 2 + 1].end, i * 4 + 4);
+        }
+        DE_FREE(a, items, sizeof text * sizeof *items);
+    }
+}
+
+TEST_F(itemize, leading_weak_prefix_and_all_weak_scripts, runtime_fx) {
+    char text[4097];
+    memset(text, '(', sizeof text - 1);
+    text[sizeof text - 1] = 'A';
+    const de_allocator *a = de_heap_allocator();
+    de_text_item *items;
+    u32 count;
+    ASSERT_EQ(de_text__itemize(f->t, f->latin, (de_str){text, sizeof text}, a, &items, &count),
+              DE_OK);
+    ASSERT_EQ(count, 1u);
+    EXPECT_EQ(items[0].script, HB_SCRIPT_LATIN);
+    EXPECT_EQ(items[0].font.id, f->latin.id);
+    EXPECT_EQ(items[0].start, 0u);
+    EXPECT_EQ(items[0].end, sizeof text);
+    DE_FREE(a, items, sizeof text * sizeof *items);
+    /* Without a strong script, preserve each character's original weak script. */
+    de_str weak = DE_STR("(\xcc\x81\xcd\xb8");
+    ASSERT_EQ(de_text__itemize(f->t, f->latin, weak, a, &items, &count), DE_OK);
+    ASSERT_EQ(count, 3u);
+    EXPECT_EQ(items[0].script, HB_SCRIPT_COMMON);
+    EXPECT_EQ(items[1].script, HB_SCRIPT_INHERITED);
+    EXPECT_EQ(items[2].script, HB_SCRIPT_UNKNOWN);
+    EXPECT_EQ(items[2].end, weak.len);
+    DE_FREE(a, items, weak.len * sizeof *items);
+}

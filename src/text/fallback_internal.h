@@ -23,6 +23,16 @@ struct de__text_runtime {
     de__text_chain chains[DE_TEXT_MAX_CHAINS];
     de__text_watch watch[256];
 };
+/* A bounded itemization batch holds one runtime lock and validates its chain once.
+ * The chain pointer is valid only until de__text_resolve_end. */
+typedef struct de__text_resolver {
+    de_text_system *text;
+    de__text_chain *chain;
+    de_font primary;
+} de__text_resolver;
+de__text_resolver de__text_resolve_begin(de_text_system *t, de_font primary);
+bool de__text_resolve_next(const de__text_resolver *resolver, u32 cp, de_font *out, u32 *glyph);
+void de__text_resolve_end(const de__text_resolver *resolver);
 void de__text_watch_font(de_text_system *t, de_font f);
 static inline void de__text_lock(struct de__text_runtime *r) {
     while (atomic_flag_test_and_set_explicit(&r->lock, memory_order_acquire)) {
