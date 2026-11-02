@@ -133,6 +133,10 @@ bool de__asset_reload_queue(de_asset_system *s, de_asset_id id) {
     (void)id;
     return false;
 }
+bool de__asset_reload_manifest_now(de_asset_system *s) {
+    (void)s;
+    return false;
+}
 
 #else /* DE__ASSET_RELOAD_ENABLED */
 

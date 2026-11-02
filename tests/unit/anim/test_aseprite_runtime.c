@@ -81,7 +81,7 @@ static void ase_runtime_fx_teardown(ase_runtime_fx *f) {
         EXPECT_EQ(de_file_delete("animtest:/aseprite-source.aseprite"), DE_OK);
     }
 }
-static void packed_load(ase_runtime_fx *f) {
+static void packed_load_at_scale(ase_runtime_fx *f, i64 pixels_per_meter) {
     de_cooker *cooker = NULL;
     ASSERT_EQ(de_cooker_create(&(de_cooker_desc){.allocator = &f->base.allocator,
                                                  .verify_determinism = DE_COOK_VERIFY_ON},
@@ -91,14 +91,16 @@ static void packed_load(ase_runtime_fx *f) {
     ASSERT_TRUE(de_cooker_builtin_importer("aseprite", &descriptor));
     ASSERT_EQ(de_cooker_register_type(cooker, &descriptor), DE_OK);
     ASSERT_EQ(de_fs_mount("asefixtures", DE_ASEPRITE_DATA_DIR, 0, 0), DE_OK);
-    de__manifest_kv keep = {.key = "layers",
-                            .value = {.type = DE_ASSET_SETTING_STRING, .u.s = "keep"}};
+    de__manifest_kv settings[] = {
+        {.key = "layers", .value = {.type = DE_ASSET_SETTING_STRING, .u.s = "keep"}},
+        {.key = "pixels_per_meter",
+         .value = {.type = DE_ASSET_SETTING_INT, .u.i = pixels_per_meter}}};
     de__manifest_asset asset = {.id = "hero/sprites",
                                 .type = "aseprite",
                                 .source = "playback.aseprite",
                                 .file = "asefixtures:/assets.toml",
-                                .settings = &keep,
-                                .setting_count = 1};
+                                .settings = settings,
+                                .setting_count = pixels_per_meter ? 2 : 1};
     de_cook_result result = {0};
     ASSERT_EQ(de_cooker_cook(cooker,
                              &(de_cook_input){.asset = &asset, .asset_root = "asefixtures:/"},
@@ -131,6 +133,10 @@ static void packed_load(ase_runtime_fx *f) {
     ASSERT_EQ(de_asset_pack_mount(f->base.assets, "animtest:/aseprite.dpak", 0), DE_OK);
     f->packed = true;
 }
+static void packed_load(ase_runtime_fx *f) {
+    packed_load_at_scale(f, 0);
+}
+#if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
 static void source_load(ase_runtime_fx *f) {
     ASSERT_EQ(
         de_file_write_all_atomic("animtest:/aseprite-source.aseprite", f->source, f->source_bytes),
@@ -143,6 +149,7 @@ static void source_load(ase_runtime_fx *f) {
         DE_OK);
     ASSERT_EQ(de_asset_manifest_load(f->base.assets, "animtest:/aseprite-assets.toml"), DE_OK);
 }
+#endif
 static void finish_load(ase_runtime_fx *f) {
     u32 reflected =
         de__asset_handle_of(f->base.assets, de_asset_id_from("hero/sprites"), "sprite_clip");
@@ -384,7 +391,12 @@ TEST_F(aseprite_runtime, named_walk_pingpong_and_single_frame_repeat_duration, a
 }
 TEST_F(aseprite_runtime, trimmed_geometry_keeps_top_origin_source_pixels_at_their_world_position,
        ase_runtime_fx) {
+#if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
     source_load(f); /* 20 source pixels per meter. */
+#else
+    /* The same geometry must work from a pack when runtime cooking is unavailable. */
+    packed_load_at_scale(f, 20);
+#endif
     finish_load(f);
     de_entity e = spawn(f, "walk");
     const f32 source_origin[][2] = {{3, 3}, {3, 3}, {3, 2}, {4, 3}};
@@ -408,6 +420,7 @@ TEST_F(aseprite_runtime, trimmed_geometry_keeps_top_origin_source_pixels_at_thei
         EXPECT_FLOAT_EQ(frame.source_pivot.y, source_origin[i][1] / 6, 0);
     }
 }
+#if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
 TEST_F(aseprite_runtime,
        source_recook_swaps_clip_layer_and_atlas_behind_handles_and_retains_failure,
        ase_runtime_fx) {
@@ -581,3 +594,12 @@ TEST_F(aseprite_runtime, manifest_slice_apply_reset_preserve_handles_source_and_
         DE_FREE(&f->base.allocator, source, (size_t)bytes + 1);
     }
 }
+#else
+TEST(aseprite_runtime,
+     source_recook_swaps_clip_layer_and_atlas_behind_handles_and_retains_failure) {
+    SKIP("runtime cooking and hot reload require Debug/Dev");
+}
+TEST(aseprite_runtime, manifest_slice_apply_reset_preserve_handles_source_and_atlas) {
+    SKIP("runtime cooking and hot reload require Debug/Dev");
+}
+#endif

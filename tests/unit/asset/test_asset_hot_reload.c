@@ -56,11 +56,9 @@ typedef struct hr_counters {
     de_asset_id last_dep;
 } hr_counters;
 
-#if DE__ASSET_RELOAD_ENABLED
 static const char *hr_bytes(const hr_obj *o) {
     return (const char *)(o + 1);
 }
-#endif
 
 static de_result hr_load(de_asset_load_ctx *ctx) {
     hr_counters *c = (hr_counters *)de_asset_load_ctx_user(ctx);
@@ -969,6 +967,29 @@ TEST_F(hot_reload, off, hr_fx) {
     manifest(f, "[assets]\n\"a\" = { type = \"hr\", source = \"a.hr\" }\n");
     const char *const paths[] = {"a"};
     de_load_handle h = load_all(f, paths, 1);
+    const u32 handle = de__asset_handle_of(f->s, id_of("a"), NULL);
+    const de__slot *slot = de__slot_get(f->s, handle);
+    ASSERT_TRUE(slot != NULL && de__slot_object(slot) != NULL);
+    const void *object = de__slot_object(slot);
+    const u32 version = slot->version;
+    const de__manifest *old_manifest = f->s->manifest;
+    const de__resolved *old_resolved = f->s->resolved;
+    /* An explicit manifest refresh must not parse this newly added entry when reload is off. */
+    put(f, "assets.toml",
+        "[assets]\n\"a\" = { type = \"hr\", source = \"a.hr\" }\n"
+        "\"b\" = { type = \"hr\", source = \"b.hr\" }\n");
+    const de_tracking_stats before = de_tracking_allocator_stats(&f->track);
+    EXPECT_FALSE(de__asset_reload_manifest_now(f->s));
+    EXPECT_FALSE(de__asset_reload_manifest_now(NULL));
+    const de_tracking_stats after = de_tracking_allocator_stats(&f->track);
+    EXPECT_EQ(after.alloc_count, before.alloc_count);
+    EXPECT_EQ(after.free_count, before.free_count);
+    EXPECT_TRUE(f->s->manifest == old_manifest);
+    EXPECT_TRUE(f->s->resolved == old_resolved);
+    EXPECT_TRUE(de__resolved_find(f->s->resolved, id_of("b")) == NULL);
+    EXPECT_TRUE(de__slot_object(de__slot_get(f->s, handle)) == object);
+    EXPECT_EQ(de__slot_get(f->s, handle)->version, version);
+    EXPECT_STREQ(hr_bytes(object), "A");
     changed(f, "a.hr");
     de_asset_system_update(f->s, NULL);
     EXPECT_EQ(rstats(f).changes, 0u);
