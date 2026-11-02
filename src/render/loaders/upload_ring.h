@@ -29,6 +29,8 @@
 #ifndef DE_RENDER_LOADERS_UPLOAD_RING_H
 #define DE_RENDER_LOADERS_UPLOAD_RING_H
 
+#include "asset/asset_internal.h"
+
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
 #include <dengine/de_debug.h>
@@ -128,6 +130,8 @@ struct de_render_uploader {
     const de_allocator *alloc;
     de_gpu_device *dev;
     de_asset_system *assets;
+    de__asset_destroy_observer asset_destroy;
+    bool destroy_requested;
     bool broken; /**< registration failed half way: loaders refuse */
 
     de_mutex lock;

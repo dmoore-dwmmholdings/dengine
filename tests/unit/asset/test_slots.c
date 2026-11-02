@@ -406,6 +406,54 @@ TEST_F(slots, object_and_unload, sys_fx) {
     EXPECT_TRUE(f->counters.last_unloaded == &obj_b);
 }
 
+typedef struct destroy_probe {
+    de__asset_destroy_observer observer;
+    const test_bytes_counters *counters;
+    u32 calls, observed_unloads;
+} destroy_probe;
+
+static void observe_destroy(void *user) {
+    destroy_probe *p = user;
+    EXPECT_TRUE(p->observer.system == NULL);
+    EXPECT_TRUE(p->observer.next == NULL);
+    EXPECT_TRUE(p->observer.list == NULL);
+    ++p->calls;
+    p->observed_unloads = p->counters->unloads;
+}
+
+TEST_F(slots, destruction_observers_bracket_unloads_and_detach, sys_fx) {
+    ASSERT_TRUE(test_bytes_register(f->s, &f->counters).id);
+    u32 slot = create_slot(f->s, 42);
+    static int object;
+    de__slot_set_object(de__slot_get(f->s, slot), &object);
+    destroy_probe early = {.counters = &f->counters}, late = {.counters = &f->counters};
+    destroy_probe removed_early = {.counters = &f->counters};
+    destroy_probe removed_late = {.counters = &f->counters};
+    const de_tracking_stats before = de_tracking_allocator_stats(&f->track);
+    de__asset_destroy_observe(f->s, &early.observer, observe_destroy, &early);
+    de__asset_destroy_observe_after_unload(f->s, &late.observer, observe_destroy, &late);
+    de__asset_destroy_observe(f->s, &removed_early.observer, observe_destroy, &removed_early);
+    de__asset_destroy_observe_after_unload(f->s, &removed_late.observer, observe_destroy,
+                                           &removed_late);
+    de__asset_destroy_unobserve(&removed_early.observer);
+    de__asset_destroy_unobserve(&removed_late.observer);
+    const de_tracking_stats after = de_tracking_allocator_stats(&f->track);
+    EXPECT_EQ(before.alloc_count, after.alloc_count);
+    EXPECT_EQ(before.bytes_live, after.bytes_live);
+    de_asset_system_destroy(f->s);
+    f->s = NULL;
+    EXPECT_EQ(early.calls, 1u);
+    EXPECT_EQ(early.observed_unloads, 0u);
+    EXPECT_EQ(late.calls, 1u);
+    EXPECT_EQ(late.observed_unloads, 1u);
+    EXPECT_EQ(removed_early.calls, 0u);
+    EXPECT_EQ(removed_late.calls, 0u);
+    de__asset_destroy_unobserve(&early.observer);
+    de__asset_destroy_unobserve(&late.observer);
+    de__asset_destroy_unobserve(&removed_early.observer);
+    de__asset_destroy_unobserve(&removed_late.observer);
+}
+
 TEST_F(slots, oom_sweep, sys_fx) {
     de_asset_system *s = f->s;
     install_manifest(s, k_manifest);

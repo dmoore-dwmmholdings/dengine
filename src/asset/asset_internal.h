@@ -23,12 +23,14 @@ DE_EXTERN_C_BEGIN
 
 /** Intrusive main-thread observer. Storage belongs to the observer, which removes it before
  * freeing that storage. Destruction detaches it before notification; callbacks only invalidate
- * their asset-system references and must not register new observers. */
+ * their asset-system references and must not register new observers. Post-unload observers
+ * instead release loader-owned resources after every job and asset object has gone. */
 typedef struct de__asset_destroy_observer {
     de_asset_system *system;
     struct de__asset_destroy_observer *next;
     void (*notify)(void *user);
     void *user;
+    struct de__asset_destroy_observer **list;
 } de__asset_destroy_observer;
 
 struct de_asset_system {
@@ -102,11 +104,18 @@ struct de_asset_system {
 
     /* DENG-163: owners of pinned assets can outlive the asset system during shutdown. */
     de__asset_destroy_observer *destroy_observers;
+    /* DENG-721: loader user storage must survive the last unload, in either owner order. */
+    de__asset_destroy_observer *destroy_finalizers;
 };
 
 /** Main thread; observer is zero-initialized and not already registered. No allocation. */
 void de__asset_destroy_observe(de_asset_system *s, de__asset_destroy_observer *observer,
                                void (*notify)(void *user), void *user);
+/** Main thread; notification runs after all jobs, unloads and asset bookkeeping. The callback
+ * may free its own observer storage but must not call asset APIs or register observers. */
+void de__asset_destroy_observe_after_unload(de_asset_system *s,
+                                            de__asset_destroy_observer *observer,
+                                            void (*notify)(void *user), void *user);
 /** Main thread; harmless after notification or on a zero observer. No allocation. */
 void de__asset_destroy_unobserve(de__asset_destroy_observer *observer);
 

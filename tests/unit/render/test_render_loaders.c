@@ -167,6 +167,43 @@ static void start(lfx *f, const char *name, start_opts o) {
     ASSERT_EQ(de__render_register_asset_types_ex(f->s, &rd, &f->u), DE_OK);
 }
 
+TEST_F(loaders, partial_registration_owner_cleanup, lfx) {
+    f->d = lt_device(DE_GPU_NULL, &f->dev_alloc, f->why, sizeof f->why);
+    ASSERT_TRUE(f->d != NULL);
+    u32 partial = 0, complete = 0;
+    for (i64 n = 0; n < 16; ++n) {
+        ASSERT_EQ(
+            de_asset_system_create(
+                &(de_asset_system_desc){.allocator = &f->alloc, .no_builtin_types = true}, &f->s),
+            DE_OK);
+        de_tracking_allocator_fail_after(&f->track, n);
+        const de_result result = de__render_register_asset_types_ex(
+            f->s,
+            &(de__render_assets_desc){
+                .device = f->d, .allocator = &f->alloc, .ring_bytes = 4096, .no_import = true},
+            &f->u);
+        de_tracking_allocator_fail_after(&f->track, -1);
+        EXPECT_TRUE(result == DE_OK || result == DE_ERR_OUT_OF_MEMORY);
+        if (result != DE_OK && f->u) {
+            ++partial;
+            EXPECT_TRUE(f->u->broken);
+            EXPECT_TRUE(de__asset_type_find(f->s, "texture").id != 0);
+        }
+        if (result == DE_OK)
+            ++complete;
+        /* Even a partial registry retains its user. Request destruction first, then let the
+         * system remove the registered callbacks and finalize the uploader exactly once. */
+        de_render_uploader_destroy(f->u);
+        f->u = NULL;
+        de_asset_system_destroy(f->s);
+        f->s = NULL;
+        EXPECT_EQ(de_tracking_allocator_stats(&f->track).bytes_live, 0u);
+        EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0u);
+    }
+    EXPECT_GT(partial, 0u);
+    EXPECT_GT(complete, 0u);
+}
+
 static void put(lfx *f, const char *file, const void *data, u64 size) {
     char path[160];
     snprintf(path, sizeof path, "%s/%s", f->dir, file);

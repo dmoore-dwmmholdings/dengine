@@ -162,6 +162,13 @@ static const char *const k_texture_exts[] = {".png", ".jpg", ".jpeg", ".exr", ".
 static const char *const k_model_exts[] = {".gltf", ".glb", ".fbx"};
 #endif
 
+static void uploader_assets_destroyed(void *user) {
+    de_render_uploader *u = user;
+    u->assets = NULL;
+    if (u->destroy_requested)
+        de_render_uploader_destroy(u);
+}
+
 de_result de__render_register_asset_types_ex(de_asset_system *s, const de__render_assets_desc *d,
                                              de_render_uploader **out) {
     if (out != NULL)
@@ -246,6 +253,9 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
             *out = u;
             return r;
         }
+        if (i == 0)
+            de__asset_destroy_observe_after_unload(s, &u->asset_destroy, uploader_assets_destroyed,
+                                                   u);
     }
     *out = u;
     return DE_OK;
@@ -263,8 +273,16 @@ de_result de_render_register_asset_types(de_asset_system *s, de_gpu_device *d,
 void de_render_uploader_destroy(de_render_uploader *u) {
     if (u == NULL)
         return;
+    /* Type callbacks retain this user pointer through asset shutdown. A renderer can go
+     * first, but its frame fence cannot remain in an uploader retained by those callbacks. */
+    de__render_uploader_set_frame_fence(u, (de_gpu_fence){0});
+    de__uploader_retire_all(u);
+    if (u->assets != NULL) {
+        u->destroy_requested = true;
+        return;
+    }
     const de_allocator *a = u->alloc;
-    de__uploader_retire_all(u); /* DENG-422: the renderer waited for the GPU */
+    de__asset_destroy_unobserve(&u->asset_destroy);
     de__uploader_fini(u);
     DE_FREE(a, u, sizeof *u);
 }

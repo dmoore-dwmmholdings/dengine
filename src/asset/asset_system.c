@@ -110,23 +110,37 @@ de_result de_asset_system_create(const de_asset_system_desc *desc, de_asset_syst
     return DE_OK;
 }
 
+static void destroy_observe(de_asset_system *s, de__asset_destroy_observer **list,
+                            de__asset_destroy_observer *observer, void (*notify)(void *user),
+                            void *user) {
+    DE_ASSERT(s != NULL && observer != NULL && observer->system == NULL && notify != NULL);
+    *observer = (de__asset_destroy_observer){
+        .system = s, .next = *list, .notify = notify, .user = user, .list = list};
+    *list = observer;
+}
+
 void de__asset_destroy_observe(de_asset_system *s, de__asset_destroy_observer *observer,
                                void (*notify)(void *user), void *user) {
-    DE_ASSERT(s != NULL && observer != NULL && observer->system == NULL && notify != NULL);
-    *observer = (de__asset_destroy_observer){s, s->destroy_observers, notify, user};
-    s->destroy_observers = observer;
+    destroy_observe(s, &s->destroy_observers, observer, notify, user);
+}
+
+void de__asset_destroy_observe_after_unload(de_asset_system *s,
+                                            de__asset_destroy_observer *observer,
+                                            void (*notify)(void *user), void *user) {
+    destroy_observe(s, &s->destroy_finalizers, observer, notify, user);
 }
 
 void de__asset_destroy_unobserve(de__asset_destroy_observer *observer) {
     if (observer == NULL || observer->system == NULL)
         return;
-    de__asset_destroy_observer **link = &observer->system->destroy_observers;
+    de__asset_destroy_observer **link = observer->list;
     while (*link != NULL && *link != observer)
         link = &(*link)->next;
     if (*link == observer)
         *link = observer->next;
     observer->system = NULL;
     observer->next = NULL;
+    observer->list = NULL;
 }
 
 void de_asset_system_destroy(de_asset_system *s) {
@@ -152,6 +166,11 @@ void de_asset_system_destroy(de_asset_system *s) {
     de__manifest_destroy(s->failed_manifest);
     DE_FREE(a, s->cache_dir_buf, s->cache_dir_size);
     de__asset_wake_shutdown(s); /* DENG-387: last; every job came back in the pipeline shutdown */
+    while (s->destroy_finalizers != NULL) {
+        de__asset_destroy_observer *observer = s->destroy_finalizers;
+        de__asset_destroy_unobserve(observer);
+        observer->notify(observer->user);
+    }
     DE_FREE(a, s, sizeof *s);
 }
 

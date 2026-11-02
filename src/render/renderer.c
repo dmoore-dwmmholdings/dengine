@@ -48,6 +48,10 @@
 
 /* ---------- Create / destroy ---------- */
 
+static void renderer_assets_destroyed(void *user) {
+    ((de_renderer *)user)->assets = NULL;
+}
+
 /* DENG-177: the first stage of every view (right after "view.debug_clear"): the view's scene
  * constants entry of the GPU scene, so the stages after it read the tables through it. */
 static void gpu_scene_view_stage(de__view_frame *vf, void *user) {
@@ -103,8 +107,7 @@ static void renderer_free(de_renderer *r) {
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
     de__material_instances_destroy(r->material_instances); /* DENG-302: after the GPU scene */
-    if (r->uploader != NULL && !r->uploader_orphaned)
-        de_render_uploader_destroy(r->uploader);
+    de_render_uploader_destroy(r->uploader);
     if (r->graph != NULL)
         de__rg_destroy(r->graph);
     for (u32 i = 0; i < DE__RENDER_MAX_FRAMES_IN_FLIGHT; ++i)
@@ -116,6 +119,7 @@ static void renderer_free(de_renderer *r) {
     if (DE_HANDLE_VALID(r->frame_fence))
         de_gpu_fence_destroy(r->dev, r->frame_fence);
     de__render_cvars_release(r);
+    de__asset_destroy_unobserve(&r->asset_destroy);
     de_mutex_destroy(&r->lock);
     DE_FREE(r->alloc, r, sizeof *r);
 }
@@ -177,6 +181,8 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     r->clear_color[2] = 0.0f;
     r->clear_color[3] = 1.0f;
     de_mutex_init(&r->lock);
+    if (r->assets)
+        de__asset_destroy_observe(r->assets, &r->asset_destroy, renderer_assets_destroyed, r);
 
     /* Settings: the cvars' selection (or auto), clamped to the device. */
     de__render_cvars_init(r);
@@ -324,13 +330,10 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         res = de_render_register_asset_types(r->assets, r->dev, a, &r->uploader);
         if (res != DE_OK) {
             if (r->uploader != NULL) {
-                /* Some types were registered before the failure: their loaders refuse, but they
-                 * point at the uploader until the asset system goes, so it must outlive this
-                 * failed renderer. It is leaked (a create that fails half way through
-                 * registration only fails for lack of memory). */
-                r->uploader_orphaned = true;
+                /* Registered types retain their user until their final unload. The uploader's
+                 * destruction request is deferred to asset-system shutdown. */
                 DE_ERROR(r->log, "de_renderer_create: asset type registration failed half way; "
-                                 "the uploader is kept for the asset system");
+                                 "uploader cleanup is deferred to asset-system shutdown");
             }
             res = DE_FAIL_WRAP(res, "de_renderer_create: registering the render asset types");
             goto fail;

@@ -34,6 +34,7 @@
 #include "render/loaders/render_assets.h"
 #include "render/loaders/upload_ring.h"
 #include "render/renderer_internal.h"
+#include "render/rt/rt_internal.h"
 #include "render/world/render_world.h"
 #if defined(DE_RENDER_PUMP_PACK_TEST)
 #include "loader_test_util.h"
@@ -617,6 +618,110 @@ TEST_F(renderer, pump_uploads_without_frames_null, rfx) {
 }
 TEST_F(renderer, pump_uploads_without_frames_metal, rfx) {
     pump_uploads_without_frames(f, DE_GPU_METAL);
+}
+
+/* Hold real load requests through teardown. No frame/view is needed: a direct main-thread
+ * RT prepare also leaves published BLAS records referring to the asset's mesh object. */
+static void pump_mesh_teardown(rfx *f, de_gpu_backend backend, bool renderer_first,
+                               bool pending_upload) {
+    start(f, backend, true);
+    snprintf(f->upload_pack_path, sizeof f->upload_pack_path, "rr:/lifetime-%lu-%llu.dpak",
+             (unsigned long)pump_test_pid(), (unsigned long long)de_time_now_ns());
+    lt_blob mesh = lt_dmsh(300, 0, 11);
+    ASSERT_TRUE(mesh.data != NULL);
+    const de_asset_id id = de_asset_id_from("lifetime/mesh");
+    dpak_writer *writer = NULL;
+    ASSERT_EQ(dpak_writer_create(&(dpak_writer_desc){.include_names = true}, &writer), DE_OK);
+    ASSERT_EQ(
+        dpak_writer_add(writer, id.hash, "mesh", mesh.data, mesh.size, NULL, 0, "lifetime/mesh"),
+        DE_OK);
+    ASSERT_EQ(dpak_writer_finish(writer, f->upload_pack_path), DE_OK);
+    dpak_writer_destroy(writer);
+    lt_free(&mesh);
+    ASSERT_EQ(de_asset_pack_mount(f->assets, f->upload_pack_path, 0), DE_OK);
+    de_render_uploader *u = de__renderer_uploader(f->r);
+    if (pending_upload)
+        de__uploader_test_hold_fence(u, 0);
+    f->isolation_load = de_asset_load(f->assets, id, 0);
+    ASSERT_TRUE(f->isolation_load.id);
+    const u64 deadline = de_time_now_ns() + WAIT_NS;
+    de_load_state state = DE_LOAD_LOADING;
+    do {
+        de_renderer_pump_uploads(f->r);
+        state = de_asset_wait(f->assets, f->isolation_load, 1000000);
+        if (pending_upload && de_render_uploader_stats(u).submitted)
+            break;
+    } while ((state == DE_LOAD_PENDING || state == DE_LOAD_LOADING) && de_time_now_ns() < deadline);
+    u64 base_bytes = 0;
+    if (pending_upload) {
+        ASSERT_GT(de_render_uploader_stats(u).submitted, 0u);
+        ASSERT_EQ(state, DE_LOAD_LOADING);
+    } else {
+        ASSERT_EQ(state, DE_LOAD_READY);
+        const de_render_mesh *m = de_render_mesh_get(f->assets, de_asset_mesh(f->assets, id));
+        ASSERT_TRUE(m != NULL);
+        base_bytes = m->gpu_bytes;
+        de_render_settings settings = de_renderer_get_settings(f->r);
+        settings.tier = DE_TIER_RT;
+        de_renderer_set_settings(f->r, &settings);
+        ASSERT_EQ(de__rt_prepare(f->r), DE_OK);
+        de_asset_stats stats = de_asset_get_stats(f->assets);
+        if (f->r->caps.ray_query && f->r->caps.max_bindless_accels) {
+            ASSERT_TRUE(f->r->rt_scene != NULL);
+            ASSERT_EQ(f->r->rt_scene->mesh_count, 1u);
+            ASSERT_GT(f->r->rt_scene->blas_count, 0u);
+            ASSERT_GT(f->r->rt_scene->value, 0u);
+            EXPECT_EQ(stats.bytes_resident[DE_ASSET_BYTES_GPU_MESH],
+                      base_bytes + f->r->rt_scene->bytes);
+        } else {
+            EXPECT_EQ(stats.bytes_resident[DE_ASSET_BYTES_GPU_MESH], base_bytes);
+        }
+    }
+    u64 frames = UINT64_MAX;
+    (void)de__renderer_frame_fence(f->r, &frames);
+    EXPECT_EQ(frames, 0u);
+    if (renderer_first) {
+        de_renderer_destroy(f->r);
+        f->r = NULL;
+        if (!pending_upload) {
+            /* Live assets retain their loader owner; RT bytes have been removed exactly once. */
+            de_asset_stats stats = de_asset_get_stats(f->assets);
+            EXPECT_EQ(stats.bytes_resident[DE_ASSET_BYTES_GPU_MESH], base_bytes);
+            EXPECT_TRUE(de_render_mesh_get(f->assets, de_asset_mesh(f->assets, id)) != NULL);
+        }
+    }
+    de_asset_system_destroy(f->assets);
+    f->assets = NULL;
+    f->isolation_load = (de_load_handle){0};
+    if (f->r) {
+        EXPECT_TRUE(f->r->assets == NULL);
+        de_renderer_destroy(f->r);
+        f->r = NULL;
+    }
+}
+TEST_F(renderer, pump_mesh_asset_first_null, rfx) {
+    pump_mesh_teardown(f, DE_GPU_NULL, false, false);
+}
+TEST_F(renderer, pump_mesh_renderer_first_null, rfx) {
+    pump_mesh_teardown(f, DE_GPU_NULL, true, false);
+}
+TEST_F(renderer, pump_mesh_asset_first_metal, rfx) {
+    pump_mesh_teardown(f, DE_GPU_METAL, false, false);
+}
+TEST_F(renderer, pump_mesh_renderer_first_metal, rfx) {
+    pump_mesh_teardown(f, DE_GPU_METAL, true, false);
+}
+TEST_F(renderer, pending_upload_asset_first_null, rfx) {
+    pump_mesh_teardown(f, DE_GPU_NULL, false, true);
+}
+TEST_F(renderer, pending_upload_renderer_first_null, rfx) {
+    pump_mesh_teardown(f, DE_GPU_NULL, true, true);
+}
+TEST_F(renderer, pending_upload_asset_first_metal, rfx) {
+    pump_mesh_teardown(f, DE_GPU_METAL, false, true);
+}
+TEST_F(renderer, pending_upload_renderer_first_metal, rfx) {
+    pump_mesh_teardown(f, DE_GPU_METAL, true, true);
 }
 
 /* The authored scene above uses public headers only. These helpers create ordinary loaded

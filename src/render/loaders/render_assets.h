@@ -65,12 +65,13 @@ typedef struct de_render_uploader de_render_uploader;
  * ring has `staging_ring_bytes` of the system's desc.
  *
  * `a` (NULL = the heap) must be thread-safe; it holds the uploader and every runtime record.
- * Destroy the asset system first (its unloads use the uploader), then the uploader, then `d`.
+ * Destroy the asset system and uploader in either order, then `d`. Requesting uploader
+ * destruction first retains its loader storage until the asset system's final unload.
  * @return DE_OK; DE_ERR_INVALID_ARGUMENT (NULL `s`, `d` or `out`); DE_ERR_ALREADY_EXISTS (one of
  *         the four names is registered already); DE_ERR_OUT_OF_MEMORY; the RHI's errors for the
  *         ring buffer or the fence. `*out` is NULL on failure, except when the failure came after
  *         some of the types were registered (the registry cannot unregister): their loaders then
- *         fail, and `*out` must still be destroyed after the asset system.
+ *         fail, and `*out` must still be destroyed (cleanup may defer to the asset system).
  */
 de_result de_render_register_asset_types(de_asset_system *s, de_gpu_device *d,
                                          const de_allocator *a, de_render_uploader **out);
@@ -93,8 +94,9 @@ typedef struct de__render_assets_desc {
 de_result de__render_register_asset_types_ex(de_asset_system *s, const de__render_assets_desc *d,
                                              de_render_uploader **out);
 
-/** Destroys the uploader (after the asset system that used it). Waits for nothing: the ring and
- * the fence are destroyed deferred by the RHI. NULL is ignored. */
+/** Requests uploader destruction. If its asset system is alive, storage survives its last
+ * unload; otherwise it is released now. The device and allocator must outlive both owners.
+ * Waits for nothing: GPU handles use RHI deferred release. NULL is ignored. */
 void de_render_uploader_destroy(de_render_uploader *u);
 
 /**

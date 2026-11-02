@@ -104,7 +104,8 @@ DE_API de_render_settings de_render_settings_auto(de_renderer *r);
 typedef struct de_renderer_desc {
     de_gpu_device *device; /**< required; must meet the Base tier (de_gpu_evaluate_tier) */
     /** The asset system the renderer registers the texture, mesh, material and model types
-     * with (NULL: none). Destroy the asset system before the renderer. */
+     * with (NULL: none). Either owner may be destroyed first during shutdown; stop rendering
+     * before destroying the asset system. The device and allocator must outlive both. */
     de_asset_system *assets;
     de_type_registry *types;       /**< for the render components (DENG-178) */
     const de_allocator *allocator; /**< NULL = de_heap_allocator(); must be thread-safe */

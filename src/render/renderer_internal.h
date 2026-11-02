@@ -31,6 +31,7 @@
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
 #include <dengine/de_render.h>
+#include "asset/asset_internal.h"
 
 DE_EXTERN_C_BEGIN
 
@@ -114,6 +115,7 @@ struct de_renderer {
     const de_allocator *alloc;
     de_gpu_device *dev;
     de_asset_system *assets;
+    de__asset_destroy_observer asset_destroy;
     de_type_registry *types;
     de_world *world; /**< de_renderer_attach */
     de_log_category log;
@@ -132,7 +134,6 @@ struct de_renderer {
 
     /* GPU uploads of the render asset types (NULL without an asset system). */
     de_render_uploader *uploader;
-    bool uploader_orphaned; /**< registration failed half way; see de_renderer_create */
 
     /* Frames. */
     de_gpu_fence frame_fence; /**< frame N signals N + 1 */
