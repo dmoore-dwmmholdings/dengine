@@ -156,9 +156,11 @@ de_result de__ed_settings_values(const de_ep_map_raw *input, de_ep_arena *arena,
         mpack_reader_t r;
         mpack_reader_init_data(&r, item->value.ptr, item->value.len);
         bool ok = value(&r, arena, &out[i].value, 0, &nodes);
-        if (mpack_reader_remaining(&r, NULL) != 0)
-            ok = false;
-        if (mpack_reader_destroy(&r) != mpack_ok || !ok)
+        /* Policy rejection may leave an array/map open. Flag it before cleanup
+         * so MPack cancels tracking instead of asserting on unclosed containers. */
+        if (!ok || mpack_reader_remaining(&r, NULL) != 0)
+            mpack_reader_flag_error(&r, mpack_error_invalid);
+        if (mpack_reader_destroy(&r) != mpack_ok)
             return DE_ERR_INVALID_ARGUMENT;
     }
     *settings = out;
