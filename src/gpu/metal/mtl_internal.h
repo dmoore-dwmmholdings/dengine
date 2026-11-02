@@ -413,6 +413,11 @@ void de__mtl_sync_drain(de_gpu_device *d);
 void de__mtl_sync_release_groups(de_gpu_device *d);
 /* Caller holds submit_lock[q], after committing buffer. */
 void de__mtl_remember_committed(de_gpu_device *d, de_gpu_queue q, void *buffer);
+/** Link two immutable submit groups unless the predecessor's native work AND published serial
+ * have completed. Returns true when linked. Groups are non-NULL dispatch_group_t objects;
+ * caller holds submit_lock[q], with no concurrent waits or further enters on the predecessor. */
+bool de__mtl_chain_predecessor(void *following, void *previous, u64 predecessor_serial,
+                               u64 completed_serial);
 de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                                u64 queue_value);
 de_result de__mtl_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial);

@@ -6,9 +6,72 @@
 
 #include "gpu/metal/mtl_internal.h"
 #include "mtl_cmd_helpers.h"
+#include "de_test.h"
+#include "de_alloc_guard.h"
 
 #include <stdio.h>
 #include <string.h>
+
+TEST(mtl, completed_predecessor_has_no_notification_allocation) {
+    dispatch_group_t previous = dispatch_group_create();
+    dispatch_group_t following = dispatch_group_create();
+    for (u32 i = 0; i < 16; ++i) {
+        de_alloc_guard guard = {0};
+        if (i >= 8)
+            de_alloc_guard_begin(&guard);
+        bool linked = de__mtl_chain_predecessor((__bridge void *)following,
+                                                (__bridge void *)previous, 10, 10);
+        intptr_t ready =
+            dispatch_group_wait(following, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC));
+        if (i >= 8)
+            de_alloc_guard_end(&guard);
+        EXPECT_FALSE(linked);
+        EXPECT_EQ(ready, 0);
+        if (i >= 8)
+            DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    }
+}
+
+static void pending_predecessor_keeps_dependency(u64 completed_serial) {
+    dispatch_group_t previous = dispatch_group_create();
+    dispatch_group_t following = dispatch_group_create();
+    dispatch_group_enter(previous);
+    bool linked = de__mtl_chain_predecessor((__bridge void *)following, (__bridge void *)previous,
+                                            10, completed_serial);
+    intptr_t while_pending = dispatch_group_wait(following, DISPATCH_TIME_NOW);
+    /* Always release held work before assertions, including counterfactual failure paths. */
+    dispatch_group_leave(previous);
+    intptr_t finished =
+        dispatch_group_wait(following, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC));
+    EXPECT_TRUE(linked);
+    EXPECT_NE(while_pending, 0);
+    EXPECT_EQ(finished, 0);
+}
+
+TEST(mtl, pending_predecessor_keeps_submission_order) {
+    pending_predecessor_keeps_dependency(9);
+}
+
+TEST(mtl, visible_serial_does_not_bypass_pending_native_completion) {
+    pending_predecessor_keeps_dependency(10);
+}
+
+TEST(mtl, completed_native_group_keeps_unpublished_serial_dependency) {
+    dispatch_group_t previous = dispatch_group_create();
+    dispatch_group_t following = dispatch_group_create();
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    bool linked =
+        de__mtl_chain_predecessor((__bridge void *)following, (__bridge void *)previous, 10, 9);
+    intptr_t finished =
+        dispatch_group_wait(following, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC));
+    de_alloc_guard_end(&guard);
+    EXPECT_TRUE(linked);
+    EXPECT_EQ(finished, 0);
+    /* A positive control: the existing notification really remains on this path. */
+    if (de_alloc_guard_counts_raw())
+        EXPECT_GT(guard.raw_mallocs, 0u);
+}
 
 void de_test_mtl_fill(void *blit_encoder, void *buffer, u64 offset, u64 size, u8 value) {
     [(__bridge id<MTLBlitCommandEncoder>)blit_encoder

@@ -69,3 +69,8 @@ if(TARGET test_gpu_metal)
     target_compile_definitions(test_gpu_metal PRIVATE
         "DE_MTL_ACCEL_TEST_LIBRARY=\"${_de_as_test_library}\"")
 endif()
+
+# DENG-739: the predecessor fast path is checked with the unchanged raw allocation guard.
+if(TARGET test_gpu_metal)
+    target_link_libraries(test_gpu_metal PRIVATE de_test_support)
+endif()

@@ -225,6 +225,22 @@ void de__mtl_sync_release_groups(de_gpu_device *d) {
     }
 }
 
+bool de__mtl_chain_predecessor(void *following, void *previous, u64 predecessor_serial,
+                               u64 completed_serial) {
+    dispatch_group_t prev = (__bridge dispatch_group_t)previous;
+    /* A visible serial alone is not native completion. Conversely, an empty native group
+     * may still have its timeline notification queued. Keep the original dependency in
+     * either case, and avoid allocating a block only after both have completed. */
+    if (completed_serial >= predecessor_serial && dispatch_group_wait(prev, DISPATCH_TIME_NOW) == 0)
+        return false;
+    dispatch_group_t group = (__bridge dispatch_group_t)following;
+    dispatch_group_enter(group);
+    dispatch_group_notify(prev, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+      dispatch_group_leave(group);
+    });
+    return true;
+}
+
 de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                                u64 queue_value) {
     mtl_device *m = de__mtl_dev(d);
@@ -247,10 +263,9 @@ de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_su
         dispatch_queue_t dq = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
         if (m->last_group[q]) {
             dispatch_group_t prev = (dispatch_group_t)CFBridgingRelease(m->last_group[q]);
-            dispatch_group_enter(group);
-            dispatch_group_notify(prev, dq, ^{
-              dispatch_group_leave(group);
-            });
+            /* gpu.c assigns contiguous serials under submit_lock[q] before this call. */
+            (void)de__mtl_chain_predecessor((__bridge void *)group, (__bridge void *)prev,
+                                            queue_value - 1, timeline.signaledValue);
         }
         m->last_group[q] = (void *)CFBridgingRetain(group);
 
