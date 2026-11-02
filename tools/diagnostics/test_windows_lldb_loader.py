@@ -85,6 +85,32 @@ class LoaderEvidence(unittest.TestCase):
         self.assertNotIn("versionProbe", report)
         self.assertTrue(report["originalEvidenceUnchanged"])
 
+    def test_non_utf8_child_output_preserves_directory_metadata_and_logs(self):
+        last = self.logs / "LastTest.log"
+        original = last.read_bytes()
+        # CTest preserves arbitrary child stdout bytes among its UTF-8 metadata.
+        # Retain Windows CRLF, the Unicode directory and the exact failed log.
+        last.write_bytes(b"1/2158 Testing: other.test\r\nOutput:\r\nchild\xa7\xff\x80\r\n" +
+                         original.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n") +
+                         b"\r\nselected child output\xa7\r\n")
+        before = last.read_bytes()
+        code, report = self.collect({"lldb.exe": []})
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["workingDirectory"], str(self.working))
+        self.assertEqual(report["versionProbe"]["exit"], 3221225781)
+        self.assertTrue(report["originalEvidenceUnchanged"])
+        self.assertEqual(last.read_bytes(), before)
+
+    def test_invalid_directory_encoding_remains_incomplete(self):
+        last = self.logs / "LastTest.log"
+        last.write_bytes(last.read_bytes().replace(str(self.working).encode("utf-8"), b"\xff"))
+        before = last.read_bytes()
+        code, report = self.collect({})
+        self.assertEqual(code, 2)
+        self.assertNotIn("versionProbe", report)
+        self.assertTrue(report["originalEvidenceUnchanged"])
+        self.assertEqual(last.read_bytes(), before)
+
     def test_inspected_debugger_mutation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "debugger files changed"):
             self.collect({"lldb.exe": []}, lambda: self.tool.write_bytes(b"changed"))

@@ -42,13 +42,16 @@ def dependent_names(text):
                   key=str.casefold)
 
 
-def original_working_directory(text):
-    entries = re.findall(r"^\d+/\d+ Testing: debugger\.native_lldb\r?\n"
-                         r"(?:(?!^\d+/\d+ Testing:).)*?^Directory: ([^\r\n]+)$",
-                         text, re.M | re.S)
+def original_working_directory(data):
+    # CTest logs contain raw child output, which need not be UTF-8. Select the
+    # metadata as bytes, then decode only this test's directory; never reinterpret
+    # or rewrite unrelated output to recover its launch location.
+    entries = re.findall(rb"^\d+/\d+ Testing: debugger\.native_lldb\r?\n"
+                         rb"(?:(?!^\d+/\d+ Testing:).)*?^Directory: ([^\r\n]+)\r?$",
+                         data, re.M | re.S)
     if len(entries) != 1:
         raise ValueError("one original LLDB test working directory is required")
-    working = Path(entries[0].strip())
+    working = Path(entries[0].decode("utf-8").strip())
     if not working.is_absolute() or not working.is_dir():
         raise ValueError("original test working directory is unavailable")
     return working.resolve()
@@ -89,7 +92,7 @@ def collect(build, output):
         if not re.search(r"^\d+:debugger\.native_lldb$", failed, re.M):
             raise ValueError("original debugger.native_lldb failure is required")
         executable = selected_lldb(protected[0].read_text(encoding="utf-8-sig"))
-        working = original_working_directory(protected[1].read_text(encoding="utf-8-sig"))
+        working = original_working_directory(protected[1].read_bytes())
         report["executable"] = str(executable)
         fingerprints[str(executable)] = digest(executable)
         directories = search_directories(executable, working)
