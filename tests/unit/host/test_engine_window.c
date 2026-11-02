@@ -66,8 +66,8 @@ static void native_host_window_setup(native_host_window *f) {
     (void)f;
 }
 static void native_host_window_teardown(native_host_window *f) {
-    de_renderer_destroy(f->renderer);
-    de_gpu_device_destroy(f->device);
+    /* The public game API transfers ownership through the engine fields. Its teardown
+     * releases asset loader storage before the GPU; these fixture pointers are aliases. */
     de__engine_destroy(f->engine);
 }
 static void host_renderer(native_host_window *f, bool vulkan) {
@@ -93,12 +93,14 @@ static void host_renderer(native_host_window *f, bool vulkan) {
     if (result == DE_ERR_UNSUPPORTED)
         SKIP("requested GPU backend unavailable");
     ASSERT_EQ(result, DE_OK);
+    f->engine->gpu = f->device;
     ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device,
                                                      .window = f->engine->window,
                                                      .assets = f->engine->assets,
                                                      .types = f->engine->types},
                                  &f->renderer),
               DE_OK);
+    f->engine->renderer = f->renderer;
     EXPECT_TRUE(f->renderer != NULL);
     if (de_gpu_get_caps(f->device)->backend == DE_GPU_METAL)
         EXPECT_TRUE(de_window_native(f->engine->window).metal_layer != NULL);

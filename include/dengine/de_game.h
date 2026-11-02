@@ -35,7 +35,8 @@ typedef struct de_steam de_steam;
  * GPU and window in dependency order. It does not create these optional instances for games.
  * A game that destroys an assigned instance itself must first respect its dependency/lifetime
  * requirements and set the field to NULL immediately afterward; otherwise shutdown destroys
- * it again. Do not destroy a renderer while the asset system still owns its render assets.
+ * it again. Stop rendering before destroying assets; the GPU and renderer allocator must
+ * outlive both renderer and assets, even when the renderer itself is destroyed first.
  * Assign owned instances as soon as create succeeds, including during a failing init: the
  * host unwinds assigned fields even when init fails (shutdown is not called in that case).
  * Ownership of other optional module fields is unchanged. */
