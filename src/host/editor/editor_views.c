@@ -107,7 +107,9 @@ typedef struct ed_ring {
     u64 last_fence;
     bool released;
 } ed_ring;
-typedef struct ed_bridge { char adapter[24]; } ed_bridge;
+typedef struct ed_bridge {
+    char adapter[24];
+} ed_bridge;
 #endif
 
 #define ED_PICK_SKIP 128u
@@ -115,7 +117,7 @@ typedef struct ed_bridge { char adapter[24]; } ed_bridge;
 typedef struct ed_pick {
     u64 req_id, render_id;
     u32 view;
-    f32 x, y; /* source pixels */
+    f32 x, y;               /* source pixels */
     u64 skip[ED_PICK_SKIP]; /* see through these (Alt-click cycling, locked entities) */
     u32 skip_count;
     u64 sprite; /* the nearest sprite under the cursor: the answer when the GPU sees nothing */
@@ -181,10 +183,13 @@ typedef struct de__ed_views {
 } de__ed_views;
 
 static de__ed_views g_views;
+#if ED_VIEWS
 static de__editor *g_ed; /* the render hook's way back */
+#endif
 
 void de__ed_each_bounds(de__editor *ed,
-                        void (*fn)(u64 e, de_dvec3 lo, de_dvec3 hi, const de__ed_mesh_geo *geo, void *user),
+                        void (*fn)(u64 e, de_dvec3 lo, de_dvec3 hi, const de__ed_mesh_geo *geo,
+                                   void *user),
                         void *user) {
 #if DE_HAS_RENDER
     const de_renderer *r = ed->e->renderer;
@@ -210,7 +215,8 @@ void de__ed_each_bounds(de__editor *ed,
             memcpy(geo.model, rw->inst.transform[s].m, sizeof geo.model);
             geo.origin = rw->origin;
         }
-        fn(rw->inst.entity[s], (de_dvec3){rw->origin.x + b.min.x, rw->origin.y + b.min.y, rw->origin.z + b.min.z},
+        fn(rw->inst.entity[s],
+           (de_dvec3){rw->origin.x + b.min.x, rw->origin.y + b.min.y, rw->origin.z + b.min.z},
            (de_dvec3){rw->origin.x + b.max.x, rw->origin.y + b.max.y, rw->origin.z + b.max.z},
            has_geo ? &geo : NULL, user);
     }
@@ -248,13 +254,14 @@ bool de__ed_entity_bounds(de__editor *ed, u64 e, de_dvec3 *min, de_dvec3 *max) {
 
 bool de__ed_views_owns(u64 entity) {
     for (u32 i = 0; i < ED_MAX_VIEWS; ++i)
-        if (g_views.views[i].id != 0 && !g_views.views[i].game && g_views.views[i].cam.bits == entity &&
-            entity != 0)
+        if (g_views.views[i].id != 0 && !g_views.views[i].game &&
+            g_views.views[i].cam.bits == entity && entity != 0)
             return true;
     return false;
 }
 
 /* The editor views' own camera entities (no icon, no frame): their count. */
+#if DE_HAS_RENDER
 static u32 editor_cameras(u64 out[ED_MAX_VIEWS]) {
     u32 n = 0;
     for (u32 i = 0; i < ED_MAX_VIEWS; ++i)
@@ -262,6 +269,8 @@ static u32 editor_cameras(u64 out[ED_MAX_VIEWS]) {
             out[n++] = g_views.views[i].cam.bits;
     return n;
 }
+
+#endif
 
 /* The view's camera, for the gizmo and the overlays (source pixels). */
 static void cam_of(const ed_view *v, de__ed_cam *c) {
@@ -334,12 +343,16 @@ static bool bridge_init(const char *adapter) {
     D3D12_COMMAND_QUEUE_DESC qd;
     memset(&qd, 0, sizeof qd);
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    if (FAILED(ID3D12Device_CreateCommandQueue(b->dev, &qd, &IID_ID3D12CommandQueue, (void **)&b->queue)) ||
+    if (FAILED(ID3D12Device_CreateCommandQueue(b->dev, &qd, &IID_ID3D12CommandQueue,
+                                               (void **)&b->queue)) ||
         FAILED(ID3D12Device_CreateCommandAllocator(b->dev, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                   &IID_ID3D12CommandAllocator, (void **)&b->alloc)) ||
-        FAILED(ID3D12Device_CreateCommandList(b->dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, b->alloc, NULL,
-                                              &IID_ID3D12GraphicsCommandList, (void **)&b->list)) ||
-        FAILED(ID3D12Device_CreateFence(b->dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void **)&b->wait)))
+                                                   &IID_ID3D12CommandAllocator,
+                                                   (void **)&b->alloc)) ||
+        FAILED(ID3D12Device_CreateCommandList(b->dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, b->alloc,
+                                              NULL, &IID_ID3D12GraphicsCommandList,
+                                              (void **)&b->list)) ||
+        FAILED(ID3D12Device_CreateFence(b->dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence,
+                                        (void **)&b->wait)))
         return false;
     ID3D12GraphicsCommandList_Close(b->list);
     b->event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -400,13 +413,14 @@ static bool ring_create(ed_view *v, u32 w, u32 h) {
         d.MipLevels = 1;
         d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         d.SampleDesc.Count = 1;
-        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+        d.Flags =
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
         D3D12_HEAP_PROPERTIES hp;
         memset(&hp, 0, sizeof hp);
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-        if (FAILED(ID3D12Device_CreateCommittedResource(b->dev, &hp, D3D12_HEAP_FLAG_SHARED, &d,
-                                                        D3D12_RESOURCE_STATE_COMMON, NULL,
-                                                        &IID_ID3D12Resource, (void **)&r->tex[i]))) {
+        if (FAILED(ID3D12Device_CreateCommittedResource(
+                b->dev, &hp, D3D12_HEAP_FLAG_SHARED, &d, D3D12_RESOURCE_STATE_COMMON, NULL,
+                &IID_ID3D12Resource, (void **)&r->tex[i]))) {
             ring_free(r);
             return false;
         }
@@ -426,13 +440,14 @@ static bool ring_create(ed_view *v, u32 w, u32 h) {
 
 static bool view_gpu_create(ed_view *v) {
     ed_bridge *b = &g_views.bridge;
-    if (FAILED(ID3D12Device_CreateFence(b->dev, 0, D3D12_FENCE_FLAG_SHARED, &IID_ID3D12Fence, (void **)&v->fence)))
+    if (FAILED(ID3D12Device_CreateFence(b->dev, 0, D3D12_FENCE_FLAG_SHARED, &IID_ID3D12Fence,
+                                        (void **)&v->fence)))
         return false;
     snprintf(v->fence_name, sizeof v->fence_name, "%s-v%u-fence", b->prefix, v->id);
     WCHAR wn[128];
     wname(v->fence_name, wn, 128);
-    if (FAILED(ID3D12Device_CreateSharedHandle(b->dev, (ID3D12DeviceChild *)v->fence, NULL, GENERIC_ALL, wn,
-                                               &v->fence_handle)))
+    if (FAILED(ID3D12Device_CreateSharedHandle(b->dev, (ID3D12DeviceChild *)v->fence, NULL,
+                                               GENERIC_ALL, wn, &v->fence_handle)))
         return false;
     v->next_generation = 1;
     return ring_create(v, v->sw, v->sh);
@@ -509,7 +524,9 @@ static bool g_half_ready;
 
 static f32 float_of_half(u16 h) {
     const u32 e = (h >> 10) & 31u, m = h & 1023u;
-    f32 f = e == 0 ? (f32)m / 16777216.0f : e == 31 ? 65504.0f : (1.0f + (f32)m / 1024.0f) * ldexpf(1.0f, (i32)e - 15);
+    f32 f = e == 0    ? (f32)m / 16777216.0f
+            : e == 31 ? 65504.0f
+                      : (1.0f + (f32)m / 1024.0f) * ldexpf(1.0f, (i32)e - 15);
     return (h & 0x8000u) ? -f : f;
 }
 
@@ -659,7 +676,8 @@ static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *sur
 #if ED_MAC_VIEWS
 static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *surface, u64 *fence) {
     ed_ring *r = &v->rings[v->ring_count - 1];
-    if (r->w != w || r->h != h) return false;
+    if (r->w != w || r->h != h)
+        return false;
     half_tables();
     const u32 slot = (u32)(v->frames % ED_RING);
     u64 *sequence = (u64 *)r->map[slot];
@@ -670,14 +688,17 @@ static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *sur
         const u16 *in = (const u16 *)(src + (size_t)y * pitch);
         u8 *out = pixels + (size_t)y * w * 4u;
         for (u32 x = 0; x < w; ++x, in += 4, out += 4) {
-            out[0] = g_half_srgb[in[0]]; out[1] = g_half_srgb[in[1]];
-            out[2] = g_half_srgb[in[2]]; out[3] = 255;
+            out[0] = g_half_srgb[in[0]];
+            out[1] = g_half_srgb[in[1]];
+            out[2] = g_half_srgb[in[2]];
+            out[3] = 255;
         }
     }
     overlay(v, pixels, w * 4u, w, h);
     __atomic_store_n(sequence, serial, __ATOMIC_RELEASE);
     r->last_fence = serial;
-    *surface = slot; *fence = serial;
+    *surface = slot;
+    *fence = serial;
     return true;
 }
 #endif
@@ -687,24 +708,30 @@ static bool present(ed_view *v, const u8 *src, u32 pitch, u32 w, u32 h, u32 *sur
 /* ---------- Engine side: renderer views, cameras, readback ---------- */
 
 static void readback_free(de__editor *ed, ed_view *v) {
+#if DE_HAS_RENDER
     for (u32 i = 0; i < ED_RB_SLOTS; ++i)
         if (DE_HANDLE_VALID(v->rb[i]))
             de_gpu_buffer_destroy(ed->e->gpu, v->rb[i]);
+#else
+    (void)ed;
+#endif
     memset(v->rb, 0, sizeof v->rb);
     memset((void *)v->rb_map, 0, sizeof v->rb_map);
 }
 
 #if ED_VIEWS
 static bool readback_alloc(de__editor *ed, ed_view *v, u32 w, u32 h) {
-    if (!w || !h || w > 8192 || h > 8192) return false;
+    if (!w || !h || w > 8192 || h > 8192)
+        return false;
     readback_free(ed, v);
     v->rb_w = w;
     v->rb_h = h;
     v->rb_pitch = (w * 8u + 255u) & ~255u;
     for (u32 i = 0; i < ED_RB_SLOTS; ++i) {
-        v->rb[i] = de_gpu_buffer_create(ed->e->gpu, &(de_gpu_buffer_desc){.size = (u64)v->rb_pitch * h,
-                                                                           .usage = DE_USAGE_COPY_DST,
-                                                                           .memory = DE_MEM_READBACK});
+        v->rb[i] =
+            de_gpu_buffer_create(ed->e->gpu, &(de_gpu_buffer_desc){.size = (u64)v->rb_pitch * h,
+                                                                   .usage = DE_USAGE_COPY_DST,
+                                                                   .memory = DE_MEM_READBACK});
         if (!DE_HANDLE_VALID(v->rb[i]))
             return false;
         v->rb_map[i] = (const u8 *)de_gpu_buffer_map(ed->e->gpu, v->rb[i]);
@@ -833,14 +860,18 @@ static void camera_store(ed_view *v, const de_ep_camera *c) {
 }
 
 static void view_release_all(de__editor *ed, ed_view *v) {
+#if DE_HAS_RENDER
     if (ed->e->renderer != NULL)
         de__render_world_wait_idle(ed->e->renderer);
+#endif
     readback_free(ed, v);
     if (!v->game) {
+#if DE_HAS_RENDER
         if (DE_HANDLE_VALID(v->rv) && ed->e->renderer != NULL)
             de_view_destroy(ed->e->renderer, v->rv);
         if (DE_HANDLE_VALID(v->target))
             de_gpu_texture_destroy(ed->e->gpu, v->target);
+#endif
         if (de_entity_alive(ed->e->world, v->cam))
             de_entity_despawn(ed->e->world, v->cam);
     }
@@ -869,7 +900,10 @@ static void write_surfaces(ed_view *v, de_ep_arena *a, u32 *generation, de_ep_li
         surface->index = i;
 #if ED_WIN_VIEWS
         char *name = (char *)de__ed_alloc(a, 128);
-        if (name == NULL) { --out->count; break; }
+        if (name == NULL) {
+            --out->count;
+            break;
+        }
         snprintf(name, 128, "%s-v%u-g%u-s%u", g_views.bridge.prefix, v->id, r->generation, i);
         surface->handle = de_ep_cstr(name);
         surface->has_fence = true;
@@ -960,7 +994,8 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     v->h = q.height ? q.height : 1;
     v->scale = q.scale;
     v->show = de__ed_show_flags(&q.show_flags);
-    snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len, q.render_mode.ptr);
+    snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len,
+             q.render_mode.ptr);
     camera_store(v, &q.camera);
     DE_INFO(ed->log, "view.create: bridge on %s; waiting for the renderer to go idle",
             g_views.bridge.adapter);
@@ -988,7 +1023,9 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         char name[32];
         snprintf(name, sizeof name, "editor%u", v->id);
         v->rv = DE_HANDLE_VALID(v->target)
-                    ? de_view_create(ed->e->renderer, &(de_view_desc){.target = v->target, .order = -10 - (i32)v->id, .name = name})
+                    ? de_view_create(ed->e->renderer, &(de_view_desc){.target = v->target,
+                                                                      .order = -10 - (i32)v->id,
+                                                                      .name = name})
                     : (de_view){0};
         if (DE_HANDLE_VALID(v->rv)) {
             de_view_set_render_scale(ed->e->renderer, v->rv, 1.0f);
@@ -1061,14 +1098,20 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de_view_destroy(ed->e->renderer, v->rv);
         de_gpu_texture_destroy(ed->e->gpu, v->target);
         v->target = de_gpu_texture_create(
-            ed->e->gpu, &(de_gpu_texture_desc){.dim = DE_TEX_2D, .format = DE_FMT_RGBA8_UNORM,
-                                               .width = v->w, .height = v->h, .depth_or_layers = 1,
-                                               .mip_count = 1, .sample_count = 1,
+            ed->e->gpu, &(de_gpu_texture_desc){.dim = DE_TEX_2D,
+                                               .format = DE_FMT_RGBA8_UNORM,
+                                               .width = v->w,
+                                               .height = v->h,
+                                               .depth_or_layers = 1,
+                                               .mip_count = 1,
+                                               .sample_count = 1,
                                                .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED,
                                                .name = "editor view"});
         char name[32];
         snprintf(name, sizeof name, "editor%u", v->id);
-        v->rv = de_view_create(ed->e->renderer, &(de_view_desc){.target = v->target, .order = -10 - (i32)v->id, .name = name});
+        v->rv = de_view_create(
+            ed->e->renderer,
+            &(de_view_desc){.target = v->target, .order = -10 - (i32)v->id, .name = name});
         de_view_set_render_scale(ed->e->renderer, v->rv, 1.0f);
         v->sw = v->w;
         v->sh = v->h;
@@ -1100,7 +1143,8 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
 #endif
 }
 
-static void on_release(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_release(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_release, de_ep_view_release_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
@@ -1132,7 +1176,8 @@ static void on_release(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     empty_response(w, req->id);
 }
 
-static void on_set_camera(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_set_camera(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
     DE__ED_PARAMS(view_set_camera, de_ep_view_camera_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
@@ -1144,7 +1189,8 @@ static void on_set_camera(de__editor *ed, const de_ep_request *req, de_ep_arena 
     empty_response(w, req->id);
 }
 
-static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                           mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_set_render_mode, de_ep_view_render_mode_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
@@ -1162,11 +1208,13 @@ static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena
         return;
     }
 #endif
-    snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len, q.render_mode.ptr);
+    snprintf(v->render_mode, sizeof v->render_mode, "%.*s", (int)q.render_mode.len,
+             q.render_mode.ptr);
     empty_response(w, req->id);
 }
 
-static void on_show_flags(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_show_flags(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_set_show_flags, de_ep_view_show_flags_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
@@ -1238,7 +1286,8 @@ static void on_paused(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     empty_response(w, req->id);
 }
 
-static void on_destroy(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_destroy(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
     DE__ED_PARAMS(view_destroy, de_ep_view_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
@@ -1247,7 +1296,8 @@ static void on_destroy(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     empty_response(w, req->id);
 }
 
-static void on_set_hidden(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_set_hidden(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(view_set_hidden, de_ep_entity_list, q);
 #if ED_VIEWS
@@ -1286,6 +1336,7 @@ static void on_set_hidden(de__editor *ed, const de_ep_request *req, de_ep_arena 
 
 /* ---------- Picking ---------- */
 
+#if DE_HAS_RENDER
 static bool hidden(u64 e) {
 #if ED_VIEWS
     return de__view_hidden_contains(g_views.hidden, e);
@@ -1297,7 +1348,8 @@ static bool hidden(u64 e) {
 
 /* The source pixel of an IDE position. */
 static void to_source(const ed_view *v, f32 x, f32 y, u32 *px, u32 *py) {
-    const f32 fx = v->w ? x * (f32)v->sw / (f32)v->w : x, fy = v->h ? y * (f32)v->sh / (f32)v->h : y;
+    const f32 fx = v->w ? x * (f32)v->sw / (f32)v->w : x,
+              fy = v->h ? y * (f32)v->sh / (f32)v->h : y;
     *px = fx < 0 ? 0u : fx >= (f32)v->sw ? v->sw - 1 : (u32)fx;
     *py = fy < 0 ? 0u : fy >= (f32)v->sh ? v->sh - 1 : (u32)fy;
 }
@@ -1313,8 +1365,8 @@ static bool pick_skipped(const ed_pick *p, u64 e) {
 
 /* Writes a pick response: `entity` (0: none) and the world point under (x, y), where an asset
  * dropped there lands. */
-static void pick_respond(de__editor *ed, mpack_writer_t *w, u64 req_id, const ed_view *v, f32 x, f32 y,
-                         u64 entity, u32 tri, bool has_tri) {
+static void pick_respond(de__editor *ed, mpack_writer_t *w, u64 req_id, const ed_view *v, f32 x,
+                         f32 y, u64 entity, u32 tri, bool has_tri) {
     de_ep_pick_result r;
     memset(&r, 0, sizeof r);
     if (entity != 0) {
@@ -1409,13 +1461,15 @@ static void picks_tick(de__editor *ed) {
         const bool gpu = done && bits != 0 && !pick_skipped(p, bits);
         mpack_writer_t w;
         de__ed_respond_begin(ed, &w);
-        pick_respond(ed, &w, p->req_id, view_find(p->view), p->x, p->y, gpu ? bits : p->sprite, tri, gpu);
+        pick_respond(ed, &w, p->req_id, view_find(p->view), p->x, p->y, gpu ? bits : p->sprite, tri,
+                     gpu);
         de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
         p->pending = false;
     }
 }
 
-static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                         mpack_writer_t *w) {
     DE__ED_PARAMS(pick_rect, de_ep_pick_rect_params, q);
     ed_view *v = view_or_fail(req, w, q.view);
     if (v == NULL)
@@ -1463,10 +1517,11 @@ static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *
         const u32 ns = editor_cameras(skip);
         u32 x0, y0, x1, y1;
         to_source(v, q.rect.items[0], q.rect.items[1], &x0, &y0);
-        to_source(v, q.rect.items[0] + q.rect.items[2], q.rect.items[1] + q.rect.items[3], &x1, &y1);
+        to_source(v, q.rect.items[0] + q.rect.items[2], q.rect.items[1] + q.rect.items[3], &x1,
+                  &y1);
         u64 *found = out.entities.items + out.entities.count;
-        const u32 n = de__ed_origin_pick(ed, &c, (f32)x0, (f32)y0, (f32)x1 + 1.0f, (f32)y1 + 1.0f, skip, ns,
-                                         found, ORIGINS);
+        const u32 n = de__ed_origin_pick(ed, &c, (f32)x0, (f32)y0, (f32)x1 + 1.0f, (f32)y1 + 1.0f,
+                                         skip, ns, found, ORIGINS);
         const u32 had = out.entities.count;
         for (u32 k = 0; k < n; ++k) {
             const u64 e = found[k];
@@ -1479,6 +1534,26 @@ static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *
     }
     de_ep_write_response_pick_rect(w, req->id, &out);
 }
+#else
+static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+    (void)ed;
+    DE__ED_PARAMS(pick, de_ep_pick_params, q);
+    (void)q;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "picking requires a renderer");
+}
+
+static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                         mpack_writer_t *w) {
+    (void)ed;
+    DE__ED_PARAMS(pick_rect, de_ep_pick_rect_params, q);
+    (void)q;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "picking requires a renderer");
+}
+
+static void picks_tick(de__editor *ed) {
+    (void)ed;
+}
+#endif
 
 /* ---------- Input ---------- */
 
@@ -1499,13 +1574,13 @@ static u16 hid_of(de_ep_str code) {
     static const struct {
         const char *name;
         u16 hid;
-    } k[] = {{"Enter", 40},        {"Escape", 41},     {"Backspace", 42},   {"Tab", 43},
-             {"Space", 44},        {"Minus", 45},      {"Equal", 46},       {"BracketLeft", 47},
-             {"BracketRight", 48}, {"Backslash", 49},  {"Semicolon", 51},   {"Quote", 52},
-             {"Backquote", 53},    {"Comma", 54},      {"Period", 55},      {"Slash", 56},
-             {"ArrowRight", 79},   {"ArrowLeft", 80},  {"ArrowDown", 81},   {"ArrowUp", 82},
-             {"Delete", 76},       {"Home", 74},       {"End", 77},         {"PageUp", 75},
-             {"PageDown", 78},     {"ControlLeft", 224}, {"ShiftLeft", 225}, {"AltLeft", 226},
+    } k[] = {{"Enter", 40},        {"Escape", 41},        {"Backspace", 42},   {"Tab", 43},
+             {"Space", 44},        {"Minus", 45},         {"Equal", 46},       {"BracketLeft", 47},
+             {"BracketRight", 48}, {"Backslash", 49},     {"Semicolon", 51},   {"Quote", 52},
+             {"Backquote", 53},    {"Comma", 54},         {"Period", 55},      {"Slash", 56},
+             {"ArrowRight", 79},   {"ArrowLeft", 80},     {"ArrowDown", 81},   {"ArrowUp", 82},
+             {"Delete", 76},       {"Home", 74},          {"End", 77},         {"PageUp", 75},
+             {"PageDown", 78},     {"ControlLeft", 224},  {"ShiftLeft", 225},  {"AltLeft", 226},
              {"MetaLeft", 227},    {"ControlRight", 228}, {"ShiftRight", 229}, {"AltRight", 230}};
     for (u32 i = 0; i < sizeof k / sizeof k[0]; ++i)
         if (strcmp(c, k[i].name) == 0)
@@ -1526,8 +1601,10 @@ static void on_input(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
             /* IDE pixels to source pixels. */
             de__ed_cam c;
             cam_of(v, &c);
-            const f32 sx = v->w ? (f32)v->sw / (f32)v->w : 1.0f, sy = v->h ? (f32)v->sh / (f32)v->h : 1.0f;
-            de__ed_gizmo_input(ed, v->id, &c, e, e->has_x ? e->x * sx : 0, e->has_y ? e->y * sy : 0);
+            const f32 sx = v->w ? (f32)v->sw / (f32)v->w : 1.0f,
+                      sy = v->h ? (f32)v->sh / (f32)v->h : 1.0f;
+            de__ed_gizmo_input(ed, v->id, &c, e, e->has_x ? e->x * sx : 0,
+                               e->has_y ? e->y * sy : 0);
             continue;
         }
         if (!to_game)
@@ -1544,8 +1621,10 @@ static void on_input(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         if (de_ep_str_eq(e->type, "pointer")) {
             if (e->has_action && de_ep_str_eq(e->action, "move")) {
                 ev.kind = DE_RAW_MOUSE_MOVE;
-                ev.mouse_move = (de_raw_mouse_move){x, y, e->has_dx ? e->dx * sx : 0, e->has_dy ? e->dy * sy : 0};
-            } else if (e->has_action && (de_ep_str_eq(e->action, "down") || de_ep_str_eq(e->action, "up"))) {
+                ev.mouse_move = (de_raw_mouse_move){x, y, e->has_dx ? e->dx * sx : 0,
+                                                    e->has_dy ? e->dy * sy : 0};
+            } else if (e->has_action &&
+                       (de_ep_str_eq(e->action, "down") || de_ep_str_eq(e->action, "up"))) {
                 ev.kind = DE_RAW_MOUSE_BUTTON;
                 ev.mouse_button.x = x;
                 ev.mouse_button.y = y;
@@ -1557,7 +1636,8 @@ static void on_input(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
             }
         } else if (de_ep_str_eq(e->type, "wheel")) {
             ev.kind = DE_RAW_MOUSE_WHEEL;
-            ev.mouse_wheel = (de_raw_mouse_wheel){e->has_dx ? e->dx : 0, e->has_dy ? -e->dy : 0, x, y};
+            ev.mouse_wheel =
+                (de_raw_mouse_wheel){e->has_dx ? e->dx : 0, e->has_dy ? -e->dy : 0, x, y};
         } else if (de_ep_str_eq(e->type, "key") && e->has_code) {
             const u16 hid = hid_of(e->code);
             if (hid == 0)
@@ -1602,7 +1682,8 @@ static void on_focus(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
 
 /* ---------- Gizmo ---------- */
 
-static void on_gizmo_tool(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_gizmo_tool(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                          mpack_writer_t *w) {
     (void)ed;
     DE__ED_PARAMS(gizmo_set_tool, de_ep_gizmo_tool_params, q);
     de__ed_gizmo_set_tool(&q);
@@ -1620,7 +1701,8 @@ static void on_gizmo_selection(de__editor *ed, const de_ep_request *req, de_ep_a
 #if ED_VIEWS
 static void quat_rotate(const f32 q[4], const f64 v[3], f64 out[3]) {
     const f64 x = q[0], y = q[1], z = q[2], ww = q[3];
-    const f64 tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+    const f64 tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]),
+              tz = 2 * (x * v[1] - y * v[0]);
     out[0] = v[0] + ww * tx + (y * tz - z * ty);
     out[1] = v[1] + ww * ty + (z * tx - x * tz);
     out[2] = v[2] + ww * tz + (x * ty - y * tx);
@@ -1661,7 +1743,8 @@ static void tick(de__editor *ed) {
         v->consumed = k + 1;
         u32 surface = 0;
         u64 fence = 0;
-        if (!present(v, v->rb_map[k % ED_RB_SLOTS], v->rb_pitch, v->rb_w, v->rb_h, &surface, &fence))
+        if (!present(v, v->rb_map[k % ED_RB_SLOTS], v->rb_pitch, v->rb_w, v->rb_h, &surface,
+                     &fence))
             continue;
         de_ep_view_frame d;
         memset(&d, 0, sizeof d);
@@ -1694,8 +1777,8 @@ static void reset(de__editor *ed) {
 void de__ed_views_register(de__editor *ed) {
     memset(&g_views, 0, sizeof g_views);
     ed->views = (struct de__ed_views *)&g_views;
-    g_ed = ed;
 #if ED_VIEWS
+    g_ed = ed;
     if (ed->e->renderer != NULL && ed->e->gpu != NULL) {
         de__ed_add_capability(ed, "views.sharedTexture");
         de__ed_add_capability(ed, "views.frameRateLimit");
@@ -1737,5 +1820,7 @@ void de__ed_views_shutdown(de__editor *ed) {
         g_views.bridge_ok = false;
     }
 #endif
+#if ED_VIEWS
     g_ed = NULL;
+#endif
 }

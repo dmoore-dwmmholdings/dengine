@@ -735,6 +735,7 @@ static void on_model_inspect(de__editor *ed, const de_ep_request *req, de_ep_are
     }
     de_ep_write_response_asset_model_inspect(w, req->id, &result);
 #else
+    (void)ed;
     (void)q;
     de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "assets.modelInspection");
 #endif

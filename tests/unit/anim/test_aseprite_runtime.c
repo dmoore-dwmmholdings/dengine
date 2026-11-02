@@ -389,6 +389,7 @@ TEST_F(aseprite_runtime, named_walk_pingpong_and_single_frame_repeat_duration, a
         tick(f, 0);
     }
 }
+#if DE_HAS_RENDER
 TEST_F(aseprite_runtime, trimmed_geometry_keeps_top_origin_source_pixels_at_their_world_position,
        ase_runtime_fx) {
 #if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
@@ -420,6 +421,11 @@ TEST_F(aseprite_runtime, trimmed_geometry_keeps_top_origin_source_pixels_at_thei
         EXPECT_FLOAT_EQ(frame.source_pivot.y, source_origin[i][1] / 6, 0);
     }
 }
+#else
+TEST(aseprite_runtime, trimmed_geometry_keeps_top_origin_source_pixels_at_their_world_position) {
+    SKIP("renderer transform is unavailable in headless builds");
+}
+#endif
 #if DE_HAS_COOKER && DE__ASSET_RELOAD_ENABLED
 TEST_F(aseprite_runtime,
        source_recook_swaps_clip_layer_and_atlas_behind_handles_and_retains_failure,

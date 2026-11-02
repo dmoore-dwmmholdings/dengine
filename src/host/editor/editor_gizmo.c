@@ -47,29 +47,53 @@
 
 typedef de_dvec3 v3;
 
-static v3 V(f64 x, f64 y, f64 z) { return (v3){x, y, z}; }
-static v3 add(v3 a, v3 b) { return V(a.x + b.x, a.y + b.y, a.z + b.z); }
-static v3 sub(v3 a, v3 b) { return V(a.x - b.x, a.y - b.y, a.z - b.z); }
-static v3 mul(v3 a, f64 s) { return V(a.x * s, a.y * s, a.z * s); }
-static f64 dot(v3 a, v3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-static v3 cross(v3 a, v3 b) { return V(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x); }
-static f64 len(v3 a) { return sqrt(dot(a, a)); }
+static v3 V(f64 x, f64 y, f64 z) {
+    return (v3){x, y, z};
+}
+static v3 add(v3 a, v3 b) {
+    return V(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+static v3 sub(v3 a, v3 b) {
+    return V(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+static v3 mul(v3 a, f64 s) {
+    return V(a.x * s, a.y * s, a.z * s);
+}
+static f64 dot(v3 a, v3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+static v3 cross(v3 a, v3 b) {
+    return V(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+static f64 len(v3 a) {
+    return sqrt(dot(a, a));
+}
 static v3 nrm(v3 a) {
     const f64 l = len(a);
     return l > 1e-12 ? mul(a, 1.0 / l) : V(0, 0, 0);
 }
-static f64 comp(v3 a, u32 i) { return i == 0 ? a.x : i == 1 ? a.y : a.z; }
-static v3 unit(u32 i) { return V(i == 0, i == 1, i == 2); }
+static f64 comp(v3 a, u32 i) {
+    return i == 0 ? a.x : i == 1 ? a.y : a.z;
+}
+static v3 unit(u32 i) {
+    return V(i == 0, i == 1, i == 2);
+}
 
 static v3 qrot(de_quat q, v3 v) {
     const f64 x = q.x, y = q.y, z = q.z, w = q.w;
-    const f64 tx = 2 * (y * v.z - z * v.y), ty = 2 * (z * v.x - x * v.z), tz = 2 * (x * v.y - y * v.x);
-    return V(v.x + w * tx + (y * tz - z * ty), v.y + w * ty + (z * tx - x * tz), v.z + w * tz + (x * ty - y * tx));
+    const f64 tx = 2 * (y * v.z - z * v.y), ty = 2 * (z * v.x - x * v.z),
+              tz = 2 * (x * v.y - y * v.x);
+    return V(v.x + w * tx + (y * tz - z * ty), v.y + w * ty + (z * tx - x * tz),
+             v.z + w * tz + (x * ty - y * tx));
 }
-static de_quat qconj(de_quat q) { return (de_quat){-q.x, -q.y, -q.z, q.w}; }
+static de_quat qconj(de_quat q) {
+    return (de_quat){-q.x, -q.y, -q.z, q.w};
+}
 static de_quat qmul(de_quat a, de_quat b) {
-    return (de_quat){a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-                     a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+    return (de_quat){a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                     a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                     a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                     a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
 }
 static de_quat qaxis(v3 axis, f64 rad) {
     const v3 a = nrm(axis);
@@ -79,16 +103,32 @@ static de_quat qaxis(v3 axis, f64 rad) {
 
 /* ---------- The camera ---------- */
 
-static de_quat cam_q(const de__ed_cam *c) { return (de_quat){c->rot[0], c->rot[1], c->rot[2], c->rot[3]}; }
-static v3 cam_pos(const de__ed_cam *c) { return V(c->pos[0], c->pos[1], c->pos[2]); }
-static v3 cam_fwd(const de__ed_cam *c) { return qrot(cam_q(c), V(0, 1, 0)); }
-static bool ortho(const de__ed_cam *c) { return !(c->fov_y > 0); }
-static f64 cam_near(const de__ed_cam *c) { return c->near > 0 ? c->near : 0.1; }
-static f64 aspect(const de__ed_cam *c) { return (f64)c->w / (f64)(c->h ? c->h : 1); }
-static f64 half_h(const de__ed_cam *c) { return (c->ortho_h > 0 ? c->ortho_h : 10.0) * 0.5; }
+static de_quat cam_q(const de__ed_cam *c) {
+    return (de_quat){c->rot[0], c->rot[1], c->rot[2], c->rot[3]};
+}
+static v3 cam_pos(const de__ed_cam *c) {
+    return V(c->pos[0], c->pos[1], c->pos[2]);
+}
+static v3 cam_fwd(const de__ed_cam *c) {
+    return qrot(cam_q(c), V(0, 1, 0));
+}
+static bool ortho(const de__ed_cam *c) {
+    return !(c->fov_y > 0);
+}
+static f64 cam_near(const de__ed_cam *c) {
+    return c->near > 0 ? c->near : 0.1;
+}
+static f64 aspect(const de__ed_cam *c) {
+    return (f64)c->w / (f64)(c->h ? c->h : 1);
+}
+static f64 half_h(const de__ed_cam *c) {
+    return (c->ortho_h > 0 ? c->ortho_h : 10.0) * 0.5;
+}
 
 /* World to camera space: x right, y forward (depth), z up. */
-static v3 to_cam(const de__ed_cam *c, v3 p) { return qrot(qconj(cam_q(c)), sub(p, cam_pos(c))); }
+static v3 to_cam(const de__ed_cam *c, v3 p) {
+    return qrot(qconj(cam_q(c)), sub(p, cam_pos(c)));
+}
 
 static void cam_to_px(const de__ed_cam *c, v3 l, f64 *x, f64 *y) {
     f64 nx, ny;
@@ -138,7 +178,9 @@ static f64 ppm(const de__ed_cam *c, f64 d) {
 }
 
 /* The direction from the camera to `p` (the view axis there). */
-static v3 view_dir(const de__ed_cam *c, v3 p) { return ortho(c) ? cam_fwd(c) : nrm(sub(p, cam_pos(c))); }
+static v3 view_dir(const de__ed_cam *c, v3 p) {
+    return ortho(c) ? cam_fwd(c) : nrm(sub(p, cam_pos(c)));
+}
 
 /* The ray's hit on the plane through `o` with normal `n`; false when parallel or behind. */
 static bool ray_plane(v3 ro, v3 rd, v3 o, v3 n, v3 *hit) {
@@ -233,7 +275,8 @@ static void seg(const de__ed_canvas *cv, f64 x0, f64 y0, f64 x1, f64 y1, rgb c, 
 }
 
 /* A world segment, clipped to the near plane. */
-static void wseg(const de__ed_cam *c, const de__ed_canvas *cv, v3 p0, v3 p1, rgb col, f32 a, u32 width) {
+static void wseg(const de__ed_cam *c, const de__ed_canvas *cv, v3 p0, v3 p1, rgb col, f32 a,
+                 u32 width) {
     v3 l0 = to_cam(c, p0), l1 = to_cam(c, p1);
     const f64 n = ortho(c) ? -1e30 : cam_near(c);
     if (l0.y < n && l1.y < n)
@@ -248,18 +291,23 @@ static void wseg(const de__ed_cam *c, const de__ed_canvas *cv, v3 p0, v3 p1, rgb
     seg(cv, x0, y0, x1, y1, col, a, width);
 }
 
-static f64 edge(f64 ax, f64 ay, f64 bx, f64 by, f64 px, f64 py) { return (bx - ax) * (py - ay) - (by - ay) * (px - ax); }
+static f64 edge(f64 ax, f64 ay, f64 bx, f64 by, f64 px, f64 py) {
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
 
 static void tri(const de__ed_canvas *cv, const f64 p[6], rgb c, f32 a) {
-    const f64 minx = fmax(0, floor(fmin(p[0], fmin(p[2], p[4])))), maxx = fmin(cv->w - 1.0, ceil(fmax(p[0], fmax(p[2], p[4]))));
-    const f64 miny = fmax(0, floor(fmin(p[1], fmin(p[3], p[5])))), maxy = fmin(cv->h - 1.0, ceil(fmax(p[1], fmax(p[3], p[5]))));
+    const f64 minx = fmax(0, floor(fmin(p[0], fmin(p[2], p[4])))),
+              maxx = fmin(cv->w - 1.0, ceil(fmax(p[0], fmax(p[2], p[4]))));
+    const f64 miny = fmax(0, floor(fmin(p[1], fmin(p[3], p[5])))),
+              maxy = fmin(cv->h - 1.0, ceil(fmax(p[1], fmax(p[3], p[5]))));
     const f64 area = edge(p[0], p[1], p[2], p[3], p[4], p[5]);
     if (fabs(area) < 1e-9)
         return;
     for (f64 y = miny; y <= maxy; ++y)
         for (f64 x = minx; x <= maxx; ++x) {
             const f64 px = x + 0.5, py = y + 0.5;
-            const f64 w0 = edge(p[2], p[3], p[4], p[5], px, py) / area, w1 = edge(p[4], p[5], p[0], p[1], px, py) / area,
+            const f64 w0 = edge(p[2], p[3], p[4], p[5], px, py) / area,
+                      w1 = edge(p[4], p[5], p[0], p[1], px, py) / area,
                       w2 = edge(p[0], p[1], p[2], p[3], px, py) / area;
             if (w0 >= 0 && w1 >= 0 && w2 >= 0)
                 blend(cv, (i32)x, (i32)y, c, a);
@@ -267,7 +315,8 @@ static void tri(const de__ed_canvas *cv, const f64 p[6], rgb c, f32 a) {
 }
 
 static void quad(const de__ed_canvas *cv, const f64 p[8], rgb c, f32 a) {
-    const f64 t0[6] = {p[0], p[1], p[2], p[3], p[4], p[5]}, t1[6] = {p[0], p[1], p[4], p[5], p[6], p[7]};
+    const f64 t0[6] = {p[0], p[1], p[2], p[3], p[4], p[5]},
+              t1[6] = {p[0], p[1], p[4], p[5], p[6], p[7]};
     tri(cv, t0, c, a);
     tri(cv, t1, c, a);
 }
@@ -282,7 +331,8 @@ static void ring_px(const de__ed_canvas *cv, f64 cx, f64 cy, f64 r, rgb c, f32 a
     enum { N = 96 };
     for (u32 i = 0; i < N; ++i) {
         const f64 a0 = 2 * DE_PI * i / N, a1 = 2 * DE_PI * (i + 1) / N;
-        seg(cv, cx + cos(a0) * r, cy + sin(a0) * r, cx + cos(a1) * r, cy + sin(a1) * r, c, a, width);
+        seg(cv, cx + cos(a0) * r, cy + sin(a0) * r, cx + cos(a1) * r, cy + sin(a1) * r, c, a,
+            width);
     }
 }
 
@@ -310,14 +360,30 @@ static bool inside(const f64 p[8], f64 x, f64 y) {
 
 enum {
     H_NONE,
-    H_MX, H_MY, H_MZ,       /* move along an axis */
-    H_MYZ, H_MXZ, H_MXY,    /* move in a plane (normal: x, y, z) */
-    H_MC,                   /* move in the view plane */
-    H_RX, H_RY, H_RZ, H_RV, /* rotate about an axis, about the view axis */
-    H_SX, H_SY, H_SZ, H_SC, /* scale along a local axis, uniformly */
-    H_RIN,                  /* rect: inside */
-    H_RL, H_RR, H_RB, H_RT, /* rect: an edge */
-    H_RLB, H_RRB, H_RLT, H_RRT,
+    H_MX,
+    H_MY,
+    H_MZ, /* move along an axis */
+    H_MYZ,
+    H_MXZ,
+    H_MXY, /* move in a plane (normal: x, y, z) */
+    H_MC,  /* move in the view plane */
+    H_RX,
+    H_RY,
+    H_RZ,
+    H_RV, /* rotate about an axis, about the view axis */
+    H_SX,
+    H_SY,
+    H_SZ,
+    H_SC,  /* scale along a local axis, uniformly */
+    H_RIN, /* rect: inside */
+    H_RL,
+    H_RR,
+    H_RB,
+    H_RT, /* rect: an edge */
+    H_RLB,
+    H_RRB,
+    H_RLT,
+    H_RRT,
     H_COUNT
 };
 
@@ -337,9 +403,9 @@ typedef struct gz_layout {
     f64 size; /* the handles' length in metres */
     /* rect */
     bool rect;
-    v3 rp, ru, rv;   /* the rectangle's origin (the first entity) and in-plane axes */
-    f64 r[4];        /* umin, umax, vmin, vmax (metres from rp) */
-    de_vec2 pivot;   /* the first entity's sprite pivot (0.5 without one) */
+    v3 rp, ru, rv; /* the rectangle's origin (the first entity) and in-plane axes */
+    f64 r[4];      /* umin, umax, vmin, vmax (metres from rp) */
+    de_vec2 pivot; /* the first entity's sprite pivot (0.5 without one) */
 } gz_layout;
 
 typedef struct ed_gz {
@@ -352,14 +418,14 @@ typedef struct ed_gz {
     i32 hover;
     /* The drag. */
     bool drag, moved, ctrl;
-    bool shift;   /* Shift: on the surface under the pointer */
-    bool vkey;    /* V held: snap to the nearest point (a bounds corner, an origin) */
-    bool align;   /* surfaceAlign: turn +Z onto the surface's normal */
+    bool shift; /* Shift: on the surface under the pointer */
+    bool vkey;  /* V held: snap to the nearest point (a bounds corner, an origin) */
+    bool align; /* surfaceAlign: turn +Z onto the surface's normal */
     de__editor *ed;
     u32 view;
     i32 h;
     f32 x0, y0, x, y;
-    gz_layout L;  /* at the press */
+    gz_layout L; /* at the press */
     v3 hit0;
     f64 t0;
     f64 ang, ang_prev;
@@ -378,9 +444,12 @@ static ed_gz G = {
 
 static const f32 k_default_steps[3] = {0.25f, 15.0f, 0.1f};
 
-static bool tool_is(const char *t) { return strcmp(G.tool, t) == 0; }
+static bool tool_is(const char *t) {
+    return strcmp(G.tool, t) == 0;
+}
 static bool tool_drags(void) {
-    return tool_is("move") || tool_is("rotate") || tool_is("scale") || tool_is("universal") || tool_is("rect");
+    return tool_is("move") || tool_is("rotate") || tool_is("scale") || tool_is("universal") ||
+           tool_is("rect");
 }
 
 static bool parse_hex(de_ep_str s, rgb *out) {
@@ -461,14 +530,16 @@ static bool ent_of(de_world *w, u64 bits, gz_ent *out) {
     const DeTransform *l = (const DeTransform *)de_entity_get_const(w, e, b.transform);
     if (l == NULL)
         return false;
-    const DeGlobalTransform *g = (const DeGlobalTransform *)de_entity_get_const(w, e, b.global_transform);
+    const DeGlobalTransform *g =
+        (const DeGlobalTransform *)de_entity_get_const(w, e, b.global_transform);
     const DeChildOf *co = (const DeChildOf *)de_entity_get_const(w, e, b.child_of);
     out->e = bits;
     out->local0 = *l;
     out->child = co != NULL && de_entity_alive(w, co->parent);
     out->parent = de_transform_identity();
     if (out->child) {
-        const DeGlobalTransform *pg = (const DeGlobalTransform *)de_entity_get_const(w, co->parent, b.global_transform);
+        const DeGlobalTransform *pg =
+            (const DeGlobalTransform *)de_entity_get_const(w, co->parent, b.global_transform);
         if (pg != NULL)
             out->parent = *pg;
     }
@@ -543,8 +614,9 @@ static gz_layout layout(de_world *w, const de__ed_cam *c) {
 
 /* Which handles a tool shows, and whether the view lets one be used. */
 static bool shown(const gz_layout *L, i32 h) {
-    const bool mv = tool_is("move") || tool_is("universal"), rot = tool_is("rotate") || tool_is("universal"),
-               sc = tool_is("scale"), rc = tool_is("rect");
+    const bool mv = tool_is("move") || tool_is("universal"),
+               rot = tool_is("rotate") || tool_is("universal"), sc = tool_is("scale"),
+               rc = tool_is("rect");
     if (h >= H_MX && h <= H_MZ)
         return mv && fabs(dot(L->ax[h - H_MX], L->dir)) < 0.985;
     if (h >= H_MYZ && h <= H_MXY)
@@ -573,9 +645,11 @@ static void ring_of(const gz_layout *L, i32 h, v3 *u, v3 *v, f64 *r) {
 
 /* The rectangle's corners (in order: left-bottom, right-bottom, right-top, left-top) in px. */
 static bool rect_px(const de__ed_cam *c, const gz_layout *L, f64 p[8]) {
-    const f64 us[4] = {L->r[0], L->r[1], L->r[1], L->r[0]}, vs[4] = {L->r[2], L->r[2], L->r[3], L->r[3]};
+    const f64 us[4] = {L->r[0], L->r[1], L->r[1], L->r[0]},
+              vs[4] = {L->r[2], L->r[2], L->r[3], L->r[3]};
     for (u32 i = 0; i < 4; ++i)
-        if (!proj(c, add(L->rp, add(mul(L->ru, us[i]), mul(L->rv, vs[i]))), &p[i * 2], &p[i * 2 + 1]))
+        if (!proj(c, add(L->rp, add(mul(L->ru, us[i]), mul(L->rv, vs[i]))), &p[i * 2],
+                  &p[i * 2 + 1]))
             return false;
     return true;
 }
@@ -591,7 +665,7 @@ static i32 hit_test(const de__ed_cam *c, const gz_layout *L, f64 x, f64 y) {
     f64 best_d = 1e30;
     const f64 S = L->size;
     /* Bias: the smaller, inner handles win near a tie. */
-#define TRY(h, d, reach, bias)                                                                      \
+#define TRY(h, d, reach, bias)                                                                     \
     do {                                                                                           \
         if ((d) <= (reach) && (d) + (bias) < best_d) {                                             \
             best = (h);                                                                            \
@@ -627,8 +701,9 @@ static i32 hit_test(const de__ed_cam *c, const gz_layout *L, f64 x, f64 y) {
             const v3 a = L->ax[(k + 1) % 3], b = L->ax[(k + 2) % 3];
             f64 q[8];
             const f64 lo = S * 0.2, hi = S * 0.42;
-            const v3 pts[4] = {add(L->o, add(mul(a, lo), mul(b, lo))), add(L->o, add(mul(a, hi), mul(b, lo))),
-                               add(L->o, add(mul(a, hi), mul(b, hi))), add(L->o, add(mul(a, lo), mul(b, hi)))};
+            const v3 pts[4] = {
+                add(L->o, add(mul(a, lo), mul(b, lo))), add(L->o, add(mul(a, hi), mul(b, lo))),
+                add(L->o, add(mul(a, hi), mul(b, hi))), add(L->o, add(mul(a, lo), mul(b, hi)))};
             bool ok = true;
             for (u32 i = 0; i < 4 && ok; ++i)
                 ok = proj(c, pts[i], &q[i * 2], &q[i * 2 + 1]);
@@ -667,7 +742,9 @@ static i32 hit_test(const de__ed_cam *c, const gz_layout *L, f64 x, f64 y) {
 
 /* ---------- The drag ---------- */
 
-static f64 snap_to(f64 v, f64 step) { return step > 0 ? floor(v / step + 0.5) * step : v; }
+static f64 snap_to(f64 v, f64 step) {
+    return step > 0 ? floor(v / step + 0.5) * step : v;
+}
 
 static f64 step_of(u32 k) {
     if (G.snap[k] > 0)
@@ -867,7 +944,8 @@ static void snap_box(u64 e, de_dvec3 lo, de_dvec3 hi, const de__ed_mesh_geo *geo
         return;
     }
     for (u32 k = 0; k < 8; ++k)
-        snap_point((snap_scan *)user, V(k & 1 ? hi.x : lo.x, k & 2 ? hi.y : lo.y, k & 4 ? hi.z : lo.z));
+        snap_point((snap_scan *)user,
+                   V(k & 1 ? hi.x : lo.x, k & 2 ? hi.y : lo.y, k & 4 ? hi.z : lo.z));
 }
 
 static void snap_origin_chunk(const de_query_chunk *ch, void *user) {
@@ -1108,7 +1186,8 @@ static void solve(const de__ed_cam *c, de_transform *out) {
             else
                 ls.y = (f32)(ls.y * fv);
             if (i == 0) {
-                const f64 du = r[0] + L->pivot.x * (r[1] - r[0]), dv = r[2] + L->pivot.y * (r[3] - r[2]);
+                const f64 du = r[0] + L->pivot.x * (r[1] - r[0]),
+                          dv = r[2] + L->pivot.y * (r[3] - r[2]);
                 w.position = add(L->rp, add(mul(L->ru, du), mul(L->rv, dv)));
             }
         }
@@ -1214,8 +1293,8 @@ static void drag_to(de__editor *ed, const de__ed_cam *c) {
     send_update(ed, now);
 }
 
-void de__ed_gizmo_input(de__editor *ed, u32 view, const de__ed_cam *c, const de_ep_input_event *e, f32 x,
-                        f32 y) {
+void de__ed_gizmo_input(de__editor *ed, u32 view, const de__ed_cam *c, const de_ep_input_event *e,
+                        f32 x, f32 y) {
     de_world *w = ed->e->world;
     G.ed = ed;
     if (de_ep_str_eq(e->type, "key")) {
@@ -1236,7 +1315,8 @@ void de__ed_gizmo_input(de__editor *ed, u32 view, const de__ed_cam *c, const de_
         } else if (de_ep_str_eq(k, "Escape")) {
             finish(ed, NULL);
             return;
-        } else if (k.len == 1 && ((k.ptr[0] >= '0' && k.ptr[0] <= '9') || k.ptr[0] == '.' || k.ptr[0] == '-') &&
+        } else if (k.len == 1 &&
+                   ((k.ptr[0] >= '0' && k.ptr[0] <= '9') || k.ptr[0] == '.' || k.ptr[0] == '-') &&
                    n + 1 < sizeof G.typed) {
             G.typed[n] = k.ptr[0];
             G.typed[n + 1] = '\0';
@@ -1376,10 +1456,12 @@ static void origin_chunk(const de_query_chunk *ch, void *user) {
 u32 de__ed_origin_pick(de__editor *ed, const de__ed_cam *c, f32 x0, f32 y0, f32 x1, f32 y1,
                        const u64 *skip, u32 skip_count, u64 *out, u32 cap) {
     de_world *w = ed->e->world;
-    const de_builtin_component_ids b = w != NULL ? de_builtin_components(w) : (de_builtin_component_ids){0};
+    const de_builtin_component_ids b =
+        w != NULL ? de_builtin_components(w) : (de_builtin_component_ids){0};
     if (w == NULL || b.global_transform.id == 0 || cap == 0)
         return 0;
-    origin_scan s = {c, fmin(x0, x1), fmin(y0, y1), fmax(x0, x1), fmax(y0, y1), skip, skip_count, out, 0, cap};
+    origin_scan s = {
+        c, fmin(x0, x1), fmin(y0, y1), fmax(x0, x1), fmax(y0, y1), skip, skip_count, out, 0, cap};
     const de_query_term terms[1] = {{b.global_transform, DE_READ}};
     const de_query_desc qd = {terms, 1, NULL, 0};
     const de_query q = de_query_create(w, &qd);
@@ -1420,7 +1502,8 @@ static void sprite_chunk(const de_query_chunk *ch, void *user) {
         const v3 lz = qrot(t->rotation, V(0, 0, 1)), ly = qrot(t->rotation, V(0, 1, 0));
         const bool side = fabs(dot(lz, f)) <= fabs(dot(ly, f));
         const v3 u = qrot(t->rotation, V(1, 0, 0)), v = side ? lz : ly;
-        const f64 w0 = sp[r].size.x * fabs(t->scale.x), h0 = sp[r].size.y * fabs(side ? t->scale.z : t->scale.y);
+        const f64 w0 = sp[r].size.x * fabs(t->scale.x),
+                  h0 = sp[r].size.y * fabs(side ? t->scale.z : t->scale.y);
         const f64 u0 = -sp[r].pivot.x * w0, v0 = -sp[r].pivot.y * h0;
         v3 hit;
         if (!ray_plane(s->ro, s->rd, t->position, nrm(cross(u, v)), &hit))
@@ -1475,7 +1558,9 @@ void de__ed_gizmo_reset(de__editor *ed) {
 
 /* ---------- Drawing the overlays ---------- */
 
-static rgb grey(u8 v) { return (rgb){v, v, v}; }
+static rgb grey(u8 v) {
+    return (rgb){v, v, v};
+}
 
 static void draw_grid(const de__ed_cam *c, const de__ed_canvas *cv) {
     const v3 f = cam_fwd(c), p = cam_pos(c);
@@ -1552,7 +1637,8 @@ static void cam_chunk(const de_query_chunk *ch, void *user) {
         const DeCamera *cam = &cams[r];
         const de_transform *t = &ts[r];
         /* A DeCamera looks down its local -Z with +Y up. */
-        const v3 fw = qrot(t->rotation, V(0, 0, -1)), up = qrot(t->rotation, V(0, 1, 0)), rt = qrot(t->rotation, V(1, 0, 0));
+        const v3 fw = qrot(t->rotation, V(0, 0, -1)), up = qrot(t->rotation, V(0, 1, 0)),
+                 rt = qrot(t->rotation, V(1, 0, 0));
         if (cam->projection == DE_PROJ_ORTHOGRAPHIC) {
             const f64 hh = cam->ortho_height * 0.5, hw = hh * d->aspect;
             v3 p[4];
@@ -1577,8 +1663,8 @@ static void cam_chunk(const de_query_chunk *ch, void *user) {
     }
 }
 
-static void draw_cameras(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv, const u64 *skip,
-                         u32 skip_count) {
+static void draw_cameras(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv,
+                         const u64 *skip, u32 skip_count) {
     de_world *w = ed->e->world;
     const de_component cam = de_component_find(w, "DeCamera");
     const de_builtin_component_ids b = de_builtin_components(w);
@@ -1588,8 +1674,10 @@ static void draw_cameras(de__editor *ed, const de__ed_cam *c, const de__ed_canva
     const de_query_desc qd = {terms, 2, NULL, 0};
     const de_query q = de_query_create(w, &qd);
     u32 ow = 16, oh = 9;
+#if DE_HAS_RENDER
     if (ed->e->renderer != NULL)
         de_renderer_output_size(ed->e->renderer, &ow, &oh);
+#endif
     cam_draw d = {c, cv, skip, skip_count, oh ? (f64)ow / oh : 16.0 / 9.0};
     de_query_each(w, q, cam_chunk, &d);
     de_query_destroy(w, q);
@@ -1625,7 +1713,8 @@ static void icon_chunk(const de_query_chunk *ch, void *user) {
 }
 
 /* Calls `fn` for each camera (`show` has DE__ED_SHOW_CAMERAS) and light (DE__ED_SHOW_LIGHTS). */
-static void icons_each(de__editor *ed, u32 show, const u64 *skip, u32 skip_count, icon_fn fn, void *user) {
+static void icons_each(de__editor *ed, u32 show, const u64 *skip, u32 skip_count, icon_fn fn,
+                       void *user) {
     de_world *w = ed->e->world;
     const de_builtin_component_ids b = de_builtin_components(w);
     if (b.global_transform.id == 0)
@@ -1661,8 +1750,8 @@ typedef struct icon_draw {
  * cone, a directional light's rays. The light points along its local -Z, as cameras do. */
 static void draw_light_shape(const icon_draw *d, const de_transform *t, const DeLight *l) {
     const rgb col = {255, 221, 120};
-    const v3 o = t->position, fw = qrot(t->rotation, V(0, 0, -1)), up = qrot(t->rotation, V(0, 1, 0)),
-             rt = qrot(t->rotation, V(1, 0, 0));
+    const v3 o = t->position, fw = qrot(t->rotation, V(0, 0, -1)),
+             up = qrot(t->rotation, V(0, 1, 0)), rt = qrot(t->rotation, V(1, 0, 0));
     enum { N = 64 };
     if (l->kind == DE_LIGHT_POINT || l->kind == DE_LIGHT_RECT) {
         const f64 r = l->range > 0 ? l->range : 10.0;
@@ -1670,8 +1759,10 @@ static void draw_light_shape(const icon_draw *d, const de_transform *t, const De
         for (u32 k = 0; k < 3; ++k)
             for (u32 i = 0; i < N; ++i) {
                 const f64 a0 = 2 * DE_PI * i / N, a1 = 2 * DE_PI * (i + 1) / N;
-                wseg(d->c, d->cv, add(o, add(mul(ax[k][0], cos(a0) * r), mul(ax[k][1], sin(a0) * r))),
-                     add(o, add(mul(ax[k][0], cos(a1) * r), mul(ax[k][1], sin(a1) * r))), col, 0.8f, 1);
+                wseg(d->c, d->cv,
+                     add(o, add(mul(ax[k][0], cos(a0) * r), mul(ax[k][1], sin(a0) * r))),
+                     add(o, add(mul(ax[k][0], cos(a1) * r), mul(ax[k][1], sin(a1) * r))), col, 0.8f,
+                     1);
             }
     } else if (l->kind == DE_LIGHT_SPOT) {
         const f64 len = l->range > 0 ? l->range : 10.0, rad = tan(l->spot_outer) * len;
@@ -1683,7 +1774,8 @@ static void draw_light_shape(const icon_draw *d, const de_transform *t, const De
         }
         for (u32 i = 0; i < 4; ++i) {
             const f64 a = DE_PI * 0.5 * i;
-            wseg(d->c, d->cv, o, add(c, add(mul(rt, cos(a) * rad), mul(up, sin(a) * rad))), col, 0.8f, 1);
+            wseg(d->c, d->cv, o, add(c, add(mul(rt, cos(a) * rad), mul(up, sin(a) * rad))), col,
+                 0.8f, 1);
         }
     } else {
         /* Directional: parallel rays from a disc. */
@@ -1714,7 +1806,8 @@ static void draw_icon(u64 e, const de_transform *t, bool light, const void *data
             ring_px(cv, x, y, 4.5, cc, a, w);
             for (u32 i = 0; i < 8; ++i) {
                 const f64 an = DE_PI * i / 4.0;
-                seg(cv, x + cos(an) * 7.5, y + sin(an) * 7.5, x + cos(an) * 10.5, y + sin(an) * 10.5, cc, a, w);
+                seg(cv, x + cos(an) * 7.5, y + sin(an) * 7.5, x + cos(an) * 10.5,
+                    y + sin(an) * 10.5, cc, a, w);
             }
         }
         box(cv, x, y, 2.5, col, 1.0f);
@@ -1724,7 +1817,8 @@ static void draw_icon(u64 e, const de_transform *t, bool light, const void *data
     const f64 body[8] = {x - 9, y - 5, x + 3, y - 5, x + 3, y + 5, x - 9, y + 5};
     const f64 lens[6] = {x + 3, y, x + 9, y - 5, x + 9, y + 5};
     for (u32 i = 0; i < 4; ++i)
-        seg(cv, body[i * 2], body[i * 2 + 1], body[((i + 1) % 4) * 2], body[((i + 1) % 4) * 2 + 1], grey(20), 0.45f, 4);
+        seg(cv, body[i * 2], body[i * 2 + 1], body[((i + 1) % 4) * 2], body[((i + 1) % 4) * 2 + 1],
+            grey(20), 0.45f, 4);
     quad(cv, body, col, 0.95f);
     tri(cv, lens, col, 0.95f);
 }
@@ -1768,7 +1862,8 @@ typedef struct coll_draw {
 
 /* A collider's outline in its body's plane: the entity's local X and, as for sprites, the local
  * axis (Z side-on, Y top-down) more across the view. */
-static void draw_collider(const coll_draw *d, const DeCollider2D *k, const de_transform *t, bool lit) {
+static void draw_collider(const coll_draw *d, const DeCollider2D *k, const de_transform *t,
+                          bool lit) {
     const v3 f = cam_fwd(d->c);
     const v3 lz = qrot(t->rotation, V(0, 0, 1)), ly = qrot(t->rotation, V(0, 1, 0));
     const bool side = fabs(dot(lz, f)) <= fabs(dot(ly, f));
@@ -1787,7 +1882,8 @@ static void draw_collider(const coll_draw *d, const DeCollider2D *k, const de_tr
         for (u32 i = 0; i < N; ++i) {
             const f64 a0 = 2 * DE_PI * i / N, a1 = 2 * DE_PI * (i + 1) / N;
             const f64 c0 = sin(a0) >= 0 ? hh : -hh, c1 = sin(a1) >= 0 ? hh : -hh;
-            wseg(d->c, d->cv, P2(cos(a0) * r, sin(a0) * r + c0), P2(cos(a1) * r, sin(a1) * r + c1), col, a, width);
+            wseg(d->c, d->cv, P2(cos(a0) * r, sin(a0) * r + c0), P2(cos(a1) * r, sin(a1) * r + c1),
+                 col, a, width);
         }
         if (hh > 0) {
             wseg(d->c, d->cv, P2(r, -hh), P2(r, hh), col, a, width);
@@ -1857,7 +1953,8 @@ static void draw_outlines(de__editor *ed, const de__ed_cam *c, const de__ed_canv
             if (rect_px(c, &L, p))
                 for (u32 k = 0; k < 4; ++k) {
                     const u32 n = (k + 1) % 4;
-                    seg(cv, p[k * 2], p[k * 2 + 1], p[n * 2], p[n * 2 + 1], G.col[C_SELECTED], 1.0f, 2);
+                    seg(cv, p[k * 2], p[k * 2 + 1], p[n * 2], p[n * 2 + 1], G.col[C_SELECTED], 1.0f,
+                        2);
                 }
             continue;
         }
@@ -1884,9 +1981,12 @@ static void draw_outlines(de__editor *ed, const de__ed_cam *c, const de__ed_canv
 }
 
 /* A handle's colour: its axis', or the hover colour when it is highlighted. */
-static rgb hcol(i32 h, i32 lit, u32 axis) { return h == lit ? G.col[C_HOVER] : G.col[axis]; }
+static rgb hcol(i32 h, i32 lit, u32 axis) {
+    return h == lit ? G.col[C_HOVER] : G.col[axis];
+}
 
-static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_layout *L, i32 lit, bool dragging) {
+static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_layout *L, i32 lit,
+                       bool dragging) {
     f64 ox, oy;
     if (!L->ok || !proj(c, L->o, &ox, &oy))
         return;
@@ -1902,12 +2002,14 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
         for (u32 i = 0; i < 4; ++i) {
             const u32 j = (i + 1) % 4;
             const rgb col = side[i] == lit ? G.col[C_HOVER] : grey(245);
-            seg(cv, p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1], col, 0.95f, side[i] == lit ? 2 : 1);
+            seg(cv, p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1], col, 0.95f,
+                side[i] == lit ? 2 : 1);
         }
         for (u32 i = 0; i < 4; ++i) {
             const u32 j = (i + 1) % 4;
             box(cv, p[i * 2], p[i * 2 + 1], 4.5, grey(30), 0.9f);
-            box(cv, p[i * 2], p[i * 2 + 1], 3.5, corner[i] == lit ? G.col[C_HOVER] : grey(245), 1.0f);
+            box(cv, p[i * 2], p[i * 2 + 1], 3.5, corner[i] == lit ? G.col[C_HOVER] : grey(245),
+                1.0f);
             const f64 mx = (p[i * 2] + p[j * 2]) * 0.5, my = (p[i * 2 + 1] + p[j * 2 + 1]) * 0.5;
             box(cv, mx, my, 3.0, side[i] == lit ? G.col[C_HOVER] : grey(245), 0.9f);
         }
@@ -1924,13 +2026,16 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
         v3 u, v;
         f64 r;
         ring_of(L, h, &u, &v, &r);
-        const rgb col = h == H_RV ? (h == lit ? G.col[C_HOVER] : grey(235)) : hcol(h, lit, (u32)(h - H_RX));
+        const rgb col =
+            h == H_RV ? (h == lit ? G.col[C_HOVER] : grey(235)) : hcol(h, lit, (u32)(h - H_RX));
         enum { N = 96 };
         for (u32 i = 0; i < N; ++i) {
             const f64 a0 = 2 * DE_PI * i / N, a1 = 2 * DE_PI * (i + 1) / N;
-            const v3 o0 = add(mul(u, cos(a0) * r), mul(v, sin(a0) * r)), o1 = add(mul(u, cos(a1) * r), mul(v, sin(a1) * r));
+            const v3 o0 = add(mul(u, cos(a0) * r), mul(v, sin(a0) * r)),
+                     o1 = add(mul(u, cos(a1) * r), mul(v, sin(a1) * r));
             const bool front = h == H_RV || dot(add(o0, o1), L->dir) <= 1e-9;
-            wseg(c, cv, add(L->o, o0), add(L->o, o1), col, front ? 1.0f : 0.25f, front ? (h == lit ? 3 : 2) : 1);
+            wseg(c, cv, add(L->o, o0), add(L->o, o1), col, front ? 1.0f : 0.25f,
+                 front ? (h == lit ? 3 : 2) : 1);
         }
     }
     if (dragging && lit >= H_RX && lit <= H_RV && fabs(G.ang) > 1e-6) {
@@ -1945,7 +2050,8 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
             const v3 p0 = add(L->o, mul(qrot(qaxis(n, G.ang * i / steps), a0), r));
             const v3 p1 = add(L->o, mul(qrot(qaxis(n, G.ang * (i + 1) / steps), a0), r));
             f64 t[6];
-            if (proj(c, L->o, &t[0], &t[1]) && proj(c, p0, &t[2], &t[3]) && proj(c, p1, &t[4], &t[5]))
+            if (proj(c, L->o, &t[0], &t[1]) && proj(c, p0, &t[2], &t[3]) &&
+                proj(c, p1, &t[4], &t[5]))
                 tri(cv, t, G.col[C_HOVER], 0.25f);
         }
     }
@@ -1956,8 +2062,9 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
             continue;
         const v3 a = L->ax[(k + 1) % 3], b = L->ax[(k + 2) % 3];
         const f64 lo = S * 0.2, hi = S * 0.42;
-        const v3 pts[4] = {add(L->o, add(mul(a, lo), mul(b, lo))), add(L->o, add(mul(a, hi), mul(b, lo))),
-                           add(L->o, add(mul(a, hi), mul(b, hi))), add(L->o, add(mul(a, lo), mul(b, hi)))};
+        const v3 pts[4] = {
+            add(L->o, add(mul(a, lo), mul(b, lo))), add(L->o, add(mul(a, hi), mul(b, lo))),
+            add(L->o, add(mul(a, hi), mul(b, hi))), add(L->o, add(mul(a, lo), mul(b, hi)))};
         f64 q[8];
         bool ok = true;
         for (u32 i = 0; i < 4 && ok; ++i)
@@ -1967,7 +2074,8 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
         const rgb col = hcol(h, lit, k);
         quad(cv, q, col, h == lit ? 0.55f : 0.3f);
         for (u32 i = 0; i < 4; ++i)
-            seg(cv, q[i * 2], q[i * 2 + 1], q[((i + 1) % 4) * 2], q[((i + 1) % 4) * 2 + 1], col, 0.9f, 1);
+            seg(cv, q[i * 2], q[i * 2 + 1], q[((i + 1) % 4) * 2], q[((i + 1) % 4) * 2 + 1], col,
+                0.9f, 1);
     }
     /* Axes: arrows (move), lines with boxes (scale). */
     for (u32 k = 0; k < 3; ++k) {
@@ -1985,7 +2093,8 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
             continue;
         const f64 ux = dx / l, uy = dy / l;
         if (mv) {
-            const f64 t[6] = {ex + ux * 14, ey + uy * 14, ex - uy * 6, ey + ux * 6, ex + uy * 6, ey - ux * 6};
+            const f64 t[6] = {ex + ux * 14, ey + uy * 14, ex - uy * 6,
+                              ey + ux * 6,  ex + uy * 6,  ey - ux * 6};
             tri(cv, t, col, 1.0f);
         } else {
             box(cv, ex, ey, 5.0, col, 1.0f);
@@ -2008,8 +2117,8 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
     }
 }
 
-void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__ed_canvas *cv, u32 show,
-                       const u64 *skip, u32 skip_count) {
+void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__ed_canvas *cv,
+                       u32 show, const u64 *skip, u32 skip_count) {
     if (ed->e->world == NULL || c->w == 0 || c->h == 0)
         return;
     if (show & DE__ED_SHOW_GRID)

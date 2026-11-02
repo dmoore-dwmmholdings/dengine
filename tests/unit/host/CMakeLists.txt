@@ -417,3 +417,10 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_include_directories(test_editor_animation_preview PRIVATE "${DE_ROOT_DIR}/src")
     target_compile_definitions(test_editor_animation_preview PRIVATE DE_ANIM_HAS_COOKER=0)
 endif()
+
+# DENG-711: production service handlers must retain schema errors and report absent GPU support.
+if(NOT DE_IS_SHIPPING AND NOT DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_headless SOURCES test_editor_headless.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host)
+    target_include_directories(test_editor_headless PRIVATE "${DE_ROOT_DIR}/src")
+endif()
