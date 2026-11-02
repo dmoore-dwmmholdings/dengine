@@ -90,3 +90,14 @@ if(TARGET test_prop)
             LABELS "unit;reflect" ENVIRONMENT "DE_PROP_SEED=${_de_prop_value}" TIMEOUT 600)
     endforeach()
 endif()
+
+# DENG-723: native debugger assertions need typed globals even in optimized build profiles.
+# Keep debug information local to the fixture; engine Release flags stay unchanged.
+if(TARGET de_debugger_fixture)
+    if(MSVC)
+        set_property(TARGET de_debugger_fixture PROPERTY MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+        target_link_options(de_debugger_fixture PRIVATE /DEBUG:FULL)
+    else()
+        target_compile_options(de_debugger_fixture PRIVATE -g)
+    endif()
+endif()
