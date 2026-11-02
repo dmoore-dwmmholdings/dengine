@@ -136,8 +136,8 @@ de_ep_raw de__ed_raw_str(de_ep_arena *a, const char *s);
 de_ep_raw de__ed_raw_f64(de_ep_arena *a, f64 v);
 de_ep_raw de__ed_raw_bool(de_ep_arena *a, bool v);
 de_ep_raw de__ed_raw_range(de_ep_arena *a, f64 lo, f64 hi);
-/** Reads a string-keyed map entry, borrowing the complete encoded value from an
- * in-memory reader. On failure, clears the entry and retains the reader error. */
+/** Reads a string-keyed map entry, borrowing the complete encoded value from a
+ * mpack_reader_init_data reader only. On failure, clears the entry and retains the error. */
 bool de__ed_raw_map_entry(mpack_reader_t *r, de_ep_kv_raw *out);
 
 /** Decodes the params of `method` into `var`, or answers invalid_params and returns. */

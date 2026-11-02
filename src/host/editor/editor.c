@@ -204,13 +204,18 @@ de_ep_raw de__ed_raw_range(de_ep_arena *a, f64 lo, f64 hi) {
 
 bool de__ed_raw_map_entry(mpack_reader_t *r, de_ep_kv_raw *out) {
     memset(out, 0, sizeof *out);
+    if (r->buffer || r->fill || r->skip) {
+        mpack_reader_flag_error(r, mpack_error_unsupported);
+        return false;
+    }
     const u32 length = mpack_expect_str(r);
     const char *key = length ? mpack_read_bytes_inplace(r, length) : "";
     mpack_done_str(r);
-    const char *begin = NULL, *end = NULL;
-    mpack_reader_remaining(r, &begin);
+    /* This pinned MPack reader exposes its contiguous cursor. reader_remaining()
+     * is only valid after closing every container, including our containing map. */
+    const char *begin = r->data;
     mpack_discard(r);
-    mpack_reader_remaining(r, &end);
+    const char *end = r->data;
     if (mpack_reader_error(r) != mpack_ok || !begin || !end || end <= begin)
         return false;
     out->key = (de_ep_str){key, length};

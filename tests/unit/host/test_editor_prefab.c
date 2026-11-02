@@ -188,6 +188,16 @@ TEST(editor_raw, truncated_or_non_string_entries_clear_outputs_and_fail) {
     de_ep_kv_raw field;
     EXPECT_FALSE(de__ed_raw_map_entry(&r, &field));
     EXPECT_EQ(mpack_reader_destroy(&r), mpack_error_type);
+    /* Borrowing cannot retain a view into a refillable reader's mutable buffer. */
+    char buffered[] = "\x81\xa1x\x2a";
+    mpack_reader_init(&r, buffered, sizeof buffered - 1, sizeof buffered - 1);
+    ASSERT_EQ(mpack_expect_map(&r), 1u);
+    field = (de_ep_kv_raw){.key = {"old", 3}, .value = {"old", 3}};
+    EXPECT_FALSE(de__ed_raw_map_entry(&r, &field));
+    EXPECT_TRUE(field.key.ptr == NULL && field.value.ptr == NULL);
+    EXPECT_EQ(field.key.len, 0u);
+    EXPECT_EQ(field.value.len, 0u);
+    EXPECT_EQ(mpack_reader_destroy(&r), mpack_error_unsupported);
 #if !MPACK_EXTENSIONS
     /* The vendored protocol intentionally disables MessagePack extension types. */
     mpack_reader_init_data(&r,
