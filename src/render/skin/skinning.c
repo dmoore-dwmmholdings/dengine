@@ -302,6 +302,73 @@ de__skin_entry *de__skin_instance(const de_renderer *r, u32 slot) {
     return NULL;
 }
 
+/* Each skin reads immutable mesh/palette data and writes its own output buffers.
+ * Keep transitions outside the independent dispatches. Fixed chunks avoid adding
+ * per-frame storage while retaining every buffer's original access transition. */
+static void skin_barriers(de_renderer *r, de_gpu_cmd *cmd, bool after) {
+    enum { BATCH = 64 };
+    de_gpu_barrier barriers[BATCH];
+    u32 count = 0;
+    for (u32 i = 0; i < r->skin->count; ++i) {
+        const de__skin_entry *e = &r->skin->entries[i];
+        if (!e->active)
+            continue;
+        const u32 outputs = e->initialized ? 1u : 2u;
+        for (u32 j = 0; j < outputs; ++j) {
+            barriers[count++] = (de_gpu_barrier){
+                .buffer = e->output[e->current ^ j],
+                .before = after            ? DE_ACCESS_SHADER_WRITE
+                          : e->initialized ? DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ
+                                           : DE_ACCESS_NONE,
+                .after =
+                    after ? DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ : DE_ACCESS_SHADER_WRITE};
+            if (count == BATCH) {
+                de_gpu_cmd_barriers(cmd, barriers, count);
+                count = 0;
+            }
+        }
+    }
+    if (count)
+        de_gpu_cmd_barriers(cmd, barriers, count);
+}
+
+static de_result skin_dispatch(de_renderer *r, u32 ring) {
+    de_gpu_cmd *cmd = de_gpu_cmd_begin(r->dev, DE_QUEUE_GRAPHICS, "Skin");
+    if (!cmd) {
+        for (u32 i = 0; i < r->skin->count; ++i)
+            r->skin->entries[i].active = false;
+        return DE_FAIL(DE_ERR_INTERNAL, "Skin command list");
+    }
+    for (u32 i = 0; i < r->skin->count; ++i) {
+        de__skin_entry *e = &r->skin->entries[i];
+        if (e->active && e->initialized)
+            e->current ^= 1u;
+    }
+    de_gpu_cmd_set_pipeline(cmd, r->skin->pipeline);
+    skin_barriers(r, cmd, false);
+    for (u32 i = 0; i < r->skin->count; ++i) {
+        const de__skin_entry *e = &r->skin->entries[i];
+        if (!e->active)
+            continue;
+        u32 pc[8] = {de_gpu_buffer_bindless(r->dev, e->description[ring]),
+                     de_gpu_buffer_bindless(r->dev, e->palette[ring]),
+                     e->packed.vertices,
+                     de_gpu_buffer_bindless(r->dev, e->output[e->current ^ 1u]),
+                     e->joint_count,
+                     e->source->vertex_count,
+                     !e->initialized,
+                     0};
+        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
+        de_gpu_cmd_dispatch(cmd, (e->source->vertex_count + 63) / 64, 1, 1);
+    }
+    skin_barriers(r, cmd, true);
+    for (u32 i = 0; i < r->skin->count; ++i)
+        if (r->skin->entries[i].active)
+            r->skin->entries[i].initialized = true;
+    return de_gpu_queue_submit(r->dev, DE_QUEUE_GRAPHICS,
+                               &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1});
+}
+
 de_result de__skin_prepare(de_renderer *r, const de__render_world_frame *f,
                            const de__gpu_scene_assets *assets) {
     if (!r || !r->skin || !f)
@@ -328,7 +395,7 @@ de_result de__skin_prepare(de_renderer *r, const de__render_world_frame *f,
         return DE_OK;
     if (f->skin_count)
         DE_TRY(ensure_pipeline(r));
-    de_gpu_cmd *cmd = NULL;
+    bool active = false;
     const u32 ring = (u32)(r->frame_index % 4);
     for (u32 i = 0; i < f->skin_count; ++i) {
         const de__skin_palette_snapshot *pose = &f->skin_palettes[i];
@@ -360,45 +427,11 @@ de_result de__skin_prepare(de_renderer *r, const de__render_world_frame *f,
         de__gs_mesh packed;
         de__gpu_scene_pack_mesh_record(source, &packed);
         memcpy(de_gpu_buffer_map(r->dev, e->description[ring]), &packed, sizeof packed);
-        if (!cmd) {
-            cmd = de_gpu_cmd_begin(r->dev, DE_QUEUE_GRAPHICS, "Skin");
-            if (!cmd)
-                return DE_FAIL(DE_ERR_INTERNAL, "Skin command list");
-            de_gpu_cmd_set_pipeline(cmd, s->pipeline);
-        }
-        if (e->initialized)
-            e->current ^= 1u;
-        de_gpu_barrier begin = {.buffer = e->output[e->current],
-                                .before = e->initialized
-                                              ? DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ
-                                              : DE_ACCESS_NONE,
-                                .after = DE_ACCESS_SHADER_WRITE};
-        de_gpu_cmd_barriers(cmd, &begin, 1);
-        if (!e->initialized) {
-            begin.buffer = e->output[e->current ^ 1u];
-            de_gpu_cmd_barriers(cmd, &begin, 1);
-        }
-        u32 pc[8] = {de_gpu_buffer_bindless(r->dev, e->description[ring]),
-                     de_gpu_buffer_bindless(r->dev, e->palette[ring]),
-                     de_gpu_buffer_bindless(r->dev, e->output[e->current]),
-                     de_gpu_buffer_bindless(r->dev, e->output[e->current ^ 1u]),
-                     e->joint_count,
-                     source->vertex_count,
-                     !e->initialized,
-                     0};
-        de_gpu_cmd_push_constants(cmd, pc, sizeof pc);
-        de_gpu_cmd_dispatch(cmd, (source->vertex_count + 63) / 64, 1, 1);
-        de_gpu_barrier end[2] = {{.buffer = e->output[e->current],
-                                  .before = DE_ACCESS_SHADER_WRITE,
-                                  .after = DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ},
-                                 {.buffer = e->output[e->current ^ 1u],
-                                  .before = DE_ACCESS_SHADER_WRITE,
-                                  .after = DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ}};
-        de_gpu_cmd_barriers(cmd, end, e->initialized ? 1 : 2);
-        e->initialized = true;
         e->active = true;
+        active = true;
         e->packed = packed;
-        e->packed.vertices = pc[2];
+        const u32 next = e->current ^ (e->initialized ? 1u : 0u);
+        e->packed.vertices = de_gpu_buffer_bindless(r->dev, e->output[next]);
         const u32 n = source->vertex_count;
         const u32 offsets[6] = {0, 12 * n, 24 * n, 40 * n, 48 * n, 56 * n},
                   formats[6] = {2, 2, 3, 1, 1, 9};
@@ -418,10 +451,7 @@ de_result de__skin_prepare(de_renderer *r, const de__render_world_frame *f,
             skinned = bounds;
         f->instances.bounds[slot] = de_aabb_transform(skinned, &f->instances.transform[slot]);
     }
-    if (cmd)
-        DE_TRY(de_gpu_queue_submit(r->dev, DE_QUEUE_GRAPHICS,
-                                   &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}));
-    return DE_OK;
+    return active ? skin_dispatch(r, ring) : DE_OK;
 }
 
 de_result de__skin_rt_prepare(de_renderer *r) {
