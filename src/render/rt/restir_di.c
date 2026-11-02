@@ -211,7 +211,8 @@ static de_result build_pipelines(de__restir_di *s, bool sources_only) {
             }
             de__engine_shader_code_free(&code);
         }
-        for (u32 i = sources_only ? 0 : K_INITIAL; i < (sources_only ? K_INITIAL : K_COUNT); ++i)
+        for (u32 i = sources_only ? 0 : K_INITIAL; i < (u32)(sources_only ? K_INITIAL : K_COUNT);
+             ++i)
             if (!s->kernels[i].id) {
                 return DE_FAIL(DE_ERR_UNSUPPORTED, "DI pipeline");
             }
