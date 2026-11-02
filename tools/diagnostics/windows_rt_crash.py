@@ -62,6 +62,9 @@ def select_cases(catalog, failures):
 
 
 def debugger_commands(dump_path):
+    # Backslashes inside sxd's quoted callback are escape characters. Win32 also
+    # accepts forward-slash separators, so keep the filename out of that grammar.
+    dump_path = dump_path.replace("\\", "/")
     # Only change break status, not exception handling status (-h is not used).
     # https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-
     capture = (f".echo {MARKER}; .exr -1; .ecxr; kn; lm; "
@@ -119,7 +122,8 @@ def capture_case(debugger, test, output):
             result["timedOut"] = True
     text = (output / "console.log").read_text(encoding="utf-8", errors="replace")
     dump = output / "crash.dmp"
-    result["secondChanceObserved"] = MARKER in text
+    # CDB echoes the registration command too; only the executed .echo is evidence.
+    result["secondChanceObserved"] = any(line.strip() == MARKER for line in text.splitlines())
     result["exceptionCodes"] = re.findall(r"ExceptionCode:\s*([0-9a-fA-F]{8})", text)
     result["minidumpCaptured"] = complete_minidump(dump)
     result["executableUnchanged"] = digest(executable) == before
@@ -141,6 +145,8 @@ def find_debugger(explicit=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-dir", type=Path, required=True)
+    parser.add_argument("--catalog", type=Path, required=True,
+                        help="CTest JSON catalog saved before the original test execution")
     parser.add_argument("--cdb", type=Path)
     args = parser.parse_args()
     if sys.platform != "win32":
@@ -152,10 +158,17 @@ def main():
     protected = [build / "Testing/Temporary" / name
                  for name in ("LastTest.log", "LastTestsFailed.log")]
     before = {str(p): digest(p) for p in protected if p.is_file()}
+    catalog_path = args.catalog.resolve()
+    catalog_before = None
     try:
         failed = protected[1].read_text() if protected[1].is_file() else ""
-        catalog = json.loads(subprocess.check_output(
-            ["ctest", "--test-dir", str(build), "--show-only=json-v1"], text=True))
+        # Even CTest's --show-only rewrites LastTest.log. Never discover here:
+        # the original failed-run evidence must survive byte for byte.
+        catalog_data = catalog_path.read_bytes()
+        catalog_before = hashlib.sha256(catalog_data).hexdigest()
+        report["catalogPath"] = str(catalog_path)
+        report["catalogSha256"] = catalog_before
+        catalog = json.loads(catalog_data.decode("utf-8-sig"))
         selected = select_cases(catalog, failed)
         report["selected"] = [test["name"] for test in selected]
         if not selected:
@@ -178,10 +191,16 @@ def main():
         report["originalLogsSha256"] = before
         report["originalLogsUnchanged"] = all(p.is_file() and digest(p) == before[str(p)]
                                               for p in protected if str(p) in before)
+        report["catalogUnchanged"] = None
+        if catalog_before is not None:
+            report["catalogUnchanged"] = (catalog_path.is_file() and
+                                          digest(catalog_path) == catalog_before)
         (output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report), flush=True)
         if not report["originalLogsUnchanged"]:
             raise RuntimeError("original CTest evidence changed during diagnostic capture")
+        if report["catalogUnchanged"] is False:
+            raise RuntimeError("original CTest catalog changed during diagnostic capture")
 
 
 if __name__ == "__main__":

@@ -125,7 +125,15 @@ jobs:
         # fixes do not require a separate CI round trip for each failing translation unit.
         run: cmake --build --preset "${PRESET}" -- -k 0
 
+      # DENG-736: discovery itself rewrites LastTest.log, so snapshot before testing.
+      - name: Save original DXR test catalog
+        if: ${{ matrix.preset == 'windows-msvc-debug' }}
+        shell: bash
+        run: ctest --preset "${PRESET}" --show-only=json-v1 > "build/${PRESET}/deng736-catalog.json"
+
       - name: Test
+        # A failed diagnostic snapshot must not prevent the original acceptance run.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
         # DENG-418: a de_test executable that crashes prints its stack on stderr and, on Windows,
         # writes a minidump into DE_TEST_DUMP_DIR (uploaded below with the test logs).
@@ -151,7 +159,7 @@ jobs:
         shell: bash
         env:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
-        run: python3 tools/diagnostics/windows_rt_crash.py --test-dir "build/${PRESET}"
+        run: python3 tools/diagnostics/windows_rt_crash.py --test-dir "build/${PRESET}" --catalog "build/${PRESET}/deng736-catalog.json"
 
       - name: Upload test logs
         if: failure()
@@ -163,6 +171,7 @@ jobs:
             build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ matrix.preset }}/de_config_dump.txt
             build/${{ matrix.preset }}/test-dumps/
+            build/${{ matrix.preset }}/deng736-catalog.json
             build/${{ matrix.preset }}/d3d12-init-*
             build/${{ matrix.preset }}/golden-init-*/
           if-no-files-found: ignore

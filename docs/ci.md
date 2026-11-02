@@ -80,10 +80,16 @@ reference, not module images.
 
 For the three DXR path-source lifecycle crashes tracked by DENG-736, the MSVC Debug
 job also captures the original failed commands under the runner's existing CDB.
+Before testing, it saves the CTest JSON catalog to `deng736-catalog.json`; the
+capture tool takes that file through `--catalog` and fingerprints it. Do not run
+CTest discovery after the failure: even `--show-only` overwrites `LastTest.log`.
+The original Test step still runs if the diagnostic catalog snapshot fails.
 The bounded diagnostic writes second-chance exception codes, stacks and minidumps
 under `test-dumps/deng736/`, without replacing the original CTest result or logs.
 It installs no debugger or SDK. Missing CDB, a timeout, a non-reproducing run or
 incomplete capture is reported explicitly; debugger success is not a passing test.
+Checks runs the portable capture controls natively on Windows, including real
+failed-CTest log preservation. That job does not qualify actual CDB execution.
 
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).
