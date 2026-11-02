@@ -63,7 +63,7 @@ TEST_F(glyph_cache, atlas_snapshots_copy_baked_runtime_and_survive_eviction, run
                 ((size_t)(y * font->height / 8) * font->width + x * font->width / 8) * 4;
             ASSERT_MEMEQ(preview + (y * 8 + x) * 4, font->pixels[0] + source, 4);
         }
-    u32 glyph;
+    u32 glyph = 0;
     ASSERT_EQ(unbaked(f, &glyph, 1), 1u);
     de_text__glyph_miss(f->t, f->cjk, glyph);
     de_text__glyph_jobs_wait(f->t);

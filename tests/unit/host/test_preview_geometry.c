@@ -21,7 +21,7 @@ static void check_shape(de__render_preview_shape shape, u32 triangles, u32 max_v
     EXPECT_GT(mesh.meshlet_count, 0u);
     EXPECT_LT(blob.size, 256u << 10);
     for (u32 i = 0; i < mesh.vertex_count; ++i) {
-        f32 p[3], n[3], t[4], uv[2];
+        f32 p[3] = {0}, n[3] = {0}, t[4] = {0}, uv[2] = {0};
         de_cooked_mesh_position(&mesh, i, p);
         ASSERT_TRUE(de_cooked_mesh_normal(&mesh, i, n));
         ASSERT_TRUE(de_cooked_mesh_tangent(&mesh, i, t));
@@ -36,14 +36,14 @@ static void check_shape(de__render_preview_shape shape, u32 triangles, u32 max_v
         }
     }
     for (u32 i = 0; i < mesh.index_count; i += 3) {
-        de_vec3 p[3];
-        f32 normal[3];
+        de_vec3 p[3] = {0};
+        f32 normal[3] = {0};
         for (u32 k = 0; k < 3; ++k) {
             u32 vertex = de_cooked_mesh_index(&mesh, i + k);
             ASSERT_LT(vertex, mesh.vertex_count);
             de_cooked_mesh_position(&mesh, vertex, (f32 *)&p[k]);
         }
-        de_cooked_mesh_normal(&mesh, de_cooked_mesh_index(&mesh, i), normal);
+        ASSERT_TRUE(de_cooked_mesh_normal(&mesh, de_cooked_mesh_index(&mesh, i), normal));
         de_vec3 cross = de_v3_cross(de_v3_sub(p[1], p[0]), de_v3_sub(p[2], p[0]));
         EXPECT_TRUE(cross.x * normal[0] + cross.y * normal[1] + cross.z * normal[2] > 1e-6f);
     }
