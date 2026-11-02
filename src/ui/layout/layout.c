@@ -52,8 +52,7 @@ void de_ui__arrange(de_ui_layout *layout, u32 index, de_vec4 rect, bool force) {
         pr = de_ui__length(node->padding[1], rect.z, ui->scale, 0),
         pb = de_ui__length(node->padding[2], rect.w, ui->scale, 0),
         left = de_ui__length(node->padding[3], rect.z, ui->scale, 0);
-    const DeUiStyle *style = de_entity_get_const(ui->world, record->entity, ui->ids.style);
-    f32 border = style ? style->border_width * ui->scale : 0;
+    f32 border = record->border_width * ui->scale;
     top += border;
     pr += border;
     pb += border;

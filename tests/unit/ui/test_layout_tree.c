@@ -94,6 +94,96 @@ TEST_F(ui_tree, static_2000_nodes_1000_frames_zero_heap, ui_fx) {
     EXPECT_EQ(after, before);
     EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
 }
+
+typedef struct UiMeasureProbe {
+    de_vec2 size;
+} UiMeasureProbe;
+static de_vec2 measure_probe(de_ui *ui, de_entity entity, de_vec2 available) {
+    (void)available;
+    const UiMeasureProbe *probe =
+        de_entity_get_const(ui->world, entity, de_component_find(ui->world, "UiMeasureProbe"));
+    return probe->size;
+}
+TEST_F(ui_tree, empty_grid_retains_declared_intrinsic_tracks, ui_fx) {
+    de_entity root = ui_node(f, (de_entity){0}), child = ui_node(f, root);
+    DeUiNode *node = ui_node_edit(f, child);
+    node->display = DE_UI_GRID;
+    node->align_self = DE_UI_ALIGN_START;
+    DeUiGrid *grid = de_entity_add(f->world, child, f->ui->ids.grid);
+    *grid = (DeUiGrid){.columns = {{DE_UI_PX, 40}, {DE_UI_PX, 30}},
+                       .column_count = 2,
+                       .column_gap = 10,
+                       .rows = {{DE_UI_PX, 12}, {DE_UI_PX, 8}},
+                       .row_count = 2,
+                       .row_gap = 5};
+    ui_frame(f);
+    expect_rect(ui_rect(f, child), 0, 0, 80, 25);
+    ui_node_edit(f, child)->display = DE_UI_FLEX;
+    ui_frame(f);
+    expect_rect(ui_rect(f, child), 0, 0, 0, 0);
+    ui_node_edit(f, child)->display = DE_UI_GRID;
+    grid = de_entity_get(f->world, child, f->ui->ids.grid);
+    grid->columns[0].value = 50;
+    grid->rows[0].value = 20;
+    ui_frame(f);
+    expect_rect(ui_rect(f, child), 0, 0, 90, 33);
+    ui_frame(f);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+}
+TEST_F(ui_tree, mixed_intrinsic_providers_and_borders_follow_archetype_changes, ui_fx) {
+    const de_field_info field = DE_FIELD(UiMeasureProbe, size, DE_FK_VEC2, DE_FIELD_DEFAULT);
+    de_type_id type;
+    ASSERT_EQ(de_type_register_ex(f->types,
+                                  &(de_type_desc){.name = "UiMeasureProbe",
+                                                  .size = sizeof(UiMeasureProbe),
+                                                  .align = _Alignof(UiMeasureProbe),
+                                                  .version = 1,
+                                                  .is_pod = true,
+                                                  .fields = &field,
+                                                  .field_count = 1},
+                                  &type, NULL),
+              DE_OK);
+    de_component component = de_component_register(f->world, type, 0);
+    ASSERT_TRUE(component.id != 0);
+    ASSERT_EQ(de_ui__register_measure(f->ui, component, measure_probe), DE_OK);
+    de_entity root = ui_node(f, (de_entity){0});
+    de_entity a = ui_node(f, root), b = ui_node(f, root), c = ui_node(f, root);
+    const de_entity leaves[] = {a, b, c};
+    for (u32 i = 0; i < 3; ++i)
+        ui_node_edit(f, leaves[i])->align_self = DE_UI_ALIGN_START;
+    DeUiNode *node = ui_node_edit(f, a);
+    node->padding[0] = (de_ui_len){DE_UI_PX, 5};
+    node->padding[1] = (de_ui_len){DE_UI_PX, 3};
+    node->padding[2] = (de_ui_len){DE_UI_PX, 7};
+    node->padding[3] = (de_ui_len){DE_UI_PX, 2};
+    UiMeasureProbe *probe = de_entity_add(f->world, b, component);
+    probe->size = (de_vec2){40, 20};
+    probe = de_entity_add(f->world, c, component);
+    probe->size = (de_vec2){15, 7};
+    DeUiStyle *style = de_entity_add(f->world, b, f->ui->ids.style);
+    style->border_width = 2;
+    style = de_entity_add(f->world, c, f->ui->ids.style);
+    style->border_width = 7;
+    ui_frame(f);
+    expect_rect(ui_rect(f, a), 0, 0, 5, 12);
+    expect_rect(ui_rect(f, b), 5, 0, 44, 24);
+    expect_rect(ui_rect(f, c), 49, 0, 29, 21);
+    ui_frame(f);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+
+    de_entity_remove(f->world, b, component);
+    de_entity_remove(f->world, b, f->ui->ids.style);
+    probe = de_entity_add(f->world, a, component);
+    probe->size = (de_vec2){9, 11};
+    style = de_entity_get(f->world, c, f->ui->ids.style);
+    style->border_width = 3;
+    ui_frame(f);
+    expect_rect(ui_rect(f, a), 0, 0, 14, 23);
+    expect_rect(ui_rect(f, b), 14, 0, 0, 0);
+    expect_rect(ui_rect(f, c), 14, 0, 21, 13);
+    ui_frame(f);
+    EXPECT_EQ(de_ui_get_layout_stats(f->ui).nodes_laid_out, 0u);
+}
 TEST_F(ui_tree, text_measure_and_bounded_authored_string, ui_fx) {
 #if defined(DE_UI_TEST_FONTS)
     runtime_fx fonts = {0};

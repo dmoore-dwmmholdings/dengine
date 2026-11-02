@@ -71,12 +71,17 @@ de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 availab
         right = de_ui__length(node->padding[1], available.x, ui->scale, 0),
         bottom = de_ui__length(node->padding[2], available.y, ui->scale, 0),
         left = de_ui__length(node->padding[3], available.x, ui->scale, 0);
-    const DeUiStyle *style = de_entity_get_const(ui->world, record->entity, ui->ids.style);
-    f32 border = style ? style->border_width * ui->scale : 0;
+    f32 border = record->border_width * ui->scale;
     top += border;
     right += border;
     bottom += border;
     left += border;
+    de_vec2 intrinsic = {0};
+    /* A flex leaf without an intrinsic provider only needs padding/border and authored
+     * constraints. Empty grids still measure their declared tracks. */
+    if (node->display == DE_UI_FLEX && record->first_child == DE_UI_NONE_INDEX &&
+        !record->measure_mask)
+        goto dimensions;
     f32 width = de_ui__length(node->width, available.x, ui->scale, available.x),
         height = de_ui__length(node->height, available.y, ui->scale, available.y);
     width = clamp_axis(width, node->min_width, node->max_width, available.x, ui->scale);
@@ -85,10 +90,9 @@ de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 availab
         width = assigned.x;
     if (axes & 2u)
         height = assigned.y;
-    de_vec2 content = {fmaxf(0, width - left - right), fmaxf(0, height - top - bottom)},
-            intrinsic = {0};
+    de_vec2 content = {fmaxf(0, width - left - right), fmaxf(0, height - top - bottom)};
     for (u32 i = 0; i < ui->measure_count; ++i)
-        if (de_entity_has(ui->world, record->entity, ui->measures[i].component)) {
+        if (record->measure_mask & (1u << i)) {
             de_vec2 size = ui->measures[i].measure(ui, record->entity, content);
             intrinsic.x = fmaxf(intrinsic.x, size.x);
             intrinsic.y = fmaxf(intrinsic.y, size.y);
@@ -127,8 +131,11 @@ de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 availab
         else
             children.y += (count - 1) * node->gap * ui->scale;
     }
-    intrinsic.x = fmaxf(intrinsic.x, children.x) + left + right;
-    intrinsic.y = fmaxf(intrinsic.y, children.y) + top + bottom;
+    intrinsic.x = fmaxf(intrinsic.x, children.x);
+    intrinsic.y = fmaxf(intrinsic.y, children.y);
+dimensions:
+    intrinsic.x = intrinsic.x + left + right;
+    intrinsic.y = intrinsic.y + top + bottom;
     intrinsic.x = clamp_axis(de_ui__length(node->width, available.x, ui->scale, intrinsic.x),
                              node->min_width, node->max_width, available.x, ui->scale);
     intrinsic.y = clamp_axis(de_ui__length(node->height, available.y, ui->scale, intrinsic.y),

@@ -150,11 +150,13 @@ static void transition(de_ui_style_system *state, de_entity entity, const de_ui_
 /* A single bounded memo benefits contiguous widget batches without introducing per-frame
  * allocations or sharing authored values, bindings, component handles or tween ownership. */
 static const de_ui_style_cascade *cascade_for(de_ui_style_system *state, u32 type,
-                                              de_name widget_name, de_name class_name, u32 bits) {
+                                              de_name class_name, u32 bits) {
     de_ui_style_cascade *result = &state->last_cascade;
     if (result->revision == state->revision && result->widget == type &&
         result->class_name.hash == class_name.hash && result->state == bits)
         return result;
+    const de_name widget_name =
+        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
     memset(result, 0, sizeof *result);
     result->revision = state->revision;
     result->widget = type;
@@ -210,10 +212,7 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
     if (de_ui_focused(ui).bits == entity.bits && !de_ui_focus_visible(ui))
         bits &= ~2u;
 #endif
-    de_name widget_name =
-        de_name_from(widget_names[type < DE_UI_STYLE_COUNT(widget_names) ? type : 0]);
-    const de_ui_style_cascade *cascade =
-        cascade_for(state, type, widget_name, current_node->style_class, bits);
+    const de_ui_style_cascade *cascade = cascade_for(state, type, current_node->style_class, bits);
     /* Untouched nodes with no matching rules need no authored/applied snapshot. Existing
      * caches must still resolve when their last matching rule disappears. */
     de_ui_style_cache *cache = cached(state, entity, cascade->matches);

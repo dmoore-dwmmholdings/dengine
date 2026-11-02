@@ -95,6 +95,17 @@ de_str de_ui__text_content(de_ui *ui, const DeUiText *text) {
 static void gather(const de_query_chunk *chunk, void *user) {
     de_ui *ui = user;
     const DeUiNode *nodes = chunk->columns[0];
+    const DeUiStyle *styles = chunk->columns[5];
+    const DeUiText *texts = chunk->columns[7];
+    /* Optional columns describe one archetype slice, so presence is shared by every row. */
+    u32 mask = 0;
+    for (u32 component = 0; component < 7; ++component)
+        if (chunk->columns[component + 1])
+            mask |= 1u << component;
+    u32 measure_mask = 0;
+    for (u32 measure = 0; measure < ui->measure_count; ++measure)
+        if (de_entity_has(ui->world, chunk->entities[0], ui->measures[measure].component))
+            measure_mask |= 1u << measure;
     for (u32 i = 0; i < chunk->count; ++i) {
         de_entity entity = chunk->entities[i];
         u32 index = de_ui__find(ui, entity);
@@ -108,21 +119,18 @@ static void gather(const de_query_chunk *chunk, void *user) {
         /* Color, opacity and other paint values do not change geometry. Border
          * width is the style input consumed by measure/arrange, including its
          * default zero when the style component is removed. */
-        const DeUiStyle *style = de_entity_get_const(ui->world, entity, ui->ids.style);
+        const DeUiStyle *style = styles ? &styles[i] : NULL;
         const f32 border_width = style ? style->border_width : 0;
         if (border_width != record->border_width) {
             record->border_width = border_width;
             record->dirty = record->measure_dirty = true;
         }
-        de_component components[] = {ui->ids.anchor, ui->ids.grid,  ui->ids.grid_item,
-                                     ui->ids.popup,  ui->ids.style, ui->ids.image,
-                                     ui->ids.text};
-        u32 mask = 0;
-        for (u32 component = 0; component < 7; ++component)
-            if (de_entity_has(ui->world, entity, components[component]))
-                mask |= 1u << component;
         if (mask != record->component_mask) {
             record->component_mask = mask;
+            record->dirty = record->measure_dirty = true;
+        }
+        if (measure_mask != record->measure_mask) {
+            record->measure_mask = measure_mask;
             record->dirty = record->measure_dirty = true;
         }
         de_entity parent = de_entity_parent(ui->world, entity);
@@ -132,7 +140,7 @@ static void gather(const de_query_chunk *chunk, void *user) {
             record->dirty = record->measure_dirty = true;
         }
         record->first_child = record->next_sibling = DE_UI_NONE_INDEX;
-        const DeUiText *text = de_entity_get_const(ui->world, entity, ui->ids.text);
+        const DeUiText *text = texts ? &texts[i] : NULL;
         if (text) {
             u64 locale_generation =
                 text->loc_id.hash && ui->desc.text ? de_loc_generation(ui->desc.text) : 0;
@@ -328,7 +336,16 @@ void de_ui_attach(de_ui *ui, de_world *world) {
         return;
     }
     de_query_term term = {ui->ids.node, DE_READ};
-    de_query_desc all = {.terms = &term, .term_count = 1};
+    /* Keep optional columns in the component-mask order consumed by gather. */
+    de_query_term terms[] = {term,
+                             {ui->ids.anchor, DE_OPTIONAL_READ},
+                             {ui->ids.grid, DE_OPTIONAL_READ},
+                             {ui->ids.grid_item, DE_OPTIONAL_READ},
+                             {ui->ids.popup, DE_OPTIONAL_READ},
+                             {ui->ids.style, DE_OPTIONAL_READ},
+                             {ui->ids.image, DE_OPTIONAL_READ},
+                             {ui->ids.text, DE_OPTIONAL_READ}};
+    de_query_desc all = {.terms = terms, .term_count = sizeof terms / sizeof terms[0]};
     ui->all_nodes = de_query_create(world, &all);
     de_component changes[] = {ui->ids.node,      ui->ids.anchor,         ui->ids.grid,
                               ui->ids.grid_item, ui->ids.popup,          ui->ids.image,
