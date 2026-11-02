@@ -245,12 +245,12 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
                 DE_OK) {
                 const de_error *e = de_error_last();
                 /* Keep the entity/component prefix, then bound the diagnostic to what fits. */
-                const int n = snprintf(err, err_cap, "entity %u, %s: ", i, key);
-                if (n >= 0 && (size_t)n < err_cap) {
-                    const size_t remaining = err_cap - (size_t)n;
+                const int prefix_length = snprintf(err, err_cap, "entity %u, %s: ", i, key);
+                if (prefix_length >= 0 && (size_t)prefix_length < err_cap) {
+                    const size_t remaining = err_cap - (size_t)prefix_length;
                     const int precision =
                         remaining - 1 > (size_t)INT_MAX ? INT_MAX : (int)(remaining - 1);
-                    snprintf(err + n, remaining, "%.*s", precision,
+                    snprintf(err + prefix_length, remaining, "%.*s", precision,
                              e != NULL ? e->message : "bad value");
                 }
                 de_error_clear();
