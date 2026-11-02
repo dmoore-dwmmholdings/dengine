@@ -683,8 +683,11 @@ TEST(d3d12, bindless_indices) {
     ASSERT_TRUE(DE_HANDLE_VALID(b));
     watch_end(d, de_gpu_buffer_bindless(d, b), &w);
     watch_end(d, de_gpu_buffer_bindless(d, b) + DE__D3D12_BUFFER_SRV_OFFSET, &ro);
-    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET + DE__D3D12_BINDLESS_BUFFERS,
-              DE__D3D12_RESOURCE_HEAP_SIZE); /* the read-only range is the last one */
+    /* DENG-734: the read-only range ends at the actual TLAS range, which ends the heap. */
+    const de__gpu_index_space *accels = &d->bindless.spaces[DE__GPU_BINDLESS_ACCEL];
+    EXPECT_EQ(buffer0 + DE__D3D12_BUFFER_SRV_OFFSET + DE__D3D12_BINDLESS_BUFFERS, accels->first);
+    EXPECT_EQ(accels->capacity - accels->first, DE__D3D12_BINDLESS_ACCELS);
+    EXPECT_EQ(accels->capacity, DE__D3D12_RESOURCE_HEAP_SIZE);
     de_gpu_buffer_desc ud = {
         .size = 64, .usage = DE_USAGE_CONSTANT, .memory = DE_MEM_UPLOAD, .name = "u"};
     watch_begin(d, false, buffer0 + 1, &w);
