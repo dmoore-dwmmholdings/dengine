@@ -91,6 +91,17 @@ incomplete capture is reported explicitly; debugger success is not a passing tes
 Checks runs the portable capture controls natively on Windows, including real
 failed-CTest log preservation. That job does not qualify actual CDB execution.
 
+For DENG-723, a failed headless Windows Release job inspects the exact LLDB selected
+in its CMake cache with `tools/diagnostics/windows_lldb_loader.py`. The collector
+uses the original test's working directory, records a separate `--version` status,
+and traverses DUMPBIN dependency lists within fixed time/module bounds. Reports and
+raw output go under `test-dumps/deng723-loader/` in the existing logs artifact.
+The original CTest result, cache, logs and inspected binaries are fingerprinted
+and preserved. Import candidates are not proof of actual loader resolution;
+API sets, KnownDLLs, redirection, delay imports and runtime loads need causal
+confirmation. Nothing is installed and PATH is unchanged. Portable controls run
+as the `check`-labeled `windows_lldb_loader_selftest` and natively in Windows Checks.
+
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).
 

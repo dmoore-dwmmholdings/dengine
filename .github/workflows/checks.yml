@@ -200,3 +200,5 @@ jobs:
       # Native subprocess/path controls only; actual CDB evidence remains the CI step.
       - name: Preserve failed CTest evidence and debugger callback paths
         run: python -m unittest discover -s tools/diagnostics -p test_windows_rt_crash.py -v
+      - name: Preserve Windows LLDB loader diagnostic evidence
+        run: python -m unittest discover -s tools/diagnostics -p test_windows_lldb_loader.py -v

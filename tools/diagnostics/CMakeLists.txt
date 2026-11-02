@@ -21,3 +21,10 @@ add_test(NAME windows_rt_crash_selftest
             -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_windows_rt_crash.py -v)
 set_tests_properties(windows_rt_crash_selftest
     PROPERTIES LABELS check TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+# DENG-723: loader evidence controls; actual collection needs the failed Windows job.
+add_test(NAME windows_lldb_loader_selftest
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_windows_lldb_loader.py -v)
+set_tests_properties(windows_lldb_loader_selftest
+    PROPERTIES LABELS check TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")

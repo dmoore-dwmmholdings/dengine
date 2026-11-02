@@ -161,6 +161,12 @@ jobs:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
         run: python3 tools/diagnostics/windows_rt_crash.py --test-dir "build/${PRESET}" --catalog "build/${PRESET}/deng736-catalog.json"
 
+      # DENG-723: preserve the real failed test; inspect only its selected debugger.
+      - name: Collect failed Windows LLDB loader evidence
+        if: ${{ failure() && steps.build.outcome == 'success' && matrix.preset == 'windows-headless-release' }}
+        shell: bash
+        run: python3 tools/diagnostics/windows_lldb_loader.py --test-dir "build/${PRESET}"
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
