@@ -52,8 +52,8 @@ TEST(model_frames, bind_points_come_from_inverse_bind_not_rest_pose) {
     u8 matrices[3 * 48];
     for (u32 i = 0; i < 3; ++i) {
         de_affine matrix = de_affine_identity();
-        matrix.m[9] = i == 1 ? -1 : 0;
-        matrix.m[10] = i == 2 ? -2 : 0;
+        matrix.m[9] = i == 1 ? -1.0f : 0.0f;
+        matrix.m[10] = i == 2 ? -2.0f : 0.0f;
         for (u32 k = 0; k < 12; ++k) {
             u32 bits;
             memcpy(&bits, &matrix.m[k], 4);

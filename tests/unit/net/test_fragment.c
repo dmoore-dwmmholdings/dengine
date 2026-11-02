@@ -239,7 +239,8 @@ TEST(net_fragment, encrypted_unreliable_missing_part_never_delivers_reclaims_poo
     ASSERT_EQ(out.count, 0u);
     ASSERT_TRUE(de__chan_fragment_stats(r.channel[1]).peak_bytes > 0);
     ASSERT_EQ(de__chan_fragment_stats(r.channel[1]).used_bytes, 0u);
-    ASSERT_EQ(de__chan_get_stats(r.channel[0]).pending[0], 0u);
+    const de__chan_stats st = de__chan_get_stats(r.channel[0]);
+    ASSERT_EQ(st.pending[0], 0u);
     fragment_rig_close(&r);
 }
 TEST(net_fragment, encrypted_reliable_pool_protocol_error_disconnects_with_reason) {
@@ -300,3 +301,28 @@ TEST(net_fragment, ordered_raw_message_cannot_interrupt_an_unfinished_fragmented
     fragment_rig_close(&r);
 }
 #endif
+
+TEST(net_fragment, full_capacity_reassembly_survives_reset_without_allocating) {
+    const u32 capacity = 2u * DE__FRAGMENT_SLICE;
+    for (u32 i = 0; i < capacity; ++i)
+        payload[i] = (u8)(i * 37u + i / DE__FRAGMENT_SLICE);
+    de__fragment_pool *p = create(capacity);
+    delivered out = {payload, capacity, 0, DE_CHANNEL_RELIABLE_UNORDERED};
+    const size_t allocated = de__fragment_get_stats(p).allocated_bytes;
+    de_alloc_guard guard = {0};
+    de_alloc_guard_begin(&guard);
+    for (u32 round = 0; round < 3; ++round) {
+        /* Reset must release message IDs and retain the same full byte capacity. */
+        de__fragment_reset(p);
+        ASSERT_EQ(de__fragment_get_stats(p).allocated_bytes, allocated);
+        ASSERT_EQ(push(p, out.channel, 42, 1, capacity, round, &out), DE_OK);
+        ASSERT_EQ(de__fragment_get_stats(p).used_bytes, capacity);
+        ASSERT_EQ(push(p, out.channel, 42, 0, capacity, round, &out), DE_OK);
+        ASSERT_EQ(out.count, round + 1);
+        ASSERT_EQ(de__fragment_get_stats(p).used_bytes, 0u);
+        ASSERT_EQ(de__fragment_get_stats(p).peak_bytes, capacity);
+    }
+    de_alloc_guard_end(&guard);
+    DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+    de__fragment_destroy(p);
+}

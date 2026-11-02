@@ -424,3 +424,10 @@ if(NOT DE_IS_SHIPPING AND NOT DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         LIBS de_host de_tp_dide_protocol LABELS unit host)
     target_include_directories(test_editor_headless PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-714: actual capability/schema responses, without a GPU or editor connection.
+if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_settings_gate SOURCES test_settings_gate.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_settings_gate PRIVATE "${DE_ROOT_DIR}/src")
+endif()

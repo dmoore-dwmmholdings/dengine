@@ -43,6 +43,7 @@ static struct {
     bool pending;
 } g_settings;
 
+#if DE_HAS_COOKER
 static void *budget_alloc(void *user, size_t size, size_t align, u32 tag) {
     settings_job *job = user;
     const u64 live = de_atomic_load_u64(&job->live, DE_ATOMIC_RELAXED);
@@ -64,6 +65,7 @@ static void *budget_alloc(void *user, size_t size, size_t align, u32 tag) {
     }
     return p;
 }
+#endif
 static void budget_free(void *user, void *ptr, size_t size) {
     if (!ptr)
         return;
@@ -72,6 +74,7 @@ static void budget_free(void *user, void *ptr, size_t size) {
     const u64 live = de_atomic_load_u64(&job->live, DE_ATOMIC_RELAXED);
     de_atomic_store_u64(&job->live, live - size, DE_ATOMIC_RELEASE);
 }
+#if DE_HAS_COOKER
 static void *budget_realloc(void *user, void *ptr, size_t old_size, size_t size, size_t align,
                             u32 tag) {
     void *p = budget_alloc(user, size, align, tag);
@@ -81,6 +84,7 @@ static void *budget_realloc(void *user, void *ptr, size_t old_size, size_t size,
     }
     return p;
 }
+#endif
 static void job_free(settings_job *job) {
     if (!job)
         return;
@@ -90,6 +94,7 @@ static void job_free(settings_job *job) {
     DE_FREE(de_heap_allocator(), job->params, job->param_bytes);
     DE_FREE(de_heap_allocator(), job, sizeof *job);
 }
+#if DE_HAS_COOKER
 static de_result make_png(settings_job *job, u32 index, u32 width, u32 height, const u8 *pixels) {
     const size_t size = de__ed_preview_png_size(width, height);
     job->png[index] = DE_ALLOC(&job->allocator, size, 16, DE_MEM_ASSET);
@@ -265,6 +270,7 @@ static i32 cook(void *user) {
     de_atomic_store_u32(&job->done, 1, DE_ATOMIC_RELEASE);
     return 0;
 }
+#endif
 static void reset(de__editor *ed) {
     (void)ed;
     g_settings.pending = false;
@@ -345,10 +351,10 @@ static void on_preview(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                        mpack_writer_t *w) {
     DE__ED_PARAMS(asset_preview_settings, de_ep_asset_preview_params, q);
 #if !DE_HAS_COOKER
+    (void)ed;
     (void)q;
     de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "settings previews require the Dev cooker");
-    return;
-#endif
+#else
     if (!ed->e->assets || !ed->e->assets->manifest ||
         ed->e->assets->desc.mode == DE_ASSET_MODE_PACKED) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "settings previews require source assets");
@@ -413,6 +419,7 @@ static void on_preview(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
     g_settings.accepted_revision = g_settings.revision;
     g_settings.pending = true;
     de__ed_defer(ed);
+#endif
 }
 static de_result stats(int argc, const char *const *argv, void *user) {
     (void)argv;

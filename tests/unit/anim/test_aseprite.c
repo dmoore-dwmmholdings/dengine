@@ -112,7 +112,6 @@ static size_t find_chunk(ase_fx *f, u16 type, u32 occurrence) {
         frame = end;
     }
     FAIL("fixture chunk missing");
-    return 0;
 }
 static void invalid(ase_fx *f) {
     const char *why = NULL;

@@ -130,7 +130,8 @@ TEST(net_cc, reliable_full_size_resends_do_not_starve_behind_tiny_new_messages) 
     DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
     ASSERT_TRUE(w.large > 20);
     ASSERT_TRUE(w.max_gap < 1000u * MS);
-    ASSERT_TRUE(de__chan_get_stats(c).channel[1].resends > 20);
+    const de__chan_stats st = de__chan_get_stats(c);
+    ASSERT_TRUE(st.channel[1].resends > 20);
     ASSERT_TRUE(de__conn_stats(c).loss > .95f);
     de__chan_destroy(c);
 }

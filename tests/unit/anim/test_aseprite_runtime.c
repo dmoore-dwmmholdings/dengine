@@ -336,7 +336,7 @@ TEST_F(aseprite_runtime, unlimited_directions_and_component_pingpong_match_expan
                 de_entity e = spawn(f, tag);
                 DeSpriteAnimator *a =
                     de_entity_get(f->base.world, e, f->base.anim->sprite_component);
-                a->speed = backwards ? -1 : 1;
+                a->speed = backwards ? -1.0f : 1.0f;
                 a->ping_pong = override != 0;
                 for (u32 ms = 0; ms < period * 3u; ++ms) {
                     tick(f, ms ? .001f : 0);

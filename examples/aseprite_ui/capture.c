@@ -66,7 +66,7 @@ static de_result request(int argc, const char *const *argv, void *user) {
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "aseprite_ui.capture <writable-vpath>");
     if (capture.active)
         return DE_FAIL(DE_ERR_BUSY, "a UI capture is already pending");
-    strcpy(capture.path, argv[1]);
+    memcpy(capture.path, argv[1], strlen(argv[1]) + 1);
     capture.after_frame = de_renderer_completed_frame(capture.engine->renderer) + 4;
     atomic_store_explicit(&capture.recorded, 0, memory_order_release);
     capture.active = true;

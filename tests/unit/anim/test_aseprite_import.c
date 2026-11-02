@@ -120,7 +120,8 @@ TEST_F(aseprite_import, builtin_atlas_clip_geometry_tags_slices_and_keep_layers,
     EXPECT_EQ(layer.atlas, v.atlas);
     EXPECT_EQ(layer.frame_count, v.frame_count);
     /* Hidden green pixels at (0,0) cannot expand the measured bounds. */
-    EXPECT_EQ(de__sprite_frame_at(&layer, 0).trim[0], 1u);
+    const de__sprite_frame frame = de__sprite_frame_at(&layer, 0);
+    EXPECT_EQ(frame.trim[0], 1u);
 }
 TEST_F(aseprite_import, full_cooker_twice_is_byte_identical_on_files_and_subassets, ase_import_fx) {
     de_asset_type_desc descriptor;

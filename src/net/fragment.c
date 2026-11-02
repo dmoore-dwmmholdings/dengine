@@ -24,8 +24,11 @@ struct de__fragment_pool {
     assembly messages[DE__FRAGMENT_SLOTS];
     retired tombstones[DE__FRAGMENT_SLOTS];
     u32 retired_next;
-    u8 data[];
 };
+/* The bounded byte pool follows the header in its single allocation. */
+static u8 *storage(de__fragment_pool *p) {
+    return (u8 *)p + sizeof *p;
+}
 static u16 read16(const u8 *p) {
     return (u16)((u16)p[0] | ((u16)p[1] << 8));
 }
@@ -236,7 +239,8 @@ de_result de__fragment_push(de__fragment_pool *p, de_channel ch, const void *bod
         p->stats.dropped++;
         return ch == DE_CHANNEL_UNRELIABLE ? DE_ERR_BUSY : DE_ERR_OUT_OF_MEMORY;
     }
-    u8 *dest = p->data + (size_t)a->page * DE__FRAGMENT_SLICE + (u32)v.index * DE__FRAGMENT_SLICE;
+    u8 *dest =
+        storage(p) + (size_t)a->page * DE__FRAGMENT_SLICE + (u32)v.index * DE__FRAGMENT_SLICE;
     const u64 bit = (u64)1 << (v.index % 64u);
     if (a->bitmap[v.index / 64u] & bit) {
         if (memcmp(dest, v.data, v.bytes) == 0)
@@ -248,7 +252,7 @@ de_result de__fragment_push(de__fragment_pool *p, de_channel ch, const void *bod
     memcpy(dest, v.data, v.bytes);
     a->bitmap[v.index / 64u] |= bit;
     if (++a->received == a->count) {
-        fn(user, ch, p->data + (size_t)a->page * DE__FRAGMENT_SLICE, a->total);
+        fn(user, ch, storage(p) + (size_t)a->page * DE__FRAGMENT_SLICE, a->total);
         retire(p, ch, a->id, now);
         release(p, a);
         p->stats.completed++;

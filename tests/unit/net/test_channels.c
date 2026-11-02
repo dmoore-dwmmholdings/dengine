@@ -130,9 +130,11 @@ TEST(net_channels, rejects_invalid_send_and_bounds_send_storage_and_failed_flush
     ASSERT_EQ(st.channel[0].dropped, 257u);
     out.fail = false;
     ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
-    ASSERT_EQ(de__chan_get_stats(c).channel[1].msgs_out, 256u);
+    st = de__chan_get_stats(c);
+    ASSERT_EQ(st.channel[1].msgs_out, 256u);
     de__chan_reset(c);
-    ASSERT_EQ(de__chan_get_stats(c).pending[1], 0u);
+    st = de__chan_get_stats(c);
+    ASSERT_EQ(st.pending[1], 0u);
     de__chan_destroy(c);
 }
 
@@ -145,17 +147,20 @@ TEST(net_channels, malformed_body_cannot_ack_or_partially_deliver_and_absent_ack
     ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
     de__chan_packet_header(data, 0, false, 0, 0);
     ASSERT_EQ(de__conn_read_payload(c, data, DE__CHAN_HEADER), DE_OK);
-    ASSERT_EQ(de__chan_get_stats(c).pending[1], 1u);
+    de__chan_stats st = de__chan_get_stats(c);
+    ASSERT_EQ(st.pending[1], 1u);
     const u32 bytes = packet(data, 1, DE_CHANNEL_RELIABLE_ORDERED, 0, &value, 1);
     de__chan_packet_header(data, 1, true, 0, 0);
     data[bytes] = 0; // malformed final message after a valid one
     ASSERT_EQ(de__conn_read_payload(c, data, bytes + 1), DE_ERR_PARSE);
-    ASSERT_EQ(de__chan_get_stats(c).pending[1], 1u);
+    st = de__chan_get_stats(c);
+    ASSERT_EQ(st.pending[1], 1u);
     u32 delivered = 0;
     de__chan_receive(c, count_message, &delivered);
     ASSERT_EQ(delivered, 0u);
     ASSERT_EQ(de__conn_read_payload(c, data, bytes), DE_OK);
-    ASSERT_EQ(de__chan_get_stats(c).pending[1], 0u);
+    st = de__chan_get_stats(c);
+    ASSERT_EQ(st.pending[1], 0u);
     de__chan_receive(c, count_message, &delivered);
     ASSERT_EQ(delivered, 1u);
     // ACK-only packets must not create an infinite acknowledgement ping-pong.
@@ -225,7 +230,8 @@ TEST(net_channels, stale_packet_ack_cannot_clear_reused_message_id_generation) {
               DE_OK); // id0, generation65536
     ASSERT_EQ(de__conn_write_packets(c, now), DE_OK);
     ack(c, peer_sequence, 0, 0);
-    ASSERT_EQ(de__chan_get_stats(c).pending[1], 1u);
+    const de__chan_stats st = de__chan_get_stats(c);
+    ASSERT_EQ(st.pending[1], 1u);
     de__chan_destroy(c);
 }
 
@@ -243,10 +249,12 @@ TEST(net_channels, actual_sent_ring_accepts_every_selective_ack_bit) {
         }
         if (distance) {
             ack(c, 0, (u16)distance, 0);
-            ASSERT_EQ(de__chan_get_stats(c).pending[1], 1u);
+            const de__chan_stats st = de__chan_get_stats(c);
+            ASSERT_EQ(st.pending[1], 1u);
         }
         ack(c, 1, (u16)distance, distance ? 1u << (distance - 1) : 0);
-        ASSERT_EQ(de__chan_get_stats(c).pending[1], 0u);
+        const de__chan_stats st = de__chan_get_stats(c);
+        ASSERT_EQ(st.pending[1], 0u);
         de__chan_destroy(c);
     }
 }
@@ -404,7 +412,8 @@ TEST(net_channels, reconnect_discards_bindings_and_fresh_bind_resets_pending_mes
     ASSERT_EQ(r.raw_received, 2u); // neither old non-owning pointer survived reconnect
     ASSERT_EQ(de__net_client_bind_channels(r.client, r.channel[0]), DE_OK);
     ASSERT_EQ(de__net_server_bind_channels(r.server, 0, r.channel[1]), DE_OK);
-    ASSERT_EQ(de__chan_get_stats(r.channel[0]).pending[1], 0u);
+    const de__chan_stats st = de__chan_get_stats(r.channel[0]);
+    ASSERT_EQ(st.pending[1], 0u);
     ASSERT_EQ(de__chan_send(r.channel[0], DE_CHANNEL_RELIABLE_ORDERED, &value, 1), DE_OK);
     ASSERT_EQ(de__conn_write_packets(r.channel[0], r.now), DE_OK);
     de__net_server_update(r.server);
@@ -518,8 +527,10 @@ TEST(net_channels, encrypted_packet_and_message_sequences_cross_wrap_twice) {
     for (u32 ch = 0; ch < 3; ++ch)
         ASSERT_EQ(received[1]->count[ch], TOTAL);
     ASSERT_TRUE(de__chan_get_stats(r.channel[0]).packets_out >= TOTAL);
-    ASSERT_EQ(de__chan_get_stats(r.channel[0]).pending[1], 0u);
-    ASSERT_EQ(de__chan_get_stats(r.channel[0]).pending[2], 0u);
+    const de__chan_stats st = de__chan_get_stats(r.channel[0]);
+    ASSERT_EQ(st.pending[1], 0u);
+    const de__chan_stats second = de__chan_get_stats(r.channel[0]);
+    ASSERT_EQ(second.pending[2], 0u);
     free(received[0]);
     free(received[1]);
     close_rig(&r);

@@ -194,14 +194,14 @@ TEST_F(sprite_anim, unequal_durations_match_millisecond_oracle_in_both_direction
                 EXPECT_EQ(sprite_index(f, e), frame_at[phase]);
                 i64 step = backwards ? -1 : 1;
                 for (i64 ms = previous; ms != now;) {
-                    i64 before = ms % period;
-                    if (before < 0)
-                        before += period;
+                    i64 phase_before = ms % period;
+                    if (phase_before < 0)
+                        phase_before += period;
                     ms += step;
                     i64 after = ms % period;
                     if (after < 0)
                         after += period;
-                    if ((backwards && boundary[before]) || (!backwards && boundary[after])) {
+                    if ((backwards && boundary[phase_before]) || (!backwards && boundary[after])) {
                         event = de_event_next(f->base.world, &reader);
                         ASSERT_TRUE(event);
                         EXPECT_EQ(event->entity.bits, e.bits);

@@ -13,7 +13,7 @@ static f32 half(u16 h) {
 }
 static u8 channel(f32 v, bool srgb) {
     if (!isfinite(v))
-        v = v > 0 ? 1 : 0;
+        v = v > 0 ? 1.0f : 0.0f;
     v = fmaxf(0, fminf(1, v));
     if (srgb)
         v = v <= .0031308f ? v * 12.92f : 1.055f * powf(v, 1.0f / 2.4f) - .055f;
