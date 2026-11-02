@@ -22,6 +22,8 @@ if(DE_BUILD_TESTS AND TARGET de_net)
         add_executable(test_net_sim_${_sim_config} test_net_sim_noop.c
             "${DE_ROOT_DIR}/src/net/net_sim.c")
         target_link_libraries(test_net_sim_${_sim_config} PRIVATE de_build_flags)
+        # The same deterministic source contract applies when compiled outside de_net.
+        target_compile_options(test_net_sim_${_sim_config} PRIVATE ${DE_DETERMINISTIC_FLAGS})
         target_include_directories(test_net_sim_${_sim_config} PRIVATE
             "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/include")
         if(DE_COMPILER_FRONTEND STREQUAL "MSVC")
@@ -36,6 +38,7 @@ if(DE_BUILD_TESTS AND TARGET de_net)
             endif()
         endif()
         target_compile_definitions(test_net_sim_${_sim_config} PRIVATE
+            DE_STATIC
             EXPECT_SHIPPING=$<IF:$<STREQUAL:${_sim_config},shipping>,1,0>)
         add_test(NAME net_sim_noop_${_sim_config} COMMAND "$<TARGET_FILE:test_net_sim_${_sim_config}>")
         set_tests_properties(net_sim_noop_${_sim_config} PROPERTIES LABELS "unit;net" TIMEOUT 10)

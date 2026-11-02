@@ -343,18 +343,22 @@ TEST(net_sim, invalid_limits_and_settings_keep_socket_ownership) {
     open_rig(&r, 4, 0, false);
     const de_net_sim good = {.latency_ms = 10};
     ASSERT_EQ(de__net_sim_set(r.tx, &good), DE_OK);
-    for (u32 i = 0; i < 4; ++i) {
-        de_net_sim bad = good;
-        if (i == 0)
-            bad.loss = NAN;
-        if (i == 1)
-            bad.duplicate = INFINITY;
-        if (i == 2)
-            bad.loss = -1;
-        if (i == 3)
-            bad.jitter_ms = 5001;
-        EXPECT_EQ(de__net_sim_set(r.tx, &bad), DE_ERR_INVALID_ARGUMENT);
-    }
+    const f32 invalid_rates[] = {NAN, INFINITY, -INFINITY, -1, -.01f, 1.01f, 2};
+    for (u32 field = 0; field < 2; ++field)
+        for (u32 i = 0; i < sizeof invalid_rates / sizeof invalid_rates[0]; ++i) {
+            de_net_sim bad = good;
+            if (field == 0)
+                bad.loss = invalid_rates[i];
+            else
+                bad.duplicate = invalid_rates[i];
+            EXPECT_EQ(de__net_sim_set(r.tx, &bad), DE_ERR_INVALID_ARGUMENT);
+        }
+    de_net_sim bad = good;
+    bad.jitter_ms = 5001;
+    EXPECT_EQ(de__net_sim_set(r.tx, &bad), DE_ERR_INVALID_ARGUMENT);
+    bad = good;
+    bad.latency_ms = 5001;
+    EXPECT_EQ(de__net_sim_set(r.tx, &bad), DE_ERR_INVALID_ARGUMENT);
     send_packet(&r, 7);
     EXPECT_EQ(de__net_sim_get_stats(r.tx).pending_out, 1u);
     de__socket *out = NULL;
@@ -365,6 +369,9 @@ TEST(net_sim, invalid_limits_and_settings_keep_socket_ownership) {
     ASSERT_EQ(de__net_sim_pump(r.tx), DE_OK);
     packet p;
     ASSERT_EQ(receive(&r, &p, 1), 1u);
+    EXPECT_EQ(p.id, 7u);
+    EXPECT_EQ(de__net_sim_set(r.tx, &(de_net_sim){.loss = 1, .duplicate = 1}), DE_OK);
+    EXPECT_EQ(de__net_sim_set(r.tx, &(de_net_sim){.loss = -0.0f, .duplicate = -0.0f}), DE_OK);
     close_rig(&r);
 }
 TEST(net_sim, zero_delay_duplication_is_immediate) {

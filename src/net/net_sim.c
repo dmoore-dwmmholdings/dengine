@@ -4,7 +4,6 @@
 #include <dengine/de_debug.h>
 #include <dengine/de_math.h>
 #include <dengine/de_platform.h>
-#include <math.h>
 #include <string.h>
 
 #define SIM_MEMORY_MAX   (64u << 20)
@@ -308,9 +307,10 @@ static void sim_close(de__socket *socket) {
 
 de_result de__net_sim_set(de__socket *socket, const de_net_sim *settings) {
     simulator *s = as_sim(socket);
+    /* Ordered bounds reject NaN and infinities without a libm dependency. */
     if (!s || !settings || settings->latency_ms > 5000 || settings->jitter_ms > 5000 ||
-        !isfinite(settings->loss) || settings->loss < 0 || settings->loss > 1 ||
-        !isfinite(settings->duplicate) || settings->duplicate < 0 || settings->duplicate > 1)
+        !(settings->loss >= 0 && settings->loss <= 1) ||
+        !(settings->duplicate >= 0 && settings->duplicate <= 1))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "net simulator: delays 0..5000 ms, rates 0..1");
     s->settings = *settings;
     s->desc.use_cvars = false;
