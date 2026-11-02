@@ -41,12 +41,22 @@ static void memory_fault(void) {
 static de_alloc_guard guard;
 static int result_fd;
 
+/* Both pipe markers fit in PIPE_BUF. Preserve a failed write as missing evidence. */
+static bool write_marker(int fd, const void *data, size_t bytes) {
+    ssize_t written;
+    do {
+        written = write(fd, data, bytes);
+    } while (written < 0 && errno == EINTR);
+    return written >= 0 && (size_t)written == bytes;
+}
+
 static void guard_done(const de_crash_context *ctx, void *user) {
     (void)ctx;
     (void)user;
     de_alloc_guard_end(&guard);
     const u64 n = de_alloc_guard_offences(&guard);
-    (void)write(result_fd, &n, sizeof n);
+    if (!write_marker(result_fd, &n, sizeof n))
+        close(result_fd); /* The parent rejects the short count; the fatal chain continues. */
 }
 
 static void no_sigpipe(int fd) {
@@ -302,7 +312,8 @@ TEST(editor_crash, interrupted_writer_is_never_waited_on_or_interleaved) {
         de__ed_crash_report(&c, NULL);
         if (de__ed_crash_frozen())
             _exit(4);
-        (void)write(ready[1], "x", 1);
+        if (!write_marker(ready[1], "x", 1))
+            _exit(7);
         (void)pthread_join(thread, NULL);
         if (b.result != DE_EP_IO_OK || !de__ed_crash_arm(&b.conn, 99))
             _exit(5);
