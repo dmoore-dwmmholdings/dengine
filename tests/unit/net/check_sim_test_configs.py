@@ -35,6 +35,17 @@ def main() -> None:
         # Ad-hoc signing is only for these temporary Xcode command-line probes.
         (fixture / "CMakeLists.txt").write_text(
             f'''cmake_minimum_required(VERSION 3.28)
+# project() runs compiler ABI try_compile before DeBuildTypes is included.
+# Apply its launcher-compatible debug format early, including inherited sccache.
+if(NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    foreach(_lang C CXX)
+        if(CMAKE_${{_lang}}_COMPILER_LAUNCHER
+           OR NOT "$ENV{{CMAKE_${{_lang}}_COMPILER_LAUNCHER}}" STREQUAL "")
+            set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+                "$<$<CONFIG:Debug,Dev,RelWithDebInfo>:Embedded>")
+        endif()
+    endforeach()
+endif()
 project(test_configuration_probe C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
