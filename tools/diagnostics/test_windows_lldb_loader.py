@@ -29,11 +29,13 @@ class LoaderEvidence(unittest.TestCase):
         (self.system / "System32").mkdir(parents=True)
         self.working = self.build / "tests/unit/reflect"
         self.working.mkdir(parents=True)
-        (self.build / "CMakeCache.txt").write_text(f"DE_LLDB_EXECUTABLE:FILEPATH={self.tool}\n")
-        (self.logs / "LastTestsFailed.log").write_text("1986:debugger.native_lldb\n")
+        # CMake/CTest evidence is UTF-8, including the intentional Unicode path.
+        (self.build / "CMakeCache.txt").write_text(
+            f"DE_LLDB_EXECUTABLE:FILEPATH={self.tool}\n", encoding="utf-8")
+        (self.logs / "LastTestsFailed.log").write_text("1986:debugger.native_lldb\n", encoding="utf-8")
         (self.logs / "LastTest.log").write_text(
             f"1986/2158 Testing: debugger.native_lldb\n1986/2158 Test: debugger.native_lldb\n"
-            f"Command: unchanged command\nDirectory: {self.working}\nOutput:\nfailed\n")
+            f"Command: unchanged command\nDirectory: {self.working}\nOutput:\nfailed\n", encoding="utf-8")
         self.output = self.build / "test-dumps/deng723-loader"
 
     def collect(self, imports, mutate=None):
@@ -44,7 +46,8 @@ class LoaderEvidence(unittest.TestCase):
                 log.write_bytes(b"")
                 return {"exit": 3221225781, "exitHex": "0xc0000135"}
             name = Path(command[-1]).name
-            log.write_text("File Type: DLL\n" + "".join(f"    {n}\n" for n in imports[name]))
+            log.write_text("File Type: DLL\n" + "".join(f"    {n}\n" for n in imports[name]),
+                           encoding="utf-8")
             if mutate:
                 mutate()
             return {"exit": 0}
@@ -53,7 +56,7 @@ class LoaderEvidence(unittest.TestCase):
                 mock.patch.object(loader.shutil, "which", return_value="dumpbin"), \
                 contextlib.redirect_stdout(io.StringIO()):
             result = loader.collect(self.build, self.output)
-        return result, json.loads((self.output / "manifest.json").read_text())
+        return result, json.loads((self.output / "manifest.json").read_text(encoding="utf-8"))
 
     def test_transitive_missing_import_keeps_original_failure_and_real_status(self):
         (self.tool.parent / "liblldb.dll").write_bytes(b"native library")
@@ -62,7 +65,7 @@ class LoaderEvidence(unittest.TestCase):
         code, report = self.collect({"lldb.exe": ["liblldb.dll", "KERNEL32.dll"],
                                      "liblldb.dll": ["missing_runtime.dll", "api-ms-win-core-x.dll",
                                                      "liblldb.dll"]})
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, report)
         self.assertEqual(report["versionProbe"]["exit"], 3221225781)
         self.assertEqual(len(report["modules"]), 2)  # Cycle bounded; OS not traversed.
         self.assertEqual(report["unlocatedImports"],
@@ -75,7 +78,7 @@ class LoaderEvidence(unittest.TestCase):
         self.assertEqual(before, {p: p.read_bytes() for p in self.logs.iterdir()})
 
     def test_no_matching_failure_refuses_diagnostic_without_touching_logs(self):
-        (self.logs / "LastTestsFailed.log").write_text("123:some.other.test\n")
+        (self.logs / "LastTestsFailed.log").write_text("123:some.other.test\n", encoding="utf-8")
         code, report = self.collect({})
         self.assertEqual(code, 2)
         self.assertEqual(report["status"], "incomplete")
@@ -85,12 +88,13 @@ class LoaderEvidence(unittest.TestCase):
     def test_inspected_debugger_mutation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "debugger files changed"):
             self.collect({"lldb.exe": []}, lambda: self.tool.write_bytes(b"changed"))
-        report = json.loads((self.output / "manifest.json").read_text())
+        report = json.loads((self.output / "manifest.json").read_text(encoding="utf-8"))
         self.assertFalse(report["inspectedModulesUnchanged"])
 
     def test_original_log_mutation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "original evidence"):
-            self.collect({"lldb.exe": []}, lambda: (self.logs / "LastTest.log").write_text("clobbered"))
+            self.collect({"lldb.exe": []}, lambda: (self.logs / "LastTest.log").write_text(
+                "clobbered", encoding="utf-8"))
 
     def test_prior_capture_cannot_be_overwritten(self):
         self.output.mkdir(parents=True)
