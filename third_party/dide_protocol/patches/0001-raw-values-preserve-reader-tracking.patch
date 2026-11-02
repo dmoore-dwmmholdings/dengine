@@ -1,0 +1,36 @@
+DENG-730: raw MessagePack slices inside tracked containers.
+Pinned DIDE protocol 1.8-7a71f2779f8e (MPack 1.1.1, MIT).
+
+MPack reader_remaining() asserts that every compound is closed. Generated raw
+fields are decoded inside maps, so Debug builds abort despite valid input.
+Borrow the exposed cursor of the pinned immutable-data reader around the
+unchanged mpack_discard validation. Reject mutable/refill/skip readers and clear
+failed outputs. No protocol bytes, API, archive pin or tracking flag changes.
+
+Local patch only; no upstream report per DENG-2. Re-check/drop if a future pinned
+protocol generator implements the equivalent contiguous-reader contract.
+
+--- a/de_editor_protocol.c
++++ b/de_editor_protocol.c
+@@ -98,8 +98,16 @@
+ static void de_ep_read_raw(mpack_reader_t *r, de_ep_raw *out) {
+-    const char *start = NULL, *end = NULL;
+-    mpack_reader_remaining(r, &start);
++    memset(out, 0, sizeof(*out));
++    /* Raw views borrow the immutable frame. Buffered/refill readers cannot keep
++     * those views alive; reader_remaining() also requires all maps to be closed. */
++    if (r->buffer || r->fill || r->skip) {
++        mpack_reader_flag_error(r, mpack_error_unsupported);
++        return;
++    }
++    const char *start = r->data;
+     mpack_discard(r);
+-    mpack_reader_remaining(r, &end);
+-    out->ptr = start;
+-    out->len = (start && end && end >= start) ? (size_t)(end - start) : 0;
++    const char *end = r->data;
++    if (mpack_reader_error(r) == mpack_ok && start && end && end > start) {
++        out->ptr = start;
++        out->len = (size_t)(end - start);
++    }
+ }

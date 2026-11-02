@@ -447,3 +447,9 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_safety PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+# DENG-730: always exercise protocol raw slices with MPack compound tracking,
+# including Dev/Release hosts where the ordinary protocol library omits it.
+if(TARGET de_test_crash_protocol)
+    de_add_test(NAME editor_protocol_raw SOURCES test_editor_protocol_raw.c
+        LIBS de_test_crash_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+endif()

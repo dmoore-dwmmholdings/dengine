@@ -607,5 +607,7 @@ license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"
 files = ["de_editor_*", "third_party/mpack/*"]
-local = ["CMakeLists.txt"]
+local = ["CMakeLists.txt", "patches/**"]
+# DENG-730: preserve raw frame slices while containing maps remain tracked/open.
+patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."

@@ -96,12 +96,20 @@ static void de_ep_read_str(mpack_reader_t *r, de_ep_str *out) {
 }
 
 static void de_ep_read_raw(mpack_reader_t *r, de_ep_raw *out) {
-    const char *start = NULL, *end = NULL;
-    mpack_reader_remaining(r, &start);
+    memset(out, 0, sizeof(*out));
+    /* Raw views borrow the immutable frame. Buffered/refill readers cannot keep
+     * those views alive; reader_remaining() also requires all maps to be closed. */
+    if (r->buffer || r->fill || r->skip) {
+        mpack_reader_flag_error(r, mpack_error_unsupported);
+        return;
+    }
+    const char *start = r->data;
     mpack_discard(r);
-    mpack_reader_remaining(r, &end);
-    out->ptr = start;
-    out->len = (start && end && end >= start) ? (size_t)(end - start) : 0;
+    const char *end = r->data;
+    if (mpack_reader_error(r) == mpack_ok && start && end && end > start) {
+        out->ptr = start;
+        out->len = (size_t)(end - start);
+    }
 }
 
 static void *de_ep_arena_array(mpack_reader_t *r, de_ep_arena *a, uint32_t count, size_t size) {
