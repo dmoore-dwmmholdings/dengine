@@ -87,9 +87,11 @@ static const bit_info k_bits[] = {
     {DE_ACCESS_COPY_DST, DE__D3D12_SYNC_COPY, DE__D3D12_ACCESS_COPY_DEST,
      DE__D3D12_ACCESS_COPY_DEST, DE__D3D12_LAYOUT_COPY_DEST, true, DE__D3D12_STATE_COPY_DEST,
      DE__D3D12_STATE_COPY_DEST},
-    {DE_ACCESS_ACCEL_READ, DE__D3D12_SYNC_ALL_SHADING | DE__D3D12_SYNC_RAYTRACING,
-     DE__D3D12_ACCESS_RTAS_READ, DE__D3D12_ACCESS_RTAS_READ, DE__D3D12_LAYOUT_GENERIC_READ, false,
-     DE__D3D12_STATE_RTAS, DE__D3D12_STATE_RTAS},
+    /* Ordinary build inputs are SRVs, including public TLAS records consumed by the
+     * translation shader. AS objects use de__d3d12_accel_dependency instead. */
+    {DE_ACCESS_ACCEL_READ, DE__D3D12_SYNC_ALL_SHADING | DE__D3D12_SYNC_BUILD_RTAS,
+     DE__D3D12_ACCESS_RTAS_READ, DE__D3D12_ACCESS_SHADER_RESOURCE, DE__D3D12_LAYOUT_GENERIC_READ,
+     false, DE__D3D12_STATE_RTAS, DE__D3D12_STATE_NON_PIXEL_SHADER_RESOURCE},
     {DE_ACCESS_ACCEL_WRITE, DE__D3D12_SYNC_BUILD_RTAS, DE__D3D12_ACCESS_RTAS_WRITE,
      DE__D3D12_ACCESS_RTAS_WRITE, DE__D3D12_LAYOUT_GENERIC_READ, false, DE__D3D12_STATE_RTAS,
      DE__D3D12_STATE_RTAS},
@@ -716,6 +718,12 @@ static void record_enhanced(de_gpu_cmd *c, d3d12_cmd *dc, const de_gpu_barrier *
             de__gpu_buffer *rec = de__gpu_get_buffer(d, x->buffer);
             if (!rec || host_visible(rec))
                 continue;
+            /* Public AS-storage buffers have the same permanent state as .accel objects. */
+            if (rec->usage & DE_USAGE_ACCEL_STORAGE) {
+                flush_enhanced(dc, &e);
+                de__d3d12_accel_dependency(c);
+                continue;
+            }
             if (!de__d3d12_translate_enhanced(c->queue, x, NULL, &t))
                 continue;
             if (e.nbuf == CHUNK)
@@ -791,8 +799,14 @@ static void record_legacy(de_gpu_cmd *c, d3d12_cmd *dc, const de_gpu_barrier *b,
             }
         } else if (x->buffer.id) {
             de__gpu_buffer *rec = de__gpu_get_buffer(d, x->buffer);
-            if (rec && !host_visible(rec))
-                legacy_buffer(c, dc, &l, x, rec);
+            if (rec && !host_visible(rec)) {
+                if (rec->usage & DE_USAGE_ACCEL_STORAGE) {
+                    flush_legacy(dc, &l);
+                    de__d3d12_accel_dependency(c);
+                } else {
+                    legacy_buffer(c, dc, &l, x, rec);
+                }
+            }
         } else if (x->accel.id) {
             flush_legacy(dc, &l);
             de__d3d12_accel_dependency(c);

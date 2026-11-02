@@ -2,6 +2,7 @@
 #include "de_test.h"
 #include "gpu/gpu_accel_internal.h"
 #include "pipeline_shaders.h"
+#include <dengine/de_debug.h>
 #include <stdio.h>
 #include <string.h>
 #if DE_HAS_GPU_VULKAN
@@ -257,3 +258,115 @@ TEST_F(accel_native, test_accel_instance_layout_gpu, native_fx) {
     finish(f, c);
     EXPECT_EQ(memcmp(expected, de_gpu_buffer_map(f->d, read), 192), 0);
 }
+
+/* DENG-735: unlike the original UPLOAD fixtures, these instance records are produced
+ * by a user compute dispatch, consumed by TLAS translation, then overwritten next frame. */
+static void generated_instance_hits(native_fx *f, bool legacy) {
+    const de__shader_target target =
+        f->d->caps.backend == DE_GPU_D3D12 ? DE__SHADER_TARGET_DXIL : DE__SHADER_TARGET_SPIRV;
+    de_pipe_test_shader shader;
+    ASSERT_TRUE(de_pipe_test_get(target, "accel_query.slang", "cs_generate_instance", &shader));
+    de_gpu_pipeline generate =
+        de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                             .cs = shader.blob,
+                                                             .push_constant_bytes = 16,
+                                                             .threadgroup_size = {1, 1, 1}});
+    de_gpu_buffer instances = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 60, .usage = DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT});
+    ASSERT_TRUE(de_pipe_test_get(target, "accel_query.slang", "cs_generate_vertices", &shader));
+    de_gpu_pipeline generate_vertices =
+        de_gpu_pipeline_create(f->d, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                             .cs = shader.blob,
+                                                             .push_constant_bytes = 8,
+                                                             .threadgroup_size = {1, 1, 1}});
+    de_gpu_buffer vertices = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 48, .usage = DE_USAGE_STORAGE | DE_USAGE_ACCEL_INPUT});
+    de_gpu_buffer storage = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){.size = 256, .usage = DE_USAGE_ACCEL_STORAGE});
+    de_gpu_blas_geometry geometry = {.vertices = vertices,
+                                     .vertex_stride = 12,
+                                     .vertex_count = 3,
+                                     .vertex_format = DE_FMT_RGB32_FLOAT,
+                                     .indices = f->indices,
+                                     .index_count = 3,
+                                     .index_u16 = true,
+                                     .opaque = true};
+    de_gpu_accel blas = de_gpu_accel_create(
+        f->d, &(de_gpu_accel_desc){.geometries = &geometry, .geometry_count = 1});
+    ASSERT_TRUE(generate.id && instances.id && generate_vertices.id && vertices.id && storage.id &&
+                blas.id);
+    const f32 translations[] = {0, 2, 0, 0};
+    const u32 masks[] = {255, 255, 0, 255};
+    const f32 expected[] = {2, 4, -1, 2};
+    for (u32 frame = 0; frame < 4; ++frame) {
+#if DE_HAS_GPU_D3D12
+        de_cvar mode = {0};
+        bool previous = false;
+        if (frame == 0 && f->d->caps.backend == DE_GPU_D3D12) {
+            mode = de_cvar_register(
+                &(de_cvar_desc){.name = "gpu.d3d12.force_legacy_barriers", .type = DE_CVAR_BOOL});
+            ASSERT_TRUE(mode.id != 0);
+            previous = de_cvar_bool(mode);
+            ASSERT_EQ(de_cvar_set(mode, legacy ? "true" : "false"), DE_OK);
+        }
+#else
+        (void)legacy;
+#endif
+        de_gpu_cmd *c = de_gpu_cmd_begin(f->d, DE_QUEUE_COMPUTE, "GPU-generated TLAS input");
+#if DE_HAS_GPU_D3D12
+        if (mode.id) {
+            ASSERT_EQ(de_cvar_set(mode, previous ? "true" : "false"), DE_OK);
+            EXPECT_EQ(de__d3d12_enhanced_barriers_active(f->d),
+                      f->d->caps.enhanced_barriers && !legacy);
+        }
+#endif
+        ASSERT_TRUE(c != NULL);
+        if (frame == 0) {
+            /* AS-storage buffers must retain their permanent AS state on both paths. */
+            const de_gpu_barrier as_ready = {
+                .buffer = storage, .before = DE_ACCESS_ACCEL_WRITE, .after = DE_ACCESS_ACCEL_READ};
+            de_gpu_cmd_barriers(c, &as_ready, 1);
+            de_gpu_barrier input = {
+                .buffer = vertices, .before = DE_ACCESS_NONE, .after = DE_ACCESS_SHADER_WRITE};
+            de_gpu_cmd_barriers(c, &input, 1);
+            de_gpu_cmd_set_pipeline(c, generate_vertices);
+            const u32 geometry_pc[2] = {0, de_gpu_buffer_bindless(f->d, vertices)};
+            de_gpu_cmd_push_constants(c, geometry_pc, sizeof geometry_pc);
+            de_gpu_cmd_dispatch(c, 1, 1, 1);
+            input.before = DE_ACCESS_SHADER_WRITE;
+            input.after = DE_ACCESS_ACCEL_READ;
+            de_gpu_cmd_barriers(c, &input, 1);
+            de_gpu_cmd_build_blas(c, blas, false);
+        }
+        de_gpu_barrier b = {.buffer = instances,
+                            .before = frame ? DE_ACCESS_ACCEL_READ : DE_ACCESS_NONE,
+                            .after = DE_ACCESS_SHADER_WRITE};
+        de_gpu_cmd_barriers(c, &b, 1);
+        de_gpu_cmd_set_pipeline(c, generate);
+        u32 pc[4] = {blas.id, de_gpu_buffer_bindless(f->d, instances), 0, masks[frame]};
+        memcpy(&pc[2], &translations[frame], sizeof pc[2]);
+        de_gpu_cmd_push_constants(c, pc, sizeof pc);
+        de_gpu_cmd_dispatch(c, 1, 1, 1);
+        b.before = DE_ACCESS_SHADER_WRITE;
+        b.after = DE_ACCESS_ACCEL_READ;
+        de_gpu_cmd_barriers(c, &b, 1);
+        de_gpu_cmd_build_tlas(c, f->tlas, instances, 1, frame != 0);
+        const f32 hit = trace(f, c);
+        EXPECT_TRUE(hit > expected[frame] - .001f && hit < expected[frame] + .001f);
+    }
+    de_gpu_pipeline_destroy(f->d, generate);
+    de_gpu_pipeline_destroy(f->d, generate_vertices);
+    de_gpu_accel_destroy(f->d, blas);
+    de_gpu_buffer_destroy(f->d, instances);
+    de_gpu_buffer_destroy(f->d, vertices);
+    de_gpu_buffer_destroy(f->d, storage);
+}
+
+TEST_F(accel_native, test_accel_gpu_generated_instance_hits_and_rewrites, native_fx) {
+    generated_instance_hits(f, false);
+}
+#if DE_HAS_GPU_D3D12
+TEST_F(accel_native, test_accel_gpu_generated_instance_legacy_hits_and_rewrites, native_fx) {
+    generated_instance_hits(f, true);
+}
+#endif

@@ -40,6 +40,66 @@ static de_gpu_barrier buf_barrier(u32 before, u32 after) {
     return b;
 }
 
+/* DENG-735: geometry and public instance records are ordinary buffers, not AS storage.
+ * TLAS records are read by the translation shader before the native build consumes them. */
+TEST(d3d12, accel_input_buffer_enhanced_dependencies) {
+    const de_gpu_queue queues[] = {DE_QUEUE_GRAPHICS, DE_QUEUE_COMPUTE};
+    for (u32 i = 0; i < 2; ++i) {
+        const de_gpu_queue q = queues[i];
+        const u32 shading = i ? SYNC(COMPUTE_SHADING) : SYNC(ALL_SHADING);
+        de_gpu_barrier b = buf_barrier(DE_ACCESS_SHADER_WRITE, DE_ACCESS_ACCEL_READ);
+        de__d3d12_enhanced e;
+        ASSERT_TRUE(de__d3d12_translate_enhanced(q, &b, NULL, &e));
+        EXPECT_EQ(e.access_before, ACC(UNORDERED_ACCESS));
+        EXPECT_EQ(e.sync_before, shading);
+        EXPECT_EQ(e.access_after, ACC(SHADER_RESOURCE));
+        EXPECT_TRUE((e.sync_after & SYNC(BUILD_RTAS)) != 0);
+        EXPECT_TRUE((e.sync_after & shading) != 0);
+        EXPECT_EQ(e.layout_before, LAYOUT(UNDEFINED));
+        EXPECT_EQ(e.layout_after, LAYOUT(UNDEFINED));
+
+        /* The next frame must wait for both kinds of input reader before overwriting it. */
+        b = buf_barrier(DE_ACCESS_ACCEL_READ, DE_ACCESS_SHADER_WRITE);
+        ASSERT_TRUE(de__d3d12_translate_enhanced(q, &b, NULL, &e));
+        EXPECT_EQ(e.access_before, ACC(SHADER_RESOURCE));
+        EXPECT_TRUE((e.sync_before & SYNC(BUILD_RTAS)) != 0);
+        EXPECT_TRUE((e.sync_before & shading) != 0);
+        EXPECT_EQ(e.access_after, ACC(UNORDERED_ACCESS));
+        EXPECT_EQ(e.sync_after, shading);
+
+        /* Skinned positions may also be read by normal rendering in the same interval. */
+        b.after = DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ;
+        ASSERT_TRUE(de__d3d12_translate_enhanced(q, &b, NULL, &e));
+        EXPECT_EQ(e.access_after & (ACC(RTAS_READ) | ACC(RTAS_WRITE)), 0u);
+        EXPECT_TRUE((e.access_after & ACC(SHADER_RESOURCE)) != 0);
+        EXPECT_TRUE((e.sync_after & SYNC(BUILD_RTAS)) != 0);
+        EXPECT_TRUE((e.sync_after & shading) != 0);
+    }
+}
+
+TEST(d3d12, accel_input_buffer_legacy_states) {
+    const de_gpu_queue queues[] = {DE_QUEUE_GRAPHICS, DE_QUEUE_COMPUTE};
+    for (u32 i = 0; i < 2; ++i) {
+        de_gpu_barrier b = buf_barrier(DE_ACCESS_SHADER_WRITE, DE_ACCESS_ACCEL_READ);
+        u32 before, after;
+        EXPECT_EQ(de__d3d12_translate_legacy(queues[i], &b, false, STATE(UNORDERED_ACCESS), &before,
+                                             &after),
+                  DE__D3D12_LEGACY_TRANSITION);
+        EXPECT_EQ(before, STATE(UNORDERED_ACCESS));
+        EXPECT_EQ(after, STATE(NON_PIXEL_SHADER_RESOURCE));
+        b = buf_barrier(DE_ACCESS_ACCEL_READ, DE_ACCESS_SHADER_WRITE);
+        EXPECT_EQ(de__d3d12_translate_legacy(queues[i], &b, false, STATE(NON_PIXEL_SHADER_RESOURCE),
+                                             &before, &after),
+                  DE__D3D12_LEGACY_TRANSITION);
+        EXPECT_EQ(before, STATE(NON_PIXEL_SHADER_RESOURCE));
+        EXPECT_EQ(after, STATE(UNORDERED_ACCESS));
+        const u32 combined = de__d3d12_legacy_state_of(
+            queues[i], DE_ACCESS_SHADER_READ | DE_ACCESS_ACCEL_READ, false);
+        EXPECT_EQ(combined & STATE(RTAS), 0u);
+        EXPECT_TRUE((combined & STATE(NON_PIXEL_SHADER_RESOURCE)) != 0);
+    }
+}
+
 /* output.basic is compute-written before a UI render pass loads it. A first UAV write
  * must initialize an RT-capable placed texture's compression metadata too (DENG-618). */
 TEST(d3d12, first_uav_write_initializes_render_target_metadata) {
