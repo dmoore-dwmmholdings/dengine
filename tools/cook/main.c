@@ -9,7 +9,12 @@
  * Later commands are further entries of `commands`.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "check.h"
 #include "cook_cmd.h"
@@ -47,7 +52,7 @@ static void usage(const de_cook_io *io, de_cook_stream stream) {
     de_cook_check_usage(io, stream);
 }
 
-int main(int argc, char **argv) {
+static int run(int argc, char **argv) {
     de_cook_io io = {write_std, NULL};
     int rc;
     if (argc < 2) {
@@ -74,3 +79,44 @@ int main(int argc, char **argv) {
     fflush(stderr);
     return rc;
 }
+
+#if defined(_WIN32)
+/* The narrow CRT argv uses the active code page, but every cooker command expects
+ * UTF-8. Convert the original UTF-16 arguments before any path is inspected. */
+int wmain(int argc, wchar_t **wide_argv) {
+    char **argv = calloc((size_t)argc + 1, sizeof *argv);
+    if (!argv) {
+        fputs("de-cook: cannot allocate command-line arguments\n", stderr);
+        return DE_COOK_EXIT_USAGE;
+    }
+    int rc = DE_COOK_EXIT_USAGE;
+    for (int i = 0; i < argc; ++i) {
+        const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1, NULL,
+                                              0, NULL, NULL);
+        if (bytes <= 0) {
+            fputs("de-cook: command-line argument is not valid Unicode\n", stderr);
+            goto done;
+        }
+        argv[i] = malloc((size_t)bytes);
+        if (!argv[i]) {
+            fputs("de-cook: cannot allocate command-line arguments\n", stderr);
+            goto done;
+        }
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1, argv[i], bytes,
+                                NULL, NULL) != bytes) {
+            fputs("de-cook: cannot convert command-line argument to UTF-8\n", stderr);
+            goto done;
+        }
+    }
+    rc = run(argc, argv);
+done:
+    for (int i = 0; i < argc; ++i)
+        free(argv[i]);
+    free(argv);
+    return rc;
+}
+#else
+int main(int argc, char **argv) {
+    return run(argc, argv);
+}
+#endif
