@@ -46,10 +46,21 @@ if(DE_BUILD_TESTS AND TARGET de_net)
 endif()
 
 # DENG-56: isolated simulator qualification, deterministic injected time and raw heap guard.
-if(TARGET de_net AND NOT DE_IS_SHIPPING)
-    de_add_test(NAME net_sim SOURCES test_net_sim.c LIBS de_net de_test_support)
+# Release/Shipping have no simulator test bodies to discover.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _de_net_test_config)
+if(TARGET de_net AND (DE_MULTI_CONFIG OR _de_net_test_config MATCHES "^(DEBUG|DEV)$"))
+    de_add_test(NAME net_sim SOURCES test_net_sim.c LIBS de_net de_test_support
+        CONFIGURATIONS Debug Dev)
     if(TARGET test_net_sim)
         target_include_directories(test_net_sim PRIVATE "${DE_ROOT_DIR}/src")
+        if(DE_MULTI_CONFIG AND CMAKE_GENERATOR STREQUAL "Ninja Multi-Config")
+            set_target_properties(test_net_sim PROPERTIES
+                EXCLUDE_FROM_ALL "$<NOT:$<CONFIG:Debug,Dev>>")
+        elseif(DE_MULTI_CONFIG AND CMAKE_GENERATOR MATCHES "^Visual Studio")
+            set_target_properties(test_net_sim PROPERTIES
+                EXCLUDE_FROM_DEFAULT_BUILD_RELEASE TRUE
+                EXCLUDE_FROM_DEFAULT_BUILD_SHIPPING TRUE)
+        endif()
     endif()
 endif()
 
@@ -85,4 +96,13 @@ if(TARGET de_net)
     if(TARGET test_net_mtu)
         target_include_directories(test_net_mtu PRIVATE "${DE_ROOT_DIR}/src")
     endif()
+endif()
+
+# DENG-719: verify real configure/build/discovery behavior, including multi-config generators.
+if(DE_BUILD_TESTS AND TARGET de_net)
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME net_sim_configurations
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_sim_test_configs.py"
+            "${DE_ROOT_DIR}")
+    set_tests_properties(net_sim_configurations PROPERTIES LABELS "check;net" TIMEOUT 120)
 endif()

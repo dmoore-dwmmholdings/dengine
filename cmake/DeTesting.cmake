@@ -5,6 +5,7 @@
 #             SOURCES <file>...
 #             [LIBS <target-or-lib>...]
 #             [LABELS <label>...]
+#             [CONFIGURATIONS <config>...]
 #             [TIMEOUT <seconds>])
 #
 #   Builds one test executable `test_<name>` from SOURCES (usually every test_*.c of one module
@@ -18,6 +19,8 @@
 #   LABELS   CTest labels. Default `unit`. The module label (the name of the calling directory,
 #            e.g. `ecs` for tests/unit/ecs/) is always added, so `ctest -L ecs` works.
 #   TIMEOUT  per-test timeout in seconds. Default 60.
+#   CONFIGURATIONS  discover/register only in these build configurations, e.g. Debug Dev.
+#                   Existing callers without this option cover every configuration.
 #   Every test also gets SKIP_RETURN_CODE 77, so SKIP() shows as skipped in CTest.
 #   The executable links `de_build_flags` (-Wall -Wextra -Wpedantic -Werror ...). Add compile
 #   definitions or extra properties on the target `test_<name>` after the call.
@@ -60,6 +63,11 @@
 if(CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
     # Inputs: DE_TEST_EXE, DE_TEST_OUT, DE_TEST_PREFIX, DE_TEST_LABELS (','-separated),
     #         DE_TEST_TIMEOUT, DE_TEST_EMULATOR (','-separated, may be empty).
+    # An explicitly ineligible configuration has no test bodies to discover. Eligible
+    # configurations (and all existing callers) still reject an empty listing below.
+    if(DEFINED DE_TEST_ENABLED AND NOT DE_TEST_ENABLED)
+        return()
+    endif()
     string(REPLACE "," ";" labels "${DE_TEST_LABELS}")
     string(REPLACE "," ";" emulator "${DE_TEST_EMULATOR}")
     execute_process(
@@ -149,7 +157,7 @@ function(de_add_test)
     if(NOT DE_BUILD_TESTS)
         return()
     endif()
-    cmake_parse_arguments(PARSE_ARGV 0 T "" "NAME;TIMEOUT" "SOURCES;LIBS;LABELS")
+    cmake_parse_arguments(PARSE_ARGV 0 T "" "NAME;TIMEOUT" "SOURCES;LIBS;LABELS;CONFIGURATIONS")
     if(T_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "de_add_test: unknown arguments: ${T_UNPARSED_ARGUMENTS}")
     endif()
@@ -173,7 +181,11 @@ function(de_add_test)
     de__test_labels(labels unit ${T_LABELS})
 
     if(CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
-        add_test(NAME ${T_NAME} COMMAND ${target})
+        if(T_CONFIGURATIONS)
+            add_test(NAME ${T_NAME} COMMAND ${target} CONFIGURATIONS ${T_CONFIGURATIONS})
+        else()
+            add_test(NAME ${T_NAME} COMMAND ${target})
+        endif()
         set_tests_properties(${T_NAME} PROPERTIES
             LABELS "${labels}" TIMEOUT ${T_TIMEOUT} SKIP_RETURN_CODE 77)
         return()
@@ -186,6 +198,11 @@ function(de_add_test)
     set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${DE_TESTING_SCRIPT}")
     string(REPLACE ";" "," labels_arg "${labels}")
     string(REPLACE ";" "," emulator_arg "${CMAKE_CROSSCOMPILING_EMULATOR}")
+    set(test_enabled 1)
+    if(T_CONFIGURATIONS)
+        string(REPLACE ";" "," configs_arg "${T_CONFIGURATIONS}")
+        set(test_enabled "$<CONFIG:${configs_arg}>")
+    endif()
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}"
             "-DDE_TEST_EXE=$<TARGET_FILE:${target}>"
@@ -194,6 +211,7 @@ function(de_add_test)
             "-DDE_TEST_LABELS=${labels_arg}"
             "-DDE_TEST_TIMEOUT=${T_TIMEOUT}"
             "-DDE_TEST_EMULATOR=${emulator_arg}"
+            "-DDE_TEST_ENABLED=${test_enabled}"
             -P "${DE_TESTING_SCRIPT}"
         COMMENT "Discovering tests in ${target}"
         VERBATIM)
@@ -215,6 +233,16 @@ function(de_add_test)
         "    set_tests_properties([==[${T_NAME}_NOT_BUILT]==] PROPERTIES LABELS [==[${labels}]==])"
         "endif()"
         "")
+    if(T_CONFIGURATIONS)
+        set(configs_upper ${T_CONFIGURATIONS})
+        list(TRANSFORM configs_upper TOUPPER)
+        string(PREPEND include_content
+            "set(_de_test_configs [==[${configs_upper}]==])\n"
+            "string(TOUPPER \"${config_expr}\" _de_test_config)\n"
+            "list(FIND _de_test_configs \"\${_de_test_config}\" _de_test_config_index)\n"
+            "if(NOT _de_test_config_index EQUAL -1)\n")
+        string(APPEND include_content "endif()\n")
+    endif()
     file(WRITE "${base}_include.cmake" "${include_content}")
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${base}_include.cmake")
 endfunction()
