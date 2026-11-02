@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "de_test.h"
 #include "render/post/jitter.h"
 #include "render/upscale/upscaler.h"
@@ -76,6 +80,9 @@ TEST(taa, backend_selection_and_mip_bias) {
     EXPECT_FLOAT_EQ(de__upscaler_mip_bias((de__upscale_size){32, 32, 64, 64}, NAN), -1, 0);
 }
 
+/* Keep unavailable Metal fixtures out of MSVC's optimizer: an inlined unconditional
+ * fixture skip makes the subsequent test body unreachable under /W4 /WX. */
+#if DE_HAS_GPU_METAL
 #define W           32u
 #define H           32u
 #define COLOR_PITCH (W * 16u)
@@ -1269,4 +1276,30 @@ TEST_F(taa, rendered_frame_arena_failure_refuses_unfiltered_frame, taa_scene) {
     EXPECT_EQ(opaque_dispatches, 1u);
     EXPECT_TRUE(opaque_last_reset);
 }
+#endif
+
+#else
+#define TAA_METAL_TEST_REQUIRES_MACOS(name)                                                        \
+    TEST(taa, name) {                                                                              \
+        SKIP("Metal runtime qualification requires macOS");                                        \
+    }
+TAA_METAL_TEST_REQUIRES_MACOS(native_history_reprojection_rejection_and_resize)
+TAA_METAL_TEST_REQUIRES_MACOS(native_pre_exposure_reactive_and_sharpen_contract)
+#if DE_TAA_SCENE_TEST
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_static_scene_reference16_and_edge_stability)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_half_scale_one_pixel_lines)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_view_jitter_resets_motion_and_steady_allocations)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_light_and_layer_policy_resets_are_view_local)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_half_scale_with_screen_history)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_disocclusion_four_frames)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_half_scale_disocclusion_four_frames)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_half_scale_static_material_change_rejects_history)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_opaque_vendor_history_graph_contract)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_forward_only_and_empty_views)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_custom_hdr_without_geometry_and_gap_reset)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_native_init_failure_falls_back_once)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_failed_resize_does_not_publish_history)
+TAA_METAL_TEST_REQUIRES_MACOS(rendered_frame_arena_failure_refuses_unfiltered_frame)
+#endif
+#undef TAA_METAL_TEST_REQUIRES_MACOS
 #endif

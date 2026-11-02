@@ -17,6 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* An unavailable fixture must register its skip directly: MSVC otherwise inlines
+ * the unconditional skip and diagnoses every following assertion as unreachable. */
+#if DE_HAS_GPU_METAL
 #define WAIT_NS (120ull * 1000000000ull)
 static const f32 inputs[16][4] = {{0, 0, 0, 1},
                                   {0.0001f, 0.0001f, 0.0001f, 1},
@@ -535,3 +538,14 @@ TEST_F(tonemap, custom_registration_reload_and_retained_pipeline, tmfx) {
 TEST_F(tonemap, asset_system_destroyed_before_registered_mapper, tmfx) {
     custom_roundtrip(f, true);
 }
+#else
+#define TONEMAP_METAL_TEST_REQUIRES_MACOS(name)                                                    \
+    TEST(tonemap, name) {                                                                          \
+        SKIP("Metal runtime qualification requires macOS");                                        \
+    }
+TONEMAP_METAL_TEST_REQUIRES_MACOS(builtin_reference_values)
+TONEMAP_METAL_TEST_REQUIRES_MACOS(temporal_reconstruction_precedes_nonlinear_mapper)
+TONEMAP_METAL_TEST_REQUIRES_MACOS(custom_registration_reload_and_retained_pipeline)
+TONEMAP_METAL_TEST_REQUIRES_MACOS(asset_system_destroyed_before_registered_mapper)
+#undef TONEMAP_METAL_TEST_REQUIRES_MACOS
+#endif
