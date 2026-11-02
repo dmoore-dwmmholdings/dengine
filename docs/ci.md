@@ -78,6 +78,13 @@ that directory too. Open a dump with the job's build of the same commit (`cdb -z
 <dir of the test's .pdb>`, then `.ecxr; kn`). The dumps hold thread stacks and the memory they
 reference, not module images.
 
+For the three DXR path-source lifecycle crashes tracked by DENG-736, the MSVC Debug
+job also captures the original failed commands under the runner's existing CDB.
+The bounded diagnostic writes second-chance exception codes, stacks and minidumps
+under `test-dumps/deng736/`, without replacing the original CTest result or logs.
+It installs no debugger or SDK. Missing CDB, a timeout, a non-reproducing run or
+incomplete capture is reported explicitly; debugger success is not a passing test.
+
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).
 

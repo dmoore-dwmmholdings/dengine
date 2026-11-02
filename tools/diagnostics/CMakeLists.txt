@@ -14,3 +14,10 @@ add_test(NAME presentation_trace_report_selftest
 set_tests_properties(presentation_trace_report_selftest PROPERTIES LABELS check TIMEOUT 30)
 set_tests_properties(acquire_trace_report_selftest presentation_trace_report_selftest
     PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+# DENG-736: subprocess/evidence controls; native CDB capture runs only after Windows failures.
+add_test(NAME windows_rt_crash_selftest
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_windows_rt_crash.py -v)
+set_tests_properties(windows_rt_crash_selftest
+    PROPERTIES LABELS check TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")

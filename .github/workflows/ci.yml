@@ -145,6 +145,14 @@ jobs:
           cmake --build --preset "${PRESET}" --target de_golden
           python3 tools/diagnostics/d3d12_init_regressions.py --test-dir "build/${PRESET}"
 
+      # DENG-736: retain the failed Test outcome; this is evidence collection, not acceptance.
+      - name: Capture original failed DXR lifecycle cases under CDB
+        if: ${{ failure() && steps.build.outcome == 'success' && matrix.preset == 'windows-msvc-debug' }}
+        shell: bash
+        env:
+          DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
+        run: python3 tools/diagnostics/windows_rt_crash.py --test-dir "build/${PRESET}"
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
