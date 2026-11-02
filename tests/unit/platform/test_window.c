@@ -15,6 +15,9 @@
 #if !defined(DE_HEADLESS)
 #include "platform/sdl/sdl_internal.h"
 #endif
+#if defined(__APPLE__) && !defined(DE_HEADLESS)
+#include "window_cocoa.h"
+#endif
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -169,6 +172,30 @@ TEST_F(window, window_limit, plat_fx) {
     /* The rest are closed by de_platform_shutdown() in the teardown. */
 }
 
+#if defined(__APPLE__) && !defined(DE_HEADLESS)
+static void expect_cocoa_backing(de_window window, u32 width, u32 height) {
+    de_native_window native = de_window_native(window);
+    ASSERT_TRUE(native.sdl_window != NULL);
+    de_test_window_cocoa_bounds bounds = {0};
+    ASSERT_TRUE(de_test_window_cocoa_backing(native.sdl_window, &bounds));
+    u32 points_w = 0, points_h = 0, pixels_w = 0, pixels_h = 0;
+    de_window_size_points(window, &points_w, &points_h);
+    de_window_size_pixels(window, &pixels_w, &pixels_h);
+    EXPECT_EQ(points_w, width);
+    EXPECT_EQ(points_h, height);
+    EXPECT_FLOAT_EQ(bounds.points_width, (f64)width, 1e-6);
+    EXPECT_FLOAT_EQ(bounds.points_height, (f64)height, 1e-6);
+    EXPECT_EQ(pixels_w, (u32)(bounds.pixels_width + 0.5));
+    EXPECT_EQ(pixels_h, (u32)(bounds.pixels_height + 0.5));
+    SDL_DisplayID display = SDL_GetDisplayForWindow(native.sdl_window);
+    ASSERT_TRUE(display != 0);
+    de_display_info info = de_window_display(window);
+    EXPECT_FLOAT_EQ(info.content_scale, SDL_GetDisplayContentScale(display), 1e-6);
+    printf("  AppKit %ux%u points -> %.0fx%.0f backing pixels, display content scale %.2f\n", width,
+           height, bounds.pixels_width, bounds.pixels_height, (double)info.content_scale);
+}
+#endif
+
 TEST_F(window, size_pixels_dpi, plat_fx) {
     (void)f;
     de_window lo = open_hidden(640, 360, false);
@@ -183,17 +210,50 @@ TEST_F(window, size_pixels_dpi, plat_fx) {
     EXPECT_GE(hw, 640u);
     EXPECT_GE(hh, 360u);
     EXPECT_EQ((u64)hw * 360u, (u64)hh * 640u); /* same aspect: one density for both axes */
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(DE_HEADLESS)
     /* macOS: without high_dpi the OS scales a 1x backbuffer; with it the pixel size is
-     * logical × backing scale, which SDL reports as the display content scale. */
+     * measured from the actual view's backing store, separately from display UI scale. */
     EXPECT_EQ(lw, 640u);
     EXPECT_EQ(lh, 360u);
-    u32 want = (u32)(640.0f * disp.content_scale + 0.5f);
-    EXPECT_EQ(hw, want);
+    const char *driver = SDL_GetCurrentVideoDriver();
+    ASSERT_TRUE(driver != NULL);
+    if (strcmp(driver, "cocoa") == 0) {
+        expect_cocoa_backing(hi, 640, 360);
+    } else {
+        /* Dummy/offscreen backends have no AppKit view. Preserve the pixel-query
+         * contract against their backend instead of guessing from display UI scale. */
+        int pixels_w = 0, pixels_h = 0;
+        ASSERT_TRUE(
+            SDL_GetWindowSizeInPixels(de__platform_sdl_window_get(hi), &pixels_w, &pixels_h));
+        EXPECT_EQ(hw, (u32)pixels_w);
+        EXPECT_EQ(hh, (u32)pixels_h);
+    }
 #endif
     de_window_destroy(lo);
     de_window_destroy(hi);
 }
+
+#if defined(__APPLE__) && !defined(DE_HEADLESS)
+TEST_F(window, cocoa_backing_on_each_display, plat_fx) {
+    (void)f;
+    const char *driver = SDL_GetCurrentVideoDriver();
+    ASSERT_TRUE(driver != NULL);
+    if (strcmp(driver, "cocoa") != 0)
+        SKIP("AppKit backing coordinates require the Cocoa video driver");
+    de__platform_sdl_state *state = de__platform_sdl_get();
+    ASSERT_GT(state->display_count, 0u);
+    for (u32 i = 0; i < state->display_count; ++i) {
+        de_window_desc desc = {
+            .width = 321, .height = 197, .display_index = (i32)i, .high_dpi = true, .hidden = true};
+        de_window window = {0};
+        ASSERT_EQ(de_window_create(&desc, &window), DE_OK);
+        de_native_window native = de_window_native(window);
+        EXPECT_EQ(SDL_GetDisplayForWindow(native.sdl_window), state->displays[i]);
+        expect_cocoa_backing(window, 321, 197);
+        de_window_destroy(window);
+    }
+}
+#endif
 
 TEST_F(window, set_mode_roundtrip, plat_fx) {
     (void)f;

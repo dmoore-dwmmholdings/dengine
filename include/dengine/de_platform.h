@@ -73,8 +73,9 @@ DE_API bool de_platform_headless(void);
 typedef struct de_display_info {
     u32 width, height; /**< desktop mode in pixels (points × pixel density) */
     u32 refresh_hz;    /**< desktop refresh rate, rounded; 0 = unknown */
-    /** UI scale the user chose for this display (1.0 = 100 %, 2.0 on a Retina display). Not the
-     * same as the pixel density of a window (see de_window_size_pixels()). */
+    /** UI content scale in the display's coordinate system (1.0 = 100 %). On macOS this can
+     * remain 1.0 on a Retina display with two backing pixels per point. This is distinct from
+     * a window's pixel density; query its actual drawable with de_window_size_pixels(). */
     f32 content_scale;
     /** The display can show more than SDR white now or on demand (Windows HDR on, macOS EDR,
      * HDR on Wayland): there is headroom above SDR white. */
@@ -173,7 +174,8 @@ DE_API de_result de_window_create(const de_window_desc *desc, de_window *out);
 /** Closes the window. A stale or zero handle is ignored. */
 DE_API void de_window_destroy(de_window w);
 
-/** Size of the drawable area in pixels (what a swapchain needs). 0 x 0 for a stale handle.
+/** Size of the drawable area in pixels (what a swapchain needs), not derived from the display's
+ * content_scale. 0 x 0 for a stale handle.
  * Either pointer may be NULL. */
 DE_API void de_window_size_pixels(de_window w, u32 *width, u32 *height);
 /** Logical window size in points, matching input cursor coordinates. Zero for stale/headless. */

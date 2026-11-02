@@ -111,3 +111,10 @@ if(TARGET test_watch)
     target_compile_definitions(test_watch PRIVATE
         DE_IO_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_watch_tmp")
 endif()
+
+# DENG-715: the DPI oracle reads AppKit backing coordinates, not SDL's pixel-size cache.
+if(TARGET test_window AND APPLE AND NOT DE_HEADLESS)
+    target_sources(test_window PRIVATE window_cocoa.m)
+    set_source_files_properties(window_cocoa.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(test_window PRIVATE "$<LINK_LIBRARY:FRAMEWORK,AppKit>")
+endif()
