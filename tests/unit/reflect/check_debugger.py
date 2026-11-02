@@ -72,7 +72,11 @@ def main():
                                  capture_output=True, text=True, timeout=60)
         print(run.stdout)
         print(run.stderr)
-        assert run.returncode == 0 and "DENG586_LLDB_OK\n" in run.stdout
+        # Windows loader failures can produce no console output. Keep the actual
+        # subprocess status so they are distinguishable from failed summaries.
+        status = f"{run.returncode} (0x{run.returncode & 0xffffffff:08x})"
+        assert run.returncode == 0 and "DENG586_LLDB_OK\n" in run.stdout, (
+            f"LLDB {args.lldb}: exit {status}; expected successful native visualizer assertions")
     print("Generated reflection visualizers verified")
 
 
