@@ -41,9 +41,11 @@ static void expect_error(de__editor *ed, de_ep_raw params, de_ep_error expected,
 TEST(editor_settings_gate, malformed_requests_validate_before_capability_checks) {
     de__editor ed = {0}; /* No engine is needed to validate the protocol schema. */
     de__ed_settings_register(&ed);
-    const char missing[] = {(char)0x80}, wrong_type[] = {(char)0xc3};
-    expect_error(&ed, (de_ep_raw){missing, sizeof missing}, DE_EP_ERR_INVALID_PARAMS, NULL);
-    expect_error(&ed, (de_ep_raw){wrong_type, sizeof wrong_type}, DE_EP_ERR_INVALID_PARAMS, NULL);
+    const u8 missing[] = {0x80}, wrong_type[] = {0xc3};
+    expect_error(&ed, (de_ep_raw){(const char *)missing, sizeof missing}, DE_EP_ERR_INVALID_PARAMS,
+                 NULL);
+    expect_error(&ed, (de_ep_raw){(const char *)wrong_type, sizeof wrong_type},
+                 DE_EP_ERR_INVALID_PARAMS, NULL);
     de__ed_settings_shutdown(&ed);
 }
 TEST(editor_settings_gate, cooker_capability_precedes_source_asset_state) {
