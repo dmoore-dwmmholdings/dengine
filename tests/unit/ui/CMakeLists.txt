@@ -99,10 +99,12 @@ endif()
 de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LABELS unit ui)
 
 # DENG-732: exercise the actual fuzz callback's per-input ownership without a GPU.
+if(TARGET de_ui)
 de_add_test(NAME ui_stylesheet_fuzz_ownership
  SOURCES test_stylesheet_fuzz_ownership.c "${DE_ROOT_DIR}/tests/fuzz/ui/fuzz_stylesheet.c"
  LIBS de_ui de_tp_tomlc17 LABELS unit ui)
 if(TARGET test_ui_stylesheet_fuzz_ownership)
  target_include_directories(test_ui_stylesheet_fuzz_ownership PRIVATE
   "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tests/fuzz")
+endif()
 endif()
