@@ -88,6 +88,32 @@ TEST_F(gpu_metal, device_caps, mtl_fx) {
         (unsigned long long)(c->dedicated_vram >> 20), (unsigned long long)c->timestamp_frequency);
 }
 
+static void idle_wait_probe(mtl_fx *f, u32 lists, bool native_only, bool concurrent_submit) {
+    de_test_mtl_idle_probe probe;
+    char why[128] = {0};
+    int result =
+        de_test_mtl_idle_wait(f->d, lists, native_only, concurrent_submit, &probe, why, sizeof why);
+    if (result != 1)
+        fprintf(stderr, "%s\n", why);
+    ASSERT_EQ(result, 1);
+    EXPECT_TRUE(probe.completed);
+    EXPECT_EQ(probe.waits, concurrent_submit ? 2u : 1u);
+    EXPECT_EQ(probe.created, 0u);
+    EXPECT_FALSE(de_gpu_device_is_lost(f->d));
+}
+TEST_F(gpu_metal, wait_idle_reuses_pending_empty_submission, mtl_fx) {
+    idle_wait_probe(f, 0, false, false);
+}
+TEST_F(gpu_metal, wait_idle_reuses_pending_multiple_lists, mtl_fx) {
+    idle_wait_probe(f, 2, false, false);
+}
+TEST_F(gpu_metal, wait_idle_waits_for_native_work_without_a_submit_serial, mtl_fx) {
+    idle_wait_probe(f, 0, true, false);
+}
+TEST_F(gpu_metal, wait_idle_keeps_a_concurrent_newer_submission, mtl_fx) {
+    idle_wait_probe(f, 0, false, true);
+}
+
 TEST(gpu_metal, default_backend_is_metal) {
     EXPECT_EQ(de_gpu_platform_default_backend(), DE_GPU_METAL);
     EXPECT_TRUE(de__gpu_find_backend(DE_GPU_DEFAULT) == &de__gpu_metal_vtable);

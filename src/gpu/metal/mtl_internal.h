@@ -117,6 +117,8 @@ typedef struct mtl_device {
     u32 residency_gen;   /* heap_gen the residency set was built from; under heap_lock */
     de_mutex size_lock;  /* heapTextureSizeAndAlignWithDescriptor: (mtl_resources.m) */
     void *last_group[DE_QUEUE_COUNT_]; /* dispatch_group_t of the last submit (mtl_sync.m) */
+    /* Retained last committed command buffer, including presents; under submit_lock[q]. */
+    void *last_committed[DE_QUEUE_COUNT_];
 
     /* DENG-325: pipelines (mtl_pipeline.m), the indirect-count kernel (mtl_icb.m) and the binary
      * archive (mtl_binary_archive.m). */
@@ -409,6 +411,8 @@ void de__mtl_sync_shutdown(de_gpu_device *d);
 void de__mtl_sync_drain(de_gpu_device *d);
 /** Releases the per-queue submit groups (device destroy, after wait_idle). */
 void de__mtl_sync_release_groups(de_gpu_device *d);
+/* Caller holds submit_lock[q], after committing buffer. */
+void de__mtl_remember_committed(de_gpu_device *d, de_gpu_queue q, void *buffer);
 de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_submit *s,
                                u64 queue_value);
 de_result de__mtl_fence_create(de_gpu_device *d, de__gpu_fence *f, u64 initial);

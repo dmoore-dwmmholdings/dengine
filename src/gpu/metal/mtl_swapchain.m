@@ -209,7 +209,10 @@ de_result de__mtl_swapchain_present(de_gpu_device *d, de__gpu_swapchain *s) {
                     }];
             }
             [cb presentDrawable:(__bridge id<CAMetalDrawable>)ms->drawable];
+            de_mutex_lock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
             [cb commit];
+            de__mtl_remember_committed(d, DE_QUEUE_GRAPHICS, (__bridge void *)cb);
+            de_mutex_unlock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
         }
     }
     drop_image(d, ms);

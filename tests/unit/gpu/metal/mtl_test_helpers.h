@@ -56,6 +56,15 @@ int de_test_mtl_bindless_kernel(de_gpu_device *d, const u32 push[6], de_gpu_buff
                                 de_gpu_texture rw_mips, u8 rw_after[4], u8 rw_mip1_after[4],
                                 char *err, size_t cap);
 
+typedef struct de_test_mtl_idle_probe {
+    u32 created, waits;
+    bool completed;
+} de_test_mtl_idle_probe;
+/** Hold real queued work on an event released by waitUntilCompleted. Forwarding objects
+ * count native command-buffer factories during idle wait, without replacing GPU execution. */
+int de_test_mtl_idle_wait(de_gpu_device *d, u32 lists, bool native_only, bool concurrent_submit,
+                          de_test_mtl_idle_probe *out, char *err, size_t cap);
+
 /* ---------- Fixture for the C tests (needs de_test.h first) ---------- */
 #if defined(DE_TEST_H)
 #include <string.h>

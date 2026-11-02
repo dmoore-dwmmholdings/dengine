@@ -361,6 +361,27 @@ TEST_F(mtl, swapchain_present_does_not_pin_drawable_texture_until_collection, sc
     f->d->vt = f->backend;
 }
 
+TEST_F(mtl, swapchain_two_drawables_recycle_with_delayed_completion_observation, sc_fx) {
+    f->sc = de_gpu_swapchain_create(
+        f->d, &(de_gpu_swapchain_desc){
+                  .window = f->window, .image_count = 2, .present = DE_PRESENT_IMMEDIATE});
+    ASSERT_TRUE(f->sc.id);
+    EXPECT_EQ(layer_info(f).max_drawables, 2u);
+    acquire_probe = *f->backend;
+    acquire_probe.queue_completed = delay_completed;
+    f->d->vt = &acquire_probe;
+    u32 presented = 0;
+    for (; presented < 8; ++presented) {
+        de_gpu_texture image;
+        if (!plain_frame(f, presented, &image))
+            break;
+    }
+    const u32 deferred = de__gpu_deferred_count(f->d);
+    f->d->vt = f->backend;
+    EXPECT_EQ(presented, 8u);
+    EXPECT_GT(deferred, 2u);
+}
+
 typedef struct resize_worker_case {
     sc_fx *f;
     u32 rendered;

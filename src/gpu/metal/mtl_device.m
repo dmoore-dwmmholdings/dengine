@@ -33,6 +33,8 @@ static void device_release(de_gpu_device *d) {
     mtl_device *m = de__mtl_dev(d);
     @autoreleasepool {
         de__mtl_sync_drain(d);
+        for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q)
+            release(&m->last_committed[q]);
         de__mtl_accel_shutdown(d);
         de__mtl_pipeline_shutdown(d); /* DENG-325 */
         de__mtl_archive_close(d);
@@ -143,24 +145,28 @@ static u64 mtl_queue_completed(de_gpu_device *d, de_gpu_queue q) {
 static void mtl_wait_idle(de_gpu_device *d) {
     mtl_device *m = de__mtl_dev(d);
     for (u32 q = 0; q < DE_QUEUE_COUNT_; ++q) {
-        const u64 target = de_atomic_load_u64(&d->submitted[q], DE_ATOMIC_ACQUIRE);
-        if (mtl_queue_completed(d, (de_gpu_queue)q) >= target)
-            continue;
         @autoreleasepool {
-            /* A queue runs its command buffers in commit order: once an empty one committed now
-             * is done, so is every signal before it. */
-            id<MTLCommandBuffer> cb =
-                [(__bridge id<MTLCommandQueue>)m->queues[q] commandBufferWithUnretainedReferences];
-            [cb commit];
-            [cb waitUntilCompleted];
+            de_mutex_lock(&d->submit_lock[q]);
+            const u64 target = de_atomic_load_u64(&d->submitted[q], DE_ATOMIC_ACQUIRE);
+            id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)m->last_committed[q];
+            de_mutex_unlock(&d->submit_lock[q]);
+            /* Queue commit order makes this cover earlier buffers too. Presents do not advance
+             * the RHI serial, so its completed value alone cannot prove native work is idle. */
+            if (cb)
+                [cb waitUntilCompleted];
+            /* Preserve completion-handler/timeline retirement after native completion. */
+            for (u32 i = 0; i < 100000 && mtl_queue_completed(d, (de_gpu_queue)q) < target; ++i)
+                de_sleep_ns(10000);
+            if (mtl_queue_completed(d, (de_gpu_queue)q) < target)
+                DE_WARN(d->log, "metal: wait_idle: the %s queue is at %llu, not %llu",
+                        k_queue_names[q],
+                        (unsigned long long)mtl_queue_completed(d, (de_gpu_queue)q),
+                        (unsigned long long)target);
+            de_mutex_lock(&d->submit_lock[q]);
+            if (m->last_committed[q] == (__bridge void *)cb)
+                release(&m->last_committed[q]);
+            de_mutex_unlock(&d->submit_lock[q]);
         }
-        /* The event update can trail the command buffer's completion; poll briefly. */
-        for (u32 i = 0; i < 100000 && mtl_queue_completed(d, (de_gpu_queue)q) < target; ++i)
-            de_sleep_ns(10000);
-        if (mtl_queue_completed(d, (de_gpu_queue)q) < target)
-            DE_WARN(d->log, "metal: wait_idle: the %s queue is at %llu, not %llu", k_queue_names[q],
-                    (unsigned long long)mtl_queue_completed(d, (de_gpu_queue)q),
-                    (unsigned long long)target);
     }
 }
 

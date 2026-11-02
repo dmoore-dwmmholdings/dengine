@@ -44,6 +44,225 @@ int de_test_mtl_device_info(u32 adapter, de_test_mtl_info *out) {
     }
 }
 
+/* Per-invocation forwarding objects avoid swizzling Metal classes or global test state. */
+@interface DENSMtlIdleState : NSObject {
+  @public
+    de_atomic_u32 waits, expired;
+}
+@property(nonatomic, strong) id<MTLSharedEvent> gate;
+@property(nonatomic, strong) dispatch_semaphore_t entered, resume;
+@property(nonatomic) bool pause_next;
+@end
+@implementation DENSMtlIdleState
+@end
+
+@interface DENSMtlIdleBuffer : NSObject
+@property(nonatomic, strong) id<MTLCommandBuffer> target;
+@property(nonatomic, strong) DENSMtlIdleState *state;
+@property(nonatomic, strong) id<MTLSharedEvent> gate;
+@property(nonatomic) bool pause;
+@end
+@implementation DENSMtlIdleBuffer
+- (id)forwardingTargetForSelector:(SEL)selector {
+    (void)selector;
+    return self.target;
+}
+- (void)waitUntilCompleted {
+    de_atomic_fetch_add_u32(&self.state->waits, 1, DE_ATOMIC_RELAXED);
+    if (self.pause) {
+        dispatch_semaphore_signal(self.state.entered);
+        if (dispatch_semaphore_wait(self.state.resume,
+                                    dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)))
+            de_atomic_store_u32(&self.state->expired, 1, DE_ATOMIC_RELAXED);
+    }
+    self.gate.signaledValue = 1;
+    [self.target waitUntilCompleted];
+}
+@end
+
+@interface DENSMtlIdleQueue : NSObject
+@property(nonatomic, strong) id<MTLCommandQueue> target;
+@property(nonatomic, strong) DENSMtlIdleState *state;
+@property(nonatomic) u32 created;
+@property(nonatomic, strong) id<MTLCommandBuffer> last_target;
+@end
+@implementation DENSMtlIdleQueue
+- (id)forwardingTargetForSelector:(SEL)selector {
+    (void)selector;
+    return self.target;
+}
+- (id<MTLCommandBuffer>)wrap:(id<MTLCommandBuffer>)target {
+    if (!target)
+        return nil;
+    ++self.created;
+    DENSMtlIdleBuffer *buffer = [DENSMtlIdleBuffer new];
+    buffer.target = target;
+    buffer.state = self.state;
+    buffer.gate = self.state.gate;
+    buffer.pause = self.state.pause_next;
+    self.last_target = target;
+    return (id<MTLCommandBuffer>)buffer;
+}
+- (id<MTLCommandBuffer>)commandBuffer {
+    return [self wrap:[self.target commandBuffer]];
+}
+- (id<MTLCommandBuffer>)commandBufferWithUnretainedReferences {
+    return [self wrap:[self.target commandBufferWithUnretainedReferences]];
+}
+- (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)descriptor {
+    return [self wrap:[self.target commandBufferWithDescriptor:descriptor]];
+}
+@end
+
+static i32 idle_wait_worker(void *user) {
+    de_gpu_wait_idle(user);
+    return 0;
+}
+
+int de_test_mtl_idle_wait(de_gpu_device *d, u32 lists, bool native_only, bool concurrent_submit,
+                          de_test_mtl_idle_probe *out, char *err, size_t cap) {
+    memset(out, 0, sizeof *out);
+    if (lists > 2)
+        return 0;
+    @autoreleasepool {
+        de_gpu_fence gate = de_gpu_fence_create(d, 0), done = de_gpu_fence_create(d, 0);
+        de_gpu_fence second_gate = {0}, second_done = {0};
+        if (concurrent_submit) {
+            second_gate = de_gpu_fence_create(d, 0);
+            second_done = de_gpu_fence_create(d, 0);
+        }
+        if (!gate.id || !done.id || (concurrent_submit && (!second_gate.id || !second_done.id))) {
+            de_gpu_fence_destroy(d, gate);
+            de_gpu_fence_destroy(d, done);
+            de_gpu_fence_destroy(d, second_gate);
+            de_gpu_fence_destroy(d, second_done);
+            snprintf(err, cap, "idle probe fences");
+            return 0;
+        }
+        mtl_device *m = de__mtl_dev(d);
+        DENSMtlIdleState *state = [DENSMtlIdleState new];
+        state.gate =
+            (__bridge id<MTLSharedEvent>)DE__GPU_PAYLOAD(mtl_fence, de__gpu_get_fence(d, gate))
+                ->event;
+        id<MTLSharedEvent> first = state.gate, second = nil;
+        if (concurrent_submit) {
+            second = (__bridge id<MTLSharedEvent>)DE__GPU_PAYLOAD(mtl_fence,
+                                                                  de__gpu_get_fence(d, second_gate))
+                         ->event;
+            state.entered = dispatch_semaphore_create(0);
+            state.resume = dispatch_semaphore_create(0);
+            state.pause_next = true;
+        }
+        DENSMtlIdleQueue *queue = [DENSMtlIdleQueue new];
+        queue.state = state;
+        de_mutex_lock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+        void *original = m->queues[DE_QUEUE_GRAPHICS];
+        queue.target = (__bridge id<MTLCommandQueue>)original;
+        m->queues[DE_QUEUE_GRAPHICS] = (void *)CFBridgingRetain(queue);
+        de_mutex_unlock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+        int ok = 1;
+        de_thread *worker = NULL;
+        id<MTLCommandBuffer> drain = nil;
+        @try {
+            de_gpu_cmd *commands[2] = {0};
+            for (u32 i = 0; i < lists; ++i) {
+                commands[i] = de_gpu_cmd_begin(d, DE_QUEUE_GRAPHICS, "idle probe");
+                if (!commands[i])
+                    ok = 0;
+            }
+            de_gpu_wait wait = {gate, 1};
+            de_gpu_submit submit = {.cmds = commands,
+                                    .cmd_count = lists,
+                                    .waits = &wait,
+                                    .wait_count = 1,
+                                    .signal = done,
+                                    .signal_value = 1};
+            if (native_only) {
+                /* The present path commits native work without advancing submitted[]. */
+                id<MTLCommandBuffer> cb = [queue commandBuffer];
+                drain = ((DENSMtlIdleBuffer *)cb).target;
+                id<MTLSharedEvent> finished = (__bridge id<MTLSharedEvent>)DE__GPU_PAYLOAD(
+                                                  mtl_fence, de__gpu_get_fence(d, done))
+                                                  ->event;
+                [cb encodeWaitForEvent:state.gate value:1];
+                [cb encodeSignalEvent:finished value:1];
+                de_mutex_lock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+                [cb commit];
+                de__mtl_remember_committed(d, DE_QUEUE_GRAPHICS, (__bridge void *)cb);
+                de_mutex_unlock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+            } else if (!ok || de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &submit) != DE_OK) {
+                snprintf(err, cap, "idle probe submission");
+                ok = 0;
+            }
+            if (ok) {
+                queue.created = 0;
+                bool retained_newer = true;
+                if (concurrent_submit) {
+                    if (de_thread_create(idle_wait_worker, d, "idle probe", DE_THREAD_NORMAL, 0,
+                                         &worker) != DE_OK ||
+                        dispatch_semaphore_wait(
+                            state.entered, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC))) {
+                        snprintf(err, cap, "idle probe worker did not enter native wait");
+                        ok = 0;
+                    } else {
+                        /* First wait is paused with its retained snapshot. Queue newer work
+                         * behind a different GPU event while that wait holds no submit lock. */
+                        state.gate = second;
+                        state.pause_next = false;
+                        de_gpu_wait later_wait = {second_gate, 1};
+                        de_gpu_submit later = {.waits = &later_wait,
+                                               .wait_count = 1,
+                                               .signal = second_done,
+                                               .signal_value = 1};
+                        if (de_gpu_queue_submit(d, DE_QUEUE_GRAPHICS, &later) != DE_OK)
+                            ok = 0;
+                        queue.created = 0;
+                    }
+                    dispatch_semaphore_signal(state.resume);
+                    if (worker) {
+                        de_thread_join(worker);
+                        worker = NULL;
+                    }
+                    de_mutex_lock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+                    retained_newer = m->last_committed[DE_QUEUE_GRAPHICS] != NULL &&
+                                     de_gpu_fence_value(d, second_done) == 0;
+                    de_mutex_unlock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+                    de_gpu_wait_idle(d); /* Must still find and wait for the later buffer. */
+                    retained_newer &= de_gpu_fence_value(d, second_done) >= 1;
+                } else
+                    de_gpu_wait_idle(d);
+                out->created = queue.created;
+                out->waits = de_atomic_load_u32(&state->waits, DE_ATOMIC_RELAXED);
+                out->completed =
+                    retained_newer && !de_atomic_load_u32(&state->expired, DE_ATOMIC_RELAXED) &&
+                    de_gpu_fence_value(d, done) >= 1 &&
+                    d->vt->queue_completed(d, DE_QUEUE_GRAPHICS) >=
+                        de_atomic_load_u64(&d->submitted[DE_QUEUE_GRAPHICS], DE_ATOMIC_ACQUIRE);
+            }
+        } @finally {
+            first.signaledValue = 1;
+            second.signaledValue = 1;
+            if (concurrent_submit)
+                dispatch_semaphore_signal(state.resume);
+            if (worker)
+                de_thread_join(worker);
+            [drain waitUntilCompleted];
+            [queue.last_target waitUntilCompleted];
+            de_mutex_lock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+            void *probe = m->queues[DE_QUEUE_GRAPHICS];
+            m->queues[DE_QUEUE_GRAPHICS] = original;
+            (void)CFBridgingRelease(probe);
+            de_mutex_unlock(&d->submit_lock[DE_QUEUE_GRAPHICS]);
+            de_gpu_wait_idle(d);
+            de_gpu_fence_destroy(d, gate);
+            de_gpu_fence_destroy(d, done);
+            de_gpu_fence_destroy(d, second_gate);
+            de_gpu_fence_destroy(d, second_done);
+        }
+        return ok;
+    }
+}
+
 u64 de_test_mtl_texture_id(void *texture) {
     MTLResourceID rid = ((__bridge id<MTLTexture>)texture).gpuResourceID;
     u64 v;

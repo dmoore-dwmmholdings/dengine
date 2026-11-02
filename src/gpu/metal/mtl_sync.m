@@ -34,6 +34,23 @@
 
 #include "gpu/metal/mtl_internal.h"
 
+/* Metal publishes completion blocks outside instrumented code. Annotate only that
+ * registration-to-completion edge, like the query listener hand-off in mtl_query.m. */
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DE__MTL_TSAN 1
+#endif
+#endif
+#if defined(DE__MTL_TSAN)
+void __tsan_acquire(void *addr);
+void __tsan_release(void *addr);
+#define DE__MTL_TSAN_ACQUIRE(p) __tsan_acquire((void *)(p))
+#define DE__MTL_TSAN_RELEASE(p) __tsan_release((void *)(p))
+#else
+#define DE__MTL_TSAN_ACQUIRE(p) ((void)(p))
+#define DE__MTL_TSAN_RELEASE(p) ((void)(p))
+#endif
+
 static const char *const k_queue_names[DE_QUEUE_COUNT_] = {"graphics", "compute", "copy"};
 
 /* ---------- Queue fences ---------- */
@@ -148,6 +165,14 @@ de_result de__mtl_fence_wait(de_gpu_device *d, de__gpu_fence *f, u64 value, u64 
 
 /* ---------- Submission ---------- */
 
+void de__mtl_remember_committed(de_gpu_device *d, de_gpu_queue q, void *buffer) {
+    mtl_device *m = de__mtl_dev(d);
+    void *old = m->last_committed[q];
+    m->last_committed[q] = (void *)CFBridgingRetain((__bridge id<MTLCommandBuffer>)buffer);
+    if (old)
+        (void)CFBridgingRelease(old);
+}
+
 /* Leaves the submit's group when `cb` completes; on an error, logs it and completes the user
  * fence (see the file comment). The block holds the events and the group, not the device: it may
  * run after the device is gone. */
@@ -157,6 +182,8 @@ static void watch(id<MTLCommandBuffer> cb, dispatch_group_t group, de_log_catego
     id fault_log = (__bridge id)fault; /* DENG-328: the block retains the device's fault log */
     dispatch_group_enter(group);
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+      /* Use Metal's callback argument before reading any captured value. */
+      DE__MTL_TSAN_ACQUIRE((__bridge void *)done);
       if (done.status == MTLCommandBufferStatusError) {
           DE_ERROR(log, "metal: command buffer \"%s\" on the %s queue failed: %s",
                    done.label ? done.label.UTF8String : "", queue_name,
@@ -169,6 +196,9 @@ static void watch(id<MTLCommandBuffer> cb, dispatch_group_t group, de_log_catego
       }
       dispatch_group_leave(group);
     }];
+    /* addCompletedHandler copies its captures before returning; every caller commits
+     * afterwards, and Metal calls the handler only after that buffer completes. */
+    DE__MTL_TSAN_RELEASE((__bridge void *)cb);
 }
 
 /* The published internal value must complete even when the submit fails (gpu_backend.h). It is
@@ -261,6 +291,7 @@ de_result de__mtl_queue_submit(de_gpu_device *d, de_gpu_queue q, const de_gpu_su
               timeline.signaledValue = queue_value;
         });
         [last commit];
+        de__mtl_remember_committed(d, q, (__bridge void *)last);
     }
     return DE_OK;
 }
