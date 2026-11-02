@@ -2,6 +2,8 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "de_test.h"
+#include "render_device.h"
+#include "gpu/gpu_backend.h"
 #include <dengine/de_debug.h>
 #include <dengine/de_shader.h>
 #include "render/post/tonemap.h"
@@ -165,6 +167,56 @@ static void tmfx_teardown(tmfx *f) {
         de_gpu_device_destroy(f->dev);
     }
 }
+typedef struct tm_device_probe {
+    tmfx fixture;
+    de_tracking_allocator tracking;
+    de_allocator allocator;
+    de_gpu_caps saved_caps;
+    bool below_base, entered, cleaned;
+} tm_device_probe;
+static tm_device_probe *tm_current_probe;
+static void tm_probe_setup(void *arg) {
+    tm_device_probe *p = arg;
+    p->allocator = de_tracking_allocator_init(&p->tracking, NULL, DE_MEM_RENDER);
+    tmfx_setup(&p->fixture);
+    ASSERT_EQ(de_gpu_device_create(
+                  &(de_gpu_device_desc){.backend = DE_GPU_NULL, .allocator = &p->allocator},
+                  &p->fixture.dev),
+              DE_OK);
+    p->saved_caps = p->fixture.dev->caps;
+    if (p->below_base)
+        p->fixture.dev->caps.base_tier_ok = false;
+    de_test_require_base_device(DE_OK, p->fixture.dev);
+}
+static void tm_probe_body(void *arg) {
+    tm_device_probe *p = arg;
+    p->entered = true;
+}
+static void tm_probe_cleanup(void *arg) {
+    tm_device_probe *p = arg;
+    if (p->fixture.dev)
+        p->fixture.dev->caps = p->saved_caps;
+    tmfx_teardown(&p->fixture);
+    p->cleaned = true;
+}
+static void tm_probe_run(void) {
+    de__test_run_fixture(tm_current_probe, tm_probe_setup, tm_probe_body, tm_probe_cleanup);
+}
+TEST(tonemap, fixture_below_base_cleanup_and_supported_execution) {
+    for (u32 i = 0; i < 2; ++i) {
+        tm_device_probe probe = {.below_base = i == 0};
+        tm_current_probe = &probe;
+        de_test_case child = {"tonemap_fixture_child", "availability", __FILE__, __LINE__,
+                              tm_probe_run};
+        de_test_result result;
+        EXPECT_EQ(de_test_run_case(&child, &result, 1), i ? DE_TEST_PASSED : DE_TEST_SKIPPED);
+        EXPECT_EQ(probe.entered, i != 0);
+        EXPECT_TRUE(probe.cleaned);
+        EXPECT_EQ(de_tracking_allocator_stats(&probe.tracking).blocks_live, 0u);
+    }
+    tm_current_probe = NULL;
+}
+
 static void open_fixture(tmfx *f, bool assets) {
 #if !DE_HAS_GPU_METAL
     (void)f;
@@ -172,9 +224,9 @@ static void open_fixture(tmfx *f, bool assets) {
     SKIP("Metal runtime qualification needs macOS");
 #else
     setenv("MTL_DEBUG_LAYER", "1", 0);
-    ASSERT_EQ(de_gpu_device_create(
-                  &(de_gpu_device_desc){.backend = DE_GPU_METAL, .debug_layer = true}, &f->dev),
-              DE_OK);
+    de_result device_result = de_gpu_device_create(
+        &(de_gpu_device_desc){.backend = DE_GPU_METAL, .debug_layer = true}, &f->dev);
+    de_test_require_base_device(device_result, f->dev);
     if (assets) {
         ASSERT_EQ(de_fs_mount("tmtest", DE_TONEMAP_SHADER_DIR, 0, 0), DE_OK);
         ASSERT_EQ(de_fs_mount("tmtest", DE_TONEMAP_TEST_TMP, DE_MOUNT_WRITABLE, 1), DE_OK);

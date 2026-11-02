@@ -3,6 +3,8 @@
 #endif
 
 #include "de_test.h"
+#include "render_device.h"
+#include "gpu/gpu_backend.h"
 #include "render/post/jitter.h"
 #include "render/upscale/upscaler.h"
 #include <dengine/de_platform.h>
@@ -124,14 +126,102 @@ static void taa_fx_teardown(taa_fx *f) {
     }
     EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).bytes_live, 0u);
 }
+/* Exercise the same availability gate and real fixture teardown with a controllable device.
+ * Null is Base-capable; changing only its reported caps models hosted unavailable hardware. */
+typedef struct taa_device_probe {
+    taa_fx fixture;
+    de_result creation;
+    u32 cap_loss, renderer_failure;
+    bool missing_device, entered, cleaned;
+    de_gpu_caps saved_caps;
+} taa_device_probe;
+static taa_device_probe *taa_current_probe;
+static void taa_probe_setup(void *arg) {
+    taa_device_probe *p = arg;
+    taa_fx *f = &p->fixture;
+    taa_fx_setup(f);
+    if (p->creation == DE_OK && !p->missing_device) {
+        ASSERT_EQ(de_gpu_device_create(
+                      &(de_gpu_device_desc){.backend = DE_GPU_NULL, .allocator = &f->allocator},
+                      &f->device),
+                  DE_OK);
+        p->saved_caps = f->device->caps;
+        if (p->cap_loss == 1)
+            f->device->caps.base_tier_ok = false;
+        else if (p->cap_loss == 2)
+            f->device->caps.max_push_constant_bytes = 0;
+        else if (p->cap_loss == 3)
+            f->device->caps.max_bindless_textures = 0;
+    }
+    de_test_require_base_device(p->creation, f->device);
+}
+static void taa_probe_body(void *arg) {
+    taa_device_probe *p = arg;
+    p->entered = true;
+    if (p->renderer_failure == 1) {
+        de_tracking_allocator_fail_after(&p->fixture.tracking, 0);
+        ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = p->fixture.device,
+                                                         .allocator = &p->fixture.allocator},
+                                     &p->fixture.renderer),
+                  DE_OK);
+    } else if (p->renderer_failure == 2) {
+        ASSERT_EQ(de_renderer_create(NULL, &p->fixture.renderer), DE_OK);
+    }
+}
+static void taa_probe_cleanup(void *arg) {
+    taa_device_probe *p = arg;
+    if (p->fixture.device)
+        p->fixture.device->caps = p->saved_caps;
+    taa_fx_teardown(&p->fixture);
+    p->cleaned = true;
+}
+static void taa_probe_run(void) {
+    de__test_run_fixture(taa_current_probe, taa_probe_setup, taa_probe_body, taa_probe_cleanup);
+}
+TEST(taa, fixture_availability_preserves_failures_and_cleanup) {
+    const struct {
+        de_result creation;
+        u32 cap_loss, renderer_failure;
+        bool missing_device;
+        de_test_status expected;
+        bool entered;
+    } cases[] = {
+        {DE_ERR_UNSUPPORTED, 0, 0, false, DE_TEST_SKIPPED, false},
+        {DE_ERR_OUT_OF_MEMORY, 0, 0, false, DE_TEST_FAILED, false},
+        {DE_ERR_INVALID_ARGUMENT, 0, 0, false, DE_TEST_FAILED, false},
+        {DE_OK, 0, 0, true, DE_TEST_FAILED, false},
+        {DE_OK, 1, 0, false, DE_TEST_SKIPPED, false},
+        {DE_OK, 2, 0, false, DE_TEST_SKIPPED, false},
+        {DE_OK, 3, 0, false, DE_TEST_SKIPPED, false},
+        {DE_OK, 0, 0, false, DE_TEST_PASSED, true},
+        {DE_OK, 0, 1, false, DE_TEST_FAILED, true},
+        {DE_OK, 0, 2, false, DE_TEST_FAILED, true},
+    };
+    for (u32 i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+        taa_device_probe probe = {.creation = cases[i].creation,
+                                  .cap_loss = cases[i].cap_loss,
+                                  .renderer_failure = cases[i].renderer_failure,
+                                  .missing_device = cases[i].missing_device};
+        taa_current_probe = &probe;
+        de_test_case child = {"taa_fixture_child", "availability", __FILE__, __LINE__,
+                              taa_probe_run};
+        de_test_result result;
+        EXPECT_EQ(de_test_run_case(&child, &result, 1), cases[i].expected);
+        EXPECT_EQ(probe.entered, cases[i].entered);
+        EXPECT_TRUE(probe.cleaned);
+        EXPECT_EQ(de_tracking_allocator_stats(&probe.fixture.tracking).blocks_live, 0u);
+    }
+    taa_current_probe = NULL;
+}
+
 static void open_taa(taa_fx *f) {
 #if !DE_HAS_GPU_METAL
     (void)f;
     SKIP("Metal runtime requires macOS");
 #else
-    ASSERT_EQ(de_gpu_device_create(
-                  &(de_gpu_device_desc){.backend = DE_GPU_METAL, .debug_layer = true}, &f->device),
-              DE_OK);
+    de_result device_result = de_gpu_device_create(
+        &(de_gpu_device_desc){.backend = DE_GPU_METAL, .debug_layer = true}, &f->device);
+    de_test_require_base_device(device_result, f->device);
     ASSERT_EQ(
         de_renderer_create(&(de_renderer_desc){.device = f->device, .allocator = &f->allocator},
                            &f->renderer),
@@ -499,11 +589,11 @@ static void open_scene(taa_scene *f, f32 scale) {
                                                              .types = f->types},
                                      &f->assets),
               DE_OK);
-    ASSERT_EQ(de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
-                                                         .allocator = &f->allocator,
-                                                         .debug_layer = true},
-                                   &f->device),
-              DE_OK);
+    de_result device_result = de_gpu_device_create(&(de_gpu_device_desc){.backend = DE_GPU_METAL,
+                                                                         .allocator = &f->allocator,
+                                                                         .debug_layer = true},
+                                                   &f->device);
+    de_test_require_base_device(device_result, f->device);
     ASSERT_EQ(de_renderer_create(&(de_renderer_desc){.device = f->device,
                                                      .assets = f->assets,
                                                      .types = f->types,
@@ -563,6 +653,22 @@ static void open_scene(taa_scene *f, f32 scale) {
     ASSERT_TRUE(f->fence.id);
 #endif
 }
+TEST_F(taa, fixture_cpu_owners_cleanup_without_device, taa_scene) {
+    ASSERT_EQ(de_task_system_create(
+                  &(de_task_system_desc){.allocator = &f->allocator, .worker_count = 2}, &f->tasks),
+              DE_OK);
+    ASSERT_EQ(de_type_registry_create(&f->allocator, &f->types), DE_OK);
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.allocator = &f->allocator,
+                                                             .tasks = f->tasks,
+                                                             .io_threads = 1,
+                                                             .cache_dir = "taa:/cache",
+                                                             .types = f->types},
+                                     &f->assets),
+              DE_OK);
+    ASSERT_TRUE(f->device == NULL && f->renderer == NULL);
+    /* The real teardown verifies all tracked CPU owners are freed and the mount is released. */
+}
+
 static void scene_frame(taa_scene *f, bool read) {
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_POST_UPDATE, 1.f / 60, 0), DE_OK);
     ASSERT_EQ(de_world_run_schedule(f->world, DE_SCHEDULE_EXTRACT, 1.f / 60, 0), DE_OK);
