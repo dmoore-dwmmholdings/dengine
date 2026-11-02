@@ -19,13 +19,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ED_IN_CAP    (16u << 20)
-#define ED_OUT_CAP   (32u << 20)
-#define ED_NOTE_CAP  (8u << 20)
-#define ED_ARENA_CAP (8u << 20)
-#define ED_BLOB_PART (1u << 20)
+#define ED_IN_CAP             (16u << 20)
+#define ED_OUT_CAP            (32u << 20)
+#define ED_NOTE_CAP           (8u << 20)
+#define ED_ARENA_CAP          (8u << 20)
+#define ED_BLOB_PART          (1u << 20)
 #define ED_REQUESTS_PER_FRAME 256u
-#define ED_DEFAULT_GRACE_S 30u
+#define ED_DEFAULT_GRACE_S    30u
 
 static const char *arg_value(const de__host *h, const char *opt) {
     const size_t n = strlen(opt);
@@ -200,6 +200,22 @@ de_ep_raw de__ed_raw_range(de_ep_arena *a, f64 lo, f64 hi) {
     mpack_write_double(&w, hi);
     mpack_finish_array(&w);
     return de__ed_raw_end(a, &w);
+}
+
+bool de__ed_raw_map_entry(mpack_reader_t *r, de_ep_kv_raw *out) {
+    memset(out, 0, sizeof *out);
+    const u32 length = mpack_expect_str(r);
+    const char *key = length ? mpack_read_bytes_inplace(r, length) : "";
+    mpack_done_str(r);
+    const char *begin = NULL, *end = NULL;
+    mpack_reader_remaining(r, &begin);
+    mpack_discard(r);
+    mpack_reader_remaining(r, &end);
+    if (mpack_reader_error(r) != mpack_ok || !begin || !end || end <= begin)
+        return false;
+    out->key = (de_ep_str){key, length};
+    out->value = (de_ep_raw){begin, (size_t)(end - begin)};
+    return true;
 }
 
 /* ---------- Connection ---------- */
@@ -427,8 +443,8 @@ de_result de__editor_start(de__host *h) {
     ed->log = de_log_register_category("editor", DE_LOG_INFO);
     snprintf(ed->token, sizeof ed->token, "%s", token);
     const char *grace = arg_value(h, "--editor-grace-s");
-    ed->grace_ns = (u64)(grace != NULL ? strtoul(grace, NULL, 10) : ED_DEFAULT_GRACE_S) *
-                   1000000000ull;
+    ed->grace_ns =
+        (u64)(grace != NULL ? strtoul(grace, NULL, 10) : ED_DEFAULT_GRACE_S) * 1000000000ull;
     ed->in_cap = ED_IN_CAP;
     ed->out_cap = ED_OUT_CAP;
     ed->note_cap = ED_NOTE_CAP;

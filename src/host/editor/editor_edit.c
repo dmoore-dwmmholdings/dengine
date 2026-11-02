@@ -184,7 +184,8 @@ static de_ep_raw components_raw(de__editor *ed, de_ep_arena *a, de_entity e) {
                 mpack_complete_map(&mw);
             } else {
                 de__ed_write_object(ed, &mw, ci->type,
-                                    (const u8 *)ecs_chunk_column(arch, ch, col) + (size_t)rec->row * ci->size);
+                                    (const u8 *)ecs_chunk_column(arch, ch, col) +
+                                        (size_t)rec->row * ci->size);
             }
         }
     }
@@ -302,32 +303,31 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         }
         /* The components as a map, split into kv pairs for the EditOp. */
         const de_ep_raw all = components_raw(ed, a, e);
-        mpack_tree_t tree;
-        mpack_tree_init_data(&tree, all.ptr, all.len);
-        mpack_tree_parse(&tree);
-        mpack_node_t root = mpack_tree_root(&tree);
-        if (mpack_tree_error(&tree) == mpack_ok && mpack_node_type(root) == mpack_type_map) {
-            const u32 n = (u32)mpack_node_map_count(root);
-            de_ep_kv_raw *kv = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (n + 1));
-            for (u32 i = 0; i < n && kv != NULL; ++i) {
-                mpack_node_t k = mpack_node_map_key_at(root, i);
-                mpack_node_t v = mpack_node_map_value_at(root, i);
-                kv[i].key = (de_ep_str){mpack_node_str(k), (u32)mpack_node_strlen(k)};
-                kv[i].value = (de_ep_raw){mpack_node_data(v), mpack_node_data_len(v)};
-            }
-            inv->has_components = kv != NULL;
-            inv->components.items = kv;
-            inv->components.count = kv ? n : 0;
+        mpack_reader_t reader;
+        mpack_reader_init_data(&reader, all.ptr, all.len);
+        const u32 n = mpack_expect_map(&reader);
+        de_ep_kv_raw *kv = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (n + 1));
+        if (kv == NULL)
+            mpack_reader_flag_error(&reader, mpack_error_memory);
+        for (u32 i = 0; i < n && mpack_reader_error(&reader) == mpack_ok; ++i) {
+            if (!de__ed_raw_map_entry(&reader, &kv[i]))
+                break;
         }
-        /* The tree points into `all`, which lives in the arena; the kv pairs stay valid. */
-        mpack_tree_destroy(&tree);
+        mpack_done_map(&reader);
+        if (mpack_reader_destroy(&reader) != mpack_ok)
+            return fail(f, DE_EP_ERR_INTERNAL, "could not capture despawned components");
+        inv->has_components = true;
+        inv->components.items = kv;
+        inv->components.count = n;
+        /* Both keys and complete values borrow `all`, which stays in the arena. */
         de_entity_despawn(w, e);
         return true;
     }
 
     if (de_ep_str_eq(o->op, "add") || de_ep_str_eq(o->op, "remove")) {
         if (!o->has_component)
-            return fail(f, DE_EP_ERR_INVALID_PARAMS, "%.*s needs component", (int)o->op.len, o->op.ptr);
+            return fail(f, DE_EP_ERR_INVALID_PARAMS, "%.*s needs component", (int)o->op.len,
+                        o->op.ptr);
         const de_component c = de__ed_component(ed, o->component);
         if (c.id == 0)
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "no component type %.*s",
@@ -374,7 +374,8 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         memcpy(path, o->path.ptr, o->path.len);
         path[o->path.len] = '\0';
         char *dot = strchr(path, '.');
-        const de_component c = de__ed_component(ed, (de_ep_str){path, dot ? (u32)(dot - path) : o->path.len});
+        const de_component c =
+            de__ed_component(ed, (de_ep_str){path, dot ? (u32)(dot - path) : o->path.len});
         de_type_id type;
         u32 size = 0;
         if (c.id == 0 || !de__ed_component_type(ed, c, &type, &size) || !de_entity_has(w, e, c))
@@ -385,7 +386,8 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "%s has no data", path);
         const de_field_info *field = NULL;
         u32 off = 0;
-        if (dot != NULL && de_reflect_resolve_path(ed->e->types, type, dot + 1, &field, &off) != DE_OK) {
+        if (dot != NULL &&
+            de_reflect_resolve_path(ed->e->types, type, dot + 1, &field, &off) != DE_OK) {
             de_error_clear();
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "no field %s", path);
         }
@@ -443,7 +445,8 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
                 return fail(f, DE_EP_ERR_INVALID_PARAMS, "an entity can't be its own parent");
             for (de_entity x = p; x.bits != 0; x = parent_of(ed, x))
                 if (x.bits == e.bits)
-                    return fail(f, DE_EP_ERR_INVALID_PARAMS, "an entity can't be moved under its own child");
+                    return fail(f, DE_EP_ERR_INVALID_PARAMS,
+                                "an entity can't be moved under its own child");
         }
         const de_entity old = parent_of(ed, e);
         /* Keep the world transform: the new local one is the old world one seen from the new
@@ -451,9 +454,12 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         const de_builtin_component_ids b = de_builtin_components(w);
         const bool keep = !o->has_keep_world || o->keep_world;
         DeTransform *local = (DeTransform *)de_entity_get(w, e, b.transform);
-        const DeGlobalTransform *gw = (const DeGlobalTransform *)de_entity_get_const(w, e, b.global_transform);
+        const DeGlobalTransform *gw =
+            (const DeGlobalTransform *)de_entity_get_const(w, e, b.global_transform);
         if (keep && local != NULL && gw != NULL) {
-            const DeGlobalTransform *pg = p.bits ? (const DeGlobalTransform *)de_entity_get_const(w, p, b.global_transform) : NULL;
+            const DeGlobalTransform *pg =
+                p.bits ? (const DeGlobalTransform *)de_entity_get_const(w, p, b.global_transform)
+                       : NULL;
             if (p.bits == 0) {
                 *local = *gw;
             } else if (pg != NULL) {
@@ -654,7 +660,8 @@ static void undo_redo(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
                       bool undo) {
     de_ep_tx_params q;
     memset(&q, 0, sizeof q);
-    if (!(undo ? de_ep_read_params_edit_undo(req, a, &q) : de_ep_read_params_edit_redo(req, a, &q))) {
+    if (!(undo ? de_ep_read_params_edit_undo(req, a, &q)
+               : de_ep_read_params_edit_redo(req, a, &q))) {
         de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "bad params");
         return;
     }

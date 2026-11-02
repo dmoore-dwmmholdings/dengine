@@ -431,3 +431,12 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_settings_gate PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-727: real prefab snapshots and raw MessagePack values, no native graphics.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_prefab SOURCES test_editor_prefab.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_prefab PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_prefab PRIVATE
+        DE_EDITOR_SAFETY_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
+endif()

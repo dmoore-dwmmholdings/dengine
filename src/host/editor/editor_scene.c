@@ -764,36 +764,44 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
         if (!de__ed_entity_row(ed, &a, (de_entity){ents[i]}, NULL, NULL, &row))
             continue;
         for (u32 c = 0; c < row.components.count; ++c) {
-            mpack_tree_t tree;
-            mpack_tree_init_data(&tree, row.components.items[c].value.ptr,
-                                 row.components.items[c].value.len);
-            mpack_tree_parse(&tree);
-            mpack_node_t m = mpack_tree_root(&tree);
-            if (mpack_tree_error(&tree) == mpack_ok && mpack_node_type(m) == mpack_type_map) {
-                for (size_t f = 0; f < mpack_node_map_count(m); ++f) {
+            mpack_reader_t reader;
+            mpack_reader_init_data(&reader, row.components.items[c].value.ptr,
+                                   row.components.items[c].value.len);
+            const u32 fields = mpack_expect_map(&reader);
+            if (mpack_reader_error(&reader) == mpack_ok) {
+                for (u32 f = 0; f < fields; ++f) {
+                    de_ep_kv_raw field;
+                    if (!de__ed_raw_map_entry(&reader, &field))
+                        break;
                     if (count == cap) {
                         ed_base *g =
                             (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap * 2, 8, DE_MEM_GENERAL);
-                        if (g == NULL)
+                        if (g == NULL) {
+                            mpack_reader_flag_error(&reader, mpack_error_memory);
                             break;
+                        }
                         memcpy(g, base, sizeof(ed_base) * count);
                         DE_FREE(al, base, sizeof(ed_base) * cap);
                         base = g;
                         cap *= 2;
                     }
-                    mpack_node_t k = mpack_node_map_key_at(m, f), v = mpack_node_map_value_at(m, f);
                     ed_base *b = &base[count++];
                     b->entity = ents[i];
                     snprintf(b->path, sizeof b->path, "%.*s.%.*s",
                              (int)row.components.items[c].key.len, row.components.items[c].key.ptr,
-                             (int)mpack_node_strlen(k), mpack_node_str(k));
+                             (int)field.key.len, field.key.ptr);
                     b->off = (u32)bytes.size;
-                    b->len = (u32)mpack_node_data_len(v);
+                    b->len = (u32)field.value.len;
                     de_writer bw = de_writer_from_mem(&bytes);
-                    (void)bw.write(bw.user, mpack_node_data(v), b->len);
+                    if (bw.write(bw.user, field.value.ptr, b->len) != DE_OK) {
+                        --count;
+                        mpack_reader_flag_error(&reader, mpack_error_memory);
+                        break;
+                    }
                 }
             }
-            mpack_tree_destroy(&tree);
+            mpack_done_map(&reader);
+            (void)mpack_reader_destroy(&reader);
         }
     }
     inst->base = base;

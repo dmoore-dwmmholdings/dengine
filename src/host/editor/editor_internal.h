@@ -43,16 +43,20 @@ struct de__editor {
     bool connected, authed;
     bool reload_outcomes; /**< negotiated peer understands optional reload failure (IPC >= 1.6) */
     char token[160];
-    u32 epoch;          /**< bumped on each connection: ids from an older one are stale */
-    u64 seq;            /**< notification sequence number */
-    u64 idle_since_ns;  /**< when the service last had no connection */
-    u64 grace_ns;       /**< quit after this long without a connection */
-    u64 blob_next;      /**< next blob id */
+    u32 epoch;         /**< bumped on each connection: ids from an older one are stale */
+    u64 seq;           /**< notification sequence number */
+    u64 idle_since_ns; /**< when the service last had no connection */
+    u64 grace_ns;      /**< quit after this long without a connection */
+    u64 blob_next;     /**< next blob id */
 
-    char *in;   size_t in_cap;   /**< one received frame */
-    char *out;  size_t out_cap;  /**< the response being written */
-    char *note; size_t note_cap; /**< a notification being written */
-    unsigned char *arena; size_t arena_cap;
+    char *in;
+    size_t in_cap; /**< one received frame */
+    char *out;
+    size_t out_cap; /**< the response being written */
+    char *note;
+    size_t note_cap; /**< a notification being written */
+    unsigned char *arena;
+    size_t arena_cap;
 
     de__ed_handler handlers[DE_EP_METHOD_COUNT];
     de__ed_tick_fn ticks[DE__ED_MAX_TICKS];
@@ -132,6 +136,9 @@ de_ep_raw de__ed_raw_str(de_ep_arena *a, const char *s);
 de_ep_raw de__ed_raw_f64(de_ep_arena *a, f64 v);
 de_ep_raw de__ed_raw_bool(de_ep_arena *a, bool v);
 de_ep_raw de__ed_raw_range(de_ep_arena *a, f64 lo, f64 hi);
+/** Reads a string-keyed map entry, borrowing the complete encoded value from an
+ * in-memory reader. On failure, clears the entry and retains the reader error. */
+bool de__ed_raw_map_entry(mpack_reader_t *r, de_ep_kv_raw *out);
 
 /** Decodes the params of `method` into `var`, or answers invalid_params and returns. */
 #define DE__ED_PARAMS(method, type, var)                                                           \
