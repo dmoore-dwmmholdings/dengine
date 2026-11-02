@@ -68,6 +68,8 @@ void de__rt_trace(de_renderer *, de_gpu_cmd *, const de__rt_context *, de_gpu_bu
                   de_gpu_buffer hits, u32 count, u32 flags);
 /** Main-thread mesh snapshot/build/compaction lifecycle; renderer thread is idle at the kick. */
 de_result de__rt_prepare(de_renderer *);
+/** Lazy hybrid pipelines for this effective view; captures never select them. Render thread. */
+de_result de__rt_effects_prepare(de_renderer *, const de_render_settings *, bool capture);
 void de__rt_scene_destroy(de_renderer *);
 void de__rt_view_stage(de__view_frame *, void *);
 /** Later effects declare an explicit read of context->dependency before reading its TLAS. */

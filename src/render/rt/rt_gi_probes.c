@@ -85,6 +85,8 @@ typedef struct ddgi_view {
     bool recorded, published;
 } ddgi_view;
 struct de__rt_gi {
+    bool pipelines_attempted;
+    de_result pipeline_result;
     de_renderer *r;
     de_gpu_pipeline kernels[K_COUNT];
     de_cvar budget, rays, hysteresis;
@@ -108,7 +110,7 @@ static bool enabled(const de_render_settings *s) {
 }
 static bool owns_frame(void *user, const de__render_world_frame *world) {
     de__rt_gi *s = user;
-    if (!world || !s->kernels[0].id || !world->view_count)
+    if (!world || !s->r->caps.ray_query || !s->r->caps.max_bindless_accels || !world->view_count)
         return false;
     for (u32 i = 0; i < world->view_count; ++i) {
         de_render_settings settings = de_view_get_settings(s->r, world->views[i].camera.view);
@@ -151,6 +153,61 @@ void de__rt_gi_destroy(de__rt_gi *s) {
 }
 static de_result build(void *, de_rg *, de__vis_context *, de__lighting_context *,
                        de__lighting_inputs *);
+static de_result build_pipelines(de__rt_gi *s) {
+    de_renderer *r = s->r;
+    if (r->caps.ray_query && r->caps.max_bindless_accels) {
+        const char *assets[] = {"ddgi_trace", "ddgi_update", "ddgi_relocate"};
+        const char *names[] = {"cs_generate", "cs_shade",  "cs_shadow_ray", "cs_shadow_add",
+                               "cs_scroll",   "cs_update", "cs_border",     "cs_relocate"};
+        for (u32 group = 0; group < 3; ++group) {
+            u32 first = group == 0   ? 0
+                        : group == 1 ? 4
+                                     : 7,
+                count = group == 0   ? 4
+                        : group == 1 ? 3
+                                     : 1;
+            de__engine_shader_code code;
+            char why[512] = {0};
+            de_result result = de__engine_shader_load(r->dev, r->alloc, assets[group], 0,
+                                                      names + first, count, &code, why, sizeof why);
+            if (result != DE_OK) {
+                return DE_FAIL(result, "DDGI shaders: %s", why);
+            }
+            for (u32 i = 0; i < count; ++i) {
+                u32 kernel = first + i, threads = group == 1 ? 8 : 64;
+                s->kernels[kernel] = de_gpu_pipeline_create(
+                    r->dev,
+                    &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                            .cs = code.entries[i].blob,
+                                            .push_constant_bytes = 16,
+                                            .threadgroup_size = {threads, group == 1 ? 8 : 1, 1},
+                                            .name = names[kernel]});
+            }
+            de__engine_shader_code_free(&code);
+        }
+        for (u32 i = 0; i < K_COUNT; ++i)
+            if (!s->kernels[i].id) {
+                return DE_FAIL(DE_ERR_UNSUPPORTED, "DDGI pipeline");
+            }
+    }
+    return DE_OK;
+}
+/* Selected on the render thread; a failed native compiler attempt is never repeated. */
+de_result de__rt_gi_pipelines(de__rt_gi *s) {
+    if (!s)
+        return DE_OK;
+    if (!s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        s->pipeline_result = build_pipelines(s);
+        if (s->pipeline_result != DE_OK) {
+            for (u32 i = 0; i < K_COUNT; ++i) {
+                de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
+                s->kernels[i] = (de_gpu_pipeline){0};
+            }
+        }
+    }
+    return s->pipeline_result;
+}
 de_result de__rt_gi_create(de_renderer *r, de__rt_gi **out) {
     *out = NULL;
     de__rt_gi *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
@@ -177,43 +234,7 @@ de_result de__rt_gi_create(de_renderer *r, de__rt_gi **out) {
         de__rt_gi_destroy(s);
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DDGI cvars");
     }
-    if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *assets[] = {"ddgi_trace", "ddgi_update", "ddgi_relocate"};
-        const char *names[] = {"cs_generate", "cs_shade",  "cs_shadow_ray", "cs_shadow_add",
-                               "cs_scroll",   "cs_update", "cs_border",     "cs_relocate"};
-        for (u32 group = 0; group < 3; ++group) {
-            u32 first = group == 0   ? 0
-                        : group == 1 ? 4
-                                     : 7,
-                count = group == 0   ? 4
-                        : group == 1 ? 3
-                                     : 1;
-            de__engine_shader_code code;
-            char why[512] = {0};
-            de_result result = de__engine_shader_load(r->dev, r->alloc, assets[group], 0,
-                                                      names + first, count, &code, why, sizeof why);
-            if (result != DE_OK) {
-                de__rt_gi_destroy(s);
-                return DE_FAIL(result, "DDGI shaders: %s", why);
-            }
-            for (u32 i = 0; i < count; ++i) {
-                u32 kernel = first + i, threads = group == 1 ? 8 : 64;
-                s->kernels[kernel] = de_gpu_pipeline_create(
-                    r->dev,
-                    &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
-                                            .cs = code.entries[i].blob,
-                                            .push_constant_bytes = 16,
-                                            .threadgroup_size = {threads, group == 1 ? 8 : 1, 1},
-                                            .name = names[kernel]});
-            }
-            de__engine_shader_code_free(&code);
-        }
-        for (u32 i = 0; i < K_COUNT; ++i)
-            if (!s->kernels[i].id) {
-                de__rt_gi_destroy(s);
-                return DE_FAIL(DE_ERR_UNSUPPORTED, "DDGI pipeline");
-            }
-    }
+
     de__irradiance_set_update_source(r->irradiance, build, owns_frame, s);
     *out = s;
     return DE_OK;
@@ -442,11 +463,12 @@ static de_result build(void *user, de_rg *g, de__vis_context *vc, de__lighting_c
     ddgi_view *view = &s->views[vc->view_slot];
     view->published = false;
     view->pending = NULL;
-    if (!enabled(vc->settings) || !s->kernels[0].id || !s->count)
+    if (!enabled(vc->settings) || !s->count)
         return DE_OK;
     de__rt_context *rt = de__rt_context_get(s->r, vc->view, g, vc->frame_index);
     if (!rt)
         return DE_OK;
+    DE_TRY(de__rt_gi_pipelines(s));
     if (view->handle.id != vc->view.id) {
         release_view(s, view);
         view->handle = vc->view;

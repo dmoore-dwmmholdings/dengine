@@ -1358,6 +1358,10 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     /* PT retains only canonical GPU scene/TLAS declarations; unused visibility work is culled. */
     const bool diagnostic = vf.display.mode != DE_VIEW_RENDER_LIT;
     const bool path = !diagnostic && de__pt_enabled(r, vf.settings) && !vf.probe_capture;
+    if (!diagnostic && !path && de__rt_effects_prepare(r, vf.settings, vf.probe_capture) != DE_OK) {
+        view_failed(r, s, "hybrid RT pipelines");
+        return;
+    }
     bool path_started = false;
     /* The stages and hooks, in slot, order, phase and registration order. */
     vs->building = &vf;

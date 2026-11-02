@@ -57,6 +57,8 @@ typedef struct shadow_view {
     de__rt_shadows_info info;
 } shadow_view;
 struct de__rt_shadows {
+    bool pipelines_attempted;
+    de_result pipeline_result;
     de_renderer *renderer;
     de_gpu_pipeline generate, resolve;
     de__signal_denoiser *denoiser;
@@ -102,6 +104,48 @@ void de__rt_shadows_destroy(de__rt_shadows *s) {
     de__signal_denoiser_destroy(s->denoiser);
     DE_FREE(s->renderer->alloc, s, sizeof *s);
 }
+static de_result build_pipelines(de__rt_shadows *s) {
+    de_renderer *r = s->renderer;
+    if (r->caps.ray_query && r->caps.max_bindless_accels) {
+        const char *names[] = {"cs_generate", "cs_resolve"};
+        de__engine_shader_code code;
+        char why[512] = {0};
+        de_result result = de__engine_shader_load(r->dev, r->alloc, "rt_shadows", 0, names, 2,
+                                                  &code, why, sizeof why);
+        if (result != DE_OK) {
+            return DE_FAIL(result, "RT shadow shaders: %s", why);
+        }
+        de_gpu_pipeline *p[] = {&s->generate, &s->resolve};
+        for (u32 i = 0; i < 2; ++i)
+            *p[i] = de_gpu_pipeline_create(
+                r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                .cs = code.entries[i].blob,
+                                                .push_constant_bytes = sizeof(shadow_params),
+                                                .threadgroup_size = {8, 8, 1},
+                                                .name = names[i]});
+        de__engine_shader_code_free(&code);
+        if (!s->generate.id || !s->resolve.id) {
+            return DE_FAIL(DE_ERR_UNSUPPORTED, "RT shadow pipelines");
+        }
+    }
+    return DE_OK;
+}
+/* Selected on the render thread; a failed native compiler attempt is never repeated. */
+de_result de__rt_shadows_pipelines(de__rt_shadows *s) {
+    if (!s)
+        return DE_OK;
+    if (!s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        s->pipeline_result = build_pipelines(s);
+        if (s->pipeline_result != DE_OK) {
+            de_gpu_pipeline_destroy(s->renderer->dev, s->generate);
+            s->generate = (de_gpu_pipeline){0};
+            de_gpu_pipeline_destroy(s->renderer->dev, s->resolve);
+            s->resolve = (de_gpu_pipeline){0};
+        }
+    }
+    return s->pipeline_result;
+}
 de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
     *out = NULL;
     de__rt_shadows *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
@@ -109,7 +153,11 @@ de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT shadows owner");
     memset(s, 0, sizeof *s);
     s->renderer = r;
-    DE_TRY(de__signal_denoiser_create(r, &s->denoiser));
+    de_result denoiser_result = de__signal_denoiser_create(r, &s->denoiser);
+    if (denoiser_result != DE_OK) {
+        DE_FREE(r->alloc, s, sizeof *s);
+        return denoiser_result;
+    }
     s->reference = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reference_spp",
                                                     .type = DE_CVAR_INT,
                                                     .flags = DE_CVAR_DEV_ONLY,
@@ -123,30 +171,7 @@ de_result de__rt_shadows_create(de_renderer *r, de__rt_shadows **out) {
         .default_number = 4,
         .min = 1,
         .max = 4});
-    if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *names[] = {"cs_generate", "cs_resolve"};
-        de__engine_shader_code code;
-        char why[512] = {0};
-        de_result result = de__engine_shader_load(r->dev, r->alloc, "rt_shadows", 0, names, 2,
-                                                  &code, why, sizeof why);
-        if (result != DE_OK) {
-            de__rt_shadows_destroy(s);
-            return DE_FAIL(result, "RT shadow shaders: %s", why);
-        }
-        de_gpu_pipeline *p[] = {&s->generate, &s->resolve};
-        for (u32 i = 0; i < 2; ++i)
-            *p[i] = de_gpu_pipeline_create(
-                r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
-                                                .cs = code.entries[i].blob,
-                                                .push_constant_bytes = sizeof(shadow_params),
-                                                .threadgroup_size = {8, 8, 1},
-                                                .name = names[i]});
-        de__engine_shader_code_free(&code);
-        if (!s->generate.id || !s->resolve.id) {
-            de__rt_shadows_destroy(s);
-            return DE_FAIL(DE_ERR_UNSUPPORTED, "RT shadow pipelines");
-        }
-    }
+
     *out = s;
     return DE_OK;
 }
@@ -237,8 +262,9 @@ de_result de__rt_shadows_build(void *user, de_rg *g, de__vis_context *vc, de__li
         settings->shadows == DE_QUALITY_OFF)
         return DE_OK;
     de__rt_context *rt = de__rt_context_get(s->renderer, vc->view, g, vc->frame_index);
-    if (!rt || !s->generate.id)
+    if (!rt)
         return DE_OK;
+    DE_TRY(de__rt_shadows_pipelines(s));
     u32 slot = (vc->view.id & 255u) - 1u;
     if (slot >= 32)
         return DE_OK;

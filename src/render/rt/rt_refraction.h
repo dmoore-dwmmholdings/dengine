@@ -6,6 +6,8 @@
 typedef struct de__rt_refraction de__rt_refraction;
 typedef struct de__rt_refraction_frame de__rt_refraction_frame;
 de_result de__rt_refraction_create(de_renderer *, de__rt_refraction **);
+/** Immutable pipelines, once after effective non-capture view selection (render thread). */
+de_result de__rt_refraction_pipelines(de__rt_refraction *);
 void de__rt_refraction_destroy(de__rt_refraction *);
 void de__rt_refraction_reset(de__rt_refraction *, de_view);
 de__rt_refraction_frame *de__rt_refraction_prepare(de__rt_refraction *, de_rg *, de__vis_context *,

@@ -21,6 +21,8 @@ void de__di_finalize(de__di_reservoir *, u32 normalization);
 de_result de__di_alias_build(const f32 *power, u32 count, de__di_alias *, u32 *scratch);
 typedef struct de__restir_di de__restir_di;
 de_result de__restir_di_create(de_renderer *, de__restir_di **);
+/** Immutable pipelines, once after effective non-capture view selection (render thread). */
+de_result de__restir_di_pipelines(de__restir_di *, const de_render_settings *);
 void de__restir_di_destroy(de__restir_di *);
 de_result de__restir_di_prepare(de_renderer *);
 de_result de__restir_di_build(de__restir_di *, de_rg *, de__vis_context *, de__lighting_context *,

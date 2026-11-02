@@ -11,6 +11,8 @@ typedef struct refraction_view {
     bool active;
 } refraction_view;
 struct de__rt_refraction {
+    bool pipelines_attempted;
+    de_result pipeline_result;
     de_renderer *r;
     de_gpu_pipeline kernels[K_COUNT];
     refraction_view views[32];
@@ -37,13 +39,8 @@ static void release(de__rt_refraction *s, refraction_view *v) {
         de_gpu_buffer_destroy(s->r->dev, b[i]);
     memset(v, 0, sizeof *v);
 }
-de_result de__rt_refraction_create(de_renderer *r, de__rt_refraction **out) {
-    *out = NULL;
-    de__rt_refraction *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
-    if (!s)
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT refraction owner");
-    memset(s, 0, sizeof *s);
-    s->r = r;
+static de_result build_pipelines(de__rt_refraction *s) {
+    de_renderer *r = s->r;
     if (r->caps.ray_query && r->caps.max_bindless_accels) {
         const char *names[] = {"cs_clear", "cs_generate",   "cs_exit",
                                "cs_shade", "cs_shadow_ray", "cs_shadow_add"};
@@ -52,7 +49,6 @@ de_result de__rt_refraction_create(de_renderer *r, de__rt_refraction **out) {
         de_result result = de__engine_shader_load(r->dev, r->alloc, "rt_refraction", 0, names,
                                                   K_COUNT, &code, why, sizeof why);
         if (result != DE_OK) {
-            de__rt_refraction_destroy(s);
             return DE_FAIL(result, "RT refraction shaders: %s", why);
         }
         for (u32 i = 0; i < K_COUNT; ++i)
@@ -65,10 +61,35 @@ de_result de__rt_refraction_create(de_renderer *r, de__rt_refraction **out) {
         de__engine_shader_code_free(&code);
         for (u32 i = 0; i < K_COUNT; ++i)
             if (!s->kernels[i].id) {
-                de__rt_refraction_destroy(s);
                 return DE_FAIL(DE_ERR_UNSUPPORTED, "RT refraction pipeline");
             }
     }
+    return DE_OK;
+}
+/* Selected on the render thread; a failed native compiler attempt is never repeated. */
+de_result de__rt_refraction_pipelines(de__rt_refraction *s) {
+    if (!s)
+        return DE_OK;
+    if (!s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        s->pipeline_result = build_pipelines(s);
+        if (s->pipeline_result != DE_OK) {
+            for (u32 i = 0; i < K_COUNT; ++i) {
+                de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
+                s->kernels[i] = (de_gpu_pipeline){0};
+            }
+        }
+    }
+    return s->pipeline_result;
+}
+de_result de__rt_refraction_create(de_renderer *r, de__rt_refraction **out) {
+    *out = NULL;
+    de__rt_refraction *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
+    if (!s)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT refraction owner");
+    memset(s, 0, sizeof *s);
+    s->r = r;
+
     *out = s;
     return DE_OK;
 }
@@ -92,10 +113,12 @@ de__rt_refraction_frame *de__rt_refraction_prepare(de__rt_refraction *s, de_rg *
         return NULL;
     refraction_view *v = &s->views[vc->view_slot];
     v->active = false;
-    if (vc->settings->tier != DE_TIER_RT || !vc->settings->rt_refraction || !s->kernels[0].id)
+    if (vc->settings->tier != DE_TIER_RT || !vc->settings->rt_refraction)
         return NULL;
     de__rt_context *context = de__rt_context_get(s->r, vc->view, g, vc->frame_index);
     if (!context)
+        return NULL;
+    if (de__rt_refraction_pipelines(s) != DE_OK)
         return NULL;
     if (v->handle.id != vc->view.id) {
         release(s, v);

@@ -1,8 +1,31 @@
 /* DENG-44: one GPU-produced TLAS per view, before any hybrid lighting effect. */
 #include "render/rt/rt_internal.h"
+#include "render/rt/rt_gi_probes.h"
+#include "render/rt/rt_reflections.h"
+#include "render/rt/rt_refraction.h"
+#include "render/rt/rtao.h"
+#include "render/rt/rt_shadows.h"
+#include "render/rt/restir_di.h"
 #include "render/passes/vis/vis_stages.h"
 #include "render/graph/rg_internal.h"
 #include <string.h>
+
+de_result de__rt_effects_prepare(de_renderer *r, const de_render_settings *settings, bool capture) {
+    if (!r || !settings || capture || settings->tier != DE_TIER_RT || !r->caps.ray_query ||
+        !r->caps.max_bindless_accels)
+        return DE_OK;
+    if (settings->rt_gi && settings->gi != DE_QUALITY_OFF && settings->gi_mode == DE_GI_RT)
+        DE_TRY(de__rt_gi_pipelines(r->rt_gi));
+    if (settings->rt_reflections && settings->reflections != DE_QUALITY_OFF)
+        DE_TRY(de__rt_reflections_pipelines(r->rt_reflections));
+    if (settings->rt_refraction)
+        DE_TRY(de__rt_refraction_pipelines(r->rt_refraction));
+    if (settings->rt_ao && settings->ao != DE_QUALITY_OFF)
+        DE_TRY(de__rtao_pipelines(r->rtao));
+    if (settings->rt_shadows && settings->shadows != DE_QUALITY_OFF)
+        DE_TRY(de__rt_shadows_pipelines(r->rt_shadows));
+    return de__restir_di_pipelines(r->restir_di, settings);
+}
 typedef struct rt_pass {
     de__rt_scene *scene;
     de__rt_context context;

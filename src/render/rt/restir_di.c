@@ -113,6 +113,8 @@ typedef struct di_view {
     de__di_info info;
 } di_view;
 struct de__restir_di {
+    bool pipelines_attempted, sources_attempted;
+    de_result pipeline_result, sources_result;
     de__radiance_denoiser *denoiser;
     de_renderer *r;
     de_gpu_pipeline kernels[K_COUNT];
@@ -174,6 +176,80 @@ void de__restir_di_destroy(de__restir_di *s) {
         DE_FREE(s->r->alloc, s->descriptors, (size_t)s->capacity * sizeof *s->descriptors);
     DE_FREE(s->r->alloc, s, sizeof *s);
 }
+static de_result build_pipelines(de__restir_di *s, bool sources_only) {
+    de_renderer *r = s->r;
+    if (r->caps.ray_query && r->caps.max_bindless_accels) {
+        const char *files[] = {"restir_di_initial", "restir_di_temporal", "restir_di_spatial",
+                               "restir_di_shade"};
+        const char *entries[4][4] = {
+            {"cs_sources", "cs_alias", "cs_initial", "cs_initial_visibility"},
+            {"cs_temporal", NULL, NULL, NULL},
+            {"cs_spatial", "cs_spatial_visibility", NULL, NULL},
+            {"cs_final_ray", "cs_shade", "cs_reference", NULL}};
+        const u32 counts[] = {4, 1, 2, 3}, indices[] = {0, 4, 5, 7};
+        char why[512] = {0};
+        for (u32 f = 0; f < (sources_only ? 1u : 4u); ++f) {
+            de__engine_shader_code code;
+            de_result result = de__engine_shader_load(r->dev, r->alloc, files[f], 0, entries[f],
+                                                      counts[f], &code, why, sizeof why);
+            if (result != DE_OK) {
+                return DE_FAIL(result, "DI shaders: %s", why);
+            }
+            const u32 first = f == 0 && !sources_only ? K_INITIAL : 0;
+            const u32 end = sources_only ? K_INITIAL : counts[f];
+            for (u32 j = first; j < end; ++j) {
+                const u32 k = indices[f] + j;
+                s->kernels[k] = de_gpu_pipeline_create(
+                    r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                    .cs = code.entries[j].blob,
+                                                    .push_constant_bytes = 16,
+                                                    .threadgroup_size = {k == K_ALIAS     ? 1
+                                                                         : k == K_SOURCES ? 64
+                                                                                          : 8,
+                                                                         k <= K_ALIAS ? 1 : 8, 1},
+                                                    .name = entries[f][j]});
+            }
+            de__engine_shader_code_free(&code);
+        }
+        for (u32 i = sources_only ? 0 : K_INITIAL; i < (sources_only ? K_INITIAL : K_COUNT); ++i)
+            if (!s->kernels[i].id) {
+                return DE_FAIL(DE_ERR_UNSUPPORTED, "DI pipeline");
+            }
+    }
+    return DE_OK;
+}
+/* PT needs only power/alias generation, even when hybrid DI is explicitly disabled.
+ * Keep its result/handles independent so a later reservoir failure cannot break PT. */
+static de_result source_pipelines(de__restir_di *s) {
+    if (!s->sources_attempted) {
+        s->sources_attempted = true;
+        s->sources_result = build_pipelines(s, true);
+        if (s->sources_result != DE_OK) {
+            for (u32 i = 0; i < K_INITIAL; ++i) {
+                de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
+                s->kernels[i] = (de_gpu_pipeline){0};
+            }
+        }
+    }
+    return s->sources_result;
+}
+/* Selected on the render thread; a failed native compiler attempt is never repeated. */
+de_result de__restir_di_pipelines(de__restir_di *s, const de_render_settings *settings) {
+    if (!s || !enabled(s, settings))
+        return DE_OK;
+    DE_TRY(source_pipelines(s));
+    if (!s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        s->pipeline_result = build_pipelines(s, false);
+        if (s->pipeline_result != DE_OK) {
+            for (u32 i = K_INITIAL; i < K_COUNT; ++i) {
+                de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
+                s->kernels[i] = (de_gpu_pipeline){0};
+            }
+        }
+    }
+    return s->pipeline_result;
+}
 de_result de__restir_di_create(de_renderer *r, de__restir_di **out) {
     *out = NULL;
     de__restir_di *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
@@ -212,44 +288,7 @@ de_result de__restir_di_create(de_renderer *r, de__restir_di **out) {
         de__restir_di_destroy(s);
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DI cvar registration");
     }
-    if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *files[] = {"restir_di_initial", "restir_di_temporal", "restir_di_spatial",
-                               "restir_di_shade"};
-        const char *entries[4][4] = {
-            {"cs_sources", "cs_alias", "cs_initial", "cs_initial_visibility"},
-            {"cs_temporal", NULL, NULL, NULL},
-            {"cs_spatial", "cs_spatial_visibility", NULL, NULL},
-            {"cs_final_ray", "cs_shade", "cs_reference", NULL}};
-        const u32 counts[] = {4, 1, 2, 3}, indices[] = {0, 4, 5, 7};
-        char why[512] = {0};
-        for (u32 f = 0; f < 4; ++f) {
-            de__engine_shader_code code;
-            de_result result = de__engine_shader_load(r->dev, r->alloc, files[f], 0, entries[f],
-                                                      counts[f], &code, why, sizeof why);
-            if (result != DE_OK) {
-                de__restir_di_destroy(s);
-                return DE_FAIL(result, "DI shaders: %s", why);
-            }
-            for (u32 j = 0; j < counts[f]; ++j) {
-                const u32 k = indices[f] + j;
-                s->kernels[k] = de_gpu_pipeline_create(
-                    r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
-                                                    .cs = code.entries[j].blob,
-                                                    .push_constant_bytes = 16,
-                                                    .threadgroup_size = {k == K_ALIAS     ? 1
-                                                                         : k == K_SOURCES ? 64
-                                                                                          : 8,
-                                                                         k <= K_ALIAS ? 1 : 8, 1},
-                                                    .name = entries[f][j]});
-            }
-            de__engine_shader_code_free(&code);
-        }
-        for (u32 i = 0; i < K_COUNT; ++i)
-            if (!s->kernels[i].id) {
-                de__restir_di_destroy(s);
-                return DE_FAIL(DE_ERR_UNSUPPORTED, "DI pipeline");
-            }
-    }
+
     *out = s;
     return DE_OK;
 }
@@ -586,6 +625,7 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
     de__rt_context *rt = de__rt_context_get(s->r, vc->view, g, vc->frame_index);
     if (!rt)
         return DE_OK;
+    DE_TRY(de__restir_di_pipelines(s, vc->settings));
     if (!view_capacity(s, v, vc->width, vc->height))
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "DI view capacity");
     const bool unbiased = de_cvar_bool(s->unbiased),
@@ -777,6 +817,7 @@ de_result de__restir_di_sources(de__restir_di *s, de__view_frame *vf, const de__
     *dependency = de_rg_import_buffer(g, s->sources, DE_ACCESS_SHADER_READ);
     if (!s->needs_alias)
         return DE_OK;
+    DE_TRY(source_pipelines(s));
     if (!s->source_view.params.id) {
         s->source_view.params =
             make_buffer(s, DI_RING * DI_STAGES * sizeof(di_params), sizeof(di_params),

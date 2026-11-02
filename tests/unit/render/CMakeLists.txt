@@ -1320,3 +1320,16 @@ find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(NAME render_taa.generated_metal_scene_layout
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_metal_scene_layout.py")
 set_tests_properties(render_taa.generated_metal_scene_layout PROPERTIES LABELS "check;render" TIMEOUT 15)
+
+# DENG-720: real native pipeline selection, reuse and injected partial-failure cleanup.
+de_add_test(NAME render_rt_lazy SOURCES test_rt_lazy.c LIBS ${_de_vis_libs}
+    LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_rt_lazy)
+    target_include_directories(test_render_rt_lazy PRIVATE "${DE_ROOT_DIR}/src")
+    if(DE_HAS_GPU_D3D12)
+        de_d3d12_agility_deploy(test_render_rt_lazy)
+        if(DE_D3D12_WARP_DLL)
+            de_d3d12_warp_deploy(test_render_rt_lazy)
+        endif()
+    endif()
+endif()

@@ -4,6 +4,8 @@
 #include "render/lighting/lighting.h"
 typedef struct de__rt_reflections de__rt_reflections;
 de_result de__rt_reflections_create(de_renderer *, de__rt_reflections **);
+/** Immutable pipelines, once after effective non-capture view selection (render thread). */
+de_result de__rt_reflections_pipelines(de__rt_reflections *);
 void de__rt_reflections_destroy(de__rt_reflections *);
 de_result de__rt_reflections_build(de__rt_reflections *, de_rg *, de__vis_context *,
                                    de__lighting_context *, de__lighting_inputs *);

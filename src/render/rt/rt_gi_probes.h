@@ -4,6 +4,8 @@
 #include "render/probes/irradiance_internal.h"
 typedef struct de__rt_gi de__rt_gi;
 de_result de__rt_gi_create(de_renderer *, de__rt_gi **);
+/** Immutable pipelines, once after effective non-capture view selection (render thread). */
+de_result de__rt_gi_pipelines(de__rt_gi *);
 void de__rt_gi_destroy(de__rt_gi *);
 void de__rt_gi_complete(de__rt_gi *, de_view, de_rg *, u64 frame, bool success);
 void de__rt_gi_prepare(de__rt_gi *, const de__render_world_frame *);

@@ -26,6 +26,7 @@ typedef struct ao_view {
     de__rtao_info info;
 } ao_view;
 struct de__rtao {
+    bool pipelines_attempted;
     de_renderer *r;
     de_cvar radius, reference;
     de__signal_denoiser *denoiser;
@@ -64,28 +65,8 @@ void de__rtao_destroy(de__rtao *s) {
     de_gpu_pipeline_destroy(s->r->dev, s->pack);
     DE_FREE(s->r->alloc, s, sizeof *s);
 }
-de_result de__rtao_create(de_renderer *r, de__rtao **out) {
-    *out = NULL;
-    de__rtao *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
-    if (!s)
-        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RTAO owner");
-    memset(s, 0, sizeof *s);
-    s->r = r;
-    DE_TRY(de__signal_denoiser_create(r, &s->denoiser));
-    s->reference = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reference_spp",
-                                                    .type = DE_CVAR_INT,
-                                                    .flags = DE_CVAR_DEV_ONLY,
-                                                    .min = 0,
-                                                    .max = 256});
-    s->radius = de_cvar_register(&(de_cvar_desc){.name = "r.rt.ao.radius",
-                                                 .type = DE_CVAR_FLOAT,
-                                                 .default_number = 1.5,
-                                                 .min = .01,
-                                                 .max = 100});
-    if (!s->radius.id) {
-        de__rtao_destroy(s);
-        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "RTAO radius registration");
-    }
+static void build_pipelines(de__rtao *s) {
+    de_renderer *r = s->r;
     if (r->caps.ray_query && r->caps.max_bindless_accels) {
         const char *entries[] = {"cs_generate", "cs_resolve", "cs_pack"};
         de__engine_shader_code code;
@@ -95,7 +76,7 @@ de_result de__rtao_create(de_renderer *r, de__rtao **out) {
         if (result != DE_OK) {
             DE_WARN(r->log, "RTAO shaders unavailable; using GTAO: %s", why);
             de_error_clear();
-            goto register_stage;
+            return;
         }
         de_gpu_pipeline *pipelines[] = {&s->generate, &s->resolve, &s->pack};
         for (u32 i = 0; i < 3; ++i)
@@ -115,7 +96,43 @@ de_result de__rtao_create(de_renderer *r, de__rtao **out) {
             de_error_clear();
         }
     }
-register_stage:;
+    return;
+}
+/* Unsupported AO retains GTAO; the failed native compiler attempt is still cached. */
+de_result de__rtao_pipelines(de__rtao *s) {
+    if (s && !s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        build_pipelines(s);
+    }
+    return DE_OK;
+}
+de_result de__rtao_create(de_renderer *r, de__rtao **out) {
+    *out = NULL;
+    de__rtao *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
+    if (!s)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RTAO owner");
+    memset(s, 0, sizeof *s);
+    s->r = r;
+    de_result denoiser_result = de__signal_denoiser_create(r, &s->denoiser);
+    if (denoiser_result != DE_OK) {
+        DE_FREE(r->alloc, s, sizeof *s);
+        return denoiser_result;
+    }
+    s->reference = de_cvar_register(&(de_cvar_desc){.name = "r.rt.reference_spp",
+                                                    .type = DE_CVAR_INT,
+                                                    .flags = DE_CVAR_DEV_ONLY,
+                                                    .min = 0,
+                                                    .max = 256});
+    s->radius = de_cvar_register(&(de_cvar_desc){.name = "r.rt.ao.radius",
+                                                 .type = DE_CVAR_FLOAT,
+                                                 .default_number = 1.5,
+                                                 .min = .01,
+                                                 .max = 100});
+    if (!s->radius.id) {
+        de__rtao_destroy(s);
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "RTAO radius registration");
+    }
+
     de_result result = de__view_register_stage(r, DE__VIEW_SLOT_LIGHTING, -31, "rtao", stage, s);
     if (result != DE_OK) {
         de__rtao_destroy(s);
@@ -220,12 +237,15 @@ static de_result build(de__rtao *s, de__view_frame *vf, const de__vis_context *v
     ao_view *v = &s->views[slot];
     v->graph = NULL;
     if (!vf->settings || vf->probe_capture || vf->settings->tier != DE_TIER_RT ||
-        !vf->settings->rt_ao || vf->settings->ao == DE_QUALITY_OFF || !s->generate.id || !vc ||
+        !vf->settings->rt_ao || vf->settings->ao == DE_QUALITY_OFF || !vc ||
         !vc->gbuffer[DE__GB1].id)
         return DE_OK;
     de__rt_context *rt = de__rt_context_get(s->r, vf->view, vf->graph, vf->frame_index);
     if (!rt)
         return DE_OK;
+    DE_TRY(de__rtao_pipelines(s));
+    if (!s->generate.id)
+        return DE_OK; /* The established unsupported-pipeline path retains GTAO. */
     u32 scale = vf->settings->ao == DE_QUALITY_LOW ? 2 : 1, tw = (vf->width + scale - 1) / scale,
         th = (vf->height + scale - 1) / scale;
     u32 spp = s->reference.id && de_cvar_int(s->reference) > 0 ? (u32)de_cvar_int(s->reference)

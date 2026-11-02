@@ -7,6 +7,8 @@ typedef struct de__rt_shadows de__rt_shadows;
 de__rt_ray de__rt_shadow_ray(const de__cluster_light *, de_vec3 position, de_vec3 normal,
                              de_vec2 u);
 de_result de__rt_shadows_create(de_renderer *, de__rt_shadows **);
+/** Immutable pipelines, once after effective non-capture view selection (render thread). */
+de_result de__rt_shadows_pipelines(de__rt_shadows *);
 void de__rt_shadows_destroy(de__rt_shadows *);
 de_result de__rt_shadows_build(void *, de_rg *, de__vis_context *, de__lighting_context *,
                                de__lighting_inputs *);

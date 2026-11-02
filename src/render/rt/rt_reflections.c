@@ -28,6 +28,8 @@ typedef struct reflection_view {
     de__rt_reflections_info info;
 } reflection_view;
 struct de__rt_reflections {
+    bool pipelines_attempted;
+    de_result pipeline_result;
     de__radiance_denoiser *denoiser;
     de_renderer *r;
     de_gpu_pipeline kernels[5];
@@ -62,6 +64,48 @@ void de__rt_reflections_destroy(de__rt_reflections *s) {
         de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
     DE_FREE(s->r->alloc, s, sizeof *s);
 }
+static de_result build_pipelines(de__rt_reflections *s) {
+    de_renderer *r = s->r;
+    if (r->caps.ray_query && r->caps.max_bindless_accels) {
+        const char *names[] = {"cs_generate", "cs_shade", "cs_sun_ray", "cs_sun_add", "cs_resolve"};
+        de__engine_shader_code code;
+        char why[512] = {0};
+        de_result res = de__engine_shader_load(r->dev, r->alloc, "rt_reflections", 0, names, 5,
+                                               &code, why, sizeof why);
+        if (res != DE_OK) {
+            return DE_FAIL(res, "RT reflection shaders: %s", why);
+        }
+        for (u32 i = 0; i < 5; ++i)
+            s->kernels[i] = de_gpu_pipeline_create(
+                r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
+                                                .cs = code.entries[i].blob,
+                                                .push_constant_bytes = 16,
+                                                .threadgroup_size = {8, 8, 1},
+                                                .name = names[i]});
+        de__engine_shader_code_free(&code);
+        for (u32 i = 0; i < 5; ++i)
+            if (!s->kernels[i].id) {
+                return DE_FAIL(DE_ERR_UNSUPPORTED, "RT reflection pipeline");
+            }
+    }
+    return DE_OK;
+}
+/* Selected on the render thread; a failed native compiler attempt is never repeated. */
+de_result de__rt_reflections_pipelines(de__rt_reflections *s) {
+    if (!s)
+        return DE_OK;
+    if (!s->pipelines_attempted) {
+        s->pipelines_attempted = true;
+        s->pipeline_result = build_pipelines(s);
+        if (s->pipeline_result != DE_OK) {
+            for (u32 i = 0; i < 5; ++i) {
+                de_gpu_pipeline_destroy(s->r->dev, s->kernels[i]);
+                s->kernels[i] = (de_gpu_pipeline){0};
+            }
+        }
+    }
+    return s->pipeline_result;
+}
 de_result de__rt_reflections_create(de_renderer *r, de__rt_reflections **out) {
     *out = NULL;
     de__rt_reflections *s = DE_ALLOC(r->alloc, sizeof *s, 16, DE_MEM_RENDER);
@@ -83,30 +127,7 @@ de_result de__rt_reflections_create(de_renderer *r, de__rt_reflections **out) {
         de__rt_reflections_destroy(s);
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "RT reflections cvar");
     }
-    if (r->caps.ray_query && r->caps.max_bindless_accels) {
-        const char *names[] = {"cs_generate", "cs_shade", "cs_sun_ray", "cs_sun_add", "cs_resolve"};
-        de__engine_shader_code code;
-        char why[512] = {0};
-        de_result res = de__engine_shader_load(r->dev, r->alloc, "rt_reflections", 0, names, 5,
-                                               &code, why, sizeof why);
-        if (res != DE_OK) {
-            de__rt_reflections_destroy(s);
-            return DE_FAIL(res, "RT reflection shaders: %s", why);
-        }
-        for (u32 i = 0; i < 5; ++i)
-            s->kernels[i] = de_gpu_pipeline_create(
-                r->dev, &(de_gpu_pipeline_desc){.kind = DE_PIPE_COMPUTE,
-                                                .cs = code.entries[i].blob,
-                                                .push_constant_bytes = 16,
-                                                .threadgroup_size = {8, 8, 1},
-                                                .name = names[i]});
-        de__engine_shader_code_free(&code);
-        for (u32 i = 0; i < 5; ++i)
-            if (!s->kernels[i].id) {
-                de__rt_reflections_destroy(s);
-                return DE_FAIL(DE_ERR_UNSUPPORTED, "RT reflection pipeline");
-            }
-    }
+
     *out = s;
     return DE_OK;
 }
@@ -233,11 +254,12 @@ de_result de__rt_reflections_build(de__rt_reflections *s, de_rg *g, de__vis_cont
     reflection_view *v = &s->views[slot];
     v->valid = false;
     if (vc->settings->tier != DE_TIER_RT || !vc->settings->rt_reflections ||
-        vc->settings->reflections == DE_QUALITY_OFF || !s->kernels[0].id)
+        vc->settings->reflections == DE_QUALITY_OFF)
         return DE_OK;
     de__rt_context *rt = de__rt_context_get(s->r, vc->view, g, vc->frame_index);
     if (!rt)
         return DE_OK;
+    DE_TRY(de__rt_reflections_pipelines(s));
     if (!reserve(s, v, vc->width, vc->height))
         return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "RT reflection extent");
     v->handle = vc->view;
