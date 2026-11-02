@@ -222,7 +222,7 @@ TEST(cook_preview, actual_audio_codec_sizes_and_locale_override) {
     ASSERT_EQ(
         de__asset_cook_preview(f.assets, "sound", settings, 1, DE_COOK_PLATFORM_HOST, &result),
         DE_OK);
-    de__sound_view before, after;
+    de__sound_view before = {0}, after = {0};
     ASSERT_EQ(de__sound_parse(result.before.data, result.before.size, &before), DE_OK);
     ASSERT_EQ(de__sound_parse(result.after.data, result.after.size, &after), DE_OK);
     EXPECT_EQ(before.codec, DE__DSND_PCM_F32);
