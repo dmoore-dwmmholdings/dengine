@@ -70,13 +70,17 @@ static const de_field_info k_target_fields[] = {
     DE_FIELD(TTarget, speed, DE_FK_F32, DE_FIELD_DEFAULT),
 };
 
+#if DE_HAS_COOKER
 static u32 g_migrations;
+#endif
 static bool g_migrate_drops;
 
 /* THealth v1 { hp } -> v2 { current = hp, max = 100 }. */
 static bool health_migrate(void *obj, u32 from_version, const void *old_data,
                            const de_field_info *old_fields, u32 old_field_count) {
+#if DE_HAS_COOKER
     g_migrations++;
+#endif
     if (g_migrate_drops || from_version != 1)
         return false;
     THealth *h = (THealth *)obj;
@@ -194,7 +198,9 @@ static de_world *scn_world(de_type_registry *types, bool health, bool target, de
 
 static void scn_fx_setup(scn_fx *f) {
     memset(&g_cap, 0, sizeof g_cap);
+#if DE_HAS_COOKER
     g_migrations = 0;
+#endif
     g_migrate_drops = false;
     de_log_desc ld;
     memset(&ld, 0, sizeof ld);

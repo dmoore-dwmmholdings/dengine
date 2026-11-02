@@ -3,14 +3,22 @@
 #include <dengine/dengine.h>
 #include <string.h>
 static de_tracking_allocator tracking;
+#if DE_HAS_RENDER && DE_HAS_GPU
 static de_allocator allocator;
+#endif
 static owned_game_result result;
 static u32 mode;
+#if DE_HAS_RENDER && DE_HAS_GPU
 static de_engine *engine;
+#endif
 void owned_game_reset(u32 requested) {
     memset(&result, 0, sizeof result);
     mode = requested;
+#if DE_HAS_RENDER && DE_HAS_GPU
     allocator = de_tracking_allocator_init(&tracking, NULL, DE_MEM_GENERAL);
+#else
+    (void)de_tracking_allocator_init(&tracking, NULL, DE_MEM_GENERAL);
+#endif
 }
 owned_game_result owned_game_get_result(void) {
     result.allocations = de_tracking_allocator_stats(&tracking);
@@ -46,8 +54,8 @@ static void probe_unload(void *object, void *user) {
 #endif
 static de_result init(de_engine *e) {
     owned_game_reset(mode);
-    engine = e;
 #if DE_HAS_RENDER && DE_HAS_GPU
+    engine = e;
     de_result r = de_gpu_device_create(&(de_gpu_device_desc){.allocator = &allocator}, &e->gpu);
     if (r != DE_OK) {
         result.unavailable = r == DE_ERR_UNSUPPORTED || r == DE_ERR_NOT_FOUND;
@@ -103,6 +111,7 @@ static de_result init(de_engine *e) {
     *(DeTransform *)de_entity_get(e->world, entity, builtin.transform) = de_transform_identity();
     return DE_OK;
 #else
+    (void)e;
     result.unavailable = true;
     return DE_ERR_UNSUPPORTED;
 #endif
