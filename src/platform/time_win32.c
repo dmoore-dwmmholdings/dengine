@@ -16,6 +16,19 @@
  * stores the same value twice, which is harmless. */
 static de_atomic_u64 de__qpc_freq = DE_ATOMIC_INIT(0);
 
+de_result de_time_thread_cpu_ns(u64 *out) {
+    if (!out)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "thread CPU time output is NULL");
+    *out = 0;
+    FILETIME created, exited, kernel, user;
+    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
+        return DE_FAIL(DE_ERR_IO, "thread CPU time query failed");
+    u64 kernel_ticks = ((u64)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime;
+    u64 user_ticks = ((u64)user.dwHighDateTime << 32) | user.dwLowDateTime;
+    *out = (kernel_ticks + user_ticks) * 100;
+    return DE_OK;
+}
+
 u64 de_time_now_ns(void) {
     u64 freq = de_atomic_load_u64(&de__qpc_freq, DE_ATOMIC_RELAXED);
     if (freq == 0) {

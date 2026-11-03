@@ -8,12 +8,22 @@
 #include <dengine/de_platform.h>
 
 #include "platform/de_atomic.h"
+#include <time.h>
 
 #if defined(__APPLE__)
 #include <mach/mach_time.h>
-#else
-#include <time.h>
 #endif
+
+de_result de_time_thread_cpu_ns(u64 *out) {
+    if (!out)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "thread CPU time output is NULL");
+    *out = 0;
+    struct timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
+        return DE_FAIL(DE_ERR_IO, "thread CPU time query failed");
+    *out = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    return DE_OK;
+}
 
 #if defined(__APPLE__)
 

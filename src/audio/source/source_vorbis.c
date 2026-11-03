@@ -51,7 +51,7 @@ de_result de__vorbis_init(de__sound_decoder *d) {
     } while (error == VORBIS_need_more_data);
     return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "invalid/truncated streaming Vorbis headers");
 }
-static bool next(de__sound_decoder *d) {
+static bool next(de__sound_decoder *d, u32 discard) {
     const u32 channels = d->asset->view.channels;
     static const u8 map[9][8] = {{0},
                                  {0},
@@ -72,13 +72,24 @@ static bool next(de__sound_decoder *d) {
             return false;
         d->used += (u32)used;
         if (count > 0) {
-            if (count > 8192 || got_channels != (int)channels)
+            if (count > (int)DE__SOUND_MAX_PACKET_FRAMES || got_channels != (int)channels)
                 return false;
-            d->pcm_at = 0;
             d->pcm_count = (u32)count;
-            for (u32 f = 0; f < (u32)count; ++f)
-                for (u32 c = 0; c < channels; ++c)
-                    d->pcm[f * channels + c] = output[map[channels][c]][f];
+            d->pcm_at = discard < d->pcm_count ? discard : d->pcm_count;
+            d->frame += d->pcm_at;
+            /* Seeking still decodes every overlap packet, but discarded PCM
+             * need not be interleaved or copied through a temporary buffer. */
+            if (channels == 2) {
+                const f32 *left = output[0], *right = output[1];
+                for (u32 f = d->pcm_at; f < d->pcm_count; ++f) {
+                    d->pcm[f * 2] = left[f];
+                    d->pcm[f * 2 + 1] = right[f];
+                }
+            } else {
+                for (u32 f = d->pcm_at; f < d->pcm_count; ++f)
+                    for (u32 c = 0; c < channels; ++c)
+                        d->pcm[f * channels + c] = output[map[channels][c]][f];
+            }
             return true;
         }
         if (!used && !more(d))
@@ -89,7 +100,7 @@ static bool next(de__sound_decoder *d) {
 u32 de__vorbis_read(de__sound_decoder *d, f32 *out, u32 frames) {
     u32 done = 0, channels = d->asset->view.channels;
     while (done < frames && d->frame < d->asset->view.frames) {
-        if (d->pcm_at == d->pcm_count && !next(d))
+        if (d->pcm_at == d->pcm_count && !next(d, 0))
             break;
         u32 n = d->pcm_count - d->pcm_at;
         if (n > frames - done)
@@ -108,10 +119,15 @@ bool de__vorbis_seek(de__sound_decoder *d, u64 frame) {
     const de__sound_view *v = &d->asset->view;
     if (frame > v->frames)
         return false;
+    /* Push decoding consumes the resynchronization page, then one packet to
+     * rebuild overlap. A page ending just before the requested frame can thus
+     * produce its first PCM after the target and force a full header restart.
+     * Keep one maximum decoded block of preroll when choosing the seek page. */
+    u64 seek_frame = frame > DE__SOUND_MAX_PACKET_FRAMES ? frame - DE__SOUND_MAX_PACKET_FRAMES : 0;
     u64 offset = 0;
     for (u32 i = 0; i < v->seek_count; ++i) {
         u64 f = de__snd_u64(v->seeks + (u64)i * 16), at = de__snd_u64(v->seeks + (u64)i * 16 + 8);
-        if (f > frame)
+        if (f > seek_frame)
             break;
         if (at < v->data_size)
             offset = at;
@@ -123,7 +139,7 @@ bool de__vorbis_seek(de__sound_decoder *d, u64 frame) {
         d->file_offset = offset;
         d->pcm_at = d->pcm_count = 0;
         for (u32 attempts = 0; attempts < 256; ++attempts) {
-            if (!next(d))
+            if (!next(d, 0))
                 break;
             int end = stb_vorbis_get_sample_offset(d->codec);
             if (end >= 0 && (u64)end >= d->pcm_count) {
@@ -143,13 +159,20 @@ bool de__vorbis_seek(de__sound_decoder *d, u64 frame) {
         if (de__vorbis_init(d) != DE_OK)
             return false;
     }
-    f32 discard[1024 * 8];
     while (d->frame < frame) {
-        u32 n = (u32)(frame - d->frame);
-        if (n > 1024)
-            n = 1024;
-        if (de__vorbis_read(d, discard, n) != n)
-            return false;
+        u64 remaining = frame - d->frame;
+        if (d->pcm_at == d->pcm_count) {
+            u32 skip = remaining < DE__SOUND_MAX_PACKET_FRAMES ? (u32)remaining
+                                                               : DE__SOUND_MAX_PACKET_FRAMES;
+            if (!next(d, skip))
+                return false;
+        } else {
+            u32 skip = d->pcm_count - d->pcm_at;
+            if (skip > remaining)
+                skip = (u32)remaining;
+            d->pcm_at += skip;
+            d->frame += skip;
+        }
     }
     return true;
 }
