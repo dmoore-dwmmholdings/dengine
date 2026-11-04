@@ -111,7 +111,9 @@ only for the LLDB child, requiring the matching DLL and standard library; the
 selected debugger, original native assertions and deadlines stay the same.
 An unset provider retains normal inheritance. `lldb_runtime_selftest` covers
 environment preservation and invalid providers. A dependency setup is qualified
-only when the original real LLDB formatter test passes.
+only when the original real LLDB formatter test passes. The checker's assertions
+run from a scratch file inside LLDB and write a report that the checker reads, in
+addition to the stdout marker, which they flush because Windows LLDB does not.
 
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).

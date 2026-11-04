@@ -12,12 +12,12 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools/diagnostics"))
 from lldb_runtime import debugger_environment
 
-# Runs inside LLDB's `script` session, where `lldb` is already defined. LLDB can lose
-# script output and tracebacks, so the result also goes to a file the checker reads.
+# Runs inside LLDB's `script` session, where `lldb` is already defined. On Windows
+# sys.stdout is Python's own wrapper, not an LLDB stream, and a marker printed without
+# a flush did not reach LLDB's stdout. So flush it, and also write the result to a file.
 NATIVE_ASSERTIONS = r"""
 import json, sys, traceback
-report = {"status": "started", "python": sys.version, "stdout": repr(sys.stdout),
-          "rawLiteral": ascii(globals().get("deng723_raw_literal"))}
+report = {"status": "started", "python": sys.version, "stdout": repr(sys.stdout)}
 try:
     t = lldb.debugger.GetSelectedTarget()
     v = lambda n: t.FindFirstGlobalVariable(n).GetSummary()
@@ -33,7 +33,7 @@ try:
     assert '3 elements' in v('debug_array') and '3 elements' in v('debug_map')
     assert v('debug_invalid')=='<invalid string>'
     assert v('debug_long').endswith('…') and len(v('debug_long'))<20000
-    print('DENG586_LLDB_OK')
+    print('DENG586_LLDB_OK', flush=True)
     report["status"] = "ok"
 except BaseException:
     report["status"] = "failed"
@@ -94,8 +94,6 @@ def main():
             'target create "%s"' % args.fixture.resolve().as_posix(),
             "breakpoint set --name debug_stop", "run",
             "target variable debug_position debug_rotation debug_matrix debug_health debug_text debug_entity",
-            # DENG-723: a non-ASCII literal on a raw command line shows how LLDB passes it on.
-            "script deng723_raw_literal = 'café'",
             "script exec(compile(open(%s, encoding='utf-8').read(), 'native_assertions', 'exec'))"
             % ascii(assertions.as_posix()),
             "process kill",
