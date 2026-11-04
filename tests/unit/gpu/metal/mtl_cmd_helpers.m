@@ -8,6 +8,7 @@
 #include "mtl_cmd_helpers.h"
 #include "de_test.h"
 #include "de_alloc_guard.h"
+#include "mtl_test_helpers.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -209,4 +210,149 @@ void de_test_mtl_layer_info(void *layer, de_gpu_device *d, de_test_mtl_layer *ou
     out->bgra8_srgb = l.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
     out->drawable_w = l.drawableSize.width;
     out->drawable_h = l.drawableSize.height;
+}
+
+/* Observe real fence publication while forwarding every call to the native encoder.
+ * Install only after recording: the backend still ends and submits actual GPU work. */
+typedef struct finish_fence_probe {
+    u32 queue_updates;
+    bool ended, published_before_end;
+} finish_fence_probe;
+
+@interface DEMtlFinishFenceProbe : NSObject
+@property(nonatomic, strong) id<MTLComputeCommandEncoder> native;
+@property(nonatomic, strong) id<MTLFence> queue_fence;
+@property(nonatomic, assign) finish_fence_probe *probe;
+@end
+
+@implementation DEMtlFinishFenceProbe
+- (void)updateFence:(id<MTLFence>)fence {
+    if (fence == self.queue_fence)
+        ++self.probe->queue_updates;
+    [self.native updateFence:fence];
+}
+- (void)endEncoding {
+    self.probe->ended = true;
+    self.probe->published_before_end = self.probe->queue_updates != 0;
+    [self.native endEncoding];
+}
+- (id)forwardingTargetForSelector:(SEL)selector {
+    (void)selector;
+    return self.native;
+}
+@end
+
+static void single_compute_fence_chain(mtl_fx *f, de_gpu_queue queue, bool mixed_first,
+                                       bool submission_wait) {
+    mtl_require_base_tier(f);
+    enum { FLOAT4S = 4096, BYTES = FLOAT4S * 16 };
+    de_gpu_buffer buffers[3] = {0};
+    for (u32 i = 0; i < 3; ++i) {
+        buffers[i] = de_gpu_buffer_create(
+            f->d, &(de_gpu_buffer_desc){.size = BYTES,
+                                        .usage = i == 0 ? DE_USAGE_STORAGE
+                                                        : DE_USAGE_STORAGE | DE_USAGE_COPY_SRC |
+                                                              DE_USAGE_COPY_DST,
+                                        .memory = i == 0 ? DE_MEM_UPLOAD : DE_MEM_GPU_ONLY});
+        ASSERT_TRUE(buffers[i].id);
+    }
+    de_gpu_buffer readback = de_gpu_buffer_create(
+        f->d, &(de_gpu_buffer_desc){
+                  .size = BYTES, .usage = DE_USAGE_COPY_DST, .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(readback.id);
+    f32 *input = de_gpu_buffer_map(f->d, buffers[0]);
+    f32 *output = de_gpu_buffer_map(f->d, readback);
+    ASSERT_TRUE(input && output);
+    for (u32 i = 0; i < FLOAT4S * 4; ++i)
+        input[i] = (f32)(i % 37) * .25f;
+    memset(output, 0xa5, BYTES);
+    de_gpu_fence fence = de_gpu_fence_create(f->d, 0);
+    ASSERT_TRUE(fence.id);
+    de_gpu_fence gate = {0};
+    if (submission_wait) {
+        gate = de_gpu_fence_create(f->d, 0);
+        ASSERT_TRUE(gate.id);
+    }
+    finish_fence_probe probes[2] = {0};
+    de_gpu_cmd *commands[3] = {0};
+    for (u32 i = 0; i < 2; ++i) {
+        commands[i] = de_gpu_cmd_begin(f->d, queue, "Single compute fence chain");
+        ASSERT_TRUE(commands[i]);
+        if (mixed_first && i == 0) {
+            void *blit = de__mtl_cmd_encoder(commands[i], DE__MTL_ENC_BLIT);
+            ASSERT_TRUE(blit);
+            de_test_mtl_fill(blit, de__mtl_buffer_object(f->d, buffers[1]), 0, BYTES, 0xa5);
+            de_gpu_barrier before = {.buffer = buffers[1],
+                                     .before = DE_ACCESS_COPY_DST,
+                                     .after = DE_ACCESS_SHADER_WRITE};
+            de_gpu_cmd_barriers(commands[i], &before, 1);
+        }
+        void *compute = de__mtl_cmd_encoder(commands[i], DE__MTL_ENC_COMPUTE);
+        ASSERT_TRUE(compute);
+        char why[256] = {0};
+        int copied = de_test_mtl_dispatch_copy(
+            f->d, compute, de_gpu_buffer_bindless(f->d, buffers[i]),
+            de_gpu_buffer_bindless(f->d, buffers[i + 1]), FLOAT4S, why, sizeof why);
+        if (!copied)
+            fprintf(stderr, "%s\n", why);
+        ASSERT_EQ(copied, 1);
+        de_gpu_barrier after = {.buffer = buffers[i + 1],
+                                .before = DE_ACCESS_SHADER_WRITE,
+                                .after = i == 0 ? DE_ACCESS_SHADER_READ : DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(commands[i], &after, 1);
+        mtl_cmd *mc = de__gpu_cmd_payload(commands[i]);
+        DEMtlFinishFenceProbe *observer = [DEMtlFinishFenceProbe new];
+        observer.native = (id<MTLComputeCommandEncoder>)CFBridgingRelease(mc->encoder);
+        observer.queue_fence = (__bridge id<MTLFence>)de__mtl_dev(f->d)->queue_fence[queue];
+        observer.probe = &probes[i];
+        mc->encoder = (void *)CFBridgingRetain(observer);
+    }
+    commands[2] = de_gpu_cmd_begin(f->d, queue, "Fence chain readback");
+    ASSERT_TRUE(commands[2]);
+    de_gpu_cmd_copy_buffer(commands[2], readback, 0, buffers[2], 0, BYTES);
+    /* One submission without CPU waits: compute -> compute -> readback.
+     * Each command buffer reads its predecessor's untracked output. */
+    de_gpu_wait wait = {.fence = gate, .value = 1};
+    ASSERT_EQ(de_gpu_queue_submit(f->d, queue,
+                                  &(de_gpu_submit){.cmds = commands,
+                                                   .cmd_count = 3,
+                                                   .waits = submission_wait ? &wait : NULL,
+                                                   .wait_count = submission_wait ? 1u : 0u,
+                                                   .signal = fence,
+                                                   .signal_value = 1}),
+              DE_OK);
+    if (submission_wait) {
+        EXPECT_EQ(de_gpu_fence_value(f->d, fence), 0u);
+        ASSERT_EQ(de_gpu_queue_submit(f->d, DE_QUEUE_COPY,
+                                      &(de_gpu_submit){.signal = gate, .signal_value = 1}),
+                  DE_OK);
+    }
+    ASSERT_EQ(de_gpu_fence_wait(f->d, fence, 1, 60000000000ull), DE_OK);
+    de_gpu_wait_idle(f->d);
+    for (u32 i = 0; i < FLOAT4S * 4; ++i)
+        EXPECT_FLOAT_EQ(output[i], input[i] * 4, .000001);
+    for (u32 i = 0; i < 2; ++i) {
+        const bool direct = !(mixed_first && i == 0);
+        EXPECT_TRUE(probes[i].ended);
+        EXPECT_EQ(probes[i].queue_updates, direct ? 1u : 0u);
+        EXPECT_EQ(probes[i].published_before_end, direct);
+    }
+    de_gpu_fence_destroy(f->d, fence);
+    de_gpu_fence_destroy(f->d, gate);
+    de_gpu_buffer_destroy(f->d, readback);
+    for (u32 i = 0; i < 3; ++i)
+        de_gpu_buffer_destroy(f->d, buffers[i]);
+}
+
+TEST_F(mtl, single_compute_lists_publish_graphics_queue_fence, mtl_fx) {
+    single_compute_fence_chain(f, DE_QUEUE_GRAPHICS, false, false);
+}
+TEST_F(mtl, single_compute_lists_publish_compute_queue_fence, mtl_fx) {
+    single_compute_fence_chain(f, DE_QUEUE_COMPUTE, false, false);
+}
+TEST_F(mtl, mixed_encoders_keep_queue_fence_join, mtl_fx) {
+    single_compute_fence_chain(f, DE_QUEUE_GRAPHICS, true, false);
+}
+TEST_F(mtl, single_compute_submission_wait_keeps_queue_fence_chain, mtl_fx) {
+    single_compute_fence_chain(f, DE_QUEUE_GRAPHICS, false, true);
 }

@@ -14,8 +14,9 @@
  *     front-end refuses barriers inside a render pass, so the render encoder is ended with its
  *     fence instead (memoryBarrierWithScope:afterStages:beforeStages: has no use).
  *   - between command buffers of one queue: the queue fence. A command buffer's first epoch waits
- *     for it, and the command buffer ends with a small blit encoder (the tail) that waits for its
- *     last epoch and updates it. A command-buffer boundary is thus a full barrier on its queue;
+ *     for it. A single compute encoder updates it directly; other command buffers end with a
+ *     small blit encoder (the tail) that joins their last epoch and updates it. A command-buffer
+ *     boundary is thus a full barrier on its queue;
  *     barriers recorded at the end of one list (RENDER_TARGET -> PRESENT, ownership releases)
  *     cover the next list too.
  *   - between queues and with the CPU: MTLSharedEvents at submit (mtl_sync.m). Queue ownership
@@ -159,7 +160,7 @@ void de__mtl_encoder_started(de_gpu_cmd *c, void *encoder, de__mtl_encoder_kind 
     ++mc->encoders;
 }
 
-void de__mtl_encoder_end(de_gpu_cmd *c) {
+static void encoder_end(de_gpu_cmd *c, bool signal_queue) {
     mtl_cmd *mc = (mtl_cmd *)de__gpu_cmd_payload(c);
     if (!mc->encoder)
         return;
@@ -189,10 +190,19 @@ void de__mtl_encoder_end(de_gpu_cmd *c) {
         }
         if (mc->kind == DE__MTL_ENC_RENDER) /* DENG-325: store actions left open */
             de__mtl_render_resolve_store(c, (__bridge void *)enc, false);
+        if (signal_queue) {
+            DE_ASSERT(mc->kind == DE__MTL_ENC_COMPUTE);
+            [(id<MTLComputeCommandEncoder>)enc
+                updateFence:(__bridge id<MTLFence>)de__mtl_dev(c->device)->queue_fence[c->queue]];
+        }
         [enc endEncoding];
     }
     mc->kind = DE__MTL_ENC_NONE;
     mc->render_ended = false;
+}
+
+void de__mtl_encoder_end(de_gpu_cmd *c) {
+    encoder_end(c, false);
 }
 
 /* ---------- Barriers ---------- */
@@ -239,6 +249,13 @@ void de__mtl_cmd_barriers(de_gpu_cmd *c, const de_gpu_barrier *b, u32 count) {
 void de__mtl_cmd_finish(de_gpu_cmd *c) {
     mtl_cmd *mc = (mtl_cmd *)de__gpu_cmd_payload(c);
     mtl_device *m = de__mtl_dev(c->device);
+    /* The first encoder waits for the previous queue fence. With exactly one
+     * compute encoder, every command is already ordered before its final update;
+     * no separate blit encoder is needed to join earlier, independent encoders. */
+    if (mc->cb && mc->encoder && mc->kind == DE__MTL_ENC_COMPUTE && mc->encoders == 1) {
+        encoder_end(c, true);
+        return;
+    }
     de__mtl_encoder_end(c);
     if (!mc->cb)
         return;
