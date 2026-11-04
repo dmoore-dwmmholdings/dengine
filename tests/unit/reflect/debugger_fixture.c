@@ -15,8 +15,9 @@ DebugHealth debug_health = {.current = 75,
 };
 de_str debug_text = {"café\nworld", 11};
 de_entity debug_entity = {.bits = ((u64)2 << 32) | 7};
-de_array debug_array;
-de_hashmap debug_map;
+/* Explicit initializers make strong definitions. MSVC C treats a bare global as tentative. */
+de_array debug_array = {.count = 0};
+de_hashmap debug_map = {.count = 0};
 de_str debug_invalid = {NULL, 5};
 static char debug_bytes[5000] = "long string";
 de_str debug_long = {debug_bytes, sizeof debug_bytes};

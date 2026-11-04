@@ -202,3 +202,5 @@ jobs:
         run: python -m unittest discover -s tools/diagnostics -p test_windows_rt_crash.py -v
       - name: Preserve Windows LLDB loader diagnostic evidence
         run: python -m unittest discover -s tools/diagnostics -p test_windows_lldb_loader.py -v
+      - name: Preserve compiler and tool Python while configuring the debugger ABI
+        run: python -m unittest discover -s tools/diagnostics -p test_lldb_runtime.py -v

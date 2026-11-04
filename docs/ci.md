@@ -99,8 +99,21 @@ raw output go under `test-dumps/deng723-loader/` in the existing logs artifact.
 The original CTest result, cache, logs and inspected binaries are fingerprinted
 and preserved. Import candidates are not proof of actual loader resolution;
 API sets, KnownDLLs, redirection, delay imports and runtime loads need causal
-confirmation. Nothing is installed and PATH is unchanged. Portable controls run
+confirmation. The collector installs nothing; its debugger probe uses the same
+child environment as the original acceptance checker. Portable controls run
 as the `check`-labeled `windows_lldb_loader_selftest` and natively in Windows Checks.
+
+The inspected Windows LLDB library imports `python310.dll`. Non-Shipping Windows
+jobs provision Python 3.10 x64 with `update-environment: false`, retaining Python
+3.11 for compiler tools and tests. `DE_LLDB_PYTHON_EXECUTABLE` is passed only to
+the Test and loader-diagnostic steps. Their shared helper sets PATH and PYTHONHOME
+only for the LLDB child, requiring the matching DLL and standard library; the
+selected debugger, original native assertions and deadlines stay the same.
+An unset provider retains normal inheritance. `lldb_runtime_selftest` covers
+environment preservation and invalid providers. A dependency setup is qualified
+only when the original real LLDB formatter test passes. The checker's assertions
+run from a scratch file inside LLDB and write a report that the checker reads, in
+addition to the stdout marker, which they flush because Windows LLDB does not.
 
 The golden-image jobs (S10) are below; self-hosted runners come in S20 and the ABI check in S37.
 The cross-architecture determinism jobs are in `determinism.yml` (below).

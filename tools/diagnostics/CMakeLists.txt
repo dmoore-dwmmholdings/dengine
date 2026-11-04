@@ -28,3 +28,10 @@ add_test(NAME windows_lldb_loader_selftest
             -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_windows_lldb_loader.py -v)
 set_tests_properties(windows_lldb_loader_selftest
     PROPERTIES LABELS check TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+# DENG-723: the ABI provider affects only the debugger child, not compiler/tool Python.
+add_test(NAME lldb_runtime_selftest
+    COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}" -p test_lldb_runtime.py -v)
+set_tests_properties(lldb_runtime_selftest
+    PROPERTIES LABELS check TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
