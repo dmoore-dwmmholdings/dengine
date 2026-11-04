@@ -51,6 +51,61 @@ static void sort_free(void *user, void *ptr, size_t size) {
     (void)size;
 }
 
+/* Primary sorting leaves entity and gather-index ordering relevant only inside equal-key
+ * runs. Small runs use stable insertion; large runs reuse the same radix scratch. */
+static de_result sort_ties(de_sort_key64 *keys, u32 count, const de__transparent_item *payloads,
+                           const de_allocator *allocator) {
+    if (count <= DE_SORT_SMALL) {
+        for (u32 i = 1; i < count; ++i) {
+            de_sort_key64 value = keys[i];
+            u32 j = i;
+            while (j &&
+                   de__transparent_before(&payloads[value.index], &payloads[keys[j - 1].index])) {
+                keys[j] = keys[j - 1];
+                --j;
+            }
+            keys[j] = value;
+        }
+        return DE_OK;
+    }
+    bool index_ordered = true, same_generation = true;
+    u64 generation = payloads[keys[0].index].entity >> 32;
+    for (u32 i = 1; i < count; ++i) {
+        index_ordered &= payloads[keys[i - 1].index].index <= payloads[keys[i].index].index;
+        same_generation &= (payloads[keys[i].index].entity >> 32) == generation;
+    }
+    if (same_generation) {
+        /* Compact forward, then expand backward: unread source indices are preserved.
+         * Common equal-depth batches need only the 32-bit entity-index radix passes. */
+        de_sort_key32 *compact = (de_sort_key32 *)(void *)keys;
+        for (u32 i = 0; i < count; ++i) {
+            u32 index = (u32)keys[i].index;
+            compact[i] = (de_sort_key32){
+                index_ordered ? (u32)payloads[index].entity : payloads[index].index, index};
+        }
+        if (!index_ordered) {
+            DE_TRY(de_radix_sort_u32(compact, count, allocator));
+            for (u32 i = 0; i < count; ++i)
+                compact[i].key = (u32)payloads[compact[i].index].entity;
+        }
+        DE_TRY(de_radix_sort_u32(compact, count, allocator));
+        for (u32 i = count; i-- > 0;)
+            keys[i] = (de_sort_key64){0, compact[i].index};
+        return DE_OK;
+    }
+    if (!index_ordered) {
+        for (u32 i = 0; i < count; ++i)
+            keys[i].key = payloads[keys[i].index].index;
+        DE_TRY(de_radix_sort_u64(keys, count, allocator));
+    }
+    for (u32 i = 0; i < count; ++i) {
+        u64 entity = payloads[keys[i].index].entity;
+        /* Entity index first, generation second, then the stably sorted gather index. */
+        keys[i].key = (entity << 32) | (entity >> 32);
+    }
+    return de_radix_sort_u64(keys, count, allocator);
+}
+
 void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_item *scratch) {
     if (items == NULL || scratch == NULL || n < 2)
         return;
@@ -59,56 +114,26 @@ void de__transparent_sort(de__transparent_item *items, u32 n, de__transparent_it
     /* Preserve payloads once; sort compact metadata in the output array. */
     memcpy(scratch, items, (size_t)n * sizeof *items);
     de_sort_key64 *keys = (de_sort_key64 *)(void *)items;
-    de_sort_key32 *entity_keys = (de_sort_key32 *)(void *)items;
-    radix_scratch tmp = {entity_keys + n, (size_t)n * sizeof *entity_keys};
+    radix_scratch tmp = {keys + n, (size_t)n * sizeof *keys};
     de_allocator allocator = {.user = &tmp, .alloc = sort_alloc, .free = sort_free};
-    bool has_overlay = false, has_scene = false, index_ordered = true, same_generation = true;
-    /* Stable entity-index tie order is independent of extraction/archetype order. */
+    bool has_overlay = false, has_scene = false;
     for (u32 i = 0; i < n; ++i) {
-        entity_keys[i] = (de_sort_key32){(u32)scratch[i].entity, i};
-        has_overlay |= scratch[i].always_on_top;
-        has_scene |= !scratch[i].always_on_top;
-        index_ordered &= !i || scratch[i - 1].index <= scratch[i].index;
-        same_generation &= (scratch[i].entity >> 32) == (scratch[0].entity >> 32);
+        const de__transparent_item *item = &scratch[i];
+        keys[i] = (de_sort_key64){de__sprite_sort_key(item->layer, item->order, item->depth), i};
+        has_overlay |= item->always_on_top;
+        has_scene |= !item->always_on_top;
     }
-    /* Gather indices normally arrive in order. Only sort them when the caller
-     * supplied a different order, so equal entity/depth ties still match before(). */
-    if (!index_ordered) {
-        for (u32 i = 0; i < n; ++i)
-            entity_keys[i].key = scratch[i].index;
-        if (de_radix_sort_u32(entity_keys, n, &allocator) != DE_OK)
-            return;
-        for (u32 i = 0; i < n; ++i)
-            entity_keys[i].key = (u32)scratch[entity_keys[i].index].entity;
-    }
-    if (same_generation) {
-        if (de_radix_sort_u32(entity_keys, n, &allocator) != DE_OK)
-            return;
-        /* Expand backwards without overwriting unread entity indices. */
-        for (u32 i = n; i-- > 0;) {
-            u32 index = entity_keys[i].index;
-            const de__transparent_item *item = &scratch[index];
-            keys[i] =
-                (de_sort_key64){de__sprite_sort_key(item->layer, item->order, item->depth), index};
-        }
-    } else {
-        for (u32 i = n; i-- > 0;) {
-            u32 index = entity_keys[i].index;
-            u64 entity = scratch[index].entity;
-            /* Comparator orders entity index first, generation second. */
-            keys[i] = (de_sort_key64){(entity << 32) | (entity >> 32), index};
-        }
-        tmp = (radix_scratch){keys + n, (size_t)n * sizeof *keys};
-        if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
-            return;
-        for (u32 i = 0; i < n; ++i) {
-            const de__transparent_item *item = &scratch[keys[i].index];
-            keys[i].key = de__sprite_sort_key(item->layer, item->order, item->depth);
-        }
-    }
-    tmp = (radix_scratch){keys + n, (size_t)n * sizeof *keys};
     if (de_radix_sort_u64(keys, n, &allocator) != DE_OK)
         return;
+    for (u32 begin = 0; begin < n;) {
+        u32 end = begin + 1;
+        while (end < n && keys[end].key == keys[begin].key)
+            ++end;
+        /* Find the whole run before replacing its primary keys with tie-break keys. */
+        if (end - begin > 1 && sort_ties(keys + begin, end - begin, scratch, &allocator) != DE_OK)
+            return;
+        begin = end;
+    }
     /* Put the permutation after both key arrays. Forward payload writes cannot
      * reach an unread index: the last n u32s end at the last output item. */
     u32 *indices = (u32 *)(void *)((u8 *)items + (size_t)n * sizeof *items) - n;
