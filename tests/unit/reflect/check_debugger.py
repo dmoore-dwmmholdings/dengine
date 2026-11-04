@@ -4,8 +4,12 @@ import ast
 from pathlib import Path
 import subprocess
 import shutil
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools/diagnostics"))
+from lldb_runtime import debugger_environment
 
 
 def main():
@@ -69,7 +73,8 @@ def main():
             file = Path(temp) / "commands.lldb"
             file.write_text("\n".join(commands) + "\n", encoding="utf-8")
             run = subprocess.run([args.lldb, "--batch", "--no-lldbinit", "-s", file],
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, timeout=60,
+                                 env=debugger_environment())
         print(run.stdout)
         print(run.stderr)
         # Windows loader failures can produce no console output. Keep the actual

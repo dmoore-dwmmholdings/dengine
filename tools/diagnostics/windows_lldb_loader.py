@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 
+from lldb_runtime import PYTHON_EXECUTABLE, debugger_environment
+
 
 MAX_MODULES = 64
 MAX_SECONDS = 60
@@ -57,22 +59,24 @@ def original_working_directory(data):
     return working.resolve()
 
 
-def search_directories(executable, working):
-    windows = Path(os.environ["SystemRoot"])
+def search_directories(executable, working, environment=None):
+    environment = os.environ if environment is None else environment
+    windows = Path(environment["SystemRoot"])
     candidates = [executable.parent, windows / "System32", windows / "System", windows,
-                  working, *(Path(p.strip('"')) for p in os.environ.get("PATH", "").split(os.pathsep)
+                  working, *(Path(p.strip('"')) for p in environment.get("PATH", "").split(os.pathsep)
                              if p.strip('"'))]
     # Record absolute existing directories only; cwd is already explicit above.
     return list(dict.fromkeys(p.resolve() for p in candidates if p.is_absolute() and p.is_dir()))
 
 
-def invoke(command, log, deadline, working=None):
+def invoke(command, log, deadline, working=None, environment=None):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("diagnostic time budget exhausted")
     with log.open("wb") as output:
         result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT,
-                                timeout=min(10, remaining), check=False, cwd=working)
+                                timeout=min(10, remaining), check=False, cwd=working,
+                                env=environment)
     return {"command": [str(p) for p in command], "exit": result.returncode,
             "exitHex": f"0x{result.returncode & 0xffffffff:08x}", "log": str(log)}
 
@@ -95,14 +99,17 @@ def collect(build, output):
         working = original_working_directory(protected[1].read_bytes())
         report["executable"] = str(executable)
         fingerprints[str(executable)] = digest(executable)
-        directories = search_directories(executable, working)
+        environment = debugger_environment()
+        report["debuggerPythonExecutable"] = (os.environ.get(PYTHON_EXECUTABLE)
+                                               if environment is not None else None)
+        directories = search_directories(executable, working, environment)
         report["candidateDirectories"] = [str(p) for p in directories]
         report["workingDirectory"] = str(working)
         deadline = time.monotonic() + MAX_SECONDS
-        # No fixture/debuggee and no changed environment. A version probe can
-        # establish the same loader status without repeating the acceptance test.
+        # No fixture/debuggee. Use the acceptance checker's scoped debugger
+        # environment; the compiler's dumpbin below keeps ordinary inheritance.
         report["versionProbe"] = invoke([executable, "--version"], output / "lldb-version.log",
-                                         deadline, working)
+                                         deadline, working, environment)
         dumpbin = shutil.which("dumpbin")
         if not dumpbin:
             raise ValueError("MSVC dumpbin unavailable; no installation attempted")

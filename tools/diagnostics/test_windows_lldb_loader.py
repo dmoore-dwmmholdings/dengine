@@ -38,20 +38,26 @@ class LoaderEvidence(unittest.TestCase):
             f"Command: unchanged command\nDirectory: {self.working}\nOutput:\nfailed\n", encoding="utf-8")
         self.output = self.build / "test-dumps/deng723-loader"
 
-    def collect(self, imports, mutate=None):
-        def invoke(command, log, deadline, working=None):
+    def collect(self, imports, mutate=None, provider=None):
+        def invoke(command, log, deadline, working=None, environment=None):
             if command[1] == "--version":
                 self.assertEqual(command[0], self.tool)
                 self.assertEqual(working, self.working)
+                if provider:
+                    self.assertEqual(environment["PYTHONHOME"], str(provider.parent))
+                else:
+                    self.assertIsNone(environment)
                 log.write_bytes(b"")
                 return {"exit": 3221225781, "exitHex": "0xc0000135"}
+            self.assertIsNone(environment)  # Do not change the compiler tool's environment.
             name = Path(command[-1]).name
             log.write_text("File Type: DLL\n" + "".join(f"    {n}\n" for n in imports[name]),
                            encoding="utf-8")
             if mutate:
                 mutate()
             return {"exit": 0}
-        environment = {"SystemRoot": str(self.system), "PATH": str(self.tool.parent)}
+        environment = {"SystemRoot": str(self.system), "PATH": str(self.tool.parent),
+                       "DE_LLDB_PYTHON_EXECUTABLE": str(provider) if provider else ""}
         with mock.patch.dict(os.environ, environment), mock.patch.object(loader, "invoke", invoke), \
                 mock.patch.object(loader.shutil, "which", return_value="dumpbin"), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -110,6 +116,20 @@ class LoaderEvidence(unittest.TestCase):
         self.assertNotIn("versionProbe", report)
         self.assertTrue(report["originalEvidenceUnchanged"])
         self.assertEqual(last.read_bytes(), before)
+
+    def test_provider_is_shared_by_version_probe_and_dependency_search(self):
+        folder = self.root / "Python ABI space"
+        (folder / "Lib/encodings").mkdir(parents=True)
+        for name in ["python.exe", "python310.dll", "Lib/os.py", "Lib/encodings/__init__.py"]:
+            (folder / name).write_bytes(b"provider fixture, never executed")
+        with mock.patch.object(loader.sys, "platform", "win32"):
+            code, report = self.collect({"lldb.exe": ["python310.dll"], "python310.dll": []},
+                                        provider=folder / "python.exe")
+        self.assertEqual(code, 0, report)
+        self.assertIn(str(folder), report["candidateDirectories"])
+        self.assertEqual(report["unlocatedImports"], [])
+        self.assertEqual(report["versionProbe"]["exit"], 3221225781)
+        self.assertTrue(report["originalEvidenceUnchanged"])
 
     def test_inspected_debugger_mutation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "debugger files changed"):

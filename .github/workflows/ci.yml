@@ -112,6 +112,16 @@ jobs:
           cache-key: ${{ matrix.preset }}
           cache-save: ${{ github.event_name != 'pull_request' }}
 
+      # DENG-723: this LLDB imports python310.dll; retain Python3.11 for build tools.
+      - name: LLDB Python ABI runtime
+        if: runner.os == 'Windows' && !endsWith(matrix.preset, 'shipping')
+        id: lldb-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          architecture: x64
+          update-environment: false
+
       - name: Configure
         shell: bash
         run: |
@@ -139,6 +149,7 @@ jobs:
         # writes a minidump into DE_TEST_DUMP_DIR (uploaded below with the test logs).
         env:
           DE_TEST_DUMP_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/test-dumps
+          DE_LLDB_PYTHON_EXECUTABLE: ${{ steps.lldb-python.outputs.python-path }}
         run: ctest --preset "${PRESET}" --output-on-failure --parallel 4
 
       - name: D3D12 compute-first numeric readback (Release)
@@ -165,6 +176,8 @@ jobs:
       - name: Collect failed Windows LLDB loader evidence
         if: ${{ failure() && steps.build.outcome == 'success' && matrix.preset == 'windows-headless-release' }}
         shell: bash
+        env:
+          DE_LLDB_PYTHON_EXECUTABLE: ${{ steps.lldb-python.outputs.python-path }}
         run: python3 tools/diagnostics/windows_lldb_loader.py --test-dir "build/${PRESET}"
 
       - name: Upload test logs
