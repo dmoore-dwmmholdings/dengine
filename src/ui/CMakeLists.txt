@@ -25,3 +25,9 @@ if(TARGET de_ui)
  target_sources(de_ui PRIVATE "${_ui_default_style}" widgets/text.c widgets/image.c widgets/button.c widgets/toggle.c widgets/slider.c widgets/progress.c input/pointer.c)
  target_include_directories(de_ui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
+
+# DENG-320: replay-aware keyboard/gamepad focus navigation.
+if(TARGET de_ui)
+ target_sources(de_ui PRIVATE input/focus.c input/spatial_nav.c input/ui_actions.c)
+ target_compile_definitions(de_ui PRIVATE DE_UI_NAVIGATION=1)
+endif()

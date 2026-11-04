@@ -69,3 +69,15 @@ opacity = 0.6
 opacity = 0.6
 [style."image:disabled"]
 opacity = 0.6
+
+[style."button:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."toggle:focus"]
+border_color = "$foreground"
+border_width = 2
+
+[style."slider:focus"]
+border_color = "$foreground"
+border_width = 2
