@@ -21,9 +21,10 @@ report = {"status": "started", "python": sys.version, "stdout": repr(sys.stdout)
 try:
     t = lldb.debugger.GetSelectedTarget()
     v = lambda n: t.FindFirstGlobalVariable(n).GetSummary()
-    report["summaries"] = {n: ascii(v(n)) for n in (
-        "debug_position", "debug_rotation", "debug_matrix", "debug_health", "debug_text",
-        "debug_entity", "debug_array", "debug_map", "debug_invalid")}
+    names = ("debug_position", "debug_rotation", "debug_matrix", "debug_health", "debug_text",
+             "debug_entity", "debug_array", "debug_map", "debug_invalid")
+    report["valid"] = {n: t.FindFirstGlobalVariable(n).IsValid() for n in names}
+    report["summaries"] = {n: ascii(v(n)) for n in names}
     assert all(s in v('debug_position') for s in ('x=1', 'y=2', 'z=3')), v('debug_position')
     assert 'w=1' in v('debug_rotation'), v('debug_rotation')
     assert '(1, 0, 0, 4)' in v('debug_matrix'), v('debug_matrix')
