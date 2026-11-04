@@ -59,12 +59,23 @@ def original_working_directory(data):
     return working.resolve()
 
 
+def environment_value(environment, name, default=None):
+    # Windows names are case-insensitive, but os.environ.copy() is a plain dict
+    # that holds them in uppercase only.
+    for key, value in environment.items():
+        if key.upper() == name.upper():
+            return value
+    if default is None:
+        raise KeyError(name)
+    return default
+
+
 def search_directories(executable, working, environment=None):
     environment = os.environ if environment is None else environment
-    windows = Path(environment["SystemRoot"])
+    windows = Path(environment_value(environment, "SystemRoot"))
+    path = environment_value(environment, "PATH", "")
     candidates = [executable.parent, windows / "System32", windows / "System", windows,
-                  working, *(Path(p.strip('"')) for p in environment.get("PATH", "").split(os.pathsep)
-                             if p.strip('"'))]
+                  working, *(Path(p.strip('"')) for p in path.split(os.pathsep) if p.strip('"'))]
     # Record absolute existing directories only; cwd is already explicit above.
     return list(dict.fromkeys(p.resolve() for p in candidates if p.is_absolute() and p.is_dir()))
 

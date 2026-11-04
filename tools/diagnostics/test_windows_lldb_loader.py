@@ -131,6 +131,19 @@ class LoaderEvidence(unittest.TestCase):
         self.assertEqual(report["versionProbe"]["exit"], 3221225781)
         self.assertTrue(report["originalEvidenceUnchanged"])
 
+    def test_plain_dict_with_uppercase_windows_names_is_accepted(self):
+        # On Windows, os.environ.copy() returns this shape, not os.environ's lookup.
+        extra = self.root / "extra"
+        extra.mkdir()
+        directories = loader.search_directories(
+            self.tool, self.working, {"SYSTEMROOT": str(self.system), "PATH": str(extra)})
+        self.assertIn(self.system / "System32", directories)
+        self.assertIn(extra, directories)
+
+    def test_missing_system_root_is_still_an_error(self):
+        with self.assertRaises(KeyError):
+            loader.search_directories(self.tool, self.working, {"PATH": str(self.root)})
+
     def test_inspected_debugger_mutation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "debugger files changed"):
             self.collect({"lldb.exe": []}, lambda: self.tool.write_bytes(b"changed"))
