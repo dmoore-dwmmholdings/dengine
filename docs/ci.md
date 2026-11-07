@@ -1,6 +1,6 @@
 # Continuous integration
 
-DEngine uses GitHub Actions. There are four workflows in `.github/workflows/`. `ci.yml`,
+DEngine uses GitHub Actions. The workflows live in `.github/workflows/`. `ci.yml`,
 `sanitizers.yml` and `checks.yml` run on a push to `main`, `dev` or `sprint/**`, on every pull
 request, and by hand (`workflow_dispatch`). `determinism.yml` runs on a push to `main`, `dev` or
 `sprint/**` and by hand, not on pull requests. Each workflow has one concurrency group per branch,
@@ -8,6 +8,16 @@ so a new run on a branch cancels the run that it replaces (also a second `gh wor
 same branch). `dev` and `main` are the exception: a new run there waits for the running one to
 finish instead of cancelling it, and only the newest waiting run is kept. Merges land on `dev`
 faster than a full run takes, so cancelling left `dev` without a finished result.
+
+`ui-m1.yml` qualifies the original static HUD workload separately from the general
+matrix. It verifies native Apple M1 (including M1 Virtual) arm64 hardware, builds
+`test_ui_draw` with the `macos-dev` preset, and requires exactly one actual passing
+`ui_draw.two_thousand_widgets_static_zero_alloc_build_extract` case. The original
+2,000 widgets, eight warm-up frames, 1,000 measured frames, zero-allocation guard,
+0.5 ms build+Extract and 2.5 ms whole-frame budgets remain in the test. Hardware,
+configuration, JUnit and test logs are uploaded as `ui-m1-acceptance`. Relevant UI/ECS
+pull requests trigger the workflow; it can also be dispatched by hand. A queued job
+or a result on another CPU does not qualify M1 performance.
 
 ## Tiers: quick and full
 
