@@ -465,3 +465,14 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-708: real source model/prefab persistence through editor scene handlers.
+if(NOT DE_IS_SHIPPING AND DE_BUILD_TOOLS AND TARGET de_render AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_scene_assets SOURCES test_editor_scene_assets.c
+        LIBS de_host de_cooker de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev)
+    target_include_directories(test_editor_scene_assets PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    target_compile_definitions(test_editor_scene_assets PRIVATE
+        DE_EDITOR_SCENE_DATA="${DE_ROOT_DIR}/tests/unit/import/data/gltf"
+        DE_EDITOR_SCENE_TMP="${CMAKE_CURRENT_BINARY_DIR}/scene-assets-tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/scene-assets-tmp")
+endif()

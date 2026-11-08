@@ -314,8 +314,12 @@ static u64 save_asset_to_id(u32 handle, const char *type, void *user) {
     (void)type;
     save_map *m = (save_map *)user;
     const char *path = de__ed_asset_path(m->ed, handle);
-    if (path == NULL)
-        return (u64)handle;
+    if (path == NULL) {
+        /* A missing printable name does not turn a typed slot into an asset identity.
+         * Generated children and packed assets still carry their canonical ID in the slot. */
+        const de__slot *slot = m->ed->e->assets ? de__slot_get(m->ed->e->assets, handle) : NULL;
+        return slot != NULL ? slot->id.hash : 0;
+    }
     const u64 id = de_asset_id_from(path).hash;
     if (saved_path(m, id) == NULL && m->count < SAVE_PATHS) {
         m->ids[m->count] = id;
