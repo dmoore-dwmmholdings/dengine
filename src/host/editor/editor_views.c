@@ -1090,6 +1090,12 @@ static void on_resize(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     if (v == NULL)
         return;
 #if ED_VIEWS
+    /* Reject unsupported extents before mutating a healthy view or its shared ring.
+     * Zero retains the established one-pixel normalization below. */
+    if (q.width > 8192 || q.height > 8192) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "view dimensions exceed 8192");
+        return;
+    }
     v->w = q.width ? q.width : 1;
     v->h = q.height ? q.height : 1;
     v->scale = q.scale;
