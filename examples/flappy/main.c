@@ -62,14 +62,10 @@ static f64 world_z(f32 py) {
     return (STAGE_H - py) / PPM;
 }
 
-/* The palette is sRGB; the UI writes its colours unconverted into an sRGB swapchain, which
- * encodes them again, so they go in linear (DENG-621). */
-static f32 linear(f32 c) {
-    return c <= .04045f ? c / 12.92f : powf((c + .055f) / 1.055f, 2.4f);
-}
-
+/* Explicitly decode the authored sRGB palette for the linear C UI API. DENG-621 remains
+ * open for the broader authored-color/output contract; this preserves the existing colors. */
 static de_entity node(de_engine *e, de_entity parent, de_vec4 color, f32 radius) {
-    color = (de_vec4){linear(color.x), linear(color.y), linear(color.z), color.w};
+    color = de_ui_color_from_srgb(color);
     de_entity n = de_entity_spawn(e->world);
     (void)de_entity_add(e->world, n, app.c.node);
     (void)de_entity_add(e->world, n, app.c.anchor);

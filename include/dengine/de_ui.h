@@ -139,6 +139,13 @@ typedef struct DeUiPopup {
     u8 placement;
     bool modal;
 } DeUiPopup;
+/** Decode finite, normalized sRGB RGB channels in [0,1] to linear RGB (IEC 61966-2-1).
+ * Alpha is unchanged: neither gamma-corrected nor premultiplied. No clamping or tonemapping.
+ * Opt-in for authored palettes; do not apply to already-linear or resolved theme colors. */
+DE_API de_vec4 de_ui_color_from_srgb(de_vec4 rgba);
+
+/** C API colors are straight-alpha, linear RGB. Stylesheet hex colors are decoded from sRGB
+ * by the theme loader; C palettes can opt in through de_ui_color_from_srgb. */
 typedef struct DeUiStyle {
     de_vec4 background, border_color;
     f32 border_width, corner_radius, opacity;
@@ -161,7 +168,7 @@ typedef struct DeUiImage {
     de_texture texture;
     de_vec4 uv_rect;
     de_vec4 nine_slice;
-    de_vec4 tint;
+    de_vec4 tint; /**< Straight-alpha linear RGB, like DeUiStyle colors. */
 } DeUiImage;
 typedef struct DeUiText {
     de_name loc_id;
