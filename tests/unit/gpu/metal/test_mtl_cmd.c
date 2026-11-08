@@ -13,8 +13,8 @@
  *   - untracked_barrier_1000: 1000 times, one blit encoder fills a 1 MiB GPU_ONLY buffer
  *     (untracked heap) and a later blit encoder of the same command buffer copies its last 256
  *     bytes out, with only de_gpu barriers between them.
- *   - residency_default_path: the default device's path follows the OS and SDK, and a kernel reads
- *     and writes buffers only through the bindless table (Base tier).
+ *   - residency_default_path: follows device, OS and SDK support. A kernel reads and writes
+ *     buffers only through the bindless table (Base tier).
  *   - residency_forced_use_heap: the same tests and the kernel on a device made with
  *     gpu.metal.force_use_heap (useHeaps: per encoder, the macOS 14 path).
  *   - timestamp_frequency: caps.timestamp_frequency against GPU timestamp counter samples.
@@ -434,14 +434,14 @@ TEST_F(mtl, untracked_barrier_1000, cmd_fx) {
 
 /* ---------- Residency ---------- */
 
-/* The default device: a residency set where the OS has them (macOS 15+) and the build has the
- * path (macOS 15 SDK), useHeaps: otherwise; a kernel reads and writes through the table. */
+/* The default device: a residency set with Apple6 support, macOS 15+ and the macOS 15 SDK
+ * build path; useHeaps: otherwise; a kernel reads and writes through the table. */
 TEST_F(mtl, residency_default_path, cmd_fx) {
-    const bool sets = de_test_mtl_has_residency_sets() && de__mtl_residency_sets_built();
-    printf(
-        "residency: %s (OS %s residency sets, build %s them)\n",
-        sets ? "MTLResidencySet" : "useHeaps:", de_test_mtl_has_residency_sets() ? "has" : "lacks",
-        de__mtl_residency_sets_built() ? "has" : "lacks");
+    const bool sets = de_test_mtl_has_residency_sets(f->d) && de__mtl_residency_sets_built();
+    printf("residency: %s (device/OS %s residency sets, build %s them)\n",
+           sets ? "MTLResidencySet" : "useHeaps:",
+           de_test_mtl_has_residency_sets(f->d) ? "has" : "lacks",
+           de__mtl_residency_sets_built() ? "has" : "lacks");
     EXPECT_EQ(de__mtl_residency_uses_heaps(f->d), !sets);
     mtl_require_base_tier(f); /* the kernel needs Metal 3 */
     bindless_dispatch_body(f->d);

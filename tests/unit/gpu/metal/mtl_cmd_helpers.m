@@ -10,6 +10,7 @@
 #include "de_alloc_guard.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 TEST(mtl, completed_predecessor_has_no_notification_allocation) {
@@ -134,9 +135,11 @@ int de_test_mtl_dispatch_copy(de_gpu_device *d, void *compute_encoder, u32 in_in
     }
 }
 
-bool de_test_mtl_has_residency_sets(void) {
-    if (@available(macOS 15.0, *))
-        return true;
+bool de_test_mtl_has_residency_sets(de_gpu_device *d) {
+    if (@available(macOS 15.0, *)) {
+        id<MTLDevice> dev = (__bridge id<MTLDevice>)de__mtl_device_object(d);
+        return [dev supportsFamily:MTLGPUFamilyApple6];
+    }
     return false;
 }
 
@@ -209,4 +212,68 @@ void de_test_mtl_layer_info(void *layer, de_gpu_device *d, de_test_mtl_layer *ou
     out->bgra8_srgb = l.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
     out->drawable_w = l.drawableSize.width;
     out->drawable_h = l.drawableSize.height;
+}
+
+/* DENG-741: protocol recording double, not a GPU or advertised device capability. Exercise the
+ * production initializer with no supported hardware family. Calling newResidencySet on that
+ * device is forbidden even when the runtime exposes the selector. Real default/forced-path
+ * GPU tests above independently cover actual allocation and bindless reads/writes. */
+@interface DEResidencyProbe : NSObject
+@property BOOL apple6;
+@property BOOL metal3;
+@property NSUInteger creates;
+@property NSUInteger familyQueries;
+@end
+@implementation DEResidencyProbe
+- (BOOL)supportsFamily:(MTLGPUFamily)family {
+    self.familyQueries += 1;
+    return (family == MTLGPUFamilyApple6 && self.apple6) ||
+           (family == MTLGPUFamilyMetal3 && self.metal3);
+}
+- (id)newResidencySetWithDescriptor:(id)desc error:(NSError **)error {
+    (void)desc;
+    (void)error;
+    self.creates += 1;
+    /* Allocation failure must still preserve useHeaps, rather than losing residency. */
+    return nil;
+}
+@end
+
+static void residency_probe(bool apple6, bool metal3) {
+    @autoreleasepool {
+        ASSERT_EQ(de_log_init(&(de_log_desc){.no_console_sink = true}), DE_OK);
+        const size_t bytes = DE__GPU_ALIGN16(sizeof(de_gpu_device)) + sizeof(mtl_device);
+        de_gpu_device *d = (de_gpu_device *)calloc(1, bytes);
+        ASSERT_TRUE(d != NULL);
+        mtl_device *m = de__mtl_dev(d);
+        DEResidencyProbe *probe = [DEResidencyProbe new];
+        probe.apple6 = apple6;
+        probe.metal3 = metal3;
+        m->device = (__bridge void *)probe;
+        de_mutex_init(&m->heap_lock);
+        EXPECT_EQ(de__mtl_residency_init(d), DE_OK);
+        bool available = false;
+        if (@available(macOS 15.0, *))
+            available = de__mtl_residency_sets_built();
+        EXPECT_EQ(probe.familyQueries, available ? 1u : 0u);
+        EXPECT_EQ(probe.creates, available && apple6 ? 1u : 0u);
+        EXPECT_TRUE(m->use_heaps);
+        EXPECT_TRUE(m->residency_set == NULL);
+        de__mtl_residency_shutdown(d);
+        de_mutex_destroy(&m->heap_lock);
+        free(d);
+        de_log_shutdown();
+    }
+}
+
+TEST(mtl, residency_unsupported_device_never_creates_set) {
+    residency_probe(false, false);
+}
+
+TEST(mtl, residency_metal3_without_apple6_never_creates_set) {
+    residency_probe(false, true);
+}
+
+TEST(mtl, residency_apple6_attempts_set_and_preserves_allocation_failure_fallback) {
+    residency_probe(true, false);
 }
