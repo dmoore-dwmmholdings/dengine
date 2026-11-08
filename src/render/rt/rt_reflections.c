@@ -35,6 +35,7 @@ struct de__rt_reflections {
     de_gpu_pipeline kernels[5];
     de_cvar max_roughness;
     u32 reference;
+    de__rt_reflections_debug debug;
     reflection_view views[32];
 };
 typedef struct reflection_pass {
@@ -334,6 +335,9 @@ de_result de__rt_reflections_build(de__rt_reflections *s, de_rg *g, de__vis_cont
     de_rg_export(g, raw, DE_ACCESS_SHADER_READ);
     de_rg_export(g, output, DE_ACCESS_SHADER_READ);
     de_rg_export(g, distance, DE_ACCESS_SHADER_READ);
+    /* Capture readers precede in-place denoiser writes through graph dependencies. */
+    if (s->debug.capture_raw)
+        s->debug.capture_raw(s->debug.capture_user, g, vc->view, output, vc->width, vc->height);
     DE_TRY(de__denoise_specular(s->denoiser, g, vc, lc, output, distance, true, s->reference != 0,
                                 de_rg_import_buffer(g, v->rays, DE_ACCESS_SHADER_READ),
                                 p->params.scale));
@@ -361,4 +365,9 @@ bool de__rt_reflections_get(const de__rt_reflections *s, de_view view,
 void de__rt_reflections_reference(de__rt_reflections *s, u32 samples) {
     if (s)
         s->reference = samples > 4096 ? 4096 : samples;
+}
+
+void de__rt_reflections_set_debug(de__rt_reflections *s, const de__rt_reflections_debug *debug) {
+    if (s)
+        s->debug = debug ? *debug : (de__rt_reflections_debug){0};
 }
