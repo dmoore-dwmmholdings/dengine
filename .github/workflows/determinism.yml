@@ -53,7 +53,7 @@ jobs:
           # line is the reference of the diff job; it is the platform the golden files are made
           # on (macOS arm64, the build host).
           jobs=$(cat <<'EOF'
-          { "platform": "macos-arm64-clang", "os": "macos-14", "preset": "macos-release", "compiler": "apple-clang" }
+          { "platform": "macos-arm64-clang", "os": "macos-15", "preset": "macos-release", "compiler": "apple-clang" }
           { "platform": "linux-x86-64-gcc", "os": "ubuntu-24.04", "preset": "linux-gcc-release", "compiler": "gcc" }
           { "platform": "linux-x86-64-clang", "os": "ubuntu-24.04", "preset": "linux-clang-release", "compiler": "clang" }
           { "platform": "windows-x86-64-msvc", "os": "windows-2022", "preset": "windows-msvc-release", "compiler": "msvc" }
@@ -68,7 +68,7 @@ jobs:
           # The cook hosts (DENG-216): Dev presets, because `de-cook cook` needs the cooker. The
           # first line is the reference of the pack comparison.
           cook=$(cat <<'EOF'
-          { "platform": "macos-arm64-clang", "os": "macos-14", "preset": "macos-dev", "compiler": "apple-clang" }
+          { "platform": "macos-arm64-clang", "os": "macos-15", "preset": "macos-dev", "compiler": "apple-clang" }
           { "platform": "linux-x86-64-gcc", "os": "ubuntu-24.04", "preset": "linux-gcc-dev", "compiler": "gcc" }
           EOF
           )
