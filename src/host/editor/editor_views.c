@@ -1337,10 +1337,12 @@ static void on_set_hidden(de__editor *ed, const de_ep_request *req, de_ep_arena 
 /* ---------- Picking ---------- */
 
 #if DE_HAS_RENDER
-static bool hidden(u64 e) {
+/* Match rendering: editor visibility is Scene-only, never canonical Game output. */
+static bool hidden(const ed_view *v, u64 e) {
 #if ED_VIEWS
-    return de__view_hidden_contains(g_views.hidden, e);
+    return v != NULL && !v->game && de__view_hidden_contains(g_views.hidden, e);
 #else
+    (void)v;
     (void)e;
     return false;
 #endif
@@ -1354,8 +1356,8 @@ static void to_source(const ed_view *v, f32 x, f32 y, u32 *px, u32 *py) {
     *py = fy < 0 ? 0u : fy >= (f32)v->sh ? v->sh - 1 : (u32)fy;
 }
 
-static bool pick_skipped(const ed_pick *p, u64 e) {
-    if (hidden(e) || de__ed_views_owns(e))
+static bool pick_skipped(const ed_view *v, const ed_pick *p, u64 e) {
+    if (hidden(v, e) || de__ed_views_owns(e))
         return true;
     for (u32 i = 0; i < p->skip_count; ++i)
         if (p->skip[i] == e)
@@ -1422,7 +1424,7 @@ static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
         for (u32 i = 0; i < p->skip_count; ++i)
             not_icons[ns++] = p->skip[i];
         const u64 icon = de__ed_icon_pick(ed, &c, p->x, p->y, v->show, not_icons, ns);
-        if (icon != 0 && !hidden(icon)) {
+        if (icon != 0 && !hidden(v, icon)) {
             pick_respond(ed, w, req->id, v, p->x, p->y, icon, 0, false);
             return;
         }
@@ -1430,7 +1432,7 @@ static void on_pick(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
         u64 sprites[64];
         const u32 n = de__ed_sprite_pick(ed, &c, p->x, p->y, sprites, 64);
         for (u32 i = 0; i < n && p->sprite == 0; ++i)
-            if (!pick_skipped(p, sprites[i]))
+            if (!pick_skipped(v, p, sprites[i]))
                 p->sprite = sprites[i];
         /* A 2D view is all sprites: the nearest one is the answer. */
         if (de__ed_cam_flat(&c) && p->sprite != 0) {
@@ -1458,11 +1460,11 @@ static void picks_tick(de__editor *ed) {
         if (!done && ++p->frames < 30)
             continue;
         /* The GPU's hit, unless it is one to see through; else the sprite under the cursor. */
-        const bool gpu = done && bits != 0 && !pick_skipped(p, bits);
+        const ed_view *v = view_find(p->view);
+        const bool gpu = done && bits != 0 && !pick_skipped(v, p, bits);
         mpack_writer_t w;
         de__ed_respond_begin(ed, &w);
-        pick_respond(ed, &w, p->req_id, view_find(p->view), p->x, p->y, gpu ? bits : p->sprite, tri,
-                     gpu);
+        pick_respond(ed, &w, p->req_id, v, p->x, p->y, gpu ? bits : p->sprite, tri, gpu);
         de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
         p->pending = false;
     }
@@ -1501,7 +1503,7 @@ static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *
     for (u32 k = 0; k < N * N && out.entities.items != NULL; ++k) {
         u64 bits = 0;
         u32 tri = 0;
-        if (!de_view_pick_result(ed->e->renderer, ids[k], &bits, &tri) || bits == 0 || hidden(bits))
+        if (!de_view_pick_result(ed->e->renderer, ids[k], &bits, &tri) || bits == 0 || hidden(v, bits))
             continue;
         bool seen = false;
         for (u32 x = 0; x < out.entities.count && !seen; ++x)
@@ -1525,7 +1527,7 @@ static void on_pick_rect(de__editor *ed, const de_ep_request *req, de_ep_arena *
         const u32 had = out.entities.count;
         for (u32 k = 0; k < n; ++k) {
             const u64 e = found[k];
-            bool seen = hidden(e);
+            bool seen = hidden(v, e);
             for (u32 x = 0; x < had && !seen; ++x)
                 seen = out.entities.items[x] == e;
             if (!seen)
