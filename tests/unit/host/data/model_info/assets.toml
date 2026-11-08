@@ -1,0 +1,3 @@
+[assets]
+hero = {type="model", source="held.model"}
+warm = {type="model", source="warm.model"}

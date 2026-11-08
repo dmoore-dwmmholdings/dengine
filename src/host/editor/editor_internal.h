@@ -96,6 +96,7 @@ void de__editor_stop(struct de__host *h);
 void de__ed_on(de__editor *ed, de_ep_method m, de__ed_handler fn);
 void de__ed_on_tick(de__editor *ed, de__ed_tick_fn fn);
 void de__ed_on_reset(de__editor *ed, de__ed_reset_fn fn);
+void de__ed_assets_shutdown(de__editor *ed);
 void de__ed_add_capability(de__editor *ed, const char *cap);
 #if DE_HAS_RENDER
 void de__ed_preview_register(de__editor *ed);
