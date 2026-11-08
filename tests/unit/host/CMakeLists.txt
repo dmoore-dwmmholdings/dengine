@@ -465,3 +465,12 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-573: macOS launch parser controls; no device or native capture is created here.
+if(APPLE AND TARGET de_render)
+    de_add_test(NAME host_gpu_capture SOURCES test_gpu_capture.c LIBS de_host
+        LABELS unit host CONFIGURATIONS Debug Dev)
+    if(TARGET test_host_gpu_capture)
+        target_include_directories(test_host_gpu_capture PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()

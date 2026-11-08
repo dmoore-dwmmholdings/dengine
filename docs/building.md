@@ -336,3 +336,52 @@ gh api repos/dmoore-dwmmholdings/dide/tarball/52f3bb1df587c499117ffa3f10bd4692e2
   > build/vendor-cache/dide_protocol-fdf480a0b8145df5-52f3bb1df587c499117ffa3f10bd4692e2a74d61
 python3 tools/vendor/vendor.py --cache build/vendor-cache verify dide_protocol --offline
 ```
+
+### Partial Metal launch capture (DENG-573)
+
+Debug/Dev hosts can arm native Xcode/Metal document capture with:
+
+```sh
+mkdir -p /tmp/dengine-captures
+DE_GPU_CAPTURE=xcode DE_GPU_CAPTURE_DIR=/tmp/dengine-captures \
+  DE_GPU_CAPTURE_FRAMES=2 ./your-game --gpu-capture
+```
+
+`DE_GPU_CAPTURE_DIR` must be an existing absolute native directory. Frames defaults to 1 and
+accepts decimal integers from 1 through 100. Environment configuration alone **only arms** the
+feature: `--gpu-capture` requests one capture after game initialization, or Ctrl+Shift+F12 requests
+one on a new F12 key edge. Holding/repeating the key does not retrigger it. A pending/active request
+rejects another request rather than replacing it. Files have process/time-qualified `.gputrace`
+names; existing files are never intentionally overwritten.
+
+The renderer owns the request and copied path. Acquisition skips do not count; reported scene,
+view, and presentation success advances the requested frame count. GPU work is drained before
+ending the document. Renderer replacement, early quit, or render failure ends an owned active
+capture as **incomplete**, possibly retaining a partial trace, without claiming completion or
+writing a success sidecar. An already-active native capture is rejected and is not stopped by the
+failed requester. Do not externally stop/restart Metal's process-global capture manager while an
+engine-owned capture is active: Metal exposes no external capture ownership identifier.
+
+Metal capture is enabled before engine/device creation when requested. The host preserves an
+existing `MTL_CAPTURE_ENABLED=1`, rejects a conflicting value, and removes only its own unchanged
+setting on exit. Host runs/environment configuration are sequential, not concurrent environment
+writers. Debug/Dev headless hosts ignore an inherited armed environment; an explicit request
+fails because there is no GPU. Release/Shipping do not install launch/hotkey capture behavior.
+
+This is **partial Metal phase 1**, not completion of DENG-573: RenderDoc/PIX and
+`DE_GPU_CAPTURE_LIBRARY` adapters are not implemented, no Windows capture runtime is qualified,
+and DENG-636 capture IPC remains unsupported. No screenshot-transfer behavior changes. A native
+GPU stall can still block the existing backend idle wait; bounded test supervision is not a
+production device-hang recovery guarantee.
+
+Opt-in native verification (macOS, usable Metal device, no desktop window):
+
+```sh
+cmake --build --preset dev --target de_offscreen_capture
+python3 tests/unit/host/check_gpu_launch_capture.py \
+  build/dev/tests/unit/host/de-offscreen-capture /tmp/dengine-capture-proof-new
+```
+
+The output directory must not exist. The proof preserves logs/traces, checks real render-graph
+markers, original pixel/asset checks, disabled and armed-only controls, sync/async completion, and
+incomplete early exit. This is engine host/native capture evidence, not a DIDE UI integration run.

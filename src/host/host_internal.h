@@ -13,6 +13,7 @@
 #include <dengine/de_game.h>
 
 #include "host/engine_internal.h"
+#include "host/gpu_capture.h"
 #include "host/game_module.h"   /* DENG-92: de__game_module */
 #include "host/loop_internal.h" /* DENG-91: the hook lists de__host holds */
 #include "host/hot_reload.h"    /* DENG-93: de__hot_reload */
@@ -60,6 +61,9 @@ typedef struct de__host {
 
     /* ---- DENG-623: the Dev-only editor service (editor/editor.c). NULL: not running. ---- */
     struct de__editor *editor;
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__host_capture capture;
+#endif
 } de__host;
 
 /* ---------- Main loop (loop.c; DENG-91 owns the body) ---------- */
