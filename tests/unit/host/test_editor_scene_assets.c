@@ -1,3 +1,6 @@
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L /* strdup, setenv and unsetenv under strict C11. */
+#endif
 #include "de_test.h"
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
