@@ -13,6 +13,15 @@
 #include <stdlib.h>
 #include <dengine/de_render.h>
 #include "ecs/ecs_internal.h"
+#if defined(_WIN32)
+#include <process.h>
+#define scene_getpid() ((unsigned long)_getpid())
+#else
+#include <unistd.h>
+#define scene_getpid() ((unsigned long)getpid())
+#endif
+
+static u32 scene_run_counter;
 
 /* Real model cook and asset pipeline; CPU loaders retain bytes and declare the actual mesh
  * material references. No renderer, invented catalog IDs or private IDE fixture required. */
@@ -49,6 +58,7 @@ typedef struct scene_fx {
     de__editor editor;
     de_load_handle load;
     bool shift, cold;
+    char native_dir[DE_FS_PATH_MAX];
     char note[32768];
     u64 arena[32768]; /* Match the production allocator-backed arena alignment. */
 } scene_fx;
@@ -61,7 +71,17 @@ static void scene_fx_setup(scene_fx *f) {
     ASSERT_EQ(de_render_register_components(f->engine.world), DE_OK);
     ASSERT_EQ(de_log_init(&(de_log_desc){.no_console_sink = true}), DE_OK);
     ASSERT_EQ(de_fs_mount("scenedata", DE_EDITOR_SCENE_DATA, DE_MOUNT_READ_ONLY, 0), DE_OK);
-    ASSERT_EQ(de_fs_mount("scenetmp", DE_EDITOR_SCENE_TMP, DE_MOUNT_WRITABLE, 0), DE_OK);
+    /* CTest executes cases in separate concurrent processes. Neither source files nor
+     * cooked caches may be shared, including across cold_reset within one process. */
+    ASSERT_EQ(de_fs_mount("scenebase", DE_EDITOR_SCENE_TMP, DE_MOUNT_WRITABLE, 0), DE_OK);
+    char run[128];
+    snprintf(run, sizeof run, "scenebase:/run-%lu-%u-%llu", scene_getpid(), scene_run_counter++,
+             (unsigned long long)de_time_now_ns());
+    ASSERT_FALSE(de_path_exists(run));
+    ASSERT_EQ(de_dir_create(run), DE_OK);
+    ASSERT_EQ(de_fs_resolve(run, f->native_dir, sizeof f->native_dir), DE_OK);
+    ASSERT_EQ(de_fs_unmount("scenebase", DE_EDITOR_SCENE_TMP), DE_OK);
+    ASSERT_EQ(de_fs_mount("scenetmp", f->native_dir, DE_MOUNT_WRITABLE, 0), DE_OK);
     void *source = NULL;
     u64 size = 0;
     ASSERT_EQ(
@@ -115,6 +135,9 @@ static void scene_fx_teardown(scene_fx *f) {
     de_world_destroy(f->engine.world);
     de_asset_system_destroy(f->engine.assets);
     de_type_registry_destroy(f->engine.types);
+    /* The real host-start test can already have cleared the process mount table. */
+    (void)de_fs_unmount("scenetmp", f->native_dir);
+    (void)de_fs_unmount("scenedata", DE_EDITOR_SCENE_DATA);
     de_log_shutdown();
     EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).bytes_live, 0u);
     EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).blocks_live, 0u);
