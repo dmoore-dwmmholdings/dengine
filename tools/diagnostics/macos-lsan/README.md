@@ -171,3 +171,70 @@ other fuzz targets have run, or that DENG-551's native watcher/Metal reports are
 resolved. Review and merge of the remedy remain separate from its test evidence.
 
 Upstream: https://github.com/llvm/llvm-project/blob/0d261d1ca552c95a8f007e061c787ac7132fbcbc/compiler-rt/lib/fuzzer/FuzzerDriver.cpp
+
+
+## CoreFoundation dispatch-worker TLS isolation (DENG-686)
+
+`cf_worker.c` creates and releases one `CFNumber` on a private serial queue executing on a pooled libdispatch worker,
+waits for completion, drains and releases its queue and semaphore. It calls no
+FSEvents or engine API and links only CoreFoundation. The `none` mode does no
+work; `main` creates/releases the same CFNumber on the main thread without
+dispatch. Run each mode in a fresh process. This isolates framework
+worker initialization from watcher stream ownership:
+
+```sh
+clang -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -fno-sanitize-recover=undefined -Wall -Wextra -Wpedantic -Werror \
+  tools/diagnostics/macos-lsan/cf_worker.c \
+  -framework CoreFoundation -o /tmp/deng-cf-worker-control
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  /tmp/deng-cf-worker-control none
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  /tmp/deng-cf-worker-control main
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  /tmp/deng-cf-worker-control worker
+```
+
+Fresh DENG-686 investigation at engine `b40b59462d5faad8336aa5b5bcc12f2501d06562`,
+macOS 26.6.2 (25G83), Apple M5 Pro and Homebrew Clang 23.1.3 reproduced a 1,128-byte
+`__CFTSDGetTable -> CFNumberCreate` report in this control and in the native
+`hot_reload.real_watcher` test. The same-binary `none` and `main` controls
+exited 0 without a leak report; `worker` completed its work but exited 1 on LSan.
+A separate bounded stream control repeated 1, 8
+and 32 stream lifetimes with balanced atomic context retain/release counters;
+each reported one such allocation. A diagnostic-only two-second delay did not
+remove it. These observations support framework worker TLS/process-exit
+reachability, not a leak growing with stream count. They do not prove all
+framework allocations are process-lifetime, or that every engine leak is external.
+
+The existing `watch.destroy_pending` test passed its engine allocator's zero-live
+bytes/blocks checks across three active watcher lifetimes but reported **two**
+1,128-byte framework allocations. Do not call this universally one allocation per
+process: libdispatch worker counts can differ. All 17 watcher functional cases passed
+in their intended separate CTest processes; 15 processes still failed LSan and
+only two exited cleanly. The sanitizer gate remains red. Running all cases in one
+process additionally violates `debounce_cvar`'s initial-global-state assumption;
+use the existing separate-process CTest registrations, not a weakened assertion.
+
+No custom suppression file or leak-disabling option was used. However, this
+installed LLVM runtime intrinsically applies Apple-arm64 standard suppressions
+(e.g. `*_fetchInitializingClassList*` was printed in reports). Its
+[`kStdSuppressions` initialization](https://github.com/llvm/llvm-project/blob/0d261d1ca552c95a8f007e061c787ac7132fbcbc/compiler-rt/lib/lsan/lsan_common.cpp)
+is unconditional; an empty user suppression file does not disable it. Therefore
+these runs are **not absolutely suppression-free**, and they do not establish a
+leak-free engine. Keep the full sanitizer report and compiler/runtime provenance.
+Do not add sleeps, suppression rules, private framework cleanup calls or queue
+unscheduling workarounds to production on the strength of these diagnostics.
+This investigation does not reproduce or explain the reported 100 GB incident.
+
+The existing DENG-551 `fsevents start 32 finalize` control also completed all
+32 queue finalizers and exited cleanly on this host. That control does not
+necessarily deliver a file event or initialize the same CoreFoundation worker
+TLS path. Its clean result is not interchangeable with the real watcher or
+CFNumber-worker workload. The new control returns 2 on allocation/wait failure;
+only its explicit completed-work message supports a completed-lifetime comparison.
+DENG-686 and DENG-551 remain open; this diagnostic does not clear either gate.
+
+On a worker timeout, the diagnostic intentionally leaves outstanding work alive until
+process exit and makes no completed-lifetime claim. Sanitizer exit handling may
+override the control return code, including allocation or timeout failures.
