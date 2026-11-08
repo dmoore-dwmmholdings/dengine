@@ -9,18 +9,27 @@
 #define _CRT_SECURE_NO_WARNINGS /* fopen */
 #endif
 #include "host/editor/editor_internal.h"
+#include "host/editor/editor_scene_load.h"
+#if DE_HAS_RENDER
+#include "render/world/render_world.h"
+#endif
 
 #include <dengine/de_asset.h>
 #include <dengine/de_memory.h>
 #include <dengine/de_platform.h>
 
 #include "asset/slots_internal.h"
+#include "asset/asset_internal.h"
+#include "asset/resolve_internal.h"
+#include "asset/cook_stage_internal.h"
 #include "core/de_toml_internal.h"
+#include "platform/vfs_internal.h"
 #include "ecs/ecs_internal.h"
 #include "host/host_internal.h"
 #include "reflect/ser_internal.h"
 
 #include <limits.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +42,8 @@ typedef struct ed_scene {
     u64 id; /* 0: free */
     char path[512];
     bool active, dirty;
+    de_load_handle owned_assets;
+    u64 mutation;
 } ed_scene;
 
 typedef struct ed_member {
@@ -50,10 +61,26 @@ typedef struct ed_instance {
     u64 root;
     char asset[256];
     ed_base *base;
-    u32 base_count;
+    u32 base_count, base_cap;
     u8 *bytes;
     size_t byte_count;
 } ed_instance;
+
+typedef struct scene_revision {
+    u64 entity, revision;
+} scene_revision;
+typedef struct scene_pending {
+    bool active, reload, additive;
+    u64 request, target, deadline;
+    u32 epoch;
+    char path[512];
+    char *text;
+    size_t length;
+    de__scene_assets assets;
+    scene_revision *revisions;
+    u32 revision_count, revision_cap;
+    u64 scene_mutations[ED_MAX_SCENES];
+} scene_pending;
 
 typedef struct de__ed_scene {
     ed_scene scenes[ED_MAX_SCENES];
@@ -62,13 +89,27 @@ typedef struct de__ed_scene {
     u32 member_count, member_cap;
     ed_instance *instances;
     u32 instance_count, instance_cap;
+    scene_pending pending;
+    de_engine *owner;
+    de__editor *attached;
+    struct de__ed_scene *next;
 } de__ed_scene;
 
-static de__ed_scene g_scene;
+/* State belongs to the public engine lifetime, not the editor connection. Keying by the
+ * public pointer also supports standalone editor fixtures without a private-engine downcast. */
+static de__ed_scene *scene_states, *active_scene;
+#define g_scene (*active_scene)
+
+static const de_allocator *scene_allocator(void) {
+    return active_scene && active_scene->owner->allocator ? active_scene->owner->allocator
+                                                          : de_heap_allocator();
+}
 
 /* ---------- Membership ---------- */
 
 static ed_member *member_find(u64 entity) {
+    if (!active_scene)
+        return NULL;
     for (u32 i = 0; i < g_scene.member_count; ++i)
         if (g_scene.members[i].entity == entity)
             return &g_scene.members[i];
@@ -83,7 +124,7 @@ static bool member_add(u64 entity, u64 scene, u64 sid) {
         return true;
     }
     if (g_scene.member_count == g_scene.member_cap) {
-        const de_allocator *al = de_heap_allocator();
+        const de_allocator *al = scene_allocator();
         const u32 cap = g_scene.member_cap ? g_scene.member_cap * 2 : 256;
         ed_member *p = (ed_member *)DE_ALLOC(al, sizeof(ed_member) * cap, 8, DE_MEM_GENERAL);
         if (p == NULL)
@@ -111,6 +152,8 @@ static void members_prune(de__editor *ed) {
 static ed_scene *scene_find(u64 id);
 
 void de__ed_scene_adopt(de__editor *ed, de_entity e, u64 scene, de_entity parent) {
+    if (!ed->scene)
+        return;
     if (scene == 0 && parent.bits != 0 && de_entity_alive(ed->e->world, parent))
         scene = de__ed_scene_of(ed, parent);
     for (u32 i = 0; i < ED_MAX_SCENES && scene == 0; ++i)
@@ -122,12 +165,17 @@ void de__ed_scene_adopt(de__editor *ed, de_entity e, u64 scene, de_entity parent
 }
 
 u64 de__ed_scene_of(de__editor *ed, de_entity e) {
-    (void)ed;
-    const ed_member *m = member_find(e.bits);
-    return m != NULL ? m->scene : ED_GAME_SCENE;
+    const de__ed_scene *state = (const de__ed_scene *)ed->scene;
+    if (state)
+        for (u32 i = 0; i < state->member_count; ++i)
+            if (state->members[i].entity == e.bits)
+                return state->members[i].scene;
+    return ED_GAME_SCENE;
 }
 
 static ed_scene *scene_find(u64 id) {
+    if (!active_scene)
+        return NULL;
     for (u32 i = 0; i < ED_MAX_SCENES; ++i)
         if (g_scene.scenes[i].id == id && id != 0)
             return &g_scene.scenes[i];
@@ -162,6 +210,7 @@ typedef struct load_map {
     u64 *ents;
     u32 n;
     de__editor *ed;
+    bool missing_asset;
 } load_map;
 
 static u64 map_sid_to_entity(u64 sid, void *user) {
@@ -173,12 +222,18 @@ static u64 map_sid_to_entity(u64 sid, void *user) {
 }
 
 static u32 map_id_to_asset(u64 id, const char *type, void *user) {
-    const load_map *m = (const load_map *)user;
-    if (m->ed->e->assets == NULL || id == 0)
+    load_map *m = (load_map *)user;
+    if (id == 0)
         return 0;
-    const u32 h = de__asset_handle_of(m->ed->e->assets, (de_asset_id){id}, type);
-    if (h == 0)
-        de_error_clear();
+    bool owned = false;
+    for (u32 i = 0; i < g_scene.pending.assets.count; ++i)
+        if (g_scene.pending.assets.refs[i].id.hash == id)
+            owned = true;
+    const u32 h = owned && m->ed->e->assets
+                      ? de__asset_handle_of(m->ed->e->assets, (de_asset_id){id}, type)
+                      : 0;
+    if (!h || !de__asset_object(m->ed->e->assets, h))
+        m->missing_asset = true;
     return h;
 }
 
@@ -192,7 +247,7 @@ static bool is_hierarchy_name(const char *name) {
 static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, char *err,
                        size_t err_cap) {
     de_world *w = ed->e->world;
-    const de_allocator *al = de_heap_allocator();
+    const de_allocator *al = scene_allocator();
     de__ed_note_asset_paths(text, len);
     toml_result_t tr = de__toml_parse(al, text, (int)len);
     if (!tr.ok) {
@@ -210,17 +265,32 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
     }
     const toml_datum_t *arr = tab_get(&tr.toptab, "entity");
     const u32 n = arr != NULL && arr->type == TOML_ARRAY ? (u32)arr->u.arr.size : 0u;
-    load_map m = {NULL, NULL, n, ed};
+    load_map m = {NULL, NULL, n, ed, false};
     m.sids = (u64 *)DE_ALLOC(al, sizeof(u64) * (n + 1), 8, DE_MEM_GENERAL);
     m.ents = (u64 *)DE_ALLOC(al, sizeof(u64) * (n + 1), 8, DE_MEM_GENERAL);
     bool ok = m.sids != NULL && m.ents != NULL;
+    if (m.ents)
+        memset(m.ents, 0, sizeof(u64) * (n + 1));
     /* 1: spawn every entity, so ENTITY fields can point at any of them. */
     for (u32 i = 0; ok && i < n; ++i) {
         const toml_datum_t *ent = &arr->u.arr.elem[i];
+        if (ent->type != TOML_TABLE) {
+            snprintf(err, err_cap, "entity %u is not a table", i);
+            ok = false;
+            break;
+        }
         const toml_datum_t *id = tab_get(ent, "id");
         m.sids[i] = id != NULL ? parse_sid(id) : de_scene_id_new();
+        for (u32 k = 0; k < i; ++k)
+            if (m.sids[k] == m.sids[i])
+                ok = false;
+        if (!m.sids[i] || !ok) {
+            snprintf(err, err_cap, "entity %u has a zero or duplicate scene ID", i);
+            ok = false;
+            break;
+        }
         m.ents[i] = de_entity_spawn(w).bits;
-        member_add(m.ents[i], scene, m.sids[i]);
+        ok = m.ents[i] != 0 && member_add(m.ents[i], scene, m.sids[i]);
     }
     /* 2: components. */
     const de_ser_context ctx = {NULL, map_sid_to_entity, NULL, map_id_to_asset, &m};
@@ -239,10 +309,16 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
                 continue;
             }
             void *data = de_entity_add(w, (de_entity){m.ents[i]}, c);
-            if (size == 0 || data == NULL)
+            if (size == 0)
                 continue;
+            if (data == NULL) {
+                snprintf(err, err_cap, "entity %u: could not add %s", i, key);
+                ok = false;
+                break;
+            }
             if (de_text_doc_read_member(doc, "entity", i, key, ed->e->types, type, data, &opt) !=
-                DE_OK) {
+                    DE_OK ||
+                m.missing_asset) {
                 const de_error *e = de_error_last();
                 /* Keep the entity/component prefix, then bound the diagnostic to what fits. */
                 const int prefix_length = snprintf(err, err_cap, "entity %u, %s: ", i, key);
@@ -259,15 +335,63 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
             }
         }
     }
+    /* Validate the parent graph before calling ECS: its cycle contract asserts in Dev. */
+    u32 *parents = NULL;
+    u8 *colors = NULL;
+    if (ok && n) {
+        parents = DE_ALLOC(al, sizeof(u32) * n, 8, DE_MEM_GENERAL);
+        colors = DE_ALLOC(al, n, 1, DE_MEM_GENERAL);
+        ok = parents && colors;
+        if (colors)
+            memset(colors, 0, n);
+        for (u32 i = 0; ok && i < n; ++i) {
+            parents[i] = n;
+            const toml_datum_t *parent = tab_get(&arr->u.arr.elem[i], "parent");
+            if (!parent)
+                continue;
+            const u64 sid = parse_sid(parent);
+            for (u32 j = 0; j < n; ++j)
+                if (m.sids[j] == sid)
+                    parents[i] = j;
+            if (parents[i] == n) {
+                snprintf(err, err_cap, "entity %u: missing parent", i);
+                ok = false;
+            }
+        }
+        for (u32 i = 0; ok && i < n; ++i) {
+            u32 at = i;
+            while (at < n && colors[at] == 0) {
+                colors[at] = 1;
+                at = parents[at];
+            }
+            if (at < n && colors[at] == 1) {
+                snprintf(err, err_cap, "scene hierarchy has a cycle");
+                ok = false;
+            }
+            at = i;
+            while (at < n && colors[at] == 1) {
+                colors[at] = 2;
+                at = parents[at];
+            }
+        }
+    }
+    if (parents)
+        DE_FREE(al, parents, sizeof(u32) * n);
+    if (colors)
+        DE_FREE(al, colors, n);
     /* 3: the hierarchy. */
     for (u32 i = 0; ok && i < n; ++i) {
         const toml_datum_t *p = tab_get(&arr->u.arr.elem[i], "parent");
         if (p == NULL)
             continue;
         const u64 pe = map_sid_to_entity(parse_sid(p), &m);
-        if (pe != 0)
-            (void)de_entity_set_parent(w, (de_entity){m.ents[i]}, (de_entity){pe});
+        if (pe == 0 || de_entity_set_parent(w, (de_entity){m.ents[i]}, (de_entity){pe}) != DE_OK) {
+            snprintf(err, err_cap, "entity %u: missing or invalid parent", i);
+            ok = false;
+        }
     }
+    if (!ok && err[0] == 0)
+        snprintf(err, err_cap, "scene entity allocation failed");
     if (!ok)
         for (u32 i = 0; i < n; ++i)
             if (m.ents != NULL && m.ents[i] != 0)
@@ -288,20 +412,31 @@ static bool spawn_text(de__editor *ed, const char *text, size_t len, u64 scene, 
 
 /* The asset IDs written so far and their paths: a saved scene names assets by path, as authored
  * scenes do (`texture = "flappy/tex/bird"`), not by ID. */
-#define SAVE_PATHS 512u
-
+typedef struct save_path {
+    u64 id;
+    char *path;
+    size_t bytes;
+} save_path;
 typedef struct save_map {
     de__editor *ed;
-    u64 ids[SAVE_PATHS];
-    const char *paths[SAVE_PATHS];
-    u32 count;
+    save_path *paths;
+    u32 count, cap;
+    bool failed;
 } save_map;
 
 static const char *saved_path(const save_map *m, u64 id) {
     for (u32 i = 0; i < m->count; ++i)
-        if (m->ids[i] == id)
-            return m->paths[i];
+        if (m->paths[i].id == id)
+            return m->paths[i].path;
     return NULL;
+}
+
+static void save_map_free(save_map *m) {
+    const de_allocator *a = scene_allocator();
+    for (u32 i = 0; i < m->count; ++i)
+        DE_FREE(a, m->paths[i].path, m->paths[i].bytes);
+    if (m->paths)
+        DE_FREE(a, m->paths, sizeof(save_path) * m->cap);
 }
 
 static u64 save_entity_to_sid(u64 bits, void *user) {
@@ -311,20 +446,65 @@ static u64 save_entity_to_sid(u64 bits, void *user) {
 }
 
 static u64 save_asset_to_id(u32 handle, const char *type, void *user) {
-    (void)type;
-    save_map *m = (save_map *)user;
-    const char *path = de__ed_asset_path(m->ed, handle);
-    if (path == NULL) {
-        /* A missing printable name does not turn a typed slot into an asset identity.
-         * Generated children and packed assets still carry their canonical ID in the slot. */
-        const de__slot *slot = m->ed->e->assets ? de__slot_get(m->ed->e->assets, handle) : NULL;
-        return slot != NULL ? slot->id.hash : 0;
+    save_map *m = user;
+    de_asset_system *assets = m->ed->e->assets;
+    const de__slot *slot = assets ? de__slot_get(assets, handle) : NULL;
+    if (!slot) {
+        if (handle)
+            m->failed = true;
+        return 0;
     }
-    const u64 id = de_asset_id_from(path).hash;
-    if (saved_path(m, id) == NULL && m->count < SAVE_PATHS) {
-        m->ids[m->count] = id;
-        m->paths[m->count++] = path;
+    if (type && slot->type_hash != de_hash64_str(type)) {
+        m->failed = true;
+        return 0;
     }
+    const u64 id = slot->id.hash;
+    if (saved_path(m, id))
+        return id;
+    const char *root = assets->resolved ? de__resolved_path(assets->resolved, slot->id) : NULL;
+    size_t bytes = root ? strlen(root) + 1 : 0;
+    if (!root) {
+        const de_result lookup = de__cook_stage_subasset_path(assets, slot->id, NULL, 0, &bytes);
+        if (lookup == DE_ERR_NOT_FOUND)
+            return id; /* Legitimately nameless packed assets retain their canonical numeric ID. */
+        if (lookup != DE_OK) {
+            m->failed = true;
+            return id;
+        }
+    }
+    const size_t allocation_bytes = bytes;
+    const de_allocator *a = scene_allocator();
+    char *copy = DE_ALLOC(a, allocation_bytes, 1, DE_MEM_GENERAL);
+    if (!copy) {
+        m->failed = true;
+        return id;
+    }
+    if (root)
+        memcpy(copy, root, bytes);
+    else if (de__cook_stage_subasset_path(assets, slot->id, copy, allocation_bytes, &bytes) !=
+             DE_OK) {
+        DE_FREE(a, copy, allocation_bytes);
+        m->failed =
+            true; /* Never turn a lost generated name into a silently cold-unloadable save. */
+        return id;
+    }
+    if (m->count == m->cap) {
+        u32 cap = m->cap ? m->cap * 2 : 32;
+        save_path *grown =
+            cap > m->cap ? DE_ALLOC(a, sizeof(save_path) * cap, 8, DE_MEM_GENERAL) : NULL;
+        if (!grown) {
+            DE_FREE(a, copy, allocation_bytes);
+            m->failed = true;
+            return id;
+        }
+        if (m->paths) {
+            memcpy(grown, m->paths, sizeof(save_path) * m->count);
+            DE_FREE(a, m->paths, sizeof(save_path) * m->cap);
+        }
+        m->paths = grown;
+        m->cap = cap;
+    }
+    m->paths[m->count++] = (save_path){id, copy, allocation_bytes};
     return id;
 }
 
@@ -352,15 +532,34 @@ static bool only_empty_assets(const char *line, size_t n) {
     return tables > 0;
 }
 
+static void save_write(save_map *m, de_mem_writer *out, const void *data, size_t n) {
+    de_writer w = de_writer_from_mem(out);
+    if (!m->failed && w.write(w.user, data, n) != DE_OK)
+        m->failed = true;
+}
+static void save_quoted(save_map *m, de_mem_writer *out, const char *path) {
+    save_write(m, out, "\"", 1);
+    for (const unsigned char *p = (const unsigned char *)path; *p; ++p) {
+        if (*p == '\\' || *p == '"')
+            save_write(m, out, "\\", 1);
+        if (*p < 32 || *p == 127) {
+            char escape[7];
+            snprintf(escape, sizeof escape, "\\u%04x", (unsigned)*p);
+            save_write(m, out, escape, 6);
+        } else
+            save_write(m, out, p, 1);
+    }
+    save_write(m, out, "\"", 1);
+}
+
 /* One line of a component's text with its asset tables (`{ id = "0x..." }`, `{ id = "0x...", path =
  * "..." }`) as path strings where the path is known; false for a line that only sets asset fields
  * to none, which the defaults already are. */
-static bool asset_line(const save_map *m, const char *line, size_t n, de_mem_writer *out) {
+static bool asset_line(save_map *m, const char *line, size_t n, de_mem_writer *out) {
     if (only_empty_assets(line, n))
         return false;
     const char *open = k_asset_open;
     const size_t on = sizeof k_asset_open - 1;
-    de_writer w = de_writer_from_mem(out);
     size_t at = 0, copied = 0;
     while (at + on + 17 <= n) {
         if (memcmp(line + at, open, on) != 0) {
@@ -381,15 +580,13 @@ static bool asset_line(const save_map *m, const char *line, size_t n, de_mem_wri
         const size_t after = (size_t)(close - line) + 1;
         const char *path = id != 0 ? saved_path(m, id) : NULL;
         if (path != NULL) {
-            (void)w.write(w.user, line + copied, at - copied);
-            (void)w.write(w.user, "\"", 1);
-            (void)w.write(w.user, path, strlen(path));
-            (void)w.write(w.user, "\"", 1);
+            save_write(m, out, line + copied, at - copied);
+            save_quoted(m, out, path);
             copied = after;
         }
         at = after;
     }
-    (void)w.write(w.user, line + copied, n - copied);
+    save_write(m, out, line + copied, n - copied);
     return true;
 }
 
@@ -397,13 +594,19 @@ static bool asset_line(const save_map *m, const char *line, size_t n, de_mem_wri
 static void put_component(de__editor *ed, de_mem_writer *out, de_type_id type, const void *data,
                           const de_ser_options *opt) {
     de_mem_writer tmp;
-    de_mem_writer_init(&tmp, NULL);
+    de_mem_writer_init(&tmp, scene_allocator());
     de_writer tw = de_writer_from_mem(&tmp);
     de__ser_out o;
     de__ser_out_init(&o, &tw);
-    (void)de__ser_text_write_body(&o, ed->e->types, type, data, opt);
-    (void)de__ser_out_flush(&o);
-    de_error_clear();
+    save_map *sm = opt->ctx != NULL ? opt->ctx->user : NULL;
+    const de_result serialized = de__ser_text_write_body(&o, ed->e->types, type, data, opt);
+    const de_result flushed = de__ser_out_flush(&o);
+    if (serialized != DE_OK || flushed != DE_OK) {
+        if (sm)
+            sm->failed = true;
+        de_mem_writer_free(&tmp);
+        return;
+    }
     de_writer ow = de_writer_from_mem(out);
     size_t at = 0;
     while (at < tmp.size) {
@@ -411,29 +614,28 @@ static void put_component(de__editor *ed, de_mem_writer *out, de_type_id type, c
         while (end < tmp.size && tmp.data[end] != '\n')
             ++end;
         const size_t n = end - at;
-        const save_map *sm = opt->ctx != NULL ? (const save_map *)opt->ctx->user : NULL;
         if (!(n >= 2 && tmp.data[at] == '_' && tmp.data[at + 1] == '_')) {
             if (sm == NULL)
                 (void)ow.write(ow.user, tmp.data + at, end < tmp.size ? n + 1 : n);
             else if (asset_line(sm, (const char *)tmp.data + at, n, out) && end < tmp.size)
-                (void)ow.write(ow.user, "\n", 1);
+                save_write(sm, out, "\n", 1);
         }
         at = end + 1;
     }
     de_mem_writer_free(&tmp);
 }
 
-static void putf(de_mem_writer *out, const char *fmt, ...) DE_PRINTF_FMT(2, 3);
-static void putf(de_mem_writer *out, const char *fmt, ...) {
+static bool putf(de_mem_writer *out, const char *fmt, ...) DE_PRINTF_FMT(2, 3);
+static bool putf(de_mem_writer *out, const char *fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
     const int n = vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    if (n > 0) {
-        de_writer w = de_writer_from_mem(out);
-        (void)w.write(w.user, buf, (size_t)n < sizeof buf ? (size_t)n : sizeof buf - 1);
-    }
+    if (n < 0 || (size_t)n >= sizeof buf)
+        return false;
+    de_writer w = de_writer_from_mem(out);
+    return w.write(w.user, buf, (size_t)n) == DE_OK;
 }
 
 typedef struct save_ent {
@@ -450,16 +652,16 @@ static int cmp_cstr(const void *x, const void *y) {
 }
 
 /* The entities of `scene` (or `only`, when given) as scene text into `out`. */
-static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_count,
+static bool write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_count,
                         de_mem_writer *out) {
     de_world *w = ed->e->world;
-    const de_allocator *al = de_heap_allocator();
+    const de_allocator *al = scene_allocator();
     u32 total = 0;
     for (u32 ai = 0; ai < w->archetypes.count; ++ai)
         total += (((ecs_archetype *const *)w->archetypes.data)[ai])->count;
     save_ent *list = (save_ent *)DE_ALLOC(al, sizeof(save_ent) * (total + 1), 8, DE_MEM_GENERAL);
     if (list == NULL)
-        return;
+        return false;
     u32 n = 0;
     for (u32 ai = 0; ai < w->archetypes.count; ++ai) {
         const ecs_archetype *a = ((ecs_archetype *const *)w->archetypes.data)[ai];
@@ -494,13 +696,14 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
     for (u32 i = 0; i < n; ++i) {
         const de_entity e = {list[i].entity};
         if (i > 0)
-            putf(out, "\n");
-        putf(out, "[[entity]]\nid = \"0x%016llx\"\n", (unsigned long long)list[i].sid);
+            sm.failed |= !putf(out, "\n");
+        sm.failed |=
+            !putf(out, "[[entity]]\nid = \"0x%016llx\"\n", (unsigned long long)list[i].sid);
         const de_entity p = de_entity_parent(w, e);
         if (p.bits != 0) {
             const ed_member *pm = member_find(p.bits);
             if (pm != NULL)
-                putf(out, "parent = \"0x%016llx\"\n", (unsigned long long)pm->sid);
+                sm.failed |= !putf(out, "parent = \"0x%016llx\"\n", (unsigned long long)pm->sid);
         }
         const ecs_record *rec = ecs_entity_record(w, e);
         const ecs_archetype *a = ((ecs_archetype *const *)w->archetypes.data)[rec->archetype];
@@ -528,7 +731,7 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
         (void)cmp_cstr;
         for (u32 k = 0; k < nn; ++k) {
             const ecs_component_info *ci = ecs_component_get(w, a->components[idx[k]]);
-            putf(out, "[entity.%s]\n", ci->name);
+            sm.failed |= !putf(out, "[entity.%s]\n", ci->name);
             const u32 col = a->column_of[idx[k]];
             if (col != ECS_INVALID_INDEX && ci->size != 0)
                 put_component(
@@ -537,6 +740,9 @@ static void write_scene(de__editor *ed, u64 scene, const u64 *only, u32 only_cou
         }
     }
     DE_FREE(al, list, sizeof(save_ent) * (total + 1));
+    const bool ok = !sm.failed;
+    save_map_free(&sm);
+    return ok;
 }
 
 /* ---------- Scene methods ---------- */
@@ -548,46 +754,85 @@ static bool no_change_in_play(de__editor *ed, const de_ep_request *req, mpack_wr
     return false;
 }
 
+static void instances_prune(de__editor *ed) {
+    const de_allocator *a = scene_allocator();
+    u32 kept = 0;
+    for (u32 i = 0; i < g_scene.instance_count; ++i) {
+        ed_instance *instance = &g_scene.instances[i];
+        if (de_entity_alive(ed->e->world, (de_entity){instance->root})) {
+            g_scene.instances[kept++] = *instance;
+        } else {
+            if (instance->base)
+                DE_FREE(a, instance->base, sizeof(ed_base) * instance->base_cap);
+            if (instance->bytes)
+                DE_FREE(a, instance->bytes, instance->byte_count);
+        }
+    }
+    g_scene.instance_count = kept;
+}
+
 static void despawn_scene(de__editor *ed, u64 scene) {
     members_prune(ed);
     for (u32 i = 0; i < g_scene.member_count; ++i)
         if (g_scene.members[i].scene == scene)
             de_entity_despawn(ed->e->world, (de_entity){g_scene.members[i].entity});
     members_prune(ed);
+    instances_prune(ed);
     de__ed_world_touch(ed);
 }
 
-static bool read_file(const char *path, char **text, size_t *len) {
-    const de_allocator *al = de_heap_allocator();
+static de_result read_file(const char *path, char **text, size_t *len) {
+    const de_allocator *al = scene_allocator();
     if (strstr(path, ":/") != NULL && path[1] != ':') {
-        void *data = NULL;
-        u64 size = 0;
-        if (de_file_read_all(path, al, &data, &size) != DE_OK) {
-            de_error_clear();
-            return false;
+        de_file *file = NULL;
+        DE_TRY(de_file_open(path, DE_FILE_READ, &file));
+        const u64 size = de_file_size(file);
+        if (size > DE_EP_MAX_FRAME || size > INT_MAX) {
+            de_file_close(file);
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "scene file exceeds protocol ceiling");
         }
-        *text = (char *)data;
+        char *data = DE_ALLOC(al, (size_t)size + 1, 16, DE_MEM_GENERAL);
+        if (!data) {
+            de_file_close(file);
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "scene file allocation failed");
+        }
+        u64 got = 0;
+        const de_result read = de_file_read(file, data, 0, size, &got);
+        de_file_close(file);
+        if (read != DE_OK || got != size) {
+            DE_FREE(al, data, (size_t)size + 1);
+            return DE_FAIL(read != DE_OK ? read : DE_ERR_IO, "scene file read failed");
+        }
+        data[size] = 0;
+        *text = data;
         *len = (size_t)size;
-        return true;
+        return DE_OK;
     }
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-        return false;
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = n >= 0 ? (char *)DE_ALLOC(al, (size_t)n + 1, 8, DE_MEM_GENERAL) : NULL;
-    const bool ok = buf != NULL && fread(buf, 1, (size_t)n, f) == (size_t)n;
-    fclose(f);
+    FILE *file = fopen(path, "rb");
+    if (!file)
+        return DE_FAIL(errno == ENOENT || errno == ENOTDIR ? DE_ERR_NOT_FOUND : DE_ERR_IO,
+                       "scene file could not be opened");
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return DE_FAIL(DE_ERR_IO, "scene file seek failed");
+    }
+    const long size = ftell(file);
+    if (size < 0 || (u64)size > DE_EP_MAX_FRAME || size > INT_MAX || fseek(file, 0, SEEK_SET)) {
+        fclose(file);
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "scene file size is invalid");
+    }
+    char *data = DE_ALLOC(al, (size_t)size + 1, 1, DE_MEM_GENERAL);
+    const bool ok = data && fread(data, 1, (size_t)size, file) == (size_t)size;
+    fclose(file);
     if (!ok) {
-        if (buf)
-            DE_FREE(al, buf, (size_t)n + 1);
-        return false;
+        if (data)
+            DE_FREE(al, data, (size_t)size + 1);
+        return DE_FAIL(DE_ERR_IO, "scene file could not be read");
     }
-    buf[n] = '\0';
-    *text = buf;
-    *len = (size_t)n;
-    return true;
+    data[size] = 0;
+    *text = data;
+    *len = (size_t)size;
+    return DE_OK;
 }
 
 static void on_list(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
@@ -609,46 +854,296 @@ static void on_list(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     de_ep_write_response_scene_list(w, req->id, &list);
 }
 
+/* One pending transaction: all buffers and requests are detached before response I/O. */
+static void pending_clear(void) {
+    scene_pending *p = &g_scene.pending;
+    de__scene_assets_drop(&p->assets);
+    if (p->text)
+        DE_FREE(scene_allocator(), p->text, p->length + 1);
+    if (p->revisions)
+        DE_FREE(scene_allocator(), p->revisions, sizeof(scene_revision) * p->revision_cap);
+    memset(p, 0, sizeof *p);
+}
+static bool affected(de__editor *ed, const scene_pending *p, de_entity e) {
+    /* Match serialization ownership: editor cameras are never scene content. */
+    if (de__ed_views_owns(e.bits))
+        return false;
+    const u64 scene = de__ed_scene_of(ed, e);
+    return p->reload ? scene == p->target : !p->additive && scene != ED_GAME_SCENE;
+}
+static int revision_compare(const void *a, const void *b) {
+    const u64 x = ((const scene_revision *)a)->entity, y = ((const scene_revision *)b)->entity;
+    return (x > y) - (x < y);
+}
+static bool snapshot(de__editor *ed, scene_pending *p, bool check) {
+    de_world *world = ed->e->world;
+    u64 total = 1;
+    for (u32 ai = 0; ai < world->archetypes.count; ++ai)
+        total += ((ecs_archetype *const *)world->archetypes.data)[ai]->count;
+    if (total > UINT32_MAX || total > SIZE_MAX / sizeof(scene_revision))
+        return false;
+    scene_revision *items =
+        DE_ALLOC(scene_allocator(), sizeof(*items) * (size_t)total, 8, DE_MEM_GENERAL);
+    if (!items)
+        return false;
+    u32 count = 0;
+    for (u32 ai = 0; ai < world->archetypes.count; ++ai) {
+        const ecs_archetype *arch = ((ecs_archetype *const *)world->archetypes.data)[ai];
+        for (u32 ci = 0; ci < arch->chunks.count; ++ci) {
+            const ecs_chunk *chunk = ecs_table_chunk(arch, ci);
+            for (u32 row = 0; row < chunk->count; ++row) {
+                de_entity e = ecs_chunk_entities(chunk)[row];
+                if (affected(ed, p, e))
+                    items[count++] = (scene_revision){e.bits, de__ed_entity_rev(ed, e)};
+            }
+        }
+    }
+    qsort(items, count, sizeof(*items), revision_compare);
+    if (!check) {
+        for (u32 i = 0; i < ED_MAX_SCENES; ++i)
+            p->scene_mutations[i] = g_scene.scenes[i].mutation;
+        p->revisions = items;
+        p->revision_count = count;
+        p->revision_cap = (u32)total;
+        return true;
+    }
+    bool same = count == p->revision_count;
+    for (u32 i = 0; same && i < ED_MAX_SCENES; ++i)
+        if (p->reload ? g_scene.scenes[i].id == p->target
+                      : !p->additive && g_scene.scenes[i].id != ED_GAME_SCENE)
+            same = p->scene_mutations[i] == g_scene.scenes[i].mutation;
+    for (u32 i = 0; same && i < count; ++i)
+        same = items[i].entity == p->revisions[i].entity &&
+               items[i].revision == p->revisions[i].revision;
+    DE_FREE(scene_allocator(), items, sizeof(*items) * (size_t)total);
+    return same;
+}
+static void scene_quiesce(de__editor *ed) {
+#if DE_HAS_RENDER
+    de_gpu_device *device = NULL;
+    if (ed->e->renderer) {
+        de__render_world_wait_idle(ed->e->renderer);
+        device = de_renderer_device(ed->e->renderer);
+        de_gpu_wait_idle(device);
+    }
+    if (ed->e->gpu && ed->e->gpu != device)
+        de_gpu_wait_idle(ed->e->gpu);
+#else
+    (void)ed;
+#endif
+}
+static void scene_release(de__editor *ed, ed_scene *scene) {
+    if (ed->e->assets)
+        de_asset_release(ed->e->assets, scene->owned_assets);
+    scene->owned_assets.id = 0;
+}
+static bool scene_commit(de__editor *ed, char *error, size_t capacity, u64 *result) {
+    scene_pending *p = &g_scene.pending;
+    ed_scene *slot = p->reload ? scene_find(p->target) : NULL;
+    if (!p->reload) {
+        for (u32 i = 0; i < ED_MAX_SCENES && !slot; ++i)
+            if (!g_scene.scenes[i].id)
+                slot = &g_scene.scenes[i];
+        for (u32 i = 0; !p->additive && i < ED_MAX_SCENES && !slot; ++i)
+            if (g_scene.scenes[i].id != ED_GAME_SCENE)
+                slot = &g_scene.scenes[i];
+    }
+    if (!slot || !snapshot(ed, p, true)) {
+        snprintf(error, capacity,
+                 "scene changed during load or transaction snapshot unavailable; retry");
+        return false;
+    }
+    scene_quiesce(ed);
+    if (de_time_now_ns() >= p->deadline) {
+        snprintf(error, capacity, "scene load deadline expired; previous scene retained");
+        return false;
+    }
+    const u64 staged = ++g_scene.next_scene;
+    if (!spawn_text(ed, p->text, p->length, staged, error, capacity))
+        return false;
+    if (de_time_now_ns() >= p->deadline) {
+        despawn_scene(ed, staged);
+        snprintf(error, capacity, "scene load deadline expired; previous scene retained");
+        return false;
+    }
+    const u64 final_id = p->reload ? p->target : staged;
+    if (p->reload) {
+        /* Only this validated reload target, excluding editor-owned views. Despawn is
+         * nonrecursive: children outside the target become roots, not collateral deletions. */
+        for (u32 i = 0; i < p->revision_count; ++i) {
+            const de_entity entity = {p->revisions[i].entity};
+            if (affected(ed, p, entity))
+                de_entity_despawn(ed->e->world, entity);
+        }
+        members_prune(ed);
+        instances_prune(ed);
+        de__ed_world_touch(ed);
+        scene_release(ed, slot);
+    } else if (!p->additive) {
+        for (u32 i = 0; i < ED_MAX_SCENES; ++i)
+            if (g_scene.scenes[i].id && g_scene.scenes[i].id != ED_GAME_SCENE) {
+                despawn_scene(ed, g_scene.scenes[i].id);
+                scene_release(ed, &g_scene.scenes[i]);
+                memset(&g_scene.scenes[i], 0, sizeof g_scene.scenes[i]);
+            }
+    }
+    for (u32 i = 0; i < g_scene.member_count; ++i)
+        if (g_scene.members[i].scene == staged)
+            g_scene.members[i].scene = final_id;
+    if (!p->reload) {
+        memset(slot, 0, sizeof *slot);
+        slot->id = final_id;
+        memcpy(slot->path, p->path, sizeof slot->path);
+        for (u32 i = 0; i < ED_MAX_SCENES; ++i)
+            g_scene.scenes[i].active = false;
+        slot->active = true;
+    } else
+        slot->dirty = true;
+    slot->owned_assets = p->assets.exact;
+    p->assets.exact.id = 0;
+    *result = final_id;
+    return true;
+}
+
+/* Private nonblocking transaction seam, also used by service-path tests without a transport. */
+bool de__ed_scene_poll(de__editor *ed, mpack_writer_t *writer) {
+    scene_pending *p = &g_scene.pending;
+    if (!p->active)
+        return false;
+    if (p->epoch != ed->epoch) {
+        pending_clear();
+        return false;
+    }
+    if (de_time_now_ns() >= p->deadline) {
+        const u64 request = p->request;
+        pending_clear();
+        de__ed_error(writer, request, DE_EP_ERR_INVALID_PARAMS,
+                     "scene load deadline expired; previous scene retained");
+        return true;
+    }
+    de_result r =
+        ed->mode == DE_EP_WORLD_MODE_EDIT ? de__scene_assets_poll(&p->assets) : DE_ERR_BUSY;
+    if (ed->mode == DE_EP_WORLD_MODE_EDIT && r == DE_ERR_BUSY)
+        return false;
+    char error[512] = "scene mode changed during load";
+    if (r != DE_OK && ed->mode == DE_EP_WORLD_MODE_EDIT) {
+        const de_error *e = de_error_last();
+        snprintf(error, sizeof error, "%s", e ? e->message : "scene asset loading failed");
+    }
+    u64 scene = 0;
+    const bool ok = r == DE_OK && scene_commit(ed, error, sizeof error, &scene);
+    const u64 request = p->request;
+    const bool reload = p->reload;
+    pending_clear();
+    if (!ok)
+        de__ed_error(writer, request, DE_EP_ERR_INVALID_PARAMS, "%s", error);
+    else if (reload) {
+        de_ep_empty empty = {0};
+        de_ep_write_response_scene_reload_from_text(writer, request, &empty);
+        /* Pending ownership is already detached: send failure may reset synchronously. */
+        de_ep_scene_params dirty = {scene};
+        mpack_writer_t note;
+        const u64 seq = de__ed_note_begin(ed, &note);
+        de_ep_write_notify_scene_dirty(&note, seq, &dirty);
+        (void)de__ed_send(ed, &note, DE_EP_KIND_NOTIFICATION);
+    } else {
+        de_ep_scene_params response = {scene};
+        de_ep_write_response_scene_load(writer, request, &response);
+    }
+    return true;
+}
+static void scene_tick(de__editor *ed) {
+    if (!g_scene.pending.active)
+        return;
+    if (!ed->connected || !ed->authed) {
+        pending_clear();
+        return;
+    }
+    mpack_writer_t writer;
+    de__ed_respond_begin(ed, &writer);
+    if (de__ed_scene_poll(ed, &writer))
+        (void)de__ed_send(ed, &writer, DE_EP_KIND_RESPONSE);
+    else
+        (void)mpack_writer_destroy(&writer);
+}
+static void scene_reset(de__editor *ed) {
+    if (!ed->scene)
+        return;
+    de__ed_scene *saved = active_scene;
+    active_scene = (de__ed_scene *)ed->scene;
+    pending_clear();
+    active_scene = saved;
+}
+static void scene_begin(de__editor *ed, const de_ep_request *request, mpack_writer_t *writer,
+                        const char *text, size_t length, const char *path, u64 target,
+                        bool additive) {
+    if (g_scene.pending.active) {
+        de__ed_error(writer, request->id, DE_EP_ERR_BUSY, "another scene transaction is pending");
+        return;
+    }
+    if (length > DE_EP_MAX_FRAME || length > INT_MAX || (path && strlen(path) >= 512)) {
+        de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS, "scene input is too large");
+        return;
+    }
+    scene_pending *p = &g_scene.pending;
+    p->request = request->id;
+    /* Existing DIDE scene requests use a 3-second client timeout. Bound engine work too:
+     * no indefinite late commit after a client stops waiting. This is measured on receipt,
+     * not a transport acknowledgement guarantee; expensive cold cooks can fail and retry. */
+    p->deadline = de_time_now_ns() + 3000000000ULL;
+    p->epoch = ed->epoch;
+    p->target = target;
+    p->reload = target != 0;
+    p->additive = additive;
+    if (path)
+        memcpy(p->path, path, strlen(path) + 1);
+    p->text = DE_ALLOC(scene_allocator(), length + 1, 1, DE_MEM_GENERAL);
+    p->length = length;
+    if (!p->text || !snapshot(ed, p, false)) {
+        pending_clear();
+        de__ed_error(writer, request->id, DE_EP_ERR_INTERNAL,
+                     "scene transaction allocation failed");
+        return;
+    }
+    memcpy(p->text, text, length);
+    p->text[length] = 0;
+    const de_result r = de__scene_assets_begin(ed, p->text, length, &p->assets);
+    if (r != DE_OK) {
+        char error[512];
+        const de_error *e = de_error_last();
+        snprintf(error, sizeof error, "%s", e ? e->message : "scene preflight failed");
+        pending_clear();
+        de__ed_error(writer, request->id, DE_EP_ERR_INVALID_PARAMS, "%s", error);
+        return;
+    }
+    p->active = true;
+    if (!de__ed_scene_poll(ed, writer))
+        de__ed_defer(ed);
+}
+
 static void on_load(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
     DE__ED_PARAMS(scene_load, de_ep_scene_load_params, q);
     if (!no_change_in_play(ed, req, w))
         return;
     char *path = de__ed_cstr(a, q.path);
-    ed_scene *slot = NULL;
-    for (u32 i = 0; i < ED_MAX_SCENES && slot == NULL; ++i)
-        if (g_scene.scenes[i].id == 0)
-            slot = &g_scene.scenes[i];
-    if (path == NULL || slot == NULL) {
-        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "too many scenes");
+    if (!path) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "scene path allocation failed");
         return;
     }
-    if (!q.additive)
-        for (u32 i = 0; i < ED_MAX_SCENES; ++i)
-            if (g_scene.scenes[i].id != 0 && g_scene.scenes[i].id != ED_GAME_SCENE) {
-                despawn_scene(ed, g_scene.scenes[i].id);
-                memset(&g_scene.scenes[i], 0, sizeof g_scene.scenes[i]);
-            }
-    const u64 id = ++g_scene.next_scene;
-    char *text = NULL;
-    size_t len = 0;
-    char err[512] = "";
-    /* A missing file is a new, empty scene (the IDE creates it on save). */
-    if (read_file(path, &text, &len)) {
-        const bool ok = spawn_text(ed, text, len, id, err, sizeof err);
-        DE_FREE(de_heap_allocator(), text, len + 1);
-        if (!ok) {
-            de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s: %s", path, err);
-            return;
-        }
+    if (g_scene.pending.active) {
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "another scene transaction is pending");
+        return;
     }
-    memset(slot, 0, sizeof *slot);
-    slot->id = id;
-    snprintf(slot->path, sizeof slot->path, "%s", path);
-    for (u32 i = 0; i < ED_MAX_SCENES; ++i)
-        g_scene.scenes[i].active = false;
-    slot->active = true;
-    de_ep_scene_params r = {id};
-    de_ep_write_response_scene_load(w, req->id, &r);
+    char *text = NULL;
+    size_t length = 0;
+    const de_result read = read_file(path, &text, &length);
+    if (read != DE_OK && read != DE_ERR_NOT_FOUND) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "scene file could not be read");
+        return;
+    }
+    scene_begin(ed, req, w, text ? text : "", length, path, 0, q.additive);
+    if (text)
+        DE_FREE(scene_allocator(), text, length + 1);
 }
 
 static void on_unload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
@@ -660,7 +1155,13 @@ static void on_unload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "scene %llu", (unsigned long long)q.scene);
         return;
     }
+    if (g_scene.pending.active) {
+        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "another scene transaction is pending");
+        return;
+    }
+    scene_quiesce(ed);
     despawn_scene(ed, q.scene);
+    scene_release(ed, s);
     if (q.scene != ED_GAME_SCENE)
         memset(s, 0, sizeof *s);
     de_ep_empty e;
@@ -677,8 +1178,12 @@ static void on_serialize(de__editor *ed, const de_ep_request *req, de_ep_arena *
     }
     members_prune(ed);
     de_mem_writer out;
-    de_mem_writer_init(&out, NULL);
-    write_scene(ed, q.scene, NULL, 0, &out);
+    de_mem_writer_init(&out, scene_allocator());
+    if (!write_scene(ed, q.scene, NULL, 0, &out)) {
+        de_mem_writer_free(&out);
+        de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "scene asset identity serialization failed");
+        return;
+    }
     de_ep_scene_text t;
     t.text.ptr = out.data != NULL ? (const char *)out.data : "";
     t.text.len = (u32)out.size;
@@ -713,29 +1218,7 @@ static void on_reload(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "scene %llu", (unsigned long long)q.scene);
         return;
     }
-    /* Check the text parses before the old entities go. */
-    toml_result_t tr = de__toml_parse(NULL, q.text.ptr, (int)q.text.len);
-    if (!tr.ok) {
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s", tr.errmsg);
-        de__toml_free(tr);
-        return;
-    }
-    de__toml_free(tr);
-    despawn_scene(ed, q.scene);
-    char err[512] = "";
-    if (!spawn_text(ed, q.text.ptr, q.text.len, q.scene, err, sizeof err)) {
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s", err);
-        return;
-    }
-    s->dirty = true;
-    de_ep_empty e;
-    memset(&e, 0, sizeof e);
-    de_ep_write_response_scene_reload_from_text(w, req->id, &e);
-    de_ep_scene_params p = {q.scene};
-    mpack_writer_t nw;
-    const u64 seq = de__ed_note_begin(ed, &nw);
-    de_ep_write_notify_scene_dirty(&nw, seq, &p);
-    de__ed_send(ed, &nw, DE_EP_KIND_NOTIFICATION);
+    scene_begin(ed, req, w, q.text.ptr, q.text.len, NULL, q.scene, false);
 }
 
 /* ---------- Prefabs ---------- */
@@ -755,11 +1238,11 @@ static u32 tree_of(de__editor *ed, de_entity root, u64 *out, u32 cap) {
 
 /* "Component.field" values of every entity of the tree, as MessagePack, into `inst`. */
 static void instance_base(de__editor *ed, ed_instance *inst) {
-    const de_allocator *al = de_heap_allocator();
+    const de_allocator *al = scene_allocator();
     u64 ents[1024];
     const u32 n = tree_of(ed, (de_entity){inst->root}, ents, 1024);
     de_mem_writer bytes;
-    de_mem_writer_init(&bytes, NULL);
+    de_mem_writer_init(&bytes, scene_allocator());
     u32 cap = 64, count = 0;
     ed_base *base = (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap, 8, DE_MEM_GENERAL);
     for (u32 i = 0; i < n && base != NULL; ++i) {
@@ -810,6 +1293,7 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
     }
     inst->base = base;
     inst->base_count = count;
+    inst->base_cap = cap;
     inst->bytes = bytes.data;
     inst->byte_count = bytes.capacity;
     /* The writer's buffer now belongs to the instance. */
@@ -870,7 +1354,7 @@ static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena
         member_add(ents[i], q.scene, de_scene_id_new());
     /* Remember the instance and its fields as instantiated. */
     if (g_scene.instance_count == g_scene.instance_cap) {
-        const de_allocator *al = de_heap_allocator();
+        const de_allocator *al = scene_allocator();
         const u32 cap = g_scene.instance_cap ? g_scene.instance_cap * 2 : 16;
         ed_instance *grown =
             (ed_instance *)DE_ALLOC(al, sizeof(ed_instance) * cap, 8, DE_MEM_GENERAL);
@@ -967,11 +1451,11 @@ static void apply_or_revert(de__editor *ed, const de_ep_request *req, de_ep_aren
         if (current_value(ed, a, q.entity, b->path, &cur)) {
             /* The new bytes go after the old ones. */
             u8 *grown =
-                (u8 *)DE_ALLOC(de_heap_allocator(), inst->byte_count + cur.len, 8, DE_MEM_GENERAL);
+                (u8 *)DE_ALLOC(scene_allocator(), inst->byte_count + cur.len, 8, DE_MEM_GENERAL);
             if (grown != NULL) {
                 if (inst->bytes != NULL) {
                     memcpy(grown, inst->bytes, inst->byte_count);
-                    DE_FREE(de_heap_allocator(), inst->bytes, inst->byte_count);
+                    DE_FREE(scene_allocator(), inst->bytes, inst->byte_count);
                 }
                 memcpy(grown + inst->byte_count, cur.ptr, cur.len);
                 b->off = (u32)inst->byte_count;
@@ -1035,18 +1519,44 @@ static void on_revert(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
 void de__ed_scene_mark_dirty(u64 scene);
 void de__ed_scene_mark_dirty(u64 scene) {
     ed_scene *s = scene_find(scene);
-    if (s != NULL)
+    if (s != NULL) {
         s->dirty = true;
+        ++s->mutation;
+    }
 }
 
-void de__ed_scene_register(de__editor *ed) {
-    memset(&g_scene, 0, sizeof g_scene);
-    ed->scene = (struct de__ed_scene *)&g_scene;
-    g_scene.next_scene = ED_GAME_SCENE;
-    ed_scene *game = &g_scene.scenes[0];
-    game->id = ED_GAME_SCENE;
-    snprintf(game->path, sizeof game->path, "%s", ed->h->config.name);
-    game->active = true;
+bool de__ed_scene_attached(void) {
+    return active_scene && active_scene->attached;
+}
+
+de_result de__ed_scene_register(de__editor *ed) {
+    /* Editor helpers have one active binding. Reject a second simultaneous attachment rather
+     * than route one engine's handlers into another engine's retained scene state. */
+    if (active_scene && active_scene->attached && active_scene->attached != ed)
+        return DE_FAIL(DE_ERR_BUSY, "only one attached scene editor service is supported");
+    de__ed_scene *state = scene_states;
+    while (state && state->owner != ed->e)
+        state = state->next;
+    if (!state) {
+        state = DE_NEW(ed->e->allocator ? ed->e->allocator : de_heap_allocator(), de__ed_scene,
+                       DE_MEM_GENERAL);
+        if (!state)
+            return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "scene service state allocation");
+        memset(state, 0, sizeof *state);
+        state->owner = ed->e;
+        state->next = scene_states;
+        scene_states = state;
+        state->next_scene = ED_GAME_SCENE;
+        ed_scene *game = &state->scenes[0];
+        game->id = ED_GAME_SCENE;
+        snprintf(game->path, sizeof game->path, "%s", ed->h->config.name);
+        game->active = true;
+    }
+    active_scene = state;
+    state->attached = ed;
+    ed->scene = (struct de__ed_scene *)state;
+    de__ed_on_tick(ed, scene_tick);
+    de__ed_on_reset(ed, scene_reset);
     de__ed_on(ed, DE_EP_METHOD_SCENE_LIST, on_list);
     de__ed_on(ed, DE_EP_METHOD_SCENE_LOAD, on_load);
     de__ed_on(ed, DE_EP_METHOD_SCENE_UNLOAD, on_unload);
@@ -1057,4 +1567,53 @@ void de__ed_scene_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_PREFAB_OVERRIDES, on_overrides);
     de__ed_on(ed, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, on_apply);
     de__ed_on(ed, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, on_revert);
+    return DE_OK;
+}
+
+void de__ed_scene_detach(de__editor *ed) {
+    scene_reset(ed);
+    if (ed->scene)
+        ((de__ed_scene *)ed->scene)->attached = NULL;
+    ed->scene = NULL;
+}
+
+/* Called after game shutdown/render-thread quiescence, immediately before assets are destroyed.
+ * Does not despawn game entities or reorder renderer/uploader destruction. */
+void de__ed_scene_engine_shutdown(de_engine *engine) {
+    de__ed_scene **link = &scene_states;
+    while (*link && (*link)->owner != engine)
+        link = &(*link)->next;
+    if (!*link)
+        return;
+    de__ed_scene *state = *link, *saved = active_scene;
+    active_scene = state;
+#if DE_HAS_RENDER
+    if (engine->renderer)
+        de_gpu_wait_idle(de_renderer_device(engine->renderer));
+#endif
+#if DE_HAS_GPU
+    if (engine->gpu)
+        de_gpu_wait_idle(engine->gpu);
+#endif
+    pending_clear();
+    for (u32 i = 0; i < ED_MAX_SCENES; ++i)
+        if (engine->assets)
+            de_asset_release(engine->assets, state->scenes[i].owned_assets);
+    const de_allocator *a = scene_allocator();
+    for (u32 i = 0; i < state->instance_count; ++i) {
+        ed_instance *instance = &state->instances[i];
+        if (instance->base)
+            DE_FREE(a, instance->base, sizeof(ed_base) * instance->base_cap);
+        if (instance->bytes)
+            DE_FREE(a, instance->bytes, instance->byte_count);
+    }
+    if (state->instances)
+        DE_FREE(a, state->instances, sizeof(ed_instance) * state->instance_cap);
+    if (state->members)
+        DE_FREE(a, state->members, sizeof(ed_member) * state->member_cap);
+    *link = state->next;
+    if (state->attached)
+        state->attached->scene = NULL;
+    active_scene = saved == state ? NULL : saved;
+    DE_FREE(a, state, sizeof *state);
 }

@@ -177,3 +177,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_animation.c
         editor/editor_animation_pose.c editor/editor_animation_pose.h)
 endif()
+
+# DENG-708: bounded reflected scene asset preflight and owned asynchronous loads.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    target_sources(de_host PRIVATE editor/editor_scene_load.c editor/editor_scene_load.h)
+endif()
