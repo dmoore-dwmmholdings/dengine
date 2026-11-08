@@ -17,6 +17,83 @@ static u32 unbaked(runtime_fx *f, u32 *glyphs, u32 max) {
     }
     return count;
 }
+TEST_F(glyph_cache, generation_survives_first_lookup_and_eviction, runtime_fx) {
+    de_text_font *font = de_text__font_get(f->t, f->cjk);
+    const u64 identity = font->identity;
+    const u32 initial = font->generation;
+    u32 glyphs[4];
+    ASSERT_EQ(unbaked(f, glyphs, 4), 4u);
+    for (u32 i = 0; i < 3; ++i)
+        de_text__glyph_miss(f->t, f->cjk, glyphs[i]);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    const u32 integrated = font->generation;
+    ASSERT_GT(integrated, initial);
+    de_text_glyph_entry entry;
+    ASSERT_TRUE(de_text__glyph(f->t, f->cjk, glyphs[0], &entry));
+    EXPECT_EQ(font->generation, integrated);
+    EXPECT_EQ(entry.generation, integrated);
+    de_font_atlas_info info;
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, entry.page, 0, NULL, 0, &info), DE_OK);
+    EXPECT_EQ(info.generation, integrated);
+    EXPECT_EQ(info.source_revision, identity);
+    de_text__glyph_miss(f->t, f->cjk, glyphs[3]);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    const u32 latest = font->generation;
+    EXPECT_GT(latest, integrated);
+    de_text_update(f->t);
+    EXPECT_EQ(font->generation, latest);
+    de__slot *slot = de__slot_get(f->assets, f->cjk.id);
+    de__slot_set_object(slot, NULL);
+    de_text_update(f->t);
+    de__slot_set_object(slot, font);
+    de_text_update(f->t);
+    EXPECT_GT(font->generation, latest);
+    ASSERT_TRUE(de_text__glyph(f->t, f->cjk, glyphs[3], &entry));
+    EXPECT_EQ(entry.generation, font->generation);
+    EXPECT_EQ(font->identity, identity);
+}
+TEST_F(glyph_cache, integrated_generation_survives_real_reload, runtime_fx) {
+#if !defined(DE_DEBUG) && !defined(DE_DEV)
+    SKIP("hot reload is a Debug/Dev feature");
+#else
+    de_text_font *font = de_text__font_get(f->t, f->cjk);
+    const u64 identity = font->identity;
+    u32 glyphs[3];
+    ASSERT_EQ(unbaked(f, glyphs, 3), 3u);
+    de_font_metrics metrics;
+    ASSERT_EQ(de_text_font_metrics(f->t, f->cjk, 16, &metrics), DE_OK);
+    for (u32 i = 0; i < 3; ++i)
+        de_text__glyph_miss(f->t, f->cjk, glyphs[i]);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    const u32 integrated = font->generation;
+    EXPECT_GT(integrated, metrics.generation);
+    de__asset_reload_on_change(f->assets, "fontall:/cjk/test.ttf", DE_WATCH_MODIFIED, false);
+    const u64 deadline = de_time_now_ns() + 5ULL * 1000000000;
+    while (de_time_now_ns() < deadline) {
+        de_asset_system_update(f->assets, NULL);
+        de_text_update(f->t);
+        font = de_text__font_get(f->t, f->cjk);
+        if (font && font->identity != identity)
+            break;
+        de_sleep_ns(1000000);
+    }
+    ASSERT_TRUE(font != NULL);
+    ASSERT_NE(font->identity, identity);
+    EXPECT_GT(font->generation, integrated);
+    de_font_atlas_info info;
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->cjk, 0, 0, NULL, 0, &info), DE_OK);
+    EXPECT_EQ(info.source_revision, font->identity);
+    EXPECT_EQ(info.generation, font->generation);
+    const u32 reloaded = font->generation;
+    ASSERT_EQ(de_text_font_metrics(f->t, f->cjk, 16, &metrics), DE_OK);
+    EXPECT_EQ(metrics.generation, reloaded);
+    de_text_update(f->t);
+    EXPECT_EQ(font->generation, reloaded);
+#endif
+}
 TEST_F(glyph_cache, atlas_snapshots_copy_baked_runtime_and_survive_eviction, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);
     de_font_atlas_info info;

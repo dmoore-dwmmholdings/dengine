@@ -15,6 +15,7 @@ typedef struct de__text_chain {
 typedef struct de__text_watch {
     de_font handle;
     de_text_font *object;
+    u64 identity; /* Decoded lifetime, including allocator address reuse. */
     u32 generation;
 } de__text_watch;
 struct de__text_runtime {
@@ -34,6 +35,8 @@ de__text_resolver de__text_resolve_begin(de_text_system *t, de_font primary);
 bool de__text_resolve_next(const de__text_resolver *resolver, u32 cp, de_font *out, u32 *glyph);
 void de__text_resolve_end(const de__text_resolver *resolver);
 void de__text_watch_font(de_text_system *t, de_font f);
+/* Runtime lock held; refresh an existing watch without another handle search. */
+void de__text_refresh_watch(de_text_system *t, de__text_watch *watch);
 static inline void de__text_lock(struct de__text_runtime *r) {
     while (atomic_flag_test_and_set_explicit(&r->lock, memory_order_acquire)) {
     }

@@ -135,13 +135,21 @@ void de__text_watch_font(de_text_system *t, de_font handle) {
         ++r->watch_count;
         r->watch[i] = (de__text_watch){.handle = handle};
     }
-    de__text_watch *w = &r->watch[i];
-    de_text_font *f = de_text__font_get(t, handle);
-    if (w->object != f) {
+    de__text_refresh_watch(t, &r->watch[i]);
+}
+void de__text_refresh_watch(de_text_system *t, de__text_watch *w) {
+    struct de__text_runtime *r = t->runtime;
+    de_text_font *f = de_text__font_get(t, w->handle);
+    const u64 identity = f ? f->identity : 0;
+    if (w->object != f || w->identity != identity) {
         w->object = f;
+        w->identity = identity;
         ++w->generation;
-        if (f)
+        /* A first watch may follow runtime integrations; never replace their newer counter. */
+        if (f && f->generation < w->generation)
             f->generation = w->generation;
         ++r->epoch;
     }
+    if (f && w->generation < f->generation)
+        w->generation = f->generation;
 }
