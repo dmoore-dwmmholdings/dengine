@@ -173,10 +173,18 @@ static void place_pipe(const de_query_chunk *chunk, void *user) {
         const pipe_pair *pair = &g->pipes[p[i].pair];
         f32 top = pair->gap - GAP * .5f, bottom = pair->gap + GAP * .5f, cy = 0, h = 0;
         switch (p[i].part) {
-        case 0: cy = (48 + top) * .5f, h = top - 48; break;
-        case 1: cy = top - 7; break;
-        case 2: cy = (bottom + FLOOR) * .5f, h = FLOOR - bottom; break;
-        default: cy = bottom + 7; break;
+        case 0:
+            cy = (48 + top) * .5f, h = top - 48;
+            break;
+        case 1:
+            cy = top - 7;
+            break;
+        case 2:
+            cy = (bottom + FLOOR) * .5f, h = FLOOR - bottom;
+            break;
+        default:
+            cy = bottom + 7;
+            break;
         }
         t[i].position.x = world_x(pair->x + PIPE_W * .5f);
         t[i].position.z = world_z(cy);
@@ -273,7 +281,8 @@ static de_result init(de_engine *e) {
     DE_TRY(de_asset_manifest_load(e->assets, "flappy:/examples/flappy/assets.toml"));
 #elif !defined(DE_SHIPPING)
     /* Release has no cooker: it loads flappy.dpak beside the executable, which the flappy_pack
-     * target cooks in a Dev build (Publish puts it there). Shipping mounts game:/'s packs itself. */
+     * target cooks in a Dev build (Publish puts it there). Shipping mounts game:/'s packs itself.
+     */
     if (de_asset_pack_mount(e->assets, "game:/flappy.dpak", 0) != DE_OK) {
         DE_ERROR(DE_LOG_CAT_GENERAL, "flappy.dpak: %s (build flappy_pack in Dev and copy it here)",
                  de_error_last()->message);
@@ -380,17 +389,22 @@ static void types(de_engine *e, de_type_registry *registry) {
         {"ready", READY}, {"playing", PLAYING}, {"dead", DEAD}, {"paused", PAUSED}};
     (void)de_enum_register(registry, "FlappyMode", modes, 4, false);
     static const de_field_info pair_fields[] = {
-        DE_FIELD_EX(FlappyPipePair, x, DE_FK_F32, DE_FIELD_DEFAULT, {0, 0, "px", "Left edge", NULL, 0}),
+        DE_FIELD_EX(FlappyPipePair, x, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "px", "Left edge", NULL, 0}),
         DE_FIELD_EX(FlappyPipePair, gap, DE_FK_F32, DE_FIELD_DEFAULT,
                     {GAP * .5, FLOOR - GAP * .5, "px", "Centre of the gap", NULL, 0}),
         DE_FIELD(FlappyPipePair, scored, DE_FK_BOOL, DE_FIELD_DEFAULT),
     };
     (void)de_type_register(registry, &DE_TYPE_DESC(FlappyPipePair, 1, pair_fields));
     static const de_field_info state_fields[] = {
-        DE_FIELD_EX(FlappyState, mode, DE_FK_ENUM, DE_FIELD_DEFAULT, {0, 0, NULL, NULL, "FlappyMode", 0}),
-        DE_FIELD_EX(FlappyState, y, DE_FK_F32, DE_FIELD_DEFAULT, {48 + RADIUS, FLOOR - RADIUS, "px", "Bird height (down)", NULL, 0}),
-        DE_FIELD_EX(FlappyState, velocity, DE_FK_F32, DE_FIELD_DEFAULT, {-400, 400, "px/s", NULL, NULL, 0}),
-        DE_FIELD_EX(FlappyState, time, DE_FK_F32, DE_FIELD_DEFAULT | DE_FIELD_READONLY, {0, 0, "s", NULL, NULL, 0}),
+        DE_FIELD_EX(FlappyState, mode, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, NULL, NULL, "FlappyMode", 0}),
+        DE_FIELD_EX(FlappyState, y, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {48 + RADIUS, FLOOR - RADIUS, "px", "Bird height (down)", NULL, 0}),
+        DE_FIELD_EX(FlappyState, velocity, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {-400, 400, "px/s", NULL, NULL, 0}),
+        DE_FIELD_EX(FlappyState, time, DE_FK_F32, DE_FIELD_DEFAULT | DE_FIELD_READONLY,
+                    {0, 0, "s", NULL, NULL, 0}),
         DE_FIELD(FlappyState, score, DE_FK_U32, DE_FIELD_DEFAULT),
         DE_FIELD(FlappyState, best, DE_FK_U32, DE_FIELD_DEFAULT),
         DE_FIELD(FlappyState, random, DE_FK_U32, DE_FIELD_DEFAULT | DE_FIELD_EDITOR_HIDDEN),
@@ -398,18 +412,23 @@ static void types(de_engine *e, de_type_registry *registry) {
                     {0, 0, NULL, NULL, "FlappyPipePair", PIPE_COUNT}),
     };
     app.c.state = component(e, registry, &DE_TYPE_DESC(FlappyState, 1, state_fields));
-    static const de_field_info name_fields[] = {DE_FIELD(Name, value, DE_FK_STRING, DE_FIELD_DEFAULT)};
+    static const de_field_info name_fields[] = {
+        DE_FIELD(Name, value, DE_FK_STRING, DE_FIELD_DEFAULT)};
     app.c.name = component(e, registry, &DE_TYPE_DESC(Name, 1, name_fields));
     static const de_field_info bird_fields[] = {
-        DE_FIELD_EX(FlappyBird, flap_tilt, DE_FK_F32, DE_FIELD_DEFAULT, {0, 1.5, "rad", "Nose-up tilt while rising", NULL, 0}),
+        DE_FIELD_EX(FlappyBird, flap_tilt, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 1.5, "rad", "Nose-up tilt while rising", NULL, 0}),
     };
     app.c.bird = component(e, registry, &DE_TYPE_DESC(FlappyBird, 1, bird_fields));
     static const de_field_info pipe_fields[] = {
-        DE_FIELD_EX(FlappyPipe, pair, DE_FK_U32, DE_FIELD_DEFAULT, {0, PIPE_COUNT - 1, NULL, "Index in FlappyState.pipes", NULL, 0}),
-        DE_FIELD_EX(FlappyPipe, part, DE_FK_U32, DE_FIELD_DEFAULT, {0, 3, NULL, "0 top, 1 top cap, 2 bottom, 3 bottom cap", NULL, 0}),
+        DE_FIELD_EX(FlappyPipe, pair, DE_FK_U32, DE_FIELD_DEFAULT,
+                    {0, PIPE_COUNT - 1, NULL, "Index in FlappyState.pipes", NULL, 0}),
+        DE_FIELD_EX(FlappyPipe, part, DE_FK_U32, DE_FIELD_DEFAULT,
+                    {0, 3, NULL, "0 top, 1 top cap, 2 bottom, 3 bottom cap", NULL, 0}),
     };
     app.c.pipe = component(e, registry, &DE_TYPE_DESC(FlappyPipe, 1, pipe_fields));
-    static const de_field_info cloud_fields[] = {DE_FIELD(FlappyCloud, index, DE_FK_U32, DE_FIELD_DEFAULT)};
+    static const de_field_info cloud_fields[] = {
+        DE_FIELD(FlappyCloud, index, DE_FK_U32, DE_FIELD_DEFAULT)};
     app.c.cloud = component(e, registry, &DE_TYPE_DESC(FlappyCloud, 1, cloud_fields));
 
     app.state = de_entity_spawn(e->world);
