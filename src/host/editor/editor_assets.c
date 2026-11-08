@@ -199,6 +199,17 @@ static de_ep_str id_str(de__editor *ed, de_asset_id id, de_ep_arena *a) {
     const char *p = S(ed)->resolved ? de__resolved_path(S(ed)->resolved, id) : NULL;
     if (p != NULL)
         return de_ep_cstr(p);
+    /* Generated names belong to the cook registry. Copy under its lock into this response;
+     * never borrow a registry string or invent an ID from catalog estimates. */
+    size_t bytes = 0;
+    if (de__cook_stage_subasset_path(S(ed), id, NULL, 0, &bytes) == DE_OK) {
+        char *copy = de__ed_alloc(a, bytes);
+        if (!copy)
+            return de_ep_cstr("");
+        if (de__cook_stage_subasset_path(S(ed), id, copy, bytes, &bytes) == DE_OK)
+            return de_ep_cstr(copy);
+        /* A registry change between the two lookups retains the unknown-ID fallback. */
+    }
     char *buf = (char *)de__ed_alloc(a, 24);
     if (buf == NULL)
         return de_ep_cstr("");
