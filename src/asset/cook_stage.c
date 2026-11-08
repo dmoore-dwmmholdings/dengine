@@ -9,6 +9,7 @@
 #include "asset/cook_stage_internal.h"
 
 #include "asset/asset_internal.h"
+#include "asset/diagnostic_internal.h"
 #include "asset/manifest_internal.h"
 #include "asset/pipeline_internal.h"
 #include "asset/resolve_internal.h"
@@ -621,6 +622,32 @@ static void cook_task_run(void *user) {
                                   strip_prefix(msg, t->parent_id));
         else
             de__pipeline_job_fail(job, rc, "%s", strip_prefix(msg, t->parent_id));
+        /* Resolve against the immutable cook root before freeing the task. job->msg already
+         * owns the original error, so resolver failures cannot replace its TLS-backed text. */
+        char source[DE_ASSET_EVENT_SOURCE_CAP];
+        u32 line = 0;
+        if (de__asset_diagnostic_location(job->msg, source, sizeof source, &line)) {
+            job->diagnostic_captured = true;
+            char joined[DE_FS_PATH_MAX];
+            const char *vpath = source;
+            if (source[0] != '/' && source[0] != '\\' && strchr(source, ':') == NULL) {
+                int n = snprintf(joined, sizeof joined, "%s/%s", t->asset_root, source);
+                vpath = n >= 0 && (size_t)n < sizeof joined ? joined : NULL;
+            }
+            const bool native =
+                source[0] == '/' || source[0] == '\\' ||
+                (source[0] && source[1] == ':' && (source[2] == '/' || source[2] == '\\'));
+            if (native) {
+                memcpy(job->diagnostic_source, source, strlen(source) + 1);
+                job->diagnostic_line = line;
+            } else if (vpath && de_fs_resolve(vpath, job->diagnostic_source,
+                                              sizeof job->diagnostic_source) == DE_OK)
+                job->diagnostic_line = line;
+            else {
+                job->diagnostic_source[0] = '\0';
+                de_error_clear();
+            }
+        }
         DE_FREE(pl->alloc, t, t->size);
         de__pipeline_finish(job);
         return;
