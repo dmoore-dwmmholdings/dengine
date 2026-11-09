@@ -328,11 +328,34 @@ cargo run --locked -p dide-conformance -- --json -- ../engine/build/dev/examples
 ```
 
 The protocol archive is pinned to a private DIDE commit. To verify it with an authenticated
-GitHub CLI session, from `engine/`:
+GitHub CLI session, from `engine/`, read the current pin and cache name from `vendor.toml`
+instead of copying an older protocol revision. The temporary download is checked against
+the pinned SHA-256 and committed vendor tree (including declared patches) before caching:
 
 ```sh
-mkdir -p build/vendor-cache
-gh api repos/dmoore-dwmmholdings/dide/tarball/52f3bb1df587c499117ffa3f10bd4692e2a74d61 \
-  > build/vendor-cache/dide_protocol-fdf480a0b8145df5-52f3bb1df587c499117ffa3f10bd4692e2a74d61
+python3 - <<'PY'
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import tempfile
+
+vendor = runpy.run_path("tools/vendor/vendor.py")
+pin = next(lib for lib in vendor["load_config"]("third_party/vendor.toml")
+           if lib.name == "dide_protocol")
+cache = Path("build/vendor-cache")
+cache.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(dir=cache) as staging:
+    archive = Path(staging) / pin.archive_name
+    with archive.open("wb") as output:
+        subprocess.run(["gh", "api", pin.url], stdout=output, check=True)
+    subprocess.run([sys.executable, "tools/vendor/vendor.py", "--cache", staging,
+                    "verify", "dide_protocol", "--offline"], check=True)
+    shutil.move(archive, cache / pin.archive_name)
+PY
 python3 tools/vendor/vendor.py --cache build/vendor-cache verify dide_protocol --offline
 ```
+
+This verifies only the pinned source archive and vendored files. It does not change the pin,
+regenerate bindings, verify another protocol revision, or qualify the running editor service.
