@@ -1,0 +1,2 @@
+asset "shader:main": spirv (permutation "USE_TINT=1"): error[E30015]: undefined identifier
+ --> shaders/tint.slang:3:8

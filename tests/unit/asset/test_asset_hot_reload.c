@@ -104,6 +104,8 @@ static void hr_dep_reloaded(void *object, de_asset_id dep, void *user) {
 static de_result hri_import(de_asset_import_ctx *ctx) {
     u64 n = 0;
     const char *src = (const char *)de_asset_import_source(ctx, &n);
+    if (n > 5 && n < 1024 && memcmp(src, "DIAG:", 5) == 0)
+        return de_asset_import_fail(ctx, DE_ERR_PARSE, "%.*s", (int)(n - 5), src + 5);
     de_result r = de_asset_import_write(ctx, src, n);
     if (r != DE_OK)
         return r;
@@ -1076,6 +1078,50 @@ TEST_F(hot_reload, own_reloaded, hr_fx) {
     EXPECT_NE(pump(f), 0u);
     EXPECT_EQ(g_own_calls, 2u);
     EXPECT_STREQ(hr_bytes(obj_of(f, "self")), "self v3");
+    de_asset_release(f->s, h);
+#endif
+}
+
+/* Synthetic compiler failures exercise native/VFS resolution independently of Slang. */
+TEST_F(hot_reload, diagnostic_source_resolution_preserves_failure, hr_fx) {
+#if !DE__ASSET_RELOAD_ENABLED || !DE_HAS_COOKER
+    SKIP("needs hot reload and the in-process cooker");
+#else
+    fx_system(f, "diagnostic_source", true, 0, false);
+    put(f, "main.hri", "last good asset");
+    manifest(f, "[assets]\n\"m\" = { type = \"hri\", source = \"main.hri\" }\n");
+    const char *const paths[] = {"m"};
+    de_load_handle h = load_all(f, paths, 1);
+    const char *sources[] = {"unmounteddiag:/unknown.slang", "/tmp/native.slang",
+                             "C:\\project\\native.slang", "included.slang"};
+    for (u32 i = 0; i < 4; ++i) {
+        char diagnostic[256];
+        snprintf(diagnostic, sizeof diagnostic,
+                 "DIAG:error[E1]: original compiler failure\n --> %s:7:2\n", sources[i]);
+        g_ev_count = 0;
+        put(f, "main.hri", diagnostic);
+        changed(f, "main.hri");
+        EXPECT_NE(pump(f), 0u);
+        ASSERT_EQ(g_ev_count, 1u);
+        EXPECT_EQ(g_ev[0].kind, DE_ASSET_EV_FAILED);
+        EXPECT_EQ(g_ev[0].error, DE_ERR_PARSE);
+        EXPECT_EQ(g_ev[0].state, DE_LOAD_READY);
+        EXPECT_EQ(g_ev[0].line, i == 0 ? 0u : 7u);
+        if (i == 0)
+            EXPECT_STREQ(g_ev[0].source, "");
+        else if (i < 3)
+            EXPECT_STREQ(g_ev[0].source, sources[i]);
+        else {
+            char virtual_path[160], native[512];
+            snprintf(virtual_path, sizeof virtual_path, "%s/included.slang", f->dir);
+            ASSERT_EQ(de_fs_resolve(virtual_path, native, sizeof native), DE_OK);
+            EXPECT_STREQ(g_ev[0].source, native);
+        }
+        char message[256];
+        EXPECT_EQ(de_asset_last_error(f->s, id_of("m"), message, sizeof message), DE_ERR_PARSE);
+        EXPECT_TRUE(strstr(message, "original compiler failure") != NULL);
+        EXPECT_STREQ(hr_bytes(obj_of(f, "m")), "last good asset");
+    }
     de_asset_release(f->s, h);
 #endif
 }
