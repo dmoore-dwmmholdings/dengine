@@ -71,3 +71,43 @@ TEST(editor_view_modes, exact_nonterminated_spans) {
     EXPECT_FALSE(de__ed_view_render_mode_parse(binary, sizeof binary, &mode));
     EXPECT_EQ(mode, DE_VIEW_RENDER_NORMALS);
 }
+
+TEST(editor_view_modes, game_views_keep_canonical_lit_output) {
+    for (u32 i = 0; i < DE_VIEW_RENDER_MODE_COUNT; ++i) {
+        const char *name = de__ed_view_render_names[i];
+        de_view_render_mode mode = DE_VIEW_RENDER_MODE_COUNT;
+        ASSERT_TRUE(de__ed_view_render_mode_request(name, strlen(name), false, &mode));
+        EXPECT_EQ(mode, (de_view_render_mode)i);
+        mode = DE_VIEW_RENDER_MODE_COUNT;
+        if (i == DE_VIEW_RENDER_LIT) {
+            ASSERT_TRUE(de__ed_view_render_mode_request(name, strlen(name), true, &mode));
+            EXPECT_EQ(mode, DE_VIEW_RENDER_LIT);
+        } else {
+            EXPECT_FALSE(de__ed_view_render_mode_request(name, strlen(name), true, &mode));
+            EXPECT_EQ(mode, DE_VIEW_RENDER_MODE_COUNT);
+        }
+    }
+}
+
+TEST(editor_view_modes, view_requests_preserve_span_and_default_contracts) {
+    const char wire[] = {'w', 'i', 'r', 'e', 'f', 'r', 'a', 'm', 'e'};
+    const char binary[] = {'l', 'i', 't', '\0'};
+    for (u32 game = 0; game < 2; ++game) {
+        de_view_render_mode mode = DE_VIEW_RENDER_NORMALS;
+        ASSERT_TRUE(de__ed_view_render_mode_request(NULL, 0, game != 0, &mode));
+        EXPECT_EQ(mode, DE_VIEW_RENDER_LIT);
+        mode = DE_VIEW_RENDER_NORMALS;
+        EXPECT_FALSE(de__ed_view_render_mode_request("litWireframe", 12, game != 0, &mode));
+        EXPECT_EQ(mode, DE_VIEW_RENDER_NORMALS);
+        EXPECT_FALSE(de__ed_view_render_mode_request(binary, sizeof binary, game != 0, &mode));
+        EXPECT_EQ(mode, DE_VIEW_RENDER_NORMALS);
+        EXPECT_FALSE(de__ed_view_render_mode_request(NULL, 1, game != 0, &mode));
+        EXPECT_EQ(mode, DE_VIEW_RENDER_NORMALS);
+        EXPECT_FALSE(de__ed_view_render_mode_request("lit", 3, game != 0, NULL));
+    }
+    de_view_render_mode mode = DE_VIEW_RENDER_NORMALS;
+    ASSERT_TRUE(de__ed_view_render_mode_request(wire, sizeof wire, false, &mode));
+    EXPECT_EQ(mode, DE_VIEW_RENDER_WIREFRAME);
+    EXPECT_FALSE(de__ed_view_render_mode_request(wire, sizeof wire, true, &mode));
+    EXPECT_EQ(mode, DE_VIEW_RENDER_WIREFRAME);
+}

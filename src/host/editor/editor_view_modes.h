@@ -39,4 +39,16 @@ static inline bool de__ed_view_render_mode_parse(const char *name, size_t len,
     return false;
 }
 
+/* Game views share the runtime output: only Scene views may select diagnostics.
+ * Validate before assigning so a rejected override never replaces the caller's mode. */
+static inline bool de__ed_view_render_mode_request(const char *name, size_t len, bool game,
+                                                   de_view_render_mode *out) {
+    de_view_render_mode mode;
+    if (out == NULL || !de__ed_view_render_mode_parse(name, len, &mode) ||
+        (game && mode != DE_VIEW_RENDER_LIT))
+        return false;
+    *out = mode;
+    return true;
+}
+
 #endif /* DE_HOST_EDITOR_VIEW_MODES_H */

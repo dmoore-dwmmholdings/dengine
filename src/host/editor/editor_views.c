@@ -923,11 +923,11 @@ u32 de__ed_views_render_modes(const char *const **names) {
     *names = de__ed_view_render_names;
     return ED_VIEWS ? DE_VIEW_RENDER_MODE_COUNT : 0;
 }
+#if ED_VIEWS
 static bool render_mode(de_ep_str name, de_view_render_mode *out) {
     return de__ed_view_render_mode_parse(name.ptr, name.len, out);
 }
 
-#if ED_VIEWS
 static de_view_display display_policy(de_view_render_mode mode, u32 show) {
     return (de_view_display){.mode = mode,
                              .disabled_features =
@@ -945,8 +945,8 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         return;
     }
     de_view_render_mode mode;
-    if (!render_mode(q.render_mode, &mode) ||
-        (q.has_game && q.game && mode != DE_VIEW_RENDER_LIT)) {
+    if (!de__ed_view_render_mode_request(q.render_mode.ptr, q.render_mode.len, q.has_game && q.game,
+                                         &mode)) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
         return;
     }
@@ -1185,7 +1185,7 @@ static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena
     if (v == NULL)
         return;
     de_view_render_mode mode;
-    if (!render_mode(q.render_mode, &mode) || (v->game && mode != DE_VIEW_RENDER_LIT)) {
+    if (!de__ed_view_render_mode_request(q.render_mode.ptr, q.render_mode.len, v->game, &mode)) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
         return;
     }
