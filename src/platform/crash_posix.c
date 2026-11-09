@@ -44,6 +44,8 @@
 #endif
 #include <sys/types.h>
 #if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <sys/ucontext.h>
 #endif
 #include <time.h>
@@ -230,6 +232,94 @@ void de_crash_thread_init(void) {
 
 /* ---------- Report ---------- */
 
+#if defined(__APPLE__)
+/* The main executable cannot be unloaded. Snapshot its identity before registering any
+ * handlers: neither dyld queries nor Mach-O traversal belong on the signal path. This does
+ * not identify a hot-reloaded game library or turn the source revision into a binary ID. */
+static char g_main_image_report[320];
+static size_t g_main_image_report_len;
+static bool g_main_image_captured;
+
+static void de__crash_capture_main_image(void) {
+    if (g_main_image_captured)
+        return; /* also immutable if OS handler installation is retried after a partial failure */
+    g_main_image_captured = true;
+    const struct mach_header_64 *h =
+        (const struct mach_header_64 *)(const void *)_dyld_get_image_header(0);
+    if (h == NULL || h->magic != MH_MAGIC_64 || h->filetype != MH_EXECUTE)
+        return;
+    const char *arch = NULL;
+    cpu_subtype_t subtype = h->cpusubtype & ~CPU_SUBTYPE_MASK;
+    if (h->cputype == CPU_TYPE_ARM64 && subtype == CPU_SUBTYPE_ARM64_ALL)
+        arch = "arm64";
+    else if (h->cputype == CPU_TYPE_X86_64 && subtype == CPU_SUBTYPE_X86_64_ALL)
+        arch = "x86_64";
+    if (arch == NULL)
+        return;
+
+    const unsigned char *p = (const unsigned char *)(h + 1);
+    size_t remaining = h->sizeofcmds;
+    const struct uuid_command *uuid = NULL;
+    const struct segment_command_64 *text = NULL;
+    for (u32 i = 0; i < h->ncmds; i++) {
+        if (remaining < sizeof(struct load_command))
+            return;
+        const struct load_command *cmd = (const struct load_command *)(const void *)p;
+        if (cmd->cmdsize < sizeof *cmd || cmd->cmdsize > remaining)
+            return;
+        if (cmd->cmd == LC_UUID && cmd->cmdsize >= sizeof(struct uuid_command))
+            uuid = (const struct uuid_command *)(const void *)p;
+        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg =
+                (const struct segment_command_64 *)(const void *)p;
+            if (memcmp(seg->segname, SEG_TEXT, sizeof SEG_TEXT) == 0)
+                text = seg;
+        }
+        p += cmd->cmdsize;
+        remaining -= cmd->cmdsize;
+    }
+    if (uuid == NULL || text == NULL || text->vmsize == 0)
+        return; /* never guess a UUID or advertise a partially known identity */
+    u64 start = text->vmaddr + (u64)_dyld_get_image_vmaddr_slide(0);
+    if (start != (u64)(uintptr_t)h || text->vmsize > UINT64_MAX - start)
+        return;
+
+    static const char hex[] = "0123456789abcdef";
+    char id[37];
+    size_t n = 0;
+    unsigned char nonzero = 0;
+    for (size_t i = 0; i < sizeof uuid->uuid; i++) {
+        nonzero |= uuid->uuid[i];
+        if (i == 4 || i == 6 || i == 8 || i == 10)
+            id[n++] = '-';
+        id[n++] = hex[uuid->uuid[i] >> 4];
+        id[n++] = hex[uuid->uuid[i] & 15];
+    }
+    if (nonzero == 0)
+        return;
+    id[n] = '\0';
+    char num[24];
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "main_image_uuid: ");
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, id);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "\nmain_image_arch: ");
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, arch);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
+                         "\nmain_image_load_address: 0x");
+    de__crash_fmt_u64(num, (u64)(uintptr_t)h, 16);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
+                         "\nmain_image_text_start: 0x");
+    de__crash_fmt_u64(num, start, 16);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
+                         "\nmain_image_text_end: 0x");
+    de__crash_fmt_u64(num, start + text->vmsize, 16);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "\n");
+    g_main_image_report_len = strlen(g_main_image_report);
+}
+#endif
+
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
 #define DE__CRASH_CONTEXT_WALK 1
 #else
@@ -324,6 +414,9 @@ DE__CRASH_NO_ASAN static int de__crash_context_frames(const void *ucv, void **fr
 /* `user` is the signal's ucontext_t, or NULL for a panic (written on the panicking thread's own
  * stack, where backtrace() works). */
 static void de__crash_write_backtrace(intptr_t fd, void *user) {
+#if defined(__APPLE__)
+    de__crash_os_write(fd, g_main_image_report, g_main_image_report_len);
+#endif
     static void *frames[DE__CRASH_MAX_FRAMES]; /* static: keep the alternate stack free */
     int n = 0;
 #if DE__CRASH_CONTEXT_WALK
@@ -444,6 +537,9 @@ const char *de__crash_os_panic(const de_panic_info *info) {
 }
 
 de_result de__crash_os_install(void) {
+#if defined(__APPLE__)
+    de__crash_capture_main_image();
+#endif
     /* glibc's first backtrace() loads libgcc_s (dlopen + malloc): do that now, not in a crash. */
     void *warm[2];
     (void)backtrace(warm, 2);

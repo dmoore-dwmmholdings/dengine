@@ -23,6 +23,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <mach-o/getsect.h>
+#include <mach-o/loader.h>
+#endif
+
 #if !defined(_WIN32)
 #include <dirent.h>
 #include <fcntl.h>
@@ -384,6 +390,51 @@ static void crash_null(void) {
     *p = 42;
 }
 
+#if defined(__APPLE__)
+/* The fork shares the executable's ASLR mapping. Compare report fields with the live image,
+ * using the OS segment accessor rather than the report writer's segment traversal. */
+static void expect_main_image(const char *report) {
+    const struct mach_header_64 *h =
+        (const struct mach_header_64 *)(const void *)_dyld_get_image_header(0);
+    ASSERT_TRUE(h != NULL);
+    unsigned long bytes = 0;
+    const uint8_t *text = getsegmentdata(h, SEG_TEXT, &bytes);
+    ASSERT_TRUE(text != NULL);
+    EXPECT_TRUE(bytes > 0);
+    uintptr_t start = (uintptr_t)text;
+    uintptr_t end = start + (uintptr_t)bytes;
+    EXPECT_TRUE((uintptr_t)crash_null >= start && (uintptr_t)crash_null < end);
+    char line[100];
+    snprintf(line, sizeof line, "main_image_load_address: 0x%llx\n",
+             (unsigned long long)(uintptr_t)h);
+    EXPECT_TRUE(strstr(report, line) != NULL);
+    snprintf(line, sizeof line, "main_image_text_start: 0x%llx\n", (unsigned long long)start);
+    EXPECT_TRUE(strstr(report, line) != NULL);
+    snprintf(line, sizeof line, "main_image_text_end: 0x%llx\n", (unsigned long long)end);
+    EXPECT_TRUE(strstr(report, line) != NULL);
+#if defined(__aarch64__)
+    EXPECT_TRUE(strstr(report, "main_image_arch: arm64\n") != NULL);
+#elif defined(__x86_64__)
+    EXPECT_TRUE(strstr(report, "main_image_arch: x86_64\n") != NULL);
+#endif
+    const struct load_command *cmd = (const struct load_command *)(const void *)(h + 1);
+    const struct uuid_command *uuid = NULL;
+    for (u32 i = 0; i < h->ncmds; i++) {
+        if (cmd->cmd == LC_UUID)
+            uuid = (const struct uuid_command *)(const void *)cmd;
+        cmd = (const struct load_command *)(const void *)((const char *)cmd + cmd->cmdsize);
+    }
+    ASSERT_TRUE(uuid != NULL);
+    const unsigned char *u = uuid->uuid;
+    snprintf(line, sizeof line,
+             "main_image_uuid: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-"
+             "%02x%02x%02x%02x%02x%02x\n",
+             u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13],
+             u[14], u[15]);
+    EXPECT_TRUE(strstr(report, line) != NULL);
+}
+#endif
+
 /* ---------- Children ---------- */
 
 static void child_segv(const char *dir) {
@@ -457,6 +508,9 @@ TEST(crash, segv_report) {
     const char *r = read_file(path);
     ASSERT_TRUE(r != NULL);
     EXPECT_TRUE(strstr(r, "DEngine crash report") != NULL);
+#if defined(__APPLE__)
+    expect_main_image(r);
+#endif
     EXPECT_TRUE(strstr(r, "reason: SIGSEGV") != NULL);
     EXPECT_TRUE(strstr(r, "fault_address: 0x0\n") != NULL);
     EXPECT_TRUE(strstr(r, "  level = e1m1\n") != NULL);
@@ -502,6 +556,9 @@ TEST(crash, panic_report) {
     const char *r = read_file(path);
     ASSERT_TRUE(r != NULL);
     EXPECT_TRUE(strstr(r, "reason: panic\n") != NULL);
+#if defined(__APPLE__)
+    expect_main_image(r);
+#endif
     EXPECT_TRUE(strstr(r, "panic: boom 7\n") != NULL);
     EXPECT_TRUE(strstr(r, "panic_location: ") != NULL);
     EXPECT_TRUE(strstr(r, "child_panic") != NULL);
