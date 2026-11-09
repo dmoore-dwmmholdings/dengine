@@ -251,6 +251,160 @@ TEST(crash, fmt_helpers) {
     EXPECT_STREQ(small, "abcdefg");
 }
 
+#if defined(__APPLE__)
+/* These aligned, in-object commands exercise the install-time production validator.
+ * They are not arbitrary/truncated file buffers or a replacement for the live-image oracle. */
+typedef struct main_image_fixture {
+    struct mach_header_64 header;
+    struct uuid_command uuid;
+    struct segment_command_64 text;
+} main_image_fixture;
+_Static_assert(offsetof(main_image_fixture, uuid) == sizeof(struct mach_header_64),
+               "UUID fixture must immediately follow the Mach-O header");
+_Static_assert(offsetof(main_image_fixture, text) ==
+                   sizeof(struct mach_header_64) + sizeof(struct uuid_command),
+               "TEXT fixture must immediately follow the UUID command");
+
+static void main_image_fixture_init(main_image_fixture *f) {
+    memset(f, 0, sizeof *f);
+    f->header.magic = MH_MAGIC_64;
+    f->header.filetype = MH_EXECUTE;
+    f->header.cputype = CPU_TYPE_ARM64;
+    f->header.cpusubtype = CPU_SUBTYPE_ARM64_ALL;
+    f->header.ncmds = 2;
+    f->header.sizeofcmds = sizeof f->uuid + sizeof f->text;
+    f->uuid.cmd = LC_UUID;
+    f->uuid.cmdsize = sizeof f->uuid;
+    for (size_t i = 0; i < sizeof f->uuid.uuid; ++i)
+        f->uuid.uuid[i] = (u8)(i + 1);
+    f->text.cmd = LC_SEGMENT_64;
+    f->text.cmdsize = sizeof f->text;
+    memcpy(f->text.segname, SEG_TEXT, sizeof SEG_TEXT);
+    f->text.vmaddr = (u64)(uintptr_t)&f->header;
+    f->text.vmsize = 4096;
+}
+
+static void expect_main_header_unavailable(const struct mach_header_64 *header) {
+    de__crash_main_image_identity out = {
+        .uuid = {42}, .arch = "unchanged", .load_address = 17, .text_start = 19, .text_end = 23};
+    unsigned char before[sizeof out];
+    memcpy(before, &out, sizeof before);
+    EXPECT_FALSE(de__crash_main_image_parse(header, 0, &out));
+    EXPECT_TRUE(memcmp(before, &out, sizeof before) == 0);
+}
+
+static void expect_main_image_unavailable(const main_image_fixture *f) {
+    expect_main_header_unavailable(&f->header);
+}
+
+TEST(crash, main_image_architectures_and_signed_slides) {
+    const intptr_t slides[] = {-4096, 0, 4096};
+    for (u32 arch = 0; arch < 2; ++arch) {
+        for (size_t i = 0; i < sizeof slides / sizeof slides[0]; ++i) {
+            main_image_fixture f;
+            main_image_fixture_init(&f);
+            if (arch == 1) {
+                f.header.cputype = CPU_TYPE_X86_64;
+                f.header.cpusubtype = CPU_SUBTYPE_X86_64_ALL;
+            }
+            const u64 load = (u64)(uintptr_t)&f.header;
+            f.text.vmaddr = load - (u64)slides[i];
+            de__crash_main_image_identity out;
+            ASSERT_TRUE(de__crash_main_image_parse(&f.header, slides[i], &out));
+            EXPECT_STREQ(out.arch, arch == 0 ? "arm64" : "x86_64");
+            EXPECT_TRUE(memcmp(out.uuid, f.uuid.uuid, sizeof out.uuid) == 0);
+            EXPECT_EQ(out.load_address, load);
+            EXPECT_EQ(out.text_start, load);
+            EXPECT_EQ(out.text_end, load + 4096);
+        }
+    }
+}
+
+TEST(crash, main_image_rejects_unavailable_identity) {
+    main_image_fixture f;
+    main_image_fixture_init(&f);
+    memset(f.uuid.uuid, 0, sizeof f.uuid.uuid);
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.header.cpusubtype = CPU_SUBTYPE_ARM64E;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.header.cputype = CPU_TYPE_X86_64;
+    f.header.cpusubtype = CPU_SUBTYPE_X86_64_H;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.header.cputype = CPU_TYPE_ARM;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.uuid.cmd = LC_CODE_SIGNATURE;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    memcpy(f.text.segname, SEG_DATA, sizeof SEG_DATA);
+    expect_main_image_unavailable(&f);
+}
+
+TEST(crash, main_image_rejects_incomplete_commands) {
+    main_image_fixture f;
+    main_image_fixture_init(&f);
+    f.header.sizeofcmds = sizeof(struct load_command) - 1;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.uuid.cmdsize = 0;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.uuid.cmdsize = f.header.sizeofcmds + 1;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.header.ncmds = 3;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    /* Keep a valid TEXT before the short UUID. Otherwise a missing TEXT could mask a
+     * regression in the UUID command-size check. Backing storage stays complete/aligned. */
+    typedef struct main_image_text_first_fixture {
+        struct mach_header_64 header;
+        struct segment_command_64 text;
+        struct uuid_command uuid;
+    } main_image_text_first_fixture;
+    main_image_text_first_fixture short_uuid = {.header = f.header, .text = f.text, .uuid = f.uuid};
+    _Static_assert(offsetof(main_image_text_first_fixture, uuid) ==
+                       sizeof(struct mach_header_64) + sizeof(struct segment_command_64),
+                   "short UUID fixture must follow TEXT without padding");
+    short_uuid.text.vmaddr = (u64)(uintptr_t)&short_uuid.header;
+    short_uuid.uuid.cmdsize = sizeof(struct load_command);
+    short_uuid.header.sizeofcmds = sizeof short_uuid.text + sizeof(struct load_command);
+    expect_main_header_unavailable(&short_uuid.header);
+    main_image_fixture_init(&f);
+    f.text.cmdsize = sizeof(struct load_command);
+    expect_main_image_unavailable(&f);
+}
+
+TEST(crash, main_image_rejects_invalid_header_and_text_bounds) {
+    main_image_fixture f;
+    main_image_fixture_init(&f);
+    f.header.magic = MH_CIGAM_64;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.header.filetype = MH_DYLIB;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.text.vmsize = 0;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.text.vmaddr++;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    f.text.vmsize = UINT64_MAX;
+    expect_main_image_unavailable(&f);
+    main_image_fixture_init(&f);
+    de__crash_main_image_identity out;
+    EXPECT_FALSE(de__crash_main_image_parse(NULL, 0, &out));
+    EXPECT_FALSE(de__crash_main_image_parse(&f.header, 0, NULL));
+    f.text.vmsize = 1;
+    ASSERT_TRUE(de__crash_main_image_parse(&f.header, 0, &out));
+    EXPECT_EQ(out.text_end - out.text_start, 1u);
+}
+#endif
+
 #if defined(DE__CRASH_FORK_TESTS)
 
 /* ---------- Fork helpers ---------- */

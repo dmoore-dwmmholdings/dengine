@@ -240,14 +240,10 @@ static char g_main_image_report[320];
 static size_t g_main_image_report_len;
 static bool g_main_image_captured;
 
-static void de__crash_capture_main_image(void) {
-    if (g_main_image_captured)
-        return; /* also immutable if OS handler installation is retried after a partial failure */
-    g_main_image_captured = true;
-    const struct mach_header_64 *h =
-        (const struct mach_header_64 *)(const void *)_dyld_get_image_header(0);
-    if (h == NULL || h->magic != MH_MAGIC_64 || h->filetype != MH_EXECUTE)
-        return;
+bool de__crash_main_image_parse(const struct mach_header_64 *h, intptr_t slide,
+                                de__crash_main_image_identity *out) {
+    if (out == NULL || h == NULL || h->magic != MH_MAGIC_64 || h->filetype != MH_EXECUTE)
+        return false;
     const char *arch = NULL;
     cpu_subtype_t subtype = h->cpusubtype & ~CPU_SUBTYPE_MASK;
     if (h->cputype == CPU_TYPE_ARM64 && subtype == CPU_SUBTYPE_ARM64_ALL)
@@ -255,7 +251,7 @@ static void de__crash_capture_main_image(void) {
     else if (h->cputype == CPU_TYPE_X86_64 && subtype == CPU_SUBTYPE_X86_64_ALL)
         arch = "x86_64";
     if (arch == NULL)
-        return;
+        return false;
 
     const unsigned char *p = (const unsigned char *)(h + 1);
     size_t remaining = h->sizeofcmds;
@@ -263,10 +259,10 @@ static void de__crash_capture_main_image(void) {
     const struct segment_command_64 *text = NULL;
     for (u32 i = 0; i < h->ncmds; i++) {
         if (remaining < sizeof(struct load_command))
-            return;
+            return false;
         const struct load_command *cmd = (const struct load_command *)(const void *)p;
         if (cmd->cmdsize < sizeof *cmd || cmd->cmdsize > remaining)
-            return;
+            return false;
         if (cmd->cmd == LC_UUID && cmd->cmdsize >= sizeof(struct uuid_command))
             uuid = (const struct uuid_command *)(const void *)p;
         if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
@@ -279,41 +275,61 @@ static void de__crash_capture_main_image(void) {
         remaining -= cmd->cmdsize;
     }
     if (uuid == NULL || text == NULL || text->vmsize == 0)
-        return; /* never guess a UUID or advertise a partially known identity */
-    u64 start = text->vmaddr + (u64)_dyld_get_image_vmaddr_slide(0);
+        return false; /* never guess a UUID or advertise a partially known identity */
+    u64 start = text->vmaddr + (u64)slide;
     if (start != (u64)(uintptr_t)h || text->vmsize > UINT64_MAX - start)
+        return false;
+
+    unsigned char nonzero = 0;
+    for (size_t i = 0; i < sizeof uuid->uuid; i++)
+        nonzero |= uuid->uuid[i];
+    if (nonzero == 0)
+        return false;
+    de__crash_main_image_identity identity = {.arch = arch,
+                                              .load_address = (u64)(uintptr_t)h,
+                                              .text_start = start,
+                                              .text_end = start + text->vmsize};
+    memcpy(identity.uuid, uuid->uuid, sizeof identity.uuid);
+    *out = identity;
+    return true;
+}
+
+static void de__crash_capture_main_image(void) {
+    if (g_main_image_captured)
+        return; /* also immutable if OS handler installation is retried after a partial failure */
+    g_main_image_captured = true;
+    const struct mach_header_64 *h =
+        (const struct mach_header_64 *)(const void *)_dyld_get_image_header(0);
+    de__crash_main_image_identity identity;
+    if (!de__crash_main_image_parse(h, _dyld_get_image_vmaddr_slide(0), &identity))
         return;
 
     static const char hex[] = "0123456789abcdef";
     char id[37];
     size_t n = 0;
-    unsigned char nonzero = 0;
-    for (size_t i = 0; i < sizeof uuid->uuid; i++) {
-        nonzero |= uuid->uuid[i];
+    for (size_t i = 0; i < sizeof identity.uuid; i++) {
         if (i == 4 || i == 6 || i == 8 || i == 10)
             id[n++] = '-';
-        id[n++] = hex[uuid->uuid[i] >> 4];
-        id[n++] = hex[uuid->uuid[i] & 15];
+        id[n++] = hex[identity.uuid[i] >> 4];
+        id[n++] = hex[identity.uuid[i] & 15];
     }
-    if (nonzero == 0)
-        return;
     id[n] = '\0';
     char num[24];
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "main_image_uuid: ");
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, id);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "\nmain_image_arch: ");
-    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, arch);
+    de__crash_str_append(g_main_image_report, sizeof g_main_image_report, identity.arch);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
                          "\nmain_image_load_address: 0x");
-    de__crash_fmt_u64(num, (u64)(uintptr_t)h, 16);
+    de__crash_fmt_u64(num, identity.load_address, 16);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
                          "\nmain_image_text_start: 0x");
-    de__crash_fmt_u64(num, start, 16);
+    de__crash_fmt_u64(num, identity.text_start, 16);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report,
                          "\nmain_image_text_end: 0x");
-    de__crash_fmt_u64(num, start + text->vmsize, 16);
+    de__crash_fmt_u64(num, identity.text_end, 16);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, num);
     de__crash_str_append(g_main_image_report, sizeof g_main_image_report, "\n");
     g_main_image_report_len = strlen(g_main_image_report);
