@@ -132,6 +132,7 @@ static de_result mtl_device_create(de_gpu_device *d, const de_gpu_device_desc *d
 }
 
 static void mtl_device_destroy(de_gpu_device *d) {
+    de__mtl_capture_end(d);  /* Only this device's owned capture, after front-end drain. */
     de__mtl_archive_save(d); /* DENG-325 */
     device_release(d);
 }
@@ -219,6 +220,10 @@ const de__gpu_backend_vtable de__gpu_metal_vtable = {
     .device_create = mtl_device_create,
     .device_destroy = mtl_device_destroy,
     .wait_idle = mtl_wait_idle,
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    .capture_begin = de__mtl_capture_begin,
+    .capture_end = de__mtl_capture_end,
+#endif
     .buffer_create = de__mtl_buffer_create,
     .buffer_destroy = de__mtl_buffer_destroy,
     .texture_create = de__mtl_texture_create,

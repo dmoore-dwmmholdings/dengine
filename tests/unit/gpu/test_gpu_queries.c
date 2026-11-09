@@ -1155,3 +1155,31 @@ TEST_F(queries, object_names_d3d12, q_fx) {
 }
 
 #endif /* _WIN32 && DE_HAS_GPU_D3D12 */
+
+#if DE_HAS_GPU_METAL
+TEST_F(queries, capture_ownership_and_invalid_utf8_metal, q_fx) {
+    set_env("MTL_CAPTURE_ENABLED", "1");
+    open_backend(f, DE_GPU_METAL);
+    const char invalid[] = {'/', (char)0xff, 0};
+    EXPECT_EQ(de__mtl_capture_begin(f->d, invalid), DE_ERR_INVALID_ARGUMENT);
+    char path[512];
+    snprintf(path, sizeof path, "%s/owned-%llu.gputrace", DE_TEST_TMP_DIR,
+             (unsigned long long)de_time_now_ns());
+    const de_result began = de__mtl_capture_begin(f->d, path);
+    if (began == DE_ERR_UNSUPPORTED)
+        SKIP("native Metal document capture unavailable on this host");
+    ASSERT_EQ(began, DE_OK);
+    de_gpu_device *other = NULL;
+    const de_result created = de_gpu_device_create(
+        &(de_gpu_device_desc){.backend = DE_GPU_METAL, .pipeline_cache_dir = ""}, &other);
+    EXPECT_EQ(created, DE_OK);
+    if (other) {
+        EXPECT_EQ(de__mtl_capture_begin(other, path), DE_ERR_BUSY);
+        de__mtl_capture_end(other); /* The failed requester has no ownership to end. */
+        EXPECT_EQ(de__mtl_capture_begin(f->d, path), DE_ERR_BUSY);
+        de_gpu_device_destroy(other); /* Destruction must also leave the foreign owner alone. */
+        EXPECT_EQ(de__mtl_capture_begin(f->d, path), DE_ERR_BUSY);
+    }
+    de__mtl_capture_end(f->d);
+}
+#endif

@@ -82,6 +82,7 @@ typedef struct mtl_device {
     struct mtl_accel *accels;        /* protected by heap_lock, includes deferred retirements */
     void *accel_translate;           /* retained compute pipeline */
     void *device;                    /* id<MTLDevice> */
+    bool capture_owned;              /* protected by the process MTLCaptureManager monitor */
     void *queues[DE_QUEUE_COUNT_];   /* id<MTLCommandQueue>: graphics, compute, copy */
     void *timeline[DE_QUEUE_COUNT_]; /* id<MTLSharedEvent>: the front-end's internal values */
 

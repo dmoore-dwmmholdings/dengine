@@ -177,3 +177,6 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_animation.c
         editor/editor_animation_pose.c editor/editor_animation_pose.h)
 endif()
+
+# DENG-573: launch/hotkey capture is compiled out outside Debug/Dev.
+target_sources(de_host PRIVATE gpu_capture.c gpu_capture.h)

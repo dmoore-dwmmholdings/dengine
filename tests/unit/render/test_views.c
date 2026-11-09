@@ -1245,3 +1245,126 @@ TEST_F(views, post_settings_copy_reset_generation_and_frame_snapshot, vfx) {
     EXPECT_FLOAT_EQ(de_view_get_post(NULL, main).bloom_intensity, 0.04f, 0);
     stop(f);
 }
+
+#if defined(DE_DEV) || defined(DE_DEBUG)
+/* DENG-573: actual renderer frames with a recording capture adapter. The null GPU still
+ * executes the production graph/fence lifecycle; these controls do not claim native capture. */
+static de__gpu_backend_vtable capture_vtable;
+static u32 capture_begins, capture_ends;
+static de_result capture_begin_result;
+static char capture_seen_path[1024];
+static de_result record_capture_begin(de_gpu_device *d, const char *path) {
+    (void)d;
+    ++capture_begins;
+    snprintf(capture_seen_path, sizeof capture_seen_path, "%s", path);
+    return capture_begin_result;
+}
+static void record_capture_end(de_gpu_device *d) {
+    (void)d;
+    ++capture_ends;
+}
+static void install_capture(vfx *f) {
+    capture_vtable = *f->d->vt;
+    capture_vtable.capture_begin = record_capture_begin;
+    capture_vtable.capture_end = record_capture_end;
+    f->d->vt = &capture_vtable;
+    capture_begins = capture_ends = 0;
+    capture_begin_result = DE_OK;
+}
+TEST_F(views, capture_exact_frames_and_copied_request, vfx) {
+    start(f, DE_GPU_NULL);
+    install_capture(f);
+    char path[] = "/tmp/copied.gputrace";
+    ASSERT_EQ(de__render_capture_request(f->r, path, 2), DE_OK);
+    path[5] = 'X';
+    EXPECT_EQ(de__render_capture_request(f->r, "/tmp/rejected.gputrace", 1), DE_ERR_BUSY);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_begins, 1u);
+    EXPECT_EQ(capture_ends, 0u);
+    EXPECT_TRUE(strcmp(capture_seen_path, "/tmp/copied.gputrace") == 0);
+    EXPECT_EQ(de__render_capture_request(f->r, "/tmp/rejected.gputrace", 1), DE_ERR_BUSY);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_ends, 1u);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_begins, 1u);
+    EXPECT_EQ(capture_ends, 1u);
+    stop(f);
+    EXPECT_EQ(capture_ends, 1u);
+}
+TEST_F(views, capture_failed_begin_never_ends_foreign, vfx) {
+    start(f, DE_GPU_NULL);
+    install_capture(f);
+    capture_begin_result = DE_ERR_BUSY;
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/foreign.gputrace", 1), DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_begins, 1u);
+    EXPECT_EQ(capture_ends, 0u);
+    capture_begin_result = DE_OK;
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/retry.gputrace", 1), DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_begins, 2u);
+    EXPECT_EQ(capture_ends, 1u);
+    stop(f);
+    EXPECT_EQ(capture_ends, 1u);
+}
+TEST_F(views, capture_abort_retains_error_and_destroy_owns_cleanup, vfx) {
+    start(f, DE_GPU_NULL);
+    install_capture(f);
+    EXPECT_EQ(de__render_capture_request(f->r, "", 1), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__render_capture_request(f->r, "/tmp/a.gputrace", 101), DE_ERR_INVALID_ARGUMENT);
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/partial.gputrace", 3), DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    (void)DE_FAIL(DE_ERR_IO, "capture original sentinel");
+    const de_error *original = de_error_last();
+    de__render_capture_frame(f->r, false);
+    EXPECT_TRUE(de_error_last() == original);
+    EXPECT_TRUE(strcmp(de_error_last()->message, "capture original sentinel") == 0);
+    EXPECT_EQ(capture_ends, 1u);
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/destroy.gputrace", 3), DE_OK);
+    ASSERT_EQ(frame(f), DE_OK);
+    stop(f);
+    EXPECT_EQ(capture_begins, 2u);
+    EXPECT_EQ(capture_ends, 2u);
+}
+TEST_F(views, capture_pending_destroy_does_not_start, vfx) {
+    start(f, DE_GPU_NULL);
+    install_capture(f);
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/pending.gputrace", 1), DE_OK);
+    stop(f);
+    EXPECT_EQ(capture_begins, 0u);
+    EXPECT_EQ(capture_ends, 0u);
+}
+#endif
+
+#if defined(DE_DEV) || defined(DE_DEBUG)
+TEST_F(views, capture_minimized_skips_and_acquire_error_aborts, vfx) {
+    start(f, DE_GPU_NULL);
+    install_capture(f);
+    ASSERT_EQ(de__render_capture_request(f->r, "/tmp/skipped.gputrace", 3), DE_OK);
+    /* A minimized surface returns before handle lookup or submission. No real window is needed. */
+    f->r->swapchain.id = 0xdeadbeef;
+    f->r->window_w = f->r->window_h = 0;
+    EXPECT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    EXPECT_EQ(capture_begins, 0u);
+    EXPECT_EQ(f->r->capture.completed, 0u);
+    f->r->swapchain.id = 0;
+    ASSERT_EQ(frame(f), DE_OK);
+    EXPECT_EQ(capture_begins, 1u);
+    EXPECT_EQ(f->r->capture.completed, 1u);
+    f->r->swapchain.id = 0xdeadbeef;
+    EXPECT_EQ(de_renderer_render_frame(f->r), DE_OK);
+    EXPECT_EQ(f->r->capture.completed, 1u);
+    EXPECT_EQ(capture_ends, 0u);
+    /* Actual acquisition validates this stale handle and fails before any native access. */
+    f->r->window_w = f->r->swapchain_w = 64;
+    f->r->window_h = f->r->swapchain_h = 48;
+    EXPECT_EQ(de_renderer_render_frame(f->r), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(capture_ends, 1u);
+    EXPECT_TRUE(de_error_last() != NULL);
+    EXPECT_TRUE(strstr(de_error_last()->message, "swapchain image") != NULL);
+    EXPECT_TRUE(de_error_last()->cause != NULL);
+    f->r->swapchain.id = 0;
+    stop(f);
+    EXPECT_EQ(capture_ends, 1u);
+}
+#endif

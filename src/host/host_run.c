@@ -281,8 +281,15 @@ int de_host_run(const de_host_desc *desc) {
         r = host_mount_dev_dir(&h, &dev_mounted);
     if (r == DE_OK)
         r = host_load_config(&h);
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    if (r == DE_OK)
+        r = de__host_capture_prepare(&h);
+#endif
     if (r == DE_OK)
         r = host_run_game(&h);
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__host_capture_cleanup(&h);
+#endif
     if (r != DE_OK) {
         de__host_log_error("de_host_run failed");
         exit_code = 1;

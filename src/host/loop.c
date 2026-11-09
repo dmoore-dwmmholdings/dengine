@@ -201,6 +201,9 @@ static void loop_input_update(de__host *h) {
 /* Step 5, second half: kicks the render thread to record the extracted frame (DENG-175; a frame
  * error is logged by the renderer). Nothing without a renderer. */
 static void loop_render_kick(de__host *h) {
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__host_capture_poll(h);
+#endif
 #if DE_HAS_RENDER
     if (h->engine->renderer != NULL)
         (void)de__render_extract_and_kick(h->engine->renderer, h->engine->world);

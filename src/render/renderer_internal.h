@@ -32,6 +32,7 @@
 #include <dengine/de_platform.h>
 #include <dengine/de_render.h>
 #include "asset/asset_internal.h"
+#include "render/capture_internal.h"
 
 DE_EXTERN_C_BEGIN
 
@@ -202,6 +203,9 @@ struct de_renderer {
     struct de__sprite_as *sprite_as;
     de_plane_2d plane_2d;
     u32 material_instances_live; /**< live runtime instances at the last kick (stats) */
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__render_capture capture;
+#endif
 };
 
 /* ---------- Settings (settings.c) ---------- */

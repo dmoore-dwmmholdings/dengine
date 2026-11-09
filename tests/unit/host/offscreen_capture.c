@@ -276,15 +276,19 @@ static void systems(de_engine *e, de_world *w) {
 static int option_error(void) {
     fprintf(stderr, "usage: de-offscreen-capture --backend null|metal|vulkan|d3d12 --pipeline 0|1 "
                     "--fail-after 0..4 --scratch <existing-directory> [--output <rgba-file>] "
-                    "[--allow-native]\n");
+                    "[--allow-native] [--gpu-capture]\n");
     return 2;
 }
 int main(int argc, char **argv) {
-    bool allow_native = false;
+    bool allow_native = false, gpu_capture = false;
     const char *scratch = NULL;
     state.backend = DE_GPU_NULL;
     state.capture_result = DE_OK;
     for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--gpu-capture")) {
+            gpu_capture = true;
+            continue;
+        }
         if (!strcmp(argv[i], "--allow-native")) {
             allow_native = true;
             continue;
@@ -338,11 +342,11 @@ int main(int argc, char **argv) {
                        .shutdown = shutdown,
                        .register_types = types,
                        .register_systems = systems};
-    char *args[] = {"offscreen_capture", "--frames", "4"};
+    char *args[] = {"offscreen_capture", "--frames", "4", "--gpu-capture"};
     int host = de_host_run(&(de_host_desc){.static_api = &api,
                                            .offscreen = true,
                                            .game_toml = "game:/offscreen.toml",
-                                           .argc = 3,
+                                           .argc = gpu_capture ? 4 : 3,
                                            .argv = args});
     de_log_flush();
     de_tracking_stats tracked = de_tracking_allocator_stats(&state.tracking);

@@ -389,6 +389,11 @@ typedef struct de__gpu_backend_vtable {
     /* DENG-734: reserved descriptors between the shared buffer and acceleration ranges.
      * D3D12 puts its buffers' read-only views here; zero preserves ordinary shared numbering. */
     u32 bindless_shared_buffer_srv_count;
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    /* DENG-573: optional owned native capture; NULL means unsupported. */
+    de_result (*capture_begin)(de_gpu_device *, const char *);
+    void (*capture_end)(de_gpu_device *);
+#endif
 } de__gpu_backend_vtable;
 
 /** Backends compiled into the build. Each backend task adds its declaration here. */

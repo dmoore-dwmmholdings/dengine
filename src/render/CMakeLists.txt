@@ -547,3 +547,8 @@ if(TARGET de_render AND DE_BUILD_TOOLS)
         loaders/preview_geometry.h)
     target_include_directories(de_render PRIVATE "${DE_ROOT_DIR}/tools")
 endif()
+
+# DENG-573: private capture lifecycle; compiled out outside Debug/Dev.
+if(TARGET de_render)
+    target_sources(de_render PRIVATE capture.c capture_internal.h)
+endif()

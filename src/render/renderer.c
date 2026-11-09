@@ -163,6 +163,9 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     if (r == NULL)
         return DE_FAIL_WRAP(DE_ERR_OUT_OF_MEMORY, "de_renderer_create: renderer");
     memset(r, 0, sizeof *r);
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de_atomic_init_u32(&r->capture.state, 0);
+#endif
     r->alloc = a;
     r->dev = desc->device;
     r->assets = desc->assets;
@@ -412,6 +415,9 @@ void de_renderer_destroy(de_renderer *r) {
         (void)de_gpu_fence_wait(r->dev, r->frame_fence, r->frame_index,
                                 DE__RENDER_FENCE_TIMEOUT_NS);
     de_gpu_wait_idle(r->dev); /* also the copy queue and every deferred destruction */
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__render_capture_abort(r);
+#endif
     renderer_free(r);
 }
 
@@ -542,9 +548,13 @@ de_result de_renderer_render_frame(de_renderer *r) {
         const de_result w = de_gpu_fence_wait(r->dev, r->frame_fence, n + 1u - r->frames_in_flight,
                                               DE__RENDER_FENCE_TIMEOUT_NS);
         r->stats.frame_wait_ms = (f32)((de_time_now_ns() - wait_begin) * 1e-6);
-        if (w != DE_OK)
+        if (w != DE_OK) {
+#if defined(DE_DEV) || defined(DE_DEBUG)
+            de__render_capture_abort(r);
+#endif
             return DE_FAIL_WRAP(w, "de_renderer_render_frame: waiting for frame %llu",
                                 (unsigned long long)(n - r->frames_in_flight));
+        }
     }
     de_arena *arena = r->arenas[n % r->frames_in_flight];
     de_arena_reset(arena);
@@ -570,9 +580,13 @@ de_result de_renderer_render_frame(de_renderer *r) {
             return DE_OK; /* minimised: nothing to draw */
         if (ww != r->swapchain_w || wh != r->swapchain_h) {
             const de_result rs = de_gpu_swapchain_resize(r->dev, r->swapchain, ww, wh);
-            if (rs != DE_OK)
+            if (rs != DE_OK) {
+#if defined(DE_DEV) || defined(DE_DEBUG)
+                de__render_capture_abort(r);
+#endif
                 return DE_FAIL_WRAP(rs, "de_renderer_render_frame: swapchain resize to %ux%u", ww,
                                     wh);
+            }
             r->swapchain_w = ww;
             r->swapchain_h = wh;
         }
@@ -581,14 +595,21 @@ de_result de_renderer_render_frame(de_renderer *r) {
         r->stats.frame_acquire_ms = (f32)((de_time_now_ns() - acquire_begin) * 1e-6);
         if (a == DE_ERR_BUSY)
             return DE_OK; /* no image (minimised, resizing): nothing to draw */
-        if (a != DE_OK)
+        if (a != DE_OK) {
+#if defined(DE_DEV) || defined(DE_DEBUG)
+            de__render_capture_abort(r);
+#endif
             return DE_FAIL_WRAP(a, "de_renderer_render_frame: swapchain image");
+        }
         final_access = DE_ACCESS_PRESENT;
     }
     const de__gpu_texture *t = de__gpu_get_texture(r->dev, target);
     de__views_set_output_size(r, t != NULL ? t->width : 0, t != NULL ? t->height : 0,
                               t != NULL ? t->format : DE__RENDER_OFFSCREEN_FORMAT);
 
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__render_capture_begin(r);
+#endif
     /* DENG-177: the GPU scene's uploads, once per frame in its own graph; queue order makes
      * them visible to every view graph. */
     const de_result sr = de__gpu_scene_frame(r->gpu_scene, arena, n);
@@ -602,13 +623,24 @@ de_result de_renderer_render_frame(de_renderer *r) {
     de__gpu_scene_fill_stats(r->gpu_scene, &r->stats);
     de__material_fill_stats(r, &r->stats); /* DENG-302 */
     r->frame_index = n + 1u;
+    de_result presented = DE_OK;
     if (DE_HANDLE_VALID(r->swapchain)) {
         const u64 present_begin = de_time_now_ns();
         const de_result p = de_gpu_swapchain_present(r->dev, r->swapchain);
+        presented = p;
         r->stats.frame_present_ms = (f32)((de_time_now_ns() - present_begin) * 1e-6);
-        if (p != DE_OK && p != DE_ERR_BUSY)
+        if (p != DE_OK && p != DE_ERR_BUSY) {
+#if defined(DE_DEV) || defined(DE_DEBUG)
+            de__render_capture_abort(r);
+#endif
             return DE_FAIL_WRAP(p, "de_renderer_render_frame: present");
+        }
     }
+#if defined(DE_DEV) || defined(DE_DEBUG)
+    de__render_capture_frame(r, sr == DE_OK && vr == DE_OK && presented == DE_OK);
+#else
+    (void)presented;
+#endif
     return vr;
 }
 

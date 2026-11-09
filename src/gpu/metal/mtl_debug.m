@@ -129,22 +129,30 @@ static bool is_metal(de_gpu_device *d) {
 }
 
 de_result de__mtl_capture_begin(de_gpu_device *d, const char *path) {
-    if (!is_metal(d) || !path)
+    if (!is_metal(d) || !path || !*path)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de__mtl_capture_begin: not a Metal device");
     @autoreleasepool {
+        NSString *nativePath = [NSString stringWithUTF8String:path];
+        if (!nativePath)
+            return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "metal: capture path is not UTF-8");
         MTLCaptureManager *mgr = [MTLCaptureManager sharedCaptureManager];
-        if (![mgr supportsDestination:MTLCaptureDestinationGPUTraceDocument])
-            return DE_FAIL(DE_ERR_UNSUPPORTED,
-                           "metal: GPU capture to a document is off; set MTL_CAPTURE_ENABLED=1 "
-                           "before the first Metal device");
-        MTLCaptureDescriptor *cd = [MTLCaptureDescriptor new];
-        cd.captureObject = (__bridge id<MTLDevice>)de__mtl_dev(d)->device;
-        cd.destination = MTLCaptureDestinationGPUTraceDocument;
-        cd.outputURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
-        NSError *err = nil;
-        if (![mgr startCaptureWithDescriptor:cd error:&err])
-            return DE_FAIL(DE_ERR_UNSUPPORTED, "metal: startCaptureWithDescriptor (%s): %s", path,
-                           err ? err.localizedDescription.UTF8String : "no reason given");
+        @synchronized(mgr) {
+            if (mgr.isCapturing)
+                return DE_FAIL(DE_ERR_BUSY, "metal: another GPU capture is already active");
+            if (![mgr supportsDestination:MTLCaptureDestinationGPUTraceDocument])
+                return DE_FAIL(DE_ERR_UNSUPPORTED,
+                               "metal: GPU capture to a document is off; set MTL_CAPTURE_ENABLED=1 "
+                               "before the first Metal device");
+            MTLCaptureDescriptor *cd = [MTLCaptureDescriptor new];
+            cd.captureObject = (__bridge id<MTLDevice>)de__mtl_dev(d)->device;
+            cd.destination = MTLCaptureDestinationGPUTraceDocument;
+            cd.outputURL = [NSURL fileURLWithPath:nativePath];
+            NSError *err = nil;
+            if (![mgr startCaptureWithDescriptor:cd error:&err])
+                return DE_FAIL(DE_ERR_UNSUPPORTED, "metal: startCaptureWithDescriptor (%s): %s",
+                               path, err ? err.localizedDescription.UTF8String : "no reason given");
+            de__mtl_dev(d)->capture_owned = true;
+        }
     }
     return DE_OK;
 }
@@ -154,8 +162,13 @@ void de__mtl_capture_end(de_gpu_device *d) {
         return;
     @autoreleasepool {
         MTLCaptureManager *mgr = [MTLCaptureManager sharedCaptureManager];
-        if (mgr.isCapturing)
-            [mgr stopCapture];
+        @synchronized(mgr) {
+            if (de__mtl_dev(d)->capture_owned) {
+                de__mtl_dev(d)->capture_owned = false;
+                if (mgr.isCapturing)
+                    [mgr stopCapture];
+            }
+        }
     }
 }
 
