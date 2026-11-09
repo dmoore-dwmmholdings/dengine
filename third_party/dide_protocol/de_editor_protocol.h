@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.8"
-#define DE_EP_SCHEMA_HASH "eb33822460ae9041"
+#define DE_EP_PROTOCOL_VERSION "1.9"
+#define DE_EP_SCHEMA_HASH "2b82864390b44b52"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -891,12 +891,14 @@ struct de_ep_limits {
 
 struct de_ep_hello_result {
     de_ep_str protocol; /* the agreed version: equal major, lower minor */
+    bool has_server_protocol;
+    de_ep_str server_protocol; /* the server native protocol version corresponding to schema; required from 1.9, absent in legacy replies */
     de_ep_list_str capabilities;
     de_ep_build_info build;
     de_ep_limits limits;
     uint32_t epoch;
     bool has_schema;
-    de_ep_str schema; /* the engine's schema hash: with an equal version it must equal the IDE's (DIDE-R154 AC1) */
+    de_ep_str schema; /* the engine native schema hash: compare only when serverProtocol equals the client native version (DIDE-R154 AC1) */
 };
 
 /* One input event. `type` is pointer, wheel, key, text, gesture or gamepad; the other fields are the ones that type uses. */

@@ -301,6 +301,8 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     de_ep_hello_result r;
     memset(&r, 0, sizeof r);
     r.protocol = de_ep_cstr(agreed);
+    r.has_server_protocol = true;
+    r.server_protocol = de_ep_cstr(DE_EP_PROTOCOL_VERSION);
     r.capabilities.items = caps;
     r.capabilities.count = ed->cap_count;
     ed_build_info(ed, &r.build);

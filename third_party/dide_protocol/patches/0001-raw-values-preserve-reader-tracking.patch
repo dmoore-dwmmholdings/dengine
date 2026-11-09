@@ -1,5 +1,5 @@
 DENG-730: raw MessagePack slices inside tracked containers.
-Pinned DIDE protocol 1.8-7a71f2779f8e (MPack 1.1.1, MIT).
+Pinned DIDE protocol 1.9-67d655e06fe7 (MPack 1.1.1, MIT).
 
 MPack reader_remaining() asserts that every compound is closed. Generated raw
 fields are decoded inside maps, so Debug builds abort despite valid input.
