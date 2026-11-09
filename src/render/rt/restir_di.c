@@ -747,6 +747,10 @@ de_result de__restir_di_build(de__restir_di *s, de_rg *g, de__vis_context *vc,
     de_rg_export(g, r.diffuse, DE_ACCESS_SHADER_READ);
     de_rg_export(g, r.specular, DE_ACCESS_SHADER_READ);
     de_rg_export(g, r.distance, DE_ACCESS_SHADER_READ);
+    /* Capture readers precede the in-place denoiser writes through graph dependencies. */
+    if (s->debug.capture_raw)
+        s->debug.capture_raw(s->debug.capture_user, g, vc->view, r.diffuse, r.specular, vc->width,
+                             vc->height);
     DE_TRY(de__denoise_diffuse(s->denoiser, g, vc, lc, r.diffuse, r.distance, s->debug.reference));
     DE_TRY(de__denoise_specular(s->denoiser, g, vc, lc, r.specular, r.distance, false,
                                 s->debug.reference, (de_rg_resource){0}, 1));
