@@ -81,3 +81,14 @@ set_tests_properties(deterministic_asm_check PROPERTIES
     RUN_SERIAL TRUE
     SKIP_REGULAR_EXPRESSION "deterministic_asm_check: SKIPPED"
     TIMEOUT 120)
+
+# DIDE-242: the committed IDE example must keep matching engine presets/files.
+find_package(Python3 3.11 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME flappy_project
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_flappy_project.py")
+    add_test(NAME flappy_project_oracles
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_flappy_project.py" --self-test)
+    set_tests_properties(flappy_project flappy_project_oracles PROPERTIES
+        LABELS check SKIP_RETURN_CODE 77 TIMEOUT 30)
+endif()
