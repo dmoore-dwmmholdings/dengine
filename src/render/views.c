@@ -20,7 +20,7 @@
  * view bumps the slot's generation, so the handle goes stale at once on both sides.
  *
  * GPU objects of a view: its de_rg (made at its first rendered frame) and its output texture
- * (remade when the internal size changes; the old one goes through the RHI's deferred
+ * (remade when the output size changes; the old one goes through the RHI's deferred
  * destruction). A destroyed view's graph and output are retired: released once the frame fence
  * passes the last frame that used them, so frames in flight never see them go.
  */
@@ -963,12 +963,8 @@ void de__views_freeze(de_renderer *r, de__render_world_frame *world) {
         viewport_px(m->viewport, tw, th, vf.viewport_px);
         vf.width = round_px(vf.viewport_px[2] * eff.render_scale, 1, 16384);
         vf.height = round_px(vf.viewport_px[3] * eff.render_scale, 1, 16384);
-        vf.output_width = vf.width;
-        vf.output_height = vf.height;
-        if (de__upscaler_policy(&eff, &m->display, m->pixel_art, m->capture)) {
-            vf.output_width = vf.viewport_px[2];
-            vf.output_height = vf.viewport_px[3];
-        }
+        vf.output_width = vf.viewport_px[2];
+        vf.output_height = vf.viewport_px[3];
         if (m->pixel_art) {
             vf.pixel_art = &m->pixel;
             u32 border = m->pixel.smooth_subpixel_scroll ? 2 : 0;
@@ -1030,12 +1026,8 @@ bool de_view_layout_info(de_renderer *r, de_view view, de_view_frame_info *out) 
     settings = effective_settings(r, m, &settings);
     vf.width = round_px(vf.viewport_px[2] * settings.render_scale, 1, 16384);
     vf.height = round_px(vf.viewport_px[3] * settings.render_scale, 1, 16384);
-    vf.output_width = vf.width;
-    vf.output_height = vf.height;
-    if (de__upscaler_policy(&settings, &m->display, m->pixel_art, m->capture)) {
-        vf.output_width = vf.viewport_px[2];
-        vf.output_height = vf.viewport_px[3];
-    }
+    vf.output_width = vf.viewport_px[2];
+    vf.output_height = vf.viewport_px[3];
     if (m->pixel_art) {
         vf.pixel_art = &m->pixel;
         u32 border = m->pixel.smooth_subpixel_scroll ? 2 : 0;
@@ -1104,10 +1096,7 @@ static bool ensure_objects(de_renderer *r, view_rs *s) {
             return false;
         }
     }
-    const bool temporal =
-        de__upscaler_policy(&s->eff, &s->copy.display, s->copy.pixel_art, s->copy.capture);
-    u32 output_w = s->copy.pixel_art || temporal ? s->vp[2] : s->w,
-        output_h = s->copy.pixel_art || temporal ? s->vp[3] : s->h;
+    const u32 output_w = s->vp[2], output_h = s->vp[3];
     if (DE_HANDLE_VALID(s->output) && s->out_w == output_w && s->out_h == output_h)
         return true;
     if (DE_HANDLE_VALID(s->output))
@@ -1204,6 +1193,24 @@ static bool prepare_hidden(de_renderer *r, view_rs *s, de__view_frame *vf) {
     if (!mapped)
         return false;
     memcpy(mapped, de__view_hidden_ids(vf->hidden), (size_t)count * sizeof(u64));
+    return true;
+}
+
+/* OUTPUT consumers use output pixels regardless of the scene's render scale. Temporal and
+ * pixel upscalers may already have promoted color; otherwise preserve the existing linear
+ * composite resolve after POST (including tonemapping), before screen-space UI and text. */
+static bool resolve_output(de__views *vs, de__view_frame *vf, de_arena *arena) {
+    if (vf->color.id != vf->output.id && DE_HANDLE_VALID(vf->color)) {
+        const de__composite_item it = {
+            .src = vf->color, .rect = {0, 0, (f32)vf->output_width, (f32)vf->output_height}};
+        if (!de__composite_add(vs->composite, vf->graph, arena, "view.resolve", vf->output,
+                               DE__VIEW_OUTPUT_FORMAT, (const f32[4]){0, 0, 0, 1}, &it, 1))
+            return false;
+        vf->color = vf->output;
+        vf->color_format = DE__VIEW_OUTPUT_FORMAT;
+    }
+    vf->width = vf->output_width;
+    vf->height = vf->output_height;
     return true;
 }
 
@@ -1343,14 +1350,14 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vf.output = de_rg_import_texture(g, s->output, s->out_access);
     de_rg_set_name(g, vf.output, "view.output");
     vf.color = vf.output;
-    if (s->copy.pixel_art ||
-        (vf.temporal_enabled && (vf.width != vf.output_width || vf.height != vf.output_height))) {
+    if (s->copy.pixel_art || vf.width != vf.output_width || vf.height != vf.output_height) {
         vf.color = de_rg_create_texture(
-            g, &(de_gpu_texture_desc){.width = s->w,
-                                      .height = s->h,
-                                      .format = DE__VIEW_OUTPUT_FORMAT,
-                                      .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED,
-                                      .name = "pixel.internal"});
+            g,
+            &(de_gpu_texture_desc){.width = s->w,
+                                   .height = s->h,
+                                   .format = DE__VIEW_OUTPUT_FORMAT,
+                                   .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED,
+                                   .name = s->copy.pixel_art ? "pixel.internal" : "view.internal"});
     }
     vf.initial_color = vf.color;
     vf.color_format = DE__VIEW_OUTPUT_FORMAT;
@@ -1363,6 +1370,7 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
         return;
     }
     bool path_started = false;
+    bool output_started = false;
     /* The stages and hooks, in slot, order, phase and registration order. */
     vs->building = &vf;
     for (u32 i = 0; i < vs->list_count; ++i) {
@@ -1383,6 +1391,15 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
             de__pt_build(&vf, r->pt);
             path_started = true;
         }
+        if (e->slot == DE__VIEW_SLOT_OUTPUT && !output_started) {
+            if (!resolve_output(vs, &vf, arena)) {
+                vs->building = NULL;
+                de__gpu_scene_view_instances(r->gpu_scene, (de_gpu_buffer){0});
+                view_failed(r, s, "output resolve");
+                return;
+            }
+            output_started = true;
+        }
         if (e->hook)
             e->hook_fn(g, handle, e->user);
         else
@@ -1393,12 +1410,9 @@ static void render_view(de_renderer *r, de__views *vs, de_arena *arena,
     vs->building = NULL;
     de__gpu_scene_view_instances(r->gpu_scene, (de_gpu_buffer){0});
 
-    if (vf.color.id != vf.output.id && DE_HANDLE_VALID(vf.color)) {
-        const de__composite_item it = {.src = vf.color,
-                                       .rect = {0.0f, 0.0f, (f32)s->out_w, (f32)s->out_h}};
-        (void)de__composite_add(vs->composite, g, arena, "view.resolve", vf.output,
-                                DE__VIEW_OUTPUT_FORMAT, (const f32[4]){0.0f, 0.0f, 0.0f, 1.0f}, &it,
-                                1);
+    if (!resolve_output(vs, &vf, arena)) {
+        view_failed(r, s, "output resolve");
+        return;
     }
     if (rtt) {
         const de__composite_item it = {

@@ -233,6 +233,142 @@ static de_vec4 read_float_pixel(ui_fx *f, de_gpu_texture target, de_gpu_buffer b
     ASSERT_TRUE(p);
     return p[y * 512 + x];
 }
+typedef struct scale_snapshot {
+    de_renderer *renderer;
+    de_view view;
+    de_view_frame_info frame;
+    de_render_hook_info hook;
+    bool captured;
+} scale_snapshot;
+static void capture_scale(de_rg *graph, de_view view, void *user) {
+    (void)graph;
+    scale_snapshot *s = user;
+    if (view.id == s->view.id)
+        s->captured = de_view_frame_info_get(s->renderer, view, &s->frame) &&
+                      de_view_hook_info(s->renderer, view, &s->hook);
+}
+TEST_F(ui_draw, metal_output_pixel_geometry_is_independent_of_render_scale, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_gpu_buffer readback;
+    de_view view;
+    de_gpu_texture target = floating_view(f, &readback, &view);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){0, 0, 0, 1}, 1);
+    de_entity rect = ui_node(f, root);
+    dimensions(f, rect, 100, 60);
+    style(f, rect, (de_vec4){1, 1, 1, 1}, 1);
+    scale_snapshot snapshot = {.renderer = f->renderer, .view = view};
+    de_render_add_hook(f->renderer, DE_HOOK_UI, capture_scale, &snapshot);
+    const f32 scales[] = {1.f, .67f, .67f};
+    for (u32 phase = 0; phase < 3; ++phase) {
+        de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+        settings.render_scale = scales[phase];
+        if (phase == 2)
+            settings.upscaler = DE_UPSCALE_NONE;
+        de_renderer_set_settings(f->renderer, &settings);
+        snapshot.captured = false;
+        /* Settings are frozen during extraction from the preceding frame snapshot. */
+        draw_kick(f);
+        draw_kick(f);
+        ASSERT_TRUE(snapshot.captured);
+        EXPECT_EQ(snapshot.frame.internal_width, phase ? 343u : 512u);
+        EXPECT_EQ(snapshot.hook.width, 512u);
+        EXPECT_EQ(snapshot.hook.height, 512u);
+        EXPECT_EQ(snapshot.hook.color_format, DE_FMT_RGBA16_FLOAT);
+        (void)read_float_pixel(f, target, readback, 0, 0);
+        const de_vec4 *pixels = de_gpu_buffer_map(f->device, readback);
+        ASSERT_TRUE(pixels);
+        u32 count = 0, right = 0, bottom = 0;
+        for (u32 y = 0; y < 512; ++y)
+            for (u32 x = 0; x < 512; ++x) {
+                de_vec4 c = pixels[y * 512 + x];
+                if (c.x > .8f && c.y > .8f && c.z > .8f) {
+                    ++count;
+                    if (x > right)
+                        right = x;
+                    if (y > bottom)
+                        bottom = y;
+                }
+            }
+        printf("render_scale=%.2f white=%u right=%u bottom=%u\n", scales[phase], count, right,
+               bottom);
+        EXPECT_EQ(count, 6000u);
+        EXPECT_EQ(right, 99u);
+        EXPECT_EQ(bottom, 59u);
+    }
+    de_gpu_wait_idle(f->device);
+    de_gpu_buffer_destroy(f->device, readback);
+    de_gpu_texture_destroy(f->device, target);
+}
+TEST_F(ui_draw, metal_main_ui_output_pixels_without_temporal_upscale, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    f->ui->desc.reference_height = 720;
+    de_ui_set_viewport(f->ui, 1280, 720, (de_window_insets){0});
+    de_view view = de_renderer_main_view(f->renderer);
+    de_builtin_component_ids bi = de_builtin_components(f->world);
+    de_component camera = de_component_find(f->world, "DeCamera");
+    de_entity e = de_entity_spawn(f->world);
+    *(DeTransform *)de_entity_add(f->world, e, bi.transform) = de_transform_identity();
+    *(DeCamera *)de_entity_add(f->world, e, camera) = (DeCamera){
+        .view = view, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){0, 0, 0, 1}, 1);
+    de_entity rect = ui_node(f, root);
+    dimensions(f, rect, 100, 60);
+    style(f, rect, (de_vec4){1, 1, 1, 1}, 1);
+    de_gpu_buffer buffer =
+        de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 1280u * 720u * 4u,
+                                                              .usage = DE_USAGE_COPY_DST,
+                                                              .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(buffer.id);
+    scale_snapshot snapshot = {.renderer = f->renderer, .view = view};
+    de_render_add_hook(f->renderer, DE_HOOK_UI, capture_scale, &snapshot);
+    for (u32 phase = 0; phase < 4; ++phase) {
+        de_render_settings settings = de_render_settings_preset(DE_TIER_BASE, DE_QUALITY_LOW);
+        settings.render_scale = phase ? .67f : 1.f;
+        if (phase == 2)
+            settings.upscaler = DE_UPSCALE_NONE;
+        const de_view_display display = {.disabled_features =
+                                             phase == 3 ? DE_VIEW_DISABLE_POST_EFFECTS : 0};
+        ASSERT_EQ(de_view_set_display(f->renderer, view, &display), DE_OK);
+        de_renderer_set_settings(f->renderer, &settings);
+        snapshot.captured = false;
+        draw_kick(f);
+        draw_kick(f);
+        de_gpu_texture target = de__renderer_offscreen(f->renderer);
+        de_gpu_cmd *cmd =
+            de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "UI output geometry probe");
+        de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, 1280 * 4, target, 0, 0);
+        ASSERT_EQ(de_gpu_queue_submit(f->device, DE_QUEUE_GRAPHICS,
+                                      &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+                  DE_OK);
+        de_gpu_wait_idle(f->device);
+        const u8 *pixels = de_gpu_buffer_map(f->device, buffer);
+        ASSERT_TRUE(pixels);
+        ASSERT_TRUE(snapshot.captured);
+        EXPECT_EQ(snapshot.frame.internal_width, phase ? 858u : 1280u);
+        EXPECT_EQ(snapshot.hook.width, 1280u);
+        EXPECT_EQ(snapshot.hook.height, 720u);
+        EXPECT_EQ(snapshot.hook.color_format, DE_FMT_RGBA16_FLOAT);
+        u32 count = 0, right = 0, bottom = 0;
+        for (u32 y = 0; y < 720; ++y)
+            for (u32 x = 0; x < 1280; ++x) {
+                const u8 *c = pixels + (y * 1280 + x) * 4;
+                if (c[0] > 204 && c[1] > 204 && c[2] > 204) {
+                    ++count;
+                    if (x > right)
+                        right = x;
+                    if (y > bottom)
+                        bottom = y;
+                }
+            }
+        printf("main phase=%u white=%u right=%u bottom=%u\n", phase, count, right, bottom);
+        EXPECT_EQ(count, 6000u);
+        EXPECT_EQ(right, 99u);
+        EXPECT_EQ(bottom, 59u);
+    }
+    de_gpu_buffer_destroy(f->device, buffer);
+}
 TEST_F(ui_draw, metal_paint_change_updates_pixels_without_geometry_relayout, ui_fx) {
     draw_renderer(f, DE_GPU_METAL);
     de_gpu_buffer readback;
@@ -504,7 +640,7 @@ TEST_F(ui_draw, metal_bound_text_tint_changes_actual_glyph_pixels_with_default_s
     binding->source = source;
     strcpy(binding->path, "UiTintSource.color");
     strcpy(binding->property, "tint");
-    for (u32 phase = 0; phase < 2; ++phase) {
+    for (u32 phase = 0; phase < 3; ++phase) {
         ((UiTintSource *)de_entity_get(f->world, source, source_component))->color =
             phase ? (de_vec4){0, 1, 0, 1} : (de_vec4){1, 0, 0, 1};
         for (u32 frame = 0; frame < 3; ++frame) {
