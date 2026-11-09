@@ -1,3 +1,6 @@
 {
-  "cmake.configurePreset": "windows-clang-cl-dev"
+  "cmake.configurePreset": "windows-clang-cl-dev",
+  "[c]": {
+    "editor.formatOnSave": true
+  }
 }
