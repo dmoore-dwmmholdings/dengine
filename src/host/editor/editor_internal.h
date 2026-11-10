@@ -96,6 +96,7 @@ void de__editor_stop(struct de__host *h);
 void de__ed_on(de__editor *ed, de_ep_method m, de__ed_handler fn);
 void de__ed_on_tick(de__editor *ed, de__ed_tick_fn fn);
 void de__ed_on_reset(de__editor *ed, de__ed_reset_fn fn);
+void de__ed_assets_shutdown(de__editor *ed);
 void de__ed_add_capability(de__editor *ed, const char *cap);
 #if DE_HAS_RENDER
 void de__ed_preview_register(de__editor *ed);
@@ -112,6 +113,8 @@ void de__ed_settings_shutdown(de__editor *ed);
 void de__ed_defer(de__editor *ed);
 /** Starts a writer over the response buffer, outside a dispatch. */
 void de__ed_respond_begin(de__editor *ed, mpack_writer_t *w);
+/** Replaces an oversized response with the ordinary Busy error; caller still owns the writer. */
+void de__ed_respond_limit(de__editor *ed, mpack_writer_t *w, u64 request);
 
 /** Writes an error response; `fmt` is printf-style. */
 void de__ed_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *fmt, ...);
