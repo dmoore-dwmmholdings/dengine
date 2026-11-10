@@ -487,3 +487,10 @@ if(TARGET test_owned_probe)
         DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
 endif()
+
+# world.entity must distinguish missing entities from a response-arena failure.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_entity SOURCES test_editor_entity.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_entity PRIVATE "${DE_ROOT_DIR}/src")
+endif()
