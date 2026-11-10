@@ -1,3 +1,6 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "de_test.h"
 #include <dengine/de_debug.h>
 #include <dengine/de_gpu.h>
@@ -11,7 +14,83 @@
 #include "render/rt/rt_shadows.h"
 #include "render/components_internal.h"
 #include "render/world/render_world.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <direct.h>
+#include <process.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+/* Diagnostic input capture only: the existing CI dump directory is already uploaded. Keep
+ * shaders and the original native call unchanged, including when capture I/O fails. */
+#define DXIL_CAPTURE_BYTES (64ull * 1024ull * 1024ull)
+static u64 capture_bytes;
+static u32 capture_serial;
+static void capture_blob(const char *directory, unsigned long pid, u32 serial, const char *role,
+                         u32 index, de_gpu_shader_blob blob) {
+    if (!blob.code || !blob.size)
+        return;
+    if (blob.size > DXIL_CAPTURE_BYTES - capture_bytes) {
+        fprintf(stderr, "DXIL capture: byte limit reached for %s%u\n", role, index);
+        return;
+    }
+    char path[1024];
+    int n = snprintf(path, sizeof path, "%s/rt-lazy-%lu-%u-%s-%u.dxil", directory, pid, serial,
+                     role, index);
+    if (n < 0 || (size_t)n >= sizeof path) {
+        fprintf(stderr, "DXIL capture: output path is too long\n");
+        return;
+    }
+    FILE *file = fopen(path, "wbx"); /* Never replace earlier evidence. */
+    if (!file) {
+        fprintf(stderr, "DXIL capture: cannot create %s (%s)\n", path, strerror(errno));
+        return;
+    }
+    const size_t written = fwrite(blob.code, 1, (size_t)blob.size, file);
+    const int closed = fclose(file);
+    capture_bytes += written;
+    fprintf(stderr, "DXIL capture: %s entry=%s bytes=%llu/%llu close=%d\n", path,
+            blob.entry ? blob.entry : "main", (unsigned long long)written,
+            (unsigned long long)blob.size, closed);
+}
+static void capture_rt_inputs(const de_gpu_pipeline_desc *desc) {
+    const char *directory = getenv("DE_TEST_DUMP_DIR");
+    if (!directory || !directory[0] || desc->kind != DE_PIPE_RAYTRACING || !desc->rt ||
+        !desc->name || strcmp(desc->name, "PT iterative raygen") || capture_serial >= 4)
+        return;
+    const de_gpu_rt_desc *rt = desc->rt;
+    if (rt->miss_count > 16 || rt->hit_group_count > 16 || (rt->miss_count && !rt->miss) ||
+        (rt->hit_group_count && !rt->hit_groups)) {
+        fprintf(stderr, "DXIL capture: unsupported diagnostic library count\n");
+        return;
+    }
+#if defined(_WIN32)
+    const unsigned long pid = (unsigned long)_getpid();
+    const int made = _mkdir(directory);
+#else
+    const unsigned long pid = (unsigned long)getpid();
+    const int made = mkdir(directory, 0700);
+#endif
+    if (made != 0 && errno != EEXIST) {
+        fprintf(stderr, "DXIL capture: cannot create output directory (%s)\n", strerror(errno));
+        return;
+    }
+    const u32 serial = ++capture_serial;
+    fprintf(stderr, "DXIL capture: pid=%lu serial=%u recursion=%u payload=%u attributes=%u\n", pid,
+            serial, rt->max_recursion, rt->payload_bytes, rt->attribute_bytes);
+    capture_blob(directory, pid, serial, "raygen", 0, rt->raygen);
+    for (u32 i = 0; i < rt->miss_count; ++i)
+        capture_blob(directory, pid, serial, "miss", i, rt->miss[i]);
+    for (u32 i = 0; i < rt->hit_group_count; ++i) {
+        capture_blob(directory, pid, serial, "closest", i, rt->hit_groups[i].closest_hit);
+        capture_blob(directory, pid, serial, "any", i, rt->hit_groups[i].any_hit);
+    }
+}
 
 typedef struct lazy_fx {
     de_gpu_device *device;
@@ -44,6 +123,8 @@ static de_result pipeline_probe(de_gpu_device *device, de__gpu_pipeline *pipelin
         ++f->failures;
         return DE_FAIL(DE_ERR_UNSUPPORTED, "injected native pipeline failure");
     }
+    if (de_gpu_get_caps(device)->backend == DE_GPU_D3D12)
+        capture_rt_inputs(desc);
     de_result result = f->native->pipeline_create(device, pipeline, desc);
     if (result == DE_OK)
         ++f->successes;
