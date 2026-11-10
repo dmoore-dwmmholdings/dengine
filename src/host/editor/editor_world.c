@@ -353,17 +353,23 @@ static void on_entity(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     DE__ED_PARAMS(world_entity, de_ep_entity_params, q);
     de_ep_entity_result res;
     memset(&res, 0, sizeof res);
-    res.entities.items = (de_ep_entity_row *)de__ed_alloc(a, sizeof(de_ep_entity_row) * (q.ids.count + 1));
+    res.entities.items =
+        (de_ep_entity_row *)de__ed_alloc(a, sizeof(de_ep_entity_row) * (q.ids.count + 1));
     if (res.entities.items == NULL) {
         de__ed_error(w, req->id, DE_EP_ERR_BUSY, "world.entity: too many ids");
         return;
     }
     for (u32 i = 0; i < q.ids.count; ++i) {
         const de_entity e = {q.ids.items[i]};
-        if (!de__ed_entity_row(ed, a, e, q.has_components ? &q.components : NULL, NULL,
-                               &res.entities.items[res.entities.count])) {
+        if (!de_entity_alive(W(ed), e)) {
             de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "entity %llu",
                          (unsigned long long)e.bits);
+            return;
+        }
+        if (!de__ed_entity_row(ed, a, e, q.has_components ? &q.components : NULL, NULL,
+                               &res.entities.items[res.entities.count])) {
+            /* A live entity's row can fail when the response arena is exhausted. */
+            de__ed_error(w, req->id, DE_EP_ERR_BUSY, "world.entity: row exceeds response arena");
             return;
         }
         ++res.entities.count;
