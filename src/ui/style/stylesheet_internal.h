@@ -70,6 +70,7 @@ typedef struct de_ui_style_cache {
 } de_ui_style_cache;
 typedef struct de_ui_style_input {
     de_entity entity;
+    de_name class_name;
     u32 widget, state;
 } de_ui_style_input;
 typedef struct de_ui_property_tween {
