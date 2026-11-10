@@ -386,6 +386,12 @@ static void apply_text(de_ui_binding_system *s, de_ui_binding_cache *c, const vo
     edit->loc_id = (de_name){0};
     ++s->writes;
 }
+static u64 next_style_revision(de_ui_binding_system *s) {
+    /* Zero is reserved for no active visual binding, including after unsigned wrap. */
+    if (++s->style_revision == 0)
+        ++s->style_revision;
+    return s->style_revision;
+}
 static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *source) {
     if (c->property == DE_UI_BIND_TEXT) {
         apply_text(s, c, source);
@@ -394,7 +400,7 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
     if (c->property == DE_UI_BIND_TINT) {
         put(s, c->entity, c->target, c->target_offset, source, sizeof(de_vec4));
         if (c->target.id == s->ui->ids.style.id)
-            c->style_revision = ++s->style_revision;
+            c->style_revision = next_style_revision(s);
         return;
     }
     long double value;
@@ -416,7 +422,7 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
         f32 scalar = (f32)fmaxl(-FLT_MAX, fminl(FLT_MAX, value));
         put(s, c->entity, c->target, c->target_offset, &scalar, sizeof scalar);
         if (c->property == DE_UI_BIND_OPACITY)
-            c->style_revision = ++s->style_revision;
+            c->style_revision = next_style_revision(s);
     }
 }
 u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style) {

@@ -41,6 +41,7 @@ de_result de_ui__binding_init(de_ui *ui);
 void de_ui__binding_attach(de_ui *ui);
 void de_ui__binding_detach(de_ui *ui);
 void de_ui__binding_shutdown(de_ui *ui);
-/* Active visual bindings override the cascade; NULL output only queries ownership revision. */
+/* Active visual bindings override the cascade with a nonzero ownership revision; zero means
+ * inactive. NULL output only queries ownership revision. */
 u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style);
 #endif

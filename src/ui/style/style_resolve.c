@@ -263,7 +263,8 @@ static void resolve(de_ui_style_system *state, de_entity entity) {
         apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], &node, &style, &text);
     }
 #if defined(DE_UI_BINDING)
-    (void)de_ui__binding_style(ui, entity, &style);
+    if (binding_revision)
+        (void)de_ui__binding_style(ui, entity, &style);
 #endif
     if (memcmp(&node, &before_node, sizeof node))
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
