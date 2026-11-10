@@ -232,6 +232,44 @@ TEST_F(ui_binding, visual_bindings_override_default_state_and_theme_without_idle
     const DeUiStyle *released = de_entity_get_const(f->ui.world, button, ui->ids.style);
     EXPECT_FLOAT_EQ(released->opacity, .1f, .00001f);
 }
+TEST_F(ui_binding, visual_revision_wrap_keeps_theme_ownership_and_removal, bind_fx) {
+    de_ui *ui = f->ui.ui;
+    const char *sheet = "[vars]\naccent='#ff0000'\n[theme.dark.vars]\naccent='#00ff00'\n"
+                        "[style.text]\ntext_color='$accent'\n[style.button]\nopacity=0.25";
+    ASSERT_EQ(de_ui__load_stylesheet_source(ui, sheet, strlen(sheet), false), DE_OK);
+    de_entity text = bound(f, "tint", "tint", DE_UI_BIND_ONE_WAY, ui->ids.text);
+    de_entity button = bound(f, "precise", "opacity", DE_UI_BIND_ONE_WAY, ui->widgets->button);
+    ui_frame(&f->ui);
+    for (u32 phase = 0; phase < 2; ++phase) {
+        ui->binding->style_revision = UINT64_MAX;
+        bind_data *edit = de_entity_get(f->ui.world, f->source, f->data);
+        if (phase == 0)
+            edit->tint = (de_vec4){.7f, .6f, .5f, .4f};
+        else
+            edit->precise = .375;
+        ui_frame(&f->ui);
+        EXPECT_NE(de_ui__binding_style(ui, text, NULL), 0u);
+        EXPECT_NE(de_ui__binding_style(ui, button, NULL), 0u);
+        ASSERT_EQ(de_ui_set_theme(ui, phase ? "" : "dark"), DE_OK);
+        ui_frame(&f->ui);
+        const bind_data *data = de_entity_get_const(f->ui.world, f->source, f->data);
+        const DeUiStyle *text_style = de_entity_get_const(f->ui.world, text, ui->ids.style);
+        const DeUiStyle *button_style = de_entity_get_const(f->ui.world, button, ui->ids.style);
+        ASSERT_TRUE(text_style && button_style);
+        EXPECT_MEMEQ(&text_style->text_color, &data->tint, sizeof data->tint);
+        EXPECT_FLOAT_EQ(button_style->opacity, data->precise, .00001f);
+    }
+    de_entity_remove(f->ui.world, text, ui->binding->component);
+    de_entity_remove(f->ui.world, button, ui->binding->component);
+    for (u32 i = 0; i < 12; ++i)
+        ui_frame(&f->ui);
+    const DeUiStyle *text_style = de_entity_get_const(f->ui.world, text, ui->ids.style);
+    const DeUiStyle *button_style = de_entity_get_const(f->ui.world, button, ui->ids.style);
+    ASSERT_TRUE(text_style && button_style);
+    const de_vec4 released_color = {1, 0, 0, 1};
+    EXPECT_MEMEQ(&text_style->text_color, &released_color, sizeof released_color);
+    EXPECT_FLOAT_EQ(button_style->opacity, .25f, .00001f);
+}
 TEST_F(ui_binding, progress_updates_same_frame_and_unchanged_source_does_not_relayout, bind_fx) {
     de_entity e = bound(f, "current", "value", DE_UI_BIND_ONE_WAY, f->ui.ui->widgets->progress);
     for (u32 i = 0; i < 4; ++i)
