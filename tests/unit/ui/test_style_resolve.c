@@ -6,6 +6,80 @@
 #endif
 #include "style_test_util.h"
 #include "asset/hot_reload_internal.h"
+typedef ui_fx ui_selector_hook_fx;
+static struct {
+    ui_selector_hook_fx *fixture;
+    de_entity later;
+    de_name class_name;
+    void (*construct)(void *);
+    u32 calls;
+    bool armed, edited;
+} selector_hook;
+static void selector_style_construct(void *object) {
+    selector_hook.construct(object);
+    if (selector_hook.armed) {
+        selector_hook.armed = false;
+        ++selector_hook.calls;
+        DeUiNode *node = de_entity_get(selector_hook.fixture->world, selector_hook.later,
+                                       selector_hook.fixture->ui->ids.node);
+        if (node) {
+            node->style_class = selector_hook.class_name;
+            selector_hook.edited = true;
+        }
+    }
+}
+static void ui_selector_hook_fx_setup(ui_selector_hook_fx *f) {
+    ui_fx_setup(f);
+    de_ui_attach(f->ui, NULL);
+    de_world_destroy(f->world);
+    f->world = NULL;
+    de_type_id id = de_type_find(f->types, "DeUiStyle"), replaced = {0};
+    const de_type_desc *canonical = de_type_get(f->types, id);
+    ASSERT_TRUE(canonical != NULL);
+    de_type_desc desc = *canonical;
+    memset(&selector_hook, 0, sizeof selector_hook);
+    selector_hook.construct = desc.hooks.construct;
+    ASSERT_TRUE(selector_hook.construct != NULL);
+    desc.hooks.construct = selector_style_construct;
+    bool changed = true;
+    ASSERT_EQ(de_type_register_ex(f->types, &desc, &replaced, &changed), DE_OK);
+    ASSERT_EQ(replaced.id, id.id);
+    ASSERT_FALSE(changed);
+    ASSERT_EQ(de_world_create(&(de_world_desc){.types = f->types}, &f->world), DE_OK);
+    de_ui_attach(f->ui, f->world);
+    ASSERT_TRUE(f->ui->style->system.id);
+}
+static void ui_selector_hook_fx_teardown(ui_selector_hook_fx *f) {
+    selector_hook.armed = false;
+    selector_hook.fixture = NULL;
+    ui_fx_teardown(f);
+    memset(&selector_hook, 0, sizeof selector_hook);
+}
+TEST_F(ui_style_resolve, style_constructor_can_change_a_later_memoized_class, ui_selector_hook_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.\".trigger\"]\nopacity=0.25\n"
+                                   "[style.\".before\"]\nopacity=1\n"
+                                   "[style.\".after\"]\nopacity=0.75"),
+              DE_OK);
+    de_entity first = ui_node(f, (de_entity){0}), later = ui_node(f, (de_entity){0});
+    ui_node_edit(f, later)->style_class = de_name_from("before");
+    style_step(f, 0);
+    ASSERT_FALSE(de_entity_has(f->world, first, f->ui->ids.style));
+    ASSERT_FALSE(de_entity_has(f->world, later, f->ui->ids.style));
+    selector_hook.fixture = f;
+    selector_hook.later = later;
+    selector_hook.class_name = de_name_from("after");
+    selector_hook.armed = true;
+    ui_node_edit(f, first)->style_class = de_name_from("trigger");
+    style_step(f, 0);
+    EXPECT_EQ(selector_hook.calls, 1u);
+    EXPECT_TRUE(selector_hook.edited);
+    EXPECT_FLOAT_EQ(style_get(f, first).opacity, .25f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, later).opacity, .75f, 0);
+    EXPECT_EQ(ui_node_edit(f, later)->style_class.hash, selector_hook.class_name.hash);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 2u);
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+}
 TEST_F(ui_style_resolve, specificity_sheet_order_state_and_class_removal, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[style.button]\nopacity=0.1\n[style.\".danger\"]\nopacity=0."
                                    "2\n[style.\"button.danger:hover\"]\nopacity=0.9"),
@@ -122,13 +196,18 @@ TEST_F(ui_style_resolve, optional_selector_inputs_follow_entities_across_style_a
                                    "[style.\"panel:hover\"]\nopacity=0.4\n"
                                    "[style.\"panel:disabled\"]\nopacity=0.6\n"
                                    "[style.\"button:hover\"]\nopacity=0.8\n"
-                                   "[style.\"button:disabled\"]\nopacity=0.9"),
+                                   "[style.\"button:disabled\"]\nopacity=0.9\n"
+                                   "[style.\".red\"]\nbackground='#f00'\n"
+                                   "[style.\".blue\"]\nbackground='#00f'"),
               DE_OK);
     enum { N = 64 };
     de_entity entities[N];
     for (u32 i = 0; i < N; ++i) {
         entities[i] = ui_node(f, (de_entity){0});
         ui_node_edit(f, entities[i])->width = (de_ui_len){DE_UI_PX, (f32)i + 1};
+        ui_node_edit(f, entities[i])->style_class = i % 3 == 0   ? de_name_from("red")
+                                                    : i % 3 == 1 ? de_name_from("blue")
+                                                                 : (de_name){0};
         if (i & 1u)
             ((DeUiWidgetType *)de_entity_add(f->world, entities[i], f->ui->style->widget))->type =
                 i % 8 == 5 ? DE_UI_WIDGET_TEXT : DE_UI_WIDGET_BUTTON;
@@ -159,11 +238,15 @@ TEST_F(ui_style_resolve, optional_selector_inputs_follow_entities_across_style_a
                     state->hovered = false;
                     state->disabled = true;
                 }
+                ui_node_edit(f, entities[i])->style_class = i % 3 == 2   ? de_name_from("red")
+                                                            : i % 3 == 0 ? de_name_from("blue")
+                                                                         : (de_name){0};
             }
         else if (phase == 2)
             for (u32 i = 0; i < N; ++i) {
                 de_entity_remove(f->world, entities[i], f->ui->style->widget);
                 de_entity_remove(f->world, entities[i], f->ui->ids.state);
+                ui_node_edit(f, entities[i])->style_class = (de_name){0};
             }
         style_step(f, 0);
         for (u32 i = 0; i < N; ++i) {
@@ -177,6 +260,9 @@ TEST_F(ui_style_resolve, optional_selector_inputs_follow_entities_across_style_a
             const DeUiNode *node = de_entity_get_const(f->world, entities[i], f->ui->ids.node);
             ASSERT_TRUE(node != NULL);
             EXPECT_FLOAT_EQ(node->width.value, (f32)i + 1, 0);
+            u32 color = phase == 0 ? i % 3 : phase == 1 ? (i + 1) % 3 : 2;
+            EXPECT_FLOAT_EQ(style_get(f, entities[i]).background.x, color == 0 ? 1.f : 0.f, 0);
+            EXPECT_FLOAT_EQ(style_get(f, entities[i]).background.z, color == 1 ? 1.f : 0.f, 0);
         }
     }
     style_step(f, 0);

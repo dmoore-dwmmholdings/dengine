@@ -15,14 +15,17 @@ static u32 state_bits(const DeUiInteractionState *s) {
 }
 static void collect(const de_query_chunk *chunk, void *user) {
     de_ui_style_system *state = user;
+    const DeUiNode *nodes = chunk->columns[0];
     const DeUiWidgetType *widgets = chunk->columns[1];
     const DeUiInteractionState *interactions = chunk->columns[2];
     /* Style publication can move archetype rows later in this pass. Retain only scalar
      * selector inputs, never pointers into the collected chunks. */
     for (u32 i = 0; i < chunk->count && state->entity_count < state->ui->capacity; ++i)
-        state->entities[state->entity_count++] = (de_ui_style_input){
-            chunk->entities[i], widgets ? (u32)widgets[i].type : DE_UI_WIDGET_PANEL,
-            state_bits(interactions ? &interactions[i] : NULL)};
+        state->entities[state->entity_count++] =
+            (de_ui_style_input){.entity = chunk->entities[i],
+                                .class_name = nodes[i].style_class,
+                                .widget = widgets ? (u32)widgets[i].type : DE_UI_WIDGET_PANEL,
+                                .state = state_bits(interactions ? &interactions[i] : NULL)};
 }
 static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bool create) {
     u64 h = entity.bits;
@@ -90,7 +93,8 @@ static void restore_authored(de_ui_style_cache *cache, DeUiNode *node, DeUiStyle
     }
 }
 static void apply_value(de_ui *ui, const de_ui_style_property *p, const de_ui_style_value *value,
-                        DeUiNode *node, DeUiStyle *style, de_text_style *text) {
+                        DeUiNode *node, DeUiStyle *style, de_text_style *text,
+                        bool *class_snapshot_valid) {
     u8 *dst = target(p, node, style, text);
     switch (p->kind) {
     case DE_UI_PROP_LENGTH: {
@@ -106,10 +110,13 @@ static void apply_value(de_ui *ui, const de_ui_style_property *p, const de_ui_st
         break;
     case DE_UI_PROP_ASSET: {
         u32 handle = 0;
-        if (ui->desc.assets)
+        if (ui->desc.assets) {
+            /* A user asset allocator or memory hook may edit a later node's selectors. */
+            *class_snapshot_valid = false;
             handle = p->target == DE_UI_TARGET_TEXT
                          ? de_asset_font(ui->desc.assets, value->asset).id
                          : de_asset_texture(ui->desc.assets, value->asset).id;
+        }
         memcpy(dst, &handle, sizeof handle);
         break;
     }
@@ -204,9 +211,12 @@ static const de_ui_style_cascade *cascade_for(de_ui_style_system *state, u32 typ
     return result;
 }
 static void publish_style(de_ui *ui, de_entity entity, bool present, const DeUiStyle *before,
-                          const DeUiStyle *style) {
+                          const DeUiStyle *style, bool *class_snapshot_valid) {
     const DeUiStyle defaults = {.opacity = 1, .text_color = {1, 1, 1, 1}};
     if (!present && memcmp(style, &defaults, sizeof *style)) {
+        /* A preregistered Style constructor can edit or remove a later Node. Even a
+         * failed add may invoke allocator hooks, so invalidate before attempting it. */
+        *class_snapshot_valid = false;
         DeUiStyle *dst = de_entity_add(ui->world, entity, ui->ids.style);
         if (dst)
             *dst = *style;
@@ -222,7 +232,7 @@ static bool style_only(u32 mask) {
 /* Only initialized, unbound, zero-duration cascades whose old AND new masks contain
  * exclusively style fields may omit the node/text snapshots. */
 static void restyle_style_only(de_ui *ui, de_entity entity, de_ui_style_cache *cache,
-                               const de_ui_style_cascade *cascade) {
+                               const de_ui_style_cascade *cascade, bool *class_snapshot_valid) {
     const DeUiStyle *current = de_entity_get_const(ui->world, entity, ui->ids.style);
     DeUiStyle style = current ? *current : (DeUiStyle){.opacity = 1, .text_color = {1, 1, 1, 1}};
     const DeUiStyle before = style;
@@ -230,21 +240,28 @@ static void restyle_style_only(de_ui *ui, de_entity entity, de_ui_style_cache *c
     cache->applied_mask = cascade->mask;
     for (u32 mask = cascade->mask; mask; mask &= mask - 1u) {
         const u32 p = de__bitset_ctz64(mask);
-        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], NULL, &style, NULL);
+        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], NULL, &style, NULL,
+                    class_snapshot_valid);
     }
-    publish_style(ui, entity, current != NULL, &before, &style);
+    publish_style(ui, entity, current != NULL, &before, &style, class_snapshot_valid);
     for (u32 mask = cascade->mask; mask; mask &= mask - 1u) {
         const de_ui_style_property *p = &de_ui__style_properties[de__bitset_ctz64(mask)];
         memcpy((u8 *)&cache->applied_style + p->offset, (const u8 *)&style + p->offset,
                property_size(p));
     }
 }
-static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
+static void resolve(de_ui_style_system *state, const de_ui_style_input *input,
+                    bool *class_snapshot_valid) {
     de_ui *ui = state->ui;
     de_entity entity = input->entity;
-    const DeUiNode *current_node = de_entity_get_const(ui->world, entity, ui->ids.node);
-    if (!current_node)
-        return;
+    const DeUiNode *current_node = NULL;
+    de_name class_name = input->class_name;
+    if (!*class_snapshot_valid) {
+        current_node = de_entity_get_const(ui->world, entity, ui->ids.node);
+        if (!current_node)
+            return;
+        class_name = current_node->style_class;
+    }
     u32 type = input->widget;
     u32 bits = input->state;
 #if defined(DE_UI_NAVIGATION)
@@ -253,7 +270,7 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
     if (de_ui_focused(ui).bits == entity.bits && !de_ui_focus_visible(ui))
         bits &= ~2u;
 #endif
-    const de_ui_style_cascade *cascade = cascade_for(state, type, current_node->style_class, bits);
+    const de_ui_style_cascade *cascade = cascade_for(state, type, class_name, bits);
     /* Untouched nodes with no matching rules need no authored/applied snapshot. Existing
      * caches must still resolve when their last matching rule disappears. */
     de_ui_style_cache *cache = cached(state, entity, cascade->matches);
@@ -263,8 +280,8 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
 #if defined(DE_UI_BINDING)
     binding_revision = de_ui__binding_style(ui, entity, NULL);
 #endif
-    if (cache->initialized && cache->class_name.hash == current_node->style_class.hash &&
-        cache->widget == type && cache->state == bits && cache->revision == state->revision &&
+    if (cache->initialized && cache->class_name.hash == class_name.hash && cache->widget == type &&
+        cache->state == bits && cache->revision == state->revision &&
         cache->binding_revision == binding_revision)
         return;
     /* A restyle replaces prior automatic motion, including properties that no longer have
@@ -276,15 +293,18 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
     ++state->entities_restyled;
     if (cache->initialized && !binding_revision && cascade->duration == 0 &&
         style_only(cache->applied_mask | cascade->mask)) {
-        /* Adding a missing style can move this entity's archetype row. */
-        const de_name class_name = current_node->style_class;
-        restyle_style_only(ui, entity, cache, cascade);
+        restyle_style_only(ui, entity, cache, cascade, class_snapshot_valid);
         cache->class_name = class_name;
         cache->widget = type;
         cache->state = bits;
         cache->revision = state->revision;
         cache->binding_revision = 0;
         return;
+    }
+    if (!current_node) {
+        current_node = de_entity_get_const(ui->world, entity, ui->ids.node);
+        if (!current_node)
+            return;
     }
     DeUiNode node = *current_node;
     DeUiStyle style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
@@ -313,7 +333,8 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
     cache->applied_mask = mask;
     for (u32 pending = cascade->mask; pending; pending &= pending - 1u) {
         const u32 p = de__bitset_ctz64(pending);
-        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], &node, &style, &text);
+        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], &node, &style, &text,
+                    class_snapshot_valid);
     }
 #if defined(DE_UI_BINDING)
     if (binding_revision)
@@ -323,7 +344,7 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
     /* Absent style already means these defaults. Avoid moving neutral panels to a new
      * archetype just to publish an identical value (the common large-tree case). */
-    publish_style(ui, entity, current_style != NULL, &before_style, &style);
+    publish_style(ui, entity, current_style != NULL, &before_style, &style, class_snapshot_valid);
     if (current_text && memcmp(&text, &before_text, sizeof text)) {
         DeUiText *dst = de_entity_get(ui->world, entity, ui->ids.text);
         dst->style = text;
@@ -358,8 +379,9 @@ void de_ui__style_tick(de_system_ctx *ctx) {
     state->entity_count = 0;
     if (state->sheet_count)
         de_query_each(state->ui->world, ctx->queries[0], collect, state);
+    bool class_snapshot_valid = true;
     for (u32 i = 0; i < state->entity_count; ++i)
-        resolve(state, &state->entities[i]);
+        resolve(state, &state->entities[i], &class_snapshot_valid);
     de_ui__tweens_tick(state, ctx->dt);
 }
 de_ui_style_stats de_ui_get_style_stats(const de_ui *ui) {
