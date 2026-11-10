@@ -15,9 +15,8 @@ u64 de__shape_hash(de_text_system *t, de_str text, const de_text_style *s, de_te
     struct de__text_runtime *r = t->runtime;
     de__text_lock(r);
     de__text_watch_font(t, s->font);
-    u64 g = r->epoch;
     de_text_font *f = de_text__font_get(t, s->font);
-    g = g * 1099511628211ULL + (f ? f->generation : 0);
+    u64 g = f ? f->generation : 0;
     for (u32 i = 0; i < r->chain_count; ++i)
         if (r->chains[i].primary.id == s->font.id) {
             for (u32 j = 0; j < r->chains[i].count; ++j) {
@@ -28,7 +27,9 @@ u64 de__shape_hash(de_text_system *t, de_str text, const de_text_style *s, de_te
             }
             break;
         }
-    out->generations = g;
+    /* Watching a fallback may advance the epoch. Snapshot it only after every
+     * font has been observed, including initial registration and replacements. */
+    out->generations = g * 1099511628211ULL + r->epoch;
     de__text_unlock(r);
     return XXH3_64bits_withSeed(text.ptr, text.len, XXH3_64bits(out, sizeof *out));
 }
