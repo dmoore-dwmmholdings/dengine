@@ -1,4 +1,12 @@
 #include "layout_test_util.h"
+TEST(paragraph, hard_boundaries_match_pinned_unicode_and_bidi_tables) {
+    for (u32 cp = 0; cp <= 0x10ffff; ++cp) {
+        de__lb lb = (de__lb)de__text_unicode(cp).lb;
+        bool expected = lb == LB_BK || lb == LB_CR || lb == LB_LF || lb == LB_NL ||
+                        SBCodepointGetBidiType(cp) == SBBidiTypeB;
+        EXPECT_EQ(de__text_hard_break(cp), expected);
+    }
+}
 TEST_F(paragraph, wrapping_alignment_and_justification, runtime_fx) {
     de_text_layout *a = layout_build(f, "The quick", 0, DE_ALIGN_START, DE_DIR_LTR, false);
     de_text_layout *b = layout_build(f, "brown fox", 0, DE_ALIGN_START, DE_DIR_LTR, false);

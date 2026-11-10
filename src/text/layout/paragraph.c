@@ -7,7 +7,12 @@ typedef struct work_char {
     f32 advance;
     bool boundary;
 } work_char;
-static bool hard_cp(u32 cp) {
+bool de__text_hard_break(u32 cp) {
+    /* The pinned line-break/Bidi-B union is exhaustively checked against both tables.
+     * Include the bidi-only record separators so shaping never crosses their paragraphs. */
+    if (cp <= 0x10ffff)
+        return (cp >= 0x0a && cp <= 0x0d) || (cp >= 0x1c && cp <= 0x1e) || cp == 0x85 ||
+               cp == 0x2028 || cp == 0x2029;
     de__lb c = (de__lb)de__text_unicode(cp).lb;
     /* UAX #9 also ends paragraphs at U+001C..U+001E. Never shape beyond
      * the paragraph whose level array SheenBidi returned. */
@@ -276,7 +281,7 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
     de__text_graphemes(cp, count, graphemes);
     for (u32 start = 0;;) {
         u32 end = start;
-        while (end < count && !hard_cp(cp[end]))
+        while (end < count && !de__text_hard_break(cp[end]))
             ++end;
         u32 first_cluster = l->cluster_count;
         if (end == start) {

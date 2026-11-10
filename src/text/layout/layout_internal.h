@@ -58,6 +58,7 @@ typedef struct de__unicode_props {
     bool east_asian, initial_quote, final_quote, mark, unassigned, pictographic;
 } de__unicode_props;
 de__unicode_props de__text_unicode(u32 cp);
+bool de__text_hard_break(u32 cp);
 /* Breaks[i] describes boundary before cp[i]; 2 mandatory, 1 allowed, 0 prohibited. */
 de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allocator *alloc);
 void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks);
