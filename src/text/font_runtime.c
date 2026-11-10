@@ -188,6 +188,7 @@ de_result de_text__runtime_init(de_text_system *t) {
     memset(t->runtime, 0, sizeof *t->runtime);
     atomic_flag_clear(&t->runtime->lock);
     t->runtime->epoch = 1;
+    t->runtime->font_type_hash = de_hash64_str("font");
     if (!t->assets)
         return DE_OK;
     de_asset_type_desc d = {0};
@@ -231,10 +232,10 @@ void de_text_update(de_text_system *t) {
     de_text__publish_pages(t);
 }
 de_text_font *de_text__font_get(de_text_system *t, de_font font) {
-    if (!t || !t->assets || !font.id)
+    if (!t || !t->assets || !t->runtime || !font.id)
         return NULL;
     de__slot *s = de__slot_get(t->assets, font.id);
-    if (!s || s->type_hash != de_hash64_str("font"))
+    if (!s || s->type_hash != t->runtime->font_type_hash)
         return NULL;
     return de__slot_object(s);
 }

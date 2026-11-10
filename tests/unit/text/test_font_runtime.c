@@ -1,5 +1,23 @@
 #include "runtime_test_util.h"
 #include <hb-ot.h>
+TEST_F(font_runtime, typed_lookup_rejects_wrong_type_and_stale_handles, runtime_fx) {
+    de_text_font *font = de_text__font_get(f->t, f->latin);
+    de__slot *slot = de__slot_get(f->assets, f->latin.id);
+    ASSERT_TRUE(font != NULL && slot != NULL);
+    u64 type_hash = slot->type_hash;
+    slot->type_hash = type_hash ^ 1u;
+    de_text_font *wrong_type = de_text__font_get(f->t, f->latin);
+    // Restore the loader's slot before assertions or fixture teardown.
+    slot->type_hash = type_hash;
+    EXPECT_TRUE(wrong_type == NULL);
+    EXPECT_TRUE(de_text__font_get(f->t, f->latin) == font);
+    u32 generation = de__slot_handle_generation(f->latin.id);
+    u32 other = generation == DE__SLOT_GEN_MAX ? 1u : generation + 1;
+    de_font stale = {de__slot_handle_make(de__slot_handle_index(f->latin.id), other)};
+    EXPECT_TRUE(de_text__font_get(f->t, stale) == NULL);
+    EXPECT_TRUE(de_text__font_get(f->t, (de_font){0}) == NULL);
+    EXPECT_TRUE(de_text__font_get(NULL, f->latin) == NULL);
+}
 TEST_F(font_runtime, loader_metrics_and_dirty, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->latin);
     ASSERT_TRUE(font != NULL);
