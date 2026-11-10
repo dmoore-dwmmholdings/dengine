@@ -182,6 +182,87 @@ TEST_F(ui_style_resolve, optional_selector_inputs_follow_entities_across_style_a
     style_step(f, 0);
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
 }
+TEST_F(ui_style_resolve, style_only_restyles_preserve_authored_values_and_restore_other_targets,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n"
+                                   "[style.\".paint\"]\nbackground='$primary'\nopacity=0.25\n"
+                                   "[style.\".geometry\"]\nwidth='40px'\n"
+                                   "[style.\".text\"]\nfont_size=30"),
+              DE_OK);
+    de_entity e = style_button(f, (de_entity){0}, "geometry");
+    ui_node_edit(f, e)->width = (de_ui_len){DE_UI_PX, 11};
+    DeUiStyle *own = de_entity_add(f->world, e, f->ui->ids.style);
+    own->opacity = 1;
+    own->background = (de_vec4){.2f, .3f, .4f, 1};
+    DeUiText *text = de_entity_add(f->world, e, f->ui->ids.text);
+    text->style.size_px = 14;
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->width.value, 40, 0);
+    ui_node_edit(f, e)->style_class = de_name_from("paint");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->width.value, 11, 0);
+    ui_node_edit(f, e)->width.value = 23;
+    text = de_entity_get(f->world, e, f->ui->ids.text);
+    text->style.size_px = 19;
+    own = de_entity_get(f->world, e, f->ui->ids.style);
+    own->opacity = .8f;
+    own->corner_radius = 9;
+    ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).background.x, 1, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .25f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 9, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->width.value, 23, 0);
+    EXPECT_FLOAT_EQ(((DeUiText *)de_entity_get(f->world, e, f->ui->ids.text))->style.size_px, 19,
+                    0);
+    ui_node_edit(f, e)->style_class = de_name_from("text");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).background.x, .2f, .00001f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, .00001f);
+    EXPECT_FLOAT_EQ(((DeUiText *)de_entity_get(f->world, e, f->ui->ids.text))->style.size_px, 30,
+                    0);
+    ui_node_edit(f, e)->style_class = de_name_from("paint");
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(((DeUiText *)de_entity_get(f->world, e, f->ui->ids.text))->style.size_px, 19,
+                    0);
+    ui_node_edit(f, e)->style_class = (de_name){0};
+    style_step(f, 0);
+    EXPECT_FLOAT_EQ(style_get(f, e).background.x, .2f, .00001f);
+    EXPECT_FLOAT_EQ(style_get(f, e).opacity, .8f, .00001f);
+    EXPECT_FLOAT_EQ(style_get(f, e).corner_radius, 9, 0);
+    EXPECT_FLOAT_EQ(ui_node_edit(f, e)->width.value, 23, 0);
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+}
+TEST_F(ui_style_resolve, initialized_style_only_rows_recreate_style_without_stale_selector_keys,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n"
+                                   "[style.\".paint\"]\nbackground='$primary'\nopacity=0.25\n"
+                                   "[style.\".other\"]\nbackground='$primary'\nopacity=0.5"),
+              DE_OK);
+    de_entity entities[] = {style_button(f, (de_entity){0}, "paint"),
+                            style_button(f, (de_entity){0}, "other")};
+    for (u32 i = 0; i < 2; ++i) {
+        ui_node_edit(f, entities[i])->width = (de_ui_len){DE_UI_PX, 37.f + i};
+        ((DeUiText *)de_entity_add(f->world, entities[i], f->ui->ids.text))->style.size_px =
+            18.f + i;
+    }
+    style_step(f, 0);
+    for (u32 i = 0; i < 2; ++i)
+        de_entity_remove(f->world, entities[i], f->ui->ids.style);
+    ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+    style_step(f, 0);
+    for (u32 i = 0; i < 2; ++i) {
+        EXPECT_FLOAT_EQ(style_get(f, entities[i]).background.x, 1, 0);
+        EXPECT_FLOAT_EQ(style_get(f, entities[i]).opacity, i ? .5f : .25f, 0);
+        EXPECT_FLOAT_EQ(ui_node_edit(f, entities[i])->width.value, 37.f + i, 0);
+        EXPECT_FLOAT_EQ(
+            ((DeUiText *)de_entity_get(f->world, entities[i], f->ui->ids.text))->style.size_px,
+            18.f + i, 0);
+    }
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+}
 TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),
