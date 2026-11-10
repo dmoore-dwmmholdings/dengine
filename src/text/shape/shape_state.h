@@ -28,8 +28,7 @@ typedef struct de__shape_stripe {
 } de__shape_stripe;
 typedef struct de__hb_font {
     de_font handle;
-    u32 generation;
-    const de_text_font *identity;
+    u64 source_revision;
     hb_font_t *font;
     u32 upem;
 } de__hb_font;

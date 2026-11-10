@@ -48,7 +48,8 @@ static hb_font_t *font_for(de_text_system *t, de_font handle, u32 *upem) {
         s->fonts[i].handle = handle;
     }
     de__hb_font *slot = &s->fonts[i];
-    if (!slot->font || slot->generation != f->generation || slot->identity != f) {
+    /* Atlas publication changes generation, but the shaping source stays immutable. */
+    if (!slot->font || slot->source_revision != f->identity) {
         de__font_source_ref(f->source_owner);
         hb_blob_t *blob =
             hb_blob_create((const char *)f->source, f->source_size, HB_MEMORY_MODE_READONLY,
@@ -64,8 +65,7 @@ static hb_font_t *font_for(de_text_system *t, de_font handle, u32 *upem) {
         if (slot->font)
             hb_font_destroy(slot->font);
         slot->font = font;
-        slot->generation = f->generation;
-        slot->identity = f;
+        slot->source_revision = f->identity;
     }
     *upem = slot->upem;
     hb_font_t *font = hb_font_reference(slot->font);

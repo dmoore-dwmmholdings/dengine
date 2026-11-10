@@ -1,6 +1,85 @@
 #include "runtime_test_util.h"
 #include "text/shape/shape_state.h"
+#include "text/glyph_cache_internal.h"
 #include <string.h>
+static de__hb_font *cached_font(de_text_system *text, de_font handle) {
+    for (u32 i = 0; i < text->shape->font_count; ++i)
+        if (text->shape->fonts[i].handle.id == handle.id)
+            return &text->shape->fonts[i];
+    return NULL;
+}
+TEST_F(shape_cache, atlas_publication_reuses_immutable_harfbuzz_font, runtime_fx) {
+    de_text_font *decoded = de_text__font_get(f->t, f->cjk);
+    ASSERT_TRUE(decoded != NULL && decoded->source_size != 0);
+    u32 glyph = 0;
+    for (u32 cp = 0x4e00; cp < 0x4e00 + 550 && !glyph; ++cp) {
+        u32 candidate = de_text__codepoint(decoded, cp);
+        bool baked = false;
+        for (u32 i = 0; i < decoded->count; ++i)
+            if (decoded->glyphs[i].index == candidate)
+                baked = true;
+        if (candidate && !baked)
+            glyph = candidate;
+    }
+    ASSERT_TRUE(glyph != 0);
+    de_text_style style = {.font = f->cjk, .size_px = 48};
+    de_shaped_run first = {0}, second = {0};
+    ASSERT_EQ(de_text__shape(f->t, DE_STR("漢"), &style, DE_DIR_LTR, NULL, &first), DE_OK);
+    de__hb_font *slot = cached_font(f->t, f->cjk);
+    if (!slot)
+        de_text__shape_free(&first);
+    ASSERT_TRUE(slot != NULL);
+    // Keep the old object alive so allocator address reuse cannot fake a cache hit.
+    hb_font_t *retained = hb_font_reference(slot->font);
+    u32 generation = decoded->generation;
+    u64 revision = decoded->identity;
+    u64 generated = de_text_get_stats(f->t).runtime_generated;
+    de_text__glyph_miss(f->t, f->cjk, glyph);
+    de_text__glyph_jobs_wait(f->t);
+    de_text_update(f->t);
+    bool published = de_text_get_stats(f->t).runtime_generated > generated &&
+                     decoded->generation != generation && decoded->identity == revision;
+    de_result result = de_text__shape(f->t, DE_STR("漢"), &style, DE_DIR_LTR, NULL, &second);
+    bool reused = slot->font == retained;
+    bool same =
+        result == DE_OK && first.count == second.count &&
+        (!first.count || !memcmp(first.glyphs, second.glyphs, first.count * sizeof *first.glyphs));
+    hb_font_destroy(retained);
+    de_text__shape_free(&first);
+    de_text__shape_free(&second);
+    EXPECT_TRUE(published);
+    EXPECT_EQ(result, DE_OK);
+    EXPECT_TRUE(reused);
+    EXPECT_TRUE(same);
+}
+TEST_F(shape_cache, changed_decoded_revision_rebuilds_at_same_address, runtime_fx) {
+    de_text_style style = {.font = f->latin, .size_px = 48};
+    de_shaped_run first = {0}, second = {0};
+    ASSERT_EQ(de_text__shape(f->t, DE_STR("office"), &style, DE_DIR_LTR, NULL, &first), DE_OK);
+    de__hb_font *slot = cached_font(f->t, f->latin);
+    de_text_font *decoded = de_text__font_get(f->t, f->latin);
+    if (!slot || !decoded)
+        de_text__shape_free(&first);
+    ASSERT_TRUE(slot != NULL && decoded != NULL);
+    hb_font_t *retained = hb_font_reference(slot->font);
+    u64 revision = decoded->identity;
+    // Model a new decoded revision at the same address; no atlas generation is edited.
+    de__text_lock(f->t->runtime);
+    decoded->identity = revision ^ (1ULL << 63);
+    de__text_unlock(f->t->runtime);
+    // Different text forces a shaping miss independently of cache-key epoch behavior.
+    de_result result = de_text__shape(f->t, DE_STR("office!"), &style, DE_DIR_LTR, NULL, &second);
+    bool rebuilt = slot->font != retained;
+    // Restore the fixture's decoded revision before assertions or teardown.
+    de__text_lock(f->t->runtime);
+    decoded->identity = revision;
+    de__text_unlock(f->t->runtime);
+    hb_font_destroy(retained);
+    de_text__shape_free(&first);
+    de_text__shape_free(&second);
+    EXPECT_EQ(result, DE_OK);
+    EXPECT_TRUE(rebuilt);
+}
 TEST_F(shape_cache, hit_eviction_and_generation, runtime_fx) {
     de_arena *arena;
     ASSERT_EQ(de_arena_create(NULL, &arena), DE_OK);
