@@ -92,6 +92,19 @@ static f32 getf(const u8 *p) {
     memcpy(&f, &u, 4);
     return f;
 }
+/* Flush each boundary so an ordinary CTest timeout still identifies the active cook. */
+static u64 determinism_cook_begin(u32 index) {
+    fprintf(stderr, "[font-determinism] cook=%u begin\n", index);
+    fflush(stderr);
+    return de_time_now_ns();
+}
+static void determinism_cook_end(u32 index, u64 start, de_result result,
+                                 const de_cook_result *cooked) {
+    u64 elapsed = de_time_now_ns() - start;
+    fprintf(stderr, "[font-determinism] cook=%u end result=%d elapsed_ns=%llu bytes=%llu\n", index,
+            (int)result, (unsigned long long)elapsed, (unsigned long long)cooked->size);
+    fflush(stderr);
+}
 TEST(font, charset_expansion) {
     u8 bits[0x110000 / 8] = {0};
     ASSERT_EQ(de__font_charset("latin-ext", bits, sizeof bits), DE_OK);
@@ -111,8 +124,14 @@ TEST(font, latin_metrics_and_determinism) {
     de_cook_result r = {0}, r2 = {0};
     /* This case compares independent complete cooks itself. Nested verification would do four
      * expensive imports; keep the same two-cook byte and metadata oracle without duplicating it. */
-    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF), DE_OK);
-    ASSERT_EQ(font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF), DE_OK);
+    u64 start = determinism_cook_begin(1);
+    de_result first_result = font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF);
+    determinism_cook_end(1, start, first_result, &r);
+    ASSERT_EQ(first_result, DE_OK);
+    start = determinism_cook_begin(2);
+    de_result second_result = font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF);
+    determinism_cook_end(2, start, second_result, &r2);
+    ASSERT_EQ(second_result, DE_OK);
     ASSERT_EQ(r.output_hash, r2.output_hash); /* Includes dependencies/subassets/extra sources. */
     ASSERT_EQ(r.dependency_count, r2.dependency_count);
     ASSERT_EQ(r.subasset_count, r2.subasset_count);
