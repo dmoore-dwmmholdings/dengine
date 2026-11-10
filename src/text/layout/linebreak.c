@@ -226,9 +226,12 @@ static bool control(u8 g) {
 }
 void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
     breaks[0] = breaks[count] = 1;
+    bool ri_odd = false;
     for (u32 i = 1; i < count; ++i) {
         de__unicode_props a = de__text_unicode(cp[i - 1]), b = de__text_unicode(cp[i]);
         u8 x = a.grapheme, y = b.grapheme;
+        /* GB12/13 depend on the consecutive RI prefix's parity, not its length. */
+        ri_odd = x == GB_RI && !ri_odd;
         bool allow = true;
         if (x == GB_CR && y == GB_LF)
             allow = false;
@@ -263,15 +266,8 @@ void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
             if (j >= 0 && de__text_unicode(cp[j]).pictographic)
                 allow = false;
         }
-        if (allow && x == GB_RI && y == GB_RI) {
-            u32 n = 0, j = i;
-            while (j && de__text_unicode(cp[j - 1]).grapheme == GB_RI) {
-                ++n;
-                --j;
-            }
-            if (n & 1)
-                allow = false;
-        }
+        if (allow && x == GB_RI && y == GB_RI && ri_odd)
+            allow = false;
         breaks[i] = (u8)allow;
     }
 }
