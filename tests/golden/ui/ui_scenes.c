@@ -192,10 +192,22 @@ static de_result render(ui_scene *s, f32 expected_scale) {
         DE_TRY(pump(s));
         /* Shaping can request an uncooked ligature. Let its real background glyph generation
          * and atlas upload finish before a reference is captured. */
-        if (frame >= 4 && !de_text_get_stats(s->text).runtime_pending)
-            break;
-        if (de_time_now_ns() - started > 5ULL * 1000000000)
-            return DE_FAIL(DE_ERR_TIMEOUT, "UI golden runtime glyph generation did not settle");
+        u32 pending = 0;
+        if (frame >= 4) {
+            pending = de_text_get_stats(s->text).runtime_pending;
+            if (!pending)
+                break;
+        }
+        const u64 elapsed_ns = de_time_now_ns() - started;
+        if (elapsed_ns > 5ULL * 1000000000) {
+            /* Early warm frames sample pending only after the original watchdog fires. */
+            if (frame < 4)
+                pending = de_text_get_stats(s->text).runtime_pending;
+            return DE_FAIL(DE_ERR_TIMEOUT,
+                           "UI golden runtime glyph generation did not settle: frame=%u pending=%u "
+                           "elapsed_ns=%llu",
+                           frame, pending, (unsigned long long)elapsed_ns);
+        }
     }
     if (fabsf(de_ui_get_layout_stats(s->ui).scale - expected_scale) > .001f)
         return DE_FAIL(DE_ERR_INTERNAL, "UI golden did not apply requested scale");
