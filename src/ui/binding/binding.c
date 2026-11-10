@@ -427,7 +427,9 @@ static void apply(de_ui_binding_system *s, de_ui_binding_cache *c, const void *s
 }
 u64 de_ui__binding_style(de_ui *ui, de_entity entity, DeUiStyle *style) {
     de_ui_binding_system *s = ui->binding;
-    if (!s || !s->component.id || !de_entity_has(ui->world, entity, s->component))
+    /* After a style-target tint/opacity sample, this counter never returns to zero. */
+    if (!s || !s->component.id || !s->style_revision ||
+        !de_entity_has(ui->world, entity, s->component))
         return 0;
     de_ui_binding_cache *c = cache(s, entity);
     if (!c || !c->valid || !c->sampled || c->target.id != ui->ids.style.id)
