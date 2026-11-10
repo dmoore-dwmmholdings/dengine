@@ -35,6 +35,12 @@
 #include "cook/importers/texture/env_internal.h"
 #endif
 
+typedef struct ssgi_capture {
+    u16 baseline[128 * 128 * 4];
+    u16 output[128 * 128 * 4];
+    f32 moments[128 * 128 * 4];
+} ssgi_capture;
+
 typedef struct gifx {
     de_tracking_allocator tracking;
     de_allocator alloc;
@@ -64,6 +70,7 @@ typedef struct gifx {
     de_gpu_buffer pre_readback;
     de_rg_resource pre_source;
     de_gpu_texture ao;
+    ssgi_capture *capture;
 } gifx;
 static void gifx_setup(gifx *f) {
     f->alloc = de_tracking_allocator_init(&f->tracking, NULL, DE_MEM_RENDER);
@@ -104,6 +111,8 @@ static void gifx_teardown(gifx *f) {
         EXPECT_EQ(validation_errors(f->dev), 0u);
         de_gpu_device_destroy(f->dev);
     }
+    if (f->capture)
+        DE_FREE(&f->alloc, f->capture, sizeof *f->capture);
     EXPECT_EQ(de_tracking_allocator_stats(&f->tracking).bytes_live, 0u);
 }
 static void open_renderer(gifx *f, de_gpu_backend backend) {
@@ -1091,6 +1100,10 @@ static de__ssgi_info ssgi_info(gifx *f) {
 }
 static void ssgi_emissive(gifx *f, de_gpu_backend backend) {
     screen_scene(f, backend, 1, 4);
+    /* Keep full image comparisons off the stack while nested driver calls run. Teardown owns
+     * this allocation so assertion/skip exits release it too. */
+    f->capture = DE_NEW(&f->alloc, ssgi_capture, DE_MEM_RENDER);
+    ASSERT_TRUE(f->capture);
     f->settings.gi_mode = DE_GI_STATIC_PROBES;
     de_view_set_settings(f->r, f->view, &f->settings);
     room_frame(f);
@@ -1099,7 +1112,7 @@ static void ssgi_emissive(gifx *f, de_gpu_backend backend) {
     EXPECT_EQ(initial.dispatches, 0u);
     const u8 *raw = de_gpu_buffer_map(f->dev, f->view_readback);
     ASSERT_TRUE(raw);
-    u16 baseline[128 * 128 * 4];
+    u16 *baseline = f->capture->baseline;
     for (u32 y = 0; y < 128; ++y)
         memcpy(baseline + y * 128 * 4, raw + f->offsets[4] + y * f->pitches[4], 128 * 8);
     EXPECT_TRUE(!f->common);
@@ -1107,8 +1120,8 @@ static void ssgi_emissive(gifx *f, de_gpu_backend backend) {
     de_view_set_settings(f->r, f->view, &f->settings);
     u32 coverage = 0;
     f64 energy = 0;
-    u16 output[128 * 128 * 4];
-    f32 moments[128 * 128 * 4];
+    u16 *output = f->capture->output;
+    f32 *moments = f->capture->moments;
     for (u32 frame = 0; frame < 20; ++frame) {
         room_frame(f);
         de__ssgi_info info = ssgi_info(f);
