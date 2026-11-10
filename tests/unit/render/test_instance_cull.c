@@ -1166,11 +1166,17 @@ static void forced_lod_selection(icx *f, de_gpu_backend backend) {
                                      (de_vec3){1, 1, 1}),
                   1u, true);
     ASSERT_TRUE(cvar_set("r.lod_bias", "-7")); /* Automatic always selects level zero. */
-    ASSERT_TRUE(cvar_set("r.cull_freeze", "1"));
+    const bool freeze = cvar_set("r.cull_freeze", "1");
+#if defined(DE_SHIPPING)
+    ASSERT_FALSE(freeze); /* Shipping intentionally omits this debug-only control. */
+#else
+    ASSERT_TRUE(freeze);
+#endif
     for (u32 selected = 0; selected < DE__GS_MESH_LODS; ++selected) {
         f->display = (de_view_display){.force_mesh_lod = true, .mesh_lod = selected};
         de__vis_context *context = NULL;
         ASSERT_TRUE(icx_frame(f, &context));
+        EXPECT_EQ((context->cull.flags & DE__VIS_CULL_FROZEN) != 0, freeze);
         EXPECT_FLOAT_EQ(context->cull.lod[3], (f32)(selected + 1u), 0.0f);
         ASSERT_GT(f->res.item_count, 0u);
         check_against_cpu(f, true, NULL);
@@ -1181,7 +1187,7 @@ static void forced_lod_selection(icx *f, de_gpu_backend backend) {
             const u32 expected = selected < mesh->lod_count ? selected : mesh->lod_count - 1u;
             EXPECT_EQ(item->lod, expected);
         }
-        /* Another view remains automatic while the first one's frozen camera is retained. */
+        /* Another view remains automatic; non-Shipping also retains the first frozen camera. */
         f->view_slot = 1u;
         f->display = (de_view_display){0};
         ASSERT_TRUE(icx_frame(f, NULL));
@@ -1193,7 +1199,7 @@ static void forced_lod_selection(icx *f, de_gpu_backend backend) {
     f->display = (de_view_display){0};
     ASSERT_TRUE(icx_frame(f, NULL));
     for (u32 i = 0; i < f->res.item_count; ++i)
-        EXPECT_EQ(f->res.items[i].lod, 0u); /* Clearing an override also works during freeze. */
+        EXPECT_EQ(f->res.items[i].lod, 0u); /* Also checked during freeze outside Shipping. */
 }
 
 /* instance_cull_chunking: chunks of at most 64 meshlets (65 meshlets are 64 + 1); a full work
