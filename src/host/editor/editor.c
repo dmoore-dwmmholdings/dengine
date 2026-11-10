@@ -80,6 +80,14 @@ void de__ed_respond_begin(de__editor *ed, mpack_writer_t *w) {
     mpack_writer_init(w, ed->out, ed->out_cap);
 }
 
+void de__ed_respond_limit(de__editor *ed, mpack_writer_t *w, u64 request) {
+    if (mpack_writer_error(w) != mpack_error_too_big)
+        return;
+    mpack_writer_destroy(w);
+    de__ed_respond_begin(ed, w);
+    de__ed_error(w, request, DE_EP_ERR_BUSY, "the result is larger than the frame limit");
+}
+
 u64 de__ed_note_begin(de__editor *ed, mpack_writer_t *w) {
     mpack_writer_init(w, ed->note, ed->note_cap);
     return ++ed->seq;
@@ -352,11 +360,8 @@ static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a
         mpack_build_map(&w);
         mpack_complete_map(&w);
         de_ep_write_result_end(&w);
-    } else if (mpack_writer_error(&w) == mpack_error_too_big) {
-        mpack_writer_destroy(&w);
-        mpack_writer_init(&w, ed->out, ed->out_cap);
-        de__ed_error(&w, req->id, DE_EP_ERR_BUSY, "the result is larger than the frame limit");
     }
+    de__ed_respond_limit(ed, &w, req->id);
     de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
 }
 

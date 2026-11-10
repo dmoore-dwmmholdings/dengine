@@ -867,6 +867,7 @@ static void model_info_tick(de__editor *ed) {
             mpack_writer_t w;
             de__ed_respond_begin(ed, &w);
             write_model_info(ed, pending.request, pending.model, pending.name, &a, &w);
+            de__ed_respond_limit(ed, &w, pending.request);
             (void)de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
         }
         model_info_release(ed, pending);

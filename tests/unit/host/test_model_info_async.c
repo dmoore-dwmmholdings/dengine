@@ -117,12 +117,14 @@ static void named_query(info_fx *f, u64 request, const char *name) {
     de_ep_request req = {.id = request, .params = {params, bytes}};
     de_ep_arena a = {(u8 *)f->arena, sizeof f->arena, 0};
     f->editor.deferred = false;
-    mpack_writer_init(&w, f->output, sizeof f->output);
+    de__ed_respond_begin(&f->editor, &w);
     f->editor.handlers[DE_EP_METHOD_ASSET_MODEL_INFO](&f->editor, &req, &a, &w);
     if (f->editor.deferred)
         ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
-    else
+    else {
+        de__ed_respond_limit(&f->editor, &w, request);
         (void)model_send(&f->editor, &w, DE_EP_KIND_RESPONSE);
+    }
 }
 static void query(info_fx *f, u64 request) {
     named_query(f, request, "hero");
@@ -197,6 +199,30 @@ TEST_F(model_info_async, failed_load_returns_legacy_not_found, info_fx) {
     complete(f, DE_ERR_IO);
     model_info_tick(&f->editor);
     response(9, true);
+}
+TEST_F(model_info_async, oversized_cold_and_warm_responses_return_busy, info_fx) {
+    /* Force the ordinary fixed-buffer overflow with valid metadata, without a large model. */
+    static const char long_name[] =
+        "A model node name that makes this otherwise valid response exceed the small test "
+        "output buffer, while leaving enough room for the ordinary typed Busy error.";
+    f->node.name = long_name;
+    f->editor.out_cap = 128;
+    query(f, 10);
+    ASSERT_TRUE(f->editor.deferred);
+    complete(f, DE_OK);
+    model_info_tick(&f->editor);
+    EXPECT_EQ(sends, 1u);
+    response(10, DE_EP_ERR_BUSY);
+    for (u32 i = 0; i < ED_LOADS; ++i)
+        EXPECT_EQ(g_assets.model_info[i].load.id, 0u);
+    u32 refs = 999;
+    de__slot_refs(de__slot_get(f->engine.assets, f->slot), &refs, NULL);
+    EXPECT_EQ(refs, 0u);
+    /* The same metadata still takes the synchronous warm path and the shared error handler. */
+    query(f, 11);
+    EXPECT_FALSE(f->editor.deferred);
+    EXPECT_EQ(sends, 2u);
+    response(11, DE_EP_ERR_BUSY);
 }
 TEST_F(model_info_async, epoch_reset_shutdown_and_reentrant_send_release_once, info_fx) {
     query(f, 1);

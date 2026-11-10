@@ -113,6 +113,8 @@ void de__ed_settings_shutdown(de__editor *ed);
 void de__ed_defer(de__editor *ed);
 /** Starts a writer over the response buffer, outside a dispatch. */
 void de__ed_respond_begin(de__editor *ed, mpack_writer_t *w);
+/** Replaces an oversized response with the ordinary Busy error; caller still owns the writer. */
+void de__ed_respond_limit(de__editor *ed, mpack_writer_t *w, u64 request);
 
 /** Writes an error response; `fmt` is printf-style. */
 void de__ed_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *fmt, ...);
