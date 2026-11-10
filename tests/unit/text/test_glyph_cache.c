@@ -94,6 +94,52 @@ TEST_F(glyph_cache, integrated_generation_survives_real_reload, runtime_fx) {
     EXPECT_EQ(font->generation, reloaded);
 #endif
 }
+TEST_F(glyph_cache, generation_advances_for_redecoded_font_at_same_address, runtime_fx) {
+    const char *ranges[] = {"65-65"};
+    de__manifest_kv setting = {
+        .key = "ranges",
+        .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {ranges, 1}}};
+    de_cook_result cooked = {0};
+    ASSERT_EQ(font_cook("NotoSans.ttf", &setting, 1, &cooked), DE_OK);
+    de_arena *arena = NULL;
+    ASSERT_EQ(de_arena_create(&(de_arena_desc){.reserve_bytes = cooked.size * 2 + 65536}, &arena),
+              DE_OK);
+    de_allocator alloc = de_arena_allocator(arena);
+    de_text_font *decoded = NULL;
+    ASSERT_EQ(de_text__font_decode(&alloc, cooked.data, cooked.size, &decoded), DE_OK);
+    de__slot *slot = de__slot_get(f->assets, f->latin.id);
+    de_text_font *original = de_text__font_get(f->t, f->latin);
+    de__slot_set_object(slot, decoded);
+    de_font_metrics metrics;
+    ASSERT_EQ(de_text_font_metrics(f->t, f->latin, 16, &metrics), DE_OK);
+    const u32 generation = metrics.generation;
+    const u64 identity = decoded->identity;
+    const uintptr_t address = (uintptr_t)decoded;
+
+    /* End the real decoded lifetime, then reuse its storage without an intervening watch.
+     * The arena owns both object and source; no shaping lease or glyph job retains either. */
+    de__slot_set_object(slot, NULL);
+    de_text__font_free(decoded);
+    de_arena_reset(arena);
+    ASSERT_EQ(de_text__font_decode(&alloc, cooked.data, cooked.size, &decoded), DE_OK);
+    EXPECT_EQ((uintptr_t)decoded, address);
+    EXPECT_NE(decoded->identity, identity);
+    de__slot_set_object(slot, decoded);
+    de_text_update(f->t);
+    ASSERT_EQ(de_text_font_metrics(f->t, f->latin, 16, &metrics), DE_OK);
+    EXPECT_GT(metrics.generation, generation);
+    de_font_atlas_info info;
+    ASSERT_EQ(de_text_copy_font_atlas(f->t, f->latin, 0, 0, NULL, 0, &info), DE_OK);
+    EXPECT_EQ(info.source_revision, decoded->identity);
+    EXPECT_EQ(info.generation, metrics.generation);
+
+    /* Restore asset ownership before releasing the temporary decoded object and arena. */
+    de__slot_set_object(slot, original);
+    de_text_update(f->t);
+    de_text__font_free(decoded);
+    de_arena_destroy(arena);
+    de_cook_result_free(&cooked);
+}
 TEST_F(glyph_cache, atlas_snapshots_copy_baked_runtime_and_survive_eviction, runtime_fx) {
     de_text_font *font = de_text__font_get(f->t, f->cjk);
     de_font_atlas_info info;
