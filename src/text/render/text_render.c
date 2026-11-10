@@ -37,7 +37,11 @@ void de_text__render_destroy(de_text_system *t) {
         if (r->frames[i].id)
             de_gpu_buffer_destroy(r->device, r->frames[i]);
         if (r->queues[i].screen)
-            DE_FREE(t->alloc, r->queues[i].screen, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_item));
+            DE_FREE(t->alloc, r->queues[i].screen,
+                    (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_screen_quad));
+        if (r->queues[i].screen_draws)
+            DE_FREE(t->alloc, r->queues[i].screen_draws,
+                    (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_screen_draw));
         if (r->queues[i].world)
             DE_FREE(t->alloc, r->queues[i].world, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_item));
     }
@@ -118,8 +122,12 @@ de_result de_text_attach(de_text_system *t, de_renderer *renderer, de_world *wor
     r->nearest_index = de_gpu_sampler_bindless(r->device, r->nearest);
     for (u32 i = 0; i < 3; ++i) {
         r->gpu_frame[i] = UINT64_MAX;
-        r->queues[i].screen = DE_ALLOC(t->alloc, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_item),
-                                       _Alignof(de__text_item), DE_MEM_UI);
+        r->queues[i].screen =
+            DE_ALLOC(t->alloc, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_screen_quad),
+                     _Alignof(de__text_screen_quad), DE_MEM_UI);
+        r->queues[i].screen_draws =
+            DE_ALLOC(t->alloc, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_screen_draw),
+                     _Alignof(de__text_screen_draw), DE_MEM_UI);
         r->queues[i].world = DE_ALLOC(t->alloc, (u64)DE_TEXT_DRAW_CAP * sizeof(de__text_item),
                                       _Alignof(de__text_item), DE_MEM_UI);
         r->frames[i] = de_gpu_buffer_create(
@@ -127,7 +135,8 @@ de_result de_text_attach(de_text_system *t, de_renderer *renderer, de_world *wor
                                              .usage = DE_USAGE_STORAGE | DE_USAGE_COPY_SRC,
                                              .memory = DE_MEM_UPLOAD,
                                              .name = "text frame instances"});
-        if (!r->queues[i].screen || !r->queues[i].world || !r->frames[i].id) {
+        if (!r->queues[i].screen || !r->queues[i].screen_draws || !r->queues[i].world ||
+            !r->frames[i].id) {
             result = DE_ERR_OUT_OF_MEMORY;
             goto fail;
         }
@@ -166,7 +175,7 @@ void de_text__render_begin(de_text_system *t) {
     de__text_queue *q = &r->queues[r->current_frame % 3];
     q->frame = r->current_frame;
     q->valid = true;
-    q->screen_count = q->world_count = 0;
+    q->screen_count = q->world_count = q->screen_draw_count = 0;
     r->stats = (de_text_render_stats){0};
     de_mutex_unlock(&r->mutex);
     de__text_unlock(t->runtime);
@@ -186,30 +195,32 @@ de_result de_text_draw(de_text_system *t, de_view view, const de_glyph_quad *qua
     }
     if (!view.id)
         view = de_renderer_main_view(r->renderer);
-    for (u32 i = 0; i < count; ++i) {
-        de__text_item *item = &q->screen[q->screen_count++];
-        memset(item, 0, sizeof *item);
-        item->font = quads[i].font.id ? quads[i].font : options->font;
-        item->page = quads[i].atlas_page;
-        item->view = view;
-        item->gpu.rect = quads[i].pos;
-        item->gpu.rect.x += origin.x;
-        item->gpu.rect.y += origin.y;
-        if (options->pixel_snap) {
-            item->gpu.rect.x = roundf(item->gpu.rect.x);
-            item->gpu.rect.y = roundf(item->gpu.rect.y);
-            item->gpu.rect.z = roundf(item->gpu.rect.z);
-            item->gpu.rect.w = roundf(item->gpu.rect.w);
-        }
-        item->gpu.uv = quads[i].uv;
-        item->gpu.color = quads[i].color;
-        item->gpu.outline = options->outline_color;
-        item->gpu.shadow = options->shadow_color;
-        item->gpu.clip = options->clip_px;
-        item->gpu.outline_width = options->outline_width;
-        item->gpu.shadow_x = options->shadow_offset.x;
-        item->gpu.shadow_y = options->shadow_offset.y;
+    if (!count) {
+        de_mutex_unlock(&r->mutex);
+        return DE_OK;
     }
+    /* Every nonempty draw owns at least one quad, so draw capacity follows the
+     * already-checked glyph capacity. No allocations or borrowed inputs here. */
+    de__text_screen_draw *draw = &q->screen_draws[q->screen_draw_count++];
+    *draw = (de__text_screen_draw){.outline = options->outline_color,
+                                   .shadow = options->shadow_color,
+                                   .clip = options->clip_px,
+                                   .origin = origin,
+                                   .shadow_offset = options->shadow_offset,
+                                   .outline_width = options->outline_width,
+                                   .font = options->font,
+                                   .view = view,
+                                   .first = q->screen_count,
+                                   .count = count,
+                                   .pixel_snap = options->pixel_snap};
+    for (u32 i = 0; i < count; ++i) {
+        q->screen[q->screen_count + i] = (de__text_screen_quad){.pos = quads[i].pos,
+                                                                .uv = quads[i].uv,
+                                                                .color = quads[i].color,
+                                                                .font = quads[i].font,
+                                                                .page = quads[i].atlas_page};
+    }
+    q->screen_count += count;
     de_mutex_unlock(&r->mutex);
     return DE_OK;
 }
@@ -294,6 +305,51 @@ static void lighting_reads(de_rg_pass *p, de__lighting_context *lc) {
     for (u32 i = 0; i < lc->probe_texture_count; ++i)
         de_rg_read(p, lc->probe_textures[i], DE_ACCESS_SHADER_READ);
 }
+typedef struct screen_cursor {
+    u32 draw, glyph;
+    de__text_item item;
+} screen_cursor;
+/* Iteration preserves call/glyph order. Expand common options once per matching
+ * draw; the page prepass needs only the owned font/page metadata. */
+static const de__text_item *screen_next(const de__text_queue *q, de_view view,
+                                        screen_cursor *cursor, bool expand) {
+    while (cursor->draw < q->screen_draw_count) {
+        const de__text_screen_draw *draw = &q->screen_draws[cursor->draw];
+        if (draw->view.id != view.id || cursor->glyph == draw->count) {
+            ++cursor->draw;
+            cursor->glyph = 0;
+            continue;
+        }
+        de__text_item *item = &cursor->item;
+        if (expand && !cursor->glyph) {
+            item->gpu = (de__text_gpu_glyph){.outline = draw->outline,
+                                             .shadow = draw->shadow,
+                                             .clip = draw->clip,
+                                             .outline_width = draw->outline_width,
+                                             .shadow_x = draw->shadow_offset.x,
+                                             .shadow_y = draw->shadow_offset.y};
+        }
+        const de__text_screen_quad *quad = &q->screen[draw->first + cursor->glyph++];
+        item->font = quad->font.id ? quad->font : draw->font;
+        item->page = quad->page;
+        item->view = draw->view;
+        if (expand) {
+            item->gpu.rect = quad->pos;
+            item->gpu.rect.x += draw->origin.x;
+            item->gpu.rect.y += draw->origin.y;
+            if (draw->pixel_snap) {
+                item->gpu.rect.x = roundf(item->gpu.rect.x);
+                item->gpu.rect.y = roundf(item->gpu.rect.y);
+                item->gpu.rect.z = roundf(item->gpu.rect.z);
+                item->gpu.rect.w = roundf(item->gpu.rect.w);
+            }
+            item->gpu.uv = quad->uv;
+            item->gpu.color = quad->color;
+        }
+        return item;
+    }
+    return NULL;
+}
 void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool world) {
     de_text_system *t = r->text;
     de__text_lock(t->runtime);
@@ -309,11 +365,15 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
         de__text_unlock(t->runtime);
         return;
     }
-    de__text_item *items = world ? q->world : q->screen;
-    u32 n = world ? q->world_count : q->screen_count;
-    for (u32 i = 0; i < n; ++i)
-        if (world || items[i].view.id == vf->view.id)
-            (void)de__text_page_ensure(r, items[i].font, items[i].page);
+    if (world) {
+        for (u32 i = 0; i < q->world_count; ++i)
+            (void)de__text_page_ensure(r, q->world[i].font, q->world[i].page);
+    } else {
+        screen_cursor cursor = {0};
+        const de__text_item *item;
+        while ((item = screen_next(q, vf->view, &cursor, false)))
+            (void)de__text_page_ensure(r, item->font, item->page);
+    }
     de__text_atlas_sync(r, vf);
     u32 start = (r->cursor[slot] + 255) & ~255u;
     u32 offset = start + sizeof(de__text_view);
@@ -335,10 +395,11 @@ void de__text_draw_stage(struct de__text_render *r, de__view_frame *vf, bool wor
         return;
     }
     memcpy(r->mapped[slot] + start, &view, sizeof view);
-    for (u32 i = 0; i < n; ++i) {
-        de__text_item *item = &items[i];
-        if (!world && item->view.id != vf->view.id)
-            continue;
+    screen_cursor cursor = {0};
+    u32 world_index = 0;
+    const de__text_item *item;
+    while ((item = world ? (world_index < q->world_count ? &q->world[world_index++] : NULL)
+                         : screen_next(q, vf->view, &cursor, true))) {
         de__text_page *page = de__text_page_ensure(r, item->font, item->page);
         de_text_font *font = de_text__font_get(t, item->font);
         if (!page || !page->initialized || !font ||

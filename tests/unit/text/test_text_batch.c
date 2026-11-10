@@ -186,6 +186,125 @@ static de_glyph_quad quad(text_render_fx *f, de_font font, u32 cp, f32 x, f32 y,
         .atlas_page = e.page,
         .color = {1, 1, 1, 1}};
 }
+static de__text_gpu_glyph staged_screen_glyph(text_render_fx *f, u64 frame, u32 count, u32 index) {
+    struct de__text_render *r = f->fonts.t->render;
+    u32 slot = (u32)(frame % 3);
+    ASSERT_EQ(r->gpu_frame[slot], frame);
+    ASSERT_LT(index, count);
+    ASSERT_GE(r->cursor[slot], count * sizeof(de__text_gpu_glyph));
+    de__text_gpu_glyph glyph;
+    memcpy(&glyph, r->mapped[slot] + r->cursor[slot] - count * sizeof glyph + index * sizeof glyph,
+           sizeof glyph);
+    return glyph;
+}
+TEST_F(text_batch, owned_screen_packets_preserve_options_order_and_views, text_render_fx) {
+    start_render(f, DE_GPU_NULL);
+    de_text_update(f->fonts.t);
+    f->r->hdr_output = false;
+    u64 frame = f->fonts.t->render->current_frame;
+    de_glyph_quad glyphs[] = {quad(f, f->bitmap, 'A', 0, 0, 8),
+                              quad(f, f->fonts.latin, 'B', 0, 0, 16)};
+    glyphs[0].pos = (de_vec4){1.2f, -2.6f, 8.4f, 4.6f};
+    glyphs[0].uv = (de_vec4){.1f, .2f, .7f, .8f};
+    glyphs[0].color = (de_vec4){.1f, .2f, .3f, .4f};
+    glyphs[1].font = f->fonts.latin;
+    glyphs[1].pos = (de_vec4){11, 12, 13, 14};
+    de_text_draw_opts first = {.font = f->bitmap,
+                               .clip_px = {1, 2, 30, 40},
+                               .outline_width = 2,
+                               .outline_color = {.2f, .3f, .4f, .5f},
+                               .shadow_offset = {3, 4},
+                               .shadow_color = {.6f, .7f, .8f, .9f},
+                               .pixel_snap = true};
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){UINT32_MAX}, glyphs, 1, (de_vec2){0}, &first),
+              DE_OK);
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, glyphs, 2, (de_vec2){.35f, -.15f}, &first),
+              DE_OK);
+    de_glyph_quad last = glyphs[0];
+    last.font = f->bitmap;
+    last.pos = (de_vec4){5.1f, 7.2f, 9.3f, 11.4f};
+    de_text_draw_opts second = {.font = f->fonts.latin,
+                                .clip_px = {5, 6, 70, 80},
+                                .outline_width = 6,
+                                .shadow_offset = {-2, -3}};
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &last, 1, (de_vec2){-1, .5f}, &second), DE_OK);
+    memset(glyphs, 0, sizeof glyphs);
+    memset(&last, 0, sizeof last);
+    memset(&first, 0, sizeof first);
+    memset(&second, 0, sizeof second);
+    render_frame(f);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).glyphs, 3u);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).draw_calls, 1u);
+    de__text_gpu_glyph a = staged_screen_glyph(f, frame, 3, 0);
+    de__text_gpu_glyph b = staged_screen_glyph(f, frame, 3, 1);
+    de__text_gpu_glyph c = staged_screen_glyph(f, frame, 3, 2);
+    EXPECT_FLOAT_EQ(a.rect.x, 2, .001);
+    EXPECT_FLOAT_EQ(a.rect.y, -3, .001);
+    EXPECT_FLOAT_EQ(a.rect.z, 8, .001);
+    EXPECT_FLOAT_EQ(a.rect.w, 5, .001);
+    EXPECT_FLOAT_EQ(a.uv.x, .1, .001);
+    EXPECT_FLOAT_EQ(a.uv.w, .8, .001);
+    EXPECT_FLOAT_EQ(a.color.x, .1, .001);
+    EXPECT_FLOAT_EQ(a.color.w, .4, .001);
+    EXPECT_FLOAT_EQ(a.clip.z, 30, .001);
+    EXPECT_FLOAT_EQ(a.outline_width, 2, .001);
+    EXPECT_FLOAT_EQ(a.outline.w, .5, .001);
+    EXPECT_FLOAT_EQ(a.shadow.w, .9, .001);
+    EXPECT_FLOAT_EQ(a.shadow_x, 3, .001);
+    EXPECT_FLOAT_EQ(a.shadow_y, 4, .001);
+    EXPECT_EQ(a.mode, 1u);
+    EXPECT_EQ(b.mode, 0u);
+    EXPECT_FLOAT_EQ(b.rect.x, 11, .001);
+    EXPECT_FLOAT_EQ(c.rect.x, 4.1, .001);
+    EXPECT_FLOAT_EQ(c.rect.y, 7.7, .001);
+    EXPECT_FLOAT_EQ(c.rect.z, 9.3, .001);
+    EXPECT_FLOAT_EQ(c.clip.z, 70, .001);
+    EXPECT_FLOAT_EQ(c.outline_width, 6, .001);
+    EXPECT_FLOAT_EQ(c.shadow_x, -2, .001);
+    EXPECT_EQ(c.mode, 1u);
+    de_vec4 zero = {0};
+    EXPECT_EQ(a.flags, 0u);
+    EXPECT_EQ(memcmp(&a.origin, &zero, sizeof zero), 0);
+    EXPECT_EQ(memcmp(&a.right, &zero, sizeof zero), 0);
+    EXPECT_EQ(memcmp(&a.up, &zero, sizeof zero), 0);
+    EXPECT_EQ(memcmp(&a.reserved, &zero, sizeof zero), 0);
+}
+TEST_F(text_batch, screen_packet_capacity_zero_draw_and_ring_reuse, text_render_fx) {
+    start_render(f, DE_GPU_NULL);
+    de_text_update(f->fonts.t);
+    de_glyph_quad glyph = quad(f, f->bitmap, 'A', 1, 2, 8);
+    de_text_draw_opts options = {.font = f->bitmap};
+    struct de__text_render *r = f->fonts.t->render;
+    u32 slot = (u32)(r->current_frame % 3);
+    for (u32 i = 0; i < DE_TEXT_DRAW_CAP; ++i)
+        ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &glyph, 1, (de_vec2){0}, &options), DE_OK);
+    EXPECT_EQ(r->queues[slot].screen_count, DE_TEXT_DRAW_CAP);
+    EXPECT_EQ(r->queues[slot].screen_draw_count, DE_TEXT_DRAW_CAP);
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, NULL, 0, (de_vec2){0}, &options), DE_OK);
+    EXPECT_EQ(r->queues[slot].screen_draw_count, DE_TEXT_DRAW_CAP);
+    EXPECT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &glyph, 1, (de_vec2){0}, &options),
+              DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(r->queues[slot].screen_count, DE_TEXT_DRAW_CAP);
+    EXPECT_EQ(r->queues[slot].screen_draw_count, DE_TEXT_DRAW_CAP);
+    de_error_clear();
+    render_frame(f);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).glyphs, DE_TEXT_DRAW_CAP);
+    for (u32 i = 0; i < 2; ++i) {
+        de_text_update(f->fonts.t);
+        render_frame(f);
+        EXPECT_EQ(de_text_get_render_stats(f->fonts.t).glyphs, 0u);
+    }
+    de_text_update(f->fonts.t);
+    EXPECT_EQ(r->current_frame % 3, slot);
+    EXPECT_EQ(r->queues[slot].screen_count, 0u);
+    EXPECT_EQ(r->queues[slot].screen_draw_count, 0u);
+    glyph.pos = (de_vec4){21, 22, 23, 24};
+    ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &glyph, 1, (de_vec2){0}, &options), DE_OK);
+    u64 frame = r->current_frame;
+    render_frame(f);
+    EXPECT_EQ(de_text_get_render_stats(f->fonts.t).glyphs, 1u);
+    EXPECT_FLOAT_EQ(staged_screen_glyph(f, frame, 1, 0).rect.x, 21, .001);
+}
 TEST_F(text_batch, submission_clipping_and_upload_regions, text_render_fx) {
     start_render(f, DE_GPU_NULL);
     de_text_update(f->fonts.t);
@@ -194,9 +313,10 @@ TEST_F(text_batch, submission_clipping_and_upload_regions, text_render_fx) {
     ASSERT_EQ(de_text_draw(f->fonts.t, (de_view){0}, &q, 1, (de_vec2){.2f, .2f}, &options), DE_OK);
     de__text_queue *queue = &f->fonts.t->render->queues[0];
     EXPECT_EQ(queue->screen_count, 1u);
-    EXPECT_FLOAT_EQ(queue->screen[0].gpu.rect.x, 10, .001);
-    EXPECT_FLOAT_EQ(queue->screen[0].gpu.clip.z, 4, .001);
+    EXPECT_FLOAT_EQ(queue->screen[0].pos.x, 10, .001);
+    EXPECT_FLOAT_EQ(queue->screen_draws[0].clip.z, 4, .001);
     render_frame(f);
+    EXPECT_FLOAT_EQ(staged_screen_glyph(f, queue->frame, 1, 0).rect.x, 10, .001);
     de_text_render_stats stats = de_text_get_render_stats(f->fonts.t);
     EXPECT_EQ(stats.draw_calls, 1u);
     EXPECT_EQ(stats.glyphs, 1u);

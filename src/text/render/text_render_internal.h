@@ -26,11 +26,31 @@ typedef struct de__text_item {
     de_view view;
     de_dvec3 position;
 } de__text_item;
+/* Screen submissions own only glyph inputs and one options snapshot per call.
+ * GPU/world-only fields are materialized by the existing render stage. */
+typedef struct de__text_screen_quad {
+    de_vec4 pos, uv, color;
+    de_font font;
+    u32 page;
+} de__text_screen_quad;
+typedef struct de__text_screen_draw {
+    de_vec4 outline, shadow, clip;
+    de_vec2 origin, shadow_offset;
+    f32 outline_width;
+    de_font font;
+    de_view view;
+    u32 first, count;
+    bool pixel_snap;
+} de__text_screen_draw;
+_Static_assert(sizeof(de__text_screen_quad) == 64, "owned screen quad stride");
+_Static_assert(sizeof(de__text_screen_draw) == 96, "owned screen draw stride");
 typedef struct de__text_queue {
     u64 frame;
     bool valid;
-    u32 screen_count, world_count;
-    de__text_item *screen, *world;
+    u32 screen_count, world_count, screen_draw_count;
+    de__text_screen_quad *screen;
+    de__text_item *world;
+    de__text_screen_draw *screen_draws;
 } de__text_queue;
 typedef struct de__text_page {
     de_font font;
