@@ -1,5 +1,22 @@
 #include "runtime_test_util.h"
 #include "text/shape/shaper_internal.h"
+TEST_F(itemize, every_ascii_scalar_matches_harfbuzz_script, runtime_fx) {
+    const de_allocator *a = de_heap_allocator();
+    hb_unicode_funcs_t *unicode = hb_unicode_funcs_get_default();
+    for (u32 cp = 0; cp < 128; ++cp) {
+        char byte = (char)cp;
+        de_text_item *items = NULL;
+        u32 count = 0;
+        ASSERT_EQ(de_text__itemize(f->t, f->latin, (de_str){&byte, 1}, a, &items, &count), DE_OK);
+        EXPECT_EQ(count, 1u);
+        if (count == 1) {
+            EXPECT_EQ(items[0].script, hb_unicode_script(unicode, cp));
+            EXPECT_EQ(items[0].start, 0u);
+            EXPECT_EQ(items[0].end, 1u);
+        }
+        DE_FREE(a, items, sizeof *items);
+    }
+}
 TEST_F(itemize, font_script_and_invalid_utf8, runtime_fx) {
     de_text_item *items;
     u32 count;

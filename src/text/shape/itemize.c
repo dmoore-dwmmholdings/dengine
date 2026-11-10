@@ -1,6 +1,13 @@
 #include "shaper_internal.h"
 #include "text/fallback_internal.h"
 #include <string.h>
+static hb_script_t script_for(u32 cp) {
+    /* ASCII's script property is fixed; avoid the general Unicode table query. */
+    if (cp < 128)
+        return ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')) ? HB_SCRIPT_LATIN
+                                                                      : HB_SCRIPT_COMMON;
+    return hb_unicode_script(hb_unicode_funcs_get_default(), cp);
+}
 u32 de__text_utf8(const char *s, u32 n, u32 *off) {
     u32 at = *off;
     if (at >= n)
@@ -63,7 +70,7 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
     hb_script_t leading = HB_SCRIPT_UNKNOWN;
     for (u32 look = 0; look < text.len;) {
         u32 cp = de__text_utf8(text.ptr, (u32)text.len, &look);
-        hb_script_t script = hb_unicode_script(hb_unicode_funcs_get_default(), cp);
+        hb_script_t script = script_for(cp);
         if (script != HB_SCRIPT_COMMON && script != HB_SCRIPT_INHERITED &&
             script != HB_SCRIPT_UNKNOWN) {
             leading = script;
@@ -80,7 +87,7 @@ de_result de_text__itemize(de_text_system *t, de_font primary, de_str text, cons
         de_font font;
         u32 glyph;
         (void)de__text_resolve_next(&resolver, cp, &font, &glyph);
-        hb_script_t script = hb_unicode_script(hb_unicode_funcs_get_default(), cp);
+        hb_script_t script = script_for(cp);
         bool weak = script == HB_SCRIPT_COMMON || script == HB_SCRIPT_INHERITED ||
                     script == HB_SCRIPT_UNKNOWN;
         if (weak) {
