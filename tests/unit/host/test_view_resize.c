@@ -37,11 +37,22 @@ static de_gpu_texture resize_texture_create(de_gpu_device *device,
     (void)desc;
     forbidden_resource_call();
 }
-#define de__render_world_wait_idle resize_wait
-#define de_view_destroy            resize_view_destroy
-#define de_view_create             resize_view_create
-#define de_gpu_texture_destroy     resize_texture_destroy
-#define de_gpu_texture_create      resize_texture_create
+/* Keep the traps indirect: an optimized MSVC build otherwise diagnoses code after
+ * their calls in the included handler as unreachable. Each target still fails
+ * immediately; no renderer/resource operation or substitute handle is allowed. */
+static void (*volatile resize_wait_call)(de_renderer *) = resize_wait;
+static void (*volatile resize_view_destroy_call)(de_renderer *, de_view) = resize_view_destroy;
+static de_view (*volatile resize_view_create_call)(de_renderer *,
+                                                   const de_view_desc *) = resize_view_create;
+static void (*volatile resize_texture_destroy_call)(de_gpu_device *,
+                                                    de_gpu_texture) = resize_texture_destroy;
+static de_gpu_texture (*volatile resize_texture_create_call)(
+    de_gpu_device *, const de_gpu_texture_desc *) = resize_texture_create;
+#define de__render_world_wait_idle resize_wait_call
+#define de_view_destroy            resize_view_destroy_call
+#define de_view_create             resize_view_create_call
+#define de_gpu_texture_destroy     resize_texture_destroy_call
+#define de_gpu_texture_create      resize_texture_create_call
 #include "host/editor/editor_views.c"
 #undef de__render_world_wait_idle
 #undef de_view_destroy
