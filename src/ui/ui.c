@@ -1,3 +1,4 @@
+#include "style/deng603_trace_internal.h"
 #include "ui_internal.h"
 #include "layout/layout_internal.h"
 #include "style/stylesheet_internal.h"
@@ -14,6 +15,7 @@
 #include <string.h>
 #include <xxhash.h>
 enum { DE_UI_LAYOUT_CHANGE_QUERIES = 9 };
+static void trace_layout(de_system_ctx *ctx);
 static u32 hash_entity(de_entity entity) {
     u64 v = entity.bits;
     v ^= v >> 33;
@@ -362,7 +364,7 @@ void de_ui_attach(de_ui *ui, de_world *world) {
     ui->layout_system =
         de_system_add(world, &(de_system_desc){.name = DE_UI_LAYOUT_SYSTEM,
                                                .schedule = DE_SCHEDULE_POST_UPDATE,
-                                               .fn = de_ui__layout_system,
+                                               .fn = trace_layout,
                                                .user = ui,
                                                .flags = DE_SYSTEM_MAIN_THREAD | DE_SYSTEM_EXCLUSIVE,
                                                .queries = queries,
@@ -508,4 +510,19 @@ void de_ui__layout_system(de_system_ctx *ctx) {
     }
     de_ui__popups(&layout);
     ui->viewport_dirty = false;
+}
+
+de_deng603_trace de__deng603_trace;
+
+static void trace_layout(de_system_ctx *ctx) {
+    if (!de__deng603_trace.enabled) {
+        de_ui__layout_system(ctx);
+        return;
+    }
+    const u64 started = de_time_now_ns();
+    de_ui__layout_system(ctx);
+    const u64 elapsed = de_time_now_ns() - started;
+    const u32 phase = de__deng603_trace.layout_count++;
+    if (phase < DE_DENG603_PHASES)
+        de__deng603_trace.layout_ns[phase] = elapsed;
 }

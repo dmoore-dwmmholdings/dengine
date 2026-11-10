@@ -1,3 +1,4 @@
+#include "deng603_trace_internal.h"
 #include "stylesheet_internal.h"
 #include "core/de_bitset.h"
 #if defined(DE_UI_BINDING)
@@ -5,6 +6,7 @@
 #endif
 #include <math.h>
 #include <string.h>
+static void trace_style(de_system_ctx *ctx);
 static const char *const widget_names[] = {"panel",   "button",   "toggle", "slider", "text",
                                            "image",   "progress", "input",  "scroll", "dropdown",
                                            "tooltip", "list",     "tabs",   "tree",   "canvas"};
@@ -473,11 +475,24 @@ void de_ui__style_attach(de_ui *ui) {
     ui->style->system = de_system_add(
         ui->world, &(de_system_desc){.name = DE_UI_STYLE_SYSTEM,
                                      .schedule = DE_SCHEDULE_POST_UPDATE,
-                                     .fn = de_ui__style_tick,
+                                     .fn = trace_style,
                                      .user = ui->style,
                                      .flags = DE_SYSTEM_MAIN_THREAD | DE_SYSTEM_EXCLUSIVE,
                                      .queries = &query,
                                      .query_count = 1,
                                      .before = before,
                                      .before_count = 1});
+}
+
+static void trace_style(de_system_ctx *ctx) {
+    if (!de__deng603_trace.enabled) {
+        de_ui__style_tick(ctx);
+        return;
+    }
+    const u64 started = de_time_now_ns();
+    de_ui__style_tick(ctx);
+    const u64 elapsed = de_time_now_ns() - started;
+    const u32 phase = de__deng603_trace.style_count++;
+    if (phase < DE_DENG603_PHASES)
+        de__deng603_trace.style_ns[phase] = elapsed;
 }

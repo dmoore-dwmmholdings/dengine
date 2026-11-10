@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "style_test_util.h"
+#include "ui/style/deng603_trace_internal.h"
 #include "asset/hot_reload_internal.h"
 typedef ui_fx ui_selector_hook_fx;
 static struct {
@@ -349,24 +350,47 @@ TEST_F(ui_style_resolve, initialized_style_only_rows_recreate_style_without_stal
     style_step(f, 0);
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
 }
-TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
+typedef ui_fx ui_deng603_trace_fx;
+static void ui_deng603_trace_fx_setup(ui_deng603_trace_fx *f) {
+    de__deng603_trace.enabled = false;
+    ui_fx_setup(f);
+}
+static void ui_deng603_trace_fx_teardown(ui_deng603_trace_fx *f) {
+    de__deng603_trace.enabled = false;
+    ui_fx_teardown(f);
+}
+TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_deng603_trace_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),
               DE_OK);
     de_entity root = ui_node(f, (de_entity){0});
     for (u32 i = 0; i < 2000; ++i)
         (void)style_button(f, root, NULL);
+    de__deng603_trace = (de_deng603_trace){.enabled = true};
     style_step(f, 0);
+    de__deng603_trace.enabled = false;
     ASSERT_EQ(de_ui_set_theme(f->ui, "dark"), DE_OK);
+    de__deng603_trace.enabled = true;
     u64 start = de_time_now_ns();
     style_step(f, 0);
     f64 ms = (de_time_now_ns() - start) / 1000000.;
+    de__deng603_trace.enabled = false;
     fprintf(stderr, "theme switch2000nodes %.3fms\n", ms);
     /* The neutral root has no matching rule and needs no style publication. */
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 2000u);
     EXPECT_TRUE(ms <= 1.0);
+    de__deng603_trace.enabled = true;
     style_step(f, 0);
+    de__deng603_trace.enabled = false;
     EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+    fprintf(stderr, "DENG603_NATIVE_COUNTS style=%u layout=%u\n", de__deng603_trace.style_count,
+            de__deng603_trace.layout_count);
+    for (u32 phase = 0; phase < DE_DENG603_PHASES; ++phase) {
+        fprintf(stderr, "DENG603_NATIVE_PHASE style phase=%u ns=%llu\n", phase + 1,
+                (unsigned long long)de__deng603_trace.style_ns[phase]);
+        fprintf(stderr, "DENG603_NATIVE_PHASE layout phase=%u ns=%llu\n", phase + 1,
+                (unsigned long long)de__deng603_trace.layout_ns[phase]);
+    }
 }
 TEST_F(ui_style_resolve, visual_theme_changes_preserve_layout_and_authored_border_changes_reflow,
        ui_fx) {
