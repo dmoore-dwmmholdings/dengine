@@ -465,3 +465,11 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-663: real resize parsing/state with trapped resources; no graphics initialization.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND
+   ((APPLE AND TARGET de_gpu_metal) OR (WIN32 AND TARGET de_gpu_d3d12)))
+    de_add_test(NAME editor_view_resize SOURCES test_view_resize.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_view_resize PRIVATE "${DE_ROOT_DIR}/src")
+endif()
