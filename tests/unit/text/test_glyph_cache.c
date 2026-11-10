@@ -96,9 +96,8 @@ TEST_F(glyph_cache, integrated_generation_survives_real_reload, runtime_fx) {
 }
 TEST_F(glyph_cache, generation_advances_for_redecoded_font_at_same_address, runtime_fx) {
     const char *ranges[] = {"65-65"};
-    de__manifest_kv setting = {
-        .key = "ranges",
-        .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {ranges, 1}}};
+    de__manifest_kv setting = {.key = "ranges",
+                               .value = {.type = DE__MANIFEST_STRING_ARRAY, .u.arr = {ranges, 1}}};
     de_cook_result cooked = {0};
     ASSERT_EQ(font_cook("NotoSans.ttf", &setting, 1, &cooked), DE_OK);
     de_arena *arena = NULL;
