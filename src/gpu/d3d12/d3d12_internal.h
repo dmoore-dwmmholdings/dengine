@@ -809,6 +809,9 @@ void de__d3d12_bindless_write_accel(de_gpu_device *, u32, de__gpu_accel *);
 void de__d3d12_accel_dependency(de_gpu_cmd *);
 de_result de__d3d12_rt_pipeline_create(de_gpu_device *, de__gpu_pipeline *,
                                        const de_gpu_pipeline_desc *);
+/* Strict, allocator-owned UTF-16 entry name. NULL defaults to main; empty is invalid.
+ * On success the caller frees *out with *bytes; on failure both outputs are zero. */
+de_result de__d3d12_rt_entry(const de_allocator *, const char *, wchar_t **out, size_t *bytes);
 void de__d3d12_cmd_set_rt_pipeline(de_gpu_cmd *, de__gpu_pipeline *);
 void de__d3d12_cmd_dispatch_rays(de_gpu_cmd *, u32, u32, u32);
 #endif /* _WIN32 */

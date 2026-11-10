@@ -2,19 +2,43 @@
 #include <string.h>
 #include <wchar.h>
 typedef struct rt_library {
-    wchar_t name[32], original[128];
+    wchar_t name[32], *original;
+    size_t original_bytes;
     D3D12_EXPORT_DESC export;
     D3D12_DXIL_LIBRARY_DESC library;
 } rt_library;
-static void library(rt_library *l, de_gpu_shader_blob b, u32 index) {
+de_result de__d3d12_rt_entry(const de_allocator *alloc, const char *entry, wchar_t **out,
+                             size_t *bytes) {
+    *out = NULL;
+    *bytes = 0;
+    const char *name = entry ? entry : "main";
+    if (!*name)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DXR shader entry is empty");
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, NULL, 0);
+    if (!count)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DXR shader entry is not valid UTF-8");
+    size_t size = (size_t)count * sizeof(wchar_t);
+    wchar_t *wide = DE_ALLOC(alloc, size, 16, DE_MEM_RENDER);
+    if (!wide)
+        return DE_FAIL(DE_ERR_OUT_OF_MEMORY, "DXR shader entry allocation");
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide, count) != count) {
+        DE_FREE(alloc, wide, size);
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "DXR shader entry conversion failed");
+    }
+    *out = wide;
+    *bytes = size;
+    return DE_OK;
+}
+static de_result library(de_gpu_device *d, rt_library *l, de_gpu_shader_blob b, u32 index) {
     memset(l, 0, sizeof *l);
+    DE_TRY(de__d3d12_rt_entry(d->alloc, b.entry, &l->original, &l->original_bytes));
     swprintf(l->name, 32, L"deRtStage%u", index);
-    MultiByteToWideChar(CP_UTF8, 0, b.entry ? b.entry : "main", -1, l->original, 128);
     l->export.Name = l->name;
     l->export.ExportToRename = l->original;
     l->library.DXILLibrary = (D3D12_SHADER_BYTECODE){b.code, (SIZE_T)b.size};
     l->library.NumExports = 1;
     l->library.pExports = &l->export;
+    return DE_OK;
 }
 de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
                                        const de_gpu_pipeline_desc *desc) {
@@ -42,10 +66,13 @@ de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
     if (!libs || !sub || !groups || !names || !handles)
         goto cleanup;
     for (u32 i = 0; i < 1 + r.miss_count; ++i) {
-        library(&libs[nlibs], i ? r.miss[i - 1] : r.raygen, nlibs);
-        memcpy(names[i], libs[nlibs].name, sizeof names[i]);
-        sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
-                                               &libs[nlibs++].library};
+        u32 index = nlibs++;
+        result = library(d, &libs[index], i ? r.miss[i - 1] : r.raygen, index);
+        if (result != DE_OK)
+            goto cleanup;
+        memcpy(names[i], libs[index].name, sizeof names[i]);
+        sub[count++] =
+            (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[index].library};
     }
     for (u32 i = 0; i < r.hit_group_count; ++i) {
         D3D12_HIT_GROUP_DESC *g = &groups[i];
@@ -53,15 +80,21 @@ de_result de__d3d12_rt_pipeline_create(de_gpu_device *d, de__gpu_pipeline *p,
         swprintf(names[1 + r.miss_count + i], 32, L"deRtHit%u", i);
         g->HitGroupExport = names[1 + r.miss_count + i];
         g->Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-        library(&libs[nlibs], r.hit_groups[i].closest_hit, nlibs);
-        g->ClosestHitShaderImport = libs[nlibs].name;
-        sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
-                                               &libs[nlibs++].library};
+        u32 index = nlibs++;
+        result = library(d, &libs[index], r.hit_groups[i].closest_hit, index);
+        if (result != DE_OK)
+            goto cleanup;
+        g->ClosestHitShaderImport = libs[index].name;
+        sub[count++] =
+            (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &libs[index].library};
         if (r.hit_groups[i].any_hit.code) {
-            library(&libs[nlibs], r.hit_groups[i].any_hit, nlibs);
-            g->AnyHitShaderImport = libs[nlibs].name;
+            index = nlibs++;
+            result = library(d, &libs[index], r.hit_groups[i].any_hit, index);
+            if (result != DE_OK)
+                goto cleanup;
+            g->AnyHitShaderImport = libs[index].name;
             sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
-                                                   &libs[nlibs++].library};
+                                                   &libs[index].library};
         }
         sub[count++] = (D3D12_STATE_SUBOBJECT){D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, g};
     }
@@ -109,6 +142,9 @@ state_fail:
         out->rt_state = NULL;
     }
 cleanup:
+    for (u32 i = 0; i < nlibs; ++i)
+        if (libs[i].original)
+            DE_FREE(d->alloc, libs[i].original, libs[i].original_bytes);
     if (libs)
         DE_FREE(d->alloc, libs, (size_t)capacity * sizeof *libs);
     if (sub)

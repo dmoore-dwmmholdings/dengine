@@ -6,6 +6,68 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if DE_HAS_GPU_D3D12
+#include "gpu/d3d12/d3d12_internal.h"
+#include <wchar.h>
+
+TEST(rt_pipeline, d3d12_entry_names) {
+    de_tracking_allocator tracker;
+    de_allocator alloc = de_tracking_allocator_init(&tracker, NULL, DE_MEM_RENDER);
+    wchar_t *wide = NULL;
+    size_t bytes = 0;
+    ASSERT_EQ(de__d3d12_rt_entry(&alloc, NULL, &wide, &bytes), DE_OK);
+    EXPECT_EQ(wcscmp(wide, L"main"), 0);
+    EXPECT_EQ(bytes, 5u * sizeof(wchar_t));
+    DE_FREE(&alloc, wide, bytes);
+
+    char long_entry[301];
+    memset(long_entry, 'a', sizeof long_entry - 1);
+    long_entry[sizeof long_entry - 1] = 0;
+    ASSERT_EQ(de__d3d12_rt_entry(&alloc, long_entry, &wide, &bytes), DE_OK);
+    EXPECT_EQ(wcslen(wide), 300u);
+    EXPECT_EQ(bytes, 301u * sizeof(wchar_t));
+    for (u32 i = 0; i < 300; ++i)
+        EXPECT_EQ(wide[i], L'a');
+    DE_FREE(&alloc, wide, bytes);
+
+    ASSERT_EQ(de__d3d12_rt_entry(&alloc, "\xce\xa9\xf0\x9f\x8c\x8d", &wide, &bytes), DE_OK);
+    EXPECT_EQ(bytes, 4u * sizeof(wchar_t));
+    EXPECT_EQ(wide[0], 0x03a9);
+    EXPECT_EQ(wide[1], 0xd83c);
+    EXPECT_EQ(wide[2], 0xdf0d);
+    EXPECT_EQ(wide[3], 0);
+    DE_FREE(&alloc, wide, bytes);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracker).blocks_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracker).bytes_live, 0u);
+}
+
+TEST(rt_pipeline, d3d12_entry_errors) {
+    de_tracking_allocator tracker;
+    de_allocator alloc = de_tracking_allocator_init(&tracker, NULL, DE_MEM_RENDER);
+    const char *invalid[] = {"",        "\x80", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80",
+                             "\xf0\x9f"};
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        wchar_t sentinel;
+        wchar_t *wide = &sentinel;
+        size_t bytes = 123;
+        EXPECT_EQ(de__d3d12_rt_entry(&alloc, invalid[i], &wide, &bytes), DE_ERR_INVALID_ARGUMENT);
+        EXPECT_TRUE(wide == NULL);
+        EXPECT_EQ(bytes, 0u);
+        de_error_clear();
+    }
+    de_tracking_allocator_fail_after(&tracker, 0);
+    wchar_t sentinel;
+    wchar_t *wide = &sentinel;
+    size_t bytes = 123;
+    EXPECT_EQ(de__d3d12_rt_entry(&alloc, "raygen", &wide, &bytes), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_TRUE(wide == NULL);
+    EXPECT_EQ(bytes, 0u);
+    de_tracking_allocator_fail_after(&tracker, -1);
+    de_error_clear();
+    EXPECT_EQ(de_tracking_allocator_stats(&tracker).blocks_live, 0u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracker).bytes_live, 0u);
+}
+#endif
 TEST(rt_pipeline, sbt_layout) {
     de__gpu_sbt_layout l;
     ASSERT_EQ(de__gpu_sbt_layout_make(32, 32, 64, 2, 3, &l), DE_OK);
