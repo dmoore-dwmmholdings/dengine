@@ -66,6 +66,14 @@ de_add_game(NAME test_owned_game_module SOURCES owned_game.c GAME_TOML ../data/o
 get_target_property(_owned_game_dir test_owned_game_module DE_GAME_DIR)
 configure_file(../data/owned_assets.toml "${_owned_game_dir}/owned_assets.toml" COPYONLY)
 configure_file(../data/owned_probe.bin "${_owned_game_dir}/owned_probe.bin" COPYONLY)
+configure_file(../data/owned_probe.dpak "${_owned_game_dir}/owned_probe.dpak" COPYONLY)
+
+# Regenerate the checked-in synthetic pack explicitly; ordinary test/game targets only read it.
+# Tools are added after tests, so the target does not exist yet during this include.
+if(DE_BUILD_TOOLS)
+    add_executable(test_owned_probe_generator EXCLUDE_FROM_ALL generate_owned_probe.c)
+    target_link_libraries(test_owned_probe_generator PRIVATE de_pack_lib de_build_flags)
+endif()
 
 # DENG-701: actual fatal commands, used only by isolated real-host IPC/session qualification.
 if(DE_GAME_DYLIB)
