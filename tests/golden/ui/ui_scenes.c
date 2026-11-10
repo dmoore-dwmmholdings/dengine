@@ -354,15 +354,24 @@ static void scene(de_golden_ctx *ctx, u32 kind) {
         for (u32 pass = 0; pass < (kind == 0 ? 2u : 1u); ++pass) {
             ui_scene s = {0};
             f32 scale = pass == 0 ? 1.f : 2.f;
+            const char *stage = "setup";
             de_result result = setup(&s, ctx, scale);
             if (result == DE_OK) {
                 content(&s, kind, scale);
+                stage = "render";
                 result = render(&s, scale);
             }
-            if (result == DE_OK)
+            if (result == DE_OK) {
+                stage = "capture";
                 result = capture(&s, pass == 0 ? pixels : other);
-            if (result != DE_OK)
-                de_golden_fail(ctx, "UI scene%u pass%u: %s", kind, pass, de_result_str(result));
+            }
+            if (result != DE_OK) {
+                const de_error *error = de_error_last();
+                de_golden_fail(ctx, "UI scene%u pass%u %s: %s: %s", kind, pass, stage,
+                               de_result_str(result),
+                               error && error->result == result ? error->message
+                                                                : "(no matching error context)");
+            }
             cleanup(&s);
             if (result != DE_OK)
                 break;
