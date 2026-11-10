@@ -2,6 +2,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* Optional raw font evidence uses getenv/fopen. */
 #endif
 #include "font_test_util.h"
+#include "font_import_diagnostic.h"
 #include <stdlib.h>
 
 /* Optional full-byte artifacts for matched generator controls; never changes the oracle. */
@@ -125,11 +126,12 @@ TEST(font, latin_metrics_and_determinism) {
     /* This case compares independent complete cooks itself. Nested verification would do four
      * expensive imports; keep the same two-cook byte and metadata oracle without duplicating it. */
     u64 start = determinism_cook_begin(1);
-    de_result first_result = font_cook_with_verify("NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF);
+    de_result first_result = font_cook_diagnostic(1, "NotoSans.ttf", &s, 1, &r, DE_COOK_VERIFY_OFF);
     determinism_cook_end(1, start, first_result, &r);
     ASSERT_EQ(first_result, DE_OK);
     start = determinism_cook_begin(2);
-    de_result second_result = font_cook_with_verify("NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF);
+    de_result second_result =
+        font_cook_diagnostic(2, "NotoSans.ttf", &s, 1, &r2, DE_COOK_VERIFY_OFF);
     determinism_cook_end(2, start, second_result, &r2);
     ASSERT_EQ(second_result, DE_OK);
     ASSERT_EQ(r.output_hash, r2.output_hash); /* Includes dependencies/subassets/extra sources. */
