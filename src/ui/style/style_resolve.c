@@ -203,6 +203,42 @@ static const de_ui_style_cascade *cascade_for(de_ui_style_system *state, u32 typ
     }
     return result;
 }
+static void publish_style(de_ui *ui, de_entity entity, bool present, const DeUiStyle *before,
+                          const DeUiStyle *style) {
+    const DeUiStyle defaults = {.opacity = 1, .text_color = {1, 1, 1, 1}};
+    if (!present && memcmp(style, &defaults, sizeof *style)) {
+        DeUiStyle *dst = de_entity_add(ui->world, entity, ui->ids.style);
+        if (dst)
+            *dst = *style;
+    } else if (present && memcmp(style, before, sizeof *style))
+        *(DeUiStyle *)de_entity_get(ui->world, entity, ui->ids.style) = *style;
+}
+static bool style_only(u32 mask) {
+    for (; mask; mask &= mask - 1u)
+        if (de_ui__style_properties[de__bitset_ctz64(mask)].target != DE_UI_TARGET_STYLE)
+            return false;
+    return true;
+}
+/* Only initialized, unbound, zero-duration cascades whose old AND new masks contain
+ * exclusively style fields may omit the node/text snapshots. */
+static void restyle_style_only(de_ui *ui, de_entity entity, de_ui_style_cache *cache,
+                               const de_ui_style_cascade *cascade) {
+    const DeUiStyle *current = de_entity_get_const(ui->world, entity, ui->ids.style);
+    DeUiStyle style = current ? *current : (DeUiStyle){.opacity = 1, .text_color = {1, 1, 1, 1}};
+    const DeUiStyle before = style;
+    restore_authored(cache, NULL, &style, NULL, cascade->mask);
+    cache->applied_mask = cascade->mask;
+    for (u32 mask = cascade->mask; mask; mask &= mask - 1u) {
+        const u32 p = de__bitset_ctz64(mask);
+        apply_value(ui, &de_ui__style_properties[p], &cascade->winning[p], NULL, &style, NULL);
+    }
+    publish_style(ui, entity, current != NULL, &before, &style);
+    for (u32 mask = cascade->mask; mask; mask &= mask - 1u) {
+        const de_ui_style_property *p = &de_ui__style_properties[de__bitset_ctz64(mask)];
+        memcpy((u8 *)&cache->applied_style + p->offset, (const u8 *)&style + p->offset,
+               property_size(p));
+    }
+}
 static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
     de_ui *ui = state->ui;
     de_entity entity = input->entity;
@@ -238,6 +274,18 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
             state->tweens[t].entity.bits == entity.bits)
             state->tweens[t].active = false;
     ++state->entities_restyled;
+    if (cache->initialized && !binding_revision && cascade->duration == 0 &&
+        style_only(cache->applied_mask | cascade->mask)) {
+        /* Adding a missing style can move this entity's archetype row. */
+        const de_name class_name = current_node->style_class;
+        restyle_style_only(ui, entity, cache, cascade);
+        cache->class_name = class_name;
+        cache->widget = type;
+        cache->state = bits;
+        cache->revision = state->revision;
+        cache->binding_revision = 0;
+        return;
+    }
     DeUiNode node = *current_node;
     DeUiStyle style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
     const DeUiStyle *current_style = de_entity_get_const(ui->world, entity, ui->ids.style);
@@ -275,13 +323,7 @@ static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
         *(DeUiNode *)de_entity_get(ui->world, entity, ui->ids.node) = node;
     /* Absent style already means these defaults. Avoid moving neutral panels to a new
      * archetype just to publish an identical value (the common large-tree case). */
-    const DeUiStyle default_style = {.opacity = 1, .text_color = {1, 1, 1, 1}};
-    if (!current_style && memcmp(&style, &default_style, sizeof style)) {
-        DeUiStyle *dst = de_entity_add(ui->world, entity, ui->ids.style);
-        if (dst)
-            *dst = style;
-    } else if (current_style && memcmp(&style, &before_style, sizeof style))
-        *(DeUiStyle *)de_entity_get(ui->world, entity, ui->ids.style) = style;
+    publish_style(ui, entity, current_style != NULL, &before_style, &style);
     if (current_text && memcmp(&text, &before_text, sizeof text)) {
         DeUiText *dst = de_entity_get(ui->world, entity, ui->ids.text);
         dst->style = text;
