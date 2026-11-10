@@ -15,8 +15,14 @@ static u32 state_bits(const DeUiInteractionState *s) {
 }
 static void collect(const de_query_chunk *chunk, void *user) {
     de_ui_style_system *state = user;
+    const DeUiWidgetType *widgets = chunk->columns[1];
+    const DeUiInteractionState *interactions = chunk->columns[2];
+    /* Style publication can move archetype rows later in this pass. Retain only scalar
+     * selector inputs, never pointers into the collected chunks. */
     for (u32 i = 0; i < chunk->count && state->entity_count < state->ui->capacity; ++i)
-        state->entities[state->entity_count++] = chunk->entities[i];
+        state->entities[state->entity_count++] = (de_ui_style_input){
+            chunk->entities[i], widgets ? (u32)widgets[i].type : DE_UI_WIDGET_PANEL,
+            state_bits(interactions ? &interactions[i] : NULL)};
 }
 static de_ui_style_cache *cached(de_ui_style_system *state, de_entity entity, bool create) {
     u64 h = entity.bits;
@@ -197,15 +203,14 @@ static const de_ui_style_cascade *cascade_for(de_ui_style_system *state, u32 typ
     }
     return result;
 }
-static void resolve(de_ui_style_system *state, de_entity entity) {
+static void resolve(de_ui_style_system *state, const de_ui_style_input *input) {
     de_ui *ui = state->ui;
+    de_entity entity = input->entity;
     const DeUiNode *current_node = de_entity_get_const(ui->world, entity, ui->ids.node);
     if (!current_node)
         return;
-    const DeUiWidgetType *widget = de_entity_get_const(ui->world, entity, state->widget);
-    u32 type = widget ? (u32)widget->type : DE_UI_WIDGET_PANEL;
-    const DeUiInteractionState *interaction = de_entity_get_const(ui->world, entity, ui->ids.state);
-    u32 bits = state_bits(interaction);
+    u32 type = input->widget;
+    u32 bits = input->state;
 #if defined(DE_UI_NAVIGATION)
     /* Logical focus remains available to editors while mouse mode suppresses only its ring.
      * Keep explicitly authored focus states working when navigation owns no focused entity. */
@@ -312,7 +317,7 @@ void de_ui__style_tick(de_system_ctx *ctx) {
     if (state->sheet_count)
         de_query_each(state->ui->world, ctx->queries[0], collect, state);
     for (u32 i = 0; i < state->entity_count; ++i)
-        resolve(state, state->entities[i]);
+        resolve(state, &state->entities[i]);
     de_ui__tweens_tick(state, ctx->dt);
 }
 de_ui_style_stats de_ui_get_style_stats(const de_ui *ui) {
@@ -330,7 +335,7 @@ de_result de_ui__style_init(de_ui *ui) {
     state->cache = DE_ALLOC(ui->alloc, (u64)ui->hash_capacity * sizeof *state->cache,
                             _Alignof(de_ui_style_cache), DE_MEM_UI);
     state->entities = DE_ALLOC(ui->alloc, (u64)ui->capacity * sizeof *state->entities,
-                               _Alignof(de_entity), DE_MEM_UI);
+                               _Alignof(de_ui_style_input), DE_MEM_UI);
     state->tweens = DE_ALLOC(ui->alloc, (u64)DE_UI_STYLE_TWEENS * sizeof *state->tweens,
                              _Alignof(de_ui_property_tween), DE_MEM_UI);
     if (!state->cache || !state->entities || !state->tweens)
@@ -396,8 +401,10 @@ void de_ui__style_attach(de_ui *ui) {
                                       &id, NULL) != DE_OK)
         return;
     ui->style->widget = de_component_register(ui->world, id, DE_COMP_SERIALIZE | DE_COMP_SNAPSHOT);
-    de_query_term term = {ui->ids.node, DE_READ};
-    de_query_desc query = {.terms = &term, .term_count = 1};
+    de_query_term terms[] = {{ui->ids.node, DE_READ},
+                             {ui->style->widget, DE_OPTIONAL_READ},
+                             {ui->ids.state, DE_OPTIONAL_READ}};
+    de_query_desc query = {.terms = terms, .term_count = DE_UI_STYLE_COUNT(terms)};
     const char *before[] = {DE_UI_LAYOUT_SYSTEM};
     ui->style->system = de_system_add(
         ui->world, &(de_system_desc){.name = DE_UI_STYLE_SYSTEM,

@@ -115,6 +115,73 @@ TEST_F(ui_style_resolve, shared_cascade_keeps_entity_values_and_selector_revisio
         }
     }
 }
+TEST_F(ui_style_resolve, optional_selector_inputs_follow_entities_across_style_adds_and_removals,
+       ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[style.panel]\nopacity=0.1\n[style.button]\nopacity=0.2\n"
+                                   "[style.text]\nopacity=0.3\n"
+                                   "[style.\"panel:hover\"]\nopacity=0.4\n"
+                                   "[style.\"panel:disabled\"]\nopacity=0.6\n"
+                                   "[style.\"button:hover\"]\nopacity=0.8\n"
+                                   "[style.\"button:disabled\"]\nopacity=0.9"),
+              DE_OK);
+    enum { N = 64 };
+    de_entity entities[N];
+    for (u32 i = 0; i < N; ++i) {
+        entities[i] = ui_node(f, (de_entity){0});
+        ui_node_edit(f, entities[i])->width = (de_ui_len){DE_UI_PX, (f32)i + 1};
+        if (i & 1u)
+            ((DeUiWidgetType *)de_entity_add(f->world, entities[i], f->ui->style->widget))->type =
+                i % 8 == 5 ? DE_UI_WIDGET_TEXT : DE_UI_WIDGET_BUTTON;
+        if (i & 2u) {
+            DeUiInteractionState *state = de_entity_add(f->world, entities[i], f->ui->ids.state);
+            state->disabled = i % 8 == 2 || i % 8 == 7;
+            state->hovered = !state->disabled;
+        }
+        ASSERT_FALSE(de_entity_has(f->world, entities[i], f->ui->ids.style));
+    }
+    for (u32 phase = 0; phase < 3; ++phase) {
+        if (phase == 1)
+            for (u32 i = 0; i < N; ++i) {
+                if (i % 4 == 0) {
+                    ((DeUiWidgetType *)de_entity_add(f->world, entities[i], f->ui->style->widget))
+                        ->type = DE_UI_WIDGET_BUTTON;
+                    ((DeUiInteractionState *)de_entity_add(f->world, entities[i], f->ui->ids.state))
+                        ->hovered = true;
+                } else if (i % 4 == 1) {
+                    de_entity_remove(f->world, entities[i], f->ui->style->widget);
+                    ((DeUiInteractionState *)de_entity_add(f->world, entities[i], f->ui->ids.state))
+                        ->disabled = true;
+                } else if (i % 4 == 2)
+                    de_entity_remove(f->world, entities[i], f->ui->ids.state);
+                else {
+                    DeUiInteractionState *state =
+                        de_entity_get(f->world, entities[i], f->ui->ids.state);
+                    state->hovered = false;
+                    state->disabled = true;
+                }
+            }
+        else if (phase == 2)
+            for (u32 i = 0; i < N; ++i) {
+                de_entity_remove(f->world, entities[i], f->ui->style->widget);
+                de_entity_remove(f->world, entities[i], f->ui->ids.state);
+            }
+        style_step(f, 0);
+        for (u32 i = 0; i < N; ++i) {
+            const f32 initial[] = {.1f, .2f, .6f, .8f, .1f, .3f, .4f, .9f},
+                      changed[] = {.8f, .6f, .1f, .9f};
+            EXPECT_FLOAT_EQ(style_get(f, entities[i]).opacity,
+                            phase == 0   ? initial[i % 8]
+                            : phase == 1 ? changed[i % 4]
+                                         : .1f,
+                            .00001f);
+            const DeUiNode *node = de_entity_get_const(f->world, entities[i], f->ui->ids.node);
+            ASSERT_TRUE(node != NULL);
+            EXPECT_FLOAT_EQ(node->width.value, (f32)i + 1, 0);
+        }
+    }
+    style_step(f, 0);
+    EXPECT_EQ(de_ui_get_style_stats(f->ui).entities_restyled, 0u);
+}
 TEST_F(ui_style_resolve, theme_2000_node_budget_and_idle_counter, ui_fx) {
     ASSERT_EQ(style_install(f->ui, "[vars]\nprimary='#000'\n[theme.dark.vars]\nprimary='#fff'\n["
                                    "style.button]\nbackground='$primary'"),

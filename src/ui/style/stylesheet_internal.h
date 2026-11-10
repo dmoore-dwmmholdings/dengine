@@ -68,6 +68,10 @@ typedef struct de_ui_style_cache {
     DeUiStyle authored_style, applied_style;
     de_text_style authored_text, applied_text;
 } de_ui_style_cache;
+typedef struct de_ui_style_input {
+    de_entity entity;
+    u32 widget, state;
+} de_ui_style_input;
 typedef struct de_ui_property_tween {
     de_entity entity;
     de_component component;
@@ -92,7 +96,7 @@ typedef struct de_ui_style_system {
     u32 sheet_count;
     u32 builtin_count;
     de_ui_style_cache *cache;
-    de_entity *entities;
+    de_ui_style_input *entities;
     u32 entity_count;
     de_ui_property_tween *tweens;
     u64 revision;
