@@ -156,14 +156,14 @@ TEST(audio_mixer, create_settings) {
     de_audio *a = NULL;
     de_audio_desc d;
     memset(&d, 0, sizeof d);
-    /* Defaults, headless: the OS backend is not in this build yet (or falls back to null). */
+    /* Defaults: an empty OS device list may still open the null fallback stream. */
     ASSERT_EQ(de_audio_create(&d, &a), DE_OK);
     EXPECT_EQ(a->sample_rate, 48000u);
     EXPECT_EQ(a->block_frames, 256u);
     EXPECT_EQ(a->voice_count, 128u);
     EXPECT_EQ(a->command_capacity, 4096u);
     EXPECT_EQ(a->ring.blocks, 3u);
-    EXPECT_TRUE(de_audio_list_devices(a, NULL, 0) >= 1u);
+    EXPECT_TRUE(de__audio_device_opens(a) >= 1u);
     de_audio_destroy(a);
 
     d.backend = DE_AUDIO_NULL;
@@ -172,6 +172,8 @@ TEST(audio_mixer, create_settings) {
     d.command_capacity = 1000; /* rounded up */
     ASSERT_EQ(de_audio_create(&d, &a), DE_OK);
     EXPECT_EQ(a->command_capacity, 1024u);
+    /* Explicit null has a simulated device. */
+    EXPECT_TRUE(de_audio_list_devices(a, NULL, 0) >= 1u);
     de_audio_destroy(a);
 
     memset(&d, 0, sizeof d);
