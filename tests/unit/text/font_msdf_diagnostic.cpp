@@ -22,6 +22,8 @@ struct Trace {
     u64 totals[PHASE_COUNT], current[PHASE_COUNT], shape_start;
     u32 kernel_completed[KERNEL_PHASE_COUNT];
     u64 kernel_totals[KERNEL_PHASE_COUNT], kernel_start;
+    u64 finder_setups, finder_setup_ns, finder_queries, finder_query_ns, expected_queries;
+    u64 current_queries, current_query_ns;
     bool report;
 };
 DE_THREAD_LOCAL Trace trace;
@@ -65,15 +67,73 @@ void kernel_end(KernelPhase phase, u64 elapsed) {
         std::fflush(stderr);
     }
 }
+u64 finder_setup_begin() {
+    if (trace.report) {
+        std::fprintf(stderr, "[font-msdf] cook=%u call=%u phase=distance_setup begin\n", trace.cook,
+                     trace.calls);
+        std::fflush(stderr);
+    }
+    return de_time_now_ns();
+}
+void finder_setup_end(u64 elapsed) {
+    trace.finder_setup_ns += elapsed;
+    ++trace.finder_setups;
+    if (trace.report) {
+        std::fprintf(stderr,
+                     "[font-msdf] cook=%u call=%u phase=distance_setup end elapsed_ns=%llu "
+                     "total_ns=%llu setups=%llu\n",
+                     trace.cook, trace.calls, (unsigned long long)elapsed,
+                     (unsigned long long)trace.finder_setup_ns,
+                     (unsigned long long)trace.finder_setups);
+        std::fflush(stderr);
+    }
+}
+void distance_generation_end() {
+    kernel_end(BEFORE_CORRECTION, de_time_now_ns() - trace.kernel_start);
+    if (trace.report) {
+        std::fprintf(
+            stderr,
+            "[font-msdf] cook=%u call=%u phase=distance_queries end elapsed_ns=%llu "
+            "total_ns=%llu queries=%llu total_queries=%llu expected_queries=%llu\n",
+            trace.cook, trace.calls, (unsigned long long)trace.current_query_ns,
+            (unsigned long long)trace.finder_query_ns, (unsigned long long)trace.current_queries,
+            (unsigned long long)trace.finder_queries, (unsigned long long)trace.expected_queries);
+        std::fflush(stderr);
+    }
+}
 } // namespace
 
 /* Every correction overload in the included generator TU forwards to its original
  * before redirects are active. Nested intervals never enter the outer phase sum. */
 namespace msdfgen {
+/* Current dependency builds without OpenMP. All counters belong to the cooking thread.
+ * Per-pixel clocks perturb this private diagnostic; they cannot qualify original timing.
+ * Setup excludes destruction; queries exclude projection, pixel conversion and loop work. */
+template <class ContourCombiner> class de_test_TimedShapeDistanceFinder {
+    u64 setup_start;
+    ShapeDistanceFinder<ContourCombiner> finder;
+
+  public:
+    typedef typename ContourCombiner::DistanceType DistanceType;
+    explicit de_test_TimedShapeDistanceFinder(const Shape &shape)
+        : setup_start(finder_setup_begin()), finder(shape) {
+        finder_setup_end(de_time_now_ns() - setup_start);
+    }
+    DistanceType distance(const Point2 &origin) {
+        u64 start = de_time_now_ns();
+        DistanceType result = finder.distance(origin);
+        u64 elapsed = de_time_now_ns() - start;
+        trace.finder_query_ns += elapsed;
+        trace.current_query_ns += elapsed;
+        ++trace.finder_queries;
+        ++trace.current_queries;
+        return result;
+    }
+};
 static void de_test_error_correction(const BitmapSection<float, 3> &output, const Shape &shape,
                                      const SDFTransformation &transformation,
                                      const MSDFGeneratorConfig &config) {
-    kernel_end(BEFORE_CORRECTION, de_time_now_ns() - trace.kernel_start);
+    distance_generation_end();
     u64 start = kernel_begin(CORRECTION);
     msdfErrorCorrection(output, shape, transformation, config);
     kernel_end(CORRECTION, de_time_now_ns() - start);
@@ -81,7 +141,7 @@ static void de_test_error_correction(const BitmapSection<float, 3> &output, cons
 static void de_test_error_correction(const BitmapSection<float, 4> &output, const Shape &shape,
                                      const SDFTransformation &transformation,
                                      const MSDFGeneratorConfig &config) {
-    kernel_end(BEFORE_CORRECTION, de_time_now_ns() - trace.kernel_start);
+    distance_generation_end();
     u64 start = kernel_begin(CORRECTION);
     msdfErrorCorrection(output, shape, transformation, config);
     kernel_end(CORRECTION, de_time_now_ns() - start);
@@ -89,7 +149,7 @@ static void de_test_error_correction(const BitmapSection<float, 4> &output, cons
 static void de_test_error_correction(const BitmapSection<float, 3> &output, const Shape &shape,
                                      const Projection &projection, Range range,
                                      const MSDFGeneratorConfig &config) {
-    kernel_end(BEFORE_CORRECTION, de_time_now_ns() - trace.kernel_start);
+    distance_generation_end();
     u64 start = kernel_begin(CORRECTION);
     msdfErrorCorrection(output, shape, projection, range, config);
     kernel_end(CORRECTION, de_time_now_ns() - start);
@@ -97,7 +157,7 @@ static void de_test_error_correction(const BitmapSection<float, 3> &output, cons
 static void de_test_error_correction(const BitmapSection<float, 4> &output, const Shape &shape,
                                      const Projection &projection, Range range,
                                      const MSDFGeneratorConfig &config) {
-    kernel_end(BEFORE_CORRECTION, de_time_now_ns() - trace.kernel_start);
+    distance_generation_end();
     u64 start = kernel_begin(CORRECTION);
     msdfErrorCorrection(output, shape, projection, range, config);
     kernel_end(CORRECTION, de_time_now_ns() - start);
@@ -106,6 +166,7 @@ static void de_test_error_correction(const BitmapSection<float, 4> &output, cons
 
 /* Preincluded dependencies keep redirects out of public/header-defined types. Prefix
  * every generator family and source-defined template to avoid duplicate definitions. */
+#define ShapeDistanceFinder      de_test_TimedShapeDistanceFinder
 #define DistancePixelConversion  de_test_DistancePixelConversion
 #define generateDistanceField    de_test_generateDistanceField
 #define generateSDF              de_test_generateSDF
@@ -134,6 +195,7 @@ static void de_test_error_correction(const BitmapSection<float, 4> &output, cons
 #undef generateSDF
 #undef generateDistanceField
 #undef DistancePixelConversion
+#undef ShapeDistanceFinder
 
 /* Define the forwarding overloads before the production-wrapper redirects. Color/sign
  * call the originals; generation passes unchanged arguments to the private source copy. */
@@ -179,30 +241,43 @@ extern "C" void de_test_msdf_trace_reset(u32 cook) {
     trace.cook = cook;
 }
 extern "C" void de_test_msdf_trace_report(void) {
-    std::fprintf(stderr,
-                 "[font-msdf] cook=%u phase=summary calls=%u shape_calls=%u color_calls=%u "
-                 "generate_calls=%u sign_calls=%u shape_ns=%llu color_ns=%llu generate_ns=%llu "
-                 "sign_ns=%llu other_ns=%llu generate_before_correction_calls=%u "
-                 "error_correction_calls=%u generate_before_correction_ns=%llu "
-                 "error_correction_ns=%llu\n",
-                 trace.cook, trace.calls, trace.completed[SHAPE], trace.completed[COLOR],
-                 trace.completed[GENERATE], trace.completed[SIGN],
-                 (unsigned long long)trace.totals[SHAPE], (unsigned long long)trace.totals[COLOR],
-                 (unsigned long long)trace.totals[GENERATE], (unsigned long long)trace.totals[SIGN],
-                 (unsigned long long)trace.totals[OTHER], trace.kernel_completed[BEFORE_CORRECTION],
-                 trace.kernel_completed[CORRECTION],
-                 (unsigned long long)trace.kernel_totals[BEFORE_CORRECTION],
-                 (unsigned long long)trace.kernel_totals[CORRECTION]);
+    std::fprintf(
+        stderr,
+        "[font-msdf] cook=%u phase=summary calls=%u shape_calls=%u color_calls=%u "
+        "generate_calls=%u sign_calls=%u shape_ns=%llu color_ns=%llu generate_ns=%llu "
+        "sign_ns=%llu other_ns=%llu generate_before_correction_calls=%u "
+        "error_correction_calls=%u generate_before_correction_ns=%llu "
+        "error_correction_ns=%llu distance_setups=%llu distance_setup_ns=%llu "
+        "distance_queries=%llu distance_query_ns=%llu expected_queries=%llu\n",
+        trace.cook, trace.calls, trace.completed[SHAPE], trace.completed[COLOR],
+        trace.completed[GENERATE], trace.completed[SIGN], (unsigned long long)trace.totals[SHAPE],
+        (unsigned long long)trace.totals[COLOR], (unsigned long long)trace.totals[GENERATE],
+        (unsigned long long)trace.totals[SIGN], (unsigned long long)trace.totals[OTHER],
+        trace.kernel_completed[BEFORE_CORRECTION], trace.kernel_completed[CORRECTION],
+        (unsigned long long)trace.kernel_totals[BEFORE_CORRECTION],
+        (unsigned long long)trace.kernel_totals[CORRECTION],
+        (unsigned long long)trace.finder_setups, (unsigned long long)trace.finder_setup_ns,
+        (unsigned long long)trace.finder_queries, (unsigned long long)trace.finder_query_ns,
+        (unsigned long long)trace.expected_queries);
     std::fflush(stderr);
 }
 extern "C" bool de_test_msdf_kernel_split_complete(void) {
     return trace.calls && trace.kernel_completed[BEFORE_CORRECTION] == trace.calls &&
            trace.kernel_completed[CORRECTION] == trace.calls;
 }
+extern "C" bool de_test_msdf_distance_split_complete(void) {
+    return trace.calls && trace.finder_setups == trace.calls && trace.expected_queries &&
+           trace.finder_queries == trace.expected_queries;
+}
+extern "C" u64 de_test_msdf_distance_queries(void) {
+    return trace.finder_queries;
+}
 extern "C" de_result de_test_msdf_generate(const de__msdf_vertex *vertices, u32 count, double scale,
                                            double ox, double oy, double range, u32 width,
                                            u32 height, float *scratch, u8 *rgba) {
     ++trace.calls;
+    trace.expected_queries += (u64)width * height;
+    trace.current_queries = trace.current_query_ns = 0;
     trace.report = trace.calls == 1 || trace.calls % 64 == 0;
     for (u64 &elapsed : trace.current)
         elapsed = 0;
