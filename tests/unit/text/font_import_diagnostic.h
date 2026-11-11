@@ -3,6 +3,7 @@
 #include "core/de_compiler.h"
 #include "text/import/import_internal.h"
 #include "text/msdf/msdf_wrap.h"
+#include "font_msdf_diagnostic.h"
 
 /* Only the explicit determinism case uses this source-included importer. Its compilation
  * context and logging overhead differ: these markers localize work, not qualify timing. */
@@ -35,7 +36,7 @@ static de_result font_diag_msdf(const de__msdf_vertex *vertices, u32 count, doub
     }
     u64 start = de_time_now_ns();
     de_result result =
-        de__msdf_generate(vertices, count, scale, ox, oy, range, width, height, scratch, rgba);
+        de_test_msdf_generate(vertices, count, scale, ox, oy, range, width, height, scratch, rgba);
     u64 elapsed = de_time_now_ns() - start;
     font_diag.msdf_ns += elapsed;
     if (report) {
@@ -49,6 +50,7 @@ static de_result font_diag_msdf(const de__msdf_vertex *vertices, u32 count, doub
     return result;
 }
 static de_result font_diag_write(de_asset_import_ctx *ctx, const de__font_build *build) {
+    de_test_msdf_trace_report();
     fprintf(stderr, "[font-import] cook=%u phase=msdf complete calls=%u total_ns=%llu\n",
             font_diag.cook, font_diag.calls, (unsigned long long)font_diag.msdf_ns);
     fprintf(stderr, "[font-import] cook=%u phase=write begin\n", font_diag.cook);
@@ -77,6 +79,7 @@ static de_result font_diag_write(de_asset_import_ctx *ctx, const de__font_build 
 static de_result font_diag_import(de_asset_import_ctx *ctx) {
     font_diag.calls = 0;
     font_diag.msdf_ns = 0;
+    de_test_msdf_trace_reset(font_diag.cook);
     fprintf(stderr, "[font-import] cook=%u phase=import begin\n", font_diag.cook);
     fflush(stderr);
     u64 start = de_time_now_ns();
