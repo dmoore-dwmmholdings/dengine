@@ -270,10 +270,9 @@ de_result de__text_paragraph(de_text_system *t, const de_text_layout_desc *d,
         cp[count++] = de__text_utf8(d->utf8.ptr, (u32)d->utf8.len, &byte);
     }
     offsets[count] = (u32)d->utf8.len;
-    result = de__text_linebreak(cp, count, breaks, l->alloc);
+    result = de__text_segment(cp, count, breaks, graphemes, l->alloc);
     if (result != DE_OK)
         goto done;
-    de__text_graphemes(cp, count, graphemes);
     for (u32 start = 0;;) {
         u32 end = start;
         while (end < count && !hard_cp(cp[end]))

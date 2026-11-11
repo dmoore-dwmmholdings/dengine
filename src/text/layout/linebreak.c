@@ -164,12 +164,17 @@ static u8 boundary(const lb_char *c, u32 count, u32 i) {
         return 0; /* LB30b */
     return 1;     /* LB31 */
 }
-de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allocator *alloc) {
+static void graphemes(const u32 *cp, u32 count, u8 *breaks, const lb_char *chars);
+static de_result segment(const u32 *cp, u32 count, u8 *breaks, u8 *grapheme_breaks,
+                         const de_allocator *alloc) {
     if (!breaks || (!cp && count))
         return DE_ERR_INVALID_ARGUMENT;
     breaks[0] = 0;
-    if (!count)
+    if (!count) {
+        if (grapheme_breaks)
+            grapheme_breaks[0] = 1;
         return DE_OK;
+    }
     lb_char small[128], *chars = small;
     if (count > 128u) {
         chars = DE_ALLOC(alloc, (u64)count * sizeof *chars, _Alignof(lb_char), DE_MEM_UI);
@@ -201,9 +206,20 @@ de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allo
     for (u32 i = 1; i < count; ++i)
         breaks[i] = boundary(chars, count, i);
     breaks[count] = 2;
+    if (grapheme_breaks)
+        graphemes(cp, count, grapheme_breaks, chars);
     if (chars != small)
         DE_FREE(alloc, chars, (u64)count * sizeof *chars);
     return DE_OK;
+}
+de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allocator *alloc) {
+    return segment(cp, count, breaks, NULL, alloc);
+}
+de_result de__text_segment(const u32 *cp, u32 count, u8 *line_breaks, u8 *grapheme_breaks,
+                           const de_allocator *alloc) {
+    if (!grapheme_breaks)
+        return DE_ERR_INVALID_ARGUMENT;
+    return segment(cp, count, line_breaks, grapheme_breaks, alloc);
 }
 enum {
     GB_OTHER,
@@ -224,10 +240,14 @@ enum {
 static bool control(u8 g) {
     return g == GB_CR || g == GB_LF || g == GB_CONTROL;
 }
-void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
+static de__unicode_props grapheme_props(const u32 *cp, u32 index, const lb_char *chars) {
+    /* Graphemes need raw properties, never inherited or tailored line-break classes. */
+    return chars ? chars[index].props : de__text_unicode(cp[index]);
+}
+static void graphemes(const u32 *cp, u32 count, u8 *breaks, const lb_char *chars) {
     breaks[0] = breaks[count] = 1;
     for (u32 i = 1; i < count; ++i) {
-        de__unicode_props a = de__text_unicode(cp[i - 1]), b = de__text_unicode(cp[i]);
+        de__unicode_props a = grapheme_props(cp, i - 1, chars), b = grapheme_props(cp, i, chars);
         u8 x = a.grapheme, y = b.grapheme;
         bool allow = true;
         if (x == GB_CR && y == GB_LF)
@@ -246,26 +266,26 @@ void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
             i32 j = (i32)i - 1;
             bool linker = false;
             while (j >= 0) {
-                de__unicode_props p = de__text_unicode(cp[j]);
+                de__unicode_props p = grapheme_props(cp, (u32)j, chars);
                 if (p.incb == 3)
                     linker = true;
                 else if (p.incb != 2)
                     break;
                 --j;
             }
-            if (linker && j >= 0 && de__text_unicode(cp[j]).incb == 1)
+            if (linker && j >= 0 && grapheme_props(cp, (u32)j, chars).incb == 1)
                 allow = false;
         }
         if (allow && b.pictographic && x == GB_ZWJ) {
             i32 j = (i32)i - 2;
-            while (j >= 0 && de__text_unicode(cp[j]).grapheme == GB_EXTEND)
+            while (j >= 0 && grapheme_props(cp, (u32)j, chars).grapheme == GB_EXTEND)
                 --j;
-            if (j >= 0 && de__text_unicode(cp[j]).pictographic)
+            if (j >= 0 && grapheme_props(cp, (u32)j, chars).pictographic)
                 allow = false;
         }
         if (allow && x == GB_RI && y == GB_RI) {
             u32 n = 0, j = i;
-            while (j && de__text_unicode(cp[j - 1]).grapheme == GB_RI) {
+            while (j && grapheme_props(cp, j - 1, chars).grapheme == GB_RI) {
                 ++n;
                 --j;
             }
@@ -274,6 +294,9 @@ void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
         }
         breaks[i] = (u8)allow;
     }
+}
+void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks) {
+    graphemes(cp, count, breaks, NULL);
 }
 
 u32 de_text_grapheme_offsets(de_str text, u32 *out, u32 capacity) {

@@ -40,6 +40,16 @@ static void break_conformance(const char *filename, bool graphemes) {
             de__text_graphemes(cp, count, actual);
         else
             ASSERT_EQ(de__text_linebreak(cp, count, actual, de_heap_allocator()), DE_OK);
+        u8 other[4097], combined_line[4097], combined_graphemes[4097];
+        if (graphemes)
+            ASSERT_EQ(de__text_linebreak(cp, count, other, de_heap_allocator()), DE_OK);
+        else
+            de__text_graphemes(cp, count, other);
+        ASSERT_EQ(
+            de__text_segment(cp, count, combined_line, combined_graphemes, de_heap_allocator()),
+            DE_OK);
+        EXPECT_MEMEQ(combined_line, graphemes ? other : actual, count + 1);
+        EXPECT_MEMEQ(combined_graphemes, graphemes ? actual : other, count + 1);
         bool okay = true;
         for (u32 i = 0; i <= count; ++i)
             if ((actual[i] != 0) != (expected[i] != 0)) {
@@ -76,6 +86,45 @@ TEST(linebreak, cjk_and_emergency_cluster_boundaries) {
     EXPECT_EQ(gb[2], 0u);
     EXPECT_EQ(gb[3], 1u);
     EXPECT_EQ(gb[4], 0u);
+}
+TEST(linebreak, combined_empty_single_context_and_allocation_failure) {
+    u8 line[130], graphemes[130];
+    EXPECT_EQ(de__text_segment(NULL, 0, line, graphemes, de_allocator_null()), DE_OK);
+    EXPECT_EQ(line[0], 0u);
+    EXPECT_EQ(graphemes[0], 1u);
+    const u32 single[] = {'a'};
+    EXPECT_EQ(de__text_segment(single, 1, line, graphemes, de_allocator_null()), DE_OK);
+    EXPECT_EQ(line[0], 0u);
+    EXPECT_EQ(line[1], 2u);
+    EXPECT_EQ(graphemes[0], 1u);
+    EXPECT_EQ(graphemes[1], 1u);
+    const u32 context[] = {'a', 0x301, 'b'};
+    EXPECT_EQ(de__text_segment(context, 3, line, graphemes, de_heap_allocator()), DE_OK);
+    EXPECT_EQ(graphemes[1], 0u);
+    EXPECT_EQ(graphemes[2], 1u);
+    EXPECT_EQ(de__text_segment(NULL, 1, line, graphemes, de_heap_allocator()),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__text_segment(single, 1, NULL, graphemes, de_heap_allocator()),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de__text_segment(single, 1, line, NULL, de_heap_allocator()),
+              DE_ERR_INVALID_ARGUMENT);
+    u32 cp[129];
+    for (u32 i = 0; i < 129; ++i)
+        cp[i] = 'a';
+    de_tracking_allocator tracking;
+    de_allocator allocator = de_tracking_allocator_init(&tracking, NULL, DE_MEM_UI);
+    de_tracking_allocator_fail_after(&tracking, 0);
+    memset(graphemes, 99, sizeof graphemes);
+    EXPECT_EQ(de__text_segment(cp, 129, line, graphemes, &allocator), DE_ERR_OUT_OF_MEMORY);
+    EXPECT_EQ(graphemes[0], 99u);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+    de_tracking_allocator_fail_after(&tracking, -1);
+    u64 allocations = de_tracking_allocator_stats(&tracking).alloc_count;
+    EXPECT_EQ(de__text_segment(cp, 129, line, graphemes, &allocator), DE_OK);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).alloc_count, allocations + 1);
+    EXPECT_EQ(de_tracking_allocator_stats(&tracking).blocks_live, 0u);
+    EXPECT_EQ(line[129], 2u);
+    EXPECT_EQ(graphemes[129], 1u);
 }
 TEST(text_graphemes, public_byte_offsets_capacity_invalid_and_large_input) {
     const char *text = "a\xcc\x81"

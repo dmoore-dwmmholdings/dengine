@@ -61,6 +61,9 @@ de__unicode_props de__text_unicode(u32 cp);
 /* Breaks[i] describes boundary before cp[i]; 2 mandatory, 1 allowed, 0 prohibited. */
 de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allocator *alloc);
 void de__text_graphemes(const u32 *cp, u32 count, u8 *breaks);
+/* Both count+1 outputs share the line-break scratch and its raw Unicode properties. */
+de_result de__text_segment(const u32 *cp, u32 count, u8 *line_breaks, u8 *grapheme_breaks,
+                           const de_allocator *alloc);
 typedef struct de__bidi {
     SBAlgorithmRef algorithm;
     SBParagraphRef paragraph;
