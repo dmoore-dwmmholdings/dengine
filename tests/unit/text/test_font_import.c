@@ -5,6 +5,44 @@
 #include "font_import_diagnostic.h"
 #include <stdlib.h>
 
+TEST(font, diagnostic_msdf_matches_original_buffers) {
+    const de__msdf_vertex shapes[][10] = {
+        {{DE_MSDF_MOVE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 0, 0, 0, 0, 0}},
+        {{DE_MSDF_MOVE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 0, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 12, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 12, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 0, 0, 0, 0, 0, 0},
+         {DE_MSDF_MOVE, 6, 6, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 18, 6, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 18, 18, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 6, 18, 0, 0, 0, 0},
+         {DE_MSDF_LINE, 6, 6, 0, 0, 0, 0}},
+    };
+    const u32 counts[] = {5, 10};
+    float original[32 * 32 * 4], traced[32 * 32 * 4];
+    u8 original_rgba[32 * 32 * 4], traced_rgba[32 * 32 * 4];
+    for (u32 i = 0; i < 2; ++i) {
+        memset(original, 0, sizeof original);
+        memset(traced, 0, sizeof traced);
+        memset(original_rgba, 0, sizeof original_rgba);
+        memset(traced_rgba, 0, sizeof traced_rgba);
+        ASSERT_EQ(
+            de__msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, original, original_rgba),
+            DE_OK);
+        de_test_msdf_trace_reset(0);
+        ASSERT_EQ(
+            de_test_msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, traced, traced_rgba),
+            DE_OK);
+        EXPECT_MEMEQ(original, traced, sizeof original);
+        EXPECT_MEMEQ(original_rgba, traced_rgba, sizeof original_rgba);
+    }
+}
+
 /* Optional full-byte artifacts for matched generator controls; never changes the oracle. */
 static void font_evidence(const char *name, const de_cook_result *cooked) {
     const char *directory = getenv("DE_FONT_IMPORT_EVIDENCE_DIR");
