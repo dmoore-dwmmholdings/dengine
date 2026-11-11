@@ -130,3 +130,33 @@ TEST(sprite_sort, full_comparator_payload_stability_and_scratch_bounds) {
             free(expected);
         }
 }
+
+TEST(sprite_sort, separated_tie_runs_and_exact_equal_keys_keep_payload_order) {
+    enum { N = 511 };
+    const u32 groups[] = {7, 29}; /* Large radix runs and small insertion runs. */
+    de__transparent_item *items = calloc(N, sizeof *items);
+    de__transparent_item *scratch = calloc(N, sizeof *scratch);
+    de__transparent_item *expected = calloc(N, sizeof *expected);
+    ASSERT_TRUE(items && scratch && expected);
+    for (u32 mode = 0; mode < 2; ++mode) {
+        for (u32 i = 0; i < N; ++i)
+            items[i] = (de__transparent_item){.depth = (f32)(i % groups[mode]),
+                                              .entity = ((u64)(i % 2) << 32) | (i % 3),
+                                              .index = (i / 3) % 2,
+                                              .instance = i,
+                                              .flags = i * 17,
+                                              .participant_item = i * 31,
+                                              .always_on_top = (i / 2) % 2};
+        memcpy(expected, items, N * sizeof *items);
+        qsort(expected, N, sizeof *expected, reference_order);
+        de_alloc_guard guard = {0};
+        de_alloc_guard_begin(&guard);
+        de__transparent_sort(items, N, scratch);
+        de_alloc_guard_end(&guard);
+        DE_ALLOC_GUARD_ASSERT_ZERO(&guard);
+        EXPECT_MEMEQ(items, expected, N * sizeof *items);
+    }
+    free(expected);
+    free(scratch);
+    free(items);
+}
