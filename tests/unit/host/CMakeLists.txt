@@ -465,3 +465,15 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-707: actual source-mode model children and production editor reference handlers.
+if(NOT DE_IS_SHIPPING AND DE_BUILD_TOOLS AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_asset_dependencies SOURCES test_editor_asset_dependencies.c
+        LIBS de_host de_cooker de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev)
+    target_include_directories(test_editor_asset_dependencies PRIVATE
+        "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/dependency-tmp")
+    target_compile_definitions(test_editor_asset_dependencies PRIVATE
+        DE_EDITOR_DEP_DATA="${DE_ROOT_DIR}/tests/unit/import/data/gltf"
+        DE_EDITOR_DEP_TMP="${CMAKE_CURRENT_BINARY_DIR}/dependency-tmp")
+endif()
