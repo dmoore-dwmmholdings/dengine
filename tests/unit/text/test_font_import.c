@@ -35,9 +35,11 @@ TEST(font, diagnostic_msdf_matches_original_buffers) {
             de__msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, original, original_rgba),
             DE_OK);
         de_test_msdf_trace_reset(0);
+        EXPECT_FALSE(de_test_msdf_kernel_split_complete());
         ASSERT_EQ(
             de_test_msdf_generate(shapes[i], counts[i], 1, 5, 5, 6, 32, 32, traced, traced_rgba),
             DE_OK);
+        EXPECT_TRUE(de_test_msdf_kernel_split_complete());
         EXPECT_MEMEQ(original, traced, sizeof original);
         EXPECT_MEMEQ(original_rgba, traced_rgba, sizeof original_rgba);
     }
