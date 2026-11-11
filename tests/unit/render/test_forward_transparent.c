@@ -549,8 +549,8 @@ static void lx_teardown(lx *f) {
     if (f->alloc.alloc)
         EXPECT_EQ(de_tracking_allocator_stats(&f->track).blocks_live, 0);
     /* The cvars are process-wide: back to their defaults. */
-    const char *const names[] = {"r.lod_bias", "r.occlusion", "r.rg_record_cost"};
-    const char *const values[] = {"0", "1", "32"};
+    const char *const names[] = {"r.lod_bias", "r.occlusion", "r.rg_record_cost", "r.cull_freeze"};
+    const char *const values[] = {"0", "1", "32", "0"};
     for (u32 i = 0; i < sizeof names / sizeof names[0]; ++i) {
         const de_cvar cv = de_cvar_find(names[i]);
         if (DE_HANDLE_VALID(cv))
@@ -977,6 +977,76 @@ static void forced_forward_lod(lx *f, de_gpu_backend backend) {
     lx_run(f);
     EXPECT_EQ(green_pixels(f), whole);
     EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+}
+
+/* Distinct cooked ranges and equal-camera pixels distinguish LOD from projection size. */
+static void automatic_forward_lod(lx *f, de_gpu_backend backend) {
+    lx_open(f, backend);
+    ASSERT_TRUE(cvar_set("r.lod_bias", "0"));
+    lx_floor(f, mat_unlit(.2f, .2f, .2f, 1, DE_COOKED_ALPHA_OPAQUE));
+    const u32 material = mat_unlit(0, 1, 0, .5f, DE_COOKED_ALPHA_BLEND);
+    const u32 mesh = lx_mesh_plane(f, 2, 2, 1);
+    de_render_mesh *record = &g_mesh[mesh - 1u].rm;
+    record->lod_count = 2;
+    record->lods[1] = (de_cooked_mesh_lod){.meshlet_first = 3,
+                                           .meshlet_count = 1,
+                                           .triangle_count = PATCH_TRIS,
+                                           .vertex_count = PATCH_VERT,
+                                           .error = .1f};
+    world_set(&f->w, 1, mesh, at(0, 0, 3), material);
+    lx_run(f);
+    const u32 near_whole = green_pixels(f);
+    ASSERT_GT(near_whole, 100u);
+    ASSERT_EQ(f->res.draw_count, 1u);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+    ASSERT_TRUE(cvar_set("r.lod_bias", "1"));
+    lx_run(f);
+    const u32 near_quarter = green_pixels(f);
+    EXPECT_GT(near_quarter, near_whole / 5u);
+    EXPECT_LT(near_quarter, near_whole / 3u);
+    EXPECT_EQ(f->res.draws[0].meshlet_first, 3u);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 1u);
+    ASSERT_TRUE(cvar_set("r.lod_bias", "0"));
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), near_whole);
+
+    /* Capture automatic near-camera constants, then move the live raster camera and bias. */
+    ASSERT_TRUE(cvar_set("r.cull_freeze", "1"));
+    lx_run(f);
+    f->eye.z = 30;
+    ASSERT_TRUE(cvar_set("r.lod_bias", "1"));
+    lx_run(f);
+    const u32 far_whole = green_pixels(f);
+    ASSERT_GT(far_whole, 40u);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+    f->display = (de_view_display){.force_mesh_lod = true, .mesh_lod = 1};
+    lx_run(f);
+    const u32 far_quarter = green_pixels(f);
+    EXPECT_GT(far_quarter, far_whole / 5u);
+    EXPECT_LT(far_quarter, far_whole / 3u);
+    EXPECT_EQ(f->res.draws[0].meshlet_first, 3u);
+    f->display = (de_view_display){0};
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), far_whole);
+    ASSERT_TRUE(cvar_set("r.cull_freeze", "0"));
+    ASSERT_TRUE(cvar_set("r.lod_bias", "0"));
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), far_quarter);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 1u);
+    ASSERT_TRUE(cvar_set("r.lod_bias", "-1"));
+    lx_run(f);
+    EXPECT_EQ(green_pixels(f), far_whole);
+    EXPECT_EQ(f->res.draws[0].meshlet_count, 4u);
+    /* Callers without camera constants retain the historical LOD0 fallback. */
+    de__transparent_item *items = NULL;
+    de__transparent_counts counts;
+    const de__transparent_view no_cull = {
+        .gs = f->gs, .world = &f->w.f, .layer_mask = UINT32_MAX, .view_matrix = de_m4_identity()};
+    ASSERT_EQ(de__transparent_gather(&no_cull, f->arena, &items, &counts), 1u);
+    EXPECT_EQ(items[0].meshlet_first, 0u);
+    EXPECT_EQ(items[0].meshlet_count, 4u);
+    printf("automatic LOD pixels: near whole %u / quarter %u, far whole %u / quarter %u\n",
+           near_whole, near_quarter, far_whole, far_quarter);
 }
 
 static void hidden_forward(lx *f, de_gpu_backend backend) {
@@ -1477,6 +1547,15 @@ static void scene_color(lx *f, de_gpu_backend b) {
     TEST_F(forward, hidden_forward_##tag, lx) {                                                    \
         hidden_forward(f, backend);                                                                \
     }
+TEST_F(forward, automatic_forward_lod_metal, lx) {
+    automatic_forward_lod(f, DE_GPU_METAL);
+}
+TEST_F(forward, automatic_forward_lod_vulkan, lx) {
+    automatic_forward_lod(f, DE_GPU_VULKAN);
+}
+TEST_F(forward, automatic_forward_lod_d3d12, lx) {
+    automatic_forward_lod(f, DE_GPU_D3D12);
+}
 HIDDEN_FORWARD_TEST(metal, DE_GPU_METAL)
 HIDDEN_FORWARD_TEST(vulkan, DE_GPU_VULKAN)
 HIDDEN_FORWARD_TEST(d3d12, DE_GPU_D3D12)
