@@ -77,6 +77,55 @@ TEST(linebreak, cjk_and_emergency_cluster_boundaries) {
     EXPECT_EQ(gb[3], 1u);
     EXPECT_EQ(gb[4], 0u);
 }
+TEST(linebreak, long_regional_indicator_base_runs) {
+    u32 cp[4096];
+    u8 breaks[4097];
+    for (u32 i = 0; i < 4096; ++i)
+        cp[i] = 0x1f1e6 + i % 26;
+    for (u32 count = 4095; count <= 4096; ++count) {
+        ASSERT_EQ(de__text_linebreak(cp, count, breaks, de_heap_allocator()), DE_OK);
+        EXPECT_EQ(breaks[0], 0u);
+        for (u32 i = 1; i < count; ++i)
+            EXPECT_EQ(breaks[i], (u8)(i % 2 == 0));
+        EXPECT_EQ(breaks[count], 2u);
+    }
+}
+TEST(linebreak, regional_indicator_inheritance_and_resets) {
+    const struct {
+        u32 count;
+        u32 cp[8];
+        u8 expected[9];
+    } cases[] = {
+        {4, {0x1f1e6, 0x301, 0x1f1e6, 0x1f1e6}, {0, 0, 0, 1, 2}},
+        {5, {0x1f1e6, 0x1f1e6, 0x301, 0x1f1e6, 0x1f1e6}, {0, 0, 0, 1, 0, 2}},
+        {4, {0x1f1e6, 0x200d, 0x1f1e6, 0x1f1e6}, {0, 0, 0, 1, 2}},
+        {4, {0x301, 0x1f1e6, 0x1f1e6, 0x1f1e6}, {0, 1, 0, 1, 2}},
+        {5, {0x1f1e6, ' ', 0x301, 0x1f1e6, 0x1f1e6}, {0, 0, 1, 1, 0, 2}},
+        {5, {0x1f1e6, 0x200b, 0x301, 0x1f1e6, 0x1f1e6}, {0, 0, 1, 1, 0, 2}},
+    };
+    for (u32 k = 0; k < sizeof cases / sizeof cases[0]; ++k) {
+        u8 breaks[9];
+        ASSERT_EQ(de__text_linebreak(cases[k].cp, cases[k].count, breaks, de_heap_allocator()),
+                  DE_OK);
+        EXPECT_MEMEQ(breaks, cases[k].expected, cases[k].count + 1);
+    }
+    const u32 interruptions[] = {'a', ' ', '\n'};
+    for (u32 k = 0; k < sizeof interruptions / sizeof interruptions[0]; ++k) {
+        for (u32 prefix = 1; prefix <= 4; ++prefix) {
+            u32 cp[9];
+            u8 breaks[10];
+            for (u32 i = 0; i < prefix + 5; ++i)
+                cp[i] = i == prefix ? interruptions[k] : 0x1f1e6;
+            ASSERT_EQ(de__text_linebreak(cp, prefix + 5, breaks, de_heap_allocator()), DE_OK);
+            EXPECT_EQ(breaks[prefix], (u8)(interruptions[k] == 'a'));
+            EXPECT_EQ(breaks[prefix + 1], (u8)(interruptions[k] == '\n' ? 2 : 1));
+            EXPECT_EQ(breaks[prefix + 2], 0u);
+            EXPECT_EQ(breaks[prefix + 3], 1u);
+            EXPECT_EQ(breaks[prefix + 4], 0u);
+            EXPECT_EQ(breaks[prefix + 5], 2u);
+        }
+    }
+}
 TEST(text_graphemes, public_byte_offsets_capacity_invalid_and_large_input) {
     const char *text = "a\xcc\x81"
                        "👩‍👩‍👧‍👦"

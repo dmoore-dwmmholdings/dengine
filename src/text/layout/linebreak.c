@@ -4,6 +4,7 @@
 #include <string.h>
 typedef struct lb_char {
     de__unicode_props props;
+    bool ri_odd;
     u32 cp, base;
     de__lb raw, cls;
 } lb_char;
@@ -150,16 +151,8 @@ static u8 boundary(const lb_char *c, u32 count, u32 i) {
     if (((alpha(a) || a == LB_NU) && b == LB_OP && !right->props.east_asian) ||
         (a == LB_CP && !left->props.east_asian && (alpha(b) || b == LB_NU)))
         return 0; /* LB30 */
-    if (a == LB_RI && b == LB_RI) {
-        u32 ri = 0;
-        i32 at = ai;
-        while (at >= 0 && c[at].cls == LB_RI) {
-            ++ri;
-            at = previous(c, at - 1);
-        }
-        if (ri & 1)
-            return 0; /* LB30a */
-    }
+    if (a == LB_RI && b == LB_RI && left->ri_odd)
+        return 0; /* LB30a */
     if (b == LB_EM && (a == LB_EB || (left->props.pictographic && left->props.unassigned)))
         return 0; /* LB30b */
     return 1;     /* LB31 */
@@ -176,6 +169,7 @@ de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allo
         if (!chars)
             return DE_ERR_OUT_OF_MEMORY;
     }
+    bool ri_odd = false;
     for (u32 i = 0; i < count; ++i) {
         lb_char *c = &chars[i];
         c->cp = cp[i];
@@ -197,6 +191,10 @@ de_result de__text_linebreak(const u32 *cp, u32 count, u8 *breaks, const de_allo
             } else
                 c->cls = LB_AL;
         }
+        /* Count effective bases: inherited CM/ZWJ do not add another RI. */
+        if (c->base == i)
+            ri_odd = c->cls == LB_RI && !ri_odd;
+        c->ri_odd = ri_odd;
     }
     for (u32 i = 1; i < count; ++i)
         breaks[i] = boundary(chars, count, i);
