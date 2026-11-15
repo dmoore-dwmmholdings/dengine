@@ -48,7 +48,7 @@ static const struct {
     {"DeMeshRenderer", 5, offsetof(DeRenderComponents, mesh_renderer)},
     {"DeLight", 10, offsetof(DeRenderComponents, light)},
     {"DeEnvironment", 3, offsetof(DeRenderComponents, environment)},
-    {"DeSprite", 16, offsetof(DeRenderComponents, sprite)},
+    {"DeSprite", 17, offsetof(DeRenderComponents, sprite)},
     {"DeSky", 5, offsetof(DeRenderComponents, sky)},
     {"DeFogVolume", 4, offsetof(DeRenderComponents, fog_volume)},
     {"DeDecal", 4, offsetof(DeRenderComponents, decal)},
