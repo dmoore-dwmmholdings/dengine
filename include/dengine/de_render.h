@@ -787,6 +787,13 @@ typedef struct DeSprite {
     f32 thickness;    /* meters, for RT shadows */
     i16 layer, order; /* translucent sorting */
     bool flip_x, flip_y, translucent, cast_shadows;
+    /** Draw the texel colour x `color` as the final colour, with no lighting (the Unlit model,
+     * DENG-763). The colour skips the 8-bit G-buffer, so with tonemapper NONE, exposure 1
+     * (exposure_ev100 = -log2(1.2)), no bloom or grading and an sRGB output, each texel reaches
+     * the output unchanged (pixel art). The lighting maps (normal, rough/metal, emissive,
+     * height) are ignored. The sprite still casts shadows when `cast_shadows` is set.
+     * false: lit, the Sprite model. */
+    bool unlit;
 } DeSprite;
 
 typedef struct de_pixel_art_settings {

@@ -1262,6 +1262,13 @@ if(TARGET test_render_palette_dither)
     target_include_directories(test_render_palette_dither PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-763 unlit sprites: exact texel colours (256 greys + palette) through the Unlit model.
+de_add_test(NAME render_sprite_unlit SOURCES test_sprite_unlit.c render_d3d12_test.c
+    LIBS ${_de_vis_libs} LABELS unit gpu render TIMEOUT 300)
+if(TARGET test_render_sprite_unlit)
+    target_include_directories(test_render_sprite_unlit PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # DENG-322 bounded public forward-participant provider contract.
 if(DE_BUILD_TOOLS)
     de_add_test(NAME render_forward_participants SOURCES test_forward_participants.c

@@ -81,11 +81,15 @@ fail:
 void de__sprite_pack_material(const DeSprite *s, de__gs_material *o,
                               u32 (*texture)(void *, de_texture), void *user) {
     memset(o, 0, sizeof *o);
-    o->model = DE__GS_MATERIAL_MODEL_SPRITE;
-    o->flags = DE__MATERIAL_FLAG_READY | DE__MATERIAL_FLAG_DOUBLE_SIDED;
+    /* DENG-763: an unlit sprite takes the Unlit model, whose resolve writes the colour to the
+     * fp16 lighting target as the final colour; the Sprite model's goes through 8-bit GB0. */
+    o->model = s->unlit ? DE__GS_MATERIAL_MODEL_UNLIT : DE__GS_MATERIAL_MODEL_SPRITE;
+    o->flags = DE__MATERIAL_FLAG_READY | DE__MATERIAL_FLAG_DOUBLE_SIDED | DE__MATERIAL_FLAG_SPRITE |
+               (s->unlit ? DE__MATERIAL_FLAG_UNLIT : 0u);
     o->alpha_mode = s->translucent ? 2u : 1u;
     o->features = DE__MATERIAL_FEATURE_DOUBLE_SIDED |
-                  (s->translucent ? DE__MATERIAL_FEATURE_FORWARD : DE__MATERIAL_FEATURE_ALPHA_MASK);
+                  (s->translucent ? DE__MATERIAL_FEATURE_FORWARD : DE__MATERIAL_FEATURE_ALPHA_MASK) |
+                  (s->unlit ? DE__MATERIAL_FEATURE_UNLIT : 0u);
     memcpy(o->base_color.v, &s->color, sizeof s->color);
     o->pbr.v[0] = DE_HANDLE_VALID(s->rough_metal_tex) ? 1.f : 0.f;
     o->pbr.v[1] = 1;
@@ -94,13 +98,14 @@ void de__sprite_pack_material(const DeSprite *s, de__gs_material *o,
     for (u32 i = 0; i < 4; ++i)
         o->specular.v[i] = 1;
     o->clearcoat.v[2] = 1.5f;
-    if (DE_HANDLE_VALID(s->emissive_tex))
+    if (DE_HANDLE_VALID(s->emissive_tex) && !s->unlit)
         for (u32 i = 0; i < 4; ++i)
             o->emissive.v[i] = 1;
     const de_texture textures[5] = {s->texture, s->rough_metal_tex, s->normal_tex, s->emissive_tex,
                                     s->height_tex};
     const u32 slots[5] = {0, 1, 2, 4, 18};
-    for (u32 i = 0; i < 5; ++i)
+    /* The Unlit model samples the base colour only. */
+    for (u32 i = 0; i < (s->unlit ? 1u : 5u); ++i)
         if (texture && DE_HANDLE_VALID(textures[i]))
             o->textures[slots[i] / 4].v[slots[i] % 4] = texture(user, textures[i]);
     /* Sprite-only storage: uv offset and signed scale; extra.w is height scale. */
