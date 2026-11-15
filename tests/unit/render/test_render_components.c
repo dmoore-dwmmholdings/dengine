@@ -494,6 +494,7 @@ TEST_F(render_components, defaults, cfx) {
         EXPECT_EQ((int)sp.layer, 0);
         EXPECT_FALSE(sp.flip_x || sp.flip_y || sp.translucent);
         EXPECT_TRUE(sp.cast_shadows);
+        EXPECT_FALSE(sp.unlit);
 
         DeSky sky;
         construct_from(f, "DeSky", &sky, sizeof sky, fill);

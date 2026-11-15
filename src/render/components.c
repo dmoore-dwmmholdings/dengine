@@ -285,6 +285,8 @@ static de_result reg_sprite(de_world *w, de_component *out) {
         DE_FIELD(DeSprite, flip_y, DE_FK_BOOL, AUTHORED),
         DE_FIELD(DeSprite, translucent, DE_FK_BOOL, AUTHORED),
         DE_FIELD(DeSprite, cast_shadows, DE_FK_BOOL, AUTHORED),
+        DE_FIELD_EX(DeSprite, unlit, DE_FK_BOOL, AUTHORED,
+                    {0, 0, 0, "Exact texel colour, no lighting", 0, 0}),
     };
     return register_component(w, DE_TYPE_DESC(DeSprite, 1, k_fields), construct_sprite, out);
 }
