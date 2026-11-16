@@ -3324,6 +3324,7 @@ void de_ep_read_hello_params(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_para
 void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v) {
     uint32_t n = 0;
     ++n;
+    n += v->has_server_protocol ? 1u : 0u;
     ++n;
     ++n;
     ++n;
@@ -3332,6 +3333,10 @@ void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v) {
     mpack_start_map(w, n);
     mpack_write_cstr(w, "protocol");
     de_ep_write_str(w, v->protocol);
+    if (v->has_server_protocol) {
+        mpack_write_cstr(w, "serverProtocol");
+        de_ep_write_str(w, v->server_protocol);
+    }
     mpack_write_cstr(w, "capabilities");
     mpack_start_array(w, v->capabilities.count);
     for (uint32_t i_1 = 0; i_1 < v->capabilities.count; ++i_1) {
@@ -3361,8 +3366,12 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
         if (de_ep_str_eq(k, "protocol")) {
             seen |= (uint64_t)1 << 0;
             de_ep_read_str(r, &out->protocol);
-        } else if (de_ep_str_eq(k, "capabilities")) {
+        } else if (de_ep_str_eq(k, "serverProtocol")) {
             seen |= (uint64_t)1 << 1;
+            out->has_server_protocol = true;
+            de_ep_read_str(r, &out->server_protocol);
+        } else if (de_ep_str_eq(k, "capabilities")) {
+            seen |= (uint64_t)1 << 2;
             out->capabilities.count = mpack_expect_array(r);
             out->capabilities.items = (de_ep_str *)de_ep_arena_array(r, a, out->capabilities.count, sizeof(*out->capabilities.items));
             for (uint32_t i_3 = 0; out->capabilities.items && i_3 < out->capabilities.count; ++i_3)
@@ -3371,16 +3380,16 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
             }
             mpack_done_array(r);
         } else if (de_ep_str_eq(k, "build")) {
-            seen |= (uint64_t)1 << 2;
+            seen |= (uint64_t)1 << 3;
             de_ep_read_build_info(r, a, &out->build);
         } else if (de_ep_str_eq(k, "limits")) {
-            seen |= (uint64_t)1 << 3;
+            seen |= (uint64_t)1 << 4;
             de_ep_read_limits(r, a, &out->limits);
         } else if (de_ep_str_eq(k, "epoch")) {
-            seen |= (uint64_t)1 << 4;
+            seen |= (uint64_t)1 << 5;
             out->epoch = mpack_expect_u32(r);
         } else if (de_ep_str_eq(k, "schema")) {
-            seen |= (uint64_t)1 << 5;
+            seen |= (uint64_t)1 << 6;
             out->has_schema = true;
             de_ep_read_str(r, &out->schema);
         } else {
@@ -3388,7 +3397,7 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
         }
     }
     mpack_done_map(r);
-    if ((seen & UINT64_C(31)) != UINT64_C(31))
+    if ((seen & UINT64_C(61)) != UINT64_C(61))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
