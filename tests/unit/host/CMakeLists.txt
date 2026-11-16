@@ -465,3 +465,12 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-692: actual legacy handler and owned requests with a controlled asynchronous backend.
+if(NOT DE_IS_SHIPPING AND TARGET de_render AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_model_info_async SOURCES test_model_info_async.c
+        LIBS de_host de_render de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev)
+    target_include_directories(test_editor_model_info_async PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_editor_model_info_async PRIVATE
+        DE_MODEL_INFO_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/model_info")
+endif()
