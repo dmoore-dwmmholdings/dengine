@@ -38,6 +38,7 @@ static void safety_fx_setup(safety_fx *f) {
 static void safety_fx_teardown(safety_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
+    de__ed_scene_engine_shutdown(&f->engine);
     de_world_destroy(f->engine.world);
     if (f->engine.assets)
         de_asset_system_destroy(f->engine.assets);

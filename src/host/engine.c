@@ -33,6 +33,10 @@
 #include <stdlib.h> /* getenv: editor sessions (DENG-647) */
 #include <string.h>
 
+#if DE_HAS_EDITOR_SERVICE
+void de__ed_scene_engine_shutdown(de_engine *engine);
+#endif
+
 /* Release owned modules in dependency order, including game-created GPU/renderer/UI.
  * NULL members are skipped, so this also unwinds partial engine or game initialisation. */
 static void engine_teardown(de__engine *e) {
@@ -63,6 +67,9 @@ static void engine_teardown(de__engine *e) {
         de_text_destroy(e->pub.text);
         e->pub.text = NULL;
     }
+#if DE_HAS_EDITOR_SERVICE
+    de__ed_scene_engine_shutdown(&e->pub);
+#endif
 #if DE_HAS_ASSETS
     /* DENG-143: before the world, which it detaches from (system, resource), and before the I/O
      * threads its loads use. */

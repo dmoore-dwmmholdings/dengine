@@ -432,6 +432,8 @@ de_result de__editor_start(de__host *h) {
     const char *endpoint = arg_value(h, "--editor-service");
     if (endpoint == NULL)
         return DE_OK;
+    if (de__ed_scene_attached())
+        return DE_FAIL(DE_ERR_BUSY, "another editor service is already attached");
     const char *token = getenv("DE_EDITOR_TOKEN");
     if (token == NULL || token[0] == '\0')
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "--editor-service needs DE_EDITOR_TOKEN");
@@ -474,7 +476,11 @@ de_result de__editor_start(de__host *h) {
     de__ed_reflect_register(ed);
     de__ed_world_register(ed);
     de__ed_edit_register(ed);
-    de__ed_scene_register(ed);
+    const de_result scenes = de__ed_scene_register(ed);
+    if (scenes != DE_OK) {
+        de__editor_stop(h);
+        return scenes;
+    }
     de__ed_assets_register(ed);
     de__ed_animation_register(ed);
 #if DE_HAS_RENDER
@@ -500,6 +506,7 @@ void de__editor_stop(de__host *h) {
     if (ed == NULL)
         return;
     ed_drop(ed, "shutdown");
+    de__ed_scene_detach(ed);
     if (de__ed_crash_disarm())
         de_ep_listener_close(&ed->listener);
     de__ed_session_shutdown();
