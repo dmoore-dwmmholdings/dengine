@@ -15,6 +15,7 @@
 #if defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
 #endif
+#include "host/editor/editor_view_modes.h"
 #include "host/editor/editor_internal.h"
 #include "host/editor/editor_gizmo.h"
 
@@ -918,28 +919,15 @@ static void write_surfaces(ed_view *v, de_ep_arena *a, u32 *generation, de_ep_li
 
 /* ---------- view.* ---------- */
 
-/* Geometry modes are currently advertised by assets.modelGeometry, not the scene toolbar. */
-static const char *const k_render_modes[] = {"lit",           "unlit",    "baseColor", "normals",
-                                             "roughness",     "metallic", "ao",        "emissive",
-                                             "motionVectors", "depth"};
 u32 de__ed_views_render_modes(const char *const **names) {
-    *names = k_render_modes;
-    return ED_VIEWS ? (sizeof k_render_modes / sizeof k_render_modes[0]) : 0;
+    *names = de__ed_view_render_names;
+    return ED_VIEWS ? DE_VIEW_RENDER_MODE_COUNT : 0;
 }
+#if ED_VIEWS
 static bool render_mode(de_ep_str name, de_view_render_mode *out) {
-    if (!name.len) {
-        *out = DE_VIEW_RENDER_LIT;
-        return true;
-    }
-    for (u32 i = 0; i < (sizeof k_render_modes / sizeof k_render_modes[0]); ++i)
-        if (de_ep_str_eq(name, k_render_modes[i])) {
-            *out = (de_view_render_mode)i;
-            return true;
-        }
-    return false;
+    return de__ed_view_render_mode_parse(name.ptr, name.len, out);
 }
 
-#if ED_VIEWS
 static de_view_display display_policy(de_view_render_mode mode, u32 show) {
     return (de_view_display){.mode = mode,
                              .disabled_features =
@@ -957,8 +945,8 @@ static void on_create(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         return;
     }
     de_view_render_mode mode;
-    if (!render_mode(q.render_mode, &mode) ||
-        (q.has_game && q.game && mode != DE_VIEW_RENDER_LIT)) {
+    if (!de__ed_view_render_mode_request(q.render_mode.ptr, q.render_mode.len, q.has_game && q.game,
+                                         &mode)) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
         return;
     }
@@ -1197,7 +1185,7 @@ static void on_render_mode(de__editor *ed, const de_ep_request *req, de_ep_arena
     if (v == NULL)
         return;
     de_view_render_mode mode;
-    if (!render_mode(q.render_mode, &mode) || (v->game && mode != DE_VIEW_RENDER_LIT)) {
+    if (!de__ed_view_render_mode_request(q.render_mode.ptr, q.render_mode.len, v->game, &mode)) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "render mode is unavailable for this view");
         return;
     }

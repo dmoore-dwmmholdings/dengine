@@ -465,3 +465,12 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# DENG-743: shared service mode mapping; pure CPU, independent of host/GPU startup.
+if(NOT DE_IS_SHIPPING)
+    de_add_test(NAME editor_view_modes SOURCES test_editor_view_modes.c
+        LIBS de_core LABELS unit host CONFIGURATIONS Debug Dev Release)
+    if(TARGET test_editor_view_modes)
+        target_include_directories(test_editor_view_modes PRIVATE "${DE_ROOT_DIR}/src")
+    endif()
+endif()
