@@ -452,6 +452,9 @@ sha256 = "93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167"
 license = "MIT"
 license_file = "LICENSE.txt"
 files = ["core/**", "msdfgen.h"]
+# MSVC Debug speed: pointer walks instead of checked iterators in the per-pixel distance loops
+# (same elements, same order, same output); see the patch header. DENG-758.
+patches = ["patches/0001-pointer-walks-in-distance-loops.patch"]
 
 [[lib]]
 name="harfbuzz"
