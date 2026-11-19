@@ -2,6 +2,12 @@
  * handlers and the generated protocol readers and writers. DENG-785 (protocol 1.15): the UI pick
  * stack, ui.nodeCorners, the theme methods and the locale methods. The UI's live viewport is 400x100 with
  * reference height 100 (scale 1), as in tests/unit/ui. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "de_test.h"
 #if !defined(DE_SHIPPING) && DE_HAS_UI
 #include "../ui/style_test_util.h"
@@ -14,6 +20,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 #define STORAGE  (1u << 20)
 #define RESPONSE (64u << 10)
@@ -53,8 +62,8 @@ static void ui_ed_fx_setup(ui_ed_fx *f) {
     f->ed.arena_cap = STORAGE;
     f->ed.note = f->note;
     f->ed.note_cap = sizeof f->note;
-    f->ed.proto_major = 1; /* as hello agrees with a 1.15 IDE */
-    f->ed.proto_minor = 15;
+    f->ed.proto_major = 1; /* as hello agrees with a 1.16 IDE */
+    f->ed.proto_minor = 16;
     de__ed_edit_register(&f->ed);
     de__ed_ui_register(&f->ed);
 }
@@ -177,7 +186,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.15"); /* pinned dide 98b63cd (DENG-785) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.16"); /* pinned dide faec8854 (DENG-787) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
@@ -648,4 +657,187 @@ TEST_F(editor_ui, ui_pick_stack_on_screen_and_through_a_ray, ui_ed_fx) {
         EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(rect, 2)), 100, 1e-3f);
     }
 }
+
+/* ---- DENG-787: protocol 1.16, ui.stylesheets and ui.checkStylesheet ---- */
+static mpack_node_t check_text(ui_ed_fx *f, const char *text) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    de_ep_write_ui_check_stylesheet_params(&w,
+                                           &(de_ep_ui_check_stylesheet_params){.text = de_ep_cstr(text)});
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, DE_EP_METHOD_UI_CHECK_STYLESHEET, size);
+}
+static bool has_cap(ui_ed_fx *f, const char *name) {
+    for (u32 i = 0; i < f->ed.cap_count; ++i)
+        if (strcmp(f->ed.caps[i], name) == 0)
+            return true;
+    return false;
+}
+static bool is_absent(mpack_node_t map, const char *key) {
+    return mpack_node_is_missing(mpack_node_map_cstr_optional(map, key)) ||
+           mpack_node_type(mpack_node_map_cstr_optional(map, key)) == mpack_type_nil;
+}
+
+TEST_F(editor_ui, advertises_ui_stylesheets_and_gates_the_1_16_methods, ui_ed_fx) {
+    EXPECT_TRUE(has_cap(f, "ui.stylesheets"));
+    EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_STYLESHEETS] != NULL);
+    EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_CHECK_STYLESHEET] != NULL);
+    f->ed.proto_minor = 15; /* an IDE that agreed 1.15 */
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS)), DE_EP_ERR_UNSUPPORTED);
+    EXPECT_EQ(code_of(check_text(f, "")), DE_EP_ERR_UNSUPPORTED);
+    f->ed.proto_minor = 16;
+    EXPECT_TRUE(de__ed_protocol_at_least(&f->ed, 1, 16));
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS)), 0);
+}
+
+TEST_F(editor_ui, stylesheets_list_loaded_failed_and_rejected_reload, ui_ed_fx) {
+    mpack_node_t r = res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "suffix"), DE_UI_STYLESHEET_SUFFIX));
+    const u32 builtin = (u32)mpack_node_array_length(mpack_node_map_cstr(r, "sheets"));
+    ASSERT_TRUE(builtin >= 1u); /* the embedded widget theme */
+
+    ASSERT_EQ(style_install(f->engine.ui, "[vars]\na=1\n"), DE_OK);
+    ASSERT_EQ(style_install(f->engine.ui, "[vars]\nb=2\n"), DE_OK);
+    de_ui_style_system *st = f->engine.ui->style;
+    ASSERT_EQ(st->sheet_count, 2u);
+    /* A rejected reload of the second sheet: loaded and an error, the old rules stay. */
+    st->sheets[1].failed = true;
+    st->sheets[1].error = (de_ui_sheet_error){.line = 4, .column = 9};
+    snprintf(st->sheets[1].error.message, sizeof st->sheets[1].error.message, "bad value");
+    /* A failed first load, with a column but no line: the column must not be sent. */
+    st->failed[st->failed_count++] =
+        (de_ui_style_failed_sheet){.error = {.line = 0, .column = 5}};
+    snprintf(st->failed[0].error.message, sizeof st->failed[0].error.message, "cannot read");
+
+    r = res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "suffix"), ".uistyle.toml"));
+    mpack_node_t sheets = mpack_node_map_cstr(r, "sheets");
+    ASSERT_EQ(mpack_node_array_length(sheets), 3u);
+    for (u32 i = 0; i < 3; ++i) {
+        mpack_node_t s = mpack_node_array_at(sheets, i);
+        EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(s, "index")), i);
+        EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(s, "builtin")));
+        EXPECT_TRUE(str_is(mpack_node_map_cstr(s, "path"), ""));
+        EXPECT_TRUE(str_is(mpack_node_map_cstr(s, "asset"), ""));
+        EXPECT_TRUE(str_is(mpack_node_map_cstr(s, "source"), ""));
+    }
+    mpack_node_t ok = mpack_node_array_at(sheets, 0);
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(ok, "loaded")));
+    EXPECT_TRUE(is_absent(ok, "error"));
+    mpack_node_t rej = mpack_node_array_at(sheets, 1);
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(rej, "loaded")));
+    mpack_node_t e = mpack_node_map_cstr(rej, "error");
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "line")), 4u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "column")), 9u);
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(e, "message"), "bad value"));
+    mpack_node_t failed = mpack_node_array_at(sheets, 2);
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(failed, "loaded")));
+    e = mpack_node_map_cstr(failed, "error");
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "line")), 0u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "column")), 0u); /* never a column at line 0 */
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(e, "message"), "cannot read"));
+}
+
+TEST_F(editor_ui, stylesheets_without_a_ui_are_empty, ui_ed_fx) {
+    de_ui_destroy(f->engine.ui);
+    f->engine.ui = NULL;
+    mpack_node_t r = res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "suffix"), DE_UI_STYLESHEET_SUFFIX));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "sheets")), 0u);
+}
+
+TEST_F(editor_ui, check_stylesheet_reports_ok_and_positions, ui_ed_fx) {
+    mpack_node_t r = res(check_text(f, ""));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "ok")));
+    EXPECT_TRUE(is_absent(r, "error"));
+    r = res(check_text(f, "[vars]\na=1\n[style.button]\nopacity=0.5\n"));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "ok")));
+    EXPECT_TRUE(is_absent(r, "error"));
+    r = res(check_text(f, "[style.button]\nopacity = 0.5\nradius = 'open\n"));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "ok")));
+    mpack_node_t e = mpack_node_map_cstr(r, "error");
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "line")), 3u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "column")), 10u);
+    EXPECT_TRUE(mpack_node_strlen(mpack_node_map_cstr(e, "message")) > 0);
+    r = res(check_text(f, "[style.button]\nopacity='wrong'"));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "ok")));
+    e = mpack_node_map_cstr(r, "error");
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "line")), 2u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "column")), 9u);
+    /* Checking never loads: the sheet list is unchanged. */
+    const size_t before = mpack_node_array_length(
+        mpack_node_map_cstr(res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS)), "sheets"));
+    (void)res(check_text(f, "[vars]\nz=1\n"));
+    EXPECT_EQ(mpack_node_array_length(
+                  mpack_node_map_cstr(res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS)), "sheets")),
+              before);
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_CHECK_STYLESHEET)), DE_EP_ERR_INVALID_PARAMS);
+}
+
+#if !defined(_WIN32)
+/* Sheets from the manifest: the asset id, the manifest path and the source relative to the asset
+ * root, and error.file taken from that source. */
+TEST_F(editor_ui, stylesheets_carry_manifest_path_source_and_error_file, ui_ed_fx) {
+    char directory[] = "/tmp/deng-edui-sheets-XXXXXX";
+    ASSERT_TRUE(mkdtemp(directory) != NULL);
+    ASSERT_EQ(de_fs_mount("edsheets", directory, DE_MOUNT_WRITABLE, 0), DE_OK);
+    static const char *const names[] = {"assets.toml", "hud.uistyle.toml", "broken.uistyle.toml"};
+    static const char *const texts[] = {
+        "[project]\nasset_root='.'\nversion=1\n[assets]\n"
+        "'ui/hud'={type='ui_style',source='hud.uistyle.toml'}\n"
+        "'ui/broken'={type='ui_style',source='broken.uistyle.toml'}\n",
+        "[style.button]\nopacity=0.2\n", "[style.button]\n\nopacity = 'x'\n"};
+    for (u32 i = 0; i < 3; ++i) {
+        char path[64];
+        snprintf(path, sizeof path, "edsheets:/%s", names[i]);
+        ASSERT_EQ(de_file_write_all_atomic(path, texts[i], strlen(texts[i])), DE_OK);
+    }
+    de_ui_destroy(f->engine.ui);
+    f->engine.ui = NULL;
+    de_asset_system *assets = NULL;
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){0}, &assets), DE_OK);
+    ASSERT_EQ(de_ui_create(&(de_ui_desc){.assets = assets, .max_nodes = 1000,
+                                         .reference_height = 100},
+                           &f->engine.ui),
+              DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(assets, "edsheets:/assets.toml"), DE_OK);
+    de_asset_id ids[] = {de_asset_id_from("ui/hud"), de_asset_id_from("ui/broken")};
+    de_load_handle load = de_asset_load_many(assets, ids, 2, 0);
+    de_asset_wait(assets, load, 30000000000ULL);
+    ASSERT_EQ(de_ui_load_stylesheet(f->engine.ui, de_ui_stylesheet(f->engine.ui, ids[0])), DE_OK);
+    EXPECT_TRUE(de_ui_load_stylesheet(f->engine.ui, de_ui_stylesheet(f->engine.ui, ids[1])) !=
+                DE_OK);
+
+    mpack_node_t sheets = mpack_node_map_cstr(res(call_empty(f, DE_EP_METHOD_UI_STYLESHEETS)),
+                                              "sheets");
+    const size_t n = mpack_node_array_length(sheets);
+    ASSERT_TRUE(n >= 3u);
+    mpack_node_t hud = mpack_node_array_at(sheets, n - 2);
+    mpack_node_t broken = mpack_node_array_at(sheets, n - 1); /* failed first loads come last */
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(hud, "path"), "ui/hud"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(hud, "asset"), "ui/hud"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(hud, "source"), "hud.uistyle.toml"));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(hud, "loaded")));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(hud, "builtin")));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(broken, "loaded")));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(broken, "source"), "broken.uistyle.toml"));
+    mpack_node_t e = mpack_node_map_cstr(broken, "error");
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(e, "file"), "broken.uistyle.toml"));
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "line")), 3u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(e, "column")), 11u);
+
+    de_ui_destroy(f->engine.ui);
+    f->engine.ui = NULL;
+    de_asset_release(assets, load);
+    de_asset_system_destroy(assets);
+    for (u32 i = 0; i < 3; ++i) {
+        char path[64];
+        snprintf(path, sizeof path, "edsheets:/%s", names[i]);
+        EXPECT_EQ(de_file_delete(path), DE_OK);
+    }
+    EXPECT_EQ(de_fs_unmount("edsheets", directory), DE_OK);
+    EXPECT_EQ(rmdir(directory), 0);
+}
+#endif
 #endif

@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.15"
-#define DE_EP_SCHEMA_HASH "3f1836982c45d485"
+#define DE_EP_PROTOCOL_VERSION "1.16"
+#define DE_EP_SCHEMA_HASH "b4ad6b70e8f503fc"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -278,6 +278,9 @@ typedef struct de_ep_tx_params de_ep_tx_params;
 typedef struct de_ep_tx_result de_ep_tx_result;
 typedef struct de_ep_type_info de_ep_type_info;
 typedef struct de_ep_type_list de_ep_type_list;
+typedef struct de_ep_ui_check_error de_ep_ui_check_error;
+typedef struct de_ep_ui_check_stylesheet de_ep_ui_check_stylesheet;
+typedef struct de_ep_ui_check_stylesheet_params de_ep_ui_check_stylesheet_params;
 typedef struct de_ep_ui_layout de_ep_ui_layout;
 typedef struct de_ep_ui_layout_params de_ep_ui_layout_params;
 typedef struct de_ep_ui_layout_rect de_ep_ui_layout_rect;
@@ -286,6 +289,9 @@ typedef struct de_ep_ui_node_corners_params de_ep_ui_node_corners_params;
 typedef struct de_ep_ui_pick_hit de_ep_ui_pick_hit;
 typedef struct de_ep_ui_preview_theme_params de_ep_ui_preview_theme_params;
 typedef struct de_ep_ui_safe_insets de_ep_ui_safe_insets;
+typedef struct de_ep_ui_sheet de_ep_ui_sheet;
+typedef struct de_ep_ui_sheet_error de_ep_ui_sheet_error;
+typedef struct de_ep_ui_stylesheets de_ep_ui_stylesheets;
 typedef struct de_ep_ui_theme_info de_ep_ui_theme_info;
 typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
 typedef struct de_ep_ui_theme_vars de_ep_ui_theme_vars;
@@ -399,6 +405,11 @@ typedef struct de_ep_list_surface {
     de_ep_surface *items;
     uint32_t count;
 } de_ep_list_surface;
+
+typedef struct de_ep_list_ui_sheet {
+    de_ep_ui_sheet *items;
+    uint32_t count;
+} de_ep_list_ui_sheet;
 
 typedef struct de_ep_list_model_lod {
     de_ep_model_lod *items;
@@ -1746,6 +1757,23 @@ struct de_ep_type_list {
     de_ep_list_type_info types;
 };
 
+struct de_ep_ui_check_error {
+    uint32_t line; /* 1-based; 0 when unknown */
+    uint32_t column; /* 1-based; 0 when unknown */
+    de_ep_str message;
+};
+
+/* The result of parsing a sheet without loading it (de_ui_check_stylesheet). */
+struct de_ep_ui_check_stylesheet {
+    bool ok;
+    bool has_error;
+    de_ep_ui_check_error error; /* present when ok is false */
+};
+
+struct de_ep_ui_check_stylesheet_params {
+    de_ep_str text; /* the sheet's TOML text, e.g. an unsaved editor buffer */
+};
+
 struct de_ep_ui_layout {
     float scale; /* the UI scale the preview used */
     de_ep_list_ui_layout_rect rects; /* root first, then its subtree in pre-order, children in sibling order */
@@ -1796,6 +1824,31 @@ struct de_ep_ui_pick_hit {
 struct de_ep_ui_preview_theme_params {
     bool has_name;
     de_ep_str name; /* the theme to preview, "" for the base variables; absent or null ends the preview and applies the game's choice. Over 63 bytes is invalid_params; undeclared is not_found */
+};
+
+/* A style sheet parse error (de_ui_sheet_error). */
+struct de_ep_ui_sheet_error {
+    de_ep_str file; /* the sheet's manifest source, relative to the asset root (the same as UiSheet.source) */
+    uint32_t line; /* 1-based; 0 when unknown */
+    uint32_t column; /* 1-based; 0 when unknown */
+    de_ep_str message;
+};
+
+/* One UI style sheet the engine loaded or tried to load (de_ui_list_sheets). */
+struct de_ep_ui_sheet {
+    uint32_t index; /* load order; the same index as a theme variable's sheet */
+    de_ep_str path; /* the manifest asset path; "" for a built-in or source sheet */
+    de_ep_str asset; /* the asset id; "" when there is none */
+    de_ep_str source; /* the manifest source, relative to the asset root; "" when there is none */
+    bool builtin;
+    bool loaded; /* false when the first load failed; a rejected hot reload keeps the old rules and stays true */
+    bool has_error;
+    de_ep_ui_sheet_error error; /* the last load or reload error, until a good reload */
+};
+
+struct de_ep_ui_stylesheets {
+    de_ep_str suffix; /* the file suffix of UI style sheets (DE_UI_STYLESHEET_SUFFIX, e.g. ".uistyle.toml"); the IDE finds sheets by it */
+    de_ep_list_ui_sheet sheets; /* loaded sheets in load order, then the sheets whose first load failed */
 };
 
 struct de_ep_ui_theme_info {
@@ -2303,6 +2356,12 @@ void de_ep_write_type_info(mpack_writer_t *w, const de_ep_type_info *v);
 void de_ep_read_type_info(mpack_reader_t *r, de_ep_arena *a, de_ep_type_info *out);
 void de_ep_write_type_list(mpack_writer_t *w, const de_ep_type_list *v);
 void de_ep_read_type_list(mpack_reader_t *r, de_ep_arena *a, de_ep_type_list *out);
+void de_ep_write_ui_check_error(mpack_writer_t *w, const de_ep_ui_check_error *v);
+void de_ep_read_ui_check_error(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_error *out);
+void de_ep_write_ui_check_stylesheet(mpack_writer_t *w, const de_ep_ui_check_stylesheet *v);
+void de_ep_read_ui_check_stylesheet(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_stylesheet *out);
+void de_ep_write_ui_check_stylesheet_params(mpack_writer_t *w, const de_ep_ui_check_stylesheet_params *v);
+void de_ep_read_ui_check_stylesheet_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_check_stylesheet_params *out);
 void de_ep_write_ui_layout(mpack_writer_t *w, const de_ep_ui_layout *v);
 void de_ep_read_ui_layout(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout *out);
 void de_ep_write_ui_layout_params(mpack_writer_t *w, const de_ep_ui_layout_params *v);
@@ -2319,6 +2378,12 @@ void de_ep_write_ui_preview_theme_params(mpack_writer_t *w, const de_ep_ui_previ
 void de_ep_read_ui_preview_theme_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
 void de_ep_write_ui_safe_insets(mpack_writer_t *w, const de_ep_ui_safe_insets *v);
 void de_ep_read_ui_safe_insets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_safe_insets *out);
+void de_ep_write_ui_sheet(mpack_writer_t *w, const de_ep_ui_sheet *v);
+void de_ep_read_ui_sheet(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_sheet *out);
+void de_ep_write_ui_sheet_error(mpack_writer_t *w, const de_ep_ui_sheet_error *v);
+void de_ep_read_ui_sheet_error(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_sheet_error *out);
+void de_ep_write_ui_stylesheets(mpack_writer_t *w, const de_ep_ui_stylesheets *v);
+void de_ep_read_ui_stylesheets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_stylesheets *out);
 void de_ep_write_ui_theme_info(mpack_writer_t *w, const de_ep_ui_theme_info *v);
 void de_ep_read_ui_theme_info(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_info *out);
 void de_ep_write_ui_theme_var(mpack_writer_t *w, const de_ep_ui_theme_var *v);
@@ -2460,9 +2525,11 @@ typedef enum de_ep_method {
     DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
     DE_EP_METHOD_TERRAIN_INFO,
     DE_EP_METHOD_TERRAIN_SAMPLE,
+    DE_EP_METHOD_UI_CHECK_STYLESHEET,
     DE_EP_METHOD_UI_LAYOUT,
     DE_EP_METHOD_UI_NODE_CORNERS,
     DE_EP_METHOD_UI_PREVIEW_THEME,
+    DE_EP_METHOD_UI_STYLESHEETS,
     DE_EP_METHOD_UI_THEME_VARS,
     DE_EP_METHOD_UI_THEMES,
     DE_EP_METHOD_UNSUBSCRIBE,
@@ -2703,12 +2770,16 @@ bool de_ep_read_params_terrain_info(const de_ep_request *req, de_ep_arena *a, de
 void de_ep_write_response_terrain_info(mpack_writer_t *w, uint64_t id, const de_ep_terrain_info *result);
 bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_sample_params *out);
 void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result);
+bool de_ep_read_params_ui_check_stylesheet(const de_ep_request *req, de_ep_arena *a, de_ep_ui_check_stylesheet_params *out);
+void de_ep_write_response_ui_check_stylesheet(mpack_writer_t *w, uint64_t id, const de_ep_ui_check_stylesheet *result);
 bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep_ui_layout_params *out);
 void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result);
 bool de_ep_read_params_ui_node_corners(const de_ep_request *req, de_ep_arena *a, de_ep_ui_node_corners_params *out);
 void de_ep_write_response_ui_node_corners(mpack_writer_t *w, uint64_t id, const de_ep_ui_node_corners *result);
 bool de_ep_read_params_ui_preview_theme(const de_ep_request *req, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
 void de_ep_write_response_ui_preview_theme(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
+bool de_ep_read_params_ui_stylesheets(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_ui_stylesheets(mpack_writer_t *w, uint64_t id, const de_ep_ui_stylesheets *result);
 bool de_ep_read_params_ui_theme_vars(const de_ep_request *req, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
 void de_ep_write_response_ui_theme_vars(mpack_writer_t *w, uint64_t id, const de_ep_ui_theme_vars *result);
 bool de_ep_read_params_ui_themes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
