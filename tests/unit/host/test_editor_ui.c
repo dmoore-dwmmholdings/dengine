@@ -1,12 +1,15 @@
 /* DENG-778: ui.layout and the ui.editor capability (DIDE protocol 1.14), through the real
- * handlers and the generated protocol readers and writers. The UI's live viewport is 400x100 with
+ * handlers and the generated protocol readers and writers. DENG-785 (protocol 1.15): the UI pick
+ * stack, ui.nodeCorners, the theme methods and the locale methods. The UI's live viewport is 400x100 with
  * reference height 100 (scale 1), as in tests/unit/ui. */
 #include "de_test.h"
 #if !defined(DE_SHIPPING) && DE_HAS_UI
+#include "../ui/style_test_util.h"
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
 #include "ui/ui_internal.h"
 #include <dengine/de_ecs.h>
+#include <dengine/de_text.h>
 #include <dengine/de_ui.h>
 #include <math.h>
 #include <stdlib.h>
@@ -50,6 +53,8 @@ static void ui_ed_fx_setup(ui_ed_fx *f) {
     f->ed.arena_cap = STORAGE;
     f->ed.note = f->note;
     f->ed.note_cap = sizeof f->note;
+    f->ed.proto_major = 1; /* as hello agrees with a 1.15 IDE */
+    f->ed.proto_minor = 15;
     de__ed_edit_register(&f->ed);
     de__ed_ui_register(&f->ed);
 }
@@ -59,6 +64,8 @@ static void ui_ed_fx_teardown(ui_ed_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
     de__ed_session_shutdown();
+    if (f->engine.text)
+        de_text_destroy(f->engine.text);
     if (f->engine.ui)
         de_ui_destroy(f->engine.ui);
     de_world_destroy(f->engine.world);
@@ -170,7 +177,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.14");
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.15"); /* pinned dide 98b63cd (DENG-785) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
@@ -329,5 +336,316 @@ TEST_F(editor_ui, layout_errors_match_the_contract, ui_ed_fx) {
     EXPECT_EQ(code_of(layout(
                   f, &(de_ep_ui_layout_params){.root = root.bits, .width = 400, .height = 100})),
               DE_EP_ERR_NOT_FOUND);
+}
+
+/* ---- DENG-785: protocol 1.15 ---- */
+static const de_ep_method k_115[] = {DE_EP_METHOD_UI_NODE_CORNERS,  DE_EP_METHOD_UI_THEMES,
+                                     DE_EP_METHOD_UI_THEME_VARS,    DE_EP_METHOD_UI_PREVIEW_THEME,
+                                     DE_EP_METHOD_LOC_LOCALES,      DE_EP_METHOD_LOC_STRINGS,
+                                     DE_EP_METHOD_LOC_PREVIEW_LOCALE};
+/* Calls `m` with an empty params map. */
+static mpack_node_t call_empty(ui_ed_fx *f, de_ep_method m) {
+    f->params[0] = (char)0x80;
+    return call(f, m, 1);
+}
+/* Calls `m` with {key: value}; value NULL sends an explicit nil. */
+static mpack_node_t call_str(ui_ed_fx *f, de_ep_method m, const char *key, const char *value) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    mpack_start_map(&w, 1);
+    mpack_write_cstr(&w, key);
+    if (value)
+        mpack_write_cstr(&w, value);
+    else
+        mpack_write_nil(&w);
+    mpack_finish_map(&w);
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, m, size);
+}
+static mpack_node_t corners(ui_ed_fx *f, u64 entity) {
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    de_ep_write_ui_node_corners_params(&w, &(de_ep_ui_node_corners_params){.entity = entity});
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, DE_EP_METHOD_UI_NODE_CORNERS, size);
+}
+static mpack_node_t res(mpack_node_t root) {
+    ASSERT_EQ(code_of(root), 0);
+    return mpack_node_map_cstr(root, "result");
+}
+static bool str_is(mpack_node_t n, const char *s) {
+    return mpack_node_type(n) == mpack_type_str && mpack_node_strlen(n) == strlen(s) &&
+           memcmp(mpack_node_str(n), s, strlen(s)) == 0;
+}
+static mpack_node_t find_var(mpack_node_t vars, const char *name) {
+    for (size_t i = 0; i < mpack_node_array_length(vars); ++i) {
+        mpack_node_t v = mpack_node_array_at(vars, i);
+        if (str_is(mpack_node_map_cstr(v, "name"), name))
+            return v;
+    }
+    ASSERT_TRUE(!"variable not found");
+    return mpack_node_array_at(vars, 0);
+}
+static de_entity boxed(ui_ed_fx *f, de_entity parent, f32 x, f32 y, f32 w, f32 h) {
+    de_entity e = node(f, parent);
+    *(DeUiAnchor *)de_entity_add(f->engine.world, e, f->engine.ui->ids.anchor) =
+        (DeUiAnchor){.offset_min = {x, y}, .offset_max = {x + w, y + h}};
+    return e;
+}
+static de_entity panel_at(ui_ed_fx *f, de_dvec3 position) {
+    de_entity root = node(f, (de_entity){0});
+    de_component panel = de_component_find(f->engine.world, "DeUiWorldPanel");
+    ASSERT_TRUE(panel.id);
+    *(DeUiWorldPanel *)de_entity_add(f->engine.world, root, panel) =
+        (DeUiWorldPanel){.size_m = {2, 1}, .pixels_per_meter = 100, .depth_test = true};
+    de_transform t = de_transform_identity();
+    t.position = position;
+    *(DeTransform *)de_entity_add(f->engine.world, root, f->engine.ui->hierarchy.transform) = t;
+    *(DeGlobalTransform *)de_entity_add(f->engine.world, root,
+                                        f->engine.ui->hierarchy.global_transform) = t;
+    return root;
+}
+
+TEST_F(editor_ui, registers_the_1_15_methods_and_gates_them_on_the_agreed_version, ui_ed_fx) {
+    for (u32 i = 0; i < (u32)(sizeof k_115 / sizeof k_115[0]); ++i)
+        EXPECT_TRUE(f->ed.handlers[k_115[i]] != NULL);
+    /* An IDE that agreed 1.14: every 1.15 method is unsupported, and there is no pick stack. */
+    f->ed.proto_minor = 14;
+    for (u32 i = 0; i < (u32)(sizeof k_115 / sizeof k_115[0]); ++i)
+        EXPECT_EQ(code_of(call_empty(f, k_115[i])), DE_EP_ERR_UNSUPPORTED);
+    const de_entity root = boxed(f, (de_entity){0}, 0, 0, 100, 50);
+    frame(f);
+    de__ed_ui_hit hits[DE__ED_UI_STACK];
+    EXPECT_EQ(de__ed_ui_pick(&f->ed, 10, 10, NULL, NULL, hits, DE__ED_UI_STACK), 0u);
+    f->ed.proto_minor = 15;
+    ASSERT_EQ(de__ed_ui_pick(&f->ed, 10, 10, NULL, NULL, hits, DE__ED_UI_STACK), 1u);
+    EXPECT_EQ(hits[0].entity, root.bits);
+    EXPECT_TRUE(de__ed_protocol_at_least(&f->ed, 1, 15));
+    EXPECT_FALSE(de__ed_protocol_at_least(&f->ed, 1, 16));
+    EXPECT_FALSE(de__ed_protocol_at_least(&f->ed, 2, 0));
+}
+
+TEST_F(editor_ui, themes_list_vars_and_preview, ui_ed_fx) {
+    ASSERT_EQ(style_install(f->engine.ui, "[vars]\na='#fff'\nb=4\n[theme.dark.vars]\na='#000'\n"
+                                          "[theme.contrast.vars]\nc=1\n"),
+              DE_OK);
+    mpack_node_t r = res(call_empty(f, DE_EP_METHOD_UI_THEMES));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "active"), ""));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "selected"), ""));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    mpack_node_t themes = mpack_node_map_cstr(r, "themes");
+    ASSERT_EQ(mpack_node_array_length(themes), 2u);
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(mpack_node_array_at(themes, 0), "name"), "contrast"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(mpack_node_array_at(themes, 1), "name"), "dark"));
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(themes, 1), "sheets")), 1u);
+
+    /* Variables: the overlay's values for "dark", the base ones for "" and for the active
+     * theme (absent). The sheet is the load-order index as text. */
+    mpack_node_t v = find_var(mpack_node_map_cstr(res(call_str(f, DE_EP_METHOD_UI_THEME_VARS,
+                                                               "theme", "dark")),
+                                                  "vars"),
+                              "a");
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "value"), "\"#000\""));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(v, "themed")));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(v, "truncated")));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "sheet"), "0"));
+    v = find_var(mpack_node_map_cstr(res(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", "")),
+                                     "vars"),
+                 "a");
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "value"), "\"#fff\""));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(v, "themed")));
+    mpack_node_t vars = mpack_node_map_cstr(res(call_empty(f, DE_EP_METHOD_UI_THEME_VARS)), "vars");
+    EXPECT_EQ(mpack_node_array_length(vars), 2u);
+    v = find_var(vars, "b");
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "value"), "4"));
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", "undeclared")),
+              DE_EP_ERR_NOT_FOUND);
+    char long_name[80];
+    memset(long_name, 'x', sizeof long_name - 1);
+    long_name[sizeof long_name - 1] = 0;
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", long_name)),
+              DE_EP_ERR_NOT_FOUND);
+
+    /* Preview: the reply is the new ui.themes state; absent or nil ends it. */
+    r = res(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", "dark"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "active"), "dark"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "selected"), ""));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "themes")), 2u);
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", "undeclared")),
+              DE_EP_ERR_NOT_FOUND);
+    char too_long[65];
+    memset(too_long, 'y', 64);
+    too_long[64] = 0;
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", too_long)),
+              DE_EP_ERR_INVALID_PARAMS);
+    r = res(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", NULL)); /* explicit nil */
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "active"), ""));
+    ASSERT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", "contrast")), 0);
+    r = res(call_empty(f, DE_EP_METHOD_UI_PREVIEW_THEME)); /* absent */
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    r = res(call_empty(f, DE_EP_METHOD_UI_PREVIEW_THEME)); /* no preview: still OK */
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+
+    /* A disconnect ends a preview the IDE left on. */
+    ASSERT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", "dark")), 0);
+    for (u32 i = 0; i < f->ed.reset_count; ++i)
+        f->ed.resets[i](&f->ed);
+    de_ui_theme_state state;
+    ASSERT_EQ(de_ui_get_theme_state(f->engine.ui, &state), DE_OK);
+    EXPECT_FALSE(state.previewing);
+    EXPECT_STREQ(state.active, "");
+}
+
+TEST_F(editor_ui, themes_without_a_ui_are_empty, ui_ed_fx) {
+    de_ui_destroy(f->engine.ui);
+    f->engine.ui = NULL;
+    mpack_node_t r = res(call_empty(f, DE_EP_METHOD_UI_THEMES));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "themes")), 0u);
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    EXPECT_EQ(mpack_node_array_length(
+                  mpack_node_map_cstr(res(call_empty(f, DE_EP_METHOD_UI_THEME_VARS)), "vars")),
+              0u);
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", "")), 0);
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", "dark")),
+              DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_UI_PREVIEW_THEME)), 0);
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_UI_PREVIEW_THEME, "name", "dark")),
+              DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(corners(f, 1)), DE_EP_ERR_NOT_FOUND);
+    de__ed_ui_hit hits[4];
+    EXPECT_EQ(de__ed_ui_pick(&f->ed, 1, 1, NULL, NULL, hits, 4), 0u);
+    for (u32 i = 0; i < f->ed.reset_count; ++i) /* the reset hook copes without a UI */
+        f->ed.resets[i](&f->ed);
+}
+
+TEST_F(editor_ui, locales_strings_and_preview, ui_ed_fx) {
+    ASSERT_EQ(de_text_create(NULL, NULL, &f->engine.text), DE_OK);
+    mpack_node_t r = res(call_empty(f, DE_EP_METHOD_LOC_LOCALES));
+    de_loc_locale_state want;
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &want), DE_OK);
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "active"), want.active));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "fallback"), want.fallback));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "preview"), ""));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "generation")), want.generation);
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "locales")), 0u);
+    r = res(call_empty(f, DE_EP_METHOD_LOC_STRINGS));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(r, "strings")), 0u);
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "locale"), want.active));
+
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", "not a locale")),
+              DE_EP_ERR_INVALID_PARAMS);
+    char long_tag[48];
+    memset(long_tag, 'a', sizeof long_tag - 1);
+    long_tag[sizeof long_tag - 1] = 0;
+    EXPECT_EQ(code_of(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", long_tag)),
+              DE_EP_ERR_INVALID_PARAMS);
+    r = res(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", "pt-br"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "preview"), "pt-BR"));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    r = res(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", NULL)); /* explicit nil */
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "previewing")));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(r, "preview"), ""));
+    EXPECT_EQ(code_of(call_empty(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE)), 0);
+
+    ASSERT_EQ(code_of(call_str(f, DE_EP_METHOD_LOC_PREVIEW_LOCALE, "locale", "de")), 0);
+    for (u32 i = 0; i < f->ed.reset_count; ++i)
+        f->ed.resets[i](&f->ed);
+    ASSERT_EQ(de_loc_get_locale_state(f->engine.text, &want), DE_OK);
+    EXPECT_FALSE(want.previewing);
+}
+
+TEST_F(editor_ui, node_corners_on_a_world_panel, ui_ed_fx) {
+    const de_entity panel = panel_at(f, (de_dvec3){100000, 0, 0});
+    const de_entity inner = boxed(f, panel, 50, 25, 100, 50);
+    const de_entity screen = node(f, (de_entity){0});
+    frame(f);
+    mpack_node_t r = res(corners(f, inner.bits));
+    EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(r, "panel")), panel.bits);
+    mpack_node_t c = mpack_node_map_cstr(r, "corners");
+    ASSERT_EQ(mpack_node_array_length(c), 12u);
+    const f64 want[4][3] = {{-.5, .25, 0}, {.5, .25, 0}, {.5, -.25, 0}, {-.5, -.25, 0}};
+    for (u32 i = 0; i < 4; ++i) {
+        EXPECT_FLOAT_EQ((f32)(mpack_node_double(mpack_node_array_at(c, i * 3)) - 100000),
+                        (f32)want[i][0], 1e-4f);
+        EXPECT_FLOAT_EQ((f32)mpack_node_double(mpack_node_array_at(c, i * 3 + 1)),
+                        (f32)want[i][1], 1e-4f);
+        EXPECT_FLOAT_EQ((f32)mpack_node_double(mpack_node_array_at(c, i * 3 + 2)),
+                        (f32)want[i][2], 1e-4f);
+    }
+    EXPECT_EQ(code_of(corners(f, screen.bits)), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(corners(f, UINT64_MAX - 1)), DE_EP_ERR_NOT_FOUND);
+}
+
+TEST_F(editor_ui, ui_pick_stack_on_screen_and_through_a_ray, ui_ed_fx) {
+    const de_entity root = node(f, (de_entity){0});
+    const de_entity a = boxed(f, root, 10, 10, 100, 50);
+    const de_entity b = boxed(f, root, 50, 20, 100, 50);
+    const de_entity panel = panel_at(f, (de_dvec3){100000.5, 0, 0});
+    const de_entity button = boxed(f, panel, 0, 0, 50, 50);
+    frame(f);
+    de__ed_ui_hit hits[DE__ED_UI_STACK];
+    /* A game view: the screen UI at the viewport pixel, topmost first. */
+    ASSERT_EQ(de__ed_ui_pick(&f->ed, 65, 35, NULL, NULL, hits, DE__ED_UI_STACK), 3u);
+    EXPECT_EQ(hits[0].entity, b.bits);
+    EXPECT_EQ(hits[1].entity, a.bits);
+    EXPECT_EQ(hits[2].entity, root.bits);
+    EXPECT_EQ(hits[0].root, root.bits);
+    EXPECT_EQ(hits[0].depth, 1u);
+    EXPECT_EQ(hits[2].depth, 0u);
+    EXPECT_FLOAT_EQ(hits[0].rect[0], 50, 1e-3f);
+    EXPECT_FLOAT_EQ(hits[0].rect[1], 20, 1e-3f);
+    EXPECT_FLOAT_EQ(hits[0].rect[2], 100, 1e-3f);
+    EXPECT_FLOAT_EQ(hits[0].rect[3], 50, 1e-3f);
+    /* Capacity keeps the topmost entries. */
+    EXPECT_EQ(de__ed_ui_pick(&f->ed, 65, 35, NULL, NULL, hits, 1), 1u);
+    EXPECT_EQ(hits[0].entity, b.bits);
+    /* A scene view: the world panel under the camera ray. */
+    const f64 origin[3] = {100000 - 0.25, 0.25, 5};
+    const f32 dir[3] = {0, 0, -1};
+    ASSERT_EQ(de__ed_ui_pick(&f->ed, 0, 0, origin, dir, hits, DE__ED_UI_STACK), 2u);
+    EXPECT_EQ(hits[0].entity, button.bits);
+    EXPECT_EQ(hits[1].entity, panel.bits);
+    EXPECT_EQ(hits[0].root, panel.bits);
+    const f64 miss[3] = {0, 0, 5};
+    EXPECT_EQ(de__ed_ui_pick(&f->ed, 0, 0, miss, dir, hits, DE__ED_UI_STACK), 0u);
+    const f32 zero[3] = {0, 0, 0};
+    EXPECT_EQ(de__ed_ui_pick(&f->ed, 0, 0, origin, zero, hits, DE__ED_UI_STACK), 0u);
+
+    /* PickResult.uiStack through the generated writer: absent when empty. */
+    de_ep_ui_pick_hit items[DE__ED_UI_STACK];
+    const u32 n = de__ed_ui_pick(&f->ed, 65, 35, NULL, NULL, hits, DE__ED_UI_STACK);
+    for (u32 pass = 0; pass < 2; ++pass) {
+        de_ep_pick_result pr = {.has_entity = true, .entity = hits[0].entity};
+        de__ed_pick_set_ui_stack(&pr, hits, pass ? 0 : n, items);
+        mpack_writer_t w;
+        mpack_writer_init(&w, f->response, RESPONSE);
+        de_ep_write_response_pick(&w, 778, &pr);
+        const size_t used = mpack_writer_buffer_used(&w);
+        ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+        if (f->parsed)
+            mpack_tree_destroy(&f->tree);
+        mpack_tree_init_data(&f->tree, f->response, used);
+        mpack_tree_parse(&f->tree);
+        f->parsed = true;
+        mpack_node_t r = res(mpack_tree_root(&f->tree));
+        if (pass) {
+            EXPECT_FALSE(mpack_node_map_contains_cstr(r, "uiStack"));
+            continue;
+        }
+        mpack_node_t stack = mpack_node_map_cstr(r, "uiStack");
+        ASSERT_EQ(mpack_node_array_length(stack), 3u);
+        mpack_node_t top = mpack_node_array_at(stack, 0);
+        EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(top, "entity")), b.bits);
+        EXPECT_EQ(mpack_node_u64(mpack_node_map_cstr(top, "root")), root.bits);
+        EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(top, "depth")), 1u);
+        mpack_node_t rect = mpack_node_map_cstr(top, "rect");
+        ASSERT_EQ(mpack_node_array_length(rect), 4u);
+        EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(rect, 2)), 100, 1e-3f);
+    }
 }
 #endif

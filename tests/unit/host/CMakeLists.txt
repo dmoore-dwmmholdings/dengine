@@ -505,9 +505,11 @@ endif()
 
 # DENG-778: ui.layout and the ui.editor capability (DIDE protocol 1.14) through the real
 # handlers and the generated protocol readers and writers. The service needs the UI module.
+# DENG-785 (protocol 1.15): the pick stack, nodeCorners, themes (stylesheets through
+# tests/unit/ui/style_test_util.h, hence tomlc17) and locales.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
     de_add_test(NAME editor_ui SOURCES test_editor_ui.c
-        LIBS de_host de_ui de_tp_dide_protocol LABELS unit host ui CONFIGURATIONS Debug Dev Release)
+        LIBS de_host de_ui de_tp_dide_protocol de_tp_tomlc17 LABELS unit host ui CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_ui PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 

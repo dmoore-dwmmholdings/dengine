@@ -1477,6 +1477,17 @@ bool de__ed_cam_flat(const de__ed_cam *c) {
     return ortho(c) && (fabs(f.x) > 0.995 || fabs(f.y) > 0.995 || fabs(f.z) > 0.995);
 }
 
+void de__ed_cam_ray(const de__ed_cam *c, f32 x, f32 y, f64 origin[3], f32 direction[3]) {
+    v3 o, d;
+    ray(c, x, y, &o, &d);
+    origin[0] = o.x;
+    origin[1] = o.y;
+    origin[2] = o.z;
+    direction[0] = (f32)d.x;
+    direction[1] = (f32)d.y;
+    direction[2] = (f32)d.z;
+}
+
 typedef struct sprite_hit {
     u64 e;
     f64 depth;

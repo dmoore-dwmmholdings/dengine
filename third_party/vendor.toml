@@ -605,9 +605,9 @@ notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matri
 # cache before offline verification (see docs/building.md).
 [[lib]]
 name = "dide_protocol"
-version = "1.14-3ac19c818c81"
-url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/3ac19c818c815ae3d114d14b33b3656bb5f7f686"
-sha256 = "6f411c8c7d391451423f87c85b34de1c4767a0589dece5cbe71438b37212b4a8"
+version = "1.15-98b63cd2e72b"
+url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/98b63cd2e72bb672533b7c94a052baa13b3f4bec"
+sha256 = "ba8c921d9170f7de5ee3c6d65b5804fbadcfe5d7afc2adcc2fd3594e5e3a98d3"
 license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"
@@ -618,5 +618,7 @@ local = ["CMakeLists.txt", "patches/**"]
 # advertises world.splines; world.water (1.13) is not advertised until DENG-776.
 # DENG-778: pinned at DIDE main 3ac19c8 (protocol 1.14, DIDE-355: EditOp.index, ui.layout,
 # ui.editor).
+# DENG-785: pinned at DIDE main 98b63cd (protocol 1.15, DIDE-356: PickResult.uiStack,
+# ui.nodeCorners, ui.themes/themeVars/previewTheme, loc.locales/strings/previewLocale).
 patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."
