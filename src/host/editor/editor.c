@@ -69,7 +69,27 @@ void de__ed_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *fmt, 
     va_start(ap, fmt);
     vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
-    de_ep_write_error(w, id, code, msg);
+    if (code != DE_EP_ERR_BUSY) {
+        de_ep_write_error(w, id, code, msg);
+        return;
+    }
+    /* IPC: "A request over a limit gets `busy` with `data: { retryAfterMs }`." */
+    mpack_start_map(w, 2);
+    mpack_write_cstr(w, "id");
+    mpack_write_u64(w, id);
+    mpack_write_cstr(w, "error");
+    mpack_start_map(w, 3);
+    mpack_write_cstr(w, "code");
+    mpack_write_i32(w, (int32_t)code);
+    mpack_write_cstr(w, "message");
+    mpack_write_cstr(w, msg);
+    mpack_write_cstr(w, "data");
+    mpack_start_map(w, 1);
+    mpack_write_cstr(w, "retryAfterMs");
+    mpack_write_u32(w, DE__ED_RETRY_AFTER_MS);
+    mpack_finish_map(w);
+    mpack_finish_map(w);
+    mpack_finish_map(w);
 }
 
 void de__ed_defer(de__editor *ed) {
@@ -333,6 +353,18 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     return true;
 }
 
+bool de__ed_method_offered(const de__editor *ed, de_ep_method m) {
+    if ((u32)m >= DE_EP_METHOD_COUNT || ed->handlers[m] == NULL)
+        return false;
+    const char *cap = de_ep_method_capability(m);
+    if (cap == NULL || cap[0] == '\0')
+        return true;
+    for (u32 i = 0; i < ed->cap_count; ++i)
+        if (strcmp(ed->caps[i], cap) == 0)
+            return true;
+    return false;
+}
+
 static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     const de_ep_method m = de_ep_method_parse(req->method);
     mpack_writer_t w;
@@ -342,7 +374,7 @@ static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a
                      (int)req->method.len, req->method.ptr);
     } else if (m == DE_EP_METHOD_HELLO) {
         de__ed_error(&w, req->id, DE_EP_ERR_CONFLICT, "already connected");
-    } else if (ed->handlers[m] == NULL) {
+    } else if (!de__ed_method_offered(ed, m)) {
         de__ed_error(&w, req->id, DE_EP_ERR_UNSUPPORTED, "%s is not supported by this engine",
                      de_ep_method_name(m));
     } else {
@@ -368,6 +400,48 @@ static void ed_dispatch(de__editor *ed, const de_ep_request *req, de_ep_arena *a
     de__ed_send(ed, &w, DE_EP_KIND_RESPONSE);
 }
 
+/* IPC: "A second `hello` while a connection is live is refused with `conflict`." A second client
+ * is accepted, answered `conflict` for its first request and closed. POSIX only: a Windows pipe
+ * has one instance, so a second client cannot connect there at all. Never waits. */
+#define ED_RIVAL_WAIT_NS 5000000000ull
+static void ed_rival_close(de__editor *ed) {
+    if (ed->rival_open)
+        de_ep_disconnect(&ed->rival);
+    ed->rival_open = false;
+}
+
+static void ed_rival_pump(de__editor *ed) {
+#ifdef _WIN32
+    (void)ed;
+#else
+    if (!ed->rival_open) {
+        if (de_ep_accept(&ed->listener, &ed->rival, (u32)ed->in_cap, 0) != DE_EP_IO_OK)
+            return;
+        ed->rival_open = true;
+        ed->rival_since_ns = de_time_now_ns();
+    }
+    u8 kind = 0;
+    size_t len = 0;
+    const de_ep_io io = de_ep_recv(&ed->rival, ed->in, ed->in_cap, &kind, &len, 0);
+    if (io == DE_EP_IO_TIMEOUT) {
+        if (de_time_now_ns() - ed->rival_since_ns > ED_RIVAL_WAIT_NS)
+            ed_rival_close(ed);
+        return;
+    }
+    de_ep_request req;
+    if (io == DE_EP_IO_OK && kind == DE_EP_KIND_REQUEST && de_ep_read_request(ed->in, len, &req)) {
+        mpack_writer_t w;
+        mpack_writer_init(&w, ed->out, ed->out_cap);
+        de_ep_write_error(&w, req.id, DE_EP_ERR_CONFLICT, "another IDE is connected");
+        const size_t used = mpack_writer_buffer_used(&w);
+        if (mpack_writer_destroy(&w) == mpack_ok)
+            (void)de_ep_send(&ed->rival, DE_EP_KIND_RESPONSE, ed->out, used);
+        DE_INFO(ed->log, "editor: refused a second IDE connection (conflict)");
+    }
+    ed_rival_close(ed);
+#endif
+}
+
 static de_result ed_pump(de__host *h, void *user) {
     (void)h;
     de__editor *ed = (de__editor *)user;
@@ -389,6 +463,8 @@ static de_result ed_pump(de__host *h, void *user) {
             de_engine_request_quit(ed->e);
             return DE_OK;
         }
+    } else {
+        ed_rival_pump(ed);
     }
     for (u32 n = 0; ed->connected && n < ED_REQUESTS_PER_FRAME; ++n) {
         u8 kind = 0;
@@ -518,6 +594,7 @@ void de__editor_stop(de__host *h) {
     if (ed == NULL)
         return;
     ed_drop(ed, "shutdown");
+    ed_rival_close(ed);
     if (de__ed_crash_disarm())
         de_ep_listener_close(&ed->listener);
     de__ed_session_shutdown();

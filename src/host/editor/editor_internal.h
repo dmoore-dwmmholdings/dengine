@@ -41,6 +41,10 @@ struct de__editor {
     de_ep_listener listener;
     de_ep_conn conn;
     bool connected, authed;
+    /* A second client while one is live: it gets `conflict` for its first request, then is closed. */
+    de_ep_conn rival;
+    bool rival_open;
+    u64 rival_since_ns;
     bool reload_outcomes; /**< negotiated peer understands optional reload failure (IPC >= 1.6) */
     char token[160];
     u32 epoch;         /**< bumped on each connection: ids from an older one are stale */
@@ -98,6 +102,9 @@ void de__ed_on(de__editor *ed, de_ep_method m, de__ed_handler fn);
 void de__ed_on_tick(de__editor *ed, de__ed_tick_fn fn);
 void de__ed_on_reset(de__editor *ed, de__ed_reset_fn fn);
 void de__ed_add_capability(de__editor *ed, const char *cap);
+/** True when `m` has a handler and needs no capability, or needs one the engine offered in hello.
+ * The dispatcher answers `unsupported` otherwise (a method of an unoffered capability). */
+bool de__ed_method_offered(const de__editor *ed, de_ep_method m);
 #if DE_HAS_RENDER
 void de__ed_preview_register(de__editor *ed);
 void de__ed_preview_invalidate(void);
@@ -114,7 +121,10 @@ void de__ed_defer(de__editor *ed);
 /** Starts a writer over the response buffer, outside a dispatch. */
 void de__ed_respond_begin(de__editor *ed, mpack_writer_t *w);
 
-/** Writes an error response; `fmt` is printf-style. */
+/** How long a `busy` reply asks the IDE to wait before it retries (`data.retryAfterMs`). */
+#define DE__ED_RETRY_AFTER_MS 100u
+
+/** Writes an error response; `fmt` is printf-style. A `busy` error carries `data.retryAfterMs`. */
 void de__ed_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *fmt, ...);
 /** Starts a notification writer over the notification buffer; returns its sequence number. */
 u64 de__ed_note_begin(de__editor *ed, mpack_writer_t *w);
