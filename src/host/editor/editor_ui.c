@@ -26,14 +26,26 @@
  *   UiSheetError.file that same source. A rejected reload is `loaded` with an `error`.
  * - ui.checkStylesheet: de_ui_check_stylesheet on the text, without loading it.
  * A line and column are 1-based; 0 is unknown, and a column is never sent with line 0.
+ *
+ * Protocol 1.17 (DENG-788, capability ui.textMetrics, `unsupported` below 1.17):
+ * - ui.measureText: de_ui_measure_text with the UI's text system, in layout pixels. The capability
+ *   is listed only when the engine has a text system; without one a call is `unsupported`.
+ *   The font is an asset id (path, or the 16-digit hex of an id the manifest lists) and must be
+ *   READY, else `not_found`. sizePx and letterSpacing are multiplied by the scale. lineHeight is
+ *   in layout pixels and is not; the engine's de_text_style.line_height is a factor of the font's
+ *   own, so the handler measures once with the font's own height and derives the factor. The reply
+ *   maps de_ui_text_metrics and de_text_line one to one. Empty text gets what
+ *   de_text_layout_lines gives for it.
  */
 #include "host/editor/editor_internal.h"
 
 #include "host/host_internal.h"
+#include <dengine/de_asset.h>
 #include <dengine/de_text.h>
 #include <dengine/de_ui.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* A safe-area inset in whole pixels; false for a value that is not finite. Negative is 0. */
@@ -657,6 +669,161 @@ static void h_ui_check_stylesheet(de__editor *ed, const de_ep_request *req, de_e
     de_ep_write_response_ui_check_stylesheet(w, req->id, &res);
 }
 
+/* ---------- Protocol 1.17 (DENG-788) ---------- */
+
+static bool need_117(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
+                     const char *method) {
+    if (de__ed_protocol_at_least(ed, 1, 17))
+        return true;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "%s: needs protocol 1.17 (agreed %u.%u)",
+                 method, (unsigned)ed->proto_major, (unsigned)ed->proto_minor);
+    return false;
+}
+
+/* The READY font asset named by `s`: a manifest path, or the 16-digit hex of a manifest id. */
+static bool font_ready(de_asset_system *assets, de_ep_str s, de_font *out) {
+    if (assets == NULL || s.ptr == NULL || s.len == 0 || s.len >= 1024 || memchr(s.ptr, 0, s.len))
+        return false;
+    char path[1024];
+    memcpy(path, s.ptr, s.len);
+    path[s.len] = 0;
+    de_asset_id id = {0};
+    bool hex = s.len == 16;
+    for (size_t i = 0; hex && i < 16; ++i)
+        hex = (path[i] >= '0' && path[i] <= '9') || (path[i] >= 'a' && path[i] <= 'f');
+    if (hex && de_asset_id_path(assets, (de_asset_id){strtoull(path, NULL, 16)}) != NULL)
+        id.hash = strtoull(path, NULL, 16);
+    else
+        id = de_asset_id_from(path);
+    de_error_clear();
+    if (id.hash == 0 || de_asset_status_of(assets, id) != DE_LOAD_READY)
+        return false;
+    *out = de_asset_font(assets, id);
+    de_error_clear();
+    return out->id != 0;
+}
+
+static de_text_align text_align(de_ep_ui_text_align a) {
+    switch (a) {
+    case DE_EP_UI_TEXT_ALIGN_CENTER:
+        return DE_ALIGN_CENTER;
+    case DE_EP_UI_TEXT_ALIGN_END:
+        return DE_ALIGN_END;
+    case DE_EP_UI_TEXT_ALIGN_JUSTIFY:
+        return DE_ALIGN_JUSTIFY;
+    default:
+        return DE_ALIGN_START;
+    }
+}
+
+/* An absent optional number is fine; a present one must be finite, and non-negative unless
+ * `signed_ok`. */
+static bool num_ok(bool has, f32 v, bool signed_ok) {
+    return !has || (isfinite(v) && (signed_ok || v >= 0));
+}
+
+static void h_ui_measure_text(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                              mpack_writer_t *w) {
+    if (!need_117(ed, req, w, "ui.measureText"))
+        return;
+    de_ui *ui = ed->e ? ed->e->ui : NULL;
+    if (ui == NULL || ed->e->text == NULL) {
+        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "ui.measureText: the game has no UI text");
+        return;
+    }
+    DE__ED_PARAMS(ui_measure_text, de_ep_ui_measure_text_params, q);
+    const de_ep_ui_text_style *st = &q.style;
+    if (!num_ok(q.has_wrap_width, q.wrap_width, false) ||
+        !num_ok(q.has_box_height, q.box_height, false) || !num_ok(q.has_scale, q.scale, false) ||
+        !num_ok(st->has_size_px, st->size_px, true) ||
+        !num_ok(st->has_letter_spacing, st->letter_spacing, true) ||
+        !num_ok(st->has_line_height, st->line_height, false)) {
+        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS,
+                     "ui.measureText: a size, spacing, line height, wrapWidth, boxHeight or scale "
+                     "is negative or not finite");
+        return;
+    }
+    de_text_style style = {0};
+    if (!font_ready(ed->e->assets, st->font, &style.font)) {
+        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "ui.measureText: the font is not loaded");
+        return;
+    }
+    style.size_px = st->has_size_px ? st->size_px : 0; /* 0 or less: 16 */
+    style.letter_spacing = st->has_letter_spacing ? st->letter_spacing : 0;
+    if (st->has_language && st->language.len > 0) {
+        char *lang = (char *)de__ed_alloc(a, (size_t)st->language.len + 1);
+        if (lang == NULL) {
+            ui_busy(w, req->id, "ui.measureText");
+            return;
+        }
+        memcpy(lang, st->language.ptr, st->language.len);
+        lang[st->language.len] = 0;
+        style.language = lang;
+    }
+    const f32 line_height = st->has_line_height ? st->line_height : 0;
+    const de_ui_text_measure_desc desc = {.utf8 = {q.text.ptr ? q.text.ptr : "", q.text.len},
+                                          .style = &style,
+                                          .align = q.has_align ? text_align(q.align) : DE_ALIGN_START,
+                                          .wrap_width = q.has_wrap_width ? q.wrap_width : 0,
+                                          .box_height = q.has_box_height ? q.box_height : 0,
+                                          .scale = q.has_scale ? q.scale : 0};
+    u32 capacity = 64;
+    de_text_line *lines = (de_text_line *)de__ed_alloc(a, sizeof *lines * capacity);
+    if (lines == NULL) {
+        ui_busy(w, req->id, "ui.measureText");
+        return;
+    }
+    de_ui_text_metrics m;
+    memset(&m, 0, sizeof m);
+    de_result r = de_ui_measure_text(ui, &desc, lines, capacity, &m);
+    if (r == DE_OK && line_height > 0 && m.line_count > 0 && m.line_height > 0) {
+        /* lineHeight is in layout pixels; the engine takes a factor of the font's own, which
+         * this first measure (factor 0) reported. */
+        style.line_height = line_height / m.line_height;
+        r = de_ui_measure_text(ui, &desc, lines, capacity, &m);
+    }
+    if (r == DE_OK && m.line_count > capacity) {
+        capacity = m.line_count;
+        lines = (de_text_line *)de__ed_alloc(a, sizeof *lines * capacity);
+        if (lines == NULL) {
+            ui_busy(w, req->id, "ui.measureText");
+            return;
+        }
+        r = de_ui_measure_text(ui, &desc, lines, capacity, &m);
+    }
+    if (r != DE_OK) {
+        de_error_clear();
+        /* The arguments were checked above, so what is left is a UI with no text system. */
+        de__ed_error(w, req->id, r == DE_ERR_INVALID_ARGUMENT ? DE_EP_ERR_UNSUPPORTED : DE_EP_ERR_INTERNAL,
+                     "ui.measureText: the text could not be measured");
+        return;
+    }
+    const u32 count = m.line_count;
+    de_ep_ui_text_line *items =
+        count ? (de_ep_ui_text_line *)de__ed_alloc(a, sizeof *items * count) : NULL;
+    float *size = (float *)de__ed_alloc(a, sizeof(float) * 2u);
+    if ((count && items == NULL) || size == NULL) {
+        ui_busy(w, req->id, "ui.measureText");
+        return;
+    }
+    for (u32 i = 0; i < count; ++i)
+        items[i] = (de_ep_ui_text_line){.start = lines[i].byte_start,
+                                        .end = lines[i].byte_end,
+                                        .x = lines[i].x,
+                                        .y = lines[i].y,
+                                        .width = lines[i].width,
+                                        .height = lines[i].height};
+    size[0] = m.size.x;
+    size[1] = m.size.y;
+    de_ep_ui_measure_text res = {.size = {size, 2},
+                                 .scale = m.scale,
+                                 .line_height = m.line_height,
+                                 .lines = {items, count},
+                                 .overflow_x = m.overflow_x,
+                                 .overflow_y = m.overflow_y};
+    de_ep_write_response_ui_measure_text(w, req->id, &res);
+}
+
 /* A disconnect ends the previews the IDE started; with none active both calls do nothing. */
 static void ui_reset(de__editor *ed) {
     if (ed->e == NULL)
@@ -670,6 +837,8 @@ static void ui_reset(de__editor *ed) {
 void de__ed_ui_register(de__editor *ed) {
     de__ed_add_capability(ed, "ui.editor");
     de__ed_add_capability(ed, "ui.stylesheets");
+    if (ed->e != NULL && ed->e->ui != NULL && ed->e->text != NULL)
+        de__ed_add_capability(ed, "ui.textMetrics"); /* needs a text system */
     de__ed_on(ed, DE_EP_METHOD_UI_LAYOUT, h_ui_layout);
     de__ed_on(ed, DE_EP_METHOD_UI_NODE_CORNERS, h_ui_node_corners);
     de__ed_on(ed, DE_EP_METHOD_UI_THEMES, h_ui_themes);
@@ -677,6 +846,7 @@ void de__ed_ui_register(de__editor *ed) {
     de__ed_on(ed, DE_EP_METHOD_UI_PREVIEW_THEME, h_ui_preview_theme);
     de__ed_on(ed, DE_EP_METHOD_UI_STYLESHEETS, h_ui_stylesheets);
     de__ed_on(ed, DE_EP_METHOD_UI_CHECK_STYLESHEET, h_ui_check_stylesheet);
+    de__ed_on(ed, DE_EP_METHOD_UI_MEASURE_TEXT, h_ui_measure_text);
     de__ed_on(ed, DE_EP_METHOD_LOC_LOCALES, h_loc_locales);
     de__ed_on(ed, DE_EP_METHOD_LOC_STRINGS, h_loc_strings);
     de__ed_on(ed, DE_EP_METHOD_LOC_PREVIEW_LOCALE, h_loc_preview_locale);

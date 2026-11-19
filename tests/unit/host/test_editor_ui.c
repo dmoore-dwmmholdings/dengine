@@ -39,7 +39,7 @@ typedef struct ui_ed_fx {
     unsigned char *storage;
     char *response;
     char note[32768];
-    char params[512];
+    char params[4096];
     mpack_tree_t tree;
     bool parsed;
 } ui_ed_fx;
@@ -1040,11 +1040,18 @@ TEST_F(editor_ui, text_metrics_errors_and_empty_text, ui_ed_fx) {
     f->ed.proto_minor = 16;
     EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x"})), DE_EP_ERR_UNSUPPORTED);
     f->ed.proto_minor = 17;
-    /* Empty text answers with a result; its lines, if any, stay inside the empty text. */
+    /* Empty text: the engine lays out one empty line, as a label of no text is one line tall
+     * (the dide mock returns no lines and size [0, 0]; DENG-788 files that as a DIDE issue). */
     mpack_node_t r = res(measure(f, &(measure_in){.text = ""}));
     mpack_node_t lines = mpack_node_map_cstr(r, "lines");
-    for (size_t i = 0; i < mpack_node_array_length(lines); ++i)
-        EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(lines, i), "end")), 0u);
+    ASSERT_EQ(mpack_node_array_length(lines), 1u);
+    mpack_node_t l0 = mpack_node_array_at(lines, 0);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l0, "start")), 0u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l0, "end")), 0u);
+    EXPECT_FLOAT_EQ(num(l0, "width"), 0, 1e-6f);
+    mpack_node_t sz = mpack_node_map_cstr(r, "size");
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(sz, 0)), 0, 1e-6f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(sz, 1)), num(r, "lineHeight"), 1e-3f);
     text_env_down(f, &t);
 }
 
