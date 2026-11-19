@@ -1,0 +1,51 @@
+kind = "material"
+version = 1
+[[node]]
+id = "n1"
+type = "value.float"
+values = { value = 0.3 }
+[[node]]
+id = "n4"
+type = "subgraph"
+[node.graph]
+[[node.graph.node]]
+id = "n1"
+type = "subgraph.input"
+[[node.graph.node]]
+id = "n2"
+type = "math.one_minus"
+[[node.graph.node]]
+id = "n3"
+type = "subgraph.output"
+[[node.graph.link]]
+from = "n1.out"
+to = "n2.x"
+[[node.graph.link]]
+from = "n2.out"
+to = "n3.in"
+[[node]]
+id = "n5"
+type = "code.float"
+values = { code = "a * 2.0 + b" }
+[[node]]
+id = "n6"
+type = "output.base"
+[[node]]
+id = "n7"
+type = "texture.triplanar"
+values = { texture = "rock" }
+[[node]]
+id = "n8"
+type = "output.sheen"
+[[link]]
+from = "n1.out"
+to = "n4.n1"
+[[link]]
+from = "n4.n3"
+to = "n5.a"
+[[link]]
+from = "n5.out"
+to = "n6.roughness"
+[[link]]
+from = "n7.rgb"
+to = "n6.base_color"
