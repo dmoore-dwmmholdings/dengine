@@ -92,8 +92,50 @@ typedef enum de_ui_easing {
 /** Handle for a registered ui_style asset. It can be passed to de_ui_load_stylesheet.
  * Loading/refcounting remains the caller's responsibility, as with ordinary blob assets. */
 DE_API de_blob de_ui_stylesheet(de_ui *ui, de_asset_id id);
-/** Switch variable overlays; NULL or empty selects the base variables. */
+/** Switch variable overlays; NULL or empty selects the base variables. Names are at most
+ * DE_UI_THEME_NAME_MAX - 1 bytes (DE_ERR_INVALID_ARGUMENT otherwise). While an editor preview
+ * is active (de_ui_preview_theme), the name is stored and applied when the preview ends. */
 DE_API de_result de_ui_set_theme(de_ui *ui, const char *name);
+
+/* ---- Theme inspection and editor preview (DENG-781) ----
+ * Main thread. A theme is a [theme.<name>.vars] overlay in a loaded stylesheet. */
+#define DE_UI_THEME_NAME_MAX  64u
+#define DE_UI_THEME_VALUE_MAX 128u
+typedef struct de_ui_theme_info {
+    char name[DE_UI_THEME_NAME_MAX];
+    u32 sheets; /* loaded stylesheets that declare this theme */
+} de_ui_theme_info;
+/** Writes the themes of every loaded stylesheet, without duplicates, sorted by name (byte
+ * order), up to `capacity`. `count` gets the full count. Names that are too long for
+ * de_ui_theme_info are left out. NULL `out` is allowed with a capacity of 0. */
+DE_API de_result de_ui_list_themes(const de_ui *ui, de_ui_theme_info *out, u32 capacity,
+                                   u32 *count);
+typedef struct de_ui_theme_var {
+    char name[DE_UI_THEME_NAME_MAX];
+    /* The value as a TOML literal: "#ff8800" (quoted), 12, 0.5, true or [1, 2, 3, 4]. */
+    char value[DE_UI_THEME_VALUE_MAX];
+    u32 sheet;      /* index of the stylesheet, in load order (built-in sheets first) */
+    bool themed;    /* the value comes from the theme overlay, not from [vars] */
+    bool truncated; /* `value` (or `name`) was cut to fit */
+} de_ui_theme_var;
+/** Writes the variables in effect for `theme` (NULL: the active theme; "": the base
+ * variables): for each sheet in load order, its [vars] in file order with the overlay values
+ * applied, then the variables that only the overlay declares. `count` gets the full count.
+ * DE_ERR_NOT_FOUND: a non-empty theme that no loaded sheet declares. */
+DE_API de_result de_ui_theme_vars(const de_ui *ui, const char *theme, de_ui_theme_var *out,
+                                  u32 capacity, u32 *count);
+/** Editor preview: shows `name` ("" is the base variables) without changing the theme the
+ * game selected with de_ui_set_theme. NULL ends the preview and applies the selected theme.
+ * DE_ERR_NOT_FOUND: a non-empty name that no loaded sheet declares. A stylesheet error under
+ * the theme returns that error and keeps the current state. Ending a preview when none is
+ * active is DE_OK. */
+DE_API de_result de_ui_preview_theme(de_ui *ui, const char *name);
+typedef struct de_ui_theme_state {
+    char active[DE_UI_THEME_NAME_MAX];   /* the theme the stylesheets are compiled with */
+    char selected[DE_UI_THEME_NAME_MAX]; /* the game's de_ui_set_theme choice */
+    bool previewing;
+} de_ui_theme_state;
+DE_API de_result de_ui_get_theme_state(const de_ui *ui, de_ui_theme_state *out);
 typedef struct de_ui_style_stats {
     u32 entities_restyled, active_tweens;
 } de_ui_style_stats;

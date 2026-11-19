@@ -64,7 +64,7 @@ endif()
 # DENG-264: original internal localization object is independent of font/GPU initialization.
 if(DE_BUILD_TOOLS)
     de_add_test(NAME text_loc SOURCES test_string_table.c test_message_format.c test_plurals.c
-        test_number_format.c test_pseudo_loc.c
+        test_number_format.c test_pseudo_loc.c test_loc_preview.c
         "${DE_ROOT_DIR}/src/text/loc/loc.c" "${DE_ROOT_DIR}/src/text/loc/loc_api.c"
         LIBS de_loc_common de_asset de_cooker de_platform de_test_support de_tp_tomlc17 TIMEOUT 30)
     target_include_directories(test_text_loc PRIVATE "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")

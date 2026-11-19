@@ -1,6 +1,6 @@
 # Retained CPU layout remains usable in headless configurations.
 de_add_module(NAME ui LAYER gameplay
- SOURCES ui.c ui_reflect.c layout/layout.c layout/flex.c layout/grid.c layout/anchor.c layout/measure.c style/stylesheet.c style/style_resolve.c style/tween.c style/theme.c
+ SOURCES ui.c ui_reflect.c layout/layout.c layout/flex.c layout/grid.c layout/anchor.c layout/measure.c style/stylesheet.c style/style_resolve.c style/tween.c style/theme.c style/theme_inspect.c
  DEPS text input OPTIONAL_OPTION DE_WITH_UI)
 if(TARGET de_ui)
  target_link_libraries(de_ui PRIVATE de_tp_xxhash de_tp_tomlc17)
