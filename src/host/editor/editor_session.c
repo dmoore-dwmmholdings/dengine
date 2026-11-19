@@ -327,6 +327,7 @@ static void on_set_mode(de__editor *ed, const de_ep_request *req, de_ep_arena *a
     }
     if (to == DE_EP_WORLD_MODE_EDIT && g_session.has_play) {
         (void)restore_world(ed, &g_session.play);
+        de__ed_edit_forget(ed); /* the inverses were captured in the play-time world */
         de_world_snapshot_free(de_heap_allocator(), &g_session.play);
         g_session.has_play = false;
     }
@@ -411,6 +412,7 @@ static void on_snap_restore(de__editor *ed, const de_ep_request *req, de_ep_aren
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "restore failed");
         return;
     }
+    de__ed_edit_forget(ed);
     de_ep_empty e;
     memset(&e, 0, sizeof e);
     de_ep_write_response_snapshot_restore(w, req->id, &e);

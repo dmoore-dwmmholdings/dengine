@@ -388,6 +388,38 @@ TEST_F(editor_service, set_edit_commits_undoes_and_redoes, service_fx) {
     EXPECT_FLOAT_EQ(health_of(f, e, health), 9, 0);
 }
 
+TEST_F(editor_service, stop_forgets_transactions_so_undo_cannot_write_play_values, service_fx) {
+    const de_component health = register_health(f);
+    const de_entity e = spawn_health(f, health, 5);
+    de__ed_session_register(&f->ed);
+    de__ed_edit_register(&f->ed);
+    EXPECT_EQ(set_mode(f, DE_EP_WORLD_MODE_PLAY), 0);
+    const u32 tx = edit_begin(f);
+    EXPECT_EQ(edit_set(f, tx, e, "SvcHealth.current", 8), 0);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), 0);
+    EXPECT_EQ(set_mode(f, DE_EP_WORLD_MODE_EDIT), 0);
+    EXPECT_FLOAT_EQ(health_of(f, e, health), 5, 0);
+    /* The transaction died with the play-time world. */
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), DE_EP_ERR_NOT_FOUND);
+    EXPECT_FLOAT_EQ(health_of(f, e, health), 5, 0);
+}
+
+TEST_F(editor_service, snapshot_restore_forgets_transactions, service_fx) {
+    const de_component health = register_health(f);
+    const de_entity e = spawn_health(f, health, 5);
+    de__ed_session_register(&f->ed);
+    de__ed_edit_register(&f->ed);
+    const u32 snap = snap_take(f);
+    const u32 tx = edit_begin(f);
+    EXPECT_EQ(edit_set(f, tx, e, "SvcHealth.current", 8), 0);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), 0);
+    EXPECT_EQ(snap_call(f, DE_EP_METHOD_SNAPSHOT_RESTORE, snap), 0);
+    EXPECT_FLOAT_EQ(health_of(f, e, health), 5, 0);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), DE_EP_ERR_NOT_FOUND);
+    EXPECT_FLOAT_EQ(health_of(f, e, health), 5, 0);
+}
+
 TEST_F(editor_service, cancel_reverts_every_applied_op, service_fx) {
     const de_component health = register_health(f);
     const de_entity e = spawn_health(f, health, 12);
