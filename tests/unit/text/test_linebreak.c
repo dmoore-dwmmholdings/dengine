@@ -77,6 +77,45 @@ TEST(linebreak, cjk_and_emergency_cluster_boundaries) {
     EXPECT_EQ(gb[3], 1u);
     EXPECT_EQ(gb[4], 0u);
 }
+TEST(linebreak, long_regional_indicator_runs_and_interruptions) {
+    u32 cp[4096];
+    u8 breaks[4097];
+    for (u32 i = 0; i < 4096; ++i)
+        cp[i] = 0x1f1e6 + i % 26;
+    for (u32 count = 4095; count <= 4096; ++count) {
+        de__text_graphemes(cp, count, breaks);
+        EXPECT_EQ(breaks[0], 1u);
+        for (u32 i = 1; i < count; ++i)
+            EXPECT_EQ(breaks[i], (u8)(i % 2 == 0));
+        EXPECT_EQ(breaks[count], 1u);
+    }
+    const u32 interruptions[] = {'a', 0x301, 0x0a};
+    for (u32 k = 0; k < sizeof interruptions / sizeof interruptions[0]; ++k) {
+        for (u32 prefix = 1; prefix <= 4; ++prefix) {
+            for (u32 i = 0; i < prefix + 5; ++i)
+                cp[i] = i == prefix ? interruptions[k] : 0x1f1e6;
+            de__text_graphemes(cp, prefix + 5, breaks);
+            /* Extend attaches to the preceding flag but still resets RI parity. */
+            EXPECT_EQ(breaks[prefix], (u8)(interruptions[k] != 0x301));
+            EXPECT_EQ(breaks[prefix + 1], 1u);
+            EXPECT_EQ(breaks[prefix + 2], 0u);
+            EXPECT_EQ(breaks[prefix + 3], 1u);
+            EXPECT_EQ(breaks[prefix + 4], 0u);
+            EXPECT_EQ(breaks[prefix + 5], 1u);
+        }
+    }
+}
+TEST(text_graphemes, regional_indicator_utf8_offsets) {
+    char text[4096 * 4];
+    u32 offsets[2049];
+    for (u32 i = 0; i < 4096; ++i)
+        memcpy(text + i * 4, "\xf0\x9f\x87\xa6", 4);
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){text, sizeof text}, offsets, 2049), 2049u);
+    for (u32 i = 0; i < 2049; ++i)
+        EXPECT_EQ(offsets[i], i * 8);
+    EXPECT_EQ(de_text_grapheme_offsets((de_str){text, sizeof text - 4}, offsets, 2049), 2049u);
+    EXPECT_EQ(offsets[2048], (u32)sizeof text - 4);
+}
 TEST(text_graphemes, public_byte_offsets_capacity_invalid_and_large_input) {
     const char *text = "a\xcc\x81"
                        "👩‍👩‍👧‍👦"
