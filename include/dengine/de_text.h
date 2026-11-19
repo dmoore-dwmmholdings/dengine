@@ -213,6 +213,12 @@ typedef struct de_loc_string {
  * pointers stay valid until the second text update after the next locale switch. */
 DE_API de_result de_loc_read_strings(const de_text_system *t, de_loc_string *out, u32 capacity,
                                      u32 *count);
+/** DENG-786: as de_loc_read_strings, and also writes the string_table asset of each string to
+ * `table_assets[i]` (the asset behind de_loc_string.table). `table_assets` may be NULL only with
+ * a capacity of 0. */
+DE_API de_result de_loc_read_strings_with_tables(const de_text_system *t, de_loc_string *out,
+                                                 de_asset_id *table_assets, u32 capacity,
+                                                 u32 *count);
 /** Editor preview: switches to `locale` (asynchronously, as de_loc_set_locale does, including
  * asset overrides) without changing the locale the game selected. While a preview is active,
  * de_loc_set_locale stores the game's choice; NULL ends the preview and switches back to it.

@@ -118,6 +118,16 @@ typedef struct de_ui_theme_var {
     bool themed;    /* the value comes from the theme overlay, not from [vars] */
     bool truncated; /* `value` (or `name`) was cut to fit */
 } de_ui_theme_var;
+/** DENG-786: where a loaded stylesheet came from. */
+typedef struct de_ui_sheet_info {
+    de_asset_id asset; /* the ui_style or blob asset; {0} when loaded from source text */
+    const char *path;  /* the asset's manifest path; "" when there is none. Valid until the next
+                        * manifest load or destroy */
+    bool builtin;      /* an embedded engine sheet */
+} de_ui_sheet_info;
+/** Describes the stylesheet at `sheet`, an index from de_ui_theme_var.sheet (load order,
+ * built-in sheets first). DE_ERR_NOT_FOUND: no sheet has that index. */
+DE_API de_result de_ui_get_sheet_info(const de_ui *ui, u32 sheet, de_ui_sheet_info *out);
 /** Writes the variables in effect for `theme` (NULL: the active theme; "": the base
  * variables): for each sheet in load order, its [vars] in file order with the overlay values
  * applied, then the variables that only the overlay declares. `count` gets the full count.

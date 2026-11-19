@@ -280,6 +280,26 @@ static de_result slot_build(de_ui_style_system *state, de_blob handle,
         slot_clear(state, slot);
     return result;
 }
+de_result de_ui_get_sheet_info(const de_ui *ui, u32 sheet, de_ui_sheet_info *out) {
+    if (!ui || !ui->style || !out)
+        return DE_ERR_INVALID_ARGUMENT;
+    const de_ui_style_system *state = ui->style;
+    if (sheet >= state->sheet_count)
+        return DE_ERR_NOT_FOUND;
+    memset(out, 0, sizeof *out);
+    out->path = "";
+    out->builtin = sheet < state->builtin_count;
+    if (state->sheets[sheet].handle.id && ui->desc.assets) {
+        const de__slot *asset = de__slot_get(ui->desc.assets, state->sheets[sheet].handle.id);
+        if (asset) {
+            out->asset = asset->id;
+            const char *path = de_asset_id_path(ui->desc.assets, asset->id);
+            if (path)
+                out->path = path;
+        }
+    }
+    return DE_OK;
+}
 de_result de_ui_load_stylesheet(de_ui *ui, de_blob stylesheet) {
     if (!ui || !ui->style || !ui->desc.assets || !stylesheet.id)
         return DE_ERR_INVALID_ARGUMENT;
