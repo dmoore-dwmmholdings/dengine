@@ -47,7 +47,7 @@ typedef struct ed_snap {
 typedef struct de__ed_session {
     ed_snap snaps[ED_MAX_SNAPS];
     u32 next_snap;
-    de_world_snapshot play;  /* taken on entering Play/Simulate from Edit */
+    de_world_snapshot play; /* taken on entering Play/Simulate from Edit */
     bool has_play;
     de_world_snapshot initial; /* at service start, for session.restart */
     bool has_initial;
@@ -92,13 +92,11 @@ static void send_state(de__editor *ed) {
     de__ed_send(ed, &w, DE_EP_KIND_NOTIFICATION);
 }
 
-/* Reload telemetry is main-thread only. A failed transport is left for the normal pump to
- * drop: dropping here runs area resets that can erase the reload's thread-local error chain. */
+/* Reload telemetry is main-thread only. It is queued to the IPC thread, which never drops the
+ * connection here: a failed transport reaches the next pump, so the area resets cannot erase the
+ * reload's thread-local error chain. */
 static void reload_send(de__editor *ed, mpack_writer_t *writer) {
-    const size_t bytes = mpack_writer_buffer_used(writer);
-    const mpack_error_t error = mpack_writer_destroy(writer);
-    if (error == mpack_ok)
-        (void)de__ed_crash_send(&ed->conn, DE_EP_KIND_NOTIFICATION, ed->note, bytes, ed->seq + 1);
+    (void)de__ed_send(ed, writer, DE_EP_KIND_NOTIFICATION);
 }
 
 void de__ed_game_reloading(de__host *h) {
@@ -212,11 +210,13 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
                         s->fields[n++] = (snap_field){ent, a->components[i], 0xFFFFFFFFu, 0, 0};
                         continue;
                     }
-                    const u8 *data = (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)r * ci->size;
+                    const u8 *data =
+                        (const u8 *)ecs_chunk_column(a, ch, col) + (size_t)r * ci->size;
                     for (u32 f = 0; f < fc && n < cap; ++f) {
                         mpack_writer_t mw;
                         mpack_writer_init(&mw, ed->note, ed->note_cap);
-                        de__ed_write_field(ed, &mw, ci->type, f, &fields[f], data + fields[f].offset);
+                        de__ed_write_field(ed, &mw, ci->type, f, &fields[f],
+                                           data + fields[f].offset);
                         const size_t len = mpack_writer_buffer_used(&mw);
                         if (mpack_writer_destroy(&mw) != mpack_ok)
                             continue;
@@ -245,7 +245,8 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
     qsort(s->fields, n, sizeof(snap_field), cmp_field);
     /* Keep the allocation sizes the free uses. */
     if (n != cap + 1) {
-        snap_field *exact = (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (n + 1), 8, DE_MEM_GENERAL);
+        snap_field *exact =
+            (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (n + 1), 8, DE_MEM_GENERAL);
         if (exact != NULL) {
             memcpy(exact, s->fields, sizeof(snap_field) * n);
             DE_FREE(al, s->fields, sizeof(snap_field) * (cap + 1));
@@ -472,7 +473,8 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
     memset(&d, 0, sizeof d);
     d.spawned.items = (u64 *)de__ed_alloc(a, sizeof(u64) * (nb + 1));
     d.despawned.items = (u64 *)de__ed_alloc(a, sizeof(u64) * (na + 1));
-    d.changed.items = (de_ep_field_change *)de__ed_alloc(a, sizeof(de_ep_field_change) * (na + nb + 1));
+    d.changed.items =
+        (de_ep_field_change *)de__ed_alloc(a, sizeof(de_ep_field_change) * (na + nb + 1));
     de_ep_kv_raw *kv = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (na + nb + 1));
     if (!d.spawned.items || !d.despawned.items || !d.changed.items || !kv) {
         de__ed_error(w, req->id, DE_EP_ERR_BUSY, "snapshot.diff: too large for scratch memory");
@@ -509,7 +511,8 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
         }
         bool differs = c != 0;
         if (c == 0)
-            differs = fa->len != fb->len || memcmp(sa->bytes + fa->off, sb->bytes + fb->off, fa->len) != 0;
+            differs = fa->len != fb->len ||
+                      memcmp(sa->bytes + fa->off, sb->bytes + fb->off, fa->len) != 0;
         if (differs) {
             const ecs_component_info *ci = ecs_component_get(ed->e->world, key->comp);
             if (cur == NULL || cur->entity != key->entity ||
@@ -529,7 +532,7 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
                 if (c == 0)
                     kv[nkv].value = (de_ep_raw){(const char *)sb->bytes + fb->off, fb->len};
                 else if (c > 0)
-                    kv[nkv].value = de__ed_raw_bool(a, true);  /* added */
+                    kv[nkv].value = de__ed_raw_bool(a, true); /* added */
                 else
                     kv[nkv].value = de__ed_raw_bool(a, false); /* removed */
                 ++nkv;
@@ -565,7 +568,8 @@ static void reset(de__editor *ed) {
         g_session.has_play = false;
     }
     if (ed->mode != DE_EP_WORLD_MODE_EDIT) {
-        DE_INFO(ed->log, "editor: mode %s -> Edit (IDE disconnected)", de_ep_world_mode_name(ed->mode));
+        DE_INFO(ed->log, "editor: mode %s -> Edit (IDE disconnected)",
+                de_ep_world_mode_name(ed->mode));
         ed->mode = DE_EP_WORLD_MODE_EDIT;
         game_systems(ed, false);
     }

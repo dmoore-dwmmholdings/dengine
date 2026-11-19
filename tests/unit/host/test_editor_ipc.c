@@ -84,8 +84,7 @@ static void ipc_fx_setup(ipc_fx *f) {
     de_atomic_init_u32(&f->run, 1);
     de_atomic_init_u32(&f->pump, 1);
     de_atomic_init_u32(&f->frames_done, 0);
-    ASSERT_EQ(de_thread_create(frame_loop, f, "test-frames", DE_THREAD_NORMAL, 0,
-                               &f->frames),
+    ASSERT_EQ(de_thread_create(frame_loop, f, "test-frames", DE_THREAD_NORMAL, 0, &f->frames),
               DE_OK);
 }
 
