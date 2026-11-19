@@ -234,3 +234,18 @@ if(DE_HAS_RENDER)
             "DE_PREVIEW_SOURCE_DIR=\"${DE_ROOT_DIR}\"")
     endif()
 endif()
+
+# DENG-579: material graph to Slang code generation (tools/cook/importers/material_graph/).
+if(TARGET de_tp_slang)
+    de_add_test(NAME material_graph SOURCES test_material_graph.c LIBS de_cooker
+        LABELS unit cook shader TIMEOUT 300)
+    if(TARGET test_material_graph)
+        target_include_directories(test_material_graph PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_material_graph PRIVATE
+            "DE_MG_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+        if(WIN32)
+            target_compile_definitions(test_material_graph PRIVATE _CRT_SECURE_NO_WARNINGS)
+        endif()
+    endif()
+endif()
