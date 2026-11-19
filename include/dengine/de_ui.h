@@ -156,6 +156,32 @@ typedef struct de_ui_layout_stats {
     f32 scale;
 } de_ui_layout_stats;
 DE_API de_ui_layout_stats de_ui_get_layout_stats(const de_ui *ui);
+/** A viewport for de_ui_layout_preview: what an editor previews the UI at. */
+typedef struct de_ui_preview_viewport {
+    u32 width, height; /**< Output pixels; with pixel_art, the internal (low-resolution) pixels. */
+    f32 ui_scale;      /**< The ui.scale value to apply; zero or less: the current ui.scale. */
+    de_window_insets safe; /**< Safe-area insets in output pixels. */
+    bool pixel_art;        /**< Integer scale round(ui_scale), as de_ui_desc.pixel_art. */
+} de_ui_preview_viewport;
+typedef struct de_ui_preview_rect {
+    de_entity entity;
+    de_vec4 rect; /**< x, y, w, h in the preview viewport's pixels, as DeUiNode.computed_rect */
+} de_ui_preview_rect;
+/**
+ * Lays the UI out at `viewport` and reports the rects of `root` (a DeUiNode entity) and its UI
+ * descendants in pre-order: the root, then each child's subtree in child order (DENG-768). Every
+ * root is laid out, as a frame would, then the live viewport is laid out again, so the world's
+ * DeUiNode.computed_rect values are unchanged afterwards. World panels keep their own extent.
+ * `*count` gets the number of nodes in the subtree; the first `capacity` go to `out`. `scale`
+ * (optional) gets the layout scale used. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui`, `viewport` or `count`, `out` NULL with a
+ *         capacity, a zero width or height, a non-finite ui_scale, or `ui` not attached) or
+ *         DE_ERR_NOT_FOUND (`root` is not a live UI node).
+ */
+DE_API de_result de_ui_layout_preview(de_ui *ui, de_entity root,
+                                      const de_ui_preview_viewport *viewport,
+                                      de_ui_preview_rect *out, u32 capacity, u32 *count,
+                                      f32 *scale);
 
 typedef struct DeUiImage {
     de_texture texture;
