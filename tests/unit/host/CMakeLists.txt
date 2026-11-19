@@ -494,3 +494,20 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_entity PRIVATE "${DE_ROOT_DIR}/src")
 endif()
+
+# DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
+# round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker
+# and Slang only, the same condition as the handlers in de_host.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_tp_slang)
+    de_add_test(NAME editor_material_graph SOURCES test_editor_material_graph.c
+        LIBS de_host de_tp_dide_protocol LABELS unit host cook TIMEOUT 300
+        CONFIGURATIONS Debug Dev)
+    if(TARGET test_editor_material_graph)
+        target_include_directories(test_editor_material_graph PRIVATE
+            "${DE_ROOT_DIR}/src" "${DE_ROOT_DIR}/tools")
+        target_compile_definitions(test_editor_material_graph PRIVATE
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:DE_ED_MATERIAL_GRAPH=1>")
+        target_link_libraries(test_editor_material_graph PRIVATE
+            "$<$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>:de_cooker>")
+    endif()
+endif()

@@ -324,6 +324,11 @@ from = "host"
 to = "services/*"
 why = "The app host creates the crash, mods, save, steam and bind services (DENG-60: host DEPS crash mods save, OPTIONAL_DEPS steam)."
 
+[[allow]]
+from = "host"
+to = "cook/importers"
+why = "Dev builds only (DE_HAS_COOKER and Slang): the editor service's materialGraph.* methods run the material graph generator and its Slang compile (tools/cook/importers/material_graph; DENG-769). Shipping does not link the cooker."
+
 # ---------------------------------------------------------------- forbidden edges
 # Never add an [[allow]] entry for these. The check fails if one exists.
 

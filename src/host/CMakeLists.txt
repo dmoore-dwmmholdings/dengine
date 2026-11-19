@@ -177,3 +177,18 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_animation.c
         editor/editor_animation_pose.c editor/editor_animation_pose.h)
 endif()
+
+# DENG-769: the material graph over the editor IPC (materialGraph.*, capability
+# assets.materialGraph; DIDE-R161). Debug and Dev with the cooker and Slang only: there the host
+# links de_cooker (tools/check_layers/layers.toml: host -> cook/importers) and the handlers serve
+# Slang imports from the engine shader root (DE_ENGINE_SHADER_ROOT overrides it, as in render).
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND TARGET de_tp_slang)
+    set(_de_host_mg "$<AND:$<CONFIG:Debug,Dev>,$<TARGET_EXISTS:de_cooker>>")
+    target_sources(de_host PRIVATE editor/editor_material_graph.c)
+    target_compile_definitions(de_host PRIVATE
+        "$<${_de_host_mg}:DE_ED_MATERIAL_GRAPH=1>"
+        "DE_ED_ENGINE_SHADER_ROOT=\"${DE_ROOT_DIR}/shaders\"")
+    target_link_libraries(de_host PRIVATE "$<${_de_host_mg}:de_cooker>")
+    set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS "$<${_de_host_mg}:de_cooker>")
+    target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
+endif()
