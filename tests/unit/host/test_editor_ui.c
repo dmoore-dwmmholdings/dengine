@@ -17,6 +17,9 @@
 #include <dengine/de_ecs.h>
 #include <dengine/de_text.h>
 #include <dengine/de_ui.h>
+#if defined(DE_UI_TEST_FONTS)
+#include "../text/runtime_test_util.h"
+#endif
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,7 +39,7 @@ typedef struct ui_ed_fx {
     unsigned char *storage;
     char *response;
     char note[32768];
-    char params[512];
+    char params[4096];
     mpack_tree_t tree;
     bool parsed;
 } ui_ed_fx;
@@ -62,8 +65,8 @@ static void ui_ed_fx_setup(ui_ed_fx *f) {
     f->ed.arena_cap = STORAGE;
     f->ed.note = f->note;
     f->ed.note_cap = sizeof f->note;
-    f->ed.proto_major = 1; /* as hello agrees with a 1.16 IDE */
-    f->ed.proto_minor = 16;
+    f->ed.proto_major = 1; /* as hello agrees with a 1.17 IDE */
+    f->ed.proto_minor = 17;
     de__ed_edit_register(&f->ed);
     de__ed_ui_register(&f->ed);
 }
@@ -186,7 +189,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.16"); /* pinned dide faec8854 (DENG-787) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.17"); /* pinned dide fdf7cd36 (DENG-788) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
@@ -839,5 +842,232 @@ TEST_F(editor_ui, stylesheets_carry_manifest_path_source_and_error_file, ui_ed_f
     EXPECT_EQ(de_fs_unmount("edsheets", directory), DE_OK);
     EXPECT_EQ(rmdir(directory), 0);
 }
+/* ---- DENG-788: protocol 1.17, ui.measureText and the capability ui.textMetrics ---- */
+TEST_F(editor_ui, text_metrics_needs_a_text_system_and_protocol_1_17, ui_ed_fx) {
+    /* The fixture has no text system: the capability is not listed and a call is unsupported. */
+    EXPECT_FALSE(has_cap(f, "ui.textMetrics"));
+    ASSERT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_MEASURE_TEXT] != NULL);
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    de_ep_write_ui_measure_text_params(
+        &w, &(de_ep_ui_measure_text_params){.text = de_ep_cstr("Hi"),
+                                            .style = {.font = de_ep_cstr("font/latin")}});
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    EXPECT_EQ(code_of(call(f, DE_EP_METHOD_UI_MEASURE_TEXT, size)), DE_EP_ERR_UNSUPPORTED);
+}
+#if defined(DE_UI_TEST_FONTS)
+typedef struct text_env {
+    runtime_fx fonts;
+} text_env;
+static void text_env_up(ui_ed_fx *f, text_env *t) {
+    memset(t, 0, sizeof *t);
+    runtime_fx_setup(&t->fonts);
+    f->engine.text = t->fonts.t;
+    f->engine.assets = t->fonts.assets;
+    f->engine.ui->desc.text = t->fonts.t;
+    de__ed_ui_register(&f->ed); /* the capability follows the text system */
+}
+static void text_env_down(ui_ed_fx *f, text_env *t) {
+    f->engine.text = NULL;
+    f->engine.assets = NULL;
+    f->engine.ui->desc.text = NULL;
+    runtime_fx_teardown(&t->fonts);
+}
+typedef struct measure_in {
+    const char *text, *font;
+    bool has_size, has_spacing, has_line_height, has_align, has_wrap, has_box, has_scale;
+    f32 size, spacing, line_height, wrap, box, scale;
+    de_ep_ui_text_align align;
+    const char *language;
+} measure_in;
+static mpack_node_t measure(ui_ed_fx *f, const measure_in *in) {
+    de_ep_ui_measure_text_params p = {.text = de_ep_cstr(in->text),
+                                      .style = {.font = de_ep_cstr(in->font ? in->font : "font/latin"),
+                                                .has_size_px = in->has_size,
+                                                .size_px = in->size,
+                                                .has_letter_spacing = in->has_spacing,
+                                                .letter_spacing = in->spacing,
+                                                .has_line_height = in->has_line_height,
+                                                .line_height = in->line_height},
+                                      .has_align = in->has_align,
+                                      .align = in->align,
+                                      .has_wrap_width = in->has_wrap,
+                                      .wrap_width = in->wrap,
+                                      .has_box_height = in->has_box,
+                                      .box_height = in->box,
+                                      .has_scale = in->has_scale,
+                                      .scale = in->scale};
+    if (in->language) {
+        p.style.has_language = true;
+        p.style.language = de_ep_cstr(in->language);
+    }
+    mpack_writer_t w;
+    mpack_writer_init(&w, f->params, sizeof f->params);
+    de_ep_write_ui_measure_text_params(&w, &p);
+    const size_t size = mpack_writer_buffer_used(&w);
+    ASSERT_EQ(mpack_writer_destroy(&w), mpack_ok);
+    return call(f, DE_EP_METHOD_UI_MEASURE_TEXT, size);
+}
+static f32 num(mpack_node_t n, const char *key) {
+    return mpack_node_float(mpack_node_map_cstr(n, key));
+}
+
+TEST_F(editor_ui, text_metrics_match_de_ui_measure_text_and_cover_the_text, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    EXPECT_TRUE(has_cap(f, "ui.textMetrics"));
+    const char *s = "The quick brown fox wraps over multiple lines";
+    mpack_node_t r = res(measure(f, &(measure_in){.text = s,
+                                                  .has_size = true,
+                                                  .size = 20,
+                                                  .has_wrap = true,
+                                                  .wrap = 100}));
+    de_text_style style = {.font = t.fonts.latin, .size_px = 20};
+    de_ui_text_metrics m = {0};
+    de_text_line lines[16] = {0};
+    ASSERT_EQ(de_ui_measure_text(f->engine.ui,
+                                 &(de_ui_text_measure_desc){
+                                     .utf8 = {s, strlen(s)}, .style = &style, .wrap_width = 100},
+                                 lines, 16, &m),
+              DE_OK);
+    ASSERT_TRUE(m.line_count > 1u && m.line_count <= 16u);
+    mpack_node_t size = mpack_node_map_cstr(r, "size");
+    ASSERT_EQ(mpack_node_array_length(size), 2u);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(size, 0)), m.size.x, 1e-3f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(size, 1)), m.size.y, 1e-3f);
+    EXPECT_FLOAT_EQ(num(r, "scale"), 1, 1e-6f);
+    EXPECT_FLOAT_EQ(num(r, "lineHeight"), m.line_height, 1e-3f);
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "overflowX")));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(r, "overflowY")));
+    mpack_node_t out = mpack_node_map_cstr(r, "lines");
+    ASSERT_EQ(mpack_node_array_length(out), (size_t)m.line_count);
+    for (u32 i = 0; i < m.line_count; ++i) {
+        mpack_node_t l = mpack_node_array_at(out, i);
+        EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l, "start")), lines[i].byte_start);
+        EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l, "end")), lines[i].byte_end);
+        EXPECT_FLOAT_EQ(num(l, "x"), lines[i].x, 1e-3f);
+        EXPECT_FLOAT_EQ(num(l, "y"), lines[i].y, 1e-3f);
+        EXPECT_FLOAT_EQ(num(l, "width"), lines[i].width, 1e-3f);
+        EXPECT_FLOAT_EQ(num(l, "height"), lines[i].height, 1e-3f);
+    }
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(out, 0), "start")), 0u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(out, m.line_count - 1), "end")),
+              (u32)strlen(s));
+    text_env_down(f, &t);
+}
+
+TEST_F(editor_ui, text_metrics_scale_overflow_and_the_default_size, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    const char *s = "Unbreakableword";
+    mpack_node_t one = res(measure(f, &(measure_in){.text = s, .has_size = true, .size = 16}));
+    const f32 w1 = mpack_node_float(mpack_node_array_at(mpack_node_map_cstr(one, "size"), 0));
+    /* size_px absent is 16. */
+    mpack_node_t dflt = res(measure(f, &(measure_in){.text = s}));
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(mpack_node_map_cstr(dflt, "size"), 0)), w1,
+                    1e-3f);
+    /* The size is multiplied by the scale, and the reply carries the scale used. */
+    mpack_node_t two = res(measure(f, &(measure_in){.text = s, .has_scale = true, .scale = 2}));
+    EXPECT_FLOAT_EQ(num(two, "scale"), 2, 1e-6f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(mpack_node_map_cstr(two, "size"), 0)),
+                    2 * w1, 0.05f * w1);
+    /* A word wider than wrapWidth cannot break narrow enough; a box shorter than the text. */
+    mpack_node_t over = res(measure(
+        f, &(measure_in){.text = s, .has_wrap = true, .wrap = 5, .has_box = true, .box = 1}));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(over, "overflowX")));
+    EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(over, "overflowY")));
+    /* Limits that are absent or 0 mean none. */
+    mpack_node_t none = res(measure(
+        f, &(measure_in){.text = s, .has_wrap = true, .wrap = 0, .has_box = true, .box = 0}));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(none, "overflowX")));
+    EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(none, "overflowY")));
+    text_env_down(f, &t);
+}
+
+TEST_F(editor_ui, text_metrics_line_height_is_in_layout_pixels, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    const char *s = "one\ntwo\nthree";
+    mpack_node_t base = res(measure(f, &(measure_in){.text = s, .has_size = true, .size = 20}));
+    const f32 own = num(base, "lineHeight");
+    ASSERT_TRUE(own > 0);
+    /* Layout pixels: 40 gives 40 per line, not a factor of 40. */
+    mpack_node_t px = res(measure(f, &(measure_in){.text = s,
+                                                   .has_size = true,
+                                                   .size = 20,
+                                                   .has_line_height = true,
+                                                   .line_height = 40}));
+    EXPECT_FLOAT_EQ(num(px, "lineHeight"), 40, 0.01f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(mpack_node_map_cstr(px, "size"), 1)), 120,
+                    0.05f);
+    /* Not multiplied by the scale. */
+    mpack_node_t sc = res(measure(f, &(measure_in){.text = s,
+                                                   .has_size = true,
+                                                   .size = 20,
+                                                   .has_line_height = true,
+                                                   .line_height = 40,
+                                                   .has_scale = true,
+                                                   .scale = 2}));
+    EXPECT_FLOAT_EQ(num(sc, "lineHeight"), 40, 0.01f);
+    /* 0 is the font's own. */
+    mpack_node_t zero = res(measure(f, &(measure_in){.text = s,
+                                                     .has_size = true,
+                                                     .size = 20,
+                                                     .has_line_height = true,
+                                                     .line_height = 0}));
+    EXPECT_FLOAT_EQ(num(zero, "lineHeight"), own, 1e-3f);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = s, .has_line_height = true, .line_height = -1})),
+              DE_EP_ERR_INVALID_PARAMS);
+    text_env_down(f, &t);
+}
+
+TEST_F(editor_ui, text_metrics_errors_and_empty_text, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .font = "font/missing"})),
+              DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .font = ""})), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .has_wrap = true, .wrap = -1})),
+              DE_EP_ERR_INVALID_PARAMS);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .has_box = true, .box = NAN})),
+              DE_EP_ERR_INVALID_PARAMS);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .has_scale = true, .scale = -2})),
+              DE_EP_ERR_INVALID_PARAMS);
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x", .has_size = true, .size = INFINITY})),
+              DE_EP_ERR_INVALID_PARAMS);
+    /* Below protocol 1.17 the method is unsupported. */
+    f->ed.proto_minor = 16;
+    EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x"})), DE_EP_ERR_UNSUPPORTED);
+    f->ed.proto_minor = 17;
+    /* Empty text: the engine lays out one empty line, as a label of no text is one line tall
+     * (the dide mock returns no lines and size [0, 0]; DENG-788 files that as a DIDE issue). */
+    mpack_node_t r = res(measure(f, &(measure_in){.text = ""}));
+    mpack_node_t lines = mpack_node_map_cstr(r, "lines");
+    ASSERT_EQ(mpack_node_array_length(lines), 1u);
+    mpack_node_t l0 = mpack_node_array_at(lines, 0);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l0, "start")), 0u);
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(l0, "end")), 0u);
+    EXPECT_FLOAT_EQ(num(l0, "width"), 0, 1e-6f);
+    mpack_node_t sz = mpack_node_map_cstr(r, "size");
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(sz, 0)), 0, 1e-6f);
+    EXPECT_FLOAT_EQ(mpack_node_float(mpack_node_array_at(sz, 1)), num(r, "lineHeight"), 1e-3f);
+    text_env_down(f, &t);
+}
+
+TEST_F(editor_ui, text_metrics_retries_with_a_larger_buffer, ui_ed_fx) {
+    text_env t;
+    text_env_up(f, &t);
+    char text[2048];
+    size_t n = 0;
+    for (int i = 0; i < 300; ++i)
+        n += (size_t)snprintf(text + n, sizeof text - n, "l%d\n", i % 10);
+    mpack_node_t r = res(measure(f, &(measure_in){.text = text}));
+    mpack_node_t lines = mpack_node_map_cstr(r, "lines");
+    ASSERT_EQ(mpack_node_array_length(lines), 301u); /* a final empty line after the last break */
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(lines, 300), "end")), (u32)n);
+    text_env_down(f, &t);
+}
+#endif
 #endif
 #endif
