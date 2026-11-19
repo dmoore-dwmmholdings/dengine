@@ -19,6 +19,13 @@
  *   de_loc_preview_locale. LocString.key is the 16-digit lowercase hex of the key hash and
  *   LocString.table the string table's index in asset ID order.
  * A disconnect ends a theme or locale preview the IDE left on (reset hook).
+ *
+ * Protocol 1.16 (DENG-787, capability ui.stylesheets, `unsupported` below 1.16):
+ * - ui.stylesheets: de_ui_list_sheets, with the suffix DE_UI_STYLESHEET_SUFFIX. UiSheet.path is
+ *   the manifest path, UiSheet.source the manifest source relative to the asset root, and
+ *   UiSheetError.file that same source. A rejected reload is `loaded` with an `error`.
+ * - ui.checkStylesheet: de_ui_check_stylesheet on the text, without loading it.
+ * A line and column are 1-based; 0 is unknown, and a column is never sent with line 0.
  */
 #include "host/editor/editor_internal.h"
 
@@ -552,6 +559,104 @@ static void h_loc_preview_locale(de__editor *ed, const de_ep_request *req, de_ep
     de_ep_write_response_loc_preview_locale(w, req->id, &res);
 }
 
+/* ---------- Protocol 1.16 (DENG-787) ---------- */
+
+static bool need_116(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
+                     const char *method) {
+    if (de__ed_protocol_at_least(ed, 1, 16))
+        return true;
+    de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "%s: needs protocol 1.16 (agreed %u.%u)",
+                 method, (unsigned)ed->proto_major, (unsigned)ed->proto_minor);
+    return false;
+}
+
+/* The copy of `s` in the reply arena, "" when it does not fit. */
+static de_ep_str arena_str(de_ep_arena *a, const char *s) {
+    const size_t n = strlen(s);
+    char *buf = (char *)de__ed_alloc(a, n + 1);
+    if (buf == NULL)
+        return de_ep_cstr("");
+    memcpy(buf, s, n + 1);
+    return de_ep_cstr(buf);
+}
+
+static void h_ui_stylesheets(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                             mpack_writer_t *w) {
+    if (!need_116(ed, req, w, "ui.stylesheets"))
+        return;
+    DE__ED_PARAMS(ui_stylesheets, de_ep_empty, q);
+    (void)q;
+    de_ep_ui_stylesheets res = {.suffix = de_ep_cstr(DE_UI_STYLESHEET_SUFFIX)};
+    const de_ui *ui = ed->e ? ed->e->ui : NULL;
+    u32 count = 0;
+    if (ui != NULL && de_ui_list_sheets(ui, NULL, 0, &count) != DE_OK) {
+        de_error_clear();
+        count = 0;
+    }
+    if (count > 0) {
+        de_ui_sheet_status *st = (de_ui_sheet_status *)de__ed_alloc(a, sizeof *st * count);
+        de_ep_ui_sheet *items = (de_ep_ui_sheet *)de__ed_alloc(a, sizeof *items * count);
+        u32 total = 0;
+        if (st == NULL || items == NULL || de_ui_list_sheets(ui, st, count, &total) != DE_OK ||
+            total != count) {
+            de_error_clear();
+            ui_busy(w, req->id, "ui.stylesheets");
+            return;
+        }
+        for (u32 i = 0; i < count; ++i) {
+            const de_ui_sheet_status *s = &st[i];
+            const char *path = s->info.path ? s->info.path : "";
+            const char *source = s->source ? s->source : "";
+            char hex[24] = "";
+            /* The asset id is the manifest id, which is the path; a sheet the manifest does not
+             * list has the 16-digit hex of its asset id; one from source text has none. */
+            if (path[0] == 0 && s->info.asset.hash)
+                snprintf(hex, sizeof hex, "%016llx", (unsigned long long)s->info.asset.hash);
+            items[i] = (de_ep_ui_sheet){.index = s->index,
+                                        .path = arena_str(a, path),
+                                        .asset = arena_str(a, path[0] ? path : hex),
+                                        .source = arena_str(a, source),
+                                        .builtin = s->info.builtin,
+                                        .loaded = s->loaded};
+            if (s->has_error) {
+                items[i].has_error = true;
+                items[i].error = (de_ep_ui_sheet_error){
+                    .file = arena_str(a, source),
+                    .line = s->error.line,
+                    .column = s->error.line ? s->error.column : 0,
+                    .message = arena_str(a, s->error.message)};
+            }
+        }
+        res.sheets = (de_ep_list_ui_sheet){items, count};
+    }
+    de_ep_write_response_ui_stylesheets(w, req->id, &res);
+}
+
+static void h_ui_check_stylesheet(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                                  mpack_writer_t *w) {
+    if (!need_116(ed, req, w, "ui.checkStylesheet"))
+        return;
+    DE__ED_PARAMS(ui_check_stylesheet, de_ep_ui_check_stylesheet_params, q);
+    de_ep_ui_check_stylesheet res = {.ok = true};
+    de_ui_sheet_error error;
+    memset(&error, 0, sizeof error);
+    if (q.text.len > 0) {
+        const de_result r = de_ui_check_stylesheet(q.text.ptr, (u64)q.text.len, &error);
+        if (r == DE_ERR_PARSE) {
+            res.ok = false;
+            res.has_error = true;
+            res.error = (de_ep_ui_check_error){.line = error.line,
+                                               .column = error.line ? error.column : 0,
+                                               .message = arena_str(a, error.message)};
+        } else if (r != DE_OK) {
+            de_error_clear();
+            de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "ui.checkStylesheet: check failed");
+            return;
+        }
+    }
+    de_ep_write_response_ui_check_stylesheet(w, req->id, &res);
+}
+
 /* A disconnect ends the previews the IDE started; with none active both calls do nothing. */
 static void ui_reset(de__editor *ed) {
     if (ed->e == NULL)
@@ -564,11 +669,14 @@ static void ui_reset(de__editor *ed) {
 
 void de__ed_ui_register(de__editor *ed) {
     de__ed_add_capability(ed, "ui.editor");
+    de__ed_add_capability(ed, "ui.stylesheets");
     de__ed_on(ed, DE_EP_METHOD_UI_LAYOUT, h_ui_layout);
     de__ed_on(ed, DE_EP_METHOD_UI_NODE_CORNERS, h_ui_node_corners);
     de__ed_on(ed, DE_EP_METHOD_UI_THEMES, h_ui_themes);
     de__ed_on(ed, DE_EP_METHOD_UI_THEME_VARS, h_ui_theme_vars);
     de__ed_on(ed, DE_EP_METHOD_UI_PREVIEW_THEME, h_ui_preview_theme);
+    de__ed_on(ed, DE_EP_METHOD_UI_STYLESHEETS, h_ui_stylesheets);
+    de__ed_on(ed, DE_EP_METHOD_UI_CHECK_STYLESHEET, h_ui_check_stylesheet);
     de__ed_on(ed, DE_EP_METHOD_LOC_LOCALES, h_loc_locales);
     de__ed_on(ed, DE_EP_METHOD_LOC_STRINGS, h_loc_strings);
     de__ed_on(ed, DE_EP_METHOD_LOC_PREVIEW_LOCALE, h_loc_preview_locale);
