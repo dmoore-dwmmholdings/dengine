@@ -39,7 +39,8 @@ TEST_F(ui_text_metrics, matches_the_text_widget_and_reports_lines, ui_fx) {
                                                             .wrap_width = 100},
                                  lines, 8, &m),
               DE_OK);
-    EXPECT_FLOAT_EQ(m.size.y, ui_rect(f, text).w, .001f);
+    /* Node rects are rounded to whole pixels. */
+    EXPECT_FLOAT_EQ(m.size.y, ui_rect(f, text).w, .5f);
     EXPECT_TRUE(m.size.x <= 100);
     EXPECT_FLOAT_EQ(m.scale, 1, 0);
     EXPECT_TRUE(m.line_count > 1);
