@@ -38,6 +38,18 @@ TEST_F(ui_theme_preview, lists_themes_across_sheets_sorted_with_capacity, ui_fx)
     EXPECT_EQ(de_ui_list_themes(f->ui, all, 4, NULL), DE_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(de_ui_list_themes(f->ui, NULL, 1, &count), DE_ERR_INVALID_ARGUMENT);
 }
+TEST_F(ui_theme_preview, sheet_info_describes_where_a_sheet_came_from, ui_fx) {
+    ASSERT_EQ(style_install(f->ui, "[vars]\na=1\n"), DE_OK);
+    de_ui_sheet_info info;
+    memset(&info, 0xAB, sizeof info);
+    ASSERT_EQ(de_ui_get_sheet_info(f->ui, 0, &info), DE_OK);
+    EXPECT_EQ(info.asset.hash, 0u); /* loaded from source text */
+    EXPECT_STREQ(info.path, "");
+    EXPECT_FALSE(info.builtin);
+    EXPECT_EQ(de_ui_get_sheet_info(f->ui, 1, &info), DE_ERR_NOT_FOUND);
+    EXPECT_EQ(de_ui_get_sheet_info(NULL, 0, &info), DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_ui_get_sheet_info(f->ui, 0, NULL), DE_ERR_INVALID_ARGUMENT);
+}
 TEST_F(ui_theme_preview, theme_vars_merge_overlay_and_format_values, ui_fx) {
     char long_value[300];
     memset(long_value, 'x', sizeof long_value);

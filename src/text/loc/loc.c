@@ -424,7 +424,8 @@ de_result de__loc_list_locales(const de__loc *loc, de_loc_locale_info *out, u32 
     *count = n;
     return DE_OK;
 }
-de_result de__loc_read_strings(const de__loc *loc, de_loc_string *out, u32 capacity, u32 *count) {
+de_result de__loc_read_strings(const de__loc *loc, de_loc_string *out, de_asset_id *table_assets,
+                               u32 capacity, u32 *count) {
     if (!loc || !count || (!out && capacity))
         return DE_ERR_INVALID_ARGUMENT;
     const loc_set *set = de_atomic_load_ptr(&((de__loc *)loc)->active, DE_ATOMIC_ACQUIRE);
@@ -450,6 +451,8 @@ de_result de__loc_read_strings(const de__loc *loc, de_loc_string *out, u32 capac
                 s->value = (de_str){table_value(table, k), de__loc_u32(entry + 12)};
                 s->locale = language < set->languages ? set->chain[language] : "";
                 s->table = i % set->tables;
+                if (table_assets)
+                    table_assets[n] = set->entries[i].id;
             }
             ++n;
         }

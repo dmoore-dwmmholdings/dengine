@@ -442,7 +442,7 @@ TEST_F(editor_ui, themes_list_vars_and_preview, ui_ed_fx) {
     EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(mpack_node_array_at(themes, 1), "sheets")), 1u);
 
     /* Variables: the overlay's values for "dark", the base ones for "" and for the active
-     * theme (absent). The sheet is the load-order index as text. */
+     * theme (absent). A sheet loaded from source text has no path: "sheet:<index>" (DENG-786). */
     mpack_node_t v = find_var(mpack_node_map_cstr(res(call_str(f, DE_EP_METHOD_UI_THEME_VARS,
                                                                "theme", "dark")),
                                                   "vars"),
@@ -450,7 +450,7 @@ TEST_F(editor_ui, themes_list_vars_and_preview, ui_ed_fx) {
     EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "value"), "\"#000\""));
     EXPECT_TRUE(mpack_node_bool(mpack_node_map_cstr(v, "themed")));
     EXPECT_FALSE(mpack_node_bool(mpack_node_map_cstr(v, "truncated")));
-    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "sheet"), "0"));
+    EXPECT_TRUE(str_is(mpack_node_map_cstr(v, "sheet"), "sheet:0"));
     v = find_var(mpack_node_map_cstr(res(call_str(f, DE_EP_METHOD_UI_THEME_VARS, "theme", "")),
                                      "vars"),
                  "a");

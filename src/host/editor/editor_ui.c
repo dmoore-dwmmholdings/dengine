@@ -167,6 +167,25 @@ static bool to_cstr(de_ep_str s, char *buf, size_t cap) {
     return true;
 }
 
+/* DENG-786: the sheet's manifest path; else "builtin:N" for an embedded sheet, "asset:<id>" for an
+ * asset the manifest does not list, and "sheet:N" for one loaded from source text. `fallback`
+ * holds SHEET_NAME_MAX bytes. The path stays valid until the next manifest load. */
+#define SHEET_NAME_MAX 32u
+static const char *sheet_name(const de_ui *ui, u32 index, char *fallback) {
+    de_ui_sheet_info info;
+    if (de_ui_get_sheet_info(ui, index, &info) != DE_OK) {
+        snprintf(fallback, SHEET_NAME_MAX, "sheet:%u", (unsigned)index);
+    } else if (info.path[0]) {
+        return info.path;
+    } else if (info.builtin) {
+        snprintf(fallback, SHEET_NAME_MAX, "builtin:%u", (unsigned)index);
+    } else if (info.asset.hash) {
+        snprintf(fallback, SHEET_NAME_MAX, "asset:%016llx", (unsigned long long)info.asset.hash);
+    } else {
+        snprintf(fallback, SHEET_NAME_MAX, "sheet:%u", (unsigned)index);
+    }
+    return fallback;
+}
 static void ui_busy(mpack_writer_t *w, u64 id, const char *method) {
     de__ed_error(w, id, DE_EP_ERR_BUSY, "%s: the reply does not fit", method);
 }
@@ -308,7 +327,7 @@ static void h_ui_theme_vars(de__editor *ed, const de_ep_request *req, de_ep_aren
         if (r == DE_OK && count > 0) {
             vars = (de_ui_theme_var *)de__ed_alloc(a, sizeof *vars * count);
             items = (de_ep_ui_theme_var *)de__ed_alloc(a, sizeof *items * count);
-            sheets = (char *)de__ed_alloc(a, 12u * count);
+            sheets = (char *)de__ed_alloc(a, SHEET_NAME_MAX * count);
             if (vars == NULL || items == NULL || sheets == NULL) {
                 ui_busy(w, req->id, "ui.themeVars");
                 return;
@@ -325,8 +344,7 @@ static void h_ui_theme_vars(de__editor *ed, const de_ep_request *req, de_ep_aren
             return;
         }
         for (u32 i = 0; i < count; ++i) {
-            char *sheet = sheets + 12u * i;
-            snprintf(sheet, 12, "%u", (unsigned)vars[i].sheet);
+            const char *sheet = sheet_name(ui, vars[i].sheet, sheets + SHEET_NAME_MAX * i);
             items[i] = (de_ep_ui_theme_var){.name = de_ep_cstr(vars[i].name),
                                             .value = de_ep_cstr(vars[i].value),
                                             .sheet = de_ep_cstr(sheet),
@@ -452,20 +470,22 @@ static void h_loc_strings(de__editor *ed, const de_ep_request *req, de_ep_arena 
         u32 count = 0;
         de_result r = de_loc_get_locale_state(text, st);
         if (r == DE_OK)
-            r = de_loc_read_strings(text, NULL, 0, &count);
+            r = de_loc_read_strings_with_tables(text, NULL, NULL, 0, &count);
         de_loc_string *strs = NULL;
         de_ep_loc_string *items = NULL;
         char *keys = NULL;
+        de_asset_id *tables = NULL;
         if (r == DE_OK && count > 0) {
             strs = (de_loc_string *)de__ed_alloc(a, sizeof *strs * count);
             items = (de_ep_loc_string *)de__ed_alloc(a, sizeof *items * count);
             keys = (char *)de__ed_alloc(a, 17u * count);
-            if (strs == NULL || items == NULL || keys == NULL) {
+            tables = (de_asset_id *)de__ed_alloc(a, sizeof *tables * count);
+            if (strs == NULL || items == NULL || keys == NULL || tables == NULL) {
                 ui_busy(w, req->id, "loc.strings");
                 return;
             }
             u32 total = 0;
-            r = de_loc_read_strings(text, strs, count, &total);
+            r = de_loc_read_strings_with_tables(text, strs, tables, count, &total);
             count = total < count ? total : count;
         }
         if (r != DE_OK) {
@@ -483,7 +503,7 @@ static void h_loc_strings(de__editor *ed, const de_ep_request *req, de_ep_arena 
                 .value = {strs[i].value.ptr ? strs[i].value.ptr : "",
                           (uint32_t)strs[i].value.len},
                 .locale = de_ep_cstr(strs[i].locale ? strs[i].locale : ""),
-                .table = strs[i].table};
+                .table = tables[i].hash};
         }
         res.locale = de_ep_cstr(st->active);
         res.generation = st->generation;

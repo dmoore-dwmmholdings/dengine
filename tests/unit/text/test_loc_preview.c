@@ -70,6 +70,21 @@ TEST(loc_preview, reads_the_resolved_string_table_with_fallback_locales) {
     EXPECT_STREQ(s->locale, "en");
     ASSERT_TRUE(find_string(strings, count, "items") != NULL);
     memset(strings, 0, sizeof strings);
+    /* DENG-786: the string_table asset of each string. */
+    de_asset_id tables[8];
+    memset(tables, 0, sizeof tables);
+    ASSERT_EQ(de_loc_read_strings_with_tables(&wrapper, strings, tables, 8, &count), DE_OK);
+    ASSERT_EQ(count, 4u);
+    for (u32 i = 0; i < count; ++i) {
+        EXPECT_TRUE(tables[i].hash != 0);
+        for (u32 j = 0; j < count; ++j) /* one table per locale: same locale, same asset */
+            EXPECT_EQ(tables[i].hash == tables[j].hash, !strcmp(strings[i].locale, strings[j].locale));
+    }
+    EXPECT_EQ(de_loc_read_strings_with_tables(&wrapper, strings, NULL, 8, &count),
+              DE_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(de_loc_read_strings_with_tables(NULL, strings, tables, 8, &count),
+              DE_ERR_INVALID_ARGUMENT);
+    memset(strings, 0, sizeof strings);
     ASSERT_EQ(de_loc_read_strings(&wrapper, strings, 1, &count), DE_OK);
     EXPECT_EQ(count, 4u);
     EXPECT_TRUE(strings[1].value.ptr == NULL);
