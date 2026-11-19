@@ -13,7 +13,12 @@
  * inverse of that is `instantiate` with `value` set to a snapshot of the instance, which brings
  * back the same entity ids, stable scene ids, components and record:
  *   {asset: str, entities: [{id, parent, scene, sid, components: {Name: value}}],
- *    base: [{entity, path, value}]} */
+ *    base: [{entity, path, value}]}
+ *
+ * Sibling order (DENG-778, protocol 1.14, ui.editor): `spawn`, `instantiate` and `reparent` take
+ * an optional `index`, the place among the parent's other children (de_entity_set_parent_at: at
+ * or past the end appends; ignored without a parent). The inverses of `despawn`, `uninstantiate`
+ * and `reparent` carry the old index, so undo puts an entity back where it was. */
 #include "host/editor/editor_internal.h"
 
 #include <dengine/de_memory.h>
@@ -257,6 +262,20 @@ static bool add_with(de__editor *ed, de_entity e, de_component c, const de_ep_ra
 static de_entity parent_of(de__editor *ed, de_entity e) {
     return de_entity_parent(W(ed), e);
 }
+/* Parents `e` to `p`, at `o`'s index when it has one (DENG-778). */
+static de_result set_parent_op(de_world *w, de_entity e, de_entity p, const de_ep_edit_op *o) {
+    if (o->has_index && p.bits != 0)
+        return de_entity_set_parent_at(w, e, p, o->index);
+    return de_entity_set_parent(w, e, p);
+}
+/* Gives the inverse `inv` the place of `e` among its siblings, when it has a parent. */
+static void inv_index(de__editor *ed, de_entity e, de_ep_edit_op *inv) {
+    const u32 i = de_entity_child_index(W(ed), e);
+    if (i != UINT32_MAX) {
+        inv->has_index = true;
+        inv->index = i;
+    }
+}
 
 /* ---------- Prefab instances (DENG-764) ---------- */
 
@@ -486,6 +505,7 @@ static bool remove_instance(de__editor *ed, de_ep_arena *a, de_entity root, de_e
     if (p.bits != 0) {
         inv->has_parent = true;
         inv->parent = p.bits;
+        inv_index(ed, root, inv);
     }
     /* Children first, so no despawn leaves an orphan behind. */
     const u32 n = de__ed_scene_tree(ed, root, ents, ED_MAX_TREE);
@@ -526,7 +546,7 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
             }
         }
         if (o->has_parent && o->parent != 0)
-            (void)de_entity_set_parent(w, ne, (de_entity){o->parent});
+            (void)set_parent_op(w, ne, (de_entity){o->parent}, o);
         de__ed_scene_adopt(ed, ne, o->has_scene ? o->scene : 0,
                            (de_entity){o->has_parent ? o->parent : 0});
         *spawned = ne.bits;
@@ -553,6 +573,10 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
                                      parent, &root, &code, msg, sizeof msg))
                 return fail(f, code, "%s", msg);
         }
+        /* The instance root goes to its place among the parent's children (DENG-778). */
+        if (o->has_index && parent.bits != 0 &&
+            de_entity_set_parent_at(w, root, parent, o->index) != DE_OK)
+            de_error_clear(); /* already parented; it stays last */
         *spawned = root.bits;
         inv->op = de_ep_cstr("uninstantiate");
         inv->has_entity = true;
@@ -576,6 +600,7 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         if (p.bits != 0) {
             inv->has_parent = true;
             inv->parent = p.bits;
+            inv_index(ed, e, inv);
         }
         /* The components as a map, split into kv pairs for the EditOp. */
         const de_ep_raw all = components_raw(ed, a, e);
@@ -725,6 +750,7 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
                                 "an entity can't be moved under its own child");
         }
         const de_entity old = parent_of(ed, e);
+        const u32 old_index = de_entity_child_index(w, e);
         /* Keep the world transform: the new local one is the old world one seen from the new
          * parent (default true). */
         const de_builtin_component_ids b = de_builtin_components(w);
@@ -744,7 +770,7 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
             }
             de_entity_mark_changed(w, e, b.transform);
         }
-        if (de_entity_set_parent(w, e, p) != DE_OK) {
+        if (set_parent_op(w, e, p, o) != DE_OK) {
             de_error_clear();
             return fail(f, DE_EP_ERR_INVALID_PARAMS, "reparent refused");
         }
@@ -754,6 +780,8 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         if (old.bits != 0) {
             inv->has_parent = true;
             inv->parent = old.bits;
+            inv->has_index = old_index != UINT32_MAX;
+            inv->index = old_index;
         }
         inv->has_keep_world = true;
         inv->keep_world = keep;

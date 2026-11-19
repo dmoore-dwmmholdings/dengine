@@ -255,6 +255,9 @@ de_transform de__ed_world_xf(de_world *w, de_entity e);
 /* DENG-776: water.info, water.surface, water.flowMap, water.probes, water.showProbes
  * (editor_water.c, render builds only); capability world.water (protocol 1.13). */
 void de__ed_water_register(de__editor *ed);
+/* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). The
+ * ui.editor EditOp.index is in editor_edit.c and works in every build. */
+void de__ed_ui_register(de__editor *ed);
 /** A probe water.showProbes shows: world centre, radius (m), depth below the surface (m). */
 typedef struct de__ed_probe_mark {
     de_dvec3 p;
