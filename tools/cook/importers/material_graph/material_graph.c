@@ -1211,6 +1211,13 @@ static endpoint resolve(mg *g, const char *prefix, const char *text, bool source
         e.pin = 0; /* "out" of a subgraph.output, "in" of a subgraph.input */
         return e;
     }
+    /* DENG-773: DIDE names both subgraph boundary pins "value". */
+    if (strcmp(pin, "value") == 0) {
+        if (source && d->role == R_SUB_IN)
+            copy_str(pin, sizeof pin, "out");
+        else if (!source && d->role == R_SUB_OUT)
+            copy_str(pin, sizeof pin, "in");
+    }
     if (source) {
         int p = d->hidden_outputs ? -1 : out_index(d->out, pin);
         if (p < 0) {

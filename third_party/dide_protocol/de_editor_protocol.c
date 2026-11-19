@@ -3340,6 +3340,65 @@ void de_ep_read_gizmo_tool_params(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_heightmap_export_params(mpack_writer_t *w, const de_ep_heightmap_export_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_tile ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "path");
+    de_ep_write_str(w, v->path);
+    mpack_write_cstr(w, "format");
+    de_ep_write_str(w, v->format);
+    if (v->has_tile) {
+        mpack_write_cstr(w, "tile");
+        mpack_start_array(w, v->tile.count);
+        for (uint32_t i_2 = 0; i_2 < v->tile.count; ++i_2) {
+            mpack_write_u32(w, v->tile.items[i_2]);
+        }
+        mpack_finish_array(w);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_heightmap_export_params(mpack_reader_t *r, de_ep_arena *a, de_ep_heightmap_export_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "path")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->path);
+        } else if (de_ep_str_eq(k, "format")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->format);
+        } else if (de_ep_str_eq(k, "tile")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_tile = true;
+            out->tile.count = mpack_expect_array(r);
+            out->tile.items = (uint32_t *)de_ep_arena_array(r, a, out->tile.count, sizeof(*out->tile.items));
+            for (uint32_t i_3 = 0; out->tile.items && i_3 < out->tile.count; ++i_3)
+            {
+                out->tile.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_hello_params(mpack_writer_t *w, const de_ep_hello_params *v) {
     uint32_t n = 0;
     ++n;
@@ -7336,6 +7395,510 @@ void de_ep_read_system_list(mpack_reader_t *r, de_ep_arena *a, de_ep_system_list
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_terrain_info(mpack_writer_t *w, const de_ep_terrain_info *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "component");
+    de_ep_write_str(w, v->component);
+    mpack_write_cstr(w, "resolution");
+    mpack_write_u32(w, v->resolution);
+    mpack_write_cstr(w, "size");
+    mpack_write_float(w, v->size);
+    mpack_write_cstr(w, "height");
+    mpack_write_float(w, v->height);
+    mpack_write_cstr(w, "origin");
+    mpack_start_array(w, v->origin.count);
+    for (uint32_t i_1 = 0; i_1 < v->origin.count; ++i_1) {
+        mpack_write_double(w, v->origin.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "tileSize");
+    mpack_write_u32(w, v->tile_size);
+    mpack_write_cstr(w, "tiles");
+    mpack_start_array(w, v->tiles.count);
+    for (uint32_t i_1 = 0; i_1 < v->tiles.count; ++i_1) {
+        mpack_write_u32(w, v->tiles.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "layers");
+    mpack_start_array(w, v->layers.count);
+    for (uint32_t i_1 = 0; i_1 < v->layers.count; ++i_1) {
+        de_ep_write_terrain_layer(w, &v->layers.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "maxLayers");
+    mpack_write_u32(w, v->max_layers);
+    mpack_write_cstr(w, "maxRules");
+    mpack_write_u32(w, v->max_rules);
+    mpack_write_cstr(w, "tools");
+    mpack_start_array(w, v->tools.count);
+    for (uint32_t i_1 = 0; i_1 < v->tools.count; ++i_1) {
+        de_ep_write_str(w, v->tools.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "formats");
+    mpack_start_array(w, v->formats.count);
+    for (uint32_t i_1 = 0; i_1 < v->formats.count; ++i_1) {
+        de_ep_write_str(w, v->formats.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_info(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_info *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "component")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->component);
+        } else if (de_ep_str_eq(k, "resolution")) {
+            seen |= (uint64_t)1 << 2;
+            out->resolution = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "size")) {
+            seen |= (uint64_t)1 << 3;
+            out->size = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "height")) {
+            seen |= (uint64_t)1 << 4;
+            out->height = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "origin")) {
+            seen |= (uint64_t)1 << 5;
+            out->origin.count = mpack_expect_array(r);
+            out->origin.items = (double *)de_ep_arena_array(r, a, out->origin.count, sizeof(*out->origin.items));
+            for (uint32_t i_3 = 0; out->origin.items && i_3 < out->origin.count; ++i_3)
+            {
+                out->origin.items[i_3] = mpack_expect_double(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "tileSize")) {
+            seen |= (uint64_t)1 << 6;
+            out->tile_size = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "tiles")) {
+            seen |= (uint64_t)1 << 7;
+            out->tiles.count = mpack_expect_array(r);
+            out->tiles.items = (uint32_t *)de_ep_arena_array(r, a, out->tiles.count, sizeof(*out->tiles.items));
+            for (uint32_t i_3 = 0; out->tiles.items && i_3 < out->tiles.count; ++i_3)
+            {
+                out->tiles.items[i_3] = mpack_expect_u32(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "layers")) {
+            seen |= (uint64_t)1 << 8;
+            out->layers.count = mpack_expect_array(r);
+            out->layers.items = (de_ep_terrain_layer *)de_ep_arena_array(r, a, out->layers.count, sizeof(*out->layers.items));
+            for (uint32_t i_3 = 0; out->layers.items && i_3 < out->layers.count; ++i_3)
+            {
+                de_ep_read_terrain_layer(r, a, &out->layers.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "maxLayers")) {
+            seen |= (uint64_t)1 << 9;
+            out->max_layers = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "maxRules")) {
+            seen |= (uint64_t)1 << 10;
+            out->max_rules = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "tools")) {
+            seen |= (uint64_t)1 << 11;
+            out->tools.count = mpack_expect_array(r);
+            out->tools.items = (de_ep_str *)de_ep_arena_array(r, a, out->tools.count, sizeof(*out->tools.items));
+            for (uint32_t i_3 = 0; out->tools.items && i_3 < out->tools.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->tools.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "formats")) {
+            seen |= (uint64_t)1 << 12;
+            out->formats.count = mpack_expect_array(r);
+            out->formats.items = (de_ep_str *)de_ep_arena_array(r, a, out->formats.count, sizeof(*out->formats.items));
+            for (uint32_t i_3 = 0; out->formats.items && i_3 < out->formats.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->formats.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(8191)) != UINT64_C(8191))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_terrain_layer(mpack_writer_t *w, const de_ep_terrain_layer *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "slot");
+    mpack_write_u32(w, v->slot);
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    mpack_write_cstr(w, "material");
+    de_ep_write_str(w, v->material);
+    mpack_write_cstr(w, "tiling");
+    mpack_write_float(w, v->tiling);
+    mpack_write_cstr(w, "sharpness");
+    mpack_write_float(w, v->sharpness);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_layer(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_layer *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "slot")) {
+            seen |= (uint64_t)1 << 0;
+            out->slot = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "material")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->material);
+        } else if (de_ep_str_eq(k, "tiling")) {
+            seen |= (uint64_t)1 << 3;
+            out->tiling = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "sharpness")) {
+            seen |= (uint64_t)1 << 4;
+            out->sharpness = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_terrain_params(mpack_writer_t *w, const de_ep_terrain_params *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_terrain_sample(mpack_writer_t *w, const de_ep_terrain_sample *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "height");
+    mpack_write_float(w, v->height);
+    mpack_write_cstr(w, "slope");
+    mpack_write_float(w, v->slope);
+    mpack_write_cstr(w, "weights");
+    mpack_start_array(w, v->weights.count);
+    for (uint32_t i_1 = 0; i_1 < v->weights.count; ++i_1) {
+        mpack_write_float(w, v->weights.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "baked");
+    mpack_start_array(w, v->baked.count);
+    for (uint32_t i_1 = 0; i_1 < v->baked.count; ++i_1) {
+        mpack_write_float(w, v->baked.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "hole");
+    mpack_write_bool(w, v->hole);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "height")) {
+            seen |= (uint64_t)1 << 0;
+            out->height = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "slope")) {
+            seen |= (uint64_t)1 << 1;
+            out->slope = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "weights")) {
+            seen |= (uint64_t)1 << 2;
+            out->weights.count = mpack_expect_array(r);
+            out->weights.items = (float *)de_ep_arena_array(r, a, out->weights.count, sizeof(*out->weights.items));
+            for (uint32_t i_3 = 0; out->weights.items && i_3 < out->weights.count; ++i_3)
+            {
+                out->weights.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "baked")) {
+            seen |= (uint64_t)1 << 3;
+            out->baked.count = mpack_expect_array(r);
+            out->baked.items = (float *)de_ep_arena_array(r, a, out->baked.count, sizeof(*out->baked.items));
+            for (uint32_t i_3 = 0; out->baked.items && i_3 < out->baked.count; ++i_3)
+            {
+                out->baked.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "hole")) {
+            seen |= (uint64_t)1 << 4;
+            out->hole = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_terrain_sample_params(mpack_writer_t *w, const de_ep_terrain_sample_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "x");
+    mpack_write_double(w, v->x);
+    mpack_write_cstr(w, "z");
+    mpack_write_double(w, v->z);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_sample_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 0;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "x")) {
+            seen |= (uint64_t)1 << 1;
+            out->x = mpack_expect_double(r);
+        } else if (de_ep_str_eq(k, "z")) {
+            seen |= (uint64_t)1 << 2;
+            out->z = mpack_expect_double(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(7)) != UINT64_C(7))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_terrain_stroke(mpack_writer_t *w, const de_ep_terrain_stroke *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_target ? 1u : 0u;
+    n += v->has_step ? 1u : 0u;
+    n += v->has_seed ? 1u : 0u;
+    n += v->has_scale ? 1u : 0u;
+    n += v->has_rotation ? 1u : 0u;
+    n += v->has_stamp ? 1u : 0u;
+    n += v->has_area ? 1u : 0u;
+    n += v->has_iterations ? 1u : 0u;
+    n += v->has_layer ? 1u : 0u;
+    n += v->has_erase ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "tool");
+    de_ep_write_str(w, v->tool);
+    mpack_write_cstr(w, "points");
+    mpack_start_array(w, v->points.count);
+    for (uint32_t i_1 = 0; i_1 < v->points.count; ++i_1) {
+        mpack_write_float(w, v->points.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "radius");
+    mpack_write_float(w, v->radius);
+    mpack_write_cstr(w, "strength");
+    mpack_write_float(w, v->strength);
+    mpack_write_cstr(w, "falloff");
+    mpack_start_array(w, v->falloff.count);
+    for (uint32_t i_1 = 0; i_1 < v->falloff.count; ++i_1) {
+        mpack_write_float(w, v->falloff.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_target) {
+        mpack_write_cstr(w, "target");
+        mpack_write_float(w, v->target);
+    }
+    if (v->has_step) {
+        mpack_write_cstr(w, "step");
+        mpack_write_float(w, v->step);
+    }
+    if (v->has_seed) {
+        mpack_write_cstr(w, "seed");
+        mpack_write_u32(w, v->seed);
+    }
+    if (v->has_scale) {
+        mpack_write_cstr(w, "scale");
+        mpack_write_float(w, v->scale);
+    }
+    if (v->has_rotation) {
+        mpack_write_cstr(w, "rotation");
+        mpack_write_float(w, v->rotation);
+    }
+    if (v->has_stamp) {
+        mpack_write_cstr(w, "stamp");
+        de_ep_write_str(w, v->stamp);
+    }
+    if (v->has_area) {
+        mpack_write_cstr(w, "area");
+        de_ep_write_str(w, v->area);
+    }
+    if (v->has_iterations) {
+        mpack_write_cstr(w, "iterations");
+        mpack_write_u32(w, v->iterations);
+    }
+    if (v->has_layer) {
+        mpack_write_cstr(w, "layer");
+        mpack_write_u32(w, v->layer);
+    }
+    if (v->has_erase) {
+        mpack_write_cstr(w, "erase");
+        mpack_write_bool(w, v->erase);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_terrain_stroke(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_stroke *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "tool")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->tool);
+        } else if (de_ep_str_eq(k, "points")) {
+            seen |= (uint64_t)1 << 1;
+            out->points.count = mpack_expect_array(r);
+            out->points.items = (float *)de_ep_arena_array(r, a, out->points.count, sizeof(*out->points.items));
+            for (uint32_t i_3 = 0; out->points.items && i_3 < out->points.count; ++i_3)
+            {
+                out->points.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "radius")) {
+            seen |= (uint64_t)1 << 2;
+            out->radius = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "strength")) {
+            seen |= (uint64_t)1 << 3;
+            out->strength = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "falloff")) {
+            seen |= (uint64_t)1 << 4;
+            out->falloff.count = mpack_expect_array(r);
+            out->falloff.items = (float *)de_ep_arena_array(r, a, out->falloff.count, sizeof(*out->falloff.items));
+            for (uint32_t i_3 = 0; out->falloff.items && i_3 < out->falloff.count; ++i_3)
+            {
+                out->falloff.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "target")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_target = true;
+            out->target = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "step")) {
+            seen |= (uint64_t)1 << 6;
+            out->has_step = true;
+            out->step = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "seed")) {
+            seen |= (uint64_t)1 << 7;
+            out->has_seed = true;
+            out->seed = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "scale")) {
+            seen |= (uint64_t)1 << 8;
+            out->has_scale = true;
+            out->scale = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "rotation")) {
+            seen |= (uint64_t)1 << 9;
+            out->has_rotation = true;
+            out->rotation = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "stamp")) {
+            seen |= (uint64_t)1 << 10;
+            out->has_stamp = true;
+            de_ep_read_str(r, &out->stamp);
+        } else if (de_ep_str_eq(k, "area")) {
+            seen |= (uint64_t)1 << 11;
+            out->has_area = true;
+            de_ep_read_str(r, &out->area);
+        } else if (de_ep_str_eq(k, "iterations")) {
+            seen |= (uint64_t)1 << 12;
+            out->has_iterations = true;
+            out->iterations = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "layer")) {
+            seen |= (uint64_t)1 << 13;
+            out->has_layer = true;
+            out->layer = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "erase")) {
+            seen |= (uint64_t)1 << 14;
+            out->has_erase = true;
+            out->erase = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(31)) != UINT64_C(31))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_tx_params(mpack_writer_t *w, const de_ep_tx_params *v) {
     uint32_t n = 0;
     ++n;
@@ -8292,6 +8855,9 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "snapshot.take",
     "stats.subscribe",
     "subscribe",
+    "terrain.exportHeightmap",
+    "terrain.info",
+    "terrain.sample",
     "unsubscribe",
     "view.create",
     "view.destroy",
@@ -8388,6 +8954,9 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "world.terrain",
+    "world.terrain",
+    "world.terrain",
     NULL,
     "views.sharedTexture",
     "views.sharedTexture",
@@ -9455,6 +10024,45 @@ bool de_ep_read_params_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep
 void de_ep_write_response_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_subscribe_result(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_terrain_export_heightmap(const de_ep_request *req, de_ep_arena *a, de_ep_heightmap_export_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_heightmap_export_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_terrain_export_heightmap(mpack_writer_t *w, uint64_t id, const de_ep_path_result *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_path_result(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_terrain_info(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_terrain_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_terrain_info(mpack_writer_t *w, uint64_t id, const de_ep_terrain_info *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_terrain_info(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_sample_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_terrain_sample_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_terrain_sample(w, result);
     de_ep_write_result_end(w);
 }
 
