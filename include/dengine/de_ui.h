@@ -293,6 +293,63 @@ typedef struct DeUiWorldPanel {
     bool lit, depth_test;
 } DeUiWorldPanel;
 
+/** One UI node under an editor pick point (DENG-779). */
+typedef struct de_ui_pick_hit {
+    de_entity entity; /**< the UI node */
+    de_entity root;   /**< its UI root: a screen root or a DeUiWorldPanel root */
+    de_vec4 rect;     /**< its DeUiNode.computed_rect, in the root's pixels */
+    u32 depth;        /**< levels below `root`; 0 is the root itself */
+} de_ui_pick_hit;
+/**
+ * Editor hit test (DENG-779): every UI node under `point`, topmost first, so that a click in an
+ * editor viewport can select one and Alt-click can step down the stack.
+ * - `root` null: the screen UI, every UI root that is not a DeUiWorldPanel. `point` is in
+ *   viewport pixels, the space of DeUiNode.computed_rect.
+ * - `root` a UI root (a UI node with no UI parent): only its subtree. For a world panel, `point`
+ *   is in the panel's pixels, (0, 0) at its top-left, as de_ui_pick_ray reports it.
+ * The order is the draw order reversed: later roots, then popups, then higher z_order, then later
+ * in tree order come first. A node is hit when its display is not DE_UI_NONE, its rect has an area
+ * and holds the point, and the clip rects of its clipping ancestors (and, for a screen root, the
+ * viewport) hold it. Unlike pointer routing, every UI node can be hit, also one that is disabled,
+ * is not a widget or draws nothing, and no renderer is needed. The rects are those of the last
+ * layout. `*count` gets the number of hits; the first `capacity` go to `out`. Main thread,
+ * outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `count`, `out` NULL with a capacity, a
+ *         non-finite point, or `ui` not attached) or DE_ERR_NOT_FOUND (`root` is not a live UI
+ *         root).
+ */
+DE_API de_result de_ui_pick(de_ui *ui, de_entity root, de_vec2 point, de_ui_pick_hit *out,
+                            u32 capacity, u32 *count);
+/** The world panel an editor ray hit (DENG-779). */
+typedef struct de_ui_panel_pick {
+    de_entity panel; /**< the DeUiWorldPanel root; null: no panel was hit */
+    de_vec2 pixel;   /**< the hit in the panel's pixels, (0, 0) at its top-left */
+    f32 distance;    /**< along the ray, in units of `direction` */
+} de_ui_panel_pick;
+/**
+ * Editor world-panel pick (DENG-779): the nearest DeUiWorldPanel root that the ray from `origin`
+ * along `direction` (world space; for example the editor camera's ray through a viewport pixel)
+ * hits inside its extent, from either side, then de_ui_pick on that panel at the hit pixel.
+ * Panels with no DeGlobalTransform are skipped. When no panel is hit, `*count` is 0 and
+ * `panel->panel` is null. `panel` is optional. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `count`, `out` NULL with a capacity, a
+ *         non-finite origin or direction, a zero direction, or `ui` not attached).
+ */
+DE_API de_result de_ui_pick_ray(de_ui *ui, de_dvec3 origin, de_vec3 direction,
+                                de_ui_panel_pick *panel, de_ui_pick_hit *out, u32 capacity,
+                                u32 *count);
+/**
+ * The world-space corners of a UI node on a world panel, for the editor's selection outline and
+ * handles (DENG-779): its computed_rect's top-left, top-right, bottom-right and bottom-left,
+ * placed through its panel's DeGlobalTransform as the panel is drawn. `panel` (optional) gets
+ * the panel root. Main thread, outside a running schedule.
+ * @return DE_OK, DE_ERR_INVALID_ARGUMENT (NULL `ui` or `corners`, or `ui` not attached) or
+ *         DE_ERR_NOT_FOUND (`node` is not a live UI node, or its root is not a world panel with a
+ *         valid size and a DeGlobalTransform).
+ */
+DE_API de_result de_ui_node_world_corners(de_ui *ui, de_entity node, de_dvec3 corners[4],
+                                          de_entity *panel);
+
 typedef enum de_ui_event_kind {
     DE_UI_EV_CLICK,
     DE_UI_EV_CHANGED,
