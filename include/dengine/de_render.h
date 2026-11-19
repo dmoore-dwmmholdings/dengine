@@ -914,11 +914,39 @@ typedef struct DeTerrain {
     f32 cell_size;
     f32 height_scale;
 } DeTerrain;
+/** The kind of a water body (DeWater.kind; reflected as "de_water_kind": ocean, river, lake). */
+typedef enum de_water_kind {
+    DE_WATER_OCEAN = 0,
+    DE_WATER_RIVER = 1,
+    DE_WATER_LAKE = 2
+} de_water_kind;
+/** An ocean's wave spectrum (DeWater.spectrum; reflected as "de_wave_spectrum": phillips,
+ * jonswap, pierson_moskowitz). */
+typedef enum de_wave_spectrum {
+    DE_WAVE_PHILLIPS = 0,
+    DE_WAVE_JONSWAP = 1,
+    DE_WAVE_PIERSON_MOSKOWITZ = 2
+} de_wave_spectrum;
+/**
+ * A water body (version 2, DENG-776; the DIDE editor IPC world.water, protocol 1.13). An ocean
+ * uses spectrum, wind and choppiness; a lake fills `extent` (centred on the entity, axis-aligned)
+ * at `surface_height`; a river follows the curve of the DeSpline entity `spline`, `width` wide,
+ * flowing at `flow_speed` at its centre. Version 1 had a bool `ocean` in place of `kind`; scenes
+ * saved with it load as an ocean (true) or a lake (false).
+ */
 typedef struct DeWater {
+    de_water_kind kind;
     de_material material;
-    bool ocean;
-    de_vec2 wind;
-    f32 choppiness;
+    de_wave_spectrum spectrum;
+    de_vec2 wind;       /* m/s over the ground (x, z); its length is the wind speed */
+    f32 choppiness;     /* 0 to 2 */
+    f32 surface_height; /* m above the entity's origin */
+    de_vec3 extent;     /* m, a lake's volume */
+    de_entity spline;   /* a river's centre line */
+    f32 width;          /* m, a river's width */
+    f32 flow_speed;     /* m/s at a river's centre */
+    de_vec4 fog_color;  /* linear RGBA, underwater */
+    f32 fog_density;    /* 1/m, underwater */
 } DeWater;
 
 /* ---------- Component registration (DENG-178; SPEC §9.1, §20.1) ---------- */
@@ -951,7 +979,9 @@ typedef struct DeWater {
  * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.
  * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
- * - DeTerrain: cell_size 1 m, height_scale 100 m. DeWater: wind (5, 0) m/s, choppiness 1.
+ * - DeTerrain: cell_size 1 m, height_scale 100 m. DeWater: ocean, Pierson-
+ *   Moskowitz, wind (5, 0) m/s, choppiness 1, extent 64 x 8 x 64 m, width 4 m, flow_speed 1 m/s,
+ *   fog_color (0.05, 0.2, 0.25, 1), fog_density 0.1 /m.
  *
  * Idempotent per world: a second call on the same world (de_renderer_attach after a world
  * reload) changes nothing. Worlds that share a registry share the types. Main thread, not while

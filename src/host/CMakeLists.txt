@@ -159,6 +159,12 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER AND DE_BU
     target_include_directories(de_host PRIVATE "${DE_ROOT_DIR}/tools")
 endif()
 
+# DENG-776: water.info/surface/flowMap/probes/showProbes (DIDE protocol 1.13, world.water). DeWater
+# is a render component, so the service is in render builds only.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    target_sources(de_host PRIVATE editor/editor_water.c)
+endif()
+
 # DENG-701: fatal notifications never reuse the blocking main-thread transport.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_crash.c editor/editor_crash.h)

@@ -2165,6 +2165,36 @@ static void draw_splines(de__editor *ed, const de__ed_cam *c, const de__ed_canva
     }
 }
 
+#if DE_HAS_RENDER
+/* DENG-776: the buoyancy probes water.showProbes asks for (DIDE world.water), in every viewport:
+ * three circles per probe sphere, coloured by depth: grey when no water is under it, light blue
+ * above the surface, deeper blues as it sinks below. */
+static void draw_water_probes(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv) {
+    enum { MAX = 512, N = 32 };
+    static de__ed_probe_mark m[MAX];
+    const u32 n = de__ed_water_marks(ed, m, MAX);
+    for (u32 i = 0; i < n; ++i) {
+        rgb col = grey(160);
+        if (m[i].wet) {
+            const f32 s = m[i].depth <= 0.0f ? 0.0f : m[i].depth >= 2.0f ? 1.0f : m[i].depth * 0.5f;
+            col = m[i].depth < 0.0f ? (rgb){150, 220, 255}
+                                    : (rgb){(u8)(90 - 70 * s), (u8)(180 - 110 * s), 255};
+        }
+        const f64 r = m[i].radius;
+        const v3 o = m[i].p, ax[3][2] = {{V(1, 0, 0), V(0, 1, 0)},
+                                         {V(1, 0, 0), V(0, 0, 1)},
+                                         {V(0, 1, 0), V(0, 0, 1)}};
+        for (u32 k = 0; k < 3; ++k)
+            for (u32 j = 0; j < N; ++j) {
+                const f64 a0 = 2 * DE_PI * j / N, a1 = 2 * DE_PI * (j + 1) / N;
+                wseg(c, cv, add(o, add(mul(ax[k][0], cos(a0) * r), mul(ax[k][1], sin(a0) * r))),
+                     add(o, add(mul(ax[k][0], cos(a1) * r), mul(ax[k][1], sin(a1) * r))), col,
+                     0.9f, 1);
+            }
+    }
+}
+#endif
+
 void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__ed_canvas *cv,
                        u32 show, const u64 *skip, u32 skip_count) {
     if (ed->e->world == NULL || c->w == 0 || c->h == 0)
@@ -2180,6 +2210,10 @@ void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__
     icons_each(ed, show, skip, skip_count, draw_icon, &idr);
     if ((show & DE__ED_SHOW_GIZMOS) && G.sel_count != 0)
         draw_splines(ed, c, cv);
+#if DE_HAS_RENDER
+    if (show & DE__ED_SHOW_GIZMOS)
+        draw_water_probes(ed, c, cv);
+#endif
     if (!(show & DE__ED_SHOW_GIZMOS) || !tool_drags() || G.sel_count == 0)
         return;
     if (G.drag && G.view == view) {

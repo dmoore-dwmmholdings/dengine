@@ -294,6 +294,11 @@ to = "physics"
 why = "World systems (terrain, water, streaming cells, vfx collision) create and query physics bodies."
 
 [[allow]]
+from = "world/water"
+to = "world/spline"
+why = "A river's surface and flow map follow its DeSpline curve (DENG-776: the DIDE world.water service)."
+
+[[allow]]
 from = "gameplay/video"
 to = "audio"
 why = "Video playback feeds its sound track to the audio mixer (DENG-60: OPTIONAL_DEPS audio)."

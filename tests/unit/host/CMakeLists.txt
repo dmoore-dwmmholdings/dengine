@@ -503,6 +503,16 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_include_directories(test_editor_spline PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-776: water.info/surface/flowMap/probes/showProbes (DIDE protocol 1.13, world.water)
+# through the real handlers and the generated protocol readers and writers. DeWater is a render
+# component, so the service needs render.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
+    de_add_test(NAME editor_water SOURCES test_editor_water.c
+        LIBS de_host de_spline de_water de_render de_tp_dide_protocol LABELS unit host
+        CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_water PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
 # round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker
 # and Slang only, the same condition as the handlers in de_host.
