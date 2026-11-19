@@ -165,8 +165,25 @@ static void gather(const de_query_chunk *chunk, void *user) {
 }
 static void changed(const de_query_chunk *chunk, void *user) {
     de_ui *ui = user;
-    for (u32 i = 0; i < chunk->count; ++i)
-        de_ui__dirty(ui, de_ui__find(ui, chunk->entities[i]));
+    /* Ancestors are marked by the propagation pass that follows every change query. */
+    for (u32 i = 0; i < chunk->count; ++i) {
+        u32 index = de_ui__find(ui, chunk->entities[i]);
+        if (index != DE_UI_NONE_INDEX)
+            ui->records[index].dirty = ui->records[index].measure_dirty = true;
+    }
+}
+/* Marks the ancestors of dirty record `index`. A walk stops at an ancestor that is already
+ * dirty: in this index-ordered pass such an ancestor either was propagated already or will be
+ * propagated when the pass reaches it, so its own ancestors end up marked either way. */
+static void propagate(de_ui *ui, u32 index) {
+    u32 steps = 0, parent = de_ui__find(ui, ui->records[index].parent);
+    while (parent != DE_UI_NONE_INDEX && steps++ < ui->capacity) {
+        de_ui_record *record = &ui->records[parent];
+        if (record->dirty && record->measure_dirty)
+            return;
+        record->dirty = record->measure_dirty = true;
+        parent = de_ui__find(ui, record->parent);
+    }
 }
 static void detach(de_ui *ui) {
     if (ui->world) {
@@ -476,8 +493,10 @@ void de_ui__layout_system(de_system_ctx *ctx) {
     for (u32 i = 1; i < DE_UI_LAYOUT_CHANGE_QUERIES + 1; ++i)
         de_query_each(ui->world, ctx->queries[i], changed, ui);
     for (u32 i = 0; i < ui->record_count; ++i)
-        if (ui->records[i].alive && ui->records[i].dirty)
-            de_ui__dirty(ui, i);
+        if (ui->records[i].alive && ui->records[i].dirty) {
+            ui->records[i].measure_dirty = true;
+            propagate(ui, i);
+        }
     de_arena *arena = de_frame_arena();
     if (!arena) {
         de_arena_reset(ui->scratch);
@@ -492,7 +511,7 @@ void de_ui__layout_system(de_system_ctx *ctx) {
         if (!r->alive)
             continue;
         if (de_ui__find(ui, r->parent) == DE_UI_NONE_INDEX &&
-            !de_entity_has(ui->world, r->entity, ui->ids.popup)) {
+            !(r->component_mask & DE_UI_HAS_POPUP)) {
             de_vec4 rect = {0, 0, (f32)ui->width, (f32)ui->height}, absolute;
             f32 previous_scale = ui->scale;
             bool world_root = de_ui__world_root_extent(ui, r->entity, &rect);
