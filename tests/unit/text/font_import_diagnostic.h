@@ -4,6 +4,8 @@
 #include "text/import/import_internal.h"
 #include "text/msdf/msdf_wrap.h"
 #include "font_msdf_diagnostic.h"
+#include <stdlib.h>
+#include <string.h>
 
 /* Only the explicit determinism case uses this source-included importer. Its compilation
  * context and logging overhead differ: these markers localize work, not qualify timing. */
@@ -89,9 +91,17 @@ static de_result font_diag_import(de_asset_import_ctx *ctx) {
     fflush(stderr);
     return result;
 }
+/* DENG-758: the timed case cooks through the production importer, so its time is the
+ * original one. Set DE_FONT_MSDF_TRACE=1 to route it through the phase trace above. */
+static bool font_diag_enabled(void) {
+    const char *flag = getenv("DE_FONT_MSDF_TRACE"); /* _CRT_SECURE_NO_WARNINGS: includer */
+    return flag && flag[0] && strcmp(flag, "0") != 0;
+}
 static de_result font_cook_diagnostic(u32 index, const char *source,
                                       const de__manifest_kv *settings, u32 count,
                                       de_cook_result *out, de_cook_verify verify) {
+    if (!font_diag_enabled())
+        return font_cook_with_type(source, settings, count, out, verify, NULL);
     font_diag.cook = index;
     de_asset_type_desc type = de_test_font_import_type_desc();
     type.import = font_diag_import;
