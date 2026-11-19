@@ -316,6 +316,50 @@ TEST(mg_import, cooks_graph) {
 #endif
 }
 
+/* ---- mg_import.cooks_layer_outputs ----------------------------------------------------------- */
+
+/* DENG-772: the transmission, volume and subsurface outputs set their feature bits in DMGR, and
+ * the subsurface amount and mean free path land in the DMAT cells the SSS pass reads. */
+TEST(mg_import, cooks_layer_outputs) {
+#if !DE_HAS_COOKER
+    SKIP(NO_COOKER_MSG);
+#else
+    static const char g[] =
+        HEADER "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+               "[[node]]\nid = \"n2\"\ntype = \"output.transmission\"\n"
+               "[[node]]\nid = \"n3\"\ntype = \"output.volume\"\n"
+               "[[node]]\nid = \"n4\"\ntype = \"output.subsurface\"\n"
+               "values = { weight = 0.5, radius_r = 0.25, radius_g = 0.125, radius_b = 0.0625 }\n"
+               "[[node]]\nid = \"n5\"\ntype = \"param.float\"\n"
+               "values = { name = \"wet\", value = 0.75 }\n";
+    cct_fresh("layers");
+    put_project("layers", "skin.mgraph.toml", g,
+                "\"mats/skin\" = { type = \"material_graph\", source = \"skin.mgraph.toml\" }");
+    COOK_OR_SKIP("layers");
+    cooked c;
+    ASSERT_TRUE(open_cooked("layers", "mats/skin", &c));
+    de_cooked_material_graph_view v;
+    const char *why = NULL;
+    ASSERT_TRUE(de_cooked_material_graph_parse(c.graph, c.graph_size, &v, &why));
+    EXPECT_EQ(v.features, 0xB0u); /* TRANSMISSION | VOLUME | SUBSURFACE */
+    ASSERT_EQ(v.param_count, 3u);
+    de_cooked_mg_param p = de_cooked_material_graph_param(&v, 0);
+    EXPECT_STREQ(p.name, "subsurface.weight");
+    EXPECT_STREQ(p.node, "n4");
+    de_cooked_material_view m;
+    ASSERT_TRUE(de_cooked_material_parse(c.material, c.material_size, &m, &why));
+    EXPECT_FLOAT_EQ(m.params.subsurface, 0.5f, 0.0f);
+    EXPECT_FLOAT_EQ(m.params.subsurface_radius[0], 0.25f, 0.0f);
+    EXPECT_FLOAT_EQ(m.params.subsurface_radius[1], 0.125f, 0.0f);
+    EXPECT_FLOAT_EQ(m.params.subsurface_radius[2], 0.0625f, 0.0f);
+    /* "wet" packs into row 0 (base_color.x), clear of the reserved cells. */
+    p = de_cooked_material_graph_param(&v, 2);
+    EXPECT_STREQ(p.name, "wet");
+    EXPECT_EQ(p.row, 0u);
+    close_cooked(&c);
+#endif
+}
+
 /* ---- mg_import.deterministic ----------------------------------------------------------------- */
 
 TEST(mg_import, deterministic) {

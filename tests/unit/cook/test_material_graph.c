@@ -63,7 +63,8 @@ TEST(material_graph, catalog_lists_nodes_and_conversions) {
                          "\"output.base\"",       "\"param.float\"",    "\"param.color\"",
                          "\"noise.gradient\"",    "\"code.float\"",     "\"reroute\"",
                          "\"subgraph\"",          "\"math.add\"",       "\"output.clearcoat\"",
-                         "\"input.time\"",        "\"input.object_position\""};
+                         "\"input.time\"",        "\"input.object_position\"",
+                         "\"output.transmission\"", "\"output.volume\"",  "\"output.subsurface\""};
     for (u32 i = 0; i < sizeof ids / sizeof ids[0]; ++i)
         EXPECT_TRUE(strstr(j, ids[i]) != NULL);
     de_strbuf_free(&b);
@@ -597,4 +598,164 @@ TEST(material_graph, slang_errors_map_to_nodes) {
     EXPECT_EQ(d->severity, DE__MG_ERROR);
     EXPECT_GE(r.error_count, 1u);
     de__mg_result_free(&r);
+}
+
+/* DENG-772: the transmission, volume and subsurface outputs. */
+static u32 warnings(const de__mg_result *r) {
+    u32 n = 0;
+    for (u32 i = 0; i < r->diag_count; ++i)
+        n += r->diags[i].severity == DE__MG_WARNING;
+    return n;
+}
+
+static const char layers_graph[] = HEADER
+    "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+    "[[node]]\nid = \"n2\"\ntype = \"output.transmission\"\nvalues = { weight = 0.75 }\n"
+    "[[node]]\nid = \"n3\"\ntype = \"output.volume\"\n"
+    "values = { thickness = 0.2, attenuation_distance = 0.5 }\n"
+    "[[node]]\nid = \"n4\"\ntype = \"output.subsurface\"\n"
+    "values = { weight = 0.5, radius_r = 0.25, radius_g = 0.125, radius_b = 0.0625 }\n"
+    "[[node]]\nid = \"n5\"\ntype = \"param.color\"\nvalues = { name = \"tint\" }\n"
+    "[[node]]\nid = \"n6\"\ntype = \"input.position\"\n"
+    "[[node]]\nid = \"n7\"\ntype = \"vector.split\"\n"
+    "[[link]]\nfrom = \"n5.out\"\nto = \"n3.attenuation_color\"\n"
+    "[[link]]\nfrom = \"n6.out\"\nto = \"n7.v\"\n"
+    "[[link]]\nfrom = \"n7.x\"\nto = \"n2.weight\"\n";
+
+TEST(material_graph, transmission_volume_subsurface_set_fields_and_features) {
+    de__mg_result r;
+    de_result res = generate(layers_graph, &r);
+    if (res != DE_OK)
+        dump_diags(&r);
+    ASSERT_EQ(res, DE_OK);
+    /* DE_MATERIAL_FEATURE_TRANSMISSION | VOLUME | SUBSURFACE */
+    EXPECT_EQ(r.features, 0xB0u);
+    EXPECT_TRUE(strstr(r.source, "s.features = 0xb0u;") != NULL);
+    EXPECT_TRUE(strstr(r.source, "s.transmission = saturate(") != NULL);
+    EXPECT_TRUE(strstr(r.source, "s.thickness = max(") != NULL);
+    EXPECT_TRUE(strstr(r.source, "v.object_scale") != NULL);
+    EXPECT_TRUE(strstr(r.source, "s.attenuation_color = saturate(") != NULL);
+    EXPECT_TRUE(strstr(r.source, "s.attenuation_distance = max(") != NULL);
+    /* The lines map back to their output nodes. */
+    u32 t = line_of(r.source, "s.transmission =");
+    u32 th = line_of(r.source, "s.thickness =");
+    ASSERT_GT(t, 0u);
+    ASSERT_GT(th, 0u);
+    EXPECT_STREQ(de__mg_node_at_line(&r, t), "n2");
+    EXPECT_STREQ(de__mg_node_at_line(&r, th), "n3");
+    EXPECT_EQ(warnings(&r), 0u);
+    de__mg_result_free(&r);
+}
+
+/* The SSS pass reads the subsurface amount (extra.z) and mean free path (subsurface.xyz) from
+ * the material, so output.subsurface exposes them as parameters in exactly those cells, and other
+ * parameters pack around them. */
+TEST(material_graph, subsurface_reserves_the_material_subsurface_cells) {
+    char g[8192];
+    int n = snprintf(g, sizeof g, "%s",
+                     HEADER "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+                            "[[node]]\nid = \"n2\"\ntype = \"output.subsurface\"\n"
+                            "values = { weight = 0.5, radius_r = 0.25, radius_g = 0.125, "
+                            "radius_b = 2.0 }\n");
+    /* Ten colours: rows 0..6 and 8 take one each (7 and 9 have no room for xyz). */
+    for (int i = 0; i < 10; ++i)
+        n += snprintf(g + n, sizeof g - (size_t)n,
+                      "[[node]]\nid = \"n%d\"\ntype = \"param.color\"\n"
+                      "values = { name = \"c%d\" }\n",
+                      10 + i, i);
+    /* Floats: the w of rows 0..6, then row 7 x, y and w, row 8 w, row 9 w; one too many. */
+    for (int i = 0; i < 13; ++i)
+        n += snprintf(g + n, sizeof g - (size_t)n,
+                      "[[node]]\nid = \"n%d\"\ntype = \"param.float\"\n"
+                      "values = { name = \"f%d\" }\n",
+                      30 + i, i);
+    de__mg_result r;
+    EXPECT_EQ(generate(g, &r), DE_ERR_PARSE);
+    /* Colours: c8 and c9 have no row (7 and 9 are partly reserved, 8 holds c7). */
+    EXPECT_TRUE(find_diag(&r, "n18", "no room") != NULL);
+    EXPECT_TRUE(find_diag(&r, "n19", "no room") != NULL);
+    const de__mg_param *w = NULL, *rad = NULL, *f[13] = {0};
+    for (u32 i = 0; i < r.param_count; ++i) {
+        const de__mg_param *p = &r.params[i];
+        if (strcmp(p->name, "subsurface.weight") == 0)
+            w = p;
+        else if (strcmp(p->name, "subsurface.radius") == 0)
+            rad = p;
+        else if (p->name[0] == 'f')
+            f[atoi(p->name + 1)] = p;
+    }
+    ASSERT_TRUE(w != NULL);
+    ASSERT_TRUE(rad != NULL);
+    EXPECT_EQ((u32)w->kind, (u32)DE__MG_PARAM_FLOAT);
+    EXPECT_EQ(w->row, 7u);
+    EXPECT_EQ(w->component, 2u);
+    EXPECT_FLOAT_EQ(w->value[0], 0.5f, 1e-6f);
+    EXPECT_FLOAT_EQ(w->max, 1.0f, 1e-6f);
+    EXPECT_STREQ(w->node, "n2");
+    EXPECT_EQ((u32)rad->kind, (u32)DE__MG_PARAM_COLOR);
+    EXPECT_EQ(rad->row, 9u);
+    EXPECT_EQ(rad->component, 0u);
+    EXPECT_FLOAT_EQ(rad->value[2], 2.0f, 1e-6f);
+    EXPECT_TRUE(rad->max >= 2.0f);
+    static const u32 want[][3] = {{7, 7, 0}, {8, 7, 1}, {9, 7, 3}, {10, 8, 3}, {11, 9, 3}};
+    for (u32 i = 0; i < 5; ++i) {
+        ASSERT_TRUE(f[want[i][0]] != NULL);
+        EXPECT_EQ(f[want[i][0]]->row, want[i][1]);
+        EXPECT_EQ(f[want[i][0]]->component, want[i][2]);
+    }
+    EXPECT_TRUE(find_diag(&r, "n42", "no room") != NULL);
+    de__mg_result_free(&r);
+
+    /* A negative radius is an error on the node. */
+    EXPECT_EQ(generate(HEADER "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+                              "[[node]]\nid = \"n2\"\ntype = \"output.subsurface\"\n"
+                              "values = { radius_g = -1.0 }\n",
+                       &r),
+              DE_ERR_PARSE);
+    EXPECT_TRUE(find_diag(&r, "n2", "radius_g") != NULL);
+    de__mg_result_free(&r);
+}
+
+TEST(material_graph, volume_without_transmission_warns) {
+    de__mg_result r;
+    ASSERT_EQ(generate(HEADER "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+                              "[[node]]\nid = \"n2\"\ntype = \"output.volume\"\n",
+                       &r),
+              DE_OK);
+    const de__mg_diag *d = find_diag(&r, "n2", "transmission");
+    ASSERT_TRUE(d != NULL);
+    EXPECT_EQ(d->severity, DE__MG_WARNING);
+    de__mg_result_free(&r);
+    /* Diffuse transmission is enough. */
+    ASSERT_EQ(generate(HEADER "[[node]]\nid = \"n1\"\ntype = \"output.base\"\n"
+                              "[[node]]\nid = \"n2\"\ntype = \"output.volume\"\n"
+                              "[[node]]\nid = \"n3\"\ntype = \"output.diffuse_transmission\"\n",
+                       &r),
+              DE_OK);
+    EXPECT_EQ(warnings(&r), 0u);
+    EXPECT_EQ(r.features, 0x60u);
+    de__mg_result_free(&r);
+}
+
+TEST(material_graph, transmission_volume_subsurface_compile_for_every_target) {
+    char why[256];
+    if (!de__slang_available(why, sizeof why))
+        SKIP(why);
+    de__mg_result g;
+    de_result res = generate(layers_graph, &g);
+    if (res != DE_OK)
+        dump_diags(&g);
+    ASSERT_EQ(res, DE_OK);
+    const de__slang_target targets[] = {DE__SLANG_SPIRV, DE__SLANG_METAL, DE__SLANG_DXIL};
+    u32 compiled = 0;
+    for (u32 i = 0; i < 3; ++i) {
+        if (!de__slang_target_supported(targets[i]))
+            continue;
+        EXPECT_EQ(compile(&g, targets[i]), DE_OK);
+        ++compiled;
+    }
+    EXPECT_GT(compiled, 0u);
+    if (g.diag_count)
+        dump_diags(&g);
+    de__mg_result_free(&g);
 }

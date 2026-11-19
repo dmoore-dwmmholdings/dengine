@@ -688,8 +688,64 @@ static const node_def k_nodes[] = {
      "s.diffuse_transmission = saturate({weight});\n"
      "s.diffuse_transmission_color = saturate({color});",
      0x40u},
+    /* DENG-772. Specular transmission: the forward pass draws it (the material pack adds FORWARD
+     * for a graph model with TRANSMISSION). */
+    {"output.transmission",
+     "Transmission",
+     "Output",
+     R_OUTPUT,
+     0,
+     0,
+     {{"weight", T_FLOAT, F1}},
+     {{0}},
+     {{0}},
+     "s.transmission = saturate({weight});",
+     0x10u},
+    /* The volume under transmission or diffuse transmission. Thickness is in object units, scaled
+     * to world units by the instance's uniform-scale estimate, as the Standard model does. */
+    {"output.volume",
+     "Volume",
+     "Output",
+     R_OUTPUT,
+     0,
+     0,
+     {{"thickness", T_FLOAT, "0.1"},
+      {"attenuation_color", T_VEC3, V3(F1)},
+      {"attenuation_distance", T_FLOAT, "1.0e30"}},
+     {{0}},
+     {{0}},
+     "s.thickness = max({thickness}, 0.0) * v.object_scale;\n"
+     "s.attenuation_color = saturate({attenuation_color});\n"
+     "s.attenuation_distance = max({attenuation_distance}, 1.0e-4);",
+     0x20u},
+    /* Subsurface scattering. SurfaceData has no subsurface fields: the screen-space SSS pass reads
+     * the amount (extra.z) and mean free path (subsurface.xyz, metres) from the material, so the
+     * node's values become the parameters subsurface.weight and subsurface.radius in exactly those
+     * cells (see layout). The generated resolve only sets the feature bit. */
+    {"output.subsurface",
+     "Subsurface",
+     "Output",
+     R_OUTPUT,
+     0,
+     0,
+     {{0}},
+     {{0}},
+     {{"weight", V_FLOAT, 1.0f, NULL},
+      {"radius_r", V_FLOAT, 1.0f, NULL},
+      {"radius_g", V_FLOAT, 1.0f, NULL},
+      {"radius_b", V_FLOAT, 1.0f, NULL}},
+     "// subsurface: the material parameters subsurface.weight and subsurface.radius",
+     0x80u},
 };
 #define MG_NODE_DEFS (sizeof k_nodes / sizeof k_nodes[0])
+
+/* DENG-772: the material cells the SSS pass reads (DeGpuMaterial extra.z, subsurface.xyz). */
+#define MG_ROW_EXTRA                    7u
+#define MG_ROW_SUBSURFACE               9u
+#define MG_SSS_WEIGHT                   "subsurface.weight"
+#define MG_SSS_RADIUS                   "subsurface.radius"
+#define MG_FEATURE_TRANSMISSION         0x10u
+#define MG_FEATURE_DIFFUSE_TRANSMISSION 0x40u
 
 static const char *const k_rows[DE__MG_PARAM_ROWS] = {
     "base_color", "emissive", "pbr",   "specular",    "clearcoat",
@@ -1517,6 +1573,7 @@ static void check_types(mg *g) {
 
 static void check_outputs(mg *g) {
     bool base = false;
+    const mg_node *volume = NULL;
     for (u32 k = 0; k < g->count; ++k) {
         mg_node *n = &g->nodes[g->sorted[k]];
         if (n->def < 0 || k_nodes[n->def].role != R_OUTPUT)
@@ -1531,11 +1588,19 @@ static void check_outputs(mg *g) {
             }
         }
         base = base || strcmp(d->id, "output.base") == 0;
+        if (strcmp(d->id, "output.volume") == 0 && !volume)
+            volume = n;
         g->r->features |= d->features;
         n->reach = true;
     }
     if (!base)
         ERR(g, "", "", 0, "the graph has no output.base node");
+    /* DENG-772: a volume only matters under transmission or diffuse transmission. */
+    const u32 under = MG_FEATURE_TRANSMISSION | MG_FEATURE_DIFFUSE_TRANSMISSION;
+    if (volume && (g->r->features & under) == 0u)
+        WARN(g, volume->path, "", volume->line,
+             "output.volume has no effect without output.transmission or "
+             "output.diffuse_transmission");
     /* Reachability: back from the outputs, in reverse order. */
     for (u32 k = g->order_count; k-- > 0;) {
         const mg_node *n = &g->nodes[g->order[k]];
@@ -1565,15 +1630,91 @@ static const char *str_value(const mg_node *n, const char *name) {
     return d.type == TOML_STRING ? d.u.s : NULL;
 }
 
+/* The first `need` adjacent free components of a row (a bit per component); 4 if none. */
+static u32 fit(u32 used, u32 need) {
+    const u32 bits = (1u << need) - 1u;
+    for (u32 c = 0; c + need <= 4; ++c)
+        if ((used & (bits << c)) == 0u)
+            return c;
+    return 4;
+}
+
+/* Whether a parameter name is taken; reports the clash on `n` when it is. */
+static bool name_taken(mg *g, const mg_node *n, const char *pin, const char *name) {
+    for (u32 i = 0; i < g->r->param_count; ++i)
+        if (strcmp(g->r->params[i].name, name) == 0) {
+            ERR(g, n->path, pin, n->line, "the name '%s' is already used by %s", name,
+                g->r->params[i].node);
+            return true;
+        }
+    return false;
+}
+
+/* DENG-772: output.subsurface's values as the parameters in the material's subsurface cells
+ * (reserved before packing, so other parameters fit around them). */
+static void subsurface_params(mg *g, const mg_node *n) {
+    de__mg_result *r = g->r;
+    static const char *const radius[3] = {"radius_r", "radius_g", "radius_b"};
+    const double weight = num_value(n, "weight", 1.0);
+    bool ok = true;
+    if (weight < 0.0 || weight > 1.0) {
+        ERR(g, n->path, "weight", n->line, "value 'weight' must be 0 to 1");
+        ok = false;
+    }
+    float rgb[3], top = 1.0f;
+    for (int c = 0; c < 3; ++c) {
+        const double x = num_value(n, radius[c], 1.0);
+        if (x < 0.0) {
+            ERR(g, n->path, radius[c], n->line, "value '%s' (metres) must not be negative",
+                radius[c]);
+            ok = false;
+        }
+        rgb[c] = (float)x;
+        top = rgb[c] > top ? rgb[c] : top;
+    }
+    if (!ok || name_taken(g, n, "", MG_SSS_WEIGHT) || name_taken(g, n, "", MG_SSS_RADIUS))
+        return;
+    de__mg_param w = {0}, m = {0};
+    copy_str(w.name, sizeof w.name, MG_SSS_WEIGHT);
+    copy_str(w.node, sizeof w.node, n->path);
+    w.kind = DE__MG_PARAM_FLOAT;
+    w.row = MG_ROW_EXTRA;
+    w.component = 2;
+    w.value[0] = (float)weight;
+    w.max = 1.0f;
+    copy_str(m.name, sizeof m.name, MG_SSS_RADIUS);
+    copy_str(m.node, sizeof m.node, n->path);
+    m.kind = DE__MG_PARAM_COLOR;
+    m.row = MG_ROW_SUBSURFACE;
+    memcpy(m.value, rgb, sizeof rgb);
+    m.max = top;
+    r->params[r->param_count++] = w;
+    r->params[r->param_count++] = m;
+}
+
 static void layout(mg *g) {
     de__mg_result *r = g->r;
-    u32 used[DE__MG_PARAM_ROWS] = {0};
+    u32 used[DE__MG_PARAM_ROWS] = {0}; /* a bit per component */
     u32 textures = 0;
+    for (u32 k = 0; k < g->count; ++k) {
+        const mg_node *n = &g->nodes[g->sorted[k]];
+        if (n->def >= 0 && strcmp(k_nodes[n->def].id, "output.subsurface") == 0) {
+            used[MG_ROW_EXTRA] |= 1u << 2;
+            used[MG_ROW_SUBSURFACE] |= 0x7u;
+            break;
+        }
+    }
+    bool sss = false;
     for (u32 k = 0; k < g->count; ++k) {
         mg_node *n = &g->nodes[g->sorted[k]];
         if (n->def < 0)
             continue;
         u8 role = k_nodes[n->def].role;
+        if (role == R_OUTPUT && !sss && strcmp(k_nodes[n->def].id, "output.subsurface") == 0) {
+            sss = true;
+            subsurface_params(g, n);
+            continue;
+        }
         if (role != R_PARAM_FLOAT && role != R_PARAM_COLOR && role != R_TEXTURE)
             continue;
         const char *name = str_value(n, role == R_TEXTURE ? "texture" : "name");
@@ -1607,7 +1748,7 @@ static void layout(mg *g) {
             p.slot = textures++;
         } else {
             u32 need = role == R_PARAM_COLOR ? 3 : 1, row = 0;
-            while (row < DE__MG_PARAM_ROWS && used[row] + need > 4)
+            while (row < DE__MG_PARAM_ROWS && fit(used[row], need) == 4)
                 ++row;
             if (row == DE__MG_PARAM_ROWS) {
                 ERR(g, n->path, "name", n->line,
@@ -1617,8 +1758,8 @@ static void layout(mg *g) {
             }
             p.kind = role == R_PARAM_COLOR ? DE__MG_PARAM_COLOR : DE__MG_PARAM_FLOAT;
             p.row = row;
-            p.component = used[row];
-            used[row] += need;
+            p.component = fit(used[row], need);
+            used[row] |= ((1u << need) - 1u) << p.component;
             if (role == R_PARAM_COLOR) {
                 p.value[0] = (float)num_value(n, "r", 1.0);
                 p.value[1] = (float)num_value(n, "g", 1.0);
