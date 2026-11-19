@@ -2007,7 +2007,7 @@ TEST(refraction, packed_layout_contract) {
     EXPECT_EQ(sizeof(de__fwd_params), 112u);
     EXPECT_EQ(offsetof(de__fwd_params, lights), 64u);
     EXPECT_EQ(offsetof(de__fwd_params, rt_capture), 96u);
-    EXPECT_EQ(offsetof(de__fwd_params, rt_reserved), 108u);
+    EXPECT_EQ(offsetof(de__fwd_params, time_bits), 108u);
     EXPECT_EQ(sizeof(de__lighting_view), 448u);
     EXPECT_EQ(sizeof(de__lighting_inputs_gpu), 112u);
     de_error_clear();

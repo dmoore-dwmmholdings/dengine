@@ -62,10 +62,54 @@ TEST(material_graph, catalog_lists_nodes_and_conversions) {
     const char *ids[] = {"\"texture.triplanar\"", "\"texture.sample\"", "\"blend.height\"",
                          "\"output.base\"",       "\"param.float\"",    "\"param.color\"",
                          "\"noise.gradient\"",    "\"code.float\"",     "\"reroute\"",
-                         "\"subgraph\"",          "\"math.add\"",       "\"output.clearcoat\""};
+                         "\"subgraph\"",          "\"math.add\"",       "\"output.clearcoat\"",
+                         "\"input.time\"",        "\"input.object_position\""};
     for (u32 i = 0; i < sizeof ids / sizeof ids[0]; ++i)
         EXPECT_TRUE(strstr(j, ids[i]) != NULL);
     de_strbuf_free(&b);
+}
+
+/* DENG-771: the time and object-position inputs read the resolve path's VertexAttribs. */
+static const char inputs_graph[] = HEADER
+    "[[node]]\nid = \"n1\"\ntype = \"input.time\"\n"
+    "[[node]]\nid = \"n2\"\ntype = \"input.object_position\"\n"
+    "[[node]]\nid = \"n3\"\ntype = \"vector.split\"\n"
+    "[[node]]\nid = \"n4\"\ntype = \"math.add\"\n"
+    "[[node]]\nid = \"n5\"\ntype = \"output.base\"\n"
+    "[[link]]\nfrom = \"n2.out\"\nto = \"n3.v\"\n"
+    "[[link]]\nfrom = \"n1.out\"\nto = \"n4.a\"\n"
+    "[[link]]\nfrom = \"n3.x\"\nto = \"n4.b\"\n"
+    "[[link]]\nfrom = \"n4.out\"\nto = \"n5.roughness\"\n";
+
+TEST(material_graph, time_and_object_position_inputs_read_the_vertex_attribs) {
+    de__mg_result r;
+    de_result res = generate(inputs_graph, &r);
+    if (res != DE_OK)
+        dump_diags(&r);
+    ASSERT_EQ(res, DE_OK);
+    EXPECT_EQ(r.error_count, 0u);
+    EXPECT_TRUE(strstr(r.source, "= v.time;") != NULL);
+    EXPECT_TRUE(strstr(r.source, "= v.object_position;") != NULL);
+    u32 line = line_of(r.source, "= v.time;");
+    ASSERT_GT(line, 0u);
+    ASSERT_TRUE(de__mg_node_at_line(&r, line) != NULL);
+    EXPECT_STREQ(de__mg_node_at_line(&r, line), "n1");
+    de__mg_result_free(&r);
+}
+
+/* DENG-771: triplanar takes its footprint from the world-position derivatives, not UV set 0. */
+static const char triplanar_graph[] = HEADER
+    "[[node]]\nid = \"n1\"\ntype = \"texture.triplanar\"\nvalues = { texture = \"rock\" }\n"
+    "[[node]]\nid = \"n2\"\ntype = \"output.base\"\n"
+    "[[link]]\nfrom = \"n1.rgb\"\nto = \"n2.base_color\"\n";
+
+TEST(material_graph, triplanar_uses_world_position_derivatives) {
+    de__mg_result r;
+    ASSERT_EQ(generate(triplanar_graph, &r), DE_OK);
+    EXPECT_TRUE(strstr(r.source, "v.position_dx") != NULL);
+    EXPECT_TRUE(strstr(r.source, "v.position_dy") != NULL);
+    EXPECT_TRUE(strstr(r.source, "u.dx = lod.dx[0] * scale") == NULL);
+    de__mg_result_free(&r);
 }
 
 TEST(material_graph, basic_graph_generates_a_model) {
@@ -509,6 +553,27 @@ TEST(material_graph, rock_moss_compiles_for_every_target) {
     if (g.diag_count)
         dump_diags(&g);
     de__mg_result_free(&g);
+}
+
+TEST(material_graph, new_inputs_and_triplanar_compile_for_every_target) {
+    char why[256];
+    if (!de__slang_available(why, sizeof why))
+        SKIP(why);
+    const char *graphs[] = {inputs_graph, triplanar_graph};
+    for (u32 k = 0; k < 2; ++k) {
+        de__mg_result g;
+        ASSERT_EQ(generate(graphs[k], &g), DE_OK);
+        const de__slang_target targets[] = {DE__SLANG_SPIRV, DE__SLANG_METAL, DE__SLANG_DXIL};
+        u32 compiled = 0;
+        for (u32 i = 0; i < 3; ++i) {
+            if (!de__slang_target_supported(targets[i]))
+                continue;
+            EXPECT_EQ(compile(&g, targets[i]), DE_OK);
+            ++compiled;
+        }
+        EXPECT_GT(compiled, 0u);
+        de__mg_result_free(&g);
+    }
 }
 
 TEST(material_graph, slang_errors_map_to_nodes) {

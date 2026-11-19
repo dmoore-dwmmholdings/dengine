@@ -17,6 +17,9 @@
  *                             roughness parameters, a tint and a metal parameter), cooked into a
  *                             registered material model, next to the Standard material of its
  *                             mean parameters, under the sky
+ *   materials_triplanar       a triplanar checker (a material graph) on a sphere without UVs
+ *                             (DENG-771): the footprint comes from the world-position
+ *                             derivatives, so the projections blend without mip seams
  *
  * Each scene runs the engine as a game does: a type registry, an ECS world, a task system, the
  * asset system in SOURCE mode over tests/golden/materials/assets/ (assets.toml; the importers
@@ -100,9 +103,9 @@ typedef struct mg_opts {
 #if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
 
 /* The gallery's models (assets.toml): each scene names their meshes. */
-#define MG_MODEL_COUNT 4u
+#define MG_MODEL_COUNT 5u
 static const char *const k_models[MG_MODEL_COUNT] = {"mesh/sphere", "mesh/card", "mesh/box",
-                                                     "mesh/cylinder"};
+                                                     "mesh/cylinder", "mesh/sphere_nouv"};
 
 typedef struct mg {
     de_golden_ctx *ctx;
@@ -705,6 +708,10 @@ DE_GOLDEN_SCENE(materials_khr_samples) {
 
 DE_GOLDEN_SCENE(materials_graph) {
     mg_run(ctx, &(mg_opts){.scene = "scenes/graph"});
+}
+
+DE_GOLDEN_SCENE(materials_triplanar) {
+    mg_run(ctx, &(mg_opts){.scene = "scenes/triplanar"});
 }
 
 DE_GOLDEN_SCENE(materials_layers_furnace) {

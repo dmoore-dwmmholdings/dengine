@@ -12,6 +12,7 @@ generate_lods = false
 "mesh/card" = { type = "model", source = "meshes/card.gltf" }
 "mesh/box" = { type = "model", source = "meshes/box.gltf" }
 "mesh/cylinder" = { type = "model", source = "meshes/cylinder.gltf" }
+"mesh/sphere_nouv" = { type = "model", source = "meshes/sphere_nouv.gltf" }
 "tex/checker" = { type = "texture", source = "textures/checker.png" }
 "tex/cutout" = { type = "texture", source = "textures/cutout.png" }
 "tex/leaf" = { type = "texture", source = "textures/leaf.png" }
@@ -110,9 +111,11 @@ generate_lods = false
 "mat/trans_vol_red" = { type = "material", source = "materials/trans_vol_red.mat.toml" }
 "mat/unlit" = { type = "material", source = "materials/unlit.mat.toml" }
 "graph/noise_rough" = { type = "material_graph", source = "graphs/noise_rough.mgraph.toml" }
+"graph/triplanar" = { type = "material_graph", source = "graphs/triplanar.mgraph.toml", textures = ["checker=tex/checker"] }
 "scenes/furnace" = { type = "scene", source = "scenes/furnace.scene.toml" }
 "scenes/gallery_ibl" = { type = "scene", source = "scenes/gallery_ibl.scene.toml" }
 "scenes/gallery_lights" = { type = "scene", source = "scenes/gallery_lights.scene.toml" }
 "scenes/graph" = { type = "scene", source = "scenes/graph.scene.toml" }
 "scenes/khr_samples" = { type = "scene", source = "scenes/khr_samples.scene.toml" }
 "scenes/layers_furnace" = { type = "scene", source = "scenes/layers_furnace.scene.toml" }
+"scenes/triplanar" = { type = "scene", source = "scenes/triplanar.scene.toml" }

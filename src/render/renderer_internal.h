@@ -138,6 +138,7 @@ struct de_renderer {
     /* Frames. */
     de_gpu_fence frame_fence; /**< frame N signals N + 1 */
     u64 frame_index;          /**< frames submitted */
+    u64 start_ns;             /**< de_time_now_ns() at creation: the material graph time input */
     de_arena *arenas[DE__RENDER_MAX_FRAMES_IN_FLIGHT];
     de_rg *graph;
 
