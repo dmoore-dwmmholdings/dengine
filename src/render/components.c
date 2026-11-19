@@ -23,7 +23,8 @@
 #include <stddef.h>
 #include <string.h>
 
-DE_STATIC_ASSERT(sizeof(de_projection) == 4 && sizeof(de_light_kind) == 4,
+DE_STATIC_ASSERT(sizeof(de_projection) == 4 && sizeof(de_light_kind) == 4 &&
+                     sizeof(de_water_kind) == 4 && sizeof(de_wave_spectrum) == 4,
                  "the render enums are reflected as 4-byte DE_FK_ENUM fields");
 DE_STATIC_ASSERT(sizeof(de_view) == 4 && sizeof(de_tonemapper) == 4 && sizeof(de_mesh) == 4 &&
                      sizeof(de_material) == 4 && sizeof(de_texture) == 4 && sizeof(de_blob) == 4,
@@ -109,6 +110,19 @@ static de_result register_enums(de_type_registry *reg) {
     };
     DE_TRY(ensure_enum(reg, "de_projection", k_projection, 2));
     DE_TRY(ensure_enum(reg, "de_light_kind", k_light_kind, 5));
+    /* DENG-776: the names the DIDE editor IPC uses (world.water, protocol 1.13). */
+    static const de_enum_value k_water_kind[] = {
+        {"ocean", DE_WATER_OCEAN},
+        {"river", DE_WATER_RIVER},
+        {"lake", DE_WATER_LAKE},
+    };
+    static const de_enum_value k_spectrum[] = {
+        {"phillips", DE_WAVE_PHILLIPS},
+        {"jonswap", DE_WAVE_JONSWAP},
+        {"pierson_moskowitz", DE_WAVE_PIERSON_MOSKOWITZ},
+    };
+    DE_TRY(ensure_enum(reg, "de_water_kind", k_water_kind, 3));
+    DE_TRY(ensure_enum(reg, "de_wave_spectrum", k_spectrum, 3));
     return DE_OK;
 }
 
@@ -411,20 +425,59 @@ static de_result reg_terrain(de_world *w, de_component *out) {
 static void construct_water(void *obj) {
     DeWater *wt = (DeWater *)obj;
     memset(wt, 0, sizeof *wt);
+    /* As the DIDE mock engine (mock-engine/src/water.rs, protocol 1.13). */
+    wt->kind = DE_WATER_OCEAN;
+    wt->spectrum = DE_WAVE_PIERSON_MOSKOWITZ;
     wt->wind = (de_vec2){5.0f, 0.0f};
     wt->choppiness = 1.0f;
+    wt->extent = (de_vec3){64.0f, 8.0f, 64.0f};
+    wt->width = 4.0f;
+    wt->flow_speed = 1.0f;
+    wt->fog_color = (de_vec4){0.05f, 0.2f, 0.25f, 1.0f};
+    wt->fog_density = 0.1f;
+}
+
+/* Version 1 had `bool ocean` in place of `kind`: false (a river or a lake) loads as a lake, the
+ * kind that needs no spline. The other version 1 fields keep their names and are already read. */
+static bool migrate_water(void *obj, u32 from_version, const void *old_data,
+                          const de_field_info *old_fields, u32 old_field_count) {
+    DeWater *wt = (DeWater *)obj;
+    if (from_version >= 2)
+        return true;
+    for (u32 i = 0; i < old_field_count; ++i)
+        if (old_fields[i].kind == DE_FK_BOOL && strcmp(old_fields[i].name, "ocean") == 0)
+            wt->kind = ((const u8 *)old_data)[old_fields[i].offset] != 0 ? DE_WATER_OCEAN
+                                                                         : DE_WATER_LAKE;
+    return true;
 }
 
 static de_result reg_water(de_world *w, de_component *out) {
     static const de_field_info k_fields[] = {
+        DE_FIELD_EX(DeWater, kind, DE_FK_ENUM, AUTHORED, {0, 0, 0, 0, "de_water_kind", 0}),
         DE_FIELD_EX(DeWater, material, DE_FK_ASSET, ASSET_REF, {0, 0, 0, 0, "material", 0}),
-        DE_FIELD_EX(DeWater, ocean, DE_FK_BOOL, AUTHORED,
-                    {0, 0, 0, "true: ocean (FFT waves); false: river or lake", 0, 0}),
+        DE_FIELD_EX(DeWater, spectrum, DE_FK_ENUM, AUTHORED,
+                    {0, 0, 0, "Ocean wave spectrum", "de_wave_spectrum", 0}),
         DE_FIELD_EX(DeWater, wind, DE_FK_VEC2, AUTHORED,
-                    {0, 0, "m/s", "Wind velocity over the water", 0, 0}),
-        DE_FIELD_EX(DeWater, choppiness, DE_FK_F32, AUTHORED, {0, 0, 0, 0, 0, 0}),
+                    {0, 0, "m/s", "Wind over the water (x, z); its length is the wind speed", 0,
+                     0}),
+        DE_FIELD_EX(DeWater, choppiness, DE_FK_F32, AUTHORED, {0, 2, 0, 0, 0, 0}),
+        DE_FIELD_EX(DeWater, surface_height, DE_FK_F32, AUTHORED,
+                    {0, 0, "m", "Surface above the entity", 0, 0}),
+        DE_FIELD_EX(DeWater, extent, DE_FK_VEC3, AUTHORED,
+                    {0, 0, "m", "A lake's volume, centred on the entity", 0, 0}),
+        DE_FIELD_EX(DeWater, spline, DE_FK_ENTITY, AUTHORED,
+                    {0, 0, 0, "A river's centre line (a DeSpline entity)", 0, 0}),
+        DE_FIELD_EX(DeWater, width, DE_FK_F32, AUTHORED, {0.1, 1000, "m", "A river's width", 0, 0}),
+        DE_FIELD_EX(DeWater, flow_speed, DE_FK_F32, AUTHORED,
+                    {0, 50, "m/s", "A river's speed at its centre", 0, 0}),
+        DE_FIELD_EX(DeWater, fog_color, DE_FK_COLOR, AUTHORED,
+                    {0, 0, 0, "Linear RGBA, underwater", 0, 0}),
+        DE_FIELD_EX(DeWater, fog_density, DE_FK_F32, AUTHORED,
+                    {0, 10, "1/m", "Underwater fog", 0, 0}),
     };
-    return register_component(w, DE_TYPE_DESC(DeWater, 1, k_fields), construct_water, out);
+    de_type_desc d = DE_TYPE_DESC(DeWater, 2, k_fields);
+    d.hooks.migrate = migrate_water;
+    return register_component(w, d, construct_water, out);
 }
 
 /* ---- DeReflectionProbe (DENG-340) ------------------------------------------------------- */

@@ -54,7 +54,7 @@ static const struct {
     {"DeDecal", 4, offsetof(DeRenderComponents, decal)},
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
     {"DeTerrain", 5, offsetof(DeRenderComponents, terrain)},
-    {"DeWater", 4, offsetof(DeRenderComponents, water)},
+    {"DeWater", 12, offsetof(DeRenderComponents, water)},
 };
 #define COMP_COUNT ((u32)(sizeof k_comps / sizeof k_comps[0]))
 
@@ -290,6 +290,11 @@ static u32 fill_fields(cfx *f, de_type_id t, u8 *obj, u32 k) {
             const u32 h = 10u + i + k;
             memcpy(p, &h, sizeof h);
             assets++;
+            break;
+        }
+        case DE_FK_ENTITY: { /* written as is without an entity map (DeWater.spline) */
+            const u64 bits = 0x0000000500000000ull + 3u + i + k;
+            memcpy(p, &bits, sizeof bits);
             break;
         }
         case DE_FK_FIXED_ARRAY: {
@@ -534,7 +539,10 @@ TEST_F(render_components, defaults, cfx) {
 
         DeWater wt;
         construct_from(f, "DeWater", &wt, sizeof wt, fill);
-        EXPECT_FALSE(wt.ocean);
+        EXPECT_EQ((int)wt.kind, (int)DE_WATER_OCEAN);
+        EXPECT_EQ((int)wt.spectrum, (int)DE_WAVE_PIERSON_MOSKOWITZ);
+        EXPECT_FLOAT_EQ(wt.width, 4.0, 0);
+        EXPECT_FLOAT_EQ(wt.flow_speed, 1.0, 0);
         EXPECT_FLOAT_EQ(wt.wind.x, 5.0, 0);
         EXPECT_FLOAT_EQ(wt.wind.y, 0.0, 0);
         EXPECT_FLOAT_EQ(wt.choppiness, 1.0, 0);
@@ -802,4 +810,25 @@ TEST_F(render_components, gltf_prefab_instantiate, cfx) {
     EXPECT_EQ(seen, 3u);
     de_asset_release(f->s, h);
 #endif
+}
+
+/* DENG-776: DeWater version 1 had `bool ocean`; version 2 has `kind`. */
+TEST_F(render_components, water_v1_ocean_migrates_to_kind, cfx) {
+    ASSERT_EQ(de_render_register_components(f->w), DE_OK);
+    const de_type_id t = type_of(f, "DeWater");
+    const de_type_desc *d = de_type_get(f->types, t);
+    ASSERT_TRUE(d != NULL && d->hooks.migrate != NULL);
+    EXPECT_EQ(d->version, 2u);
+    const de_field_info old_fields[] = {{.name = "ocean", .kind = DE_FK_BOOL, .offset = 0}};
+    const u8 yes[1] = {1}, no[1] = {0};
+    DeWater wt;
+    ASSERT_EQ(de_type_construct(f->types, t, &wt), DE_OK);
+    EXPECT_TRUE(d->hooks.migrate(&wt, 1, yes, old_fields, 1));
+    EXPECT_EQ((int)wt.kind, (int)DE_WATER_OCEAN);
+    EXPECT_TRUE(d->hooks.migrate(&wt, 1, no, old_fields, 1));
+    EXPECT_EQ((int)wt.kind, (int)DE_WATER_LAKE);
+    /* Version 2 data needs nothing. */
+    wt.kind = DE_WATER_RIVER;
+    EXPECT_TRUE(d->hooks.migrate(&wt, 2, no, old_fields, 1));
+    EXPECT_EQ((int)wt.kind, (int)DE_WATER_RIVER);
 }

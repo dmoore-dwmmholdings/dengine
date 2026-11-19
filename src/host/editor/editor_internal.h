@@ -78,6 +78,7 @@ struct de__editor {
     struct de__ed_views *views;
     struct de__ed_debugdraw *debugdraw;
     struct de__ed_extra *extra;
+    struct de__ed_water *water;
 };
 
 /* ---------- Lifecycle (editor.c) ---------- */
@@ -248,6 +249,20 @@ void de__ed_material_graph_register(de__editor *ed);
 /* DENG-775: spline.info, spline.sample, spline.instances (editor_spline.c); capability
  * world.splines (protocol 1.12). */
 void de__ed_spline_register(de__editor *ed);
+/** An entity's world transform, as the gizmo reads it: a root's local transform, else its global
+ * one (or parent * local when that is not computed yet). Identity without DeTransform. */
+de_transform de__ed_world_xf(de_world *w, de_entity e);
+/* DENG-776: water.info, water.surface, water.flowMap, water.probes, water.showProbes
+ * (editor_water.c, render builds only); capability world.water (protocol 1.13). */
+void de__ed_water_register(de__editor *ed);
+/** A probe water.showProbes shows: world centre, radius (m), depth below the surface (m). */
+typedef struct de__ed_probe_mark {
+    de_dvec3 p;
+    f32 radius, depth;
+    bool wet;
+} de__ed_probe_mark;
+/** Fills up to `max` probes of the bodies water.showProbes shows; returns how many. */
+u32 de__ed_water_marks(de__editor *ed, de__ed_probe_mark *out, u32 max);
 /* Fills the hello result for the agreed version (editor.c). `caps` holds DE__ED_MAX_CAPS. */
 void de__ed_hello_result(de__editor *ed, const char *agreed, de_ep_str *caps,
                          de_ep_hello_result *r);

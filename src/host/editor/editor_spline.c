@@ -26,9 +26,7 @@ static bool ids_of(de_world *w, de_spline_ids *out) {
     return w != NULL && de__spline_register(w, out) == DE_OK;
 }
 
-/* The entity's world transform, as the gizmo reads it: a root's local transform, else its global
- * one (or parent * local when that is not computed yet). */
-static de_transform world_xf(de_world *w, de_entity e) {
+de_transform de__ed_world_xf(de_world *w, de_entity e) {
     const de_builtin_component_ids b = de_builtin_components(w);
     const DeTransform *l = (const DeTransform *)de_entity_get_const(w, e, b.transform);
     if (l == NULL)
@@ -40,7 +38,7 @@ static de_transform world_xf(de_world *w, de_entity e) {
         (const DeGlobalTransform *)de_entity_get_const(w, e, b.global_transform);
     if (g != NULL)
         return *g;
-    const de_transform parent = world_xf(w, co->parent);
+    const de_transform parent = de__ed_world_xf(w, co->parent);
     return de_transform_mul(&parent, l);
 }
 
@@ -63,7 +61,7 @@ static de_spline_poly *poly_of(de__editor *ed, de_ep_arena *a, const DeSpline *s
     de_spline_poly *p = (de_spline_poly *)de__ed_alloc(a, sizeof *p);
     if (p == NULL)
         return NULL;
-    const de_transform t = world_xf(world_of(ed), (de_entity){bits});
+    const de_transform t = de__ed_world_xf(world_of(ed), (de_entity){bits});
     de__spline_poly(s, &t, p);
     return p;
 }
