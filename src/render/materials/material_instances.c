@@ -195,7 +195,24 @@ void de__material_pack(const de_render_material *m, const de__material_models *m
     /* The record's alpha mode (the loader and de_material_set_params keep standard.alpha_mode
      * equal to it). */
     o->alpha_mode = m->alpha_mode <= DE_COOKED_ALPHA_BLEND ? m->alpha_mode : DE_COOKED_ALPHA_OPAQUE;
-    o->features = de__material_features(s, o->alpha_mode, o->model);
+    u32 graph_features = 0u;
+    if (o->model >= DE__MATERIAL_MODEL_FIRST_GAME &&
+        de__material_models_graph_features(models, o->model, &graph_features)) {
+        /* DENG-770: a material graph's model. Its kernel evaluates the graph, so the lobes are the
+         * graph's, whatever the parameter values; the pass routing still follows the record. */
+        u32 f =
+            graph_features & ~(DE__MATERIAL_FEATURE_FORWARD | DE__MATERIAL_FEATURE_DOUBLE_SIDED |
+                               DE__MATERIAL_FEATURE_ALPHA_MASK);
+        if (o->alpha_mode == DE_COOKED_ALPHA_BLEND || (f & DE__MATERIAL_FEATURE_TRANSMISSION) != 0u)
+            f |= DE__MATERIAL_FEATURE_FORWARD;
+        if (s->double_sided)
+            f |= DE__MATERIAL_FEATURE_DOUBLE_SIDED;
+        if (o->alpha_mode == DE_COOKED_ALPHA_MASK)
+            f |= DE__MATERIAL_FEATURE_ALPHA_MASK;
+        o->features = f;
+    } else {
+        o->features = de__material_features(s, o->alpha_mode, o->model);
+    }
     o->flags = DE__MATERIAL_FLAG_READY | (s->double_sided ? DE__MATERIAL_FLAG_DOUBLE_SIDED : 0u) |
                (o->model == DE__GS_MATERIAL_MODEL_UNLIT ? DE__MATERIAL_FLAG_UNLIT : 0u);
     f4(&o->base_color, s->base_color.x, s->base_color.y, s->base_color.z, s->base_color.w);

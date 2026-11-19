@@ -186,10 +186,10 @@ TEST(cook_check, extra_types) {
     }
 
     /* Independent list: catch missing, duplicate or reordered built-ins as well as drift. */
-    const char *const expected[] = {"texture", "model",      "material",     "shader",
-                                    "sound",   "font",       "aseprite",     "tilemap",
-                                    "strings", "stylesheet", "video",        "scene",
-                                    "prefab",  "blob",       "string_table", "sprite_clip"};
+    const char *const expected[] = {
+        "texture",  "model",   "material",     "shader",      "sound",         "font",
+        "aseprite", "tilemap", "strings",      "stylesheet",  "video",         "scene",
+        "prefab",   "blob",    "string_table", "sprite_clip", "material_graph"};
     ASSERT_EQ(de_cook_known_type_count, (u32)(sizeof expected / sizeof expected[0]));
     for (u32 i = 0; i < de_cook_known_type_count; ++i) {
         EXPECT_STREQ(de_cook_known_types[i], expected[i]);

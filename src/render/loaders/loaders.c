@@ -30,6 +30,7 @@
 
 #if DE_HAS_COOKER
 #include "cook/importers/material/mat_toml_import.h"
+#include "cook/lib/de_cooker.h"
 #include "cook/importers/model/model_import.h"
 #include "cook/importers/texture/texture_import.h"
 #endif
@@ -176,8 +177,8 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
     if (s == NULL || d == NULL || d->device == NULL || out == NULL)
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
                        "de_render_register_asset_types: NULL system, device or out");
-    static const char *const names[] = {"texture", "mesh", "material", "model"};
-    for (u32 i = 0; i < 4u; ++i)
+    static const char *const names[] = {"texture", "mesh", "material", "model", "material_graph"};
+    for (u32 i = 0; i < 5u; ++i)
         if (DE_HANDLE_VALID(de__asset_type_find(s, names[i])))
             return DE_FAIL(DE_ERR_ALREADY_EXISTS,
                            "de_render_register_asset_types: the type \"%s\" is registered already",
@@ -199,7 +200,7 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
         return r;
     }
 
-    de_asset_type_desc td[4];
+    de_asset_type_desc td[5];
     memset(td, 0, sizeof td);
     td[0].name = "texture";
     td[0].load = de__texture_load;
@@ -219,7 +220,12 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
     td[3].load = de__model_load;
     td[3].unload = de__model_unload;
     td[3].ready = de__model_ready;
-    td[0].importer_version = td[3].importer_version = 1u;
+    td[4].name = "material_graph"; /* DENG-770 */
+    td[4].load = de__material_graph_load;
+    td[4].unload = de__material_graph_unload;
+    td[4].ready = de__material_graph_ready;
+    td[4].category = DE_ASSET_CAT_CPU;
+    td[0].importer_version = td[3].importer_version = td[4].importer_version = 1u;
 #if DE_HAS_COOKER
     td[0].extensions = de_texture_import_extensions;
     td[0].extension_count = DE_TEXTURE_IMPORT_EXTENSION_COUNT;
@@ -232,6 +238,11 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
         td[3].importer_version = DE_MODEL_IMPORTER_VERSION;
         td[2].import = de_mat_toml_import; /* DENG-302 */
         td[2].importer_version = DE_MAT_TOML_IMPORTER_VERSION;
+        de_asset_type_desc mg; /* the graph importer, in builds with Slang */
+        if (de_cooker_builtin_importer("material_graph", &mg)) {
+            td[4].import = mg.import;
+            td[4].importer_version = mg.importer_version;
+        }
     }
 #else
     td[0].extensions = k_texture_exts;
@@ -239,7 +250,7 @@ de_result de__render_register_asset_types_ex(de_asset_system *s, const de__rende
     td[3].extensions = k_model_exts;
     td[3].extension_count = (u32)(sizeof k_model_exts / sizeof k_model_exts[0]);
 #endif
-    for (u32 i = 0; i < 4u; ++i) {
+    for (u32 i = 0; i < 5u; ++i) {
         td[i].user = u;
         if (!DE_HANDLE_VALID(de_asset_type_register(s, &td[i]))) {
             r = de__loader_rhi_error();
