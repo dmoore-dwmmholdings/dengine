@@ -50,7 +50,8 @@ def gltf(name, positions, normals, tangents, uvs, indices):
     off_t = len(blob)
     floats(tangents)
     off_uv = len(blob)
-    floats(uvs)
+    if uvs is not None:
+        floats(uvs)
     off_i = len(blob)
     blob.extend(struct.pack("<%dH" % len(indices), *indices))
     while len(blob) % 4:
@@ -61,25 +62,29 @@ def gltf(name, positions, normals, tangents, uvs, indices):
         {"buffer": 0, "byteOffset": 0, "byteLength": off_n},
         {"buffer": 0, "byteOffset": off_n, "byteLength": off_t - off_n},
         {"buffer": 0, "byteOffset": off_t, "byteLength": off_uv - off_t},
-        {"buffer": 0, "byteOffset": off_uv, "byteLength": off_i - off_uv},
-        {"buffer": 0, "byteOffset": off_i, "byteLength": len(indices) * 2},
     ]
     acc = [
         {"bufferView": 0, "componentType": 5126, "count": n, "type": "VEC3",
          "min": [round(v, 6) for v in lo], "max": [round(v, 6) for v in hi]},
         {"bufferView": 1, "componentType": 5126, "count": n, "type": "VEC3"},
         {"bufferView": 2, "componentType": 5126, "count": n, "type": "VEC4"},
-        {"bufferView": 3, "componentType": 5126, "count": n, "type": "VEC2"},
-        {"bufferView": 4, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
     ]
+    attrs = {"POSITION": 0, "NORMAL": 1, "TANGENT": 2}
+    if uvs is not None:  # DENG-771: a mesh may have no UV stream
+        views.append({"buffer": 0, "byteOffset": off_uv, "byteLength": off_i - off_uv})
+        acc.append({"bufferView": 3, "componentType": 5126, "count": n, "type": "VEC2"})
+        attrs["TEXCOORD_0"] = 3
+    views.append({"buffer": 0, "byteOffset": off_i, "byteLength": len(indices) * 2})
+    acc.append({"bufferView": len(views) - 1, "componentType": 5123, "count": len(indices),
+                "type": "SCALAR"})
     doc = {
         "asset": {"version": "2.0", "generator": "dengine gen_assets.py (DENG-307)"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"name": name, "mesh": 0}],
         "meshes": [{"name": name, "primitives": [{
-            "attributes": {"POSITION": 0, "NORMAL": 1, "TANGENT": 2, "TEXCOORD_0": 3},
-            "indices": 4}]}],
+            "attributes": attrs,
+            "indices": len(acc) - 1}]}],
         "accessors": acc,
         "bufferViews": views,
         "buffers": [{"byteLength": len(blob), "uri": "data:application/octet-stream;base64,"
@@ -92,7 +97,7 @@ def r6(v):
     return [round(x, 6) + 0.0 for x in v]
 
 
-def mesh_sphere(seg=32, rings=16, r=0.5):
+def mesh_sphere(seg=32, rings=16, r=0.5, uvs=True, name="sphere"):
     """A UV sphere of radius `r` (glTF axes: +Y up; the importer converts to the engine's Z up)."""
     P, N, T, UV, I = [], [], [], [], []
     for j in range(rings + 1):
@@ -111,7 +116,7 @@ def mesh_sphere(seg=32, rings=16, r=0.5):
             a = j * (seg + 1) + i
             b = a + seg + 1
             I += [a, b, a + 1, a + 1, b, b + 1]
-    return gltf("sphere", P, N, T, UV, I)
+    return gltf(name, P, N, T, UV if uvs else None, I)
 
 
 def mesh_card(n=2):
@@ -663,6 +668,41 @@ def scene_graph():
     return sc
 
 
+GRAPH_TRIPLANAR = """kind = "material"
+version = 1
+next_id = 8
+[[node]]
+id = "n1"
+type = "texture.triplanar"
+values = { texture = "checker", scale = 2.5, sharpness = 4.0 }
+[[node]]
+id = "n2"
+type = "param.float"
+values = { name = "rough", value = 0.6, min = 0.0, max = 1.0 }
+[[node]]
+id = "n3"
+type = "output.base"
+[[link]]
+from = "n1.rgb"
+to = "n3.base_color"
+[[link]]
+from = "n2.out"
+to = "n3.roughness"
+"""
+
+
+def scene_triplanar():
+    """DENG-771: a triplanar checker on a sphere that has no UV stream. The footprint comes from
+    the world-position derivatives, so the checker is filtered the same on every projection plane
+    and shows no mip seams where the projections blend."""
+    sc = Scene("triplanar on a mesh without UVs")
+    camera(sc, (0.0, -3.2, 0.0), 0.0, 30.0, 0.0)
+    sc.entity([xf((0.0, 0.0, 0.0), quat_axis((0.0, 0.0, 1.0), 0.5)),
+               mesh_renderer("mesh/sphere_nouv#sphere_nouv", "graph/triplanar#material")])
+    environment(sc, "env/sky", 1.0)
+    return sc
+
+
 def scene_khr():
     """Procedural stand-ins for five Khronos glTF sample models (LICENSES.md), lit by the sky and
     a sun: ClearCoatTest (coat x coat roughness over a base), SheenChair (a seat of two boxes in a
@@ -726,6 +766,7 @@ def main():
     out("meshes/card.gltf", mesh_card())
     out("meshes/box.gltf", mesh_box())
     out("meshes/cylinder.gltf", mesh_cylinder())
+    out("meshes/sphere_nouv.gltf", mesh_sphere(uvs=False, name="sphere_nouv"))
     out("textures/checker.png", tex_checker())
     out("textures/cutout.png", tex_cutout())
     out("textures/leaf.png", tex_leaf())
@@ -745,8 +786,10 @@ def main():
         "layers_furnace": scene_layers_furnace(),
         "khr_samples": scene_khr(),
         "graph": scene_graph(),
+        "triplanar": scene_triplanar(),
     }
     out("graphs/noise_rough.mgraph.toml", GRAPH_NOISE_ROUGH.encode("ascii"))
+    out("graphs/triplanar.mgraph.toml", GRAPH_TRIPLANAR.encode("ascii"))
     for name, kv in MATS.items():
         out("materials/%s.mat.toml" % name, mat_file(name, kv))
     for name, sc in scenes.items():
@@ -758,7 +801,7 @@ def main():
          "[project]", 'asset_root = "."', "",
          "[defaults.model]", "generate_lods = false", "",
          "[assets]"]
-    for n in ("sphere", "card", "box", "cylinder"):
+    for n in ("sphere", "card", "box", "cylinder", "sphere_nouv"):
         m.append('"mesh/%s" = { type = "model", source = "meshes/%s.gltf" }' % (n, n))
     m.append('"tex/checker" = { type = "texture", source = "textures/checker.png" }')
     m.append('"tex/cutout" = { type = "texture", source = "textures/cutout.png" }')
@@ -774,6 +817,8 @@ def main():
                  % (name, name))
     m.append('"graph/noise_rough" = { type = "material_graph", '
              'source = "graphs/noise_rough.mgraph.toml" }')
+    m.append('"graph/triplanar" = { type = "material_graph", '
+             'source = "graphs/triplanar.mgraph.toml", textures = ["checker=tex/checker"] }')
     for name in sorted(scenes):
         m.append('"scenes/%s" = { type = "scene", source = "scenes/%s.scene.toml" }'
                  % (name, name))

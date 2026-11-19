@@ -184,6 +184,7 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
     r->clear_color[2] = 0.0f;
     r->clear_color[3] = 1.0f;
     de_mutex_init(&r->lock);
+    r->start_ns = de_time_now_ns(); /* DENG-771: material graph time input */
     if (r->assets)
         de__asset_destroy_observe(r->assets, &r->asset_destroy, renderer_assets_destroyed, r);
 

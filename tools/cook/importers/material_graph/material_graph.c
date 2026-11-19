@@ -224,6 +224,28 @@ static const node_def k_nodes[] = {
      {{0}},
      NULL,
      0},
+    {"input.time",
+     "Time",
+     "Input",
+     R_NONE,
+     0,
+     0,
+     {{0}},
+     {{"out", T_FLOAT, "v.time"}},
+     {{0}},
+     NULL,
+     0},
+    {"input.object_position",
+     "Object Position",
+     "Input",
+     R_NONE,
+     0,
+     0,
+     {{0}},
+     {{"out", T_VEC3, "v.object_position"}},
+     {{0}},
+     NULL,
+     0},
     /* Textures and UVs. */
     {"texture.sample",
      "Sample Texture",
@@ -246,7 +268,7 @@ static const node_def k_nodes[] = {
       {"normal", T_VEC3, "v.normal"},
       {"scale", T_FLOAT, F1},
       {"sharpness", T_FLOAT, "4.0"}},
-     TEX_OUTS("de_mg_triplanar(m, {#}u, {position}, {normal}, {scale}, {sharpness}, lod)"),
+     TEX_OUTS("de_mg_triplanar(m, {#}u, {position}, {normal}, {scale}, {sharpness}, v.position_dx, v.position_dy, lod)"),
      {{"texture", V_NAME, 0.0f, ""}},
      NULL,
      0},
@@ -713,19 +735,24 @@ static const char *const k_prelude[] = {
     "    return de_tex2d(t).SampleGrad(de_sampler(lod.sampler), u.uv, u.dx, u.dy);\n"
     "}\n"
     "\n",
-    "// World-space projections; the footprint comes from UV set 0 scaled like the position.\n"
+    "// World-space projections. The footprint is the world-position difference of one pixel\n"
+    "// (dp_dx, dp_dy), projected onto each plane like the position, so it needs no UVs.\n"
     "float4 de_mg_triplanar(DeGpuMaterial m, uint slot, float3 p, float3 n, float scale,\n"
-    "                       float sharpness, TextureLodInfo lod)\n"
+    "                       float sharpness, float3 dp_dx, float3 dp_dy, TextureLodInfo lod)\n"
     "{\n"
     "    float3 w = pow(abs(n), max(sharpness, 1.0));\n"
     "    w /= max(w.x + w.y + w.z, 1e-5);\n"
     "    DeMgUv u;\n"
-    "    u.dx = lod.dx[0] * scale;\n"
-    "    u.dy = lod.dy[0] * scale;\n"
+    "    u.dx = dp_dx.zy * scale;\n"
+    "    u.dy = dp_dy.zy * scale;\n"
     "    u.uv = p.zy * scale;\n"
     "    float4 r = w.x * de_mg_sample(m, slot, u, lod);\n"
+    "    u.dx = dp_dx.xz * scale;\n"
+    "    u.dy = dp_dy.xz * scale;\n"
     "    u.uv = p.xz * scale;\n"
     "    r += w.y * de_mg_sample(m, slot, u, lod);\n"
+    "    u.dx = dp_dx.xy * scale;\n"
+    "    u.dy = dp_dy.xy * scale;\n"
     "    u.uv = p.xy * scale;\n"
     "    r += w.z * de_mg_sample(m, slot, u, lod);\n"
     "    return r;\n"
