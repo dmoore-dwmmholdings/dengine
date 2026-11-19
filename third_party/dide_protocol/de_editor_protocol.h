@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.10"
-#define DE_EP_SCHEMA_HASH "34f71d534d9afbf8"
+#define DE_EP_PROTOCOL_VERSION "1.11"
+#define DE_EP_SCHEMA_HASH "e250b4445dda6784"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -180,6 +180,7 @@ typedef struct de_ep_font_atlas_params de_ep_font_atlas_params;
 typedef struct de_ep_gizmo_drag_end de_ep_gizmo_drag_end;
 typedef struct de_ep_gizmo_drag_update de_ep_gizmo_drag_update;
 typedef struct de_ep_gizmo_tool_params de_ep_gizmo_tool_params;
+typedef struct de_ep_heightmap_export_params de_ep_heightmap_export_params;
 typedef struct de_ep_hello_params de_ep_hello_params;
 typedef struct de_ep_hello_result de_ep_hello_result;
 typedef struct de_ep_input_event de_ep_input_event;
@@ -255,6 +256,12 @@ typedef struct de_ep_surface de_ep_surface;
 typedef struct de_ep_system_enable_params de_ep_system_enable_params;
 typedef struct de_ep_system_info de_ep_system_info;
 typedef struct de_ep_system_list de_ep_system_list;
+typedef struct de_ep_terrain_info de_ep_terrain_info;
+typedef struct de_ep_terrain_layer de_ep_terrain_layer;
+typedef struct de_ep_terrain_params de_ep_terrain_params;
+typedef struct de_ep_terrain_sample de_ep_terrain_sample;
+typedef struct de_ep_terrain_sample_params de_ep_terrain_sample_params;
+typedef struct de_ep_terrain_stroke de_ep_terrain_stroke;
 typedef struct de_ep_tx_params de_ep_tx_params;
 typedef struct de_ep_tx_result de_ep_tx_result;
 typedef struct de_ep_type_info de_ep_type_info;
@@ -449,6 +456,11 @@ typedef struct de_ep_list_peer_checksum {
     de_ep_peer_checksum *items;
     uint32_t count;
 } de_ep_list_peer_checksum;
+
+typedef struct de_ep_list_terrain_layer {
+    de_ep_terrain_layer *items;
+    uint32_t count;
+} de_ep_list_terrain_layer;
 
 typedef struct de_ep_list_asset_type_info {
     de_ep_asset_type_info *items;
@@ -790,7 +802,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -917,6 +929,14 @@ struct de_ep_gizmo_tool_params {
     de_ep_map_f32 snap; /* move (m), rotate (deg), scale steps, absent or 0 = off; surfaceAlign 1 aligns surface placement to the normal */
     bool has_colors;
     de_ep_map_str colors; /* theme colors as #rrggbb: x, y, z, hover, selected */
+};
+
+struct de_ep_heightmap_export_params {
+    uint64_t entity;
+    de_ep_str path;
+    de_ep_str format; /* png16, raw16 or exr */
+    bool has_tile;
+    de_ep_list_u32 tile; /* [x, y]; absent for the whole terrain */
 };
 
 struct de_ep_hello_params {
@@ -1465,6 +1485,78 @@ struct de_ep_system_list {
     de_ep_list_system_info systems;
 };
 
+struct de_ep_terrain_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected component holding layers, order and rules */
+    uint32_t resolution; /* height samples per edge of the whole terrain */
+    float size; /* edge length in metres */
+    float height; /* height range in metres; samples are 0..height */
+    de_ep_list_f64 origin; /* world [x, y, z] of sample (0, 0) */
+    uint32_t tile_size; /* samples per undo/import tile edge */
+    de_ep_list_u32 tiles; /* [x, y] tile counts */
+    de_ep_list_terrain_layer layers; /* in blend order, bottom first */
+    uint32_t max_layers;
+    uint32_t max_rules;
+    de_ep_list_str tools; /* the stroke tools this engine applies */
+    de_ep_list_str formats; /* heightmap formats: png16, raw16, exr */
+};
+
+struct de_ep_terrain_layer {
+    uint32_t slot; /* splat channel; stable when layers are reordered */
+    de_ep_str name;
+    de_ep_str material; /* material asset id; empty for an unused slot */
+    float tiling; /* metres per texture repeat */
+    float sharpness; /* height-blend sharpness, 0..1 */
+};
+
+struct de_ep_terrain_params {
+    uint64_t entity;
+};
+
+/* The terrain at a world point as it renders: height, slope, and splat weights by slot with auto-material rules applied. */
+struct de_ep_terrain_sample {
+    float height;
+    float slope; /* degrees */
+    de_ep_list_f32 weights;
+    de_ep_list_f32 baked; /* the splat map alone, without rules */
+    bool hole;
+};
+
+struct de_ep_terrain_sample_params {
+    uint64_t entity;
+    double x;
+    double z;
+};
+
+/* One stroke, or the dabs of one while it is drawn (the IDE merges those into one undo step with a mergeKey). `points` are world [x, y, z, pressure] dabs, already spaced. Weight at a sample is strength x falloff(distance / radius) x pressure. */
+struct de_ep_terrain_stroke {
+    de_ep_str tool; /* raise, lower, smooth, flatten, ramp, noise, terrace, erodeHydraulic, erodeThermal, stamp, paint or hole */
+    de_ep_list_f32 points; /* 4 values per dab */
+    float radius; /* metres */
+    float strength; /* 0..1 */
+    de_ep_list_f32 falloff; /* falloff curve, sampled evenly from the centre (1st) to the edge (last) */
+    bool has_target;
+    float target; /* flatten: the height in metres */
+    bool has_step;
+    float step; /* terrace: step height in metres */
+    bool has_seed;
+    uint32_t seed; /* noise */
+    bool has_scale;
+    float scale; /* noise: feature size in metres; stamp: height scale */
+    bool has_rotation;
+    float rotation; /* stamp: degrees */
+    bool has_stamp;
+    de_ep_str stamp; /* stamp: heightmap file path */
+    bool has_area;
+    de_ep_str area; /* erosion: brush (default) or tile */
+    bool has_iterations;
+    uint32_t iterations; /* erosion */
+    bool has_layer;
+    uint32_t layer; /* paint: layer slot */
+    bool has_erase;
+    bool erase; /* paint and hole: remove instead of add */
+};
+
 struct de_ep_tx_params {
     uint32_t tx;
 };
@@ -1711,6 +1803,8 @@ void de_ep_write_gizmo_drag_update(mpack_writer_t *w, const de_ep_gizmo_drag_upd
 void de_ep_read_gizmo_drag_update(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo_drag_update *out);
 void de_ep_write_gizmo_tool_params(mpack_writer_t *w, const de_ep_gizmo_tool_params *v);
 void de_ep_read_gizmo_tool_params(mpack_reader_t *r, de_ep_arena *a, de_ep_gizmo_tool_params *out);
+void de_ep_write_heightmap_export_params(mpack_writer_t *w, const de_ep_heightmap_export_params *v);
+void de_ep_read_heightmap_export_params(mpack_reader_t *r, de_ep_arena *a, de_ep_heightmap_export_params *out);
 void de_ep_write_hello_params(mpack_writer_t *w, const de_ep_hello_params *v);
 void de_ep_read_hello_params(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_params *out);
 void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v);
@@ -1861,6 +1955,18 @@ void de_ep_write_system_info(mpack_writer_t *w, const de_ep_system_info *v);
 void de_ep_read_system_info(mpack_reader_t *r, de_ep_arena *a, de_ep_system_info *out);
 void de_ep_write_system_list(mpack_writer_t *w, const de_ep_system_list *v);
 void de_ep_read_system_list(mpack_reader_t *r, de_ep_arena *a, de_ep_system_list *out);
+void de_ep_write_terrain_info(mpack_writer_t *w, const de_ep_terrain_info *v);
+void de_ep_read_terrain_info(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_info *out);
+void de_ep_write_terrain_layer(mpack_writer_t *w, const de_ep_terrain_layer *v);
+void de_ep_read_terrain_layer(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_layer *out);
+void de_ep_write_terrain_params(mpack_writer_t *w, const de_ep_terrain_params *v);
+void de_ep_read_terrain_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_params *out);
+void de_ep_write_terrain_sample(mpack_writer_t *w, const de_ep_terrain_sample *v);
+void de_ep_read_terrain_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample *out);
+void de_ep_write_terrain_sample_params(mpack_writer_t *w, const de_ep_terrain_sample_params *v);
+void de_ep_read_terrain_sample_params(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_sample_params *out);
+void de_ep_write_terrain_stroke(mpack_writer_t *w, const de_ep_terrain_stroke *v);
+void de_ep_read_terrain_stroke(mpack_reader_t *r, de_ep_arena *a, de_ep_terrain_stroke *out);
 void de_ep_write_tx_params(mpack_writer_t *w, const de_ep_tx_params *v);
 void de_ep_read_tx_params(mpack_reader_t *r, de_ep_arena *a, de_ep_tx_params *out);
 void de_ep_write_tx_result(mpack_writer_t *w, const de_ep_tx_result *v);
@@ -1975,6 +2081,9 @@ typedef enum de_ep_method {
     DE_EP_METHOD_SNAPSHOT_TAKE,
     DE_EP_METHOD_STATS_SUBSCRIBE,
     DE_EP_METHOD_SUBSCRIBE,
+    DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
+    DE_EP_METHOD_TERRAIN_INFO,
+    DE_EP_METHOD_TERRAIN_SAMPLE,
     DE_EP_METHOD_UNSUBSCRIBE,
     DE_EP_METHOD_VIEW_CREATE,
     DE_EP_METHOD_VIEW_DESTROY,
@@ -2190,6 +2299,12 @@ bool de_ep_read_params_stats_subscribe(const de_ep_request *req, de_ep_arena *a,
 void de_ep_write_response_stats_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_subscribe_params *out);
 void de_ep_write_response_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
+bool de_ep_read_params_terrain_export_heightmap(const de_ep_request *req, de_ep_arena *a, de_ep_heightmap_export_params *out);
+void de_ep_write_response_terrain_export_heightmap(mpack_writer_t *w, uint64_t id, const de_ep_path_result *result);
+bool de_ep_read_params_terrain_info(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_params *out);
+void de_ep_write_response_terrain_info(mpack_writer_t *w, uint64_t id, const de_ep_terrain_info *result);
+bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_sample_params *out);
+void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result);
 bool de_ep_read_params_unsubscribe(const de_ep_request *req, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_response_unsubscribe(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_create(const de_ep_request *req, de_ep_arena *a, de_ep_view_create_params *out);

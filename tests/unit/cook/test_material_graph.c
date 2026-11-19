@@ -215,6 +215,28 @@ TEST(material_graph, structural_errors_are_diagnosed) {
     EXPECT_EQ(de__mg_generate(NULL, &r), DE_ERR_INVALID_ARGUMENT);
 }
 
+/* DENG-773: DIDE names both subgraph boundary pins "value"; "in"/"out" stay valid. */
+TEST(material_graph, subgraph_boundary_accepts_value_pin_alias) {
+    static const char g[] =
+        HEADER "[[node]]\nid = \"n1\"\ntype = \"value.float\"\nvalues = { value = 0.25 }\n"
+               "[[node]]\nid = \"n4\"\ntype = \"subgraph\"\n"
+               "[node.graph]\n"
+               "[[node.graph.node]]\nid = \"n1\"\ntype = \"subgraph.input\"\n"
+               "[[node.graph.node]]\nid = \"n2\"\ntype = \"math.one_minus\"\n"
+               "[[node.graph.node]]\nid = \"n3\"\ntype = \"subgraph.output\"\n"
+               "[[node.graph.link]]\nfrom = \"n1.value\"\nto = \"n2.x\"\n"
+               "[[node.graph.link]]\nfrom = \"n2.out\"\nto = \"n3.value\"\n"
+               "[[node]]\nid = \"n6\"\ntype = \"output.base\"\n"
+               "[[link]]\nfrom = \"n1.out\"\nto = \"n4.n1\"\n"
+               "[[link]]\nfrom = \"n4.n3\"\nto = \"n6.roughness\"\n";
+    de__mg_result r;
+    de_result res = generate(g, &r);
+    if (res != DE_OK)
+        dump_diags(&r);
+    ASSERT_EQ(res, DE_OK);
+    de__mg_result_free(&r);
+}
+
 TEST(material_graph, subgraph_and_reroute_inline_with_paths) {
     static const char g[] =
         HEADER "[[node]]\nid = \"n1\"\ntype = \"value.float\"\nvalues = { value = 0.25 }\n"
