@@ -50,7 +50,7 @@ typedef struct ed_instance {
     u64 root;
     char asset[256];
     ed_base *base;
-    u32 base_count;
+    u32 base_count, base_cap;
     u8 *bytes;
     size_t byte_count;
 } ed_instance;
@@ -106,6 +106,25 @@ static void members_prune(de__editor *ed) {
         if (de_entity_alive(ed->e->world, (de_entity){g_scene.members[i].entity}))
             g_scene.members[k++] = g_scene.members[i];
     g_scene.member_count = k;
+}
+
+bool de__ed_scene_member(u64 entity, u64 *scene, u64 *sid) {
+    const ed_member *m = member_find(entity);
+    if (m == NULL)
+        return false;
+    *scene = m->scene;
+    *sid = m->sid;
+    return true;
+}
+
+bool de__ed_scene_member_set(u64 entity, u64 scene, u64 sid) {
+    return member_add(entity, scene, sid);
+}
+
+void de__ed_scene_member_drop(u64 entity) {
+    ed_member *m = member_find(entity);
+    if (m != NULL)
+        *m = g_scene.members[--g_scene.member_count];
 }
 
 static ed_scene *scene_find(u64 id);
@@ -749,8 +768,13 @@ static u32 tree_of(de__editor *ed, de_entity root, u64 *out, u32 cap) {
     return n;
 }
 
-/* "Component.field" values of every entity of the tree, as MessagePack, into `inst`. */
-static void instance_base(de__editor *ed, ed_instance *inst) {
+u32 de__ed_scene_tree(de__editor *ed, de_entity root, u64 *out, u32 cap) {
+    return tree_of(ed, root, out, cap);
+}
+
+/* "Component.field" values of every entity of the tree, as MessagePack, into `inst`. `scratch`
+ * is the free part of the caller's arena: what the caller keeps there stays. */
+static void instance_base(de__editor *ed, ed_instance *inst, const de_ep_arena *scratch) {
     const de_allocator *al = de_heap_allocator();
     u64 ents[1024];
     const u32 n = tree_of(ed, (de_entity){inst->root}, ents, 1024);
@@ -759,7 +783,7 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
     u32 cap = 64, count = 0;
     ed_base *base = (ed_base *)DE_ALLOC(al, sizeof(ed_base) * cap, 8, DE_MEM_GENERAL);
     for (u32 i = 0; i < n && base != NULL; ++i) {
-        de_ep_arena a = {ed->arena, ed->arena_cap, 0};
+        de_ep_arena a = *scratch;
         de_ep_entity_row row;
         if (!de__ed_entity_row(ed, &a, (de_entity){ents[i]}, NULL, NULL, &row))
             continue;
@@ -806,6 +830,7 @@ static void instance_base(de__editor *ed, ed_instance *inst) {
     }
     inst->base = base;
     inst->base_count = count;
+    inst->base_cap = base != NULL ? cap : 0;
     inst->bytes = bytes.data;
     inst->byte_count = bytes.capacity;
     /* The writer's buffer now belongs to the instance. */
@@ -823,70 +848,198 @@ static ed_instance *instance_of(de__editor *ed, u64 entity) {
     return NULL;
 }
 
-static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
-                           mpack_writer_t *w) {
-    DE__ED_PARAMS(prefab_instantiate, de_ep_prefab_instantiate_params, q);
-    de_asset_system *s = ed->e->assets;
-    char *asset = de__ed_cstr(a, q.asset);
-    if (s == NULL || asset == NULL) {
-        de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "no asset system");
-        return;
-    }
-    if (scene_find(q.scene) == NULL) {
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "scene %llu", (unsigned long long)q.scene);
-        return;
-    }
-    const de_asset_id id = de_asset_id_from(asset);
-    de_prefab p = de_asset_prefab(s, id);
-    if (!DE_HANDLE_VALID(p)) {
-        de_error_clear();
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "prefab %s", asset);
-        return;
-    }
-    de_load_handle lh = de_asset_load(s, id, 0);
-    if (de_asset_wait(s, lh, 10000000000ULL) != DE_LOAD_READY) {
-        de_asset_release(s, lh);
-        de__ed_error(w, req->id, DE_EP_ERR_NOT_FOUND, "prefab %s did not load", asset);
-        return;
-    }
-    de_entity root = DE_ENTITY_NULL;
-    const de_result r = de_prefab_instantiate(
-        s, ed->e->world, p, q.has_parent ? (de_entity){q.parent} : DE_ENTITY_NULL, &root);
-    de_asset_release(s, lh);
-    if (r != DE_OK) {
-        const de_error *e = de_error_last();
-        de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s",
-                     e != NULL ? e->message : "instantiate failed");
-        de_error_clear();
-        return;
-    }
-    u64 ents[1024];
-    const u32 n = tree_of(ed, root, ents, 1024);
-    for (u32 i = 0; i < n; ++i)
-        member_add(ents[i], q.scene, de_scene_id_new());
-    /* Remember the instance and its fields as instantiated. */
+static ed_instance *instance_push(void) {
     if (g_scene.instance_count == g_scene.instance_cap) {
         const de_allocator *al = de_heap_allocator();
         const u32 cap = g_scene.instance_cap ? g_scene.instance_cap * 2 : 16;
         ed_instance *grown =
             (ed_instance *)DE_ALLOC(al, sizeof(ed_instance) * cap, 8, DE_MEM_GENERAL);
-        if (grown != NULL) {
-            if (g_scene.instances != NULL) {
-                memcpy(grown, g_scene.instances, sizeof(ed_instance) * g_scene.instance_count);
-                DE_FREE(al, g_scene.instances, sizeof(ed_instance) * g_scene.instance_cap);
-            }
-            g_scene.instances = grown;
-            g_scene.instance_cap = cap;
+        if (grown == NULL)
+            return NULL;
+        if (g_scene.instances != NULL) {
+            memcpy(grown, g_scene.instances, sizeof(ed_instance) * g_scene.instance_count);
+            DE_FREE(al, g_scene.instances, sizeof(ed_instance) * g_scene.instance_cap);
         }
+        g_scene.instances = grown;
+        g_scene.instance_cap = cap;
     }
-    if (g_scene.instance_count < g_scene.instance_cap) {
-        ed_instance *inst = &g_scene.instances[g_scene.instance_count++];
-        memset(inst, 0, sizeof *inst);
-        inst->root = root.bits;
+    ed_instance *inst = &g_scene.instances[g_scene.instance_count++];
+    memset(inst, 0, sizeof *inst);
+    return inst;
+}
+
+static ed_instance *instance_rooted(u64 root) {
+    for (u32 i = 0; i < g_scene.instance_count; ++i)
+        if (g_scene.instances[i].root == root)
+            return &g_scene.instances[i];
+    return NULL;
+}
+
+bool de__ed_prefab_spawn(de__editor *ed, de_ep_arena *a, const char *asset, u64 scene,
+                         de_entity parent, de_entity *root, de_ep_error *code, char *msg,
+                         size_t msg_cap) {
+    de_asset_system *s = ed->e->assets;
+    *root = DE_ENTITY_NULL;
+    if (s == NULL || asset == NULL) {
+        *code = DE_EP_ERR_UNSUPPORTED;
+        snprintf(msg, msg_cap, "no asset system");
+        return false;
+    }
+    if (scene_find(scene) == NULL) {
+        *code = DE_EP_ERR_NOT_FOUND;
+        snprintf(msg, msg_cap, "scene %llu", (unsigned long long)scene);
+        return false;
+    }
+    const de_asset_id id = de_asset_id_from(asset);
+    de_prefab p = de_asset_prefab(s, id);
+    if (!DE_HANDLE_VALID(p)) {
+        de_error_clear();
+        *code = DE_EP_ERR_NOT_FOUND;
+        snprintf(msg, msg_cap, "prefab %s", asset);
+        return false;
+    }
+    de_load_handle lh = de_asset_load(s, id, 0);
+    if (de_asset_wait(s, lh, 10000000000ULL) != DE_LOAD_READY) {
+        de_asset_release(s, lh);
+        *code = DE_EP_ERR_NOT_FOUND;
+        snprintf(msg, msg_cap, "prefab %s did not load", asset);
+        return false;
+    }
+    const de_result r = de_prefab_instantiate(s, ed->e->world, p, parent, root);
+    de_asset_release(s, lh);
+    if (r != DE_OK) {
+        const de_error *e = de_error_last();
+        *code = DE_EP_ERR_INVALID_PARAMS;
+        snprintf(msg, msg_cap, "%s", e != NULL ? e->message : "instantiate failed");
+        de_error_clear();
+        return false;
+    }
+    u64 ents[1024];
+    const u32 n = tree_of(ed, *root, ents, 1024);
+    for (u32 i = 0; i < n; ++i)
+        member_add(ents[i], scene, de_scene_id_new());
+    /* Remember the instance and its fields as instantiated. */
+    ed_instance *inst = instance_push();
+    if (inst != NULL) {
+        inst->root = root->bits;
         snprintf(inst->asset, sizeof inst->asset, "%s", asset);
-        instance_base(ed, inst);
+        /* Scratch past what the caller keeps, 16-byte aligned like the arena's own. */
+        const size_t at = (a->used + 15u) & ~(size_t)15u;
+        const de_ep_arena scratch = {a->base + at, at < a->size ? a->size - at : 0, 0};
+        instance_base(ed, inst, &scratch);
     }
     de__ed_world_touch(ed);
+    return true;
+}
+
+const char *de__ed_prefab_instance_asset(u64 root) {
+    const ed_instance *inst = instance_rooted(root);
+    return inst != NULL ? inst->asset : NULL;
+}
+
+void de__ed_prefab_instance_write_base(u64 root, mpack_writer_t *w) {
+    const ed_instance *inst = instance_rooted(root);
+    const u32 n = inst != NULL ? inst->base_count : 0;
+    mpack_start_array(w, n);
+    for (u32 i = 0; i < n; ++i) {
+        const ed_base *b = &inst->base[i];
+        mpack_start_map(w, 3);
+        mpack_write_cstr(w, "entity");
+        mpack_write_u64(w, b->entity);
+        mpack_write_cstr(w, "path");
+        mpack_write_cstr(w, b->path);
+        mpack_write_cstr(w, "value");
+        mpack_write_object_bytes(w, (const char *)inst->bytes + b->off, b->len);
+        mpack_finish_map(w);
+    }
+    mpack_finish_array(w);
+}
+
+void de__ed_prefab_instance_drop(u64 root) {
+    ed_instance *inst = instance_rooted(root);
+    if (inst == NULL)
+        return;
+    const de_allocator *al = de_heap_allocator();
+    if (inst->base != NULL)
+        DE_FREE(al, inst->base, sizeof(ed_base) * inst->base_cap);
+    if (inst->bytes != NULL)
+        DE_FREE(al, inst->bytes, inst->byte_count);
+    const u32 i = (u32)(inst - g_scene.instances);
+    memmove(inst, inst + 1, sizeof(ed_instance) * (g_scene.instance_count - i - 1));
+    --g_scene.instance_count;
+}
+
+bool de__ed_prefab_instance_restore(u64 root, const char *asset, const char *base, size_t len) {
+    const de_allocator *al = de_heap_allocator();
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, base, len);
+    const u32 n = mpack_expect_array_max(&r, 1u << 20);
+    ed_base *b = n ? (ed_base *)DE_ALLOC(al, sizeof(ed_base) * n, 8, DE_MEM_GENERAL) : NULL;
+    u8 *bytes = len ? (u8 *)DE_ALLOC(al, len, 8, DE_MEM_GENERAL) : NULL;
+    size_t used = 0;
+    u32 count = 0;
+    if ((n && b == NULL) || (len && bytes == NULL))
+        mpack_reader_flag_error(&r, mpack_error_memory);
+    for (u32 i = 0; i < n && mpack_reader_error(&r) == mpack_ok; ++i) {
+        ed_base *e = &b[count];
+        memset(e, 0, sizeof *e);
+        bool has_value = false;
+        const u32 keys = mpack_expect_map(&r);
+        for (u32 k = 0; k < keys && mpack_reader_error(&r) == mpack_ok; ++k) {
+            char key[16];
+            mpack_expect_cstr(&r, key, sizeof key);
+            if (strcmp(key, "entity") == 0) {
+                e->entity = mpack_expect_u64(&r);
+            } else if (strcmp(key, "path") == 0) {
+                mpack_expect_cstr(&r, e->path, sizeof e->path);
+            } else if (strcmp(key, "value") == 0) {
+                const char *begin = r.data;
+                mpack_discard(&r);
+                if (mpack_reader_error(&r) == mpack_ok && r.data > begin) {
+                    e->off = (u32)used;
+                    e->len = (u32)(r.data - begin);
+                    memcpy(bytes + used, begin, e->len);
+                    used += e->len;
+                    has_value = true;
+                }
+            } else {
+                mpack_discard(&r);
+            }
+        }
+        mpack_done_map(&r);
+        count += has_value;
+    }
+    mpack_done_array(&r);
+    ed_instance *inst = mpack_reader_destroy(&r) == mpack_ok ? instance_push() : NULL;
+    if (inst == NULL) {
+        if (b != NULL)
+            DE_FREE(al, b, sizeof(ed_base) * n);
+        if (bytes != NULL)
+            DE_FREE(al, bytes, len);
+        return false;
+    }
+    inst->root = root;
+    snprintf(inst->asset, sizeof inst->asset, "%s", asset);
+    inst->base = b;
+    inst->base_count = count;
+    inst->base_cap = b != NULL ? n : 0;
+    inst->bytes = bytes;
+    inst->byte_count = bytes != NULL ? len : 0;
+    return true;
+}
+
+static void on_instantiate(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                           mpack_writer_t *w) {
+    DE__ED_PARAMS(prefab_instantiate, de_ep_prefab_instantiate_params, q);
+    de_entity root;
+    de_ep_error code = DE_EP_OK;
+    char msg[256];
+    if (!de__ed_prefab_spawn(ed, a, de__ed_cstr(a, q.asset), q.scene,
+                             q.has_parent ? (de_entity){q.parent} : DE_ENTITY_NULL, &root, &code,
+                             msg, sizeof msg)) {
+        de__ed_error(w, req->id, code, "%s", msg);
+        return;
+    }
     de_ep_entity_result_one res = {root.bits};
     de_ep_write_response_prefab_instantiate(w, req->id, &res);
 }

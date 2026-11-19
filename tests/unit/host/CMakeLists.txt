@@ -453,6 +453,9 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_service SOURCES test_editor_service.c
         LIBS de_host de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_service PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-764: the crate prefab for transactional instantiate.
+    target_compile_definitions(test_editor_service PRIVATE
+        DE_EDITOR_PREFAB_DATA_DIR="${DE_ROOT_DIR}/tests/unit/asset/data/scenes")
 endif()
 # DENG-730: always exercise protocol raw slices with MPack compound tracking,
 # including Dev/Release hosts where the ordinary protocol library omits it.
