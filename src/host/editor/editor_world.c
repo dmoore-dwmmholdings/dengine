@@ -88,7 +88,8 @@ static bool arch_has(const ecs_archetype *a, u32 comp) {
 static u32 row_rev(const ecs_archetype *a, const ecs_chunk *ch, u32 row) {
     u32 rev = 0;
     for (u32 c = 0; c < a->column_count; ++c) {
-        const u32 added = ecs_chunk_added(a, ch, c)[row], changed = ecs_chunk_changed(a, ch, c)[row];
+        const u32 added = ecs_chunk_added(a, ch, c)[row],
+                  changed = ecs_chunk_changed(a, ch, c)[row];
         if (added > rev)
             rev = added;
         if (changed > rev)
@@ -199,9 +200,10 @@ static bool row_of(de__editor *ed, de_ep_arena *a, const ecs_archetype *arch, co
             if (components != NULL && components->count > 0 && !name_in(components, ci->name))
                 continue;
             const u32 col = arch->column_of[i];
-            const void *data = col == ECS_INVALID_INDEX
-                                   ? NULL
-                                   : (const u8 *)ecs_chunk_column(arch, ch, col) + (size_t)row * ci->size;
+            const void *data =
+                col == ECS_INVALID_INDEX
+                    ? NULL
+                    : (const u8 *)ecs_chunk_column(arch, ch, col) + (size_t)row * ci->size;
             kv[n].key = de_ep_cstr(ci->name);
             kv[n++].value = component_raw(ed, a, ci, data);
         }
@@ -280,7 +282,8 @@ static void on_query(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         after = strtoull(buf, NULL, 10);
     }
     const de_world *wd = W(ed);
-    de_ep_entity_row *rows = (de_ep_entity_row *)de__ed_alloc(a, sizeof(de_ep_entity_row) * (q.limit + 1));
+    de_ep_entity_row *rows =
+        (de_ep_entity_row *)de__ed_alloc(a, sizeof(de_ep_entity_row) * (q.limit + 1));
     if (rows == NULL) {
         de__ed_error(w, req->id, DE_EP_ERR_BUSY, "world.query: page too large for scratch memory");
         return;
@@ -382,14 +385,16 @@ static void on_archetypes(de__editor *ed, const de_ep_request *req, de_ep_arena 
     const de_world *wd = W(ed);
     de_ep_archetype_list list;
     memset(&list, 0, sizeof list);
-    list.archetypes.items = (de_ep_archetype *)de__ed_alloc(a, sizeof(de_ep_archetype) * (wd->archetypes.count + 1));
+    list.archetypes.items =
+        (de_ep_archetype *)de__ed_alloc(a, sizeof(de_ep_archetype) * (wd->archetypes.count + 1));
     for (u32 ai = 0; ai < wd->archetypes.count && list.archetypes.items != NULL; ++ai) {
         const ecs_archetype *arch = arch_at(wd, ai);
         if (arch->count == 0)
             continue;
         de_ep_archetype *o = &list.archetypes.items[list.archetypes.count++];
         memset(o, 0, sizeof *o);
-        o->components.items = (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (arch->component_count + 1));
+        o->components.items =
+            (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (arch->component_count + 1));
         for (u32 i = 0; i < arch->component_count && o->components.items != NULL; ++i) {
             const ecs_component_info *ci = ecs_component_get(wd, arch->components[i]);
             if (ci != NULL && ci->name != NULL)
@@ -423,11 +428,13 @@ static de_ep_list_str access_names(de__editor *ed, de_ep_arena *a, const ecs_acc
             const ecs_component_info *ci = ecs_component_get(wd, items[i].id);
             name = ci ? ci->name : NULL;
         } else if (kind == 1 && items[i].id >= 1 && items[i].id <= wd->resources.count) {
-            const ecs_resource *res = (const ecs_resource *)de_array_at(&wd->resources, items[i].id - 1u);
+            const ecs_resource *res =
+                (const ecs_resource *)de_array_at(&wd->resources, items[i].id - 1u);
             const de_type_desc *d = de_type_get(r, res->type);
             name = d ? d->name : NULL;
         } else if (kind == 2 && items[i].id >= 1 && items[i].id <= wd->events.count) {
-            const ecs_event_queue *eq = (const ecs_event_queue *)de_array_at(&wd->events, items[i].id - 1u);
+            const ecs_event_queue *eq =
+                (const ecs_event_queue *)de_array_at(&wd->events, items[i].id - 1u);
             const de_type_desc *d = de_type_get(r, eq->payload);
             name = d ? d->name : NULL;
         }
@@ -437,7 +444,8 @@ static de_ep_list_str access_names(de__editor *ed, de_ep_arena *a, const ecs_acc
     return l;
 }
 
-static void on_systems(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+static void on_systems(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
+                       mpack_writer_t *w) {
     de_world *wd = W(ed);
     const ecs_system_registry *reg = wd->systems;
     de_ep_system_list list;
@@ -446,7 +454,8 @@ static void on_systems(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
         de_ep_write_response_world_systems(w, req->id, &list);
         return;
     }
-    list.systems.items = (de_ep_system_info *)de__ed_alloc(a, sizeof(de_ep_system_info) * (reg->slots.count + 1));
+    list.systems.items =
+        (de_ep_system_info *)de__ed_alloc(a, sizeof(de_ep_system_info) * (reg->slots.count + 1));
     for (u32 s = 0; s < DE_SCHEDULE_COUNT_ && list.systems.items != NULL; ++s) {
         const ecs_schedule_state *st = &reg->schedules[s];
         ecs_system *const *sys = (ecs_system *const *)st->systems.data;
@@ -480,13 +489,17 @@ static void on_systems(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
             /* The systems before it in the schedule's last-built DAG. */
             o->has_after = true;
             const ecs_sched_edge *edges = (const ecs_sched_edge *)st->edges.data;
-            o->after.items = (de_ep_str *)de__ed_alloc(a, sizeof(de_ep_str) * (st->edges.count + x->after_count + 1));
+            o->after.items = (de_ep_str *)de__ed_alloc(
+                a, sizeof(de_ep_str) * (st->edges.count + x->after_count + 1));
             for (u32 k = 0; k < st->edges.count && o->after.items != NULL; ++k)
-                if (edges[k].to == i && edges[k].from < st->systems.count && sys[edges[k].from]->name)
+                if (edges[k].to == i && edges[k].from < st->systems.count &&
+                    sys[edges[k].from]->name)
                     o->after.items[o->after.count++] = de_ep_cstr(sys[edges[k].from]->name);
             o->has_resource_reads = o->has_resource_writes = true;
-            o->resource_reads = access_names(ed, a, x->access.resources, x->access.resource_count, 1, 0);
-            o->resource_writes = access_names(ed, a, x->access.resources, x->access.resource_count, 1, 1);
+            o->resource_reads =
+                access_names(ed, a, x->access.resources, x->access.resource_count, 1, 0);
+            o->resource_writes =
+                access_names(ed, a, x->access.resources, x->access.resource_count, 1, 1);
             o->has_event_reads = o->has_event_writes = true;
             o->event_reads = access_names(ed, a, x->access.events, x->access.event_count, 2, 0);
             o->event_writes = access_names(ed, a, x->access.events, x->access.event_count, 2, 1);
@@ -522,7 +535,8 @@ static void on_resources(de__editor *ed, const de_ep_request *req, de_ep_arena *
     const de_world *wd = W(ed);
     de_ep_resource_list list;
     memset(&list, 0, sizeof list);
-    list.resources.items = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (wd->resources.count + 1));
+    list.resources.items =
+        (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (wd->resources.count + 1));
     for (u32 i = 0; i < wd->resources.count && list.resources.items != NULL; ++i) {
         const ecs_resource *res = (const ecs_resource *)de_array_at(&wd->resources, i);
         const de_type_desc *d = de_type_get(ed->e->types, res->type);
@@ -548,7 +562,8 @@ static void on_events(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
         const ecs_event_queue *eq = (const ecs_event_queue *)de_array_at(&wd->events, i);
         cap += eq->buf[0].count + eq->buf[1].count;
     }
-    list.events.items = (de_ep_event_record *)de__ed_alloc(a, sizeof(de_ep_event_record) * (cap + 1));
+    list.events.items =
+        (de_ep_event_record *)de__ed_alloc(a, sizeof(de_ep_event_record) * (cap + 1));
     const u64 frame = de__ed_frame(ed);
     for (u32 i = 0; i < wd->events.count && list.events.items != NULL; ++i) {
         const ecs_event_queue *eq = (const ecs_event_queue *)de_array_at(&wd->events, i);
@@ -565,7 +580,8 @@ static void on_events(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
             for (u32 k = 0; k < buf->count; ++k) {
                 mpack_writer_t mw;
                 de__ed_raw_begin(a, &mw);
-                de__ed_write_object(ed, &mw, eq->payload, (const u8 *)buf->data + (size_t)k * eq->size);
+                de__ed_write_object(ed, &mw, eq->payload,
+                                    (const u8 *)buf->data + (size_t)k * eq->size);
                 de_ep_event_record *o = &list.events.items[list.events.count++];
                 o->frame = at;
                 o->type = de_ep_cstr(d->name);
@@ -593,9 +609,10 @@ static void sub_free(ed_world_sub *s) {
     memset(s, 0, sizeof *s);
 }
 
+static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since);
+
 static void on_subscribe(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                          mpack_writer_t *w) {
-    (void)ed;
     DE__ED_PARAMS(subscribe, de_ep_subscribe_params, q);
     if (!de_ep_str_eq(q.topic, DE_EP_TOPIC_WORLD_DELTA)) {
         de__ed_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "subscribe to %.*s", (int)q.topic.len,
@@ -636,6 +653,10 @@ static void on_subscribe(de__editor *ed, const de_ep_request *req, de_ep_arena *
         }
         mpack_tree_destroy(&tree);
     }
+    /* Prime now, not at the next tick: requests queued behind this one apply in the same frame,
+     * and a spawn among them must reach the subscriber as a spawn (DIDE-358). */
+    sub_delta(ed, s, 0);
+    s->since = ecs_change_tick_advance(W(ed));
     de_ep_subscribe_result r = {s->id};
     de_ep_write_response_subscribe(w, req->id, &r);
 }
@@ -679,6 +700,17 @@ static int cmp_u64(const void *x, const void *y) {
     return a < b ? -1 : a > b;
 }
 
+/* An entity an open transaction spawned, or one below it (a prefab instance's children). */
+static bool held_by_open_tx(const de_world *wd, const u64 *held, u32 n_held, u64 bits) {
+    de_entity e = {bits};
+    for (u32 depth = 0; depth < 64 && e.bits != 0; ++depth) {
+        if (bsearch(&e.bits, held, n_held, sizeof(u64), cmp_u64) != NULL)
+            return true;
+        e = de_entity_parent(wd, e);
+    }
+    return false;
+}
+
 static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since) {
     const de_world *wd = W(ed);
     const bool prime = s->prime;
@@ -699,10 +731,22 @@ static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since) {
     for (u32 ai = 0; ai < wd->archetypes.count; ++ai)
         total += arch_at(wd, ai)->count;
     u64 *now_set = (u64 *)de__ed_alloc(&a, sizeof(u64) * (total + 1));
-    de_ep_entity_row *spawned = (de_ep_entity_row *)de__ed_alloc(&a, sizeof(de_ep_entity_row) * (total + 1));
-    de_ep_field_change *changed = (de_ep_field_change *)de__ed_alloc(&a, sizeof(de_ep_field_change) * (total * 4 + 1));
+    de_ep_entity_row *spawned =
+        (de_ep_entity_row *)de__ed_alloc(&a, sizeof(de_ep_entity_row) * (total + 1));
+    de_ep_field_change *changed =
+        (de_ep_field_change *)de__ed_alloc(&a, sizeof(de_ep_field_change) * (total * 4 + 1));
     if (now_set == NULL || spawned == NULL || changed == NULL)
         return;
+    /* Spawns of open transactions wait for their commit (DIDE-358). */
+    u32 n_held = de__ed_edit_open_spawns(NULL, 0);
+    u64 *held = NULL;
+    if (n_held != 0) {
+        held = (u64 *)de__ed_alloc(&a, sizeof(u64) * n_held);
+        if (held == NULL)
+            return;
+        (void)de__ed_edit_open_spawns(held, n_held);
+        qsort(held, n_held, sizeof(u64), cmp_u64);
+    }
     u32 n_now = 0, n_sp = 0, n_ch = 0;
     for (u32 ai = 0; ai < wd->archetypes.count; ++ai) {
         const ecs_archetype *arch = arch_at(wd, ai);
@@ -717,7 +761,8 @@ static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since) {
             const ecs_chunk *ch = ecs_table_chunk(arch, ci);
             for (u32 r = 0; r < ch->count; ++r) {
                 const u64 bits = ecs_chunk_entities(ch)[r].bits;
-                if (de__ed_views_owns(bits))
+                if (de__ed_views_owns(bits) || (n_held != 0 && (s->resync || !known_has(s, bits)) &&
+                                                held_by_open_tx(wd, held, n_held, bits)))
                     continue;
                 now_set[n_now++] = bits;
                 if (s->resync || !known_has(s, bits)) {
@@ -737,16 +782,19 @@ static void sub_delta(de__editor *ed, ed_world_sub *s, u32 since) {
                     const ecs_component_info *cinfo = ecs_component_get(wd, arch->components[i]);
                     if (cinfo == NULL || cinfo->name == NULL)
                         continue;
-                    const u8 *data = (const u8 *)ecs_chunk_column(arch, ch, col) + (size_t)r * cinfo->size;
+                    const u8 *data =
+                        (const u8 *)ecs_chunk_column(arch, ch, col) + (size_t)r * cinfo->size;
                     u32 fc = 0;
                     const de_field_info *fields = de_type_fields(ed->e->types, cinfo->type, &fc);
-                    de_ep_kv_raw *kv = (de_ep_kv_raw *)de__ed_alloc(&a, sizeof(de_ep_kv_raw) * (fc + 1));
+                    de_ep_kv_raw *kv =
+                        (de_ep_kv_raw *)de__ed_alloc(&a, sizeof(de_ep_kv_raw) * (fc + 1));
                     if (kv == NULL)
                         break;
                     for (u32 f = 0; f < fc; ++f) {
                         mpack_writer_t mw;
                         de__ed_raw_begin(&a, &mw);
-                        de__ed_write_field(ed, &mw, cinfo->type, f, &fields[f], data + fields[f].offset);
+                        de__ed_write_field(ed, &mw, cinfo->type, f, &fields[f],
+                                           data + fields[f].offset);
                         kv[f].key = de_ep_cstr(fields[f].name);
                         kv[f].value = de__ed_raw_end(&a, &mw);
                     }

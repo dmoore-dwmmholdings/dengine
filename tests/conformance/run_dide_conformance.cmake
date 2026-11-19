@@ -1,5 +1,5 @@
 # Runs the DIDE editor-IPC conformance suite (dide crate dide-conformance) against a game and
-# fails on any failed check that is not a known, tracked gap below (DENG-783).
+# fails on any failed check that is not a known, tracked gap below (DENG-783, DENG-784).
 #   -DRUNNER=<dide-conformance> -DGAME=<game executable> -DLOG=<output file>
 # The runner starts the game itself with --editor-service.
 foreach(_v RUNNER GAME LOG)
@@ -12,14 +12,9 @@ execute_process(COMMAND "${RUNNER}" -- "${GAME}"
                 OUTPUT_FILE "${LOG}" ERROR_FILE "${LOG}.err" TIMEOUT 600 RESULT_VARIABLE _rc)
 file(STRINGS "${LOG}" _lines REGEX "^(ok|FAIL|skip) +|editor IPC [0-9.]+ .*passed")
 
-# Checks that fail for reasons outside the engine's protocol behaviour, each with its issue.
-set(_known
-  # The suite's catalog sweep has no requests for the replay.* methods (DIDE-357).
-  "catalog: every method answers per the IDL: the sweep has no request for: replay"
-  # The suite expects a first world.delta with the whole world; the IDL does not (DIDE-358).
-  "deltas: a subscription sends the world"
-  # IPC is serviced once per frame; the spec's service thread is DENG-784.
-  "performance: a small read round trip under 2 ms")
+# Checks that fail for reasons outside the engine's protocol behaviour, each with its issue. None
+# are open: DENG-784 removed the last three (DIDE-357, DIDE-358 and the 2 ms small-read round trip).
+set(_known "")
 
 set(_summary "")
 set(_bad "")

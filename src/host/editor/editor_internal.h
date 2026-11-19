@@ -3,8 +3,10 @@
  * `--editor-service <endpoint>` and the session token in DE_EDITOR_TOKEN; the service listens
  * there, and DIDE connects and speaks the editor IPC (third_party/dide_protocol, the DIDE IDL).
  *
- * Everything runs on the main thread: a frame-begin hook polls the connection, so requests are
- * handled between frames, where the world can be read and edited safely. Each area registers
+ * The connection runs on its own service thread (editor_ipc.h, DENG-784): it answers the small
+ * reads (`ping`, `session.info`) from a frame-boundary copy and queues every other request. A
+ * frame-begin hook applies the queued requests between frames, where the world can be read and
+ * edited safely; all fields below are frame-thread only. Each area registers
  * its method handlers in `de__editor.handlers`; a method nobody handles answers `unsupported`.
  *
  * Include as "host/editor/editor_internal.h". Internal to src/host/.
@@ -38,13 +40,8 @@ struct de__editor {
     de_engine *e;
     de_log_category log;
 
-    de_ep_listener listener;
-    de_ep_conn conn;
+    struct de__ed_ipc *ipc; /**< the service thread: listener, connection, second-IDE refusal */
     bool connected, authed;
-    /* A second client while one is live: it gets `conflict` for its first request, then is closed. */
-    de_ep_conn rival;
-    bool rival_open;
-    u64 rival_since_ns;
     bool reload_outcomes; /**< negotiated peer understands optional reload failure (IPC >= 1.6) */
     /** The agreed protocol version (hello); 0.0 before a hello. DENG-785 gates the 1.15 ui.editor
      * methods and PickResult.uiStack on it. */
@@ -56,8 +53,6 @@ struct de__editor {
     u64 grace_ns;      /**< quit after this long without a connection */
     u64 blob_next;     /**< next blob id */
 
-    char *in;
-    size_t in_cap; /**< one received frame */
     char *out;
     size_t out_cap; /**< the response being written */
     char *note;
@@ -235,6 +230,8 @@ de_component de__ed_component(de__editor *ed, de_ep_str name);
 bool de__ed_component_type(de__editor *ed, de_component c, de_type_id *type, u32 *size);
 /** Marks the world changed so the next world.delta sees the editor's own writes. */
 void de__ed_world_touch(de__editor *ed);
+/** The entities spawned by open edit transactions; fills up to `cap`, returns the count. */
+u32 de__ed_edit_open_spawns(u64 *out, u32 cap);
 /** Forces the next world.delta of every subscription to be a full resync. */
 void de__ed_world_resync(de__editor *ed);
 
@@ -293,8 +290,8 @@ u32 de__ed_ui_pick(de__editor *ed, f32 x, f32 y, const f64 *origin, const f32 *d
                    de__ed_ui_hit *out, u32 capacity);
 /** Sets PickResult.uiStack from `n` hits (absent when n is 0). `items` holds `n` entries and
  * must outlive the write; each item's rect points into its hit. */
-static inline void de__ed_pick_set_ui_stack(de_ep_pick_result *r, const de__ed_ui_hit *hits,
-                                            u32 n, de_ep_ui_pick_hit *items) {
+static inline void de__ed_pick_set_ui_stack(de_ep_pick_result *r, const de__ed_ui_hit *hits, u32 n,
+                                            de_ep_ui_pick_hit *items) {
     r->has_ui_stack = n > 0;
     r->ui_stack.items = n > 0 ? items : NULL;
     r->ui_stack.count = n;

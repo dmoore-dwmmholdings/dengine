@@ -102,6 +102,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE
         editor/editor_internal.h
         editor/editor.c
+        editor/editor_ipc.c
+        editor/editor_ipc.h
         editor/editor_session.c
         editor/editor_value.c
         editor/editor_reflect.c
