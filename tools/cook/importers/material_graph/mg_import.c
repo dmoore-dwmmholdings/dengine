@@ -469,9 +469,9 @@ static de_result write_material(de_asset_import_ctx *ctx, const char *path, cons
         de_asset_import_setting_bool(ctx, "double_sided", false) ? DE_COOKED_MAT_DOUBLE_SIDED : 0u;
 
     const u32 total = DE_COOKED_MATERIAL_HEADER_SIZE + DE_COOKED_MATERIAL_PARAMS_SIZE +
-                      tex_count * DE_COOKED_MATERIAL_TEX_SIZE;
+                      tex_count * DE_COOKED_MATERIAL_TEX_SIZE + DE_COOKED_MATERIAL_TRAILER_SIZE;
     u8 b[DE_COOKED_MATERIAL_HEADER_SIZE + DE_COOKED_MATERIAL_PARAMS_SIZE +
-         DE_COOKED_TEX_COUNT * DE_COOKED_MATERIAL_TEX_SIZE];
+         DE_COOKED_TEX_COUNT * DE_COOKED_MATERIAL_TEX_SIZE + DE_COOKED_MATERIAL_TRAILER_SIZE];
     memset(b, 0, sizeof b);
     memcpy(b, DE_COOKED_MATERIAL_MAGIC, 4);
     de_cooked_put_u32(b + 4, DE_COOKED_MATERIAL_VERSION);
@@ -492,6 +492,8 @@ static de_result write_material(de_asset_import_ctx *ctx, const char *path, cons
         de_cooked_put_u64(t + 8, de_asset_id_from(tex[s].asset).hash);
         t += DE_COOKED_MATERIAL_TEX_SIZE;
     }
+    /* The trailer (DENG-774): the graph asset itself, loaded with the material. */
+    de_cooked_put_u64(t, de_asset_import_id(ctx).hash);
     de_result r =
         de_asset_import_add_subasset(ctx, DE_COOKED_MATERIAL_GRAPH_MATERIAL, "material", b, total);
     if (r != DE_OK)

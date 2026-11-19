@@ -95,9 +95,6 @@ typedef struct mg_opts {
     u32 samples;
     u32 rt_effect;
     bool base_fallback;
-    /** An asset loaded before the scene and kept: a material graph, whose `#material` the scene
-     * names (a material does not load its graph; DENG-770). */
-    const char *preload;
 } mg_opts;
 
 #if DE_GOLDEN_COOK && MG_RUNTIME_COOKS
@@ -122,7 +119,6 @@ typedef struct mg {
     u64 fence_value;
     de_view view;
     de_load_handle scene_load;
-    de_load_handle preload;
     de_load_handle model_load[MG_MODEL_COUNT];
     u32 pitch;
     u8 *now, *prev;
@@ -329,8 +325,6 @@ static void mg_close(mg *m) {
         mg_cvar("r.refraction", m->saved_refraction ? "1" : "0");
     if (m->assets != NULL && DE_HANDLE_VALID(m->scene_load))
         de_asset_release(m->assets, m->scene_load);
-    if (m->assets != NULL && DE_HANDLE_VALID(m->preload))
-        de_asset_release(m->assets, m->preload);
     for (u32 i = 0; m->assets != NULL && i < MG_MODEL_COUNT; ++i)
         if (DE_HANDLE_VALID(m->model_load[i]))
             de_asset_release(m->assets, m->model_load[i]);
@@ -560,13 +554,6 @@ static void mg_run(de_golden_ctx *ctx, const mg_opts *o) {
         mg_close(&m);
         return;
     }
-    if (o->preload != NULL) {
-        m.preload = de_asset_load(m.assets, de_asset_id_from(o->preload), 0);
-        if (!mg_wait(&m, m.preload, o->preload, t0)) {
-            mg_close(&m);
-            return;
-        }
-    }
     const de_asset_id id = de_asset_id_from(o->scene);
     m.scene_load = de_asset_load(m.assets, id, 0);
     if (!mg_wait(&m, m.scene_load, o->scene, t0)) {
@@ -717,7 +704,7 @@ DE_GOLDEN_SCENE(materials_khr_samples) {
 }
 
 DE_GOLDEN_SCENE(materials_graph) {
-    mg_run(ctx, &(mg_opts){.scene = "scenes/graph", .preload = "graph/noise_rough"});
+    mg_run(ctx, &(mg_opts){.scene = "scenes/graph"});
 }
 
 DE_GOLDEN_SCENE(materials_layers_furnace) {
