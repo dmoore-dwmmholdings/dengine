@@ -100,6 +100,10 @@ typedef struct de_ui_style_system {
     de_ui_property_tween *tweens;
     u64 revision;
     de_name theme;
+    /* DENG-781: the compiled theme's name, the game's de_ui_set_theme choice, and whether an
+     * editor preview (de_ui_preview_theme) holds the compiled theme. */
+    char theme_active[DE_UI_THEME_NAME_MAX], theme_selected[DE_UI_THEME_NAME_MAX];
+    bool theme_previewing;
     de_component widget;
     de_query nodes;
     de_system system;
@@ -124,6 +128,9 @@ de_result de_ui__style_asset_register(de_asset_system *assets);
 void de_ui__sheets_refresh(de_ui_style_system *state);
 void de_ui__sheets_shutdown(de_ui_style_system *state);
 de_result de_ui__compile_sheet(de_ui_style_system *state, de_ui_style_sheet_slot *slot);
+/* DENG-781: whether a loaded sheet has [theme.<name>]. */
+bool de_ui__theme_declared(const de_ui_style_system *state, const char *name);
+de_result de_ui__apply_theme(de_ui_style_system *state, const char *name);
 de_result de_ui__tween_path(de_ui *ui, de_entity entity, const char *property, f32 to, f32 seconds,
                             de_ui_easing easing);
 f32 de_ui__ease(de_ui_easing easing, f32 progress);

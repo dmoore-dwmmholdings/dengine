@@ -15,6 +15,12 @@ de_str de__loc_lookup(const de__loc *loc, de_name id);
 u32 de__loc_format(const de__loc *loc, de_name id, const de_loc_arg *args, u32 count, char *out,
                    u32 capacity);
 void de__loc_pseudo(de__loc *loc, bool enabled);
+/* DENG-781: editor preview and inspection; main thread. */
+de_result de__loc_preview_locale(de__loc *loc, const char *locale);
+de_result de__loc_state(const de__loc *loc, de_loc_locale_state *out);
+de_result de__loc_list_locales(const de__loc *loc, de_loc_locale_info *out, u32 capacity,
+                               u32 *count);
+de_result de__loc_read_strings(const de__loc *loc, de_loc_string *out, u32 capacity, u32 *count);
 de_result de__loc_register(de_asset_system *assets);
 bool de__loc_valid_locale(const char *locale);
 /* All formatting and validation are bounded, reentrant and allocation-free. */

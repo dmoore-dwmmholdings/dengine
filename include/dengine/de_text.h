@@ -189,5 +189,44 @@ DE_API de_result de_loc_set_default_locale(de_text_system *t, const char *locale
 /** Increments once when a ready locale/pseudo table set is published. */
 DE_API u64 de_loc_generation(const de_text_system *t);
 
+/* ---- Locale inspection and editor preview (DENG-781) ----
+ * Main thread, between text updates. Each reads the published (active) locale set. */
+#define DE_LOC_LOCALE_MAX 36u
+typedef struct de_loc_locale_info {
+    char locale[DE_LOC_LOCALE_MAX];
+    u32 tables; /* string_table assets that have this locale */
+} de_loc_locale_info;
+/** Writes the locales of the published string tables, without duplicates, sorted by tag (byte
+ * order), up to `capacity`. `count` gets the full count; it is 0 until a set is published. */
+DE_API de_result de_loc_list_locales(const de_text_system *t, de_loc_locale_info *out, u32 capacity,
+                                     u32 *count);
+typedef struct de_loc_string {
+    de_name key;
+    const char *key_name; /* de_name_str(key): NULL when not interned, and in Release/Shipping */
+    de_str value;         /* as de_loc returns it (pseudo-localized while pseudo is on) */
+    const char *locale;   /* the locale in the fallback chain that supplied the value */
+    u32 table;            /* index of the string_table asset, in asset ID order */
+} de_loc_string;
+/** Writes every string that de_loc resolves in the published set: the fallback chain in order
+ * (locale, its parents, then the default locale), each table in asset ID order and each key
+ * in hash order, keeping only the first value for a key. `count` gets the full count. The
+ * pointers stay valid until the second text update after the next locale switch. */
+DE_API de_result de_loc_read_strings(const de_text_system *t, de_loc_string *out, u32 capacity,
+                                     u32 *count);
+/** Editor preview: switches to `locale` (asynchronously, as de_loc_set_locale does, including
+ * asset overrides) without changing the locale the game selected. While a preview is active,
+ * de_loc_set_locale stores the game's choice; NULL ends the preview and switches back to it.
+ * Ending a preview when none is active is DE_OK. */
+DE_API de_result de_loc_preview_locale(de_text_system *t, const char *locale);
+typedef struct de_loc_locale_state {
+    char active[DE_LOC_LOCALE_MAX];   /* published set (de_loc_locale) */
+    char selected[DE_LOC_LOCALE_MAX]; /* the game's de_loc_set_locale choice */
+    char preview[DE_LOC_LOCALE_MAX];  /* "" when no preview is active */
+    char fallback[DE_LOC_LOCALE_MAX]; /* de_loc_set_default_locale */
+    u64 generation;
+    bool previewing;
+} de_loc_locale_state;
+DE_API de_result de_loc_get_locale_state(const de_text_system *t, de_loc_locale_state *out);
+
 DE_EXTERN_C_END
 #endif

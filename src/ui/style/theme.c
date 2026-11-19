@@ -1,6 +1,7 @@
 #include "stylesheet_internal.h"
 #include <errno.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 static de_result bad(toml_datum_t d, const char *message) {
@@ -140,24 +141,36 @@ de_result de_ui__style_value(de_ui_style_system *state, de_ui_sheet_document *sh
     }
     return DE_OK;
 }
-de_result de_ui_set_theme(de_ui *ui, const char *name) {
-    if (!ui || !ui->style)
-        return DE_ERR_INVALID_ARGUMENT;
-    de_name theme = de_name_from(name ? name : "");
-    if (theme.hash != ui->style->theme.hash) {
-        de_name previous = ui->style->theme;
-        ui->style->theme = theme;
-        for (u32 i = 0; i < ui->style->sheet_count; ++i) {
-            de_result result = de_ui__compile_sheet(ui->style, &ui->style->sheets[i]);
+/* Recompiles every sheet with `name`'s overlay. On an error the previous theme stays. */
+de_result de_ui__apply_theme(de_ui_style_system *state, const char *name) {
+    de_name theme = de_name_from(name);
+    if (theme.hash != state->theme.hash) {
+        de_name previous = state->theme;
+        state->theme = theme;
+        for (u32 i = 0; i < state->sheet_count; ++i) {
+            de_result result = de_ui__compile_sheet(state, &state->sheets[i]);
             if (result != DE_OK) {
-                ui->style->theme = previous;
-                for (u32 j = 0; j < ui->style->sheet_count; ++j)
-                    (void)de_ui__compile_sheet(ui->style, &ui->style->sheets[j]);
+                state->theme = previous;
+                for (u32 j = 0; j < state->sheet_count; ++j)
+                    (void)de_ui__compile_sheet(state, &state->sheets[j]);
                 return result;
             }
         }
-        ++ui->style->revision;
+        ++state->revision;
     }
+    snprintf(state->theme_active, sizeof state->theme_active, "%s", name);
+    return DE_OK;
+}
+de_result de_ui_set_theme(de_ui *ui, const char *name) {
+    if (!ui || !ui->style)
+        return DE_ERR_INVALID_ARGUMENT;
+    name = name ? name : "";
+    if (strlen(name) >= DE_UI_THEME_NAME_MAX)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "UI theme name longer than %u bytes",
+                       DE_UI_THEME_NAME_MAX - 1);
+    if (!ui->style->theme_previewing)
+        DE_TRY(de_ui__apply_theme(ui->style, name));
+    snprintf(ui->style->theme_selected, sizeof ui->style->theme_selected, "%s", name);
     return DE_OK;
 }
 static de_result easing_value(toml_datum_t d, de_ui_easing *out) {
