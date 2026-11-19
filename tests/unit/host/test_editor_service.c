@@ -906,5 +906,120 @@ TEST_F(editor_service, prefab_instantiate_index_places_the_root_among_siblings, 
     expect_kids(f, p, (de_entity[]){k[0], root, k[1]}, 3);
     prefab_teardown();
 }
+
+/* ---------- DIDE conformance 1.14 (DENG-783) ---------- */
+
+/* IPC: "A request over a limit gets `busy` with `data: { retryAfterMs }`." */
+TEST_F(editor_service, busy_errors_carry_retry_after_ms, service_fx) {
+    de__ed_session_register(&f->ed);
+    reply r;
+    int code = 0;
+    for (u32 i = 0; i < 200 && code == 0; ++i) {
+        call(f, DE_EP_METHOD_SNAPSHOT_TAKE, NULL, 0, &r);
+        code = code_of(&r);
+        if (code == 0)
+            done(&r);
+    }
+    ASSERT_EQ(code, (int)DE_EP_ERR_BUSY);
+    const mpack_node_t err = mpack_node_map_cstr(r.root, "error");
+    ASSERT_TRUE(mpack_node_map_contains_cstr(err, "data"));
+    const mpack_node_t data = mpack_node_map_cstr(err, "data");
+    ASSERT_TRUE(mpack_node_map_contains_cstr(data, "retryAfterMs"));
+    EXPECT_EQ(mpack_node_u32(mpack_node_map_cstr(data, "retryAfterMs")), DE__ED_RETRY_AFTER_MS);
+    EXPECT_TRUE(mpack_node_strlen(mpack_node_map_cstr(err, "message")) > 0);
+    done(&r);
+}
+
+/* A method of a capability the engine did not offer in hello is `unsupported`, even with a
+ * handler (net.sim and net.checksums need net.multi). */
+TEST_F(editor_service, methods_of_unoffered_capabilities_are_not_offered, service_fx) {
+    de__ed_session_register(&f->ed);
+    de__ed_extra_register(&f->ed);
+    EXPECT_TRUE(de__ed_method_offered(&f->ed, DE_EP_METHOD_PING));
+    EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_NET_SIM] != NULL);
+    EXPECT_FALSE(de__ed_method_offered(&f->ed, DE_EP_METHOD_NET_SIM));
+    EXPECT_TRUE(de__ed_method_offered(&f->ed, DE_EP_METHOD_REPLAY_PLAY)); /* "replay" is offered */
+    f->ed.cap_count = 0;
+    EXPECT_FALSE(de__ed_method_offered(&f->ed, DE_EP_METHOD_REPLAY_PLAY));
+    EXPECT_FALSE(de__ed_method_offered(&f->ed, DE_EP_METHOD_COUNT));
+}
+
+/* An entity with no components is still in a snapshot, so a diff names its spawn. */
+TEST_F(editor_service, snapshot_diff_names_a_spawn_without_components, service_fx) {
+    de__ed_session_register(&f->ed);
+    const de_entity before = de_entity_spawn(f->engine.world);
+    const u32 a = snap_take(f);
+    const de_entity bare = de_entity_spawn(f->engine.world);
+    const u32 b = snap_take(f);
+    char p[32];
+    const de_ep_snap_diff_params q = {.a = a, .b = b};
+    WRITE_PARAMS(p, de_ep_write_snap_diff_params, &q);
+    reply r;
+    call(f, DE_EP_METHOD_SNAPSHOT_DIFF, p, p_size, &r);
+    ASSERT_EQ(code_of(&r), 0);
+    const mpack_node_t result = mpack_node_map_cstr(r.root, "result");
+    EXPECT_TRUE(list_has(mpack_node_map_cstr(result, "spawned"), bare.bits));
+    EXPECT_FALSE(list_has(mpack_node_map_cstr(result, "spawned"), before.bits));
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(result, "despawned")), 0u);
+    EXPECT_EQ(mpack_node_array_length(mpack_node_map_cstr(result, "changed")), 0u);
+    done(&r);
+    /* And the other way round, a despawn. */
+    const de_ep_snap_diff_params back = {.a = b, .b = a};
+    char p2[32];
+    WRITE_PARAMS(p2, de_ep_write_snap_diff_params, &back);
+    call(f, DE_EP_METHOD_SNAPSHOT_DIFF, p2, p2_size, &r);
+    ASSERT_EQ(code_of(&r), 0);
+    EXPECT_TRUE(list_has(mpack_node_map_cstr(mpack_node_map_cstr(r.root, "result"), "despawned"),
+                         bare.bits));
+    done(&r);
+}
+
+/* IPC: on a dropped connection the engine stops Play and returns to Edit (restoring the pre-play
+ * world) and cancels every open transaction. Here a transaction opened in Edit spawned a child,
+ * then Play began and a second transaction spawned another. */
+TEST_F(editor_service, disconnect_stops_play_and_cancels_open_transactions, service_fx) {
+    const de_component health = register_health(f);
+    const de_entity e = spawn_health(f, health, 10);
+    de_entity none[1];
+    const de_entity p = family(f, none, 0);
+    de__ed_session_register(&f->ed); /* registers its reset first, as editor.c does */
+    de__ed_edit_register(&f->ed);
+    const u32 tx = edit_begin(f);
+    de_ep_edit_op op = spawn_under(p, false, 0);
+    ASSERT_EQ(apply_ops(f, tx, &op, 1), 0);
+    ASSERT_EQ(de_entity_children_count(f->engine.world, p), 1u);
+    ASSERT_EQ(set_mode(f, DE_EP_WORLD_MODE_PLAY), 0);
+    const u32 tx_play = edit_begin(f);
+    ASSERT_EQ(apply_ops(f, tx_play, &op, 1), 0);
+    ((SvcHealth *)de_entity_get(f->engine.world, e, health))->current = 3;
+    ASSERT_EQ(de_entity_children_count(f->engine.world, p), 2u);
+
+    for (u32 i = 0; i < f->ed.reset_count; ++i)
+        f->ed.resets[i](&f->ed);
+
+    EXPECT_EQ(f->ed.mode, DE_EP_WORLD_MODE_EDIT);
+    EXPECT_FLOAT_EQ(health_of(f, e, health), 10, 0);
+    EXPECT_EQ(de_entity_children_count(f->engine.world, p), 0u);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx_play), DE_EP_ERR_NOT_FOUND);
+}
+
+/* A drop in Edit cancels the open transaction but keeps committed work. */
+TEST_F(editor_service, disconnect_in_edit_keeps_committed_edits, service_fx) {
+    de_entity none[1];
+    const de_entity p = family(f, none, 0);
+    de__ed_session_register(&f->ed);
+    de__ed_edit_register(&f->ed);
+    u32 kept;
+    ASSERT_EQ(commit_one(f, spawn_under(p, false, 0), &kept), 0);
+    const u32 open = edit_begin(f);
+    de_ep_edit_op op = spawn_under(p, false, 0);
+    ASSERT_EQ(apply_ops(f, open, &op, 1), 0);
+    ASSERT_EQ(de_entity_children_count(f->engine.world, p), 2u);
+    for (u32 i = 0; i < f->ed.reset_count; ++i)
+        f->ed.resets[i](&f->ed);
+    EXPECT_EQ(f->ed.mode, DE_EP_WORLD_MODE_EDIT);
+    EXPECT_EQ(de_entity_children_count(f->engine.world, p), 1u);
+}
 #endif
 #endif

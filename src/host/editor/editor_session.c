@@ -31,6 +31,10 @@ typedef struct snap_field {
     u32 off, len;
 } snap_field;
 
+/* Every entity has one marker row (component 0, this field index, no bytes), so an entity with no
+ * components still shows in a diff as spawned or despawned. Never a changed field. */
+#define SNAP_MARK 0xFFFFFFFEu
+
 typedef struct ed_snap {
     u32 id; /* 0: free */
     de_world_snapshot ecs;
@@ -178,7 +182,7 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
                 (void)de_type_fields(ed->e->types, ci->type, &fc);
             per += fc > 0 ? fc : 1u;
         }
-        cap += a->count * per;
+        cap += a->count * (per + 1u); /* + the entity's marker row */
     }
     s->fields = (snap_field *)DE_ALLOC(al, sizeof(snap_field) * (cap + 1), 8, DE_MEM_GENERAL);
     if (s->fields == NULL)
@@ -195,6 +199,7 @@ static bool snap_encode(de__editor *ed, ed_snap *s) {
             const ecs_chunk *ch = ecs_table_chunk(a, ci_);
             for (u32 r = 0; r < ch->count; ++r) {
                 const u64 ent = ecs_chunk_entities(ch)[r].bits;
+                s->fields[n++] = (snap_field){ent, 0, SNAP_MARK, 0, 0};
                 for (u32 i = 0; i < a->component_count; ++i) {
                     const ecs_component_info *ci = ecs_component_get(w, a->components[i]);
                     if (ci == NULL)
@@ -495,6 +500,13 @@ static void on_snap_diff(de__editor *ed, const de_ep_request *req, de_ep_arena *
             ++i;
             continue;
         }
+        if (key->field == SNAP_MARK) { /* the entity is on both sides */
+            if (c <= 0)
+                ++i;
+            if (c >= 0)
+                ++j;
+            continue;
+        }
         bool differs = c != 0;
         if (c == 0)
             differs = fa->len != fb->len || memcmp(sa->bytes + fa->off, sb->bytes + fb->off, fa->len) != 0;
@@ -543,8 +555,21 @@ static void tick(de__editor *ed) {
     }
 }
 
+/* The connection ended. IPC: the engine "stops Play or Simulate and returns to Edit (restoring the
+ * pre-play snapshot, as Stop does)". Open transactions are the edit area's reset, which runs after
+ * this one, so this one must not forget them. */
 static void reset(de__editor *ed) {
-    (void)ed;
+    if (g_session.has_play) {
+        (void)restore_world(ed, &g_session.play);
+        de_world_snapshot_free(de_heap_allocator(), &g_session.play);
+        g_session.has_play = false;
+    }
+    if (ed->mode != DE_EP_WORLD_MODE_EDIT) {
+        DE_INFO(ed->log, "editor: mode %s -> Edit (IDE disconnected)", de_ep_world_mode_name(ed->mode));
+        ed->mode = DE_EP_WORLD_MODE_EDIT;
+        game_systems(ed, false);
+    }
+    g_session.step_frames = 0;
     for (u32 i = 0; i < ED_MAX_SNAPS; ++i)
         if (g_session.snaps[i].id != 0)
             snap_free(&g_session.snaps[i]);

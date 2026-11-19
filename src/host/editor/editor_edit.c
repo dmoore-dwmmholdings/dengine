@@ -34,6 +34,10 @@
 
 typedef enum { TX_FREE, TX_OPEN, TX_COMMITTED, TX_UNDONE, TX_CANCELLED } tx_state;
 
+/* Scratch for reverting open transactions when the connection ends. Not the request arena: a
+ * drop can happen inside a handler that still uses it. */
+#define ED_RESET_SCRATCH (8u << 20)
+
 typedef struct ed_blob {
     u8 *p;
     u32 n;
@@ -46,6 +50,7 @@ typedef struct ed_pair {
 typedef struct ed_tx {
     u32 id;
     tx_state state;
+    bool in_play; /**< begun outside Edit: a return to Edit discards its effects anyway */
     u64 scene;
     ed_pair *pairs;
     u32 count, cap;
@@ -826,7 +831,6 @@ static void send_applied(de__editor *ed, const ed_tx *t) {
 /* ---------- Methods ---------- */
 
 static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
-    (void)ed;
     DE__ED_PARAMS(edit_begin, de_ep_edit_begin_params, q);
     u32 open = 0;
     ed_tx *slot = NULL;
@@ -855,6 +859,7 @@ static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
     }
     slot->id = ++g_edit.next_id;
     slot->state = TX_OPEN;
+    slot->in_play = ed->mode != DE_EP_WORLD_MODE_EDIT;
     slot->scene = q.scene;
     de_ep_tx_result r = {slot->id};
     de_ep_write_response_edit_begin(w, req->id, &r);
@@ -1027,18 +1032,50 @@ static void on_redo(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mp
     undo_redo(ed, req, a, w, false);
 }
 
-/* A new connection has a new epoch: older transactions are gone. */
-static void reset(de__editor *ed) {
-    (void)ed;
+static void drop_all(void) {
     for (u32 i = 0; i < ED_MAX_TX; ++i)
         if (g_edit.tx[i].state != TX_FREE)
             tx_free(&g_edit.tx[i]);
 }
 
-/** Drops every transaction (a snapshot restore or Stop made their inverses meaningless). */
+/* The connection ended. IPC: the engine "cancels every open transaction", so each open one begun
+ * in Edit is reverted as edit.cancel does, newest first. The session's reset ran before this one
+ * (it registers first) and already put the pre-play world back, which discards the effects of
+ * transactions begun in Play. Then every transaction goes: a new connection has a new epoch. */
+static void reset(de__editor *ed) {
+    const de_allocator *al = de_heap_allocator();
+    unsigned char *scratch = NULL;
+    for (;;) {
+        ed_tx *t = NULL;
+        for (u32 i = 0; i < ED_MAX_TX; ++i) {
+            ed_tx *c = &g_edit.tx[i];
+            if (c->state == TX_OPEN && !c->in_play && c->count != 0 && (t == NULL || c->id > t->id))
+                t = c;
+        }
+        if (t == NULL)
+            break;
+        if (scratch == NULL)
+            scratch = (unsigned char *)DE_ALLOC(al, ED_RESET_SCRATCH, 8, DE_MEM_GENERAL);
+        if (scratch != NULL) {
+            de_ep_arena a = {scratch, ED_RESET_SCRATCH, 0};
+            ed_fail f = {DE_EP_OK, ""};
+            if (!replay(ed, &a, t, true, &f))
+                DE_WARN(ed->log, "editor: could not cancel transaction %u at disconnect: %s",
+                        t->id, f.msg);
+        }
+        tx_free(t);
+    }
+    if (scratch != NULL)
+        DE_FREE(al, scratch, ED_RESET_SCRATCH);
+    drop_all();
+}
+
+/** Drops every transaction without reverting it (a snapshot restore or Stop made their inverses
+ * meaningless). */
 void de__ed_edit_forget(de__editor *ed);
 void de__ed_edit_forget(de__editor *ed) {
-    reset(ed);
+    (void)ed;
+    drop_all();
 }
 
 void de__ed_edit_register(de__editor *ed) {
