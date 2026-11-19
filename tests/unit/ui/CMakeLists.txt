@@ -32,7 +32,7 @@ endif()
 
 # DENG-322 real world-root layout/ray routing and integer internal UI geometry.
 if(TARGET de_ui)
- de_add_test(NAME ui_world_pixel SOURCES test_world_panel.c test_pixel_ui.c
+ de_add_test(NAME ui_world_pixel SOURCES test_world_panel.c test_pixel_ui.c test_editor_pick.c
   LIBS de_ui de_platform de_ecs de_reflect LABELS ui)
  target_include_directories(test_ui_world_pixel PRIVATE "${DE_ROOT_DIR}/src")
  if(TARGET de_gpu_metal)

@@ -32,7 +32,7 @@ endif()
 
 # DENG-322 world panels and internal-grid pixel UI.
 if(TARGET de_ui)
- target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c pixel/pixel_ui.c)
+ target_sources(de_ui PRIVATE world/world_panel.c world/world_pointer.c world/world_pick.c pixel/pixel_ui.c)
 endif()
 
 # DENG-320: replay-aware keyboard/gamepad focus navigation.
