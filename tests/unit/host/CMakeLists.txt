@@ -517,6 +517,15 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
     de_add_test(NAME editor_ui SOURCES test_editor_ui.c
         LIBS de_host de_ui de_tp_dide_protocol de_tp_tomlc17 LABELS unit host ui CONFIGURATIONS Debug Dev Release)
     target_include_directories(test_editor_ui PRIVATE "${DE_ROOT_DIR}/src")
+    # DENG-788: ui.measureText runs against the real fonts, as tests/unit/ui does.
+    if(DE_BUILD_TOOLS)
+        target_link_libraries(test_editor_ui PRIVATE de_cooker de_pack_lib de_tp_stb de_tp_harfbuzz)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp")
+        target_compile_definitions(test_editor_ui PRIVATE
+            "DE_TEXT_PACK_TMP=\"${CMAKE_CURRENT_BINARY_DIR}/text-packed-tmp\""
+            DE_UI_TEST_FONTS=1 "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
+        target_include_directories(test_editor_ui PRIVATE "${DE_ROOT_DIR}/tools")
+    endif()
 endif()
 
 # DENG-776: water.info/surface/flowMap/probes/showProbes (DIDE protocol 1.13, world.water)
