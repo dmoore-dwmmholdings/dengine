@@ -169,7 +169,8 @@ bool cone_allowed(DeGpuInstance inst, uint submesh, MeshletCullParams pc)
 }
 
 /// The cone test in object space: true when every triangle of the meshlet faces away.
-bool cone_culled(float4 rows[3], MeshletBounds m, DeVisCullView v)
+/// `forward` is v.planes[4].xyz, read by the caller (DENG-434).
+bool cone_culled(float4 rows[3], MeshletBounds m, DeVisCullView v, float3 forward)
 {
     if (!(m.apex.w < 1.0))
         return false; // no cone (cutoff 1) or a bad record
@@ -184,7 +185,7 @@ bool cone_culled(float4 rows[3], MeshletBounds m, DeVisCullView v)
     if (v.lod.y != 0.0)
     {
         // Orthographic: the forward direction (the near plane's inward normal) in object space.
-        float3 f = v.planes[4].xyz;
+        float3 f = forward;
         dir = (c0 * f.x + c1 * f.y + c2 * f.z) / det;
     }
     else
@@ -244,6 +245,13 @@ bool small_meshlet_culled(DeVisCullView v, float3 c, float r, float width, float
 bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, MeshletCullParams pc)
 {
     bool skinned=(inst.flags&DE_GPU_INSTANCE_SKINNED)!=0;
+    // DENG-434: read the orthographic forward direction here and pass it to cone_culled by
+    // value. With Metal shader validation on (MTL_SHADER_VALIDATION=1; Metal 32023.922, macOS
+    // 26.6), v.planes read inside cone_culled came back as zero although the same view gives
+    // valid planes to de_cull_sphere and valid camera, lod and view_proj to cone_culled, and the
+    // validation layer reports no invalid access: the cone test then culled nothing in
+    // orthographic views. Same value, same formula as the CPU reference.
+    float3 forward = v.planes[4].xyz;
     float3 c = float3(dot(inst.transform[0], float4(m.sphere.xyz, 1.0)),
                       dot(inst.transform[1], float4(m.sphere.xyz, 1.0)),
                       dot(inst.transform[2], float4(m.sphere.xyz, 1.0)));
@@ -252,7 +260,7 @@ bool meshlet_visible(DeGpuInstance inst, MeshletBounds m, DeVisCullView v, Meshl
     if ((v.flags & DE_VIS_CULL_FRUSTUM) != 0 && !de_cull_sphere(v, c, r))
         return false;
     if (!skinned && (pc.flags & DE_VIS_MESHLET_CONE) != 0 && cone_allowed(inst, m.submesh, pc) &&
-        cone_culled(inst.transform, m, v))
+        cone_culled(inst.transform, m, v, forward))
         return false;
     if ((pc.flags & DE_VIS_MESHLET_SMALL) != 0 &&
         small_meshlet_culled(v, c, r, pc.width, pc.height))
