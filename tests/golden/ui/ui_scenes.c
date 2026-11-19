@@ -1,5 +1,6 @@
 /* DENG-317 diagnostic components: real retained layout, cooked assets, Extract and UI pass.
  * The test-only host bridge/readback uses the unchanged S10 renderer-scene convention. */
+#include "glyph_wait.h"
 #include "golden.h"
 #include "cooked_assets.h"
 #include <dengine/dengine.h>
@@ -203,10 +204,8 @@ static de_result render(ui_scene *s, f32 expected_scale) {
             /* Early warm frames sample pending only after the original watchdog fires. */
             if (frame < 4)
                 pending = de_text_get_stats(s->text).runtime_pending;
-            return DE_FAIL(DE_ERR_TIMEOUT,
-                           "UI golden runtime glyph generation did not settle: frame=%u pending=%u "
-                           "elapsed_ns=%llu",
-                           frame, pending, (unsigned long long)elapsed_ns);
+            return DE_FAIL(DE_ERR_TIMEOUT, DE_UI_GOLDEN_GLYPH_TIMEOUT_FMT, frame, pending,
+                           (unsigned long long)elapsed_ns);
         }
     }
     if (fabsf(de_ui_get_layout_stats(s->ui).scale - expected_scale) > .001f)

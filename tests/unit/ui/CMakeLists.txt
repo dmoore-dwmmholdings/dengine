@@ -96,7 +96,7 @@ if(TARGET de_ui AND DE_HAS_RENDER)
 endif()
 
 # DENG-657: replay the real cold-frame watchdog condition without a renderer or GPU.
-de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LABELS unit ui)
+de_add_test(NAME ui_golden_wait SOURCES test_golden_glyph_wait.c LIBS de_core LABELS unit ui)
 
 # DENG-732: exercise the actual fuzz callback's per-input ownership without a GPU.
 if(TARGET de_ui)
