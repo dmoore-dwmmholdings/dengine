@@ -75,6 +75,16 @@ DE_API void de_text_layout_free(de_text_layout *l);
 DE_API de_vec2 de_text_layout_size(const de_text_layout *l);
 DE_API u32 de_text_layout_hit_test(const de_text_layout *l, de_vec2 point);    /* byte offset */
 DE_API de_vec4 de_text_layout_caret(const de_text_layout *l, u32 byte_offset); /* x, y, w, h */
+/** One line of a laid-out paragraph, in layout order (DENG-782). */
+typedef struct de_text_line {
+    u32 byte_start, byte_end; /**< UTF-8 range; includes trailing blanks and the line break. */
+    f32 x, y;                 /**< Left edge of the visible glyphs; top of the line. */
+    f32 width, height;        /**< Visible width (trailing blanks excluded); line height. */
+} de_text_line;
+/** Line breaks of `l`. Returns the line count and writes up to `capacity` lines to `out`
+ * (NULL is valid only with zero capacity). The ranges are contiguous and cover the text. A blank
+ * line has zero width. A NULL layout returns zero. No allocation. */
+DE_API u32 de_text_layout_lines(const de_text_layout *l, de_text_line *out, u32 capacity);
 /** UAX29 extended-grapheme UTF8 byte boundaries, including zero and end. Returns the
  * required count, writes up to capacity offsets (NULL is valid only with zero capacity).
  * Invalid UTF8 bytes use the layout decoder's one-byte U+FFFD replacement policy.

@@ -55,7 +55,7 @@ if(TARGET test_text_layout)
 endif()
 
 if(TARGET test_text_layout AND DE_BUILD_TOOLS)
- target_sources(test_text_layout PRIVATE test_paragraph.c test_hit_test.c)
+ target_sources(test_text_layout PRIVATE test_paragraph.c test_hit_test.c test_layout_lines.c)
  target_link_libraries(test_text_layout PRIVATE de_cooker de_platform)
  target_include_directories(test_text_layout PRIVATE "${DE_ROOT_DIR}/tools")
  target_compile_definitions(test_text_layout PRIVATE "DE_FONT_DATA=\"${DE_ROOT_DIR}/tests/data/fonts/latin\"")
