@@ -375,6 +375,18 @@ if(TARGET test_render_meshlet_cull)
     endif()
 endif()
 
+# DENG-434: the perspective and orthographic CPU reference again under Metal API and shader (GPU)
+# validation. With shader validation on, the Metal compiler read the orthographic forward
+# direction (DeVisCullView.planes[4]) inside cone_culled as zero, so the GPU cone test culled
+# nothing in orthographic views. Skips (77) without a Metal device, like the plain test.
+if(TARGET test_render_meshlet_cull AND DE_HAS_GPU_METAL)
+    add_test(NAME render_meshlet_cull.meshlet_cull.frustum_cpu_ref_metal_gpu_validation
+        COMMAND test_render_meshlet_cull --filter=meshlet_cull.frustum_cpu_ref_metal)
+    set_tests_properties(render_meshlet_cull.meshlet_cull.frustum_cpu_ref_metal_gpu_validation
+        PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=1"
+        LABELS "unit;gpu;render" TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
+
 # DENG-233: the HZB and two-phase occlusion culling (src/render/passes/vis/hzb.c, occlusion.c),
 # executable test_render_occlusion; CTest names render_occlusion.<suite>.<test>. test_hzb.c: the
 # HZB against a CPU min/max reduction for odd and non-power-of-two sizes, the grouped and the
