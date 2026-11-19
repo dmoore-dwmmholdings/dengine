@@ -84,9 +84,11 @@ Every create function takes a `*_desc` struct, and `(de_x_desc){0}` is always va
 ## Deprecation
 
 1. Mark the declaration as deprecated in the header with a doc comment:
-   `/** Deprecated since 1.4: use de_x_create2(). Removed in 2.0. */`. A `DE_DEPRECATED(msg)`
-   attribute macro in `de_base.h` is a follow-up. When it exists, use it as well, so callers get a
-   compiler warning.
+   `/** Deprecated since 1.4: use de_x_create2(). Removed in 2.0. */`. Also add the `DE_DEPRECATED(msg)`
+   macro from `de_base.h`, before the declaration and after `DE_API`, so callers get a compiler
+   warning that carries the message: `DE_API DE_DEPRECATED("use de_x_create2()") de_x de_x_create(void);`.
+   The macro maps to the deprecation attribute on Clang, GCC and MSVC and expands to nothing on other
+   compilers. (DENG-767)
 2. Add the replacement in the same minor release. Write the change in the release notes.
 3. The deprecated item stays, and keeps working, for the rest of the major version. It is removed
    only in the next major version. (DENG-2 Q8: the ABI is frozen within a major version)
