@@ -616,12 +616,14 @@ static void nonaligned_bake_reload(gifx *f, de_gpu_backend backend) {
     de__irradiance_destroy(f->r->irradiance);
     f->r->irradiance = NULL;
     ASSERT_EQ(de__irradiance_create(f->r, &f->r->irradiance), DE_OK);
+    u64 waits = de__gpu_wait_idle_count(f->dev);
     room_frame(f);
     ASSERT_TRUE(de__irradiance_get(f->r, 77, &info));
     EXPECT_TRUE(info.ready && info.baked);
     EXPECT_EQ(info.captures, 0u);
-    if (backend == DE_GPU_METAL)
-        EXPECT_TRUE(de__irradiance_resource_drains(f->r) > 0);
+    /* DENG-432: GI recorded over pending retirements; the only global wait is room_frame's. */
+    EXPECT_TRUE(de__irradiance_retired_begins(f->r) > 0);
+    EXPECT_EQ(de__gpu_wait_idle_count(f->dev), waits + 1u);
     EXPECT_EQ(de__views_last_order(f->r, NULL, 0), 0u);
     ASSERT_EQ(de__irradiance_readback(f->r, 77, after, bytes), DE_OK);
     EXPECT_EQ(memcmp(before, after, (size_t)bytes), 0);
@@ -660,10 +662,10 @@ static void nonaligned_bake_reload(gifx *f, de_gpu_backend backend) {
     EXPECT_NE(info.classification.id, original_classification.id);
     ASSERT_EQ(de__irradiance_readback(f->r, 77, after, bytes), DE_OK);
     EXPECT_EQ(memcmp(before, after, (size_t)bytes), 0);
-    u64 steady_drains = de__irradiance_resource_drains(f->r);
+    waits = de__gpu_wait_idle_count(f->dev);
     room_frame(f);
     room_frame(f);
-    EXPECT_EQ(de__irradiance_resource_drains(f->r), steady_drains);
+    EXPECT_EQ(de__gpu_wait_idle_count(f->dev), waits + 2u);
     free(before);
     free(after);
 }
