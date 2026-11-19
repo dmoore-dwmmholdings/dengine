@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.16"
-#define DE_EP_SCHEMA_HASH "b4ad6b70e8f503fc"
+#define DE_EP_PROTOCOL_VERSION "1.17"
+#define DE_EP_SCHEMA_HASH "15fa7630ebb8df20"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -106,6 +106,15 @@ typedef enum de_ep_material_graph_target_status {
 } de_ep_material_graph_target_status;
 const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v);
 bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out);
+
+typedef enum de_ep_ui_text_align {
+    DE_EP_UI_TEXT_ALIGN_START,
+    DE_EP_UI_TEXT_ALIGN_CENTER,
+    DE_EP_UI_TEXT_ALIGN_END,
+    DE_EP_UI_TEXT_ALIGN_JUSTIFY,
+} de_ep_ui_text_align;
+const char *de_ep_ui_text_align_name(de_ep_ui_text_align v);
+bool de_ep_ui_text_align_parse(de_ep_str s, de_ep_ui_text_align *out);
 
 typedef enum de_ep_world_mode {
     DE_EP_WORLD_MODE_EDIT,
@@ -284,6 +293,8 @@ typedef struct de_ep_ui_check_stylesheet_params de_ep_ui_check_stylesheet_params
 typedef struct de_ep_ui_layout de_ep_ui_layout;
 typedef struct de_ep_ui_layout_params de_ep_ui_layout_params;
 typedef struct de_ep_ui_layout_rect de_ep_ui_layout_rect;
+typedef struct de_ep_ui_measure_text de_ep_ui_measure_text;
+typedef struct de_ep_ui_measure_text_params de_ep_ui_measure_text_params;
 typedef struct de_ep_ui_node_corners de_ep_ui_node_corners;
 typedef struct de_ep_ui_node_corners_params de_ep_ui_node_corners_params;
 typedef struct de_ep_ui_pick_hit de_ep_ui_pick_hit;
@@ -292,6 +303,8 @@ typedef struct de_ep_ui_safe_insets de_ep_ui_safe_insets;
 typedef struct de_ep_ui_sheet de_ep_ui_sheet;
 typedef struct de_ep_ui_sheet_error de_ep_ui_sheet_error;
 typedef struct de_ep_ui_stylesheets de_ep_ui_stylesheets;
+typedef struct de_ep_ui_text_line de_ep_ui_text_line;
+typedef struct de_ep_ui_text_style de_ep_ui_text_style;
 typedef struct de_ep_ui_theme_info de_ep_ui_theme_info;
 typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
 typedef struct de_ep_ui_theme_vars de_ep_ui_theme_vars;
@@ -485,6 +498,11 @@ typedef struct de_ep_list_system_info {
     de_ep_system_info *items;
     uint32_t count;
 } de_ep_list_system_info;
+
+typedef struct de_ep_list_ui_text_line {
+    de_ep_ui_text_line *items;
+    uint32_t count;
+} de_ep_list_ui_text_line;
 
 typedef struct de_ep_list_ui_theme_var {
     de_ep_ui_theme_var *items;
@@ -1804,6 +1822,41 @@ struct de_ep_ui_layout_rect {
     de_ep_list_f32 rect; /* [x, y, w, h] in physical pixels of the preview viewport */
 };
 
+/* The result of ui.measureText (de_ui_measure_text). */
+struct de_ep_ui_measure_text {
+    de_ep_list_f32 size; /* [width, height] in layout pixels */
+    float scale; /* the layout scale used */
+    float line_height; /* layout pixels */
+    de_ep_list_ui_text_line lines;
+    bool overflow_x; /* wrapWidth is set and a line cannot break narrow enough */
+    bool overflow_y; /* boxHeight is set and the text is taller */
+};
+
+struct de_ep_ui_text_style {
+    de_ep_str font; /* the font asset (id or path); not_found when it is not loaded */
+    bool has_size_px;
+    float size_px; /* before scale; the engine multiplies it by the scale. Absent, 0 or less means 16 */
+    bool has_letter_spacing;
+    float letter_spacing; /* before scale; the engine multiplies it by the scale. Absent means 0 */
+    bool has_line_height;
+    float line_height; /* layout pixels, after scale (not multiplied). Absent or 0 for the font's own line height */
+    bool has_language;
+    de_ep_str language; /* a language tag for shaping; absent for none */
+};
+
+struct de_ep_ui_measure_text_params {
+    de_ep_str text;
+    de_ep_ui_text_style style;
+    bool has_align;
+    de_ep_ui_text_align align; /* absent means start */
+    bool has_wrap_width;
+    float wrap_width; /* layout pixels; absent or 0 means no wrap; negative or non-finite is invalid_params */
+    bool has_box_height;
+    float box_height; /* layout pixels; absent or 0 means no height limit; negative or non-finite is invalid_params */
+    bool has_scale;
+    float scale; /* the layout scale; absent means the current one. Pass the scale ui.layout returned to match a preview. Negative or non-finite is invalid_params */
+};
+
 struct de_ep_ui_node_corners {
     uint64_t panel; /* the world-panel root */
     de_ep_list_f64 corners; /* 12 numbers: the world-space x, y, z of the top-left, top-right, bottom-right and bottom-left corners */
@@ -1849,6 +1902,16 @@ struct de_ep_ui_sheet {
 struct de_ep_ui_stylesheets {
     de_ep_str suffix; /* the file suffix of UI style sheets (DE_UI_STYLESHEET_SUFFIX, e.g. ".uistyle.toml"); the IDE finds sheets by it */
     de_ep_list_ui_sheet sheets; /* loaded sheets in load order, then the sheets whose first load failed */
+};
+
+/* One laid-out line (de_text_layout_lines). */
+struct de_ep_ui_text_line {
+    uint32_t start; /* UTF-8 byte offset of the first byte. Ranges include trailing blanks and the line break and are contiguous */
+    uint32_t end; /* UTF-8 byte offset after the last byte */
+    float x;
+    float y;
+    float width; /* leaves out trailing blanks */
+    float height;
 };
 
 struct de_ep_ui_theme_info {
@@ -2368,6 +2431,10 @@ void de_ep_write_ui_layout_params(mpack_writer_t *w, const de_ep_ui_layout_param
 void de_ep_read_ui_layout_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_params *out);
 void de_ep_write_ui_layout_rect(mpack_writer_t *w, const de_ep_ui_layout_rect *v);
 void de_ep_read_ui_layout_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_rect *out);
+void de_ep_write_ui_measure_text(mpack_writer_t *w, const de_ep_ui_measure_text *v);
+void de_ep_read_ui_measure_text(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text *out);
+void de_ep_write_ui_measure_text_params(mpack_writer_t *w, const de_ep_ui_measure_text_params *v);
+void de_ep_read_ui_measure_text_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text_params *out);
 void de_ep_write_ui_node_corners(mpack_writer_t *w, const de_ep_ui_node_corners *v);
 void de_ep_read_ui_node_corners(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_node_corners *out);
 void de_ep_write_ui_node_corners_params(mpack_writer_t *w, const de_ep_ui_node_corners_params *v);
@@ -2384,6 +2451,10 @@ void de_ep_write_ui_sheet_error(mpack_writer_t *w, const de_ep_ui_sheet_error *v
 void de_ep_read_ui_sheet_error(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_sheet_error *out);
 void de_ep_write_ui_stylesheets(mpack_writer_t *w, const de_ep_ui_stylesheets *v);
 void de_ep_read_ui_stylesheets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_stylesheets *out);
+void de_ep_write_ui_text_line(mpack_writer_t *w, const de_ep_ui_text_line *v);
+void de_ep_read_ui_text_line(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_line *out);
+void de_ep_write_ui_text_style(mpack_writer_t *w, const de_ep_ui_text_style *v);
+void de_ep_read_ui_text_style(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_style *out);
 void de_ep_write_ui_theme_info(mpack_writer_t *w, const de_ep_ui_theme_info *v);
 void de_ep_read_ui_theme_info(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_info *out);
 void de_ep_write_ui_theme_var(mpack_writer_t *w, const de_ep_ui_theme_var *v);
@@ -2527,6 +2598,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_TERRAIN_SAMPLE,
     DE_EP_METHOD_UI_CHECK_STYLESHEET,
     DE_EP_METHOD_UI_LAYOUT,
+    DE_EP_METHOD_UI_MEASURE_TEXT,
     DE_EP_METHOD_UI_NODE_CORNERS,
     DE_EP_METHOD_UI_PREVIEW_THEME,
     DE_EP_METHOD_UI_STYLESHEETS,
@@ -2774,6 +2846,8 @@ bool de_ep_read_params_ui_check_stylesheet(const de_ep_request *req, de_ep_arena
 void de_ep_write_response_ui_check_stylesheet(mpack_writer_t *w, uint64_t id, const de_ep_ui_check_stylesheet *result);
 bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep_ui_layout_params *out);
 void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result);
+bool de_ep_read_params_ui_measure_text(const de_ep_request *req, de_ep_arena *a, de_ep_ui_measure_text_params *out);
+void de_ep_write_response_ui_measure_text(mpack_writer_t *w, uint64_t id, const de_ep_ui_measure_text *result);
 bool de_ep_read_params_ui_node_corners(const de_ep_request *req, de_ep_arena *a, de_ep_ui_node_corners_params *out);
 void de_ep_write_response_ui_node_corners(mpack_writer_t *w, uint64_t id, const de_ep_ui_node_corners *result);
 bool de_ep_read_params_ui_preview_theme(const de_ep_request *req, de_ep_arena *a, de_ep_ui_preview_theme_params *out);

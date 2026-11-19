@@ -251,6 +251,40 @@ bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_
     return false;
 }
 
+const char *de_ep_ui_text_align_name(de_ep_ui_text_align v) {
+    switch (v) {
+    case DE_EP_UI_TEXT_ALIGN_START:
+        return "start";
+    case DE_EP_UI_TEXT_ALIGN_CENTER:
+        return "center";
+    case DE_EP_UI_TEXT_ALIGN_END:
+        return "end";
+    case DE_EP_UI_TEXT_ALIGN_JUSTIFY:
+        return "justify";
+    }
+    return "";
+}
+
+bool de_ep_ui_text_align_parse(de_ep_str s, de_ep_ui_text_align *out) {
+    if (de_ep_str_eq(s, "start")) {
+        *out = DE_EP_UI_TEXT_ALIGN_START;
+        return true;
+    }
+    if (de_ep_str_eq(s, "center")) {
+        *out = DE_EP_UI_TEXT_ALIGN_CENTER;
+        return true;
+    }
+    if (de_ep_str_eq(s, "end")) {
+        *out = DE_EP_UI_TEXT_ALIGN_END;
+        return true;
+    }
+    if (de_ep_str_eq(s, "justify")) {
+        *out = DE_EP_UI_TEXT_ALIGN_JUSTIFY;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_world_mode_name(de_ep_world_mode v) {
     switch (v) {
     case DE_EP_WORLD_MODE_EDIT:
@@ -9079,6 +9113,159 @@ void de_ep_read_ui_layout_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layou
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_ui_measure_text(mpack_writer_t *w, const de_ep_ui_measure_text *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "size");
+    mpack_start_array(w, v->size.count);
+    for (uint32_t i_1 = 0; i_1 < v->size.count; ++i_1) {
+        mpack_write_float(w, v->size.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "scale");
+    mpack_write_float(w, v->scale);
+    mpack_write_cstr(w, "lineHeight");
+    mpack_write_float(w, v->line_height);
+    mpack_write_cstr(w, "lines");
+    mpack_start_array(w, v->lines.count);
+    for (uint32_t i_1 = 0; i_1 < v->lines.count; ++i_1) {
+        de_ep_write_ui_text_line(w, &v->lines.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "overflowX");
+    mpack_write_bool(w, v->overflow_x);
+    mpack_write_cstr(w, "overflowY");
+    mpack_write_bool(w, v->overflow_y);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_measure_text(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "size")) {
+            seen |= (uint64_t)1 << 0;
+            out->size.count = mpack_expect_array(r);
+            out->size.items = (float *)de_ep_arena_array(r, a, out->size.count, sizeof(*out->size.items));
+            for (uint32_t i_3 = 0; out->size.items && i_3 < out->size.count; ++i_3)
+            {
+                out->size.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "scale")) {
+            seen |= (uint64_t)1 << 1;
+            out->scale = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "lineHeight")) {
+            seen |= (uint64_t)1 << 2;
+            out->line_height = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "lines")) {
+            seen |= (uint64_t)1 << 3;
+            out->lines.count = mpack_expect_array(r);
+            out->lines.items = (de_ep_ui_text_line *)de_ep_arena_array(r, a, out->lines.count, sizeof(*out->lines.items));
+            for (uint32_t i_3 = 0; out->lines.items && i_3 < out->lines.count; ++i_3)
+            {
+                de_ep_read_ui_text_line(r, a, &out->lines.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "overflowX")) {
+            seen |= (uint64_t)1 << 4;
+            out->overflow_x = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "overflowY")) {
+            seen |= (uint64_t)1 << 5;
+            out->overflow_y = mpack_expect_bool(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(63)) != UINT64_C(63))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_ui_measure_text_params(mpack_writer_t *w, const de_ep_ui_measure_text_params *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    n += v->has_align ? 1u : 0u;
+    n += v->has_wrap_width ? 1u : 0u;
+    n += v->has_box_height ? 1u : 0u;
+    n += v->has_scale ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "text");
+    de_ep_write_str(w, v->text);
+    mpack_write_cstr(w, "style");
+    de_ep_write_ui_text_style(w, &v->style);
+    if (v->has_align) {
+        mpack_write_cstr(w, "align");
+        mpack_write_cstr(w, de_ep_ui_text_align_name(v->align));
+    }
+    if (v->has_wrap_width) {
+        mpack_write_cstr(w, "wrapWidth");
+        mpack_write_float(w, v->wrap_width);
+    }
+    if (v->has_box_height) {
+        mpack_write_cstr(w, "boxHeight");
+        mpack_write_float(w, v->box_height);
+    }
+    if (v->has_scale) {
+        mpack_write_cstr(w, "scale");
+        mpack_write_float(w, v->scale);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_measure_text_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_measure_text_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "text")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->text);
+        } else if (de_ep_str_eq(k, "style")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_ui_text_style(r, a, &out->style);
+        } else if (de_ep_str_eq(k, "align")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_align = true;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_ui_text_align_parse(s_, &out->align))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "wrapWidth")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_wrap_width = true;
+            out->wrap_width = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "boxHeight")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_box_height = true;
+            out->box_height = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "scale")) {
+            seen |= (uint64_t)1 << 5;
+            out->has_scale = true;
+            out->scale = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_ui_node_corners(mpack_writer_t *w, const de_ep_ui_node_corners *v) {
     uint32_t n = 0;
     ++n;
@@ -9437,6 +9624,128 @@ void de_ep_read_ui_stylesheets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_style
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_ui_text_line(mpack_writer_t *w, const de_ep_ui_text_line *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "start");
+    mpack_write_u32(w, v->start);
+    mpack_write_cstr(w, "end");
+    mpack_write_u32(w, v->end);
+    mpack_write_cstr(w, "x");
+    mpack_write_float(w, v->x);
+    mpack_write_cstr(w, "y");
+    mpack_write_float(w, v->y);
+    mpack_write_cstr(w, "width");
+    mpack_write_float(w, v->width);
+    mpack_write_cstr(w, "height");
+    mpack_write_float(w, v->height);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_text_line(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_line *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "start")) {
+            seen |= (uint64_t)1 << 0;
+            out->start = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "end")) {
+            seen |= (uint64_t)1 << 1;
+            out->end = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "x")) {
+            seen |= (uint64_t)1 << 2;
+            out->x = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "y")) {
+            seen |= (uint64_t)1 << 3;
+            out->y = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "width")) {
+            seen |= (uint64_t)1 << 4;
+            out->width = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "height")) {
+            seen |= (uint64_t)1 << 5;
+            out->height = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(63)) != UINT64_C(63))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_ui_text_style(mpack_writer_t *w, const de_ep_ui_text_style *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_size_px ? 1u : 0u;
+    n += v->has_letter_spacing ? 1u : 0u;
+    n += v->has_line_height ? 1u : 0u;
+    n += v->has_language ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "font");
+    de_ep_write_str(w, v->font);
+    if (v->has_size_px) {
+        mpack_write_cstr(w, "sizePx");
+        mpack_write_float(w, v->size_px);
+    }
+    if (v->has_letter_spacing) {
+        mpack_write_cstr(w, "letterSpacing");
+        mpack_write_float(w, v->letter_spacing);
+    }
+    if (v->has_line_height) {
+        mpack_write_cstr(w, "lineHeight");
+        mpack_write_float(w, v->line_height);
+    }
+    if (v->has_language) {
+        mpack_write_cstr(w, "language");
+        de_ep_write_str(w, v->language);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_ui_text_style(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_text_style *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "font")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->font);
+        } else if (de_ep_str_eq(k, "sizePx")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_size_px = true;
+            out->size_px = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "letterSpacing")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_letter_spacing = true;
+            out->letter_spacing = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "lineHeight")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_line_height = true;
+            out->line_height = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "language")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_language = true;
+            de_ep_read_str(r, &out->language);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -10850,6 +11159,7 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "terrain.sample",
     "ui.checkStylesheet",
     "ui.layout",
+    "ui.measureText",
     "ui.nodeCorners",
     "ui.previewTheme",
     "ui.stylesheets",
@@ -10967,6 +11277,7 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     "world.terrain",
     "ui.stylesheets",
     "ui.editor",
+    "ui.textMetrics",
     "ui.editor",
     "ui.editor",
     "ui.stylesheets",
@@ -12187,6 +12498,19 @@ bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep
 void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_ui_layout(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_ui_measure_text(const de_ep_request *req, de_ep_arena *a, de_ep_ui_measure_text_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_ui_measure_text_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_ui_measure_text(mpack_writer_t *w, uint64_t id, const de_ep_ui_measure_text *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_ui_measure_text(w, result);
     de_ep_write_result_end(w);
 }
 
