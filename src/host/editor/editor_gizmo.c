@@ -30,6 +30,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* snprintf */
 #endif
 #include "host/editor/editor_gizmo.h"
+#include "world/spline/spline.h"
 
 #include <dengine/de_ecs.h>
 #include <dengine/de_math.h>
@@ -2118,6 +2119,52 @@ static void draw_gizmo(const de__ed_cam *c, const de__ed_canvas *cv, const gz_la
     }
 }
 
+/* DENG-775: a selected spline's curve and point handles (DIDE world.splines), in the selection
+ * colour; a Bezier spline also shows its tangent handles. The curve is the one spline.sample
+ * returns (de__spline_poly with the entity's world transform). */
+static void draw_splines(de__editor *ed, const de__ed_cam *c, const de__ed_canvas *cv) {
+    de_world *w = ed->e->world;
+    const de_component comp = de_component_find(w, DE_SPLINE_COMPONENT);
+    if (comp.id == 0)
+        return;
+    static de_spline_poly poly; /* 33 KB; the overlay draws on the main thread only */
+    const rgb col = G.col[C_SELECTED];
+    for (u32 i = 0; i < G.sel_count; ++i) {
+        const DeSpline *s = (const DeSpline *)de_entity_get_const(w, (de_entity){G.sel[i]}, comp);
+        gz_ent g;
+        if (s == NULL || !ent_of(w, G.sel[i], &g))
+            continue;
+        de__spline_poly(s, &g.world0, &poly);
+        for (u32 k = 1; k < poly.n; ++k) {
+            const de_vec3 a = poly.p[k - 1], b = poly.p[k];
+            wseg(c, cv, (v3){a.x, a.y, a.z}, (v3){b.x, b.y, b.z}, col, 1.0f, 2);
+        }
+        const u32 n = s->count < DE_SPLINE_MAX_POINTS ? s->count : DE_SPLINE_MAX_POINTS;
+        for (u32 k = 0; k < n; ++k) {
+            const de_spline_point *q = &s->points[k];
+            const v3 p =
+                de_transform_point(&g.world0, (v3){q->position.x, q->position.y, q->position.z});
+            if (s->kind == DE_SPLINE_BEZIER) {
+                const de_vec3 t[2] = {q->in_tangent, q->out_tangent};
+                for (u32 j = 0; j < 2; ++j) {
+                    const v3 h = de_transform_point(&g.world0, (v3){q->position.x + t[j].x,
+                                                                    q->position.y + t[j].y,
+                                                                    q->position.z + t[j].z});
+                    wseg(c, cv, p, h, col, 0.6f, 1);
+                    f64 x, y;
+                    if (proj(c, h, &x, &y))
+                        box(cv, x, y, 2.5, col, 0.8f);
+                }
+            }
+            f64 x, y;
+            if (!proj(c, p, &x, &y))
+                continue;
+            box(cv, x, y, 4.5, grey(30), 0.9f);
+            box(cv, x, y, 3.5, col, 1.0f);
+        }
+    }
+}
+
 void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__ed_canvas *cv,
                        u32 show, const u64 *skip, u32 skip_count) {
     if (ed->e->world == NULL || c->w == 0 || c->h == 0)
@@ -2131,6 +2178,8 @@ void de__ed_gizmo_draw(de__editor *ed, u32 view, const de__ed_cam *c, const de__
     draw_colliders(ed, c, cv, (show & DE__ED_SHOW_COLLIDERS) != 0);
     icon_draw idr = {c, cv};
     icons_each(ed, show, skip, skip_count, draw_icon, &idr);
+    if ((show & DE__ED_SHOW_GIZMOS) && G.sel_count != 0)
+        draw_splines(ed, c, cv);
     if (!(show & DE__ED_SHOW_GIZMOS) || !tool_drags() || G.sel_count == 0)
         return;
     if (G.drag && G.view == view) {
