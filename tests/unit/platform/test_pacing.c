@@ -86,6 +86,21 @@ static void print_os_sleep_lateness(void) {
 #endif
 }
 
+/* Host load when the samples ran, a record for failure logs, not a check (DENG-726). A full
+ * audit missed the host gate (188/200) while a run on an idle host made 200/200. Under CPU
+ * contention a timeshare thread can wake from its OS sleep past the deadline, or, once the
+ * learned spin window covers the whole 2 ms, spin without sleeping and lose the CPU for a
+ * scheduler quantum. The load average tells such runs apart from a regression in
+ * de_sleep_ns(). (getrusage() is no help here: Darwin counts blocking sleeps as involuntary
+ * context switches.) */
+static void print_host_load(void) {
+#if !defined(_WIN32)
+    double load[3] = {0, 0, 0};
+    if (getloadavg(load, 3) == 3)
+        printf("host load average: %.2f %.2f %.2f\n", load[0], load[1], load[2]);
+#endif
+}
+
 TEST(pacing, sleep_accuracy) {
     /* Acceptance: de_sleep_ns(2 ms) lands within +0.3 ms / -0 of the target in >= 95 % of 200
      * samples. The histogram goes to stdout for the record. */
@@ -127,6 +142,7 @@ TEST(pacing, sleep_accuracy) {
     for (int b = 0; b < BUCKETS; b++)
         printf("  %-7s %3u\n", labels[b], hist[b]);
     printf("  within +0.3 ms: %u / %d\n", within, SAMPLES);
+    print_host_load();
 
     EXPECT_EQ(early, 0u);
     if (on_ci()) {
