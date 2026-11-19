@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <dengine/de_asset.h>
 #include <dengine/de_platform.h>
 
 #include "check.h"
@@ -187,15 +188,32 @@ TEST(cook_check, extra_types) {
 
     /* Independent list: catch missing, duplicate or reordered built-ins as well as drift. */
     const char *const expected[] = {
-        "texture",  "model",   "material",     "shader",      "sound",         "font",
-        "aseprite", "tilemap", "strings",      "stylesheet",  "video",         "scene",
-        "prefab",   "blob",    "string_table", "sprite_clip", "material_graph"};
+        "texture",  "model",   "material",     "shader",      "sound",          "font",
+        "aseprite", "tilemap", "strings",      "stylesheet",  "video",          "scene",
+        "prefab",   "blob",    "string_table", "sprite_clip", "material_graph", "ui_style"};
     ASSERT_EQ(de_cook_known_type_count, (u32)(sizeof expected / sizeof expected[0]));
     for (u32 i = 0; i < de_cook_known_type_count; ++i) {
         EXPECT_STREQ(de_cook_known_types[i], expected[i]);
         for (u32 j = 0; j < i; ++j)
             EXPECT_TRUE(strcmp(de_cook_known_types[i], de_cook_known_types[j]) != 0);
     }
+}
+
+/* DENG-780: a ui_style or stylesheet source that does not end with DE_ASSET_STYLESHEET_SUFFIX
+ * is a warning, with or without --no-sources. Other types and locale sources that use the suffix
+ * are not reported. */
+TEST(cook_check, stylesheet_suffix) {
+    const char *const args[] = {DATA "/stylesheet_suffix/assets.toml", "--no-sources", NULL};
+    EXPECT_EQ(run_check(args), DE_COOK_EXIT_OK);
+    remove_all(g_cap.out, DATA "/");
+    EXPECT_STREQ(g_cap.out,
+                 "stylesheet_suffix/assets.toml:8: warning: asset \"ui/legacy\": stylesheet source "
+                 "\"ui/menu.toml\" does not end with \"" DE_ASSET_STYLESHEET_SUFFIX
+                 "\", so editors cannot find it [assets.\"ui/legacy\".source]\n"
+                 "stylesheet_suffix/assets.toml:9: warning: asset \"ui/plain\": stylesheet source "
+                 "\"ui/plain.toml\" does not end with \"" DE_ASSET_STYLESHEET_SUFFIX
+                 "\", so editors cannot find it [assets.\"ui/plain\".source]\n"
+                 "de-cook --check: 0 errors, 2 warnings, 0 notes\n");
 }
 
 /* --quiet keeps the error lines only; --no-sources drops the source check. */

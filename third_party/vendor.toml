@@ -84,7 +84,12 @@ license = "MIT"
 files = ["src/tomlc17.c", "src/tomlc17.h"]
 # UBSan fix in page_create() (null-pointer member access); see the patch header. DENG-356.
 # Per-parse opt-in duplicate assignment policy for localization (DENG-509).
-patches = ["patches/0001-page-create-offsetof.patch", "patches/0002-per-parse-duplicate-policy.patch"]
+# Error line and column in toml_result_t for UI stylesheet errors (DENG-780).
+patches = [
+    "patches/0001-page-create-offsetof.patch",
+    "patches/0002-per-parse-duplicate-policy.patch",
+    "patches/0003-error-position.patch",
+]
 
 [[lib]]
 name = "stb"

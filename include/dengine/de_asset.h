@@ -22,6 +22,11 @@ typedef struct de_world de_world;
 typedef struct de_asset_id {
     u64 hash;
 } de_asset_id; /* hash of "player/model#Body" */
+/** DENG-780: the file name suffix of UI stylesheet sources (asset types "ui_style" and
+ * "stylesheet"). Editors find stylesheets by this suffix, and `de-cook --check` warns about a
+ * stylesheet source without it. This is the only definition; de_ui.h repeats it as
+ * DE_UI_STYLESHEET_SUFFIX. */
+#define DE_ASSET_STYLESHEET_SUFFIX ".uistyle.toml"
 /**
  * The ID of the asset path `path`: de_hash64 (XXH3-64, seed 0) of its exact bytes, the same on
  * every platform and in every build. The hash is part of the pack format: it never changes

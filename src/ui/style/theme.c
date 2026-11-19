@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 static de_result bad(toml_datum_t d, const char *message) {
-    return DE_FAIL(DE_ERR_PARSE, "UI stylesheet line %d: %s", d.lineno > 0 ? d.lineno : 1, message);
+    return de_ui__sheet_fail(d.lineno > 0 ? d.lineno : 1, d.colno > 0 ? d.colno : 0, message);
 }
 static bool number(toml_datum_t d, f32 *value) {
     if (d.type != TOML_INT64 && d.type != TOML_FP64)
