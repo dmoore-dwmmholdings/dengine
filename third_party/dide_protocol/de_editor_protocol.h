@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.11"
-#define DE_EP_SCHEMA_HASH "e250b4445dda6784"
+#define DE_EP_PROTOCOL_VERSION "1.13"
+#define DE_EP_SCHEMA_HASH "11248618d80bb8db"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -138,6 +138,7 @@ typedef struct de_ep_asset_type_list de_ep_asset_type_list;
 typedef struct de_ep_asset_type_params de_ep_asset_type_params;
 typedef struct de_ep_blob_ref de_ep_blob_ref;
 typedef struct de_ep_build_info de_ep_build_info;
+typedef struct de_ep_buoyancy_probes de_ep_buoyancy_probes;
 typedef struct de_ep_c_var de_ep_c_var;
 typedef struct de_ep_c_var_list de_ep_c_var_list;
 typedef struct de_ep_cache_clear_params de_ep_cache_clear_params;
@@ -247,6 +248,12 @@ typedef struct de_ep_snap_diff de_ep_snap_diff;
 typedef struct de_ep_snap_diff_params de_ep_snap_diff_params;
 typedef struct de_ep_snap_params de_ep_snap_params;
 typedef struct de_ep_snap_result de_ep_snap_result;
+typedef struct de_ep_spline_carve de_ep_spline_carve;
+typedef struct de_ep_spline_info de_ep_spline_info;
+typedef struct de_ep_spline_instances de_ep_spline_instances;
+typedef struct de_ep_spline_params de_ep_spline_params;
+typedef struct de_ep_spline_sample_params de_ep_spline_sample_params;
+typedef struct de_ep_spline_samples de_ep_spline_samples;
 typedef struct de_ep_stats_sample de_ep_stats_sample;
 typedef struct de_ep_stats_subscribe_params de_ep_stats_subscribe_params;
 typedef struct de_ep_step_params de_ep_step_params;
@@ -280,6 +287,14 @@ typedef struct de_ep_view_render_mode_params de_ep_view_render_mode_params;
 typedef struct de_ep_view_resize_params de_ep_view_resize_params;
 typedef struct de_ep_view_resized de_ep_view_resized;
 typedef struct de_ep_view_show_flags_params de_ep_view_show_flags_params;
+typedef struct de_ep_water_flow_map de_ep_water_flow_map;
+typedef struct de_ep_water_flow_params de_ep_water_flow_params;
+typedef struct de_ep_water_info de_ep_water_info;
+typedef struct de_ep_water_params de_ep_water_params;
+typedef struct de_ep_water_probes_params de_ep_water_probes_params;
+typedef struct de_ep_water_show_probes_params de_ep_water_show_probes_params;
+typedef struct de_ep_water_surface de_ep_water_surface;
+typedef struct de_ep_water_surface_params de_ep_water_surface_params;
 typedef struct de_ep_world_delta de_ep_world_delta;
 
 typedef struct de_ep_kv_f32 {
@@ -346,6 +361,11 @@ typedef struct de_ep_list_str {
     de_ep_str *items;
     uint32_t count;
 } de_ep_list_str;
+
+typedef struct de_ep_list_bool {
+    bool *items;
+    uint32_t count;
+} de_ep_list_bool;
 
 typedef struct de_ep_list_c_var {
     de_ep_c_var *items;
@@ -658,6 +678,16 @@ struct de_ep_build_info {
     de_ep_str config; /* debug, dev, release */
 };
 
+/* Each probe of the bodies asked for, in the current frame. */
+struct de_ep_buoyancy_probes {
+    de_ep_list_u64 entities; /* the body each probe belongs to */
+    de_ep_list_f32 positions; /* world space, 3 values per probe */
+    de_ep_list_bool wet; /* whether the probe is over or in a water body */
+    de_ep_list_f32 depths; /* metres of the probe's centre below the surface (negative above it); 0 when not wet */
+    de_ep_list_f32 forces; /* upward buoyancy force in newtons */
+    de_ep_list_u64 shown; /* the bodies water.showProbes shows */
+};
+
 struct de_ep_c_var {
     de_ep_str name;
     de_ep_str type;
@@ -802,7 +832,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -1416,6 +1446,51 @@ struct de_ep_snap_result {
     uint32_t snap;
 };
 
+/* The `spline.carve` edit op's value. Terrain within `width` / 2 of the curve (horizontally) moves to the curve's height minus `depth`; the next `falloff` metres blend back to the terrain. */
+struct de_ep_spline_carve {
+    uint64_t spline; /* the spline entity */
+    float width; /* metres */
+    float falloff; /* metres */
+    float depth; /* metres below the curve */
+};
+
+struct de_ep_spline_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected spline component */
+    de_ep_str mesh_component; /* the reflected mesh-placement component */
+    de_ep_list_str kinds; /* the curve kinds this engine evaluates: catmullRom, bezier */
+    uint32_t max_points;
+    uint32_t count;
+    float length; /* arc length in metres */
+    uint64_t revision; /* the entity revision this reply describes */
+};
+
+/* The meshes placed along a spline as they render in the current frame. Without deform, an instance every `spacing` metres from `offset`, at scale 1. With deform, the curve is split into round(length / mesh length) pieces and each instance is stretched along +X to fill its piece. */
+struct de_ep_spline_instances {
+    uint64_t revision; /* the spline entity revision the instances were built from */
+    de_ep_str mesh;
+    bool deform;
+    de_ep_list_f32 transforms; /* world space, 10 values per instance: position xyz, rotation quaternion xyzw (+X along the curve), scale xyz */
+};
+
+struct de_ep_spline_params {
+    uint64_t entity;
+};
+
+struct de_ep_spline_sample_params {
+    uint64_t entity;
+    float step; /* metres between samples along the curve, at least 0.01; at most 4096 samples are returned */
+};
+
+/* The curve as the engine evaluates it, in world space, sampled evenly by arc length from the start (and back to it when closed). */
+struct de_ep_spline_samples {
+    uint64_t revision;
+    float length;
+    de_ep_list_f32 positions; /* 3 values per sample */
+    de_ep_list_f32 tangents; /* unit direction, 3 values per sample */
+    de_ep_list_f32 distances; /* arc length at each sample */
+};
+
 struct de_ep_stats_sample {
     uint64_t frame;
     de_ep_map_f64 values;
@@ -1666,6 +1741,64 @@ struct de_ep_view_show_flags_params {
     de_ep_list_str show_flags;
 };
 
+/* A river's flow map, generated from its spline: inside width / 2 of the curve the water flows along the curve, fastest (flowSpeed) at the centre and 0 at the banks; outside it is 0. The engine regenerates it in the frame that applies an edit to the river or its spline. */
+struct de_ep_water_flow_map {
+    uint64_t revision; /* the river entity revision; the spline's edits bump it too */
+    de_ep_list_f32 origin; /* world [x, z] of the map's first texel corner */
+    de_ep_list_f32 size; /* [width along x, depth along z] in metres */
+    uint32_t width; /* texels along x */
+    uint32_t height; /* texels along z */
+    de_ep_list_f32 flow; /* world velocity [x, z] in m/s, 2 values per texel, rows along +z */
+    float max_speed; /* the fastest texel in m/s */
+};
+
+struct de_ep_water_flow_params {
+    uint64_t entity; /* a river */
+    uint32_t resolution; /* texels along the longer side, 2 to 128 */
+};
+
+struct de_ep_water_info {
+    uint64_t entity;
+    de_ep_str component; /* the reflected water component */
+    de_ep_str buoyancy_component; /* the reflected buoyancy probe component */
+    de_ep_list_str kinds; /* the body kinds this engine renders: ocean, river, lake */
+    de_ep_list_str spectra; /* the wave spectra this engine simulates: phillips, jonswap, pierson_moskowitz */
+    de_ep_str kind; /* this body's kind */
+    float wave_height; /* significant wave height in metres for an ocean at its current wind and spectrum; 0 for a river or a lake */
+    uint32_t max_probes; /* probes per buoyancy component */
+    uint64_t revision; /* the entity revision this reply describes */
+};
+
+struct de_ep_water_params {
+    uint64_t entity;
+};
+
+struct de_ep_water_probes_params {
+    bool has_entities;
+    de_ep_list_u64 entities; /* bodies with the buoyancy component; absent for the ones water.showProbes shows. Entities without it are skipped. */
+};
+
+/* The engine draws these bodies' probes in every viewport (a sphere per probe, coloured by how deep it is) until the next call. An empty list hides them. */
+struct de_ep_water_show_probes_params {
+    de_ep_list_u64 entities;
+};
+
+/* The body's surface height over a square, as the current frame renders it. Ocean waves move with game time, which advances in Play and Simulate only. */
+struct de_ep_water_surface {
+    uint64_t revision; /* the entity revision the surface was built from */
+    float time; /* game time in seconds the surface is at */
+    float wave_height; /* as WaterInfo.waveHeight */
+    de_ep_list_f32 heights; /* world y, resolution x resolution, rows along +z, each row along +x */
+};
+
+struct de_ep_water_surface_params {
+    uint64_t entity;
+    float x; /* world x of the square's centre */
+    float z; /* world z of the square's centre */
+    float size; /* side of the square in metres, above 0 */
+    uint32_t resolution; /* samples per side, 2 to 64 */
+};
+
 struct de_ep_world_delta {
     uint32_t subscription;
     bool has_resync;
@@ -1719,6 +1852,8 @@ void de_ep_write_blob_ref(mpack_writer_t *w, const de_ep_blob_ref *v);
 void de_ep_read_blob_ref(mpack_reader_t *r, de_ep_arena *a, de_ep_blob_ref *out);
 void de_ep_write_build_info(mpack_writer_t *w, const de_ep_build_info *v);
 void de_ep_read_build_info(mpack_reader_t *r, de_ep_arena *a, de_ep_build_info *out);
+void de_ep_write_buoyancy_probes(mpack_writer_t *w, const de_ep_buoyancy_probes *v);
+void de_ep_read_buoyancy_probes(mpack_reader_t *r, de_ep_arena *a, de_ep_buoyancy_probes *out);
 void de_ep_write_c_var(mpack_writer_t *w, const de_ep_c_var *v);
 void de_ep_read_c_var(mpack_reader_t *r, de_ep_arena *a, de_ep_c_var *out);
 void de_ep_write_c_var_list(mpack_writer_t *w, const de_ep_c_var_list *v);
@@ -1937,6 +2072,18 @@ void de_ep_write_snap_params(mpack_writer_t *w, const de_ep_snap_params *v);
 void de_ep_read_snap_params(mpack_reader_t *r, de_ep_arena *a, de_ep_snap_params *out);
 void de_ep_write_snap_result(mpack_writer_t *w, const de_ep_snap_result *v);
 void de_ep_read_snap_result(mpack_reader_t *r, de_ep_arena *a, de_ep_snap_result *out);
+void de_ep_write_spline_carve(mpack_writer_t *w, const de_ep_spline_carve *v);
+void de_ep_read_spline_carve(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_carve *out);
+void de_ep_write_spline_info(mpack_writer_t *w, const de_ep_spline_info *v);
+void de_ep_read_spline_info(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_info *out);
+void de_ep_write_spline_instances(mpack_writer_t *w, const de_ep_spline_instances *v);
+void de_ep_read_spline_instances(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_instances *out);
+void de_ep_write_spline_params(mpack_writer_t *w, const de_ep_spline_params *v);
+void de_ep_read_spline_params(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_spline_sample_params(mpack_writer_t *w, const de_ep_spline_sample_params *v);
+void de_ep_read_spline_sample_params(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_sample_params *out);
+void de_ep_write_spline_samples(mpack_writer_t *w, const de_ep_spline_samples *v);
+void de_ep_read_spline_samples(mpack_reader_t *r, de_ep_arena *a, de_ep_spline_samples *out);
 void de_ep_write_stats_sample(mpack_writer_t *w, const de_ep_stats_sample *v);
 void de_ep_read_stats_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_stats_sample *out);
 void de_ep_write_stats_subscribe_params(mpack_writer_t *w, const de_ep_stats_subscribe_params *v);
@@ -2003,6 +2150,22 @@ void de_ep_write_view_resized(mpack_writer_t *w, const de_ep_view_resized *v);
 void de_ep_read_view_resized(mpack_reader_t *r, de_ep_arena *a, de_ep_view_resized *out);
 void de_ep_write_view_show_flags_params(mpack_writer_t *w, const de_ep_view_show_flags_params *v);
 void de_ep_read_view_show_flags_params(mpack_reader_t *r, de_ep_arena *a, de_ep_view_show_flags_params *out);
+void de_ep_write_water_flow_map(mpack_writer_t *w, const de_ep_water_flow_map *v);
+void de_ep_read_water_flow_map(mpack_reader_t *r, de_ep_arena *a, de_ep_water_flow_map *out);
+void de_ep_write_water_flow_params(mpack_writer_t *w, const de_ep_water_flow_params *v);
+void de_ep_read_water_flow_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_flow_params *out);
+void de_ep_write_water_info(mpack_writer_t *w, const de_ep_water_info *v);
+void de_ep_read_water_info(mpack_reader_t *r, de_ep_arena *a, de_ep_water_info *out);
+void de_ep_write_water_params(mpack_writer_t *w, const de_ep_water_params *v);
+void de_ep_read_water_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_params *out);
+void de_ep_write_water_probes_params(mpack_writer_t *w, const de_ep_water_probes_params *v);
+void de_ep_read_water_probes_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_probes_params *out);
+void de_ep_write_water_show_probes_params(mpack_writer_t *w, const de_ep_water_show_probes_params *v);
+void de_ep_read_water_show_probes_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_show_probes_params *out);
+void de_ep_write_water_surface(mpack_writer_t *w, const de_ep_water_surface *v);
+void de_ep_read_water_surface(mpack_reader_t *r, de_ep_arena *a, de_ep_water_surface *out);
+void de_ep_write_water_surface_params(mpack_writer_t *w, const de_ep_water_surface_params *v);
+void de_ep_read_water_surface_params(mpack_reader_t *r, de_ep_arena *a, de_ep_water_surface_params *out);
 void de_ep_write_world_delta(mpack_writer_t *w, const de_ep_world_delta *v);
 void de_ep_read_world_delta(mpack_reader_t *r, de_ep_arena *a, de_ep_world_delta *out);
 
@@ -2079,6 +2242,9 @@ typedef enum de_ep_method {
     DE_EP_METHOD_SNAPSHOT_RELEASE,
     DE_EP_METHOD_SNAPSHOT_RESTORE,
     DE_EP_METHOD_SNAPSHOT_TAKE,
+    DE_EP_METHOD_SPLINE_INFO,
+    DE_EP_METHOD_SPLINE_INSTANCES,
+    DE_EP_METHOD_SPLINE_SAMPLE,
     DE_EP_METHOD_STATS_SUBSCRIBE,
     DE_EP_METHOD_SUBSCRIBE,
     DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
@@ -2095,6 +2261,11 @@ typedef enum de_ep_method {
     DE_EP_METHOD_VIEW_SET_PAUSED,
     DE_EP_METHOD_VIEW_SET_RENDER_MODE,
     DE_EP_METHOD_VIEW_SET_SHOW_FLAGS,
+    DE_EP_METHOD_WATER_FLOW_MAP,
+    DE_EP_METHOD_WATER_INFO,
+    DE_EP_METHOD_WATER_PROBES,
+    DE_EP_METHOD_WATER_SHOW_PROBES,
+    DE_EP_METHOD_WATER_SURFACE,
     DE_EP_METHOD_WORLD_ARCHETYPES,
     DE_EP_METHOD_WORLD_CHECKSUM,
     DE_EP_METHOD_WORLD_ENTITY,
@@ -2295,6 +2466,12 @@ bool de_ep_read_params_snapshot_restore(const de_ep_request *req, de_ep_arena *a
 void de_ep_write_response_snapshot_restore(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_snapshot_take(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_snapshot_take(mpack_writer_t *w, uint64_t id, const de_ep_snap_result *result);
+bool de_ep_read_params_spline_info(const de_ep_request *req, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_response_spline_info(mpack_writer_t *w, uint64_t id, const de_ep_spline_info *result);
+bool de_ep_read_params_spline_instances(const de_ep_request *req, de_ep_arena *a, de_ep_spline_params *out);
+void de_ep_write_response_spline_instances(mpack_writer_t *w, uint64_t id, const de_ep_spline_instances *result);
+bool de_ep_read_params_spline_sample(const de_ep_request *req, de_ep_arena *a, de_ep_spline_sample_params *out);
+void de_ep_write_response_spline_sample(mpack_writer_t *w, uint64_t id, const de_ep_spline_samples *result);
 bool de_ep_read_params_stats_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_stats_subscribe_params *out);
 void de_ep_write_response_stats_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_subscribe_params *out);
@@ -2327,6 +2504,16 @@ bool de_ep_read_params_view_set_render_mode(const de_ep_request *req, de_ep_aren
 void de_ep_write_response_view_set_render_mode(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_set_show_flags(const de_ep_request *req, de_ep_arena *a, de_ep_view_show_flags_params *out);
 void de_ep_write_response_view_set_show_flags(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_water_flow_map(const de_ep_request *req, de_ep_arena *a, de_ep_water_flow_params *out);
+void de_ep_write_response_water_flow_map(mpack_writer_t *w, uint64_t id, const de_ep_water_flow_map *result);
+bool de_ep_read_params_water_info(const de_ep_request *req, de_ep_arena *a, de_ep_water_params *out);
+void de_ep_write_response_water_info(mpack_writer_t *w, uint64_t id, const de_ep_water_info *result);
+bool de_ep_read_params_water_probes(const de_ep_request *req, de_ep_arena *a, de_ep_water_probes_params *out);
+void de_ep_write_response_water_probes(mpack_writer_t *w, uint64_t id, const de_ep_buoyancy_probes *result);
+bool de_ep_read_params_water_show_probes(const de_ep_request *req, de_ep_arena *a, de_ep_water_show_probes_params *out);
+void de_ep_write_response_water_show_probes(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_water_surface(const de_ep_request *req, de_ep_arena *a, de_ep_water_surface_params *out);
+void de_ep_write_response_water_surface(mpack_writer_t *w, uint64_t id, const de_ep_water_surface *result);
 bool de_ep_read_params_world_archetypes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_world_archetypes(mpack_writer_t *w, uint64_t id, const de_ep_archetype_list *result);
 bool de_ep_read_params_world_checksum(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);

@@ -493,6 +493,7 @@ de_result de__editor_start(de__host *h) {
     de__ed_views_register(ed);
     de__ed_debugdraw_register(ed);
     de__ed_extra_register(ed);
+    de__ed_spline_register(ed);
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);
 #endif

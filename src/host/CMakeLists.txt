@@ -14,7 +14,7 @@ de_add_module(
         loop.c
         game_module.c
     DEPS
-        core platform task reflect ecs asset anim input text sky terrain water decal streaming
+        core platform task reflect ecs asset anim input text sky terrain water decal streaming spline
         tilemap crash mods save
     OPTIONAL_DEPS gpu gpu_d3d12 gpu_vulkan gpu_metal render physics audio net ui vfx nav video steam
 )
@@ -114,7 +114,8 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
         editor/editor_gizmo.c
         editor/editor_gizmo.h
         editor/editor_debugdraw.c
-        editor/editor_extra.c)
+        editor/editor_extra.c
+        editor/editor_spline.c)
     target_link_libraries(de_host PRIVATE de_tp_dide_protocol)
     set_property(TARGET de_host APPEND PROPERTY DE_MODULE_LIBS de_tp_dide_protocol)
     target_compile_definitions(de_host PRIVATE DE_HAS_EDITOR_SERVICE=1)

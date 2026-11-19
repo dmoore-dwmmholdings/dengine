@@ -495,6 +495,14 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_include_directories(test_editor_entity PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-775: spline.info/sample/instances (DIDE protocol 1.12, world.splines) through the real
+# handlers and the generated protocol readers and writers.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_spline SOURCES test_editor_spline.c
+        LIBS de_host de_spline de_tp_dide_protocol LABELS unit host CONFIGURATIONS Debug Dev Release)
+    target_include_directories(test_editor_spline PRIVATE "${DE_ROOT_DIR}/src")
+endif()
+
 # DENG-769: the material graph over the editor IPC (materialGraph.catalog/generate/compile),
 # round-tripped through the generated protocol readers and writers. Debug and Dev with the cooker
 # and Slang only, the same condition as the handlers in de_host.
