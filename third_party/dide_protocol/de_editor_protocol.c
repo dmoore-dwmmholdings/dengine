@@ -173,6 +173,84 @@ bool de_ep_asset_event_kind_parse(de_ep_str s, de_ep_asset_event_kind *out) {
     return false;
 }
 
+const char *de_ep_material_graph_param_kind_name(de_ep_material_graph_param_kind v) {
+    switch (v) {
+    case DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT:
+        return "FLOAT";
+    case DE_EP_MATERIAL_GRAPH_PARAM_KIND_COLOR:
+        return "COLOR";
+    case DE_EP_MATERIAL_GRAPH_PARAM_KIND_TEXTURE:
+        return "TEXTURE";
+    }
+    return "";
+}
+
+bool de_ep_material_graph_param_kind_parse(de_ep_str s, de_ep_material_graph_param_kind *out) {
+    if (de_ep_str_eq(s, "FLOAT")) {
+        *out = DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT;
+        return true;
+    }
+    if (de_ep_str_eq(s, "COLOR")) {
+        *out = DE_EP_MATERIAL_GRAPH_PARAM_KIND_COLOR;
+        return true;
+    }
+    if (de_ep_str_eq(s, "TEXTURE")) {
+        *out = DE_EP_MATERIAL_GRAPH_PARAM_KIND_TEXTURE;
+        return true;
+    }
+    return false;
+}
+
+const char *de_ep_material_graph_severity_name(de_ep_material_graph_severity v) {
+    switch (v) {
+    case DE_EP_MATERIAL_GRAPH_SEVERITY_ERROR:
+        return "ERROR";
+    case DE_EP_MATERIAL_GRAPH_SEVERITY_WARNING:
+        return "WARNING";
+    }
+    return "";
+}
+
+bool de_ep_material_graph_severity_parse(de_ep_str s, de_ep_material_graph_severity *out) {
+    if (de_ep_str_eq(s, "ERROR")) {
+        *out = DE_EP_MATERIAL_GRAPH_SEVERITY_ERROR;
+        return true;
+    }
+    if (de_ep_str_eq(s, "WARNING")) {
+        *out = DE_EP_MATERIAL_GRAPH_SEVERITY_WARNING;
+        return true;
+    }
+    return false;
+}
+
+const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v) {
+    switch (v) {
+    case DE_EP_MATERIAL_GRAPH_TARGET_STATUS_OK:
+        return "OK";
+    case DE_EP_MATERIAL_GRAPH_TARGET_STATUS_ERROR:
+        return "ERROR";
+    case DE_EP_MATERIAL_GRAPH_TARGET_STATUS_UNSUPPORTED:
+        return "UNSUPPORTED";
+    }
+    return "";
+}
+
+bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out) {
+    if (de_ep_str_eq(s, "OK")) {
+        *out = DE_EP_MATERIAL_GRAPH_TARGET_STATUS_OK;
+        return true;
+    }
+    if (de_ep_str_eq(s, "ERROR")) {
+        *out = DE_EP_MATERIAL_GRAPH_TARGET_STATUS_ERROR;
+        return true;
+    }
+    if (de_ep_str_eq(s, "UNSUPPORTED")) {
+        *out = DE_EP_MATERIAL_GRAPH_TARGET_STATUS_UNSUPPORTED;
+        return true;
+    }
+    return false;
+}
+
 const char *de_ep_world_mode_name(de_ep_world_mode v) {
     switch (v) {
     case DE_EP_WORLD_MODE_EDIT:
@@ -3324,6 +3402,7 @@ void de_ep_read_hello_params(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_para
 void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v) {
     uint32_t n = 0;
     ++n;
+    n += v->has_server_protocol ? 1u : 0u;
     ++n;
     ++n;
     ++n;
@@ -3332,6 +3411,10 @@ void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v) {
     mpack_start_map(w, n);
     mpack_write_cstr(w, "protocol");
     de_ep_write_str(w, v->protocol);
+    if (v->has_server_protocol) {
+        mpack_write_cstr(w, "serverProtocol");
+        de_ep_write_str(w, v->server_protocol);
+    }
     mpack_write_cstr(w, "capabilities");
     mpack_start_array(w, v->capabilities.count);
     for (uint32_t i_1 = 0; i_1 < v->capabilities.count; ++i_1) {
@@ -3361,8 +3444,12 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
         if (de_ep_str_eq(k, "protocol")) {
             seen |= (uint64_t)1 << 0;
             de_ep_read_str(r, &out->protocol);
-        } else if (de_ep_str_eq(k, "capabilities")) {
+        } else if (de_ep_str_eq(k, "serverProtocol")) {
             seen |= (uint64_t)1 << 1;
+            out->has_server_protocol = true;
+            de_ep_read_str(r, &out->server_protocol);
+        } else if (de_ep_str_eq(k, "capabilities")) {
+            seen |= (uint64_t)1 << 2;
             out->capabilities.count = mpack_expect_array(r);
             out->capabilities.items = (de_ep_str *)de_ep_arena_array(r, a, out->capabilities.count, sizeof(*out->capabilities.items));
             for (uint32_t i_3 = 0; out->capabilities.items && i_3 < out->capabilities.count; ++i_3)
@@ -3371,16 +3458,16 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
             }
             mpack_done_array(r);
         } else if (de_ep_str_eq(k, "build")) {
-            seen |= (uint64_t)1 << 2;
+            seen |= (uint64_t)1 << 3;
             de_ep_read_build_info(r, a, &out->build);
         } else if (de_ep_str_eq(k, "limits")) {
-            seen |= (uint64_t)1 << 3;
+            seen |= (uint64_t)1 << 4;
             de_ep_read_limits(r, a, &out->limits);
         } else if (de_ep_str_eq(k, "epoch")) {
-            seen |= (uint64_t)1 << 4;
+            seen |= (uint64_t)1 << 5;
             out->epoch = mpack_expect_u32(r);
         } else if (de_ep_str_eq(k, "schema")) {
-            seen |= (uint64_t)1 << 5;
+            seen |= (uint64_t)1 << 6;
             out->has_schema = true;
             de_ep_read_str(r, &out->schema);
         } else {
@@ -3388,7 +3475,7 @@ void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_resu
         }
     }
     mpack_done_map(r);
-    if ((seen & UINT64_C(31)) != UINT64_C(31))
+    if ((seen & UINT64_C(61)) != UINT64_C(61))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -3832,6 +3919,467 @@ void de_ep_read_log_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_lo
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_catalog(mpack_writer_t *w, const de_ep_material_graph_catalog *v) {
+    uint32_t n = 0;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "json");
+    de_ep_write_str(w, v->json);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_catalog(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_catalog *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "json")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->json);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_compile_params(mpack_writer_t *w, const de_ep_material_graph_compile_params *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_name ? 1u : 0u;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "graph");
+    de_ep_write_str(w, v->graph);
+    if (v->has_name) {
+        mpack_write_cstr(w, "name");
+        de_ep_write_str(w, v->name);
+    }
+    mpack_write_cstr(w, "targets");
+    mpack_start_array(w, v->targets.count);
+    for (uint32_t i_1 = 0; i_1 < v->targets.count; ++i_1) {
+        de_ep_write_str(w, v->targets.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_compile_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compile_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "graph")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->graph);
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_name = true;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "targets")) {
+            seen |= (uint64_t)1 << 2;
+            out->targets.count = mpack_expect_array(r);
+            out->targets.items = (de_ep_str *)de_ep_arena_array(r, a, out->targets.count, sizeof(*out->targets.items));
+            for (uint32_t i_3 = 0; out->targets.items && i_3 < out->targets.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->targets.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(5)) != UINT64_C(5))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_compiled(mpack_writer_t *w, const de_ep_material_graph_compiled *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "generated");
+    de_ep_write_material_graph_generated(w, &v->generated);
+    mpack_write_cstr(w, "targets");
+    mpack_start_array(w, v->targets.count);
+    for (uint32_t i_1 = 0; i_1 < v->targets.count; ++i_1) {
+        de_ep_write_material_graph_target_result(w, &v->targets.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_compiled(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compiled *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "generated")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_material_graph_generated(r, a, &out->generated);
+        } else if (de_ep_str_eq(k, "targets")) {
+            seen |= (uint64_t)1 << 1;
+            out->targets.count = mpack_expect_array(r);
+            out->targets.items = (de_ep_material_graph_target_result *)de_ep_arena_array(r, a, out->targets.count, sizeof(*out->targets.items));
+            for (uint32_t i_3 = 0; out->targets.items && i_3 < out->targets.count; ++i_3)
+            {
+                de_ep_read_material_graph_target_result(r, a, &out->targets.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_diagnostic(mpack_writer_t *w, const de_ep_material_graph_diagnostic *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    n += v->has_line ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "severity");
+    mpack_write_cstr(w, de_ep_material_graph_severity_name(v->severity));
+    mpack_write_cstr(w, "node");
+    de_ep_write_str(w, v->node);
+    mpack_write_cstr(w, "pin");
+    de_ep_write_str(w, v->pin);
+    mpack_write_cstr(w, "message");
+    de_ep_write_str(w, v->message);
+    if (v->has_line) {
+        mpack_write_cstr(w, "line");
+        mpack_write_u32(w, v->line);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_diagnostic(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_diagnostic *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "severity")) {
+            seen |= (uint64_t)1 << 0;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_material_graph_severity_parse(s_, &out->severity))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "node")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->node);
+        } else if (de_ep_str_eq(k, "pin")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->pin);
+        } else if (de_ep_str_eq(k, "message")) {
+            seen |= (uint64_t)1 << 3;
+            de_ep_read_str(r, &out->message);
+        } else if (de_ep_str_eq(k, "line")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_line = true;
+            out->line = mpack_expect_u32(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_generated(mpack_writer_t *w, const de_ep_material_graph_generated *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_source ? 1u : 0u;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "ok");
+    mpack_write_bool(w, v->ok);
+    if (v->has_source) {
+        mpack_write_cstr(w, "source");
+        de_ep_write_str(w, v->source);
+    }
+    mpack_write_cstr(w, "params");
+    mpack_start_array(w, v->params.count);
+    for (uint32_t i_1 = 0; i_1 < v->params.count; ++i_1) {
+        de_ep_write_material_graph_param(w, &v->params.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "features");
+    mpack_write_u32(w, v->features);
+    mpack_write_cstr(w, "diagnostics");
+    mpack_start_array(w, v->diagnostics.count);
+    for (uint32_t i_1 = 0; i_1 < v->diagnostics.count; ++i_1) {
+        de_ep_write_material_graph_diagnostic(w, &v->diagnostics.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_generated(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_generated *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "ok")) {
+            seen |= (uint64_t)1 << 0;
+            out->ok = mpack_expect_bool(r);
+        } else if (de_ep_str_eq(k, "source")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_source = true;
+            de_ep_read_str(r, &out->source);
+        } else if (de_ep_str_eq(k, "params")) {
+            seen |= (uint64_t)1 << 2;
+            out->params.count = mpack_expect_array(r);
+            out->params.items = (de_ep_material_graph_param *)de_ep_arena_array(r, a, out->params.count, sizeof(*out->params.items));
+            for (uint32_t i_3 = 0; out->params.items && i_3 < out->params.count; ++i_3)
+            {
+                de_ep_read_material_graph_param(r, a, &out->params.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "features")) {
+            seen |= (uint64_t)1 << 3;
+            out->features = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "diagnostics")) {
+            seen |= (uint64_t)1 << 4;
+            out->diagnostics.count = mpack_expect_array(r);
+            out->diagnostics.items = (de_ep_material_graph_diagnostic *)de_ep_arena_array(r, a, out->diagnostics.count, sizeof(*out->diagnostics.items));
+            for (uint32_t i_3 = 0; out->diagnostics.items && i_3 < out->diagnostics.count; ++i_3)
+            {
+                de_ep_read_material_graph_diagnostic(r, a, &out->diagnostics.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(29)) != UINT64_C(29))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_param(mpack_writer_t *w, const de_ep_material_graph_param *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "kind");
+    mpack_write_cstr(w, de_ep_material_graph_param_kind_name(v->kind));
+    mpack_write_cstr(w, "name");
+    de_ep_write_str(w, v->name);
+    mpack_write_cstr(w, "node");
+    de_ep_write_str(w, v->node);
+    mpack_write_cstr(w, "row");
+    mpack_write_u32(w, v->row);
+    mpack_write_cstr(w, "component");
+    mpack_write_u32(w, v->component);
+    mpack_write_cstr(w, "slot");
+    mpack_write_u32(w, v->slot);
+    mpack_write_cstr(w, "value");
+    mpack_start_array(w, v->value.count);
+    for (uint32_t i_1 = 0; i_1 < v->value.count; ++i_1) {
+        mpack_write_float(w, v->value.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "min");
+    mpack_write_float(w, v->min);
+    mpack_write_cstr(w, "max");
+    mpack_write_float(w, v->max);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_param(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_param *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "kind")) {
+            seen |= (uint64_t)1 << 0;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_material_graph_param_kind_parse(s_, &out->kind))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->name);
+        } else if (de_ep_str_eq(k, "node")) {
+            seen |= (uint64_t)1 << 2;
+            de_ep_read_str(r, &out->node);
+        } else if (de_ep_str_eq(k, "row")) {
+            seen |= (uint64_t)1 << 3;
+            out->row = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "component")) {
+            seen |= (uint64_t)1 << 4;
+            out->component = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "slot")) {
+            seen |= (uint64_t)1 << 5;
+            out->slot = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "value")) {
+            seen |= (uint64_t)1 << 6;
+            out->value.count = mpack_expect_array(r);
+            out->value.items = (float *)de_ep_arena_array(r, a, out->value.count, sizeof(*out->value.items));
+            for (uint32_t i_3 = 0; out->value.items && i_3 < out->value.count; ++i_3)
+            {
+                out->value.items[i_3] = mpack_expect_float(r);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "min")) {
+            seen |= (uint64_t)1 << 7;
+            out->min = mpack_expect_float(r);
+        } else if (de_ep_str_eq(k, "max")) {
+            seen |= (uint64_t)1 << 8;
+            out->max = mpack_expect_float(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(511)) != UINT64_C(511))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_params(mpack_writer_t *w, const de_ep_material_graph_params *v) {
+    uint32_t n = 0;
+    ++n;
+    n += v->has_name ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "graph");
+    de_ep_write_str(w, v->graph);
+    if (v->has_name) {
+        mpack_write_cstr(w, "name");
+        de_ep_write_str(w, v->name);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_params *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "graph")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->graph);
+        } else if (de_ep_str_eq(k, "name")) {
+            seen |= (uint64_t)1 << 1;
+            out->has_name = true;
+            de_ep_read_str(r, &out->name);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_material_graph_target_result(mpack_writer_t *w, const de_ep_material_graph_target_result *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    n += v->has_code_size ? 1u : 0u;
+    ++n;
+    n += v->has_message ? 1u : 0u;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "target");
+    de_ep_write_str(w, v->target);
+    mpack_write_cstr(w, "status");
+    mpack_write_cstr(w, de_ep_material_graph_target_status_name(v->status));
+    if (v->has_code_size) {
+        mpack_write_cstr(w, "codeSize");
+        mpack_write_u64(w, v->code_size);
+    }
+    mpack_write_cstr(w, "diagnostics");
+    mpack_start_array(w, v->diagnostics.count);
+    for (uint32_t i_1 = 0; i_1 < v->diagnostics.count; ++i_1) {
+        de_ep_write_material_graph_diagnostic(w, &v->diagnostics.items[i_1]);
+    }
+    mpack_finish_array(w);
+    if (v->has_message) {
+        mpack_write_cstr(w, "message");
+        de_ep_write_str(w, v->message);
+    }
+    mpack_finish_map(w);
+}
+
+void de_ep_read_material_graph_target_result(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_target_result *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "target")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->target);
+        } else if (de_ep_str_eq(k, "status")) {
+            seen |= (uint64_t)1 << 1;
+            {
+                de_ep_str s_;
+                de_ep_read_str(r, &s_);
+                if (!de_ep_material_graph_target_status_parse(s_, &out->status))
+                    mpack_reader_flag_error(r, mpack_error_data);
+            }
+        } else if (de_ep_str_eq(k, "codeSize")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_code_size = true;
+            out->code_size = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "diagnostics")) {
+            seen |= (uint64_t)1 << 3;
+            out->diagnostics.count = mpack_expect_array(r);
+            out->diagnostics.items = (de_ep_material_graph_diagnostic *)de_ep_arena_array(r, a, out->diagnostics.count, sizeof(*out->diagnostics.items));
+            for (uint32_t i_3 = 0; out->diagnostics.items && i_3 < out->diagnostics.count; ++i_3)
+            {
+                de_ep_read_material_graph_diagnostic(r, a, &out->diagnostics.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "message")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_message = true;
+            de_ep_read_str(r, &out->message);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(11)) != UINT64_C(11))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -7707,6 +8255,9 @@ static const char *const de_ep__methods[DE_EP_METHOD_COUNT] = {
     "input.events",
     "input.focus",
     "log.subscribe",
+    "materialGraph.catalog",
+    "materialGraph.compile",
+    "materialGraph.generate",
     "net.checksums",
     "net.sim",
     "pick",
@@ -7800,6 +8351,9 @@ static const char *const de_ep__capabilities[DE_EP_METHOD_COUNT] = {
     NULL,
     NULL,
     NULL,
+    "assets.materialGraph",
+    "assets.materialGraph",
+    "assets.materialGraph",
     "net.multi",
     "net.multi",
     NULL,
@@ -8420,6 +8974,45 @@ bool de_ep_read_params_log_subscribe(const de_ep_request *req, de_ep_arena *a, d
 void de_ep_write_response_log_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result) {
     de_ep_write_result_begin(w, id);
     de_ep_write_subscribe_result(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_material_graph_catalog(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_empty(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_material_graph_catalog(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_catalog *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_material_graph_catalog(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_material_graph_compile(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_compile_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_material_graph_compile_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_material_graph_compile(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_compiled *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_material_graph_compiled(w, result);
+    de_ep_write_result_end(w);
+}
+
+bool de_ep_read_params_material_graph_generate(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_params *out) {
+    mpack_reader_t r;
+    de_ep__params_reader(req, &r);
+    de_ep_read_material_graph_params(&r, a, out);
+    return mpack_reader_destroy(&r) == mpack_ok;
+}
+
+void de_ep_write_response_material_graph_generate(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_generated *result) {
+    de_ep_write_result_begin(w, id);
+    de_ep_write_material_graph_generated(w, result);
     de_ep_write_result_end(w);
 }
 

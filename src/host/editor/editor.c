@@ -268,6 +268,28 @@ void de__ed_session_build_info(de__editor *ed, de_ep_build_info *b) {
 }
 
 /* The first request: hello. False closes the connection. */
+void de__ed_hello_result(de__editor *ed, const char *agreed, de_ep_str *caps,
+                         de_ep_hello_result *r) {
+    for (u32 i = 0; i < ed->cap_count; ++i)
+        caps[i] = de_ep_cstr(ed->caps[i]);
+    memset(r, 0, sizeof *r);
+    r->protocol = de_ep_cstr(agreed);
+    r->capabilities.items = caps;
+    r->capabilities.count = ed->cap_count;
+    ed_build_info(ed, &r->build);
+    r->limits.requests_in_flight = DE_EP_LIMIT_REQUESTS_IN_FLIGHT;
+    r->limits.subscriptions = DE_EP_LIMIT_SUBSCRIPTIONS;
+    r->limits.query_page_size = DE_EP_LIMIT_QUERY_PAGE_SIZE;
+    r->limits.open_transactions = DE_EP_LIMIT_OPEN_TRANSACTIONS;
+    r->limits.frame_size = DE_EP_LIMIT_FRAME_SIZE;
+    r->epoch = ed->epoch;
+    r->has_schema = true;
+    r->schema = de_ep_cstr(DE_EP_SCHEMA_HASH);
+    /* Required from protocol 1.9: the native version the schema hash belongs to. */
+    r->has_server_protocol = true;
+    r->server_protocol = de_ep_cstr(DE_EP_PROTOCOL_VERSION);
+}
+
 static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     mpack_writer_t w;
     mpack_writer_init(&w, ed->out, ed->out_cap);
@@ -296,22 +318,8 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
         return false;
     }
     de_ep_str caps[DE__ED_MAX_CAPS];
-    for (u32 i = 0; i < ed->cap_count; ++i)
-        caps[i] = de_ep_cstr(ed->caps[i]);
     de_ep_hello_result r;
-    memset(&r, 0, sizeof r);
-    r.protocol = de_ep_cstr(agreed);
-    r.capabilities.items = caps;
-    r.capabilities.count = ed->cap_count;
-    ed_build_info(ed, &r.build);
-    r.limits.requests_in_flight = DE_EP_LIMIT_REQUESTS_IN_FLIGHT;
-    r.limits.subscriptions = DE_EP_LIMIT_SUBSCRIPTIONS;
-    r.limits.query_page_size = DE_EP_LIMIT_QUERY_PAGE_SIZE;
-    r.limits.open_transactions = DE_EP_LIMIT_OPEN_TRANSACTIONS;
-    r.limits.frame_size = DE_EP_LIMIT_FRAME_SIZE;
-    r.epoch = ed->epoch;
-    r.has_schema = true;
-    r.schema = de_ep_cstr(DE_EP_SCHEMA_HASH);
+    de__ed_hello_result(ed, agreed, caps, &r);
     de_ep_write_response_hello(&w, req->id, &r);
     if (!de__ed_send(ed, &w, DE_EP_KIND_RESPONSE))
         return false;
@@ -485,6 +493,9 @@ de_result de__editor_start(de__host *h) {
     de__ed_views_register(ed);
     de__ed_debugdraw_register(ed);
     de__ed_extra_register(ed);
+#if DE_ED_MATERIAL_GRAPH
+    de__ed_material_graph_register(ed);
+#endif
 
     de_result r = de__loop_add_frame_begin_hook(h, ed_pump, ed);
     if (r != DE_OK) {

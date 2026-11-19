@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.8"
-#define DE_EP_SCHEMA_HASH "eb33822460ae9041"
+#define DE_EP_PROTOCOL_VERSION "1.10"
+#define DE_EP_SCHEMA_HASH "34f71d534d9afbf8"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -83,6 +83,29 @@ typedef enum de_ep_asset_event_kind {
 } de_ep_asset_event_kind;
 const char *de_ep_asset_event_kind_name(de_ep_asset_event_kind v);
 bool de_ep_asset_event_kind_parse(de_ep_str s, de_ep_asset_event_kind *out);
+
+typedef enum de_ep_material_graph_param_kind {
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT,
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_COLOR,
+    DE_EP_MATERIAL_GRAPH_PARAM_KIND_TEXTURE,
+} de_ep_material_graph_param_kind;
+const char *de_ep_material_graph_param_kind_name(de_ep_material_graph_param_kind v);
+bool de_ep_material_graph_param_kind_parse(de_ep_str s, de_ep_material_graph_param_kind *out);
+
+typedef enum de_ep_material_graph_severity {
+    DE_EP_MATERIAL_GRAPH_SEVERITY_ERROR,
+    DE_EP_MATERIAL_GRAPH_SEVERITY_WARNING,
+} de_ep_material_graph_severity;
+const char *de_ep_material_graph_severity_name(de_ep_material_graph_severity v);
+bool de_ep_material_graph_severity_parse(de_ep_str s, de_ep_material_graph_severity *out);
+
+typedef enum de_ep_material_graph_target_status {
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_OK,
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_ERROR,
+    DE_EP_MATERIAL_GRAPH_TARGET_STATUS_UNSUPPORTED,
+} de_ep_material_graph_target_status;
+const char *de_ep_material_graph_target_status_name(de_ep_material_graph_target_status v);
+bool de_ep_material_graph_target_status_parse(de_ep_str s, de_ep_material_graph_target_status *out);
 
 typedef enum de_ep_world_mode {
     DE_EP_WORLD_MODE_EDIT,
@@ -165,6 +188,14 @@ typedef struct de_ep_input_focus_params de_ep_input_focus_params;
 typedef struct de_ep_limits de_ep_limits;
 typedef struct de_ep_log_record de_ep_log_record;
 typedef struct de_ep_log_subscribe_params de_ep_log_subscribe_params;
+typedef struct de_ep_material_graph_catalog de_ep_material_graph_catalog;
+typedef struct de_ep_material_graph_compile_params de_ep_material_graph_compile_params;
+typedef struct de_ep_material_graph_compiled de_ep_material_graph_compiled;
+typedef struct de_ep_material_graph_diagnostic de_ep_material_graph_diagnostic;
+typedef struct de_ep_material_graph_generated de_ep_material_graph_generated;
+typedef struct de_ep_material_graph_param de_ep_material_graph_param;
+typedef struct de_ep_material_graph_params de_ep_material_graph_params;
+typedef struct de_ep_material_graph_target_result de_ep_material_graph_target_result;
 typedef struct de_ep_material_render_params de_ep_material_render_params;
 typedef struct de_ep_model_attribute de_ep_model_attribute;
 typedef struct de_ep_model_info de_ep_model_info;
@@ -444,10 +475,25 @@ typedef struct de_ep_list_debug_draw_category {
     uint32_t count;
 } de_ep_list_debug_draw_category;
 
+typedef struct de_ep_list_material_graph_param {
+    de_ep_material_graph_param *items;
+    uint32_t count;
+} de_ep_list_material_graph_param;
+
 typedef struct de_ep_list_animation_joint_frame {
     de_ep_animation_joint_frame *items;
     uint32_t count;
 } de_ep_list_animation_joint_frame;
+
+typedef struct de_ep_list_material_graph_diagnostic {
+    de_ep_material_graph_diagnostic *items;
+    uint32_t count;
+} de_ep_list_material_graph_diagnostic;
+
+typedef struct de_ep_list_material_graph_target_result {
+    de_ep_material_graph_target_result *items;
+    uint32_t count;
+} de_ep_list_material_graph_target_result;
 
 struct de_ep_animation_joint {
     de_ep_str name;
@@ -744,7 +790,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set or reparent; the other fields are the ones that op uses. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -891,12 +937,14 @@ struct de_ep_limits {
 
 struct de_ep_hello_result {
     de_ep_str protocol; /* the agreed version: equal major, lower minor */
+    bool has_server_protocol;
+    de_ep_str server_protocol; /* the server native protocol version corresponding to schema; required from 1.9, absent in legacy replies */
     de_ep_list_str capabilities;
     de_ep_build_info build;
     de_ep_limits limits;
     uint32_t epoch;
     bool has_schema;
-    de_ep_str schema; /* the engine's schema hash: with an equal version it must equal the IDE's (DIDE-R154 AC1) */
+    de_ep_str schema; /* the engine native schema hash: compare only when serverProtocol equals the client native version (DIDE-R154 AC1) */
 };
 
 /* One input event. `type` is pointer, wheel, key, text, gesture or gamepad; the other fields are the ones that type uses. */
@@ -960,6 +1008,74 @@ struct de_ep_log_subscribe_params {
     de_ep_str min_level; /* trace, debug, info, warn, error, fatal */
     bool has_categories;
     de_ep_list_str categories;
+};
+
+/* The node catalog of material graphs. */
+struct de_ep_material_graph_catalog {
+    de_ep_str json; /* the catalog in the graph Kind JSON shape {kind, conversions, types} */
+};
+
+/* Compiles the graph's generated module for each target. */
+struct de_ep_material_graph_compile_params {
+    de_ep_str graph; /* the graph file text, at most 4 MiB */
+    bool has_name;
+    de_ep_str name; /* a name for the generated module's header comment */
+    de_ep_list_str targets; /* 1 to 6 distinct targets: spirv, dxil, metallib, metal, spirv-asm, dxil-asm */
+};
+
+/* The generated Slang module, or the diagnostics that stopped it. A graph with errors is a normal result (ok false), not an error response. */
+struct de_ep_material_graph_generated {
+    bool ok; /* true when the graph has no errors (warnings possible) */
+    bool has_source;
+    de_ep_str source; /* the Slang module; absent when ok is false */
+    de_ep_list_material_graph_param params;
+    uint32_t features; /* DE_MATERIAL_FEATURE_* bits the layer outputs set */
+    de_ep_list_material_graph_diagnostic diagnostics;
+};
+
+struct de_ep_material_graph_compiled {
+    de_ep_material_graph_generated generated; /* the generation step; targets is empty when generated.ok is false */
+    de_ep_list_material_graph_target_result targets; /* one per requested target, in request order */
+};
+
+/* One problem, on the node and pin that caused it. */
+struct de_ep_material_graph_diagnostic {
+    de_ep_material_graph_severity severity;
+    de_ep_str node; /* node path ("n3", or "n4/n2" inside subgraph n4); empty for the whole graph or generated boilerplate */
+    de_ep_str pin; /* the pin, or empty */
+    de_ep_str message;
+    bool has_line;
+    uint32_t line; /* one-based line in the graph file; omitted when unknown */
+};
+
+/* Where an exposed parameter lives in the material's float4 rows or texture slots, and its default. */
+struct de_ep_material_graph_param {
+    de_ep_material_graph_param_kind kind;
+    de_ep_str name;
+    de_ep_str node; /* the first node that declares it */
+    uint32_t row; /* FLOAT and COLOR: float4 row 0..9 */
+    uint32_t component; /* FLOAT and COLOR: first component 0..3 */
+    uint32_t slot; /* TEXTURE: slot 0..18 */
+    de_ep_list_f32 value; /* the default: 1 value (FLOAT) or 3 (COLOR); empty for TEXTURE */
+    float min;
+    float max;
+};
+
+/* A material graph file's text (TOML, kind = "material", version = 1), usually the unsaved editor buffer. */
+struct de_ep_material_graph_params {
+    de_ep_str graph; /* the graph file text, at most 4 MiB */
+    bool has_name;
+    de_ep_str name; /* a name for the generated module's header comment */
+};
+
+struct de_ep_material_graph_target_result {
+    de_ep_str target;
+    de_ep_material_graph_target_status status; /* UNSUPPORTED: this engine build cannot compile for the target */
+    bool has_code_size;
+    uint64_t code_size; /* bytes of compiled code when OK */
+    de_ep_list_material_graph_diagnostic diagnostics; /* Slang errors and warnings mapped to graph nodes */
+    bool has_message;
+    de_ep_str message; /* Slang's unmapped diagnostics text, possibly cut */
 };
 
 /* Saved source-mode material rendered in an isolated preview world; no material edits or game-world mutation. */
@@ -1611,6 +1727,22 @@ void de_ep_write_log_record(mpack_writer_t *w, const de_ep_log_record *v);
 void de_ep_read_log_record(mpack_reader_t *r, de_ep_arena *a, de_ep_log_record *out);
 void de_ep_write_log_subscribe_params(mpack_writer_t *w, const de_ep_log_subscribe_params *v);
 void de_ep_read_log_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_log_subscribe_params *out);
+void de_ep_write_material_graph_catalog(mpack_writer_t *w, const de_ep_material_graph_catalog *v);
+void de_ep_read_material_graph_catalog(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_catalog *out);
+void de_ep_write_material_graph_compile_params(mpack_writer_t *w, const de_ep_material_graph_compile_params *v);
+void de_ep_read_material_graph_compile_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compile_params *out);
+void de_ep_write_material_graph_compiled(mpack_writer_t *w, const de_ep_material_graph_compiled *v);
+void de_ep_read_material_graph_compiled(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_compiled *out);
+void de_ep_write_material_graph_diagnostic(mpack_writer_t *w, const de_ep_material_graph_diagnostic *v);
+void de_ep_read_material_graph_diagnostic(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_diagnostic *out);
+void de_ep_write_material_graph_generated(mpack_writer_t *w, const de_ep_material_graph_generated *v);
+void de_ep_read_material_graph_generated(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_generated *out);
+void de_ep_write_material_graph_param(mpack_writer_t *w, const de_ep_material_graph_param *v);
+void de_ep_read_material_graph_param(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_param *out);
+void de_ep_write_material_graph_params(mpack_writer_t *w, const de_ep_material_graph_params *v);
+void de_ep_read_material_graph_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_params *out);
+void de_ep_write_material_graph_target_result(mpack_writer_t *w, const de_ep_material_graph_target_result *v);
+void de_ep_read_material_graph_target_result(mpack_reader_t *r, de_ep_arena *a, de_ep_material_graph_target_result *out);
 void de_ep_write_material_render_params(mpack_writer_t *w, const de_ep_material_render_params *v);
 void de_ep_read_material_render_params(mpack_reader_t *r, de_ep_arena *a, de_ep_material_render_params *out);
 void de_ep_write_model_attribute(mpack_writer_t *w, const de_ep_model_attribute *v);
@@ -1806,6 +1938,9 @@ typedef enum de_ep_method {
     DE_EP_METHOD_INPUT_EVENTS,
     DE_EP_METHOD_INPUT_FOCUS,
     DE_EP_METHOD_LOG_SUBSCRIBE,
+    DE_EP_METHOD_MATERIAL_GRAPH_CATALOG,
+    DE_EP_METHOD_MATERIAL_GRAPH_COMPILE,
+    DE_EP_METHOD_MATERIAL_GRAPH_GENERATE,
     DE_EP_METHOD_NET_CHECKSUMS,
     DE_EP_METHOD_NET_SIM,
     DE_EP_METHOD_PICK,
@@ -1981,6 +2116,12 @@ bool de_ep_read_params_input_focus(const de_ep_request *req, de_ep_arena *a, de_
 void de_ep_write_response_input_focus(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_log_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_log_subscribe_params *out);
 void de_ep_write_response_log_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
+bool de_ep_read_params_material_graph_catalog(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_material_graph_catalog(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_catalog *result);
+bool de_ep_read_params_material_graph_compile(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_compile_params *out);
+void de_ep_write_response_material_graph_compile(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_compiled *result);
+bool de_ep_read_params_material_graph_generate(const de_ep_request *req, de_ep_arena *a, de_ep_material_graph_params *out);
+void de_ep_write_response_material_graph_generate(mpack_writer_t *w, uint64_t id, const de_ep_material_graph_generated *result);
 bool de_ep_read_params_net_checksums(const de_ep_request *req, de_ep_arena *a, de_ep_net_checksums_params *out);
 void de_ep_write_response_net_checksums(mpack_writer_t *w, uint64_t id, const de_ep_net_checksums *result);
 bool de_ep_read_params_net_sim(const de_ep_request *req, de_ep_arena *a, de_ep_net_sim_params *out);

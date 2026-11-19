@@ -242,6 +242,12 @@ void de__ed_logs_register(de__editor *ed);
 void de__ed_views_register(de__editor *ed);
 void de__ed_debugdraw_register(de__editor *ed);
 void de__ed_extra_register(de__editor *ed);
+/* DENG-769: materialGraph.* (editor_material_graph.c); Debug/Dev with the cooker and Slang only
+ * (DE_ED_MATERIAL_GRAPH). */
+void de__ed_material_graph_register(de__editor *ed);
+/* Fills the hello result for the agreed version (editor.c). `caps` holds DE__ED_MAX_CAPS. */
+void de__ed_hello_result(de__editor *ed, const char *agreed, de_ep_str *caps,
+                         de_ep_hello_result *r);
 
 DE_EXTERN_C_END
 #endif /* DE_HOST_EDITOR_INTERNAL_H */
