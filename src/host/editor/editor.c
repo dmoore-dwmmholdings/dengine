@@ -252,6 +252,7 @@ static void ed_drop(de__editor *ed, const char *why) {
     if (de__ed_crash_disarm())
         de_ep_disconnect(&ed->conn);
     ed->connected = ed->authed = false;
+    ed->proto_major = ed->proto_minor = 0;
     ed->idle_since_ns = de_time_now_ns();
     for (u32 i = 0; i < ed->reset_count; ++i)
         ed->resets[i](ed);
@@ -344,8 +345,11 @@ static bool ed_hello(de__editor *ed, const de_ep_request *req, de_ep_arena *a) {
     if (!de__ed_send(ed, &w, DE_EP_KIND_RESPONSE))
         return false;
     unsigned major = 0, minor = 0;
-    ed->reload_outcomes =
-        sscanf(agreed, "%u.%u", &major, &minor) == 2 && (major > 1 || (major == 1 && minor >= 6));
+    if (sscanf(agreed, "%u.%u", &major, &minor) != 2 || major > 0xffffu || minor > 0xffffu)
+        major = minor = 0;
+    ed->proto_major = (u16)major; /* DENG-785: gates the 1.15 methods */
+    ed->proto_minor = (u16)minor;
+    ed->reload_outcomes = de__ed_protocol_at_least(ed, 1, 6);
     ed->authed = true;
     if (!de__ed_crash_arm(&ed->conn, ed->seq + 1))
         DE_WARN(ed->log, "editor: crash notification unavailable; IDE will use process exit");

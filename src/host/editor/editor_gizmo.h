@@ -85,6 +85,9 @@ void de__ed_each_bounds(de__editor *ed,
 bool de__ed_entity_bounds(de__editor *ed, u64 e, de_dvec3 *min, de_dvec3 *max);
 /** True for a 2D view: orthographic, looking along a world axis. */
 bool de__ed_cam_flat(const de__ed_cam *c);
+/** The world-space ray through the view pixel (x, y): origin and unit direction (DENG-785: the
+ * scene view's UI world-panel pick). */
+void de__ed_cam_ray(const de__ed_cam *c, f32 x, f32 y, f64 origin[3], f32 direction[3]);
 /** A connection ended: no drag, no hover. */
 void de__ed_gizmo_reset(de__editor *ed);
 

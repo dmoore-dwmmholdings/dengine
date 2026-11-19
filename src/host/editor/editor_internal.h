@@ -46,6 +46,9 @@ struct de__editor {
     bool rival_open;
     u64 rival_since_ns;
     bool reload_outcomes; /**< negotiated peer understands optional reload failure (IPC >= 1.6) */
+    /** The agreed protocol version (hello); 0.0 before a hello. DENG-785 gates the 1.15 ui.editor
+     * methods and PickResult.uiStack on it. */
+    u16 proto_major, proto_minor;
     char token[160];
     u32 epoch;         /**< bumped on each connection: ids from an older one are stale */
     u64 seq;           /**< notification sequence number */
@@ -265,9 +268,42 @@ de_transform de__ed_world_xf(de_world *w, de_entity e);
 /* DENG-776: water.info, water.surface, water.flowMap, water.probes, water.showProbes
  * (editor_water.c, render builds only); capability world.water (protocol 1.13). */
 void de__ed_water_register(de__editor *ed);
-/* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). The
+/* DENG-778: ui.layout (editor_ui.c, UI builds only); capability ui.editor (protocol 1.14). DENG-785
+ * adds the 1.15 methods: ui.nodeCorners, ui.themes, ui.themeVars, ui.previewTheme, loc.locales,
+ * loc.strings and loc.previewLocale (`unsupported` below 1.15). The
  * ui.editor EditOp.index is in editor_edit.c and works in every build. */
 void de__ed_ui_register(de__editor *ed);
+/** True when the agreed protocol is at least major.minor. */
+static inline bool de__ed_protocol_at_least(const de__editor *ed, u16 major, u16 minor) {
+    return ed->proto_major > major || (ed->proto_major == major && ed->proto_minor >= minor);
+}
+/* DENG-785 (protocol 1.15, ui.editor): the UI pick stack for a viewport pick. */
+#define DE__ED_UI_STACK 32u
+/** One UI node under a pick point (de_ui_pick_hit): rect is [x, y, w, h] in the root's pixels. */
+typedef struct de__ed_ui_hit {
+    u64 entity, root;
+    f32 rect[4];
+    u32 depth;
+} de__ed_ui_hit;
+/** The UI nodes under a viewport point, topmost first, up to `capacity`; returns how many were
+ * written. `origin`/`direction` NULL: the screen UI at (x, y) in viewport pixels (a game view).
+ * Otherwise the world panels under the world-space ray (a scene view). 0 without a UI, below
+ * protocol 1.15. Defined in editor_ui.c (UI builds only). */
+u32 de__ed_ui_pick(de__editor *ed, f32 x, f32 y, const f64 *origin, const f32 *direction,
+                   de__ed_ui_hit *out, u32 capacity);
+/** Sets PickResult.uiStack from `n` hits (absent when n is 0). `items` holds `n` entries and
+ * must outlive the write; each item's rect points into its hit. */
+static inline void de__ed_pick_set_ui_stack(de_ep_pick_result *r, const de__ed_ui_hit *hits,
+                                            u32 n, de_ep_ui_pick_hit *items) {
+    r->has_ui_stack = n > 0;
+    r->ui_stack.items = n > 0 ? items : NULL;
+    r->ui_stack.count = n;
+    for (u32 i = 0; i < n; ++i)
+        items[i] = (de_ep_ui_pick_hit){.entity = hits[i].entity,
+                                       .root = hits[i].root,
+                                       .rect = {(f32 *)hits[i].rect, 4},
+                                       .depth = hits[i].depth};
+}
 /** A probe water.showProbes shows: world centre, radius (m), depth below the surface (m). */
 typedef struct de__ed_probe_mark {
     de_dvec3 p;

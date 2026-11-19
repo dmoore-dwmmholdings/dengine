@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.14"
-#define DE_EP_SCHEMA_HASH "dbe39edd707de29a"
+#define DE_EP_PROTOCOL_VERSION "1.15"
+#define DE_EP_SCHEMA_HASH "3f1836982c45d485"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -188,6 +188,11 @@ typedef struct de_ep_input_event de_ep_input_event;
 typedef struct de_ep_input_events_params de_ep_input_events_params;
 typedef struct de_ep_input_focus_params de_ep_input_focus_params;
 typedef struct de_ep_limits de_ep_limits;
+typedef struct de_ep_loc_locale_info de_ep_loc_locale_info;
+typedef struct de_ep_loc_locales de_ep_loc_locales;
+typedef struct de_ep_loc_preview_params de_ep_loc_preview_params;
+typedef struct de_ep_loc_string de_ep_loc_string;
+typedef struct de_ep_loc_strings de_ep_loc_strings;
 typedef struct de_ep_log_record de_ep_log_record;
 typedef struct de_ep_log_subscribe_params de_ep_log_subscribe_params;
 typedef struct de_ep_material_graph_catalog de_ep_material_graph_catalog;
@@ -276,7 +281,16 @@ typedef struct de_ep_type_list de_ep_type_list;
 typedef struct de_ep_ui_layout de_ep_ui_layout;
 typedef struct de_ep_ui_layout_params de_ep_ui_layout_params;
 typedef struct de_ep_ui_layout_rect de_ep_ui_layout_rect;
+typedef struct de_ep_ui_node_corners de_ep_ui_node_corners;
+typedef struct de_ep_ui_node_corners_params de_ep_ui_node_corners_params;
+typedef struct de_ep_ui_pick_hit de_ep_ui_pick_hit;
+typedef struct de_ep_ui_preview_theme_params de_ep_ui_preview_theme_params;
 typedef struct de_ep_ui_safe_insets de_ep_ui_safe_insets;
+typedef struct de_ep_ui_theme_info de_ep_ui_theme_info;
+typedef struct de_ep_ui_theme_var de_ep_ui_theme_var;
+typedef struct de_ep_ui_theme_vars de_ep_ui_theme_vars;
+typedef struct de_ep_ui_theme_vars_params de_ep_ui_theme_vars_params;
+typedef struct de_ep_ui_themes de_ep_ui_themes;
 typedef struct de_ep_unsubscribe_params de_ep_unsubscribe_params;
 typedef struct de_ep_view_camera_params de_ep_view_camera_params;
 typedef struct de_ep_view_create_params de_ep_view_create_params;
@@ -421,6 +435,11 @@ typedef struct de_ep_list_field_info {
     uint32_t count;
 } de_ep_list_field_info;
 
+typedef struct de_ep_list_loc_string {
+    de_ep_loc_string *items;
+    uint32_t count;
+} de_ep_list_loc_string;
+
 typedef struct de_ep_list_model_node {
     de_ep_model_node *items;
     uint32_t count;
@@ -435,6 +454,11 @@ typedef struct de_ep_list_scene_info {
     de_ep_scene_info *items;
     uint32_t count;
 } de_ep_list_scene_info;
+
+typedef struct de_ep_list_ui_pick_hit {
+    de_ep_ui_pick_hit *items;
+    uint32_t count;
+} de_ep_list_ui_pick_hit;
 
 typedef struct de_ep_list_cache_entry {
     de_ep_cache_entry *items;
@@ -451,6 +475,11 @@ typedef struct de_ep_list_system_info {
     uint32_t count;
 } de_ep_list_system_info;
 
+typedef struct de_ep_list_ui_theme_var {
+    de_ep_ui_theme_var *items;
+    uint32_t count;
+} de_ep_list_ui_theme_var;
+
 typedef struct de_ep_list_debug_output {
     de_ep_debug_output *items;
     uint32_t count;
@@ -465,6 +494,11 @@ typedef struct de_ep_list_field_change {
     de_ep_field_change *items;
     uint32_t count;
 } de_ep_list_field_change;
+
+typedef struct de_ep_list_ui_theme_info {
+    de_ep_ui_theme_info *items;
+    uint32_t count;
+} de_ep_list_ui_theme_info;
 
 typedef struct de_ep_list_model_mesh_lod {
     de_ep_model_mesh_lod *items;
@@ -495,6 +529,11 @@ typedef struct de_ep_list_asset_type_info {
     de_ep_asset_type_info *items;
     uint32_t count;
 } de_ep_list_asset_type_info;
+
+typedef struct de_ep_list_loc_locale_info {
+    de_ep_loc_locale_info *items;
+    uint32_t count;
+} de_ep_list_loc_locale_info;
 
 typedef struct de_ep_list_animation_joint {
     de_ep_animation_joint *items;
@@ -1052,6 +1091,43 @@ struct de_ep_input_focus_params {
     bool focused;
 };
 
+struct de_ep_loc_locale_info {
+    de_ep_str locale;
+    uint32_t tables; /* how many string tables have the locale */
+};
+
+/* The locale state (de_loc_get_locale_state) and the published locales (de_loc_list_locales). */
+struct de_ep_loc_locales {
+    de_ep_str active;
+    de_ep_str selected; /* the game's own choice, kept during a preview */
+    de_ep_str preview; /* the previewed locale; "" when none */
+    de_ep_str fallback; /* the default locale at the end of the fallback chain */
+    uint64_t generation; /* changes when a locale switch is published */
+    bool previewing;
+    de_ep_list_loc_locale_info locales; /* sorted by tag (byte order) */
+};
+
+struct de_ep_loc_preview_params {
+    bool has_locale;
+    de_ep_str locale; /* the locale to preview; absent or null ends the preview. The switch is asynchronous: wait for a new generation. A tag that is not a valid identifier is invalid_params */
+};
+
+struct de_ep_loc_string {
+    de_ep_str key; /* the key hash, de_hash64 of the key name, as 16 hex digits */
+    bool has_name;
+    de_ep_str name; /* the key name when the engine has it (never in Release or Shipping) */
+    de_ep_str value;
+    de_ep_str locale; /* the fallback-chain locale that supplied the value */
+    uint64_t table; /* the string_table asset */
+};
+
+/* Every string de_loc resolves (de_loc_read_strings): in fallback-chain order, then table, then key; the first value for a key only. */
+struct de_ep_loc_strings {
+    de_ep_str locale; /* the active locale */
+    uint64_t generation;
+    de_ep_list_loc_string strings;
+};
+
 struct de_ep_log_record {
     double time;
     uint64_t frame;
@@ -1316,6 +1392,8 @@ struct de_ep_pick_result {
     de_ep_list_f32 normal;
     bool has_distance;
     float distance;
+    bool has_ui_stack;
+    de_ep_list_ui_pick_hit ui_stack; /* ui.editor (protocol 1.15): every UI node under the point, topmost first; absent when there is none */
 };
 
 struct de_ep_prefab_instantiate_params {
@@ -1698,6 +1776,58 @@ struct de_ep_ui_layout_rect {
     de_ep_list_f32 rect; /* [x, y, w, h] in physical pixels of the preview viewport */
 };
 
+struct de_ep_ui_node_corners {
+    uint64_t panel; /* the world-panel root */
+    de_ep_list_f64 corners; /* 12 numbers: the world-space x, y, z of the top-left, top-right, bottom-right and bottom-left corners */
+};
+
+struct de_ep_ui_node_corners_params {
+    uint64_t entity; /* a UI node on a placed world panel; not_found otherwise */
+};
+
+/* One UI node under a pick point (de_ui_pick_hit). */
+struct de_ep_ui_pick_hit {
+    uint64_t entity;
+    uint64_t root; /* the screen root or world-panel root the node is under */
+    de_ep_list_f32 rect; /* [x, y, w, h] in viewport pixels for a screen root, panel pixels for a world-panel root */
+    uint32_t depth; /* the node's depth below its root (the root is 0) */
+};
+
+struct de_ep_ui_preview_theme_params {
+    bool has_name;
+    de_ep_str name; /* the theme to preview, "" for the base variables; absent or null ends the preview and applies the game's choice. Over 63 bytes is invalid_params; undeclared is not_found */
+};
+
+struct de_ep_ui_theme_info {
+    de_ep_str name;
+    uint32_t sheets; /* how many loaded sheets declare the theme */
+};
+
+struct de_ep_ui_theme_var {
+    de_ep_str name;
+    de_ep_str value; /* TOML text, at most 127 bytes */
+    de_ep_str sheet; /* the sheet that declares it */
+    bool themed; /* the theme overrides the base value */
+    bool truncated; /* value was cut at a UTF-8 boundary */
+};
+
+struct de_ep_ui_theme_vars {
+    de_ep_list_ui_theme_var vars; /* per sheet in load order: base keys in order, then keys only the theme declares */
+};
+
+struct de_ep_ui_theme_vars_params {
+    bool has_theme;
+    de_ep_str theme; /* absent: the active theme; "": the base variables; an undeclared theme is not_found */
+};
+
+/* The theme state (de_ui_get_theme_state) and the declared themes (de_ui_list_themes). */
+struct de_ep_ui_themes {
+    de_ep_str active; /* the applied theme; "" for the base variables */
+    de_ep_str selected; /* the game's own choice, kept during a preview */
+    bool previewing;
+    de_ep_list_ui_theme_info themes; /* sorted by name (byte order) */
+};
+
 struct de_ep_unsubscribe_params {
     uint32_t subscription;
 };
@@ -1993,6 +2123,16 @@ void de_ep_write_input_focus_params(mpack_writer_t *w, const de_ep_input_focus_p
 void de_ep_read_input_focus_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_focus_params *out);
 void de_ep_write_limits(mpack_writer_t *w, const de_ep_limits *v);
 void de_ep_read_limits(mpack_reader_t *r, de_ep_arena *a, de_ep_limits *out);
+void de_ep_write_loc_locale_info(mpack_writer_t *w, const de_ep_loc_locale_info *v);
+void de_ep_read_loc_locale_info(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locale_info *out);
+void de_ep_write_loc_locales(mpack_writer_t *w, const de_ep_loc_locales *v);
+void de_ep_read_loc_locales(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_locales *out);
+void de_ep_write_loc_preview_params(mpack_writer_t *w, const de_ep_loc_preview_params *v);
+void de_ep_read_loc_preview_params(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_preview_params *out);
+void de_ep_write_loc_string(mpack_writer_t *w, const de_ep_loc_string *v);
+void de_ep_read_loc_string(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_string *out);
+void de_ep_write_loc_strings(mpack_writer_t *w, const de_ep_loc_strings *v);
+void de_ep_read_loc_strings(mpack_reader_t *r, de_ep_arena *a, de_ep_loc_strings *out);
 void de_ep_write_log_record(mpack_writer_t *w, const de_ep_log_record *v);
 void de_ep_read_log_record(mpack_reader_t *r, de_ep_arena *a, de_ep_log_record *out);
 void de_ep_write_log_subscribe_params(mpack_writer_t *w, const de_ep_log_subscribe_params *v);
@@ -2169,8 +2309,26 @@ void de_ep_write_ui_layout_params(mpack_writer_t *w, const de_ep_ui_layout_param
 void de_ep_read_ui_layout_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_params *out);
 void de_ep_write_ui_layout_rect(mpack_writer_t *w, const de_ep_ui_layout_rect *v);
 void de_ep_read_ui_layout_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_rect *out);
+void de_ep_write_ui_node_corners(mpack_writer_t *w, const de_ep_ui_node_corners *v);
+void de_ep_read_ui_node_corners(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_node_corners *out);
+void de_ep_write_ui_node_corners_params(mpack_writer_t *w, const de_ep_ui_node_corners_params *v);
+void de_ep_read_ui_node_corners_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_node_corners_params *out);
+void de_ep_write_ui_pick_hit(mpack_writer_t *w, const de_ep_ui_pick_hit *v);
+void de_ep_read_ui_pick_hit(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_pick_hit *out);
+void de_ep_write_ui_preview_theme_params(mpack_writer_t *w, const de_ep_ui_preview_theme_params *v);
+void de_ep_read_ui_preview_theme_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
 void de_ep_write_ui_safe_insets(mpack_writer_t *w, const de_ep_ui_safe_insets *v);
 void de_ep_read_ui_safe_insets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_safe_insets *out);
+void de_ep_write_ui_theme_info(mpack_writer_t *w, const de_ep_ui_theme_info *v);
+void de_ep_read_ui_theme_info(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_info *out);
+void de_ep_write_ui_theme_var(mpack_writer_t *w, const de_ep_ui_theme_var *v);
+void de_ep_read_ui_theme_var(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_var *out);
+void de_ep_write_ui_theme_vars(mpack_writer_t *w, const de_ep_ui_theme_vars *v);
+void de_ep_read_ui_theme_vars(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_vars *out);
+void de_ep_write_ui_theme_vars_params(mpack_writer_t *w, const de_ep_ui_theme_vars_params *v);
+void de_ep_read_ui_theme_vars_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
+void de_ep_write_ui_themes(mpack_writer_t *w, const de_ep_ui_themes *v);
+void de_ep_read_ui_themes(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_themes *out);
 void de_ep_write_unsubscribe_params(mpack_writer_t *w, const de_ep_unsubscribe_params *v);
 void de_ep_read_unsubscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_view_camera_params(mpack_writer_t *w, const de_ep_view_camera_params *v);
@@ -2255,6 +2413,9 @@ typedef enum de_ep_method {
     DE_EP_METHOD_HELLO,
     DE_EP_METHOD_INPUT_EVENTS,
     DE_EP_METHOD_INPUT_FOCUS,
+    DE_EP_METHOD_LOC_LOCALES,
+    DE_EP_METHOD_LOC_PREVIEW_LOCALE,
+    DE_EP_METHOD_LOC_STRINGS,
     DE_EP_METHOD_LOG_SUBSCRIBE,
     DE_EP_METHOD_MATERIAL_GRAPH_CATALOG,
     DE_EP_METHOD_MATERIAL_GRAPH_COMPILE,
@@ -2300,6 +2461,10 @@ typedef enum de_ep_method {
     DE_EP_METHOD_TERRAIN_INFO,
     DE_EP_METHOD_TERRAIN_SAMPLE,
     DE_EP_METHOD_UI_LAYOUT,
+    DE_EP_METHOD_UI_NODE_CORNERS,
+    DE_EP_METHOD_UI_PREVIEW_THEME,
+    DE_EP_METHOD_UI_THEME_VARS,
+    DE_EP_METHOD_UI_THEMES,
     DE_EP_METHOD_UNSUBSCRIBE,
     DE_EP_METHOD_VIEW_CREATE,
     DE_EP_METHOD_VIEW_DESTROY,
@@ -2444,6 +2609,12 @@ bool de_ep_read_params_input_events(const de_ep_request *req, de_ep_arena *a, de
 void de_ep_write_response_input_events(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_input_focus(const de_ep_request *req, de_ep_arena *a, de_ep_input_focus_params *out);
 void de_ep_write_response_input_focus(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_loc_locales(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_loc_locales(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
+bool de_ep_read_params_loc_preview_locale(const de_ep_request *req, de_ep_arena *a, de_ep_loc_preview_params *out);
+void de_ep_write_response_loc_preview_locale(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
+bool de_ep_read_params_loc_strings(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_loc_strings(mpack_writer_t *w, uint64_t id, const de_ep_loc_strings *result);
 bool de_ep_read_params_log_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_log_subscribe_params *out);
 void de_ep_write_response_log_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_material_graph_catalog(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
@@ -2534,6 +2705,14 @@ bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, 
 void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result);
 bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep_ui_layout_params *out);
 void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result);
+bool de_ep_read_params_ui_node_corners(const de_ep_request *req, de_ep_arena *a, de_ep_ui_node_corners_params *out);
+void de_ep_write_response_ui_node_corners(mpack_writer_t *w, uint64_t id, const de_ep_ui_node_corners *result);
+bool de_ep_read_params_ui_preview_theme(const de_ep_request *req, de_ep_arena *a, de_ep_ui_preview_theme_params *out);
+void de_ep_write_response_ui_preview_theme(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
+bool de_ep_read_params_ui_theme_vars(const de_ep_request *req, de_ep_arena *a, de_ep_ui_theme_vars_params *out);
+void de_ep_write_response_ui_theme_vars(mpack_writer_t *w, uint64_t id, const de_ep_ui_theme_vars *result);
+bool de_ep_read_params_ui_themes(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
+void de_ep_write_response_ui_themes(mpack_writer_t *w, uint64_t id, const de_ep_ui_themes *result);
 bool de_ep_read_params_unsubscribe(const de_ep_request *req, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_response_unsubscribe(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_create(const de_ep_request *req, de_ep_arena *a, de_ep_view_create_params *out);
