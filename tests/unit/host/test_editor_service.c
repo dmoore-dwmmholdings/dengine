@@ -451,6 +451,169 @@ TEST_F(editor_service, invalid_set_ops_change_nothing, service_fx) {
     EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_CANCEL, tx), 0);
 }
 
+/* ---------- Sibling order: EditOp.index (DIDE protocol 1.14, ui.editor; DENG-778) ---------- */
+
+/* Child number `i` of `p` in list order, or DE_ENTITY_NULL. */
+static de_entity kid_at(service_fx *f, de_entity p, u32 i) {
+    de_entity c = de_entity_children_first(f->engine.world, p);
+    for (; c.bits != 0 && i > 0; --i)
+        c = de_entity_children_next(f->engine.world, c);
+    return c;
+}
+/* A parent with `n` children, made directly (not through edits). */
+static de_entity family(service_fx *f, de_entity *kids, u32 n) {
+    de_world *w = f->engine.world;
+    const de_entity p = de_entity_spawn(w);
+    for (u32 i = 0; i < n; ++i) {
+        kids[i] = de_entity_spawn(w);
+        ASSERT_EQ(de_entity_set_parent(w, kids[i], p), DE_OK);
+    }
+    return p;
+}
+/* `p`'s children are exactly `want`, in that order. */
+static void expect_kids(service_fx *f, de_entity p, const de_entity *want, u32 n) {
+    EXPECT_EQ(de_entity_children_count(f->engine.world, p), n);
+    for (u32 i = 0; i < n; ++i) {
+        EXPECT_EQ(kid_at(f, p, i).bits, want[i].bits);
+        EXPECT_EQ(de_entity_child_index(f->engine.world, want[i]), i);
+    }
+}
+/* One op in its own committed transaction; the error code, or 0. */
+static int commit_one(service_fx *f, de_ep_edit_op op, u32 *tx) {
+    *tx = edit_begin(f);
+    const de_ep_edit_apply_params q = {.tx = *tx, .ops = {&op, 1}};
+    char p[1024];
+    WRITE_PARAMS(p, de_ep_write_edit_apply_params, &q);
+    const int code = call_code(f, DE_EP_METHOD_EDIT_APPLY, p, p_size);
+    if (code != 0) {
+        EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_CANCEL, *tx), 0);
+        return code;
+    }
+    return tx_call(f, DE_EP_METHOD_EDIT_COMMIT, *tx);
+}
+static de_ep_edit_op spawn_under(de_entity parent, bool has_index, u32 index) {
+    return (de_ep_edit_op){.op = de_ep_cstr("spawn"),
+                           .has_scene = true,
+                           .scene = 1,
+                           .has_parent = parent.bits != 0,
+                           .parent = parent.bits,
+                           .has_index = has_index,
+                           .index = index};
+}
+static de_ep_edit_op reparent_to(de_entity e, de_entity parent, bool has_index, u32 index) {
+    return (de_ep_edit_op){.op = de_ep_cstr("reparent"),
+                           .has_entity = true,
+                           .entity = e.bits,
+                           .has_parent = parent.bits != 0,
+                           .parent = parent.bits,
+                           .has_keep_world = true,
+                           .keep_world = false,
+                           .has_index = has_index,
+                           .index = index};
+}
+
+TEST_F(editor_service, spawn_index_inserts_and_past_the_end_appends, service_fx) {
+    de__ed_edit_register(&f->ed);
+    de_entity k[3];
+    const de_entity p = family(f, k, 3);
+    u32 tx, tx_end, tx_plain;
+    ASSERT_EQ(commit_one(f, spawn_under(p, true, 1), &tx), 0);
+    const de_entity n = kid_at(f, p, 1);
+    ASSERT_TRUE(n.bits != 0 && n.bits != k[1].bits);
+    expect_kids(f, p, (de_entity[]){k[0], n, k[1], k[2]}, 4);
+    /* At or past the end appends; absent appends as before. */
+    ASSERT_EQ(commit_one(f, spawn_under(p, true, 99), &tx_end), 0);
+    const de_entity m = kid_at(f, p, 4);
+    ASSERT_EQ(commit_one(f, spawn_under(p, false, 0), &tx_plain), 0);
+    const de_entity o = kid_at(f, p, 5);
+    expect_kids(f, p, (de_entity[]){k[0], n, k[1], k[2], m, o}, 6);
+    /* Undo removes it; redo puts the same entity back at index 1. */
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    expect_kids(f, p, (de_entity[]){k[0], k[1], k[2], m, o}, 5);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    expect_kids(f, p, (de_entity[]){k[0], n, k[1], k[2], m, o}, 6);
+    /* Without a parent the index is ignored. */
+    u32 tx_root;
+    ASSERT_EQ(commit_one(f, spawn_under(DE_ENTITY_NULL, true, 0), &tx_root), 0);
+    EXPECT_EQ(de_entity_children_count(f->engine.world, p), 6u);
+}
+
+/* The DIDE conformance check (protocol 1.14): an indexed reparent to 0 reorders, and undo puts
+ * the child back at its old index (the inverse is a reparent at index 2). */
+TEST_F(editor_service, reparent_index_reorders_and_undo_restores_the_old_index, service_fx) {
+    de__ed_edit_register(&f->ed);
+    de_entity k[3];
+    const de_entity p = family(f, k, 3);
+    u32 tx;
+    ASSERT_EQ(commit_one(f, reparent_to(k[2], p, true, 0), &tx), 0);
+    expect_kids(f, p, (de_entity[]){k[2], k[0], k[1]}, 3);
+    for (u32 i = 0; i < 2; ++i) {
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+        expect_kids(f, p, k, 3);
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+        expect_kids(f, p, (de_entity[]){k[2], k[0], k[1]}, 3);
+    }
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    /* The index counts the siblings without the entity: moving k0 to 1 puts it after k1. */
+    u32 tx_mid;
+    ASSERT_EQ(commit_one(f, reparent_to(k[0], p, true, 1), &tx_mid), 0);
+    expect_kids(f, p, (de_entity[]){k[1], k[0], k[2]}, 3);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx_mid), 0);
+    expect_kids(f, p, k, 3);
+    /* To another parent at an index; undo returns it to the middle of the first parent. */
+    de_entity q[2];
+    const de_entity p2 = family(f, q, 2);
+    u32 tx_move;
+    ASSERT_EQ(commit_one(f, reparent_to(k[1], p2, true, 1), &tx_move), 0);
+    expect_kids(f, p2, (de_entity[]){q[0], k[1], q[1]}, 3);
+    expect_kids(f, p, (de_entity[]){k[0], k[2]}, 2);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx_move), 0);
+    expect_kids(f, p, k, 3);
+    expect_kids(f, p2, q, 2);
+    /* From a root to an index, and back to a root on undo. */
+    const de_entity loose = de_entity_spawn(f->engine.world);
+    u32 tx_adopt;
+    ASSERT_EQ(commit_one(f, reparent_to(loose, p, true, 0), &tx_adopt), 0);
+    expect_kids(f, p, (de_entity[]){loose, k[0], k[1], k[2]}, 4);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx_adopt), 0);
+    EXPECT_EQ(de_entity_parent(f->engine.world, loose).bits, 0u);
+    expect_kids(f, p, k, 3);
+    /* An only child stays where it is. */
+    de_entity only[1];
+    const de_entity p3 = family(f, only, 1);
+    u32 tx_only;
+    ASSERT_EQ(commit_one(f, reparent_to(only[0], p3, true, 0), &tx_only), 0);
+    expect_kids(f, p3, only, 1);
+}
+
+TEST_F(editor_service, despawn_undo_puts_the_entity_back_at_its_index, service_fx) {
+    de__ed_edit_register(&f->ed);
+    de_entity k[3];
+    const de_entity p = family(f, k, 3);
+    u32 tx;
+    ASSERT_EQ(commit_one(f,
+                         (de_ep_edit_op){
+                             .op = de_ep_cstr("despawn"), .has_entity = true, .entity = k[1].bits},
+                         &tx),
+              0);
+    expect_kids(f, p, (de_entity[]){k[0], k[2]}, 2);
+    for (u32 i = 0; i < 2; ++i) {
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+        expect_kids(f, p, k, 3);
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+        expect_kids(f, p, (de_entity[]){k[0], k[2]}, 2);
+    }
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    u32 tx_first;
+    ASSERT_EQ(commit_one(f,
+                         (de_ep_edit_op){
+                             .op = de_ep_cstr("despawn"), .has_entity = true, .entity = k[0].bits},
+                         &tx_first),
+              0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx_first), 0);
+    expect_kids(f, p, k, 3);
+}
+
 /* ---------- Transactional prefab instantiate (DENG-764) ---------- */
 
 #if DE_HAS_COOKER
@@ -708,6 +871,39 @@ TEST_F(editor_service, prefab_uninstantiate_op_removes_an_instance_and_its_inver
     expect_no_crate(f, root, child, empty);
     ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
     expect_crate(f, &ids, root, child, text);
+    prefab_teardown();
+}
+
+/* DIDE protocol 1.14 (DENG-778): instantiate at an index; undo of an uninstantiate puts the
+ * instance back at its index. */
+TEST_F(editor_service, prefab_instantiate_index_places_the_root_among_siblings, service_fx) {
+    const prefab_ids ids = prefab_setup(f);
+    de_entity k[2];
+    const de_entity p = family(f, k, 2);
+    de_ep_edit_op op = instantiate_op("props/crate");
+    op.has_parent = true;
+    op.parent = p.bits;
+    op.has_index = true;
+    op.index = 1;
+    u32 tx;
+    ASSERT_EQ(commit_one(f, op, &tx), 0);
+    const de_entity root = kid_at(f, p, 1);
+    ASSERT_TRUE(de_entity_has(f->engine.world, root, ids.health));
+    expect_kids(f, p, (de_entity[]){k[0], root, k[1]}, 3);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    expect_kids(f, p, k, 2);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    expect_kids(f, p, (de_entity[]){k[0], root, k[1]}, 3);
+    u32 tx_un;
+    ASSERT_EQ(commit_one(f,
+                         (de_ep_edit_op){.op = de_ep_cstr("uninstantiate"),
+                                         .has_entity = true,
+                                         .entity = root.bits},
+                         &tx_un),
+              0);
+    expect_kids(f, p, k, 2);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx_un), 0);
+    expect_kids(f, p, (de_entity[]){k[0], root, k[1]}, 3);
     prefab_teardown();
 }
 #endif

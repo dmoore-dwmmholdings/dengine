@@ -165,6 +165,11 @@ if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_RENDER)
     target_sources(de_host PRIVATE editor/editor_water.c)
 endif()
 
+# DENG-778: ui.layout (DIDE protocol 1.14, ui.editor) reads the UI module's layout preview.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol AND DE_HAS_UI)
+    target_sources(de_host PRIVATE editor/editor_ui.c)
+endif()
+
 # DENG-701: fatal notifications never reuse the blocking main-thread transport.
 if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
     target_sources(de_host PRIVATE editor/editor_crash.c editor/editor_crash.h)

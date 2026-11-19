@@ -500,6 +500,9 @@ de_result de__editor_start(de__host *h) {
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);
 #endif
+#if DE_HAS_UI
+    de__ed_ui_register(ed); /* ui.layout needs the UI module */
+#endif
 
     de_result r = de__loop_add_frame_begin_hook(h, ed_pump, ed);
     if (r != DE_OK) {

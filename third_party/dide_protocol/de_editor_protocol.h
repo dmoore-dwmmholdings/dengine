@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.13"
-#define DE_EP_SCHEMA_HASH "11248618d80bb8db"
+#define DE_EP_PROTOCOL_VERSION "1.14"
+#define DE_EP_SCHEMA_HASH "dbe39edd707de29a"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -273,6 +273,10 @@ typedef struct de_ep_tx_params de_ep_tx_params;
 typedef struct de_ep_tx_result de_ep_tx_result;
 typedef struct de_ep_type_info de_ep_type_info;
 typedef struct de_ep_type_list de_ep_type_list;
+typedef struct de_ep_ui_layout de_ep_ui_layout;
+typedef struct de_ep_ui_layout_params de_ep_ui_layout_params;
+typedef struct de_ep_ui_layout_rect de_ep_ui_layout_rect;
+typedef struct de_ep_ui_safe_insets de_ep_ui_safe_insets;
 typedef struct de_ep_unsubscribe_params de_ep_unsubscribe_params;
 typedef struct de_ep_view_camera_params de_ep_view_camera_params;
 typedef struct de_ep_view_create_params de_ep_view_create_params;
@@ -481,6 +485,11 @@ typedef struct de_ep_list_terrain_layer {
     de_ep_terrain_layer *items;
     uint32_t count;
 } de_ep_list_terrain_layer;
+
+typedef struct de_ep_list_ui_layout_rect {
+    de_ep_ui_layout_rect *items;
+    uint32_t count;
+} de_ep_list_ui_layout_rect;
 
 typedef struct de_ep_list_asset_type_info {
     de_ep_asset_type_info *items;
@@ -832,7 +841,7 @@ struct de_ep_edit_begin_params {
     de_ep_str merge_key;
 };
 
-/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. */
+/* One operation. `op` is spawn, despawn, add, remove, set, reparent, instantiate or uninstantiate; the other fields are the ones that op uses. `instantiate` (`path` the prefab asset, `scene`, optional `parent`) spawns a prefab instance and returns its root in `assignedIds`; its inverse is `uninstantiate`. `uninstantiate` (`entity` the instance root; any other entity is INVALID_PARAMS) removes the tree, its scene memberships and the instance record; its inverse is `instantiate` with `value` an opaque snapshot, which restores the same entity ids, scene ids, components and instance record (CONFLICT if an id is taken). `edit.undo` and `edit.redo` replace each pair's other side with the inverse the replay returns. With the optional world.terrain capability (protocol 1.11) there are four more, each on the terrain `entity`: `terrain.stroke` (`value` a TerrainStroke as a map), `terrain.import` (`path` a heightmap file, `value` a map with `format` and an optional `tile` [x, y]), `terrain.bake` (writes the enabled auto-material rules into the splat map and turns them off) and `terrain.restore` (`value` opaque: the tiles one of the others changed, as they were). The inverse of each is a `terrain.restore`. With the optional world.splines capability (protocol 1.12) there is `spline.carve` on a terrain `entity` (`value` a SplineCarve as a map), whose inverse is also a `terrain.restore`. Since protocol 1.14, `spawn`, `reparent` and `instantiate` take an optional `index`: the sibling position under `parent`, counted without the entity itself. Absent, or at or past the end, appends; a `reparent` to the same parent reorders. The inverse of a `reparent` carries the entity's old index, so undo restores the order. */
 struct de_ep_edit_op {
     de_ep_str op;
     bool has_scene;
@@ -853,6 +862,8 @@ struct de_ep_edit_op {
     uint64_t base_rev;
     bool has_keep_world;
     bool keep_world;
+    bool has_index;
+    uint32_t index; /* spawn, reparent, instantiate: sibling position under parent (protocol 1.14); absent appends */
 };
 
 struct de_ep_empty {
@@ -1657,6 +1668,36 @@ struct de_ep_type_list {
     de_ep_list_type_info types;
 };
 
+struct de_ep_ui_layout {
+    float scale; /* the UI scale the preview used */
+    de_ep_list_ui_layout_rect rects; /* root first, then its subtree in pre-order, children in sibling order */
+};
+
+/* Safe-area insets in physical pixels. */
+struct de_ep_ui_safe_insets {
+    float left;
+    float top;
+    float right;
+    float bottom;
+};
+
+struct de_ep_ui_layout_params {
+    uint64_t root; /* a live UI node (DeUiNode); not_found otherwise */
+    uint32_t width; /* physical pixels, above 0 */
+    uint32_t height; /* physical pixels, above 0 */
+    bool has_ui_scale;
+    float ui_scale; /* the ui.scale cvar for the preview, finite; absent for the live value */
+    bool has_safe;
+    de_ep_ui_safe_insets safe; /* safe-area insets; absent for none */
+    bool has_pixel_art;
+    bool pixel_art; /* pixel-art UI: a whole-number scale and no safe area */
+};
+
+struct de_ep_ui_layout_rect {
+    uint64_t entity;
+    de_ep_list_f32 rect; /* [x, y, w, h] in physical pixels of the preview viewport */
+};
+
 struct de_ep_unsubscribe_params {
     uint32_t subscription;
 };
@@ -2122,6 +2163,14 @@ void de_ep_write_type_info(mpack_writer_t *w, const de_ep_type_info *v);
 void de_ep_read_type_info(mpack_reader_t *r, de_ep_arena *a, de_ep_type_info *out);
 void de_ep_write_type_list(mpack_writer_t *w, const de_ep_type_list *v);
 void de_ep_read_type_list(mpack_reader_t *r, de_ep_arena *a, de_ep_type_list *out);
+void de_ep_write_ui_layout(mpack_writer_t *w, const de_ep_ui_layout *v);
+void de_ep_read_ui_layout(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout *out);
+void de_ep_write_ui_layout_params(mpack_writer_t *w, const de_ep_ui_layout_params *v);
+void de_ep_read_ui_layout_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_params *out);
+void de_ep_write_ui_layout_rect(mpack_writer_t *w, const de_ep_ui_layout_rect *v);
+void de_ep_read_ui_layout_rect(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_layout_rect *out);
+void de_ep_write_ui_safe_insets(mpack_writer_t *w, const de_ep_ui_safe_insets *v);
+void de_ep_read_ui_safe_insets(mpack_reader_t *r, de_ep_arena *a, de_ep_ui_safe_insets *out);
 void de_ep_write_unsubscribe_params(mpack_writer_t *w, const de_ep_unsubscribe_params *v);
 void de_ep_read_unsubscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_view_camera_params(mpack_writer_t *w, const de_ep_view_camera_params *v);
@@ -2250,6 +2299,7 @@ typedef enum de_ep_method {
     DE_EP_METHOD_TERRAIN_EXPORT_HEIGHTMAP,
     DE_EP_METHOD_TERRAIN_INFO,
     DE_EP_METHOD_TERRAIN_SAMPLE,
+    DE_EP_METHOD_UI_LAYOUT,
     DE_EP_METHOD_UNSUBSCRIBE,
     DE_EP_METHOD_VIEW_CREATE,
     DE_EP_METHOD_VIEW_DESTROY,
@@ -2482,6 +2532,8 @@ bool de_ep_read_params_terrain_info(const de_ep_request *req, de_ep_arena *a, de
 void de_ep_write_response_terrain_info(mpack_writer_t *w, uint64_t id, const de_ep_terrain_info *result);
 bool de_ep_read_params_terrain_sample(const de_ep_request *req, de_ep_arena *a, de_ep_terrain_sample_params *out);
 void de_ep_write_response_terrain_sample(mpack_writer_t *w, uint64_t id, const de_ep_terrain_sample *result);
+bool de_ep_read_params_ui_layout(const de_ep_request *req, de_ep_arena *a, de_ep_ui_layout_params *out);
+void de_ep_write_response_ui_layout(mpack_writer_t *w, uint64_t id, const de_ep_ui_layout *result);
 bool de_ep_read_params_unsubscribe(const de_ep_request *req, de_ep_arena *a, de_ep_unsubscribe_params *out);
 void de_ep_write_response_unsubscribe(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_view_create(const de_ep_request *req, de_ep_arena *a, de_ep_view_create_params *out);
