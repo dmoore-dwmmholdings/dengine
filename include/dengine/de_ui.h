@@ -128,6 +128,40 @@ typedef struct de_ui_sheet_info {
 /** Describes the stylesheet at `sheet`, an index from de_ui_theme_var.sheet (load order,
  * built-in sheets first). DE_ERR_NOT_FOUND: no sheet has that index. */
 DE_API de_result de_ui_get_sheet_info(const de_ui *ui, u32 sheet, de_ui_sheet_info *out);
+
+/* ---- Stylesheet files, sheet list and parse errors (DENG-780) ---- */
+/** The file name suffix of stylesheet sources, for example "ui/hud.uistyle.toml". */
+#define DE_UI_STYLESHEET_SUFFIX DE_ASSET_STYLESHEET_SUFFIX
+/** True when `path` (either separator) names a file that ends with DE_UI_STYLESHEET_SUFFIX and
+ * has a name before it. The match is exact bytes (case-sensitive). */
+DE_API bool de_ui_is_stylesheet_path(const char *path);
+#define DE_UI_SHEET_ERROR_MAX 160u
+/** A stylesheet error. `line` and `column` are 1-based, 0 when not known. `message` is the
+ * reason without the position, cut to fit. */
+typedef struct de_ui_sheet_error {
+    u32 line, column;
+    char message[DE_UI_SHEET_ERROR_MAX];
+} de_ui_sheet_error;
+/** Parses and validates stylesheet text without loading it. DE_OK clears `out`; DE_ERR_PARSE
+ * fills it, and the error context message has the same position ("UI stylesheet line L,
+ * column C: reason"). Asset references are not resolved. Any thread. */
+DE_API de_result de_ui_check_stylesheet(const char *bytes, u64 length, de_ui_sheet_error *out);
+/** One stylesheet of de_ui_list_sheets. */
+typedef struct de_ui_sheet_status {
+    de_ui_sheet_info info;
+    u32 index;          /* list position; for a loaded sheet, the de_ui_theme_var.sheet index */
+    const char *source; /* the asset's manifest `source` relative to the asset root; "" when
+                         * none. Valid like info.path */
+    bool loaded;        /* false: the first load failed and no rules are in use */
+    bool has_error;     /* `error` is set: a failed load, or a rejected reload (old rules kept) */
+    de_ui_sheet_error error;
+} de_ui_sheet_status;
+/** Lists the stylesheets: the loaded sheets in load order (built-in sheets first), then the
+ * sheets whose first de_ui_load_stylesheet failed. Writes up to `capacity` entries; `count`
+ * gets the full count. `out` may be NULL with `capacity` 0. A good reload clears an error; a
+ * failed sheet leaves the list when a later de_ui_load_stylesheet of it succeeds. Main thread. */
+DE_API de_result de_ui_list_sheets(const de_ui *ui, de_ui_sheet_status *out, u32 capacity,
+                                   u32 *count);
 /** Writes the variables in effect for `theme` (NULL: the active theme; "": the base
  * variables): for each sheet in load order, its [vars] in file order with the overlay values
  * applied, then the variables that only the overlay declares. `count` gets the full count.
