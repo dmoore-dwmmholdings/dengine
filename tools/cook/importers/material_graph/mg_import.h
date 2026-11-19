@@ -37,7 +37,7 @@ DE_EXTERN_C_BEGIN
 
 /** Bump on any change of the importer's output. de_mg_importer_version() mixes it with the shader
  * importer's version and the engine shader sources. */
-#define DE_MG_IMPORTER_BASE_VERSION 1u
+#define DE_MG_IMPORTER_BASE_VERSION 2u
 
 /** The importer version: base version, shader importer version, engine shader root contents.
  * Computed once per process. Never 0. */

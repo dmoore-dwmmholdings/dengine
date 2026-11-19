@@ -9,6 +9,8 @@
  *   registers_model            the graph loads READY; its model has the next game id, a resolve
  *                              pipeline and the graph's features; the sub-asset material resolves
  *                              to it and packs the graph's defaults and features
+ *   material_loads_graph_dependency  loading only `#material` loads the graph and registers its
+ *                              model before the material is READY; release and reload work
  *   param_edit_keeps_pipeline  de_material_set_params changes the block, not the model's pipeline
  *                              or the model count
  *   hot_reload_replaces        the source changes: the reload keeps the model id and the material's
@@ -217,6 +219,29 @@ TEST_F(material_graph, registers_model, mg_fx) {
     EXPECT_FLOAT_EQ(b.emissive.v[0], 0.375f, 1e-6f);
     de_asset_release(f->assets, hm);
     de_asset_release(f->assets, hg);
+}
+
+TEST_F(material_graph, material_loads_graph_dependency, mg_fx) {
+    open_fx(f, "dependency", ROCK_GRAPH("0.375"), "");
+    EXPECT_EQ(rock_model(f), DE__MATERIAL_MODEL_MAX);
+    /* Only the sub-asset: the graph is not loaded by anything else (DENG-774). */
+    de_load_handle hm;
+    ASSERT_EQ((int)load(f, "mats/rock#material", &hm), (int)DE_LOAD_READY);
+    const u32 id = rock_model(f);
+    ASSERT_NE(id, DE__MATERIAL_MODEL_MAX);
+    EXPECT_EQ((int)de_asset_status_of(f->assets, de_asset_id_from("mats/rock")),
+              (int)DE_LOAD_READY);
+    const de_material m = de_asset_material(f->assets, de_asset_id_from("mats/rock#material"));
+    de__material_params b;
+    ASSERT_TRUE(pack_of(f, m, &b));
+    EXPECT_EQ(b.model, id);
+    EXPECT_FLOAT_EQ(b.emissive.v[0], 0.375f, 1e-6f);
+
+    /* Releasing the material releases the graph with it; loading it again works. */
+    de_asset_release(f->assets, hm);
+    ASSERT_EQ((int)load(f, "mats/rock#material", &hm), (int)DE_LOAD_READY);
+    ASSERT_NE(rock_model(f), DE__MATERIAL_MODEL_MAX);
+    de_asset_release(f->assets, hm);
 }
 
 TEST_F(material_graph, param_edit_keeps_pipeline, mg_fx) {

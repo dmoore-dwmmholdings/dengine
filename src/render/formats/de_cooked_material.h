@@ -31,7 +31,13 @@
  *   textures    T x 16: u32 slot (de_cooked_tex_slot), u32 texcoord set (0 or 1), u64 texture
  *               asset ID (never 0). Sorted by slot, each slot once.
  *
- * Bump DE_COOKED_MATERIAL_VERSION on any change. The parser reads versions 1 and 2.
+ *   trailer     optional, version 2 only (DENG-774): u64 model asset ID, 8 bytes after the textures
+ *               (the blob is then 8 bytes longer than 32 + P + 16 T). It names the `material_graph`
+ *               asset that registers the model; the loader makes it a runtime dependency, so the
+ *               model exists before the material is READY. Never 0 when present.
+ *
+ * Bump DE_COOKED_MATERIAL_VERSION on any change that old parsers must refuse. The parser reads
+ * versions 1 and 2.
  */
 #ifndef DE_RENDER_FORMATS_COOKED_MATERIAL_H
 #define DE_RENDER_FORMATS_COOKED_MATERIAL_H
@@ -48,6 +54,7 @@ DE_EXTERN_C_BEGIN
 #define DE_COOKED_MATERIAL_VERSION     2u
 #define DE_COOKED_MATERIAL_HEADER_SIZE 32u
 #define DE_COOKED_MATERIAL_TEX_SIZE    16u
+#define DE_COOKED_MATERIAL_TRAILER_SIZE 8u /**< the optional model asset ID (DENG-774) */
 
 /** Material flags. The feature bits say which KHR_materials_* extension the source used. */
 enum {
@@ -192,6 +199,7 @@ typedef struct de_cooked_material_view {
     de_cooked_material_params params;
     u32 texture_count;
     de_cooked_material_tex textures[DE_COOKED_TEX_COUNT];
+    u64 model_asset; /**< the trailer: the asset that registers the model, or 0 (DENG-774) */
 } de_cooked_material_view;
 
 /**
@@ -225,13 +233,21 @@ static inline bool de_cooked_material_parse(const void *data, u64 size,
     u32 psize = de_cooked_get_u32(p + 16);
     out->texture_count = de_cooked_get_u32(p + 20);
     u32 total = de_cooked_get_u32(p + 24);
+    const u64 base = (u64)DE_COOKED_MATERIAL_HEADER_SIZE + psize +
+                     (u64)out->texture_count * DE_COOKED_MATERIAL_TEX_SIZE;
+    const bool trailer = out->version != 1u && (u64)total == base + DE_COOKED_MATERIAL_TRAILER_SIZE;
     if (out->alpha_mode > DE_COOKED_ALPHA_BLEND || psize != nfloats * 4u ||
-        out->texture_count > DE_COOKED_TEX_COUNT ||
-        (u64)total != (u64)DE_COOKED_MATERIAL_HEADER_SIZE + psize +
-                          (u64)out->texture_count * DE_COOKED_MATERIAL_TEX_SIZE ||
+        out->texture_count > DE_COOKED_TEX_COUNT || ((u64)total != base && !trailer) ||
         (u64)total != size) {
         w = "bad sizes or alpha mode";
         goto fail;
+    }
+    if (trailer) {
+        out->model_asset = de_cooked_get_u64(p + base);
+        if (out->model_asset == 0) {
+            w = "bad model asset record";
+            goto fail;
+        }
     }
     out->params = de_cooked_material_params_default(); /* version 1: the v2 fields' defaults */
     f32 f[DE_COOKED_MATERIAL_PARAM_FLOATS];
