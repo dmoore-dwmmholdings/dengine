@@ -230,6 +230,8 @@ de_component de__ed_component(de__editor *ed, de_ep_str name);
 bool de__ed_component_type(de__editor *ed, de_component c, de_type_id *type, u32 *size);
 /** Marks the world changed so the next world.delta sees the editor's own writes. */
 void de__ed_world_touch(de__editor *ed);
+/** The entities spawned by open edit transactions; fills up to `cap`, returns the count. */
+u32 de__ed_edit_open_spawns(u64 *out, u32 cap);
 /** Forces the next world.delta of every subscription to be a full resync. */
 void de__ed_world_resync(de__editor *ed);
 

@@ -163,6 +163,22 @@ static void tx_assign(ed_tx *t, u64 e) {
     t->assigned[t->assigned_count++] = e;
 }
 
+/* The entities spawned by open transactions (DIDE-358): world.delta reports them once their
+ * transaction commits, after its edit.applied, and never when it is cancelled. Fills up to `cap`;
+ * returns the count. */
+u32 de__ed_edit_open_spawns(u64 *out, u32 cap) {
+    u32 n = 0;
+    for (u32 i = 0; i < ED_MAX_TX; ++i) {
+        const ed_tx *t = &g_edit.tx[i];
+        if (t->state != TX_OPEN)
+            continue;
+        for (u32 k = 0; k < t->assigned_count; ++k, ++n)
+            if (out != NULL && n < cap)
+                out[n] = t->assigned[k];
+    }
+    return n;
+}
+
 static ed_tx *tx_find(u32 id) {
     for (u32 i = 0; i < ED_MAX_TX; ++i)
         if (g_edit.tx[i].state != TX_FREE && g_edit.tx[i].id == id)
@@ -1060,8 +1076,8 @@ static void reset(de__editor *ed) {
             de_ep_arena a = {scratch, ED_RESET_SCRATCH, 0};
             ed_fail f = {DE_EP_OK, ""};
             if (!replay(ed, &a, t, true, &f))
-                DE_WARN(ed->log, "editor: could not cancel transaction %u at disconnect: %s",
-                        t->id, f.msg);
+                DE_WARN(ed->log, "editor: could not cancel transaction %u at disconnect: %s", t->id,
+                        f.msg);
         }
         tx_free(t);
     }
