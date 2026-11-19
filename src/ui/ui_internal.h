@@ -57,6 +57,8 @@ struct de_ui {
     u32 width, height;
     de_window_insets safe;
     bool viewport_override, viewport_dirty;
+    bool previewing;      /**< de_ui_layout_preview's pass is running (DENG-768) */
+    f32 preview_ui_scale; /**< its ui.scale; zero or less: the cvar */
     f32 scale;
     de_ui_layout_stats stats;
     void *render;

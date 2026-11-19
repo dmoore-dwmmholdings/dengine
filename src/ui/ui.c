@@ -425,11 +425,13 @@ void de_ui_set_viewport(de_ui *ui, u32 width, u32 height, de_window_insets safe)
 de_ui_layout_stats de_ui_get_layout_stats(const de_ui *ui) {
     return ui ? ui->stats : (de_ui_layout_stats){0};
 }
-void de_ui__layout_system(de_system_ctx *ctx) {
-    de_ui *ui = ctx->user;
+/* One layout pass: gather the nodes through `all`, mark what the `changes` queries report, lay
+ * out every root. A preview pass (ui->previewing) keeps the viewport, pixel-art flag and ui.scale
+ * the preview set instead of reading the window, renderer and cvar. */
+static void layout_pass(de_ui *ui, de_query all, const de_query *changes, u32 change_count) {
     ++ui->frame;
     memset(&ui->stats, 0, sizeof ui->stats);
-    if (!ui->viewport_override && !ui->desc.pixel_art && !ui->desc.view.id) {
+    if (!ui->previewing && !ui->viewport_override && !ui->desc.pixel_art && !ui->desc.view.id) {
         de_window window = ui->desc.window;
         if (window.id) {
             u32 width = 0, height = 0;
@@ -452,17 +454,20 @@ void de_ui__layout_system(de_system_ctx *ctx) {
         }
 #endif
     }
-    (void)de_ui__pixel_prepare(ui);
-    f32 scale = ui->desc.pixel_art ? fmaxf(1, roundf((f32)de_cvar_float(ui->scale_cvar)))
-                                   : (f32)ui->height / ui->desc.reference_height *
-                                         (f32)de_cvar_float(ui->scale_cvar);
+    if (!ui->previewing)
+        (void)de_ui__pixel_prepare(ui);
+    const f32 ui_scale = ui->previewing && ui->preview_ui_scale > 0
+                             ? ui->preview_ui_scale
+                             : (f32)de_cvar_float(ui->scale_cvar);
+    f32 scale = ui->desc.pixel_art ? fmaxf(1, roundf(ui_scale))
+                                   : (f32)ui->height / ui->desc.reference_height * ui_scale;
     if (!isfinite(scale) || scale <= 0)
         scale = 1;
     if (scale != ui->scale)
         ui->viewport_dirty = true;
     ui->scale = scale;
     ui->stats.scale = scale;
-    de_query_each(ui->world, ctx->queries[0], gather, ui);
+    de_query_each(ui->world, all, gather, ui);
     for (u32 i = 0; i < ui->record_count; ++i) {
         de_ui_record *r = &ui->records[i];
         if (!r->alive)
@@ -490,8 +495,8 @@ void de_ui__layout_system(de_system_ctx *ctx) {
             last = index;
         }
     }
-    for (u32 i = 1; i < DE_UI_LAYOUT_CHANGE_QUERIES + 1; ++i)
-        de_query_each(ui->world, ctx->queries[i], changed, ui);
+    for (u32 i = 0; i < change_count; ++i)
+        de_query_each(ui->world, changes[i], changed, ui);
     for (u32 i = 0; i < ui->record_count; ++i)
         if (ui->records[i].alive && ui->records[i].dirty) {
             ui->records[i].measure_dirty = true;
@@ -527,4 +532,70 @@ void de_ui__layout_system(de_system_ctx *ctx) {
     }
     de_ui__popups(&layout);
     ui->viewport_dirty = false;
+}
+void de_ui__layout_system(de_system_ctx *ctx) {
+    de_ui *ui = ctx->user;
+    layout_pass(ui, ctx->queries[0], ctx->queries + 1, DE_UI_LAYOUT_CHANGE_QUERIES);
+}
+/* The record after `index` in a pre-order walk of the subtree of `root`, or DE_UI_NONE_INDEX. */
+static u32 preorder_next(const de_ui *ui, u32 index, u32 root) {
+    if (ui->records[index].first_child != DE_UI_NONE_INDEX)
+        return ui->records[index].first_child;
+    for (u32 steps = 0; index != root && steps <= ui->capacity; ++steps) {
+        if (ui->records[index].next_sibling != DE_UI_NONE_INDEX)
+            return ui->records[index].next_sibling;
+        index = de_ui__find(ui, ui->records[index].parent);
+        if (index == DE_UI_NONE_INDEX)
+            break;
+    }
+    return DE_UI_NONE_INDEX;
+}
+de_result de_ui_layout_preview(de_ui *ui, de_entity root, const de_ui_preview_viewport *viewport,
+                               de_ui_preview_rect *out, u32 capacity, u32 *count, f32 *scale) {
+    if (!ui || !viewport || !count || (capacity && !out))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_ui_layout_preview: NULL argument");
+    *count = 0;
+    if (!ui->world || !ui->all_nodes.id)
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_ui_layout_preview: the UI is not attached");
+    if (!viewport->width || !viewport->height || !isfinite(viewport->ui_scale))
+        return DE_FAIL(DE_ERR_INVALID_ARGUMENT,
+                       "de_ui_layout_preview: the viewport needs a width, a height and a finite "
+                       "ui_scale");
+    if (!root.bits || !de_entity_alive(ui->world, root) ||
+        !de_entity_has(ui->world, root, ui->ids.node))
+        return DE_FAIL(DE_ERR_NOT_FOUND, "de_ui_layout_preview: 0x%016llx is not a UI node",
+                       (unsigned long long)root.bits);
+    const u32 width = ui->width, height = ui->height;
+    const de_window_insets safe = ui->safe;
+    const bool override = ui->viewport_override, pixel_art = ui->desc.pixel_art;
+    ui->width = viewport->width;
+    ui->height = viewport->height;
+    ui->safe = viewport->safe;
+    ui->viewport_override = true;
+    ui->desc.pixel_art = viewport->pixel_art;
+    ui->preview_ui_scale = viewport->ui_scale;
+    ui->previewing = true;
+    ui->viewport_dirty = true;
+    layout_pass(ui, ui->all_nodes, NULL, 0);
+    if (scale)
+        *scale = ui->scale;
+    u32 n = 0;
+    const u32 first = de_ui__find(ui, root);
+    for (u32 i = first; i != DE_UI_NONE_INDEX && n < ui->capacity; i = preorder_next(ui, i, first)) {
+        if (n < capacity)
+            out[n] = (de_ui_preview_rect){ui->records[i].entity, ui->records[i].node.computed_rect};
+        ++n;
+    }
+    *count = n;
+    /* Lay out again at the live viewport, so every computed_rect is what the frame left. */
+    ui->width = width;
+    ui->height = height;
+    ui->safe = safe;
+    ui->viewport_override = override;
+    ui->desc.pixel_art = pixel_art;
+    ui->preview_ui_scale = 0;
+    ui->previewing = false;
+    ui->viewport_dirty = true;
+    layout_pass(ui, ui->all_nodes, NULL, 0);
+    return DE_OK;
 }
