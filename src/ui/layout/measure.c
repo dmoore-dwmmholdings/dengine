@@ -103,8 +103,8 @@ de_vec2 de_ui__measure_assigned(de_ui_layout *layout, u32 index, de_vec2 availab
     for (u32 child = record->first_child; child != DE_UI_NONE_INDEX;
          child = ui->records[child].next_sibling) {
         de_ui_record *r = &ui->records[child];
-        if (r->node.display == DE_UI_NONE || de_entity_has(ui->world, r->entity, ui->ids.anchor) ||
-            de_entity_has(ui->world, r->entity, ui->ids.popup))
+        if (r->node.display == DE_UI_NONE ||
+            (r->component_mask & (DE_UI_HAS_ANCHOR | DE_UI_HAS_POPUP)))
             continue;
         de_vec2 size = de_ui__measure(layout, child, content);
         f32 mt = de_ui__length(r->node.margin[0], content.y, ui->scale, 0),

@@ -10,6 +10,10 @@
 #define DE_UI_MAX_MEASURES   32u
 #define DE_UI_COMPONENTS     9u
 #define DE_UI_NONE_INDEX     UINT32_MAX
+/* de_ui_record.component_mask bits, in the optional-column order of the gather query. They
+ * describe the record's archetype as gathered by this frame's layout pass. */
+#define DE_UI_HAS_ANCHOR (1u << 0)
+#define DE_UI_HAS_POPUP  (1u << 3)
 typedef struct de_ui_components {
     de_component node, anchor, grid, grid_item, popup, style, state, image, text;
 } de_ui_components;

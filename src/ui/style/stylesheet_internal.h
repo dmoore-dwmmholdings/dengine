@@ -92,6 +92,9 @@ typedef struct de_ui_style_system {
     u32 sheet_count;
     u32 builtin_count;
     de_ui_style_cache *cache;
+    /* Slots that ever held an entity since the cache was last cleared. Zero means every
+     * lookup would stop at an empty slot, so lookups that do not create can skip the probe. */
+    u32 cache_used;
     de_entity *entities;
     u32 entity_count;
     de_ui_property_tween *tweens;
