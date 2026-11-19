@@ -465,3 +465,15 @@ if(TARGET de_gpu_d3d12)
         endif()
     endforeach()
 endif()
+
+# The owned-game probe must resolve in both source and cooker-free packed mode,
+# independently of native GPU availability or host-loop startup.
+de_add_test(NAME owned_probe SOURCES test_owned_probe.c
+    LIBS de_host de_asset de_platform de_task LABELS unit host)
+if(TARGET test_owned_probe)
+    target_include_directories(test_owned_probe PRIVATE "${DE_ROOT_DIR}/src")
+    target_compile_definitions(test_owned_probe PRIVATE
+        DE_HOST_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        DE_HOST_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_owned_probe_tmp")
+endif()
