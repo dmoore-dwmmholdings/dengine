@@ -52,7 +52,10 @@ typedef struct de__gs_float4 {
 enum {
     DE__MATERIAL_FLAG_READY = 1u, /**< the material is loaded; the block is valid */
     DE__MATERIAL_FLAG_DOUBLE_SIDED = 2u,
-    DE__MATERIAL_FLAG_UNLIT = 4u
+    DE__MATERIAL_FLAG_UNLIT = 4u,
+    /** a DeSprite's block: subsurface holds the atlas uv offset and signed scale (DENG-763; an
+     * unlit sprite has the Unlit model, so the model id alone does not say it) */
+    DE__MATERIAL_FLAG_SPRITE = 8u
 };
 /** Texture slots of a block (DE_GPU_MATERIAL_TEXTURES = DE_COOKED_TEX_COUNT). */
 #define DE__MATERIAL_TEXTURES 19u
