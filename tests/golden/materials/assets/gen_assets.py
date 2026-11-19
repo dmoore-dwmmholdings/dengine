@@ -591,6 +591,78 @@ def scene_layers_furnace():
     return sc
 
 
+# DENG-770: a material graph asset (type material_graph). The cook generates its Slang model,
+# compiles cs_resolve_model per target, and registers it at load; its `#material` holds the
+# parameter defaults at their rows. Parameters take rows in node-id order: tint = row 0 xyz,
+# metal = row 0 w, rough_lo = row 1 x, rough_hi = row 1 y.
+GRAPH_NOISE_ROUGH = """kind = "material"
+version = 1
+next_id = 16
+[[node]]
+id = "n1"
+type = "param.color"
+values = { name = "tint", r = 0.95, g = 0.64, b = 0.54 }
+[[node]]
+id = "n2"
+type = "param.float"
+values = { name = "metal", value = 1.0, min = 0.0, max = 1.0 }
+[[node]]
+id = "n3"
+type = "param.float"
+values = { name = "rough_lo", value = 0.15, min = 0.0, max = 1.0 }
+[[node]]
+id = "n4"
+type = "param.float"
+values = { name = "rough_hi", value = 0.8, min = 0.0, max = 1.0 }
+[[node]]
+id = "n5"
+type = "value.float"
+values = { value = 6.0 }
+[[node]]
+id = "n6"
+type = "noise.value"
+[[node]]
+id = "n7"
+type = "math.lerp"
+[[node]]
+id = "n8"
+type = "output.base"
+[[link]]
+from = "n5.out"
+to = "n6.scale"
+[[link]]
+from = "n3.out"
+to = "n7.a"
+[[link]]
+from = "n4.out"
+to = "n7.b"
+[[link]]
+from = "n6.out"
+to = "n7.t"
+[[link]]
+from = "n7.out"
+to = "n8.roughness"
+[[link]]
+from = "n1.out"
+to = "n8.base_color"
+[[link]]
+from = "n2.out"
+to = "n8.metallic"
+"""
+
+
+def scene_graph():
+    """DENG-770: the graph's material (value noise between two roughnesses on a copper tint) on
+    the left, the Standard material of its mean parameters on the right, under the sky."""
+    sc = Scene("material graph")
+    camera(sc, (0.0, -6.0, 0.0), 0.0, 30.0, 0.0)
+    twin = mat("graph_twin", base_color=[0.95, 0.64, 0.54], metallic=1.0, roughness=0.475)
+    sc.entity([xf((-0.65, 0.0, 0.0)), mesh_renderer(SPHERE, "graph/noise_rough#material")])
+    sc.entity([xf((0.65, 0.0, 0.0)), mesh_renderer(SPHERE, twin)])
+    environment(sc, "env/sky", 1.0)
+    return sc
+
+
 def scene_khr():
     """Procedural stand-ins for five Khronos glTF sample models (LICENSES.md), lit by the sky and
     a sun: ClearCoatTest (coat x coat roughness over a base), SheenChair (a seat of two boxes in a
@@ -672,7 +744,9 @@ def main():
         "furnace": scene_furnace(),
         "layers_furnace": scene_layers_furnace(),
         "khr_samples": scene_khr(),
+        "graph": scene_graph(),
     }
+    out("graphs/noise_rough.mgraph.toml", GRAPH_NOISE_ROUGH.encode("ascii"))
     for name, kv in MATS.items():
         out("materials/%s.mat.toml" % name, mat_file(name, kv))
     for name, sc in scenes.items():
@@ -698,6 +772,8 @@ def main():
     for name in sorted(MATS):
         m.append('"mat/%s" = { type = "material", source = "materials/%s.mat.toml" }'
                  % (name, name))
+    m.append('"graph/noise_rough" = { type = "material_graph", '
+             'source = "graphs/noise_rough.mgraph.toml" }')
     for name in sorted(scenes):
         m.append('"scenes/%s" = { type = "scene", source = "scenes/%s.scene.toml" }'
                  % (name, name))

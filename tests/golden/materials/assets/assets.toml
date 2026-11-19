@@ -56,6 +56,7 @@ generate_lods = false
 "mat/furnace_metal_r5" = { type = "material", source = "materials/furnace_metal_r5.mat.toml" }
 "mat/furnace_sheen" = { type = "material", source = "materials/furnace_sheen.mat.toml" }
 "mat/furnace_stack" = { type = "material", source = "materials/furnace_stack.mat.toml" }
+"mat/graph_twin" = { type = "material", source = "materials/graph_twin.mat.toml" }
 "mat/ior_0" = { type = "material", source = "materials/ior_0.mat.toml" }
 "mat/ior_1" = { type = "material", source = "materials/ior_1.mat.toml" }
 "mat/ior_2" = { type = "material", source = "materials/ior_2.mat.toml" }
@@ -108,8 +109,10 @@ generate_lods = false
 "mat/trans_vol_blue" = { type = "material", source = "materials/trans_vol_blue.mat.toml" }
 "mat/trans_vol_red" = { type = "material", source = "materials/trans_vol_red.mat.toml" }
 "mat/unlit" = { type = "material", source = "materials/unlit.mat.toml" }
+"graph/noise_rough" = { type = "material_graph", source = "graphs/noise_rough.mgraph.toml" }
 "scenes/furnace" = { type = "scene", source = "scenes/furnace.scene.toml" }
 "scenes/gallery_ibl" = { type = "scene", source = "scenes/gallery_ibl.scene.toml" }
 "scenes/gallery_lights" = { type = "scene", source = "scenes/gallery_lights.scene.toml" }
+"scenes/graph" = { type = "scene", source = "scenes/graph.scene.toml" }
 "scenes/khr_samples" = { type = "scene", source = "scenes/khr_samples.scene.toml" }
 "scenes/layers_furnace" = { type = "scene", source = "scenes/layers_furnace.scene.toml" }

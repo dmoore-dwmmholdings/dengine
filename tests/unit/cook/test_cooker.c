@@ -84,11 +84,12 @@ TEST_F(cooker, registry, cook_fx) {
 
     u32 n = 0;
     const char *const *engine = de_cooker_engine_type_names(&n);
-    /* Independent contract: preserve registration order and the DENG-190 sprite type. */
-    const char *const expected[] = {"texture", "model",      "material",     "shader",
-                                    "sound",   "font",       "aseprite",     "tilemap",
-                                    "strings", "stylesheet", "video",        "scene",
-                                    "prefab",  "blob",       "string_table", "sprite_clip"};
+    /* Independent contract: preserve registration order, the DENG-190 sprite type and the
+     * DENG-770 material graph type. */
+    const char *const expected[] = {
+        "texture",  "model",   "material",     "shader",      "sound",         "font",
+        "aseprite", "tilemap", "strings",      "stylesheet",  "video",         "scene",
+        "prefab",   "blob",    "string_table", "sprite_clip", "material_graph"};
     ASSERT_EQ(n, (u32)(sizeof expected / sizeof expected[0]));
     for (u32 i = 0; i < n; ++i) {
         EXPECT_STREQ(engine[i], expected[i]);

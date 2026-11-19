@@ -103,6 +103,9 @@ static void renderer_free(de_renderer *r) {
     de__views_destroy(r); /* DENG-176: view graphs, outputs, the composite */
     de__upscalers_destroy(r);
     de__tonemappers_destroy(r);
+    /* DENG-770: the uploader can outlive the renderer (asset-system shutdown): its graph loads
+     * stop registering before the models go. */
+    de__render_uploader_set_material_models(r->uploader, NULL);
     de__material_models_destroy(r->material_models); /* DENG-298: after the vis frame */
     de__brdf_luts_destroy(r->brdf_luts);             /* DENG-299 */
     de__gpu_scene_destroy(r->gpu_scene); /* DENG-177: before the uploader whose ring it stages in */
@@ -340,6 +343,8 @@ de_result de_renderer_create(const de_renderer_desc *desc, de_renderer **out) {
         }
         /* DENG-422: unloaded assets stay alive until the frames that could name them complete. */
         de__render_uploader_set_frame_fence(r->uploader, r->frame_fence);
+        /* DENG-770: `material_graph` assets register their models here. */
+        de__render_uploader_set_material_models(r->uploader, r->material_models);
     }
 
     /* ---- DENG-302: material instances (asset records and runtime instances) ---- */

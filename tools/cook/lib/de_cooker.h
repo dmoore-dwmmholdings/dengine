@@ -47,7 +47,8 @@ DE_EXTERN_C_BEGIN
  */
 #define DE_COOKER_ENGINE_TYPE_NAMES                                                                \
     "texture", "model", "material", "shader", "sound", "font", "aseprite", "tilemap", "strings",   \
-        "stylesheet", "video", "scene", "prefab", "blob", "string_table", "sprite_clip"
+        "stylesheet", "video", "scene", "prefab", "blob", "string_table", "sprite_clip",           \
+        "material_graph"
 
 /** The engine type names (DE_COOKER_ENGINE_TYPE_NAMES) and their count in `*count`. */
 const char *const *de_cooker_engine_type_names(u32 *count);
