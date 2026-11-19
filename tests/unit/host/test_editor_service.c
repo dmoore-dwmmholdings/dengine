@@ -4,8 +4,11 @@
 #include "host/editor/editor_internal.h"
 #include "host/host_internal.h"
 #include "host/hot_reload.h"
+#include <dengine/de_asset.h>
 #include <dengine/de_ecs.h>
+#include <dengine/de_math.h>
 #include <dengine/de_platform.h>
+#include <dengine/de_task.h>
 #include <stdio.h>
 
 /* DENG-642: unit tests for the editor service's session (modes, step, snapshots, diff) and
@@ -17,6 +20,7 @@ typedef struct service_fx {
     de_engine engine;
     de__host host;
     de__editor ed;
+    de_task_system *tasks;
     unsigned char arena[65536];
     char note[32768];
 } service_fx;
@@ -40,6 +44,10 @@ static void service_fx_teardown(service_fx *f) {
         f->ed.resets[i](&f->ed);
     de__ed_session_shutdown();
     de_world_destroy(f->engine.world);
+    if (f->engine.assets)
+        de_asset_system_destroy(f->engine.assets);
+    if (f->tasks)
+        de_task_system_destroy(f->tasks);
     de_type_registry_destroy(f->engine.types);
     de_log_shutdown();
 }
@@ -410,4 +418,265 @@ TEST_F(editor_service, invalid_set_ops_change_nothing, service_fx) {
     EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, 9999), DE_EP_ERR_NOT_FOUND);
     EXPECT_EQ(tx_call(f, DE_EP_METHOD_EDIT_CANCEL, tx), 0);
 }
+
+/* ---------- Transactional prefab instantiate (DENG-764) ---------- */
+
+#if DE_HAS_COOKER
+typedef struct THealth {
+    f32 current, max;
+} THealth;
+typedef struct TTarget {
+    de_entity target;
+    u32 texture;
+    f32 speed;
+} TTarget;
+static const de_field_info t_health_fields[] = {
+    DE_FIELD(THealth, current, DE_FK_F32, DE_FIELD_DEFAULT),
+    DE_FIELD(THealth, max, DE_FK_F32, DE_FIELD_DEFAULT),
+};
+static const de_field_info t_target_fields[] = {
+    DE_FIELD(TTarget, target, DE_FK_ENTITY, DE_FIELD_DEFAULT),
+    DE_FIELD_EX(TTarget, texture, DE_FK_ASSET, DE_FIELD_DEFAULT | DE_FIELD_ASSET_REF,
+                {0, 0, 0, 0, "blob", 0}),
+    DE_FIELD(TTarget, speed, DE_FK_F32, DE_FIELD_DEFAULT),
+};
+
+typedef struct prefab_ids {
+    de_component health, target;
+} prefab_ids;
+
+/* The crate prefab (a root with THealth, a child with TTarget aimed at the root), with the scene
+ * and edit handlers. */
+static prefab_ids prefab_setup(service_fx *f) {
+    prefab_ids ids;
+    ASSERT_TRUE(DE_HANDLE_VALID(
+        de_type_register(f->engine.types, &DE_TYPE_DESC(THealth, 1, t_health_fields))));
+    ASSERT_TRUE(DE_HANDLE_VALID(
+        de_type_register(f->engine.types, &DE_TYPE_DESC(TTarget, 1, t_target_fields))));
+    ids.health = de_component_register(f->engine.world, de_type_find(f->engine.types, "THealth"),
+                                       DE_COMP_SERIALIZE);
+    ids.target = de_component_register(f->engine.world, de_type_find(f->engine.types, "TTarget"),
+                                       DE_COMP_SERIALIZE);
+    ASSERT_TRUE(DE_HANDLE_VALID(ids.health) && DE_HANDLE_VALID(ids.target));
+    ASSERT_EQ(de_fs_mount("svc764", DE_EDITOR_PREFAB_DATA_DIR, 0, 0), DE_OK);
+    de_fp_env_init_thread();
+    ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 1}, &f->tasks), DE_OK);
+    ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks = f->tasks,
+                                                             .types = f->engine.types,
+                                                             .io_threads = 1,
+                                                             .cache_dir = "nocache764:/cache"},
+                                     &f->engine.assets),
+              DE_OK);
+    ASSERT_EQ(de_asset_manifest_load(f->engine.assets, "svc764:/assets.toml"), DE_OK);
+    de__ed_scene_register(&f->ed);
+    de__ed_edit_register(&f->ed);
+    return ids;
+}
+static void prefab_teardown(void) {
+    (void)de_fs_unmount("svc764", DE_EDITOR_PREFAB_DATA_DIR);
+}
+
+typedef struct ent_list {
+    u64 ids[16];
+    u32 count;
+} ent_list;
+static void collect(const de_query_chunk *chunk, void *user) {
+    ent_list *l = (ent_list *)user;
+    for (u32 i = 0; i < chunk->count && l->count < 16; ++i)
+        l->ids[l->count++] = chunk->entities[i].bits;
+}
+/* Every live entity. */
+static ent_list live_entities(service_fx *f) {
+    ent_list l;
+    memset(&l, 0, sizeof l);
+    const de_query q = de_query_create(f->engine.world, &(de_query_desc){0});
+    de_query_each(f->engine.world, q, collect, &l);
+    de_query_destroy(f->engine.world, q);
+    return l;
+}
+
+/* scene.serialize of the game scene (its stable ids, parents and components). */
+static void serialize(service_fx *f, char *out, size_t cap) {
+    char p[32];
+    const de_ep_scene_params q = {1};
+    WRITE_PARAMS(p, de_ep_write_scene_params, &q);
+    reply r;
+    call(f, DE_EP_METHOD_SCENE_SERIALIZE, p, p_size, &r);
+    ASSERT_EQ(code_of(&r), 0);
+    mpack_node_t text = mpack_node_map_cstr(mpack_node_map_cstr(r.root, "result"), "text");
+    const size_t n = mpack_node_strlen(text);
+    ASSERT_TRUE(n < cap);
+    memcpy(out, mpack_node_str(text), n);
+    out[n] = '\0';
+    done(&r);
+}
+
+static int apply_ops(service_fx *f, u32 tx, de_ep_edit_op *ops, u32 n) {
+    const de_ep_edit_apply_params q = {.tx = tx, .ops = {ops, n}};
+    char p[1024];
+    WRITE_PARAMS(p, de_ep_write_edit_apply_params, &q);
+    return call_code(f, DE_EP_METHOD_EDIT_APPLY, p, p_size);
+}
+static de_ep_edit_op instantiate_op(const char *asset) {
+    return (de_ep_edit_op){.op = de_ep_cstr("instantiate"),
+                           .has_scene = true,
+                           .scene = 1,
+                           .has_path = true,
+                           .path = de_ep_cstr(asset)};
+}
+static int overrides_code(service_fx *f, u64 entity) {
+    char p[32];
+    const de_ep_entity_ref q = {entity};
+    WRITE_PARAMS(p, de_ep_write_entity_ref, &q);
+    return call_code(f, DE_EP_METHOD_PREFAB_OVERRIDES, p, p_size);
+}
+static int revert_code(service_fx *f, u64 entity, const char *path) {
+    char p[128];
+    const de_ep_override_path_params q = {.entity = entity, .path = de_ep_cstr(path)};
+    WRITE_PARAMS(p, de_ep_write_override_path_params, &q);
+    return call_code(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, p, p_size);
+}
+
+/* The crate's root and child among the live entities. */
+static void crate_of(service_fx *f, const prefab_ids *ids, de_entity *root, de_entity *child) {
+    const ent_list l = live_entities(f);
+    ASSERT_EQ(l.count, 2u);
+    *root = *child = DE_ENTITY_NULL;
+    for (u32 i = 0; i < l.count; ++i) {
+        const de_entity e = {l.ids[i]};
+        if (de_entity_has(f->engine.world, e, ids->health))
+            *root = e;
+        if (de_entity_has(f->engine.world, e, ids->target))
+            *child = e;
+    }
+    ASSERT_TRUE(root->bits != 0 && child->bits != 0);
+    EXPECT_EQ(de_entity_parent(f->engine.world, *child).bits, root->bits);
+    const TTarget *t = de_entity_get(f->engine.world, *child, ids->target);
+    ASSERT_TRUE(t != NULL);
+    EXPECT_EQ(t->target.bits, root->bits);
+}
+
+/* The instance is back as it was: same ids, stable ids, record and base values. */
+static void expect_crate(service_fx *f, const prefab_ids *ids, de_entity root, de_entity child,
+                         const char *text) {
+    de_entity r2, c2;
+    crate_of(f, ids, &r2, &c2);
+    EXPECT_EQ(r2.bits, root.bits);
+    EXPECT_EQ(c2.bits, child.bits);
+    static char now[4096];
+    serialize(f, now, sizeof now);
+    EXPECT_STREQ(now, text);
+    EXPECT_EQ(overrides_code(f, root.bits), 0);
+    THealth *h = de_entity_get(f->engine.world, root, ids->health);
+    ASSERT_TRUE(h != NULL);
+    h->current = 3;
+    EXPECT_EQ(revert_code(f, root.bits, "THealth.current"), 0);
+    EXPECT_FLOAT_EQ(h->current, 50, 0);
+}
+/* The whole tree, the instance record and the scene members are gone. */
+static void expect_no_crate(service_fx *f, de_entity root, de_entity child, const char *empty) {
+    EXPECT_FALSE(de_entity_alive(f->engine.world, root));
+    EXPECT_FALSE(de_entity_alive(f->engine.world, child));
+    EXPECT_EQ(live_entities(f).count, 0u);
+    static char now[4096];
+    serialize(f, now, sizeof now);
+    EXPECT_STREQ(now, empty);
+    EXPECT_EQ(overrides_code(f, root.bits), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(overrides_code(f, child.bits), DE_EP_ERR_NOT_FOUND);
+}
+
+TEST_F(editor_service, prefab_instantiate_op_undoes_the_whole_instance_and_redoes_it_exactly,
+       service_fx) {
+    const prefab_ids ids = prefab_setup(f);
+    static char empty[4096], text[4096];
+    serialize(f, empty, sizeof empty);
+    const u32 tx = edit_begin(f);
+    de_ep_edit_op op = instantiate_op("props/crate");
+    ASSERT_EQ(apply_ops(f, tx, &op, 1), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), 0);
+    de_entity root, child;
+    crate_of(f, &ids, &root, &child);
+    serialize(f, text, sizeof text);
+    EXPECT_TRUE(strstr(text, "THealth") != NULL && strstr(text, "TTarget") != NULL);
+    EXPECT_EQ(overrides_code(f, root.bits), 0);
+    for (u32 i = 0; i < 2; ++i) {
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+        expect_no_crate(f, root, child, empty);
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+        expect_crate(f, &ids, root, child, text);
+    }
+    prefab_teardown();
+}
+
+TEST_F(editor_service, prefab_instantiate_rolls_back_with_a_failed_op_or_a_cancel, service_fx) {
+    const prefab_ids ids = prefab_setup(f);
+    (void)ids;
+    static char empty[4096];
+    serialize(f, empty, sizeof empty);
+    const u32 tx = edit_begin(f);
+    /* A later op fails: the instantiate goes too, record and members included. */
+    de_ep_edit_op ops[2] = {instantiate_op("props/crate"),
+                            {.op = de_ep_cstr("set"),
+                             .has_entity = true,
+                             .entity = 0xFFFFFFFFull,
+                             .has_path = true,
+                             .path = de_ep_cstr("THealth.current"),
+                             .has_value = true,
+                             .value = {"\x01", 1}}};
+    EXPECT_EQ(apply_ops(f, tx, ops, 2), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(live_entities(f).count, 0u);
+    static char now[4096];
+    serialize(f, now, sizeof now);
+    EXPECT_STREQ(now, empty);
+    /* A cancel removes an applied instantiate. */
+    ASSERT_EQ(apply_ops(f, tx, ops, 1), 0);
+    de_entity root, child;
+    crate_of(f, &ids, &root, &child);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_CANCEL, tx), 0);
+    expect_no_crate(f, root, child, empty);
+    /* An unknown prefab changes nothing. */
+    const u32 tx2 = edit_begin(f);
+    de_ep_edit_op bad = instantiate_op("props/missing");
+    EXPECT_EQ(apply_ops(f, tx2, &bad, 1), DE_EP_ERR_NOT_FOUND);
+    EXPECT_EQ(live_entities(f).count, 0u);
+    prefab_teardown();
+}
+
+TEST_F(editor_service, prefab_uninstantiate_op_removes_an_instance_and_its_inverse_restores_it,
+       service_fx) {
+    const prefab_ids ids = prefab_setup(f);
+    static char empty[4096], text[4096];
+    serialize(f, empty, sizeof empty);
+    const u32 tx = edit_begin(f);
+    de_ep_edit_op op = instantiate_op("props/crate");
+    ASSERT_EQ(apply_ops(f, tx, &op, 1), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx), 0);
+    de_entity root, child;
+    crate_of(f, &ids, &root, &child);
+    serialize(f, text, sizeof text);
+    /* Only an instance root can be uninstantiated. */
+    const u32 tx2 = edit_begin(f);
+    de_ep_edit_op un = {
+        .op = de_ep_cstr("uninstantiate"), .has_entity = true, .entity = child.bits};
+    EXPECT_EQ(apply_ops(f, tx2, &un, 1), DE_EP_ERR_INVALID_PARAMS);
+    EXPECT_EQ(live_entities(f).count, 2u);
+    un.entity = root.bits;
+    ASSERT_EQ(apply_ops(f, tx2, &un, 1), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_COMMIT, tx2), 0);
+    expect_no_crate(f, root, child, empty);
+    for (u32 i = 0; i < 2; ++i) {
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx2), 0);
+        expect_crate(f, &ids, root, child, text);
+        ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx2), 0);
+        expect_no_crate(f, root, child, empty);
+    }
+    /* Undo both, newest first, then redo the instantiate. */
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx2), 0);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_UNDO, tx), 0);
+    expect_no_crate(f, root, child, empty);
+    ASSERT_EQ(tx_call(f, DE_EP_METHOD_EDIT_REDO, tx), 0);
+    expect_crate(f, &ids, root, child, text);
+    prefab_teardown();
+}
+#endif
 #endif

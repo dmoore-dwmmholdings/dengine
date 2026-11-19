@@ -193,6 +193,28 @@ u32 de__ed_views_render_modes(const char *const **names);
 /** Entity `e`, spawned by an edit, joins `scene` (0: `parent`'s scene, or the active one) with a
  * new scene id, so a save writes it to that scene. */
 void de__ed_scene_adopt(de__editor *ed, de_entity e, u64 scene, de_entity parent);
+/** An entity's scene and stable scene id; false when no scene has it. */
+bool de__ed_scene_member(u64 entity, u64 *scene, u64 *sid);
+/** Puts an entity in `scene` with stable id `sid` (an undone removal gets its ids back). */
+bool de__ed_scene_member_set(u64 entity, u64 scene, u64 sid);
+/** Takes an entity out of its scene. */
+void de__ed_scene_member_drop(u64 entity);
+/** Every entity of the tree under `root`, root first, breadth-first, at most `cap`. */
+u32 de__ed_scene_tree(de__editor *ed, de_entity root, u64 *out, u32 cap);
+/** Instantiates prefab `asset` under `parent` into `scene`: new entities and stable ids, and an
+ * instance record with the fields as instantiated. False with `code` and `msg` set; then nothing
+ * changed. `a` is scratch (what is in it already stays). */
+bool de__ed_prefab_spawn(de__editor *ed, de_ep_arena *a, const char *asset, u64 scene,
+                         de_entity parent, de_entity *root, de_ep_error *code, char *msg,
+                         size_t msg_cap);
+/** The prefab asset of the instance whose root is `root`; NULL when `root` is not one. */
+const char *de__ed_prefab_instance_asset(u64 root);
+/** The instance record's fields as instantiated: an array of {entity, path, value} maps. */
+void de__ed_prefab_instance_write_base(u64 root, mpack_writer_t *w);
+/** Forgets the instance record whose root is `root`. */
+void de__ed_prefab_instance_drop(u64 root);
+/** Adds an instance record from what de__ed_prefab_instance_write_base wrote. */
+bool de__ed_prefab_instance_restore(u64 root, const char *asset, const char *base, size_t len);
 /** The component called `name` in the world (id 0 when there is none). */
 de_component de__ed_component(de__editor *ed, de_ep_str name);
 /** A component's reflected type and data size; false for an unknown component. */

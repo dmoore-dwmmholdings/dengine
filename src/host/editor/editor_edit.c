@@ -1,10 +1,19 @@
 /* editor_edit.c: transactional edits with inverses, undo and redo (DENG-626).
  *
- * Ops: spawn, despawn, add, remove, set, reparent. They run between frames (the service's
- * frame-begin hook), so they use the world's immediate structural calls. Each applied op is kept
- * with its inverse as EditOp MessagePack bytes; undo applies the inverses in reverse, redo the
- * ops again. An undone despawn gets its entity id back: the freed index is taken again at the
- * old generation. */
+ * Ops: spawn, despawn, add, remove, set, reparent, instantiate, uninstantiate. They run between
+ * frames (the service's frame-begin hook), so they use the world's immediate structural calls.
+ * Each applied op is kept with its inverse as EditOp MessagePack bytes; undo applies the inverses
+ * in reverse, redo the ops again, and each replayed op's own inverse replaces its counterpart, so
+ * a redo restores what the undo took away. An undone despawn gets its entity id back: the freed
+ * index is taken again at the old generation.
+ *
+ * Prefabs (DENG-764): `instantiate` (path: the prefab asset; optional parent) spawns a new
+ * instance: entities, scene ids and the instance record. Its inverse is `uninstantiate` (entity:
+ * the instance root), which removes the whole tree, its scene memberships and the record. The
+ * inverse of that is `instantiate` with `value` set to a snapshot of the instance, which brings
+ * back the same entity ids, stable scene ids, components and record:
+ *   {asset: str, entities: [{id, parent, scene, sid, components: {Name: value}}],
+ *    base: [{entity, path, value}]} */
 #include "host/editor/editor_internal.h"
 
 #include <dengine/de_memory.h>
@@ -249,6 +258,246 @@ static de_entity parent_of(de__editor *ed, de_entity e) {
     return de_entity_parent(W(ed), e);
 }
 
+/* ---------- Prefab instances (DENG-764) ---------- */
+
+#define ED_MAX_TREE 1024u
+
+/* The instance under `root` as an `instantiate` value (see the top of the file). */
+static bool snapshot_instance(de__editor *ed, de_ep_arena *a, de_entity root, const char *asset,
+                              de_ep_raw *out) {
+    u64 *ents = (u64 *)de__ed_alloc(a, sizeof(u64) * ED_MAX_TREE);
+    de_ep_raw *comps = (de_ep_raw *)de__ed_alloc(a, sizeof(de_ep_raw) * ED_MAX_TREE);
+    if (ents == NULL || comps == NULL)
+        return false;
+    const u32 n = de__ed_scene_tree(ed, root, ents, ED_MAX_TREE);
+    if (n >= ED_MAX_TREE)
+        return false;
+    /* Each raw writer takes the rest of the arena, so the components go first. */
+    for (u32 i = 0; i < n; ++i) {
+        comps[i] = components_raw(ed, a, (de_entity){ents[i]});
+        if (comps[i].ptr == NULL)
+            return false;
+    }
+    mpack_writer_t mw;
+    de__ed_raw_begin(a, &mw);
+    mpack_start_map(&mw, 3);
+    mpack_write_cstr(&mw, "asset");
+    mpack_write_cstr(&mw, asset);
+    mpack_write_cstr(&mw, "entities");
+    mpack_start_array(&mw, n);
+    for (u32 i = 0; i < n; ++i) {
+        const de_entity e = {ents[i]};
+        u64 scene = 0, sid = 0;
+        (void)de__ed_scene_member(e.bits, &scene, &sid);
+        mpack_start_map(&mw, 5);
+        mpack_write_cstr(&mw, "id");
+        mpack_write_u64(&mw, e.bits);
+        mpack_write_cstr(&mw, "parent");
+        mpack_write_u64(&mw, parent_of(ed, e).bits);
+        mpack_write_cstr(&mw, "scene");
+        mpack_write_u64(&mw, scene);
+        mpack_write_cstr(&mw, "sid");
+        mpack_write_u64(&mw, sid);
+        mpack_write_cstr(&mw, "components");
+        mpack_write_object_bytes(&mw, comps[i].ptr, comps[i].len);
+        mpack_finish_map(&mw);
+    }
+    mpack_finish_array(&mw);
+    mpack_write_cstr(&mw, "base");
+    de__ed_prefab_instance_write_base(root.bits, &mw);
+    mpack_finish_map(&mw);
+    *out = de__ed_raw_end(a, &mw);
+    return out->ptr != NULL;
+}
+
+typedef struct snap_ent {
+    u64 id, parent, scene, sid;
+    de_ep_kv_raw *comps;
+    u32 comp_count;
+} snap_ent;
+
+typedef struct snap {
+    char asset[256];
+    snap_ent *ents;
+    u32 count;
+    const char *base;
+    size_t base_len;
+} snap;
+
+static bool snapshot_read(de_ep_arena *a, de_ep_raw value, snap *out) {
+    memset(out, 0, sizeof *out);
+    mpack_reader_t r;
+    mpack_reader_init_data(&r, value.ptr, value.len);
+    const u32 keys = mpack_expect_map_max(&r, 16);
+    for (u32 k = 0; k < keys && mpack_reader_error(&r) == mpack_ok; ++k) {
+        char key[16];
+        mpack_expect_cstr(&r, key, sizeof key);
+        if (strcmp(key, "asset") == 0) {
+            mpack_expect_cstr(&r, out->asset, sizeof out->asset);
+        } else if (strcmp(key, "entities") == 0 && out->ents == NULL) {
+            const u32 n = mpack_expect_array_max(&r, ED_MAX_TREE);
+            out->ents = (snap_ent *)de__ed_alloc(a, sizeof(snap_ent) * (n + 1));
+            if (out->ents == NULL)
+                mpack_reader_flag_error(&r, mpack_error_memory);
+            for (u32 i = 0; i < n && mpack_reader_error(&r) == mpack_ok; ++i) {
+                snap_ent *e = &out->ents[out->count++];
+                memset(e, 0, sizeof *e);
+                const u32 fields = mpack_expect_map_max(&r, 16);
+                for (u32 f = 0; f < fields && mpack_reader_error(&r) == mpack_ok; ++f) {
+                    char name[16];
+                    mpack_expect_cstr(&r, name, sizeof name);
+                    if (strcmp(name, "id") == 0) {
+                        e->id = mpack_expect_u64(&r);
+                    } else if (strcmp(name, "parent") == 0) {
+                        e->parent = mpack_expect_u64(&r);
+                    } else if (strcmp(name, "scene") == 0) {
+                        e->scene = mpack_expect_u64(&r);
+                    } else if (strcmp(name, "sid") == 0) {
+                        e->sid = mpack_expect_u64(&r);
+                    } else if (strcmp(name, "components") == 0 && e->comps == NULL) {
+                        const u32 m = mpack_expect_map_max(&r, 4096);
+                        e->comps = (de_ep_kv_raw *)de__ed_alloc(a, sizeof(de_ep_kv_raw) * (m + 1));
+                        if (e->comps == NULL)
+                            mpack_reader_flag_error(&r, mpack_error_memory);
+                        for (u32 c = 0; c < m && mpack_reader_error(&r) == mpack_ok; ++c)
+                            if (de__ed_raw_map_entry(&r, &e->comps[e->comp_count]))
+                                ++e->comp_count;
+                        mpack_done_map(&r);
+                    } else {
+                        mpack_discard(&r);
+                    }
+                }
+                mpack_done_map(&r);
+            }
+            mpack_done_array(&r);
+        } else if (strcmp(key, "base") == 0) {
+            const char *begin = r.data;
+            mpack_discard(&r);
+            if (mpack_reader_error(&r) == mpack_ok) {
+                out->base = begin;
+                out->base_len = (size_t)(r.data - begin);
+            }
+        } else {
+            mpack_discard(&r);
+        }
+    }
+    mpack_done_map(&r);
+    return mpack_reader_destroy(&r) == mpack_ok && out->count > 0 && out->asset[0] != '\0';
+}
+
+/* Takes the first `n` entities of a restore back out. */
+static void restore_undo(de__editor *ed, const snap *s, u32 n) {
+    for (u32 i = n; i > 0; --i) {
+        de__ed_scene_member_drop(s->ents[i - 1].id);
+        if (de_entity_alive(W(ed), (de_entity){s->ents[i - 1].id}))
+            de_entity_despawn(W(ed), (de_entity){s->ents[i - 1].id});
+    }
+}
+
+/* `instantiate` with a snapshot: the same ids, scene ids, components and instance record. */
+static bool restore_instance(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o,
+                             de_entity parent, de_entity *root, ed_fail *f) {
+    de_world *w = W(ed);
+    snap s;
+    if (!snapshot_read(a, o->value, &s))
+        return fail(f, DE_EP_ERR_INVALID_PARAMS, "instantiate value is not an instance snapshot");
+    if (o->has_entity && o->entity != s.ents[0].id)
+        return fail(f, DE_EP_ERR_INVALID_PARAMS, "entity is not the snapshot's root");
+    /* Check everything first: all or nothing. */
+    for (u32 i = 0; i < s.count; ++i) {
+        if (s.ents[i].id == 0 || de_entity_alive(w, (de_entity){s.ents[i].id}))
+            return fail(f, DE_EP_ERR_CONFLICT, "entity %llu exists",
+                        (unsigned long long)s.ents[i].id);
+        for (u32 c = 0; c < s.ents[i].comp_count; ++c)
+            if (de__ed_component(ed, s.ents[i].comps[c].key).id == 0)
+                return fail(f, DE_EP_ERR_INVALID_PARAMS, "no component type %.*s",
+                            (int)s.ents[i].comps[c].key.len, s.ents[i].comps[c].key.ptr);
+    }
+    for (u32 i = 0; i < s.count; ++i) {
+        const de_entity e = spawn_at(ed, s.ents[i].id);
+        if (e.bits != s.ents[i].id) {
+            if (de_entity_alive(w, e))
+                de_entity_despawn(w, e);
+            restore_undo(ed, &s, i);
+            return fail(f, DE_EP_ERR_CONFLICT, "entity id %llu is taken",
+                        (unsigned long long)s.ents[i].id);
+        }
+    }
+    for (u32 i = 0; i < s.count; ++i) {
+        const de_entity e = {s.ents[i].id};
+        for (u32 c = 0; c < s.ents[i].comp_count; ++c) {
+            const de_component comp = de__ed_component(ed, s.ents[i].comps[c].key);
+            if (!add_with(ed, e, comp, &s.ents[i].comps[c].value, f)) {
+                restore_undo(ed, &s, s.count);
+                return false;
+            }
+        }
+        const de_entity p = i == 0 ? parent : (de_entity){s.ents[i].parent};
+        if (p.bits != 0 && de_entity_set_parent(w, e, p) != DE_OK) {
+            de_error_clear();
+            restore_undo(ed, &s, s.count);
+            return fail(f, DE_EP_ERR_INVALID_PARAMS, "parent %llu", (unsigned long long)p.bits);
+        }
+    }
+    for (u32 i = 0; i < s.count; ++i) {
+        const de_entity e = {s.ents[i].id};
+        if (s.ents[i].sid != 0)
+            (void)de__ed_scene_member_set(e.bits, s.ents[i].scene ? s.ents[i].scene : o->scene,
+                                          s.ents[i].sid);
+        else
+            de__ed_scene_adopt(ed, e, o->scene, i == 0 ? parent : (de_entity){s.ents[i].parent});
+    }
+    de__ed_prefab_instance_drop(s.ents[0].id); /* a stale record of an old root */
+    static const char no_base[] = "\x90";
+    if (!de__ed_prefab_instance_restore(s.ents[0].id, s.asset, s.base ? s.base : no_base,
+                                        s.base ? s.base_len : 1)) {
+        restore_undo(ed, &s, s.count);
+        return fail(f, DE_EP_ERR_INTERNAL, "could not restore the instance record");
+    }
+    de__ed_world_touch(ed);
+    *root = (de_entity){s.ents[0].id};
+    return true;
+}
+
+/* `uninstantiate`: the whole tree, its scene memberships and the instance record go. */
+static bool remove_instance(de__editor *ed, de_ep_arena *a, de_entity root, de_ep_edit_op *inv,
+                            ed_fail *f) {
+    const char *asset = de__ed_prefab_instance_asset(root.bits);
+    if (asset == NULL)
+        return fail(f, DE_EP_ERR_INVALID_PARAMS, "%llu is not a prefab instance root",
+                    (unsigned long long)root.bits);
+    char *copy = de__ed_cstr(a, de_ep_cstr(asset));
+    de_ep_raw value;
+    if (copy == NULL || !snapshot_instance(ed, a, root, copy, &value))
+        return fail(f, DE_EP_ERR_INTERNAL, "could not capture the instance");
+    u64 *ents = (u64 *)de__ed_alloc(a, sizeof(u64) * ED_MAX_TREE);
+    if (ents == NULL)
+        return fail(f, DE_EP_ERR_BUSY, "out of scratch memory");
+    inv->op = de_ep_cstr("instantiate");
+    inv->has_scene = true;
+    inv->scene = de__ed_scene_of(ed, root);
+    inv->has_entity = true;
+    inv->entity = root.bits;
+    inv->has_path = true;
+    inv->path = de_ep_cstr(copy);
+    inv->has_value = true;
+    inv->value = value;
+    const de_entity p = parent_of(ed, root);
+    if (p.bits != 0) {
+        inv->has_parent = true;
+        inv->parent = p.bits;
+    }
+    /* Children first, so no despawn leaves an orphan behind. */
+    const u32 n = de__ed_scene_tree(ed, root, ents, ED_MAX_TREE);
+    for (u32 i = n; i > 0; --i) {
+        de__ed_scene_member_drop(ents[i - 1]);
+        de_entity_despawn(W(ed), (de_entity){ents[i - 1]});
+    }
+    de__ed_prefab_instance_drop(root.bits);
+    de__ed_world_touch(ed);
+    return true;
+}
+
 static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_ep_edit_op *inv,
                      u64 *spawned, ed_fail *f) {
     de_world *w = W(ed);
@@ -287,8 +536,35 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         return true;
     }
 
+    if (de_ep_str_eq(o->op, "instantiate")) {
+        if (!o->has_path || o->path.len == 0)
+            return fail(f, DE_EP_ERR_INVALID_PARAMS, "instantiate needs path (the prefab)");
+        const de_entity parent = {o->has_parent ? o->parent : 0};
+        if (parent.bits != 0 && !de_entity_alive(w, parent))
+            return fail(f, DE_EP_ERR_NOT_FOUND, "parent %llu", (unsigned long long)parent.bits);
+        de_entity root = DE_ENTITY_NULL;
+        if (o->has_value) {
+            if (!restore_instance(ed, a, o, parent, &root, f))
+                return false;
+        } else {
+            de_ep_error code = DE_EP_OK;
+            char msg[256];
+            if (!de__ed_prefab_spawn(ed, a, de__ed_cstr(a, o->path), o->has_scene ? o->scene : 0,
+                                     parent, &root, &code, msg, sizeof msg))
+                return fail(f, code, "%s", msg);
+        }
+        *spawned = root.bits;
+        inv->op = de_ep_cstr("uninstantiate");
+        inv->has_entity = true;
+        inv->entity = root.bits;
+        return true;
+    }
+
     if (!de_entity_alive(w, e))
         return fail(f, DE_EP_ERR_NOT_FOUND, "entity %llu", (unsigned long long)e.bits);
+
+    if (de_ep_str_eq(o->op, "uninstantiate"))
+        return remove_instance(ed, a, e, inv, f);
 
     if (de_ep_str_eq(o->op, "despawn")) {
         inv->op = de_ep_cstr("spawn");
@@ -623,18 +899,43 @@ static void on_commit(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     send_dirty(ed, t->scene);
 }
 
-/* Applies a transaction's inverses (undo) or ops (redo); false with `f` set on a failure. */
+/* Applies a transaction's inverses (undo) or ops (redo); false with `f` set on a failure. Each
+ * replayed op's inverse replaces the other side of its pair: an undone `instantiate` is redone
+ * from the snapshot its undo took, so it gets the same ids back. */
 static bool replay(de__editor *ed, de_ep_arena *a, ed_tx *t, bool undo, ed_fail *f) {
-    for (u32 i = 0; i < t->count; ++i) {
-        const ed_pair *p = &t->pairs[undo ? t->count - 1 - i : i];
-        de_ep_edit_op o, ignored;
+    const de_allocator *al = de_heap_allocator();
+    ed_blob *fresh = NULL;
+    if (t->count != 0) {
+        fresh = (ed_blob *)DE_ALLOC(al, sizeof(ed_blob) * t->count, 8, DE_MEM_GENERAL);
+        if (fresh == NULL)
+            return fail(f, DE_EP_ERR_BUSY, "out of memory");
+        memset(fresh, 0, sizeof(ed_blob) * t->count);
+    }
+    bool ok = true;
+    for (u32 i = 0; i < t->count && ok; ++i) {
+        const u32 k = undo ? t->count - 1 - i : i;
+        const ed_pair *p = &t->pairs[k];
+        de_ep_edit_op o, inv;
         u64 spawned = 0;
         if (!op_of_blob(undo ? &p->inv : &p->fwd, a, &o))
-            return fail(f, DE_EP_ERR_INTERNAL, "a stored op did not decode");
-        if (!apply_op(ed, a, &o, &ignored, &spawned, f))
-            return false;
+            ok = fail(f, DE_EP_ERR_INTERNAL, "a stored op did not decode");
+        else if (!apply_op(ed, a, &o, &inv, &spawned, f))
+            ok = false;
+        else
+            fresh[k] = blob_of_op(ed, &inv);
     }
-    return true;
+    for (u32 k = 0; k < t->count; ++k) {
+        ed_blob *side = undo ? &t->pairs[k].fwd : &t->pairs[k].inv;
+        if (ok && fresh[k].p != NULL) {
+            blob_free(side);
+            *side = fresh[k];
+        } else {
+            blob_free(&fresh[k]);
+        }
+    }
+    if (fresh != NULL)
+        DE_FREE(al, fresh, sizeof(ed_blob) * t->count);
+    return ok;
 }
 
 static void on_cancel(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
