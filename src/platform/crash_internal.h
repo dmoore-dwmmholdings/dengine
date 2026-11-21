@@ -49,6 +49,23 @@
 /** Bytes of each alternate signal stack (POSIX), at least; Linux may ask for more. */
 #define DE__CRASH_ALTSTACK_BYTES (64u * 1024u)
 
+#if defined(__APPLE__)
+struct mach_header_64;
+/* Install-time identity of a trusted loaded Mach-O main executable, not an untrusted file
+ * parser. No dyld lookup or command traversal occurs while a crash is being reported. */
+typedef struct de__crash_main_image_identity {
+    u8 uuid[16];
+    const char *arch;
+    u64 load_address;
+    u64 text_start;
+    u64 text_end;
+} de__crash_main_image_identity;
+
+/* Leaves out unchanged when identity is unavailable or unsupported. */
+bool de__crash_main_image_parse(const struct mach_header_64 *header, intptr_t slide,
+                                de__crash_main_image_identity *out);
+#endif
+
 /* ---------- Formatting (async-signal-safe) ---------- */
 
 /** Writes `v` in `base` (10 or 16, lowercase, no prefix) into `buf` (at least 21 bytes) and
