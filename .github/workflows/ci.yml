@@ -75,11 +75,11 @@ jobs:
           { "name": "linux gcc Debug", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-debug" }
           { "name": "linux gcc Dev", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-dev", "quick": true }
           { "name": "linux gcc Release", "os": "ubuntu-24.04", "compiler": "gcc", "preset": "linux-gcc-release" }
-          { "name": "macos apple-clang Debug", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-debug" }
-          { "name": "macos apple-clang Release", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-release" }
+          { "name": "macos apple-clang Debug", "os": "macos-15", "compiler": "apple-clang", "preset": "macos-debug" }
+          { "name": "macos apple-clang Release", "os": "macos-15", "compiler": "apple-clang", "preset": "macos-release" }
           { "name": "windows clang-cl Shipping", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-clang-cl-shipping" }
           { "name": "linux clang Shipping", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-clang-shipping" }
-          { "name": "macos apple-clang Shipping", "os": "macos-14", "compiler": "apple-clang", "preset": "macos-shipping" }
+          { "name": "macos apple-clang Shipping", "os": "macos-15", "compiler": "apple-clang", "preset": "macos-shipping" }
           { "name": "headless linux Release", "os": "ubuntu-24.04", "compiler": "clang", "preset": "linux-headless-release", "quick": true }
           { "name": "headless windows Release", "os": "windows-2022", "compiler": "clang-cl", "preset": "windows-headless-release" }
           EOF
@@ -278,7 +278,7 @@ jobs:
             verbose_tests: '^(render_loaders|render_graph_gpu|render_gpu_scene|render_vis|render_meshlet_cull|render_occlusion|render_raster_mesh|render_raster_compute|render_raster_alpha|render_classify|render_picking|render_resolve|render_brdf|render_standard|render_clustered_lights|render_standard_layers|render_ibl_exposure|render_ibl_layers|render_transmission|render_forward_transparent|render_sss|render_reflection_probes|render_ssr|render_irradiance_ssgi|render_csm|render_shadow_atlas|render_pcss_contact|render_gtao|render_ss_refraction)\..*_d3d12$'
             require: --backend d3d12 --warp
           - name: macos metal (hosted, skips below Base)
-            os: macos-14
+            os: macos-15
             compiler: apple-clang
             preset: macos-debug
             backend: metal
