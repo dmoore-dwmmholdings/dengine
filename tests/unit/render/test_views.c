@@ -610,7 +610,7 @@ TEST_F(views, split_screen_two_graphs, vfx) {
 
 TEST_F(views, render_scale_independent, vfx) {
     start(f, DE_GPU_NULL);
-    /* This fixture verifies the transient-free, spatial-only graph cache. */
+    /* This fixture verifies independent internal sizes with spatial output resolution. */
     de_render_settings spatial = de_renderer_get_settings(f->r);
     spatial.upscaler = DE_UPSCALE_NONE;
     de_renderer_set_settings(f->r, &spatial);
@@ -626,6 +626,11 @@ TEST_F(views, render_scale_independent, vfx) {
     EXPECT_EQ(ir.width, 320u);
     EXPECT_EQ(ir.height, 360u);
     EXPECT_EQ(ir.viewport_px[2], 640u); /* composited back to its whole viewport */
+    /* Let initial GPU-scene uploads settle before measuring a scale-only graph change. */
+    for (u32 i = 0; i < 3; ++i)
+        ASSERT_EQ(frame(f), DE_OK);
+    u64 before = 0;
+    de__view_graph_stats(f->r, l, &before, NULL);
     /* The renderer's scale applies to views without their own; the right one keeps 0.5. */
     de_render_settings s = de_renderer_get_settings(f->r);
     s.render_scale = 0.75f;
@@ -636,11 +641,20 @@ TEST_F(views, render_scale_independent, vfx) {
     EXPECT_EQ(il.width, 480u);
     EXPECT_EQ(il.height, 540u);
     EXPECT_EQ(ir.width, 320u);
-    /* A size change recompiles once (the transient-free graph keys on its imports only, so the
-     * same plan serves: compiles stay at 1). */
+    /* Scaling adds an internal transient and output resolve. The resize frame also uploads
+     * changed GPU-scene view constants; the next frame drops that upload pass. These are two
+     * distinct plans, after which six unchanged frames must reuse the steady-state plan. */
     u64 compiles = 0;
     de__view_graph_stats(f->r, l, &compiles, NULL);
-    EXPECT_EQ(compiles, 1u);
+    EXPECT_EQ(compiles, before + 1u);
+    ASSERT_EQ(frame(f), DE_OK);
+    de__view_graph_stats(f->r, l, &compiles, NULL);
+    EXPECT_EQ(compiles, before + 2u);
+    for (u32 i = 0; i < 6; ++i) {
+        ASSERT_EQ(frame(f), DE_OK);
+        de__view_graph_stats(f->r, l, &compiles, NULL);
+        EXPECT_EQ(compiles, before + 2u);
+    }
     stop(f);
 }
 
