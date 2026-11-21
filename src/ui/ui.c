@@ -13,6 +13,13 @@
 #include <math.h>
 #include <string.h>
 #include <xxhash.h>
+static f32 color_from_srgb(f32 c) {
+    return c <= .04045f ? c / 12.92f : powf((c + .055f) / 1.055f, 2.4f);
+}
+de_vec4 de_ui_color_from_srgb(de_vec4 rgba) {
+    return (de_vec4){color_from_srgb(rgba.x), color_from_srgb(rgba.y), color_from_srgb(rgba.z),
+                     rgba.w};
+}
 enum { DE_UI_LAYOUT_CHANGE_QUERIES = 9 };
 static u32 hash_entity(de_entity entity) {
     u64 v = entity.bits;

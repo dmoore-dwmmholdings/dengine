@@ -20,7 +20,7 @@ endif()
 
 # DENG-317 real retained commands, ownership and allocation/performance checks.
 if(TARGET de_ui)
- de_add_test(NAME ui_draw SOURCES test_draw_list.c LIBS de_ui de_platform de_ecs de_reflect de_test_support LABELS ui)
+ de_add_test(NAME ui_draw SOURCES test_draw_list.c LIBS de_ui de_platform de_ecs de_reflect de_test_support de_tp_tomlc17 LABELS ui)
  target_include_directories(test_ui_draw PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 if(TARGET test_ui_draw AND TARGET de_gpu_metal)

@@ -55,5 +55,8 @@ Known engine issues this example works around:
   the GPU.
 - It sets `render_scale = 1` and no upscaler, because the UI is drawn in output pixels into the
   internal-resolution target, so a lower render scale magnifies it.
-- It converts its palette to linear, because UI colours written to an sRGB swapchain are
-  gamma-encoded twice.
+
+Palette colors use `de_ui_color_from_srgb` explicitly: C UI colors are linear, while authored
+hex theme colors are decoded by the theme loader. This preserves the example's prior conversion.
+DENG-621 remains open for the broader authored-color/output contract; raw UNORM render-target
+bytes are not automatically sRGB-encoded screenshots.

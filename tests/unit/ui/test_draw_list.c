@@ -1,4 +1,5 @@
 #include "ui_test_util.h"
+#include "style_test_util.h"
 #include "ui/render/draw_list.h"
 #include "ui/binding/binding_internal.h"
 #include "asset/hot_reload_internal.h"
@@ -6,6 +7,7 @@
 #include "render/loaders/render_assets.h"
 #include "de_alloc_guard.h"
 #include <stdio.h>
+#include <stdlib.h>
 static DeUiStyle *style(ui_fx *f, de_entity entity, de_vec4 color, f32 opacity) {
     DeUiStyle *s = de_entity_add(f->world, entity, f->ui->ids.style);
     *s = (DeUiStyle){.background = color, .opacity = opacity, .text_color = {1, 1, 1, 1}};
@@ -185,6 +187,18 @@ TEST_F(ui_draw, no_camera_twelve_frames_retire_unsubmitted_packets, ui_fx) {
         EXPECT_EQ(de_ui_get_render_stats(f->ui).truncated, 0u);
     }
 }
+TEST(ui_draw, srgb_palette_helper_preserves_alpha_and_transfer) {
+    de_vec4 a = de_ui_color_from_srgb((de_vec4){0, .04045f, 1, .37f});
+    EXPECT_FLOAT_EQ(a.x, 0, 0);
+    EXPECT_FLOAT_EQ(a.y, .003130805f, 1e-8f);
+    EXPECT_FLOAT_EQ(a.z, 1, 1e-7f);
+    EXPECT_FLOAT_EQ(a.w, .37f, 0);
+    a = de_ui_color_from_srgb((de_vec4){.5f, .25f, .75f, 0});
+    EXPECT_FLOAT_EQ(a.x, .21404114f, 1e-7f);
+    EXPECT_FLOAT_EQ(a.y, .05087609f, 1e-7f);
+    EXPECT_FLOAT_EQ(a.z, .52252155f, 1e-7f);
+    EXPECT_FLOAT_EQ(a.w, 0, 0);
+}
 #if DE_HAS_GPU_METAL
 static de_gpu_texture floating_view(ui_fx *f, de_gpu_buffer *readback, de_view *view) {
     de_gpu_texture target = de_gpu_texture_create(
@@ -232,6 +246,78 @@ static de_vec4 read_float_pixel(ui_fx *f, de_gpu_texture target, de_gpu_buffer b
     const de_vec4 *p = de_gpu_buffer_map(f->device, buffer);
     ASSERT_TRUE(p);
     return p[y * 512 + x];
+}
+/* Explicit linear C colors and opt-in sRGB palettes share the theme's existing linear
+ * contract. UNORM reads raw linear values; an sRGB attachment encodes them in hardware.
+ * This does not assert that raw UNORM bytes are already display-encoded screenshots. */
+TEST_F(ui_draw, metal_linear_helper_and_theme_color_contract, ui_fx) {
+    draw_renderer(f, DE_GPU_METAL);
+    de_render_settings settings = de_renderer_get_settings(f->renderer);
+    settings.render_scale = 1;
+    settings.upscaler = DE_UPSCALE_NONE;
+    de_renderer_set_settings(f->renderer, &settings);
+    de_entity root = ui_node(f, (de_entity){0});
+    style(f, root, (de_vec4){.2158605f, .05126946f, .5209956f, 1}, 1);
+    de_gpu_buffer buffer =
+        de_gpu_buffer_create(f->device, &(de_gpu_buffer_desc){.size = 512u * 512u * 4u,
+                                                              .usage = DE_USAGE_COPY_DST,
+                                                              .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(buffer.id);
+    const de_gpu_format formats[] = {DE_FMT_RGBA8_UNORM, DE_FMT_RGBA8_SRGB};
+    for (u32 i = 0; i < 6; ++i) {
+        if (i == 2)
+            style(f, root,
+                  de_ui_color_from_srgb((de_vec4){128.f / 255, 64.f / 255, 191.f / 255, 1}), 1);
+        if (i == 4) {
+            /* The expected theme pixel must not survive from the previous helper phase. */
+            style(f, root, (de_vec4){0, 1, 0, 1}, 1);
+            ASSERT_EQ(style_install(f->ui, "[style.button]\nbackground='#8040bf'\n"), DE_OK);
+            DeUiWidgetType *tag = de_entity_add(f->world, root, f->ui->style->widget);
+            tag->type = DE_UI_WIDGET_BUTTON;
+        }
+        de_gpu_texture target = de_gpu_texture_create(
+            f->device, &(de_gpu_texture_desc){.width = 512,
+                                              .height = 512,
+                                              .format = formats[i % 2],
+                                              .usage = DE_USAGE_RENDER_TARGET | DE_USAGE_SAMPLED |
+                                                       DE_USAGE_COPY_SRC});
+        ASSERT_TRUE(target.id);
+        de_view view =
+            de_view_create(f->renderer, &(de_view_desc){.target = target, .name = "color probe"});
+        ASSERT_TRUE(view.id);
+        f->ui->desc.view = view;
+        de_builtin_component_ids bi = de_builtin_components(f->world);
+        de_component camera = de_component_find(f->world, "DeCamera");
+        de_entity e = de_entity_spawn(f->world);
+        *(DeTransform *)de_entity_add(f->world, e, bi.transform) = de_transform_identity();
+        *(DeCamera *)de_entity_add(f->world, e, camera) = (DeCamera){
+            .view = view, .projection = DE_PROJ_ORTHOGRAPHIC, .ortho_height = 2, .near_z = .1f};
+        draw_kick(f);
+        de_gpu_cmd *cmd = de_gpu_cmd_begin(f->device, DE_QUEUE_GRAPHICS, "color probe readback");
+        ASSERT_TRUE(cmd);
+        de_gpu_barrier barrier = {
+            .texture = target, .before = DE_ACCESS_SHADER_READ, .after = DE_ACCESS_COPY_SRC};
+        de_gpu_cmd_barriers(cmd, &barrier, 1);
+        de_gpu_cmd_copy_texture_to_buffer(cmd, buffer, 0, 512 * 4, target, 0, 0);
+        ASSERT_EQ(de_gpu_queue_submit(f->device, DE_QUEUE_GRAPHICS,
+                                      &(de_gpu_submit){.cmds = &cmd, .cmd_count = 1}),
+                  DE_OK);
+        de_gpu_wait_idle(f->device);
+        const u8 *pixels = de_gpu_buffer_map(f->device, buffer);
+        ASSERT_TRUE(pixels);
+        const u8 *pixel = pixels + (256 * 512 + 256) * 4;
+        const u8 encoded[] = {128, 64, 191};
+        const u8 linear[] = {55, 13, 133};
+        const u8 *expected = i % 2 ? encoded : linear;
+        printf("color source %u format %u actual %u %u %u %u\n", i / 2, formats[i % 2], pixel[0],
+               pixel[1], pixel[2], pixel[3]);
+        for (u32 c = 0; c < 3; ++c)
+            EXPECT_TRUE(abs((int)pixel[c] - expected[c]) <= 1);
+        EXPECT_EQ(pixel[3], 255u);
+        de_view_destroy(f->renderer, view);
+        de_gpu_texture_destroy(f->device, target);
+    }
+    de_gpu_buffer_destroy(f->device, buffer);
 }
 TEST_F(ui_draw, metal_paint_change_updates_pixels_without_geometry_relayout, ui_fx) {
     draw_renderer(f, DE_GPU_METAL);
