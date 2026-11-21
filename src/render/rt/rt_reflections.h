@@ -9,7 +9,19 @@ de_result de__rt_reflections_pipelines(de__rt_reflections *);
 void de__rt_reflections_destroy(de__rt_reflections *);
 de_result de__rt_reflections_build(de__rt_reflections *, de_rg *, de__vis_context *,
                                    de__lighting_context *, de__lighting_inputs *);
+typedef struct de__rt_reflections_debug {
+    /** Optional render-thread diagnostic of resolved RGBA16F radiance before denoising.
+     * May append graph readback passes declaring COPY_SRC reads; must not modify radiance.
+     * Caller owns capture storage and user lifetime through graph completion. NULL disables
+     * the hook with no capture allocation or GPU work. */
+    void (*capture_raw)(void *user, de_rg *graph, de_view view, de_rg_resource radiance, u32 width,
+                        u32 height);
+    void *capture_user;
+} de__rt_reflections_debug;
+void de__rt_reflections_set_debug(de__rt_reflections *, const de__rt_reflections_debug *);
 typedef struct de__rt_reflections_info {
+    /* Lighting output (normally denoised in place), or explicit reference output.
+     * Use capture_raw for pre-denoise estimator-convergence measurements. */
     de_gpu_texture radiance, distance;
     de_gpu_buffer rays, hits;
     u64 frame, rays_traced;

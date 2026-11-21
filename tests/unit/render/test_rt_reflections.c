@@ -9,7 +9,8 @@
 
 typedef struct reflection_fixture {
     shadow_fixture shadow;
-    de_gpu_buffer rb;
+    de_gpu_buffer rb, raw_readback;
+    u32 raw_captures;
     de__rt_reflections_info info;
     f32 pixels[SW * SH * 4];
     de_gpu_buffer sphere_indices;
@@ -75,6 +76,7 @@ static void reflection_fixture_teardown(reflection_fixture *f) {
     if (f->shadow.rt.d) {
         de_gpu_wait_idle(f->shadow.rt.d);
         de_gpu_buffer_destroy(f->shadow.rt.d, f->rb);
+        de_gpu_buffer_destroy(f->shadow.rt.d, f->raw_readback);
     }
     if (f->sphere_indices.id) {
         mesh_free(&g_mesh[2], f->shadow.rt.d);
@@ -123,6 +125,70 @@ static void reflection_frame(reflection_fixture *f) {
     for (u32 i = 0; i < SW * SH * 4; ++i)
         f->pixels[i] = half_to_f32(data[i]);
 }
+/* Read the original resolved half-float estimator without altering lighting or denoising. */
+typedef struct raw_reflection_pass {
+    de_gpu_buffer target;
+    de_rg_resource radiance;
+} raw_reflection_pass;
+static void raw_reflection_copy(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const raw_reflection_pass *p = user;
+    de_gpu_cmd_copy_texture_to_buffer(cmd, p->target, 0, SW * 8, de_rg_texture(pass, p->radiance),
+                                      0, 0);
+}
+static void capture_raw_reflection(void *user, de_rg *graph, de_view view, de_rg_resource radiance,
+                                   u32 width, u32 height) {
+    reflection_fixture *f = user;
+    ASSERT_EQ(view.id, f->shadow.rt.view.id);
+    ASSERT_EQ(width, SW);
+    ASSERT_EQ(height, SH);
+    raw_reflection_pass *p = de_arena_push_zero(graph->arena, sizeof *p, 16);
+    ASSERT_TRUE(p != NULL);
+    *p = (raw_reflection_pass){f->raw_readback, radiance};
+    de_rg_pass *pass = de_rg_add_pass(graph, "Reflection raw acceptance readback",
+                                      DE_QUEUE_GRAPHICS, raw_reflection_copy, p);
+    ASSERT_TRUE(pass != NULL);
+    de_rg_read(pass, radiance, DE_ACCESS_COPY_SRC);
+    de_rg_write(pass, de_rg_import_buffer(graph, f->raw_readback, DE_ACCESS_COPY_DST),
+                DE_ACCESS_COPY_DST);
+    de_rg_pass_side_effect(pass);
+    ++f->raw_captures;
+}
+static void enable_raw_reflection_capture(reflection_fixture *f) {
+    rt_fixture *r = &f->shadow.rt;
+    f->raw_readback = de_gpu_buffer_create(r->d, &(de_gpu_buffer_desc){.size = SW * SH * 8,
+                                                                       .usage = DE_USAGE_COPY_DST,
+                                                                       .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(f->raw_readback.id != 0);
+    de__rt_reflections_set_debug(
+        r->r->rt_reflections,
+        &(de__rt_reflections_debug){.capture_raw = capture_raw_reflection, .capture_user = f});
+}
+static void raw_reflection_frame(reflection_fixture *f) {
+    const u32 before = f->raw_captures;
+    reflection_frame(f); /* Normal denoising and the filtered lighting getter still run. */
+    ASSERT_EQ(f->raw_captures, before + 1);
+    const u16 *values = de_gpu_buffer_map(f->shadow.rt.d, f->raw_readback);
+    ASSERT_TRUE(values != NULL);
+    for (u32 i = 0; i < SW * SH * 4; ++i)
+        f->pixels[i] = half_to_f32(values[i]);
+}
+TEST_F(rt_reflections, raw_capture_is_opt_in, reflection_fixture) {
+    reflection_frame(f);
+    EXPECT_EQ(f->raw_captures, 0u);
+    EXPECT_EQ(f->raw_readback.id, 0u);
+    enable_raw_reflection_capture(f);
+    raw_reflection_frame(f);
+    EXPECT_EQ(f->raw_captures, 1u);
+    de__rt_reflections_set_debug(f->shadow.rt.r->rt_reflections, NULL);
+    reflection_frame(f);
+    EXPECT_EQ(f->raw_captures, 1u);
+    double energy = 0;
+    for (u32 i = 0; i < SW * SH; ++i)
+        for (u32 c = 0; c < 3; ++c)
+            energy += f->pixels[i * 4 + c];
+    EXPECT_TRUE(energy > 0);
+}
+
 TEST_F(rt_reflections, mirror_readback, reflection_fixture) {
     reflection_frame(f);
     u32 valid = 0, colored = 0;
@@ -352,16 +418,20 @@ static void add_sphere(reflection_fixture *f) {
 }
 TEST_F(rt_reflections, rough_metal_sphere_multisample_reference, reflection_fixture) {
     add_sphere(f);
+    /* S16 estimator convergence: measure resolved RGBA16F before S17 denoising.
+     * Preserve the original scene, 64 frames, 1024-spp reference, pixel mask and 3% limits.
+     * S17 filtered quality remains covered by unchanged denoise_gi_spec.rough_metal_512spp. */
+    enable_raw_reflection_capture(f);
     double accumulated[SW * SH * 3] = {0};
     const u32 frames = 64;
     for (u32 frame = 0; frame < frames; ++frame) {
-        reflection_frame(f);
+        raw_reflection_frame(f);
         for (u32 i = 0; i < SW * SH; ++i)
             for (u32 c = 0; c < 3; ++c)
                 accumulated[i * 3 + c] += f->pixels[i * 4 + c] / frames;
     }
     de__rt_reflections_reference(f->shadow.rt.r->rt_reflections, 1024);
-    reflection_frame(f);
+    raw_reflection_frame(f);
     double expected = 0, measured = 0, absolute = 0;
     u32 count = 0;
     for (u32 i = 0; i < SW * SH; ++i)
@@ -374,7 +444,8 @@ TEST_F(rt_reflections, rough_metal_sphere_multisample_reference, reflection_fixt
             }
         }
     double error = fabs(measured - expected) / expected;
-    printf("Rough metal sphere: %u pixels, %u accumulated frames vs 1024 spp Hammersley, mean "
+    printf("Raw resolved rough metal sphere: %u pixels, %u accumulated frames vs 1024 spp "
+           "Hammersley, mean "
            "relative error %.8g; normalized pixel L1 %.8g\n",
            count, frames, error, absolute / expected);
     ASSERT_TRUE(count > 50 && expected > 1);
