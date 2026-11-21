@@ -194,11 +194,14 @@ u32 de__transparent_gather(const de__transparent_view *v, de_arena *arena,
             (const de__gs_mesh *)de__gpu_scene_entry(v->gs, DE__GS_MESHES, mesh_slot);
         if (mesh == NULL || (mesh->flags & need_mesh) != need_mesh || mesh->lod_count == 0)
             continue;
-        /* Automatic forward rendering retains its existing LOD0 policy. An inspection view's
-         * explicit choice must match visibility-buffer and RT selection, including short chains. */
-        const u32 levels = mesh->lod_count < DE__GS_MESH_LODS ? mesh->lod_count : DE__GS_MESH_LODS;
-        const u32 requested = cv && cv->lod[3] > 0.0f ? (u32)cv->lod[3] - 1u : 0u;
-        const u32 lod = requested < levels ? requested : levels - 1u;
+        /* Reuse the visibility selector and its exact (possibly frozen) cull constants.
+         * Pack the same frame/index as GPU upload, including bounds and transform scale. */
+        u32 lod = 0;
+        if (cv != NULL) {
+            de__gs_instance instance;
+            de__gpu_scene_pack_frame_instance(v->gs, v->world, s, &instance);
+            lod = de__vis_select_lod(cv, &instance, mesh);
+        }
         if (!mesh->lods[lod].meshlet_count)
             continue;
         u32 bits = 0;
