@@ -49,7 +49,8 @@ TEST(restir_di, alias_table) {
 }
 typedef struct di_fixture {
     shadow_fixture shadow;
-    de_gpu_buffer readback;
+    de_gpu_buffer readback, raw_readback;
+    u32 raw_captures;
     f64 sum[PIXELS * 3];
     f32 reference[PIXELS * 3];
     f32 current[PIXELS * 3];
@@ -101,6 +102,7 @@ static void di_fixture_teardown(di_fixture *f) {
     if (f->shadow.rt.d) {
         de_gpu_wait_idle(f->shadow.rt.d);
         de_gpu_buffer_destroy(f->shadow.rt.d, f->readback);
+        de_gpu_buffer_destroy(f->shadow.rt.d, f->raw_readback);
     }
     (void)cvar_set("r.rt.restir_di_unbiased", "0");
     (void)cvar_set("r.rt.restir_di_initial_visibility", "0");
@@ -140,6 +142,72 @@ static void di_frame(di_fixture *f) {
     shadow_frame(&f->shadow);
     read_di(f);
 }
+/* A diagnostic consumer, not a change to DI rays, lighting outputs or denoising. */
+typedef struct raw_di_pass {
+    de_gpu_buffer target;
+    de_rg_resource diffuse, specular;
+} raw_di_pass;
+static void raw_di_copy(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    const raw_di_pass *p = user;
+    de_gpu_cmd_copy_texture_to_buffer(cmd, p->target, 0, SW * 16, de_rg_texture(pass, p->diffuse),
+                                      0, 0);
+    de_gpu_cmd_copy_texture_to_buffer(cmd, p->target, PIXELS * 16, SW * 16,
+                                      de_rg_texture(pass, p->specular), 0, 0);
+}
+static void capture_raw_di(void *user, de_rg *graph, de_view view, de_rg_resource diffuse,
+                           de_rg_resource specular, u32 width, u32 height) {
+    di_fixture *f = user;
+    ASSERT_EQ(view.id, f->shadow.rt.view.id);
+    ASSERT_EQ(width, SW);
+    ASSERT_EQ(height, SH);
+    raw_di_pass *p = de_arena_push_zero(graph->arena, sizeof *p, 16);
+    ASSERT_TRUE(p != NULL);
+    *p = (raw_di_pass){f->raw_readback, diffuse, specular};
+    de_rg_pass *pass =
+        de_rg_add_pass(graph, "DI raw acceptance readback", DE_QUEUE_GRAPHICS, raw_di_copy, p);
+    ASSERT_TRUE(pass != NULL);
+    de_rg_read(pass, diffuse, DE_ACCESS_COPY_SRC);
+    de_rg_read(pass, specular, DE_ACCESS_COPY_SRC);
+    de_rg_write(pass, de_rg_import_buffer(graph, f->raw_readback, DE_ACCESS_COPY_DST),
+                DE_ACCESS_COPY_DST);
+    de_rg_pass_side_effect(pass);
+    ++f->raw_captures;
+}
+static void enable_raw_capture(di_fixture *f) {
+    rt_fixture *r = &f->shadow.rt;
+    f->raw_readback = de_gpu_buffer_create(r->d, &(de_gpu_buffer_desc){.size = PIXELS * 32,
+                                                                       .usage = DE_USAGE_COPY_DST,
+                                                                       .memory = DE_MEM_READBACK});
+    ASSERT_TRUE(f->raw_readback.id != 0);
+    de__restir_di_debug(r->r->restir_di,
+                        &(de__di_debug){.capture_raw = capture_raw_di, .capture_user = f});
+}
+static void raw_di_frame(di_fixture *f) {
+    const u32 before = f->raw_captures;
+    di_frame(f); /* The normal lighting/denoising and filtered getter still run. */
+    ASSERT_EQ(f->raw_captures, before + 1);
+    const f32 *values = de_gpu_buffer_map(f->shadow.rt.d, f->raw_readback);
+    ASSERT_TRUE(values != NULL);
+    for (u32 i = 0; i < PIXELS; ++i)
+        for (u32 c = 0; c < 3; ++c)
+            f->current[i * 3 + c] = values[i * 4 + c] + values[PIXELS * 4 + i * 4 + c];
+}
+TEST_F(restir_di, raw_capture_is_opt_in, di_fixture) {
+    di_frame(f);
+    EXPECT_EQ(f->raw_captures, 0u);
+    EXPECT_EQ(f->raw_readback.id, 0u);
+    enable_raw_capture(f);
+    raw_di_frame(f);
+    EXPECT_EQ(f->raw_captures, 1u);
+    de__restir_di_debug(f->shadow.rt.r->restir_di, NULL);
+    di_frame(f);
+    EXPECT_EQ(f->raw_captures, 1u);
+    f64 filtered_energy = 0;
+    for (u32 i = 0; i < PIXELS * 3; ++i)
+        filtered_energy += f->current[i];
+    EXPECT_TRUE(filtered_energy > 0);
+}
+
 TEST_F(restir_di, analytic_sources_respect_view_light_selection, di_fixture) {
     rt_fixture *r = &f->shadow.rt;
     set_lights(f, 2);
@@ -356,6 +424,10 @@ TEST_F(restir_di, unlit_emitters_use_base_color_without_standard_emission, di_fi
 }
 TEST_F(restir_di, alpha_visibility, di_fixture) {
     rt_fixture *r = &f->shadow.rt;
+    /* Binary alpha visibility is measured before spatial/temporal radiance filtering.
+     * Keep the original three scene phases, rays, 5%/95% classification and >2 thresholds.
+     * Filtered output is independently qualified by denoise_gi_spec.di_512_lights_reference. */
+    enable_raw_capture(f);
     set_lights(f, 1);
     ASSERT_TRUE(cvar_set("r.rt.restir_di_unbiased", "0"));
     r->w.f.lights.transform[0] = at(5.6f, 0, 4);
@@ -367,15 +439,15 @@ TEST_F(restir_di, alpha_visibility, di_fixture) {
     g_mat[1].standard.alpha_cutoff = .5f;
     g_mat[1].standard.base_color_tex.id = 1;
     g_mat[1].textures[0].id = 1;
-    di_frame(f);
+    raw_di_frame(f);
     memcpy(f->reference, f->current, sizeof f->reference);
     g_mat[1].alpha_mode = DE_COOKED_ALPHA_OPAQUE;
     g_mat[1].standard.alpha_mode = DE_COOKED_ALPHA_OPAQUE;
-    di_frame(f);
+    raw_di_frame(f);
     for (u32 i = 0; i < PIXELS * 3; ++i)
         f->sum[i] = f->current[i];
     r->w.f.instances.flags[1] &= ~DE__RW_INST_CAST_SHADOWS;
-    di_frame(f);
+    raw_di_frame(f);
     u32 cutouts = 0, solid = 0;
     for (u32 i = 0; i < PIXELS; ++i) {
         f32 clear = f->current[i * 3], alpha = f->reference[i * 3];
@@ -386,7 +458,7 @@ TEST_F(restir_di, alpha_visibility, di_fixture) {
                 ++solid;
         }
     }
-    printf("production DI alpha: %u cutout pixels, %u solid shadow pixels\n", cutouts, solid);
+    printf("raw production DI alpha: %u cutout pixels, %u solid shadow pixels\n", cutouts, solid);
     EXPECT_TRUE(cutouts > 2);
     EXPECT_TRUE(solid > 2);
 }

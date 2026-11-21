@@ -29,10 +29,19 @@ de_result de__restir_di_build(de__restir_di *, de_rg *, de__vis_context *, de__l
                               de__lighting_inputs *);
 typedef struct de__di_debug {
     bool reference;
+    /** Optional render-thread diagnostic at the raw post-visibility, pre-denoise stage.
+     * May append graph readback passes declaring COPY_SRC reads of diffuse/specular. Must not
+     * modify these resources. The caller owns capture storage and user lifetime through graph
+     * completion; NULL disables the hook with no capture allocation or GPU work. */
+    void (*capture_raw)(void *user, de_rg *graph, de_view view, de_rg_resource diffuse,
+                        de_rg_resource specular, u32 width, u32 height);
+    void *capture_user;
 } de__di_debug;
 void de__restir_di_complete(de__restir_di *, de_view, const de_rg *, u64 frame, bool success);
 void de__restir_di_debug(de__restir_di *, const de__di_debug *);
 typedef struct de__di_info {
+    /* Lighting outputs (normally denoised in place), or explicit reference output.
+     * Not a raw-visibility diagnostic; use capture_raw for that measurement. */
     de_gpu_texture diffuse, specular, distance;
     de_gpu_buffer reservoir, sources;
     u32 width, height, source_count, emissive_count;
