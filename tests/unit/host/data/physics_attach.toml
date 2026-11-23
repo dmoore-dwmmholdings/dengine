@@ -1,0 +1,10 @@
+# DENG-835: test_host_physics. [physics] attach = true makes the host attach a 3D physics world
+# before the game's init.
+[game]
+name = "host_physics_game"
+
+[tasks]
+workers = 1
+
+[physics]
+attach = true

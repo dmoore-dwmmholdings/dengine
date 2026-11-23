@@ -84,6 +84,9 @@ typedef struct de__game_config {
     u32 asset_io_threads;                   /**< [assets] io_threads; 2 (1 to 64) */
     bool asset_hot_reload;                  /**< [assets] hot_reload; true (Debug and Dev only) */
     char asset_locale[DE__GAME_LOCALE_MAX]; /**< [assets] locale; "" = none */
+    /** DENG-835: [physics] attach; false. True makes the host create a 3D physics world and
+     *  attach it (de__engine_attach_physics) before the game's init. */
+    bool physics_attach;
 } de__game_config;
 
 /** Fills `*out` with the defaults above. */
@@ -139,6 +142,9 @@ typedef struct de__engine {
     de_log_category log_host; /* "host" */
     de_log_category log_game; /* "game" */
     bool owns_io;             /* DENG-143: de_io_init succeeded here; destroy shuts it down */
+    /* DENG-835: the physics world de__engine_attach_physics created (pub.physics points to it);
+     * destroyed after the world. NULL when the game brought its own, or none. */
+    de_physics_world *owned_physics;
 } de__engine;
 
 /** The internal engine of a public pointer (no check; `e` must come from de__engine_create). */
@@ -180,6 +186,20 @@ de_result de__engine_create(const de__engine_desc *d, de_engine **out);
  * threads are joined), platform (if the engine started it), then the engine. NULL is ignored.
  * Main thread only. */
 void de__engine_destroy(de_engine *e);
+
+/**
+ * DENG-835: gives the engine a 3D physics world when the game has none, so DeCollider and the
+ * other physics components exist (the editor's inspector and the nav bake need them). Does
+ * nothing when `e->physics` is set or the world already has a DePhysicsWorld resource (the game
+ * attached its own). Otherwise creates a world with the engine allocator and task system,
+ * de_physics_attach()es it, sets `e->physics` and keeps ownership: de__engine_destroy destroys it
+ * after the ECS world. The host calls it before the game's init when game.toml has `[physics]
+ * attach = true`, and after register_systems in an editor session (de_engine_editor_session),
+ * with the engine as the system owner, so a hot reload keeps the physics systems. Main thread.
+ * @return DE_OK (also in builds without physics, where it does nothing), DE_ERR_INVALID_ARGUMENT
+ *         (NULL `e`), or the create or attach error.
+ */
+de_result de__engine_attach_physics(de_engine *e);
 
 DE_EXTERN_C_END
 #endif /* DE_HOST_ENGINE_INTERNAL_H */
