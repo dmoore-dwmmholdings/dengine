@@ -624,3 +624,10 @@ size = [1280, 720]
 tiers = ["base"]
 threshold_mean = 0.005
 threshold_p99 = 0.05
+
+[scene.sky_aerial_perspective]
+description = "Physical sky's aerial perspective, latitude 45, day 80, 15:30, 25 m up, looking north over a 60 km ground: stone columns of one angular size from 200 m to 24 km fade toward the horizon colour with the distance (DENG-840)"
+size = [1280, 720]
+tiers = ["base"]
+threshold_mean = 0.005
+threshold_p99 = 0.05

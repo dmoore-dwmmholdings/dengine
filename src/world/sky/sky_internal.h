@@ -35,6 +35,11 @@ DE_EXTERN_C_BEGIN
 #define DE__SKY_MULTISCATTER_N  32u
 #define DE__SKY_VIEW_W          192u
 #define DE__SKY_VIEW_H          108u
+/** The aerial-perspective volume (DENG-840): N x N screen cells x N depth slices, as a 2D atlas
+ * N * N wide and N high (slice s at x in [s N, s N + N)). */
+#define DE__SKY_AERIAL_N        32u
+/** The distance the volume covers, km. Farther surfaces take the last slice. */
+#define DE__SKY_AERIAL_RANGE_KM 32.0f
 
 /** Solar illuminance at the top of the atmosphere used by the sky, in lux (DE_SKY_SOLAR_ILLUMINANCE). */
 #define DE__SKY_SOLAR_ILLUMINANCE 120000.0f
@@ -54,6 +59,16 @@ f64 de__sky_mie_scale(f64 turbidity);
 void de__sky_transmittance_cpu(f64 r, f64 mu, f64 mie_scale, u32 steps, f64 out_rgb[3]);
 /** The transmittance LUT's (r, mu) at uv (texel centres at (i + 0.5) / size), as the shader. */
 void de__sky_transmittance_rmu(f64 u, f64 v, f64 *r, f64 *mu);
+
+/** The aerial-perspective depth mapping, as sky_common.slang: slice coordinate w (0..1) to the
+ * distance from the camera (km), and back (clamped to 0..1). */
+f64 de__sky_aerial_distance(f64 w, f64 range_km);
+f64 de__sky_aerial_slice(f64 dist_km, f64 range_km);
+/** Transmittance from radius r (km, on +Z) along the unit direction `dir` (+Z up) over `dist_km`,
+ * in double precision (midpoint rule, `steps` segments, the medium clamped to the ground as the
+ * shader): the reference for the aerial-perspective volume's alpha. */
+void de__sky_aerial_transmittance_cpu(f64 r, const f64 dir[3], f64 dist_km, f64 mie_scale,
+                                      u32 steps, f64 out_rgb[3]);
 
 /* ---------- Celestial (celestial.c) ---------- */
 
@@ -107,6 +122,22 @@ u32 de__sky_luts_transmittance_bindless(const de__sky_luts *l);
 u32 de__sky_luts_multiscatter_bindless(const de__sky_luts *l);
 /** The fence and value of the last generation. */
 de_gpu_fence de__sky_luts_fence(const de__sky_luts *l, u64 *value);
+
+/** The push constants of the aerial-perspective volume (shaders/sky/aerial_perspective.slang,
+ * cs_aerial; 96 bytes). de__sky_luts_aerial_record fills idx[1..3]. */
+typedef struct de__sky_aerial_params {
+    u32 idx[4];    /**< target (storage), transmittance, multiscatter, clamp sampler */
+    f32 ray00[4];  /**< camera ray at the top-left corner (world, unnormalized); w: radius km */
+    f32 ray_du[4]; /**< its change across the width; w: range km */
+    f32 ray_dv[4]; /**< its change down the height; w: mie scale */
+    f32 sun[4];    /**< direction, weight (illuminance x pre-exposure) */
+    f32 moon[4];   /**< direction, weight */
+} de__sky_aerial_params;
+/** Whether this backend has the aerial-perspective pipelines. */
+bool de__sky_luts_aerial_ready(const de__sky_luts *l);
+/** Records the volume's build into `cmd` for `p` (its idx[0]: the bindless storage index of a
+ * DE__SKY_AERIAL_N^2 x DE__SKY_AERIAL_N float4 texture). The LUTs must be generated. */
+void de__sky_luts_aerial_record(const de__sky_luts *l, de_gpu_cmd *cmd, de__sky_aerial_params *p);
 #endif
 
 /* ---------- The sky's per-frame inputs (sky.c -> sky_luts.c) ---------- */

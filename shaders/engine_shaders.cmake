@@ -130,3 +130,5 @@ de_engine_shader(sky_transmittance  sky/transmittance_lut.slang)
 de_engine_shader(sky_multiscatter   sky/multiscatter_lut.slang)
 de_engine_shader(sky_skyview        sky/skyview_lut.slang)
 de_engine_shader(sky_render         sky/sky_render.slang)
+# DENG-840: the aerial perspective (src/world/sky/sky_luts.c).
+de_engine_shader(sky_aerial         sky/aerial_perspective.slang)

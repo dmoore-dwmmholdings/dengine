@@ -46,6 +46,7 @@ typedef struct sky_opts {
     /* What the sky must report for this time (de_sky_get_state), checked before the capture. */
     f32 sun_elev_min, sun_elev_max;
     bool expect_moon_light;
+    const char *scene; /**< the scene asset; NULL: scenes/sky_ground */
 } sky_opts;
 
 #if DE_GOLDEN_COOK
@@ -332,16 +333,17 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
         sky_close(&s);
         return;
     }
-    const de_asset_id scene_id = de_asset_id_from("scenes/sky_ground");
+    const char *scene_name = o->scene != NULL ? o->scene : "scenes/sky_ground";
+    const de_asset_id scene_id = de_asset_id_from(scene_name);
     s.scene_load = de_asset_load(s.assets, scene_id, 0);
-    if (!sky_wait(&s, s.scene_load, "scenes/sky_ground", t0)) {
+    if (!sky_wait(&s, s.scene_load, scene_name, t0)) {
         sky_close(&s);
         return;
     }
     de_entity cam = DE_ENTITY_NULL;
     if (de_prefab_instantiate(s.assets, s.world, de_asset_scene(s.assets, scene_id),
                               DE_ENTITY_NULL, &cam) != DE_OK) {
-        de_golden_fail(ctx, "instantiating scenes/sky_ground: %s", sky_err());
+        de_golden_fail(ctx, "instantiating %s: %s", scene_name, sky_err());
         sky_close(&s);
         return;
     }
@@ -354,7 +356,7 @@ static void sky_run_scene(de_golden_ctx *ctx, const sky_opts *o) {
                               ? (DeTransform *)de_entity_get(s.world, cam, c_transform)
                               : NULL;
     if (camera == NULL || cam_xf == NULL) {
-        de_golden_fail(ctx, "scenes/sky_ground: the first root has no DeCamera or DeTransform");
+        de_golden_fail(ctx, "%s: the first root has no DeCamera or DeTransform", scene_name);
         sky_close(&s);
         return;
     }
@@ -472,4 +474,15 @@ DE_GOLDEN_SCENE(sky_night) {
                                    .sun_elev_min = -60.0f,
                                    .sun_elev_max = -18.0f,
                                    .expect_moon_light = true});
+}
+/* DENG-840: the aerial perspective. Afternoon, looking north (the sun behind-left), 25 m up, just
+ * above the horizon: columns from 200 m to 24 km fade toward the horizon colour with the distance. */
+DE_GOLDEN_SCENE(sky_aerial_perspective) {
+    sky_run_scene(ctx, &(sky_opts){.hours = 15.5f,
+                                   .heading_deg = 0.0f,
+                                   .pitch_deg = 2.0f,
+                                   .ev100 = 14.0f,
+                                   .sun_elev_min = 15.0f,
+                                   .sun_elev_max = 35.0f,
+                                   .scene = "scenes/sky_aerial"});
 }

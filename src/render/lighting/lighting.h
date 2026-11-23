@@ -213,6 +213,10 @@ typedef struct de__lighting_context {
     u32 shadow_texture_count;
     de_rg_resource rt_shadow_visibility, rt_shadow_distance, rt_shadow_keys;
     de_rg_resource restir_diffuse, restir_specular, restir_distance;
+    /* ---- DENG-840: the physical sky's aerial perspective, for the forward transparent pass ---- */
+    de_rg_resource aerial; /**< RGBA16F 32^3 froxel atlas (invalid: none this frame) */
+    u32 aerial_sampler;    /**< its linear clamp sampler (bindless) */
+    f32 aerial_range_km;   /**< the distance its depth slices cover */
 } de__lighting_context;
 
 /**
