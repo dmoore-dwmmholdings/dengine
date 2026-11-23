@@ -690,7 +690,8 @@ static void on_unsubscribe(de__editor *ed, const de_ep_request *req, de_ep_arena
             return;
         }
     /* Log and stats subscriptions live in editor_logs.c. */
-    if (de__ed_logs_unsubscribe(q.subscription)) {
+    /* Input monitor subscriptions live in editor_input.c (DENG-828). */
+    if (de__ed_logs_unsubscribe(q.subscription) || de__ed_input_unsubscribe(q.subscription)) {
         de_ep_empty e;
         memset(&e, 0, sizeof e);
         de_ep_write_response_unsubscribe(w, req->id, &e);

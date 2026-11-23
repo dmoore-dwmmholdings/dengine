@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define DE_EP_PROTOCOL_VERSION "1.23"
-#define DE_EP_SCHEMA_HASH "761498e5da01bb19"
+#define DE_EP_PROTOCOL_VERSION "1.24"
+#define DE_EP_SCHEMA_HASH "0451eb867f2432c2"
 #define DE_EP_MAX_FRAME 67108864u
 #define DE_EP_KIND_REQUEST 1
 #define DE_EP_KIND_RESPONSE 2
@@ -83,6 +83,15 @@ typedef enum de_ep_asset_event_kind {
 } de_ep_asset_event_kind;
 const char *de_ep_asset_event_kind_name(de_ep_asset_event_kind v);
 bool de_ep_asset_event_kind_parse(de_ep_str s, de_ep_asset_event_kind *out);
+
+typedef enum de_ep_input_action_phase {
+    DE_EP_INPUT_ACTION_PHASE_IDLE,
+    DE_EP_INPUT_ACTION_PHASE_STARTED,
+    DE_EP_INPUT_ACTION_PHASE_PERFORMED,
+    DE_EP_INPUT_ACTION_PHASE_CANCELED,
+} de_ep_input_action_phase;
+const char *de_ep_input_action_phase_name(de_ep_input_action_phase v);
+bool de_ep_input_action_phase_parse(de_ep_str s, de_ep_input_action_phase *out);
 
 typedef enum de_ep_material_graph_param_kind {
     DE_EP_MATERIAL_GRAPH_PARAM_KIND_FLOAT,
@@ -220,9 +229,17 @@ typedef struct de_ep_gizmo_tool_params de_ep_gizmo_tool_params;
 typedef struct de_ep_heightmap_export_params de_ep_heightmap_export_params;
 typedef struct de_ep_hello_params de_ep_hello_params;
 typedef struct de_ep_hello_result de_ep_hello_result;
+typedef struct de_ep_input_action_state de_ep_input_action_state;
+typedef struct de_ep_input_context_state de_ep_input_context_state;
 typedef struct de_ep_input_event de_ep_input_event;
 typedef struct de_ep_input_events_params de_ep_input_events_params;
 typedef struct de_ep_input_focus_params de_ep_input_focus_params;
+typedef struct de_ep_input_gamepad_state de_ep_input_gamepad_state;
+typedef struct de_ep_input_load_action_maps de_ep_input_load_action_maps;
+typedef struct de_ep_input_load_action_maps_params de_ep_input_load_action_maps_params;
+typedef struct de_ep_input_monitor_sample de_ep_input_monitor_sample;
+typedef struct de_ep_input_monitor_subscribe_params de_ep_input_monitor_subscribe_params;
+typedef struct de_ep_input_mouse_state de_ep_input_mouse_state;
 typedef struct de_ep_limits de_ep_limits;
 typedef struct de_ep_loc_locale_info de_ep_loc_locale_info;
 typedef struct de_ep_loc_locales de_ep_loc_locales;
@@ -630,10 +647,25 @@ typedef struct de_ep_list_model_submesh_lod {
     uint32_t count;
 } de_ep_list_model_submesh_lod;
 
+typedef struct de_ep_list_input_action_state {
+    de_ep_input_action_state *items;
+    uint32_t count;
+} de_ep_list_input_action_state;
+
 typedef struct de_ep_list_debug_draw_category {
     de_ep_debug_draw_category *items;
     uint32_t count;
 } de_ep_list_debug_draw_category;
+
+typedef struct de_ep_list_input_context_state {
+    de_ep_input_context_state *items;
+    uint32_t count;
+} de_ep_list_input_context_state;
+
+typedef struct de_ep_list_input_gamepad_state {
+    de_ep_input_gamepad_state *items;
+    uint32_t count;
+} de_ep_list_input_gamepad_state;
 
 typedef struct de_ep_list_material_graph_param {
     de_ep_material_graph_param *items;
@@ -1227,6 +1259,23 @@ struct de_ep_hello_result {
     de_ep_str schema; /* the engine native schema hash: compare only when serverProtocol equals the client native version (DIDE-R154 AC1) */
 };
 
+struct de_ep_input_action_state {
+    de_ep_str map;
+    de_ep_str name;
+    de_ep_str type; /* button, axis1d or axis2d */
+    de_ep_list_f32 value; /* 1 value (button, axis1d) or 2 (axis2d), after dead zone, curve, scale and invert */
+    de_ep_input_action_phase phase;
+    de_ep_str interaction; /* press, release, hold, tap or double_tap */
+    bool has_progress;
+    float progress; /* hold and tap: the time held over hold_seconds (or tap_seconds), 0 to 1; absent for the others */
+};
+
+struct de_ep_input_context_state {
+    de_ep_str name;
+    de_ep_list_str maps; /* bottom to top */
+    bool blocks_lower;
+};
+
 /* One input event. `type` is pointer, wheel, key, text, gesture or gamepad; the other fields are the ones that type uses. */
 struct de_ep_input_event {
     de_ep_str type;
@@ -1269,6 +1318,58 @@ struct de_ep_input_events_params {
 struct de_ep_input_focus_params {
     uint32_t view;
     bool focused;
+};
+
+struct de_ep_input_gamepad_state {
+    uint32_t id; /* the engine's gamepad slot */
+    de_ep_str name;
+    de_ep_str family; /* glyph family: xbox, ps, ps5, switch or generic */
+    de_ep_list_f32 left_stick; /* [x, y] raw, -1 to 1, before any binding's dead zone */
+    de_ep_list_f32 right_stick;
+    float left_trigger; /* 0 to 1 */
+    float right_trigger;
+    de_ep_list_str buttons; /* held pad_button names */
+    bool has_gyro;
+    de_ep_list_f32 gyro; /* [x, y, z] rad/s; absent when the pad has none or it is off */
+};
+
+struct de_ep_input_load_action_maps {
+    uint32_t maps;
+    uint32_t actions;
+};
+
+/* Load (or reload) action maps from action-map TOML (de_action_maps_load): a map of the same name is replaced, its actions keep their state where the name and type match. Allowed in every mode; the IDE sends it after a save so tuning applies in Play. */
+struct de_ep_input_load_action_maps_params {
+    de_ep_str path; /* project-relative path, used in messages */
+    bool has_text;
+    de_ep_str text; /* the file text, at most 1 MiB; absent: the engine reads path (not_found when missing). Text the engine refuses is invalid_params with its message */
+};
+
+struct de_ep_input_mouse_state {
+    float x; /* cursor position in the game view, pixels */
+    float y;
+    float dx; /* motion this frame */
+    float dy;
+    float wheel_x;
+    float wheel_y;
+    de_ep_list_str buttons; /* held: left, right, middle, x1, x2 */
+};
+
+/* One frame's input state for the input monitor (DIDE-R188). */
+struct de_ep_input_monitor_sample {
+    uint32_t subscription;
+    uint64_t frame;
+    de_ep_list_str keys; /* held keys, engine key names */
+    de_ep_input_mouse_state mouse;
+    de_ep_list_input_gamepad_state gamepads;
+    de_ep_list_input_action_state actions; /* every action of every enabled map */
+    de_ep_list_input_context_state contexts; /* the active context stack, bottom to top */
+};
+
+/* Stream raw device state and resolved actions (de_input_* queries) while the game runs. Samples are sent in Play and Simulate only; Edit and Paused send none (the subscription stays). One subscription per connection is enough; a second is allowed. */
+struct de_ep_input_monitor_subscribe_params {
+    bool has_rate_hz;
+    float rate_hz; /* samples per second, 1 to 120; absent: 30. Out of range is invalid_params */
 };
 
 struct de_ep_loc_locale_info {
@@ -2538,12 +2639,28 @@ void de_ep_write_hello_params(mpack_writer_t *w, const de_ep_hello_params *v);
 void de_ep_read_hello_params(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_params *out);
 void de_ep_write_hello_result(mpack_writer_t *w, const de_ep_hello_result *v);
 void de_ep_read_hello_result(mpack_reader_t *r, de_ep_arena *a, de_ep_hello_result *out);
+void de_ep_write_input_action_state(mpack_writer_t *w, const de_ep_input_action_state *v);
+void de_ep_read_input_action_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_action_state *out);
+void de_ep_write_input_context_state(mpack_writer_t *w, const de_ep_input_context_state *v);
+void de_ep_read_input_context_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_context_state *out);
 void de_ep_write_input_event(mpack_writer_t *w, const de_ep_input_event *v);
 void de_ep_read_input_event(mpack_reader_t *r, de_ep_arena *a, de_ep_input_event *out);
 void de_ep_write_input_events_params(mpack_writer_t *w, const de_ep_input_events_params *v);
 void de_ep_read_input_events_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_events_params *out);
 void de_ep_write_input_focus_params(mpack_writer_t *w, const de_ep_input_focus_params *v);
 void de_ep_read_input_focus_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_focus_params *out);
+void de_ep_write_input_gamepad_state(mpack_writer_t *w, const de_ep_input_gamepad_state *v);
+void de_ep_read_input_gamepad_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_gamepad_state *out);
+void de_ep_write_input_load_action_maps(mpack_writer_t *w, const de_ep_input_load_action_maps *v);
+void de_ep_read_input_load_action_maps(mpack_reader_t *r, de_ep_arena *a, de_ep_input_load_action_maps *out);
+void de_ep_write_input_load_action_maps_params(mpack_writer_t *w, const de_ep_input_load_action_maps_params *v);
+void de_ep_read_input_load_action_maps_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_load_action_maps_params *out);
+void de_ep_write_input_monitor_sample(mpack_writer_t *w, const de_ep_input_monitor_sample *v);
+void de_ep_read_input_monitor_sample(mpack_reader_t *r, de_ep_arena *a, de_ep_input_monitor_sample *out);
+void de_ep_write_input_monitor_subscribe_params(mpack_writer_t *w, const de_ep_input_monitor_subscribe_params *v);
+void de_ep_read_input_monitor_subscribe_params(mpack_reader_t *r, de_ep_arena *a, de_ep_input_monitor_subscribe_params *out);
+void de_ep_write_input_mouse_state(mpack_writer_t *w, const de_ep_input_mouse_state *v);
+void de_ep_read_input_mouse_state(mpack_reader_t *r, de_ep_arena *a, de_ep_input_mouse_state *out);
 void de_ep_write_limits(mpack_writer_t *w, const de_ep_limits *v);
 void de_ep_read_limits(mpack_reader_t *r, de_ep_arena *a, de_ep_limits *out);
 void de_ep_write_loc_locale_info(mpack_writer_t *w, const de_ep_loc_locale_info *v);
@@ -2887,6 +3004,8 @@ typedef enum de_ep_method {
     DE_EP_METHOD_HELLO,
     DE_EP_METHOD_INPUT_EVENTS,
     DE_EP_METHOD_INPUT_FOCUS,
+    DE_EP_METHOD_INPUT_LOAD_ACTION_MAPS,
+    DE_EP_METHOD_INPUT_MONITOR_SUBSCRIBE,
     DE_EP_METHOD_LOC_LOCALES,
     DE_EP_METHOD_LOC_PREVIEW_LOCALE,
     DE_EP_METHOD_LOC_PSEUDO,
@@ -2988,6 +3107,7 @@ const char *de_ep_method_capability(de_ep_method m);
 #define DE_EP_TOPIC_GIZMO_DRAG_END "gizmo.dragEnd"
 #define DE_EP_TOPIC_GIZMO_DRAG_UPDATE "gizmo.dragUpdate"
 #define DE_EP_TOPIC_INPUT_CAPTURE_CHANGED "input.captureChanged"
+#define DE_EP_TOPIC_INPUT_MONITOR "input.monitor"
 #define DE_EP_TOPIC_LOG_RECORD "log.record"
 #define DE_EP_TOPIC_NET_DESYNC "net.desync"
 #define DE_EP_TOPIC_REFLECT_CHANGED "reflect.changed"
@@ -3099,6 +3219,10 @@ bool de_ep_read_params_input_events(const de_ep_request *req, de_ep_arena *a, de
 void de_ep_write_response_input_events(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
 bool de_ep_read_params_input_focus(const de_ep_request *req, de_ep_arena *a, de_ep_input_focus_params *out);
 void de_ep_write_response_input_focus(mpack_writer_t *w, uint64_t id, const de_ep_empty *result);
+bool de_ep_read_params_input_load_action_maps(const de_ep_request *req, de_ep_arena *a, de_ep_input_load_action_maps_params *out);
+void de_ep_write_response_input_load_action_maps(mpack_writer_t *w, uint64_t id, const de_ep_input_load_action_maps *result);
+bool de_ep_read_params_input_monitor_subscribe(const de_ep_request *req, de_ep_arena *a, de_ep_input_monitor_subscribe_params *out);
+void de_ep_write_response_input_monitor_subscribe(mpack_writer_t *w, uint64_t id, const de_ep_subscribe_result *result);
 bool de_ep_read_params_loc_locales(const de_ep_request *req, de_ep_arena *a, de_ep_empty *out);
 void de_ep_write_response_loc_locales(mpack_writer_t *w, uint64_t id, const de_ep_loc_locales *result);
 bool de_ep_read_params_loc_preview_locale(const de_ep_request *req, de_ep_arena *a, de_ep_loc_preview_params *out);
@@ -3279,6 +3403,7 @@ void de_ep_write_notify_edit_applied(mpack_writer_t *w, uint64_t seq, const de_e
 void de_ep_write_notify_gizmo_drag_end(mpack_writer_t *w, uint64_t seq, const de_ep_gizmo_drag_end *data);
 void de_ep_write_notify_gizmo_drag_update(mpack_writer_t *w, uint64_t seq, const de_ep_gizmo_drag_update *data);
 void de_ep_write_notify_input_capture_changed(mpack_writer_t *w, uint64_t seq, const de_ep_capture_changed *data);
+void de_ep_write_notify_input_monitor(mpack_writer_t *w, uint64_t seq, const de_ep_input_monitor_sample *data);
 void de_ep_write_notify_log_record(mpack_writer_t *w, uint64_t seq, const de_ep_log_record *data);
 void de_ep_write_notify_net_desync(mpack_writer_t *w, uint64_t seq, const de_ep_net_desync *data);
 void de_ep_write_notify_reflect_changed(mpack_writer_t *w, uint64_t seq, const de_ep_reflect_changed *data);

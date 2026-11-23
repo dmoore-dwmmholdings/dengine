@@ -204,6 +204,7 @@ typedef struct at_parser {
     de_log_category log;
     bool apply; /* pass 2: add maps and actions */
     u32 unknown_keys;
+    u32 maps, actions; /* DENG-828: [maps] tables and actions added in pass 2 */
 } at_parser;
 
 static const char *at_type_name(toml_type_t t) {
@@ -501,6 +502,7 @@ static de_result at_action(at_parser *p, const toml_datum_t *t, const char *path
     if (!DE_HANDLE_VALID(a))
         return DE_FAIL_WRAP(DE_ERR_INVALID_ARGUMENT, "%s:%d: %s: could not add the action",
                             p->source, t->lineno, path);
+    ++p->actions;
     return DE_OK;
 }
 
@@ -514,6 +516,7 @@ static de_result at_map(at_parser *p, const toml_datum_t *t, const char *path, c
         if (!DE_HANDLE_VALID(m))
             return DE_FAIL_WRAP(DE_ERR_INVALID_ARGUMENT, "%s: %s: could not create the map",
                                 p->source, path);
+        ++p->maps;
     }
     for (int32_t i = 0; i < t->u.tab.size; ++i) {
         const toml_datum_t *v = &t->u.tab.value[i];
@@ -663,8 +666,16 @@ static de_result parse_top(at_parser *p, const toml_datum_t *top) {
 
 de_result de__action_maps_parse(de_input *in, const char *text, size_t len, const char *source,
                                 u32 *unknown_keys) {
+    return de__action_maps_parse_counted(in, text, len, source, unknown_keys, NULL);
+}
+
+de_result de__action_maps_parse_counted(de_input *in, const char *text, size_t len,
+                                        const char *source, u32 *unknown_keys,
+                                        de__action_maps_counts *counts) {
     if (unknown_keys != NULL)
         *unknown_keys = 0;
+    if (counts != NULL)
+        memset(counts, 0, sizeof *counts);
     if (in == NULL || (text == NULL && len != 0))
         return DE_FAIL(DE_ERR_INVALID_ARGUMENT, "de_action_maps_load: NULL input or text");
     if (len > (size_t)INT_MAX)
@@ -689,6 +700,10 @@ de_result de__action_maps_parse(de_input *in, const char *text, size_t len, cons
     de__toml_free(res);
     if (unknown_keys != NULL)
         *unknown_keys = p.unknown_keys;
+    if (counts != NULL && r == DE_OK) {
+        counts->maps = p.maps;
+        counts->actions = p.actions;
+    }
     return r;
 }
 
