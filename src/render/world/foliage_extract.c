@@ -1,10 +1,13 @@
 /*
  * foliage_extract.c: DeFoliage instances into the render world (DENG-822).
  *
- * Every placed instance of a DeFoliage entity becomes one instance slot, so foliage takes the
+ * Every placed instance of a DeFoliage layer becomes one instance slot, so foliage takes the
  * mesh path and the GPU scene's instance table like any DeMeshRenderer (one draw per mesh batch,
- * GPU-driven culling). The slots are detached: the entity map knows only the layer's entity, which
- * is every slot's owner (picking a blade of grass picks the layer).
+ * GPU-driven culling). The instances are on DeFoliagePage entities (DENG-823), up to 512 per page
+ * and any number of pages per 16 m cell; each page is tracked and rebuilt on its own, so a stroke
+ * rebuilds only the pages it changed. The slots are detached: the entity map knows only the
+ * layer's entity, which is every slot's owner (picking a blade of grass picks the layer). A page
+ * whose layer is not alive draws nothing.
  *
  * Distance LOD: a cell's instances of a type are dropped when the cell's nearest point (x and z)
  * is beyond the type's cullDistance from the main camera. Impostors are not drawn yet: an
@@ -20,6 +23,7 @@
 #include "core/de_toml_internal.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- foliageType ---------- */
@@ -158,47 +162,6 @@ void de__rw_foliage_resolve(de__render_world *rw, de_world *w, de_query q, bool 
     de_query_each(w, q, resolve_chunk, &x);
 }
 
-/* ---------- Layers ---------- */
-
-static de__rw_foliage_layer *layer_of(de__render_world *rw, u64 entity, bool add) {
-    de__rw_foliage *fo = &rw->foliage;
-    for (u32 i = 0; i < fo->layer_count; ++i)
-        if (fo->layers[i].entity == entity)
-            return &fo->layers[i];
-    if (!add)
-        return NULL;
-    if (fo->layer_count == fo->layer_cap) {
-        const u32 cap = fo->layer_cap ? fo->layer_cap * 2u : 8u;
-        de__rw_foliage_layer *n = (de__rw_foliage_layer *)DE_REALLOC(
-            rw->alloc, fo->layers, sizeof *n * fo->layer_cap, sizeof *n * cap,
-            DE_ALIGNOF(de__rw_foliage_layer), DE_MEM_RENDER);
-        if (n == NULL)
-            return NULL;
-        fo->layers = n;
-        fo->layer_cap = cap;
-    }
-    de__rw_foliage_layer *l = &fo->layers[fo->layer_count++];
-    memset(l, 0, sizeof *l);
-    l->entity = entity;
-    l->dirty = true;
-    return l;
-}
-
-static bool layer_reserve(de__render_world *rw, de__rw_foliage_layer *l, u32 n) {
-    if (n <= l->cap)
-        return true;
-    u32 cap = l->cap ? l->cap : 64u;
-    while (cap < n)
-        cap *= 2u;
-    u32 *s = (u32 *)DE_REALLOC(rw->alloc, l->slots, sizeof(u32) * l->cap, sizeof(u32) * cap,
-                               DE_ALIGNOF(u32), DE_MEM_RENDER);
-    if (s == NULL)
-        return false;
-    l->slots = s;
-    l->cap = cap;
-    return true;
-}
-
 static u64 mix(u64 h, u64 v) {
     for (u32 i = 0; i < 8; ++i)
         h = (h ^ ((v >> (8u * i)) & 0xffu)) * 0x100000001b3ull;
@@ -262,47 +225,129 @@ static void slot_write(de__render_world *rw, u32 s, const de_foliage_instance *i
         *need_bounds = true;
 }
 
-static void layer_build(extract_ctx *x, de__rw_foliage_layer *l, const DeFoliage *fo,
-                        const u32 *masks, u64 sig) {
-    de__render_world *rw = x->rw;
-    const de__rw_foliage_type *types[DE_FOLIAGE_TYPES];
-    for (u32 k = 0; k < DE_FOLIAGE_TYPES; ++k)
-        types[k] = DE_HANDLE_VALID(fo->types[k]) ? type_find(&rw->foliage, fo->types[k].id) : NULL;
-    u32 want = 0, at = 0;
-    for (u32 c = 0; c < fo->cell_count; ++c) {
-        for (u32 i = 0; i < fo->cells[c].count; ++i) {
-            const de_foliage_instance *in = &fo->instances[at + i];
-            if (in->type < DE_FOLIAGE_TYPES && (masks[c] >> in->type) & 1u)
-                ++want;
+/* ---------- Palettes ---------- */
+
+/* The palettes of this frame's DeFoliage layers, sorted by entity, so a page finds its layer's. */
+static void palette_chunk(const de_query_chunk *c, void *user) {
+    extract_ctx *x = (extract_ctx *)user;
+    de__rw_foliage *fo = &x->rw->foliage;
+    const DeFoliage *layers = (const DeFoliage *)c->columns[0];
+    for (u32 i = 0; i < c->count; ++i) {
+        if (fo->palette_count == fo->palette_cap) {
+            const u32 cap = fo->palette_cap ? fo->palette_cap * 2u : 8u;
+            de__rw_foliage_palette *n = (de__rw_foliage_palette *)DE_REALLOC(
+                x->rw->alloc, fo->palettes, sizeof *n * fo->palette_cap, sizeof *n * cap,
+                DE_ALIGNOF(de__rw_foliage_palette), DE_MEM_RENDER);
+            if (n == NULL)
+                return; /* its pages draw nothing this frame */
+            fo->palettes = n;
+            fo->palette_cap = cap;
         }
-        at += fo->cells[c].count;
+        de__rw_foliage_palette *p = &fo->palettes[fo->palette_count++];
+        p->entity = c->entities[i].bits;
+        for (u32 k = 0; k < DE_FOLIAGE_TYPES; ++k)
+            p->types[k] = DE_HANDLE_VALID(layers[i].types[k]) ? layers[i].types[k].id : 0u;
     }
-    if (!layer_reserve(rw, l, want)) {
+}
+
+static int cmp_palette(const void *a, const void *b) {
+    const u64 x = ((const de__rw_foliage_palette *)a)->entity;
+    const u64 y = ((const de__rw_foliage_palette *)b)->entity;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static const de__rw_foliage_palette *palette_find(const de__rw_foliage *fo, u64 entity) {
+    u32 lo = 0, hi = fo->palette_count;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        if (fo->palettes[mid].entity < entity)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo < fo->palette_count && fo->palettes[lo].entity == entity ? &fo->palettes[lo] : NULL;
+}
+
+/* ---------- Pages ---------- */
+
+/* The entry of page `entity` (sorted by entity), added when `add`. */
+static de__rw_foliage_page *page_of(de__render_world *rw, u64 entity, bool add) {
+    de__rw_foliage *fo = &rw->foliage;
+    u32 lo = 0, hi = fo->page_count;
+    while (lo < hi) {
+        const u32 mid = lo + (hi - lo) / 2u;
+        if (fo->pages[mid].entity < entity)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    if (lo < fo->page_count && fo->pages[lo].entity == entity)
+        return &fo->pages[lo];
+    if (!add)
+        return NULL;
+    if (fo->page_count == fo->page_cap) {
+        const u32 cap = fo->page_cap ? fo->page_cap * 2u : 16u;
+        de__rw_foliage_page *n = (de__rw_foliage_page *)DE_REALLOC(
+            rw->alloc, fo->pages, sizeof *n * fo->page_cap, sizeof *n * cap,
+            DE_ALIGNOF(de__rw_foliage_page), DE_MEM_RENDER);
+        if (n == NULL)
+            return NULL;
+        fo->pages = n;
+        fo->page_cap = cap;
+    }
+    memmove(&fo->pages[lo + 1], &fo->pages[lo], (fo->page_count - lo) * sizeof fo->pages[0]);
+    fo->page_count++;
+    de__rw_foliage_page *l = &fo->pages[lo];
+    memset(l, 0, sizeof *l);
+    l->entity = entity;
+    l->dirty = true;
+    return l;
+}
+
+static bool page_reserve(de__render_world *rw, de__rw_foliage_page *l, u32 n) {
+    if (n <= l->cap)
+        return true;
+    u32 cap = l->cap ? l->cap : 64u;
+    while (cap < n)
+        cap *= 2u;
+    u32 *s = (u32 *)DE_REALLOC(rw->alloc, l->slots, sizeof(u32) * l->cap, sizeof(u32) * cap,
+                               DE_ALIGNOF(u32), DE_MEM_RENDER);
+    if (s == NULL)
+        return false;
+    l->slots = s;
+    l->cap = cap;
+    return true;
+}
+
+static void page_build(extract_ctx *x, de__rw_foliage_page *l, const DeFoliagePage *pg,
+                       const de__rw_foliage_type *const types[], u32 mask, u64 sig) {
+    de__render_world *rw = x->rw;
+    u32 want = 0;
+    for (u32 i = 0; i < pg->count; ++i)
+        if (pg->instances[i].type < DE_FOLIAGE_TYPES && (mask >> pg->instances[i].type) & 1u)
+            ++want;
+    if (!page_reserve(rw, l, want)) {
         x->failed += want;
         want = 0;
     }
     const u32 old = l->count;
     u32 n = 0;
     bool need_bounds = false;
-    at = 0;
-    for (u32 c = 0; c < fo->cell_count && n < want; ++c) {
-        for (u32 i = 0; i < fo->cells[c].count && n < want; ++i) {
-            const de_foliage_instance *in = &fo->instances[at + i];
-            if (in->type >= DE_FOLIAGE_TYPES || !((masks[c] >> in->type) & 1u))
-                continue;
-            u32 s = n < old ? l->slots[n] : DE__RW_NONE;
+    for (u32 i = 0; i < pg->count && n < want; ++i) {
+        const de_foliage_instance *in = &pg->instances[i];
+        if (in->type >= DE_FOLIAGE_TYPES || !((mask >> in->type) & 1u))
+            continue;
+        u32 s = n < old ? l->slots[n] : DE__RW_NONE;
+        if (s == DE__RW_NONE) {
+            s = de__rw_pool_take_detached(rw, DE__RW_KIND_INSTANCE, (de_entity){l->owner});
             if (s == DE__RW_NONE) {
-                s = de__rw_pool_take_detached(rw, DE__RW_KIND_INSTANCE, (de_entity){l->entity});
-                if (s == DE__RW_NONE) {
-                    ++x->failed;
-                    continue;
-                }
+                ++x->failed;
+                continue;
             }
-            rw->inst_pool.seen[s] = rw->frame;
-            slot_write(rw, s, in, types[in->type]->mesh, &need_bounds);
-            l->slots[n++] = s;
         }
-        at += fo->cells[c].count;
+        rw->inst_pool.seen[s] = rw->frame;
+        slot_write(rw, s, in, types[in->type]->mesh, &need_bounds);
+        l->slots[n++] = s;
     }
     /* Slots n..old are not seen this frame: the sweep frees them. */
     l->count = n;
@@ -311,7 +356,7 @@ static void layer_build(extract_ctx *x, de__rw_foliage_layer *l, const DeFoliage
     l->need_bounds = need_bounds;
 }
 
-static void layer_keep(de__render_world *rw, de__rw_foliage_layer *l) {
+static void page_keep(de__render_world *rw, de__rw_foliage_page *l) {
     bool need_bounds = false;
     for (u32 i = 0; i < l->count; ++i) {
         const u32 s = l->slots[i];
@@ -329,7 +374,7 @@ static void layer_keep(de__render_world *rw, de__rw_foliage_layer *l) {
 static void changed_chunk(const de_query_chunk *c, void *user) {
     extract_ctx *x = (extract_ctx *)user;
     for (u32 i = 0; i < c->count; ++i) {
-        de__rw_foliage_layer *l = layer_of(x->rw, c->entities[i].bits, false);
+        de__rw_foliage_page *l = page_of(x->rw, c->entities[i].bits, false);
         if (l != NULL)
             l->dirty = true;
     }
@@ -339,33 +384,20 @@ static void all_chunk(const de_query_chunk *c, void *user) {
     extract_ctx *x = (extract_ctx *)user;
     de__render_world *rw = x->rw;
     const de__rw_foliage *ff = &rw->foliage;
-    const DeFoliage *layers = (const DeFoliage *)c->columns[0];
+    const DeFoliagePage *pages = (const DeFoliagePage *)c->columns[0];
     for (u32 i = 0; i < c->count; ++i) {
-        const DeFoliage *fo = &layers[i];
-        de__rw_foliage_layer *l = layer_of(rw, c->entities[i].bits, true);
+        const DeFoliagePage *pg = &pages[i];
+        de__rw_foliage_page *l = page_of(rw, c->entities[i].bits, true);
         if (l == NULL) {
-            x->failed += fo->instance_count;
+            x->failed += pg->count <= DE_FOLIAGE_PAGE_INSTANCES ? pg->count : 0u;
             continue;
         }
         l->seen = rw->frame;
-        const de__rw_foliage_type *types[DE_FOLIAGE_TYPES];
-        for (u32 k = 0; k < DE_FOLIAGE_TYPES; ++k)
-            types[k] = DE_HANDLE_VALID(fo->types[k]) ? type_find(&rw->foliage, fo->types[k].id)
-                                                     : NULL;
-        const u32 cells = fo->cell_count <= DE_FOLIAGE_CELLS ? fo->cell_count : 0;
-        u32 masks[DE_FOLIAGE_CELLS];
         u64 sig = mix(0xcbf29ce484222325ull, ff->type_gen);
-        sig = mix(sig, cells);
-        u32 total = 0;
-        for (u32 k = 0; k < cells; ++k) {
-            masks[k] = cell_mask(ff, types, cell_distance(ff, fo->cells[k].x, fo->cells[k].z));
-            sig = mix(sig, ((u64)(u32)fo->cells[k].x << 32) | (u32)fo->cells[k].z);
-            sig = mix(sig, ((u64)fo->cells[k].count << 32) | masks[k]);
-            sig = mix(sig, fo->cells[k].revision);
-            total += fo->cells[k].count;
-        }
-        if (total != fo->instance_count || fo->instance_count > DE_FOLIAGE_INSTANCES) {
-            /* An inconsistent table draws nothing rather than reading past it. */
+        sig = mix(sig, pg->layer.bits);
+        const de__rw_foliage_palette *pal = palette_find(ff, pg->layer.bits);
+        if (pal == NULL || pg->count > DE_FOLIAGE_PAGE_INSTANCES) {
+            /* No live layer, or a bad page: nothing drawn rather than reading past it. */
             sig = mix(sig, 0xbadull);
             if (l->sig != sig || l->dirty) {
                 l->count = 0;
@@ -374,44 +406,66 @@ static void all_chunk(const de_query_chunk *c, void *user) {
             }
             continue;
         }
+        if (l->owner != pg->layer.bits) {
+            l->owner = pg->layer.bits; /* slots of another owner are rebuilt */
+            l->dirty = true;
+        }
+        const de__rw_foliage_type *types[DE_FOLIAGE_TYPES];
+        for (u32 k = 0; k < DE_FOLIAGE_TYPES; ++k) {
+            types[k] = pal->types[k] != 0 ? type_find(&rw->foliage, pal->types[k]) : NULL;
+            sig = mix(sig, pal->types[k]);
+        }
+        const u32 mask = cell_mask(ff, types, cell_distance(ff, pg->x, pg->z));
+        sig = mix(sig, ((u64)(u32)pg->x << 32) | (u32)pg->z);
+        sig = mix(sig, ((u64)pg->count << 32) | mask);
+        sig = mix(sig, pg->revision);
         if (l->dirty || l->sig != sig)
-            layer_build(x, l, fo, masks, sig);
+            page_build(x, l, pg, types, mask, sig);
         else
-            layer_keep(rw, l);
+            page_keep(rw, l);
     }
 }
 
-u32 de__rw_foliage_extract(de__render_world *rw, de_world *w, de_query all, de_query changed) {
+u32 de__rw_foliage_extract(de__render_world *rw, de_world *w, de_query layers, de_query all,
+                           de_query changed) {
     extract_ctx x = {rw, 0};
+    de__rw_foliage *fo = &rw->foliage;
+    fo->palette_count = 0;
+    de_query_each(w, layers, palette_chunk, &x);
+    if (fo->palette_count > 1)
+        qsort(fo->palettes, fo->palette_count, sizeof fo->palettes[0], cmp_palette);
     de_query_each(w, changed, changed_chunk, &x);
     de_query_each(w, all, all_chunk, &x);
-    /* Layers whose entity is gone, or no longer has DeFoliage: their slots are swept. */
-    de__rw_foliage *fo = &rw->foliage;
+    /* Pages whose entity is gone, or no longer has DeFoliagePage: their slots are swept. */
     u32 kept = 0;
-    for (u32 i = 0; i < fo->layer_count; ++i) {
-        if (fo->layers[i].seen == rw->frame) {
-            fo->layers[kept++] = fo->layers[i];
+    for (u32 i = 0; i < fo->page_count; ++i) {
+        if (fo->pages[i].seen == rw->frame) {
+            fo->pages[kept++] = fo->pages[i];
             continue;
         }
-        DE_FREE(rw->alloc, fo->layers[i].slots, sizeof(u32) * fo->layers[i].cap);
+        DE_FREE(rw->alloc, fo->pages[i].slots, sizeof(u32) * fo->pages[i].cap);
     }
-    fo->layer_count = kept;
+    fo->page_count = kept;
     return x.failed;
 }
 
 void de__rw_foliage_reset(de__render_world *rw) {
     de__rw_foliage *fo = &rw->foliage;
-    for (u32 i = 0; i < fo->layer_count; ++i)
-        DE_FREE(rw->alloc, fo->layers[i].slots, sizeof(u32) * fo->layers[i].cap);
-    fo->layer_count = 0;
+    for (u32 i = 0; i < fo->page_count; ++i)
+        DE_FREE(rw->alloc, fo->pages[i].slots, sizeof(u32) * fo->pages[i].cap);
+    fo->page_count = 0;
 }
 
 void de__rw_foliage_free(de__render_world *rw) {
     de__rw_foliage *fo = &rw->foliage;
     de__rw_foliage_reset(rw);
-    DE_FREE(rw->alloc, fo->layers, sizeof(de__rw_foliage_layer) * fo->layer_cap);
-    fo->layers = NULL;
-    fo->layer_cap = 0;
+    DE_FREE(rw->alloc, fo->pages, sizeof(de__rw_foliage_page) * fo->page_cap);
+    fo->pages = NULL;
+    fo->page_cap = 0;
+    DE_FREE(rw->alloc, fo->palettes, sizeof(de__rw_foliage_palette) * fo->palette_cap);
+    fo->palettes = NULL;
+    fo->palette_cap = 0;
+    fo->palette_count = 0;
     de_asset_system *assets = rw->r != NULL ? rw->r->assets : NULL;
     for (u32 i = 0; i < DE__RW_FOLIAGE_TYPE_CACHE; ++i)
         if (assets != NULL && DE_HANDLE_VALID(fo->types[i].load))

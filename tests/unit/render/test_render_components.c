@@ -55,7 +55,8 @@ static const struct {
     {"DeParticleSystem", 4, offsetof(DeRenderComponents, particle_system)},
     {"DeTerrain", 9, offsetof(DeRenderComponents, terrain)},
     {"DeWater", 12, offsetof(DeRenderComponents, water)},
-    {"DeFoliage", 6, offsetof(DeRenderComponents, foliage)},
+    {"DeFoliage", 2, offsetof(DeRenderComponents, foliage)},
+    {"DeFoliagePage", 7, offsetof(DeRenderComponents, foliage_page)},
 };
 #define COMP_COUNT ((u32)(sizeof k_comps / sizeof k_comps[0]))
 
@@ -278,7 +279,7 @@ static u32 fill_fields(cfx *f, de_type_id t, u8 *obj, u32 k) {
             memcpy(p, &v, sizeof v);
             break;
         }
-        case DE_FK_U64: { /* de_foliage_cell.revision */
+        case DE_FK_U64: { /* DeFoliagePage.revision */
             const u64 v = 0x0000000100000000ull + 7u * i + k;
             memcpy(p, &v, sizeof v);
             break;
@@ -349,7 +350,7 @@ TEST_F(render_components, text_roundtrip, cfx) {
         const de_type_id t = type_of(f, k_comps[c].name);
         const de_type_desc *d = de_type_get(f->types, t);
         ASSERT_TRUE(d != NULL);
-        static u8 src[16384], dst[16384]; /* DeFoliage is about 12 KB */
+        static u8 src[16384], dst[16384]; /* DeFoliagePage is about 14 KB */
         ASSERT_LE(d->size, (u32)sizeof src);
         ASSERT_EQ(de_type_construct(f->types, t, src), DE_OK);
         const u32 assets = fill_fields(f, t, src, c);
@@ -651,12 +652,8 @@ TEST_F(render_components, asset_ref_flags, cfx) {
             const bool grid = strcmp(k_comps[c].name, "DeTerrain") == 0 &&
                               (strcmp(fs[i].name, "heights") == 0 ||
                                strcmp(fs[i].name, "splat") == 0 || strcmp(fs[i].name, "holes") == 0);
-            /* DeFoliage's instance store is authored through foliage.* edits. */
-            const bool store = strcmp(k_comps[c].name, "DeFoliage") == 0 &&
-                               (strcmp(fs[i].name, "cell_count") == 0 ||
-                                strcmp(fs[i].name, "instance_count") == 0 ||
-                                strcmp(fs[i].name, "cells") == 0 ||
-                                strcmp(fs[i].name, "instances") == 0);
+            /* DeFoliagePage, the paged instance store, is authored through foliage.* edits. */
+            const bool store = strcmp(k_comps[c].name, "DeFoliagePage") == 0;
             if (grid || store) {
                 EXPECT_TRUE((fs[i].flags & DE_FIELD_EDITOR_HIDDEN) != 0);
             } else if (runtime) {
