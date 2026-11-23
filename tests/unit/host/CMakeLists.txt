@@ -692,3 +692,13 @@ set_tests_properties(editor_service_absent_in_shipping PROPERTIES
 if(DE_IS_SHIPPING)
     set_tests_properties(editor_service_absent_in_shipping PROPERTIES RUN_SERIAL TRUE)
 endif()
+
+# DENG-665: Game-view picks ignore the Scene-only hidden list. Real editor service over IPC on
+# Metal, so macOS only. Needs the flappy example built and a Python with msgpack; it skips
+# (exit 77) otherwise.
+if(APPLE AND Python3_EXECUTABLE)
+    add_test(NAME editor_game_view_picks COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/check_game_view_picks.py" "$<TARGET_FILE:flappy>")
+    set_tests_properties(editor_game_view_picks PROPERTIES
+        LABELS "unit;host" TIMEOUT 120 SKIP_RETURN_CODE 77)
+endif()
