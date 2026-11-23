@@ -1204,6 +1204,7 @@ typedef struct ed_def {
     size_t used, cap;
     ed_nest *nest;
     u32 nest_count;
+    bool ready; /* its asset loaded (DENG-807): the values are the cooked prefab's */
 } ed_def;
 
 static struct {
@@ -1360,14 +1361,16 @@ static void def_str(const toml_datum_t *d, char *out, size_t cap) {
         snprintf(out, cap, "%.*s", (int)d->u.str.len, d->u.str.ptr);
 }
 
-/* The `[prefab]` table of the prefab's source, if it has one. */
-static void def_links(de__editor *ed, ed_def *d) {
+/* The `[prefab]` table of the prefab's source, if it has one. False when the source can't be
+ * read or parsed. */
+static bool def_links(de__editor *ed, ed_def *d) {
     const de_allocator *al = de_heap_allocator();
     void *src = NULL;
     u64 size = 0;
     if (!de__ed_asset_source(ed, d->asset, &src, &size))
-        return;
+        return false;
     toml_result_t tr = de__toml_parse(al, (const char *)src, (int)size);
+    const bool parsed = tr.ok;
     const toml_datum_t *pf = tr.ok ? tab_get(&tr.toptab, "prefab") : NULL;
     if (pf != NULL && pf->type == TOML_TABLE) {
         def_str(tab_get(pf, "base"), d->base, sizeof d->base);
@@ -1403,6 +1406,7 @@ static void def_links(de__editor *ed, ed_def *d) {
     }
     de__toml_free(tr);
     DE_FREE(al, src, size + 1);
+    return parsed;
 }
 
 /* Reads `d`'s values and links from its asset (the asset system's current object and the
@@ -1415,12 +1419,13 @@ static void def_fill(de__editor *ed, ed_def *d) {
         de_load_handle lh = de_asset_load(s, id, 0);
         if (de_asset_wait(s, lh, 10000000000ULL) == DE_LOAD_READY) {
             def_visit v = {ed, d};
+            d->ready = true;
             (void)de__prefab_visit(s, ed->e->world, p, def_visit_fn, &v);
         }
         de_asset_release(s, lh);
     }
     de_error_clear();
-    def_links(ed, d);
+    (void)def_links(ed, d);
 }
 
 /* The definition of `asset`, loading it and the prefabs it links to on first use. */
@@ -2491,6 +2496,131 @@ static bool reject_request(de__editor *ed, const de_ep_request *req, mpack_write
     return reject_state(ed, req->id, w, q->has_revision, q->revision);
 }
 
+/* ---------- Dependents the editor has not loaded (DENG-807) ----------
+ *
+ * The apply plan follows the definitions the editor holds. Before the plan is built, every
+ * manifest prefab whose base or nested chain reaches the target is loaded, so a variant or a
+ * nesting prefab that was never spawned follows the base, and its source is written too. A
+ * prefab that is not loaded yet is read for its links only. One whose source can't be read may
+ * be a dependent, so the apply is refused ("dependent_unreadable"); so is a cycle of links among
+ * the dependents ("dependent_cycle"). Both are found before anything is written. */
+
+#define ED_DEPS_MAX 4096u
+
+typedef struct pf_node {
+    const char *asset;
+    const ed_def *d; /* the loaded definition, or &own */
+    ed_def own;      /* the links of a prefab that is not loaded yet */
+    bool reach, left;
+} pf_node;
+
+static u32 node_find(const pf_node *nodes, u32 n, const char *asset) {
+    for (u32 i = 0; i < n; ++i)
+        if (strcmp(nodes[i].asset, asset) == 0)
+            return i;
+    return n;
+}
+
+/* Whether node `i` links to a node that reaches the target (and, with `live`, is not `left`). */
+static bool node_links(const pf_node *nodes, u32 n, u32 i, bool live) {
+    const ed_def *d = nodes[i].d;
+    for (u32 k = 0; k <= d->nest_count; ++k) {
+        const char *to = k < d->nest_count ? d->nest[k].asset : d->base;
+        const u32 j = to[0] != '\0' ? node_find(nodes, n, to) : n;
+        if (j < n && nodes[j].reach && !(live && nodes[j].left))
+            return true;
+    }
+    return false;
+}
+
+static void nodes_free(pf_node *nodes, u32 n) {
+    for (u32 i = 0; i < n; ++i)
+        if (nodes[i].d == &nodes[i].own)
+            def_free_inner(&nodes[i].own);
+    DE_FREE(de_heap_allocator(), nodes, sizeof(pf_node) * n);
+}
+
+/* Loads the definitions of the manifest prefabs whose links reach `target`. False, with the
+ * error written, when the apply must not go on. */
+static bool load_dependents(de__editor *ed, const de_ep_request *req, mpack_writer_t *w,
+                            const char *target) {
+    u32 n = 0;
+    while (n <= ED_DEPS_MAX && de__ed_asset_nth(ed, "prefab", n) != NULL)
+        ++n;
+    if (n > ED_DEPS_MAX) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "too_large", "the project has too many prefabs");
+        return false;
+    }
+    if (n == 0)
+        return true;
+    pf_node *nodes =
+        (pf_node *)DE_ALLOC(de_heap_allocator(), sizeof(pf_node) * n, 8, DE_MEM_GENERAL);
+    if (nodes == NULL) {
+        prefab_error(w, req->id, DE_EP_ERR_BUSY, "memory", "out of memory");
+        return false;
+    }
+    memset(nodes, 0, sizeof(pf_node) * n);
+    for (u32 i = 0; i < n; ++i) {
+        pf_node *nd = &nodes[i];
+        nd->asset = de__ed_asset_nth(ed, "prefab", i);
+        nd->d = def_find(nd->asset);
+        if (nd->d != NULL)
+            continue;
+        nd->d = &nd->own;
+        snprintf(nd->own.asset, sizeof nd->own.asset, "%s", nd->asset);
+        if (!def_links(ed, &nd->own)) {
+            const char *src = de__ed_asset_source_path(ed, nd->asset);
+            prefab_error(w, req->id, DE_EP_ERR_INTERNAL, "dependent_unreadable",
+                         "can't read %s (%s): it may be a variant or nesting prefab of %s",
+                         src != NULL ? src : "no source", nd->asset, target);
+            nodes_free(nodes, n);
+            return false;
+        }
+    }
+    const u32 t = node_find(nodes, n, target);
+    if (t == n) {
+        nodes_free(nodes, n);
+        return true;
+    }
+    nodes[t].reach = true;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (u32 i = 0; i < n; ++i)
+            if (!nodes[i].reach && node_links(nodes, n, i, false))
+                nodes[i].reach = grew = true;
+    }
+    /* Peel off the dependents that link to no other remaining one; what stays is a cycle. */
+    for (bool peeled = true; peeled;) {
+        peeled = false;
+        for (u32 i = 0; i < n; ++i)
+            if (nodes[i].reach && !nodes[i].left && !node_links(nodes, n, i, true))
+                nodes[i].left = peeled = true;
+    }
+    for (u32 i = 0; i < n; ++i)
+        if (nodes[i].reach && !nodes[i].left) {
+            prefab_error(w, req->id, DE_EP_ERR_UNSUPPORTED, "dependent_cycle",
+                         "%s is in a cycle of prefab links that reaches %s", nodes[i].asset,
+                         target);
+            nodes_free(nodes, n);
+            return false;
+        }
+    for (u32 i = 0; i < n; ++i) {
+        if (!nodes[i].reach || i == t)
+            continue;
+        const ed_def *d = prefab_def_load(ed, nodes[i].asset, 0);
+        if (d == NULL || !d->ready) {
+            prefab_error(w, req->id, d == NULL ? DE_EP_ERR_BUSY : DE_EP_ERR_INTERNAL,
+                         d == NULL ? "memory" : "dependent_unreadable",
+                         "can't load %s, a variant or nesting prefab of %s", nodes[i].asset,
+                         target);
+            nodes_free(nodes, n);
+            return false;
+        }
+    }
+    nodes_free(nodes, n);
+    return true;
+}
+
 /* prefab.applyOverride: the instance's value becomes the value of `target` (default: the
  * instance's prefab) and of every level between. The change flows on to the variants and
  * nesting prefabs that did not set the field themselves, and to every instance that had the old
@@ -2544,6 +2674,8 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
             return;
         }
     }
+    if (!load_dependents(ed, req, w, lv[t].d->asset))
+        return;
     pf_dchg *dc = (pf_dchg *)de__ed_alloc(a, sizeof(pf_dchg) * ED_PLAN_MAX);
     pf_bchg *bc = (pf_bchg *)de__ed_alloc(a, sizeof(pf_bchg) * ED_PLAN_MAX);
     if (dc == NULL || bc == NULL) {

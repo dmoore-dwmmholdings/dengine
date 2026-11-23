@@ -299,6 +299,15 @@ const char *de__ed_asset_source_path(de__editor *ed, const char *id) {
     return ma != NULL ? ma->source : NULL;
 }
 
+/* The id of the manifest's `i`th asset of type `type` (DENG-807), or NULL past the last. */
+const char *de__ed_asset_nth(de__editor *ed, const char *type, u32 i) {
+    const de__manifest *m = manifest(ed);
+    for (u32 k = 0; m != NULL && k < m->asset_count; ++k)
+        if (m->assets[k].type != NULL && strcmp(m->assets[k].type, type) == 0 && i-- == 0)
+            return m->assets[k].id;
+    return NULL;
+}
+
 static void on_thumbnail(de__editor *ed, const de_ep_request *req, de_ep_arena *a,
                          mpack_writer_t *w) {
     DE__ED_PARAMS(asset_thumbnail, de_ep_asset_thumbnail_params, q);
