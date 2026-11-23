@@ -9,7 +9,9 @@
 // Keep these names and their meanings: sky_medium, sky_phase_rayleigh, sky_phase_mie,
 // sky_dist_to_top, sky_dist_to_ground, sky_hits_ground, sky_transmittance_uv,
 // sky_transmittance_rmu, sky_transmittance, sky_multiscatter_uv, sky_multiscatter, sky_view_uv,
-// sky_view_dir, sky_integrate, sky_radiance. The constants mirror src/world/sky/sky_internal.h.
+// sky_view_dir, sky_integrate, sky_radiance, and the aerial perspective (DENG-840):
+// sky_scattering, sky_aerial_distance, sky_aerial_slice, sky_aerial_perspective,
+// sky_apply_aerial. The constants mirror src/world/sky/sky_internal.h.
 module sky_common;
 
 import bindless;
@@ -32,6 +34,10 @@ public static const uint SKY_TRANSMITTANCE_H = 64;
 public static const uint SKY_MULTISCATTER_N = 32;
 public static const uint SKY_VIEW_W = 192;
 public static const uint SKY_VIEW_H = 108;
+/// The aerial-perspective froxel volume: SKY_AERIAL_N x SKY_AERIAL_N screen cells x SKY_AERIAL_N
+/// depth slices, stored as a 2D atlas of the slices side by side (width N * N, height N), because
+/// the bindless tables hold 2D textures only.
+public static const uint SKY_AERIAL_N = 32;
 
 /// The medium at altitude `h` (km above ground). `mie_scale` is turbidity - 1.
 public struct SkyMedium
@@ -259,4 +265,75 @@ public float3 sky_integrate(uint tlut, uint mslut, uint smp, float mie_scale, fl
 public float3 sky_radiance(uint skyview, uint smp, float r, float3 dir)
 {
     return de_tex2d(skyview).SampleLevel(de_sampler(smp), sky_view_uv(r, dir), 0.0).rgb;
+}
+
+/// The light scattered toward the viewer per unit length at a point of radius vector `p` (km,
+/// planet centre at the origin, +Z up) in medium `m`, from two lights, with the multiple-scattering
+/// term: what sky_integrate accumulates at each step. `c0`, `c1` are dot(view dir, light dir).
+public float3 sky_scattering(uint tlut, uint mslut, uint smp, float3 p, SkyMedium m, SkyLight l0,
+                             SkyLight l1, float c0, float c1)
+{
+    float rp = length(p);
+    float3 up = p / rp;
+    float3 S = float3(0.0, 0.0, 0.0);
+    if (l0.weight > 0.0)
+    {
+        float mus = dot(up, l0.dir);
+        float vis = sky_hits_ground(rp, mus) ? 0.0 : 1.0;
+        S += l0.weight * (vis * sky_transmittance(tlut, smp, rp, mus) *
+                              (m.rayleigh * sky_phase_rayleigh(c0) + m.mie * sky_phase_mie(c0, SKY_MIE_G)) +
+                          sky_multiscatter(mslut, smp, rp, mus) * (m.rayleigh + m.mie));
+    }
+    if (l1.weight > 0.0)
+    {
+        float mus = dot(up, l1.dir);
+        float vis = sky_hits_ground(rp, mus) ? 0.0 : 1.0;
+        S += l1.weight * (vis * sky_transmittance(tlut, smp, rp, mus) *
+                              (m.rayleigh * sky_phase_rayleigh(c1) + m.mie * sky_phase_mie(c1, SKY_MIE_G)) +
+                          sky_multiscatter(mslut, smp, rp, mus) * (m.rayleigh + m.mie));
+    }
+    return S;
+}
+
+/// The aerial-perspective volume's depth mapping: slice coordinate w (0..1) to distance from the
+/// camera (km) over `range_km`. Quadratic, so the slices near the camera are thin. Slice i
+/// (0..N-1) stores the result at the end of the slice, w = (i + 1) / N.
+public float sky_aerial_distance(float w, float range_km)
+{
+    return range_km * w * w;
+}
+
+/// The inverse of sky_aerial_distance: the slice coordinate (0..1, clamped) of `dist_km`.
+public float sky_aerial_slice(float dist_km, float range_km)
+{
+    return sqrt(saturate(dist_km / max(range_km, 1e-6)));
+}
+
+/// The aerial perspective at screen uv (0..1, top-left origin) and distance `dist_km` from the
+/// atlas `atlas` (linear clamp sampler `smp`): rgb is the in-scattered light (the atlas units:
+/// pre-exposed luminance), a the transmittance (the mean of the three channels). The first slice
+/// fades to no effect at the camera; past `range_km` the last slice holds.
+public float4 sky_aerial_perspective(uint atlas, uint smp, float2 uv, float dist_km,
+                                     float range_km)
+{
+    float N = float(SKY_AERIAL_N);
+    float w = sky_aerial_slice(dist_km, range_km) * N - 1.0;
+    float fade = saturate(w + 1.0);
+    w = max(w, 0.0);
+    float s0 = floor(w);
+    float f = w - s0;
+    float s1 = min(s0 + 1.0, N - 1.0);
+    float2 c = clamp(uv, 0.5 / N, 1.0 - 0.5 / N); // texel centres: no bleed between slices
+    Texture2D<float4> t = de_tex2d(atlas);
+    float4 a = t.SampleLevel(de_sampler(smp), float2((s0 + c.x) / N, c.y), 0.0);
+    float4 b = t.SampleLevel(de_sampler(smp), float2((s1 + c.x) / N, c.y), 0.0);
+    float4 ap = lerp(a, b, f);
+    return float4(ap.rgb * fade, lerp(1.0, ap.a, fade));
+}
+
+/// `L` (the surface's pre-exposed radiance) seen through the aerial perspective `ap`
+/// (sky_aerial_perspective).
+public float3 sky_apply_aerial(float3 L, float4 ap)
+{
+    return L * ap.a + ap.rgb;
 }

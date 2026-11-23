@@ -3,6 +3,9 @@
  * LUTs (regenerated when the turbidity or the ground albedo changes), and the view stage that
  * renders the sky-view LUT and the sky (with the sun and moon disks) into the lighting target
  * where no geometry is. Views lit by an HDRI environment keep it: the stage skips them.
+ * DENG-840 adds the aerial perspective (Hillaire 2020 §5.5; SPEC §12.13, §12.7): a per-view 32^3
+ * froxel volume of in-scatter and transmittance (a 2D atlas), applied to the opaque surfaces in
+ * the lighting target and exported to the forward transparency pass through the lighting context.
  */
 #include "world/sky/sky_internal.h"
 
@@ -42,6 +45,7 @@ struct de__sky_luts {
     de_gpu_device *dev;
     const de_allocator *alloc;
     de_gpu_pipeline pipe_t, pipe_ms;
+    de_gpu_pipeline pipe_ap; /* DENG-840: the aerial-perspective volume (invalid: no AP) */
     de_gpu_texture tex_t, tex_ms;
     de_gpu_buffer buf_t, buf_ms; /* staging: the kernels write buffers, a copy fills the textures */
     de_gpu_sampler smp;
@@ -104,6 +108,8 @@ void de__sky_luts_destroy(de__sky_luts *l) {
         de_gpu_pipeline_destroy(dev, l->pipe_t);
     if (DE_HANDLE_VALID(l->pipe_ms))
         de_gpu_pipeline_destroy(dev, l->pipe_ms);
+    if (DE_HANDLE_VALID(l->pipe_ap))
+        de_gpu_pipeline_destroy(dev, l->pipe_ap);
     if (DE_HANDLE_VALID(l->tex_t))
         de_gpu_texture_destroy(dev, l->tex_t);
     if (DE_HANDLE_VALID(l->tex_ms))
@@ -138,6 +144,9 @@ de_result de__sky_luts_create(de_gpu_device *dev, const de_allocator *alloc, de_
     if (r == DE_OK)
         r = load_pipe(dev, alloc, "sky_multiscatter", "cs_multiscatter",
                       (u32)sizeof(multiscatter_params), 64u, 1u, &l->pipe_ms);
+    if (r == DE_OK)
+        r = load_pipe(dev, alloc, "sky_aerial", "cs_aerial", (u32)sizeof(de__sky_aerial_params),
+                      8u, 8u, &l->pipe_ap);
     if (r != DE_OK) {
         de__sky_luts_destroy(l);
         return r;
@@ -264,6 +273,21 @@ de_gpu_fence de__sky_luts_fence(const de__sky_luts *l, u64 *value) {
     return l != NULL ? l->fence : (de_gpu_fence){0};
 }
 
+bool de__sky_luts_aerial_ready(const de__sky_luts *l) {
+    return l != NULL && l->ready && DE_HANDLE_VALID(l->pipe_ap);
+}
+
+void de__sky_luts_aerial_record(const de__sky_luts *l, de_gpu_cmd *cmd, de__sky_aerial_params *p) {
+    if (!de__sky_luts_aerial_ready(l) || cmd == NULL || p == NULL)
+        return;
+    p->idx[1] = l->t_bindless;
+    p->idx[2] = l->ms_bindless;
+    p->idx[3] = l->smp_bindless;
+    de_gpu_cmd_set_pipeline(cmd, l->pipe_ap);
+    de_gpu_cmd_push_constants(cmd, p, (u32)sizeof *p);
+    de_gpu_cmd_dispatch(cmd, (DE__SKY_AERIAL_N + 7u) / 8u, (DE__SKY_AERIAL_N + 7u) / 8u, 1);
+}
+
 /* ---------- The view stage ---------- */
 
 typedef struct skyview_params {
@@ -277,6 +301,17 @@ typedef struct sky_params {
     f32 ray00[4], ray_du[4], ray_dv[4], sun[4], moon[4], misc[4];
 } sky_params;
 
+DE_STATIC_ASSERT(sizeof(de__sky_aerial_params) == 96, "de__sky_aerial_params: 96 bytes");
+
+/* The aerial perspective's application to the opaque surfaces (cs_aerial_apply; 80 bytes). */
+typedef struct aerial_apply_params {
+    u32 idx[4];  /* atlas, clamp sampler, depth, target (storage) */
+    u32 size[4]; /* width, height, orthographic, 0 */
+    f32 ray[4];  /* view-space ray at z = -1: top-left corner (x, y), change across (dx, dy) */
+    f32 proj[4]; /* projection m[10], m[14], m[11], m[15] */
+    f32 misc[4]; /* range km, km per world unit (metres), 0, 0 */
+} aerial_apply_params;
+
 #define SKY_VIEW_STEPS 32.0f
 /* The largest radiance written (pre-exposed): keeps the sun disk finite in fp16 and in TAA. */
 #define SKY_MAX_VALUE 60000.0f
@@ -288,8 +323,10 @@ struct de__sky_render {
     de_gpu_device *dev;
     de__sky_luts *luts;
     de_gpu_pipeline pipe_view, pipe_sky;
+    de_gpu_pipeline pipe_apply; /* DENG-840 */
     de_gpu_sampler smp_wrap;
     u32 smp_wrap_bindless;
+    de_cvar cv_aerial; /* r.sky_aerial_perspective */
     bool registered, failed;
 };
 
@@ -307,6 +344,37 @@ typedef struct sky_pass {
     sky_params pc;
     u32 gx, gy;
 } sky_pass;
+
+typedef struct aerial_pass {
+    de_gpu_device *dev;
+    const de__sky_luts *luts;
+    de_rg_resource target;
+    de__sky_aerial_params pc;
+} aerial_pass;
+
+typedef struct apply_pass {
+    de_gpu_device *dev;
+    de_gpu_pipeline pipe;
+    de_rg_resource atlas, depth, target;
+    aerial_apply_params pc;
+    u32 gx, gy;
+} apply_pass;
+
+static void aerial_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    aerial_pass *p = (aerial_pass *)user;
+    p->pc.idx[0] = de_gpu_texture_bindless(p->dev, de_rg_texture(pass, p->target), 0, true);
+    de__sky_luts_aerial_record(p->luts, cmd, &p->pc);
+}
+
+static void apply_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
+    apply_pass *p = (apply_pass *)user;
+    p->pc.idx[0] = de_gpu_texture_bindless(p->dev, de_rg_texture(pass, p->atlas), 0, false);
+    p->pc.idx[2] = de_gpu_texture_bindless(p->dev, de_rg_texture(pass, p->depth), 0, false);
+    p->pc.idx[3] = de_gpu_texture_bindless(p->dev, de_rg_texture(pass, p->target), 0, true);
+    de_gpu_cmd_set_pipeline(cmd, p->pipe);
+    de_gpu_cmd_push_constants(cmd, &p->pc, (u32)sizeof p->pc);
+    de_gpu_cmd_dispatch(cmd, p->gx, p->gy, 1);
+}
 
 static void view_exec(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     view_pass *p = (view_pass *)user;
@@ -342,6 +410,85 @@ static void put3(f32 out[4], de_vec3 v, f32 w) {
     out[1] = v.y;
     out[2] = v.z;
     out[3] = w;
+}
+
+/* DENG-840: builds the view's aerial-perspective volume, applies it to the opaque surfaces in
+ * lc->target and exports it to the forward transparency pass (lc->aerial). Per-frame data is on
+ * the view's arena: no heap allocation. */
+static void add_aerial(de__sky_render *sr, const de__view_frame *vf, de__vis_context *vc,
+                       de__lighting_context *lc, const de__sky_snapshot *sn, f32 r_km, f32 sun_w,
+                       f32 moon_w, de_vec3 r00, de_vec3 r10, de_vec3 r01) {
+    de_rg *g = vf->graph;
+    const de_rg_resource atlas = de_rg_create_texture(
+        g, &(de_gpu_texture_desc){.width = DE__SKY_AERIAL_N * DE__SKY_AERIAL_N,
+                                  .height = DE__SKY_AERIAL_N,
+                                  .format = DE_FMT_RGBA16_FLOAT,
+                                  .usage = DE_USAGE_STORAGE | DE_USAGE_SAMPLED,
+                                  .name = "sky.aerial"});
+    aerial_pass *ap = (aerial_pass *)de_arena_push(vc->arena, sizeof *ap, 16);
+    apply_pass *pp = (apply_pass *)de_arena_push(vc->arena, sizeof *pp, 16);
+    if (!DE_HANDLE_VALID(atlas) || ap == NULL || pp == NULL) {
+        ++g->error_count;
+        return;
+    }
+    memset(ap, 0, sizeof *ap);
+    ap->dev = sr->dev;
+    ap->luts = sr->luts;
+    ap->target = atlas;
+    put3(ap->pc.ray00, r00, r_km);
+    put3(ap->pc.ray_du, (de_vec3){r10.x - r00.x, r10.y - r00.y, r10.z - r00.z},
+         DE__SKY_AERIAL_RANGE_KM);
+    put3(ap->pc.ray_dv, (de_vec3){r01.x - r00.x, r01.y - r00.y, r01.z - r00.z}, sn->mie_scale);
+    put3(ap->pc.sun, sn->sun_dir, sun_w);
+    put3(ap->pc.moon, sn->moon_dir, moon_w);
+    de_rg_pass *pass = de_rg_add_pass(g, "sky.aerial", DE_QUEUE_GRAPHICS, aerial_exec, ap);
+    if (pass == NULL)
+        return;
+    de_rg_write(pass, atlas, DE_ACCESS_SHADER_WRITE);
+
+    /* The view-space ray at z = -1 per pixel and the linear depth, from the projection. */
+    const de_mat4 *pr = &vf->proj;
+    const bool ortho = pr->m[11] == 0.0f && pr->m[15] != 0.0f;
+    const de_mat4 ip = de_m4_inverse(pr);
+    de_vec3 c00 = unproject(&ip, -1.0f, 1.0f, 0.5f), c11 = unproject(&ip, 1.0f, -1.0f, 0.5f);
+    if (!ortho && c00.z != 0.0f && c11.z != 0.0f) {
+        const f32 s0 = -1.0f / c00.z, s1 = -1.0f / c11.z;
+        c00 = (de_vec3){c00.x * s0, c00.y * s0, -1.0f};
+        c11 = (de_vec3){c11.x * s1, c11.y * s1, -1.0f};
+    }
+    memset(pp, 0, sizeof *pp);
+    pp->dev = sr->dev;
+    pp->pipe = sr->pipe_apply;
+    pp->atlas = atlas;
+    pp->depth = vc->depth;
+    pp->target = lc->target;
+    pp->pc.idx[1] = sr->luts->smp_bindless;
+    pp->pc.size[0] = vf->width;
+    pp->pc.size[1] = vf->height;
+    pp->pc.size[2] = ortho ? 1u : 0u;
+    pp->pc.ray[0] = c00.x;
+    pp->pc.ray[1] = c00.y;
+    pp->pc.ray[2] = c11.x - c00.x;
+    pp->pc.ray[3] = c11.y - c00.y;
+    pp->pc.proj[0] = pr->m[10];
+    pp->pc.proj[1] = pr->m[14];
+    pp->pc.proj[2] = pr->m[11];
+    pp->pc.proj[3] = pr->m[15];
+    pp->pc.misc[0] = DE__SKY_AERIAL_RANGE_KM;
+    pp->pc.misc[1] = 0.001f; /* world units are metres */
+    pp->gx = (vf->width + 7u) / 8u;
+    pp->gy = (vf->height + 7u) / 8u;
+    pass = de_rg_add_pass(g, "sky.aerial_apply", DE_QUEUE_GRAPHICS, apply_exec, pp);
+    if (pass == NULL)
+        return;
+    de_rg_read(pass, atlas, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, vc->depth, DE_ACCESS_SHADER_READ);
+    de_rg_read(pass, lc->target, DE_ACCESS_SHADER_READ);
+    de_rg_write(pass, lc->target, DE_ACCESS_SHADER_WRITE);
+
+    lc->aerial = atlas;
+    lc->aerial_sampler = sr->luts->smp_bindless;
+    lc->aerial_range_km = DE__SKY_AERIAL_RANGE_KM;
 }
 
 static void stage(de__view_frame *vf, void *user) {
@@ -417,6 +564,10 @@ static void stage(de__view_frame *vf, void *user) {
     const de_mat4 inv = de_m4_inverse(&vp_m);
     const de_vec3 r00 = ray_at(&inv, -1.0f, 1.0f), r10 = ray_at(&inv, 1.0f, 1.0f),
                   r01 = ray_at(&inv, -1.0f, -1.0f);
+    if (sr->cv_aerial.id && de_cvar_bool(sr->cv_aerial) && DE_HANDLE_VALID(sr->pipe_apply) &&
+        de__sky_luts_aerial_ready(sr->luts))
+        add_aerial(sr, vf, vc, lc, &sn, r_km, sun_w, moon_w, r00, r10, r01);
+
     memset(sp, 0, sizeof *sp);
     sp->dev = sr->dev;
     sp->pipe = sr->pipe_sky;
@@ -458,6 +609,8 @@ void de__sky_render_destroy(de__sky_render *sr) {
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_view);
     if (DE_HANDLE_VALID(sr->pipe_sky))
         de_gpu_pipeline_destroy(sr->dev, sr->pipe_sky);
+    if (DE_HANDLE_VALID(sr->pipe_apply))
+        de_gpu_pipeline_destroy(sr->dev, sr->pipe_apply);
     if (DE_HANDLE_VALID(sr->smp_wrap))
         de_gpu_sampler_destroy(sr->dev, sr->smp_wrap);
     de__sky_luts_destroy(sr->luts);
@@ -488,6 +641,16 @@ de_result de__sky_render_create(struct de_renderer *r, struct de_sky *s, const d
     if (res == DE_OK)
         res = load_pipe(r->dev, alloc, "sky_render", "cs_sky", (u32)sizeof(sky_params), 8u, 8u,
                         &sr->pipe_sky);
+    if (res == DE_OK)
+        res = load_pipe(r->dev, alloc, "sky_aerial", "cs_aerial_apply",
+                        (u32)sizeof(aerial_apply_params), 8u, 8u, &sr->pipe_apply);
+    if (res == DE_OK)
+        sr->cv_aerial = de_cvar_register(&(de_cvar_desc){
+            .name = "r.sky_aerial_perspective",
+            .help = "The physical sky's aerial perspective on opaque and transparent surfaces",
+            .type = DE_CVAR_BOOL,
+            .flags = DE_CVAR_SAVED,
+            .default_number = 1});
     if (res == DE_OK) {
         sr->smp_wrap = de_gpu_sampler_create(r->dev, &(de_gpu_sampler_desc){.min = DE_FILTER_LINEAR,
                                                                             .mag = DE_FILTER_LINEAR,

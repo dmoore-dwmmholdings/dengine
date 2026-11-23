@@ -62,6 +62,7 @@ typedef struct fw_pass {
     de__fwd_params pc;
     de_rg_resource target, depth, scene_color, scene_depth, views;
     de_rg_resource lights, dir_lights, grid, list, counters, ltc1, ltc2;
+    de_rg_resource aerial; /* DENG-840: the sky's aerial-perspective atlas (invalid: none) */
     const de__forward_draw *draws;
     de_rg_resource indirect, indices;
     u32 draw_count, first_draw;
@@ -242,6 +243,9 @@ static void draw_execute(de_gpu_cmd *cmd, const de_rg_pass *pass, void *user) {
     pc.ltc2 = DE_HANDLE_VALID(p->ltc2)
                   ? de_gpu_texture_bindless(p->fw->dev, de_rg_texture(pass, p->ltc2), 0, false)
                   : 0u;
+    pc.aerial = DE_HANDLE_VALID(p->aerial)
+                    ? de_gpu_texture_bindless(p->fw->dev, de_rg_texture(pass, p->aerial), 0, false)
+                    : DE_GPU_BINDLESS_INVALID;
     const de_gpu_attachment color = {.texture = de_rg_texture(pass, p->target), .store = true};
     const de_gpu_attachment depth = {.texture = de_rg_texture(pass, p->depth), .store = true};
     if (!p->rt) {
@@ -300,6 +304,8 @@ static de_result add_mesh_run(de_rg *g, de__vis_context *vc, de__lighting_contex
         if (DE_HANDLE_VALID(tables[i]))
             de_rg_read(p, tables[i], DE_ACCESS_SHADER_READ);
     de__forward_declare_lighting(p, lc);
+    if (DE_HANDLE_VALID(pd->aerial))
+        de_rg_read(p, pd->aerial, DE_ACCESS_SHADER_READ);
     if (DE_HANDLE_VALID(pd->scene_color)) {
         de_rg_read(p, pd->scene_color, DE_ACCESS_SHADER_READ);
         if (pd->scene_depth.id)
@@ -398,7 +404,11 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                            .refraction = !fw->cv_refraction.id || de_cvar_bool(fw->cv_refraction),
                            .width = lc->width,
                            .height = lc->height,
-                           .ltc_sampler = lc->sampler_bindless},
+                           .ltc_sampler = lc->sampler_bindless,
+                           /* DENG-840: the sky stage (before this one) published it. */
+                           .aerial = DE_GPU_BINDLESS_INVALID,
+                           .aerial_sampler = lc->aerial_sampler,
+                           .aerial_range_bits = fwd_float_bits(lc->aerial_range_km)},
                     .target = lc->target,
                     .depth = vc->depth,
                     .views = vc->scene_views,
@@ -409,6 +419,7 @@ de_result de__forward_build(de__forward *fw, de_rg *g, de__vis_context *vc,
                     .counters = lc->counters,
                     .ltc1 = lc->ltc1,
                     .ltc2 = lc->ltc2,
+                    .aerial = lc->aerial,
                     .draws = draws,
                     .draw_count = nd};
 

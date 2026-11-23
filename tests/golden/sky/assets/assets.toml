@@ -12,3 +12,4 @@ generate_lods = false
 "mat/ground" = {type="material", source="materials/ground.mat.toml"}
 "mat/stone" = {type="material", source="materials/stone.mat.toml"}
 "scenes/sky_ground" = {type="scene", source="scenes/sky_ground.scene.toml"}
+"scenes/sky_aerial" = {type="scene", source="scenes/sky_aerial.scene.toml"} # DENG-840
