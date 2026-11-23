@@ -882,13 +882,54 @@ DE_API bool de_render_forward_bindings(const de_forward_context *context, const 
                                        de_forward_shader_bindings *out);
 
 /* ---------- World systems (SPEC §12.13); configured through components ---------- */
+/**
+ * The physical sky (DENG-206): a Bruneton/Hillaire atmosphere (Rayleigh, Mie, ozone) over a
+ * 6360 km planet, the sun and the moon at their astronomical places, drawn behind the scene when
+ * the view has no HDR environment (DeEnvironment.hdri 0). Time is local apparent solar time on
+ * longitude 0 in 2026: the sun is highest at 12 h. de_sky_attach() runs it; with drive_sun the
+ * first directional DeLight follows the sun (or the moon at night): its rotation, colour and
+ * illuminance at the ground.
+ */
 typedef struct DeSky {
-    f32 time_of_day_hours;
+    f32 time_of_day_hours; /**< local apparent solar time, 0..24 */
     f32 latitude_deg;
-    f32 turbidity;
+    f32 turbidity; /**< 1 clear .. 10 hazy; 2 is the reference (Mie density = turbidity - 1) */
     bool clouds;
     f32 cloud_coverage;
+    f32 day_of_year; /**< 1 .. 365 (2026); 80 = the March equinox */
+    f32 moon_phase;  /**< < 0: the real moon of that date; 0..1: forced phase (0.5 full) */
+    f32 ground_albedo;
+    bool drive_sun; /**< drive the first directional DeLight */
 } DeSky;
+
+/** The sun's illuminance at the top of the atmosphere used by the sky, in lux. The solar
+ * constant is about 128 klx; 120 klx is the usual engine figure that keeps clear-noon ground
+ * illuminance near 100 klx after the atmosphere. Lights driven by the sky use it. */
+#define DE_SKY_SOLAR_ILLUMINANCE 120000.0f
+
+typedef struct de_sky de_sky;
+/** What the sky computed on its last update (the world's DE_SCHEDULE_POST_UPDATE). */
+typedef struct de_sky_state {
+    de_vec3 sun_direction, moon_direction; /**< toward the body; x east, y north, z up */
+    f32 sun_elevation_deg, moon_elevation_deg;
+    f32 moon_illuminated_fraction;
+    de_vec3 light_color;    /**< the driven light's colour (transmittance, max channel 1) */
+    f32 light_illuminance;  /**< lux at the ground; 0 when both bodies are below the horizon */
+    bool light_is_moon;
+} de_sky_state;
+/**
+ * Runs the sky for `world`: a DE_SCHEDULE_POST_UPDATE system (before DE_TRANSFORM_PROPAGATE_SYSTEM)
+ * reads the first DeSky and drives the light, and, with `renderer` (may be NULL: no drawing), a
+ * view stage draws the sky where the depth is the far plane, before the transparents. Main
+ * thread, outside a running schedule. Not per-frame: allocates.
+ * @return DE_OK; DE_ERR_INVALID_ARGUMENT; DE_ERR_NOT_FOUND (DeSky or DeLight not registered:
+ *         de_render_register_components); DE_ERR_OUT_OF_MEMORY.
+ */
+DE_API de_result de_sky_attach(de_world *world, de_renderer *renderer, de_sky **out);
+/** Removes the system and the stage (waits for the render thread); NULL is ignored. */
+DE_API void de_sky_detach(de_sky *sky);
+/** The last update's state; false before the first update with a DeSky. */
+DE_API bool de_sky_get_state(const de_sky *sky, de_sky_state *out);
 typedef struct DeFogVolume {
     de_vec3 extent;
     f32 density;
@@ -1068,7 +1109,8 @@ typedef struct DeWater {
  *   0.05 m, cast_shadows true, view_mask 0 (all views, including legacy scenes).
  * - DeEnvironment: intensity 1. DeSprite: uv_rect (0, 0, 1, 1), size 1 x 1 m, pivot (0.5, 0.5),
  *   white, cast_shadows true.
- * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5.
+ * - DeSky: 12 h, latitude 45 degrees, turbidity 2, cloud_coverage 0.5, day_of_year 80,
+ *   moon_phase -1 (real), ground_albedo 0.3, drive_sun true.
  * - DeFogVolume: extent 10 x 10 x 10 m, density 0.02 /m, white albedo.
  * - DeDecal: extent 1 x 1 x 1 m, angle_fade 1. DeParticleSystem: playing, time_scale 1.
  * - DeTerrain: 33 x 33 samples over 32 x 32 m, height 32 m, flat at 0, all splat weight in slot

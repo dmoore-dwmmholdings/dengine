@@ -1,9 +1,16 @@
 # src/world/sky: module `sky` (target de_sky), layer gameplay.
-# Stub source only, until the sprint that owns this module adds real code.
+# The physical sky (DENG-206, SPEC §12.13): celestial positions, the CPU atmosphere reference,
+# the DeSky system that drives the sun light (de_sky_attach), and, in render builds, the GPU LUTs
+# and the sky view stage.
 de_add_module(
     NAME sky
     LAYER gameplay
-    SOURCES sky_stub.c
+    SOURCES sky.c celestial.c atmosphere.c sky_internal.h
     DEPS ecs asset
     OPTIONAL_DEPS render
 )
+
+if(DE_HAS_RENDER)
+  target_sources(de_sky PRIVATE sky_luts.c)
+  target_link_libraries(de_sky PRIVATE de_render de_gpu de_ecs)
+endif()

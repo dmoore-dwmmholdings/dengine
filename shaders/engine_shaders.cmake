@@ -125,3 +125,8 @@ de_engine_shader(ui_world ui/ui_world.slang)
 de_engine_shader(startup_splash startup/splash.slang)
 de_engine_shader(post_tonemap post/tonemap_pass.slang)
 de_engine_shader(post_taa post/taa.slang)
+# DENG-206: the physical sky (src/world/sky/sky_luts.c).
+de_engine_shader(sky_transmittance  sky/transmittance_lut.slang)
+de_engine_shader(sky_multiscatter   sky/multiscatter_lut.slang)
+de_engine_shader(sky_skyview        sky/skyview_lut.slang)
+de_engine_shader(sky_render         sky/sky_render.slang)
