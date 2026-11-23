@@ -1,0 +1,14 @@
+# DENG-837: the sky goldens' assets (sky_scenes.c). The box mesh is a copy of the procedural CC0
+# base_tier box (tests/golden/base_tier/assets, gen_assets.py); the materials and the scene are
+# hand-written for these goldens.
+[project]
+asset_root = "."
+
+[defaults.model]
+generate_lods = false
+
+[assets]
+"mesh/box" = {type="model", source="meshes/box.gltf"}
+"mat/ground" = {type="material", source="materials/ground.mat.toml"}
+"mat/stone" = {type="material", source="materials/stone.mat.toml"}
+"scenes/sky_ground" = {type="scene", source="scenes/sky_ground.scene.toml"}

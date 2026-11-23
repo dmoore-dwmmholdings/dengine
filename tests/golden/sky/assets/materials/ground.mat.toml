@@ -1,0 +1,4 @@
+# ground (DENG-837 sky goldens): a dry grass-coloured diffuse ground.
+base_color = [0.22, 0.26, 0.16]
+metallic = 0.0
+roughness = 0.9

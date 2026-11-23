@@ -1,0 +1,4 @@
+# stone (DENG-837 sky goldens): a light grey diffuse stone.
+base_color = [0.6, 0.6, 0.58]
+metallic = 0.0
+roughness = 0.7

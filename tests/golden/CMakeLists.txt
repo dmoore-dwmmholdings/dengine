@@ -210,3 +210,6 @@ target_sources(de_golden PRIVATE ui/world_panel/world_scenes.c ui/pixel_ui/pixel
 
 # DENG-80: the lit two-layer tilemap.
 add_subdirectory(tilemap)
+
+# DENG-837 (DENG-206 AC1): the physical sky at four times of day.
+add_subdirectory(sky)
