@@ -85,6 +85,12 @@ u64 de_physics2d_checksum(const de_physics2d_world *p) {
         ck_f32(&c, b->material[i].friction);
         ck_f32(&c, b->material[i].restitution);
         ck_f32(&c, b->material[i].density);
+        /* DENG-766: the combine modes only when set, so default materials hash as before. */
+        if (b->material[i].friction_combine != DE_COMBINE_DEFAULT ||
+            b->material[i].restitution_combine != DE_COMBINE_DEFAULT) {
+            ck_u32(&c, (u32)b->material[i].friction_combine);
+            ck_u32(&c, (u32)b->material[i].restitution_combine);
+        }
         ck_u64(&c, b->owner[i].bits);
         ck_v2(&c, b->world_aabb[i].min);
         ck_v2(&c, b->world_aabb[i].max);

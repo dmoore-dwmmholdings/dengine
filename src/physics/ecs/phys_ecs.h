@@ -48,6 +48,7 @@ typedef struct de__pecs_entry {
     de_entity entity;
     de_body body;
     de_shape owned_shape; /**< compound made for DeCollider.offset; invalid = none */
+    de_shape owned_base;  /**< DENG-766: base shape made from DeCollider.shape_kind; or none */
     u8 kind;              /**< DE__PECS_* */
     u8 body_type;         /**< de_body_type of the body */
     u8 flags;             /**< DE__PECS_NO_INTERP, DE__PECS_FAILED */
@@ -104,6 +105,11 @@ enum {
     DE__PECS_Q_XFORM_CHAR,   /**< DeTransform changed, with DeCharacter */
     DE__PECS_Q_ALL_COL,      /**< every DeCollider (rescans) */
     DE__PECS_Q_ALL_CHAR,     /**< every DeCharacter (moves, rescans) */
+    DE__PECS_Q_HULL_CHANGED, /**< DENG-766: DeConvexHull changed, with DeCollider */
+    DE__PECS_Q_ALL_HINGE,    /**< DENG-766: every DeHingeJoint */
+    DE__PECS_Q_ALL_CONE,     /**< DENG-766: every DeConeTwistJoint */
+    DE__PECS_Q_ALL_FIXED,    /**< DENG-766: every DeFixedJoint */
+    DE__PECS_Q_ALL_RAGDOLL,  /**< DENG-766: every DeRagdoll */
     DE__PECS_Q_COUNT
 };
 
@@ -113,6 +119,7 @@ typedef struct de__pecs {
     de_world *w;
 
     de_component c_rb, c_col, c_char, c_xform, c_global, c_child_of, c_children;
+    de_component c_hull, c_hinge, c_cone, c_fixed, c_ragdoll; /**< DENG-766 */
     de_event_type ev_contact, ev_break;
     de_system sys_step, sys_interp;
 
@@ -143,6 +150,11 @@ typedef struct de__pecs {
 
     de_joint_break_event *breaks;
     u32 break_cap;
+
+    /* DENG-766: joints and ragdolls made for components, sorted by (entity index, kind). */
+    struct de__pecs_auth *auth;
+    u32 auth_count, auth_cap;
+    u32 auth_warnings; /**< joint / ragdoll failures logged so far */
 
     de__pecs_stats stats;
 } de__pecs;
@@ -205,6 +217,16 @@ void de__pecs_interpolate_system(de_system_ctx *ctx);
 
 /** Sends the contact events of the last step, then the joint break events. */
 void de__pecs_send_events(de__pecs *s);
+
+/* ---- authoring.c (DENG-766) ---- */
+
+/** The joints and ragdolls of the authoring components, after the sync (see de_physics.h). */
+void de__pecs_authoring(de__pecs *s, const de_system_ctx *ctx);
+/** Frees the list (world destroy; the joints and ragdolls go with the world). */
+void de__pecs_authoring_free(de__pecs *s);
+/** The base shape of a DeCollider whose shape_kind is not DE_COLLIDER_SHAPE_HANDLE (the hull
+ *  from the entity's DeConvexHull); invalid with the error set on failure. */
+de_shape de__pecs_make_base_shape(de__pecs *s, de_entity e, const DeCollider *col);
 
 /* ---- systems.c ---- */
 

@@ -119,9 +119,12 @@ static void prepare(const de__solver2d_ctx *ctx, void *state, de__constraint2d *
     cc->tangent = de__v2_right_perp(m->normal);
     const f32 fa = de__maxf(bp->material[a].friction, 0.0f);
     const f32 fb = de__maxf(bp->material[b].friction, 0.0f);
-    cc->friction = de_dsqrt(fa * fb);
-    cc->restitution =
-        de__maxf(de__maxf(bp->material[a].restitution, bp->material[b].restitution), 0.0f);
+    cc->friction = de__combine(bp->material[a].friction_combine, bp->material[b].friction_combine,
+                               fa, fb, DE_COMBINE_GEOMETRIC);
+    cc->restitution = de__combine(bp->material[a].restitution_combine,
+                                  bp->material[b].restitution_combine,
+                                  de__maxf(bp->material[a].restitution, 0.0f),
+                                  de__maxf(bp->material[b].restitution, 0.0f), DE_COMBINE_MAXIMUM);
     const f32 ma = A->inv_mass, mb = B->inv_mass;
     const f32 ia = A->inv_inertia, ib = B->inv_inertia;
     cc->soft_static = (ma == 0.0f || mb == 0.0f) ? 1u : 0u;

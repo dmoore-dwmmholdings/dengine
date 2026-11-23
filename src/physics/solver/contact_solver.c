@@ -22,7 +22,8 @@
  *     two tangent directions with their own effective masses; the accumulated pair is kept in
  *     the ellipse (l0 / mu0)^2 + (l1 / mu1)^2 <= normal_impulse^2 (a circle when isotropic) by
  *     the maximum-dissipation projection (friction_clamp).
- *     Mixing: mu = sqrt(mu_a * mu_b) (de_dsqrt). Anisotropic friction (de_body_desc
+ *     Mixing: mu = sqrt(mu_a * mu_b) (de_dsqrt) unless the materials' friction_combine says
+ *     otherwise (DENG-766, de__combine). Anisotropic friction (de_body_desc
  *     .friction_axis): the first body (A, then B) with an axis gives tangent 0 = that axis
  *     projected into the contact plane; mu0 mixes the bodies' friction along their axes, mu1
  *     their friction_secondary (an isotropic body uses its friction for both).
@@ -115,8 +116,10 @@ static void contact_friction(const de_physics_world *p, u32 a, u32 b, de_vec3 n,
     }
     cc->tangent[0] = t0;
     cc->tangent[1] = de__v3_cross(n, t0);
-    cc->friction[0] = de_dsqrt(fa * fb);
-    cc->friction[1] = de_dsqrt(fa1 * fb1);
+    const de_combine_mode ma = bp->material[a].friction_combine;
+    const de_combine_mode mb = bp->material[b].friction_combine;
+    cc->friction[0] = de__combine(ma, mb, fa, fb, DE_COMBINE_GEOMETRIC);
+    cc->friction[1] = de__combine(ma, mb, fa1, fb1, DE_COMBINE_GEOMETRIC);
 }
 
 static void gather(de__solver *s, const de__solver_ctx *ctx, void *state) {
@@ -172,8 +175,10 @@ static void prepare(const de__solver_ctx *ctx, void *state, de__constraint *c) {
     cc->point_count = m->point_count;
     cc->normal = m->normal;
     contact_friction(p, a, b, m->normal, cc);
-    cc->restitution =
-        de__maxf(de__maxf(bp->material[a].restitution, bp->material[b].restitution), 0.0f);
+    cc->restitution = de__combine(bp->material[a].restitution_combine,
+                                  bp->material[b].restitution_combine,
+                                  de__maxf(bp->material[a].restitution, 0.0f),
+                                  de__maxf(bp->material[b].restitution, 0.0f), DE_COMBINE_MAXIMUM);
     const f32 ma = A->inv_mass, mb = B->inv_mass;
     cc->soft_static = (ma == 0.0f || mb == 0.0f) ? 1u : 0u;
 

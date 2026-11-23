@@ -113,13 +113,33 @@ typedef struct de_shape_desc {
 /**
  * Surface and bulk material. `density` in kg/m^3; 0 means DE_PHYSICS_DEFAULT_DENSITY.
  * `friction` (Coulomb coefficient, >= 0) and `restitution` (bounce, >= 0; 1 keeps the approach
- * speed) are used by the solver (DENG-217): a contact uses sqrt(friction_a * friction_b) and
- * max(restitution_a, restitution_b). A zeroed material is frictionless and does not bounce.
- * Contacts closing slower than the restitution threshold (cvar
- * `physics.solver.restitution_threshold`, 1 m/s) do not bounce.
+ * speed) are used by the solver (DENG-217). By default a contact uses sqrt(friction_a *
+ * friction_b) and max(restitution_a, restitution_b); `friction_combine` and
+ * `restitution_combine` (DENG-766, de_combine_mode) choose another rule. A zeroed material is
+ * frictionless, does not bounce and uses the default rules. Contacts closing slower than the
+ * restitution threshold (cvar `physics.solver.restitution_threshold`, 1 m/s) do not bounce.
  */
+/**
+ * How the two materials of a contact combine friction or restitution (DENG-766; the DIDE
+ * `.physmat.toml` keys `friction_combine` and `restitution_combine`). A material with
+ * DE_COMBINE_DEFAULT takes the other material's mode; when both are DEFAULT, friction uses
+ * DE_COMBINE_GEOMETRIC and restitution DE_COMBINE_MAXIMUM. When the two materials ask for
+ * different modes, the mode later in this list wins: average, minimum, geometric, multiply,
+ * maximum. Both 2D and 3D contacts use it.
+ */
+typedef enum de_combine_mode {
+    DE_COMBINE_DEFAULT = 0, /**< geometric (friction) or maximum (restitution) */
+    DE_COMBINE_AVERAGE,     /**< (a + b) / 2 */
+    DE_COMBINE_MINIMUM,     /**< min(a, b) */
+    DE_COMBINE_GEOMETRIC,   /**< sqrt(a * b) */
+    DE_COMBINE_MULTIPLY,    /**< a * b */
+    DE_COMBINE_MAXIMUM      /**< max(a, b) */
+} de_combine_mode;
+
 typedef struct de_material_phys {
     f32 friction, restitution, density;
+    /* DENG-766 (appended): combine rules; 0 = the default rule. */
+    de_combine_mode friction_combine, restitution_combine;
 } de_material_phys;
 
 /** Density used when de_material_phys.density is 0 (water, kg/m^3). */
@@ -662,13 +682,82 @@ typedef struct DeRigidBody {
 } DeRigidBody;
 /* DeCollider.shape is a runtime handle: snapshotted, not serialized (assets bind it, S23). */
 
+/** DeCollider.shape_kind (DENG-766): where the collider's shape comes from. */
+typedef enum de_collider_shape {
+    DE_COLLIDER_SHAPE_HANDLE = 0, /**< DeCollider.shape, a shape built outside the component */
+    DE_COLLIDER_SHAPE_SPHERE,     /**< radius */
+    DE_COLLIDER_SHAPE_CAPSULE,    /**< radius, half_height (as DE_SHAPE_CAPSULE) */
+    DE_COLLIDER_SHAPE_BOX,        /**< half_extents */
+    DE_COLLIDER_SHAPE_CONVEX      /**< the hull of the entity's DeConvexHull points */
+} de_collider_shape;
+
 typedef struct DeCollider {
     de_shape shape;
     de_transform offset;
     de_material_phys material;
     de_collision_filter filter;
     bool is_trigger;
+    /* DENG-766 (appended): authored shape (see "Physics authoring" below). */
+    de_collider_shape shape_kind; /* 0 = use `shape` */
+    f32 radius, half_height;      /* sphere, capsule (m) */
+    de_vec3 half_extents;         /* box (m) */
+    de_name material_asset;       /* a registered material asset; 0 = use `material` */
 } DeCollider;
+
+/** Most points of a DeConvexHull. */
+#define DE_CONVEX_HULL_MAX_POINTS 64u
+
+/** DENG-766: the points of a DE_COLLIDER_SHAPE_CONVEX collider (body-local, before the
+ *  collider offset). The hull is rebuilt when they change. */
+typedef struct DeConvexHull {
+    u32 point_count;  /* 4..DE_CONVEX_HULL_MAX_POINTS */
+    f32 tolerance;    /* de_shape_desc.hull_tolerance (m); 0 = automatic */
+    de_vec3 points[DE_CONVEX_HULL_MAX_POINTS];
+} DeConvexHull;
+
+/** DENG-766: a hinge between this entity's body and `target`'s (the world when null). Frames as
+ *  in de_joint_desc: `frame` on this body (A), `target_frame` on the target (B; world space for
+ *  the world). The hinge axis is the frame's X axis. */
+typedef struct DeHingeJoint {
+    de_entity target;
+    de_transform frame, target_frame;
+    bool enable_limit;
+    f32 limit_min, limit_max; /* rad, within [-pi, pi] */
+    f32 break_force;          /* N; 0 = unbreakable */
+    bool collide_connected;
+    de_joint joint; /* internal, set by the physics system */
+} DeHingeJoint;
+
+/** DENG-766: a cone-twist joint (shoulders, hips). Twist about the frame's X axis in
+ *  [twist_min, twist_max]; swing cone half-angles swing_y and swing_z. */
+typedef struct DeConeTwistJoint {
+    de_entity target;
+    de_transform frame, target_frame;
+    f32 twist_min, twist_max; /* rad, within [-pi, pi] */
+    f32 swing_y, swing_z;     /* rad, >= 0 */
+    f32 break_force;
+    bool collide_connected;
+    de_joint joint;
+} DeConeTwistJoint;
+
+/** DENG-766: a fixed joint (every degree of freedom locked). */
+typedef struct DeFixedJoint {
+    de_entity target;
+    de_transform frame, target_frame;
+    f32 break_force;
+    bool collide_connected;
+    de_joint joint;
+} DeFixedJoint;
+
+/** DENG-766: spawns a ragdoll from a registered ragdoll asset at the entity's DeTransform. */
+DE_HANDLE(de_ragdoll);
+typedef struct DeRagdoll {
+    de_name asset;                 /* e.g. "physics/ragdolls/hero.ragdoll.toml" */
+    de_material_phys material;     /* every bone */
+    de_collision_filter filter;    /* as de_ragdoll_desc.filter */
+    f32 linear_damping, angular_damping;
+    de_ragdoll ragdoll; /* internal, set by the physics system */
+} DeRagdoll;
 
 typedef struct DeCharacter {
     f32 radius, height, step_height, max_slope_rad, skin_width;
@@ -684,6 +773,55 @@ typedef struct DeCharacter {
 typedef struct DePhysicsWorld {
     de_physics_world *world;
 } DePhysicsWorld;
+
+/* ---------- Physics authoring (DENG-766) ----------
+ * Data the editor (DIDE) writes, used by physics.step:
+ *
+ * - Collider shapes: DeCollider.shape_kind other than DE_COLLIDER_SHAPE_HANDLE makes the system
+ *   build the base shape from radius / half_height / half_extents, or from the entity's
+ *   DeConvexHull, and own it (DeCollider.shape is then ignored and not written). A change to any
+ *   of these fields, or to the DeConvexHull, re-creates the body. Bad values (radius <= 0, fewer
+ *   than 4 hull points, ...) leave the entity without a body and log a warning.
+ * - Materials: de_physics_material_parse reads a `.physmat.toml` asset, and
+ *   de_physics_material_register makes it findable by name. A DeCollider whose material_asset
+ *   names a registered material uses it instead of DeCollider.material; the name is resolved
+ *   when the body is created (register materials before their colliders appear). An unknown
+ *   name falls back to DeCollider.material.
+ * - Joints: DeHingeJoint, DeConeTwistJoint and DeFixedJoint make a DENG-220 joint between the
+ *   entity's body and the target's (or the world). The joint is made, after the bodies, in the
+ *   tick the component appears, and made again when a field or either body changes. It is
+ *   destroyed when the component or the entity goes. While a body is missing there is no joint.
+ *   A broken joint stays broken until a field changes.
+ * - Ragdolls: de_ragdoll_asset_parse reads a `.ragdoll.toml` asset, and
+ *   de_physics_ragdoll_asset_register makes it findable by name. DeRagdoll spawns
+ *   (de_ragdoll_create, owner = the entity) the named ragdoll at the entity's DeTransform in the
+ *   tick it appears or its fields change (or the asset is registered again), and destroys it
+ *   when the component or the entity goes. The bones are bodies of their own (not written back
+ *   to the entity); read them with de_ragdoll_bone_body and de_ragdoll_get_pose.
+ * - Order (SPEC §5.7): joints and ragdolls are handled after the body sync of physics.step and
+ *   before character moves: first removals in entity index order, then DeHingeJoint,
+ *   DeConeTwistJoint, DeFixedJoint and DeRagdoll in query order.
+ * - Reflection: the DIDE material keys (friction, restitution, density, friction_combine,
+ *   restitution_combine) are the de_material_phys field names; de_combine_mode and
+ *   de_collider_shape are registered enums.
+ */
+
+/**
+ * Parses a physics material asset (`physics/materials/<name>.physmat.toml`, DIDE format): keys
+ * friction, restitution, density, friction_combine and restitution_combine ("average",
+ * "minimum", "maximum", "multiply", "geometric"). Missing keys take DIDE's defaults (friction
+ * 0.5, restitution 0, density 0 = DE_PHYSICS_DEFAULT_DENSITY, friction_combine "geometric",
+ * restitution_combine "maximum").
+ * DE_ERR_PARSE (bad TOML, wrong type, unknown mode) or DE_ERR_INVALID_ARGUMENT (negative or
+ * non-finite value, NULL argument); `out` is unchanged on failure.
+ */
+DE_API de_result de_physics_material_parse(const char *text, u32 len, de_material_phys *out);
+/** Registers (or replaces) material `name` (typically its project path). Allocates. */
+DE_API de_result de_physics_material_register(de_physics_world *p, de_name name,
+                                              const de_material_phys *m);
+/** Copies registered material `name` into `out`; false when it is not registered. */
+DE_API bool de_physics_material_find(const de_physics_world *p, de_name name,
+                                     de_material_phys *out);
 
 /* ---------- Character controller (DENG-221) ----------
  * A kinematic capsule character controller (SPEC §13.1). Each character is a kinematic body
@@ -888,7 +1026,7 @@ DE_API de_body de_physics_entity_body(const de_physics_world *p, de_entity e);
  * - Threading: like the body API (create, destroy and setters single-threaded).
  */
 
-DE_HANDLE(de_ragdoll);
+/* de_ragdoll is declared with DeRagdoll above. */
 
 /** Most bones of one ragdoll. */
 #define DE_RAGDOLL_MAX_BONES 128u
@@ -987,6 +1125,32 @@ DE_API bool de_ragdoll_set_velocity(de_physics_world *p, de_ragdoll r, de_vec3 l
  */
 DE_API bool de_ragdoll_set_motor_targets(de_physics_world *p, de_ragdoll r, const de_quat *local,
                                          u32 count);
+
+/** DENG-766: a parsed ragdoll asset (`physics/ragdolls/<name>.ragdoll.toml`). */
+typedef struct de_ragdoll_asset {
+    de_ragdoll_bone bones[DE_RAGDOLL_MAX_BONES];
+    u32 bone_count;
+    bool self_collision;
+    char skeleton[128]; /**< the skeleton asset the bones follow (may be empty) */
+} de_ragdoll_asset;
+
+/**
+ * Parses a ragdoll asset in the DIDE format: `skeleton`, `self_collision` and `[[bones]]`, each
+ * with name, parent (omitted for the root), bind {position, rotation [x, y, z, w]}, shape
+ * ("capsule", "box", "sphere"), radius, half_height, half_extents, shape_offset {position,
+ * rotation}, mass, joint ("cone_twist", "hinge"), joint_rotation, limit_min, limit_max, swing_y
+ * and swing_z. Missing keys are 0 (zero rotations are the identity). Checks only the format and
+ * the parent order (1..DE_RAGDOLL_MAX_BONES bones, bone 0 the root, every other parent lower);
+ * de_ragdoll_create checks the values. DE_ERR_PARSE on failure (`out` then undefined).
+ */
+DE_API de_result de_ragdoll_asset_parse(const char *text, u32 len, de_ragdoll_asset *out);
+/** Registers (or replaces; DeRagdoll spawns again) ragdoll asset `name`. Copies it. */
+DE_API de_result de_physics_ragdoll_asset_register(de_physics_world *p, de_name name,
+                                                   const de_ragdoll_asset *a);
+/** The registered ragdoll asset `name` (valid until it is registered again or the world is
+ *  destroyed), or NULL. */
+DE_API const de_ragdoll_asset *de_physics_ragdoll_asset_find(const de_physics_world *p,
+                                                             de_name name);
 
 /* ---------- 2D (same design, operates in the configured 2D plane) ---------- */
 /*

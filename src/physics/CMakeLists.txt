@@ -165,3 +165,13 @@ if(TARGET de_physics)
         ragdoll_internal.h
         ragdoll.c)
 endif()
+
+# DENG-766: physics authoring (DIDE): material and ragdoll assets (TOML through core's
+# de__toml_parse) and the ECS joint / ragdoll components.
+if(TARGET de_physics)
+    target_sources(de_physics PRIVATE
+        assets.c
+        ecs/authoring.c)
+    target_link_libraries(de_physics PRIVATE de_tp_tomlc17)
+    set_property(TARGET de_physics APPEND PROPERTY DE_MODULE_LIBS de_tp_tomlc17)
+endif()

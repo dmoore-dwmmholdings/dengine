@@ -19,7 +19,14 @@ static de_result components(de_world *w, de__ecs2d *s) {
     static const de_field_info material[] = {
         DE_FIELD(de_material_phys, friction, DE_FK_F32, DE_FIELD_DEFAULT),
         DE_FIELD(de_material_phys, restitution, DE_FK_F32, DE_FIELD_DEFAULT),
-        DE_FIELD(de_material_phys, density, DE_FK_F32, DE_FIELD_DEFAULT)};
+        DE_FIELD_EX(de_material_phys, density, DE_FK_F32, DE_FIELD_DEFAULT,
+                    {0, 0, "kg/m^3", "0 = 1000 (water)", 0, 0}),
+        /* DENG-766: the same fields as the 3D attach (whichever runs first registers it). */
+        DE_FIELD_EX(de_material_phys, friction_combine, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "0 = geometric", "de_combine_mode", 0}),
+        DE_FIELD_EX(de_material_phys, restitution_combine, DE_FK_ENUM, DE_FIELD_DEFAULT,
+                    {0, 0, 0, "0 = maximum", "de_combine_mode", 0})};
+    DE_TRY(de__phys_register_authoring_enums(r));
     static const de_field_info filter[] = {
         DE_FIELD(de_collision_filter, layer, DE_FK_U32, DE_FIELD_DEFAULT),
         DE_FIELD(de_collision_filter, mask, DE_FK_U32, DE_FIELD_DEFAULT),
