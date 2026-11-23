@@ -1850,6 +1850,8 @@ static void read_extra(const de_ep_request *req, pf_extra *x) {
         }
         (void)mpack_reader_destroy(&v);
     }
+    /* DENG-805: close the params map, or MPACK_DEBUG read tracking breaks in destroy. */
+    mpack_done_map(&r);
     (void)mpack_reader_destroy(&r);
 }
 

@@ -360,6 +360,22 @@ if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
     target_include_directories(test_editor_model_inspection PRIVATE "${DE_ROOT_DIR}/src")
 endif()
 
+# DENG-805: DE_MPACK_DEBUG turns mpack read/write tracking on in Debug on every compiler (MSVC
+# got it from _DEBUG only). This test fails when a config that should track does not.
+if(NOT DE_IS_SHIPPING AND TARGET de_tp_dide_protocol)
+    de_add_test(NAME editor_mpack_config SOURCES test_editor_mpack_config.c
+        LIBS de_tp_dide_protocol LABELS unit host)
+    if(TARGET test_editor_mpack_config)
+        if(DE_MPACK_DEBUG STREQUAL "ON")
+            target_compile_definitions(test_editor_mpack_config PRIVATE
+                DE_TEST_MPACK_TRACKING_EXPECTED=1)
+        elseif(DE_MPACK_DEBUG STREQUAL "Debug")
+            target_compile_definitions(test_editor_mpack_config PRIVATE
+                DE_TEST_MPACK_TRACKING_EXPECTED=$<IF:$<CONFIG:Debug>,1,0>)
+        endif()
+    endif()
+endif()
+
 # DENG-695: validate bounded preview PNGs with an independent image decoder.
 if(NOT DE_IS_SHIPPING AND DE_HAS_RENDER AND TARGET de_tp_dide_protocol)
     de_add_test(NAME editor_preview_image SOURCES test_preview_image.c
