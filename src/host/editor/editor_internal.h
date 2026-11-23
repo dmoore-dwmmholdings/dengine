@@ -227,8 +227,24 @@ const char *de__ed_prefab_instance_asset(u64 root);
 void de__ed_prefab_instance_write_base(u64 root, mpack_writer_t *w);
 /** Forgets the instance record whose root is `root`. */
 void de__ed_prefab_instance_drop(u64 root);
-/** Adds an instance record from what de__ed_prefab_instance_write_base wrote. */
-bool de__ed_prefab_instance_restore(u64 root, const char *asset, const char *base, size_t len);
+/** The instance record's prefab-local ids: an array of [entity, scene id] pairs (DENG-571). */
+void de__ed_prefab_instance_write_local(u64 root, mpack_writer_t *w);
+/** Adds an instance record from what de__ed_prefab_instance_write_base and _write_local wrote
+ * (`local` may be NULL: then the record has no prefab-local ids). */
+bool de__ed_prefab_instance_restore(u64 root, const char *asset, const char *base, size_t len,
+                                    const char *local, size_t local_len);
+/** The `prefab.state` edit op (DENG-571): sets prefab definition values and instance base
+ * values from `value` and writes the old ones into `*inv` (in `a`). False with `code`/`msg`. */
+bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_raw *inv,
+                         de_ep_error *code, char *msg, size_t msg_cap);
+/** Runs `ops` as one edit, all or nothing (DENG-571): in open transaction `tx`, or, when `tx` is
+ * 0, in a new transaction of `scene` that it commits. Returns the transaction id; 0 with
+ * `code`/`msg` set on a failure, and then nothing changed. */
+u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_ep_edit_op *ops,
+                    u32 count, de_ep_error *code, char *msg, size_t msg_cap);
+/** The source text of asset `id` (heap memory the caller frees with `*size`); false when the
+ * manifest has no source for it or the file can't be read. */
+bool de__ed_asset_source(de__editor *ed, const char *id, void **data, u64 *size);
 /** The component called `name` in the world (id 0 when there is none). */
 de_component de__ed_component(de__editor *ed, de_ep_str name);
 /** A component's reflected type and data size; false for an unknown component. */

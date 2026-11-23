@@ -323,7 +323,7 @@ static bool snapshot_instance(de__editor *ed, de_ep_arena *a, de_entity root, co
     }
     mpack_writer_t mw;
     de__ed_raw_begin(a, &mw);
-    mpack_start_map(&mw, 3);
+    mpack_start_map(&mw, 4);
     mpack_write_cstr(&mw, "asset");
     mpack_write_cstr(&mw, asset);
     mpack_write_cstr(&mw, "entities");
@@ -348,6 +348,8 @@ static bool snapshot_instance(de__editor *ed, de_ep_arena *a, de_entity root, co
     mpack_finish_array(&mw);
     mpack_write_cstr(&mw, "base");
     de__ed_prefab_instance_write_base(root.bits, &mw);
+    mpack_write_cstr(&mw, "local");
+    de__ed_prefab_instance_write_local(root.bits, &mw);
     mpack_finish_map(&mw);
     *out = de__ed_raw_end(a, &mw);
     return out->ptr != NULL;
@@ -365,6 +367,8 @@ typedef struct snap {
     u32 count;
     const char *base;
     size_t base_len;
+    const char *local; /* [entity, prefab-local id] pairs (DENG-571) */
+    size_t local_len;
 } snap;
 
 static bool snapshot_read(de_ep_arena *a, de_ep_raw value, snap *out) {
@@ -413,12 +417,13 @@ static bool snapshot_read(de_ep_arena *a, de_ep_raw value, snap *out) {
                 mpack_done_map(&r);
             }
             mpack_done_array(&r);
-        } else if (strcmp(key, "base") == 0) {
+        } else if (strcmp(key, "base") == 0 || strcmp(key, "local") == 0) {
+            const bool base = key[0] == 'b';
             const char *begin = r.data;
             mpack_discard(&r);
             if (mpack_reader_error(&r) == mpack_ok) {
-                out->base = begin;
-                out->base_len = (size_t)(r.data - begin);
+                *(base ? &out->base : &out->local) = begin;
+                *(base ? &out->base_len : &out->local_len) = (size_t)(r.data - begin);
             }
         } else {
             mpack_discard(&r);
@@ -493,7 +498,7 @@ static bool restore_instance(de__editor *ed, de_ep_arena *a, const de_ep_edit_op
     de__ed_prefab_instance_drop(s.ents[0].id); /* a stale record of an old root */
     static const char no_base[] = "\x90";
     if (!de__ed_prefab_instance_restore(s.ents[0].id, s.asset, s.base ? s.base : no_base,
-                                        s.base ? s.base_len : 1)) {
+                                        s.base ? s.base_len : 1, s.local, s.local_len)) {
         restore_undo(ed, &s, s.count);
         return fail(f, DE_EP_ERR_INTERNAL, "could not restore the instance record");
     }
@@ -605,6 +610,19 @@ static bool apply_op(de__editor *ed, de_ep_arena *a, const de_ep_edit_op *o, de_
         inv->op = de_ep_cstr("uninstantiate");
         inv->has_entity = true;
         inv->entity = root.bits;
+        return true;
+    }
+
+    /* DENG-571: prefab definition and instance base values, from a prefab apply. */
+    if (de_ep_str_eq(o->op, "prefab.state")) {
+        if (!o->has_value)
+            return fail(f, DE_EP_ERR_INVALID_PARAMS, "prefab.state needs value");
+        de_ep_raw old;
+        if (!de__ed_prefab_state(ed, a, o->value, &old, &f->code, f->msg, sizeof f->msg))
+            return false;
+        inv->op = o->op;
+        inv->has_value = true;
+        inv->value = old;
         return true;
     }
 
@@ -860,8 +878,8 @@ static void send_applied(de__editor *ed, const ed_tx *t) {
 
 /* ---------- Methods ---------- */
 
-static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
-    DE__ED_PARAMS(edit_begin, de_ep_edit_begin_params, q);
+/* A new open transaction of `scene`; NULL with `f` set (busy) when none is free. */
+static ed_tx *tx_open(de__editor *ed, u64 scene, ed_fail *f) {
     u32 open = 0;
     ed_tx *slot = NULL;
     for (u32 i = 0; i < ED_MAX_TX; ++i) {
@@ -870,8 +888,8 @@ static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
             slot = &g_edit.tx[i];
     }
     if (open >= DE_EP_LIMIT_OPEN_TRANSACTIONS) {
-        de__ed_error(w, req->id, DE_EP_ERR_BUSY, "too many open transactions");
-        return;
+        (void)fail(f, DE_EP_ERR_BUSY, "too many open transactions");
+        return NULL;
     }
     if (slot == NULL) {
         /* Recycle the oldest finished transaction (its undo history goes). */
@@ -882,17 +900,64 @@ static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
                 slot = &g_edit.tx[i];
             }
         if (slot == NULL) {
-            de__ed_error(w, req->id, DE_EP_ERR_BUSY, "no free transaction");
-            return;
+            (void)fail(f, DE_EP_ERR_BUSY, "no free transaction");
+            return NULL;
         }
         tx_free(slot);
     }
     slot->id = ++g_edit.next_id;
     slot->state = TX_OPEN;
     slot->in_play = ed->mode != DE_EP_WORLD_MODE_EDIT;
-    slot->scene = q.scene;
+    slot->scene = scene;
+    return slot;
+}
+
+static void on_begin(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
+    DE__ED_PARAMS(edit_begin, de_ep_edit_begin_params, q);
+    ed_fail f = {DE_EP_OK, ""};
+    const ed_tx *slot = tx_open(ed, q.scene, &f);
+    if (slot == NULL) {
+        de__ed_error(w, req->id, f.code, "%s", f.msg);
+        return;
+    }
     de_ep_tx_result r = {slot->id};
     de_ep_write_response_edit_begin(w, req->id, &r);
+}
+
+/* Applies `ops` to open transaction `t`, all or nothing: on a failure what this call applied is
+ * undone and `f` is set. */
+static bool tx_apply(de__editor *ed, de_ep_arena *a, ed_tx *t, const de_ep_edit_op *ops, u32 n,
+                     ed_fail *f) {
+    const u32 first = t->count, first_assigned = t->assigned_count;
+    for (u32 i = 0; i < n; ++i) {
+        de_ep_edit_op inv, applied = ops[i];
+        u64 spawned = 0;
+        if (!applied.has_scene) {
+            applied.has_scene = true;
+            applied.scene = t->scene;
+        }
+        if (!apply_op(ed, a, &applied, &inv, &spawned, f)) {
+            for (u32 k = t->count; k > first; --k) {
+                de_ep_edit_op undo, ignored;
+                u64 s2 = 0;
+                ed_fail f2;
+                if (op_of_blob(&t->pairs[k - 1].inv, a, &undo))
+                    (void)apply_op(ed, a, &undo, &ignored, &s2, &f2);
+                blob_free(&t->pairs[k - 1].fwd);
+                blob_free(&t->pairs[k - 1].inv);
+            }
+            t->count = first;
+            t->assigned_count = first_assigned;
+            return false;
+        }
+        if (spawned != 0) {
+            applied.has_entity = true;
+            applied.entity = spawned;
+            tx_assign(t, spawned);
+        }
+        tx_push(t, blob_of_op(ed, &applied), blob_of_op(ed, &inv));
+    }
+    return true;
 }
 
 static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpack_writer_t *w) {
@@ -906,37 +971,10 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         de__ed_error(w, req->id, DE_EP_ERR_CONFLICT, "transaction %u isn't open", q.tx);
         return;
     }
-    const u32 first = t->count, first_assigned = t->assigned_count;
-    for (u32 i = 0; i < q.ops.count; ++i) {
-        de_ep_edit_op inv, applied = q.ops.items[i];
-        u64 spawned = 0;
-        ed_fail f = {DE_EP_OK, ""};
-        if (!applied.has_scene) {
-            applied.has_scene = true;
-            applied.scene = t->scene;
-        }
-        if (!apply_op(ed, a, &applied, &inv, &spawned, &f)) {
-            /* All or nothing: undo what this call applied. */
-            for (u32 k = t->count; k > first; --k) {
-                de_ep_edit_op undo, ignored;
-                u64 s2 = 0;
-                ed_fail f2;
-                if (op_of_blob(&t->pairs[k - 1].inv, a, &undo))
-                    (void)apply_op(ed, a, &undo, &ignored, &s2, &f2);
-                blob_free(&t->pairs[k - 1].fwd);
-                blob_free(&t->pairs[k - 1].inv);
-            }
-            t->count = first;
-            t->assigned_count = first_assigned;
-            de__ed_error(w, req->id, f.code, "%s", f.msg);
-            return;
-        }
-        if (spawned != 0) {
-            applied.has_entity = true;
-            applied.entity = spawned;
-            tx_assign(t, spawned);
-        }
-        tx_push(t, blob_of_op(ed, &applied), blob_of_op(ed, &inv));
+    ed_fail f = {DE_EP_OK, ""};
+    if (!tx_apply(ed, a, t, q.ops.items, q.ops.count, &f)) {
+        de__ed_error(w, req->id, f.code, "%s", f.msg);
+        return;
     }
     de_ep_empty e;
     memset(&e, 0, sizeof e);
@@ -960,6 +998,40 @@ static void on_commit(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     de_ep_write_response_edit_commit(w, req->id, &e);
     send_applied(ed, t);
     send_dirty(ed, t->scene);
+}
+
+u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_ep_edit_op *ops,
+                    u32 count, de_ep_error *code, char *msg, size_t msg_cap) {
+    ed_fail f = {DE_EP_OK, ""};
+    ed_tx *t = NULL;
+    if (tx != 0) {
+        t = tx_find(tx);
+        if (t == NULL)
+            (void)fail(&f, DE_EP_ERR_NOT_FOUND, "transaction %u", tx);
+        else if (t->state != TX_OPEN)
+            (void)fail(&f, DE_EP_ERR_CONFLICT, "transaction %u isn't open", tx);
+        if (f.code != DE_EP_OK)
+            t = NULL;
+    } else {
+        t = tx_open(ed, scene, &f);
+    }
+    if (t != NULL && !tx_apply(ed, a, t, ops, count, &f)) {
+        if (tx == 0)
+            tx_free(t); /* nothing in it: the failed call undid its own ops */
+        t = NULL;
+    }
+    if (t == NULL) {
+        *code = f.code;
+        snprintf(msg, msg_cap, "%s", f.msg);
+        return 0;
+    }
+    const u32 id = t->id;
+    if (tx == 0) {
+        t->state = TX_COMMITTED;
+        send_applied(ed, t);
+        send_dirty(ed, t->scene);
+    }
+    return id;
 }
 
 /* Applies a transaction's inverses (undo) or ops (redo); false with `f` set on a failure. Each
