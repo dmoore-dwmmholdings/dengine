@@ -1,0 +1,14 @@
+# DENG-709: declarations for the asset.animationPreview service test. A held backend completes
+# the loads, so the sources are never read.
+[assets]
+wave = {type="anim_clip", source="wave.anim"}
+c1 = {type="anim_clip", source="c1.anim"}
+c2 = {type="anim_clip", source="c2.anim"}
+c3 = {type="anim_clip", source="c3.anim"}
+c4 = {type="anim_clip", source="c4.anim"}
+c5 = {type="anim_clip", source="c5.anim"}
+c6 = {type="anim_clip", source="c6.anim"}
+c7 = {type="anim_clip", source="c7.anim"}
+rig = {type="skeleton", source="rig.skel"}
+hero = {type="model", source="hero.model"}
+tex = {type="texture", source="tex.png"}

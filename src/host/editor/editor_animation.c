@@ -14,33 +14,51 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The retained source set: model parents, clips and skeletons shared by the clips being
+ * previewed. Each entry holds one load reference until it idles out (DE__ED_ANIM_IDLE_NS without
+ * a request), the IDE disconnects, or a reload or reimport changes cooked data. Busy when full
+ * and nothing is idle, like the DIDE mock (DIDE-308). */
+#define DE__ED_ANIM_SOURCES 8u
+#define DE__ED_ANIM_IDLE_NS 10000000000ull
+
+typedef struct anim_source {
+    de_asset_id id;
+    de_load_handle load;
+    u64 used;
+} anim_source;
 static struct {
-    char clip[1025], parent[1025];
-    de_asset_id ids[3];
-    de_load_handle loads[3];
+    anim_source held[DE__ED_ANIM_SOURCES];
     u32 count;
-    u64 last_request, samples;
+    u64 samples;
 } preview;
 
+static void drop(de__editor *ed, u32 i) {
+    de_asset_cancel(ed->e->assets, preview.held[i].load);
+    de_asset_release(ed->e->assets, preview.held[i].load);
+    preview.held[i] = preview.held[--preview.count];
+    memset(&preview.held[preview.count], 0, sizeof preview.held[0]);
+}
 static void reset(de__editor *ed) {
-    for (u32 i = 0; i < preview.count; ++i) {
-        de_asset_cancel(ed->e->assets, preview.loads[i]);
-        de_asset_release(ed->e->assets, preview.loads[i]);
-    }
-    memset(&preview, 0, sizeof preview);
+    while (preview.count)
+        drop(ed, preview.count - 1);
 }
 void de__ed_animation_invalidate(de__editor *ed) {
     reset(ed);
 }
+static void idle(de__editor *ed, u64 now) {
+    for (u32 i = preview.count; i-- > 0;)
+        if (now - preview.held[i].used >= DE__ED_ANIM_IDLE_NS)
+            drop(ed, i);
+}
 static void tick(de__editor *ed) {
-    if (preview.count && de_time_now_ns() - preview.last_request >= 5000000000ull)
-        reset(ed);
+    if (preview.count)
+        idle(ed, de_time_now_ns());
 }
 static bool valid_id(de_ep_str s) {
     return s.ptr && s.len && s.len <= 1024 && !memchr(s.ptr, 0, s.len);
 }
 static const de__slot *ready(de__editor *ed, const char *name, de_asset_id id, const char *type,
-                             const de_ep_request *req, mpack_writer_t *w) {
+                             u64 now, const de_ep_request *req, mpack_writer_t *w) {
     de_asset_system *assets = ed->e->assets;
     u32 handle = de__asset_handle_of(assets, id, NULL);
     const de__slot *slot = handle ? de__slot_get(assets, handle) : NULL;
@@ -52,11 +70,12 @@ static const de__slot *ready(de__editor *ed, const char *name, de_asset_id id, c
         de__ed_error(w, req->id, DE_EP_ERR_INVALID_PARAMS, "%s must be %s", name, type);
         return NULL;
     }
-    bool held = false;
+    u32 at = preview.count;
     for (u32 i = 0; i < preview.count; ++i)
-        held |= preview.ids[i].hash == id.hash;
-    if (!held) {
-        if (preview.count == 3) {
+        if (preview.held[i].id.hash == id.hash)
+            at = i;
+    if (at == preview.count) {
+        if (preview.count == DE__ED_ANIM_SOURCES) {
             de__ed_error(w, req->id, DE_EP_ERR_BUSY, "animation source set is full");
             return NULL;
         }
@@ -65,12 +84,14 @@ static const de__slot *ready(de__editor *ed, const char *name, de_asset_id id, c
             de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "cannot retain animation source");
             return NULL;
         }
-        preview.ids[preview.count] = id;
-        preview.loads[preview.count++] = load;
+        preview.held[preview.count++] = (anim_source){id, load, now};
     }
+    preview.held[at].used = now;
     if (slot->state == DE_LOAD_FAILED || slot->state == DE_LOAD_PARTIAL) {
         char why[256] = {0};
         (void)de_asset_last_error(assets, id, why, sizeof why);
+        /* Do not keep a dead reference: the next request retries the load. */
+        drop(ed, at);
         de__ed_error(w, req->id, DE_EP_ERR_INTERNAL, "animation source failed: %s", why);
         return NULL;
     }
@@ -95,20 +116,18 @@ static void sample(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpa
                      "invalid animation ID, parent, time or version pair");
         return;
     }
-    if (!de_ep_str_eq(q.id, preview.clip) ||
-        (q.has_parent ? !de_ep_str_eq(q.parent, preview.parent) : preview.parent[0] != 0)) {
-        reset(ed);
-        memcpy(preview.clip, q.id.ptr, q.id.len);
-        if (q.has_parent)
-            memcpy(preview.parent, q.parent.ptr, q.parent.len);
-    }
-    preview.last_request = de_time_now_ns();
+    char clip_name[1025] = {0}, parent_name[1025] = {0};
+    memcpy(clip_name, q.id.ptr, q.id.len);
+    if (q.has_parent)
+        memcpy(parent_name, q.parent.ptr, q.parent.len);
+    const u64 now = de_time_now_ns();
+    idle(ed, now);
     /* Cooking the parent declares generated children. Do not start a failed child load first. */
     if (q.has_parent &&
-        !ready(ed, preview.parent, de_asset_id_from(preview.parent), "model", req, w))
+        !ready(ed, parent_name, de_asset_id_from(parent_name), "model", now, req, w))
         return;
     const de__slot *clip_slot =
-        ready(ed, preview.clip, de_asset_id_from(preview.clip), "anim_clip", req, w);
+        ready(ed, clip_name, de_asset_id_from(clip_name), "anim_clip", now, req, w);
     if (!clip_slot)
         return;
     const de__anim_asset *clip = de__slot_object(clip_slot);
@@ -117,7 +136,7 @@ static void sample(de__editor *ed, const de_ep_request *req, de_ep_arena *a, mpa
         return;
     }
     de_asset_id skeleton_id = {clip->clip.skeleton_id};
-    const de__slot *skeleton_slot = ready(ed, "clip skeleton", skeleton_id, "skeleton", req, w);
+    const de__slot *skeleton_slot = ready(ed, "clip skeleton", skeleton_id, "skeleton", now, req, w);
     if (!skeleton_slot)
         return;
     const de__anim_asset *skeleton = de__slot_object(skeleton_slot);
