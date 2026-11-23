@@ -27,6 +27,7 @@ typedef struct safety_fx {
     unsigned char arena[65536];
     char note[32768];
     char copy[128]; /* DENG-798: "tmp798:/<dir>", the writable copy of the prefab fixtures */
+    bool safe676_data; /* DENG-814: safe676:/ is the shared fixture directory, to unmount */
 } safety_fx;
 
 static void safety_fx_setup(safety_fx *f) {
@@ -48,6 +49,10 @@ static void safety_fx_teardown(safety_fx *f) {
     for (u32 i = 0; i < f->ed.reset_count; ++i)
         f->ed.resets[i](&f->ed);
     copy_remove(f);
+    /* DENG-814: the mount table is process-wide. A safe676:/ left over would come first in the
+     * next test's reads, which would then see the shared fixtures, not its writable copy. */
+    if (f->safe676_data)
+        (void)de_fs_unmount("safe676", DE_EDITOR_SAFETY_DATA_DIR);
     de_world_destroy(f->engine.world);
     if (f->engine.assets)
         de_asset_system_destroy(f->engine.assets);
@@ -336,6 +341,7 @@ TEST_F(editor_safety, prefab_revert_restores_only_the_field_and_rejects_missing_
     ASSERT_TRUE(DE_HANDLE_VALID(de_component_register(
         f->engine.world, de_type_find(f->engine.types, "TTarget"), DE_COMP_SERIALIZE)));
     ASSERT_EQ(de_fs_mount("safe676", DE_EDITOR_SAFETY_DATA_DIR, 0, 0), DE_OK);
+    f->safe676_data = true;
     de_fp_env_init_thread();
     ASSERT_EQ(de_task_system_create(&(de_task_system_desc){.worker_count = 1}, &f->tasks), DE_OK);
     ASSERT_EQ(de_asset_system_create(&(de_asset_system_desc){.tasks = f->tasks,

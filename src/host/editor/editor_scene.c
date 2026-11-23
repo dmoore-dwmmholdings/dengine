@@ -1245,6 +1245,11 @@ typedef struct ed_def {
     ed_nest *nest;
     u32 nest_count;
     bool ready; /* its asset loaded (DENG-807): the values are the cooked prefab's */
+    /* The hash of the source bytes these values stand for, when the editor wrote them itself or
+     * read them in a reload. A reload event whose source still has this hash is the echo of an
+     * own write: the cooked asset it reports can be older than the values (DENG-813). */
+    bool src_known;
+    u64 src_hash;
 } ed_def;
 
 static struct {
@@ -2730,6 +2735,17 @@ static void instance_refresh(de__editor *ed, ed_instance *inst, const ed_def *d)
     }
 }
 
+/* The hash of `asset`'s source file as it is now. False when it can't be read. */
+static bool source_hash(de__editor *ed, const char *asset, u64 *out) {
+    void *src = NULL;
+    u64 size = 0;
+    if (!de__ed_asset_source(ed, asset, &src, &size))
+        return false;
+    *out = de_hash64(src, (size_t)size, 0);
+    DE_FREE(de_heap_allocator(), src, size + 1);
+    return true;
+}
+
 void de__ed_prefab_reloaded(de__editor *ed, de_asset_id id) {
     if (ed->e->assets == NULL || g_prefab.count == 0)
         return;
@@ -2764,14 +2780,25 @@ void de__ed_prefab_reloaded(de__editor *ed, de_asset_id id) {
         if (!mark[i])
             continue;
         ed_def *d = g_prefab.defs[i];
+        /* A reload runs on a snapshot of the file and its event can come late: after the editor
+         * wrote the file again (undo, redo) the cooked asset is older than the definition. When
+         * the source is the one the definition came from, there is nothing new to read. */
+        u64 now = 0;
+        const bool have_now = source_hash(ed, d->asset, &now);
+        if (have_now && d->src_known && d->src_hash == now)
+            continue;
         ed_def fresh;
         memset(&fresh, 0, sizeof fresh);
         snprintf(fresh.asset, sizeof fresh.asset, "%s", d->asset);
         def_fill(ed, &fresh);
         if (def_same(d, &fresh)) {
+            d->src_known = have_now;
+            d->src_hash = now;
             def_free_inner(&fresh);
             continue;
         }
+        fresh.src_known = have_now;
+        fresh.src_hash = now;
         def_free_inner(d);
         *d = fresh;
         changed[i] = any_changed = true;
@@ -5122,6 +5149,11 @@ bool de__ed_prefab_state(de__editor *ed, de_ep_arena *a, de_ep_raw value, de_ep_
             continue;
         if (ed->e->assets != NULL)
             (void)de__asset_reload_queue(ed->e->assets, de_asset_id_from(files[i].asset));
+        ed_def *wd = def_find(files[i].asset);
+        if (wd != NULL) {
+            wd->src_known = true;
+            wd->src_hash = de_hash64(files[i].next, files[i].next_len, 0);
+        }
     }
     files_release(files, nf);
     bool ok = true;
