@@ -891,6 +891,7 @@ static void tick(de__editor *ed) {
             break;
         case DE_ASSET_EV_RELOADED:
             de__ed_animation_invalidate(ed);
+            de__ed_prefab_reloaded(ed, ev->id);
 #if DE_HAS_RENDER
             de__ed_preview_invalidate();
 #endif

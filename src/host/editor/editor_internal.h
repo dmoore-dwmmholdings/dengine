@@ -267,6 +267,13 @@ const char *de__ed_prefab_source_edit(const de_type_registry *types, const char 
                                       const de__ed_src_edit *edits, u32 count, char **out,
                                       size_t *out_len, char *msg, size_t msg_cap);
 void de__ed_prefab_source_free(char *text, size_t len);
+/** A prefab asset was reloaded (DENG-803): reads the definitions that depend on it again; when
+ * any changed, bumps the prefab revision and updates the instances' non-overridden fields. */
+void de__ed_prefab_reloaded(de__editor *ed, de_asset_id id);
+/** Writes `value` into `path` ("Component.field") of `entity` directly: no transaction, no undo
+ * entry (DENG-803). `a` is scratch. */
+bool de__ed_set_value(de__editor *ed, de_ep_arena *a, u64 entity, const char *path,
+                      de_ep_raw value);
 /** The reason of the last failed prefab.state op ("write", "source_changed", ...), or NULL. */
 const char *de__ed_prefab_fail_reason(void);
 /** The component called `name` in the world (id 0 when there is none). */
