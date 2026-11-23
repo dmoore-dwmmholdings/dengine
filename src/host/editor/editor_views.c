@@ -849,6 +849,10 @@ static void camera_apply(de__editor *ed, ed_view *v) {
 
 static void camera_store(ed_view *v, const de_ep_camera *c) {
     v->camera = *c;
+    /* DENG-818: orthoHeight <= 0 is not a usable orthographic extent. Treat it as absent, so a
+     * perspective camera (fovY > 0) stays perspective instead of turning orthographic and black. */
+    if (v->camera.has_ortho_height && !(v->camera.ortho_height > 0.0f))
+        v->camera.has_ortho_height = false;
     v->cam_dirty = true;
     for (u32 i = 0; i < 3; ++i)
         v->cam_pos[i] = i < c->position.count ? c->position.items[i] : 0.0;
