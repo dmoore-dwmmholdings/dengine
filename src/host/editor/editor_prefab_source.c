@@ -116,6 +116,11 @@ static void put_hex(sbuf *b, u64 v) {
     sb_put(b, "\"", 1);
 }
 
+/* An entity id as the sources spell them: "0x13". */
+static void put_id(sbuf *b, u64 v) {
+    sb_putf(b, "\"0x%llx\"", (unsigned long long)v);
+}
+
 static bool node_f64(mpack_node_t n, f64 *out) {
     switch (mpack_node_type(n)) {
     case mpack_type_float: *out = mpack_node_float(n); return true;
@@ -816,6 +821,244 @@ static const char *comp_edit(const de_type_registry *types, const sbuf *cur, sca
     return why;
 }
 
+/* ---------- Whole entities and nesting pairs (DENG-811) ---------- */
+
+/* Where an item's line starts, with one blank line before it when there is one. */
+static size_t with_blank_before(const char *s, size_t at) {
+    if (at >= 2 && s[at - 1] == '\n' && s[at - 2] == '\n')
+        return at - 1;
+    if (at >= 4 && s[at - 1] == '\n' && s[at - 2] == '\r' && s[at - 3] == '\n')
+        return at - 2;
+    return at;
+}
+
+/* The span of entity `sid`'s whole block: [[entity]] with id = sid and its [entity.X] tables, or
+ * the keyed [entity.<sid>] tables (one run). False when the source does not hold it so. */
+static bool locate_entity(const scan *c, u64 sid, size_t *start, size_t *end) {
+    bool array = false;
+    for (u32 i = 0; i < c->count; ++i)
+        array |= c->items[i].kind == IT_ARRAY && c->items[i].nseg == 1 &&
+                 seg_is(&c->items[i], 0, "entity");
+    bool found = false, open = false, done = false;
+    u32 block = 0; /* the array layout: the current [[entity]] item */
+    bool in_block = false;
+    for (u32 i = 0; i < c->count; ++i) {
+        const item *it = &c->items[i];
+        if (it->kind == IT_ARRAY) {
+            if (open)
+                done = true;
+            open = false;
+            in_block = array && it->nseg == 1 && seg_is(it, 0, "entity");
+            block = i;
+            continue;
+        }
+        if (it->kind == IT_TABLE) {
+            u64 id = 0;
+            const bool ent = seg_is(it, 0, "entity");
+            if (array) {
+                in_block = false;
+                if (!ent && open) {
+                    open = false;
+                    done = true;
+                }
+                if (open)
+                    *end = it->line_end;
+                continue;
+            }
+            const bool mine = ent && it->nseg >= 2 && it->nseg <= SEG_MAX &&
+                              parse_id(it->seg[1], strlen(it->seg[1]), &id) && id == sid;
+            if (mine) {
+                if (done)
+                    return false; /* split in two runs */
+                if (!found)
+                    *start = it->line_start;
+                found = open = true;
+                *end = it->line_end;
+            } else if (open) {
+                open = false;
+                done = true;
+            }
+            continue;
+        }
+        if (array && in_block && it->nseg == 1 && seg_is(it, 0, "id")) {
+            u64 id = 0;
+            if (parse_id(c->s + it->vs, it->ve - it->vs, &id) && id == sid) {
+                if (found)
+                    return false;
+                found = open = true;
+                *start = c->items[block].line_start;
+            }
+        }
+        if (open)
+            *end = it->line_end;
+    }
+    return found;
+}
+
+/* Path "": `val` nil drops entity `sid`, or {parent, components} appends it. */
+static const char *entity_edit(const de_type_registry *types, const sbuf *cur, scan *c,
+                               const de__ed_src_edit *ed, const char *eol, sbuf *next,
+                               char *msg, size_t msg_cap) {
+    if (!scan_all(c, cur->p, cur->len))
+        return failf(msg, msg_cap, c->oom ? "memory" : "source_layout",
+                     c->oom ? "out of memory" : "the source is not TOML the editor can edit");
+    bool array = false;
+    for (u32 i = 0; i < c->count; ++i)
+        array |= c->items[i].kind == IT_ARRAY && c->items[i].nseg == 1 &&
+                 seg_is(&c->items[i], 0, "entity");
+    size_t start = 0, end = 0;
+    const bool has = locate_entity(c, ed->sid, &start, &end);
+    mpack_tree_t tree;
+    mpack_tree_init_data(&tree, (const char *)ed->val, ed->val_len);
+    mpack_tree_parse(&tree);
+    const char *why = NULL;
+    const mpack_node_t root = mpack_tree_root(&tree);
+    if (mpack_tree_error(&tree) != mpack_ok) {
+        why = failf(msg, msg_cap, "value", "entity 0x%llx has a malformed value",
+                    (unsigned long long)ed->sid);
+    } else if (mpack_node_type(root) == mpack_type_nil) {
+        if (!has) {
+            why = failf(msg, msg_cap, "source_layout", "the source does not hold entity 0x%llx "
+                        "as one block", (unsigned long long)ed->sid);
+        } else {
+            const size_t from = with_blank_before(cur->p, start);
+            sb_put(next, cur->p, from);
+            sb_put(next, cur->p + end, cur->len - end);
+        }
+    } else if (has || mpack_node_type(root) != mpack_type_map) {
+        why = failf(msg, msg_cap, has ? "source_layout" : "value",
+                    has ? "the source already holds entity 0x%llx" : "entity 0x%llx has a "
+                    "malformed value", (unsigned long long)ed->sid);
+    } else {
+        sbuf block = {0};
+        cloc l;
+        memset(&l, 0, sizeof l);
+        for (u32 i = 0; !array && i < c->count; ++i)
+            l.keyed |= c->items[i].kind == IT_TABLE && c->items[i].nseg >= 2 &&
+                       seg_is(&c->items[i], 0, "entity");
+        snprintf(l.id, sizeof l.id, "0x%llx", (unsigned long long)ed->sid);
+        sb_puts(&block, eol);
+        u64 parent = 0;
+        const mpack_node_t pn = mpack_node_map_cstr_optional(root, "parent");
+        if (mpack_node_type(pn) == mpack_type_uint)
+            parent = mpack_node_u64(pn);
+        if (l.keyed) {
+            sb_putf(&block, "[entity.%s]%s", l.id, eol);
+        } else {
+            sb_putf(&block, "[[entity]]%sid = ", eol);
+            put_id(&block, ed->sid);
+            sb_puts(&block, eol);
+        }
+        if (parent != 0) {
+            sb_puts(&block, "parent = ");
+            put_id(&block, parent);
+            sb_puts(&block, eol);
+        }
+        const mpack_node_t comps = mpack_node_map_cstr_optional(root, "components");
+        bool ok = mpack_node_type(comps) == mpack_type_map || mpack_node_type(comps) ==
+                  mpack_type_missing;
+        for (size_t i = 0; ok && mpack_node_type(comps) == mpack_type_map &&
+                           i < mpack_node_map_count(comps); ++i) {
+            const mpack_node_t k = mpack_node_map_key_at(comps, i);
+            char comp[SEG_CAP];
+            const size_t kl = mpack_node_type(k) == mpack_type_str ? mpack_node_strlen(k) : 0;
+            if (kl == 0 || kl >= sizeof comp) {
+                ok = false;
+                break;
+            }
+            memcpy(comp, mpack_node_str(k), kl);
+            comp[kl] = '\0';
+            ok = put_table(&block, types, &l, comp, mpack_node_map_value_at(comps, i), eol);
+        }
+        if (!ok || block.oom) {
+            why = failf(msg, msg_cap, "value", "entity 0x%llx has no source spelling",
+                        (unsigned long long)ed->sid);
+        } else {
+            sb_put(next, cur->p, cur->len);
+            if (cur->len > 0 && cur->p[cur->len - 1] != '\n')
+                sb_puts(next, eol);
+            sb_put(next, block.p, block.len);
+        }
+        sb_free(&block);
+    }
+    (void)mpack_tree_destroy(&tree);
+    return why;
+}
+
+/* Path "@nest": `val` {root, inner, outer} appends the pair to the ids of the
+ * [[prefab.nested]] entry whose root is `root`. */
+static const char *nest_edit(const sbuf *cur, scan *c, const de__ed_src_edit *ed, sbuf *next,
+                             char *msg, size_t msg_cap) {
+    if (!scan_all(c, cur->p, cur->len))
+        return failf(msg, msg_cap, c->oom ? "memory" : "source_layout",
+                     c->oom ? "out of memory" : "the source is not TOML the editor can edit");
+    mpack_tree_t tree;
+    mpack_tree_init_data(&tree, (const char *)ed->val, ed->val_len);
+    mpack_tree_parse(&tree);
+    const mpack_node_t root = mpack_tree_root(&tree);
+    u64 want = 0, inner = 0, outer = 0;
+    const bool ok = mpack_tree_error(&tree) == mpack_ok &&
+                    mpack_node_type(root) == mpack_type_map;
+    if (ok) {
+        want = mpack_node_u64(mpack_node_map_cstr(root, "root"));
+        inner = mpack_node_u64(mpack_node_map_cstr(root, "inner"));
+        outer = mpack_node_u64(mpack_node_map_cstr(root, "outer"));
+    }
+    const bool bad = !ok || mpack_tree_error(&tree) != mpack_ok;
+    (void)mpack_tree_destroy(&tree);
+    if (bad)
+        return failf(msg, msg_cap, "value", "a nesting pair has a malformed value");
+    bool in_nest = false, is_root = false;
+    const item *ids = NULL, *hit = NULL;
+    for (u32 i = 0; i <= c->count; ++i) {
+        const item *it = i < c->count ? &c->items[i] : NULL;
+        if (it == NULL || it->kind != IT_KEY) {
+            if (in_nest && is_root && ids != NULL) {
+                if (hit != NULL)
+                    return failf(msg, msg_cap, "source_layout", "two nested prefabs have root "
+                                 "0x%llx", (unsigned long long)want);
+                hit = ids;
+            }
+            if (it == NULL)
+                break;
+            in_nest = it->kind == IT_ARRAY && it->nseg == 2 && seg_is(it, 0, "prefab") &&
+                      seg_is(it, 1, "nested");
+            is_root = false;
+            ids = NULL;
+            continue;
+        }
+        if (!in_nest || it->nseg != 1)
+            continue;
+        u64 id = 0;
+        if (seg_is(it, 0, "root"))
+            is_root = parse_id(c->s + it->vs, it->ve - it->vs, &id) && id == want;
+        else if (seg_is(it, 0, "ids"))
+            ids = it;
+    }
+    if (hit == NULL || hit->ve <= hit->vs || cur->p[hit->ve - 1] != ']')
+        return failf(msg, msg_cap, "source_layout", "the source has no [[prefab.nested]] ids "
+                     "for root 0x%llx", (unsigned long long)want);
+    size_t at = hit->ve - 1;
+    size_t back = at;
+    while (back > hit->vs && (cur->p[back - 1] == ' ' || cur->p[back - 1] == '\t' ||
+                              cur->p[back - 1] == '\n' || cur->p[back - 1] == '\r'))
+        --back;
+    const bool first = back > hit->vs && cur->p[back - 1] == '[';
+    const bool comma = back > hit->vs && cur->p[back - 1] == ',';
+    sb_put(next, cur->p, back);
+    if (!first && !comma)
+        sb_puts(next, ", ");
+    else if (comma)
+        sb_puts(next, " ");
+    sb_puts(next, "[");
+    put_id(next, inner);
+    sb_puts(next, ", ");
+    put_id(next, outer);
+    sb_puts(next, "]");
+    sb_put(next, cur->p + at, cur->len - at);
+    return NULL;
+}
+
 /* ---------- Entry point ---------- */
 
 const char *de__ed_prefab_source_edit(const de_type_registry *types, const char *src, size_t len,
@@ -834,6 +1077,21 @@ const char *de__ed_prefab_source_edit(const de_type_registry *types, const char 
     const char *why = NULL;
     for (u32 e = 0; e < count && why == NULL; ++e) {
         const de__ed_src_edit *ed = &edits[e];
+        if (ed->path[0] == '\0' || strcmp(ed->path, "@nest") == 0) {
+            sbuf next = {0};
+            why = ed->path[0] == '\0'
+                      ? entity_edit(types, &cur, &c, ed, eol, &next, msg, msg_cap)
+                      : nest_edit(&cur, &c, ed, &next, msg, msg_cap);
+            if (why == NULL && next.oom)
+                why = failf(msg, msg_cap, "memory", "out of memory");
+            if (why != NULL) {
+                sb_free(&next);
+                continue;
+            }
+            sb_free(&cur);
+            cur = next;
+            continue;
+        }
         const char *dot = strchr(ed->path, '.');
         if (dot == NULL) {
             sbuf next = {0};
