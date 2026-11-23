@@ -610,9 +610,9 @@ notes = "Joe-Kuo D(6) numeric inputs for the generated 1024-dimensional PT matri
 # cache before offline verification (see docs/building.md).
 [[lib]]
 name = "dide_protocol"
-version = "1.17-fdf7cd36a9cd"
-url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/fdf7cd36a9cd093106686400f53971cb99320c2d"
-sha256 = "719e1888f33dd58550ba280281551501ce95fa057a0e85bc3b3f9b41c980ef86"
+version = "1.18-285c49fa9f9d"
+url = "https://api.github.com/repos/dmoore-dwmmholdings/dide/tarball/285c49fa9f9d6f4e8e615cc643616dc151d63bf9"
+sha256 = "fab31984ed8b2d04cde906741da257311f561a5ba6d2ecdbb53863f1e4153c5e"
 license = "MIT"
 strip = 3
 license_file = "third_party/mpack/LICENSE"
@@ -625,5 +625,7 @@ local = ["CMakeLists.txt", "patches/**"]
 # ui.editor).
 # DENG-785: pinned at DIDE main 98b63cd (protocol 1.15, DIDE-356: PickResult.uiStack,
 # ui.nodeCorners, ui.themes/themeVars/previewTheme, loc.locales/strings/previewLocale).
+# DENG-797: pinned at DIDE main 285c49f (protocol 1.18, DIDE-382: ApplyResult, RevertResult,
+# PrefabErrorData; DIDE-R37).
 patches = ["patches/0001-raw-values-preserve-reader-tracking.patch"]
 notes = "Dev-only: linked by the host's editor service (src/host/editor), never in Shipping."

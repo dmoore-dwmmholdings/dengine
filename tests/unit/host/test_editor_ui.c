@@ -66,7 +66,7 @@ static void ui_ed_fx_setup(ui_ed_fx *f) {
     f->ed.note = f->note;
     f->ed.note_cap = sizeof f->note;
     f->ed.proto_major = 1; /* as hello agrees with a 1.17 IDE */
-    f->ed.proto_minor = 17;
+    f->ed.proto_minor = 18;
     de__ed_edit_register(&f->ed);
     de__ed_ui_register(&f->ed);
 }
@@ -189,7 +189,7 @@ TEST_F(editor_ui, advertises_ui_editor_and_registers_ui_layout, ui_ed_fx) {
         found = found || strcmp(f->ed.caps[i], "ui.editor") == 0;
     EXPECT_TRUE(found);
     EXPECT_TRUE(f->ed.handlers[DE_EP_METHOD_UI_LAYOUT] != NULL);
-    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.17"); /* pinned dide fdf7cd36 (DENG-788) */
+    EXPECT_STREQ(DE_EP_PROTOCOL_VERSION, "1.18"); /* pinned dide 285c49f (DENG-797) */
 }
 
 TEST_F(editor_ui, layout_reports_pre_order_rects_at_the_preview_viewport, ui_ed_fx) {
@@ -1039,7 +1039,7 @@ TEST_F(editor_ui, text_metrics_errors_and_empty_text, ui_ed_fx) {
     /* Below protocol 1.17 the method is unsupported. */
     f->ed.proto_minor = 16;
     EXPECT_EQ(code_of(measure(f, &(measure_in){.text = "x"})), DE_EP_ERR_UNSUPPORTED);
-    f->ed.proto_minor = 17;
+    f->ed.proto_minor = 18;
     /* Empty text: the engine lays out one empty line, as a label of no text is one line tall
      * (the dide mock returns no lines and size [0, 0]; DENG-788 files that as a DIDE issue). */
     mpack_node_t r = res(measure(f, &(measure_in){.text = ""}));

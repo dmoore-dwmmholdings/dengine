@@ -814,6 +814,52 @@ TEST_F(editor_prefab_overrides, revert_is_undoable_and_apply_joins_an_open_trans
     EXPECT_EQ(checksum(f), changed);
 }
 
+/* DENG-797: the 1.18 wire shapes (ApplyResult, RevertResult, PrefabErrorData, OverrideList), key
+ * by key and in order. */
+static void expect_keys(mpack_node_t map, const char *const *keys, u32 n) {
+    ASSERT_EQ(mpack_node_map_count(map), n);
+    for (u32 i = 0; i < n; ++i)
+        EXPECT_TRUE(node_streq(mpack_node_map_key_at(map, i), keys[i]));
+}
+
+TEST_F(editor_prefab_overrides, results_and_error_data_have_the_1_18_shapes, safety_fx) {
+    const pf_world p = prefab_world(f);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    char response[2048];
+    mpack_tree_t tree;
+    mpack_node_t root = prefab_call(f, DE_EP_METHOD_PREFAB_OVERRIDES, a, (pf_call){0}, &tree,
+                                    response);
+    static const char *const list_keys[] = {"overrides", "asset", "root", "revision"};
+    expect_keys(mpack_node_map_cstr(root, "result"), list_keys, 4);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->max = 3;
+    root = prefab_call(f, DE_EP_METHOD_PREFAB_OVERRIDES, a, (pf_call){0}, &tree, response);
+    mpack_node_t row = mpack_node_array_at(
+        mpack_node_map_cstr(mpack_node_map_cstr(root, "result"), "overrides"), 0);
+    static const char *const row_keys[] = {"path", "value", "entity", "base",
+                                           "source", "chain", "ids"};
+    expect_keys(row, row_keys, 7);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    root = prefab_call(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.max"},
+                       &tree, response);
+    static const char *const apply_keys[] = {"files", "tx", "revision", "prefabs", "entities"};
+    expect_keys(mpack_node_map_cstr(root, "result"), apply_keys, 5);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->max = 4;
+    root = prefab_call(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a, (pf_call){.path = "THealth.max"},
+                       &tree, response);
+    static const char *const revert_keys[] = {"tx", "revision"};
+    expect_keys(mpack_node_map_cstr(root, "result"), revert_keys, 2);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+    root = prefab_call(f, DE_EP_METHOD_PREFAB_REVERT_OVERRIDE, a, (pf_call){.path = "THealth.max"},
+                       &tree, response);
+    static const char *const err_keys[] = {"code", "message", "data"};
+    expect_keys(mpack_node_map_cstr(root, "error"), err_keys, 3);
+    static const char *const data_keys[] = {"reason", "revision"};
+    expect_keys(mpack_node_map_cstr(mpack_node_map_cstr(root, "error"), "data"), data_keys, 2);
+    EXPECT_EQ(mpack_tree_destroy(&tree), mpack_ok);
+}
+
 TEST_F(editor_prefab_overrides, errors_are_structured, safety_fx) {
     const pf_world p = prefab_world(f);
     const de_entity a = spawn_prefab(f, "props/crate");

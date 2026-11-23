@@ -604,6 +604,72 @@ void de_ep_read_animation_preview_params(mpack_reader_t *r, de_ep_arena *a, de_e
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
+void de_ep_write_apply_result(mpack_writer_t *w, const de_ep_apply_result *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "tx");
+    mpack_write_u32(w, v->tx);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_write_cstr(w, "prefabs");
+    mpack_start_array(w, v->prefabs.count);
+    for (uint32_t i_1 = 0; i_1 < v->prefabs.count; ++i_1) {
+        de_ep_write_str(w, v->prefabs.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "entities");
+    mpack_start_array(w, v->entities.count);
+    for (uint32_t i_1 = 0; i_1 < v->entities.count; ++i_1) {
+        mpack_write_u64(w, v->entities.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_apply_result(mpack_reader_t *r, de_ep_arena *a, de_ep_apply_result *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "tx")) {
+            seen |= (uint64_t)1 << 0;
+            out->tx = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 1;
+            out->revision = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "prefabs")) {
+            seen |= (uint64_t)1 << 2;
+            out->prefabs.count = mpack_expect_array(r);
+            out->prefabs.items = (de_ep_str *)de_ep_arena_array(r, a, out->prefabs.count, sizeof(*out->prefabs.items));
+            for (uint32_t i_3 = 0; out->prefabs.items && i_3 < out->prefabs.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->prefabs.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "entities")) {
+            seen |= (uint64_t)1 << 3;
+            out->entities.count = mpack_expect_array(r);
+            out->entities.items = (uint64_t *)de_ep_arena_array(r, a, out->entities.count, sizeof(*out->entities.items));
+            for (uint32_t i_3 = 0; out->entities.items && i_3 < out->entities.count; ++i_3)
+            {
+                out->entities.items[i_3] = mpack_expect_u64(r);
+            }
+            mpack_done_array(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
 void de_ep_write_archetype(mpack_writer_t *w, const de_ep_archetype *v) {
     uint32_t n = 0;
     ++n;
@@ -5858,11 +5924,34 @@ void de_ep_write_override(mpack_writer_t *w, const de_ep_override *v) {
     uint32_t n = 0;
     ++n;
     ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
+    ++n;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "path");
     de_ep_write_str(w, v->path);
     mpack_write_cstr(w, "value");
     de_ep_write_raw(w, v->value);
+    mpack_write_cstr(w, "entity");
+    mpack_write_u64(w, v->entity);
+    mpack_write_cstr(w, "base");
+    de_ep_write_raw(w, v->base);
+    mpack_write_cstr(w, "source");
+    de_ep_write_str(w, v->source);
+    mpack_write_cstr(w, "chain");
+    mpack_start_array(w, v->chain.count);
+    for (uint32_t i_1 = 0; i_1 < v->chain.count; ++i_1) {
+        de_ep_write_str(w, v->chain.items[i_1]);
+    }
+    mpack_finish_array(w);
+    mpack_write_cstr(w, "ids");
+    mpack_start_array(w, v->ids.count);
+    for (uint32_t i_1 = 0; i_1 < v->ids.count; ++i_1) {
+        mpack_write_u64(w, v->ids.items[i_1]);
+    }
+    mpack_finish_array(w);
     mpack_finish_map(w);
 }
 
@@ -5879,17 +5968,47 @@ void de_ep_read_override(mpack_reader_t *r, de_ep_arena *a, de_ep_override *out)
         } else if (de_ep_str_eq(k, "value")) {
             seen |= (uint64_t)1 << 1;
             de_ep_read_raw(r, &out->value);
+        } else if (de_ep_str_eq(k, "entity")) {
+            seen |= (uint64_t)1 << 2;
+            out->entity = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "base")) {
+            seen |= (uint64_t)1 << 3;
+            de_ep_read_raw(r, &out->base);
+        } else if (de_ep_str_eq(k, "source")) {
+            seen |= (uint64_t)1 << 4;
+            de_ep_read_str(r, &out->source);
+        } else if (de_ep_str_eq(k, "chain")) {
+            seen |= (uint64_t)1 << 5;
+            out->chain.count = mpack_expect_array(r);
+            out->chain.items = (de_ep_str *)de_ep_arena_array(r, a, out->chain.count, sizeof(*out->chain.items));
+            for (uint32_t i_3 = 0; out->chain.items && i_3 < out->chain.count; ++i_3)
+            {
+                de_ep_read_str(r, &out->chain.items[i_3]);
+            }
+            mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "ids")) {
+            seen |= (uint64_t)1 << 6;
+            out->ids.count = mpack_expect_array(r);
+            out->ids.items = (uint64_t *)de_ep_arena_array(r, a, out->ids.count, sizeof(*out->ids.items));
+            for (uint32_t i_3 = 0; out->ids.items && i_3 < out->ids.count; ++i_3)
+            {
+                out->ids.items[i_3] = mpack_expect_u64(r);
+            }
+            mpack_done_array(r);
         } else {
             mpack_discard(r);
         }
     }
     mpack_done_map(r);
-    if ((seen & UINT64_C(3)) != UINT64_C(3))
+    if ((seen & UINT64_C(127)) != UINT64_C(127))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
 void de_ep_write_override_list(mpack_writer_t *w, const de_ep_override_list *v) {
     uint32_t n = 0;
+    ++n;
+    ++n;
+    ++n;
     ++n;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "overrides");
@@ -5898,6 +6017,12 @@ void de_ep_write_override_list(mpack_writer_t *w, const de_ep_override_list *v) 
         de_ep_write_override(w, &v->overrides.items[i_1]);
     }
     mpack_finish_array(w);
+    mpack_write_cstr(w, "asset");
+    de_ep_write_str(w, v->asset);
+    mpack_write_cstr(w, "root");
+    mpack_write_u64(w, v->root);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
     mpack_finish_map(w);
 }
 
@@ -5917,12 +6042,21 @@ void de_ep_read_override_list(mpack_reader_t *r, de_ep_arena *a, de_ep_override_
                 de_ep_read_override(r, a, &out->overrides.items[i_3]);
             }
             mpack_done_array(r);
+        } else if (de_ep_str_eq(k, "asset")) {
+            seen |= (uint64_t)1 << 1;
+            de_ep_read_str(r, &out->asset);
+        } else if (de_ep_str_eq(k, "root")) {
+            seen |= (uint64_t)1 << 2;
+            out->root = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 3;
+            out->revision = mpack_expect_u64(r);
         } else {
             mpack_discard(r);
         }
     }
     mpack_done_map(r);
-    if ((seen & UINT64_C(1)) != UINT64_C(1))
+    if ((seen & UINT64_C(15)) != UINT64_C(15))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -5930,11 +6064,26 @@ void de_ep_write_override_path_params(mpack_writer_t *w, const de_ep_override_pa
     uint32_t n = 0;
     ++n;
     ++n;
+    n += v->has_target ? 1u : 0u;
+    n += v->has_revision ? 1u : 0u;
+    n += v->has_tx ? 1u : 0u;
     mpack_start_map(w, n);
     mpack_write_cstr(w, "entity");
     mpack_write_u64(w, v->entity);
     mpack_write_cstr(w, "path");
     de_ep_write_str(w, v->path);
+    if (v->has_target) {
+        mpack_write_cstr(w, "target");
+        de_ep_write_str(w, v->target);
+    }
+    if (v->has_revision) {
+        mpack_write_cstr(w, "revision");
+        mpack_write_u64(w, v->revision);
+    }
+    if (v->has_tx) {
+        mpack_write_cstr(w, "tx");
+        mpack_write_u32(w, v->tx);
+    }
     mpack_finish_map(w);
 }
 
@@ -5951,6 +6100,18 @@ void de_ep_read_override_path_params(mpack_reader_t *r, de_ep_arena *a, de_ep_ov
         } else if (de_ep_str_eq(k, "path")) {
             seen |= (uint64_t)1 << 1;
             de_ep_read_str(r, &out->path);
+        } else if (de_ep_str_eq(k, "target")) {
+            seen |= (uint64_t)1 << 2;
+            out->has_target = true;
+            de_ep_read_str(r, &out->target);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 3;
+            out->has_revision = true;
+            out->revision = mpack_expect_u64(r);
+        } else if (de_ep_str_eq(k, "tx")) {
+            seen |= (uint64_t)1 << 4;
+            out->has_tx = true;
+            out->tx = mpack_expect_u32(r);
         } else {
             mpack_discard(r);
         }
@@ -6262,6 +6423,40 @@ void de_ep_read_pick_result(mpack_reader_t *r, de_ep_arena *a, de_ep_pick_result
     }
     mpack_done_map(r);
     (void)seen;
+}
+
+void de_ep_write_prefab_error_data(mpack_writer_t *w, const de_ep_prefab_error_data *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "reason");
+    de_ep_write_str(w, v->reason);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_prefab_error_data(mpack_reader_t *r, de_ep_arena *a, de_ep_prefab_error_data *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "reason")) {
+            seen |= (uint64_t)1 << 0;
+            de_ep_read_str(r, &out->reason);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 1;
+            out->revision = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
+        mpack_reader_flag_error(r, mpack_error_data);
 }
 
 void de_ep_write_prefab_instantiate_params(mpack_writer_t *w, const de_ep_prefab_instantiate_params *v) {
@@ -6748,6 +6943,40 @@ void de_ep_read_resource_list(mpack_reader_t *r, de_ep_arena *a, de_ep_resource_
     }
     mpack_done_map(r);
     if ((seen & UINT64_C(1)) != UINT64_C(1))
+        mpack_reader_flag_error(r, mpack_error_data);
+}
+
+void de_ep_write_revert_result(mpack_writer_t *w, const de_ep_revert_result *v) {
+    uint32_t n = 0;
+    ++n;
+    ++n;
+    mpack_start_map(w, n);
+    mpack_write_cstr(w, "tx");
+    mpack_write_u32(w, v->tx);
+    mpack_write_cstr(w, "revision");
+    mpack_write_u64(w, v->revision);
+    mpack_finish_map(w);
+}
+
+void de_ep_read_revert_result(mpack_reader_t *r, de_ep_arena *a, de_ep_revert_result *out) {
+    memset(out, 0, sizeof(*out));
+    (void)a;
+    uint64_t seen = 0;
+    uint32_t n = mpack_expect_map(r);
+    for (uint32_t i = 0; i < n && mpack_reader_error(r) == mpack_ok; ++i) {
+        de_ep_str k = de_ep_read_key(r);
+        if (de_ep_str_eq(k, "tx")) {
+            seen |= (uint64_t)1 << 0;
+            out->tx = mpack_expect_u32(r);
+        } else if (de_ep_str_eq(k, "revision")) {
+            seen |= (uint64_t)1 << 1;
+            out->revision = mpack_expect_u64(r);
+        } else {
+            mpack_discard(r);
+        }
+    }
+    mpack_done_map(r);
+    if ((seen & UINT64_C(3)) != UINT64_C(3))
         mpack_reader_flag_error(r, mpack_error_data);
 }
 
@@ -12027,9 +12256,9 @@ bool de_ep_read_params_prefab_apply_override(const de_ep_request *req, de_ep_are
     return mpack_reader_destroy(&r) == mpack_ok;
 }
 
-void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
+void de_ep_write_response_prefab_apply_override(mpack_writer_t *w, uint64_t id, const de_ep_apply_result *result) {
     de_ep_write_result_begin(w, id);
-    de_ep_write_empty(w, result);
+    de_ep_write_apply_result(w, result);
     de_ep_write_result_end(w);
 }
 
@@ -12066,9 +12295,9 @@ bool de_ep_read_params_prefab_revert_override(const de_ep_request *req, de_ep_ar
     return mpack_reader_destroy(&r) == mpack_ok;
 }
 
-void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_empty *result) {
+void de_ep_write_response_prefab_revert_override(mpack_writer_t *w, uint64_t id, const de_ep_revert_result *result) {
     de_ep_write_result_begin(w, id);
-    de_ep_write_empty(w, result);
+    de_ep_write_revert_result(w, result);
     de_ep_write_result_end(w);
 }
 
