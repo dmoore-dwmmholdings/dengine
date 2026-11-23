@@ -1217,19 +1217,24 @@ static bool local_ent_of(const ed_instance *inst, u64 sid, u64 *entity) {
     return false;
 }
 
+static void def_free_inner(ed_def *d) {
+    const de_allocator *al = de_heap_allocator();
+    if (d->vals != NULL)
+        DE_FREE(al, d->vals, sizeof(ed_dval) * d->val_cap);
+    if (d->bytes != NULL)
+        DE_FREE(al, d->bytes, d->cap);
+    for (u32 k = 0; k < d->nest_count; ++k)
+        if (d->nest[k].inner != NULL)
+            DE_FREE(al, d->nest[k].inner, sizeof(u64) * 2 * d->nest[k].count);
+    if (d->nest != NULL)
+        DE_FREE(al, d->nest, sizeof(ed_nest) * d->nest_count);
+}
+
 static void prefab_defs_free(void) {
     const de_allocator *al = de_heap_allocator();
     for (u32 i = 0; i < g_prefab.count; ++i) {
         ed_def *d = g_prefab.defs[i];
-        if (d->vals != NULL)
-            DE_FREE(al, d->vals, sizeof(ed_dval) * d->val_cap);
-        if (d->bytes != NULL)
-            DE_FREE(al, d->bytes, d->cap);
-        for (u32 k = 0; k < d->nest_count; ++k)
-            if (d->nest[k].inner != NULL)
-                DE_FREE(al, d->nest[k].inner, sizeof(u64) * 2 * d->nest[k].count);
-        if (d->nest != NULL)
-            DE_FREE(al, d->nest, sizeof(ed_nest) * d->nest_count);
+        def_free_inner(d);
         DE_FREE(al, d, sizeof *d);
     }
     if (g_prefab.defs != NULL)
@@ -1380,6 +1385,24 @@ static void def_links(de__editor *ed, ed_def *d) {
     DE_FREE(al, src, size + 1);
 }
 
+/* Reads `d`'s values and links from its asset (the asset system's current object and the
+ * manifest's source). `d` must be empty. */
+static void def_fill(de__editor *ed, ed_def *d) {
+    de_asset_system *s = ed->e->assets;
+    const de_asset_id id = de_asset_id_from(d->asset);
+    const de_prefab p = de_asset_prefab(s, id);
+    if (DE_HANDLE_VALID(p)) {
+        de_load_handle lh = de_asset_load(s, id, 0);
+        if (de_asset_wait(s, lh, 10000000000ULL) == DE_LOAD_READY) {
+            def_visit v = {ed, d};
+            (void)de__prefab_visit(s, ed->e->world, p, def_visit_fn, &v);
+        }
+        de_asset_release(s, lh);
+    }
+    de_error_clear();
+    def_links(ed, d);
+}
+
 /* The definition of `asset`, loading it and the prefabs it links to on first use. */
 static ed_def *prefab_def_load(de__editor *ed, const char *asset, u32 depth) {
     ed_def *d = def_find(asset);
@@ -1405,18 +1428,7 @@ static ed_def *prefab_def_load(de__editor *ed, const char *asset, u32 depth) {
     memset(d, 0, sizeof *d);
     snprintf(d->asset, sizeof d->asset, "%s", asset);
     g_prefab.defs[g_prefab.count++] = d; /* before the links: a cycle stops here */
-    const de_asset_id id = de_asset_id_from(asset);
-    const de_prefab p = de_asset_prefab(s, id);
-    if (DE_HANDLE_VALID(p)) {
-        de_load_handle lh = de_asset_load(s, id, 0);
-        if (de_asset_wait(s, lh, 10000000000ULL) == DE_LOAD_READY) {
-            def_visit v = {ed, d};
-            (void)de__prefab_visit(s, ed->e->world, p, def_visit_fn, &v);
-        }
-        de_asset_release(s, lh);
-    }
-    de_error_clear();
-    def_links(ed, d);
+    def_fill(ed, d);
     if (d->base[0] != '\0')
         (void)prefab_def_load(ed, d->base, depth + 1);
     for (u32 k = 0; k < d->nest_count; ++k)
@@ -1963,6 +1975,132 @@ static de_ep_raw base_raw(const ed_instance *inst, const ed_base *b) {
     return (de_ep_raw){(const char *)inst->bytes + b->off, b->len};
 }
 
+/* ---------- Prefab reload (DENG-803) ----------
+ *
+ * When a prefab asset is reloaded, its definition and the loaded definitions that link to it
+ * (variants, nesting, transitively) are read again. Definitions whose values and links come out
+ * unchanged stay as they are: that is what a reload of the editor's own prefab.state write looks
+ * like, so it neither bumps the revision again nor touches the instances. When any changed, the
+ * prefab revision goes up (clients holding the old one get CONFLICT "stale"), and each live
+ * instance of a changed prefab takes the new value of every field it did not override; an
+ * override stays an override (its entity value is kept, the instance base moves). Entities are
+ * not added or removed, and nothing goes on the undo stack. */
+
+#define ED_DEFS_MAX 256u
+
+static bool def_same(const ed_def *x, const ed_def *y) {
+    if (strcmp(x->base, y->base) != 0 || x->nest_count != y->nest_count ||
+        x->val_count != y->val_count)
+        return false;
+    for (u32 k = 0; k < x->nest_count; ++k) {
+        const ed_nest *a = &x->nest[k], *b = &y->nest[k];
+        if (strcmp(a->asset, b->asset) != 0 || a->root != b->root || a->count != b->count ||
+            (a->count != 0 && (memcmp(a->inner, b->inner, sizeof(u64) * a->count) != 0 ||
+                               memcmp(a->outer, b->outer, sizeof(u64) * a->count) != 0)))
+            return false;
+    }
+    for (u32 i = 0; i < x->val_count; ++i) {
+        const ed_dval *w = def_get(y, x->vals[i].sid, x->vals[i].path);
+        if (w == NULL || !raw_eq(dval_raw(x, &x->vals[i]), dval_raw(y, w)))
+            return false;
+    }
+    return true;
+}
+
+/* `inst` takes the values of its prefab's new definition `d` for the fields it did not override. */
+static void instance_refresh(de__editor *ed, ed_instance *inst, const ed_def *d) {
+    if (inst->local_count == 0)
+        return;
+    for (u32 i = 0; i < d->val_count; ++i) {
+        const ed_dval *v = &d->vals[i];
+        u64 entity = 0;
+        if (!local_ent_of(inst, v->sid, &entity))
+            continue;
+        ed_base *b = base_find(inst, entity, de_ep_cstr(v->path));
+        if (b == NULL)
+            continue;
+        ed_kind kind = {0};
+        if (!path_field(ed, v->path, &kind))
+            continue;
+        de_ep_arena a = {ed->arena, ed->arena_cap, 0};
+        de_ep_raw nv;
+        if (!remap(&a, kind, dval_raw(d, v), inst->local_sid, inst->local_ent, inst->local_count,
+                   &nv) ||
+            raw_eq(nv, base_raw(inst, b)))
+            continue;
+        de_ep_raw cur;
+        if (current_value(ed, &a, entity, v->path, &cur) && raw_eq(cur, base_raw(inst, b)))
+            (void)de__ed_set_value(ed, &a, entity, v->path, nv);
+        (void)base_put(inst, b, nv.ptr, nv.len);
+    }
+}
+
+void de__ed_prefab_reloaded(de__editor *ed, de_asset_id id) {
+    if (ed->e->assets == NULL || g_prefab.count == 0)
+        return;
+    u8 mark[ED_DEFS_MAX];
+    memset(mark, 0, sizeof mark);
+    const u32 n = g_prefab.count < ED_DEFS_MAX ? g_prefab.count : ED_DEFS_MAX;
+    bool any = false;
+    for (u32 i = 0; i < n; ++i)
+        if (de_asset_id_from(g_prefab.defs[i]->asset).hash == id.hash)
+            mark[i] = any = true;
+    if (!any)
+        return;
+    for (bool grew = true; grew;) { /* the dependents, transitively */
+        grew = false;
+        for (u32 i = 0; i < n; ++i) {
+            const ed_def *d = g_prefab.defs[i];
+            for (u32 j = 0; j < n && !mark[i]; ++j) {
+                if (!mark[j])
+                    continue;
+                bool dep = d->base[0] != '\0' && strcmp(d->base, g_prefab.defs[j]->asset) == 0;
+                for (u32 k = 0; k < d->nest_count && !dep; ++k)
+                    dep = strcmp(d->nest[k].asset, g_prefab.defs[j]->asset) == 0;
+                if (dep)
+                    mark[i] = grew = true;
+            }
+        }
+    }
+    u8 changed[ED_DEFS_MAX];
+    memset(changed, 0, sizeof changed);
+    bool any_changed = false;
+    for (u32 i = 0; i < n; ++i) {
+        if (!mark[i])
+            continue;
+        ed_def *d = g_prefab.defs[i];
+        ed_def fresh;
+        memset(&fresh, 0, sizeof fresh);
+        snprintf(fresh.asset, sizeof fresh.asset, "%s", d->asset);
+        def_fill(ed, &fresh);
+        if (def_same(d, &fresh)) {
+            def_free_inner(&fresh);
+            continue;
+        }
+        def_free_inner(d);
+        *d = fresh;
+        changed[i] = any_changed = true;
+    }
+    if (!any_changed)
+        return;
+    for (u32 i = 0; i < n; ++i) /* a link may name a prefab that was not loaded yet */
+        if (changed[i]) {
+            ed_def *d = g_prefab.defs[i];
+            if (d->base[0] != '\0')
+                (void)prefab_def_load(ed, d->base, 1);
+            for (u32 k = 0; k < d->nest_count; ++k)
+                (void)prefab_def_load(ed, d->nest[k].asset, 1);
+        }
+    ++g_prefab.revision;
+    for (u32 q = 0; q < g_scene.instance_count; ++q) {
+        ed_instance *inst = &g_scene.instances[q];
+        for (u32 i = 0; i < n; ++i)
+            if (changed[i] && strcmp(g_prefab.defs[i]->asset, inst->asset) == 0)
+                instance_refresh(ed, inst, g_prefab.defs[i]);
+    }
+    de__ed_world_touch(ed);
+}
+
 /* {id, error: {code, message, data: {reason, revision}}} */
 static void prefab_error(mpack_writer_t *w, u64 id, de_ep_error code, const char *reason,
                          const char *fmt, ...) DE_PRINTF_FMT(5, 6);
@@ -2364,7 +2502,7 @@ static void on_apply(de__editor *ed, const de_ep_request *req, de_ep_arena *a, m
         return;
     }
     /* `files` (protocol 1.19) is the source path of each entry of `prefabs`, in the same order:
-     * the manifest's, relative to the asset root ("prefabs/crate.prefab.toml"). */
+     * the manifest's, as listed in the manifest ("crate.prefab.toml"). */
     de_ep_str pnames[ED_PLAN_MAX], fnames[ED_PLAN_MAX];
     for (u32 i = 0; i < nd; ++i) {
         const char *src = de__ed_asset_source_path(ed, names[i]);

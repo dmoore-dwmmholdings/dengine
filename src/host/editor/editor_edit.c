@@ -1090,6 +1090,22 @@ static void on_commit(de__editor *ed, const de_ep_request *req, de_ep_arena *a, 
     send_dirty(ed, t->scene);
 }
 
+bool de__ed_set_value(de__editor *ed, de_ep_arena *a, u64 entity, const char *path,
+                      de_ep_raw value) {
+    de_ep_edit_op op, inv;
+    memset(&op, 0, sizeof op);
+    op.op = de_ep_cstr("set");
+    op.has_entity = true;
+    op.entity = entity;
+    op.has_path = true;
+    op.path = de_ep_cstr(path);
+    op.has_value = true;
+    op.value = value;
+    ed_fail f = {DE_EP_OK, "", NULL};
+    u64 spawned = 0;
+    return apply_op(ed, a, &op, &inv, &spawned, &f);
+}
+
 u32 de__ed_edit_run(de__editor *ed, de_ep_arena *a, u32 tx, u64 scene, const de_ep_edit_op *ops,
                     u32 count, de_ep_error *code, char *msg, size_t msg_cap) {
     ed_fail f = {DE_EP_OK, "", NULL};

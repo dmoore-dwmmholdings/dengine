@@ -1346,6 +1346,121 @@ TEST_F(editor_prefab_source, trailing_comments_crlf_and_unsupported_layouts, saf
     EXPECT_TRUE(overrides_of(f, a, a, "THealth.max").found);
     EXPECT_EQ(read_text(CRATE).n, sizeof dotted - 1);
 }
+
+/* ---------- DENG-803: a reloaded prefab file refreshes the definition store ---------------- */
+
+/* Waits for every queued reload to finish, then tells the editor what the asset events tell it
+ * in a running host: the listed assets were reloaded. */
+static void reload_and_notify(safety_fx *f, const char *const *assets, u32 count) {
+    for (u32 i = 0; i < count; ++i)
+        ASSERT_TRUE(de__asset_reload_queue(f->engine.assets, de_asset_id_from(assets[i])));
+    de__asset_reload_stats st;
+    const u64 t0 = de_time_now_ns();
+    for (;;) {
+        de__asset_wake_reset(f->engine.assets);
+        de_asset_system_update(f->engine.assets, NULL);
+        de__asset_reload_get_stats(f->engine.assets, &st);
+        if (st.started != 0 && st.swapped + st.failed + st.superseded + st.discarded >= st.started)
+            break;
+        ASSERT_TRUE(de_time_now_ns() - t0 < 20000000000ull);
+        (void)de__asset_wake_block(f->engine.assets, 10000000u);
+    }
+    EXPECT_EQ(st.failed, 0u);
+    for (u32 i = 0; i < count; ++i)
+        de__ed_prefab_reloaded(&f->ed, de_asset_id_from(assets[i]));
+}
+
+static float health_current(safety_fx *f, const pf_world *p, de_entity e) {
+    return ((THealth *)de_entity_get(f->engine.world, e, p->health))->current;
+}
+
+TEST_F(editor_prefab_reload, external_edit_updates_definition_instances_and_revision, safety_fx) {
+    const pf_world p = prefab_world_ex(f, true);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const de_entity b = spawn_prefab(f, "props/crate");
+    ((THealth *)de_entity_get(f->engine.world, b, p.health))->max = 99; /* an override */
+    const u64 rev = overrides_of(f, a, a, "THealth.current").revision;
+    const text crate = read_text(CRATE);
+    const text edited = replaced(crate, "current = 50.0", "current = 65.0");
+    ASSERT_EQ(de_file_write_all_atomic(CRATE, edited.s, edited.n), DE_OK);
+    const char *const changed[] = {"props/crate"};
+    reload_and_notify(f, changed, 1);
+    /* The instances took the new value; the override stayed. */
+    EXPECT_FLOAT_EQ(health_current(f, &p, a), 65, 0);
+    EXPECT_FLOAT_EQ(health_current(f, &p, b), 65, 0);
+    EXPECT_FLOAT_EQ(((THealth *)de_entity_get(f->engine.world, b, p.health))->max, 99, 0);
+    EXPECT_TRUE(overrides_of(f, b, b, "THealth.max").found);
+    EXPECT_FALSE(overrides_of(f, a, a, "THealth.current").found);
+    /* The revision went up once: the old one is stale. */
+    EXPECT_EQ(overrides_of(f, a, a, "THealth.current").revision, rev + 1);
+    prefab_fails(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a,
+                 (pf_call){.path = "THealth.current", .has_revision = true, .revision = rev},
+                 DE_EP_ERR_CONFLICT, "stale");
+    /* The definition changed: an apply of another field compares against the new one. */
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
+    /* A reload that changes nothing leaves the revision alone. */
+    reload_and_notify(f, changed, 1);
+    EXPECT_EQ(overrides_of(f, a, a, "THealth.current").revision, rev + 1);
+}
+
+TEST_F(editor_prefab_reload, a_base_reload_refreshes_the_loaded_variant_and_nesting_prefab,
+       safety_fx) {
+    const pf_world p = prefab_world_ex(f, true);
+    const de_entity v = spawn_prefab(f, "props/crate_heavy");
+    const de_entity s = spawn_prefab(f, "props/stack");
+    const u64 rev = overrides_of(f, v, v, "THealth.max").revision;
+    /* A variant file lists its own values: an edit of the base and the variant together, as a
+     * checkout would make it. */
+    const text crate = read_text(CRATE), heavy = read_text(HEAVY), stack = read_text(STACK);
+    text e1 = replaced(crate, "current = 50.0", "current = 65.0");
+    text e2 = replaced(heavy, "current = 50.0", "current = 65.0");
+    text e3 = replaced(stack, "speed = 2.0", "speed = 3.0");
+    e3 = replaced(e3, "current = 50.0", "current = 65.0");
+    ASSERT_EQ(de_file_write_all_atomic(CRATE, e1.s, e1.n), DE_OK);
+    ASSERT_EQ(de_file_write_all_atomic(HEAVY, e2.s, e2.n), DE_OK);
+    ASSERT_EQ(de_file_write_all_atomic(STACK, e3.s, e3.n), DE_OK);
+    /* The editor hears about the base only: the variant and the nesting prefab are reloaded
+     * by the asset system, and their definitions are read again as dependents of it. */
+    const char *const all[] = {"props/crate", "props/crate_heavy", "props/stack"};
+    for (u32 i = 0; i < 3; ++i)
+        ASSERT_TRUE(de__asset_reload_queue(f->engine.assets, de_asset_id_from(all[i])));
+    reload_and_notify(f, all, 0);
+    de__ed_prefab_reloaded(&f->ed, de_asset_id_from("props/crate"));
+    EXPECT_FLOAT_EQ(health_current(f, &p, v), 65, 0);
+    EXPECT_FLOAT_EQ(health_current(f, &p, first_child(f, s)), 65, 0);
+    const de_entity leaf = first_child(f, first_child(f, s));
+    EXPECT_FLOAT_EQ(((TTarget *)de_entity_get(f->engine.world, leaf, p.target))->speed, 3, 0);
+    EXPECT_FALSE(overrides_of(f, v, v, "THealth.current").found);
+    EXPECT_EQ(overrides_of(f, v, v, "THealth.max").revision, rev + 1); /* once, not per prefab */
+}
+
+TEST_F(editor_prefab_reload, the_editors_own_write_does_not_bump_again_or_fight_undo, safety_fx) {
+    const pf_world p = prefab_world_ex(f, true);
+    const de_entity a = spawn_prefab(f, "props/crate");
+    const de_entity v = spawn_prefab(f, "props/crate_heavy");
+    const text crate = read_text(CRATE);
+    ((THealth *)de_entity_get(f->engine.world, a, p.health))->current = 70;
+    const u32 tx =
+        prefab_ok(f, DE_EP_METHOD_PREFAB_APPLY_OVERRIDE, a, (pf_call){.path = "THealth.current"});
+    const u64 rev = overrides_of(f, a, a, "THealth.current").revision;
+    const char *const written[] = {"props/crate", "props/crate_heavy", "props/stack"};
+    reload_and_notify(f, written, 3); /* the recook of what apply wrote */
+    EXPECT_EQ(overrides_of(f, a, a, "THealth.current").revision, rev);
+    EXPECT_FLOAT_EQ(health_current(f, &p, a), 70, 0);
+    EXPECT_FLOAT_EQ(health_current(f, &p, v), 70, 0);
+    /* Undo restores the old bytes and value, and its own recook changes nothing more. */
+    transaction(f, DE_EP_METHOD_EDIT_UNDO, tx);
+    const u64 rev2 = overrides_of(f, a, a, "THealth.current").revision;
+    EXPECT_EQ(rev2, rev + 1);
+    reload_and_notify(f, written, 3);
+    EXPECT_EQ(overrides_of(f, a, a, "THealth.current").revision, rev2);
+    /* The instance keeps the value it was given: back at the source's value, it is an override
+     * again, and nothing was reset behind the user's back. */
+    EXPECT_FLOAT_EQ(health_current(f, &p, a), 70, 0);
+    EXPECT_TRUE(overrides_of(f, a, a, "THealth.current").found);
+    EXPECT_TRUE(text_eq(read_text(CRATE), crate));
+}
 #endif
 
 #endif
