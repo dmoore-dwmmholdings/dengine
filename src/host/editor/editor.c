@@ -622,6 +622,9 @@ de_result de__editor_start(de__host *h) {
     de__ed_terrain_register(ed); /* so is DeTerrain */
     de__ed_foliage_register(ed); /* and DeFoliage */
 #endif
+#if DE_HAS_PHYSICS
+    de__ed_physics_register(ed); /* DENG-821: physics.loadAsset, physics.drag.* */
+#endif
 #if DE_ED_MATERIAL_GRAPH
     de__ed_material_graph_register(ed);
 #endif
