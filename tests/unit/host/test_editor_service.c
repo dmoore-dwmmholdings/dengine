@@ -1024,7 +1024,7 @@ TEST_F(editor_service, prefab_instantiate_index_places_the_root_among_siblings, 
 /* IPC: "A request over a limit gets `busy` with `data: { retryAfterMs }`." */
 TEST_F(editor_service, busy_errors_carry_retry_after_ms, service_fx) {
     de__ed_session_register(&f->ed);
-    reply r;
+    reply r = {0};
     int code = 0;
     for (u32 i = 0; i < 200 && code == 0; ++i) {
         call(f, DE_EP_METHOD_SNAPSHOT_TAKE, NULL, 0, &r);
