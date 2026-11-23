@@ -436,6 +436,7 @@ typedef struct de__vis_context {
     f32 lod_error_px;
     i32 lod_bias;
     u32 forced_lod; /**< Cooked level+1, 0 automatic; copied from this view's frozen display. */
+    de_view_render_mode render_mode; /**< this view's frozen display mode (Scene debug views) */
 
     /* Instance culling (cull_instances.c), per phase (DE__VIS_PHASE_INDEX). */
     de__vis_cull_view cull;  /**< this frame's cull constants */
