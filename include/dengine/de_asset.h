@@ -714,16 +714,20 @@ DE_API de_result de_asset_import_fail(de_asset_import_ctx *ctx, de_result result
  * - `blob`: raw bytes. Packs and the cooker copy the source unchanged (the asset setting
  *   `compress = true|false` only decides whether a pack compresses it); de_blob_data reads them.
  * - `scene` and `prefab`: TOML sources (DENG-2 Q9), cooked to a binary scene. A prefab has
- *   exactly one root entity; a scene any number. Source:
+ *   exactly one root entity; a scene any number. Source: one table per entity, keyed by its
+ *   stable 64-bit scene ID (de_scene_id_new), as the editor's scene.serialize writes it
+ *   (DENG-570, SPEC §9.2):
  *
- *       [[entity]]
- *       id = "0x9f3a6c0d5e2b4471"     # stable 64-bit scene ID (de_scene_id_new), or an integer
+ *       [entity.0x9f3a6c0d5e2b4471]   # the key is the scene ID: "0x" and 1-16 hex digits
  *       parent = "0x1c2d..."          # optional: another entity of the same file
- *       [entity.Health]               # one table per component, named by its reflected type
+ *       [entity.0x9f3a6c0d5e2b4471.Health]  # one table per component, named by its type
  *       current = 75.0
- *       [entity.Sprite]
+ *       [entity.0x9f3a6c0d5e2b4471.Sprite]
  *       texture = "ui/heart"          # ASSET fields: an asset ID path (a cook dependency)
  *       target = "0x1c2d..."          # ENTITY fields: the scene ID of an entity of the file
+ *
+ *   The older array layout reads the same: `[[entity]]` tables, each with `id = "0x..."` (or an
+ *   integer) and its components as `[entity.Health]`. A keyed table has no `id` key.
  *
  *   Component tables are read with the text serializer (de_deserialize_object rules) against
  *   de_asset_system_desc.types and written with the binary serializer (self-describing). An
