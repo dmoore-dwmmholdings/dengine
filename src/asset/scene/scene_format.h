@@ -46,6 +46,8 @@
 
 #include <dengine/de_asset.h>
 #include <dengine/de_base.h>
+#include <dengine/de_ecs.h>
+#include <dengine/de_reflect.h>
 
 #include <string.h>
 
@@ -192,6 +194,22 @@ typedef struct de__scene_object {
 de_result de__blob_type_register(de_asset_system *s);
 /** Registers the `scene` and `prefab` types (scene_type.c). Main thread. */
 de_result de__scene_types_register(de_asset_system *s);
+
+/* ---- Editor prefab support (DENG-571, scene_instantiate.c) ---------------------------------- */
+
+/** de_prefab_instantiate, and the scene id and entity of each spawned entity in record order
+ * (up to `cap`; `*count` gets how many). */
+de_result de__prefab_instantiate_ids(de_asset_system *s, de_world *w, de_prefab p,
+                                     de_entity parent, de_entity *out_root, u64 *sids,
+                                     de_entity *ents, u32 cap, u32 *count);
+
+/** Called for each component of a prefab, decoded into scratch memory. Entity fields hold
+ * prefab-local scene ids, not entities. `obj` is valid during the call only. */
+typedef void (*de__prefab_visit_fn)(void *user, u64 scene_id, de_type_id type,
+                                    const char *component, const void *obj);
+/** Visits every component of a loaded prefab or scene, in record order. Main thread. */
+de_result de__prefab_visit(de_asset_system *s, de_world *w, de_prefab p, de__prefab_visit_fn fn,
+                           void *user);
 
 DE_EXTERN_C_END
 

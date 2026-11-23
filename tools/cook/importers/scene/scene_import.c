@@ -412,10 +412,14 @@ static de_result scene_import_kind(de_asset_import_ctx *ctx, bool prefab) {
     const char **names = NULL;
     u32 cand_count = 0, comp_count = 0, type_count = 0, roots = 0;
 
-    /* Top level: `[[entity]]`; anything else is ignored with a warning. */
+    /* Top level: `[[entity]]`; anything else is ignored with a warning. A prefab's `[prefab]`
+     * table (its variant base and nested prefabs, DENG-571) is editor data: it is skipped
+     * silently and the cooked prefab stays the flattened entities. */
     const toml_datum_t *arr = NULL;
     for (int32_t k = 0; k < tr.toptab.u.tab.size; ++k) {
         const toml_datum_t *v = &tr.toptab.u.tab.value[k];
+        if (strcmp(tr.toptab.u.tab.key[k], "prefab") == 0 && v->type == TOML_TABLE)
+            continue;
         if (strcmp(tr.toptab.u.tab.key[k], "entity") != 0) {
             imp_warn(&m, v->lineno, "top-level key `%s` is not `entity`; skipped",
                      tr.toptab.u.tab.key[k]);
