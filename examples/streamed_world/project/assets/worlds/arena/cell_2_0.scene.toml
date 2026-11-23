@@ -1,0 +1,19 @@
+# world/arena/cell_2_0: cell (2, 0) of world "arena" (de-cook world)
+
+[entity.0x0000000000000003]
+[entity.0x0000000000000003.DeTransform]
+position = [128.0, 128.0, 0.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [8.0, 8.0, 1.0]
+
+[entity.0x0000000000000024]
+[entity.0x0000000000000024.DeTransform]
+position = [64.0, 64.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]
+
+[entity.0x0000000000000025]
+[entity.0x0000000000000025.DeTransform]
+position = [192.0, 192.0, 2.0]
+rotation = [0.0, 0.0, 0.0, 1.0]
+scale = [1.0, 1.0, 1.0]

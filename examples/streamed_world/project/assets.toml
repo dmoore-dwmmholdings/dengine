@@ -1,0 +1,21 @@
+# DENG-836: a small streamed world for the real-engine world.streaming e2e (DIDE-401).
+# 6 cells in a 3 x 2 grid (256 m cells on x/y, Z up). `de-cook world` writes
+# assets/worlds/arena/ (committed); the include below declares its cell scenes and bundles.
+# After editing a source scene or the [worlds.arena] table, cook again:
+#   de-cook world examples/streamed_world/project/assets.toml --world arena
+[project]
+asset_root = "assets"
+include = ["assets/worlds/arena/cells.toml"]
+
+[assets]
+"levels/arena_terrain" = { type = "scene", source = "scenes/terrain.scene.toml" }
+"levels/arena_props"   = { type = "scene", source = "scenes/props.scene.toml" }
+
+[worlds.arena]
+scenes = ["levels/arena_terrain", "levels/arena_props"]
+load_radius = 300.0
+unload_radius = 400.0
+max_loads_per_frame = 2
+
+[worlds.arena.proxy]
+enabled = false

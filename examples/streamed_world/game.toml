@@ -1,0 +1,11 @@
+[game]
+name = "Streamed World"
+
+[window]
+title = "Streamed World"
+width = 640
+height = 360
+surface = "vulkan"
+
+[timing]
+fixed_hz = 60
