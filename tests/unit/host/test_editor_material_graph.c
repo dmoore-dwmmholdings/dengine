@@ -26,6 +26,7 @@ typedef struct mg_fx {
     char *reply;
     size_t params_size;
     size_t reply_size;
+    uint32_t reply_left; /* reply map entries after `result`, for close_reply() */
 } mg_fx;
 
 static void fx_setup(mg_fx *f) {
@@ -96,7 +97,8 @@ static void encode_compile(mg_fx *f, const char *graph, const char *const *targe
 }
 
 /* Opens the reply and positions `r` on the result value. Returns the error code, or 0 for a
- * result (then the caller reads the value and destroys `r`). */
+ * result (then the caller reads the value and calls close_reply()). DENG-805: every map is
+ * closed before destroy, so the helpers pass under MPACK_DEBUG read tracking. */
 static int open_reply(mg_fx *f, mpack_reader_t *r) {
     mpack_reader_init_data(r, f->reply, f->reply_size);
     const uint32_t n = mpack_expect_map(r);
@@ -107,6 +109,7 @@ static int open_reply(mg_fx *f, mpack_reader_t *r) {
         if (strcmp(key, "id") == 0) {
             EXPECT_EQ(mpack_expect_u64(r), 769u);
         } else if (strcmp(key, "result") == 0) {
+            f->reply_left = n - i - 1;
             return 0;
         } else if (strcmp(key, "error") == 0) {
             const uint32_t m = mpack_expect_map(r);
@@ -122,16 +125,25 @@ static int open_reply(mg_fx *f, mpack_reader_t *r) {
             mpack_discard(r);
         }
     }
+    mpack_done_map(r);
     mpack_reader_destroy(r);
     EXPECT_TRUE(code > 0);
     return code;
+}
+
+/* Skips the reply entries after `result`, closes the reply map and destroys `r`. */
+static mpack_error_t close_reply(mg_fx *f, mpack_reader_t *r) {
+    for (uint32_t i = 0; i < f->reply_left * 2u && mpack_reader_error(r) == mpack_ok; ++i)
+        mpack_discard(r);
+    mpack_done_map(r);
+    return mpack_reader_destroy(r);
 }
 
 static int error_of(mg_fx *f) {
     mpack_reader_t r;
     const int code = open_reply(f, &r);
     if (code == 0)
-        mpack_reader_destroy(&r);
+        close_reply(f, &r);
     return code;
 }
 
@@ -140,7 +152,7 @@ static void read_generated(mg_fx *f, de_ep_material_graph_generated *out) {
     ASSERT_EQ(open_reply(f, &r), 0);
     de_ep_arena a = {f->decode, ARENA_CAP, 0};
     de_ep_read_material_graph_generated(&r, &a, out);
-    ASSERT_EQ(mpack_reader_destroy(&r), mpack_ok);
+    ASSERT_EQ(close_reply(f, &r), mpack_ok);
 }
 
 static void read_compiled(mg_fx *f, de_ep_material_graph_compiled *out) {
@@ -148,7 +160,7 @@ static void read_compiled(mg_fx *f, de_ep_material_graph_compiled *out) {
     ASSERT_EQ(open_reply(f, &r), 0);
     de_ep_arena a = {f->decode, ARENA_CAP, 0};
     de_ep_read_material_graph_compiled(&r, &a, out);
-    ASSERT_EQ(mpack_reader_destroy(&r), mpack_ok);
+    ASSERT_EQ(close_reply(f, &r), mpack_ok);
 }
 
 static bool str_is(de_ep_str s, const char *c) {
@@ -248,7 +260,7 @@ TEST(editor_material_graph, catalog_round_trip) {
     de_ep_arena a = {f.decode, ARENA_CAP, 0};
     de_ep_material_graph_catalog c;
     de_ep_read_material_graph_catalog(&r, &a, &c);
-    ASSERT_EQ(mpack_reader_destroy(&r), mpack_ok);
+    ASSERT_EQ(close_reply(&f, &r), mpack_ok);
     EXPECT_TRUE(str_has(c.json, "\"kind\":\"material\""));
     EXPECT_TRUE(str_has(c.json, "\"output.base\""));
     EXPECT_TRUE(str_has(c.json, "\"subgraph\""));
